@@ -66,6 +66,42 @@ impl Connection {
         self.stream.as_raw_fd()
     }
 
+    /// The process on the other end, or 0 where the kernel would not say.
+    ///
+    /// `hyprctl clients` prints each window's pid and `dispatch focuswindow
+    /// pid:1234` picks a window out by it, so a compositor that answers
+    /// nothing is one both of those are broken against. `SO_PEERCRED` gives
+    /// the peer as it was when the socket was made, which is what a client's
+    /// pid means: a client that forks afterwards is still the process that
+    /// connected.
+    #[must_use]
+    pub fn peer_pid(&self) -> i32 {
+        #[expect(
+            unsafe_code,
+            reason = "AUDIT: std's UnixStream::peer_cred is still unstable; ucred is three integers with no invariants"
+        )]
+        // SAFETY: a zeroed `ucred` is three zero integers, which is what a
+        // socket with no peer credentials reads back as anyway.
+        let mut peer: libc::ucred = unsafe { core::mem::zeroed() };
+        let mut length = size_of::<libc::ucred>() as libc::socklen_t;
+        #[expect(
+            unsafe_code,
+            reason = "AUDIT: getsockopt writes at most `length` bytes into a local ucred, and the socket is valid for as long as self"
+        )]
+        // SAFETY: the pointer is to `peer`, which lives for this call, and
+        // `length` is its own size; `getsockopt` writes no more than that.
+        let asked = unsafe {
+            libc::getsockopt(
+                self.stream.as_raw_fd(),
+                libc::SOL_SOCKET,
+                libc::SO_PEERCRED,
+                (&raw mut peer).cast(),
+                &raw mut length,
+            )
+        };
+        if asked < 0 { 0 } else { peer.pid }
+    }
+
     /// The bytes read and not yet consumed.
     #[must_use]
     pub fn bytes(&self) -> &[u8] {

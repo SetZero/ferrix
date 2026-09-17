@@ -3,7 +3,8 @@ use compositor_config::{Config, Gaps, NoSources, parse};
 use crate::Group;
 use crate::{
     Change, Direction, Dispatcher, Error, ForceSplit, FullscreenMode, Layout, Monitor, MonitorId,
-    NewStatus, Orientation, Rect, Settings, State, WindowId, WorkspaceId, WorkspaceTarget,
+    Move, NewStatus, Orientation, Rect, Settings, State, WindowId, WorkspaceId,
+    WorkspaceTarget,
 };
 
 /// No gaps and no border, so slots and client rectangles coincide.
@@ -1967,4 +1968,564 @@ fn the_focus_order_is_the_history_backwards() {
     let order = state.windows_in_focus_order();
     assert_eq!(order.first().copied(), Some(WindowId(1)));
     assert_eq!(order.len(), 3, "{order:?}");
+}
+
+// ---------------------------------------------------------------------------
+// The dispatchers a person's configuration binds that the layout had not
+// answered: `setfloating` and its relatives, the ones that move and resize a
+// floating window, the ones that walk the tiling, and the ones that name a
+// workspace or tag a window.
+//
+// Each is Hyprland's by name and by what its argument means, and each is
+// checked here rather than on a screen: a dispatcher is rectangles and ids.
+// ---------------------------------------------------------------------------
+
+/// `setfloating` and `settiled` always do the same thing; `togglefloating`
+/// is the one that turns the window over.
+#[test]
+fn setfloating_and_settiled_do_not_toggle() {
+    let mut state = setup(BARE);
+    open(&mut state, &[1, 2]);
+    focus(&mut state, 1);
+    assert!(!state.is_floating(WindowId(1)));
+
+    let _ = dispatch(&mut state, "setfloating", "");
+    assert!(state.is_floating(WindowId(1)));
+    // Twice is still floating, which is the whole difference from the
+    // toggle.
+    let changes = dispatch(&mut state, "setfloating", "");
+    assert_eq!(changes, [], "a window that already floats is left alone");
+    assert!(state.is_floating(WindowId(1)));
+
+    let _ = dispatch(&mut state, "settiled", "");
+    assert!(!state.is_floating(WindowId(1)));
+    let changes = dispatch(&mut state, "settiled", "");
+    assert_eq!(changes, []);
+}
+
+/// `centerwindow` puts a floating window in the middle of the work area,
+/// and `centerwindow 1` in the middle of the whole monitor.
+#[test]
+fn centerwindow_centres_a_floating_window() {
+    let mut state = setup(BARE);
+    open(&mut state, &[1]);
+    focus(&mut state, 1);
+    let _ = dispatch(&mut state, "setfloating", "");
+    let _ = state
+        .float_window(WindowId(1), Rect::new(0, 0, 400, 200))
+        .unwrap();
+
+    let _ = dispatch(&mut state, "centerwindow", "");
+    let at = rects(&state)[0].1;
+    assert_eq!(
+        (at.x, at.y),
+        ((1920 - 400) / 2, (1080 - 200) / 2),
+        "the window is in the middle"
+    );
+    assert_eq!((at.width, at.height), (400, 200), "and is the size it was");
+
+    // A tiled window is where the tiling put it, and this does nothing.
+    let _ = dispatch(&mut state, "settiled", "");
+    let before = rects(&state);
+    let changes = dispatch(&mut state, "centerwindow", "");
+    assert_eq!(changes, []);
+    assert_eq!(rects(&state), before);
+}
+
+/// `moveactive` and `resizeactive` take a distance, or a position and a size
+/// after `exact`.
+#[test]
+fn moveactive_and_resizeactive_move_and_size_a_floating_window() {
+    let mut state = setup(BARE);
+    open(&mut state, &[1]);
+    focus(&mut state, 1);
+    let _ = dispatch(&mut state, "setfloating", "");
+    let _ = state
+        .float_window(WindowId(1), Rect::new(100, 100, 400, 200))
+        .unwrap();
+
+    let _ = dispatch(&mut state, "moveactive", "30 -20");
+    assert_eq!(rects(&state)[0].1, Rect::new(130, 80, 400, 200));
+
+    let _ = dispatch(&mut state, "resizeactive", "50 50");
+    assert_eq!(rects(&state)[0].1, Rect::new(130, 80, 450, 250));
+
+    // `exact` makes the two numbers a place and a size rather than a change.
+    let _ = dispatch(&mut state, "moveactive", "exact 10 10");
+    assert_eq!(rects(&state)[0].1, Rect::new(10, 10, 450, 250));
+    let _ = dispatch(&mut state, "resizeactive", "exact 640 480");
+    assert_eq!(rects(&state)[0].1, Rect::new(10, 10, 640, 480));
+
+    // And a window is never resized out of existence.
+    let _ = dispatch(&mut state, "resizeactive", "-10000 -10000");
+    let at = rects(&state)[0].1;
+    assert!(at.width >= 1 && at.height >= 1, "{at:?}");
+}
+
+/// `swapwindow` exchanges two tiled windows and leaves the focus on the one
+/// that moved, so a run of them walks a window across the screen.
+#[test]
+fn swapwindow_exchanges_two_tiled_windows() {
+    let mut state = setup(BARE);
+    open(&mut state, &[1, 2]);
+    focus(&mut state, 1);
+    let before = rects(&state);
+
+    let _ = dispatch(&mut state, "swapwindow", "r");
+    let after = rects(&state);
+    assert_ne!(before, after, "the two changed places");
+    assert_eq!(
+        state.focused_window(),
+        Some(WindowId(1)),
+        "the focus follows the window that moved"
+    );
+    // The rectangles are the same two, with the ids exchanged.
+    let places = |rows: &[(u64, Rect)]| {
+        let mut out: Vec<Rect> = rows.iter().map(|(_, rect)| *rect).collect();
+        out.sort_by_key(|rect| rect.x);
+        out
+    };
+    assert_eq!(places(&before), places(&after));
+}
+
+/// `cyclenext` walks the windows on the workspace, wrapping both ways.
+#[test]
+fn cyclenext_walks_the_workspace() {
+    let mut state = setup(BARE);
+    open(&mut state, &[1, 2, 3]);
+    focus(&mut state, 1);
+    let order = |state: &mut State, arg: &str| {
+        let _ = dispatch(state, "cyclenext", arg);
+        state.focused_window().map(|window| window.0)
+    };
+    assert_eq!(order(&mut state, ""), Some(2));
+    assert_eq!(order(&mut state, ""), Some(3));
+    assert_eq!(order(&mut state, ""), Some(1), "it wraps round");
+    assert_eq!(order(&mut state, "prev"), Some(3), "and back the other way");
+}
+
+/// `pin` and `pseudo` are recorded on the window and said out loud, and
+/// `pin` is refused for a tiled window, which has one slot on one workspace
+/// and nowhere else.
+#[test]
+fn pin_and_pseudo_are_kept_on_the_window() {
+    let mut state = setup(BARE);
+    open(&mut state, &[1]);
+    focus(&mut state, 1);
+
+    assert_eq!(dispatch(&mut state, "pin", ""), [], "a tiled window is not pinned");
+    assert!(!state.is_pinned(WindowId(1)));
+
+    let _ = dispatch(&mut state, "setfloating", "");
+    assert_eq!(
+        dispatch(&mut state, "pin", ""),
+        [Change::Pinned {
+            window: WindowId(1),
+            pinned: true
+        }]
+    );
+    assert!(state.is_pinned(WindowId(1)));
+    let _ = dispatch(&mut state, "pin", "");
+    assert!(!state.is_pinned(WindowId(1)), "it turns over");
+
+    assert_eq!(
+        dispatch(&mut state, "pseudo", ""),
+        [Change::Pseudo {
+            window: WindowId(1),
+            pseudo: true
+        }]
+    );
+    assert!(state.is_pseudo(WindowId(1)));
+}
+
+/// `tagwindow` adds a tag, `-name` takes it away, and a bare name turns it
+/// over, which is how Hyprland's reads its argument.
+#[test]
+fn tagwindow_adds_takes_away_and_turns_over() {
+    let mut state = setup(BARE);
+    open(&mut state, &[1]);
+    focus(&mut state, 1);
+
+    let _ = dispatch(&mut state, "tagwindow", "+music");
+    assert_eq!(state.tags_of(WindowId(1)), ["music"]);
+    // Adding it again changes nothing.
+    let _ = dispatch(&mut state, "tagwindow", "+music");
+    assert_eq!(state.tags_of(WindowId(1)), ["music"]);
+
+    let _ = dispatch(&mut state, "tagwindow", "-music");
+    assert_eq!(state.tags_of(WindowId(1)), [] as [String; 0]);
+
+    // A bare name turns it over.
+    let _ = dispatch(&mut state, "tagwindow", "music");
+    assert_eq!(state.tags_of(WindowId(1)), ["music"]);
+    let _ = dispatch(&mut state, "tagwindow", "music");
+    assert_eq!(state.tags_of(WindowId(1)), [] as [String; 0]);
+}
+
+/// `renameworkspace` gives a workspace a name, and an empty one puts the
+/// number back.
+#[test]
+fn renameworkspace_names_a_workspace() {
+    let mut state = setup(BARE);
+    open(&mut state, &[1]);
+    assert_eq!(state.workspace_name(WorkspaceId(1)), "1");
+
+    let changes = dispatch(&mut state, "renameworkspace", "1 mail");
+    assert_eq!(
+        changes,
+        [Change::Renamed {
+            workspace: WorkspaceId(1),
+            name: "mail".to_owned()
+        }]
+    );
+    assert_eq!(state.workspace_name(WorkspaceId(1)), "mail");
+
+    let _ = dispatch(&mut state, "renameworkspace", "1");
+    assert_eq!(state.workspace_name(WorkspaceId(1)), "1");
+
+    // A workspace that does not exist is left alone rather than made.
+    assert_eq!(dispatch(&mut state, "renameworkspace", "7 nowhere"), []);
+}
+
+/// `workspaceopt allfloat` floats every window on the workspace and leaves
+/// the focus where it was.
+#[test]
+fn workspaceopt_floats_every_window() {
+    let mut state = setup(BARE);
+    open(&mut state, &[1, 2, 3]);
+    focus(&mut state, 2);
+
+    let _ = dispatch(&mut state, "workspaceopt", "allfloat");
+    for id in [1, 2, 3] {
+        assert!(state.is_floating(WindowId(id)), "{id} floats");
+    }
+    assert_eq!(state.focused_window(), Some(WindowId(2)));
+
+    let _ = dispatch(&mut state, "workspaceopt", "allpseudo");
+    for id in [1, 2, 3] {
+        assert!(state.is_pseudo(WindowId(id)), "{id} is pseudotiled");
+    }
+}
+
+/// `focuscurrentorlast` swaps between the focused window and the one before
+/// it, which is what a person binds to Alt-Tab.
+#[test]
+fn focuscurrentorlast_swaps_with_the_one_before() {
+    let mut state = setup(BARE);
+    open(&mut state, &[1, 2, 3]);
+    focus(&mut state, 1);
+    focus(&mut state, 3);
+
+    let _ = dispatch(&mut state, "focuscurrentorlast", "");
+    assert_eq!(state.focused_window(), Some(WindowId(1)));
+    let _ = dispatch(&mut state, "focuscurrentorlast", "");
+    assert_eq!(state.focused_window(), Some(WindowId(3)), "and back");
+}
+
+/// `fullscreenstate` sets the state rather than turning it over, and -1
+/// leaves it alone.
+#[test]
+fn fullscreenstate_sets_rather_than_toggles() {
+    let mut state = setup(BARE);
+    open(&mut state, &[1, 2]);
+    focus(&mut state, 1);
+
+    assert_eq!(dispatch(&mut state, "fullscreenstate", "-1 -1"), []);
+    assert!(state.fullscreen(WorkspaceId(1)).is_none());
+
+    let _ = dispatch(&mut state, "fullscreenstate", "2 -1");
+    assert_eq!(
+        state.fullscreen(WorkspaceId(1)),
+        Some((WindowId(1), FullscreenMode::Fullscreen))
+    );
+    // Again is not a toggle.
+    let changes = dispatch(&mut state, "fullscreenstate", "2 -1");
+    assert_eq!(changes, []);
+    assert!(state.fullscreen(WorkspaceId(1)).is_some());
+
+    let _ = dispatch(&mut state, "fullscreenstate", "0 -1");
+    assert!(state.fullscreen(WorkspaceId(1)).is_none());
+}
+
+/// `bringactivetotop` and `alterzorder` decide which floating window is
+/// drawn over the others.
+#[test]
+fn bringactivetotop_puts_a_floating_window_over_the_rest() {
+    let mut state = setup(BARE);
+    open(&mut state, &[1, 2]);
+    for id in [1, 2] {
+        focus(&mut state, id);
+        let _ = dispatch(&mut state, "setfloating", "");
+    }
+    // The layout draws floating windows bottom to top, so the last is on
+    // top: window 2 floated last.
+    // `rects` sorts by id; the drawing order is the one `layout` gives.
+    let on_top = |state: &State| rects_on(state, M1).last().map(|(id, _)| *id);
+    assert_eq!(on_top(&state), Some(2));
+
+    focus(&mut state, 1);
+    let _ = dispatch(&mut state, "bringactivetotop", "");
+    assert_eq!(on_top(&state), Some(1));
+
+    let _ = dispatch(&mut state, "alterzorder", "bottom");
+    assert_eq!(on_top(&state), Some(2), "and back under");
+}
+
+/// Every new dispatcher is refused with Hyprland's own error when its
+/// argument is not one, rather than doing something nobody asked for.
+#[test]
+fn a_bad_argument_to_a_new_dispatcher_is_refused() {
+    let mut state = setup(BARE);
+    open(&mut state, &[1]);
+    for (name, arg) in [
+        ("resizeactive", "sideways"),
+        ("moveactive", "10"),
+        ("swapwindow", "sideways"),
+        ("workspaceopt", "allsomething"),
+        ("lockactivegroup", "maybe"),
+        ("denywindowfromgroup", "maybe"),
+        ("renameworkspace", "notanumber name"),
+        ("fullscreenstate", "x y"),
+    ] {
+        assert!(
+            matches!(
+                state.dispatch_str(name, arg),
+                Err(Error::BadArgument { .. })
+            ),
+            "{name} {arg} was accepted"
+        );
+    }
+}
+
+// -- The rest of Hyprland's dispatchers ---------------------------------------
+
+/// `layoutmsg togglesplit` turns the split holding the focused window the
+/// other way, which lasts as long as `dwindle:preserve_split` is on -- the
+/// same condition Hyprland's own has.
+#[test]
+fn layoutmsg_togglesplit_turns_the_split() {
+    let mut state = setup(&format!("{BARE}dwindle:preserve_split = true\n"));
+    open(&mut state, &[1, 2]);
+    // Side by side on a wide monitor.
+    assert_eq!(rects(&state)[0].1, r(0, 0, 960, 1080));
+
+    focus(&mut state, 2);
+    assert_eq!(dispatch(&mut state, "layoutmsg", "togglesplit"), [Change::Layout(M1)]);
+    assert_eq!(
+        rects(&state),
+        [(1, r(0, 0, 1920, 540)), (2, r(0, 540, 1920, 540))],
+        "one above the other"
+    );
+
+    // And back.
+    let _ = dispatch(&mut state, "layoutmsg", "togglesplit");
+    assert_eq!(rects(&state)[0].1, r(0, 0, 960, 1080));
+}
+
+/// `layoutmsg swapsplit` exchanges the two halves of the split, so the
+/// window changes sides without changing size.
+#[test]
+fn layoutmsg_swapsplit_exchanges_the_halves() {
+    let mut state = setup(BARE);
+    open(&mut state, &[1, 2]);
+    assert_eq!(rects(&state)[0].1, r(0, 0, 960, 1080));
+
+    focus(&mut state, 1);
+    assert_eq!(dispatch(&mut state, "layoutmsg", "swapsplit"), [Change::Layout(M1)]);
+    assert_eq!(
+        rects(&state),
+        [(1, r(960, 0, 960, 1080)), (2, r(0, 0, 960, 1080))]
+    );
+}
+
+/// `layoutmsg movetoroot` gives a window buried in the tree half the
+/// screen, and `unstable` puts it on the other side.
+#[test]
+fn layoutmsg_movetoroot_lifts_a_window_to_half_the_screen() {
+    let mut state = setup(BARE);
+    open(&mut state, &[1, 2, 3, 4]);
+    // The fourth window is two splits deep, so it has an eighth.
+    focus(&mut state, 4);
+    let buried = rects(&state)[3].1;
+    assert!(buried.width * buried.height < 1920 * 1080 / 4, "{buried:?}");
+
+    assert_eq!(dispatch(&mut state, "layoutmsg", "movetoroot"), [Change::Layout(M1)]);
+    let lifted = rects(&state)[3].1;
+    assert_eq!(lifted.width * lifted.height, 1920 * 1080 / 2);
+    // Stable by default: it stays on the side it was on.
+    assert_eq!(lifted.x, buried.x.min(960));
+}
+
+/// `layoutmsg preselect` says where the next window opened goes, whatever
+/// the shape of the box would otherwise say.
+#[test]
+fn layoutmsg_preselect_places_the_next_window() {
+    // As in Hyprland, the side only sticks while `preserve_split` is on:
+    // with it off both compositors work every split out from its box again.
+    let mut state = setup(&format!("{BARE}dwindle:preserve_split = true\n"));
+    open(&mut state, &[1]);
+    // A 1920x1080 box splits side by side on its own.
+    let _ = dispatch(&mut state, "layoutmsg", "preselect u");
+    open(&mut state, &[2]);
+    assert_eq!(
+        rects(&state),
+        [(1, r(0, 540, 1920, 540)), (2, r(0, 0, 1920, 540))],
+        "the new window went above"
+    );
+
+    // And only for the one window: the next splits the usual way.
+    open(&mut state, &[3]);
+    assert_eq!(rects(&state)[2].1.height, 540, "not a third of the screen");
+}
+
+/// The master layout's own messages: which window is the master, where it
+/// is and how much it takes.
+#[test]
+fn layoutmsg_speaks_to_the_master_layout() {
+    let mut state = setup(&format!("{BARE}general:layout = master\n"));
+    open(&mut state, &[1, 2, 3]);
+    // The first is the master, on the left, taking `master:mfact` of the
+    // screen -- Hyprland's default 0.55.
+    assert_eq!(rects(&state)[0].1, r(0, 0, 1056, 1080));
+
+    focus(&mut state, 3);
+    let _ = dispatch(&mut state, "layoutmsg", "swapwithmaster");
+    assert_eq!(rects(&state)[2].1, r(0, 0, 1056, 1080), "3 is the master");
+
+    focus(&mut state, 1);
+    let _ = dispatch(&mut state, "layoutmsg", "focusmaster");
+    assert_eq!(focused(&state), Some(3));
+
+    let _ = dispatch(&mut state, "layoutmsg", "orientationtop");
+    assert_eq!(rects(&state)[2].1, r(0, 0, 1920, 594), "along the top");
+
+    let _ = dispatch(&mut state, "layoutmsg", "mfact exact 0.25");
+    assert_eq!(rects(&state)[2].1, r(0, 0, 1920, 270));
+    let _ = dispatch(&mut state, "layoutmsg", "mfact 0.25");
+    assert_eq!(rects(&state)[2].1, r(0, 0, 1920, 540), "a change, not a size");
+}
+
+/// A message meant for the other layout, and one neither knows, are both
+/// ignored rather than refused: Hyprland ignores them too.
+#[test]
+fn a_layoutmsg_the_layout_does_not_know_is_ignored() {
+    let mut state = setup(BARE);
+    open(&mut state, &[1, 2]);
+    let before = rects(&state);
+    for message in ["swapwithmaster", "orientationtop", "nonsense", ""] {
+        assert_eq!(dispatch(&mut state, "layoutmsg", message), []);
+    }
+    assert_eq!(rects(&state), before);
+}
+
+/// `moveintoorcreategroup` makes the window in that direction into a group
+/// and joins it, so one bind is enough to gather windows.
+#[test]
+fn moveintoorcreategroup_makes_the_group_it_needs() {
+    let mut state = setup(BARE);
+    open(&mut state, &[1, 2]);
+    focus(&mut state, 2);
+    let _ = dispatch(&mut state, "moveintoorcreategroup", "l");
+    let group = state.group(WindowId(1)).expect("window 1 is now a group");
+    assert_eq!(group.members, [WindowId(1), WindowId(2)]);
+    // And one window fills the screen, since the group holds one slot.
+    assert_eq!(rects(&state), [(2, r(0, 0, 1920, 1080))]);
+}
+
+/// `movewindoworgroup` joins a group when there is one in that direction
+/// and moves the window when there is not.
+#[test]
+fn movewindoworgroup_joins_a_group_or_moves() {
+    let mut state = setup(BARE);
+    open(&mut state, &[1, 2]);
+    // Nothing is a group yet, so this moves.
+    focus(&mut state, 2);
+    let _ = dispatch(&mut state, "movewindoworgroup", "l");
+    assert_eq!(
+        rects(&state),
+        [(1, r(960, 0, 960, 1080)), (2, r(0, 0, 960, 1080))]
+    );
+    assert!(state.group(WindowId(1)).is_none());
+
+    // Make one, and the same dispatcher joins it.
+    focus(&mut state, 2);
+    let _ = dispatch(&mut state, "togglegroup", "");
+    focus(&mut state, 1);
+    let _ = dispatch(&mut state, "movewindoworgroup", "l");
+    let group = state.group(WindowId(2)).expect("window 2 is a group");
+    assert_eq!(group.members, [WindowId(2), WindowId(1)]);
+}
+
+/// `focusworkspaceoncurrentmonitor` brings the workspace over rather than
+/// following it to the monitor it is on.
+#[test]
+fn focusworkspaceoncurrentmonitor_brings_the_workspace_here() {
+    let mut state = setup(BARE);
+    let _changes = state.add_monitor(monitor(M2, 1920, 0, 1920, 1080)).unwrap();
+    // Workspace 2 lives on the second monitor.
+    let _ = dispatch(&mut state, "focusmonitor", "1");
+    let _ = dispatch(&mut state, "workspace", "2");
+    open(&mut state, &[1]);
+    assert_eq!(state.workspace_monitor(WorkspaceId(2)), Some(M2));
+
+    let _ = dispatch(&mut state, "focusmonitor", "0");
+    let _ = dispatch(&mut state, "focusworkspaceoncurrentmonitor", "2");
+    assert_eq!(state.workspace_monitor(WorkspaceId(2)), Some(M1));
+    assert_eq!(state.active_workspace(M1), Some(WorkspaceId(2)));
+    assert_eq!(focused(&state), Some(1), "and the window on it");
+}
+
+/// `movewindowpixel` and `resizewindowpixel` act on the window the
+/// compositor picked out rather than on the focused one.
+#[test]
+fn movewindowpixel_and_resizewindowpixel_act_on_one_window() {
+    let mut state = setup(BARE);
+    let _changes = state
+        .open_floating(WindowId(1), r(100, 100, 400, 300))
+        .unwrap();
+    let _changes = state
+        .open_floating(WindowId(2), r(700, 100, 400, 300))
+        .unwrap();
+    focus(&mut state, 2);
+
+    let by = Move {
+        x: 30,
+        y: -20,
+        exact: false,
+    };
+    let _changes = state.move_window_pixel(WindowId(1), &by).unwrap();
+    let _changes = state.resize_window_pixel(WindowId(1), &by).unwrap();
+    assert_eq!(rects(&state)[0].1, r(130, 80, 430, 280));
+    assert_eq!(rects(&state)[1].1, r(700, 100, 400, 300), "2 is untouched");
+    assert!(state.move_window_pixel(WindowId(9), &by).is_err());
+}
+
+/// Both read the window off the end, after a comma, which is the one place
+/// Hyprland puts it last.
+#[test]
+fn movewindowpixel_reads_the_window_after_the_comma() {
+    assert_eq!(
+        Dispatcher::parse("movewindowpixel", "10 20,class:foot").unwrap(),
+        Dispatcher::MoveWindowPixel {
+            by: Move {
+                x: 10,
+                y: 20,
+                exact: false
+            },
+            window: "class:foot".to_owned(),
+        }
+    );
+    assert!(Dispatcher::parse("resizewindowpixel", "10 20").is_err());
+    assert!(Dispatcher::parse("movewindowpixel", "sideways,foo").is_err());
+}
+
+/// `setignoregrouplock` is deprecated in Hyprland, where it does nothing;
+/// it is accepted here and does nothing too.
+#[test]
+fn setignoregrouplock_is_accepted_and_does_nothing() {
+    let mut state = setup(BARE);
+    open(&mut state, &[1, 2]);
+    let before = rects(&state);
+    assert_eq!(dispatch(&mut state, "setignoregrouplock", "toggle"), []);
+    assert_eq!(rects(&state), before);
 }

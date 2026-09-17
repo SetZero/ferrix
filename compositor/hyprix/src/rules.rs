@@ -53,6 +53,42 @@ impl Rules {
         &self.styles
     }
 
+    /// `setprop`: change one of a window's drawn properties by hand, the
+    /// way a `windowrule` would have.
+    ///
+    /// Gives whether the name was one of the properties. Hyprland's
+    /// `setprop` reaches the same field a rule sets, so a property set here
+    /// outlives the rules and is forgotten with the window.
+    pub fn set_property(&mut self, window: WindowId, name: &str, value: &str) -> bool {
+        // Hyprland's `unset` puts a property back to what the style says.
+        let unset = value.eq_ignore_ascii_case("unset");
+        let yes = matches!(value, "1" | "true" | "yes" | "on") || value.is_empty();
+        let number = value.parse::<i64>().ok();
+        let fraction = value.parse::<f32>().ok();
+        // A value that is not one leaves the window as it was, rather than
+        // making a property up.
+        let known = match name {
+            "alpha" | "alphafullscreen" | "opacity" => unset || fraction.is_some(),
+            "rounding" | "bordersize" => unset || number.is_some(),
+            "noblur" | "noshadow" | "nodim" => true,
+            _ => false,
+        };
+        if !known {
+            return false;
+        }
+        let style = self.styles.entry(window).or_default();
+        match name {
+            "alpha" | "alphafullscreen" | "opacity" => style.opacity = fraction.filter(|_| !unset),
+            "rounding" => style.rounding = number.filter(|_| !unset),
+            "bordersize" => style.border = number.filter(|_| !unset),
+            "noblur" => style.blur = unset || !yes,
+            "noshadow" => style.shadow = unset || !yes,
+            "nodim" => style.dim = unset || !yes,
+            _ => return false,
+        }
+        true
+    }
+
     /// Forget a window that has gone.
     pub fn window_gone(&mut self, window: WindowId) {
         let _ = self.styles.remove(&window);

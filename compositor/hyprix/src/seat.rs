@@ -158,6 +158,10 @@ struct Bound {
     submap: Option<String>,
     /// `u`: fires whichever map is in force.
     universal: bool,
+    /// `m`: a drag. It fires on the press *and* on the release, and the
+    /// argument it carries is `+action` for the one and `-action` for the
+    /// other, which is how Hyprland tells the start of a drag from its end.
+    mouse: bool,
     dispatcher: String,
     argument: String,
 }
@@ -264,6 +268,7 @@ impl Seat {
                 while_locked: bind.flags.locked,
                 submap: bind.submap.clone(),
                 universal: bind.flags.submap_universal,
+                mouse: bind.flags.mouse,
                 dispatcher: bind.dispatcher.clone(),
                 argument: bind.arg.clone(),
             });
@@ -328,6 +333,16 @@ impl Seat {
     #[must_use]
     pub const fn keyboard(&self) -> &Keyboard {
         &self.keyboard
+    }
+
+    /// Put the pointer at `(x, y)`, as `movecursor` does.
+    ///
+    /// Gives the actions the move causes, which the caller delivers: a
+    /// pointer that moved is a pointer that has entered or left a window,
+    /// and a client is told that the same way whether a person moved the
+    /// mouse or a dispatcher did.
+    pub fn warp(&mut self, x: f64, y: f64) -> Vec<Action> {
+        self.move_to(x, y)
     }
 
     /// Where the pointer is.
@@ -415,11 +430,16 @@ impl Seat {
             .filter(|bind| bind.trigger == trigger)
             .filter(|bind| self.in_force(bind))
             .filter(|bind| bind.ignore_mods || bind.mods == held)
-            .filter(|bind| if bind.release { !pressed } else { pressed })
+            // A drag is both halves of the press; everything else is one.
+            .filter(|bind| bind.mouse || if bind.release { !pressed } else { pressed })
             .filter(|bind| !repeat || bind.repeat)
             .map(|bind| Action::Dispatch {
                 name: bind.dispatcher.clone(),
-                argument: bind.argument.clone(),
+                argument: if bind.mouse {
+                    format!("{}{}", if pressed { '+' } else { '-' }, bind.argument)
+                } else {
+                    bind.argument.clone()
+                },
             })
             .collect()
     }

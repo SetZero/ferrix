@@ -242,6 +242,7 @@ dependencies = [
  "compositor-lswt",
  "compositor-pattern",
  "compositor-protocol",
+ "compositor-regex",
  "compositor-render",
  "compositor-server",
  "compositor-shot",

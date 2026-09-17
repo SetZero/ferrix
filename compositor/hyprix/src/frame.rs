@@ -120,6 +120,28 @@ pub fn draw_locked(
     draw_windows(target, &empty, clients, &sources, &layers, damage)
 }
 
+/// Draw a screen that `dpms off` has turned off: black, and nothing else.
+///
+/// Hyprland turns the connector itself off, which a virtual screen has no
+/// equivalent of; what a person sees is the same, and what the compositor
+/// must *not* show -- the windows that were there -- is gone either way.
+pub fn draw_dark(target: &mut Output<'_>, damage: &Damage) -> Result<(), String> {
+    let Output {
+        canvas,
+        backend,
+        ..
+    } = target;
+    canvas.clear(compositor_render::Color(0xff00_0000), damage);
+    let (width, height) = backend.size();
+    let stride = backend.stride();
+    let mut screen = Target::new(backend.buffer(), width, height, stride)
+        .map_err(|error| format!("the screen's buffer is not one: {error:?}"))?;
+    canvas
+        .present(&mut screen, damage)
+        .map_err(|error| format!("the frame does not fit the screen: {error:?}"))?;
+    backend.present().map_err(|error| error.to_string())
+}
+
 /// The two above, which differ only in what they are given to draw.
 fn draw_windows(
     target: &mut Output<'_>,

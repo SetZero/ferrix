@@ -75,6 +75,76 @@ impl Master {
         self.master = self.master.map(exchange);
     }
 
+    /// The master, which is `None` only when the list is empty.
+    pub(crate) const fn master(&self) -> Option<WindowId> {
+        self.master
+    }
+
+    /// `layoutmsg swapwithmaster`: exchange `window` with the master, or,
+    /// when `window` *is* the master, with the first of the stack.
+    ///
+    /// The two change places in the list as well, so a second call puts
+    /// them back -- which is what makes the message a toggle in Hyprland.
+    pub(crate) fn swap_with_master(&mut self, window: WindowId) -> bool {
+        let Some(master) = self.master else {
+            return false;
+        };
+        let other = if window == master {
+            let Some(first) = self.stack().next() else {
+                return false;
+            };
+            first
+        } else if self.contains(window) {
+            window
+        } else {
+            return false;
+        };
+        self.swap(master, other);
+        // `swap` renames both, and the master is now the window that was in
+        // the other's place; the master stays whichever window holds the
+        // master's slot, which `swap` has already seen to.
+        true
+    }
+
+    /// `layoutmsg swapnext` and `swapprev`: exchange `window` with the one
+    /// after or before it in list order, wrapping around.
+    pub(crate) fn swap_along(&mut self, window: WindowId, back: bool) -> bool {
+        let Some(at) = self.order.iter().position(|id| *id == window) else {
+            return false;
+        };
+        if self.order.len() < 2 {
+            return false;
+        }
+        let to = if back {
+            at.checked_sub(1).unwrap_or(self.order.len() - 1)
+        } else {
+            (at + 1) % self.order.len()
+        };
+        self.order.swap(at, to);
+        true
+    }
+
+    /// `layoutmsg rollnext` and `rollprev`: turn the whole list around by
+    /// one, so every window moves to the next slot and the last wraps to
+    /// the front. The master slot keeps its place and takes whichever
+    /// window rolls into it.
+    pub(crate) fn roll(&mut self, back: bool) {
+        if self.order.len() < 2 {
+            return;
+        }
+        let master = self
+            .master
+            .and_then(|master| self.order.iter().position(|id| *id == master));
+        if back {
+            self.order.rotate_left(1);
+        } else {
+            self.order.rotate_right(1);
+        }
+        if let Some(at) = master {
+            self.master = self.order.get(at).copied();
+        }
+    }
+
     /// Whether `window` is in the list.
     pub(crate) fn contains(&self, window: WindowId) -> bool {
         self.order.contains(&window)

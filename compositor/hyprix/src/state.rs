@@ -34,6 +34,13 @@ pub struct Slot {
     /// Layer surfaces it owns, in the order it made them: wlroots places
     /// them in that order, so a bar that started first gets the edge.
     layers: Vec<ObjectId>,
+    /// What each of its windows was called when it mapped: the class and
+    /// then the title. A client may rename a window afterwards, and
+    /// `initialclass:` and `initialtitle:` are what it was called first.
+    firsts: BTreeMap<WindowId, (String, String)>,
+    /// The process that opened the connection, or 0 where the kernel would
+    /// not say.
+    pid: i32,
     /// Whether it is finished and waiting to be dropped.
     gone: bool,
 }
@@ -74,6 +81,19 @@ impl Slot {
     /// The pools this connection has shared, by object.
     pub const fn pools(&self) -> &BTreeMap<ObjectId, Mapping> {
         &self.pools
+    }
+
+    /// The process that opened it.
+    pub const fn pid(&self) -> i32 {
+        self.pid
+    }
+
+    /// What one of its windows was called when it mapped: the class and
+    /// then the title.
+    pub fn first_called(&self, window: WindowId) -> Option<(&str, &str)> {
+        self.firsts
+            .get(&window)
+            .map(|(class, title)| (class.as_str(), title.as_str()))
     }
 }
 
@@ -199,6 +219,9 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
         i32::try_from(config.int("input:repeat_delay").unwrap_or(600)).unwrap_or(600),
     );
     let follow_mouse = config.int("input:follow_mouse").unwrap_or(1) != 0;
+    // Off in Hyprland: a program asking for another's window makes it
+    // urgent rather than taking the focus away from what is being used.
+    let focus_on_activate = config.int("misc:focus_on_activate").unwrap_or(0) != 0;
     {
         let (live, unresolved) = seat.binds();
         for reason in unresolved {
@@ -306,8 +329,20 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
     let mut most = 0usize;
     let started = Instant::now();
     let deadline = options.deadline.map(Duration::from_millis);
+    // What the compositor's own dispatchers change: which screens `dpms`
+    // has turned off, which windows have asked to be raised and not been
+    // looked at, the drag a `bindm` started, whether `exit` was asked for,
+    // and whether `toggleswallow` is on.
+    let mut dpms: BTreeMap<String, bool> = BTreeMap::new();
+    let mut urgent: Vec<WindowId> = Vec::new();
+    let mut drag: Option<crate::act::Drag> = None;
+    let mut quit = false;
+    let mut swallow = false;
 
     loop {
+        if quit {
+            break;
+        }
         if let Some(limit) = deadline
             && started.elapsed() > limit
         {
@@ -323,6 +358,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
         while let Ok(Some(stream)) = listener.accept() {
             match Connection::new(stream) {
                 Ok(connection) => slots.push(Slot {
+                    pid: connection.peer_pid(),
                     client: {
                         let mut client = Client::new(globals(screens.len()));
                         // What each screen is, and what the seat has: only
@@ -340,6 +376,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                     pools: BTreeMap::new(),
                     windows: Vec::new(),
                     layers: Vec::new(),
+                    firsts: BTreeMap::new(),
                     gone: false,
                 }),
                 Err(_) => continue,
@@ -395,6 +432,14 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
         }
 
         let mut changed = false;
+        // What each screen is called and where it is, which is all a
+        // dispatcher needs of one: `dpms` names a screen and
+        // `movecursortocorner` falls back to the first. Taken here so that
+        // the screens themselves stay free for the frame below.
+        let placements: Vec<(String, Rect)> = screens
+            .iter()
+            .map(|screen| (screen.name.clone(), screen.rect))
+            .collect();
 
         // Input, before the clients are read: a key that fires a dispatcher
         // changes the layout, and a window told its new size in the same pass
@@ -439,18 +484,52 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                 now,
                 follow_mouse,
             );
+            let mut pending = Vec::new();
             for (name, argument) in done.dispatch {
-                if dispatch(
-                    &name,
-                    &argument,
-                    &mut state,
+                let mut around = crate::act::Around {
+                    slots: &mut slots,
+                    sources: &sources,
+                    socket: listener.path(),
+                    seat: &mut seat,
+                    plugins: &mut plugins,
+                    rules: &mut window_rules,
+                    events: &mut events,
+                    dpms: &mut dpms,
+                    screens: &placements,
+                    urgent: &mut urgent,
+                    drag: &mut drag,
+                    pending: &mut pending,
+                    quit: &mut quit,
+                    swallow: &mut swallow,
+                    report,
+                };
+                if dispatch(&name, &argument, &mut state, &mut around) {
+                    changed = true;
+                }
+            }
+            // A dispatcher that moved the pointer moved it for the clients
+            // too: the same actions a hand would have caused.
+            if !pending.is_empty() {
+                let _done = crate::deliver::deliver(
+                    &pending,
+                    &mut focus,
+                    &state,
                     &mut slots,
                     &sources,
-                    listener.path(),
-                    &mut seat,
-                    &mut plugins,
-                    report,
-                ) {
+                    now,
+                    follow_mouse,
+                );
+                changed = true;
+            }
+            // A drag carries on for as long as the button is held: one bind
+            // starts it and every movement after that moves the window.
+            if let Some(held) = drag.as_mut() {
+                let (x, y) = seat.pointer();
+                #[expect(
+                    clippy::cast_possible_truncation,
+                    reason = "the pointer is held inside the screen, which is far inside i64"
+                )]
+                if crate::act::dragged(held, &mut state, (x as i64, y as i64)) {
                     changed = true;
                 }
             }
@@ -476,6 +555,8 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                 &mut shots,
                 &mut lock,
                 &screens,
+                &mut urgent,
+                focus_on_activate,
                 report,
             )? {
                 changed = true;
@@ -486,22 +567,47 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
         for shot in shots.drain(..) {
             take_shot(&shot, &screens, &mut slots);
         }
+        let mut pending = Vec::new();
         for reply in asked {
+            let mut around = crate::act::Around {
+                slots: &mut slots,
+                sources: &sources,
+                socket: listener.path(),
+                seat: &mut seat,
+                plugins: &mut plugins,
+                rules: &mut window_rules,
+                events: &mut events,
+                dpms: &mut dpms,
+                screens: &placements,
+                urgent: &mut urgent,
+                drag: &mut drag,
+                pending: &mut pending,
+                quit: &mut quit,
+                swallow: &mut swallow,
+                report,
+            };
             if run_ipc(
                 &reply,
                 &mut state,
                 &mut config,
                 &mut settings,
                 &mut style,
-                &mut slots,
-                &sources,
-                listener.path(),
-                &mut seat,
-                &mut plugins,
-                report,
+                &mut around,
             ) {
                 changed = true;
             }
+        }
+        if !pending.is_empty() {
+            let _done = crate::deliver::deliver(
+                &pending,
+                &mut focus,
+                &state,
+                &mut slots,
+                &sources,
+                now,
+                follow_mouse,
+            );
+            changed = true;
         }
 
         // A connection that ended takes its windows with it.
@@ -692,10 +798,12 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                         },
                     ),
                 };
-                // While the session is locked the screen shows the lock's
-                // own surface and nothing else -- not the windows, not the
-                // bars, and not what was there a moment ago.
-                if let Some(held) = lock.as_ref() {
+                // A screen `dpms off` turned off shows nothing at all,
+                // before the lock and before the windows: that is what
+                // turning a screen off means.
+                if dpms.get(&screen.name).copied().unwrap_or(false) {
+                    crate::frame::draw_dark(&mut target, &full)?;
+                } else if let Some(held) = lock.as_ref() {
                     let covering =
                         held.surfaces
                             .get(&which)
@@ -784,6 +892,8 @@ fn serve(
     shots: &mut Vec<Shot>,
     lock: &mut Option<Lock>,
     screens: &[Screen],
+    urgent: &mut Vec<WindowId>,
+    taking_focus: bool,
     report: &mut dyn FnMut(&str),
 ) -> Result<bool, String> {
     let Some(slot) = slots.get_mut(index) else {
@@ -975,6 +1085,14 @@ fn serve(
                         // The frame is redrawn below whatever the rules
                         // did, since a window that has just mapped is a
                         // change in itself.
+                        // What it is called now is what it opened as, and
+                        // `initialclass:` and `initialtitle:` keep it after
+                        // the client has renamed the window.
+                        let called = slot.client.toplevel(toplevel).map_or_else(
+                            || (String::new(), String::new()),
+                            |top| (top.app_id.clone(), top.title.clone()),
+                        );
+                        let _ = slot.firsts.insert(window, called);
                         let _ = apply_rules(rules, &slot.client, toplevel, window, state, report);
                         configure(&mut slot.client, state, toplevel, window);
                         let _ = sources.insert(
@@ -1027,7 +1145,17 @@ fn serve(
     // with a token this compositor gave out. A token it did not give out is
     // refused, which is the whole of the protocol's security.
     if let Some((token, surface)) = activating {
-        changed |= activate(&token, surface, slots, index, state, sources, report);
+        changed |= activate(
+            &token,
+            surface,
+            slots,
+            index,
+            state,
+            sources,
+            urgent,
+            taking_focus,
+            report,
+        );
     }
     input_method_turn(
         method,
@@ -1354,27 +1482,18 @@ fn open_screens() -> Result<Vec<Box<dyn Backend>>, String> {
 /// dispatch movefocus l` and a keybind of the same name do the same thing.
 /// `keyword` changes one option while the compositor runs, which is what
 /// `hyprctl keyword general:gaps_in 10` is for.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "a request may change any of the compositor's parts, and passing one struct would only move the list"
-)]
 fn run_ipc(
     reply: &compositor_ipc::Reply,
     state: &mut State,
     config: &mut Config,
     settings: &mut Settings,
     style: &mut Style,
-    slots: &mut [Slot],
-    sources: &BTreeMap<WindowId, Source>,
-    socket: &std::path::Path,
-    seat: &mut Seat,
-    plugins: &mut crate::plugins::Plugins,
-    report: &mut dyn FnMut(&str),
+    around: &mut crate::act::Around<'_>,
 ) -> bool {
     match reply {
-        compositor_ipc::Reply::Dispatch { name, argument } => dispatch(
-            name, argument, state, slots, sources, socket, seat, plugins, report,
-        ),
+        compositor_ipc::Reply::Dispatch { name, argument } => {
+            dispatch(name, argument, state, around)
+        }
         compositor_ipc::Reply::Keyword { name, value } => {
             if config.keyword(name, value).is_err() {
                 return false;
@@ -1403,45 +1522,24 @@ fn run_ipc(
 /// `submap` is here for the same reason: which binds are in force is the
 /// seat's and not the tiling's, and it moves no window either. Both are in
 /// Hyprland's one dispatcher table, and so in this one.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "a dispatcher may reach the layout, a client, a program, the seat or a plugin"
-)]
 fn dispatch(
     name: &str,
     argument: &str,
     state: &mut State,
-    slots: &mut [Slot],
-    sources: &BTreeMap<WindowId, Source>,
-    socket: &std::path::Path,
-    seat: &mut Seat,
-    plugins: &mut crate::plugins::Plugins,
-    report: &mut dyn FnMut(&str),
+    around: &mut crate::act::Around<'_>,
 ) -> bool {
-    if name.eq_ignore_ascii_case("exec") {
-        match start(argument, socket) {
-            Ok(pid) => report(&format!("hyprix: started {argument} as {pid}")),
-            Err(error) => report(&format!("hyprix: {argument} did not start: {error}")),
-        }
-        return false;
+    let name = name.to_ascii_lowercase();
+    let name = name.as_str();
+    // The compositor's own half of Hyprland's table.
+    if let Some(changed) = crate::act::compositor(name, argument, state, around) {
+        return changed;
     }
-    if name.eq_ignore_ascii_case("submap") {
-        // No layout change either way: the picture is the same and only the
-        // keyboard has moved. The event socket is told from the snapshot,
-        // which carries the submap.
-        match seat.enter_submap(argument) {
-            Ok(true) => {
-                let name = seat.submap();
-                if name.is_empty() {
-                    report("hyprix: the global keymap");
-                } else {
-                    report(&format!("hyprix: submap {name}"));
-                }
-            }
-            Ok(false) => {}
-            Err(why) => report(&format!("hyprix: {why}")),
-        }
-        return false;
+    // Four dispatchers carry a window expression rather than a direction:
+    // which window it picks out is the compositor's to say, since a title,
+    // a class and a process are all things the layout does not hold. The
+    // layout is reached back into once the window is known.
+    if let Some(what) = window_named(name) {
+        return one_window(what, name, argument, state, around);
     }
     let changes = match state.dispatch_str(name, argument) {
         Ok(changes) => changes,
@@ -1451,19 +1549,132 @@ fn dispatch(
         // entry. The plugin acts by sending requests back, so nothing has
         // changed yet.
         Err(compositor_layout::Error::UnknownDispatcher(_)) => {
-            let _ = plugins.dispatch(name, argument);
+            let _ = around.plugins.dispatch(name, argument);
             return false;
         }
-        Err(_) => return false,
+        Err(error) => {
+            around.say(&format!("hyprix: {name}: {error}"));
+            return false;
+        }
     };
     // `killactive` asks a window to close, which is the client's to obey;
     // the layout says which window.
     for change in &changes {
         if let compositor_layout::Change::Close(window) = change {
-            close(*window, slots, sources);
+            close(*window, around.slots, around.sources);
         }
     }
     !changes.is_empty()
+}
+
+/// What a dispatcher that names a window does to the one it picks out.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Named {
+    /// `focuswindow`, `focuswindowbyclass`.
+    Focus,
+    /// `closewindow`, `killwindow`.
+    Close,
+    /// `movewindowpixel`.
+    Move,
+    /// `resizewindowpixel`.
+    Resize,
+}
+
+/// Whether a dispatcher names a window with one of Hyprland's window
+/// expressions, and what it does to it.
+fn window_named(name: &str) -> Option<Named> {
+    match name {
+        "focuswindow" | "focuswindowbyclass" => Some(Named::Focus),
+        "closewindow" | "killwindow" => Some(Named::Close),
+        "movewindowpixel" => Some(Named::Move),
+        "resizewindowpixel" => Some(Named::Resize),
+        _ => None,
+    }
+}
+
+/// Carry out one of those four.
+fn one_window(
+    what: Named,
+    name: &str,
+    argument: &str,
+    state: &mut State,
+    around: &mut crate::act::Around<'_>,
+) -> bool {
+    // The two pixel dispatchers put the change first and the window after a
+    // comma, which is the one place Hyprland puts the window last.
+    let (which, by) = match what {
+        Named::Focus | Named::Close => (argument.trim(), None),
+        Named::Move | Named::Resize => {
+            let Some((how, which)) = argument.split_once(',') else {
+                around.say(&format!("hyprix: {name} takes a change, a comma and a window"));
+                return false;
+            };
+            let Some(by) = compositor_layout::Move::parse(how.trim()) else {
+                around.say(&format!("hyprix: {name}: {how:?} is not a change"));
+                return false;
+            };
+            (which.trim(), Some(by))
+        }
+    };
+    let Some(window) = crate::act::pick(Some(which), state, around) else {
+        return false;
+    };
+    match (what, by) {
+        (Named::Focus, _) => !state.focus_window(window).unwrap_or_default().is_empty(),
+        (Named::Close, _) => {
+            close(window, around.slots, around.sources);
+            // The window is still there until its client obeys, so nothing
+            // has moved yet.
+            false
+        }
+        (Named::Move, Some(by)) => state
+            .move_window_pixel(window, &by)
+            .is_ok_and(|changes| !changes.is_empty()),
+        (Named::Resize, Some(by)) => state
+            .resize_window_pixel(window, &by)
+            .is_ok_and(|changes| !changes.is_empty()),
+        (Named::Move | Named::Resize, None) => false,
+    }
+}
+
+/// Every window there is, as one of Hyprland's window expressions sees it.
+///
+/// Built when a dispatcher names a window and not held, because it borrows
+/// every client's titles: a name a client changes between two dispatchers
+/// has to be the new one, and a cache of them is a cache that goes stale in
+/// the one direction that matters.
+pub(crate) fn as_seen<'a>(
+    state: &'a State,
+    slots: &'a [Slot],
+    sources: &BTreeMap<WindowId, Source>,
+) -> Vec<crate::select::Seen<'a>> {
+    let mut seen = Vec::new();
+    for (&window, source) in sources {
+        let Some(slot) = slots.get(source.client) else {
+            continue;
+        };
+        let named = slot
+            .client()
+            .toplevels()
+            .find(|(_, top)| top.surface == source.surface)
+            .map(|(_, top)| top);
+        let (class, title) = named.map_or(("", ""), |top| (top.app_id.as_str(), top.title.as_str()));
+        // A window whose client never said what it was called mapped with
+        // the same nothing it is called now.
+        let (initial_class, initial_title) = slot.first_called(window).unwrap_or((class, title));
+        seen.push(crate::select::Seen {
+            window,
+            class,
+            title,
+            initial_class,
+            initial_title,
+            tags: state.tags_of(window),
+            pid: slot.pid(),
+            floating: state.is_floating(window),
+            workspace: state.workspace_of(window),
+        });
+    }
+    seen
 }
 
 /// The session lock, while a program holds it.
@@ -1820,6 +2031,10 @@ fn input_method_turn(
 /// has, and the second passes it back with the surface it wants raised. A
 /// token the compositor did not make is refused, which is the whole of what
 /// stops any program stealing the focus whenever it likes.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "an activation reaches every connection, the layout, the urgency list and the option that decides between the last two"
+)]
 fn activate(
     token: &str,
     surface: ObjectId,
@@ -1827,6 +2042,8 @@ fn activate(
     index: usize,
     state: &mut State,
     sources: &BTreeMap<WindowId, Source>,
+    urgent: &mut Vec<WindowId>,
+    taking_focus: bool,
     report: &mut dyn FnMut(&str),
 ) -> bool {
     // Any client may have been given the token, since the program that asked
@@ -1846,6 +2063,16 @@ fn activate(
         report("hyprix: an activation for a surface that is not a window");
         return false;
     };
+    // `misc:focus_on_activate` is off in Hyprland and off here: a program
+    // that asks for another's window makes it urgent, and the person
+    // decides, with `focusurgentorlast`, whether to go to it. With the
+    // option on the focus goes there at once.
+    if !taking_focus {
+        urgent.retain(|held| *held != window);
+        urgent.push(window);
+        report(&format!("hyprix: window {} is urgent", window.0));
+        return false;
+    }
     if state.focus_window(window).is_err() {
         return false;
     }
@@ -2491,7 +2718,7 @@ fn read_config(options: &Options) -> Result<Config, String> {
 /// A sentence saying why it did not start, which the caller logs: a program
 /// that will not start is the person's to fix, not a reason to have no
 /// compositor.
-fn start(command: &str, socket: &std::path::Path) -> Result<u32, String> {
+pub(crate) fn start(command: &str, socket: &std::path::Path) -> Result<u32, String> {
     let mut parts = command.split_whitespace();
     let program = parts.next().ok_or_else(|| "an empty command".to_owned())?;
     std::process::Command::new(program)

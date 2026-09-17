@@ -50,7 +50,9 @@ mod tests;
 use core::fmt;
 
 pub use compositor_config::Gaps;
-pub use dispatch::{Direction, Dispatcher, FullscreenMode, GroupMember, Locking, WorkspaceTarget};
+pub use dispatch::{
+    Direction, Dispatcher, FullscreenMode, GroupMember, Locking, Move, WorkspaceTarget,
+};
 pub use settings::{
     DwindleSettings, ForceSplit, Layout, MasterSettings, NewStatus, Orientation, Settings,
 };

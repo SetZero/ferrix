@@ -129,6 +129,71 @@ impl Node {
         }
     }
 
+    /// The way down to the split that holds `window` as one of its own two
+    /// children: `false` for a first child and `true` for a second. An
+    /// empty path is the root itself.
+    ///
+    /// A path rather than a borrow of the split, because a tree walked with
+    /// `&mut` cannot hand back a reference into one branch and then look in
+    /// the other; the path is taken once, and the walk down it is short.
+    fn path_to_parent(&self, window: WindowId) -> Option<Vec<bool>> {
+        let Self::Split(split) = self else {
+            return None;
+        };
+        if split.first == Self::Leaf(window) || split.second == Self::Leaf(window) {
+            return Some(Vec::new());
+        }
+        for (side, child) in [(false, &split.first), (true, &split.second)] {
+            if child.contains(window)
+                && let Some(mut rest) = child.path_to_parent(window)
+            {
+                rest.insert(0, side);
+                return Some(rest);
+            }
+        }
+        None
+    }
+
+    /// The node a path leads to.
+    fn at(&mut self, path: &[bool]) -> Option<&mut Self> {
+        let Some((side, rest)) = path.split_first() else {
+            return Some(self);
+        };
+        let Self::Split(split) = self else {
+            return None;
+        };
+        if *side { split.second.at(rest) } else { split.first.at(rest) }
+    }
+
+    /// The split a path leads to.
+    fn split_at(&mut self, path: &[bool]) -> Option<&mut Split> {
+        match self.at(path) {
+            Some(Self::Split(split)) => Some(split),
+            _ => None,
+        }
+    }
+
+    /// Exchange the two leaves holding `a` and `b`.
+    ///
+    /// The tree keeps its shape and the two windows change places in it,
+    /// which is what Hyprland's dwindle `switchWindows` does: it exchanges
+    /// the two nodes' windows rather than moving nodes around, so every
+    /// split's ratio and direction survives the swap.
+    ///
+    /// Each window is a leaf exactly once, so rewriting a leaf as it is
+    /// reached cannot make the walk swap the same pair twice.
+    fn swap(&mut self, a: WindowId, b: WindowId) {
+        match self {
+            Self::Leaf(id) if *id == a => *id = b,
+            Self::Leaf(id) if *id == b => *id = a,
+            Self::Leaf(_) => {}
+            Self::Split(split) => {
+                split.first.swap(a, b);
+                split.second.swap(a, b);
+            }
+        }
+    }
+
     /// Each leaf with its box, when this subtree's box is `area`.
     fn slots(&self, area: Area, settings: &Settings, out: &mut Vec<(WindowId, Area)>) {
         match self {
@@ -262,6 +327,9 @@ impl Node {
 #[derive(Debug, Clone, PartialEq, Default)]
 pub(crate) struct Dwindle {
     root: Option<Node>,
+    /// Where `layoutmsg preselect` said the next window goes, taken by the
+    /// next window that opens.
+    preselect: Option<Direction>,
 }
 
 impl Dwindle {
@@ -282,7 +350,12 @@ impl Dwindle {
             .filter(|target| root.contains(*target))
             .or_else(|| leaves(&root).last().copied());
         if let Some(target) = target {
-            let _found = root.split_leaf(target, new, area, settings, Place::Configured);
+            // `layoutmsg preselect` names the side for one window only.
+            let place = self
+                .preselect
+                .take()
+                .map_or(Place::Configured, Place::Toward);
+            let _found = root.split_leaf(target, new, area, settings, place);
         }
         self.root = Some(root);
     }
@@ -333,6 +406,101 @@ impl Dwindle {
     /// Remove `window`, promoting its sibling.
     pub(crate) fn remove(&mut self, window: WindowId) {
         self.root = self.root.take().and_then(|root| root.without(window));
+    }
+
+    /// Exchange two windows' places, leaving every split alone.
+    pub(crate) fn swap(&mut self, a: WindowId, b: WindowId) {
+        if let Some(root) = &mut self.root
+            && root.contains(a)
+            && root.contains(b)
+        {
+            root.swap(a, b);
+        }
+    }
+
+    /// `layoutmsg togglesplit`: turn the split holding `window` the other
+    /// way.
+    ///
+    /// As in Hyprland, this lasts only while `dwindle:preserve_split` is on:
+    /// with it off, both compositors work a split's direction out from the
+    /// shape of its box every time they lay the tree out, so the flip is
+    /// undone by the next frame. Hyprland's `recalcSizePosRecursive` does
+    /// exactly that, and so does `Split::stacked_in`.
+    pub(crate) fn toggle_split(&mut self, window: WindowId) -> bool {
+        let Some(root) = &mut self.root else {
+            return false;
+        };
+        let Some(path) = root.path_to_parent(window) else {
+            return false;
+        };
+        let Some(split) = root.split_at(&path) else {
+            return false;
+        };
+        split.stacked = !split.stacked;
+        true
+    }
+
+    /// `layoutmsg swapsplit`: exchange the two halves of the split holding
+    /// `window`, so the window changes sides without changing size.
+    pub(crate) fn swap_split(&mut self, window: WindowId) -> bool {
+        let Some(root) = &mut self.root else {
+            return false;
+        };
+        let Some(path) = root.path_to_parent(window) else {
+            return false;
+        };
+        let Some(split) = root.split_at(&path) else {
+            return false;
+        };
+        core::mem::swap(&mut split.first, &mut split.second);
+        true
+    }
+
+    /// `layoutmsg movetoroot`: exchange `window` with the whole of the
+    /// other half of the tree, so it takes half the screen.
+    ///
+    /// `stable` then exchanges the root's two halves as well, which is what
+    /// Hyprland's own flag is for: the window ends up on the side of the
+    /// screen it was already on rather than jumping across.
+    pub(crate) fn move_to_root(&mut self, window: WindowId, stable: bool) -> bool {
+        let Some(root) = &mut self.root else {
+            return false;
+        };
+        let Some(path) = root.path_to_parent(window) else {
+            return false;
+        };
+        // Its parent is the root, so it is already one of the two halves.
+        let Some((&side, _)) = path.split_first() else {
+            return false;
+        };
+        let Some(split) = root.split_at(&path) else {
+            return false;
+        };
+        let mut deep = path.clone();
+        deep.push(split.second == Node::Leaf(window));
+        // The other half of the root, which is never inside `deep`.
+        let shallow = [!side];
+        let Some(here) = root.at(&deep) else {
+            return false;
+        };
+        let leaf = core::mem::replace(here, Node::Leaf(window));
+        let Some(there) = root.at(&shallow) else {
+            return false;
+        };
+        let other = core::mem::replace(there, leaf);
+        if let Some(here) = root.at(&deep) {
+            *here = other;
+        }
+        if stable && let Node::Split(split) = root {
+            core::mem::swap(&mut split.first, &mut split.second);
+        }
+        true
+    }
+
+    /// `layoutmsg preselect`: where the next window opened on this
+    /// workspace goes, whatever the box's shape would otherwise say.
+    pub(crate) fn preselect(&mut self, direction: Option<Direction>) {
+        self.preselect = direction;
     }
 
     /// Whether `window` is in the tree.

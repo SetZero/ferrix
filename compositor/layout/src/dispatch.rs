@@ -214,6 +214,173 @@ pub enum Dispatcher {
         /// The other.
         other: MonitorTarget,
     },
+    /// `setfloating`: float the focused window, whether or not it already
+    /// does. `togglefloating` is the one that turns it over.
+    SetFloating,
+    /// `settiled`: tile it, the same way round.
+    SetTiled,
+    /// `centerwindow`: put a floating window in the middle of its monitor.
+    /// `1` centres it on the monitor including the reserved strips, which
+    /// is what Hyprland's argument means.
+    CenterWindow {
+        /// Whether to ignore what the bars reserved.
+        whole: bool,
+    },
+    /// `pin`: keep a floating window on every workspace of its monitor.
+    Pin,
+    /// `pseudo`: a tiled window drawn at the size it asked for, in the
+    /// middle of the slot the tiling gave it.
+    Pseudo,
+    /// `resizeactive`: make the focused window larger or smaller.
+    ResizeActive(Move),
+    /// `moveactive`: move a floating window.
+    MoveActive(Move),
+    /// `swapwindow`: exchange the focused window with its neighbour in a
+    /// direction, leaving the focus on the window that moved.
+    SwapWindow(Direction),
+    /// `swapnext`: exchange it with the next window in the tiling.
+    SwapNext {
+        /// Whether to take the one before instead.
+        back: bool,
+    },
+    /// `cyclenext`: focus the next window on the workspace.
+    CycleNext {
+        /// Whether to take the one before instead.
+        back: bool,
+        /// `tiled`: skip the floating ones.
+        tiled_only: bool,
+    },
+    /// `bringactivetotop`: put the focused floating window above the rest.
+    BringActiveToTop,
+    /// `alterzorder`: put a floating window at the top or the bottom.
+    AlterZOrder {
+        /// Whether it goes to the top.
+        top: bool,
+    },
+    /// `focuswindow`: focus the window a rule-shaped expression matches.
+    FocusWindow(String),
+    /// `closewindow`: ask that window to close.
+    CloseWindow(String),
+    /// `focuscurrentorlast`: swap between the focused window and the one
+    /// before it.
+    FocusCurrentOrLast,
+    /// `fullscreenstate`: the two fullscreen states Hyprland keeps -- what
+    /// the compositor does, and what the client is told -- set separately.
+    FullscreenState {
+        /// The compositor's, or -1 for "leave it".
+        internal: i64,
+        /// The client's, or -1 for "leave it".
+        client: i64,
+    },
+    /// `renameworkspace`: give a workspace a name.
+    RenameWorkspace {
+        /// Which workspace, by id.
+        id: i64,
+        /// Its new name; empty puts the number back.
+        name: String,
+    },
+    /// `workspaceopt`: turn every window on the workspace floating or
+    /// pseudotiled.
+    WorkspaceOpt(WorkspaceOption),
+    /// `movegroupwindow`: move the focused window inside its group.
+    MoveGroupWindow {
+        /// Whether to move it back rather than forward.
+        back: bool,
+    },
+    /// `lockactivegroup`: whether the focused window's group takes any more
+    /// windows.
+    LockActiveGroup(Locking),
+    /// `denywindowfromgroup`: whether a window opened by the focused one
+    /// joins its group.
+    DenyWindowFromGroup(Locking),
+    /// `tagwindow`: add, take away or turn over one of a window's tags,
+    /// which a `windowrule` can match on.
+    TagWindow(String),
+    /// `focusworkspaceoncurrentmonitor`: show a workspace on the focused
+    /// monitor, bringing it over from another monitor if that is where it
+    /// is.
+    FocusWorkspaceOnCurrentMonitor(WorkspaceTarget),
+    /// `moveintoorcreategroup`: put the focused window into the group in a
+    /// direction, making the window there into one if it is not already.
+    MoveIntoOrCreateGroup(Direction),
+    /// `movewindoworgroup`: move the focused window into the group in a
+    /// direction if there is one there, and past that window otherwise.
+    MoveWindowOrGroup(Direction),
+    /// `setignoregrouplock`: deprecated in Hyprland, where it does nothing.
+    SetIgnoreGroupLock,
+    /// `layoutmsg`: a message to the layout itself, which each layout
+    /// reads its own way.
+    LayoutMessage(String),
+    /// `movewindowpixel`: move a named window, which the compositor picks
+    /// out.
+    MoveWindowPixel {
+        /// How far, or where to.
+        by: Move,
+        /// The window expression naming it.
+        window: String,
+    },
+    /// `resizewindowpixel`: resize a named window, the same way.
+    ResizeWindowPixel {
+        /// How much, or what size.
+        by: Move,
+        /// The window expression naming it.
+        window: String,
+    },
+}
+
+impl Move {
+    /// Parse `resizeactive`'s and `moveactive`'s two numbers.
+    ///
+    /// `exact` before them makes them a size or a position; a number ending
+    /// in `%` is that fraction of the monitor, which is kept as a negative
+    /// sentinel nowhere -- percentages are resolved against the monitor by
+    /// the caller, and this keeps the pixels a `%` names once the monitor is
+    /// known. Hyprland's own parser takes both, and so does this.
+    #[must_use]
+    pub fn parse(text: &str) -> Option<Self> {
+        let text = text.trim();
+        let (text, exact) = match text.strip_prefix("exact") {
+            Some(rest) => (rest.trim(), true),
+            None => (text, false),
+        };
+        let mut numbers = text.split_whitespace();
+        let value = |word: Option<&str>| -> Option<i64> {
+            let word = word?;
+            // A percentage is resolved against the monitor later; here it
+            // is kept as the number it names.
+            word.strip_suffix('%')
+                .unwrap_or(word)
+                .parse::<i64>()
+                .ok()
+        };
+        let x = value(numbers.next())?;
+        let y = value(numbers.next())?;
+        Some(Self { x, y, exact })
+    }
+}
+
+/// How far `resizeactive` or `moveactive` asks a window to move.
+///
+/// Hyprland takes two numbers, each a count of pixels or a percentage of
+/// the monitor, and `exact` before them makes them a position or a size
+/// rather than a change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Move {
+    /// Across.
+    pub x: i64,
+    /// Down.
+    pub y: i64,
+    /// Whether the two are where to put it rather than how far to move it.
+    pub exact: bool,
+}
+
+/// What `workspaceopt` turns on for every window on the workspace.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkspaceOption {
+    /// `allfloat`.
+    AllFloat,
+    /// `allpseudo`.
+    AllPseudo,
 }
 
 /// Which member of a group `changegroupactive` asks for.
@@ -236,6 +403,20 @@ pub enum Locking {
     Unlock,
     /// `toggle`.
     Toggle,
+}
+
+impl Locking {
+    /// Parse one of the three words, an empty argument being `lock`, as
+    /// Hyprland's `lockgroups` reads it.
+    #[must_use]
+    pub fn parse(text: &str) -> Option<Self> {
+        match text.trim() {
+            "lock" | "" => Some(Self::Lock),
+            "unlock" => Some(Self::Unlock),
+            "toggle" => Some(Self::Toggle),
+            _ => None,
+        }
+    }
 }
 
 impl Dispatcher {
@@ -289,6 +470,86 @@ impl Dispatcher {
                 "" | "active" => Ok(Self::ToggleFloating),
                 _ => Err(bad()),
             },
+            "setfloating" => Ok(Self::SetFloating),
+            "settiled" => Ok(Self::SetTiled),
+            "centerwindow" => Ok(Self::CenterWindow {
+                whole: arg == "1",
+            }),
+            "pin" => Ok(Self::Pin),
+            "pseudo" => Ok(Self::Pseudo),
+            "resizeactive" => Move::parse(arg).map(Self::ResizeActive).ok_or_else(bad),
+            "moveactive" => Move::parse(arg).map(Self::MoveActive).ok_or_else(bad),
+            "swapwindow" => direction().map(Self::SwapWindow),
+            "swapnext" => Ok(Self::SwapNext {
+                back: matches!(arg, "b" | "prev"),
+            }),
+            "cyclenext" => {
+                let words: Vec<&str> = arg.split_whitespace().collect();
+                Ok(Self::CycleNext {
+                    back: words.iter().any(|word| matches!(*word, "prev" | "last")),
+                    tiled_only: words.contains(&"tiled"),
+                })
+            }
+            "bringactivetotop" => Ok(Self::BringActiveToTop),
+            "alterzorder" => Ok(Self::AlterZOrder {
+                top: !arg.starts_with("bottom"),
+            }),
+            "focuswindow" => Ok(Self::FocusWindow(arg.to_owned())),
+            "closewindow" | "killwindow" => Ok(Self::CloseWindow(arg.to_owned())),
+            "focuscurrentorlast" => Ok(Self::FocusCurrentOrLast),
+            "fullscreenstate" => {
+                let mut numbers = arg.split_whitespace();
+                let number = |text: Option<&str>| match text {
+                    None | Some("") => Ok(-1),
+                    Some(text) => text.parse::<i64>().map_err(|_| bad()),
+                };
+                Ok(Self::FullscreenState {
+                    internal: number(numbers.next())?,
+                    client: number(numbers.next())?,
+                })
+            }
+            "renameworkspace" => {
+                let (first, rest) = arg
+                    .split_once(char::is_whitespace)
+                    .unwrap_or((arg, ""));
+                Ok(Self::RenameWorkspace {
+                    id: first.parse::<i64>().map_err(|_| bad())?,
+                    name: rest.trim().to_owned(),
+                })
+            }
+            "workspaceopt" => match arg {
+                "allfloat" => Ok(Self::WorkspaceOpt(WorkspaceOption::AllFloat)),
+                "allpseudo" => Ok(Self::WorkspaceOpt(WorkspaceOption::AllPseudo)),
+                _ => Err(bad()),
+            },
+            "movegroupwindow" => Ok(Self::MoveGroupWindow {
+                back: arg == "b" || arg == "prev",
+            }),
+            "lockactivegroup" => Locking::parse(arg).map(Self::LockActiveGroup).ok_or_else(bad),
+            "denywindowfromgroup" => Locking::parse(arg)
+                .map(Self::DenyWindowFromGroup)
+                .ok_or_else(bad),
+            "tagwindow" => Ok(Self::TagWindow(arg.to_owned())),
+            "focusworkspaceoncurrentmonitor" => {
+                workspace().map(Self::FocusWorkspaceOnCurrentMonitor)
+            }
+            "moveintoorcreategroup" => direction().map(Self::MoveIntoOrCreateGroup),
+            "movewindoworgroup" => direction().map(Self::MoveWindowOrGroup),
+            // Hyprland kept the name and took the behaviour out.
+            "setignoregrouplock" => Ok(Self::SetIgnoreGroupLock),
+            "layoutmsg" => Ok(Self::LayoutMessage(arg.to_owned())),
+            // Both take the change first and the window after a comma,
+            // which is the one place Hyprland puts the window last.
+            "movewindowpixel" | "resizewindowpixel" => {
+                let (how, window) = arg.split_once(',').ok_or_else(bad)?;
+                let by = Move::parse(how.trim()).ok_or_else(bad)?;
+                let window = window.trim().to_owned();
+                if name == "movewindowpixel" {
+                    Ok(Self::MoveWindowPixel { by, window })
+                } else {
+                    Ok(Self::ResizeWindowPixel { by, window })
+                }
+            }
             "togglegroup" => Ok(Self::ToggleGroup),
             "moveoutofgroup" => Ok(Self::MoveOutOfGroup),
             "moveintogroup" => direction().map(Self::MoveIntoGroup),

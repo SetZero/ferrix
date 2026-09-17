@@ -144,6 +144,9 @@ pub(crate) static OPTIONS: &[(&str, Initial)] = &[
     ("master:special_scale_factor", Float(1.0)),
     ("misc:disable_hyprland_logo", Int(0)),
     ("misc:disable_splash_rendering", Int(0)),
+    // Off, as in Hyprland: a program that asks for another's window to be
+    // raised makes it urgent rather than taking the focus away.
+    ("misc:focus_on_activate", Int(0)),
     ("misc:force_default_wallpaper", Int(-1)),
 ];
 

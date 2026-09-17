@@ -29,22 +29,20 @@
 //! which window has focus are found by comparing the state before and
 //! after, so none can be forgotten.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::f64::consts::{FRAC_PI_2, PI};
 
 use compositor_config::{Bind, Config, Gaps};
 
-use crate::dispatch::{
-    Direction, Dispatcher, FullscreenMode, GroupMember, Locking, MonitorTarget, WorkspaceTarget,
-};
+use crate::dispatch::{Direction, Dispatcher, FullscreenMode, GroupMember, Locking, MonitorTarget, Move, WorkspaceOption, WorkspaceTarget};
 use crate::dwindle::Dwindle;
 use crate::geometry::{self, Area, overlap, sticks};
 use crate::master::Master;
-use crate::settings::{Layout, Settings};
+use crate::settings::{Layout, Orientation, Settings};
 use crate::{Error, Monitor, MonitorId, Rect, WindowId, WorkspaceId};
 
 /// Something a change to the state did that the caller acts on.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Change {
     /// The window should be asked to close. It stays until the caller
     /// reports it gone with [`State::window_gone`].
@@ -85,6 +83,28 @@ pub enum Change {
     Layout(MonitorId),
     /// Another window has focus, or none.
     Focus(Option<WindowId>),
+    /// A floating window was pinned to every workspace of its monitor, or
+    /// unpinned.
+    Pinned {
+        /// The window.
+        window: WindowId,
+        /// Whether it is pinned now.
+        pinned: bool,
+    },
+    /// A tiled window was made pseudotiled, or made ordinary again.
+    Pseudo {
+        /// The window.
+        window: WindowId,
+        /// Whether it is pseudotiled now.
+        pseudo: bool,
+    },
+    /// A workspace was given a name, or had one taken away.
+    Renamed {
+        /// The workspace.
+        workspace: WorkspaceId,
+        /// Its name now; empty puts the number back.
+        name: String,
+    },
 }
 
 /// A visible window's place.
@@ -171,11 +191,28 @@ impl Tiling {
         }
     }
 
-    /// Exchange two windows' places in the master layout; the dwindle
-    /// layout never exchanges windows.
+    /// Exchange two windows' places, whichever layout holds them.
     fn swap(&mut self, a: WindowId, b: WindowId) {
-        if let Self::Master(master) = self {
-            master.swap(a, b);
+        match self {
+            Self::Dwindle(dwindle) => dwindle.swap(a, b),
+            Self::Master(master) => master.swap(a, b),
+        }
+    }
+
+    /// The dwindle tree, when that is the layout: `layoutmsg` speaks to
+    /// one layout and says nothing to the other, as in Hyprland.
+    const fn dwindle(&mut self) -> Option<&mut Dwindle> {
+        match self {
+            Self::Dwindle(dwindle) => Some(dwindle),
+            Self::Master(_) => None,
+        }
+    }
+
+    /// The master list, when that is the layout.
+    const fn master(&mut self) -> Option<&mut Master> {
+        match self {
+            Self::Master(master) => Some(master),
+            Self::Dwindle(_) => None,
         }
     }
 
@@ -284,6 +321,18 @@ pub struct State {
     /// nothing; `moveintogroup` is a person asking, and Hyprland's lock does
     /// not stop that either.
     groups_locked: bool,
+    /// `pin`: floating windows that stay on every workspace of their
+    /// monitor.
+    pinned: BTreeSet<WindowId>,
+    /// `pseudo`: tiled windows drawn at the size they asked for, in the
+    /// middle of the slot the tiling gave them.
+    pseudo: BTreeSet<WindowId>,
+    /// `tagwindow`: the tags each window carries, which a `windowrule` can
+    /// match on.
+    tags: BTreeMap<WindowId, Vec<String>>,
+    /// `denywindowfromgroup`: whether a window opened by the focused one
+    /// joins its group. Recorded and reported, as `lockgroups` is.
+    deny_from_group: bool,
 }
 
 /// A group: windows sharing one tiling slot, of which one is shown.
@@ -300,6 +349,11 @@ pub struct Group {
     pub members: Vec<WindowId>,
     /// Which member is shown, an index into `members`.
     pub active: usize,
+    /// `lockactivegroup`: whether this group takes any more windows.
+    /// Recorded and reported, as `lockgroups` is: nothing here adds a
+    /// window to a group on its own, and `moveintogroup` is a person
+    /// asking.
+    pub locked: bool,
 }
 
 impl Group {
@@ -336,6 +390,10 @@ impl State {
             names: BTreeMap::new(),
             groups: BTreeMap::new(),
             groups_locked: false,
+            pinned: BTreeSet::new(),
+            pseudo: BTreeSet::new(),
+            tags: BTreeMap::new(),
+            deny_from_group: false,
         }
     }
 
@@ -755,6 +813,59 @@ impl State {
                 .map(Change::Close)
                 .into_iter()
                 .collect(),
+            Dispatcher::SetFloating => state.set_floating(true),
+            Dispatcher::SetTiled => state.set_floating(false),
+            Dispatcher::CenterWindow { whole } => state.center_window(whole),
+            Dispatcher::Pin => state.pin(),
+            Dispatcher::Pseudo => state.toggle_pseudo(),
+            Dispatcher::ResizeActive(by) => state.resize_active(&by),
+            Dispatcher::MoveActive(by) => state.move_active(&by),
+            Dispatcher::SwapWindow(direction) => state.swap_window(&direction),
+            Dispatcher::SwapNext { back } => state.swap_next(&back),
+            Dispatcher::CycleNext { back, tiled_only } => state.cycle_next(&back, &tiled_only),
+            Dispatcher::BringActiveToTop => state.alter_z_order(&true, None),
+            Dispatcher::AlterZOrder { top } => state.alter_z_order(&top, None),
+            Dispatcher::FocusWindow(_) | Dispatcher::CloseWindow(_) => {
+                // Both name a window with a `windowrule`-shaped expression,
+                // which is matched on a window's title and class -- and the
+                // layout holds neither. The compositor answers these, and
+                // reaches back in with `focus_window` and `Change::Close`.
+                Vec::new()
+            }
+            Dispatcher::FocusCurrentOrLast => state.focus_current_or_last(),
+            Dispatcher::FullscreenState { internal, client } => {
+                state.fullscreen_state(&internal, &client)
+            }
+            Dispatcher::RenameWorkspace { id, name } => state.rename_workspace(&id, &name),
+            Dispatcher::WorkspaceOpt(option) => state.workspace_option(&option),
+            Dispatcher::MoveGroupWindow { back } => state.move_group_window(&back),
+            Dispatcher::LockActiveGroup(locking) => state.lock_active_group(&locking),
+            Dispatcher::DenyWindowFromGroup(locking) => {
+                state.deny_from_group = match locking {
+                    Locking::Lock => true,
+                    Locking::Unlock => false,
+                    Locking::Toggle => !state.deny_from_group,
+                };
+                Vec::new()
+            }
+            Dispatcher::TagWindow(tag) => state.tag_window(&tag),
+            Dispatcher::FocusWorkspaceOnCurrentMonitor(target) => {
+                state.focus_workspace_here(target)
+            }
+            Dispatcher::MoveIntoOrCreateGroup(direction) => {
+                state.move_into_or_create_group(direction)
+            }
+            Dispatcher::MoveWindowOrGroup(direction) => state.move_window_or_group(direction),
+            // Hyprland's own is an empty function: the group lock is
+            // ignored per bind now, not per session.
+            Dispatcher::SetIgnoreGroupLock => Vec::new(),
+            Dispatcher::LayoutMessage(message) => state.layout_message(&message),
+            // Both name a window with an expression the layout cannot
+            // read; the compositor picks it out and reaches back in with
+            // `move_window_pixel` and `resize_window_pixel`.
+            Dispatcher::MoveWindowPixel { .. } | Dispatcher::ResizeWindowPixel { .. } => {
+                Vec::new()
+            }
             Dispatcher::ToggleFloating => state.toggle_floating(),
             Dispatcher::Fullscreen(mode) => state.toggle_fullscreen(mode),
             Dispatcher::ToggleSpecialWorkspace(name) => state.toggle_special(&name),
@@ -964,6 +1075,512 @@ impl State {
             window,
             workspace: to,
         }]
+    }
+
+    /// `setfloating` and `settiled`: float or tile the focused window,
+    /// whether or not it already is.
+    ///
+    /// `togglefloating` is the one that turns it over; these two are what a
+    /// configuration binds when it wants a key that always does the same
+    /// thing.
+    fn set_floating(&mut self, floating: bool) -> Vec<Change> {
+        let Some(window) = self.focused_window() else {
+            return Vec::new();
+        };
+        if self.is_floating(window) == floating {
+            return Vec::new();
+        }
+        self.toggle_floating()
+    }
+
+    /// `centerwindow`: put a floating window in the middle of its monitor.
+    ///
+    /// A tiled window is where the tiling put it and this does nothing to
+    /// it, which is what Hyprland's does. `whole` centres it on the whole
+    /// monitor rather than on what the bars left.
+    fn center_window(&mut self, whole: bool) -> Vec<Change> {
+        let Some(window) = self.focused_window() else {
+            return Vec::new();
+        };
+        if !self.is_floating(window) {
+            return Vec::new();
+        }
+        let Some(workspace) = self.workspace_of(window) else {
+            return Vec::new();
+        };
+        let area = if whole {
+            self.workspace_monitor(workspace)
+                .and_then(|monitor| self.output(monitor))
+                .map(|output| output.monitor.rect)
+                .unwrap_or_default()
+        } else {
+            self.work_area_of(workspace)
+        };
+        let Some(rect) = self.floating_rects.get(&window).copied() else {
+            return Vec::new();
+        };
+        let at = Rect::new(
+            area.x
+                .saturating_add(area.width.saturating_sub(rect.width) / 2),
+            area.y
+                .saturating_add(area.height.saturating_sub(rect.height) / 2),
+            rect.width,
+            rect.height,
+        );
+        self.place_floating(window, at)
+    }
+
+    /// Put a floating window at `rect`, in the space every window's
+    /// rectangle is in.
+    fn place_floating(&mut self, window: WindowId, rect: Rect) -> Vec<Change> {
+        let Some(workspace) = self.workspace_of(window) else {
+            return Vec::new();
+        };
+        let (x, y) = self.origin(workspace);
+        let _previous = self.floating_rects.insert(
+            window,
+            rect.translate(x.saturating_neg(), y.saturating_neg()),
+        );
+        self.workspace_monitor(workspace)
+            .map(Change::Layout)
+            .into_iter()
+            .collect()
+    }
+
+    /// `pin`: keep a floating window on every workspace of its monitor.
+    ///
+    /// A tiled window cannot be pinned -- it has a slot on one workspace and
+    /// nowhere else -- which is what Hyprland's refuses too.
+    fn pin(&mut self) -> Vec<Change> {
+        let Some(window) = self.focused_window() else {
+            return Vec::new();
+        };
+        if !self.is_floating(window) {
+            return Vec::new();
+        }
+        if !self.pinned.insert(window) {
+            let _ = self.pinned.remove(&window);
+        }
+        vec![Change::Pinned {
+            window,
+            pinned: self.pinned.contains(&window),
+        }]
+    }
+
+    /// `pseudo`: draw a tiled window at the size it asked for, in the middle
+    /// of the slot the tiling gave it.
+    fn toggle_pseudo(&mut self) -> Vec<Change> {
+        let Some(window) = self.focused_window() else {
+            return Vec::new();
+        };
+        if !self.pseudo.insert(window) {
+            let _ = self.pseudo.remove(&window);
+        }
+        vec![Change::Pseudo {
+            window,
+            pseudo: self.pseudo.contains(&window),
+        }]
+    }
+
+    /// `resizeactive`: make the focused window larger or smaller.
+    ///
+    /// A floating window is resized where it is; a tiled one is not, because
+    /// its size is the tiling's to decide -- Hyprland resizes a tiled window
+    /// by moving the split it is on, which this layout does not expose.
+    fn resize_active(&mut self, by: &Move) -> Vec<Change> {
+        let Some(window) = self.focused_window() else {
+            return Vec::new();
+        };
+        self.move_floating(window, by, true)
+    }
+
+    /// `moveactive`: move a floating window, by a distance or to a place.
+    fn move_active(&mut self, by: &Move) -> Vec<Change> {
+        let Some(window) = self.focused_window() else {
+            return Vec::new();
+        };
+        self.move_floating(window, by, false)
+    }
+
+    /// Move or resize one floating window, which is what all four of
+    /// `moveactive`, `resizeactive`, `movewindowpixel` and
+    /// `resizewindowpixel` come down to.
+    ///
+    /// A tiled window is left alone: its rectangle is the tiling's, and
+    /// Hyprland's own dispatchers do nothing to one either.
+    fn move_floating(&mut self, window: WindowId, by: &Move, resizing: bool) -> Vec<Change> {
+        if !self.is_floating(window) {
+            return Vec::new();
+        }
+        let Some(rect) = self.rect_of(window) else {
+            return Vec::new();
+        };
+        let at = |now: i64, change: i64| {
+            if by.exact {
+                change
+            } else {
+                now.saturating_add(change)
+            }
+        };
+        let rect = if resizing {
+            // A window is never resized out of existence.
+            Rect::new(
+                rect.x,
+                rect.y,
+                at(rect.width, by.x).max(1),
+                at(rect.height, by.y).max(1),
+            )
+        } else {
+            Rect::new(at(rect.x, by.x), at(rect.y, by.y), rect.width, rect.height)
+        };
+        self.place_floating(window, rect)
+    }
+
+    /// Where a window is now: its floating rectangle, or the slot the
+    /// tiling gave it.
+    fn rect_of(&self, window: WindowId) -> Option<Rect> {
+        self.layout()
+            .iter()
+            .flat_map(|output| output.windows.iter())
+            .find(|placed| placed.window == window)
+            .map(|placed| placed.rect)
+    }
+
+    /// `swapwindow`: exchange the focused window with its neighbour.
+    ///
+    /// The focus follows the window that moved, which is what Hyprland's
+    /// does and what makes a run of them walk a window across the screen.
+    fn swap_window(&mut self, direction: &Direction) -> Vec<Change> {
+        let Some(window) = self.focused_window() else {
+            return Vec::new();
+        };
+        let Some(other) = self.window_in_direction(window, *direction) else {
+            return Vec::new();
+        };
+        self.swap(window, other)
+    }
+
+    /// `swapnext`: exchange the focused window with the next in the tiling.
+    fn swap_next(&mut self, back: &bool) -> Vec<Change> {
+        let Some(window) = self.focused_window() else {
+            return Vec::new();
+        };
+        let Some(other) = self.along(window, *back, false) else {
+            return Vec::new();
+        };
+        self.swap(window, other)
+    }
+
+    /// `cyclenext`: focus the next window on the workspace.
+    fn cycle_next(&mut self, back: &bool, tiled_only: &bool) -> Vec<Change> {
+        let Some(window) = self.focused_window() else {
+            return Vec::new();
+        };
+        let Some(other) = self.along(window, *back, *tiled_only) else {
+            return Vec::new();
+        };
+        self.focus(other);
+        vec![Change::Focus(Some(other))]
+    }
+
+    /// The window before or after `window` on its workspace, wrapping.
+    ///
+    /// The order is the one the layout draws in -- tiled windows then
+    /// floating ones -- which is the order Hyprland's `cyclenext` walks.
+    fn along(&self, window: WindowId, back: bool, tiled_only: bool) -> Option<WindowId> {
+        let workspace = self.workspace_of(window)?;
+        let held = self.workspaces.get(&workspace)?;
+        let mut order: Vec<WindowId> = held.tiling.windows();
+        if !tiled_only {
+            order.extend(held.floating.iter().copied());
+        }
+        if order.len() < 2 {
+            return None;
+        }
+        let at = order.iter().position(|held| *held == window)?;
+        let next = if back {
+            at.checked_sub(1).unwrap_or(order.len() - 1)
+        } else {
+            (at + 1) % order.len()
+        };
+        order.get(next).copied()
+    }
+
+    /// Exchange two windows' places, leaving the focus on the first.
+    fn swap(&mut self, window: WindowId, other: WindowId) -> Vec<Change> {
+        let Some(workspace) = self.workspace_of(window) else {
+            return Vec::new();
+        };
+        if self.workspace_of(other) != Some(workspace) {
+            return Vec::new();
+        }
+        let floating = (self.is_floating(window), self.is_floating(other));
+        match floating {
+            // Two tiled windows exchange their places in the tree.
+            (false, false) => {
+                if let Some(held) = self.workspaces.get_mut(&workspace) {
+                    held.tiling.swap(window, other);
+                }
+            }
+            // Two floating windows exchange their rectangles.
+            (true, true) => {
+                let (one, two) = (
+                    self.floating_rects.get(&window).copied(),
+                    self.floating_rects.get(&other).copied(),
+                );
+                if let (Some(one), Some(two)) = (one, two) {
+                    let _ = self.floating_rects.insert(window, two);
+                    let _ = self.floating_rects.insert(other, one);
+                }
+            }
+            // One of each is not a swap Hyprland makes either.
+            _ => return Vec::new(),
+        }
+        self.workspace_monitor(workspace)
+            .map(Change::Layout)
+            .into_iter()
+            .collect()
+    }
+
+    /// `bringactivetotop` and `alterzorder`: where a floating window sits
+    /// in the stack.
+    fn alter_z_order(&mut self, top: &bool, which: Option<WindowId>) -> Vec<Change> {
+        let Some(window) = which.or_else(|| self.focused_window()) else {
+            return Vec::new();
+        };
+        let Some(workspace) = self.workspace_of(window) else {
+            return Vec::new();
+        };
+        let Some(held) = self.workspaces.get_mut(&workspace) else {
+            return Vec::new();
+        };
+        let Some(at) = held.floating.iter().position(|held| *held == window) else {
+            return Vec::new();
+        };
+        let _ = held.floating.remove(at);
+        if *top {
+            held.floating.push(window);
+        } else {
+            held.floating.insert(0, window);
+        }
+        self.workspace_monitor(workspace)
+            .map(Change::Layout)
+            .into_iter()
+            .collect()
+    }
+
+    /// `focuscurrentorlast`: swap between the focused window and the one
+    /// before it.
+    fn focus_current_or_last(&mut self) -> Vec<Change> {
+        let order = self.windows_in_focus_order();
+        let Some(previous) = order.get(1).copied() else {
+            return Vec::new();
+        };
+        self.focus(previous);
+        vec![Change::Focus(Some(previous))]
+    }
+
+    /// `fullscreenstate`: the compositor's fullscreen and the client's, set
+    /// separately.
+    ///
+    /// -1 leaves one alone. This layout keeps one state rather than two --
+    /// what the compositor does *is* what the client is told -- so the
+    /// internal one decides and the client's is read and reported.
+    fn fullscreen_state(&mut self, internal: &i64, _client: &i64) -> Vec<Change> {
+        let Some(window) = self.focused_window() else {
+            return Vec::new();
+        };
+        let Some(workspace) = self.workspace_of(window) else {
+            return Vec::new();
+        };
+        let now = self.fullscreen(workspace).map(|(_, mode)| mode);
+        let wanted = match internal {
+            -1 => return Vec::new(),
+            0 => None,
+            1 => Some(FullscreenMode::Maximized),
+            _ => Some(FullscreenMode::Fullscreen),
+        };
+        if now == wanted {
+            return Vec::new();
+        }
+        // The one path both go through, so that a state set here and one
+        // toggled by `fullscreen` cannot drift.
+        match wanted {
+            None => self.dispatch(&Dispatcher::Fullscreen(
+                now.unwrap_or(FullscreenMode::Fullscreen),
+            )),
+            Some(mode) => {
+                let mut changes = Vec::new();
+                if now.is_some() {
+                    changes.extend(self.dispatch(&Dispatcher::Fullscreen(
+                        now.unwrap_or(FullscreenMode::Fullscreen),
+                    )));
+                }
+                changes.extend(self.dispatch(&Dispatcher::Fullscreen(mode)));
+                changes
+            }
+        }
+    }
+
+    /// `renameworkspace`: give a workspace a name, or take one away.
+    fn rename_workspace(&mut self, id: &i64, name: &str) -> Vec<Change> {
+        let workspace = WorkspaceId(*id);
+        if !self.workspaces.contains_key(&workspace) {
+            return Vec::new();
+        }
+        if name.is_empty() {
+            let _ = self.names.remove(&workspace);
+        } else {
+            let _ = self.names.insert(workspace, name.to_owned());
+        }
+        vec![Change::Renamed {
+            workspace,
+            name: name.to_owned(),
+        }]
+    }
+
+    /// `workspaceopt`: float or pseudotile every window on the focused
+    /// workspace.
+    fn workspace_option(&mut self, option: &WorkspaceOption) -> Vec<Change> {
+        let Some(workspace) = self
+            .focused_monitor()
+            .and_then(|monitor| self.active_workspace(monitor))
+        else {
+            return Vec::new();
+        };
+        let windows = self.windows_on(workspace);
+        let was = self.focused_window();
+        let mut changes = Vec::new();
+        for window in windows {
+            match option {
+                WorkspaceOption::AllFloat => {
+                    if !self.is_floating(window) {
+                        self.focus(window);
+                        changes.extend(self.toggle_floating());
+                    }
+                }
+                WorkspaceOption::AllPseudo => {
+                    let _ = self.pseudo.insert(window);
+                    changes.push(Change::Pseudo {
+                        window,
+                        pseudo: true,
+                    });
+                }
+            }
+        }
+        if let Some(was) = was {
+            self.focus(was);
+        }
+        changes
+    }
+
+    /// Every window on a workspace, tiled then floating.
+    fn windows_on(&self, workspace: WorkspaceId) -> Vec<WindowId> {
+        let Some(held) = self.workspaces.get(&workspace) else {
+            return Vec::new();
+        };
+        let mut windows = held.tiling.windows();
+        windows.extend(held.floating.iter().copied());
+        windows
+    }
+
+    /// `movegroupwindow`: move the focused window inside its group.
+    fn move_group_window(&mut self, back: &bool) -> Vec<Change> {
+        let Some(window) = self.focused_window() else {
+            return Vec::new();
+        };
+        let Some((head, _)) = self.group_of(window) else {
+            return Vec::new();
+        };
+        let Some(group) = self.groups.get_mut(&head) else {
+            return Vec::new();
+        };
+        let Some(at) = group.members.iter().position(|held| *held == window) else {
+            return Vec::new();
+        };
+        let to = if *back {
+            at.checked_sub(1).unwrap_or(group.members.len().saturating_sub(1))
+        } else {
+            (at + 1) % group.members.len()
+        };
+        // The head is the member the tiling tree holds, and it stays the
+        // head: Hyprland's `movegroupwindow` changes the tab order and not
+        // which slot the group is in.
+        if at != 0 && to != 0 {
+            group.members.swap(at, to);
+        }
+        self.workspace_of(window)
+            .and_then(|workspace| self.workspace_monitor(workspace))
+            .map(Change::Layout)
+            .into_iter()
+            .collect()
+    }
+
+    /// `lockactivegroup`: whether the focused window's group takes more
+    /// windows.
+    ///
+    /// Recorded and reported, as `lockgroups` is: nothing here adds a window
+    /// to a group on its own, and `moveintogroup` is a person asking.
+    fn lock_active_group(&mut self, locking: &Locking) -> Vec<Change> {
+        let Some(window) = self.focused_window() else {
+            return Vec::new();
+        };
+        let Some((head, _)) = self.group_of(window) else {
+            return Vec::new();
+        };
+        if let Some(group) = self.groups.get_mut(&head) {
+            group.locked = match locking {
+                Locking::Lock => true,
+                Locking::Unlock => false,
+                Locking::Toggle => !group.locked,
+            };
+        }
+        Vec::new()
+    }
+
+    /// `tagwindow`: add a tag, take one away with `-`, or turn one over
+    /// with `+`, as Hyprland's own reads them.
+    fn tag_window(&mut self, tag: &str) -> Vec<Change> {
+        let Some(window) = self.focused_window() else {
+            return Vec::new();
+        };
+        let (tag, add) = match tag.trim().strip_prefix('-') {
+            Some(rest) => (rest.trim(), Some(false)),
+            None => match tag.trim().strip_prefix('+') {
+                Some(rest) => (rest.trim(), Some(true)),
+                None => (tag.trim(), None),
+            },
+        };
+        if tag.is_empty() {
+            return Vec::new();
+        }
+        let held = self.tags.entry(window).or_default();
+        let there = held.iter().any(|name| name == tag);
+        let wanted = add.unwrap_or(!there);
+        if wanted && !there {
+            held.push(tag.to_owned());
+        } else if !wanted {
+            held.retain(|name| name != tag);
+        }
+        Vec::new()
+    }
+
+    /// The tags a window carries, which a `windowrule` can match on.
+    #[must_use]
+    pub fn tags_of(&self, window: WindowId) -> &[String] {
+        self.tags.get(&window).map_or(&[], Vec::as_slice)
+    }
+
+    /// Whether a window is pinned, drawn pseudotiled, or both.
+    #[must_use]
+    pub fn is_pinned(&self, window: WindowId) -> bool {
+        self.pinned.contains(&window)
+    }
+
+    /// The same for `pseudo`.
+    #[must_use]
+    pub fn is_pseudo(&self, window: WindowId) -> bool {
+        self.pseudo.contains(&window)
     }
 
     fn toggle_floating(&mut self) -> Vec<Change> {
@@ -1831,6 +2448,7 @@ impl State {
             Group {
                 members: vec![window],
                 active: 0,
+                locked: false,
             },
         );
         Vec::new()
@@ -1897,6 +2515,290 @@ impl State {
         }
         self.focus(window);
         Vec::new()
+    }
+
+    /// `moveintoorcreategroup`: the same, making the window in that
+    /// direction into a group of one first if it is not already in a group.
+    ///
+    /// This is what people bind rather than `moveintogroup`: the first
+    /// press makes the group and the second joins it, so a group never has
+    /// to be made by hand.
+    fn move_into_or_create_group(&mut self, direction: Direction) -> Vec<Change> {
+        let Some(window) = self.focused_window() else {
+            return Vec::new();
+        };
+        if self.group_of(window).is_some() || self.is_floating(window) {
+            return Vec::new();
+        }
+        let Some(target) = self.window_in_direction(window, direction) else {
+            return Vec::new();
+        };
+        if self.group_of(target).is_none() {
+            if self.is_floating(target) {
+                return Vec::new();
+            }
+            let _ = self.groups.insert(
+                target,
+                Group {
+                    members: vec![target],
+                    active: 0,
+                    locked: false,
+                },
+            );
+        }
+        self.move_into_group(direction)
+    }
+
+    /// `movewindoworgroup`: into the group in a direction if there is one
+    /// there, and past the window there otherwise.
+    ///
+    /// The one dispatcher people bind to each arrow: it fills a group when
+    /// there is one to fill and moves the window when there is not.
+    fn move_window_or_group(&mut self, direction: Direction) -> Vec<Change> {
+        let joins = self
+            .focused_window()
+            .filter(|window| !self.is_floating(*window) && self.group_of(*window).is_none())
+            .and_then(|window| self.window_in_direction(window, direction))
+            .is_some_and(|target| self.group_of(target).is_some());
+        if joins {
+            return self.move_into_group(direction);
+        }
+        self.move_window(direction)
+    }
+
+    /// `focusworkspaceoncurrentmonitor`: show a workspace here rather than
+    /// going to the monitor it is on.
+    ///
+    /// `workspace` follows a workspace to wherever it lives; this brings it
+    /// over instead, which is what a person with two screens binds when
+    /// they want the numbers to mean "here".
+    fn focus_workspace_here(&mut self, target: WorkspaceTarget) -> Vec<Change> {
+        let Some(workspace) = self.resolve(target) else {
+            return Vec::new();
+        };
+        let changes = self.workspace_onto(workspace, &MonitorTarget::Current);
+        self.show(workspace);
+        if let Some(window) = self.focused_on(workspace) {
+            self.focus(window);
+        }
+        changes
+    }
+
+    /// `layoutmsg`: a message to the layout itself.
+    ///
+    /// Each of Hyprland's two layouts reads its own set of messages and
+    /// ignores the other's, and so does this: `layoutmsg togglesplit` says
+    /// nothing to the master layout and `layoutmsg swapwithmaster` says
+    /// nothing to dwindle. A message neither knows is ignored, as
+    /// Hyprland ignores one.
+    fn layout_message(&mut self, message: &str) -> Vec<Change> {
+        let mut words = message.split_whitespace();
+        let Some(word) = words.next() else {
+            return Vec::new();
+        };
+        let rest: Vec<&str> = words.collect();
+        match self.settings.layout {
+            Layout::Dwindle => self.dwindle_message(word, &rest),
+            Layout::Master => self.master_message(word, &rest),
+        }
+    }
+
+    /// The dwindle layout's own messages, which all act on the focused
+    /// window's place in the tree.
+    fn dwindle_message(&mut self, word: &str, rest: &[&str]) -> Vec<Change> {
+        // `preselect` is the one that acts on no window: it says where the
+        // *next* window goes.
+        if word == "preselect" {
+            let direction = rest.first().and_then(|text| Direction::parse(text));
+            let Some(workspace) = self.current_workspace() else {
+                return Vec::new();
+            };
+            if let Some(ws) = self.workspaces.get_mut(&workspace)
+                && let Some(dwindle) = ws.tiling.dwindle()
+            {
+                dwindle.preselect(direction);
+            }
+            return Vec::new();
+        }
+        let Some(window) = self.focused_window().map(|window| self.in_tiling(window)) else {
+            return Vec::new();
+        };
+        let Some(workspace) = self.workspace_of(window) else {
+            return Vec::new();
+        };
+        // `movetoroot` takes an optional `unstable`; anything else is the
+        // stable form, as Hyprland reads it.
+        let stable = rest.first() != Some(&"unstable");
+        let Some(ws) = self.workspaces.get_mut(&workspace) else {
+            return Vec::new();
+        };
+        let Some(dwindle) = ws.tiling.dwindle() else {
+            return Vec::new();
+        };
+        // The changes are `run`'s to work out: every one of these moves a
+        // window, and the caller is told by the layout it sees afterwards.
+        let _acted = match word {
+            "togglesplit" => dwindle.toggle_split(window),
+            "swapsplit" => dwindle.swap_split(window),
+            "movetoroot" => dwindle.move_to_root(window, stable),
+            _ => false,
+        };
+        Vec::new()
+    }
+
+    /// The master layout's own messages.
+    fn master_message(&mut self, word: &str, rest: &[&str]) -> Vec<Change> {
+        // The two that change a setting rather than the list.
+        match word {
+            "mfact" => return self.set_mfact(rest),
+            other if other.starts_with("orientation") => return self.set_orientation(other, rest),
+            // Hyprland's master layout can have several masters; this one
+            // has exactly one, so both messages leave it as it is.
+            "addmaster" | "removemaster" => return Vec::new(),
+            _ => {}
+        }
+        let Some(window) = self.focused_window().map(|window| self.in_tiling(window)) else {
+            return Vec::new();
+        };
+        let Some(workspace) = self.workspace_of(window) else {
+            return Vec::new();
+        };
+        // `focusmaster` moves the focus rather than the windows.
+        if word == "focusmaster" {
+            let master = self
+                .workspaces
+                .get_mut(&workspace)
+                .and_then(|ws| ws.tiling.master())
+                .and_then(|master| master.master());
+            let Some(master) = master else {
+                return Vec::new();
+            };
+            self.focus(master);
+            return Vec::new();
+        }
+        let Some(ws) = self.workspaces.get_mut(&workspace) else {
+            return Vec::new();
+        };
+        let Some(master) = ws.tiling.master() else {
+            return Vec::new();
+        };
+        let _acted = match word {
+            "swapwithmaster" => master.swap_with_master(window),
+            "swapnext" => master.swap_along(window, false),
+            "swapprev" => master.swap_along(window, true),
+            "rollnext" => {
+                master.roll(false);
+                true
+            }
+            "rollprev" => {
+                master.roll(true);
+                true
+            }
+            _ => false,
+        };
+        // `cyclenext` and `cycleprev` are the dispatcher of the same name,
+        // which walks the focus and belongs to neither layout.
+        match word {
+            "cyclenext" => self.cycle_next(&false, &true),
+            "cycleprev" => self.cycle_next(&true, &true),
+            _ => Vec::new(),
+        }
+    }
+
+    /// `layoutmsg mfact [exact] <value>`: how much of the screen the master
+    /// takes, as a share between nothing and all of it.
+    fn set_mfact(&mut self, rest: &[&str]) -> Vec<Change> {
+        let (exact, text) = match rest {
+            ["exact", value, ..] => (true, *value),
+            [value, ..] => (false, *value),
+            [] => return Vec::new(),
+        };
+        let Ok(value) = text.parse::<f64>() else {
+            return Vec::new();
+        };
+        let mfact = if exact {
+            value
+        } else {
+            self.settings.master.mfact + value
+        };
+        // Hyprland clamps to the same bounds its configuration does.
+        let mfact = mfact.clamp(0.05, 0.95);
+        if (mfact - self.settings.master.mfact).abs() < f64::EPSILON {
+            return Vec::new();
+        }
+        self.settings.master.mfact = mfact;
+        self.run(|_| Vec::new())
+    }
+
+    /// `layoutmsg orientation<side>`, `orientationnext`, `orientationprev`
+    /// and `orientationcycle`: which side of the screen the master is on.
+    fn set_orientation(&mut self, word: &str, rest: &[&str]) -> Vec<Change> {
+        // `orientation left` and `orientationleft` are both written.
+        let named = word.strip_prefix("orientation").unwrap_or("");
+        let named = if named.is_empty() {
+            rest.first().copied().unwrap_or("")
+        } else {
+            named
+        };
+        let round = [
+            Orientation::Left,
+            Orientation::Top,
+            Orientation::Right,
+            Orientation::Bottom,
+        ];
+        let at = round
+            .iter()
+            .position(|side| *side == self.settings.master.orientation)
+            .unwrap_or(0);
+        let along = |step: usize| round.get((at + step) % round.len()).copied();
+        let orientation = match named {
+            "left" => Some(Orientation::Left),
+            "right" => Some(Orientation::Right),
+            "top" | "up" => Some(Orientation::Top),
+            "bottom" | "down" => Some(Orientation::Bottom),
+            // Hyprland lays `center` out as `left` here, as this layout
+            // says in its own description.
+            "center" => Some(Orientation::Left),
+            "next" | "cycle" => along(1),
+            "prev" => along(round.len() - 1),
+            _ => None,
+        };
+        let Some(orientation) = orientation else {
+            return Vec::new();
+        };
+        if orientation == self.settings.master.orientation {
+            return Vec::new();
+        }
+        self.settings.master.orientation = orientation;
+        self.run(|_| Vec::new())
+    }
+
+    /// `movewindowpixel`: move a window the compositor picked out.
+    ///
+    /// # Errors
+    ///
+    /// The window is not one this layout holds.
+    pub fn move_window_pixel(&mut self, window: WindowId, by: &Move) -> Result<Vec<Change>, Error> {
+        if !self.windows.contains_key(&window) {
+            return Err(Error::UnknownWindow(window));
+        }
+        Ok(self.run(|state| state.move_floating(window, by, false)))
+    }
+
+    /// `resizewindowpixel`: resize a window the compositor picked out.
+    ///
+    /// # Errors
+    ///
+    /// The window is not one this layout holds.
+    pub fn resize_window_pixel(
+        &mut self,
+        window: WindowId,
+        by: &Move,
+    ) -> Result<Vec<Change>, Error> {
+        if !self.windows.contains_key(&window) {
+            return Err(Error::UnknownWindow(window));
+        }
+        Ok(self.run(|state| state.move_floating(window, by, true)))
     }
 
     /// `moveoutofgroup`: take the focused window out of its group and put it

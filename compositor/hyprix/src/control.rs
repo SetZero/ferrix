@@ -343,7 +343,7 @@ fn described_layers(
                     i32::try_from(at.rect.height).unwrap_or(0),
                 ),
                 namespace: surface.namespace.clone(),
-                pid: 0,
+                pid: slot.pid(),
             });
         }
     }
@@ -534,7 +534,7 @@ fn describe(
         monitor: 0,
         class: named.as_ref().map(|top| top.1.clone()).unwrap_or_default(),
         title: named.map(|top| top.0).unwrap_or_default(),
-        pid: 0,
+        pid: slot.pid(),
         focus_history: if Some(it.window) == focused { 0 } else { -1 },
         grouped: it.grouped.to_vec(),
     })
@@ -590,6 +590,17 @@ impl Events {
     #[must_use]
     pub fn counts(&self) -> (usize, u64) {
         (self.subscribers.len(), self.written)
+    }
+
+    /// Write one line to every subscriber, as `dispatch event` does.
+    ///
+    /// The line is the caller's whole line, newline and all, because the
+    /// only caller is the `event` dispatcher and Hyprland's own
+    /// `custom>>...` is not a shape the watcher knows.
+    pub fn say(&mut self, line: &str) {
+        self.subscribers
+            .retain_mut(|stream| stream.write_all(line.as_bytes()).is_ok());
+        self.written = self.written.saturating_add(1);
     }
 
     /// Take any new subscribers, work out what changed, and write it.
