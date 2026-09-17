@@ -82,6 +82,13 @@ pub(crate) struct Args {
     /// Where QEMU serves QMP. No flag sets it: `test-display` picks a port to
     /// ask QEMU for its screendump over.
     pub(crate) qmp_port: Option<u16>,
+    /// `--vnc <display>`: serve the screen over VNC at this address rather
+    /// than in a window of this host's, which is what a machine reached over
+    /// `ssh` has. `window` says why the default is the loopback.
+    pub(crate) vnc: Option<String>,
+    /// `--config <PATH>`: the `hyprland.conf` `run-compositor` carries into
+    /// the guest, in place of the small one it writes itself.
+    pub(crate) config: Option<String>,
     /// `--boot <name>`: run only the boots of `test-compositor` whose name
     /// holds this, rather than all of them.
     ///
@@ -130,6 +137,8 @@ impl Args {
                 "--port" => args.port = Some(value(&mut items, "--port")?),
                 "--init" => args.init = Some(value(&mut items, "--init")?),
                 "--boot" => args.boot = Some(value(&mut items, "--boot")?),
+                "--vnc" => args.vnc = Some(value(&mut items, "--vnc")?),
+                "--config" => args.config = Some(value(&mut items, "--config")?),
                 other if other.starts_with('-') => {
                     return Err(Error::new(format!("unknown option `{other}`")));
                 }

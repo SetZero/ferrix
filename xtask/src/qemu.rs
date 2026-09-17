@@ -879,7 +879,7 @@ fn qemu_command(
     let accelerator = accelerator(arch, &binary, args.accel.as_deref())?;
     let processors = processors(&accelerator, args);
 
-    let mut command = Command::new(binary);
+    let mut command = Command::new(&binary);
     let _ = command.current_dir(paths::workspace_root());
 
     let _ = command.args(["-accel", &accelerator]);
@@ -888,15 +888,20 @@ fn qemu_command(
         &args.memory.to_string(),
         "-smp",
         &processors.to_string(),
-        "-display",
-        if args.display && args.command.as_deref() == Some("run") {
-            "default"
-        } else {
-            "none"
-        },
         "-monitor",
         "none",
     ]);
+    // Where the screen goes: nowhere for a test, which reads it with a
+    // screendump; a window or a VNC server for a boot somebody watches.
+    // `window` chooses by asking this QEMU what it was built with, because
+    // `-display default` fails outright on a build with no local backend
+    // rather than falling back to anything.
+    let window = crate::window::choose(&binary, args)?;
+    // Which console the person means: the card, on a machine that has one and
+    // a boot that asked for it. `attach_display` puts it there.
+    let card = (args.display && arch != Arch::Armv7a).then(|| crate::display::device_id(0));
+    let _ = command.args(window.arguments(card.as_deref()));
+    window.announce(card.as_deref());
     // The serial port, which is this machine's whole console.
     let _ = command.args(console.arguments()?);
     // A guest that reboots on a triple fault turns a crash into an endless

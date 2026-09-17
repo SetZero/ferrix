@@ -383,9 +383,52 @@ from `BootInfo`. What changes is what a person sees:
   the virtio-gpu** (`display 1024x768`): AAVMF's `VirtioGpuDxe` took the boot
   framebuffer over `ramfb`, which is §2.4's hazard. The fix is decided before
   L5.
-* **`run --display`** swaps `-display none` for the host's display backend.
-  That's how the customer sees each iteration. Input injection
-  (`input-send-event`) comes with the input iteration.
+* **`run --display` and `run-compositor`** are the two boots a person
+  watches, and `xtask/src/window.rs` decides where their screen goes.
+  `run-compositor` builds the same image `test-compositor` boots -- the
+  compositor as init, its clients, `hyprctl` and a `hyprland.conf` -- and
+  gives it a screen, this terminal as its serial port, and the host's own
+  accelerator, which is what `run` does too. `--config <PATH>` carries a real
+  configuration instead of the small one it writes; zinc is carried at
+  `/bin/zinc`, so `SUPER+RETURN` opens a shell on a pseudoterminal.
+* **Where the screen goes is asked, not assumed (2026-09-17).**
+  `-display default` is no good: QEMU's `default` is whichever local backend
+  was compiled in, and a build with none fails at startup rather than falling
+  back. So `window.rs` asks QEMU (`-display help`) and the host, in this
+  order:
+  1. `gtk`, then `sdl`, when QEMU has one *and* this host can open a window:
+     always on Windows and macOS, and on a POSIX host when `DISPLAY` or
+     `WAYLAND_DISPLAY` is set.
+  2. VNC otherwise, at `127.0.0.1:0` -- the loopback, because `-vnc` without
+     `password=on` lets any client in -- with the port printed and the `ssh
+     -L` line that reaches it from another machine. `--vnc <display>` asks for
+     VNC anyway, and is the only way anything here binds a wider address.
+  3. Neither, which is an error naming what QEMU did offer and what to
+     install.
+  The two hosts this is developed on are exactly the two cases: the Windows
+  QEMU 11.1 offers `gtk` and `sdl`; the Linux box the gates run on builds QEMU
+  9.2.4 headless, offers `none`, `spice-app` and `dbus`, is reached over
+  `ssh`, and shows its screen over VNC.
+* **A watched boot has two heads, and the card is the second one.** Firmware
+  keeps the machine's own display device -- q35's VGA, `virt`'s `ramfb` -- and
+  the kernel's driver drives the virtio-gpu, so QEMU has two consoles and
+  shows the first. VNC is told which console to serve
+  (`display=gpu0,head=0`), so a viewer sees the compositor and nothing else.
+  GTK cannot be told which tab to open on, only to show the tab bar
+  (`show-tabs=on`), so the run prints which tab the compositor is and that
+  `Ctrl-Alt-2` is its shortcut. Taking VGA away instead (`-vga none`) would
+  leave the loader's framebuffer on the card the driver later takes over,
+  which is §2.4's hazard and not something a convenience should decide.
+* **What a watched boot showed (2026-09-17).** On Windows, `cargo xtask
+  run-compositor` opens a GTK window and the guest reaches `hyprix: card0
+  Virtual-1 640x480`, with `seat 2 devices [event0 QEMU Virtio Keyboard,
+  event1 QEMU Virtio Tablet], 15 binds` and both `/bin/pattern` clients
+  started: the binds are pressed by pressing them. The card is 640×480 rather
+  than the `xres=1024,yres=768` a headless boot reports, because a console
+  with a UI attached takes its size from the window; the compositor follows
+  whatever the card says, which is why the picture is right either way.
+  Input injection over QMP (`input-send-event`) is `test-input` and
+  `test-seat`, and needs no window.
 
 ## 4. Landings and points
 

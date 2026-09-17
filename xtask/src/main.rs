@@ -66,6 +66,7 @@ mod symbolize;
 mod test_disk;
 mod threads;
 mod vfs;
+mod window;
 mod workspace;
 mod wsl;
 mod zinc;
@@ -116,6 +117,7 @@ USAGE:
 COMMANDS:
     build         Compile the loader and kernel and write a bootable image
     run           Boot the image under QEMU, attached to the terminal
+    run-compositor  Boot compositor/hyprix as init with a virtio-gpu, on a screen this host can show
     test-boot     Boot the image under QEMU and assert the kernel came up
     test-shell    Boot with a static busybox built in and require its script's output
     test-vfs      Boot with busybox in the initramfs and require stage 8's exit programs and applets
@@ -152,6 +154,9 @@ OPTIONS:
                                          behind xtask's own NAT gateway (10.0.2.2, guest 10.0.2.15);
                                          test-net turns it on whether or not it is given
     --display                            run, test-boot: a virtio-gpu device; run: and a window showing it
+    --vnc <DISPLAY>                      run --display, run-compositor: serve the screen over VNC
+                                         at e.g. `:0` (127.0.0.1) rather than in a window of this host's
+    --config <PATH>                      run-compositor: the hyprland.conf the guest is given
     --fast                               check: skip the cross-target clippy passes
     --ferrousli                          check: also ferrousli's fmt, clippy and tests, debug and release
     --zinc                               check: also zinc's fmt, clippy, tests and pty completion test
@@ -244,6 +249,7 @@ fn run() -> Result<()> {
         "test-vfs" => test_vfs(&args),
         "test-net" => test_net(&args),
         "test-display" => display::test_display(&args),
+        "run-compositor" => compositor::run_compositor(&args),
         "test-compositor" => compositor::test_compositor(&args),
         "test-input" => input::test_input(&args),
         "test-seat" => seat::test_seat(&args),

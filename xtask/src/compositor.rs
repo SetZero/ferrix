@@ -853,7 +853,7 @@ fn boot_and_dump(
     binds: &[(&str, &[&str])],
     args: &Args,
 ) -> Result<(Vec<Image>, Vec<String>)> {
-    let (image, kernel) = build_image(arch, programs, config, args)?;
+    let (image, kernel) = build_image(arch, programs, config, Vec::new(), args)?;
 
     let port = free_port()?;
     let mut qemu_args = args.clone();
@@ -995,6 +995,7 @@ fn build_image(
     arch: Arch,
     programs: &Programs,
     config: &str,
+    extra: Vec<crate::ports::File>,
     args: &Args,
 ) -> Result<(PathBuf, PathBuf)> {
     let loader = crate::cargo::build_loader(arch, args.release)?;
@@ -1022,6 +1023,10 @@ fn build_image(
         mode: 0o644,
         bytes: config.as_bytes().to_vec(),
     });
+    // Whatever the caller wants beside them, which is how `run-compositor`
+    // puts a shell on the image without changing the archive every gate boot
+    // is judged on.
+    carried.extend(extra);
     let initramfs = crate::initramfs::build(None, &natives, None, &carried)?;
     // The kernel as well as the image: the watcher symbolises a panic's
     // addresses out of it.
@@ -1229,6 +1234,98 @@ pub(crate) fn test_compositor(args: &Args) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// The configuration `run-compositor` writes when none was given: a desktop
+/// somebody can drive.
+///
+/// The gate's `CONFIG` is written for a screendump -- two clients, and binds
+/// a test presses -- and a person sitting in front of the window wants the
+/// rest of what a keyboard is for. Every dispatcher named here is one
+/// `compositor/layout` has; `RETURN` opens zinc on a pseudoterminal, which is
+/// the shell this project has and `run-compositor` carries at `/bin/zinc`.
+const RUN_CONFIG: &str = "# Written into the initramfs by `cargo xtask run-compositor`.
+# `--config <PATH>` carries a real `hyprland.conf` instead of this one.
+exec-once = /bin/pattern checkerboard one
+exec-once = /bin/pattern gradient two
+bind = SUPER, RETURN, exec, /bin/term /bin/zinc
+bind = SUPER, P, exec, /bin/pattern gradient another
+bind = SUPER, Q, killactive
+bind = SUPER, F, fullscreen
+bind = SUPER, V, togglefloating
+bind = SUPER, L, movefocus, l
+bind = SUPER, H, movefocus, r
+bind = SUPER SHIFT, L, movewindow, r
+bind = SUPER SHIFT, H, movewindow, l
+bind = SUPER, 1, workspace, 1
+bind = SUPER, 2, workspace, 2
+bind = SUPER SHIFT, 1, movetoworkspace, 1
+bind = SUPER SHIFT, 2, movetoworkspace, 2
+bind = SUPER, C, exec, /bin/hyprctl clients
+bind = SUPER, W, exec, /bin/hyprctl activewindow
+";
+
+/// `cargo xtask run-compositor`: the compositor on a screen a person watches.
+///
+/// The same image `test-compositor` boots -- the compositor as init, its
+/// clients and `hyprctl` in the initramfs -- with three differences, each of
+/// which is what "watch it" means rather than "judge it":
+///
+/// * QEMU gets a window, or a VNC server where this host has no way to open
+///   one. `window` decides which and says so.
+/// * The serial port is this terminal, as `run`'s is, so the compositor's own
+///   log is in front of the person watching it and `Ctrl-A x` ends the boot.
+/// * The accelerator is `auto`, again as `run`'s is: a screen somebody is
+///   looking at wants the hypervisor this host has, where a test wants `tcg`
+///   on every host to be the same test.
+///
+/// The keyboard and the pointer are QEMU's own virtio devices, which the
+/// window forwards to -- the same path `test-seat` drives over QMP -- so the
+/// binds in [`RUN_CONFIG`] are pressed by pressing them.
+///
+/// # Errors
+///
+/// An architecture QEMU has no virtio-gpu for, a `--config` that cannot be
+/// read, or a QEMU that cannot show a screen at all.
+pub(crate) fn run_compositor(args: &Args) -> Result<()> {
+    let arch = args.single_arch()?;
+    if crate::display::target(arch).is_none() {
+        return Err(Error::new(format!(
+            "{arch} has no virtio-gpu in QEMU's machine; the compositor runs on x86_64 and aarch64"
+        )));
+    }
+    let config = match &args.config {
+        Some(path) => std::fs::read_to_string(path)
+            .map_err(|error| Error::new(format!("reading {path}: {error}")))?,
+        None => RUN_CONFIG.to_owned(),
+    };
+    let programs = Programs::build(arch)?;
+    // The shell, so that the terminal bind opens something to type into. An
+    // architecture zinc is not built for is not a reason to refuse the
+    // screen: the bind is then the only thing on the configuration that does
+    // nothing, and the compositor is what was asked for.
+    let mut extra = Vec::new();
+    if let Some(zinc) = crate::zinc::build(arch)? {
+        extra.push(crate::ports::File {
+            path: crate::initramfs::ZINC_PATH,
+            mode: 0o755,
+            bytes: zinc,
+        });
+    }
+    let (image, _) = build_image(arch, &programs, &config, extra, args)?;
+    let args = Args {
+        // The card, the keyboard and the tablet: `--display` is what puts a
+        // virtio-gpu on the bus, and without one the compositor has no
+        // `/dev/dri` to open. `test-compositor` sets it the same way.
+        display: true,
+        accel: args
+            .accel
+            .clone()
+            .or_else(|| (!args.gdb).then(|| "auto".to_owned())),
+        ..args.clone()
+    };
+    println!("  {arch}: the compositor is init; its log is this terminal");
+    crate::qemu::run(arch, &image, &args)
 }
 
 /// A fifth boot: two monitors, which on QEMU are two virtio-gpu devices and
