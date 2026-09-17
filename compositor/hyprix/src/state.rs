@@ -376,6 +376,10 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
     let mut was_locked = false;
     let mut urgent: Vec<WindowId> = Vec::new();
     let mut drag: Option<crate::act::Drag> = None;
+    // The drag a client started with `wl_data_device.start_drag`, while one
+    // is going on. Two clients that cannot see each other, joined by the
+    // compositor.
+    let mut carried: Option<crate::dragging::Carried> = None;
     let mut quit = false;
     let mut swallow = false;
     // When the seat was last used, and how far back `forceidle` pretended
@@ -547,6 +551,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                 &sources,
                 now,
                 follow_mouse,
+                carried.is_some(),
             );
             let mut pending = Vec::new();
             for asked in done.dispatch {
@@ -585,6 +590,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                     &sources,
                     now,
                     follow_mouse,
+                    carried.is_some(),
                 );
                 changed = true;
             }
@@ -635,6 +641,19 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                 changed = true;
             }
         }
+        // The drag, now that every client's own borrow is over: it reaches
+        // two connections at once and a client's borrow holds one of them.
+        changed |= carry_drag(
+            &mut asks,
+            &mut carried,
+            &mut slots,
+            &state,
+            &sources,
+            &seat,
+            now,
+            report,
+        );
+
         // What the screen protocols asked for, now that every client's own
         // borrow is over: each of these reaches the screens or the layout.
         changed |= carry_out(
@@ -729,6 +748,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                 &sources,
                 now,
                 follow_mouse,
+                carried.is_some(),
             );
             changed = true;
         }
@@ -788,6 +808,16 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
         // The clipboard, the lock and the input method hold a client the
         // same way and move the same way.
         clipboard.renumber(&places);
+        // A drag whose *source* went is a drag with nothing on it: the
+        // target is told to leave and the drag ends.
+        if let Some(held) = carried.as_mut()
+            && !held.renumber(&places)
+        {
+            if let Some(mut held) = carried.take() {
+                held.ended(&mut slots, false);
+            }
+            changed = true;
+        }
         if let Some(held) = lock.as_mut() {
             held.client = places
                 .get(held.client)
@@ -920,6 +950,14 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
         if changed || drawn == 0 || animating || settling {
             settling = animating;
             let outputs = state.layout();
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "the pointer is held inside the screen, which is far inside i64"
+            )]
+            let cursor_at = {
+                let (x, y) = seat.pointer();
+                (x as i64, y as i64)
+            };
             // What each window is drawn with: what a `windowrule` gave it,
             // and over that whatever `wp_alpha_modifier_v1` asked for. The
             // protocol's multiplier is the client's own word about how much
@@ -950,6 +988,17 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                     // The pointer, unless the session is locked: a lock
                     // screen draws its own and the compositor's arrow over
                     // it would be two pointers.
+                    // The surface a drag is carrying, drawn at the
+                    // pointer: that is what makes a drag look like one.
+                    drag_icon: carried.as_ref().and_then(|held| {
+                        Some(crate::frame::Placed {
+                            client: held.client,
+                            surface: held.icon?,
+                            rect: Rect::new(cursor_at.0, cursor_at.1, 0, 0),
+                            above: true,
+                            rules: crate::frame::LayerRules::default(),
+                        })
+                    }),
                     // The ramps a night-light set on this screen, applied
                     // to the pixels on their way out.
                     gamma: gammas.get(&which).copied(),
@@ -1273,6 +1322,39 @@ fn serve(
                 // The requests are carried out as they arrive, so the end
                 // of a batch is nothing to do.
                 Event::WorkspacesCommitted => {}
+                // Drag and drop: the source began it, and the target
+                // answers with what it will take.
+                Event::DragStarted {
+                    source,
+                    origin,
+                    icon,
+                    serial,
+                    mimes,
+                } => {
+                    let _ = (origin, serial);
+                    asks.drags.push(Drag::Started {
+                        client: index,
+                        source,
+                        icon,
+                        mimes: mimes.clone(),
+                    });
+                }
+                Event::DragAccepted { offer, mime } => {
+                    let _ = offer;
+                    asks.drags.push(Drag::Accepted { mime: mime.clone() });
+                }
+                Event::DragActions {
+                    offer,
+                    actions,
+                    preferred,
+                } => {
+                    let _ = offer;
+                    asks.drags.push(Drag::Actions { actions, preferred });
+                }
+                Event::DragFinished { offer } => {
+                    let _ = offer;
+                    asks.drags.push(Drag::Finished);
+                }
                 Event::DataDeviceMade { .. } => made_device.push(Which::Clipboard),
                 Event::PrimaryDeviceMade { .. } => made_device.push(Which::Primary),
                 Event::SelectionSet { source, mimes } => {
@@ -1282,7 +1364,17 @@ fn serve(
                     selection.push((Which::Primary, source, mimes.clone(), Through::Window));
                 }
                 Event::SelectionWanted { offer, mime, fd } => {
-                    wanted.push((Which::Clipboard, offer, mime.clone(), fd, Through::Window));
+                    // An offer made for a *drag* is not the selection's:
+                    // the data comes from the client that started the
+                    // drag, and goes on the same kind of pipe.
+                    if slot.client.drag_offer() == Some(offer) {
+                        asks.drags.push(Drag::Receive {
+                            mime: mime.clone(),
+                            fd,
+                        });
+                    } else {
+                        wanted.push((Which::Clipboard, offer, mime.clone(), fd, Through::Window));
+                    }
                     claimed += 1;
                 }
                 Event::PrimaryWanted { offer, mime, fd } => {
@@ -2742,6 +2834,167 @@ struct ScreenAsks {
     arranged: Vec<(usize, Arrangement)>,
     /// A bar clicking a workspace number.
     workspaces: Vec<(i64, compositor_server::WorkspaceRequest)>,
+    /// What the drag protocol asked for this pass.
+    drags: Vec<Drag>,
+}
+
+/// Carry the drag: start it, follow the pointer, and drop it.
+///
+/// Every step is the compositor's, because the two clients cannot see each
+/// other. Gives whether the screen has to be drawn again -- the drag icon
+/// follows the pointer, so it always does while one is on.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "a drag reaches two connections, the layout, the pointer, the clock and the log"
+)]
+fn carry_drag(
+    asks: &mut ScreenAsks,
+    carried: &mut Option<crate::dragging::Carried>,
+    slots: &mut [Slot],
+    state: &State,
+    sources: &BTreeMap<WindowId, Source>,
+    seat: &Seat,
+    now: u32,
+    report: &mut dyn FnMut(&str),
+) -> bool {
+    let mut changed = false;
+    for step in asks.drags.drain(..) {
+        match step {
+            Drag::Started {
+                client,
+                source,
+                icon,
+                mimes,
+            } => {
+                // A drag that starts while one is on ends the first, which
+                // is what a client that lost track of its own button does.
+                if let Some(held) = carried.as_mut() {
+                    held.ended(slots, false);
+                }
+                let actions = source
+                    .and_then(|source| {
+                        slots
+                            .get(client)
+                            .map(|slot| slot.client().source_actions(source))
+                    })
+                    .unwrap_or(0);
+                report(&format!(
+                    "hyprix: client {client} started a drag of {} type(s)",
+                    mimes.len()
+                ));
+                *carried = Some(crate::dragging::Carried {
+                    client,
+                    source,
+                    icon,
+                    mimes,
+                    actions,
+                    over: None,
+                    accepted: None,
+                    action: 0,
+                    dropped: false,
+                });
+                changed = true;
+            }
+            Drag::Accepted { mime } => {
+                if let Some(held) = carried.as_mut() {
+                    held.accepted(slots, mime);
+                }
+            }
+            Drag::Actions { actions, preferred } => {
+                if let Some(held) = carried.as_mut() {
+                    held.actions(slots, actions, preferred);
+                }
+            }
+            Drag::Finished => {
+                if let Some(mut held) = carried.take() {
+                    held.ended(slots, true);
+                    report("hyprix: the drag was taken");
+                }
+                changed = true;
+            }
+            Drag::Receive { mime, fd } => {
+                let sent = carried
+                    .as_ref()
+                    .and_then(|held| Some((held.client, held.source?)))
+                    .and_then(|(client, source)| Some((slots.get_mut(client)?, source)));
+                match sent {
+                    Some((slot, source)) => {
+                        slot.client_mut().send_selection(source, &mime, fd);
+                        // Sent now: the descriptor is closed on the next
+                        // line, and one let go of before the message
+                        // carrying it has been written is one the client
+                        // never gets.
+                        let _ = slot.flush();
+                        report(&format!("hyprix: the drag's {mime} went to whoever asked"));
+                    }
+                    None => report("hyprix: a drag was asked for data nobody is dragging"),
+                }
+                crate::clipboard::close(fd);
+            }
+        }
+    }
+    let Some(held) = carried.as_mut() else {
+        return changed;
+    };
+    // Where the pointer is now, without moving its own focus: a window told
+    // `wl_pointer.enter` mid-drag would think the person had clicked it.
+    let at = seat.pointer();
+    let under = crate::deliver::under_pointer(state, sources, at);
+    changed |= held.moved(slots, under, now);
+    // The button coming up is the drop. The seat holds no button state, so
+    // this is the one place the compositor asks: a drag ends when nothing
+    // is held down any more.
+    if !held.dropped && !seat.buttons_held() {
+        held.dropped(slots);
+        report("hyprix: the drag was dropped");
+        changed = true;
+        // A drag with no source is an icon and nothing else: there is
+        // nobody to say `finish` to, so it ends here.
+        if held.source.is_none()
+            && let Some(mut held) = carried.take()
+        {
+            held.ended(slots, false);
+        }
+    }
+    changed
+}
+
+/// One step of a drag, queued while the clients are read.
+#[derive(Clone, Debug)]
+enum Drag {
+    /// `wl_data_device.start_drag`.
+    Started {
+        /// Which connection began it.
+        client: usize,
+        /// Its `wl_data_source`, or `None` for a drag with nothing on it.
+        source: Option<ObjectId>,
+        /// The surface drawn at the pointer, if it gave one.
+        icon: Option<ObjectId>,
+        /// The types the source can give the data in.
+        mimes: Vec<String>,
+    },
+    /// `wl_data_offer.accept`: the type the target will take, or `None`.
+    Accepted {
+        /// The type.
+        mime: Option<String>,
+    },
+    /// `wl_data_offer.set_actions`.
+    Actions {
+        /// What the target can do.
+        actions: u32,
+        /// Which of those it would rather.
+        preferred: u32,
+    },
+    /// `wl_data_offer.finish`: the target has taken it.
+    Finished,
+    /// `wl_data_offer.receive` on a drag's offer: the target is asking for
+    /// the data, which comes from the client that started the drag.
+    Receive {
+        /// The type it asked for.
+        mime: String,
+        /// The pipe to write it to.
+        fd: Fd,
+    },
 }
 
 /// One half of a window capture, as a [`Shot`] the loop can answer.

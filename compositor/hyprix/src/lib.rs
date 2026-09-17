@@ -27,6 +27,7 @@ pub mod clipboard;
 pub mod control;
 pub mod deliver;
 pub mod devices;
+pub mod dragging;
 pub mod frame;
 pub mod keymap;
 pub mod options;

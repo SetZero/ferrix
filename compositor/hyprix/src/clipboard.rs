@@ -311,7 +311,7 @@ impl Clipboard {
 }
 
 /// Close a descriptor the compositor was handed.
-fn close(fd: Fd) {
+pub fn close(fd: Fd) {
     #[expect(
         unsafe_code,
         reason = "AUDIT: close is not in std for a raw descriptor; this one arrived over the \

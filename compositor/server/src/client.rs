@@ -43,6 +43,7 @@ use compositor_xkb::Modifiers;
 
 mod control;
 mod desktop;
+mod drag;
 mod hypr;
 mod input;
 mod outputs;
@@ -50,6 +51,7 @@ mod screen;
 mod workspaces;
 
 pub use control::{Flavour, Manager};
+pub use drag::Dragging;
 pub use hypr::{Export, Shortcut};
 pub use input::{Constraint, Injected};
 pub use outputs::Configuration;
@@ -297,6 +299,42 @@ pub enum Event {
         window: u64,
         /// The `wl_buffer` to write into.
         buffer: ObjectId,
+    },
+    /// `wl_data_device.start_drag`: a client began a drag.
+    DragStarted {
+        /// What it is dragging, or `None` for an icon with nothing on it.
+        source: Option<ObjectId>,
+        /// The surface the drag started on.
+        origin: ObjectId,
+        /// The surface drawn at the pointer, if it gave one.
+        icon: Option<ObjectId>,
+        /// The serial of the press that began it.
+        serial: u32,
+        /// The types the source can give the data in.
+        mimes: Vec<String>,
+    },
+    /// `wl_data_offer.accept`: the client under the pointer said which type
+    /// it would take, or `None` for none of them.
+    DragAccepted {
+        /// The offer it said it on.
+        offer: ObjectId,
+        /// The type, or `None`.
+        mime: Option<String>,
+    },
+    /// `wl_data_offer.set_actions`: what the target will do with it.
+    DragActions {
+        /// The offer.
+        offer: ObjectId,
+        /// What it can do.
+        actions: u32,
+        /// Which of those it would rather.
+        preferred: u32,
+    },
+    /// `wl_data_offer.finish`: the target has taken what it took, which is
+    /// when a move may delete the original.
+    DragFinished {
+        /// The offer.
+        offer: ObjectId,
     },
     /// `xdg_system_bell_v1.ring`: the terminal bell, for the surface that
     /// rang it or for the whole seat.
@@ -738,6 +776,10 @@ pub struct Client {
     hyprland_surfaces: BTreeMap<ObjectId, ObjectId>,
     /// The window captures being taken.
     exports: BTreeMap<ObjectId, Export>,
+    /// What each `wl_data_source` of this client said it can do in a drag.
+    source_actions: BTreeMap<ObjectId, u32>,
+    /// The drag this client is under, while one is over it.
+    dragging: Dragging,
     /// The next configure serial. Serials go up and are never reused, so a
     /// client's `ack_configure` names one configure and no other.
     serial: u32,
@@ -913,6 +955,8 @@ impl Client {
             lock_notifications: Vec::new(),
             hyprland_surfaces: BTreeMap::new(),
             exports: BTreeMap::new(),
+            source_actions: BTreeMap::new(),
+            dragging: Dragging::default(),
             serial: 1,
         }
     }
@@ -3818,9 +3862,11 @@ impl Client {
     /// the selection, so the types are collected here and read when
     /// `set_selection` arrives.
     fn data_source_request(&mut self, sender: ObjectId, opcode: u16, args: &[Arg<'_>]) {
-        // `set_actions` is drag-and-drop's, which this compositor does not
-        // do: a client that asks is not refused, since the protocol allows
-        // the request on a selection source too.
+        // `set_actions` is the drag's, and a selection source may send it
+        // too; either way it is recorded there.
+        if self.drag_request(sender, Role::DataSource, opcode, args) {
+            return;
+        }
         if opcode != wl_data_source::request::OFFER {
             return;
         }
@@ -3836,10 +3882,10 @@ impl Client {
     /// `wl_data_device`: the selection, and the drag this compositor does
     /// not do.
     fn data_device_request(&mut self, opcode: u16, args: &[Arg<'_>]) {
-        // `start_drag` is drag-and-drop's. Nothing is dragged here, and a
-        // client that asks is answered with nothing rather than an error:
-        // the protocol's own answer to a drag that does not start is no
-        // `enter` and no `drop`.
+        if opcode == wl_data_device::request::START_DRAG {
+            self.start_drag(args);
+            return;
+        }
         if opcode != wl_data_device::request::SET_SELECTION {
             return;
         }
@@ -3858,7 +3904,10 @@ impl Client {
     /// `wl_data_offer`: what a client does with the selection it was told
     /// about.
     fn data_offer_request(&mut self, sender: ObjectId, opcode: u16, args: &[Arg<'_>]) {
-        // `accept` and `finish` are the drag's; `set_actions` too.
+        // `accept`, `set_actions` and `finish` are the drag's.
+        if self.drag_request(sender, Role::DataOffer, opcode, args) {
+            return;
+        }
         if opcode != wl_data_offer::request::RECEIVE {
             return;
         }

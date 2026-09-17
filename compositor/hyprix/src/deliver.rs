@@ -228,6 +228,38 @@ pub struct Asked {
     pub trigger: Option<(u16, u32)>,
 }
 
+/// Which client and surface the pointer is over, and where inside it.
+///
+/// A drag needs this without moving the pointer's own focus: while a drag is
+/// on, a window must not be told the pointer entered it -- that is the
+/// protocol's rule, and a practical one, since a window that got a
+/// `wl_pointer.enter` mid-drag would think the person had clicked it.
+#[must_use]
+pub fn under_pointer(
+    state: &State,
+    sources: &BTreeMap<WindowId, Source>,
+    at: (f64, f64),
+) -> Option<(usize, ObjectId, (f64, f64))> {
+    let placements = placements(state, sources);
+    let over = placements.iter().find(|placed| {
+        let (x, y, width, height) = placed.rect;
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "a window's edge is at most a screen's width; the loss is beyond any pixel"
+        )]
+        let (left, top, right, bottom) =
+            (x as f64, y as f64, (x + width) as f64, (y + height) as f64);
+        at.0 >= left && at.0 < right && at.1 >= top && at.1 < bottom
+    })?;
+    let (x, y, _, _) = over.rect;
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "as above: the origin is a screen coordinate"
+    )]
+    let local = (at.0 - x as f64, at.1 - y as f64);
+    Some((over.client, over.surface, local))
+}
+
 /// What delivering the seat's actions did.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Done {
@@ -247,6 +279,10 @@ pub struct Done {
 ///
 /// The dispatchers are not run here: they change the layout, and the layout
 /// is the caller's. Everything else is sent as it goes.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "an action reaches the focus, the layout, every connection, the clock, one option and the drag"
+)]
 pub fn deliver(
     actions: &[Action],
     focus: &mut Focus,
@@ -255,6 +291,7 @@ pub fn deliver(
     sources: &BTreeMap<WindowId, Source>,
     time: u32,
     follow_mouse: bool,
+    dragging: bool,
 ) -> Done {
     let placements = placements(state, sources);
     let mut done = Done::default();
@@ -303,6 +340,13 @@ pub fn deliver(
                         dy,
                     );
                 }
+                // While a drag is on the pointer enters and leaves
+                // nothing: the drag's own `enter` and `leave` are what a
+                // window is told, and a `wl_pointer.enter` mid-drag would
+                // look to it like a click.
+                if dragging {
+                    continue;
+                }
                 if let Some((local_x, local_y)) = focus.move_pointer(&placements, slots, (*x, *y))
                     && let Some((client, _)) = focus.pointer
                     && let Some(slot) = slots.get_mut(client)
@@ -325,6 +369,12 @@ pub fn deliver(
                 }
             }
             Action::Button { button, pressed } => {
+                // A button while a drag is on is the drop, which the
+                // compositor makes: the window under the pointer must not
+                // be told the person clicked it.
+                if dragging {
+                    continue;
+                }
                 if let Some((client, _)) = focus.pointer
                     && let Some(slot) = slots.get_mut(client)
                 {

@@ -47,7 +47,7 @@ mod surface;
 mod xdg;
 
 pub use client::{
-    Client, Configuration, Constraint, Event, Export, Fatal, Flavour, ForeignRequest,
+    Client, Configuration, Constraint, Dragging, Event, Export, Fatal, Flavour, ForeignRequest,
     ForeignToplevel, GAMMA_SIZE, Injected, Manager, Outgoing, Shortcut, Typed, Wanted, Workspace,
     WorkspaceRequest,
 };

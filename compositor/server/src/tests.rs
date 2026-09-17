@@ -4002,3 +4002,225 @@ fn a_window_capture_is_offered_a_buffer_and_filled_once() {
     let _ = client.read(&copy, &[]);
     assert!(client.is_finished(), "a second copy is refused");
 }
+
+// -- Drag and drop -----------------------------------------------------------
+
+/// A client with `wl_data_device_manager` (9) bound, a surface at 20, a data
+/// device at 21 and a source at 22.
+fn dragging_client() -> Client {
+    let mut client =
+        full_client(core::wl_seat::capability::POINTER | core::wl_seat::capability::KEYBOARD);
+    let mut bytes = create_surface(20);
+    bytes.extend(request(
+        9,
+        core::wl_data_device_manager::request::GET_DATA_DEVICE,
+        &[ArgType::NewId, ArgType::Object { nullable: false }],
+        &[Arg::NewId(ObjectId(21)), Arg::Object(ObjectId(7))],
+    ));
+    bytes.extend(request(
+        9,
+        core::wl_data_device_manager::request::CREATE_DATA_SOURCE,
+        &[ArgType::NewId],
+        &[Arg::NewId(ObjectId(22))],
+    ));
+    for mime in ["text/uri-list", "text/plain"] {
+        bytes.extend(request(
+            22,
+            core::wl_data_source::request::OFFER,
+            &[ArgType::Str { nullable: false }],
+            &[Arg::Str(Some(mime))],
+        ));
+    }
+    bytes.extend(request(
+        22,
+        core::wl_data_source::request::SET_ACTIONS,
+        &[ArgType::Uint],
+        &[Arg::Uint(
+            core::wl_data_device_manager::dnd_action::COPY
+                | core::wl_data_device_manager::dnd_action::MOVE,
+        )],
+    ));
+    assert_eq!(client.read(&bytes, &[]), bytes.len());
+    assert!(!client.is_finished(), "{:?}", client.fatal());
+    let _ = client.take_outgoing();
+    let _ = client.take_events();
+    client
+}
+
+/// `start_drag` tells the compositor what is being dragged, with the types
+/// the source offered and the icon it gave.
+#[test]
+fn start_drag_names_what_is_being_dragged() {
+    let mut client = dragging_client();
+    let mut bytes = create_surface(23);
+    bytes.extend(request(
+        21,
+        core::wl_data_device::request::START_DRAG,
+        &[
+            ArgType::Object { nullable: true },
+            ArgType::Object { nullable: false },
+            ArgType::Object { nullable: true },
+            ArgType::Uint,
+        ],
+        &[
+            Arg::Object(ObjectId(22)),
+            Arg::Object(ObjectId(20)),
+            Arg::Object(ObjectId(23)),
+            Arg::Uint(7),
+        ],
+    ));
+    assert_eq!(client.read(&bytes, &[]), bytes.len());
+    assert_eq!(client.fatal(), None);
+    let started = client
+        .take_events()
+        .into_iter()
+        .find_map(|event| match event {
+            Event::DragStarted {
+                source,
+                origin,
+                icon,
+                serial,
+                mimes,
+            } => Some((source, origin, icon, serial, mimes)),
+            _ => None,
+        })
+        .expect("the compositor is told a drag began");
+    assert_eq!(started.0, Some(ObjectId(22)));
+    assert_eq!(started.1, ObjectId(20));
+    assert_eq!(started.2, Some(ObjectId(23)));
+    assert_eq!(started.3, 7);
+    assert_eq!(started.4, ["text/uri-list", "text/plain"]);
+    assert_eq!(
+        client.source_actions(ObjectId(22)),
+        core::wl_data_device_manager::dnd_action::COPY
+            | core::wl_data_device_manager::dnd_action::MOVE
+    );
+}
+
+/// The client under the pointer is given an offer with every type on it and
+/// what the source can do, then entered -- in that order, because a client
+/// reads the types inside its `enter` handler.
+#[test]
+fn a_drag_over_a_window_offers_it_every_type() {
+    let mut client = dragging_client();
+    let mimes = ["text/uri-list".to_owned(), "text/plain".to_owned()];
+    let offer = client
+        .drag_enter(
+            ObjectId(20),
+            (12.0, 34.0),
+            &mimes,
+            core::wl_data_device_manager::dnd_action::COPY,
+        )
+        .expect("an offer was made");
+    let told = sent(&mut client);
+    let opcodes: Vec<(ObjectId, u16)> = told
+        .iter()
+        .map(|event| (event.sender, event.opcode))
+        .collect();
+    assert_eq!(
+        opcodes,
+        [
+            (ObjectId(21), core::wl_data_device::event::DATA_OFFER),
+            (offer, core::wl_data_offer::event::OFFER),
+            (offer, core::wl_data_offer::event::OFFER),
+            (offer, core::wl_data_offer::event::SOURCE_ACTIONS),
+            (ObjectId(21), core::wl_data_device::event::ENTER),
+        ],
+        "the offer, its types, what the source can do, then the enter"
+    );
+    let entered = told.last().expect("the enter").args.clone();
+    assert_eq!(entered[1], format!("Object({:?})", ObjectId(20)));
+    assert_eq!(entered[2], "Fixed(12)");
+    assert_eq!(entered[3], "Fixed(34)");
+    assert_eq!(client.drag_offer(), Some(offer));
+
+    // Moving inside the same surface is a motion and nothing else.
+    client.drag_motion(9, (13.0, 35.0));
+    assert_eq!(
+        sent(&mut client)
+            .iter()
+            .map(|event| event.opcode)
+            .collect::<Vec<u16>>(),
+        [core::wl_data_device::event::MOTION]
+    );
+
+    // Leaving takes the offer with it: the protocol says the `leave`
+    // destroys it, and a client that kept it would hold an object the
+    // server has taken back.
+    client.drag_leave();
+    assert_eq!(
+        sent(&mut client)
+            .iter()
+            .map(|event| event.opcode)
+            .collect::<Vec<u16>>(),
+        [core::wl_data_device::event::LEAVE]
+    );
+    assert_eq!(client.drag_offer(), None);
+    assert!(client.objects().get(offer).is_none());
+}
+
+/// What the target says comes back for the compositor: the type it will
+/// take, what it will do with it, and that it has finished.
+#[test]
+fn the_target_says_what_it_will_take() {
+    let mut client = dragging_client();
+    let mimes = ["text/plain".to_owned()];
+    let offer = client
+        .drag_enter(ObjectId(20), (0.0, 0.0), &mimes, 3)
+        .expect("an offer");
+    let _ = sent(&mut client);
+    let _ = client.take_events();
+
+    let mut bytes = request(
+        offer.0,
+        core::wl_data_offer::request::ACCEPT,
+        &[ArgType::Uint, ArgType::Str { nullable: true }],
+        &[Arg::Uint(1), Arg::Str(Some("text/plain"))],
+    );
+    bytes.extend(request(
+        offer.0,
+        core::wl_data_offer::request::SET_ACTIONS,
+        &[ArgType::Uint, ArgType::Uint],
+        &[
+            Arg::Uint(
+                core::wl_data_device_manager::dnd_action::COPY
+                    | core::wl_data_device_manager::dnd_action::MOVE,
+            ),
+            Arg::Uint(core::wl_data_device_manager::dnd_action::MOVE),
+        ],
+    ));
+    bytes.extend(request(
+        offer.0,
+        core::wl_data_offer::request::FINISH,
+        &[],
+        &[],
+    ));
+    assert_eq!(client.read(&bytes, &[]), bytes.len());
+    assert_eq!(client.fatal(), None);
+
+    let events = client.take_events();
+    assert!(events.iter().any(|event| matches!(
+        event,
+        Event::DragAccepted { mime: Some(mime), .. } if mime == "text/plain"
+    )));
+    assert!(events.iter().any(|event| matches!(
+        event,
+        Event::DragActions { preferred, .. }
+            if *preferred == core::wl_data_device_manager::dnd_action::MOVE
+    )));
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, Event::DragFinished { .. }))
+    );
+
+    // And the drop, which is what tells the target it may take it.
+    assert!(client.drag_drop());
+    assert_eq!(
+        sent(&mut client)
+            .iter()
+            .map(|event| event.opcode)
+            .collect::<Vec<u16>>(),
+        [core::wl_data_device::event::DROP]
+    );
+}

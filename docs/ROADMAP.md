@@ -4368,6 +4368,32 @@ the frame being drawn, or need the frame drawn again without one surface in
 it, and this renderer draws one pass over one canvas. They are parsed rather
 than refused so a person's configuration is not a wall of diagnostics.
 
+**Done — drag and drop (2026-09-17).** The most intricate conversation in
+core Wayland, and the one every file manager, browser and editor uses.
+`wl_data_device.start_drag` was read and dropped; there was no drag at all.
+
+Three objects talk at once and the two clients cannot see each other, so
+every step is the compositor's. It makes the *offer* for whichever client
+the pointer is over, names every type the source put on it, says what the
+source can do, and enters -- in that order, because a client reads the types
+inside its `enter` handler and one told afterwards would have nothing to
+read. It tells the source which type that client said it would take, settles
+the action the two agreed on (the target's preference where both offered
+it), and, when the last button comes up, tells one to drop and the other
+that the drop happened. A drop over nothing, or over a client that would
+take no type, cancels the source -- which is what stops a file manager
+deleting the original after a move that went nowhere.
+
+Two rules that are easy to miss and were written down here. While a drag is
+on, the pointer enters and leaves nothing: a window told `wl_pointer.enter`
+mid-drag would think the person had clicked it, so the pointer's own events
+stop for the length of the drag. And the offer is destroyed by the `leave`,
+so a client that walked the pointer across three windows does not end up
+holding three offers.
+
+The icon the source gave is drawn at the pointer and under it, because what
+a drag *looks* like is a thing following the pointer.
+
 **Done — a terminal (2026-09-17).** Stage 18's exit asked for one, and it
 needed pseudoterminals the kernel did not have. It has them now:
 `/dev/ptmx` gives a master, `TIOCGPTN` says which pair it is, `TIOCSPTLCK`

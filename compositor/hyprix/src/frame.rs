@@ -39,6 +39,12 @@ pub struct Output<'a> {
     pub cursor: Option<Cursor>,
     /// The ramps a night-light set on this screen, if one did.
     pub gamma: Option<Gamma>,
+    /// The surface a drag is carrying, drawn at the pointer.
+    ///
+    /// Its rectangle's position is where the pointer is; the size is the
+    /// surface's own, because a drag icon is whatever the client drew and
+    /// not something the compositor sizes.
+    pub drag_icon: Option<Placed>,
 }
 
 /// A night-light's three ramps, one entry a level.
@@ -259,8 +265,10 @@ fn draw_windows(
         scale,
         cursor,
         gamma,
+        drag_icon,
     } = target;
     let gamma = *gamma;
+    let drag_icon = *drag_icon;
     let cursor = *cursor;
     let (origin, scale) = (*origin, *scale);
     // The layout, the decorations and the layer surfaces are all in logical
@@ -303,6 +311,35 @@ fn draw_windows(
         windows: styles,
     };
     let _ = render_with_layers(canvas, output, origin, &styles, &surfaces, &drawn, damage);
+
+    // The drag icon under the pointer and over everything else: what a
+    // drag looks like is a thing following the pointer, and a compositor
+    // that drew it under a window would have a drag nobody can see.
+    if let Some(icon) = drag_icon
+        && let Some(slot) = clients.get(icon.client)
+        && let Some(surface) = pixels(slot.client(), slot.pools(), icon.surface)
+    {
+        let at = scale_rect(
+            Rect::new(
+                icon.rect.x,
+                icon.rect.y,
+                i64::from(surface.width()),
+                i64::from(surface.height()),
+            ),
+            origin,
+            scale,
+        );
+        canvas.composite(
+            &surface,
+            Rect::new(
+                at.x.saturating_sub(origin.0),
+                at.y.saturating_sub(origin.1),
+                at.width,
+                at.height,
+            ),
+            damage,
+        );
+    }
 
     // The pointer last, over everything: it is not a window, not a layer
     // surface and not part of the layout, and a compositor that drew it

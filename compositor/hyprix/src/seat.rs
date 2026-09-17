@@ -220,6 +220,9 @@ pub struct Seat {
     /// Whether a client has asked for the compositor's keybinds to be left
     /// alone: `zwp_keyboard_shortcuts_inhibit_manager_v1`.
     shortcuts_inhibited: bool,
+    /// The pointer buttons held down now, by their evdev codes. A drag ends
+    /// when the last of them comes up.
+    buttons: Vec<u32>,
     /// The screen, which the pointer may not leave.
     screen: (f64, f64),
     /// The submap in force, `None` for the global map.
@@ -249,6 +252,7 @@ impl Seat {
             binds: Vec::new(),
             hold: Hold::Free,
             shortcuts_inhibited: false,
+            buttons: Vec::new(),
             // The pointer starts in the middle, as Hyprland's does.
             pointer: (f64::from(width) / 2.0, f64::from(height) / 2.0),
             used: false,
@@ -370,6 +374,16 @@ impl Seat {
         self.hold = hold;
     }
 
+    /// Whether any pointer button is held down.
+    ///
+    /// A drag ends when the button that began it comes up, and the drag is
+    /// the compositor's to end -- so it asks the seat, which is the only
+    /// thing that sees the buttons.
+    #[must_use]
+    pub fn buttons_held(&self) -> bool {
+        !self.buttons.is_empty()
+    }
+
     /// The modifiers held now, which is what a key sent on to another
     /// window has to carry with it.
     #[must_use]
@@ -417,6 +431,15 @@ impl Seat {
             Input::Absolute { x, y } => self.move_to(x * self.screen.0, y * self.screen.1),
             Input::Button { button, pressed } => {
                 self.used = true;
+                // Which buttons are down, for the one thing that has to
+                // know: a drag ends when the last of them comes up.
+                if pressed {
+                    if !self.buttons.contains(&button) {
+                        self.buttons.push(button);
+                    }
+                } else {
+                    self.buttons.retain(|held| *held != button);
+                }
                 let mut actions = self.fired(Trigger::Button(button), pressed, false);
                 actions.push(Action::Button { button, pressed });
                 actions
