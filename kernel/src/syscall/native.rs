@@ -163,6 +163,7 @@ pub(crate) fn dispatch(args: &SyscallArgs, process: Option<&Process>) -> Result<
         NativeCall::BlockRingCreate => block_ring_create(process, handle(a[0])),
         NativeCall::NetRingCreate => net_ring_create(process, handle(a[0])),
         NativeCall::DisplayControlCreate => display_control_create(process, handle(a[0])),
+        NativeCall::InputControlCreate => input_control_create(process, handle(a[0])),
         NativeCall::DeviceInfo => device_info(process, handle(a[0]), a[1]),
         NativeCall::DeviceQuiesce => device_quiesce(process, handle(a[0])),
         NativeCall::IoMappingMap => io_mapping_map(process, handle(a[0]), a[1]),
@@ -1128,6 +1129,23 @@ fn display_control_create(process: &Process, device: Handle) -> Result<usize, Er
     let driver_end = crate::display::create(&node).map_err(|why| match why {
         crate::display::CreateError::InUse => status::ALREADY_BOUND,
         crate::display::CreateError::NoMemory => status::NO_MEMORY,
+    })?;
+    insert_new(
+        process,
+        Object::Channel(driver_end),
+        ferrix_blkring::control::CONTROL_RIGHTS,
+    )
+}
+
+/// `input_control_create`.
+///
+/// As the display's: the device's own channel, one per device, and the
+/// driver's end of it back.
+fn input_control_create(process: &Process, device: Handle) -> Result<usize, Errno> {
+    let node = device_in(process, device, Rights::MANAGE)?;
+    let driver_end = crate::input::create(&node).map_err(|why| match why {
+        crate::input::CreateError::InUse => status::ALREADY_BOUND,
+        crate::input::CreateError::NoMemory => status::NO_MEMORY,
     })?;
     insert_new(
         process,

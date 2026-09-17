@@ -483,6 +483,10 @@ pub(crate) fn sys_ioctl(
     if let Some(card) = crate::display::drm::of(file.io()) {
         return crate::display::drm::ioctl(process, &card, request, arg);
     }
+    // An open input device (`docs/INPUT.md` §3.3), by its per-open object.
+    if let Some(device) = crate::input::evdev::of(file.io()) {
+        return crate::input::evdev::ioctl(process, &device, request, arg);
+    }
     // The two socket requests, which ask a socket what is queued each way.
     let answered = if let Some(socket) = fs::socket::of(&file) {
         socket.ioctl(process, request, arg)

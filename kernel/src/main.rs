@@ -30,6 +30,7 @@ mod early;
 mod fdt;
 mod fs;
 mod init;
+mod input;
 mod iommu;
 mod irq;
 mod mm;

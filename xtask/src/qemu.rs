@@ -933,6 +933,21 @@ fn attach_display(command: &mut Command, arch: Arch, args: &Args) {
             ),
         ]);
     }
+    // A keyboard and a tablet, which is what QEMU's own HID devices are and
+    // what `input-send-event` over QMP drives. The tablet rather than the
+    // mouse: it reports absolute positions, so a monitor command names a
+    // pixel rather than a movement, which is what a test can check.
+    // `--display` brings them too: a screen with no keyboard and no pointer
+    // is not a machine anybody drives, and the compositor `run --display`
+    // starts wants a seat.
+    if (args.input || args.display) && arch != Arch::Armv7a {
+        for kind in ["virtio-keyboard-pci", "virtio-tablet-pci"] {
+            let _ = command.args([
+                "-device",
+                &format!("{kind},disable-legacy=on,iommu_platform=on"),
+            ]);
+        }
+    }
     if let Some(port) = args.qmp_port {
         let _ = command.args(["-qmp", &format!("tcp:127.0.0.1:{port},server=on,wait=off")]);
     }

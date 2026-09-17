@@ -224,6 +224,15 @@ const DRI_CURSOR: u64 = 1 << 48;
 /// The name of the directory cards are in.
 const DRI: &[u8] = b"dri";
 
+/// `/dev/input`'s inode number.
+const INPUT_INO: u64 = 1 << 37;
+
+/// The root's cursor for `/dev/input`, after `/dev/dri`'s.
+const INPUT_CURSOR: u64 = (1 << 48) + 2;
+
+/// The name of the directory input devices are in.
+const INPUT: &[u8] = b"input";
+
 /// A devfs instance.
 #[derive(Debug)]
 pub(crate) struct Devfs {
@@ -492,6 +501,10 @@ enum Place {
     Dri,
     /// `/dev/dri/card<N>`.
     Card(u32),
+    /// `/dev/input`, while an input device is published.
+    Input,
+    /// `/dev/input/event<N>`.
+    Event(u32),
 }
 
 /// A devfs inode.
@@ -509,7 +522,12 @@ impl Node {
     fn device(&self) -> Option<&'static Device> {
         match self.place {
             Place::Device(index) => DEVICES.get(index),
-            Place::Root | Place::Block(_) | Place::Dri | Place::Card(_) => None,
+            Place::Root
+            | Place::Block(_)
+            | Place::Dri
+            | Place::Card(_)
+            | Place::Input
+            | Place::Event(_) => None,
         }
     }
 }
@@ -565,6 +583,16 @@ impl Inode for Node {
                 ino: DRI_INO,
                 ..directory
             },
+            (Place::Input, _) => Metadata {
+                ino: INPUT_INO,
+                ..directory
+            },
+            (Place::Event(index), _) => Metadata {
+                atime: self.made,
+                mtime: self.made,
+                ctime: self.made,
+                ..crate::input::evdev::metadata(index)
+            },
             (Place::Card(index), _) => crate::display::card(index).map_or(
                 Metadata {
                     kind: FileType::CharDevice,
@@ -587,7 +615,7 @@ impl Inode for Node {
     }
 
     fn is_stream(&self) -> bool {
-        !matches!(self.place, Place::Root | Place::Dri)
+        !matches!(self.place, Place::Root | Place::Dri | Place::Input)
     }
 
     /// Disks are registered and dropped without the VFS being told, so a miss
@@ -610,6 +638,14 @@ impl Inode for Node {
             let file: Arc<dyn Inode> = crate::display::drm::CardFile::open(card)?;
             return Ok(Some(file));
         }
+        // Every open of an input device gets its own object, with its own
+        // queue, clock and grab: `docs/INPUT.md` §3.3 allows any number,
+        // as Linux does.
+        if let Place::Event(index) = self.place {
+            let device = crate::input::device(index).ok_or(Errno::ENXIO)?;
+            let file: Arc<dyn Inode> = crate::input::evdev::EventFile::open(device)?;
+            return Ok(Some(file));
+        }
         Ok(self
             .device()
             .filter(|device| device.behaviour == Behaviour::Console)
@@ -617,7 +653,7 @@ impl Inode for Node {
     }
 
     fn read_at(&self, offset: u64, buf: &mut [u8]) -> Result<usize> {
-        if let Place::Block(_) | Place::Card(_) = self.place {
+        if let Place::Block(_) | Place::Card(_) | Place::Event(_) = self.place {
             return Err(Errno::ENXIO);
         }
         let device = self.device().ok_or(Errno::EISDIR)?;
@@ -636,7 +672,7 @@ impl Inode for Node {
     }
 
     fn write_at(&self, offset: u64, data: &[u8], append: bool) -> Result<(usize, u64)> {
-        if let Place::Block(_) | Place::Card(_) = self.place {
+        if let Place::Block(_) | Place::Card(_) | Place::Event(_) = self.place {
             return Err(Errno::ENXIO);
         }
         let device = self.device().ok_or(Errno::EISDIR)?;
@@ -658,12 +694,26 @@ impl Inode for Node {
                 made: self.made,
             }));
         }
+        if self.place == Place::Input {
+            let index = crate::input::evdev::event_number(name).ok_or(Errno::ENOENT)?;
+            let _device = crate::input::device(index).ok_or(Errno::ENOENT)?;
+            return Ok(Arc::new(Node {
+                place: Place::Event(index),
+                made: self.made,
+            }));
+        }
         if self.place != Place::Root {
             return Err(Errno::ENOTDIR);
         }
         if name == DRI && !crate::display::card_indices().is_empty() {
             return Ok(Arc::new(Node {
                 place: Place::Dri,
+                made: self.made,
+            }));
+        }
+        if name == INPUT && !crate::input::device_indices().is_empty() {
+            return Ok(Arc::new(Node {
+                place: Place::Input,
                 made: self.made,
             }));
         }
@@ -682,6 +732,9 @@ impl Inode for Node {
     fn read_dir(&self, cursor: u64, emit: &mut dyn FnMut(DirEntry<'_>) -> bool) -> Result<()> {
         if self.place == Place::Dri {
             return read_dri(cursor, emit);
+        }
+        if self.place == Place::Input {
+            return crate::input::evdev::read_dir(cursor, emit);
         }
         if self.place != Place::Root {
             return Err(Errno::ENOTDIR);
@@ -721,11 +774,22 @@ impl Inode for Node {
             }
         }
         if cursor <= DRI_CURSOR && !crate::display::card_indices().is_empty() {
-            let _ = emit(DirEntry {
+            let kept = emit(DirEntry {
                 ino: DRI_INO,
                 kind: FileType::Directory,
                 name: DRI,
                 next: DRI_CURSOR + 1,
+            });
+            if !kept {
+                return Ok(());
+            }
+        }
+        if cursor <= INPUT_CURSOR && !crate::input::device_indices().is_empty() {
+            let _ = emit(DirEntry {
+                ino: INPUT_INO,
+                kind: FileType::Directory,
+                name: INPUT,
+                next: INPUT_CURSOR + 1,
             });
         }
         Ok(())

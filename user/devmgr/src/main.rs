@@ -51,6 +51,10 @@ const VIRTIO_BLK_IDS: [u16; 2] = [0x1042, 0x1001];
 const VIRTIO_NET_IDS: [u16; 2] = [0x1041, 0x1000];
 /// virtio-gpu has only a modern id.
 const VIRTIO_GPU_IDS: [u16; 1] = [0x1050];
+/// virtio-input, the same (`docs/DEVMGR.md`). QEMU's keyboard, mouse and
+/// tablet are three functions of it, so one driver process starts per
+/// device, as one blk driver starts per disk.
+const VIRTIO_INPUT_IDS: [u16; 1] = [0x1052];
 
 /// Which kind of ring a driver serves its device over. The two rings are
 /// separate protocols with separate kernel ends, and the only thing devmgr
@@ -64,6 +68,8 @@ enum Kind {
     Net,
     /// `docs/DISPLAY.md`: a card, numbered by the kernel.
     Display,
+    /// `docs/INPUT.md`: an input device, numbered by the kernel.
+    Input,
 }
 
 /// A driver about to be started: its kind, carrying what only that kind
@@ -79,14 +85,17 @@ enum Plan {
     Net,
     /// A card, whose number the kernel chooses.
     Display,
+    /// An input device, whose number the kernel chooses.
+    Input,
 }
 
 /// The table: which driver, by name in the initramfs, drives which device,
 /// and over which ring.
-const DRIVERS: [(u16, &[u16], &[u8], Kind); 3] = [
+const DRIVERS: [(u16, &[u16], &[u8], Kind); 4] = [
     (VIRTIO_VENDOR, &VIRTIO_BLK_IDS, b"blk", Kind::Block),
     (VIRTIO_VENDOR, &VIRTIO_NET_IDS, b"net", Kind::Net),
     (VIRTIO_VENDOR, &VIRTIO_GPU_IDS, b"gpu", Kind::Display),
+    (VIRTIO_VENDOR, &VIRTIO_INPUT_IDS, b"input", Kind::Input),
 ];
 
 /// Where devmgr gave up, as the exit status.
@@ -184,6 +193,7 @@ fn run(channel: &Channel<Kernel>) -> Result<(), Step> {
             }
             Kind::Net => Plan::Net,
             Kind::Display => Plan::Display,
+            Kind::Input => Plan::Input,
         };
         let Some(slot) = started.get_mut(count as usize) else {
             failed += 1;
@@ -436,6 +446,7 @@ fn start(
         Plan::Block(name) => start_block(job, device, image, info, name, port, key),
         Plan::Net => start_net(job, device, image, info, port, key),
         Plan::Display => start_display(job, device, image, info, port, key),
+        Plan::Input => start_input(job, device, image, info, port, key),
     }
 }
 
@@ -568,6 +579,56 @@ fn start_display(
         job,
         image,
         "gpu",
+        port,
+        key,
+        encoded.as_bytes(),
+        [device, control],
+    )
+}
+
+/// A virtio-input driver, over an input control channel.
+///
+/// The same shape as the display's: the device, the channel, and where the
+/// register blocks are. The name in START is the program's, which is what a
+/// driver checks its device id against.
+fn start_input(
+    job: &Job<Kernel>,
+    device: Device<Kernel>,
+    image: &Vmo<Kernel>,
+    info: &DeviceInfo,
+    port: &Port<Kernel>,
+    key: u64,
+) -> Result<(Job<Kernel>, Process<Kernel>), ()> {
+    let control = device.input_control().map_err(|_| ())?;
+    let block = |block: ferrix_native_abi::types::DeviceBlock| Block {
+        phys: block.phys,
+        offset: block.offset,
+        length: block.length,
+    };
+    let start = Start {
+        common: block(info.common),
+        notify: block(info.notify),
+        isr: block(info.isr),
+        device: block(info.device),
+        notify_off_multiplier: info.notify_off_multiplier,
+        msix_table_size: info.msix_table_size,
+        pci_device_id: info.device_id,
+        location: info.location,
+        name: [b'i', b'n', b'p', b'u', b't', 0, 0, 0],
+    };
+    let device = device
+        .into_owned()
+        .replace(Requested::Exactly(DEVICE_RIGHTS))
+        .map_err(|_| ())?;
+    let control = control
+        .into_owned()
+        .replace(Requested::Exactly(CONTROL_RIGHTS))
+        .map_err(|_| ())?;
+    let encoded = Ring::Start(start).encode();
+    launch(
+        job,
+        image,
+        "input",
         port,
         key,
         encoded.as_bytes(),

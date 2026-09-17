@@ -68,6 +68,10 @@ pub(crate) struct Args {
     /// `--display`: a virtio-gpu device on the bus, and for `run` a window
     /// that shows it. `test-display` turns it on.
     pub(crate) display: bool,
+    /// `--input`: a virtio keyboard and a virtio tablet on the bus, which
+    /// QMP's `input-send-event` drives. `test-input` turns it on, and
+    /// `--display` brings them as well.
+    pub(crate) input: bool,
     /// Where QEMU serves QMP. No flag sets it: `test-display` picks a port to
     /// ask QEMU for its screendump over.
     pub(crate) qmp_port: Option<u16>,
@@ -97,6 +101,7 @@ impl Args {
                 "--reset" => args.reset = true,
                 "--net" => args.net = true,
                 "--display" => args.display = true,
+                "--input" => args.input = true,
                 "--arch" => args.arch = Some(value(&mut items, "--arch")?),
                 "--smp" => {
                     args.smp = number(&mut items, "--smp")?;

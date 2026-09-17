@@ -148,6 +148,15 @@ impl<S: Syscall> Device<S> {
         self.ring(nr::DISPLAY_CONTROL_CREATE)
     }
 
+    /// `input_control_create`: the input control channel for this device.
+    ///
+    /// # Errors
+    ///
+    /// `ALREADY_BOUND` when the device has one, and whatever the call said.
+    pub fn input_control(&self) -> Result<Channel<S>, Error> {
+        self.ring(nr::INPUT_CONTROL_CREATE)
+    }
+
     /// The body every control channel shares: one call, one handle back.
     fn ring(&self, number: usize) -> Result<Channel<S>, Error> {
         let value = Call::new(number)

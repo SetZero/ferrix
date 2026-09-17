@@ -83,6 +83,8 @@ pub const BLOCK_RING_CREATE: usize = 0x1048;
 pub const NET_RING_CREATE: usize = 0x104B;
 /// [`NativeCall::DisplayControlCreate`].
 pub const DISPLAY_CONTROL_CREATE: usize = 0x104C;
+/// [`NativeCall::InputControlCreate`].
+pub const INPUT_CONTROL_CREATE: usize = 0x104D;
 /// [`NativeCall::DeviceInfo`].
 pub const DEVICE_INFO: usize = 0x1049;
 /// [`NativeCall::DeviceQuiesce`].
@@ -200,6 +202,10 @@ pub enum NativeCall {
     /// process holds with `MANAGE`, and answer the driver's end of it
     /// (`docs/DISPLAY.md` §2.2). One per device.
     DisplayControlCreate,
+    /// `(device)` → handle. Make the input control channel for a device this
+    /// process holds with `MANAGE`, and answer the driver's end of it
+    /// (`docs/INPUT.md` §3.2). One per device.
+    InputControlCreate,
     /// `(device, info)` → 0. Write a `DeviceInfo` at `info`: the device as
     /// enumeration found it, which is what whoever starts a driver on it puts
     /// in the driver's START. Any device handle will do.
@@ -212,7 +218,7 @@ pub enum NativeCall {
 }
 
 /// Every native call, in number order.
-pub const ALL: [NativeCall; 32] = [
+pub const ALL: [NativeCall; 33] = [
     NativeCall::HandleClose,
     NativeCall::HandleDuplicate,
     NativeCall::HandleReplace,
@@ -245,6 +251,7 @@ pub const ALL: [NativeCall; 32] = [
     NativeCall::DeviceQuiesce,
     NativeCall::NetRingCreate,
     NativeCall::DisplayControlCreate,
+    NativeCall::InputControlCreate,
 ];
 
 /// Whether `number` is in the native range at all.
@@ -290,6 +297,7 @@ pub const fn decode(number: usize) -> Option<NativeCall> {
         BLOCK_RING_CREATE => NativeCall::BlockRingCreate,
         NET_RING_CREATE => NativeCall::NetRingCreate,
         DISPLAY_CONTROL_CREATE => NativeCall::DisplayControlCreate,
+        INPUT_CONTROL_CREATE => NativeCall::InputControlCreate,
         DEVICE_INFO => NativeCall::DeviceInfo,
         DEVICE_QUIESCE => NativeCall::DeviceQuiesce,
         _ => return None,
@@ -331,6 +339,7 @@ pub const fn number(call: NativeCall) -> usize {
         NativeCall::BlockRingCreate => BLOCK_RING_CREATE,
         NativeCall::NetRingCreate => NET_RING_CREATE,
         NativeCall::DisplayControlCreate => DISPLAY_CONTROL_CREATE,
+        NativeCall::InputControlCreate => INPUT_CONTROL_CREATE,
         NativeCall::DeviceInfo => DEVICE_INFO,
         NativeCall::DeviceQuiesce => DEVICE_QUIESCE,
     }

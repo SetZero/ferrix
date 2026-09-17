@@ -165,6 +165,18 @@ name = "ferrix-heap"
 version = "0.1.0"
 
 [[package]]
+name = "ferrix-input"
+version = "0.1.0"
+dependencies = [
+ "ferrix-blkring",
+ "ferrix-inputctl",
+ "ferrix-native-abi",
+ "ferrix-rt",
+ "ferrix-virtio",
+ "ferrix-virtio-input",
+]
+
+[[package]]
 name = "ferrix-inputctl"
 version = "0.1.0"
 dependencies = [
@@ -190,6 +202,7 @@ dependencies = [
  "ferrix-fdt",
  "ferrix-frame",
  "ferrix-heap",
+ "ferrix-inputctl",
  "ferrix-linux-abi",
  "ferrix-native-abi",
  "ferrix-net",

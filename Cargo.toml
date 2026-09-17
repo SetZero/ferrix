@@ -64,6 +64,7 @@ members = [
     "user/blk",
     "user/net",
     "user/gpu",
+    "user/input",
     "user/devmgr",
 
     # Host-side build and test driver (`cargo xtask ...`).
