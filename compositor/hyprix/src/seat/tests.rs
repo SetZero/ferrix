@@ -94,7 +94,8 @@ fn a_bind_fires_on_its_modifiers_and_eats_the_key() {
         actions,
         [Action::Dispatch {
             name: "killactive".to_owned(),
-            argument: String::new()
+            argument: String::new(),
+            trigger: Some((KEY_Q, generated::MOD4)),
         }],
         "the bind fired and the key did not reach the window"
     );
@@ -115,7 +116,8 @@ fn a_bind_does_not_fire_with_a_modifier_it_did_not_ask_for() {
         actions,
         [Action::Dispatch {
             name: "exit".to_owned(),
-            argument: String::new()
+            argument: String::new(),
+            trigger: Some((KEY_Q, generated::MOD4 | generated::SHIFT)),
         }]
     );
 }
@@ -174,7 +176,8 @@ fn a_repeat_reaches_no_window_and_only_a_bind_that_asked() {
         actions,
         [Action::Dispatch {
             name: "resizeactive".to_owned(),
-            argument: "10 0".to_owned()
+            argument: "10 0".to_owned(),
+            trigger: Some((KEY_A, 0)),
         }]
     );
 
@@ -204,7 +207,8 @@ fn a_bind_by_keycode_is_read_as_xkb_numbers_one() {
         press(&mut seat, KEY_Q),
         [Action::Dispatch {
             name: "exit".to_owned(),
-            argument: String::new()
+            argument: String::new(),
+            trigger: Some((KEY_Q, 0)),
         }]
     );
 }

@@ -52,6 +52,12 @@ scan "$protocols/xdg-dialog-v1.xml" xdg-dialog
 scan "$protocols/xdg-system-bell-v1.xml" xdg-system-bell
 scan "$protocols/xdg-toplevel-tag-v1.xml" xdg-toplevel-tag
 scan "$protocols/kde-server-decoration.xml" kde-server-decoration
+scan "$protocols/relative-pointer-unstable-v1.xml" relative-pointer
+scan "$protocols/pointer-constraints-unstable-v1.xml" pointer-constraints
+scan "$protocols/pointer-gestures-unstable-v1.xml" pointer-gestures
+scan "$protocols/keyboard-shortcuts-inhibit-unstable-v1.xml" keyboard-shortcuts-inhibit
+scan "$protocols/virtual-keyboard-unstable-v1.xml" virtual-keyboard
+scan "$protocols/wlr-virtual-pointer-unstable-v1.xml" wlr-virtual-pointer
 
 gcc -O0 -Wall -Werror -I"$work" \
     $(pkg-config --cflags wayland-client) \

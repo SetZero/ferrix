@@ -51,6 +51,12 @@
 #include "xdg-system-bell-client-protocol.h"
 #include "xdg-toplevel-tag-client-protocol.h"
 #include "kde-server-decoration-client-protocol.h"
+#include "relative-pointer-client-protocol.h"
+#include "pointer-constraints-client-protocol.h"
+#include "pointer-gestures-client-protocol.h"
+#include "keyboard-shortcuts-inhibit-client-protocol.h"
+#include "virtual-keyboard-client-protocol.h"
+#include "wlr-virtual-pointer-client-protocol.h"
 
 static void print_messages(const struct wl_interface *interface,
 			   const char *kind, const struct wl_message *messages,
@@ -195,6 +201,27 @@ int main(void)
 		/* kde-server-decoration.xml */
 		&org_kde_kwin_server_decoration_manager_interface,
 		&org_kde_kwin_server_decoration_interface,
+		/* relative-pointer-unstable-v1.xml */
+		&zwp_relative_pointer_manager_v1_interface,
+		&zwp_relative_pointer_v1_interface,
+		/* pointer-constraints-unstable-v1.xml */
+		&zwp_pointer_constraints_v1_interface,
+		&zwp_locked_pointer_v1_interface,
+		&zwp_confined_pointer_v1_interface,
+		/* pointer-gestures-unstable-v1.xml */
+		&zwp_pointer_gestures_v1_interface,
+		&zwp_pointer_gesture_swipe_v1_interface,
+		&zwp_pointer_gesture_pinch_v1_interface,
+		&zwp_pointer_gesture_hold_v1_interface,
+		/* keyboard-shortcuts-inhibit-unstable-v1.xml */
+		&zwp_keyboard_shortcuts_inhibit_manager_v1_interface,
+		&zwp_keyboard_shortcuts_inhibitor_v1_interface,
+		/* virtual-keyboard-unstable-v1.xml */
+		&zwp_virtual_keyboard_v1_interface,
+		&zwp_virtual_keyboard_manager_v1_interface,
+		/* wlr-virtual-pointer-unstable-v1.xml */
+		&zwlr_virtual_pointer_v1_interface,
+		&zwlr_virtual_pointer_manager_v1_interface,
 	};
 
 	printf("# libwayland %s\n", WAYLAND_VERSION);

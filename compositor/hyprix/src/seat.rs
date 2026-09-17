@@ -103,6 +103,10 @@ pub enum Action {
         name: String,
         /// Its argument, as the bind wrote it.
         argument: String,
+        /// The key that fired it, when a key did: the evdev code and the
+        /// modifiers held with it. `pass` sends exactly that key on to
+        /// another window, and has nothing to send without it.
+        trigger: Option<(u16, u32)>,
     },
     /// The pointer is at `(x, y)` on the screen.
     Pointer {
@@ -166,6 +170,19 @@ struct Bound {
     argument: String,
 }
 
+/// Where a `zwp_pointer_constraints_v1` holds the pointer.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Hold {
+    /// Nowhere: the pointer goes where the mouse says.
+    #[default]
+    Free,
+    /// Still: `lock_pointer`, which is what a game or a 3D modeller asks
+    /// for when it turns the pointer into a direction.
+    Locked,
+    /// Inside a rectangle: `confine_pointer`.
+    Inside(compositor_layout::Rect),
+}
+
 /// What sets a bind off.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Trigger {
@@ -197,6 +214,12 @@ pub struct Seat {
     /// before -- which is also what a machine with a mouse plugged in and
     /// never touched should look like.
     used: bool,
+    /// Where the pointer is held, if a client has asked for it:
+    /// `zwp_pointer_constraints_v1`.
+    hold: Hold,
+    /// Whether a client has asked for the compositor's keybinds to be left
+    /// alone: `zwp_keyboard_shortcuts_inhibit_manager_v1`.
+    shortcuts_inhibited: bool,
     /// The screen, which the pointer may not leave.
     screen: (f64, f64),
     /// The submap in force, `None` for the global map.
@@ -224,6 +247,8 @@ impl Seat {
         let mut seat = Self {
             keyboard: Keyboard::new(),
             binds: Vec::new(),
+            hold: Hold::Free,
+            shortcuts_inhibited: false,
             // The pointer starts in the middle, as Hyprland's does.
             pointer: (f64::from(width) / 2.0, f64::from(height) / 2.0),
             used: false,
@@ -335,6 +360,28 @@ impl Seat {
         &self.keyboard
     }
 
+    /// Where a `zwp_pointer_constraints_v1` is holding the pointer.
+    ///
+    /// The compositor works this out each pass from which surface the
+    /// pointer is over and what that surface's client asked for: a
+    /// constraint applies only while its own surface has the pointer, which
+    /// is the protocol's rule and not the seat's to judge.
+    pub const fn set_hold(&mut self, hold: Hold) {
+        self.hold = hold;
+    }
+
+    /// The modifiers held now, which is what a key sent on to another
+    /// window has to carry with it.
+    #[must_use]
+    pub fn modifiers(&self) -> Modifiers {
+        self.keyboard.modifiers()
+    }
+
+    /// Whether the keybinds are the client's for now.
+    pub const fn set_shortcuts_inhibited(&mut self, inhibited: bool) {
+        self.shortcuts_inhibited = inhibited;
+    }
+
     /// Put the pointer at `(x, y)`, as `movecursor` does.
     ///
     /// Gives the actions the move causes, which the caller delivers: a
@@ -424,6 +471,12 @@ impl Seat {
 
     /// The dispatchers the binds on `trigger` ask for.
     fn fired(&self, trigger: Trigger, pressed: bool, repeat: bool) -> Vec<Action> {
+        // A client holding a shortcuts inhibitor gets every key, including
+        // the ones a bind would have eaten. That is the whole of the
+        // protocol: a virtual machine or a nested compositor needs `SUPER`.
+        if self.shortcuts_inhibited {
+            return Vec::new();
+        }
         let held = self.keyboard.modifiers().depressed & COMPARED;
         self.binds
             .iter()
@@ -439,6 +492,10 @@ impl Seat {
                     format!("{}{}", if pressed { '+' } else { '-' }, bind.argument)
                 } else {
                     bind.argument.clone()
+                },
+                trigger: match trigger {
+                    Trigger::Key(code) => Some((code, held)),
+                    Trigger::Button(_) | Trigger::Wheel { .. } => None,
                 },
             })
             .collect()
@@ -463,6 +520,29 @@ impl Seat {
 
     fn move_to(&mut self, x: f64, y: f64) -> Vec<Action> {
         self.used = true;
+        // A locked pointer does not move at all, which is what a game
+        // reading relative movement wants: the arrow stays where it was and
+        // the client is told the distance.
+        let (x, y) = match self.hold {
+            Hold::Free => (x, y),
+            Hold::Locked => return Vec::new(),
+            Hold::Inside(rect) => {
+                // The rectangle is in logical pixels and the pointer in
+                // the same; the last column and row inside it are where a
+                // confined pointer may still be.
+                #[expect(
+                    clippy::cast_precision_loss,
+                    reason = "a screen's pixels are far inside f64's exact range"
+                )]
+                let edge = |near: i64, far: i64| (near as f64, far.saturating_sub(1) as f64);
+                let (left, right) = edge(rect.x, rect.right());
+                let (top, bottom) = edge(rect.y, rect.bottom());
+                (
+                    x.clamp(left, right.max(left)),
+                    y.clamp(top, bottom.max(top)),
+                )
+            }
+        };
         // The pointer may not leave the screen, and a NaN from a device that
         // reported nonsense must not become the position.
         let hold = |value: f64, limit: f64| {

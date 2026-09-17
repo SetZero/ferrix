@@ -42,6 +42,9 @@ use compositor_wire::{
 use compositor_xkb::Modifiers;
 
 mod desktop;
+mod input;
+
+pub use input::{Constraint, Injected};
 
 use crate::globals::Globals;
 use crate::layer::{Anchors, Layer, LayerSurface, Margin};
@@ -196,6 +199,9 @@ pub enum Event {
         /// Whether it is modal now.
         modal: bool,
     },
+    /// A virtual device asked the seat to do something, which the
+    /// compositor hands on as if a real one had reported it.
+    Injected(Injected),
     /// `xdg_system_bell_v1.ring`: the terminal bell, for the surface that
     /// rang it or for the whole seat.
     Bell {
@@ -582,6 +588,16 @@ pub struct Client {
     dialogs: BTreeMap<ObjectId, ObjectId>,
     /// Which surface each `org_kde_kwin_server_decoration` is on.
     kde_decorations: BTreeMap<ObjectId, ObjectId>,
+    /// The `zwp_relative_pointer_v1`s this client has made.
+    relative_pointers: Vec<ObjectId>,
+    /// The pointer constraints it holds, by object.
+    constraints: BTreeMap<ObjectId, Constraint>,
+    /// The surface each `zwp_keyboard_shortcuts_inhibitor_v1` covers.
+    shortcut_inhibitors: BTreeMap<ObjectId, ObjectId>,
+    /// The `zwp_virtual_keyboard_v1`s it has made.
+    virtual_keyboards: Vec<ObjectId>,
+    /// The `zwlr_virtual_pointer_v1`s it has made.
+    virtual_pointers: Vec<ObjectId>,
     /// The next configure serial. Serials go up and are never reused, so a
     /// client's `ack_configure` names one configure and no other.
     serial: u32,
@@ -731,6 +747,11 @@ impl Client {
             alphas: BTreeMap::new(),
             dialogs: BTreeMap::new(),
             kde_decorations: BTreeMap::new(),
+            relative_pointers: Vec::new(),
+            constraints: BTreeMap::new(),
+            shortcut_inhibitors: BTreeMap::new(),
+            virtual_keyboards: Vec::new(),
+            virtual_pointers: Vec::new(),
             serial: 1,
         }
     }
@@ -1470,7 +1491,10 @@ impl Client {
                     }
                 }
             }
-            other => self.forget_desktop(id, other),
+            other => {
+                self.forget_desktop(id, other);
+                self.forget_input(id, other);
+            }
         }
         // wl_display.delete_id is what lets a client reuse an id without
         // racing the server. libwayland sends it for every object the client
@@ -1555,7 +1579,8 @@ impl Client {
             // because refusing would be a protocol error for a request the
             // protocol allows.
             other => {
-                let _ = self.desktop(sender, other, version, opcode, args);
+                let _ = self.desktop(sender, other, version, opcode, args)
+                    || self.input(sender, other, version, opcode, args);
             }
         }
     }

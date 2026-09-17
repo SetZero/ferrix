@@ -75,6 +75,12 @@ pub struct Around<'a> {
     /// How long `forceidle` is pretending the seat has gone unused, or
     /// `None` for the real clock.
     pub forced: &'a mut Option<std::time::Duration>,
+    /// Which surface has the keyboard and which the pointer, so that a key
+    /// sent to another window can be handed back afterwards.
+    pub focus: &'a mut crate::deliver::Focus,
+    /// The key that fired this dispatcher, when a key did: the evdev code
+    /// and the modifiers held with it.
+    pub trigger: Option<(u16, u32)>,
     /// What to say.
     pub report: &'a mut dyn FnMut(&str),
 }
@@ -142,6 +148,9 @@ pub fn compositor(
             Some(signal(number.trim(), Some(which.trim()), state, around))
         }
         "setprop" => Some(set_prop(argument, state, around)),
+        "pass" => Some(pass(argument, state, around)),
+        "sendshortcut" => Some(send_shortcut(argument, None, state, around)),
+        "sendkeystate" => Some(send_key_state(argument, state, around)),
         "focusurgentorlast" => Some(focus_urgent_or_last(state, around)),
         "toggleswallow" => {
             *around.swallow = !*around.swallow;
@@ -368,6 +377,157 @@ pub fn dragged(drag: &mut Drag, state: &mut State, (x, y): (i64, i64)) -> bool {
         state.move_window_pixel(drag.window, &by)
     };
     moved.is_ok_and(|changes| !changes.is_empty())
+}
+
+/// `pass <window>`: send the key that fired this bind on to another window.
+///
+/// The one use is a bind that both does something and lets the key through
+/// to a particular window -- `bind = SUPER, P, pass, class:^(mpv)$` is how
+/// a media key reaches a player that is not focused. There is nothing to
+/// pass when no key fired the bind, which is what `hyprctl dispatch pass`
+/// is.
+fn pass(which: &str, state: &State, around: &mut Around<'_>) -> bool {
+    let Some((code, mods)) = around.trigger else {
+        around.say("hyprix: pass has no key to send: nothing fired it");
+        return false;
+    };
+    let Some(window) = pick(Some(which), state, around) else {
+        return false;
+    };
+    press(window, code, mods, Press::Tap, around);
+    false
+}
+
+/// How `sendkeystate` asks for a key to be sent.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Press {
+    /// Down and then up, which is what `pass` and `sendshortcut` send.
+    Tap,
+    /// Down and held.
+    Down,
+    /// Down twice, which is what a repeat looks like on the wire.
+    Repeat,
+    /// Up.
+    Up,
+}
+
+/// `sendshortcut <mods>,<key>,<window>`: make up a key and send it.
+///
+/// The window may be empty, which is the focused one. The key is a name
+/// XKB knows, `code:<n>` for a raw keycode, or a bare number above nine,
+/// which is Hyprland's own reading.
+fn send_shortcut(
+    argument: &str,
+    how: Option<Press>,
+    state: &State,
+    around: &mut Around<'_>,
+) -> bool {
+    let fields: Vec<&str> = argument.splitn(3, ',').collect();
+    let [mods, key, which] = fields.as_slice() else {
+        around.say("hyprix: sendshortcut takes modifiers, a key and a window");
+        return false;
+    };
+    let Some(code) = keycode(key.trim()) else {
+        around.say(&format!("hyprix: sendshortcut: {key} is not a key"));
+        return false;
+    };
+    let mods = compositor_config::Mods::parse(mods.trim()).0;
+    let Some(window) = pick(Some(which.trim()), state, around) else {
+        return false;
+    };
+    press(window, code, mods, how.unwrap_or(Press::Tap), around);
+    false
+}
+
+/// `sendkeystate <mods>,<key>,<state>,<window>`: the same, with the half of
+/// the press the caller chose.
+fn send_key_state(argument: &str, state: &State, around: &mut Around<'_>) -> bool {
+    let fields: Vec<&str> = argument.splitn(4, ',').collect();
+    let [mods, key, wanted, which] = fields.as_slice() else {
+        around.say("hyprix: sendkeystate takes modifiers, a key, a state and a window");
+        return false;
+    };
+    let how = match wanted.trim() {
+        "down" => Press::Down,
+        "repeat" => Press::Repeat,
+        "up" => Press::Up,
+        _ => {
+            around.say("hyprix: sendkeystate's state is down, repeat or up");
+            return false;
+        }
+    };
+    let rejoined = format!("{mods},{key},{which}");
+    send_shortcut(&rejoined, Some(how), state, around)
+}
+
+/// A key by the name Hyprland lets a bind write it.
+fn keycode(text: &str) -> Option<u16> {
+    if let Some(number) = text.strip_prefix("code:") {
+        // `code:NN` is XKB's numbering, which is eight above evdev's.
+        return u16::try_from(number.trim().parse::<u32>().ok()?.checked_sub(8)?).ok();
+    }
+    if let Ok(number) = text.parse::<u32>()
+        && number > 9
+    {
+        return u16::try_from(number).ok();
+    }
+    compositor_xkb::code_of(text)
+}
+
+/// Send one key to one window, whatever has the keyboard.
+///
+/// The window is handed the keyboard for the length of the key and then it
+/// is handed back, which is what Hyprland's `Actions::pass` does: a
+/// `wl_keyboard` only ever has one surface, so there is no other way to
+/// send a key to a window that is not focused.
+fn press(window: WindowId, code: u16, mods: u32, how: Press, around: &mut Around<'_>) {
+    let Some(source) = around.sources.get(&window).copied() else {
+        return;
+    };
+    let focused = around.focus.keyboard();
+    let borrowed = focused != Some((source.client, source.surface));
+    let held = around.seat.modifiers();
+    let Some(slot) = around.slots.get_mut(source.client) else {
+        return;
+    };
+    let with = compositor_xkb::Modifiers {
+        depressed: mods,
+        ..held
+    };
+    if borrowed {
+        let _ = slot.client_mut().keyboard_enter(source.surface, &[], with);
+    } else {
+        let _ = slot.client_mut().keyboard_modifiers(with);
+    }
+    // The clock a key carries is the compositor's own milliseconds, which
+    // is what every other key it sends carries.
+    let time = u32::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis()
+            & u128::from(u32::MAX),
+    )
+    .unwrap_or(0);
+    let halves: &[bool] = match how {
+        Press::Tap => &[true, false],
+        Press::Down => &[true],
+        Press::Repeat => &[true, true],
+        Press::Up => &[false],
+    };
+    for pressed in halves {
+        let _ = slot.client_mut().keyboard_key(time, code, *pressed);
+    }
+    if borrowed {
+        let _ = slot.client_mut().keyboard_leave(source.surface);
+        // The focus has not moved, so the loop would see nothing to do;
+        // forgetting it makes the next pass give the real window its
+        // keyboard back.
+        around.focus.forget_keyboard();
+    } else {
+        let _ = slot.client_mut().keyboard_modifiers(held);
+    }
+    let _ = slot.flush();
 }
 
 /// `forceidle <seconds>`: pretend the seat has gone that long unused.

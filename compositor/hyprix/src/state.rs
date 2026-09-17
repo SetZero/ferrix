@@ -342,6 +342,12 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
     // it was: `ext-idle-notify` measures from the last of the two.
     let mut last_input = Instant::now();
     let mut forced: Option<Duration> = None;
+    // What a `zwp_virtual_keyboard_v1` or a `zwlr_virtual_pointer_v1` asked
+    // the seat to do. A client's requests are read after the input loop has
+    // run, so what one injects is carried out on the next pass -- one frame
+    // later, which is the same delay a real device's event has when it
+    // arrives a moment after the read.
+    let mut injected: Vec<crate::seat::Input> = Vec::new();
 
     loop {
         if quit {
@@ -464,7 +470,11 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
         // `ext-session-lock-v1`'s other half -- a lock that showed a picture
         // and still let a key reach the browser under it would not be one.
         seat.set_locked(lock.is_some());
-        for input in devices.read() {
+        for input in devices
+            .read()
+            .into_iter()
+            .chain(std::mem::take(&mut injected))
+        {
             // Any input at all ends the idle: that is what the protocol
             // measures, and what `forceidle` was pretending about.
             last_input = Instant::now();
@@ -493,7 +503,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                 follow_mouse,
             );
             let mut pending = Vec::new();
-            for (name, argument) in done.dispatch {
+            for asked in done.dispatch {
                 let mut around = crate::act::Around {
                     slots: &mut slots,
                     sources: &sources,
@@ -510,9 +520,11 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                     quit: &mut quit,
                     swallow: &mut swallow,
                     forced: &mut forced,
+                    focus: &mut focus,
+                    trigger: asked.trigger,
                     report,
                 };
-                if dispatch(&name, &argument, &mut state, &mut around) {
+                if dispatch(&asked.name, &asked.argument, &mut state, &mut around) {
                     changed = true;
                 }
             }
@@ -565,6 +577,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                 &mut lock,
                 &screens,
                 &mut urgent,
+                &mut injected,
                 focus_on_activate,
                 report,
             )? {
@@ -576,6 +589,19 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
         for shot in shots.drain(..) {
             take_shot(&shot, &screens, &mut slots);
         }
+        // Where a `zwp_pointer_constraints_v1` is holding the pointer, and
+        // whether a client has asked for the keybinds. Both are worked out
+        // from what has the pointer and what has the keyboard, which is the
+        // compositor's judgement and not the client's: a constraint applies
+        // only while its own surface has the pointer.
+        hold_pointer(&mut seat, &mut slots, &focus, &state, &sources);
+        seat.set_shortcuts_inhibited(
+            focus
+                .keyboard()
+                .and_then(|(client, surface)| Some((slots.get(client)?, surface)))
+                .is_some_and(|(slot, surface)| slot.client().inhibits_shortcuts(surface)),
+        );
+
         // What every `ext_idle_notification_v1` is waiting for: how long
         // the seat has gone without input, and whether any client holds
         // idling off with a `zwp_idle_inhibitor_v1` on a mapped surface.
@@ -604,6 +630,11 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                 quit: &mut quit,
                 swallow: &mut swallow,
                 forced: &mut forced,
+                focus: &mut focus,
+                // `hyprctl dispatch pass` has no key behind it: `pass`
+                // sends on the key that fired a bind, and a socket request
+                // fired none.
+                trigger: None,
                 report,
             };
             if run_ipc(
@@ -682,6 +713,22 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
             },
         );
         focus.renumber(&places);
+        // The clipboard, the lock and the input method hold a client the
+        // same way and move the same way.
+        clipboard.renumber(&places);
+        if let Some(held) = lock.as_mut() {
+            held.client = places
+                .get(held.client)
+                .copied()
+                .flatten()
+                .unwrap_or(held.client);
+        }
+        if let Some(held) = method.as_mut() {
+            match places.get(held.client).copied().flatten() {
+                Some(at) => held.client = at,
+                None => method = None,
+            }
+        }
 
         // A window arriving or leaving resizes every other window on the
         // workspace, and a window that is not told is one drawing at the
@@ -933,6 +980,7 @@ fn serve(
     lock: &mut Option<Lock>,
     screens: &[Screen],
     urgent: &mut Vec<WindowId>,
+    injected: &mut Vec<crate::seat::Input>,
     taking_focus: bool,
     report: &mut dyn FnMut(&str),
 ) -> Result<bool, String> {
@@ -1116,6 +1164,16 @@ fn serve(
                 Event::Bell { .. } => {
                     report("hyprix: a client rang the bell");
                 }
+                // A virtual device's input is a person's: it goes to the
+                // seat, keybinds and all, which is what makes `wtype` type
+                // into whatever is focused and what wlroots gates behind a
+                // compositor's own policy. This one offers it to every
+                // client, as Hyprland does.
+                Event::Injected(what) => {
+                    if let Some(input) = as_input(what) {
+                        injected.push(input);
+                    }
+                }
                 Event::ToplevelCreated { toplevel, .. } => {
                     let window = WindowId(u64::from(*next_window));
                     *next_window = next_window.saturating_add(1);
@@ -1274,7 +1332,10 @@ fn serve(
                 "hyprix: client {index} pasted {mime}, on a pipe to whoever copied"
             ));
         } else {
-            report("hyprix: a paste asked for a selection that is not there any more");
+            report(&format!(
+                "hyprix: client {index} pasted {mime} through an offer that is not the \
+                 selection any more"
+            ));
         }
     }
     let Some(slot) = slots.get_mut(index) else {
@@ -1330,6 +1391,110 @@ fn apply_rules(
         focused: state.focused_window() == Some(window),
     };
     rules.apply(window, &what, state, report)
+}
+
+/// Hold the pointer where a client asked, and tell it whether the hold is
+/// in force.
+///
+/// A constraint applies only while its own surface has the pointer: the
+/// protocol says so, and it is the compositor that knows. A client whose
+/// surface loses the pointer is told `unlocked` or `unconfined`, and a
+/// one-shot constraint is destroyed by that.
+fn hold_pointer(
+    seat: &mut Seat,
+    slots: &mut [Slot],
+    focus: &Focus,
+    state: &State,
+    sources: &BTreeMap<WindowId, Source>,
+) {
+    let under = focus.pointer_on();
+    // Every client is told, because the one that lost the pointer is the
+    // one that has to hear the constraint has stopped.
+    let mut hold = crate::seat::Hold::Free;
+    for (index, slot) in slots.iter_mut().enumerate() {
+        let surfaces: Vec<ObjectId> = slot
+            .client()
+            .surfaces()
+            .map(|(id, _)| id)
+            .filter(|surface| slot.client().constraint_on(*surface).is_some())
+            .collect();
+        for surface in surfaces {
+            let on = under == Some((index, surface));
+            if on && let Some(held) = slot.client().constraint_on(surface) {
+                hold = if held.locked {
+                    crate::seat::Hold::Locked
+                } else {
+                    rect_of(state, sources, index, surface)
+                        .map_or(crate::seat::Hold::Free, crate::seat::Hold::Inside)
+                };
+            }
+            slot.client_mut().constrain(surface, on);
+        }
+    }
+    seat.set_hold(hold);
+}
+
+/// Where the window a surface belongs to is, in the space every window's
+/// rectangle is in.
+fn rect_of(
+    state: &State,
+    sources: &BTreeMap<WindowId, Source>,
+    client: usize,
+    surface: ObjectId,
+) -> Option<Rect> {
+    let window = sources
+        .iter()
+        .find(|(_, source)| source.client == client && source.surface == surface)
+        .map(|(window, _)| *window)?;
+    state
+        .layout()
+        .iter()
+        .flat_map(|output| output.windows.iter())
+        .find(|placed| placed.window == window)
+        .map(|placed| placed.rect)
+}
+
+/// One virtual device's request as the seat's own input.
+///
+/// `modifiers` has no place here: the seat keeps its own xkb state from the
+/// keys it is given, and a client's idea of which modifiers are held would
+/// fight it. `wtype` sends both and works either way.
+fn as_input(what: compositor_server::Injected) -> Option<crate::seat::Input> {
+    Some(match what {
+        compositor_server::Injected::Key { key, pressed } => crate::seat::Input::Key {
+            code: u16::try_from(key).ok()?,
+            pressed,
+            repeat: false,
+        },
+        compositor_server::Injected::Motion { dx, dy } => crate::seat::Input::Motion {
+            dx: dx.to_f64(),
+            dy: dy.to_f64(),
+        },
+        compositor_server::Injected::MotionAbsolute {
+            x,
+            y,
+            width,
+            height,
+        } => {
+            // The client chooses the unit and sends the whole each number
+            // is out of; a whole of nothing is a place nobody can read.
+            if width == 0 || height == 0 {
+                return None;
+            }
+            crate::seat::Input::Absolute {
+                x: f64::from(x) / f64::from(width),
+                y: f64::from(y) / f64::from(height),
+            }
+        }
+        compositor_server::Injected::Button { button, pressed } => {
+            crate::seat::Input::Button { button, pressed }
+        }
+        compositor_server::Injected::Axis { axis, value } => crate::seat::Input::Axis {
+            axis,
+            value: value.to_f64(),
+        },
+        compositor_server::Injected::Modifiers { .. } => return None,
+    })
 }
 
 /// What each window is drawn with: its rule's style, with the alpha a
@@ -2908,6 +3073,46 @@ fn globals(outputs: usize) -> Globals {
             &compositor_protocol::kde_decoration::ORG_KDE_KWIN_SERVER_DECORATION_MANAGER,
             1,
             Role::KdeDecorationManager,
+        ),
+        // How far the pointer moved rather than where it is, and keeping
+        // it inside a window: the pair a game, a 3D modeller and a
+        // remote-desktop viewer all need.
+        (
+            &compositor_protocol::relative_pointer::ZWP_RELATIVE_POINTER_MANAGER_V1,
+            1,
+            Role::RelativePointerManager,
+        ),
+        (
+            &compositor_protocol::pointer_constraints::ZWP_POINTER_CONSTRAINTS_V1,
+            1,
+            Role::PointerConstraints,
+        ),
+        // A touchpad's gestures, which this compositor never reports: it
+        // reads evdev and not libinput, and the recogniser is libinput's.
+        // Offering the global is what stops a toolkit warning on start.
+        (
+            &compositor_protocol::pointer_gestures::ZWP_POINTER_GESTURES_V1,
+            3,
+            Role::PointerGestures,
+        ),
+        // A virtual machine or a nested compositor asking for `SUPER`
+        // instead of the compositor eating it.
+        (
+            &compositor_protocol::shortcuts_inhibit::ZWP_KEYBOARD_SHORTCUTS_INHIBIT_MANAGER_V1,
+            1,
+            Role::ShortcutsInhibitManager,
+        ),
+        // A client acting as a device: `wtype`, `ydotool`, an on-screen
+        // keyboard, a remote-desktop viewer.
+        (
+            &compositor_protocol::virtual_keyboard::ZWP_VIRTUAL_KEYBOARD_MANAGER_V1,
+            1,
+            Role::VirtualKeyboardManager,
+        ),
+        (
+            &compositor_protocol::virtual_pointer::ZWLR_VIRTUAL_POINTER_MANAGER_V1,
+            2,
+            Role::VirtualPointerManager,
         ),
         // Typing through an input method: the application's half and the
         // method's own. Offering both is what lets an on-screen keyboard or

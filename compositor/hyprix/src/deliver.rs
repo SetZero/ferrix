@@ -43,6 +43,11 @@ struct Placement {
 pub struct Focus {
     keyboard: Option<(usize, ObjectId)>,
     pointer: Option<(usize, ObjectId)>,
+    /// Where the pointer was last put, so that a movement can be reported
+    /// as a distance as well as a place: `zwp_relative_pointer_v1` carries
+    /// the distance, and a client that locked the pointer reads nothing
+    /// else.
+    was: Option<(f64, f64)>,
 }
 
 impl Focus {
@@ -52,6 +57,7 @@ impl Focus {
         Self {
             keyboard: None,
             pointer: None,
+            was: None,
         }
     }
 
@@ -63,6 +69,17 @@ impl Focus {
     #[must_use]
     pub const fn pointer_on(&self) -> Option<(usize, ObjectId)> {
         self.pointer
+    }
+
+    /// Forget which surface has the keyboard, so that the next pass sends
+    /// it a fresh `enter`.
+    ///
+    /// `pass` and `sendshortcut` hand the keyboard to another window for
+    /// the length of one key and hand it back; the focus has not changed,
+    /// so without this the loop would see nothing to do and the real window
+    /// would be left without an `enter`.
+    pub const fn forget_keyboard(&mut self) {
+        self.keyboard = None;
     }
 
     /// The window the keyboard is on, if any.
@@ -196,11 +213,26 @@ impl Focus {
     }
 }
 
+/// One dispatcher a bind asked for: its name, its argument, and the key
+/// that fired it when a key did.
+///
+/// The key is here because of one dispatcher: `pass` sends the key that
+/// fired the bind on to another window, and has nothing to send without it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Asked {
+    /// The dispatcher's name, lower-cased.
+    pub name: String,
+    /// Its argument, as the bind wrote it.
+    pub argument: String,
+    /// The evdev code and the modifiers held with it.
+    pub trigger: Option<(u16, u32)>,
+}
+
 /// What delivering the seat's actions did.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Done {
     /// The dispatchers to run, in order, which the caller hands the layout.
-    pub dispatch: Vec<(String, String)>,
+    pub dispatch: Vec<Asked>,
     /// The window `follow_mouse` asks to be focused, if the pointer moved
     /// onto one that is not.
     ///
@@ -228,8 +260,16 @@ pub fn deliver(
     let mut done = Done::default();
     for action in actions {
         match action {
-            Action::Dispatch { name, argument } => {
-                done.dispatch.push((name.clone(), argument.clone()));
+            Action::Dispatch {
+                name,
+                argument,
+                trigger,
+            } => {
+                done.dispatch.push(Asked {
+                    name: name.clone(),
+                    argument: argument.clone(),
+                    trigger: *trigger,
+                });
             }
             Action::Key { code, pressed } => {
                 if let Some((client, _)) = focus.keyboard
@@ -246,6 +286,23 @@ pub fn deliver(
                 }
             }
             Action::Pointer { x, y } => {
+                // The distance, for every `zwp_relative_pointer_v1` of the
+                // client the pointer is over. It is sent whether or not the
+                // pointer is constrained: the protocol says the events are
+                // "not limited by the surface", and a client that locked
+                // the pointer has no other way to know it moved.
+                let moved = focus.was.map(|(was_x, was_y)| (x - was_x, y - was_y));
+                focus.was = Some((*x, *y));
+                if let Some((dx, dy)) = moved.filter(|(dx, dy)| *dx != 0.0 || *dy != 0.0)
+                    && let Some((client, _)) = focus.pointer
+                    && let Some(slot) = slots.get_mut(client)
+                {
+                    slot.client_mut().relative_motion(
+                        u64::from(time).saturating_mul(1_000),
+                        dx,
+                        dy,
+                    );
+                }
                 if let Some((local_x, local_y)) = focus.move_pointer(&placements, slots, (*x, *y))
                     && let Some((client, _)) = focus.pointer
                     && let Some(slot) = slots.get_mut(client)

@@ -13,9 +13,10 @@ use compositor_wire::{ArgType, Interface};
 
 use crate::{
     GLOBALS, alpha_modifier, content_type, core, cursor_shape, foreign_toplevel, fractional_scale,
-    idle_inhibit, idle_notify, input_method, kde_decoration, layer_shell, presentation,
-    primary_selection, screencopy, session_lock, single_pixel, system_bell, text_input,
-    toplevel_icon, toplevel_tag, viewporter, xdg_activation, xdg_decoration, xdg_dialog,
+    idle_inhibit, idle_notify, input_method, kde_decoration, layer_shell, pointer_constraints,
+    pointer_gestures, presentation, primary_selection, relative_pointer, screencopy, session_lock,
+    shortcuts_inhibit, single_pixel, system_bell, text_input, toplevel_icon, toplevel_tag,
+    viewporter, virtual_keyboard, virtual_pointer, xdg_activation, xdg_decoration, xdg_dialog,
     xdg_output, xdg_shell,
 };
 
@@ -103,6 +104,21 @@ fn tables() -> Vec<&'static Interface> {
         &toplevel_tag::XDG_TOPLEVEL_TAG_MANAGER_V1,
         &kde_decoration::ORG_KDE_KWIN_SERVER_DECORATION_MANAGER,
         &kde_decoration::ORG_KDE_KWIN_SERVER_DECORATION,
+        &relative_pointer::ZWP_RELATIVE_POINTER_MANAGER_V1,
+        &relative_pointer::ZWP_RELATIVE_POINTER_V1,
+        &pointer_constraints::ZWP_POINTER_CONSTRAINTS_V1,
+        &pointer_constraints::ZWP_LOCKED_POINTER_V1,
+        &pointer_constraints::ZWP_CONFINED_POINTER_V1,
+        &pointer_gestures::ZWP_POINTER_GESTURES_V1,
+        &pointer_gestures::ZWP_POINTER_GESTURE_SWIPE_V1,
+        &pointer_gestures::ZWP_POINTER_GESTURE_PINCH_V1,
+        &pointer_gestures::ZWP_POINTER_GESTURE_HOLD_V1,
+        &shortcuts_inhibit::ZWP_KEYBOARD_SHORTCUTS_INHIBIT_MANAGER_V1,
+        &shortcuts_inhibit::ZWP_KEYBOARD_SHORTCUTS_INHIBITOR_V1,
+        &virtual_keyboard::ZWP_VIRTUAL_KEYBOARD_MANAGER_V1,
+        &virtual_keyboard::ZWP_VIRTUAL_KEYBOARD_V1,
+        &virtual_pointer::ZWLR_VIRTUAL_POINTER_MANAGER_V1,
+        &virtual_pointer::ZWLR_VIRTUAL_POINTER_V1,
     ]
 }
 

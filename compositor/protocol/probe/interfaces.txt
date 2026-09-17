@@ -368,3 +368,56 @@ org_kde_kwin_server_decoration_manager 1 event 0 default_mode u
 org_kde_kwin_server_decoration 1 request 0 release 
 org_kde_kwin_server_decoration 1 request 1 request_mode u
 org_kde_kwin_server_decoration 1 event 0 mode u
+zwp_relative_pointer_manager_v1 1 request 0 destroy 
+zwp_relative_pointer_manager_v1 1 request 1 get_relative_pointer no
+zwp_relative_pointer_v1 1 request 0 destroy 
+zwp_relative_pointer_v1 1 event 0 relative_motion uuffff
+zwp_pointer_constraints_v1 1 request 0 destroy 
+zwp_pointer_constraints_v1 1 request 1 lock_pointer noo?ou
+zwp_pointer_constraints_v1 1 request 2 confine_pointer noo?ou
+zwp_locked_pointer_v1 1 request 0 destroy 
+zwp_locked_pointer_v1 1 request 1 set_cursor_position_hint ff
+zwp_locked_pointer_v1 1 request 2 set_region ?o
+zwp_locked_pointer_v1 1 event 0 locked 
+zwp_locked_pointer_v1 1 event 1 unlocked 
+zwp_confined_pointer_v1 1 request 0 destroy 
+zwp_confined_pointer_v1 1 request 1 set_region ?o
+zwp_confined_pointer_v1 1 event 0 confined 
+zwp_confined_pointer_v1 1 event 1 unconfined 
+zwp_pointer_gestures_v1 3 request 0 get_swipe_gesture no
+zwp_pointer_gestures_v1 3 request 1 get_pinch_gesture no
+zwp_pointer_gestures_v1 3 request 2 release 2
+zwp_pointer_gestures_v1 3 request 3 get_hold_gesture 3no
+zwp_pointer_gesture_swipe_v1 2 request 0 destroy 
+zwp_pointer_gesture_swipe_v1 2 event 0 begin uuou
+zwp_pointer_gesture_swipe_v1 2 event 1 update uff
+zwp_pointer_gesture_swipe_v1 2 event 2 end uui
+zwp_pointer_gesture_pinch_v1 2 request 0 destroy 
+zwp_pointer_gesture_pinch_v1 2 event 0 begin uuou
+zwp_pointer_gesture_pinch_v1 2 event 1 update uffff
+zwp_pointer_gesture_pinch_v1 2 event 2 end uui
+zwp_pointer_gesture_hold_v1 3 request 0 destroy 3
+zwp_pointer_gesture_hold_v1 3 event 0 begin 3uuou
+zwp_pointer_gesture_hold_v1 3 event 1 end 3uui
+zwp_keyboard_shortcuts_inhibit_manager_v1 1 request 0 destroy 
+zwp_keyboard_shortcuts_inhibit_manager_v1 1 request 1 inhibit_shortcuts noo
+zwp_keyboard_shortcuts_inhibitor_v1 1 request 0 destroy 
+zwp_keyboard_shortcuts_inhibitor_v1 1 event 0 active 
+zwp_keyboard_shortcuts_inhibitor_v1 1 event 1 inactive 
+zwp_virtual_keyboard_v1 1 request 0 keymap uhu
+zwp_virtual_keyboard_v1 1 request 1 key uuu
+zwp_virtual_keyboard_v1 1 request 2 modifiers uuuu
+zwp_virtual_keyboard_v1 1 request 3 destroy 
+zwp_virtual_keyboard_manager_v1 1 request 0 create_virtual_keyboard on
+zwlr_virtual_pointer_v1 2 request 0 motion uff
+zwlr_virtual_pointer_v1 2 request 1 motion_absolute uuuuu
+zwlr_virtual_pointer_v1 2 request 2 button uuu
+zwlr_virtual_pointer_v1 2 request 3 axis uuf
+zwlr_virtual_pointer_v1 2 request 4 frame 
+zwlr_virtual_pointer_v1 2 request 5 axis_source u
+zwlr_virtual_pointer_v1 2 request 6 axis_stop uu
+zwlr_virtual_pointer_v1 2 request 7 axis_discrete uufi
+zwlr_virtual_pointer_v1 2 request 8 destroy 
+zwlr_virtual_pointer_manager_v1 2 request 0 create_virtual_pointer ?on
+zwlr_virtual_pointer_manager_v1 2 request 1 destroy 
+zwlr_virtual_pointer_manager_v1 2 request 2 create_virtual_pointer_with_output 2?o?on

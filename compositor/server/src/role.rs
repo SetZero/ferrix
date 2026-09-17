@@ -175,6 +175,38 @@ pub enum Role {
     KdeDecorationManager,
     /// `org_kde_kwin_server_decoration`: one surface's.
     KdeDecoration,
+    /// `zwp_relative_pointer_manager_v1`: how far the pointer moved, for a
+    /// client that does not care where it is.
+    RelativePointerManager,
+    /// `zwp_relative_pointer_v1`: one pointer's.
+    RelativePointer,
+    /// `zwp_pointer_constraints_v1`: keeping the pointer in a window.
+    PointerConstraints,
+    /// `zwp_locked_pointer_v1`: the pointer held still.
+    LockedPointer,
+    /// `zwp_confined_pointer_v1`: the pointer held inside a surface.
+    ConfinedPointer,
+    /// `zwp_keyboard_shortcuts_inhibit_manager_v1`: a virtual machine or a
+    /// nested compositor asking for `SUPER`.
+    ShortcutsInhibitManager,
+    /// `zwp_keyboard_shortcuts_inhibitor_v1`: one such request.
+    ShortcutsInhibitor,
+    /// `zwp_virtual_keyboard_manager_v1`: a client acting as a keyboard.
+    VirtualKeyboardManager,
+    /// `zwp_virtual_keyboard_v1`: one such keyboard.
+    VirtualKeyboard,
+    /// `zwlr_virtual_pointer_manager_v1`: a client acting as a mouse.
+    VirtualPointerManager,
+    /// `zwlr_virtual_pointer_v1`: one such mouse.
+    VirtualPointer,
+    /// `zwp_pointer_gestures_v1`: a touchpad's swipe, pinch and hold.
+    PointerGestures,
+    /// `zwp_pointer_gesture_swipe_v1`.
+    GestureSwipe,
+    /// `zwp_pointer_gesture_pinch_v1`.
+    GesturePinch,
+    /// `zwp_pointer_gesture_hold_v1`.
+    GestureHold,
 }
 
 impl Role {

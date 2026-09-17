@@ -2999,3 +2999,296 @@ fn kde_decorations_are_the_servers() {
         );
     }
 }
+
+// -- The pointer and keyboard protocols beyond `wl_seat` ----------------------
+
+/// A connection with those globals bound: `wl_seat` is object 13 and its
+/// `wl_pointer` object 14, the managers 15 upwards, and a test's own
+/// objects start at 20.
+fn input_client() -> Client {
+    let mut globals = globals();
+    for (interface, version, role) in [
+        (
+            &compositor_protocol::relative_pointer::ZWP_RELATIVE_POINTER_MANAGER_V1,
+            1,
+            Role::RelativePointerManager,
+        ),
+        (
+            &compositor_protocol::pointer_constraints::ZWP_POINTER_CONSTRAINTS_V1,
+            1,
+            Role::PointerConstraints,
+        ),
+        (
+            &compositor_protocol::shortcuts_inhibit::ZWP_KEYBOARD_SHORTCUTS_INHIBIT_MANAGER_V1,
+            1,
+            Role::ShortcutsInhibitManager,
+        ),
+        (
+            &compositor_protocol::virtual_keyboard::ZWP_VIRTUAL_KEYBOARD_MANAGER_V1,
+            1,
+            Role::VirtualKeyboardManager,
+        ),
+        (
+            &compositor_protocol::virtual_pointer::ZWLR_VIRTUAL_POINTER_MANAGER_V1,
+            2,
+            Role::VirtualPointerManager,
+        ),
+    ] {
+        assert!(globals.add(interface, version, role).is_some());
+    }
+    let mut client = Client::new(globals);
+    client.set_seat_capabilities(
+        core::wl_seat::capability::POINTER | core::wl_seat::capability::KEYBOARD,
+    );
+    let mut bytes = get_registry(2);
+    bytes.extend(bind(2, 1, "wl_compositor", 6, 4));
+    bytes.extend(bind(2, 3, "wl_seat", 7, 13));
+    bytes.extend(request(
+        13,
+        core::wl_seat::request::GET_POINTER,
+        &[ArgType::NewId],
+        &[Arg::NewId(ObjectId(14))],
+    ));
+    for (name, interface, version, id) in [
+        (5u32, "zwp_relative_pointer_manager_v1", 1u32, 15u32),
+        (6, "zwp_pointer_constraints_v1", 1, 16),
+        (7, "zwp_keyboard_shortcuts_inhibit_manager_v1", 1, 17),
+        (8, "zwp_virtual_keyboard_manager_v1", 1, 18),
+        (9, "zwlr_virtual_pointer_manager_v1", 2, 19),
+    ] {
+        bytes.extend(bind(2, name, interface, version, id));
+    }
+    assert_eq!(client.read(&bytes, &[]), bytes.len());
+    assert!(!client.is_finished(), "{:?}", client.fatal());
+    let _ = client.take_outgoing();
+    let _ = client.take_events();
+    client
+}
+
+/// `zwp_relative_pointer_v1` carries the distance, in microseconds, with
+/// the accelerated and unaccelerated movements both given.
+#[test]
+fn a_relative_pointer_is_told_how_far_the_pointer_moved() {
+    let mut client = input_client();
+    let bytes = request(
+        15,
+        compositor_protocol::relative_pointer::zwp_relative_pointer_manager_v1::request::GET_RELATIVE_POINTER,
+        &[ArgType::NewId, ArgType::Object { nullable: false }],
+        &[Arg::NewId(ObjectId(20)), Arg::Object(ObjectId(14))],
+    );
+    assert_eq!(client.read(&bytes, &[]), bytes.len());
+    assert_eq!(client.fatal(), None);
+
+    client.relative_motion(0x1_0000_0002, -3.5, 7.0);
+    let events = sent(&mut client);
+    let moved = events
+        .iter()
+        .find(|event| event.sender == ObjectId(20))
+        .expect("the movement was sent");
+    assert_eq!(
+        moved.args,
+        [
+            "Uint(1)",
+            "Uint(2)",
+            "Fixed(-3.5)",
+            "Fixed(7)",
+            "Fixed(-3.5)",
+            "Fixed(7)"
+        ],
+        "the microseconds split in two, then the distance twice"
+    );
+}
+
+/// A one-shot pointer lock is told `locked` when the compositor puts it in
+/// force, `unlocked` when it takes it away, and is gone after that; a
+/// persistent one stays and can come back.
+#[test]
+fn a_pointer_lock_is_told_when_it_is_in_force() {
+    for (lifetime, survives) in [
+        (
+            compositor_protocol::pointer_constraints::zwp_pointer_constraints_v1::lifetime::ONESHOT,
+            false,
+        ),
+        (
+            compositor_protocol::pointer_constraints::zwp_pointer_constraints_v1::lifetime::PERSISTENT,
+            true,
+        ),
+    ] {
+        let mut client = input_client();
+        let mut bytes = create_surface(20);
+        bytes.extend(request(
+            16,
+            compositor_protocol::pointer_constraints::zwp_pointer_constraints_v1::request::LOCK_POINTER,
+            &[
+                ArgType::NewId,
+                ArgType::Object { nullable: false },
+                ArgType::Object { nullable: false },
+                ArgType::Object { nullable: true },
+                ArgType::Uint,
+            ],
+            &[
+                Arg::NewId(ObjectId(21)),
+                Arg::Object(ObjectId(20)),
+                Arg::Object(ObjectId(14)),
+                Arg::Object(ObjectId::NULL),
+                Arg::Uint(lifetime),
+            ],
+        ));
+        assert_eq!(client.read(&bytes, &[]), bytes.len());
+        assert_eq!(client.fatal(), None);
+        let _ = sent(&mut client);
+        assert!(client.constraint_on(ObjectId(20)).is_some());
+
+        // Told once when it comes into force, and not again.
+        client.constrain(ObjectId(20), true);
+        assert_eq!(
+            sent(&mut client).iter().map(|e| e.opcode).collect::<Vec<u16>>(),
+            [compositor_protocol::pointer_constraints::zwp_locked_pointer_v1::event::LOCKED]
+        );
+        client.constrain(ObjectId(20), true);
+        assert_eq!(sent(&mut client), []);
+
+        // And once when it stops. A one-shot lock is destroyed by that,
+        // which is what the protocol's `oneshot` lifetime means.
+        client.constrain(ObjectId(20), false);
+        // A one-shot lock is destroyed by the event that ends it, so the
+        // test says what the object was, as a real client's proxy knows.
+        let told: Vec<u16> = sent_knowing(
+            &mut client,
+            &[(
+                ObjectId(21),
+                &compositor_protocol::pointer_constraints::ZWP_LOCKED_POINTER_V1,
+            )],
+        )
+        .iter()
+        .filter(|event| event.sender == ObjectId(21))
+        .map(|event| event.opcode)
+        .collect();
+        assert_eq!(
+            told,
+            [compositor_protocol::pointer_constraints::zwp_locked_pointer_v1::event::UNLOCKED]
+        );
+        assert_eq!(client.constraint_on(ObjectId(20)).is_some(), survives);
+    }
+}
+
+/// A shortcuts inhibitor is told `active` at once, and the compositor can
+/// ask which surface it covers.
+#[test]
+fn a_shortcuts_inhibitor_is_active_from_the_start() {
+    let mut client = input_client();
+    let mut bytes = create_surface(20);
+    bytes.extend(request(
+        17,
+        compositor_protocol::shortcuts_inhibit::zwp_keyboard_shortcuts_inhibit_manager_v1::request::INHIBIT_SHORTCUTS,
+        &[
+            ArgType::NewId,
+            ArgType::Object { nullable: false },
+            ArgType::Object { nullable: false },
+        ],
+        &[
+            Arg::NewId(ObjectId(21)),
+            Arg::Object(ObjectId(20)),
+            Arg::Object(ObjectId(13)),
+        ],
+    ));
+    assert_eq!(client.read(&bytes, &[]), bytes.len());
+    assert_eq!(client.fatal(), None);
+    assert_eq!(
+        sent(&mut client)
+            .iter()
+            .filter(|event| event.sender == ObjectId(21))
+            .map(|event| event.opcode)
+            .collect::<Vec<u16>>(),
+        [compositor_protocol::shortcuts_inhibit::zwp_keyboard_shortcuts_inhibitor_v1::event::ACTIVE]
+    );
+    assert!(client.inhibits_shortcuts(ObjectId(20)));
+    assert!(!client.inhibits_shortcuts(ObjectId(4)));
+
+    // Destroying it gives the keybinds back.
+    let bytes = request(
+        21,
+        compositor_protocol::shortcuts_inhibit::zwp_keyboard_shortcuts_inhibitor_v1::request::DESTROY,
+        &[],
+        &[],
+    );
+    assert_eq!(client.read(&bytes, &[]), bytes.len());
+    assert!(!client.inhibits_shortcuts(ObjectId(20)));
+}
+
+/// A virtual keyboard's keys and a virtual pointer's movements come up as
+/// input for the seat, in the order the client sent them.
+#[test]
+fn a_virtual_device_reports_input_for_the_seat() {
+    let mut client = input_client();
+    let mut bytes = request(
+        18,
+        compositor_protocol::virtual_keyboard::zwp_virtual_keyboard_manager_v1::request::CREATE_VIRTUAL_KEYBOARD,
+        &[ArgType::Object { nullable: false }, ArgType::NewId],
+        &[Arg::Object(ObjectId(13)), Arg::NewId(ObjectId(20))],
+    );
+    bytes.extend(request(
+        19,
+        compositor_protocol::virtual_pointer::zwlr_virtual_pointer_manager_v1::request::CREATE_VIRTUAL_POINTER,
+        &[ArgType::Object { nullable: true }, ArgType::NewId],
+        &[Arg::Object(ObjectId(13)), Arg::NewId(ObjectId(21))],
+    ));
+    bytes.extend(request(
+        20,
+        compositor_protocol::virtual_keyboard::zwp_virtual_keyboard_v1::request::KEY,
+        &[ArgType::Uint, ArgType::Uint, ArgType::Uint],
+        &[
+            Arg::Uint(7),
+            Arg::Uint(30),
+            Arg::Uint(core::wl_keyboard::key_state::PRESSED),
+        ],
+    ));
+    bytes.extend(request(
+        21,
+        compositor_protocol::virtual_pointer::zwlr_virtual_pointer_v1::request::MOTION,
+        &[ArgType::Uint, ArgType::Fixed, ArgType::Fixed],
+        &[
+            Arg::Uint(7),
+            Arg::Fixed(Fixed::from_f64(4.0)),
+            Arg::Fixed(Fixed::from_f64(-2.0)),
+        ],
+    ));
+    bytes.extend(request(
+        21,
+        compositor_protocol::virtual_pointer::zwlr_virtual_pointer_v1::request::BUTTON,
+        &[ArgType::Uint, ArgType::Uint, ArgType::Uint],
+        &[
+            Arg::Uint(7),
+            Arg::Uint(272),
+            Arg::Uint(core::wl_pointer::button_state::PRESSED),
+        ],
+    ));
+    assert_eq!(client.read(&bytes, &[]), bytes.len());
+    assert_eq!(client.fatal(), None);
+
+    let injected: Vec<crate::Injected> = client
+        .take_events()
+        .into_iter()
+        .filter_map(|event| match event {
+            Event::Injected(what) => Some(what),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        injected,
+        [
+            crate::Injected::Key {
+                key: 30,
+                pressed: true
+            },
+            crate::Injected::Motion {
+                dx: Fixed::from_f64(4.0),
+                dy: Fixed::from_f64(-2.0)
+            },
+            crate::Injected::Button {
+                button: 272,
+                pressed: true
+            },
+        ]
+    );
+}

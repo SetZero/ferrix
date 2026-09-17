@@ -4223,6 +4223,50 @@ own clients draw once and never noticed. `foot` now draws five frames in the
 same run where it drew one, and every surface on the screen is told: the
 windows, the bars, the menus and the lock's own.
 
+**Done — the pointer and keyboard protocols beyond `wl_seat` (2026-09-17).**
+`wl_pointer` says where the pointer *is*, which is the wrong question for a
+game, a 3D modeller or a remote-desktop viewer: they want how far it moved,
+and they want it to stay inside their window while they have it.
+`zwp_relative_pointer_v1` and `zwp_pointer_constraints_v1` are that pair, and
+both are carried out rather than answered: a locked pointer does not move at
+all and the client is told the distance instead, a confined one is clamped to
+its window's rectangle, and a one-shot constraint is destroyed by the event
+that ends it. A constraint is in force only while its own surface has the
+pointer, which is the compositor's judgement and not the client's.
+
+`zwp_keyboard_shortcuts_inhibit_manager_v1` is how a virtual machine or a
+nested compositor gets `SUPER` instead of the compositor eating it: while the
+inhibiting surface has the keyboard, no bind fires at all.
+
+`zwp_virtual_keyboard_v1` and `zwlr_virtual_pointer_v1` are a client acting
+as a device -- `wtype`, `ydotool`, an on-screen keyboard, a remote viewer.
+What they report goes to the seat as a person's input would, keybinds and
+all, which is what makes them worth having and what wlroots gates behind a
+compositor's policy; this one offers it to every client, as Hyprland does.
+
+`zwp_pointer_gestures_v1` is offered and never sent to, and says so: a
+touchpad's swipe and pinch come from libinput's gesture recogniser and this
+compositor reads evdev directly. A toolkit that binds it and hears nothing
+behaves as it does on a machine with a mouse; one that finds no global warns
+on every start.
+
+That machinery is also what `pass`, `sendshortcut` and `sendkeystate` needed.
+A `wl_keyboard` has one surface at a time, so sending a key to a window that
+is not focused means handing it the keyboard for the length of the key and
+handing it back -- which is what Hyprland does too. `pass` sends *the key
+that fired the bind*, so the seat now carries the trigger through to the
+dispatcher.
+
+**And a bug the clipboard boot found while this landed.** A connection
+ending compacts the slot list, and three things held a client by its *place*
+in that list and were never moved with it: the clipboard's owner, the
+session lock's client and the input method's. A window's `Source` and the
+keyboard focus had already been fixed for exactly this; these three had not.
+What it looked like was a paste answered by nobody while the program that
+copied sat waiting to be asked -- once in about ten boots, whenever a
+clipboard client happened to exit before another pasted. `Clipboard::renumber`
+is host-tested, and the test fails without the fix.
+
 **Done — a terminal (2026-09-17).** Stage 18's exit asked for one, and it
 needed pseudoterminals the kernel did not have. It has them now:
 `/dev/ptmx` gives a master, `TIOCGPTN` says which pair it is, `TIOCSPTLCK`

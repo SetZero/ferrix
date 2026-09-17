@@ -211,6 +211,29 @@ impl Clipboard {
         true
     }
 
+    /// A connection went, so every slot after it moved: `places[old]` is
+    /// where the client that was at `old` is now.
+    ///
+    /// A selection holds its owner by its *place* in the list, so a place
+    /// that is no longer that client is a paste answered by a stranger --
+    /// or, as the clipboard boot found, one answered by nobody while the
+    /// program that copied waits to be asked. The same hazard a window's
+    /// `Source` and the focus have, and the same fix.
+    pub fn renumber(&mut self, places: &[Option<usize>]) {
+        for held in [&mut self.selection, &mut self.primary] {
+            let moved = held
+                .as_ref()
+                .map(|selection| places.get(selection.client).copied().flatten());
+            match (held.as_mut(), moved) {
+                (Some(selection), Some(Some(at))) => selection.client = at,
+                // Its owner is the client that went, which `client_gone`
+                // has already dealt with; this is the belt to that brace.
+                (Some(_), Some(None)) => *held = None,
+                _ => {}
+            }
+        }
+    }
+
     /// A connection went: if it owned the selection, there is no selection.
     pub fn client_gone(&mut self, clients: &mut [crate::state::Slot], client: usize) {
         for which in [Which::Clipboard, Which::Primary] {
@@ -237,4 +260,68 @@ fn close(fd: Fd) {
     )]
     // SAFETY: a descriptor this process received and owns.
     let _ = unsafe { libc::close(fd.0) };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Clipboard, Which};
+    use compositor_wire::ObjectId;
+
+    /// A clipboard whose owner is the client at `client`.
+    fn holding(client: usize) -> Clipboard {
+        let mut clipboard = Clipboard::default();
+        for which in [Which::Clipboard, Which::Primary] {
+            clipboard.copied(
+                which,
+                &mut [],
+                client,
+                Some(ObjectId(7)),
+                vec!["text/plain".to_owned()],
+            );
+        }
+        clipboard
+    }
+
+    /// A connection ending moves every slot after it, and the selection
+    /// holds its owner by that place.
+    ///
+    /// This is the bug the clipboard boot found: with the owner left at its
+    /// old place, a paste is answered by whichever client took that number
+    /// -- or, as it happened, by nobody, while the program that copied waits
+    /// to be asked.
+    #[test]
+    fn a_selection_follows_its_owner_when_a_client_before_it_goes() {
+        let mut clipboard = holding(3);
+        // Client 1 went: 0 stays, 2 becomes 1, 3 becomes 2.
+        clipboard.renumber(&[Some(0), None, Some(1), Some(2)]);
+        for which in [Which::Clipboard, Which::Primary] {
+            assert_eq!(
+                clipboard.held(which).map(|held| held.client),
+                Some(2),
+                "{which:?}"
+            );
+        }
+    }
+
+    /// And a selection whose own owner went is no selection.
+    #[test]
+    fn a_selection_whose_owner_went_is_gone() {
+        let mut clipboard = holding(1);
+        clipboard.renumber(&[Some(0), None, Some(1)]);
+        for which in [Which::Clipboard, Which::Primary] {
+            assert!(clipboard.held(which).is_none(), "{which:?}");
+        }
+    }
+
+    /// A place nobody moved leaves the selection where it was, which is
+    /// every pass in which no connection ended.
+    #[test]
+    fn nothing_moves_when_nothing_went() {
+        let mut clipboard = holding(2);
+        clipboard.renumber(&[Some(0), Some(1), Some(2)]);
+        assert_eq!(
+            clipboard.held(Which::Clipboard).map(|held| held.client),
+            Some(2)
+        );
+    }
 }
