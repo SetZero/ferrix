@@ -37,6 +37,8 @@ pub enum Role {
     DecorationManager,
     /// `zwlr_layer_shell_v1`.
     LayerShell,
+    /// `zwlr_layer_surface_v1`: a bar, a wallpaper, a launcher.
+    LayerSurface,
     /// `wl_surface`, made by `wl_compositor.create_surface`.
     Surface,
     /// `wl_region`, made by `wl_compositor.create_region`.

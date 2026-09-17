@@ -31,6 +31,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use compositor_pattern::Shape;
 use compositor_render::Pattern;
 use hyprix::Options;
 
@@ -40,6 +41,9 @@ const HEIGHT: u32 = 768;
 
 /// Where `compositor/render` keeps the image both paths must produce.
 const EXPECTED: &str = "../render/tests/data/dwindle-two-clients.xrle";
+
+/// The same, with a bar across the top.
+const BAR_EXPECTED: &str = "../render/tests/data/layer-bar-two-clients.xrle";
 
 /// A directory of this test's own, named for the process so two runs at once
 /// do not share one.
@@ -53,6 +57,16 @@ fn workspace(name: &str) -> PathBuf {
 /// Run the compositor with the clients in `patterns`, and give back the last
 /// frame it drew as `XRGB8888` rows.
 fn run(name: &str, patterns: &[(Pattern, &str)]) -> (Vec<u8>, String) {
+    let shaped: Vec<(Pattern, &str, Shape)> = patterns
+        .iter()
+        .map(|(pattern, title)| (*pattern, *title, Shape::Window))
+        .collect();
+    run_shaped(name, &shaped)
+}
+
+/// The same, with each client given the role it asks for: a window, or a bar
+/// through `zwlr_layer_shell_v1`.
+fn run_shaped(name: &str, patterns: &[(Pattern, &str, Shape)]) -> (Vec<u8>, String) {
     let work = workspace(name);
     let socket = work.join("wayland");
     let frames = work.join("frames");
@@ -67,7 +81,7 @@ fn run(name: &str, patterns: &[(Pattern, &str)]) -> (Vec<u8>, String) {
 
     let clients: Vec<_> = patterns
         .iter()
-        .map(|(pattern, title)| (*pattern, (*title).to_owned()))
+        .map(|(pattern, title, shape)| (*pattern, (*title).to_owned(), *shape))
         .collect();
     let socket_for_clients = socket.clone();
     let started = std::thread::spawn(move || {
@@ -80,11 +94,11 @@ fn run(name: &str, patterns: &[(Pattern, &str)]) -> (Vec<u8>, String) {
             std::thread::sleep(Duration::from_millis(5));
         }
         let mut handles = Vec::new();
-        for (pattern, title) in clients {
+        for (pattern, title, shape) in clients {
             let path = socket_for_clients.clone();
             handles.push(std::thread::spawn(move || {
                 // Each client is told where to connect the way any client is.
-                connect(&path, pattern, &title)
+                connect(&path, pattern, &title, shape)
             }));
             // In order, so the dwindle tree is the one the expected image was
             // built from: the first window takes the whole area and the
@@ -111,12 +125,12 @@ fn run(name: &str, patterns: &[(Pattern, &str)]) -> (Vec<u8>, String) {
 }
 
 /// One client, connected to `socket`.
-fn connect(socket: &Path, pattern: Pattern, title: &str) -> String {
+fn connect(socket: &Path, pattern: Pattern, title: &str, shape: Shape) -> String {
     // `WAYLAND_DISPLAY` is how every client is told, but the environment is
     // one per process and these clients share it, so the path goes in
     // directly. `socket_path` takes a name with a slash as an absolute path,
     // which is what this is.
-    compositor_pattern::client::run_on(socket, pattern, title)
+    compositor_pattern::client::run_shaped_on(socket, pattern, title, shape)
         .unwrap_or_else(|error| format!("pattern failed: {error}"))
 }
 
@@ -145,8 +159,12 @@ fn last_frame(directory: &Path) -> Vec<u8> {
 /// `compositor/render`'s expected image, as the same `(red, green, blue)`
 /// bytes a PPM holds.
 fn expected() -> Vec<u8> {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(EXPECTED);
-    let bytes = std::fs::read(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+    image(&Path::new(env!("CARGO_MANIFEST_DIR")).join(EXPECTED))
+}
+
+/// One expected image, as the same `(red, green, blue)` bytes a PPM holds.
+fn image(path: &Path) -> Vec<u8> {
+    let bytes = std::fs::read(path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
     let word = |at: usize| -> u32 {
         let slice: [u8; 4] = bytes
             .get(at..at + 4)
@@ -545,7 +563,9 @@ fn subscribed(name: &str, kill: bool) -> Vec<String> {
         let mut handles = Vec::new();
         for (pattern, title) in [(Pattern::Checkerboard, "one"), (Pattern::Gradient, "two")] {
             let path = socket_for_clients.clone();
-            handles.push(std::thread::spawn(move || connect(&path, pattern, title)));
+            handles.push(std::thread::spawn(move || {
+                connect(&path, pattern, title, Shape::Window)
+            }));
             std::thread::sleep(Duration::from_millis(250));
         }
         // `killactive` through the request socket, so the window really
@@ -646,4 +666,35 @@ fn a_window_closing_reaches_the_socket_too() {
         .filter(|line| line.starts_with("activewindow>>"))
         .collect();
     assert!(focused.len() >= 3, "{lines:?}");
+}
+
+/// A bar through `zwlr_layer_shell_v1`, and the windows tiling under it.
+///
+/// This is the whole of what a Hyprland setup needs before it will start:
+/// `waybar` is a layer surface, `hyprpaper` is a layer surface, and a
+/// compositor that does not place them puts the windows over the bar or
+/// under it.
+#[test]
+fn a_bar_takes_its_strip_and_the_windows_tile_under_it() {
+    let (frame, report) = run_shaped(
+        "bar",
+        &[
+            (Pattern::Checkerboard, "bar", Shape::Bar(30)),
+            (Pattern::Checkerboard, "one", Shape::Window),
+            (Pattern::Gradient, "two", Shape::Window),
+        ],
+    );
+    assert!(
+        report.contains("most 2"),
+        "the bar should not be a window: {report}"
+    );
+    assert!(!report.contains("failed"), "{report}");
+
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(BAR_EXPECTED);
+    let (differing, first) = compare(&frame, &image(&path));
+    assert_eq!(
+        differing, 0,
+        "the compositor drew something else than the renderer's expected image; \
+         first difference {first:?}"
+    );
 }

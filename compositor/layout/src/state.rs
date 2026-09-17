@@ -32,7 +32,7 @@
 use std::collections::BTreeMap;
 use std::f64::consts::{FRAC_PI_2, PI};
 
-use compositor_config::{Bind, Config};
+use compositor_config::{Bind, Config, Gaps};
 
 use crate::dispatch::{Direction, Dispatcher, FullscreenMode, WorkspaceTarget};
 use crate::dwindle::Dwindle;
@@ -390,6 +390,38 @@ impl State {
     }
 
     // -- Monitors -------------------------------------------------------------
+
+    /// Say what a monitor has reserved, and re-tile it.
+    ///
+    /// The strips a layer surface's exclusive zone takes off the monitor:
+    /// a bar across the top means the windows start below it. Nothing else
+    /// sets them, and `compositor/layout` works none of them out -- where a
+    /// layer surface goes is [`crate::layers`]' and what it reserves is that
+    /// module's answer, because it is the protocol's rule and not the
+    /// tiling's.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::UnknownMonitor`] for a monitor that is not there.
+    pub fn set_reserved(
+        &mut self,
+        monitor: MonitorId,
+        reserved: Gaps,
+    ) -> Result<Vec<Change>, Error> {
+        if self.output(monitor).is_none() {
+            return Err(Error::UnknownMonitor(monitor));
+        }
+        Ok(self.run(|state| {
+            if let Some(output) = state
+                .outputs
+                .iter_mut()
+                .find(|output| output.monitor.id == monitor)
+            {
+                output.monitor.reserved = reserved;
+            }
+            Vec::new()
+        }))
+    }
 
     /// Add a monitor. It shows the lowest-numbered workspace left without a
     /// monitor by an unplug, taking all of those, or else the lowest number

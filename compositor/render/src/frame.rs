@@ -63,12 +63,31 @@ pub fn outer(placed: &Placed) -> Rect {
     )
 }
 
+/// One layer surface to draw: where it is, whether it is above the windows,
+/// and its pixels.
+///
+/// The compositor works out the rectangle from the protocol's anchor rules
+/// (`compositor_layout::layers`); this crate only draws it.
+#[derive(Debug)]
+pub struct LayerFrame<'pixels> {
+    /// Where it is, in the layout's global coordinates.
+    pub rect: Rect,
+    /// Whether it is drawn above the windows: `top` and `overlay` are,
+    /// `background` and `bottom` are not.
+    pub above: bool,
+    /// Its pixels, or `None` for one that has not drawn yet.
+    pub surface: Option<Surface<'pixels>>,
+}
+
 /// Draw `output`, the layout of the monitor whose top-left corner is at
 /// `origin` in the layout's global coordinates, into `canvas` within
-/// `damage`: the background, then each window bottom to top, its border in
-/// [`Style`]'s active colour if it has focus and the inactive one if not,
-/// then its surface from `surfaces` inside the border. A window with no
-/// surface yet shows the background.
+/// `damage`.
+///
+/// In order: the background; the layer surfaces that are under the windows;
+/// each window bottom to top, its border in [`Style`]'s active colour if it
+/// has focus and the inactive one if not, then its surface from `surfaces`
+/// inside the border; and the layer surfaces that are above them. A window
+/// or a layer surface with no pixels yet shows what is under it.
 ///
 /// Returns the damage the frame produced, which is `damage` on the canvas,
 /// since the background covers all of it.
@@ -80,8 +99,27 @@ pub fn render(
     surfaces: &BTreeMap<WindowId, Surface<'_>>,
     damage: &Damage,
 ) -> Damage {
+    render_with_layers(canvas, output, origin, style, surfaces, &[], damage)
+}
+
+/// [`render`], with the layer surfaces `zwlr_layer_shell_v1` put on the
+/// monitor.
+pub fn render_with_layers(
+    canvas: &mut Canvas,
+    output: &MonitorLayout,
+    origin: (i64, i64),
+    style: &Style,
+    surfaces: &BTreeMap<WindowId, Surface<'_>>,
+    layers: &[LayerFrame<'_>],
+    damage: &Damage,
+) -> Damage {
     let local = |rect: Rect| rect.translate(origin.0.saturating_neg(), origin.1.saturating_neg());
     canvas.clear(style.background, damage);
+    for layer in layers.iter().filter(|layer| !layer.above) {
+        if let Some(surface) = layer.surface.as_ref() {
+            canvas.composite(surface, local(layer.rect), damage);
+        }
+    }
     for placed in &output.windows {
         let rect = local(placed.rect);
         let color = if placed.focused {
@@ -92,6 +130,11 @@ pub fn render(
         canvas.border(rect, placed.border, color, damage);
         if let Some(surface) = surfaces.get(&placed.window) {
             canvas.composite(surface, rect, damage);
+        }
+    }
+    for layer in layers.iter().filter(|layer| layer.above) {
+        if let Some(surface) = layer.surface.as_ref() {
+            canvas.composite(surface, local(layer.rect), damage);
         }
     }
     damage.clipped(canvas.bounds())

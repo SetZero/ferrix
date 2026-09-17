@@ -40,6 +40,7 @@
 
 mod client;
 mod globals;
+mod layer;
 mod role;
 mod shm;
 mod surface;
@@ -47,6 +48,7 @@ mod xdg;
 
 pub use client::{Client, Event, Fatal, Outgoing};
 pub use globals::{Global, Globals};
+pub use layer::{Anchors, Layer, LayerSurface, Margin};
 pub use role::Role;
 pub use shm::{Buffer, BufferError, FORMATS, Format, Pool};
 pub use surface::{Committed, Output, Rect, Region, State, Subsurface, Surface};

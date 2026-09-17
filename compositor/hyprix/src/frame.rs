@@ -2,8 +2,11 @@
 
 use std::collections::BTreeMap;
 
+use compositor_layout::Rect;
 use compositor_layout::{MonitorLayout, WindowId};
-use compositor_render::{Canvas, Damage, Format, Style, Surface, Target, render};
+use compositor_render::{
+    Canvas, Damage, Format, LayerFrame, Style, Surface, Target, render_with_layers,
+};
 use compositor_server::Client;
 use compositor_wire::ObjectId;
 
@@ -24,6 +27,22 @@ pub struct Output<'a> {
     pub origin: (i64, i64),
     /// The colours a window is drawn with.
     pub style: &'a Style,
+}
+
+/// Where one layer surface is, and whose it is.
+///
+/// The compositor works the rectangle out from the protocol's anchor rules
+/// each time the layer surfaces change; this is what the drawing needs.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Placed {
+    /// Which connection.
+    pub client: usize,
+    /// The `wl_surface` under the layer surface.
+    pub surface: ObjectId,
+    /// Where it goes, in the global space.
+    pub rect: Rect,
+    /// Whether it is drawn above the windows.
+    pub above: bool,
 }
 
 /// Which client and which surface a window's pixels come from.
@@ -47,6 +66,7 @@ pub fn draw(
     output: &MonitorLayout,
     clients: &[Slot],
     sources: &BTreeMap<WindowId, Source>,
+    layers: &[Placed],
     damage: &Damage,
 ) -> Result<(), String> {
     let Output {
@@ -71,9 +91,22 @@ pub fn draw(
         }
     }
 
+    // The bars and wallpapers, in the order they were made, which is the
+    // order they were placed in.
+    let drawn: Vec<LayerFrame<'_>> = layers
+        .iter()
+        .map(|placed| LayerFrame {
+            rect: placed.rect,
+            above: placed.above,
+            surface: clients
+                .get(placed.client)
+                .and_then(|slot| pixels(slot.client(), slot.pools(), placed.surface)),
+        })
+        .collect();
+
     // Every window's rectangle is in the global space all monitors share;
     // the canvas is this monitor's, so the origin is where the monitor is.
-    let _ = render(canvas, output, origin, style, &surfaces, damage);
+    let _ = render_with_layers(canvas, output, origin, style, &surfaces, &drawn, damage);
 
     let (width, height) = backend.size();
     let stride = backend.stride();

@@ -38,6 +38,7 @@
 mod dispatch;
 mod dwindle;
 mod geometry;
+pub mod layers;
 mod master;
 mod settings;
 mod state;

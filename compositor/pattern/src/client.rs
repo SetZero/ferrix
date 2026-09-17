@@ -9,6 +9,7 @@ use compositor_protocol::core::{
     self, wl_compositor, wl_display, wl_keyboard, wl_pointer, wl_registry, wl_seat, wl_shm,
     wl_shm_pool, wl_surface,
 };
+use compositor_protocol::layer_shell::{self, zwlr_layer_shell_v1, zwlr_layer_surface_v1};
 use compositor_protocol::xdg_shell::{self, xdg_surface, xdg_toplevel, xdg_wm_base};
 use compositor_render::Pattern;
 use compositor_socket::{Connection, RecvError, socket_path};
@@ -33,6 +34,8 @@ mod id {
     pub(super) const TOPLEVEL: ObjectId = ObjectId(9);
     pub(super) const POOL: ObjectId = ObjectId(10);
     pub(super) const BUFFER: ObjectId = ObjectId(11);
+    pub(super) const LAYER_SHELL: ObjectId = ObjectId(15);
+    pub(super) const LAYER_SURFACE: ObjectId = ObjectId(16);
     pub(super) const SEAT: ObjectId = ObjectId(12);
     pub(super) const KEYBOARD: ObjectId = ObjectId(13);
     pub(super) const POINTER: ObjectId = ObjectId(14);
@@ -47,6 +50,18 @@ mod id {
 /// closed it.
 const DEADLINE: Duration = Duration::from_secs(600);
 
+/// What this client asks the compositor to make of its surface.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Shape {
+    /// An `xdg_toplevel`: a window the layout tiles.
+    #[default]
+    Window,
+    /// A `zwlr_layer_surface_v1` on the `top` layer, anchored across the top
+    /// edge, this many pixels tall and reserving all of them: what a bar
+    /// asks for.
+    Bar(u32),
+}
+
 /// Connect, make a window, draw `pattern` in it, and keep drawing until the
 /// compositor goes away.
 ///
@@ -60,6 +75,18 @@ pub fn run(pattern: Pattern, title: &str) -> Result<String, String> {
     run_on(&path, pattern, title)
 }
 
+/// The same, as a bar rather than a window.
+///
+/// # Errors
+///
+/// A sentence saying what could not be done.
+pub fn run_shaped(pattern: Pattern, title: &str, shape: Shape) -> Result<String, String> {
+    let display =
+        std::env::var("WAYLAND_DISPLAY").map_err(|_| "WAYLAND_DISPLAY is not set".to_owned())?;
+    let path = socket_path(&display).map_err(|error| format!("the socket: {error}"))?;
+    run_shaped_on(&path, pattern, title, shape)
+}
+
 /// The same, on a socket named directly rather than through the environment.
 ///
 /// The environment is one per process, so two clients running in one
@@ -70,6 +97,20 @@ pub fn run(pattern: Pattern, title: &str) -> Result<String, String> {
 ///
 /// A sentence saying what could not be done.
 pub fn run_on(path: &std::path::Path, pattern: Pattern, title: &str) -> Result<String, String> {
+    run_shaped_on(path, pattern, title, Shape::Window)
+}
+
+/// The same, with the surface given the role `shape` names.
+///
+/// # Errors
+///
+/// A sentence saying what could not be done.
+pub fn run_shaped_on(
+    path: &std::path::Path,
+    pattern: Pattern,
+    title: &str,
+    shape: Shape,
+) -> Result<String, String> {
     let stream = UnixStream::connect(path)
         .map_err(|error| format!("connecting to {}: {error}", path.display()))?;
     let mut connection =
@@ -95,6 +136,7 @@ pub fn run_on(path: &std::path::Path, pattern: Pattern, title: &str) -> Result<S
 
     let mut state = Client {
         pattern,
+        shape,
         title: title.to_owned(),
         globals: BTreeMap::new(),
         bound: false,
@@ -136,6 +178,7 @@ pub fn run_on(path: &std::path::Path, pattern: Pattern, title: &str) -> Result<S
 /// What the client knows.
 struct Client {
     pattern: Pattern,
+    shape: Shape,
     title: String,
     /// The registry's names, by interface.
     globals: BTreeMap<String, (u32, u32)>,
@@ -194,6 +237,8 @@ impl Client {
             id::SURFACE => &core::WL_SURFACE,
             id::XDG_SURFACE => &xdg_shell::XDG_SURFACE,
             id::TOPLEVEL => &xdg_shell::XDG_TOPLEVEL,
+            id::LAYER_SHELL => &layer_shell::ZWLR_LAYER_SHELL_V1,
+            id::LAYER_SURFACE => &layer_shell::ZWLR_LAYER_SURFACE_V1,
             id::SEAT => &core::WL_SEAT,
             id::KEYBOARD => &core::WL_KEYBOARD,
             id::POINTER => &core::WL_POINTER,
@@ -270,6 +315,28 @@ impl Client {
             }
             id::SEAT if opcode == wl_seat::event::CAPABILITIES => {
                 self.seat(args.first().and_then(Arg::as_uint).unwrap_or(0), out);
+            }
+            id::LAYER_SURFACE if opcode == zwlr_layer_surface_v1::event::CONFIGURE => {
+                let serial = args.first().and_then(Arg::as_uint).unwrap_or(0);
+                let (width, height) = (
+                    args.get(1).and_then(Arg::as_uint).unwrap_or(0),
+                    args.get(2).and_then(Arg::as_uint).unwrap_or(0),
+                );
+                request(
+                    out,
+                    id::LAYER_SURFACE,
+                    zwlr_layer_surface_v1::request::ACK_CONFIGURE,
+                    &[ArgType::Uint],
+                    &[Arg::Uint(serial)],
+                );
+                self.width = i32::try_from(width).unwrap_or(0);
+                self.height = i32::try_from(height).unwrap_or(0);
+                self.acked = true;
+                say(&format!("pattern: layer {width}x{height}"));
+                self.draw(out)?;
+            }
+            id::LAYER_SURFACE if opcode == zwlr_layer_surface_v1::event::CLOSED => {
+                return Err("the compositor closed this layer surface".to_owned());
             }
             id::KEYBOARD => self.keyboard(opcode, args, out)?,
             id::POINTER => self.pointer(opcode, args),
@@ -399,12 +466,17 @@ impl Client {
         // `wl_seat` is wanted and not required: a compositor with nothing
         // plugged in may offer none, and a client that refused to start over
         // it would be a client that only runs on a machine with a keyboard.
+        let bar = matches!(self.shape, Shape::Bar(_));
         for (interface, id, want, required) in [
             ("wl_compositor", id::COMPOSITOR, 6u32, true),
             ("wl_shm", id::SHM, 1, true),
-            ("xdg_wm_base", id::SHELL, 6, true),
+            ("xdg_wm_base", id::SHELL, !bar as u32 * 6, !bar),
             ("wl_seat", id::SEAT, 7, false),
+            ("zwlr_layer_shell_v1", id::LAYER_SHELL, 5, bar),
         ] {
+            if want == 0 {
+                continue;
+            }
             let offer = self.globals.get(interface).copied();
             if offer.is_none() && !required {
                 say(&format!("pattern: the compositor offers no {interface}"));
@@ -430,7 +502,7 @@ impl Client {
         }
         self.bound = true;
 
-        // The window, in the order the protocol requires.
+        // The surface, then the role, in the order the protocol requires.
         request(
             out,
             id::COMPOSITOR,
@@ -438,6 +510,9 @@ impl Client {
             &[ArgType::NewId],
             &[Arg::NewId(id::SURFACE)],
         );
+        if let Shape::Bar(height) = self.shape {
+            return self.become_bar(height, out);
+        }
         request(
             out,
             id::SHELL,
@@ -473,6 +548,63 @@ impl Client {
     }
 
     /// Draw the pattern at the size the compositor gave, and commit it.
+    /// Ask for a `zwlr_layer_surface_v1` across the top edge: what a bar
+    /// asks for, in the order `waybar` asks for it.
+    fn become_bar(&mut self, height: u32, out: &mut Writer) -> Result<(), String> {
+        request(
+            out,
+            id::LAYER_SHELL,
+            zwlr_layer_shell_v1::request::GET_LAYER_SURFACE,
+            &[
+                ArgType::NewId,
+                ArgType::Object { nullable: false },
+                ArgType::Object { nullable: true },
+                ArgType::Uint,
+                ArgType::Str { nullable: false },
+            ],
+            &[
+                Arg::NewId(id::LAYER_SURFACE),
+                Arg::Object(id::SURFACE),
+                // A null output: the compositor chooses, which is what a bar
+                // with no monitor configured asks for.
+                Arg::Object(ObjectId(0)),
+                Arg::Uint(zwlr_layer_shell_v1::layer::TOP),
+                Arg::Str(Some("pattern-bar")),
+            ],
+        );
+        request(
+            out,
+            id::LAYER_SURFACE,
+            zwlr_layer_surface_v1::request::SET_ANCHOR,
+            &[ArgType::Uint],
+            &[Arg::Uint(
+                zwlr_layer_surface_v1::anchor::TOP
+                    | zwlr_layer_surface_v1::anchor::LEFT
+                    | zwlr_layer_surface_v1::anchor::RIGHT,
+            )],
+        );
+        request(
+            out,
+            id::LAYER_SURFACE,
+            zwlr_layer_surface_v1::request::SET_SIZE,
+            &[ArgType::Uint, ArgType::Uint],
+            // Zero across, because it is anchored to both side edges and the
+            // compositor decides; the height is the bar's own.
+            &[Arg::Uint(0), Arg::Uint(height)],
+        );
+        request(
+            out,
+            id::LAYER_SURFACE,
+            zwlr_layer_surface_v1::request::SET_EXCLUSIVE_ZONE,
+            &[ArgType::Int],
+            &[Arg::Int(i32::try_from(height).unwrap_or(0))],
+        );
+        // A surface with a role and no buffer: the compositor answers with a
+        // configure, and the first commit is what asks for it.
+        request(out, id::SURFACE, wl_surface::request::COMMIT, &[], &[]);
+        Ok(())
+    }
+
     fn draw(&mut self, out: &mut Writer) -> Result<(), String> {
         if !self.acked || self.width <= 0 || self.height <= 0 {
             return Ok(());

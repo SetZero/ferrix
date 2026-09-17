@@ -4105,6 +4105,34 @@ windows arriving with their class and title, and the focus moving each time a
 keybind is pressed. The sockets are bound before `exec-once` runs now, which
 is what lets a bar started that way find them.
 
+**Done — `zwlr_layer_shell_v1`: the surfaces that are not windows
+(2026-09-17).** A bar, a wallpaper, a notification and a launcher are not
+windows: they are not tiled, they are not in the focus order, and they sit at
+a fixed place on a fixed layer. `wlr-layer-shell-unstable-v1` is how every
+wlroots-shaped compositor -- Hyprland included -- lets a client say so, and it
+is what `waybar`, `hyprpaper`, `mako` and `wofi` are written against. Without
+it a Hyprland user's setup does not start at all, which made it the largest
+thing missing.
+
+The protocol is answered whole for the four layers and the placement rules:
+the anchors, the size with the protocol's own `invalid_size` rule for an axis
+with no size and no two anchors, the margins, the exclusive zone, the
+keyboard interactivity, and the configure conversation with its serials.
+Where a surface goes is `compositor/layout`'s `layers`, which follows
+wlroots' `wlr_scene_layer_surface_v1_configure`: the usable area less the
+margins, the size the client asked for on any axis it is not stretched
+across, and each exclusive zone taken off the area the next surface is placed
+in -- which is what makes two bars on one edge stack rather than overlap. The
+zones become the monitor's reserved strips, so the windows tile in what is
+left.
+
+`compositor/pattern --bar 30` is a bar, asking for what `waybar` asks for in
+the order it asks. On the host it is drawn beside two windows and the frame
+is compared against an image `compositor/render`'s own tests bless; on
+Ferrix, `cargo xtask test-compositor` boots a second time with a bar in the
+`hyprland.conf` and requires the same picture from QEMU's screendump. Every
+one of 786,432 pixels, on x86-64 and AArch64.
+
 What this stage still owes: a terminal a person can type in at the serial
 console, which waits on a pty.
 

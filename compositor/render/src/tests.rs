@@ -127,6 +127,92 @@ fn two_client_frame() -> Vec<u8> {
     frame_after(&[])
 }
 
+/// A bar across the top, and the two clients tiled in what is left.
+///
+/// The bar's height is 30 and its exclusive zone all of it, which is what
+/// `compositor/pattern --bar 30` asks for; where it goes is
+/// `compositor_layout::layers`' answer and what it leaves is the monitor's
+/// reserved strip, so the picture is made by the same two crates the
+/// compositor uses.
+fn bar_and_two_clients_frame() -> Vec<u8> {
+    const BAR: u32 = 30;
+
+    let monitor = Rect::new(0, 0, i64::from(WIDTH), i64::from(HEIGHT));
+    let request = compositor_layout::layers::Request {
+        top: true,
+        left: true,
+        right: true,
+        size: (0, BAR),
+        exclusive_zone: BAR.cast_signed(),
+        ..compositor_layout::layers::Request::default()
+    };
+    let (placements, reserved) = compositor_layout::layers::place(monitor, &[request]);
+    let bar = placements[0];
+
+    let mut state = State::new(Settings::default());
+    let _ = state
+        .add_monitor(Monitor {
+            id: MonitorId(1),
+            rect: monitor,
+            reserved: Gaps::all(0),
+        })
+        .unwrap();
+    let _ = state.set_reserved(MonitorId(1), reserved).unwrap();
+    let _ = state.open_window(CHECKERBOARD).unwrap();
+    let _ = state.open_window(GRADIENT).unwrap();
+    let layout = state.layout().remove(0);
+
+    let buffers = client_buffers(&layout);
+    // The bar draws the checkerboard, which is what the test client does.
+    let bar_pixels = Pattern::Checkerboard.draw(bar.rect.width as u32, bar.rect.height as u32);
+    let bar_surface = Surface::new(
+        &bar_pixels,
+        bar.rect.width as u32,
+        bar.rect.height as u32,
+        bar.rect.width as u32 * 4,
+        Pattern::Checkerboard.format(),
+    )
+    .unwrap();
+
+    let mut canvas = Canvas::new(WIDTH, HEIGHT).unwrap();
+    let full = Damage::full(WIDTH, HEIGHT);
+    let layers = [crate::LayerFrame {
+        rect: bar.rect,
+        above: true,
+        surface: Some(bar_surface),
+    }];
+    let produced = crate::render_with_layers(
+        &mut canvas,
+        &layout,
+        (0, 0),
+        &Style::default(),
+        &surfaces(&buffers),
+        &layers,
+        &full,
+    );
+    assert_eq!(produced, full);
+    canvas.data().to_vec()
+}
+
+#[test]
+fn a_bar_takes_its_strip_and_the_windows_tile_under_it() {
+    let frame = bar_and_two_clients_frame();
+    golden::check("layer-bar-two-clients", WIDTH, HEIGHT, &frame);
+
+    // The windows really moved down: the frame differs from the one with no
+    // bar over far more than the bar's own strip.
+    let plain = two_client_frame();
+    let differing = frame
+        .chunks(4)
+        .zip(plain.chunks(4))
+        .filter(|(one, other)| one != other)
+        .count();
+    assert!(
+        differing > (WIDTH as usize) * 30,
+        "only {differing} pixels changed; the bar drew and nothing moved"
+    );
+}
+
 #[test]
 fn two_pattern_clients_tiled_by_dwindle_match_the_expected_image() {
     golden::check("dwindle-two-clients", WIDTH, HEIGHT, &two_client_frame());

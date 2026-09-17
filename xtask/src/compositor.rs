@@ -97,6 +97,25 @@ const CONFIG_PATH: &str = "etc/hyprland.conf";
 /// looking when `HYPRLAND_INSTANCE_SIGNATURE` is not set.
 const INSTANCE: &str = "ferrix";
 
+/// The picture a bar and two windows make, which the second boot requires.
+const BAR_EXPECTED: (&str, &str) = (
+    "a bar across the top with the windows under it",
+    "compositor/render/tests/data/layer-bar-two-clients.xrle",
+);
+
+/// The configuration the second boot is given: a bar through
+/// `zwlr_layer_shell_v1`, and the same two windows.
+///
+/// A second boot rather than a fourth picture, because a bar changes every
+/// picture: the three states above are the stage's exit criterion and are
+/// compared against images blessed without one.
+const BAR_CONFIG: &str = "\
+# Carried into the initramfs by `cargo xtask test-compositor`.
+exec-once = /bin/pattern checkerboard bar --bar 30
+exec-once = /bin/pattern checkerboard one
+exec-once = /bin/pattern gradient two
+";
+
 /// The configuration carried into the initramfs.
 ///
 /// The two clients are `exec-once` rather than `--exec`, because that is what
@@ -151,11 +170,18 @@ fn build(arch: Arch, package: &str, binary: &str) -> Result<PathBuf> {
 /// configuration are files in the initramfs, since the kernel embeds one
 /// program and unpacks the rest. The arguments reach the compositor through
 /// the init script, which `Options::parse` reads as its own command line.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "a boot is a program, its clients, a configuration and what to require of it"
+)]
 fn boot_and_dump(
     arch: Arch,
     program: &Path,
     client: &Path,
     ctl: &Path,
+    config: &str,
+    wanted: &[(&str, &str)],
+    binds: &[(&str, &[&str])],
     args: &Args,
 ) -> Result<(Vec<Image>, Vec<String>)> {
     let loader = crate::cargo::build_loader(arch, args.release)?;
@@ -183,7 +209,7 @@ fn boot_and_dump(
         crate::ports::File {
             path: CONFIG_PATH,
             mode: 0o644,
-            bytes: CONFIG.as_bytes().to_vec(),
+            bytes: config.as_bytes().to_vec(),
         },
     ];
     let initramfs = crate::initramfs::build(None, &natives, None, &carried)?;
@@ -216,20 +242,13 @@ fn boot_and_dump(
                 "{arch}: the compositor never printed `{MARKER}`"
             )));
         }
-        let marker = watching
-            .lines()
-            .iter()
-            .chain(watching.after())
-            .rev()
-            .find(|line| line.contains(MARKER))
-            .map_or("", |line| line.trim());
-        println!("  {arch}: {}", marker.trim_start_matches("| ").trim());
+        say_the_marker(watching, arch);
 
-        for (index, (what, path)) in EXPECTED.iter().enumerate() {
+        for (index, (what, path)) in wanted.iter().enumerate() {
             // Each keybind but the first is sent after the picture before it
             // has settled, so that a state is never judged before the
             // compositor has been asked to make it.
-            if let Some((name, keys)) = BINDS.get(index.wrapping_sub(1)) {
+            if let Some((name, keys)) = binds.get(index.wrapping_sub(1)) {
                 press(&mut qmp, keys)?;
                 println!("  {arch}: pressed {name}");
             }
@@ -246,18 +265,9 @@ fn boot_and_dump(
             taken.push(screen);
         }
 
-        // The control socket, from inside the guest: `hyprctl` is carried in
-        // the initramfs and a keybind runs it, because Hyprland's own is not
-        // on Ferrix's image and `exec` is how a person starts anything.
-        for (name, keys) in ASKED {
-            press(&mut qmp, keys)?;
-            println!("  {arch}: pressed {name}");
+        if !binds.is_empty() {
+            ask_the_sockets(&mut qmp, watching, arch)?;
         }
-        // The answers are whole when the second command's last line is in.
-        let _ = watching.read_more(Instant::now() + SETTLE, |lines| {
-            lines.iter().any(|line| line.contains("workspace: 1"))
-                && lines.iter().filter(|line| line.contains("title: ")).count() >= 3
-        })?;
         said = watching
             .lines()
             .iter()
@@ -268,6 +278,36 @@ fn boot_and_dump(
     };
     let _ = crate::qemu::watch_then(arch, &image, &kernel, &qemu_args, EITHER, hook)?;
     Ok((taken, said))
+}
+
+/// Print the line the compositor said when its screen came up.
+fn say_the_marker(watching: &Watching<'_>, arch: Arch) {
+    let marker = watching
+        .lines()
+        .iter()
+        .chain(watching.after())
+        .rev()
+        .find(|line| line.contains(MARKER))
+        .map_or("", |line| line.trim());
+    println!("  {arch}: {}", marker.trim_start_matches("| ").trim());
+}
+
+/// Ask the compositor about itself, from inside the guest.
+///
+/// `hyprctl` is carried in the initramfs and a keybind `exec`s it, because
+/// Hyprland's own is not on Ferrix's image and `exec` is how a person starts
+/// anything.
+fn ask_the_sockets(qmp: &mut Qmp, watching: &mut Watching<'_>, arch: Arch) -> Result<()> {
+    for (name, keys) in ASKED {
+        press(qmp, keys)?;
+        println!("  {arch}: pressed {name}");
+    }
+    // The answers are whole when the second command's last line is in.
+    let _ = watching.read_more(Instant::now() + SETTLE, |lines| {
+        lines.iter().any(|line| line.contains("workspace: 1"))
+            && lines.iter().filter(|line| line.contains("title: ")).count() >= 3
+    })?;
+    Ok(())
 }
 
 /// Press and release `keys` in order, as a hand does: the modifiers first,
@@ -350,7 +390,9 @@ pub(crate) fn test_compositor(args: &Args) -> Result<()> {
         let program = build(arch, "hyprix", "hyprix")?;
         let client = build(arch, "compositor-pattern", "pattern")?;
         let ctl = build(arch, "compositor-ctl", "hyprctl")?;
-        let (screens, said) = boot_and_dump(arch, &program, &client, &ctl, args)?;
+        let (screens, said) = boot_and_dump(
+            arch, &program, &client, &ctl, CONFIG, &EXPECTED, &BINDS, args,
+        )?;
         if screens.len() != EXPECTED.len() {
             return Err(Error::new(format!(
                 "{arch}: {} of {} states were reached",
@@ -423,6 +465,31 @@ pub(crate) fn test_compositor(args: &Args) -> Result<()> {
         println!(
             "  {arch}: a subscriber on the event socket was told {focus_changes} focus changes \
              and every window"
+        );
+
+        // A second boot: a bar through `zwlr_layer_shell_v1`, and the
+        // windows tiling in what its exclusive zone leaves. Without this
+        // protocol a Hyprland setup does not start at all, and a compositor
+        // that places a bar badly puts the windows over it.
+        let (screens, _) = boot_and_dump(
+            arch,
+            &program,
+            &client,
+            &ctl,
+            BAR_CONFIG,
+            &[BAR_EXPECTED],
+            &[],
+            args,
+        )?;
+        let Some(screen) = screens.first() else {
+            return Err(Error::new(format!(
+                "{arch}: the bar boot took no screendump"
+            )));
+        };
+        println!(
+            "  {arch}: a bar reserved its strip and the windows tiled under it, every one of {} \
+             pixels",
+            screen.width * screen.height
         );
     }
     Ok(())

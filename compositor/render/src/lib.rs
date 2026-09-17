@@ -106,7 +106,7 @@ pub use canvas::{Canvas, MAX_SIZE};
 pub use compositor_config::Color;
 pub use compositor_layout::Rect;
 pub use damage::Damage;
-pub use frame::{Style, damage_between, outer, render};
+pub use frame::{LayerFrame, Style, damage_between, outer, render, render_with_layers};
 pub use patterns::Pattern;
 
 /// What the renderer could not do.

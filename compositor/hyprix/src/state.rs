@@ -29,6 +29,9 @@ pub struct Slot {
     pools: BTreeMap<ObjectId, Mapping>,
     /// Windows this connection owns, so they can be closed when it goes.
     windows: Vec<(ObjectId, WindowId)>,
+    /// Layer surfaces it owns, in the order it made them: wlroots places
+    /// them in that order, so a bar that started first gets the edge.
+    layers: Vec<ObjectId>,
     /// Whether it is finished and waiting to be dropped.
     gone: bool,
 }
@@ -207,6 +210,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
 
     let mut slots: Vec<Slot> = Vec::new();
     let mut sources: BTreeMap<WindowId, Source> = BTreeMap::new();
+    let mut placed_layers: Vec<crate::frame::Placed> = Vec::new();
     let mut next_window = 1u32;
     let mut drawn = 0u32;
     // The most windows at once, not the count at the end: a client that ran
@@ -252,6 +256,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                     connection,
                     pools: BTreeMap::new(),
                     windows: Vec::new(),
+                    layers: Vec::new(),
                     gone: false,
                 }),
                 Err(_) => continue,
@@ -347,6 +352,10 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
         // size it had before -- which the compositor then draws cropped.
         // Hyprland reconfigures the whole workspace for the same reason.
         if changed {
+            // The layer surfaces first: their exclusive zones decide how
+            // much of the monitor is left for the windows to tile in, so a
+            // bar has to be placed before a window is told its size.
+            placed_layers = place_layers(&mut slots, &mut state, (width, height));
             reconfigure(&mut slots, &state);
         }
         // The keyboard follows the layout's focus, and a window that has just
@@ -369,6 +378,11 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                 for (_, window) in windows {
                     let _ = state.window_gone(window);
                     let _ = sources.remove(&window);
+                    changed = true;
+                }
+                if slots.get(index).is_some_and(|slot| !slot.layers.is_empty()) {
+                    // Its bars go with it, and the space they reserved comes
+                    // back to the windows.
                     changed = true;
                 }
             }
@@ -395,7 +409,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                 origin: (0, 0),
                 style: &style,
             };
-            crate::frame::draw(&mut target, output, &slots, &sources, &full)?;
+            crate::frame::draw(&mut target, output, &slots, &sources, &placed_layers, &full)?;
             drawn = drawn.saturating_add(1);
             if drawn == 1 {
                 // The screen is up and the first frame is on it. This is what
@@ -479,6 +493,11 @@ fn serve(
                 } => {
                     let _ = slot.pools.remove(&object);
                 }
+                Event::LayerSurfaceCreated { layer_surface, .. } => {
+                    slot.layers.push(layer_surface);
+                    changed = true;
+                }
+                Event::LayerSurfaceChanged { .. } => changed = true,
                 Event::ToplevelCreated { toplevel, .. } => {
                     let window = WindowId(u64::from(*next_window));
                     *next_window = next_window.saturating_add(1);
@@ -663,6 +682,84 @@ fn close(window: WindowId, slots: &mut [Slot], sources: &BTreeMap<WindowId, Sour
     }
 }
 
+/// Place every layer surface, tell each one its size, and reserve what they
+/// asked for.
+///
+/// The surfaces are taken in the order their clients made them, across every
+/// connection, which is the order wlroots places them in: a bar that started
+/// first gets the edge. The exclusive zones become the monitor's reserved
+/// strips, so the windows tile in what is left.
+fn place_layers(
+    slots: &mut [Slot],
+    state: &mut State,
+    size: (u32, u32),
+) -> Vec<crate::frame::Placed> {
+    let monitor = Rect::new(0, 0, i64::from(size.0), i64::from(size.1));
+    // Everything that has been given a role, with what it asked for.
+    let mut asked: Vec<(
+        usize,
+        ObjectId,
+        ObjectId,
+        bool,
+        compositor_layout::layers::Request,
+    )> = Vec::new();
+    for (index, slot) in slots.iter().enumerate() {
+        for id in &slot.layers {
+            let Some(layer) = slot.client.layer_surface(*id) else {
+                continue;
+            };
+            let anchors = compositor_server::Anchors::from_raw(layer.anchor);
+            asked.push((
+                index,
+                *id,
+                layer.surface,
+                layer.layer.above_windows(),
+                compositor_layout::layers::Request {
+                    top: anchors.top,
+                    bottom: anchors.bottom,
+                    left: anchors.left,
+                    right: anchors.right,
+                    size: layer.size,
+                    margin: (
+                        layer.margin.top,
+                        layer.margin.right,
+                        layer.margin.bottom,
+                        layer.margin.left,
+                    ),
+                    exclusive_zone: layer.exclusive_zone,
+                },
+            ));
+        }
+    }
+
+    let requests: Vec<compositor_layout::layers::Request> =
+        asked.iter().map(|(.., request)| *request).collect();
+    let (placements, reserved) = compositor_layout::layers::place(monitor, &requests);
+    let _ = state.set_reserved(MonitorId(1), reserved);
+
+    let mut drawn = Vec::with_capacity(asked.len());
+    for ((index, id, surface, above, _), placement) in asked.into_iter().zip(placements) {
+        if let Some(slot) = slots.get_mut(index) {
+            let width = u32::try_from(placement.rect.width).unwrap_or(0);
+            let height = u32::try_from(placement.rect.height).unwrap_or(0);
+            let already = slot
+                .client
+                .layer_surface(id)
+                .is_some_and(|layer| layer.sent_configure && layer.configured == (width, height));
+            if !already {
+                slot.client.configure_layer(id, width, height);
+            }
+        }
+        drawn.push(crate::frame::Placed {
+            client: index,
+            surface,
+            rect: placement.rect,
+            above,
+        });
+    }
+    drawn
+}
+
 /// Tell every window the size the layout gives it now.
 ///
 /// A configure a client has already been given and has acked is not sent
@@ -746,6 +843,14 @@ fn globals() -> Globals {
         (&core::WL_OUTPUT, 4, Role::Output),
         (&core::WL_DATA_DEVICE_MANAGER, 3, Role::DataDeviceManager),
         (&xdg_shell::XDG_WM_BASE, 6, Role::XdgWmBase),
+        // The bars, wallpapers, launchers and notification daemons: every
+        // one of them is a `zwlr_layer_shell_v1` client, and a compositor
+        // that does not offer it is one a Hyprland setup does not start on.
+        (
+            &compositor_protocol::layer_shell::ZWLR_LAYER_SHELL_V1,
+            5,
+            Role::LayerShell,
+        ),
     ] {
         let _ = globals.add(interface, version, role);
     }

@@ -2269,3 +2269,263 @@ fn a_client_with_no_keyboard_is_sent_nothing_and_told_so() {
     client.pointer_frame();
     assert!(sent(&mut client).is_empty());
 }
+
+// ---------------------------------------------------------------------------
+// zwlr_layer_shell_v1
+//
+// A bar, a wallpaper and a launcher are not windows. Without this protocol a
+// Hyprland user's setup -- waybar, hyprpaper, mako, wofi -- does not start,
+// so what matters is that the conversation is the one those programs have.
+// ---------------------------------------------------------------------------
+
+/// A client with `zwlr_layer_shell_v1` bound at 12 and a surface at 3.
+fn layer_client() -> Client {
+    let mut globals = Globals::new();
+    for (interface, version, role) in [
+        (&core::WL_COMPOSITOR, 6, Role::Compositor),
+        (&core::WL_SHM, 1, Role::Shm),
+        (&xdg_shell::XDG_WM_BASE, 6, Role::XdgWmBase),
+        (
+            &compositor_protocol::layer_shell::ZWLR_LAYER_SHELL_V1,
+            5,
+            Role::LayerShell,
+        ),
+    ] {
+        assert!(globals.add(interface, version, role).is_some());
+    }
+    let mut client = Client::new(globals);
+    let mut bytes = get_registry(2);
+    bytes.extend(bind(2, 1, "wl_compositor", 6, 4));
+    bytes.extend(bind(2, 2, "wl_shm", 1, 5));
+    bytes.extend(bind(2, 3, "xdg_wm_base", 6, 6));
+    bytes.extend(bind(2, 4, "zwlr_layer_shell_v1", 5, 12));
+    bytes.extend(create_surface(3));
+    assert_eq!(client.read(&bytes, &[]), bytes.len());
+    assert_eq!(client.fatal(), None);
+    let _ = sent(&mut client);
+    client
+}
+
+/// `zwlr_layer_shell_v1.get_layer_surface(id, surface, output, layer, ns)`.
+fn get_layer_surface(id: u32, surface: u32, layer: u32, namespace: &str) -> Vec<u8> {
+    request(
+        12,
+        compositor_protocol::layer_shell::zwlr_layer_shell_v1::request::GET_LAYER_SURFACE,
+        &[
+            ArgType::NewId,
+            ArgType::Object { nullable: false },
+            ArgType::Object { nullable: true },
+            ArgType::Uint,
+            ArgType::Str { nullable: false },
+        ],
+        &[
+            Arg::NewId(ObjectId(id)),
+            Arg::Object(ObjectId(surface)),
+            Arg::Object(ObjectId(0)),
+            Arg::Uint(layer),
+            Arg::Str(Some(namespace)),
+        ],
+    )
+}
+
+#[test]
+fn a_bar_says_what_it_is_and_is_told_what_size_to_be() {
+    use compositor_protocol::layer_shell::zwlr_layer_surface_v1 as layer;
+
+    let mut client = layer_client();
+    let mut bytes = get_layer_surface(13, 3, 2, "waybar");
+    // Anchored across the top, thirty pixels tall, reserving all thirty.
+    bytes.extend(request(
+        13,
+        layer::request::SET_ANCHOR,
+        &[ArgType::Uint],
+        &[Arg::Uint(
+            layer::anchor::TOP | layer::anchor::LEFT | layer::anchor::RIGHT,
+        )],
+    ));
+    bytes.extend(request(
+        13,
+        layer::request::SET_SIZE,
+        &[ArgType::Uint, ArgType::Uint],
+        &[Arg::Uint(0), Arg::Uint(30)],
+    ));
+    bytes.extend(request(
+        13,
+        layer::request::SET_EXCLUSIVE_ZONE,
+        &[ArgType::Int],
+        &[Arg::Int(30)],
+    ));
+    assert_eq!(client.read(&bytes, &[]), bytes.len());
+    assert_eq!(client.fatal(), None);
+
+    let surface = client
+        .layer_surface(ObjectId(13))
+        .expect("the layer surface");
+    assert_eq!(surface.namespace, "waybar");
+    assert_eq!(surface.layer, crate::Layer::Top);
+    assert_eq!(surface.size, (0, 30));
+    assert_eq!(surface.exclusive_zone, 30);
+    assert_eq!(surface.output, None, "a null output is `you choose`");
+
+    // The compositor was told it has something to place.
+    let events = client.take_events();
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            Event::LayerSurfaceCreated {
+                layer_surface,
+                surface
+            } if *layer_surface == ObjectId(13) && *surface == ObjectId(3)
+        )),
+        "{events:?}"
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, Event::LayerSurfaceChanged { .. }))
+            .count(),
+        3,
+        "one for each thing it said"
+    );
+
+    // And configuring it sends the size with a serial the client acks.
+    client.configure_layer(ObjectId(13), 1024, 30);
+    let events = sent(&mut client);
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert_eq!(events[0].opcode, layer::event::CONFIGURE);
+    let serial: u32 = events[0].args[0]
+        .trim_start_matches("Uint(")
+        .trim_end_matches(')')
+        .parse()
+        .expect("a serial");
+    assert_eq!(events[0].args[1..], ["Uint(1024)", "Uint(30)"]);
+
+    let ack = request(
+        13,
+        layer::request::ACK_CONFIGURE,
+        &[ArgType::Uint],
+        &[Arg::Uint(serial)],
+    );
+    assert_eq!(client.read(&ack, &[]), ack.len());
+    assert_eq!(client.fatal(), None);
+    assert!(
+        client
+            .layer_surface(ObjectId(13))
+            .is_some_and(|surface| surface.committed)
+    );
+}
+
+/// The protocol's own rule, and the one that catches a bar that forgot
+/// `set_size`: an axis the surface is not anchored to both edges of must
+/// have a size, because the compositor has nothing else to go on.
+#[test]
+fn a_surface_with_no_size_on_a_free_axis_is_refused() {
+    use compositor_protocol::layer_shell::zwlr_layer_surface_v1 as layer;
+
+    let mut client = layer_client();
+    let mut bytes = get_layer_surface(13, 3, 2, "forgetful");
+    bytes.extend(request(
+        13,
+        layer::request::SET_ANCHOR,
+        &[ArgType::Uint],
+        &[Arg::Uint(layer::anchor::TOP | layer::anchor::LEFT)],
+    ));
+    assert_eq!(client.read(&bytes, &[]), bytes.len());
+    assert_eq!(client.fatal(), None);
+
+    client.configure_layer(ObjectId(13), 1024, 0);
+    assert!(
+        matches!(
+            client.fatal(),
+            Some(Fatal::Interface { code, .. }) if *code == layer::error::INVALID_SIZE
+        ),
+        "{:?}",
+        client.fatal()
+    );
+}
+
+#[test]
+fn a_layer_that_is_not_one_of_the_four_is_refused() {
+    let mut client = layer_client();
+    let bytes = get_layer_surface(13, 3, 4, "nowhere");
+    let _ = client.read(&bytes, &[]);
+    assert!(
+        matches!(
+            client.fatal(),
+            Some(Fatal::Interface { code, .. })
+                if *code == compositor_protocol::layer_shell::zwlr_layer_shell_v1::error::INVALID_LAYER
+        ),
+        "{:?}",
+        client.fatal()
+    );
+}
+
+/// A surface may be given one role and no other, whichever protocol gives
+/// it.
+#[test]
+fn a_surface_that_is_already_a_window_cannot_also_be_a_bar() {
+    let mut client = layer_client();
+    let mut bytes = request(
+        6,
+        xdg_shell::xdg_wm_base::request::GET_XDG_SURFACE,
+        &[ArgType::NewId, ArgType::Object { nullable: false }],
+        &[Arg::NewId(ObjectId(8)), Arg::Object(ObjectId(3))],
+    );
+    bytes.extend(get_layer_surface(13, 3, 2, "greedy"));
+    let _ = client.read(&bytes, &[]);
+    assert!(
+        matches!(
+            client.fatal(),
+            Some(Fatal::Interface { code, .. })
+                if *code == compositor_protocol::layer_shell::zwlr_layer_shell_v1::error::ROLE
+        ),
+        "{:?}",
+        client.fatal()
+    );
+}
+
+/// An anchor with a bit the protocol does not define is `invalid_anchor`,
+/// rather than a surface placed by a bit nobody agreed on.
+#[test]
+fn an_anchor_with_an_undefined_bit_is_refused() {
+    use compositor_protocol::layer_shell::zwlr_layer_surface_v1 as layer;
+
+    let mut client = layer_client();
+    let mut bytes = get_layer_surface(13, 3, 2, "bits");
+    bytes.extend(request(
+        13,
+        layer::request::SET_ANCHOR,
+        &[ArgType::Uint],
+        &[Arg::Uint(0x10)],
+    ));
+    let _ = client.read(&bytes, &[]);
+    assert!(
+        matches!(
+            client.fatal(),
+            Some(Fatal::Interface { code, .. }) if *code == layer::error::INVALID_ANCHOR
+        ),
+        "{:?}",
+        client.fatal()
+    );
+}
+
+/// `closed` is final: the surface is gone from the compositor's side, and a
+/// second close says nothing.
+#[test]
+fn closing_a_layer_surface_says_so_once() {
+    use compositor_protocol::layer_shell::zwlr_layer_surface_v1 as layer;
+
+    let mut client = layer_client();
+    let bytes = get_layer_surface(13, 3, 0, "wallpaper");
+    assert_eq!(client.read(&bytes, &[]), bytes.len());
+    let _ = sent(&mut client);
+
+    client.close_layer(ObjectId(13));
+    let events = sent(&mut client);
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].opcode, layer::event::CLOSED);
+    assert!(client.layer_surface(ObjectId(13)).is_none());
+
+    client.close_layer(ObjectId(13));
+    assert!(sent(&mut client).is_empty());
+}
