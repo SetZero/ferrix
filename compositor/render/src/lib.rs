@@ -88,6 +88,7 @@
 
 #![forbid(unsafe_code)]
 
+mod blur;
 mod buffer;
 mod canvas;
 mod damage;
@@ -102,7 +103,7 @@ mod tests;
 use core::fmt;
 
 pub use buffer::{Format, Surface, Target};
-pub use canvas::{Canvas, MAX_SIZE};
+pub use canvas::{Canvas, MAX_SIZE, Shadow};
 pub use compositor_config::Color;
 pub use compositor_layout::Rect;
 pub use damage::Damage;

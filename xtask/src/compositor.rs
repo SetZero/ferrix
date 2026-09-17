@@ -106,7 +106,7 @@ const BAR_EXPECTED: (&str, &str) = (
 /// The picture Hyprland's two window decorations make, which the third boot
 /// requires.
 const DECORATED_EXPECTED: (&str, &str) = (
-    "corners cut and the unfocused window see-through",
+    "corners cut, a shadow under each window, and the unfocused one dimmed",
     "compositor/render/tests/data/decorated-two-clients.xrle",
 );
 
@@ -114,8 +114,15 @@ const DECORATED_EXPECTED: (&str, &str) = (
 /// `decoration:rounding` and `decoration:inactive_opacity` set.
 const DECORATED_CONFIG: &str = "\
 # Carried into the initramfs by `cargo xtask test-compositor`.
+# The same settings `compositor/render`'s `decorated_style` blesses the
+# picture with; a line changed here and not there is a picture that cannot
+# match.
 decoration:rounding = 12
 decoration:inactive_opacity = 0.6
+decoration:shadow:range = 12
+decoration:shadow:render_power = 2
+decoration:dim_inactive = 1
+decoration:dim_strength = 0.4
 exec-once = /bin/pattern checkerboard one
 exec-once = /bin/pattern gradient two
 ";
@@ -496,7 +503,7 @@ pub(crate) fn test_compositor(args: &Args) -> Result<()> {
                 BAR_EXPECTED,
             ),
             (
-                "rounded corners and a see-through window",
+                "rounded corners, a shadow, a dimmed window and a blurred background",
                 DECORATED_CONFIG,
                 DECORATED_EXPECTED,
             ),

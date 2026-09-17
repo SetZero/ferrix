@@ -216,6 +216,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
     let mut sources: BTreeMap<WindowId, Source> = BTreeMap::new();
     let mut placed_layers: Vec<crate::frame::Placed> = Vec::new();
     let mut settling = false;
+    let mut slowest = Duration::ZERO;
     let mut next_window = 1u32;
     let mut drawn = 0u32;
     // The most windows at once, not the count at the end: a client that ran
@@ -422,6 +423,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
             };
             // Where each window *is*, rather than where the tiling put it.
             let output = &animations.follow(output, millis);
+            let began = Instant::now();
             let full = Damage::full(width, height);
             let mut target = crate::frame::Output {
                 canvas: &mut canvas,
@@ -431,6 +433,11 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
             };
             crate::frame::draw(&mut target, output, &slots, &sources, &placed_layers, &full)?;
             drawn = drawn.saturating_add(1);
+            // The slowest frame, which is the bound `docs/ROADMAP.md` asks
+            // each software effect to have: blur is the expensive one, and a
+            // number measured on the machine that ran it is worth more than
+            // one somebody hoped for.
+            slowest = slowest.max(began.elapsed());
             if drawn == 1 {
                 // The screen is up and the first frame is on it. This is what
                 // a watcher waits for, in the shape `compositor/blank`'s
@@ -453,9 +460,10 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
         .map_or((0, 0), crate::control::Events::counts);
     Ok(format!(
         "hyprix: {} {display} frames {drawn} windows {} most {most} subscribers {subscribers} \
-         events {told}",
+         events {told} slowest frame {} us",
         backend.describe(),
-        sources.len()
+        sources.len(),
+        slowest.as_micros()
     ))
 }
 

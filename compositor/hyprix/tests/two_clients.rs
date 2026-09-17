@@ -838,7 +838,10 @@ fn once_settled(edges: &[usize]) -> &[usize] {
 fn a_window_moves_through_the_frames_between_two_layouts() {
     let frames = frames_after(
         "animated",
-        "animation = windows, 1, 8, default\n",
+        // The blur off: this test counts frames, and a dual-Kawase over a
+        // translucent window in a debug build costs more per frame than the
+        // animation it is trying to watch.
+        "animation = windows, 1, 8, default\ndecoration:blur:enabled = 0\n",
         "dispatch movewindow l",
     );
     assert!(frames.len() > 10, "only {} frames", frames.len());
@@ -901,7 +904,7 @@ fn a_window_moves_through_the_frames_between_two_layouts() {
 fn animations_can_be_turned_off() {
     let frames = frames_after(
         "instant",
-        "animations:enabled = 0\n",
+        "animations:enabled = 0\ndecoration:blur:enabled = 0\n",
         "dispatch movewindow l",
     );
     let row = HEIGHT as usize / 4;

@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use compositor_config::Config;
 use compositor_layout::{MonitorLayout, Placed, WindowId};
 
-use crate::{Canvas, Color, Damage, Rect, Surface};
+use crate::{Canvas, Color, Damage, Format, Rect, Shadow, Surface};
 
 /// The colours a frame is drawn in, and the decorations it is drawn with.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -31,6 +31,16 @@ pub struct Style {
     /// Hyprland keeps apart because a translucent fullscreen window shows
     /// the background and nothing else.
     pub fullscreen_opacity: f32,
+    /// `decoration:shadow:*`, or `None` when `shadow:enabled` is off.
+    pub shadow: Option<Shadow>,
+    /// `decoration:dim_strength` when `decoration:dim_inactive` is on: how
+    /// much black is laid over a window that is not focused. Zero when it is
+    /// off.
+    pub dim: f32,
+    /// `decoration:blur:size` and `blur:passes`, or `None` when
+    /// `blur:enabled` is off: how much of what is behind a translucent
+    /// window is blurred, and how many times.
+    pub blur: Option<(i64, u32)>,
 }
 
 impl Style {
@@ -55,14 +65,41 @@ impl Style {
             let value = config.float(name).unwrap_or(1.0) as f32;
             value.clamp(0.0, 1.0)
         };
+        let rounding = config.int("decoration:rounding").unwrap_or(0).max(0);
         Self {
             background: Self::BACKGROUND,
             active_border: first("general:col.active_border", 0xFFFF_FFFF),
             inactive_border: first("general:col.inactive_border", 0xFF44_4444),
-            rounding: config.int("decoration:rounding").unwrap_or(0).max(0),
+            rounding,
             active_opacity: opacity("decoration:active_opacity"),
             inactive_opacity: opacity("decoration:inactive_opacity"),
             fullscreen_opacity: opacity("decoration:fullscreen_opacity"),
+            shadow: config
+                .bool("decoration:shadow:enabled")
+                .unwrap_or(true)
+                .then(|| Shadow {
+                    rounding,
+                    range: config.int("decoration:shadow:range").unwrap_or(4).max(0),
+                    power: u32::try_from(config.int("decoration:shadow:render_power").unwrap_or(3))
+                        .unwrap_or(3),
+                    color: first("decoration:shadow:color", 0xEE1A_1A1A),
+                    offset: offset(config.str("decoration:shadow:offset").unwrap_or("")),
+                }),
+            dim: if config.bool("decoration:dim_inactive").unwrap_or(false) {
+                opacity("decoration:dim_strength")
+            } else {
+                0.0
+            },
+            blur: config
+                .bool("decoration:blur:enabled")
+                .unwrap_or(true)
+                .then(|| {
+                    (
+                        config.int("decoration:blur:size").unwrap_or(8).max(0),
+                        u32::try_from(config.int("decoration:blur:passes").unwrap_or(1))
+                            .unwrap_or(1),
+                    )
+                }),
         }
     }
 
@@ -86,6 +123,28 @@ impl Default for Style {
 }
 
 impl Eq for Style {}
+
+/// `shadow:offset`, which Hyprland reads as a vector: two numbers separated
+/// by a space or a comma. Anything else is no offset, which is its default.
+fn offset(text: &str) -> (i64, i64) {
+    let mut parts = text
+        .split([' ', ','])
+        .map(str::trim)
+        .filter(|part| !part.is_empty());
+    let number = |part: Option<&str>| {
+        part.and_then(|text| text.parse::<f64>().ok())
+            .filter(|value| value.is_finite())
+            .map_or(0, |value| {
+                #[expect(
+                    clippy::cast_possible_truncation,
+                    reason = "Hyprland clamps the offset to ±250; an i64 holds it"
+                )]
+                let whole = value.round() as i64;
+                whole.clamp(-250, 250)
+            })
+    };
+    (number(parts.next()), number(parts.next()))
+}
 
 /// A window's client rectangle with its border around it, in the layout's
 /// global coordinates.
@@ -164,6 +223,22 @@ pub fn render_with_layers(
         } else {
             style.inactive_border
         };
+        // The shadow first, under the border and the window: Hyprland draws
+        // it as a decoration behind them and does not cut the window's own
+        // shape out of it.
+        if let Some(shadow) = style.shadow.as_ref() {
+            let border = placed.border.max(0);
+            canvas.shadow(
+                Rect::new(
+                    rect.x.saturating_sub(border),
+                    rect.y.saturating_sub(border),
+                    rect.width.saturating_add(border.saturating_mul(2)),
+                    rect.height.saturating_add(border.saturating_mul(2)),
+                ),
+                shadow,
+                damage,
+            );
+        }
         // A rounded window's border follows its corners, so it cannot be
         // four strips: Hyprland draws the outer rounding as the window's
         // plus the border's width, and the surface goes inside it. A square
@@ -187,6 +262,20 @@ pub fn render_with_layers(
         } else {
             canvas.border(rect, placed.border, color, damage);
         }
+        // What is behind a window that can be seen through, blurred. Only
+        // for a window that can be: blurring behind an opaque one costs a
+        // pyramid of passes and changes not one pixel of the frame. A
+        // surface in a format with alpha may be translucent anywhere, and a
+        // window drawn at less than full opacity is translucent everywhere.
+        let translucent = surfaces
+            .get(&placed.window)
+            .is_some_and(|surface| surface.format() == Format::Argb8888)
+            || style.opacity(placed.focused, placed.fullscreen) < 1.0;
+        if let Some((size, passes)) = style.blur
+            && translucent
+        {
+            canvas.blur(rect, style.rounding, size, passes, damage);
+        }
         if let Some(surface) = surfaces.get(&placed.window) {
             // Scaled, which is the exact path when the surface is already
             // the rectangle's size -- which it is for every window that is
@@ -198,6 +287,18 @@ pub fn render_with_layers(
                 style.opacity(placed.focused, placed.fullscreen),
                 damage,
             );
+        }
+        // `decoration:dim_inactive`: black over a window that is not
+        // focused, at `dim_strength`. Over the surface, because it dims the
+        // window and not the background behind it.
+        if style.dim > 0.0 && !placed.focused {
+            #[expect(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                reason = "an opacity between zero and one becomes a byte of alpha"
+            )]
+            let alpha = (style.dim.clamp(0.0, 1.0) * 255.0).round() as u32;
+            canvas.fill_rounded(rect, style.rounding, Color(alpha << 24), damage);
         }
     }
     for layer in layers.iter().filter(|layer| layer.above) {

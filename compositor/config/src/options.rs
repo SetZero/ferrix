@@ -81,10 +81,22 @@ pub(crate) static OPTIONS: &[(&str, Initial)] = &[
     ("binds:allow_workspace_cycles", Int(0)),
     ("binds:workspace_back_and_forth", Int(0)),
     ("decoration:active_opacity", Float(1.0)),
+    ("decoration:blur:enabled", Int(1)),
+    ("decoration:blur:passes", Int(1)),
+    ("decoration:blur:size", Int(8)),
     ("decoration:dim_inactive", Int(0)),
+    ("decoration:dim_strength", Float(0.5)),
     ("decoration:fullscreen_opacity", Float(1.0)),
     ("decoration:inactive_opacity", Float(1.0)),
     ("decoration:rounding", Int(0)),
+    ("decoration:shadow:color", GradientOf(0xee1a_1a1a)),
+    ("decoration:shadow:enabled", Int(1)),
+    // A vector, which this configuration has no type for; it is read as the
+    // two numbers `compositor/render` parses out of it, as Hyprland reads
+    // `0 0` and `0, 0` alike.
+    ("decoration:shadow:offset", Str("0 0")),
+    ("decoration:shadow:range", Int(4)),
+    ("decoration:shadow:render_power", Int(3)),
     ("dwindle:default_split_ratio", Float(1.0)),
     ("dwindle:force_split", Int(0)),
     ("dwindle:permanent_direction_override", Int(0)),

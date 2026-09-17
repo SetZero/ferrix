@@ -348,6 +348,157 @@ impl Canvas {
             .collect()
     }
 
+    /// Draw a window's drop shadow: `rect` grown by `range` on every side,
+    /// with `color` fading out over that distance.
+    ///
+    /// A port of Hyprland's `shadow.glsl` (`getShadow` and
+    /// `pixAlphaRoundedDistance`), which is the only description of the
+    /// shape there is. Inside the box, each pixel's alpha is scaled by:
+    ///
+    /// * **In a corner** -- past the rounded corner's centre on both axes --
+    ///   by `((radius - d) / range)^power`, with `d` the distance to that
+    ///   centre and `radius` the range plus the window's rounding; nothing
+    ///   further out than `radius`.
+    /// * **Along an edge**, by `(smallest / range)^power`, with `smallest`
+    ///   the distance to the nearest edge of the shadow's own box.
+    /// * **Anywhere else**, not at all.
+    ///
+    /// The window is drawn over it afterwards, as Hyprland draws it: this
+    /// does not cut the window's own shape out, because nothing shows
+    /// through an opaque window and a translucent one shows its shadow in
+    /// Hyprland too.
+    ///
+    /// This is the one place in the crate that blends a pixel by hand. It
+    /// has to be: every pixel has an alpha of its own, and tiny-skia's
+    /// shaders take one colour for a whole rectangle. The arithmetic is the
+    /// same source-over its `f32` pipeline does -- `s + d × (255 − a) / 255`,
+    /// rounded to the nearest byte -- so a shadow and a fill of the same
+    /// colour agree.
+    pub fn shadow(&mut self, rect: Rect, shadow: &Shadow, damage: &Damage) {
+        if shadow.range <= 0 || shadow.color.alpha() == 0 || is_empty(rect) {
+            return;
+        }
+        let full = Rect::new(
+            rect.x
+                .saturating_sub(shadow.range)
+                .saturating_add(shadow.offset.0),
+            rect.y
+                .saturating_sub(shadow.range)
+                .saturating_add(shadow.offset.1),
+            rect.width.saturating_add(shadow.range.saturating_mul(2)),
+            rect.height.saturating_add(shadow.range.saturating_mul(2)),
+        );
+        let clips = self.clips(full, damage);
+        if clips.is_empty() {
+            return;
+        }
+        let shape = Falloff::new(full, shadow.rounding, shadow.range, shadow.power);
+        let alpha = f32::from(shadow.color.alpha()) / 255.0;
+        for clip in clips {
+            for y in clip.y..clip.bottom() {
+                self.shadow_row(clip, y, full, &shape, shadow.color, alpha);
+            }
+            self.damage.add(clip);
+        }
+    }
+
+    /// One row of a shadow, which is where its pixels are actually written.
+    fn shadow_row(
+        &mut self,
+        clip: Rect,
+        y: i64,
+        full: Rect,
+        shape: &Falloff,
+        color: Color,
+        alpha: f32,
+    ) {
+        // The canvas holds blue in tiny-skia's red byte; the module comment
+        // says why.
+        let colour = [color.blue(), color.green(), color.red()];
+        let width = index(i64::from(self.width()));
+        let row = index(y) * width;
+        for x in clip.x..clip.right() {
+            let factor = shape.at(x - full.x, y - full.y) * alpha;
+            if factor > 0.0
+                && let Some(pixel) = self
+                    .pixmap
+                    .data_mut()
+                    .get_mut((row + index(x)) * 4..(row + index(x)) * 4 + 4)
+            {
+                over(pixel, colour, factor);
+            }
+        }
+    }
+
+    /// Blur what has already been drawn inside `rect`, in place.
+    ///
+    /// Hyprland blurs what is *behind* a translucent window: the frame so
+    /// far is taken, blurred, and put back before the window is drawn over
+    /// it. So this reads the canvas's own pixels and writes them back, and
+    /// it has to be called between the things behind and the thing in front.
+    ///
+    /// The region read is `rect` grown by the blur's reach on every side,
+    /// because a blur that only read what it writes would pull the frame's
+    /// own edge inwards and leave a bright rim; only `rect`'s rounded shape
+    /// is written back. Nothing outside the canvas is read: the edges are
+    /// clamped, as `GL_CLAMP_TO_EDGE` clamps them.
+    pub fn blur(&mut self, rect: Rect, rounding: i64, size: i64, passes: u32, damage: &Damage) {
+        if size <= 0 || passes == 0 || is_empty(rect) {
+            return;
+        }
+        // The reach: each pass doubles the scale the offsets apply at.
+        let reach = size.saturating_mul(1_i64 << passes.min(6));
+        let Some(read) = intersect(
+            Rect::new(
+                rect.x.saturating_sub(reach),
+                rect.y.saturating_sub(reach),
+                rect.width.saturating_add(reach.saturating_mul(2)),
+                rect.height.saturating_add(reach.saturating_mul(2)),
+            ),
+            self.bounds(),
+        ) else {
+            return;
+        };
+        let clips = if rounding > 0 {
+            self.rounded_clips(rect, rounding, damage)
+        } else {
+            self.clips(rect, damage)
+        };
+        if clips.is_empty() {
+            return;
+        }
+
+        let (wide, tall) = (index(read.width), index(read.height));
+        let stride = index(i64::from(self.width())) * 4;
+        let mut block = vec![0_u8; wide * tall * 4];
+        for row in 0..tall {
+            let from = (index(read.y) + row) * stride + index(read.x) * 4;
+            let to = row * wide * 4;
+            if let (Some(source), Some(target)) = (
+                self.pixmap.data().get(from..from + wide * 4),
+                block.get_mut(to..to + wide * 4),
+            ) {
+                target.copy_from_slice(source);
+            }
+        }
+        crate::blur::blur(&mut block, wide, tall, size, passes);
+
+        for clip in clips {
+            for y in clip.y..clip.bottom() {
+                let from = (index(y - read.y) * wide + index(clip.x - read.x)) * 4;
+                let to = index(y) * stride + index(clip.x) * 4;
+                let len = index(clip.width) * 4;
+                if let (Some(source), Some(target)) = (
+                    block.get(from..from + len),
+                    self.pixmap.data_mut().get_mut(to..to + len),
+                ) {
+                    target.copy_from_slice(source);
+                }
+            }
+            self.damage.add(clip);
+        }
+    }
+
     /// Fill `rect` with `color` and its corners cut to `radius`: the shape a
     /// rounded window's border is drawn as, before its surface is put inside
     /// it.
@@ -514,4 +665,108 @@ fn opaque_rows(surface: &Surface<'_>) -> Vec<u8> {
             ]
         })
         .collect()
+}
+
+/// What a window's drop shadow is: Hyprland's `decoration:shadow:*`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Shadow {
+    /// The window's own corner rounding, which the shadow follows.
+    pub rounding: i64,
+    /// `shadow:range`: how far it reaches past the window, in pixels.
+    pub range: i64,
+    /// `shadow:render_power`: how fast it fades, 1 to 4.
+    pub power: u32,
+    /// `shadow:color`, whose alpha is the shadow's own.
+    pub color: Color,
+    /// `shadow:offset`: how far the whole shadow is moved.
+    pub offset: (i64, i64),
+}
+
+/// A shadow's alpha at each point of its box, as `shadow.glsl` computes it.
+#[derive(Clone, Copy, Debug)]
+struct Falloff {
+    size: (f32, f32),
+    /// The rounded corner's centre, inset from the box by `range + rounding`
+    /// on both axes: `TOPLEFT` in `renderRoundedShadow`.
+    inset: f32,
+    range: f32,
+    power: i32,
+}
+
+impl Falloff {
+    fn new(full: Rect, rounding: i64, range: i64, power: u32) -> Self {
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "a window's size and a shadow's range, in pixels"
+        )]
+        Self {
+            size: (full.width as f32, full.height as f32),
+            inset: (range.saturating_add(rounding.max(0))) as f32,
+            range: range as f32,
+            // Hyprland clamps the power to 1..=4 before it reaches the
+            // shader.
+            power: power.clamp(1, 4) as i32,
+        }
+    }
+
+    /// The alpha at `(x, y)` inside the box, 0 to 1.
+    fn at(&self, x: i64, y: i64) -> f32 {
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "a position inside a shadow's box"
+        )]
+        let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
+        let (right, bottom) = (self.size.0 - self.inset, self.size.1 - self.inset);
+        let radius = self.inset;
+
+        // The four corners, which are the only places both axes are past
+        // the rounding's centre.
+        let corner = match (px < self.inset, px > right, py < self.inset, py > bottom) {
+            (true, _, true, _) => Some((self.inset, self.inset)),
+            (true, _, _, true) => Some((self.inset, bottom)),
+            (_, true, true, _) => Some((right, self.inset)),
+            (_, true, _, true) => Some((right, bottom)),
+            _ => None,
+        };
+        if let Some((cx, cy)) = corner {
+            let distance = ((px - cx).powi(2) + (py - cy).powi(2)).sqrt();
+            return rounded_distance(distance, radius, self.range, self.power);
+        }
+
+        // An edge: the distance to the nearest side of the shadow's own box.
+        let smallest = py.min(self.size.1 - py).min(px).min(self.size.0 - px);
+        if smallest < self.range {
+            return (smallest / self.range).max(0.0).powi(self.power);
+        }
+        1.0
+    }
+}
+
+/// `pixAlphaRoundedDistance` from `shadow.glsl`.
+fn rounded_distance(distance: f32, radius: f32, range: f32, power: i32) -> f32 {
+    if distance > radius {
+        return 0.0;
+    }
+    if distance > radius - range {
+        return ((radius - distance) / range).clamp(0.0, 1.0).powi(power);
+    }
+    1.0
+}
+
+/// Blend one premultiplied colour over one canvas pixel.
+///
+/// `colour` is not premultiplied; `alpha` is how much of it shows. The
+/// arithmetic is tiny-skia's source-over, rounded the way its `f32` pipeline
+/// rounds, so a shadow and a fill of the same colour agree to the byte.
+fn over(pixel: &mut [u8], colour: [u8; 3], alpha: f32) {
+    let alpha = alpha.clamp(0.0, 1.0);
+    let keep = 1.0 - alpha;
+    for (at, channel) in colour.iter().enumerate() {
+        let Some(slot) = pixel.get_mut(at) else {
+            continue;
+        };
+        let source = f32::from(*channel) * alpha;
+        let blended = source + f32::from(*slot) * keep;
+        *slot = blended.round().clamp(0.0, 255.0) as u8;
+    }
 }

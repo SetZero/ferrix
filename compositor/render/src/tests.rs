@@ -11,6 +11,18 @@ use crate::{
 
 const BG: u32 = 0x0020_4060;
 
+/// `Style::default()` with the drop shadow off.
+///
+/// Hyprland has shadows on by default, so a default frame has them; a test
+/// that asks what colour a gap or a border is has to say it wants the one
+/// with nothing over it, or it is asking about the shadow.
+fn unshadowed() -> Style {
+    Style {
+        shadow: None,
+        ..Style::default()
+    }
+}
+
 /// An `XRGB8888` value as the canvas presents it, X byte `0xFF`.
 const fn shown(xrgb: u32) -> u32 {
     xrgb | 0xFF00_0000
@@ -96,6 +108,11 @@ fn surfaces(
 /// writes, so the picture a keybind makes and the picture this blesses come
 /// from one piece of code.
 fn frame_after(after: &[(&str, &str)]) -> Vec<u8> {
+    frame_with(&Style::default(), after)
+}
+
+/// The same, drawn with `style`.
+fn frame_with(style: &Style, after: &[(&str, &str)]) -> Vec<u8> {
     let (mut state, mut layout) = two_clients();
     for (name, argument) in after {
         let changes = state.dispatch_str(name, argument).unwrap();
@@ -109,7 +126,7 @@ fn frame_after(after: &[(&str, &str)]) -> Vec<u8> {
         &mut canvas,
         &layout,
         (0, 0),
-        &Style::default(),
+        style,
         &surfaces(&buffers),
         &full,
     );
@@ -216,12 +233,15 @@ fn a_bar_takes_its_strip_and_the_windows_tile_under_it() {
 /// The same two clients with Hyprland's two decorations on: corners cut to
 /// `decoration:rounding` and the unfocused window at
 /// `decoration:inactive_opacity`.
-fn decorated_frame() -> Vec<u8> {
-    let (_, layout) = two_clients();
-    let buffers = client_buffers(&layout);
+fn decorated_style() -> Style {
     let config = parse(
         "test",
-        "decoration:rounding = 12\ndecoration:inactive_opacity = 0.6\n",
+        "decoration:rounding = 12\n\
+         decoration:inactive_opacity = 0.6\n\
+         decoration:shadow:range = 12\n\
+         decoration:shadow:render_power = 2\n\
+         decoration:dim_inactive = 1\n\
+         decoration:dim_strength = 0.4\n",
         &mut NoSources,
     )
     .config;
@@ -229,18 +249,124 @@ fn decorated_frame() -> Vec<u8> {
     assert_eq!(style.rounding, 12);
     assert!((style.inactive_opacity - 0.6).abs() < 0.001);
     assert!((style.active_opacity - 1.0).abs() < f32::EPSILON);
-
-    let mut canvas = Canvas::new(WIDTH, HEIGHT).unwrap();
-    let full = Damage::full(WIDTH, HEIGHT);
-    let _ = render(
-        &mut canvas,
-        &layout,
-        (0, 0),
-        &style,
-        &surfaces(&buffers),
-        &full,
+    assert!((style.dim - 0.4).abs() < 0.001);
+    let shadow = style.shadow.expect("shadows are on by default");
+    assert_eq!((shadow.range, shadow.power), (12, 2));
+    assert_eq!(shadow.color, Color(0xEE1A_1A1A), "Hyprland's own default");
+    assert_eq!(
+        shadow.rounding, 12,
+        "the shadow follows the window's corners"
     );
-    canvas.data().to_vec()
+    style
+}
+
+fn decorated_frame() -> Vec<u8> {
+    frame_with(&decorated_style(), &[])
+}
+
+/// The shadow's shape, against the rules `shadow.glsl` has: nothing past the
+/// range, and a falloff towards the window that never turns back.
+#[test]
+fn a_shadow_fades_out_over_its_range_and_no_further() {
+    let (_, layout) = two_clients();
+    let placed = layout
+        .windows
+        .iter()
+        .find(|placed| placed.focused)
+        .copied()
+        .unwrap();
+    let frame = decorated_frame();
+    let at = |x: i64, y: i64| -> u32 {
+        let start = ((y * i64::from(WIDTH) + x) * 4) as usize;
+        u32::from_le_bytes([
+            frame[start],
+            frame[start + 1],
+            frame[start + 2],
+            frame[start + 3],
+        ])
+    };
+    let background = shown(Style::default().background.0 & 0x00FF_FFFF);
+    // Above the focused window, at its horizontal middle: the only shadow
+    // that can reach there is its own, since the other window is beside it
+    // and 20 pixels is not the distance between them.
+    let range = decorated_style().shadow.expect("a shadow").range;
+    let top = placed.rect.y - placed.border.max(0);
+    let middle = placed.rect.x + placed.rect.width / 2;
+    assert!(top - range > 0, "the window is too near the top edge");
+
+    assert_eq!(
+        at(middle, top - range - 1),
+        background,
+        "the shadow reached past its range"
+    );
+    // Near the window it is plainly there. One pixel inside the range it is
+    // not: a power of two puts the alpha at `(1/12)² × 0.93`, which is less
+    // than half a step of the background's grey and rounds away. That is
+    // what a falloff is, and a test that asked for a visible pixel at the
+    // far edge would be asking the shadow to have a hard edge.
+    assert_ne!(at(middle, top - 2), background, "there is no shadow");
+
+    // Each step towards the window is at least as far towards the shadow's
+    // own colour as the one before. Towards, not darker: Hyprland's default
+    // shadow is `0xee1a1a1a` and its background `0x111111`, so its shadow is
+    // the lighter of the two and a test that asked for darker would be
+    // asking about this tree's background rather than about the falloff.
+    let greys: Vec<u32> = (1..range)
+        .map(|step| at(middle, top - range + step) & 0xFF)
+        .collect();
+    assert!(
+        greys.windows(2).all(|pair| pair[1] >= pair[0]),
+        "the falloff is not monotonic: {greys:?}"
+    );
+    assert_eq!(
+        greys.iter().min(),
+        greys.first(),
+        "it does not start at the background: {greys:?}"
+    );
+    assert!(
+        greys.iter().min() < greys.iter().max(),
+        "the shadow is flat: {greys:?}"
+    );
+}
+
+/// `decoration:dim_inactive` lays black over a window that is not focused,
+/// and over no other.
+#[test]
+fn dimming_darkens_the_unfocused_window_alone() {
+    let (_, layout) = two_clients();
+    let frame = decorated_frame();
+    let plain = frame_with(
+        &Style {
+            dim: 0.0,
+            ..decorated_style()
+        },
+        &[],
+    );
+    let at = |bytes: &[u8], x: i64, y: i64| -> u32 {
+        let start = ((y * i64::from(WIDTH) + x) * 4) as usize;
+        u32::from_le_bytes([
+            bytes[start],
+            bytes[start + 1],
+            bytes[start + 2],
+            bytes[start + 3],
+        ])
+    };
+    for placed in &layout.windows {
+        let (x, y) = (
+            placed.rect.x + placed.rect.width / 2,
+            placed.rect.y + placed.rect.height / 2,
+        );
+        let (dimmed, undimmed) = (at(&frame, x, y), at(&plain, x, y));
+        if placed.focused {
+            assert_eq!(dimmed, undimmed, "the focused window was dimmed");
+        } else {
+            assert_ne!(dimmed, undimmed, "the unfocused window was not dimmed");
+            assert!(
+                (dimmed & 0xFF) <= (undimmed & 0xFF),
+                "dimming made it lighter"
+            );
+        }
+    }
 }
 
 #[test]
@@ -277,7 +403,15 @@ fn a_rounded_corner_shows_what_is_behind_it() {
     let outer_y = (placed.rect.y - border) as u32;
     let middle = outer_x + (placed.rect.width / 2) as u32;
 
-    let bytes = decorated_frame();
+    // With the shadow off: a corner that is cut shows the background, and a
+    // shadow over it would be neither.
+    let bytes = frame_with(
+        &Style {
+            shadow: None,
+            ..decorated_style()
+        },
+        &[],
+    );
     let at = |x: u32, y: u32| -> u32 {
         let start = ((y * WIDTH + x) * 4) as usize;
         u32::from_le_bytes([
@@ -304,7 +438,7 @@ fn a_rounded_corner_shows_what_is_behind_it() {
 
     // With no rounding the corner is the border, which is what makes the
     // check above worth having.
-    let square = two_client_frame();
+    let square = frame_with(&unshadowed(), &[]);
     let start = ((outer_y * WIDTH + outer_x) * 4) as usize;
     assert_eq!(
         u32::from_le_bytes([
@@ -422,12 +556,12 @@ fn the_tiled_frame_has_its_gaps_and_borders_on_exact_pixels() {
         rects,
         [Rect::new(21, 21, 485, 726), Rect::new(518, 21, 485, 726)]
     );
-    let frame = two_client_frame();
+    let frame = frame_with(&unshadowed(), &[]);
     let at = |x: u32, y: u32| {
         let offset = (y * WIDTH + x) as usize * 4;
         u32::from_le_bytes(frame[offset..offset + 4].try_into().unwrap())
     };
-    let style = Style::default();
+    let style = unshadowed();
     let bg = style.background.0 | 0xFF00_0000;
     let inactive = style.inactive_border.0;
     let active = style.active_border.0;
@@ -873,7 +1007,7 @@ fn a_layout_on_a_monitor_away_from_the_origin_is_drawn_in_its_coordinates() {
         &mut canvas,
         &layout,
         (1920, 100),
-        &Style::default(),
+        &unshadowed(),
         &BTreeMap::new(),
         &Damage::full(200, 100),
     );
@@ -959,4 +1093,113 @@ fn the_patterns_are_what_their_docs_say() {
                 .all(|shift| (pixel >> shift) & 0xFF <= alpha)
         );
     }
+}
+
+/// The blur is behind a window that can be seen through and nowhere else.
+///
+/// Every pixel it changes is inside the gradient's rectangle: the gradient
+/// is the only surface with an alpha channel, and blurring behind an opaque
+/// window costs a pyramid of passes and changes nothing anybody can see.
+#[test]
+fn only_a_translucent_window_has_its_background_blurred() {
+    let (_, layout) = two_clients();
+    let style = Style {
+        blur: Some((16, 2)),
+        shadow: None,
+        dim: 0.0,
+        ..Style::default()
+    };
+    let blurred = frame_with(&style, &[]);
+    let plain = frame_with(
+        &Style {
+            blur: None,
+            ..style
+        },
+        &[],
+    );
+
+    let inside = |placed: &compositor_layout::Placed, x: i64, y: i64| {
+        x >= placed.rect.x
+            && x < placed.rect.x + placed.rect.width
+            && y >= placed.rect.y
+            && y < placed.rect.y + placed.rect.height
+    };
+    let gradient = layout
+        .windows
+        .iter()
+        .find(|placed| placed.window == GRADIENT)
+        .copied()
+        .unwrap();
+    let checkerboard = layout
+        .windows
+        .iter()
+        .find(|placed| placed.window == CHECKERBOARD)
+        .copied()
+        .unwrap();
+
+    let mut changed = 0_u32;
+    let mut stray = 0_u32;
+    let mut over_the_opaque = 0_u32;
+    for y in 0..i64::from(HEIGHT) {
+        for x in 0..i64::from(WIDTH) {
+            let at = ((y * i64::from(WIDTH) + x) * 4) as usize;
+            if blurred.get(at..at + 4) == plain.get(at..at + 4) {
+                continue;
+            }
+            changed += 1;
+            if inside(&checkerboard, x, y) {
+                over_the_opaque += 1;
+            } else if !inside(&gradient, x, y) {
+                stray += 1;
+            }
+        }
+    }
+    assert!(changed > 1000, "the blur changed only {changed} pixels");
+    assert_eq!(
+        over_the_opaque, 0,
+        "the opaque window's pixels were blurred"
+    );
+    assert_eq!(stray, 0, "{stray} pixels outside any window changed");
+}
+
+/// And over something that is not flat, it blurs: the canvas's own pixels,
+/// which is where a window over another window would read from.
+#[test]
+fn the_canvas_blurs_what_is_drawn_on_it() {
+    let mut canvas = Canvas::new(128, 128).unwrap();
+    let full = Damage::full(128, 128);
+    canvas.clear(Color(0xFF00_0000), &full);
+    canvas.fill(Rect::new(32, 32, 64, 64), Color(0xFFFF_FFFF), &full);
+    let before: Vec<u32> = (0..128).map(|x| canvas.pixel(x, 64).unwrap()).collect();
+
+    canvas.blur(Rect::new(0, 0, 128, 128), 0, 8, 2, &full);
+    let after: Vec<u32> = (0..128).map(|x| canvas.pixel(x, 64).unwrap()).collect();
+    assert_ne!(before, after, "nothing was blurred");
+
+    // The hard edge at 32 became a gradient: the pixel just outside the
+    // square is no longer the background it was.
+    assert_eq!(before[30] & 0xFF, 0x00);
+    assert!(after[30] & 0xFF > 0, "the edge did not spread outwards");
+    // And the frame is still opaque, which presenting depends on.
+    assert!(after.iter().all(|pixel| pixel >> 24 == 0xFF));
+}
+
+/// `blur:enabled = 0` turns it off, and then the frame is the one with no
+/// blur at all -- to the byte, which is what a compositor that skipped the
+/// pass rather than running it with no effect produces.
+#[test]
+fn the_blur_can_be_turned_off() {
+    let config = parse("test", "decoration:blur:enabled = 0\n", &mut NoSources).config;
+    let style = Style::from_config(&config);
+    assert_eq!(style.blur, None);
+    assert_eq!(
+        frame_with(&style, &[]),
+        frame_with(
+            &Style {
+                blur: None,
+                ..Style::default()
+            },
+            &[]
+        )
+    );
 }

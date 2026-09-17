@@ -4158,6 +4158,38 @@ bezier curves, rounded corners, blur and shadows, dimming and opacity rules,
 special workspaces, groups, multi-monitor with per-monitor workspaces and
 scaling, the plugin-shaped extension points, and the rest of `hyprctl`.
 
+**Begun — shadows, dimming and blur (2026-09-17).** The three decorations
+that needed no GPU, each ported from the shader that is the only description
+of it there is.
+
+`decoration:shadow:*` is `shadow.glsl`'s `getShadow` and
+`pixAlphaRoundedDistance`: a box the window's rectangle grown by
+`shadow:range`, with a falloff of `((radius − d) / range)^power` in the
+corners and `(smallest / range)^power` along the edges, `radius` being the
+range plus the window's own rounding. Drawn under the border and the window,
+as Hyprland draws it. This is the one place in the renderer that blends a
+pixel by hand -- every pixel has an alpha of its own and tiny-skia's shaders
+take one colour for a rectangle -- so the arithmetic is written out to be the
+same source-over its `f32` pipeline does.
+
+`decoration:dim_inactive` and `dim_strength` lay black over a window that is
+not focused, over its surface and inside its rounding.
+
+`decoration:blur:*` is the dual-Kawase pair, `blur1.glsl`'s five taps down
+and `blur2.glsl`'s eight up, `blur:passes` times each way at `blur:size`.
+It reads the frame so far from under a translucent window and writes it back
+before the window is drawn, which is what Hyprland does and why the pass has
+to sit between the two. The two passes do *not* use the same offsets --
+`blur1`'s `halfpixel` is four times `blur2`'s -- and using one for both turns
+a bright block into a dark hole with a bright halo, which is what this looked
+like before the shaders were read again. The colour grading (`noise`,
+`contrast`, `brightness`, `vibrancy`) is not done: it changes the blur's
+colour and not its shape.
+
+The compositor now reports its slowest frame in microseconds, which is the
+stated bound this stage asks each software effect to have: a number measured
+on the machine that ran it rather than one somebody hoped for.
+
 **Begun — special workspaces (2026-09-17).** Hyprland's scratchpad: a
 workspace shown *over* the monitor's own rather than instead of it, with a
 negative id and a `special:` name. `togglespecialworkspace [name]` shows and
