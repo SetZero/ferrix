@@ -248,6 +248,55 @@ bind = SUPER, C, exec, /bin/hyprctl --batch plugin list ; clients
 bind = SUPER, W, exec, /bin/hyprctl activewindow
 ";
 
+/// The picture the animated boot starts from: the same decorations the third
+/// boot requires, since the slide is watched with them on.
+const ANIMATED_EXPECTED: [(&str, &str); 1] = [(
+    "corners cut, a shadow under each window, and the unfocused one dimmed",
+    "compositor/render/tests/data/decorated-two-clients.xrle",
+)];
+
+/// Where the slide ends: the same two windows, exchanged.
+const ANIMATED_MOVING: Moving<'static> = Moving {
+    what: "a window sliding to the other side with its decorations on",
+    path: "compositor/render/tests/data/decorated-two-clients-swapped.xrle",
+    keys: &["meta_l", "a"],
+};
+
+/// How long a frame may take on the guest, in microseconds.
+///
+/// Not the bound the renderer's software fallback has -- that one is stated
+/// and checked where it means something, by `compositor/render`'s own
+/// release-build test, at 250 ms for a frame with every effect on. This is
+/// the same frame under QEMU's `tcg`, which emulates every instruction and
+/// is tens of times slower than the processor it is emulating: the numbers
+/// the guest reports are around 1.5 seconds a frame, and what this catches
+/// is a compositor that stopped drawing or a frame that became minutes
+/// rather than seconds.
+const FRAME_BOUND: u128 = 5_000_000;
+
+/// The configuration the eighth boot is given: the decorations of the third,
+/// with the animations on and a keybind that sends a window to the other
+/// side so that its slide can be watched.
+///
+/// Two seconds for the slide rather than Hyprland's 0.8, because what is
+/// watched here is a sequence of screendumps and a screendump of a
+/// virtio-gpu is not a fast thing: a longer slide is the same curve with
+/// more points on it.
+const ANIMATED_CONFIG: &str = "\
+# Carried into the initramfs by `cargo xtask test-compositor`.
+decoration:rounding = 12
+decoration:inactive_opacity = 0.6
+decoration:shadow:range = 12
+decoration:shadow:render_power = 2
+decoration:dim_inactive = 1
+decoration:dim_strength = 0.4
+animation = windows, 1, 20, default
+exec-once = /bin/pattern checkerboard one
+exec-once = /bin/pattern gradient two
+bind = SUPER, A, exec, /bin/hyprctl --batch dispatch movefocus l ; \
+dispatch movewindow r
+";
+
 /// The configuration the second boot is given: a bar through
 /// `zwlr_layer_shell_v1`, and the same two windows.
 ///
@@ -326,6 +375,20 @@ struct Wanted<'a> {
     states: &'a [(&'a str, &'a str)],
     /// What each further screen must show at the end.
     others: &'a [(&'a str, &'a str)],
+    /// A window sliding: the keybind that starts it and the picture it ends
+    /// in, with every distinct screendump along the way kept.
+    moving: Option<Moving<'a>>,
+}
+
+/// A window on its way somewhere: what starts it, and where it stops.
+#[derive(Clone, Copy, Debug)]
+struct Moving<'a> {
+    /// What the sequence shows, for the line the test prints.
+    what: &'a str,
+    /// The expected image it must end in.
+    path: &'a str,
+    /// The keys that start it, as QMP's `qcode` names them.
+    keys: &'a [&'a str],
 }
 
 impl Wanted<'_> {
@@ -396,13 +459,45 @@ fn boot_and_dump(
             let screen = settle(&mut qmp, &dump, &want)?;
             let (found, count) = differences(&screen, &want);
             if count != 0 {
-                return Err(unexpected(arch, what, &screen, found, count));
+                // What the guest said, which is where the reason usually
+                // is: a keybind that did not fire, a client that died, a
+                // program that could not start.
+                let _ = watching.read_more(Instant::now() + Duration::from_secs(2), |_| false)?;
+                return Err(with_the_transcript(
+                    unexpected(arch, what, &screen, found, count),
+                    watching,
+                ));
             }
             println!(
                 "  {arch}: {what}, every one of {} pixels as the renderer draws them",
                 screen.width * screen.height
             );
             taken.push(screen);
+        }
+
+        // A window sliding: the keybind, then every distinct picture until
+        // the one it ends in. What is required of them is the caller's --
+        // how many there were, and what the last is -- because a frame
+        // part-way through a slide is drawn at whatever time it was drawn
+        // and cannot be an expected image.
+        if let Some(moving) = wanted.moving {
+            press(&mut qmp, moving.keys)?;
+            println!("  {arch}: pressed the keys that start {}", moving.what);
+            let mut kept = follow(&mut qmp, &dump, &expected(moving.path)?)?;
+            println!(
+                "  {arch}: {}: {} pictures, the last of them the one it ends in",
+                moving.what,
+                kept.len()
+            );
+            taken.append(&mut kept);
+            // The compositor says how long its frames took while it draws,
+            // and a boot with no keybinds to press asks the serial port for
+            // nothing else: read what it said, so the caller can judge it.
+            let _ = watching.read_more(Instant::now() + SETTLE, |lines| {
+                lines
+                    .iter()
+                    .any(|line| line.contains("slowest of the last"))
+            })?;
         }
 
         // The screens after the first, once the states have been reached:
@@ -540,6 +635,31 @@ fn key(name: &str, down: bool) -> String {
     )
 }
 
+/// Take screendumps as fast as QEMU gives them until one is `want` or the
+/// time is up, keeping every picture that differs from the one before it.
+///
+/// This is how a slide is watched: a window part-way along its curve is at a
+/// place no expected image can hold, so what a test can require is that
+/// there were several of them and that the last is where it was going.
+fn follow(qmp: &mut Qmp, dump: &Path, want: &[u8]) -> Result<Vec<Image>> {
+    let mut kept: Vec<Image> = Vec::new();
+    let deadline = Instant::now() + SETTLE;
+    loop {
+        qmp.screendump(Some(DEVICE_ID), dump)?;
+        let bytes = std::fs::read(dump)
+            .map_err(|error| Error::new(format!("reading {}: {error}", dump.display())))?;
+        let screen = parse_ppm(&bytes)?;
+        let fresh = kept.last().is_none_or(|last| last.pixels != screen.pixels);
+        let done = differences(&screen, want).1 == 0;
+        if fresh {
+            kept.push(screen);
+        }
+        if done || Instant::now() >= deadline {
+            return Ok(kept);
+        }
+    }
+}
+
 /// Take screendumps until one is `want`, or until the time is up.
 ///
 /// A client has to draw and commit and the compositor has to compose and
@@ -564,6 +684,23 @@ fn settle_on(qmp: &mut Qmp, device: &str, dump: &Path, want: &[u8]) -> Result<Im
         }
         std::thread::sleep(Duration::from_millis(250));
     }
+}
+
+/// An error with the last of what the guest said after it.
+///
+/// A picture that is not the one expected says nothing about why; the lines
+/// the compositor and its clients printed usually do.
+fn with_the_transcript(error: Error, watching: &Watching<'_>) -> Error {
+    let every: Vec<&String> = watching.lines().iter().chain(watching.after()).collect();
+    let said: Vec<String> = every
+        .iter()
+        .skip(every.len().saturating_sub(20))
+        .map(|line| line.trim().to_owned())
+        .collect();
+    Error::new(format!(
+        "{error}\n  the guest's last lines:\n    {}",
+        said.join("\n    ")
+    ))
 }
 
 /// Why a state is not the picture it should be.
@@ -616,6 +753,7 @@ pub(crate) fn test_compositor(args: &Args) -> Result<()> {
             &Wanted {
                 states: &EXPECTED,
                 others: &[],
+                moving: None,
             },
             &BINDS,
             args,
@@ -676,6 +814,7 @@ pub(crate) fn test_compositor(args: &Args) -> Result<()> {
                 &Wanted {
                     states: &[wanted],
                     others: &[],
+                    moving: None,
                 },
                 &[],
                 args,
@@ -692,6 +831,7 @@ pub(crate) fn test_compositor(args: &Args) -> Result<()> {
         test_groups(arch, &program, &client, &ctl, &plug, args)?;
         test_monitors(arch, &program, &client, &ctl, &plug, args)?;
         test_plugins(arch, &program, &client, &ctl, &plug, args)?;
+        test_animation(arch, &program, &client, &ctl, &plug, args)?;
     }
     Ok(())
 }
@@ -720,6 +860,7 @@ fn test_monitors(
         &Wanted {
             states: &MONITOR_EXPECTED,
             others: &MONITOR_OTHERS,
+            moving: None,
         },
         &MONITOR_BINDS,
         args,
@@ -742,6 +883,107 @@ fn test_monitors(
         )));
     }
     monitors_were_said(arch, &said)
+}
+
+/// An eighth boot: a window sliding, watched frame by frame.
+///
+/// `docs/ROADMAP.md` stage 19's exit asks for a sequence of screendumps
+/// showing a window moving along the configured curve with rounded corners
+/// and blur behind a translucent client, inside the stated frame-time bound
+/// under the software fallback. This is that: the decorated picture, a
+/// keybind, every distinct picture until the windows have changed places,
+/// and the compositor's own frame times from the same boot.
+fn test_animation(
+    arch: Arch,
+    program: &Path,
+    client: &Path,
+    ctl: &Path,
+    plug: &Path,
+    args: &Args,
+) -> Result<()> {
+    let (screens, said) = boot_and_dump(
+        arch,
+        program,
+        client,
+        ctl,
+        plug,
+        ANIMATED_CONFIG,
+        &Wanted {
+            states: &ANIMATED_EXPECTED,
+            others: &[],
+            moving: Some(ANIMATED_MOVING),
+        },
+        &[],
+        args,
+    )?;
+    // The first is the state it started in; the rest are the slide, the
+    // first of which is usually that same state, since a screendump asked
+    // for the instant the keys go in is taken before the compositor has
+    // drawn anything new.
+    let sliding = screens.get(ANIMATED_EXPECTED.len()..).unwrap_or(&[]);
+    let (Some(first), Some(last)) = (screens.first(), sliding.last()) else {
+        return Err(Error::new(format!("{arch}: no pictures at all")));
+    };
+    // It arrived: the loop that took them stops at the goal or at the time,
+    // and a run that stopped at the time is a window that never got there.
+    let want = expected(ANIMATED_MOVING.path)?;
+    let (found, count) = differences(last, &want);
+    if count != 0 {
+        return Err(unexpected(arch, ANIMATED_MOVING.what, last, found, count));
+    }
+    // And it went through somewhere else on the way: a compositor that drew
+    // the goal at once would have the state it started from and the state it
+    // ended in and nothing between them, however many dumps were taken.
+    let between = sliding
+        .iter()
+        .filter(|screen| screen.pixels != first.pixels && screen.pixels != last.pixels)
+        .count();
+    if between == 0 {
+        return Err(Error::new(format!(
+            "{arch}: the window jumped: {} pictures, none of them between the two states",
+            sliding.len()
+        )));
+    }
+    println!(
+        "  {arch}: a window slid through {} pictures with its decorations on, {between} of them \
+         places neither layout put it, ending in the one the renderer blesses",
+        sliding.len()
+    );
+    frames_were_inside_the_bound(arch, &said)
+}
+
+/// What the compositor said about its own frames, against the bound.
+fn frames_were_inside_the_bound(arch: Arch, said: &[String]) -> Result<()> {
+    let mut slowest = 0u128;
+    for line in said {
+        // `hyprix: frames <n> slowest of the last <m> <us> us`.
+        let Some(rest) = line.split("slowest of the last ").nth(1) else {
+            continue;
+        };
+        let mut words = rest.split_whitespace();
+        let (Some(_count), Some(number)) = (words.next(), words.next()) else {
+            continue;
+        };
+        if let Ok(micros) = number.parse::<u128>() {
+            slowest = slowest.max(micros);
+        }
+    }
+    if slowest == 0 {
+        return Err(Error::new(format!(
+            "{arch}: the compositor never said how long its frames took"
+        )));
+    }
+    if slowest > FRAME_BOUND {
+        return Err(Error::new(format!(
+            "{arch}: the slowest frame took {slowest} us, past the {FRAME_BOUND} us a frame under \
+             emulation is allowed"
+        )));
+    }
+    println!(
+        "  {arch}: the slowest frame the guest drew took {slowest} us, under emulation; the \
+         renderer's own bound is checked in release by `compositor/render`"
+    );
+    Ok(())
 }
 
 /// A seventh boot: a plugin, and a keybind naming a dispatcher it added.
@@ -768,6 +1010,7 @@ fn test_plugins(
         &Wanted {
             states: &PLUGIN_EXPECTED,
             others: &[],
+            moving: None,
         },
         &PLUGIN_BINDS,
         args,
@@ -912,6 +1155,7 @@ fn test_groups(
         &Wanted {
             states: &GROUPED_EXPECTED,
             others: &[],
+            moving: None,
         },
         &GROUP_BINDS,
         args,

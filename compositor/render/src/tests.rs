@@ -591,6 +591,28 @@ fn rounding_and_opacity_make_a_different_picture() {
     assert!(differing > 0, "the decorations changed nothing");
 }
 
+/// The decorated windows after `movefocus l` and `movewindow r`: the state a
+/// window's slide ends in, with the corners cut, the shadows under them, the
+/// blur behind the translucent one and the dimming on whichever is not
+/// focused.
+///
+/// This is the picture `cargo xtask test-compositor` requires at the end of
+/// the sequence of screendumps it takes while the window is moving, which is
+/// what `docs/ROADMAP.md` stage 19's exit asks for.
+#[test]
+fn the_decorated_windows_swap_places_too() {
+    let swapped = frame_with(
+        &decorated_style(),
+        &[("movefocus", "l"), ("movewindow", "r")],
+    );
+    golden::check("decorated-two-clients-swapped", WIDTH, HEIGHT, &swapped);
+    assert_ne!(
+        swapped,
+        decorated_frame(),
+        "the windows did not change places"
+    );
+}
+
 /// A rounded window's very corner is not the window: the rounding cut it
 /// away, and what shows there is whatever is behind. Along the same edge,
 /// away from the corner, the border is drawn as it always was.
@@ -1445,5 +1467,47 @@ fn the_blur_can_be_turned_off() {
             },
             &[]
         )
+    );
+}
+
+/// What the software fallback costs, which `docs/ROADMAP.md` stage 19 asks
+/// each effect to have stated: the worst frame this renderer draws, timed.
+///
+/// The worst frame is every decoration at once over the whole screen --
+/// rounded corners, a shadow under each window, the dim over the unfocused
+/// one, and a dual-Kawase blur behind both, since `inactive_opacity` makes
+/// both translucent. The blur is nearly all of it: the same frame without it
+/// is under a fifth of the time.
+///
+/// Only in release, and only as a ceiling: a test that asserted a debug
+/// build's time would be asserting the optimiser's absence, and one that
+/// asserted a tight number would fail on a slower machine for no reason
+/// anybody could act on. What it catches is a change that makes a frame
+/// several times more expensive.
+#[test]
+fn a_frame_with_every_effect_is_inside_the_stated_bound() {
+    /// The bound, in milliseconds. About 110 ms on the machine this was
+    /// written on, so the ceiling is a little over twice that: a slower
+    /// machine passes, and an effect that doubled in cost does not.
+    const BOUND: u128 = 250;
+
+    if cfg!(debug_assertions) {
+        // Not a failure: `cargo test` is a debug build, and the number a
+        // debug build gives says nothing about the fallback's cost.
+        return;
+    }
+    // Once to warm whatever the allocator and the caches need, then the
+    // slowest of three, which is what a frame has to fit inside.
+    let _ = decorated_frame();
+    let mut slowest = 0;
+    for _ in 0..3 {
+        let began = std::time::Instant::now();
+        let _ = decorated_frame();
+        slowest = slowest.max(began.elapsed().as_millis());
+    }
+    assert!(
+        slowest <= BOUND,
+        "the worst frame took {slowest} ms, past the {BOUND} ms this renderer's software \
+         fallback is stated to be inside"
     );
 }

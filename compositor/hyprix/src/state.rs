@@ -254,6 +254,12 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
     let mut placed_layers: Vec<crate::frame::Placed> = Vec::new();
     let mut settling = false;
     let mut slowest = Duration::ZERO;
+    // The slowest of the frames since the last report, how many there were,
+    // and when that report was: the line is a second apart at most, and
+    // silent while nothing is drawn.
+    let mut since = Duration::ZERO;
+    let mut counted = 0u32;
+    let mut reported = Instant::now();
     let mut next_window = 1u32;
     let mut drawn = 0u32;
     // The most windows at once, not the count at the end: a client that ran
@@ -306,7 +312,10 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
         // the connection opens with `[[PLUGIN]]`, which is a plugin and is
         // kept.
         let mut asked: Vec<compositor_ipc::Reply> = Vec::new();
-        {
+        // A description of the compositor is not free -- it walks every
+        // window of every monitor -- so it is made only when there is a
+        // plugin to answer.
+        if !plugins.is_empty() {
             let snapshot = crate::control::snapshot(&state, &slots, &sources, &plugins);
             asked.extend(plugins.poll(&snapshot));
         }
@@ -438,7 +447,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
 
         // The event socket, from the same description `hyprctl` answers
         // from: a bar and a script must not be told two different things.
-        {
+        if events.is_some() || !plugins.is_empty() {
             let snapshot = crate::control::snapshot(&state, &slots, &sources, &plugins);
             if let Some(socket) = events.as_mut() {
                 socket.publish(&snapshot);
@@ -492,7 +501,23 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
             // each software effect to have: blur is the expensive one, and a
             // number measured on the machine that ran it is worth more than
             // one somebody hoped for.
-            slowest = slowest.max(began.elapsed());
+            let took = began.elapsed();
+            slowest = slowest.max(took);
+            // Every so many frames, say how long the slowest of them took.
+            // The compositor does not end on a machine it is the session of,
+            // so a number only in the line it prints when it stops is a
+            // number nobody sees: `docs/ROADMAP.md` asks each software
+            // effect for a frame-time bound, and this is where it is
+            // measured on the machine that ran it.
+            since = since.max(took);
+            counted = counted.saturating_add(1);
+            if reported.elapsed() >= FRAME_REPORT {
+                report(&format!(
+                    "hyprix: frames {drawn} slowest of the last {counted} {} us",
+                    since.as_micros()
+                ));
+                (since, counted, reported) = (Duration::ZERO, 0, Instant::now());
+            }
             if drawn == 1 {
                 // The screens are up and the first frame is on them. This is
                 // what a watcher waits for, in the shape
@@ -648,6 +673,13 @@ fn resolve_display(display: &str) -> String {
     }
     format!("/tmp/{display}")
 }
+
+/// How often the compositor says how slow its frames have been, at most.
+///
+/// A line a second while it is drawing, and nothing while it is not: a
+/// compositor that drew ten frames in a second should say so, and one
+/// showing a still screen has nothing to report.
+const FRAME_REPORT: Duration = Duration::from_secs(1);
 
 /// Every screen in one line, for the compositor's marker and its log line.
 ///

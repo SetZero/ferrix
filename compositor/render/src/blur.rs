@@ -62,12 +62,16 @@ impl Plane {
 
     /// One pixel, with the edges clamped: what `GL_CLAMP_TO_EDGE` gives.
     fn at(&self, x: isize, y: isize) -> [f32; 4] {
-        let x = x
-            .clamp(0, self.width.saturating_sub(1) as isize)
-            .unsigned_abs();
-        let y = y
-            .clamp(0, self.height.saturating_sub(1) as isize)
-            .unsigned_abs();
+        #[expect(
+            clippy::cast_possible_wrap,
+            reason = "a plane is at most a screen wide, far inside isize"
+        )]
+        let (last_x, last_y) = (
+            self.width.saturating_sub(1) as isize,
+            self.height.saturating_sub(1) as isize,
+        );
+        let x = x.clamp(0, last_x).unsigned_abs();
+        let y = y.clamp(0, last_y).unsigned_abs();
         self.pixels
             .get(y.saturating_mul(self.width).saturating_add(x))
             .copied()
@@ -75,6 +79,11 @@ impl Plane {
     }
 
     /// A sample at a fractional position, bilinear, as `GL_LINEAR` gives it.
+    ///
+    /// The four channels are written out rather than looped over with
+    /// `get`: this is the innermost arithmetic of the whole effect -- twenty
+    /// million of these for a blur behind one window -- and an `Option` a
+    /// channel is an `Option` twenty million times.
     fn sample(&self, x: f32, y: f32) -> [f32; 4] {
         let (fx, fy) = (x - 0.5, y - 0.5);
         let (x0, y0) = (fx.floor(), fy.floor());
@@ -90,14 +99,14 @@ impl Plane {
             self.at(ix, iy + 1),
             self.at(ix + 1, iy + 1),
         );
-        let mut out = [0.0; 4];
-        for (channel, value) in out.iter_mut().enumerate() {
-            let take = |from: &[f32; 4]| from.get(channel).copied().unwrap_or(0.0);
-            let top = take(&a) + (take(&b) - take(&a)) * tx;
-            let bottom = take(&c) + (take(&d) - take(&c)) * tx;
-            *value = top + (bottom - top) * ty;
-        }
-        out
+        let mix = |one: f32, other: f32, t: f32| one + (other - one) * t;
+        let channel = |a: f32, b: f32, c: f32, d: f32| mix(mix(a, b, tx), mix(c, d, tx), ty);
+        [
+            channel(a[0], b[0], c[0], d[0]),
+            channel(a[1], b[1], c[1], d[1]),
+            channel(a[2], b[2], c[2], d[2]),
+            channel(a[3], b[3], c[3], d[3]),
+        ]
     }
 
     fn set(&mut self, x: usize, y: usize, value: [f32; 4]) {
@@ -118,6 +127,15 @@ impl Plane {
 /// centre, with four taps a `radius` away on the diagonals.
 fn down(from: &Plane, radius: f32) -> Plane {
     let mut to = Plane::new(from.width.div_ceil(2), from.height.div_ceil(2));
+    // The taps are the same for every pixel; only where they are read from
+    // moves. Built once rather than per pixel.
+    let taps: [(f32, f32, f32); 5] = [
+        (0.0, 0.0, 4.0),
+        (-radius, -radius, 1.0),
+        (radius, radius, 1.0),
+        (radius, -radius, 1.0),
+        (-radius, radius, 1.0),
+    ];
     for y in 0..to.height {
         for x in 0..to.width {
             #[expect(
@@ -125,13 +143,6 @@ fn down(from: &Plane, radius: f32) -> Plane {
                 reason = "a position inside a buffer at most 4096 wide"
             )]
             let (sx, sy) = ((x as f32 + 0.5) * 2.0, (y as f32 + 0.5) * 2.0);
-            let taps: [(f32, f32, f32); 5] = [
-                (0.0, 0.0, 4.0),
-                (-radius, -radius, 1.0),
-                (radius, radius, 1.0),
-                (radius, -radius, 1.0),
-                (-radius, radius, 1.0),
-            ];
             to.set(x, y, weighted(from, sx, sy, &taps, 8.0));
         }
     }
@@ -150,20 +161,20 @@ fn up(from: &Plane, width: usize, height: usize, radius: f32) -> Plane {
     // with a bright halo, which is what this looked like when both were
     // `radius`.
     let r = radius / 4.0;
+    let taps: [(f32, f32, f32); 8] = [
+        (-2.0 * r, 0.0, 1.0),
+        (-r, r, 2.0),
+        (0.0, 2.0 * r, 1.0),
+        (r, r, 2.0),
+        (2.0 * r, 0.0, 1.0),
+        (r, -r, 2.0),
+        (0.0, -2.0 * r, 1.0),
+        (-r, -r, 2.0),
+    ];
     for y in 0..to.height {
         for x in 0..to.width {
             #[expect(clippy::cast_precision_loss, reason = "as in `down`")]
             let (sx, sy) = ((x as f32 + 0.5) / 2.0, (y as f32 + 0.5) / 2.0);
-            let taps: [(f32, f32, f32); 8] = [
-                (-2.0 * r, 0.0, 1.0),
-                (-r, r, 2.0),
-                (0.0, 2.0 * r, 1.0),
-                (r, r, 2.0),
-                (2.0 * r, 0.0, 1.0),
-                (r, -r, 2.0),
-                (0.0, -2.0 * r, 1.0),
-                (-r, -r, 2.0),
-            ];
             to.set(x, y, weighted(from, sx, sy, &taps, 12.0));
         }
     }
@@ -175,14 +186,19 @@ fn weighted(from: &Plane, x: f32, y: f32, taps: &[(f32, f32, f32)], total: f32) 
     let mut sum = [0.0_f32; 4];
     for &(dx, dy, weight) in taps {
         let sample = from.sample(x + dx, y + dy);
-        for (channel, value) in sum.iter_mut().enumerate() {
-            *value += sample.get(channel).copied().unwrap_or(0.0) * weight;
-        }
+        // Written out for the same reason `sample` is: this runs once a tap
+        // a pixel a pass.
+        sum[0] += sample[0] * weight;
+        sum[1] += sample[1] * weight;
+        sum[2] += sample[2] * weight;
+        sum[3] += sample[3] * weight;
     }
-    for value in &mut sum {
-        *value /= total;
-    }
-    sum
+    [
+        sum[0] / total,
+        sum[1] / total,
+        sum[2] / total,
+        sum[3] / total,
+    ]
 }
 
 /// Blur `pixels`, a tight `width × height` block of premultiplied `RGBA`
