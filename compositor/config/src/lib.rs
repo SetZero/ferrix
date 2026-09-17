@@ -24,6 +24,7 @@ mod bind;
 mod monitor;
 mod options;
 mod parse;
+mod rule;
 mod value;
 
 #[cfg(test)]
@@ -37,6 +38,7 @@ pub use bind::{Bind, BindFlags, Key, Mods};
 pub use monitor::{Mode, MonitorRule, Position, Scale};
 pub use options::OptionValue;
 pub use parse::parse;
+pub use rule::{Decoration, Effect, Length, Matcher, Window, WindowRule};
 pub use value::{
     Color, Gaps, Gradient, MAX_GRADIENT_COLORS, parse_color, parse_float, parse_gaps,
     parse_gradient, parse_int,

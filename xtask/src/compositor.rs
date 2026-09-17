@@ -298,6 +298,26 @@ bind = SUPER, A, exec, /bin/hyprctl --batch dispatch movefocus l ; \
 dispatch movewindow r
 ";
 
+/// The picture a window rule makes, which the tenth boot requires.
+const RULED_EXPECTED: [(&str, &str); 1] = [(
+    "a window floating where a rule put it, over the one that has the tiling",
+    "compositor/render/tests/data/ruled-two-clients.xrle",
+)];
+
+/// The configuration the tenth boot is given: the same two clients, with
+/// rules that float one of them at a size and a place.
+///
+/// The form is Hyprland 0.56's: fields with a name and a value, and
+/// `match:` in front of the ones the window must be.
+const RULED_CONFIG: &str = "\
+# Carried into the initramfs by `cargo xtask test-compositor`.
+windowrule = float, match:title ^(two)$
+windowrule = size 400 300, match:title ^(two)$
+windowrule = move 200 150, match:title ^(two)$
+exec-once = /bin/pattern checkerboard one
+exec-once = /bin/pattern gradient two
+";
+
 /// The picture a terminal makes, which the ninth boot requires.
 const TERMINAL_EXPECTED: [(&str, &str); 1] = [(
     "a terminal with a program's output in it",
@@ -865,6 +885,7 @@ pub(crate) fn test_compositor(args: &Args) -> Result<()> {
         test_plugins(arch, &program, &client, &ctl, &plug, &term, args)?;
         test_animation(arch, &program, &client, &ctl, &plug, &term, args)?;
         test_terminal(arch, &program, &client, &ctl, &plug, &term, args)?;
+        test_rules(arch, &program, &client, &ctl, &plug, &term, args)?;
     }
     Ok(())
 }
@@ -920,6 +941,52 @@ fn test_monitors(
     monitors_were_said(arch, &said)
 }
 
+/// A tenth boot: a `windowrule` that floats a window somewhere.
+///
+/// Nothing is pressed: the rules are in the configuration and the
+/// compositor applies them as the windows map, so what is required is the
+/// picture they make.
+fn test_rules(
+    arch: Arch,
+    program: &Path,
+    client: &Path,
+    ctl: &Path,
+    plug: &Path,
+    term: &Path,
+    args: &Args,
+) -> Result<()> {
+    let (screens, said) = boot_and_dump(
+        arch,
+        program,
+        client,
+        ctl,
+        plug,
+        term,
+        RULED_CONFIG,
+        &Wanted {
+            states: &RULED_EXPECTED,
+            others: &[],
+            moving: None,
+        },
+        &[],
+        args,
+    )?;
+    let Some(screen) = screens.first() else {
+        return Err(Error::new(format!("{arch}: the rule boot took no picture")));
+    };
+    if !said.iter().any(|line| line.contains("window rules")) {
+        return Err(Error::new(format!(
+            "{arch}: the compositor never said it had read the rules"
+        )));
+    }
+    println!(
+        "  {arch}: a window rule floated a window at the size and place it names, every one of \
+         {} pixels",
+        screen.width * screen.height
+    );
+    Ok(())
+}
+
 /// A ninth boot: a terminal, with a program running in it.
 ///
 /// The whole path at once: the compositor starts `compositor/term`, which
@@ -955,7 +1022,9 @@ fn test_terminal(
         args,
     )?;
     let Some(screen) = screens.first() else {
-        return Err(Error::new(format!("{arch}: the terminal boot took no picture")));
+        return Err(Error::new(format!(
+            "{arch}: the terminal boot took no picture"
+        )));
     };
     // The terminal said what it drew, which says the pseudoterminal carried
     // the program's output rather than the picture having come from

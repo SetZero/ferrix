@@ -44,6 +44,9 @@ dependencies = [
 [[package]]
 name = "compositor-config"
 version = "0.1.0"
+dependencies = [
+ "compositor-regex",
+]
 
 [[package]]
 name = "compositor-ctl"
@@ -108,6 +111,10 @@ version = "0.1.0"
 dependencies = [
  "compositor-wire",
 ]
+
+[[package]]
+name = "compositor-regex"
+version = "0.1.0"
 
 [[package]]
 name = "compositor-render"

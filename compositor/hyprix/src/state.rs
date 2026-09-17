@@ -94,6 +94,11 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
         }
     }
     let mut screens = Screen::all(backends, &rules)?;
+    // The `windowrule` lines, which are applied when a window maps.
+    let window_rules = crate::rules::Rules::new(&config, report);
+    if !window_rules.is_empty() {
+        report(&format!("hyprix: {} window rules", window_rules.len()));
+    }
     // What the whole desktop covers, which is what the pointer moves over.
     let (width, height) = Screen::desktop(&screens);
 
@@ -382,6 +387,8 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                 &mut state,
                 &mut sources,
                 &mut next_window,
+                &window_rules,
+                report,
             )? {
                 changed = true;
             }
@@ -553,6 +560,8 @@ fn serve(
     state: &mut State,
     sources: &mut BTreeMap<WindowId, Source>,
     next_window: &mut u32,
+    rules: &crate::rules::Rules,
+    report: &mut dyn FnMut(&str),
 ) -> Result<bool, String> {
     let Some(slot) = slots.get_mut(index) else {
         return Ok(false);
@@ -624,7 +633,14 @@ fn serve(
                             })
                             .copied()
                     {
-                        // The first commit of a window asks to be configured.
+                        // The first commit of a window asks to be
+                        // configured, and is where Hyprland applies the
+                        // window's rules: by now the client has said what
+                        // it is called.
+                        // The frame is redrawn below whatever the rules
+                        // did, since a window that has just mapped is a
+                        // change in itself.
+                        let _ = apply_rules(rules, &slot.client, toplevel, window, state, report);
                         configure(&mut slot.client, state, toplevel, window);
                         let _ = sources.insert(
                             window,
@@ -658,6 +674,43 @@ fn serve(
         slot.gone = true;
     }
     Ok(changed)
+}
+
+/// Apply the `windowrule` lines to a window that has just mapped.
+///
+/// What the window is called is what the client has said by now: a client
+/// sets its title and its application id before its first commit, and the
+/// first commit is where this is called from.
+fn apply_rules(
+    rules: &crate::rules::Rules,
+    client: &Client,
+    toplevel: ObjectId,
+    window: WindowId,
+    state: &mut State,
+    report: &mut dyn FnMut(&str),
+) -> bool {
+    if rules.is_empty() {
+        return false;
+    }
+    let named = client.toplevel(toplevel);
+    let (title, class) = named.map_or((String::new(), String::new()), |top| {
+        (top.title.clone(), top.app_id.clone())
+    });
+    let what = compositor_config::Window {
+        class: &class,
+        title: &title,
+        // A window that has just mapped has had no other name, so the
+        // initial ones are these.
+        initial_class: &class,
+        initial_title: &title,
+        floating: state.is_floating(window),
+        fullscreen: state
+            .workspace_of(window)
+            .and_then(|workspace| state.fullscreen(workspace))
+            .is_some_and(|(id, _)| id == window),
+        focused: state.focused_window() == Some(window),
+    };
+    rules.apply(window, &what, state, report)
 }
 
 /// Where the Wayland socket goes.

@@ -1,0 +1,15 @@
+[package]
+name = "compositor-regex"
+description = "The regular expressions a window rule matches with, as RE2 matches them"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "compositor_regex"
+path = "src/lib.rs"
+
+[lints]
+workspace = true

@@ -30,6 +30,7 @@ pub mod keymap;
 pub mod options;
 pub mod plugins;
 pub mod pool;
+pub mod rules;
 pub mod seat;
 pub mod state;
 

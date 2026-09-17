@@ -1886,3 +1886,85 @@ fn two_monitors_can_swap_what_they_show() {
     assert_eq!(state.active_workspace(M1), Some(two));
     assert!(state.dispatch_str("swapactiveworkspaces", "0").is_err());
 }
+
+/// A window told to float at a rectangle floats there, whether it was tiled,
+/// floating already or in a group.
+#[test]
+fn a_window_can_be_told_to_float_somewhere() {
+    let mut state = setup(BARE);
+    open(&mut state, &[1, 2]);
+    let where_it_goes = Rect::new(100, 80, 400, 300);
+
+    let changes = state.float_window(WindowId(1), where_it_goes).unwrap();
+    assert!(
+        changes.contains(&Change::Floating {
+            window: WindowId(1),
+            floating: true
+        }),
+        "{changes:?}"
+    );
+    assert!(state.is_floating(WindowId(1)));
+    let placed = |state: &State, window: WindowId| -> Rect {
+        state.layout()[0]
+            .windows
+            .iter()
+            .find(|placed| placed.window == window)
+            .expect("the window")
+            .rect
+    };
+    assert_eq!(placed(&state, WindowId(1)), where_it_goes);
+    // The other window has the whole tiling to itself now.
+    assert!(!state.is_floating(WindowId(2)));
+
+    // Again, with another rectangle: a window that floats already is moved.
+    let moved = Rect::new(10, 20, 200, 150);
+    let _ = state.float_window(WindowId(1), moved).unwrap();
+    assert_eq!(placed(&state, WindowId(1)), moved);
+
+    // A window this state does not have is an error, not a new window.
+    assert_eq!(
+        state.float_window(WindowId(9), moved),
+        Err(Error::UnknownWindow(WindowId(9)))
+    );
+}
+
+/// Floating a grouped window takes it out of its group, since a floating
+/// window has no slot to share.
+#[test]
+fn floating_a_grouped_window_takes_it_out_of_the_group() {
+    let mut state = setup(BARE);
+    open(&mut state, &[1, 2]);
+    let _ = state.dispatch_str("togglegroup", "").unwrap();
+    let _ = state.dispatch_str("movefocus", "l").unwrap();
+    let _ = state.dispatch_str("moveintogroup", "r").unwrap();
+    let head = state.group(WindowId(2)).expect("a group").members[0];
+    let member = state
+        .group(head)
+        .expect("a group")
+        .members
+        .get(1)
+        .copied()
+        .expect("a second member");
+
+    let _ = state
+        .float_window(member, Rect::new(0, 0, 200, 200))
+        .unwrap();
+    assert!(state.is_floating(member));
+    assert_eq!(state.group(member), None, "it is still in a group");
+}
+
+/// The focus history, most recent first, which is what a `no_focus` rule
+/// gives the focus back with.
+#[test]
+fn the_focus_order_is_the_history_backwards() {
+    let mut state = setup(BARE);
+    open(&mut state, &[1, 2, 3]);
+    assert_eq!(
+        state.windows_in_focus_order().first().copied(),
+        Some(WindowId(3))
+    );
+    let _ = state.focus_window(WindowId(1)).unwrap();
+    let order = state.windows_in_focus_order();
+    assert_eq!(order.first().copied(), Some(WindowId(1)));
+    assert_eq!(order.len(), 3, "{order:?}");
+}

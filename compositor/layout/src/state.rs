@@ -585,6 +585,72 @@ impl State {
         self.open(window, Some(rect))
     }
 
+    /// Float a window that is already open, at `rect`.
+    ///
+    /// A window that floats already is moved and resized; one that is tiled
+    /// comes out of the tiling and out of any group it is in, as
+    /// `togglefloating` takes it. This is what a `windowrule` asking for a
+    /// size or a place does, and what a dispatcher that moves a floating
+    /// window by pixels will.
+    ///
+    /// # Errors
+    ///
+    /// A window this state does not have.
+    pub fn float_window(&mut self, window: WindowId, rect: Rect) -> Result<Vec<Change>, Error> {
+        if !self.windows.contains_key(&window) {
+            return Err(Error::UnknownWindow(window));
+        }
+        Ok(self.run(|state| {
+            let Some(workspace) = state.workspace_of(window) else {
+                return Vec::new();
+            };
+            // A floating window's rectangle is kept in the workspace's own
+            // coordinates, so that a workspace moved to another monitor
+            // takes its windows with it.
+            let (x, y) = state.origin(workspace);
+            let _previous = state.floating_rects.insert(
+                window,
+                rect.translate(x.saturating_neg(), y.saturating_neg()),
+            );
+            if state.is_floating(window) {
+                return Vec::new();
+            }
+            if state.group_of(window).is_some() {
+                let was = state.focused_window();
+                state.focus(window);
+                let _ = state.move_out_of_group();
+                if let Some(was) = was {
+                    state.focus(was);
+                }
+            }
+            let mut changes = Vec::new();
+            if let Some(ws) = state.workspaces.get_mut(&workspace) {
+                if ws.fullscreen.is_some_and(|(id, _)| id == window) {
+                    ws.fullscreen = None;
+                    changes.push(Change::Fullscreen { window, mode: None });
+                }
+                ws.tiling.remove(window);
+                ws.floating.push(window);
+            }
+            changes.push(Change::Floating {
+                window,
+                floating: true,
+            });
+            changes
+        }))
+    }
+
+    /// Every window, most recently focused first.
+    ///
+    /// The focus history, which is what a rule that gives the focus back
+    /// needs and what `hyprctl clients` numbers its `focusHistoryID` from.
+    #[must_use]
+    pub fn windows_in_focus_order(&self) -> Vec<WindowId> {
+        let mut order: Vec<WindowId> = self.history.iter().rev().copied().collect();
+        order.dedup();
+        order
+    }
+
     fn open(&mut self, window: WindowId, floating: Option<Rect>) -> Result<Vec<Change>, Error> {
         if self.windows.contains_key(&window) {
             return Err(Error::DuplicateWindow(window));

@@ -919,7 +919,9 @@ fn read_pts(cursor: u64, emit: &mut dyn FnMut(DirEntry<'_>) -> bool) -> Result<(
             ino: pty::SLAVE_INO_BASE + u64::from(number),
             kind: FileType::CharDevice,
             name: name.as_bytes(),
-            next: FIRST_CURSOR.saturating_add(u64::from(number)).saturating_add(1),
+            next: FIRST_CURSOR
+                .saturating_add(u64::from(number))
+                .saturating_add(1),
         };
         if !emit(entry) {
             return Ok(());

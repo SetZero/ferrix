@@ -220,7 +220,14 @@ pub(crate) fn apply(
         value: value.to_owned(),
     };
     match key {
-        "windowrule" | "windowrulev2" => config.window_rules.push(raw(key)),
+        "windowrule" => config.window_rules.push(raw(key)),
+        // Hyprland 0.56 merged the two syntaxes and took this one away; its
+        // own handler answers with this sentence and nothing else.
+        "windowrulev2" => {
+            return Err(
+                "windowrulev2 is deprecated. Correct syntax can be found on the wiki.".to_owned(),
+            );
+        }
         "layerrule" => config.layer_rules.push(raw(key)),
         "monitor" => config.monitors.push(raw(key)),
         "workspace" => config.workspaces.push(raw(key)),

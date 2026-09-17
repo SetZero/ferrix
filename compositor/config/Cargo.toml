@@ -7,5 +7,8 @@ rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[dependencies]
+compositor-regex = { path = "../regex" }
+
 [lints]
 workspace = true

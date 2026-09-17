@@ -564,8 +564,8 @@ fn keywords_collect_in_order() {
     let config = clean(
         "monitor = ,preferred,auto,1\n\
          workspace = 1, monitor:Virtual-1\n\
-         windowrule = float, ^(pavucontrol)$\n\
-         windowrulev2 = opacity 0.9 0.8, class:^(kitty)$\n\
+         windowrule = float, match:class ^(pavucontrol)$\n\
+         windowrule = opacity 0.9 0.8, match:class ^(kitty)$\n\
          layerrule = blur, waybar\n\
          bezier = ease, 0.05, 0.9, 0.1, 1.05\n\
          animation = windows, 1, 7, ease\n\
@@ -598,8 +598,8 @@ fn keywords_collect_in_order() {
     assert_eq!(
         values(&config.window_rules),
         owned(&[
-            ("windowrule", "float, ^(pavucontrol)$"),
-            ("windowrulev2", "opacity 0.9 0.8, class:^(kitty)$"),
+            ("windowrule", "float, match:class ^(pavucontrol)$"),
+            ("windowrule", "opacity 0.9 0.8, match:class ^(kitty)$"),
         ])
     );
     assert_eq!(
@@ -798,7 +798,7 @@ bind = $mainMod, 1, workspace, 1
 bind = $mainMod SHIFT, 1, movetoworkspace, 1
 bindm = $mainMod, mouse:272, movewindow
 
-windowrulev2 = float, class:^(pattern-float)$
+windowrule = float, match:class ^(pattern-float)$
 ";
 
 #[test]
@@ -931,4 +931,169 @@ fn a_monitor_can_be_disabled_and_a_bad_field_is_refused() {
             .is_err_and(|why| why.contains("not done yet")),
         "{auto_left:?}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// `windowrule =` lines
+//
+// Hyprland 0.56's form: comma-separated fields, each a name and a value, with
+// `match:` in front of the ones the window must be.
+// ---------------------------------------------------------------------------
+
+use crate::{Decoration, Effect, Length, Window, WindowRule};
+
+fn window<'a>(class: &'a str, title: &'a str) -> Window<'a> {
+    Window {
+        class,
+        title,
+        initial_class: class,
+        initial_title: title,
+        ..Window::default()
+    }
+}
+
+#[test]
+fn a_rule_is_what_to_do_and_what_to_do_it_to() {
+    let rule = WindowRule::parse("float, match:class ^(foot)$").unwrap();
+    assert_eq!(rule.effects, [Effect::Float]);
+    assert!(rule.matches(&window("foot", "a shell")));
+    assert!(!rule.matches(&window("kitty", "a shell")));
+
+    // Several effects and several matchers, all of which must hold.
+    let rule =
+        WindowRule::parse("float, size 800 600, match:class ^(foot)$, match:title ^(Save.*)$")
+            .unwrap();
+    assert_eq!(
+        rule.effects,
+        [
+            Effect::Float,
+            Effect::Size(Length::Pixels(800), Length::Pixels(600))
+        ]
+    );
+    assert!(rule.matches(&window("foot", "Save as")));
+    assert!(!rule.matches(&window("foot", "a shell")));
+    assert!(!rule.matches(&window("kitty", "Save as")));
+
+    // A rule with no `match:` applies to every window, which is what a line
+    // with none means.
+    let every = WindowRule::parse("no_shadow").unwrap();
+    assert_eq!(every.effects, [Effect::Without(Decoration::Shadow)]);
+    assert!(every.matches(&window("anything", "at all")));
+}
+
+#[test]
+fn the_effects_take_their_values() {
+    let effects = |line: &str| WindowRule::parse(line).unwrap().effects;
+    assert_eq!(effects("tile"), [Effect::Tile]);
+    assert_eq!(effects("center"), [Effect::Center]);
+    assert_eq!(effects("move center"), [Effect::Center]);
+    assert_eq!(
+        effects("move 100 200"),
+        [Effect::Move(Length::Pixels(100), Length::Pixels(200))]
+    );
+    // A percentage is of the monitor.
+    assert_eq!(
+        effects("size 50% 100%"),
+        [Effect::Size(Length::Share(0.5), Length::Share(1.0))]
+    );
+    assert_eq!(Length::Share(0.5).against(1024), 512);
+    assert_eq!(Length::Pixels(640).against(1024), 640);
+    assert_eq!(
+        effects("workspace 3"),
+        [Effect::Workspace {
+            target: "3".to_owned(),
+            silent: false
+        }]
+    );
+    assert_eq!(
+        effects("workspace 3 silent"),
+        [Effect::Workspace {
+            target: "3".to_owned(),
+            silent: true
+        }]
+    );
+    assert_eq!(effects("opacity 0.8"), [Effect::Opacity(0.8)]);
+    // Hyprland's second number is the unfocused opacity; the first is what
+    // this carries.
+    assert_eq!(effects("opacity 0.8 0.6"), [Effect::Opacity(0.8)]);
+    assert_eq!(effects("rounding 12"), [Effect::Rounding(12)]);
+    assert_eq!(effects("border_size 3"), [Effect::BorderSize(3)]);
+    assert_eq!(effects("fullscreen"), [Effect::Fullscreen]);
+    assert_eq!(effects("no_focus"), [Effect::NoFocus]);
+    assert_eq!(effects("no_blur"), [Effect::Without(Decoration::Blur)]);
+    assert_eq!(effects("no_dim"), [Effect::Without(Decoration::Dim)]);
+}
+
+#[test]
+fn the_states_a_rule_can_match_on() {
+    let floating = WindowRule::parse("no_shadow, match:float 1").unwrap();
+    let tiled = Window {
+        floating: false,
+        ..window("foot", "a shell")
+    };
+    assert!(!floating.matches(&tiled));
+    assert!(floating.matches(&Window {
+        floating: true,
+        ..tiled
+    }));
+
+    let unfocused = WindowRule::parse("opacity 0.7, match:focus 0").unwrap();
+    assert!(unfocused.matches(&tiled));
+    assert!(!unfocused.matches(&Window {
+        focused: true,
+        ..tiled
+    }));
+
+    // The initial names are matched apart from the current ones.
+    let initial = WindowRule::parse("float, match:initial_title ^(one)$").unwrap();
+    assert!(initial.matches(&Window {
+        title: "renamed",
+        initial_title: "one",
+        ..window("pattern", "one")
+    }));
+    assert!(!initial.matches(&window("pattern", "one what")));
+}
+
+#[test]
+fn a_rule_that_cannot_be_read_says_what_is_wrong() {
+    for bad in [
+        // A field with no value.
+        "match:class",
+        // A matcher nothing has.
+        "float, match:colour blue",
+        // An effect nothing does.
+        "levitate",
+        // A value of the wrong shape.
+        "size 800",
+        "size wide high",
+        "opacity green",
+        "opacity 2",
+        "rounding round",
+        "workspace",
+        // A pattern the engine will not take.
+        r"float, match:class ^(\d+)$",
+        // Nothing to do at all.
+        "match:class ^(foot)$",
+    ] {
+        assert!(WindowRule::parse(bad).is_err(), "`{bad}` was read");
+    }
+}
+
+/// `windowrulev2` is refused with Hyprland's own words: 0.56 merged the two
+/// syntaxes and took the old one away.
+#[test]
+fn windowrulev2_is_refused_as_hyprland_refuses_it() {
+    let parsed = parse(
+        "t.conf",
+        "windowrulev2 = float,class:^(foot)$\nwindowrule = float, match:class ^(foot)$\n",
+        &mut NoSources,
+    );
+    assert_eq!(parsed.diagnostics.len(), 1, "{:?}", parsed.diagnostics);
+    assert!(
+        parsed.diagnostics[0].message.contains("deprecated"),
+        "{:?}",
+        parsed.diagnostics[0]
+    );
+    // And the line that is not deprecated is kept.
+    assert_eq!(parsed.config.window_rules.len(), 1);
 }

@@ -342,6 +342,90 @@ fn the_second_monitor_draws_the_window_moved_to_it() {
     }
 }
 
+/// What a `windowrule` that floats, sizes and moves a window makes: the
+/// checkerboard with the tiling to itself, and the gradient floating over it
+/// at the place and size the rule gave.
+///
+/// The rule is carried out by `compositor/hyprix`'s `rules`, which calls
+/// `State::float_window`; this calls the same thing, so the picture the
+/// compositor draws on Ferrix and the picture blessed here are made by one
+/// piece of code.
+fn ruled_frame() -> Vec<u8> {
+    let (mut state, _) = two_clients();
+    let _ = state
+        .float_window(GRADIENT, Rect::new(RULED.0, RULED.1, RULED.2, RULED.3))
+        .expect("the window floats");
+    let layout = state.layout().remove(0);
+    let buffers = client_buffers(&layout);
+    let mut canvas = Canvas::new(WIDTH, HEIGHT).unwrap();
+    let full = Damage::full(WIDTH, HEIGHT);
+    let produced = render(
+        &mut canvas,
+        &layout,
+        (0, 0),
+        &Style::default(),
+        &surfaces(&buffers),
+        &full,
+    );
+    assert_eq!(produced, full);
+    canvas.data().to_vec()
+}
+
+/// Where the rule puts the floating window: the same numbers
+/// `cargo xtask test-compositor`'s configuration gives it.
+const RULED: (i64, i64, i64, i64) = (200, 150, 400, 300);
+
+/// A window a rule floats is drawn where the rule put it, over the one that
+/// has the tiling to itself.
+///
+/// This is the picture `cargo xtask test-compositor` requires from a
+/// screendump of a guest whose `hyprland.conf` carries those rules.
+#[test]
+fn a_ruled_window_floats_where_the_rule_put_it() {
+    let frame = ruled_frame();
+    golden::check("ruled-two-clients", WIDTH, HEIGHT, &frame);
+
+    // Not the tiled picture: one window has the whole area and the other is
+    // over it.
+    assert_ne!(frame, two_client_frame(), "the rule changed nothing");
+
+    // The floating window's own pixels are where the rule said. Inside its
+    // client area, which is the rectangle less the border.
+    let at = |x: i64, y: i64| -> u32 {
+        let start = ((y * i64::from(WIDTH) + x) * 4) as usize;
+        u32::from_le_bytes([
+            frame[start],
+            frame[start + 1],
+            frame[start + 2],
+            frame[start + 3],
+        ])
+    };
+    let tiled = two_client_frame();
+    let tiled_at = |x: i64, y: i64| -> u32 {
+        let start = ((y * i64::from(WIDTH) + x) * 4) as usize;
+        u32::from_le_bytes([
+            tiled[start],
+            tiled[start + 1],
+            tiled[start + 2],
+            tiled[start + 3],
+        ])
+    };
+    let middle = (RULED.0 + RULED.2 / 2, RULED.1 + RULED.3 / 2);
+    assert_ne!(
+        at(middle.0, middle.1),
+        tiled_at(middle.0, middle.1),
+        "the floating window is not over the middle of where it was put"
+    );
+    // And outside it, at the far right, the checkerboard now reaches: the
+    // tiling is one window's.
+    let far = (i64::from(WIDTH) - 40, i64::from(HEIGHT) / 2);
+    assert_ne!(
+        at(far.0, far.1),
+        tiled_at(far.0, far.1),
+        "the tiled window did not take the space the floating one left"
+    );
+}
+
 /// The frame with nothing dispatched: the second window opened is the
 /// focused one, which dwindle puts on the right.
 fn two_client_frame() -> Vec<u8> {

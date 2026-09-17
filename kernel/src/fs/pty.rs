@@ -277,11 +277,7 @@ impl Pty {
         }
         for target in crate::syscall::registry::live() {
             if target.pgid() == group {
-                crate::syscall::kill::send(
-                    &target,
-                    signal,
-                    crate::syscall::signal::Origin::Kernel,
-                );
+                crate::syscall::kill::send(&target, signal, crate::syscall::signal::Origin::Kernel);
             }
         }
     }
@@ -382,7 +378,11 @@ impl Pty {
                 .changed
                 .wait_until_deadline(|| ready() || killed(), u64::MAX);
         }
-        if ready() { Ok(()) } else { Err(Errno::ERESTARTSYS) }
+        if ready() {
+            Ok(())
+        } else {
+            Err(Errno::ERESTARTSYS)
+        }
     }
 }
 
@@ -466,7 +466,8 @@ impl Inode for MasterFile {
     }
 
     fn write_at(&self, offset: u64, buf: &[u8], _append: bool) -> VfsResult<(usize, u64)> {
-        self.write_stream(buf, false).map(|written| (written, offset))
+        self.write_stream(buf, false)
+            .map(|written| (written, offset))
     }
 
     /// What the person typed, through the line discipline.
@@ -536,7 +537,8 @@ impl Inode for SlaveFile {
     }
 
     fn write_at(&self, offset: u64, buf: &[u8], _append: bool) -> VfsResult<(usize, u64)> {
-        self.write_stream(buf, false).map(|written| (written, offset))
+        self.write_stream(buf, false)
+            .map(|written| (written, offset))
     }
 
     /// The program's output, on its way to the master.

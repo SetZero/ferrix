@@ -4289,6 +4289,39 @@ virtio-gpu only when a host window manager resizes its window, which a
 headless test cannot do; two devices are two consoles, and a screendump names
 each.
 
+**Begun — window rules (2026-09-17).** `windowrule = <effect> [value],
+match:<prop> <value>, ...`, which is Hyprland 0.56's own form: comma-separated
+fields, each a name and a value, with `match:` in front of the ones the
+window must be. `windowrulev2` is refused with Hyprland's own sentence,
+because 0.56 merged the two syntaxes and took the old one away.
+
+Matching is by regular expression for the four names a window has -- `class`,
+`title`, `initial_class`, `initial_title` -- and a yes-or-no for `float`,
+`fullscreen` and `focus`. The expressions are `compositor/regex`'s, which is
+RE2's syntax as far as a window rule uses it: literals and escapes, `.`,
+classes with ranges and negation, `*`, `+`, `?`, groups with alternatives,
+and the anchors every rule carries and a full match makes redundant. What is
+not done -- counted repetition, `\d`, lookaround, non-greedy -- is refused
+with a sentence rather than matched wrongly, because a rule that silently
+matched everything would float every window a person owns. The matcher
+counts its steps and gives up rather than hanging the compositor on a
+pattern that backtracks for ever.
+
+A rule is applied where Hyprland applies one: when the window maps, which is
+where the client has finished saying what it is called. `float`, `tile`,
+`size`, `move`, `center`, `workspace` (with `silent`), `fullscreen`,
+`maximize` and `no_focus` are carried out, through the same calls a
+dispatcher makes. The rest of what a rule can say -- `opacity`, `rounding`,
+`border_size`, `no_blur`, `no_shadow`, `no_dim` -- is about how *one* window
+is drawn where this renderer draws every window with one style, and a rule
+asking for one of those says so in the log rather than being quietly
+ignored.
+
+`cargo xtask test-compositor` boots a tenth time with three rules that
+float, size and move one of the two windows, and requires the picture they
+make: `compositor/render` blesses it by calling `State::float_window`, which
+is what the rules call, so the two pictures are made by one piece of code.
+
 **Begun — window groups (2026-09-17).** Hyprland's tabs: windows that share
 one slot in the tiling, of which one is drawn. Only the head is in the
 dwindle tree, and the slot draws whichever member is active, so cycling a
