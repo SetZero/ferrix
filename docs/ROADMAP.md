@@ -4193,6 +4193,49 @@ grid, printed a row at a time.
 /bin/hyprctl` and requires the picture the terminal makes, pixel for pixel,
 on x86-64 and on AArch64.
 
+**Done — screenshots (2026-09-17).** `zwlr_screencopy_v1`, which is what
+`grim` speaks, what `hyprshot` wraps, and what every screen recorder and
+screen-sharing portal on wlroots goes through. The compositor says what
+buffer to make -- `XRGB8888` at the screen's size, since its canvas is
+opaque and an alpha channel that is always `0xFF` is a larger file saying
+the same thing -- the client makes one in `wl_shm` and hands it over, and
+the compositor writes the screen into it row by row and answers `ready`.
+`capture_output_region` is the same with the rows clipped. A frame may be
+copied into once: a second `copy` is `already_used`, which is a protocol
+error, because a client that sent one has lost track of an object it owns.
+
+This is the one place the compositor *writes* into a client's memory, and it
+is a mapping of its own: `compositor/hyprix`'s pool mapping is read-only and
+says why, so a screenshot maps the same pool a second time, writable, for
+exactly as long as the copy takes. The rule that the compositor never writes
+into a window's buffer still holds everywhere else.
+
+`compositor/shot` is `grim` without the file format: it binds the manager
+and a `wl_output`, makes the buffer it is told to make, and reads back what
+was written into it. It prints the size and an FNV digest of every pixel,
+which is how a whole screen is compared through a serial port.
+
+And that is the strongest picture proof in this tree. Every other boot
+compares QEMU's *screendump*, which reads the virtio-gpu's scanout; this
+compares what the compositor handed a program **through the Wayland
+protocol**, against the image `compositor/render` builds on the host by
+calling the renderer with rectangles. A compositor that drew the right thing
+and answered screencopy with rubbish is caught here and nowhere else.
+
+`cargo xtask test-compositor` boots a fourteenth time: a keybind runs
+`/bin/shot`, and the digest it prints must be the digest of the expected
+image, on x86-64 and on AArch64. A host test in `compositor/hyprix` compares
+the screenshot against the same image pixel by pixel.
+
+**And a second real bug came out of it.** The seat turned a whole batch of
+input events into actions *before* any dispatcher ran, so a key pressed
+after `submap` in the same batch was judged against the map that was in
+force before it. On a machine fast enough to see each key on its own the two
+are the same; under emulation a whole sequence arrives in one read, which is
+where it was found. Each input is now carried out before the next is read,
+which is what Hyprland does and what anything a dispatcher changes about the
+meaning of the *next* key requires.
+
 **Done — the window list a bar draws (2026-09-17).**
 `zwlr_foreign_toplevel_management_v1`, which is the other half of a bar's
 job: `zwlr_layer_shell_v1` puts the bar on the screen, and this tells it what
@@ -4602,6 +4645,21 @@ in this tree: virtio-gpu's 3D commands through a render node,
 `zwp_linux_dmabuf`, GBM-shaped allocation, and a driver stack -- Mesa's virgl
 and Venus on ferrousli, or a Rust path over Vulkan -- that does not exist on
 Ferrix yet and is a stage's work in itself.
+
+Of the protocols and keywords a Hyprland setup uses, what is left is:
+`layerrule`, the session lock (`ext-session-lock-v1`, which is what
+`hyprlock` speaks), `zwp_virtual_keyboard` and the input-method protocols an
+on-screen keyboard needs, `zwp_pointer-constraints` and
+`relative-pointer` (a game that grabs the pointer), `viewporter` and
+`presentation-time`, drag-and-drop -- the other half of the four interfaces
+the clipboard already uses -- and the rest of `hyprctl`'s read-only
+commands, of which `binds`, `devices`, `layers` and `getoption` are the ones
+a bar or a script asks for. Each is a protocol or a table rather than a
+subsystem, and each is written the way the four above were: the XML
+vendored, the tables checked against libwayland's own, a program in
+`compositor/` that speaks it with no screen, a host test against the image
+the renderer blesses, and a boot of `cargo xtask test-compositor` that does
+it on Ferrix.
 
 **Exit:** the stage 18 test with animations on, requiring a sequence of
 screendumps to show a window moving along the configured curve with rounded

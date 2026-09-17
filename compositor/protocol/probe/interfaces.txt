@@ -213,3 +213,16 @@ zwlr_foreign_toplevel_handle_v1 3 event 4 state a
 zwlr_foreign_toplevel_handle_v1 3 event 5 done 
 zwlr_foreign_toplevel_handle_v1 3 event 6 closed 
 zwlr_foreign_toplevel_handle_v1 3 event 7 parent 3?o
+zwlr_screencopy_manager_v1 3 request 0 capture_output nio
+zwlr_screencopy_manager_v1 3 request 1 capture_output_region nioiiii
+zwlr_screencopy_manager_v1 3 request 2 destroy 
+zwlr_screencopy_frame_v1 3 request 0 copy o
+zwlr_screencopy_frame_v1 3 request 1 destroy 
+zwlr_screencopy_frame_v1 3 request 2 copy_with_damage 2o
+zwlr_screencopy_frame_v1 3 event 0 buffer uuuu
+zwlr_screencopy_frame_v1 3 event 1 flags u
+zwlr_screencopy_frame_v1 3 event 2 ready uuu
+zwlr_screencopy_frame_v1 3 event 3 failed 
+zwlr_screencopy_frame_v1 3 event 4 damage 2uuuu
+zwlr_screencopy_frame_v1 3 event 5 linux_dmabuf 3uuu
+zwlr_screencopy_frame_v1 3 event 6 buffer_done 3

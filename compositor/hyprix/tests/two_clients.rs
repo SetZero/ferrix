@@ -1158,6 +1158,7 @@ fn what_one_client_copies_another_pastes() {
         "the compositor's line does not say what the clipboard did: {line}"
     );
 }
+
 /// A bar's half of the protocol: `zwlr_foreign_toplevel_management_v1`.
 ///
 /// `compositor/lswt` is a taskbar with the drawing taken out -- it binds the
@@ -1255,5 +1256,155 @@ fn a_bar_is_told_which_windows_there_are_and_can_close_one() {
     assert!(
         after[0].contains("\"two\""),
         "the wrong window was closed: {after:?}; before: {listed:?}; the compositor said {line}"
+    );
+}
+
+/// A screenshot, through `zwlr_screencopy_v1`.
+///
+/// `compositor/shot` is `grim` without the file format: it binds the
+/// manager and a `wl_output`, is told what buffer to make, makes one, hands
+/// it over and reads back what the compositor wrote into it. What is
+/// required is that those pixels are the picture `compositor/render`
+/// blesses for the same two windows -- so a screenshot taken over the socket
+/// and a frame built by calling the renderer with rectangles agree byte for
+/// byte, which is the same standard every other picture in this tree is held
+/// to.
+#[test]
+fn a_screenshot_is_the_frame_the_renderer_blesses() {
+    let work = workspace("screenshot");
+    let socket = work.join("wayland");
+
+    let options = Options {
+        display: socket.to_string_lossy().into_owned(),
+        headless: Some((WIDTH, HEIGHT)),
+        deadline: Some(8000),
+        ..Options::default()
+    };
+
+    let for_clients = socket.clone();
+    let clients = std::thread::spawn(move || {
+        for _ in 0..400 {
+            if for_clients.exists() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let mut windows = Vec::new();
+        for (pattern, title) in [(Pattern::Checkerboard, "one"), (Pattern::Gradient, "two")] {
+            let path = for_clients.clone();
+            windows.push(std::thread::spawn(move || {
+                connect(&path, pattern, title, Shape::Window)
+            }));
+            std::thread::sleep(Duration::from_millis(250));
+        }
+        // Both windows are drawn by now, which is what the picture is of.
+        std::thread::sleep(Duration::from_millis(500));
+        let taken = compositor_shot::take(&for_clients, 0);
+        for window in windows {
+            let _ = window.join();
+        }
+        taken
+    });
+
+    let line = hyprix::run(&options).expect("the compositor ran");
+    let taken = clients.join().expect("the clients finished");
+    let taken =
+        taken.unwrap_or_else(|why| panic!("the screenshot: {why}; the compositor said {line}"));
+
+    assert_eq!(
+        (taken.width, taken.height),
+        (WIDTH, HEIGHT),
+        "the screenshot is not the screen's size"
+    );
+    let want = expected();
+    assert_eq!(
+        taken.pixels.len(),
+        want.len(),
+        "the screenshot has {} bytes and the expected image {}",
+        taken.pixels.len(),
+        want.len()
+    );
+    let differing = taken
+        .pixels
+        .chunks_exact(3)
+        .zip(want.chunks_exact(3))
+        .filter(|(shot, blessed)| shot != blessed)
+        .count();
+    assert_eq!(
+        differing,
+        0,
+        "{differing} of {} pixels in the screenshot are not the renderer's; the compositor said \
+         {line}",
+        (WIDTH * HEIGHT) as usize
+    );
+}
+
+/// What is left after a window is closed from outside it.
+///
+/// The taskbar test says the *list* is right afterwards; this says the
+/// *picture* is. They are different claims: the list comes from the layout
+/// and the picture from whichever client's buffer the compositor reaches
+/// for, and a compositor that held a window's client by its place in a list
+/// it had just compacted would get the first right and the second wrong.
+#[test]
+fn the_window_left_after_a_close_is_drawn_from_its_own_buffer() {
+    let work = workspace("closed");
+    let socket = work.join("wayland");
+
+    let options = Options {
+        display: socket.to_string_lossy().into_owned(),
+        headless: Some((WIDTH, HEIGHT)),
+        deadline: Some(12000),
+        ..Options::default()
+    };
+
+    let for_clients = socket.clone();
+    let clients = std::thread::spawn(move || {
+        for _ in 0..400 {
+            if for_clients.exists() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let mut windows = Vec::new();
+        for (pattern, title) in [(Pattern::Checkerboard, "one"), (Pattern::Gradient, "two")] {
+            let path = for_clients.clone();
+            windows.push(std::thread::spawn(move || {
+                connect(&path, pattern, title, Shape::Window)
+            }));
+            std::thread::sleep(Duration::from_millis(250));
+        }
+        let closed = compositor_lswt::run(
+            &for_clients,
+            &compositor_lswt::Want::Close("one".to_owned()),
+        );
+        // Long enough for the window that is left to be told its new size
+        // and to draw at it.
+        std::thread::sleep(Duration::from_millis(2500));
+        let taken = compositor_shot::take(&for_clients, 0);
+        for window in windows {
+            let _ = window.join();
+        }
+        (closed, taken)
+    });
+
+    let line = hyprix::run(&options).expect("the compositor ran");
+    let (closed, taken) = clients.join().expect("the clients finished");
+    let _ = closed.unwrap_or_else(|why| panic!("closing: {why}"));
+    let taken = taken.unwrap_or_else(|why| panic!("the screenshot: {why}"));
+
+    let want = image(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("../render/tests/data/one-client-alone.xrle"),
+    );
+    let differing = taken
+        .pixels
+        .chunks_exact(3)
+        .zip(want.chunks_exact(3))
+        .filter(|(shot, blessed)| shot != blessed)
+        .count();
+    assert_eq!(
+        differing, 0,
+        "{differing} pixels of the window that was left are not the renderer's; the compositor \
+         said {line}"
     );
 }

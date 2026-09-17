@@ -78,6 +78,10 @@ pub enum Role {
     /// `zwlr_foreign_toplevel_handle_v1`: one window in that list, made by
     /// the *server* -- the manager does not ask for them, it is told.
     ForeignToplevel,
+    /// `zwlr_screencopy_manager_v1`: a screenshot program.
+    ScreencopyManager,
+    /// `zwlr_screencopy_frame_v1`: one screenshot being taken.
+    ScreencopyFrame,
 }
 
 impl Role {

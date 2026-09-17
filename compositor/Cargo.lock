@@ -164,6 +164,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "compositor-shot"
+version = "0.1.0"
+dependencies = [
+ "compositor-evecho",
+ "compositor-protocol",
+ "compositor-shm",
+ "compositor-socket",
+ "compositor-wire",
+]
+
+[[package]]
 name = "compositor-socket"
 version = "0.1.0"
 dependencies = [
@@ -220,6 +231,7 @@ dependencies = [
  "compositor-protocol",
  "compositor-render",
  "compositor-server",
+ "compositor-shot",
  "compositor-socket",
  "compositor-wire",
  "compositor-xkb",

@@ -8,7 +8,7 @@ use compositor_config::{Config, MonitorRule, NoSources, Position};
 use compositor_layout::{Monitor, MonitorId, Rect, Settings, State, WindowId};
 use compositor_protocol::{core, xdg_shell};
 use compositor_render::{Canvas, Damage, Style};
-use compositor_server::{Client, Event, ForeignRequest, Globals, Role};
+use compositor_server::{Client, Event, ForeignRequest, Globals, Rect as ServerRect, Role};
 use compositor_socket::{Connection, Listener, RecvError};
 use compositor_wire::{Fd, ObjectId};
 
@@ -120,6 +120,9 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
     let mut window_rules = crate::rules::Rules::new(&config, report);
     // The clipboard: what one client copied, for the others to paste.
     let mut clipboard = crate::clipboard::Clipboard::new();
+    // The screenshots asked for in one pass, kept until the screens are in
+    // reach: a client's own borrow is open while its requests are read.
+    let mut shots: Vec<Shot> = Vec::new();
     if !window_rules.is_empty() {
         report(&format!("hyprix: {} window rules", window_rules.len()));
     }
@@ -425,10 +428,16 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                 &mut next_window,
                 &mut window_rules,
                 &mut clipboard,
+                &mut shots,
                 report,
             )? {
                 changed = true;
             }
+        }
+        // The screenshots asked for in this pass, now that the screens are
+        // in reach again.
+        for shot in shots.drain(..) {
+            take_shot(&shot, &screens, &mut slots);
         }
         for reply in asked {
             if run_ipc(
@@ -643,6 +652,7 @@ fn serve(
     next_window: &mut u32,
     rules: &mut crate::rules::Rules,
     clipboard: &mut crate::clipboard::Clipboard,
+    shots: &mut Vec<Shot>,
     report: &mut dyn FnMut(&str),
 ) -> Result<bool, String> {
     let Some(slot) = slots.get_mut(index) else {
@@ -721,6 +731,32 @@ fn serve(
                     role: Role::ForeignToplevelManager,
                     ..
                 } => bound_manager = true,
+                // A screenshot: the screens are the loop's, not this
+                // client's, so both halves are carried out there.
+                Event::ScreencopyWanted {
+                    frame,
+                    output,
+                    region,
+                } => shots.push(Shot::Wanted {
+                    client: index,
+                    frame,
+                    output,
+                    region,
+                }),
+                Event::ScreencopyInto {
+                    frame,
+                    buffer,
+                    output,
+                    region,
+                    with_damage,
+                } => shots.push(Shot::Into {
+                    client: index,
+                    frame,
+                    buffer,
+                    output,
+                    region,
+                    with_damage,
+                }),
                 // A bar asked for something to be done to a window it
                 // does not own, which is the whole point of the protocol:
                 // clicking a taskbar entry focuses that window, and the
@@ -1214,6 +1250,190 @@ fn dispatch(
     !changes.is_empty()
 }
 
+/// A screenshot, waiting for the part of the loop that has the screens.
+///
+/// `zwlr_screencopy_v1` is answered in two steps -- the compositor says what
+/// buffer to make, the client makes one and hands it over -- and neither can
+/// be done while a client's own borrow is open, because both read a screen
+/// and one writes into another client's memory.
+#[derive(Clone, Copy, Debug)]
+enum Shot {
+    /// A program asked for one: it is owed the size and the format.
+    Wanted {
+        /// Which connection asked.
+        client: usize,
+        /// Its `zwlr_screencopy_frame_v1`.
+        frame: ObjectId,
+        /// Which screen, by its place in the outputs.
+        output: usize,
+        /// The part of it, or `None` for all of it.
+        region: Option<ServerRect>,
+    },
+    /// It handed over the buffer to write the screenshot into.
+    Into {
+        /// Which connection asked.
+        client: usize,
+        /// Its `zwlr_screencopy_frame_v1`.
+        frame: ObjectId,
+        /// The `wl_buffer` to fill.
+        buffer: ObjectId,
+        /// Which screen.
+        output: usize,
+        /// The part of it, or `None` for all of it.
+        region: Option<ServerRect>,
+        /// Whether `copy_with_damage` asked for a `damage` event.
+        with_damage: bool,
+    },
+}
+
+/// Answer one half of a screenshot.
+fn take_shot(shot: &Shot, screens: &[Screen], slots: &mut [Slot]) {
+    match *shot {
+        Shot::Wanted {
+            client,
+            frame,
+            output,
+            region,
+        } => {
+            let Some(size) = shot_size(screens, output, region) else {
+                if let Some(slot) = slots.get_mut(client) {
+                    slot.client_mut().screencopy_failed(frame);
+                }
+                return;
+            };
+            if let Some(slot) = slots.get_mut(client) {
+                // `XRGB8888` is what the frame is: the canvas is opaque, and
+                // a screenshot with an alpha channel that is always 0xFF is
+                // a larger file saying the same thing.
+                slot.client_mut().screencopy_offer(
+                    frame,
+                    compositor_server::Format::Xrgb8888,
+                    size,
+                );
+            }
+        }
+        Shot::Into {
+            client,
+            frame,
+            buffer,
+            output,
+            region,
+            with_damage,
+        } => {
+            let taken = copy_screen(screens, output, region, slots, client, buffer);
+            let Some(slot) = slots.get_mut(client) else {
+                return;
+            };
+            if taken {
+                let damaged = with_damage.then(|| {
+                    let (width, height) = shot_size(screens, output, region).unwrap_or((0, 0));
+                    ServerRect {
+                        x: 0,
+                        y: 0,
+                        width: i32::try_from(width).unwrap_or(0),
+                        height: i32::try_from(height).unwrap_or(0),
+                    }
+                });
+                slot.client_mut()
+                    .screencopy_ready(frame, now_monotonic(), damaged);
+            } else {
+                slot.client_mut().screencopy_failed(frame);
+            }
+        }
+    }
+}
+
+/// How large the screenshot is: the screen, or the part of it asked for,
+/// clipped to the screen.
+fn shot_size(screens: &[Screen], output: usize, region: Option<ServerRect>) -> Option<(u32, u32)> {
+    let screen = screens.get(output)?;
+    let (width, height) = (screen.canvas.width(), screen.canvas.height());
+    let Some(region) = region else {
+        return Some((width, height));
+    };
+    let (x, y) = (region.x.max(0), region.y.max(0));
+    let wanted = |start: i32, size: i32, limit: u32| -> u32 {
+        let start = u32::try_from(start).unwrap_or(0);
+        let size = u32::try_from(size.max(0)).unwrap_or(0);
+        size.min(limit.saturating_sub(start))
+    };
+    let (w, h) = (
+        wanted(x, region.width, width),
+        wanted(y, region.height, height),
+    );
+    (w > 0 && h > 0).then_some((w, h))
+}
+
+/// Write the screen into the client's buffer, row by row.
+///
+/// Gives whether it was written. The buffer has to be the size the
+/// compositor said and one of the two formats `wl_shm` offers; anything else
+/// is a client that did not do as it was told, and the frame fails rather
+/// than the compositor writing outside what was agreed.
+fn copy_screen(
+    screens: &[Screen],
+    output: usize,
+    region: Option<ServerRect>,
+    slots: &mut [Slot],
+    client: usize,
+    buffer: ObjectId,
+) -> bool {
+    let Some((width, height)) = shot_size(screens, output, region) else {
+        return false;
+    };
+    let Some(screen) = screens.get(output) else {
+        return false;
+    };
+    let from = screen.canvas.data();
+    let stride = screen.canvas.width() as usize * 4;
+    let (left, top) = region.map_or((0, 0), |rect| {
+        (rect.x.max(0) as usize * 4, rect.y.max(0) as usize)
+    });
+    let Some(slot) = slots.get_mut(client) else {
+        return false;
+    };
+    let Some(shape) = slot.client().buffer(buffer).copied() else {
+        return false;
+    };
+    if shape.width != i32::try_from(width).unwrap_or(-1)
+        || shape.height != i32::try_from(height).unwrap_or(-1)
+    {
+        return false;
+    }
+    let Some(mapping) = slot.pools().get(&shape.pool) else {
+        return false;
+    };
+    let Ok(mut writable) = mapping.writable() else {
+        return false;
+    };
+    let into = writable.bytes_mut();
+    let row = width as usize * 4;
+    let (offset, to_stride) = (shape.offset.max(0) as usize, shape.stride.max(0) as usize);
+    if to_stride < row {
+        return false;
+    }
+    for y in 0..height as usize {
+        let at = (top + y) * stride + left;
+        let Some(source) = from.get(at..at + row) else {
+            return false;
+        };
+        let start = offset + y * to_stride;
+        let Some(target) = into.get_mut(start..start + row) else {
+            return false;
+        };
+        target.copy_from_slice(source);
+    }
+    true
+}
+
+/// The monotonic clock, as `zwlr_screencopy_frame_v1.ready` carries it.
+fn now_monotonic() -> (u64, u32) {
+    let since = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    (since.as_secs(), since.subsec_nanos())
+}
+
 /// Where each slot will be once the ones that have gone are taken out.
 ///
 /// `None` for a slot that is going. The compositor holds a client by its
@@ -1522,6 +1742,13 @@ fn globals(outputs: usize) -> Globals {
             &compositor_protocol::foreign_toplevel::ZWLR_FOREIGN_TOPLEVEL_MANAGER_V1,
             3,
             Role::ForeignToplevelManager,
+        ),
+        // A screenshot: `grim`, `hyprshot` and every screen recorder on
+        // wlroots go through this and nothing else.
+        (
+            &compositor_protocol::screencopy::ZWLR_SCREENCOPY_MANAGER_V1,
+            3,
+            Role::ScreencopyManager,
         ),
     ] {
         let _ = globals.add(interface, version, role);

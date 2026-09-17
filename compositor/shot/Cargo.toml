@@ -1,0 +1,26 @@
+[package]
+name = "compositor-shot"
+description = "Take a screenshot through zwlr_screencopy_v1 and say what is in it"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "shot"
+path = "src/main.rs"
+
+[lib]
+name = "compositor_shot"
+path = "src/lib.rs"
+
+[dependencies]
+compositor-evecho = { path = "../evecho" }
+compositor-protocol = { path = "../protocol" }
+compositor-shm = { path = "../shm" }
+compositor-socket = { path = "../socket" }
+compositor-wire = { path = "../wire" }
+
+[lints]
+workspace = true

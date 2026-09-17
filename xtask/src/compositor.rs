@@ -103,6 +103,7 @@ const PLUG_PATH: &str = "bin/plug";
 const TERM_PATH: &str = "bin/term";
 const CLIP_PATH: &str = "bin/clip";
 const LSWT_PATH: &str = "bin/lswt";
+const SHOT_PATH: &str = "bin/shot";
 const CONFIG_PATH: &str = "etc/hyprland.conf";
 
 /// The instance the control socket is under, which `hyprctl` finds by
@@ -329,6 +330,40 @@ windowrule = rounding 12, match:title ^(one)$
 windowrule = no_shadow, match:title ^(one)$
 exec-once = /bin/pattern checkerboard one
 exec-once = /bin/pattern gradient two
+";
+
+/// The two pictures the screenshot boot requires, and the key between them.
+///
+/// A screenshot changes nothing on the screen, so both are the tiled pair:
+/// what the boot is *for* is the digest the guest prints, which must be the
+/// digest of the picture `compositor/render` blesses. The second picture is
+/// there so that a compositor which had stopped drawing would still be
+/// caught.
+const SHOT_EXPECTED: [(&str, &str); 2] = [
+    (
+        "tiled",
+        "compositor/render/tests/data/dwindle-two-clients.xrle",
+    ),
+    (
+        "still tiled, with a screenshot taken of it",
+        "compositor/render/tests/data/dwindle-two-clients.xrle",
+    ),
+];
+
+/// The key the screenshot boot presses.
+///
+/// No modifier, for the reason `TASKBAR_BINDS` gives: a modifier reaches the
+/// focused client, and this client draws something else when it is sent a
+/// key.
+const SHOT_BINDS: [(&str, &[&str]); 1] = [("S, which takes a screenshot", &["s"])];
+
+/// The configuration the fourteenth boot is given: two windows and a key
+/// that screenshots them.
+const SHOT_CONFIG: &str = "\
+# Carried into the initramfs by `cargo xtask test-compositor`.
+exec-once = /bin/pattern checkerboard one
+exec-once = /bin/pattern gradient two
+bind = , S, exec, /bin/shot
 ";
 
 /// The two pictures the taskbar boot requires, and the two keys between
@@ -562,6 +597,8 @@ struct Programs {
     clip: PathBuf,
     /// `lswt`, which lists the windows as a taskbar does.
     lswt: PathBuf,
+    /// `shot`, which takes a screenshot as `grim` does.
+    shot: PathBuf,
 }
 
 impl Programs {
@@ -575,11 +612,12 @@ impl Programs {
             term: build(arch, "compositor-term", "term")?,
             clip: build(arch, "compositor-clip", "clip")?,
             lswt: build(arch, "compositor-lswt", "lswt")?,
+            shot: build(arch, "compositor-shot", "shot")?,
         })
     }
 
     /// The ones the initramfs carries, each with the path it goes at.
-    fn carried(&self) -> [(&'static str, &Path); 6] {
+    fn carried(&self) -> [(&'static str, &Path); 7] {
         [
             (CLIENT_PATH, self.client.as_path()),
             (CTL_PATH, self.ctl.as_path()),
@@ -587,6 +625,7 @@ impl Programs {
             (TERM_PATH, self.term.as_path()),
             (CLIP_PATH, self.clip.as_path()),
             (LSWT_PATH, self.lswt.as_path()),
+            (SHOT_PATH, self.shot.as_path()),
         ]
     }
 }
@@ -1106,7 +1145,7 @@ fn said_on_its_own(line: &str) -> &str {
 /// each takes minutes under emulation and there are fourteen of them, so a
 /// change to one is otherwise an hour a try.
 type Boot = fn(Arch, &Programs, &Args) -> Result<()>;
-const BOOTS: [(&str, Boot); 13] = [
+const BOOTS: [(&str, Boot); 14] = [
     ("dispatchers", test_dispatchers),
     ("bar", test_bar),
     ("decorations", test_decorations),
@@ -1120,6 +1159,7 @@ const BOOTS: [(&str, Boot); 13] = [
     ("clipboard", test_clipboard),
     ("submap", test_submap),
     ("taskbar", test_taskbar),
+    ("screenshot", test_screenshot),
 ];
 
 /// Whether `--boot` asked for this one.
@@ -1241,6 +1281,93 @@ fn one_picture(
         screen.width * screen.height
     );
     Ok(())
+}
+
+/// A fourteenth boot: a screenshot, through `zwlr_screencopy_v1`.
+///
+/// The guest takes a picture of its own screen with `/bin/shot` -- which is
+/// `grim` without the file format -- and prints its size and a digest of
+/// every pixel. What is required is that the digest is the one the expected
+/// image has: the screenshot the compositor wrote into a client's shared
+/// memory inside the guest is, pixel for pixel, the frame
+/// `compositor/render` builds on the host by calling the renderer with
+/// rectangles.
+///
+/// That is a stronger statement than the screendump the other boots make.
+/// QEMU's screendump reads the virtio-gpu's scanout; this reads what the
+/// compositor handed to a program *through the Wayland protocol*, so a
+/// compositor that drew the right thing and answered screencopy with
+/// rubbish is caught here and nowhere else.
+fn test_screenshot(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
+    let (screens, said) = boot_and_dump(
+        arch,
+        programs,
+        SHOT_CONFIG,
+        &Wanted {
+            states: &SHOT_EXPECTED,
+            others: &[],
+            moving: None,
+            awaiting: &["shot: "],
+        },
+        &SHOT_BINDS,
+        args,
+    )?;
+    let Some(screen) = screens.first() else {
+        return Err(Error::new(format!(
+            "{arch}: the screenshot boot took no picture"
+        )));
+    };
+    if screens.len() != SHOT_EXPECTED.len() {
+        return Err(Error::new(format!(
+            "{arch}: {} of {} pictures were taken",
+            screens.len(),
+            SHOT_EXPECTED.len()
+        )));
+    }
+    // The picture the guest must have handed the program: the same expected
+    // image every screendump above is compared against, and its size is the
+    // screen's, since a screendump of another size would already have
+    // failed.
+    let want = expected(SHOT_EXPECTED[0].1)?;
+    let line = format!(
+        "shot: {}x{} {:016x}",
+        screen.width,
+        screen.height,
+        fnv1a(&want)
+    );
+    if !said.iter().any(|said| said_on_its_own(said) == line) {
+        let printed = said
+            .iter()
+            .map(|said| said_on_its_own(said))
+            .filter(|said| said.starts_with("shot: "))
+            .collect::<Vec<_>>()
+            .join("; ");
+        return Err(Error::new(format!(
+            "{arch}: the guest's screenshot is not the expected image: it said `{printed}` and \
+             the image is `{line}`"
+        )));
+    }
+    println!(
+        "  {arch}: a program on the guest took a screenshot through `zwlr_screencopy_v1` and \
+         every one of its {} pixels is the one the renderer blesses",
+        screen.width * screen.height
+    );
+    Ok(())
+}
+
+/// FNV-1a, which is how a whole screen is compared through a serial port.
+///
+/// The same function `compositor/shot`'s `digest` is, and it has to stay the
+/// same: the guest prints the digest of what it was handed and this is what
+/// that is compared against. Short enough to print on one line, and simple
+/// enough that two copies cannot drift without a test saying so.
+fn fnv1a(bytes: &[u8]) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
 }
 
 /// A thirteenth boot: a taskbar, through

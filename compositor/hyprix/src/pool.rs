@@ -63,6 +63,25 @@ impl Mapping {
         }
     }
 
+    /// Map the same pool again, writable, for one screenshot.
+    ///
+    /// # Errors
+    ///
+    /// Whatever `mmap` said. A pool a client made read-only cannot be
+    /// written into, and a screenshot into it fails rather than the
+    /// compositor doing so.
+    pub fn writable(&self) -> io::Result<Writable> {
+        let address = map_with(
+            self.fd.as_raw_fd(),
+            self.len,
+            libc::PROT_READ | libc::PROT_WRITE,
+        )?;
+        Ok(Writable {
+            address,
+            len: self.len,
+        })
+    }
+
     /// Map the pool again at `size`, which `wl_shm_pool.resize` may only make
     /// larger.
     ///
@@ -79,6 +98,48 @@ impl Mapping {
         self.address = address;
         self.len = len;
         Ok(())
+    }
+}
+
+/// A second mapping of one pool, writable, for as long as it is held.
+///
+/// The compositor never writes into a window's buffer -- that is what
+/// [`Mapping`] being read-only says -- but a screenshot is the other way
+/// round: `zwlr_screencopy_frame_v1.copy` hands over a buffer *for* the
+/// compositor to fill. This is that one case, and it is a mapping of its own
+/// so the read-only rule still holds everywhere else and the writable window
+/// exists only while a screenshot is being taken.
+#[derive(Debug)]
+pub struct Writable {
+    address: *mut core::ffi::c_void,
+    len: usize,
+}
+
+// SAFETY: as `Mapping`'s: the pointer is this value's own mapping and no
+// reference to it outlives the value.
+unsafe impl Send for Writable {}
+
+impl Writable {
+    /// The bytes, to write into.
+    #[must_use]
+    pub fn bytes_mut(&mut self) -> &mut [u8] {
+        #[expect(
+            unsafe_code,
+            reason = "AUDIT: the mapping is this value's own and lives exactly as long as it, so the slice cannot outlive it"
+        )]
+        // SAFETY: `address` is a mapping of `len` bytes made by
+        // `Mapping::writable` and unmapped only by `Drop`, so it is live for
+        // this borrow. The memory is shared with a client, which is why it
+        // is written as `u8` and never as a structure.
+        unsafe {
+            core::slice::from_raw_parts_mut(self.address.cast::<u8>(), self.len)
+        }
+    }
+}
+
+impl Drop for Writable {
+    fn drop(&mut self) {
+        unmap(self.address, self.len);
     }
 }
 
@@ -103,6 +164,11 @@ fn own(raw: i32) -> OwnedFd {
 
 /// `mmap` `len` bytes of `fd`, read-only and shared.
 fn map(fd: i32, len: usize) -> io::Result<*mut core::ffi::c_void> {
+    map_with(fd, len, libc::PROT_READ)
+}
+
+/// The same, with the protection said out loud.
+fn map_with(fd: i32, len: usize, protection: i32) -> io::Result<*mut core::ffi::c_void> {
     #[expect(
         unsafe_code,
         reason = "AUDIT: mmap is not in std; the call maps a descriptor this process owns at a length it chose, and the result is checked against MAP_FAILED"
@@ -113,7 +179,7 @@ fn map(fd: i32, len: usize) -> io::Result<*mut core::ffi::c_void> {
         libc::mmap(
             core::ptr::null_mut(),
             len,
-            libc::PROT_READ,
+            protection,
             libc::MAP_SHARED,
             fd,
             0,

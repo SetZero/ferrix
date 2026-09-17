@@ -7,5 +7,6 @@
 pub mod core;
 pub mod foreign_toplevel;
 pub mod layer_shell;
+pub mod screencopy;
 pub mod xdg_decoration;
 pub mod xdg_shell;

@@ -45,6 +45,8 @@ compositor-ctl = { path = "../ctl" }
 compositor-clip = { path = "../clip" }
 # A taskbar with the drawing taken out, for the foreign-toplevel test.
 compositor-lswt = { path = "../lswt" }
+# And a screenshot program, for the screencopy test.
+compositor-shot = { path = "../shot" }
 
 [lints]
 workspace = true

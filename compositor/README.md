@@ -160,6 +160,13 @@ names the part of Hyprland or hyprlang it follows.
   requests a click on a taskbar entry makes. Named after Leon Henrik
   Plickat's program of the same name, and there for the same reason `clip`
   is: it is the part of a bar that can be tested with no screen.
+* **`shot`** is `grim` without the file format: it binds
+  `zwlr_screencopy_manager_v1` and a `wl_output`, makes the `wl_shm` buffer
+  the compositor says to make, hands it over, and prints the size and an FNV
+  digest of every pixel it was given. The digest is how a whole screen is
+  compared through a serial port, and comparing it against the image
+  `render` blesses is the strongest picture check in the tree: it is what
+  the compositor handed a *program*, not what QEMU read off the scanout.
 * **`ctl`** is `hyprctl`, over `ipc`'s request shape; **`plug`** is the
   example plugin, a program the compositor starts and talks to rather than a
   shared object it loads; **`anim`** is Hyprland's bezier curves and its
@@ -191,6 +198,13 @@ calling the renderer with rectangles, the other by two programs talking
 Wayland to a server that works those rectangles out from their requests -- so
 a difference between them is a real one. A second test runs one client
 instead of two and requires the comparison to notice.
+
+The same file holds the protocol tests that need more than one program at
+once, each with the compositor and its clients in threads of one process: a
+`clip copy` and a `clip paste` that must agree about what was on the
+clipboard, an `lswt` that must be told the windows and must be able to close
+one from outside it, and a `shot` whose screenshot must be the renderer's
+blessed image pixel for pixel.
 
 `hyprix/probe/real-client.sh` is the other half: it runs `foot`, a Wayland
 terminal built against libwayland and every other compositor, and records
