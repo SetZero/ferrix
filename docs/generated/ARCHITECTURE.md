@@ -98,14 +98,14 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixAssurance` | `11-assurance.sysml` | docs/RELIABILITY.md and docs/ASSEMBLY.md: the quality gates, what each one verifies, and what the tests can actually reach. All of it runs in CI today except the two debts the roadmap states. |
 | `FerrixViews` | `12-views.sysml` | How to read the one model as two: what runs today, and what the roadmap still owes. The filters key on the lifecycle keywords every element carries. |
 
-13 files, 16 packages, 1488 elements, 163 relations. Model digest `0e9c940c6ab8eb11`.
+13 files, 16 packages, 1488 elements, 163 relations. Model digest `4a7bed08db55c265`.
 
 | Maturity | Elements | Meaning |
 | --- | ---: | --- |
 | `#implemented` | 138 | The code exists and the QEMU boot test exercises it on every architecture it applies to. |
-| `#inProgress` | 10 | The owning stage has started; part of the element runs. |
+| `#inProgress` | 11 | The owning stage has started; part of the element runs. |
 | `#writtenAhead` | 15 | A libs/ crate exists and passes its host tests, but nothing in kernel/ calls it yet. |
-| `#planned` | 97 | Only the design exists, in docs/ARCHITECTURE.md. Nothing stands in for it. |
+| `#planned` | 96 | Only the design exists, in docs/ARCHITECTURE.md. Nothing stands in for it. |
 | `@deferred` | 22 | Work a finished stage explicitly left behind, carrying the reason that stage gave. |
 
 An element carries its own keyword or none; a keyword is never inherited from a parent, so a `#planned` field inside an `#implemented` part still reads as planned.
@@ -2561,7 +2561,7 @@ flowchart TB
   n19_FerrixRoadmap_stage16Rustc["S16  Stage 16 rustc<br>Planned · the goal"]
   n20_FerrixRoadmap_stage17DisplayAndInput["S17  Stage 17 display and input<br>InProgress · 74 points"]
   n21_FerrixRoadmap_stage18Compositor["S18  Stage 18 compositor<br>InProgress · 96 points"]
-  n22_FerrixRoadmap_stage19HyprlandFidelity["S19  Stage 19 hyprland fidelity<br>Planned · 144 points"]
+  n22_FerrixRoadmap_stage19HyprlandFidelity["S19  Stage 19 hyprland fidelity<br>InProgress · 144 points"]
   n23_FerrixRoadmap_stage20SelfHosting["S20  Stage 20 self hosting<br>Planned · longer"]
   n0_FerrixRoadmap_stage0Foundation -. "depends on" .-> n1_FerrixRoadmap_stage1Boot
   n1_FerrixRoadmap_stage1Boot -. "depends on" .-> n2_FerrixRoadmap_stage2Memory
@@ -2594,8 +2594,8 @@ flowchart TB
   classDef planned fill:#e4e7ea,stroke:#6a737e,color:#16191d
   classDef inProgress fill:#dae5f0,stroke:#2a5f8f,color:#16191d
   class n0_FerrixRoadmap_stage0Foundation,n1_FerrixRoadmap_stage1Boot,n2_FerrixRoadmap_stage2Memory,n3_FerrixRoadmap_stage3TrapsInterruptsTime,n4_FerrixRoadmap_stage4Smp,n5_FerrixRoadmap_armv7aPort,n6_FerrixRoadmap_stage5Scheduler,n7_FerrixRoadmap_stage6UserMode,n8_FerrixRoadmap_stage7LinuxAbi,n9_FerrixRoadmap_stage8Vfs,n10_FerrixRoadmap_stage9NativeAbi,n11_FerrixRoadmap_stage10UserspaceDrivers,n12_FerrixRoadmap_stage11BtrfsRead,n13_FerrixRoadmap_stageNetworking implemented
-  class n14_FerrixRoadmap_stageDynamicLinking,n15_FerrixRoadmap_stage12BtrfsWrite,n16_FerrixRoadmap_stage13Isolation,n17_FerrixRoadmap_stage14RealTime,n18_FerrixRoadmap_stage15Userland,n19_FerrixRoadmap_stage16Rustc,n22_FerrixRoadmap_stage19HyprlandFidelity,n23_FerrixRoadmap_stage20SelfHosting planned
-  class n20_FerrixRoadmap_stage17DisplayAndInput,n21_FerrixRoadmap_stage18Compositor inProgress
+  class n14_FerrixRoadmap_stageDynamicLinking,n15_FerrixRoadmap_stage12BtrfsWrite,n16_FerrixRoadmap_stage13Isolation,n17_FerrixRoadmap_stage14RealTime,n18_FerrixRoadmap_stage15Userland,n19_FerrixRoadmap_stage16Rustc,n23_FerrixRoadmap_stage20SelfHosting planned
+  class n20_FerrixRoadmap_stage17DisplayAndInput,n21_FerrixRoadmap_stage18Compositor,n22_FerrixRoadmap_stage19HyprlandFidelity inProgress
 ```
 
 **Figure 16 — The roadmap, stage by stage.** An arrow points from a stage to the stage it unblocks. The two stages with a second arrow into them are the ones that need more than their predecessor. [SVG](diagrams/roadmap-stages.svg) Source: `10-roadmap.sysml`.
@@ -2624,7 +2624,7 @@ flowchart TB
 | `S16` | 16 | Stage 16 rustc | Planned | the goal | `#planned` |
 | `S17` | 17 | Stage 17 display and input | InProgress | 74 points | `#inProgress` |
 | `S18` | 18 | Stage 18 compositor | InProgress | 96 points | `#inProgress` |
-| `S19` | 19 | Stage 19 hyprland fidelity | Planned | 144 points | `#planned` |
+| `S19` | 19 | Stage 19 hyprland fidelity | InProgress | 144 points | `#inProgress` |
 | `S20` | 20 | Stage 20 self hosting | Planned | longer | `#planned` |
 
 Sizes are order-of-magnitude and not a schedule.
@@ -2843,9 +2843,11 @@ The compositor itself: the Wayland wire protocol and its server, xdg-shell, wl_s
 
 ### S19 — Stage 19 hyprland fidelity
 
-**Planned**  ·  size 144 points  ·  `#planned`
+**InProgress**  ·  size 144 points  ·  `#inProgress`
 
 What makes a Hyprland rather than a tiling compositor: animations with bezier curves, rounded corners, blur, shadows, opacity rules, special workspaces, groups, multiple monitors, plugins -- and the GPU behind them.
+
+Well under way: every one of Hyprland's globals, dispatchers and hyprctl commands is answered, and a person's own hyprland.conf -- 377 lines, a bar, a dock and a wallpaper daemon -- runs with no diagnostic. What is left is XWayland, the GPU, and the layer-rule effects that need a second render pass.
 
 ### S20 — Stage 20 self hosting
 
@@ -3257,7 +3259,7 @@ flowchart LR
 | `S16` | `stage16Rustc` | `allocate` and `dependency` | — | `#planned` |
 | `S17` | `stage17DisplayAndInput` | `dependency` | — | `#inProgress` |
 | `S18` | `stage18Compositor` | `dependency` | — | `#inProgress` |
-| `S19` | `stage19HyprlandFidelity` | — | — | `#planned` |
+| `S19` | `stage19HyprlandFidelity` | — | — | `#inProgress` |
 | `S20` | `stage20SelfHosting` | — | — | `#planned` |
 | `D.fuzz` | `fuzzTargetsOwed` | — | — | `#planned` |
 | `D.miri` | `miriOwed` | — | — | `#planned` |

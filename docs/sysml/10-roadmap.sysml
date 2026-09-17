@@ -447,14 +447,21 @@ package FerrixRoadmap {
              * requires on x86-64 and AArch64. Met. */
     }
 
-    #planned requirement <'S19'> stage19HyprlandFidelity : Stage {
+    #inProgress requirement <'S19'> stage19HyprlandFidelity : Stage {
         attribute :>> number = 19;
-        attribute :>> status = StageStatus::Planned;
+        attribute :>> status = StageStatus::InProgress;
         attribute :>> size = "144 points";
         doc /* What makes a Hyprland rather than a tiling compositor:
              * animations with bezier curves, rounded corners, blur, shadows,
              * opacity rules, special workspaces, groups, multiple monitors,
-             * plugins -- and the GPU behind them. */
+             * plugins -- and the GPU behind them.
+             *
+             * Well under way: every one of Hyprland's globals, dispatchers
+             * and hyprctl commands is answered, and a person's own
+             * hyprland.conf -- 377 lines, a bar, a dock and a wallpaper
+             * daemon -- runs with no diagnostic. What is left is XWayland,
+             * the GPU, and the layer-rule effects that need a second render
+             * pass. */
     }
 
     #planned requirement <'S20'> stage20SelfHosting : Stage {
