@@ -363,7 +363,7 @@ pub(crate) fn test_seat(args: &Args) -> Result<()> {
             )));
         }
         println!(
-            "  {arch}: `bind = SUPER, Q, killactive` closed the window and left the background,              with {wrong} pixels of cursor at {tip:?}"
+            "  {arch}: `SUPER, Q, killactive` closed the window; {wrong} pixels of cursor left at {tip:?}"
         );
     }
     Ok(())

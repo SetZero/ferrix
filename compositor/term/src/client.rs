@@ -460,7 +460,7 @@ impl Terminal {
         // when this returns, mapping and all.
         #[expect(
             unsafe_code,
-            reason = "AUDIT: the descriptor arrived with this message and is                       this client's to own and to close"
+            reason = "AUDIT: the descriptor arrived with this message and is this client's to own"
         )]
         // SAFETY: the wire reader hands over a descriptor nothing else holds.
         let owned = unsafe { OwnedFd::from_raw_fd(fd.0) };
