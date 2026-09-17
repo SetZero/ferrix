@@ -8,8 +8,9 @@ use compositor_protocol::core::{
 };
 use compositor_protocol::xdg_shell::{self, xdg_surface, xdg_toplevel, xdg_wm_base};
 use compositor_wire::{
-    Arg, ArgType, Error as WireError, Fd, ObjectError, ObjectId, Objects, Reader, Writer,
+    Arg, ArgType, Error as WireError, Fd, Fixed, ObjectError, ObjectId, Objects, Reader, Writer,
 };
+use compositor_xkb::Modifiers;
 
 use crate::globals::Globals;
 use crate::role::Role;
@@ -232,6 +233,11 @@ pub struct Client {
     capabilities: u32,
     /// The keymap every `wl_keyboard` is sent, if there is one.
     keymap: Option<(Fd, u32)>,
+    /// What every `wl_keyboard` of version 4 or above is told about repeat:
+    /// keys a second, then the delay before the first repeat in
+    /// milliseconds. Hyprland's `input:repeat_rate` and `input:repeat_delay`
+    /// defaults.
+    repeat: (i32, i32),
     /// What `wl_output` says the screen is.
     output: Output,
     /// The next configure serial. Serials go up and are never reused, so a
@@ -267,6 +273,7 @@ impl Client {
             subsurfaces: BTreeMap::new(),
             capabilities: 0,
             keymap: None,
+            repeat: (25, 600),
             output: Output::default(),
             serial: 1,
         }
@@ -288,6 +295,17 @@ impl Client {
     /// copy.
     pub const fn set_keymap(&mut self, keymap: Option<(Fd, u32)>) {
         self.keymap = keymap;
+    }
+
+    /// Say how a held key repeats: `rate` keys a second, `delay`
+    /// milliseconds before the first repeat.
+    ///
+    /// The compositor sends no repeats of its own -- `wl_keyboard.key` has no
+    /// way to say one -- so this is the whole of repeat: the client is told
+    /// the numbers and repeats for itself. A rate of zero disables it, which
+    /// the protocol says in so many words.
+    pub const fn set_repeat_info(&mut self, rate: i32, delay: i32) {
+        self.repeat = (rate, delay);
     }
 
     /// Say what the screen is, before any client binds `wl_output`.
@@ -377,6 +395,282 @@ impl Client {
         let _ = self
             .out
             .write(toplevel, xdg_toplevel::event::CLOSE, &[], &[]);
+    }
+
+    // -----------------------------------------------------------------
+    // The seat: what the compositor sends when somebody types or points
+    //
+    // Every one of these goes to each object of the role this client made,
+    // because a client may ask its seat for more than one `wl_keyboard` and
+    // the protocol says each gets the events. A client that asked for none
+    // gets nothing, which is how a compositor sends a key to the focused
+    // window without knowing whether that window wanted keys.
+    //
+    // The serial each returns is this connection's, from `next_serial`: a
+    // client quotes it back in `set_cursor`, in a `start_drag`, or in
+    // `xdg_toplevel.move`, and the compositor matches it against what it
+    // sent.
+    // -----------------------------------------------------------------
+
+    /// Give this client the keyboard focus on `surface`.
+    ///
+    /// `keys` is every key held at the moment focus arrives, in the order
+    /// they were pressed, so that a client focused while a key is down knows
+    /// it is down.
+    ///
+    /// `None` when this client has no `wl_keyboard` yet. That is not a
+    /// failure and it is not nothing: a window is often mapped in the same
+    /// burst of requests that asks the seat for its keyboard, and whichever
+    /// the server reads first, the client has to be told it has the focus. So
+    /// the caller is told the focus did not arrive, and asks again.
+    pub fn keyboard_enter(
+        &mut self,
+        surface: ObjectId,
+        keys: &[u16],
+        modifiers: Modifiers,
+    ) -> Option<u32> {
+        let keyboards = self.objects_with(Role::Keyboard);
+        if keyboards.is_empty() {
+            return None;
+        }
+        let serial = self.next_serial();
+        let packed: Vec<u8> = keys
+            .iter()
+            .flat_map(|key| u32::from(*key).to_le_bytes())
+            .collect();
+        for keyboard in keyboards {
+            let _ = self.out.write(
+                keyboard,
+                core::wl_keyboard::event::ENTER,
+                &[
+                    ArgType::Uint,
+                    ArgType::Object { nullable: false },
+                    ArgType::Array,
+                ],
+                &[Arg::Uint(serial), Arg::Object(surface), Arg::Array(&packed)],
+            );
+        }
+        // The modifiers are not part of `enter`, and a client that is not
+        // told them treats every key as unmodified until the next change.
+        let _ = self.keyboard_modifiers(modifiers);
+        Some(serial)
+    }
+
+    /// Take the keyboard focus away from `surface`.
+    ///
+    /// `None` when this client has no `wl_keyboard`, as in
+    /// [`Client::keyboard_enter`].
+    pub fn keyboard_leave(&mut self, surface: ObjectId) -> Option<u32> {
+        let keyboards = self.objects_with(Role::Keyboard);
+        if keyboards.is_empty() {
+            return None;
+        }
+        let serial = self.next_serial();
+        for keyboard in keyboards {
+            let _ = self.out.write(
+                keyboard,
+                core::wl_keyboard::event::LEAVE,
+                &[ArgType::Uint, ArgType::Object { nullable: false }],
+                &[Arg::Uint(serial), Arg::Object(surface)],
+            );
+        }
+        Some(serial)
+    }
+
+    /// A key went down or came up, at `time` milliseconds.
+    ///
+    /// `code` is the evdev keycode, which is what the keymap the client was
+    /// given numbers from eight.
+    pub fn keyboard_key(&mut self, time: u32, code: u16, pressed: bool) -> Option<u32> {
+        let keyboards = self.objects_with(Role::Keyboard);
+        if keyboards.is_empty() {
+            return None;
+        }
+        let serial = self.next_serial();
+        let state = if pressed {
+            core::wl_keyboard::key_state::PRESSED
+        } else {
+            core::wl_keyboard::key_state::RELEASED
+        };
+        for keyboard in keyboards {
+            let _ = self.out.write(
+                keyboard,
+                core::wl_keyboard::event::KEY,
+                &[ArgType::Uint, ArgType::Uint, ArgType::Uint, ArgType::Uint],
+                &[
+                    Arg::Uint(serial),
+                    Arg::Uint(time),
+                    Arg::Uint(u32::from(code)),
+                    Arg::Uint(state),
+                ],
+            );
+        }
+        Some(serial)
+    }
+
+    /// The modifier state changed.
+    pub fn keyboard_modifiers(&mut self, modifiers: Modifiers) -> Option<u32> {
+        let keyboards = self.objects_with(Role::Keyboard);
+        if keyboards.is_empty() {
+            return None;
+        }
+        let serial = self.next_serial();
+        for keyboard in keyboards {
+            let _ = self.out.write(
+                keyboard,
+                core::wl_keyboard::event::MODIFIERS,
+                &[
+                    ArgType::Uint,
+                    ArgType::Uint,
+                    ArgType::Uint,
+                    ArgType::Uint,
+                    ArgType::Uint,
+                ],
+                &[
+                    Arg::Uint(serial),
+                    Arg::Uint(modifiers.depressed),
+                    Arg::Uint(modifiers.latched),
+                    Arg::Uint(modifiers.locked),
+                    Arg::Uint(modifiers.group),
+                ],
+            );
+        }
+        Some(serial)
+    }
+
+    /// The pointer came onto `surface` at `(x, y)` in its own coordinates.
+    ///
+    /// `None` when this client has no `wl_pointer`, as in
+    /// [`Client::keyboard_enter`].
+    pub fn pointer_enter(&mut self, surface: ObjectId, x: Fixed, y: Fixed) -> Option<u32> {
+        let pointers = self.objects_with(Role::Pointer);
+        if pointers.is_empty() {
+            return None;
+        }
+        let serial = self.next_serial();
+        for pointer in pointers {
+            let _ = self.out.write(
+                pointer,
+                core::wl_pointer::event::ENTER,
+                &[
+                    ArgType::Uint,
+                    ArgType::Object { nullable: false },
+                    ArgType::Fixed,
+                    ArgType::Fixed,
+                ],
+                &[
+                    Arg::Uint(serial),
+                    Arg::Object(surface),
+                    Arg::Fixed(x),
+                    Arg::Fixed(y),
+                ],
+            );
+        }
+        Some(serial)
+    }
+
+    /// The pointer left `surface`.
+    ///
+    /// `None` when this client has no `wl_pointer`.
+    pub fn pointer_leave(&mut self, surface: ObjectId) -> Option<u32> {
+        let pointers = self.objects_with(Role::Pointer);
+        if pointers.is_empty() {
+            return None;
+        }
+        let serial = self.next_serial();
+        for pointer in pointers {
+            let _ = self.out.write(
+                pointer,
+                core::wl_pointer::event::LEAVE,
+                &[ArgType::Uint, ArgType::Object { nullable: false }],
+                &[Arg::Uint(serial), Arg::Object(surface)],
+            );
+        }
+        Some(serial)
+    }
+
+    /// The pointer moved to `(x, y)` in the focused surface's coordinates.
+    pub fn pointer_motion(&mut self, time: u32, x: Fixed, y: Fixed) {
+        for pointer in self.objects_with(Role::Pointer) {
+            let _ = self.out.write(
+                pointer,
+                core::wl_pointer::event::MOTION,
+                &[ArgType::Uint, ArgType::Fixed, ArgType::Fixed],
+                &[Arg::Uint(time), Arg::Fixed(x), Arg::Fixed(y)],
+            );
+        }
+    }
+
+    /// A pointer button went down or came up. `button` is evdev's code, which
+    /// is what the protocol asks for in so many words.
+    pub fn pointer_button(&mut self, time: u32, button: u32, pressed: bool) -> Option<u32> {
+        let pointers = self.objects_with(Role::Pointer);
+        if pointers.is_empty() {
+            return None;
+        }
+        let serial = self.next_serial();
+        let state = if pressed {
+            core::wl_pointer::button_state::PRESSED
+        } else {
+            core::wl_pointer::button_state::RELEASED
+        };
+        for pointer in pointers {
+            let _ = self.out.write(
+                pointer,
+                core::wl_pointer::event::BUTTON,
+                &[ArgType::Uint, ArgType::Uint, ArgType::Uint, ArgType::Uint],
+                &[
+                    Arg::Uint(serial),
+                    Arg::Uint(time),
+                    Arg::Uint(button),
+                    Arg::Uint(state),
+                ],
+            );
+        }
+        Some(serial)
+    }
+
+    /// A scroll: `axis` is `wl_pointer.axis`, `value` the distance.
+    pub fn pointer_axis(&mut self, time: u32, axis: u32, value: Fixed) {
+        for pointer in self.objects_with(Role::Pointer) {
+            let _ = self.out.write(
+                pointer,
+                core::wl_pointer::event::AXIS,
+                &[ArgType::Uint, ArgType::Uint, ArgType::Fixed],
+                &[Arg::Uint(time), Arg::Uint(axis), Arg::Fixed(value)],
+            );
+        }
+    }
+
+    /// End a group of pointer events that belong together.
+    ///
+    /// Only for version 5 and above; before it, each event stood alone and a
+    /// `frame` sent to a version-4 pointer is an opcode it does not have.
+    pub fn pointer_frame(&mut self) {
+        for pointer in self.objects_with_version(Role::Pointer, 5) {
+            let _ = self
+                .out
+                .write(pointer, core::wl_pointer::event::FRAME, &[], &[]);
+        }
+    }
+
+    /// Every object this client made with `role`.
+    fn objects_with(&self, role: Role) -> Vec<ObjectId> {
+        self.objects
+            .iter()
+            .filter(|(_, entry)| entry.data == role)
+            .map(|(id, _)| id)
+            .collect()
+    }
+
+    /// Every object this client made with `role`, bound at `version` or
+    /// above.
+    fn objects_with_version(&self, role: Role, version: u32) -> Vec<ObjectId> {
+        self.objects
+            .iter()
+            .filter(|(_, entry)| entry.data == role && entry.version >= version)
+            .map(|(id, _)| id)
+            .collect()
     }
 
     /// The surface `id` names, if it is one.
@@ -1224,6 +1518,18 @@ impl Client {
         }
         if role == Role::Keyboard {
             self.send_keymap(id);
+            // `repeat_info` arrived in version 4, and a client that does not
+            // get it repeats at whatever it chooses -- or, for a toolkit that
+            // waits for it, not at all.
+            if version >= 4 {
+                let (rate, delay) = self.repeat;
+                let _ = self.out.write(
+                    id,
+                    core::wl_keyboard::event::REPEAT_INFO,
+                    &[ArgType::Int, ArgType::Int],
+                    &[Arg::Int(rate), Arg::Int(delay)],
+                );
+            }
         }
     }
 

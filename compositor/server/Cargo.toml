@@ -10,6 +10,8 @@ publish.workspace = true
 [dependencies]
 compositor-protocol = { path = "../protocol" }
 compositor-wire = { path = "../wire" }
+# The keymap the seat hands out, and what a modifier mask means in it.
+compositor-xkb = { path = "../xkb" }
 
 [dev-dependencies]
 # The socket is only needed by `examples/serve.rs`, the probe's other half.

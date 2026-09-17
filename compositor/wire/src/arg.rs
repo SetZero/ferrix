@@ -120,6 +120,15 @@ impl Arg<'_> {
         }
     }
 
+    /// The `fixed` this is, if it is one.
+    #[must_use]
+    pub const fn as_fixed(&self) -> Option<Fixed> {
+        match self {
+            Self::Fixed(value) => Some(*value),
+            _ => None,
+        }
+    }
+
     /// The object id this names, whether as `object` or as either `new_id`.
     #[must_use]
     pub const fn as_object(&self) -> Option<ObjectId> {

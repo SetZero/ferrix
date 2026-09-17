@@ -5,7 +5,7 @@
 //! so a test that writes a request writes the one a real client would.
 
 use compositor_protocol::{core, xdg_shell};
-use compositor_wire::{Arg, ArgType, Fd, Header, ObjectId, Reader, Writer};
+use compositor_wire::{Arg, ArgType, Fd, Fixed, Header, ObjectId, Reader, Writer};
 
 use crate::{Client, Event, Fatal, Globals, Role, Surface};
 
@@ -1958,8 +1958,10 @@ fn a_fresh_seat_says_what_it_has_and_refuses_what_it_does_not() {
         Some(Role::Pointer)
     );
 
+    // The keymap and the repeat settings, and nothing else yet: no `enter`,
+    // no key, because nothing has focus and nobody has typed.
     let events = sent(&mut seated);
-    assert_eq!(events.len(), 1, "the keymap, and nothing else yet");
+    assert_eq!(events.len(), 2, "the keymap and repeat_info: {events:?}");
     assert_eq!(events[0].sender, ObjectId(10));
     assert_eq!(events[0].opcode, core::wl_keyboard::event::KEYMAP);
     // With no keymap the compositor says so rather than sending a descriptor
@@ -1969,6 +1971,9 @@ fn a_fresh_seat_says_what_it_has_and_refuses_what_it_does_not() {
         format!("Uint({})", core::wl_keyboard::keymap_format::NO_KEYMAP)
     );
     assert_eq!(events[0].args[2], "Uint(0)");
+    assert_eq!(events[1].sender, ObjectId(10));
+    assert_eq!(events[1].opcode, core::wl_keyboard::event::REPEAT_INFO);
+    assert_eq!(events[1].args, ["Int(25)", "Int(600)"]);
 
     // Touch is still refused, since the seat did not announce it.
     let touch = ask(core::wl_seat::request::GET_TOUCH, 12);
@@ -2086,4 +2091,181 @@ fn the_clipboards_objects_are_made_even_though_nothing_is_ever_offered() {
             wanted: "wl_seat"
         })
     );
+}
+
+/// A client with a keyboard and a pointer already made, and the events its
+/// creation sent taken away.
+fn seated_client() -> Client {
+    let both = core::wl_seat::capability::KEYBOARD | core::wl_seat::capability::POINTER;
+    let mut client = full_client(both);
+    let ask =
+        |opcode: u16, id: u32| request(7, opcode, &[ArgType::NewId], &[Arg::NewId(ObjectId(id))]);
+    let mut bytes = ask(core::wl_seat::request::GET_KEYBOARD, 10);
+    bytes.extend(ask(core::wl_seat::request::GET_POINTER, 11));
+    assert_eq!(client.read(&bytes, &[]), bytes.len());
+    assert_eq!(client.fatal(), None);
+    let _ = sent(&mut client);
+    client
+}
+
+/// Focus, a key, and focus taken away again: the whole of what a window is
+/// typed into through.
+#[test]
+fn a_focused_client_is_told_the_keys_and_the_modifiers() {
+    let mut client = seated_client();
+    let surface = ObjectId(3);
+    let modifiers = compositor_xkb::Modifiers {
+        depressed: compositor_xkb::generated::SHIFT,
+        locked: compositor_xkb::generated::LOCK,
+        ..compositor_xkb::Modifiers::default()
+    };
+
+    // A key already held when focus arrives is in `enter`, in the order it
+    // was pressed, so the client does not think it is up.
+    let enter = client
+        .keyboard_enter(surface, &[42, 30], modifiers)
+        .expect("the client has a keyboard");
+    let events = sent(&mut client);
+    assert_eq!(events.len(), 2, "enter and modifiers: {events:?}");
+    assert_eq!(events[0].opcode, core::wl_keyboard::event::ENTER);
+    assert_eq!(events[0].sender, ObjectId(10));
+    assert_eq!(
+        events[0].args,
+        [
+            format!("Uint({enter})"),
+            "Object(ObjectId(3))".to_owned(),
+            // Each key is a 32-bit word, little-endian: 42 then 30.
+            "Array([42, 0, 0, 0, 30, 0, 0, 0])".to_owned(),
+        ]
+    );
+    assert_eq!(events[1].opcode, core::wl_keyboard::event::MODIFIERS);
+    assert_eq!(
+        events[1].args[1..],
+        [
+            format!("Uint({})", compositor_xkb::generated::SHIFT),
+            "Uint(0)".to_owned(),
+            format!("Uint({})", compositor_xkb::generated::LOCK),
+            "Uint(0)".to_owned(),
+        ]
+    );
+
+    // A press and a release, with the evdev code and the protocol's state.
+    let press = client
+        .keyboard_key(1234, 16, true)
+        .expect("a keyboard to send it to");
+    let release = client
+        .keyboard_key(1240, 16, false)
+        .expect("a keyboard to send it to");
+    assert_ne!(press, release, "each event has a serial of its own");
+    let events = sent(&mut client);
+    assert_eq!(
+        events[0].args,
+        [
+            format!("Uint({press})"),
+            "Uint(1234)".to_owned(),
+            "Uint(16)".to_owned(),
+            format!("Uint({})", core::wl_keyboard::key_state::PRESSED),
+        ]
+    );
+    assert_eq!(
+        events[1].args[3],
+        format!("Uint({})", core::wl_keyboard::key_state::RELEASED)
+    );
+
+    let leave = client.keyboard_leave(surface).expect("a keyboard");
+    let events = sent(&mut client);
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].opcode, core::wl_keyboard::event::LEAVE);
+    assert_eq!(
+        events[0].args,
+        [format!("Uint({leave})"), "Object(ObjectId(3))".to_owned()]
+    );
+}
+
+#[test]
+fn a_pointer_is_told_where_it_is_and_what_was_clicked() {
+    let mut client = seated_client();
+    let surface = ObjectId(3);
+    let _ = client.keyboard_enter(surface, &[], compositor_xkb::Modifiers::default());
+    let _ = sent(&mut client);
+
+    let serial = client
+        .pointer_enter(surface, Fixed::from_int(10), Fixed::from_int(20))
+        .expect("the client has a pointer");
+    client.pointer_motion(7, Fixed::from_int(11), Fixed::from_int(21));
+    // `BTN_LEFT`, which the protocol asks for by its evdev number.
+    let clicked = client
+        .pointer_button(8, 0x110, true)
+        .expect("a pointer to send it to");
+    client.pointer_axis(
+        9,
+        core::wl_pointer::axis::VERTICAL_SCROLL,
+        Fixed::from_int(-1),
+    );
+    client.pointer_frame();
+    let events = sent(&mut client);
+
+    let opcodes: Vec<u16> = events.iter().map(|event| event.opcode).collect();
+    assert_eq!(
+        opcodes,
+        [
+            core::wl_pointer::event::ENTER,
+            core::wl_pointer::event::MOTION,
+            core::wl_pointer::event::BUTTON,
+            core::wl_pointer::event::AXIS,
+            core::wl_pointer::event::FRAME,
+        ]
+    );
+    assert!(events.iter().all(|event| event.sender == ObjectId(11)));
+    assert_eq!(
+        events[0].args,
+        [
+            format!("Uint({serial})"),
+            "Object(ObjectId(3))".to_owned(),
+            "Fixed(10)".to_owned(),
+            "Fixed(20)".to_owned(),
+        ]
+    );
+    assert_eq!(
+        events[2].args,
+        [
+            format!("Uint({clicked})"),
+            "Uint(8)".to_owned(),
+            "Uint(272)".to_owned(),
+            format!("Uint({})", core::wl_pointer::button_state::PRESSED),
+        ]
+    );
+
+    let left = client.pointer_leave(surface).expect("a pointer");
+    let events = sent(&mut client);
+    assert_eq!(events[0].opcode, core::wl_pointer::event::LEAVE);
+    assert_eq!(events[0].args[0], format!("Uint({left})"));
+}
+
+/// A client that never asked for a keyboard is sent no key, and is told so.
+///
+/// The compositor sends to the focused window without asking whether it
+/// wanted one, so this is what keeps a `wl_surface` from being handed an
+/// opcode it has no event for. Saying so matters as much as not sending: a
+/// window is usually mapped in the same burst that asks the seat for its
+/// keyboard, and a compositor that took the silent `enter` for a delivered
+/// one would leave that window unable to be typed into.
+#[test]
+fn a_client_with_no_keyboard_is_sent_nothing_and_told_so() {
+    let mut client = full_client(core::wl_seat::capability::KEYBOARD);
+    let _ = sent(&mut client);
+    assert_eq!(
+        client.keyboard_enter(ObjectId(3), &[30], compositor_xkb::Modifiers::default()),
+        None
+    );
+    assert_eq!(client.keyboard_key(1, 30, true), None);
+    assert_eq!(client.keyboard_leave(ObjectId(3)), None);
+    assert_eq!(
+        client.pointer_enter(ObjectId(3), Fixed::ZERO, Fixed::ZERO),
+        None
+    );
+    assert_eq!(client.pointer_button(1, 272, true), None);
+    client.pointer_motion(1, Fixed::from_int(1), Fixed::from_int(1));
+    client.pointer_frame();
+    assert!(sent(&mut client).is_empty());
 }

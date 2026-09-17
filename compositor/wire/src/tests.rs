@@ -1175,3 +1175,16 @@ fn a_descriptor_libwayland_sent_is_not_in_its_bytes() {
         "a header, a new_id and a size, and nothing for the descriptor"
     );
 }
+
+/// Each accessor answers for its own kind and for nothing else: a client
+/// reading a pointer's position with the wrong one would silently read zero.
+#[test]
+fn an_argument_answers_only_for_its_own_kind() {
+    let fixed = Arg::Fixed(Fixed::from_int(7));
+    assert_eq!(fixed.as_fixed(), Some(Fixed::from_int(7)));
+    assert_eq!(fixed.as_int(), None);
+    assert_eq!(fixed.as_uint(), None);
+    assert_eq!(Arg::Int(7).as_fixed(), None);
+    assert_eq!(Arg::Uint(7).as_fixed(), None);
+    assert_eq!(Arg::Object(ObjectId(7)).as_fixed(), None);
+}
