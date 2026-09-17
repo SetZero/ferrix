@@ -210,6 +210,18 @@ impl Rules {
                     style.opaque = *on;
                     styled = true;
                 }
+                Effect::NearestNeighbor(on) => {
+                    style.nearest = *on;
+                    styled = true;
+                }
+                // `monitor <name>`: the window opens on that monitor,
+                // through the same call `movewindowtomonitor` makes.
+                Effect::Monitor(name) => match state.dispatch_str("movewindowtomonitor", name) {
+                    Ok(made) => changed |= !made.is_empty(),
+                    Err(error) => {
+                        report(&format!("hyprix: windowrule monitor {name}: {error:?}"));
+                    }
+                },
                 Effect::BorderSize(width) => {
                     style.border = Some(*width);
                     styled = true;

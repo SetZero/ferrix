@@ -142,6 +142,11 @@ pub enum Effect {
     /// `opaque <yes-or-no>`: it is drawn as if every pixel were opaque,
     /// whatever its buffer's alpha says.
     Opaque(bool),
+    /// `nearest_neighbor <yes-or-no>`: a stretched window is sampled
+    /// nearest rather than bilinear, for pixel art.
+    NearestNeighbor(bool),
+    /// `monitor <name>`: the window opens on that monitor.
+    Monitor(String),
     /// `rounding <n>`: how far its corners are cut.
     Rounding(i64),
     /// `border_size <n>`.
@@ -509,6 +514,18 @@ fn effect(field: &str) -> Result<Effect, String> {
             .map_err(|why| format!("invalid field border_color: {why}")),
         "decorate" => Ok(Effect::Decorate(yes(value))),
         "opaque" => Ok(Effect::Opaque(yes(value))),
+        "nearest_neighbor" => Ok(Effect::NearestNeighbor(yes(value))),
+        "monitor" => {
+            if value.is_empty() {
+                return Err("invalid field monitor: it takes a monitor".to_owned());
+            }
+            Ok(Effect::Monitor(value.to_owned()))
+        }
+        // `no_initial_focus` is `no_focus` by another name: Hyprland keeps
+        // them apart because one is checked when the window maps and the
+        // other whenever it would be focused, and this compositor applies
+        // its rules when a window maps, which is the same moment.
+        "no_initial_focus" => Ok(Effect::NoFocus),
         "border_size" => number("a number of pixels").map(Effect::BorderSize),
         "pin" => Ok(Effect::Pin),
         "pseudo" => Ok(Effect::Pseudo),

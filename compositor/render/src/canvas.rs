@@ -383,8 +383,8 @@ impl Canvas {
     /// Hyprland scales the window's texture for the same reason; the client
     /// is configured at the goal and draws once, not once a frame.
     ///
-    /// The sampling is bilinear, which is the one place in this crate where
-    /// a pixel is not a pixel. It is also the only place it can be: a
+    /// The sampling is bilinear unless `nearest` says otherwise, which is
+    /// the one place in this crate where a pixel is not a pixel. It is also the only place it can be: a
     /// stretched surface has no whole-pixel mapping to stretch along. A
     /// window that is not being animated goes through
     /// [`Canvas::composite_with`] and is exact, which is why every expected
@@ -395,6 +395,7 @@ impl Canvas {
         rect: Rect,
         rounding: Rounding,
         opacity: f32,
+        nearest: bool,
         damage: &Damage,
     ) {
         if is_empty(rect) || surface.width() == 0 || surface.height() == 0 {
@@ -437,10 +438,18 @@ impl Canvas {
         )]
         let transform = tiny_skia::Transform::from_translate(rect.x as f32, rect.y as f32)
             .pre_scale(scale_x, scale_y);
+        // `windowrule = nearest_neighbor`: the sampling is nearest rather
+        // than bilinear, which is what a person writes for pixel art or a
+        // retro game -- a stretched sprite must stay a sprite and not
+        // become a smear.
         let shader = Pattern::new(
             pixmap,
             SpreadMode::Pad,
-            FilterQuality::Bilinear,
+            if nearest {
+                FilterQuality::Nearest
+            } else {
+                FilterQuality::Bilinear
+            },
             opacity,
             transform,
         );

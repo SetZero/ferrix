@@ -342,6 +342,10 @@ pub struct WindowStyle {
     /// rubbish in its alpha channel, and it also takes the blur out of the
     /// frame, since there is nothing to see behind an opaque window.
     pub opaque: bool,
+    /// `nearest_neighbor`: a stretched window is sampled nearest rather
+    /// than bilinear, which is what a person writes for pixel art -- a
+    /// sprite must stay a sprite and not become a smear.
+    pub nearest: bool,
 }
 
 impl Default for WindowStyle {
@@ -359,6 +363,7 @@ impl Default for WindowStyle {
             border_color: None,
             decorate: true,
             opaque: false,
+            nearest: false,
         }
     }
 }
@@ -622,7 +627,7 @@ fn window(
         } else {
             *surface
         };
-        canvas.composite_scaled(&surface, rect, rounding, opacity, damage);
+        canvas.composite_scaled(&surface, rect, rounding, opacity, own.nearest, damage);
     }
     // `decoration:dim_inactive`: black over a window that is not focused, at
     // `dim_strength`. Over the surface, because it dims the window and not

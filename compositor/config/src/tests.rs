@@ -1533,3 +1533,39 @@ fn a_binds_option_is_not_a_bind_with_flags() {
     assert_eq!(parsed.config.binds.len(), 1, "and the bind is still a bind");
     assert!(parsed.config.binds[0].flags.locked);
 }
+
+/// `monitor`, `no_initial_focus` and `nearest_neighbor`, the last three
+/// effects a real configuration is likely to write.
+///
+/// `no_initial_focus` is `no_focus` by another name: Hyprland keeps the two
+/// apart because one is checked when the window maps and the other whenever
+/// it would be focused, and this compositor applies its rules when a window
+/// maps, which is the same moment.
+#[test]
+fn the_effects_that_place_a_window_and_sample_it() {
+    let effects = |line: &str| WindowRule::parse(line).map(|rule| rule.effects);
+
+    assert_eq!(
+        effects("monitor DP-1"),
+        Ok(vec![Effect::Monitor("DP-1".to_owned())])
+    );
+    assert_eq!(
+        effects("monitor desc:Dell Inc. DELL P2418D"),
+        Ok(vec![Effect::Monitor(
+            "desc:Dell Inc. DELL P2418D".to_owned()
+        )])
+    );
+    assert!(effects("monitor").is_err(), "it takes a monitor");
+
+    assert_eq!(effects("no_initial_focus"), Ok(vec![Effect::NoFocus]));
+    assert_eq!(effects("no_focus"), Ok(vec![Effect::NoFocus]));
+
+    assert_eq!(
+        effects("nearest_neighbor"),
+        Ok(vec![Effect::NearestNeighbor(true)])
+    );
+    assert_eq!(
+        effects("nearest_neighbor false"),
+        Ok(vec![Effect::NearestNeighbor(false)])
+    );
+}
