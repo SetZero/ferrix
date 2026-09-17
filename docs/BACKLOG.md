@@ -300,6 +300,24 @@ nobody has it yet.
 
 ---
 
+## Fourteen programs stand between the userland and deleting busybox
+
+The uutils family, zinc and the ports own `/bin` now. Fourteen names are
+still busybox's and still gated: `sysctl`, `fdisk`, `top`, `mpstat`,
+`iostat`, `pwdx` and `su` in `test-vfs`, and `ip`, `route`, `netstat`,
+`nslookup`, `ping`, `ping6` and `udhcpc` in `test-net`.
+
+None of it is blocked on the kernel. Netlink, raw sockets, `/proc`,
+set-user-id and ferrousli's resolver are all there and gated; what is missing
+is user-space programs over them. `docs/UUTILS.md` §8.1 breaks it down: 28
+points, the largest single piece being `ip` over netlink at 8.
+
+And read §8.3 before starting. Deleting busybox also takes `grep`, `sed`,
+`awk`, `tar`, `mount` and every editor with it, none of which anything
+replaces. Keeping busybox in the image as one program among others costs
+1.2 MiB beside uutils' 14 MiB. Whether S8 is wanted at all is the customer's
+call, and nothing after S6 depends on it.
+
 ## procps and util-linux are the two of the family that do not build
 
 D2 named four uutils projects. coreutils, findutils and diffutils are in the
