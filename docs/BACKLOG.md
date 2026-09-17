@@ -639,8 +639,9 @@ reasoning is in the decisions above.
 * **Stage 19 entire** (144): animations with Hyprland's bezier curves,
   rounded corners, blur, shadows, opacity rules, special workspaces, groups,
   multi-monitor, the plugin-shaped extension points, and the GPU. This is
-  what makes it Hyprland rather than a tiling compositor, and none of it is
-  begun.
+  what makes it Hyprland rather than a tiling compositor. *(2026-09-18:
+  everything but the GPU and XWayland is landed and the exit met for it;
+  about 100 of the 144 are left, and the roadmap's stage 19 says which.)*
 
 ## Wind-down of 2026-09-17, about 00:10: the fleet moves to another machine
 

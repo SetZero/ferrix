@@ -46,10 +46,14 @@ sectors through the block ring with VT-d on x86-64 and the `SMMUv3` on AArch64
 translating, and a deliberate out-of-domain write faulted on both; ARMv7-A runs
 it in degraded trusted mode, as decided. What the stage still owes — `devmgr`
 the program, trusting decoding-off BARs — is after the exit in its section.
-Stages 17 and 18 have begun, and the compositor runs: `cargo xtask
-test-compositor` boots it as init on Ferrix, and two Wayland clients tile on
-the card, pixel for pixel as the renderer draws them, on x86-64 and AArch64.
-Stage 17, display and input, has begun. Its display iteration is done:
+Networking is done: sockets, a net core and a ring-3 virtio-net driver, with
+`curl` fetching over HTTPS and `git` cloning inside the guest. Stages 17 and
+18 are met, and the compositor runs: `cargo xtask test-compositor` boots it
+as init on Ferrix, and two Wayland clients tile on the card, pixel for pixel
+as the renderer draws them, on x86-64 and AArch64. Stage 19 is under way and
+every part of its exit but the GPU is met; the GPU path was decided on
+2026-09-18 (`docs/GPU.md`), stage 21 is bare metal with a card of Ferrix's
+own, and stage 22 is Steam. Stage 17's display iteration is done:
 `/dev/dri/card0` served by a ring-3 virtio-gpu driver, with `cargo xtask
 test-display` requiring a compositor's colour pixel for pixel on x86-64 and
 AArch64. Its input iteration is done too, to the same standard:
@@ -2800,7 +2804,7 @@ manifest's; a byte wrong anywhere in the stack is a CRC that differs.
 
 ---
 
-## Networking — sockets, a net core, virtio-net  ·  *month*
+## Networking — sockets, a net core, virtio-net ✅
 
 Placed after stage 11 without a number of its own, the way *ARMv7-A* sits
 after stage 4. The net core was named in `docs/ARCHITECTURE.md` and left
@@ -3385,7 +3389,7 @@ The remaining syscall surface, the memory scale, the process spawn path for
 
 ---
 
-## Stage 17 — Display and input  ·  *74 points*
+## Stage 17 — Display and input ✅  ·  *74 points, spent*
 
 The first stage of the goal after `rustc`: a Hyprland-shaped Wayland
 compositor, written in Rust, running on Ferrix. The compositor is a user
@@ -3657,7 +3661,7 @@ primary plane on the card" on both.
 
 ---
 
-## Stage 18 — The compositor  ·  *96 points*
+## Stage 18 — The compositor ✅  ·  *96 points, spent*
 
 A Wayland compositor in Rust, on `libs/`' side of the tree as its own
 workspace the way ferrousli is, **written from scratch** rather than on the
@@ -4197,12 +4201,10 @@ whole of it, since that is where the work landed. `cargo xtask test-pty`
 proves the pair without a window and `cargo xtask test-compositor` boots a
 terminal in the compositor and requires the picture it makes.
 
-This stage's exit criterion is met in full.
-
-**Still to do, in the order visible iterations need it.** Iteration 1, a
-blank screen on Ferrix in QEMU, pulls a first cut of stage 17 forward (the
-customer's order of 2026-09-16); then the protocol server, the seat, the
-IPC, the clients.
+This stage's exit criterion is met in full, and its 96 points are spent.
+The visible iterations the customer ordered on 2026-09-16 -- a blank screen
+on Ferrix in QEMU first, then the protocol server, the seat, the IPC and the
+clients -- landed in that order.
 
 **Exit:** in a test of its own on x86-64 and AArch64, the compositor starts
 from a `hyprland.conf`, `exec-once` launches two pattern clients, they tile
@@ -4214,7 +4216,7 @@ console can run the terminal client in it.
 
 ---
 
-## Stage 19 — Hyprland fidelity, and the GPU  ·  *144 points*
+## Stage 19 — Hyprland fidelity, and the GPU  ·  *144 points, about 100 left*
 
 What makes it Hyprland rather than a tiling compositor: animations with its
 bezier curves, rounded corners, blur and shadows, dimming and opacity rules,
@@ -5418,8 +5420,15 @@ met, and by `cargo xtask test-compositor` on x86-64 and on AArch64:
 * a plugin loaded from `plugin = /bin/plug`, adding a dispatcher a keybind
   presses.
 
-What is left is the GPU path, and with it the frame rate the exit asks for
-under one: the four pieces above, none of which is begun.
+**Where the points stand (2026-09-18).** Of the stage's 144, about 100 are
+left, in three parts: the GPU path, 52, in the four pieces above, none of
+which is begun; XWayland, 40 as a first guess -- `xwayland_shell_v1` on the
+compositor's side and an X server on Ferrix, which stage 22 is what finally
+needs; and the small remainder `docs/COMPOSITOR-DAMAGE-HANDOFF.md` §5 lists,
+about 8: the pointer-driven options (`resize_on_border`, `snap`,
+`extend_border_grab_area`, dwindle's cursor-placed splits), `xray` and
+`no_screen_share`, which need a second pass, and `persistent_size`. The
+frame rate the exit asks for under the GPU path comes with the GPU path.
 
 ---
 
@@ -5501,7 +5510,8 @@ staged until now.
   loading (the C path), or a Rust X server that answers the requests Steam
   and Wine make, which is the smaller subset than it sounds and the larger
   program than it looks. `xwayland_shell_v1` on the compositor's side is a
-  table. 40 points as a first guess, most of it the server.
+  table. 40 points as a first guess, most of it the server, counted in
+  stage 19's remainder and not again here.
 * **Sound.** Ferrix has no audio at all: a `virtio-snd` driver in ring 3,
   an audio core with a `/dev/snd` shaped enough for a client library, and a
   server speaking the PulseAudio or PipeWire protocol over a Unix socket,

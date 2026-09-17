@@ -100,12 +100,12 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixAssurance` | `11-assurance.sysml` | docs/RELIABILITY.md and docs/ASSEMBLY.md: the quality gates, what each one verifies, and what the tests can actually reach. All of it runs in CI today except the two debts the roadmap states. |
 | `FerrixViews` | `12-views.sysml` | How to read the one model as two: what runs today, and what the roadmap still owes. The filters key on the lifecycle keywords every element carries. |
 
-13 files, 16 packages, 1496 elements, 165 relations. Model digest `2b7e699b39ff8fd5`.
+13 files, 16 packages, 1496 elements, 165 relations. Model digest `b6266c18152c51e6`.
 
 | Maturity | Elements | Meaning |
 | --- | ---: | --- |
-| `#implemented` | 138 | The code exists and the QEMU boot test exercises it on every architecture it applies to. |
-| `#inProgress` | 11 | The owning stage has started; part of the element runs. |
+| `#implemented` | 140 | The code exists and the QEMU boot test exercises it on every architecture it applies to. |
+| `#inProgress` | 9 | The owning stage has started; part of the element runs. |
 | `#writtenAhead` | 15 | A libs/ crate exists and passes its host tests, but nothing in kernel/ calls it yet. |
 | `#planned` | 98 | Only the design exists, in docs/ARCHITECTURE.md. Nothing stands in for it. |
 | `@deferred` | 22 | Work a finished stage explicitly left behind, carrying the reason that stage gave. |
@@ -2561,9 +2561,9 @@ flowchart TB
   n17_FerrixRoadmap_stage14RealTime["S14  Stage 14 real time<br>Planned · month"]
   n18_FerrixRoadmap_stage15Userland["S15  Stage 15 userland<br>Planned · week"]
   n19_FerrixRoadmap_stage16Rustc["S16  Stage 16 rustc<br>Planned · the goal"]
-  n20_FerrixRoadmap_stage17DisplayAndInput["S17  Stage 17 display and input<br>InProgress · 74 points"]
-  n21_FerrixRoadmap_stage18Compositor["S18  Stage 18 compositor<br>InProgress · 96 points"]
-  n22_FerrixRoadmap_stage19HyprlandFidelity["S19  Stage 19 hyprland fidelity<br>InProgress · 144 points"]
+  n20_FerrixRoadmap_stage17DisplayAndInput["S17  Stage 17 display and input<br>Done · 74 points, spent"]
+  n21_FerrixRoadmap_stage18Compositor["S18  Stage 18 compositor<br>Done · 96 points, spent"]
+  n22_FerrixRoadmap_stage19HyprlandFidelity["S19  Stage 19 hyprland fidelity<br>InProgress · 144 points, about 100 left"]
   n23_FerrixRoadmap_stage21BareMetalGpu["S21  Stage 21 bare metal gpu<br>Planned · unsized, over 100 points"]
   n24_FerrixRoadmap_stage22Steam["S22  Stage 22 steam<br>Planned · unsized, over 300 points"]
   n25_FerrixRoadmap_stage20SelfHosting["S20  Stage 20 self hosting<br>Planned · longer"]
@@ -2604,9 +2604,9 @@ flowchart TB
   classDef implemented fill:#dceae2,stroke:#2c6e4e,color:#16191d
   classDef planned fill:#e4e7ea,stroke:#6a737e,color:#16191d
   classDef inProgress fill:#dae5f0,stroke:#2a5f8f,color:#16191d
-  class n0_FerrixRoadmap_stage0Foundation,n1_FerrixRoadmap_stage1Boot,n2_FerrixRoadmap_stage2Memory,n3_FerrixRoadmap_stage3TrapsInterruptsTime,n4_FerrixRoadmap_stage4Smp,n5_FerrixRoadmap_armv7aPort,n6_FerrixRoadmap_stage5Scheduler,n7_FerrixRoadmap_stage6UserMode,n8_FerrixRoadmap_stage7LinuxAbi,n9_FerrixRoadmap_stage8Vfs,n10_FerrixRoadmap_stage9NativeAbi,n11_FerrixRoadmap_stage10UserspaceDrivers,n12_FerrixRoadmap_stage11BtrfsRead,n13_FerrixRoadmap_stageNetworking implemented
+  class n0_FerrixRoadmap_stage0Foundation,n1_FerrixRoadmap_stage1Boot,n2_FerrixRoadmap_stage2Memory,n3_FerrixRoadmap_stage3TrapsInterruptsTime,n4_FerrixRoadmap_stage4Smp,n5_FerrixRoadmap_armv7aPort,n6_FerrixRoadmap_stage5Scheduler,n7_FerrixRoadmap_stage6UserMode,n8_FerrixRoadmap_stage7LinuxAbi,n9_FerrixRoadmap_stage8Vfs,n10_FerrixRoadmap_stage9NativeAbi,n11_FerrixRoadmap_stage10UserspaceDrivers,n12_FerrixRoadmap_stage11BtrfsRead,n13_FerrixRoadmap_stageNetworking,n20_FerrixRoadmap_stage17DisplayAndInput,n21_FerrixRoadmap_stage18Compositor implemented
   class n14_FerrixRoadmap_stageDynamicLinking,n15_FerrixRoadmap_stage12BtrfsWrite,n16_FerrixRoadmap_stage13Isolation,n17_FerrixRoadmap_stage14RealTime,n18_FerrixRoadmap_stage15Userland,n19_FerrixRoadmap_stage16Rustc,n23_FerrixRoadmap_stage21BareMetalGpu,n24_FerrixRoadmap_stage22Steam,n25_FerrixRoadmap_stage20SelfHosting planned
-  class n20_FerrixRoadmap_stage17DisplayAndInput,n21_FerrixRoadmap_stage18Compositor,n22_FerrixRoadmap_stage19HyprlandFidelity inProgress
+  class n22_FerrixRoadmap_stage19HyprlandFidelity inProgress
 ```
 
 **Figure 16 — The roadmap, stage by stage.** An arrow points from a stage to the stage it unblocks. The two stages with a second arrow into them are the ones that need more than their predecessor. [SVG](diagrams/roadmap-stages.svg) Source: `10-roadmap.sysml`.
@@ -2633,9 +2633,9 @@ flowchart TB
 | `S14` | 14 | Stage 14 real time | Planned | month | `#planned` |
 | `S15` | 15 | Stage 15 userland | Planned | week | `#planned` |
 | `S16` | 16 | Stage 16 rustc | Planned | the goal | `#planned` |
-| `S17` | 17 | Stage 17 display and input | InProgress | 74 points | `#inProgress` |
-| `S18` | 18 | Stage 18 compositor | InProgress | 96 points | `#inProgress` |
-| `S19` | 19 | Stage 19 hyprland fidelity | InProgress | 144 points | `#inProgress` |
+| `S17` | 17 | Stage 17 display and input | Done | 74 points, spent | `#implemented` |
+| `S18` | 18 | Stage 18 compositor | Done | 96 points, spent | `#implemented` |
+| `S19` | 19 | Stage 19 hyprland fidelity | InProgress | 144 points, about 100 left | `#inProgress` |
 | `S21` | 21 | Stage 21 bare metal gpu | Planned | unsized, over 100 points | `#planned` |
 | `S22` | 22 | Stage 22 steam | Planned | unsized, over 300 points | `#planned` |
 | `S20` | 20 | Stage 20 self hosting | Planned | longer | `#planned` |
@@ -2842,27 +2842,27 @@ The remaining syscall surface, the memory scale, the spawn path for rust-lld, a 
 
 ### S17 — Stage 17 display and input
 
-**InProgress**  ·  size 74 points  ·  `#inProgress`
+**Done**  ·  size 74 points, spent  ·  `#implemented`
 
 A display core and a virtio-gpu driver in ring 3 behind /dev/dri/card0, an input core and a virtio-input driver behind /dev/input/eventN, and the calls a Rust event loop makes: epoll, eventfd, FIONBIO, memfd sealing, AF_UNIX with SCM_RIGHTS. Nothing is drawn by the kernel.
 
-The display iteration is done (xtask test-display) and so is the input iteration (xtask test-input, which sends a key and a touch through QMP and requires them back out of the nodes on x86-64 and AArch64, with a negative control that must fail). What is left is the seat: the compositor does not read those nodes yet. docs/DISPLAY.md and docs/INPUT.md are the designs.
+The display iteration is done (xtask test-display) and so is the input iteration (xtask test-input, which sends a key and a touch through QMP and requires them back out of the nodes on x86-64 and AArch64, with a negative control that must fail). The seat came with the compositor: xtask test-seat types into a window on Ferrix from QEMU's far end, and the stage is met. docs/DISPLAY.md and docs/INPUT.md are the designs.
 
 ### S18 — Stage 18 compositor
 
-**InProgress**  ·  size 96 points  ·  `#inProgress`
+**Done**  ·  size 96 points, spent  ·  `#implemented`
 
 The compositor itself: the Wayland wire protocol and its server, xdg-shell, wl_shm, the dwindle and master layouts, a CPU renderer, hyprland.conf and the hyprctl socket. Exit: two real Wayland clients tiled on Ferrix's screen, pixel for pixel as the renderer draws them, which xtask test-compositor requires on x86-64 and AArch64. Met.
 
 ### S19 — Stage 19 hyprland fidelity
 
-**InProgress**  ·  size 144 points  ·  `#inProgress`
+**InProgress**  ·  size 144 points, about 100 left  ·  `#inProgress`
 
 What makes a Hyprland rather than a tiling compositor: animations with bezier curves, rounded corners, blur, shadows, opacity rules, special workspaces, groups, multiple monitors, plugins -- and the GPU behind them.
 
 Well under way: every one of Hyprland's globals, dispatchers and hyprctl commands is answered, and a person's own hyprland.conf -- 377 lines, a bar, a dock and a wallpaper daemon -- runs with no diagnostic. What is left is XWayland, the GPU, and the layer-rule effects that need a second render pass.
 
-The GPU path was decided on 2026-09-18 (docs/GPU.md): the host's driver through virtio-gpu 3D -- the ring-3 driver's 3D commands, a render node with the virtgpu ioctls and 3D scanout, the host half in xtask, and a Rust virgl encoder as the compositor's renderer behind a renderer trait, 52 points in that order. A card of Ferrix's own is stage 21.
+The GPU path was decided on 2026-09-18 (docs/GPU.md): the host's driver through virtio-gpu 3D -- the ring-3 driver's 3D commands, a render node with the virtgpu ioctls and 3D scanout, the host half in xtask, and a Rust virgl encoder as the compositor's renderer behind a renderer trait, 52 points in that order. A card of Ferrix's own is stage 21. Of the 144, about 100 are left: the GPU's 52, XWayland's 40, and about 8 of pointer-driven options and second-pass effects.
 
 ### S21 — Stage 21 bare metal gpu
 
@@ -3286,8 +3286,8 @@ flowchart LR
 | `S14` | `stage14RealTime` | `allocate` and `dependency` | — | `#planned` |
 | `S15` | `stage15Userland` | `allocate` and `dependency` | — | `#planned` |
 | `S16` | `stage16Rustc` | `allocate` and `dependency` | — | `#planned` |
-| `S17` | `stage17DisplayAndInput` | `dependency` | — | `#inProgress` |
-| `S18` | `stage18Compositor` | `dependency` | — | `#inProgress` |
+| `S17` | `stage17DisplayAndInput` | `dependency` | — | `#implemented` |
+| `S18` | `stage18Compositor` | `dependency` | — | `#implemented` |
 | `S19` | `stage19HyprlandFidelity` | `dependency` | — | `#inProgress` |
 | `S21` | `stage21BareMetalGpu` | — | — | `#planned` |
 | `S22` | `stage22Steam` | — | — | `#planned` |

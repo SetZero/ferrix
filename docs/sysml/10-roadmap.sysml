@@ -417,10 +417,10 @@ package FerrixRoadmap {
              * ./hello on Ferrix, in CI. */
     }
 
-    #inProgress requirement <'S17'> stage17DisplayAndInput : Stage {
+    #implemented requirement <'S17'> stage17DisplayAndInput : Stage {
         attribute :>> number = 17;
-        attribute :>> status = StageStatus::InProgress;
-        attribute :>> size = "74 points";
+        attribute :>> status = StageStatus::Done;
+        attribute :>> size = "74 points, spent";
         doc /* A display core and a virtio-gpu driver in ring 3 behind
              * /dev/dri/card0, an input core and a virtio-input driver behind
              * /dev/input/eventN, and the calls a Rust event loop makes:
@@ -431,14 +431,15 @@ package FerrixRoadmap {
              * the input iteration (xtask test-input, which sends a key and a
              * touch through QMP and requires them back out of the nodes on
              * x86-64 and AArch64, with a negative control that must fail).
-             * What is left is the seat: the compositor does not read those
-             * nodes yet. docs/DISPLAY.md and docs/INPUT.md are the designs. */
+             * The seat came with the compositor: xtask test-seat types into
+             * a window on Ferrix from QEMU's far end, and the stage is met.
+             * docs/DISPLAY.md and docs/INPUT.md are the designs. */
     }
 
-    #inProgress requirement <'S18'> stage18Compositor : Stage {
+    #implemented requirement <'S18'> stage18Compositor : Stage {
         attribute :>> number = 18;
-        attribute :>> status = StageStatus::InProgress;
-        attribute :>> size = "96 points";
+        attribute :>> status = StageStatus::Done;
+        attribute :>> size = "96 points, spent";
         doc /* The compositor itself: the Wayland wire protocol and its
              * server, xdg-shell, wl_shm, the dwindle and master layouts, a
              * CPU renderer, hyprland.conf and the hyprctl socket. Exit: two
@@ -450,7 +451,7 @@ package FerrixRoadmap {
     #inProgress requirement <'S19'> stage19HyprlandFidelity : Stage {
         attribute :>> number = 19;
         attribute :>> status = StageStatus::InProgress;
-        attribute :>> size = "144 points";
+        attribute :>> size = "144 points, about 100 left";
         doc /* What makes a Hyprland rather than a tiling compositor:
              * animations with bezier curves, rounded corners, blur, shadows,
              * opacity rules, special workspaces, groups, multiple monitors,
@@ -468,7 +469,9 @@ package FerrixRoadmap {
              * commands, a render node with the virtgpu ioctls and 3D
              * scanout, the host half in xtask, and a Rust virgl encoder as
              * the compositor's renderer behind a renderer trait, 52 points
-             * in that order. A card of Ferrix's own is stage 21. */
+             * in that order. A card of Ferrix's own is stage 21. Of the
+             * 144, about 100 are left: the GPU's 52, XWayland's 40, and
+             * about 8 of pointer-driven options and second-pass effects. */
     }
 
     #planned requirement <'S21'> stage21BareMetalGpu : Stage {
