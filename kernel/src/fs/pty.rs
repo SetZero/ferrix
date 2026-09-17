@@ -360,11 +360,6 @@ impl Pty {
         self.state.lock().master
     }
 
-    /// Whether any slave is open.
-    fn slave_open(&self) -> bool {
-        self.state.lock().slaves > 0
-    }
-
     /// Wait until `ready` or the caller is signalled.
     fn wait_for(&self, ready: impl Fn() -> bool) -> Result<(), Errno> {
         let caller = process::current();
@@ -621,9 +616,4 @@ pub(crate) fn slave_of(io: &Arc<dyn Inode>) -> Option<Arc<SlaveFile>> {
 /// Unlock a pair, as `TIOCSPTLCK` does with a zero.
 pub(crate) fn set_locked(pty: &Pty, locked: bool) {
     pty.state.lock().locked = locked;
-}
-
-/// Whether a pair is locked.
-pub(crate) fn locked(pty: &Pty) -> bool {
-    pty.state.lock().locked
 }
