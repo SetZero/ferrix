@@ -50,6 +50,26 @@ cc -static -no-pie -nostdlib -nostdinc -isystem include \
    -o prog path/to/crt1.o prog.c target/debug/libferrousli.a
 ```
 
+## uutils/coreutils
+
+`tools/uutils/build.sh` builds uutils/coreutils 0.9.0 against this library, as
+one static x86-64 multicall program: Rust's own `std` and unwinder for the
+`x86_64-unknown-linux-musl` target, and `libferrousli.a` in the C library's
+place. On Windows, `tools/uutils/build-windows.sh` builds the same program
+without WSL, with clang for the one C dependency in uutils' tree and lld for
+the link. `tools/uutils/sources.sh` pins the release by checksum and says why
+the target is the musl one when this library is closer to glibc.
+
+`cargo xtask uutils` runs whichever script the host needs. The binary installs
+as `x86_64/coreutils` under `~/.local/share/ferrix/uutils/ferrousli` (or
+`$FERRIX_UUTILS`), and a link that fails writes `undefined-symbols.txt` beside
+it, as busybox's does. It linked with nothing missing from this library on
+2026-09-17.
+
+These are the utilities that replace busybox's. `../docs/UUTILS.md` is the
+plan: the uutils family for the utilities, zinc for the shell, and the list of
+what nobody provides yet.
+
 ## busybox
 
 `tools/busybox/build.sh` builds busybox 1.37.0 against this library, as a

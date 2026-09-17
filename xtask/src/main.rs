@@ -48,6 +48,7 @@ mod compositor;
 mod console;
 mod display;
 mod fat;
+mod ferrousli;
 mod flash;
 mod gateway;
 mod initramfs;
@@ -65,6 +66,7 @@ mod shell;
 mod symbolize;
 mod test_disk;
 mod threads;
+mod uutils;
 mod vfs;
 mod window;
 mod workspace;
@@ -136,6 +138,7 @@ COMMANDS:
     native-clippy check's clippy of the native programs for --arch, as CI runs it
     model-doc     Regenerate docs/generated/ from the SysML model
     busybox       Build busybox against ferrousli (x86_64) for --init ferrousli
+    uutils        Build uutils/coreutils against ferrousli (x86_64), the utilities replacing busybox's
     ports         Build the programs ported onto ferrousli (x86_64: curl, btop), which images carry beside busybox
     flash         Copy the loader and kernel onto a board's boot partition
     watch-serial  Watch a real serial port for the kernel's boot report
@@ -268,6 +271,7 @@ fn run() -> Result<()> {
         }
         "model-doc" => check::model_doc(),
         "busybox" => busybox::build(args.single_arch()?).map(|_| ()),
+        "uutils" => uutils::build(args.single_arch()?).map(|_| ()),
         "ports" => ports::build(args.single_arch()?),
         "flash" => {
             let arch = args.single_arch()?;

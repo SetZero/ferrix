@@ -104,7 +104,7 @@ archive and no localized symbol. uutils/coreutils 0.9.0 **links with zero
 undefined symbols** and the 14 MiB static binary runs on the host. That is
 S1's exit, and it is met.
 
-## 3a. What the spike found that this plan did not expect
+## 3a. The one thing this plan did not expect, and what it changed
 
 `coreutils echo hi` prints uutils' usage and says `<unknown binary name>`. It
 is not a ferrousli fault, and the control says so: the same probe built as a
@@ -123,25 +123,41 @@ dispatch — which is the whole of how `/bin/ls` becomes `ls` — never happens.
 ferrousli's `getauxval(AT_EXECFN)` answers correctly; a C program against this
 library prints the path. rustix simply does not ask it.
 
-**So D3 needs a decision, and it is the product owner's.** Three ways out,
-and the first is the one to try:
+Three ways out were on the table:
 
 1. **Build for the `x86_64-unknown-linux-musl` triple, still linking
    ferrousli.** uutils' `#[cfg(not(target_env = "musl"))]` then falls away and
-   it uses `argv[0]`, which works. It also suits ferrousli, whose headers *are*
-   musl's. Two things stop it today, both the same shape as the three in §3 and
-   both ferrousli's: `rust_begin_unwind` is defined by ferrousli's
-   `#[panic_handler]` and by `std`, and the musl target asks for `-lunwind`
-   where the gnu target asked for `libgcc_eh`. Perhaps 3 points.
+   it uses `argv[0]`. It also suits ferrousli, whose headers *are* musl's.
 2. **Carry a patch to uutils' `validation.rs`.** Smallest change, and a patch
    to maintain for ever against a moving upstream.
 3. **Give one binary per utility instead of a multicall one.** No dispatch to
    get right, and roughly a hundred copies of a 14 MiB binary, which the
    initramfs cannot hold.
 
-Until one is chosen, S3 — the initramfs carrying `/bin/coreutils` with a
-symlink per utility — cannot work, because the symlinks are exactly what the
-dispatch reads. **S1 does not depend on this**, and is done.
+**It is (1), and it was measured rather than argued.** uutils/coreutils builds
+for the musl triple against ferrousli with **zero undefined symbols and no
+duplicate ones**, and every part of the dispatch then works: a symlink named
+`ls` lists, `sort`, `wc`, `seq`, `head` and `uname` all run as themselves,
+`coreutils echo hi` takes the second-argument form, and `env` starts another
+program.
+
+Two things had to be got right, and neither was `rust_begin_unwind`, which
+does not in fact clash on this triple:
+
+* **The unwinder.** The musl target names `-lunwind` where the gnu target
+  named `-lgcc_eh`, and `std`'s panic machinery really calls into it. rustc
+  ships the answer — `self-contained/libunwind.a` — for this target on Linux
+  **and on Windows**, which is what lets the Windows build work the same way.
+  It is copied rather than reached with `-L`, so the linker cannot satisfy
+  `-lc` from musl's `libc.a` sitting beside it.
+* **The toolchain.** uutils is unpacked and built outside the repository,
+  where rustup falls back to the machine's default — older than ferrousli's
+  `rust-version`, and with no musl target installed. Both scripts read the
+  channel out of `rust-toolchain.toml` and name it.
+
+So D3 stands as the product owner set it: one build, against ferrousli, no
+musl C library anywhere. Only the *triple* changed, and with it the reason for
+the triple, which is now written down where it is used.
 
 ## 4. Where each part of the userland comes from
 
@@ -187,7 +203,7 @@ its table row in `docs/BACKLOG.md` names.
 | # | Slice | Points | Gate |
 |---|---|---|---|
 | S1 | **Done.** ferrousli gained the 17: `posix_spawn` and its eight, `pthread_atfork`, `splice`, `lutimes`, `__res_init`, `gnu_get_libc_version`, three `_chk` functions, the two versioned `termios` names, `dlsym` and the rest of `dlfcn.h`, `_dl_find_object`, and a weak `rust_eh_personality`. `execvpe` and `errno::get` came with `posix_spawn`, and the `.init_array` constructors now get `argc`, `argv` and `envp` as glibc and musl pass them | 8 | `check --ferrousli` passes; uutils links with 0 undefined symbols |
-| S2 | `ferrousli/tools/uutils/` (`sources.sh`, `build.sh`, `build-windows.sh`) and `cargo xtask uutils`, mirroring `tools/busybox/` and `xtask/src/busybox.rs`, with the staleness rule | 5 | the binary builds on Linux and on Windows |
+| S2 | **Done.** `ferrousli/tools/uutils/` (`sources.sh`, `build.sh`, `build-windows.sh`) and `cargo xtask uutils`. What it shares with busybox moved to `xtask/src/ferrousli.rs`, which is what stays when S8 deletes `busybox.rs`. The staleness rule is written and unused until S3 calls it | 5 | builds on Linux and on Windows; the Windows-built binary runs on Linux |
 | S3 | The initramfs carries `/bin/coreutils` with a symlink per utility, and `/bin/sh` is zinc | 3 | `test-boot` on x86-64 |
 | S4 | `test-shell` runs zinc, not `busybox sh`; the script's expected transcript re-recorded against zinc | 5 | `test-shell`, and zinc's own gate |
 | S5 | `test-vfs`'s expectations rewritten from busybox's messages to GNU's, row by row, each row saying which program now answers it | 8 | `test-vfs` on x86-64 |
@@ -195,9 +211,10 @@ its table row in `docs/BACKLOG.md` names.
 | S7 | `git` as a ferrousli port, beside `curl` and `btop` | 8 | it clones and commits on Ferrix |
 | S8 | busybox deleted: `tools/busybox/`, `xtask/src/busybox.rs`, the UAPI headers, ferrousli's three `<linux/*>` pass-throughs, the applet list | 3 | the whole matrix, once §5 is empty |
 
-S1 is the only one nothing else could start without, and it has landed.
-S2 and S4 can go in parallel now; **S3 is blocked on §3a**, the
-multicall dispatch; S8 is blocked on §5 and is not scheduled.
+S1 and S2 have landed, and §3a is settled, so **S3 is no longer blocked**.
+S4 can go in parallel with it. S8 is blocked on §5 and is not scheduled.
+
+**26 points left of S3-S7.**
 
 **Total, S1–S7: 42 points.** S8 is 3 more, whenever §5 empties.
 
