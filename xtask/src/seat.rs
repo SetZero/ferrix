@@ -211,7 +211,15 @@ fn boot_and_type(arch: Arch, program: &Path, client: &Path, args: &Args) -> Resu
         // 4: the keybind, and the window it closed.
         qmp.input_send_event(&[key("meta_l", true)])?;
         qmp.input_send_event(&[key("q", true)])?;
-        wait_for(watching, "the compositor asked this window to close", arch)?;
+        // Which window, and not merely that one was asked to close: the
+        // client says so -- `the compositor asked the Checkerboard window
+        // called one to close` -- because a keybind that closed the wrong
+        // window would otherwise pass this.
+        wait_for(
+            watching,
+            "the compositor asked the Checkerboard window called one to close",
+            arch,
+        )?;
         qmp.input_send_event(&[key("q", false)])?;
         qmp.input_send_event(&[key("meta_l", false)])?;
         std::thread::sleep(SETTLE);

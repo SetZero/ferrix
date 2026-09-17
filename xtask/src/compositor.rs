@@ -875,8 +875,7 @@ fn boot_and_dump(
     binds: &[(&str, &[&str])],
     args: &Args,
 ) -> Result<(Vec<Image>, Vec<String>)> {
-    let (image, kernel) =
-        build_image(arch, programs, &undithered(config), Carried::none(), args)?;
+    let (image, kernel) = build_image(arch, programs, &undithered(config), Carried::none(), args)?;
 
     let port = free_port()?;
     let mut qemu_args = args.clone();
