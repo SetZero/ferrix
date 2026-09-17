@@ -387,6 +387,53 @@ commit as a new one, and a mistake there is a disk that stops reading. The
 extraction is 3 points and wants a landing of its own, with both rings' tests
 and both fuzz targets as the evidence. | open | 3
 
+## Velocity, measured on 2026-09-18
+
+Points are what a session says before it starts (the rule of 2026-09-13,
+`docs/ROADMAP.md`'s opening) and velocity is what landed, counted
+afterwards. This is the first count over the whole points era, from the
+evening of 2026-09-13, when the first estimates were written, to the morning
+of 2026-09-18. Sources: the product-owner ledger kept at the time (which
+measured 2026-09-14 at the time), the landings recorded in this file, and
+the roadmap's stage totals -- stage totals for stages 17, 18 and 19 rather
+than their rows, so that nothing is counted twice.
+
+| day | points landed | what |
+|---|---|---|
+| 2026-09-13 | 0 | the first estimates written that evening; the day's landings were sized before the rule and are not counted |
+| 2026-09-14 | 131 | measured by the product owner at 23:20: 19 landings across ten sessions -- stages 7, 8, 9, 10, 11, the mm stack, the board -- ≈ 21 points a queue-hour |
+| 2026-09-15 | 34 | 00:20–03:00: memfd 5, threads 5 (7), the POSIX gap document 3, the native Windows busybox 5, the branch cleanup 3, netwire 8, inet ABI 3; then the fleet stopped until the evening of the 16th |
+| 2026-09-16 | 66 | from 19:40: threads 6 (3), the zinc gate 2, the compositor's parser 5, display L1 3, ferrousli's threads 8, a busybox fix 1, and the rest of networking (44 of its 50 estimated), whose exit was met at 22:50 |
+| 2026-09-17 | 214 | stage 17 (74) and stage 18 (96) less the 8 above, both exits met; stage 19's first ≈ 44 (rules, dispatchers, layouts, groups, monitors, plugins, blur and shadows); static PIE 3, the threads exit 2, ferrousli-misc 3 |
+| 2026-09-18 | unpointed | the compositor's frame time, pacing, the kernel's fault fix, the cores, 1080p and wallpapers, the GPU and Steam decisions: none was sized before it started, so none counts |
+
+**About 445 points in four calendar days, 2026-09-14 to -17: ≈ 111 a
+calendar day, and ≈ 150 a day the fleet was actually running** (the 15th was
+three hours). The finer number the ledger measured on the 14th, 21 points a
+queue-hour, held on the 17th too by this count. Ten sessions ran on the 14th
+and about eight on the 17th, so a session-day is 15–20 points, and every
+estimate under 8 held both days.
+
+What the number is good for and what it is not:
+
+* It sizes the pointed remainder: stage 19's ≈ 100 and dynamic linking's 39
+  are a fleet-day each at the 17th's pace *if the work is of the kind that
+  was measured* -- protocol tables, syscalls, a renderer -- which the GPU
+  path (unknowns in every step) and XWayland (a server) are not. Stages 21
+  and 22 are unsized and the number says nothing about them.
+* Three calibrations are mixed in it: session estimates against each other's
+  yardsticks, the product owner's "unmeasured" sizing of stages 17–19 on
+  the 13th, and the rows that carry their own points. The stage totals for
+  17 and 18 came in where they were sized (74 and 96), which is the one
+  check the mix has passed.
+* The 18th's landings are counted at zero, not because they were small
+  (sized afterwards they would be about 35: the backdrop 8, pacing and the
+  card's damage 5, the fault fix 3, the cores and the shadow 8, 1080p and
+  wallpapers 8, the two decisions 3) but because a size given after the fact
+  is not an estimate. The next count should not have such a row.
+
+---
+
 ## Decisions
 
 Dated, newest first. A decision here is final until the customer says otherwise.
