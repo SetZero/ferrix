@@ -3831,6 +3831,42 @@ conversation's last message -- the client never acks, the compositor refuses
 its buffer, and libwayland prints `xdg_surface#7: error 3: a buffer was
 attached before a configure was acked`.
 
+**Done — the compositor runs, and two clients are tiled on it
+(2026-09-17).** `compositor/hyprix` is the compositor itself: it reads a
+`hyprland.conf`, binds a Wayland socket, starts what `exec-once` names, tiles
+what connects to it with `compositor/layout`, draws with `compositor/render`
+and puts the frame on a screen. Nothing in it parses a file, works out a
+layout, draws a pixel or decodes a message; it is the loop that joins the
+crates that do, and the two places the compositor touches the world -- a
+client's shared memory, mapped read-only, and the screen.
+`compositor/pattern` is the client it draws: a whole Wayland client in one
+file, over `compositor/wire` and `compositor/socket` rather than a toolkit,
+which means the tests exercise those crates from both ends.
+
+**The headless half of this stage's exit passes.** Two pattern clients
+connect over a real socket, are tiled dwindle-style with the configured gaps
+and borders, draw into shared memory, and the frame the compositor composed
+is compared pixel for pixel against the expected image `compositor/render`'s
+own tests bless: 0 differing pixels of 786,432. The two pictures are built by
+different paths -- one by calling the renderer with rectangles from the
+layout, the other by two programs talking Wayland to a server that works the
+same rectangles out from the requests they sent -- and nothing but the pixels
+is shared between them. A second test runs one client instead of two and
+requires the comparison to notice, so the check is known to fail when the
+picture is wrong.
+
+Writing it found two things. A window is reconfigured when *any* window
+arrives or leaves, not only when it is made: a client that is not told is one
+drawing at the size it had before, which the compositor then draws cropped,
+and the first run showed exactly that. And the server refused the client's
+own second pool for reusing an object id it had not destroyed, which was the
+client's bug and the server being right.
+
+What is left of this stage: `wl_seat`, so a window can be typed into; the
+`hyprctl` IPC; and the screen itself, which is `compositor/blank`'s DRM path
+moved behind `hyprix`'s backend so the same frame goes to `/dev/dri/card0`
+under QEMU.
+
 **Still to do, in the order visible iterations need it.** Iteration 1, a
 blank screen on Ferrix in QEMU, pulls a first cut of stage 17 forward (the
 customer's order of 2026-09-16); then the protocol server, the seat, the

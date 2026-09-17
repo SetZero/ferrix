@@ -1,0 +1,35 @@
+[package]
+name = "hyprix"
+description = "The compositor: a Hyprland-shaped Wayland compositor for Ferrix"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "hyprix"
+path = "src/lib.rs"
+
+[[bin]]
+name = "hyprix"
+path = "src/main.rs"
+
+[dependencies]
+compositor-config = { path = "../config" }
+compositor-layout = { path = "../layout" }
+compositor-protocol = { path = "../protocol" }
+compositor-render = { path = "../render" }
+compositor-server = { path = "../server" }
+compositor-socket = { path = "../socket" }
+compositor-wire = { path = "../wire" }
+# Declarations only: `mmap` of a client's pool, and `pause`.
+libc = "0.2.189"
+
+[dev-dependencies]
+# The test runs the compositor and two clients in threads of one process and
+# compares the pixels, which is the everyday gate compositor/README.md names.
+compositor-pattern = { path = "../pattern" }
+
+[lints]
+workspace = true

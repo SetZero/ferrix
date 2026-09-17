@@ -108,7 +108,21 @@ names the part of Hyprland or hyprlang it follows.
   to catch. The card code builds on Linux only; the choice of mode and CRTC
   and the fill are tested on any host.
 
+* **`hyprix`** is the compositor: it reads a `hyprland.conf`, listens on a
+  Wayland socket, tiles what connects to it, draws on the CPU and puts the
+  frame on a screen. Nothing in it parses a file, works out a layout, draws a
+  pixel or decodes a message -- the crates above do those -- so it is the loop
+  that joins them and the two places the compositor touches the world: a
+  client's shared memory, and the screen. `--headless WxH` draws into memory
+  instead, and `--dump <dir>` writes each frame as a PPM.
+* **`pattern`** is a Wayland client in one file, over `wire` and `socket`
+  rather than a toolkit, that draws one of `render`'s test patterns. It is
+  what the compositor's tests put on screen, and it exercises the same crates
+  from the client's side.
+
 ## Testing
+
+
 
 From this directory, on any host:
 
@@ -118,3 +132,12 @@ cargo test
 
 `cargo xtask check` runs formatting, clippy and the tests here as part of the
 whole gate.
+
+The one that matters most is `hyprix/tests/two_clients.rs`: it runs the
+compositor and two pattern clients in threads of one process, over a real
+socket, and compares the frame the compositor composed against the image
+`render`'s own tests bless. The two are built by different paths -- one by
+calling the renderer with rectangles, the other by two programs talking
+Wayland to a server that works those rectangles out from their requests -- so
+a difference between them is a real one. A second test runs one client
+instead of two and requires the comparison to notice.

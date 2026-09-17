@@ -46,6 +46,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "compositor-pattern"
+version = "0.1.0"
+dependencies = [
+ "compositor-protocol",
+ "compositor-render",
+ "compositor-socket",
+ "compositor-wire",
+ "libc",
+]
+
+[[package]]
 name = "compositor-protocol"
 version = "0.1.0"
 dependencies = [
@@ -85,6 +96,21 @@ version = "0.1.0"
 [[package]]
 name = "ferrix-linux-abi"
 version = "0.1.0"
+
+[[package]]
+name = "hyprix"
+version = "0.1.0"
+dependencies = [
+ "compositor-config",
+ "compositor-layout",
+ "compositor-pattern",
+ "compositor-protocol",
+ "compositor-render",
+ "compositor-server",
+ "compositor-socket",
+ "compositor-wire",
+ "libc",
+]
 
 [[package]]
 name = "libc"

@@ -271,8 +271,7 @@ fn header_fields(header: *mut libc::cmsghdr) -> (i32, i32, usize) {
     // control buffer that outlives this read. A control buffer is a byte
     // array, so the read must be unaligned.
     let copy: libc::cmsghdr = unsafe { header.read_unaligned() };
-    // `cmsg_len` is a `size_t` on every Linux target, which is `usize`.
-    let payload = copy.cmsg_len.saturating_sub(cmsg_len_zero());
+    let payload = widen(copy.cmsg_len).saturating_sub(cmsg_len_zero());
     (copy.cmsg_level, copy.cmsg_type, payload)
 }
 
@@ -379,6 +378,16 @@ fn write_fd(at: *mut i32, fd: i32) {
     unsafe {
         at.write_unaligned(fd);
     }
+}
+
+/// A control message's length as a `usize`.
+///
+/// `cmsg_len` is a `size_t` against glibc and a `u32` against musl, and the
+/// compositor is built for both: a cast is redundant on one and a conversion
+/// is redundant on the other, so this is generic and neither reads as
+/// pointless on either.
+fn widen<T: TryInto<usize>>(value: T) -> usize {
+    value.try_into().unwrap_or(0)
 }
 
 /// `CMSG_LEN(0)`: the bytes a header takes before its payload.
