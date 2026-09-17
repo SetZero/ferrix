@@ -4164,6 +4164,48 @@ bezier curves, rounded corners, blur and shadows, dimming and opacity rules,
 special workspaces, groups, multi-monitor with per-monitor workspaces and
 scaling, the plugin-shaped extension points, and the rest of `hyprctl`.
 
+**Done — the window rules that were read and not obeyed (2026-09-17).**
+`WindowRuleEffectContainer.cpp` has 55 effect strings. When the merged
+0.56 grammar landed, 19 of them were carried out and the rest were kept by
+name so that one unsupported word could not cost a person the matchers
+beside it. Sixteen more are carried out now, and the ones that are not
+each have a reason written down.
+
+The ones that change how a window is *drawn* go through
+`compositor/render`: `rounding_power` (a superellipse rather than a
+circle, which is the "squircle" a person sets the option for),
+`border_color`, `decorate false` for a window that draws its own frame,
+`opaque` for a client that leaves rubbish in its alpha channel,
+`nearest_neighbor` for pixel art, and `dim_around`.
+
+`dim_around` was on the list of effects said to need a second render
+pass, and it does not: Hyprland darkens what is *behind* the thing that
+asked for it, this renderer draws in order, so "behind" is "already
+drawn" and one fill of the canvas just before that thing is the whole
+effect. Both halves work -- `windowrule` for a dialog and `layerrule` for
+a launcher.
+
+The ones that change where a window *is* go through `compositor/layout`:
+`monitor`, `min_size`, `max_size`, `no_max_size`, `keep_aspect_ratio`,
+`fullscreen_state` and `scrolling_width`. The size limits belong with the
+window rather than with the rule that set them -- Hyprland clamps at
+every point a size could change, and a rule fires once while a window is
+resized many times -- so every floating rectangle in the layout goes
+through one call that holds it down.
+
+And two that are bookkeeping: `group set` makes a window a group of one
+so the next window opened onto it joins it rather than splitting the
+workspace, with all seven of Hyprland's group words read as
+`applyDynamicRules` reads them; and `no_close_for` holds a window open,
+with `killactive` saying why rather than doing nothing.
+
+What is left is `xray` and `no_screen_share`, which do need a second pass
+-- the first reads what is behind the frame being drawn and the second
+means drawing the frame again without one surface in it -- the five that
+belong to a GPU this compositor has not got (`immediate`, `no_vrr`,
+`no_auto_hdr`, `tonemap`, `force_rgbx`), `persistent_size`, which needs
+state on disk, and the input ones.
+
 **Done — all four tiling layouts, and the options that shape them
 (2026-09-17).** Hyprland 0.56 has four: `dwindle`, `master`, `monocle` and
 `scrolling`. This compositor had two, and a person who wrote either of the
