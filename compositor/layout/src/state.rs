@@ -1122,9 +1122,22 @@ impl State {
             }
             return Vec::new();
         };
+        // `binds:movefocus_cycles_fullscreen`: there is nothing beside a
+        // window that covers the screen, so a direction key on one does
+        // nothing unless it is read as "the next window" instead.
+        let fullscreen = self
+            .workspace_of(window)
+            .and_then(|workspace| self.fullscreen(workspace))
+            .is_some_and(|(id, _)| id == window);
+        if self.settings.movefocus_cycles_fullscreen && fullscreen {
+            let back = matches!(direction, Direction::Up | Direction::Left);
+            return self.cycle_next(&back, &false);
+        }
         if let Some(target) = self.window_in_direction(window, direction) {
             self.focus(target);
-        } else if let Some(monitor) = self.monitor_towards(direction) {
+        } else if self.settings.window_direction_monitor_fallback
+            && let Some(monitor) = self.monitor_towards(direction)
+        {
             self.focused_monitor = Some(monitor);
         } else if !self.settings.no_focus_fallback
             && let Some(target) = self.wrapped(window, direction)
@@ -1361,7 +1374,17 @@ impl State {
         let Some(window) = self.focused_window() else {
             return Vec::new();
         };
-        if !self.is_floating(window) {
+        // Hyprland pins a floating window; `binds:allow_pin_fullscreen`
+        // lets a fullscreen one be pinned as well, because a fullscreen
+        // window is already drawn over everything and a person who asked
+        // for it to follow them meant it.
+        if !self.is_floating(window)
+            && !(self.settings.allow_pin_fullscreen
+                && self
+                    .workspace_of(window)
+                    .and_then(|workspace| self.fullscreen(workspace))
+                    .is_some_and(|(id, _)| id == window))
+        {
             return Vec::new();
         }
         if !self.pinned.insert(window) {

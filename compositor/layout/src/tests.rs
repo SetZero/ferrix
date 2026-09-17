@@ -2900,3 +2900,72 @@ fn the_scratchpad_closes_when_its_last_window_goes() {
     let _gone = kept.window_gone(WindowId(1)).expect("the window");
     assert!(kept.special_on(M1).is_some());
 }
+
+/// `binds:movefocus_cycles_fullscreen`: a direction key on a fullscreen
+/// window walks to the next window instead of looking for one beside it.
+///
+/// There is nothing beside a window that covers the screen, so without the
+/// option the key does nothing at all -- which is what a person notices and
+/// why the option exists.
+#[test]
+fn movefocus_can_cycle_when_a_window_is_fullscreen() {
+    let mut plain = setup(BARE);
+    open(&mut plain, &[1, 2]);
+    focus(&mut plain, 1);
+    let _full = dispatch(&mut plain, "fullscreen", "0");
+    let _moved = dispatch(&mut plain, "movefocus", "r");
+    assert_eq!(plain.focused_window(), Some(WindowId(1)), "nowhere to go");
+
+    let mut cycling = setup(&format!("{BARE}binds:movefocus_cycles_fullscreen = true\n"));
+    open(&mut cycling, &[1, 2]);
+    focus(&mut cycling, 1);
+    let _full = dispatch(&mut cycling, "fullscreen", "0");
+    let _moved = dispatch(&mut cycling, "movefocus", "r");
+    assert_eq!(cycling.focused_window(), Some(WindowId(2)));
+}
+
+/// `binds:allow_pin_fullscreen`: a fullscreen window can be pinned.
+///
+/// `pin` takes only on a floating window otherwise, which is Hyprland's own
+/// rule and is what makes `pin` on a fullscreen window do nothing.
+#[test]
+fn a_fullscreen_window_can_be_pinned_when_the_option_says_so() {
+    let mut plain = setup(BARE);
+    open(&mut plain, &[1]);
+    let _full = dispatch(&mut plain, "fullscreen", "0");
+    let _pinned = dispatch(&mut plain, "pin", "");
+    assert!(!plain.is_pinned(WindowId(1)));
+
+    let mut allowed = setup(&format!("{BARE}binds:allow_pin_fullscreen = true\n"));
+    open(&mut allowed, &[1]);
+    let _full = dispatch(&mut allowed, "fullscreen", "0");
+    let _pinned = dispatch(&mut allowed, "pin", "");
+    assert!(allowed.is_pinned(WindowId(1)));
+}
+
+/// `binds:window_direction_monitor_fallback = false`: `movefocus` with no
+/// window in that direction stays where it is rather than moving to the
+/// monitor there.
+#[test]
+fn movefocus_can_be_kept_off_the_next_monitor() {
+    let mut state = state_on(BARE, monitor(M1, 0, 0, 1920, 1080));
+    let _second = state
+        .add_monitor(monitor(M2, 1920, 0, 1280, 1024))
+        .expect("a second monitor");
+    open(&mut state, &[1]);
+    focus(&mut state, 1);
+    let _moved = dispatch(&mut state, "movefocus", "r");
+    assert_eq!(state.focused_monitor(), Some(M2), "the default follows");
+
+    let mut kept = state_on(
+        &format!("{BARE}binds:window_direction_monitor_fallback = false\n"),
+        monitor(M1, 0, 0, 1920, 1080),
+    );
+    let _second = kept
+        .add_monitor(monitor(M2, 1920, 0, 1280, 1024))
+        .expect("a second monitor");
+    open(&mut kept, &[1]);
+    focus(&mut kept, 1);
+    let _moved = dispatch(&mut kept, "movefocus", "r");
+    assert_eq!(kept.focused_monitor(), Some(M1));
+}

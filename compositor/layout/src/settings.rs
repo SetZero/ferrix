@@ -148,6 +148,18 @@ pub struct Settings {
     /// One number rather than two, because only the layout in force is ever
     /// asked and a person who sets one sets the other.
     pub special_scale_factor: f64,
+    /// `binds:allow_pin_fullscreen`: a fullscreen window can be pinned.
+    /// Without it `pin` takes only on a floating window, which is what
+    /// Hyprland's own handler does with one.
+    pub allow_pin_fullscreen: bool,
+    /// `binds:movefocus_cycles_fullscreen`: `movefocus` on a fullscreen
+    /// window walks to the next window on the workspace rather than looking
+    /// for one in that direction -- there is nothing beside a window that
+    /// covers the screen, so without this the key does nothing.
+    pub movefocus_cycles_fullscreen: bool,
+    /// `binds:window_direction_monitor_fallback`: `movefocus` with no window
+    /// in that direction moves to the monitor there.
+    pub window_direction_monitor_fallback: bool,
 }
 
 impl Default for Settings {
@@ -215,6 +227,13 @@ impl Settings {
                 .bool("binds:hide_special_on_workspace_change")
                 .unwrap_or(false),
             close_special_on_empty: config.bool("misc:close_special_on_empty").unwrap_or(true),
+            allow_pin_fullscreen: config.bool("binds:allow_pin_fullscreen").unwrap_or(false),
+            movefocus_cycles_fullscreen: config
+                .bool("binds:movefocus_cycles_fullscreen")
+                .unwrap_or(false),
+            window_direction_monitor_fallback: config
+                .bool("binds:window_direction_monitor_fallback")
+                .unwrap_or(true),
             special_scale_factor: finite(
                 config.float(match layout {
                     Layout::Master => "master:special_scale_factor",
