@@ -140,23 +140,47 @@ pub fn ask(socket: &std::path::Path, request: &str) -> Result<String, String> {
 /// `hyprctl dispatch movefocus l` is `dispatch movefocus l`: the flags go
 /// before a `/` and the rest is the command with its arguments, separated by
 /// spaces, exactly as Hyprland's `hyprctl` builds it.
+///
+/// `--batch` is `batchRequest`'s line: `[[BATCH]]` and the commands with
+/// their `;` between them, and with `-j` the flags in front of each command
+/// rather than in front of the line.
 #[must_use]
 pub fn line(arguments: &[String]) -> String {
     let mut flags = String::new();
+    let mut batch = false;
     let mut words: Vec<&str> = Vec::new();
     for argument in arguments {
         match argument.as_str() {
             "-j" | "--json" => flags.push('j'),
             "-r" => flags.push('r'),
+            "--batch" => batch = true,
             other => words.push(other),
         }
     }
     let command = words.join(" ");
+    if batch {
+        return format!("[[BATCH]]{}", with_flags(&command, &flags));
+    }
     if flags.is_empty() {
         command
     } else {
         format!("{flags}/{command}")
     }
+}
+
+/// Put `flags` in front of every command of a batch, which is what
+/// `batchRequest` does with its `;\s*` replacement.
+fn with_flags(commands: &str, flags: &str) -> String {
+    if flags.is_empty() {
+        return commands.to_owned();
+    }
+    commands
+        .split(';')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .map(|part| format!("{flags}/{part}"))
+        .collect::<Vec<_>>()
+        .join(";")
 }
 
 #[cfg(test)]
@@ -182,5 +206,28 @@ mod tests {
         // A flag anywhere is a flag, as `hyprctl`'s own parsing has it.
         assert_eq!(line(&owned(&["clients", "-j"])), "j/clients");
         assert_eq!(line(&[]), "");
+    }
+
+    #[test]
+    fn a_batch_is_one_line_of_commands() {
+        assert_eq!(
+            line(&owned(&[
+                "--batch",
+                "dispatch",
+                "togglegroup",
+                ";",
+                "dispatch",
+                "movefocus",
+                "l"
+            ])),
+            "[[BATCH]]dispatch togglegroup ; dispatch movefocus l"
+        );
+        // With `-j` the flags go in front of each command, not the line:
+        // `batchRequest` replaces every `;` with `;j/` and prefixes the
+        // first.
+        assert_eq!(
+            line(&owned(&["--batch", "-j", "clients", ";", "workspaces"])),
+            "[[BATCH]]j/clients;j/workspaces"
+        );
     }
 }

@@ -34,7 +34,9 @@ use std::f64::consts::{FRAC_PI_2, PI};
 
 use compositor_config::{Bind, Config, Gaps};
 
-use crate::dispatch::{Direction, Dispatcher, FullscreenMode, WorkspaceTarget};
+use crate::dispatch::{
+    Direction, Dispatcher, FullscreenMode, GroupMember, Locking, WorkspaceTarget,
+};
 use crate::dwindle::Dwindle;
 use crate::geometry::{self, Area, overlap, sticks};
 use crate::master::Master;
@@ -275,6 +277,43 @@ pub struct State {
     /// The name of each workspace that has one, which is the special ones:
     /// a numbered workspace's name is its number.
     names: BTreeMap<WorkspaceId, String>,
+    /// Every group, by its head -- the member the tiling tree holds.
+    groups: BTreeMap<WindowId, Group>,
+    /// `lockgroups`: whether a window may be added to a group. Nothing adds
+    /// one on its own here, so this is recorded and reported and changes
+    /// nothing; `moveintogroup` is a person asking, and Hyprland's lock does
+    /// not stop that either.
+    groups_locked: bool,
+}
+
+/// A group: windows sharing one tiling slot, of which one is shown.
+///
+/// Hyprland's `togglegroup` makes a window a group of one; another window
+/// moved into it becomes a tab. Only the active member is drawn, in the slot
+/// the group's head holds in the tiling tree -- the head stays put while the
+/// active tab changes, which is what keeps the layout still as a person
+/// cycles through them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Group {
+    /// The members, in tab order. The first is the head, and it is the one
+    /// the tiling tree knows about.
+    pub members: Vec<WindowId>,
+    /// Which member is shown, an index into `members`.
+    pub active: usize,
+}
+
+impl Group {
+    /// The member that is shown.
+    #[must_use]
+    pub fn showing(&self) -> Option<WindowId> {
+        self.members.get(self.active).copied()
+    }
+
+    /// The head, which holds the group's place in the tiling.
+    #[must_use]
+    pub fn head(&self) -> Option<WindowId> {
+        self.members.first().copied()
+    }
 }
 
 /// The lowest id a special workspace has, `SPECIAL_WORKSPACE_START` in
@@ -295,6 +334,8 @@ impl State {
             floating_rects: BTreeMap::new(),
             history: Vec::new(),
             names: BTreeMap::new(),
+            groups: BTreeMap::new(),
+            groups_locked: false,
         }
     }
 
@@ -581,6 +622,7 @@ impl State {
             return Err(Error::UnknownWindow(window));
         }
         Ok(self.run(|state| {
+            state.ungroup(window);
             state.detach(window);
             state.history.retain(|id| *id != window);
             let _rect = state.floating_rects.remove(&window);
@@ -649,6 +691,18 @@ impl State {
             Dispatcher::ToggleFloating => state.toggle_floating(),
             Dispatcher::Fullscreen(mode) => state.toggle_fullscreen(mode),
             Dispatcher::ToggleSpecialWorkspace(name) => state.toggle_special(&name),
+            Dispatcher::ToggleGroup => state.toggle_group(),
+            Dispatcher::ChangeGroupActive(which) => state.change_group_active(which),
+            Dispatcher::MoveIntoGroup(direction) => state.move_into_group(direction),
+            Dispatcher::MoveOutOfGroup => state.move_out_of_group(),
+            Dispatcher::LockGroups(lock) => {
+                state.groups_locked = match lock {
+                    Locking::Lock => true,
+                    Locking::Unlock => false,
+                    Locking::Toggle => !state.groups_locked,
+                };
+                Vec::new()
+            }
         })
     }
 
@@ -685,16 +739,19 @@ impl State {
 
     /// Hyprland's `moveActiveTo`, for a tiled window.
     fn move_window(&mut self, direction: Direction) -> Vec<Change> {
-        let Some(window) = self.focused_window() else {
+        let Some(focused) = self.focused_window() else {
             return Vec::new();
         };
+        // A grouped window moves with its group: the head is what the
+        // tiling can move, and the focus stays where it was.
+        let window = self.in_tiling(focused);
         let Some(from) = self.workspace_of(window) else {
             return Vec::new();
         };
         if self.is_floating(window) || self.fullscreen(from).is_some() {
             return Vec::new();
         }
-        if let Some(other) = self.window_in_direction(window, direction) {
+        if let Some(other) = self.window_in_direction(focused, direction) {
             return self.move_past(window, other, direction);
         }
         let Some(to) = self
@@ -704,7 +761,7 @@ impl State {
             return Vec::new();
         };
         self.move_window_to(window, to);
-        self.focus(window);
+        self.focus(focused);
         vec![Change::MoveToWorkspace {
             window,
             workspace: to,
@@ -725,6 +782,8 @@ impl State {
         other: WindowId,
         direction: Direction,
     ) -> Vec<Change> {
+        // The search found what is drawn; the tiling holds the group's head.
+        let (window, other) = (self.in_tiling(window), self.in_tiling(other));
         let (Some(from), Some(beyond)) = (self.workspace_of(window), self.workspace_of(other))
         else {
             return Vec::new();
@@ -752,7 +811,7 @@ impl State {
         let Some(ideal) = self
             .candidates()
             .into_iter()
-            .find(|candidate| candidate.window == window)
+            .find(|candidate| candidate.window == self.shown(window))
             .map(|candidate| candidate.ideal)
         else {
             return Vec::new();
@@ -831,6 +890,12 @@ impl State {
         let Some(window) = self.focused_window() else {
             return Vec::new();
         };
+        // A floating window has no slot to share, so one that floats leaves
+        // its group on the way out, as Hyprland's `setWindowFullscreen`
+        // path and its group code both do.
+        if self.group_of(window).is_some() {
+            let _ = self.move_out_of_group();
+        }
         let Some(workspace) = self.workspace_of(window) else {
             return Vec::new();
         };
@@ -936,7 +1001,10 @@ impl State {
                 .tiling
                 .slots(Area::of(work), &self.settings)
                 .into_iter()
-                .map(|(window, slot)| (window, slot.round(), false));
+                // A group's slot draws its active member, and that is the
+                // window a direction search has to find: it is the one with
+                // the box, and the one the focus goes to.
+                .map(|(window, slot)| (self.shown(window), slot.round(), false));
             let floating = ws.floating.iter().filter_map(|&window| {
                 self.floating_rects
                     .get(&window)
@@ -1312,8 +1380,17 @@ impl State {
     /// was.
     fn move_window_to(&mut self, window: WindowId, workspace: WorkspaceId) {
         let floating = self.is_floating(window);
+        // Only the head is in the tiling, but the whole group goes with it.
+        let members = self
+            .groups
+            .get(&window)
+            .map(|group| group.members.clone())
+            .unwrap_or_default();
         self.detach(window);
         self.attach(window, workspace, floating);
+        for member in members.into_iter().skip(1) {
+            let _ = self.windows.insert(member, workspace);
+        }
     }
 
     /// Focus a window: its monitor gets focus and shows its workspace, it
@@ -1406,6 +1483,225 @@ impl State {
                 let next = index.checked_add(offset)?.checked_rem_euclid(count)?;
                 ids.get(usize::try_from(next).ok()?).copied()
             }
+        }
+    }
+
+    // -- Groups ---------------------------------------------------------------
+
+    /// The group `window` belongs to, and its head.
+    fn group_of(&self, window: WindowId) -> Option<(WindowId, &Group)> {
+        self.groups
+            .iter()
+            .find(|(_, group)| group.members.contains(&window))
+            .map(|(head, group)| (*head, group))
+    }
+
+    /// The members of the group `window` is in, or nothing if it is in none.
+    #[must_use]
+    pub fn group(&self, window: WindowId) -> Option<&Group> {
+        self.group_of(window).map(|(_, group)| group)
+    }
+
+    /// What a slot draws: the active member if `window` heads a group, and
+    /// `window` itself if it heads none.
+    fn shown(&self, window: WindowId) -> WindowId {
+        self.groups
+            .get(&window)
+            .and_then(Group::showing)
+            .unwrap_or(window)
+    }
+
+    /// What holds `window`'s place in the tiling: its group's head if it is
+    /// in a group, since only the head is in the tree.
+    fn in_tiling(&self, window: WindowId) -> WindowId {
+        self.group_of(window).map_or(window, |(head, _)| head)
+    }
+
+    /// Whether `lockgroups` has locked them.
+    #[must_use]
+    pub const fn groups_locked(&self) -> bool {
+        self.groups_locked
+    }
+
+    /// `togglegroup`: make the focused window a group, or dissolve the one
+    /// it is in.
+    ///
+    /// Dissolving puts every member back in the tiling beside the head,
+    /// which is where they would have been had they never been grouped.
+    fn toggle_group(&mut self) -> Vec<Change> {
+        let Some(window) = self.focused_window() else {
+            return Vec::new();
+        };
+        if let Some((head, _)) = self.group_of(window) {
+            let Some(group) = self.groups.remove(&head) else {
+                return Vec::new();
+            };
+            let Some(workspace) = self.workspace_of(head) else {
+                return Vec::new();
+            };
+            let area = Area::of(self.work_area_of(workspace));
+            let settings = self.settings;
+            if let Some(ws) = self.workspaces.get_mut(&workspace) {
+                for member in group.members.iter().skip(1) {
+                    ws.tiling.insert(*member, Some(head), area, &settings);
+                }
+            }
+            self.focus(window);
+            return Vec::new();
+        }
+        // A floating window is not in the tiling, so it has no slot to
+        // share; Hyprland's `togglegroup` does nothing for one either.
+        if self.is_floating(window) {
+            return Vec::new();
+        }
+        let _ = self.groups.insert(
+            window,
+            Group {
+                members: vec![window],
+                active: 0,
+            },
+        );
+        Vec::new()
+    }
+
+    /// `changegroupactive`: show another member of the focused window's
+    /// group, and focus it.
+    fn change_group_active(&mut self, which: GroupMember) -> Vec<Change> {
+        let Some(window) = self.focused_window() else {
+            return Vec::new();
+        };
+        let Some((head, group)) = self.group_of(window) else {
+            return Vec::new();
+        };
+        let count = group.members.len();
+        if count == 0 {
+            return Vec::new();
+        }
+        let active = match which {
+            // Hyprland wraps both ways.
+            GroupMember::Forward => (group.active + 1) % count,
+            GroupMember::Back => (group.active + count - 1) % count,
+            // Its index is one-based, and out of range does nothing.
+            GroupMember::Index(index) => match usize::try_from(index) {
+                Ok(index) if (1..=count).contains(&index) => index - 1,
+                _ => return Vec::new(),
+            },
+        };
+        let Some(showing) = self.groups.get_mut(&head).map(|group| {
+            group.active = active;
+            group.members.get(active).copied()
+        }) else {
+            return Vec::new();
+        };
+        if let Some(showing) = showing {
+            self.focus(showing);
+        }
+        Vec::new()
+    }
+
+    /// `moveintogroup`: put the focused window into the group in `direction`.
+    fn move_into_group(&mut self, direction: Direction) -> Vec<Change> {
+        let Some(window) = self.focused_window() else {
+            return Vec::new();
+        };
+        if self.group_of(window).is_some() || self.is_floating(window) {
+            return Vec::new();
+        }
+        let Some(target) = self.window_in_direction(window, direction) else {
+            return Vec::new();
+        };
+        let Some((head, _)) = self.group_of(target) else {
+            return Vec::new();
+        };
+        // Out of the tiling: from here on the group's head holds its place.
+        if let Some(workspace) = self.workspace_of(window)
+            && let Some(ws) = self.workspaces.get_mut(&workspace)
+        {
+            ws.tiling.remove(window);
+        }
+        if let Some(group) = self.groups.get_mut(&head) {
+            group.members.push(window);
+            group.active = group.members.len().saturating_sub(1);
+        }
+        self.focus(window);
+        Vec::new()
+    }
+
+    /// `moveoutofgroup`: take the focused window out of its group and put it
+    /// back in the tiling.
+    ///
+    /// Taking the head out moves the group's place to the next member, which
+    /// is what Hyprland does: a group with a member left is still a group.
+    fn move_out_of_group(&mut self) -> Vec<Change> {
+        let Some(window) = self.focused_window() else {
+            return Vec::new();
+        };
+        let Some((head, _)) = self.group_of(window) else {
+            return Vec::new();
+        };
+        let Some(workspace) = self.workspace_of(window) else {
+            return Vec::new();
+        };
+        let Some(mut group) = self.groups.remove(&head) else {
+            return Vec::new();
+        };
+        group.members.retain(|member| *member != window);
+        group.active = group.active.min(group.members.len().saturating_sub(1));
+
+        let area = Area::of(self.work_area_of(workspace));
+        let settings = self.settings;
+        if let Some(ws) = self.workspaces.get_mut(&workspace) {
+            if window == head {
+                // The head left: whoever is first now takes its place in the
+                // tree, and the window that left goes beside it.
+                ws.tiling.remove(head);
+                if let Some(next) = group.members.first().copied() {
+                    ws.tiling.insert(next, None, area, &settings);
+                    ws.tiling.insert(window, Some(next), area, &settings);
+                } else {
+                    ws.tiling.insert(window, None, area, &settings);
+                }
+            } else {
+                ws.tiling.insert(window, Some(head), area, &settings);
+            }
+        }
+        // A group of one is no group, which is what Hyprland's own
+        // `moveoutofgroup` leaves behind.
+        if group.members.len() > 1
+            && let Some(next) = group.members.first().copied()
+        {
+            let _ = self.groups.insert(next, group);
+        }
+        self.focus(window);
+        Vec::new()
+    }
+
+    /// Forget a window that has gone, from whatever group held it.
+    fn ungroup(&mut self, window: WindowId) {
+        let Some((head, _)) = self.group_of(window) else {
+            return;
+        };
+        let Some(mut group) = self.groups.remove(&head) else {
+            return;
+        };
+        group.members.retain(|member| *member != window);
+        group.active = group.active.min(group.members.len().saturating_sub(1));
+        let Some(next) = group.members.first().copied() else {
+            return;
+        };
+        if window == head {
+            // The head's slot in the tree goes with it; the next member
+            // takes its place.
+            if let Some(workspace) = self.workspace_of(next) {
+                let area = Area::of(self.work_area_of(workspace));
+                let settings = self.settings;
+                if let Some(ws) = self.workspaces.get_mut(&workspace) {
+                    ws.tiling.insert(next, None, area, &settings);
+                }
+            }
+        }
+        if group.members.len() > 1 {
+            let _ = self.groups.insert(next, group);
         }
     }
 
@@ -1585,7 +1881,9 @@ impl State {
             .into_iter()
             .map(|(window, slot)| {
                 let rect = geometry::client(slot.round(), area, &self.settings);
-                place(window, rect, border, false, false)
+                // A group's slot shows whichever member is active; the head
+                // is what the tree holds and may not be what is drawn.
+                place(self.shown(window), rect, border, false, false)
             })
             .collect();
         let (x, y) = (output.monitor.rect.x, output.monitor.rect.y);

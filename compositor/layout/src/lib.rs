@@ -49,11 +49,11 @@ mod tests;
 use core::fmt;
 
 pub use compositor_config::Gaps;
-pub use dispatch::{Direction, Dispatcher, FullscreenMode, WorkspaceTarget};
+pub use dispatch::{Direction, Dispatcher, FullscreenMode, GroupMember, Locking, WorkspaceTarget};
 pub use settings::{
     DwindleSettings, ForceSplit, Layout, MasterSettings, NewStatus, Orientation, Settings,
 };
-pub use state::{Change, MonitorLayout, Placed, State};
+pub use state::{Change, Group, MonitorLayout, Placed, State};
 
 /// A window, by the id the protocol server gave it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

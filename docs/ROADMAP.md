@@ -4158,6 +4158,37 @@ bezier curves, rounded corners, blur and shadows, dimming and opacity rules,
 special workspaces, groups, multi-monitor with per-monitor workspaces and
 scaling, the plugin-shaped extension points, and the rest of `hyprctl`.
 
+**Begun — window groups (2026-09-17).** Hyprland's tabs: windows that share
+one slot in the tiling, of which one is drawn. Only the head is in the
+dwindle tree, and the slot draws whichever member is active, so cycling a
+group changes the picture and not the layout -- a group that moved the
+windows each time would be a workspace switch with extra steps.
+
+`togglegroup` makes a group of the focused window and dissolves the one it is
+in, putting every member back beside the head; `moveintogroup <direction>`
+takes the neighbour in that direction and adds the focused window to its
+group; `moveoutofgroup` puts one back in the tiling, and a group of one is no
+group, which is what Hyprland leaves behind; `changegroupactive
+[f|b|<index>]` cycles, wrapping both ways, with the index one-based as
+Hyprland's is; `lockgroups lock|unlock|toggle` is read and reported. Every
+direction search maps a grouped window through its slot, so `movefocus` and
+`movewindow` work from inside a group and move the whole of it.
+
+`hyprctl clients` grew the `grouped` field and the `hidden` one that goes
+with it: the members a group does not draw are listed as hidden windows with
+the group's box rather than left out, which is what a bar drawing the tabs
+reads. The event socket says `togglegroup>>1,<head>` when one is made,
+`moveintogroup>><window>` and `moveoutofgroup>><window>` as it fills and
+empties, and `togglegroup>>0,<head>` when it goes. `hyprctl --batch` landed
+with them, because one keybind running three dispatchers over the control
+socket is how the Ferrix proof presses them.
+
+`cargo xtask test-compositor` boots a fourth time: two windows tiled, one
+keybind, and then both of them in one slot with the one that was moved in
+drawn -- pixel for pixel the image `compositor/render`'s own tests bless, on
+x86-64 and on AArch64, with `hyprctl clients` naming the group from inside
+the guest and the event socket carrying both events.
+
 **Begun — shadows, dimming and blur (2026-09-17).** The three decorations
 that needed no GPU, each ported from the shader that is the only description
 of it there is.
@@ -4263,13 +4294,11 @@ Vulkan driver exists — the choice is the customer's, recorded in
 software fallback with a stated frame-time bound, so the compositor is never
 GPU-only.
 
-**What this stage still owes, in the order it is worth doing.** Blur,
-shadows and `dim_inactive`, which are three more passes over the same canvas
-and need no GPU. Window groups, the tabbed stack `togglegroup` makes, which
-is layout work like the scratchpad. Multiple monitors with per-monitor
-workspaces and scaling, which needs a second virtio-gpu head in `xtask` and a
-second connector in `card0` before any of the layout work is testable. The
-plugin-shaped extension points. And the GPU, which is the largest thing left
+**What this stage still owes, in the order it is worth doing.** Multiple
+monitors with per-monitor workspaces and scaling, which needs a second
+virtio-gpu head in `xtask` and a second connector in `card0` before any of
+the layout work is testable. The plugin-shaped extension points. And the GPU,
+which is the largest thing left
 in this tree: virtio-gpu's 3D commands through a render node,
 `zwp_linux_dmabuf`, GBM-shaped allocation, and a driver stack -- Mesa's virgl
 and Venus on ferrousli, or a Rust path over Vulkan -- that does not exist on

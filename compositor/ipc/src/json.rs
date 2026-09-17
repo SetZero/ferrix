@@ -59,6 +59,13 @@ impl Json {
         self.open();
     }
 
+    /// Start an array that is a field of the object being written.
+    pub fn array_field(&mut self, name: &str) {
+        self.field(name);
+        self.text.push('[');
+        self.open();
+    }
+
     /// End the array or object being written.
     pub fn end(&mut self, bracket: char) {
         self.depth = self.depth.saturating_sub(1);

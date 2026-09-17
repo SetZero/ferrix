@@ -12,6 +12,9 @@ pub struct Window {
     pub address: u64,
     /// Whether it is showing a buffer.
     pub mapped: bool,
+    /// Whether something hides it: a group draws only its active member,
+    /// and Hyprland lists the rest as hidden rather than not at all.
+    pub hidden: bool,
     /// Whether it is on the workspace its monitor shows.
     pub visible: bool,
     /// Its client area's top-left, in the space all monitors share.
@@ -37,6 +40,9 @@ pub struct Window {
     pub pid: i32,
     /// How recently it was focused: 0 is the focused window.
     pub focus_history: i32,
+    /// The addresses of every window in its group, itself among them, in
+    /// the group's own order. Empty when it is in no group.
+    pub grouped: Vec<u64>,
 }
 
 /// One workspace.

@@ -111,12 +111,27 @@ fn frame_after(after: &[(&str, &str)]) -> Vec<u8> {
     frame_with(&Style::default(), after)
 }
 
+/// The same, allowing a dispatcher that changes no picture: `togglegroup`
+/// makes a group of one, which is drawn exactly as the window was.
+fn frame_quiet(after: &[(&str, &str)]) -> Vec<u8> {
+    frame_dispatching(&Style::default(), after, false)
+}
+
 /// The same, drawn with `style`.
 fn frame_with(style: &Style, after: &[(&str, &str)]) -> Vec<u8> {
+    frame_dispatching(style, after, true)
+}
+
+/// The frame after `after`, requiring each dispatcher to have changed
+/// something when `must_change` says so.
+fn frame_dispatching(style: &Style, after: &[(&str, &str)], must_change: bool) -> Vec<u8> {
     let (mut state, mut layout) = two_clients();
     for (name, argument) in after {
         let changes = state.dispatch_str(name, argument).unwrap();
-        assert!(!changes.is_empty(), "{name} {argument} changed nothing");
+        assert!(
+            !must_change || !changes.is_empty(),
+            "{name} {argument} changed nothing"
+        );
         layout = state.layout().remove(0);
     }
     let buffers = client_buffers(&layout);
@@ -450,6 +465,42 @@ fn a_rounded_corner_shows_what_is_behind_it() {
         shown(0x00FF_FFFF)
     );
 }
+
+/// A group: the focused window made one with `togglegroup`, and the other
+/// moved into it with `moveintogroup`. The two share one slot, which is the
+/// whole work area now that only the head is in the tiling, and the slot
+/// draws the member that was moved in -- Hyprland makes the window it adds
+/// the active one.
+///
+/// This is the picture `cargo xtask test-compositor` requires from a
+/// screendump after a keybind batches those dispatchers through the control
+/// socket.
+#[test]
+fn a_group_draws_one_member_in_the_slot_they_share() {
+    let grouped = frame_quiet(&GROUPING);
+    golden::check("grouped-two-clients", WIDTH, HEIGHT, &grouped);
+
+    // One window's worth of picture, and not the tiled one: both windows are
+    // in one slot, so the gradient's half of the screen is gone.
+    let tiled = two_client_frame();
+    assert_ne!(grouped, tiled, "the group changed nothing");
+
+    // Cycling the group draws the other member in the same place, and
+    // cycling again comes back: a group of two wraps.
+    let mut cycled = GROUPING.to_vec();
+    cycled.push(("changegroupactive", "f"));
+    let other = frame_quiet(&cycled);
+    assert_ne!(other, grouped, "the same member is still drawn");
+    cycled.push(("changegroupactive", "f"));
+    assert_eq!(frame_quiet(&cycled), grouped, "forward twice did not wrap");
+}
+
+/// What makes the group: the dispatchers a keybind runs, here and on Ferrix.
+const GROUPING: [(&str, &str); 3] = [
+    ("togglegroup", ""),
+    ("movefocus", "l"),
+    ("moveintogroup", "r"),
+];
 
 #[test]
 fn two_pattern_clients_tiled_by_dwindle_match_the_expected_image() {

@@ -315,7 +315,7 @@ fn active_workspace(flags: Flags, snapshot: &Snapshot) -> String {
 fn write_window(out: &mut Json, window: &Window) {
     out.string("address", &format!("0x{:x}", window.address));
     out.boolean("mapped", window.mapped);
-    out.boolean("hidden", false);
+    out.boolean("hidden", window.hidden);
     out.boolean("visible", window.visible);
     out.boolean("acceptsInput", true);
     out.pair("at", i64::from(window.at.0), i64::from(window.at.1));
@@ -335,7 +335,15 @@ fn write_window(out: &mut Json, window: &Window) {
     out.boolean("pinned", false);
     out.boolean("fullscreen", window.fullscreen);
     out.number("fullscreenClient", 0);
-    out.empty_array("grouped");
+    if window.grouped.is_empty() {
+        out.empty_array("grouped");
+    } else {
+        out.array_field("grouped");
+        for member in &window.grouped {
+            out.item(&format!("0x{member:x}"));
+        }
+        out.end(']');
+    }
     out.empty_array("tags");
     out.string("swallowing", "0x0");
     out.number("focusHistoryID", i64::from(window.focus_history));
@@ -347,7 +355,7 @@ fn readable_window(window: &Window) -> String {
     let mut text = String::new();
     let _ = writeln!(text, "Window {:x} -> {}:", window.address, window.title);
     let _ = writeln!(text, "\tmapped: {}", window.mapped);
-    let _ = writeln!(text, "\thidden: 0");
+    let _ = writeln!(text, "\thidden: {}", i32::from(window.hidden));
     let _ = writeln!(text, "\tat: {},{}", window.at.0, window.at.1);
     let _ = writeln!(text, "\tsize: {},{}", window.size.0, window.size.1);
     let _ = writeln!(
@@ -362,8 +370,23 @@ fn readable_window(window: &Window) -> String {
     let _ = writeln!(text, "\tpid: {}", window.pid);
     let _ = writeln!(text, "\txwayland: 0");
     let _ = writeln!(text, "\tfullscreen: {}", i32::from(window.fullscreen));
+    // Hyprland prints a lone `0` for a window in no group, and the members'
+    // addresses without `0x` for one in a group.
+    let _ = writeln!(text, "\tgrouped: {}", grouped(&window.grouped));
     let _ = writeln!(text, "\tfocusHistoryID: {}\n", window.focus_history);
     text
+}
+
+/// The readable form's `grouped:` value: `0` for no group.
+fn grouped(members: &[u64]) -> String {
+    if members.is_empty() {
+        return "0".to_owned();
+    }
+    members
+        .iter()
+        .map(|member| format!("{member:x}"))
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 /// Add the trailing newline unless the request asked for none.

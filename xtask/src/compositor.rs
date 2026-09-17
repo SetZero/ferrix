@@ -127,6 +127,39 @@ exec-once = /bin/pattern checkerboard one
 exec-once = /bin/pattern gradient two
 ";
 
+/// The two pictures the group boot requires: the windows tiled, then both
+/// of them in one slot with the one moved in drawn.
+const GROUPED_EXPECTED: [(&str, &str); 2] = [
+    (
+        "tiled",
+        "compositor/render/tests/data/dwindle-two-clients.xrle",
+    ),
+    (
+        "two windows in one slot, the one moved into the group drawn",
+        "compositor/render/tests/data/grouped-two-clients.xrle",
+    ),
+];
+
+/// The keybind the group boot presses between its two pictures.
+const GROUP_BINDS: [(&str, &[&str]); 1] = [("SUPER G", &["meta_l", "g"])];
+
+/// The configuration the fourth boot is given: Hyprland's window groups.
+///
+/// One keybind runs the three dispatchers, through `hyprctl --batch` over
+/// the control socket, because that is the shortest honest proof that both
+/// the batch and the group dispatchers work from inside the guest: the
+/// picture afterwards is the group's, and `hyprctl clients` names the group.
+const GROUP_CONFIG: &str = "\
+# Carried into the initramfs by `cargo xtask test-compositor`.
+exec-once = /bin/hyprctl subscribe
+exec-once = /bin/pattern checkerboard one
+exec-once = /bin/pattern gradient two
+bind = SUPER, G, exec, /bin/hyprctl --batch dispatch togglegroup ; \
+dispatch movefocus l ; dispatch moveintogroup r
+bind = SUPER, C, exec, /bin/hyprctl clients
+bind = SUPER, W, exec, /bin/hyprctl activewindow
+";
+
 /// The configuration the second boot is given: a bar through
 /// `zwlr_layer_shell_v1`, and the same two windows.
 ///
@@ -518,7 +551,73 @@ pub(crate) fn test_compositor(args: &Args) -> Result<()> {
                 screen.width * screen.height
             );
         }
+
+        test_groups(arch, &program, &client, &ctl, args)?;
     }
+    Ok(())
+}
+
+/// A fourth boot: Hyprland's window groups, made by one keybind that batches
+/// three dispatchers through the control socket.
+///
+/// Two pictures rather than one, because a group that changed nothing would
+/// match the tiled image and pass: the second must be the group's, and the
+/// two must differ.
+fn test_groups(arch: Arch, program: &Path, client: &Path, ctl: &Path, args: &Args) -> Result<()> {
+    let (screens, said) = boot_and_dump(
+        arch,
+        program,
+        client,
+        ctl,
+        GROUP_CONFIG,
+        &GROUPED_EXPECTED,
+        &GROUP_BINDS,
+        args,
+    )?;
+    let (Some(tiled), Some(grouped)) = (screens.first(), screens.get(1)) else {
+        return Err(Error::new(format!(
+            "{arch}: the group boot took no pictures"
+        )));
+    };
+    if tiled.pixels == grouped.pixels {
+        return Err(Error::new(format!(
+            "{arch}: the group is the same picture as the tiling"
+        )));
+    }
+    println!(
+        "  {arch}: a group drew one of its two members in the slot they share, every one of {} \
+         pixels",
+        grouped.width * grouped.height
+    );
+    group_was_said(arch, &said)
+}
+
+/// What the group boot's `hyprctl` and event socket must have said.
+///
+/// The picture proves the layout; these prove what a bar is told about it --
+/// the `grouped` field of `hyprctl clients`, and the two events Hyprland
+/// posts when a group is made and joined.
+fn group_was_said(arch: Arch, said: &[String]) -> Result<()> {
+    let grouped = said
+        .iter()
+        .filter_map(|line| line.split("grouped: ").nth(1))
+        .map(str::trim)
+        .find(|value| value.contains(','))
+        .map(str::to_owned);
+    let Some(grouped) = grouped else {
+        return Err(Error::new(format!(
+            "{arch}: `hyprctl clients` named no window's group"
+        )));
+    };
+    println!("  {arch}: `hyprctl clients` says grouped: {grouped}");
+    for wanted in ["togglegroup>>1,", "moveintogroup>>"] {
+        if !said.iter().any(|line| line.contains(wanted)) {
+            return Err(Error::new(format!(
+                "{arch}: nothing on the event socket said `{wanted}`"
+            )));
+        }
+    }
+    println!("  {arch}: the event socket said the group was made and joined");
     Ok(())
 }
 

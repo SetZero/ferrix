@@ -1,5 +1,6 @@
 use compositor_config::{Config, Gaps, NoSources, parse};
 
+use crate::Group;
 use crate::{
     Change, Direction, Dispatcher, Error, ForceSplit, FullscreenMode, Layout, Monitor, MonitorId,
     NewStatus, Orientation, Rect, Settings, State, WindowId, WorkspaceId, WorkspaceTarget,
@@ -1564,4 +1565,184 @@ fn showing_a_scratchpad_with_a_window_focuses_it() {
         Some(WindowId(2)),
         "showing it again did not take the focus back"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Groups
+//
+// Hyprland's tabs: windows sharing one tiling slot, of which one is shown.
+// The slot stays where it is while the tabs are cycled, which is the whole
+// point of them -- a group that moved the layout each time would be a
+// workspace switch with extra steps.
+// ---------------------------------------------------------------------------
+
+/// The windows the layout draws, in order.
+fn drawn(state: &State) -> Vec<WindowId> {
+    state.layout()[0]
+        .windows
+        .iter()
+        .map(|placed| placed.window)
+        .collect()
+}
+
+#[test]
+fn a_group_shows_one_member_in_one_slot() {
+    let mut state = setup(BARE);
+    open(&mut state, &[1, 2, 3]);
+    let before = state.layout()[0].windows.clone();
+    assert_eq!(before.len(), 3);
+
+    // Window 3 has the focus; make it a group and move 2 into it.
+    let _ = state.dispatch_str("togglegroup", "").unwrap();
+    assert_eq!(state.group(WindowId(3)).map(|g| g.members.len()), Some(1));
+
+    let _ = state.dispatch_str("movefocus", "l").unwrap();
+    let focused = state.focused_window().expect("a window");
+    let _ = state.dispatch_str("moveintogroup", "r").unwrap();
+    let group = state.group(WindowId(3)).expect("the group");
+    assert_eq!(group.members, [WindowId(3), focused]);
+    assert_eq!(group.showing(), Some(focused), "the one moved in is shown");
+
+    // Two slots now, not three, and one of them is the group's.
+    let after = state.layout()[0].windows.clone();
+    assert_eq!(after.len(), 2, "{after:?}");
+    assert!(drawn(&state).contains(&focused));
+}
+
+#[test]
+fn cycling_a_group_changes_what_is_drawn_and_not_where() {
+    let mut state = setup(BARE);
+    open(&mut state, &[1, 2]);
+    let _ = state.dispatch_str("togglegroup", "").unwrap();
+    let _ = state.dispatch_str("movefocus", "l").unwrap();
+    let _ = state.dispatch_str("moveintogroup", "r").unwrap();
+
+    let places = |state: &State| -> Vec<Rect> {
+        state.layout()[0]
+            .windows
+            .iter()
+            .map(|placed| placed.rect)
+            .collect()
+    };
+    let before = places(&state);
+    let showing = drawn(&state);
+
+    let _ = state.dispatch_str("changegroupactive", "f").unwrap();
+    assert_eq!(places(&state), before, "the layout moved");
+    assert_ne!(drawn(&state), showing, "the same member is still shown");
+
+    // Forward again comes back round: a group of two wraps.
+    let _ = state.dispatch_str("changegroupactive", "f").unwrap();
+    assert_eq!(drawn(&state), showing);
+    // And back goes the other way.
+    let _ = state.dispatch_str("changegroupactive", "b").unwrap();
+    assert_ne!(drawn(&state), showing);
+
+    // An index counts from one, as Hyprland's does: two is the one moved
+    // in, since the head was there first. Out of range does nothing rather
+    // than showing a member that is not there.
+    let _ = state.dispatch_str("changegroupactive", "2").unwrap();
+    assert_eq!(drawn(&state), showing);
+    let _ = state.dispatch_str("changegroupactive", "9").unwrap();
+    assert_eq!(drawn(&state), showing);
+}
+
+#[test]
+fn the_active_member_is_the_focused_one() {
+    let mut state = setup(BARE);
+    open(&mut state, &[1, 2]);
+    let _ = state.dispatch_str("togglegroup", "").unwrap();
+    let _ = state.dispatch_str("movefocus", "l").unwrap();
+    let moved = state.focused_window().expect("a window");
+    let _ = state.dispatch_str("moveintogroup", "r").unwrap();
+    assert_eq!(state.focused_window(), Some(moved));
+
+    let _ = state.dispatch_str("changegroupactive", "f").unwrap();
+    let showing = state.group(moved).and_then(Group::showing);
+    assert_eq!(state.focused_window(), showing);
+}
+
+#[test]
+fn taking_a_window_out_puts_it_back_in_the_tiling() {
+    let mut state = setup(BARE);
+    open(&mut state, &[1, 2]);
+    let _ = state.dispatch_str("togglegroup", "").unwrap();
+    let _ = state.dispatch_str("movefocus", "l").unwrap();
+    let _ = state.dispatch_str("moveintogroup", "r").unwrap();
+    assert_eq!(state.layout()[0].windows.len(), 1);
+
+    let _ = state.dispatch_str("moveoutofgroup", "").unwrap();
+    assert_eq!(state.layout()[0].windows.len(), 2, "it did not come back");
+    // A group of one is no group, which is what Hyprland leaves behind.
+    assert_eq!(state.group(WindowId(1)), None);
+    assert_eq!(state.group(WindowId(2)), None);
+}
+
+#[test]
+fn dissolving_a_group_puts_every_member_back() {
+    let mut state = setup(BARE);
+    open(&mut state, &[1, 2, 3]);
+    let _ = state.dispatch_str("togglegroup", "").unwrap();
+    for _ in 0..2 {
+        let _ = state.dispatch_str("movefocus", "l").unwrap();
+        let _ = state.dispatch_str("moveintogroup", "r").unwrap();
+    }
+    assert_eq!(state.group(WindowId(3)).map(|g| g.members.len()), Some(3));
+    assert_eq!(state.layout()[0].windows.len(), 1);
+
+    let _ = state.dispatch_str("togglegroup", "").unwrap();
+    assert_eq!(state.group(WindowId(3)), None);
+    let mut back = drawn(&state);
+    back.sort_unstable();
+    assert_eq!(back, [WindowId(1), WindowId(2), WindowId(3)]);
+}
+
+/// A window that goes while it is grouped takes itself out of the group, and
+/// a group whose head went keeps its place in the tiling.
+#[test]
+fn a_window_that_goes_leaves_its_group_whole() {
+    let mut state = setup(BARE);
+    open(&mut state, &[1, 2, 3]);
+    let _ = state.dispatch_str("togglegroup", "").unwrap();
+    for _ in 0..2 {
+        let _ = state.dispatch_str("movefocus", "l").unwrap();
+        let _ = state.dispatch_str("moveintogroup", "r").unwrap();
+    }
+    // The head goes.
+    let _ = state.window_gone(WindowId(3)).unwrap();
+    let group = state.group(WindowId(1)).expect("the group survived");
+    assert_eq!(group.members.len(), 2);
+    assert!(!group.members.contains(&WindowId(3)));
+    assert_eq!(state.layout()[0].windows.len(), 1, "the slot went with it");
+
+    // And down to one member, it stops being a group.
+    let showing = state.group(WindowId(1)).and_then(Group::showing).unwrap();
+    let _ = state.window_gone(showing).unwrap();
+    assert_eq!(state.group(WindowId(1)), None);
+    assert_eq!(state.group(WindowId(2)), None);
+    assert_eq!(state.layout()[0].windows.len(), 1);
+}
+
+#[test]
+fn lockgroups_is_read_and_reported() {
+    let mut state = setup(BARE);
+    assert!(!state.groups_locked());
+    let _ = state.dispatch_str("lockgroups", "lock").unwrap();
+    assert!(state.groups_locked());
+    let _ = state.dispatch_str("lockgroups", "toggle").unwrap();
+    assert!(!state.groups_locked());
+    let _ = state.dispatch_str("lockgroups", "unlock").unwrap();
+    assert!(!state.groups_locked());
+    assert!(state.dispatch_str("lockgroups", "sideways").is_err());
+}
+
+/// A floating window has no slot to share, so `togglegroup` does nothing for
+/// one -- which is what Hyprland does too.
+#[test]
+fn a_floating_window_cannot_be_a_group() {
+    let mut state = setup(BARE);
+    open(&mut state, &[1]);
+    let _ = state.dispatch_str("togglefloating", "").unwrap();
+    let _ = state.dispatch_str("togglegroup", "").unwrap();
+    assert_eq!(state.group(WindowId(1)), None);
 }

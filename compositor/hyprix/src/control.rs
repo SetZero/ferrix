@@ -175,44 +175,32 @@ pub fn snapshot(
         let mut windows = 0;
         let mut has_fullscreen = false;
         for placed in &output.windows {
-            windows += 1;
             has_fullscreen |= placed.fullscreen;
-            let Some(source) = sources.get(&placed.window) else {
-                continue;
+            // A group's slot draws one member; Hyprland lists the rest as
+            // hidden windows with the same box, so a bar can draw the tabs.
+            let grouped: Vec<u64> = state
+                .group(placed.window)
+                .map(|group| group.members.iter().map(|member| member.0).collect())
+                .unwrap_or_default();
+            let shown = placed.window;
+            let members = if grouped.is_empty() {
+                vec![shown]
+            } else {
+                grouped.iter().copied().map(WindowId).collect()
             };
-            let Some(slot) = clients.get(source.client) else {
-                continue;
-            };
-            let named = toplevel_of(slot.client(), source.surface);
-            snapshot.windows.push(Window {
-                address: placed.window.0,
-                mapped: slot
-                    .client()
-                    .surface(source.surface)
-                    .is_some_and(compositor_server::Surface::is_mapped),
-                visible: true,
-                at: (
-                    i32::try_from(placed.rect.x).unwrap_or(0),
-                    i32::try_from(placed.rect.y).unwrap_or(0),
-                ),
-                size: (
-                    i32::try_from(placed.rect.width).unwrap_or(0),
-                    i32::try_from(placed.rect.height).unwrap_or(0),
-                ),
-                workspace: i32::try_from(output.workspace.0).unwrap_or(0),
-                workspace_name: state.workspace_name(output.workspace),
-                floating: placed.floating,
-                fullscreen: placed.fullscreen,
-                monitor: 0,
-                class: named.as_ref().map(|top| top.1.clone()).unwrap_or_default(),
-                title: named.map(|top| top.0).unwrap_or_default(),
-                pid: 0,
-                focus_history: if Some(placed.window) == focused {
-                    0
-                } else {
-                    -1
-                },
-            });
+            for member in members {
+                windows += 1;
+                let described = Described {
+                    window: member,
+                    placed,
+                    workspace: output.workspace,
+                    hidden: member != shown,
+                    grouped: &grouped,
+                };
+                if let Some(window) = describe(state, clients, sources, focused, &described) {
+                    snapshot.windows.push(window);
+                }
+            }
         }
         snapshot.workspaces.push(Workspace {
             id: i32::try_from(output.workspace.0).unwrap_or(0),
@@ -232,6 +220,63 @@ pub fn snapshot(
 }
 
 /// The title and app id of the window on `surface`, if it has them.
+/// One window for `hyprctl clients`, and where it is.
+struct Described<'a> {
+    /// The window being described, which for a group's hidden member is not
+    /// the window whose placement it borrows.
+    window: WindowId,
+    /// The placement of the slot it is in.
+    placed: &'a compositor_layout::Placed,
+    /// The workspace that slot is on.
+    workspace: compositor_layout::WorkspaceId,
+    /// Whether a group draws another member in its place.
+    hidden: bool,
+    /// Its group's members, empty if it is in none.
+    grouped: &'a [u64],
+}
+
+/// What `hyprctl clients` says about one window, or nothing if no client of
+/// this compositor owns it.
+fn describe(
+    state: &State,
+    clients: &[crate::state::Slot],
+    sources: &BTreeMap<WindowId, Source>,
+    focused: Option<WindowId>,
+    it: &Described,
+) -> Option<Window> {
+    let source = sources.get(&it.window)?;
+    let slot = clients.get(source.client)?;
+    let named = toplevel_of(slot.client(), source.surface);
+    let placed = it.placed;
+    Some(Window {
+        address: it.window.0,
+        mapped: slot
+            .client()
+            .surface(source.surface)
+            .is_some_and(compositor_server::Surface::is_mapped),
+        hidden: it.hidden,
+        visible: !it.hidden,
+        at: (
+            i32::try_from(placed.rect.x).unwrap_or(0),
+            i32::try_from(placed.rect.y).unwrap_or(0),
+        ),
+        size: (
+            i32::try_from(placed.rect.width).unwrap_or(0),
+            i32::try_from(placed.rect.height).unwrap_or(0),
+        ),
+        workspace: i32::try_from(it.workspace.0).unwrap_or(0),
+        workspace_name: state.workspace_name(it.workspace),
+        floating: placed.floating,
+        fullscreen: placed.fullscreen,
+        monitor: 0,
+        class: named.as_ref().map(|top| top.1.clone()).unwrap_or_default(),
+        title: named.map(|top| top.0).unwrap_or_default(),
+        pid: 0,
+        focus_history: if Some(it.window) == focused { 0 } else { -1 },
+        grouped: it.grouped.to_vec(),
+    })
+}
+
 fn toplevel_of(client: &Client, surface: ObjectId) -> Option<(String, String)> {
     client
         .toplevels()

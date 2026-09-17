@@ -157,6 +157,27 @@ pub enum Event {
         /// Its address.
         address: u64,
     },
+    /// A group was made or dissolved. The payload is `1` or `0` and the
+    /// head's address (`src/desktop/view/Group.cpp:66` and `:82`).
+    ToggleGroup {
+        /// Whether the group is there now.
+        on: bool,
+        /// The head's address: the window whose place in the tiling the
+        /// group holds.
+        address: u64,
+    },
+    /// A window joined a group
+    /// (`src/config/shared/actions/ConfigActions.cpp:1320`).
+    MoveIntoGroup {
+        /// The window that joined.
+        address: u64,
+    },
+    /// A window left one
+    /// (`src/config/shared/actions/ConfigActions.cpp:1341`).
+    MoveOutOfGroup {
+        /// The window that left.
+        address: u64,
+    },
 }
 
 /// A window as `activewindow` names it: what it is, and where.
@@ -259,6 +280,16 @@ impl Event {
             Self::CloseLayer(namespace) => vec![line("closelayer", namespace)],
             Self::Urgent { address } => {
                 vec![line("urgent", &format!("{address:x}"))]
+            }
+            Self::ToggleGroup { on, address } => vec![line(
+                "togglegroup",
+                &format!("{},{address:x}", u8::from(*on)),
+            )],
+            Self::MoveIntoGroup { address } => {
+                vec![line("moveintogroup", &format!("{address:x}"))]
+            }
+            Self::MoveOutOfGroup { address } => {
+                vec![line("moveoutofgroup", &format!("{address:x}"))]
             }
         }
     }
@@ -390,6 +421,8 @@ impl Watcher {
             }
         }
 
+        group_events(&before, now, &mut events);
+
         if before.active_workspace != now.active_workspace {
             let name = now
                 .workspaces
@@ -423,5 +456,71 @@ impl Watcher {
 
         self.seen = Some(now.clone());
         events
+    }
+}
+
+/// What the groups did between two snapshots.
+///
+/// Hyprland posts these where they happen: a group appearing or going is
+/// `togglegroup` with the head's address, and a window joining or leaving one
+/// that stays is `moveintogroup` or `moveoutofgroup`. Told apart here by
+/// whether the group itself is still there, since a snapshot names each
+/// window's group rather than the groups.
+fn group_events(before: &Snapshot, now: &Snapshot, events: &mut Vec<Event>) {
+    let heads = |snapshot: &Snapshot| -> Vec<u64> {
+        let mut heads: Vec<u64> = snapshot
+            .windows
+            .iter()
+            .filter_map(|window| window.grouped.first().copied())
+            .collect();
+        heads.sort_unstable();
+        heads.dedup();
+        heads
+    };
+    let (was, is) = (heads(before), heads(now));
+    for head in &is {
+        if !was.contains(head) {
+            events.push(Event::ToggleGroup {
+                on: true,
+                address: *head,
+            });
+        }
+    }
+    for head in &was {
+        if !is.contains(head) {
+            events.push(Event::ToggleGroup {
+                on: false,
+                address: *head,
+            });
+        }
+    }
+    for window in &now.windows {
+        let Some(old) = before
+            .windows
+            .iter()
+            .find(|old| old.address == window.address)
+        else {
+            continue;
+        };
+        let (left, joined) = (old.grouped.first(), window.grouped.first());
+        match (left, joined) {
+            // Into a group it does not head. A window that heads the group
+            // it joined made it, which is the `togglegroup` above and not a
+            // second event: `moveintogroup` names the window that came to
+            // an existing head, whether the head was there a frame ago or a
+            // batch put both in one pass.
+            (None, Some(head)) if *head != window.address => {
+                events.push(Event::MoveIntoGroup {
+                    address: window.address,
+                });
+            }
+            // Out of one that still is.
+            (Some(head), None) if is.contains(head) => {
+                events.push(Event::MoveOutOfGroup {
+                    address: window.address,
+                });
+            }
+            _ => {}
+        }
     }
 }

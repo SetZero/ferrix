@@ -284,6 +284,8 @@ fn snapshot() -> Snapshot {
                 title: "one".to_owned(),
                 pid: 1234,
                 focus_history: 0,
+                hidden: false,
+                grouped: Vec::new(),
             },
             Window {
                 address: 2,
@@ -302,6 +304,8 @@ fn snapshot() -> Snapshot {
                 title: "a \"quoted\" \\ title\nwith a newline".to_owned(),
                 pid: 5678,
                 focus_history: 1,
+                hidden: false,
+                grouped: Vec::new(),
             },
         ],
         active_window: Some(1),
@@ -1048,5 +1052,145 @@ fn a_monitor_says_which_scratchpad_is_over_it() {
     assert_eq!(
         special.get("id").and_then(parse::Value::number),
         Some(-99.0)
+    );
+}
+
+/// A window in a group: `grouped` holds every member's address in the
+/// group's order, and the members a group does not draw are listed as
+/// hidden rather than left out, which is what a bar drawing tabs reads.
+/// From `getGroupedData` in `src/debug/HyprCtl.cpp`.
+#[test]
+fn a_grouped_window_names_its_group() {
+    let mut snap = snapshot();
+    for (index, window) in snap.windows.iter_mut().enumerate() {
+        window.grouped = vec![1, 2];
+        window.hidden = index > 0;
+        window.visible = index == 0;
+        window.mapped = true;
+    }
+    let request = Request::parse("j/clients");
+    let Reply::Text(json) = answer(&request, &snap, Version::default()) else {
+        panic!("clients answered with no text");
+    };
+    let value = parse::parse(&json).unwrap_or_else(|error| panic!("{error}\n{json}"));
+    let windows = value.items();
+    assert_eq!(windows.len(), 2, "a hidden member is still listed");
+    let addresses = |at: usize| -> Vec<String> {
+        windows[at]
+            .get("grouped")
+            .expect("grouped")
+            .items()
+            .iter()
+            .filter_map(|item| item.text().map(str::to_owned))
+            .collect()
+    };
+    assert_eq!(addresses(0), ["0x1", "0x2"]);
+    assert_eq!(addresses(1), ["0x1", "0x2"]);
+    assert_eq!(
+        windows[1].get("hidden").and_then(parse::Value::boolean),
+        Some(true)
+    );
+
+    // And the readable form prints them without `0x`, as Hyprland does.
+    let request = Request::parse("clients");
+    let Reply::Text(readable) = answer(&request, &snap, Version::default()) else {
+        panic!("clients answered with no text");
+    };
+    assert!(readable.contains("\tgrouped: 1,2\n"), "{readable}");
+    assert!(readable.contains("\thidden: 1\n"), "{readable}");
+}
+
+/// A window in no group prints Hyprland's empty array, and its `0` in the
+/// readable form.
+#[test]
+fn an_ungrouped_window_says_so() {
+    let value = json("j/clients");
+    assert!(
+        value.items()[0]
+            .get("grouped")
+            .expect("grouped")
+            .items()
+            .is_empty()
+    );
+    assert!(text("clients").contains("\tgrouped: 0\n"));
+}
+
+/// The four states of a group, each the event Hyprland posts for it: made,
+/// joined, left, dissolved. From `CGroup::create`, `CGroup::destroy` and the
+/// two dispatchers in `ConfigActions.cpp`.
+#[test]
+fn a_group_being_made_joined_left_and_dissolved_is_four_events() {
+    let grouped = |members: &[u64], of: &[u64]| -> Vec<Window> {
+        members
+            .iter()
+            .map(|address| Window {
+                grouped: of.to_vec(),
+                ..watched_window(*address, if *address == 1 { "one" } else { "two" })
+            })
+            .collect()
+    };
+    let mut watcher = Watcher::new();
+    // Two windows, neither grouped.
+    let _ = watcher.changed(&watched(
+        &[watched_window(1, "one"), watched_window(2, "two")],
+        Some(1),
+    ));
+
+    // `togglegroup` on window 1: a group of one, headed by it.
+    let mut windows = grouped(&[1], &[1]);
+    windows.push(watched_window(2, "two"));
+    let made = watcher.changed(&watched(&windows, Some(1)));
+    assert_eq!(
+        made.iter().flat_map(Event::lines).collect::<Vec<_>>(),
+        ["togglegroup>>1,1\n"]
+    );
+
+    // `moveintogroup`: window 2 joins the group window 1 heads.
+    let joined = watcher.changed(&watched(&grouped(&[1, 2], &[1, 2]), Some(1)));
+    assert_eq!(
+        joined.iter().flat_map(Event::lines).collect::<Vec<_>>(),
+        ["moveintogroup>>2\n"]
+    );
+
+    // `moveoutofgroup`: it leaves, and the group is still there.
+    let mut windows = grouped(&[1], &[1]);
+    windows.push(watched_window(2, "two"));
+    let left = watcher.changed(&watched(&windows, Some(1)));
+    assert_eq!(
+        left.iter().flat_map(Event::lines).collect::<Vec<_>>(),
+        ["moveoutofgroup>>2\n"]
+    );
+
+    // `togglegroup` again: the group goes, and its head is named.
+    let gone = watcher.changed(&watched(
+        &[watched_window(1, "one"), watched_window(2, "two")],
+        Some(1),
+    ));
+    assert_eq!(
+        gone.iter().flat_map(Event::lines).collect::<Vec<_>>(),
+        ["togglegroup>>0,1\n"]
+    );
+}
+
+/// A batch makes a group and fills it in one pass, so the watcher sees both
+/// at once: the head made it, and every other member joined it.
+#[test]
+fn a_group_made_and_joined_in_one_pass_is_both_events() {
+    let mut watcher = Watcher::new();
+    let _ = watcher.changed(&watched(
+        &[watched_window(1, "one"), watched_window(2, "two")],
+        Some(1),
+    ));
+    let members: Vec<Window> = [(2_u64, "two"), (1, "one")]
+        .into_iter()
+        .map(|(address, title)| Window {
+            grouped: vec![2, 1],
+            ..watched_window(address, title)
+        })
+        .collect();
+    let events = watcher.changed(&watched(&members, Some(1)));
+    assert_eq!(
+        events.iter().flat_map(Event::lines).collect::<Vec<_>>(),
+        ["togglegroup>>1,2\n", "moveintogroup>>1\n"]
     );
 }

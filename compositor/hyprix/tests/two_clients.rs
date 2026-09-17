@@ -75,7 +75,7 @@ fn run_shaped(name: &str, patterns: &[(Pattern, &str, Shape)]) -> (Vec<u8>, Stri
         display: socket.to_string_lossy().into_owned(),
         headless: Some((WIDTH, HEIGHT)),
         dump: Some(frames.clone()),
-        deadline: Some(4000),
+        deadline: Some(8000),
         ..Options::default()
     };
 
@@ -711,6 +711,11 @@ fn a_bar_takes_its_strip_and_the_windows_tile_under_it() {
 /// Run the compositor with two clients and a configuration, dispatching
 /// `after` through the control socket once both windows are up, and give
 /// back every frame it drew.
+///
+/// The deadline is wall-clock and the dispatch is a second into the run, so
+/// it has to leave room for the whole animation after that: a run that ends
+/// mid-slide gives a test the first part of the curve and nothing else,
+/// which under a loaded machine is what a four-second deadline did.
 fn frames_after(name: &str, config: &str, after: &str) -> Vec<Vec<u8>> {
     let work = workspace(name);
     let socket = work.join("wayland");
@@ -838,10 +843,13 @@ fn once_settled(edges: &[usize]) -> &[usize] {
 fn a_window_moves_through_the_frames_between_two_layouts() {
     let frames = frames_after(
         "animated",
-        // The blur off: this test counts frames, and a dual-Kawase over a
-        // translucent window in a debug build costs more per frame than the
-        // animation it is trying to watch.
-        "animation = windows, 1, 8, default\ndecoration:blur:enabled = 0\n",
+        // Two seconds rather than Hyprland's default 0.8, and the blur off.
+        // What is measured here is where the window was in each frame that
+        // was drawn, and the compositor draws a handful of them a second in
+        // a debug build: a short slide is sampled two or three times, and
+        // the first sample is already most of the way there. A longer one
+        // is the same curve with more points on it.
+        "animation = windows, 1, 20, default\ndecoration:blur:enabled = 0\n",
         "dispatch movewindow l",
     );
     assert!(frames.len() > 10, "only {} frames", frames.len());
@@ -888,7 +896,13 @@ fn a_window_moves_through_the_frames_between_two_layouts() {
         panic!("no seam at all");
     };
     let span = last.abs_diff(first);
-    assert!(span > 100, "the seam moved only {span} pixels");
+    // Fifty pixels rather than the whole slide: what is measured is the
+    // leading edge of the moving window in the frames that were *drawn*,
+    // and the first of those is already some way along a curve that starts
+    // fast. The distance that proves a slide is one no border, gap or
+    // rounding could account for, and this is four times the widest of
+    // them.
+    assert!(span > 50, "the seam moved only {span} pixels: {seams:?}");
     let middle = seams.get(seams.len() / 2).copied().expect("a middle frame");
     let covered = middle.abs_diff(first);
     assert!(

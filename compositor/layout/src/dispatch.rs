@@ -129,6 +129,41 @@ pub enum Dispatcher {
     /// `togglespecialworkspace`: show the named special workspace over the
     /// monitor's own, or hide it if it is already showing.
     ToggleSpecialWorkspace(String),
+    /// `togglegroup`: make the focused window a group, or dissolve the one
+    /// it is in.
+    ToggleGroup,
+    /// `changegroupactive`: show another member of the focused window's
+    /// group.
+    ChangeGroupActive(GroupMember),
+    /// `moveintogroup`: put the focused window into the group in a
+    /// direction.
+    MoveIntoGroup(Direction),
+    /// `moveoutofgroup`: take the focused window out of its group.
+    MoveOutOfGroup,
+    /// `lockgroups`: whether a window may be added to a group.
+    LockGroups(Locking),
+}
+
+/// Which member of a group `changegroupactive` asks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GroupMember {
+    /// `f`, or nothing at all: the next, wrapping around.
+    Forward,
+    /// `b` or `p`: the one before, wrapping around.
+    Back,
+    /// A number, which Hyprland counts from one.
+    Index(i64),
+}
+
+/// What `lockgroups` asks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Locking {
+    /// `lock`.
+    Lock,
+    /// `unlock`.
+    Unlock,
+    /// `toggle`.
+    Toggle,
 }
 
 impl Dispatcher {
@@ -152,6 +187,23 @@ impl Dispatcher {
             "killactive" => Ok(Self::KillActive),
             "togglefloating" => match arg {
                 "" | "active" => Ok(Self::ToggleFloating),
+                _ => Err(bad()),
+            },
+            "togglegroup" => Ok(Self::ToggleGroup),
+            "moveoutofgroup" => Ok(Self::MoveOutOfGroup),
+            "moveintogroup" => direction().map(Self::MoveIntoGroup),
+            "changegroupactive" => match arg {
+                "" | "f" | "forward" => Ok(Self::ChangeGroupActive(GroupMember::Forward)),
+                "b" | "p" | "back" | "prev" => Ok(Self::ChangeGroupActive(GroupMember::Back)),
+                other => other
+                    .parse::<i64>()
+                    .map(|index| Self::ChangeGroupActive(GroupMember::Index(index)))
+                    .map_err(|_| bad()),
+            },
+            "lockgroups" => match arg {
+                "lock" | "" => Ok(Self::LockGroups(Locking::Lock)),
+                "unlock" => Ok(Self::LockGroups(Locking::Unlock)),
+                "toggle" => Ok(Self::LockGroups(Locking::Toggle)),
                 _ => Err(bad()),
             },
             "togglespecialworkspace" => Ok(Self::ToggleSpecialWorkspace(if arg.is_empty() {
