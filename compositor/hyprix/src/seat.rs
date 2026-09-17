@@ -274,6 +274,13 @@ impl Seat {
             eaten: Vec::new(),
         };
         seat.set_binds(config);
+        // How many layout groups the keymap has, which is what
+        // `hyprctl switchxkblayout` moves between and wraps around:
+        // `input:kb_layout = de,us` is a keyboard with two. The count comes
+        // from the same two options the keymap itself is built from, so the
+        // group the clients are told about is always a group their keymap
+        // has.
+        seat.keyboard.set_groups(group_count(config));
         seat
     }
 
@@ -382,6 +389,16 @@ impl Seat {
     #[must_use]
     pub const fn keyboard(&self) -> &Keyboard {
         &self.keyboard
+    }
+
+    /// Put the keyboard in layout group `group`, and say whether it moved.
+    ///
+    /// What `hyprctl switchxkblayout` does, and the whole of what it does:
+    /// the group wraps into the keymap's range, no new keymap goes to the
+    /// clients, and the caller sends the `wl_keyboard.modifiers` that tells
+    /// them which group they are in now.
+    pub fn set_layout_group(&mut self, group: u32) -> bool {
+        self.keyboard.set_group(group)
     }
 
     /// Where a `zwp_pointer_constraints_v1` is holding the pointer.
@@ -614,6 +631,33 @@ pub fn chosen(config: &Config) -> (&'static Layout, bool) {
         config.str("input:kb_layout").unwrap_or_default(),
         config.str("input:kb_variant").unwrap_or_default(),
     )
+}
+
+/// Every layout `config` asks for, in group order, each with whether it is
+/// the one that was asked for.
+///
+/// `input:kb_layout = de,us` is a keyboard with two groups and
+/// `input:kb_variant = nodeadkeys,` gives the first of them a variant: two
+/// comma-separated lists read side by side, which is XKB's grammar and so
+/// Hyprland's, since Hyprland hands the strings to libxkbcommon unread.
+#[must_use]
+pub fn chosen_layouts(config: &Config) -> Vec<(&'static Layout, bool)> {
+    compositor_xkb::layouts(
+        config.str("input:kb_layout").unwrap_or_default(),
+        config.str("input:kb_variant").unwrap_or_default(),
+    )
+}
+
+/// How many layout groups the keymap `config` asks for has.
+///
+/// At least one: an unset or unreadable `input:kb_layout` is the fallback
+/// layout, which is one group, and a keymap with none is not something a
+/// client could be told about.
+#[must_use]
+pub fn group_count(config: &Config) -> u32 {
+    u32::try_from(chosen_layouts(config).len())
+        .unwrap_or(1)
+        .max(1)
 }
 
 /// What sets `key` off, or `None` for a key this keymap does not have.

@@ -270,9 +270,10 @@ impl Loaded {
                     {
                         Reply::Text(text) => answer.push_str(&text),
                         // The answer Hyprland gives for a request that did
-                        // something, with the doing left to the compositor.
+                        // something, with the doing left to the compositor
+                        // -- or the reply's own answer, where it has one.
                         other => {
-                            answer.push_str("ok\n");
+                            answer.push_str(other.said().unwrap_or("ok\n"));
                             todo.push(other);
                         }
                     }

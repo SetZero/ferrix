@@ -2615,6 +2615,36 @@ fn run_ipc(
             }
             false
         }
+        // `hyprctl switchxkblayout`: put the keyboard in another layout
+        // group. The group was worked out by `compositor/ipc`, which had
+        // the snapshot to work it out from; what is left is the part only
+        // the compositor can do.
+        //
+        // Every keyboard this seat reads shares one XKB state, so the
+        // addresses name which keyboards were asked and the group is the
+        // seat's either way -- `switchxkblayout all` on a machine with two
+        // keyboards asks for the same group twice and gets it once.
+        //
+        // What the clients are told is one `wl_keyboard.modifiers` with the
+        // new group in it and no new keymap, which is the whole of a
+        // layout switch on the wire: the keymap they already hold carries
+        // every layout the configuration named. The event socket's
+        // `activelayout` follows from the next snapshot, like every other
+        // event on it.
+        compositor_ipc::Reply::SwitchLayout { groups, .. } => {
+            let mut moved = false;
+            for (_, group) in groups {
+                moved |= around.seat.set_layout_group(*group);
+            }
+            if moved {
+                around
+                    .pending
+                    .push(crate::seat::Action::Modifiers(around.seat.modifiers()));
+            }
+            // No window moved, so nothing is re-tiled: a layout switch
+            // changes what the keys mean and not where anything is.
+            false
+        }
         compositor_ipc::Reply::Reload | compositor_ipc::Reply::Text(_) => false,
     }
 }
@@ -3327,6 +3357,7 @@ fn as_reported<'a>(
         submap: seat.submap(),
         binds: &config.binds,
         devices,
+        keyboard: seat.keyboard(),
         layers,
         plugins,
         cursor,

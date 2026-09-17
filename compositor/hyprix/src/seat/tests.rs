@@ -454,3 +454,33 @@ fn a_bind_is_resolved_against_the_keymap_the_configuration_asked_for() {
     assert!(fired(&mut american, KEY_Z));
     assert!(!fired(&mut american, KEY_Y));
 }
+
+/// The seat's keyboard has as many layout groups as the configuration named
+/// layouts, and `hyprctl switchxkblayout` moves between exactly those.
+///
+/// The count is what the numeric form of the request is range-checked
+/// against and what `next` wraps around, so a seat that did not take it
+/// from the configuration would answer `layout idx out of range of 1` for a
+/// keyboard the person configured with three layouts.
+#[test]
+fn the_keyboard_has_a_group_for_every_layout_the_configuration_named() {
+    let mut three = seat("input:kb_layout = de,us,fr\n");
+    assert_eq!(three.keyboard().groups(), 3);
+    assert_eq!(three.keyboard().group(), 0);
+
+    // A group in force, and the modifiers that say so: a client is told the
+    // index and reads the layout out of the keymap it already holds.
+    assert!(three.set_layout_group(2));
+    assert_eq!(three.modifiers().group, 2);
+    // The same group again moves nothing, which is what keeps a repeated
+    // request from putting an event on the socket.
+    assert!(!three.set_layout_group(2));
+    // And past the last comes round, which is what `next` relies on.
+    assert!(three.set_layout_group(3));
+    assert_eq!(three.keyboard().group(), 0);
+
+    // An unset `input:kb_layout` is one group: the fallback layout.
+    let one = seat("");
+    assert_eq!(one.keyboard().groups(), 1);
+    assert_eq!(super::group_count(&config("input:kb_layout = de,us\n")), 2);
+}

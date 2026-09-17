@@ -4,7 +4,9 @@ use core::fmt::Write;
 
 use crate::json::Json;
 use crate::request::{Flags, Format, Request};
-use crate::state::{Bind, Devices, Layer, Monitor, Plugin, Snapshot, Window, Workspace};
+use crate::state::{
+    Bind, Devices, Keyboard, Layer, Monitor, Plugin, Snapshot, Window, Workspace, device_name,
+};
 
 /// What the compositor calls itself in `hyprctl version`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -60,6 +62,43 @@ pub enum Reply {
         /// what `seterror` sends.
         error: bool,
     },
+    /// `switchxkblayout <device> <cmd>`: which layout group one or more
+    /// keyboards are in.
+    ///
+    /// The group is worked out here, from the snapshot, rather than by the
+    /// compositor: which keyboards a selector names, what `next` wraps to
+    /// and whether an index is in range are all answers this crate already
+    /// has the state for, and a second copy of the arithmetic in the
+    /// compositor is a second copy to get wrong. What is left for the
+    /// compositor is the one thing it alone can do -- put the keyboard in
+    /// the group and tell the clients.
+    SwitchLayout {
+        /// Each keyboard to move, by the address `hyprctl devices` prints,
+        /// and the group to put it in.
+        groups: Vec<(u64, u32)>,
+        /// What to answer, which is `ok` unless some of the keyboards
+        /// `all` named could not be moved and some could.
+        answer: String,
+    },
+}
+
+impl Reply {
+    /// What to write back, for a reply that carries its own answer.
+    ///
+    /// `serve` answers `ok` for every reply the compositor has to act on,
+    /// because Hyprland does. `switchxkblayout all` is the one request that
+    /// both acts and has something else to say: Hyprland moves the
+    /// keyboards it can and answers with the reasons the others could not
+    /// be moved (`src/debug/HyprCtl.cpp:1405`), so that reply carries the
+    /// text and this hands it over.
+    #[must_use]
+    pub fn said(&self) -> Option<&str> {
+        match self {
+            Self::Text(text) => Some(text),
+            Self::SwitchLayout { answer, .. } => Some(answer),
+            _ => None,
+        }
+    }
 }
 
 /// Answer `request` from `snapshot`.
@@ -164,14 +203,13 @@ pub fn answer(request: &Request, snapshot: &Snapshot, version: Version) -> Reply
         }
         "decorations" => text(decorations(flags, &request.argument, snapshot)),
         "getprop" => text(window_property(flags, &request.argument, snapshot)),
+        "switchxkblayout" => switch_xkb_layout(&request.argument, &snapshot.devices.keyboards),
         // Each of these acts on something this compositor does not have,
-        // and says so rather than pretending. `switchxkblayout` needs a
-        // keymap with more than one layout, which `compositor/xkb` builds
-        // one of; `output` creates and removes headless screens, which
-        // this compositor's screens are not; `setcursor` names a cursor
-        // theme, and the cursor here is drawn in code; `kill` is
-        // Hyprland's click-to-kill mode, which needs a pointer grab.
-        "switchxkblayout" => text("this keymap has one layout\n".to_owned()),
+        // and says so rather than pretending. `output` creates and removes
+        // headless screens, which this compositor's screens are not;
+        // `setcursor` names a cursor theme, and the cursor here is drawn in
+        // code; `kill` is Hyprland's click-to-kill mode, which needs a
+        // pointer grab.
         "output" => text("the screens are the card's, not this compositor's to make\n".to_owned()),
         "setcursor" => {
             text("the cursor is drawn in code; there is no theme to choose\n".to_owned())
@@ -191,6 +229,142 @@ pub fn answer(request: &Request, snapshot: &Snapshot, version: Version) -> Reply
         // keeps working for everything else it asks.
         other => text(format!("unknown request {other}\n")),
     }
+}
+
+/// `hyprctl switchxkblayout <device> <cmd>`: which layout a keyboard types.
+///
+/// `switchXKBLayoutRequest` (`src/debug/HyprCtl.cpp:1359`). A request, not a
+/// dispatcher: a keybind reaches it through `exec, hyprctl switchxkblayout`,
+/// and Hyprland's dispatcher table has no entry for it, so neither does this
+/// compositor's.
+///
+/// What it changes is only the group. No new keymap goes to the clients --
+/// the keymap holds every layout the configuration named and the group says
+/// which of them is in force -- so what a client is told is one
+/// `wl_keyboard.modifiers` with the new group in it, which is how a switch
+/// costs nothing and loses no key.
+///
+/// The arguments are split on spaces and nothing else, and an empty device
+/// is a device, not `all`: `switchxkblayout  next`, written with two spaces,
+/// names no keyboard and is answered `device not found`. That is Hyprland's
+/// own reading, since `CVarList` keeps its empty fields, and this reaches
+/// the same answer from a request whose argument arrived trimmed -- with one
+/// difference worth writing down: a *leading* run of spaces is gone by the
+/// time the argument gets here, so `switchxkblayout  all next` is read as
+/// `all` where Hyprland reads an empty device. Every other spacing agrees,
+/// including the trailing and doubled spaces a script actually produces.
+fn switch_xkb_layout(argument: &str, keyboards: &[Keyboard]) -> Reply {
+    let mut words = argument.split(' ');
+    let selector = words.next().unwrap_or_default().trim();
+    let command = words.next().unwrap_or_default().trim();
+
+    // One keyboard: the answer is the reason it could not be moved, or `ok`.
+    let one = |keyboard: &Keyboard| match group_wanted(keyboard, command) {
+        Ok(group) => Reply::SwitchLayout {
+            groups: vec![(keyboard.device.address, group)],
+            answer: "ok\n".to_owned(),
+        },
+        Err(why) => Reply::Text(format!("{why}\n")),
+    };
+
+    match selector {
+        // The seat's keyboard: the one that last produced an event, which is
+        // Hyprland's `m_active` and the `main` field of `hyprctl devices`.
+        // A seat that has no keyboard yet is `no device`, which is a
+        // different answer from a name nothing matches.
+        "main" | "active" | "current" => keyboards
+            .iter()
+            .find(|keyboard| keyboard.main)
+            .map_or_else(|| Reply::Text("no device\n".to_owned()), one),
+        // Every keyboard: the ones that can be moved are, and the answer is
+        // the reasons the others could not, a line each. `ok` when none
+        // failed -- including when there is no keyboard at all, since then
+        // nothing failed.
+        "all" => {
+            let mut groups = Vec::new();
+            let mut answer = String::new();
+            for keyboard in keyboards {
+                match group_wanted(keyboard, command) {
+                    Ok(group) => groups.push((keyboard.device.address, group)),
+                    Err(why) => {
+                        let _ = writeln!(answer, "{why}");
+                    }
+                }
+            }
+            if answer.is_empty() {
+                answer.push_str("ok\n");
+            }
+            if groups.is_empty() {
+                // Nothing to do: an answer and no work, so the compositor is
+                // not woken for it.
+                return Reply::Text(answer);
+            }
+            Reply::SwitchLayout { groups, answer }
+        }
+        // A name, matched against the normalised name every device has.
+        name => keyboards
+            .iter()
+            .find(|keyboard| keyboard.device.name == device_name(name))
+            .map_or_else(|| Reply::Text("device not found\n".to_owned()), one),
+    }
+}
+
+/// Which group `command` asks a keyboard for, or why it asks for none.
+///
+/// `updateKeyboard` inside `switchXKBLayoutRequest`
+/// (`src/debug/HyprCtl.cpp:1366`). `next` and `prev` are not range-checked
+/// there: they are handed to `xkb_state_update_mask`, which wraps a group
+/// into the keymap's range, so the wrapping is done here instead and the
+/// compositor is handed a group it can use as it stands.
+///
+/// A numeric argument is range-checked and counts from zero. It is read the
+/// way `std::stoi` reads it, because that is what Hyprland reads it with:
+/// see [`stoi`].
+fn group_wanted(keyboard: &Keyboard, command: &str) -> Result<u32, String> {
+    // At least one, for the reason `Keyboard::groups` gives.
+    let groups = keyboard.groups.max(1);
+    // Hyprland's own scan for the active group runs off the end when none is
+    // active and leaves the count itself, which its wrapping then turns into
+    // the first group; taking the count modulo itself is the same zero.
+    let active = keyboard.active_layout_index.unwrap_or(groups) % groups;
+    match command {
+        "next" => Ok((active + 1) % groups),
+        "prev" => Ok(if active == 0 { groups - 1 } else { active - 1 }),
+        _ => {
+            let index = stoi(command).ok_or_else(|| "invalid arg 2".to_owned())?;
+            match u32::try_from(index) {
+                // Hyprland's own check is `> LAYOUTS - 1`, which for a count
+                // of at least one is this.
+                Ok(index) if index < groups => Ok(index),
+                // A negative index and one past the end are the same answer,
+                // which names the count rather than the last index: a person
+                // reading it is being told how many layouts there are.
+                _ => Err(format!("layout idx out of range of {groups}")),
+            }
+        }
+    }
+}
+
+/// `std::stoi`'s reading of a string, which is what Hyprland reads
+/// `switchxkblayout`'s numeric argument with.
+///
+/// A sign, then digits, then anything -- `2x` is two -- and no digits at all
+/// is the failure that becomes `invalid arg 2`. A number too large for an
+/// `int` is `std::out_of_range`, which the same `catch` takes
+/// (`src/debug/HyprCtl.cpp:1384`), so it is the same answer and `None` here.
+/// Leading whitespace, which `stoi` also skips, cannot reach this: the
+/// argument was split on spaces and each field trimmed.
+fn stoi(text: &str) -> Option<i32> {
+    let (negative, rest) = match text.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, text.strip_prefix('+').unwrap_or(text)),
+    };
+    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if digits.is_empty() {
+        return None;
+    }
+    let value = digits.parse::<i64>().ok()?;
+    i32::try_from(if negative { -value } else { value }).ok()
 }
 
 /// `hyprctl getprop <window> <property>`: one property of one window.
@@ -654,10 +828,18 @@ fn devices(flags: Flags, devices: &Devices) -> String {
             out.string("layout", &keyboard.layout);
             out.string("variant", &keyboard.variant);
             out.string("options", &keyboard.options);
-            out.number(
-                "active_layout_index",
-                i64::from(keyboard.active_layout_index),
-            );
+            match keyboard.active_layout_index {
+                Some(index) => out.number("active_layout_index", i64::from(index)),
+                // Hyprland writes the word `none` here for a keyboard with
+                // no active group, and writes it *bare*
+                // (`src/debug/HyprCtl.cpp:793`): the answer is then not
+                // JSON at all and a bar's parser throws on the whole
+                // document. Quoted here. A bar that reads a number still
+                // reads one whenever there is one, and the only case where
+                // it reads a string is the case where Hyprland gives it
+                // nothing it can read.
+                None => out.string("active_layout_index", "none"),
+            }
             out.string("active_keymap", &keyboard.active_keymap);
             out.boolean("capsLock", keyboard.caps_lock);
             out.boolean("numLock", keyboard.num_lock);
@@ -700,7 +882,12 @@ fn devices(flags: Flags, devices: &Devices) -> String {
             keyboard.layout,
             keyboard.variant,
             keyboard.options,
-            keyboard.active_layout_index,
+            // The word `none` for a keyboard with no active group, as
+            // Hyprland's readable form has it
+            // (`src/debug/HyprCtl.cpp:889`).
+            keyboard
+                .active_layout_index
+                .map_or_else(|| "none".to_owned(), |index| index.to_string()),
             keyboard.active_keymap,
             yes_no(keyboard.caps_lock),
             yes_no(keyboard.num_lock),
