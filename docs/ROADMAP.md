@@ -5369,20 +5369,24 @@ test-compositor` boots a third time with both set and requires the picture
 must show: the compositor's background where the corner was cut, and the
 border along the same edge away from it.
 
-Those are shaders. This stage brings the GPU: virtio-gpu's 3D commands
-through a render node (`/dev/dri/renderD128`), `zwp_linux_dmabuf`, GBM-shaped
-buffer allocation, and either Mesa's virgl and Venus drivers built on
-ferrousli for OpenGL ES and Vulkan, or a Rust path over Vulkan (`wgpu`) once a
-Vulkan driver exists — the choice is the customer's, recorded in
-`docs/BACKLOG.md` when it is made. Until it is made, every effect has a
-software fallback with a stated frame-time bound, so the compositor is never
-GPU-only.
+Those are shaders. This stage brings the GPU, and the choice the earlier text
+here left to the customer was made on 2026-09-18 (`docs/GPU.md`, and the
+decision in `docs/BACKLOG.md`): **the host's GPU driver first, through
+virtio-gpu's 3D commands**, which puts the NVIDIA driver of the machine
+Ferrix is watched on behind the guest's rendering without porting a line of
+it; and a driver for a card of Ferrix's own later, in stage 21, when Ferrix
+runs on bare metal. Every effect keeps its software fallback with a stated
+frame-time bound, so the compositor is never GPU-only.
 
-**What this stage still owes.** The GPU, which is the largest thing left
-in this tree: virtio-gpu's 3D commands through a render node,
-`zwp_linux_dmabuf`, GBM-shaped allocation, and a driver stack -- Mesa's virgl
-and Venus on ferrousli, or a Rust path over Vulkan -- that does not exist on
-Ferrix yet and is a stage's work in itself.
+**What this stage still owes.** The GPU, which is the largest thing left in
+this tree, in the order `docs/GPU.md` §3 gives and with its sizes: virtio-gpu
+3D in the ring-3 driver (13), a render node with the `virtgpu` ioctls and
+scanout of a 3D resource (13), the host half in xtask with a gate that can
+judge a GPU's picture (5), and a Rust virgl encoder as the compositor's own
+renderer behind a renderer trait, with the eight shaders of Hyprland's
+effects as TGSI (21) -- 52 points to a GPU-composited desktop. Mesa on
+ferrousli and `zwp_linux_dmabuf` come after, when clients render on the GPU
+themselves.
 
 Of the protocols and keywords a Hyprland setup uses, what is left is:
 `layerrule`, `zwp_virtual_keyboard`, `zwp_pointer_constraints` and
@@ -5414,8 +5418,7 @@ met, and by `cargo xtask test-compositor` on x86-64 and on AArch64:
   presses.
 
 What is left is the GPU path, and with it the frame rate the exit asks for
-under one: virtio-gpu's 3D commands, `zwp_linux_dmabuf`, and a driver stack
-that does not exist on Ferrix.
+under one: the four pieces above, none of which is begun.
 
 ---
 
@@ -5426,6 +5429,24 @@ test writes itself: the image produced by the Ferrix-hosted compiler boots
 and passes every test above. Moved from 17 on 2026-09-13, when the compositor
 became the goal after `rustc`; it is not on the compositor's path, and the
 compositor is cross-compiled until it is.
+
+---
+
+## Stage 21 — Bare metal, and a GPU of Ferrix's own  ·  *unsized, over 100 points*
+
+Ferrix on a machine rather than in one, with the NVIDIA card in it driving
+the screen: the second half of the decision of 2026-09-18, opened when the
+customer wants Ferrix on bare metal and not before. `docs/GPU.md` §4 says
+what it takes and why it is not sized: NVIDIA's open kernel modules as a
+ring-3 driver process behind an OS interface layer written for Ferrix, the
+GSP firmware they load, and a userspace that today means glibc-built closed
+libraries -- or Mesa's NVK and Linux's Rust driver Nova, weighed when the
+stage opens. What stage 19's Path A leaves ready for it: the render node,
+the renderer trait and the GPU renderer's shaders, `zwp_linux_dmabuf`, and
+gates that judge a GPU's picture. It depends on the dynamic linking stage,
+whichever userspace is taken.
+
+**Exit:** the stage 19 exit on real hardware, drawn by the card.
 
 ---
 

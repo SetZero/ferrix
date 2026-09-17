@@ -24,7 +24,8 @@ This document specifies iteration 1's cut of that:
 
 It is not the virtio-gpu protocol, which the driver speaks to the device
 (`libs/virtio::gpu`, to be written). It is not the GPU: no 3D, no render node,
-no dmabuf, no PRIME (stage 19). It is not input (virtio-input is its own
+no dmabuf, no PRIME (stage 19; how the GPU comes, and in what order, is
+decided in `docs/GPU.md`). It is not input (virtio-input is its own
 iteration).
 
 **Exit of iteration 1:** on x86-64 and AArch64, the compositor's first binary
