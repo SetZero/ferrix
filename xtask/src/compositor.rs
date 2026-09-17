@@ -1380,7 +1380,7 @@ bind = SUPER, C, exec, /bin/hyprctl clients
 bind = SUPER, W, exec, /bin/hyprctl activewindow
 ";
 
-/// `config` with the interface brought up, when `--net` asked for one.
+/// `config` with the interface brought up, when the boot has a network.
 ///
 /// `--net` puts a virtio-net device on the bus and xtask's own gateway behind
 /// it, and that is all it does: the guest has a device and no address, so a
@@ -1552,6 +1552,16 @@ pub(crate) fn run_compositor(args: &Args) -> Result<()> {
         Some(path) => std::fs::read_to_string(path)
             .map_err(|error| Error::new(format!("reading {path}: {error}")))?,
         None => RUN_CONFIG.to_owned(),
+    };
+    // A watched boot has a network unless it was told not to: a person at a
+    // screen expects a machine that can fetch something, and finding out
+    // that `ping` says `bad address` for want of a device is nobody's
+    // idea of a lesson. A boot that is judged still asks for `--net`,
+    // because the bus a check enumerates must be the bus it has always
+    // enumerated.
+    let args = &Args {
+        net: !args.no_net,
+        ..args.clone()
     };
     let config = with_network(with_layout(config, args), args);
     let programs = Programs::build(arch)?;

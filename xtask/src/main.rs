@@ -158,7 +158,9 @@ OPTIONS:
     --net                                run, test-boot, test-shell, test-vfs, run-compositor:
                                          a virtio-net device,
                                          behind xtask's own NAT gateway (10.0.2.2, guest 10.0.2.15);
-                                         test-net turns it on whether or not it is given
+                                         test-net turns it on whether or not it is given;
+                                         run-compositor has one unless --no-net
+    --no-net                             run-compositor: no network device and no gateway
     --display                            run, test-boot: a virtio-gpu device; run: and a window showing it
     --vnc <DISPLAY>                      run --display, run-compositor: serve the screen over VNC
                                          at e.g. `:0` (127.0.0.1) rather than in a window of this host's

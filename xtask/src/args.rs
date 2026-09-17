@@ -31,10 +31,18 @@ pub(crate) struct Args {
     /// `test-boot` requires QEMU to see the machine reset rather than power off.
     pub(crate) reset: bool,
     /// `--net`: give the guest a virtio-net device, with `xtask`'s own gateway
-    /// behind it. Off by default, because every boot that does not need a
-    /// network is a boot with one fewer device on the bus and one fewer thread
-    /// in this process.
+    /// behind it. Off by default for a boot that is judged, because every boot
+    /// that does not need a network is a boot with one fewer device on the bus
+    /// and one fewer thread in this process -- and because the bus a check
+    /// enumerates should be the bus it has always enumerated. A watched boot
+    /// has one anyway; see `no_net`.
     pub(crate) net: bool,
+    /// `--no-net`: take the network away from a boot that would have had one.
+    ///
+    /// Only `run-compositor` has one to take: somebody watching a screen
+    /// expects a machine that can reach the network, so that boot asks for
+    /// it unasked, and this is how they say they would rather it did not.
+    pub(crate) no_net: bool,
     /// `-h`/`--help`.
     pub(crate) help: bool,
     /// `--smp`, virtual CPUs.
@@ -140,6 +148,7 @@ impl Args {
                 "--miri" => args.miri = true,
                 "--reset" => args.reset = true,
                 "--net" => args.net = true,
+                "--no-net" => args.no_net = true,
                 "--display" => args.display = true,
                 "--input" => args.input = true,
                 "--screens" => args.screens = number(&mut items, "--screens")?,
