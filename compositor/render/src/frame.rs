@@ -40,6 +40,9 @@ pub struct Style {
     /// much black is laid over a window that is not focused. Zero when it is
     /// off.
     pub dim: f32,
+    /// `decoration:dim_around`: how much black is laid over everything
+    /// *behind* a window or layer surface whose rule asked for it.
+    pub dim_around: f32,
     /// `decoration:blur:*`, or `None` when `blur:enabled` is off: how much
     /// of what is behind a translucent window is blurred, how many times,
     /// and the colour grading over it.
@@ -157,6 +160,16 @@ impl Style {
                 opacity("decoration:dim_strength")
             } else {
                 0.0
+            },
+            // Not gated on `dim_inactive`: this one is a *rule*'s, and the
+            // option is only how strong it is. Hyprland's default is 0.4.
+            dim_around: {
+                #[expect(
+                    clippy::cast_possible_truncation,
+                    reason = "a share between zero and one; `f32` holds it"
+                )]
+                let value = config.float("decoration:dim_around").unwrap_or(0.4) as f32;
+                value.clamp(0.0, 1.0)
             },
             blur: config
                 .bool("decoration:blur:enabled")
@@ -297,6 +310,9 @@ pub struct LayerFrame<'pixels> {
     pub above: bool,
     /// Its pixels, or `None` for one that has not drawn yet.
     pub surface: Option<Surface<'pixels>>,
+    /// Whether everything behind it is darkened while it is up:
+    /// `layerrule = dim_around`. What a launcher does to the desktop.
+    pub dim_around: bool,
     /// Whether what is behind it is blurred: `layerrule = blur, waybar`.
     ///
     /// This is what makes a bar with a translucent background look like
@@ -346,6 +362,10 @@ pub struct WindowStyle {
     /// than bilinear, which is what a person writes for pixel art -- a
     /// sprite must stay a sprite and not become a smear.
     pub nearest: bool,
+    /// `dim_around`: everything behind this window is darkened by
+    /// `decoration:dim_around` while it is up, which is what a launcher or
+    /// a confirmation dialog does to the desktop behind it.
+    pub dim_around: bool,
 }
 
 impl Default for WindowStyle {
@@ -364,6 +384,7 @@ impl Default for WindowStyle {
             decorate: true,
             opaque: false,
             nearest: false,
+            dim_around: false,
         }
     }
 }
@@ -487,13 +508,39 @@ pub fn render_with_layers(
     let style = styles.base;
     let local = |rect: Rect| rect.translate(origin.0.saturating_neg(), origin.1.saturating_neg());
     canvas.clear(style.background, damage);
+    // `dim_around`: black over everything drawn *so far*, laid down just
+    // before the window or surface that asked for it. Hyprland dims what
+    // is behind such a thing; drawing in order means "behind" is "already
+    // drawn", so one fill in the right place is the whole of it -- no
+    // second pass and no second canvas.
+    let dim_behind = |canvas: &mut Canvas, damage: &Damage| {
+        if style.dim_around <= 0.0 {
+            return;
+        }
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "a share between zero and one becomes a byte of alpha"
+        )]
+        let alpha = (style.dim_around.clamp(0.0, 1.0) * 255.0).round() as u32;
+        canvas.fill(canvas.bounds(), Color(alpha << 24), damage);
+    };
     for layer in layers.iter().filter(|layer| !layer.above) {
+        if layer.dim_around {
+            dim_behind(canvas, damage);
+        }
         draw_layer(canvas, layer, local(layer.rect), style, damage);
     }
     for placed in &output.windows {
+        if styles.of(placed.window).dim_around {
+            dim_behind(canvas, damage);
+        }
         window(canvas, placed, local(placed.rect), styles, surfaces, damage);
     }
     for layer in layers.iter().filter(|layer| layer.above) {
+        if layer.dim_around {
+            dim_behind(canvas, damage);
+        }
         draw_layer(canvas, layer, local(layer.rect), style, damage);
     }
     damage.clipped(canvas.bounds())

@@ -170,6 +170,9 @@ pub enum Effect {
     /// that long after it opened, which is what a person writes for a
     /// window they keep shutting by accident.
     NoCloseFor(i64),
+    /// `dim_around <yes-or-no>`: everything behind it is darkened by
+    /// `decoration:dim_around` while it is up.
+    DimAround(bool),
     /// `rounding <n>`: how far its corners are cut.
     Rounding(i64),
     /// `border_size <n>`.
@@ -653,6 +656,7 @@ fn effect(field: &str) -> Result<Effect, String> {
         "no_close_for" => {
             number("a number of milliseconds").map(|held| Effect::NoCloseFor(held.max(0)))
         }
+        "dim_around" => Ok(Effect::DimAround(yes(value))),
         // `no_initial_focus` is `no_focus` by another name: Hyprland keeps
         // them apart because one is checked when the window maps and the
         // other whenever it would be focused, and this compositor applies

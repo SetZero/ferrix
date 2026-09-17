@@ -249,6 +249,10 @@ impl Rules {
                     style.nearest = *on;
                     styled = true;
                 }
+                Effect::DimAround(on) => {
+                    style.dim_around = *on;
+                    styled = true;
+                }
                 Effect::MinSize(wide, tall) => {
                     limits.smallest = Some((*wide, *tall));
                     limited = true;

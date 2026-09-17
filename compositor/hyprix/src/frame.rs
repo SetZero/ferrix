@@ -160,6 +160,9 @@ pub struct Placed {
 pub struct LayerRules {
     /// `blur`: what is behind it is blurred.
     pub blur: bool,
+    /// `dim_around`: everything behind it is darkened while it is up,
+    /// which is what a launcher does to the desktop.
+    pub dim_around: bool,
     /// `abovelock`: it is drawn over the session lock.
     pub above_lock: bool,
     /// `noscreenshare`: a screenshot leaves it out.
@@ -300,6 +303,7 @@ fn draw_windows(
             surface: clients
                 .get(placed.client)
                 .and_then(|slot| pixels(slot.client(), slot.pools(), placed.surface)),
+            dim_around: placed.rules.dim_around,
             blur: placed.rules.blur,
         })
         .collect();

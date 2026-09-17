@@ -623,6 +623,7 @@ fn bar_and_two_clients_frame() -> Vec<u8> {
         rect: bar.rect,
         above: true,
         surface: Some(bar_surface),
+        dim_around: false,
         blur: false,
     }];
     let produced = render_with_layers(
@@ -1037,6 +1038,7 @@ fn a_window_with_a_menu_on_it_matches_the_expected_image() {
         rect: Rect::new(parent.x + at.x, parent.y + at.y, at.width, at.height),
         above: true,
         surface: Some(surface),
+        dim_around: false,
         blur: false,
     }];
     let mut canvas = Canvas::new(WIDTH, HEIGHT).unwrap();
@@ -1082,6 +1084,7 @@ fn a_locked_screen_is_the_lock_surface_and_nothing_else() {
         rect: Rect::new(0, 0, i64::from(WIDTH), i64::from(HEIGHT)),
         above: true,
         surface: Some(surface),
+        dim_around: false,
         blur: false,
     }];
     let _ = render_with_layers(
@@ -2592,5 +2595,88 @@ fn a_full_screen_blur_is_inside_the_stated_bound() {
         slowest <= BOUND,
         "a full-screen blur took {slowest} ms, past the {BOUND} ms this renderer is stated to \
          be inside"
+    );
+}
+
+/// `dim_around` darkens everything behind a window and nothing in front of
+/// it.
+///
+/// What a launcher does to the desktop. Hyprland dims what is *behind* the
+/// thing that asked for it; drawing in order means "behind" is "already
+/// drawn", so one fill just before that thing is the whole of the effect --
+/// no second pass and no second canvas.
+#[test]
+fn dim_around_darkens_what_is_behind_and_not_what_is_in_front() {
+    let (width, height) = (400u32, 300u32);
+    let damage = Damage::full(width, height);
+    let mut style = plain_style();
+    style.dim_around = 0.5;
+    style.rounding = Rounding::none();
+
+    // Two windows side by side; the second asks for `dim_around`, so the
+    // first is darkened and the second is not.
+    let bytes = vec![0xFFu8; (width * height * 4) as usize];
+    let first = Surface::new(&bytes, 100, 100, 400, Format::Xrgb8888).expect("a surface");
+    let surfaces: BTreeMap<WindowId, Surface<'_>> = [
+        (WindowId(1), first),
+        (
+            WindowId(2),
+            Surface::new(&bytes, 100, 100, 400, Format::Xrgb8888).expect("a surface"),
+        ),
+    ]
+    .into_iter()
+    .collect();
+    let mut windows = BTreeMap::new();
+    let _previous = windows.insert(
+        WindowId(2),
+        crate::WindowStyle {
+            dim_around: true,
+            ..crate::WindowStyle::default()
+        },
+    );
+    let output = MonitorLayout {
+        monitor: MonitorId(1),
+        workspace: compositor_layout::WorkspaceId(1),
+        windows: vec![
+            Placed {
+                window: WindowId(1),
+                rect: Rect::new(0, 0, 100, 100),
+                border: 0,
+                focused: false,
+                floating: false,
+                fullscreen: false,
+            },
+            Placed {
+                window: WindowId(2),
+                rect: Rect::new(200, 0, 100, 100),
+                border: 0,
+                focused: true,
+                floating: false,
+                fullscreen: false,
+            },
+        ],
+    };
+
+    let mut canvas = Canvas::new(width, height).expect("a canvas");
+    let _drawn = render_with_layers(
+        &mut canvas,
+        &output,
+        (0, 0),
+        &Styles {
+            base: &style,
+            windows: &windows,
+        },
+        &surfaces,
+        &[],
+        &damage,
+    );
+    // The first window is white under half-black, so its channels are
+    // about 128; the second is drawn after the dim and is still white.
+    let behind = canvas.pixel(50, 50).expect("a pixel") & 0xFF;
+    let front = canvas.pixel(250, 50).expect("a pixel") & 0xFF;
+    assert_eq!(front, 0xFF, "the window that asked for it is not dimmed");
+    assert!(
+        (100..=160).contains(&behind),
+        "the window behind it is {behind} and half of white is about 128"
     );
 }

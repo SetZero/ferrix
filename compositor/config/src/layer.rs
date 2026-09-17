@@ -33,16 +33,21 @@
 //! `order` is obeyed: it decides where a surface goes among its own
 //! layer's.
 //!
+//! `dim_around` is drawn: everything already on the canvas is darkened by
+//! `decoration:dim_around` just before the surface goes on top of it, which
+//! is what a launcher does to the desktop. Drawing in order means "behind"
+//! is "already drawn", so one fill in the right place is the whole of it.
+//!
 //! The rest are read, kept and not acted on, and each for a reason.
 //! `no_anim` has nothing to turn off, because a layer surface is not
-//! animated here. `dim_around`, `xray` and `blur_popups` each need a second
-//! render pass -- the first two read what is *behind* the frame being
-//! drawn, and this renderer draws one pass over one canvas.
-//! `no_screen_share` needs the same: a screenshot here is the screen's own
-//! buffer, and leaving one surface out of it means drawing the frame
-//! again without it. They are parsed rather than refused so that a
-//! person's configuration is not a wall of diagnostics, and recorded so
-//! that the compositor can act on them when the renderer can.
+//! animated here. `xray` and `blur_popups` each need a second render pass
+//! -- the first reads what is *behind* the frame being drawn, and this
+//! renderer draws one pass over one canvas. `no_screen_share` needs the
+//! same: a screenshot here is the screen's own buffer, and leaving one
+//! surface out of it means drawing the frame again without it. They are
+//! parsed rather than refused so that a person's configuration is not a
+//! wall of diagnostics, and recorded so that the compositor can act on
+//! them when the renderer can.
 
 use compositor_regex::Regex;
 

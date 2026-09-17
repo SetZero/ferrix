@@ -4055,6 +4055,7 @@ fn place_layers(
                 on,
                 crate::frame::LayerRules {
                     blur: named.blur,
+                    dim_around: named.dim_around,
                     above_lock: named.above_lock,
                     no_screen_share: named.no_screen_share,
                     order: named.order,
