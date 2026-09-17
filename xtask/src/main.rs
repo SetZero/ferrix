@@ -160,6 +160,10 @@ OPTIONS:
     --vnc <DISPLAY>                      run --display, run-compositor: serve the screen over VNC
                                          at e.g. `:0` (127.0.0.1) rather than in a window of this host's
     --config <PATH>                      run-compositor: the hyprland.conf the guest is given
+    --layout <LIST>                      run-compositor: the keyboard layout, as input:kb_layout
+                                         takes it: `de`, or `de,us` for two a switch moves between
+    --variant <LIST>                     run-compositor: their variants, as input:kb_variant
+                                         takes them: `nodeadkeys,` is one for the first layout only
     --fast                               check: skip the cross-target clippy passes
     --ferrousli                          check: also ferrousli's fmt, clippy and tests, debug and release
     --zinc                               check: also zinc's fmt, clippy, tests and pty completion test

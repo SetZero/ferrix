@@ -1362,6 +1362,39 @@ bind = SUPER, C, exec, /bin/hyprctl clients
 bind = SUPER, W, exec, /bin/hyprctl activewindow
 ";
 
+/// `config` with the layouts `--layout` and `--variant` asked for.
+///
+/// Appended rather than substituted, and appended to a person's own file as
+/// readily as to [`RUN_CONFIG`]: a later line overrides an earlier one, which
+/// is hyprlang's rule and this configuration parser's, so two lines at the
+/// end are the whole of it. A `--config` that sets `input:kb_layout` and a
+/// `--layout` that disagrees means the flag wins, which is the way round a
+/// flag typed now should win over a file written earlier.
+///
+/// The names are not checked here. The compositor ships the keymaps it has
+/// and says which one it gave -- `hyprix: no keymap for kb_layout = ru,
+/// kb_variant = ; using us` -- and a second opinion in this tool would be
+/// one more place to keep the list.
+fn with_layout(config: String, args: &Args) -> String {
+    if args.layout.is_none() && args.variant.is_none() {
+        return config;
+    }
+    let mut config = config;
+    if !config.ends_with('\n') {
+        config.push('\n');
+    }
+    config.push_str("# Appended by `cargo xtask run-compositor`:\n");
+    if let Some(layout) = &args.layout {
+        println!("  keyboard: input:kb_layout = {layout}");
+        config.push_str(&format!("input:kb_layout = {layout}\n"));
+    }
+    if let Some(variant) = &args.variant {
+        println!("  keyboard: input:kb_variant = {variant}");
+        config.push_str(&format!("input:kb_variant = {variant}\n"));
+    }
+    config
+}
+
 /// What a boot's image carries to type into: the busybox whose applets are
 /// most of what a person types, zinc, the shell that runs them, and the
 /// programs ported onto ferrousli.
@@ -1468,6 +1501,7 @@ pub(crate) fn run_compositor(args: &Args) -> Result<()> {
             .map_err(|error| Error::new(format!("reading {path}: {error}")))?,
         None => RUN_CONFIG.to_owned(),
     };
+    let config = with_layout(config, args);
     let programs = Programs::build(arch)?;
     let (image, _) = build_image(arch, &programs, &config, Carried::wanted(arch, args)?, args)?;
     let args = Args {
@@ -2801,4 +2835,71 @@ fn differences(screen: &Image, want: &[u8]) -> (Option<(usize, usize)>, usize) {
         }
     }
     (first, count)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{RUN_CONFIG, with_layout};
+    use crate::args::Args;
+
+    /// The flags a watched boot takes for its keyboard, appended so that they
+    /// beat whatever the configuration said: a later line overrides an
+    /// earlier one, which the configuration parser has its own test for.
+    #[test]
+    fn the_layout_flags_are_appended_to_whatever_configuration_is_used() {
+        let asked = |layout: Option<&str>, variant: Option<&str>| {
+            with_layout(
+                "input:kb_layout = fr\n".to_owned(),
+                &Args {
+                    layout: layout.map(str::to_owned),
+                    variant: variant.map(str::to_owned),
+                    ..Args::default()
+                },
+            )
+        };
+
+        // Neither flag leaves the configuration exactly as it was, which is
+        // what a person's own file must get.
+        assert_eq!(asked(None, None), "input:kb_layout = fr\n");
+
+        // Both, in the order the options are read.
+        let both = asked(Some("de,us"), Some("nodeadkeys,"));
+        assert!(both.starts_with("input:kb_layout = fr\n"), "{both}");
+        assert!(
+            both.ends_with("input:kb_layout = de,us\ninput:kb_variant = nodeadkeys,\n"),
+            "{both}"
+        );
+
+        // A variant on its own is a variant of whatever the file's layout is.
+        let variant = asked(None, Some("dvorak"));
+        assert!(
+            variant.ends_with("input:kb_variant = dvorak\n"),
+            "{variant}"
+        );
+        assert!(!variant.contains("kb_layout = de"), "{variant}");
+    }
+
+    /// A configuration that does not end in a newline still gets its own
+    /// line: the flag would otherwise land on the end of the last one.
+    #[test]
+    fn a_configuration_with_no_final_newline_gets_one() {
+        let appended = with_layout(
+            "bind = SUPER, Q, killactive".to_owned(),
+            &Args {
+                layout: Some("de".to_owned()),
+                ..Args::default()
+            },
+        );
+        assert!(appended.contains("killactive\n"), "{appended}");
+        assert!(appended.ends_with("input:kb_layout = de\n"), "{appended}");
+    }
+
+    /// The configuration a watched boot writes when nothing else was named
+    /// starts a terminal, because a screen somebody is watching is one they
+    /// want to type into.
+    #[test]
+    fn the_default_configuration_opens_a_terminal() {
+        assert!(RUN_CONFIG.contains("exec-once = /bin/term /bin/zinc"));
+        assert!(RUN_CONFIG.contains("bind = SUPER, RETURN, exec, /bin/term /bin/zinc"));
+    }
 }

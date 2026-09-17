@@ -86,6 +86,14 @@ pub(crate) struct Args {
     /// than in a window of this host's, which is what a machine reached over
     /// `ssh` has. `window` says why the default is the loopback.
     pub(crate) vnc: Option<String>,
+    /// `--layout <LIST>`: the keyboard layouts a watched boot is configured
+    /// with, as `input:kb_layout` takes them -- one name or a comma-separated
+    /// list, `de` or `de,us`.
+    pub(crate) layout: Option<String>,
+    /// `--variant <LIST>`: their variants, as `input:kb_variant` takes them,
+    /// read alongside the names: `nodeadkeys,` is a variant for the first
+    /// layout and none for the second.
+    pub(crate) variant: Option<String>,
     /// `--config <PATH>`: the `hyprland.conf` `run-compositor` carries into
     /// the guest, in place of the small one it writes itself.
     pub(crate) config: Option<String>,
@@ -139,6 +147,8 @@ impl Args {
                 "--boot" => args.boot = Some(value(&mut items, "--boot")?),
                 "--vnc" => args.vnc = Some(value(&mut items, "--vnc")?),
                 "--config" => args.config = Some(value(&mut items, "--config")?),
+                "--layout" => args.layout = Some(value(&mut items, "--layout")?),
+                "--variant" => args.variant = Some(value(&mut items, "--variant")?),
                 other if other.starts_with('-') => {
                     return Err(Error::new(format!("unknown option `{other}`")));
                 }
