@@ -226,3 +226,13 @@ zwlr_screencopy_frame_v1 3 event 3 failed
 zwlr_screencopy_frame_v1 3 event 4 damage 2uuuu
 zwlr_screencopy_frame_v1 3 event 5 linux_dmabuf 3uuu
 zwlr_screencopy_frame_v1 3 event 6 buffer_done 3
+ext_session_lock_manager_v1 1 request 0 destroy 
+ext_session_lock_manager_v1 1 request 1 lock n
+ext_session_lock_v1 1 request 0 destroy 
+ext_session_lock_v1 1 request 1 get_lock_surface noo
+ext_session_lock_v1 1 request 2 unlock_and_destroy 
+ext_session_lock_v1 1 event 0 locked 
+ext_session_lock_v1 1 event 1 finished 
+ext_session_lock_surface_v1 1 request 0 destroy 
+ext_session_lock_surface_v1 1 request 1 ack_configure u
+ext_session_lock_surface_v1 1 event 0 configure uuu

@@ -27,6 +27,7 @@ scan "$protocols/xdg-decoration-unstable-v1.xml" xdg-decoration
 scan "$protocols/wlr-layer-shell-unstable-v1.xml" wlr-layer-shell
 scan "$protocols/wlr-foreign-toplevel-management-unstable-v1.xml" wlr-foreign-toplevel-management
 scan "$protocols/wlr-screencopy-unstable-v1.xml" wlr-screencopy
+scan "$protocols/ext-session-lock-v1.xml" ext-session-lock
 
 gcc -O0 -Wall -Werror -I"$work" \
     $(pkg-config --cflags wayland-client) \

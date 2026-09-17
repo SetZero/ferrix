@@ -76,6 +76,44 @@ pub fn draw(
     layers: &[Placed],
     damage: &Damage,
 ) -> Result<(), String> {
+    draw_windows(target, output, clients, sources, layers, damage)
+}
+
+/// Draw the screen while the session is locked: the lock's own surface and
+/// nothing else.
+///
+/// `locked` is where the lock surface's pixels are, or `None` for a screen
+/// the lock has not covered yet. A screen with no lock surface is drawn as
+/// the background alone -- black, since the style's background is what the
+/// compositor clears to -- because what it must *not* show is what was on
+/// it before. That is the whole point of the protocol: the compositor stops
+/// drawing the windows the moment the lock is taken, before the client has
+/// drawn anything at all.
+pub fn draw_locked(
+    target: &mut Output<'_>,
+    output: &MonitorLayout,
+    clients: &[Slot],
+    locked: Option<Placed>,
+    damage: &Damage,
+) -> Result<(), String> {
+    let empty = MonitorLayout {
+        windows: Vec::new(),
+        ..output.clone()
+    };
+    let sources = BTreeMap::new();
+    let layers: Vec<Placed> = locked.into_iter().collect();
+    draw_windows(target, &empty, clients, &sources, &layers, damage)
+}
+
+/// The two above, which differ only in what they are given to draw.
+fn draw_windows(
+    target: &mut Output<'_>,
+    output: &MonitorLayout,
+    clients: &[Slot],
+    sources: &BTreeMap<WindowId, Source>,
+    layers: &[Placed],
+    damage: &Damage,
+) -> Result<(), String> {
     let Output {
         canvas,
         backend,

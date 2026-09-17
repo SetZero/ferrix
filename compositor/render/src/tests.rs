@@ -908,6 +908,45 @@ fn two_pattern_clients_tiled_by_dwindle_match_the_expected_image() {
     golden::check("dwindle-two-clients", WIDTH, HEIGHT, &two_client_frame());
 }
 
+/// A locked screen: the lock's own surface over the whole of it, and
+/// nothing of what was there before.
+///
+/// This is the picture `cargo xtask test-compositor` requires while
+/// `ext-session-lock-v1` holds the screen. It is the checkerboard at the
+/// screen's exact size and at its exact origin, because that is what the
+/// protocol makes a lock surface: a compositor that drew it anywhere else,
+/// or left a strip of a window showing, would not match.
+#[test]
+fn a_locked_screen_is_the_lock_surface_and_nothing_else() {
+    // No windows at all: while the session is locked the compositor draws
+    // the lock's surface and stops drawing the layout, which is what the
+    // frame below is built from.
+    let layout = MonitorLayout {
+        monitor: MonitorId(1),
+        workspace: compositor_layout::WorkspaceId(1),
+        windows: Vec::new(),
+    };
+    let pixels = Pattern::Checkerboard.draw(WIDTH, HEIGHT);
+    let surface = Surface::new(&pixels, WIDTH, HEIGHT, WIDTH * 4, Format::Xrgb8888).unwrap();
+    let mut canvas = Canvas::new(WIDTH, HEIGHT).unwrap();
+    let full = Damage::full(WIDTH, HEIGHT);
+    let over = [LayerFrame {
+        rect: Rect::new(0, 0, i64::from(WIDTH), i64::from(HEIGHT)),
+        above: true,
+        surface: Some(surface),
+    }];
+    let _ = render_with_layers(
+        &mut canvas,
+        &layout,
+        (0, 0),
+        &Styles::plain(&Style::default()),
+        &BTreeMap::new(),
+        &over,
+        &full,
+    );
+    golden::check("locked-screen", WIDTH, HEIGHT, canvas.data());
+}
+
 /// One window left after the other closed: it takes the whole workspace and
 /// is drawn with the active border, since the focus goes to what is left.
 ///

@@ -123,6 +123,8 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
     // The screenshots asked for in one pass, kept until the screens are in
     // reach: a client's own borrow is open while its requests are read.
     let mut shots: Vec<Shot> = Vec::new();
+    // The session lock, while one is held.
+    let mut lock: Option<Lock> = None;
     if !window_rules.is_empty() {
         report(&format!("hyprix: {} window rules", window_rules.len()));
     }
@@ -352,7 +354,14 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                 &state,
                 &slots,
                 &sources,
-                &as_reported(&config, &seat, &devices, &placed_layers, &plugins),
+                &as_reported(
+                    &config,
+                    &seat,
+                    &devices,
+                    &placed_layers,
+                    &plugins,
+                    lock.is_some(),
+                ),
             );
             asked.extend(plugins.poll(&snapshot));
         }
@@ -363,7 +372,14 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                 &state,
                 &slots,
                 &sources,
-                &as_reported(&config, &seat, &devices, &placed_layers, &plugins),
+                &as_reported(
+                    &config,
+                    &seat,
+                    &devices,
+                    &placed_layers,
+                    &plugins,
+                    lock.is_some(),
+                ),
             );
             match crate::control::serve(&mut stream, &snapshot, &mut plugins) {
                 Ok(todo) => asked.extend(todo),
@@ -389,6 +405,12 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
         // emulation a whole sequence arrives in one read, which is where
         // this was found.
         let now = u32::try_from(started.elapsed().as_millis()).unwrap_or(u32::MAX);
+        // While the session is locked the keyboard is the lock's: a bind
+        // fires only if it was written `bindl`, and every other key goes to
+        // the lock's own surface and to no window. That is
+        // `ext-session-lock-v1`'s other half -- a lock that showed a picture
+        // and still let a key reach the browser under it would not be one.
+        seat.set_locked(lock.is_some());
         for input in devices.read() {
             let actions = seat.input(input);
             if actions.is_empty() {
@@ -437,6 +459,8 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                 &mut window_rules,
                 &mut clipboard,
                 &mut shots,
+                &mut lock,
+                &screens,
                 report,
             )? {
                 changed = true;
@@ -481,6 +505,18 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                     changed = true;
                 }
                 clipboard.client_gone(&mut slots, index);
+                // A lock whose program died leaves the screen locked with
+                // nothing drawn on it, which is the one thing
+                // `ext-session-lock-v1` is most explicit about: an unlocked
+                // session is not what a crash is allowed to produce.
+                if let Some(held) = lock.as_mut()
+                    && held.client == index
+                {
+                    held.orphaned = true;
+                    held.surfaces.clear();
+                    report("hyprix: the program holding the lock went; the screen stays locked");
+                    changed = true;
+                }
                 if slots.get(index).is_some_and(|slot| !slot.layers.is_empty()) {
                     // Its bars go with it, and the space they reserved comes
                     // back to the windows.
@@ -526,13 +562,33 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
         }
         // The keyboard follows the layout's focus, and a window that has just
         // arrived is what the layout focused.
-        focus.follow_layout(
-            &state,
-            &mut slots,
-            &sources,
-            seat.keyboard().pressed(),
-            seat.keyboard().modifiers(),
-        );
+        // Who the keyboard is on. A locked session takes it away from every
+        // window and gives it to the lock's own surface, so that a key
+        // typed at a lock screen cannot reach what is behind it.
+        if let Some(held) = lock.as_ref() {
+            // The lock surface on the focused monitor, or the first one it
+            // covered; a lock whose program has gone gets nothing, which
+            // leaves the keyboard on no client at all.
+            let wanted = held
+                .surfaces
+                .values()
+                .next()
+                .map(|(_, surface)| (held.client, *surface));
+            focus.follow(
+                wanted,
+                &mut slots,
+                seat.keyboard().pressed(),
+                seat.keyboard().modifiers(),
+            );
+        } else {
+            focus.follow_layout(
+                &state,
+                &mut slots,
+                &sources,
+                seat.keyboard().pressed(),
+                seat.keyboard().modifiers(),
+            );
+        }
 
         // The event socket and the bars, from the same description
         // `hyprctl` answers from: a bar and a script must not be told two
@@ -543,7 +599,14 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                 &state,
                 &slots,
                 &sources,
-                &as_reported(&config, &seat, &devices, &placed_layers, &plugins),
+                &as_reported(
+                    &config,
+                    &seat,
+                    &devices,
+                    &placed_layers,
+                    &plugins,
+                    lock.is_some(),
+                ),
             );
             if let Some(socket) = events.as_mut() {
                 socket.publish(&snapshot);
@@ -577,7 +640,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
             let began = Instant::now();
             // A frame a monitor: each screen draws the workspace it shows,
             // with the windows' rectangles moved into its own pixels.
-            for screen in &mut screens {
+            for (which, screen) in screens.iter_mut().enumerate() {
                 let Some(output) = outputs
                     .iter()
                     .find(|output| output.monitor == screen.monitor)
@@ -597,7 +660,30 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                     styles: window_rules.styles(),
                     scale: screen.scale,
                 };
-                crate::frame::draw(&mut target, output, &slots, &sources, &placed_layers, &full)?;
+                // While the session is locked the screen shows the lock's
+                // own surface and nothing else -- not the windows, not the
+                // bars, and not what was there a moment ago.
+                if let Some(held) = lock.as_ref() {
+                    let covering =
+                        held.surfaces
+                            .get(&which)
+                            .map(|(_, surface)| crate::frame::Placed {
+                                client: held.client,
+                                surface: *surface,
+                                rect: screen.rect,
+                                above: true,
+                            });
+                    crate::frame::draw_locked(&mut target, output, &slots, covering, &full)?;
+                } else {
+                    crate::frame::draw(
+                        &mut target,
+                        output,
+                        &slots,
+                        &sources,
+                        &placed_layers,
+                        &full,
+                    )?;
+                }
             }
             drawn = drawn.saturating_add(1);
             // The slowest frame, which is the bound `docs/ROADMAP.md` asks
@@ -665,6 +751,8 @@ fn serve(
     rules: &mut crate::rules::Rules,
     clipboard: &mut crate::clipboard::Clipboard,
     shots: &mut Vec<Shot>,
+    lock: &mut Option<Lock>,
+    screens: &[Screen],
     report: &mut dyn FnMut(&str),
 ) -> Result<bool, String> {
     let Some(slot) = slots.get_mut(index) else {
@@ -694,6 +782,10 @@ fn serve(
     // there already are before the roundtrip it sent after binding comes
     // back.
     let mut bound_manager = false;
+    // The session lock's, for the same reason: the screens are the loop's.
+    let mut locking: Option<ObjectId> = None;
+    let mut covered: Vec<(ObjectId, ObjectId, usize)> = Vec::new();
+    let mut unlocking: Option<bool> = None;
     if consumed > 0 {
         let events = slot.client.take_events();
         let mut claimed = 0;
@@ -743,6 +835,15 @@ fn serve(
                     role: Role::ForeignToplevelManager,
                     ..
                 } => bound_manager = true,
+                // The session lock. Which screens it covers and when it is
+                // told so are the loop's, which has them.
+                Event::SessionLocked { lock } => locking = Some(lock),
+                Event::SessionLockSurfaceMade {
+                    lock_surface,
+                    surface,
+                    output,
+                } => covered.push((lock_surface, surface, output)),
+                Event::SessionUnlocked { asked } => unlocking = Some(asked),
                 // A screenshot: the screens are the loop's, not this
                 // client's, so both halves are carried out there.
                 Event::ScreencopyWanted {
@@ -851,6 +952,9 @@ fn serve(
             slot.client_mut().show_toplevels(&windows);
         }
     }
+    changed |= lock_changed(
+        lock, slots, index, screens, locking, &covered, unlocking, report,
+    );
     for (window, what) in asked {
         report(&format!(
             "hyprix: a bar asked for {what:?} of window {}, {}",
@@ -1262,6 +1366,27 @@ fn dispatch(
     !changes.is_empty()
 }
 
+/// The session lock, while a program holds it.
+///
+/// `ext-session-lock-v1`'s whole point is that the compositor stops drawing
+/// everything else the moment the lock is taken -- before the client has
+/// drawn anything -- so this exists from the `lock` request and not from
+/// the first frame.
+#[derive(Clone, Debug, Default)]
+struct Lock {
+    /// Which connection holds it.
+    client: usize,
+    /// The lock surface for each screen: its `ext_session_lock_surface_v1`
+    /// and the `wl_surface` under it.
+    surfaces: BTreeMap<usize, (ObjectId, ObjectId)>,
+    /// Whether the client has been told every screen is covered.
+    told: bool,
+    /// Whether the client that took it has gone. The screen stays locked:
+    /// a lock whose program died must not become an unlocked session, which
+    /// is the one thing the protocol is most explicit about.
+    orphaned: bool,
+}
+
 /// A screenshot, waiting for the part of the loop that has the screens.
 ///
 /// `zwlr_screencopy_v1` is answered in two steps -- the compositor says what
@@ -1457,6 +1582,7 @@ fn as_reported<'a>(
     devices: &'a Devices,
     layers: &'a [crate::frame::Placed],
     plugins: &'a crate::plugins::Plugins,
+    locked: bool,
 ) -> crate::control::Reported<'a> {
     let (x, y) = seat.pointer();
     crate::control::Reported {
@@ -1466,10 +1592,95 @@ fn as_reported<'a>(
         layers,
         plugins,
         cursor: (x as i32, y as i32),
-        // There is no session lock protocol here yet, so nothing can be
-        // locked.
-        locked: false,
+        locked,
     }
+}
+
+/// Carry out what one client's pass said about the session lock.
+///
+/// Gives whether the screen has to be drawn again, which is every one of
+/// them: taking the lock blanks the screen, covering a screen draws what
+/// the client put there, and unlocking gives the screen back to the windows.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the lock reaches the screens, the client and the log, and is three events in one               pass"
+)]
+fn lock_changed(
+    lock: &mut Option<Lock>,
+    slots: &mut [Slot],
+    index: usize,
+    screens: &[Screen],
+    locking: Option<ObjectId>,
+    covered: &[(ObjectId, ObjectId, usize)],
+    unlocking: Option<bool>,
+    report: &mut dyn FnMut(&str),
+) -> bool {
+    let mut changed = false;
+    if let Some(object) = locking {
+        if lock.is_some() {
+            // One lock at a time. A second program is told it will never be
+            // given the screen, which is what `finished` means and what it
+            // is to answer by giving up.
+            if let Some(slot) = slots.get_mut(index) {
+                slot.client_mut().session_lock_refused(object);
+            }
+            report("hyprix: a second program asked to lock the session and was refused");
+        } else {
+            *lock = Some(Lock {
+                client: index,
+                ..Lock::default()
+            });
+            report("hyprix: the session is locked");
+            // The windows stop being drawn now, not when the client has
+            // drawn something: that is what the protocol is for.
+            changed = true;
+        }
+    }
+    for (lock_surface, surface, output) in covered {
+        let Some(held) = lock.as_mut() else {
+            continue;
+        };
+        if held.client != index {
+            continue;
+        }
+        let _ = held.surfaces.insert(*output, (*lock_surface, *surface));
+        // The size it must draw at, which is the screen's own.
+        if let (Some(screen), Some(slot)) = (screens.get(*output), slots.get_mut(index)) {
+            let (width, height) = screen.backend.size();
+            slot.client_mut()
+                .configure_lock_surface(*lock_surface, (width, height));
+        }
+        changed = true;
+    }
+    // Told once, and only when every screen is covered: `locked` means the
+    // screen shows what the client drew and nothing of what was there.
+    if let Some(held) = lock.as_mut()
+        && !held.told
+        && held.client == index
+        && !screens.is_empty()
+        && (0..screens.len()).all(|screen| held.surfaces.contains_key(&screen))
+    {
+        held.told = true;
+        if let Some(slot) = slots.get_mut(index) {
+            slot.client_mut().session_is_locked();
+        }
+        report(&format!(
+            "hyprix: the lock covers {} screen(s)",
+            screens.len()
+        ));
+    }
+    if let Some(asked) = unlocking
+        && lock.as_ref().is_some_and(|held| held.client == index)
+    {
+        *lock = None;
+        changed = true;
+        report(if asked {
+            "hyprix: the session is unlocked"
+        } else {
+            "hyprix: the lock went"
+        });
+    }
+    changed
 }
 
 /// Where each slot will be once the ones that have gone are taken out.
@@ -1795,6 +2006,12 @@ fn globals(outputs: usize) -> Globals {
             &compositor_protocol::screencopy::ZWLR_SCREENCOPY_MANAGER_V1,
             3,
             Role::ScreencopyManager,
+        ),
+        // The screen lock, which `hyprlock` and `swaylock` speak.
+        (
+            &compositor_protocol::session_lock::EXT_SESSION_LOCK_MANAGER_V1,
+            1,
+            Role::SessionLockManager,
         ),
     ] {
         let _ = globals.add(interface, version, role);

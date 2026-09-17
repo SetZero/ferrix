@@ -4193,6 +4193,45 @@ grid, printed a row at a time.
 /bin/hyprctl` and requires the picture the terminal makes, pixel for pixel,
 on x86-64 and on AArch64.
 
+**Done — the screen lock (2026-09-17).** `ext-session-lock-v1`, which is
+what `hyprlock` speaks and `swaylock` speaks, and the one protocol whose
+whole point is that the compositor stops drawing everything else.
+
+A program binds the manager and asks for the lock; from that moment the
+compositor draws no window, no bar and nothing of what was on the screen a
+second ago -- *before* the program has drawn anything, which is the part the
+protocol is most particular about. It makes an `ext_session_lock_surface_v1`
+for each screen, is configured at that screen's exact size, and when every
+screen is covered it is told `locked`, which is the compositor's judgement
+and nobody else's. `unlock_and_destroy` gives the screen back.
+
+The keyboard goes with it. While the session is locked the only binds that
+fire are the ones written `bindl` -- which is what that flag has always been
+for, and what keeps the volume keys working on a locked screen -- and every
+other key goes to the lock's own surface and to no window. `hyprctl locked`
+says so.
+
+A lock whose program *dies* leaves the screen locked with nothing drawn on
+it. That is the one thing the protocol insists on, and the one thing a
+compositor gets wrong by doing nothing: an unlocked session is not what a
+crash is allowed to produce. A second program asking to lock while one is
+held is sent `finished` and refused.
+
+`compositor/lock` is `hyprlock` with the password taken out: it locks, draws
+a checkerboard over every screen, holds it, and unlocks. It asks for no
+password because Ferrix has no notion of one yet; the part that can be
+tested is the part that matters to the compositor.
+
+`cargo xtask test-compositor` boots a fifteenth time and takes three
+pictures: the windows, the lock over them, and the windows again. The middle
+one must be the picture `compositor/render` blesses for a locked screen and
+not one pixel of either window, and a keybind pressed while the screen was
+locked must have done nothing -- the window it would have closed is still
+there in the third. On x86-64 and on AArch64. A host test compares a
+*screenshot* of the locked screen against the same image, which is the
+compositor's own answer to a program rather than what QEMU read off the
+scanout.
+
 **Done — who draws the title bar (2026-09-17).**
 `zxdg_decoration_manager_v1` was vendored, generated and checked against
 libwayland, and never offered: the compositor's list of globals did not have
@@ -4695,8 +4734,7 @@ and Venus on ferrousli, or a Rust path over Vulkan -- that does not exist on
 Ferrix yet and is a stage's work in itself.
 
 Of the protocols and keywords a Hyprland setup uses, what is left is:
-`layerrule`, the session lock (`ext-session-lock-v1`, which is what
-`hyprlock` speaks), `zwp_virtual_keyboard` and the input-method protocols an
+`layerrule`, `zwp_virtual_keyboard` and the input-method protocols an
 on-screen keyboard needs, `zwp_pointer-constraints` and
 `relative-pointer` (a game that grabs the pointer), `viewporter` and
 `presentation-time`, drag-and-drop -- the other half of the four interfaces

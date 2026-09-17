@@ -96,6 +96,22 @@ impl Focus {
             .focused_window()
             .and_then(|window| sources.get(&window))
             .map(|source| (source.client, source.surface));
+        self.follow(wanted, slots, held, modifiers);
+    }
+
+    /// Give the keyboard to `wanted`, or to nothing.
+    ///
+    /// The layout says what that is in the ordinary case; a locked session
+    /// says the lock's own surface, and a locked session whose program has
+    /// gone says nothing at all -- which is a screen where no key reaches
+    /// any client, and is what a lock is for.
+    pub fn follow(
+        &mut self,
+        wanted: Option<(usize, ObjectId)>,
+        slots: &mut [Slot],
+        held: &[u16],
+        modifiers: compositor_xkb::Modifiers,
+    ) {
         if wanted == self.keyboard {
             return;
         }

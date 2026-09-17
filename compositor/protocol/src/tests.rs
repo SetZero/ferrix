@@ -11,7 +11,10 @@ use std::collections::BTreeMap;
 
 use compositor_wire::{ArgType, Interface};
 
-use crate::{GLOBALS, core, foreign_toplevel, layer_shell, screencopy, xdg_decoration, xdg_shell};
+use crate::{
+    GLOBALS, core, foreign_toplevel, layer_shell, screencopy, session_lock, xdg_decoration,
+    xdg_shell,
+};
 
 /// The probe's output: one line per message, and one more per unnamed
 /// `new_id`.
@@ -55,6 +58,9 @@ fn tables() -> Vec<&'static Interface> {
         &foreign_toplevel::ZWLR_FOREIGN_TOPLEVEL_HANDLE_V1,
         &screencopy::ZWLR_SCREENCOPY_MANAGER_V1,
         &screencopy::ZWLR_SCREENCOPY_FRAME_V1,
+        &session_lock::EXT_SESSION_LOCK_MANAGER_V1,
+        &session_lock::EXT_SESSION_LOCK_V1,
+        &session_lock::EXT_SESSION_LOCK_SURFACE_V1,
     ]
 }
 
@@ -360,6 +366,7 @@ fn every_global_is_bindable_and_none_is_the_display_or_the_registry() {
     assert!(names.contains(&"zwlr_layer_shell_v1"));
     assert!(names.contains(&"zwlr_foreign_toplevel_manager_v1"));
     assert!(names.contains(&"zwlr_screencopy_manager_v1"));
+    assert!(names.contains(&"ext_session_lock_manager_v1"));
     let mut sorted = names.clone();
     sorted.sort_unstable();
     sorted.dedup();

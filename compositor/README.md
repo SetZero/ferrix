@@ -169,6 +169,12 @@ names the part of Hyprland or hyprlang it follows.
   compared through a serial port, and comparing it against the image
   `render` blesses is the strongest picture check in the tree: it is what
   the compositor handed a *program*, not what QEMU read off the scanout.
+* **`lock`** is `hyprlock` with the password taken out: it takes the screen
+  through `ext-session-lock-v1`, draws a checkerboard over every screen,
+  holds it and gives it back. It asks for no password because Ferrix has no
+  notion of one; what it tests is the compositor's half -- that the windows
+  stop being drawn the moment the lock is taken, that a keybind that is not
+  `bindl` stops firing, and that the screen comes back.
 * **`ctl`** is `hyprctl`, over `ipc`'s request shape; **`plug`** is the
   example plugin, a program the compositor starts and talks to rather than a
   shared object it loads; **`anim`** is Hyprland's bezier curves and its

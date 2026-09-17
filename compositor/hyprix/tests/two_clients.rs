@@ -1408,3 +1408,82 @@ fn the_window_left_after_a_close_is_drawn_from_its_own_buffer() {
          said {line}"
     );
 }
+
+/// A locked screen shows the lock and nothing of what was under it.
+///
+/// `ext-session-lock-v1` is the one protocol whose whole point is that the
+/// compositor stops drawing everything else, so the check is a picture: two
+/// windows are tiled, a program takes the lock and draws a checkerboard over
+/// the whole screen, and a screenshot of the *locked* screen must be the
+/// image `compositor/render` blesses for one -- not the windows, and not a
+/// strip of them at any edge.
+#[test]
+fn a_locked_screen_shows_the_lock_and_none_of_the_windows() {
+    let work = workspace("locked");
+    let socket = work.join("wayland");
+
+    let options = Options {
+        display: socket.to_string_lossy().into_owned(),
+        headless: Some((WIDTH, HEIGHT)),
+        deadline: Some(14000),
+        ..Options::default()
+    };
+
+    let for_clients = socket.clone();
+    let clients = std::thread::spawn(move || {
+        for _ in 0..400 {
+            if for_clients.exists() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let mut windows = Vec::new();
+        for (pattern, title) in [(Pattern::Checkerboard, "one"), (Pattern::Gradient, "two")] {
+            let path = for_clients.clone();
+            windows.push(std::thread::spawn(move || {
+                connect(&path, pattern, title, Shape::Window)
+            }));
+            std::thread::sleep(Duration::from_millis(250));
+        }
+        // The lock is taken in a thread of its own and held, so that the
+        // screenshot below is taken while it is up.
+        let locking = for_clients.clone();
+        let lock =
+            std::thread::spawn(move || compositor_lock::lock(&locking, Duration::from_secs(4)));
+        std::thread::sleep(Duration::from_millis(2500));
+        let taken = compositor_shot::take(&for_clients, 0);
+        let locked = lock.join().unwrap_or_else(|_| Err("panicked".to_owned()));
+        for window in windows {
+            let _ = window.join();
+        }
+        (locked, taken)
+    });
+
+    let line = hyprix::run(&options).expect("the compositor ran");
+    let (locked, taken) = clients.join().expect("the clients finished");
+    let locked = locked.unwrap_or_else(|why| panic!("locking: {why}; the compositor said {line}"));
+    assert_eq!(
+        locked.screens, 1,
+        "the lock covered {} screens",
+        locked.screens
+    );
+    assert!(
+        locked.told,
+        "the compositor never said the screen was covered"
+    );
+
+    let taken = taken.unwrap_or_else(|why| panic!("the screenshot: {why}"));
+    let want = image(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("../render/tests/data/locked-screen.xrle"),
+    );
+    let differing = taken
+        .pixels
+        .chunks_exact(3)
+        .zip(want.chunks_exact(3))
+        .filter(|(shot, blessed)| shot != blessed)
+        .count();
+    assert_eq!(
+        differing, 0,
+        "{differing} pixels of the locked screen are not the lock's; the compositor said {line}"
+    );
+}

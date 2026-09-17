@@ -104,6 +104,7 @@ const TERM_PATH: &str = "bin/term";
 const CLIP_PATH: &str = "bin/clip";
 const LSWT_PATH: &str = "bin/lswt";
 const SHOT_PATH: &str = "bin/shot";
+const LOCK_PATH: &str = "bin/lock";
 const CONFIG_PATH: &str = "etc/hyprland.conf";
 
 /// The instance the control socket is under, which `hyprctl` finds by
@@ -330,6 +331,50 @@ windowrule = rounding 12, match:title ^(one)$
 windowrule = no_shadow, match:title ^(one)$
 exec-once = /bin/pattern checkerboard one
 exec-once = /bin/pattern gradient two
+";
+
+/// The three pictures the lock boot requires, and the two keys between them.
+///
+/// The windows, then the lock over them, then the windows again: what
+/// `ext-session-lock-v1` is for is that the middle one shows *nothing* of
+/// the first, and what says the lock let go is that the third is the first
+/// again.
+const LOCK_EXPECTED: [(&str, &str); 3] = [
+    (
+        "tiled",
+        "compositor/render/tests/data/dwindle-two-clients.xrle",
+    ),
+    (
+        "the lock's own surface over the whole screen, and no window on it",
+        "compositor/render/tests/data/locked-screen.xrle",
+    ),
+    (
+        "the windows again, once the lock let go",
+        "compositor/render/tests/data/dwindle-two-clients.xrle",
+    ),
+];
+
+/// The keys the lock boot presses. The second is the one that must do
+/// nothing: `K` is bound, and a bind that is not `bindl` does not fire while
+/// the session is locked.
+///
+/// No modifier, for the reason `TASKBAR_BINDS` gives.
+const LOCK_BINDS: [(&str, &[&str]); 2] = [
+    ("L, which locks the screen for four seconds", &["l"]),
+    (
+        "K, a bind that must not fire while the screen is locked",
+        &["k"],
+    ),
+];
+
+/// The configuration the fifteenth boot is given: two windows and a key
+/// that locks the screen.
+const LOCK_CONFIG: &str = "\
+# Carried into the initramfs by `cargo xtask test-compositor`.
+exec-once = /bin/pattern checkerboard one
+exec-once = /bin/pattern gradient two
+bind = , L, exec, /bin/lock 4
+bind = , K, exec, /bin/lswt close one
 ";
 
 /// The two pictures the screenshot boot requires, and the key between them.
@@ -613,6 +658,8 @@ struct Programs {
     lswt: PathBuf,
     /// `shot`, which takes a screenshot as `grim` does.
     shot: PathBuf,
+    /// `lock`, which locks the screen as `hyprlock` does.
+    lock: PathBuf,
 }
 
 impl Programs {
@@ -627,11 +674,12 @@ impl Programs {
             clip: build(arch, "compositor-clip", "clip")?,
             lswt: build(arch, "compositor-lswt", "lswt")?,
             shot: build(arch, "compositor-shot", "shot")?,
+            lock: build(arch, "compositor-lock", "lock")?,
         })
     }
 
     /// The ones the initramfs carries, each with the path it goes at.
-    fn carried(&self) -> [(&'static str, &Path); 7] {
+    fn carried(&self) -> [(&'static str, &Path); 8] {
         [
             (CLIENT_PATH, self.client.as_path()),
             (CTL_PATH, self.ctl.as_path()),
@@ -640,6 +688,7 @@ impl Programs {
             (CLIP_PATH, self.clip.as_path()),
             (LSWT_PATH, self.lswt.as_path()),
             (SHOT_PATH, self.shot.as_path()),
+            (LOCK_PATH, self.lock.as_path()),
         ]
     }
 }
@@ -1159,7 +1208,7 @@ fn said_on_its_own(line: &str) -> &str {
 /// each takes minutes under emulation and there are fourteen of them, so a
 /// change to one is otherwise an hour a try.
 type Boot = fn(Arch, &Programs, &Args) -> Result<()>;
-const BOOTS: [(&str, Boot); 14] = [
+const BOOTS: [(&str, Boot); 15] = [
     ("dispatchers", test_dispatchers),
     ("bar", test_bar),
     ("decorations", test_decorations),
@@ -1174,6 +1223,7 @@ const BOOTS: [(&str, Boot); 14] = [
     ("submap", test_submap),
     ("taskbar", test_taskbar),
     ("screenshot", test_screenshot),
+    ("lock", test_lock),
 ];
 
 /// Whether `--boot` asked for this one.
@@ -1351,6 +1401,82 @@ fn one_picture(
     println!(
         "  {arch}: {what}, every one of {} pixels",
         screen.width * screen.height
+    );
+    Ok(())
+}
+
+/// A fifteenth boot: the screen lock, through `ext-session-lock-v1`.
+///
+/// Three pictures: the windows, the lock over them, and the windows again.
+/// The middle one is the point -- while the lock is held the compositor
+/// draws its surface and *nothing else*, so the screen must be the picture
+/// `compositor/render` blesses for a locked screen and not one pixel of
+/// either window.
+///
+/// The second key is the other half. `K` closes a window, and it is pressed
+/// while the screen is locked: a bind that is not written `bindl` does not
+/// fire then, so both windows have to still be there when the lock lets go.
+/// A lock that showed a picture and still let a keybind through would not
+/// be one.
+fn test_lock(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
+    let (screens, said) = boot_and_dump(
+        arch,
+        programs,
+        LOCK_CONFIG,
+        &Wanted {
+            states: &LOCK_EXPECTED,
+            others: &[],
+            moving: None,
+            awaiting: &["lock: locked"],
+        },
+        &LOCK_BINDS,
+        args,
+    )?;
+    if screens.len() != LOCK_EXPECTED.len() {
+        return Err(Error::new(format!(
+            "{arch}: {} of {} pictures were taken",
+            screens.len(),
+            LOCK_EXPECTED.len()
+        )));
+    }
+    // The locked screen and the tiled one must be two pictures, which a
+    // compositor that ignored the lock would fail here rather than at the
+    // comparison above.
+    if let (Some(before), Some(locked)) = (screens.first(), screens.get(1))
+        && before.pixels == locked.pixels
+    {
+        return Err(Error::new(format!(
+            "{arch}: the locked screen is the picture the windows made"
+        )));
+    }
+    let has = |wanted: &str| said.iter().any(|line| line.contains(wanted));
+    for wanted in [
+        "hyprix: the session is locked",
+        "hyprix: the lock covers 1 screen(s)",
+        "hyprix: the session is unlocked",
+        "lock: locked 1 screen(s) and unlocked again",
+    ] {
+        if !has(wanted) {
+            return Err(Error::new(format!(
+                "{arch}: the lock boot did not say `{wanted}`"
+            )));
+        }
+    }
+    // And the bind pressed while the screen was locked did not fire: the
+    // window it would have closed is still drawn in the third picture,
+    // which is the tiled pair.
+    if has("lswt: closed") {
+        return Err(Error::new(format!(
+            "{arch}: a bind fired while the session was locked"
+        )));
+    }
+    println!(
+        "  {arch}: a program locked the screen and every one of its {} pixels was the lock's own \
+         picture, a keybind pressed while it was locked did nothing, and the windows came back \
+         when it let go",
+        screens
+            .first()
+            .map_or(0, |screen| screen.width * screen.height)
     );
     Ok(())
 }

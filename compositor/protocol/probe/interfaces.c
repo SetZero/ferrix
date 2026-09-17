@@ -31,6 +31,7 @@
 #include "wlr-layer-shell-client-protocol.h"
 #include "wlr-foreign-toplevel-management-client-protocol.h"
 #include "wlr-screencopy-client-protocol.h"
+#include "ext-session-lock-client-protocol.h"
 
 static void print_messages(const struct wl_interface *interface,
 			   const char *kind, const struct wl_message *messages,
@@ -113,6 +114,10 @@ int main(void)
 		/* wlr-screencopy-unstable-v1.xml */
 		&zwlr_screencopy_manager_v1_interface,
 		&zwlr_screencopy_frame_v1_interface,
+		/* ext-session-lock-v1.xml */
+		&ext_session_lock_manager_v1_interface,
+		&ext_session_lock_v1_interface,
+		&ext_session_lock_surface_v1_interface,
 	};
 
 	printf("# libwayland %s\n", WAYLAND_VERSION);

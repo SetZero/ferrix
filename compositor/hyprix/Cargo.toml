@@ -47,6 +47,8 @@ compositor-clip = { path = "../clip" }
 compositor-lswt = { path = "../lswt" }
 # And a screenshot program, for the screencopy test.
 compositor-shot = { path = "../shot" }
+# And a screen lock, for the session-lock test.
+compositor-lock = { path = "../lock" }
 
 [lints]
 workspace = true

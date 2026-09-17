@@ -13,7 +13,7 @@
 resolver = "3"
 members = [
     "anim", "blank", "clip", "config", "ctl", "drm", "evecho", "hyprix", "ipc",
-    "layout", "lswt", "pattern", "plug", "protocol", "regex", "render",
+    "layout", "lock", "lswt", "pattern", "plug", "protocol", "regex", "render",
     "server", "shm", "shot", "socket", "term", "wire", "xkb",
 ]
 

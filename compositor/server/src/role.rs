@@ -84,6 +84,13 @@ pub enum Role {
     ScreencopyManager,
     /// `zwlr_screencopy_frame_v1`: one screenshot being taken.
     ScreencopyFrame,
+    /// `ext_session_lock_manager_v1`: a program that can lock the screen.
+    SessionLockManager,
+    /// `ext_session_lock_v1`: the lock itself, while it is held.
+    SessionLock,
+    /// `ext_session_lock_surface_v1`: what is shown on one screen while the
+    /// session is locked.
+    SessionLockSurface,
 }
 
 impl Role {

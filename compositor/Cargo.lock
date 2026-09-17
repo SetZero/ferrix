@@ -98,6 +98,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "compositor-lock"
+version = "0.1.0"
+dependencies = [
+ "compositor-evecho",
+ "compositor-protocol",
+ "compositor-render",
+ "compositor-shm",
+ "compositor-socket",
+ "compositor-wire",
+]
+
+[[package]]
 name = "compositor-lswt"
 version = "0.1.0"
 dependencies = [
@@ -226,6 +238,7 @@ dependencies = [
  "compositor-evecho",
  "compositor-ipc",
  "compositor-layout",
+ "compositor-lock",
  "compositor-lswt",
  "compositor-pattern",
  "compositor-protocol",

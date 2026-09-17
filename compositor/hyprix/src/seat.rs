@@ -152,6 +152,8 @@ struct Bound {
     non_consuming: bool,
     /// `i`: fire whatever modifiers are held.
     ignore_mods: bool,
+    /// `l`: fires while the session is locked.
+    while_locked: bool,
     /// The submap it belongs to, `None` for the global map.
     submap: Option<String>,
     /// `u`: fires whichever map is in force.
@@ -186,6 +188,8 @@ pub struct Seat {
     screen: (f64, f64),
     /// The submap in force, `None` for the global map.
     submap: Option<String>,
+    /// Whether the session is locked, which is what `bindl` is for.
+    locked: bool,
     /// Every submap a bind was written in, whether or not its key resolved.
     submaps: Vec<String>,
     /// Binds that have not been resolved, with the reason, for the log.
@@ -211,6 +215,7 @@ impl Seat {
             pointer: (f64::from(width) / 2.0, f64::from(height) / 2.0),
             screen: (f64::from(width), f64::from(height)),
             submap: None,
+            locked: false,
             submaps: Vec::new(),
             unresolved: Vec::new(),
             eaten: Vec::new(),
@@ -246,6 +251,7 @@ impl Seat {
                 repeat: bind.flags.repeat,
                 non_consuming: bind.flags.non_consuming,
                 ignore_mods: bind.flags.ignore_mods,
+                while_locked: bind.flags.locked,
                 submap: bind.submap.clone(),
                 universal: bind.flags.submap_universal,
                 dispatcher: bind.dispatcher.clone(),
@@ -258,6 +264,16 @@ impl Seat {
     #[must_use]
     pub fn binds(&self) -> (usize, &[String]) {
         (self.binds.len(), &self.unresolved)
+    }
+
+    /// Say whether the session is locked.
+    ///
+    /// A locked session takes every bind out of force but the ones written
+    /// `bindl`, which is what that flag is for: the volume keys and the
+    /// brightness keys keep working on a locked screen and nothing else
+    /// does.
+    pub const fn set_locked(&mut self, locked: bool) {
+        self.locked = locked;
     }
 
     /// The submap in force, empty for the global map.
@@ -401,6 +417,9 @@ impl Seat {
 
     /// Whether a bind is in the map that is in force.
     fn in_force(&self, bind: &Bound) -> bool {
+        if self.locked && !bind.while_locked {
+            return false;
+        }
         bind.universal || bind.submap == self.submap
     }
 

@@ -28,6 +28,9 @@
 //!   puts the bar on the screen and this tells it what to draw.
 //! * **`screencopy`** is `zwlr_screencopy_v1`: a screenshot. `grim`,
 //!   `hyprshot` and every screen recorder on wlroots go through it.
+//! * **`session_lock`** is `ext-session-lock-v1`: the screen lock.
+//!   `hyprlock` and `swaylock` speak it, and it is the one protocol whose
+//!   whole point is that the compositor stops drawing everything else.
 //!
 //! The list of protocols is `FILES` in the generator. Adding one is vendoring
 //! its XML, adding a line there and a module to `generated/mod.rs`, and
@@ -38,7 +41,9 @@
 mod generated;
 
 pub use compositor_wire::Interface;
-pub use generated::{core, foreign_toplevel, layer_shell, screencopy, xdg_decoration, xdg_shell};
+pub use generated::{
+    core, foreign_toplevel, layer_shell, screencopy, session_lock, xdg_decoration, xdg_shell,
+};
 
 /// Every interface the compositor offers as a global, with the version it
 /// offers, in the order `wl_registry.global` announces them.
@@ -57,6 +62,7 @@ pub const GLOBALS: &[&Interface] = &[
     &layer_shell::ZWLR_LAYER_SHELL_V1,
     &foreign_toplevel::ZWLR_FOREIGN_TOPLEVEL_MANAGER_V1,
     &screencopy::ZWLR_SCREENCOPY_MANAGER_V1,
+    &session_lock::EXT_SESSION_LOCK_MANAGER_V1,
 ];
 
 #[cfg(test)]

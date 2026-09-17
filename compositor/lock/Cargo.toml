@@ -1,0 +1,27 @@
+[package]
+name = "compositor-lock"
+description = "Lock the screen through ext-session-lock-v1, as hyprlock does"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "lock"
+path = "src/main.rs"
+
+[lib]
+name = "compositor_lock"
+path = "src/lib.rs"
+
+[dependencies]
+compositor-evecho = { path = "../evecho" }
+compositor-protocol = { path = "../protocol" }
+compositor-render = { path = "../render" }
+compositor-shm = { path = "../shm" }
+compositor-socket = { path = "../socket" }
+compositor-wire = { path = "../wire" }
+
+[lints]
+workspace = true
