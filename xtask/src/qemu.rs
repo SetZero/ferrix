@@ -386,10 +386,16 @@ pub(crate) fn test_shell(arch: Arch, image: &Path, kernel: &Path, args: &Args) -
 pub(crate) fn test_vfs(arch: Arch, image: &Path, kernel: &Path, args: &Args) -> Result<()> {
     let commands = crate::vfs::COMMANDS;
     let applets = crate::vfs::APPLETS;
+    let utilities: &[crate::vfs::Command] = if crate::vfs::carries_utilities(arch) {
+        crate::vfs::UTILITIES
+    } else {
+        &[]
+    };
     println!(
-        "  {arch}: running {} programs and {} applets under QEMU (timeout {}s)",
+        "  {arch}: running {} programs, {} applets and {} uutils commands under QEMU (timeout {}s)",
         commands.len(),
         applets.len(),
+        utilities.len(),
         args.timeout
     );
     let watched = watch(arch, image, kernel, args, crate::vfs::DONE)?;
@@ -424,6 +430,12 @@ pub(crate) fn test_vfs(arch: Arch, image: &Path, kernel: &Path, args: &Args) -> 
             commands.len(),
             "applets",
             "stage 8's applets all passed",
+        ),
+        (
+            utilities,
+            commands.len() + applets.len(),
+            "uutils commands",
+            "uutils/coreutils ran on Ferrix",
         ),
     ];
     let mut failures = Vec::new();

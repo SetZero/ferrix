@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use compositor_layout::Rect;
 use compositor_layout::{MonitorLayout, WindowId};
 use compositor_render::{
-    Canvas, Damage, Format, LayerFrame, Style, Surface, Target, render_with_layers,
+    Backdrop, Canvas, Damage, Format, LayerFrame, Style, Surface, Target, render_onto,
 };
 use compositor_server::Client;
 use compositor_wire::ObjectId;
@@ -21,6 +21,10 @@ use crate::state::Slot;
 pub struct Output<'a> {
     /// The canvas the frame is composed on.
     pub canvas: &'a mut Canvas,
+    /// What is behind the windows and the blur of it, kept from frame to
+    /// frame so that a tiled window's blur is a copy: `crate::damage` says
+    /// what that does to a frame's damage.
+    pub backdrop: &'a mut Backdrop,
     /// The screen it is shown on.
     pub backend: &'a mut dyn Backend,
     /// Where the monitor is in the global space.
@@ -299,6 +303,7 @@ fn draw_windows(
 ) -> Result<(), String> {
     let Output {
         canvas,
+        backdrop,
         backend,
         origin,
         style,
@@ -353,7 +358,16 @@ fn draw_windows(
         base: style,
         windows: styles,
     };
-    let _ = render_with_layers(canvas, output, origin, &styles, &surfaces, &drawn, damage);
+    let _ = render_onto(
+        canvas,
+        Some(backdrop),
+        output,
+        origin,
+        &styles,
+        &surfaces,
+        &drawn,
+        damage,
+    );
 
     // The drag icon under the pointer and over everything else: what a
     // drag looks like is a thing following the pointer, and a compositor

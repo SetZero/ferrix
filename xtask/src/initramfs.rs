@@ -220,6 +220,46 @@ pub(crate) const APPLETS: &[&str] = &[
     "whoami", "whois", "xargs", "xxd", "xz", "xzcat", "yes", "zcat", "zcip",
 ];
 
+/// Where uutils/coreutils goes: one multicall binary, as busybox is.
+pub(crate) const UUTILS_PATH: &str = "bin/coreutils";
+
+/// The directory its utility names are linked in.
+///
+/// `/usr/bin`, not `/bin`, because `/bin` is busybox's: almost every name
+/// below is one busybox also answers to, and a link can only point at one of
+/// them. Which of the two owns `/bin` is the next slice's question
+/// (`docs/UUTILS.md` S4), and until it is answered both are in the image and
+/// reachable, uutils by its own path. `PATH` is `/bin` (`kernel/src/init.rs`),
+/// so nothing finds these by name yet, which is the point: no gate changes
+/// what it runs.
+pub(crate) const UUTILS_DIR: &str = "usr/bin";
+
+/// Every utility uutils/coreutils 0.9.0 provides, each linked in
+/// [`UUTILS_DIR`] beside the program: `coreutils --list`, as the binary this
+/// tree pins prints it.
+///
+/// Written out rather than asked of the program, for the reason [`APPLETS`]
+/// is: the program is built for the target and this runs on the host, which
+/// may be Windows. A link to a utility a given binary lacks costs one
+/// directory entry.
+#[rustfmt::skip]
+pub(crate) const UTILITIES: &[&str] = &[
+    "[", "arch", "b2sum", "base32", "base64", "basename", "basenc", "cat",
+    "chgrp", "chmod", "chown", "chroot", "cksum", "comm", "cp", "csplit",
+    "cut", "date", "dd", "df", "dir", "dircolors", "dirname", "du", "echo",
+    "env", "expand", "expr", "factor", "false", "fmt", "fold", "groups",
+    "head", "hostid", "hostname", "id", "install", "join", "kill", "link",
+    "ln", "logname", "ls", "md5sum", "mkdir", "mkfifo", "mknod", "mktemp",
+    "more", "mv", "nice", "nl", "nohup", "nproc", "numfmt", "od", "paste",
+    "pathchk", "pinky", "pr", "printenv", "printf", "ptx", "pwd",
+    "readlink", "realpath", "rm", "rmdir", "seq", "sha1sum", "sha224sum",
+    "sha256sum", "sha384sum", "sha512sum", "shred", "shuf", "sleep", "sort",
+    "split", "stat", "stty", "sum", "sync", "tac", "tail", "tee", "test",
+    "timeout", "touch", "tr", "true", "truncate", "tsort", "tty", "uname",
+    "unexpand", "uniq", "unlink", "uptime", "users", "vdir", "wc", "who",
+    "whoami", "yes",
+];
+
 /// Where zinc, the zsh-compatible shell, goes beside a program.
 pub(crate) const ZINC_PATH: &str = "bin/zinc";
 
@@ -292,13 +332,33 @@ pub(crate) fn build(
                 .map_err(|error| Error::new(format!("reading {}: {error}", path.display())))
         })
         .transpose()?;
-    build_with_shell(program.as_deref(), natives, zinc, ports)
+    build_with_shell(program.as_deref(), natives, zinc, None, ports)
+}
+
+/// [`build`], with uutils/coreutils carried too.
+///
+/// A separate entry point rather than a fifth argument to [`build`]: most
+/// callers carry no program at all, and would all have to say `None` twice.
+pub(crate) fn build_with_utilities(
+    program: Option<&Path>,
+    natives: &[native::Built],
+    zinc: Option<&[u8]>,
+    uutils: Option<&[u8]>,
+    ports: &[ports::File],
+) -> Result<Vec<u8>> {
+    let program = program
+        .map(|path| {
+            std::fs::read(path)
+                .map_err(|error| Error::new(format!("reading {}: {error}", path.display())))
+        })
+        .transpose()?;
+    build_with_shell(program.as_deref(), natives, zinc, uutils, ports)
 }
 
 /// [`build`], with the program's bytes rather than its path and no zinc.
 #[cfg(test)]
 fn build_with(program: Option<&[u8]>, natives: &[native::Built]) -> Result<Vec<u8>> {
-    build_with_shell(program, natives, None, &[])
+    build_with_shell(program, natives, None, None, &[])
 }
 
 /// [`build`], with the program's bytes rather than its path.
@@ -306,6 +366,7 @@ fn build_with_shell(
     program: Option<&[u8]>,
     natives: &[native::Built],
     zinc: Option<&[u8]>,
+    uutils: Option<&[u8]>,
     ports: &[ports::File],
 ) -> Result<Vec<u8>> {
     let mut archive = Newc::new();
@@ -381,6 +442,23 @@ fn build_with_shell(
         if let Some(zinc) = zinc {
             archive.file(ZINC_PATH, 0o755, zinc)?;
             archive.symlink("bin/zsh", "zinc")?;
+        }
+        // uutils/coreutils, beside a program for the same reason zinc is: the
+        // boot check carries none and its archive stays the bytes it was. The
+        // links are absolute, unlike busybox's, because they point out of the
+        // directory they are in.
+        if let Some(uutils) = uutils {
+            archive.file(UUTILS_PATH, 0o755, uutils)?;
+            // `usr` itself is made above, with `usr/share/udhcpc`; a second
+            // entry for it would be a second `mkdir` of a directory that is
+            // already there.
+            archive.directory(UUTILS_DIR, 0o755)?;
+            for utility in UTILITIES {
+                archive.symlink(
+                    &format!("{UUTILS_DIR}/{utility}"),
+                    &format!("/{UUTILS_PATH}"),
+                )?;
+            }
         }
     }
     // The files a caller asked to carry: the ports, and whatever else a test
@@ -495,8 +573,8 @@ mod tests {
 
     #[test]
     fn zinc_goes_in_bin_as_zinc_and_zsh_only_beside_a_program() {
-        let with = build_with_shell(Some(b"program"), &[], Some(b"shell"), &[]).unwrap();
-        let without = build_with_shell(None, &[], Some(b"shell"), &[]).unwrap();
+        let with = build_with_shell(Some(b"program"), &[], Some(b"shell"), None, &[]).unwrap();
+        let without = build_with_shell(None, &[], Some(b"shell"), None, &[]).unwrap();
         assert!(
             with.windows(ZINC_PATH.len())
                 .any(|w| w == ZINC_PATH.as_bytes()),
@@ -512,6 +590,56 @@ mod tests {
                 .any(|w| w == ZINC_PATH.as_bytes()),
             "without a program the archive is the one the boot check reads"
         );
+    }
+
+    #[test]
+    fn uutils_goes_in_bin_with_its_names_linked_in_usr_bin() {
+        let with = build_with_shell(Some(b"program"), &[], None, Some(b"utilities"), &[]).unwrap();
+        let archive = ferrix_cpio::Archive::new(&with);
+        let found = archive.find(UUTILS_PATH).unwrap().unwrap();
+        assert_eq!(found.data, b"utilities");
+        assert_eq!(found.mode & 0o777, 0o755, "it has to be runnable");
+
+        // Every name is a link to it, and an absolute one: the links are not
+        // in the directory the program is in, as busybox's are.
+        for utility in ["ls", "cat", "uname", "wc"] {
+            let link = archive
+                .find(&format!("{UUTILS_DIR}/{utility}"))
+                .unwrap()
+                .unwrap_or_else(|| panic!("{utility} is linked"));
+            assert_eq!(
+                link.symlink_target(),
+                Some("/bin/coreutils"),
+                "{UUTILS_DIR}/{utility}"
+            );
+        }
+
+        // /bin stays busybox's: the names are in both places, and the link in
+        // /bin is the one PATH finds. Changing that is S4's, not this.
+        assert_eq!(
+            archive.find("bin/ls").unwrap().unwrap().symlink_target(),
+            Some("busybox")
+        );
+
+        // And without it the archive is the one it was, which is what keeps
+        // the boot check's bytes the same.
+        let without = build_with_shell(Some(b"program"), &[], None, None, &[]).unwrap();
+        assert!(
+            ferrix_cpio::Archive::new(&without)
+                .find(UUTILS_PATH)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn every_utility_name_is_a_name_and_they_are_unique() {
+        let mut seen = std::collections::BTreeSet::new();
+        for utility in UTILITIES {
+            assert!(seen.insert(utility), "{utility} is listed twice");
+            assert!(!utility.is_empty() && !utility.contains('/'), "{utility}");
+        }
+        assert_eq!(seen.len(), 106, "coreutils 0.9.0 provides 106 utilities");
     }
 
     #[test]
@@ -533,7 +661,7 @@ mod tests {
                 content: ports::Content::Link("../usr/bin/git".to_owned()),
             },
         ];
-        let bytes = build_with_shell(Some(b"program"), &[], None, &files).unwrap();
+        let bytes = build_with_shell(Some(b"program"), &[], None, None, &files).unwrap();
         let archive = ferrix_cpio::Archive::new(&bytes);
         assert_eq!(archive.find("bin/curl").unwrap().unwrap().data, b"curl");
         let bundle = archive
@@ -557,7 +685,7 @@ mod tests {
         // all, so what kept its bytes the same was the empty list and never
         // the branch. `cargo xtask test-compositor` boots the compositor as
         // init with no busybox, and its clients have to be somewhere.
-        let without = build_with_shell(None, &[], None, &files).unwrap();
+        let without = build_with_shell(None, &[], None, None, &files).unwrap();
         assert_eq!(
             ferrix_cpio::Archive::new(&without)
                 .find("bin/curl")

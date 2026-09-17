@@ -79,7 +79,7 @@ pub extern "C" fn __signbitf(x: f32) -> c_int {
 
 /// The class of the x87 `long double` with this significand, whose bit 63 is
 /// the integer bit, and this sign and biased exponent.
-const fn classify_x87(mantissa: u64, sign_exponent: u16) -> c_int {
+pub(crate) const fn classify_x87(mantissa: u64, sign_exponent: u16) -> c_int {
     let exponent = sign_exponent & 0x7fff;
     let integer_bit = mantissa >> 63 != 0;
     if exponent == 0 && !integer_bit {

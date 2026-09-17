@@ -4357,6 +4357,26 @@ nothing further than the kernel's reach -- which turned out to be twice what
 was being read, so the outermost ring of every blurred window was a blur of
 the region's clamped edge rather than of the frame.
 
+That was not enough to make a blurred desktop usable, and two more things
+were (2026-09-17). A blur of the frame as it stands cannot be redrawn a strip
+at a time -- outside the damage the canvas holds the window drawn over its
+own blur -- so every pointer motion over a translucent window, and every
+letter typed into one, redrew and blurred the whole of it: 120 ms a frame
+at 1920x1080, in a loop that reads its input once a frame. And `foot`
+commits `ARGB8888` whatever its opacity, so that was every terminal. A tiled
+window now takes its blur from `compositor_render::Backdrop`, which is
+Hyprland's `m_blurFB` (`decoration:blur:new_optimizations`, on by default):
+what is behind the windows and the blur of it, kept from frame to frame and
+blurred again only where a wallpaper or a bar under the windows changed.
+The other was a copy nobody had timed: a client's padded buffer was gathered
+into tight rows *whole* for every blend, three milliseconds for a
+full-screen terminal's one changed cell. The same frame is 0.06 ms now, and
+the compositor's share of a core with a bar and a terminal went from 62% to
+6%. Twelve expected images moved, all of them darker inside a translucent
+tiled window and nowhere else: the blur they held had the window's own
+shadow and, under a rounded window, its border's fill in it, and Hyprland's
+has neither. `docs/COMPOSITOR-DAMAGE-HANDOFF.md` has the measurements.
+
 **Done — the rest of Hyprland's dispatcher table (2026-09-17).**
 Twenty-seven names in Hyprland's `m_dispMap` had no answer here; every one
 of them does now. The split is by what they touch. `compositor/layout`

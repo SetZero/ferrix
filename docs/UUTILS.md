@@ -141,6 +141,10 @@ duplicate ones**, and every part of the dispatch then works: a symlink named
 `coreutils echo hi` takes the second-argument form, and `env` starts another
 program.
 
+That was on a Linux host. Since S3 it is also true **on Ferrix**: `test-vfs`
+runs the multicall form, the symlink dispatch and a file read there, and
+`uname -sm` prints `Ferrix x86_64`.
+
 Two things had to be got right, and neither was `rust_begin_unwind`, which
 does not in fact clash on this triple:
 
@@ -204,19 +208,24 @@ its table row in `docs/BACKLOG.md` names.
 |---|---|---|---|
 | S1 | **Done.** ferrousli gained the 17: `posix_spawn` and its eight, `pthread_atfork`, `splice`, `lutimes`, `__res_init`, `gnu_get_libc_version`, three `_chk` functions, the two versioned `termios` names, `dlsym` and the rest of `dlfcn.h`, `_dl_find_object`, and a weak `rust_eh_personality`. `execvpe` and `errno::get` came with `posix_spawn`, and the `.init_array` constructors now get `argc`, `argv` and `envp` as glibc and musl pass them | 8 | `check --ferrousli` passes; uutils links with 0 undefined symbols |
 | S2 | **Done.** `ferrousli/tools/uutils/` (`sources.sh`, `build.sh`, `build-windows.sh`) and `cargo xtask uutils`. What it shares with busybox moved to `xtask/src/ferrousli.rs`, which is what stays when S8 deletes `busybox.rs`. The staleness rule is written and unused until S3 calls it | 5 | builds on Linux and on Windows; the Windows-built binary runs on Linux |
-| S3 | The initramfs carries `/bin/coreutils` with a symlink per utility, and `/bin/sh` is zinc | 3 | `test-boot` on x86-64 |
-| S4 | `test-shell` runs zinc, not `busybox sh`; the script's expected transcript re-recorded against zinc | 5 | `test-shell`, and zinc's own gate |
-| S5 | `test-vfs`'s expectations rewritten from busybox's messages to GNU's, row by row, each row saying which program now answers it | 8 | `test-vfs` on x86-64 |
+| S3 | **Done.** Every image that carries a program carries `/bin/coreutils`, with each of the 106 utility names linked in `/usr/bin` — not `/bin`, which stays busybox's, so no gate runs a different program than it did. Three `test-vfs` rows, reported as a group of their own, run uutils on Ferrix for the first time | 3 | the three rows pass on Ferrix: the multicall form, the symlink dispatch, and a file read |
+| S4 | **`/bin/sh` is zinc, in one landing**: the kernel (which hardcodes `/bin/busybox` and `sh -i` in `init.rs`), `test-shell`'s transcript, and `test-vfs`'s 18 `sh -c` scripts, all re-recorded together. It cannot be split — between any two of those landings `main` is red | 13 | the whole matrix: a kernel change, so the release build and the four boots |
+| S5 | *Folded into S4.* The `test-vfs` rows break the moment the shell changes, so they are re-recorded in the same landing | — | — |
 | S6 | findutils, diffutils, procps and util-linux built and installed the same way | 5 | `test-vfs`'s rows that need them |
 | S7 | `git` as a ferrousli port, beside `curl` and `btop` | 8 | it clones and commits on Ferrix |
 | S8 | busybox deleted: `tools/busybox/`, `xtask/src/busybox.rs`, the UAPI headers, ferrousli's three `<linux/*>` pass-throughs, the applet list | 3 | the whole matrix, once §5 is empty |
 
-S1 and S2 have landed, and §3a is settled, so **S3 is no longer blocked**.
-S4 can go in parallel with it. S8 is blocked on §5 and is not scheduled.
+S1, S2 and S3 have landed and §3a is settled. What is left is **S4, the
+one that matters**: it is the landing that makes uutils and zinc the
+userland rather than passengers in the image, and it is 13 points in one
+piece. S6 and S7 can go in parallel with it. S8 is blocked on §5 and is not
+scheduled.
 
-**26 points left of S3-S7.**
+**23 points left of S4-S7.**
 
-**Total, S1–S7: 42 points.** S8 is 3 more, whenever §5 empties.
+**Total, S1–S7: 42 points**, of which S1, S2 and S3 are done. S8 is 3 more, whenever §5 empties.
+
+S3 was quoted at 2 and cost 3: the two `test-vfs` groups became three, which the runner and the judging both had to agree about, per architecture.
 
 ## 7. Risks
 

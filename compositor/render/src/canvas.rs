@@ -102,6 +102,12 @@ impl Canvas {
         self.pixmap.data()
     }
 
+    /// The same bytes, to write: what [`crate::Backdrop`] keeps up to date a
+    /// row at a time.
+    pub(crate) fn data_mut(&mut self) -> &mut [u8] {
+        self.pixmap.data_mut()
+    }
+
     /// Pixel (`x`, `y`) as an `XRGB8888` value, if it is on the canvas.
     #[must_use]
     pub fn pixel(&self, x: u32, y: u32) -> Option<u32> {
@@ -465,7 +471,12 @@ impl Canvas {
     /// here as everywhere else in this crate, so a pixel is in or out, and a
     /// row's inset is the circle's at that row's centre, rounded to the
     /// nearest pixel.
-    fn rounded_clips(&self, rect: Rect, rounding: Rounding, damage: &Damage) -> Vec<Rect> {
+    pub(crate) fn rounded_clips(
+        &self,
+        rect: Rect,
+        rounding: Rounding,
+        damage: &Damage,
+    ) -> Vec<Rect> {
         let radius = rounding
             .radius
             .min(rect.width / 2)
@@ -609,29 +620,21 @@ impl Canvas {
         self.blur_from(None, rect, rounding, blur, damage);
     }
 
-    /// The same, reading `backdrop` rather than this canvas.
+    /// The same, reading `backdrop` rather than this canvas: the blur of
+    /// one canvas written onto another.
     ///
-    /// What makes a blurred desktop cheap. Blurring a strip of this canvas
-    /// is wrong: outside the damage the canvas still holds the *last*
-    /// frame, and the last frame has the translucent surface drawn over
-    /// the blur -- so the blur would be a blur of itself, which is a smear
-    /// that grows with every frame. Growing the damage until the whole
-    /// surface is redrawn is one answer and costs a full frame for a
-    /// near-fullscreen window.
+    /// Blurring a strip of a canvas in place is only right while everything
+    /// the kernel reads has been drawn by this frame. Outside the damage a
+    /// canvas still holds the *last* frame, and the last frame has the
+    /// translucent surface drawn over the blur -- so the blur would be a
+    /// blur of itself, a smear that grows with every frame. A caller that
+    /// blurs in place therefore has to redraw the whole of each blurred
+    /// surface its damage touches.
     ///
-    /// A `backdrop` is the other, and is Hyprland's own
-    /// `decoration:blur:new_optimizations`, which is on by default: a
-    /// second canvas holding what is *behind* the windows -- the
-    /// background and the layer surfaces under them -- kept between
-    /// frames and brought up to date within the damage. Nothing is ever
-    /// drawn over it, so a strip of it is the same pixels a whole frame
-    /// would have put there, and a blur over that strip is exact.
-    ///
-    /// What is given up is a window blurring the *window* behind it: the
-    /// backdrop stops at the layers, so two translucent windows one over
-    /// the other each blur the desktop rather than each other. That is
-    /// what Hyprland's own optimisation gives up too, and it is the
-    /// behaviour a person gets from Hyprland out of the box.
+    /// A `backdrop` nothing is ever drawn over has no such trouble: a strip
+    /// of it holds the same pixels a whole frame would have put there, and
+    /// a blur of that strip is exact. [`crate::Backdrop`] is what keeps
+    /// one, and what calls this.
     pub fn blur_from(
         &mut self,
         backdrop: Option<&Self>,
@@ -790,21 +793,41 @@ impl Canvas {
     fn blend(&mut self, surface: &Surface<'_>, rect: Rect, opacity: f32, clips: &[Rect]) {
         // `wl_shm`'s bytes are blue, green, red, alpha: canvas order. A
         // padded buffer is gathered into tight rows first.
+        //
+        // Only the part of it the clips cover. A client's buffer is padded
+        // more often than not -- `foot` hands over a 1878-pixel row in a
+        // stride of 7680 bytes -- and gathering all of a full-screen terminal to draw the one
+        // cell that changed is three milliseconds of copying for a few
+        // hundred pixels of drawing. The part is cut on whole pixels and the
+        // pattern moved by the same whole pixels, so every canvas pixel
+        // still takes exactly the surface pixel it took.
+        let whole = Rect::new(
+            0,
+            0,
+            i64::from(surface.width()),
+            i64::from(surface.height()),
+        );
         let gathered: Vec<u8>;
-        let bytes = if surface.format() == Format::Xrgb8888 {
-            gathered = opaque_rows(surface);
-            &gathered
-        } else if let Some(tight) = surface.tight() {
-            tight
-        } else {
-            gathered = (0..surface.height())
-                .filter_map(|y| surface.row(y))
-                .flatten()
-                .copied()
-                .collect();
-            &gathered
+        let (bytes, part) = match surface.tight() {
+            Some(tight) if surface.format() == Format::Argb8888 => (tight, whole),
+            _ => {
+                let Some(part) = bounding(clips)
+                    .map(|bounds| {
+                        bounds.translate(rect.x.saturating_neg(), rect.y.saturating_neg())
+                    })
+                    .and_then(|bounds| intersect(bounds, whole))
+                else {
+                    return;
+                };
+                gathered = part_rows(surface, part);
+                (gathered.as_slice(), part)
+            }
         };
-        let Some(pixmap) = PixmapRef::from_bytes(bytes, surface.width(), surface.height()) else {
+        let (Ok(width), Ok(height)) = (u32::try_from(part.width), u32::try_from(part.height))
+        else {
+            return;
+        };
+        let Some(pixmap) = PixmapRef::from_bytes(bytes, width, height) else {
             return;
         };
         let shader = Pattern::new(
@@ -812,25 +835,30 @@ impl Canvas {
             SpreadMode::Pad,
             FilterQuality::Nearest,
             opacity,
-            tiny_skia::Transform::from_translate(rect.x as f32, rect.y as f32),
+            tiny_skia::Transform::from_translate(
+                rect.x.saturating_add(part.x) as f32,
+                rect.y.saturating_add(part.y) as f32,
+            ),
         );
         let paint = paint(shader, BlendMode::SourceOver);
         self.fill_clips(clips, &paint);
     }
 
-    /// Copy the pixels in `damage` out of `other`, which must be this
-    /// canvas's size.
+    /// Copy each of `clips` out of `other`, which must be this canvas's
+    /// size, and record it.
     ///
-    /// How the blur's backdrop is kept: everything behind the windows is
-    /// drawn onto this canvas and then copied into the backdrop, within
-    /// the damage, so the backdrop holds the same pixels a whole frame
-    /// would have put there.
-    pub fn take_from(&mut self, other: &Self, damage: &Damage) {
+    /// How a window gets the blur of what is behind it from a
+    /// [`crate::Backdrop`]: the blur is there already, and the window's
+    /// shape is the clips.
+    pub(crate) fn copy_from(&mut self, other: &Self, clips: &[Rect]) {
         if (other.width(), other.height()) != (self.width(), self.height()) {
             return;
         }
         let width = index(i64::from(self.width()));
-        for clip in damage.clipped(self.bounds()).rects() {
+        for &clip in clips {
+            let Some(clip) = intersect(clip, self.bounds()) else {
+                continue;
+            };
             let len = index(clip.width) * 4;
             for y in clip.y..clip.bottom() {
                 let start = (index(y) * width + index(clip.x)) * 4;
@@ -841,6 +869,7 @@ impl Canvas {
                     target.copy_from_slice(source);
                 }
             }
+            self.damage.add(clip);
         }
     }
 
@@ -973,6 +1002,38 @@ impl Default for Rounding {
     fn default() -> Self {
         Self::none()
     }
+}
+
+/// The pixels of `part` of a surface as tight rows the shader can read,
+/// with an opaque surface's X byte forced to `0xFF` as [`opaque_rows`]
+/// forces it.
+fn part_rows(surface: &Surface<'_>, part: Rect) -> Vec<u8> {
+    let opaque = surface.format() == Format::Xrgb8888;
+    let (from, to) = (index(part.x) * 4, index(part.right()) * 4);
+    let mut rows = Vec::with_capacity(index(part.width) * index(part.height) * 4);
+    for y in part.y..part.bottom() {
+        let Some(row) = u32::try_from(y)
+            .ok()
+            .and_then(|y| surface.row(y))
+            .and_then(|row| row.get(from..to))
+        else {
+            continue;
+        };
+        let start = rows.len();
+        rows.extend_from_slice(row);
+        if opaque {
+            for pixel in rows
+                .get_mut(start..)
+                .into_iter()
+                .flatten()
+                .skip(3)
+                .step_by(4)
+            {
+                *pixel = 0xFF;
+            }
+        }
+    }
+    rows
 }
 
 /// A surface's pixels as tight rows the shader can read.

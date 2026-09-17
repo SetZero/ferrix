@@ -307,9 +307,11 @@ fn test_vfs(args: &Args) -> Result<()> {
              `{arch}` in the path is replaced by the architecture's name",
         )
     })?;
-    let commands = vfs::encode(&[vfs::COMMANDS, vfs::APPLETS].concat())?;
     let mut failed = Vec::new();
     for arch in args.arches()? {
+        // Per architecture, because only the one that carries uutils runs the
+        // commands that need it.
+        let commands = vfs::encode(&vfs::commands(arch))?;
         let program = program_for(init, arch)?;
         let loader = cargo::build_loader(arch, args.release)?;
         let list = paths::build_dir(arch).join("init-commands");
@@ -319,10 +321,12 @@ fn test_vfs(args: &Args) -> Result<()> {
         // zinc too: the permissions commands run a set-user-id copy of it,
         // which is the one program in the image that shows an effective id.
         let shell = zinc::build(arch)?;
-        let initramfs = initramfs::build(
+        let utilities = uutils::carried(arch)?;
+        let initramfs = initramfs::build_with_utilities(
             Some(&program),
             &natives,
             shell.as_deref(),
+            utilities.as_deref(),
             &ports::installed(arch)?,
         )?;
         let image = fat::write_image_with(arch, &loader, &kernel, &initramfs, None)?;
@@ -410,8 +414,10 @@ fn image_cmdline(args: &Args) -> Option<&'static str> {
 /// Given a program — `--init`, or `FERRIX_INIT` when that is absent — the
 /// kernel is built with it to start `sh -i`, and the initramfs carries it at
 /// `/bin/busybox` with a link beside it for every applet, so that the shell's
-/// `PATH=/bin` finds `ls` where a person types it. Without one the image is
-/// the one it always was. Either way the initramfs carries the tree's native
+/// `PATH=/bin` finds `ls` where a person types it; uutils/coreutils rides
+/// along at `/bin/coreutils`, its own names linked in `/usr/bin`, on the one
+/// architecture it is built for. Without a program the image is the one it
+/// always was. Either way the initramfs carries the tree's native
 /// programs in `/sbin`, built and checked for `arch` first.
 fn build_image(arch: Arch, args: &Args) -> Result<(PathBuf, PathBuf)> {
     let natives = native::build(arch, args.release)?;
@@ -423,10 +429,12 @@ fn build_image(arch: Arch, args: &Args) -> Result<(PathBuf, PathBuf)> {
     let loader = cargo::build_loader(arch, args.release)?;
     let kernel = cargo::build_kernel_with_init(arch, args.release, &program, "")?;
     let shell = zinc::build(arch)?;
-    let initramfs = initramfs::build(
+    let utilities = uutils::carried(arch)?;
+    let initramfs = initramfs::build_with_utilities(
         Some(&program),
         &natives,
         shell.as_deref(),
+        utilities.as_deref(),
         &ports::installed(arch)?,
     )?;
     let image = fat::write_image_with(arch, &loader, &kernel, &initramfs, image_cmdline(args))?;
@@ -449,10 +457,12 @@ fn build_board_files(arch: Arch, args: &Args) -> Result<(PathBuf, PathBuf, Vec<u
     let loader = cargo::build_loader(arch, args.release)?;
     let kernel = cargo::build_kernel_with_init(arch, args.release, &program, "")?;
     let shell = zinc::build(arch)?;
-    let initramfs = initramfs::build(
+    let utilities = uutils::carried(arch)?;
+    let initramfs = initramfs::build_with_utilities(
         Some(&program),
         &natives,
         shell.as_deref(),
+        utilities.as_deref(),
         &ports::installed(arch)?,
     )?;
     Ok((loader, kernel, initramfs))

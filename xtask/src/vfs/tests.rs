@@ -6,7 +6,7 @@ fn owned(lines: &[&str]) -> Vec<String> {
 
 /// Every command the kernel runs, the criterion's and then the applets.
 fn every_command() -> impl Iterator<Item = &'static Command> {
-    COMMANDS.iter().chain(APPLETS)
+    COMMANDS.iter().chain(APPLETS).chain(UTILITIES)
 }
 
 /// The log a kernel that passes every command would write.

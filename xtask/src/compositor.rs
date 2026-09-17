@@ -845,6 +845,28 @@ impl Wanted<'_> {
     }
 }
 
+/// `config` with the blur's dither turned off, which is what every gate boot
+/// is given.
+///
+/// `decoration:blur:noise` is 0.0117 in Hyprland and here, and the dither is
+/// drawn. But the pictures a boot is judged against are
+/// `compositor/render`'s expected images, and those are blessed without it
+/// (`Style::undithered` says why: a dither is the one thing a run-length
+/// encoded image cannot hold). `compositor/hyprix/tests/two_clients.rs`
+/// tells the compositor under test the same thing for the same reason.
+///
+/// Without this a boot fails on a dither and nothing else: every pixel that
+/// differs is inside the translucent half of the gradient client and is one
+/// step up in each of its three channels, which is what a dither seen
+/// through a window a quarter transparent rounds to. How many of them there
+/// are depends on what is behind the window, so a change to the blur moves
+/// the count and looks like the cause.
+///
+/// `run-compositor` does not come this way, and draws the dither.
+fn undithered(config: &str) -> String {
+    format!("decoration:blur:noise = 0\n{config}")
+}
+
 fn boot_and_dump(
     arch: Arch,
     programs: &Programs,
@@ -853,7 +875,8 @@ fn boot_and_dump(
     binds: &[(&str, &[&str])],
     args: &Args,
 ) -> Result<(Vec<Image>, Vec<String>)> {
-    let (image, kernel) = build_image(arch, programs, config, Carried::none(), args)?;
+    let (image, kernel) =
+        build_image(arch, programs, &undithered(config), Carried::none(), args)?;
 
     let port = free_port()?;
     let mut qemu_args = args.clone();

@@ -22,3 +22,8 @@ fn classification_and_comparison_macros_on_every_type() {
 fn complex_functions_through_the_c_calling_convention_give_musls_bits() {
     check(&Case::named("math/complex"));
 }
+
+#[test]
+fn the_long_double_functions_through_their_shims_answer_as_c_says() {
+    check(&Case::named("math/longdouble"));
+}
