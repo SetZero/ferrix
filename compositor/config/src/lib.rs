@@ -36,7 +36,7 @@ use std::path::{Path, PathBuf};
 
 pub use bind::{Bind, BindFlags, Key, Mods};
 pub use monitor::{Mode, MonitorRule, Position, Scale};
-pub use options::OptionValue;
+pub use options::{OptionValue, default_of};
 pub use parse::parse;
 pub use rule::{Decoration, Effect, Length, Matcher, Window, WindowRule};
 pub use value::{

@@ -116,6 +116,27 @@ pub fn run(options: &Options) -> Result<String, String> {
 ///
 /// A sentence saying what could not be done.
 pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<String, String> {
+    // Everything the compositor says goes to whoever is watching *and* into
+    // a rolling buffer, which is what `hyprctl rollinglog` reads. Hyprland
+    // keeps the same buffer for the same reason: when something is wrong,
+    // the last few lines are what a person asks for first.
+    //
+    // A `RefCell` because the closure holds the buffer while the snapshot
+    // reads it, and both are shared borrows of the cell rather than of the
+    // lines.
+    let rolling: std::cell::RefCell<Vec<String>> = std::cell::RefCell::new(Vec::new());
+    let said_to = |line: &str| {
+        let mut lines = rolling.borrow_mut();
+        lines.push(line.to_owned());
+        if lines.len() > ROLLING {
+            let _ = lines.remove(0);
+        }
+    };
+    let mut report = |line: &str| {
+        said_to(line);
+        report(line);
+    };
+    let report = &mut report;
     let mut config = read_config(options)?;
     let mut settings = Settings::from_config(&config);
     let mut style = Style::from_config(&config);
@@ -210,6 +231,13 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
     };
     let mut seat = Seat::new(&config, width, height);
     let mut animations = crate::animate::Animations::new(&config);
+    // What `hyprctl animations`, `configerrors` and `rollinglog` read,
+    // gathered when the configuration is read rather than on every frame.
+    let said = Said {
+        animations: animations.described(),
+        beziers: animations.beziers(),
+        errors: animations.diagnostics().to_vec(),
+    };
     for reason in animations.diagnostics() {
         report(&format!("hyprix: an animation line was dropped: {reason}"));
     }
@@ -419,7 +447,10 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                     &devices,
                     &placed_layers,
                     &plugins,
+                    &said,
+                    &rolling.borrow(),
                     lock.is_some(),
+                    started.elapsed().as_secs(),
                 ),
             );
             asked.extend(plugins.poll(&snapshot));
@@ -437,7 +468,10 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                     &devices,
                     &placed_layers,
                     &plugins,
+                    &said,
+                    &rolling.borrow(),
                     lock.is_some(),
+                    started.elapsed().as_secs(),
                 ),
             );
             match crate::control::serve(&mut stream, &snapshot, &mut plugins) {
@@ -834,7 +868,10 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                     &devices,
                     &placed_layers,
                     &plugins,
+                    &said,
+                    &rolling.borrow(),
                     lock.is_some(),
+                    started.elapsed().as_secs(),
                 ),
             );
             if let Some(socket) = events.as_mut() {
@@ -1987,6 +2024,24 @@ fn run_ipc(
             let _ = state.set_settings(*settings);
             true
         }
+        // `notify`, `dismissnotify` and `seterror`: a message for the
+        // person at the screen. This compositor draws no overlay of its
+        // own -- Hyprland's is a rectangle over everything -- so the
+        // message is said and put on the event socket, where a
+        // notification daemon or a bar picks it up. That is more use than
+        // an overlay only this compositor can draw.
+        compositor_ipc::Reply::Notify { message, error } => {
+            let what = if *error { "error" } else { "notify" };
+            if message.is_empty() {
+                around.say(&format!("hyprix: the {what} was taken away"));
+            } else {
+                around.say(&format!("hyprix: {what}: {message}"));
+            }
+            if let Some(events) = around.events.as_mut() {
+                events.say(&format!("custom>>{what},{message}\n"));
+            }
+            false
+        }
         compositor_ipc::Reply::Reload | compositor_ipc::Reply::Text(_) => false,
     }
 }
@@ -2420,25 +2475,67 @@ fn now_monotonic() -> (u64, u32) {
 /// Gathered here rather than at each call so that the three places that ask
 /// for a snapshot cannot disagree about what the seat and the configuration
 /// say.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "`hyprctl` reads the seat, the configuration, the devices, the layers, the plugins, the animations, the log and the clock"
+)]
 fn as_reported<'a>(
     config: &'a Config,
     seat: &'a Seat,
     devices: &'a Devices,
     layers: &'a [crate::frame::Placed],
     plugins: &'a crate::plugins::Plugins,
+    said: &'a Said,
+    log: &'a [String],
     locked: bool,
+    uptime: u64,
 ) -> crate::control::Reported<'a> {
     let (x, y) = seat.pointer();
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "the pointer is held inside the screen, which is far inside i32"
+    )]
+    let cursor = (x as i32, y as i32);
     crate::control::Reported {
         submap: seat.submap(),
         binds: &config.binds,
         devices,
         layers,
         plugins,
-        cursor: (x as i32, y as i32),
+        cursor,
         locked,
+        config,
+        animations: &said.animations,
+        beziers: &said.beziers,
+        errors: &said.errors,
+        log,
+        uptime,
     }
 }
+
+/// What the compositor has to say about itself that is not the layout's:
+/// the animation tree as it ended up, what could not be read, and the last
+/// lines it printed.
+///
+/// Gathered once when the configuration is read and once more on a reload,
+/// because `hyprctl animations` and `hyprctl configerrors` are asked for far
+/// less often than a frame is drawn.
+#[derive(Clone, Debug, Default)]
+struct Said {
+    /// Every animation node with what it ended up with.
+    animations: Vec<compositor_ipc::Animation>,
+    /// Every bezier.
+    beziers: Vec<compositor_ipc::Bezier>,
+    /// What could not be read in the configuration.
+    errors: Vec<String>,
+}
+
+/// How many lines `hyprctl rollinglog` keeps.
+///
+/// Hyprland keeps a rolling buffer of its own log; this keeps the same
+/// shape and a bound, because a compositor that runs for a week must not
+/// grow a log in memory for ever.
+const ROLLING: usize = 500;
 
 /// The cursor surface the client under the pointer asked for, if it asked
 /// for one of its own.

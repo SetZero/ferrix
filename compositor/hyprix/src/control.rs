@@ -209,6 +209,32 @@ pub fn snapshot(
     snapshot.layers = described_layers(state, clients, reported.layers);
     snapshot.cursor = reported.cursor;
     snapshot.locked = reported.locked;
+    snapshot.options = described_options(reported.config);
+    snapshot.animations = reported.animations.to_vec();
+    snapshot.beziers = reported.beziers.to_vec();
+    snapshot.errors = reported.errors.to_vec();
+    snapshot.log = reported.log.to_vec();
+    snapshot.shortcuts = clients
+        .iter()
+        .flat_map(|slot| slot.client().shortcut_names())
+        .map(|name| compositor_ipc::Shortcut {
+            name,
+            // The protocol carries a description with each shortcut; the
+            // compositor keeps the name, which is what `dispatch global`
+            // takes and what a script reads this command for.
+            description: String::new(),
+        })
+        .collect();
+    snapshot.system = compositor_ipc::System {
+        os: "Ferrix".to_owned(),
+        kernel: env!("CARGO_PKG_VERSION").to_owned(),
+        counts: (
+            snapshot.monitors.len(),
+            snapshot.windows.len(),
+            clients.len(),
+        ),
+        uptime: reported.uptime,
+    };
     snapshot
 }
 
@@ -235,6 +261,50 @@ pub struct Reported<'a> {
     /// Whether a session lock is up, which this compositor has no protocol
     /// for and so never is.
     pub locked: bool,
+    /// The configuration, for `hyprctl getoption` and `descriptions`.
+    pub config: &'a compositor_config::Config,
+    /// Every animation node with what it ended up with: `hyprctl
+    /// animations`.
+    pub animations: &'a [compositor_ipc::Animation],
+    /// Every bezier, for the same.
+    pub beziers: &'a [compositor_ipc::Bezier],
+    /// What could not be read in the configuration: `hyprctl
+    /// configerrors`.
+    pub errors: &'a [String],
+    /// The last lines the compositor said: `hyprctl rollinglog`.
+    pub log: &'a [String],
+    /// How long it has been running, in seconds.
+    pub uptime: u64,
+}
+
+/// Every option the compositor has, with what it holds now.
+///
+/// The type word is the key Hyprland puts the value under in JSON, and a
+/// script reads exactly that key: `int` for an integer, a boolean or a
+/// colour, `float` for a float, `str` for anything written out.
+fn described_options(config: &compositor_config::Config) -> Vec<compositor_ipc::Opt> {
+    config
+        .options()
+        .map(|(name, value)| compositor_ipc::Opt {
+            name: name.to_owned(),
+            value: value.to_string(),
+            kind: match value {
+                compositor_config::OptionValue::Int(_) => "int",
+                compositor_config::OptionValue::Float(_) => "float",
+                compositor_config::OptionValue::Str(_) => "str",
+                compositor_config::OptionValue::Gradient(_)
+                | compositor_config::OptionValue::Gaps(_) => "custom",
+            },
+            // Whether the configuration said so, rather than it being
+            // the table's own default.
+            set: config.option(name) != Some(&default_of(name)),
+        })
+        .collect()
+}
+
+/// What the table says an option is, for the `set` flag.
+fn default_of(name: &str) -> compositor_config::OptionValue {
+    compositor_config::default_of(name).unwrap_or(compositor_config::OptionValue::Int(0))
 }
 
 /// One bind, as `hyprctl binds` prints it.

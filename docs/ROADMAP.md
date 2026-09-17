@@ -4557,10 +4557,34 @@ keyword yet and no global-shortcuts protocol -- and are answered with an
 empty list rather than `unknown request`, because a bar asking for them
 should get an empty answer and carry on.
 
-What is still not answered is `getoption`, `animations`, `systeminfo`,
-`rollinglog`, `configerrors`, `descriptions` and `status`, and the ones that
-change something: `notify`, `seterror`, `switchxkblayout`, `output`,
-`setcursor` and `decorations`.
+**And the rest of them (2026-09-17).** `getoption` answers in Hyprland's own
+shape -- the value under the key its *type* names, with a `set` flag saying
+whether the configuration said anything or it is the table's default, which
+is the one field a script reads to know whether a line took effect.
+`descriptions` lists every option with its type and value; Hyprland prints a
+sentence about each, written beside its default in its own table, and this
+compositor's table has no such sentences, so what is printed is the truth
+rather than a row of empty strings. `animations` prints the whole tree with
+the `overridden` flag and then the beziers, which is how a person finds out
+that their `animation =` line named a bezier that does not exist.
+`configerrors` is what could not be read, `rollinglog` the last five hundred
+lines the compositor said -- everything it says now goes to whoever is
+watching *and* into a rolling buffer -- and `systeminfo` and `status` what it
+is and how long it has been up. `globalshortcuts` is no longer empty:
+`hyprland-global-shortcuts-v1` fills it.
+
+`notify`, `dismissnotify` and `seterror` come back for the compositor, which
+says the message and puts it on the event socket. Hyprland draws a rectangle
+over everything; this compositor draws none, and a line a notification daemon
+or a bar can pick up is more use than an overlay only this compositor can
+draw. `decorations` lists what is drawn around a window, which here is a
+border and nothing else.
+
+Four say plainly that they act on something this compositor does not have,
+rather than pretending or refusing: `switchxkblayout` (this keymap has one
+layout), `output` (the screens are the card's), `setcursor` (the cursor is
+drawn in code and there is no theme) and `kill` (click-to-kill needs a
+pointer grab).
 
 The second boot of `cargo xtask test-compositor` has the bar, so it is the
 one that asks: a keybind runs `hyprctl --batch binds ; devices ; layers ;

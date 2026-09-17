@@ -62,6 +62,13 @@ impl Curves {
             .insert(name.to_owned(), Bezier::new(first, second));
     }
 
+    /// Every curve by name, in name order, for `hyprctl animations`.
+    pub fn named(&self) -> impl Iterator<Item = (&str, &Bezier)> {
+        self.curves
+            .iter()
+            .map(|(name, curve)| (name.as_str(), curve))
+    }
+
     /// The curve `name` names, or `default` for one that was never declared.
     ///
     /// That fallback is `CAnimationManager::getBezier`'s: a name nothing

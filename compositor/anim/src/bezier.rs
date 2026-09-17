@@ -26,6 +26,12 @@ pub struct Bezier {
 }
 
 impl Bezier {
+    /// The two control points, which are what `hyprctl animations` prints.
+    #[must_use]
+    pub const fn control_points(&self) -> ((f32, f32), (f32, f32)) {
+        (self.control[0], self.control[1])
+    }
+
     /// Hyprland's `linear`: the straight line, added by its animation
     /// manager and by `removeAllBeziers`.
     #[must_use]

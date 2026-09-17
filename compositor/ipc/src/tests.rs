@@ -9,7 +9,10 @@
 use crate::json::Json;
 use crate::reply::{Reply, Version, answer};
 use crate::request::{Flags, Format, Request};
-use crate::state::{Bind, Device, Devices, Keyboard, Layer, Monitor, Snapshot, Window, Workspace};
+use crate::state::{
+    Animation, Bezier, Bind, Device, Devices, Keyboard, Layer, Monitor, Opt, Shortcut, Snapshot,
+    System, Window, Workspace,
+};
 
 /// A small parser, so a test can say "this answer is JSON" and look inside
 /// it without the compositor taking a JSON crate.
@@ -351,6 +354,13 @@ fn snapshot() -> Snapshot {
         }],
         cursor: (512, 384),
         locked: false,
+        options: Vec::new(),
+        animations: Vec::new(),
+        beziers: Vec::new(),
+        errors: Vec::new(),
+        log: Vec::new(),
+        shortcuts: Vec::new(),
+        system: System::default(),
     }
 }
 
@@ -1094,6 +1104,13 @@ fn watched(windows: &[Window], active: Option<u64>) -> Snapshot {
         }],
         cursor: (512, 384),
         locked: false,
+        options: Vec::new(),
+        animations: Vec::new(),
+        beziers: Vec::new(),
+        errors: Vec::new(),
+        log: Vec::new(),
+        shortcuts: Vec::new(),
+        system: System::default(),
     }
 }
 
@@ -1484,4 +1501,221 @@ fn the_plugins_are_listed_as_hyprland_lists_them() {
     snap.plugins.clear();
     assert_eq!(ask(&snap, "plugin list"), "no plugins loaded\n");
     assert_eq!(ask(&snap, "plugin load /tmp/x.so"), "unknown opt\n");
+}
+
+// -- The rest of what `hyprctl` reads ----------------------------------------
+
+/// A snapshot that also holds what the later commands read.
+fn told() -> Snapshot {
+    let mut snapshot = snapshot();
+    snapshot.options = vec![
+        Opt {
+            name: "general:gaps_in".to_owned(),
+            value: "4 4 4 4".to_owned(),
+            kind: "custom",
+            set: true,
+        },
+        Opt {
+            name: "general:border_size".to_owned(),
+            value: "1".to_owned(),
+            kind: "int",
+            set: false,
+        },
+        Opt {
+            name: "general:layout".to_owned(),
+            value: "dwindle".to_owned(),
+            kind: "str",
+            set: false,
+        },
+    ];
+    snapshot.animations = vec![Animation {
+        name: "windows".to_owned(),
+        overridden: true,
+        bezier: "myBezier".to_owned(),
+        enabled: true,
+        speed: 7.0,
+        style: "slide".to_owned(),
+    }];
+    snapshot.beziers = vec![Bezier {
+        name: "myBezier".to_owned(),
+        first: (0.05, 0.9),
+        second: (0.1, 1.05),
+    }];
+    snapshot.errors = vec!["general:gaps_in = x: not a number".to_owned()];
+    snapshot.log = vec![
+        "hyprix: 1 monitor".to_owned(),
+        "hyprix: frames 1".to_owned(),
+    ];
+    snapshot.shortcuts = vec![Shortcut {
+        name: "rocks.magical.cast:record".to_owned(),
+        description: "Start recording".to_owned(),
+    }];
+    snapshot.system = System {
+        os: "Ferrix".to_owned(),
+        kernel: "0.1.0".to_owned(),
+        counts: (1, 2, 3),
+        uptime: 42,
+    };
+    snapshot
+}
+
+/// Answer one request against that snapshot.
+fn told_text(line: &str) -> String {
+    match answer(&Request::parse(line), &told(), Version::default()) {
+        Reply::Text(text) => text,
+        other => panic!("{line:?} asked for {other:?}"),
+    }
+}
+
+/// `getoption` puts the value under the key its *type* names, which is what
+/// a script reads, and says whether the configuration set it.
+#[test]
+fn getoption_names_the_value_after_its_type() {
+    assert_eq!(
+        told_text("getoption general:border_size"),
+        "int: 1\nset: false\n"
+    );
+    assert_eq!(
+        told_text("getoption general:layout"),
+        "str: dwindle\nset: false\n"
+    );
+    // Hyprland writes a complex value as `custom type:` and its JSON key as
+    // `custom`.
+    assert_eq!(
+        told_text("getoption general:gaps_in"),
+        "custom type: 4 4 4 4\nset: true\n"
+    );
+    assert_eq!(told_text("getoption nothing:here"), "no such option\n");
+
+    let json = parse::parse(&told_text("j/getoption general:border_size")).expect("JSON");
+    assert_eq!(
+        json.get("option"),
+        Some(&parse::Value::Text("general:border_size".to_owned()))
+    );
+    assert_eq!(json.get("int"), Some(&parse::Value::Number(1.0)));
+    assert_eq!(json.get("set"), Some(&parse::Value::Bool(false)));
+    // A string goes quoted under `str`, a number bare under `int`.
+    let json = parse::parse(&told_text("j/getoption general:layout")).expect("JSON");
+    assert_eq!(
+        json.get("str"),
+        Some(&parse::Value::Text("dwindle".to_owned()))
+    );
+}
+
+/// `animations` prints the tree and then the beziers, in Hyprland's shape.
+#[test]
+fn animations_prints_the_tree_and_the_beziers() {
+    let written = told_text("animations");
+    for wanted in [
+        "animations:",
+        "name: windows",
+        "overridden: 1",
+        "bezier: myBezier",
+        "speed: 7.00",
+        "style: slide",
+        "beziers:",
+        "X0: 0.05",
+        "Y1: 1.05",
+    ] {
+        assert!(written.contains(wanted), "{wanted:?} in {written:?}");
+    }
+
+    // The JSON is two arrays: the animations, then the beziers.
+    let json = parse::parse(&told_text("j/animations")).expect("JSON");
+    let parse::Value::List(both) = &json else {
+        panic!("an array of two");
+    };
+    assert_eq!(both.len(), 2);
+    assert_eq!(
+        both.first()
+            .and_then(|list| match list {
+                parse::Value::List(items) => items.first(),
+                _ => None,
+            })
+            .and_then(|first| first.get("bezier")),
+        Some(&parse::Value::Text("myBezier".to_owned()))
+    );
+}
+
+/// `configerrors`, `rollinglog`, `systeminfo` and `globalshortcuts`.
+#[test]
+fn the_compositor_says_what_it_is_and_what_went_wrong() {
+    assert_eq!(
+        told_text("configerrors"),
+        "general:gaps_in = x: not a number\n"
+    );
+    assert_eq!(
+        told_text("rollinglog"),
+        "hyprix: 1 monitor\nhyprix: frames 1\n"
+    );
+    let written = told_text("systeminfo");
+    for wanted in ["os: Ferrix", "monitors: 1", "windows: 2", "uptime: 42 s"] {
+        assert!(written.contains(wanted), "{wanted:?} in {written:?}");
+    }
+    // `status` is the same answer under another name, as Hyprland's is.
+    assert_eq!(told_text("status"), written);
+    assert_eq!(
+        told_text("globalshortcuts"),
+        "rocks.magical.cast:record -> Start recording\n"
+    );
+
+    let json = parse::parse(&told_text("j/configerrors")).expect("JSON");
+    assert_eq!(
+        json,
+        parse::Value::List(vec![parse::Value::Text(
+            "general:gaps_in = x: not a number".to_owned()
+        )])
+    );
+}
+
+/// `notify`, `dismissnotify` and `seterror` come back for the compositor to
+/// say, with the message the person is to see.
+#[test]
+fn a_notification_comes_back_with_its_message() {
+    assert_eq!(
+        ask("notify 1 3000 rgb(ff0000) something happened"),
+        Reply::Notify {
+            message: "something happened".to_owned(),
+            error: false
+        }
+    );
+    assert_eq!(
+        ask("dismissnotify"),
+        Reply::Notify {
+            message: String::new(),
+            error: false
+        }
+    );
+    assert_eq!(
+        ask("seterror rgb(ff0000) the configuration is wrong"),
+        Reply::Notify {
+            message: "the configuration is wrong".to_owned(),
+            error: true
+        }
+    );
+    assert_eq!(
+        ask("seterror disable"),
+        Reply::Notify {
+            message: String::new(),
+            error: true
+        }
+    );
+}
+
+/// The commands that act on something this compositor does not have say so,
+/// rather than pretending or refusing.
+#[test]
+fn the_commands_with_nothing_to_act_on_say_so() {
+    for (line, wanted) in [
+        ("switchxkblayout kb next", "one layout"),
+        ("output create headless", "the card's"),
+        ("setcursor Adwaita 24", "no theme"),
+        ("kill", "click-to-kill"),
+    ] {
+        let written = told_text(line);
+        assert!(written.contains(wanted), "{line:?} said {written:?}");
+    }
+    // And a window that is there has a border and nothing else.
+    assert!(told_text("decorations one").contains("border"));
+    assert_eq!(told_text("decorations nothing"), "");
 }

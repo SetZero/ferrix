@@ -120,6 +120,46 @@ impl Animations {
         &self.said
     }
 
+    /// Every node of the tree with what it ended up with, for `hyprctl
+    /// animations`.
+    ///
+    /// Every node, not only the ones a line named: Hyprland prints the
+    /// whole tree and marks which were set, because what a person wants to
+    /// know is what `windowsIn` will actually do.
+    #[must_use]
+    pub fn described(&self) -> Vec<compositor_ipc::Animation> {
+        compositor_anim::NODES
+            .iter()
+            .map(|(name, _)| {
+                let settings = self.tree.get(name);
+                compositor_ipc::Animation {
+                    name: (*name).to_owned(),
+                    overridden: self.tree.was_set(name),
+                    bezier: settings.curve.clone(),
+                    enabled: self.enabled && settings.enabled,
+                    speed: f64::from(settings.speed),
+                    style: settings.style.clone(),
+                }
+            })
+            .collect()
+    }
+
+    /// Every bezier, for the same command.
+    #[must_use]
+    pub fn beziers(&self) -> Vec<compositor_ipc::Bezier> {
+        self.curves
+            .named()
+            .map(|(name, curve)| {
+                let (first, second) = curve.control_points();
+                compositor_ipc::Bezier {
+                    name: name.to_owned(),
+                    first: (f64::from(first.0), f64::from(first.1)),
+                    second: (f64::from(second.0), f64::from(second.1)),
+                }
+            })
+            .collect()
+    }
+
     /// Whether any window is still moving at `now`.
     #[must_use]
     pub fn busy(&self, now: u64) -> bool {

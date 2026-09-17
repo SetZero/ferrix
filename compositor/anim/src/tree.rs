@@ -118,6 +118,15 @@ impl Tree {
         true
     }
 
+    /// Whether a line named this node itself, rather than an ancestor.
+    ///
+    /// Hyprland's `hyprctl animations` prints this as `overridden`, and it
+    /// is the one field that says whether a person's line took effect.
+    #[must_use]
+    pub fn was_set(&self, name: &str) -> bool {
+        self.set.contains_key(name)
+    }
+
     /// What `name` ends up with: its own settings, or the nearest ancestor's
     /// that was set, or `global`'s defaults.
     #[must_use]

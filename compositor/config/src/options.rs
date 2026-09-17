@@ -150,6 +150,16 @@ pub(crate) static OPTIONS: &[(&str, Initial)] = &[
     ("misc:force_default_wallpaper", Int(-1)),
 ];
 
+/// What the table says an option starts as, if the compositor has it.
+///
+/// `hyprctl getoption` prints a `set` flag, which is whether the
+/// configuration said anything about the option rather than leaving it at
+/// this.
+#[must_use]
+pub fn default_of(name: &str) -> Option<OptionValue> {
+    find(name).map(Initial::value)
+}
+
 /// The table entry for `name`, if the compositor has that option.
 pub(crate) fn find(name: &str) -> Option<Initial> {
     OPTIONS

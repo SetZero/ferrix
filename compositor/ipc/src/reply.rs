@@ -50,6 +50,16 @@ pub enum Reply {
     },
     /// `reload`: read the configuration file again.
     Reload,
+    /// `notify`, `dismissnotify` and `seterror`: a message for the person
+    /// at the screen. The compositor says it and puts it on the event
+    /// socket, where a notification daemon or a bar picks it up.
+    Notify {
+        /// What to say, empty for "take the last one away".
+        message: String,
+        /// Whether it is an error rather than a notification, which is
+        /// what `seterror` sends.
+        error: bool,
+    },
 }
 
 /// Answer `request` from `snapshot`.
@@ -96,12 +106,10 @@ pub fn answer(request: &Request, snapshot: &Snapshot, version: Version) -> Reply
         } else {
             format!("{}\n", snapshot.locked)
         }),
-        // Neither has anything to list, and both are answered rather than
-        // refused: a bar asking for them should get an empty list, not
-        // `unknown request`. `workspacerules` has no `workspacerule` keyword
-        // to fill it yet, and `globalshortcuts` needs a protocol this
-        // compositor does not offer.
-        "workspacerules" | "globalshortcuts" => text(if flags.format() == Format::Json {
+        // `workspacerules` has no `workspacerule` keyword to fill it yet,
+        // and is answered with an empty list rather than refused: a bar
+        // asking for it should carry on.
+        "workspacerules" => text(if flags.format() == Format::Json {
             let mut out = Json::new(pretty(flags));
             out.array();
             out.end(']');
@@ -109,6 +117,17 @@ pub fn answer(request: &Request, snapshot: &Snapshot, version: Version) -> Reply
         } else {
             String::new()
         }),
+        "globalshortcuts" => text(global_shortcuts(flags, &snapshot.shortcuts)),
+        "getoption" => text(option_named(
+            flags,
+            request.argument.trim(),
+            &snapshot.options,
+        )),
+        "descriptions" => text(descriptions(flags, &snapshot.options)),
+        "animations" => text(animations(flags, snapshot)),
+        "configerrors" => text(lines(flags, &snapshot.errors)),
+        "rollinglog" => text(rolling_log(flags, &snapshot.log)),
+        "systeminfo" | "status" => text(system_info(flags, &snapshot.system)),
         "dispatch" => {
             let (name, argument) = split(&request.argument);
             Reply::Dispatch { name, argument }
@@ -118,6 +137,50 @@ pub fn answer(request: &Request, snapshot: &Snapshot, version: Version) -> Reply
             Reply::Keyword { name, value }
         }
         "reload" => Reply::Reload,
+        // `notify <icon> <time> <colour> <message...>`: the first three
+        // are how Hyprland's own overlay draws it, and this compositor
+        // draws no overlay, so what is kept is the message.
+        "notify" => Reply::Notify {
+            message: request
+                .argument
+                .splitn(4, ' ')
+                .nth(3)
+                .unwrap_or_default()
+                .to_owned(),
+            error: false,
+        },
+        "dismissnotify" => Reply::Notify {
+            message: String::new(),
+            error: false,
+        },
+        // `seterror <colour> <message...>`, or `seterror disable`.
+        "seterror" => {
+            let rest = request.argument.trim();
+            let message = match rest.split_once(' ') {
+                Some((_, message)) if !rest.starts_with("dis") => message.trim().to_owned(),
+                _ => String::new(),
+            };
+            Reply::Notify {
+                message,
+                error: true,
+            }
+        }
+        "decorations" => text(decorations(flags, &request.argument, snapshot)),
+        // Each of these acts on something this compositor does not have,
+        // and says so rather than pretending. `switchxkblayout` needs a
+        // keymap with more than one layout, which `compositor/xkb` builds
+        // one of; `output` creates and removes headless screens, which
+        // this compositor's screens are not; `setcursor` names a cursor
+        // theme, and the cursor here is drawn in code; `kill` is
+        // Hyprland's click-to-kill mode, which needs a pointer grab.
+        "switchxkblayout" => text("this keymap has one layout\n".to_owned()),
+        "output" => text("the screens are the card's, not this compositor's to make\n".to_owned()),
+        "setcursor" => {
+            text("the cursor is drawn in code; there is no theme to choose\n".to_owned())
+        }
+        "kill" => {
+            text("click-to-kill is not implemented; `closewindow` names a window\n".to_owned())
+        }
         // `hyprctl plugin list`, and nothing else: Hyprland's `load` and
         // `unload` take a shared object, and this compositor's plugins are
         // programs it starts.
@@ -130,6 +193,218 @@ pub fn answer(request: &Request, snapshot: &Snapshot, version: Version) -> Reply
         // keeps working for everything else it asks.
         other => text(format!("unknown request {other}\n")),
     }
+}
+
+/// `hyprctl decorations <window>`: what is drawn around one window.
+///
+/// Hyprland lists a decoration a plugin may have added; this compositor
+/// draws a border and nothing else, so that is what it lists -- and a
+/// window it does not have is an empty list, as Hyprland's is.
+fn decorations(flags: Flags, which: &str, snapshot: &Snapshot) -> String {
+    let found = snapshot
+        .windows
+        .iter()
+        .find(|window| window.title == which.trim() || window.class == which.trim());
+    if flags.format() == Format::Json {
+        let mut out = Json::new(pretty(flags));
+        out.array();
+        if found.is_some() {
+            out.object();
+            out.string("decorationName", "border");
+            out.number("priority", 0);
+            out.end('}');
+        }
+        out.end(']');
+        return finish(out, flags);
+    }
+    match found {
+        Some(_) => "Decoration border:\n\tpriority: 0\n".to_owned(),
+        None => String::new(),
+    }
+}
+
+/// `hyprctl globalshortcuts`: every shortcut a program registered.
+fn global_shortcuts(flags: Flags, shortcuts: &[crate::Shortcut]) -> String {
+    if flags.format() == Format::Json {
+        let mut out = Json::new(pretty(flags));
+        out.array();
+        for shortcut in shortcuts {
+            out.object();
+            out.string("name", &shortcut.name);
+            out.string("description", &shortcut.description);
+            out.end('}');
+        }
+        out.end(']');
+        return finish(out, flags);
+    }
+    if shortcuts.is_empty() {
+        return "none\n".to_owned();
+    }
+    shortcuts
+        .iter()
+        .map(|shortcut| format!("{} -> {}\n", shortcut.name, shortcut.description))
+        .collect()
+}
+
+/// `hyprctl getoption <name>`, in Hyprland's own shape: the value under the
+/// key its *type* names, and whether the configuration set it.
+fn option_named(flags: Flags, name: &str, options: &[crate::Opt]) -> String {
+    let Some(option) = options.iter().find(|option| option.name == name) else {
+        return "no such option\n".to_owned();
+    };
+    if flags.format() == Format::Json {
+        let mut out = Json::new(pretty(flags));
+        out.object();
+        out.string("option", &option.name);
+        // Hyprland puts a number bare and a string quoted, under a key
+        // named for the type; a script reads exactly that key.
+        match option.kind {
+            "str" | "custom" => out.string(option.kind, &option.value),
+            _ => out.bare(option.kind, &option.value),
+        }
+        out.boolean("set", option.set);
+        out.end('}');
+        return finish(out, flags);
+    }
+    // Hyprland's readable form writes a complex value as `custom type:`
+    // and its JSON key as `custom`; every other type is the same word in
+    // both.
+    let word = if option.kind == "custom" {
+        "custom type"
+    } else {
+        option.kind
+    };
+    format!("{word}: {}\nset: {}\n", option.value, option.set)
+}
+
+/// `hyprctl descriptions`: every option the compositor has.
+///
+/// Hyprland prints a sentence about each, written beside its default in its
+/// own configuration table. This compositor's table has no such sentences,
+/// so what is printed is the name, the type and the value -- which is what
+/// a script reading this command is after, and is the truth rather than a
+/// row of empty strings.
+fn descriptions(flags: Flags, options: &[crate::Opt]) -> String {
+    if flags.format() == Format::Json {
+        let mut out = Json::new(pretty(flags));
+        out.array();
+        for option in options {
+            out.object();
+            out.string("value", &option.name);
+            out.string("type", option.kind);
+            out.string("data", &option.value);
+            out.end('}');
+        }
+        out.end(']');
+        return finish(out, flags);
+    }
+    options
+        .iter()
+        .map(|option| format!("{} ({}) = {}\n", option.name, option.kind, option.value))
+        .collect()
+}
+
+/// `hyprctl animations`: the animations and the beziers, in that order,
+/// which is how Hyprland prints them.
+fn animations(flags: Flags, snapshot: &Snapshot) -> String {
+    if flags.format() == Format::Json {
+        let mut out = Json::new(pretty(flags));
+        out.array();
+        out.array();
+        for animation in &snapshot.animations {
+            out.object();
+            out.string("name", &animation.name);
+            out.boolean("overridden", animation.overridden);
+            out.string("bezier", &animation.bezier);
+            out.boolean("enabled", animation.enabled);
+            out.bare("speed", &format!("{:.2}", animation.speed));
+            out.string("style", &animation.style);
+            out.end('}');
+        }
+        out.end(']');
+        out.array();
+        for bezier in &snapshot.beziers {
+            out.object();
+            out.string("name", &bezier.name);
+            out.bare("X0", &format!("{:.2}", bezier.first.0));
+            out.bare("Y0", &format!("{:.2}", bezier.first.1));
+            out.bare("X1", &format!("{:.2}", bezier.second.0));
+            out.bare("Y1", &format!("{:.2}", bezier.second.1));
+            out.end('}');
+        }
+        out.end(']');
+        out.end(']');
+        return finish(out, flags);
+    }
+    let mut result = String::from("animations:\n");
+    for animation in &snapshot.animations {
+        result.push_str(&format!(
+            "\n\tname: {}\n\t\toverridden: {}\n\t\tbezier: {}\n\t\tenabled: {}\n\t\tspeed: {:.2}\n\t\tstyle: {}\n",
+            animation.name,
+            u8::from(animation.overridden),
+            animation.bezier,
+            animation.enabled,
+            animation.speed,
+            animation.style
+        ));
+    }
+    result.push_str("beziers:\n");
+    for bezier in &snapshot.beziers {
+        result.push_str(&format!(
+            "\n\tname: {}\n\t\tX0: {:.2}\n\t\tY0: {:.2}\n\t\tX1: {:.2}\n\t\tY1: {:.2}",
+            bezier.name, bezier.first.0, bezier.first.1, bezier.second.0, bezier.second.1
+        ));
+    }
+    result
+}
+
+/// `hyprctl configerrors`: a line each, or an array of them.
+fn lines(flags: Flags, said: &[String]) -> String {
+    if flags.format() == Format::Json {
+        let mut out = Json::new(pretty(flags));
+        out.array();
+        for line in said {
+            out.item(line);
+        }
+        out.end(']');
+        return finish(out, flags);
+    }
+    said.iter().map(|line| format!("{line}\n")).collect()
+}
+
+/// `hyprctl rollinglog`: the last lines the compositor said, as one string.
+fn rolling_log(flags: Flags, log: &[String]) -> String {
+    let joined: String = log.iter().map(|line| format!("{line}\n")).collect();
+    if flags.format() == Format::Json {
+        let mut out = Json::new(pretty(flags));
+        out.object();
+        out.string("log", &joined);
+        out.end('}');
+        return finish(out, flags);
+    }
+    joined
+}
+
+/// `hyprctl systeminfo` and `hyprctl status`.
+fn system_info(flags: Flags, system: &crate::System) -> String {
+    let (monitors, windows, clients) = system.counts;
+    if flags.format() == Format::Json {
+        let mut out = Json::new(pretty(flags));
+        out.object();
+        out.string("os", &system.os);
+        out.string("kernel", &system.kernel);
+        out.number("monitors", i64::try_from(monitors).unwrap_or(0));
+        out.number("windows", i64::try_from(windows).unwrap_or(0));
+        out.number("clients", i64::try_from(clients).unwrap_or(0));
+        out.number("uptime", i64::try_from(system.uptime).unwrap_or(0));
+        out.end('}');
+        return finish(out, flags);
+    }
+    format!(
+        "os: {}\nkernel: {}\nmonitors: {monitors}\nwindows: {windows}\nclients: \
+         {clients}\nuptime: {} s\n",
+        system.os, system.kernel, system.uptime
+    )
 }
 
 /// `hyprctl binds`, in Hyprland's own shape.

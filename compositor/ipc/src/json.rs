@@ -119,6 +119,17 @@ impl Json {
         self.text.push_str("[]");
     }
 
+    /// A field whose value is written out as it stands.
+    ///
+    /// `hyprctl getoption` puts an option's value under a key named for its
+    /// *type*, and a number goes there bare while a string goes quoted --
+    /// so the caller, which knows the type, writes the value and this
+    /// writes the key.
+    pub fn bare(&mut self, name: &str, value: &str) {
+        self.field(name);
+        self.text.push_str(value);
+    }
+
     /// A string in an array.
     pub fn item(&mut self, value: &str) {
         self.comma();

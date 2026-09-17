@@ -121,6 +121,88 @@ pub struct Snapshot {
     pub cursor: (i32, i32),
     /// Whether a session lock is up.
     pub locked: bool,
+    /// Every option the compositor has and what it holds now, which is
+    /// what `hyprctl getoption` and `hyprctl descriptions` read.
+    pub options: Vec<Opt>,
+    /// Every animation the configuration names, for `hyprctl animations`.
+    pub animations: Vec<Animation>,
+    /// Every bezier it names, for the same.
+    pub beziers: Vec<Bezier>,
+    /// What could not be read in the configuration, a line each:
+    /// `hyprctl configerrors`.
+    pub errors: Vec<String>,
+    /// The last lines the compositor said: `hyprctl rollinglog`.
+    pub log: Vec<String>,
+    /// Every global shortcut a program registered, by name and
+    /// description: `hyprctl globalshortcuts`.
+    pub shortcuts: Vec<Shortcut>,
+    /// What the compositor is running on: `hyprctl systeminfo`.
+    pub system: System,
+}
+
+/// One option, as `hyprctl getoption` prints it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Opt {
+    /// Its name, `category:key`.
+    pub name: String,
+    /// What it holds now, as the compositor would write it.
+    pub value: String,
+    /// Which of Hyprland's shapes it is: `int`, `float`, `str`, `vec2`,
+    /// `custom`. That word is the JSON key its value goes under, which is
+    /// what a script reads.
+    pub kind: &'static str,
+    /// Whether the configuration set it, rather than it being the default.
+    pub set: bool,
+}
+
+/// One animation, as `hyprctl animations` prints it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Animation {
+    /// What it animates: `windows`, `workspaces`, `fade`.
+    pub name: String,
+    /// Whether the configuration named it rather than its parent.
+    pub overridden: bool,
+    /// The bezier it uses.
+    pub bezier: String,
+    /// Whether it runs at all.
+    pub enabled: bool,
+    /// How fast, in tenths of a second.
+    pub speed: f64,
+    /// Its style, where the animation has one.
+    pub style: String,
+}
+
+/// One bezier curve, as the same command prints it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Bezier {
+    /// What it is called.
+    pub name: String,
+    /// The first control point.
+    pub first: (f64, f64),
+    /// The second.
+    pub second: (f64, f64),
+}
+
+/// One global shortcut a program registered.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Shortcut {
+    /// `<app_id>:<id>`, which is what `dispatch global` takes.
+    pub name: String,
+    /// What the program says it is for.
+    pub description: String,
+}
+
+/// What `hyprctl systeminfo` and `hyprctl status` say the compositor is.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct System {
+    /// The operating system it is running on.
+    pub os: String,
+    /// The kernel.
+    pub kernel: String,
+    /// How many monitors, windows and connections there are.
+    pub counts: (usize, usize, usize),
+    /// How long it has been running, in seconds.
+    pub uptime: u64,
 }
 
 /// One key binding, with the fields `hyprctl binds` prints.
