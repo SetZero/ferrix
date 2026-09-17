@@ -487,9 +487,9 @@ it.
 | L2 | `libs/virtio::input`: configuration queries and the 8-byte event, hostile-device tests, checked against QEMU 9.2.4, fuzzed, its evdev numbers L1's. Landed (493fd843, 0bfb1de4, and the switch to L1's numbers) | no | 2 |
 | L3 | `libs/inputctl`: §3.2's messages and validation, and `queue`: report assembly, per-open queues, `SYN_DROPPED`, grab, clock conversion, state for `EVIOCGKEY`/`EVIOCGABS`. Host-tested, fuzzed | no | 3 |
 | L4 | `libs/virtio-input`: driver logic over `libs/virtio-blk`'s traits (bring-up, the queries into `HELLO`, keeping the event queue full, filtering, batching), tested against a simulated device that drops short reports as QEMU does. Landed | no | 3 |
-| L5 | `user/input`, devmgr's table entry and `start_input`, `INPUT_CONTROL_CREATE`, the core's per-device task; exit: the boot line names each device and its event types | yes | 5 |
-| L6 | devfs `/dev/input/eventN`: subdirectory, character nodes, per-open objects, the ioctl branch and §3.3's subset, `read` and `poll`; Linux's queue size, drop rule, grab and revoke answers, string and bitmap lengths, and `read`'s errors checked against `drivers/input/evdev.c` | yes | 5 |
-| L7 | `compositor/evecho`; `xtask test-input` with QMP `input-send-event` and its negative control; the devices under `run --display` | no | 3 |
+| L5 | `user/input`, devmgr's table entry and `start_input`, `INPUT_CONTROL_CREATE`, the core's per-device task; exit: the boot line names each device and its event types. Landed | yes | 5 |
+| L6 | devfs `/dev/input/eventN`: subdirectory, character nodes, per-open objects, the ioctl branch and §3.3's subset, `read` and `poll`; Linux's queue size, drop rule, grab and revoke answers, string and bitmap lengths, and `read`'s errors checked against `drivers/input/evdev.c`. Landed | yes | 5 |
+| L7 | `compositor/evecho`; `xtask test-input` with QMP `input-send-event` and its negative control; the devices under `run --display`. Landed | no | 3 |
 |  | **The input iteration** |  | **23** |
 
 **The event-loop prerequisites (§2) are iteration 2's, not these 23**, and the
@@ -534,8 +534,41 @@ is the driver logic over a transport, pinned pages and an event area the
 process hands it, host-tested against a device copying QEMU 9.2.4's keyboard,
 mouse, tablet and multi-touch tables (28 tests) and fuzzed against a real
 session (`virtio_input_driver`, 10,523,605 inputs in ten minutes without a
-failure). Two of its rules are decisions 9 and 10 below. L5–L7 are open. Of
-iteration 2's prerequisites,
+failure). Two of its rules are decisions 9 and 10 below.
+
+L5, L6 and L7 are done, and with them the input iteration. The boot line
+names each device and what it publishes -- `input    event0 QEMU Virtio
+Keyboard: keys, LEDs, repeat` -- `/dev/input/eventN` answers the requests
+§2.4 reads out of the `evdev` crate, and `cargo xtask test-input` puts a key
+and a touch in at QEMU's far end over QMP and requires them back out of the
+nodes, on x86_64 and on aarch64, with a negative control that reports every
+key as `KEY_RESERVED` and must fail.
+
+Four things the three landings found, each of which would have been a silent
+wrong answer rather than a failing test:
+
+* **A kernel task's stack is four pages, and the handshake did not fit.** A
+  decoded `Message` is 1680 bytes and a `Session` 4272, and the compiler
+  inlined the decode, the session and the box into the task's entry and added
+  every temporary up. The frame was larger than the stack and the first push
+  double-faulted. `Hello::decode_into` now decodes onto the heap, and each
+  large value has a frame of its own held apart by `#[inline(never)]`
+  (`kernel/src/input/mod.rs`, `judge`).
+* **`EVIOCGBIT` of a type with no bitmap is `EINVAL`.**
+  `evdev_handle_get_bits` switches on the type, and `EV_REP`, `EV_PWR` and
+  `EV_FF_STATUS` are not in the switch. A consumer that asked for every type
+  a device reports lost every keyboard that reports `EV_REP`, which QEMU's
+  does -- found by running `compositor/evecho` against the host's own kernel
+  before Ferrix ever ran it.
+* **A directory cursor counts from `FIRST_CURSOR`, not from zero.** The two
+  entries before it are `.` and `..`. Counting from zero listed nothing at
+  all, because the first `getdents` arrives with the cursor already at two.
+* **A copy to a program's memory may not be made with a spin lock held.** It
+  may fault, and a fault may not be resolved with preemption disabled;
+  `EVIOCGNAME` held the session across the copy. The text is now copied out
+  of the session first.
+
+Of iteration 2's prerequisites,
 E1–E3 landed (os-26) and E4 landed (the GUI session): iteration 2's
 prerequisites are all in. The roadmap's stage 17 records what E1 and E2 do not yet do as
 Linux does.

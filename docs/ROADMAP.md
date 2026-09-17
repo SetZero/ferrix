@@ -49,14 +49,18 @@ the program, trusting decoding-off BARs — is after the exit in its section.
 Stages 17 and 18 have begun, and the compositor runs: `cargo xtask
 test-compositor` boots it as init on Ferrix, and two Wayland clients tile on
 the card, pixel for pixel as the renderer draws them, on x86-64 and AArch64.
-Stage 17, display and input, has begun. Its first display iteration is done:
+Stage 17, display and input, has begun. Its display iteration is done:
 `/dev/dri/card0` served by a ring-3 virtio-gpu driver, with `cargo xtask
 test-display` requiring a compositor's colour pixel for pixel on x86-64 and
-AArch64. Input is designed in `docs/INPUT.md`, and its first two landings,
-evdev's numbers and the virtio-input protocol, are in. `epoll`, `eventfd` and
+AArch64. Its input iteration is done too, to the same standard:
+`/dev/input/eventN` served by a ring-3 virtio-input driver and a kernel input
+core, with `cargo xtask test-input` sending a key and a touch in at QEMU's
+far end over QMP and requiring them back out of the nodes on both
+architectures, and a negative control that must fail. `epoll`, `eventfd` and
 `ioctl(FIONBIO)` are in the boot test, so the kernel side of iteration 2's
 prerequisites is done, and `card0` has the primary plane and `type` property
-Smithay's legacy path needs (E4).
+Smithay's legacy path needs (E4). What is left of stage 17 is the seat: the
+compositor does not yet read those nodes.
 Each stage's section below says what exists. The marker will not move until a
 stage meets its exit criterion.
 
@@ -3428,6 +3432,29 @@ mouse, tablet and multi-touch tables and against devices that lie; the
 made, no event to be lost or reordered, and every message to fit and to end at
 a report boundary unless it is full. It ran 10,523,605 inputs in ten minutes
 without a failure. No kernel code uses it yet: L5 is the process.
+
+**Done — L5, L6 and L7 of the input iteration: events, end to end
+(2026-09-17).** The input core (`kernel/src/input`) takes a ring-3 driver's
+HELLO on a control channel `INPUT_CONTROL_CREATE` (0x104D) makes, judges it
+through `ferrix-inputctl`'s session, and publishes `/dev/input/eventN` with a
+boot line naming the device and what it publishes -- `input    event0 QEMU
+Virtio Keyboard: keys, LEDs, repeat`. `user/input`, started by devmgr for
+0x1052, drives the device through `ferrix-virtio-input` behind VT-d or the
+SMMUv3, as `user/gpu` drives the card. The nodes answer the evdev subset
+`docs/INPUT.md` §2.4 reads out of the `evdev` crate -- `EVIOCGVERSION`,
+`EVIOCGID`, `EVIOCGNAME`, `EVIOCGUNIQ`, `EVIOCGPROP`, `EVIOCGBIT` of each
+type that has a bitmap, `EVIOCGKEY`, `EVIOCGLED`, `EVIOCGSW`, `EVIOCGABS`,
+`EVIOCGREP`/`EVIOCSREP`, `EVIOCGRAB`, `EVIOCREVOKE`, `EVIOCSCLOCKID` -- with
+a queue per open following `evdev.c`'s size, drop and `SYN_DROPPED` rules.
+`compositor/evecho` is the consumer, and it runs on a Linux host's own
+`/dev/input` as well as on Ferrix, which is where it found that `EVIOCGBIT`
+of `EV_REP` is `EINVAL` on Linux. `cargo xtask test-input` boots it as init
+on x86-64 and AArch64, sends a key press, a key release, an absolute position
+and a button through QMP's `input-send-event`, and requires each one back out
+of the right node as a finished report; its negative control reports every
+key as `KEY_RESERVED` and must fail the same check. `--display` now brings
+the keyboard and the tablet too, so the compositor `run --display` starts has
+a seat to read when it grows one.
 
 **Estimate, re-baselined by os-f6 on 2026-09-16:** 74 points, from 55. The
 display's iteration 1 took 37, the input iteration is 23 (`docs/INPUT.md`

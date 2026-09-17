@@ -417,8 +417,48 @@ package FerrixRoadmap {
              * ./hello on Ferrix, in CI. */
     }
 
-    #planned requirement <'S17'> stage17SelfHosting : Stage {
+    #inProgress requirement <'S17'> stage17DisplayAndInput : Stage {
         attribute :>> number = 17;
+        attribute :>> status = StageStatus::InProgress;
+        attribute :>> size = "74 points";
+        doc /* A display core and a virtio-gpu driver in ring 3 behind
+             * /dev/dri/card0, an input core and a virtio-input driver behind
+             * /dev/input/eventN, and the calls a Rust event loop makes:
+             * epoll, eventfd, FIONBIO, memfd sealing, AF_UNIX with
+             * SCM_RIGHTS. Nothing is drawn by the kernel.
+             *
+             * The display iteration is done (xtask test-display) and so is
+             * the input iteration (xtask test-input, which sends a key and a
+             * touch through QMP and requires them back out of the nodes on
+             * x86-64 and AArch64, with a negative control that must fail).
+             * What is left is the seat: the compositor does not read those
+             * nodes yet. docs/DISPLAY.md and docs/INPUT.md are the designs. */
+    }
+
+    #inProgress requirement <'S18'> stage18Compositor : Stage {
+        attribute :>> number = 18;
+        attribute :>> status = StageStatus::InProgress;
+        attribute :>> size = "96 points";
+        doc /* The compositor itself: the Wayland wire protocol and its
+             * server, xdg-shell, wl_shm, the dwindle and master layouts, a
+             * CPU renderer, hyprland.conf and the hyprctl socket. Exit: two
+             * real Wayland clients tiled on Ferrix's screen, pixel for pixel
+             * as the renderer draws them, which xtask test-compositor
+             * requires on x86-64 and AArch64. Met. */
+    }
+
+    #planned requirement <'S19'> stage19HyprlandFidelity : Stage {
+        attribute :>> number = 19;
+        attribute :>> status = StageStatus::Planned;
+        attribute :>> size = "144 points";
+        doc /* What makes a Hyprland rather than a tiling compositor:
+             * animations with bezier curves, rounded corners, blur, shadows,
+             * opacity rules, special workspaces, groups, multiple monitors,
+             * plugins -- and the GPU behind them. */
+    }
+
+    #planned requirement <'S20'> stage20SelfHosting : Stage {
+        attribute :>> number = 20;
         attribute :>> status = StageStatus::Planned;
         attribute :>> size = "longer";
         doc /* Build Ferrix on Ferrix; the image the hosted compiler produces
@@ -447,7 +487,10 @@ package FerrixRoadmap {
     dependency from stage14RealTime to stage13Isolation, stage4Smp;
     dependency from stage15Userland to stage14RealTime;
     dependency from stage16Rustc to stage15Userland;
-    dependency from stage17SelfHosting to stage16Rustc;
+    dependency from stage17DisplayAndInput to stage10UserspaceDrivers, stage7LinuxAbi;
+    dependency from stage18Compositor to stage17DisplayAndInput;
+    dependency from stage19HyprlandFidelity to stage18Compositor;
+    dependency from stage20SelfHosting to stage16Rustc;
 
     #planned requirement <'D.fuzz'> fuzzTargetsOwed : Principles::DesignRule {
         doc /* fuzz/ has two targets, elf_parse and frame_alloc. Every
