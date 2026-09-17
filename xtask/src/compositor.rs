@@ -1333,6 +1333,18 @@ pub(crate) fn test_compositor(args: &Args) -> Result<()> {
             println!("  {arch}: no virtio-gpu in QEMU's machine; skipped");
             continue;
         }
+        // A `--boot` that names none of them is a mistake, not a run with
+        // nothing to do: `--boot tiled` -- a picture's name, not a boot's --
+        // built every program, booted nothing and exited 0, forty times in a
+        // loop that was then read as forty boots passing.
+        if !BOOTS.iter().any(|(name, _)| wanted(args, name)) {
+            let names: Vec<&str> = BOOTS.iter().map(|(name, _)| *name).collect();
+            return Err(Error::new(format!(
+                "--boot {} names no boot; they are {}",
+                args.boot.as_deref().unwrap_or_default(),
+                names.join(", ")
+            )));
+        }
         let programs = Programs::build(arch)?;
         for (name, boot) in BOOTS {
             if wanted(args, name) {
