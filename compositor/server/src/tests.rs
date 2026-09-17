@@ -3701,3 +3701,304 @@ fn the_workspace_list_names_each_workspace_and_marks_the_shown_one() {
         "the workspace that went is removed: {told:?}"
     );
 }
+
+// -- Hyprland's own protocols ------------------------------------------------
+
+/// A connection with Hyprland's own globals bound, at 15 upwards.
+fn hypr_client() -> Client {
+    let mut globals = globals();
+    for (interface, version, role) in [
+        (
+            &compositor_protocol::global_shortcuts::HYPRLAND_GLOBAL_SHORTCUTS_MANAGER_V1,
+            1,
+            Role::GlobalShortcuts,
+        ),
+        (
+            &compositor_protocol::focus_grab::HYPRLAND_FOCUS_GRAB_MANAGER_V1,
+            1,
+            Role::FocusGrabManager,
+        ),
+        (
+            &compositor_protocol::lock_notify::HYPRLAND_LOCK_NOTIFIER_V1,
+            1,
+            Role::LockNotifier,
+        ),
+        (
+            &compositor_protocol::hyprland_surface::HYPRLAND_SURFACE_MANAGER_V1,
+            2,
+            Role::HyprlandSurfaceManager,
+        ),
+        (
+            &compositor_protocol::toplevel_export::HYPRLAND_TOPLEVEL_EXPORT_MANAGER_V1,
+            2,
+            Role::ToplevelExportManager,
+        ),
+    ] {
+        assert!(globals.add(interface, version, role).is_some());
+    }
+    let mut client = Client::new(globals);
+    let mut bytes = get_registry(2);
+    bytes.extend(bind(2, 1, "wl_compositor", 6, 4));
+    for (name, interface, version, id) in [
+        (5u32, "hyprland_global_shortcuts_manager_v1", 1u32, 15u32),
+        (6, "hyprland_focus_grab_manager_v1", 1, 16),
+        (7, "hyprland_lock_notifier_v1", 1, 17),
+        (8, "hyprland_surface_manager_v1", 2, 18),
+        (9, "hyprland_toplevel_export_manager_v1", 2, 19),
+    ] {
+        bytes.extend(bind(2, name, interface, version, id));
+    }
+    assert_eq!(client.read(&bytes, &[]), bytes.len());
+    assert!(!client.is_finished(), "{:?}", client.fatal());
+    let _ = client.take_outgoing();
+    let _ = client.take_events();
+    client
+}
+
+/// A global shortcut is a *name* a program registers, fired by
+/// `dispatch global <app_id>:<id>` and not by reading the keyboard.
+#[test]
+fn a_global_shortcut_is_fired_by_its_name() {
+    let mut client = hypr_client();
+    let bytes = request(
+        15,
+        compositor_protocol::global_shortcuts::hyprland_global_shortcuts_manager_v1::request::REGISTER_SHORTCUT,
+        &[
+            ArgType::NewId,
+            ArgType::Str { nullable: false },
+            ArgType::Str { nullable: false },
+            ArgType::Str { nullable: false },
+            ArgType::Str { nullable: false },
+        ],
+        &[
+            Arg::NewId(ObjectId(20)),
+            Arg::Str(Some("record")),
+            Arg::Str(Some("rocks.magical.cast")),
+            Arg::Str(Some("Start recording")),
+            Arg::Str(Some("SUPER R")),
+        ],
+    );
+    assert_eq!(client.read(&bytes, &[]), bytes.len());
+    assert_eq!(client.fatal(), None);
+    assert_eq!(client.shortcut_names(), ["rocks.magical.cast:record"]);
+
+    assert!(!client.fire_shortcut("somebody.else:record", (5, 0)));
+    assert_eq!(sent(&mut client), []);
+    assert!(client.fire_shortcut("rocks.magical.cast:record", (5, 6)));
+    assert_eq!(
+        sent(&mut client)
+            .iter()
+            .map(|event| (event.opcode, event.args.clone()))
+            .collect::<Vec<(u16, Vec<String>)>>(),
+        [
+            (
+                compositor_protocol::global_shortcuts::hyprland_global_shortcut_v1::event::PRESSED,
+                vec![
+                    "Uint(0)".to_owned(),
+                    "Uint(5)".to_owned(),
+                    "Uint(6)".to_owned()
+                ]
+            ),
+            (
+                compositor_protocol::global_shortcuts::hyprland_global_shortcut_v1::event::RELEASED,
+                vec![
+                    "Uint(0)".to_owned(),
+                    "Uint(5)".to_owned(),
+                    "Uint(6)".to_owned()
+                ]
+            ),
+        ],
+        "a key bound to `global` is a moment, not a hold"
+    );
+
+    // The same name twice is a client that has lost track of its own
+    // shortcuts, which the protocol calls an error.
+    let bytes = request(
+        15,
+        compositor_protocol::global_shortcuts::hyprland_global_shortcuts_manager_v1::request::REGISTER_SHORTCUT,
+        &[
+            ArgType::NewId,
+            ArgType::Str { nullable: false },
+            ArgType::Str { nullable: false },
+            ArgType::Str { nullable: false },
+            ArgType::Str { nullable: false },
+        ],
+        &[
+            Arg::NewId(ObjectId(21)),
+            Arg::Str(Some("record")),
+            Arg::Str(Some("rocks.magical.cast")),
+            Arg::Str(Some("")),
+            Arg::Str(Some("")),
+        ],
+    );
+    let _ = client.read(&bytes, &[]);
+    assert!(client.is_finished());
+}
+
+/// A focus grab collects surfaces and puts them in force with `commit`,
+/// and is told `cleared` when the compositor takes it away.
+#[test]
+fn a_focus_grab_holds_the_surfaces_it_committed() {
+    let mut client = hypr_client();
+    let mut bytes = create_surface(20);
+    bytes.extend(create_surface(21));
+    bytes.extend(request(
+        16,
+        compositor_protocol::focus_grab::hyprland_focus_grab_manager_v1::request::CREATE_GRAB,
+        &[ArgType::NewId],
+        &[Arg::NewId(ObjectId(22))],
+    ));
+    for surface in [20u32, 21] {
+        bytes.extend(request(
+            22,
+            compositor_protocol::focus_grab::hyprland_focus_grab_v1::request::ADD_SURFACE,
+            &[ArgType::Object { nullable: false }],
+            &[Arg::Object(ObjectId(surface))],
+        ));
+    }
+    bytes.extend(request(
+        22,
+        compositor_protocol::focus_grab::hyprland_focus_grab_v1::request::COMMIT,
+        &[],
+        &[],
+    ));
+    assert_eq!(client.read(&bytes, &[]), bytes.len());
+    assert_eq!(client.fatal(), None);
+    assert!(
+        client.take_events().iter().any(|event| matches!(
+            event,
+            Event::FocusGrabbed { grab, surfaces }
+                if *grab == ObjectId(22) && surfaces.len() == 2
+        )),
+        "the compositor is told what it covers"
+    );
+    assert_eq!(
+        client.grabbed(),
+        [(ObjectId(22), vec![ObjectId(20), ObjectId(21)])]
+    );
+
+    client.grab_cleared(ObjectId(22));
+    assert_eq!(
+        sent(&mut client)
+            .iter()
+            .map(|event| event.opcode)
+            .collect::<Vec<u16>>(),
+        [compositor_protocol::focus_grab::hyprland_focus_grab_v1::event::CLEARED]
+    );
+    assert_eq!(client.grabbed(), []);
+}
+
+/// `hyprland-lock-notify-v1` tells a program that is not the locker when
+/// the screen locks, which nothing else does.
+#[test]
+fn a_lock_notification_is_told_both_ways() {
+    let mut client = hypr_client();
+    let bytes = request(
+        17,
+        compositor_protocol::lock_notify::hyprland_lock_notifier_v1::request::GET_LOCK_NOTIFICATION,
+        &[ArgType::NewId],
+        &[Arg::NewId(ObjectId(20))],
+    );
+    assert_eq!(client.read(&bytes, &[]), bytes.len());
+    assert_eq!(client.fatal(), None);
+    assert!(client.watches_lock());
+
+    client.lock_changed(true);
+    client.lock_changed(false);
+    assert_eq!(
+        sent(&mut client)
+            .iter()
+            .map(|event| event.opcode)
+            .collect::<Vec<u16>>(),
+        [
+            compositor_protocol::lock_notify::hyprland_lock_notification_v1::event::LOCKED,
+            compositor_protocol::lock_notify::hyprland_lock_notification_v1::event::UNLOCKED,
+        ]
+    );
+}
+
+/// `hyprland_surface_v1.set_opacity` reaches the same field
+/// `wp_alpha_modifier_v1` sets, and destroying it puts the surface back.
+#[test]
+fn a_hyprland_surface_sets_its_own_opacity() {
+    let mut client = hypr_client();
+    let mut bytes = create_surface(20);
+    bytes.extend(request(
+        18,
+        compositor_protocol::hyprland_surface::hyprland_surface_manager_v1::request::GET_HYPRLAND_SURFACE,
+        &[ArgType::NewId, ArgType::Object { nullable: false }],
+        &[Arg::NewId(ObjectId(21)), Arg::Object(ObjectId(20))],
+    ));
+    bytes.extend(request(
+        21,
+        compositor_protocol::hyprland_surface::hyprland_surface_v1::request::SET_OPACITY,
+        &[ArgType::Fixed],
+        &[Arg::Fixed(Fixed::from_f64(0.25))],
+    ));
+    bytes.extend(commit(20));
+    assert_eq!(client.read(&bytes, &[]), bytes.len());
+    assert_eq!(client.fatal(), None);
+    let alpha = client.surface_alpha(ObjectId(20)).expect("a quarter");
+    assert!((alpha - 0.25).abs() < 0.001, "{alpha}");
+}
+
+/// `hyprland-toplevel-export-v1` is `zwlr_screencopy_v1` for one window:
+/// the compositor says what buffer to make, the client makes it and hands
+/// it over, and a frame may be copied into once.
+#[test]
+fn a_window_capture_is_offered_a_buffer_and_filled_once() {
+    let mut client = hypr_client();
+    let bytes = request(
+        19,
+        compositor_protocol::toplevel_export::hyprland_toplevel_export_manager_v1::request::CAPTURE_TOPLEVEL,
+        &[ArgType::NewId, ArgType::Int, ArgType::Uint],
+        &[Arg::NewId(ObjectId(20)), Arg::Int(0), Arg::Uint(7)],
+    );
+    assert_eq!(client.read(&bytes, &[]), bytes.len());
+    assert_eq!(client.fatal(), None);
+    assert!(
+        client.take_events().iter().any(|event| matches!(
+            event,
+            Event::ToplevelExportAsked {
+                frame: ObjectId(20),
+                window: 7
+            }
+        )),
+        "the compositor is asked for window 7"
+    );
+
+    client.export_buffer(ObjectId(20), 640, 480);
+    let told = sent(&mut client);
+    assert_eq!(
+        told.first().map(|event| event.args.clone()),
+        Some(vec![
+            format!("Uint({})", crate::Format::Xrgb8888.to_wl_shm()),
+            "Uint(640)".to_owned(),
+            "Uint(480)".to_owned(),
+            "Uint(2560)".to_owned(),
+        ])
+    );
+
+    // Handing over a buffer asks for the copy; a second `copy` is a client
+    // that has lost track of an object it owns.
+    let copy = request(
+        20,
+        compositor_protocol::toplevel_export::hyprland_toplevel_export_frame_v1::request::COPY,
+        &[ArgType::Object { nullable: false }, ArgType::Int],
+        &[Arg::Object(ObjectId(21)), Arg::Int(0)],
+    );
+    assert_eq!(client.read(&copy, &[]), copy.len());
+    assert!(
+        client.take_events().iter().any(|event| matches!(
+            event,
+            Event::ToplevelExportCopy {
+                frame: ObjectId(20),
+                window: 7,
+                buffer: ObjectId(21)
+            }
+        )),
+        "the compositor is handed the buffer"
+    );
+    let _ = client.read(&copy, &[]);
+    assert!(client.is_finished(), "a second copy is refused");
+}

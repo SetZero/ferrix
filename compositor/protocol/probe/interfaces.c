@@ -64,6 +64,12 @@
 #include "ext-data-control-client-protocol.h"
 #include "wlr-output-management-client-protocol.h"
 #include "ext-workspace-client-protocol.h"
+#include "hyprland-global-shortcuts-client-protocol.h"
+#include "hyprland-focus-grab-client-protocol.h"
+#include "hyprland-lock-notify-client-protocol.h"
+#include "hyprland-toplevel-mapping-client-protocol.h"
+#include "hyprland-surface-client-protocol.h"
+#include "hyprland-toplevel-export-client-protocol.h"
 
 static void print_messages(const struct wl_interface *interface,
 			   const char *kind, const struct wl_message *messages,
@@ -258,6 +264,24 @@ int main(void)
 		&ext_workspace_manager_v1_interface,
 		&ext_workspace_group_handle_v1_interface,
 		&ext_workspace_handle_v1_interface,
+		/* hyprland-global-shortcuts-v1.xml */
+		&hyprland_global_shortcuts_manager_v1_interface,
+		&hyprland_global_shortcut_v1_interface,
+		/* hyprland-focus-grab-v1.xml */
+		&hyprland_focus_grab_manager_v1_interface,
+		&hyprland_focus_grab_v1_interface,
+		/* hyprland-lock-notify-v1.xml */
+		&hyprland_lock_notifier_v1_interface,
+		&hyprland_lock_notification_v1_interface,
+		/* hyprland-toplevel-mapping-v1.xml */
+		&hyprland_toplevel_mapping_manager_v1_interface,
+		&hyprland_toplevel_window_mapping_handle_v1_interface,
+		/* hyprland-surface-v1.xml */
+		&hyprland_surface_manager_v1_interface,
+		&hyprland_surface_v1_interface,
+		/* hyprland-toplevel-export-v1.xml */
+		&hyprland_toplevel_export_manager_v1_interface,
+		&hyprland_toplevel_export_frame_v1_interface,
 	};
 
 	printf("# libwayland %s\n", WAYLAND_VERSION);

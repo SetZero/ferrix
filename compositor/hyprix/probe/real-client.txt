@@ -1,7 +1,7 @@
 # foot foot version: 1.25.0 +pgo +ime +graphemes -assertions
 client hyprix: seat 0 devices [], 0 binds
 client hyprix: 1 monitor [headless 1024x768]
-client hyprix: started foot --log-level=info --log-no-syslog -e sleep 3 as 1819864
+client hyprix: started foot --log-level=info --log-no-syslog -e sleep 3 as 1843733
 client info: main.c:420: version: 1.25.0 +pgo +ime +graphemes -assertions
 client info: main.c:427: arch: Linux x86_64/64-bit
 client info: main.c:444: locale: en_US.UTF-8
@@ -14,10 +14,10 @@ client info: terminal.c:706: using <n> rendering threads
 client info: wayland.c:1185: using SSD decorations
 client info: wayland.c:1185: using SSD decorations
 client info: terminal.c:1511: gamma-correct blending: disabled
-client hyprix: frames 3 slowest of the last 3 947012 us
-client hyprix: frames 4 slowest of the last 1 53839 us
+client hyprix: frames 3 slowest of the last 3 923330 us
+client hyprix: frames 4 slowest of the last 1 54369 us
 client info: main.c:696: goodbye
-client hyprix: headless 1024x768 <work>/wayland frames 5 windows 0 most 1 subscribers 0 events 0 copied 0 pasted 0 slowest frame 947012 us
+client hyprix: headless 1024x768 <work>/wayland frames 5 windows 0 most 1 subscribers 0 events 0 copied 0 pasted 0 slowest frame 923330 us
 frame frames 5
 frame size 1024x768
 frame colours 7

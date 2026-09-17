@@ -90,6 +90,14 @@
 //! * **`output_management`** is `kanshi` and `wlr-randr` arranging the
 //!   screens, and **`ext_workspace`** is the workspace numbers a bar draws.
 //!
+//! * **`global_shortcuts`**, **`focus_grab`**, **`lock_notify`**,
+//!   **`toplevel_mapping`**, **`hyprland_surface`** and
+//!   **`toplevel_export`** are Hyprland's own: a shortcut a program
+//!   registers rather than a keybind, a launcher holding the focus, a
+//!   program told when the screen locks, the handle that joins a
+//!   `wl_surface` to a window everywhere else, a surface's own opacity, and
+//!   a screenshot of one *window* rather than a screen.
+//!
 //! The list of protocols is `FILES` in the generator. Adding one is vendoring
 //! its XML, adding a line there and a module to `generated/mod.rs`, and
 //! naming its interfaces in `probe/interfaces.c` and `probe/interfaces.sh`,
@@ -101,11 +109,12 @@ mod generated;
 pub use compositor_wire::Interface;
 pub use generated::{
     alpha_modifier, content_type, core, cursor_shape, data_control, ext_data_control,
-    ext_workspace, foreign_list, foreign_toplevel, fractional_scale, gamma_control, idle_inhibit,
-    idle_notify, input_method, kde_decoration, layer_shell, output_management, output_power,
-    pointer_constraints, pointer_gestures, presentation, primary_selection, relative_pointer,
-    screencopy, session_lock, shortcuts_inhibit, single_pixel, system_bell, text_input,
-    toplevel_icon, toplevel_tag, viewporter, virtual_keyboard, virtual_pointer, xdg_activation,
+    ext_workspace, focus_grab, foreign_list, foreign_toplevel, fractional_scale, gamma_control,
+    global_shortcuts, hyprland_surface, idle_inhibit, idle_notify, input_method, kde_decoration,
+    layer_shell, lock_notify, output_management, output_power, pointer_constraints,
+    pointer_gestures, presentation, primary_selection, relative_pointer, screencopy, session_lock,
+    shortcuts_inhibit, single_pixel, system_bell, text_input, toplevel_export, toplevel_icon,
+    toplevel_mapping, toplevel_tag, viewporter, virtual_keyboard, virtual_pointer, xdg_activation,
     xdg_decoration, xdg_dialog, xdg_output, xdg_shell,
 };
 
@@ -159,6 +168,12 @@ pub const GLOBALS: &[&Interface] = &[
     &ext_data_control::EXT_DATA_CONTROL_MANAGER_V1,
     &output_management::ZWLR_OUTPUT_MANAGER_V1,
     &ext_workspace::EXT_WORKSPACE_MANAGER_V1,
+    &global_shortcuts::HYPRLAND_GLOBAL_SHORTCUTS_MANAGER_V1,
+    &focus_grab::HYPRLAND_FOCUS_GRAB_MANAGER_V1,
+    &lock_notify::HYPRLAND_LOCK_NOTIFIER_V1,
+    &toplevel_mapping::HYPRLAND_TOPLEVEL_MAPPING_MANAGER_V1,
+    &hyprland_surface::HYPRLAND_SURFACE_MANAGER_V1,
+    &toplevel_export::HYPRLAND_TOPLEVEL_EXPORT_MANAGER_V1,
 ];
 
 #[cfg(test)]

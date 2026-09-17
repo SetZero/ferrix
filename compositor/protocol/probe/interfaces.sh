@@ -65,6 +65,12 @@ scan "$protocols/wlr-data-control-unstable-v1.xml" wlr-data-control
 scan "$protocols/ext-data-control-v1.xml" ext-data-control
 scan "$protocols/wlr-output-management-unstable-v1.xml" wlr-output-management
 scan "$protocols/ext-workspace-v1.xml" ext-workspace
+scan "$protocols/hyprland-global-shortcuts-v1.xml" hyprland-global-shortcuts
+scan "$protocols/hyprland-focus-grab-v1.xml" hyprland-focus-grab
+scan "$protocols/hyprland-lock-notify-v1.xml" hyprland-lock-notify
+scan "$protocols/hyprland-toplevel-mapping-v1.xml" hyprland-toplevel-mapping
+scan "$protocols/hyprland-surface-v1.xml" hyprland-surface
+scan "$protocols/hyprland-toplevel-export-v1.xml" hyprland-toplevel-export
 
 gcc -O0 -Wall -Werror -I"$work" \
     $(pkg-config --cflags wayland-client) \

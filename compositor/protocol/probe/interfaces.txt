@@ -541,3 +541,43 @@ ext_workspace_handle_v1 1 event 2 coordinates a
 ext_workspace_handle_v1 1 event 3 state u
 ext_workspace_handle_v1 1 event 4 capabilities u
 ext_workspace_handle_v1 1 event 5 removed 
+hyprland_global_shortcuts_manager_v1 1 request 0 register_shortcut nssss
+hyprland_global_shortcuts_manager_v1 1 request 1 destroy 
+hyprland_global_shortcut_v1 1 request 0 destroy 
+hyprland_global_shortcut_v1 1 event 0 pressed uuu
+hyprland_global_shortcut_v1 1 event 1 released uuu
+hyprland_focus_grab_manager_v1 1 request 0 create_grab n
+hyprland_focus_grab_manager_v1 1 request 1 destroy 
+hyprland_focus_grab_v1 1 request 0 add_surface o
+hyprland_focus_grab_v1 1 request 1 remove_surface o
+hyprland_focus_grab_v1 1 request 2 commit 
+hyprland_focus_grab_v1 1 request 3 destroy 
+hyprland_focus_grab_v1 1 event 0 cleared 
+hyprland_lock_notifier_v1 1 request 0 destroy 
+hyprland_lock_notifier_v1 1 request 1 get_lock_notification n
+hyprland_lock_notification_v1 1 request 0 destroy 
+hyprland_lock_notification_v1 1 event 0 locked 
+hyprland_lock_notification_v1 1 event 1 unlocked 
+hyprland_toplevel_mapping_manager_v1 1 request 0 get_window_for_toplevel no
+hyprland_toplevel_mapping_manager_v1 1 request 1 get_window_for_toplevel_wlr no
+hyprland_toplevel_mapping_manager_v1 1 request 2 destroy 
+hyprland_toplevel_window_mapping_handle_v1 1 request 0 destroy 
+hyprland_toplevel_window_mapping_handle_v1 1 event 0 window_address uu
+hyprland_toplevel_window_mapping_handle_v1 1 event 1 failed 
+hyprland_surface_manager_v1 2 request 0 get_hyprland_surface no
+hyprland_surface_manager_v1 2 request 1 destroy 
+hyprland_surface_v1 2 request 0 set_opacity f
+hyprland_surface_v1 2 request 1 destroy 
+hyprland_surface_v1 2 request 2 set_visible_region 2?o
+hyprland_toplevel_export_manager_v1 2 request 0 capture_toplevel niu
+hyprland_toplevel_export_manager_v1 2 request 1 destroy 
+hyprland_toplevel_export_manager_v1 2 request 2 capture_toplevel_with_wlr_toplevel_handle 2nio
+hyprland_toplevel_export_frame_v1 2 request 0 copy oi
+hyprland_toplevel_export_frame_v1 2 request 1 destroy 
+hyprland_toplevel_export_frame_v1 2 event 0 buffer uuuu
+hyprland_toplevel_export_frame_v1 2 event 1 damage uuuu
+hyprland_toplevel_export_frame_v1 2 event 2 flags u
+hyprland_toplevel_export_frame_v1 2 event 3 ready uuu
+hyprland_toplevel_export_frame_v1 2 event 4 failed 
+hyprland_toplevel_export_frame_v1 2 event 5 linux_dmabuf uuu
+hyprland_toplevel_export_frame_v1 2 event 6 buffer_done 

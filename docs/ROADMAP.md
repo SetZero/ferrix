@@ -4313,6 +4313,39 @@ that expression names. The screen must be the picture `compositor/render`
 blesses for the window that is left. Two new things in one picture -- a
 client acting as a device, and a dispatcher picking a window out by title.
 
+**Done — Hyprland's own protocols (2026-09-17).** Six, each written for
+something Hyprland does that no other compositor had a protocol for.
+
+`hyprland-global-shortcuts-v1` is how a screen recorder or a push-to-talk
+program has a key without reading the keyboard: it registers a *name*, the
+person binds a key to `dispatch global <app_id>:<id>`, and the program hears
+`pressed`. That is also what finally makes the `global` dispatcher mean
+something.
+
+`hyprland-focus-grab-v1` is a launcher holding the focus on its own surfaces
+until a click lands outside them. `hyprland-lock-notify-v1` tells a program
+that is *not* the locker when the screen locks -- a recorder or a notifier
+has no other way to know, because `ext-session-lock-v1` is the locker's own
+protocol and says nothing to anybody else.
+`hyprland-toplevel-mapping-v1` joins a toplevel handle from either window
+list to the address every other protocol calls that window by.
+`hyprland-surface-v1` is a surface asking to be drawn see-through, which is
+the same field `wp_alpha_modifier_v1` sets.
+`hyprland-toplevel-export-v1` is `zwlr_screencopy_v1` for one *window*,
+which is what a recorder uses for "share this window": the same two halves,
+answered out of the same pixels, with the window's rectangle in place of a
+screen's.
+
+Two are not offered, and the module says why. `hyprland-input-capture-v1`'s
+whole conversation is a `libei` socket the compositor hands over, and there
+is no `libei` on Ferrix; offering the global and never sending the
+descriptor would leave a client waiting for ever.
+`hyprland-ctm-control-v1`'s `blocked` event has a `<description>` with no
+`summary`, which this `wayland-scanner` refuses -- so its table could not be
+checked against libwayland's, and an unchecked table is the one thing the
+generator exists to avoid. The colour work it does is
+`wlr-gamma-control`'s as well, and that one is offered.
+
 **Done — a terminal (2026-09-17).** Stage 18's exit asked for one, and it
 needed pseudoterminals the kernel did not have. It has them now:
 `/dev/ptmx` gives a master, `TIOCGPTN` says which pair it is, `TIOCSPTLCK`

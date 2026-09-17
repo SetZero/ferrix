@@ -246,6 +246,32 @@ pub enum Role {
     WorkspaceGroup,
     /// `ext_workspace_handle_v1`: one workspace.
     WorkspaceHandle,
+    /// `hyprland_global_shortcuts_manager_v1`: a shortcut a program
+    /// registers rather than a keybind.
+    GlobalShortcuts,
+    /// `hyprland_global_shortcut_v1`: one of them.
+    GlobalShortcut,
+    /// `hyprland_focus_grab_manager_v1`: a launcher holding the focus.
+    FocusGrabManager,
+    /// `hyprland_focus_grab_v1`: one such hold.
+    FocusGrab,
+    /// `hyprland_lock_notifier_v1`: a program told when the screen locks.
+    LockNotifier,
+    /// `hyprland_lock_notification_v1`: one such request.
+    LockNotification,
+    /// `hyprland_toplevel_mapping_manager_v1`: the address every other
+    /// protocol calls a window by.
+    ToplevelMapping,
+    /// `hyprland_toplevel_window_mapping_handle_v1`: one answer.
+    MappingHandle,
+    /// `hyprland_surface_manager_v1`: a surface's own opacity.
+    HyprlandSurfaceManager,
+    /// `hyprland_surface_v1`: one surface's.
+    HyprlandSurface,
+    /// `hyprland_toplevel_export_manager_v1`: a screenshot of one window.
+    ToplevelExportManager,
+    /// `hyprland_toplevel_export_frame_v1`: one being taken.
+    ToplevelExportFrame,
 }
 
 impl Role {

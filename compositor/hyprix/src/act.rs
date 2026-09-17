@@ -213,19 +213,38 @@ fn event(data: &str, around: &mut Around<'_>) -> bool {
     false
 }
 
-/// `global`: a shortcut a program registered.
+/// `global <app_id>:<id>`: a shortcut a program registered.
 ///
-/// `hyprland-global-shortcuts-v1` is not among the protocols this
-/// compositor offers, so the only thing that can have registered one is a
-/// plugin, and that is where the name goes.
+/// `hyprland-global-shortcuts-v1` is how a screen recorder or a
+/// push-to-talk program has a key without reading the keyboard: it
+/// registers a *name*, the person binds a key to `dispatch global <name>`,
+/// and the program hears `pressed`. A plugin may have registered the same
+/// name, and hears it too.
 fn global(name: &str, around: &mut Around<'_>) -> bool {
-    if around.plugins.dispatch("global", name) {
-        return false;
+    let at = now_monotonic();
+    let mut heard = false;
+    for slot in around.slots.iter_mut() {
+        if slot.client_mut().fire_shortcut(name, at) {
+            heard = true;
+            let _ = slot.flush();
+        }
     }
-    around.say(&format!(
-        "hyprix: nothing has registered the shortcut {name}"
-    ));
+    heard |= around.plugins.dispatch("global", name);
+    if !heard {
+        around.say(&format!(
+            "hyprix: nothing has registered the shortcut {name}"
+        ));
+    }
     false
+}
+
+/// The compositor's clock as these protocols carry it: seconds and
+/// nanoseconds.
+fn now_monotonic() -> (u64, u32) {
+    let since = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    (since.as_secs(), since.subsec_nanos())
 }
 
 /// `dpms on|off|toggle [monitor]`: turn a screen off, or every screen.

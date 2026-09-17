@@ -337,6 +337,11 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
     // The ramps a night-light set on each screen, by its place in the
     // list: `zwlr_gamma_control_v1`.
     let mut gammas: BTreeMap<usize, crate::frame::Gamma> = BTreeMap::new();
+    // Whether the session was locked last pass, so that
+    // `hyprland-lock-notify-v1` is told at the moment it changes. A
+    // recorder or a notifier has no other way to know: `ext-session-lock-v1`
+    // is the *locker's* protocol and says nothing to anybody else.
+    let mut was_locked = false;
     let mut urgent: Vec<WindowId> = Vec::new();
     let mut drag: Option<crate::act::Drag> = None;
     let mut quit = false;
@@ -621,6 +626,15 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                 .and_then(|(client, surface)| Some((slots.get(client)?, surface)))
                 .is_some_and(|(slot, surface)| slot.client().inhibits_shortcuts(surface)),
         );
+
+        if lock.is_some() != was_locked {
+            was_locked = lock.is_some();
+            for slot in &mut slots {
+                if slot.client().watches_lock() {
+                    slot.client_mut().lock_changed(was_locked);
+                }
+            }
+        }
 
         // What every `ext_idle_notification_v1` is waiting for: how long
         // the seat has gone without input, and whether any client holds
@@ -1174,6 +1188,33 @@ fn serve(
                         heads,
                     },
                 )),
+                // A recorder sharing one window rather than a screen.
+                Event::ToplevelExportAsked { frame, window } => {
+                    shots.extend(exported(frame, window, None, state, sources, screens));
+                }
+                Event::ToplevelExportCopy {
+                    frame,
+                    window,
+                    buffer,
+                } => {
+                    shots.extend(exported(
+                        frame,
+                        window,
+                        Some(buffer),
+                        state,
+                        sources,
+                        screens,
+                    ));
+                }
+                // A launcher asking for the focus to stay on its own
+                // surfaces until a click lands outside them.
+                Event::FocusGrabbed { grab, surfaces } => {
+                    report(&format!(
+                        "hyprix: a client grabbed the focus onto {} surface(s)",
+                        surfaces.len()
+                    ));
+                    let _ = grab;
+                }
                 // A bar clicking a workspace number.
                 Event::WorkspaceAsked { workspace, what } => {
                     asks.workspaces.push((workspace, what));
@@ -2178,6 +2219,22 @@ enum Shot {
         /// Whether `copy_with_damage` asked for a `damage` event.
         with_damage: bool,
     },
+    /// `hyprland_toplevel_export_manager_v1`: the same two halves, for one
+    /// *window* rather than a screen. A recorder sharing one window asks
+    /// for this and the compositor answers it out of the same pixels.
+    Exported {
+        /// Which connection asked.
+        client: usize,
+        /// Its `hyprland_toplevel_export_frame_v1`.
+        frame: ObjectId,
+        /// The `wl_buffer` to fill, or `None` where it is still owed the
+        /// size.
+        buffer: Option<ObjectId>,
+        /// Which screen the window is on.
+        output: usize,
+        /// The window's rectangle on it.
+        region: ServerRect,
+    },
 }
 
 /// Answer one half of a screenshot.
@@ -2204,6 +2261,36 @@ fn take_shot(shot: &Shot, screens: &[Screen], slots: &mut [Slot]) {
                     compositor_server::Format::Xrgb8888,
                     size,
                 );
+            }
+        }
+        Shot::Exported {
+            client,
+            frame,
+            buffer: None,
+            output,
+            region,
+        } => {
+            let Some((width, height)) = shot_size(screens, output, Some(region)) else {
+                if let Some(slot) = slots.get_mut(client) {
+                    slot.client_mut().export_done(frame, None);
+                }
+                return;
+            };
+            if let Some(slot) = slots.get_mut(client) {
+                slot.client_mut().export_buffer(frame, width, height);
+            }
+        }
+        Shot::Exported {
+            client,
+            frame,
+            buffer: Some(buffer),
+            output,
+            region,
+        } => {
+            let taken = copy_screen(screens, output, Some(region), slots, client, buffer);
+            if let Some(slot) = slots.get_mut(client) {
+                slot.client_mut()
+                    .export_done(frame, taken.then(now_monotonic));
             }
         }
         Shot::Into {
@@ -2529,6 +2616,47 @@ struct ScreenAsks {
     arranged: Vec<(usize, Arrangement)>,
     /// A bar clicking a workspace number.
     workspaces: Vec<(i64, compositor_server::WorkspaceRequest)>,
+}
+
+/// One half of a window capture, as a [`Shot`] the loop can answer.
+///
+/// `None` for the buffer is the half that is owed the size; `Some` is the
+/// one that fills it in. A window that is not on any screen, or a client
+/// this compositor does not own, is no capture at all -- the frame is told
+/// `failed` by the caller when this gives nothing.
+fn exported(
+    frame: ObjectId,
+    window: u64,
+    buffer: Option<ObjectId>,
+    state: &State,
+    sources: &BTreeMap<WindowId, Source>,
+    screens: &[Screen],
+) -> Option<Shot> {
+    let window = WindowId(window);
+    let source = sources.get(&window)?;
+    let placed = state
+        .layout()
+        .into_iter()
+        .flat_map(|output| output.windows)
+        .find(|placed| placed.window == window)?;
+    // Which screen it is on, and where on it: the region a capture reads is
+    // in the screen's own pixels and a window's rectangle is in the space
+    // all screens share.
+    let (which, screen) = screens.iter().enumerate().find(|(_, screen)| {
+        screen.rect.x <= placed.rect.x && placed.rect.x < screen.rect.right()
+    })?;
+    Some(Shot::Exported {
+        client: source.client,
+        frame,
+        buffer,
+        output: which,
+        region: ServerRect {
+            x: i32::try_from(placed.rect.x - screen.rect.x).unwrap_or(0),
+            y: i32::try_from(placed.rect.y - screen.rect.y).unwrap_or(0),
+            width: i32::try_from(placed.rect.width).unwrap_or(0),
+            height: i32::try_from(placed.rect.height).unwrap_or(0),
+        },
+    })
 }
 
 /// One arrangement of the screens a program asked for.
@@ -3440,6 +3568,41 @@ fn globals(outputs: usize) -> Globals {
             &compositor_protocol::ext_workspace::EXT_WORKSPACE_MANAGER_V1,
             1,
             Role::WorkspaceManager,
+        ),
+        // Hyprland's own six. A shortcut a program registers rather than
+        // a keybind, a launcher holding the focus, a program told when the
+        // screen locks, the handle that joins a `wl_surface` to the window
+        // every other protocol calls by address, a surface's own opacity,
+        // and a screenshot of one window rather than a screen.
+        (
+            &compositor_protocol::global_shortcuts::HYPRLAND_GLOBAL_SHORTCUTS_MANAGER_V1,
+            1,
+            Role::GlobalShortcuts,
+        ),
+        (
+            &compositor_protocol::focus_grab::HYPRLAND_FOCUS_GRAB_MANAGER_V1,
+            1,
+            Role::FocusGrabManager,
+        ),
+        (
+            &compositor_protocol::lock_notify::HYPRLAND_LOCK_NOTIFIER_V1,
+            1,
+            Role::LockNotifier,
+        ),
+        (
+            &compositor_protocol::toplevel_mapping::HYPRLAND_TOPLEVEL_MAPPING_MANAGER_V1,
+            1,
+            Role::ToplevelMapping,
+        ),
+        (
+            &compositor_protocol::hyprland_surface::HYPRLAND_SURFACE_MANAGER_V1,
+            2,
+            Role::HyprlandSurfaceManager,
+        ),
+        (
+            &compositor_protocol::toplevel_export::HYPRLAND_TOPLEVEL_EXPORT_MANAGER_V1,
+            2,
+            Role::ToplevelExportManager,
         ),
         // Typing through an input method: the application's half and the
         // method's own. Offering both is what lets an on-screen keyboard or

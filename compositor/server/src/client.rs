@@ -43,12 +43,14 @@ use compositor_xkb::Modifiers;
 
 mod control;
 mod desktop;
+mod hypr;
 mod input;
 mod outputs;
 mod screen;
 mod workspaces;
 
 pub use control::{Flavour, Manager};
+pub use hypr::{Export, Shortcut};
 pub use input::{Constraint, Injected};
 pub use outputs::Configuration;
 pub use outputs::Wanted;
@@ -271,6 +273,31 @@ pub enum Event {
     },
     /// `ext_workspace_manager_v1.commit`: carry out what was asked.
     WorkspacesCommitted,
+    /// `hyprland_focus_grab_v1.commit`: a launcher asking for the focus to
+    /// stay on its own surfaces until a click lands outside them.
+    FocusGrabbed {
+        /// The grab.
+        grab: ObjectId,
+        /// The surfaces it covers.
+        surfaces: Vec<ObjectId>,
+    },
+    /// `hyprland_toplevel_export_manager_v1.capture_toplevel`: a screenshot
+    /// of one window, which is owed the size of the buffer to make.
+    ToplevelExportAsked {
+        /// The frame.
+        frame: ObjectId,
+        /// Which window, by the address every other protocol calls it.
+        window: u64,
+    },
+    /// The client made that buffer and handed it over.
+    ToplevelExportCopy {
+        /// The frame.
+        frame: ObjectId,
+        /// Which window.
+        window: u64,
+        /// The `wl_buffer` to write into.
+        buffer: ObjectId,
+    },
     /// `xdg_system_bell_v1.ring`: the terminal bell, for the surface that
     /// rang it or for the whole seat.
     Bell {
@@ -701,6 +728,16 @@ pub struct Client {
     workspace_handles: BTreeMap<i64, ObjectId>,
     /// What each of those was last told.
     workspace_told: BTreeMap<i64, Workspace>,
+    /// The global shortcuts this client has registered.
+    shortcuts: BTreeMap<ObjectId, Shortcut>,
+    /// The focus grabs it holds, and what each covers.
+    grabs: BTreeMap<ObjectId, Vec<ObjectId>>,
+    /// The `hyprland_lock_notification_v1`s it is waiting on.
+    lock_notifications: Vec<ObjectId>,
+    /// Which surface each `hyprland_surface_v1` is on.
+    hyprland_surfaces: BTreeMap<ObjectId, ObjectId>,
+    /// The window captures being taken.
+    exports: BTreeMap<ObjectId, Export>,
     /// The next configure serial. Serials go up and are never reused, so a
     /// client's `ack_configure` names one configure and no other.
     serial: u32,
@@ -871,6 +908,11 @@ impl Client {
             workspace_groups: BTreeMap::new(),
             workspace_handles: BTreeMap::new(),
             workspace_told: BTreeMap::new(),
+            shortcuts: BTreeMap::new(),
+            grabs: BTreeMap::new(),
+            lock_notifications: Vec::new(),
+            hyprland_surfaces: BTreeMap::new(),
+            exports: BTreeMap::new(),
             serial: 1,
         }
     }
@@ -1617,6 +1659,7 @@ impl Client {
                 self.forget_control(id, other);
                 self.forget_outputs(id, other);
                 self.forget_workspaces(id, other);
+                self.forget_hypr(id, other);
             }
         }
         // wl_display.delete_id is what lets a client reuse an id without
@@ -1707,7 +1750,8 @@ impl Client {
                     || self.screen(sender, other, version, opcode, args)
                     || self.control(sender, other, version, opcode, args)
                     || self.outputs(sender, other, version, opcode, args)
-                    || self.workspaces(sender, other, opcode);
+                    || self.workspaces(sender, other, opcode)
+                    || self.hypr(sender, other, version, opcode, args);
             }
         }
     }
