@@ -15,6 +15,7 @@ use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use compositor_ipc::{Monitor, Request, Snapshot, Window, Workspace};
 use compositor_layout::{State, WindowId};
@@ -113,12 +114,7 @@ pub fn serve(
     snapshot: &Snapshot,
     plugins: &mut crate::plugins::Plugins,
 ) -> std::io::Result<Vec<compositor_ipc::Reply>> {
-    let mut line = String::new();
-    let mut buffer = [0u8; 4096];
-    // One read: `hyprctl` writes its line and waits, and a request longer
-    // than a buffer is one nothing sends.
-    let read = stream.read(&mut buffer)?;
-    line.push_str(&String::from_utf8_lossy(buffer.get(..read).unwrap_or(&[])));
+    let line = first_request(stream)?;
 
     // A connection that opens with `[[PLUGIN]]` is a plugin, and is kept
     // rather than answered and closed.
@@ -145,6 +141,54 @@ pub fn serve(
     stream.write_all(answer.as_bytes())?;
     stream.flush()?;
     Ok(todo)
+}
+
+/// How long the compositor waits for a request on a connection that has
+/// just been accepted.
+///
+/// A client connects and then writes, and the two are not one call: a
+/// compositor that read once and closed would lose the request whenever it
+/// won that race, which is what `hyprctl` saw as `Broken pipe` about half
+/// the time on an emulated guest. Long enough that a program which is
+/// merely slow is heard; short enough that a connection which says nothing
+/// at all does not hold up a frame.
+const PATIENCE: Duration = Duration::from_millis(250);
+
+/// Read the first whole line a connection sends.
+///
+/// Gives what arrived, which is empty for a connection that said nothing:
+/// the caller answers that as it answers an unknown request.
+fn first_request(stream: &mut UnixStream) -> std::io::Result<String> {
+    let _ = stream.set_read_timeout(Some(PATIENCE));
+    let mut line = String::new();
+    let mut buffer = [0u8; 4096];
+    loop {
+        match stream.read(&mut buffer) {
+            // End of file: the client shut its write half, which is what
+            // `hyprctl` does after its line.
+            Ok(0) => break,
+            Ok(read) => {
+                line.push_str(&String::from_utf8_lossy(buffer.get(..read).unwrap_or(&[])));
+                if line.contains('\n') {
+                    break;
+                }
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                break;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(error),
+        }
+    }
+    // The connection goes back to blocking for the answer, and a plugin's
+    // reads are made non-blocking when it is taken.
+    let _ = stream.set_read_timeout(None);
+    Ok(line)
 }
 
 /// Describe the compositor for an answer.
