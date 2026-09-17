@@ -4046,9 +4046,43 @@ a compositor may not open its devices blocking: the first version read the
 keyboard once round a loop that also had the clients and the screen in it,
 and stopped all three until somebody typed.
 
-What this stage still owes: the event socket a bar subscribes to; a terminal
-client, which waits on a pty; and the two-client keybind states its exit
-criterion names.
+**Done — the exit criterion, all but the terminal (2026-09-17).** `cargo
+xtask test-compositor` now does what this stage's exit asks, on x86-64 and
+AArch64. The compositor starts from a `hyprland.conf` carried in the
+initramfs; its `exec-once` lines start the two clients; they tile
+dwindle-style with the configured gaps and borders; a keybind pressed through
+QMP's `input-send-event` moves the focus and another swaps the windows; and
+each of the three states is required from QEMU's screendump, pixel for pixel,
+against an image `compositor/render`'s own tests bless. Every one of 786,432
+pixels, three times over, and the test also requires the three pictures to be
+three pictures -- a compositor that ignored both keybinds would otherwise
+pass every comparison if two expected images happened to be the same file.
+
+The IPC half runs on the guest. Hyprland's `hyprctl` is not on Ferrix's
+image, so `compositor/ctl` is the same program written here: it finds
+`$XDG_RUNTIME_DIR/hypr/<instance>/.socket.sock` where Hyprland's looks,
+writes one line and prints the answer. `probe/hyprctl.sh` now runs every
+read-only command through both clients against one compositor in one session,
+and a test requires the two answers to be identical -- which is the whole
+claim it makes. On Ferrix, two more binds run it:
+
+    bind = SUPER, C, exec, /bin/hyprctl clients
+    bind = SUPER, W, exec, /bin/hyprctl activewindow
+
+`exec` is a dispatcher the compositor answers rather than the layout, because
+starting a program is the compositor's to do; it is also how a person opens a
+terminal. After the swap, `hyprctl clients` names both windows with the
+titles and the class they set, and `hyprctl activewindow` names the
+checkerboard -- the same window the third picture draws the active border
+round.
+
+A window is reconfigured on a change of *state* as well as of size now. A
+window that has just been focused is the same size and a different state, and
+a client that is not told has a title bar that never lights up.
+
+What this stage still owes: the event socket a bar subscribes to, and a
+terminal client a person can type in at the serial console, which waits on a
+pty.
 
 **Still to do, in the order visible iterations need it.** Iteration 1, a
 blank screen on Ferrix in QEMU, pulls a first cut of stage 17 forward (the
