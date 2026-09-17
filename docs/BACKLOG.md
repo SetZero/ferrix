@@ -637,11 +637,18 @@ each with a row above saying where it stands:
   per port, a build lock, the Linux path, Windows through WSL), state
   unreported; read the commits before trusting them. `ports-curl-btop` is
   landed and can be deleted.
-* `os-a8/long-double` 8cc17d0e: the x87 long double foundation
-  (`ferrousli/src/math/ld80.rs`, 954 lines), not in `mod.rs`, never
-  compiled, no tests; the commit message has the plan (10 points for the
-  59 math and 20 complex long double forms). `os-a8/kept-os02-stub-462f7714`
-  pins a superseded os-02 commit: delete.
+* `os-a8/long-double` is landed and can be deleted: the x87 long double
+  foundation is compiled, and with it the 31 `long double` functions the
+  x87 computes directly (2026-09-17). What is left of that row: the 28
+  with no single instruction behind them -- the transcendentals, `cbrtl`,
+  `hypotl`, `fmal`, and the gamma and error functions -- each a port of
+  musl's, 5 points, and the 20 `long double complex` forms after them, 2.
+  The 200,000-argument comparison against the musl build on nazuna that
+  the original plan named was not written: the landed slice is checked
+  instead by its Rust unit tests and by `tests/c/math/longdouble.c`,
+  which is what exercises the naked shims' calling convention. Write the
+  comparison with the transcendentals, where rounding is the question.
+  `os-a8/kept-os02-stub-462f7714` pins a superseded os-02 commit: delete.
 * `os-26/fx1151-diag` 61bb2204: the reason-print build for FX-1151, not
   for `main`; its logs are on the Windows PC under
   `~/.local/share/ferrix/logs/os-26-whpx/`. The 15-site task-gone
@@ -670,8 +677,9 @@ and `MAP_PRIVATE`'s shadow objects are in `kernel/src/user/space.rs`.
 *Not superseded, and the only copy of what they hold:* `fx0701` (the FX-0701
 diagnostics the row above says to rebuild from its description -- they exist
 here, and nothing of them is on `main`); `stage9/log-header` (`xtask/src/tree.rs`,
-for the open row that every gate log names its tree); `ferrousli-posix`
-(`ld80.rs`); `unix-creds`; `ports-autobuild`. `stage8-diag` is a diagnostic
+for the open row that every gate log names its tree); `unix-creds`;
+`ports-autobuild`. `ferrousli-posix` held the `ld80.rs` foundation and
+is landed. `stage8-diag` is a diagnostic
 its own message says is not for landing, and `pre-pull-backup-2026-09-13` has
 no merge base with `main` at all.
 
