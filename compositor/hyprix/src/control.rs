@@ -202,7 +202,7 @@ pub fn snapshot(
     sources: &BTreeMap<WindowId, Source>,
     reported: &Reported<'_>,
 ) -> Snapshot {
-    let mut snapshot = describe_all(state, clients, sources, reported.submap);
+    let mut snapshot = describe_all(state, clients, sources, reported.styles, reported.submap);
     snapshot.plugins = reported.plugins.listed();
     snapshot.binds = reported.binds.iter().map(described_bind).collect();
     snapshot.devices = described_devices(reported.devices);
@@ -271,6 +271,9 @@ pub struct Reported<'a> {
     /// What could not be read in the configuration: `hyprctl
     /// configerrors`.
     pub errors: &'a [String],
+    /// What a rule gave each window to be drawn with, which `hyprctl
+    /// getprop` reads.
+    pub styles: &'a BTreeMap<WindowId, compositor_render::WindowStyle>,
     /// The last lines the compositor said: `hyprctl rollinglog`.
     pub log: &'a [String],
     /// How long it has been running, in seconds.
@@ -305,6 +308,18 @@ fn described_options(config: &compositor_config::Config) -> Vec<compositor_ipc::
 /// What the table says an option is, for the `set` flag.
 fn default_of(name: &str) -> compositor_config::OptionValue {
     compositor_config::default_of(name).unwrap_or(compositor_config::OptionValue::Int(0))
+}
+
+/// What one window is drawn with, as `hyprctl getprop` reads it.
+fn described_style(style: &compositor_render::WindowStyle) -> compositor_ipc::Style {
+    compositor_ipc::Style {
+        alpha: style.opacity,
+        rounding: style.rounding,
+        border: style.border,
+        no_blur: !style.blur,
+        no_shadow: !style.shadow,
+        no_dim: !style.dim,
+    }
 }
 
 /// One bind, as `hyprctl binds` prints it.
@@ -431,6 +446,7 @@ pub fn describe_all(
     state: &State,
     clients: &[crate::state::Slot],
     sources: &BTreeMap<WindowId, Source>,
+    styles: &BTreeMap<WindowId, compositor_render::WindowStyle>,
     submap: &str,
 ) -> Snapshot {
     let mut snapshot = Snapshot {
@@ -493,7 +509,8 @@ pub fn describe_all(
                     hidden: member != shown,
                     grouped: &grouped,
                 };
-                if let Some(window) = describe(state, clients, sources, focused, &described) {
+                if let Some(window) = describe(state, clients, sources, styles, focused, &described)
+                {
                     snapshot.windows.push(window);
                 }
             }
@@ -574,6 +591,7 @@ fn describe(
     state: &State,
     clients: &[crate::state::Slot],
     sources: &BTreeMap<WindowId, Source>,
+    styles: &BTreeMap<WindowId, compositor_render::WindowStyle>,
     focused: Option<WindowId>,
     it: &Described,
 ) -> Option<Window> {
@@ -607,6 +625,10 @@ fn describe(
         pid: slot.pid(),
         focus_history: if Some(it.window) == focused { 0 } else { -1 },
         grouped: it.grouped.to_vec(),
+        style: styles
+            .get(&it.window)
+            .map(described_style)
+            .unwrap_or_default(),
     })
 }
 

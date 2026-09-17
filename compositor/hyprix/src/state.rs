@@ -457,6 +457,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                     &plugins,
                     &said,
                     &rolling.borrow(),
+                    window_rules.styles(),
                     lock.is_some(),
                     started.elapsed().as_secs(),
                 ),
@@ -478,6 +479,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                     &plugins,
                     &said,
                     &rolling.borrow(),
+                    window_rules.styles(),
                     lock.is_some(),
                     started.elapsed().as_secs(),
                 ),
@@ -925,6 +927,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                     &plugins,
                     &said,
                     &rolling.borrow(),
+                    window_rules.styles(),
                     lock.is_some(),
                     started.elapsed().as_secs(),
                 ),
@@ -1666,8 +1669,13 @@ fn serve(
     // after the bind is how every such client knows it has the whole list,
     // and an answer that arrives after the callback is a list it never sees.
     if bound_manager {
-        let windows =
-            crate::control::toplevels(&crate::control::describe_all(state, slots, sources, ""));
+        let windows = crate::control::toplevels(&crate::control::describe_all(
+            state,
+            slots,
+            sources,
+            &BTreeMap::new(),
+            "",
+        ));
         if let Some(slot) = slots.get_mut(index) {
             slot.client_mut().show_toplevels(&windows);
         }
@@ -2763,6 +2771,7 @@ fn as_reported<'a>(
     plugins: &'a crate::plugins::Plugins,
     said: &'a Said,
     log: &'a [String],
+    styles: &'a BTreeMap<WindowId, compositor_render::WindowStyle>,
     locked: bool,
     uptime: u64,
 ) -> crate::control::Reported<'a> {
@@ -2784,6 +2793,7 @@ fn as_reported<'a>(
         animations: &said.animations,
         beziers: &said.beziers,
         errors: &said.errors,
+        styles,
         log,
         uptime,
     }

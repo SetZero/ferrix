@@ -52,7 +52,7 @@ pub use reply::{Reply, Version, answer};
 pub use request::{Flags, Format, Request};
 pub use state::{
     Animation, Bezier, Bind, Device, Devices, Keyboard, Layer, Monitor, Opt, Plugin, Shortcut,
-    Snapshot, System, Window, Workspace,
+    Snapshot, Style, System, Window, Workspace,
 };
 
 /// Hyprland's own socket names inside its instance directory.

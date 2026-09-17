@@ -5,7 +5,9 @@
 //! should describe the frame before it rather than half of the next.
 
 /// One window, with the fields `hyprctl clients` prints.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+///
+/// Not `Eq`: a window's own opacity is a fraction, as Hyprland's is.
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Window {
     /// Hyprland prints an address, which programs use as an opaque handle.
     /// This is the compositor's own window id, printed the same way.
@@ -43,6 +45,30 @@ pub struct Window {
     /// The addresses of every window in its group, itself among them, in
     /// the group's own order. Empty when it is in no group.
     pub grouped: Vec<u64>,
+    /// What it is drawn with where a `windowrule` or `setprop` asked for
+    /// something other than the style every window has: `hyprctl getprop`.
+    pub style: Style,
+}
+
+/// One window's own decorations, as `hyprctl getprop` reads them.
+///
+/// Each is `None` for "whatever the style says", which is what a window
+/// with no rule has, and `hyprctl getprop` prints the compositor's own
+/// value for one of those.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Style {
+    /// `alpha`: how much of the window shows.
+    pub alpha: Option<f32>,
+    /// `rounding`: how far its corners are cut.
+    pub rounding: Option<i64>,
+    /// `bordersize`: how wide its border is.
+    pub border: Option<i64>,
+    /// `noblur`.
+    pub no_blur: bool,
+    /// `noshadow`.
+    pub no_shadow: bool,
+    /// `nodim`.
+    pub no_dim: bool,
 }
 
 /// One workspace.

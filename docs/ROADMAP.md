@@ -4667,11 +4667,21 @@ or a bar can pick up is more use than an overlay only this compositor can
 draw. `decorations` lists what is drawn around a window, which here is a
 border and nothing else.
 
+`getprop` answers one property of one window -- the value bare in the
+readable form and under its own key in JSON, which is Hyprland's shape --
+and a property nothing set is answered with the compositor's own, since that
+is what a person asking "what is this window drawn with" wants to know.
+
 Four say plainly that they act on something this compositor does not have,
 rather than pretending or refusing: `switchxkblayout` (this keymap has one
 layout), `output` (the screens are the card's), `setcursor` (the cursor is
 drawn in code and there is no theme) and `kill` (click-to-kill needs a
 pointer grab).
+
+That leaves **two** of Hyprland's thirty-eight unanswered: `eval` and
+`repl`, which are its plugin console. They need a scripting runtime, and
+this compositor's plugins are programs it starts and talks to over the
+control socket.
 
 The second boot of `cargo xtask test-compositor` has the bar, so it is the
 one that asks: a keybind runs `hyprctl --batch binds ; devices ; layers ;

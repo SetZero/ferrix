@@ -11,7 +11,7 @@ use crate::reply::{Reply, Version, answer};
 use crate::request::{Flags, Format, Request};
 use crate::state::{
     Animation, Bezier, Bind, Device, Devices, Keyboard, Layer, Monitor, Opt, Shortcut, Snapshot,
-    System, Window, Workspace,
+    Style, System, Window, Workspace,
 };
 
 /// A small parser, so a test can say "this answer is JSON" and look inside
@@ -290,6 +290,7 @@ fn snapshot() -> Snapshot {
                 focus_history: 0,
                 hidden: false,
                 grouped: Vec::new(),
+                style: Style::default(),
             },
             Window {
                 address: 2,
@@ -310,6 +311,7 @@ fn snapshot() -> Snapshot {
                 focus_history: 1,
                 hidden: false,
                 grouped: Vec::new(),
+                style: Style::default(),
             },
         ],
         active_window: Some(1),
@@ -1442,6 +1444,7 @@ fn a_group_made_and_joined_in_one_pass_is_both_events() {
         .into_iter()
         .map(|(address, title)| Window {
             grouped: vec![2, 1],
+            style: Style::default(),
             ..watched_window(address, title)
         })
         .collect();
@@ -1718,4 +1721,41 @@ fn the_commands_with_nothing_to_act_on_say_so() {
     // And a window that is there has a border and nothing else.
     assert!(told_text("decorations one").contains("border"));
     assert_eq!(told_text("decorations nothing"), "");
+}
+
+/// `getprop` answers one property of one window, bare in the readable form
+/// and under its own key in JSON, which is what a script reads.
+#[test]
+fn getprop_answers_one_property_of_one_window() {
+    let mut snapshot = told();
+    if let Some(window) = snapshot.windows.first_mut() {
+        window.style = Style {
+            alpha: Some(0.5),
+            rounding: Some(8),
+            no_blur: true,
+            ..Style::default()
+        };
+    }
+    let ask = |line: &str| match answer(&Request::parse(line), &snapshot, Version::default()) {
+        Reply::Text(text) => text,
+        other => panic!("{line:?} asked for {other:?}"),
+    };
+    assert_eq!(ask("getprop one alpha"), "0.5\n");
+    assert_eq!(ask("getprop one rounding"), "8\n");
+    assert_eq!(ask("getprop one noblur"), "true\n");
+    // A property nothing set is the compositor's own, which is what a
+    // person asking wants to know.
+    assert_eq!(ask("getprop one bordersize"), "-1\n");
+    assert_eq!(ask("getprop one floating"), "false\n");
+    assert_eq!(ask("getprop nothing alpha"), "window not found\n");
+    assert_eq!(ask("getprop one wobble"), "prop not found\n");
+    assert_eq!(ask("getprop one"), "not enough args\n");
+
+    let json = parse::parse(&ask("j/getprop one rounding")).expect("JSON");
+    assert_eq!(json.get("rounding"), Some(&parse::Value::Number(8.0)));
+    let json = parse::parse(&ask("j/getprop one title")).expect("JSON");
+    assert_eq!(
+        json.get("title"),
+        Some(&parse::Value::Text("one".to_owned()))
+    );
 }

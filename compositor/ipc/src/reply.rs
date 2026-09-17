@@ -166,6 +166,7 @@ pub fn answer(request: &Request, snapshot: &Snapshot, version: Version) -> Reply
             }
         }
         "decorations" => text(decorations(flags, &request.argument, snapshot)),
+        "getprop" => text(window_property(flags, &request.argument, snapshot)),
         // Each of these acts on something this compositor does not have,
         // and says so rather than pretending. `switchxkblayout` needs a
         // keymap with more than one layout, which `compositor/xkb` builds
@@ -193,6 +194,70 @@ pub fn answer(request: &Request, snapshot: &Snapshot, version: Version) -> Reply
         // keeps working for everything else it asks.
         other => text(format!("unknown request {other}\n")),
     }
+}
+
+/// `hyprctl getprop <window> <property>`: one property of one window.
+///
+/// The value bare in the readable form and `{"<property>": <value>}` in
+/// JSON, which is Hyprland's own shape and what a script reads. A property
+/// nothing set is the compositor's own -- which is what a person asking
+/// wants to know, since the question is "what is this window drawn with".
+fn window_property(flags: Flags, argument: &str, snapshot: &Snapshot) -> String {
+    let mut words = argument.split_whitespace();
+    let (Some(which), Some(property)) = (words.next(), words.next()) else {
+        return "not enough args\n".to_owned();
+    };
+    let Some(window) = snapshot
+        .windows
+        .iter()
+        .find(|window| window.title == which || window.class == which)
+    else {
+        return "window not found\n".to_owned();
+    };
+    let style = &window.style;
+    let (value, quoted) = match property {
+        "alpha" | "alphaoverride" => (
+            style
+                .alpha
+                .map_or_else(|| "1".to_owned(), |alpha| format!("{alpha}")),
+            false,
+        ),
+        "rounding" => (
+            style
+                .rounding
+                .map_or_else(|| "-1".to_owned(), |value| value.to_string()),
+            false,
+        ),
+        "bordersize" => (
+            style
+                .border
+                .map_or_else(|| "-1".to_owned(), |value| value.to_string()),
+            false,
+        ),
+        "noblur" => (style.no_blur.to_string(), false),
+        "noshadow" => (style.no_shadow.to_string(), false),
+        "nodim" => (style.no_dim.to_string(), false),
+        "floating" => (window.floating.to_string(), false),
+        "fullscreen" => (window.fullscreen.to_string(), false),
+        "pid" => (window.pid.to_string(), false),
+        "class" => (window.class.clone(), true),
+        "title" => (window.title.clone(), true),
+        "workspace" => (window.workspace.to_string(), false),
+        // Hyprland's own answer to a name it does not know.
+        _ => return "prop not found\n".to_owned(),
+    };
+    if flags.format() == Format::Json {
+        let mut out = Json::new(pretty(flags));
+        out.object();
+        if quoted {
+            out.string(property, &value);
+        } else {
+            out.bare(property, &value);
+        }
+        out.end('}');
+        return finish(out, flags);
+    }
+    format!("{value}\n")
 }
 
 /// `hyprctl decorations <window>`: what is drawn around one window.
