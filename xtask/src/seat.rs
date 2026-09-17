@@ -54,6 +54,14 @@ const BACKGROUND: [u8; 3] = [0x11, 0x11, 0x11];
 const CLIENT_PATH: &str = "bin/pattern";
 const CONFIG_PATH: &str = "etc/hyprland.conf";
 
+/// How wide and tall the cursor the compositor draws is.
+///
+/// `compositor/render`'s `cursor` module: a 24x24 arrow whose tip is the
+/// pointer, drawn down and to the right of it. A screen with the pointer on
+/// it is the background plus this, and a check that wants the background
+/// alone has to say where the cursor is allowed to be.
+const CURSOR: usize = 24;
+
 /// The configuration the compositor is given: one keybind, and a client.
 ///
 /// `killactive` is the bind because its effect is visible from outside --
@@ -331,16 +339,31 @@ pub(crate) fn test_seat(args: &Args) -> Result<()> {
         );
 
         // The keybind closed the window, so the screen is the compositor's
-        // background and nothing else.
-        let (found, wrong) = mismatches(closed, BACKGROUND, 0);
-        if wrong != 0 {
+        // background -- everywhere but the cursor. The pointer was put in
+        // the middle of the screen a few steps up, and the compositor draws
+        // a 24x24 arrow whose tip is the pointer (`compositor/render`'s
+        // `cursor`), down and to the right of it. That is what is left, and
+        // a check that asked for the background *everywhere* was written
+        // before the cursor was drawn at all.
+        let tip = (closed.width / 2, closed.height / 2);
+        let (found, wrong) = mismatches(closed, BACKGROUND, usize::MAX);
+        let stray = found
+            .iter()
+            .filter(|(x, y, _)| {
+                x.saturating_sub(tip.0) >= CURSOR || y.saturating_sub(tip.1) >= CURSOR
+            })
+            .take(4)
+            .copied()
+            .collect::<Vec<_>>();
+        if !stray.is_empty() {
             return Err(Error::new(format!(
-                "{arch}: `SUPER, Q, killactive` did not clear the screen; {wrong} of {pixels} \
-                 pixels are not the background, the first: {found:?}"
+                "{arch}: `SUPER, Q, killactive` did not clear the screen; {} of {pixels} \
+                 pixels are not the background or the cursor at {tip:?}, the first: {stray:?}",
+                stray.len()
             )));
         }
         println!(
-            "  {arch}: `bind = SUPER, Q, killactive` closed the window and left the background"
+            "  {arch}: `bind = SUPER, Q, killactive` closed the window and left the background,              with {wrong} pixels of cursor at {tip:?}"
         );
     }
     Ok(())
