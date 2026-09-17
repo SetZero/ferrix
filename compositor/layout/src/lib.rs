@@ -1,6 +1,6 @@
 //! Hyprland's window management as a pure state machine: monitors,
-//! workspaces, the dwindle and master layouts, and the dispatchers a key
-//! binding runs.
+//! workspaces, the dwindle, master and monocle layouts, and the dispatchers
+//! a key binding runs.
 //!
 //! Nothing here is a Wayland object, a socket or a device. A window is a
 //! [`WindowId`] the protocol server chose, a monitor is a rectangle in
@@ -11,12 +11,11 @@
 //! is tested with arithmetic alone and carries over whichever way the Smithay
 //! decision in `docs/BACKLOG.md` goes.
 //!
-//! Hyprland is the reference: the dwindle tree follows `DwindleLayout.cpp`,
-//! the master layout `MasterLayout.cpp`, the neighbour search
+//! Hyprland is the reference: the dwindle tree follows
+//! `DwindleAlgorithm.cpp`, the master layout `MasterAlgorithm.cpp`, the
+//! monocle layout `MonocleAlgorithm.cpp`, the neighbour search
 //! `CCompositor::getWindowInDirection`, and the gap and border arithmetic
-//! `applyNodeDataToWindow`, as of Hyprland 0.53. Where 0.54 moved these into
-//! `src/layout/algorithm` and changed what they do, as it did for
-//! `movewindow`, this crate follows 0.54. Each module says where it departs.
+//! `applyNodeDataToWindow`. Each module says where it departs.
 //!
 //! Every change goes through [`State`]'s methods, and each returns the
 //! [`Change`]s it caused, so the caller redraws, reconfigures or emits IPC
@@ -25,13 +24,12 @@
 //! not understood is an [`Error`], never a panic.
 //!
 //! What is not handled yet: `dwindle:pseudotile` (the option is left unread
-//! and every tiled window fills its slot), the master layout's `center`
-//! orientation (it lays out as `left`), `master:new_on_active`,
-//! `binds:workspace_back_and_forth`, `binds:window_direction_monitor_fallback`
-//! (always on, its default), `binds:movefocus_cycles_fullscreen`, special and
-//! named workspaces, window selectors as dispatcher arguments, resizing
-//! splits, and `movewindow` on a floating window, which in Hyprland pushes it
-//! against the monitor's edge and here does nothing.
+//! and every tiled window fills its slot), the `scrolling` layout, the
+//! dwindle options that need a cursor (`smart_split`, `smart_resizing`,
+//! `use_active_for_splits`, `precise_mouse_move`, `permanent_direction_override`),
+//! per-node resizing in the master layout, window selectors as dispatcher
+//! arguments, and `movewindow` on a floating window, which in Hyprland
+//! pushes it against the monitor's edge and here does nothing.
 
 #![forbid(unsafe_code)]
 
@@ -40,6 +38,7 @@ mod dwindle;
 mod geometry;
 pub mod layers;
 mod master;
+mod monocle;
 pub mod popup;
 mod settings;
 mod state;

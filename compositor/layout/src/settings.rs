@@ -15,6 +15,8 @@ pub enum Layout {
     Dwindle,
     /// `master`.
     Master,
+    /// `monocle`: every window fills the workspace and one is shown.
+    Monocle,
 }
 
 /// Which side of a split a new dwindle window takes: `dwindle:force_split`.
@@ -225,6 +227,7 @@ impl Settings {
     pub fn from_config(config: &Config) -> Self {
         let layout = match config.str("general:layout") {
             Some(name) if name.eq_ignore_ascii_case("master") => Layout::Master,
+            Some(name) if name.eq_ignore_ascii_case("monocle") => Layout::Monocle,
             _ => Layout::Dwindle,
         };
         let force_split = match config.int("dwindle:force_split") {
@@ -277,7 +280,10 @@ impl Settings {
             special_scale_factor: finite(
                 config.float(match layout {
                     Layout::Master => "master:special_scale_factor",
-                    Layout::Dwindle => "dwindle:special_scale_factor",
+                    // Monocle has no scale factor of its own, and
+                    // `dwindle`'s is the one Hyprland reads for a window
+                    // whose layout does not offer one.
+                    Layout::Dwindle | Layout::Monocle => "dwindle:special_scale_factor",
                 }),
                 1.0,
             )

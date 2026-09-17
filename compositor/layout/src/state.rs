@@ -41,6 +41,7 @@ use crate::dispatch::{
 use crate::dwindle::Dwindle;
 use crate::geometry::{self, Area, overlap, sticks};
 use crate::master::Master;
+use crate::monocle::Monocle;
 use crate::settings::{Layout, Orientation, Settings};
 use crate::{Error, Monitor, MonitorId, Rect, WindowId, WorkspaceId};
 
@@ -145,6 +146,7 @@ pub struct MonitorLayout {
 enum Tiling {
     Dwindle(Dwindle),
     Master(Master),
+    Monocle(Monocle),
 }
 
 impl Tiling {
@@ -152,6 +154,7 @@ impl Tiling {
         match layout {
             Layout::Dwindle => Self::Dwindle(Dwindle::default()),
             Layout::Master => Self::Master(Master::default()),
+            Layout::Monocle => Self::Monocle(Monocle::default()),
         }
     }
 
@@ -167,6 +170,7 @@ impl Tiling {
         match self {
             Self::Dwindle(dwindle) => dwindle.insert(new, focused, area, settings),
             Self::Master(master) => master.insert(new, focused, settings),
+            Self::Monocle(monocle) => monocle.insert(new),
         }
     }
 
@@ -184,6 +188,7 @@ impl Tiling {
         match self {
             Self::Dwindle(dwindle) => dwindle.insert_at(new, point, toward, area, settings),
             Self::Master(master) => master.insert(new, None, settings),
+            Self::Monocle(monocle) => monocle.insert(new),
         }
     }
 
@@ -191,6 +196,7 @@ impl Tiling {
         match self {
             Self::Dwindle(dwindle) => dwindle.remove(window),
             Self::Master(master) => master.remove(window),
+            Self::Monocle(monocle) => monocle.remove(window),
         }
     }
 
@@ -199,6 +205,7 @@ impl Tiling {
         match self {
             Self::Dwindle(dwindle) => dwindle.swap(a, b),
             Self::Master(master) => master.swap(a, b),
+            Self::Monocle(monocle) => monocle.swap(a, b),
         }
     }
 
@@ -207,7 +214,7 @@ impl Tiling {
     const fn dwindle(&mut self) -> Option<&mut Dwindle> {
         match self {
             Self::Dwindle(dwindle) => Some(dwindle),
-            Self::Master(_) => None,
+            _ => None,
         }
     }
 
@@ -216,7 +223,7 @@ impl Tiling {
     fn master_windows(&self) -> &[WindowId] {
         match self {
             Self::Master(master) => master.masters(),
-            Self::Dwindle(_) => &[],
+            _ => &[],
         }
     }
 
@@ -225,7 +232,7 @@ impl Tiling {
     fn master_window(&self) -> Option<WindowId> {
         match self {
             Self::Master(master) => master.master(),
-            Self::Dwindle(_) => None,
+            _ => None,
         }
     }
 
@@ -233,7 +240,7 @@ impl Tiling {
     const fn master(&mut self) -> Option<&mut Master> {
         match self {
             Self::Master(master) => Some(master),
-            Self::Dwindle(_) => None,
+            _ => None,
         }
     }
 
@@ -241,6 +248,7 @@ impl Tiling {
         match self {
             Self::Dwindle(dwindle) => dwindle.contains(window),
             Self::Master(master) => master.contains(window),
+            Self::Monocle(monocle) => monocle.contains(window),
         }
     }
 
@@ -248,13 +256,23 @@ impl Tiling {
         match self {
             Self::Dwindle(dwindle) => dwindle.windows(),
             Self::Master(master) => master.windows(),
+            Self::Monocle(monocle) => monocle.windows(),
         }
     }
 
-    fn slots(&self, area: Area, settings: &Settings) -> Vec<(WindowId, Area)> {
+    /// Each window's box. `shown` is the workspace's focused window, which
+    /// only the monocle layout reads: it draws one window and that is the
+    /// one.
+    fn slots(
+        &self,
+        area: Area,
+        settings: &Settings,
+        shown: Option<WindowId>,
+    ) -> Vec<(WindowId, Area)> {
         match self {
             Self::Dwindle(dwindle) => dwindle.slots(area, settings),
             Self::Master(master) => master.slots(area, settings),
+            Self::Monocle(monocle) => monocle.slots(area, shown),
         }
     }
 
@@ -1958,7 +1976,7 @@ impl State {
             let work = geometry::work_area(monitor, &self.settings);
             let tiled = ws
                 .tiling
-                .slots(Area::of(work), &self.settings)
+                .slots(Area::of(work), &self.settings, self.focused_window())
                 .into_iter()
                 // A group's slot draws its active member, and that is the
                 // window a direction search has to find: it is the one with
@@ -2924,6 +2942,14 @@ impl State {
         match self.settings.layout {
             Layout::Dwindle => self.dwindle_message(word, &rest),
             Layout::Master => self.master_message(word, &rest),
+            // Monocle's own messages are `cyclenext` and `cycleprev`,
+            // which are the dispatcher of the same name and belong to no
+            // layout; every other word is not one of its messages.
+            Layout::Monocle => match word {
+                "cyclenext" => self.cycle_next(&false, &true),
+                "cycleprev" => self.cycle_next(&true, &true),
+                _ => Vec::new(),
+            },
         }
     }
 
@@ -3400,9 +3426,13 @@ impl State {
                 ),
             }];
         }
+        // The monocle layout draws the workspace's focused window, so the
+        // focus is part of what the slots are: `recalculate` reads the
+        // index `focusTargetUpdate` keeps, and the focus is that index.
+        let shown = self.recent_tiled(output.active);
         let mut windows: Vec<Placed> = ws
             .tiling
-            .slots(Area::of(area), settings)
+            .slots(Area::of(area), settings, shown)
             .into_iter()
             .map(|(window, slot)| {
                 let rect = geometry::client(slot.round(), area, settings);

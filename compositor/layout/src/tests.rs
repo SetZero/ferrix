@@ -3163,3 +3163,96 @@ fn a_master_closing_leaves_the_masters_that_are_left() {
         "the first window left takes the slot"
     );
 }
+
+// -- Monocle ------------------------------------------------------------------
+
+/// `general:layout = monocle`: every window fills the workspace and the
+/// focused one is shown.
+///
+/// Hyprland's third tiling layout, and one this compositor did not have at
+/// all: a person who wrote it got dwindle. What makes it a layout rather
+/// than a fullscreen window is that the windows are still tiled --
+/// `cyclenext` walks them, closing one shows the next, and the gaps and
+/// the border are the workspace's.
+#[test]
+fn monocle_shows_one_window_at_a_time() {
+    let mut state = setup("general:layout = monocle\n");
+    open(&mut state, &[1]);
+    // The gaps and the border are the workspace's, which is what tells a
+    // monocle window from a fullscreen one: `gaps_out` 20 and a border of
+    // 1 leave 1878x1038 at 21,21.
+    assert_eq!(rects(&state), [(1, r(21, 21, 1878, 1038))]);
+
+    // A second window is focused as it opens, so it is the one shown.
+    open(&mut state, &[2]);
+    assert_eq!(rects(&state), [(2, r(21, 21, 1878, 1038))]);
+
+    // Focusing the first shows it instead.
+    focus(&mut state, 1);
+    assert_eq!(rects(&state), [(1, r(21, 21, 1878, 1038))]);
+
+    // And both are still on the workspace, which is what makes the layout
+    // a layout.
+    assert_eq!(state.windows(WorkspaceId(1)).len(), 2);
+}
+
+/// `cyclenext` walks the windows, and each one it lands on is the one
+/// drawn.
+#[test]
+fn monocle_cyclenext_walks_the_windows() {
+    let mut state = setup(&format!("{BARE}general:layout = monocle\n"));
+    open(&mut state, &[1, 2, 3]);
+    assert_eq!(rects(&state), [(3, r(0, 0, 1920, 1080))]);
+
+    let _next = dispatch(&mut state, "cyclenext", "");
+    assert_eq!(state.focused_window(), Some(WindowId(1)));
+    assert_eq!(rects(&state), [(1, r(0, 0, 1920, 1080))]);
+
+    let _next = dispatch(&mut state, "cyclenext", "");
+    assert_eq!(rects(&state), [(2, r(0, 0, 1920, 1080))]);
+
+    // `layoutmsg cyclenext` is the monocle layout's own message and does
+    // the same thing, which is what `CMonocleAlgorithm::layoutMsg` does
+    // with it.
+    let _next = dispatch(&mut state, "layoutmsg", "cyclenext");
+    assert_eq!(rects(&state), [(3, r(0, 0, 1920, 1080))]);
+}
+
+/// Closing the shown window shows another, and closing the last empties
+/// the workspace.
+#[test]
+fn monocle_closing_the_shown_window_shows_another() {
+    let mut state = setup(&format!("{BARE}general:layout = monocle\n"));
+    open(&mut state, &[1, 2]);
+    assert_eq!(rects(&state), [(2, r(0, 0, 1920, 1080))]);
+    let _gone = state.window_gone(WindowId(2)).expect("the window");
+    assert_eq!(rects(&state), [(1, r(0, 0, 1920, 1080))]);
+    let _gone = state.window_gone(WindowId(1)).expect("the window");
+    assert_eq!(rects(&state), [] as [(u64, Rect); 0]);
+}
+
+/// A workspace whose focus is elsewhere still shows one of its windows.
+///
+/// A monitor showing a workspace nothing on it is focused on -- the other
+/// monitor has the focus -- must still draw something, or the screen goes
+/// blank when the focus moves away.
+#[test]
+fn monocle_shows_a_window_on_an_unfocused_workspace() {
+    let mut state = state_on(
+        &format!("{BARE}general:layout = monocle\n"),
+        monitor(M1, 0, 0, 1920, 1080),
+    );
+    let _second = state
+        .add_monitor(monitor(M2, 1920, 0, 1280, 1024))
+        .expect("a second monitor");
+    open(&mut state, &[1]);
+    focus(&mut state, 1);
+    let _moved = dispatch(&mut state, "focusmonitor", "1");
+    open(&mut state, &[2]);
+    assert_eq!(
+        rects_on(&state, M1),
+        [(1, r(0, 0, 1920, 1080))],
+        "the first monitor still draws its window"
+    );
+    assert_eq!(rects_on(&state, M2), [(2, r(1920, 0, 1280, 1024))]);
+}
