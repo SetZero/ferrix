@@ -659,29 +659,43 @@ each with a row above saying where it stands:
   **Both landed on 2026-09-17**, with the fixes their rows in the
   after-`rustc` table record; the branches can be deleted.
 
-**Every unmerged branch, surveyed against `main` on 2026-09-17.** Each was
-compared file by file and item by item, not by its subject line, because a
+**The branches, surveyed against `main` and cleaned up on 2026-09-17.** Each
+was compared file by file and item by item, not by its subject line, because a
 branch whose base is months old diffs against `main` as though it held
-everything that landed since.
+everything that landed since. Eighteen were deleted, none of them holding
+anything `main` lacks:
 
-*Superseded -- `main` has the same work, finished, and the branch adds
-nothing; delete them:* `ci-smmu-stage2`, `dead-driver` and `unix-gc`, whose
-patches are on `main` under other hashes (only hunk offsets and a BACKLOG row
-differ); `codex/posix-2024` and `ferrousli-netcore`, whose netdb, `inet` and
-`ifaddrs` files are each smaller than `main`'s and which would reintroduce
-`ferrousli/src/stubs.rs`, the placeholder `main` emptied one function at a
-time; `compositor-render`, `display-core` and `input-l4`, for which `main`
-defines every item they define; `stage8-filemmap`, since `MAP_SHARED` landed
-and `MAP_PRIVATE`'s shadow objects are in `kernel/src/user/space.rs`.
+* Nine were already in `main` and went with `git branch -d`, which checks:
+  `codex/posix-assert`, `codex/posix-endian`, `codex/posix-stdatomic`,
+  `ferrousli-posix`, `linux-abi-inet`, `netwire`, `ports-curl-btop`,
+  `zinc-next`, `zinc2`.
+* Nine more were superseded -- `main` defines every item they define, and
+  their patches differ from what landed only by their base: `ci-smmu-stage2`,
+  `codex/posix-2024`, `compositor-render`, `dac5`, `dead-driver`,
+  `display-core`, `input-l4`, `stage8-filemmap`, `unix-gc`. Two looked as
+  though they held something of their own and did not: `codex/posix-2024`'s
+  extra names are the internals and tests of an older netdb, whose exported
+  functions are all in `main` and which would bring back
+  `ferrousli/src/stubs.rs`, the placeholder `main` emptied one implementation
+  at a time; and `stage8-filemmap`'s `copy_out` is at the merge base, so it is
+  code `main` refactored away rather than code the branch adds.
 
-*Not superseded, and the only copy of what they hold:* `fx0701` (the FX-0701
-diagnostics the row above says to rebuild from its description -- they exist
-here, and nothing of them is on `main`); `stage9/log-header` (`xtask/src/tree.rs`,
+*Kept, as the only copy of what they hold:* `fx0701` (the FX-0701 diagnostics
+the row above asks the next session to rebuild from prose -- they exist here,
+and nothing of them is on `main`); `stage9/log-header` (`xtask/src/tree.rs`,
 for the open row that every gate log names its tree); `unix-creds`;
-`ports-autobuild`. `ferrousli-posix` held the `ld80.rs` foundation and
-is landed. `stage8-diag` is a diagnostic
-its own message says is not for landing, and `pre-pull-backup-2026-09-13` has
-no merge base with `main` at all.
+`ports-autobuild`. `stage8-diag` is a diagnostic its own message says is not
+for landing, and `pre-pull-backup-2026-09-13` has no merge base with `main` at
+all.
+
+*Kept because a worktree under them holds uncommitted work*, whatever their
+merge status: `codex/posix-stdlib`, `display-design`, `ferrousli-netdb` and
+`ferrousli-netcore`. Check `git -C <worktree> status` before removing any of
+them; `ferrousli-netcore` is superseded but its worktree is not empty.
+
+*Left alone as live work:* `compositor-backdrop`, `gui/window-head`,
+`gui/xkb-ipc`, `gui/xkb-merge`, `gui/xkb-probe` and `uutils-shell`, which
+gained commits while this survey was being written.
 
 **Waiting on the customer:** ~~Smithay's core crates or from scratch for the
 compositor server~~ — settled on 2026-09-17, from scratch, in the decisions
