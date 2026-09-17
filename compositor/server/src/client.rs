@@ -41,17 +41,21 @@ use compositor_wire::{
 };
 use compositor_xkb::Modifiers;
 
+mod capture;
 mod control;
 mod desktop;
 mod drag;
+mod frames;
 mod hypr;
 mod input;
 mod outputs;
 mod screen;
 mod workspaces;
 
+pub use capture::{Frame, Source};
 pub use control::{Flavour, Manager};
 pub use drag::Dragging;
+pub use frames::{Hotkey, Listener};
 pub use hypr::{Export, Shortcut};
 pub use input::{Constraint, Injected};
 pub use outputs::Configuration;
@@ -299,6 +303,50 @@ pub enum Event {
         window: u64,
         /// The `wl_buffer` to write into.
         buffer: ObjectId,
+    },
+    /// `ext_image_copy_capture_manager_v1.create_session`: a recorder
+    /// began taking frames out of a screen or a window, and is owed the
+    /// size of the buffer to make.
+    CaptureSession {
+        /// The session.
+        session: ObjectId,
+        /// What it is looking at.
+        source: Source,
+    },
+    /// `ext_image_copy_capture_frame_v1.capture`: the client made the
+    /// buffer and handed it over.
+    CaptureAsked {
+        /// The frame.
+        frame: ObjectId,
+        /// What to copy.
+        source: Source,
+        /// The `wl_buffer` to write into.
+        buffer: ObjectId,
+    },
+    /// `wp_pointer_warp_v1.warp_pointer`: a client asked for the pointer
+    /// to be put somewhere inside its own window.
+    PointerWarped {
+        /// The surface it named, which is one of its own.
+        surface: ObjectId,
+        /// Where inside it, in the protocol's own fixed point so that
+        /// what the compositor acts on is the number the client sent.
+        at: (Fixed, Fixed),
+        /// The serial of the input event it quoted.
+        serial: u32,
+    },
+    /// `wp_security_context_v1.commit`: a sandbox handed over a socket of
+    /// its own to accept connections on.
+    SecurityContext {
+        /// The listening socket.
+        listener: Fd,
+        /// The descriptor that is closed when the sandbox ends.
+        close: Fd,
+        /// What made the sandbox: `flatpak`, `snap`.
+        engine: String,
+        /// What is running in it.
+        app_id: String,
+        /// Which instance of it.
+        instance: String,
     },
     /// `wl_data_device.start_drag`: a client began a drag.
     DragStarted {
@@ -780,6 +828,22 @@ pub struct Client {
     source_actions: BTreeMap<ObjectId, u32>,
     /// The drag this client is under, while one is over it.
     dragging: Dragging,
+    /// Which surface each of the four per-surface presentation objects is
+    /// for: a background effect, a tearing control, a fifo and a timer.
+    for_surfaces: BTreeMap<ObjectId, ObjectId>,
+    /// The listening sockets sandboxes handed over.
+    contexts: BTreeMap<ObjectId, Listener>,
+    /// What each of those sandboxes calls itself: the engine, the
+    /// application and the instance.
+    sandboxes: BTreeMap<ObjectId, (String, String, String)>,
+    /// The keys a launcher asked for by keysym.
+    hotkeys: BTreeMap<ObjectId, Hotkey>,
+    /// What each `ext_image_capture_source_v1` is looking at.
+    capture_sources: BTreeMap<ObjectId, Source>,
+    /// What each capture session is looking at.
+    sessions: BTreeMap<ObjectId, Source>,
+    /// Each frame being copied out of one.
+    frames_taken: BTreeMap<ObjectId, Frame>,
     /// The next configure serial. Serials go up and are never reused, so a
     /// client's `ack_configure` names one configure and no other.
     serial: u32,
@@ -957,6 +1021,13 @@ impl Client {
             exports: BTreeMap::new(),
             source_actions: BTreeMap::new(),
             dragging: Dragging::default(),
+            for_surfaces: BTreeMap::new(),
+            contexts: BTreeMap::new(),
+            sandboxes: BTreeMap::new(),
+            hotkeys: BTreeMap::new(),
+            capture_sources: BTreeMap::new(),
+            sessions: BTreeMap::new(),
+            frames_taken: BTreeMap::new(),
             serial: 1,
         }
     }
@@ -1704,6 +1775,8 @@ impl Client {
                 self.forget_outputs(id, other);
                 self.forget_workspaces(id, other);
                 self.forget_hypr(id, other);
+                self.forget_frames(id, other);
+                self.forget_capture(id, other);
             }
         }
         // wl_display.delete_id is what lets a client reuse an id without
@@ -1795,7 +1868,9 @@ impl Client {
                     || self.control(sender, other, version, opcode, args)
                     || self.outputs(sender, other, version, opcode, args)
                     || self.workspaces(sender, other, opcode)
-                    || self.hypr(sender, other, version, opcode, args);
+                    || self.hypr(sender, other, version, opcode, args)
+                    || self.frames(sender, other, version, opcode, args)
+                    || self.capture(sender, other, version, opcode, args);
             }
         }
     }
@@ -1927,6 +2002,10 @@ impl Client {
         // The three lists the server itself fills, each owed everything
         // that already exists the moment it is bound.
         match global.role {
+            // A client that was told nothing must assume the compositor can
+            // do no background effect at all, so the capabilities go out at
+            // bind.
+            Role::BackgroundEffectManager => self.background_capabilities(id),
             Role::ForeignList => self.lists.push(id),
             Role::WorkspaceManager => self.workspace_managers.push(id),
             Role::OutputManager => {

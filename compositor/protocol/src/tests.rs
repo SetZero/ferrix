@@ -12,14 +12,15 @@ use std::collections::BTreeMap;
 use compositor_wire::{ArgType, Interface};
 
 use crate::{
-    GLOBALS, alpha_modifier, content_type, core, cursor_shape, data_control, ext_data_control,
-    ext_workspace, focus_grab, foreign_list, foreign_toplevel, fractional_scale, gamma_control,
-    global_shortcuts, hyprland_surface, idle_inhibit, idle_notify, input_method, kde_decoration,
-    layer_shell, lock_notify, output_management, output_power, pointer_constraints,
-    pointer_gestures, presentation, primary_selection, relative_pointer, screencopy, session_lock,
-    shortcuts_inhibit, single_pixel, system_bell, text_input, toplevel_export, toplevel_icon,
-    toplevel_mapping, toplevel_tag, viewporter, virtual_keyboard, virtual_pointer, xdg_activation,
-    xdg_decoration, xdg_dialog, xdg_output, xdg_shell,
+    GLOBALS, alpha_modifier, background_effect, capture_source, commit_timing, content_type, core,
+    cursor_shape, data_control, ext_data_control, ext_workspace, fifo, focus_grab, foreign_list,
+    foreign_toplevel, fractional_scale, gamma_control, global_shortcuts, hotkey, hyprland_surface,
+    idle_inhibit, idle_notify, image_copy, input_method, kde_decoration, layer_shell, lock_notify,
+    output_management, output_power, pointer_constraints, pointer_gestures, pointer_warp,
+    presentation, primary_selection, relative_pointer, screencopy, security_context, session_lock,
+    shortcuts_inhibit, single_pixel, system_bell, tearing_control, text_input, toplevel_export,
+    toplevel_icon, toplevel_mapping, toplevel_tag, viewporter, virtual_keyboard, virtual_pointer,
+    xdg_activation, xdg_decoration, xdg_dialog, xdg_output, xdg_shell,
 };
 
 /// The probe's output: one line per message, and one more per unnamed
@@ -155,6 +156,26 @@ fn tables() -> Vec<&'static Interface> {
         &hyprland_surface::HYPRLAND_SURFACE_V1,
         &toplevel_export::HYPRLAND_TOPLEVEL_EXPORT_MANAGER_V1,
         &toplevel_export::HYPRLAND_TOPLEVEL_EXPORT_FRAME_V1,
+        &pointer_warp::WP_POINTER_WARP_V1,
+        &background_effect::EXT_BACKGROUND_EFFECT_MANAGER_V1,
+        &background_effect::EXT_BACKGROUND_EFFECT_SURFACE_V1,
+        &tearing_control::WP_TEARING_CONTROL_MANAGER_V1,
+        &tearing_control::WP_TEARING_CONTROL_V1,
+        &fifo::WP_FIFO_MANAGER_V1,
+        &fifo::WP_FIFO_V1,
+        &commit_timing::WP_COMMIT_TIMING_MANAGER_V1,
+        &commit_timing::WP_COMMIT_TIMER_V1,
+        &security_context::WP_SECURITY_CONTEXT_MANAGER_V1,
+        &security_context::WP_SECURITY_CONTEXT_V1,
+        &hotkey::VICINAE_HOTKEY_MANAGER_V1,
+        &hotkey::VICINAE_HOTKEY_V1,
+        &capture_source::EXT_IMAGE_CAPTURE_SOURCE_V1,
+        &capture_source::EXT_OUTPUT_IMAGE_CAPTURE_SOURCE_MANAGER_V1,
+        &capture_source::EXT_FOREIGN_TOPLEVEL_IMAGE_CAPTURE_SOURCE_MANAGER_V1,
+        &image_copy::EXT_IMAGE_COPY_CAPTURE_MANAGER_V1,
+        &image_copy::EXT_IMAGE_COPY_CAPTURE_SESSION_V1,
+        &image_copy::EXT_IMAGE_COPY_CAPTURE_FRAME_V1,
+        &image_copy::EXT_IMAGE_COPY_CAPTURE_CURSOR_SESSION_V1,
     ]
 }
 

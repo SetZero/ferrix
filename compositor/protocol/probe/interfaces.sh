@@ -71,6 +71,15 @@ scan "$protocols/hyprland-lock-notify-v1.xml" hyprland-lock-notify
 scan "$protocols/hyprland-toplevel-mapping-v1.xml" hyprland-toplevel-mapping
 scan "$protocols/hyprland-surface-v1.xml" hyprland-surface
 scan "$protocols/hyprland-toplevel-export-v1.xml" hyprland-toplevel-export
+scan "$protocols/pointer-warp-v1.xml" pointer-warp
+scan "$protocols/ext-background-effect-v1.xml" ext-background-effect
+scan "$protocols/tearing-control-v1.xml" tearing-control
+scan "$protocols/fifo-v1.xml" fifo
+scan "$protocols/commit-timing-v1.xml" commit-timing
+scan "$protocols/security-context-v1.xml" security-context
+scan "$protocols/vicinae-hotkey-v1.xml" vicinae-hotkey
+scan "$protocols/ext-image-capture-source-v1.xml" ext-image-capture-source
+scan "$protocols/ext-image-copy-capture-v1.xml" ext-image-copy-capture
 
 gcc -O0 -Wall -Werror -I"$work" \
     $(pkg-config --cflags wayland-client) \

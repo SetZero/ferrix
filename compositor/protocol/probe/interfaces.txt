@@ -581,3 +581,69 @@ hyprland_toplevel_export_frame_v1 2 event 3 ready uuu
 hyprland_toplevel_export_frame_v1 2 event 4 failed 
 hyprland_toplevel_export_frame_v1 2 event 5 linux_dmabuf uuu
 hyprland_toplevel_export_frame_v1 2 event 6 buffer_done 
+wp_pointer_warp_v1 1 request 0 destroy 
+wp_pointer_warp_v1 1 request 1 warp_pointer ooffu
+ext_background_effect_manager_v1 1 request 0 destroy 
+ext_background_effect_manager_v1 1 request 1 get_background_effect no
+ext_background_effect_manager_v1 1 event 0 capabilities u
+ext_background_effect_surface_v1 1 request 0 destroy 
+ext_background_effect_surface_v1 1 request 1 set_blur_region ?o
+wp_tearing_control_manager_v1 1 request 0 destroy 
+wp_tearing_control_manager_v1 1 request 1 get_tearing_control no
+wp_tearing_control_v1 1 request 0 set_presentation_hint u
+wp_tearing_control_v1 1 request 1 destroy 
+wp_fifo_manager_v1 1 request 0 destroy 
+wp_fifo_manager_v1 1 request 1 get_fifo no
+wp_fifo_v1 1 request 0 set_barrier 
+wp_fifo_v1 1 request 1 wait_barrier 
+wp_fifo_v1 1 request 2 destroy 
+wp_commit_timing_manager_v1 1 request 0 destroy 
+wp_commit_timing_manager_v1 1 request 1 get_timer no
+wp_commit_timer_v1 1 request 0 set_timestamp uuu
+wp_commit_timer_v1 1 request 1 destroy 
+wp_security_context_manager_v1 1 request 0 destroy 
+wp_security_context_manager_v1 1 request 1 create_listener nhh
+wp_security_context_v1 1 request 0 destroy 
+wp_security_context_v1 1 request 1 set_sandbox_engine s
+wp_security_context_v1 1 request 2 set_app_id s
+wp_security_context_v1 1 request 3 set_instance_id s
+wp_security_context_v1 1 request 4 commit 
+vicinae_hotkey_manager_v1 1 request 0 destroy 
+vicinae_hotkey_manager_v1 1 request 1 bind nuu?oss
+vicinae_hotkey_v1 1 request 0 destroy 
+vicinae_hotkey_v1 1 event 0 bound 
+vicinae_hotkey_v1 1 event 1 denied us
+vicinae_hotkey_v1 1 event 2 revoked us
+vicinae_hotkey_v1 1 event 3 pressed uu
+vicinae_hotkey_v1 1 event 4 released uu
+ext_image_capture_source_v1 1 request 0 destroy 
+ext_output_image_capture_source_manager_v1 1 request 0 create_source no
+ext_output_image_capture_source_manager_v1 1 request 1 destroy 
+ext_foreign_toplevel_image_capture_source_manager_v1 1 request 0 create_source no
+ext_foreign_toplevel_image_capture_source_manager_v1 1 request 1 destroy 
+ext_image_copy_capture_manager_v1 1 request 0 create_session nou
+ext_image_copy_capture_manager_v1 1 request 1 create_pointer_cursor_session noo
+ext_image_copy_capture_manager_v1 1 request 2 destroy 
+ext_image_copy_capture_session_v1 1 request 0 create_frame n
+ext_image_copy_capture_session_v1 1 request 1 destroy 
+ext_image_copy_capture_session_v1 1 event 0 buffer_size uu
+ext_image_copy_capture_session_v1 1 event 1 shm_format u
+ext_image_copy_capture_session_v1 1 event 2 dmabuf_device a
+ext_image_copy_capture_session_v1 1 event 3 dmabuf_format ua
+ext_image_copy_capture_session_v1 1 event 4 done 
+ext_image_copy_capture_session_v1 1 event 5 stopped 
+ext_image_copy_capture_frame_v1 1 request 0 destroy 
+ext_image_copy_capture_frame_v1 1 request 1 attach_buffer o
+ext_image_copy_capture_frame_v1 1 request 2 damage_buffer iiii
+ext_image_copy_capture_frame_v1 1 request 3 capture 
+ext_image_copy_capture_frame_v1 1 event 0 transform u
+ext_image_copy_capture_frame_v1 1 event 1 damage iiii
+ext_image_copy_capture_frame_v1 1 event 2 presentation_time uuu
+ext_image_copy_capture_frame_v1 1 event 3 ready 
+ext_image_copy_capture_frame_v1 1 event 4 failed u
+ext_image_copy_capture_cursor_session_v1 1 request 0 destroy 
+ext_image_copy_capture_cursor_session_v1 1 request 1 get_capture_session n
+ext_image_copy_capture_cursor_session_v1 1 event 0 enter 
+ext_image_copy_capture_cursor_session_v1 1 event 1 leave 
+ext_image_copy_capture_cursor_session_v1 1 event 2 position ii
+ext_image_copy_capture_cursor_session_v1 1 event 3 hotspot ii

@@ -48,8 +48,8 @@ mod xdg;
 
 pub use client::{
     Client, Configuration, Constraint, Dragging, Event, Export, Fatal, Flavour, ForeignRequest,
-    ForeignToplevel, GAMMA_SIZE, Injected, Manager, Outgoing, Shortcut, Typed, Wanted, Workspace,
-    WorkspaceRequest,
+    ForeignToplevel, Frame, GAMMA_SIZE, Hotkey, Injected, Listener, Manager, Outgoing, Shortcut,
+    Source, Typed, Wanted, Workspace, WorkspaceRequest,
 };
 pub use globals::{Global, Globals};
 pub use layer::{Anchors, Layer, LayerSurface, Margin};

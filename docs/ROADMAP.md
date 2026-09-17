@@ -4394,6 +4394,45 @@ holding three offers.
 The icon the source gave is drawn at the pointer and under it, because what
 a drag *looks* like is a thing following the pointer.
 
+**Done — the last of the protocols (2026-09-17).** Nine more, which brings
+what this compositor offers to **60 globals** against Hyprland's 60.
+
+`wp_pointer_warp_v1` is a client putting the pointer somewhere *inside its
+own window*, which a game's settings panel and a drawing program both want;
+the surface has to be one the client owns, and one it does not is a protocol
+error. `ext-background-effect-v1` is a surface asking for what is behind it
+to be blurred -- `layerrule = blur` said by the protocol instead of by the
+person -- and it is drawn.
+
+`tearing-control-v1`, `fifo-v1` and `commit-timing-v1` are a client saying
+how it would like its frames scheduled. Each is read and recorded and acted
+on by nothing, and the module says why: acting on any of them means choosing
+*when* to put a frame on the screen, and this compositor draws when
+something changed and presents at once, which is what a software renderer
+with no vertical blank can do.
+
+`wp_security_context_manager_v1` is a sandbox handing over a socket of its
+own; the descriptors are taken and closed and the sandbox is named in the
+log, because this compositor accepts on one listener and telling a flatpak's
+clients apart would mean a second. `vicinae-hotkey-v1` is a launcher asking
+for a key by keysym rather than by registering a name.
+
+`ext-image-capture-source-v1` and `ext-image-copy-capture-v1` are
+screenshots as the `ext` namespace has them: a *source* -- a screen, or a
+window from either toplevel list -- and a session that copies frames out of
+it one after another. That is what a recorder actually needs, and it is what
+a `grim` or an `xdg-desktop-portal` written this year binds. It is answered
+out of the same pixels `zwlr_screencopy_v1` is.
+
+**What is left, and why.** Six of Hyprland's globals are not offered.
+`wl_drm`, `wp_linux_drm_syncobj_manager_v1`, `wp_color_manager_v1` and
+`xwayland_shell_v1` are the GPU path and XWayland, neither of which exists
+on Ferrix yet. `hyprland-input-capture-v1`'s whole conversation is a `libei`
+socket, and there is no `libei`. `hyprland-ctm-control-v1`'s XML has a
+`<description>` with no `summary`, which this `wayland-scanner` refuses, so
+its table could not be checked against libwayland's -- and an unchecked
+table is the one thing the generator exists to avoid.
+
 **Done — a terminal (2026-09-17).** Stage 18's exit asked for one, and it
 needed pseudoterminals the kernel did not have. It has them now:
 `/dev/ptmx` gives a master, `TIOCGPTN` says which pair it is, `TIOCSPTLCK`

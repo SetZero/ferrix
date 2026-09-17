@@ -666,6 +666,27 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
             report,
         );
 
+        // `wp_pointer_warp_v1`: a client put the pointer inside its own
+        // window. The last one wins, which is what a client sending two in
+        // one pass means, and the move goes out as a person's would --
+        // through the seat, so a window is entered and left the same way.
+        if let Some((x, y)) = asks.warps.pop() {
+            let moved = seat.warp(x, y);
+            if !moved.is_empty() {
+                let _done = crate::deliver::deliver(
+                    &moved,
+                    &mut focus,
+                    &state,
+                    &mut slots,
+                    &sources,
+                    now,
+                    follow_mouse,
+                    carried.is_some(),
+                );
+                changed = true;
+            }
+        }
+
         // The screenshots asked for in this pass, now that the screens are
         // in reach again.
         for shot in shots.drain(..) {
@@ -1160,6 +1181,13 @@ fn serve(
     // Clipboard managers that have just made a device, which are owed both
     // selections at once whether or not they have a window.
     let mut watching: Vec<ObjectId> = Vec::new();
+    // Where a client asked the pointer to be put, inside one of its own
+    // surfaces: `wp_pointer_warp_v1`.
+    let mut warped: Vec<(
+        usize,
+        ObjectId,
+        (compositor_wire::Fixed, compositor_wire::Fixed),
+    )> = Vec::new();
 
     let mut made_device: Vec<Which> = Vec::new();
     // A cursor shape a client named, and a window it asked to be raised.
@@ -1288,6 +1316,25 @@ fn serve(
                         heads,
                     },
                 )),
+                // The newer screenshot: a session is owed the size of the
+                // buffer to make, and a frame is filled in.
+                Event::CaptureSession { session, source } => {
+                    shots.extend(captured(session, source, None, state, sources, screens));
+                }
+                Event::CaptureAsked {
+                    frame,
+                    source,
+                    buffer,
+                } => {
+                    shots.extend(captured(
+                        frame,
+                        source,
+                        Some(buffer),
+                        state,
+                        sources,
+                        screens,
+                    ));
+                }
                 // A recorder sharing one window rather than a screen.
                 Event::ToplevelExportAsked { frame, window } => {
                     shots.extend(exported(frame, window, None, state, sources, screens));
@@ -1314,6 +1361,35 @@ fn serve(
                         surfaces.len()
                     ));
                     let _ = grab;
+                }
+                // A client putting the pointer inside its own window.
+                Event::PointerWarped {
+                    surface,
+                    at,
+                    serial,
+                } => {
+                    let _ = serial;
+                    warped.push((index, surface, at));
+                }
+                // A sandbox handed over a socket of its own. The compositor
+                // has one listener and takes connections on it alone, so
+                // the descriptors are closed and the sandbox is named in
+                // the log -- which is more than silence and less than a
+                // pretence that its clients are being told apart.
+                Event::SecurityContext {
+                    listener,
+                    close,
+                    engine,
+                    app_id,
+                    instance,
+                } => {
+                    claimed += 2;
+                    crate::clipboard::close(listener);
+                    crate::clipboard::close(close);
+                    report(&format!(
+                        "hyprix: a {engine} sandbox for {app_id} ({instance}) asked for a \
+                         socket of its own, which this compositor does not make"
+                    ));
                 }
                 // A bar clicking a workspace number.
                 Event::WorkspaceAsked { workspace, what } => {
@@ -1610,6 +1686,24 @@ fn serve(
         ));
         changed |= for_the_bar(window, what, state, slots, sources);
     }
+    for (client, surface, (x, y)) in warped {
+        // The place is inside the surface, and the pointer is put in the
+        // space all screens share: a client may only move the pointer
+        // inside its own window, which is what the protocol is for.
+        let Some(rect) = rect_of(state, sources, client, surface) else {
+            continue;
+        };
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "a screen's pixels are far inside f64's exact range"
+        )]
+        let at = (rect.x as f64 + x.to_f64(), rect.y as f64 + y.to_f64());
+        asks.warps.push(at);
+        report(&format!(
+            "hyprix: client {client} put the pointer at {}, {}",
+            at.0, at.1
+        ));
+    }
     for (window, modal) in modals {
         // `setfloating` and `settiled` act on the focused window, and this
         // one need not be focused; the layout's own call is what a rule
@@ -1811,10 +1905,19 @@ fn drawn_with(
         let Some(slot) = slots.get(source.client) else {
             continue;
         };
-        let Some(alpha) = slot.client().surface_alpha(source.surface) else {
-            continue;
-        };
-        out.entry(window).or_default().opacity = Some(alpha);
+        if let Some(alpha) = slot.client().surface_alpha(source.surface) {
+            out.entry(window).or_default().opacity = Some(alpha);
+        }
+        // `ext_background_effect_surface_v1.set_blur_region`: a client
+        // asking for what is behind it to be blurred, which is the
+        // protocol's own `layerrule = blur` for a window.
+        if slot
+            .client()
+            .surface(source.surface)
+            .is_some_and(|state| state.current.blur)
+        {
+            out.entry(window).or_default().blur = true;
+        }
     }
     out
 }
@@ -2411,6 +2514,20 @@ enum Shot {
         /// The window's rectangle on it.
         region: ServerRect,
     },
+    /// `ext-image-copy-capture-v1`: the same two halves again, for a source
+    /// that may be a screen or a window. The client is the one that asked,
+    /// which is where the buffer is.
+    Captured {
+        /// The session, or the frame once there is a buffer.
+        frame: ObjectId,
+        /// The `wl_buffer` to fill, or `None` where the session is still
+        /// owed the size.
+        buffer: Option<ObjectId>,
+        /// Which screen the source is on.
+        output: usize,
+        /// Its rectangle on that screen.
+        region: ServerRect,
+    },
 }
 
 /// Answer one half of a screenshot.
@@ -2437,6 +2554,44 @@ fn take_shot(shot: &Shot, screens: &[Screen], slots: &mut [Slot]) {
                     compositor_server::Format::Xrgb8888,
                     size,
                 );
+            }
+        }
+        // The newer screenshot: the same two halves, and the client that
+        // asked is found from the frame rather than carried.
+        Shot::Captured {
+            frame,
+            buffer,
+            output,
+            region,
+        } => {
+            let Some(client) = slots
+                .iter()
+                .position(|slot| slot.client().objects().get(frame).is_some())
+            else {
+                return;
+            };
+            match buffer {
+                None => {
+                    let Some((width, height)) = shot_size(screens, output, Some(region)) else {
+                        if let Some(slot) = slots.get_mut(client) {
+                            slot.client_mut().capture_stopped(frame);
+                        }
+                        return;
+                    };
+                    if let Some(slot) = slots.get_mut(client) {
+                        slot.client_mut().capture_offer(frame, width, height);
+                    }
+                }
+                Some(buffer) => {
+                    let taken = copy_screen(screens, output, Some(region), slots, client, buffer);
+                    if let Some(slot) = slots.get_mut(client) {
+                        if taken {
+                            slot.client_mut().capture_ready(frame, now_monotonic());
+                        } else {
+                            slot.client_mut().capture_failed(frame);
+                        }
+                    }
+                }
             }
         }
         Shot::Exported {
@@ -2836,6 +2991,9 @@ struct ScreenAsks {
     workspaces: Vec<(i64, compositor_server::WorkspaceRequest)>,
     /// What the drag protocol asked for this pass.
     drags: Vec<Drag>,
+    /// Where a client asked the pointer to be put, in the space all
+    /// screens share: `wp_pointer_warp_v1`.
+    warps: Vec<(f64, f64)>,
 }
 
 /// Carry the drag: start it, follow the pointer, and drop it.
@@ -2995,6 +3153,55 @@ enum Drag {
         /// The pipe to write it to.
         fd: Fd,
     },
+}
+
+/// One half of an `ext-image-copy-capture-v1` capture, as a [`Shot`].
+///
+/// `None` for the buffer is the session being told what size to make one;
+/// `Some` is the frame being filled in. A source that is not on any screen
+/// is no capture at all.
+fn captured(
+    object: ObjectId,
+    source: compositor_server::Source,
+    buffer: Option<ObjectId>,
+    state: &State,
+    sources: &BTreeMap<WindowId, Source>,
+    screens: &[Screen],
+) -> Option<Shot> {
+    let (client, output, region) = match source {
+        compositor_server::Source::Screen(which) => {
+            let screen = screens.get(which)?;
+            (
+                None,
+                which,
+                ServerRect {
+                    x: 0,
+                    y: 0,
+                    width: i32::try_from(screen.rect.width).unwrap_or(0),
+                    height: i32::try_from(screen.rect.height).unwrap_or(0),
+                },
+            )
+        }
+        compositor_server::Source::Window(window) => {
+            let Shot::Exported {
+                client,
+                output,
+                region,
+                ..
+            } = exported(object, window, buffer, state, sources, screens)?
+            else {
+                return None;
+            };
+            (Some(client), output, region)
+        }
+    };
+    let _ = client;
+    Some(Shot::Captured {
+        frame: object,
+        buffer,
+        output,
+        region,
+    })
 }
 
 /// One half of a window capture, as a [`Shot`] the loop can answer.
@@ -4008,6 +4215,63 @@ fn globals(outputs: usize) -> Globals {
             &compositor_protocol::toplevel_export::HYPRLAND_TOPLEVEL_EXPORT_MANAGER_V1,
             2,
             Role::ToplevelExportManager,
+        ),
+        // Where the pointer goes, what is behind a surface, and how a
+        // client would like its frames scheduled.
+        (
+            &compositor_protocol::pointer_warp::WP_POINTER_WARP_V1,
+            1,
+            Role::PointerWarp,
+        ),
+        (
+            &compositor_protocol::background_effect::EXT_BACKGROUND_EFFECT_MANAGER_V1,
+            1,
+            Role::BackgroundEffectManager,
+        ),
+        (
+            &compositor_protocol::tearing_control::WP_TEARING_CONTROL_MANAGER_V1,
+            1,
+            Role::TearingManager,
+        ),
+        (
+            &compositor_protocol::fifo::WP_FIFO_MANAGER_V1,
+            1,
+            Role::FifoManager,
+        ),
+        (
+            &compositor_protocol::commit_timing::WP_COMMIT_TIMING_MANAGER_V1,
+            1,
+            Role::CommitTimingManager,
+        ),
+        // A sandbox asking for a socket of its own, and a launcher asking
+        // for a key by keysym.
+        (
+            &compositor_protocol::security_context::WP_SECURITY_CONTEXT_MANAGER_V1,
+            1,
+            Role::SecurityContextManager,
+        ),
+        (
+            &compositor_protocol::hotkey::VICINAE_HOTKEY_MANAGER_V1,
+            1,
+            Role::HotkeyManager,
+        ),
+        // Screenshots as the `ext` namespace has them: a source, and a
+        // session that copies frames out of it. What a recorder or a
+        // screen-sharing portal written this year binds.
+        (
+            &compositor_protocol::capture_source::EXT_OUTPUT_IMAGE_CAPTURE_SOURCE_MANAGER_V1,
+            1,
+            Role::OutputCaptureSourceManager,
+        ),
+        (
+            &compositor_protocol::capture_source::EXT_FOREIGN_TOPLEVEL_IMAGE_CAPTURE_SOURCE_MANAGER_V1,
+            1,
+            Role::ToplevelCaptureSourceManager,
+        ),
+        (
+            &compositor_protocol::image_copy::EXT_IMAGE_COPY_CAPTURE_MANAGER_V1,
+            1,
+            Role::CaptureManager,
         ),
         // Typing through an input method: the application's half and the
         // method's own. Offering both is what lets an on-screen keyboard or

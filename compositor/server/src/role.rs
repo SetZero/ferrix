@@ -272,6 +272,54 @@ pub enum Role {
     ToplevelExportManager,
     /// `hyprland_toplevel_export_frame_v1`: one being taken.
     ToplevelExportFrame,
+    /// `wp_pointer_warp_v1`: a client putting the pointer inside its own
+    /// window.
+    PointerWarp,
+    /// `ext_background_effect_manager_v1`: a surface asking for what is
+    /// behind it to be blurred.
+    BackgroundEffectManager,
+    /// `ext_background_effect_surface_v1`: one surface's.
+    BackgroundEffect,
+    /// `wp_tearing_control_manager_v1`: how a client would like its frames
+    /// put on the screen.
+    TearingManager,
+    /// `wp_tearing_control_v1`: one surface's.
+    Tearing,
+    /// `wp_fifo_manager_v1`: a client asking for its frames in order.
+    FifoManager,
+    /// `wp_fifo_v1`: one surface's.
+    Fifo,
+    /// `wp_commit_timing_manager_v1`: a client asking for a commit at a
+    /// time.
+    CommitTimingManager,
+    /// `wp_commit_timer_v1`: one surface's.
+    CommitTimer,
+    /// `wp_security_context_manager_v1`: a sandbox asking for a socket of
+    /// its own.
+    SecurityContextManager,
+    /// `wp_security_context_v1`: one sandbox.
+    SecurityContext,
+    /// `vicinae_hotkey_manager_v1`: a launcher asking for a key by keysym.
+    HotkeyManager,
+    /// `vicinae_hotkey_v1`: one such key.
+    Hotkey,
+    /// `ext_output_image_capture_source_manager_v1`: a screen as something
+    /// that can be captured.
+    OutputCaptureSourceManager,
+    /// `ext_foreign_toplevel_image_capture_source_manager_v1`: a window as
+    /// the same.
+    ToplevelCaptureSourceManager,
+    /// `ext_image_capture_source_v1`: one such thing.
+    CaptureSource,
+    /// `ext_image_copy_capture_manager_v1`: a recorder or a portal.
+    CaptureManager,
+    /// `ext_image_copy_capture_session_v1`: frames out of one source.
+    CaptureSession,
+    /// `ext_image_copy_capture_frame_v1`: one of them.
+    CaptureFrame,
+    /// `ext_image_copy_capture_cursor_session_v1`: the cursor by itself,
+    /// which this compositor draws into the frame instead.
+    CursorCaptureSession,
 }
 
 impl Role {

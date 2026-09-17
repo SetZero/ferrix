@@ -98,6 +98,24 @@
 //!   `wl_surface` to a window everywhere else, a surface's own opacity, and
 //!   a screenshot of one *window* rather than a screen.
 //!
+//! * **`pointer_warp`** is a client putting the pointer somewhere inside
+//!   its own window, which a game's settings panel and a drawing program
+//!   both want; **`background_effect`** is a surface asking for what is
+//!   behind it to be blurred, which is `layerrule = blur` said by the
+//!   protocol.
+//! * **`tearing_control`**, **`fifo`** and **`commit_timing`** are a
+//!   client saying how it would like its frames scheduled.
+//! * **`security_context`** is a sandbox asking for a socket of its own,
+//!   so the compositor can tell a flatpak's clients from the rest.
+//! * **`hotkey`** is `vicinae`'s, a launcher that asks for a key by keysym
+//!   rather than registering a name.
+//!
+//! * **`capture_source`** and **`image_copy`** are screenshots as the
+//!   `ext` namespace has them: a *source* -- a screen, or a window from
+//!   either toplevel list -- and a session that copies frames out of it.
+//!   The newer `grim` and every screen-sharing portal written this year
+//!   bind these rather than `zwlr_screencopy_v1`.
+//!
 //! The list of protocols is `FILES` in the generator. Adding one is vendoring
 //! its XML, adding a line there and a module to `generated/mod.rs`, and
 //! naming its interfaces in `probe/interfaces.c` and `probe/interfaces.sh`,
@@ -108,14 +126,15 @@ mod generated;
 
 pub use compositor_wire::Interface;
 pub use generated::{
-    alpha_modifier, content_type, core, cursor_shape, data_control, ext_data_control,
-    ext_workspace, focus_grab, foreign_list, foreign_toplevel, fractional_scale, gamma_control,
-    global_shortcuts, hyprland_surface, idle_inhibit, idle_notify, input_method, kde_decoration,
-    layer_shell, lock_notify, output_management, output_power, pointer_constraints,
-    pointer_gestures, presentation, primary_selection, relative_pointer, screencopy, session_lock,
-    shortcuts_inhibit, single_pixel, system_bell, text_input, toplevel_export, toplevel_icon,
-    toplevel_mapping, toplevel_tag, viewporter, virtual_keyboard, virtual_pointer, xdg_activation,
-    xdg_decoration, xdg_dialog, xdg_output, xdg_shell,
+    alpha_modifier, background_effect, capture_source, commit_timing, content_type, core,
+    cursor_shape, data_control, ext_data_control, ext_workspace, fifo, focus_grab, foreign_list,
+    foreign_toplevel, fractional_scale, gamma_control, global_shortcuts, hotkey, hyprland_surface,
+    idle_inhibit, idle_notify, image_copy, input_method, kde_decoration, layer_shell, lock_notify,
+    output_management, output_power, pointer_constraints, pointer_gestures, pointer_warp,
+    presentation, primary_selection, relative_pointer, screencopy, security_context, session_lock,
+    shortcuts_inhibit, single_pixel, system_bell, tearing_control, text_input, toplevel_export,
+    toplevel_icon, toplevel_mapping, toplevel_tag, viewporter, virtual_keyboard, virtual_pointer,
+    xdg_activation, xdg_decoration, xdg_dialog, xdg_output, xdg_shell,
 };
 
 /// Every interface the compositor offers as a global, with the version it
@@ -174,6 +193,16 @@ pub const GLOBALS: &[&Interface] = &[
     &toplevel_mapping::HYPRLAND_TOPLEVEL_MAPPING_MANAGER_V1,
     &hyprland_surface::HYPRLAND_SURFACE_MANAGER_V1,
     &toplevel_export::HYPRLAND_TOPLEVEL_EXPORT_MANAGER_V1,
+    &pointer_warp::WP_POINTER_WARP_V1,
+    &background_effect::EXT_BACKGROUND_EFFECT_MANAGER_V1,
+    &tearing_control::WP_TEARING_CONTROL_MANAGER_V1,
+    &fifo::WP_FIFO_MANAGER_V1,
+    &commit_timing::WP_COMMIT_TIMING_MANAGER_V1,
+    &security_context::WP_SECURITY_CONTEXT_MANAGER_V1,
+    &hotkey::VICINAE_HOTKEY_MANAGER_V1,
+    &capture_source::EXT_OUTPUT_IMAGE_CAPTURE_SOURCE_MANAGER_V1,
+    &capture_source::EXT_FOREIGN_TOPLEVEL_IMAGE_CAPTURE_SOURCE_MANAGER_V1,
+    &image_copy::EXT_IMAGE_COPY_CAPTURE_MANAGER_V1,
 ];
 
 #[cfg(test)]

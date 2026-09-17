@@ -149,6 +149,12 @@ pub struct State {
     /// `wp_content_type_v1.set_content_type`: what the surface is showing,
     /// as the protocol numbers it.
     pub content: u32,
+    /// `ext_background_effect_surface_v1.set_blur_region`: whether what is
+    /// behind the surface is blurred.
+    pub blur: bool,
+    /// `wp_tearing_control_v1.set_presentation_hint`: whether the client
+    /// would rather have its frame at once than wait for a whole one.
+    pub tearing: bool,
 }
 
 impl State {
@@ -169,6 +175,8 @@ impl State {
             viewport_size: None,
             alpha: None,
             content: compositor_protocol::content_type::wp_content_type_v1::r#type::NONE,
+            blur: false,
+            tearing: false,
         }
     }
 }
@@ -263,6 +271,8 @@ impl Surface {
             viewport_size: self.current.viewport_size,
             alpha: self.current.alpha,
             content: self.current.content,
+            blur: self.current.blur,
+            tearing: self.current.tearing,
         };
         self.committed_callbacks
             .append(&mut std::mem::take(&mut self.frame_callbacks));

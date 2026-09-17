@@ -4224,3 +4224,437 @@ fn the_target_says_what_it_will_take() {
         [core::wl_data_device::event::DROP]
     );
 }
+
+// -- Where the pointer goes and how a frame is scheduled ---------------------
+
+/// A connection with the presentation globals bound, at 15 upwards, and a
+/// surface at 20.
+fn frames_client() -> Client {
+    let mut globals = globals();
+    for (interface, version, role) in [
+        (
+            &compositor_protocol::pointer_warp::WP_POINTER_WARP_V1,
+            1,
+            Role::PointerWarp,
+        ),
+        (
+            &compositor_protocol::background_effect::EXT_BACKGROUND_EFFECT_MANAGER_V1,
+            1,
+            Role::BackgroundEffectManager,
+        ),
+        (
+            &compositor_protocol::tearing_control::WP_TEARING_CONTROL_MANAGER_V1,
+            1,
+            Role::TearingManager,
+        ),
+        (
+            &compositor_protocol::hotkey::VICINAE_HOTKEY_MANAGER_V1,
+            1,
+            Role::HotkeyManager,
+        ),
+    ] {
+        assert!(globals.add(interface, version, role).is_some());
+    }
+    let mut client = Client::new(globals);
+    let mut bytes = get_registry(2);
+    bytes.extend(bind(2, 1, "wl_compositor", 6, 4));
+    for (name, interface, version, id) in [
+        (5u32, "wp_pointer_warp_v1", 1u32, 15u32),
+        (6, "ext_background_effect_manager_v1", 1, 16),
+        (7, "wp_tearing_control_manager_v1", 1, 17),
+        (8, "vicinae_hotkey_manager_v1", 1, 18),
+    ] {
+        bytes.extend(bind(2, name, interface, version, id));
+    }
+    bytes.extend(create_surface(20));
+    assert_eq!(client.read(&bytes, &[]), bytes.len());
+    assert!(!client.is_finished(), "{:?}", client.fatal());
+    let _ = client.take_outgoing();
+    let _ = client.take_events();
+    client
+}
+
+/// `warp_pointer` names a surface the client owns and a place inside it,
+/// and a surface it does not own is a protocol error.
+#[test]
+fn a_client_may_warp_the_pointer_inside_its_own_window() {
+    let mut client = frames_client();
+    let bytes = request(
+        15,
+        compositor_protocol::pointer_warp::wp_pointer_warp_v1::request::WARP_POINTER,
+        &[
+            ArgType::Object { nullable: false },
+            ArgType::Object { nullable: false },
+            ArgType::Fixed,
+            ArgType::Fixed,
+            ArgType::Uint,
+        ],
+        &[
+            Arg::Object(ObjectId(20)),
+            Arg::Object(ObjectId(4)),
+            Arg::Fixed(Fixed::from_f64(10.5)),
+            Arg::Fixed(Fixed::from_f64(20.0)),
+            Arg::Uint(3),
+        ],
+    );
+    assert_eq!(client.read(&bytes, &[]), bytes.len());
+    assert_eq!(client.fatal(), None);
+    assert!(
+        client.take_events().iter().any(|event| matches!(
+            event,
+            Event::PointerWarped { surface, at, serial }
+                if *surface == ObjectId(20)
+                    && at.0 == Fixed::from_f64(10.5)
+                    && *serial == 3
+        )),
+        "the compositor is asked to move the pointer"
+    );
+
+    // A surface this client does not own is not one it may warp into.
+    let bytes = request(
+        15,
+        compositor_protocol::pointer_warp::wp_pointer_warp_v1::request::WARP_POINTER,
+        &[
+            ArgType::Object { nullable: false },
+            ArgType::Object { nullable: false },
+            ArgType::Fixed,
+            ArgType::Fixed,
+            ArgType::Uint,
+        ],
+        &[
+            Arg::Object(ObjectId(4)),
+            Arg::Object(ObjectId(4)),
+            Arg::Fixed(Fixed::from_f64(0.0)),
+            Arg::Fixed(Fixed::from_f64(0.0)),
+            Arg::Uint(3),
+        ],
+    );
+    let _ = client.read(&bytes, &[]);
+    assert!(client.is_finished());
+}
+
+/// `ext-background-effect-v1` says what it can do at bind, and a client's
+/// blur region reaches the surface on the next commit.
+#[test]
+fn a_background_effect_blurs_what_is_behind_a_surface() {
+    let mut client = frames_client();
+    // The capabilities went out at bind, before any request.
+    let mut fresh = Client::new({
+        let mut globals = globals();
+        assert!(
+            globals
+                .add(
+                    &compositor_protocol::background_effect::EXT_BACKGROUND_EFFECT_MANAGER_V1,
+                    1,
+                    Role::BackgroundEffectManager
+                )
+                .is_some()
+        );
+        globals
+    });
+    let mut bytes = get_registry(2);
+    bytes.extend(bind(2, 5, "ext_background_effect_manager_v1", 1, 3));
+    assert_eq!(fresh.read(&bytes, &[]), bytes.len());
+    assert!(
+        sent(&mut fresh).iter().any(|event| {
+            event.args
+                == [format!(
+                    "Uint({})",
+                    compositor_protocol::background_effect::ext_background_effect_manager_v1::capability::BLUR
+                )]
+        }),
+        "a client told nothing must assume the compositor can do none"
+    );
+
+    let mut bytes = request(
+        16,
+        compositor_protocol::background_effect::ext_background_effect_manager_v1::request::GET_BACKGROUND_EFFECT,
+        &[ArgType::NewId, ArgType::Object { nullable: false }],
+        &[Arg::NewId(ObjectId(21)), Arg::Object(ObjectId(20))],
+    );
+    // A null region is the whole surface, which is what a client asking for
+    // a frosted panel sends.
+    bytes.extend(request(
+        21,
+        compositor_protocol::background_effect::ext_background_effect_surface_v1::request::SET_BLUR_REGION,
+        &[ArgType::Object { nullable: true }],
+        &[Arg::Object(ObjectId::NULL)],
+    ));
+    bytes.extend(commit(20));
+    assert_eq!(client.read(&bytes, &[]), bytes.len());
+    assert_eq!(client.fatal(), None);
+    assert!(
+        client
+            .surface(ObjectId(20))
+            .is_some_and(|state| state.current.blur)
+    );
+}
+
+/// A tearing hint is recorded on the surface it was made for.
+#[test]
+fn a_tearing_hint_is_recorded_on_its_surface() {
+    let mut client = frames_client();
+    let mut bytes = request(
+        17,
+        compositor_protocol::tearing_control::wp_tearing_control_manager_v1::request::GET_TEARING_CONTROL,
+        &[ArgType::NewId, ArgType::Object { nullable: false }],
+        &[Arg::NewId(ObjectId(21)), Arg::Object(ObjectId(20))],
+    );
+    bytes.extend(request(
+        21,
+        compositor_protocol::tearing_control::wp_tearing_control_v1::request::SET_PRESENTATION_HINT,
+        &[ArgType::Uint],
+        &[Arg::Uint(
+            compositor_protocol::tearing_control::wp_tearing_control_v1::presentation_hint::ASYNC,
+        )],
+    ));
+    bytes.extend(commit(20));
+    assert_eq!(client.read(&bytes, &[]), bytes.len());
+    assert_eq!(client.fatal(), None);
+    assert!(
+        client
+            .surface(ObjectId(20))
+            .is_some_and(|state| state.current.tearing)
+    );
+}
+
+/// A launcher's hotkey is bound at once and fires on the key it named.
+#[test]
+fn a_hotkey_is_bound_and_fires_on_its_key() {
+    let mut client = frames_client();
+    let bytes = request(
+        18,
+        compositor_protocol::hotkey::vicinae_hotkey_manager_v1::request::BIND,
+        &[
+            ArgType::NewId,
+            ArgType::Uint,
+            ArgType::Uint,
+            ArgType::Object { nullable: false },
+            ArgType::Str { nullable: false },
+            ArgType::Str { nullable: false },
+        ],
+        &[
+            Arg::NewId(ObjectId(21)),
+            Arg::Uint(0x0020),
+            Arg::Uint(64),
+            Arg::Object(ObjectId(4)),
+            Arg::Str(Some("vicinae")),
+            Arg::Str(Some("Open the launcher")),
+        ],
+    );
+    assert_eq!(client.read(&bytes, &[]), bytes.len());
+    assert_eq!(client.fatal(), None);
+    assert_eq!(
+        sent(&mut client)
+            .iter()
+            .map(|event| event.opcode)
+            .collect::<Vec<u16>>(),
+        [compositor_protocol::hotkey::vicinae_hotkey_v1::event::BOUND],
+        "a launcher has to know whether to wait for the key"
+    );
+    assert_eq!(
+        client.hotkeys().first().map(|held| held.app_id.clone()),
+        Some("vicinae".to_owned())
+    );
+
+    assert!(!client.fire_hotkey(0x0020, 0, 5), "the modifiers differ");
+    assert!(client.fire_hotkey(0x0020, 64, 5));
+    assert_eq!(
+        sent(&mut client)
+            .iter()
+            .map(|event| event.opcode)
+            .collect::<Vec<u16>>(),
+        [
+            compositor_protocol::hotkey::vicinae_hotkey_v1::event::PRESSED,
+            compositor_protocol::hotkey::vicinae_hotkey_v1::event::RELEASED,
+        ]
+    );
+}
+
+// -- Screenshots as the `ext` namespace has them -----------------------------
+
+/// A connection with the capture globals bound, at 15 upwards, and a
+/// `wl_output` at 14.
+fn capturing_client() -> Client {
+    let mut globals = globals();
+    for (interface, version, role) in [
+        (&core::WL_OUTPUT, 4, Role::Output),
+        (
+            &compositor_protocol::capture_source::EXT_OUTPUT_IMAGE_CAPTURE_SOURCE_MANAGER_V1,
+            1,
+            Role::OutputCaptureSourceManager,
+        ),
+        (
+            &compositor_protocol::image_copy::EXT_IMAGE_COPY_CAPTURE_MANAGER_V1,
+            1,
+            Role::CaptureManager,
+        ),
+    ] {
+        assert!(globals.add(interface, version, role).is_some());
+    }
+    let mut client = Client::new(globals);
+    client.set_outputs(vec![crate::Output::default()]);
+    let mut bytes = get_registry(2);
+    bytes.extend(bind(2, 5, "wl_output", 4, 14));
+    bytes.extend(bind(
+        2,
+        6,
+        "ext_output_image_capture_source_manager_v1",
+        1,
+        15,
+    ));
+    bytes.extend(bind(2, 7, "ext_image_copy_capture_manager_v1", 1, 16));
+    assert_eq!(client.read(&bytes, &[]), bytes.len());
+    assert!(!client.is_finished(), "{:?}", client.fatal());
+    let _ = client.take_outgoing();
+    let _ = client.take_events();
+    client
+}
+
+/// A source, a session and a frame: the compositor says what buffer to
+/// make, the client makes one and hands it over, and the frame is answered.
+#[test]
+fn a_capture_session_offers_a_buffer_and_answers_a_frame() {
+    let mut client = capturing_client();
+    let mut bytes = request(
+        15,
+        compositor_protocol::capture_source::ext_output_image_capture_source_manager_v1::request::CREATE_SOURCE,
+        &[ArgType::NewId, ArgType::Object { nullable: false }],
+        &[Arg::NewId(ObjectId(20)), Arg::Object(ObjectId(14))],
+    );
+    bytes.extend(request(
+        16,
+        compositor_protocol::image_copy::ext_image_copy_capture_manager_v1::request::CREATE_SESSION,
+        &[
+            ArgType::NewId,
+            ArgType::Object { nullable: false },
+            ArgType::Uint,
+        ],
+        &[
+            Arg::NewId(ObjectId(21)),
+            Arg::Object(ObjectId(20)),
+            Arg::Uint(0),
+        ],
+    ));
+    assert_eq!(client.read(&bytes, &[]), bytes.len());
+    assert_eq!(client.fatal(), None);
+    assert!(
+        client.take_events().iter().any(|event| matches!(
+            event,
+            Event::CaptureSession {
+                session: ObjectId(21),
+                source: crate::Source::Screen(0)
+            }
+        )),
+        "the compositor is told what is being captured"
+    );
+
+    // The size, every format, then `done`: a client waits for `done` and
+    // reads everything before it.
+    client.capture_offer(ObjectId(21), 640, 480);
+    assert_eq!(
+        sent(&mut client)
+            .iter()
+            .map(|event| (event.opcode, event.args.clone()))
+            .collect::<Vec<(u16, Vec<String>)>>(),
+        [
+            (
+                compositor_protocol::image_copy::ext_image_copy_capture_session_v1::event::BUFFER_SIZE,
+                vec!["Uint(640)".to_owned(), "Uint(480)".to_owned()]
+            ),
+            (
+                compositor_protocol::image_copy::ext_image_copy_capture_session_v1::event::SHM_FORMAT,
+                vec![format!("Uint({})", crate::Format::Xrgb8888.to_wl_shm())]
+            ),
+            (
+                compositor_protocol::image_copy::ext_image_copy_capture_session_v1::event::DONE,
+                vec![]
+            ),
+        ]
+    );
+
+    // A frame, its buffer, and the `capture` that asks for it.
+    let mut bytes = request(
+        21,
+        compositor_protocol::image_copy::ext_image_copy_capture_session_v1::request::CREATE_FRAME,
+        &[ArgType::NewId],
+        &[Arg::NewId(ObjectId(22))],
+    );
+    bytes.extend(request(
+        22,
+        compositor_protocol::image_copy::ext_image_copy_capture_frame_v1::request::ATTACH_BUFFER,
+        &[ArgType::Object { nullable: false }],
+        &[Arg::Object(ObjectId(23))],
+    ));
+    bytes.extend(request(
+        22,
+        compositor_protocol::image_copy::ext_image_copy_capture_frame_v1::request::CAPTURE,
+        &[],
+        &[],
+    ));
+    assert_eq!(client.read(&bytes, &[]), bytes.len());
+    assert_eq!(client.fatal(), None);
+    assert!(
+        client.take_events().iter().any(|event| matches!(
+            event,
+            Event::CaptureAsked {
+                frame: ObjectId(22),
+                buffer: ObjectId(23),
+                ..
+            }
+        )),
+        "the compositor is handed the buffer"
+    );
+
+    client.capture_ready(ObjectId(22), (9, 500));
+    assert_eq!(
+        sent(&mut client)
+            .iter()
+            .map(|event| event.opcode)
+            .collect::<Vec<u16>>(),
+        [
+            compositor_protocol::image_copy::ext_image_copy_capture_frame_v1::event::PRESENTATION_TIME,
+            compositor_protocol::image_copy::ext_image_copy_capture_frame_v1::event::READY,
+        ]
+    );
+}
+
+/// `capture` with no buffer is a client that lost track of its own frame.
+#[test]
+fn a_capture_with_no_buffer_is_refused() {
+    let mut client = capturing_client();
+    let mut bytes = request(
+        15,
+        compositor_protocol::capture_source::ext_output_image_capture_source_manager_v1::request::CREATE_SOURCE,
+        &[ArgType::NewId, ArgType::Object { nullable: false }],
+        &[Arg::NewId(ObjectId(20)), Arg::Object(ObjectId(14))],
+    );
+    bytes.extend(request(
+        16,
+        compositor_protocol::image_copy::ext_image_copy_capture_manager_v1::request::CREATE_SESSION,
+        &[
+            ArgType::NewId,
+            ArgType::Object { nullable: false },
+            ArgType::Uint,
+        ],
+        &[
+            Arg::NewId(ObjectId(21)),
+            Arg::Object(ObjectId(20)),
+            Arg::Uint(0),
+        ],
+    ));
+    bytes.extend(request(
+        21,
+        compositor_protocol::image_copy::ext_image_copy_capture_session_v1::request::CREATE_FRAME,
+        &[ArgType::NewId],
+        &[Arg::NewId(ObjectId(22))],
+    ));
+    bytes.extend(request(
+        22,
+        compositor_protocol::image_copy::ext_image_copy_capture_frame_v1::request::CAPTURE,
+        &[],
+        &[],
+    ));
+    let _ = client.read(&bytes, &[]);
+    assert!(client.is_finished());
+}

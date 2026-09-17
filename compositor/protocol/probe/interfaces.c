@@ -70,6 +70,15 @@
 #include "hyprland-toplevel-mapping-client-protocol.h"
 #include "hyprland-surface-client-protocol.h"
 #include "hyprland-toplevel-export-client-protocol.h"
+#include "pointer-warp-client-protocol.h"
+#include "ext-background-effect-client-protocol.h"
+#include "tearing-control-client-protocol.h"
+#include "fifo-client-protocol.h"
+#include "commit-timing-client-protocol.h"
+#include "security-context-client-protocol.h"
+#include "vicinae-hotkey-client-protocol.h"
+#include "ext-image-capture-source-client-protocol.h"
+#include "ext-image-copy-capture-client-protocol.h"
 
 static void print_messages(const struct wl_interface *interface,
 			   const char *kind, const struct wl_message *messages,
@@ -282,6 +291,35 @@ int main(void)
 		/* hyprland-toplevel-export-v1.xml */
 		&hyprland_toplevel_export_manager_v1_interface,
 		&hyprland_toplevel_export_frame_v1_interface,
+		/* pointer-warp-v1.xml */
+		&wp_pointer_warp_v1_interface,
+		/* ext-background-effect-v1.xml */
+		&ext_background_effect_manager_v1_interface,
+		&ext_background_effect_surface_v1_interface,
+		/* tearing-control-v1.xml */
+		&wp_tearing_control_manager_v1_interface,
+		&wp_tearing_control_v1_interface,
+		/* fifo-v1.xml */
+		&wp_fifo_manager_v1_interface,
+		&wp_fifo_v1_interface,
+		/* commit-timing-v1.xml */
+		&wp_commit_timing_manager_v1_interface,
+		&wp_commit_timer_v1_interface,
+		/* security-context-v1.xml */
+		&wp_security_context_manager_v1_interface,
+		&wp_security_context_v1_interface,
+		/* vicinae-hotkey-v1.xml */
+		&vicinae_hotkey_manager_v1_interface,
+		&vicinae_hotkey_v1_interface,
+		/* ext-image-capture-source-v1.xml */
+		&ext_image_capture_source_v1_interface,
+		&ext_output_image_capture_source_manager_v1_interface,
+		&ext_foreign_toplevel_image_capture_source_manager_v1_interface,
+		/* ext-image-copy-capture-v1.xml */
+		&ext_image_copy_capture_manager_v1_interface,
+		&ext_image_copy_capture_session_v1_interface,
+		&ext_image_copy_capture_frame_v1_interface,
+		&ext_image_copy_capture_cursor_session_v1_interface,
 	};
 
 	printf("# libwayland %s\n", WAYLAND_VERSION);
