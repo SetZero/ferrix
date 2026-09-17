@@ -1097,3 +1097,76 @@ fn windowrulev2_is_refused_as_hyprland_refuses_it() {
     // And the line that is not deprecated is kept.
     assert_eq!(parsed.config.window_rules.len(), 1);
 }
+
+// -- `layerrule` --------------------------------------------------------------
+
+/// Each rule is read, and a line that is not one says so rather than
+/// costing a person the rest of their configuration.
+#[test]
+fn a_layerrule_is_read_or_refused_with_a_reason() {
+    use crate::{LayerEffect, LayerRule};
+
+    let rule = LayerRule::parse("blur, waybar").expect("a rule");
+    assert_eq!(rule.effect, LayerEffect::Blur);
+    assert!(rule.matches("waybar"));
+    assert!(!rule.matches("swaync"));
+
+    assert_eq!(
+        LayerRule::parse("ignorealpha 0.5, waybar").map(|rule| rule.effect),
+        Ok(LayerEffect::IgnoreAlpha(0.5))
+    );
+    assert_eq!(
+        LayerRule::parse("order 10, notifications").map(|rule| rule.effect),
+        Ok(LayerEffect::Order(10))
+    );
+    // Hyprland's `abovelock` takes an optional boolean, and the bare word
+    // means true.
+    assert_eq!(
+        LayerRule::parse("abovelock, keyboard").map(|rule| rule.effect),
+        Ok(LayerEffect::AboveLock(true))
+    );
+    assert_eq!(
+        LayerRule::parse("abovelock false, keyboard").map(|rule| rule.effect),
+        Ok(LayerEffect::AboveLock(false))
+    );
+    assert!(LayerRule::parse("blur").is_err(), "no namespace");
+    assert!(LayerRule::parse("wobble, waybar").is_err(), "no such rule");
+    assert!(LayerRule::parse("order x, waybar").is_err(), "not a number");
+}
+
+/// Every rule that matches one surface is applied, later lines winning.
+#[test]
+fn the_rules_that_match_a_namespace_are_gathered() {
+    use crate::{LayerRule, Layered};
+
+    let rules: Vec<LayerRule> = [
+        "blur, ^(waybar)$",
+        "ignorealpha 0.3, waybar",
+        "order 2, waybar",
+        "order 5, waybar",
+        "abovelock, keyboard",
+    ]
+    .iter()
+    .map(|line| LayerRule::parse(line).expect("a rule"))
+    .collect();
+
+    let bar = Layered::of(&rules, "waybar");
+    assert!(bar.blur);
+    assert_eq!(bar.ignore_alpha, Some(0.3));
+    assert_eq!(bar.order, 5, "the later line wins");
+    assert!(!bar.above_lock);
+    assert!(bar.animates, "nothing turned it off");
+
+    let keyboard = Layered::of(&rules, "keyboard");
+    assert!(keyboard.above_lock);
+    assert!(!keyboard.blur);
+
+    // A namespace nothing names gets the defaults.
+    assert_eq!(
+        Layered::of(&rules, "nothing"),
+        Layered {
+            animates: true,
+            ..Layered::default()
+        }
+    );
+}

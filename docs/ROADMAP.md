@@ -4346,6 +4346,28 @@ checked against libwayland's, and an unchecked table is the one thing the
 generator exists to avoid. The colour work it does is
 `wlr-gamma-control`'s as well, and that one is offered.
 
+**Done — `layerrule` (2026-09-17).** The `zwlr_layer_shell_v1` half of
+`windowrule`. A layer surface has no title and no application id -- it has a
+*namespace*, which is what it passed to `get_layer_surface`, and that is what
+a rule matches on, as a regular expression.
+
+Three are drawn. `blur` blurs what is behind a translucent bar, which is what
+makes one look like Hyprland's, and is a rule rather than the default because
+blurring behind an opaque bar costs a pyramid of passes and changes not one
+pixel. `abovelock` draws the surface *over* the session lock -- the whole
+reason an on-screen keyboard can be used on a lock screen, and until now the
+compositor drew nothing over a lock at all. `order` decides where a surface
+goes among its own layer's, a higher number nearer the top, with the sort
+stable so that surfaces with the same order keep the sequence their clients
+made them in.
+
+The rest are read, kept and not acted on, and the module says why each:
+`noanim` has nothing to turn off, and `dimaround`, `xray`, `blurpopups` and
+`noscreenshare` each need a second render pass -- they read what is *behind*
+the frame being drawn, or need the frame drawn again without one surface in
+it, and this renderer draws one pass over one canvas. They are parsed rather
+than refused so a person's configuration is not a wall of diagnostics.
+
 **Done — a terminal (2026-09-17).** Stage 18's exit asked for one, and it
 needed pseudoterminals the kernel did not have. It has them now:
 `/dev/ptmx` gives a master, `TIOCGPTN` says which pair it is, `TIOCSPTLCK`

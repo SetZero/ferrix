@@ -161,6 +161,10 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
     let mut screens = Screen::all(backends, &rules)?;
     // The `windowrule` lines, which are applied when a window maps.
     let mut window_rules = crate::rules::Rules::new(&config, report);
+    // `layerrule = <rule>, <namespace>`: what a bar, a wallpaper or a
+    // notification is drawn with. The `zwlr_layer_shell_v1` half of
+    // `windowrule`, matched on the namespace a surface asked for.
+    let layer_rules = read_layer_rules(&config, report);
     // The clipboard: what one client copied, for the others to paste.
     let mut clipboard = crate::clipboard::Clipboard::new();
     // The screenshots asked for in one pass, kept until the screens are in
@@ -813,7 +817,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
             // The layer surfaces first: their exclusive zones decide how
             // much of the monitor is left for the windows to tile in, so a
             // bar has to be placed before a window is told its size.
-            placed_layers = place_layers(&mut slots, &mut state, &screens);
+            placed_layers = place_layers(&mut slots, &mut state, &screens, &layer_rules);
             reconfigure(&mut slots, &state);
         }
         // The popups, which are drawn over the windows like a layer surface
@@ -974,8 +978,18 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                                 surface: *surface,
                                 rect: screen.rect,
                                 above: true,
+                                rules: crate::frame::LayerRules::default(),
                             });
-                    crate::frame::draw_locked(&mut target, output, &slots, covering, &full)?;
+                    // `layerrule = abovelock, <namespace>`: an on-screen
+                    // keyboard has to be usable on a lock screen, and a
+                    // compositor that drew nothing over the lock would
+                    // leave a person with no way to type the password.
+                    let over: Vec<crate::frame::Placed> = placed_layers
+                        .iter()
+                        .copied()
+                        .filter(|placed| placed.rules.above_lock)
+                        .collect();
+                    crate::frame::draw_locked(&mut target, output, &slots, covering, &over, &full)?;
                 } else {
                     let over: Vec<crate::frame::Placed> = placed_layers
                         .iter()
@@ -1774,6 +1788,21 @@ fn refresh_ns(screens: &[Screen]) -> u32 {
         .map_or(60_000, |screen| screen.output().refresh.max(1));
     // Refresh is in millihertz: a nanosecond period is 10^12 over it.
     u32::try_from(1_000_000_000_000i64 / i64::from(millihertz)).unwrap_or(16_666_666)
+}
+
+/// Read the `layerrule` lines, saying what could not be read.
+fn read_layer_rules(
+    config: &Config,
+    report: &mut dyn FnMut(&str),
+) -> Vec<compositor_config::LayerRule> {
+    let mut rules = Vec::new();
+    for raw in &config.layer_rules {
+        match compositor_config::LayerRule::parse(&raw.value) {
+            Ok(rule) => rules.push(rule),
+            Err(why) => report(&format!("hyprix: layerrule = {}: {why}", raw.value)),
+        }
+    }
+    rules
 }
 
 /// Where the Wayland socket goes.
@@ -2946,6 +2975,7 @@ fn placed_popups(
                     i64::from(at.3),
                 ),
                 above: true,
+                rules: crate::frame::LayerRules::default(),
             });
         }
     }
@@ -3260,6 +3290,7 @@ fn place_layers(
     slots: &mut [Slot],
     state: &mut State,
     screens: &[Screen],
+    rules: &[compositor_config::LayerRule],
 ) -> Vec<crate::frame::Placed> {
     // Everything that has been given a role, with what it asked for and
     // which screen it asked for it on.
@@ -3269,6 +3300,7 @@ fn place_layers(
         ObjectId,
         bool,
         usize,
+        crate::frame::LayerRules,
         compositor_layout::layers::Request,
     )> = Vec::new();
     // A layer surface that named no output goes on the focused monitor,
@@ -3288,12 +3320,19 @@ fn place_layers(
                 .and_then(|output| slot.client.output_of(output))
                 .filter(|which| *which < screens.len())
                 .unwrap_or(chosen);
+            let named = compositor_config::Layered::of(rules, &layer.namespace);
             asked.push((
                 index,
                 *id,
                 layer.surface,
                 layer.layer.above_windows(),
                 on,
+                crate::frame::LayerRules {
+                    blur: named.blur,
+                    above_lock: named.above_lock,
+                    no_screen_share: named.no_screen_share,
+                    order: named.order,
+                },
                 compositor_layout::layers::Request {
                     top: anchors.top,
                     bottom: anchors.bottom,
@@ -3315,27 +3354,42 @@ fn place_layers(
     // A monitor at a time: an exclusive zone reserves a strip of the screen
     // the surface is on and of no other, so a bar on one monitor does not
     // move the windows on the next.
-    let mut placed: Vec<(usize, ObjectId, ObjectId, bool, Rect)> = Vec::new();
+    let mut placed: Vec<(
+        usize,
+        ObjectId,
+        ObjectId,
+        bool,
+        crate::frame::LayerRules,
+        Rect,
+    )> = Vec::new();
     for (which, screen) in screens.iter().enumerate() {
-        let here: Vec<&(
+        let mut here: Vec<&(
             usize,
             ObjectId,
             ObjectId,
             bool,
             usize,
+            crate::frame::LayerRules,
             compositor_layout::layers::Request,
-        )> = asked.iter().filter(|(.., on, _)| *on == which).collect();
+        )> = asked.iter().filter(|(.., on, _, _)| *on == which).collect();
+        // `layerrule = order <n>`: a higher number goes nearer the top of
+        // its own layer. The sort is stable, so surfaces with the same
+        // order keep the sequence their clients made them in -- which is
+        // wlroots' rule and what gives a bar that started first the edge.
+        here.sort_by_key(|(.., rules, _)| rules.order);
         let requests: Vec<compositor_layout::layers::Request> =
             here.iter().map(|(.., request)| *request).collect();
         let (placements, reserved) = compositor_layout::layers::place(screen.rect, &requests);
         let _ = state.set_reserved(screen.monitor, reserved);
-        for ((index, id, surface, above, _, _), placement) in here.into_iter().zip(placements) {
-            placed.push((*index, *id, *surface, *above, placement.rect));
+        for ((index, id, surface, above, _, rules, _), placement) in
+            here.into_iter().zip(placements)
+        {
+            placed.push((*index, *id, *surface, *above, *rules, placement.rect));
         }
     }
 
     let mut drawn = Vec::with_capacity(placed.len());
-    for (index, id, surface, above, rect) in placed {
+    for (index, id, surface, above, rules, rect) in placed {
         if let Some(slot) = slots.get_mut(index) {
             let width = u32::try_from(rect.width).unwrap_or(0);
             let height = u32::try_from(rect.height).unwrap_or(0);
@@ -3352,6 +3406,7 @@ fn place_layers(
             surface,
             rect,
             above,
+            rules,
         });
     }
     drawn

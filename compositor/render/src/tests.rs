@@ -591,6 +591,7 @@ fn bar_and_two_clients_frame() -> Vec<u8> {
         rect: bar.rect,
         above: true,
         surface: Some(bar_surface),
+        blur: false,
     }];
     let produced = render_with_layers(
         &mut canvas,
@@ -1003,6 +1004,7 @@ fn a_window_with_a_menu_on_it_matches_the_expected_image() {
         rect: Rect::new(parent.x + at.x, parent.y + at.y, at.width, at.height),
         above: true,
         surface: Some(surface),
+        blur: false,
     }];
     let mut canvas = Canvas::new(WIDTH, HEIGHT).unwrap();
     let full = Damage::full(WIDTH, HEIGHT);
@@ -1047,6 +1049,7 @@ fn a_locked_screen_is_the_lock_surface_and_nothing_else() {
         rect: Rect::new(0, 0, i64::from(WIDTH), i64::from(HEIGHT)),
         above: true,
         surface: Some(surface),
+        blur: false,
     }];
     let _ = render_with_layers(
         &mut canvas,

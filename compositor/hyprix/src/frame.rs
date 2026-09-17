@@ -141,6 +141,26 @@ pub struct Placed {
     pub rect: Rect,
     /// Whether it is drawn above the windows.
     pub above: bool,
+    /// What its `layerrule` lines gave it.
+    pub rules: LayerRules,
+}
+
+/// What a surface's `layerrule` lines came to, as the frame reads them.
+///
+/// A copy of the fields the drawing uses, rather than the whole of
+/// `compositor_config::Layered`: a `Placed` is compared with the last pass's
+/// and a `String` in it would allocate on every frame.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct LayerRules {
+    /// `blur`: what is behind it is blurred.
+    pub blur: bool,
+    /// `abovelock`: it is drawn over the session lock.
+    pub above_lock: bool,
+    /// `noscreenshare`: a screenshot leaves it out.
+    pub no_screen_share: bool,
+    /// `order`: where it goes among its own layer's surfaces, a higher
+    /// number nearer the top.
+    pub order: i64,
 }
 
 /// Which client and which surface a window's pixels come from.
@@ -174,7 +194,8 @@ pub fn draw(
 /// nothing else.
 ///
 /// `locked` is where the lock surface's pixels are, or `None` for a screen
-/// the lock has not covered yet. A screen with no lock surface is drawn as
+/// the lock has not covered yet, and `over` the layer surfaces a
+/// `layerrule = abovelock` asked to be drawn on top of it. A screen with no lock surface is drawn as
 /// the background alone -- black, since the style's background is what the
 /// compositor clears to -- because what it must *not* show is what was on
 /// it before. That is the whole point of the protocol: the compositor stops
@@ -185,6 +206,7 @@ pub fn draw_locked(
     output: &MonitorLayout,
     clients: &[Slot],
     locked: Option<Placed>,
+    over: &[Placed],
     damage: &Damage,
 ) -> Result<(), String> {
     let empty = MonitorLayout {
@@ -192,7 +214,10 @@ pub fn draw_locked(
         ..output.clone()
     };
     let sources = BTreeMap::new();
-    let layers: Vec<Placed> = locked.into_iter().collect();
+    // The lock's own surface first, and then whatever a `layerrule =
+    // abovelock` asked to be drawn over it -- an on-screen keyboard, which
+    // is the whole reason that rule exists.
+    let layers: Vec<Placed> = locked.into_iter().chain(over.iter().copied()).collect();
     draw_windows(target, &empty, clients, &sources, &layers, damage)
 }
 
@@ -267,6 +292,7 @@ fn draw_windows(
             surface: clients
                 .get(placed.client)
                 .and_then(|slot| pixels(slot.client(), slot.pools(), placed.surface)),
+            blur: placed.rules.blur,
         })
         .collect();
 

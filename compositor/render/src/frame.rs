@@ -207,6 +207,13 @@ pub struct LayerFrame<'pixels> {
     pub above: bool,
     /// Its pixels, or `None` for one that has not drawn yet.
     pub surface: Option<Surface<'pixels>>,
+    /// Whether what is behind it is blurred: `layerrule = blur, waybar`.
+    ///
+    /// This is what makes a bar with a translucent background look like
+    /// Hyprland's, and it is a rule rather than the default because
+    /// blurring behind an opaque bar costs a pyramid of passes and changes
+    /// not one pixel.
+    pub blur: bool,
 }
 
 /// What one window is drawn with, where a `windowrule` asked for something
@@ -367,19 +374,41 @@ pub fn render_with_layers(
     let local = |rect: Rect| rect.translate(origin.0.saturating_neg(), origin.1.saturating_neg());
     canvas.clear(style.background, damage);
     for layer in layers.iter().filter(|layer| !layer.above) {
-        if let Some(surface) = layer.surface.as_ref() {
-            canvas.composite(surface, local(layer.rect), damage);
-        }
+        draw_layer(canvas, layer, local(layer.rect), style, damage);
     }
     for placed in &output.windows {
         window(canvas, placed, local(placed.rect), styles, surfaces, damage);
     }
     for layer in layers.iter().filter(|layer| layer.above) {
-        if let Some(surface) = layer.surface.as_ref() {
-            canvas.composite(surface, local(layer.rect), damage);
-        }
+        draw_layer(canvas, layer, local(layer.rect), style, damage);
     }
     damage.clipped(canvas.bounds())
+}
+
+/// One layer surface: the blur behind it, where a `layerrule` asked for
+/// one, and then its pixels.
+///
+/// No border, no rounding and no shadow: a bar draws its own corners, and a
+/// compositor that put a border round a wallpaper would be drawing a line
+/// across the screen.
+fn draw_layer(
+    canvas: &mut Canvas,
+    layer: &LayerFrame<'_>,
+    rect: Rect,
+    style: &Style,
+    damage: &Damage,
+) {
+    let Some(surface) = layer.surface.as_ref() else {
+        return;
+    };
+    // Only for a surface that can be seen through: blurring behind an
+    // opaque bar costs a pyramid of passes and changes nothing.
+    if let Some((size, passes)) = style.blur.filter(|_| layer.blur)
+        && surface.format() == Format::Argb8888
+    {
+        canvas.blur(rect, 0, size, passes, damage);
+    }
+    canvas.composite(surface, rect, damage);
 }
 
 /// One window: its shadow, its border, the blur behind it, its own pixels
