@@ -461,7 +461,28 @@ package FerrixRoadmap {
              * hyprland.conf -- 377 lines, a bar, a dock and a wallpaper
              * daemon -- runs with no diagnostic. What is left is XWayland,
              * the GPU, and the layer-rule effects that need a second render
-             * pass. */
+             * pass.
+             *
+             * The GPU path was decided on 2026-09-18 (docs/GPU.md): the
+             * host's driver through virtio-gpu 3D -- the ring-3 driver's 3D
+             * commands, a render node with the virtgpu ioctls and 3D
+             * scanout, the host half in xtask, and a Rust virgl encoder as
+             * the compositor's renderer behind a renderer trait, 52 points
+             * in that order. A card of Ferrix's own is stage 21. */
+    }
+
+    #planned requirement <'S21'> stage21BareMetalGpu : Stage {
+        attribute :>> number = 21;
+        attribute :>> status = StageStatus::Planned;
+        attribute :>> size = "unsized, over 100 points";
+        doc /* Ferrix on bare metal with an NVIDIA card driven by Ferrix
+             * itself: Path B of the GPU decision of 2026-09-18, opened when
+             * the customer wants real hardware. NVIDIA's open kernel modules
+             * as a ring-3 driver process behind an OS interface layer written
+             * for Ferrix, their GSP firmware, and a userspace that is either
+             * glibc-built closed libraries or Mesa's NVK over a Rust driver
+             * such as Linux's Nova, weighed when the stage opens. Exit: the
+             * stage 19 exit on real hardware, drawn by the card. */
     }
 
     #planned requirement <'S20'> stage20SelfHosting : Stage {
@@ -498,6 +519,7 @@ package FerrixRoadmap {
     dependency from stage18Compositor to stage17DisplayAndInput;
     dependency from stage19HyprlandFidelity to stage18Compositor;
     dependency from stage20SelfHosting to stage16Rustc;
+    dependency from stage21BareMetalGpu to stage19HyprlandFidelity, stageDynamicLinking;
 
     #planned requirement <'D.fuzz'> fuzzTargetsOwed : Principles::DesignRule {
         doc /* fuzz/ has two targets, elf_parse and frame_alloc. Every

@@ -225,7 +225,8 @@ window's View menu. `--init blank` builds the compositor's first program,
 `/dev/dri/card0` through Ferrix's Linux DRM subset, sets the preferred mode
 (1024×768) and fills the screen with one colour, `#1E1E2E`. Its serial
 line says `compositor: scanout ...`, or why it failed. There is no input and
-no windows yet; [the display design](docs/DISPLAY.md) says what comes next.
+no windows yet; [the display design](docs/DISPLAY.md) says what comes next,
+and [the GPU decision](docs/GPU.md) how the pixels leave the CPU.
 x86-64 and AArch64 only: QEMU's ARMv7-A `virt` machine has no virtio-gpu.
 
 `test-display` boots the same program with QEMU's window off, asks QEMU for a

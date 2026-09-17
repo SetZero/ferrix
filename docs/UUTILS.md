@@ -214,23 +214,51 @@ was, and what it needs shows up at run time rather than at link time.
 have released is 0.0.1 in both cases, and neither the release nor main builds
 for this target. `sysctl`, `ps` and `top` stay busybox's.
 
-## 5. What nobody provides, and what that costs
+## 5. Where `/bin` stands, and what is still busybox's
 
-Named here so that no gate is quietly dropped:
+Measured from the tree on 2026-09-18, not remembered. An image that carries a
+program carries four userlands, and `/bin` gives each name to one of them:
 
-| Missing | Used by | What happens |
+| Program | Owns | Names |
 |---|---|---|
-| `ifconfig`, `route`, `netstat`, `arp`, `ip`, `udhcpc`, `ping`, `nslookup`, `nc`, `wget` | **all of `test-net`** | `test-net` keeps busybox until Ferrix has its own. `curl` already replaces `wget` for the fetch |
-| `grep`, `sed`, `awk` | scripts in `test-vfs`, and every real script | zinc's own pattern matching covers some; the rest is a row |
-| `tar`, `gzip`, `cpio` | nothing gated today | a row, low |
-| `mount`, `umount`, `fdisk`, `swapon`, `losetup` | `test-vfs` mount checks | util-linux has none of them yet; a row |
-| `su`, `adduser`, `passwd`, `login`, `getty` | the multi-user slices (`dac`…`dac5`) | a row, and those slices keep busybox until it is filled |
-| `vi`, `less` | nothing gated | not replaced |
+| zinc | the shell | `sh`, `zsh` |
+| coreutils | the utilities | 106, from `cat` and `ls` to `stty` and `numfmt` |
+| diffutils | comparison | `diff`, `cmp` |
+| findutils | searching | `find`, `xargs`, `locate`, `updatedb` |
+| busybox | **everything else in `APPLETS`** | the rest, and it is still most of the list |
 
-**So busybox does not leave in one step.** It leaves `test-shell` and the
-`test-vfs` rows the uutils family covers, and stays in the image — as one
-binary with a shrinking symlink set — for `test-net` and the rows above. The
-last slice in §6 is the one that deletes it, and it is not scheduled here.
+The ports ride beside them: `curl`, `btop` and `git`, each built against
+ferrousli, each under its own name.
+
+**What is still busybox's, and gated, is this and only this:**
+
+| Gate | Programs that are busybox's |
+|---|---|
+| `test-vfs` | `sysctl` (three rows), `fdisk`, `top`, `mpstat`, `iostat`, `pwdx`, `su` |
+| `test-net` | `ip`, `route`, `netstat`, `nslookup`, `ping`, `ping6`, `udhcpc` |
+
+Fourteen programs. Everything else either moved or was never gated.
+
+**A note on the networking row, because a summary of this document got it
+wrong once.** Ferrix's networking is done and gated: the stack in `libs/net`,
+the net ring, netlink, `AF_INET` and `AF_INET6`, raw and packet sockets, DHCP.
+`test-net` passes. What is missing is the seven *commands* above, which
+configure and inspect it. uutils is GNU coreutils, which has never contained a
+networking tool, so there was never a chance of them arriving with the family.
+
+## 5a. What is not gated, and would still be lost
+
+busybox also answers names nothing checks. Deleting it takes these with it,
+and that is a decision rather than an oversight:
+
+| Names | Worth |
+|---|---|
+| `grep`, `sed`, `awk` | the three every real script needs. zinc's own pattern matching covers some of `grep`'s uses and none of `sed`'s or `awk`'s |
+| `tar`, `gzip`, `cpio`, `unzip` | nothing in the tree unpacks an archive on the guest yet |
+| `mount`, `umount`, `swapon`, `losetup` | stage 11 will want `mount` from a program rather than from the kernel |
+| `adduser`, `passwd`, `login`, `getty` | the multi-user slices; `su` is the gated one and is in §5 |
+| `vi`, `less`, `more`, `watch` | a person at the prompt. `more` is uutils', the rest are not |
+| `dmesg`, `free`, `ps`, `uptime`, `w` | `uptime` is uutils'; procps has the rest and does not build (§6a) |
 
 ## 6. The slices
 
@@ -250,9 +278,9 @@ its table row in `docs/BACKLOG.md` names.
 
 S1 to S7 have landed. uutils and zinc **are** the userland now, not
 passengers in the image, and git builds against ferrousli. What is left is
-S8, which deletes busybox, and it is blocked on §5: `test-net` has no
-replacement for busybox's networking, and neither has `grep`, `sed`, `awk`,
-`tar`, `mount` or `su`.
+S8, and §8 says what it needs: 28 points of user-space programs over
+interfaces the kernel already has, before 3 points of deletion — and a
+decision, in §8.3, about whether the deletion is wanted at all.
 
 **Nothing left but S8's 3 points, and those wait on §5.**
 
@@ -308,3 +336,52 @@ than now. The backlog has the row.
   control, no line editor and no completion in front of every gate. The `sh
   -i` and controlling-terminal checks stage 7 owns have no home until zinc has
   job control; they keep busybox's `sh` until it does.
+
+## 8. What S8 needs
+
+S8 is one line of work — *delete busybox* — and it cannot start until
+something answers the fourteen names in §5. This is what that means.
+
+### 8.1 The programs, and who could write them
+
+| Group | Names | What it takes | Points |
+|---|---|---|---|
+| Interfaces and routes | `ip`, `route`, `netstat` | A native Rust program over **netlink, which Ferrix already implements and gates**. `ip` is the only one the image really needs: `route` and `netstat` are `ip route` and `ss` in other clothes, and `test-net` could ask `ip` for what it asks them for | 8 |
+| Reachability | `ping`, `ping6` | Raw `AF_INET`/`AF_INET6` sockets, which the kernel has and `test-net` already exercises directly | 3 |
+| Address assignment | `udhcpc` | A DHCP client. The lease script `xtask/src/initramfs.rs` writes is busybox's shape and would go with it | 5 |
+| Name lookup | `nslookup` | A front end to ferrousli's resolver, which is complete | 2 |
+| `/proc` readers | `sysctl`, `top`, `mpstat`, `iostat`, `pwdx` | procps' job. It does not build (§6a); writing them here instead is five small programs over `/proc`, which the kernel serves | 5 |
+| Partitions | `fdisk` | `test-vfs` only asks it to read `/proc/partitions` and exit 0 without dying. A reader is small; a partition *editor* is not, and is not wanted | 2 |
+| Becoming another user | `su` | set-user-id, which the `dac` slices built the kernel side of | 3 |
+
+**28 points before S8 can begin**, and none of it is blocked on the kernel:
+every one of these is a user-space program over an interface Ferrix already
+has. That is the useful shape of the answer — the hard half is done.
+
+### 8.2 Then the deletion itself
+
+Mechanical, once §8.1 lands. 3 points:
+
+* `ferrousli/tools/busybox/` — `sources.sh`, `build.sh`, `build-windows.sh`,
+  `config.sh` and `hostcompat/`;
+* `xtask/src/busybox.rs`, and the `busybox` command in `main.rs`;
+* `--init`, which exists to name a busybox. `test-shell` keeps a way to run
+  somebody else's binary, or stage 7's exit criterion loses its point
+  (`docs/ROADMAP.md` says why);
+* `initramfs::APPLETS`, the union of two busybox builds' applet lists, and
+  `PROGRAM_PATH`;
+* the kernel UAPI headers busybox's Windows build pins, and **ferrousli's
+  three `<linux/*>` pass-through headers**, which exist for busybox alone;
+* the gate rows in `docs/BACKLOG.md` that name a busybox, and the three
+  busyboxes (ferrousli's, Alpine's musl, the host's glibc) the matrix runs.
+
+### 8.3 What is lost the day it goes
+
+§5a, in one sentence: no `grep`, no `sed`, no `awk`, no `tar`, no `mount`, no
+editor. **That is the argument for not scheduling S8 as a deletion at all**,
+but as the last step of a plan that replaces those too — or for keeping
+busybox in the image indefinitely as a program among others, which costs one
+binary of 1.2 MiB beside uutils' 14 MiB and gives up nothing.
+
+The customer decides which. Nothing in the tree forces the choice, and
+nothing after S6 depends on it.

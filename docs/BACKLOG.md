@@ -268,7 +268,8 @@ nobody has it yet.
 | Input hotplug: devices exist from boot in the input iteration. A device that arrives or leaves later, and how a compositor learns of it without udev (`inotify` on `/dev/input`, not in Ferrix today, or a rescan) (`docs/INPUT.md` §3.4, §6, os-f6 2026-09-16) | 17 |
 | `card0` is opened by one process at a time, standing in for DRM master (`docs/DISPLAY.md` §5, a written deviation from Linux): Linux's many opens with one master, `SET_MASTER`/`DROP_MASTER` arbitrating between them, and the render node beside it come in stage 19 | 19 |
 | The compositor workspace: the server written from scratch (decided 2026-09-17), CPU rendering, dwindle and master, `hyprland.conf`, `hyprctl` IPC, two Rust test clients. `hyprland.conf` landed 2026-09-16 (`compositor/config`, 5); the layouts and dispatchers landed (8); `compositor/render` landed 2026-09-17 (5). `compositor/wire`, the Wayland wire protocol with no libwayland, and `compositor/protocol`, the interface tables generated from the XML, landed 2026-09-17 (8). `compositor/server`'s connection, `wl_display` and `wl_registry` landed 2026-09-17, with a real libwayland client reading its globals over a replayed transcript (5). `wl_shm` over sealed memfds and `wl_compositor`/`wl_surface` landed 2026-09-17, with a real libwayland client's window-setup requests replayed into the server (8). `xdg_shell` and the `AF_UNIX` socket landed 2026-09-17, and with them a real libwayland client's whole startup handshake runs against the server over a real socket (11). `compositor/hyprix`, the compositor itself, and `compositor/pattern`, the test client, landed 2026-09-17 with the headless half of stage 18's exit passing: two clients tiled, 0 differing pixels of 786,432 against `compositor/render`'s expected image, and a negative control (13). `compositor/ipc` and the `hyprctl` socket landed 2026-09-17, driven by Hyprland's own `hyprctl` binary: `clients`, `monitors`, `workspaces`, `activewindow`, `dispatch` and `runtime keyword` all answer (5). The DRM backend and `xtask test-compositor` landed 2026-09-17: `compositor/drm` is the card, lifted out of `compositor/blank`, and the compositor boots as init on Ferrix and shows its background on every one of QEMU's 786,432 pixels on x86-64 and AArch64 (10). Two clients on the card landed the same day: the initramfs carries `compositor/pattern` at `/bin/pattern`, the compositor's `exec-once` starts two, and `cargo xtask test-compositor` requires QEMU's screendump to match the renderer's expected image pixel for pixel on x86-64 and AArch64 (5). Next: `wl_seat` with keyboard and pointer, which waits on stage 17's input L5-L7 (8); the event socket `.socket2.sock` a bar subscribes to (3). GUI session | 18 |
-| GPU path decision, then `renderD128`, dmabuf, GBM, animations, blur and rounding | 19 |
+| The GPU, Path A (`docs/GPU.md` §3, decided 2026-09-18), in this order: A1 virtio-gpu 3D in the ring-3 driver and `libs/virtio::gpu` (13); A2 `/dev/dri/renderD128`, GEM handles, the `virtgpu` ioctls from a committed probe, and scanout of a 3D resource (13); A5 the host half in xtask -- `-device virtio-gpu-gl` and a GL display where QEMU has them, the gate host's QEMU rebuilt with OpenGL and virglrenderer, a tolerance for a GPU's picture (5); A3b `compositor/virgl`, a Rust encoder of virgl's command stream with Hyprland's eight effect shaders as TGSI, behind a renderer trait in `compositor/render` with the software renderer as the fallback (21). 52 points. Unowned | 19 |
+| The GPU, after Path A: A4 `zwp_linux_dmabuf` and a GBM-shaped allocator, and Mesa's virgl on ferrousli (`docs/GPU.md` §3, 3a), for clients that render on the GPU themselves. 8 points and 40 or more. Unowned | 19 |
 | The DK1's LTDC display and USB HID as the hardware variant of stage 17 | 17, P3 |
 
 ### Networking rows, unowned
@@ -288,6 +289,9 @@ nobody has it yet.
 * `/sys`, `/dev/rtc`, tmpfs `FS_IOC_GETFLAGS`: with stage 13's cgroupfs, the
   RTC driver, and never, respectively.
 * `vfork` sharing memory rather than copying it.
+* Stage 21, bare metal with an NVIDIA card driven by Ferrix itself: Path B
+  of the GPU decision of 2026-09-18, `docs/GPU.md` §4. Opened when the
+  customer wants Ferrix on real hardware; unsized, over 100 points.
 * Huge pages; frame share and release are order 0 by design.
 * A panic report as a QR code: a port of Linux's `drm_panic_qr` as
   `libs/qr` (ferrix-qr), so a panic screen can carry the whole report. WIP
@@ -295,6 +299,24 @@ nobody has it yet.
   panic path.
 
 ---
+
+## Fourteen programs stand between the userland and deleting busybox
+
+The uutils family, zinc and the ports own `/bin` now. Fourteen names are
+still busybox's and still gated: `sysctl`, `fdisk`, `top`, `mpstat`,
+`iostat`, `pwdx` and `su` in `test-vfs`, and `ip`, `route`, `netstat`,
+`nslookup`, `ping`, `ping6` and `udhcpc` in `test-net`.
+
+None of it is blocked on the kernel. Netlink, raw sockets, `/proc`,
+set-user-id and ferrousli's resolver are all there and gated; what is missing
+is user-space programs over them. `docs/UUTILS.md` §8.1 breaks it down: 28
+points, the largest single piece being `ip` over netlink at 8.
+
+And read §8.3 before starting. Deleting busybox also takes `grep`, `sed`,
+`awk`, `tar`, `mount` and every editor with it, none of which anything
+replaces. Keeping busybox in the image as one program among others costs
+1.2 MiB beside uutils' 14 MiB. Whether S8 is wanted at all is the customer's
+call, and nothing after S6 depends on it.
 
 ## procps and util-linux are the two of the family that do not build
 
@@ -362,6 +384,19 @@ and both fuzz targets as the evidence. | open | 3
 
 Dated, newest first. A decision here is final until the customer says otherwise.
 
+* **2026-09-18 (customer)** The GPU: **Path A first, Path B in a later
+  stage.** Path A is GPU acceleration for Ferrix as a guest through
+  virtio-gpu's 3D commands, which uses the host's NVIDIA driver without
+  porting it: the ring-3 driver's 3D commands, a render node with the
+  `virtgpu` ioctls and 3D scanout, the host half in xtask, and a Rust virgl
+  encoder as the compositor's renderer behind a renderer trait -- 52 points,
+  in that order, `docs/GPU.md` §3. Path B is a driver for an NVIDIA card
+  under Ferrix itself, for the day Ferrix runs on bare metal: stage 21,
+  unsized, `docs/GPU.md` §4. This settles the third of the three choices
+  left open on 2026-09-13 below: neither Mesa on ferrousli nor Vulkan for
+  the compositor, but a Rust encoder of virgl's command stream, with Mesa
+  kept for the day clients render on the GPU themselves. The Windows QEMU
+  already offers `virtio-gpu-gl`; the gate host's has to be rebuilt for it.
 * **2026-09-16 (customer)** A release with every current feature finished:
   the freeze went to os-02, os-05, os-a8, os-26, os-e5 and os-12 at about
   22:35; each landed what was gate-green and stopped, the product owner
