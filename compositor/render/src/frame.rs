@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use compositor_config::Config;
 use compositor_layout::{MonitorLayout, Placed, WindowId};
 
-use crate::{Canvas, Color, Damage, Format, Rect, Shadow, Surface};
+use crate::{Blur, Canvas, Color, Damage, Format, Gradient, Rect, Shadow, Surface};
 
 /// The colours a frame is drawn in, and the decorations it is drawn with.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -14,12 +14,15 @@ pub struct Style {
     /// What shows where no window is: Hyprland's `misc:background_color`,
     /// which `compositor/config` does not read yet, at its default.
     pub background: Color,
-    /// The focused window's border: the first colour of
-    /// `general:col.active_border`.
-    pub active_border: Color,
-    /// Every other window's border: the first colour of
-    /// `general:col.inactive_border`.
-    pub inactive_border: Color,
+    /// The focused window's border: `general:col.active_border`, whole.
+    ///
+    /// A gradient, because Hyprland's is: `col.active_border = rgba(33ccffee)
+    /// rgba(00ff99ee) 45deg` is two colours running across the window, and a
+    /// compositor that took the first of them would draw a configuration
+    /// nobody wrote.
+    pub active_border: Gradient,
+    /// Every other window's border: `general:col.inactive_border`.
+    pub inactive_border: Gradient,
     /// `decoration:rounding`: how far a window's corners are cut, in pixels.
     /// Zero is a square window, which is Hyprland's default.
     pub rounding: i64,
@@ -37,10 +40,10 @@ pub struct Style {
     /// much black is laid over a window that is not focused. Zero when it is
     /// off.
     pub dim: f32,
-    /// `decoration:blur:size` and `blur:passes`, or `None` when
-    /// `blur:enabled` is off: how much of what is behind a translucent
-    /// window is blurred, and how many times.
-    pub blur: Option<(i64, u32)>,
+    /// `decoration:blur:*`, or `None` when `blur:enabled` is off: how much
+    /// of what is behind a translucent window is blurred, how many times,
+    /// and the colour grading over it.
+    pub blur: Option<Blur>,
 }
 
 impl Style {
@@ -76,20 +79,31 @@ impl Style {
                 offset: (grow(shadow.offset.0), grow(shadow.offset.1)),
                 ..shadow
             }),
-            blur: self.blur.map(|(size, passes)| (grow(size), passes)),
+            blur: self.blur.map(|blur| Blur {
+                size: grow(blur.size),
+                ..blur
+            }),
             ..*self
         }
     }
 
-    /// The colours `config` gives. A border gradient is drawn as its first
-    /// colour until gradients are written.
+    /// The colours and the decorations `config` gives.
     #[must_use]
     pub fn from_config(config: &Config) -> Self {
+        // `decoration:shadow:color` is a gradient option in Hyprland too,
+        // because every colour option is; the shadow shader takes one
+        // colour, so this takes the first of them, as Hyprland's
+        // `CHyprDropShadowDecoration` does.
         let first = |name: &str, default: u32| {
             config
                 .gradient(name)
                 .and_then(|gradient| gradient.colors.first().copied())
                 .unwrap_or(Color(default))
+        };
+        let border = |name: &str, default: u32| {
+            config
+                .gradient(name)
+                .map_or_else(|| Gradient::solid(Color(default)), Gradient::from)
         };
         let opacity = |name: &str| {
             #[expect(
@@ -102,8 +116,8 @@ impl Style {
         let rounding = config.int("decoration:rounding").unwrap_or(0).max(0);
         Self {
             background: Self::BACKGROUND,
-            active_border: first("general:col.active_border", 0xFFFF_FFFF),
-            inactive_border: first("general:col.inactive_border", 0xFF44_4444),
+            active_border: border("general:col.active_border", 0xFFFF_FFFF),
+            inactive_border: border("general:col.inactive_border", 0xFF44_4444),
             rounding,
             active_opacity: opacity("decoration:active_opacity"),
             inactive_opacity: opacity("decoration:inactive_opacity"),
@@ -127,13 +141,7 @@ impl Style {
             blur: config
                 .bool("decoration:blur:enabled")
                 .unwrap_or(true)
-                .then(|| {
-                    (
-                        config.int("decoration:blur:size").unwrap_or(8).max(0),
-                        u32::try_from(config.int("decoration:blur:passes").unwrap_or(1))
-                            .unwrap_or(1),
-                    )
-                }),
+                .then(|| blur_of(config)),
         }
     }
 
@@ -157,6 +165,46 @@ impl Default for Style {
 }
 
 impl Eq for Style {}
+
+/// `decoration:blur:*`: the shape of the blur and the five values that
+/// grade it.
+///
+/// Each grading value falls back to Hyprland's own default rather than to
+/// the one that does nothing, because Hyprland's defaults are not nothing --
+/// `contrast` is 0.8916 and `vibrancy` 0.1696 out of the box -- so a
+/// configuration that turns the blur on and says no more asks for a graded
+/// blur. The one exception is the dither, whose fallback is
+/// [`Blur::DEFAULT_NOISE`] and which explains itself there.
+///
+/// Each is clamped to the range Hyprland's `ConfigValues.cpp` gives it, so
+/// a value outside it is the nearest one inside rather than a picture
+/// nobody has seen.
+fn blur_of(config: &Config) -> Blur {
+    let graded = |name: &str, default: f32, top: f32| {
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "a grading value between zero and two; `f32` holds it"
+        )]
+        let value = config
+            .float(name)
+            .map_or(default, |value| value as f32)
+            .clamp(0.0, top);
+        value
+    };
+    Blur {
+        size: config.int("decoration:blur:size").unwrap_or(8).max(0),
+        passes: u32::try_from(config.int("decoration:blur:passes").unwrap_or(1)).unwrap_or(1),
+        noise: graded("decoration:blur:noise", Blur::DEFAULT_NOISE, 1.0),
+        contrast: graded("decoration:blur:contrast", Blur::CONTRAST, 2.0),
+        brightness: graded("decoration:blur:brightness", Blur::BRIGHTNESS, 2.0),
+        vibrancy: graded("decoration:blur:vibrancy", Blur::VIBRANCY, 1.0),
+        vibrancy_darkness: graded(
+            "decoration:blur:vibrancy_darkness",
+            Blur::VIBRANCY_DARKNESS,
+            1.0,
+        ),
+    }
+}
 
 /// `shadow:offset`, which Hyprland reads as a vector: two numbers separated
 /// by a space or a comma. Anything else is no offset, which is its default.
@@ -403,10 +451,10 @@ fn draw_layer(
     };
     // Only for a surface that can be seen through: blurring behind an
     // opaque bar costs a pyramid of passes and changes nothing.
-    if let Some((size, passes)) = style.blur.filter(|_| layer.blur)
+    if let Some(blur) = style.blur.filter(|_| layer.blur)
         && surface.format() == Format::Argb8888
     {
-        canvas.blur(rect, 0, size, passes, damage);
+        canvas.blur(rect, 0, &blur, damage);
     }
     canvas.composite(surface, rect, damage);
 }
@@ -428,10 +476,10 @@ fn window(
     let opacity = own
         .opacity
         .unwrap_or_else(|| style.opacity(placed.focused, placed.fullscreen));
-    let color = if placed.focused {
-        style.active_border
+    let gradient = if placed.focused {
+        &style.active_border
     } else {
-        style.inactive_border
+        &style.inactive_border
     };
     // The shadow first, under the border and the window: Hyprland draws it
     // as a decoration behind them and does not cut the window's own shape
@@ -455,6 +503,11 @@ fn window(
     // strips: Hyprland draws the outer rounding as the window's plus the
     // border's width, and the surface goes inside it. A square window keeps
     // the four strips, which blend a translucent border once at the corners.
+    //
+    // Either way the gradient runs across the border's whole box, which is
+    // the box `renderBorder` gives the shader: the rounded path fills that
+    // box and the square one draws four windows onto it, so a window's
+    // corner is the same colour whichever path drew it.
     if rounding > 0 {
         let outer = Rect::new(
             rect.x.saturating_sub(width),
@@ -462,9 +515,9 @@ fn window(
             rect.width.saturating_add(width.saturating_mul(2)),
             rect.height.saturating_add(width.saturating_mul(2)),
         );
-        canvas.fill_rounded(outer, rounding.saturating_add(width), color, damage);
+        canvas.fill_rounded_gradient(outer, rounding.saturating_add(width), gradient, damage);
     } else {
-        canvas.border(rect, width, color, damage);
+        canvas.border_gradient(rect, width, gradient, damage);
     }
     // What is behind a window that can be seen through, blurred. Only for a
     // window that can be: blurring behind an opaque one costs a pyramid of
@@ -475,10 +528,10 @@ fn window(
         .get(&placed.window)
         .is_some_and(|surface| surface.format() == Format::Argb8888)
         || opacity < 1.0;
-    if let Some((size, passes)) = style.blur.filter(|_| own.blur)
+    if let Some(blur) = style.blur.filter(|_| own.blur)
         && translucent
     {
-        canvas.blur(rect, rounding, size, passes, damage);
+        canvas.blur(rect, rounding, &blur, damage);
     }
     if let Some(surface) = surfaces.get(&placed.window) {
         // Scaled, which is the exact path when the surface is already the

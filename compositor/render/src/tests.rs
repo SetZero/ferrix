@@ -5,8 +5,8 @@ use compositor_layout::{Monitor, MonitorId, MonitorLayout, Placed, Settings, Sta
 
 use crate::golden::{self, Mismatch};
 use crate::{
-    Canvas, Color, Damage, Error, Format, LayerFrame, Pattern, Rect, Style, Styles, Surface,
-    Target, cursor, damage_between, outer, render, render_with_layers,
+    Blur, Canvas, Color, Damage, Error, Format, Gradient, LayerFrame, Pattern, Rect, Style, Styles,
+    Surface, Target, cursor, damage_between, outer, render, render_with_layers,
 };
 
 const BG: u32 = 0x0020_4060;
@@ -53,13 +53,25 @@ const GRADIENT: WindowId = WindowId(2);
 /// A 1024x768 monitor with the default gaps and border, the checkerboard
 /// opened first and the gradient second, as dwindle tiles them.
 fn two_clients() -> (State, MonitorLayout) {
-    let mut state = State::new(Settings::default());
+    two_clients_tiled(Settings::default())
+}
+
+/// The same, tiled with `settings`: the gaps and the border width a
+/// `general` block asked for.
+fn two_clients_tiled(settings: Settings) -> (State, MonitorLayout) {
+    two_clients_on((WIDTH, HEIGHT), settings)
+}
+
+/// The same two clients on a monitor of another size, for a picture that
+/// wants to be smaller than the screen this crate's images are usually of.
+fn two_clients_on(size: (u32, u32), settings: Settings) -> (State, MonitorLayout) {
+    let mut state = State::new(settings);
     let _ = state
         .add_monitor(Monitor {
             scale: 1.0,
             name: "Virtual-1".to_owned(),
             id: MonitorId(1),
-            rect: Rect::new(0, 0, i64::from(WIDTH), i64::from(HEIGHT)),
+            rect: Rect::new(0, 0, i64::from(size.0), i64::from(size.1)),
             reserved: Gaps::all(0),
         })
         .unwrap();
@@ -1199,8 +1211,8 @@ fn the_tiled_frame_has_its_gaps_and_borders_on_exact_pixels() {
     };
     let style = unshadowed();
     let bg = style.background.0 | 0xFF00_0000;
-    let inactive = style.inactive_border.0;
-    let active = style.active_border.0;
+    let inactive = style.inactive_border.first().0;
+    let active = style.active_border.first().0;
     assert_eq!((inactive, active), (0xFF44_4444, 0xFFFF_FFFF));
 
     // Along row 300: the outer gap, the checkerboard's border and pixels,
@@ -1253,8 +1265,19 @@ fn the_style_follows_the_configuration() {
     );
     assert_eq!(parsed.diagnostics, []);
     let style = Style::from_config(&parsed.config);
-    assert_eq!(style.active_border, Color(0xEE33_CCFF));
-    assert_eq!(style.inactive_border, Color(0xFF59_5959));
+    // The whole gradient, not its first colour: two colours and the angle
+    // they run at are what that line says.
+    assert_eq!(
+        style.active_border.colors(),
+        [Color(0xEE33_CCFF), Color(0xEE00_FF99)]
+    );
+    assert_eq!(style.active_border.angle_degrees(), 45);
+    assert_eq!(
+        style.inactive_border,
+        Gradient::solid(Color(0xFF59_5959)),
+        "one colour is a gradient of one"
+    );
+    assert!(style.inactive_border.is_solid());
     assert_eq!(style.background, Style::BACKGROUND);
 }
 
@@ -1742,7 +1765,7 @@ fn the_patterns_are_what_their_docs_say() {
 fn only_a_translucent_window_has_its_background_blurred() {
     let (_, layout) = two_clients();
     let style = Style {
-        blur: Some((16, 2)),
+        blur: Some(Blur::new(16, 2)),
         shadow: None,
         dim: 0.0,
         ..Style::default()
@@ -1810,7 +1833,7 @@ fn the_canvas_blurs_what_is_drawn_on_it() {
     canvas.fill(Rect::new(32, 32, 64, 64), Color(0xFFFF_FFFF), &full);
     let before: Vec<u32> = (0..128).map(|x| canvas.pixel(x, 64).unwrap()).collect();
 
-    canvas.blur(Rect::new(0, 0, 128, 128), 0, 8, 2, &full);
+    canvas.blur(Rect::new(0, 0, 128, 128), 0, &Blur::ungraded(8, 2), &full);
     let after: Vec<u32> = (0..128).map(|x| canvas.pixel(x, 64).unwrap()).collect();
     assert_ne!(before, after, "nothing was blurred");
 
@@ -1881,5 +1904,436 @@ fn a_frame_with_every_effect_is_inside_the_stated_bound() {
         slowest <= BOUND,
         "the worst frame took {slowest} ms, past the {BOUND} ms this renderer's software \
          fallback is stated to be inside"
+    );
+}
+
+// -- The real configuration: a gradient border and a graded blur -------------
+
+/// The `general` block of the configuration this compositor is meant to
+/// draw faithfully, as `~/.config/hypr/hyprland.conf` writes it:
+///
+/// ```text
+/// general {
+///     border_size = 2
+///     col.active_border = rgba(33ccffee) rgba(00ff99ee) 45deg
+///     col.inactive_border = rgba(595959aa)
+/// }
+/// ```
+fn gradient_config() -> compositor_config::Config {
+    let parsed = parse(
+        "hyprland.conf",
+        "general:border_size = 2\n\
+         general:col.active_border = rgba(33ccffee) rgba(00ff99ee) 45deg\n\
+         general:col.inactive_border = rgba(595959aa)\n",
+        &mut NoSources,
+    );
+    assert_eq!(parsed.diagnostics, []);
+    parsed.config
+}
+
+/// That block's style, with the shadow and the blur off so that what a test
+/// looks at is the border and not what is drawn over or under it.
+fn gradient_style() -> Style {
+    let style = Style::from_config(&gradient_config());
+    assert_eq!(
+        style.active_border.colors(),
+        [Color(0xEE33_CCFF), Color(0xEE00_FF99)],
+        "both colours of the gradient reached the style"
+    );
+    assert_eq!(style.active_border.angle_degrees(), 45);
+    assert_eq!(
+        style.inactive_border,
+        Gradient::solid(Color(0xAA59_5959)),
+        "one colour is a gradient of one"
+    );
+    Style {
+        shadow: None,
+        blur: None,
+        ..style
+    }
+}
+
+/// The two clients drawn with `style`, tiled the way `settings` tiles them.
+fn frame_tiled(style: &Style, settings: Settings) -> Vec<u8> {
+    frame_on((WIDTH, HEIGHT), style, settings)
+}
+
+/// The same on a monitor of `size`.
+fn frame_on(size: (u32, u32), style: &Style, settings: Settings) -> Vec<u8> {
+    let (width, height) = size;
+    let (_, layout) = two_clients_on(size, settings);
+    let buffers = client_buffers(&layout);
+    let mut canvas = Canvas::new(width, height).unwrap();
+    let full = Damage::full(width, height);
+    let produced = render(
+        &mut canvas,
+        &layout,
+        (0, 0),
+        style,
+        &surfaces(&buffers),
+        &full,
+    );
+    assert_eq!(produced, full);
+    canvas.data().to_vec()
+}
+
+/// The frame that configuration's `general` block draws: a two-pixel border
+/// running from blue to green across the focused window, and a flat one
+/// round the other.
+#[test]
+fn the_gradient_border_matches_the_expected_image() {
+    let frame = frame_tiled(&gradient_style(), Settings::from_config(&gradient_config()));
+    golden::check("gradient-border-two-clients", WIDTH, HEIGHT, &frame);
+}
+
+/// The gradient is a gradient: two pixels along its angle are two colours,
+/// and which colour is where says it runs the way Hyprland runs it -- at
+/// `45deg`, from the window's top-left corner towards its bottom-right one.
+///
+/// A gradient of one colour is still flat, which is what
+/// `col.inactive_border` asks for.
+#[test]
+fn a_gradient_border_runs_from_corner_to_corner() {
+    let settings = Settings::from_config(&gradient_config());
+    let (_, layout) = two_clients_tiled(settings);
+    let frame = frame_tiled(&gradient_style(), settings);
+    let at = |x: i64, y: i64| -> u32 {
+        let start = ((y * i64::from(WIDTH) + x) * 4) as usize;
+        u32::from_le_bytes([
+            frame[start],
+            frame[start + 1],
+            frame[start + 2],
+            frame[start + 3],
+        ])
+    };
+    let blue = |pixel: u32| pixel & 0xFF;
+    let green = |pixel: u32| (pixel >> 8) & 0xFF;
+
+    let focused = layout
+        .windows
+        .iter()
+        .find(|placed| placed.focused)
+        .copied()
+        .expect("a focused window");
+    assert_eq!(focused.border, 2, "general:border_size = 2");
+    let border = outer(&focused);
+    // Two corners of the border's own box, which are the two ends of the
+    // gradient at this angle.
+    let (start, end) = (
+        at(border.x, border.y),
+        at(border.right() - 1, border.bottom() - 1),
+    );
+    assert_ne!(
+        start, end,
+        "the border is one colour: {start:08x} at both corners"
+    );
+    // `rgba(33ccffee)` is blue and `rgba(00ff99ee)` green, so the first
+    // colour has more blue than green and the last the other way round.
+    // Finding them at these two corners is what says 45 degrees turns the
+    // bands clockwise from vertical rather than the other way.
+    assert!(
+        blue(start) > green(start),
+        "the top-left corner is not the first colour: {start:08x}"
+    );
+    assert!(
+        green(end) > blue(end),
+        "the bottom-right corner is not the last colour: {end:08x}"
+    );
+    // Across the top edge it moves as well, and by less: the shader's
+    // progress at 45 degrees is `0.707·y + 0.293·x`, so a step across is
+    // under half a step down.
+    let top_right = at(border.right() - 1, border.y);
+    let bottom_left = at(border.x, border.bottom() - 1);
+    assert_ne!(start, top_right, "the top edge is flat");
+    let across = green(top_right).abs_diff(green(start));
+    let down = green(bottom_left).abs_diff(green(start));
+    assert!(
+        across < down,
+        "the gradient does not lean downwards: {across} across against {down} down"
+    );
+
+    // And the window that is not focused has `col.inactive_border`, one
+    // colour: every edge of it is that one blend over the background.
+    let quiet = layout
+        .windows
+        .iter()
+        .find(|placed| !placed.focused)
+        .copied()
+        .expect("an unfocused window");
+    let quiet_box = outer(&quiet);
+    let middle = |from: i64, along: i64| from + along / 2;
+    let flat = [
+        at(middle(quiet_box.x, quiet_box.width), quiet_box.y),
+        at(middle(quiet_box.x, quiet_box.width), quiet_box.bottom() - 1),
+        at(quiet_box.x, middle(quiet_box.y, quiet_box.height)),
+        at(quiet_box.right() - 1, middle(quiet_box.y, quiet_box.height)),
+    ];
+    assert!(
+        flat.windows(2).all(|pair| pair[0] == pair[1]),
+        "a gradient of one colour was not drawn flat: {flat:08x?}"
+    );
+}
+
+/// Where a gradient's angle points, read off `Gradient::progress` rather
+/// than off a window, so that what is checked is the shader's arithmetic
+/// and not a blend over a background.
+///
+/// Against `gradient.glsl`'s `getOkColorForCoordArray1`: the progress is
+/// `y·sin(angle) + x·(1 − sin(angle))`, with the coordinate folded into the
+/// first quadrant first.
+#[test]
+fn the_gradient_angle_turns_the_bands_clockwise() {
+    let two = |degrees| Gradient::new(&[Color(0xFF00_0000), Color(0xFFFF_FFFF)], degrees);
+    let near = |value: f32, expected: f32| (value - expected).abs() < 0.001;
+
+    // Zero: `sin(0)` is zero, so the progress is the coordinate's `x`. The
+    // colour runs left to right and the bands are vertical.
+    let flat = two(0);
+    assert!(near(flat.progress(0.0, 0.0), 0.0));
+    assert!(near(flat.progress(1.0, 0.0), 1.0));
+    assert!(
+        near(flat.progress(0.25, 0.9), 0.25),
+        "0 degrees is not horizontal"
+    );
+
+    // A quarter turn: `sin` is one, so it is the coordinate's `y`. The
+    // colour runs top to bottom and the bands are horizontal -- a vertical
+    // line turned a quarter turn clockwise, on a screen whose `y` grows
+    // downwards.
+    let quarter = two(90);
+    assert!(
+        quarter.progress(0.9, 0.0) < 0.01,
+        "90 degrees is not vertical"
+    );
+    assert!(quarter.progress(0.1, 1.0) > 0.99);
+
+    // And 45 in between, blended rather than rotated: the first colour at
+    // the top-left corner, the last at the bottom-right one, with the
+    // shader's `sin` and `1 - sin` for weights rather than a rotation's
+    // equal halves.
+    let leaning = two(45);
+    let sine = 45.0_f32.to_radians().sin();
+    assert!(near(leaning.progress(1.0, 0.0), 1.0 - sine));
+    assert!(near(leaning.progress(0.0, 1.0), sine));
+    assert!(leaning.progress(0.0, 0.0) < 0.01 && leaning.progress(1.0, 1.0) > 0.99);
+
+    // Half a turn folds the coordinate rather than turning the arithmetic
+    // round, and the gradient runs right to left.
+    let about = two(180);
+    assert!(
+        about.progress(0.0, 0.5) > about.progress(1.0, 0.5),
+        "180 degrees did not turn the gradient round"
+    );
+}
+
+/// The `decoration` block of the same configuration, blur and all:
+///
+/// ```text
+/// decoration {
+///     rounding = 8
+///     shadow { enabled = true; range = 4; render_power = 3; color = rgba(1a1a1aee) }
+///     blur {
+///         enabled = true
+///         size = 8
+///         passes = 3
+///         noise = 0.015
+///         contrast = 1.1
+///         brightness = 0.9
+///         vibrancy = 0.1696
+///     }
+/// }
+/// ```
+///
+/// The four grading values are put on the style rather than read out of the
+/// configuration because `compositor/config`'s option table does not carry
+/// the five `blur:` grading options yet:
+/// `the_grading_waits_on_the_options_table` below is the test that says so,
+/// and the day it fails is the day these come out of the file.
+fn graded_style() -> Style {
+    let parsed = parse(
+        "hyprland.conf",
+        "decoration:rounding = 8\n\
+         decoration:shadow:enabled = true\n\
+         decoration:shadow:range = 4\n\
+         decoration:shadow:render_power = 3\n\
+         decoration:shadow:color = rgba(1a1a1aee)\n\
+         decoration:blur:enabled = true\n\
+         decoration:blur:size = 8\n\
+         decoration:blur:passes = 3\n",
+        &mut NoSources,
+    );
+    assert_eq!(parsed.diagnostics, []);
+    let style = Style::from_config(&parsed.config);
+    let blur = style.blur.expect("the blur is on");
+    assert_eq!((blur.size, blur.passes), (8, 3));
+    Style {
+        blur: Some(Blur {
+            noise: 0.015,
+            contrast: 1.1,
+            brightness: 0.9,
+            vibrancy: 0.1696,
+            ..blur
+        }),
+        ..style
+    }
+}
+
+/// A monitor half as wide and half as tall as the rest of this file's,
+/// which is what the graded blur's expected image is of.
+///
+/// Smaller because of the dither: `blur:noise` moves every pixel it touches
+/// by a step or two, which is what a run-length encoded image cannot hold,
+/// so the one committed image that carries a dither carries it over a
+/// quarter of the pixels. The blur, the rounding and the shadow are the
+/// same ones; only the screen is smaller.
+const SMALL: (u32, u32) = (512, 384);
+
+/// The frame that configuration's `decoration` block draws: the blur behind
+/// the window that can be seen through, graded the way its five values ask
+/// for, dither and all.
+#[test]
+fn the_graded_blur_matches_the_expected_image() {
+    let frame = frame_on(SMALL, &graded_style(), Settings::default());
+    golden::check("graded-blur-two-clients", SMALL.0, SMALL.1, &frame);
+}
+
+/// The grading changes the blur and nothing else: the same frame with the
+/// five values at the ones that do nothing is a different picture, and it
+/// differs only where the blur was drawn.
+#[test]
+fn the_grading_changes_the_blurred_pixels_and_no_others() {
+    let style = graded_style();
+    let blur = style.blur.expect("the blur is on");
+    let graded = frame_with(&style, &[]);
+    let ungraded = frame_with(
+        &Style {
+            blur: Some(Blur::ungraded(blur.size, blur.passes)),
+            ..style
+        },
+        &[],
+    );
+    assert_ne!(graded, ungraded, "the grading changed nothing");
+
+    let (_, layout) = two_clients();
+    let translucent = layout
+        .windows
+        .iter()
+        .find(|placed| placed.window == GRADIENT)
+        .copied()
+        .expect("the gradient client");
+    let mut changed = 0_u32;
+    let mut stray = 0_u32;
+    for y in 0..i64::from(HEIGHT) {
+        for x in 0..i64::from(WIDTH) {
+            let at = ((y * i64::from(WIDTH) + x) * 4) as usize;
+            if graded.get(at..at + 4) == ungraded.get(at..at + 4) {
+                continue;
+            }
+            changed += 1;
+            let inside = x >= translucent.rect.x
+                && x < translucent.rect.right()
+                && y >= translucent.rect.y
+                && y < translucent.rect.bottom();
+            if !inside {
+                stray += 1;
+            }
+        }
+    }
+    assert!(
+        changed > 10_000,
+        "the grading changed only {changed} pixels of the blur"
+    );
+    assert_eq!(stray, 0, "{stray} pixels outside the blur changed");
+}
+
+/// The five grading options are not in `compositor/config`'s table yet, so a
+/// configuration that sets them is told each does not exist, and the style
+/// falls back to Hyprland's own defaults.
+///
+/// This is the state of the wiring, written down. The renderer reads all
+/// five through [`Style`], and `general:col.active_border` beside them comes
+/// out of the file already, but `decoration:blur:noise` and its four
+/// neighbours need a line each in `config/src/options.rs`. The day they get
+/// one this test fails, and what it should become is the test that a
+/// configuration setting them reaches the style.
+#[test]
+fn the_grading_waits_on_the_options_table() {
+    let parsed = parse(
+        "hyprland.conf",
+        "decoration:blur:noise = 0.015\n\
+         decoration:blur:contrast = 1.1\n\
+         decoration:blur:brightness = 0.9\n\
+         decoration:blur:vibrancy = 0.1696\n\
+         decoration:blur:vibrancy_darkness = 0.0\n",
+        &mut NoSources,
+    );
+    assert_eq!(
+        parsed.diagnostics.len(),
+        5,
+        "the grading options exist now: read them in `Style::from_config` and turn this \
+         into the test that they arrive"
+    );
+    let blur = Style::from_config(&parsed.config)
+        .blur
+        .expect("the blur is on by default");
+    assert_eq!(
+        (blur.contrast, blur.brightness, blur.vibrancy),
+        (Blur::CONTRAST, Blur::BRIGHTNESS, Blur::VIBRANCY),
+        "a grading value the table does not carry must fall back to Hyprland's own"
+    );
+    assert_eq!(
+        blur.noise,
+        Blur::DEFAULT_NOISE,
+        "the dither is the one value this renderer does not take Hyprland's default for"
+    );
+}
+
+/// What a blurred screen costs, which is the compositor's whole frame
+/// budget: a full-screen blur at the size and passes the configuration at
+/// the head of this file asks for, timed.
+///
+/// Hyprland blurs what is behind a translucent window, so a bar or a
+/// terminal over a wallpaper puts this on the critical path of every frame
+/// it is on. At 1920x1080 with `size = 8` and `passes = 3` it was 304 ms
+/// when the pyramid was first written, which is three frames a second; the
+/// row-hoisted taps, the shared vertical mix, the contrast table and the
+/// cast that replaced `f32::floor` took it to 85 ms on the machine this was
+/// written on, and the expected images are the same bytes as before, which
+/// is what says the kernel did not change.
+///
+/// The ceiling is more than twice that measurement, for the reason
+/// `a_frame_with_every_effect_is_inside_the_stated_bound` states: a slower
+/// machine must pass, and a change that made the blur several times more
+/// expensive must not.
+#[test]
+fn a_full_screen_blur_is_inside_the_stated_bound() {
+    /// The bound, in milliseconds.
+    const BOUND: u128 = 220;
+    /// A screen, which is what a blur behind a full-screen window covers.
+    const SCREEN: (u32, u32) = (1920, 1080);
+
+    if cfg!(debug_assertions) {
+        return;
+    }
+    let (width, height) = SCREEN;
+    let mut canvas = Canvas::new(width, height).unwrap();
+    let full = Damage::full(width, height);
+    canvas.clear(Color(BG), &full);
+    // Something to blur: a flat screen would be the same pixel everywhere
+    // and would not touch the memory a real frame touches.
+    canvas.fill(Rect::new(100, 100, 700, 500), Color(0xFFFF_FFFF), &full);
+    let rect = Rect::new(10, 10, i64::from(width) - 20, i64::from(height) - 20);
+    // Once to warm the caches and the allocator, then the slowest of three.
+    canvas.blur(rect, 8, &Blur::new(8, 3), &full);
+    let mut slowest = 0;
+    for _ in 0..3 {
+        let began = std::time::Instant::now();
+        canvas.blur(rect, 8, &Blur::new(8, 3), &full);
+        slowest = slowest.max(began.elapsed().as_millis());
+    }
+    assert!(
+        slowest <= BOUND,
+        "a full-screen blur took {slowest} ms, past the {BOUND} ms this renderer is stated to \
+         be inside"
     );
 }

@@ -94,6 +94,7 @@ mod canvas;
 pub mod cursor;
 mod damage;
 mod frame;
+mod gradient;
 mod patterns;
 
 // Public, and not only for this crate's own tests: `compositor/term` draws
@@ -105,6 +106,7 @@ mod tests;
 
 use core::fmt;
 
+pub use blur::Blur;
 pub use buffer::{Format, Surface, Target};
 pub use canvas::{Canvas, MAX_SIZE, Shadow};
 pub use compositor_config::Color;
@@ -114,6 +116,7 @@ pub use frame::{
     LayerFrame, Style, Styles, WindowStyle, damage_between, outer, render, render_with_layers,
     scaled,
 };
+pub use gradient::Gradient;
 pub use patterns::Pattern;
 
 /// What the renderer could not do.

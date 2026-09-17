@@ -3,8 +3,10 @@
 
 use tiny_skia::{BlendMode, FilterQuality, Paint, Pattern, Pixmap, PixmapRef, Shader, SpreadMode};
 
+use crate::blur::{Block, Blur};
 use crate::damage::{intersect, is_empty};
-use crate::{Color, Damage, Error, Format, Rect, Surface, Target};
+use crate::gradient::Axis;
+use crate::{Color, Damage, Error, Format, Gradient, Rect, Surface, Target};
 
 /// The largest width or height a canvas, surface or target may have: past
 /// a 16K output, and small enough that every coordinate is exact in the
@@ -186,6 +188,137 @@ impl Canvas {
         ];
         for strip in strips {
             self.fill(strip, color, damage);
+        }
+    }
+
+    /// Draw a border `width` pixels wide around `rect`, outside it, in
+    /// `gradient`: Hyprland's gradient border with no rounding.
+    ///
+    /// The gradient runs across the whole border box -- `rect` grown by
+    /// `width` on every side, which is the box `renderBorder` hands the
+    /// shader -- so the four strips are four windows onto one gradient
+    /// rather than four gradients of their own. A gradient of one colour is
+    /// [`Canvas::border`] exactly, including its blend.
+    pub fn border_gradient(
+        &mut self,
+        rect: Rect,
+        width: i64,
+        gradient: &Gradient,
+        damage: &Damage,
+    ) {
+        if width <= 0 || is_empty(rect) {
+            return;
+        }
+        if gradient.is_solid() {
+            self.border(rect, width, gradient.first(), damage);
+            return;
+        }
+        let outer_x = rect.x.saturating_sub(width);
+        let outer_y = rect.y.saturating_sub(width);
+        let outer_width = rect.width.saturating_add(width.saturating_mul(2));
+        let outer_height = rect.height.saturating_add(width.saturating_mul(2));
+        let box_rect = Rect::new(outer_x, outer_y, outer_width, outer_height);
+        let strips = [
+            Rect::new(outer_x, outer_y, outer_width, width),
+            Rect::new(outer_x, rect.bottom(), outer_width, width),
+            Rect::new(outer_x, rect.y, width, rect.height),
+            Rect::new(rect.right(), rect.y, width, rect.height),
+        ];
+        let ramp = gradient.ramp();
+        for strip in strips {
+            let clips = self.clips(strip, damage);
+            self.fill_gradient_clips(box_rect, &clips, gradient, &ramp);
+        }
+    }
+
+    /// Fill `rect` with `gradient` and its corners cut to `radius`: the
+    /// shape a rounded window's border is drawn as, before its surface goes
+    /// inside it.
+    ///
+    /// The gradient runs across `rect`, which for a window's border is the
+    /// border box, so the colour at the corner is the colour the square
+    /// border has at the same corner.
+    pub fn fill_rounded_gradient(
+        &mut self,
+        rect: Rect,
+        radius: i64,
+        gradient: &Gradient,
+        damage: &Damage,
+    ) {
+        if is_empty(rect) {
+            return;
+        }
+        if gradient.is_solid() {
+            self.fill_rounded(rect, radius, gradient.first(), damage);
+            return;
+        }
+        let clips = self.rounded_clips(rect, radius, damage);
+        let ramp = gradient.ramp();
+        self.fill_gradient_clips(rect, &clips, gradient, &ramp);
+    }
+
+    /// Draw `gradient` over `clips`, taking each pixel's colour from where
+    /// it is inside `box_rect`.
+    ///
+    /// By hand rather than through a tiny-skia shader, for the reason
+    /// [`Canvas::shadow`] is: every pixel has a colour and an alpha of its
+    /// own, and tiny-skia's linear gradient is not Hyprland's -- it
+    /// interpolates in sRGB, along a true rotation, with anti-aliased
+    /// stops. The blend is the same source-over tiny-skia's `f32` pipeline
+    /// does, so a gradient of one colour and a fill of that colour agree to
+    /// the byte.
+    fn fill_gradient_clips(
+        &mut self,
+        box_rect: Rect,
+        clips: &[Rect],
+        gradient: &Gradient,
+        ramp: &[Color],
+    ) {
+        let axis = gradient.axis();
+        for &clip in clips {
+            for y in clip.y..clip.bottom() {
+                self.gradient_row(clip, y, box_rect, &axis, ramp);
+            }
+            self.damage.add(clip);
+        }
+    }
+
+    /// One row of a gradient, which is where its pixels are written.
+    fn gradient_row(&mut self, clip: Rect, y: i64, box_rect: Rect, axis: &Axis, ramp: &[Color]) {
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "a window's size in pixels, far inside f32's exact range"
+        )]
+        let (wide, tall) = (box_rect.width.max(1) as f32, box_rect.height.max(1) as f32);
+        #[expect(clippy::cast_precision_loss, reason = "as above")]
+        let ny = ((y - box_rect.y) as f32 + 0.5) / tall;
+        let last = ramp.len().saturating_sub(1);
+        let width = index(i64::from(self.width()));
+        let row = index(y) * width;
+        for x in clip.x..clip.right() {
+            #[expect(clippy::cast_precision_loss, reason = "as above")]
+            let nx = ((x - box_rect.x) as f32 + 0.5) / wide;
+            #[expect(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                reason = "a progress between zero and one over an index of a few thousand"
+            )]
+            let at = (axis.at(nx, ny) * last as f32).round() as usize;
+            let Some(color) = ramp.get(at.min(last)) else {
+                continue;
+            };
+            // The canvas holds blue in tiny-skia's red byte; the module
+            // comment says why.
+            let colour = [color.blue(), color.green(), color.red()];
+            let alpha = f32::from(color.alpha()) / 255.0;
+            if alpha > 0.0
+                && let Some(pixel) = self
+                    .pixmap
+                    .data_mut()
+                    .get_mut((row + index(x)) * 4..(row + index(x)) * 4 + 4)
+            {
+                over(pixel, colour, alpha);
+            }
         }
     }
 
@@ -442,12 +575,19 @@ impl Canvas {
     /// own edge inwards and leave a bright rim; only `rect`'s rounded shape
     /// is written back. Nothing outside the canvas is read: the edges are
     /// clamped, as `GL_CLAMP_TO_EDGE` clamps them.
-    pub fn blur(&mut self, rect: Rect, rounding: i64, size: i64, passes: u32, damage: &Damage) {
-        if size <= 0 || passes == 0 || is_empty(rect) {
+    ///
+    /// The grading in `blur` ([`Blur::contrast`] and its four neighbours)
+    /// runs over that read region rather than over the whole monitor as
+    /// Hyprland's two extra passes do. Each of them is a function of one
+    /// pixel, so the only place the two could differ is where the kernel
+    /// clamps at the region's edge -- and the region already reaches a
+    /// whole blur past what is written.
+    pub fn blur(&mut self, rect: Rect, rounding: i64, blur: &Blur, damage: &Damage) {
+        if blur.size <= 0 || blur.passes == 0 || is_empty(rect) {
             return;
         }
         // The reach: each pass doubles the scale the offsets apply at.
-        let reach = size.saturating_mul(1_i64 << passes.min(6));
+        let reach = blur.size.saturating_mul(1_i64 << blur.passes.min(6));
         let Some(read) = intersect(
             Rect::new(
                 rect.x.saturating_sub(reach),
@@ -481,7 +621,16 @@ impl Canvas {
                 target.copy_from_slice(source);
             }
         }
-        crate::blur::blur(&mut block, wide, tall, size, passes);
+        crate::blur::blur(
+            &mut block,
+            &Block {
+                width: wide,
+                height: tall,
+                origin: (read.x, read.y),
+                screen: (self.width(), self.height()),
+            },
+            blur,
+        );
 
         for clip in clips {
             for y in clip.y..clip.bottom() {
