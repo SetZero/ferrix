@@ -775,5 +775,63 @@ pub(crate) fn judge(
     }
 }
 
+/// uutils/coreutils, run from the same boot as the applets above and reported
+/// apart from them, on the one architecture the image carries it on.
+///
+/// This is the first time these utilities run on Ferrix at all: until now they
+/// had only been built and run on a Linux host. What each row is for:
+///
+/// * the multicall binary called by its own name, which picks the utility from
+///   the second argument;
+/// * the same binary reached through a symlink in `/usr/bin`, which picks it
+///   from `argv[0]` instead -- the dispatch `docs/UUTILS.md` §3a is about, and
+///   the thing that does not work in a static binary on the `-gnu` target;
+/// * a file read through the btrfs fixture the boot check mounted, by the same
+///   command an applet above runs, so the two implementations answer the same
+///   question about the same file.
+///
+/// Each is an `sh -c` script, because the kernel starts every command with
+/// `/bin/busybox` (`kernel/src/init.rs`): the shell is what forks and execs
+/// something else. Each ends in a status of its own, for the reason the rest
+/// of this file's scripts do.
+pub(crate) const UTILITIES: &[Command] = &[
+    Command {
+        argv: &["sh", "-c", "/bin/coreutils echo uutils: hello; exit 3"],
+        status: 3,
+        expect: Expect::Lines(&["uutils: hello"]),
+    },
+    Command {
+        argv: &["sh", "-c", "/usr/bin/uname -sm; exit 4"],
+        status: 4,
+        expect: Expect::Lines(&["Ferrix x86_64"]),
+    },
+    Command {
+        argv: &["sh", "-c", "/usr/bin/wc -c < /mnt/big.txt; exit 5"],
+        status: 5,
+        expect: Expect::Lines(&["140000"]),
+    },
+];
+
+/// The commands the kernel is built to run on `arch`, in order: the
+/// criterion's three, the applets, and uutils where the image carries it.
+///
+/// Only x86-64 carries uutils, because ferrousli is built for x86-64 only, so
+/// only x86-64 runs the rows that need it. Every architecture runs everything
+/// that came before.
+pub(crate) fn commands(arch: crate::paths::Arch) -> Vec<Command> {
+    let mut all = [COMMANDS, APPLETS].concat();
+    if carries_utilities(arch) {
+        all.extend_from_slice(UTILITIES);
+    }
+    all
+}
+
+/// Whether an image for `arch` carries uutils, and so whether [`UTILITIES`]
+/// runs. One place, so the kernel's command list and the judging cannot
+/// disagree about how many commands there are.
+pub(crate) fn carries_utilities(arch: crate::paths::Arch) -> bool {
+    arch == crate::paths::Arch::X86_64
+}
+
 #[cfg(test)]
 mod tests;

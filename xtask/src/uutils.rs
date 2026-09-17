@@ -86,15 +86,6 @@ fn refuse_other_than_x86_64(arch: Arch) -> Result<()> {
 /// than ferrousli, so what boots is the tree as it stands.
 ///
 /// Never another build in its place: a build that fails is the error.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the staleness rule, ready for the slice that puts uutils in \
-                  the initramfs (docs/UUTILS.md S3); until then only the test \
-                  below calls it"
-    )
-)]
 pub(crate) fn program(arch: Arch) -> Result<PathBuf> {
     refuse_other_than_x86_64(arch)?;
     let root = root()?;
@@ -164,6 +155,23 @@ fn build_locked(arch: Arch, root: &Path) -> Result<PathBuf> {
     }
     println!("\nbuilt {}", program.display());
     Ok(program)
+}
+
+/// The bytes an image carries, built when stale, or `None` on an architecture
+/// ferrousli is not built for.
+///
+/// `None` rather than an error: an image for AArch64 or ARMv7-A is a whole
+/// image without these utilities, and refusing to build one would be the
+/// wrong answer to "this is x86-64 only for now".
+pub(crate) fn carried(arch: Arch) -> Result<Option<Vec<u8>>> {
+    if arch != Arch::X86_64 {
+        println!("  uutils is not built for {} yet", arch.name());
+        return Ok(None);
+    }
+    let path = program(arch)?;
+    std::fs::read(&path)
+        .map(Some)
+        .map_err(|error| Error::new(format!("reading {}: {error}", path.display())))
 }
 
 #[cfg(test)]
