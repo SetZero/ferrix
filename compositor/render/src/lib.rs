@@ -108,7 +108,7 @@ use core::fmt;
 
 pub use blur::Blur;
 pub use buffer::{Format, Surface, Target};
-pub use canvas::{Canvas, MAX_SIZE, Shadow};
+pub use canvas::{Canvas, MAX_SIZE, Rounding, Shadow};
 pub use compositor_config::Color;
 pub use compositor_layout::Rect;
 pub use damage::Damage;

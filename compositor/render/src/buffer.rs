@@ -101,6 +101,20 @@ impl<'a> Surface<'a> {
         })
     }
 
+    /// The same bytes read as opaque, whatever the client's format said.
+    ///
+    /// `windowrule = opaque`: a client that leaves rubbish in its alpha
+    /// channel is drawn blotchy, and the rule is a person saying "there is
+    /// nothing to see through here". The bytes are not touched; only what
+    /// the fourth one *means* changes, which is exactly what the rule says.
+    #[must_use]
+    pub const fn as_opaque(self) -> Self {
+        Self {
+            format: Format::Xrgb8888,
+            ..self
+        }
+    }
+
     /// The width in pixels.
     #[must_use]
     pub const fn width(&self) -> u32 {

@@ -12,7 +12,8 @@
 //! (with `silent`), `fullscreen`, `maximize` and `no_focus`, through the
 //! same calls a dispatcher makes.
 //!
-//! And the renderer's: `opacity`, `rounding`, `border_size`, `no_blur`,
+//! And the renderer's: `opacity`, `rounding`, `rounding_power`,
+//! `border_size`, `border_color`, `decorate`, `opaque`, `no_blur`,
 //! `no_shadow` and `no_dim`, which are what *one* window is drawn with. They
 //! are kept here by window, and the frame reads them: a window with no rule
 //! is drawn as every window is.
@@ -191,6 +192,22 @@ impl Rules {
                 }
                 Effect::Rounding(rounding) => {
                     style.rounding = Some(*rounding);
+                    styled = true;
+                }
+                Effect::RoundingPower(power) => {
+                    style.rounding_power = Some(*power);
+                    styled = true;
+                }
+                Effect::BorderColor(gradient) => {
+                    style.border_color = Some(compositor_render::Gradient::from(gradient));
+                    styled = true;
+                }
+                Effect::Decorate(on) => {
+                    style.decorate = *on;
+                    styled = true;
+                }
+                Effect::Opaque(on) => {
+                    style.opaque = *on;
                     styled = true;
                 }
                 Effect::BorderSize(width) => {

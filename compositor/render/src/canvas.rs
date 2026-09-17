@@ -241,7 +241,7 @@ impl Canvas {
     pub fn fill_rounded_gradient(
         &mut self,
         rect: Rect,
-        radius: i64,
+        rounding: Rounding,
         gradient: &Gradient,
         damage: &Damage,
     ) {
@@ -249,10 +249,10 @@ impl Canvas {
             return;
         }
         if gradient.is_solid() {
-            self.fill_rounded(rect, radius, gradient.first(), damage);
+            self.fill_rounded(rect, rounding, gradient.first(), damage);
             return;
         }
-        let clips = self.rounded_clips(rect, radius, damage);
+        let clips = self.rounded_clips(rect, rounding, damage);
         let ramp = gradient.ramp();
         self.fill_gradient_clips(rect, &clips, gradient, &ramp);
     }
@@ -328,7 +328,7 @@ impl Canvas {
     /// [`Format::Xrgb8888`]. Where the surface is smaller than `rect`,
     /// nothing is drawn.
     pub fn composite(&mut self, surface: &Surface<'_>, rect: Rect, damage: &Damage) {
-        self.composite_with(surface, rect, 0, 1.0, damage);
+        self.composite_with(surface, rect, Rounding::none(), 1.0, damage);
     }
 
     /// The same, with Hyprland's two window decorations applied.
@@ -342,7 +342,7 @@ impl Canvas {
         &mut self,
         surface: &Surface<'_>,
         rect: Rect,
-        rounding: i64,
+        rounding: Rounding,
         opacity: f32,
         damage: &Damage,
     ) {
@@ -359,7 +359,7 @@ impl Canvas {
         if opacity == 0.0 {
             return;
         }
-        let clips = if rounding > 0 {
+        let clips = if !rounding.is_square() {
             self.rounded_clips(area, rounding, damage)
         } else {
             self.clips(area, damage)
@@ -393,7 +393,7 @@ impl Canvas {
         &mut self,
         surface: &Surface<'_>,
         rect: Rect,
-        rounding: i64,
+        rounding: Rounding,
         opacity: f32,
         damage: &Damage,
     ) {
@@ -410,7 +410,7 @@ impl Canvas {
             self.composite_with(surface, rect, rounding, opacity, damage);
             return;
         }
-        let clips = if rounding > 0 {
+        let clips = if !rounding.is_square() {
             self.rounded_clips(rect, rounding, damage)
         } else {
             self.clips(rect, damage)
@@ -456,14 +456,19 @@ impl Canvas {
     /// here as everywhere else in this crate, so a pixel is in or out, and a
     /// row's inset is the circle's at that row's centre, rounded to the
     /// nearest pixel.
-    fn rounded_clips(&self, rect: Rect, radius: i64, damage: &Damage) -> Vec<Rect> {
-        let radius = radius.min(rect.width / 2).min(rect.height / 2).max(0);
+    fn rounded_clips(&self, rect: Rect, rounding: Rounding, damage: &Damage) -> Vec<Rect> {
+        let radius = rounding
+            .radius
+            .min(rect.width / 2)
+            .min(rect.height / 2)
+            .max(0);
+        let rounding = Rounding { radius, ..rounding };
         if radius == 0 {
             return self.clips(rect, damage);
         }
         let mut spans = Vec::with_capacity((radius * 2 + 1) as usize);
         for row in 0..radius {
-            let inset = corner_inset(radius, row);
+            let inset = corner_inset(rounding, row);
             let width = rect.width.saturating_sub(inset.saturating_mul(2));
             if width <= 0 {
                 continue;
@@ -525,7 +530,7 @@ impl Canvas {
         if clips.is_empty() {
             return;
         }
-        let shape = Falloff::new(full, shadow.rounding, shadow.range, shadow.power);
+        let shape = Falloff::new(full, shadow.rounding.radius, shadow.range, shadow.power);
         let alpha = f32::from(shadow.color.alpha()) / 255.0;
         for clip in clips {
             for y in clip.y..clip.bottom() {
@@ -591,11 +596,11 @@ impl Canvas {
     /// pixel, so the only place the two could differ is where the kernel
     /// clamps at the region's edge -- and the region already reaches a
     /// whole blur past what is written.
-    pub fn blur(&mut self, rect: Rect, rounding: i64, blur: &Blur, damage: &Damage) {
+    pub fn blur(&mut self, rect: Rect, rounding: Rounding, blur: &Blur, damage: &Damage) {
         if blur.size <= 0 || blur.passes == 0 || is_empty(rect) {
             return;
         }
-        let clips = if rounding > 0 {
+        let clips = if !rounding.is_square() {
             self.rounded_clips(rect, rounding, damage)
         } else {
             self.clips(rect, damage)
@@ -694,11 +699,11 @@ impl Canvas {
     /// Fill `rect` with `color` and its corners cut to `radius`: the shape a
     /// rounded window's border is drawn as, before its surface is put inside
     /// it.
-    pub fn fill_rounded(&mut self, rect: Rect, radius: i64, color: Color, damage: &Damage) {
+    pub fn fill_rounded(&mut self, rect: Rect, rounding: Rounding, color: Color, damage: &Damage) {
         if color.alpha() == 0 || is_empty(rect) {
             return;
         }
-        let clips = self.rounded_clips(rect, radius, damage);
+        let clips = self.rounded_clips(rect, rounding, damage);
         let paint = paint(Shader::SolidColor(skia_color(color)), BlendMode::SourceOver);
         self.fill_clips(&clips, &paint);
     }
@@ -814,24 +819,86 @@ fn copy_opaque(dst: &mut [u8], src: &[u8]) {
 /// How far a rounded corner's row is inset from the rectangle's edge.
 ///
 /// `row` counts from the corner's own edge, so row 0 is the outermost and
-/// `radius - 1` the innermost. The inset is the circle's at that row's
-/// centre -- `radius - sqrt(radius² - dy²)` with `dy` the distance from the
-/// circle's centre to the row's middle -- rounded to the nearest pixel,
-/// because coverage here is all or nothing.
-fn corner_inset(radius: i64, row: i64) -> i64 {
+/// `radius - 1` the innermost. The inset is the corner curve's at that
+/// row's centre, rounded to the nearest pixel, because coverage here is
+/// all or nothing.
+///
+/// The curve is `rounding.glsl`'s `distanceWithRounding`: a *superellipse*
+/// `(|x|^p + |y|^p)^(1/p) = radius`, where `p` is
+/// `decoration:rounding_power`. Two is a circle, which is what every other
+/// compositor draws; above two the corner is squarer, which is the
+/// "squircle" a person sets the option for, and below two it is pinched.
+fn corner_inset(rounding: Rounding, row: i64) -> i64 {
+    let radius = rounding.radius;
     #[expect(
         clippy::cast_precision_loss,
         reason = "a radius is a few dozen pixels; the loss is beyond any of them"
     )]
     let (radius_f, row_f) = (radius as f64, row as f64);
-    let dy = radius_f - row_f - 0.5;
-    let dx = (radius_f * radius_f - dy * dy).max(0.0).sqrt();
+    let power = f64::from(rounding.power).clamp(1.0, 10.0);
+    let dy = (radius_f - row_f - 0.5).max(0.0);
+    // `x = (r^p - y^p)^(1/p)`, which is the circle's `sqrt(r² - y²)` at
+    // `p = 2` and is computed the same way for every other power.
+    let dx = (radius_f.powf(power) - dy.powf(power))
+        .max(0.0)
+        .powf(1.0 / power);
     #[expect(
         clippy::cast_possible_truncation,
         reason = "the value is between zero and the radius, which is an i64 already"
     )]
     let inset = (radius_f - dx).round() as i64;
     inset.clamp(0, radius)
+}
+
+/// How a corner is cut: how far, and by what curve.
+///
+/// `decoration:rounding` and `decoration:rounding_power`. They travel
+/// together because every place that cuts a corner needs both, and a radius
+/// without its power is a corner drawn as a circle whatever the
+/// configuration said.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Rounding {
+    /// `decoration:rounding`: how far the corner is cut, in pixels. Zero is
+    /// a square corner.
+    pub radius: i64,
+    /// `decoration:rounding_power`: the superellipse's exponent. Two is a
+    /// circle; above two the corner is squarer.
+    pub power: f32,
+}
+
+impl Rounding {
+    /// Hyprland's `decoration:rounding_power` default, which is a circle.
+    pub const POWER: f32 = 2.0;
+
+    /// A square corner.
+    #[must_use]
+    pub const fn none() -> Self {
+        Self {
+            radius: 0,
+            power: Self::POWER,
+        }
+    }
+
+    /// A corner of `radius` pixels cut as a circle.
+    #[must_use]
+    pub const fn circle(radius: i64) -> Self {
+        Self {
+            radius,
+            power: Self::POWER,
+        }
+    }
+
+    /// Whether the corner is cut at all.
+    #[must_use]
+    pub const fn is_square(self) -> bool {
+        self.radius <= 0
+    }
+}
+
+impl Default for Rounding {
+    fn default() -> Self {
+        Self::none()
+    }
 }
 
 /// A surface's pixels as tight rows the shader can read.
@@ -860,10 +927,13 @@ fn opaque_rows(surface: &Surface<'_>) -> Vec<u8> {
 }
 
 /// What a window's drop shadow is: Hyprland's `decoration:shadow:*`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+///
+/// Not `Eq`: its rounding carries a power, which is a float, as Hyprland's
+/// is.
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Shadow {
     /// The window's own corner rounding, which the shadow follows.
-    pub rounding: i64,
+    pub rounding: Rounding,
     /// `shadow:range`: how far it reaches past the window, in pixels.
     pub range: i64,
     /// `shadow:render_power`: how fast it fades, 1 to 4.

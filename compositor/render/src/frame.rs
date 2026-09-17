@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use compositor_config::Config;
 use compositor_layout::{MonitorLayout, Placed, WindowId};
 
-use crate::{Blur, Canvas, Color, Damage, Format, Gradient, Rect, Shadow, Surface};
+use crate::{Blur, Canvas, Color, Damage, Format, Gradient, Rect, Rounding, Shadow, Surface};
 
 /// The colours a frame is drawn in, and the decorations it is drawn with.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -22,9 +22,10 @@ pub struct Style {
     pub active_border: Gradient,
     /// Every other window's border: `general:col.inactive_border`.
     pub inactive_border: Gradient,
-    /// `decoration:rounding`: how far a window's corners are cut, in pixels.
-    /// Zero is a square window, which is Hyprland's default.
-    pub rounding: i64,
+    /// `decoration:rounding` and `decoration:rounding_power`: how far a
+    /// window's corners are cut and by what curve. Zero is a square
+    /// window, which is Hyprland's default.
+    pub rounding: Rounding,
     /// `decoration:active_opacity`: how much of the focused window shows.
     pub active_opacity: f32,
     /// `decoration:inactive_opacity`: the same for every other window.
@@ -70,10 +71,14 @@ impl Style {
             let scaled = (value as f64 * scale).round() as i64;
             scaled
         };
+        let scaled = |rounding: Rounding| Rounding {
+            radius: grow(rounding.radius),
+            ..rounding
+        };
         Self {
-            rounding: grow(self.rounding),
+            rounding: scaled(self.rounding),
             shadow: self.shadow.map(|shadow| Shadow {
-                rounding: grow(shadow.rounding),
+                rounding: scaled(shadow.rounding),
                 range: grow(shadow.range),
                 offset: (grow(shadow.offset.0), grow(shadow.offset.1)),
                 ..shadow
@@ -112,7 +117,17 @@ impl Style {
             let value = config.float(name).unwrap_or(1.0) as f32;
             value.clamp(0.0, 1.0)
         };
-        let rounding = config.int("decoration:rounding").unwrap_or(0).max(0);
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "a rounding power is between one and ten; `f32` holds it"
+        )]
+        let power = config
+            .float("decoration:rounding_power")
+            .unwrap_or(f64::from(Rounding::POWER)) as f32;
+        let rounding = Rounding {
+            radius: config.int("decoration:rounding").unwrap_or(0).max(0),
+            power: power.clamp(1.0, 10.0),
+        };
         Self {
             // Hyprland stores a colour as an integer and reads this one
             // as a colour rather than a gradient, so the first stop of
@@ -312,6 +327,21 @@ pub struct WindowStyle {
     pub shadow: bool,
     /// `no_dim`: whether it is dimmed when it is not focused.
     pub dim: bool,
+    /// `rounding_power`: the curve its corners are cut by.
+    pub rounding_power: Option<f32>,
+    /// `border_color`: its border, instead of the focused and unfocused
+    /// ones. Hyprland's rule takes one or two gradients -- the second for
+    /// the unfocused state -- and this carries the first.
+    pub border_color: Option<Gradient>,
+    /// `decorate`: whether it is drawn with a border and a shadow at all.
+    /// `decorate false` is what a person writes for a window that draws
+    /// its own frame.
+    pub decorate: bool,
+    /// `opaque`: it is drawn as if every pixel were opaque, whatever its
+    /// buffer's alpha says. Hyprland's rule for a client that leaves
+    /// rubbish in its alpha channel, and it also takes the blur out of the
+    /// frame, since there is nothing to see behind an opaque window.
+    pub opaque: bool,
 }
 
 impl Default for WindowStyle {
@@ -325,6 +355,10 @@ impl Default for WindowStyle {
             blur: true,
             shadow: true,
             dim: true,
+            rounding_power: None,
+            border_color: None,
+            decorate: true,
+            opaque: false,
         }
     }
 }
@@ -481,7 +515,7 @@ fn draw_layer(
     if let Some(blur) = style.blur.filter(|_| layer.blur)
         && surface.format() == Format::Argb8888
     {
-        canvas.blur(rect, 0, &blur, damage);
+        canvas.blur(rect, Rounding::none(), &blur, damage);
     }
     canvas.composite(surface, rect, damage);
 }
@@ -498,20 +532,28 @@ fn window(
 ) {
     let style = styles.base;
     let own = styles.of(placed.window);
-    let rounding = own.rounding.unwrap_or(style.rounding).max(0);
+    // A rule's `rounding` and `rounding_power` each stand in for the
+    // style's own, and either may be set without the other.
+    let rounding = Rounding {
+        radius: own.rounding.unwrap_or(style.rounding.radius).max(0),
+        power: own.rounding_power.unwrap_or(style.rounding.power),
+    };
     let width = own.border.unwrap_or(placed.border).max(0);
     let opacity = own
         .opacity
         .unwrap_or_else(|| style.opacity(placed.focused, placed.fullscreen));
-    let gradient = if placed.focused {
+    let gradient = own.border_color.as_ref().unwrap_or(if placed.focused {
         &style.active_border
     } else {
         &style.inactive_border
-    };
+    });
+    // `decorate false`: no border and no shadow, for a window that draws
+    // its own frame.
+    let width = if own.decorate { width } else { 0 };
     // The shadow first, under the border and the window: Hyprland draws it
     // as a decoration behind them and does not cut the window's own shape
     // out of it.
-    if let Some(shadow) = style.shadow.as_ref().filter(|_| own.shadow) {
+    if let Some(shadow) = style.shadow.as_ref().filter(|_| own.shadow && own.decorate) {
         canvas.shadow(
             Rect::new(
                 rect.x.saturating_sub(width),
@@ -535,14 +577,22 @@ fn window(
     // the box `renderBorder` gives the shader: the rounded path fills that
     // box and the square one draws four windows onto it, so a window's
     // corner is the same colour whichever path drew it.
-    if rounding > 0 {
+    if !rounding.is_square() {
         let outer = Rect::new(
             rect.x.saturating_sub(width),
             rect.y.saturating_sub(width),
             rect.width.saturating_add(width.saturating_mul(2)),
             rect.height.saturating_add(width.saturating_mul(2)),
         );
-        canvas.fill_rounded_gradient(outer, rounding.saturating_add(width), gradient, damage);
+        canvas.fill_rounded_gradient(
+            outer,
+            Rounding {
+                radius: rounding.radius.saturating_add(width),
+                ..rounding
+            },
+            gradient,
+            damage,
+        );
     } else {
         canvas.border_gradient(rect, width, gradient, damage);
     }
@@ -551,10 +601,13 @@ fn window(
     // passes and changes not one pixel of the frame. A surface in a format
     // with alpha may be translucent anywhere, and a window drawn at less
     // than full opacity is translucent everywhere.
-    let translucent = surfaces
-        .get(&placed.window)
-        .is_some_and(|surface| surface.format() == Format::Argb8888)
-        || opacity < 1.0;
+    // `opaque`: the window is drawn as if every pixel were opaque, so
+    // there is nothing to see behind it and nothing to blur.
+    let translucent = !own.opaque
+        && (surfaces
+            .get(&placed.window)
+            .is_some_and(|surface| surface.format() == Format::Argb8888)
+            || opacity < 1.0);
     if let Some(blur) = style.blur.filter(|_| own.blur)
         && translucent
     {
@@ -564,7 +617,12 @@ fn window(
         // Scaled, which is the exact path when the surface is already the
         // rectangle's size -- which it is for every window that is not
         // part-way through an animation.
-        canvas.composite_scaled(surface, rect, rounding, opacity, damage);
+        let surface = if own.opaque {
+            (*surface).as_opaque()
+        } else {
+            *surface
+        };
+        canvas.composite_scaled(&surface, rect, rounding, opacity, damage);
     }
     // `decoration:dim_inactive`: black over a window that is not focused, at
     // `dim_strength`. Over the surface, because it dims the window and not

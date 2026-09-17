@@ -22,6 +22,8 @@
 
 use compositor_regex::Regex;
 
+use crate::value::Gradient;
+
 /// What a window must be for a rule to apply to it.
 #[derive(Clone, Debug)]
 pub enum Matcher {
@@ -128,6 +130,18 @@ pub enum Effect {
     NoFocus,
     /// `opacity <a>`: how much of it shows.
     Opacity(f32),
+    /// `rounding_power <p>`: the curve its corners are cut by, which is a
+    /// superellipse's exponent. Two is a circle.
+    RoundingPower(f32),
+    /// `border_color <gradient>`: its border, instead of the focused and
+    /// unfocused ones.
+    BorderColor(Gradient),
+    /// `decorate <yes-or-no>`: whether it gets a border and a shadow at
+    /// all.
+    Decorate(bool),
+    /// `opaque <yes-or-no>`: it is drawn as if every pixel were opaque,
+    /// whatever its buffer's alpha says.
+    Opaque(bool),
     /// `rounding <n>`: how far its corners are cut.
     Rounding(i64),
     /// `border_size <n>`.
@@ -422,6 +436,17 @@ fn effect(field: &str) -> Result<Effect, String> {
             .ok_or_else(|| format!("invalid field {name}: it takes two lengths"))?;
         Ok((Length::parse(first)?, Length::parse(second.trim())?))
     };
+    // Hyprland's boolean effects take `truthy`, and a bare word is true:
+    // `windowrule = opaque` and `opaque true` mean the same thing.
+    let yes = |value: &str| -> bool {
+        if value.is_empty() || value == "1" {
+            return true;
+        }
+        let lowered = value.to_lowercase();
+        ["true", "yes", "on"]
+            .iter()
+            .any(|word| lowered.starts_with(word))
+    };
     let number = |what: &str| -> Result<i64, String> {
         value
             .parse()
@@ -470,6 +495,20 @@ fn effect(field: &str) -> Result<Effect, String> {
             Ok(Effect::Opacity(opacity))
         }
         "rounding" => number("a number of pixels").map(Effect::Rounding),
+        "rounding_power" => {
+            let power: f32 = value
+                .parse()
+                .map_err(|_| format!("invalid field rounding_power: `{value}` is not a number"))?;
+            Ok(Effect::RoundingPower(power.clamp(1.0, 10.0)))
+        }
+        // Hyprland's rule takes one gradient or two -- the second for the
+        // unfocused state -- and this carries the first, as the renderer
+        // draws one border.
+        "border_color" => crate::value::parse_gradient(value)
+            .map(Effect::BorderColor)
+            .map_err(|why| format!("invalid field border_color: {why}")),
+        "decorate" => Ok(Effect::Decorate(yes(value))),
+        "opaque" => Ok(Effect::Opaque(yes(value))),
         "border_size" => number("a number of pixels").map(Effect::BorderSize),
         "pin" => Ok(Effect::Pin),
         "pseudo" => Ok(Effect::Pseudo),

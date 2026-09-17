@@ -5,8 +5,8 @@ use compositor_layout::{Monitor, MonitorId, MonitorLayout, Placed, Settings, Sta
 
 use crate::golden::{self, Mismatch};
 use crate::{
-    Blur, Canvas, Color, Damage, Error, Format, Gradient, LayerFrame, Pattern, Rect, Style, Styles,
-    Surface, Target, cursor, damage_between, outer, render, render_with_layers,
+    Blur, Canvas, Color, Damage, Error, Format, Gradient, LayerFrame, Pattern, Rect, Rounding,
+    Style, Styles, Surface, Target, cursor, damage_between, outer, render, render_with_layers,
 };
 
 const BG: u32 = 0x0020_4060;
@@ -673,7 +673,7 @@ fn decorated_style() -> Style {
     )
     .config;
     let style = Style::from_config(&config).undithered();
-    assert_eq!(style.rounding, 12);
+    assert_eq!(style.rounding, Rounding::circle(12));
     assert!((style.inactive_opacity - 0.6).abs() < 0.001);
     assert!((style.active_opacity - 1.0).abs() < f32::EPSILON);
     assert!((style.dim - 0.4).abs() < 0.001);
@@ -681,7 +681,8 @@ fn decorated_style() -> Style {
     assert_eq!((shadow.range, shadow.power), (12, 2));
     assert_eq!(shadow.color, Color(0xEE1A_1A1A), "Hyprland's own default");
     assert_eq!(
-        shadow.rounding, 12,
+        shadow.rounding,
+        Rounding::circle(12),
         "the shadow follows the window's corners"
     );
     style
@@ -1855,7 +1856,12 @@ fn the_canvas_blurs_what_is_drawn_on_it() {
     canvas.fill(Rect::new(32, 32, 64, 64), Color(0xFFFF_FFFF), &full);
     let before: Vec<u32> = (0..128).map(|x| canvas.pixel(x, 64).unwrap()).collect();
 
-    canvas.blur(Rect::new(0, 0, 128, 128), 0, &Blur::ungraded(8, 2), &full);
+    canvas.blur(
+        Rect::new(0, 0, 128, 128),
+        Rounding::circle(0),
+        &Blur::ungraded(8, 2),
+        &full,
+    );
     let after: Vec<u32> = (0..128).map(|x| canvas.pixel(x, 64).unwrap()).collect();
     assert_ne!(before, after, "nothing was blurred");
 
@@ -2287,6 +2293,110 @@ fn the_background_is_the_colour_the_configuration_names() {
     );
 }
 
+/// `decoration:rounding_power` cuts the corner by a superellipse rather
+/// than a circle.
+///
+/// `rounding.glsl`'s `distanceWithRounding` is
+/// `(|x|^p + |y|^p)^(1/p)`, and `p` is the option. Two is the circle every
+/// other compositor draws; above two the corner is squarer, which is the
+/// "squircle" a person sets the option for. A compositor that read the
+/// option and drew a circle anyway would look right to a reader of the
+/// configuration and wrong on the screen.
+#[test]
+fn the_rounding_power_changes_the_shape_of_the_corner() {
+    let (width, height) = (200u32, 200u32);
+    let damage = Damage::full(width, height);
+    let corner = |power: f32| -> u64 {
+        let mut canvas = Canvas::new(width, height).unwrap();
+        canvas.clear(Color(0xFF00_0000), &damage);
+        canvas.fill_rounded(
+            Rect::new(0, 0, 200, 200),
+            Rounding { radius: 60, power },
+            Color(0xFFFF_FFFF),
+            &damage,
+        );
+        // How many pixels of the top-left 60x60 corner were filled: a
+        // squarer corner fills more of it.
+        let mut filled = 0;
+        for y in 0..60 {
+            for x in 0..60 {
+                if canvas.pixel(x, y) == Some(0xFFFF_FFFF) {
+                    filled += 1;
+                }
+            }
+        }
+        filled
+    };
+
+    let circle = corner(2.0);
+    let squarer = corner(4.0);
+    let pinched = corner(1.0);
+    assert!(
+        squarer > circle,
+        "a power of 4 fills {squarer} of the corner and a circle {circle}"
+    );
+    assert!(
+        pinched < circle,
+        "a power of 1 fills {pinched} of the corner and a circle {circle}"
+    );
+    // A circle's quarter is pi/4 of the square, which is what says the
+    // default is a circle and not something else that grows with the power.
+    let quarter = f64::from(60 * 60) * core::f64::consts::FRAC_PI_4;
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "a corner is a few thousand pixels"
+    )]
+    let counted = circle as f64;
+    assert!(
+        (counted - quarter).abs() / quarter < 0.02,
+        "a circle's corner is {counted} pixels and a quarter circle is {quarter}"
+    );
+    // And a power of 1 is a straight diagonal: half the corner square.
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "a corner is a few thousand pixels"
+    )]
+    let diagonal = pinched as f64;
+    let half = f64::from(60 * 60) / 2.0;
+    assert!(
+        (diagonal - half).abs() / half < 0.05,
+        "a power of 1 fills {diagonal} pixels and half the corner is {half}"
+    );
+}
+
+/// `rounding_power`, `border_color`, `decorate` and `opaque` reach the
+/// frame from a `windowrule`.
+#[test]
+fn a_rule_can_change_the_corner_the_border_and_the_alpha() {
+    let parsed = parse(
+        "t.conf",
+        "decoration:rounding = 10\n\
+         decoration:rounding_power = 3\n",
+        &mut NoSources,
+    );
+    assert_eq!(parsed.diagnostics, []);
+    let style = Style::from_config(&parsed.config);
+    assert_eq!(style.rounding.radius, 10);
+    assert!((style.rounding.power - 3.0).abs() < f32::EPSILON);
+
+    // And the four fields a rule sets, which the frame reads instead of
+    // the style's.
+    let rule = crate::WindowStyle {
+        rounding_power: Some(5.0),
+        border_color: Some(Gradient::solid(Color(0xFF00_FF00))),
+        decorate: false,
+        opaque: true,
+        ..crate::WindowStyle::default()
+    };
+    assert_eq!(rule.rounding_power, Some(5.0));
+    assert_eq!(
+        rule.border_color.as_ref().map(Gradient::first),
+        Some(Color(0xFF00_FF00))
+    );
+    assert!(!rule.decorate);
+    assert!(rule.opaque);
+}
+
 /// A configuration's five grading values reach the style, and a
 /// configuration that says nothing gets Hyprland's own.
 ///
@@ -2379,7 +2489,7 @@ fn a_blur_reads_what_is_damaged_and_writes_the_same_pixels() {
             Color(0xFFFF_FFFF),
             &Damage::full(width, height),
         );
-        canvas.blur(rect, 8, &blur, damage);
+        canvas.blur(rect, Rounding::circle(8), &blur, damage);
     };
 
     let mut whole = Canvas::new(width, height).unwrap();
@@ -2419,11 +2529,11 @@ fn a_blur_reads_what_is_damaged_and_writes_the_same_pixels() {
         return;
     }
     // Once to warm the caches, then the slowest of three.
-    part.blur(rect, 8, &blur, &Damage::from(strip));
+    part.blur(rect, Rounding::circle(8), &blur, &Damage::from(strip));
     let mut slowest = 0;
     for _ in 0..3 {
         let began = std::time::Instant::now();
-        part.blur(rect, 8, &blur, &Damage::from(strip));
+        part.blur(rect, Rounding::circle(8), &blur, &Damage::from(strip));
         slowest = slowest.max(began.elapsed().as_millis());
     }
     assert!(
@@ -2471,11 +2581,11 @@ fn a_full_screen_blur_is_inside_the_stated_bound() {
     canvas.fill(Rect::new(100, 100, 700, 500), Color(0xFFFF_FFFF), &full);
     let rect = Rect::new(10, 10, i64::from(width) - 20, i64::from(height) - 20);
     // Once to warm the caches and the allocator, then the slowest of three.
-    canvas.blur(rect, 8, &Blur::new(8, 3), &full);
+    canvas.blur(rect, Rounding::circle(8), &Blur::new(8, 3), &full);
     let mut slowest = 0;
     for _ in 0..3 {
         let began = std::time::Instant::now();
-        canvas.blur(rect, 8, &Blur::new(8, 3), &full);
+        canvas.blur(rect, Rounding::circle(8), &Blur::new(8, 3), &full);
         slowest = slowest.max(began.elapsed().as_millis());
     }
     assert!(

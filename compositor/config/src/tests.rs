@@ -1203,6 +1203,50 @@ fn the_matchers_and_effects_of_the_merged_grammar() {
     }));
 }
 
+/// The four effects that reach the renderer through `WindowStyle`.
+///
+/// `rounding_power` makes the corner a superellipse, `border_color` gives
+/// one window its own border, `decorate` takes the border and the shadow
+/// away from a window that draws its own frame, and `opaque` says a
+/// client's alpha channel is not to be believed.
+#[test]
+fn the_effects_that_change_how_one_window_is_drawn() {
+    let effects = |line: &str| WindowRule::parse(line).map(|rule| rule.effects);
+
+    assert_eq!(
+        effects("rounding_power 4"),
+        Ok(vec![Effect::RoundingPower(4.0)])
+    );
+    // Hyprland clamps it to one and ten.
+    assert_eq!(
+        effects("rounding_power 99"),
+        Ok(vec![Effect::RoundingPower(10.0)])
+    );
+    assert!(effects("rounding_power round").is_err());
+
+    assert_eq!(
+        effects("border_color rgba(ff0000ff)").map(|held| held
+            .iter()
+            .map(|effect| match effect {
+                Effect::BorderColor(gradient) => gradient.colors.clone(),
+                _ => Vec::new(),
+            })
+            .collect::<Vec<_>>()),
+        Ok(vec![vec![Color(0xFFFF_0000)]])
+    );
+    // Two colours and an angle, which a gradient border is.
+    assert_eq!(
+        effects("border_color rgba(33ccffee) rgba(00ff99ee) 45deg").map(|held| held.len()),
+        Ok(1)
+    );
+
+    // A bare word is true, which is Hyprland's `truthy`.
+    assert_eq!(effects("decorate"), Ok(vec![Effect::Decorate(true)]));
+    assert_eq!(effects("decorate false"), Ok(vec![Effect::Decorate(false)]));
+    assert_eq!(effects("opaque"), Ok(vec![Effect::Opaque(true)]));
+    assert_eq!(effects("opaque 0"), Ok(vec![Effect::Opaque(false)]));
+}
+
 #[test]
 fn a_rule_that_cannot_be_read_says_what_is_wrong() {
     for bad in [
