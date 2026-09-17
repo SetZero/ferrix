@@ -1103,6 +1103,19 @@ const COPIED: &str = "a line that crossed the clipboard";
 
 #[test]
 fn what_one_client_copies_another_pastes() {
+    // Both selections, because they are the same protocol twice over and a
+    // compositor that carried one and not the other would pass a test of
+    // either alone.
+    for which in [
+        compositor_clip::Which::Clipboard,
+        compositor_clip::Which::Primary,
+    ] {
+        one_selection(which);
+    }
+}
+
+/// One selection, copied in one program and pasted in another.
+fn one_selection(which: compositor_clip::Which) {
     let work = workspace("clipboard");
     let socket = work.join("wayland");
 
@@ -1125,13 +1138,13 @@ fn what_one_client_copies_another_pastes() {
         // must; the paste runs beside it.
         let copying = for_clients.clone();
         let copier = std::thread::spawn(move || {
-            compositor_clip::copy(&copying, COPIED, Duration::from_secs(6))
+            compositor_clip::copy(&copying, which, COPIED, Duration::from_secs(6))
         });
         // A moment for the selection to be set before anything asks for it:
         // a paste that arrives first is told there is nothing, which is
         // true.
         std::thread::sleep(Duration::from_millis(400));
-        let pasted = compositor_clip::paste(&for_clients);
+        let pasted = compositor_clip::paste(&for_clients, which);
         let copied = copier.join().unwrap_or_else(|_| Err("panicked".to_owned()));
         (copied, pasted)
     });

@@ -16,4 +16,4 @@
 /// The Wayland client both halves are.
 pub mod client;
 
-pub use client::{copy, paste};
+pub use client::{Which, copy, paste};

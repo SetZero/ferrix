@@ -117,7 +117,7 @@ impl Region {
 }
 
 /// What a surface shows, or is about to.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct State {
     /// The buffer, or `None` where the client attached the null buffer --
     /// which is how a surface is unmapped.
@@ -137,6 +137,12 @@ pub struct State {
     pub transform: u32,
     /// Buffer pixels per surface pixel; at least 1.
     pub scale: i32,
+    /// `wp_viewport.set_source`: the part of the buffer to draw, in buffer
+    /// coordinates, or `None` for all of it.
+    pub viewport_source: Option<(f64, f64, f64, f64)>,
+    /// `wp_viewport.set_destination`: the size the surface is to be, in
+    /// surface coordinates, or `None` for the buffer's own.
+    pub viewport_size: Option<(i32, i32)>,
 }
 
 impl State {
@@ -153,12 +159,14 @@ impl State {
             input: None,
             transform: compositor_protocol::core::wl_output::transform::NORMAL,
             scale: 1,
+            viewport_source: None,
+            viewport_size: None,
         }
     }
 }
 
 /// A `wl_surface`.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Surface {
     /// What it shows now.
     pub current: State,
@@ -243,6 +251,8 @@ impl Surface {
             input: self.current.input.clone(),
             transform: self.current.transform,
             scale: self.current.scale,
+            viewport_source: self.current.viewport_source,
+            viewport_size: self.current.viewport_size,
         };
         self.committed_callbacks
             .append(&mut std::mem::take(&mut self.frame_callbacks));

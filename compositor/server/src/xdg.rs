@@ -44,6 +44,9 @@ pub struct Toplevel {
     pub title: String,
     /// `set_app_id`, which is what a `windowrule` matches on.
     pub app_id: String,
+    /// `xdg_toplevel_icon_v1.set_name`: what a taskbar looks up in an icon
+    /// theme to draw beside this window's name.
+    pub icon: String,
     /// `set_parent`, for a dialog.
     pub parent: Option<ObjectId>,
     /// `set_min_size`, recorded and not obeyed for a tiled window.

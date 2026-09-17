@@ -615,9 +615,19 @@ fn clipboard_config() -> String {
          exec-once = /bin/pattern checkerboard one\n\
          exec-once = /bin/pattern gradient two\n\
          exec-once = /bin/clip copy {CLIPBOARD_TEXT}\n\
-         exec-once = /bin/clip paste\n"
+         exec-once = /bin/clip paste\n\
+         exec-once = /bin/clip --primary copy {PRIMARY_TEXT}\n\
+         exec-once = /bin/clip --primary paste\n"
     )
 }
+
+/// What the same boot puts on the *primary* selection, which is what a
+/// middle click pastes.
+///
+/// Different text from the clipboard's, because the point of having both is
+/// that they are two: a compositor that answered a primary paste from the
+/// clipboard would pass with the same string and fail with this one.
+const PRIMARY_TEXT: &str = "the primary selection is the other one";
 
 /// The picture a terminal makes, which the ninth boot requires.
 const TERMINAL_EXPECTED: [(&str, &str); 1] = [(
@@ -1901,10 +1911,15 @@ fn test_clipboard(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
     // has answered: the boot is waited for that line rather than drained for
     // a fixed time, which under emulation is a coin toss.
     let asked = format!(
-        "clip: copied {} bytes, asked for 1 times",
+        "clip: copied {} bytes to the clipboard, asked for 1 times",
         CLIPBOARD_TEXT.len()
     );
     let pasted = format!("clip: pasted {CLIPBOARD_TEXT}");
+    let asked_primary = format!(
+        "clip: copied {} bytes to the primary, asked for 1 times",
+        PRIMARY_TEXT.len()
+    );
+    let pasted_primary = format!("clip: pasted {PRIMARY_TEXT}");
     let (screens, said) = boot_and_dump(
         arch,
         programs,
@@ -1914,7 +1929,12 @@ fn test_clipboard(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
             others: &[],
             moving: None,
             pointer: None,
-            awaiting: &[asked.as_str(), pasted.as_str()],
+            awaiting: &[
+                asked.as_str(),
+                pasted.as_str(),
+                asked_primary.as_str(),
+                pasted_primary.as_str(),
+            ],
         },
         &[],
         args,
@@ -1926,8 +1946,9 @@ fn test_clipboard(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
     };
     let has = |wanted: &str| said.iter().any(|line| line.contains(wanted));
     for wanted in [
-        // The compositor took the selection and handed the pipe on.
+        // The compositor took both selections and handed each pipe on.
         "hyprix: the selection is 1 type(s) from client",
+        "hyprix: the primary selection is 1 type(s) from client",
         "pasted text/plain;charset=utf-8, on a pipe to whoever copied",
     ] {
         if !has(wanted) {
@@ -1943,16 +1964,26 @@ fn test_clipboard(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
             "{arch}: the copying program did not say `{asked}`"
         )));
     }
-    // And what came out of one program is what went into the other.
-    if !has(&pasted) {
+    // And what came out of one program is what went into the other, for
+    // each of the two selections.
+    for (wanted, text) in [(&asked_primary, PRIMARY_TEXT), (&pasted, CLIPBOARD_TEXT)] {
+        if !has(wanted) {
+            return Err(Error::new(format!(
+                "{arch}: nothing said `{wanted}` for {text:?}"
+            )));
+        }
+    }
+    if !has(&pasted_primary) {
         return Err(Error::new(format!(
-            "{arch}: nothing pasted `{CLIPBOARD_TEXT}`"
+            "{arch}: nothing pasted `{PRIMARY_TEXT}` from the primary selection"
         )));
     }
     println!(
-        "  {arch}: one program copied {} bytes and another pasted them back, on a pipe the \
-         compositor passed between them, with the windows still drawn in every one of {} pixels",
+        "  {arch}: one program copied {} bytes to the clipboard and {} to the primary selection \
+         and two others pasted each back, on pipes the compositor passed between them, with the \
+         windows still drawn in every one of {} pixels",
         CLIPBOARD_TEXT.len(),
+        PRIMARY_TEXT.len(),
         screen.width * screen.height
     );
     Ok(())

@@ -4193,6 +4193,51 @@ grid, printed a row at a time.
 /bin/hyprctl` and requires the picture the terminal makes, pixel for pixel,
 on x86-64 and on AArch64.
 
+**Done — the eight protocols a real toolkit asked for (2026-09-17).** Not
+chosen from a list: `foot`, a Wayland terminal written against libwayland and
+every other compositor, prints a warning line for each protocol it wanted and
+did not find. It printed six, and the seventh and eighth are the two halves
+of the one it named last. `hyprix/probe/real-client.txt` is that log, and it
+now has no warning in it at all.
+
+* **`wp_cursor_shape_v1`** -- a client *naming* the cursor it wants rather
+  than drawing one, which is what a toolkit would rather do: it has no idea
+  what the person's theme looks like and the compositor does. This one draws
+  its own arrow for every shape and says which was asked for; there is one
+  shape and no theme to pick another from.
+* **`zwp_primary_selection_device_manager_v1`** -- the middle-click paste,
+  which is the clipboard's older and simpler sibling and the same protocol
+  under another name. `compositor/clip` grew `--primary` rather than a twin,
+  and the compositor's clipboard carries both selections apart.
+* **`xdg_activation_v1`** -- one program asking for another's window to be
+  raised: a link opened from a chat window raising the browser. The token is
+  a string the compositor makes and only it can make, and one it did not make
+  is refused, which is the whole of what stops any program stealing the focus
+  whenever it likes.
+* **`wp_viewporter`** and **`wp_fractional_scale_v1`** -- a client saying its
+  buffer is to be cropped or scaled into its surface, and the compositor
+  telling it a scale that need not be a whole number. This compositor's
+  monitor scales are whole, so the preferred scale is that number in the
+  protocol's 120ths and is sent at once rather than left for the client to
+  wait on.
+* **`xdg_toplevel_icon_v1`** -- the icon a taskbar draws beside a window's
+  name. The name is kept, which is what a taskbar looks up in an icon theme;
+  the buffers are accepted and not kept, because this compositor draws no
+  icon itself and holding a client's pixels for something nobody draws is
+  memory nobody asked for.
+* **`zwp_text_input_v3`** and **`zwp_input_method_v2`** -- the two halves of
+  typing through an input method. The application says it wants text, the
+  method says what was typed, and the compositor is what joins them: they are
+  two connections and neither can see the other. One input method a seat; a
+  second is told `unavailable`. With none running, a text field is told
+  nothing, which is a session with no IME and is the truth rather than a
+  pretence.
+
+The eleventh boot of `cargo xtask test-compositor` now copies to both
+selections and pastes each back, with different text in each: a compositor
+that answered a primary paste from the clipboard would pass with one string
+and fail with two.
+
 **Done — the pointer (2026-09-17).** A compositor with a mouse and no arrow
 on the screen is one a person cannot use, and there was none: `wl_pointer`
 carried motion and buttons to the clients and nothing was ever drawn.
@@ -4797,11 +4842,10 @@ and Venus on ferrousli, or a Rust path over Vulkan -- that does not exist on
 Ferrix yet and is a stage's work in itself.
 
 Of the protocols and keywords a Hyprland setup uses, what is left is:
-`layerrule`, `zwp_virtual_keyboard` and the input-method protocols an
-on-screen keyboard needs, `zwp_pointer-constraints` and
-`relative-pointer` (a game that grabs the pointer), `viewporter` and
-`presentation-time`, drag-and-drop -- the other half of the four interfaces
-the clipboard already uses -- and `hyprctl getoption`. Each is a protocol or a table rather than a
+`layerrule`, `zwp_virtual_keyboard`, `zwp_pointer_constraints` and
+`relative-pointer` (a game that grabs the pointer), `presentation-time`,
+drag-and-drop -- the other half of the four interfaces the clipboard already
+uses -- and `hyprctl getoption`. Each is a protocol or a table rather than a
 subsystem, and each is written the way the four above were: the XML
 vendored, the tables checked against libwayland's own, a program in
 `compositor/` that speaks it with no screen, a host test against the image

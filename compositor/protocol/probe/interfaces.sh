@@ -28,6 +28,19 @@ scan "$protocols/wlr-layer-shell-unstable-v1.xml" wlr-layer-shell
 scan "$protocols/wlr-foreign-toplevel-management-unstable-v1.xml" wlr-foreign-toplevel-management
 scan "$protocols/wlr-screencopy-unstable-v1.xml" wlr-screencopy
 scan "$protocols/ext-session-lock-v1.xml" ext-session-lock
+# `cursor-shape-v1` names `zwp_tablet_tool_v2` in one request's signature, so
+# the tablet protocol is compiled in for the symbol. It is not one of the
+# generator's `FILES`: this compositor has no tablet tool, and a table
+# nothing offers is a table nothing checks.
+scan "/usr/share/wayland-protocols/stable/tablet/tablet-v2.xml" tablet
+scan "$protocols/cursor-shape-v1.xml" cursor-shape
+scan "$protocols/primary-selection-unstable-v1.xml" primary-selection
+scan "$protocols/xdg-activation-v1.xml" xdg-activation
+scan "$protocols/viewporter.xml" viewporter
+scan "$protocols/fractional-scale-v1.xml" fractional-scale
+scan "$protocols/xdg-toplevel-icon-v1.xml" xdg-toplevel-icon
+scan "$protocols/text-input-unstable-v3.xml" text-input
+scan "$protocols/input-method-unstable-v2.xml" input-method
 
 gcc -O0 -Wall -Werror -I"$work" \
     $(pkg-config --cflags wayland-client) \

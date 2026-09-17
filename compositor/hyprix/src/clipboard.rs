@@ -25,11 +25,28 @@ pub struct Selection {
     pub mimes: Vec<String>,
 }
 
+/// Which of the two selections a call is about.
+///
+/// Wayland has both, and so does X11 before it: the clipboard is what a copy
+/// puts there and a paste takes out, and the *primary* selection is what
+/// merely selecting text puts there and a middle click takes out. They are
+/// the same protocol twice over, under different names, and they are kept
+/// apart because a person uses them for different things.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Which {
+    /// `wl_data_device`: copy and paste.
+    Clipboard,
+    /// `zwp_primary_selection_device_v1`: select and middle click.
+    Primary,
+}
+
 /// The compositor's clipboard: at most one selection at a time, as X11's
 /// `CLIPBOARD` and Wayland's selection both are.
 #[derive(Debug, Default)]
 pub struct Clipboard {
     selection: Option<Selection>,
+    /// The primary selection, which is the same thing under another name.
+    primary: Option<Selection>,
     /// How many times something has been copied and pasted, for the
     /// compositor's log line.
     copied: u32,
@@ -42,15 +59,16 @@ impl Clipboard {
     pub const fn new() -> Self {
         Self {
             selection: None,
+            primary: None,
             copied: 0,
             pasted: 0,
         }
     }
 
-    /// What is on the clipboard, if anything.
+    /// What is on either selection, if anything.
     #[must_use]
-    pub const fn selection(&self) -> Option<&Selection> {
-        self.selection.as_ref()
+    pub const fn selection(&self, which: Which) -> Option<&Selection> {
+        self.held(which)
     }
 
     /// How many times something has been copied, and how many pasted.
@@ -66,26 +84,34 @@ impl Clipboard {
     /// when it no longer owns what it copied.
     pub fn copied(
         &mut self,
+        which: Which,
         clients: &mut [crate::state::Slot],
         client: usize,
         source: Option<ObjectId>,
         mimes: Vec<String>,
     ) {
-        if let Some(previous) = self.selection.take()
+        let held = match which {
+            Which::Clipboard => &mut self.selection,
+            Which::Primary => &mut self.primary,
+        };
+        if let Some(previous) = held.take()
             && (previous.client != client || Some(previous.source) != source)
             && let Some(slot) = clients.get_mut(previous.client)
         {
-            slot.client_mut().cancel_selection(previous.source);
+            match which {
+                Which::Clipboard => slot.client_mut().cancel_selection(previous.source),
+                Which::Primary => slot.client_mut().cancel_primary(previous.source),
+            }
         }
-        self.selection = source.map(|source| Selection {
+        *held = source.map(|source| Selection {
             client,
             source,
             mimes,
         });
-        if self.selection.is_some() {
+        if held.is_some() {
             self.copied = self.copied.saturating_add(1);
         }
-        self.offer_to_all(clients);
+        self.offer_to_all(which, clients);
     }
 
     /// Tell every client that can paste what is on the clipboard.
@@ -93,32 +119,47 @@ impl Clipboard {
     /// The client that owns the selection is told too, which is what
     /// Hyprland and every wlroots compositor do: a program that copies and
     /// then pastes gets its own data back.
-    pub fn offer_to_all(&self, clients: &mut [crate::state::Slot]) {
+    pub fn offer_to_all(&self, which: Which, clients: &mut [crate::state::Slot]) {
         let mimes = self
-            .selection
-            .as_ref()
+            .held(which)
             .map(|selection| selection.mimes.clone())
             .unwrap_or_default();
         for slot in clients.iter_mut() {
-            if slot.client().has_data_device() {
-                slot.client_mut().offer_selection(&mimes);
+            match which {
+                Which::Clipboard if slot.client().has_data_device() => {
+                    slot.client_mut().offer_selection(&mimes);
+                }
+                Which::Primary if slot.client().has_primary_device() => {
+                    slot.client_mut().offer_primary(&mimes);
+                }
+                _ => {}
             }
+        }
+    }
+
+    /// Which of the two is held.
+    const fn held(&self, which: Which) -> Option<&Selection> {
+        match which {
+            Which::Clipboard => self.selection.as_ref(),
+            Which::Primary => self.primary.as_ref(),
         }
     }
 
     /// Tell one client, which is what a client that has just made a
     /// `wl_data_device` is owed.
-    pub fn offer_to(&self, clients: &mut [crate::state::Slot], client: usize) {
+    pub fn offer_to(&self, which: Which, clients: &mut [crate::state::Slot], client: usize) {
         let mimes = self
-            .selection
-            .as_ref()
+            .held(which)
             .map(|selection| selection.mimes.clone())
             .unwrap_or_default();
         if mimes.is_empty() {
             return;
         }
         if let Some(slot) = clients.get_mut(client) {
-            slot.client_mut().offer_selection(&mimes);
+            match which {
+                Which::Clipboard => slot.client_mut().offer_selection(&mimes),
+                Which::Primary => slot.client_mut().offer_primary(&mimes),
+            }
         }
     }
 
@@ -130,19 +171,21 @@ impl Clipboard {
     /// so that read ends rather than hangs.
     pub fn pasted(
         &mut self,
+        which: Which,
         clients: &mut [crate::state::Slot],
         asking: usize,
         offer: ObjectId,
         mime: &str,
         fd: Fd,
     ) -> bool {
-        let Some(selection) = self.selection.as_ref() else {
+        let Some(selection) = self.held(which).cloned() else {
             close(fd);
             return false;
         };
-        let current = clients
-            .get(asking)
-            .is_some_and(|slot| slot.client().holds_offer(offer));
+        let current = clients.get(asking).is_some_and(|slot| match which {
+            Which::Clipboard => slot.client().holds_offer(offer),
+            Which::Primary => slot.client().holds_primary_offer(offer),
+        });
         if !current {
             close(fd);
             return false;
@@ -151,9 +194,12 @@ impl Clipboard {
             close(fd);
             return false;
         };
-        owner
-            .client_mut()
-            .send_selection(selection.source, mime, fd);
+        match which {
+            Which::Clipboard => owner
+                .client_mut()
+                .send_selection(selection.source, mime, fd),
+            Which::Primary => owner.client_mut().send_primary(selection.source, mime, fd),
+        }
         // Sent now rather than at the end of the pass: the descriptor is
         // closed on the next line, and one let go of before the message
         // carrying it has been written is one the client never gets.
@@ -167,13 +213,17 @@ impl Clipboard {
 
     /// A connection went: if it owned the selection, there is no selection.
     pub fn client_gone(&mut self, clients: &mut [crate::state::Slot], client: usize) {
-        if self
-            .selection
-            .as_ref()
-            .is_some_and(|selection| selection.client == client)
-        {
-            self.selection = None;
-            self.offer_to_all(clients);
+        for which in [Which::Clipboard, Which::Primary] {
+            if self
+                .held(which)
+                .is_some_and(|selection| selection.client == client)
+            {
+                match which {
+                    Which::Clipboard => self.selection = None,
+                    Which::Primary => self.primary = None,
+                }
+                self.offer_to_all(which, clients);
+            }
         }
     }
 }

@@ -9,6 +9,8 @@ use compositor_layout::{Monitor, MonitorId, Rect, Settings, State, WindowId};
 use compositor_protocol::{core, xdg_shell};
 use compositor_render::{Canvas, Damage, Style};
 use compositor_server::{Client, Event, ForeignRequest, Globals, Rect as ServerRect, Role};
+
+use crate::clipboard::Which;
 use compositor_socket::{Connection, Listener, RecvError};
 use compositor_wire::{Fd, ObjectId};
 
@@ -125,6 +127,8 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
     let mut shots: Vec<Shot> = Vec::new();
     // The session lock, while one is held.
     let mut lock: Option<Lock> = None;
+    // The input method, while a program is one.
+    let mut method: Option<Method> = None;
     if !window_rules.is_empty() {
         report(&format!("hyprix: {} window rules", window_rules.len()));
     }
@@ -468,6 +472,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                 &mut next_window,
                 &mut window_rules,
                 &mut clipboard,
+                &mut method,
                 &mut shots,
                 &mut lock,
                 &screens,
@@ -775,6 +780,7 @@ fn serve(
     next_window: &mut u32,
     rules: &mut crate::rules::Rules,
     clipboard: &mut crate::clipboard::Clipboard,
+    method: &mut Option<Method>,
     shots: &mut Vec<Shot>,
     lock: &mut Option<Lock>,
     screens: &[Screen],
@@ -797,9 +803,17 @@ fn serve(
     let mut changed = false;
     // The clipboard's, kept until the client's own borrow is over: telling
     // every client what the selection holds needs them all.
-    let mut selection: Option<(Option<ObjectId>, Vec<String>)> = None;
-    let mut wanted: Vec<(ObjectId, String, Fd)> = Vec::new();
-    let mut made_device = false;
+    let mut selection: Vec<(Which, Option<ObjectId>, Vec<String>)> = Vec::new();
+    let mut wanted: Vec<(Which, ObjectId, String, Fd)> = Vec::new();
+    let mut made_device: Vec<Which> = Vec::new();
+    // A cursor shape a client named, and a window it asked to be raised.
+    let mut shaped: Option<u32> = None;
+    let mut activating: Option<(String, ObjectId)> = None;
+    // The input method's two halves, which are two connections.
+    let mut typing: Vec<(ObjectId, bool)> = Vec::new();
+    let mut became_method: Option<ObjectId> = None;
+    let mut was_typed: Vec<compositor_server::Typed> = Vec::new();
+    let mut method_gone = false;
     // The same, for what a bar asked: acting on a window reaches every
     // client's slot, and this one's borrow is still open.
     let mut asked: Vec<(WindowId, ForeignRequest)> = Vec::new();
@@ -851,13 +865,37 @@ fn serve(
                 // The clipboard. What one client copied is the compositor's
                 // to remember and to offer to the others; the data never
                 // passes through it.
-                Event::DataDeviceMade { .. } => made_device = true,
+                Event::DataDeviceMade { .. } => made_device.push(Which::Clipboard),
+                Event::PrimaryDeviceMade { .. } => made_device.push(Which::Primary),
                 Event::SelectionSet { source, mimes } => {
-                    selection = Some((source, mimes.clone()));
+                    selection.push((Which::Clipboard, source, mimes.clone()));
+                }
+                Event::PrimarySet { source, mimes } => {
+                    selection.push((Which::Primary, source, mimes.clone()));
                 }
                 Event::SelectionWanted { offer, mime, fd } => {
-                    wanted.push((offer, mime.clone(), fd));
+                    wanted.push((Which::Clipboard, offer, mime.clone(), fd));
                     claimed += 1;
+                }
+                Event::PrimaryWanted { offer, mime, fd } => {
+                    wanted.push((Which::Primary, offer, mime.clone(), fd));
+                    claimed += 1;
+                }
+                // A client naming its cursor rather than drawing one, and a
+                // client asking for another's window: both reach the loop.
+                Event::CursorShaped { shape } => shaped = Some(shape),
+                // Typing through an input method: the application's half
+                // and the method's half are two connections, and joining
+                // them is the whole of what the compositor does here.
+                Event::TextInputEnabled {
+                    text_input,
+                    enabled,
+                } => typing.push((text_input, enabled)),
+                Event::InputMethodMade { method } => became_method = Some(method),
+                Event::InputMethodTyped { typed, .. } => was_typed.push(typed.clone()),
+                Event::InputMethodGone { .. } => method_gone = true,
+                Event::ActivationAsked { token, surface } => {
+                    activating = Some((token.clone(), surface));
                 }
                 Event::Bound {
                     role: Role::ForeignToplevelManager,
@@ -960,20 +998,47 @@ fn serve(
 
     // Now that the client's own borrow is over: what it copied goes to
     // every other client, and what it pasted goes to whoever copied.
-    if made_device {
-        clipboard.offer_to(slots, index);
+    for which in made_device {
+        clipboard.offer_to(which, slots, index);
     }
-    if let Some((source, mimes)) = selection {
+    for (which, source, mimes) in selection {
         let held = mimes.len();
-        clipboard.copied(slots, index, source, mimes);
+        let name = match which {
+            Which::Clipboard => "selection",
+            Which::Primary => "primary selection",
+        };
+        clipboard.copied(which, slots, index, source, mimes);
         if source.is_some() {
             report(&format!(
-                "hyprix: the selection is {held} type(s) from client {index}"
+                "hyprix: the {name} is {held} type(s) from client {index}"
             ));
         } else {
-            report("hyprix: the selection was given up");
+            report(&format!("hyprix: the {name} was given up"));
         }
     }
+    // A cursor shape is the seat's: the compositor draws its own arrow for
+    // every one of them, and says which was asked for so that what a real
+    // toolkit wanted is on the record.
+    if let Some(shape) = shaped {
+        report(&format!("hyprix: a client asked for cursor shape {shape}"));
+        changed = true;
+    }
+    // An activation: one program asking for another's window to be raised,
+    // with a token this compositor gave out. A token it did not give out is
+    // refused, which is the whole of the protocol's security.
+    if let Some((token, surface)) = activating {
+        changed |= activate(&token, surface, slots, index, state, sources, report);
+    }
+    input_method_turn(
+        method,
+        slots,
+        index,
+        &typing,
+        became_method,
+        &was_typed,
+        method_gone,
+        report,
+    );
     // Before anything else this client is owed: a `wl_display.sync` sent
     // after the bind is how every such client knows it has the whole list,
     // and an answer that arrives after the callback is a list it never sees.
@@ -998,8 +1063,8 @@ fn serve(
         ));
         changed |= for_the_bar(window, what, state, slots, sources);
     }
-    for (offer, mime, fd) in wanted {
-        if clipboard.pasted(slots, index, offer, &mime, fd) {
+    for (which, offer, mime, fd) in wanted {
+        if clipboard.pasted(which, slots, index, offer, &mime, fd) {
             report(&format!(
                 "hyprix: client {index} pasted {mime}, on a pipe to whoever copied"
             ));
@@ -1656,6 +1721,138 @@ fn cursor_shown(slots: &[Slot], focus: &Focus) -> bool {
         .is_none_or(|slot| !slot.client().said_cursor() || slot.client().cursor().is_some())
 }
 
+/// The input method for the seat, while a program is one.
+#[derive(Clone, Copy, Debug)]
+struct Method {
+    /// Which connection it is.
+    client: usize,
+    /// Its `zwp_input_method_v2`.
+    object: ObjectId,
+    /// The text field it is typing into, if one is enabled.
+    into: Option<(usize, ObjectId)>,
+    /// The serial the next `done` carries, which the protocol makes the
+    /// count of commits the text field has made.
+    serial: u32,
+}
+
+/// Join the input method's two halves for one client's pass.
+///
+/// An application says it wants to be typed into and an input method says
+/// what was typed; the two are different connections and neither can see the
+/// other, so the compositor is what passes each to the other. With no input
+/// method running, an application that enables a text input is told nothing
+/// -- which is a session with no IME, and is the truth rather than a
+/// pretence.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the two halves of an input method are two connections and four kinds of event"
+)]
+fn input_method_turn(
+    method: &mut Option<Method>,
+    slots: &mut [Slot],
+    index: usize,
+    typing: &[(ObjectId, bool)],
+    became: Option<ObjectId>,
+    was_typed: &[compositor_server::Typed],
+    gone: bool,
+    report: &mut dyn FnMut(&str),
+) {
+    if let Some(object) = became {
+        if method.is_some() {
+            // One input method a seat. A second is told it will never be
+            // given the keyboard, which is what `unavailable` means.
+            if let Some(slot) = slots.get_mut(index) {
+                slot.client_mut().input_method_unavailable(object);
+            }
+            report("hyprix: a second input method asked for the seat and was refused");
+        } else {
+            *method = Some(Method {
+                client: index,
+                object,
+                into: None,
+                serial: 0,
+            });
+            report("hyprix: an input method took the seat");
+        }
+    }
+    if gone && method.is_some_and(|held| held.client == index) {
+        *method = None;
+        report("hyprix: the input method went");
+    }
+    for (text_input, enabled) in typing {
+        let Some(held) = method.as_mut() else {
+            // No input method: the application is told nothing, which is
+            // what a session with no IME looks like from inside it.
+            continue;
+        };
+        held.into = enabled.then_some((index, *text_input));
+        let (client, object) = (held.client, held.object);
+        if let Some(slot) = slots.get_mut(client) {
+            slot.client_mut().input_method_active(object, *enabled);
+        }
+        report(&format!(
+            "hyprix: a text field {} the input method",
+            if *enabled { "took" } else { "let go of" }
+        ));
+    }
+    for typed in was_typed {
+        let Some(held) = method.as_mut() else {
+            continue;
+        };
+        let Some((client, text_input)) = held.into else {
+            continue;
+        };
+        held.serial = held.serial.saturating_add(1);
+        let serial = held.serial;
+        if let Some(slot) = slots.get_mut(client) {
+            slot.client_mut()
+                .text_input_typed(text_input, typed, serial);
+        }
+        report("hyprix: the input method typed into the focused text field");
+    }
+}
+
+/// Raise the window `surface` is, if `token` is one the compositor gave
+/// out.
+///
+/// `xdg_activation_v1` is how one program asks for another's window: the
+/// first asks the compositor for a token, hands it over by whatever means it
+/// has, and the second passes it back with the surface it wants raised. A
+/// token the compositor did not make is refused, which is the whole of what
+/// stops any program stealing the focus whenever it likes.
+fn activate(
+    token: &str,
+    surface: ObjectId,
+    slots: &mut [Slot],
+    index: usize,
+    state: &mut State,
+    sources: &BTreeMap<WindowId, Source>,
+    report: &mut dyn FnMut(&str),
+) -> bool {
+    // Any client may have been given the token, since the program that asked
+    // for it is not the one that uses it.
+    let known = slots
+        .iter_mut()
+        .any(|slot| slot.client_mut().takes_token(token));
+    if !known {
+        report("hyprix: an activation with a token this compositor never gave out");
+        return false;
+    }
+    let window = sources
+        .iter()
+        .find(|(_, source)| source.client == index && source.surface == surface)
+        .map(|(window, _)| *window);
+    let Some(window) = window else {
+        report("hyprix: an activation for a surface that is not a window");
+        return false;
+    };
+    if state.focus_window(window).is_err() {
+        return false;
+    }
+    report(&format!("hyprix: window {} was activated", window.0));
+    true
+}
+
 /// Where every popup is on the screen, in the order they were made.
 ///
 /// A popup is drawn like a layer surface on the top level: above the
@@ -2217,6 +2414,53 @@ fn globals(outputs: usize) -> Globals {
             &compositor_protocol::session_lock::EXT_SESSION_LOCK_MANAGER_V1,
             1,
             Role::SessionLockManager,
+        ),
+        // The six a real toolkit asks for and warns about when it is not
+        // offered. `foot` names every one of them on a compositor that has
+        // none, which is how this list was written.
+        (
+            &compositor_protocol::cursor_shape::WP_CURSOR_SHAPE_MANAGER_V1,
+            1,
+            Role::CursorShapeManager,
+        ),
+        (
+            &compositor_protocol::primary_selection::ZWP_PRIMARY_SELECTION_DEVICE_MANAGER_V1,
+            1,
+            Role::PrimaryManager,
+        ),
+        (
+            &compositor_protocol::xdg_activation::XDG_ACTIVATION_V1,
+            1,
+            Role::Activation,
+        ),
+        (
+            &compositor_protocol::viewporter::WP_VIEWPORTER,
+            1,
+            Role::Viewporter,
+        ),
+        (
+            &compositor_protocol::fractional_scale::WP_FRACTIONAL_SCALE_MANAGER_V1,
+            1,
+            Role::FractionalScaleManager,
+        ),
+        (
+            &compositor_protocol::toplevel_icon::XDG_TOPLEVEL_ICON_MANAGER_V1,
+            1,
+            Role::IconManager,
+        ),
+        // Typing through an input method: the application's half and the
+        // method's own. Offering both is what lets an on-screen keyboard or
+        // an IME run at all; with neither running, a text field is told
+        // nothing, which is a session with no IME.
+        (
+            &compositor_protocol::text_input::ZWP_TEXT_INPUT_MANAGER_V3,
+            1,
+            Role::TextInputManager,
+        ),
+        (
+            &compositor_protocol::input_method::ZWP_INPUT_METHOD_MANAGER_V2,
+            1,
+            Role::InputMethodManager,
         ),
     ] {
         let _ = globals.add(interface, version, role);

@@ -91,6 +91,49 @@ pub enum Role {
     /// `ext_session_lock_surface_v1`: what is shown on one screen while the
     /// session is locked.
     SessionLockSurface,
+    /// `wp_cursor_shape_manager_v1`: a client naming its cursor.
+    CursorShapeManager,
+    /// `wp_cursor_shape_device_v1`: one pointer's named cursor.
+    CursorShapeDevice,
+    /// `zwp_primary_selection_device_manager_v1`: the middle-click paste.
+    PrimaryManager,
+    /// `zwp_primary_selection_device_v1`.
+    PrimaryDevice,
+    /// `zwp_primary_selection_source_v1`: what a client selected.
+    PrimarySource,
+    /// `zwp_primary_selection_offer_v1`, made by the *server*.
+    PrimaryOffer,
+    /// `xdg_activation_v1`: one program asking for another to be focused.
+    Activation,
+    /// `xdg_activation_token_v1`: one such request being made.
+    ActivationToken,
+    /// `wp_viewporter`.
+    Viewporter,
+    /// `wp_viewport`: one surface's crop and scale.
+    Viewport,
+    /// `wp_fractional_scale_manager_v1`.
+    FractionalScaleManager,
+    /// `wp_fractional_scale_v1`: one surface's preferred scale.
+    FractionalScale,
+    /// `xdg_toplevel_icon_manager_v1`.
+    IconManager,
+    /// `xdg_toplevel_icon_v1`: one window's icon.
+    Icon,
+    /// `zwp_text_input_manager_v3`: an application that wants to be typed
+    /// into through an input method.
+    TextInputManager,
+    /// `zwp_text_input_v3`: one such application's text field.
+    TextInput,
+    /// `zwp_input_method_manager_v2`: the input method's own side.
+    InputMethodManager,
+    /// `zwp_input_method_v2`: the input method itself.
+    InputMethod,
+    /// `zwp_input_popup_surface_v2`: the candidate window an input method
+    /// shows beside the text being typed.
+    InputPopup,
+    /// `zwp_input_method_keyboard_grab_v2`: the keyboard while an input
+    /// method has it.
+    InputGrab,
 }
 
 impl Role {

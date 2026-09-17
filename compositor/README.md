@@ -161,7 +161,9 @@ names the part of Hyprland or hyprlang it follows.
   alive to answer -- Wayland's clipboard is a promise, and the data lives in
   the program that made it -- and `clip paste` asks for the selection on a
   pipe and prints what comes back. Between them they are the compositor's
-  clipboard tested with no window and no screen.
+  clipboard tested with no window and no screen. `--primary` does the same
+  to the selection a middle click pastes, which is the same protocol under
+  another name.
 * **`lswt`** is a taskbar with the drawing taken out: it binds
   `zwlr_foreign_toplevel_management_v1`, takes the handle the compositor
   makes for each window, and prints the title, the application id and the

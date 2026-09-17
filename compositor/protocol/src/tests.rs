@@ -12,8 +12,9 @@ use std::collections::BTreeMap;
 use compositor_wire::{ArgType, Interface};
 
 use crate::{
-    GLOBALS, core, foreign_toplevel, layer_shell, screencopy, session_lock, xdg_decoration,
-    xdg_shell,
+    GLOBALS, core, cursor_shape, foreign_toplevel, fractional_scale, input_method, layer_shell,
+    primary_selection, screencopy, session_lock, text_input, toplevel_icon, viewporter,
+    xdg_activation, xdg_decoration, xdg_shell,
 };
 
 /// The probe's output: one line per message, and one more per unnamed
@@ -61,6 +62,26 @@ fn tables() -> Vec<&'static Interface> {
         &session_lock::EXT_SESSION_LOCK_MANAGER_V1,
         &session_lock::EXT_SESSION_LOCK_V1,
         &session_lock::EXT_SESSION_LOCK_SURFACE_V1,
+        &cursor_shape::WP_CURSOR_SHAPE_MANAGER_V1,
+        &cursor_shape::WP_CURSOR_SHAPE_DEVICE_V1,
+        &primary_selection::ZWP_PRIMARY_SELECTION_DEVICE_MANAGER_V1,
+        &primary_selection::ZWP_PRIMARY_SELECTION_DEVICE_V1,
+        &primary_selection::ZWP_PRIMARY_SELECTION_OFFER_V1,
+        &primary_selection::ZWP_PRIMARY_SELECTION_SOURCE_V1,
+        &xdg_activation::XDG_ACTIVATION_V1,
+        &xdg_activation::XDG_ACTIVATION_TOKEN_V1,
+        &viewporter::WP_VIEWPORTER,
+        &viewporter::WP_VIEWPORT,
+        &fractional_scale::WP_FRACTIONAL_SCALE_MANAGER_V1,
+        &fractional_scale::WP_FRACTIONAL_SCALE_V1,
+        &toplevel_icon::XDG_TOPLEVEL_ICON_MANAGER_V1,
+        &toplevel_icon::XDG_TOPLEVEL_ICON_V1,
+        &text_input::ZWP_TEXT_INPUT_MANAGER_V3,
+        &text_input::ZWP_TEXT_INPUT_V3,
+        &input_method::ZWP_INPUT_METHOD_MANAGER_V2,
+        &input_method::ZWP_INPUT_METHOD_V2,
+        &input_method::ZWP_INPUT_POPUP_SURFACE_V2,
+        &input_method::ZWP_INPUT_METHOD_KEYBOARD_GRAB_V2,
     ]
 }
 
@@ -367,6 +388,9 @@ fn every_global_is_bindable_and_none_is_the_display_or_the_registry() {
     assert!(names.contains(&"zwlr_foreign_toplevel_manager_v1"));
     assert!(names.contains(&"zwlr_screencopy_manager_v1"));
     assert!(names.contains(&"ext_session_lock_manager_v1"));
+    assert!(names.contains(&"wp_cursor_shape_manager_v1"));
+    assert!(names.contains(&"zwp_primary_selection_device_manager_v1"));
+    assert!(names.contains(&"zwp_text_input_manager_v3"));
     let mut sorted = names.clone();
     sorted.sort_unstable();
     sorted.dedup();

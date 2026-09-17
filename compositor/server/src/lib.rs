@@ -46,7 +46,7 @@ mod shm;
 mod surface;
 mod xdg;
 
-pub use client::{Client, Event, Fatal, ForeignRequest, ForeignToplevel, Outgoing};
+pub use client::{Client, Event, Fatal, ForeignRequest, ForeignToplevel, Outgoing, Typed};
 pub use globals::{Global, Globals};
 pub use layer::{Anchors, Layer, LayerSurface, Margin};
 pub use role::Role;

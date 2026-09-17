@@ -236,3 +236,87 @@ ext_session_lock_v1 1 event 1 finished
 ext_session_lock_surface_v1 1 request 0 destroy 
 ext_session_lock_surface_v1 1 request 1 ack_configure u
 ext_session_lock_surface_v1 1 event 0 configure uuu
+wp_cursor_shape_manager_v1 2 request 0 destroy 
+wp_cursor_shape_manager_v1 2 request 1 get_pointer no
+wp_cursor_shape_manager_v1 2 request 2 get_tablet_tool_v2 no
+wp_cursor_shape_device_v1 2 request 0 destroy 
+wp_cursor_shape_device_v1 2 request 1 set_shape uu
+zwp_primary_selection_device_manager_v1 1 request 0 create_source n
+zwp_primary_selection_device_manager_v1 1 request 1 get_device no
+zwp_primary_selection_device_manager_v1 1 request 2 destroy 
+zwp_primary_selection_device_v1 1 request 0 set_selection ?ou
+zwp_primary_selection_device_v1 1 request 1 destroy 
+zwp_primary_selection_device_v1 1 event 0 data_offer n
+zwp_primary_selection_device_v1 1 event 1 selection ?o
+zwp_primary_selection_offer_v1 1 request 0 receive sh
+zwp_primary_selection_offer_v1 1 request 1 destroy 
+zwp_primary_selection_offer_v1 1 event 0 offer s
+zwp_primary_selection_source_v1 1 request 0 offer s
+zwp_primary_selection_source_v1 1 request 1 destroy 
+zwp_primary_selection_source_v1 1 event 0 send sh
+zwp_primary_selection_source_v1 1 event 1 cancelled 
+xdg_activation_v1 1 request 0 destroy 
+xdg_activation_v1 1 request 1 get_activation_token n
+xdg_activation_v1 1 request 2 activate so
+xdg_activation_token_v1 1 request 0 set_serial uo
+xdg_activation_token_v1 1 request 1 set_app_id s
+xdg_activation_token_v1 1 request 2 set_surface o
+xdg_activation_token_v1 1 request 3 commit 
+xdg_activation_token_v1 1 request 4 destroy 
+xdg_activation_token_v1 1 event 0 done s
+wp_viewporter 1 request 0 destroy 
+wp_viewporter 1 request 1 get_viewport no
+wp_viewport 1 request 0 destroy 
+wp_viewport 1 request 1 set_source ffff
+wp_viewport 1 request 2 set_destination ii
+wp_fractional_scale_manager_v1 1 request 0 destroy 
+wp_fractional_scale_manager_v1 1 request 1 get_fractional_scale no
+wp_fractional_scale_v1 1 request 0 destroy 
+wp_fractional_scale_v1 1 event 0 preferred_scale u
+xdg_toplevel_icon_manager_v1 1 request 0 destroy 
+xdg_toplevel_icon_manager_v1 1 request 1 create_icon n
+xdg_toplevel_icon_manager_v1 1 request 2 set_icon o?o
+xdg_toplevel_icon_manager_v1 1 event 0 icon_size i
+xdg_toplevel_icon_manager_v1 1 event 1 done 
+xdg_toplevel_icon_v1 1 request 0 destroy 
+xdg_toplevel_icon_v1 1 request 1 set_name s
+xdg_toplevel_icon_v1 1 request 2 add_buffer oi
+zwp_text_input_manager_v3 1 request 0 destroy 
+zwp_text_input_manager_v3 1 request 1 get_text_input no
+zwp_text_input_v3 1 request 0 destroy 
+zwp_text_input_v3 1 request 1 enable 
+zwp_text_input_v3 1 request 2 disable 
+zwp_text_input_v3 1 request 3 set_surrounding_text sii
+zwp_text_input_v3 1 request 4 set_text_change_cause u
+zwp_text_input_v3 1 request 5 set_content_type uu
+zwp_text_input_v3 1 request 6 set_cursor_rectangle iiii
+zwp_text_input_v3 1 request 7 commit 
+zwp_text_input_v3 1 event 0 enter o
+zwp_text_input_v3 1 event 1 leave o
+zwp_text_input_v3 1 event 2 preedit_string ?sii
+zwp_text_input_v3 1 event 3 commit_string ?s
+zwp_text_input_v3 1 event 4 delete_surrounding_text uu
+zwp_text_input_v3 1 event 5 done u
+zwp_input_method_manager_v2 1 request 0 get_input_method on
+zwp_input_method_manager_v2 1 request 1 destroy 
+zwp_input_method_v2 1 request 0 commit_string s
+zwp_input_method_v2 1 request 1 set_preedit_string sii
+zwp_input_method_v2 1 request 2 delete_surrounding_text uu
+zwp_input_method_v2 1 request 3 commit u
+zwp_input_method_v2 1 request 4 get_input_popup_surface no
+zwp_input_method_v2 1 request 5 grab_keyboard n
+zwp_input_method_v2 1 request 6 destroy 
+zwp_input_method_v2 1 event 0 activate 
+zwp_input_method_v2 1 event 1 deactivate 
+zwp_input_method_v2 1 event 2 surrounding_text suu
+zwp_input_method_v2 1 event 3 text_change_cause u
+zwp_input_method_v2 1 event 4 content_type uu
+zwp_input_method_v2 1 event 5 done 
+zwp_input_method_v2 1 event 6 unavailable 
+zwp_input_popup_surface_v2 1 request 0 destroy 
+zwp_input_popup_surface_v2 1 event 0 text_input_rectangle iiii
+zwp_input_method_keyboard_grab_v2 1 request 0 release 
+zwp_input_method_keyboard_grab_v2 1 event 0 keymap uhu
+zwp_input_method_keyboard_grab_v2 1 event 1 key uuuu
+zwp_input_method_keyboard_grab_v2 1 event 2 modifiers uuuuu
+zwp_input_method_keyboard_grab_v2 1 event 3 repeat_info ii

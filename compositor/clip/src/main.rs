@@ -9,19 +9,36 @@ const PATIENCE: Duration = Duration::from_secs(30);
 fn main() {
     let arguments =
         compositor_evecho::init::unshell(std::env::args().skip(1).collect::<Vec<String>>());
-    let answer = match arguments.first().map(String::as_str) {
+    // `--primary` picks the selection a middle click pastes rather than the
+    // one a paste does. `wl-copy` spells it the same way.
+    let primary = arguments.iter().any(|word| word == "--primary");
+    let which = if primary {
+        compositor_clip::Which::Primary
+    } else {
+        compositor_clip::Which::Clipboard
+    };
+    let words: Vec<&String> = arguments
+        .iter()
+        .filter(|word| *word != "--primary")
+        .collect();
+    let answer = match words.first().map(|word| word.as_str()) {
         Some("copy") => {
-            let text = arguments
+            let text = words
                 .get(1..)
-                .map(|words| words.join(" "))
+                .map(|rest| {
+                    rest.iter()
+                        .map(|word| word.as_str())
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                })
                 .unwrap_or_default();
-            socket().and_then(|path| compositor_clip::copy(&path, &text, PATIENCE))
+            socket().and_then(|path| compositor_clip::copy(&path, which, &text, PATIENCE))
         }
         Some("paste") => socket()
-            .and_then(|path| compositor_clip::paste(&path))
+            .and_then(|path| compositor_clip::paste(&path, which))
             .map(|text| format!("clip: pasted {text}")),
         _ => {
-            say("clip: usage: clip copy <text> | clip paste");
+            say("clip: usage: clip [--primary] copy <text> | clip [--primary] paste");
             std::process::exit(2);
         }
     };

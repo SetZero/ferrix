@@ -7,14 +7,31 @@ use compositor_protocol::core::{
     wl_display, wl_output, wl_region, wl_registry, wl_seat, wl_shm, wl_shm_pool, wl_subcompositor,
     wl_subsurface, wl_surface,
 };
+use compositor_protocol::cursor_shape::{
+    self, wp_cursor_shape_device_v1, wp_cursor_shape_manager_v1,
+};
 use compositor_protocol::foreign_toplevel::{
     self, zwlr_foreign_toplevel_handle_v1, zwlr_foreign_toplevel_manager_v1,
 };
+use compositor_protocol::fractional_scale::{
+    self, wp_fractional_scale_manager_v1, wp_fractional_scale_v1,
+};
+use compositor_protocol::input_method::{self, zwp_input_method_manager_v2, zwp_input_method_v2};
 use compositor_protocol::layer_shell::{self, zwlr_layer_shell_v1, zwlr_layer_surface_v1};
+use compositor_protocol::primary_selection::{
+    self, zwp_primary_selection_device_manager_v1, zwp_primary_selection_device_v1,
+    zwp_primary_selection_offer_v1, zwp_primary_selection_source_v1,
+};
 use compositor_protocol::screencopy::{self, zwlr_screencopy_frame_v1, zwlr_screencopy_manager_v1};
 use compositor_protocol::session_lock::{
     self, ext_session_lock_manager_v1, ext_session_lock_surface_v1, ext_session_lock_v1,
 };
+use compositor_protocol::text_input::{self, zwp_text_input_manager_v3, zwp_text_input_v3};
+use compositor_protocol::toplevel_icon::{
+    self, xdg_toplevel_icon_manager_v1, xdg_toplevel_icon_v1,
+};
+use compositor_protocol::viewporter::{self, wp_viewport, wp_viewporter};
+use compositor_protocol::xdg_activation::{self, xdg_activation_token_v1, xdg_activation_v1};
 use compositor_protocol::xdg_decoration::{
     self, zxdg_decoration_manager_v1, zxdg_toplevel_decoration_v1,
 };
@@ -283,6 +300,92 @@ pub enum Event {
         /// Whether the client asked, rather than having gone.
         asked: bool,
     },
+    /// An application said it wants to be typed into through an input
+    /// method, or that it no longer does.
+    TextInputEnabled {
+        /// Its `zwp_text_input_v3`.
+        text_input: ObjectId,
+        /// Whether it is enabled now.
+        enabled: bool,
+    },
+    /// It said what is around the cursor, which an input method uses to
+    /// guess the next word.
+    TextInputSurrounded {
+        /// Its `zwp_text_input_v3`.
+        text_input: ObjectId,
+        /// The text.
+        text: String,
+        /// Where the cursor is in it, in bytes.
+        cursor: i32,
+        /// Where the selection's other end is.
+        anchor: i32,
+    },
+    /// It said where the cursor is on the screen, which is where an input
+    /// method puts its candidate window.
+    TextInputCursorAt {
+        /// Its `zwp_text_input_v3`.
+        text_input: ObjectId,
+        /// The rectangle, in the surface's own coordinates.
+        rect: Rect,
+    },
+    /// It applied everything it has said since the last commit.
+    TextInputCommitted {
+        /// Its `zwp_text_input_v3`.
+        text_input: ObjectId,
+    },
+    /// A program became the input method for the seat.
+    InputMethodMade {
+        /// Its `zwp_input_method_v2`.
+        method: ObjectId,
+    },
+    /// The input method typed something.
+    InputMethodTyped {
+        /// Its `zwp_input_method_v2`.
+        method: ObjectId,
+        /// What it typed.
+        typed: Typed,
+    },
+    /// The input method went.
+    InputMethodGone {
+        /// Its `zwp_input_method_v2`.
+        method: ObjectId,
+    },
+    /// A client named the cursor it wants rather than drawing one.
+    CursorShaped {
+        /// Which of `wp_cursor_shape_device_v1`'s shapes.
+        shape: u32,
+    },
+    /// A client made a `zwp_primary_selection_device_v1`: it can paste the
+    /// primary selection, and is owed whatever is in it.
+    PrimaryDeviceMade {
+        /// The device.
+        device: ObjectId,
+    },
+    /// A client set the primary selection, which is what a middle click
+    /// pastes.
+    PrimarySet {
+        /// The source, or `None` for one being cleared.
+        source: Option<ObjectId>,
+        /// The types it offered.
+        mimes: Vec<String>,
+    },
+    /// A client asked for the primary selection's data on a descriptor.
+    PrimaryWanted {
+        /// The offer it asked through.
+        offer: ObjectId,
+        /// The type it asked for.
+        mime: String,
+        /// Where the data is to be written.
+        fd: Fd,
+    },
+    /// A client asked for another program's window to be focused, with a
+    /// token the compositor gave out.
+    ActivationAsked {
+        /// The token it was given.
+        token: String,
+        /// The `wl_surface` it wants raised.
+        surface: ObjectId,
+    },
     /// A client said what the pointer looks like over its windows.
     CursorSet {
         /// The surface it drew, or `None` for a pointer it wants hidden.
@@ -409,6 +512,29 @@ pub struct Client {
     /// has been handed over already. A frame may be copied into once, which
     /// is `zwlr_screencopy_frame_v1`'s `already_used`.
     frames: BTreeMap<ObjectId, Capture>,
+    /// The `zwp_text_input_v3`s it has made: an application's text fields.
+    text_inputs: Vec<ObjectId>,
+    /// The `zwp_input_method_v2` it holds, if it is the input method.
+    input_method: Option<ObjectId>,
+    /// What the input method has staged and not yet committed.
+    typed: Typed,
+    /// The `zwp_primary_selection_source_v1`s it has made, and the types
+    /// each offered.
+    primary_sources: BTreeMap<ObjectId, Vec<String>>,
+    /// The `zwp_primary_selection_device_v1`s it has made.
+    primary_devices: Vec<ObjectId>,
+    /// The primary offer it was last given, if it still has one.
+    primary_offer: Option<ObjectId>,
+    /// The activation tokens this client was given and has not used.
+    tokens: std::collections::BTreeSet<String>,
+    /// How many tokens it has been given, which makes each one different.
+    token: u32,
+    /// Which surface each `wp_viewport` is on.
+    viewports: BTreeMap<ObjectId, ObjectId>,
+    /// Which surface each `wp_fractional_scale_v1` is on.
+    fractional: BTreeMap<ObjectId, ObjectId>,
+    /// What each `xdg_toplevel_icon_v1` is called.
+    icons: BTreeMap<ObjectId, String>,
     /// What the client last asked the pointer to look like: the surface and
     /// the hotspot, or `None` for a pointer it asked to be hidden.
     cursor: Option<(ObjectId, (i32, i32))>,
@@ -445,6 +571,23 @@ struct Capture {
 /// request the way every client-made object's is: the compositor picks it,
 /// and it is the manager's, which is what wlroots does.
 const FOREIGN_TOPLEVEL_VERSION: u32 = 3;
+
+/// What an input method has typed, staged until it commits.
+///
+/// The three are applied together: a method that replaced a word should not
+/// be seen half way through, which is the same reason a `wl_surface` is
+/// double-buffered.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Typed {
+    /// `commit_string`: text to insert.
+    pub commit: Option<String>,
+    /// `set_preedit_string`: the text being composed, and where the cursor
+    /// is inside it.
+    pub preedit: Option<(String, i32, i32)>,
+    /// `delete_surrounding_text`: how much to take out before and after the
+    /// cursor.
+    pub delete: Option<(u32, u32)>,
+}
 
 /// What a bar asked the compositor to do to somebody else's window.
 ///
@@ -530,6 +673,17 @@ impl Client {
             handles: BTreeMap::new(),
             told: BTreeMap::new(),
             frames: BTreeMap::new(),
+            text_inputs: Vec::new(),
+            input_method: None,
+            typed: Typed::default(),
+            primary_sources: BTreeMap::new(),
+            primary_devices: Vec::new(),
+            primary_offer: None,
+            tokens: std::collections::BTreeSet::new(),
+            token: 0,
+            viewports: BTreeMap::new(),
+            fractional: BTreeMap::new(),
+            icons: BTreeMap::new(),
             cursor: None,
             said_cursor: false,
             positioners: BTreeMap::new(),
@@ -1322,6 +1476,23 @@ impl Client {
             Role::DecorationManager => self.decoration_manager(version, opcode, args),
             Role::ToplevelDecoration => self.toplevel_decoration(sender, opcode, args),
             Role::Pointer => self.pointer_request(opcode, args),
+            Role::CursorShapeManager => self.cursor_shape_manager(version, opcode, args),
+            Role::CursorShapeDevice => self.cursor_shape_device(opcode, args),
+            Role::PrimaryManager => self.primary_manager(version, opcode, args),
+            Role::PrimaryDevice => self.primary_device(opcode, args),
+            Role::PrimarySource => self.primary_source(sender, opcode, args),
+            Role::PrimaryOffer => self.primary_offer(sender, opcode, args),
+            Role::Activation => self.activation(version, opcode, args),
+            Role::ActivationToken => self.activation_token(sender, opcode, args),
+            Role::Viewporter => self.viewporter(version, opcode, args),
+            Role::Viewport => self.viewport(sender, opcode, args),
+            Role::FractionalScaleManager => self.fractional_manager(version, opcode, args),
+            Role::IconManager => self.icon_manager(version, opcode, args),
+            Role::Icon => self.icon(sender, opcode, args),
+            Role::TextInputManager => self.text_input_manager(version, opcode, args),
+            Role::TextInput => self.text_input(sender, opcode, args),
+            Role::InputMethodManager => self.input_method_manager(version, opcode, args),
+            Role::InputMethod => self.input_method(sender, opcode, args),
             Role::XdgPositioner => self.positioner(sender, opcode, args),
             Role::XdgPopup => self.popup_request(sender, opcode, args),
             Role::SessionLockManager => self.lock_manager(version, opcode, args),
@@ -2184,6 +2355,602 @@ impl Client {
     #[must_use]
     pub const fn said_cursor(&self) -> bool {
         self.said_cursor
+    }
+
+    /// `wp_cursor_shape_manager_v1`: `get_pointer` and `get_tablet_tool_v2`.
+    ///
+    /// A device object is made for each; the tablet tool's is made and never
+    /// spoken to, because this compositor has no tablet tool to name a
+    /// cursor for.
+    fn cursor_shape_manager(&mut self, version: u32, opcode: u16, args: &[Arg<'_>]) {
+        if !matches!(
+            opcode,
+            wp_cursor_shape_manager_v1::request::GET_POINTER
+                | wp_cursor_shape_manager_v1::request::GET_TABLET_TOOL_V2
+        ) {
+            return;
+        }
+        let Some(id) = args.first().and_then(Arg::as_object) else {
+            return;
+        };
+        let _ = self.make(
+            id,
+            &cursor_shape::WP_CURSOR_SHAPE_DEVICE_V1,
+            version,
+            Role::CursorShapeDevice,
+        );
+    }
+
+    /// `wp_cursor_shape_device_v1`: `set_shape`.
+    ///
+    /// The client names a cursor instead of drawing one, which is what a
+    /// toolkit would rather do: it has no idea what the person's theme
+    /// looks like and the compositor does. This one draws its own arrow for
+    /// every shape it is given -- there is one shape and no theme to pick
+    /// another from -- and says which was asked for, so that a client is
+    /// answered rather than refused and the log records what a real toolkit
+    /// wanted.
+    fn cursor_shape_device(&mut self, opcode: u16, args: &[Arg<'_>]) {
+        if opcode != wp_cursor_shape_device_v1::request::SET_SHAPE {
+            return;
+        }
+        let shape = args.get(1).and_then(Arg::as_uint).unwrap_or(0);
+        if shape == 0 || shape > wp_cursor_shape_device_v1::shape::ALL_SCROLL {
+            self.fail(Fatal::Interface {
+                object: ObjectId::DISPLAY,
+                code: wp_cursor_shape_device_v1::error::INVALID_SHAPE,
+                text: format!("{shape} is not a cursor shape"),
+            });
+            return;
+        }
+        self.cursor = None;
+        self.said_cursor = true;
+        self.events.push(Event::CursorShaped { shape });
+    }
+
+    /// `zwp_primary_selection_device_manager_v1`: `create_source` and
+    /// `get_device`.
+    fn primary_manager(&mut self, version: u32, opcode: u16, args: &[Arg<'_>]) {
+        let Some(id) = args.first().and_then(Arg::as_object) else {
+            return;
+        };
+        match opcode {
+            zwp_primary_selection_device_manager_v1::request::CREATE_SOURCE => {
+                if self.make(
+                    id,
+                    &primary_selection::ZWP_PRIMARY_SELECTION_SOURCE_V1,
+                    version,
+                    Role::PrimarySource,
+                ) {
+                    let _ = self.primary_sources.insert(id, Vec::new());
+                }
+            }
+            zwp_primary_selection_device_manager_v1::request::GET_DEVICE => {
+                if !self.make(
+                    id,
+                    &primary_selection::ZWP_PRIMARY_SELECTION_DEVICE_V1,
+                    version,
+                    Role::PrimaryDevice,
+                ) {
+                    return;
+                }
+                self.primary_devices.push(id);
+                self.events.push(Event::PrimaryDeviceMade { device: id });
+            }
+            _ => {}
+        }
+    }
+
+    /// `zwp_primary_selection_source_v1`: the types it is offering.
+    fn primary_source(&mut self, sender: ObjectId, opcode: u16, args: &[Arg<'_>]) {
+        if opcode != zwp_primary_selection_source_v1::request::OFFER {
+            return;
+        }
+        let Some(mime) = args.first().and_then(Arg::as_str) else {
+            return;
+        };
+        if let Some(mimes) = self.primary_sources.get_mut(&sender) {
+            mimes.push(mime.to_owned());
+        }
+    }
+
+    /// `zwp_primary_selection_device_v1`: `set_selection`.
+    ///
+    /// The primary selection is what a middle click pastes, and it is set by
+    /// *selecting* rather than by asking: no serial is checked here for the
+    /// same reason the clipboard's is not.
+    fn primary_device(&mut self, opcode: u16, args: &[Arg<'_>]) {
+        if opcode != zwp_primary_selection_device_v1::request::SET_SELECTION {
+            return;
+        }
+        let source = args.first().and_then(Arg::as_object);
+        let mimes = source
+            .and_then(|source| self.primary_sources.get(&source))
+            .cloned()
+            .unwrap_or_default();
+        self.events.push(Event::PrimarySet {
+            source: source.filter(|source| !source.is_null()),
+            mimes,
+        });
+    }
+
+    /// `zwp_primary_selection_offer_v1`: `receive`, which is a paste.
+    fn primary_offer(&mut self, sender: ObjectId, opcode: u16, args: &[Arg<'_>]) {
+        if opcode != zwp_primary_selection_offer_v1::request::RECEIVE {
+            return;
+        }
+        let (Some(mime), Some(fd)) = (
+            args.first().and_then(Arg::as_str),
+            args.get(1).and_then(Arg::as_fd),
+        ) else {
+            return;
+        };
+        self.events.push(Event::PrimaryWanted {
+            offer: sender,
+            mime: mime.to_owned(),
+            fd,
+        });
+    }
+
+    /// `xdg_activation_v1`: `get_activation_token` and `activate`.
+    ///
+    /// A program that wants another raised asks for a token, hands it over
+    /// by whatever means it has -- an environment variable, a command line
+    /// -- and the other program passes it to `activate`. The token is a
+    /// string the compositor makes and only it can make, which is what stops
+    /// any program stealing the focus whenever it likes.
+    fn activation(&mut self, version: u32, opcode: u16, args: &[Arg<'_>]) {
+        match opcode {
+            xdg_activation_v1::request::GET_ACTIVATION_TOKEN => {
+                let Some(id) = args.first().and_then(Arg::as_object) else {
+                    return;
+                };
+                let _ = self.make(
+                    id,
+                    &xdg_activation::XDG_ACTIVATION_TOKEN_V1,
+                    version,
+                    Role::ActivationToken,
+                );
+            }
+            xdg_activation_v1::request::ACTIVATE => {
+                let (Some(token), Some(surface)) = (
+                    args.first().and_then(Arg::as_str),
+                    args.get(1).and_then(Arg::as_object),
+                ) else {
+                    return;
+                };
+                self.events.push(Event::ActivationAsked {
+                    token: token.to_owned(),
+                    surface,
+                });
+            }
+            _ => {}
+        }
+    }
+
+    /// `xdg_activation_token_v1`: `commit` is where the token is handed
+    /// back.
+    ///
+    /// `set_serial`, `set_app_id` and `set_surface` say who is asking and
+    /// why; they are read and the token is given whatever they said, because
+    /// this compositor grants an activation to whoever has a token it made.
+    fn activation_token(&mut self, sender: ObjectId, opcode: u16, _args: &[Arg<'_>]) {
+        if opcode != xdg_activation_token_v1::request::COMMIT {
+            return;
+        }
+        // One token a request, made here and never twice: a client that
+        // could guess another's token could steal the focus.
+        self.token = self.token.wrapping_add(1);
+        let token = format!("hyprix-{}-{}", self.serial, self.token);
+        let _ = self.tokens.insert(token.clone());
+        let _ = self.out.write(
+            sender,
+            xdg_activation_token_v1::event::DONE,
+            &[ArgType::Str { nullable: false }],
+            &[Arg::Str(Some(&token))],
+        );
+    }
+
+    /// Whether `token` is one this client was given and has not used.
+    #[must_use]
+    pub fn takes_token(&mut self, token: &str) -> bool {
+        self.tokens.remove(token)
+    }
+
+    /// `wp_viewporter`: `get_viewport`.
+    fn viewporter(&mut self, version: u32, opcode: u16, args: &[Arg<'_>]) {
+        if opcode != wp_viewporter::request::GET_VIEWPORT {
+            return;
+        }
+        let (Some(id), Some(surface)) = (
+            args.first().and_then(Arg::as_object),
+            args.get(1).and_then(Arg::as_object),
+        ) else {
+            return;
+        };
+        if !self.surfaces.contains_key(&surface) {
+            self.fail(Fatal::WrongInterface {
+                object: surface,
+                wanted: "wl_surface",
+            });
+            return;
+        }
+        if self.viewports.values().any(|held| *held == surface) {
+            self.fail(Fatal::Interface {
+                object: surface,
+                code: wp_viewporter::error::VIEWPORT_EXISTS,
+                text: "that surface already has a viewport".to_owned(),
+            });
+            return;
+        }
+        if self.make(id, &viewporter::WP_VIEWPORT, version, Role::Viewport) {
+            let _ = self.viewports.insert(id, surface);
+        }
+    }
+
+    /// `wp_viewport`: `set_source` and `set_destination`.
+    ///
+    /// The crop and the scale a surface's buffer is drawn with. Both are
+    /// recorded on the surface and applied where the surface's size is
+    /// worked out, which is the one place a buffer's size and a window's
+    /// stop being the same number.
+    fn viewport(&mut self, sender: ObjectId, opcode: u16, args: &[Arg<'_>]) {
+        let Some(surface) = self.viewports.get(&sender).copied() else {
+            return;
+        };
+        match opcode {
+            wp_viewport::request::SET_SOURCE => {
+                let numbers: Vec<Fixed> = args.iter().filter_map(Arg::as_fixed).collect();
+                let [x, y, width, height] = numbers.as_slice() else {
+                    return;
+                };
+                if let Some(state) = self.surfaces.get_mut(&surface) {
+                    state.pending.viewport_source = (width.to_f64() > 0.0)
+                        .then(|| (x.to_f64(), y.to_f64(), width.to_f64(), height.to_f64()));
+                }
+            }
+            wp_viewport::request::SET_DESTINATION => {
+                let numbers: Vec<i32> = args.iter().filter_map(Arg::as_int).collect();
+                let [width, height] = numbers.as_slice() else {
+                    return;
+                };
+                if *width <= 0 && *width != -1 {
+                    self.fail(Fatal::Interface {
+                        object: sender,
+                        code: wp_viewport::error::BAD_VALUE,
+                        text: format!("a destination of {width}x{height}"),
+                    });
+                    return;
+                }
+                if let Some(state) = self.surfaces.get_mut(&surface) {
+                    state.pending.viewport_size = (*width > 0).then_some((*width, *height));
+                }
+            }
+            wp_viewport::request::DESTROY => {
+                let _ = self.viewports.remove(&sender);
+            }
+            _ => {}
+        }
+    }
+
+    /// `wp_fractional_scale_manager_v1`: `get_fractional_scale`.
+    ///
+    /// The scale is sent at once, as the protocol allows: this compositor's
+    /// monitor scales are whole numbers, so the preferred scale is that
+    /// number in the protocol's 120ths and a client that asked is told
+    /// rather than left waiting.
+    fn fractional_manager(&mut self, version: u32, opcode: u16, args: &[Arg<'_>]) {
+        if opcode != wp_fractional_scale_manager_v1::request::GET_FRACTIONAL_SCALE {
+            return;
+        }
+        let (Some(id), Some(surface)) = (
+            args.first().and_then(Arg::as_object),
+            args.get(1).and_then(Arg::as_object),
+        ) else {
+            return;
+        };
+        if !self.surfaces.contains_key(&surface) {
+            self.fail(Fatal::WrongInterface {
+                object: surface,
+                wanted: "wl_surface",
+            });
+            return;
+        }
+        if !self.make(
+            id,
+            &fractional_scale::WP_FRACTIONAL_SCALE_V1,
+            version,
+            Role::FractionalScale,
+        ) {
+            return;
+        }
+        let _ = self.fractional.insert(id, surface);
+        let scale = self.outputs.first().map_or(1, |output| output.scale.max(1));
+        let _ = self.out.write(
+            id,
+            wp_fractional_scale_v1::event::PREFERRED_SCALE,
+            &[ArgType::Uint],
+            // 120ths, which is the protocol's own unit.
+            &[Arg::Uint(
+                u32::try_from(scale).unwrap_or(1).saturating_mul(120),
+            )],
+        );
+    }
+
+    /// `xdg_toplevel_icon_manager_v1`: `create_icon` and `set_icon`.
+    ///
+    /// The sizes are announced at bind and the icon is taken as given: what
+    /// a compositor does with one is draw it in a taskbar, and this one has
+    /// no taskbar of its own -- the bar is a client, and what it draws is
+    /// its own business. Answering rather than refusing is what matters: a
+    /// toolkit that finds no manager logs a warning on every start.
+    fn icon_manager(&mut self, version: u32, opcode: u16, args: &[Arg<'_>]) {
+        match opcode {
+            xdg_toplevel_icon_manager_v1::request::CREATE_ICON => {
+                let Some(id) = args.first().and_then(Arg::as_object) else {
+                    return;
+                };
+                let _ = self.make(
+                    id,
+                    &toplevel_icon::XDG_TOPLEVEL_ICON_V1,
+                    version,
+                    Role::Icon,
+                );
+            }
+            xdg_toplevel_icon_manager_v1::request::SET_ICON => {
+                let (Some(toplevel), icon) = (
+                    args.first().and_then(Arg::as_object),
+                    args.get(1).and_then(Arg::as_object),
+                ) else {
+                    return;
+                };
+                let name = icon
+                    .and_then(|icon| self.icons.get(&icon))
+                    .cloned()
+                    .unwrap_or_default();
+                if let Some(top) = self.toplevels.get_mut(&toplevel) {
+                    top.icon = name;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// `xdg_toplevel_icon_v1`: `set_name` and `add_buffer`.
+    ///
+    /// The name is kept, which is what a taskbar looks up in an icon theme.
+    /// The buffers are accepted and not kept: this compositor draws no icon
+    /// itself, and holding a client's pixels for something nobody draws is
+    /// memory nobody asked for.
+    fn icon(&mut self, sender: ObjectId, opcode: u16, args: &[Arg<'_>]) {
+        if opcode != xdg_toplevel_icon_v1::request::SET_NAME {
+            return;
+        }
+        if let Some(name) = args.first().and_then(Arg::as_str) {
+            let _ = self.icons.insert(sender, name.to_owned());
+        }
+    }
+
+    /// `zwp_text_input_manager_v3`: `get_text_input`.
+    fn text_input_manager(&mut self, version: u32, opcode: u16, args: &[Arg<'_>]) {
+        if opcode != zwp_text_input_manager_v3::request::GET_TEXT_INPUT {
+            return;
+        }
+        let Some(id) = args.first().and_then(Arg::as_object) else {
+            return;
+        };
+        if self.make(id, &text_input::ZWP_TEXT_INPUT_V3, version, Role::TextInput) {
+            self.text_inputs.push(id);
+        }
+    }
+
+    /// `zwp_text_input_v3`: an application saying it wants to be typed
+    /// into, and what it is being typed into.
+    ///
+    /// `enable` and `disable` are the two that matter to the compositor:
+    /// they are what an input method is told about, as `activate` and
+    /// `deactivate`. The rest -- the surrounding text, the content type,
+    /// where the cursor is on the screen -- is passed on so that an input
+    /// method can put its candidate window in the right place and guess the
+    /// right word.
+    fn text_input(&mut self, sender: ObjectId, opcode: u16, args: &[Arg<'_>]) {
+        use zwp_text_input_v3::request;
+        match opcode {
+            request::ENABLE => self.events.push(Event::TextInputEnabled {
+                text_input: sender,
+                enabled: true,
+            }),
+            request::DISABLE => self.events.push(Event::TextInputEnabled {
+                text_input: sender,
+                enabled: false,
+            }),
+            request::SET_SURROUNDING_TEXT => {
+                let text = args.first().and_then(Arg::as_str).unwrap_or("").to_owned();
+                let cursor = args.get(1).and_then(Arg::as_int).unwrap_or(0);
+                let anchor = args.get(2).and_then(Arg::as_int).unwrap_or(0);
+                self.events.push(Event::TextInputSurrounded {
+                    text_input: sender,
+                    text,
+                    cursor,
+                    anchor,
+                });
+            }
+            request::SET_CURSOR_RECTANGLE => {
+                let numbers: Vec<i32> = args.iter().filter_map(Arg::as_int).collect();
+                let [x, y, width, height] = numbers.as_slice() else {
+                    return;
+                };
+                self.events.push(Event::TextInputCursorAt {
+                    text_input: sender,
+                    rect: Rect {
+                        x: *x,
+                        y: *y,
+                        width: *width,
+                        height: *height,
+                    },
+                });
+            }
+            request::COMMIT => self
+                .events
+                .push(Event::TextInputCommitted { text_input: sender }),
+            request::DESTROY => {
+                self.text_inputs.retain(|held| *held != sender);
+                self.events.push(Event::TextInputEnabled {
+                    text_input: sender,
+                    enabled: false,
+                });
+            }
+            _ => {}
+        }
+    }
+
+    /// `zwp_input_method_manager_v2`: `get_input_method`.
+    ///
+    /// One input method a seat: a second is made and told `unavailable` at
+    /// once, which is what the protocol says and what stops two programs
+    /// both believing they are the keyboard.
+    fn input_method_manager(&mut self, version: u32, opcode: u16, args: &[Arg<'_>]) {
+        if opcode != zwp_input_method_manager_v2::request::GET_INPUT_METHOD {
+            return;
+        }
+        let Some(id) = args.get(1).and_then(Arg::as_object) else {
+            return;
+        };
+        if !self.make(
+            id,
+            &input_method::ZWP_INPUT_METHOD_V2,
+            version,
+            Role::InputMethod,
+        ) {
+            return;
+        }
+        self.input_method = Some(id);
+        self.events.push(Event::InputMethodMade { method: id });
+    }
+
+    /// `zwp_input_method_v2`: what the input method has typed.
+    ///
+    /// `commit_string`, `set_preedit_string` and `delete_surrounding_text`
+    /// are staged and applied by `commit`, which is the same double-buffered
+    /// shape a `wl_surface` has and for the same reason: a method that
+    /// replaced a word should not be seen half way through.
+    fn input_method(&mut self, sender: ObjectId, opcode: u16, args: &[Arg<'_>]) {
+        use zwp_input_method_v2::request;
+        match opcode {
+            request::COMMIT_STRING => {
+                self.typed.commit = args.first().and_then(Arg::as_str).map(str::to_owned);
+            }
+            request::SET_PREEDIT_STRING => {
+                let text = args.first().and_then(Arg::as_str).unwrap_or("").to_owned();
+                let begin = args.get(1).and_then(Arg::as_int).unwrap_or(0);
+                let end = args.get(2).and_then(Arg::as_int).unwrap_or(0);
+                self.typed.preedit = Some((text, begin, end));
+            }
+            request::DELETE_SURROUNDING_TEXT => {
+                let before = args.first().and_then(Arg::as_uint).unwrap_or(0);
+                let after = args.get(1).and_then(Arg::as_uint).unwrap_or(0);
+                self.typed.delete = Some((before, after));
+            }
+            request::COMMIT => {
+                let typed = std::mem::take(&mut self.typed);
+                self.events.push(Event::InputMethodTyped {
+                    method: sender,
+                    typed,
+                });
+            }
+            request::DESTROY => {
+                if self.input_method == Some(sender) {
+                    self.input_method = None;
+                }
+                self.events.push(Event::InputMethodGone { method: sender });
+            }
+            _ => {}
+        }
+    }
+
+    /// Tell an input method that a text field has been focused, or has gone.
+    pub fn input_method_active(&mut self, method: ObjectId, active: bool) {
+        let opcode = if active {
+            zwp_input_method_v2::event::ACTIVATE
+        } else {
+            zwp_input_method_v2::event::DEACTIVATE
+        };
+        let _ = self.out.write(method, opcode, &[], &[]);
+        let _ = self
+            .out
+            .write(method, zwp_input_method_v2::event::DONE, &[], &[]);
+    }
+
+    /// Tell an input method it will never be the seat's: another already is.
+    pub fn input_method_unavailable(&mut self, method: ObjectId) {
+        let _ = self
+            .out
+            .write(method, zwp_input_method_v2::event::UNAVAILABLE, &[], &[]);
+    }
+
+    /// Give a text field what an input method typed.
+    ///
+    /// The order is the protocol's: what is deleted, then the preedit, then
+    /// the commit, then `done` -- which is what applies all three at once.
+    pub fn text_input_typed(&mut self, text_input: ObjectId, typed: &Typed, serial: u32) {
+        if let Some((before, after)) = typed.delete {
+            let _ = self.out.write(
+                text_input,
+                zwp_text_input_v3::event::DELETE_SURROUNDING_TEXT,
+                &[ArgType::Uint, ArgType::Uint],
+                &[Arg::Uint(before), Arg::Uint(after)],
+            );
+        }
+        if let Some((text, begin, end)) = typed.preedit.as_ref() {
+            let _ = self.out.write(
+                text_input,
+                zwp_text_input_v3::event::PREEDIT_STRING,
+                &[ArgType::Str { nullable: true }, ArgType::Int, ArgType::Int],
+                &[Arg::Str(Some(text)), Arg::Int(*begin), Arg::Int(*end)],
+            );
+        }
+        if let Some(text) = typed.commit.as_ref() {
+            let _ = self.out.write(
+                text_input,
+                zwp_text_input_v3::event::COMMIT_STRING,
+                &[ArgType::Str { nullable: true }],
+                &[Arg::Str(Some(text))],
+            );
+        }
+        let _ = self.out.write(
+            text_input,
+            zwp_text_input_v3::event::DONE,
+            &[ArgType::Uint],
+            &[Arg::Uint(serial)],
+        );
+    }
+
+    /// Tell a text field that an input method is there, or is gone.
+    pub fn text_input_focus(&mut self, text_input: ObjectId, surface: ObjectId, entered: bool) {
+        let opcode = if entered {
+            zwp_text_input_v3::event::ENTER
+        } else {
+            zwp_text_input_v3::event::LEAVE
+        };
+        let _ = self.out.write(
+            text_input,
+            opcode,
+            &[ArgType::Object { nullable: false }],
+            &[Arg::Object(surface)],
+        );
+    }
+
+    /// Every `zwp_text_input_v3` this client has made.
+    #[must_use]
+    pub fn text_inputs(&self) -> &[ObjectId] {
+        &self.text_inputs
+    }
+
+    /// The `zwp_input_method_v2` this client holds, if it is the input
+    /// method.
+    #[must_use]
+    pub const fn input_method_object(&self) -> Option<ObjectId> {
+        self.input_method
     }
 
     /// `xdg_positioner`: the numbers a popup is placed with.
@@ -3534,6 +4301,88 @@ impl Client {
             &[],
         );
         let _ = self.told.insert(window.window, window.clone());
+    }
+
+    /// Tell this client what the primary selection holds.
+    ///
+    /// The same shape as [`Client::offer_selection`], because the primary
+    /// selection is the same protocol with a different name: an offer is
+    /// made, its types are sent, and it is then named as the selection.
+    pub fn offer_primary(&mut self, mimes: &[String]) {
+        if self.primary_devices.is_empty() {
+            return;
+        }
+        let offer = if mimes.is_empty() {
+            None
+        } else {
+            let Ok(offer) = self.objects.create(
+                &primary_selection::ZWP_PRIMARY_SELECTION_OFFER_V1,
+                1,
+                Role::PrimaryOffer,
+            ) else {
+                return;
+            };
+            Some(offer)
+        };
+        let devices = self.primary_devices.clone();
+        for device in devices {
+            if let Some(offer) = offer {
+                let _ = self.out.write(
+                    device,
+                    zwp_primary_selection_device_v1::event::DATA_OFFER,
+                    &[ArgType::NewId],
+                    &[Arg::NewId(offer)],
+                );
+                for mime in mimes {
+                    let _ = self.out.write(
+                        offer,
+                        zwp_primary_selection_offer_v1::event::OFFER,
+                        &[ArgType::Str { nullable: false }],
+                        &[Arg::Str(Some(mime))],
+                    );
+                }
+            }
+            let _ = self.out.write(
+                device,
+                zwp_primary_selection_device_v1::event::SELECTION,
+                &[ArgType::Object { nullable: true }],
+                &[Arg::Object(offer.unwrap_or(ObjectId::NULL))],
+            );
+        }
+        self.primary_offer = offer;
+    }
+
+    /// Whether `offer` is the primary offer this client was last given.
+    #[must_use]
+    pub fn holds_primary_offer(&self, offer: ObjectId) -> bool {
+        self.primary_offer == Some(offer)
+    }
+
+    /// Ask this client's primary source for its data on `fd`.
+    pub fn send_primary(&mut self, source: ObjectId, mime: &str, fd: Fd) {
+        let _ = self.out.write(
+            source,
+            zwp_primary_selection_source_v1::event::SEND,
+            &[ArgType::Str { nullable: false }, ArgType::Fd],
+            &[Arg::Str(Some(mime)), Arg::Fd(fd)],
+        );
+    }
+
+    /// Tell this client's primary source that it is no longer the
+    /// selection.
+    pub fn cancel_primary(&mut self, source: ObjectId) {
+        let _ = self.out.write(
+            source,
+            zwp_primary_selection_source_v1::event::CANCELLED,
+            &[],
+            &[],
+        );
+    }
+
+    /// Whether this client can paste the primary selection.
+    #[must_use]
+    pub fn has_primary_device(&self) -> bool {
+        !self.primary_devices.is_empty()
     }
 
     /// Whether this client has a `wl_data_device`, which is what a client

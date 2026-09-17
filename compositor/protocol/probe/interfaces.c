@@ -32,6 +32,14 @@
 #include "wlr-foreign-toplevel-management-client-protocol.h"
 #include "wlr-screencopy-client-protocol.h"
 #include "ext-session-lock-client-protocol.h"
+#include "cursor-shape-client-protocol.h"
+#include "primary-selection-client-protocol.h"
+#include "xdg-activation-client-protocol.h"
+#include "viewporter-client-protocol.h"
+#include "fractional-scale-client-protocol.h"
+#include "xdg-toplevel-icon-client-protocol.h"
+#include "text-input-client-protocol.h"
+#include "input-method-client-protocol.h"
 
 static void print_messages(const struct wl_interface *interface,
 			   const char *kind, const struct wl_message *messages,
@@ -118,6 +126,34 @@ int main(void)
 		&ext_session_lock_manager_v1_interface,
 		&ext_session_lock_v1_interface,
 		&ext_session_lock_surface_v1_interface,
+		/* cursor-shape-v1.xml */
+		&wp_cursor_shape_manager_v1_interface,
+		&wp_cursor_shape_device_v1_interface,
+		/* primary-selection-unstable-v1.xml */
+		&zwp_primary_selection_device_manager_v1_interface,
+		&zwp_primary_selection_device_v1_interface,
+		&zwp_primary_selection_offer_v1_interface,
+		&zwp_primary_selection_source_v1_interface,
+		/* xdg-activation-v1.xml */
+		&xdg_activation_v1_interface,
+		&xdg_activation_token_v1_interface,
+		/* viewporter.xml */
+		&wp_viewporter_interface,
+		&wp_viewport_interface,
+		/* fractional-scale-v1.xml */
+		&wp_fractional_scale_manager_v1_interface,
+		&wp_fractional_scale_v1_interface,
+		/* xdg-toplevel-icon-v1.xml */
+		&xdg_toplevel_icon_manager_v1_interface,
+		&xdg_toplevel_icon_v1_interface,
+		/* text-input-unstable-v3.xml */
+		&zwp_text_input_manager_v3_interface,
+		&zwp_text_input_v3_interface,
+		/* input-method-unstable-v2.xml */
+		&zwp_input_method_manager_v2_interface,
+		&zwp_input_method_v2_interface,
+		&zwp_input_popup_surface_v2_interface,
+		&zwp_input_method_keyboard_grab_v2_interface,
 	};
 
 	printf("# libwayland %s\n", WAYLAND_VERSION);
