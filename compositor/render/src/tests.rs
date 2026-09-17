@@ -2333,6 +2333,89 @@ fn the_grading_comes_out_of_the_configuration() {
     assert_eq!(undithered.contrast, Blur::CONTRAST);
 }
 
+/// A blur over a damaged strip writes the same pixels a blur over the whole
+/// window writes, and costs what the strip costs rather than what the
+/// window costs.
+///
+/// This is the difference between a blurred desktop that can be used and
+/// one that cannot. A terminal's cursor blinking damages a few hundred
+/// pixels; if the blur behind the window is recomputed for the whole window
+/// anyway, that blink costs a tenth of a second and the compositor draws at
+/// six frames a second with nothing happening. The pixels have to come out
+/// identical for the shortcut to be allowed, and they do: a blurred pixel
+/// depends on nothing further away than the blur's reach, which is exactly
+/// what the region read is grown by.
+#[test]
+fn a_blur_reads_what_is_damaged_and_writes_the_same_pixels() {
+    const BOUND: u128 = 25;
+    let (width, height) = (1920u32, 1080u32);
+    let rect = Rect::new(10, 10, i64::from(width) - 20, i64::from(height) - 20);
+    let blur = Blur::new(8, 3);
+    let strip = Rect::new(900, 500, 120, 40);
+
+    let painted = |canvas: &mut Canvas, damage: &Damage| {
+        canvas.clear(Color(BG), &Damage::full(width, height));
+        canvas.fill(
+            Rect::new(100, 100, 700, 500),
+            Color(0xFFFF_FFFF),
+            &Damage::full(width, height),
+        );
+        canvas.blur(rect, 8, &blur, damage);
+    };
+
+    let mut whole = Canvas::new(width, height).unwrap();
+    painted(&mut whole, &Damage::full(width, height));
+    let mut part = Canvas::new(width, height).unwrap();
+    painted(&mut part, &Damage::from(strip));
+
+    // Inside the strip the two agree to the byte, and outside it the
+    // partial one is the unblurred frame.
+    let mut worst = 0_u32;
+    for y in strip.y..strip.bottom() {
+        for x in strip.x..strip.right() {
+            let (x, y) = (u32::try_from(x).unwrap(), u32::try_from(y).unwrap());
+            let (a, b) = (whole.pixel(x, y).unwrap(), part.pixel(x, y).unwrap());
+            for shift in [0, 8, 16, 24] {
+                let (one, two) = ((a >> shift) & 0xFF, (b >> shift) & 0xFF);
+                worst = worst.max(one.abs_diff(two));
+            }
+        }
+    }
+    assert_eq!(
+        worst, 0,
+        "the blur over the damaged strip differs from the blur over the whole window by {worst} \
+         of a channel"
+    );
+    // And a pixel well outside the strip was left alone, which is what says
+    // the damage was obeyed rather than ignored. Just outside the white
+    // rectangle, where a blur lightens the background and doing nothing
+    // does not.
+    assert_ne!(
+        whole.pixel(805, 300),
+        part.pixel(805, 300),
+        "a pixel outside the damage was blurred anyway"
+    );
+
+    if cfg!(debug_assertions) {
+        return;
+    }
+    // Once to warm the caches, then the slowest of three.
+    part.blur(rect, 8, &blur, &Damage::from(strip));
+    let mut slowest = 0;
+    for _ in 0..3 {
+        let began = std::time::Instant::now();
+        part.blur(rect, 8, &blur, &Damage::from(strip));
+        slowest = slowest.max(began.elapsed().as_millis());
+    }
+    assert!(
+        slowest <= BOUND,
+        "a blur over a {}x{} strip took {slowest} ms, which is the whole window's cost: the \
+         damage is being ignored",
+        strip.width,
+        strip.height
+    );
+}
+
 /// What a blurred screen costs, which is the compositor's whole frame
 /// budget: a full-screen blur at the size and passes the configuration at
 /// the head of this file asks for, timed.

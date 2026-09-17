@@ -170,6 +170,32 @@ pub(crate) fn intersect(a: Rect, b: Rect) -> Option<Rect> {
     })
 }
 
+/// The smallest rectangle holding every one of `rects`, or `None` for none.
+///
+/// What a run of clips comes to: the blur reads a region around what it
+/// writes, and what it writes is these.
+pub(crate) fn bounding(rects: &[Rect]) -> Option<Rect> {
+    let mut held: Option<Rect> = None;
+    for &rect in rects {
+        if is_empty(rect) {
+            continue;
+        }
+        held = Some(match held {
+            None => rect,
+            Some(so_far) => {
+                let (left, top) = (so_far.x.min(rect.x), so_far.y.min(rect.y));
+                Rect::new(
+                    left,
+                    top,
+                    so_far.right().max(rect.right()).saturating_sub(left),
+                    so_far.bottom().max(rect.bottom()).saturating_sub(top),
+                )
+            }
+        });
+    }
+    held
+}
+
 /// `a` less `b`, as up to four disjoint rectangles: the rows above and below
 /// `b`, then the columns left and right of it within `b`'s rows.
 fn subtract(a: Rect, b: Rect) -> Vec<Rect> {

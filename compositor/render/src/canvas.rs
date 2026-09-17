@@ -4,7 +4,7 @@
 use tiny_skia::{BlendMode, FilterQuality, Paint, Pattern, Pixmap, PixmapRef, Shader, SpreadMode};
 
 use crate::blur::{Block, Blur};
-use crate::damage::{intersect, is_empty};
+use crate::damage::{bounding, intersect, is_empty};
 use crate::gradient::Axis;
 use crate::{Color, Damage, Error, Format, Gradient, Rect, Surface, Target};
 
@@ -570,11 +570,20 @@ impl Canvas {
     /// it. So this reads the canvas's own pixels and writes them back, and
     /// it has to be called between the things behind and the thing in front.
     ///
-    /// The region read is `rect` grown by the blur's reach on every side,
-    /// because a blur that only read what it writes would pull the frame's
-    /// own edge inwards and leave a bright rim; only `rect`'s rounded shape
-    /// is written back. Nothing outside the canvas is read: the edges are
+    /// The region read is what will be *written* -- the damaged part of
+    /// `rect` -- grown by the blur's reach on every side, because a blur
+    /// that only read what it writes would pull the frame's own edge
+    /// inwards and leave a bright rim; only `rect`'s rounded shape is
+    /// written back. Nothing outside the canvas is read: the edges are
     /// clamped, as `GL_CLAMP_TO_EDGE` clamps them.
+    ///
+    /// Reading the damage rather than the whole rectangle is what makes a
+    /// blurred desktop usable. A blinking cursor in a terminal damages a
+    /// few hundred pixels; blurring the whole window behind it costs a
+    /// tenth of a second on a 1920x1080 screen and blurring what changed
+    /// costs a thousandth. The answer is the same either way: a pixel's
+    /// blurred value depends on nothing further than the reach away, which
+    /// is exactly what the region is grown by.
     ///
     /// The grading in `blur` ([`Blur::contrast`] and its four neighbours)
     /// runs over that read region rather than over the whole monitor as
@@ -586,27 +595,61 @@ impl Canvas {
         if blur.size <= 0 || blur.passes == 0 || is_empty(rect) {
             return;
         }
-        // The reach: each pass doubles the scale the offsets apply at.
-        let reach = blur.size.saturating_mul(1_i64 << blur.passes.min(6));
-        let Some(read) = intersect(
-            Rect::new(
-                rect.x.saturating_sub(reach),
-                rect.y.saturating_sub(reach),
-                rect.width.saturating_add(reach.saturating_mul(2)),
-                rect.height.saturating_add(reach.saturating_mul(2)),
-            ),
-            self.bounds(),
-        ) else {
-            return;
-        };
         let clips = if rounding > 0 {
             self.rounded_clips(rect, rounding, damage)
         } else {
             self.clips(rect, damage)
         };
-        if clips.is_empty() {
+        let Some(written) = bounding(&clips) else {
             return;
-        }
+        };
+        // How far a blurred pixel can read from, which is what the region
+        // has to be grown by on every side.
+        //
+        // Each level of the pyramid is half the one above it, so a tap at
+        // `size` on level *k* is `size * 2^k` source pixels. Going down
+        // that sums to `size * (2^passes - 1)`, and coming back up sums to
+        // the same, so the whole kernel reaches `2 * size * (2^passes - 1)`
+        // -- which is inside `2 * size * 2^passes`, and that is this.
+        let reach = blur
+            .size
+            .saturating_mul(1_i64 << blur.passes.min(6))
+            .saturating_mul(2);
+        // And the lattice the pyramid halves on. The region read is snapped
+        // out to it, in the canvas's own coordinates, so that a blur over a
+        // damaged strip lands on the same source pixels at every level as a
+        // blur over the whole window: the downsample's taps are counted
+        // from the region's first pixel, so two regions that begin at
+        // different offsets would sample different pixels and differ by a
+        // step of a channel where they meet.
+        let lattice = 1_i64 << blur.passes.min(6);
+        let snapped = |value: i64, up: bool| -> i64 {
+            let rounded = value.div_euclid(lattice).saturating_mul(lattice);
+            if up && rounded < value {
+                rounded.saturating_add(lattice)
+            } else {
+                rounded
+            }
+        };
+        let (left, top) = (
+            snapped(written.x.saturating_sub(reach), false),
+            snapped(written.y.saturating_sub(reach), false),
+        );
+        let (right, bottom) = (
+            snapped(written.right().saturating_add(reach), true),
+            snapped(written.bottom().saturating_add(reach), true),
+        );
+        let Some(read) = intersect(
+            Rect::new(
+                left,
+                top,
+                right.saturating_sub(left),
+                bottom.saturating_sub(top),
+            ),
+            self.bounds(),
+        ) else {
+            return;
+        };
 
         let (wide, tall) = (index(read.width), index(read.height));
         let stride = index(i64::from(self.width())) * 4;
