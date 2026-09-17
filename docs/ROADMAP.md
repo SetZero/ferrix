@@ -4231,6 +4231,18 @@ Vulkan driver exists — the choice is the customer's, recorded in
 software fallback with a stated frame-time bound, so the compositor is never
 GPU-only.
 
+**What this stage still owes, in the order it is worth doing.** Blur,
+shadows and `dim_inactive`, which are three more passes over the same canvas
+and need no GPU. Window groups, the tabbed stack `togglegroup` makes, which
+is layout work like the scratchpad. Multiple monitors with per-monitor
+workspaces and scaling, which needs a second virtio-gpu head in `xtask` and a
+second connector in `card0` before any of the layout work is testable. The
+plugin-shaped extension points. And the GPU, which is the largest thing left
+in this tree: virtio-gpu's 3D commands through a render node,
+`zwp_linux_dmabuf`, GBM-shaped allocation, and a driver stack -- Mesa's virgl
+and Venus on ferrousli, or a Rust path over Vulkan -- that does not exist on
+Ferrix yet and is a stage's work in itself.
+
 **Exit:** the stage 18 test with animations on, requiring a sequence of
 screendumps to show a window moving along the configured curve with rounded
 corners and blur behind a translucent client, at the stated frame rate under
