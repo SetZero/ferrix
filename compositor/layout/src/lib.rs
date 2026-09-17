@@ -40,6 +40,7 @@ mod dwindle;
 mod geometry;
 pub mod layers;
 mod master;
+pub mod popup;
 mod settings;
 mod state;
 

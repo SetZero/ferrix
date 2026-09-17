@@ -93,6 +93,57 @@ pub enum XdgRole {
     Popup(ObjectId),
 }
 
+/// What an `xdg_positioner` holds, as the wire carries it.
+///
+/// The numbers and nothing else: where a popup *goes* is arithmetic, and it
+/// lives in `compositor/layout` with the rest of the geometry. This crate
+/// records what the client said and hands it on.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Positioner {
+    /// `set_size`.
+    pub size: (i32, i32),
+    /// `set_anchor_rect`, in the parent's surface-local coordinates.
+    pub anchor_rect: (i32, i32, i32, i32),
+    /// `set_anchor`.
+    pub anchor: u32,
+    /// `set_gravity`.
+    pub gravity: u32,
+    /// `set_constraint_adjustment`.
+    pub adjust: u32,
+    /// `set_offset`.
+    pub offset: (i32, i32),
+    /// `set_reactive`.
+    pub reactive: bool,
+}
+
+impl Positioner {
+    /// Whether `set_size` and `set_anchor_rect` have both been given, which
+    /// the protocol requires before `get_popup`.
+    #[must_use]
+    pub const fn is_complete(&self) -> bool {
+        self.size.0 > 0 && self.size.1 > 0 && self.anchor_rect.2 > 0 && self.anchor_rect.3 > 0
+    }
+}
+
+/// One `xdg_popup`: a menu, a tooltip, a dropdown.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Popup {
+    /// The `wl_surface` its pixels come from.
+    pub surface: ObjectId,
+    /// The `xdg_surface` it was made from.
+    pub xdg_surface: ObjectId,
+    /// The `xdg_surface` it hangs off: a window's, or another popup's.
+    pub parent: ObjectId,
+    /// The numbers it was placed with.
+    pub positioner: Positioner,
+    /// Where the compositor put it, in the parent's surface-local
+    /// coordinates, once it has said.
+    pub placed: Option<(i32, i32, i32, i32)>,
+    /// Whether the client asked for a grab, which is what makes a menu a
+    /// menu: it takes the keyboard until it is dismissed.
+    pub grabbed: bool,
+}
+
 impl XdgSurface {
     /// A surface just given the beginnings of a window.
     #[must_use]

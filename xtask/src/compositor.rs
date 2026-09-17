@@ -333,6 +333,28 @@ exec-once = /bin/pattern checkerboard one
 exec-once = /bin/pattern gradient two
 ";
 
+/// The picture a window with a menu on it makes, which the sixteenth boot
+/// requires.
+///
+/// Nothing is pressed: the client asks for the popup as soon as its window
+/// has drawn, which is when a toolkit would, so what is required is the
+/// picture it makes.
+const MENU_EXPECTED: [(&str, &str); 1] = [(
+    "a menu over the window it hangs off, where the positioner puts it",
+    "compositor/render/tests/data/menu-on-a-window.xrle",
+)];
+
+/// The configuration the sixteenth boot is given: a window with a menu and
+/// a window without one.
+///
+/// `--menu 200` is what `compositor/render` blesses the picture with, and a
+/// number changed here and not there is a picture that cannot match.
+const MENU_CONFIG: &str = "\
+# Carried into the initramfs by `cargo xtask test-compositor`.
+exec-once = /bin/pattern checkerboard one --menu 200
+exec-once = /bin/pattern gradient two
+";
+
 /// The three pictures the lock boot requires, and the two keys between them.
 ///
 /// The windows, then the lock over them, then the windows again: what
@@ -1208,7 +1230,7 @@ fn said_on_its_own(line: &str) -> &str {
 /// each takes minutes under emulation and there are fourteen of them, so a
 /// change to one is otherwise an hour a try.
 type Boot = fn(Arch, &Programs, &Args) -> Result<()>;
-const BOOTS: [(&str, Boot); 15] = [
+const BOOTS: [(&str, Boot); 16] = [
     ("dispatchers", test_dispatchers),
     ("bar", test_bar),
     ("decorations", test_decorations),
@@ -1224,6 +1246,7 @@ const BOOTS: [(&str, Boot); 15] = [
     ("taskbar", test_taskbar),
     ("screenshot", test_screenshot),
     ("lock", test_lock),
+    ("menu", test_menu),
 ];
 
 /// Whether `--boot` asked for this one.
@@ -1400,6 +1423,50 @@ fn one_picture(
     };
     println!(
         "  {arch}: {what}, every one of {} pixels",
+        screen.width * screen.height
+    );
+    Ok(())
+}
+
+/// A sixteenth boot: a menu, through `xdg_popup`.
+///
+/// Every right-click menu, dropdown and tooltip in every toolkit is an
+/// `xdg_popup`, and a client that makes one and is never configured waits
+/// for ever -- the menu simply does not appear. This boot is a window that
+/// asks for one the moment it has drawn, and what is required is the
+/// picture: the popup over the window, at the rectangle
+/// `xdg_positioner`'s rules put it, which `compositor/render` blesses by
+/// calling those same rules.
+fn test_menu(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
+    let (screens, said) = boot_and_dump(
+        arch,
+        programs,
+        MENU_CONFIG,
+        &Wanted {
+            states: &MENU_EXPECTED,
+            others: &[],
+            moving: None,
+            awaiting: &["menu at"],
+        },
+        &[],
+        args,
+    )?;
+    let Some(screen) = screens.first() else {
+        return Err(Error::new(format!("{arch}: the menu boot took no picture")));
+    };
+    // And the client was told where it was put, which says the configure
+    // reached it rather than the picture having come from somewhere else.
+    if !said
+        .iter()
+        .any(|line| line.contains("pattern: one menu at 1,1 200x200"))
+    {
+        return Err(Error::new(format!(
+            "{arch}: the client was never told where its menu is"
+        )));
+    }
+    println!(
+        "  {arch}: a window asked for a menu and the compositor placed it, drew it over the \
+         window and told the client where it is, in every one of {} pixels",
         screen.width * screen.height
     );
     Ok(())

@@ -13,7 +13,9 @@ use compositor_protocol::layer_shell::{self, zwlr_layer_shell_v1, zwlr_layer_sur
 use compositor_protocol::xdg_decoration::{
     self, zxdg_decoration_manager_v1, zxdg_toplevel_decoration_v1,
 };
-use compositor_protocol::xdg_shell::{self, xdg_surface, xdg_toplevel, xdg_wm_base};
+use compositor_protocol::xdg_shell::{
+    self, xdg_popup, xdg_positioner, xdg_surface, xdg_toplevel, xdg_wm_base,
+};
 use compositor_render::Pattern;
 use compositor_socket::{Connection, RecvError, socket_path};
 use compositor_wire::{Arg, ArgType, Fd, Interface, ObjectId, Reader, Writer};
@@ -45,6 +47,12 @@ mod id {
     pub(super) const POINTER: ObjectId = ObjectId(14);
     pub(super) const DECORATIONS: ObjectId = ObjectId(18);
     pub(super) const DECORATION: ObjectId = ObjectId(19);
+    pub(super) const POSITIONER: ObjectId = ObjectId(20);
+    pub(super) const POPUP_SURFACE: ObjectId = ObjectId(21);
+    pub(super) const POPUP_XDG: ObjectId = ObjectId(22);
+    pub(super) const POPUP: ObjectId = ObjectId(23);
+    pub(super) const POPUP_POOL: ObjectId = ObjectId(24);
+    pub(super) const POPUP_BUFFER: ObjectId = ObjectId(25);
 }
 
 /// How long to run before giving up, so a test can never hang.
@@ -66,6 +74,9 @@ pub enum Shape {
     /// edge, this many pixels tall and reserving all of them: what a bar
     /// asks for.
     Bar(u32),
+    /// A window with an `xdg_popup` on it, this many pixels square, hanging
+    /// off the window's top-left corner: what a menu is.
+    Menu(u32),
 }
 
 /// Connect, make a window, draw `pattern` in it, and keep drawing until the
@@ -157,6 +168,9 @@ pub fn run_shaped_on(
         keys: 0,
         seat: false,
         scale: 1,
+        menu_asked: false,
+        menu_size: (0, 0),
+        menu: None,
     };
 
     let started = Instant::now();
@@ -213,6 +227,12 @@ struct Client {
     keys: u32,
     /// Whether the seat has been bound and asked for its objects.
     seat: bool,
+    /// Whether the menu has been asked for, so it is asked for once.
+    menu_asked: bool,
+    /// The size the compositor configured the menu to.
+    menu_size: (i32, i32),
+    /// The memory the menu is drawn into, once its size is known.
+    menu: Option<Shared>,
 }
 
 impl Client {
@@ -260,6 +280,12 @@ impl Client {
             id::BUFFER => &core::WL_BUFFER,
             id::OUTPUT => &core::WL_OUTPUT,
             id::DECORATION => &xdg_decoration::ZXDG_TOPLEVEL_DECORATION_V1,
+            id::POSITIONER => &xdg_shell::XDG_POSITIONER,
+            id::POPUP_SURFACE => &core::WL_SURFACE,
+            id::POPUP_XDG => &xdg_shell::XDG_SURFACE,
+            id::POPUP => &xdg_shell::XDG_POPUP,
+            id::POPUP_POOL => &core::WL_SHM_POOL,
+            id::POPUP_BUFFER => &core::WL_BUFFER,
             _ => return None,
         })
     }
@@ -333,6 +359,41 @@ impl Client {
                 );
                 self.acked = true;
                 self.draw(out)?;
+                // A menu is asked for after the window has something on it,
+                // which is when a toolkit would: a popup on a window that
+                // has never drawn is a menu with nothing under it.
+                if let Shape::Menu(side) = self.shape {
+                    self.open_menu(side, out);
+                }
+            }
+            id::POPUP_XDG if opcode == xdg_surface::event::CONFIGURE => {
+                let serial = args.first().and_then(Arg::as_uint).unwrap_or(0);
+                request(
+                    out,
+                    id::POPUP_XDG,
+                    xdg_surface::request::ACK_CONFIGURE,
+                    &[ArgType::Uint],
+                    &[Arg::Uint(serial)],
+                );
+                let (width, height) = self.menu_size;
+                self.draw_menu(width, height, out)?;
+            }
+            id::POPUP if opcode == xdg_popup::event::CONFIGURE => {
+                // Where the compositor put it, in the parent's own
+                // coordinates, and how large it is allowed to be.
+                let value = |at: usize| args.get(at).and_then(Arg::as_int).unwrap_or(0);
+                self.menu_size = (value(2), value(3));
+                say(&format!(
+                    "pattern: {} menu at {},{} {}x{}",
+                    self.title,
+                    value(0),
+                    value(1),
+                    value(2),
+                    value(3)
+                ));
+            }
+            id::POPUP if opcode == xdg_popup::event::POPUP_DONE => {
+                say(&format!("pattern: {} menu dismissed", self.title));
             }
             id::DECORATION if opcode == zxdg_toplevel_decoration_v1::event::CONFIGURE => {
                 // Which side draws this window's decorations. Said out loud
@@ -627,6 +688,187 @@ impl Client {
         }
         // The first commit carries no buffer: it asks to be configured.
         request(out, id::SURFACE, wl_surface::request::COMMIT, &[], &[]);
+        Ok(())
+    }
+
+    /// Ask for a menu on this window: an `xdg_popup` hanging off the
+    /// window's top-left corner.
+    ///
+    /// The order is every toolkit's: a positioner with a size and an anchor
+    /// rectangle, a surface, an `xdg_surface` over it, `get_popup`, and a
+    /// commit with no buffer that asks to be configured. Nothing may be
+    /// drawn until the compositor has said where the popup is.
+    fn open_menu(&mut self, side: u32, out: &mut Writer) {
+        if self.menu_asked {
+            return;
+        }
+        self.menu_asked = true;
+        let side = i32::try_from(side).unwrap_or(1).max(1);
+        request(
+            out,
+            id::SHELL,
+            xdg_wm_base::request::CREATE_POSITIONER,
+            &[ArgType::NewId],
+            &[Arg::NewId(id::POSITIONER)],
+        );
+        request(
+            out,
+            id::POSITIONER,
+            xdg_positioner::request::SET_SIZE,
+            &[ArgType::Int, ArgType::Int],
+            &[Arg::Int(side), Arg::Int(side)],
+        );
+        // A one-pixel rectangle at the window's top-left, which is what a
+        // menu opened at a point hangs off.
+        request(
+            out,
+            id::POSITIONER,
+            xdg_positioner::request::SET_ANCHOR_RECT,
+            &[ArgType::Int, ArgType::Int, ArgType::Int, ArgType::Int],
+            &[Arg::Int(0), Arg::Int(0), Arg::Int(1), Arg::Int(1)],
+        );
+        for (opcode, value) in [
+            (
+                xdg_positioner::request::SET_ANCHOR,
+                xdg_positioner::anchor::BOTTOM_RIGHT,
+            ),
+            (
+                xdg_positioner::request::SET_GRAVITY,
+                xdg_positioner::gravity::BOTTOM_RIGHT,
+            ),
+            (
+                xdg_positioner::request::SET_CONSTRAINT_ADJUSTMENT,
+                xdg_positioner::constraint_adjustment::SLIDE_X
+                    | xdg_positioner::constraint_adjustment::SLIDE_Y,
+            ),
+        ] {
+            request(
+                out,
+                id::POSITIONER,
+                opcode,
+                &[ArgType::Uint],
+                &[Arg::Uint(value)],
+            );
+        }
+        request(
+            out,
+            id::COMPOSITOR,
+            wl_compositor::request::CREATE_SURFACE,
+            &[ArgType::NewId],
+            &[Arg::NewId(id::POPUP_SURFACE)],
+        );
+        request(
+            out,
+            id::SHELL,
+            xdg_wm_base::request::GET_XDG_SURFACE,
+            &[ArgType::NewId, ArgType::Object { nullable: false }],
+            &[Arg::NewId(id::POPUP_XDG), Arg::Object(id::POPUP_SURFACE)],
+        );
+        request(
+            out,
+            id::POPUP_XDG,
+            xdg_surface::request::GET_POPUP,
+            &[
+                ArgType::NewId,
+                ArgType::Object { nullable: true },
+                ArgType::Object { nullable: false },
+            ],
+            &[
+                Arg::NewId(id::POPUP),
+                Arg::Object(id::XDG_SURFACE),
+                Arg::Object(id::POSITIONER),
+            ],
+        );
+        request(
+            out,
+            id::POPUP_SURFACE,
+            wl_surface::request::COMMIT,
+            &[],
+            &[],
+        );
+    }
+
+    /// Draw the menu at the size the compositor put it, and commit it.
+    fn draw_menu(&mut self, width: i32, height: i32, out: &mut Writer) -> Result<(), String> {
+        let (width, height) = (width.max(1), height.max(1));
+        let stride = width.saturating_mul(4);
+        let len = usize::try_from(stride.saturating_mul(height))
+            .map_err(|_| "a menu too large to draw".to_owned())?;
+        if self.menu.is_none() {
+            let shared = Shared::new(len).map_err(|error| format!("shared memory: {error}"))?;
+            let fd = shared.as_raw_fd();
+            self.menu = Some(shared);
+            request_with_fd(
+                out,
+                id::SHM,
+                wl_shm::request::CREATE_POOL,
+                &[ArgType::NewId, ArgType::Fd, ArgType::Int],
+                &[
+                    Arg::NewId(id::POPUP_POOL),
+                    Arg::Fd(Fd(fd)),
+                    Arg::Int(i32::try_from(len).unwrap_or(i32::MAX)),
+                ],
+            );
+            request(
+                out,
+                id::POPUP_POOL,
+                wl_shm_pool::request::CREATE_BUFFER,
+                &[
+                    ArgType::NewId,
+                    ArgType::Int,
+                    ArgType::Int,
+                    ArgType::Int,
+                    ArgType::Int,
+                    ArgType::Uint,
+                ],
+                &[
+                    Arg::NewId(id::POPUP_BUFFER),
+                    Arg::Int(0),
+                    Arg::Int(width),
+                    Arg::Int(height),
+                    Arg::Int(stride),
+                    Arg::Uint(Pattern::Gradient.format().wl_shm()),
+                ],
+            );
+        }
+        // The gradient, so the menu is a picture a test can compare and is
+        // plainly not the window under it.
+        let pixels = Pattern::Gradient.draw(
+            u32::try_from(width).unwrap_or(0),
+            u32::try_from(height).unwrap_or(0),
+        );
+        if let Some(shared) = self.menu.as_mut() {
+            let room = shared.bytes_mut();
+            let take = pixels.len().min(room.len());
+            if let (Some(to), Some(from)) = (room.get_mut(..take), pixels.get(..take)) {
+                to.copy_from_slice(from);
+            }
+        }
+        request(
+            out,
+            id::POPUP_SURFACE,
+            wl_surface::request::ATTACH,
+            &[
+                ArgType::Object { nullable: true },
+                ArgType::Int,
+                ArgType::Int,
+            ],
+            &[Arg::Object(id::POPUP_BUFFER), Arg::Int(0), Arg::Int(0)],
+        );
+        request(
+            out,
+            id::POPUP_SURFACE,
+            wl_surface::request::DAMAGE_BUFFER,
+            &[ArgType::Int, ArgType::Int, ArgType::Int, ArgType::Int],
+            &[Arg::Int(0), Arg::Int(0), Arg::Int(width), Arg::Int(height)],
+        );
+        request(
+            out,
+            id::POPUP_SURFACE,
+            wl_surface::request::COMMIT,
+            &[],
+            &[],
+        );
         Ok(())
     }
 

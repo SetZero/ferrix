@@ -1487,3 +1487,72 @@ fn a_locked_screen_shows_the_lock_and_none_of_the_windows() {
         "{differing} pixels of the locked screen are not the lock's; the compositor said {line}"
     );
 }
+
+/// A menu is drawn where `xdg_positioner` says, over the window it hangs
+/// off.
+///
+/// Every right-click menu, dropdown and tooltip in every toolkit is an
+/// `xdg_popup`, and a client that makes one and is never configured waits
+/// for ever: the menu simply does not appear. What is required here is the
+/// picture -- the popup over the window, at the rectangle the placement
+/// rules put it, compared against the image `compositor/render` blesses by
+/// calling those same rules.
+#[test]
+fn a_menu_is_drawn_where_the_positioner_puts_it() {
+    let work = workspace("menu");
+    let socket = work.join("wayland");
+
+    let options = Options {
+        display: socket.to_string_lossy().into_owned(),
+        headless: Some((WIDTH, HEIGHT)),
+        deadline: Some(12000),
+        ..Options::default()
+    };
+
+    let for_clients = socket.clone();
+    let clients = std::thread::spawn(move || {
+        for _ in 0..400 {
+            if for_clients.exists() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let mut windows = Vec::new();
+        for (pattern, title, shape) in [
+            (Pattern::Checkerboard, "one", Shape::Menu(200)),
+            (Pattern::Gradient, "two", Shape::Window),
+        ] {
+            let path = for_clients.clone();
+            windows.push(std::thread::spawn(move || {
+                connect(&path, pattern, title, shape)
+            }));
+            std::thread::sleep(Duration::from_millis(250));
+        }
+        // Long enough for the popup to be placed, configured and drawn.
+        std::thread::sleep(Duration::from_millis(3000));
+        let taken = compositor_shot::take(&for_clients, 0);
+        for window in windows {
+            let _ = window.join();
+        }
+        taken
+    });
+
+    let line = hyprix::run(&options).expect("the compositor ran");
+    let taken = clients.join().expect("the clients finished");
+    let taken =
+        taken.unwrap_or_else(|why| panic!("the screenshot: {why}; the compositor said {line}"));
+
+    let want = image(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("../render/tests/data/menu-on-a-window.xrle"),
+    );
+    let differing = taken
+        .pixels
+        .chunks_exact(3)
+        .zip(want.chunks_exact(3))
+        .filter(|(shot, blessed)| shot != blessed)
+        .count();
+    assert_eq!(
+        differing, 0,
+        "{differing} pixels of the menu's frame are not the renderer's; the compositor said {line}"
+    );
+}

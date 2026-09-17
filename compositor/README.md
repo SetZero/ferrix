@@ -45,7 +45,11 @@ names the part of Hyprland or hyprlang it follows.
   `movefocus`, `movewindow`, `workspace`, `movetoworkspace`(`silent`),
   `killactive`, `togglefloating` and `fullscreen`, parsed from a `Bind`.
   Each call returns the changes it caused; `State::layout` gives every
-  visible window's client rectangle.
+  visible window's client rectangle. `popup` is the other geometry a
+  compositor owes a client: `xdg_positioner`'s rules for where a menu goes,
+  in the protocol's own order -- anchor, offset, gravity, then flip, slide
+  and resize -- which is arithmetic and so is tested against the rules
+  rather than against a screenshot.
 * **`wire`** is Wayland's wire protocol with no libwayland: the message
   header, every argument type, descriptors travelling beside the bytes
   rather than in them, and the per-client object map that keeps a client's

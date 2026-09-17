@@ -4193,6 +4193,41 @@ grid, printed a row at a time.
 /bin/hyprctl` and requires the picture the terminal makes, pixel for pixel,
 on x86-64 and on AArch64.
 
+**Done — menus (2026-09-17).** `xdg_popup`, which is what every right-click
+menu, dropdown, tooltip and combo box in every toolkit is. The objects were
+being made and nothing else: a positioner was a bag of numbers nobody read,
+`get_popup` handed back an id and never a `configure`, and a client that
+asked for a menu waited for ever. On a compositor like that a person right-
+clicks and nothing happens.
+
+Where a popup goes is `xdg_positioner`'s arithmetic and nothing else -- a
+rectangle on the parent to hang off, a point of it to anchor to, a direction
+to grow in, an offset, and what to do when the result falls off the screen
+-- so it is written in `compositor/layout` with the rest of the geometry,
+where it is tested against the rules rather than against a screenshot. The
+order is the protocol's: anchor, offset, gravity, then `flip`, `slide` and
+`resize`, each on the axis that is off the screen and only if the client
+asked for it. A flip that would not help either is not made, which is what
+stops a menu jumping to the other side for no gain; a slide takes the far
+edge first, so a popup wider than the screen ends flush with the near one;
+a resize is the last resort and the only one that gives the client
+something other than the size it asked for.
+
+The compositor places each popup against its parent's rectangle -- a
+window's, or another popup's, since a submenu is a popup on a popup --
+clips it to the monitor that parent is on, and draws it over the windows
+with no border and no gaps, which is what a menu is. `grab`, `reposition`
+and `popup_done` are all answered; `set_parent_size` and
+`set_parent_configure` are read and dropped, because this compositor places
+a popup against the parent's geometry as it is.
+
+`cargo xtask test-compositor` boots a sixteenth time with `exec-once =
+/bin/pattern checkerboard one --menu 200`: the window asks for a menu the
+moment it has drawn, as a toolkit would, and the screen must be the picture
+`compositor/render` blesses -- which it builds by calling the same placement
+rules -- with the client having been told where it was put. A host test
+compares a screenshot of the same thing.
+
 **Done — the screen lock (2026-09-17).** `ext-session-lock-v1`, which is
 what `hyprlock` speaks and `swaylock` speaks, and the one protocol whose
 whole point is that the compositor stops drawing everything else.

@@ -560,6 +560,10 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
             placed_layers = place_layers(&mut slots, &mut state, &screens);
             reconfigure(&mut slots, &state);
         }
+        // The popups, which are drawn over the windows like a layer surface
+        // on the top level: a menu is not a window, has no border and no
+        // gaps, and belongs where its parent put it.
+        let popups = placed_popups(&slots, &state, &sources);
         // The keyboard follows the layout's focus, and a window that has just
         // arrived is what the layout focused.
         // Who the keyboard is on. A locked session takes it away from every
@@ -675,14 +679,12 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                             });
                     crate::frame::draw_locked(&mut target, output, &slots, covering, &full)?;
                 } else {
-                    crate::frame::draw(
-                        &mut target,
-                        output,
-                        &slots,
-                        &sources,
-                        &placed_layers,
-                        &full,
-                    )?;
+                    let over: Vec<crate::frame::Placed> = placed_layers
+                        .iter()
+                        .copied()
+                        .chain(popups.iter().copied())
+                        .collect();
+                    crate::frame::draw(&mut target, output, &slots, &sources, &over, &full)?;
                 }
             }
             drawn = drawn.saturating_add(1);
@@ -782,6 +784,9 @@ fn serve(
     // there already are before the roundtrip it sent after binding comes
     // back.
     let mut bound_manager = false;
+    // The popups made in this pass, which are placed once the client's own
+    // borrow is over: placing one reads the layout and the parent window.
+    let mut fresh_popups: Vec<ObjectId> = Vec::new();
     // The session lock's, for the same reason: the screens are the loop's.
     let mut locking: Option<ObjectId> = None;
     let mut covered: Vec<(ObjectId, ObjectId, usize)> = Vec::new();
@@ -835,6 +840,10 @@ fn serve(
                     role: Role::ForeignToplevelManager,
                     ..
                 } => bound_manager = true,
+                // A popup: a menu, a tooltip, a dropdown. Where it goes
+                // needs the window its parent is, which the layout has.
+                Event::PopupCreated { popup, .. } => fresh_popups.push(popup),
+                Event::PopupGone { .. } | Event::PopupGrabbed { .. } => changed = true,
                 // The session lock. Which screens it covers and when it is
                 // told so are the loop's, which has them.
                 Event::SessionLocked { lock } => locking = Some(lock),
@@ -951,6 +960,9 @@ fn serve(
         if let Some(slot) = slots.get_mut(index) {
             slot.client_mut().show_toplevels(&windows);
         }
+    }
+    for popup in fresh_popups {
+        changed |= place_popup(popup, slots, index, state, sources, screens);
     }
     changed |= lock_changed(
         lock, slots, index, screens, locking, &covered, unlocking, report,
@@ -1594,6 +1606,151 @@ fn as_reported<'a>(
         cursor: (x as i32, y as i32),
         locked,
     }
+}
+
+/// Where every popup is on the screen, in the order they were made.
+///
+/// A popup is drawn like a layer surface on the top level: above the
+/// windows, with no border and no gaps, at the rectangle the compositor
+/// configured it to. A submenu is a popup on a popup, and its coordinates
+/// are its parent's, so the walk up is the same one that placed it.
+fn placed_popups(
+    slots: &[Slot],
+    state: &State,
+    sources: &BTreeMap<WindowId, Source>,
+) -> Vec<crate::frame::Placed> {
+    let mut out = Vec::new();
+    for (index, slot) in slots.iter().enumerate() {
+        for (_, popup) in slot.client().popups() {
+            let Some(at) = popup.placed else {
+                continue;
+            };
+            let Some(parent) = parent_rect(slot.client(), popup.parent, state, sources, index)
+            else {
+                continue;
+            };
+            out.push(crate::frame::Placed {
+                client: index,
+                surface: popup.surface,
+                rect: Rect::new(
+                    parent.x.saturating_add(i64::from(at.0)),
+                    parent.y.saturating_add(i64::from(at.1)),
+                    i64::from(at.2),
+                    i64::from(at.3),
+                ),
+                above: true,
+            });
+        }
+    }
+    out
+}
+
+/// Put one popup where its positioner says, and tell the client.
+///
+/// Gives whether anything changed, which is whenever the popup was placed:
+/// a popup that has just been configured will draw, and a frame has to
+/// follow.
+///
+/// The anchor rectangle and the answer are both in the parent's
+/// surface-local coordinates, which is what `xdg_popup.configure` carries;
+/// the *screen* is what the constraint adjustments are measured against, so
+/// the parent's own place on it is what turns one into the other.
+fn place_popup(
+    popup: ObjectId,
+    slots: &mut [Slot],
+    index: usize,
+    state: &State,
+    sources: &BTreeMap<WindowId, Source>,
+    screens: &[Screen],
+) -> bool {
+    let Some(slot) = slots.get(index) else {
+        return false;
+    };
+    let Some(held) = slot.client().popup(popup).cloned() else {
+        return false;
+    };
+    // Where the parent is on the screen: a window, or another popup hanging
+    // off one.
+    let Some(parent) = parent_rect(slot.client(), held.parent, state, sources, index) else {
+        return false;
+    };
+    // The screen it is on, which is what it must be kept inside.
+    let room = screens
+        .iter()
+        .find(|screen| {
+            screen.rect.x <= parent.x && parent.x < screen.rect.x.saturating_add(screen.rect.width)
+        })
+        .map_or(parent, |screen| screen.rect);
+    let numbers = held.positioner;
+    let wanted = compositor_layout::popup::Positioner {
+        size: (i64::from(numbers.size.0), i64::from(numbers.size.1)),
+        anchor_rect: Rect::new(
+            i64::from(numbers.anchor_rect.0),
+            i64::from(numbers.anchor_rect.1),
+            i64::from(numbers.anchor_rect.2),
+            i64::from(numbers.anchor_rect.3),
+        ),
+        anchor: compositor_layout::popup::Anchor::from_wire(numbers.anchor).unwrap_or_default(),
+        gravity: compositor_layout::popup::Anchor::from_wire(numbers.gravity).unwrap_or_default(),
+        adjust: compositor_layout::popup::Adjust(numbers.adjust),
+        offset: (i64::from(numbers.offset.0), i64::from(numbers.offset.1)),
+        reactive: numbers.reactive,
+    };
+    let at = compositor_layout::popup::place(&wanted, parent, room);
+    let Some(slot) = slots.get_mut(index) else {
+        return false;
+    };
+    let number = |value: i64| i32::try_from(value).unwrap_or(0);
+    slot.client_mut().configure_popup(
+        popup,
+        (
+            number(at.x),
+            number(at.y),
+            number(at.width),
+            number(at.height),
+        ),
+    );
+    true
+}
+
+/// Where a popup's parent is on the screen.
+///
+/// A popup hangs off an `xdg_surface`, which is either a window's or another
+/// popup's: a submenu is a popup on a popup, and its coordinates are its
+/// parent's, which are in turn its parent's.
+fn parent_rect(
+    client: &Client,
+    parent: ObjectId,
+    state: &State,
+    sources: &BTreeMap<WindowId, Source>,
+    index: usize,
+) -> Option<Rect> {
+    // A window: the rectangle the tiling gave it.
+    let surface = client.xdg_surface(parent).map(|xdg| xdg.surface)?;
+    if let Some((window, _)) = sources
+        .iter()
+        .find(|(_, source)| source.client == index && source.surface == surface)
+    {
+        return state
+            .layout()
+            .iter()
+            .flat_map(|output| output.windows.iter())
+            .find(|placed| placed.window == *window)
+            .map(|placed| placed.rect);
+    }
+    // Another popup: where that one was put, inside *its* parent.
+    let (id, held) = client
+        .popups()
+        .find(|(_, popup)| popup.xdg_surface == parent)?;
+    let _ = id;
+    let at = held.placed?;
+    let grandparent = parent_rect(client, held.parent, state, sources, index)?;
+    Some(Rect::new(
+        grandparent.x.saturating_add(i64::from(at.0)),
+        grandparent.y.saturating_add(i64::from(at.1)),
+        i64::from(at.2),
+        i64::from(at.3),
+    ))
 }
 
 /// Carry out what one client's pass said about the session lock.

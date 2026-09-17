@@ -21,17 +21,27 @@ fn main() {
         .get(1)
         .cloned()
         .unwrap_or_else(|| format!("{pattern:?}"));
+    let sized = |flag: &str| {
+        arguments
+            .iter()
+            .position(|word| word == flag)
+            .map(|at| arguments.get(at + 1).and_then(|word| word.parse().ok()))
+    };
     // `--bar <height>`: a `zwlr_layer_surface_v1` across the top rather than
-    // a window, which is what a bar is.
-    let shape = match arguments.iter().position(|word| word == "--bar") {
-        Some(at) => {
-            let Some(height) = arguments.get(at + 1).and_then(|word| word.parse().ok()) else {
-                say("pattern: --bar takes a height in pixels");
-                std::process::exit(2);
-            };
-            compositor_pattern::Shape::Bar(height)
+    // a window. `--menu <side>`: a window with an `xdg_popup` on it, which
+    // is what every right-click menu and dropdown is.
+    let shape = match (sized("--bar"), sized("--menu")) {
+        (Some(Some(height)), _) => compositor_pattern::Shape::Bar(height),
+        (Some(None), _) => {
+            say("pattern: --bar takes a height in pixels");
+            std::process::exit(2);
         }
-        None => compositor_pattern::Shape::Window,
+        (_, Some(Some(side))) => compositor_pattern::Shape::Menu(side),
+        (_, Some(None)) => {
+            say("pattern: --menu takes a size in pixels");
+            std::process::exit(2);
+        }
+        _ => compositor_pattern::Shape::Window,
     };
 
     match compositor_pattern::run_shaped(pattern, &title, shape) {

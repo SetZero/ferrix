@@ -908,6 +908,73 @@ fn two_pattern_clients_tiled_by_dwindle_match_the_expected_image() {
     golden::check("dwindle-two-clients", WIDTH, HEIGHT, &two_client_frame());
 }
 
+/// A window with a menu on it: the popup drawn over the window, at the
+/// rectangle `xdg_positioner`'s rules put it.
+///
+/// This is the picture `cargo xtask test-compositor` requires of a popup.
+/// The popup hangs off a one-pixel anchor rectangle at the window's
+/// top-left, anchored and gravitated `bottom_right`, so its own top-left
+/// lands one pixel in from the window's -- which is where a menu opened at a
+/// point goes, and is what every toolkit asks for.
+#[test]
+fn a_window_with_a_menu_on_it_matches_the_expected_image() {
+    let (_, layout) = two_clients();
+    let buffers = client_buffers(&layout);
+    // Where the compositor puts it: the placement rules, on the window the
+    // menu belongs to, so the picture and the compositor agree by
+    // construction.
+    let parent = layout
+        .windows
+        .iter()
+        .find(|placed| placed.window == CHECKERBOARD)
+        .map(|placed| placed.rect)
+        .expect("the checkerboard is on screen");
+    let positioner = compositor_layout::popup::Positioner {
+        size: (MENU, MENU),
+        anchor_rect: Rect::new(0, 0, 1, 1),
+        anchor: compositor_layout::popup::Anchor::BottomRight,
+        gravity: compositor_layout::popup::Anchor::BottomRight,
+        adjust: compositor_layout::popup::Adjust(
+            compositor_layout::popup::Adjust::SLIDE_X | compositor_layout::popup::Adjust::SLIDE_Y,
+        ),
+        ..compositor_layout::popup::Positioner::default()
+    };
+    let at = compositor_layout::popup::place(
+        &positioner,
+        parent,
+        Rect::new(0, 0, i64::from(WIDTH), i64::from(HEIGHT)),
+    );
+    let menu = Pattern::Gradient.draw(MENU as u32, MENU as u32);
+    let surface = Surface::new(
+        &menu,
+        MENU as u32,
+        MENU as u32,
+        MENU as u32 * 4,
+        Pattern::Gradient.format(),
+    )
+    .unwrap();
+    let over = [LayerFrame {
+        rect: Rect::new(parent.x + at.x, parent.y + at.y, at.width, at.height),
+        above: true,
+        surface: Some(surface),
+    }];
+    let mut canvas = Canvas::new(WIDTH, HEIGHT).unwrap();
+    let full = Damage::full(WIDTH, HEIGHT);
+    let _ = render_with_layers(
+        &mut canvas,
+        &layout,
+        (0, 0),
+        &Styles::plain(&Style::default()),
+        &surfaces(&buffers),
+        &over,
+        &full,
+    );
+    golden::check("menu-on-a-window", WIDTH, HEIGHT, canvas.data());
+}
+
+/// The menu's side, which the boot's `--menu` argument must match.
+const MENU: i64 = 200;
+
 /// A locked screen: the lock's own surface over the whole of it, and
 /// nothing of what was there before.
 ///

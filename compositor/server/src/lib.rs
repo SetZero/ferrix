@@ -52,7 +52,7 @@ pub use layer::{Anchors, Layer, LayerSurface, Margin};
 pub use role::Role;
 pub use shm::{Buffer, BufferError, FORMATS, Format, Pool};
 pub use surface::{Committed, Output, Rect, Region, State, Subsurface, Surface};
-pub use xdg::{Toplevel, XdgRole, XdgSurface};
+pub use xdg::{Popup, Positioner, Toplevel, XdgRole, XdgSurface};
 
 pub use compositor_protocol as protocol;
 pub use compositor_wire as wire;

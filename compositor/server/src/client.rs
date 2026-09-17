@@ -29,7 +29,7 @@ use crate::layer::{Anchors, Layer, LayerSurface, Margin};
 use crate::role::Role;
 use crate::shm::{Buffer, FORMATS, Format, Pool};
 use crate::surface::{Committed, Output, Rect, Region, Subsurface, Surface};
-use crate::xdg::{Toplevel, XdgRole, XdgSurface};
+use crate::xdg::{Popup, Positioner, Toplevel, XdgRole, XdgSurface};
 
 /// What ended a connection.
 ///
@@ -283,6 +283,28 @@ pub enum Event {
         /// Whether the client asked, rather than having gone.
         asked: bool,
     },
+    /// A client made a popup: a menu, a tooltip, a dropdown. It has to be
+    /// placed and configured before it may draw anything at all.
+    PopupCreated {
+        /// The `xdg_popup`.
+        popup: ObjectId,
+        /// The `wl_surface` its pixels come from.
+        surface: ObjectId,
+        /// The `xdg_surface` it hangs off.
+        parent: ObjectId,
+    },
+    /// It asked for a grab, which is what makes a menu a menu: the keyboard
+    /// is the popup's until it is dismissed, and a click outside dismisses
+    /// it.
+    PopupGrabbed {
+        /// The `xdg_popup`.
+        popup: ObjectId,
+    },
+    /// A popup went.
+    PopupGone {
+        /// The `xdg_popup` that was destroyed.
+        popup: ObjectId,
+    },
     /// A bar asked the compositor to do something to a window it does not
     /// own, through `zwlr_foreign_toplevel_handle_v1`.
     ForeignToplevelAsked {
@@ -380,6 +402,10 @@ pub struct Client {
     /// has been handed over already. A frame may be copied into once, which
     /// is `zwlr_screencopy_frame_v1`'s `already_used`.
     frames: BTreeMap<ObjectId, Capture>,
+    /// Each `xdg_positioner` this client made, and what it has set on it.
+    positioners: BTreeMap<ObjectId, Positioner>,
+    /// Each `xdg_popup` it has made.
+    popups: BTreeMap<ObjectId, Popup>,
     /// The `ext_session_lock_v1` this client holds, if it locked the
     /// session, and the lock surfaces it has made, by screen.
     lock: Option<ObjectId>,
@@ -491,6 +517,8 @@ impl Client {
             handles: BTreeMap::new(),
             told: BTreeMap::new(),
             frames: BTreeMap::new(),
+            positioners: BTreeMap::new(),
+            popups: BTreeMap::new(),
             lock: None,
             lock_surfaces: BTreeMap::new(),
             serial: 1,
@@ -1278,6 +1306,8 @@ impl Client {
             Role::XdgToplevel => self.xdg_toplevel_request(sender, opcode, args),
             Role::DecorationManager => self.decoration_manager(version, opcode, args),
             Role::ToplevelDecoration => self.toplevel_decoration(sender, opcode, args),
+            Role::XdgPositioner => self.positioner(sender, opcode, args),
+            Role::XdgPopup => self.popup_request(sender, opcode, args),
             Role::SessionLockManager => self.lock_manager(version, opcode, args),
             Role::SessionLock => self.session_lock(sender, version, opcode, args),
             Role::SessionLockSurface => self.lock_surface(sender, opcode, args),
@@ -2088,6 +2118,188 @@ impl Client {
         }
     }
 
+    /// `xdg_positioner`: the numbers a popup is placed with.
+    ///
+    /// Each is recorded and none is acted on: where a popup goes is worked
+    /// out once, when `get_popup` reads the positioner, because the protocol
+    /// says a positioner is a value copied at that moment and a change after
+    /// it moves nothing.
+    fn positioner(&mut self, sender: ObjectId, opcode: u16, args: &[Arg<'_>]) {
+        use xdg_shell::xdg_positioner::request;
+        let numbers: Vec<i32> = args.iter().filter_map(Arg::as_int).collect();
+        let Some(held) = self.positioners.get_mut(&sender) else {
+            return;
+        };
+        match opcode {
+            request::SET_SIZE => {
+                let [width, height] = numbers.as_slice() else {
+                    return;
+                };
+                if *width <= 0 || *height <= 0 {
+                    self.fail(Fatal::Interface {
+                        object: sender,
+                        code: xdg_shell::xdg_positioner::error::INVALID_INPUT,
+                        text: format!("a popup of {width}x{height}"),
+                    });
+                    return;
+                }
+                held.size = (*width, *height);
+            }
+            request::SET_ANCHOR_RECT => {
+                let [x, y, width, height] = numbers.as_slice() else {
+                    return;
+                };
+                if *width <= 0 || *height <= 0 {
+                    self.fail(Fatal::Interface {
+                        object: sender,
+                        code: xdg_shell::xdg_positioner::error::INVALID_INPUT,
+                        text: format!("an anchor rectangle of {width}x{height}"),
+                    });
+                    return;
+                }
+                held.anchor_rect = (*x, *y, *width, *height);
+            }
+            request::SET_ANCHOR | request::SET_GRAVITY => {
+                let Some(value) = args.first().and_then(Arg::as_uint) else {
+                    return;
+                };
+                if value > 8 {
+                    self.fail(Fatal::Interface {
+                        object: sender,
+                        code: xdg_shell::xdg_positioner::error::INVALID_INPUT,
+                        text: format!("{value} is not an anchor or a gravity"),
+                    });
+                    return;
+                }
+                if opcode == request::SET_ANCHOR {
+                    held.anchor = value;
+                } else {
+                    held.gravity = value;
+                }
+            }
+            request::SET_CONSTRAINT_ADJUSTMENT => {
+                held.adjust = args.first().and_then(Arg::as_uint).unwrap_or(0);
+            }
+            request::SET_OFFSET => {
+                let [x, y] = numbers.as_slice() else {
+                    return;
+                };
+                held.offset = (*x, *y);
+            }
+            request::SET_REACTIVE => held.reactive = true,
+            // `set_parent_size` and `set_parent_configure` are for a
+            // reactive popup whose parent is being resized: this compositor
+            // places a popup against the parent's geometry as it is, so both
+            // are read and nothing is kept.
+            _ => {}
+        }
+    }
+
+    /// `xdg_popup`: `grab`, `reposition` and `destroy`.
+    fn popup_request(&mut self, sender: ObjectId, opcode: u16, args: &[Arg<'_>]) {
+        use xdg_shell::xdg_popup::request;
+        match opcode {
+            request::GRAB => {
+                if let Some(popup) = self.popups.get_mut(&sender) {
+                    popup.grabbed = true;
+                }
+                self.events.push(Event::PopupGrabbed { popup: sender });
+            }
+            request::REPOSITION => {
+                let held = args
+                    .first()
+                    .and_then(Arg::as_object)
+                    .and_then(|id| self.positioners.get(&id))
+                    .copied();
+                let token = args.get(1).and_then(Arg::as_uint).unwrap_or(0);
+                if let (Some(held), Some(popup)) = (held, self.popups.get_mut(&sender)) {
+                    popup.positioner = held;
+                    popup.placed = None;
+                }
+                // `repositioned` goes before the `configure` the compositor
+                // will send, which is what tells the client the configure
+                // that follows is the answer to this request and not to
+                // something else.
+                let _ = self.out.write(
+                    sender,
+                    xdg_shell::xdg_popup::event::REPOSITIONED,
+                    &[ArgType::Uint],
+                    &[Arg::Uint(token)],
+                );
+                let (surface, parent) = self
+                    .popups
+                    .get(&sender)
+                    .map_or((ObjectId::NULL, ObjectId::NULL), |popup| {
+                        (popup.surface, popup.parent)
+                    });
+                self.events.push(Event::PopupCreated {
+                    popup: sender,
+                    surface,
+                    parent,
+                });
+            }
+            request::DESTROY => {
+                let _ = self.popups.remove(&sender);
+                self.events.push(Event::PopupGone { popup: sender });
+            }
+            _ => {}
+        }
+    }
+
+    /// Tell a popup where it is, and its `xdg_surface` that the state is
+    /// whole.
+    ///
+    /// `x` and `y` are in the parent's surface-local coordinates, which is
+    /// what the protocol says `xdg_popup.configure` carries.
+    pub fn configure_popup(&mut self, popup: ObjectId, at: (i32, i32, i32, i32)) {
+        let Some(held) = self.popups.get_mut(&popup) else {
+            return;
+        };
+        held.placed = Some(at);
+        let xdg_surface = held.xdg_surface;
+        let (x, y, width, height) = at;
+        let _ = self.out.write(
+            popup,
+            xdg_shell::xdg_popup::event::CONFIGURE,
+            &[ArgType::Int, ArgType::Int, ArgType::Int, ArgType::Int],
+            &[Arg::Int(x), Arg::Int(y), Arg::Int(width), Arg::Int(height)],
+        );
+        let serial = self.next_serial();
+        let _ = self.out.write(
+            xdg_surface,
+            xdg_surface::event::CONFIGURE,
+            &[ArgType::Uint],
+            &[Arg::Uint(serial)],
+        );
+        if let Some(surface) = self.xdg_surfaces.get_mut(&xdg_surface) {
+            surface.configure_sent(serial);
+        }
+    }
+
+    /// Tell a popup it has been dismissed.
+    ///
+    /// The client is to destroy it: a menu that was clicked away is gone,
+    /// and the compositor says so rather than waiting to be told.
+    pub fn popup_done(&mut self, popup: ObjectId) {
+        if !self.popups.contains_key(&popup) {
+            return;
+        }
+        let _ = self
+            .out
+            .write(popup, xdg_shell::xdg_popup::event::POPUP_DONE, &[], &[]);
+    }
+
+    /// One popup, if this client has it.
+    #[must_use]
+    pub fn popup(&self, popup: ObjectId) -> Option<&Popup> {
+        self.popups.get(&popup)
+    }
+
+    /// Every popup it has, in the order they were made.
+    pub fn popups(&self) -> impl Iterator<Item = (ObjectId, &Popup)> {
+        self.popups.iter().map(|(id, popup)| (*id, popup))
+    }
+
     /// `ext_session_lock_manager_v1`: `lock`.
     ///
     /// The lock object is made at once and the *compositor* decides when to
@@ -2576,11 +2788,12 @@ impl Client {
                 let Some(id) = args.first().and_then(Arg::as_object) else {
                     return;
                 };
-                // A positioner is a bag of numbers a popup reads. Popups are
-                // not placed yet, so it is made and kept alive -- destroying
-                // it would be a protocol error the client did not earn --
-                // and nothing reads it.
-                let _ = self.make(id, &xdg_shell::XDG_POSITIONER, version, Role::XdgPositioner);
+                // A positioner is a bag of numbers a popup reads, and it
+                // starts empty: the protocol requires `set_size` and
+                // `set_anchor_rect` before `get_popup` uses it.
+                if self.make(id, &xdg_shell::XDG_POSITIONER, version, Role::XdgPositioner) {
+                    let _ = self.positioners.insert(id, Positioner::default());
+                }
             }
             xdg_wm_base::request::GET_XDG_SURFACE => {
                 let (Some(id), Some(surface)) = (
@@ -2679,10 +2892,14 @@ impl Client {
                 let Some(id) = args.first().and_then(Arg::as_object) else {
                     return;
                 };
-                // Popups are not placed yet. The object is made so the
-                // client's ids stay in step and it is told nothing, rather
-                // than the connection being ended for using a protocol the
-                // compositor advertised.
+                // The parent is nullable in the protocol -- an
+                // `xdg_positioner` with a parent set by another extension
+                // may carry it -- and this compositor has no such extension,
+                // so a null parent is a popup with nothing to hang off.
+                let (parent, positioner) = (
+                    args.get(1).and_then(Arg::as_object),
+                    args.get(2).and_then(Arg::as_object),
+                );
                 let Some(xdg) = self.xdg_surfaces.get(&sender) else {
                     return;
                 };
@@ -2694,11 +2911,62 @@ impl Client {
                     });
                     return;
                 }
-                if self.make(id, &xdg_shell::XDG_POPUP, version, Role::XdgPopup)
-                    && let Some(xdg) = self.xdg_surfaces.get_mut(&sender)
-                {
+                let surface = xdg.surface;
+                let Some(parent) = parent.filter(|parent| !parent.is_null()) else {
+                    self.fail(Fatal::Interface {
+                        object: sender,
+                        code: xdg_wm_base::error::INVALID_POPUP_PARENT,
+                        text: "a popup with no parent".to_owned(),
+                    });
+                    return;
+                };
+                if !self.xdg_surfaces.contains_key(&parent) {
+                    self.fail(Fatal::WrongInterface {
+                        object: parent,
+                        wanted: "xdg_surface",
+                    });
+                    return;
+                }
+                let Some(held) = positioner.and_then(|id| self.positioners.get(&id)).copied()
+                else {
+                    self.fail(Fatal::WrongInterface {
+                        object: positioner.unwrap_or(ObjectId::NULL),
+                        wanted: "xdg_positioner",
+                    });
+                    return;
+                };
+                // A positioner without a size or an anchor rectangle is the
+                // one error a popup can earn before it exists.
+                if !held.is_complete() {
+                    self.fail(Fatal::Interface {
+                        object: sender,
+                        code: xdg_wm_base::error::INVALID_POSITIONER,
+                        text: "the positioner has no size or no anchor rectangle".to_owned(),
+                    });
+                    return;
+                }
+                if !self.make(id, &xdg_shell::XDG_POPUP, version, Role::XdgPopup) {
+                    return;
+                }
+                if let Some(xdg) = self.xdg_surfaces.get_mut(&sender) {
                     xdg.role = Some(XdgRole::Popup(id));
                 }
+                let _ = self.popups.insert(
+                    id,
+                    Popup {
+                        surface,
+                        xdg_surface: sender,
+                        parent,
+                        positioner: held,
+                        placed: None,
+                        grabbed: false,
+                    },
+                );
+                self.events.push(Event::PopupCreated {
+                    popup: id,
+                    surface,
+                    parent,
+                });
             }
             xdg_surface::request::SET_WINDOW_GEOMETRY => {
                 let numbers: Vec<i32> = (0..4)
