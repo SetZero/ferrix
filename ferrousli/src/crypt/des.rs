@@ -2103,11 +2103,22 @@ const TEST_LEN: usize = 21;
 /// The key schedule: the 48-bit subkey of each of the 16 rounds, as two
 /// 24-bit halves.
 #[derive(Debug, Clone, Copy)]
-struct ExpandedKey {
+pub(super) struct ExpandedKey {
     /// The left halves.
     l: [u32; 16],
     /// The right halves.
     r: [u32; 16],
+}
+
+impl ExpandedKey {
+    /// The same schedule with its rounds in the other order, which is what
+    /// turns the cipher into its own inverse: DES decrypts by running the
+    /// sixteen subkeys backwards.
+    pub(super) fn reversed(mut self) -> Self {
+        self.l.reverse();
+        self.r.reverse();
+        self
+    }
 }
 
 /// `table[row][column]`. Every column here is masked to the table's width
@@ -2159,7 +2170,7 @@ fn setup_salt(salt: u32) -> u32 {
 
 /// The key schedule of the 8-byte `key`, whose low bit in each byte (DES's
 /// parity bit) is ignored.
-fn expand_key(key: &[u8; 8]) -> ExpandedKey {
+pub(super) fn expand_key(key: &[u8; 8]) -> ExpandedKey {
     let [a0, a1, a2, a3, b0, b1, b2, b3] = *key;
     let raw0 = u32::from_be_bytes([a0, a1, a2, a3]);
     let raw1 = u32::from_be_bytes([b0, b1, b2, b3]);
@@ -2277,7 +2288,7 @@ fn des(l_in: u32, r_in: u32, count: u32, saltbits: u32, key: &ExpandedKey) -> (u
 }
 
 /// Enciphers the 8-byte `block` once under `key`, without salt.
-fn cipher(block: &[u8; 8], key: &ExpandedKey) -> [u8; 8] {
+pub(super) fn cipher(block: &[u8; 8], key: &ExpandedKey) -> [u8; 8] {
     let [a0, a1, a2, a3, b0, b1, b2, b3] = *block;
     let (l, r) = des(
         u32::from_be_bytes([a0, a1, a2, a3]),
