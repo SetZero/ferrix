@@ -41,7 +41,12 @@ if ! bash "tools/uutils/$1"; then
     fi
     exit 1
 fi
-install -m 755 "$out/x86_64/coreutils" "$root/x86_64/bin/coreutils"
+# Normally $out is the install directory itself and the scripts have already
+# put the programs where they are read from; the copy is for a caller whose
+# $FERRIX_UUTILS is somewhere else.
+if ! [ "$out" -ef "$root" ]; then
+    cp -a "$out/x86_64/bin/." "$root/x86_64/bin/" || exit 1
+fi
 "#;
 
 /// What a uutils built against ferrousli is made from, relative to
@@ -62,9 +67,18 @@ fn root() -> Result<PathBuf> {
     ferrousli::install_root(VAR, HOME_SEGMENTS, "ferrousli's uutils")
 }
 
-/// The installed binary for `arch`, beneath `root`.
-fn installed(root: &Path, arch: Arch) -> PathBuf {
-    root.join(arch.name()).join("bin").join("coreutils")
+/// The installed binary called `name` for `arch`, beneath `root`.
+fn installed(root: &Path, arch: Arch, name: &str) -> PathBuf {
+    root.join(arch.name()).join("bin").join(name)
+}
+
+/// The first of the family, which stands for the rest: they are built and
+/// installed in one run, so if this one is current they all are.
+fn first(root: &Path, arch: Arch) -> PathBuf {
+    let name = crate::initramfs::FAMILY
+        .first()
+        .map_or("coreutils", |binary| binary.name);
+    installed(root, arch, name)
 }
 
 /// Refuse every architecture the build scripts do not build for.
@@ -89,7 +103,7 @@ fn refuse_other_than_x86_64(arch: Arch) -> Result<()> {
 pub(crate) fn program(arch: Arch) -> Result<PathBuf> {
     refuse_other_than_x86_64(arch)?;
     let root = root()?;
-    let program = installed(&root, arch);
+    let program = first(&root, arch);
     let dir = crate::paths::workspace_root().join("ferrousli");
     if ferrousli::stale(&program, &dir, INPUTS).is_none() {
         return Ok(program);
@@ -118,7 +132,7 @@ pub(crate) fn build(arch: Arch) -> Result<PathBuf> {
 /// [`build`], with the build lock already held.
 fn build_locked(arch: Arch, root: &Path) -> Result<PathBuf> {
     let root = root.to_path_buf();
-    let program = installed(&root, arch);
+    let program = first(&root, arch);
     let dir = crate::paths::workspace_root().join("ferrousli");
 
     let (script, mut command) = if cfg!(windows) {
@@ -163,15 +177,27 @@ fn build_locked(arch: Arch, root: &Path) -> Result<PathBuf> {
 /// `None` rather than an error: an image for AArch64 or ARMv7-A is a whole
 /// image without these utilities, and refusing to build one would be the
 /// wrong answer to "this is x86-64 only for now".
-pub(crate) fn carried(arch: Arch) -> Result<Option<Vec<u8>>> {
+pub(crate) fn carried(arch: Arch) -> Result<Vec<(&'static str, Vec<u8>)>> {
     if arch != Arch::X86_64 {
         println!("  uutils is not built for {} yet", arch.name());
-        return Ok(None);
+        return Ok(Vec::new());
     }
-    let path = program(arch)?;
-    std::fs::read(&path)
-        .map(Some)
-        .map_err(|error| Error::new(format!("reading {}: {error}", path.display())))
+    // Builds the lot when any of them is stale, and gives back where they
+    // were installed.
+    let watched = program(arch)?;
+    let dir = watched
+        .parent()
+        .map(Path::to_path_buf)
+        .ok_or_else(|| Error::new(format!("{} has no directory", watched.display())))?;
+    crate::initramfs::FAMILY
+        .iter()
+        .map(|binary| {
+            let path = dir.join(binary.name);
+            let bytes = std::fs::read(&path)
+                .map_err(|error| Error::new(format!("reading {}: {error}", path.display())))?;
+            Ok((binary.name, bytes))
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -188,7 +214,12 @@ mod tests {
 
     #[test]
     fn the_installed_path_sits_beside_the_other_programs() {
-        let path = installed(Path::new("root"), Arch::X86_64);
-        assert_eq!(path, Path::new("root/x86_64/bin/coreutils"));
+        let path = installed(Path::new("root"), Arch::X86_64, "xargs");
+        assert_eq!(path, Path::new("root/x86_64/bin/xargs"));
+        assert_eq!(
+            first(Path::new("root"), Arch::X86_64),
+            Path::new("root/x86_64/bin/coreutils"),
+            "coreutils is the one the staleness rule watches"
+        );
     }
 }

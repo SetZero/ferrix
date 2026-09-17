@@ -223,8 +223,47 @@ pub(crate) const APPLETS: &[&str] = &[
     "whoami", "whois", "xargs", "xxd", "xz", "xzcat", "yes", "zcat", "zcip",
 ];
 
-/// Where uutils/coreutils goes: one multicall binary, as busybox is.
-pub(crate) const UUTILS_PATH: &str = "bin/coreutils";
+/// One program the uutils family installs, and the names it answers to.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Binary {
+    /// Its own name, which is also where it goes: `bin/<name>`.
+    pub(crate) name: &'static str,
+    /// The other names linked to it in `/bin`. Empty for a program that
+    /// answers only to its own, as findutils' four do.
+    pub(crate) links: &'static [&'static str],
+}
+
+/// The family, as `ferrousli/tools/uutils/` builds it.
+///
+/// Three projects and six programs. coreutils and diffutils are multicall
+/// binaries, which pick their utility from `argv[0]`; findutils builds one
+/// program per utility instead, so each answers only to its own name.
+pub(crate) const FAMILY: &[Binary] = &[
+    Binary {
+        name: "coreutils",
+        links: UTILITIES,
+    },
+    Binary {
+        name: "diffutils",
+        links: &["diff", "cmp"],
+    },
+    Binary {
+        name: "find",
+        links: &[],
+    },
+    Binary {
+        name: "xargs",
+        links: &[],
+    },
+    Binary {
+        name: "locate",
+        links: &[],
+    },
+    Binary {
+        name: "updatedb",
+        links: &[],
+    },
+];
 
 /// The directory its utility names are linked in: `/bin`, which is `PATH`.
 ///
@@ -330,6 +369,26 @@ if ip link show eth0 >/dev/null 2>&1 && ! ip -o addr show eth0 | grep -q ' inet 
 fi
 ";
 
+/// The names linked to the family program called `name`, or none if the
+/// family has no such program.
+fn links_of(name: &str) -> &'static [&'static str] {
+    FAMILY
+        .iter()
+        .find(|binary| binary.name == name)
+        .map_or(&[], |binary| binary.links)
+}
+
+/// Whether `applet` is a name one of the carried family programs owns, and so
+/// one busybox does not get a link for.
+///
+/// A program that is not carried owns nothing: an image for an architecture
+/// the family is not built for still has busybox's `ls`.
+fn owned_by_family(carried: &[(&str, Vec<u8>)], applet: &str) -> bool {
+    carried
+        .iter()
+        .any(|(name, _)| *name == applet || links_of(name).contains(&applet))
+}
+
 /// The archive every image carries: the tree's native programs in `/sbin`,
 /// and `program` at `/bin/busybox` when one is given, with `zinc` at
 /// `/bin/zinc` and `/bin/zsh` beside it when that is given too, and the
@@ -346,7 +405,7 @@ pub(crate) fn build(
                 .map_err(|error| Error::new(format!("reading {}: {error}", path.display())))
         })
         .transpose()?;
-    build_with_shell(program.as_deref(), natives, zinc, None, ports)
+    build_with_shell(program.as_deref(), natives, zinc, &[], ports)
 }
 
 /// [`build`], with uutils/coreutils carried too.
@@ -357,7 +416,7 @@ pub(crate) fn build_with_utilities(
     program: Option<&Path>,
     natives: &[native::Built],
     zinc: Option<&[u8]>,
-    uutils: Option<&[u8]>,
+    uutils: &[(&str, Vec<u8>)],
     ports: &[ports::File],
 ) -> Result<Vec<u8>> {
     let program = program
@@ -372,7 +431,7 @@ pub(crate) fn build_with_utilities(
 /// [`build`], with the program's bytes rather than its path and no zinc.
 #[cfg(test)]
 fn build_with(program: Option<&[u8]>, natives: &[native::Built]) -> Result<Vec<u8>> {
-    build_with_shell(program, natives, None, None, &[])
+    build_with_shell(program, natives, None, &[], &[])
 }
 
 /// [`build`], with the program's bytes rather than its path.
@@ -380,7 +439,7 @@ fn build_with_shell(
     program: Option<&[u8]>,
     natives: &[native::Built],
     zinc: Option<&[u8]>,
-    uutils: Option<&[u8]>,
+    uutils: &[(&str, Vec<u8>)],
     ports: &[ports::File],
 ) -> Result<Vec<u8>> {
     let mut archive = Newc::new();
@@ -455,7 +514,7 @@ fn build_with_shell(
             if zinc.is_some() && ZINC_NAMES.contains(applet) {
                 continue;
             }
-            if uutils.is_some() && UTILITIES.contains(applet) {
+            if owned_by_family(uutils, applet) {
                 continue;
             }
             archive.symlink(&format!("bin/{applet}"), "busybox")?;
@@ -472,12 +531,12 @@ fn build_with_shell(
         // boot check carries none and its archive stays the bytes it was. The
         // links are absolute, unlike busybox's, because they point out of the
         // directory they are in.
-        if let Some(uutils) = uutils {
-            archive.file(UUTILS_PATH, 0o755, uutils)?;
-            // Relative, as busybox's are, now that the links are in the
-            // directory the program is in.
-            for utility in UTILITIES {
-                archive.symlink(&format!("{UUTILS_DIR}/{utility}"), "coreutils")?;
+        for (name, bytes) in uutils {
+            archive.file(&format!("{UUTILS_DIR}/{name}"), 0o755, bytes)?;
+            // Relative, as busybox's are: the links are in the directory the
+            // program is in.
+            for link in links_of(name) {
+                archive.symlink(&format!("{UUTILS_DIR}/{link}"), name)?;
             }
         }
     }
@@ -593,8 +652,8 @@ mod tests {
 
     #[test]
     fn zinc_goes_in_bin_as_zinc_and_zsh_only_beside_a_program() {
-        let with = build_with_shell(Some(b"program"), &[], Some(b"shell"), None, &[]).unwrap();
-        let without = build_with_shell(None, &[], Some(b"shell"), None, &[]).unwrap();
+        let with = build_with_shell(Some(b"program"), &[], Some(b"shell"), &[], &[]).unwrap();
+        let without = build_with_shell(None, &[], Some(b"shell"), &[], &[]).unwrap();
         assert!(
             with.windows(ZINC_PATH.len())
                 .any(|w| w == ZINC_PATH.as_bytes()),
@@ -614,7 +673,7 @@ mod tests {
 
     #[test]
     fn sh_is_zinc_when_zinc_is_there_and_busybox_when_it_is_not() {
-        let with = build_with_shell(Some(b"program"), &[], Some(b"shell"), None, &[]).unwrap();
+        let with = build_with_shell(Some(b"program"), &[], Some(b"shell"), &[], &[]).unwrap();
         let archive = ferrix_cpio::Archive::new(&with);
         for name in ZINC_NAMES {
             assert_eq!(
@@ -634,7 +693,7 @@ mod tests {
         );
         // And with no zinc in the image, `sh` is busybox's again, so an image
         // built for an architecture zinc is not compiled for still has one.
-        let without = build_with_shell(Some(b"program"), &[], None, None, &[]).unwrap();
+        let without = build_with_shell(Some(b"program"), &[], None, &[], &[]).unwrap();
         assert_eq!(
             ferrix_cpio::Archive::new(&without)
                 .find("bin/sh")
@@ -647,11 +706,35 @@ mod tests {
 
     #[test]
     fn uutils_owns_the_names_it_provides_and_busybox_keeps_the_rest() {
-        let with = build_with_shell(Some(b"program"), &[], None, Some(b"utilities"), &[]).unwrap();
+        let carried: Vec<(&str, Vec<u8>)> = FAMILY
+            .iter()
+            .map(|binary| (binary.name, binary.name.as_bytes().to_vec()))
+            .collect();
+        let with = build_with_shell(Some(b"program"), &[], None, &carried, &[]).unwrap();
         let archive = ferrix_cpio::Archive::new(&with);
-        let found = archive.find(UUTILS_PATH).unwrap().unwrap();
-        assert_eq!(found.data, b"utilities");
-        assert_eq!(found.mode & 0o777, 0o755, "it has to be runnable");
+
+        // Every program in the family is carried under its own name, and each
+        // of its own links points at it.
+        for binary in FAMILY {
+            let path = format!("bin/{}", binary.name);
+            let found = archive
+                .find(&path)
+                .unwrap()
+                .unwrap_or_else(|| panic!("{path} is carried"));
+            assert_eq!(found.data, binary.name.as_bytes());
+            assert_eq!(found.mode & 0o777, 0o755, "{path} has to be runnable");
+            for link in binary.links {
+                assert_eq!(
+                    archive
+                        .find(&format!("bin/{link}"))
+                        .unwrap()
+                        .unwrap_or_else(|| panic!("bin/{link} is linked"))
+                        .symlink_target(),
+                    Some(binary.name),
+                    "bin/{link}"
+                );
+            }
+        }
 
         // Every name uutils provides is a link to it.
         for utility in ["ls", "cat", "uname", "wc"] {
@@ -681,7 +764,7 @@ mod tests {
 
         // Without uutils the name is busybox's, so an image for an
         // architecture without it still has an `ls`.
-        let no_uutils = build_with_shell(Some(b"program"), &[], None, None, &[]).unwrap();
+        let no_uutils = build_with_shell(Some(b"program"), &[], None, &[], &[]).unwrap();
         assert_eq!(
             ferrix_cpio::Archive::new(&no_uutils)
                 .find("bin/ls")
@@ -693,10 +776,10 @@ mod tests {
 
         // And without it the archive is the one it was, which is what keeps
         // the boot check's bytes the same.
-        let without = build_with_shell(Some(b"program"), &[], None, None, &[]).unwrap();
+        let without = build_with_shell(Some(b"program"), &[], None, &[], &[]).unwrap();
         assert!(
             ferrix_cpio::Archive::new(&without)
-                .find(UUTILS_PATH)
+                .find("bin/coreutils")
                 .unwrap()
                 .is_none()
         );
@@ -731,7 +814,7 @@ mod tests {
                 content: ports::Content::Link("../usr/bin/git".to_owned()),
             },
         ];
-        let bytes = build_with_shell(Some(b"program"), &[], None, None, &files).unwrap();
+        let bytes = build_with_shell(Some(b"program"), &[], None, &[], &files).unwrap();
         let archive = ferrix_cpio::Archive::new(&bytes);
         assert_eq!(archive.find("bin/curl").unwrap().unwrap().data, b"curl");
         let bundle = archive
@@ -755,7 +838,7 @@ mod tests {
         // all, so what kept its bytes the same was the empty list and never
         // the branch. `cargo xtask test-compositor` boots the compositor as
         // init with no busybox, and its clients have to be somewhere.
-        let without = build_with_shell(None, &[], None, None, &files).unwrap();
+        let without = build_with_shell(None, &[], None, &[], &files).unwrap();
         assert_eq!(
             ferrix_cpio::Archive::new(&without)
                 .find("bin/curl")

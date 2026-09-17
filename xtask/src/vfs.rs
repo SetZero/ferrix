@@ -825,7 +825,10 @@ pub(crate) const SHELL: &[Command] = &[
 ///   thing that does not work in a static binary on the `-gnu` target;
 /// * a file read through the btrfs fixture the boot check mounted, by the same
 ///   command an applet above runs, so the two implementations answer the same
-///   question about the same file.
+///   question about the same file;
+/// * `find` and `xargs`, from findutils, which builds a program per utility
+///   rather than a multicall binary, so these two prove the other shape;
+/// * `diff` and `cmp`, from diffutils, which is a multicall binary again.
 ///
 /// Each is an `sh -c` script, because the kernel starts every command with
 /// `/bin/busybox` (`kernel/src/init.rs`): the shell is what forks and execs
@@ -846,6 +849,32 @@ pub(crate) const UTILITIES: &[Command] = &[
         argv: &["sh", "-c", "wc -c < /mnt/big.txt; exit 5"],
         status: 5,
         expect: Expect::Lines(&["140000"]),
+    },
+    // findutils, which builds one program per utility rather than a multicall
+    // binary: `find` walks the directory the image's own files are in, and
+    // `xargs` reads a pipe and builds a command line from it.
+    Command {
+        argv: &["sh", "-c", "find /etc -name passwd; exit 6"],
+        status: 6,
+        expect: Expect::Lines(&["/etc/passwd"]),
+    },
+    Command {
+        argv: &["sh", "-c", "echo hello | xargs echo said; exit 7"],
+        status: 7,
+        expect: Expect::Lines(&["said hello"]),
+    },
+    // diffutils, a multicall binary answering to `diff` and `cmp`. Both are
+    // asked about the same two one-line files, so a kernel that lost a write
+    // fails them together rather than one of them being a puzzle.
+    Command {
+        argv: &[
+            "sh",
+            "-c",
+            "echo one > /tmp/d1; echo two > /tmp/d2; diff /tmp/d1 /tmp/d2; cmp /tmp/d1 /tmp/d2; exit 8",
+        ],
+        status: 8,
+        // `cmp` says "char" where GNU's says "byte"; recorded as it prints.
+        expect: Expect::Shaped(&["1c1", "< one", "> two", "*differ: char 1, line 1"]),
     },
 ];
 

@@ -205,15 +205,14 @@ was, and what it needs shows up at run time rather than at link time.
 | uutils/coreutils | 0.9.0 | the 105: `cat ls cp mv rm mkdir chmod chown stat head tail wc od dd ln readlink truncate touch env id printf echo test sleep seq sort uniq cut tr df du mknod mkfifo tty stty uname hostname nproc kill nohup timeout base64 md5sum sha256sum shuf split comm paste expr factor yes tee sync chroot nice pwd true false …` |
 | uutils/findutils | 0.9.1 | `find`, `xargs`, `locate`, `updatedb` |
 | uutils/diffutils | v0.5.0 | `diff`, `cmp` |
-| uutils/procps | 0.0.1 | `ps`, `top`, `free`, `pwdx`, `w`, `watch`, `sysctl`, `pgrep`, `pkill`, `pidof`, `pmap`, `vmstat`, `slabtop`, `tload` |
-| uutils/util-linux | 0.0.1 | `dmesg`, `last`, `mountpoint`, `rev`, `setsid`, `hexdump`, `lscpu`, `blockdev`, `renice`, `cal`, `mesg`, `nologin`, `uuidgen` |
+| ~~uutils/procps~~ | — | **Nothing. It does not build here** — §6a |
+| ~~uutils/util-linux~~ | — | **Nothing. It does not build here** — §6a |
 | ports, against ferrousli | as pinned | `curl`, `btop`, and **`git`**, the new one the customer named |
 
-`procps` covers more of `test-vfs` than was expected: `sysctl`, `top`, `pwdx`
-and `w` are all there, and they are four of the applets the `/proc` checks
-were written around. Both `procps` and `util-linux` are at `0.0.1` and will
-disappoint somewhere; where they do, the row says so rather than the gate
-being deleted.
+**That table was wrong when it was written, and §6a says how.** The rows for
+`procps` and `util-linux` listed what their *main branches* have; what they
+have released is 0.0.1 in both cases, and neither the release nor main builds
+for this target. `sysctl`, `ps` and `top` stay busybox's.
 
 ## 5. What nobody provides, and what that costs
 
@@ -245,15 +244,17 @@ its table row in `docs/BACKLOG.md` names.
 | S3 | **Done.** Every image that carries a program carries `/bin/coreutils`, with each of the 106 utility names linked in `/usr/bin` — not `/bin`, which stays busybox's, so no gate runs a different program than it did. Three `test-vfs` rows, reported as a group of their own, run uutils on Ferrix for the first time | 3 | the three rows pass on Ferrix: the multicall form, the symlink dispatch, and a file read |
 | S4 | **Done, and it did split.** Three commits, each green: init resolves a command's program through `/bin` instead of always running busybox; `/bin/sh` is zinc; the hundred names uutils provides are uutils'. busybox keeps what neither has | 13 → **6** | the whole matrix; `test-vfs` gained a group that says which shell `/bin/sh` is |
 | S5 | *Folded into S4, and nearly free.* One row of eighteen needed re-recording | — | — |
-| S6 | findutils, diffutils, procps and util-linux built and installed the same way | 5 | `test-vfs`'s rows that need them |
-| S7 | `git` as a ferrousli port, beside `curl` and `btop` | 8 | it clones and commits on Ferrix |
+| S6 | **Done, in half.** findutils and diffutils are built and installed the same way, and six programs ride in the image where one did. procps and util-linux do not build for this target at all, at their release or at their main branch — §6a | 5 → 4 | `test-vfs` runs `find`, `xargs`, `diff` and `cmp` on Ferrix |
+| S7 | **Done by another session** (os-12, 2026-09-17): git 2.55.0 over a new `zlib` port and curl's libcurl, without Perl, Python, Tcl, gettext or iconv | 8 → 12 | landed gated by the whole matrix |
 | S8 | busybox deleted: `tools/busybox/`, `xtask/src/busybox.rs`, the UAPI headers, ferrousli's three `<linux/*>` pass-throughs, the applet list | 3 | the whole matrix, once §5 is empty |
 
-S1 to S5 have landed. uutils and zinc **are** the userland now, not
-passengers in the image. What is left is S6 (the rest of the family), S7
-(`git`), and S8, which is blocked on §5 and is not scheduled.
+S1 to S7 have landed. uutils and zinc **are** the userland now, not
+passengers in the image, and git builds against ferrousli. What is left is
+S8, which deletes busybox, and it is blocked on §5: `test-net` has no
+replacement for busybox's networking, and neither has `grep`, `sed`, `awk`,
+`tar`, `mount` or `su`.
 
-**13 points left of S6-S7.**
+**Nothing left but S8's 3 points, and those wait on §5.**
 
 S4 was quoted at 13 and cost about 6, for one reason worth writing down: I
 said it could not be split, and it split into three. The claim that held
@@ -264,6 +265,29 @@ utilities are two flips, each self-consistent.
 **Total, S1–S7: 42 points**, of which S1, S2 and S3 are done. S8 is 3 more, whenever §5 empties.
 
 S3 was quoted at 2 and cost 3: the two `test-vfs` groups became three, which the runner and the judging both had to agree about, per architecture.
+
+## 6a. procps and util-linux do not build here
+
+Four projects were named in D2 and two of them are in the image. The other two
+were tried at their release and at their main branch, and neither builds:
+
+| | 0.0.1, the only release | `main` |
+|---|---|---|
+| procps | its pinned `time` does not compile on this toolchain; unpinning it pulls a `uucore` whose API its own code no longer matches | `uu_top`'s build script wants **libsystemd** through `pkg-config`, and refuses to cross-compile |
+| util-linux | the same shape of dependency rot | `blockdev` and `fsfreeze` pass `ioctl` a request of the type glibc declares, and musl declares a different one, so neither compiles for a musl target |
+
+So this is not a choice about how to pin them. Two of the four are blocked
+upstream.
+
+What it would take, if the utilities are wanted: for procps, building the
+multicall binary with `top` excluded by feature, and pinning a main commit
+rather than the release; for util-linux, the same with `blockdev` and
+`fsfreeze` excluded. Both then run on unreleased code, and both give up the
+utility that made them interesting — `top` for procps, and for util-linux the
+two that touch the kernel directly. `sysctl`, `ps` and `top` are the ones
+`test-vfs` would have moved off busybox, and they are exactly what is missing.
+Perhaps 5 points, and worth doing when either project releases again rather
+than now. The backlog has the row.
 
 ## 7. Risks
 

@@ -50,25 +50,35 @@ cc -static -no-pie -nostdlib -nostdinc -isystem include \
    -o prog path/to/crt1.o prog.c target/debug/libferrousli.a
 ```
 
-## uutils/coreutils
+## The uutils family
 
-`tools/uutils/build.sh` builds uutils/coreutils 0.9.0 against this library, as
-one static x86-64 multicall program: Rust's own `std` and unwinder for the
+`tools/uutils/build.sh` builds uutils/coreutils 0.9.0, findutils 0.9.1 and
+diffutils v0.5.0 against this library, as six static x86-64 programs: Rust's own `std` and unwinder for the
 `x86_64-unknown-linux-musl` target, and `libferrousli.a` in the C library's
 place. On Windows, `tools/uutils/build-windows.sh` builds the same program
 without WSL, with clang for the one C dependency in uutils' tree and lld for
 the link. `tools/uutils/sources.sh` pins the release by checksum and says why
 the target is the musl one when this library is closer to glibc.
 
-`cargo xtask uutils` runs whichever script the host needs. The binary installs
-as `x86_64/coreutils` under `~/.local/share/ferrix/uutils/ferrousli` (or
+`cargo xtask uutils` runs whichever script the host needs. The binaries
+install under `x86_64/bin/` in `~/.local/share/ferrix/uutils/ferrousli` (or
 `$FERRIX_UUTILS`), and a link that fails writes `undefined-symbols.txt` beside
-it, as busybox's does. It linked with nothing missing from this library on
-2026-09-17.
+them, as busybox's does. All six linked with nothing missing from this library
+on 2026-09-18. coreutils and diffutils are multicall binaries, which pick
+their utility from `argv[0]`; findutils builds one program per utility.
 
-These are the utilities that replace busybox's. `../docs/UUTILS.md` is the
-plan: the uutils family for the utilities, zinc for the shell, and the list of
-what nobody provides yet.
+One thing this build does that the C ports do not: it links against a copy of
+`libferrousli.a` whose `rust_begin_unwind` has been weakened. This library is
+Rust, and a `no_std` one must define a `#[panic_handler]`; a program that
+brings `std` defines it too, and two strong definitions do not link. It is the
+same clash `rust_eh_personality` has, which `src/lib.rs` settles by defining
+it weak in assembly, and which stable Rust cannot express for a
+`#[panic_handler]`. The C ports link the library itself, untouched.
+
+These are the utilities that replace busybox's, and since 2026-09-18 they are
+what `/bin` holds: every name uutils provides is uutils', `/bin/sh` is zinc,
+and busybox keeps the rest. `../docs/UUTILS.md` is the plan, including §6a on
+the two projects of the family that do not build for this target.
 
 ## busybox
 

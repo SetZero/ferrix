@@ -444,7 +444,7 @@ pub(crate) fn test_vfs(arch: Arch, image: &Path, kernel: &Path, args: &Args) -> 
             utilities,
             commands.len() + applets.len() + shell.len(),
             "uutils commands",
-            "uutils/coreutils ran on Ferrix",
+            "the uutils family ran on Ferrix",
         ),
     ];
     let mut failures = Vec::new();

@@ -345,7 +345,7 @@ fn test_vfs(args: &Args) -> Result<()> {
             Some(&program),
             &natives,
             shell.as_deref(),
-            utilities.as_deref(),
+            &utilities,
             &ports::installed(arch)?,
         )?;
         let image = fat::write_image_with(arch, &loader, &kernel, &initramfs, None)?;
@@ -453,7 +453,7 @@ fn build_image(arch: Arch, args: &Args) -> Result<(PathBuf, PathBuf)> {
         Some(&program),
         &natives,
         shell.as_deref(),
-        utilities.as_deref(),
+        &utilities,
         &ports::installed(arch)?,
     )?;
     let image = fat::write_image_with(arch, &loader, &kernel, &initramfs, image_cmdline(args))?;
@@ -481,7 +481,7 @@ fn build_board_files(arch: Arch, args: &Args) -> Result<(PathBuf, PathBuf, Vec<u
         Some(&program),
         &natives,
         shell.as_deref(),
-        utilities.as_deref(),
+        &utilities,
         &ports::installed(arch)?,
     )?;
     Ok((loader, kernel, initramfs))

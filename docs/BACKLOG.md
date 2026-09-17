@@ -296,6 +296,22 @@ nobody has it yet.
 
 ---
 
+## procps and util-linux are the two of the family that do not build
+
+D2 named four uutils projects. coreutils, findutils and diffutils are in the
+image; procps and util-linux are not, and it is not a pinning choice. Their
+only release, 0.0.1, does not compile on this toolchain -- dependency rot --
+and their main branches do not compile for this target either: procps' `top`
+wants libsystemd through pkg-config and refuses to cross-compile, and
+util-linux's `blockdev` and `fsfreeze` pass `ioctl` the request type glibc
+declares, which is not musl's.
+
+They hold what `test-vfs` would most like to move off busybox: `sysctl`, `ps`
+and `top`. Getting them would mean pinning main commits and excluding by
+feature exactly the utilities that make them worth having. 5 points, and
+better spent when either project releases again. `docs/UUTILS.md` §6a has the
+detail.
+
 ## `splice` and `copy_file_range` are answered `ENOSYS`, and uutils asks
 
 uutils/coreutils reaches for both before falling back: `cat` and `cp` take a
