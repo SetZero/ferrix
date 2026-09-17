@@ -2214,14 +2214,19 @@ fn a_pointer_is_told_where_it_is_and_what_was_clicked() {
     let clicked = client
         .pointer_button(8, 0x110, true)
         .expect("a pointer to send it to");
+    // One wheel click up, which the device layer reports as a whole
+    // `WHEEL_STEP` of surface distance.
     client.pointer_axis(
         9,
         core::wl_pointer::axis::VERTICAL_SCROLL,
-        Fixed::from_int(-1),
+        Fixed::from_int(-15),
     );
     client.pointer_frame();
     let events = sent(&mut client);
 
+    // This client bound `wl_seat` at 7, so it hears the scroll the way a
+    // client of that version does: what kind of scroll it was, how many
+    // clicks, and then the distance.
     let opcodes: Vec<u16> = events.iter().map(|event| event.opcode).collect();
     assert_eq!(
         opcodes,
@@ -2229,9 +2234,23 @@ fn a_pointer_is_told_where_it_is_and_what_was_clicked() {
             core::wl_pointer::event::ENTER,
             core::wl_pointer::event::MOTION,
             core::wl_pointer::event::BUTTON,
+            core::wl_pointer::event::AXIS_SOURCE,
+            core::wl_pointer::event::AXIS_DISCRETE,
             core::wl_pointer::event::AXIS,
             core::wl_pointer::event::FRAME,
         ]
+    );
+    assert_eq!(
+        events[3].args,
+        [format!("Uint({})", core::wl_pointer::axis_source::WHEEL)]
+    );
+    assert_eq!(
+        events[4].args,
+        [
+            format!("Uint({})", core::wl_pointer::axis::VERTICAL_SCROLL),
+            "Int(-1)".to_owned(),
+        ],
+        "one click, in the wheel's own units"
     );
     assert!(events.iter().all(|event| event.sender == ObjectId(11)));
     assert_eq!(
@@ -2257,6 +2276,87 @@ fn a_pointer_is_told_where_it_is_and_what_was_clicked() {
     let events = sent(&mut client);
     assert_eq!(events[0].opcode, core::wl_pointer::event::LEAVE);
     assert_eq!(events[0].args[0], format!("Uint({left})"));
+}
+
+/// A client on a modern `wl_seat` hears a scroll the modern way.
+///
+/// `axis_discrete` was deprecated at version 8 and `axis_value120` put in
+/// its place, and version 9 added `axis_relative_direction`. A client that
+/// bound 9 and heard `axis_discrete` would scroll by nothing, because it
+/// has stopped listening for that event; one that heard neither would
+/// scroll smoothly where a wheel should click. So exactly which of the two
+/// goes out is the whole of whether a wheel works, and it is decided per
+/// bound pointer rather than per compositor.
+#[test]
+fn a_modern_pointer_hears_the_scroll_in_value120() {
+    let mut globals = Globals::new();
+    for (interface, version, role) in [
+        (&core::WL_COMPOSITOR, 6, Role::Compositor),
+        (&core::WL_SEAT, 9, Role::Seat),
+    ] {
+        assert!(globals.add(interface, version, role).is_some());
+    }
+    let mut client = Client::new(globals);
+    client.set_seat_capabilities(core::wl_seat::capability::POINTER);
+    let mut bytes = get_registry(2);
+    bytes.extend(bind(2, 1, "wl_compositor", 6, 4));
+    bytes.extend(bind(2, 2, "wl_seat", 9, 7));
+    bytes.extend(request(
+        7,
+        core::wl_seat::request::GET_POINTER,
+        &[ArgType::NewId],
+        &[Arg::NewId(ObjectId(11))],
+    ));
+    assert_eq!(client.read(&bytes, &[]), bytes.len());
+    assert_eq!(client.fatal(), None);
+    let _ = sent(&mut client);
+
+    let _ = client.pointer_enter(ObjectId(3), Fixed::from_int(1), Fixed::from_int(1));
+    let _ = sent(&mut client);
+    // Two clicks down, which is two whole `WHEEL_STEP`s of distance.
+    client.pointer_axis(
+        9,
+        core::wl_pointer::axis::VERTICAL_SCROLL,
+        Fixed::from_int(30),
+    );
+    let events = sent(&mut client);
+    let opcodes: Vec<u16> = events.iter().map(|event| event.opcode).collect();
+    assert_eq!(
+        opcodes,
+        [
+            core::wl_pointer::event::AXIS_SOURCE,
+            core::wl_pointer::event::AXIS_RELATIVE_DIRECTION,
+            core::wl_pointer::event::AXIS_VALUE120,
+            core::wl_pointer::event::AXIS,
+        ],
+        "no `axis_discrete`, which a client on 9 has stopped listening for"
+    );
+    assert_eq!(
+        events[1].args,
+        [
+            format!("Uint({})", core::wl_pointer::axis::VERTICAL_SCROLL),
+            format!(
+                "Uint({})",
+                core::wl_pointer::axis_relative_direction::IDENTICAL
+            ),
+        ]
+    );
+    assert_eq!(
+        events[2].args,
+        [
+            format!("Uint({})", core::wl_pointer::axis::VERTICAL_SCROLL),
+            "Int(240)".to_owned(),
+        ],
+        "two clicks, in the protocol\'s hundred-and-twentieths"
+    );
+    assert_eq!(
+        events[3].args,
+        [
+            "Uint(9)".to_owned(),
+            format!("Uint({})", core::wl_pointer::axis::VERTICAL_SCROLL),
+            "Fixed(30)".to_owned(),
+        ]
+    );
 }
 
 /// A client that never asked for a keyboard is sent no key, and is told so.

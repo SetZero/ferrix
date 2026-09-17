@@ -860,6 +860,14 @@ struct Capture {
     used: bool,
 }
 
+/// How far one wheel click scrolls, in surface coordinates.
+///
+/// libinput reports a click as 15 units and every toolkit expects that, so
+/// `compositor/hyprix`'s devices turn a wheel notch into this much distance
+/// -- and this is where it is turned back, because `wl_pointer`'s own unit
+/// for a click is 120 and a client reads the two together.
+const WHEEL_STEP: f64 = 15.0;
+
 /// The version of `zwlr_foreign_toplevel_handle_v1` a handle is made at.
 ///
 /// A handle is the server's object, so its version is not inherited from a
@@ -1402,7 +1410,61 @@ impl Client {
 
     /// A scroll: `axis` is `wl_pointer.axis`, `value` the distance.
     pub fn pointer_axis(&mut self, time: u32, axis: u32, value: Fixed) {
+        // A wheel click is `WHEEL_STEP` of surface distance, and the
+        // protocol's own unit for one is 120 -- so the notches are the
+        // distance over the step, which is what `axis_value120` carries and
+        // what a client multiplies its own scroll speed by.
+        let notches = value.to_f64() / WHEEL_STEP;
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "a wheel reports whole clicks, so the product is a small whole number"
+        )]
+        let value120 = (notches * 120.0).round() as i32;
         for pointer in self.objects_with(Role::Pointer) {
+            let version = self.objects.get(pointer).map_or(1, |entry| entry.version);
+            // The order inside a frame is the protocol's: what kind of
+            // scroll it was, which way it runs, how far in the wheel's own
+            // units, and only then the distance.
+            if version >= 5 {
+                let _ = self.out.write(
+                    pointer,
+                    core::wl_pointer::event::AXIS_SOURCE,
+                    &[ArgType::Uint],
+                    &[Arg::Uint(core::wl_pointer::axis_source::WHEEL)],
+                );
+            }
+            if version >= 9 {
+                let _ = self.out.write(
+                    pointer,
+                    core::wl_pointer::event::AXIS_RELATIVE_DIRECTION,
+                    &[ArgType::Uint, ArgType::Uint],
+                    &[
+                        Arg::Uint(axis),
+                        // Nothing here inverts a wheel: `input:natural_scroll`
+                        // is the seat's and is applied before this.
+                        Arg::Uint(core::wl_pointer::axis_relative_direction::IDENTICAL),
+                    ],
+                );
+            }
+            // `axis_discrete` is deprecated from version 8, where
+            // `axis_value120` replaces it: a client on 8 or above ignores
+            // the first and a client below has never heard of the second,
+            // so exactly one of them goes out.
+            if version >= 8 {
+                let _ = self.out.write(
+                    pointer,
+                    core::wl_pointer::event::AXIS_VALUE120,
+                    &[ArgType::Uint, ArgType::Int],
+                    &[Arg::Uint(axis), Arg::Int(value120)],
+                );
+            } else if version >= 5 {
+                let _ = self.out.write(
+                    pointer,
+                    core::wl_pointer::event::AXIS_DISCRETE,
+                    &[ArgType::Uint, ArgType::Int],
+                    &[Arg::Uint(axis), Arg::Int(value120 / 120)],
+                );
+            }
             let _ = self.out.write(
                 pointer,
                 core::wl_pointer::event::AXIS,

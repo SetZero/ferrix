@@ -1,37 +1,44 @@
-//! `layerrule = <rule>, <namespace>`: what a bar, a wallpaper or a
-//! notification is drawn with.
+//! `layerrule = <effect> <value>, match:namespace <namespace>`: what a bar,
+//! a wallpaper or a notification is drawn with.
 //!
-//! The `zwlr_layer_shell_v1` half of `windowrule`. A layer surface has no
-//! title and no application id -- it has a *namespace*, which is what it
-//! passed to `get_layer_surface`, and that is the only thing a rule can
-//! match on. `waybar` calls itself `waybar`, `swaync` calls itself
-//! `swaync-control-center`, and a person writes
+//! The `zwlr_layer_shell_v1` half of `windowrule`, and in Hyprland 0.56 the
+//! same engine reading the same grammar: a list of comma-separated fields,
+//! each a name and a value with a space between them, where a field whose
+//! name begins `match:` is something the surface must be and every other
+//! field is something to do to it
+//! (`CConfigManager::handleLayerrule`):
 //!
 //! ```text
-//! layerrule = blur, waybar
-//! layerrule = ignorealpha 0.5, waybar
-//! layerrule = order 10, notifications
+//! layerrule = blur true, match:namespace waybar
+//! layerrule = ignore_alpha 0.5, match:namespace waybar
+//! layerrule = order 10, match:namespace notifications
 //! ```
 //!
-//! Hyprland matches the namespace as a regular expression, as it does a
-//! window's class, so `^(waybar)$` and `waybar` both work and mean
-//! different things.
+//! A layer surface has no title and no application id -- it has a
+//! *namespace*, which is what it passed to `get_layer_surface`, and that is
+//! the only property Hyprland's `CLayerRule::matches` looks at. Every other
+//! `match:` a person writes is read and skipped, which is what Hyprland
+//! does with it; refusing them here would cost a person a line Hyprland
+//! accepts.
+//!
+//! The namespace is matched as a regular expression, as a window's class
+//! is, so `^(waybar)$` and `waybar` both work and mean different things.
 //!
 //! # What is drawn and what is only recorded
 //!
 //! `blur` is drawn: `compositor/render` blurs what is behind a translucent
 //! layer surface, which is what makes a bar look like Hyprland's.
-//! `abovelock` is drawn: the surface goes over the session lock, which is
+//! `above_lock` is drawn: the surface goes over the session lock, which is
 //! the whole reason an on-screen keyboard can be used on a lock screen.
 //! `order` is obeyed: it decides where a surface goes among its own
 //! layer's.
 //!
 //! The rest are read, kept and not acted on, and each for a reason.
-//! `noanim` has nothing to turn off, because a layer surface is not
-//! animated here. `dimaround`, `xray` and `blurpopups` each need a second
+//! `no_anim` has nothing to turn off, because a layer surface is not
+//! animated here. `dim_around`, `xray` and `blur_popups` each need a second
 //! render pass -- the first two read what is *behind* the frame being
 //! drawn, and this renderer draws one pass over one canvas.
-//! `noscreenshare` needs the same: a screenshot here is the screen's own
+//! `no_screen_share` needs the same: a screenshot here is the screen's own
 //! buffer, and leaving one surface out of it means drawing the frame
 //! again without it. They are parsed rather than refused so that a
 //! person's configuration is not a wall of diagnostics, and recorded so
@@ -42,87 +49,131 @@ use compositor_regex::Regex;
 /// One `layerrule` line.
 #[derive(Clone, Debug)]
 pub struct LayerRule {
-    /// The namespace it matches.
-    pub namespace: Regex,
-    /// What it does.
-    pub effect: LayerEffect,
+    /// The namespace it matches. A line with no `match:namespace` field
+    /// applies to every layer surface, which is what Hyprland's engine
+    /// does with a rule that registered no match for that property.
+    pub namespace: Option<Regex>,
+    /// What it does, in the order the line gave them. One line may carry
+    /// several effects, as `blur true, ignore_alpha 0.2` does.
+    pub effects: Vec<LayerEffect>,
 }
 
 /// What a `layerrule` asks for.
 #[derive(Clone, PartialEq, Debug)]
 pub enum LayerEffect {
-    /// `blur`: what is behind the surface is blurred, which is what makes a
-    /// bar with a translucent background look like Hyprland's.
-    Blur,
-    /// `blurpopups`: the same for the popups it opens.
-    BlurPopups,
-    /// `ignorealpha <fraction>`: a pixel less opaque than this is left out
+    /// `blur <yes-or-no>`: what is behind the surface is blurred, which is
+    /// what makes a bar with a translucent background look like
+    /// Hyprland's.
+    Blur(bool),
+    /// `blur_popups <yes-or-no>`: the same for the popups it opens.
+    BlurPopups(bool),
+    /// `ignore_alpha <fraction>`: a pixel less opaque than this is left out
     /// of what the blur is drawn under.
     IgnoreAlpha(f32),
-    /// `dimaround`: everything else is dimmed while it is up, which is what
-    /// a launcher does.
-    DimAround,
-    /// `xray`: the blur reads the wallpaper rather than what is under it.
-    Xray,
-    /// `noanim`: it does not animate.
-    NoAnim,
+    /// `dim_around <yes-or-no>`: everything else is dimmed while it is up,
+    /// which is what a launcher does.
+    DimAround(bool),
+    /// `xray <yes-or-no>`: the blur reads the wallpaper rather than what is
+    /// under it.
+    Xray(bool),
+    /// `no_anim <yes-or-no>`: it does not animate.
+    NoAnim(bool),
     /// `order <n>`: where it goes among the surfaces of its own layer, a
     /// higher number nearer the top.
     Order(i64),
-    /// `abovelock [true]`: it is drawn over the session lock, which is what
-    /// an on-screen keyboard needs to be usable on a lock screen.
-    AboveLock(bool),
-    /// `noscreenshare`: it is left out of a screenshot.
-    NoScreenShare,
+    /// `above_lock <0-2>`: it is drawn over the session lock, which is what
+    /// an on-screen keyboard needs to be usable on a lock screen. Two
+    /// means it takes input there as well.
+    AboveLock(i64),
+    /// `no_screen_share <yes-or-no>`: it is left out of a screenshot.
+    NoScreenShare(bool),
     /// `animation <style>`: which animation it uses, recorded as written.
     Animation(String),
 }
 
+/// Hyprland's `truthy`: `1`, or a word beginning `true`, `yes` or `on`.
+fn truthy(value: &str) -> bool {
+    if value == "1" {
+        return true;
+    }
+    let lowered = value.to_lowercase();
+    ["true", "yes", "on"]
+        .iter()
+        .any(|word| lowered.starts_with(word))
+}
+
 impl LayerRule {
-    /// Read one `layerrule` line's value: the rule, a comma, the namespace.
+    /// Read one `layerrule =` line's value.
     ///
     /// # Errors
     ///
-    /// A sentence saying what is wrong, which the caller reports as a
-    /// diagnostic and carries on -- one bad line must not cost a person
-    /// their whole configuration.
+    /// Hyprland's own wording for a field it cannot read, which the caller
+    /// reports as a diagnostic and carries on -- one bad line must not cost
+    /// a person their whole configuration.
     pub fn parse(value: &str) -> Result<Self, String> {
-        let (rule, namespace) = value
-            .split_once(',')
-            .ok_or_else(|| format!("invalid layerrule {value}: expected a rule and a namespace"))?;
-        let namespace = Regex::new(namespace.trim())
-            .map_err(|why| format!("invalid layerrule namespace: {why}"))?;
-        let rule = rule.trim();
-        let (word, rest) = rule.split_once(' ').unwrap_or((rule, ""));
-        let rest = rest.trim();
-        let effect = match word {
-            "blur" => LayerEffect::Blur,
-            "blurpopups" => LayerEffect::BlurPopups,
-            "dimaround" => LayerEffect::DimAround,
-            "xray" => LayerEffect::Xray,
-            "noanim" => LayerEffect::NoAnim,
-            "noscreenshare" => LayerEffect::NoScreenShare,
-            "ignorealpha" => LayerEffect::IgnoreAlpha(
-                rest.parse()
-                    .map_err(|_| format!("invalid layerrule ignorealpha {rest}"))?,
-            ),
-            "order" => LayerEffect::Order(
-                rest.parse()
-                    .map_err(|_| format!("invalid layerrule order {rest}"))?,
-            ),
-            // Hyprland's `abovelock` takes an optional boolean, and the
-            // bare word means true.
-            "abovelock" => LayerEffect::AboveLock(!matches!(rest, "0" | "false" | "no")),
-            "animation" => LayerEffect::Animation(rest.to_owned()),
-            other => return Err(format!("invalid layerrule {other}")),
+        let mut namespace = None;
+        let mut effects = Vec::new();
+        for field in value.split(',').map(str::trim).filter(|f| !f.is_empty()) {
+            let (name, rest) = field
+                .split_once(' ')
+                .ok_or_else(|| format!("invalid field {field}: missing a value"))?;
+            let rest = rest.trim();
+            match name.strip_prefix("match:") {
+                Some("namespace") => {
+                    namespace = Some(
+                        Regex::new(rest).map_err(|why| format!("invalid prop namespace: {why}"))?,
+                    );
+                }
+                // Every other property Hyprland knows is accepted and
+                // skipped, because that is what `CLayerRule::matches` does
+                // with one: a layer surface has only a namespace.
+                Some(other) if crate::rule::is_prop(other) => {}
+                Some(other) => return Err(format!("invalid prop {other}")),
+                None => effects.push(Self::effect(name, rest)?),
+            }
+        }
+        if effects.is_empty() {
+            return Err(format!("layerrule: `{value}` does nothing"));
+        }
+        Ok(Self { namespace, effects })
+    }
+
+    /// One effect field.
+    fn effect(name: &str, value: &str) -> Result<LayerEffect, String> {
+        let number = |what: &str| -> Result<i64, String> {
+            value
+                .parse()
+                .map_err(|_| format!("invalid field {name}: `{value}` is not {what}"))
         };
-        Ok(Self { namespace, effect })
+        match name {
+            "blur" => Ok(LayerEffect::Blur(truthy(value))),
+            "blur_popups" => Ok(LayerEffect::BlurPopups(truthy(value))),
+            "dim_around" => Ok(LayerEffect::DimAround(truthy(value))),
+            "xray" => Ok(LayerEffect::Xray(truthy(value))),
+            "no_anim" => Ok(LayerEffect::NoAnim(truthy(value))),
+            "no_screen_share" => Ok(LayerEffect::NoScreenShare(truthy(value))),
+            "ignore_alpha" => {
+                let fraction: f32 = value
+                    .parse()
+                    .map_err(|_| format!("invalid field ignore_alpha: `{value}` is not a share"))?;
+                Ok(LayerEffect::IgnoreAlpha(fraction.clamp(0.0, 1.0)))
+            }
+            "order" => number("a number").map(LayerEffect::Order),
+            // Hyprland clamps this to 0..2 rather than refusing it.
+            "above_lock" => {
+                number("a number").map(|level| LayerEffect::AboveLock(level.clamp(0, 2)))
+            }
+            "animation" => Ok(LayerEffect::Animation(value.to_owned())),
+            other => Err(format!("invalid field type {other}")),
+        }
     }
 
     /// Whether this rule is about a surface with that namespace.
     #[must_use]
     pub fn matches(&self, namespace: &str) -> bool {
-        self.namespace.matches(namespace)
+        self.namespace
+            .as_ref()
+            .is_none_or(|pattern| pattern.matches(namespace))
     }
 }
 
@@ -162,17 +213,19 @@ impl Layered {
             ..Self::default()
         };
         for rule in rules.iter().filter(|rule| rule.matches(namespace)) {
-            match &rule.effect {
-                LayerEffect::Blur => out.blur = true,
-                LayerEffect::BlurPopups => out.blur_popups = true,
-                LayerEffect::IgnoreAlpha(fraction) => out.ignore_alpha = Some(*fraction),
-                LayerEffect::DimAround => out.dim_around = true,
-                LayerEffect::Xray => out.xray = true,
-                LayerEffect::NoAnim => out.animates = false,
-                LayerEffect::Order(order) => out.order = *order,
-                LayerEffect::AboveLock(above) => out.above_lock = *above,
-                LayerEffect::NoScreenShare => out.no_screen_share = true,
-                LayerEffect::Animation(style) => out.animation.clone_from(style),
+            for effect in &rule.effects {
+                match effect {
+                    LayerEffect::Blur(on) => out.blur = *on,
+                    LayerEffect::BlurPopups(on) => out.blur_popups = *on,
+                    LayerEffect::IgnoreAlpha(fraction) => out.ignore_alpha = Some(*fraction),
+                    LayerEffect::DimAround(on) => out.dim_around = *on,
+                    LayerEffect::Xray(on) => out.xray = *on,
+                    LayerEffect::NoAnim(on) => out.animates = !*on,
+                    LayerEffect::Order(order) => out.order = *order,
+                    LayerEffect::AboveLock(level) => out.above_lock = *level > 0,
+                    LayerEffect::NoScreenShare(on) => out.no_screen_share = *on,
+                    LayerEffect::Animation(style) => out.animation.clone_from(style),
+                }
             }
         }
         out

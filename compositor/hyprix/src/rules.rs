@@ -29,6 +29,11 @@ pub struct Rules {
     rules: Vec<WindowRule>,
     /// What a rule gave a window to be drawn with, by window.
     styles: BTreeMap<WindowId, WindowStyle>,
+    /// `suppress_event`: what each window asks for and does not get.
+    suppressed: BTreeMap<WindowId, Vec<String>>,
+    /// Every effect a rule asked for that this compositor does not carry
+    /// out, so that it can be reported rather than silently dropped.
+    unhandled: Vec<String>,
 }
 
 impl Rules {
@@ -44,7 +49,27 @@ impl Rules {
         Self {
             rules,
             styles: BTreeMap::new(),
+            suppressed: BTreeMap::new(),
+            unhandled: Vec::new(),
         }
+    }
+
+    /// Whether a rule told this window it does not get `event`.
+    ///
+    /// `suppress_event maximize` is the one a real configuration writes: a
+    /// tiling compositor decides that, and an application which asks on
+    /// startup would otherwise fight the layout.
+    #[must_use]
+    pub fn suppresses(&self, window: WindowId, event: &str) -> bool {
+        self.suppressed
+            .get(&window)
+            .is_some_and(|events| events.iter().any(|held| held == event))
+    }
+
+    /// Every effect a rule asked for that is not carried out here.
+    #[must_use]
+    pub fn unhandled(&self) -> &[String] {
+        &self.unhandled
     }
 
     /// What each window is drawn with, for the frame.
@@ -92,6 +117,7 @@ impl Rules {
     /// Forget a window that has gone.
     pub fn window_gone(&mut self, window: WindowId) {
         let _ = self.styles.remove(&window);
+        let _ = self.suppressed.remove(&window);
     }
 
     /// How many rules there are.
@@ -141,6 +167,8 @@ impl Rules {
         let mut size = None;
         let mut position = None;
         let mut centred = false;
+        let mut pin = false;
+        let mut pseudo = false;
         let mut changed = false;
         // What the window is drawn with, which starts as what every window
         // is drawn with.
@@ -212,6 +240,30 @@ impl Rules {
                         changed = true;
                     }
                 }
+                // Both are acted on after the floating is settled: `pin`
+                // only takes on a floating window, and a line that says
+                // `float, pin` means the two in that order however they
+                // are written.
+                Effect::Pin => pin = true,
+                Effect::Pseudo => pseudo = true,
+                Effect::Tag(name) => {
+                    // `+` so that a rule applied twice does not turn the
+                    // tag off again, which a bare name would.
+                    if let Ok(made) = state.dispatch_str("tagwindow", &format!("+{name}")) {
+                        changed |= !made.is_empty();
+                    }
+                }
+                Effect::Suppress(events) => {
+                    self.suppressed
+                        .entry(window)
+                        .or_default()
+                        .extend(events.iter().cloned());
+                }
+                // Read, kept and not carried out; `unhandled` says which,
+                // so `hyprctl` can report what a rule asked for.
+                Effect::Unhandled(name) => {
+                    self.unhandled.push(name.clone());
+                }
             }
         }
         if styled {
@@ -231,6 +283,29 @@ impl Rules {
             && let Ok(made) = state.dispatch_str("togglefloating", "")
         {
             changed |= !made.is_empty();
+        }
+        // `pin` and `pseudo` are the focused window's dispatchers, and the
+        // window a rule is about need not be the focused one -- a rule
+        // fires when a window maps, and a window may map without taking
+        // the focus. So the focus goes there and comes back, which is what
+        // the modal path does for the same reason.
+        if (pin && !state.is_pinned(window)) || (pseudo && !state.is_pseudo(window)) {
+            let was = state.focused_window();
+            if state.focus_window(window).is_ok() {
+                if pin && !state.is_pinned(window) {
+                    changed |= state
+                        .dispatch_str("pin", "")
+                        .is_ok_and(|made| !made.is_empty());
+                }
+                if pseudo && !state.is_pseudo(window) {
+                    changed |= state
+                        .dispatch_str("pseudo", "")
+                        .is_ok_and(|made| !made.is_empty());
+                }
+                if let Some(was) = was {
+                    let _ = state.focus_window(was);
+                }
+            }
         }
         changed
     }
@@ -268,4 +343,84 @@ fn rectangle(
         })
     };
     Rect::new(x, y, width.max(1), height.max(1))
+}
+
+#[cfg(test)]
+mod tests {
+    use compositor_config::{Config, NoSources, parse};
+    use compositor_layout::{Monitor, MonitorId, Rect, State, WindowId};
+
+    use super::Rules;
+
+    fn config(text: &str) -> Config {
+        let parsed = parse("t.conf", text, &mut NoSources);
+        assert_eq!(parsed.diagnostics, [], "the test configuration parses");
+        parsed.config
+    }
+
+    /// One 1920x1080 monitor with one window on it.
+    fn state(config: &Config) -> State {
+        let mut state = State::from_config(config);
+        let _changes = state
+            .add_monitor(Monitor {
+                scale: 1.0,
+                name: "Virtual-1".to_owned(),
+                id: MonitorId(1),
+                rect: Rect::new(0, 0, 1920, 1080),
+                reserved: compositor_config::Gaps::all(0),
+            })
+            .expect("a monitor");
+        let _opened = state.open_window(WindowId(1)).expect("a window");
+        state
+    }
+
+    fn what<'a>(class: &'a str) -> compositor_config::Window<'a> {
+        compositor_config::Window {
+            class,
+            initial_class: class,
+            ..compositor_config::Window::default()
+        }
+    }
+
+    /// `suppress_event maximize` is recorded against the window, which is
+    /// how the compositor knows to ignore what the client asks for.
+    ///
+    /// `nazuna`'s first `windowrule` line is exactly this, against every
+    /// class, and it is only worth writing because the compositor obeys
+    /// `set_maximized` by default.
+    #[test]
+    fn suppress_event_is_recorded_against_the_window() {
+        let config = config("windowrule = suppress_event maximize, match:class .*\n");
+        let mut state = state(&config);
+        let mut rules = Rules::new(&config, &mut |_| {});
+        assert_eq!(rules.len(), 1);
+        let _changed = rules.apply(WindowId(1), &what("foot"), &mut state, &mut |_| {});
+        assert!(rules.suppresses(WindowId(1), "maximize"));
+        assert!(!rules.suppresses(WindowId(1), "fullscreen"));
+        // And it is forgotten with the window, rather than being handed to
+        // whatever window id comes next.
+        rules.window_gone(WindowId(1));
+        assert!(!rules.suppresses(WindowId(1), "maximize"));
+    }
+
+    /// `pin` and `tag` reach the layout, and an effect this compositor does
+    /// not carry out is kept by name rather than losing the rest of the
+    /// line.
+    #[test]
+    fn pin_and_tag_are_carried_out_and_the_rest_is_kept() {
+        // `pin` takes only on a floating window, here as in Hyprland,
+        // so the rule says both -- and in the order the effects are
+        // written, which the line reverses on purpose.
+        let config = config(
+            "windowrule = pin, float, match:class ^(foot)$\n\
+             windowrule = tag music, no_shortcuts_inhibit true, match:class ^(foot)$\n",
+        );
+        let mut state = state(&config);
+        let mut rules = Rules::new(&config, &mut |_| {});
+        assert_eq!(rules.len(), 2);
+        let _changed = rules.apply(WindowId(1), &what("foot"), &mut state, &mut |_| {});
+        assert!(state.is_pinned(WindowId(1)), "the rule pinned it");
+        assert_eq!(state.tags_of(WindowId(1)), ["music"]);
+        assert_eq!(rules.unhandled(), ["no_shortcuts_inhibit"]);
+    }
 }

@@ -318,7 +318,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
     // sockets, because it connects to one as soon as it runs.
     let mut plugins = crate::plugins::Plugins::new();
     for command in &config.plugins {
-        match start(command, listener.path()) {
+        match start(command, listener.path(), options.instance.as_deref()) {
             Ok(pid) => report(&format!("hyprix: plugin {command} started as {pid}")),
             Err(error) => report(&format!("hyprix: plugin {command} did not start: {error}")),
         }
@@ -334,7 +334,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
         .map(String::as_str)
         .chain(options.exec.iter().map(String::as_str))
     {
-        match start(command, listener.path()) {
+        match start(command, listener.path(), options.instance.as_deref()) {
             Ok(pid) => report(&format!("hyprix: started {command} as {pid}")),
             // A program that will not start is the person's to fix, not a
             // reason to have no compositor; Hyprland logs it and carries on.
@@ -561,6 +561,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                     slots: &mut slots,
                     sources: &sources,
                     socket: listener.path(),
+                    instance: options.instance.as_deref(),
                     seat: &mut seat,
                     plugins: &mut plugins,
                     rules: &mut window_rules,
@@ -732,6 +733,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                 slots: &mut slots,
                 sources: &sources,
                 socket: listener.path(),
+                instance: options.instance.as_deref(),
                 seat: &mut seat,
                 plugins: &mut plugins,
                 rules: &mut window_rules,
@@ -1207,6 +1209,10 @@ fn serve(
     // The windows `xdg_dialog_v1` called modal in this pass, which the
     // layout floats once the client's own borrow is over.
     let mut modals: Vec<(WindowId, bool)> = Vec::new();
+    // What a window asked `xdg_toplevel` for in this pass: the last
+    // `set_fullscreen`/`set_maximized` state each one is in, acted on once
+    // the client's own borrow is over.
+    let mut asked_states: Vec<(WindowId, bool, bool)> = Vec::new();
     // Whether this client has just become a bar, which is owed the windows
     // there already are before the roundtrip it sent after binding comes
     // back.
@@ -1530,6 +1536,20 @@ fn serve(
                 // look past, so it floats: Hyprland's own `windowrule =
                 // float, xdg_dialog` says the same thing by hand, and this
                 // is the protocol saying it for itself.
+                // A client asking to be fullscreen or maximized. Hyprland
+                // does both, and `windowrule = suppress_event` is how a
+                // person turns one off -- which is only worth writing
+                // because the compositor obeys it by default.
+                Event::ToplevelAsked {
+                    toplevel,
+                    maximized,
+                    fullscreen,
+                } => {
+                    if let Some((_, window)) = slot.windows.iter().find(|(top, _)| *top == toplevel)
+                    {
+                        asked_states.push((*window, maximized, fullscreen));
+                    }
+                }
                 Event::ToplevelModal { toplevel, modal } => {
                     if let Some((_, window)) = slot.windows.iter().find(|(top, _)| *top == toplevel)
                     {
@@ -1712,6 +1732,45 @@ fn serve(
             at.0, at.1
         ));
     }
+    for (window, maximized, fullscreen) in asked_states {
+        // Hyprland's fullscreen modes: 0 is the whole screen, 1 is
+        // maximized inside the gaps. A window asking for both gets the
+        // larger, as Hyprland's `set_fullscreen` does.
+        let wanted = if fullscreen {
+            Some("0")
+        } else if maximized {
+            Some("1")
+        } else {
+            None
+        };
+        let event = if fullscreen { "fullscreen" } else { "maximize" };
+        if wanted.is_some() && rules.suppresses(window, event) {
+            report(&format!(
+                "hyprix: window {} asked for {event}, which a windowrule suppressed",
+                window.0
+            ));
+            continue;
+        }
+        let holds = state
+            .workspace_of(window)
+            .and_then(|workspace| state.fullscreen(workspace))
+            .is_some_and(|(id, _)| id == window);
+        // `fullscreen <mode>` turns it on and off again, so a window
+        // already where it asked to be is left alone.
+        let mode = match wanted {
+            Some(mode) if !holds => mode,
+            None if holds => "0",
+            _ => continue,
+        };
+        let was = state.focused_window();
+        if state.focus_window(window).is_ok() {
+            let made = state.dispatch_str("fullscreen", mode);
+            changed |= made.is_ok_and(|changes| !changes.is_empty());
+            if let Some(was) = was {
+                let _ = state.focus_window(was);
+            }
+        }
+    }
     for (window, modal) in modals {
         // `setfloating` and `settiled` act on the focused window, and this
         // one need not be focused; the layout's own call is what a rule
@@ -1780,6 +1839,30 @@ fn apply_rules(
     let (title, class) = named.map_or((String::new(), String::new()), |top| {
         (top.title.clone(), top.app_id.clone())
     });
+    let modal = named.is_some_and(|top| top.modal);
+    let xdg_tag = named.map(|top| top.tag.clone()).unwrap_or_default();
+    // `wp_content_type_v1` on the window's own surface, by the names
+    // Hyprland's `match:content` uses.
+    let content = named
+        .and_then(|top| client.surface(top.surface))
+        .map_or("none", |surface| {
+            use compositor_protocol::content_type::wp_content_type_v1::r#type;
+            match surface.current.content {
+                r#type::PHOTO => "photo",
+                r#type::VIDEO => "video",
+                r#type::GAME => "game",
+                _ => "none",
+            }
+        });
+    let fullscreen = state
+        .workspace_of(window)
+        .and_then(|workspace| state.fullscreen(workspace))
+        .is_some_and(|(id, _)| id == window);
+    let workspace = state
+        .workspace_of(window)
+        .map(|workspace| state.workspace_name(workspace))
+        .unwrap_or_default();
+    let tags: Vec<String> = state.tags_of(window).to_vec();
     let what = compositor_config::Window {
         class: &class,
         title: &title,
@@ -1788,11 +1871,22 @@ fn apply_rules(
         initial_class: &class,
         initial_title: &title,
         floating: state.is_floating(window),
-        fullscreen: state
-            .workspace_of(window)
-            .and_then(|workspace| state.fullscreen(workspace))
-            .is_some_and(|(id, _)| id == window),
+        fullscreen,
         focused: state.focused_window() == Some(window),
+        pinned: state.is_pinned(window),
+        modal,
+        grouped: state.group(window).is_some(),
+        tags: &tags,
+        workspace: &workspace,
+        // A window has no namespace; only a layer surface does, and this
+        // matcher is here because Hyprland's one engine reads both.
+        namespace: "",
+        xdg_tag: &xdg_tag,
+        content,
+        // Hyprland numbers the fullscreen states, and this compositor has
+        // the two a tiling layout can be in: none, or fullscreen.
+        fullscreen_state_internal: i64::from(fullscreen),
+        fullscreen_state_client: i64::from(named.is_some_and(|top| top.fullscreen)),
     };
     rules.apply(window, &what, state, report)
 }
@@ -3958,11 +4052,23 @@ fn configure(client: &mut Client, state: &State, toplevel: ObjectId, window: Win
 fn globals(outputs: usize) -> Globals {
     let mut globals = Globals::new();
     for (interface, version, role) in [
-        (&core::WL_COMPOSITOR, 6, Role::Compositor),
-        (&core::WL_SUBCOMPOSITOR, 1, Role::Subcompositor),
-        (&core::WL_SHM, 1, Role::Shm),
-        (&core::WL_SEAT, 7, Role::Seat),
-        (&core::WL_DATA_DEVICE_MANAGER, 3, Role::DataDeviceManager),
+        // Each at the version its own interface offers. A compositor that
+        // advertises less is one a toolkit refuses to start against:
+        // `hyprtoolkit` binds `wl_seat` at 9 and gives up with "Missing
+        // protocols" when it is offered 7, which is how this was found.
+        (&core::WL_COMPOSITOR, core::WL_COMPOSITOR.version, Role::Compositor),
+        (
+            &core::WL_SUBCOMPOSITOR,
+            core::WL_SUBCOMPOSITOR.version,
+            Role::Subcompositor,
+        ),
+        (&core::WL_SHM, core::WL_SHM.version, Role::Shm),
+        (&core::WL_SEAT, core::WL_SEAT.version, Role::Seat),
+        (
+            &core::WL_DATA_DEVICE_MANAGER,
+            core::WL_DATA_DEVICE_MANAGER.version,
+            Role::DataDeviceManager,
+        ),
         (&xdg_shell::XDG_WM_BASE, 6, Role::XdgWmBase),
         // Who draws the title bar, which for a tiling compositor is always
         // the compositor: a toolkit that finds no manager here assumes it is
@@ -4326,12 +4432,34 @@ fn read_config(options: &Options) -> Result<Config, String> {
 /// A sentence saying why it did not start, which the caller logs: a program
 /// that will not start is the person's to fix, not a reason to have no
 /// compositor.
-pub(crate) fn start(command: &str, socket: &std::path::Path) -> Result<u32, String> {
+pub(crate) fn start(
+    command: &str,
+    socket: &std::path::Path,
+    instance: Option<&str>,
+) -> Result<u32, String> {
     let mut parts = command.split_whitespace();
     let program = parts.next().ok_or_else(|| "an empty command".to_owned())?;
-    std::process::Command::new(program)
-        .args(parts)
-        .env("WAYLAND_DISPLAY", socket)
+    let mut child = std::process::Command::new(program);
+    let _ = child.args(parts).env("WAYLAND_DISPLAY", socket);
+    // The environment Hyprland gives everything it starts
+    // (`CCompositor::initServer`). Without it a program started by
+    // `exec-once` cannot find the compositor to ask: `hyprctl` looks for
+    // `$HYPRLAND_INSTANCE_SIGNATURE` and prints "Couldn't connect to socket"
+    // without one, which is how this was found -- a wallpaper daemon on this
+    // machine could not read `hyprctl monitors`.
+    if let Some(instance) = instance {
+        let _ = child.env("HYPRLAND_INSTANCE_SIGNATURE", instance);
+    }
+    // Only when nothing set it, as Hyprland does: a session started by a
+    // display manager has its own, and a toolkit reads this to decide which
+    // portal to talk to.
+    if std::env::var_os("XDG_CURRENT_DESKTOP").is_none() {
+        let _ = child.env("XDG_CURRENT_DESKTOP", "Hyprland");
+    }
+    if std::env::var_os("XDG_SESSION_TYPE").is_none() {
+        let _ = child.env("XDG_SESSION_TYPE", "wayland");
+    }
+    child
         .spawn()
         .map(|child| child.id())
         .map_err(|error| error.to_string())

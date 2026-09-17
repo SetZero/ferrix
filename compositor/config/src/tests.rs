@@ -1054,6 +1054,135 @@ fn the_states_a_rule_can_match_on() {
     assert!(!initial.matches(&window("pattern", "one what")));
 }
 
+/// The matchers and the effects the merged 0.56 grammar added, which a
+/// real configuration writes.
+///
+/// `nazuna`'s two `windowrule` lines are `suppress_event maximize,
+/// match:class .*` and a `no_focus` line matching on `xwayland`, `pin` and
+/// `float` at once. Before this both were refused outright, and a refused
+/// line is a line that does nothing: the person who wrote it gets a
+/// diagnostic and the window they meant to keep unfocused takes the focus.
+#[test]
+fn the_matchers_and_effects_of_the_merged_grammar() {
+    let effects = |line: &str| WindowRule::parse(line).map(|rule| rule.effects);
+
+    assert_eq!(
+        effects("suppress_event maximize"),
+        Ok(vec![Effect::Suppress(vec!["maximize".to_owned()])])
+    );
+    assert_eq!(
+        effects("suppress_event maximize fullscreen"),
+        Ok(vec![Effect::Suppress(vec![
+            "maximize".to_owned(),
+            "fullscreen".to_owned()
+        ])])
+    );
+    assert_eq!(effects("pin"), Ok(vec![Effect::Pin]));
+    assert_eq!(effects("pseudo"), Ok(vec![Effect::Pseudo]));
+    assert_eq!(
+        effects("tag music"),
+        Ok(vec![Effect::Tag("music".to_owned())])
+    );
+    // An effect Hyprland has that this compositor does not carry out is
+    // kept by name, so that the matchers written beside it still apply.
+    assert_eq!(
+        effects("no_shortcuts_inhibit true, float"),
+        Ok(vec![
+            Effect::Unhandled("no_shortcuts_inhibit".to_owned()),
+            Effect::Float
+        ])
+    );
+    // A word that is not in Hyprland's table at all is still a typo.
+    assert!(effects("levitate").is_err());
+
+    let base = window("foot", "a shell");
+    let pinned = WindowRule::parse("float, match:pin 1").unwrap();
+    assert!(!pinned.matches(&base));
+    assert!(pinned.matches(&Window {
+        pinned: true,
+        ..base
+    }));
+
+    let modal = WindowRule::parse("float, match:modal 1").unwrap();
+    assert!(modal.matches(&Window {
+        modal: true,
+        ..base
+    }));
+
+    let grouped = WindowRule::parse("float, match:group 1").unwrap();
+    assert!(grouped.matches(&Window {
+        grouped: true,
+        ..base
+    }));
+
+    // There is no XWayland here, so a rule that asks for an X11 window
+    // matches nothing and one that asks for a native window matches
+    // everything. `nazuna`'s `no_focus` line asks for `xwayland 1`, and
+    // that line is meant not to fire.
+    assert!(
+        !WindowRule::parse("no_focus, match:xwayland 1")
+            .unwrap()
+            .matches(&base)
+    );
+    assert!(
+        WindowRule::parse("no_focus, match:xwayland 0")
+            .unwrap()
+            .matches(&base)
+    );
+
+    let tagged = WindowRule::parse("opacity 0.5, match:tag ^(music)$").unwrap();
+    let tags = ["music".to_owned()];
+    assert!(!tagged.matches(&base));
+    assert!(tagged.matches(&Window {
+        tags: &tags,
+        ..base
+    }));
+
+    let on = WindowRule::parse("float, match:workspace ^(3)$").unwrap();
+    assert!(on.matches(&Window {
+        workspace: "3",
+        ..base
+    }));
+    assert!(!on.matches(&Window {
+        workspace: "4",
+        ..base
+    }));
+
+    let named = WindowRule::parse("float, match:xdg_tag ^(main)$").unwrap();
+    assert!(named.matches(&Window {
+        xdg_tag: "main",
+        ..base
+    }));
+
+    let playing = WindowRule::parse("immediate true, match:content ^(game)$").unwrap();
+    assert!(playing.matches(&Window {
+        content: "game",
+        ..base
+    }));
+    assert!(!playing.matches(&base));
+
+    let state = WindowRule::parse("float, match:fullscreen_state_internal 1").unwrap();
+    assert!(state.matches(&Window {
+        fullscreen_state_internal: 1,
+        ..base
+    }));
+    assert!(!state.matches(&base));
+
+    // And the whole of the line `nazuna` writes, which must read and must
+    // not fire.
+    let real = WindowRule::parse(
+        "no_focus true, match:class ^$, match:title ^$, match:xwayland 1, match:float 1, \
+         match:fullscreen 0, match:pin 0",
+    )
+    .expect("the line a real configuration writes");
+    assert!(!real.matches(&Window {
+        class: "",
+        title: "",
+        floating: true,
+        ..base
+    }));
+}
+
 #[test]
 fn a_rule_that_cannot_be_read_says_what_is_wrong() {
     for bad in [
@@ -1102,36 +1231,74 @@ fn windowrulev2_is_refused_as_hyprland_refuses_it() {
 
 /// Each rule is read, and a line that is not one says so rather than
 /// costing a person the rest of their configuration.
+///
+/// Hyprland 0.56 reads a `layerrule` with the same grammar as a
+/// `windowrule`: fields separated by commas, each a name and a value, and
+/// the namespace under `match:namespace`. The old `blur, waybar` form is
+/// gone, and a compositor that still took it would quietly accept a line
+/// Hyprland refuses.
 #[test]
 fn a_layerrule_is_read_or_refused_with_a_reason() {
     use crate::{LayerEffect, LayerRule};
 
-    let rule = LayerRule::parse("blur, waybar").expect("a rule");
-    assert_eq!(rule.effect, LayerEffect::Blur);
+    let rule = LayerRule::parse("blur true, match:namespace waybar").expect("a rule");
+    assert_eq!(rule.effects, vec![LayerEffect::Blur(true)]);
     assert!(rule.matches("waybar"));
     assert!(!rule.matches("swaync"));
 
     assert_eq!(
-        LayerRule::parse("ignorealpha 0.5, waybar").map(|rule| rule.effect),
-        Ok(LayerEffect::IgnoreAlpha(0.5))
+        LayerRule::parse("ignore_alpha 0.5, match:namespace waybar").map(|rule| rule.effects),
+        Ok(vec![LayerEffect::IgnoreAlpha(0.5)])
     );
     assert_eq!(
-        LayerRule::parse("order 10, notifications").map(|rule| rule.effect),
-        Ok(LayerEffect::Order(10))
+        LayerRule::parse("order 10, match:namespace notifications").map(|rule| rule.effects),
+        Ok(vec![LayerEffect::Order(10)])
     );
-    // Hyprland's `abovelock` takes an optional boolean, and the bare word
-    // means true.
+    // One line may carry several effects, which is what the merged
+    // grammar bought.
     assert_eq!(
-        LayerRule::parse("abovelock, keyboard").map(|rule| rule.effect),
-        Ok(LayerEffect::AboveLock(true))
+        LayerRule::parse("blur true, ignore_alpha 0.2, match:namespace waybar")
+            .map(|rule| rule.effects),
+        Ok(vec![LayerEffect::Blur(true), LayerEffect::IgnoreAlpha(0.2)])
+    );
+    // Hyprland's `truthy`: `1`, or a word beginning true, yes or on.
+    assert_eq!(
+        LayerRule::parse("no_anim yes, match:namespace bar").map(|rule| rule.effects),
+        Ok(vec![LayerEffect::NoAnim(true)])
     );
     assert_eq!(
-        LayerRule::parse("abovelock false, keyboard").map(|rule| rule.effect),
-        Ok(LayerEffect::AboveLock(false))
+        LayerRule::parse("no_anim 0, match:namespace bar").map(|rule| rule.effects),
+        Ok(vec![LayerEffect::NoAnim(false)])
     );
-    assert!(LayerRule::parse("blur").is_err(), "no namespace");
-    assert!(LayerRule::parse("wobble, waybar").is_err(), "no such rule");
-    assert!(LayerRule::parse("order x, waybar").is_err(), "not a number");
+    // `above_lock` is a level, clamped rather than refused.
+    assert_eq!(
+        LayerRule::parse("above_lock 2, match:namespace keyboard").map(|rule| rule.effects),
+        Ok(vec![LayerEffect::AboveLock(2)])
+    );
+    assert_eq!(
+        LayerRule::parse("above_lock 7, match:namespace keyboard").map(|rule| rule.effects),
+        Ok(vec![LayerEffect::AboveLock(2)])
+    );
+    // A rule with no namespace applies everywhere.
+    let every = LayerRule::parse("blur true").expect("a rule");
+    assert!(every.matches("anything"));
+    // A property a layer surface does not have is accepted and skipped,
+    // as Hyprland's own engine does with it.
+    assert!(LayerRule::parse("blur true, match:class foot").is_ok());
+
+    assert!(LayerRule::parse("blur").is_err(), "no value");
+    assert!(
+        LayerRule::parse("wobble true, match:namespace waybar").is_err(),
+        "no such rule"
+    );
+    assert!(
+        LayerRule::parse("order x, match:namespace waybar").is_err(),
+        "not a number"
+    );
+    assert!(
+        LayerRule::parse("match:namespace waybar").is_err(),
+        "nothing to do"
+    );
 }
 
 /// Every rule that matches one surface is applied, later lines winning.
@@ -1140,11 +1307,11 @@ fn the_rules_that_match_a_namespace_are_gathered() {
     use crate::{LayerRule, Layered};
 
     let rules: Vec<LayerRule> = [
-        "blur, ^(waybar)$",
-        "ignorealpha 0.3, waybar",
-        "order 2, waybar",
-        "order 5, waybar",
-        "abovelock, keyboard",
+        "blur true, match:namespace ^(waybar)$",
+        "ignore_alpha 0.3, match:namespace waybar",
+        "order 2, match:namespace waybar",
+        "order 5, match:namespace waybar",
+        "above_lock 1, match:namespace keyboard",
     ]
     .iter()
     .map(|line| LayerRule::parse(line).expect("a rule"))

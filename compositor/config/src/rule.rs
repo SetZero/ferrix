@@ -39,6 +39,64 @@ pub enum Matcher {
     Fullscreen(bool),
     /// `match:focus`: whether it is the focused window.
     Focused(bool),
+    /// `match:pin`: whether it is pinned across workspaces.
+    Pinned(bool),
+    /// `match:modal`: whether `xdg_dialog_v1` called it modal.
+    Modal(bool),
+    /// `match:group`: whether it is in a group.
+    Grouped(bool),
+    /// `match:xwayland`: whether it is an X11 window. No window here is --
+    /// there is no `XWayland` -- so a rule asking for one matches nothing.
+    Xwayland(bool),
+    /// `match:tag`: one of the tags a `tag` effect or `tagwindow` gave it.
+    Tag(Regex),
+    /// `match:workspace`: the workspace it is on, by name.
+    Workspace(Regex),
+    /// `match:namespace`: the namespace, for the layer surfaces Hyprland
+    /// matches with the same engine.
+    Namespace(Regex),
+    /// `match:xdg_tag`: the name `xdg_toplevel_tag_manager_v1` gave it.
+    XdgTag(Regex),
+    /// `match:content`: what `wp_content_type_v1` says it is showing.
+    Content(Regex),
+    /// `match:fullscreen_state_internal`: the fullscreen state the
+    /// compositor put it in, as a number.
+    FullscreenStateInternal(i64),
+    /// `match:fullscreen_state_client`: the fullscreen state the client
+    /// asked for, as a number.
+    FullscreenStateClient(i64),
+}
+
+/// Every `match:` property Hyprland's rule engine knows.
+///
+/// `Rule.cpp`'s `MATCH_PROP_STRINGS`. A `layerrule` may name any of them
+/// and Hyprland reads all of them, even though a layer surface only ever
+/// matches on `namespace`; [`is_prop`] is how the layer half asks.
+const PROPS: [&str; 18] = [
+    "class",
+    "title",
+    "initial_class",
+    "initial_title",
+    "float",
+    "tag",
+    "xwayland",
+    "fullscreen",
+    "pin",
+    "focus",
+    "group",
+    "modal",
+    "fullscreen_state_internal",
+    "fullscreen_state_client",
+    "workspace",
+    "content",
+    "xdg_tag",
+    "namespace",
+];
+
+/// Whether `name` is a `match:` property Hyprland knows.
+#[must_use]
+pub fn is_prop(name: &str) -> bool {
+    PROPS.contains(&name)
 }
 
 /// What a rule does to a window it matches.
@@ -77,7 +135,83 @@ pub enum Effect {
     /// `no_blur`, `no_shadow`, `no_dim`: a decoration this window does not
     /// get.
     Without(Decoration),
+    /// `pin`: it stays on the screen across workspaces.
+    Pin,
+    /// `pseudo`: it keeps its own size inside its tiled slot.
+    Pseudo,
+    /// `tag <name>`: a tag that a later `match:tag` finds it by.
+    Tag(String),
+    /// `suppress_event <event> ...`: what the window asks for and does not
+    /// get.
+    Suppress(Vec<String>),
+    /// An effect Hyprland has that this compositor does not carry out,
+    /// kept by name rather than refused.
+    Unhandled(String),
 }
+
+/// Every effect name Hyprland's own table has.
+///
+/// `WindowRuleEffectContainer.cpp`'s list, in its order. A name in it that
+/// this compositor does not carry out becomes [`Effect::Unhandled`]; a name
+/// that is not in it at all is a typo, and is refused so a person hears
+/// about it rather than watching a rule quietly do nothing.
+const KNOWN: [&str; 55] = [
+    "float",
+    "tile",
+    "fullscreen",
+    "maximize",
+    "fullscreen_state",
+    "move",
+    "size",
+    "center",
+    "pseudo",
+    "monitor",
+    "workspace",
+    "no_initial_focus",
+    "pin",
+    "group",
+    "suppress_event",
+    "content",
+    "no_close_for",
+    "scrolling_width",
+    "rounding",
+    "rounding_power",
+    "persistent_size",
+    "animation",
+    "border_color",
+    "idle_inhibit",
+    "opacity",
+    "tag",
+    "max_size",
+    "min_size",
+    "border_size",
+    "allows_input",
+    "dim_around",
+    "decorate",
+    "focus_on_activate",
+    "keep_aspect_ratio",
+    "nearest_neighbor",
+    "no_anim",
+    "no_blur",
+    "no_dim",
+    "no_focus",
+    "no_follow_mouse",
+    "no_max_size",
+    "no_shadow",
+    "no_shortcuts_inhibit",
+    "opaque",
+    "force_rgbx",
+    "sync_fullscreen",
+    "immediate",
+    "xray",
+    "render_unfocused",
+    "no_screen_share",
+    "no_vrr",
+    "no_auto_hdr",
+    "tonemap",
+    "scroll_mouse",
+    "scroll_touchpad",
+];
 
 /// A decoration a rule can take away.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -175,6 +309,17 @@ impl WindowRule {
             Matcher::Floating(wanted) => what.floating == *wanted,
             Matcher::Fullscreen(wanted) => what.fullscreen == *wanted,
             Matcher::Focused(wanted) => what.focused == *wanted,
+            Matcher::Pinned(wanted) => what.pinned == *wanted,
+            Matcher::Modal(wanted) => what.modal == *wanted,
+            Matcher::Grouped(wanted) => what.grouped == *wanted,
+            Matcher::Xwayland(wanted) => !*wanted,
+            Matcher::Tag(pattern) => what.tags.iter().any(|tag| pattern.matches(tag)),
+            Matcher::Workspace(pattern) => pattern.matches(what.workspace),
+            Matcher::Namespace(pattern) => pattern.matches(what.namespace),
+            Matcher::XdgTag(pattern) => pattern.matches(what.xdg_tag),
+            Matcher::Content(pattern) => pattern.matches(what.content),
+            Matcher::FullscreenStateInternal(wanted) => what.fullscreen_state_internal == *wanted,
+            Matcher::FullscreenStateClient(wanted) => what.fullscreen_state_client == *wanted,
         })
     }
 }
@@ -196,6 +341,26 @@ pub struct Window<'a> {
     pub fullscreen: bool,
     /// Whether it has the focus.
     pub focused: bool,
+    /// Whether it is pinned across workspaces.
+    pub pinned: bool,
+    /// Whether `xdg_dialog_v1` called it modal.
+    pub modal: bool,
+    /// Whether it is in a group.
+    pub grouped: bool,
+    /// The tags it has been given.
+    pub tags: &'a [String],
+    /// The workspace it is on, by name.
+    pub workspace: &'a str,
+    /// Its namespace, which only a layer surface has.
+    pub namespace: &'a str,
+    /// The name `xdg_toplevel_tag_manager_v1` gave it.
+    pub xdg_tag: &'a str,
+    /// What `wp_content_type_v1` says it is showing.
+    pub content: &'a str,
+    /// The fullscreen state the compositor put it in.
+    pub fullscreen_state_internal: i64,
+    /// The fullscreen state the client asked for.
+    pub fullscreen_state_client: i64,
 }
 
 /// One `match:` field.
@@ -205,6 +370,11 @@ fn matcher(field: &str) -> Result<Matcher, String> {
         .ok_or_else(|| format!("invalid field {field}: missing a value"))?;
     let value = value.trim();
     let pattern = || Regex::new(value).map_err(|why| format!("invalid prop {name}: {why}"));
+    let number = || {
+        value
+            .parse()
+            .map_err(|_| format!("invalid prop {name}: `{value}` is not a number"))
+    };
     let yes_or_no = || match value {
         "1" | "true" | "yes" | "on" => Ok(true),
         "0" | "false" | "no" | "off" => Ok(false),
@@ -220,6 +390,22 @@ fn matcher(field: &str) -> Result<Matcher, String> {
         "float" => yes_or_no().map(Matcher::Floating),
         "fullscreen" => yes_or_no().map(Matcher::Fullscreen),
         "focus" => yes_or_no().map(Matcher::Focused),
+        "pin" => yes_or_no().map(Matcher::Pinned),
+        "modal" => yes_or_no().map(Matcher::Modal),
+        "group" => yes_or_no().map(Matcher::Grouped),
+        // No window here is XWayland's -- there is no XWayland -- so the
+        // rule matches only when it asks for a native one. A real
+        // configuration uses this the way nazuna's does, to keep a rule
+        // off Wayland windows, and a compositor that refused the matcher
+        // would cost a person the whole line.
+        "xwayland" => yes_or_no().map(Matcher::Xwayland),
+        "tag" => pattern().map(Matcher::Tag),
+        "workspace" => pattern().map(Matcher::Workspace),
+        "namespace" => pattern().map(Matcher::Namespace),
+        "xdg_tag" => pattern().map(Matcher::XdgTag),
+        "content" => pattern().map(Matcher::Content),
+        "fullscreen_state_internal" => number().map(Matcher::FullscreenStateInternal),
+        "fullscreen_state_client" => number().map(Matcher::FullscreenStateClient),
         other => Err(format!("invalid prop {other}")),
     }
 }
@@ -285,6 +471,21 @@ fn effect(field: &str) -> Result<Effect, String> {
         }
         "rounding" => number("a number of pixels").map(Effect::Rounding),
         "border_size" => number("a number of pixels").map(Effect::BorderSize),
+        "pin" => Ok(Effect::Pin),
+        "pseudo" => Ok(Effect::Pseudo),
+        "tag" => Ok(Effect::Tag(value.to_owned())),
+        // `suppress_event <event>`: a window that asks to be maximized or
+        // fullscreen is not. A tiling compositor decides both, and a
+        // configuration says this so that an application which asks on
+        // startup does not fight the layout.
+        "suppress_event" => Ok(Effect::Suppress(
+            value.split_whitespace().map(ToOwned::to_owned).collect(),
+        )),
+        // Every other effect Hyprland has is read and kept without being
+        // acted on, rather than refused. One unsupported word in a line
+        // must not cost a person the matchers beside it, and a rule this
+        // compositor cannot carry out is still a rule it can report.
+        other if KNOWN.contains(&other) => Ok(Effect::Unhandled(other.to_owned())),
         other => Err(format!("invalid field type {other}")),
     }
 }
