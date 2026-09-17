@@ -58,6 +58,14 @@ pub(crate) fn run(args: &Args) -> Result<()> {
         python_with("scripts/gen-wayland-protocol.py", &["--check"])
     })?;
 
+    // The keymap the compositor hands every client, and the modifier bits
+    // that go with it, are libxkbcommon's own output through a committed
+    // probe. A keymap edited by hand is a keyboard that types the wrong
+    // letters, and the client is the only thing that would notice.
+    step("xkb keymap and tables", || {
+        python_with("scripts/gen-xkb-tables.py", &["--check"])
+    })?;
+
     // The panic screen's font is generated from the BDF committed beside it,
     // and a hand edit to either would otherwise drift silently.
     step("font", || python_with("scripts/gen-font.py", &["--check"]))?;
