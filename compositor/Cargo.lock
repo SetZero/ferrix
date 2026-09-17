@@ -256,6 +256,7 @@ dependencies = [
  "compositor-regex",
  "compositor-render",
  "compositor-server",
+ "compositor-shm",
  "compositor-shot",
  "compositor-socket",
  "compositor-wire",

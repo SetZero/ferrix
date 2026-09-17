@@ -1596,3 +1596,528 @@ fn a_menu_is_drawn_where_the_positioner_puts_it() {
         "{differing} pixels of the menu's frame are not the renderer's; the compositor said {line}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Damage
+//
+// The compositor redraws the part of each screen that changed and leaves the
+// rest of the canvas as the last frame left it. What shows that is a client
+// that changes a little: `compositor/pattern` damages the whole of its buffer
+// every time it draws, so this brings a client of its own that repaints a
+// square of a few hundred pixels and says which square.
+//
+// Two things have to hold at once, and the test is worth nothing without
+// both: the frame that comes out is the right picture, and the damage the
+// compositor handed the renderer was not the whole screen.
+// ---------------------------------------------------------------------------
+
+/// What the patching client is made of: the ids it gives its objects, the
+/// square it repaints, and the two colours.
+mod patch {
+    use compositor_wire::ObjectId;
+
+    pub(super) const DISPLAY: ObjectId = ObjectId(1);
+    pub(super) const REGISTRY: ObjectId = ObjectId(2);
+    pub(super) const SYNC: ObjectId = ObjectId(3);
+    pub(super) const COMPOSITOR: ObjectId = ObjectId(4);
+    pub(super) const SHM: ObjectId = ObjectId(5);
+    pub(super) const SHELL: ObjectId = ObjectId(6);
+    pub(super) const SURFACE: ObjectId = ObjectId(7);
+    pub(super) const XDG_SURFACE: ObjectId = ObjectId(8);
+    pub(super) const TOPLEVEL: ObjectId = ObjectId(9);
+    pub(super) const POOL: ObjectId = ObjectId(10);
+    pub(super) const BUFFER: ObjectId = ObjectId(11);
+
+    /// The side of the square it repaints, and where it is in the buffer.
+    /// Away from the corners, so no rounding cuts it.
+    pub(super) const SIDE: i32 = 24;
+    pub(super) const AT: (i32, i32) = (40, 40);
+
+    /// The window's colour and the square's, as `XRGB8888`: blue, green,
+    /// red, and one byte the compositor does not read. Neither is a colour
+    /// the background, the borders or the other client's pattern has, so
+    /// counting them in a frame counts this window's own pixels.
+    pub(super) const BASE: [u8; 4] = [0x40, 0x40, 0x40, 0x00];
+    pub(super) const MARK: [u8; 4] = [0x00, 0x00, 0xFF, 0x00];
+}
+
+use compositor_protocol::core::{
+    WL_BUFFER, WL_CALLBACK, WL_DISPLAY, WL_REGISTRY, WL_SHM, WL_SHM_POOL, WL_SURFACE, wl_callback,
+    wl_compositor, wl_display, wl_registry, wl_shm, wl_shm_pool, wl_surface,
+};
+use compositor_protocol::xdg_shell::{self, xdg_surface, xdg_toplevel, xdg_wm_base};
+use compositor_socket::{Connection, RecvError};
+use compositor_wire::{Arg, ArgType, Fd, Interface, ObjectId, Reader, Writer};
+
+/// What the client knows.
+struct Patcher {
+    globals: std::collections::BTreeMap<String, (u32, u32)>,
+    size: (i32, i32),
+    shared: Option<compositor_shm::Shared>,
+    drawn: u32,
+    marked: u32,
+}
+
+/// Queue one request. The only way this fails is a message longer than
+/// the format allows, which none of these is.
+fn send(
+    out: &mut Writer,
+    sender: ObjectId,
+    opcode: u16,
+    signature: &'static [ArgType],
+    args: &[Arg<'_>],
+) {
+    let _ = out.write(sender, opcode, signature, args);
+}
+
+/// Which interface an object of this client's speaks, so an event for it
+/// can be decoded.
+fn interface_of(id: ObjectId) -> Option<&'static Interface> {
+    Some(match id {
+        patch::DISPLAY => &WL_DISPLAY,
+        patch::REGISTRY => &WL_REGISTRY,
+        patch::SYNC => &WL_CALLBACK,
+        patch::SHM => &WL_SHM,
+        patch::SURFACE => &WL_SURFACE,
+        patch::XDG_SURFACE => &xdg_shell::XDG_SURFACE,
+        patch::TOPLEVEL => &xdg_shell::XDG_TOPLEVEL,
+        patch::SHELL => &xdg_shell::XDG_WM_BASE,
+        patch::POOL => &WL_SHM_POOL,
+        patch::BUFFER => &WL_BUFFER,
+        _ => return None,
+    })
+}
+
+impl Patcher {
+    /// Bind what a window needs and ask for one.
+    fn bind(&mut self, title: &str, out: &mut Writer) -> Result<(), String> {
+        for (interface, id, version) in [
+            ("wl_compositor", patch::COMPOSITOR, 6u32),
+            ("wl_shm", patch::SHM, 1),
+            ("xdg_wm_base", patch::SHELL, 6),
+        ] {
+            let (name, offered) = self
+                .globals
+                .get(interface)
+                .copied()
+                .ok_or_else(|| format!("the compositor offers no {interface}"))?;
+            out.write(
+                patch::REGISTRY,
+                wl_registry::request::BIND,
+                &[ArgType::Uint, ArgType::AnyNewId],
+                &[
+                    Arg::Uint(name),
+                    Arg::AnyNewId {
+                        interface,
+                        version: version.min(offered),
+                        id,
+                    },
+                ],
+            )
+            .map_err(|error| format!("binding {interface}: {error:?}"))?;
+        }
+        send(
+            out,
+            patch::COMPOSITOR,
+            wl_compositor::request::CREATE_SURFACE,
+            &[ArgType::NewId],
+            &[Arg::NewId(patch::SURFACE)],
+        );
+        send(
+            out,
+            patch::SHELL,
+            xdg_wm_base::request::GET_XDG_SURFACE,
+            &[ArgType::NewId, ArgType::Object { nullable: false }],
+            &[Arg::NewId(patch::XDG_SURFACE), Arg::Object(patch::SURFACE)],
+        );
+        send(
+            out,
+            patch::XDG_SURFACE,
+            xdg_surface::request::GET_TOPLEVEL,
+            &[ArgType::NewId],
+            &[Arg::NewId(patch::TOPLEVEL)],
+        );
+        send(
+            out,
+            patch::TOPLEVEL,
+            xdg_toplevel::request::SET_TITLE,
+            &[ArgType::Str { nullable: false }],
+            &[Arg::Str(Some(title))],
+        );
+        send(
+            out,
+            patch::TOPLEVEL,
+            xdg_toplevel::request::SET_APP_ID,
+            &[ArgType::Str { nullable: false }],
+            &[Arg::Str(Some("rocks.magical.patch"))],
+        );
+        // The first commit carries no buffer: it asks to be configured.
+        send(out, patch::SURFACE, wl_surface::request::COMMIT, &[], &[]);
+        Ok(())
+    }
+
+    /// Make the pool and the buffer once the size is known, fill the
+    /// window with its colour, and commit the whole of it.
+    fn draw(&mut self, out: &mut Writer) -> Result<(), String> {
+        let (width, height) = self.size;
+        if width <= 0 || height <= 0 || self.shared.is_some() {
+            return Ok(());
+        }
+        let stride = width.saturating_mul(4);
+        let len = usize::try_from(stride.saturating_mul(height))
+            .map_err(|_| "a window too large to draw".to_owned())?;
+        let mut shared =
+            compositor_shm::Shared::new(len).map_err(|error| format!("memory: {error}"))?;
+        for pixel in shared.bytes_mut().chunks_exact_mut(4) {
+            pixel.copy_from_slice(&patch::BASE);
+        }
+        let fd = shared.as_raw_fd();
+        self.shared = Some(shared);
+        send(
+            out,
+            patch::SHM,
+            wl_shm::request::CREATE_POOL,
+            &[ArgType::NewId, ArgType::Fd, ArgType::Int],
+            &[
+                Arg::NewId(patch::POOL),
+                Arg::Fd(Fd(fd)),
+                Arg::Int(i32::try_from(len).unwrap_or(i32::MAX)),
+            ],
+        );
+        send(
+            out,
+            patch::POOL,
+            wl_shm_pool::request::CREATE_BUFFER,
+            &[
+                ArgType::NewId,
+                ArgType::Int,
+                ArgType::Int,
+                ArgType::Int,
+                ArgType::Int,
+                ArgType::Uint,
+            ],
+            &[
+                Arg::NewId(patch::BUFFER),
+                Arg::Int(0),
+                Arg::Int(width),
+                Arg::Int(height),
+                Arg::Int(stride),
+                Arg::Uint(wl_shm::format::XRGB8888),
+            ],
+        );
+        self.attach(out, (0, 0, width, height));
+        Ok(())
+    }
+
+    /// Repaint the square and commit it, damaging nothing else.
+    fn mark(&mut self, out: &mut Writer) {
+        let stride = usize::try_from(self.size.0.saturating_mul(4)).unwrap_or(0);
+        let (left, top) = patch::AT;
+        let side = usize::try_from(patch::SIDE).unwrap_or(0);
+        if let Some(shared) = self.shared.as_mut() {
+            let bytes = shared.bytes_mut();
+            for y in top..top.saturating_add(patch::SIDE) {
+                let at = usize::try_from(y).unwrap_or(0) * stride
+                    + usize::try_from(left).unwrap_or(0) * 4;
+                let Some(row) = bytes.get_mut(at..at + side * 4) else {
+                    continue;
+                };
+                for pixel in row.chunks_exact_mut(4) {
+                    pixel.copy_from_slice(&patch::MARK);
+                }
+            }
+        }
+        self.marked = self.marked.saturating_add(1);
+        self.attach(out, (left, top, patch::SIDE, patch::SIDE));
+    }
+
+    /// Attach the buffer, say which part of it changed, and commit.
+    fn attach(&mut self, out: &mut Writer, damage: (i32, i32, i32, i32)) {
+        send(
+            out,
+            patch::SURFACE,
+            wl_surface::request::ATTACH,
+            &[
+                ArgType::Object { nullable: true },
+                ArgType::Int,
+                ArgType::Int,
+            ],
+            &[Arg::Object(patch::BUFFER), Arg::Int(0), Arg::Int(0)],
+        );
+        send(
+            out,
+            patch::SURFACE,
+            wl_surface::request::DAMAGE_BUFFER,
+            &[ArgType::Int, ArgType::Int, ArgType::Int, ArgType::Int],
+            &[
+                Arg::Int(damage.0),
+                Arg::Int(damage.1),
+                Arg::Int(damage.2),
+                Arg::Int(damage.3),
+            ],
+        );
+        send(out, patch::SURFACE, wl_surface::request::COMMIT, &[], &[]);
+        self.drawn = self.drawn.saturating_add(1);
+    }
+
+    /// Answer one event.
+    fn event(
+        &mut self,
+        sender: ObjectId,
+        opcode: u16,
+        args: &[Arg<'_>],
+        title: &str,
+        out: &mut Writer,
+    ) -> Result<(), String> {
+        match sender {
+            patch::DISPLAY if opcode == wl_display::event::ERROR => {
+                let text = args.get(2).and_then(Arg::as_str).unwrap_or("");
+                return Err(format!("the compositor refused this client: {text}"));
+            }
+            patch::REGISTRY if opcode == wl_registry::event::GLOBAL => {
+                let (Some(name), Some(interface), Some(version)) = (
+                    args.first().and_then(Arg::as_uint),
+                    args.get(1).and_then(Arg::as_str),
+                    args.get(2).and_then(Arg::as_uint),
+                ) else {
+                    return Ok(());
+                };
+                let _ = self.globals.insert(interface.to_owned(), (name, version));
+            }
+            patch::SYNC if opcode == wl_callback::event::DONE => {
+                self.bind(title, out)?;
+            }
+            patch::SHELL if opcode == xdg_wm_base::event::PING => {
+                let serial = args.first().and_then(Arg::as_uint).unwrap_or(0);
+                send(
+                    out,
+                    patch::SHELL,
+                    xdg_wm_base::request::PONG,
+                    &[ArgType::Uint],
+                    &[Arg::Uint(serial)],
+                );
+            }
+            patch::TOPLEVEL if opcode == xdg_toplevel::event::CONFIGURE => {
+                let (width, height) = (
+                    args.first().and_then(Arg::as_int).unwrap_or(0),
+                    args.get(1).and_then(Arg::as_int).unwrap_or(0),
+                );
+                // A zero is "you choose", which every client answers
+                // with the size it would like.
+                self.size = (
+                    if width > 0 { width } else { 640 },
+                    if height > 0 { height } else { 480 },
+                );
+            }
+            patch::XDG_SURFACE if opcode == xdg_surface::event::CONFIGURE => {
+                let serial = args.first().and_then(Arg::as_uint).unwrap_or(0);
+                send(
+                    out,
+                    patch::XDG_SURFACE,
+                    xdg_surface::request::ACK_CONFIGURE,
+                    &[ArgType::Uint],
+                    &[Arg::Uint(serial)],
+                );
+                self.draw(out)?;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+}
+
+/// A client that draws its window one colour and then repaints one small
+/// square of it `marks` times, damaging only that square.
+///
+/// The requests are every toolkit's, in the order the protocol requires: a
+/// surface, an `xdg_surface` over it, a toplevel, a commit with no buffer
+/// that asks to be configured, and then a buffer attached and committed for
+/// each frame. What is unusual is only the damage.
+fn patching(socket: &Path, title: &str, marks: u32) -> String {
+    let stream = std::os::unix::net::UnixStream::connect(socket)
+        .unwrap_or_else(|error| panic!("connecting to {}: {error}", socket.display()));
+    let mut connection = Connection::new(stream).expect("a connection");
+    let mut out = Writer::new();
+    send(
+        &mut out,
+        patch::DISPLAY,
+        wl_display::request::GET_REGISTRY,
+        &[ArgType::NewId],
+        &[Arg::NewId(patch::REGISTRY)],
+    );
+    send(
+        &mut out,
+        patch::DISPLAY,
+        wl_display::request::SYNC,
+        &[ArgType::NewId],
+        &[Arg::NewId(patch::SYNC)],
+    );
+    let mut state = Patcher {
+        globals: std::collections::BTreeMap::new(),
+        size: (0, 0),
+        shared: None,
+        drawn: 0,
+        marked: 0,
+    };
+    let started = std::time::Instant::now();
+    let mut last = started;
+    while started.elapsed() < Duration::from_secs(30) {
+        match connection.receive() {
+            Ok(_) => {}
+            Err(RecvError::WouldBlock) => std::thread::sleep(Duration::from_millis(2)),
+            Err(RecvError::Closed) => break,
+            Err(error) => return format!("reading: {error:?}"),
+        }
+        let bytes = connection.bytes().to_vec();
+        let fds = connection.fds();
+        let mut reader = Reader::new(&bytes, &fds);
+        while !reader.is_done() {
+            let Ok(header) = reader.peek() else {
+                break;
+            };
+            let Some(method) =
+                interface_of(header.sender).and_then(|interface| interface.event(header.opcode))
+            else {
+                // An event for an object this client did not make, or one
+                // its interface has not got: what follows it in the buffer
+                // cannot be decoded either.
+                break;
+            };
+            let Ok((_, read)) = reader.read(method.signature) else {
+                break;
+            };
+            if let Err(why) = state.event(header.sender, header.opcode, &read, title, &mut out) {
+                return why;
+            }
+        }
+        let consumed = reader.consumed();
+        if consumed > 0 {
+            connection.consume(consumed, 0);
+        }
+        // One square every so often, which is what this client is for: far
+        // enough apart that each of them is a frame of its own.
+        if state.shared.is_some()
+            && state.marked < marks
+            && last.elapsed() > Duration::from_millis(200)
+        {
+            last = std::time::Instant::now();
+            state.mark(&mut out);
+        }
+        if !out.is_empty() {
+            let (queued, handed) = out.take();
+            if connection.send(&queued, &handed).is_err() {
+                break;
+            }
+        }
+    }
+    format!(
+        "patch: {title} {}x{} drew {} marked {}",
+        state.size.0, state.size.1, state.drawn, state.marked
+    )
+}
+
+/// How many pixels the smallest frame of the run redrew, and how many the
+/// screen holds, from the line the compositor says when it stops.
+fn smallest(report: &str) -> Option<(i64, i64)> {
+    let rest = report.split("smallest frame ").nth(1)?;
+    let mut words = rest.split_whitespace();
+    let least: i64 = words.next()?.parse().ok()?;
+    let _of = words.next()?;
+    let whole: i64 = words.next()?.parse().ok()?;
+    Some((least, whole))
+}
+
+/// How many pixels of `frame` are exactly `colour`, which is given as the
+/// `XRGB8888` bytes a client writes.
+fn how_many(frame: &[u8], colour: [u8; 4]) -> usize {
+    let want = [colour[2], colour[1], colour[0]];
+    frame
+        .chunks_exact(3)
+        .filter(|pixel| *pixel == want.as_slice())
+        .count()
+}
+
+/// A client that repaints a square of its window gets a frame with that
+/// square in it, and the compositor redrew a fraction of the screen to
+/// produce it.
+///
+/// Both halves matter. Without the first a compositor that damaged nothing
+/// at all would pass; without the second one that redraws every pixel of
+/// every frame would -- which is what this compositor did before the damage
+/// was worked out.
+#[test]
+fn a_small_commit_redraws_a_small_part_of_the_screen() {
+    let work = workspace("damage");
+    let socket = work.join("wayland");
+    let frames = work.join("frames");
+
+    let options = Options {
+        display: socket.to_string_lossy().into_owned(),
+        headless: Some((WIDTH, HEIGHT)),
+        dump: Some(frames.clone()),
+        deadline: Some(8000),
+        config: Some(undithered(&work)),
+        ..Options::default()
+    };
+
+    let for_clients = socket.clone();
+    let clients = std::thread::spawn(move || {
+        for _ in 0..400 {
+            if for_clients.exists() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        // The pattern client first, so the dwindle tree is the one every
+        // other test here builds: the first window takes the whole area
+        // and the second splits it.
+        let first = for_clients.clone();
+        let one = std::thread::spawn(move || {
+            connect(&first, Pattern::Checkerboard, "one", Shape::Window)
+        });
+        std::thread::sleep(Duration::from_millis(250));
+        let second = for_clients.clone();
+        let two = std::thread::spawn(move || patching(&second, "two", 12));
+        let lines = [
+            one.join().unwrap_or_else(|_| "one panicked".to_owned()),
+            two.join().unwrap_or_else(|_| "two panicked".to_owned()),
+        ];
+        lines.join("; ")
+    });
+
+    let line = hyprix::run(&options).expect("the compositor ran");
+    let said = clients.join().expect("the clients finished");
+    let report = format!("{line} | {said}");
+    let frame = last_frame(&frames);
+    let _ = std::fs::remove_dir_all(&work);
+
+    assert!(
+        said.contains("marked 12"),
+        "the client did not repaint its square: {report}"
+    );
+    // The picture: the square is in the frame, whole, and the window it is
+    // in is still around it.
+    let marked = how_many(&frame, patch::MARK);
+    let side = (patch::SIDE * patch::SIDE) as usize;
+    assert_eq!(
+        marked, side,
+        "the square is {marked} pixels of the frame rather than {side}: {report}"
+    );
+    let base = how_many(&frame, patch::BASE);
+    assert!(
+        base > side * 20,
+        "only {base} pixels around the square are the window's own colour: {report}"
+    );
+
+    // And the damage: some frame of the run redrew a small part of the
+    // screen. A compositor that asks for the whole screen every time
+    // cannot pass this, and "small" is generous on purpose -- what is
+    // tested is that the damage is a region at all, not how tight it is.
+    let (least, whole) = smallest(&report).unwrap_or_else(|| panic!("no damage in {report}"));
+    assert_eq!(whole, i64::from(WIDTH) * i64::from(HEIGHT));
+    assert!(
+        least < whole / 16,
+        "the smallest frame of the run redrew {least} pixels of {whole}, which is the screen: \
+         {report}"
+    );
+}

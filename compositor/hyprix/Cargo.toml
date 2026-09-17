@@ -50,6 +50,10 @@ compositor-lswt = { path = "../lswt" }
 compositor-shot = { path = "../shot" }
 # And a screen lock, for the session-lock test.
 compositor-lock = { path = "../lock" }
+# Shared memory, for the one client the tests bring themselves: what damage
+# tracking has to be shown by is a client that repaints a corner of its
+# window and says so, which `compositor/pattern` does not do.
+compositor-shm = { path = "../shm" }
 
 [lints]
 workspace = true
