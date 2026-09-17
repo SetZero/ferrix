@@ -292,6 +292,13 @@ nobody has it yet.
 * Stage 21, bare metal with an NVIDIA card driven by Ferrix itself: Path B
   of the GPU decision of 2026-09-18, `docs/GPU.md` §4. Opened when the
   customer wants Ferrix on real hardware; unsized, over 100 points.
+* Stage 22, Steam (decided 2026-09-18): the 32-bit x86 ABI (unsized),
+  glibc's place taken by ferrousli under the Steam runtime (13 priced, the
+  rest unsized), bubblewrap's needs on top of stage 13 (13), a root on btrfs
+  (stage 12), XWayland (40 as a first guess), sound -- `virtio-snd`, an
+  audio core, a PulseAudio or PipeWire server (30) -- and Vulkan through
+  Venus on a KVM host (8 over Path A, plus the driver question). Over 300
+  points; the roadmap's stage 22 is the list.
 * Huge pages; frame share and release are order 0 by design.
 * A panic report as a QR code: a port of Linux's `drm_panic_qr` as
   `libs/qr` (ferrix-qr), so a panic screen can carry the whole report. WIP
@@ -384,6 +391,15 @@ and both fuzz targets as the evidence. | open | 3
 
 Dated, newest first. A decision here is final until the customer says otherwise.
 
+* **2026-09-18 (customer)** **Steam is on the roadmap, as stage 22**, the
+  step after the GPU decision below: the client starts and logs in, a
+  native game installs to btrfs and plays with sound through the GPU path,
+  and a Windows game runs through Proton. It is a guest's stage first and
+  does not wait for bare metal. What it stands on that the roadmap did not
+  stage until now -- the 32-bit x86 ABI, XWayland, sound, Vulkan through
+  Venus -- is written into the stage as a list of what has to be true, with
+  first guesses that sum past 300 points; the rest is stages 12, 13 and
+  dynamic linking, which were already there.
 * **2026-09-18 (customer)** The GPU: **Path A first, Path B in a later
   stage.** Path A is GPU acceleration for Ferrix as a guest through
   virtio-gpu's 3D commands, which uses the host's NVIDIA driver without
@@ -623,8 +639,9 @@ reasoning is in the decisions above.
 * **Stage 19 entire** (144): animations with Hyprland's bezier curves,
   rounded corners, blur, shadows, opacity rules, special workspaces, groups,
   multi-monitor, the plugin-shaped extension points, and the GPU. This is
-  what makes it Hyprland rather than a tiling compositor, and none of it is
-  begun.
+  what makes it Hyprland rather than a tiling compositor. *(2026-09-18:
+  everything but the GPU and XWayland is landed and the exit met for it;
+  about 100 of the 144 are left, and the roadmap's stage 19 says which.)*
 
 ## Wind-down of 2026-09-17, about 00:10: the fleet moves to another machine
 

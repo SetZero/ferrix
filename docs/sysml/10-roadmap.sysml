@@ -417,10 +417,10 @@ package FerrixRoadmap {
              * ./hello on Ferrix, in CI. */
     }
 
-    #inProgress requirement <'S17'> stage17DisplayAndInput : Stage {
+    #implemented requirement <'S17'> stage17DisplayAndInput : Stage {
         attribute :>> number = 17;
-        attribute :>> status = StageStatus::InProgress;
-        attribute :>> size = "74 points";
+        attribute :>> status = StageStatus::Done;
+        attribute :>> size = "74 points, spent";
         doc /* A display core and a virtio-gpu driver in ring 3 behind
              * /dev/dri/card0, an input core and a virtio-input driver behind
              * /dev/input/eventN, and the calls a Rust event loop makes:
@@ -431,14 +431,15 @@ package FerrixRoadmap {
              * the input iteration (xtask test-input, which sends a key and a
              * touch through QMP and requires them back out of the nodes on
              * x86-64 and AArch64, with a negative control that must fail).
-             * What is left is the seat: the compositor does not read those
-             * nodes yet. docs/DISPLAY.md and docs/INPUT.md are the designs. */
+             * The seat came with the compositor: xtask test-seat types into
+             * a window on Ferrix from QEMU's far end, and the stage is met.
+             * docs/DISPLAY.md and docs/INPUT.md are the designs. */
     }
 
-    #inProgress requirement <'S18'> stage18Compositor : Stage {
+    #implemented requirement <'S18'> stage18Compositor : Stage {
         attribute :>> number = 18;
-        attribute :>> status = StageStatus::InProgress;
-        attribute :>> size = "96 points";
+        attribute :>> status = StageStatus::Done;
+        attribute :>> size = "96 points, spent";
         doc /* The compositor itself: the Wayland wire protocol and its
              * server, xdg-shell, wl_shm, the dwindle and master layouts, a
              * CPU renderer, hyprland.conf and the hyprctl socket. Exit: two
@@ -450,7 +451,7 @@ package FerrixRoadmap {
     #inProgress requirement <'S19'> stage19HyprlandFidelity : Stage {
         attribute :>> number = 19;
         attribute :>> status = StageStatus::InProgress;
-        attribute :>> size = "144 points";
+        attribute :>> size = "144 points, about 100 left";
         doc /* What makes a Hyprland rather than a tiling compositor:
              * animations with bezier curves, rounded corners, blur, shadows,
              * opacity rules, special workspaces, groups, multiple monitors,
@@ -468,7 +469,9 @@ package FerrixRoadmap {
              * commands, a render node with the virtgpu ioctls and 3D
              * scanout, the host half in xtask, and a Rust virgl encoder as
              * the compositor's renderer behind a renderer trait, 52 points
-             * in that order. A card of Ferrix's own is stage 21. */
+             * in that order. A card of Ferrix's own is stage 21. Of the
+             * 144, about 100 are left: the GPU's 52, XWayland's 40, and
+             * about 8 of pointer-driven options and second-pass effects. */
     }
 
     #planned requirement <'S21'> stage21BareMetalGpu : Stage {
@@ -483,6 +486,24 @@ package FerrixRoadmap {
              * glibc-built closed libraries or Mesa's NVK over a Rust driver
              * such as Linux's Nova, weighed when the stage opens. Exit: the
              * stage 19 exit on real hardware, drawn by the card. */
+    }
+
+    #planned requirement <'S22'> stage22Steam : Stage {
+        attribute :>> number = 22;
+        attribute :>> status = StageStatus::Planned;
+        attribute :>> size = "unsized, over 300 points";
+        doc /* Steam on Ferrix, put on the roadmap by the customer on
+             * 2026-09-18 as the step after the GPU decision; a guest's
+             * stage first, on Path A's GPU, that does not wait for bare
+             * metal. What it stands on that nothing else staged: the 32-bit
+             * x86 ABI for the i386 client and 32-bit Wine, glibc's place
+             * taken by ferrousli under the Steam runtime, bubblewrap's needs
+             * over stage 13, a root on btrfs, XWayland, sound (virtio-snd,
+             * an audio core, a PulseAudio or PipeWire server), and Vulkan
+             * through Venus on a KVM host. Exit in three boots: the client
+             * logs in with its browser helper drawing; a native game
+             * installs, plays and sounds; a Windows game runs through
+             * Proton. */
     }
 
     #planned requirement <'S20'> stage20SelfHosting : Stage {
@@ -520,6 +541,8 @@ package FerrixRoadmap {
     dependency from stage19HyprlandFidelity to stage18Compositor;
     dependency from stage20SelfHosting to stage16Rustc;
     dependency from stage21BareMetalGpu to stage19HyprlandFidelity, stageDynamicLinking;
+    dependency from stage22Steam to stage19HyprlandFidelity, stageDynamicLinking,
+        stage12BtrfsWrite, stage13Isolation, stageNetworking;
 
     #planned requirement <'D.fuzz'> fuzzTargetsOwed : Principles::DesignRule {
         doc /* fuzz/ has two targets, elf_parse and frame_alloc. Every

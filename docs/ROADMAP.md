@@ -46,10 +46,14 @@ sectors through the block ring with VT-d on x86-64 and the `SMMUv3` on AArch64
 translating, and a deliberate out-of-domain write faulted on both; ARMv7-A runs
 it in degraded trusted mode, as decided. What the stage still owes — `devmgr`
 the program, trusting decoding-off BARs — is after the exit in its section.
-Stages 17 and 18 have begun, and the compositor runs: `cargo xtask
-test-compositor` boots it as init on Ferrix, and two Wayland clients tile on
-the card, pixel for pixel as the renderer draws them, on x86-64 and AArch64.
-Stage 17, display and input, has begun. Its display iteration is done:
+Networking is done: sockets, a net core and a ring-3 virtio-net driver, with
+`curl` fetching over HTTPS and `git` cloning inside the guest. Stages 17 and
+18 are met, and the compositor runs: `cargo xtask test-compositor` boots it
+as init on Ferrix, and two Wayland clients tile on the card, pixel for pixel
+as the renderer draws them, on x86-64 and AArch64. Stage 19 is under way and
+every part of its exit but the GPU is met; the GPU path was decided on
+2026-09-18 (`docs/GPU.md`), stage 21 is bare metal with a card of Ferrix's
+own, and stage 22 is Steam. Stage 17's display iteration is done:
 `/dev/dri/card0` served by a ring-3 virtio-gpu driver, with `cargo xtask
 test-display` requiring a compositor's colour pixel for pixel on x86-64 and
 AArch64. Its input iteration is done too, to the same standard:
@@ -2800,7 +2804,7 @@ manifest's; a byte wrong anywhere in the stack is a CRC that differs.
 
 ---
 
-## Networking — sockets, a net core, virtio-net  ·  *month*
+## Networking — sockets, a net core, virtio-net ✅
 
 Placed after stage 11 without a number of its own, the way *ARMv7-A* sits
 after stage 4. The net core was named in `docs/ARCHITECTURE.md` and left
@@ -3274,7 +3278,8 @@ every binary a distribution ships is a position-independent executable that
 asks for glibc's `ld-linux`. The question of 2026-09-16 that put this here was
 whether Steam could run; the answer began with this section, before the
 32-bit ABI, networking and the display stages it also waits on. The 32-bit
-x86 ABI is not part of it and is not staged.
+x86 ABI is not part of it; since 2026-09-18 it is stage 22's, where the rest
+of that answer is.
 
 Three parts, in the order they can be tested:
 
@@ -3384,7 +3389,7 @@ The remaining syscall surface, the memory scale, the process spawn path for
 
 ---
 
-## Stage 17 — Display and input  ·  *74 points*
+## Stage 17 — Display and input ✅  ·  *74 points, spent*
 
 The first stage of the goal after `rustc`: a Hyprland-shaped Wayland
 compositor, written in Rust, running on Ferrix. The compositor is a user
@@ -3656,7 +3661,7 @@ primary plane on the card" on both.
 
 ---
 
-## Stage 18 — The compositor  ·  *96 points*
+## Stage 18 — The compositor ✅  ·  *96 points, spent*
 
 A Wayland compositor in Rust, on `libs/`' side of the tree as its own
 workspace the way ferrousli is, **written from scratch** rather than on the
@@ -4196,12 +4201,10 @@ whole of it, since that is where the work landed. `cargo xtask test-pty`
 proves the pair without a window and `cargo xtask test-compositor` boots a
 terminal in the compositor and requires the picture it makes.
 
-This stage's exit criterion is met in full.
-
-**Still to do, in the order visible iterations need it.** Iteration 1, a
-blank screen on Ferrix in QEMU, pulls a first cut of stage 17 forward (the
-customer's order of 2026-09-16); then the protocol server, the seat, the
-IPC, the clients.
+This stage's exit criterion is met in full, and its 96 points are spent.
+The visible iterations the customer ordered on 2026-09-16 -- a blank screen
+on Ferrix in QEMU first, then the protocol server, the seat, the IPC and the
+clients -- landed in that order.
 
 **Exit:** in a test of its own on x86-64 and AArch64, the compositor starts
 from a `hyprland.conf`, `exec-once` launches two pattern clients, they tile
@@ -4213,7 +4216,7 @@ console can run the terminal client in it.
 
 ---
 
-## Stage 19 — Hyprland fidelity, and the GPU  ·  *144 points*
+## Stage 19 — Hyprland fidelity, and the GPU  ·  *144 points, about 100 left*
 
 What makes it Hyprland rather than a tiling compositor: animations with its
 bezier curves, rounded corners, blur and shadows, dimming and opacity rules,
@@ -5417,8 +5420,15 @@ met, and by `cargo xtask test-compositor` on x86-64 and on AArch64:
 * a plugin loaded from `plugin = /bin/plug`, adding a dispatcher a keybind
   presses.
 
-What is left is the GPU path, and with it the frame rate the exit asks for
-under one: the four pieces above, none of which is begun.
+**Where the points stand (2026-09-18).** Of the stage's 144, about 100 are
+left, in three parts: the GPU path, 52, in the four pieces above, none of
+which is begun; XWayland, 40 as a first guess -- `xwayland_shell_v1` on the
+compositor's side and an X server on Ferrix, which stage 22 is what finally
+needs; and the small remainder `docs/COMPOSITOR-DAMAGE-HANDOFF.md` §5 lists,
+about 8: the pointer-driven options (`resize_on_border`, `snap`,
+`extend_border_grab_area`, dwindle's cursor-placed splits), `xray` and
+`no_screen_share`, which need a second pass, and `persistent_size`. The
+frame rate the exit asks for under the GPU path comes with the GPU path.
 
 ---
 
@@ -5447,6 +5457,89 @@ gates that judge a GPU's picture. It depends on the dynamic linking stage,
 whichever userspace is taken.
 
 **Exit:** the stage 19 exit on real hardware, drawn by the card.
+
+---
+
+## Stage 22 — Steam  ·  *unsized, over 300 points*
+
+Steam runs on Ferrix, logs in, and a game bought there plays. Put on the
+roadmap by the customer on 2026-09-18 as the step after the GPU decision. It
+does not wait for stage 21: it is a guest's stage first, on the GPU of Path
+A, and moves to bare metal when stage 21 does.
+
+Steam is the hardest Linux program to be somebody else's binary for, which
+is why it is the right exit for `docs/ARCHITECTURE.md` §2's promise: a
+closed client that is a 32-bit program starting 64-bit helpers, one of them
+a whole browser; a runtime that containerises every game with bubblewrap;
+and games that draw with Vulkan through Wine. Everything below is something
+Steam needs that Ferrix does not have, in the order it can be tested. The
+dynamic linking section above already says the first part; the rest was not
+staged until now.
+
+* **The 32-bit x86 ABI.** The Steam client itself is an `i386` program
+  today, and every 32-bit Windows game Proton runs is 32-bit Wine underneath,
+  so this is needed whether or not Valve's 64-bit client arrives first. The
+  `i386` system call table and its `compat` layouts -- `struct stat64`,
+  `off_t` pairs, `epoll_event` packed, `iovec` and `msghdr` with 32-bit
+  pointers -- entered through `int $0x80` and the vDSO-less path glibc falls
+  back to, 32-bit address spaces below 4 GiB on the 64-bit kernel, 32-bit
+  `mmap` and `brk` limits, `TLS` through `set_thread_area` and the `GDT`
+  entries it needs, 32-bit signal frames, and `AT_SYSINFO` absent as
+  `AT_SYSINFO_EHDR` is. x86-64 only; the Arm architectures have nothing
+  to run. Unsized: the table is as long as stage 7's was.
+* **glibc's place, taken.** The dynamic linking stage's third part, glibc's
+  names, with Steam as its stress test: `ld-linux` and `libc.so.6` requested
+  by name, `dlopen` from the client and from every Steam runtime library,
+  `GLIBC_2.x` versions back to the ones a 2012 runtime binary asks for, and
+  the `/etc/ld.so.cache`, `LD_PRELOAD` and `LD_LIBRARY_PATH` behaviour the
+  runtime's launcher scripts lean on. 13 points are priced there; Steam adds
+  whatever those scripts find missing, unsized.
+* **The container the games run in.** Steam's `pressure-vessel` runs each
+  game inside bubblewrap: user, mount and pid namespaces, `pivot_root`,
+  `seccomp` filters, and the Chromium helper's own sandbox on top. That is
+  stage 13 entire, plus what stage 13 does not name and Steam will:
+  `inotify`, `pidfd_open` and `pidfd_send_signal`, `SO_PEERCRED`,
+  `/proc/<pid>/` fields the runtime reads, and `prctl` beyond what stage 7
+  answers. Stage 13's month, plus 13 points of the rest.
+* **Somewhere to put it.** A Steam library is tens of gigabytes on a
+  filesystem that survives a reboot: stage 12, btrfs write, and a root on
+  it rather than an initramfs. Stage 12's "longer".
+* **XWayland.** The client is an X11 program; stage 19 lists XWayland as
+  its largest single gap and this is what finally needs it. An X server on
+  the compositor's protocol: Xwayland built on ferrousli with its dynamic
+  loading (the C path), or a Rust X server that answers the requests Steam
+  and Wine make, which is the smaller subset than it sounds and the larger
+  program than it looks. `xwayland_shell_v1` on the compositor's side is a
+  table. 40 points as a first guess, most of it the server, counted in
+  stage 19's remainder and not again here.
+* **Sound.** Ferrix has no audio at all: a `virtio-snd` driver in ring 3,
+  an audio core with a `/dev/snd` shaped enough for a client library, and a
+  server speaking the PulseAudio or PipeWire protocol over a Unix socket,
+  which is what Steam and every game link against. 30 points as a first
+  guess.
+* **The GPU, with Vulkan.** Path A gives OpenGL, which the client and a
+  native game can use. Proton draws with Vulkan through DXVK, and Vulkan
+  under virtio-gpu is Venus, which needs a Linux host with KVM: on the
+  Windows machine, Proton games wait for stage 21, and native GL games do
+  not. Venus is Path A's steps 1 and 2 again for a second capability set,
+  8 points on top of Path A, and Mesa's Venus driver on ferrousli or a Rust
+  Vulkan loader over it, which is Path A's 3a question asked a second
+  time.
+* **Wine and Proton.** Not Ferrix's to write and everything Ferrix's to
+  run: Proton is Wine plus DXVK plus the runtime, and every one of its
+  kernel needs is one of the bullets above. What it will find missing is
+  found by running it.
+
+**Exit,** in three steps, each a boot of its own the way stage 18's and
+19's are: the Steam client starts on Ferrix, logs in and shows its store,
+with the browser helper drawing; a native Linux game from the library
+installs to btrfs, launches and draws through the GPU path with sound; and
+a Windows game runs through Proton. The first two are a guest's exit on
+the Linux host; the third is the GPU's Vulkan, wherever that comes first.
+
+None of it is sized past a first guess, and the sum of the first guesses is
+already over 300 points, so the stage is written as a list of what has to be
+true rather than a plan.
 
 ---
 
