@@ -4,10 +4,11 @@ use std::ffi::CStr;
 use std::io;
 
 use ferrix_linux_abi::drm::{
-    self, CardRes, CreateDumb, Crtc, CrtcPageFlip, FbCmd2, Field, GetBlob, GetConnector,
-    GetEncoder, GetPlane, GetPlaneRes, GetProperty, Layout, MapDumb, ModeInfo, ObjGetProperties,
-    PropertyEnum, SetClientCap,
+    self, CardRes, ClipRect, CreateDumb, Crtc, CrtcPageFlip, FbCmd2, FbDirtyCmd, Field, GetBlob,
+    GetConnector, GetEncoder, GetPlane, GetPlaneRes, GetProperty, Layout, MapDumb, ModeInfo,
+    ObjGetProperties, PropertyEnum, SetClientCap, Version,
 };
+use ferrix_linux_abi::socket::Width;
 
 use crate::modeset;
 
@@ -16,6 +17,9 @@ const MARKER: &str = "compositor: scanout";
 
 /// The first card, and the name every other is made from.
 const CARD: &CStr = c"/dev/dri/card0";
+
+/// The most rectangles one [`Card::dirty`] names: `DRM_MODE_FB_DIRTY_MAX_CLIPS`.
+const MAX_CLIPS: usize = drm::FB_DIRTY_MAX_CLIPS as usize;
 
 /// The most cards looked for: a machine with more screens than this has
 /// them on one card's connectors, which is where they are looked for next.
@@ -662,6 +666,99 @@ impl Card {
             ..CrtcPageFlip::ZERO
         };
         self.ioctl(drm::IOCTL_MODE_PAGE_FLIP, &mut flip)
+    }
+
+    /// The kernel driver's name, as `DRM_IOCTL_VERSION` gives it:
+    /// `virtio_gpu`, `amdgpu`, `i915`.
+    ///
+    /// What says whether the card scans out of the memory a dumb buffer is
+    /// or out of a copy of it, which is what [`Card::dirty`] is for.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the card said.
+    pub fn driver(&self) -> io::Result<String> {
+        let width = if size_of::<usize>() == 4 {
+            Width::Bits32
+        } else {
+            Width::Bits64
+        };
+        let mut name = [0u8; 64];
+        let version = Version {
+            version_major: 0,
+            version_minor: 0,
+            version_patchlevel: 0,
+            name_len: name.len() as u64,
+            name: address(&mut name),
+            date_len: 0,
+            date: 0,
+            desc_len: 0,
+            desc: 0,
+        };
+        let mut bytes = vec![0u8; Version::size(width)];
+        version
+            .write(width, &mut bytes)
+            .ok_or_else(|| io::Error::other("a structure larger than its buffer"))?;
+        // SAFETY: `bytes` is a live buffer of the size the request's number
+        // encodes, and the one pointer in it is to `name`, which outlives the
+        // call and whose length is beside it.
+        let result =
+            unsafe { libc::ioctl(self.fd, drm::ioctl_version(width) as _, bytes.as_mut_ptr()) };
+        if result < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let answered =
+            Version::read(width, &bytes).ok_or_else(|| io::Error::other("a short answer"))?;
+        let len = usize::try_from(answered.name_len)
+            .unwrap_or(usize::MAX)
+            .min(name.len());
+        Ok(String::from_utf8_lossy(name.get(..len).unwrap_or(&[])).into_owned())
+    }
+
+    /// Tell the card that `clips` of `buffer` have been drawn into, each
+    /// `(x, y, width, height)`.
+    ///
+    /// `DRM_IOCTL_MODE_DIRTYFB`. A card that scans out of a copy of the
+    /// buffer -- a virtio-gpu, whose host holds the copy -- takes this as
+    /// the order to bring that much of the copy up to date, which is the
+    /// whole of showing a frame on such a card and costs what changed
+    /// rather than the screen.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the card said.
+    pub fn dirty(&self, buffer: &Dumb, clips: &[(u32, u32, u32, u32)]) -> io::Result<()> {
+        let edge = |value: u32| u16::try_from(value).unwrap_or(u16::MAX);
+        let mut bytes = vec![0u8; clips.len().min(MAX_CLIPS) * ClipRect::SIZE];
+        for (&(x, y, width, height), out) in
+            clips.iter().zip(bytes.chunks_exact_mut(ClipRect::SIZE))
+        {
+            ClipRect {
+                x1: edge(x),
+                y1: edge(y),
+                x2: edge(x.saturating_add(width)),
+                y2: edge(y.saturating_add(height)),
+            }
+            .write(out)
+            .ok_or_else(|| io::Error::other("a clip larger than its buffer"))?;
+        }
+        let mut command = FbDirtyCmd {
+            fb_id: buffer.framebuffer,
+            // More clips than the call takes is all of it, which is what
+            // none at all says.
+            num_clips: if clips.len() > MAX_CLIPS {
+                0
+            } else {
+                u32::try_from(clips.len()).unwrap_or(0)
+            },
+            clips_ptr: if clips.is_empty() || clips.len() > MAX_CLIPS {
+                0
+            } else {
+                address(&mut bytes)
+            },
+            ..FbDirtyCmd::ZERO
+        };
+        self.ioctl(drm::IOCTL_MODE_DIRTYFB, &mut command)
     }
 
     /// Map `size` bytes of the card at `offset`.

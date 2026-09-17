@@ -8,7 +8,7 @@ that whoever touches it next does not have to rediscover any of it.
 The short version: **a frame that changes a little costs a little, whatever
 is on the screen: 120 ms → 0.06 ms for a terminal rewriting a line,
 translucent or not. What is left is a wallpaper that changes every frame,
-which is a blur every frame (§2.4).**
+which is a blur every frame (§2.5).**
 
 ---
 
@@ -208,7 +208,42 @@ machine.** One `foot` rewriting a line five times a second:
 The compositor's share of a core over ten seconds of the last row: 62% →
 6%, most of what is left being a loop that wakes every 2 ms.
 
-### 2.4 What is left
+### 2.4 What a cheap frame uncovered: nothing paced them
+
+The day the above landed, the pointer stuttered over *everything* in
+`cargo xtask run-compositor`, worse than before. A frame that took 120 ms had
+been pacing of a kind; at 0.06 ms the loop drew one for every report the
+mouse sent, and a frame is not only drawing. On a card it ends in a page
+flip, and Ferrix's virtio-gpu answers a flip by setting the scanout and
+sending the **whole** framebuffer to the host, waited for (`show` in
+`kernel/src/display/drm.rs`). A guest with one processor spent it doing
+that.
+
+* `hyprix::pace`: a change is owed a frame, and the frame is the next one
+  the screen's refresh allows. Input is still read every pass. Hyprland
+  draws on its frame scheduler's clock for the same reason.
+* `backend::Drm` on a `virtio_gpu` (`DRM_IOCTL_VERSION`) is one buffer and
+  `DRM_IOCTL_MODE_DIRTYFB` over the frame's damage: the host shows a *copy*
+  of the buffer, so nothing tears and a flip is the expensive way to say
+  what changed. `Backend::age` tells the damage that such a screen is owed
+  this frame's damage alone. Every other card flips two buffers as before.
+* `test-compositor --boot pointer` sweeps the pointer through 400 places
+  first. The picture at the end must be the single movement's, to the pixel
+  (no arrow left behind on the host's copy), and no frame report may count
+  more than 75 frames. At main before this it counted **160** and the boot
+  failed on exactly that; with it, 60, slowest 2.3 ms, 97 ms of drawing in
+  the second (KVM, 1024x768).
+* The report line ends `, all of them N us` now: what the window's frames
+  cost together, which a slowest frame cannot say.
+
+Still to be looked at there: the first frames of a boot take about a second
+each in the guest (`frames 4 slowest of the last 4 1142353 us`) where the
+host draws the same frame in tens of milliseconds. Not the blur's
+arithmetic; probably what a fresh fifteen megabytes of planes costs in page
+faults on Ferrix. It is paid once a boot now rather than once a frame,
+which is why it is a note and not a fix.
+
+### 2.5 What is left
 
 * **A wallpaper that changes every frame** (`mpvpaper`) changes what is
   behind every window every frame, and the blur of it is owed every frame:
@@ -218,7 +253,7 @@ The compositor's share of a core over ten seconds of the last row: 62% →
 * **A floating translucent window, and a blurred bar,** are still redrawn
   whole when touched. A bar is 8.6 ms. A large floating terminal is the case
   that would be felt.
-* **The loop polls**, 2 ms at a time, and builds a description of every
+* **The loop polls** for input, 2 ms at a time, and builds a description of every
   window each pass while a bar is watching. Not the frame time, but it is a
   core that is never idle on a machine with one.
 * **`composite_scaled` still gathers a whole surface**, for a window

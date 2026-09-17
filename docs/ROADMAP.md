@@ -4385,6 +4385,15 @@ tiled window and nowhere else: the blur they held had the window's own
 shadow and, under a rounded window, its border's fill in it, and Hyprland's
 has neither. `docs/COMPOSITOR-DAMAGE-HANDOFF.md` has the measurements.
 
+A cheap frame then showed what a dear one had hidden: nothing paced them. A
+frame for every report of the mouse, each ending on Ferrix's virtio-gpu in
+the whole framebuffer sent to the host, and the pointer stuttered over
+everything in `run-compositor`. A change is owed a frame at the screen's
+refresh now (`hyprix::pace`), and a virtio-gpu is one buffer told what
+changed with `DRM_IOCTL_MODE_DIRTYFB` rather than two flipped whole. The
+pointer boot sweeps the pointer through four hundred places and holds both:
+160 frames for the sweep before, 60 after, and the last picture exact.
+
 **Done — the rest of Hyprland's dispatcher table (2026-09-17).**
 Twenty-seven names in Hyprland's `m_dispMap` had no answer here; every one
 of them does now. The split is by what they touch. `compositor/layout`

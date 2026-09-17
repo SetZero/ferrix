@@ -365,6 +365,47 @@ const POINTER_EXPECTED: [(&str, &str); 2] = [
 /// is a different picture and not the one this boot is about.
 const POINTER_AT: (i32, i32) = (22401, 12800);
 
+/// How many places the pointer is swept through on its way to
+/// [`POINTER_AT`], and how long after each the next is sent.
+///
+/// A hand moving a mouse, as a guest sees it: a few hundred reports a
+/// second, each a few pixels on from the last. The boot used to put the
+/// pointer down once, and a compositor that drew a whole frame for every
+/// report -- each ending in the whole framebuffer sent to the host -- passed
+/// it and stuttered under a hand. So the pointer is swept first, and two
+/// things are required of the sweep. The picture at the end is the one a
+/// single movement makes, to the pixel: no frame of the four hundred left
+/// an arrow behind on the host's copy of the screen, which is what sending
+/// only what changed would do if what changed were worked out wrong. And
+/// the compositor drew at the screen's rate and not the mouse's:
+/// [`MOST_FRAMES`].
+const SWEEP: (u32, Duration) = (400, Duration::from_millis(3));
+
+/// The most frames one of the compositor's frame reports may count.
+///
+/// A report is printed by the first frame a second or more after the last,
+/// so at sixty frames a second it counts sixty or so however long the quiet
+/// before it was. Three hundred reports a second drawn one for one count
+/// three hundred.
+const MOST_FRAMES: u32 = 75;
+
+/// Where the pointer is at `step` of the sweep, in QMP's 0..0x7FFF.
+///
+/// Inside the focused window for the reason [`POINTER_AT`] gives, down and
+/// back up its whole height so that it crosses the half of the gradient that
+/// can be seen through, which is the half with a blur behind it.
+fn swept(step: u32) -> (i32, i32) {
+    let (steps, _) = SWEEP;
+    let along = i32::try_from(step).unwrap_or(0);
+    let of = i32::try_from(steps).unwrap_or(1).max(1);
+    // x from 56% to 94% of the screen, y a triangle wave from 10% to 90%.
+    let x = 18_350 + (12_450 * along) / of;
+    let wave = (along * 4) % (of * 2);
+    let up = if wave < of { wave } else { of * 2 - wave };
+    let y = 3_277 + (26_213 * up) / of;
+    (x, y)
+}
+
 /// The configuration the seventeenth boot is given: the two windows, and
 /// nothing else.
 const POINTER_CONFIG: &str = "\
@@ -1114,8 +1155,14 @@ fn ask_for_state(
     if index == 1
         && let Some((x, y)) = pointer
     {
+        let (steps, every) = SWEEP;
+        for step in 0..steps {
+            let (x, y) = swept(step);
+            qmp.input_send_event(&[absolute("x", x), absolute("y", y)])?;
+            std::thread::sleep(every);
+        }
         qmp.input_send_event(&[absolute("x", x), absolute("y", y)])?;
-        println!("  {arch}: moved the pointer");
+        println!("  {arch}: swept the pointer through {steps} places and put it down");
     }
     Ok(())
 }
@@ -1731,7 +1778,7 @@ fn one_picture(
 /// point -- and to have been the ordinary tiled pair before it, because the
 /// pointer is not drawn until it has moved.
 fn test_pointer(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
-    let (screens, _) = boot_and_dump(
+    let (screens, said) = boot_and_dump(
         arch,
         programs,
         POINTER_CONFIG,
@@ -1756,9 +1803,41 @@ fn test_pointer(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
             "{arch}: moving the pointer drew nothing"
         )));
     }
+    // The compositor's own count of what the sweep cost: `hyprix: frames 412
+    // slowest of the last 58 1312 us`, a second or more apart.
+    let counted: Vec<u32> = said
+        .iter()
+        .filter_map(|line| {
+            line.split_once("slowest of the last ")?
+                .1
+                .split(' ')
+                .next()?
+                .parse()
+                .ok()
+        })
+        .collect();
+    let Some(most) = counted.iter().copied().max() else {
+        return Err(Error::new(format!(
+            "{arch}: the compositor never said how many frames it drew"
+        )));
+    };
+    // The sweep lasts a second and is drawn: a report that counted a
+    // handful is a sweep that was not seen at all.
+    if most < 20 {
+        return Err(Error::new(format!(
+            "{arch}: the most frames a report counted is {most}, so the sweep was not drawn"
+        )));
+    }
+    if most > MOST_FRAMES {
+        return Err(Error::new(format!(
+            "{arch}: one report counted {most} frames, over {MOST_FRAMES}: the compositor is \
+             drawing a frame for every report of the mouse rather than at the screen's rate"
+        )));
+    }
     println!(
-        "  {arch}: the pointer was drawn where the mouse was put, over the windows, in every one \
-         of {} pixels",
+        "  {arch}: the pointer was swept over the windows and put down, drawn at the screen's \
+         rate ({most} frames the most in a report) and left where the mouse was put, in every \
+         one of {} pixels",
         after.width * after.height
     );
     Ok(())

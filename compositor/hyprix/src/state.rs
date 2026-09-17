@@ -400,6 +400,10 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
     let mut sources: BTreeMap<WindowId, Source> = BTreeMap::new();
     let mut placed_layers: Vec<crate::frame::Placed> = Vec::new();
     let mut settling = false;
+    // Whether something has changed that no frame has shown yet, and when
+    // the next frame may be drawn. `crate::pace` says why a change waits.
+    let mut owed = false;
+    let mut pace = crate::pace::Pace::default();
     let mut slowest = Duration::ZERO;
     // What the clients have said they drew since the last frame, and the
     // fewest pixels any frame has redrawn. `crate::damage` says what the
@@ -411,6 +415,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
     // and when that report was: the line is a second apart at most, and
     // silent while nothing is drawn.
     let mut since = Duration::ZERO;
+    let mut spent = Duration::ZERO;
     let mut counted = 0u32;
     let mut reported = Instant::now();
     let mut next_window = 1u32;
@@ -1037,7 +1042,17 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
         // that is drawn while a window is still moving is a frame short of
         // its goal, and without this the screen would keep that last frame
         // for ever.
-        if changed || drawn == 0 || animating || settling {
+        //
+        // And when the screen can take one. A change is owed a frame, not
+        // drawn the moment it happens: what changed is kept -- the commits
+        // in `commits`, everything else in the plan the next frame is
+        // compared with -- and the frame that shows it is the next one the
+        // screen's refresh allows.
+        owed |= changed;
+        if (owed || drawn == 0 || animating || settling)
+            && pace.due(Instant::now(), refresh_ns(&screens))
+        {
+            owed = false;
             settling = animating;
             let outputs = state.layout();
             #[expect(
@@ -1185,7 +1200,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                 // And the clients' own pixels: where on this screen each
                 // commit since the last frame landed.
                 let heard = commits.on(&plan, &sources);
-                let frame = screen.watch.frame(plan, &heard);
+                let frame = screen.watch.frame(plan, &heard, screen.backend.age());
                 redrew = redrew.saturating_add(frame.canvas.area());
                 let mut target = crate::frame::Output {
                     canvas: &mut screen.canvas,
@@ -1257,14 +1272,22 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
             // number nobody sees: `docs/ROADMAP.md` asks each software
             // effect for a frame-time bound, and this is where it is
             // measured on the machine that ran it.
+            //
+            // And all of them together, after the slowest, which is what
+            // the machine spent drawing: one frame in sixty may be slow for
+            // a reason of its own, and a slowest frame cannot tell that
+            // from sixty slow ones.
             since = since.max(took);
+            spent = spent.saturating_add(took);
             counted = counted.saturating_add(1);
             if reported.elapsed() >= FRAME_REPORT {
                 report(&format!(
-                    "hyprix: frames {drawn} slowest of the last {counted} {} us",
-                    since.as_micros()
+                    "hyprix: frames {drawn} slowest of the last {counted} {} us, all of them {} us",
+                    since.as_micros(),
+                    spent.as_micros()
                 ));
-                (since, counted, reported) = (Duration::ZERO, 0, Instant::now());
+                (since, spent, counted, reported) =
+                    (Duration::ZERO, Duration::ZERO, 0, Instant::now());
             }
             if drawn == 1 {
                 // The screens are up and the first frame is on them. This is

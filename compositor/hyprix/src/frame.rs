@@ -289,7 +289,7 @@ pub fn draw_dark(target: &mut Output<'_>, damage: &Damage) -> Result<(), String>
     canvas
         .present(&mut screen, present)
         .map_err(|error| format!("the frame does not fit the screen: {error:?}"))?;
-    backend.present().map_err(|error| error.to_string())
+    backend.present(present).map_err(|error| error.to_string())
 }
 
 /// The two above, which differ only in what they are given to draw.
@@ -420,7 +420,7 @@ fn draw_windows(
     if let Some(gamma) = gamma {
         gamma.apply(backend.buffer(), stride, present);
     }
-    backend.present().map_err(|error| error.to_string())
+    backend.present(present).map_err(|error| error.to_string())
 }
 
 /// One rectangle in the buffer pixels of a monitor at `scale`, grown away

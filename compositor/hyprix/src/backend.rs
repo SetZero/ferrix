@@ -22,10 +22,23 @@ pub trait Backend: core::fmt::Debug {
 
     /// Show what was drawn.
     ///
+    /// `drawn` is what of the buffer has been written since it was last
+    /// handed over, in its own pixels: a screen that is sent its picture
+    /// rather than scanning it out of this memory is sent that much.
+    ///
     /// # Errors
     ///
     /// Whatever the screen said.
-    fn present(&mut self) -> io::Result<()>;
+    fn present(&mut self, drawn: &compositor_render::Damage) -> io::Result<()>;
+
+    /// How many frames old the buffer [`Backend::buffer`] gives is: one for
+    /// a screen with one buffer, two for one that draws into two in turn.
+    ///
+    /// What a frame has to copy into it: its own damage, and that of every
+    /// frame the buffer missed.
+    fn age(&self) -> u32 {
+        1
+    }
 
     /// What to say about this backend in the compositor's log line.
     fn describe(&self) -> String;
@@ -96,7 +109,7 @@ impl Backend for Headless {
         self.width.saturating_mul(4)
     }
 
-    fn present(&mut self) -> io::Result<()> {
+    fn present(&mut self, _drawn: &compositor_render::Damage) -> io::Result<()> {
         self.frames = self.frames.saturating_add(1);
         Ok(())
     }
@@ -123,6 +136,15 @@ impl Backend for Headless {
 /// buffer would work and would tear: the card scans out of the same memory
 /// the compositor is writing, so half a frame is on screen while the other
 /// half is being drawn.
+///
+/// Unless the card does not scan out of that memory at all. A virtio-gpu's
+/// host holds a copy of the buffer and shows the copy, which changes only
+/// when the guest says what to bring up to date -- so nothing tears, and a
+/// flip is the expensive way to say it: the scanout is set again and the
+/// *whole* buffer sent, whatever the frame changed. On that card the screen
+/// is one buffer and a frame is `DRM_IOCTL_MODE_DIRTYFB` over its damage:
+/// a pointer's frame sends a pointer's worth of pixels to the host rather
+/// than two million. Linux's own `virtio_gpu` answers the call the same way.
 #[cfg(target_os = "linux")]
 #[derive(Debug)]
 pub struct Drm {
@@ -133,6 +155,9 @@ pub struct Drm {
     buffers: [compositor_drm::Dumb; 2],
     /// Which buffer is being drawn into.
     back: usize,
+    /// Whether the card shows a copy of the buffer it is told to bring up
+    /// to date, so that the first buffer is the only one drawn into.
+    copied: bool,
     width: u32,
     height: u32,
     frames: u32,
@@ -198,11 +223,15 @@ impl Drm {
         // A page flip needs a mode already set, so the first buffer is shown
         // the long way round.
         let _ = card.set_mode(&plan, &first)?;
+        // A card that will not say what it is is drawn on the way that is
+        // right for every card.
+        let copied = card.driver().is_ok_and(|driver| driver == "virtio_gpu");
         Ok(Self {
             card,
             plan,
             buffers: [first, second],
-            back: 1,
+            back: usize::from(!copied),
+            copied,
             width,
             height,
             frames: 0,
@@ -246,13 +275,39 @@ impl Backend for Drm {
             .map_or_else(|| self.width.saturating_mul(4), |buffer| buffer.pitch)
     }
 
-    fn present(&mut self) -> io::Result<()> {
-        if let Some(buffer) = self.buffers.get(self.back) {
+    fn present(&mut self, drawn: &compositor_render::Damage) -> io::Result<()> {
+        let Some(buffer) = self.buffers.get(self.back) else {
+            return Ok(());
+        };
+        if self.copied {
+            let edge = |value: i64| u32::try_from(value.max(0)).unwrap_or(u32::MAX);
+            let clips: Vec<(u32, u32, u32, u32)> = drawn
+                .rects()
+                .iter()
+                .map(|rect| {
+                    (
+                        edge(rect.x),
+                        edge(rect.y),
+                        edge(rect.width),
+                        edge(rect.height),
+                    )
+                })
+                .collect();
+            // A frame that drew nothing has nothing to send, and an empty
+            // list would say "all of it".
+            if !clips.is_empty() {
+                self.card.dirty(buffer, &clips)?;
+            }
+        } else {
             self.card.page_flip(&self.plan, buffer)?;
+            self.back = 1 - self.back;
         }
-        self.back = 1 - self.back;
         self.frames = self.frames.saturating_add(1);
         Ok(())
+    }
+
+    fn age(&self) -> u32 {
+        if self.copied { 1 } else { 2 }
     }
 
     fn describe(&self) -> String {

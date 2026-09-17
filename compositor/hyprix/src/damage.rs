@@ -56,6 +56,10 @@
 //! [`Frame::screen`] is therefore this frame's damage and the last one's,
 //! which is Hyprland's damage ring at a buffer age of two
 //! (`CMonitor::addDamage`).
+//!
+//! A screen with one buffer is owed only this frame's: `Backend::age` says
+//! which a screen is, and a virtio-gpu, which is sent what changed rather
+//! than flipped to, is the one that has one.
 
 use std::collections::BTreeMap;
 
@@ -647,8 +651,10 @@ impl Watch {
     /// said they drew.
     ///
     /// `heard` is already in this screen's own pixels: only the caller knows
-    /// where a surface's rectangle is.
-    pub(crate) fn frame(&mut self, plan: Plan, heard: &Heard) -> Frame {
+    /// where a surface's rectangle is. `age` is how many frames old the
+    /// buffer this frame is copied into is, `Backend::age`: past one, it is
+    /// owed the frame before's damage as well as this one's.
+    pub(crate) fn frame(&mut self, plan: Plan, heard: &Heard, age: u32) -> Frame {
         let (width, height) = plan.size;
         let mut behind = heard.behind.clone();
         let mut region = match self.plan.as_ref() {
@@ -664,7 +670,9 @@ impl Watch {
         plan.blurs_whole(&mut region);
         let region = region.clipped(Rect::new(0, 0, i64::from(width), i64::from(height)));
         let mut screen = region.clone();
-        screen.extend(&self.previous);
+        if age > 1 {
+            screen.extend(&self.previous);
+        }
         self.previous = region.clone();
         self.plan = Some(plan);
         Frame {
