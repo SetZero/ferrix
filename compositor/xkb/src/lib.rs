@@ -55,6 +55,10 @@
 
 pub mod generated;
 
+mod character;
+
+pub use character::character;
+
 mod state;
 
 pub use state::{Keyboard, Modifiers};
@@ -123,6 +127,44 @@ pub fn layout(name: &str, variant: &str) -> (&'static generated::Layout, bool) {
     }
     (fallback, false)
 }
+
+/// Every layout a configuration asks for, in order, each with whether it is
+/// the one that was asked for.
+///
+/// `input:kb_layout = de,us` is a keyboard with two groups, and
+/// `input:kb_variant = nodeadkeys,` gives the first of them a variant: both
+/// options are comma-separated lists read side by side, which is XKB's own
+/// grammar and so libxkbcommon's and so Hyprland's, since Hyprland hands the
+/// strings on unread.
+///
+/// A name with no variant beside it has none. Whitespace around either is
+/// ignored, because a person aligning a configuration file is not changing
+/// what it says.
+///
+/// At most [`MAX_GROUPS`] of them, for the reason that constant gives. An
+/// empty list is one group, the fallback, which is what an unset
+/// `kb_layout` means.
+#[must_use]
+pub fn layouts(names: &str, variants: &str) -> Vec<(&'static generated::Layout, bool)> {
+    if names.trim().is_empty() {
+        return vec![layout("", variants)];
+    }
+    let mut variants = variants.split(',');
+    names
+        .split(',')
+        .take(MAX_GROUPS)
+        .map(|name| layout(name, variants.next().unwrap_or_default()))
+        .collect()
+}
+
+/// How many groups a keymap may have.
+///
+/// XKB's own limit, which libxkbcommon spells `XKB_MAX_GROUPS` and enforces
+/// by refusing the fifth: a `wl_keyboard.modifiers` group is two bits in the
+/// protocol's own reckoning, and a keymap with more would have groups no
+/// client could be told about. A configuration naming more gets the first
+/// four, which is what libxkbcommon gives Hyprland.
+pub const MAX_GROUPS: usize = 4;
 
 /// What XKB adds to an evdev keycode to get its own.
 pub const XKB_OFFSET: u32 = 8;

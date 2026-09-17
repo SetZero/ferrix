@@ -13,13 +13,19 @@
 
 /// What the key named `keysym` sends, with `control` held or not.
 ///
-/// A keysym whose name is one character is that character; the rest are the
-/// named keys a terminal has bytes for. `None` for a key that sends nothing,
-/// which is what a modifier does.
+/// A keysym that makes a character sends it; the rest are the named keys a
+/// terminal has bytes for. `None` for a key that sends nothing, which is
+/// what a modifier does.
+///
+/// What a keysym's character is belongs to `compositor/xkb`, not here: X11
+/// names a keysym rather than spelling it, so `minus` is a hyphen and
+/// `exclam` is an exclamation mark. This used to take a name of one
+/// character as that character and let every other name fall through to
+/// [`named`], which knows only the keys with escape sequences -- so a
+/// terminal could be typed into with letters and digits and nothing else.
 #[must_use]
 pub fn bytes(keysym: &str, control: bool) -> Option<Vec<u8>> {
-    let mut characters = keysym.chars();
-    if let (Some(one), None) = (characters.next(), characters.next()) {
+    if let Some(one) = compositor_xkb::character(keysym) {
         // A character key. With control held it is the control character,
         // which is how every terminal has made one since the teletype:
         // control-C is three, the interrupt character the line discipline
