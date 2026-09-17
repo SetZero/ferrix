@@ -653,3 +653,351 @@ fn every_answer_this_crate_writes_is_json_when_json_was_asked_for() {
     }
     assert_eq!(Flags::default().format(), Format::Readable);
 }
+
+// ---------------------------------------------------------------------------
+// The event stream
+//
+// The line is `CEventManager::formatEvent`'s, and each payload is the one
+// Hyprland's own `postEvent` call builds; the variants cite the file and the
+// line. A bar reads these, so a shape that is nearly right is a bar that
+// shows the wrong thing.
+// ---------------------------------------------------------------------------
+
+use crate::{Event, MAX_DATA, Watcher, WindowRef};
+
+fn lines(event: &Event) -> Vec<String> {
+    event.lines()
+}
+
+#[test]
+fn an_event_is_its_name_then_two_angles_then_its_data() {
+    assert_eq!(
+        lines(&Event::Workspace {
+            id: 2,
+            name: "2".to_owned()
+        }),
+        ["workspace>>2\n", "workspacev2>>2,2\n"]
+    );
+    assert_eq!(
+        lines(&Event::ConfigReloaded),
+        ["configreloaded>>\n"],
+        "an event with no data is still a line"
+    );
+    assert_eq!(lines(&Event::Fullscreen(true)), ["fullscreen>>1\n"]);
+    assert_eq!(lines(&Event::Fullscreen(false)), ["fullscreen>>0\n"]);
+}
+
+/// Hyprland prints an address as lower-case hexadecimal with no `0x`, because
+/// it prints a pointer with `{:x}`.
+#[test]
+fn an_address_is_bare_lower_case_hexadecimal() {
+    assert_eq!(
+        lines(&Event::CloseWindow {
+            address: 0xDEAD_BEEF
+        }),
+        ["closewindow>>deadbeef\n"]
+    );
+    assert_eq!(lines(&Event::Urgent { address: 0x2A }), ["urgent>>2a\n"]);
+}
+
+#[test]
+fn the_focused_window_is_named_by_class_and_title_and_by_address() {
+    let window = WindowRef {
+        address: 0x1234,
+        class: "rocks.magical.pattern".to_owned(),
+        title: "one".to_owned(),
+    };
+    assert_eq!(
+        lines(&Event::ActiveWindow(Some(window))),
+        [
+            "activewindow>>rocks.magical.pattern,one\n",
+            "activewindowv2>>1234\n"
+        ]
+    );
+}
+
+/// With nothing focused Hyprland sends a bare comma and an empty payload,
+/// which is what its `FocusState.cpp:243` writes. A reader splits on the
+/// comma and gets two empty fields, and that is the signal.
+#[test]
+fn nothing_focused_is_a_comma_and_nothing() {
+    assert_eq!(
+        lines(&Event::ActiveWindow(None)),
+        ["activewindow>>,\n", "activewindowv2>>\n"]
+    );
+}
+
+#[test]
+fn every_event_that_has_a_v2_form_sends_both() {
+    let both = [
+        Event::Workspace {
+            id: 1,
+            name: "1".to_owned(),
+        },
+        Event::CreateWorkspace {
+            id: 1,
+            name: "1".to_owned(),
+        },
+        Event::DestroyWorkspace {
+            id: 1,
+            name: "1".to_owned(),
+        },
+        Event::FocusedMonitor {
+            monitor: "HEADLESS-1".to_owned(),
+            workspace: (1, "1".to_owned()),
+        },
+        Event::ActiveWindow(None),
+        Event::MoveWindow {
+            address: 1,
+            workspace: (2, "2".to_owned()),
+        },
+        Event::WindowTitle {
+            address: 1,
+            title: "t".to_owned(),
+        },
+        Event::MonitorAdded {
+            id: 0,
+            name: "HEADLESS-1".to_owned(),
+            description: String::new(),
+        },
+        Event::MonitorRemoved {
+            id: 0,
+            name: "HEADLESS-1".to_owned(),
+            description: String::new(),
+        },
+    ];
+    for event in both {
+        let sent = lines(&event);
+        assert_eq!(sent.len(), 2, "{event:?} sent {}", sent.len());
+        let names: Vec<&str> = sent
+            .iter()
+            .filter_map(|line| line.split_once(">>").map(|(name, _)| name))
+            .collect();
+        assert_eq!(
+            names.get(1).map(|name| name.ends_with("v2")),
+            Some(true),
+            "{event:?}: {names:?}"
+        );
+    }
+
+    // And the ones Hyprland sends once are sent once.
+    for event in [
+        Event::OpenWindow {
+            address: 1,
+            workspace: "1".to_owned(),
+            class: "c".to_owned(),
+            title: "t".to_owned(),
+        },
+        Event::CloseWindow { address: 1 },
+        Event::Fullscreen(true),
+        Event::ConfigReloaded,
+        Event::Submap(String::new()),
+        Event::OpenLayer("bar".to_owned()),
+        Event::CloseLayer("bar".to_owned()),
+        Event::Urgent { address: 1 },
+        Event::FloatingMode {
+            address: 1,
+            floating: true,
+        },
+    ] {
+        assert_eq!(lines(&event).len(), 1, "{event:?}");
+    }
+}
+
+/// One event is one line, whatever a client called its window. A title with
+/// a newline in it would otherwise be two lines and a reader would take the
+/// second for another event.
+#[test]
+fn a_newline_in_the_data_becomes_a_space() {
+    let sent = lines(&Event::WindowTitle {
+        address: 1,
+        title: "two\nlines".to_owned(),
+    });
+    assert_eq!(
+        sent.get(1).map(String::as_str),
+        Some("windowtitlev2>>1,two lines\n")
+    );
+    for line in &sent {
+        assert_eq!(line.matches('\n').count(), 1, "{line:?}");
+    }
+}
+
+/// Hyprland cuts the payload at 1024 bytes, so a client with an enormous
+/// title cannot make an enormous line.
+#[test]
+fn a_payload_is_cut_at_a_kilobyte() {
+    let long = "x".repeat(MAX_DATA * 2);
+    let sent = lines(&Event::OpenLayer(long));
+    let line = sent.first().map(String::as_str).unwrap_or("");
+    assert_eq!(line.len(), "openlayer>>".len() + MAX_DATA + 1);
+    // The cut is on a character boundary: a multi-byte character straddling
+    // the limit is dropped rather than halved, which would be invalid UTF-8.
+    let wide = "\u{00e9}".repeat(MAX_DATA);
+    let sent = lines(&Event::OpenLayer(wide));
+    let line = sent.first().map(String::as_str).unwrap_or("");
+    assert!(line.is_char_boundary(line.len()));
+    assert_eq!(line.len(), "openlayer>>".len() + MAX_DATA + 1);
+}
+
+// -- What changed -----------------------------------------------------------
+
+fn watched_window(address: u64, title: &str) -> Window {
+    Window {
+        address,
+        mapped: true,
+        visible: true,
+        workspace: 1,
+        workspace_name: "1".to_owned(),
+        class: "rocks.magical.pattern".to_owned(),
+        title: title.to_owned(),
+        ..Window::default()
+    }
+}
+
+fn watched(windows: &[Window], active: Option<u64>) -> Snapshot {
+    Snapshot {
+        monitors: vec![Monitor {
+            id: 0,
+            name: "HEADLESS-1".to_owned(),
+            width: 1024,
+            height: 768,
+            active_workspace: 1,
+            active_workspace_name: "1".to_owned(),
+            focused: true,
+            ..Monitor::default()
+        }],
+        workspaces: vec![Workspace {
+            id: 1,
+            name: "1".to_owned(),
+            monitor: "HEADLESS-1".to_owned(),
+            windows: windows.len() as u32,
+            has_fullscreen: false,
+        }],
+        windows: windows.to_vec(),
+        active_window: active,
+        active_workspace: 1,
+    }
+}
+
+/// A bar that connected before the compositor finished starting has to be
+/// told what already exists, or it shows an empty screen until something
+/// moves.
+#[test]
+fn the_first_look_reports_everything_as_new() {
+    let mut watcher = Watcher::new();
+    let events = watcher.changed(&watched(&[watched_window(1, "one")], Some(1)));
+    assert!(
+        matches!(events.first(), Some(Event::MonitorAdded { .. })),
+        "{events:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, Event::CreateWorkspace { id: 1, .. }))
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, Event::OpenWindow { address: 1, .. }))
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, Event::ActiveWindow(Some(_))))
+    );
+
+    // Nothing changed, nothing said.
+    assert!(
+        watcher
+            .changed(&watched(&[watched_window(1, "one")], Some(1)))
+            .is_empty()
+    );
+}
+
+#[test]
+fn a_window_arriving_leaving_and_being_renamed_is_each_one_event() {
+    let mut watcher = Watcher::new();
+    let _ = watcher.changed(&watched(&[watched_window(1, "one")], Some(1)));
+
+    let events = watcher.changed(&watched(
+        &[watched_window(1, "one"), watched_window(2, "two")],
+        Some(2),
+    ));
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, Event::OpenWindow { address: 2, .. }))
+            .count(),
+        1,
+        "{events:?}"
+    );
+    assert!(events.iter().any(|event| matches!(
+        event,
+        Event::ActiveWindow(Some(window)) if window.address == 2
+    )));
+
+    let events = watcher.changed(&watched(
+        &[watched_window(1, "renamed"), watched_window(2, "two")],
+        Some(2),
+    ));
+    assert_eq!(
+        events,
+        vec![Event::WindowTitle {
+            address: 1,
+            title: "renamed".to_owned()
+        }]
+    );
+
+    let events = watcher.changed(&watched(&[watched_window(1, "renamed")], None));
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, Event::CloseWindow { address: 2 }))
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, Event::ActiveWindow(None)))
+    );
+}
+
+#[test]
+fn a_window_moving_workspace_and_floating_are_each_one_event() {
+    let mut watcher = Watcher::new();
+    let _ = watcher.changed(&watched(&[watched_window(1, "one")], Some(1)));
+
+    let mut moved = watched_window(1, "one");
+    moved.workspace = 2;
+    moved.workspace_name = "2".to_owned();
+    moved.floating = true;
+    let events = watcher.changed(&watched(&[moved], Some(1)));
+    assert!(
+        events.iter().any(|event| matches!(
+            event,
+            Event::MoveWindow { address: 1, workspace } if workspace.0 == 2
+        )),
+        "{events:?}"
+    );
+    assert!(events.iter().any(|event| matches!(
+        event,
+        Event::FloatingMode {
+            address: 1,
+            floating: true
+        }
+    )));
+}
+
+/// Hyprland's `fullscreen` event names no window: it is the focused one's
+/// state, so a focus change onto a fullscreen window is one too.
+#[test]
+fn fullscreen_follows_the_focused_window() {
+    let mut watcher = Watcher::new();
+    let _ = watcher.changed(&watched(&[watched_window(1, "one")], Some(1)));
+
+    let mut full = watched_window(1, "one");
+    full.fullscreen = true;
+    let events = watcher.changed(&watched(&[full.clone()], Some(1)));
+    assert!(events.contains(&Event::Fullscreen(true)), "{events:?}");
+    let events = watcher.changed(&watched(&[watched_window(1, "one")], Some(1)));
+    assert!(events.contains(&Event::Fullscreen(false)), "{events:?}");
+}

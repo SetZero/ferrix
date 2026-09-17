@@ -138,6 +138,7 @@ name = "hyprix"
 version = "0.1.0"
 dependencies = [
  "compositor-config",
+ "compositor-ctl",
  "compositor-drm",
  "compositor-evecho",
  "compositor-ipc",

@@ -1,10 +1,15 @@
-//! The `hyprctl` socket: one request a connection, answered and closed.
+//! The two `hyprctl` sockets: the one that answers, and the one that tells.
 //!
-//! Hyprland puts two sockets in an instance directory under
-//! `$XDG_RUNTIME_DIR/hypr/`, and `hyprctl` finds them there. This is the
-//! first of them: a connection sends one line, is answered, and is closed.
-//! What a request means and what an answer says are `compositor/ipc`'s; this
-//! is the socket under them.
+//! Hyprland puts both in an instance directory under
+//! `$XDG_RUNTIME_DIR/hypr/`, and `hyprctl` and every bar find them there.
+//!
+//! * **`.socket.sock`**, [`Control`]: a connection sends one line, is
+//!   answered, and is closed.
+//! * **`.socket2.sock`**, [`Events`]: a connection is kept, and every state
+//!   change is a line written to it. It is never read from.
+//!
+//! What a request means, what an answer says and what an event's line is are
+//! `compositor/ipc`'s; this is the sockets under them.
 
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
@@ -34,11 +39,21 @@ impl Control {
     /// there and nowhere else, so a compositor that puts it somewhere else is
     /// one `hyprctl` cannot find.
     ///
+    /// An `instance` with a `/` in it is the directory itself, as a
+    /// `--display` with one is the socket itself. Nothing real passes one:
+    /// `HYPRLAND_INSTANCE_SIGNATURE` is a name. It is how a test gives two
+    /// compositors in one process two instance directories without setting
+    /// an environment variable that the whole process shares.
+    ///
     /// # Errors
     ///
     /// Whatever the bind said.
     pub fn bind(runtime: &Path, instance: &str) -> std::io::Result<Self> {
-        let directory = runtime.join("hypr").join(instance);
+        let directory = if instance.contains('/') {
+            PathBuf::from(instance)
+        } else {
+            runtime.join("hypr").join(instance)
+        };
         std::fs::create_dir_all(&directory)?;
         let path = directory.join(compositor_ipc::REQUEST_SOCKET);
         match std::fs::remove_file(&path) {
@@ -59,6 +74,13 @@ impl Control {
     #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// The instance directory, which the event socket goes in beside this
+    /// one.
+    #[must_use]
+    pub fn directory(&self) -> &Path {
+        &self.directory
     }
 
     /// Take one waiting connection, if there is one.
@@ -212,4 +234,94 @@ fn toplevel_of(client: &Client, surface: ObjectId) -> Option<(String, String)> {
         .toplevels()
         .find(|(_, top)| top.surface == surface)
         .map(|(_, top)| (top.title.clone(), top.app_id.clone()))
+}
+
+/// The event socket: connections that are written to and never read.
+///
+/// A bar connects once and stays connected for the session, so the
+/// connections are kept and each is written to as things happen. A client
+/// that goes away is dropped on the write that fails, which is how Hyprland
+/// notices too (`CEventManager::flushClient`).
+#[derive(Debug)]
+pub struct Events {
+    listener: UnixListener,
+    subscribers: Vec<UnixStream>,
+    watcher: compositor_ipc::Watcher,
+    /// How many lines have been written, for the compositor's own report.
+    written: u64,
+}
+
+impl Events {
+    /// Bind the event socket beside the request one.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the bind said.
+    pub fn bind(directory: &Path) -> std::io::Result<Self> {
+        let path = directory.join(compositor_ipc::EVENT_SOCKET);
+        match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+        let listener = UnixListener::bind(&path)?;
+        listener.set_nonblocking(true)?;
+        Ok(Self {
+            listener,
+            subscribers: Vec::new(),
+            watcher: compositor_ipc::Watcher::new(),
+            written: 0,
+        })
+    }
+
+    /// How many subscribers there are and how many lines they have been
+    /// sent, for the compositor's own report.
+    #[must_use]
+    pub fn counts(&self) -> (usize, u64) {
+        (self.subscribers.len(), self.written)
+    }
+
+    /// Take any new subscribers, work out what changed, and write it.
+    ///
+    /// A subscriber that has just connected is told what already exists,
+    /// because its [`compositor_ipc::Watcher`] would otherwise start from
+    /// the state it connected in and tell it nothing until something moved.
+    /// Hyprland leaves a fresh client to ask `hyprctl` for that; telling it
+    /// is strictly more useful and no reader can be surprised by an event
+    /// for a window it does not know about yet.
+    pub fn publish(&mut self, snapshot: &Snapshot) {
+        let mut fresh = Vec::new();
+        while let Ok((stream, _)) = self.listener.accept() {
+            // Written to and never read: a blocking write to a bar that has
+            // stopped reading would stop the compositor.
+            if stream.set_nonblocking(true).is_ok() {
+                fresh.push(stream);
+            }
+        }
+        // A first subscriber is told the whole state; one joining an
+        // existing one gets the changes from here on, as Hyprland's would.
+        if !fresh.is_empty() && self.subscribers.is_empty() {
+            self.watcher = compositor_ipc::Watcher::new();
+        }
+        let events = self.watcher.changed(snapshot);
+        self.subscribers.append(&mut fresh);
+        if events.is_empty() || self.subscribers.is_empty() {
+            return;
+        }
+        let lines: Vec<String> = events
+            .iter()
+            .flat_map(compositor_ipc::Event::lines)
+            .collect();
+        self.subscribers.retain_mut(|stream| {
+            for line in &lines {
+                if stream.write_all(line.as_bytes()).is_err() {
+                    return false;
+                }
+            }
+            true
+        });
+        self.written = self
+            .written
+            .saturating_add(lines.len().try_into().unwrap_or(u64::MAX));
+    }
 }

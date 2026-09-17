@@ -31,6 +31,16 @@
 //! from `compositor/layout`. The pictures compared here came from two
 //! programs talking Wayland to a server that worked the same rectangles out
 //! from their requests, so a difference between the two paths is a real one.
+//!
+//! # The two sockets
+//!
+//! `hyprctl` is carried in the initramfs beside the clients, because
+//! Hyprland's own is not on Ferrix's image. The configuration's first
+//! `exec-once` subscribes to `.socket2.sock` and prints every line, which is
+//! what a bar does, so the transcript holds the compositor's whole event
+//! stream: the monitor, the workspace, each window arriving, and the focus
+//! moving as the keybinds are pressed. Two more binds ask `.socket.sock` for
+//! `clients` and `activewindow`.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -94,6 +104,7 @@ const INSTANCE: &str = "ferrix";
 /// `hyprland.conf` holds. The two binds are the ones this test presses.
 const CONFIG: &str = "\
 # Carried into the initramfs by `cargo xtask test-compositor`.
+exec-once = /bin/hyprctl subscribe
 exec-once = /bin/pattern checkerboard one
 exec-once = /bin/pattern gradient two
 bind = SUPER, L, movefocus, l
@@ -382,6 +393,37 @@ pub(crate) fn test_compositor(args: &Args) -> Result<()> {
             }
         }
         println!("  {arch}: `hyprctl clients` and `hyprctl activewindow` answered on the guest");
+
+        // The event socket. The subscriber started before the clients did,
+        // so it was told the monitor and the workspace as well as each
+        // window, and the focus moving as each keybind was pressed.
+        for wanted in [
+            "monitoradded>>",
+            "createworkspacev2>>1,1",
+            "openwindow>>",
+            "activewindow>>rocks.magical.pattern,one",
+            "activewindow>>rocks.magical.pattern,two",
+        ] {
+            if !has(wanted) {
+                return Err(Error::new(format!(
+                    "{arch}: nothing on the event socket said `{wanted}`"
+                )));
+            }
+        }
+        let focus_changes = said
+            .iter()
+            .filter(|line| line.contains("activewindowv2>>"))
+            .count();
+        if focus_changes < 3 {
+            return Err(Error::new(format!(
+                "{arch}: the focus moved twice by keybind and the socket said so \
+                 {focus_changes} times in all"
+            )));
+        }
+        println!(
+            "  {arch}: a subscriber on the event socket was told {focus_changes} focus changes \
+             and every window"
+        );
     }
     Ok(())
 }

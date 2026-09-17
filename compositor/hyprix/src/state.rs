@@ -165,7 +165,32 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
         })
         .map_err(|error| format!("the monitor: {error:?}"))?;
 
-    // `exec-once` from the configuration, then anything --exec added.
+    // `hyprctl`'s socket, when one was asked for. Hyprland puts it under
+    // $XDG_RUNTIME_DIR/hypr/<instance>/, and a program looks there.
+    let mut events = None;
+    let control = match options.instance.as_deref() {
+        Some(instance) => {
+            let runtime = std::env::var_os("XDG_RUNTIME_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(std::env::temp_dir);
+            let control = crate::control::Control::bind(&runtime, instance)
+                .map_err(|error| format!("hyprctl's socket: {error}"))?;
+            // The event socket beside it. A bar is the only thing that reads
+            // it, so a compositor that cannot bind it still works for
+            // everything else; the reason is said and the loop goes on.
+            match crate::control::Events::bind(control.directory()) {
+                Ok(socket) => events = Some(socket),
+                Err(error) => report(&format!("hyprix: no event socket: {error}")),
+            }
+            Some(control)
+        }
+        None => None,
+    };
+
+    // `exec-once` from the configuration, then anything --exec added --
+    // after the sockets, because a bar started by `exec-once` looks for them
+    // as soon as it runs and a compositor that binds them later has started
+    // a program that cannot find it.
     for command in config
         .exec_once
         .iter()
@@ -179,21 +204,6 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
             Err(error) => report(&format!("hyprix: {command} did not start: {error}")),
         }
     }
-
-    // `hyprctl`'s socket, when one was asked for. Hyprland puts it under
-    // $XDG_RUNTIME_DIR/hypr/<instance>/, and a program looks there.
-    let control = match options.instance.as_deref() {
-        Some(instance) => {
-            let runtime = std::env::var_os("XDG_RUNTIME_DIR")
-                .map(PathBuf::from)
-                .unwrap_or_else(std::env::temp_dir);
-            Some(
-                crate::control::Control::bind(&runtime, instance)
-                    .map_err(|error| format!("hyprctl's socket: {error}"))?,
-            )
-        }
-        None => None,
-    };
 
     let mut slots: Vec<Slot> = Vec::new();
     let mut sources: BTreeMap<WindowId, Source> = BTreeMap::new();
@@ -365,6 +375,13 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
         }
         slots.retain(|slot| !slot.gone);
 
+        // The event socket, from the same description `hyprctl` answers
+        // from: a bar and a script must not be told two different things.
+        if let Some(socket) = events.as_mut() {
+            let snapshot = crate::control::snapshot(&state, &slots, &sources, (width, height));
+            socket.publish(&snapshot);
+        }
+
         most = most.max(sources.len());
         if changed || drawn == 0 {
             let outputs = state.layout();
@@ -397,8 +414,12 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
         std::thread::sleep(Duration::from_millis(2));
     }
 
+    let (subscribers, told) = events
+        .as_ref()
+        .map_or((0, 0), crate::control::Events::counts);
     Ok(format!(
-        "hyprix: {} {display} frames {drawn} windows {} most {most}",
+        "hyprix: {} {display} frames {drawn} windows {} most {most} subscribers {subscribers} \
+         events {told}",
         backend.describe(),
         sources.len()
     ))

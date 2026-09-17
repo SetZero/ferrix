@@ -38,6 +38,8 @@ libc = "0.2.189"
 # The test runs the compositor and two clients in threads of one process and
 # compares the pixels, which is the everyday gate compositor/README.md names.
 compositor-pattern = { path = "../pattern" }
+# And a subscriber on the event socket, which is what a bar is.
+compositor-ctl = { path = "../ctl" }
 
 [lints]
 workspace = true

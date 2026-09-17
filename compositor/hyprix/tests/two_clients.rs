@@ -486,3 +486,164 @@ fn an_unknown_request_is_answered_rather_than_hanging_hyprctl() {
         hyprctl("nonsense")
     );
 }
+
+// ---------------------------------------------------------------------------
+// The event socket
+//
+// `.socket2.sock` is what a bar reads. `compositor/ipc`'s tests check each
+// line's shape against Hyprland's own `postEvent` calls; this checks that the
+// compositor puts them on a socket a reader can get at, in the order a reader
+// needs, while two clients come and go.
+// ---------------------------------------------------------------------------
+
+/// Run the compositor with a subscriber on its event socket, and give back
+/// every line the subscriber read.
+fn subscribed(name: &str, kill: bool) -> Vec<String> {
+    let work = workspace(name);
+    let socket = work.join("wayland");
+    let runtime = work.join("runtime");
+    std::fs::create_dir_all(&runtime).expect("a runtime directory");
+    // The instance is given as a directory rather than a name, so this test
+    // needs no `XDG_RUNTIME_DIR`: an environment variable is one per process
+    // and the tests run in threads of one.
+    let instance = runtime.join("hypr").join("ferrix-test");
+    let events = instance.join(compositor_ipc::EVENT_SOCKET);
+    let requests = instance.join(compositor_ipc::REQUEST_SOCKET);
+
+    let options = Options {
+        display: socket.to_string_lossy().into_owned(),
+        headless: Some((WIDTH, HEIGHT)),
+        instance: Some(instance.to_string_lossy().into_owned()),
+        deadline: Some(4000),
+        ..Options::default()
+    };
+
+    let listening = events.clone();
+    let reader = std::thread::spawn(move || {
+        for _ in 0..800 {
+            if listening.exists() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let mut lines = Vec::new();
+        let _ = compositor_ctl::subscribe(&listening, &mut |line| lines.push(line.to_owned()));
+        lines
+    });
+
+    let socket_for_clients = socket.clone();
+    let clients = std::thread::spawn(move || {
+        for _ in 0..400 {
+            if socket_for_clients.exists() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        // The subscriber has to be connected before the first window, or it
+        // is told the state instead of being told the window arrived.
+        std::thread::sleep(Duration::from_millis(400));
+        let mut handles = Vec::new();
+        for (pattern, title) in [(Pattern::Checkerboard, "one"), (Pattern::Gradient, "two")] {
+            let path = socket_for_clients.clone();
+            handles.push(std::thread::spawn(move || connect(&path, pattern, title)));
+            std::thread::sleep(Duration::from_millis(250));
+        }
+        // `killactive` through the request socket, so the window really
+        // closes and the socket really says so: the clients themselves run
+        // until the compositor goes, as a window does.
+        if kill {
+            std::thread::sleep(Duration::from_millis(500));
+            let _ = compositor_ctl::ask(&requests, "dispatch killactive");
+        }
+        for handle in handles {
+            let _ = handle.join();
+        }
+    });
+
+    let line = hyprix::run(&options).expect("the compositor ran");
+    clients.join().expect("the clients finished");
+    let lines = reader.join().expect("the subscriber finished");
+    let _ = std::fs::remove_dir_all(&work);
+    assert!(
+        line.contains("subscribers 1"),
+        "the compositor saw no subscriber: {line}"
+    );
+    lines
+}
+
+#[test]
+fn a_bar_on_the_event_socket_is_told_what_happens() {
+    let lines = subscribed("events", false);
+    assert!(!lines.is_empty(), "the subscriber read nothing");
+
+    // What already existed when it connected: the monitor and the workspace.
+    assert!(
+        lines.iter().any(|line| line == "monitoradded>>HEADLESS-1"),
+        "{lines:?}"
+    );
+    assert!(
+        lines.iter().any(|line| line == "createworkspacev2>>1,1"),
+        "{lines:?}"
+    );
+
+    // Then each window arriving, with its class and title.
+    let opened: Vec<&String> = lines
+        .iter()
+        .filter(|line| line.starts_with("openwindow>>"))
+        .collect();
+    assert_eq!(opened.len(), 2, "{lines:?}");
+    assert!(
+        opened[0].ends_with(",1,rocks.magical.pattern,one"),
+        "{:?}",
+        opened[0]
+    );
+    assert!(
+        opened[1].ends_with(",1,rocks.magical.pattern,two"),
+        "{:?}",
+        opened[1]
+    );
+
+    // And the focus moving onto each, in both shapes.
+    assert!(
+        lines
+            .iter()
+            .any(|line| line == "activewindow>>rocks.magical.pattern,two"),
+        "{lines:?}"
+    );
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line.starts_with("activewindowv2>>"))
+            .count(),
+        2,
+        "{lines:?}"
+    );
+
+    // Every line is one line and holds no newline of its own, which is what
+    // `formatEvent` promises a reader.
+    for line in &lines {
+        assert!(!line.contains('\n'), "{line:?}");
+        assert!(line.contains(">>"), "{line:?}");
+    }
+}
+
+/// A bar that is not told a window closed shows a window that is gone.
+///
+/// The window is closed by `hyprctl dispatch killactive` on the request
+/// socket, which is how a person closes one: the clients themselves run
+/// until the compositor goes.
+#[test]
+fn a_window_closing_reaches_the_socket_too() {
+    let lines = subscribed("events-closing", true);
+    assert!(
+        lines.iter().any(|line| line.starts_with("closewindow>>")),
+        "nothing said a window closed: {lines:?}"
+    );
+    // And the focus moved to the one that is left, rather than being left on
+    // a window that no longer exists.
+    let focused: Vec<&String> = lines
+        .iter()
+        .filter(|line| line.starts_with("activewindow>>"))
+        .collect();
+    assert!(focused.len() >= 3, "{lines:?}");
+}

@@ -38,6 +38,38 @@ pub fn runtime() -> PathBuf {
         .join("hypr")
 }
 
+/// The event socket, beside the request one.
+///
+/// # Errors
+///
+/// As [`socket`].
+pub fn event_socket() -> Result<PathBuf, String> {
+    socket().map(|path| path.with_file_name(compositor_ipc::EVENT_SOCKET))
+}
+
+/// Read the event socket for as long as it is open, giving each line to
+/// `each`.
+///
+/// Hyprland's own readers use `socat - .socket2.sock`; Ferrix has no socat,
+/// so this is it. The socket is never written to.
+///
+/// # Errors
+///
+/// A sentence saying what the socket said. A compositor that went away closes
+/// the connection, which ends the read without an error.
+pub fn subscribe(socket: &std::path::Path, each: &mut dyn FnMut(&str)) -> Result<(), String> {
+    use std::io::{BufRead as _, BufReader};
+
+    let stream = UnixStream::connect(socket)
+        .map_err(|error| format!("connecting to {}: {error}", socket.display()))?;
+    let reader = BufReader::new(stream);
+    for line in reader.lines() {
+        let line = line.map_err(|error| format!("reading an event: {error}"))?;
+        each(&line);
+    }
+    Ok(())
+}
+
 /// The socket to talk to, named by the environment or found by looking.
 ///
 /// # Errors

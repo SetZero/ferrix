@@ -4080,9 +4080,33 @@ A window is reconfigured on a change of *state* as well as of size now. A
 window that has just been focused is the same size and a different state, and
 a client that is not told has a title bar that never lights up.
 
-What this stage still owes: the event socket a bar subscribes to, and a
-terminal client a person can type in at the serial console, which waits on a
-pty.
+**Done — the event socket (2026-09-17).** `.socket2.sock` is the second of
+Hyprland's two: a bar connects once and reads a line for every state change,
+and never writes. The line is `CEventManager::formatEvent`'s and no more --
+`"{event}>>{data}\n"`, the data cut to 1024 bytes, every newline inside it
+turned into a space so that one event is always one line however a client
+titled its window -- and each payload is the one Hyprland's own `postEvent`
+call builds, with the file and line cited on the variant that carries it. The
+`v2` forms are sent beside the old ones, because both have readers.
+
+The events are worked out from the difference between two descriptions of
+the compositor rather than posted from inside whatever changed. Hyprland
+scatters `postEvent` calls through its source and a change made somewhere new
+is a change nothing reports; a difference cannot be missed. The cost is that
+two changes in one pass are reported together and in one fixed order, which
+no reader can tell from two changes a millisecond apart.
+
+`hyprctl subscribe` reads it. That is not one of Hyprland's commands -- its
+own readers are `socat - .socket2.sock` -- but Ferrix has no socat, and a
+socket nothing on the image can read is a socket nothing proves. `cargo xtask
+test-compositor` now starts it as the configuration's first `exec-once`, so
+the transcript holds the whole stream: the monitor, the workspace, both
+windows arriving with their class and title, and the focus moving each time a
+keybind is pressed. The sockets are bound before `exec-once` runs now, which
+is what lets a bar started that way find them.
+
+What this stage still owes: a terminal a person can type in at the serial
+console, which waits on a pty.
 
 **Still to do, in the order visible iterations need it.** Iteration 1, a
 blank screen on Ferrix in QEMU, pulls a first cut of stage 17 forward (the

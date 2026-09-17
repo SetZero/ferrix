@@ -40,11 +40,13 @@
 //! not by closing the connection -- so a program that asks for something
 //! newer keeps working for everything else it asks.
 
+mod events;
 mod json;
 mod reply;
 mod request;
 mod state;
 
+pub use events::{Event, MAX_DATA, Watcher, WindowRef};
 pub use json::Json;
 pub use reply::{Reply, Version, answer};
 pub use request::{Flags, Format, Request};
