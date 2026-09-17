@@ -68,7 +68,14 @@ const EITHER: &str = "hyprix: ";
 /// How long to let the screen settle after the marker: the clients have to
 /// connect, be configured, draw and commit, and the flip is queued after
 /// that. `test-display` allows four seconds for one program's fill.
-const SETTLE: Duration = Duration::from_secs(10);
+///
+/// Half a minute because of the slowest case, which is a window left alone
+/// when its neighbour's client went: it has to be told its new size, draw a
+/// buffer at it and commit, and only then is a frame drawn and flipped --
+/// four round trips at a second and a half a frame under emulation. A
+/// screen that is already right costs none of it: the wait ends the moment
+/// the picture matches.
+const SETTLE: Duration = Duration::from_secs(30);
 
 /// The three pictures, in the order the keybinds make them. Each is blessed
 /// by `compositor/render`'s own tests.
@@ -95,6 +102,7 @@ const CTL_PATH: &str = "bin/hyprctl";
 const PLUG_PATH: &str = "bin/plug";
 const TERM_PATH: &str = "bin/term";
 const CLIP_PATH: &str = "bin/clip";
+const LSWT_PATH: &str = "bin/lswt";
 const CONFIG_PATH: &str = "etc/hyprland.conf";
 
 /// The instance the control socket is under, which `hyprctl` finds by
@@ -323,6 +331,54 @@ exec-once = /bin/pattern checkerboard one
 exec-once = /bin/pattern gradient two
 ";
 
+/// The two pictures the taskbar boot requires, and the two keys between
+/// them.
+///
+/// Nothing draws the taskbar: `zwlr_foreign_toplevel_management_v1` is a
+/// list and not a surface, and what it does is visible only when a window
+/// acts on it. The first key lists the windows, which changes no picture;
+/// the second asks one of them to close, which changes the picture to the
+/// one window that is left.
+const TASKBAR_EXPECTED: [(&str, &str); 3] = [
+    (
+        "tiled",
+        "compositor/render/tests/data/dwindle-two-clients.xrle",
+    ),
+    (
+        "still tiled, with a taskbar having listed both windows",
+        "compositor/render/tests/data/dwindle-two-clients.xrle",
+    ),
+    (
+        "one window left, closed from outside it by the taskbar",
+        "compositor/render/tests/data/one-client-alone.xrle",
+    ),
+];
+
+/// The keys the taskbar boot presses between its pictures.
+///
+/// No modifier, which matters here and nowhere else. A bind consumes its
+/// own key but never the modifier held with it, so `SUPER B` reaches the
+/// focused client as a `meta` press -- and `compositor/pattern` draws the
+/// *other* pattern for every key it is sent, on purpose, so that a key
+/// shows on the screen. It redraws only when it is configured, so in every
+/// other boot the change never reaches a frame; this is the one boot that
+/// presses a key and then resizes a window, and with `SUPER` in front of
+/// them the window that was left drew a checkerboard.
+const TASKBAR_BINDS: [(&str, &[&str]); 2] = [
+    ("B, which lists the windows", &["b"]),
+    ("K, which closes one of them", &["k"]),
+];
+
+/// The configuration the thirteenth boot is given: two windows, and a
+/// program that reads them through the foreign-toplevel protocol.
+const TASKBAR_CONFIG: &str = "\
+# Carried into the initramfs by `cargo xtask test-compositor`.
+exec-once = /bin/pattern checkerboard one
+exec-once = /bin/pattern gradient two
+bind = , B, exec, /bin/lswt
+bind = , K, exec, /bin/lswt close one
+";
+
 /// The six pictures the submap boot requires, and the five keys between
 /// them.
 ///
@@ -504,6 +560,8 @@ struct Programs {
     term: PathBuf,
     /// `clip`, the copy-and-paste program.
     clip: PathBuf,
+    /// `lswt`, which lists the windows as a taskbar does.
+    lswt: PathBuf,
 }
 
 impl Programs {
@@ -516,17 +574,19 @@ impl Programs {
             plug: build(arch, "compositor-plug", "plug")?,
             term: build(arch, "compositor-term", "term")?,
             clip: build(arch, "compositor-clip", "clip")?,
+            lswt: build(arch, "compositor-lswt", "lswt")?,
         })
     }
 
     /// The ones the initramfs carries, each with the path it goes at.
-    fn carried(&self) -> [(&'static str, &Path); 5] {
+    fn carried(&self) -> [(&'static str, &Path); 6] {
         [
             (CLIENT_PATH, self.client.as_path()),
             (CTL_PATH, self.ctl.as_path()),
             (PLUG_PATH, self.plug.as_path()),
             (TERM_PATH, self.term.as_path()),
             (CLIP_PATH, self.clip.as_path()),
+            (LSWT_PATH, self.lswt.as_path()),
         ]
     }
 }
@@ -1046,7 +1106,7 @@ fn said_on_its_own(line: &str) -> &str {
 /// each takes minutes under emulation and there are fourteen of them, so a
 /// change to one is otherwise an hour a try.
 type Boot = fn(Arch, &Programs, &Args) -> Result<()>;
-const BOOTS: [(&str, Boot); 12] = [
+const BOOTS: [(&str, Boot); 13] = [
     ("dispatchers", test_dispatchers),
     ("bar", test_bar),
     ("decorations", test_decorations),
@@ -1059,6 +1119,7 @@ const BOOTS: [(&str, Boot); 12] = [
     ("rules", test_rules),
     ("clipboard", test_clipboard),
     ("submap", test_submap),
+    ("taskbar", test_taskbar),
 ];
 
 /// Whether `--boot` asked for this one.
@@ -1178,6 +1239,60 @@ fn one_picture(
     println!(
         "  {arch}: {what}, every one of {} pixels",
         screen.width * screen.height
+    );
+    Ok(())
+}
+
+/// A thirteenth boot: a taskbar, through
+/// `zwlr_foreign_toplevel_management_v1`.
+///
+/// `/bin/lswt` is what a bar's window list is once the drawing is taken
+/// out: it binds the manager, takes the handle the compositor makes for
+/// each window, and reads the title, the application id and the states.
+/// Then it sends a request back through one of those handles -- `close`, on
+/// a window it does not own -- which is what a middle click on a taskbar
+/// entry does, and the screen says whether it arrived.
+fn test_taskbar(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
+    let (screens, said) = boot_and_dump(
+        arch,
+        programs,
+        TASKBAR_CONFIG,
+        &Wanted {
+            states: &TASKBAR_EXPECTED,
+            others: &[],
+            moving: None,
+            awaiting: &["lswt: left"],
+        },
+        &TASKBAR_BINDS,
+        args,
+    )?;
+    let Some(last) = screens.last() else {
+        return Err(Error::new(format!(
+            "{arch}: the taskbar boot took no picture"
+        )));
+    };
+    // Both windows, by application id, title and state: the focused one is
+    // marked and the other is not, which is the tick a taskbar draws.
+    let has = |wanted: &str| said.iter().any(|line| line.contains(wanted));
+    for wanted in [
+        "lswt: rocks.magical.pattern \"one\" []",
+        "lswt: rocks.magical.pattern \"two\" [activated]",
+        "lswt: closed \"one\"",
+        // And the window that is left is the other one, which says the
+        // close reached the window the bar named and not its neighbour.
+        "lswt: left \"two\"",
+    ] {
+        if !has(wanted) {
+            return Err(Error::new(format!(
+                "{arch}: the taskbar never said `{wanted}`"
+            )));
+        }
+    }
+    println!(
+        "  {arch}: a taskbar listed both windows with the focused one marked, and closed the \
+         other from outside it, leaving every one of {} pixels the renderer's own picture of \
+         one window",
+        last.width * last.height
     );
     Ok(())
 }

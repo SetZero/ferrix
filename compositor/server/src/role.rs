@@ -73,6 +73,11 @@ pub enum Role {
     /// `wl_data_offer`, made by the *server* when it tells a client what the
     /// selection holds.
     DataOffer,
+    /// `zwlr_foreign_toplevel_manager_v1`: a bar's list of windows.
+    ForeignToplevelManager,
+    /// `zwlr_foreign_toplevel_handle_v1`: one window in that list, made by
+    /// the *server* -- the manager does not ask for them, it is told.
+    ForeignToplevel,
 }
 
 impl Role {

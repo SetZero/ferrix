@@ -64,7 +64,10 @@ names the part of Hyprland or hyprlang it follows.
   a commit. `probe/interfaces.c` links against libwayland's own compiled
   `wl_*_interface` structures and prints them; the tests require the
   generated tables to agree, message for message. Adding a protocol is
-  vendoring one XML and adding a line to the generator's `FILES`.
+  vendoring one XML, adding a line to the generator's `FILES` and a module to
+  `src/generated/mod.rs`, and naming its interfaces in `probe/interfaces.c`
+  and `probe/interfaces.sh` so libwayland's own tables are compared against
+  the new ones too -- a table nothing compares is a table nothing checks.
 * **`server`** is what a client's requests do: one `Client` holds a
   connection's objects, is handed the bytes that arrived and the descriptors
   with them, and gives back the bytes to send. It holds no socket and no
@@ -150,6 +153,13 @@ names the part of Hyprland or hyprlang it follows.
   the program that made it -- and `clip paste` asks for the selection on a
   pipe and prints what comes back. Between them they are the compositor's
   clipboard tested with no window and no screen.
+* **`lswt`** is a taskbar with the drawing taken out: it binds
+  `zwlr_foreign_toplevel_management_v1`, takes the handle the compositor
+  makes for each window, and prints the title, the application id and the
+  states -- `lswt activate <title>` and `lswt close <title>` send the two
+  requests a click on a taskbar entry makes. Named after Leon Henrik
+  Plickat's program of the same name, and there for the same reason `clip`
+  is: it is the part of a bar that can be tested with no screen.
 * **`ctl`** is `hyprctl`, over `ipc`'s request shape; **`plug`** is the
   example plugin, a program the compositor starts and talks to rather than a
   shared object it loads; **`anim`** is Hyprland's bezier curves and its

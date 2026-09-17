@@ -22,14 +22,21 @@
 //!   compositor is always the client-side answer of "neither".
 //! * **`layer_shell`** is `zwlr_layer_shell_v1`, which is how a bar or a
 //!   wallpaper places itself. Hyprland's own bars use it.
+//! * **`foreign_toplevel`** is `zwlr_foreign_toplevel_management_v1`: the
+//!   list of windows, and the four things a bar does with one. It is what
+//!   fills a taskbar, and it is the other half of a bar's job -- layer-shell
+//!   puts the bar on the screen and this tells it what to draw.
 //!
-//! The list of protocols is `FILES` in the generator: vendoring one more XML
-//! and adding a line there is the whole of adding a protocol.
+//! The list of protocols is `FILES` in the generator. Adding one is vendoring
+//! its XML, adding a line there and a module to `generated/mod.rs`, and
+//! naming its interfaces in `probe/interfaces.c` and `probe/interfaces.sh`,
+//! so that the new tables are compared against libwayland's compiled ones as
+//! every other table here is.
 
 mod generated;
 
 pub use compositor_wire::Interface;
-pub use generated::{core, layer_shell, xdg_decoration, xdg_shell};
+pub use generated::{core, foreign_toplevel, layer_shell, xdg_decoration, xdg_shell};
 
 /// Every interface the compositor offers as a global, with the version it
 /// offers, in the order `wl_registry.global` announces them.
@@ -46,6 +53,7 @@ pub const GLOBALS: &[&Interface] = &[
     &xdg_shell::XDG_WM_BASE,
     &xdg_decoration::ZXDG_DECORATION_MANAGER_V1,
     &layer_shell::ZWLR_LAYER_SHELL_V1,
+    &foreign_toplevel::ZWLR_FOREIGN_TOPLEVEL_MANAGER_V1,
 ];
 
 #[cfg(test)]

@@ -5,6 +5,7 @@
 //! gate. This file is the only hand-written one in the directory.
 
 pub mod core;
+pub mod foreign_toplevel;
 pub mod layer_shell;
 pub mod xdg_decoration;
 pub mod xdg_shell;

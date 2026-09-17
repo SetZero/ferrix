@@ -4193,6 +4193,66 @@ grid, printed a row at a time.
 /bin/hyprctl` and requires the picture the terminal makes, pixel for pixel,
 on x86-64 and on AArch64.
 
+**Done — the window list a bar draws (2026-09-17).**
+`zwlr_foreign_toplevel_management_v1`, which is the other half of a bar's
+job: `zwlr_layer_shell_v1` puts the bar on the screen, and this tells it what
+to draw on it. Waybar's `wlr/taskbar`, eww's window list and every panel that
+shows what is open read this protocol and nothing else, so a compositor that
+does not offer it is one whose bar shows a clock and an empty strip.
+
+The compositor makes a `zwlr_foreign_toplevel_handle_v1` for each window --
+a server-side object, as it must be, out of the server's half of the id space
+-- and sends the title, the application id and the four states, followed by
+`done`, which is what makes the three one atomic change. A client is told
+about the windows that already exist *inside the pass its bind arrived in*,
+before the `wl_display.sync` every such client sends after binding is
+answered: a list that arrives after that callback is a list the client has
+already stopped waiting for. Nothing is written to a client that has already
+been told the same thing, because a bar woken by `done` on every frame of an
+animation is a bar that burns a core.
+
+The requests come back the other way: `activate` is `focuswindow`, `close` is
+`killactive`, and the two state requests focus the window and then run the
+dispatcher a keybind would. `set_rectangle` is accepted and dropped -- it
+says where the window's icon is on the bar so a minimise can fly to it, and
+there is no such animation here -- and `maximized` and `minimized` are
+reported false and refused rather than faked, because this layout has one
+fullscreen state and no minimised one, and a wrong tick in a taskbar's menu
+is worse than none.
+
+`compositor/lswt` is `lswt`, Leon Henrik Plickat's "list wayland toplevels",
+which is a taskbar with the drawing taken out: `lswt` prints a line a window,
+`lswt activate <title>` focuses one and `lswt close <title>` asks one to
+close. It is how the protocol is tested with no screen and no panel.
+
+**It found two real bugs, which is why the protocol was worth writing.**
+Both are about a client *leaving*, which nothing in the tree had tested:
+every picture until now was made by clients that all stayed.
+
+The compositor holds a client by its *place* in the list of connections --
+a window's `Source`, the keyboard focus -- and a connection that ended was
+taken out of that list with `retain`, which moves every connection after it
+down one. Every such place then named the wrong client: a window that
+outlived an earlier client was drawn from somebody else's buffer and typed
+into by somebody else's keyboard. The places are renumbered in step with the
+list now.
+
+And the window left behind was never told it had grown. The loop
+reconfigures the workspace when something changed, and a connection ending
+was handled *after* that, so the one case where the layout changes without
+anyone asking -- a neighbour going away -- set the flag a moment too late.
+The window kept drawing at the size it had and the compositor drew that
+buffer into a rectangle twice as wide. The connection that ended is handled
+before the reconfigure now, with everything else that changes the layout.
+
+`cargo xtask test-compositor` boots a thirteenth time: a keybind runs
+`/bin/lswt`, which must name both windows with the focused one marked, and a
+second keybind runs `/bin/lswt close one`, after which the screen must be the
+picture `compositor/render` blesses for one window left alone -- on x86-64
+and on AArch64. A host test in `compositor/hyprix` runs the same program
+against the compositor in one process and requires the window that went to be
+the one it named.
+
 **Done — submaps (2026-09-17).** Hyprland's modal keybinding: `submap =
 resize` puts every bind after it in a map of its own, `submap = reset` goes
 back to the global one, and the `submap` dispatcher moves between them while

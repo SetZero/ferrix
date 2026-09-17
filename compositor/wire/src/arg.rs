@@ -156,4 +156,18 @@ impl Arg<'_> {
             _ => None,
         }
     }
+
+    /// The bytes of the `array` this is, if it is one.
+    ///
+    /// An array is bytes on the wire and whatever the protocol says
+    /// otherwise: `zwlr_foreign_toplevel_handle_v1.state` is a list of
+    /// 32-bit values in the machine's own order, and `wl_keyboard.enter` a
+    /// list of keycodes the same way.
+    #[must_use]
+    pub const fn as_array(&self) -> Option<&[u8]> {
+        match self {
+            Self::Array(bytes) => Some(bytes),
+            _ => None,
+        }
+    }
 }

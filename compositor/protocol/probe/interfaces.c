@@ -29,6 +29,7 @@
 #include "xdg-shell-client-protocol.h"
 #include "xdg-decoration-client-protocol.h"
 #include "wlr-layer-shell-client-protocol.h"
+#include "wlr-foreign-toplevel-management-client-protocol.h"
 
 static void print_messages(const struct wl_interface *interface,
 			   const char *kind, const struct wl_message *messages,
@@ -105,6 +106,9 @@ int main(void)
 		/* wlr-layer-shell-unstable-v1.xml */
 		&zwlr_layer_shell_v1_interface,
 		&zwlr_layer_surface_v1_interface,
+		/* wlr-foreign-toplevel-management-unstable-v1.xml */
+		&zwlr_foreign_toplevel_manager_v1_interface,
+		&zwlr_foreign_toplevel_handle_v1_interface,
 	};
 
 	printf("# libwayland %s\n", WAYLAND_VERSION);

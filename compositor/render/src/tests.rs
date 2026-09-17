@@ -908,6 +908,35 @@ fn two_pattern_clients_tiled_by_dwindle_match_the_expected_image() {
     golden::check("dwindle-two-clients", WIDTH, HEIGHT, &two_client_frame());
 }
 
+/// One window left after the other closed: it takes the whole workspace and
+/// is drawn with the active border, since the focus goes to what is left.
+///
+/// This is the picture `cargo xtask test-compositor` requires after a
+/// taskbar has asked a window it does not own to close, through
+/// `zwlr_foreign_toplevel_handle_v1.close`. The layout is reached the way
+/// the compositor reaches it -- the window is *gone*, not merely unfocused
+/// -- so the two pictures are made by one piece of code.
+#[test]
+fn one_client_left_after_the_other_closed_matches_the_expected_image() {
+    let (mut state, _) = two_clients();
+    let _ = state.window_gone(CHECKERBOARD).unwrap();
+    let layout = state.layout().remove(0);
+    assert_eq!(layout.windows.len(), 1, "one window should be left");
+    let buffers = client_buffers(&layout);
+    let mut canvas = Canvas::new(WIDTH, HEIGHT).unwrap();
+    let full = Damage::full(WIDTH, HEIGHT);
+    let produced = render(
+        &mut canvas,
+        &layout,
+        (0, 0),
+        &Style::default(),
+        &surfaces(&buffers),
+        &full,
+    );
+    assert_eq!(produced, full);
+    golden::check("one-client-alone", WIDTH, HEIGHT, canvas.data());
+}
+
 /// `movefocus l`: the same two windows in the same places, with the active
 /// border on the other one.
 ///

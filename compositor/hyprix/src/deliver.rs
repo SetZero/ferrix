@@ -61,6 +61,17 @@ impl Focus {
         self.keyboard
     }
 
+    /// A connection went, so every slot after it moved: `places[old]` is
+    /// where the client that was at `old` is now, or `None` if it is the one
+    /// that went.
+    ///
+    /// The focus holds a client by its place in the list, and a place that
+    /// is no longer that client is a `wl_keyboard.leave` sent to a stranger.
+    pub fn renumber(&mut self, places: &[Option<usize>]) {
+        moved(&mut self.keyboard, places);
+        moved(&mut self.pointer, places);
+    }
+
     /// Give the keyboard to whatever the layout says is focused.
     ///
     /// Called every time round the loop. A focus that has not moved sends
@@ -280,4 +291,16 @@ fn placements(state: &State, sources: &BTreeMap<WindowId, Source>) -> Vec<Placem
 /// A pixel position as Wayland's 24.8 fixed point.
 fn fixed(value: f64) -> Fixed {
     Fixed::from_f64(value)
+}
+
+/// One held `(client, surface)` pair, moved to where its client is now or
+/// forgotten if that client has gone.
+fn moved(held: &mut Option<(usize, ObjectId)>, places: &[Option<usize>]) {
+    if let Some((client, surface)) = *held {
+        *held = places
+            .get(client)
+            .copied()
+            .flatten()
+            .map(|at| (at, surface));
+    }
 }

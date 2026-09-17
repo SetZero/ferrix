@@ -192,3 +192,24 @@ zwlr_layer_surface_v1 5 request 8 set_layer 2u
 zwlr_layer_surface_v1 5 request 9 set_exclusive_edge 5u
 zwlr_layer_surface_v1 5 event 0 configure uuu
 zwlr_layer_surface_v1 5 event 1 closed 
+zwlr_foreign_toplevel_manager_v1 3 request 0 stop 
+zwlr_foreign_toplevel_manager_v1 3 event 0 toplevel n
+zwlr_foreign_toplevel_manager_v1 3 event 1 finished 
+zwlr_foreign_toplevel_handle_v1 3 request 0 set_maximized 
+zwlr_foreign_toplevel_handle_v1 3 request 1 unset_maximized 
+zwlr_foreign_toplevel_handle_v1 3 request 2 set_minimized 
+zwlr_foreign_toplevel_handle_v1 3 request 3 unset_minimized 
+zwlr_foreign_toplevel_handle_v1 3 request 4 activate o
+zwlr_foreign_toplevel_handle_v1 3 request 5 close 
+zwlr_foreign_toplevel_handle_v1 3 request 6 set_rectangle oiiii
+zwlr_foreign_toplevel_handle_v1 3 request 7 destroy 
+zwlr_foreign_toplevel_handle_v1 3 request 8 set_fullscreen 2?o
+zwlr_foreign_toplevel_handle_v1 3 request 9 unset_fullscreen 2
+zwlr_foreign_toplevel_handle_v1 3 event 0 title s
+zwlr_foreign_toplevel_handle_v1 3 event 1 app_id s
+zwlr_foreign_toplevel_handle_v1 3 event 2 output_enter o
+zwlr_foreign_toplevel_handle_v1 3 event 3 output_leave o
+zwlr_foreign_toplevel_handle_v1 3 event 4 state a
+zwlr_foreign_toplevel_handle_v1 3 event 5 done 
+zwlr_foreign_toplevel_handle_v1 3 event 6 closed 
+zwlr_foreign_toplevel_handle_v1 3 event 7 parent 3?o

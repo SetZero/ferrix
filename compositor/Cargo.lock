@@ -98,6 +98,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "compositor-lswt"
+version = "0.1.0"
+dependencies = [
+ "compositor-evecho",
+ "compositor-protocol",
+ "compositor-socket",
+ "compositor-wire",
+]
+
+[[package]]
 name = "compositor-pattern"
 version = "0.1.0"
 dependencies = [
@@ -205,6 +215,7 @@ dependencies = [
  "compositor-evecho",
  "compositor-ipc",
  "compositor-layout",
+ "compositor-lswt",
  "compositor-pattern",
  "compositor-protocol",
  "compositor-render",

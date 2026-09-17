@@ -43,6 +43,8 @@ compositor-pattern = { path = "../pattern" }
 compositor-ctl = { path = "../ctl" }
 # The two halves of a clipboard, for the copy-and-paste test.
 compositor-clip = { path = "../clip" }
+# A taskbar with the drawing taken out, for the foreign-toplevel test.
+compositor-lswt = { path = "../lswt" }
 
 [lints]
 workspace = true

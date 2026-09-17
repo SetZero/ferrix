@@ -19,7 +19,7 @@ use std::time::Duration;
 
 use compositor_ipc::{Monitor, Request, Snapshot, Window, Workspace};
 use compositor_layout::{State, WindowId};
-use compositor_server::Client;
+use compositor_server::{Client, ForeignToplevel};
 use compositor_wire::ObjectId;
 
 use crate::frame::Source;
@@ -203,8 +203,25 @@ pub fn snapshot(
     plugins: &crate::plugins::Plugins,
     submap: &str,
 ) -> Snapshot {
+    let mut snapshot = describe_all(state, clients, sources, submap);
+    snapshot.plugins = plugins.listed();
+    snapshot
+}
+
+/// The same, without the plugins.
+///
+/// A bar reading `zwlr_foreign_toplevel_management_v1` wants the windows and
+/// nothing else, and it has to be answered from inside one client's pass --
+/// before the roundtrip it sent after binding comes back -- where the
+/// plugins are not to hand.
+#[must_use]
+pub fn describe_all(
+    state: &State,
+    clients: &[crate::state::Slot],
+    sources: &BTreeMap<WindowId, Source>,
+    submap: &str,
+) -> Snapshot {
     let mut snapshot = Snapshot {
-        plugins: plugins.listed(),
         submap: submap.to_owned(),
         ..Snapshot::default()
     };
@@ -295,6 +312,32 @@ pub fn snapshot(
 /// this tree's `MonitorId` counts from one.
 fn monitor_id(monitor: compositor_layout::MonitorId) -> i32 {
     i32::try_from(monitor.0.saturating_sub(1)).unwrap_or(0)
+}
+
+/// What every window in `snapshot` looks like to a bar.
+///
+/// The same description `hyprctl clients` prints, narrowed to the six things
+/// `zwlr_foreign_toplevel_handle_v1` carries. `maximized` is always false:
+/// this layout has one fullscreen state and no separate maximised one, and
+/// saying a window is maximised when the compositor cannot tell would put a
+/// wrong tick in every taskbar's menu. `minimized` is false for the same
+/// reason -- nothing here is minimised; a window a group does not draw is
+/// still on its workspace, and a bar that hid it would hide half a group.
+#[must_use]
+pub fn toplevels(snapshot: &Snapshot) -> Vec<ForeignToplevel> {
+    snapshot
+        .windows
+        .iter()
+        .map(|window| ForeignToplevel {
+            window: window.address,
+            title: window.title.clone(),
+            app_id: window.class.clone(),
+            activated: snapshot.active_window == Some(window.address),
+            fullscreen: window.fullscreen,
+            maximized: false,
+            minimized: false,
+        })
+        .collect()
 }
 
 /// The title and app id of the window on `surface`, if it has them.

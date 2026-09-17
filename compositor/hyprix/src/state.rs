@@ -8,7 +8,7 @@ use compositor_config::{Config, MonitorRule, NoSources, Position};
 use compositor_layout::{Monitor, MonitorId, Rect, Settings, State, WindowId};
 use compositor_protocol::{core, xdg_shell};
 use compositor_render::{Canvas, Damage, Style};
-use compositor_server::{Client, Event, Globals, Role};
+use compositor_server::{Client, Event, ForeignRequest, Globals, Role};
 use compositor_socket::{Connection, Listener, RecvError};
 use compositor_wire::{Fd, ObjectId};
 
@@ -345,13 +345,15 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
         // window of every monitor -- so it is made only when there is a
         // plugin to answer.
         if !plugins.is_empty() {
-            let snapshot = crate::control::snapshot(&state, &slots, &sources, &plugins, seat.submap());
+            let snapshot =
+                crate::control::snapshot(&state, &slots, &sources, &plugins, seat.submap());
             asked.extend(plugins.poll(&snapshot));
         }
         if let Some(control) = control.as_ref()
             && let Some(mut stream) = control.accept()
         {
-            let snapshot = crate::control::snapshot(&state, &slots, &sources, &plugins, seat.submap());
+            let snapshot =
+                crate::control::snapshot(&state, &slots, &sources, &plugins, seat.submap());
             match crate::control::serve(&mut stream, &snapshot, &mut plugins) {
                 Ok(todo) => asked.extend(todo),
                 Err(_) => {
@@ -446,27 +448,6 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
             }
         }
 
-        // A window arriving or leaving resizes every other window on the
-        // workspace, and a window that is not told is one drawing at the
-        // size it had before -- which the compositor then draws cropped.
-        // Hyprland reconfigures the whole workspace for the same reason.
-        if changed {
-            // The layer surfaces first: their exclusive zones decide how
-            // much of the monitor is left for the windows to tile in, so a
-            // bar has to be placed before a window is told its size.
-            placed_layers = place_layers(&mut slots, &mut state, &screens);
-            reconfigure(&mut slots, &state);
-        }
-        // The keyboard follows the layout's focus, and a window that has just
-        // arrived is what the layout focused.
-        focus.follow_layout(
-            &state,
-            &mut slots,
-            &sources,
-            seat.keyboard().pressed(),
-            seat.keyboard().modifiers(),
-        );
-
         // A connection that ended takes its windows with it.
         for index in 0..slots.len() {
             if slots.get(index).is_some_and(|slot| slot.gone) {
@@ -490,17 +471,70 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                 }
             }
         }
+        // Taking a slot out moves every slot after it, and a window's
+        // `Source` and the focus both name a client by its *place* in the
+        // list. Renumber them as the list is compacted: a window that
+        // outlived an earlier client would otherwise be drawn from somebody
+        // else's buffer and typed into by somebody else's keyboard.
+        let places = renumbered(&slots);
         slots.retain(|slot| !slot.gone);
+        sources.retain(
+            |_, source| match places.get(source.client).copied().flatten() {
+                Some(at) => {
+                    source.client = at;
+                    true
+                }
+                None => false,
+            },
+        );
+        focus.renumber(&places);
 
-        // The event socket, from the same description `hyprctl` answers
-        // from: a bar and a script must not be told two different things.
-        if events.is_some() || !plugins.is_empty() {
-            let snapshot = crate::control::snapshot(&state, &slots, &sources, &plugins, seat.submap());
+        // A window arriving or leaving resizes every other window on the
+        // workspace, and a window that is not told is one drawing at the
+        // size it had before -- which the compositor then draws scaled into
+        // a rectangle that is not its buffer's. Hyprland reconfigures the
+        // whole workspace for the same reason.
+        //
+        // Everything that changes the layout is above this, *including* a
+        // connection ending: a window left alone when its neighbour's client
+        // went is the one case where nothing the compositor was asked to do
+        // changed the layout and it changed anyway, and it was the one case
+        // this missed.
+        if changed {
+            // The layer surfaces first: their exclusive zones decide how
+            // much of the monitor is left for the windows to tile in, so a
+            // bar has to be placed before a window is told its size.
+            placed_layers = place_layers(&mut slots, &mut state, &screens);
+            reconfigure(&mut slots, &state);
+        }
+        // The keyboard follows the layout's focus, and a window that has just
+        // arrived is what the layout focused.
+        focus.follow_layout(
+            &state,
+            &mut slots,
+            &sources,
+            seat.keyboard().pressed(),
+            seat.keyboard().modifiers(),
+        );
+
+        // The event socket and the bars, from the same description
+        // `hyprctl` answers from: a bar and a script must not be told two
+        // different things.
+        let watched = slots.iter().any(|slot| slot.client().watches_toplevels());
+        if events.is_some() || !plugins.is_empty() || watched {
+            let snapshot =
+                crate::control::snapshot(&state, &slots, &sources, &plugins, seat.submap());
             if let Some(socket) = events.as_mut() {
                 socket.publish(&snapshot);
             }
             // A plugin that subscribed hears the same lines a bar does.
             plugins.tell(&snapshot);
+            if watched {
+                let windows = crate::control::toplevels(&snapshot);
+                for slot in &mut slots {
+                    slot.client_mut().show_toplevels(&windows);
+                }
+            }
         }
 
         most = most.max(sources.len());
@@ -631,6 +665,13 @@ fn serve(
     let mut selection: Option<(Option<ObjectId>, Vec<String>)> = None;
     let mut wanted: Vec<(ObjectId, String, Fd)> = Vec::new();
     let mut made_device = false;
+    // The same, for what a bar asked: acting on a window reaches every
+    // client's slot, and this one's borrow is still open.
+    let mut asked: Vec<(WindowId, ForeignRequest)> = Vec::new();
+    // Whether this client has just become a bar, which is owed the windows
+    // there already are before the roundtrip it sent after binding comes
+    // back.
+    let mut bound_manager = false;
     if consumed > 0 {
         let events = slot.client.take_events();
         let mut claimed = 0;
@@ -675,6 +716,17 @@ fn serve(
                 Event::SelectionWanted { offer, mime, fd } => {
                     wanted.push((offer, mime.clone(), fd));
                     claimed += 1;
+                }
+                Event::Bound {
+                    role: Role::ForeignToplevelManager,
+                    ..
+                } => bound_manager = true,
+                // A bar asked for something to be done to a window it
+                // does not own, which is the whole point of the protocol:
+                // clicking a taskbar entry focuses that window, and the
+                // middle click closes it.
+                Event::ForeignToplevelAsked { window, what } => {
+                    asked.push((WindowId(window), what));
                 }
                 Event::ToplevelCreated { toplevel, .. } => {
                     let window = WindowId(u64::from(*next_window));
@@ -740,6 +792,24 @@ fn serve(
         } else {
             report("hyprix: the selection was given up");
         }
+    }
+    // Before anything else this client is owed: a `wl_display.sync` sent
+    // after the bind is how every such client knows it has the whole list,
+    // and an answer that arrives after the callback is a list it never sees.
+    if bound_manager {
+        let windows =
+            crate::control::toplevels(&crate::control::describe_all(state, slots, sources, ""));
+        if let Some(slot) = slots.get_mut(index) {
+            slot.client_mut().show_toplevels(&windows);
+        }
+    }
+    for (window, what) in asked {
+        report(&format!(
+            "hyprix: a bar asked for {what:?} of window {}, {}",
+            window.0,
+            named(window, slots, sources)
+        ));
+        changed |= for_the_bar(window, what, state, slots, sources);
     }
     for (offer, mime, fd) in wanted {
         if clipboard.pasted(slots, index, offer, &mime, fd) {
@@ -1144,6 +1214,70 @@ fn dispatch(
     !changes.is_empty()
 }
 
+/// Where each slot will be once the ones that have gone are taken out.
+///
+/// `None` for a slot that is going. The compositor holds a client by its
+/// place in the list -- a `Source`, the focus -- so every such place has to
+/// be moved in step with the list itself.
+fn renumbered(slots: &[Slot]) -> Vec<Option<usize>> {
+    let mut places = Vec::with_capacity(slots.len());
+    let mut next = 0usize;
+    for slot in slots {
+        if slot.gone {
+            places.push(None);
+        } else {
+            places.push(Some(next));
+            next = next.saturating_add(1);
+        }
+    }
+    places
+}
+
+/// Do what a bar asked of a window, and say whether the layout changed.
+///
+/// Each is the dispatcher a keybind would run, aimed at the window the bar
+/// named rather than the focused one: `activate` is `focuswindow`, `close`
+/// is `killactive`, and the two state requests are `fullscreen` after the
+/// window has been focused, since that is what this layout's dispatcher
+/// acts on. `minimized` has nowhere to go -- nothing here is minimised --
+/// so it is answered by leaving the window where it is, which is what a
+/// compositor without a minimised state does.
+fn for_the_bar(
+    window: WindowId,
+    what: ForeignRequest,
+    state: &mut State,
+    slots: &mut [Slot],
+    sources: &BTreeMap<WindowId, Source>,
+) -> bool {
+    match what {
+        ForeignRequest::Activate => state.focus_window(window).is_ok(),
+        ForeignRequest::Close => {
+            close(window, slots, sources);
+            false
+        }
+        ForeignRequest::Fullscreen(on) => {
+            let is = state
+                .workspace_of(window)
+                .and_then(|workspace| state.fullscreen(workspace))
+                .is_some_and(|(full, _)| full == window);
+            if is == on {
+                return false;
+            }
+            if state.focus_window(window).is_err() {
+                return false;
+            }
+            state
+                .dispatch_str("fullscreen", "0")
+                .is_ok_and(|made| !made.is_empty())
+        }
+        // Maximised and minimised are states this compositor does not have,
+        // and a bar is told so: the window is never reported in either, so
+        // a request to leave one is already true and a request to enter one
+        // is refused by doing nothing rather than by doing the wrong thing.
+        ForeignRequest::Maximized(_) | ForeignRequest::Minimized(_) => false,
+    }
+}
+
 /// Ask the window's client to close it.
 fn close(window: WindowId, slots: &mut [Slot], sources: &BTreeMap<WindowId, Source>) {
     let Some(source) = sources.get(&window) else {
@@ -1160,6 +1294,26 @@ fn close(window: WindowId, slots: &mut [Slot], sources: &BTreeMap<WindowId, Sour
     if let Some(toplevel) = toplevel {
         slot.client.close_toplevel(toplevel);
     }
+}
+
+/// What a window is called, for a diagnostic.
+fn named(window: WindowId, slots: &[Slot], sources: &BTreeMap<WindowId, Source>) -> String {
+    let Some(source) = sources.get(&window) else {
+        return "a window that is not there".to_owned();
+    };
+    let Some(slot) = slots.get(source.client) else {
+        return format!(
+            "a window on connection {}, which is not there",
+            source.client
+        );
+    };
+    let title = slot
+        .client()
+        .toplevels()
+        .find(|(_, top)| top.surface == source.surface)
+        .map(|(_, top)| top.title.clone())
+        .unwrap_or_default();
+    format!("{title:?} on connection {}", source.client)
 }
 
 /// Place every layer surface, tell each one its size, and reserve what they
@@ -1359,6 +1513,15 @@ fn globals(outputs: usize) -> Globals {
             &compositor_protocol::layer_shell::ZWLR_LAYER_SHELL_V1,
             5,
             Role::LayerShell,
+        ),
+        // The other half of a bar: layer-shell puts it on the screen and
+        // this tells it which windows to draw. Waybar, eww and every
+        // taskbar read it, and a compositor that does not offer it is one
+        // whose bar shows a clock and nothing else.
+        (
+            &compositor_protocol::foreign_toplevel::ZWLR_FOREIGN_TOPLEVEL_MANAGER_V1,
+            3,
+            Role::ForeignToplevelManager,
         ),
     ] {
         let _ = globals.add(interface, version, role);

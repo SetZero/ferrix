@@ -302,8 +302,19 @@ impl Client {
                 );
                 // A zero means "you choose", which every client answers with
                 // the size it would like.
+                let (before_width, before_height) = (self.width, self.height);
                 self.width = if width > 0 { width } else { 640 };
                 self.height = if height > 0 { height } else { 480 };
+                if (self.width, self.height) != (before_width, before_height) {
+                    // Said out loud because a window that was not told it
+                    // had grown is drawn at the size it had, and the
+                    // difference between that and a compositor bug is this
+                    // line.
+                    say(&format!(
+                        "pattern: {} configured {}x{}",
+                        self.title, self.width, self.height
+                    ));
+                }
             }
             id::XDG_SURFACE if opcode == xdg_surface::event::CONFIGURE => {
                 let serial = args.first().and_then(Arg::as_uint).unwrap_or(0);
@@ -318,7 +329,13 @@ impl Client {
                 self.draw(out)?;
             }
             id::TOPLEVEL if opcode == xdg_toplevel::event::CLOSE => {
-                return Err("the compositor asked this window to close".to_owned());
+                // Which window, because a test that asks for one to be
+                // closed from outside it has to be able to say whether the
+                // right one went.
+                return Err(format!(
+                    "the compositor asked the {:?} window called {} to close",
+                    self.pattern, self.title
+                ));
             }
             id::BUFFER if opcode == core::wl_buffer::event::RELEASE => {
                 self.released = self.released.saturating_add(1);

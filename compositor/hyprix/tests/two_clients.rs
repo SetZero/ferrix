@@ -1158,3 +1158,102 @@ fn what_one_client_copies_another_pastes() {
         "the compositor's line does not say what the clipboard did: {line}"
     );
 }
+/// A bar's half of the protocol: `zwlr_foreign_toplevel_management_v1`.
+///
+/// `compositor/lswt` is a taskbar with the drawing taken out -- it binds the
+/// manager, takes a handle for each window, and reads the title, the
+/// application id and the states. What is required here is that the two
+/// windows the compositor is tiling are the two it describes, with the
+/// focused one marked, and that a request sent back through a handle reaches
+/// the window it names: `close` on a window nobody owns is what a middle
+/// click on a taskbar entry does.
+#[test]
+fn a_bar_is_told_which_windows_there_are_and_can_close_one() {
+    let work = workspace("toplevels");
+    let socket = work.join("wayland");
+
+    let options = Options {
+        display: socket.to_string_lossy().into_owned(),
+        headless: Some((WIDTH, HEIGHT)),
+        deadline: Some(8000),
+        ..Options::default()
+    };
+
+    let for_clients = socket.clone();
+    let clients = std::thread::spawn(move || {
+        for _ in 0..400 {
+            if for_clients.exists() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let mut windows = Vec::new();
+        for (pattern, title) in [(Pattern::Checkerboard, "one"), (Pattern::Gradient, "two")] {
+            let path = for_clients.clone();
+            windows.push(std::thread::spawn(move || {
+                connect(&path, pattern, title, Shape::Window)
+            }));
+            std::thread::sleep(Duration::from_millis(250));
+        }
+        // Both windows are up by now, which is what the list is of.
+        let listed = compositor_lswt::run(&for_clients, &compositor_lswt::Want::List);
+        // And one of them is asked to close, from outside it.
+        let closed = compositor_lswt::run(
+            &for_clients,
+            &compositor_lswt::Want::Close("one".to_owned()),
+        );
+        // A moment for the window to go, and then the list again: what the
+        // bar was told is only true if the window it named is the one that
+        // went.
+        std::thread::sleep(Duration::from_millis(500));
+        let after = compositor_lswt::run(&for_clients, &compositor_lswt::Want::List);
+        for window in windows {
+            let _ = window.join();
+        }
+        (listed, closed, after)
+    });
+
+    let line = hyprix::run(&options).expect("the compositor ran");
+    let (listed, closed, after) = clients.join().expect("the clients finished");
+    let listed = listed.unwrap_or_else(|why| panic!("listing: {why}; the compositor said {line}"));
+
+    assert_eq!(
+        listed.len(),
+        2,
+        "the bar was told about {} windows, not two: {listed:?}; the compositor said {line}",
+        listed.len()
+    );
+    // Both, by application id and title, in the order they opened.
+    assert!(
+        listed[0].contains("rocks.magical.pattern") && listed[0].contains("\"one\""),
+        "the first window: {listed:?}"
+    );
+    assert!(
+        listed[1].contains("\"two\""),
+        "the second window: {listed:?}"
+    );
+    // The focused one is marked, and it is the one that opened last.
+    assert!(
+        !listed[0].contains("activated") && listed[1].contains("activated"),
+        "the focused window is not the one marked: {listed:?}"
+    );
+
+    let closed = closed.unwrap_or_else(|why| panic!("closing: {why}"));
+    assert!(
+        closed.iter().any(|line| line.contains("closed \"one\"")),
+        "the close was not sent: {closed:?}"
+    );
+
+    // And the window it named is the one that went: `pattern` leaves when
+    // the compositor asks its window to close, so the list is now one.
+    let after = after.unwrap_or_else(|why| panic!("listing again: {why}"));
+    assert_eq!(
+        after.len(),
+        1,
+        "after closing one window the bar sees {after:?}; the compositor said {line}"
+    );
+    assert!(
+        after[0].contains("\"two\""),
+        "the wrong window was closed: {after:?}; before: {listed:?}; the compositor said {line}"
+    );
+}
