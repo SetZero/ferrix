@@ -16,6 +16,7 @@ name = "hyprix"
 path = "src/main.rs"
 
 [dependencies]
+compositor-evecho = { path = "../evecho" }
 compositor-config = { path = "../config" }
 compositor-drm = { path = "../drm" }
 compositor-ipc = { path = "../ipc" }

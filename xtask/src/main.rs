@@ -51,6 +51,7 @@ mod fat;
 mod flash;
 mod gateway;
 mod initramfs;
+mod input;
 mod native;
 mod net;
 mod paths;
@@ -119,6 +120,7 @@ COMMANDS:
     test-net      Boot with a network device and require busybox to configure it and fetch a file
     test-display  Boot compositor/blank as init with a virtio-gpu, and require its colour on every pixel
     test-compositor  Boot compositor/hyprix as init with a virtio-gpu, and require its background on every pixel
+    test-input    Boot compositor/evecho as init with virtio-input, send a key and a touch over QMP, and require them back
     test-threads  Boot threads-test as init and require std::thread, Mutex, mpsc and /proc's thread count
     check         Run every quality gate (fmt, clippy, layering, audits, tests, docs)
     host-clippy   check's host clippy step alone, as CI runs it
@@ -238,6 +240,7 @@ fn run() -> Result<()> {
         "test-net" => test_net(&args),
         "test-display" => display::test_display(&args),
         "test-compositor" => compositor::test_compositor(&args),
+        "test-input" => input::test_input(&args),
         "test-threads" => threads::test_threads(&args),
         "check" => check::run(&args),
         "host-clippy" => check::host_clippy(),

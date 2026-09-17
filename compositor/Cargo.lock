@@ -47,6 +47,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "compositor-evecho"
+version = "0.1.0"
+dependencies = [
+ "ferrix-linux-abi",
+ "libc",
+]
+
+[[package]]
 name = "compositor-ipc"
 version = "0.1.0"
 dependencies = [
@@ -119,6 +127,7 @@ version = "0.1.0"
 dependencies = [
  "compositor-config",
  "compositor-drm",
+ "compositor-evecho",
  "compositor-ipc",
  "compositor-layout",
  "compositor-pattern",

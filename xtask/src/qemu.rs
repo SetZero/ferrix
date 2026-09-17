@@ -548,16 +548,17 @@ fn watch(arch: Arch, image: &Path, kernel: &Path, args: &Args, until: &str) -> R
     watch_hooked(arch, image, kernel, args, until, None)
 }
 
-/// [`watch`], calling `at_marker` with the lines so far once `until` has been
-/// printed, while QEMU is still running, and returning the lines. A boot that
-/// panicked or never printed `until` is an error, as in `test_boot`.
+/// [`watch`], calling `at_marker` once `until` has been printed, while QEMU
+/// is still running, and returning the lines. The hook sees the lines so far
+/// and may read the ones that follow ([`Watching`]). A boot that panicked or
+/// never printed `until` is an error, as in `test_boot`.
 pub(crate) fn watch_then(
     arch: Arch,
     image: &Path,
     kernel: &Path,
     args: &Args,
     until: &str,
-    mut at_marker: impl FnMut(&[String]) -> Result<()>,
+    mut at_marker: impl FnMut(&mut Watching<'_>) -> Result<()>,
 ) -> Result<Vec<String>> {
     let watched = watch_hooked(arch, image, kernel, args, until, Some(&mut at_marker))?;
     match watched.verdict {
@@ -572,7 +573,78 @@ pub(crate) fn watch_then(
 }
 
 /// The hook [`watch_then`] runs at the marker.
-type AtMarker<'a> = &'a mut dyn FnMut(&[String]) -> Result<()>;
+type AtMarker<'a> = &'a mut dyn FnMut(&mut Watching<'_>) -> Result<()>;
+
+/// What a hook sees while QEMU is still running.
+///
+/// A test that has to *do* something at the marker -- take a screendump,
+/// send an input event -- usually has to see what the guest said in answer,
+/// and the guest says it after the marker. [`Watching::read_more`] reads
+/// those lines from the same channel every other line comes from, and prints
+/// and logs them the same way, so a transcript read afterwards is whole.
+pub(crate) struct Watching<'a> {
+    lines: &'a [String],
+    receiver: &'a mpsc::Receiver<String>,
+    log: &'a mut std::fs::File,
+    started: Instant,
+    after: Vec<String>,
+}
+
+impl std::fmt::Debug for Watching<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Watching")
+            .field("lines", &self.lines.len())
+            .field("after", &self.after.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl Watching<'_> {
+    /// Every line up to and including the one the boot waited for.
+    pub(crate) fn lines(&self) -> &[String] {
+        self.lines
+    }
+
+    /// The lines read since, by [`Watching::read_more`].
+    pub(crate) fn after(&self) -> &[String] {
+        &self.after
+    }
+
+    /// Read lines until `enough` is true of them all, or until `deadline`.
+    ///
+    /// Says whether `enough` was ever true: a caller that waited for an
+    /// answer and did not get one reports that itself, since only it knows
+    /// what it was waiting for.
+    ///
+    /// # Errors
+    ///
+    /// Only a log that could not be written.
+    pub(crate) fn read_more(
+        &mut self,
+        deadline: Instant,
+        mut enough: impl FnMut(&[String]) -> bool,
+    ) -> Result<bool> {
+        if enough(&self.after) {
+            return Ok(true);
+        }
+        loop {
+            let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+                return Ok(false);
+            };
+            let Ok(line) = self.receiver.recv_timeout(remaining) else {
+                return Ok(false);
+            };
+            let at = self.started.elapsed().as_secs_f64();
+            println!("  {at:6.2} | {line}");
+            writeln!(self.log, "{at:6.2} | {line}")?;
+            self.after.push(line);
+            if enough(&self.after) {
+                return Ok(true);
+            }
+        }
+    }
+}
 
 fn watch_hooked(
     arch: Arch,
@@ -668,10 +740,7 @@ fn watch_hooked(
     }
     // While QEMU still runs, so the hook can ask it things; a hook that fails
     // still lets QEMU be stopped and the log be kept.
-    let hooked = match at_marker {
-        Some(hook) if verdict == Verdict::Reached => hook(&lines),
-        _ => Ok(()),
-    };
+    let hooked = run_hook(at_marker, verdict, &mut lines, &receiver, &mut log, started);
     let status = finish(&mut child, verdict != Verdict::Silent)?;
     drop(receiver);
     let _ = reader.join();
@@ -701,6 +770,33 @@ fn watch_hooked(
         status,
         log: log_path,
     })
+}
+
+/// Run the marker hook, if there is one and the marker was reached, and
+/// keep whatever lines it read in the transcript.
+fn run_hook(
+    at_marker: Option<AtMarker<'_>>,
+    verdict: Verdict,
+    lines: &mut Vec<String>,
+    receiver: &mpsc::Receiver<String>,
+    log: &mut std::fs::File,
+    started: Instant,
+) -> Result<()> {
+    let Some(hook) = at_marker else { return Ok(()) };
+    if verdict != Verdict::Reached {
+        return Ok(());
+    }
+    let mut watching = Watching {
+        lines,
+        receiver,
+        log,
+        started,
+        after: Vec::new(),
+    };
+    let answered = hook(&mut watching);
+    let after = watching.after;
+    lines.extend(after);
+    answered
 }
 
 /// The error for a boot that panicked.

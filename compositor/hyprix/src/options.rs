@@ -63,7 +63,7 @@ usage: hyprix [options]
     /// A message naming the argument that was wrong.
     pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Self, String> {
         let mut options = Self::default();
-        let mut args = Self::unshell(args.into_iter().collect()).into_iter();
+        let mut args = compositor_evecho::init::unshell(args.into_iter().collect()).into_iter();
         while let Some(argument) = args.next() {
             let mut value = || {
                 args.next()
@@ -95,44 +95,6 @@ usage: hyprix [options]
             }
         }
         Ok(options)
-    }
-}
-
-impl Options {
-    /// The arguments a shell would have been given, as the compositor's own.
-    ///
-    /// Ferrix's kernel starts its first program the way it starts a shell
-    /// (`kernel/src/init.rs`): `sh -i` for an interactive one, and
-    /// `sh -c <script>` when a script was built in. The compositor is that
-    /// first program when it runs as init, so it is handed those, and `-i`
-    /// is not an option it has.
-    ///
-    /// `-i` alone means "nothing was asked for", which is the compositor's
-    /// own defaults. `-c <words>` means "run this", and for a compositor what
-    /// is run is itself, so the words are its arguments.
-    ///
-    /// A script holding a newline is one argument a line, because an
-    /// argument may hold a space: `--exec /bin/pattern checkerboard one` is
-    /// one argument and four words. A script on one line is split on
-    /// whitespace, which is what somebody typing one means.
-    fn unshell(args: Vec<String>) -> Vec<String> {
-        let words = |script: &String| -> Vec<String> {
-            if script.contains('\n') {
-                script
-                    .split('\n')
-                    .map(str::trim)
-                    .filter(|line| !line.is_empty())
-                    .map(str::to_owned)
-                    .collect()
-            } else {
-                script.split_whitespace().map(str::to_owned).collect()
-            }
-        };
-        match args.split_first() {
-            Some((first, rest)) if first == "-i" && rest.is_empty() => Vec::new(),
-            Some((first, rest)) if first == "-c" => rest.iter().flat_map(words).collect(),
-            _ => args,
-        }
     }
 }
 

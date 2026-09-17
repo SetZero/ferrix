@@ -1,0 +1,31 @@
+[package]
+name = "compositor-evecho"
+description = "evdev in Rust: what a /dev/input/eventN device is, and what it sends"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "compositor_evecho"
+path = "src/lib.rs"
+
+[[bin]]
+name = "evecho"
+path = "src/main.rs"
+
+# Report every key as `KEY_RESERVED`, so `xtask test-input` can show that its
+# check reads the events rather than the program's shape.
+[features]
+negative-control = []
+
+[dependencies]
+# Declarations only, as in the card: open, ioctl and read are the C library
+# std already links.
+libc = "0.2.189"
+# The evdev numbers and layouts, checked against the UAPI headers.
+ferrix-linux-abi = { path = "../../libs/linux-abi" }
+
+[lints]
+workspace = true

@@ -100,7 +100,8 @@ fn boot_and_dump(arch: Arch, program: &Path, client: &Path, args: &Args) -> Resu
     qemu_args.qmp_port = Some(port);
     let dump = paths::build_dir(arch).join("compositor.ppm");
     let mut taken = None;
-    let hook = |lines: &[String]| -> Result<()> {
+    let hook = |watching: &mut crate::qemu::Watching<'_>| -> Result<()> {
+        let lines = watching.lines();
         let mut qmp = Qmp::connect(port, Instant::now() + Duration::from_secs(10))?;
         if let Some(line) = lines.iter().rev().find(|line| line.contains(FAILED)) {
             return Err(Error::new(format!("{arch}: {}", line.trim())));

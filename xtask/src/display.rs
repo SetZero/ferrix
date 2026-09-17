@@ -194,6 +194,21 @@ impl Qmp {
         };
         self.execute("screendump", Some(&arguments)).map(drop)
     }
+
+    /// Put `events` -- each one an `InputEvent` object's JSON -- into the
+    /// guest's input devices, as one report.
+    ///
+    /// QEMU routes each event to a device that takes its kind, and ends the
+    /// lot with a sync of its own, so one call is one report.
+    ///
+    /// # Errors
+    ///
+    /// Whatever QMP said, which for a guest with no device that takes the
+    /// event is `Input handler not found`.
+    pub(crate) fn input_send_event(&mut self, events: &[String]) -> Result<()> {
+        let arguments = format!("{{\"events\":[{}]}}", events.join(","));
+        self.execute("input-send-event", Some(&arguments)).map(drop)
+    }
 }
 
 /// `text` as a JSON string literal.
@@ -338,7 +353,8 @@ fn boot_and_dump(arch: Arch, program: &Path, args: &Args, name: &str) -> Result<
     qemu_args.qmp_port = Some(port);
     let dump = paths::build_dir(arch).join(format!("{name}.ppm"));
     let mut taken = None;
-    let hook = |lines: &[String]| -> Result<()> {
+    let hook = |watching: &mut crate::qemu::Watching<'_>| -> Result<()> {
+        let lines = watching.lines();
         let mut qmp = Qmp::connect(port, Instant::now() + Duration::from_secs(10))?;
         if let Some(line) = lines.iter().rev().find(|line| line.contains(FAILED)) {
             // Say what QEMU's first console showed, which is also the proof
