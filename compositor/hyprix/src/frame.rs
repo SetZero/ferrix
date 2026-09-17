@@ -25,8 +25,11 @@ pub struct Output<'a> {
     pub backend: &'a mut dyn Backend,
     /// Where the monitor is in the global space.
     pub origin: (i64, i64),
-    /// The colours a window is drawn with.
+    /// The colours a window is drawn with, and what a `windowrule` changed
+    /// for one of them.
     pub style: &'a Style,
+    /// What each window is drawn with where a rule said something else.
+    pub styles: &'a BTreeMap<WindowId, compositor_render::WindowStyle>,
     /// How many buffer pixels one logical pixel is: `monitor = ..., 2`.
     /// Everything above the renderer works in logical pixels, and this is
     /// where they become the screen's own.
@@ -78,6 +81,7 @@ pub fn draw(
         backend,
         origin,
         style,
+        styles,
         scale,
     } = target;
     let (origin, scale) = (*origin, *scale);
@@ -115,7 +119,11 @@ pub fn draw(
 
     // Every window's rectangle is in the global space all monitors share;
     // the canvas is this monitor's, so the origin is where the monitor is.
-    let _ = render_with_layers(canvas, output, origin, style, &surfaces, &drawn, damage);
+    let styles = compositor_render::Styles {
+        base: style,
+        windows: styles,
+    };
+    let _ = render_with_layers(canvas, output, origin, &styles, &surfaces, &drawn, damage);
 
     let (width, height) = backend.size();
     let stride = backend.stride();

@@ -351,20 +351,45 @@ fn the_second_monitor_draws_the_window_moved_to_it() {
 /// compositor draws on Ferrix and the picture blessed here are made by one
 /// piece of code.
 fn ruled_frame() -> Vec<u8> {
+    use std::collections::BTreeMap;
+
     let (mut state, _) = two_clients();
     let _ = state
         .float_window(GRADIENT, Rect::new(RULED.0, RULED.1, RULED.2, RULED.3))
         .expect("the window floats");
     let layout = state.layout().remove(0);
     let buffers = client_buffers(&layout);
+    // And what the rules give each window to be drawn with: the floating one
+    // at `opacity 0.6`, the tiled one with its corners cut and no shadow.
+    let mut windows = BTreeMap::new();
+    let _ = windows.insert(
+        GRADIENT,
+        crate::WindowStyle {
+            opacity: Some(0.6),
+            ..crate::WindowStyle::default()
+        },
+    );
+    let _ = windows.insert(
+        CHECKERBOARD,
+        crate::WindowStyle {
+            rounding: Some(12),
+            shadow: false,
+            ..crate::WindowStyle::default()
+        },
+    );
+    let style = Style::default();
     let mut canvas = Canvas::new(WIDTH, HEIGHT).unwrap();
     let full = Damage::full(WIDTH, HEIGHT);
-    let produced = render(
+    let produced = crate::render_with_layers(
         &mut canvas,
         &layout,
         (0, 0),
-        &Style::default(),
+        &crate::Styles {
+            base: &style,
+            windows: &windows,
+        },
         &surfaces(&buffers),
+        &[],
         &full,
     );
     assert_eq!(produced, full);
@@ -423,6 +448,85 @@ fn a_ruled_window_floats_where_the_rule_put_it() {
         at(far.0, far.1),
         tiled_at(far.0, far.1),
         "the tiled window did not take the space the floating one left"
+    );
+}
+
+/// A window a rule gave a style of its own: drawn with that, where every
+/// other window is drawn with the configuration's.
+#[test]
+fn a_window_a_rule_styled_is_drawn_with_it() {
+    use std::collections::BTreeMap;
+
+    use crate::{Styles, WindowStyle};
+
+    let (_, layout) = two_clients();
+    let buffers = client_buffers(&layout);
+    let style = decorated_style();
+    let frame = |windows: &BTreeMap<WindowId, WindowStyle>| -> Vec<u8> {
+        let mut canvas = Canvas::new(WIDTH, HEIGHT).unwrap();
+        let full = Damage::full(WIDTH, HEIGHT);
+        let styles = Styles {
+            base: &style,
+            windows,
+        };
+        let _ = crate::render_with_layers(
+            &mut canvas,
+            &layout,
+            (0, 0),
+            &styles,
+            &surfaces(&buffers),
+            &[],
+            &full,
+        );
+        canvas.data().to_vec()
+    };
+    let plain = frame(&BTreeMap::new());
+
+    // `no_shadow` on one window: the picture changes, and only where that
+    // window's shadow was.
+    let mut without = BTreeMap::new();
+    let _ = without.insert(
+        CHECKERBOARD,
+        WindowStyle {
+            shadow: false,
+            ..WindowStyle::default()
+        },
+    );
+    let unshadowed = frame(&without);
+    assert_ne!(unshadowed, plain, "the shadow was drawn anyway");
+
+    // `rounding 0` on one window: its corner is the border again.
+    let mut square = BTreeMap::new();
+    let _ = square.insert(
+        CHECKERBOARD,
+        WindowStyle {
+            rounding: Some(0),
+            ..WindowStyle::default()
+        },
+    );
+    let squared = frame(&square);
+    assert_ne!(squared, plain, "the corner was cut anyway");
+
+    // `opacity 1` on the unfocused window, which the style draws at 0.6:
+    // more of it shows.
+    let mut opaque = BTreeMap::new();
+    let _ = opaque.insert(
+        CHECKERBOARD,
+        WindowStyle {
+            opacity: Some(1.0),
+            ..WindowStyle::default()
+        },
+    );
+    assert_ne!(frame(&opaque), plain, "the opacity was the style's anyway");
+
+    // And a window with no rule is drawn as it always was: the gradient's
+    // half of every picture above is the same.
+    let half = (WIDTH as usize / 2 + 100) * 4;
+    let row = (HEIGHT as usize / 2) * WIDTH as usize * 4;
+    assert_eq!(
+        plain.get(row + half..row + half + 4),
+        unshadowed.get(row + half..row + half + 4),
+        "the window with no rule changed"
     );
 }
 
@@ -492,7 +596,7 @@ fn bar_and_two_clients_frame() -> Vec<u8> {
         &mut canvas,
         &layout,
         (0, 0),
-        &Style::default(),
+        &crate::Styles::plain(&Style::default()),
         &surfaces(&buffers),
         &layers,
         &full,

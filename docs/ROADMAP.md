@@ -4310,17 +4310,18 @@ pattern that backtracks for ever.
 A rule is applied where Hyprland applies one: when the window maps, which is
 where the client has finished saying what it is called. `float`, `tile`,
 `size`, `move`, `center`, `workspace` (with `silent`), `fullscreen`,
-`maximize` and `no_focus` are carried out, through the same calls a
-dispatcher makes. The rest of what a rule can say -- `opacity`, `rounding`,
-`border_size`, `no_blur`, `no_shadow`, `no_dim` -- is about how *one* window
-is drawn where this renderer draws every window with one style, and a rule
-asking for one of those says so in the log rather than being quietly
-ignored.
+`maximize` and `no_focus` go to the layout, through the same calls a
+dispatcher makes; `opacity`, `rounding`, `border_size`, `no_blur`,
+`no_shadow` and `no_dim` go to the renderer, which now draws each window
+with what a rule gave it and every other window with the configuration's
+style.
 
-`cargo xtask test-compositor` boots a tenth time with three rules that
-float, size and move one of the two windows, and requires the picture they
-make: `compositor/render` blesses it by calling `State::float_window`, which
-is what the rules call, so the two pictures are made by one piece of code.
+`cargo xtask test-compositor` boots a tenth time with six rules -- one
+window floated at a size and a place and drawn at `opacity 0.6`, the other
+with its corners cut and no shadow -- and requires the picture they make.
+`compositor/render` blesses it by calling `State::float_window` and handing
+the renderer the same per-window styles, which is what the rules do, so the
+two pictures are made by one piece of code.
 
 **Begun — window groups (2026-09-17).** Hyprland's tabs: windows that share
 one slot in the tiling, of which one is drawn. Only the head is in the

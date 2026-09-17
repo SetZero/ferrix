@@ -209,6 +209,78 @@ pub struct LayerFrame<'pixels> {
     pub surface: Option<Surface<'pixels>>,
 }
 
+/// What one window is drawn with, where a `windowrule` asked for something
+/// other than the style every window has.
+///
+/// Hyprland's rules change a single window's decorations -- `opacity 0.8`,
+/// `rounding 0`, `no_blur` -- and a compositor that read those and drew
+/// every window the same would be one whose rules do nothing. Each field is
+/// "as the style says" until a rule fills it in.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WindowStyle {
+    /// `opacity`: how much of the window shows, over the style's own.
+    pub opacity: Option<f32>,
+    /// `rounding`: how far its corners are cut.
+    pub rounding: Option<i64>,
+    /// `border_size`: how wide its border is.
+    pub border: Option<i64>,
+    /// `no_blur`: whether what is behind it is blurred.
+    pub blur: bool,
+    /// `no_shadow`.
+    pub shadow: bool,
+    /// `no_dim`: whether it is dimmed when it is not focused.
+    pub dim: bool,
+}
+
+impl Default for WindowStyle {
+    /// Everything as the style says, which is what a window with no rule
+    /// gets.
+    fn default() -> Self {
+        Self {
+            opacity: None,
+            rounding: None,
+            border: None,
+            blur: true,
+            shadow: true,
+            dim: true,
+        }
+    }
+}
+
+/// The style a frame is drawn with: the one every window has, and the
+/// windows a rule gave something else.
+#[derive(Clone, Copy, Debug)]
+pub struct Styles<'a> {
+    /// What every window is drawn with.
+    pub base: &'a Style,
+    /// What a rule changed, by window.
+    pub windows: &'a BTreeMap<WindowId, WindowStyle>,
+}
+
+impl<'a> Styles<'a> {
+    /// A style with no window given anything of its own.
+    #[must_use]
+    pub fn plain(base: &'a Style) -> Self {
+        Self {
+            base,
+            windows: Self::none(),
+        }
+    }
+
+    /// The empty map, which a style with no rules borrows.
+    fn none() -> &'static BTreeMap<WindowId, WindowStyle> {
+        static NONE: std::sync::OnceLock<BTreeMap<WindowId, WindowStyle>> =
+            std::sync::OnceLock::new();
+        NONE.get_or_init(BTreeMap::new)
+    }
+
+    /// What `window` is drawn with.
+    #[must_use]
+    pub fn of(&self, window: WindowId) -> WindowStyle {
+        self.windows.get(&window).copied().unwrap_or_default()
+    }
+}
+
 /// Draw `output`, the layout of the monitor whose top-left corner is at
 /// `origin` in the layout's global coordinates, into `canvas` within
 /// `damage`.
@@ -229,7 +301,15 @@ pub fn render(
     surfaces: &BTreeMap<WindowId, Surface<'_>>,
     damage: &Damage,
 ) -> Damage {
-    render_with_layers(canvas, output, origin, style, surfaces, &[], damage)
+    render_with_layers(
+        canvas,
+        output,
+        origin,
+        &Styles::plain(style),
+        surfaces,
+        &[],
+        damage,
+    )
 }
 
 /// A monitor's layout in the buffer pixels a scaled screen draws.
@@ -278,11 +358,12 @@ pub fn render_with_layers(
     canvas: &mut Canvas,
     output: &MonitorLayout,
     origin: (i64, i64),
-    style: &Style,
+    styles: &Styles<'_>,
     surfaces: &BTreeMap<WindowId, Surface<'_>>,
     layers: &[LayerFrame<'_>],
     damage: &Damage,
 ) -> Damage {
+    let style = styles.base;
     let local = |rect: Rect| rect.translate(origin.0.saturating_neg(), origin.1.saturating_neg());
     canvas.clear(style.background, damage);
     for layer in layers.iter().filter(|layer| !layer.above) {
@@ -291,89 +372,7 @@ pub fn render_with_layers(
         }
     }
     for placed in &output.windows {
-        let rect = local(placed.rect);
-        let color = if placed.focused {
-            style.active_border
-        } else {
-            style.inactive_border
-        };
-        // The shadow first, under the border and the window: Hyprland draws
-        // it as a decoration behind them and does not cut the window's own
-        // shape out of it.
-        if let Some(shadow) = style.shadow.as_ref() {
-            let border = placed.border.max(0);
-            canvas.shadow(
-                Rect::new(
-                    rect.x.saturating_sub(border),
-                    rect.y.saturating_sub(border),
-                    rect.width.saturating_add(border.saturating_mul(2)),
-                    rect.height.saturating_add(border.saturating_mul(2)),
-                ),
-                shadow,
-                damage,
-            );
-        }
-        // A rounded window's border follows its corners, so it cannot be
-        // four strips: Hyprland draws the outer rounding as the window's
-        // plus the border's width, and the surface goes inside it. A square
-        // window keeps the four strips, which blend a translucent border
-        // once at the corners.
-        if style.rounding > 0 {
-            let outer = Rect::new(
-                rect.x.saturating_sub(placed.border.max(0)),
-                rect.y.saturating_sub(placed.border.max(0)),
-                rect.width
-                    .saturating_add(placed.border.max(0).saturating_mul(2)),
-                rect.height
-                    .saturating_add(placed.border.max(0).saturating_mul(2)),
-            );
-            canvas.fill_rounded(
-                outer,
-                style.rounding.saturating_add(placed.border.max(0)),
-                color,
-                damage,
-            );
-        } else {
-            canvas.border(rect, placed.border, color, damage);
-        }
-        // What is behind a window that can be seen through, blurred. Only
-        // for a window that can be: blurring behind an opaque one costs a
-        // pyramid of passes and changes not one pixel of the frame. A
-        // surface in a format with alpha may be translucent anywhere, and a
-        // window drawn at less than full opacity is translucent everywhere.
-        let translucent = surfaces
-            .get(&placed.window)
-            .is_some_and(|surface| surface.format() == Format::Argb8888)
-            || style.opacity(placed.focused, placed.fullscreen) < 1.0;
-        if let Some((size, passes)) = style.blur
-            && translucent
-        {
-            canvas.blur(rect, style.rounding, size, passes, damage);
-        }
-        if let Some(surface) = surfaces.get(&placed.window) {
-            // Scaled, which is the exact path when the surface is already
-            // the rectangle's size -- which it is for every window that is
-            // not part-way through an animation.
-            canvas.composite_scaled(
-                surface,
-                rect,
-                style.rounding,
-                style.opacity(placed.focused, placed.fullscreen),
-                damage,
-            );
-        }
-        // `decoration:dim_inactive`: black over a window that is not
-        // focused, at `dim_strength`. Over the surface, because it dims the
-        // window and not the background behind it.
-        if style.dim > 0.0 && !placed.focused {
-            #[expect(
-                clippy::cast_possible_truncation,
-                clippy::cast_sign_loss,
-                reason = "an opacity between zero and one becomes a byte of alpha"
-            )]
-            let alpha = (style.dim.clamp(0.0, 1.0) * 255.0).round() as u32;
-            canvas.fill_rounded(rect, style.rounding, Color(alpha << 24), damage);
-        }
+        window(canvas, placed, local(placed.rect), styles, surfaces, damage);
     }
     for layer in layers.iter().filter(|layer| layer.above) {
         if let Some(surface) = layer.surface.as_ref() {
@@ -381,6 +380,95 @@ pub fn render_with_layers(
         }
     }
     damage.clipped(canvas.bounds())
+}
+
+/// One window: its shadow, its border, the blur behind it, its own pixels
+/// and the dim over them, with whatever a `windowrule` changed.
+fn window(
+    canvas: &mut Canvas,
+    placed: &Placed,
+    rect: Rect,
+    styles: &Styles<'_>,
+    surfaces: &BTreeMap<WindowId, Surface<'_>>,
+    damage: &Damage,
+) {
+    let style = styles.base;
+    let own = styles.of(placed.window);
+    let rounding = own.rounding.unwrap_or(style.rounding).max(0);
+    let width = own.border.unwrap_or(placed.border).max(0);
+    let opacity = own
+        .opacity
+        .unwrap_or_else(|| style.opacity(placed.focused, placed.fullscreen));
+    let color = if placed.focused {
+        style.active_border
+    } else {
+        style.inactive_border
+    };
+    // The shadow first, under the border and the window: Hyprland draws it
+    // as a decoration behind them and does not cut the window's own shape
+    // out of it.
+    if let Some(shadow) = style.shadow.as_ref().filter(|_| own.shadow) {
+        canvas.shadow(
+            Rect::new(
+                rect.x.saturating_sub(width),
+                rect.y.saturating_sub(width),
+                rect.width.saturating_add(width.saturating_mul(2)),
+                rect.height.saturating_add(width.saturating_mul(2)),
+            ),
+            &Shadow {
+                rounding,
+                ..*shadow
+            },
+            damage,
+        );
+    }
+    // A rounded window's border follows its corners, so it cannot be four
+    // strips: Hyprland draws the outer rounding as the window's plus the
+    // border's width, and the surface goes inside it. A square window keeps
+    // the four strips, which blend a translucent border once at the corners.
+    if rounding > 0 {
+        let outer = Rect::new(
+            rect.x.saturating_sub(width),
+            rect.y.saturating_sub(width),
+            rect.width.saturating_add(width.saturating_mul(2)),
+            rect.height.saturating_add(width.saturating_mul(2)),
+        );
+        canvas.fill_rounded(outer, rounding.saturating_add(width), color, damage);
+    } else {
+        canvas.border(rect, width, color, damage);
+    }
+    // What is behind a window that can be seen through, blurred. Only for a
+    // window that can be: blurring behind an opaque one costs a pyramid of
+    // passes and changes not one pixel of the frame. A surface in a format
+    // with alpha may be translucent anywhere, and a window drawn at less
+    // than full opacity is translucent everywhere.
+    let translucent = surfaces
+        .get(&placed.window)
+        .is_some_and(|surface| surface.format() == Format::Argb8888)
+        || opacity < 1.0;
+    if let Some((size, passes)) = style.blur.filter(|_| own.blur)
+        && translucent
+    {
+        canvas.blur(rect, rounding, size, passes, damage);
+    }
+    if let Some(surface) = surfaces.get(&placed.window) {
+        // Scaled, which is the exact path when the surface is already the
+        // rectangle's size -- which it is for every window that is not
+        // part-way through an animation.
+        canvas.composite_scaled(surface, rect, rounding, opacity, damage);
+    }
+    // `decoration:dim_inactive`: black over a window that is not focused, at
+    // `dim_strength`. Over the surface, because it dims the window and not
+    // the background behind it.
+    if style.dim > 0.0 && !placed.focused && own.dim {
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "an opacity between zero and one becomes a byte of alpha"
+        )]
+        let alpha = (style.dim.clamp(0.0, 1.0) * 255.0).round() as u32;
+        canvas.fill_rounded(rect, rounding, Color(alpha << 24), damage);
+    }
 }
 
 /// The part of a monitor whose top-left corner is at `origin` that differs

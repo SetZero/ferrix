@@ -8,20 +8,27 @@
 //!
 //! # What is carried out
 //!
-//! `float`, `tile`, `size`, `move`, `center`, `workspace` (with `silent`),
-//! `fullscreen`, `maximize` and `no_focus`. The rest of what a rule can say
-//! -- `opacity`, `rounding`, `border_size`, `no_blur`, `no_shadow`,
-//! `no_dim` -- is about how one window is *drawn*, and this renderer draws
-//! every window with one style; a rule that asks for one of those is
-//! reported as not applied rather than quietly ignored.
+//! The layout's: `float`, `tile`, `size`, `move`, `center`, `workspace`
+//! (with `silent`), `fullscreen`, `maximize` and `no_focus`, through the
+//! same calls a dispatcher makes.
+//!
+//! And the renderer's: `opacity`, `rounding`, `border_size`, `no_blur`,
+//! `no_shadow` and `no_dim`, which are what *one* window is drawn with. They
+//! are kept here by window, and the frame reads them: a window with no rule
+//! is drawn as every window is.
 
-use compositor_config::{Config, Effect, Window, WindowRule};
+use std::collections::BTreeMap;
+
+use compositor_config::{Config, Decoration, Effect, Window, WindowRule};
 use compositor_layout::{Rect, State, WindowId};
+use compositor_render::WindowStyle;
 
 /// Every `windowrule` line, read.
 #[derive(Debug, Default)]
 pub struct Rules {
     rules: Vec<WindowRule>,
+    /// What a rule gave a window to be drawn with, by window.
+    styles: BTreeMap<WindowId, WindowStyle>,
 }
 
 impl Rules {
@@ -34,7 +41,21 @@ impl Rules {
                 Err(why) => report(&format!("hyprix: windowrule = {}: {why}", raw.value)),
             }
         }
-        Self { rules }
+        Self {
+            rules,
+            styles: BTreeMap::new(),
+        }
+    }
+
+    /// What each window is drawn with, for the frame.
+    #[must_use]
+    pub const fn styles(&self) -> &BTreeMap<WindowId, WindowStyle> {
+        &self.styles
+    }
+
+    /// Forget a window that has gone.
+    pub fn window_gone(&mut self, window: WindowId) {
+        let _ = self.styles.remove(&window);
     }
 
     /// How many rules there are.
@@ -54,17 +75,18 @@ impl Rules {
     /// Gives whether anything changed, which is what the loop needs to know
     /// to draw again.
     pub fn apply(
-        &self,
+        &mut self,
         window: WindowId,
         what: &Window<'_>,
         state: &mut State,
         report: &mut dyn FnMut(&str),
     ) -> bool {
-        let effects: Vec<&Effect> = self
+        let effects: Vec<Effect> = self
             .rules
             .iter()
             .filter(|rule| rule.matches(what))
             .flat_map(|rule| rule.effects.iter())
+            .cloned()
             .collect();
         if effects.is_empty() {
             return false;
@@ -84,7 +106,11 @@ impl Rules {
         let mut position = None;
         let mut centred = false;
         let mut changed = false;
-        for effect in effects {
+        // What the window is drawn with, which starts as what every window
+        // is drawn with.
+        let mut style = WindowStyle::default();
+        let mut styled = false;
+        for effect in &effects {
             match effect {
                 Effect::Float => floating = Some(true),
                 Effect::Tile => floating = Some(false),
@@ -95,6 +121,26 @@ impl Rules {
                     position = Some((x.against(area.width), y.against(area.height)));
                 }
                 Effect::Center => centred = true,
+                Effect::Opacity(opacity) => {
+                    style.opacity = Some(*opacity);
+                    styled = true;
+                }
+                Effect::Rounding(rounding) => {
+                    style.rounding = Some(*rounding);
+                    styled = true;
+                }
+                Effect::BorderSize(width) => {
+                    style.border = Some(*width);
+                    styled = true;
+                }
+                Effect::Without(decoration) => {
+                    match decoration {
+                        Decoration::Blur => style.blur = false,
+                        Decoration::Shadow => style.shadow = false,
+                        Decoration::Dim => style.dim = false,
+                    }
+                    styled = true;
+                }
                 Effect::Workspace { target, silent } => {
                     let name = if *silent {
                         "movetoworkspacesilent"
@@ -130,13 +176,11 @@ impl Rules {
                         changed = true;
                     }
                 }
-                // How one window is drawn, which this renderer cannot do
-                // yet: said rather than ignored.
-                other => report(&format!(
-                    "hyprix: windowrule {other:?} is not applied yet; it is about how one window \
-                     is drawn and every window is drawn with one style"
-                )),
             }
+        }
+        if styled {
+            let _ = self.styles.insert(window, style);
+            changed = true;
         }
 
         // Floating last, so that a `size` written after a `float` is still

@@ -95,7 +95,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
     }
     let mut screens = Screen::all(backends, &rules)?;
     // The `windowrule` lines, which are applied when a window maps.
-    let window_rules = crate::rules::Rules::new(&config, report);
+    let mut window_rules = crate::rules::Rules::new(&config, report);
     if !window_rules.is_empty() {
         report(&format!("hyprix: {} window rules", window_rules.len()));
     }
@@ -387,7 +387,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                 &mut state,
                 &mut sources,
                 &mut next_window,
-                &window_rules,
+                &mut window_rules,
                 report,
             )? {
                 changed = true;
@@ -441,6 +441,9 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                 for (_, window) in windows {
                     let _ = state.window_gone(window);
                     let _ = sources.remove(&window);
+                    // What a rule gave it goes with it, so that a window id
+                    // handed out again is drawn as a new window.
+                    window_rules.window_gone(window);
                     changed = true;
                 }
                 if slots.get(index).is_some_and(|slot| !slot.layers.is_empty()) {
@@ -499,6 +502,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                     backend: screen.backend.as_mut(),
                     origin: (screen.rect.x, screen.rect.y),
                     style: &style,
+                    styles: window_rules.styles(),
                     scale: screen.scale,
                 };
                 crate::frame::draw(&mut target, output, &slots, &sources, &placed_layers, &full)?;
@@ -560,7 +564,7 @@ fn serve(
     state: &mut State,
     sources: &mut BTreeMap<WindowId, Source>,
     next_window: &mut u32,
-    rules: &crate::rules::Rules,
+    rules: &mut crate::rules::Rules,
     report: &mut dyn FnMut(&str),
 ) -> Result<bool, String> {
     let Some(slot) = slots.get_mut(index) else {
@@ -682,7 +686,7 @@ fn serve(
 /// sets its title and its application id before its first commit, and the
 /// first commit is where this is called from.
 fn apply_rules(
-    rules: &crate::rules::Rules,
+    rules: &mut crate::rules::Rules,
     client: &Client,
     toplevel: ObjectId,
     window: WindowId,
