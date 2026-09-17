@@ -20,10 +20,12 @@
 //! busybox's shell starts every program it does not have built in with
 //! `clone`, `execve` and `wait4` (measured in
 //! `docs/STAGE8-WHAT-THE-EXIT-NEEDS.md`). So a build can carry a list instead
-//! of a script, and init starts each program in turn itself. The program is
-//! `/bin/busybox`, read from the initramfs through the VFS rather than built
-//! into the kernel, because loading a program from a file is part of what the
-//! stage is for.
+//! of a script, and init starts each program in turn itself. Each command's
+//! program is the name its `argv[0]` has in `/bin`, read from the initramfs
+//! through the VFS rather than built into the kernel, because loading a
+//! program from a file is part of what the stage is for. Which binary that
+//! name belongs to -- busybox, uutils/coreutils, zinc -- is the image's
+//! business and not this file's.
 //!
 //! Each command's start and end go on lines of their own, in a format
 //! `xtask/src/vfs.rs` parses; the two change together. While a command runs,
@@ -56,8 +58,14 @@ static SCRIPT: &[u8] = include_bytes!(env!("FERRIX_INIT_SCRIPT_FILE"));
 /// `kernel/build.rs` for the encoding.
 static COMMANDS: &[u8] = include_bytes!(env!("FERRIX_INIT_COMMANDS_FILE"));
 
-/// The program every command is run with.
-const PROGRAM: &str = "/bin/busybox";
+/// Where a command's program is looked for: `PATH`, which is one directory.
+///
+/// A command's `argv[0]` names its program, and the program is whatever that
+/// name is in `/bin` -- a link to busybox, to uutils/coreutils, or to zinc.
+/// Init resolves it the way the shell would, rather than knowing which binary
+/// owns which name, so that moving a name from one to the other is a change
+/// to the image and not to the kernel.
+const PROGRAM_DIR: &[u8] = b"/bin/";
 
 /// The environment every command starts with.
 const ENVIRONMENT: &[&[u8]] = &[b"PATH=/bin", b"HOME=/", b"TERM=dumb"];
@@ -122,26 +130,51 @@ pub(crate) fn run() {
     }
 }
 
-/// Read [`PROGRAM`] from the root and run each command in `list` with it.
+/// Run each command in `list`, each with the program its `argv[0]` names in
+/// [`PROGRAM_DIR`].
 fn run_commands(list: &[u8]) {
     let commands = parse(list);
     let ctx = fs::namespace().context();
-    let (program, exe, _set_ids) = match fs::read_program(&ctx, None, PROGRAM.as_bytes()) {
-        Ok(read) => read,
-        Err(errno) => {
-            println!("  init     {PROGRAM} could not be read: errno {}", errno.0);
-            return;
-        }
-    };
-    println!(
-        "  init     {PROGRAM} is {} KiB, running {} commands",
-        program.len() / 1024,
-        commands.len()
-    );
+    println!("  init     running {} commands", commands.len());
+    // The programs the commands have needed so far, so that twenty commands
+    // over three programs read three files. Worth keeping rather than reading
+    // each time: uutils/coreutils is one binary of some 14 MiB answering to a
+    // hundred names, and reading it once per command would be most of the
+    // boot.
+    // The image type is the one `read_program` returns; only the path and
+    // the resolved name are named here.
+    let mut loaded: Vec<(Vec<u8>, _, Vec<u8>)> = Vec::new();
     for (index, argv) in commands.iter().enumerate() {
         println!("  init     command {index}: {}", Argv(argv));
         syscall::report_unanswered(UNANSWERED_LINES);
-        match start(&program, &exe, argv) {
+        let Some(name) = argv.first() else {
+            println!("  init     command {index} names no program");
+            continue;
+        };
+        let mut path = Vec::from(PROGRAM_DIR);
+        path.extend_from_slice(name);
+
+        let known = loaded.iter().position(|(seen, ..)| seen == &path);
+        let at = match known {
+            Some(at) => at,
+            None => match fs::read_program(&ctx, None, &path) {
+                Ok((image, exe, _set_ids)) => {
+                    loaded.push((path.clone(), image, exe));
+                    loaded.len().saturating_sub(1)
+                }
+                Err(errno) => {
+                    println!(
+                        "  init     command {index} could not be read: errno {}",
+                        errno.0
+                    );
+                    continue;
+                }
+            },
+        };
+        let Some((_, image, exe)) = loaded.get(at) else {
+            continue;
+        };
+        match start(image, exe, &path, argv) {
             Ok(status) => println!("  init     command {index} exited with {status}"),
             Err(problem) => {
                 println!("  init     command {index} could not be started: {problem:?}");
@@ -158,14 +191,17 @@ fn run_commands(list: &[u8]) {
 /// does not change when that does.
 ///
 /// `exe` is where the program was read from, resolved, which is what
-/// `/proc/self/exe` must say: the name as written in [`PROGRAM`] may pass
-/// through a symbolic link, and glibc's static startup asserts the link it
-/// reads back is absolute.
-fn start(program: &[u8], exe: &[u8], argv: &[&[u8]]) -> Result<i32, exec::ExecError> {
+/// `/proc/self/exe` must say: the name in `/bin` is a symbolic link, and
+/// glibc's static startup asserts the link it reads back is absolute.
+///
+/// `path` is the name before it was resolved, which is what `AT_EXECFN` says:
+/// a multicall binary reads it, or `argv[0]`, to know which of its programs
+/// it has been asked for.
+fn start(program: &[u8], exe: &[u8], path: &[u8], argv: &[&[u8]]) -> Result<i32, exec::ExecError> {
     let executable = exec::Executable {
         image: program,
         exe,
-        exec_fn: PROGRAM.as_bytes(),
+        exec_fn: path,
         set_ids: fs::SetIds::NONE,
     };
     exec::run_init(executable, argv, ENVIRONMENT, random_bytes())
