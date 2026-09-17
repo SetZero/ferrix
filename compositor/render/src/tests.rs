@@ -11,7 +11,19 @@ use crate::{
 
 const BG: u32 = 0x0020_4060;
 
-/// `Style::default()` with the drop shadow off.
+/// The style every expected image in this crate is blessed from:
+/// [`Style::default`] with the dither off.
+///
+/// [`Style::undithered`] says why. The dither is drawn, and
+/// `graded-blur-two-clients` is the image that holds it; every other
+/// picture here is of the layout and the decorations, and a dither over
+/// all of them costs eight megabytes of run-length encoding to say the
+/// same thing eleven times.
+fn plain_style() -> Style {
+    Style::default().undithered()
+}
+
+/// `plain_style()` with the drop shadow off.
 ///
 /// Hyprland has shadows on by default, so a default frame has them; a test
 /// that asks what colour a gap or a border is has to say it wants the one
@@ -19,7 +31,7 @@ const BG: u32 = 0x0020_4060;
 fn unshadowed() -> Style {
     Style {
         shadow: None,
-        ..Style::default()
+        ..plain_style()
     }
 }
 
@@ -122,13 +134,13 @@ fn surfaces(
 /// writes, so the picture a keybind makes and the picture this blesses come
 /// from one piece of code.
 fn frame_after(after: &[(&str, &str)]) -> Vec<u8> {
-    frame_with(&Style::default(), after)
+    frame_with(&plain_style(), after)
 }
 
 /// The same, allowing a dispatcher that changes no picture: `togglegroup`
 /// makes a group of one, which is drawn exactly as the window was.
 fn frame_quiet(after: &[(&str, &str)]) -> Vec<u8> {
-    frame_dispatching(&Style::default(), after, false)
+    frame_dispatching(&plain_style(), after, false)
 }
 
 /// The same, drawn with `style`.
@@ -194,7 +206,7 @@ fn scaled_frame() -> (Vec<u8>, Placed) {
         &mut canvas,
         &layout,
         (0, 0),
-        &Style::default().at_scale(SCALE),
+        &plain_style().at_scale(SCALE),
         &surfaces(&buffers),
         &full,
     );
@@ -298,7 +310,7 @@ fn two_monitor_frames() -> (Vec<u8>, Vec<u8>) {
             &mut canvas,
             &layout,
             (x, 0),
-            &Style::default(),
+            &plain_style(),
             &surfaces(&buffers),
             &full,
         );
@@ -337,7 +349,7 @@ fn the_second_monitor_draws_the_window_moved_to_it() {
 
     // Each monitor has one window on it, so neither frame is the tiled pair
     // and neither is empty.
-    let background = shown(Style::default().background.0 & 0x00FF_FFFF);
+    let background = shown(plain_style().background.0 & 0x00FF_FFFF);
     for (what, frame) in [("left", &left), ("right", &right)] {
         let pixels: Vec<u32> = frame
             .chunks_exact(4)
@@ -389,7 +401,7 @@ fn ruled_frame() -> Vec<u8> {
             ..crate::WindowStyle::default()
         },
     );
-    let style = Style::default();
+    let style = plain_style();
     let mut canvas = Canvas::new(WIDTH, HEIGHT).unwrap();
     let full = Damage::full(WIDTH, HEIGHT);
     let produced = render_with_layers(
@@ -609,7 +621,7 @@ fn bar_and_two_clients_frame() -> Vec<u8> {
         &mut canvas,
         &layout,
         (0, 0),
-        &Styles::plain(&Style::default()),
+        &Styles::plain(&plain_style()),
         &surfaces(&buffers),
         &layers,
         &full,
@@ -652,7 +664,7 @@ fn decorated_style() -> Style {
         &mut NoSources,
     )
     .config;
-    let style = Style::from_config(&config);
+    let style = Style::from_config(&config).undithered();
     assert_eq!(style.rounding, 12);
     assert!((style.inactive_opacity - 0.6).abs() < 0.001);
     assert!((style.active_opacity - 1.0).abs() < f32::EPSILON);
@@ -692,7 +704,7 @@ fn a_shadow_fades_out_over_its_range_and_no_further() {
             frame[start + 3],
         ])
     };
-    let background = shown(Style::default().background.0 & 0x00FF_FFFF);
+    let background = shown(plain_style().background.0 & 0x00FF_FFFF);
     // Above the focused window, at its horizontal middle: the only shadow
     // that can reach there is its own, since the other window is beside it
     // and 20 pixels is not the distance between them.
@@ -850,7 +862,7 @@ fn a_rounded_corner_shows_what_is_behind_it() {
             bytes[start + 3],
         ])
     };
-    let background = shown(Style::default().background.0 & 0x00FF_FFFF);
+    let background = shown(plain_style().background.0 & 0x00FF_FFFF);
     assert_eq!(at(outer_x, outer_y), background, "the corner was not cut");
     assert_eq!(
         at(outer_x, outer_y + 1),
@@ -937,7 +949,7 @@ fn the_pointer_is_drawn_over_the_windows() {
         &mut canvas,
         &layout,
         (0, 0),
-        &Style::default(),
+        &plain_style(),
         &surfaces(&buffers),
         &full,
     );
@@ -1024,7 +1036,7 @@ fn a_window_with_a_menu_on_it_matches_the_expected_image() {
         &mut canvas,
         &layout,
         (0, 0),
-        &Styles::plain(&Style::default()),
+        &Styles::plain(&plain_style()),
         &surfaces(&buffers),
         &over,
         &full,
@@ -1067,7 +1079,7 @@ fn a_locked_screen_is_the_lock_surface_and_nothing_else() {
         &mut canvas,
         &layout,
         (0, 0),
-        &Styles::plain(&Style::default()),
+        &Styles::plain(&plain_style()),
         &BTreeMap::new(),
         &over,
         &full,
@@ -1096,7 +1108,7 @@ fn one_client_left_after_the_other_closed_matches_the_expected_image() {
         &mut canvas,
         &layout,
         (0, 0),
-        &Style::default(),
+        &plain_style(),
         &surfaces(&buffers),
         &full,
     );
@@ -1591,7 +1603,7 @@ fn a_frame_with_partial_damage_leaves_the_rest_alone() {
     let (mut state, before) = two_clients();
     let buffers = client_buffers(&before);
     let surfaces = surfaces(&buffers);
-    let style = Style::default();
+    let style = plain_style();
     let mut canvas = Canvas::new(WIDTH, HEIGHT).unwrap();
     let _ = render(
         &mut canvas,
@@ -1768,7 +1780,7 @@ fn only_a_translucent_window_has_its_background_blurred() {
         blur: Some(Blur::new(16, 2)),
         shadow: None,
         dim: 0.0,
-        ..Style::default()
+        ..plain_style()
     };
     let blurred = frame_with(&style, &[]);
     let plain = frame_with(
@@ -1858,7 +1870,7 @@ fn the_blur_can_be_turned_off() {
         frame_with(
             &Style {
                 blur: None,
-                ..Style::default()
+                ..plain_style()
             },
             &[]
         )
@@ -1934,7 +1946,7 @@ fn gradient_config() -> compositor_config::Config {
 /// That block's style, with the shadow and the blur off so that what a test
 /// looks at is the border and not what is drawn over or under it.
 fn gradient_style() -> Style {
-    let style = Style::from_config(&gradient_config());
+    let style = Style::from_config(&gradient_config()).undithered();
     assert_eq!(
         style.active_border.colors(),
         [Color(0xEE33_CCFF), Color(0xEE00_FF99)],
@@ -2246,46 +2258,69 @@ fn the_grading_changes_the_blurred_pixels_and_no_others() {
     assert_eq!(stray, 0, "{stray} pixels outside the blur changed");
 }
 
-/// The five grading options are not in `compositor/config`'s table yet, so a
-/// configuration that sets them is told each does not exist, and the style
-/// falls back to Hyprland's own defaults.
+/// A configuration's five grading values reach the style, and a
+/// configuration that says nothing gets Hyprland's own.
 ///
-/// This is the state of the wiring, written down. The renderer reads all
-/// five through [`Style`], and `general:col.active_border` beside them comes
-/// out of the file already, but `decoration:blur:noise` and its four
-/// neighbours need a line each in `config/src/options.rs`. The day they get
-/// one this test fails, and what it should become is the test that a
-/// configuration setting them reaches the style.
+/// Hyprland's defaults are not nothing -- `contrast` is 0.8916, `vibrancy`
+/// 0.1696 and `noise` 0.0117 out of the box -- so a compositor that fell
+/// back to the values that do nothing would draw a flat grey blur where
+/// Hyprland draws a graded one, on a configuration that said only
+/// `blur { enabled = true }`.
 #[test]
-fn the_grading_waits_on_the_options_table() {
+fn the_grading_comes_out_of_the_configuration() {
     let parsed = parse(
         "hyprland.conf",
         "decoration:blur:noise = 0.015\n\
          decoration:blur:contrast = 1.1\n\
          decoration:blur:brightness = 0.9\n\
-         decoration:blur:vibrancy = 0.1696\n\
-         decoration:blur:vibrancy_darkness = 0.0\n",
+         decoration:blur:vibrancy = 0.5\n\
+         decoration:blur:vibrancy_darkness = 0.25\n",
         &mut NoSources,
     );
     assert_eq!(
-        parsed.diagnostics.len(),
-        5,
-        "the grading options exist now: read them in `Style::from_config` and turn this \
-         into the test that they arrive"
+        parsed.diagnostics,
+        [],
+        "every grading option is in the table"
     );
     let blur = Style::from_config(&parsed.config)
         .blur
         .expect("the blur is on by default");
-    assert_eq!(
-        (blur.contrast, blur.brightness, blur.vibrancy),
-        (Blur::CONTRAST, Blur::BRIGHTNESS, Blur::VIBRANCY),
-        "a grading value the table does not carry must fall back to Hyprland's own"
+    assert!((blur.noise - 0.015).abs() < 1e-6, "{}", blur.noise);
+    assert!((blur.contrast - 1.1).abs() < 1e-6, "{}", blur.contrast);
+    assert!((blur.brightness - 0.9).abs() < 1e-6, "{}", blur.brightness);
+    assert!((blur.vibrancy - 0.5).abs() < 1e-6, "{}", blur.vibrancy);
+    assert!(
+        (blur.vibrancy_darkness - 0.25).abs() < 1e-6,
+        "{}",
+        blur.vibrancy_darkness
     );
+
+    // And a configuration that says none of them gets Hyprland's.
+    let plain = Style::default().blur.expect("the blur is on by default");
     assert_eq!(
-        blur.noise,
-        Blur::DEFAULT_NOISE,
-        "the dither is the one value this renderer does not take Hyprland's default for"
+        (
+            plain.noise,
+            plain.contrast,
+            plain.brightness,
+            plain.vibrancy,
+            plain.vibrancy_darkness
+        ),
+        (
+            Blur::NOISE,
+            Blur::CONTRAST,
+            Blur::BRIGHTNESS,
+            Blur::VIBRANCY,
+            Blur::VIBRANCY_DARKNESS
+        )
     );
+    // `Style::undithered` is the expected images' own style and nothing
+    // else's: it takes the dither off and leaves the rest of the grading.
+    let undithered = Style::default()
+        .undithered()
+        .blur
+        .expect("the blur is on by default");
+    assert_eq!(undithered.noise, 0.0);
+    assert_eq!(undithered.contrast, Blur::CONTRAST);
 }
 
 /// What a blurred screen costs, which is the compositor's whole frame

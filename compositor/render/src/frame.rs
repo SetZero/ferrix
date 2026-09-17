@@ -164,6 +164,29 @@ impl Default for Style {
     }
 }
 
+impl Style {
+    /// The same style with the blur's dither off.
+    ///
+    /// For the expected images, and for nothing else. They are run-length
+    /// encoded, and a dither that moves every pixel by a step or two is the
+    /// one thing a run of pixels cannot survive: blessed from Hyprland's
+    /// own `decoration:blur:noise` the committed images grow from one
+    /// megabyte to eight and a half, and the format's reason for existing
+    /// goes with them.
+    ///
+    /// What is given up is a picture *of* a dither of about one part in
+    /// 170 in most of the images. What is kept is the dither itself,
+    /// exactly as `blurFinish.glsl` computes it, drawn for any
+    /// configuration that asks for one and held by an image of its own.
+    #[must_use]
+    pub fn undithered(mut self) -> Self {
+        if let Some(blur) = self.blur.as_mut() {
+            blur.noise = 0.0;
+        }
+        self
+    }
+}
+
 impl Eq for Style {}
 
 /// `decoration:blur:*`: the shape of the blur and the five values that
@@ -173,8 +196,7 @@ impl Eq for Style {}
 /// the one that does nothing, because Hyprland's defaults are not nothing --
 /// `contrast` is 0.8916 and `vibrancy` 0.1696 out of the box -- so a
 /// configuration that turns the blur on and says no more asks for a graded
-/// blur. The one exception is the dither, whose fallback is
-/// [`Blur::DEFAULT_NOISE`] and which explains itself there.
+/// blur, dither and all.
 ///
 /// Each is clamped to the range Hyprland's `ConfigValues.cpp` gives it, so
 /// a value outside it is the nearest one inside rather than a picture
@@ -194,7 +216,7 @@ fn blur_of(config: &Config) -> Blur {
     Blur {
         size: config.int("decoration:blur:size").unwrap_or(8).max(0),
         passes: u32::try_from(config.int("decoration:blur:passes").unwrap_or(1)).unwrap_or(1),
-        noise: graded("decoration:blur:noise", Blur::DEFAULT_NOISE, 1.0),
+        noise: graded("decoration:blur:noise", Blur::NOISE, 1.0),
         contrast: graded("decoration:blur:contrast", Blur::CONTRAST, 2.0),
         brightness: graded("decoration:blur:brightness", Blur::BRIGHTNESS, 2.0),
         vibrancy: graded("decoration:blur:vibrancy", Blur::VIBRANCY, 1.0),

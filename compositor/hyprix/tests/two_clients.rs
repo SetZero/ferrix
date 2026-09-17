@@ -54,6 +54,21 @@ fn workspace(name: &str) -> PathBuf {
     path
 }
 
+/// A configuration with the blur's dither turned off, written into `work`.
+///
+/// `decoration:blur:noise` is 0.0117 in Hyprland and 0.0117 here, and the
+/// dither is drawn. But `compositor/render`'s expected images are
+/// run-length encoded and a dither is the one thing a run of pixels cannot
+/// survive, so they are blessed without it -- and this test compares
+/// against those images, so the compositor under test is told the same
+/// thing. `compositor/render`'s `graded-blur-two-clients` is the picture
+/// that holds the dither.
+fn undithered(work: &Path) -> PathBuf {
+    let path = work.join("no-dither.conf");
+    std::fs::write(&path, "decoration:blur:noise = 0\n").expect("a configuration");
+    path
+}
+
 /// Run the compositor with the clients in `patterns`, and give back the last
 /// frame it drew as `XRGB8888` rows.
 fn run(name: &str, patterns: &[(Pattern, &str)]) -> (Vec<u8>, String) {
@@ -76,6 +91,7 @@ fn run_shaped(name: &str, patterns: &[(Pattern, &str, Shape)]) -> (Vec<u8>, Stri
         headless: Some((WIDTH, HEIGHT)),
         dump: Some(frames.clone()),
         deadline: Some(8000),
+        config: Some(undithered(&work)),
         ..Options::default()
     };
 
@@ -533,6 +549,7 @@ fn subscribed(name: &str, kill: bool) -> Vec<String> {
         headless: Some((WIDTH, HEIGHT)),
         instance: Some(instance.to_string_lossy().into_owned()),
         deadline: Some(4000),
+        config: Some(undithered(&work)),
         ..Options::default()
     };
 
@@ -725,7 +742,10 @@ fn frames_after(name: &str, config: &str, after: &str) -> Vec<Vec<u8>> {
     std::fs::create_dir_all(&instance).expect("an instance directory");
     let requests = instance.join(compositor_ipc::REQUEST_SOCKET);
     let config_path = work.join("hyprland.conf");
-    std::fs::write(&config_path, config).expect("a configuration");
+    // The dither off, for the reason `undithered` gives; a test that
+    // wants it says so after this line and wins.
+    std::fs::write(&config_path, format!("decoration:blur:noise = 0\n{config}"))
+        .expect("a configuration");
 
     let options = Options {
         display: socket.to_string_lossy().into_owned(),
@@ -963,6 +983,7 @@ fn with_a_plugin(name: &str) -> (Vec<u8>, String, String) {
         instance: Some(instance.to_string_lossy().into_owned()),
         dump: Some(frames.clone()),
         deadline: Some(8000),
+        config: Some(undithered(&work)),
         ..Options::default()
     };
 
@@ -1123,6 +1144,7 @@ fn one_selection(which: compositor_clip::Which) {
         display: socket.to_string_lossy().into_owned(),
         headless: Some((WIDTH, HEIGHT)),
         deadline: Some(8000),
+        config: Some(undithered(&work)),
         ..Options::default()
     };
 
@@ -1190,6 +1212,7 @@ fn a_bar_is_told_which_windows_there_are_and_can_close_one() {
         display: socket.to_string_lossy().into_owned(),
         headless: Some((WIDTH, HEIGHT)),
         deadline: Some(8000),
+        config: Some(undithered(&work)),
         ..Options::default()
     };
 
@@ -1291,6 +1314,7 @@ fn a_screenshot_is_the_frame_the_renderer_blesses() {
         display: socket.to_string_lossy().into_owned(),
         headless: Some((WIDTH, HEIGHT)),
         deadline: Some(8000),
+        config: Some(undithered(&work)),
         ..Options::default()
     };
 
@@ -1368,6 +1392,7 @@ fn the_window_left_after_a_close_is_drawn_from_its_own_buffer() {
         display: socket.to_string_lossy().into_owned(),
         headless: Some((WIDTH, HEIGHT)),
         deadline: Some(12000),
+        config: Some(undithered(&work)),
         ..Options::default()
     };
 
@@ -1439,6 +1464,7 @@ fn a_locked_screen_shows_the_lock_and_none_of_the_windows() {
         display: socket.to_string_lossy().into_owned(),
         headless: Some((WIDTH, HEIGHT)),
         deadline: Some(14000),
+        config: Some(undithered(&work)),
         ..Options::default()
     };
 
@@ -1519,6 +1545,7 @@ fn a_menu_is_drawn_where_the_positioner_puts_it() {
         display: socket.to_string_lossy().into_owned(),
         headless: Some((WIDTH, HEIGHT)),
         deadline: Some(12000),
+        config: Some(undithered(&work)),
         ..Options::default()
     };
 

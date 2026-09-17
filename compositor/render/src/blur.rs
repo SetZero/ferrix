@@ -108,26 +108,9 @@ pub struct Blur {
 }
 
 impl Blur {
-    /// Hyprland's `decoration:blur:noise`, which is *not* what a blur here
-    /// starts with: [`Blur::DEFAULT_NOISE`] is, and says why.
+    /// Hyprland's `decoration:blur:noise`, which is what a blur starts
+    /// with here as well.
     pub const NOISE: f32 = 0.0117;
-
-    /// The dither a blur starts with here: none.
-    ///
-    /// The one place this crate does not take Hyprland's default, and it is
-    /// the expected images that decide it. They are run-length encoded, and
-    /// a dither that moves every pixel by a step or two is the one thing a
-    /// run of pixels cannot survive: with Hyprland's 0.0117 the committed
-    /// images grow from 660 kilobytes to 8.9 megabytes, and the format's
-    /// own reason for existing -- a tiled frame in a few kilobytes where a
-    /// PPM is 2.3 megabytes -- goes with them.
-    ///
-    /// What is given up is a dither of about one part in 170, whose whole
-    /// job is to hide the banding in a blur. What is kept is every other
-    /// part of the grading at Hyprland's own value, and the dither itself
-    /// exactly as `blurFinish.glsl` computes it for any configuration that
-    /// asks for one.
-    pub const DEFAULT_NOISE: f32 = 0.0;
     /// Hyprland's `decoration:blur:contrast`.
     pub const CONTRAST: f32 = 0.8916;
     /// Hyprland's `decoration:blur:brightness`.
@@ -138,14 +121,13 @@ impl Blur {
     pub const VIBRANCY_DARKNESS: f32 = 0.0;
 
     /// A blur of `size` and `passes`, graded the way Hyprland grades one
-    /// that says nothing else -- but for the dither, which starts off
-    /// ([`Blur::DEFAULT_NOISE`]).
+    /// that says nothing else.
     #[must_use]
     pub const fn new(size: i64, passes: u32) -> Self {
         Self {
             size,
             passes,
-            noise: Self::DEFAULT_NOISE,
+            noise: Self::NOISE,
             contrast: Self::CONTRAST,
             brightness: Self::BRIGHTNESS,
             vibrancy: Self::VIBRANCY,
