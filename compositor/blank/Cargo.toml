@@ -13,15 +13,15 @@ path = "src/main.rs"
 
 [features]
 # Draw the first pixel in another colour, so the display test can show its
-# pixel check fails on exactly that pixel.
-negative-control = []
+# pixel check fails on exactly that pixel. The drawing is the card crate's,
+# so the feature is passed on to it.
+negative-control = ["compositor-drm/negative-control"]
 
 [dependencies]
-# Declarations only, as in zinc: open, ioctl, mmap and pause are the C library
-# std already links.
+# Declarations only, as in zinc: `pause` is the C library std already links.
 libc = "0.2.189"
-# The DRM numbers and structure layouts, checked against the UAPI headers.
-ferrix-linux-abi = { path = "../../libs/linux-abi" }
+# The card, which `hyprix` drives through the same crate.
+compositor-drm = { path = "../drm" }
 
 [lints]
 workspace = true

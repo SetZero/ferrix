@@ -17,7 +17,7 @@ fn main() {
             std::process::exit(2);
         }
     };
-    match hyprix::run(&options) {
+    match hyprix::run_with(&options, &mut |line| report(line)) {
         Ok(line) => report(&line),
         Err(error) => {
             report(&format!("hyprix: failed: {error}"));

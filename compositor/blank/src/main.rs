@@ -10,23 +10,13 @@
 //! It runs as init in the display test, so it never exits: it prints one
 //! line saying what it showed, or where it failed, and waits.
 
-#![cfg_attr(
-    not(target_os = "linux"),
-    allow(
-        dead_code,
-        reason = "only the Linux build calls the modeset; other hosts test it"
-    )
-)]
-
-#[cfg(target_os = "linux")]
-mod card;
-mod modeset;
-
 #[cfg(target_os = "linux")]
 fn main() {
     use std::io::Write;
 
-    let line = match card::Card::open().and_then(|card| card::show(&card)) {
+    use compositor_drm::{Card, show};
+
+    let line = match Card::open().and_then(|card| show(&card)) {
         Ok(line) => line,
         Err(error) => format!("compositor: failed: {error}"),
     };

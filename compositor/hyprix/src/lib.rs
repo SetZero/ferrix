@@ -28,4 +28,4 @@ pub mod pool;
 pub mod state;
 
 pub use options::Options;
-pub use state::run;
+pub use state::{run, run_with};

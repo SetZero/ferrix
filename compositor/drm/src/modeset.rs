@@ -5,14 +5,14 @@ use ferrix_linux_abi::drm::{self, ModeInfo};
 
 /// The colour the screen is filled with, as `XRGB8888`: a dark slate, so a
 /// screen that is merely black is not mistaken for success.
-pub(crate) const BACKGROUND: u32 = 0x001E_1E2E;
+pub const BACKGROUND: u32 = 0x001E_1E2E;
 
 /// The colour the negative control draws its first pixel in.
-pub(crate) const NEGATIVE: u32 = 0x00FF_00FF;
+pub const NEGATIVE: u32 = 0x00FF_00FF;
 
 /// The mode to set from a connector's list: the preferred one, else the
 /// first.
-pub(crate) fn choose_mode(modes: &[ModeInfo]) -> Option<ModeInfo> {
+pub fn choose_mode(modes: &[ModeInfo]) -> Option<ModeInfo> {
     modes
         .iter()
         .find(|mode| mode.r#type & drm::MODE_TYPE_PREFERRED != 0)
@@ -22,7 +22,7 @@ pub(crate) fn choose_mode(modes: &[ModeInfo]) -> Option<ModeInfo> {
 
 /// The CRTC an encoder can drive: the one it is on, else the first its
 /// `possible_crtcs` bit mask allows among `crtcs`.
-pub(crate) fn choose_crtc(current: u32, possible: u32, crtcs: &[u32]) -> Option<u32> {
+pub fn choose_crtc(current: u32, possible: u32, crtcs: &[u32]) -> Option<u32> {
     if current != 0 {
         return Some(current);
     }
@@ -35,7 +35,7 @@ pub(crate) fn choose_crtc(current: u32, possible: u32, crtcs: &[u32]) -> Option<
 
 /// Fill a `width` × `height` `XRGB8888` buffer of `stride` bytes a row with
 /// `color`, and with `negative`, draw pixel (0, 0) in [`NEGATIVE`].
-pub(crate) fn fill(
+pub fn fill(
     pixels: &mut [u8],
     width: usize,
     height: usize,
@@ -55,12 +55,12 @@ pub(crate) fn fill(
 }
 
 /// A mode's name, up to its NUL.
-pub(crate) fn mode_name(mode: &ModeInfo) -> String {
+pub fn mode_name(mode: &ModeInfo) -> String {
     c_name(&mode.name)
 }
 
 /// A NUL-padded name field as text, up to its NUL.
-pub(crate) fn c_name(field: &[u8]) -> String {
+pub fn c_name(field: &[u8]) -> String {
     let end = field
         .iter()
         .position(|&byte| byte == 0)
@@ -72,16 +72,21 @@ pub(crate) fn c_name(field: &[u8]) -> String {
 /// framebuffer it shows, the CRTCs it can be on, and the name its `type`
 /// property's value has in that property's enum list, if it has one.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Plane {
-    pub(crate) id: u32,
-    pub(crate) crtc: u32,
-    pub(crate) framebuffer: u32,
-    pub(crate) possible_crtcs: u32,
-    pub(crate) kind: Option<String>,
+pub struct Plane {
+    /// The plane's object id.
+    pub id: u32,
+    /// The CRTC it is showing on, or zero.
+    pub crtc: u32,
+    /// The framebuffer it is showing, or zero.
+    pub framebuffer: u32,
+    /// A bit per CRTC of the card's list that this plane can be on.
+    pub possible_crtcs: u32,
+    /// `Primary`, `Overlay` or `Cursor`, when the `type` property named one.
+    pub kind: Option<String>,
 }
 
 /// The name `value` has among an enum property's `(value, name)` pairs.
-pub(crate) fn enum_name(value: u64, names: &[(u64, String)]) -> Option<String> {
+pub fn enum_name(value: u64, names: &[(u64, String)]) -> Option<String> {
     names
         .iter()
         .find(|(named, _)| *named == value)
@@ -97,7 +102,7 @@ pub(crate) fn enum_name(value: u64, names: &[(u64, String)]) -> Option<String> {
 /// A primary plane that does not show `framebuffer` on `crtc` after the
 /// modeset is an error: the card would be telling a compositor something
 /// other than what is on the screen.
-pub(crate) fn describe_planes(
+pub fn describe_planes(
     planes: &[Plane],
     crtc_index: usize,
     crtc: u32,

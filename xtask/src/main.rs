@@ -44,6 +44,7 @@ mod btrfs_disk;
 mod busybox;
 mod cargo;
 mod check;
+mod compositor;
 mod console;
 mod display;
 mod fat;
@@ -117,6 +118,7 @@ COMMANDS:
     test-vfs      Boot with busybox in the initramfs and require stage 8's exit programs and applets
     test-net      Boot with a network device and require busybox to configure it and fetch a file
     test-display  Boot compositor/blank as init with a virtio-gpu, and require its colour on every pixel
+    test-compositor  Boot compositor/hyprix as init with a virtio-gpu, and require its background on every pixel
     test-threads  Boot threads-test as init and require std::thread, Mutex, mpsc and /proc's thread count
     check         Run every quality gate (fmt, clippy, layering, audits, tests, docs)
     host-clippy   check's host clippy step alone, as CI runs it
@@ -235,6 +237,7 @@ fn run() -> Result<()> {
         "test-vfs" => test_vfs(&args),
         "test-net" => test_net(&args),
         "test-display" => display::test_display(&args),
+        "test-compositor" => compositor::test_compositor(&args),
         "test-threads" => threads::test_threads(&args),
         "check" => check::run(&args),
         "host-clippy" => check::host_clippy(),

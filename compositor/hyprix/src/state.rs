@@ -47,16 +47,40 @@ impl Slot {
 ///
 /// A sentence saying what could not be done.
 pub fn run(options: &Options) -> Result<String, String> {
+    run_with(options, &mut |_| {})
+}
+
+/// The same, saying each thing as it happens.
+///
+/// A compositor's log line comes at the end, and a compositor does not end:
+/// so whatever is watching -- a person, or `cargo xtask test-compositor` --
+/// has to be told when the screen is up rather than when the run is over.
+///
+/// # Errors
+///
+/// A sentence saying what could not be done.
+pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<String, String> {
     let mut config = read_config(options)?;
     let mut settings = Settings::from_config(&config);
     let mut style = Style::from_config(&config);
 
-    let (width, height) = options.headless.unwrap_or((1920, 1080));
-    let mut backend = Headless::new(width, height);
+    // The screen: memory when `--headless` asked for one, and the card
+    // otherwise. The card's size is the mode's, not the compositor's to
+    // choose.
+    let mut backend: Box<dyn Backend> = match options.headless {
+        Some((width, height)) => Box::new(Headless::new(width, height)),
+        None => open_screen()?,
+    };
+    let (width, height) = backend.size();
     let mut canvas = Canvas::new(width, height).map_err(|error| format!("a canvas: {error:?}"))?;
 
-    let listener =
-        Listener::bind(&options.display).map_err(|error| format!("the socket: {error}"))?;
+    // Where the socket goes. Wayland's rule is `$XDG_RUNTIME_DIR/<name>`,
+    // which is what a session manager sets; a compositor started as init on a
+    // machine that has just booted has no session manager and no variable, so
+    // it falls back to a directory that always exists and says so in its log
+    // line. A name with a slash in it is an absolute path either way.
+    let display = resolve_display(&options.display);
+    let listener = Listener::bind(&display).map_err(|error| format!("the socket: {error}"))?;
 
     let mut state = State::new(settings);
     let _ = state
@@ -216,17 +240,22 @@ pub fn run(options: &Options) -> Result<String, String> {
             let full = Damage::full(width, height);
             let mut target = crate::frame::Output {
                 canvas: &mut canvas,
-                backend: &mut backend,
+                backend: backend.as_mut(),
                 origin: (0, 0),
                 style: &style,
             };
             crate::frame::draw(&mut target, output, &slots, &sources, &full)?;
             drawn = drawn.saturating_add(1);
+            if drawn == 1 {
+                // The screen is up and the first frame is on it. This is what
+                // a watcher waits for, in the shape `compositor/blank`'s
+                // marker has.
+                report(&format!("hyprix: {} {display}", backend.describe()));
+            }
             if let Some(directory) = options.dump.as_ref() {
                 let _ = std::fs::create_dir_all(directory);
                 let path = directory.join(format!("frame-{drawn:04}.ppm"));
-                backend
-                    .write_ppm(&path)
+                crate::backend::write_ppm(backend.as_ref(), &path)
                     .map_err(|error| format!("writing {}: {error}", path.display()))?;
             }
         }
@@ -235,9 +264,8 @@ pub fn run(options: &Options) -> Result<String, String> {
     }
 
     Ok(format!(
-        "hyprix: {} {} frames {drawn} windows {} most {most}",
+        "hyprix: {} {display} frames {drawn} windows {} most {most}",
         backend.describe(),
-        options.display,
         sources.len()
     ))
 }
@@ -351,6 +379,37 @@ fn serve(
         slot.gone = true;
     }
     Ok(changed)
+}
+
+/// Where the Wayland socket goes.
+///
+/// A name with a `/` in it is an absolute path, as `wl_display_connect` reads
+/// one. A bare name is joined to `XDG_RUNTIME_DIR` when there is one, and to
+/// `/tmp` when there is not: a compositor started as init has no session
+/// manager to set the variable, and refusing to start over it would be a
+/// compositor that only runs where something else ran first.
+fn resolve_display(display: &str) -> String {
+    if display.contains('/') || std::env::var_os("XDG_RUNTIME_DIR").is_some() {
+        return display.to_owned();
+    }
+    format!("/tmp/{display}")
+}
+
+/// Open the screen, or say why not.
+///
+/// Only Linux, and Ferrix through its Linux ABI, have `/dev/dri`; elsewhere
+/// the compositor is headless or it is nothing.
+#[cfg(target_os = "linux")]
+fn open_screen() -> Result<Box<dyn Backend>, String> {
+    crate::backend::Drm::open()
+        .map(|screen| Box::new(screen) as Box<dyn Backend>)
+        .map_err(|error| format!("/dev/dri/card0: {error}"))
+}
+
+/// The same, where there is no `/dev/dri`.
+#[cfg(not(target_os = "linux"))]
+fn open_screen() -> Result<Box<dyn Backend>, String> {
+    Err("this host has no /dev/dri; run with --headless".to_owned())
 }
 
 /// Do what a `hyprctl` request asked, and say whether the layout changed.

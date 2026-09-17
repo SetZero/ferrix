@@ -63,7 +63,7 @@ usage: hyprix [options]
     /// A message naming the argument that was wrong.
     pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Self, String> {
         let mut options = Self::default();
-        let mut args = args.into_iter();
+        let mut args = Self::unshell(args.into_iter().collect()).into_iter();
         while let Some(argument) = args.next() {
             let mut value = || {
                 args.next()
@@ -95,6 +95,31 @@ usage: hyprix [options]
             }
         }
         Ok(options)
+    }
+}
+
+impl Options {
+    /// The arguments a shell would have been given, as the compositor's own.
+    ///
+    /// Ferrix's kernel starts its first program the way it starts a shell
+    /// (`kernel/src/init.rs`): `sh -i` for an interactive one, and
+    /// `sh -c <script>` when a script was built in. The compositor is that
+    /// first program when it runs as init, so it is handed those, and `-i`
+    /// is not an option it has.
+    ///
+    /// `-i` alone means "nothing was asked for", which is the compositor's
+    /// own defaults. `-c <words>` means "run this", and for a compositor
+    /// what is run is itself, so the words are its arguments.
+    fn unshell(args: Vec<String>) -> Vec<String> {
+        match args.split_first() {
+            Some((first, rest)) if first == "-i" && rest.is_empty() => Vec::new(),
+            Some((first, rest)) if first == "-c" => rest
+                .iter()
+                .flat_map(|script| script.split_whitespace())
+                .map(str::to_owned)
+                .collect(),
+            _ => args,
+        }
     }
 }
 
@@ -183,6 +208,20 @@ mod tests {
             Some((16, 9)),
             "a capital X is a size too"
         );
+    }
+
+    #[test]
+    fn the_arguments_a_kernel_gives_its_first_program_are_read() {
+        // `kernel/src/init.rs` starts the first program as `sh -i` or as
+        // `sh -c <script>`, and the compositor is that program when it runs
+        // as init.
+        assert_eq!(parse(&["-i"]).expect("valid"), Options::default());
+        let options = parse(&["-c", "--headless 800x600 --frames 2"]).expect("valid");
+        assert_eq!(options.headless, Some((800, 600)));
+        assert_eq!(options.frames, Some(2));
+        // `-i` is only the shell's when it is the whole command line; a
+        // compositor given it beside real options is a mistake worth saying.
+        assert!(parse(&["-i", "--frames", "1"]).is_err());
     }
 
     #[test]

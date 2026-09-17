@@ -3925,6 +3925,35 @@ general:gaps_in 40` re-tiling both windows from 485 pixels wide to 450 while
 the compositor runs. A compositor that took the keyword and did not re-tile
 would still have said `ok`, so the test requires the sizes.
 
+**Done — the compositor on a screen, on Ferrix (2026-09-17).**
+`compositor/drm` is the card, lifted out of `compositor/blank`: the legacy
+mode-setting calls and nothing a compositor does not need. `blank` drives the
+screen through it still -- `cargo xtask test-display` passes unchanged,
+negative control and all -- and `hyprix` drives it too, with two dumb buffers
+drawn into in turn and shown with a page flip. One buffer would tear: the
+card scans out of the same memory the compositor is writing.
+
+`cargo xtask test-compositor` boots the compositor as init on Ferrix with a
+virtio-gpu and requires the screen. It opened `/dev/dri/card0` through the
+kernel's display core and the ring-3 virtio-gpu driver, set the card's
+preferred mode, bound its Wayland socket, drew a frame with
+`compositor/render` and flipped it, and every one of QEMU's 786,432 pixels is
+the compositor's background.
+
+Two things had to be true for it to run as init that are not true of a
+program started from a shell. The kernel starts its first program the way it
+starts a shell, so the compositor is handed `sh -i` or `sh -c <script>`: `-i`
+alone now means "the defaults", and `-c` means the words after it are the
+compositor's own arguments. And `XDG_RUNTIME_DIR` is a session manager's to
+set, and a machine that has just booted has neither, so a bare display name
+falls back to `/tmp` rather than the compositor refusing to start -- which
+would be a compositor that only runs where something else ran first.
+
+The two-client picture on the card waits on the initramfs: the kernel embeds
+one program (`kernel/build.rs`), so the compositor has nothing to start.
+`compositor/hyprix/tests/two_clients.rs` is that picture on the host until
+then, and it is compared against the same expected image.
+
 **Still to do, in the order visible iterations need it.** Iteration 1, a
 blank screen on Ferrix in QEMU, pulls a first cut of stage 17 forward (the
 customer's order of 2026-09-16); then the protocol server, the seat, the

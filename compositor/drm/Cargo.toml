@@ -1,0 +1,23 @@
+[package]
+name = "compositor-drm"
+description = "The card: /dev/dri/card0 through the legacy mode-setting calls"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+# Draw the first pixel in another colour, so a display test can show its pixel
+# check fails on exactly that pixel.
+negative-control = []
+
+[dependencies]
+# Declarations only, as in zinc: open, ioctl and mmap are the C library std
+# already links.
+libc = "0.2.189"
+# The DRM numbers and structure layouts, checked against the UAPI headers.
+ferrix-linux-abi = { path = "../../libs/linux-abi" }
+
+[lints]
+workspace = true

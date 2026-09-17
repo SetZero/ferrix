@@ -95,6 +95,14 @@ names the part of Hyprland or hyprlang it follows.
   crate holds no compositor. It holds no socket either, so the answers are
   host-tested; a JSON parser in the tests is what says an answer is JSON
   without the compositor taking a dependency for it.
+* **`drm`** is the card: `/dev/dri/card0` through the legacy mode-setting
+  calls, and nothing else a compositor does not need -- no atomic commit, no
+  GEM import, no render node. It finds a connected connector and a mode,
+  finds a CRTC that can drive it, makes dumb buffers, maps them and shows
+  one. It is the only crate here that builds on Linux alone, because
+  `/dev/dri` is Linux's and Ferrix's through its Linux ABI; the parts that
+  are arithmetic rather than ioctls are tested on any host. `blank` and
+  `hyprix` both drive the screen through it.
 * **`render`** draws the frame: a `Canvas` over a `tiny-skia` pixmap with
   `clear`, `fill`, `border` and `composite` (`ARGB8888` source-over,
   `XRGB8888` copied and made opaque), each drawn only inside a `Damage` of
@@ -121,8 +129,11 @@ names the part of Hyprland or hyprlang it follows.
   frame on a screen. Nothing in it parses a file, works out a layout, draws a
   pixel or decodes a message -- the crates above do those -- so it is the loop
   that joins them and the two places the compositor touches the world: a
-  client's shared memory, and the screen. `--headless WxH` draws into memory
-  instead, and `--dump <dir>` writes each frame as a PPM.
+  client's shared memory, and the screen. The screen is `compositor/drm`'s
+  card, with two dumb buffers drawn into in turn and shown with a page flip;
+  `--headless WxH` draws into memory instead, and `--dump <dir>` writes each
+  frame as a PPM. `cargo xtask test-compositor` boots it as init on Ferrix
+  and requires its background on every pixel of QEMU's screendump.
 * **`pattern`** is a Wayland client in one file, over `wire` and `socket`
   rather than a toolkit, that draws one of `render`'s test patterns. It is
   what the compositor's tests put on screen, and it exercises the same crates

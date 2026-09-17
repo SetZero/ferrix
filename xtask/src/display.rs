@@ -66,7 +66,7 @@ const SETTLE: Duration = Duration::from_secs(5);
 
 /// The Rust target the program is built for on `arch`, if the architecture
 /// has virtio-gpu.
-fn target(arch: Arch) -> Option<&'static str> {
+pub(crate) fn target(arch: Arch) -> Option<&'static str> {
     match arch {
         Arch::X86_64 => Some("x86_64-unknown-linux-musl"),
         Arch::AArch64 => Some("aarch64-unknown-linux-musl"),
