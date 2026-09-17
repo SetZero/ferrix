@@ -32,7 +32,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::f64::consts::{FRAC_PI_2, PI};
 
-use compositor_config::{Bind, Config, Gaps};
+use compositor_config::{Bind, Config, Gaps, WorkspaceRule};
 
 use crate::dispatch::{
     Direction, Dispatcher, FullscreenMode, GroupMember, Locking, MonitorTarget, Move,
@@ -302,6 +302,10 @@ struct Candidate {
 #[derive(Debug, Clone, PartialEq)]
 pub struct State {
     settings: Settings,
+    /// The `workspace =` lines, which say what one workspace is unlike the
+    /// others: its gaps, its border, its layout, which monitor it lives on
+    /// and whether it exists with nothing on it.
+    rules: Vec<WorkspaceRule>,
     /// In the order they were added.
     outputs: Vec<Output>,
     focused_monitor: Option<MonitorId>,
@@ -384,6 +388,7 @@ impl State {
     pub const fn new(settings: Settings) -> Self {
         Self {
             settings,
+            rules: Vec::new(),
             outputs: Vec::new(),
             focused_monitor: None,
             workspaces: BTreeMap::new(),
@@ -412,6 +417,127 @@ impl State {
     #[must_use]
     pub const fn settings(&self) -> &Settings {
         &self.settings
+    }
+
+    /// The options in force *on one workspace*: the general ones with
+    /// whatever its `workspace =` lines changed.
+    ///
+    /// Hyprland reads `gapsin`, `gapsout`, `bordersize` and `layout` out of
+    /// the workspace's rule wherever it would have read the option, which
+    /// is what lets a person keep one workspace edge to edge -- a browser,
+    /// a video -- while every other one has its gaps.
+    #[must_use]
+    pub fn settings_at(&self, workspace: WorkspaceId) -> Settings {
+        let mut settings = self.settings;
+        if self.rules.is_empty() {
+            return settings;
+        }
+        let name = self.workspace_name(workspace);
+        let rule = compositor_config::rules_for(&self.rules, workspace.0, &name);
+        if let Some(gaps) = rule.gaps_in {
+            settings.gaps_in = gaps;
+        }
+        if let Some(gaps) = rule.gaps_out {
+            settings.gaps_out = gaps;
+        }
+        // `border:false` is not `bordersize:0` in Hyprland either; both end
+        // at the same place here, because a border of no pixels is a
+        // window with none.
+        if rule.no_border == Some(true) {
+            settings.border_size = 0;
+        } else if let Some(size) = rule.border_size {
+            settings.border_size = size.max(0);
+        }
+        if let Some(layout) = &rule.layout {
+            settings.layout = if layout.eq_ignore_ascii_case("master") {
+                Layout::Master
+            } else {
+                Layout::Dwindle
+            };
+        }
+        settings
+    }
+
+    /// Take the `workspace =` lines, and make the workspaces they say must
+    /// exist.
+    ///
+    /// `persistent:true` is the one that has to be acted on at once: the
+    /// workspace exists with nothing on it, which is what puts it in a
+    /// bar's list before anything has been opened there. `defaultName:`
+    /// names it, and `monitor:` says which screen it belongs to.
+    pub fn set_workspace_rules(&mut self, rules: Vec<WorkspaceRule>) -> Vec<Change> {
+        self.rules = rules;
+        let mut changes = Vec::new();
+        let persistent: Vec<WorkspaceRule> = self
+            .rules
+            .iter()
+            .filter(|rule| rule.is_persistent == Some(true))
+            .cloned()
+            .collect();
+        for rule in persistent {
+            let compositor_config::Which::Id(id) = rule.which else {
+                // A persistent workspace has to have a number to be made;
+                // Hyprland's own `WORKSPACE_INVALID` path skips the rest.
+                continue;
+            };
+            let workspace = WorkspaceId(id);
+            let monitor = self.monitor_for(rule.monitor.as_deref());
+            let Some(monitor) = monitor else { continue };
+            if self.workspaces.contains_key(&workspace) {
+                continue;
+            }
+            self.ensure_workspace(workspace, monitor);
+            if let Some(name) = &rule.default_name {
+                let _previous = self.names.insert(workspace, name.clone());
+            }
+            changes.push(Change::Layout(monitor));
+        }
+        changes
+    }
+
+    /// Which monitor a `monitor:` field names, or the focused one.
+    fn monitor_for(&self, name: Option<&str>) -> Option<MonitorId> {
+        let Some(name) = name else {
+            return self.focused_monitor.or_else(|| self.first_monitor());
+        };
+        self.outputs
+            .iter()
+            .find(|output| output.monitor.name == name)
+            .map(|output| output.monitor.id)
+            .or_else(|| self.focused_monitor.or_else(|| self.first_monitor()))
+    }
+
+    /// The first monitor there is, for a rule that named none.
+    fn first_monitor(&self) -> Option<MonitorId> {
+        self.outputs.first().map(|output| output.monitor.id)
+    }
+
+    /// Which monitor a workspace's rule says it belongs to, if one does.
+    ///
+    /// `workspace = 3, monitor:DP-1` is how a person nails a workspace to a
+    /// screen, and it is read when the workspace is first made.
+    #[must_use]
+    pub fn workspace_monitor_rule(&self, workspace: WorkspaceId) -> Option<MonitorId> {
+        if self.rules.is_empty() {
+            return None;
+        }
+        let name = self.workspace_name(workspace);
+        let rule = compositor_config::rules_for(&self.rules, workspace.0, &name);
+        self.outputs
+            .iter()
+            .find(|output| output.monitor.name == rule.monitor.clone().unwrap_or_default())
+            .map(|output| output.monitor.id)
+    }
+
+    /// The command a `workspace = …, on-created-empty:` line names for a
+    /// workspace that has just been made with nothing on it.
+    #[must_use]
+    pub fn on_created_empty(&self, workspace: WorkspaceId) -> Option<String> {
+        if self.rules.is_empty() {
+            return None;
+        }
+        let name = self.workspace_name(workspace);
+        compositor_config::rules_for(&self.rules, workspace.0, &name).on_created_empty
     }
 
     /// The monitors, in the order they were added.
@@ -2048,7 +2174,7 @@ impl State {
     /// `gaps_out`.
     fn work_area_of(&self, workspace: WorkspaceId) -> Rect {
         self.workspace_monitor(workspace)
-            .map(|monitor| work_area(&self.outputs, monitor, &self.settings))
+            .map(|monitor| work_area(&self.outputs, monitor, &self.settings_at(workspace)))
             .unwrap_or_default()
     }
 
@@ -2065,7 +2191,9 @@ impl State {
     }
 
     fn ensure_workspace(&mut self, workspace: WorkspaceId, monitor: MonitorId) {
-        let layout = self.settings.layout;
+        // `workspace = …, layout:master` on a workspace that has no tree
+        // yet, which is the only moment the tree's kind is decided.
+        let layout = self.settings_at(workspace).layout;
         let _ws = self
             .workspaces
             .entry(workspace)
@@ -2083,13 +2211,14 @@ impl State {
     fn attach(&mut self, window: WindowId, workspace: WorkspaceId, floating: bool) {
         let area = Area::of(self.work_area_of(workspace));
         let beside = self.recent_tiled(workspace);
+        let settings = self.settings_at(workspace);
         let Some(ws) = self.workspaces.get_mut(&workspace) else {
             return;
         };
         if floating {
             ws.floating.push(window);
         } else {
-            ws.tiling.insert(window, beside, area, &self.settings);
+            ws.tiling.insert(window, beside, area, &settings);
         }
         let _previous = self.windows.insert(window, workspace);
     }
@@ -3037,10 +3166,18 @@ impl State {
 
     /// Record each dwindle split's direction for its current box.
     fn settle(&mut self) {
+        let at: Vec<(WorkspaceId, Settings)> = self
+            .workspaces
+            .keys()
+            .map(|&workspace| (workspace, self.settings_at(workspace)))
+            .collect();
         let outputs = &self.outputs;
-        for ws in self.workspaces.values_mut() {
-            let area = Area::of(work_area(outputs, ws.monitor, &self.settings));
-            ws.tiling.settle(area, &self.settings);
+        for (workspace, settings) in at {
+            let Some(ws) = self.workspaces.get_mut(&workspace) else {
+                continue;
+            };
+            let area = Area::of(work_area(outputs, ws.monitor, &settings));
+            ws.tiling.settle(area, &settings);
         }
     }
 
@@ -3060,8 +3197,11 @@ impl State {
         let Some(ws) = self.workspaces.get(&output.active) else {
             return Vec::new();
         };
-        let area = geometry::work_area(&output.monitor, &self.settings);
-        let border = self.settings.border_size;
+        // A workspace's own `gapsin`, `gapsout` and `bordersize`, where a
+        // `workspace =` line set them; the general options otherwise.
+        let settings = &self.settings_at(output.active);
+        let area = geometry::work_area(&output.monitor, settings);
+        let border = settings.border_size;
         let place =
             |window: WindowId, rect: Rect, border: i64, floating: bool, fullscreen: bool| Placed {
                 window,
@@ -3077,7 +3217,7 @@ impl State {
                 FullscreenMode::Fullscreen => place(window, output.monitor.rect, 0, floating, true),
                 FullscreenMode::Maximized => place(
                     window,
-                    geometry::client(area, area, &self.settings),
+                    geometry::client(area, area, settings),
                     border,
                     floating,
                     true,
@@ -3086,10 +3226,10 @@ impl State {
         }
         let mut windows: Vec<Placed> = ws
             .tiling
-            .slots(Area::of(area), &self.settings)
+            .slots(Area::of(area), settings)
             .into_iter()
             .map(|(window, slot)| {
-                let rect = geometry::client(slot.round(), area, &self.settings);
+                let rect = geometry::client(slot.round(), area, settings);
                 // A group's slot shows whichever member is active; the head
                 // is what the tree holds and may not be what is drawn.
                 place(self.shown(window), rect, border, false, false)

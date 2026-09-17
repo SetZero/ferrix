@@ -85,6 +85,9 @@ pub struct Around<'a> {
     /// The key that fired this dispatcher, when a key did: the evdev code
     /// and the modifiers held with it.
     pub trigger: Option<(u16, u32)>,
+    /// Workspaces whose `on-created-empty:` command has already been run,
+    /// so that going back to one does not start a second terminal.
+    pub opened: &'a mut std::collections::BTreeSet<compositor_layout::WorkspaceId>,
     /// What to say.
     pub report: &'a mut dyn FnMut(&str),
 }

@@ -106,17 +106,7 @@ pub fn answer(request: &Request, snapshot: &Snapshot, version: Version) -> Reply
         } else {
             format!("{}\n", snapshot.locked)
         }),
-        // `workspacerules` has no `workspacerule` keyword to fill it yet,
-        // and is answered with an empty list rather than refused: a bar
-        // asking for it should carry on.
-        "workspacerules" => text(if flags.format() == Format::Json {
-            let mut out = Json::new(pretty(flags));
-            out.array();
-            out.end(']');
-            finish(out, flags)
-        } else {
-            String::new()
-        }),
+        "workspacerules" => text(workspace_rules(flags, &snapshot.workspace_rules)),
         "globalshortcuts" => text(global_shortcuts(flags, &snapshot.shortcuts)),
         "getoption" => text(option_named(
             flags,
@@ -308,6 +298,99 @@ fn global_shortcuts(flags: Flags, shortcuts: &[crate::Shortcut]) -> String {
     shortcuts
         .iter()
         .map(|shortcut| format!("{} -> {}\n", shortcut.name, shortcut.description))
+        .collect()
+}
+
+/// `hyprctl workspacerules`: every `workspace =` line, read.
+///
+/// Hyprland prints a field only where the line set it, and the text form
+/// prints `<unset>` for the rest. That is not decoration: `border:` unset
+/// and `border:true` are different -- the first leaves `general:border_size`
+/// alone and the second insists on it -- so a reader has to be able to tell
+/// them apart.
+fn workspace_rules(flags: Flags, rules: &[compositor_config::WorkspaceRule]) -> String {
+    let yes_or_no = |value: bool| if value { "true" } else { "false" };
+    if flags.format() == Format::Json {
+        let mut out = Json::new(pretty(flags));
+        out.array();
+        for rule in rules {
+            out.object();
+            out.string("workspaceString", &rule.workspace);
+            out.boolean("enabled", true);
+            if let Some(monitor) = &rule.monitor {
+                out.string("monitor", monitor);
+            }
+            if let Some(value) = rule.is_default {
+                out.boolean("default", value);
+            }
+            if let Some(value) = rule.is_persistent {
+                out.boolean("persistent", value);
+            }
+            for (name, gaps) in [("gapsIn", rule.gaps_in), ("gapsOut", rule.gaps_out)] {
+                if let Some(gaps) = gaps {
+                    out.bare(
+                        name,
+                        &format!(
+                            "[{}, {}, {}, {}]",
+                            gaps.top, gaps.right, gaps.bottom, gaps.left
+                        ),
+                    );
+                }
+            }
+            if let Some(size) = rule.border_size {
+                out.number("borderSize", size);
+            }
+            if let Some(value) = rule.no_border {
+                out.boolean("border", !value);
+            }
+            if let Some(value) = rule.no_rounding {
+                out.boolean("rounding", !value);
+            }
+            if let Some(value) = rule.decorate {
+                out.boolean("decorate", value);
+            }
+            if let Some(value) = rule.no_shadow {
+                out.boolean("shadow", !value);
+            }
+            if let Some(name) = &rule.default_name {
+                out.string("defaultName", name);
+            }
+            if let Some(command) = &rule.on_created_empty {
+                out.string("onCreatedEmpty", command);
+            }
+            out.end('}');
+        }
+        out.end(']');
+        return finish(out, flags);
+    }
+    let unset = |value: Option<String>| value.unwrap_or_else(|| "<unset>".to_owned());
+    rules
+        .iter()
+        .map(|rule| {
+            let gaps = |gaps: Option<compositor_config::Gaps>| {
+                unset(gaps.map(|gaps| {
+                    format!("{} {} {} {}", gaps.top, gaps.right, gaps.bottom, gaps.left)
+                }))
+            };
+            format!(
+                "Workspace rule {}:\n\tenabled: true\n\tmonitor: {}\n\tdefault: {}\n\tpersistent: \
+                 {}\n\tgapsIn: {}\n\tgapsOut: {}\n\tborderSize: {}\n\tborder: {}\n\trounding: \
+                 {}\n\tdecorate: {}\n\tshadow: {}\n\tdefaultName: {}\n\tonCreatedEmpty: {}\n\n",
+                rule.workspace,
+                unset(rule.monitor.clone()),
+                unset(rule.is_default.map(|value| yes_or_no(value).to_owned())),
+                unset(rule.is_persistent.map(|value| yes_or_no(value).to_owned())),
+                gaps(rule.gaps_in),
+                gaps(rule.gaps_out),
+                unset(rule.border_size.map(|size| size.to_string())),
+                unset(rule.no_border.map(|value| yes_or_no(!value).to_owned())),
+                unset(rule.no_rounding.map(|value| yes_or_no(!value).to_owned())),
+                unset(rule.decorate.map(|value| yes_or_no(value).to_owned())),
+                unset(rule.no_shadow.map(|value| yes_or_no(!value).to_owned())),
+                unset(rule.default_name.clone()),
+                unset(rule.on_created_empty.clone()),
+            )
+        })
         .collect()
 }
 

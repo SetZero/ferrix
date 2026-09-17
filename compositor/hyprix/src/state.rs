@@ -173,6 +173,10 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
     // notification is drawn with. The `zwlr_layer_shell_v1` half of
     // `windowrule`, matched on the namespace a surface asked for.
     let layer_rules = read_layer_rules(&config, report);
+    // `workspace = <workspace>, <rule>…`: what one workspace is unlike the
+    // others -- its gaps, its border, its layout, which screen it lives on
+    // and whether it exists with nothing on it.
+    let workspace_rules = read_workspace_rules(&config, report);
     // The clipboard: what one client copied, for the others to paste.
     let mut clipboard = crate::clipboard::Clipboard::new();
     // The screenshots asked for in one pass, kept until the screens are in
@@ -249,10 +253,14 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
         animations: animations.described(),
         beziers: animations.beziers(),
         errors: animations.diagnostics().to_vec(),
+        workspace_rules,
     };
     for reason in animations.diagnostics() {
         report(&format!("hyprix: an animation line was dropped: {reason}"));
     }
+    // Workspaces whose `on-created-empty:` command has been run.
+    let mut opened: std::collections::BTreeSet<compositor_layout::WorkspaceId> =
+        std::collections::BTreeSet::new();
     let mut focus = Focus::new();
     let repeat = (
         i32::try_from(config.int("input:repeat_rate").unwrap_or(25)).unwrap_or(25),
@@ -286,6 +294,23 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                 scale: screen.scale,
             })
             .map_err(|error| format!("the monitor: {error:?}"))?;
+    }
+    // The workspace rules go in once the monitors are there: a
+    // `persistent:` workspace has to be put on one, and `monitor:` names
+    // it.
+    let made = state.set_workspace_rules(said.workspace_rules.clone());
+    if !said.workspace_rules.is_empty() {
+        report(&format!(
+            "hyprix: {} workspace rule{}, {} workspace{} made",
+            said.workspace_rules.len(),
+            if said.workspace_rules.len() == 1 {
+                ""
+            } else {
+                "s"
+            },
+            made.len(),
+            if made.len() == 1 { "" } else { "s" }
+        ));
     }
     report(&format!(
         "hyprix: {} monitor{} [{}]",
@@ -571,6 +596,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                     sources: &sources,
                     socket: listener.path(),
                     instance: options.instance.as_deref(),
+                    opened: &mut opened,
                     seat: &mut seat,
                     plugins: &mut plugins,
                     rules: &mut window_rules,
@@ -743,6 +769,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                 sources: &sources,
                 socket: listener.path(),
                 instance: options.instance.as_deref(),
+                opened: &mut opened,
                 seat: &mut seat,
                 plugins: &mut plugins,
                 rules: &mut window_rules,
@@ -2103,6 +2130,21 @@ fn refresh_ns(screens: &[Screen]) -> u32 {
     u32::try_from(1_000_000_000_000i64 / i64::from(millihertz)).unwrap_or(16_666_666)
 }
 
+/// Read the `workspace =` lines, saying what could not be read.
+fn read_workspace_rules(
+    config: &Config,
+    report: &mut dyn FnMut(&str),
+) -> Vec<compositor_config::WorkspaceRule> {
+    let mut rules = Vec::new();
+    for raw in &config.workspaces {
+        match compositor_config::WorkspaceRule::parse(&raw.value) {
+            Ok(rule) => rules.push(rule),
+            Err(why) => report(&format!("hyprix: workspace = {}: {why}", raw.value)),
+        }
+    }
+    rules
+}
+
 /// Read the `layerrule` lines, saying what could not be read.
 fn read_layer_rules(
     config: &Config,
@@ -2441,11 +2483,48 @@ fn dispatch(
     // `killactive` asks a window to close, which is the client's to obey;
     // the layout says which window.
     for change in &changes {
-        if let compositor_layout::Change::Close(window) = change {
-            close(*window, around.slots, around.sources);
+        match change {
+            compositor_layout::Change::Close(window) => {
+                close(*window, around.slots, around.sources);
+            }
+            // `workspace = 5, on-created-empty:foot`: going to a workspace
+            // that has nothing on it starts the program the line names.
+            // Once, which is what the set is for -- Hyprland runs it when
+            // the workspace is *created*, and coming back to an empty one
+            // must not start a second terminal.
+            compositor_layout::Change::Workspace { workspace, .. } => {
+                created_empty(*workspace, state, around);
+            }
+            _ => {}
         }
     }
     !changes.is_empty()
+}
+
+/// Run a workspace's `on-created-empty:` command, if it has one, it has
+/// nothing on it, and it has not been run before.
+fn created_empty(
+    workspace: compositor_layout::WorkspaceId,
+    state: &State,
+    around: &mut crate::act::Around<'_>,
+) {
+    if around.opened.contains(&workspace) || !state.windows(workspace).is_empty() {
+        return;
+    }
+    let Some(command) = state.on_created_empty(workspace) else {
+        return;
+    };
+    let _ = around.opened.insert(workspace);
+    match start(&command, around.socket, around.instance) {
+        Ok(pid) => around.say(&format!(
+            "hyprix: workspace {} was made empty, started {command} as {pid}",
+            workspace.0
+        )),
+        Err(why) => around.say(&format!(
+            "hyprix: workspace {}: on-created-empty {command}: {why}",
+            workspace.0
+        )),
+    }
 }
 
 /// What a dispatcher that names a window does to the one it picks out.
@@ -2921,6 +3000,7 @@ fn as_reported<'a>(
         animations: &said.animations,
         beziers: &said.beziers,
         errors: &said.errors,
+        workspace_rules: &said.workspace_rules,
         styles,
         log,
         uptime,
@@ -2942,6 +3022,8 @@ struct Said {
     beziers: Vec<compositor_ipc::Bezier>,
     /// What could not be read in the configuration.
     errors: Vec<String>,
+    /// Every `workspace =` line, read.
+    workspace_rules: Vec<compositor_config::WorkspaceRule>,
 }
 
 /// How many lines `hyprctl rollinglog` keeps.

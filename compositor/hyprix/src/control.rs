@@ -213,6 +213,7 @@ pub fn snapshot(
     snapshot.animations = reported.animations.to_vec();
     snapshot.beziers = reported.beziers.to_vec();
     snapshot.errors = reported.errors.to_vec();
+    snapshot.workspace_rules = reported.workspace_rules.to_vec();
     snapshot.log = reported.log.to_vec();
     snapshot.shortcuts = clients
         .iter()
@@ -271,6 +272,8 @@ pub struct Reported<'a> {
     /// What could not be read in the configuration: `hyprctl
     /// configerrors`.
     pub errors: &'a [String],
+    /// Every `workspace =` line, read: `hyprctl workspacerules`.
+    pub workspace_rules: &'a [compositor_config::WorkspaceRule],
     /// What a rule gave each window to be drawn with, which `hyprctl
     /// getprop` reads.
     pub styles: &'a BTreeMap<WindowId, compositor_render::WindowStyle>,

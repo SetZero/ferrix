@@ -2545,3 +2545,71 @@ fn setignoregrouplock_is_accepted_and_does_nothing() {
     assert_eq!(dispatch(&mut state, "setignoregrouplock", "toggle"), []);
     assert_eq!(rects(&state), before);
 }
+
+/// A `workspace =` line changes that workspace's gaps and border, and no
+/// other workspace's.
+///
+/// This is the whole point of the keyword: one workspace edge to edge for a
+/// browser or a video while everything else keeps its gaps. A compositor
+/// that read the rule and then laid every workspace out with the general
+/// options would look right in `hyprctl workspacerules` and wrong on the
+/// screen.
+#[test]
+fn a_workspace_rule_changes_that_workspaces_gaps() {
+    let mut state = setup("general:gaps_in = 10\ngeneral:gaps_out = 20\ngeneral:border_size = 2\n");
+    let rules = ["1, gapsin:0, gapsout:0, bordersize:0"]
+        .iter()
+        .map(|line| compositor_config::WorkspaceRule::parse(line).expect("a rule"))
+        .collect();
+    let _changes = state.set_workspace_rules(rules);
+
+    open(&mut state, &[1]);
+    assert_eq!(
+        rects_on(&state, M1),
+        [(1, Rect::new(0, 0, 1920, 1080))],
+        "workspace 1 has no gaps and no border"
+    );
+
+    // The second workspace has the general options, untouched.
+    let _moved = dispatch(&mut state, "movetoworkspace", "2");
+    let _shown = dispatch(&mut state, "workspace", "2");
+    assert_eq!(
+        rects_on(&state, M1),
+        [(1, Rect::new(22, 22, 1876, 1036))],
+        "workspace 2 keeps gaps_out 20 and border 2"
+    );
+}
+
+/// `persistent:true` makes the workspace exist with nothing on it, and
+/// `defaultName:` names it.
+#[test]
+fn a_persistent_workspace_exists_with_nothing_on_it() {
+    let mut state = setup(BARE);
+    assert_eq!(state.workspaces().count(), 1, "the one the monitor shows");
+
+    let rules = ["5, persistent:true, defaultName:media"]
+        .iter()
+        .map(|line| compositor_config::WorkspaceRule::parse(line).expect("a rule"))
+        .collect();
+    let changes = state.set_workspace_rules(rules);
+    assert_eq!(changes, [Change::Layout(M1)]);
+    assert!(
+        state.workspaces().any(|id| id == WorkspaceId(5)),
+        "workspace 5 was made"
+    );
+    assert_eq!(state.workspace_name(WorkspaceId(5)), "media");
+    assert!(state.windows(WorkspaceId(5)).is_empty());
+}
+
+/// `layout:master` on one workspace leaves every other one dwindle.
+#[test]
+fn a_workspace_rule_chooses_that_workspaces_layout() {
+    let mut state = setup(BARE);
+    let rules = ["2, layout:master"]
+        .iter()
+        .map(|line| compositor_config::WorkspaceRule::parse(line).expect("a rule"))
+        .collect();
+    let _changes = state.set_workspace_rules(rules);
+    assert_eq!(state.settings_at(WorkspaceId(1)).layout, Layout::Dwindle);
+    assert_eq!(state.settings_at(WorkspaceId(2)).layout, Layout::Master);
+}

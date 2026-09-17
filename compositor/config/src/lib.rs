@@ -27,6 +27,7 @@ mod options;
 mod parse;
 mod rule;
 mod value;
+mod workspace;
 
 #[cfg(test)]
 mod tests;
@@ -45,6 +46,7 @@ pub use value::{
     Color, Gaps, Gradient, MAX_GRADIENT_COLORS, parse_color, parse_float, parse_gaps,
     parse_gradient, parse_int,
 };
+pub use workspace::{Which, WorkspaceRule, rules_for};
 
 /// A keyword line kept as written, for the parts of the compositor that
 /// interpret it: window and layer rules, monitors, workspaces, animations.

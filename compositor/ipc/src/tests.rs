@@ -252,6 +252,7 @@ mod parse {
 fn snapshot() -> Snapshot {
     Snapshot {
         plugins: Vec::new(),
+        workspace_rules: Vec::new(),
         monitors: vec![Monitor {
             id: 0,
             name: "HEADLESS-1".to_owned(),
@@ -1046,6 +1047,7 @@ fn watched_window(address: u64, title: &str) -> Window {
 fn watched(windows: &[Window], active: Option<u64>) -> Snapshot {
     Snapshot {
         plugins: Vec::new(),
+        workspace_rules: Vec::new(),
         monitors: vec![Monitor {
             id: 0,
             name: "HEADLESS-1".to_owned(),
@@ -1758,4 +1760,59 @@ fn getprop_answers_one_property_of_one_window() {
         json.get("title"),
         Some(&parse::Value::Text("one".to_owned()))
     );
+}
+
+/// `hyprctl workspacerules` prints every `workspace =` line, and prints a
+/// field the line did not set as unset rather than as false.
+///
+/// `border:` unset and `border:false` are different things -- the first
+/// leaves `general:border_size` alone and the second insists the workspace
+/// has none -- so a reader that could not tell them apart would have to
+/// guess, and a bar drawing a workspace's state would guess wrong.
+#[test]
+fn the_workspace_rules_are_listed() {
+    let mut snapshot = snapshot();
+    snapshot.workspace_rules = [
+        "1, monitor:DP-1, gapsout:0, border:false",
+        "name:code, default:1",
+    ]
+    .iter()
+    .map(|line| compositor_config::WorkspaceRule::parse(line).expect("a rule"))
+    .collect();
+    let ask = |line: &str| match answer(&Request::parse(line), &snapshot, Version::default()) {
+        Reply::Text(text) => text,
+        other => panic!("{line:?} asked for {other:?}"),
+    };
+
+    let json = parse::parse(&ask("j/workspacerules")).expect("workspacerules is json");
+    let items = json.items();
+    assert_eq!(items.len(), 2);
+    let first = &items[0];
+    assert_eq!(
+        first.get("workspaceString").and_then(parse::Value::text),
+        Some("1")
+    );
+    assert_eq!(
+        first.get("monitor").and_then(parse::Value::text),
+        Some("DP-1")
+    );
+    assert_eq!(
+        first.get("border").and_then(parse::Value::boolean),
+        Some(false),
+        "`border:false` prints as border false"
+    );
+    assert!(
+        first.get("persistent").is_none(),
+        "a field the line did not set is left out"
+    );
+    assert_eq!(
+        items[1].get("default").and_then(parse::Value::boolean),
+        Some(true)
+    );
+
+    let readable = ask("workspacerules");
+    assert!(readable.contains("Workspace rule 1:"), "{readable}");
+    assert!(readable.contains("\tmonitor: DP-1\n"), "{readable}");
+    assert!(readable.contains("\tpersistent: <unset>\n"), "{readable}");
+    assert!(readable.contains("\tborder: false\n"), "{readable}");
 }

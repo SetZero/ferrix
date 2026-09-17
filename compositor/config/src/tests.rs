@@ -1337,3 +1337,105 @@ fn the_rules_that_match_a_namespace_are_gathered() {
         }
     );
 }
+
+// -- `workspace` rules --------------------------------------------------------
+
+/// A `workspace =` line is read into what it changes.
+///
+/// Hyprland calls the keyword `workspace` and the thing it makes a
+/// workspace rule; the fields are `key:value` and the first one names the
+/// workspace. Three of them are stored as their negations, which is how
+/// `hyprctl workspacerules` prints them, and a field the line did not set
+/// is *unset* rather than false: `border:` unset leaves
+/// `general:border_size` alone and `border:true` insists on it.
+#[test]
+fn a_workspace_rule_is_read() {
+    use crate::{Which, WorkspaceRule};
+
+    let rule = WorkspaceRule::parse("1, monitor:DP-1, default:true").expect("a rule");
+    assert_eq!(rule.which, Which::Id(1));
+    assert_eq!(rule.workspace, "1");
+    assert_eq!(rule.monitor.as_deref(), Some("DP-1"));
+    assert_eq!(rule.is_default, Some(true));
+    assert_eq!(rule.is_persistent, None, "the line did not say");
+
+    let rule = WorkspaceRule::parse(
+        "name:code, gapsin:0, gapsout:5 10, bordersize:3, border:false, shadow:0, rounding:0, \
+         decorate:true, layout:master, layoutopt:orientation:top, defaultName:code, \
+         persistent:1, on-created-empty:foot, animation:slide",
+    )
+    .expect("a rule");
+    assert_eq!(rule.which, Which::Name("code".to_owned()));
+    assert_eq!(rule.gaps_in, Some(Gaps::all(0)));
+    assert_eq!(
+        rule.gaps_out,
+        Some(Gaps {
+            top: 5,
+            right: 10,
+            bottom: 5,
+            left: 10
+        })
+    );
+    assert_eq!(rule.border_size, Some(3));
+    assert_eq!(rule.no_border, Some(true), "`border:false` is `no_border`");
+    assert_eq!(rule.no_shadow, Some(true));
+    assert_eq!(rule.no_rounding, Some(true));
+    assert_eq!(rule.decorate, Some(true));
+    assert_eq!(rule.layout.as_deref(), Some("master"));
+    assert_eq!(
+        rule.layout_options,
+        [("orientation".to_owned(), "top".to_owned())]
+    );
+    assert_eq!(rule.default_name.as_deref(), Some("code"));
+    assert_eq!(rule.is_persistent, Some(true));
+    assert_eq!(rule.on_created_empty.as_deref(), Some("foot"));
+    assert_eq!(rule.animation.as_deref(), Some("slide"));
+
+    // `special:` names a scratchpad, and a bare word that is not a number
+    // is a name, which is what Hyprland's `getWorkspaceIDNameFromString`
+    // does with one.
+    assert_eq!(
+        WorkspaceRule::parse("special:magic, gapsout:0").map(|rule| rule.which),
+        Ok(Which::Special("magic".to_owned()))
+    );
+    assert_eq!(
+        WorkspaceRule::parse("code, gapsout:0").map(|rule| rule.which),
+        Ok(Which::Name("code".to_owned()))
+    );
+
+    // A key that is not one of Hyprland's is skipped rather than refused:
+    // its chain of `find`s falls through and the rule is left as it was.
+    let rule = WorkspaceRule::parse("2, wobble:7, bordersize:1").expect("a rule");
+    assert_eq!(rule.border_size, Some(1));
+
+    assert!(WorkspaceRule::parse("").is_err(), "no workspace");
+    assert!(
+        WorkspaceRule::parse("2, bordersize:wide").is_err(),
+        "not a number"
+    );
+}
+
+/// Every rule that matches one workspace is applied, later lines winning.
+#[test]
+fn the_rules_that_match_a_workspace_are_gathered() {
+    use crate::{WorkspaceRule, rules_for};
+
+    let rules: Vec<WorkspaceRule> = [
+        "1, gapsout:0",
+        "1, bordersize:0",
+        "1, bordersize:4",
+        "name:code, gapsin:1",
+    ]
+    .iter()
+    .map(|line| WorkspaceRule::parse(line).expect("a rule"))
+    .collect();
+
+    let first = rules_for(&rules, 1, "1");
+    assert_eq!(first.gaps_out, Some(Gaps::all(0)));
+    assert_eq!(first.border_size, Some(4), "the later line wins");
+    assert_eq!(first.gaps_in, None);
+
+    // A rule written with a name matches by name, not by number.
+    assert_eq!(rules_for(&rules, 7, "code").gaps_in, Some(Gaps::all(1)));
+    assert_eq!(rules_for(&rules, 2, "2"), WorkspaceRule::default());
+}

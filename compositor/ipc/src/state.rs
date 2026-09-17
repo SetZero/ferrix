@@ -147,6 +147,8 @@ pub struct Snapshot {
     pub cursor: (i32, i32),
     /// Whether a session lock is up.
     pub locked: bool,
+    /// Every `workspace =` line, read: `hyprctl workspacerules`.
+    pub workspace_rules: Vec<compositor_config::WorkspaceRule>,
     /// Every option the compositor has and what it holds now, which is
     /// what `hyprctl getoption` and `hyprctl descriptions` read.
     pub options: Vec<Opt>,
