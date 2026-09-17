@@ -211,9 +211,18 @@ impl Tiling {
         }
     }
 
+    /// Which windows the master layout holds as masters, if that is the
+    /// layout.
+    fn master_windows(&self) -> &[WindowId] {
+        match self {
+            Self::Master(master) => master.masters(),
+            Self::Dwindle(_) => &[],
+        }
+    }
+
     /// The window the master layout holds as its master, if that is the
     /// layout and it has one.
-    const fn master_window(&self) -> Option<WindowId> {
+    fn master_window(&self) -> Option<WindowId> {
         match self {
             Self::Master(master) => master.master(),
             Self::Dwindle(_) => None,
@@ -2967,9 +2976,7 @@ impl State {
         match word {
             "mfact" => return self.set_mfact(rest),
             other if other.starts_with("orientation") => return self.set_orientation(other, rest),
-            // Hyprland's master layout can have several masters; this one
-            // has exactly one, so both messages leave it as it is.
-            "addmaster" | "removemaster" => return Vec::new(),
+
             _ => {}
         }
         let Some(window) = self.focused_window().map(|window| self.in_tiling(window)) else {
@@ -2997,7 +3004,10 @@ impl State {
         let Some(master) = ws.tiling.master() else {
             return Vec::new();
         };
+        let small = self.settings.master.allow_small_split;
         let _acted = match word {
+            "addmaster" => master.add_master(window, small),
+            "removemaster" => master.remove_master(window),
             "swapwithmaster" => master.swap_with_master(window),
             "swapnext" => master.swap_along(window, false),
             "swapprev" => master.swap_along(window, true),
@@ -3308,6 +3318,20 @@ impl State {
             .iter()
             .find(|output| output.monitor.id == monitor)?
             .special
+    }
+
+    /// Which windows the master layout holds as masters on `workspace`.
+    ///
+    /// Empty for a dwindle workspace, which has no master at all. What
+    /// `layoutmsg addmaster` and `removemaster` change: two masters look
+    /// like two windows in one column, and a rectangle alone cannot tell
+    /// that from a stack.
+    #[must_use]
+    pub fn masters_on(&self, workspace: WorkspaceId) -> Vec<WindowId> {
+        self.workspaces
+            .get(&workspace)
+            .map(|ws| ws.tiling.master_windows().to_vec())
+            .unwrap_or_default()
     }
 
     /// Whether `workspace` is a special one, by Hyprland's own range.

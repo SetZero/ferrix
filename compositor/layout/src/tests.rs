@@ -3059,3 +3059,107 @@ fn master_can_take_the_focus_when_a_window_closes() {
     let _gone = mastered.window_gone(WindowId(3)).expect("the window");
     assert_eq!(mastered.focused_window(), Some(WindowId(1)));
 }
+
+/// `layoutmsg addmaster` and `removemaster` move a window between the
+/// master column and the stack.
+///
+/// Hyprland's master layout has as many masters as a person asks for, and
+/// they share the master column. This compositor had one and both messages
+/// did nothing, so two masters side by side -- which is the whole reason
+/// the messages exist -- could not be had at all.
+#[test]
+fn addmaster_and_removemaster_move_a_window_between_the_columns() {
+    let mut state = setup(&format!("{BARE}general:layout = master\n"));
+    open(&mut state, &[1, 2, 3]);
+    assert_eq!(state.masters_on(WorkspaceId(1)), [WindowId(1)]);
+    assert_eq!(
+        rects_on(&state, M1),
+        [
+            (1, r(0, 0, 1056, 1080)),
+            (2, r(1056, 0, 864, 540)),
+            (3, r(1056, 540, 864, 540))
+        ]
+    );
+
+    // The focused window joins the masters and the column is shared.
+    focus(&mut state, 2);
+    let _added = dispatch(&mut state, "layoutmsg", "addmaster");
+    assert_eq!(state.masters_on(WorkspaceId(1)), [WindowId(1), WindowId(2)]);
+    assert_eq!(
+        rects_on(&state, M1),
+        [
+            (1, r(0, 0, 1056, 540)),
+            (2, r(0, 540, 1056, 540)),
+            (3, r(1056, 0, 864, 1080))
+        ]
+    );
+
+    // And back out again.
+    let _removed = dispatch(&mut state, "layoutmsg", "removemaster");
+    assert_eq!(state.masters_on(WorkspaceId(1)), [WindowId(1)]);
+    assert_eq!(
+        rects_on(&state, M1),
+        [
+            (1, r(0, 0, 1056, 1080)),
+            (2, r(1056, 0, 864, 540)),
+            (3, r(1056, 540, 864, 540))
+        ]
+    );
+}
+
+/// `addmaster` is refused when it would leave fewer than two windows in the
+/// stack, unless `master:allow_small_split` says otherwise.
+///
+/// A stack of one beside two masters is not what the message is for, which
+/// is why Hyprland answers `nothing to do`.
+#[test]
+fn addmaster_needs_a_stack_to_take_from() {
+    let mut plain = setup(&format!("{BARE}general:layout = master\n"));
+    open(&mut plain, &[1, 2]);
+    focus(&mut plain, 2);
+    let _added = dispatch(&mut plain, "layoutmsg", "addmaster");
+    assert_eq!(plain.masters_on(WorkspaceId(1)), [WindowId(1)]);
+
+    let mut small = setup(&format!(
+        "{BARE}general:layout = master\nmaster:allow_small_split = true\n"
+    ));
+    open(&mut small, &[1, 2]);
+    focus(&mut small, 2);
+    let _added = dispatch(&mut small, "layoutmsg", "addmaster");
+    assert_eq!(
+        small.masters_on(WorkspaceId(1)),
+        [WindowId(1), WindowId(2)],
+        "both are masters, so they share the whole workspace"
+    );
+    assert_eq!(
+        rects_on(&small, M1),
+        [(1, r(0, 0, 1920, 540)), (2, r(0, 540, 1920, 540))]
+    );
+
+    // `removemaster` is refused with fewer than two masters: a workspace
+    // with none is not a state the layout has.
+    let mut state = setup(&format!("{BARE}general:layout = master\n"));
+    open(&mut state, &[1, 2]);
+    let _removed = dispatch(&mut state, "layoutmsg", "removemaster");
+    assert_eq!(state.masters_on(WorkspaceId(1)), [WindowId(1)]);
+}
+
+/// The last master closing hands the master's slot to the first window
+/// left, and a master closing with another master leaves that one.
+#[test]
+fn a_master_closing_leaves_the_masters_that_are_left() {
+    let mut state = setup(&format!("{BARE}general:layout = master\n"));
+    open(&mut state, &[1, 2, 3]);
+    focus(&mut state, 2);
+    let _added = dispatch(&mut state, "layoutmsg", "addmaster");
+    assert_eq!(state.masters_on(WorkspaceId(1)), [WindowId(1), WindowId(2)]);
+
+    let _gone = state.window_gone(WindowId(1)).expect("the window");
+    assert_eq!(state.masters_on(WorkspaceId(1)), [WindowId(2)]);
+    let _gone = state.window_gone(WindowId(2)).expect("the window");
+    assert_eq!(
+        state.masters_on(WorkspaceId(1)),
+        [WindowId(3)],
+        "the first window left takes the slot"
+    );
+}

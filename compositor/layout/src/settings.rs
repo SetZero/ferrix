@@ -112,6 +112,11 @@ pub struct MasterSettings {
     /// `master:focus_master_on_close`: closing a window focuses the master
     /// rather than whatever is nearest.
     pub focus_master_on_close: bool,
+    /// `master:allow_small_split`: `layoutmsg addmaster` is allowed even
+    /// when it would leave fewer than two windows in the stack. Hyprland
+    /// refuses without it, because a stack of one beside two masters is
+    /// not what the message is for.
+    pub allow_small_split: bool,
 }
 
 /// `master:new_on_active`: where a new window goes relative to the focused
@@ -304,6 +309,7 @@ impl Settings {
                     _ => NewOnActive::End,
                 },
                 focus_master_on_close: config.bool("master:focus_master_on_close").unwrap_or(false),
+                allow_small_split: config.bool("master:allow_small_split").unwrap_or(false),
             },
         }
     }
