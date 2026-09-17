@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use compositor_config::{Config, MonitorRule, NoSources, Position};
 use compositor_layout::{Monitor, MonitorId, Rect, Settings, State, WindowId};
 use compositor_protocol::{core, xdg_shell};
-use compositor_render::{Canvas, Damage, Style};
+use compositor_render::{Canvas, Style};
 use compositor_server::{Client, Event, ForeignRequest, Globals, Rect as ServerRect, Role};
 
 use crate::clipboard::{Through, Which};
@@ -394,6 +394,12 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
     let mut placed_layers: Vec<crate::frame::Placed> = Vec::new();
     let mut settling = false;
     let mut slowest = Duration::ZERO;
+    // What the clients have said they drew since the last frame, and the
+    // fewest pixels any frame has redrawn. `crate::damage` says what the
+    // first is for; the second is what says the compositor is redrawing
+    // what changed rather than the screen.
+    let mut commits = crate::damage::Told::default();
+    let mut least = i64::MAX;
     // The slowest of the frames since the last report, how many there were,
     // and when that report was: the line is a second apart at most, and
     // silent while nothing is drawn.
@@ -687,6 +693,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                 &mut urgent,
                 &mut injected,
                 &mut asks,
+                &mut commits,
                 focus_on_activate,
                 report,
             )? {
@@ -1040,6 +1047,10 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
             // of its surface shows, so it wins over a rule's opacity.
             let drawn_with = drawn_with(window_rules.styles(), &slots, &sources);
             let began = Instant::now();
+            // How many pixels this frame redrew, over every screen: what
+            // damage tracking is worth is how little a frame that changes
+            // little costs, and the line the loop prints says so.
+            let mut redrew = 0i64;
             // A frame a monitor: each screen draws the workspace it shows,
             // with the windows' rectangles moved into its own pixels.
             for (which, screen) in screens.iter_mut().enumerate() {
@@ -1053,77 +1064,163 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                 // it.
                 let output = &animations.follow(output, millis);
                 let (width, height) = screen.size();
-                let full = Damage::full(width, height);
-                let mut target = crate::frame::Output {
-                    canvas: &mut screen.canvas,
-                    backend: screen.backend.as_mut(),
-                    origin: (screen.rect.x, screen.rect.y),
-                    style: &style,
-                    styles: &drawn_with,
-                    scale: screen.scale,
-                    // The pointer, unless the session is locked: a lock
-                    // screen draws its own and the compositor's arrow over
-                    // it would be two pointers.
-                    // The surface a drag is carrying, drawn at the
-                    // pointer: that is what makes a drag look like one.
-                    drag_icon: carried.as_ref().and_then(|held| {
-                        Some(crate::frame::Placed {
-                            client: held.client,
-                            surface: held.icon?,
-                            rect: Rect::new(cursor_at.0, cursor_at.1, 0, 0),
-                            above: true,
-                            rules: crate::frame::LayerRules::default(),
-                        })
-                    }),
-                    // The ramps a night-light set on this screen, applied
-                    // to the pixels on their way out.
-                    gamma: gammas.get(&which).copied(),
-                    cursor: (lock.is_none() && devices.has_pointer() && seat.pointer_used()).then(
-                        || {
-                            let (x, y) = seat.pointer();
-                            crate::frame::Cursor {
-                                at: (x as i64, y as i64),
-                                surface: cursor_surface(&slots, &focus),
-                                shown: cursor_shown(&slots, &focus),
-                            }
-                        },
-                    ),
-                };
+                let origin = (screen.rect.x, screen.rect.y);
+                let scale = screen.scale;
                 // A screen `dpms off` turned off shows nothing at all,
                 // before the lock and before the windows: that is what
                 // turning a screen off means.
-                if dpms.get(&screen.name).copied().unwrap_or(false) {
-                    crate::frame::draw_dark(&mut target, &full)?;
+                let dark = dpms.get(&screen.name).copied().unwrap_or(false);
+                // What is drawn over the windows, or over the lock: the
+                // bars and the menus, or the lock's own surface and
+                // whatever a `layerrule = abovelock` asked for over it --
+                // an on-screen keyboard, which is the whole reason that
+                // rule exists, because a compositor that drew nothing over
+                // the lock would leave a person with no way to type the
+                // password.
+                let over: Vec<crate::frame::Placed> = if dark {
+                    Vec::new()
                 } else if let Some(held) = lock.as_ref() {
-                    let covering =
-                        held.surfaces
-                            .get(&which)
-                            .map(|(_, surface)| crate::frame::Placed {
-                                client: held.client,
-                                surface: *surface,
-                                rect: screen.rect,
-                                above: true,
-                                rules: crate::frame::LayerRules::default(),
-                            });
-                    // `layerrule = abovelock, <namespace>`: an on-screen
-                    // keyboard has to be usable on a lock screen, and a
-                    // compositor that drew nothing over the lock would
-                    // leave a person with no way to type the password.
-                    let over: Vec<crate::frame::Placed> = placed_layers
-                        .iter()
-                        .copied()
-                        .filter(|placed| placed.rules.above_lock)
-                        .collect();
-                    crate::frame::draw_locked(&mut target, output, &slots, covering, &over, &full)?;
+                    held.surfaces
+                        .get(&which)
+                        .map(|(_, surface)| crate::frame::Placed {
+                            client: held.client,
+                            surface: *surface,
+                            rect: screen.rect,
+                            above: true,
+                            rules: crate::frame::LayerRules::default(),
+                        })
+                        .into_iter()
+                        .chain(
+                            placed_layers
+                                .iter()
+                                .copied()
+                                .filter(|placed| placed.rules.above_lock),
+                        )
+                        .collect()
                 } else {
-                    let over: Vec<crate::frame::Placed> = placed_layers
+                    placed_layers
                         .iter()
                         .copied()
                         .chain(popups.iter().copied())
-                        .collect();
-                    crate::frame::draw(&mut target, output, &slots, &sources, &over, &full)?;
+                        .collect()
+                };
+                // The surface a drag is carrying, drawn at the pointer:
+                // that is what makes a drag look like one.
+                let drag_icon = carried.as_ref().filter(|_| !dark).and_then(|held| {
+                    Some(crate::frame::Placed {
+                        client: held.client,
+                        surface: held.icon?,
+                        rect: Rect::new(cursor_at.0, cursor_at.1, 0, 0),
+                        above: true,
+                        rules: crate::frame::LayerRules::default(),
+                    })
+                });
+                // The pointer, unless the session is locked: a lock screen
+                // draws its own and the compositor's arrow over it would be
+                // two pointers.
+                let cursor =
+                    (!dark && lock.is_none() && devices.has_pointer() && seat.pointer_used()).then(
+                        || crate::frame::Cursor {
+                            at: cursor_at,
+                            surface: cursor_surface(&slots, &focus),
+                            shown: cursor_shown(&slots, &focus),
+                        },
+                    );
+                // The ramps a night-light set on this screen, applied to
+                // the pixels on their way out.
+                let gamma = gammas.get(&which).copied();
+                // A locked screen draws no window, and a screen that is off
+                // draws nothing at all: a plan says what is drawn, not what
+                // the layout holds.
+                let scaled = style.at_scale(scale);
+                let layout = if dark || lock.is_some() {
+                    compositor_layout::MonitorLayout {
+                        windows: Vec::new(),
+                        ..output.clone()
+                    }
+                } else {
+                    compositor_render::scaled(output, origin, scale)
+                };
+                let blurred = blurs_behind(
+                    &scaled,
+                    &layout,
+                    &over,
+                    &slots,
+                    &sources,
+                    &drawn_with,
+                    (origin, scale),
+                );
+                // Everything this frame is drawn from but the clients' own
+                // pixels, which is what the damage is worked out from by
+                // comparing it with the frame before's.
+                let plan = crate::damage::Plan {
+                    size: (width, height),
+                    origin,
+                    scale,
+                    style: scaled,
+                    dark,
+                    locked: lock.is_some(),
+                    gamma,
+                    layout,
+                    blurred,
+                    styles: drawn_with.clone(),
+                    layers: over.clone(),
+                    cursor: cursor.and_then(|cursor| {
+                        Some((
+                            cursor,
+                            crate::frame::cursor_rect(&slots, &cursor, origin, scale)?,
+                        ))
+                    }),
+                    drag_icon: drag_icon.and_then(|icon| {
+                        Some((icon, crate::frame::drag_rect(&slots, &icon, origin, scale)?))
+                    }),
+                };
+                // And the clients' own pixels: where on this screen each
+                // commit since the last frame landed.
+                let (told, everything) = commits.on(&plan, &sources);
+                let frame = screen.watch.frame(plan, &told, everything);
+                redrew = redrew.saturating_add(frame.canvas.area());
+                let mut target = crate::frame::Output {
+                    canvas: &mut screen.canvas,
+                    backend: screen.backend.as_mut(),
+                    origin,
+                    style: &style,
+                    styles: &drawn_with,
+                    scale,
+                    drag_icon,
+                    gamma,
+                    cursor,
+                    present: frame.screen,
+                };
+                if dark {
+                    crate::frame::draw_dark(&mut target, &frame.canvas)?;
+                } else if lock.is_some() {
+                    // The lock's own surface is the first of `over`, which
+                    // is where the damage above expects it too: the drawing
+                    // and the damage read one list.
+                    crate::frame::draw_locked(
+                        &mut target,
+                        output,
+                        &slots,
+                        None,
+                        &over,
+                        &frame.canvas,
+                    )?;
+                } else {
+                    crate::frame::draw(
+                        &mut target,
+                        output,
+                        &slots,
+                        &sources,
+                        &over,
+                        &frame.canvas,
+                    )?;
                 }
             }
+            // The frame has been drawn from them, so the next one starts
+            // from what happens next.
+            commits.taken();
+            least = least.min(redrew);
             drawn = drawn.saturating_add(1);
             // Every surface that went into the frame is owed two things: a
             // `wl_callback.done` for the `wl_surface.frame` it asked for,
@@ -1179,12 +1276,23 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
         .as_ref()
         .map_or((0, 0), crate::control::Events::counts);
     let (copied, pasted) = clipboard.counts();
+    // How many pixels every screen together holds, which is what a frame
+    // used to redraw whatever had changed.
+    let pixels: i64 = screens
+        .iter()
+        .map(|screen| {
+            let (width, height) = screen.size();
+            i64::from(width).saturating_mul(i64::from(height))
+        })
+        .sum();
     Ok(format!(
         "hyprix: {} {display} frames {drawn} windows {} most {most} subscribers {subscribers} \
-         events {told} copied {copied} pasted {pasted} slowest frame {} us",
+         events {told} copied {copied} pasted {pasted} slowest frame {} us smallest frame {} of \
+         {pixels} pixels",
         described(&screens),
         sources.len(),
-        slowest.as_micros()
+        slowest.as_micros(),
+        if least == i64::MAX { 0 } else { least }
     ))
 }
 
@@ -1211,6 +1319,7 @@ fn serve(
     urgent: &mut Vec<WindowId>,
     injected: &mut Vec<crate::seat::Input>,
     asks: &mut ScreenAsks,
+    commits: &mut crate::damage::Told,
     taking_focus: bool,
     report: &mut dyn FnMut(&str),
 ) -> Result<bool, String> {
@@ -1293,8 +1402,23 @@ fn serve(
                     }
                 }
                 Event::PoolResized { pool, size } => {
-                    if let Some(mapping) = slot.pools.get_mut(&pool) {
-                        let _ = mapping.resize(size);
+                    let resized = match slot.pools.get_mut(&pool) {
+                        Some(mapping) => {
+                            let _ = mapping.resize(size);
+                            true
+                        }
+                        None => false,
+                    };
+                    // A pool mapped again is memory at another address, so
+                    // what every surface drawn from it shows may have
+                    // changed with no commit to say so.
+                    let showing = if resized {
+                        showing_from(&slot.client, pool)
+                    } else {
+                        Vec::new()
+                    };
+                    for surface in showing {
+                        commits.painted(whole_of(index, surface));
                     }
                 }
                 Event::Destroyed {
@@ -1302,14 +1426,32 @@ fn serve(
                     role: Role::ShmPool,
                 } => {
                     let _ = slot.retired.insert(object);
-                    release_retired_pools(slot);
+                    if release_retired_pools(slot) {
+                        commits.everything();
+                    }
                 }
                 // A buffer going may be the last one of a pool the client
                 // has already destroyed, which is when the memory is
-                // finally let go.
+                // finally let go. A surface still showing a buffer that has
+                // gone is drawn as its border and background instead, which
+                // is a change to the screen no commit announced; every
+                // other destroy changes nothing, since a client destroys a
+                // buffer it has finished with.
                 Event::Destroyed {
-                    role: Role::Buffer, ..
-                } => release_retired_pools(slot),
+                    object,
+                    role: Role::Buffer,
+                } => {
+                    let showing: Vec<ObjectId> = slot
+                        .client
+                        .surfaces()
+                        .filter(|(_, state)| state.current.buffer == Some(object))
+                        .map(|(id, _)| id)
+                        .collect();
+                    let _ = release_retired_pools(slot);
+                    for surface in showing {
+                        commits.painted(whole_of(index, surface));
+                    }
+                }
                 Event::LayerSurfaceCreated { layer_surface, .. } => {
                     slot.layers.push(layer_surface);
                     changed = true;
@@ -1676,6 +1818,12 @@ fn serve(
                         );
                     }
                     changed = true;
+                    // What the client says it drew, which is the only thing
+                    // that can change the pixels inside a surface: where
+                    // that lands on a screen is worked out when the frame
+                    // is drawn, because only then is it known where the
+                    // surface is.
+                    commits.painted(painted(&slot.client, index, surface));
                     if let Some(old) = change.released {
                         slot.client.release_buffer(old);
                     }
@@ -2251,6 +2399,9 @@ struct Screen {
     made: (String, String, String),
     /// How many buffer pixels one logical pixel is: `monitor = ..., 2`.
     scale: f64,
+    /// What it last drew, which is what the next frame's damage is worked
+    /// out against.
+    watch: crate::damage::Watch,
 }
 
 impl Screen {
@@ -2304,6 +2455,9 @@ impl Screen {
                 monitor: MonitorId(id),
                 rect: Rect::new(at_x, at_y, logical_width, logical_height),
                 scale,
+                // Nothing drawn yet, which is what makes a screen's first
+                // frame a whole one.
+                watch: crate::damage::Watch::default(),
             });
         }
         if screens.is_empty() {
@@ -2773,22 +2927,157 @@ enum Shot {
     },
 }
 
+/// What a commit changed inside one surface.
+///
+/// `compositor/server`'s `surface.rs` keeps a commit's two damage lists
+/// apart, because it cannot join them: `wl_surface.damage` is in surface
+/// coordinates and `damage_buffer` in the buffer's, and what turns one into
+/// the other is the surface's scale. This is the moment the scale is known,
+/// so both become the buffer's own pixels here -- which is the space the
+/// renderer draws from, since it draws the whole of a buffer into the
+/// rectangle the layout gave it however the surface is scaled.
+///
+/// The lists read are the *current* ones, which is where the commit just
+/// put them: `Surface::commit` makes the pending state current and starts
+/// the next commit's lists empty.
+fn painted(client: &Client, index: usize, surface: ObjectId) -> crate::damage::Painted {
+    let state = client.surface(surface);
+    let buffer = state
+        .and_then(|state| state.current.buffer)
+        .and_then(|held| client.buffer(held))
+        .map(|buffer| (i64::from(buffer.width), i64::from(buffer.height)));
+    let mut rects = Vec::new();
+    if let Some(state) = state {
+        let scale = i64::from(state.current.scale.max(1));
+        let held = |rect: &ServerRect, scale: i64| {
+            Rect::new(
+                i64::from(rect.x).saturating_mul(scale),
+                i64::from(rect.y).saturating_mul(scale),
+                i64::from(rect.width).saturating_mul(scale),
+                i64::from(rect.height).saturating_mul(scale),
+            )
+        };
+        rects.extend(
+            state
+                .current
+                .buffer_damage
+                .iter()
+                .map(|rect| held(rect, 1))
+                .chain(state.current.damage.iter().map(|rect| held(rect, scale))),
+        );
+    }
+    crate::damage::Painted {
+        client: index,
+        surface,
+        buffer,
+        rects,
+    }
+}
+
+/// The rectangles this frame draws a blur behind, in the screen's own
+/// pixels.
+///
+/// The renderer's own condition, because the damage has to know exactly
+/// which surfaces read the canvas rather than only writing to it
+/// (`crate::damage::Plan::blurs_whole` says why): the style has a blur, no
+/// rule turned it off for this surface, and the surface can be seen through
+/// -- a buffer in a format with alpha, or a window drawn at less than full
+/// opacity, which is translucent everywhere.
+///
+/// `layout` is already in the screen's own pixels; the layer surfaces are
+/// in the logical space every rectangle above the renderer is in.
+fn blurs_behind(
+    style: &Style,
+    layout: &compositor_layout::MonitorLayout,
+    layers: &[crate::frame::Placed],
+    slots: &[Slot],
+    sources: &BTreeMap<WindowId, Source>,
+    styles: &BTreeMap<WindowId, compositor_render::WindowStyle>,
+    screen: ((i64, i64), f64),
+) -> Vec<Rect> {
+    if style.blur.is_none() {
+        return Vec::new();
+    }
+    let (origin, scale) = screen;
+    let windows = layout
+        .windows
+        .iter()
+        .filter(|placed| {
+            let own = styles.get(&placed.window).copied().unwrap_or_default();
+            let opacity = own
+                .opacity
+                .unwrap_or_else(|| style.opacity(placed.focused, placed.fullscreen));
+            own.blur
+                && (opacity < 1.0
+                    || sources.get(&placed.window).is_some_and(|source| {
+                        crate::frame::translucent(slots, source.client, source.surface)
+                    }))
+        })
+        .map(|placed| {
+            placed
+                .rect
+                .translate(origin.0.saturating_neg(), origin.1.saturating_neg())
+        });
+    let layers = layers
+        .iter()
+        .filter(|placed| {
+            placed.rules.blur && crate::frame::translucent(slots, placed.client, placed.surface)
+        })
+        .map(|placed| crate::frame::local(placed.rect, origin, scale));
+    windows.chain(layers).collect()
+}
+
+/// Every surface of `client` whose buffer is in `pool`.
+///
+/// Which is to say: every surface whose pixels are in that memory, and
+/// whose pixels have therefore moved when the memory has.
+fn showing_from(client: &Client, pool: ObjectId) -> Vec<ObjectId> {
+    client
+        .surfaces()
+        .filter(|(_, state)| {
+            state
+                .current
+                .buffer
+                .and_then(|held| client.buffer(held))
+                .is_some_and(|buffer| buffer.pool == pool)
+        })
+        .map(|(id, _)| id)
+        .collect()
+}
+
+/// A change to the whole of one surface, for something that happened to it
+/// rather than in it: its memory moved, or its buffer went.
+fn whole_of(client: usize, surface: ObjectId) -> crate::damage::Painted {
+    crate::damage::Painted {
+        client,
+        surface,
+        buffer: None,
+        rects: Vec::new(),
+    }
+}
+
 /// Let go of every pool the client destroyed that has no buffer left.
 ///
 /// The two halves of `wl_shm_pool`'s lifetime: the object goes when the
 /// client says so, and the memory goes when the last buffer made from it
 /// does. Called on both, because either may be the last event.
-fn release_retired_pools(slot: &mut Slot) {
+///
+/// Gives whether any memory went, which is a change to the screen nothing
+/// else announces: a surface whose pool is no longer mapped is drawn as its
+/// border and background alone.
+fn release_retired_pools(slot: &mut Slot) -> bool {
     let done: Vec<ObjectId> = slot
         .retired
         .iter()
         .copied()
         .filter(|pool| !slot.client.pool_in_use(*pool))
         .collect();
+    let any = !done.is_empty();
     for pool in done {
         let _ = slot.retired.remove(&pool);
         let _ = slot.pools.remove(&pool);
     }
+    any
 }
 
 /// Answer one half of a screenshot.
