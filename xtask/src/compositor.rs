@@ -853,7 +853,7 @@ fn boot_and_dump(
     binds: &[(&str, &[&str])],
     args: &Args,
 ) -> Result<(Vec<Image>, Vec<String>)> {
-    let (image, kernel) = build_image(arch, programs, config, Vec::new(), args)?;
+    let (image, kernel) = build_image(arch, programs, config, Carried::none(), args)?;
 
     let port = free_port()?;
     let mut qemu_args = args.clone();
@@ -995,7 +995,7 @@ fn build_image(
     arch: Arch,
     programs: &Programs,
     config: &str,
-    extra: Vec<crate::ports::File>,
+    carried_too: Carried,
     args: &Args,
 ) -> Result<(PathBuf, PathBuf)> {
     let loader = crate::cargo::build_loader(arch, args.release)?;
@@ -1023,11 +1023,19 @@ fn build_image(
         mode: 0o644,
         content: crate::ports::Content::Bytes(config.as_bytes().to_vec()),
     });
-    // Whatever the caller wants beside them, which is how `run-compositor`
-    // puts a shell on the image without changing the archive every gate boot
-    // is judged on.
-    carried.extend(extra);
-    let initramfs = crate::initramfs::build(None, &natives, None, &carried)?;
+    // The busybox, zinc and the ported programs, when a caller asked for
+    // them. A gate boot asks for none and its archive is the bytes it always
+    // was; `run-compositor` asks for all three, because a shell whose every
+    // command answers `command not found` is not one anybody can use. The
+    // busybox and zinc go in through the same slots `build` and `run` use, so
+    // the applet links, `/etc/passwd` and `/bin/zsh` come with them.
+    carried.extend(carried_too.ports);
+    let initramfs = crate::initramfs::build(
+        carried_too.busybox.as_deref(),
+        &natives,
+        carried_too.zinc.as_deref(),
+        &carried,
+    )?;
     // The kernel as well as the image: the watcher symbolises a panic's
     // addresses out of it.
     let image = crate::fat::write_image_with(arch, &loader, &kernel, &initramfs, None)?;
@@ -1265,6 +1273,78 @@ bind = SUPER, C, exec, /bin/hyprctl clients
 bind = SUPER, W, exec, /bin/hyprctl activewindow
 ";
 
+/// What a boot's image carries to type into: the busybox whose applets are
+/// most of what a person types, zinc, the shell that runs them, and the
+/// programs ported onto ferrousli.
+///
+/// A gate boot carries neither. Its archive is compared byte for byte against
+/// what it has always been, and nothing it checks needs `ls`.
+///
+/// A watched boot carries both, and the terminal bind is the reason: a shell
+/// whose every command answers `command not found` is not a terminal anybody
+/// can use. That was the first thing tried in the window and it is what this
+/// exists to fix.
+struct Carried {
+    /// The busybox, which goes to `/bin/busybox` with a link for each applet.
+    busybox: Option<PathBuf>,
+    /// zinc's bytes, which go to `/bin/zinc` with `/bin/zsh` beside them.
+    zinc: Option<Vec<u8>>,
+    /// What `cargo xtask ports` built -- curl and btop -- when this machine
+    /// has them. `build` and `run` put them on every image they make; a
+    /// watched boot wants them for the same reason it wants the applets, and
+    /// a gate boot's archive names none.
+    ports: Vec<crate::ports::File>,
+}
+
+impl Carried {
+    /// Neither, which is what every judged boot asks for.
+    fn none() -> Self {
+        Self {
+            busybox: None,
+            zinc: None,
+            ports: Vec::new(),
+        }
+    }
+
+    /// What a watched boot should carry, from `--init` or from whatever
+    /// busybox this machine already has.
+    ///
+    /// `--init` is the same flag `build`, `run` and `test-shell` take, with
+    /// the same meanings: a path, `{arch}` replaced, or `ferrousli` for the
+    /// one built against this tree's own library. Given nothing, an installed
+    /// busybox is used where there is one and skipped where there is not:
+    /// somebody who asked to look at the compositor did not ask to wait for a
+    /// busybox to be built, and a screen with no shell is still the screen
+    /// they wanted.
+    ///
+    /// # Errors
+    ///
+    /// A `--init` that names no file, or a zinc that will not build.
+    fn wanted(arch: Arch, args: &Args) -> Result<Self> {
+        let asked = crate::optional_program(arch, args)?;
+        let busybox = match asked {
+            Some(program) => Some(program),
+            None => crate::busybox::installed_program(arch),
+        };
+        match &busybox {
+            Some(program) => println!("  busybox {} in /bin", program.display()),
+            None => {
+                println!("  no busybox: zinc's own builtins are all the shell has");
+                println!("    `cargo xtask busybox` builds one, or --init <PATH> names one");
+            }
+        }
+        let ports = crate::ports::installed(arch)?;
+        if !ports.is_empty() {
+            println!("  {} ported files in /bin and /etc", ports.len());
+        }
+        Ok(Self {
+            busybox,
+            zinc: crate::zinc::build(arch)?,
+            ports,
+        })
+    }
+}
+
 /// `cargo xtask run-compositor`: the compositor on a screen a person watches.
 ///
 /// The same image `test-compositor` boots -- the compositor as init, its
@@ -1300,19 +1380,7 @@ pub(crate) fn run_compositor(args: &Args) -> Result<()> {
         None => RUN_CONFIG.to_owned(),
     };
     let programs = Programs::build(arch)?;
-    // The shell, so that the terminal bind opens something to type into. An
-    // architecture zinc is not built for is not a reason to refuse the
-    // screen: the bind is then the only thing on the configuration that does
-    // nothing, and the compositor is what was asked for.
-    let mut extra = Vec::new();
-    if let Some(zinc) = crate::zinc::build(arch)? {
-        extra.push(crate::ports::File {
-            path: crate::initramfs::ZINC_PATH.to_owned(),
-            mode: 0o755,
-            content: crate::ports::Content::Bytes(zinc),
-        });
-    }
-    let (image, _) = build_image(arch, &programs, &config, extra, args)?;
+    let (image, _) = build_image(arch, &programs, &config, Carried::wanted(arch, args)?, args)?;
     let args = Args {
         // The card, the keyboard and the tablet: `--display` is what puts a
         // virtio-gpu on the bus, and without one the compositor has no

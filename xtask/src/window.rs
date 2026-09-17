@@ -113,8 +113,17 @@ impl Window {
             Window::Local(name) => {
                 println!("  screen: a window, through QEMU's {name} backend");
                 if card.is_some() {
+                    // The window opens on the card, because `qemu` creates it
+                    // before the head firmware drew on. The other console is
+                    // still there, with the loader's text on it, and a person
+                    // who wants it can reach it the way QEMU always offers.
                     println!(
-                        "    the compositor draws on the second console: its tab, or Ctrl-Alt-2"
+                        "    it opens on {card}, where the compositor draws",
+                        card = card.unwrap_or_default()
+                    );
+                    println!(
+                        "    the loader's own head is the tab beside it (View menu; \
+                         Ctrl-Alt-2 is unreliable on a German layout, where it is AltGr)"
                     );
                 }
             }
@@ -153,6 +162,25 @@ fn wanted(args: &Args) -> bool {
         Some("run-compositor") => true,
         _ => false,
     }
+}
+
+/// Whether this boot should have the card as its only screen.
+///
+/// QEMU shows its first console and can be told to show another only over
+/// VNC, so on a machine with two heads a window opens on firmware's -- the
+/// one the loader's text went to -- and the compositor draws on a console
+/// nobody asked for. A boot that is watched therefore goes without the
+/// machine's own display device: `q35`'s VGA, `virt`'s `ramfb`.
+///
+/// What that costs is where the loader's framebuffer comes from. With the
+/// VGA gone, firmware's graphics output is the virtio-gpu, so the panic
+/// screen and the card the ring-3 driver takes over are the same device,
+/// which `docs/DISPLAY.md` §2.4 keeps them apart for. That is a trade a
+/// watched boot can make and a judged one must not, which is why this asks
+/// the command and not the person: every `test-*` boot keeps both heads and
+/// compares the card by screendump, exactly as it did before.
+pub(crate) fn sole_screen(args: &Args) -> bool {
+    wanted(args)
 }
 
 /// Whether this host has somewhere to open a window.

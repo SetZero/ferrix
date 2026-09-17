@@ -936,6 +936,16 @@ fn qemu_command(
                 "-device",
                 "intel-iommu,intremap=off",
             ]);
+            // The machine's own VGA, which `q35` adds unasked, is QEMU's
+            // first console and the card is the second, so a window opens on
+            // firmware's head and the compositor draws out of sight. A boot
+            // that is watched takes the VGA away and leaves the card as the
+            // only console; a boot that is judged keeps it, because the
+            // loader's framebuffer is then VGA's rather than the card the
+            // driver takes over, which is `docs/DISPLAY.md` §2.4's hazard.
+            if crate::window::sole_screen(args) {
+                let _ = command.args(["-vga", "none"]);
+            }
             // The image on the first port of q35's AHCI controller, where a
             // bare `-drive` puts it, spelled out only to give it `bootindex`.
             // Without one OVMF tries the virtio test disk first, because its
@@ -970,12 +980,14 @@ fn qemu_command(
                 "-device",
                 "virtio-blk-device,drive=disk",
             ]);
-            if arch == Arch::AArch64 {
+            if arch == Arch::AArch64 && !crate::window::sole_screen(args) {
                 // A framebuffer for the panic screen. `virt` has no display
                 // device, and firmware offers graphics output only when there
                 // is one; ramfb is the simplest one edk2 drives, and it needs
                 // no display attached. ARMv7-A boots through U-Boot, which
-                // this has not been tried with.
+                // this has not been tried with. Left off a boot that is
+                // watched, for the reason `q35`'s VGA is: it would be the
+                // console the window opens on.
                 let _ = command.args(["-device", "ramfb"]);
             }
         }
@@ -1040,11 +1052,20 @@ fn attach_display(command: &mut Command, arch: Arch, args: &Args) {
         // until a host window manager resizes it, which a headless test has
         // nothing to do.
         for index in 0..args.screens.max(1) {
+            // A watched boot pins the cards high on the bus, for the reason
+            // `WATCHED_CARD_SLOT` gives. A judged one says nothing and lets
+            // QEMU assign, because the bus a test enumerates is the bus it
+            // has always enumerated.
+            let slot = if crate::window::sole_screen(args) {
+                format!(",addr=0x{:x}", WATCHED_CARD_SLOT + index)
+            } else {
+                String::new()
+            };
             let _ = command.args([
                 "-device",
                 &format!(
-                    "virtio-gpu-pci,id={},disable-legacy=on,iommu_platform=on,xres=1024,yres=768",
-                    crate::display::device_id(index)
+                    "virtio-gpu-pci,id={id}{slot},disable-legacy=on,iommu_platform=on,xres=1024,yres=768",
+                    id = crate::display::device_id(index)
                 ),
             ]);
         }
@@ -1064,10 +1085,46 @@ fn attach_display(command: &mut Command, arch: Arch, args: &Args) {
             ]);
         }
     }
+    // The head firmware draws on, created after the cards so that QEMU's
+    // first console is a card and a window opens on the compositor. On
+    // `q35` that is a VGA in place of the machine's own, which
+    // `qemu_command` took away with `-vga none`; on `virt` it is the `ramfb`
+    // the arch arm leaves to this.
+    if crate::window::sole_screen(args) {
+        match arch {
+            Arch::X86_64 => {
+                let _ = command.args(["-device", &format!("VGA,addr=0x{FIRMWARE_SLOT:x}")]);
+            }
+            Arch::AArch64 => {
+                let _ = command.args(["-device", "ramfb"]);
+            }
+            Arch::Armv7a => {}
+        }
+    }
     if let Some(port) = args.qmp_port {
         let _ = command.args(["-qmp", &format!("tcp:127.0.0.1:{port},server=on,wait=off")]);
     }
 }
+
+/// Where a watched boot's first card goes on the bus, the next one a slot
+/// along.
+///
+/// Two orders decide two different things, and a window needs them to
+/// disagree. QEMU's consoles are in device *creation* order, and it shows the
+/// first one; firmware picks its graphics output in PCI *address* order. So a
+/// watched boot creates the cards first and puts them high on the bus, and
+/// creates the head firmware should use last and puts it low: the window
+/// opens on the compositor, and the loader's framebuffer is still not the
+/// card the ring-3 driver takes over.
+///
+/// Both are pinned rather than one, because QEMU fills the low slots as it
+/// realizes devices and this machine's count changes with `--net` and the
+/// test disks: a slot that is free today is the network's tomorrow.
+const WATCHED_CARD_SLOT: u32 = 0x10;
+
+/// Where a watched boot's firmware head goes: below the cards, and clear of
+/// the slots QEMU assigns from the bottom.
+const FIRMWARE_SLOT: u32 = 0x0a;
 
 /// The MAC address the guest's virtio-net device carries.
 ///

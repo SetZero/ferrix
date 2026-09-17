@@ -76,6 +76,20 @@ const INPUTS: &[&str] = &[
     "tools/busybox",
 ];
 
+/// The installed busybox for `arch` if there already is one, and `None`
+/// rather than a build.
+///
+/// [`program`] is the strict answer `--init ferrousli` wants: it builds when
+/// the binary is missing or older than ferrousli, because what boots must be
+/// the tree as it stands. A watched boot wants the opposite -- somebody
+/// asked to look at the compositor, and a ten-minute busybox build is not
+/// what they asked for -- so this takes whatever is there and says so.
+pub(crate) fn installed_program(arch: Arch) -> Option<PathBuf> {
+    let root = root().ok()?;
+    let program = installed(&root, arch);
+    program.is_file().then_some(program)
+}
+
 /// `--init ferrousli`: the installed busybox for `arch`, built first when it is
 /// missing or older than ferrousli, so what boots is the tree as it stands.
 ///

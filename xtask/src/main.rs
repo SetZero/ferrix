@@ -484,7 +484,7 @@ fn program_for(init: &str, arch: Arch) -> Result<PathBuf> {
 /// The program `build`, `run` and `test-boot` were given, if any: `--init`,
 /// or else a non-empty `FERRIX_INIT`, the variable that has always chosen the
 /// shell those commands embed.
-fn optional_program(arch: Arch, args: &Args) -> Result<Option<PathBuf>> {
+pub(crate) fn optional_program(arch: Arch, args: &Args) -> Result<Option<PathBuf>> {
     let init = match (&args.init, std::env::var("FERRIX_INIT")) {
         (Some(init), _) => init.clone(),
         (None, Ok(init)) if !init.is_empty() => init,
