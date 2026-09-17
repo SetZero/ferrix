@@ -485,6 +485,24 @@ package FerrixRoadmap {
              * stage 19 exit on real hardware, drawn by the card. */
     }
 
+    #planned requirement <'S22'> stage22Steam : Stage {
+        attribute :>> number = 22;
+        attribute :>> status = StageStatus::Planned;
+        attribute :>> size = "unsized, over 300 points";
+        doc /* Steam on Ferrix, put on the roadmap by the customer on
+             * 2026-09-18 as the step after the GPU decision; a guest's
+             * stage first, on Path A's GPU, that does not wait for bare
+             * metal. What it stands on that nothing else staged: the 32-bit
+             * x86 ABI for the i386 client and 32-bit Wine, glibc's place
+             * taken by ferrousli under the Steam runtime, bubblewrap's needs
+             * over stage 13, a root on btrfs, XWayland, sound (virtio-snd,
+             * an audio core, a PulseAudio or PipeWire server), and Vulkan
+             * through Venus on a KVM host. Exit in three boots: the client
+             * logs in with its browser helper drawing; a native game
+             * installs, plays and sounds; a Windows game runs through
+             * Proton. */
+    }
+
     #planned requirement <'S20'> stage20SelfHosting : Stage {
         attribute :>> number = 20;
         attribute :>> status = StageStatus::Planned;
@@ -520,6 +538,8 @@ package FerrixRoadmap {
     dependency from stage19HyprlandFidelity to stage18Compositor;
     dependency from stage20SelfHosting to stage16Rustc;
     dependency from stage21BareMetalGpu to stage19HyprlandFidelity, stageDynamicLinking;
+    dependency from stage22Steam to stage19HyprlandFidelity, stageDynamicLinking,
+        stage12BtrfsWrite, stage13Isolation, stageNetworking;
 
     #planned requirement <'D.fuzz'> fuzzTargetsOwed : Principles::DesignRule {
         doc /* fuzz/ has two targets, elf_parse and frame_alloc. Every
