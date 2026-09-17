@@ -83,6 +83,28 @@ pub struct Buffer {
     pub stride: i32,
     /// What the pixels are.
     pub format: Format,
+    /// The one colour this buffer is, for a `wp_single_pixel_buffer_v1`.
+    ///
+    /// Such a buffer has no pool: the colour *is* the buffer, and `pool` is
+    /// the null object. Held as the four bytes the renderer reads, in the
+    /// order `Format::Argb8888` puts them on a little-endian machine.
+    pub solid: Option<[u8; 4]>,
+}
+
+impl Buffer {
+    /// One pixel of one colour, as `create_u32_rgba_buffer` makes it.
+    #[must_use]
+    pub const fn solid(alpha: u8, red: u8, green: u8, blue: u8) -> Self {
+        Self {
+            pool: compositor_wire::ObjectId::NULL,
+            offset: 0,
+            width: 1,
+            height: 1,
+            stride: 4,
+            format: Format::Argb8888,
+            solid: Some([blue, green, red, alpha]),
+        }
+    }
 }
 
 /// Why a `wl_shm_pool.create_buffer` is refused.
@@ -199,6 +221,7 @@ impl Pool {
             height,
             stride,
             format,
+            solid: None,
         })
     }
 }
@@ -212,6 +235,11 @@ impl Buffer {
     /// number.
     #[must_use]
     pub fn range(&self) -> Option<(usize, usize)> {
+        // A buffer that is one colour is in no pool, so it covers no part
+        // of one; the renderer reads `solid` instead.
+        if self.solid.is_some() {
+            return None;
+        }
         let start = usize::try_from(self.offset).ok()?;
         let len = usize::try_from(self.stride.checked_mul(self.height)?).ok()?;
         Some((start, start.checked_add(len)?))

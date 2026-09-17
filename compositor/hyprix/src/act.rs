@@ -72,6 +72,9 @@ pub struct Around<'a> {
     pub quit: &'a mut bool,
     /// Whether a terminal that opened a window is hidden: `toggleswallow`.
     pub swallow: &'a mut bool,
+    /// How long `forceidle` is pretending the seat has gone unused, or
+    /// `None` for the real clock.
+    pub forced: &'a mut Option<std::time::Duration>,
     /// What to say.
     pub report: &'a mut dyn FnMut(&str),
 }
@@ -145,10 +148,7 @@ pub fn compositor(
             around.say("hyprix: swallowing a terminal is not implemented");
             Some(false)
         }
-        "forceidle" => {
-            around.say("hyprix: there is no idle protocol to notify");
-            Some(false)
-        }
+        "forceidle" => Some(force_idle(argument, around)),
         "releaseinputcapture" => {
             around.say("hyprix: nothing has captured the input");
             Some(false)
@@ -213,7 +213,9 @@ fn global(name: &str, around: &mut Around<'_>) -> bool {
     if around.plugins.dispatch("global", name) {
         return false;
     }
-    around.say(&format!("hyprix: nothing has registered the shortcut {name}"));
+    around.say(&format!(
+        "hyprix: nothing has registered the shortcut {name}"
+    ));
     false
 }
 
@@ -279,7 +281,10 @@ fn move_cursor_to_corner(argument: &str, state: &State, around: &mut Around<'_>)
     // The last column and row inside the window, so the pointer lands on it
     // rather than one pixel past it.
     let (left, top) = (rect.x, rect.y);
-    let (right, bottom) = (rect.right().saturating_sub(1), rect.bottom().saturating_sub(1));
+    let (right, bottom) = (
+        rect.right().saturating_sub(1),
+        rect.bottom().saturating_sub(1),
+    );
     let (x, y) = match corner {
         0 => (left, bottom),
         1 => (right, bottom),
@@ -294,9 +299,7 @@ fn move_cursor_to_corner(argument: &str, state: &State, around: &mut Around<'_>)
         clippy::cast_precision_loss,
         reason = "a screen's pixels are far inside f64's exact range"
     )]
-    around
-        .pending
-        .extend(around.seat.warp(x as f64, y as f64));
+    around.pending.extend(around.seat.warp(x as f64, y as f64));
     true
 }
 
@@ -367,14 +370,28 @@ pub fn dragged(drag: &mut Drag, state: &mut State, (x, y): (i64, i64)) -> bool {
     moved.is_ok_and(|changes| !changes.is_empty())
 }
 
+/// `forceidle <seconds>`: pretend the seat has gone that long unused.
+///
+/// Every `ext_idle_notification_v1` whose timeout is shorter than that is
+/// told the seat went idle, which is how a person tests a screen locker
+/// without waiting ten minutes for it. Any real input undoes it, and so
+/// does a duration of nothing.
+fn force_idle(argument: &str, around: &mut Around<'_>) -> bool {
+    let Ok(seconds) = argument.trim().parse::<f64>() else {
+        around.say("hyprix: forceidle takes a number of seconds");
+        return false;
+    };
+    *around.forced = (seconds > 0.0).then(|| std::time::Duration::from_secs_f64(seconds));
+    match *around.forced {
+        Some(held) => around.say(&format!("hyprix: idle for {} s", held.as_secs_f64())),
+        None => around.say("hyprix: no longer idle"),
+    }
+    false
+}
+
 /// `signal`, `signalwindow` and `forcekillactive`: send a signal to the
 /// process on the other end of a window's connection.
-fn signal(
-    number: &str,
-    which: Option<&str>,
-    state: &State,
-    around: &mut Around<'_>,
-) -> bool {
+fn signal(number: &str, which: Option<&str>, state: &State, around: &mut Around<'_>) -> bool {
     let Ok(number) = number.trim().parse::<i32>() else {
         around.say("hyprix: a signal is a number");
         return false;

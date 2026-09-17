@@ -117,7 +117,9 @@ impl Selector {
         }
         // Hyprland's default: the whole expression against the class, which
         // is what `focuswindowbyclass` means and what a bare one does.
-        Regex::new(text).ok().map(|re| Self::Matching(Field::Class, re))
+        Regex::new(text)
+            .ok()
+            .map(|re| Self::Matching(Field::Class, re))
     }
 
     /// The first window this picks out, in the order the compositor holds

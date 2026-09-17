@@ -127,9 +127,7 @@ pub fn draw_locked(
 /// must *not* show -- the windows that were there -- is gone either way.
 pub fn draw_dark(target: &mut Output<'_>, damage: &Damage) -> Result<(), String> {
     let Output {
-        canvas,
-        backend,
-        ..
+        canvas, backend, ..
     } = target;
     canvas.clear(compositor_render::Color(0xff00_0000), damage);
     let (width, height) = backend.size();
@@ -283,18 +281,27 @@ fn scale_rect(rect: Rect, origin: (i64, i64), scale: f64) -> Rect {
 
 /// The pixels a surface is showing, if it is showing any.
 fn pixels<'a>(
-    client: &Client,
+    client: &'a Client,
     pools: &'a BTreeMap<ObjectId, Mapping>,
     surface: ObjectId,
 ) -> Option<Surface<'a>> {
     let state = client.surface(surface)?;
     let buffer = client.buffer(state.current.buffer?)?;
-    let mapping = pools.get(&buffer.pool)?;
-    let (start, end) = buffer.range()?;
-    // The client may have shrunk nothing -- a pool only grows -- but a
-    // mapping made before a resize is smaller than the pool is now, so the
-    // range is checked against what is mapped rather than against the pool.
-    let bytes = mapping.bytes().get(start..end)?;
+    // A `wp_single_pixel_buffer_v1` is in no pool: the colour is the
+    // buffer, four bytes held on the buffer itself. A window drawn from one
+    // is scaled to its rectangle like any other, so one pixel fills it.
+    let bytes = match buffer.solid.as_ref() {
+        Some(colour) => colour.as_slice(),
+        None => {
+            let mapping = pools.get(&buffer.pool)?;
+            let (start, end) = buffer.range()?;
+            // The client may have shrunk nothing -- a pool only grows --
+            // but a mapping made before a resize is smaller than the pool
+            // is now, so the range is checked against what is mapped rather
+            // than against the pool.
+            mapping.bytes().get(start..end)?
+        }
+    };
     let format = match buffer.format {
         compositor_server::Format::Argb8888 => Format::Argb8888,
         compositor_server::Format::Xrgb8888 => Format::Xrgb8888,

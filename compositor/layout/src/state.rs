@@ -34,7 +34,10 @@ use std::f64::consts::{FRAC_PI_2, PI};
 
 use compositor_config::{Bind, Config, Gaps};
 
-use crate::dispatch::{Direction, Dispatcher, FullscreenMode, GroupMember, Locking, MonitorTarget, Move, WorkspaceOption, WorkspaceTarget};
+use crate::dispatch::{
+    Direction, Dispatcher, FullscreenMode, GroupMember, Locking, MonitorTarget, Move,
+    WorkspaceOption, WorkspaceTarget,
+};
 use crate::dwindle::Dwindle;
 use crate::geometry::{self, Area, overlap, sticks};
 use crate::master::Master;
@@ -863,9 +866,7 @@ impl State {
             // Both name a window with an expression the layout cannot
             // read; the compositor picks it out and reaches back in with
             // `move_window_pixel` and `resize_window_pixel`.
-            Dispatcher::MoveWindowPixel { .. } | Dispatcher::ResizeWindowPixel { .. } => {
-                Vec::new()
-            }
+            Dispatcher::MoveWindowPixel { .. } | Dispatcher::ResizeWindowPixel { .. } => Vec::new(),
             Dispatcher::ToggleFloating => state.toggle_floating(),
             Dispatcher::Fullscreen(mode) => state.toggle_fullscreen(mode),
             Dispatcher::ToggleSpecialWorkspace(name) => state.toggle_special(&name),
@@ -1499,7 +1500,8 @@ impl State {
             return Vec::new();
         };
         let to = if *back {
-            at.checked_sub(1).unwrap_or(group.members.len().saturating_sub(1))
+            at.checked_sub(1)
+                .unwrap_or(group.members.len().saturating_sub(1))
         } else {
             (at + 1) % group.members.len()
         };

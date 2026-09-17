@@ -48,6 +48,26 @@
 //!   `hyprlock` and `swaylock` speak it, and it is the one protocol whose
 //!   whole point is that the compositor stops drawing everything else.
 //!
+//! * **`xdg_output`** is a screen's logical position, size and name, which
+//!   is what a bar reads rather than `wl_output.mode`: the mode is in the
+//!   screen's own pixels and a bar lays itself out in the logical ones.
+//! * **`presentation`** is `presentation-time`: when a frame actually
+//!   reached the screen, which is what a toolkit that animates needs and
+//!   what a frame callback does not say.
+//! * **`idle_notify`** and **`idle_inhibit`** are the two halves of "is
+//!   anyone there": a screen locker waits on the first and a video player
+//!   holds it off with the second.
+//! * **`single_pixel`** is one `wl_buffer` of one colour, which is how a
+//!   client puts a solid rectangle on the screen without sharing a
+//!   megabyte of the same four bytes.
+//! * **`content_type`** is a client saying it is showing a video or a
+//!   game, and **`alpha_modifier`** is it asking to be drawn see-through.
+//! * **`xdg_dialog`** is a dialog saying it is modal, which is what floats
+//!   it here; **`system_bell`** is the terminal bell; **`toplevel_tag`** is
+//!   a name a window keeps across restarts.
+//! * **`kde_decoration`** is KDE's own `xdg-decoration`, which a good deal
+//!   of software still asks first.
+//!
 //! The list of protocols is `FILES` in the generator. Adding one is vendoring
 //! its XML, adding a line there and a module to `generated/mod.rs`, and
 //! naming its interfaces in `probe/interfaces.c` and `probe/interfaces.sh`,
@@ -58,9 +78,11 @@ mod generated;
 
 pub use compositor_wire::Interface;
 pub use generated::{
-    core, cursor_shape, foreign_toplevel, fractional_scale, input_method, layer_shell,
-    primary_selection, screencopy, session_lock, text_input, toplevel_icon, viewporter,
-    xdg_activation, xdg_decoration, xdg_shell,
+    alpha_modifier, content_type, core, cursor_shape, foreign_toplevel, fractional_scale,
+    idle_inhibit, idle_notify, input_method, kde_decoration, layer_shell, presentation,
+    primary_selection, screencopy, session_lock, single_pixel, system_bell, text_input,
+    toplevel_icon, toplevel_tag, viewporter, xdg_activation, xdg_decoration, xdg_dialog,
+    xdg_output, xdg_shell,
 };
 
 /// Every interface the compositor offers as a global, with the version it
@@ -89,6 +111,17 @@ pub const GLOBALS: &[&Interface] = &[
     &toplevel_icon::XDG_TOPLEVEL_ICON_MANAGER_V1,
     &text_input::ZWP_TEXT_INPUT_MANAGER_V3,
     &input_method::ZWP_INPUT_METHOD_MANAGER_V2,
+    &xdg_output::ZXDG_OUTPUT_MANAGER_V1,
+    &presentation::WP_PRESENTATION,
+    &idle_notify::EXT_IDLE_NOTIFIER_V1,
+    &idle_inhibit::ZWP_IDLE_INHIBIT_MANAGER_V1,
+    &single_pixel::WP_SINGLE_PIXEL_BUFFER_MANAGER_V1,
+    &content_type::WP_CONTENT_TYPE_MANAGER_V1,
+    &alpha_modifier::WP_ALPHA_MODIFIER_V1,
+    &xdg_dialog::XDG_WM_DIALOG_V1,
+    &system_bell::XDG_SYSTEM_BELL_V1,
+    &toplevel_tag::XDG_TOPLEVEL_TAG_MANAGER_V1,
+    &kde_decoration::ORG_KDE_KWIN_SERVER_DECORATION_MANAGER,
 ];
 
 #[cfg(test)]

@@ -12,9 +12,11 @@ use std::collections::BTreeMap;
 use compositor_wire::{ArgType, Interface};
 
 use crate::{
-    GLOBALS, core, cursor_shape, foreign_toplevel, fractional_scale, input_method, layer_shell,
-    primary_selection, screencopy, session_lock, text_input, toplevel_icon, viewporter,
-    xdg_activation, xdg_decoration, xdg_shell,
+    GLOBALS, alpha_modifier, content_type, core, cursor_shape, foreign_toplevel, fractional_scale,
+    idle_inhibit, idle_notify, input_method, kde_decoration, layer_shell, presentation,
+    primary_selection, screencopy, session_lock, single_pixel, system_bell, text_input,
+    toplevel_icon, toplevel_tag, viewporter, xdg_activation, xdg_decoration, xdg_dialog,
+    xdg_output, xdg_shell,
 };
 
 /// The probe's output: one line per message, and one more per unnamed
@@ -82,6 +84,25 @@ fn tables() -> Vec<&'static Interface> {
         &input_method::ZWP_INPUT_METHOD_V2,
         &input_method::ZWP_INPUT_POPUP_SURFACE_V2,
         &input_method::ZWP_INPUT_METHOD_KEYBOARD_GRAB_V2,
+        &xdg_output::ZXDG_OUTPUT_MANAGER_V1,
+        &xdg_output::ZXDG_OUTPUT_V1,
+        &presentation::WP_PRESENTATION,
+        &presentation::WP_PRESENTATION_FEEDBACK,
+        &idle_notify::EXT_IDLE_NOTIFIER_V1,
+        &idle_notify::EXT_IDLE_NOTIFICATION_V1,
+        &idle_inhibit::ZWP_IDLE_INHIBIT_MANAGER_V1,
+        &idle_inhibit::ZWP_IDLE_INHIBITOR_V1,
+        &single_pixel::WP_SINGLE_PIXEL_BUFFER_MANAGER_V1,
+        &content_type::WP_CONTENT_TYPE_MANAGER_V1,
+        &content_type::WP_CONTENT_TYPE_V1,
+        &alpha_modifier::WP_ALPHA_MODIFIER_V1,
+        &alpha_modifier::WP_ALPHA_MODIFIER_SURFACE_V1,
+        &xdg_dialog::XDG_WM_DIALOG_V1,
+        &xdg_dialog::XDG_DIALOG_V1,
+        &system_bell::XDG_SYSTEM_BELL_V1,
+        &toplevel_tag::XDG_TOPLEVEL_TAG_MANAGER_V1,
+        &kde_decoration::ORG_KDE_KWIN_SERVER_DECORATION_MANAGER,
+        &kde_decoration::ORG_KDE_KWIN_SERVER_DECORATION,
     ]
 }
 

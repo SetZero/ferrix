@@ -3,8 +3,7 @@ use compositor_config::{Config, Gaps, NoSources, parse};
 use crate::Group;
 use crate::{
     Change, Direction, Dispatcher, Error, ForceSplit, FullscreenMode, Layout, Monitor, MonitorId,
-    Move, NewStatus, Orientation, Rect, Settings, State, WindowId, WorkspaceId,
-    WorkspaceTarget,
+    Move, NewStatus, Orientation, Rect, Settings, State, WindowId, WorkspaceId, WorkspaceTarget,
 };
 
 /// No gaps and no border, so slots and client rectangles coincide.
@@ -2113,7 +2112,11 @@ fn pin_and_pseudo_are_kept_on_the_window() {
     open(&mut state, &[1]);
     focus(&mut state, 1);
 
-    assert_eq!(dispatch(&mut state, "pin", ""), [], "a tiled window is not pinned");
+    assert_eq!(
+        dispatch(&mut state, "pin", ""),
+        [],
+        "a tiled window is not pinned"
+    );
     assert!(!state.is_pinned(WindowId(1)));
 
     let _ = dispatch(&mut state, "setfloating", "");
@@ -2310,7 +2313,10 @@ fn layoutmsg_togglesplit_turns_the_split() {
     assert_eq!(rects(&state)[0].1, r(0, 0, 960, 1080));
 
     focus(&mut state, 2);
-    assert_eq!(dispatch(&mut state, "layoutmsg", "togglesplit"), [Change::Layout(M1)]);
+    assert_eq!(
+        dispatch(&mut state, "layoutmsg", "togglesplit"),
+        [Change::Layout(M1)]
+    );
     assert_eq!(
         rects(&state),
         [(1, r(0, 0, 1920, 540)), (2, r(0, 540, 1920, 540))],
@@ -2331,7 +2337,10 @@ fn layoutmsg_swapsplit_exchanges_the_halves() {
     assert_eq!(rects(&state)[0].1, r(0, 0, 960, 1080));
 
     focus(&mut state, 1);
-    assert_eq!(dispatch(&mut state, "layoutmsg", "swapsplit"), [Change::Layout(M1)]);
+    assert_eq!(
+        dispatch(&mut state, "layoutmsg", "swapsplit"),
+        [Change::Layout(M1)]
+    );
     assert_eq!(
         rects(&state),
         [(1, r(960, 0, 960, 1080)), (2, r(0, 0, 960, 1080))]
@@ -2349,7 +2358,10 @@ fn layoutmsg_movetoroot_lifts_a_window_to_half_the_screen() {
     let buried = rects(&state)[3].1;
     assert!(buried.width * buried.height < 1920 * 1080 / 4, "{buried:?}");
 
-    assert_eq!(dispatch(&mut state, "layoutmsg", "movetoroot"), [Change::Layout(M1)]);
+    assert_eq!(
+        dispatch(&mut state, "layoutmsg", "movetoroot"),
+        [Change::Layout(M1)]
+    );
     let lifted = rects(&state)[3].1;
     assert_eq!(lifted.width * lifted.height, 1920 * 1080 / 2);
     // Stable by default: it stays on the side it was on.
@@ -2402,7 +2414,11 @@ fn layoutmsg_speaks_to_the_master_layout() {
     let _ = dispatch(&mut state, "layoutmsg", "mfact exact 0.25");
     assert_eq!(rects(&state)[2].1, r(0, 0, 1920, 270));
     let _ = dispatch(&mut state, "layoutmsg", "mfact 0.25");
-    assert_eq!(rects(&state)[2].1, r(0, 0, 1920, 540), "a change, not a size");
+    assert_eq!(
+        rects(&state)[2].1,
+        r(0, 0, 1920, 540),
+        "a change, not a size"
+    );
 }
 
 /// A message meant for the other layout, and one neither knows, are both

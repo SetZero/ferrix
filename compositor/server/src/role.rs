@@ -134,6 +134,47 @@ pub enum Role {
     /// `zwp_input_method_keyboard_grab_v2`: the keyboard while an input
     /// method has it.
     InputGrab,
+    /// `zxdg_output_manager_v1`: a screen in the logical pixels a bar lays
+    /// itself out in.
+    XdgOutputManager,
+    /// `zxdg_output_v1`: one screen's.
+    XdgOutput,
+    /// `wp_presentation`: when a frame reached the screen.
+    Presentation,
+    /// `wp_presentation_feedback`: one frame's answer, made by the client
+    /// and destroyed by the event that answers it.
+    PresentationFeedback,
+    /// `ext_idle_notifier_v1`: a screen locker or a power daemon.
+    IdleNotifier,
+    /// `ext_idle_notification_v1`: one such timeout.
+    IdleNotification,
+    /// `zwp_idle_inhibit_manager_v1`: a video player holding it off.
+    IdleInhibitManager,
+    /// `zwp_idle_inhibitor_v1`: one such hold.
+    IdleInhibitor,
+    /// `wp_single_pixel_buffer_manager_v1`: a buffer that is one colour.
+    SinglePixelManager,
+    /// `wp_content_type_manager_v1`: what a surface is showing.
+    ContentTypeManager,
+    /// `wp_content_type_v1`: one surface's.
+    ContentType,
+    /// `wp_alpha_modifier_v1`: a surface asking to be drawn see-through.
+    AlphaModifier,
+    /// `wp_alpha_modifier_surface_v1`: one surface's.
+    AlphaSurface,
+    /// `xdg_wm_dialog_v1`: a dialog saying it is modal.
+    DialogManager,
+    /// `xdg_dialog_v1`: one dialog.
+    Dialog,
+    /// `xdg_system_bell_v1`: the terminal bell.
+    SystemBell,
+    /// `xdg_toplevel_tag_manager_v1`: a name a window keeps across
+    /// restarts.
+    ToplevelTagManager,
+    /// `org_kde_kwin_server_decoration_manager`: KDE's `xdg-decoration`.
+    KdeDecorationManager,
+    /// `org_kde_kwin_server_decoration`: one surface's.
+    KdeDecoration,
 }
 
 impl Role {

@@ -91,12 +91,29 @@ struct Sent {
 /// what a real client does, so an event written with the wrong signature
 /// shows up here as a message that will not decode.
 fn sent(client: &mut Client) -> Vec<Sent> {
+    sent_knowing(client, &[])
+}
+
+/// The same, told what a few objects speak.
+///
+/// An object the *server* destroyed as it sent the event -- a
+/// `wp_presentation_feedback`, which the protocol gives no destroy request
+/// and which is gone the moment it is answered -- is no longer in the map,
+/// so a test that wants to read one says which interface it was. A real
+/// client has the same knowledge in its own proxy.
+fn sent_knowing(
+    client: &mut Client,
+    known: &[(ObjectId, &'static compositor_protocol::Interface)],
+) -> Vec<Sent> {
     let outgoing = client.take_outgoing();
     let mut reader = Reader::new(&outgoing.bytes, &outgoing.descriptors);
     let mut out = Vec::new();
     while !reader.is_done() {
         let header = reader.peek().expect("a header");
-        let interface = interface_of(client, header);
+        let interface = known
+            .iter()
+            .find(|(id, _)| *id == header.sender)
+            .map_or_else(|| interface_of(client, header), |(_, known)| *known);
         let method = interface
             .event(header.opcode)
             .unwrap_or_else(|| panic!("{} has no event {}", interface.name, header.opcode));
@@ -2633,4 +2650,352 @@ fn a_window_that_asks_about_its_decorations_is_told_the_compositor_draws_them() 
         "{:?}",
         client.fatal()
     );
+}
+
+// -- The protocols a desktop session asks for ---------------------------------
+
+/// A connection with every one of those globals bound, so that binding each
+/// is a test of the routing as well as of the handler.
+///
+/// `wl_compositor` is object 4 and `wl_output` object 5, as in
+/// `drawing_client`; the managers are 6 upwards in the order below, and a
+/// test's own objects start at 20.
+fn desktop_client() -> Client {
+    let mut globals = globals();
+    for (interface, version, role) in [
+        (&core::WL_OUTPUT, 4, Role::Output),
+        (
+            &compositor_protocol::xdg_output::ZXDG_OUTPUT_MANAGER_V1,
+            3,
+            Role::XdgOutputManager,
+        ),
+        (
+            &compositor_protocol::presentation::WP_PRESENTATION,
+            2,
+            Role::Presentation,
+        ),
+        (
+            &compositor_protocol::idle_notify::EXT_IDLE_NOTIFIER_V1,
+            2,
+            Role::IdleNotifier,
+        ),
+        (
+            &compositor_protocol::idle_inhibit::ZWP_IDLE_INHIBIT_MANAGER_V1,
+            1,
+            Role::IdleInhibitManager,
+        ),
+        (
+            &compositor_protocol::single_pixel::WP_SINGLE_PIXEL_BUFFER_MANAGER_V1,
+            1,
+            Role::SinglePixelManager,
+        ),
+        (
+            &compositor_protocol::alpha_modifier::WP_ALPHA_MODIFIER_V1,
+            1,
+            Role::AlphaModifier,
+        ),
+        (
+            &compositor_protocol::kde_decoration::ORG_KDE_KWIN_SERVER_DECORATION_MANAGER,
+            1,
+            Role::KdeDecorationManager,
+        ),
+    ] {
+        assert!(globals.add(interface, version, role).is_some());
+    }
+    let mut client = Client::new(globals);
+    client.set_outputs(vec![crate::Output {
+        x: 100,
+        y: 0,
+        width: 2560,
+        height: 1440,
+        refresh: 60_000,
+        scale: 2,
+        name: "DP-3".to_owned(),
+    }]);
+    let mut bytes = get_registry(2);
+    bytes.extend(bind(2, 1, "wl_compositor", 6, 4));
+    bytes.extend(bind(2, 5, "wl_output", 4, 5));
+    for (name, interface, version, id) in [
+        (6u32, "zxdg_output_manager_v1", 3u32, 6u32),
+        (7, "wp_presentation", 2, 7),
+        (8, "ext_idle_notifier_v1", 2, 8),
+        (9, "zwp_idle_inhibit_manager_v1", 1, 9),
+        (10, "wp_single_pixel_buffer_manager_v1", 1, 10),
+        (11, "wp_alpha_modifier_v1", 1, 11),
+        (12, "org_kde_kwin_server_decoration_manager", 1, 12),
+    ] {
+        bytes.extend(bind(2, name, interface, version, id));
+    }
+    assert_eq!(client.read(&bytes, &[]), bytes.len());
+    assert!(!client.is_finished(), "{:?}", client.fatal());
+    let _ = client.take_outgoing();
+    let _ = client.take_events();
+    client
+}
+
+/// `zxdg_output_manager_v1` tells a bar the screen's *logical* size, which
+/// on a scaled monitor is not the mode.
+#[test]
+fn xdg_output_says_the_logical_size_and_the_name() {
+    let mut client = desktop_client();
+    let bytes = request(
+        6,
+        compositor_protocol::xdg_output::zxdg_output_manager_v1::request::GET_XDG_OUTPUT,
+        &[ArgType::NewId, ArgType::Object { nullable: false }],
+        &[Arg::NewId(ObjectId(20)), Arg::Object(ObjectId(5))],
+    );
+    assert_eq!(client.read(&bytes, &[]), bytes.len());
+    assert_eq!(client.fatal(), None);
+
+    let events = sent(&mut client);
+    let args: Vec<Vec<String>> = events
+        .iter()
+        .filter(|event| event.sender == ObjectId(20))
+        .map(|event| event.args.clone())
+        .collect();
+    assert_eq!(
+        args,
+        [
+            vec!["Int(100)".to_owned(), "Int(0)".to_owned()],
+            // 2560x1440 at scale 2 is 1280x720 of the logical pixels every
+            // window's rectangle is in.
+            vec!["Int(1280)".to_owned(), "Int(720)".to_owned()],
+            vec!["Str(Some(\"DP-3\"))".to_owned()],
+            vec!["Str(Some(\"DP-3 (2560x1440)\"))".to_owned()],
+            vec![],
+        ],
+        "position, size, name, description, done"
+    );
+}
+
+/// `wp_presentation` answers a feedback when the frame is presented, and
+/// the object is gone afterwards: the protocol gives it no destroy request.
+#[test]
+fn presentation_feedback_is_answered_once_and_then_gone() {
+    let mut client = desktop_client();
+    let mut bytes = create_surface(20);
+    bytes.extend(request(
+        7,
+        compositor_protocol::presentation::wp_presentation::request::FEEDBACK,
+        &[ArgType::Object { nullable: false }, ArgType::NewId],
+        &[Arg::Object(ObjectId(20)), Arg::NewId(ObjectId(21))],
+    ));
+    assert_eq!(client.read(&bytes, &[]), bytes.len());
+    assert_eq!(client.fatal(), None);
+    let _ = sent(&mut client);
+
+    client.presented(ObjectId(20), (7, 500), 16_666_666, 42);
+    let events = sent_knowing(
+        &mut client,
+        &[(
+            ObjectId(21),
+            &compositor_protocol::presentation::WP_PRESENTATION_FEEDBACK,
+        )],
+    );
+    let answer = events
+        .iter()
+        .find(|event| event.sender == ObjectId(21))
+        .expect("the feedback was answered");
+    assert_eq!(
+        answer.args,
+        [
+            "Uint(0)",
+            "Uint(7)",
+            "Uint(500)",
+            "Uint(16666666)",
+            "Uint(0)",
+            "Uint(42)",
+            "Uint(1)"
+        ],
+        "the seconds split in two, the nanoseconds, the refresh, the count, and vsync"
+    );
+    assert!(
+        client.objects().get(ObjectId(21)).is_none(),
+        "and it is gone"
+    );
+
+    // A second frame owes nothing: the feedback was for one frame.
+    client.presented(ObjectId(20), (8, 0), 16_666_666, 43);
+    assert_eq!(sent(&mut client), []);
+}
+
+/// `ext-idle-notify` says `idled` once the timeout has passed and
+/// `resumed` when it has not; an inhibitor on a surface showing nothing
+/// holds nothing off.
+#[test]
+fn idle_notifications_fire_once_and_an_inhibitor_needs_a_mapped_surface() {
+    let mut client = desktop_client();
+    let mut bytes = create_surface(20);
+    bytes.extend(request(
+        8,
+        compositor_protocol::idle_notify::ext_idle_notifier_v1::request::GET_IDLE_NOTIFICATION,
+        &[
+            ArgType::NewId,
+            ArgType::Uint,
+            ArgType::Object { nullable: false },
+        ],
+        &[
+            Arg::NewId(ObjectId(21)),
+            Arg::Uint(1_000),
+            Arg::Object(ObjectId(3)),
+        ],
+    ));
+    bytes.extend(request(
+        9,
+        compositor_protocol::idle_inhibit::zwp_idle_inhibit_manager_v1::request::CREATE_INHIBITOR,
+        &[ArgType::NewId, ArgType::Object { nullable: false }],
+        &[Arg::NewId(ObjectId(22)), Arg::Object(ObjectId(20))],
+    ));
+    assert_eq!(client.read(&bytes, &[]), bytes.len());
+    assert_eq!(client.fatal(), None);
+    let _ = sent(&mut client);
+
+    let opcodes = |client: &mut Client| {
+        sent(client)
+            .iter()
+            .map(|event| event.opcode)
+            .collect::<Vec<u16>>()
+    };
+    assert!(!client.idle_tick(999, false), "not yet");
+    assert!(client.idle_tick(1_000, false), "now");
+    assert_eq!(
+        opcodes(&mut client),
+        [compositor_protocol::idle_notify::ext_idle_notification_v1::event::IDLED]
+    );
+    assert!(!client.idle_tick(2_000, false), "and not said twice");
+    assert!(client.idle_tick(0, false), "input brings it back");
+    assert_eq!(
+        opcodes(&mut client),
+        [compositor_protocol::idle_notify::ext_idle_notification_v1::event::RESUMED]
+    );
+
+    // The inhibitor's surface is showing nothing, so it holds nothing off.
+    assert!(!client.inhibits_idle());
+    assert!(
+        client.idle_tick(5_000, client.inhibits_idle()),
+        "idle again"
+    );
+    let _ = sent(&mut client);
+    // And with it held off, the notification goes back to not-idle.
+    assert!(client.idle_tick(5_000, true));
+    assert_eq!(
+        opcodes(&mut client),
+        [compositor_protocol::idle_notify::ext_idle_notification_v1::event::RESUMED]
+    );
+}
+
+/// `wp_single_pixel_buffer_manager_v1` makes a `wl_buffer` that is one
+/// colour and has no pool.
+#[test]
+fn a_single_pixel_buffer_is_one_colour_and_no_pool() {
+    let mut client = desktop_client();
+    let bytes = request(
+        10,
+        compositor_protocol::single_pixel::wp_single_pixel_buffer_manager_v1::request::CREATE_U32_RGBA_BUFFER,
+        &[
+            ArgType::NewId,
+            ArgType::Uint,
+            ArgType::Uint,
+            ArgType::Uint,
+            ArgType::Uint,
+        ],
+        &[
+            Arg::NewId(ObjectId(20)),
+            Arg::Uint(0x1122_3344),
+            Arg::Uint(0x5566_7788),
+            Arg::Uint(0x99aa_bbcc),
+            Arg::Uint(u32::MAX),
+        ],
+    );
+    assert_eq!(client.read(&bytes, &[]), bytes.len());
+    assert_eq!(client.fatal(), None);
+
+    let buffer = client.buffer(ObjectId(20)).expect("the buffer was made");
+    assert_eq!((buffer.width, buffer.height, buffer.stride), (1, 1, 4));
+    // Little-endian ARGB: blue, green, red, alpha, each the top byte of the
+    // protocol's 32-bit channel.
+    assert_eq!(buffer.solid, Some([0x99, 0x55, 0x11, 0xff]));
+    assert_eq!(buffer.range(), None, "it covers no part of a pool");
+}
+
+/// `wp_alpha_modifier_v1` makes a surface see-through, and destroying the
+/// object puts it back.
+#[test]
+fn the_alpha_modifier_makes_a_surface_see_through() {
+    let mut client = desktop_client();
+    let mut bytes = create_surface(20);
+    bytes.extend(request(
+        11,
+        compositor_protocol::alpha_modifier::wp_alpha_modifier_v1::request::GET_SURFACE,
+        &[ArgType::NewId, ArgType::Object { nullable: false }],
+        &[Arg::NewId(ObjectId(21)), Arg::Object(ObjectId(20))],
+    ));
+    bytes.extend(request(
+        21,
+        compositor_protocol::alpha_modifier::wp_alpha_modifier_surface_v1::request::SET_MULTIPLIER,
+        &[ArgType::Uint],
+        &[Arg::Uint(u32::MAX / 2)],
+    ));
+    bytes.extend(commit(20));
+    assert_eq!(client.read(&bytes, &[]), bytes.len());
+    assert_eq!(client.fatal(), None);
+
+    let alpha = client
+        .surface_alpha(ObjectId(20))
+        .expect("half see-through");
+    assert!((alpha - 0.5).abs() < 0.001, "{alpha}");
+
+    // Destroying it puts the surface back to opaque, on the next commit as
+    // every other part of a surface's state is.
+    let mut bytes = request(
+        21,
+        compositor_protocol::alpha_modifier::wp_alpha_modifier_surface_v1::request::DESTROY,
+        &[],
+        &[],
+    );
+    bytes.extend(commit(20));
+    assert_eq!(client.read(&bytes, &[]), bytes.len());
+    assert_eq!(client.surface_alpha(ObjectId(20)), None);
+}
+
+/// KDE's decoration manager is answered with the server's mode, which is
+/// the same answer `xdg-decoration` gets: a tiling compositor draws the
+/// border, and a client that drew its own would draw a second one inside
+/// it.
+#[test]
+fn kde_decorations_are_the_servers() {
+    let mut client = desktop_client();
+    let mut bytes = create_surface(20);
+    bytes.extend(request(
+        12,
+        compositor_protocol::kde_decoration::org_kde_kwin_server_decoration_manager::request::CREATE,
+        &[ArgType::NewId, ArgType::Object { nullable: false }],
+        &[Arg::NewId(ObjectId(21)), Arg::Object(ObjectId(20))],
+    ));
+    // Asking for client-side gets the same answer.
+    bytes.extend(request(
+        21,
+        compositor_protocol::kde_decoration::org_kde_kwin_server_decoration::request::REQUEST_MODE,
+        &[ArgType::Uint],
+        &[Arg::Uint(
+            compositor_protocol::kde_decoration::org_kde_kwin_server_decoration::mode::CLIENT,
+        )],
+    ));
+    assert_eq!(client.read(&bytes, &[]), bytes.len());
+    assert_eq!(client.fatal(), None);
+
+    let told: Vec<Sent> = sent(&mut client)
+        .into_iter()
+        .filter(|event| event.sender == ObjectId(21))
+        .collect();
+    assert_eq!(told.len(), 2, "once on create and once when asked");
+    for event in &told {
+        assert_eq!(
+            event.args,
+            [format!(
+                "Uint({})",
+                compositor_protocol::kde_decoration::org_kde_kwin_server_decoration::mode::SERVER
+            )]
+        );
+    }
 }

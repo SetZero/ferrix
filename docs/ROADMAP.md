@@ -4164,6 +4164,65 @@ bezier curves, rounded corners, blur and shadows, dimming and opacity rules,
 special workspaces, groups, multi-monitor with per-monitor workspaces and
 scaling, the plugin-shaped extension points, and the rest of `hyprctl`.
 
+**Done — the rest of Hyprland's dispatcher table (2026-09-17).**
+Twenty-seven names in Hyprland's `m_dispMap` had no answer here; every one
+of them does now. The split is by what they touch. `compositor/layout`
+answers the ones that move windows -- `layoutmsg` (both layouts' own
+messages: `togglesplit`, `swapsplit`, `movetoroot`, `preselect` for dwindle,
+and `swapwithmaster`, `focusmaster`, `mfact`, `orientation*`, `swapnext`,
+`rollnext` and the rest for master), `moveintoorcreategroup`,
+`movewindoworgroup`, `focusworkspaceoncurrentmonitor`, `movewindowpixel`,
+`resizewindowpixel` -- and a new `hyprix::act` answers the ones that reach
+past it: starting a program, signalling one, turning a screen off, moving
+the pointer, dragging a window with the mouse, writing a line on the event
+socket, and ending the session.
+
+Four dispatchers name a window with one of Hyprland's *window expressions*
+rather than a direction, and the layout holds neither a title nor a class
+nor a process. `hyprix::select` is `CViewQuery::bySelector` written out:
+`class:`, `initialclass:`, `title:`, `initialtitle:`, `tag:`, `address:`,
+`stableid:`, `pid:`, `floating`, `tiled`, `active`, and a bare expression
+read as a class -- each matched against the *whole* field, as RE2 matches
+one. To answer `pid:` at all, the socket now asks `SO_PEERCRED` who
+connected, which is also why `hyprctl clients` stopped printing `pid: 0`.
+
+Two things this found. The dwindle layout could not exchange two windows, so
+`swapwindow` did nothing in the default layout; it swaps the two leaves now,
+the way `switchWindows` does, leaving every split's ratio alone. And
+`misc:focus_on_activate` is *off* in Hyprland -- a program asking for
+another's window makes it urgent rather than taking the focus -- which this
+compositor had as always-on; it is the option now, with the urgency list
+`focusurgentorlast` reads.
+
+`toggleswallow` keeps its flag and says that swallowing a terminal is not
+implemented, because it is not. A dispatcher that quietly did nothing would
+be worse than one that says so.
+
+**Done — the protocols a desktop session asks for (2026-09-17).** Eleven
+more, each small and each bound by something a person runs. `xdg-output`
+gives a bar the screen's *logical* position, size and name, which on a
+scaled monitor is not what `wl_output.mode` says. `presentation-time` says
+when a frame actually reached the screen, which is what a toolkit that
+animates needs and what a frame callback does not say. `ext-idle-notify` and
+`idle-inhibit` are the two halves of "is anyone there": a locker waits on
+the first, a video player holds it off with the second, and the `forceidle`
+dispatcher drives the clock so a person can test a locker without waiting
+ten minutes. `single-pixel-buffer` is a `wl_buffer` that is one colour and
+has no pool at all. `content-type` and `alpha-modifier` are a client saying
+what it is showing and how much of it shows -- the second is drawn, so a
+client can fade itself. `xdg-dialog` floats a modal dialog, which is
+Hyprland's `windowrule = float, xdg_dialog` said by the protocol itself.
+`xdg-system-bell` and `xdg-toplevel-tag` are the terminal bell and the name
+a window keeps across restarts. `kde-server-decoration` is KDE's own
+`xdg-decoration`, answered with the same `Server`.
+
+**And the frame callbacks, which were never fired.** A client that asks for
+`wl_surface.frame` and waits for it before drawing again -- which is every
+toolkit -- drew one frame on this compositor and then stopped. The tree's
+own clients draw once and never noticed. `foot` now draws five frames in the
+same run where it drew one, and every surface on the screen is told: the
+windows, the bars, the menus and the lock's own.
+
 **Done — a terminal (2026-09-17).** Stage 18's exit asked for one, and it
 needed pseudoterminals the kernel did not have. It has them now:
 `/dev/ptmx` gives a master, `TIOCGPTN` says which pair it is, `TIOCSPTLCK`

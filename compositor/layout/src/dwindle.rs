@@ -162,7 +162,11 @@ impl Node {
         let Self::Split(split) = self else {
             return None;
         };
-        if *side { split.second.at(rest) } else { split.first.at(rest) }
+        if *side {
+            split.second.at(rest)
+        } else {
+            split.first.at(rest)
+        }
     }
 
     /// The split a path leads to.

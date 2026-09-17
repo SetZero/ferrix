@@ -41,6 +41,8 @@ use compositor_wire::{
 };
 use compositor_xkb::Modifiers;
 
+mod desktop;
+
 use crate::globals::Globals;
 use crate::layer::{Anchors, Layer, LayerSurface, Margin};
 use crate::role::Role;
@@ -185,6 +187,20 @@ pub enum Event {
         object: ObjectId,
         /// What it was.
         role: Role,
+    },
+    /// `xdg_dialog_v1`: the toplevel said whether it is modal. A modal
+    /// dialog floats, which is what Hyprland does with one.
+    ToplevelModal {
+        /// The `xdg_toplevel`.
+        toplevel: ObjectId,
+        /// Whether it is modal now.
+        modal: bool,
+    },
+    /// `xdg_system_bell_v1.ring`: the terminal bell, for the surface that
+    /// rang it or for the whole seat.
+    Bell {
+        /// The `wl_surface`, or `None` for the seat.
+        surface: Option<ObjectId>,
     },
     /// A surface's pending state became current. What it shows may have
     /// changed, and so may the region it takes input in.
@@ -549,6 +565,23 @@ pub struct Client {
     /// session, and the lock surfaces it has made, by screen.
     lock: Option<ObjectId>,
     lock_surfaces: BTreeMap<ObjectId, usize>,
+    /// Which screen each `zxdg_output_v1` names, by its place in
+    /// `outputs`.
+    xdg_outputs: BTreeMap<ObjectId, usize>,
+    /// The `wp_presentation_feedback`s owed for each surface's next frame.
+    feedback: BTreeMap<ObjectId, Vec<ObjectId>>,
+    /// Each `ext_idle_notification_v1` this client is waiting on.
+    idles: BTreeMap<ObjectId, desktop::Idle>,
+    /// The surface each `zwp_idle_inhibitor_v1` holds idling off for.
+    inhibitors: BTreeMap<ObjectId, ObjectId>,
+    /// Which surface each `wp_content_type_v1` is on.
+    contents: BTreeMap<ObjectId, ObjectId>,
+    /// Which surface each `wp_alpha_modifier_surface_v1` is on.
+    alphas: BTreeMap<ObjectId, ObjectId>,
+    /// Which toplevel each `xdg_dialog_v1` is on.
+    dialogs: BTreeMap<ObjectId, ObjectId>,
+    /// Which surface each `org_kde_kwin_server_decoration` is on.
+    kde_decorations: BTreeMap<ObjectId, ObjectId>,
     /// The next configure serial. Serials go up and are never reused, so a
     /// client's `ack_configure` names one configure and no other.
     serial: u32,
@@ -690,6 +723,14 @@ impl Client {
             popups: BTreeMap::new(),
             lock: None,
             lock_surfaces: BTreeMap::new(),
+            xdg_outputs: BTreeMap::new(),
+            feedback: BTreeMap::new(),
+            idles: BTreeMap::new(),
+            inhibitors: BTreeMap::new(),
+            contents: BTreeMap::new(),
+            alphas: BTreeMap::new(),
+            dialogs: BTreeMap::new(),
+            kde_decorations: BTreeMap::new(),
             serial: 1,
         }
     }
@@ -1429,7 +1470,7 @@ impl Client {
                     }
                 }
             }
-            _ => {}
+            other => self.forget_desktop(id, other),
         }
         // wl_display.delete_id is what lets a client reuse an id without
         // racing the server. libwayland sends it for every object the client
@@ -1504,12 +1545,18 @@ impl Client {
             Role::ForeignToplevel => self.toplevel_handle(sender, opcode),
             Role::LayerShell => self.layer_shell(version, opcode, args),
             Role::LayerSurface => self.layer_surface_request(sender, opcode, args),
-            // wl_buffer's only request is `destroy`, which the destructor
-            // flag handles; the rest are globals whose roles land after
-            // this. A bound object's requests are read, decoded and dropped
-            // rather than refused, because refusing would be a protocol
-            // error for a request the protocol allows.
-            _ => {}
+            // The protocols a desktop session asks for beyond a window and
+            // a bar, which are their own module.
+            //
+            // What is left after that is `wl_buffer`, whose only request is
+            // `destroy` and whose destructor flag handles it, and the
+            // globals whose roles have no requests. A bound object's
+            // requests are read, decoded and dropped rather than refused,
+            // because refusing would be a protocol error for a request the
+            // protocol allows.
+            other => {
+                let _ = self.desktop(sender, other, version, opcode, args);
+            }
         }
     }
 

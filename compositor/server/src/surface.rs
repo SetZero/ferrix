@@ -143,6 +143,12 @@ pub struct State {
     /// `wp_viewport.set_destination`: the size the surface is to be, in
     /// surface coordinates, or `None` for the buffer's own.
     pub viewport_size: Option<(i32, i32)>,
+    /// `wp_alpha_modifier_surface_v1.set_multiplier`: how much of the
+    /// surface shows, as a fraction, or `None` for all of it.
+    pub alpha: Option<f32>,
+    /// `wp_content_type_v1.set_content_type`: what the surface is showing,
+    /// as the protocol numbers it.
+    pub content: u32,
 }
 
 impl State {
@@ -161,6 +167,8 @@ impl State {
             scale: 1,
             viewport_source: None,
             viewport_size: None,
+            alpha: None,
+            content: compositor_protocol::content_type::wp_content_type_v1::r#type::NONE,
         }
     }
 }
@@ -253,6 +261,8 @@ impl Surface {
             scale: self.current.scale,
             viewport_source: self.current.viewport_source,
             viewport_size: self.current.viewport_size,
+            alpha: self.current.alpha,
+            content: self.current.content,
         };
         self.committed_callbacks
             .append(&mut std::mem::take(&mut self.frame_callbacks));

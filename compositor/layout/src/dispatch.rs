@@ -348,10 +348,7 @@ impl Move {
             let word = word?;
             // A percentage is resolved against the monitor later; here it
             // is kept as the number it names.
-            word.strip_suffix('%')
-                .unwrap_or(word)
-                .parse::<i64>()
-                .ok()
+            word.strip_suffix('%').unwrap_or(word).parse::<i64>().ok()
         };
         let x = value(numbers.next())?;
         let y = value(numbers.next())?;
@@ -472,9 +469,7 @@ impl Dispatcher {
             },
             "setfloating" => Ok(Self::SetFloating),
             "settiled" => Ok(Self::SetTiled),
-            "centerwindow" => Ok(Self::CenterWindow {
-                whole: arg == "1",
-            }),
+            "centerwindow" => Ok(Self::CenterWindow { whole: arg == "1" }),
             "pin" => Ok(Self::Pin),
             "pseudo" => Ok(Self::Pseudo),
             "resizeactive" => Move::parse(arg).map(Self::ResizeActive).ok_or_else(bad),
@@ -509,9 +504,7 @@ impl Dispatcher {
                 })
             }
             "renameworkspace" => {
-                let (first, rest) = arg
-                    .split_once(char::is_whitespace)
-                    .unwrap_or((arg, ""));
+                let (first, rest) = arg.split_once(char::is_whitespace).unwrap_or((arg, ""));
                 Ok(Self::RenameWorkspace {
                     id: first.parse::<i64>().map_err(|_| bad())?,
                     name: rest.trim().to_owned(),
@@ -525,7 +518,9 @@ impl Dispatcher {
             "movegroupwindow" => Ok(Self::MoveGroupWindow {
                 back: arg == "b" || arg == "prev",
             }),
-            "lockactivegroup" => Locking::parse(arg).map(Self::LockActiveGroup).ok_or_else(bad),
+            "lockactivegroup" => Locking::parse(arg)
+                .map(Self::LockActiveGroup)
+                .ok_or_else(bad),
             "denywindowfromgroup" => Locking::parse(arg)
                 .map(Self::DenyWindowFromGroup)
                 .ok_or_else(bad),

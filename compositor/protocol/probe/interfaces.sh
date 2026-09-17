@@ -41,6 +41,17 @@ scan "$protocols/fractional-scale-v1.xml" fractional-scale
 scan "$protocols/xdg-toplevel-icon-v1.xml" xdg-toplevel-icon
 scan "$protocols/text-input-unstable-v3.xml" text-input
 scan "$protocols/input-method-unstable-v2.xml" input-method
+scan "$protocols/xdg-output-unstable-v1.xml" xdg-output
+scan "$protocols/presentation-time.xml" presentation-time
+scan "$protocols/ext-idle-notify-v1.xml" ext-idle-notify
+scan "$protocols/idle-inhibit-unstable-v1.xml" idle-inhibit
+scan "$protocols/single-pixel-buffer-v1.xml" single-pixel-buffer
+scan "$protocols/content-type-v1.xml" content-type
+scan "$protocols/alpha-modifier-v1.xml" alpha-modifier
+scan "$protocols/xdg-dialog-v1.xml" xdg-dialog
+scan "$protocols/xdg-system-bell-v1.xml" xdg-system-bell
+scan "$protocols/xdg-toplevel-tag-v1.xml" xdg-toplevel-tag
+scan "$protocols/kde-server-decoration.xml" kde-server-decoration
 
 gcc -O0 -Wall -Werror -I"$work" \
     $(pkg-config --cflags wayland-client) \

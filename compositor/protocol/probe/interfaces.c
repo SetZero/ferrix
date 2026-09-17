@@ -40,6 +40,17 @@
 #include "xdg-toplevel-icon-client-protocol.h"
 #include "text-input-client-protocol.h"
 #include "input-method-client-protocol.h"
+#include "xdg-output-client-protocol.h"
+#include "presentation-time-client-protocol.h"
+#include "ext-idle-notify-client-protocol.h"
+#include "idle-inhibit-client-protocol.h"
+#include "single-pixel-buffer-client-protocol.h"
+#include "content-type-client-protocol.h"
+#include "alpha-modifier-client-protocol.h"
+#include "xdg-dialog-client-protocol.h"
+#include "xdg-system-bell-client-protocol.h"
+#include "xdg-toplevel-tag-client-protocol.h"
+#include "kde-server-decoration-client-protocol.h"
 
 static void print_messages(const struct wl_interface *interface,
 			   const char *kind, const struct wl_message *messages,
@@ -154,6 +165,36 @@ int main(void)
 		&zwp_input_method_v2_interface,
 		&zwp_input_popup_surface_v2_interface,
 		&zwp_input_method_keyboard_grab_v2_interface,
+		/* xdg-output-unstable-v1.xml */
+		&zxdg_output_manager_v1_interface,
+		&zxdg_output_v1_interface,
+		/* presentation-time.xml */
+		&wp_presentation_interface,
+		&wp_presentation_feedback_interface,
+		/* ext-idle-notify-v1.xml */
+		&ext_idle_notifier_v1_interface,
+		&ext_idle_notification_v1_interface,
+		/* idle-inhibit-unstable-v1.xml */
+		&zwp_idle_inhibit_manager_v1_interface,
+		&zwp_idle_inhibitor_v1_interface,
+		/* single-pixel-buffer-v1.xml */
+		&wp_single_pixel_buffer_manager_v1_interface,
+		/* content-type-v1.xml */
+		&wp_content_type_manager_v1_interface,
+		&wp_content_type_v1_interface,
+		/* alpha-modifier-v1.xml */
+		&wp_alpha_modifier_v1_interface,
+		&wp_alpha_modifier_surface_v1_interface,
+		/* xdg-dialog-v1.xml */
+		&xdg_wm_dialog_v1_interface,
+		&xdg_dialog_v1_interface,
+		/* xdg-system-bell-v1.xml */
+		&xdg_system_bell_v1_interface,
+		/* xdg-toplevel-tag-v1.xml */
+		&xdg_toplevel_tag_manager_v1_interface,
+		/* kde-server-decoration.xml */
+		&org_kde_kwin_server_decoration_manager_interface,
+		&org_kde_kwin_server_decoration_interface,
 	};
 
 	printf("# libwayland %s\n", WAYLAND_VERSION);

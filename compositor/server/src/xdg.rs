@@ -59,6 +59,15 @@ pub struct Toplevel {
     pub fullscreen: bool,
     /// The last size the compositor configured it at.
     pub configured: (i32, i32),
+    /// `xdg_dialog_v1.set_modal`: a dialog the application will not let
+    /// you look past, which is what floats it here.
+    pub modal: bool,
+    /// `xdg_toplevel_tag_manager_v1.set_toplevel_tag`: a name the window
+    /// keeps across restarts.
+    pub tag: String,
+    /// `set_toplevel_description`: a sentence about it, for a session
+    /// manager and for `hyprctl clients`.
+    pub description: String,
     /// The states the last configure carried, in the order they were sent.
     ///
     /// Kept beside the size because a configure is both: a window that has

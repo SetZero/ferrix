@@ -338,6 +338,10 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
     let mut drag: Option<crate::act::Drag> = None;
     let mut quit = false;
     let mut swallow = false;
+    // When the seat was last used, and how far back `forceidle` pretended
+    // it was: `ext-idle-notify` measures from the last of the two.
+    let mut last_input = Instant::now();
+    let mut forced: Option<Duration> = None;
 
     loop {
         if quit {
@@ -461,6 +465,10 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
         // and still let a key reach the browser under it would not be one.
         seat.set_locked(lock.is_some());
         for input in devices.read() {
+            // Any input at all ends the idle: that is what the protocol
+            // measures, and what `forceidle` was pretending about.
+            last_input = Instant::now();
+            forced = None;
             let actions = seat.input(input);
             if actions.is_empty() {
                 continue;
@@ -501,6 +509,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                     pending: &mut pending,
                     quit: &mut quit,
                     swallow: &mut swallow,
+                    forced: &mut forced,
                     report,
                 };
                 if dispatch(&name, &argument, &mut state, &mut around) {
@@ -567,6 +576,16 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
         for shot in shots.drain(..) {
             take_shot(&shot, &screens, &mut slots);
         }
+        // What every `ext_idle_notification_v1` is waiting for: how long
+        // the seat has gone without input, and whether any client holds
+        // idling off with a `zwp_idle_inhibitor_v1` on a mapped surface.
+        let idle = u64::try_from(forced.unwrap_or_else(|| last_input.elapsed()).as_millis())
+            .unwrap_or(u64::MAX);
+        let inhibited = slots.iter().any(|slot| slot.client().inhibits_idle());
+        for slot in &mut slots {
+            let _said = slot.client_mut().idle_tick(idle, inhibited);
+        }
+
         let mut pending = Vec::new();
         for reply in asked {
             let mut around = crate::act::Around {
@@ -584,6 +603,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                 pending: &mut pending,
                 quit: &mut quit,
                 swallow: &mut swallow,
+                forced: &mut forced,
                 report,
             };
             if run_ipc(
@@ -762,6 +782,11 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
         if changed || drawn == 0 || animating || settling {
             settling = animating;
             let outputs = state.layout();
+            // What each window is drawn with: what a `windowrule` gave it,
+            // and over that whatever `wp_alpha_modifier_v1` asked for. The
+            // protocol's multiplier is the client's own word about how much
+            // of its surface shows, so it wins over a rule's opacity.
+            let drawn_with = drawn_with(window_rules.styles(), &slots, &sources);
             let began = Instant::now();
             // A frame a monitor: each screen draws the workspace it shows,
             // with the windows' rectangles moved into its own pixels.
@@ -782,7 +807,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                     backend: screen.backend.as_mut(),
                     origin: (screen.rect.x, screen.rect.y),
                     style: &style,
-                    styles: window_rules.styles(),
+                    styles: &drawn_with,
                     scale: screen.scale,
                     // The pointer, unless the session is locked: a lock
                     // screen draws its own and the compositor's arrow over
@@ -824,6 +849,21 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                 }
             }
             drawn = drawn.saturating_add(1);
+            // Every surface that went into the frame is owed two things: a
+            // `wl_callback.done` for the `wl_surface.frame` it asked for,
+            // and a `wp_presentation_feedback.presented` if it asked for
+            // one. A client that waits on the first before drawing again --
+            // which every toolkit does -- draws once and stops without it.
+            frames_done(
+                &mut slots,
+                &sources,
+                &placed_layers,
+                &popups,
+                lock.as_ref(),
+                now,
+                drawn,
+                refresh_ns(&screens),
+            );
             // The slowest frame, which is the bound `docs/ROADMAP.md` asks
             // each software effect to have: blur is the expensive one, and a
             // number measured on the machine that ran it is worth more than
@@ -927,6 +967,9 @@ fn serve(
     // The same, for what a bar asked: acting on a window reaches every
     // client's slot, and this one's borrow is still open.
     let mut asked: Vec<(WindowId, ForeignRequest)> = Vec::new();
+    // The windows `xdg_dialog_v1` called modal in this pass, which the
+    // layout floats once the client's own borrow is over.
+    let mut modals: Vec<(WindowId, bool)> = Vec::new();
     // Whether this client has just become a bar, which is owed the windows
     // there already are before the roundtrip it sent after binding comes
     // back.
@@ -1056,6 +1099,22 @@ fn serve(
                 // middle click closes it.
                 Event::ForeignToplevelAsked { window, what } => {
                     asked.push((WindowId(window), what));
+                }
+                // A modal dialog is one the application will not let you
+                // look past, so it floats: Hyprland's own `windowrule =
+                // float, xdg_dialog` says the same thing by hand, and this
+                // is the protocol saying it for itself.
+                Event::ToplevelModal { toplevel, modal } => {
+                    if let Some((_, window)) = slot.windows.iter().find(|(top, _)| *top == toplevel)
+                    {
+                        modals.push((*window, modal));
+                    }
+                }
+                // There is nothing to ring: this compositor has no sound.
+                // Saying so is more than the warning a toolkit logs when
+                // the global is missing.
+                Event::Bell { .. } => {
+                    report("hyprix: a client rang the bell");
                 }
                 Event::ToplevelCreated { toplevel, .. } => {
                     let window = WindowId(u64::from(*next_window));
@@ -1191,6 +1250,24 @@ fn serve(
         ));
         changed |= for_the_bar(window, what, state, slots, sources);
     }
+    for (window, modal) in modals {
+        // `setfloating` and `settiled` act on the focused window, and this
+        // one need not be focused; the layout's own call is what a rule
+        // uses, and it takes the window.
+        let was = state.focused_window();
+        if state.focus_window(window).is_ok() {
+            let made = state.dispatch_str(if modal { "setfloating" } else { "settiled" }, "");
+            changed |= made.is_ok_and(|changes| !changes.is_empty());
+            if let Some(was) = was {
+                let _ = state.focus_window(was);
+            }
+        }
+        report(&format!(
+            "hyprix: window {} is {}modal",
+            window.0,
+            if modal { "" } else { "no longer " }
+        ));
+    }
     for (which, offer, mime, fd) in wanted {
         if clipboard.pasted(which, slots, index, offer, &mime, fd) {
             report(&format!(
@@ -1253,6 +1330,89 @@ fn apply_rules(
         focused: state.focused_window() == Some(window),
     };
     rules.apply(window, &what, state, report)
+}
+
+/// What each window is drawn with: its rule's style, with the alpha a
+/// client set through `wp_alpha_modifier_v1` over the top.
+fn drawn_with(
+    styled: &BTreeMap<WindowId, compositor_render::WindowStyle>,
+    slots: &[Slot],
+    sources: &BTreeMap<WindowId, Source>,
+) -> BTreeMap<WindowId, compositor_render::WindowStyle> {
+    let mut out = styled.clone();
+    for (&window, source) in sources {
+        let Some(slot) = slots.get(source.client) else {
+            continue;
+        };
+        let Some(alpha) = slot.client().surface_alpha(source.surface) else {
+            continue;
+        };
+        out.entry(window).or_default().opacity = Some(alpha);
+    }
+    out
+}
+
+/// Tell every surface that went into the frame that it was drawn.
+///
+/// Two events, both owed once a frame has been presented: the frame
+/// callbacks a client asked for with `wl_surface.frame`, and the
+/// `wp_presentation_feedback` it asked for with `wp_presentation.feedback`.
+/// The first is what makes a toolkit draw its next frame at all; the second
+/// is how it knows how far ahead to draw it.
+///
+/// Every surface on the screen is told, not only the windows: a bar, a
+/// wallpaper, a menu and the lock's own surface each drew, and each waits
+/// the same way.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "a frame's surfaces come from four places and the event carries the clock, the count and the refresh"
+)]
+fn frames_done(
+    slots: &mut [Slot],
+    sources: &BTreeMap<WindowId, Source>,
+    layers: &[crate::frame::Placed],
+    popups: &[crate::frame::Placed],
+    lock: Option<&Lock>,
+    now: u32,
+    drawn: u32,
+    refresh: u32,
+) {
+    let mut surfaces: Vec<(usize, ObjectId)> = sources
+        .values()
+        .map(|source| (source.client, source.surface))
+        .collect();
+    surfaces.extend(
+        layers
+            .iter()
+            .chain(popups)
+            .map(|placed| (placed.client, placed.surface)),
+    );
+    if let Some(held) = lock {
+        surfaces.extend(
+            held.surfaces
+                .values()
+                .map(|(_, surface)| (held.client, *surface)),
+        );
+    }
+    let at = now_monotonic();
+    for (index, surface) in surfaces {
+        let Some(slot) = slots.get_mut(index) else {
+            continue;
+        };
+        slot.client_mut().fire_frame_callbacks(surface, now);
+        slot.client_mut()
+            .presented(surface, at, refresh, u64::from(drawn));
+    }
+}
+
+/// How long one frame lasts on the first screen, in nanoseconds, which is
+/// what `wp_presentation_feedback.presented` carries.
+fn refresh_ns(screens: &[Screen]) -> u32 {
+    let millihertz = screens
+        .first()
+        .map_or(60_000, |screen| screen.output().refresh.max(1));
+    // Refresh is in millihertz: a nanosecond period is 10^12 over it.
+    u32::try_from(1_000_000_000_000i64 / i64::from(millihertz)).unwrap_or(16_666_666)
 }
 
 /// Where the Wayland socket goes.
@@ -1606,7 +1766,9 @@ fn one_window(
         Named::Focus | Named::Close => (argument.trim(), None),
         Named::Move | Named::Resize => {
             let Some((how, which)) = argument.split_once(',') else {
-                around.say(&format!("hyprix: {name} takes a change, a comma and a window"));
+                around.say(&format!(
+                    "hyprix: {name} takes a change, a comma and a window"
+                ));
                 return false;
             };
             let Some(by) = compositor_layout::Move::parse(how.trim()) else {
@@ -1658,7 +1820,8 @@ pub(crate) fn as_seen<'a>(
             .toplevels()
             .find(|(_, top)| top.surface == source.surface)
             .map(|(_, top)| top);
-        let (class, title) = named.map_or(("", ""), |top| (top.app_id.as_str(), top.title.as_str()));
+        let (class, title) =
+            named.map_or(("", ""), |top| (top.app_id.as_str(), top.title.as_str()));
         // A window whose client never said what it was called mapped with
         // the same nothing it is called now.
         let (initial_class, initial_title) = slot.first_called(window).unwrap_or((class, title));
@@ -2674,6 +2837,77 @@ fn globals(outputs: usize) -> Globals {
             &compositor_protocol::toplevel_icon::XDG_TOPLEVEL_ICON_MANAGER_V1,
             1,
             Role::IconManager,
+        ),
+        // A bar reads a screen's logical size and name from here rather
+        // than from `wl_output.mode`, which is in the screen's own pixels;
+        // on a scaled monitor the two differ, and it is the logical one
+        // that every window's rectangle is in.
+        (
+            &compositor_protocol::xdg_output::ZXDG_OUTPUT_MANAGER_V1,
+            3,
+            Role::XdgOutputManager,
+        ),
+        // When a frame actually reached the screen, which a frame callback
+        // does not say: it fires when the compositor *began* one.
+        (
+            &compositor_protocol::presentation::WP_PRESENTATION,
+            2,
+            Role::Presentation,
+        ),
+        // The two halves of "is anyone there": a locker or a power daemon
+        // waits on the first, a video player holds it off with the second.
+        (
+            &compositor_protocol::idle_notify::EXT_IDLE_NOTIFIER_V1,
+            2,
+            Role::IdleNotifier,
+        ),
+        (
+            &compositor_protocol::idle_inhibit::ZWP_IDLE_INHIBIT_MANAGER_V1,
+            1,
+            Role::IdleInhibitManager,
+        ),
+        // A buffer that is one colour, which is how a client puts a solid
+        // rectangle on the screen without sharing a megabyte of the same
+        // four bytes.
+        (
+            &compositor_protocol::single_pixel::WP_SINGLE_PIXEL_BUFFER_MANAGER_V1,
+            1,
+            Role::SinglePixelManager,
+        ),
+        // What a surface is showing, and how much of it shows.
+        (
+            &compositor_protocol::content_type::WP_CONTENT_TYPE_MANAGER_V1,
+            1,
+            Role::ContentTypeManager,
+        ),
+        (
+            &compositor_protocol::alpha_modifier::WP_ALPHA_MODIFIER_V1,
+            1,
+            Role::AlphaModifier,
+        ),
+        // A dialog saying it is modal, which floats it; the terminal bell;
+        // and the name a window keeps across restarts.
+        (
+            &compositor_protocol::xdg_dialog::XDG_WM_DIALOG_V1,
+            1,
+            Role::DialogManager,
+        ),
+        (
+            &compositor_protocol::system_bell::XDG_SYSTEM_BELL_V1,
+            1,
+            Role::SystemBell,
+        ),
+        (
+            &compositor_protocol::toplevel_tag::XDG_TOPLEVEL_TAG_MANAGER_V1,
+            1,
+            Role::ToplevelTagManager,
+        ),
+        // KDE's own `xdg-decoration`, which a good deal of software still
+        // asks first and warns about when it is not there.
+        (
+            &compositor_protocol::kde_decoration::ORG_KDE_KWIN_SERVER_DECORATION_MANAGER,
+            1,
+            Role::KdeDecorationManager,
         ),
         // Typing through an input method: the application's half and the
         // method's own. Offering both is what lets an on-screen keyboard or

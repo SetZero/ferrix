@@ -320,3 +320,51 @@ zwp_input_method_keyboard_grab_v2 1 event 0 keymap uhu
 zwp_input_method_keyboard_grab_v2 1 event 1 key uuuu
 zwp_input_method_keyboard_grab_v2 1 event 2 modifiers uuuuu
 zwp_input_method_keyboard_grab_v2 1 event 3 repeat_info ii
+zxdg_output_manager_v1 3 request 0 destroy 
+zxdg_output_manager_v1 3 request 1 get_xdg_output no
+zxdg_output_v1 3 request 0 destroy 
+zxdg_output_v1 3 event 0 logical_position ii
+zxdg_output_v1 3 event 1 logical_size ii
+zxdg_output_v1 3 event 2 done 
+zxdg_output_v1 3 event 3 name 2s
+zxdg_output_v1 3 event 4 description 2s
+wp_presentation 2 request 0 destroy 
+wp_presentation 2 request 1 feedback on
+wp_presentation 2 event 0 clock_id u
+wp_presentation_feedback 2 event 0 sync_output o
+wp_presentation_feedback 2 event 1 presented uuuuuuu
+wp_presentation_feedback 2 event 2 discarded 
+ext_idle_notifier_v1 2 request 0 destroy 
+ext_idle_notifier_v1 2 request 1 get_idle_notification nuo
+ext_idle_notifier_v1 2 request 2 get_input_idle_notification 2nuo
+ext_idle_notification_v1 2 request 0 destroy 
+ext_idle_notification_v1 2 event 0 idled 
+ext_idle_notification_v1 2 event 1 resumed 
+zwp_idle_inhibit_manager_v1 1 request 0 destroy 
+zwp_idle_inhibit_manager_v1 1 request 1 create_inhibitor no
+zwp_idle_inhibitor_v1 1 request 0 destroy 
+wp_single_pixel_buffer_manager_v1 1 request 0 destroy 
+wp_single_pixel_buffer_manager_v1 1 request 1 create_u32_rgba_buffer nuuuu
+wp_content_type_manager_v1 1 request 0 destroy 
+wp_content_type_manager_v1 1 request 1 get_surface_content_type no
+wp_content_type_v1 1 request 0 destroy 
+wp_content_type_v1 1 request 1 set_content_type u
+wp_alpha_modifier_v1 1 request 0 destroy 
+wp_alpha_modifier_v1 1 request 1 get_surface no
+wp_alpha_modifier_surface_v1 1 request 0 destroy 
+wp_alpha_modifier_surface_v1 1 request 1 set_multiplier u
+xdg_wm_dialog_v1 1 request 0 destroy 
+xdg_wm_dialog_v1 1 request 1 get_xdg_dialog no
+xdg_dialog_v1 1 request 0 destroy 
+xdg_dialog_v1 1 request 1 set_modal 
+xdg_dialog_v1 1 request 2 unset_modal 
+xdg_system_bell_v1 1 request 0 destroy 
+xdg_system_bell_v1 1 request 1 ring ?o
+xdg_toplevel_tag_manager_v1 1 request 0 destroy 
+xdg_toplevel_tag_manager_v1 1 request 1 set_toplevel_tag os
+xdg_toplevel_tag_manager_v1 1 request 2 set_toplevel_description os
+org_kde_kwin_server_decoration_manager 1 request 0 create no
+org_kde_kwin_server_decoration_manager 1 event 0 default_mode u
+org_kde_kwin_server_decoration 1 request 0 release 
+org_kde_kwin_server_decoration 1 request 1 request_mode u
+org_kde_kwin_server_decoration 1 event 0 mode u
