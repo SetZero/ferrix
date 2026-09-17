@@ -430,7 +430,7 @@ fn described_devices(
                 active_layout_index: Some(group),
                 active_keymap: layouts
                     .get(group as usize)
-                    .map_or_else(|| "none".to_owned(), |(layout, _)| group_name(layout)),
+                    .map_or_else(|| "none".to_owned(), |(layout, _)| layout.label.to_owned()),
                 groups,
                 caps_lock: effective & compositor_xkb::generated::LOCK != 0,
                 num_lock: effective & compositor_xkb::generated::MOD2 != 0,
@@ -447,28 +447,6 @@ fn described_devices(
         }
     }
     out
-}
-
-/// What a layout's group is called, as `xkb_keymap_layout_get_name` would
-/// answer it.
-///
-/// Hyprland's `active_keymap` is that name -- `English (US)`, `German` --
-/// and not the `us` a configuration wrote
-/// (`src/devices/IKeyboard.cpp:306`), because it is what a bar's layout
-/// widget shows a person. libxkbcommon reads it out of the keymap's
-/// `name[Group1]` line, which is in the keymap text this compositor ships,
-/// so this reads it from the same place rather than keeping a second table
-/// that could disagree with the keymap a client compiles.
-fn group_name(layout: &'static compositor_xkb::generated::Layout) -> String {
-    let named = layout
-        .keymap
-        .find("name[1]=\"")
-        .and_then(|at| layout.keymap.get(at + "name[1]=\"".len()..))
-        .and_then(|rest| rest.split_once('"'))
-        .map(|(name, _)| name);
-    // A keymap with no name for its group: say what the configuration
-    // called it, which is more use than Hyprland's own `error`.
-    named.map_or_else(|| layout.described(), str::to_owned)
 }
 
 /// Every layer surface, with the monitor and the level `hyprctl layers`
