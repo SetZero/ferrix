@@ -211,6 +211,15 @@ impl Tiling {
         }
     }
 
+    /// The window the master layout holds as its master, if that is the
+    /// layout and it has one.
+    const fn master_window(&self) -> Option<WindowId> {
+        match self {
+            Self::Master(master) => master.master(),
+            Self::Dwindle(_) => None,
+        }
+    }
+
     /// The master list, when that is the layout.
     const fn master(&mut self) -> Option<&mut Master> {
         match self {
@@ -941,10 +950,24 @@ impl State {
         }
         Ok(self.run(|state| {
             let was_on = state.windows.get(&window).copied();
+            let was_focused = state.focused_window() == Some(window);
             state.ungroup(window);
             state.detach(window);
             state.history.retain(|id| *id != window);
             let _rect = state.floating_rects.remove(&window);
+            // `master:focus_master_on_close`: the focus goes to the master
+            // rather than to whatever the history has next, which is what
+            // `getNextCandidate` does with the option on.
+            if was_focused
+                && state.settings.master.focus_master_on_close
+                && let Some(workspace) = was_on
+                && let Some(master) = state
+                    .workspaces
+                    .get(&workspace)
+                    .and_then(|ws| ws.tiling.master_window())
+            {
+                state.focus(master);
+            }
             // `misc:close_special_on_empty`: a scratchpad whose last window
             // has gone stops being shown, rather than leaving an empty
             // overlay over the screen for a person to dismiss by hand.

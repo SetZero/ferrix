@@ -19,7 +19,7 @@
 
 use crate::WindowId;
 use crate::geometry::Area;
-use crate::settings::{NewStatus, Orientation, Settings};
+use crate::settings::{NewOnActive, NewStatus, Orientation, Settings};
 
 /// One workspace's master layout.
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -39,10 +39,24 @@ impl Master {
                 NewStatus::Slave => false,
                 NewStatus::Inherit => focused.is_some() && focused == self.master,
             };
-        if settings.master.new_on_top {
-            self.order.insert(0, new);
-        } else {
-            self.order.push(new);
+        // `master:new_on_active`: beside the focused window rather than at
+        // one end of the stack. A window that is master with only itself
+        // for a master is skipped, as `addTarget`'s own test does: putting
+        // the new window beside it would make it the master instead.
+        let beside = match settings.master.new_on_active {
+            NewOnActive::End => None,
+            NewOnActive::Before | NewOnActive::After if becomes_master => None,
+            NewOnActive::Before | NewOnActive::After => focused
+                .filter(|id| Some(*id) != self.master)
+                .and_then(|id| self.order.iter().position(|held| *held == id)),
+        };
+        match beside {
+            Some(at) if settings.master.new_on_active == NewOnActive::Before => {
+                self.order.insert(at, new);
+            }
+            Some(at) => self.order.insert(at.saturating_add(1), new),
+            None if settings.master.new_on_top => self.order.insert(0, new),
+            None => self.order.push(new),
         }
         if becomes_master {
             self.master = Some(new);

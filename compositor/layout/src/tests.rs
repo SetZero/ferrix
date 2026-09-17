@@ -3003,3 +3003,59 @@ fn a_floating_window_is_centred_in_its_own_work_area() {
     let _centred = dispatch(&mut fallback, "centerwindow", "");
     assert_eq!(rects(&fallback), [(1, r(480, 270, 960, 540))]);
 }
+
+/// `master:new_on_active`: a new window goes beside the focused one rather
+/// than at one end of the stack.
+#[test]
+fn master_new_on_active_puts_the_window_beside_the_focused_one() {
+    let stack =
+        |state: &State| -> Vec<u64> { rects_on(state, M1).into_iter().map(|(id, _)| id).collect() };
+
+    let mut after = setup(&format!(
+        "{BARE}general:layout = master\nmaster:new_on_active = after\n"
+    ));
+    open(&mut after, &[1, 2, 3]);
+    focus(&mut after, 2);
+    open(&mut after, &[4]);
+    assert_eq!(stack(&after), [1, 2, 4, 3]);
+
+    // `before` applies to every window as it opens, so the stack is
+    // already reversed by the time the fourth arrives: 2 pushed behind the
+    // master, then 3 went in front of 2, and 4 goes in front of 3.
+    let mut before = setup(&format!(
+        "{BARE}general:layout = master\nmaster:new_on_active = before\n"
+    ));
+    open(&mut before, &[1, 2, 3]);
+    assert_eq!(stack(&before), [1, 3, 2]);
+    focus(&mut before, 3);
+    open(&mut before, &[4]);
+    assert_eq!(stack(&before), [1, 4, 3, 2]);
+
+    // `none`, the default: at the end of the stack whatever is focused.
+    let mut plain = setup(&format!("{BARE}general:layout = master\n"));
+    open(&mut plain, &[1, 2, 3]);
+    focus(&mut plain, 2);
+    open(&mut plain, &[4]);
+    assert_eq!(stack(&plain), [1, 2, 3, 4]);
+}
+
+/// `master:focus_master_on_close`: closing a window focuses the master
+/// rather than whatever the history has next.
+#[test]
+fn master_can_take_the_focus_when_a_window_closes() {
+    let mut plain = setup(&format!("{BARE}general:layout = master\n"));
+    open(&mut plain, &[1, 2, 3]);
+    focus(&mut plain, 2);
+    focus(&mut plain, 3);
+    let _gone = plain.window_gone(WindowId(3)).expect("the window");
+    assert_eq!(plain.focused_window(), Some(WindowId(2)), "the history's");
+
+    let mut mastered = setup(&format!(
+        "{BARE}general:layout = master\nmaster:focus_master_on_close = true\n"
+    ));
+    open(&mut mastered, &[1, 2, 3]);
+    focus(&mut mastered, 2);
+    focus(&mut mastered, 3);
+    let _gone = mastered.window_gone(WindowId(3)).expect("the window");
+    assert_eq!(mastered.focused_window(), Some(WindowId(1)));
+}

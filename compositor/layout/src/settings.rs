@@ -106,6 +106,26 @@ pub struct MasterSettings {
     /// `master:always_keep_position`: one window alone keeps the master's
     /// share of the screen rather than filling it.
     pub always_keep_position: bool,
+    /// `master:new_on_active`: where a new window goes relative to the
+    /// focused one, rather than at one end of the stack.
+    pub new_on_active: NewOnActive,
+    /// `master:focus_master_on_close`: closing a window focuses the master
+    /// rather than whatever is nearest.
+    pub focus_master_on_close: bool,
+}
+
+/// `master:new_on_active`: where a new window goes relative to the focused
+/// one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum NewOnActive {
+    /// `none`, the default: at one end of the stack, which end being
+    /// `master:new_on_top`.
+    #[default]
+    End,
+    /// `before`: just before the focused window.
+    Before,
+    /// `after`: just after it.
+    After,
 }
 
 /// Everything the layouts read from the configuration.
@@ -278,6 +298,12 @@ impl Settings {
                 .unwrap_or(2),
                 center_fallback,
                 always_keep_position: config.bool("master:always_keep_position").unwrap_or(false),
+                new_on_active: match config.str("master:new_on_active") {
+                    Some("before") => NewOnActive::Before,
+                    Some("after") => NewOnActive::After,
+                    _ => NewOnActive::End,
+                },
+                focus_master_on_close: config.bool("master:focus_master_on_close").unwrap_or(false),
             },
         }
     }
