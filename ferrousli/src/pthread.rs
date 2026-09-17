@@ -1015,6 +1015,136 @@ pub unsafe extern "C" fn pthread_getname_np(
     }
 }
 
+/// A registration made by [`pthread_atfork`], and the list it is on.
+///
+/// The list is doubly linked so that it can be walked in either direction:
+/// POSIX has the `prepare` handlers run in the reverse of the order they were
+/// registered in, and the `parent` and `child` handlers in that order. New
+/// registrations go on the front, so `older` walks the first way and `newer`
+/// the second.
+///
+/// A node is never removed, because POSIX has no way to unregister one, so a
+/// node once linked is read-only and lives until the process ends.
+struct AtforkHandlers {
+    prepare: Option<extern "C" fn()>,
+    parent: Option<extern "C" fn()>,
+    child: Option<extern "C" fn()>,
+    /// The registration made before this one.
+    older: *mut AtforkHandlers,
+    /// The registration made after this one.
+    newer: *mut AtforkHandlers,
+}
+
+/// The most recent registration, or null.
+static ATFORK_NEWEST: AtomicUsize = AtomicUsize::new(0);
+/// The first registration, or null.
+static ATFORK_OLDEST: AtomicUsize = AtomicUsize::new(0);
+/// Guards the two above, and is held from the `prepare` handlers until the
+/// `parent` or `child` handlers have run, so that no thread registers a
+/// handler in the middle of a fork.
+static ATFORK_LOCK: crate::lock::SpinLock = crate::lock::SpinLock::new();
+
+/// Registers up to three functions to run around a [`crate::process::fork`]:
+/// `prepare` in the forking thread before the fork, `parent` in that thread
+/// afterwards, and `child` in the new process. Any of them may be null.
+///
+/// Returns 0, or `ENOMEM` if the registration could not be allocated. It is
+/// never undone: POSIX gives no way to remove a handler.
+///
+/// A library registers these to take its locks before a fork and release them
+/// on both sides, because the child of a fork has only the forking thread, and
+/// a lock another thread held is held for ever there.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub extern "C" fn pthread_atfork(
+    prepare: Option<extern "C" fn()>,
+    parent: Option<extern "C" fn()>,
+    child: Option<extern "C" fn()>,
+) -> c_int {
+    let node = crate::malloc::malloc(size_of::<AtforkHandlers>()).cast::<AtforkHandlers>();
+    if node.is_null() {
+        return errno::ENOMEM;
+    }
+    ATFORK_LOCK.acquire();
+    let newest = ATFORK_NEWEST.load(Ordering::Relaxed);
+    // SAFETY: `node` is this thread's fresh allocation, large enough and
+    // aligned for the structure, and nothing else refers to it yet.
+    unsafe {
+        node.write(AtforkHandlers {
+            prepare,
+            parent,
+            child,
+            older: with_exposed_provenance_mut(newest),
+            newer: null_mut(),
+        });
+    }
+    let previous = with_exposed_provenance_mut::<AtforkHandlers>(newest);
+    if previous.is_null() {
+        ATFORK_OLDEST.store(node.addr(), Ordering::Relaxed);
+    } else {
+        // SAFETY: the list holds its nodes for the life of the process, and
+        // the lock keeps this the only writer.
+        unsafe { (*previous).newer = node };
+    }
+    ATFORK_NEWEST.store(node.addr(), Ordering::Relaxed);
+    ATFORK_LOCK.release();
+    0
+}
+
+/// Runs the `prepare` handlers, newest first, and leaves [`ATFORK_LOCK`] held
+/// for [`run_atfork_parent`] or [`run_atfork_child`] to release.
+///
+/// Called by `fork` before the `clone`.
+pub(crate) fn run_atfork_prepare() {
+    ATFORK_LOCK.acquire();
+    let mut at =
+        with_exposed_provenance_mut::<AtforkHandlers>(ATFORK_NEWEST.load(Ordering::Relaxed));
+    while !at.is_null() {
+        // SAFETY: a linked node is read-only and lives as long as the process.
+        let node = unsafe { &*at };
+        if let Some(prepare) = node.prepare {
+            prepare();
+        }
+        at = node.older;
+    }
+}
+
+/// Runs the `parent` handlers, oldest first, and releases the lock
+/// [`run_atfork_prepare`] took. Called in the forking process after the
+/// `clone`, whether it succeeded or not.
+pub(crate) fn run_atfork_parent() {
+    run_atfork_after(false);
+}
+
+/// Runs the `child` handlers, oldest first, in the new process.
+///
+/// The lock is reset rather than released: the child is a copy made while the
+/// forking thread held it, so here it is held by the thread running this, and
+/// resetting it is that thread releasing it. No other thread survives a fork
+/// to be woken.
+pub(crate) fn run_atfork_child() {
+    run_atfork_after(true);
+}
+
+/// What [`run_atfork_parent`] and [`run_atfork_child`] share.
+fn run_atfork_after(child: bool) {
+    let mut at =
+        with_exposed_provenance_mut::<AtforkHandlers>(ATFORK_OLDEST.load(Ordering::Relaxed));
+    while !at.is_null() {
+        // SAFETY: a linked node is read-only and lives as long as the process.
+        let node = unsafe { &*at };
+        let hook = if child { node.child } else { node.parent };
+        if let Some(hook) = hook {
+            hook();
+        }
+        at = node.newer;
+    }
+    if child {
+        ATFORK_LOCK.reset();
+    } else {
+        ATFORK_LOCK.release();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

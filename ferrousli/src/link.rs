@@ -1,4 +1,4 @@
-//! `link.h`'s `dl_iterate_phdr` and `dlfcn.h`'s `dladdr`, for a static
+//! `link.h`'s `dl_iterate_phdr` and the whole of `dlfcn.h`, for a static
 //! program, which is the only object loaded.
 //!
 //! An unwinder finds the unwind tables for an address by walking the loaded
@@ -9,9 +9,10 @@
 //! `AT_PHDR` less the `PT_PHDR` segment's address for a position-independent
 //! one, as `thread.rs` computes it for TLS.
 
-use core::ffi::{c_char, c_int, c_ulonglong, c_void};
+use core::ffi::{CStr, c_char, c_int, c_ulonglong, c_void};
 use core::mem::{offset_of, size_of};
 use core::ptr::{null, null_mut, with_exposed_provenance};
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use crate::{auxv, thread};
 
@@ -180,4 +181,83 @@ pub unsafe extern "C" fn dladdr(address: *const c_void, info: *mut DlInfo) -> c_
         i += 1;
     }
     0
+}
+
+/// Loads a shared object: never, in a static program. Returns null, and
+/// [`dlerror`] then says why, as musl's static `dlopen` does.
+///
+/// # Safety
+///
+/// `path` must be null or a NUL-terminated string.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn dlopen(_path: *const c_char, _flags: c_int) -> *mut c_void {
+    fail();
+    null_mut()
+}
+
+/// Looks a symbol up in a loaded object. A static program has loaded none, so
+/// this finds nothing and returns null, as musl's static `dlsym` does.
+///
+/// Rust's `std` calls this to find functions it can do without, and takes null
+/// as "the C library has not got it"; that is how this came to be needed.
+///
+/// # Safety
+///
+/// `name` must be a NUL-terminated string.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn dlsym(_handle: *mut c_void, _name: *const c_char) -> *mut c_void {
+    fail();
+    null_mut()
+}
+
+/// Closes a handle from [`dlopen`], which never gave one out. Returns -1.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub extern "C" fn dlclose(_handle: *mut c_void) -> c_int {
+    fail();
+    -1
+}
+
+/// The message for the last `dlfcn.h` call that failed, or null if none has
+/// since this was last called. Every call here fails the same way.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub extern "C" fn dlerror() -> *mut c_char {
+    if FAILED.swap(false, Ordering::Relaxed) {
+        MESSAGE.as_ptr().cast_mut()
+    } else {
+        null_mut()
+    }
+}
+
+/// Whether a `dlfcn.h` call has failed since [`dlerror`] last reported one.
+static FAILED: AtomicBool = AtomicBool::new(false);
+
+/// What [`dlerror`] says. musl's static build says the same.
+const MESSAGE: &CStr = c"Dynamic loading not supported";
+
+/// Records that a `dlfcn.h` call failed, for [`dlerror`] to report.
+fn fail() {
+    FAILED.store(true, Ordering::Relaxed);
+}
+
+/// Describes the loaded object holding `address` for an unwinder, as glibc
+/// 2.35 and later do. Always answers "not found", and returns -1.
+///
+/// The caller is `_Unwind_Find_FDE` in libgcc, which calls this first and
+/// falls back to [`dl_iterate_phdr`] — which this library does implement, and
+/// which finds the program's unwind tables — when it is told nothing. So the
+/// answer here is not a refusal to unwind; it only costs the fast path.
+///
+/// It is written this way on purpose. Filling `*result` needs glibc's `struct
+/// dl_find_object`, and there is no header in `include/` to take that layout
+/// from: musl has no such structure, and glibc's header is LGPL and must not
+/// be copied. Not touching the structure at all needs no layout. `docs` has
+/// the row for doing this properly, which wants the layout written down from
+/// the ABI first.
+///
+/// # Safety
+///
+/// None: neither pointer is read or written.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub extern "C" fn _dl_find_object(_address: *mut c_void, _result: *mut c_void) -> c_int {
+    -1
 }

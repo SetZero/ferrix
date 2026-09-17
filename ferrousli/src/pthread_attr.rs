@@ -104,6 +104,19 @@ pub struct SchedParam {
 
 const _: () = assert!(size_of::<SchedParam>() == 48);
 
+impl SchedParam {
+    /// The parameters for a thread or process running at `priority`, with
+    /// every reserved field zero. The reserved fields are private, so this is
+    /// how anything outside this module builds one.
+    pub const fn with_priority(priority: c_int) -> Self {
+        Self {
+            sched_priority: priority,
+            reserved: [0; 11],
+            align: [],
+        }
+    }
+}
+
 /// A default stack size set with `pthread_setattr_default_np`, or zero.
 static DEFAULT_STACK: AtomicUsize = AtomicUsize::new(0);
 /// A default guard size set with `pthread_setattr_default_np`, or zero.

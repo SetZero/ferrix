@@ -855,6 +855,16 @@ pub extern "C" fn res_init() -> c_int {
 /// A query buffer's size, for callers building one.
 pub const QUERY_BUF: usize = QUERY_MAX;
 
+/// [`res_init`] under the name glibc exports it by, which is the one a
+/// program linked against glibc calls. Rust's `std` calls it after a name
+/// lookup fails, which is how this came to be needed; here, as in musl, there
+/// is nothing to re-read, because every lookup opens `/etc/resolv.conf`
+/// itself.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub extern "C" fn __res_init() -> c_int {
+    res_init()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

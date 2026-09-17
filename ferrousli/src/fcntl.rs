@@ -271,3 +271,72 @@ pub unsafe extern "C" fn creat64(path: *const c_char, mode: c_uint) -> c_int {
     // SAFETY: the caller's contract is `creat`'s.
     unsafe { creat(path, mode) }
 }
+
+/// Moves up to `len` bytes between `fd_in` and `fd_out` without copying them
+/// through the caller, where one of the two is a pipe.
+///
+/// `off_in` and `off_out` are the offsets to move from and to, each null for a
+/// descriptor's own file position, and each updated when it is not. The kernel
+/// refuses an offset for a pipe.
+///
+/// A cancellation point, as it is in glibc: it blocks until the pipe has room
+/// or data unless `SPLICE_F_NONBLOCK` is set.
+///
+/// # Safety
+///
+/// `off_in` and `off_out` must each be null or valid for a read and a write of
+/// an `off_t`.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn splice(
+    fd_in: c_int,
+    off_in: *mut i64,
+    fd_out: c_int,
+    off_out: *mut i64,
+    len: usize,
+    flags: c_uint,
+) -> isize {
+    // SAFETY: the caller vouches for both offsets.
+    let ret = unsafe {
+        crate::cancel::syscall_cp(
+            nr::SPLICE,
+            fd_in as usize,
+            off_in.addr(),
+            fd_out as usize,
+            off_out.addr(),
+            len,
+            flags as usize,
+        )
+    };
+    errno::from_syscall(ret)
+}
+
+/// Moves up to the `count` buffers at `iov` into or out of the pipe `fd`
+/// without copying them, and returns how many bytes moved.
+///
+/// A cancellation point, for the reason [`splice`] is one.
+///
+/// # Safety
+///
+/// `iov` must be valid for reads of `count` `struct iovec`, each naming a
+/// buffer the kernel may read or write for as long as the call runs.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn vmsplice(
+    fd: c_int,
+    iov: *const crate::uio::Iovec,
+    count: usize,
+    flags: c_uint,
+) -> isize {
+    // SAFETY: the caller vouches for the vector and its buffers.
+    let ret = unsafe {
+        crate::cancel::syscall_cp(
+            nr::VMSPLICE,
+            fd as usize,
+            iov.addr(),
+            count,
+            flags as usize,
+            0,
+            0,
+        )
+    };
+    errno::from_syscall(ret)
+}

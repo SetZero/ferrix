@@ -468,3 +468,33 @@ mod tests {
         let _ = unsafe { syscall::syscall2(nr::CLOSE, fd as usize, 0) };
     }
 }
+
+// glibc's versioned names for the two speed setters.
+//
+// glibc has exported `cfsetispeed` and `cfsetospeed` as `cfsetispeed@GLIBC_2.2.5`
+// and `cfsetospeed@GLIBC_2.2.5` since x86-64 glibc existed, and Rust's `libc`
+// crate asks for them by those names on a `*-linux-gnu` target. A program
+// linked against this library therefore has two undefined symbols that the
+// plain names above do not satisfy — which is what the spike that linked
+// uutils/coreutils here found.
+//
+// Each is a tail jump to the function above rather than a `.symver` alias.
+// `.symver` requires the symbol it renames to be defined in the same object
+// file, and the functions above are Rust, which rustc may put in any codegen
+// unit; a jump is a relocation and works wherever the target landed. The cost
+// is one instruction on a call that writes two fields.
+#[cfg(all(not(test), target_arch = "x86_64"))]
+core::arch::global_asm!(
+    ".pushsection .text.ferrousli_termios_versioned,\"ax\",@progbits",
+    ".p2align 4",
+    ".globl \"cfsetispeed@GLIBC_2.2.5\"",
+    ".type \"cfsetispeed@GLIBC_2.2.5\", @function",
+    "\"cfsetispeed@GLIBC_2.2.5\":",
+    "jmp cfsetispeed",
+    ".p2align 4",
+    ".globl \"cfsetospeed@GLIBC_2.2.5\"",
+    ".type \"cfsetospeed@GLIBC_2.2.5\", @function",
+    "\"cfsetospeed@GLIBC_2.2.5\":",
+    "jmp cfsetospeed",
+    ".popsection",
+);

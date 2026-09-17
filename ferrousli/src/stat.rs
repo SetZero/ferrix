@@ -445,9 +445,32 @@ pub unsafe extern "C" fn __fxstatat(
 /// read of two `struct timeval`.
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub unsafe extern "C" fn utimes(path: *const c_char, times: *const Timeval) -> c_int {
+    // SAFETY: the caller's contract is `utimes_at`'s.
+    unsafe { utimes_at(path, times, 0) }
+}
+
+/// Sets `path`'s times as [`utimes`] does, but on the link itself when `path`
+/// names a symbolic link rather than on what it points at.
+///
+/// # Safety
+///
+/// As [`utimes`].
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn lutimes(path: *const c_char, times: *const Timeval) -> c_int {
+    // SAFETY: the caller's contract is `utimes_at`'s.
+    unsafe { utimes_at(path, times, AT_SYMLINK_NOFOLLOW) }
+}
+
+/// What [`utimes`] and [`lutimes`] share: the microsecond times converted to
+/// nanoseconds and given to `utimensat` with `flags`.
+///
+/// # Safety
+///
+/// As [`utimes`].
+unsafe fn utimes_at(path: *const c_char, times: *const Timeval, flags: c_int) -> c_int {
     if times.is_null() {
         // SAFETY: the caller passes a NUL-terminated string.
-        return unsafe { utimensat(AT_FDCWD, path, null(), 0) };
+        return unsafe { utimensat(AT_FDCWD, path, null(), flags) };
     }
     // SAFETY: the caller passes two `struct timeval`.
     let given = unsafe { times.cast::<[Timeval; 2]>().read() };
@@ -464,5 +487,5 @@ pub unsafe extern "C" fn utimes(path: *const c_char, times: *const Timeval) -> c
     }
     // SAFETY: the caller passes a NUL-terminated string, and `specs` is a live
     // local.
-    unsafe { utimensat(AT_FDCWD, path, specs.as_ptr(), 0) }
+    unsafe { utimensat(AT_FDCWD, path, specs.as_ptr(), flags) }
 }

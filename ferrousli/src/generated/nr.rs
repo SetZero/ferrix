@@ -440,3 +440,7 @@ pub const INOTIFY_RM_WATCH: usize = 255;
 pub const GETRESUID: usize = 118;
 /// `getresgid`.
 pub const GETRESGID: usize = 120;
+/// `splice`.
+pub const SPLICE: usize = 275;
+/// `vmsplice`.
+pub const VMSPLICE: usize = 278;

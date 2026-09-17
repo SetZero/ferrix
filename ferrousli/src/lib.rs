@@ -50,6 +50,7 @@ pub mod fcntl;
 pub mod fenv;
 pub mod float;
 pub mod fnmatch;
+pub mod fortify;
 pub mod futex;
 pub mod getopt;
 pub mod glob;
@@ -77,6 +78,7 @@ pub mod mutex;
 pub mod netdb;
 pub mod nl_types;
 pub mod poll;
+pub mod posix_spawn;
 pub mod process;
 pub mod pthread;
 pub mod pthread_attr;
@@ -145,14 +147,30 @@ fn panic(_info: &core::panic::PanicInfo<'_>) -> ! {
     syscall::trap()
 }
 
-/// The unwinder's personality routine, which nothing ever calls.
-///
-/// This target's precompiled `core` was built to unwind, and its unwind tables
-/// name this symbol even though this library aborts instead. Without a
-/// definition, every C program fails to link. A frame is never unwound through,
-/// so reaching this is a bug, and it traps.
-#[cfg(not(test))]
-#[unsafe(no_mangle)]
-pub extern "C" fn rust_eh_personality() {
-    syscall::trap()
-}
+// The unwinder's personality routine, which nothing ever calls.
+//
+// This target's precompiled `core` was built to unwind, and its unwind tables
+// name this symbol even though this library aborts instead. Without a
+// definition, every C program fails to link. A frame is never unwound
+// through, so reaching this is a bug, and it traps: `ud2`, which is what
+// `syscall::trap` emits.
+//
+// It is weak, and it is assembly because of that. A Rust program linked
+// against this library brings its own `std`, which defines
+// `rust_eh_personality` too, and two strong definitions is a link error — the
+// first thing that stopped uutils/coreutils linking here. A weak one loses to
+// `std`'s, which is the right outcome: a program that really unwinds should
+// use the personality routine belonging to the code that laid the unwind
+// tables down. stable Rust cannot mark a `#[no_mangle]` function weak, and in
+// assembly `.weak` is one directive.
+#[cfg(all(not(test), target_arch = "x86_64"))]
+core::arch::global_asm!(
+    ".pushsection .text.rust_eh_personality,\"ax\",@progbits",
+    ".p2align 4",
+    ".weak rust_eh_personality",
+    ".type rust_eh_personality, @function",
+    "rust_eh_personality:",
+    "ud2",
+    ".size rust_eh_personality, . - rust_eh_personality",
+    ".popsection",
+);

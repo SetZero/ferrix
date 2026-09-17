@@ -32,10 +32,32 @@ const UNCHANGED: usize = c_uint::MAX as usize;
 /// AArch64's different `clone` argument orders do not matter.
 ///
 /// The child's thread control block is a copy of the parent's, so its thread
-/// id is recorded again. Nothing else is done for the child yet: there are no
-/// `pthread_atfork` handlers and no other threads' state to discard.
+/// id is recorded again. No other thread's state is discarded yet.
+///
+/// The `pthread_atfork` handlers run around the `clone`: `prepare` before it
+/// in this thread, then `parent` here and `child` there. They run even when
+/// the `clone` fails, as POSIX requires — a `prepare` handler has taken locks
+/// that its `parent` handler must release whatever happened.
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn fork() -> c_int {
+    crate::pthread::run_atfork_prepare();
+    let ret = fork_bare();
+    if ret == 0 {
+        crate::pthread::run_atfork_child();
+    } else {
+        crate::pthread::run_atfork_parent();
+    }
+    ret
+}
+
+/// [`fork`] without the `pthread_atfork` handlers.
+///
+/// `posix_spawn` forks this way. POSIX leaves it unspecified whether the
+/// handlers run there, and glibc does not run them, for a reason worth
+/// keeping: a program calls `posix_spawn` rather than `fork` precisely to
+/// avoid what the handlers are working around, and a handler that takes a
+/// lock another thread holds would hang the spawn.
+pub(crate) fn fork_bare() -> c_int {
     // SAFETY: without `CLONE_VM` the child gets a copy of the address space,
     // so nothing either process holds is shared with the other.
     let ret = unsafe { syscall::syscall6(nr::CLONE, SIGCHLD, 0, 0, 0, 0, 0) };
@@ -153,12 +175,30 @@ fn join(dir: &[u8], file: &[u8], buf: &mut [u8]) -> bool {
 /// strings ending in a null pointer, and `environ` a valid environment.
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub unsafe extern "C" fn execvp(file: *const c_char, argv: *const *const c_char) -> c_int {
-    // SAFETY: the caller passes a NUL-terminated string.
-    let name = unsafe { CStr::from_ptr(file) }.to_bytes();
     let envp = environ
         .load(Ordering::Relaxed)
         .cast_const()
         .cast::<*const c_char>();
+    // SAFETY: the caller's contract is `execvpe`'s, and `environ` is this
+    // library's own.
+    unsafe { execvpe(file, argv, envp) }
+}
+
+/// [`execvp`] with the environment given rather than taken from `environ`.
+/// glibc's extension, which musl has too.
+///
+/// # Safety
+///
+/// As [`execvp`], with `envp` an array of NUL-terminated strings ending in a
+/// null pointer.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn execvpe(
+    file: *const c_char,
+    argv: *const *const c_char,
+    envp: *const *const c_char,
+) -> c_int {
+    // SAFETY: the caller passes a NUL-terminated string.
+    let name = unsafe { CStr::from_ptr(file) }.to_bytes();
     if name.is_empty() {
         errno::set(errno::ENOENT);
         return -1;

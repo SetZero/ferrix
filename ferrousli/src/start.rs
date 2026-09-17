@@ -8,7 +8,7 @@
 //! stack protector reads the canary through the thread pointer in its first
 //! instructions, and that includes constructors.
 
-use core::ffi::{c_char, c_int, c_void};
+use core::ffi::{CStr, c_char, c_int, c_void};
 use core::sync::atomic::Ordering;
 
 use crate::exit::exit;
@@ -19,17 +19,30 @@ use crate::{auxv, thread};
 /// convention makes passing unused ones harmless.
 type Main = unsafe extern "C" fn(c_int, *mut *mut c_char, *mut *mut c_char) -> c_int;
 
-/// A constructor or destructor from `.init_array` or `.fini_array`.
+/// A destructor from `.fini_array`, which is called with no arguments.
 pub type Hook = Option<unsafe extern "C" fn()>;
+
+/// A constructor from `.preinit_array` or `.init_array`.
+///
+/// glibc and musl both call these with the program's `argc`, `argv` and
+/// `envp`, and a constructor compiled for Linux may read them. This library
+/// called them with nothing, which no program has yet been found to notice,
+/// but which is the contract being wrong rather than merely unused: glibc's
+/// `call_init` passes all three, and musl's `__libc_start_main` does too.
+///
+/// A constructor that takes no arguments is still safe to call through this
+/// type, for the reason [`Main`] may be called with three: on x86-64 the extra
+/// arguments sit in registers the callee does not read.
+pub type InitHook = Option<unsafe extern "C" fn(c_int, *mut *mut c_char, *mut *mut c_char)>;
 
 unsafe extern "C" {
     // Bounds the linker defines around the arrays in a static program. Only
     // their addresses are used. The `end` symbols are one past the last entry
     // and are never read.
-    static __preinit_array_start: Hook;
-    static __preinit_array_end: Hook;
-    static __init_array_start: Hook;
-    static __init_array_end: Hook;
+    static __preinit_array_start: InitHook;
+    static __preinit_array_end: InitHook;
+    static __init_array_start: InitHook;
+    static __init_array_end: InitHook;
     static __fini_array_start: Hook;
     static __fini_array_end: Hook;
 }
@@ -72,11 +85,20 @@ pub unsafe extern "C" fn __libc_start_main(
         run(
             &raw const __preinit_array_start,
             &raw const __preinit_array_end,
+            argc,
+            argv,
+            envp,
         );
     }
     // SAFETY: as above.
     unsafe {
-        run(&raw const __init_array_start, &raw const __init_array_end);
+        run(
+            &raw const __init_array_start,
+            &raw const __init_array_end,
+            argc,
+            argv,
+            envp,
+        );
     }
 
     // SAFETY: `main` is the program's, called with the kernel's arguments.
@@ -84,20 +106,29 @@ pub unsafe extern "C" fn __libc_start_main(
     exit(status)
 }
 
-/// Calls each hook in `start..end`, in order.
+/// Calls each constructor in `start..end`, in order, with the program's
+/// arguments and environment.
 ///
 /// # Safety
 ///
-/// The range must hold hooks that are sound to call now.
-unsafe fn run(start: *const Hook, end: *const Hook) {
+/// The range must hold constructors that are sound to call now, and `argv` and
+/// `envp` must be the program's.
+unsafe fn run(
+    start: *const InitHook,
+    end: *const InitHook,
+    argc: c_int,
+    argv: *mut *mut c_char,
+    envp: *mut *mut c_char,
+) {
     let mut at = start;
     while at < end {
         // SAFETY: the caller vouches that `at` is inside the array, and the
         // array sections are pointer-aligned.
         let hook = unsafe { at.read() };
         if let Some(hook) = hook {
-            // SAFETY: the caller vouches for calling each hook.
-            unsafe { hook() };
+            // SAFETY: the caller vouches for calling each constructor, and for
+            // the arguments being the program's.
+            unsafe { hook(argc, argv, envp) };
         }
         at = at.wrapping_add(1);
     }
@@ -121,4 +152,32 @@ pub unsafe fn run_fini() {
             unsafe { hook() };
         }
     }
+}
+
+/// The glibc version this library claims to be, as `gnu/libc-version.h`
+/// declares it: a NUL-terminated string such as `2.39`.
+///
+/// It is a claim about which glibc interfaces exist here, not a version of
+/// this library. A program asks so that it can decide whether a newer
+/// interface is available; Rust's `std` is one, which is how this came to be
+/// needed. 2.39 is the newest glibc whose additions this library has —
+/// `__isoc23_strtol` and its relatives from 2.38, `fchmodat2` from 2.39.
+/// **Raise it when an interface from a later glibc is added, and not before:
+/// a number that is too high makes callers take a path that is not here.**
+const LIBC_VERSION: &CStr = c"2.39";
+
+/// The release this library claims to be, as glibc reports it. glibc says
+/// `stable` for a released version, and so does this.
+const LIBC_RELEASE: &CStr = c"stable";
+
+/// glibc's `gnu_get_libc_version`.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub extern "C" fn gnu_get_libc_version() -> *const c_char {
+    LIBC_VERSION.as_ptr()
+}
+
+/// glibc's `gnu_get_libc_release`.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub extern "C" fn gnu_get_libc_release() -> *const c_char {
+    LIBC_RELEASE.as_ptr()
 }

@@ -34,6 +34,17 @@ pub extern "C" fn __errno_location() -> *mut c_int {
     ERRNO.with(core::cell::Cell::as_ptr)
 }
 
+/// The calling thread's `errno`.
+///
+/// C reads `errno` directly; this is for the code here that has to look at
+/// what a call it made left behind, such as `posix_spawn` reporting the
+/// failure by return value rather than through `errno`.
+pub fn get() -> c_int {
+    // SAFETY: the pointer is the calling thread's `errno`, which lives as
+    // long as the thread.
+    unsafe { __errno_location().read() }
+}
+
 /// Sets the calling thread's `errno`.
 pub fn set(value: c_int) {
     // SAFETY: the pointer is the calling thread's `errno`, which lives as
