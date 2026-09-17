@@ -95,8 +95,10 @@ mod damage;
 mod frame;
 mod patterns;
 
-#[cfg(test)]
-mod golden;
+// Public, and not only for this crate's own tests: `compositor/term` draws
+// its expected image with its own font and its own grid, and the images live
+// together whichever crate blesses one.
+pub mod golden;
 #[cfg(test)]
 mod tests;
 

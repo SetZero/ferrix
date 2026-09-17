@@ -80,8 +80,8 @@ const READ_SECTORS: u64 = 2;
 const PARTITIONS: &[u8] = b"major minor  #blocks  name\n\n 254      250         32 ferrixcheck0\n";
 
 /// The character nodes, in the order `/dev` lists them.
-const STATIC_NODES: [&[u8]; 7] = [
-    b"null", b"zero", b"full", b"random", b"urandom", b"tty", b"console",
+const STATIC_NODES: [&[u8]; 8] = [
+    b"null", b"zero", b"full", b"random", b"urandom", b"tty", b"console", b"ptmx",
 ];
 
 /// Where `/dev` is staged in the check's page.

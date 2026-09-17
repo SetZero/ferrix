@@ -1052,6 +1052,23 @@ fn terminal_ioctls_match_the_generic_header() {
     assert_eq!(types::TIOCINQ, types::FIONREAD, "TIOCINQ is FIONREAD");
     assert_eq!(types::TIOCNOTTY, 0x5422, "TIOCNOTTY is 'T' 0x22");
     assert_eq!(types::TIOCGSID, 0x5429, "TIOCGSID is 'T' 0x29");
+
+    // The two pseudoterminal requests carry a direction and a size, which
+    // the plain `'T' nn` numbers above do not: `_IOR` is two in the top two
+    // bits, `_IOW` is one, and the size is the argument's.
+    let encode = |direction: u32, size: u32, number: u32| {
+        (direction << 30) | (size << 16) | (u32::from(b'T') << 8) | number
+    };
+    assert_eq!(
+        types::TIOCGPTN,
+        encode(2, 4, 0x30),
+        "TIOCGPTN is _IOR('T', 0x30, unsigned int)"
+    );
+    assert_eq!(
+        types::TIOCSPTLCK,
+        encode(1, 4, 0x31),
+        "TIOCSPTLCK is _IOW('T', 0x31, int)"
+    );
 }
 
 #[test]

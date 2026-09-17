@@ -15,6 +15,5 @@
 //! attach and commit, then redraw whenever it is configured again.
 
 pub mod client;
-pub mod shm;
 
 pub use client::{Shape, run, run_on, run_shaped, run_shaped_on};

@@ -89,6 +89,7 @@ version = "0.1.0"
 dependencies = [
  "compositor-protocol",
  "compositor-render",
+ "compositor-shm",
  "compositor-socket",
  "compositor-wire",
  "libc",
@@ -128,10 +129,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "compositor-shm"
+version = "0.1.0"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "compositor-socket"
 version = "0.1.0"
 dependencies = [
  "compositor-wire",
+ "libc",
+]
+
+[[package]]
+name = "compositor-term"
+version = "0.1.0"
+dependencies = [
+ "compositor-evecho",
+ "compositor-layout",
+ "compositor-protocol",
+ "compositor-render",
+ "compositor-shm",
+ "compositor-socket",
+ "compositor-wire",
+ "compositor-xkb",
+ "ferrix-fbtext",
  "libc",
 ]
 
@@ -141,6 +165,10 @@ version = "0.1.0"
 
 [[package]]
 name = "compositor-xkb"
+version = "0.1.0"
+
+[[package]]
+name = "ferrix-fbtext"
 version = "0.1.0"
 
 [[package]]

@@ -93,6 +93,7 @@ const EXPECTED: [(&str, &str); 3] = [
 const CLIENT_PATH: &str = "bin/pattern";
 const CTL_PATH: &str = "bin/hyprctl";
 const PLUG_PATH: &str = "bin/plug";
+const TERM_PATH: &str = "bin/term";
 const CONFIG_PATH: &str = "etc/hyprland.conf";
 
 /// The instance the control socket is under, which `hyprctl` finds by
@@ -297,6 +298,24 @@ bind = SUPER, A, exec, /bin/hyprctl --batch dispatch movefocus l ; \
 dispatch movewindow r
 ";
 
+/// The picture a terminal makes, which the ninth boot requires.
+const TERMINAL_EXPECTED: [(&str, &str); 1] = [(
+    "a terminal with a program's output in it",
+    "compositor/render/tests/data/terminal-hyprctl-version.xrle",
+)];
+
+/// The configuration the ninth boot is given: a terminal, and nothing else.
+///
+/// `docs/ROADMAP.md` stage 18's exit asks for a terminal on the compositor.
+/// The program it runs is `hyprctl version`, which prints three lines and
+/// stops: short enough to be an expected image, and a round trip through
+/// the control socket on the way, so what is on the screen came from the
+/// compositor through a pseudoterminal and back.
+const TERMINAL_CONFIG: &str = "\
+# Carried into the initramfs by `cargo xtask test-compositor`.
+exec-once = /bin/term /bin/hyprctl version
+";
+
 /// The configuration the second boot is given: a bar through
 /// `zwlr_layer_shell_v1`, and the same two windows.
 ///
@@ -410,12 +429,13 @@ fn boot_and_dump(
     client: &Path,
     ctl: &Path,
     plug: &Path,
+    term: &Path,
     config: &str,
     wanted: &Wanted<'_>,
     binds: &[(&str, &[&str])],
     args: &Args,
 ) -> Result<(Vec<Image>, Vec<String>)> {
-    let (image, kernel) = build_image(arch, program, [client, ctl, plug], config, args)?;
+    let (image, kernel) = build_image(arch, program, [client, ctl, plug, term], config, args)?;
 
     let port = free_port()?;
     let mut qemu_args = args.clone();
@@ -464,7 +484,7 @@ fn boot_and_dump(
                 // program that could not start.
                 let _ = watching.read_more(Instant::now() + Duration::from_secs(2), |_| false)?;
                 return Err(with_the_transcript(
-                    unexpected(arch, what, &screen, found, count),
+                    &unexpected(arch, what, &screen, found, count),
                     watching,
                 ));
             }
@@ -521,6 +541,10 @@ fn boot_and_dump(
         if !binds.is_empty() {
             ask_the_sockets(&mut qmp, watching, arch)?;
         }
+        // Whatever else the guest said by now, so that what is checked
+        // against the transcript is what the boot actually printed rather
+        // than what had been read when the last picture matched.
+        let _ = watching.read_more(Instant::now() + Duration::from_secs(2), |_| false)?;
         said = watching
             .lines()
             .iter()
@@ -539,7 +563,7 @@ fn boot_and_dump(
 fn build_image(
     arch: Arch,
     program: &Path,
-    programs: [&Path; 3],
+    programs: [&Path; 4],
     config: &str,
     args: &Args,
 ) -> Result<(PathBuf, PathBuf)> {
@@ -554,7 +578,7 @@ fn build_image(
         std::fs::read(path)
             .map_err(|error| Error::new(format!("reading {}: {error}", path.display())))
     };
-    let [client, ctl, plug] = programs;
+    let [client, ctl, plug, term] = programs;
     let carried = [
         crate::ports::File {
             path: CLIENT_PATH,
@@ -570,6 +594,11 @@ fn build_image(
             path: PLUG_PATH,
             mode: 0o755,
             bytes: read(plug)?,
+        },
+        crate::ports::File {
+            path: TERM_PATH,
+            mode: 0o755,
+            bytes: read(term)?,
         },
         crate::ports::File {
             path: CONFIG_PATH,
@@ -690,7 +719,7 @@ fn settle_on(qmp: &mut Qmp, device: &str, dump: &Path, want: &[u8]) -> Result<Im
 ///
 /// A picture that is not the one expected says nothing about why; the lines
 /// the compositor and its clients printed usually do.
-fn with_the_transcript(error: Error, watching: &Watching<'_>) -> Error {
+fn with_the_transcript(error: &Error, watching: &Watching<'_>) -> Error {
     let every: Vec<&String> = watching.lines().iter().chain(watching.after()).collect();
     let said: Vec<String> = every
         .iter()
@@ -743,12 +772,14 @@ pub(crate) fn test_compositor(args: &Args) -> Result<()> {
         let client = build(arch, "compositor-pattern", "pattern")?;
         let ctl = build(arch, "compositor-ctl", "hyprctl")?;
         let plug = build(arch, "compositor-plug", "plug")?;
+        let term = build(arch, "compositor-term", "term")?;
         let (screens, said) = boot_and_dump(
             arch,
             &program,
             &client,
             &ctl,
             &plug,
+            &term,
             CONFIG,
             &Wanted {
                 states: &EXPECTED,
@@ -810,6 +841,7 @@ pub(crate) fn test_compositor(args: &Args) -> Result<()> {
                 &client,
                 &ctl,
                 &plug,
+                &term,
                 config,
                 &Wanted {
                     states: &[wanted],
@@ -828,10 +860,11 @@ pub(crate) fn test_compositor(args: &Args) -> Result<()> {
             );
         }
 
-        test_groups(arch, &program, &client, &ctl, &plug, args)?;
-        test_monitors(arch, &program, &client, &ctl, &plug, args)?;
-        test_plugins(arch, &program, &client, &ctl, &plug, args)?;
-        test_animation(arch, &program, &client, &ctl, &plug, args)?;
+        test_groups(arch, &program, &client, &ctl, &plug, &term, args)?;
+        test_monitors(arch, &program, &client, &ctl, &plug, &term, args)?;
+        test_plugins(arch, &program, &client, &ctl, &plug, &term, args)?;
+        test_animation(arch, &program, &client, &ctl, &plug, &term, args)?;
+        test_terminal(arch, &program, &client, &ctl, &plug, &term, args)?;
     }
     Ok(())
 }
@@ -848,6 +881,7 @@ fn test_monitors(
     client: &Path,
     ctl: &Path,
     plug: &Path,
+    term: &Path,
     args: &Args,
 ) -> Result<()> {
     let (screens, said) = boot_and_dump(
@@ -856,6 +890,7 @@ fn test_monitors(
         client,
         ctl,
         plug,
+        term,
         MONITOR_CONFIG,
         &Wanted {
             states: &MONITOR_EXPECTED,
@@ -885,6 +920,59 @@ fn test_monitors(
     monitors_were_said(arch, &said)
 }
 
+/// A ninth boot: a terminal, with a program running in it.
+///
+/// The whole path at once: the compositor starts `compositor/term`, which
+/// opens `/dev/ptmx`, opens the slave, runs a program on it with the slave
+/// for its session and its three descriptors, reads what it wrote back
+/// through the master, draws it in a grid with `libs/fbtext`'s font, and
+/// puts that in a `wl_shm` buffer the compositor composes into the frame.
+/// Every pixel of that frame is compared against the one
+/// `compositor/term`'s own test blesses.
+fn test_terminal(
+    arch: Arch,
+    program: &Path,
+    client: &Path,
+    ctl: &Path,
+    plug: &Path,
+    term: &Path,
+    args: &Args,
+) -> Result<()> {
+    let (screens, said) = boot_and_dump(
+        arch,
+        program,
+        client,
+        ctl,
+        plug,
+        term,
+        TERMINAL_CONFIG,
+        &Wanted {
+            states: &TERMINAL_EXPECTED,
+            others: &[],
+            moving: None,
+        },
+        &[],
+        args,
+    )?;
+    let Some(screen) = screens.first() else {
+        return Err(Error::new(format!("{arch}: the terminal boot took no picture")));
+    };
+    // The terminal said what it drew, which says the pseudoterminal carried
+    // the program's output rather than the picture having come from
+    // somewhere else.
+    if !said.iter().any(|line| line.contains("term: ")) {
+        return Err(Error::new(format!(
+            "{arch}: the terminal never said anything"
+        )));
+    }
+    println!(
+        "  {arch}: a terminal ran a program on a pseudoterminal and drew its output, every one \
+         of {} pixels",
+        screen.width * screen.height
+    );
+    Ok(())
+}
+
 /// An eighth boot: a window sliding, watched frame by frame.
 ///
 /// `docs/ROADMAP.md` stage 19's exit asks for a sequence of screendumps
@@ -899,6 +987,7 @@ fn test_animation(
     client: &Path,
     ctl: &Path,
     plug: &Path,
+    term: &Path,
     args: &Args,
 ) -> Result<()> {
     let (screens, said) = boot_and_dump(
@@ -907,6 +996,7 @@ fn test_animation(
         client,
         ctl,
         plug,
+        term,
         ANIMATED_CONFIG,
         &Wanted {
             states: &ANIMATED_EXPECTED,
@@ -998,6 +1088,7 @@ fn test_plugins(
     client: &Path,
     ctl: &Path,
     plug: &Path,
+    term: &Path,
     args: &Args,
 ) -> Result<()> {
     let (screens, said) = boot_and_dump(
@@ -1006,6 +1097,7 @@ fn test_plugins(
         client,
         ctl,
         plug,
+        term,
         PLUGIN_CONFIG,
         &Wanted {
             states: &PLUGIN_EXPECTED,
@@ -1143,6 +1235,7 @@ fn test_groups(
     client: &Path,
     ctl: &Path,
     plug: &Path,
+    term: &Path,
     args: &Args,
 ) -> Result<()> {
     let (screens, said) = boot_and_dump(
@@ -1151,6 +1244,7 @@ fn test_groups(
         client,
         ctl,
         plug,
+        term,
         GROUP_CONFIG,
         &Wanted {
             states: &GROUPED_EXPECTED,

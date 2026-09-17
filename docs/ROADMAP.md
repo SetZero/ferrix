@@ -4046,7 +4046,7 @@ a compositor may not open its devices blocking: the first version read the
 keyboard once round a loop that also had the clients and the screen in it,
 and stopped all three until somebody typed.
 
-**Done — the exit criterion, all but the terminal (2026-09-17).** `cargo
+**Done — the exit criterion (2026-09-17).** `cargo
 xtask test-compositor` now does what this stage's exit asks, on x86-64 and
 AArch64. The compositor starts from a `hyprland.conf` carried in the
 initramfs; its `exec-once` lines start the two clients; they tile
@@ -4133,8 +4133,14 @@ Ferrix, `cargo xtask test-compositor` boots a second time with a bar in the
 `hyprland.conf` and requires the same picture from QEMU's screendump. Every
 one of 786,432 pixels, on x86-64 and AArch64.
 
-What this stage still owes: a terminal a person can type in at the serial
-console, which waits on a pty.
+**Done — the terminal (2026-09-17).** The last thing this stage owed. It
+needed pseudoterminals, which the kernel did not have and now does, and a
+terminal emulator, which is `compositor/term`: stage 19's own entry has the
+whole of it, since that is where the work landed. `cargo xtask test-pty`
+proves the pair without a window and `cargo xtask test-compositor` boots a
+terminal in the compositor and requires the picture it makes.
+
+This stage's exit criterion is met in full.
 
 **Still to do, in the order visible iterations need it.** Iteration 1, a
 blank screen on Ferrix in QEMU, pulls a first cut of stage 17 forward (the
@@ -4157,6 +4163,35 @@ What makes it Hyprland rather than a tiling compositor: animations with its
 bezier curves, rounded corners, blur and shadows, dimming and opacity rules,
 special workspaces, groups, multi-monitor with per-monitor workspaces and
 scaling, the plugin-shaped extension points, and the rest of `hyprctl`.
+
+**Done — a terminal (2026-09-17).** Stage 18's exit asked for one, and it
+needed pseudoterminals the kernel did not have. It has them now:
+`/dev/ptmx` gives a master, `TIOCGPTN` says which pair it is, `TIOCSPTLCK`
+unlocks it and `/dev/pts/<n>` is the slave. What the master writes goes
+through the same line discipline the console's terminal has -- `ICANON`,
+`ECHO`, `ISIG` and the rest, honoured exactly as they are there -- and the
+echo goes back to the master, because on a pseudoterminal the *terminal* is
+the program at that end. What the slave writes has `OPOST` applied and is
+read by the master. Closing the master takes the pair away: the slave's
+reads end and its writes fail, which is what a shell reads as "the terminal
+has gone". The slave answers every terminal request, including the
+session and process-group ones, with a pair's own session and foreground
+group; the master answers those that act on the pair, as Linux's does.
+
+`compositor/term` is the terminal: a character grid with the escape
+sequences a shell and its programs actually send (the cursor, the erases,
+the colours, the cursor's visibility), drawn with `libs/fbtext`'s Spleen
+font -- the same one the kernel's panic screen uses, so the image carries
+one typeface -- into a `wl_shm` buffer. It starts a program on a pair with
+the slave for its session and its three descriptors, sends what is typed
+back through the master, and tells the program when the window is resized.
+`--headless` runs the program with no window at all, which is what
+`cargo xtask test-pty` boots: a program's output, through the pair, into the
+grid, printed a row at a time.
+
+`cargo xtask test-compositor` boots a ninth time with `exec-once = /bin/term
+/bin/hyprctl` and requires the picture the terminal makes, pixel for pixel,
+on x86-64 and on AArch64.
 
 **Begun — plugins (2026-09-17).** A plugin is a program the compositor
 starts and talks to, not a shared object it loads into itself. Hyprland's
@@ -4390,8 +4425,7 @@ Vulkan driver exists — the choice is the customer's, recorded in
 software fallback with a stated frame-time bound, so the compositor is never
 GPU-only.
 
-**What this stage still owes, in the order it is worth doing.** The GPU,
-which is the largest thing left
+**What this stage still owes.** The GPU, which is the largest thing left
 in this tree: virtio-gpu's 3D commands through a render node,
 `zwp_linux_dmabuf`, GBM-shaped allocation, and a driver stack -- Mesa's virgl
 and Venus on ferrousli, or a Rust path over Vulkan -- that does not exist on
@@ -4403,6 +4437,21 @@ corners and blur behind a translucent client, at the stated frame rate under
 the GPU path and inside the stated bound under the fallback; two monitors on
 QEMU with independent workspaces; a plugin-shaped extension loaded from the
 configuration.
+
+**Where the exit stands (2026-09-17).** Every part of it but the GPU path is
+met, and by `cargo xtask test-compositor` on x86-64 and on AArch64:
+
+* the sliding window with its decorations on, as a sequence of screendumps,
+  with the guest's own frame times reported and the renderer's software
+  bound stated and checked in release by `compositor/render`;
+* two monitors, each with a workspace of its own and each required to be the
+  picture blessed for it;
+* a plugin loaded from `plugin = /bin/plug`, adding a dispatcher a keybind
+  presses.
+
+What is left is the GPU path, and with it the frame rate the exit asks for
+under one: virtio-gpu's 3D commands, `zwp_linux_dmabuf`, and a driver stack
+that does not exist on Ferrix.
 
 ---
 

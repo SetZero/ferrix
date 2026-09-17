@@ -40,6 +40,7 @@ pub(crate) mod mmap_check;
 mod pages;
 pub(crate) mod pipe;
 pub(crate) mod procfs;
+pub(crate) mod pty;
 pub(crate) mod socket;
 pub(crate) mod sockname;
 pub(crate) mod terminal;

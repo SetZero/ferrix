@@ -45,7 +45,7 @@ use ferrix_linux_abi::errno::Errno;
 use ferrix_linux_abi::types::{
     FIONREAD, TCFLSH, TCGETS, TCGETS2, TCIFLUSH, TCIOFLUSH, TCION, TCOFLUSH, TCSETS, TCSETS2,
     TCSETSF, TCSETSF2, TCSETSW, TCSETSW2, TCXONC, TERMIOS_BYTES, TERMIOS2_BYTES, TIOCGPGRP,
-    TIOCGSID, TIOCGWINSZ, TIOCNOTTY, TIOCSCTTY, TIOCSPGRP, TIOCSWINSZ,
+    TIOCGPTN, TIOCGSID, TIOCGWINSZ, TIOCNOTTY, TIOCSCTTY, TIOCSPGRP, TIOCSPTLCK, TIOCSWINSZ,
 };
 use ferrix_vfs::OpenFile;
 
@@ -293,4 +293,196 @@ fn put(process: &Process, at: u64, bytes: &[u8]) -> Result<usize, Errno> {
 /// Copy a `pid_t` answer into the program.
 fn put_int(process: &Process, at: u64, value: u32) -> Result<usize, Errno> {
     put(process, at, &value.to_le_bytes())
+}
+
+// ---------------------------------------------------------------------------
+// Pseudoterminals
+//
+// The same requests, answered about a pair rather than about the console.
+// `crate::syscall::fd::sys_ioctl` decides which by the object the descriptor
+// holds: a master, a slave, or the console.
+// ---------------------------------------------------------------------------
+
+/// `ioctl` on a pseudoterminal's master.
+///
+/// Every request the slave takes, and the two the master has of its own:
+/// `TIOCGPTN`, which says which pair it is, and `TIOCSPTLCK`, which unlocks
+/// the slave. Linux answers the terminal requests on a master as well, and
+/// they act on the pair -- `TCSETS` on the master is what `openpty` uses to
+/// set a terminal up before anything opens the slave.
+pub(crate) fn master_ioctl(
+    process: &Process,
+    master: &crate::fs::pty::MasterFile,
+    request: u32,
+    arg: u64,
+) -> Result<usize, Errno> {
+    match request {
+        TIOCGPTN => put_int(process, arg, master.pty.number),
+        TIOCSPTLCK => {
+            let mut bytes = [0_u8; 4];
+            get(process, arg, &mut bytes)?;
+            // A zero unlocks, as `unlockpt` writes; anything else locks.
+            crate::fs::pty::set_locked(&master.pty, i32::from_le_bytes(bytes) != 0);
+            Ok(0)
+        }
+        _ => pty_ioctl(process, &master.pty, request, arg, false),
+    }
+}
+
+/// `ioctl` on a pseudoterminal's slave, which is a terminal like any other.
+pub(crate) fn slave_ioctl(
+    process: &Process,
+    slave: &crate::fs::pty::SlaveFile,
+    request: u32,
+    arg: u64,
+) -> Result<usize, Errno> {
+    pty_ioctl(process, &slave.pty, request, arg, true)
+}
+
+/// The requests both ends take.
+///
+/// `job_control` is the slave's alone: a master is not a controlling
+/// terminal and `TIOCSCTTY` on one is `ENOTTY`, which is what Linux answers.
+fn pty_ioctl(
+    process: &Process,
+    pty: &crate::fs::pty::Pty,
+    request: u32,
+    arg: u64,
+    slave: bool,
+) -> Result<usize, Errno> {
+    match request {
+        TCGETS => put(process, arg, &pty.termios().to_bytes()),
+        TCGETS2 => put(process, arg, &pty.termios().to_bytes2()),
+        TCSETS | TCSETSW | TCSETSF => {
+            let mut bytes = [0_u8; TERMIOS_BYTES];
+            get(process, arg, &mut bytes)?;
+            let current = pty.termios();
+            let speeds = (current.input_speed(), current.output_speed());
+            let termios = Termios::from_bytes(&bytes).with_speeds(speeds.0, speeds.1, current);
+            pty.set_termios(termios, request == TCSETSF);
+            Ok(0)
+        }
+        TCSETS2 | TCSETSW2 | TCSETSF2 => {
+            let mut bytes = [0_u8; TERMIOS2_BYTES];
+            get(process, arg, &mut bytes)?;
+            let termios = Termios::from_bytes2(&bytes, pty.termios());
+            pty.set_termios(termios, request == TCSETSF2);
+            Ok(0)
+        }
+        TIOCGWINSZ => put(process, arg, &pty.winsize().to_bytes()),
+        TIOCSWINSZ => {
+            let mut bytes = [0_u8; 8];
+            get(process, arg, &mut bytes)?;
+            pty.set_winsize(Winsize::from_bytes(bytes));
+            Ok(0)
+        }
+        FIONREAD => {
+            // Each end counts what it could read: the slave the typing, the
+            // master what the program wrote.
+            let waiting = if slave {
+                pty.slave_available()
+            } else {
+                pty.master_available()
+            };
+            let count = i32::try_from(waiting).unwrap_or(i32::MAX);
+            put(process, arg, &count.to_le_bytes())
+        }
+        TCFLSH => match arg {
+            TCIFLUSH => {
+                pty.flush_input();
+                Ok(0)
+            }
+            TCOFLUSH => {
+                pty.flush_output();
+                Ok(0)
+            }
+            TCIOFLUSH => {
+                pty.flush_input();
+                pty.flush_output();
+                Ok(0)
+            }
+            _ => Err(Errno::EINVAL),
+        },
+        // Output is never held back, so suspending and restarting it are
+        // both already true.
+        TCXONC if arg <= TCION => Ok(0),
+        TCXONC => Err(Errno::EINVAL),
+        TIOCSCTTY | TIOCNOTTY | TIOCGPGRP | TIOCSPGRP | TIOCGSID if slave => {
+            pty_job_control(process, pty, request, arg)
+        }
+        _ => Err(Errno::ENOTTY),
+    }
+}
+
+/// The session and process-group requests, on a slave.
+///
+/// A pseudoterminal's rules are the console's: the session leader that asks
+/// for it gets it if nobody else holds it, a process may only ask about the
+/// terminal of its own session, and the foreground group must be a group in
+/// that session.
+fn pty_job_control(
+    process: &Process,
+    pty: &crate::fs::pty::Pty,
+    request: u32,
+    arg: u64,
+) -> Result<usize, Errno> {
+    let live = registry::live();
+    let answer = match request {
+        TIOCSCTTY => {
+            let session = pty.session();
+            if session != 0 && session != process.sid() {
+                return Err(Errno::EPERM);
+            }
+            if process.pid() != process.sid() {
+                return Err(Errno::EPERM);
+            }
+            pty.set_session(process.sid(), process.pgid());
+            Ok(0)
+        }
+        TIOCNOTTY => {
+            if pty.session() != process.sid() || pty.session() == 0 {
+                Err(Errno::ENOTTY)
+            } else {
+                if process.pid() == process.sid() {
+                    pty.set_session(0, 0);
+                }
+                Ok(0)
+            }
+        }
+        TIOCGPGRP => {
+            if pty.session() != process.sid() {
+                Err(Errno::ENOTTY)
+            } else {
+                put_int(process, arg, pty.foreground())
+            }
+        }
+        TIOCGSID => {
+            if pty.session() != process.sid() {
+                Err(Errno::ENOTTY)
+            } else {
+                put_int(process, arg, pty.session())
+            }
+        }
+        TIOCSPGRP => {
+            let mut bytes = [0_u8; 4];
+            get(process, arg, &mut bytes)?;
+            let group = u32::from_le_bytes(bytes);
+            if pty.session() != process.sid() {
+                return Err(Errno::ENOTTY);
+            }
+            // The group has to be one of this session's, which is what
+            // `tcsetpgrp` promises a shell.
+            let known = live
+                .iter()
+                .any(|target| target.pgid() == group && target.sid() == process.sid());
+            if !known {
+                return Err(Errno::EPERM);
+            }
+            pty.set_foreground(group);
+            Ok(0)
+        }
+        _ => Err(Errno::ENOTTY),
+    };
+    drop(live);
+    answer
 }

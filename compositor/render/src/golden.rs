@@ -23,13 +23,20 @@
 //! writes each rendered frame there as a PPM too), commit it, and run the
 //! tests again without the variable.
 
+#![expect(
+    clippy::unwrap_used,
+    clippy::panic,
+    reason = "a test's expected-image checker: its job is to stop the test with a clear message, \
+              and every caller is a test"
+)]
+
 use std::path::PathBuf;
 
 /// The file's first bytes.
 const MAGIC: &[u8; 16] = b"ferrix-xrgb-rle\n";
 
 /// The variable that makes the tests write their expected images.
-pub(crate) const BLESS: &str = "COMPOSITOR_RENDER_BLESS";
+pub const BLESS: &str = "COMPOSITOR_RENDER_BLESS";
 
 /// The variable naming a directory to write every rendered frame to as PPM.
 const PPM: &str = "COMPOSITOR_RENDER_PPM";
@@ -146,16 +153,42 @@ fn write_ppm(path: &std::path::Path, width: u32, height: u32, data: &[u8]) {
 }
 
 /// Where the expected image `name` is kept.
+#[cfg(test)]
 pub(crate) fn path(name: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests")
-        .join("data")
-        .join(format!("{name}.xrle"))
+    in_dir(
+        &PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("data"),
+        name,
+    )
+}
+
+/// The same, in a directory the caller names: the expected images live
+/// together whichever crate blesses one.
+fn in_dir(directory: &std::path::Path, name: &str) -> PathBuf {
+    directory.join(format!("{name}.xrle"))
 }
 
 /// Require a rendered frame to be the expected image `name`, byte for byte;
 /// or, with [`BLESS`] set, write it as that image and fail.
+#[cfg(test)]
 pub(crate) fn check(name: &str, width: u32, height: u32, data: &[u8]) {
+    check_at(&path(name), name, width, height, data);
+}
+
+/// The same, for a crate whose expected images are somewhere else: the
+/// terminal's, which are drawn by `compositor/term` and kept here with the
+/// rest.
+///
+/// # Panics
+///
+/// As [`check`]: a frame that is not the expected image, or a blessing.
+pub fn check_in(directory: &std::path::Path, name: &str, width: u32, height: u32, data: &[u8]) {
+    check_at(&in_dir(directory, name), name, width, height, data);
+}
+
+/// Require `data` to be the image at `path`, or write it there.
+fn check_at(path: &std::path::Path, name: &str, width: u32, height: u32, data: &[u8]) {
     if let Some(dir) = std::env::var_os(PPM) {
         write_ppm(
             &PathBuf::from(dir).join(format!("{name}.ppm")),
@@ -164,16 +197,15 @@ pub(crate) fn check(name: &str, width: u32, height: u32, data: &[u8]) {
             data,
         );
     }
-    let path = path(name);
     if std::env::var_os(BLESS).is_some() {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, encode(width, height, data)).unwrap();
+        std::fs::write(path, encode(width, height, data)).unwrap();
         panic!(
             "wrote {}: look at it, commit it, and run the tests again without {BLESS}",
             path.display()
         );
     }
-    let file = std::fs::read(&path).unwrap_or_else(|error| {
+    let file = std::fs::read(path).unwrap_or_else(|error| {
         panic!(
             "{}: {error}; write it deliberately with {BLESS}=1 cargo test -p compositor-render",
             path.display()

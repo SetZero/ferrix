@@ -1407,6 +1407,13 @@ pub const TIOCOUTQ: u32 = 0x5411;
 pub const TIOCGWINSZ: u32 = 0x5413;
 /// Set a terminal's size.
 pub const TIOCSWINSZ: u32 = 0x5414;
+/// Which pseudoterminal pair a master is: `_IOR('T', 0x30, unsigned int)`,
+/// which is `(2 << 30) | (4 << 16) | ('T' << 8) | 0x30`.
+pub const TIOCGPTN: u32 = 0x8004_5430;
+/// Lock or unlock a pseudoterminal's slave: `_IOW('T', 0x31, int)`. A pair
+/// starts locked, and `openpty` unlocks it with a zero before it opens the
+/// slave.
+pub const TIOCSPTLCK: u32 = 0x4004_5431;
 /// How many bytes a read would return without waiting.
 pub const FIONREAD: u32 = 0x541B;
 /// Set or clear `O_NONBLOCK` from the `int` the argument points at: any

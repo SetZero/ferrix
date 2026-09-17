@@ -15,7 +15,7 @@ use compositor_render::Pattern;
 use compositor_socket::{Connection, RecvError, socket_path};
 use compositor_wire::{Arg, ArgType, Fd, Interface, ObjectId, Reader, Writer};
 
-use crate::shm::Shared;
+use compositor_shm::Shared;
 
 /// The objects this client makes, at fixed ids. A client may name its own
 /// objects however it likes as long as it does not reuse one, and fixed

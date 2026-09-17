@@ -107,6 +107,7 @@ use ferrix_vfs::{
 use crate::fs;
 use crate::fs::block::BlockDevice;
 use crate::fs::console::console_inode;
+use crate::fs::pty;
 use crate::sync::SpinLock;
 use crate::syscall::time;
 
@@ -125,6 +126,9 @@ enum Behaviour {
     /// A node that opens the console: `/dev/tty`, which has a number of its
     /// own and so cannot be the console's inode.
     Console,
+    /// `/dev/ptmx`: opening it makes a pseudoterminal pair and gives back
+    /// the master, which is a different object each time.
+    Ptmx,
     /// The console's own inode: `/dev/console`. Never a devfs node — the name
     /// resolves to [`console_inode`] itself.
     ConsoleItself,
@@ -146,7 +150,7 @@ struct Device {
 }
 
 /// Every character node in `/dev`, in the order a listing reports it.
-static DEVICES: [Device; 7] = [
+static DEVICES: [Device; 8] = [
     Device {
         name: b"null",
         major: 1,
@@ -196,6 +200,13 @@ static DEVICES: [Device; 7] = [
         permissions: 0o600,
         behaviour: Behaviour::ConsoleItself,
     },
+    Device {
+        name: b"ptmx",
+        major: 5,
+        minor: 2,
+        permissions: 0o666,
+        behaviour: Behaviour::Ptmx,
+    },
 ];
 
 /// The root directory's inode number. A device's is its index plus two.
@@ -232,6 +243,15 @@ const INPUT_CURSOR: u64 = (1 << 48) + 2;
 
 /// The name of the directory input devices are in.
 const INPUT: &[u8] = b"input";
+
+/// `/dev/pts`'s inode number.
+const PTS_INO: u64 = 1 << 38;
+
+/// The root's cursor for `/dev/pts`, after `/dev/input`'s.
+const PTS_CURSOR: u64 = (1 << 48) + 4;
+
+/// The name of the directory pseudoterminal slaves are in.
+const PTS: &[u8] = b"pts";
 
 /// A devfs instance.
 #[derive(Debug)]
@@ -505,6 +525,10 @@ enum Place {
     Input,
     /// `/dev/input/event<N>`.
     Event(u32),
+    /// `/dev/pts`, the directory a pseudoterminal's slave is in.
+    Pts,
+    /// `/dev/pts/<N>`.
+    Slave(u32),
 }
 
 /// A devfs inode.
@@ -527,7 +551,9 @@ impl Node {
             | Place::Dri
             | Place::Card(_)
             | Place::Input
-            | Place::Event(_) => None,
+            | Place::Event(_)
+            | Place::Pts
+            | Place::Slave(_) => None,
         }
     }
 }
@@ -587,6 +613,16 @@ impl Inode for Node {
                 ino: INPUT_INO,
                 ..directory
             },
+            (Place::Pts, _) => Metadata {
+                ino: PTS_INO,
+                ..directory
+            },
+            (Place::Slave(number), _) => Metadata {
+                atime: self.made,
+                mtime: self.made,
+                ctime: self.made,
+                ..pty::slave_metadata(number)
+            },
             (Place::Event(index), _) => Metadata {
                 atime: self.made,
                 mtime: self.made,
@@ -615,7 +651,10 @@ impl Inode for Node {
     }
 
     fn is_stream(&self) -> bool {
-        !matches!(self.place, Place::Root | Place::Dri | Place::Input)
+        !matches!(
+            self.place,
+            Place::Root | Place::Dri | Place::Input | Place::Pts
+        )
     }
 
     /// Disks are registered and dropped without the VFS being told, so a miss
@@ -646,6 +685,22 @@ impl Inode for Node {
             let file: Arc<dyn Inode> = crate::input::evdev::EventFile::open(device)?;
             return Ok(Some(file));
         }
+        // A slave is one object a pair, shared by every open of it, as a
+        // terminal is: two programs with the same terminal open read from
+        // one queue.
+        if let Place::Slave(number) = self.place {
+            let file: Arc<dyn Inode> = pty::open_slave(number)?;
+            return Ok(Some(file));
+        }
+        // Every open of `/dev/ptmx` is a pair of its own, which is the whole
+        // point of the multiplexer.
+        if self
+            .device()
+            .is_some_and(|device| device.behaviour == Behaviour::Ptmx)
+        {
+            let file: Arc<dyn Inode> = pty::open_master()?;
+            return Ok(Some(file));
+        }
         Ok(self
             .device()
             .filter(|device| device.behaviour == Behaviour::Console)
@@ -653,7 +708,7 @@ impl Inode for Node {
     }
 
     fn read_at(&self, offset: u64, buf: &mut [u8]) -> Result<usize> {
-        if let Place::Block(_) | Place::Card(_) | Place::Event(_) = self.place {
+        if let Place::Block(_) | Place::Card(_) | Place::Event(_) | Place::Slave(_) = self.place {
             return Err(Errno::ENXIO);
         }
         let device = self.device().ok_or(Errno::EISDIR)?;
@@ -668,11 +723,14 @@ impl Inode for Node {
                 Ok(buf.len())
             }
             Behaviour::Console | Behaviour::ConsoleItself => console_inode().read_at(offset, buf),
+            // The node is never the object: opening it makes a pair and
+            // gives back the master, which is what reads and writes.
+            Behaviour::Ptmx => Err(Errno::ENXIO),
         }
     }
 
     fn write_at(&self, offset: u64, data: &[u8], append: bool) -> Result<(usize, u64)> {
-        if let Place::Block(_) | Place::Card(_) | Place::Event(_) = self.place {
+        if let Place::Block(_) | Place::Card(_) | Place::Event(_) | Place::Slave(_) = self.place {
             return Err(Errno::ENXIO);
         }
         let device = self.device().ok_or(Errno::EISDIR)?;
@@ -682,6 +740,7 @@ impl Inode for Node {
             Behaviour::Console | Behaviour::ConsoleItself => {
                 console_inode().write_at(offset, data, append)
             }
+            Behaviour::Ptmx => Err(Errno::ENXIO),
         }
     }
 
@@ -702,6 +761,16 @@ impl Inode for Node {
                 made: self.made,
             }));
         }
+        if self.place == Place::Pts {
+            // A slave's name is its number and nothing else, as devpts
+            // names them.
+            let number = slave_number(name).ok_or(Errno::ENOENT)?;
+            let _pair = pty::pair(number).ok_or(Errno::ENOENT)?;
+            return Ok(Arc::new(Node {
+                place: Place::Slave(number),
+                made: self.made,
+            }));
+        }
         if self.place != Place::Root {
             return Err(Errno::ENOTDIR);
         }
@@ -714,6 +783,15 @@ impl Inode for Node {
         if name == INPUT && !crate::input::device_indices().is_empty() {
             return Ok(Arc::new(Node {
                 place: Place::Input,
+                made: self.made,
+            }));
+        }
+        // `/dev/pts` is there once anything has opened `/dev/ptmx`, which is
+        // when it has anything in it: Linux's devpts is a mount, and this
+        // is the same directory without one.
+        if name == PTS && pty::made() > 0 {
+            return Ok(Arc::new(Node {
+                place: Place::Pts,
                 made: self.made,
             }));
         }
@@ -735,6 +813,9 @@ impl Inode for Node {
         }
         if self.place == Place::Input {
             return crate::input::evdev::read_dir(cursor, emit);
+        }
+        if self.place == Place::Pts {
+            return read_pts(cursor, emit);
         }
         if self.place != Place::Root {
             return Err(Errno::ENOTDIR);
@@ -785,11 +866,22 @@ impl Inode for Node {
             }
         }
         if cursor <= INPUT_CURSOR && !crate::input::device_indices().is_empty() {
-            let _ = emit(DirEntry {
+            let kept = emit(DirEntry {
                 ino: INPUT_INO,
                 kind: FileType::Directory,
                 name: INPUT,
                 next: INPUT_CURSOR + 1,
+            });
+            if !kept {
+                return Ok(());
+            }
+        }
+        if cursor <= PTS_CURSOR && pty::made() > 0 {
+            let _ = emit(DirEntry {
+                ino: PTS_INO,
+                kind: FileType::Directory,
+                name: PTS,
+                next: PTS_CURSOR + 1,
             });
         }
         Ok(())
@@ -804,6 +896,36 @@ impl Inode for Node {
         let vmo: Arc<dyn Any + Send + Sync> = Arc::clone(&card.vmo) as Arc<dyn Any + Send + Sync>;
         Some(vmo)
     }
+}
+
+/// The number a slave's name is, with no leading zero: devpts names a slave
+/// by its number and nothing else.
+fn slave_number(name: &[u8]) -> Option<u32> {
+    if name.is_empty() || (name.len() > 1 && name.first() == Some(&b'0')) {
+        return None;
+    }
+    core::str::from_utf8(name).ok()?.parse::<u32>().ok()
+}
+
+/// `/dev/pts`'s listing: every pair that exists, by number.
+fn read_pts(cursor: u64, emit: &mut dyn FnMut(DirEntry<'_>) -> bool) -> Result<()> {
+    let first = cursor.saturating_sub(FIRST_CURSOR);
+    for number in pty::numbers() {
+        if u64::from(number) < first {
+            continue;
+        }
+        let name = alloc::format!("{number}");
+        let entry = DirEntry {
+            ino: pty::SLAVE_INO_BASE + u64::from(number),
+            kind: FileType::CharDevice,
+            name: name.as_bytes(),
+            next: FIRST_CURSOR.saturating_add(u64::from(number)).saturating_add(1),
+        };
+        if !emit(entry) {
+            return Ok(());
+        }
+    }
+    Ok(())
 }
 
 /// The card number `card<N>` names, with no leading zero.

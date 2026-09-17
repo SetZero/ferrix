@@ -487,6 +487,13 @@ pub(crate) fn sys_ioctl(
     if let Some(device) = crate::input::evdev::of(file.io()) {
         return crate::input::evdev::ioctl(process, &device, request, arg);
     }
+    // A pseudoterminal, by which end of it the descriptor holds.
+    if let Some(master) = fs::pty::master_of(file.io()) {
+        return tty::master_ioctl(process, &master, request, arg);
+    }
+    if let Some(slave) = fs::pty::slave_of(file.io()) {
+        return tty::slave_ioctl(process, &slave, request, arg);
+    }
     // The two socket requests, which ask a socket what is queued each way.
     let answered = if let Some(socket) = fs::socket::of(&file) {
         socket.ioctl(process, request, arg)

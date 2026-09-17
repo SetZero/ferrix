@@ -1,5 +1,11 @@
-//! The client's side of shared memory: a `memfd` it draws into and the
+//! A client's side of shared memory: a `memfd` it draws into and the
 //! compositor reads.
+//!
+//! Every `wl_shm` client needs exactly this and nothing else: memory both
+//! sides can see, a descriptor to send, and a slice to draw into. It is a
+//! crate of its own because two of this tree's clients want it -- the test
+//! patterns and the terminal -- and because the three calls it makes are
+//! `unsafe` ones that should be audited once.
 
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
@@ -19,7 +25,7 @@ impl Shared {
     ///
     /// Whatever the call said.
     pub fn new(len: usize) -> io::Result<Self> {
-        let name = c"pattern";
+        let name = c"compositor";
         #[expect(
             unsafe_code,
             reason = "AUDIT: memfd_create is not in std; the name is a literal with its NUL and the flags are constants"

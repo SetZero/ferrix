@@ -1,0 +1,19 @@
+[package]
+name = "compositor-shm"
+description = "A client's side of shared memory: a memfd it draws into and the compositor reads"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "compositor_shm"
+path = "src/lib.rs"
+
+[dependencies]
+# Declarations only: `memfd_create`, `ftruncate` and `mmap` for the buffer.
+libc = "0.2.189"
+
+[lints]
+workspace = true

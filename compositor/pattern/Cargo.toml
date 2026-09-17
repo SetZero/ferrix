@@ -18,6 +18,7 @@ path = "src/main.rs"
 [dependencies]
 compositor-protocol = { path = "../protocol" }
 compositor-render = { path = "../render" }
+compositor-shm = { path = "../shm" }
 compositor-socket = { path = "../socket" }
 compositor-wire = { path = "../wire" }
 # Declarations only: `memfd_create` and `mmap` for the shared buffer.
