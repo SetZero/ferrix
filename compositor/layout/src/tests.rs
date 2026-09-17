@@ -20,6 +20,9 @@ fn config(text: &str) -> Config {
 
 fn monitor(id: MonitorId, x: i64, y: i64, width: i64, height: i64) -> Monitor {
     Monitor {
+        // What a virtio-gpu connector is called, which is what Ferrix's
+        // monitors are named after.
+        name: format!("Virtual-{}", id.0),
         id,
         rect: Rect::new(x, y, width, height),
         reserved: Gaps::all(0),
@@ -359,6 +362,7 @@ fn reserved_strips_are_outside_the_tiled_area() {
     let mut state = State::from_config(&config("general:gaps_out = 20\ngeneral:border_size = 0\n"));
     let _changes = state
         .add_monitor(Monitor {
+            name: String::new(),
             id: M1,
             rect: r(0, 0, 1920, 1080),
             reserved: Gaps {
@@ -863,6 +867,7 @@ fn the_neighbour_search_reaches_across_gaps_and_reserved_strips() {
     let mut state = setup("");
     let _changes = state
         .add_monitor(Monitor {
+            name: String::new(),
             id: M2,
             rect: r(1920, 0, 1280, 1024),
             reserved: Gaps {
@@ -1430,6 +1435,7 @@ fn extreme_geometry_does_not_panic() {
     ));
     let _changes = state
         .add_monitor(Monitor {
+            name: String::new(),
             id: M1,
             rect: r(i64::MAX, i64::MIN, i64::MAX, 0),
             reserved: Gaps::all(i64::MIN),
@@ -1745,4 +1751,134 @@ fn a_floating_window_cannot_be_a_group() {
     let _ = state.dispatch_str("togglefloating", "").unwrap();
     let _ = state.dispatch_str("togglegroup", "").unwrap();
     assert_eq!(state.group(WindowId(1)), None);
+}
+
+// ---------------------------------------------------------------------------
+// The monitor dispatchers
+//
+// Which monitor an argument names is `CMonitorQueryCore::fromConfigString`'s:
+// `current`, a direction, `+N`/`-N` along the list, an id counting from zero,
+// or a name.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn focusmonitor_takes_every_form_hyprland_takes() {
+    let mut state = two_monitors();
+    assert_eq!(state.focused_monitor(), Some(M1));
+
+    // A direction.
+    let _ = state.dispatch_str("focusmonitor", "r").unwrap();
+    assert_eq!(state.focused_monitor(), Some(M2));
+    let _ = state.dispatch_str("focusmonitor", "l").unwrap();
+    assert_eq!(state.focused_monitor(), Some(M1));
+
+    // Along the list, wrapping both ways.
+    let _ = state.dispatch_str("focusmonitor", "+1").unwrap();
+    assert_eq!(state.focused_monitor(), Some(M2));
+    let _ = state.dispatch_str("focusmonitor", "+1").unwrap();
+    assert_eq!(state.focused_monitor(), Some(M1), "it did not wrap");
+    let _ = state.dispatch_str("focusmonitor", "-1").unwrap();
+    assert_eq!(state.focused_monitor(), Some(M2));
+
+    // An id, which Hyprland counts from zero.
+    let _ = state.dispatch_str("focusmonitor", "0").unwrap();
+    assert_eq!(state.focused_monitor(), Some(M1));
+    let _ = state.dispatch_str("focusmonitor", "1").unwrap();
+    assert_eq!(state.focused_monitor(), Some(M2));
+    // One that is not there changes nothing.
+    let _ = state.dispatch_str("focusmonitor", "7").unwrap();
+    assert_eq!(state.focused_monitor(), Some(M2));
+
+    // A name, which is the connector's.
+    let _ = state.dispatch_str("focusmonitor", "Virtual-1").unwrap();
+    assert_eq!(state.focused_monitor(), Some(M1));
+    let _ = state.dispatch_str("focusmonitor", "Virtual-2").unwrap();
+    assert_eq!(state.focused_monitor(), Some(M2));
+    let _ = state.dispatch_str("focusmonitor", "DP-9").unwrap();
+    assert_eq!(state.focused_monitor(), Some(M2), "a name nothing has");
+
+    // `current` stays, and nothing at all is an error.
+    let _ = state.dispatch_str("focusmonitor", "current").unwrap();
+    assert_eq!(state.focused_monitor(), Some(M2));
+    assert!(state.dispatch_str("focusmonitor", "").is_err());
+}
+
+/// Focusing a monitor focuses the window last focused on it, which is what
+/// makes `focusmonitor` a focus change rather than a cursor move.
+#[test]
+fn focusmonitor_takes_the_window_with_it() {
+    let mut state = two_monitors();
+    open(&mut state, &[1]);
+    let _ = state.dispatch_str("focusmonitor", "r").unwrap();
+    assert_eq!(state.focused_window(), None, "the second monitor is empty");
+    let _ = state.dispatch_str("focusmonitor", "l").unwrap();
+    assert_eq!(state.focused_window(), Some(WindowId(1)));
+}
+
+#[test]
+fn movewindow_to_a_monitor_sends_the_window_and_the_focus() {
+    let mut state = two_monitors();
+    open(&mut state, &[1]);
+    let changes = state.dispatch_str("movewindow", "mon:Virtual-2").unwrap();
+    assert!(
+        changes.contains(&Change::MoveToWorkspace {
+            window: WindowId(1),
+            workspace: WorkspaceId(2),
+        }),
+        "{changes:?}"
+    );
+    assert_eq!(state.workspace_of(WindowId(1)), Some(WorkspaceId(2)));
+    assert_eq!(state.focused_monitor(), Some(M2));
+    assert_eq!(state.focused_window(), Some(WindowId(1)));
+
+    // `silent` sends the window and leaves the focus where it was.
+    let _ = state.dispatch_str("movewindow", "mon:0").unwrap();
+    open(&mut state, &[2]);
+    let _ = state.dispatch_str("movewindow", "mon:1 silent").unwrap();
+    assert_eq!(state.workspace_of(WindowId(2)), Some(WorkspaceId(2)));
+    assert_eq!(state.focused_monitor(), Some(M1));
+}
+
+#[test]
+fn a_workspace_can_be_moved_to_another_monitor() {
+    let mut state = two_monitors();
+    open(&mut state, &[1]);
+    assert_eq!(state.workspace_monitor(WorkspaceId(1)), Some(M1));
+
+    let _ = state
+        .dispatch_str("movecurrentworkspacetomonitor", "Virtual-2")
+        .unwrap();
+    assert_eq!(state.workspace_monitor(WorkspaceId(1)), Some(M2));
+    assert_eq!(state.active_workspace(M2), Some(WorkspaceId(1)));
+    // The monitor it left is showing something rather than nothing.
+    let left = state.active_workspace(M1).expect("a workspace");
+    assert_ne!(left, WorkspaceId(1));
+
+    // And by name, the other way.
+    let _ = state
+        .dispatch_str("moveworkspacetomonitor", "1 Virtual-1")
+        .unwrap();
+    assert_eq!(state.workspace_monitor(WorkspaceId(1)), Some(M1));
+    assert_eq!(state.active_workspace(M1), Some(WorkspaceId(1)));
+}
+
+#[test]
+fn two_monitors_can_swap_what_they_show() {
+    let mut state = two_monitors();
+    let (one, two) = (
+        state.active_workspace(M1).expect("a workspace"),
+        state.active_workspace(M2).expect("a workspace"),
+    );
+    assert_ne!(one, two);
+
+    let _ = state.dispatch_str("swapactiveworkspaces", "0 1").unwrap();
+    assert_eq!(state.active_workspace(M1), Some(two));
+    assert_eq!(state.active_workspace(M2), Some(one));
+    assert_eq!(state.workspace_monitor(one), Some(M2));
+    assert_eq!(state.workspace_monitor(two), Some(M1));
+
+    // The same monitor twice does nothing, and one argument is an error.
+    let _ = state.dispatch_str("swapactiveworkspaces", "0 0").unwrap();
+    assert_eq!(state.active_workspace(M1), Some(two));
+    assert!(state.dispatch_str("swapactiveworkspaces", "0").is_err());
 }

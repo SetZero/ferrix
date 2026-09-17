@@ -35,6 +35,51 @@ impl Direction {
     }
 }
 
+/// Which monitor a dispatcher's argument names, by
+/// `CMonitorQueryCore::fromConfigString`'s rules.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MonitorTarget {
+    /// `current`: the focused monitor.
+    Current,
+    /// `l`, `r`, `u`/`t`, `d`/`b`: the monitor that way from the focused
+    /// one.
+    Direction(Direction),
+    /// `+N` or `-N`: N places along the monitors in their own order,
+    /// wrapping around.
+    Relative(i64),
+    /// A number: the monitor with that id, which Hyprland counts from zero.
+    Id(i64),
+    /// Anything else: a monitor's name, as the connector is called.
+    Named(String),
+}
+
+impl MonitorTarget {
+    /// Parse a monitor argument. Nothing at all names no monitor, as
+    /// Hyprland's empty string does.
+    #[must_use]
+    pub fn parse(text: &str) -> Option<Self> {
+        let text = text.trim();
+        if text.is_empty() {
+            return None;
+        }
+        if text == "current" {
+            return Some(Self::Current);
+        }
+        // A direction first: `l` and `r` are names nothing should be called,
+        // and Hyprland reads them as directions.
+        if let Some(direction) = Direction::parse(text) {
+            return Some(Self::Direction(direction));
+        }
+        if text.starts_with(['+', '-']) {
+            return text.parse::<i64>().ok().map(Self::Relative);
+        }
+        if let Ok(id) = text.parse::<i64>() {
+            return Some(Self::Id(id));
+        }
+        Some(Self::Named(text.to_owned()))
+    }
+}
+
 /// Which workspace a `workspace` or `movetoworkspace` argument names.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkspaceTarget {
@@ -142,6 +187,33 @@ pub enum Dispatcher {
     MoveOutOfGroup,
     /// `lockgroups`: whether a window may be added to a group.
     LockGroups(Locking),
+    /// `focusmonitor`: focus a monitor, and the window last focused on it.
+    FocusMonitor(MonitorTarget),
+    /// `movewindow mon:<monitor>`: move the focused window to a monitor's
+    /// active workspace, and follow it there unless `silent` was asked for.
+    MoveWindowToMonitor {
+        /// Which monitor.
+        monitor: MonitorTarget,
+        /// Whether the focus stays where it is.
+        silent: bool,
+    },
+    /// `movecurrentworkspacetomonitor`: move the focused monitor's active
+    /// workspace to another monitor.
+    MoveCurrentWorkspaceToMonitor(MonitorTarget),
+    /// `moveworkspacetomonitor`: move a workspace to a monitor.
+    MoveWorkspaceToMonitor {
+        /// Which workspace.
+        workspace: WorkspaceTarget,
+        /// Which monitor.
+        monitor: MonitorTarget,
+    },
+    /// `swapactiveworkspaces`: exchange what two monitors are showing.
+    SwapActiveWorkspaces {
+        /// One monitor.
+        one: MonitorTarget,
+        /// The other.
+        other: MonitorTarget,
+    },
 }
 
 /// Which member of a group `changegroupactive` asks for.
@@ -177,9 +249,37 @@ impl Dispatcher {
         };
         let direction = || Direction::parse(arg).ok_or_else(bad);
         let workspace = || WorkspaceTarget::parse(arg).ok_or_else(bad);
+        let monitor = || MonitorTarget::parse(arg).ok_or_else(bad);
         match name.as_str() {
             "movefocus" => direction().map(Self::MoveFocus),
-            "movewindow" => direction().map(Self::MoveWindow),
+            // `movewindow` takes a direction or `mon:<monitor>`, with
+            // `silent` after it leaving the focus where it is.
+            "movewindow" => match arg.strip_prefix("mon:") {
+                Some(rest) => {
+                    let (text, silent) = match rest.trim().strip_suffix("silent") {
+                        Some(head) => (head.trim(), true),
+                        None => (rest.trim(), false),
+                    };
+                    MonitorTarget::parse(text)
+                        .map(|monitor| Self::MoveWindowToMonitor { monitor, silent })
+                        .ok_or_else(bad)
+                }
+                None => direction().map(Self::MoveWindow),
+            },
+            "focusmonitor" => monitor().map(Self::FocusMonitor),
+            "movecurrentworkspacetomonitor" => monitor().map(Self::MoveCurrentWorkspaceToMonitor),
+            "moveworkspacetomonitor" => {
+                let (first, rest) = arg.split_once(char::is_whitespace).ok_or_else(bad)?;
+                let workspace = WorkspaceTarget::parse(first).ok_or_else(bad)?;
+                let monitor = MonitorTarget::parse(rest).ok_or_else(bad)?;
+                Ok(Self::MoveWorkspaceToMonitor { workspace, monitor })
+            }
+            "swapactiveworkspaces" => {
+                let (first, rest) = arg.split_once(char::is_whitespace).ok_or_else(bad)?;
+                let one = MonitorTarget::parse(first).ok_or_else(bad)?;
+                let other = MonitorTarget::parse(rest).ok_or_else(bad)?;
+                Ok(Self::SwapActiveWorkspaces { one, other })
+            }
             "workspace" => workspace().map(Self::Workspace),
             "movetoworkspace" => workspace().map(Self::MoveToWorkspace),
             "movetoworkspacesilent" => workspace().map(Self::MoveToWorkspaceSilent),

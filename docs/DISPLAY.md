@@ -187,17 +187,17 @@ source is committed this time.
 | `DRM_IOCTL_GET_CAP` | `DRM_CAP_DUMB_BUFFER` = 1, `DUMB_PREFERRED_DEPTH` = 24, `DUMB_PREFER_SHADOW` = 0, `TIMESTAMP_MONOTONIC` = 1, `CRTC_IN_VBLANK_EVENT` = 1; others `EINVAL` |
 | `DRM_IOCTL_SET_CLIENT_CAP` | `UNIVERSAL_PLANES` takes 0 or 1 (E4) and changes only what `GETPLANERESOURCES` lists; `ATOMIC` refused with `EOPNOTSUPP`, so clients fall back to legacy; the rest `EINVAL` |
 | `DRM_IOCTL_SET_MASTER`, `DROP_MASTER` | succeed; the exclusive open (below) is the master |
-| `MODE_GETRESOURCES` | one CRTC, one encoder, one connector, the framebuffer ids |
-| `MODE_GETCONNECTOR` | `Virtual-1`, connected, the preferred mode from `HELLO` plus the standard modes that fit |
-| `MODE_GETENCODER`, `MODE_GETCRTC` | the one of each |
+| `MODE_GETRESOURCES` | a CRTC, an encoder and a connector per scanout the driver reported, and the framebuffer ids |
+| `MODE_GETCONNECTOR` | `Virtual-<n>`, connected when the scanout is enabled, the preferred mode from `HELLO` plus the standard modes that fit |
+| `MODE_GETENCODER`, `MODE_GETCRTC` | the head's own, each encoder driving the one CRTC of its head |
 | `MODE_CREATE_DUMB`, `MODE_MAP_DUMB`, `MODE_DESTROY_DUMB` | §2.1; `bpp` 32 only |
 | `MODE_ADDFB`, `MODE_ADDFB2`, `MODE_RMFB` | `XRGB8888` only; a framebuffer names one dumb buffer |
 | `MODE_SETCRTC` | `SCANOUT` then `FLUSH` of the whole buffer |
 | `MODE_PAGE_FLIP` | `SCANOUT` if the buffer changed, then `FLUSH`; `DRM_MODE_PAGE_FLIP_EVENT` queues a `drm_event_vblank` when `FLIPPED` arrives |
 | `MODE_DIRTYFB` | `FLUSH` of the clip rectangles |
 | `read()` | `drm_event_vblank` records; blocks while none are queued, `EAGAIN` under `O_NONBLOCK` |
-| `MODE_GETPLANERESOURCES` | E4: the primary plane, id 4, to an open that set `UNIVERSAL_PLANES`; no plane to one that did not |
-| `MODE_GETPLANE` | E4: plane 4: format `XRGB8888`, `possible_crtcs` 1, and the CRTC and framebuffer `SETCRTC` or `PAGE_FLIP` last showed, 0 and 0 while nothing is; the formats are copied only into an array with room for all of them; another id `ENOENT` |
+| `MODE_GETPLANERESOURCES` | E4: one primary plane a head to an open that set `UNIVERSAL_PLANES`; no plane to one that did not |
+| `MODE_GETPLANE` | E4: format `XRGB8888`, `possible_crtcs` the bit of its head's CRTC, and the CRTC and framebuffer `SETCRTC` or `PAGE_FLIP` last showed on that head, 0 and 0 while nothing is; the formats are copied only into an array with room for all of them; another id `ENOENT` |
 | `MODE_OBJ_GETPROPERTIES` | E4: the plane has `type` (property 5) at `Primary` (1); the CRTC and the connector have none; the encoder, a framebuffer and the property have no property list, `EINVAL`; an id of another type than the one asked for, or no object, `ENOENT` |
 | `MODE_GETPROPERTY` | E4: property 5, `type`, `DRM_MODE_PROP_ENUM \| DRM_MODE_PROP_IMMUTABLE`, values 0, 1 and 2 named `Overlay`, `Primary` and `Cursor`; another id `ENOENT` |
 
@@ -276,12 +276,27 @@ from the kernel's `enum drm_plane_type`, as the connector status values were.
 
 **Object ids.** Linux numbers all of a device's mode objects from one idr, so
 an id names one object whatever its type, and `DRM_MODE_OBJECT_ANY` lookups
-are well defined. `card0` keeps that: the CRTC is 1, the encoder 2, the
-connector 3, the plane 4 and the `type` property 5, the ids below 32 are kept
-for fixed objects, and framebuffers are numbered from 32 up and never reused
-within an open. In iteration 1 framebuffers were numbered from 1, the same
-ids as the CRTC, encoder and connector, which no call could tell apart until
+are well defined. `card0` keeps that: each head has a block of four ids of
+its own, starting at 1 -- the CRTC, the encoder, the connector and the
+primary plane, so head 0 is 1 to 4 and head 1 is 5 to 8 -- the `type`
+property is above every head's block, the ids below 128 are kept for fixed
+objects, and framebuffers are numbered from 128 up and never reused within an
+open. In iteration 1 framebuffers were numbered from 1, the same ids as the
+CRTC, encoder and connector, which no call could tell apart until
 `OBJ_GETPROPERTIES` took `DRM_MODE_OBJECT_ANY`.
+
+**More than one head (2026-09-17).** A card publishes one connector per
+scanout the driver's `HELLO` reported, which is what Linux's own virtio-gpu
+driver does: a scanout the host has nothing attached to is a connector
+reporting `disconnected`, not a connector that is missing. `SETCRTC` and
+`PAGE_FLIP` name a head's CRTC and carry its scanout number to the driver, so
+two monitors on one card are two framebuffers flipped apart from one another.
+
+QEMU enables a virtio-gpu's second *output* only when a host window manager
+resizes its window, which a headless test has nothing to do, so
+`cargo xtask test-compositor --screens 2` gives the guest two virtio-gpu
+*devices* instead: two cards, one screen each, which is the other shape a
+two-monitor machine comes in and the one a test can drive.
 
 **How it is checked.** `compositor/blank` asks for universal planes after its
 modeset, reads the planes as Smithay does, and ends its marker line with

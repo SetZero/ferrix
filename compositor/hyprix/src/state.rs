@@ -76,15 +76,16 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
     let mut settings = Settings::from_config(&config);
     let mut style = Style::from_config(&config);
 
-    // The screen: memory when `--headless` asked for one, and the card
-    // otherwise. The card's size is the mode's, not the compositor's to
-    // choose.
-    let mut backend: Box<dyn Backend> = match options.headless {
-        Some((width, height)) => Box::new(Headless::new(width, height)),
-        None => open_screen()?,
+    // The screens: memory when `--headless` asked for one, and every
+    // connected connector of every card otherwise. A card's size is the
+    // mode's, not the compositor's to choose.
+    let backends: Vec<Box<dyn Backend>> = match options.headless {
+        Some((width, height)) => vec![Box::new(Headless::new(width, height))],
+        None => open_screens()?,
     };
-    let (width, height) = backend.size();
-    let mut canvas = Canvas::new(width, height).map_err(|error| format!("a canvas: {error:?}"))?;
+    let mut screens = Screen::all(backends)?;
+    // What the whole desktop covers, which is what the pointer moves over.
+    let (width, height) = Screen::desktop(&screens);
 
     // Where the socket goes. Wayland's rule is `$XDG_RUNTIME_DIR/<name>`,
     // which is what a session manager sets; a compositor started as init on a
@@ -164,13 +165,26 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
     }
 
     let mut state = State::new(settings);
-    let _ = state
-        .add_monitor(Monitor {
-            id: MonitorId(1),
-            rect: Rect::new(0, 0, i64::from(width), i64::from(height)),
-            reserved: compositor_layout::Gaps::default(),
-        })
-        .map_err(|error| format!("the monitor: {error:?}"))?;
+    for screen in &screens {
+        let _ = state
+            .add_monitor(Monitor {
+                id: screen.monitor,
+                name: screen.name.clone(),
+                rect: screen.rect,
+                reserved: compositor_layout::Gaps::default(),
+            })
+            .map_err(|error| format!("the monitor: {error:?}"))?;
+    }
+    report(&format!(
+        "hyprix: {} monitor{} [{}]",
+        screens.len(),
+        if screens.len() == 1 { "" } else { "s" },
+        screens
+            .iter()
+            .map(|screen| screen.describe())
+            .collect::<Vec<_>>()
+            .join(", ")
+    ));
 
     // `hyprctl`'s socket, when one was asked for. Hyprland puts it under
     // $XDG_RUNTIME_DIR/hypr/<instance>/, and a program looks there.
@@ -243,17 +257,13 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
             match Connection::new(stream) {
                 Ok(connection) => slots.push(Slot {
                     client: {
-                        let mut client = Client::new(globals());
-                        // What the screen is, and what the seat has: only
+                        let mut client = Client::new(globals(screens.len()));
+                        // What each screen is, and what the seat has: only
                         // the capabilities there are devices for, since a
                         // client may not ask for one the seat did not
                         // announce and should not wait for keys that will
                         // never come.
-                        client.set_output(compositor_server::Output {
-                            width: i32::try_from(width).unwrap_or(0),
-                            height: i32::try_from(height).unwrap_or(0),
-                            ..compositor_server::Output::default()
-                        });
+                        client.set_outputs(screens.iter().map(Screen::output).collect());
                         client.set_seat_capabilities(capabilities);
                         client.set_keymap(keymap.as_ref().map(Keymap::handed));
                         client.set_repeat_info(repeat.0, repeat.1);
@@ -274,7 +284,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
         if let Some(control) = control.as_ref()
             && let Some(mut stream) = control.accept()
         {
-            let snapshot = crate::control::snapshot(&state, &slots, &sources, (width, height));
+            let snapshot = crate::control::snapshot(&state, &slots, &sources);
             match crate::control::serve(&mut stream, &snapshot) {
                 Ok(todo) => asked = todo,
                 Err(_) => {
@@ -361,7 +371,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
             // The layer surfaces first: their exclusive zones decide how
             // much of the monitor is left for the windows to tile in, so a
             // bar has to be placed before a window is told its size.
-            placed_layers = place_layers(&mut slots, &mut state, (width, height));
+            placed_layers = place_layers(&mut slots, &mut state, &screens);
             reconfigure(&mut slots, &state);
         }
         // The keyboard follows the layout's focus, and a window that has just
@@ -398,7 +408,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
         // The event socket, from the same description `hyprctl` answers
         // from: a bar and a script must not be told two different things.
         if let Some(socket) = events.as_mut() {
-            let snapshot = crate::control::snapshot(&state, &slots, &sources, (width, height));
+            let snapshot = crate::control::snapshot(&state, &slots, &sources);
             socket.publish(&snapshot);
         }
 
@@ -418,20 +428,29 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
         if changed || drawn == 0 || animating || settling {
             settling = animating;
             let outputs = state.layout();
-            let Some(output) = outputs.first() else {
-                continue;
-            };
-            // Where each window *is*, rather than where the tiling put it.
-            let output = &animations.follow(output, millis);
             let began = Instant::now();
-            let full = Damage::full(width, height);
-            let mut target = crate::frame::Output {
-                canvas: &mut canvas,
-                backend: backend.as_mut(),
-                origin: (0, 0),
-                style: &style,
-            };
-            crate::frame::draw(&mut target, output, &slots, &sources, &placed_layers, &full)?;
+            // A frame a monitor: each screen draws the workspace it shows,
+            // with the windows' rectangles moved into its own pixels.
+            for screen in &mut screens {
+                let Some(output) = outputs
+                    .iter()
+                    .find(|output| output.monitor == screen.monitor)
+                else {
+                    continue;
+                };
+                // Where each window *is*, rather than where the tiling put
+                // it.
+                let output = &animations.follow(output, millis);
+                let (width, height) = screen.size();
+                let full = Damage::full(width, height);
+                let mut target = crate::frame::Output {
+                    canvas: &mut screen.canvas,
+                    backend: screen.backend.as_mut(),
+                    origin: (screen.rect.x, screen.rect.y),
+                    style: &style,
+                };
+                crate::frame::draw(&mut target, output, &slots, &sources, &placed_layers, &full)?;
+            }
             drawn = drawn.saturating_add(1);
             // The slowest frame, which is the bound `docs/ROADMAP.md` asks
             // each software effect to have: blur is the expensive one, and a
@@ -439,16 +458,13 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
             // one somebody hoped for.
             slowest = slowest.max(began.elapsed());
             if drawn == 1 {
-                // The screen is up and the first frame is on it. This is what
-                // a watcher waits for, in the shape `compositor/blank`'s
-                // marker has.
-                report(&format!("hyprix: {} {display}", backend.describe()));
+                // The screens are up and the first frame is on them. This is
+                // what a watcher waits for, in the shape
+                // `compositor/blank`'s marker has.
+                report(&format!("hyprix: {} {display}", described(&screens)));
             }
             if let Some(directory) = options.dump.as_ref() {
-                let _ = std::fs::create_dir_all(directory);
-                let path = directory.join(format!("frame-{drawn:04}.ppm"));
-                crate::backend::write_ppm(backend.as_ref(), &path)
-                    .map_err(|error| format!("writing {}: {error}", path.display()))?;
+                dump(&screens, directory, drawn)?;
             }
         }
 
@@ -461,7 +477,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
     Ok(format!(
         "hyprix: {} {display} frames {drawn} windows {} most {most} subscribers {subscribers} \
          events {told} slowest frame {} us",
-        backend.describe(),
+        described(&screens),
         sources.len(),
         slowest.as_micros()
     ))
@@ -597,20 +613,158 @@ fn resolve_display(display: &str) -> String {
     format!("/tmp/{display}")
 }
 
-/// Open the screen, or say why not.
+/// Every screen in one line, for the compositor's marker and its log line.
+///
+/// One screen reads as it always did -- `card0 Virtual-1 1024x768 ...` --
+/// and two are separated by a comma, so a watcher looking for the first
+/// still finds it.
+fn described(screens: &[Screen]) -> String {
+    screens
+        .iter()
+        .map(Screen::describe)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Write each screen's last frame as a PPM.
+///
+/// One screen writes `frame-0001.ppm`, as it always did; two write
+/// `frame-0001-<name>.ppm` each, so a test can tell the monitors apart.
+fn dump(screens: &[Screen], directory: &std::path::Path, drawn: u32) -> Result<(), String> {
+    let _ = std::fs::create_dir_all(directory);
+    for screen in screens {
+        let path = if screens.len() == 1 {
+            directory.join(format!("frame-{drawn:04}.ppm"))
+        } else {
+            directory.join(format!("frame-{drawn:04}-{}.ppm", screen.name))
+        };
+        crate::backend::write_ppm(screen.backend.as_ref(), &path)
+            .map_err(|error| format!("writing {}: {error}", path.display()))?;
+    }
+    Ok(())
+}
+
+/// One screen, and the monitor it is.
+///
+/// The canvas is the screen's own: a frame is composed on it and handed to
+/// the backend, and two screens never share one, since a monitor's pixels
+/// are its own and its damage is too.
+struct Screen {
+    /// Where the frame goes.
+    backend: Box<dyn Backend>,
+    /// What the frame is composed on.
+    canvas: Canvas,
+    /// The monitor it is, in the layout.
+    monitor: MonitorId,
+    /// Where it is in the space every window's rectangle is in.
+    rect: Rect,
+    /// What it is called: the connector's name.
+    name: String,
+}
+
+impl Screen {
+    /// Every screen, laid out side by side from the left in the order the
+    /// backends came.
+    ///
+    /// Hyprland's `monitor = ..., auto` does the same: a monitor with no
+    /// position goes to the right of the ones already placed, so two
+    /// 1024-wide screens cover 0..1024 and 1024..2048 and the pointer walks
+    /// from one to the other.
+    fn all(backends: Vec<Box<dyn Backend>>) -> Result<Vec<Self>, String> {
+        let mut screens = Vec::with_capacity(backends.len());
+        let mut x = 0i64;
+        for (index, backend) in backends.into_iter().enumerate() {
+            let (width, height) = backend.size();
+            let canvas =
+                Canvas::new(width, height).map_err(|error| format!("a canvas: {error:?}"))?;
+            let id = u32::try_from(index)
+                .ok()
+                .and_then(|index| index.checked_add(1))
+                .ok_or_else(|| "too many monitors".to_owned())?;
+            let rect = Rect::new(x, 0, i64::from(width), i64::from(height));
+            x = x.saturating_add(i64::from(width));
+            screens.push(Self {
+                name: backend.name(),
+                backend,
+                canvas,
+                monitor: MonitorId(id),
+                rect,
+            });
+        }
+        Ok(screens)
+    }
+
+    /// What every screen covers together, which is the space the pointer
+    /// moves in.
+    fn desktop(screens: &[Self]) -> (u32, u32) {
+        let width = screens
+            .iter()
+            .map(|screen| screen.rect.right())
+            .max()
+            .unwrap_or(0);
+        let height = screens
+            .iter()
+            .map(|screen| screen.rect.bottom())
+            .max()
+            .unwrap_or(0);
+        (
+            u32::try_from(width).unwrap_or(0),
+            u32::try_from(height).unwrap_or(0),
+        )
+    }
+
+    /// The screen's size in pixels.
+    fn size(&self) -> (u32, u32) {
+        self.backend.size()
+    }
+
+    /// What to say about it in the compositor's log line.
+    fn describe(&self) -> String {
+        self.backend.describe()
+    }
+
+    /// What `wl_output` tells a client this screen is.
+    fn output(&self) -> compositor_server::Output {
+        let (width, height) = self.size();
+        compositor_server::Output {
+            x: i32::try_from(self.rect.x).unwrap_or(0),
+            y: i32::try_from(self.rect.y).unwrap_or(0),
+            width: i32::try_from(width).unwrap_or(0),
+            height: i32::try_from(height).unwrap_or(0),
+            name: self.name.clone(),
+            ..compositor_server::Output::default()
+        }
+    }
+}
+
+/// Open every screen the machine has, or say why there is none.
+///
+/// One screen a connected connector, across every card: two monitors are two
+/// screens whether they are two connectors of one card or a card each.
 ///
 /// Only Linux, and Ferrix through its Linux ABI, have `/dev/dri`; elsewhere
 /// the compositor is headless or it is nothing.
 #[cfg(target_os = "linux")]
-fn open_screen() -> Result<Box<dyn Backend>, String> {
-    crate::backend::Drm::open()
+fn open_screens() -> Result<Vec<Box<dyn Backend>>, String> {
+    let screens: Vec<Box<dyn Backend>> = crate::backend::Drm::open_all()
+        .into_iter()
         .map(|screen| Box::new(screen) as Box<dyn Backend>)
-        .map_err(|error| format!("/dev/dri/card0: {error}"))
+        .collect();
+    if screens.is_empty() {
+        // Say what the first card said rather than "none": a card that is
+        // there and will not open is a different problem from no card.
+        let why = crate::backend::Drm::open().err().map_or_else(
+            || "no connected connector".to_owned(),
+            |error| error.to_string(),
+        );
+        return Err(format!("/dev/dri: {why}"));
+    }
+    Ok(screens)
 }
 
 /// The same, where there is no `/dev/dri`.
 #[cfg(not(target_os = "linux"))]
-fn open_screen() -> Result<Box<dyn Backend>, String> {
+fn open_screens() -> Result<Vec<Box<dyn Backend>>, String> {
     Err("this host has no /dev/dri; run with --headless".to_owned())
 }
 
@@ -720,28 +874,41 @@ fn close(window: WindowId, slots: &mut [Slot], sources: &BTreeMap<WindowId, Sour
 fn place_layers(
     slots: &mut [Slot],
     state: &mut State,
-    size: (u32, u32),
+    screens: &[Screen],
 ) -> Vec<crate::frame::Placed> {
-    let monitor = Rect::new(0, 0, i64::from(size.0), i64::from(size.1));
-    // Everything that has been given a role, with what it asked for.
+    // Everything that has been given a role, with what it asked for and
+    // which screen it asked for it on.
     let mut asked: Vec<(
         usize,
         ObjectId,
         ObjectId,
         bool,
+        usize,
         compositor_layout::layers::Request,
     )> = Vec::new();
+    // A layer surface that named no output goes on the focused monitor,
+    // which is what "you choose" means and what wlroots' own helper does.
+    let chosen = screens
+        .iter()
+        .position(|screen| Some(screen.monitor) == state.focused_monitor())
+        .unwrap_or(0);
     for (index, slot) in slots.iter().enumerate() {
         for id in &slot.layers {
             let Some(layer) = slot.client.layer_surface(*id) else {
                 continue;
             };
             let anchors = compositor_server::Anchors::from_raw(layer.anchor);
+            let on = layer
+                .output
+                .and_then(|output| slot.client.output_of(output))
+                .filter(|which| *which < screens.len())
+                .unwrap_or(chosen);
             asked.push((
                 index,
                 *id,
                 layer.surface,
                 layer.layer.above_windows(),
+                on,
                 compositor_layout::layers::Request {
                     top: anchors.top,
                     bottom: anchors.bottom,
@@ -760,16 +927,33 @@ fn place_layers(
         }
     }
 
-    let requests: Vec<compositor_layout::layers::Request> =
-        asked.iter().map(|(.., request)| *request).collect();
-    let (placements, reserved) = compositor_layout::layers::place(monitor, &requests);
-    let _ = state.set_reserved(MonitorId(1), reserved);
+    // A monitor at a time: an exclusive zone reserves a strip of the screen
+    // the surface is on and of no other, so a bar on one monitor does not
+    // move the windows on the next.
+    let mut placed: Vec<(usize, ObjectId, ObjectId, bool, Rect)> = Vec::new();
+    for (which, screen) in screens.iter().enumerate() {
+        let here: Vec<&(
+            usize,
+            ObjectId,
+            ObjectId,
+            bool,
+            usize,
+            compositor_layout::layers::Request,
+        )> = asked.iter().filter(|(.., on, _)| *on == which).collect();
+        let requests: Vec<compositor_layout::layers::Request> =
+            here.iter().map(|(.., request)| *request).collect();
+        let (placements, reserved) = compositor_layout::layers::place(screen.rect, &requests);
+        let _ = state.set_reserved(screen.monitor, reserved);
+        for ((index, id, surface, above, _, _), placement) in here.into_iter().zip(placements) {
+            placed.push((*index, *id, *surface, *above, placement.rect));
+        }
+    }
 
-    let mut drawn = Vec::with_capacity(asked.len());
-    for ((index, id, surface, above, _), placement) in asked.into_iter().zip(placements) {
+    let mut drawn = Vec::with_capacity(placed.len());
+    for (index, id, surface, above, rect) in placed {
         if let Some(slot) = slots.get_mut(index) {
-            let width = u32::try_from(placement.rect.width).unwrap_or(0);
-            let height = u32::try_from(placement.rect.height).unwrap_or(0);
+            let width = u32::try_from(rect.width).unwrap_or(0);
+            let height = u32::try_from(rect.height).unwrap_or(0);
             let already = slot
                 .client
                 .layer_surface(id)
@@ -781,7 +965,7 @@ fn place_layers(
         drawn.push(crate::frame::Placed {
             client: index,
             surface,
-            rect: placement.rect,
+            rect,
             above,
         });
     }
@@ -861,14 +1045,13 @@ fn configure(client: &mut Client, state: &State, toplevel: ObjectId, window: Win
 }
 
 /// The globals the compositor offers.
-fn globals() -> Globals {
+fn globals(outputs: usize) -> Globals {
     let mut globals = Globals::new();
     for (interface, version, role) in [
         (&core::WL_COMPOSITOR, 6, Role::Compositor),
         (&core::WL_SUBCOMPOSITOR, 1, Role::Subcompositor),
         (&core::WL_SHM, 1, Role::Shm),
         (&core::WL_SEAT, 7, Role::Seat),
-        (&core::WL_OUTPUT, 4, Role::Output),
         (&core::WL_DATA_DEVICE_MANAGER, 3, Role::DataDeviceManager),
         (&xdg_shell::XDG_WM_BASE, 6, Role::XdgWmBase),
         // The bars, wallpapers, launchers and notification daemons: every
@@ -881,6 +1064,11 @@ fn globals() -> Globals {
         ),
     ] {
         let _ = globals.add(interface, version, role);
+    }
+    // One `wl_output` a monitor, in the order the screens came: that is how
+    // a client is told there are two screens, and which is which.
+    for _ in 0..outputs.max(1) {
+        let _ = globals.add(&core::WL_OUTPUT, 4, Role::Output);
     }
     globals
 }

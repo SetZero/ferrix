@@ -4158,6 +4158,44 @@ bezier curves, rounded corners, blur and shadows, dimming and opacity rules,
 special workspaces, groups, multi-monitor with per-monitor workspaces and
 scaling, the plugin-shaped extension points, and the rest of `hyprctl`.
 
+**Begun — more than one monitor (2026-09-17).** A screen a connected
+connector, across every card: the compositor opens every `/dev/dri/cardN`,
+takes each connected connector with a mode and a CRTC of its own, and drives
+one canvas and one pair of dumb buffers for each. The monitors are laid out
+side by side from the left in the order the kernel lists them, which is
+Hyprland's `auto`, and each is named after its connector -- `Virtual-1`,
+`Virtual-2` -- with each connector type numbered from one across the whole
+machine, as wlroots numbers outputs.
+
+The card grew heads to match: `/dev/dri/cardN` publishes one connector, one
+encoder, one CRTC and one primary plane per scanout the driver reported,
+each in a block of four ids of its own, and `SETCRTC` and `PAGE_FLIP` carry
+the head's scanout number down to the driver. `docs/DISPLAY.md` §2.3 has the
+table.
+
+Every monitor is a `wl_output` global of its own, so a client is told there
+are two screens and which is which, and a layer surface is placed on the
+screen its `wl_output` names -- a bar on one monitor reserves a strip of that
+monitor and moves no window on the next. `hyprctl monitors` lists them all
+with their names, positions and active workspaces, and the event socket
+announces each.
+
+The dispatchers that name a monitor are Hyprland's, with
+`CMonitorQueryCore::fromConfigString`'s argument forms -- `current`, a
+direction, `+N`/`-N` along the list, an id counting from zero, or a name:
+`focusmonitor`, `movewindow mon:<monitor>` with `silent`,
+`movecurrentworkspacetomonitor`, `moveworkspacetomonitor` and
+`swapactiveworkspaces`.
+
+The proof is a fifth boot of `cargo xtask test-compositor`: two virtio-gpu
+devices, so two cards and two monitors in the guest, two windows tiled on the
+first, and then a keybind moving one to the second -- with each screen
+required, pixel for pixel, to be the picture `compositor/render`'s own tests
+bless for it, on x86-64 and on AArch64. QEMU enables a second *output* of one
+virtio-gpu only when a host window manager resizes its window, which a
+headless test cannot do; two devices are two consoles, and a screendump names
+each.
+
 **Begun — window groups (2026-09-17).** Hyprland's tabs: windows that share
 one slot in the tiling, of which one is drawn. Only the head is in the
 dwindle tree, and the slot draws whichever member is active, so cycling a
@@ -4294,11 +4332,10 @@ Vulkan driver exists — the choice is the customer's, recorded in
 software fallback with a stated frame-time bound, so the compositor is never
 GPU-only.
 
-**What this stage still owes, in the order it is worth doing.** Multiple
-monitors with per-monitor workspaces and scaling, which needs a second
-virtio-gpu head in `xtask` and a second connector in `card0` before any of
-the layout work is testable. The plugin-shaped extension points. And the GPU,
-which is the largest thing left
+**What this stage still owes, in the order it is worth doing.** Per-monitor
+scaling, which is `monitor = name, res, pos, scale` and a renderer that draws
+a logical pixel as more than one. The plugin-shaped extension points. And the
+GPU, which is the largest thing left
 in this tree: virtio-gpu's 3D commands through a render node,
 `zwp_linux_dmabuf`, GBM-shaped allocation, and a driver stack -- Mesa's virgl
 and Venus on ferrousli, or a Rust path over Vulkan -- that does not exist on

@@ -56,6 +56,7 @@ fn two_clients() -> (State, MonitorLayout) {
     let mut state = State::new(Settings::default());
     let _ = state
         .add_monitor(Monitor {
+            name: "Virtual-1".to_owned(),
             id: MonitorId(1),
             rect: Rect::new(0, 0, i64::from(WIDTH), i64::from(HEIGHT)),
             reserved: Gaps::all(0),
@@ -153,6 +154,100 @@ fn frame_dispatching(style: &Style, after: &[(&str, &str)], must_change: bool) -
     bytes
 }
 
+/// Two 1024x768 monitors side by side, with the gradient moved to the second
+/// one: a frame each, drawn the way the compositor draws them -- one canvas
+/// a monitor, each with its own origin in the space the windows' rectangles
+/// are in.
+fn two_monitor_frames() -> (Vec<u8>, Vec<u8>) {
+    let mut state = State::new(Settings::default());
+    for (index, x) in [(1u32, 0i64), (2, i64::from(WIDTH))] {
+        let _ = state
+            .add_monitor(Monitor {
+                name: format!("Virtual-{index}"),
+                id: MonitorId(index),
+                rect: Rect::new(x, 0, i64::from(WIDTH), i64::from(HEIGHT)),
+                reserved: Gaps::all(0),
+            })
+            .unwrap();
+    }
+    let _ = state.open_window(CHECKERBOARD).unwrap();
+    let _ = state.open_window(GRADIENT).unwrap();
+    // The gradient has the focus, and goes to the second monitor with it;
+    // the checkerboard is left alone on the first, unfocused.
+    let changes = state.dispatch_str("movewindow", "mon:1").unwrap();
+    assert!(!changes.is_empty(), "the window did not move");
+
+    let outputs = state.layout();
+    let mut frames = Vec::new();
+    for (index, x) in [(1u32, 0i64), (2, i64::from(WIDTH))] {
+        let layout = outputs
+            .iter()
+            .find(|output| output.monitor == MonitorId(index))
+            .expect("a layout for the monitor")
+            .clone();
+        let buffers = client_buffers(&layout);
+        let mut canvas = Canvas::new(WIDTH, HEIGHT).unwrap();
+        let full = Damage::full(WIDTH, HEIGHT);
+        let produced = render(
+            &mut canvas,
+            &layout,
+            (x, 0),
+            &Style::default(),
+            &surfaces(&buffers),
+            &full,
+        );
+        assert_eq!(produced, full);
+        frames.push(canvas.data().to_vec());
+    }
+    let mut frames = frames.into_iter();
+    let (left, right) = (
+        frames.next().expect("the left frame"),
+        frames.next().expect("the right frame"),
+    );
+    (left, right)
+}
+
+/// A window moved to the second monitor is drawn there and nowhere else,
+/// each monitor drawing the workspace it shows.
+///
+/// These are the two pictures `cargo xtask test-compositor` requires from
+/// screendumps of two virtio-gpu devices, one for each of the guest's cards.
+#[test]
+fn the_first_monitor_keeps_the_window_that_stayed() {
+    let (left, _) = two_monitor_frames();
+    golden::check("two-monitors-left", WIDTH, HEIGHT, &left);
+}
+
+/// The other monitor, and what both of them must be: two different pictures,
+/// neither empty and neither the tiled pair.
+///
+/// A test of its own for each image because blessing one writes it and
+/// stops, and two images want two runs.
+#[test]
+fn the_second_monitor_draws_the_window_moved_to_it() {
+    let (left, right) = two_monitor_frames();
+    golden::check("two-monitors-right", WIDTH, HEIGHT, &right);
+    assert_ne!(left, right, "both monitors drew the same thing");
+
+    // Each monitor has one window on it, so neither frame is the tiled pair
+    // and neither is empty.
+    let background = shown(Style::default().background.0 & 0x00FF_FFFF);
+    for (what, frame) in [("left", &left), ("right", &right)] {
+        let pixels: Vec<u32> = frame
+            .chunks_exact(4)
+            .filter_map(|pixel| pixel.try_into().ok().map(u32::from_le_bytes))
+            .collect();
+        assert!(
+            pixels.iter().any(|pixel| *pixel != background),
+            "the {what} monitor is empty"
+        );
+        assert!(
+            pixels.contains(&background),
+            "the {what} monitor has no background at all, so nothing is tiled"
+        );
+    }
+}
+
 /// The frame with nothing dispatched: the second window opened is the
 /// focused one, which dwindle puts on the right.
 fn two_client_frame() -> Vec<u8> {
@@ -184,6 +279,7 @@ fn bar_and_two_clients_frame() -> Vec<u8> {
     let mut state = State::new(Settings::default());
     let _ = state
         .add_monitor(Monitor {
+            name: "Virtual-1".to_owned(),
             id: MonitorId(1),
             rect: monitor,
             reserved: Gaps::all(0),
@@ -1045,6 +1141,7 @@ fn a_layout_on_a_monitor_away_from_the_origin_is_drawn_in_its_coordinates() {
     let mut state = State::new(Settings::default());
     let _ = state
         .add_monitor(Monitor {
+            name: "Virtual-1".to_owned(),
             id: MonitorId(7),
             rect: Rect::new(1920, 100, 200, 100),
             reserved: Gaps::all(0),

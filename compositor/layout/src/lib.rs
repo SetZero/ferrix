@@ -119,10 +119,14 @@ impl Rect {
 }
 
 /// A monitor as the layouts see it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Monitor {
     /// Its id.
     pub id: MonitorId,
+    /// What it is called: the connector's name, as Hyprland names a monitor
+    /// and as a `monitor =` line, a `workspace` rule and `focusmonitor`
+    /// name one. Empty for a monitor nothing has named.
+    pub name: String,
     /// Where it is and how big, in logical pixels.
     pub rect: Rect,
     /// The strips along its edges that layer-shell surfaces such as bars

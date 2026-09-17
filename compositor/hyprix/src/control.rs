@@ -146,26 +146,33 @@ pub fn snapshot(
     state: &State,
     clients: &[crate::state::Slot],
     sources: &BTreeMap<WindowId, Source>,
-    screen: (u32, u32),
 ) -> Snapshot {
-    let mut snapshot = Snapshot {
-        monitors: vec![Monitor {
-            id: 0,
-            name: "HEADLESS-1".to_owned(),
-            width: i32::try_from(screen.0).unwrap_or(0),
-            height: i32::try_from(screen.1).unwrap_or(0),
+    let mut snapshot = Snapshot::default();
+    // One monitor a screen, in the order they were added, which is the order
+    // `hyprctl monitors` prints and the order `focusmonitor +1` walks.
+    for monitor in state.monitors() {
+        let active = state.active_workspace(monitor.id);
+        snapshot.monitors.push(Monitor {
+            id: monitor_id(monitor.id),
+            name: monitor.name.clone(),
+            width: i32::try_from(monitor.rect.width).unwrap_or(0),
+            height: i32::try_from(monitor.rect.height).unwrap_or(0),
             refresh: 60.0,
-            at: (0, 0),
-            active_workspace: 1,
-            active_workspace_name: "1".to_owned(),
+            at: (
+                i32::try_from(monitor.rect.x).unwrap_or(0),
+                i32::try_from(monitor.rect.y).unwrap_or(0),
+            ),
+            active_workspace: active.map_or(0, |id| i32::try_from(id.0).unwrap_or(0)),
+            active_workspace_name: active
+                .map(|id| state.workspace_name(id))
+                .unwrap_or_default(),
             special_workspace: state
-                .special_on(compositor_layout::MonitorId(1))
+                .special_on(monitor.id)
                 .map(|id| (i32::try_from(id.0).unwrap_or(0), state.workspace_name(id))),
             scale: 1.0,
-            focused: true,
-        }],
-        ..Snapshot::default()
-    };
+            focused: Some(monitor.id) == state.focused_monitor(),
+        });
+    }
 
     let focused = state.focused_window();
     // Hyprland's focus history id: 0 is the focused window, and the rest
@@ -204,19 +211,30 @@ pub fn snapshot(
         }
         snapshot.workspaces.push(Workspace {
             id: i32::try_from(output.workspace.0).unwrap_or(0),
-            name: output.workspace.0.to_string(),
-            monitor: "HEADLESS-1".to_owned(),
+            name: state.workspace_name(output.workspace),
+            monitor: state
+                .monitors()
+                .find(|monitor| monitor.id == output.monitor)
+                .map(|monitor| monitor.name.clone())
+                .unwrap_or_default(),
             windows,
             has_fullscreen,
         });
-        snapshot.active_workspace = i32::try_from(output.workspace.0).unwrap_or(0);
-        if let Some(monitor) = snapshot.monitors.first_mut() {
-            monitor.active_workspace = snapshot.active_workspace;
-            monitor.active_workspace_name = snapshot.active_workspace.to_string();
+        // The active workspace is the focused monitor's, not the last
+        // monitor's: `hyprctl activeworkspace` answers about where the
+        // person is.
+        if Some(output.monitor) == state.focused_monitor() {
+            snapshot.active_workspace = i32::try_from(output.workspace.0).unwrap_or(0);
         }
     }
     snapshot.active_window = focused.map(|window| window.0);
     snapshot
+}
+
+/// The id `hyprctl` gives a monitor, which Hyprland counts from zero where
+/// this tree's `MonitorId` counts from one.
+fn monitor_id(monitor: compositor_layout::MonitorId) -> i32 {
+    i32::try_from(monitor.0.saturating_sub(1)).unwrap_or(0)
 }
 
 /// The title and app id of the window on `surface`, if it has them.

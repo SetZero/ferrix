@@ -59,6 +59,11 @@ pub(crate) const BACKGROUND: [u8; 3] = [0x1E, 0x1E, 0x2E];
 /// The virtio-gpu device's QEMU id, which the screendump names.
 pub(crate) const DEVICE_ID: &str = "gpu0";
 
+/// The id of screen `index`'s device: `gpu0`, `gpu1`.
+pub(crate) fn device_id(index: u32) -> String {
+    format!("gpu{index}")
+}
+
 /// How long the screen may take to show the colour after the marker: the
 /// program's `SETCRTC` returns once the flush is queued, not once QEMU has
 /// drawn it.

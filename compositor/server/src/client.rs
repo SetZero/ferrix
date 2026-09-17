@@ -256,8 +256,13 @@ pub struct Client {
     /// milliseconds. Hyprland's `input:repeat_rate` and `input:repeat_delay`
     /// defaults.
     repeat: (i32, i32),
-    /// What `wl_output` says the screen is.
-    output: Output,
+    /// What each `wl_output` says its screen is, one to a monitor and in
+    /// the order the globals advertise them.
+    outputs: Vec<Output>,
+    /// The monitor each bound `wl_output` object names, by its place in
+    /// `outputs`: a layer surface and a `wl_surface.enter` both name a
+    /// screen by its object.
+    output_objects: BTreeMap<ObjectId, usize>,
     /// The next configure serial. Serials go up and are never reused, so a
     /// client's `ack_configure` names one configure and no other.
     serial: u32,
@@ -293,7 +298,8 @@ impl Client {
             capabilities: 0,
             keymap: None,
             repeat: (25, 600),
-            output: Output::default(),
+            outputs: vec![Output::default()],
+            output_objects: BTreeMap::new(),
             serial: 1,
         }
     }
@@ -328,8 +334,24 @@ impl Client {
     }
 
     /// Say what the screen is, before any client binds `wl_output`.
-    pub const fn set_output(&mut self, output: Output) {
-        self.output = output;
+    pub fn set_output(&mut self, output: Output) {
+        self.outputs = vec![output];
+    }
+
+    /// Say what every screen is, in the order the `wl_output` globals were
+    /// added: the first global describes the first monitor and so on, which
+    /// is how a client tells two screens apart.
+    pub fn set_outputs(&mut self, outputs: Vec<Output>) {
+        if !outputs.is_empty() {
+            self.outputs = outputs;
+        }
+    }
+
+    /// The monitor a bound `wl_output` object names, by its place in the
+    /// list [`Client::set_outputs`] was given.
+    #[must_use]
+    pub fn output_of(&self, object: ObjectId) -> Option<usize> {
+        self.output_objects.get(&object).copied()
     }
 
     /// The subsurface `id` names, if it is one.
@@ -1160,7 +1182,17 @@ impl Client {
             }
         }
         if global.role == Role::Output {
-            self.describe_output(id, version);
+            // Which screen this global is: the outputs are advertised in the
+            // order `set_outputs` was given them.
+            let which = self
+                .globals
+                .all()
+                .iter()
+                .filter(|other| other.role == Role::Output)
+                .position(|other| other.name == *name)
+                .unwrap_or(0);
+            let _ = self.output_objects.insert(id, which);
+            self.describe_output(id, version, which);
         }
         if global.role == Role::Shm {
             // libwayland's wl_shm sends its formats from the bind handler,
@@ -2097,8 +2129,10 @@ impl Client {
     /// against, and foot reports `(null): 0x0+0x0@0Hz` for an output that
     /// sent none. The `done` at the end is what says the description is
     /// whole, and a client waits for it.
-    fn describe_output(&mut self, id: ObjectId, version: u32) {
-        let mode = self.output;
+    fn describe_output(&mut self, id: ObjectId, version: u32, which: usize) {
+        let Some(mode) = self.outputs.get(which).cloned() else {
+            return;
+        };
         let _ = self.out.write(
             id,
             wl_output::event::GEOMETRY,
@@ -2148,7 +2182,7 @@ impl Client {
         }
         if version >= 4 {
             for (opcode, text) in [
-                (wl_output::event::NAME, mode.name),
+                (wl_output::event::NAME, mode.name.as_str()),
                 (
                     wl_output::event::DESCRIPTION,
                     "the Ferrix compositor's output",

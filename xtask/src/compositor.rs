@@ -160,6 +160,44 @@ bind = SUPER, C, exec, /bin/hyprctl clients
 bind = SUPER, W, exec, /bin/hyprctl activewindow
 ";
 
+/// The two pictures the two-monitor boot requires, one a screen: the
+/// windows tiled on the first, then the gradient alone on the second with
+/// the checkerboard alone on the first.
+const MONITOR_EXPECTED: [(&str, &str); 2] = [
+    (
+        "tiled",
+        "compositor/render/tests/data/dwindle-two-clients.xrle",
+    ),
+    (
+        "the checkerboard alone on the first monitor",
+        "compositor/render/tests/data/two-monitors-left.xrle",
+    ),
+];
+
+/// What the second screen must show once the keybind has been pressed.
+const MONITOR_OTHERS: [(&str, &str); 1] = [(
+    "the gradient alone on the second monitor",
+    "compositor/render/tests/data/two-monitors-right.xrle",
+)];
+
+/// The keybind the two-monitor boot presses between its two pictures.
+const MONITOR_BINDS: [(&str, &[&str]); 1] = [("SUPER M", &["meta_l", "m"])];
+
+/// The configuration the fifth boot is given: two monitors, and a keybind
+/// that sends the focused window to the second one.
+const MONITOR_CONFIG: &str = "\
+# Carried into the initramfs by `cargo xtask test-compositor`.
+exec-once = /bin/hyprctl subscribe
+exec-once = /bin/pattern checkerboard one
+exec-once = /bin/pattern gradient two
+bind = SUPER, M, movewindow, mon:1
+# Both answers from one press, because the presses are the ones every boot
+# makes: the monitors, and the clients whose last line is what the wait for
+# the answers looks for.
+bind = SUPER, C, exec, /bin/hyprctl --batch monitors ; clients
+bind = SUPER, W, exec, /bin/hyprctl activewindow
+";
+
 /// The configuration the second boot is given: a bar through
 /// `zwlr_layer_shell_v1`, and the same two windows.
 ///
@@ -227,6 +265,28 @@ fn build(arch: Arch, package: &str, binary: &str) -> Result<PathBuf> {
 /// configuration are files in the initramfs, since the kernel embeds one
 /// program and unpacks the rest. The arguments reach the compositor through
 /// the init script, which `Options::parse` reads as its own command line.
+/// What a boot must show.
+///
+/// The states are the first screen's, one to a keybind; `others` is what
+/// every screen after the first must show once the last state has been
+/// reached, which is how a second monitor is judged.
+#[derive(Clone, Copy, Debug)]
+struct Wanted<'a> {
+    /// The pictures the first screen must show, in order.
+    states: &'a [(&'a str, &'a str)],
+    /// What each further screen must show at the end.
+    others: &'a [(&'a str, &'a str)],
+}
+
+impl Wanted<'_> {
+    /// How many virtio-gpu devices the boot needs: one a screen.
+    fn screens(&self) -> u32 {
+        u32::try_from(self.others.len())
+            .unwrap_or(0)
+            .saturating_add(1)
+    }
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "a boot is a program, its clients, a configuration and what to require of it"
@@ -237,7 +297,7 @@ fn boot_and_dump(
     client: &Path,
     ctl: &Path,
     config: &str,
-    wanted: &[(&str, &str)],
+    wanted: &Wanted<'_>,
     binds: &[(&str, &[&str])],
     args: &Args,
 ) -> Result<(Vec<Image>, Vec<String>)> {
@@ -276,6 +336,7 @@ fn boot_and_dump(
     let mut qemu_args = args.clone();
     qemu_args.display = true;
     qemu_args.qmp_port = Some(port);
+    qemu_args.screens = wanted.screens();
     let dump = paths::build_dir(arch).join("compositor.ppm");
     let mut taken = Vec::new();
     let mut said = Vec::new();
@@ -301,7 +362,7 @@ fn boot_and_dump(
         }
         say_the_marker(watching, arch);
 
-        for (index, (what, path)) in wanted.iter().enumerate() {
+        for (index, (what, path)) in wanted.states.iter().enumerate() {
             // Each keybind but the first is sent after the picture before it
             // has settled, so that a state is never judged before the
             // compositor has been asked to make it.
@@ -317,6 +378,24 @@ fn boot_and_dump(
             }
             println!(
                 "  {arch}: {what}, every one of {} pixels as the renderer draws them",
+                screen.width * screen.height
+            );
+            taken.push(screen);
+        }
+
+        // The screens after the first, once the states have been reached:
+        // each is a device of its own in QEMU, and a screendump names it.
+        for (index, (what, path)) in wanted.others.iter().enumerate() {
+            let which = u32::try_from(index).unwrap_or(0).saturating_add(1);
+            let want = expected(path)?;
+            let screen = settle_on(&mut qmp, &crate::display::device_id(which), &dump, &want)?;
+            let (found, count) = differences(&screen, &want);
+            if count != 0 {
+                return Err(unexpected(arch, what, &screen, found, count));
+            }
+            println!(
+                "  {arch}: screen {which}: {what}, every one of {} pixels as the renderer draws \
+                 them",
                 screen.width * screen.height
             );
             taken.push(screen);
@@ -395,9 +474,15 @@ fn key(name: &str, down: bool) -> String {
 /// judged, so a state that never arrives is reported as the picture it
 /// stopped at rather than as a timeout.
 fn settle(qmp: &mut Qmp, dump: &Path, want: &[u8]) -> Result<Image> {
+    settle_on(qmp, DEVICE_ID, dump, want)
+}
+
+/// The same, of one named device: a machine with two screens has a
+/// virtio-gpu each, and a screendump names which.
+fn settle_on(qmp: &mut Qmp, device: &str, dump: &Path, want: &[u8]) -> Result<Image> {
     let deadline = Instant::now() + SETTLE;
     loop {
-        qmp.screendump(Some(DEVICE_ID), dump)?;
+        qmp.screendump(Some(device), dump)?;
         let bytes = std::fs::read(dump)
             .map_err(|error| Error::new(format!("reading {}: {error}", dump.display())))?;
         let screen = parse_ppm(&bytes)?;
@@ -448,7 +533,17 @@ pub(crate) fn test_compositor(args: &Args) -> Result<()> {
         let client = build(arch, "compositor-pattern", "pattern")?;
         let ctl = build(arch, "compositor-ctl", "hyprctl")?;
         let (screens, said) = boot_and_dump(
-            arch, &program, &client, &ctl, CONFIG, &EXPECTED, &BINDS, args,
+            arch,
+            &program,
+            &client,
+            &ctl,
+            CONFIG,
+            &Wanted {
+                states: &EXPECTED,
+                others: &[],
+            },
+            &BINDS,
+            args,
         )?;
         if screens.len() != EXPECTED.len() {
             return Err(Error::new(format!(
@@ -472,57 +567,7 @@ pub(crate) fn test_compositor(args: &Args) -> Result<()> {
             }
         }
 
-        // `hyprctl clients` names both windows and `hyprctl activewindow`
-        // names the focused one, which after the swap is the checkerboard:
-        // the same window the third picture draws the active border round.
-        let has = |wanted: &str| said.iter().any(|line| line.contains(wanted));
-        for wanted in [
-            // Both windows, from `clients`.
-            "title: one",
-            "title: two",
-            "class: rocks.magical.pattern",
-            // The focused one, from `activewindow`, on the workspace it is
-            // on.
-            "workspace: 1 (1)",
-        ] {
-            if !has(wanted) {
-                return Err(Error::new(format!(
-                    "{arch}: `hyprctl` over the control socket did not say `{wanted}`"
-                )));
-            }
-        }
-        println!("  {arch}: `hyprctl clients` and `hyprctl activewindow` answered on the guest");
-
-        // The event socket. The subscriber started before the clients did,
-        // so it was told the monitor and the workspace as well as each
-        // window, and the focus moving as each keybind was pressed.
-        for wanted in [
-            "monitoradded>>",
-            "createworkspacev2>>1,1",
-            "openwindow>>",
-            "activewindow>>rocks.magical.pattern,one",
-            "activewindow>>rocks.magical.pattern,two",
-        ] {
-            if !has(wanted) {
-                return Err(Error::new(format!(
-                    "{arch}: nothing on the event socket said `{wanted}`"
-                )));
-            }
-        }
-        let focus_changes = said
-            .iter()
-            .filter(|line| line.contains("activewindowv2>>"))
-            .count();
-        if focus_changes < 3 {
-            return Err(Error::new(format!(
-                "{arch}: the focus moved twice by keybind and the socket said so \
-                 {focus_changes} times in all"
-            )));
-        }
-        println!(
-            "  {arch}: a subscriber on the event socket was told {focus_changes} focus changes \
-             and every window"
-        );
+        the_sockets_said(arch, &said)?;
 
         // Two more boots, each with a configuration of its own: a bar
         // through `zwlr_layer_shell_v1`, and Hyprland's two window
@@ -541,8 +586,19 @@ pub(crate) fn test_compositor(args: &Args) -> Result<()> {
                 DECORATED_EXPECTED,
             ),
         ] {
-            let (screens, _) =
-                boot_and_dump(arch, &program, &client, &ctl, config, &[wanted], &[], args)?;
+            let (screens, _) = boot_and_dump(
+                arch,
+                &program,
+                &client,
+                &ctl,
+                config,
+                &Wanted {
+                    states: &[wanted],
+                    others: &[],
+                },
+                &[],
+                args,
+            )?;
             let Some(screen) = screens.first() else {
                 return Err(Error::new(format!("{arch}: {what}: no screendump")));
             };
@@ -553,7 +609,132 @@ pub(crate) fn test_compositor(args: &Args) -> Result<()> {
         }
 
         test_groups(arch, &program, &client, &ctl, args)?;
+        test_monitors(arch, &program, &client, &ctl, args)?;
     }
+    Ok(())
+}
+
+/// A fifth boot: two monitors, which on QEMU are two virtio-gpu devices and
+/// so two cards in the guest.
+///
+/// The keybind sends the focused window to the second monitor, and each
+/// screen is then required to be the picture `compositor/render`'s own tests
+/// bless for it: one window each, neither monitor drawing the other's.
+fn test_monitors(arch: Arch, program: &Path, client: &Path, ctl: &Path, args: &Args) -> Result<()> {
+    let (screens, said) = boot_and_dump(
+        arch,
+        program,
+        client,
+        ctl,
+        MONITOR_CONFIG,
+        &Wanted {
+            states: &MONITOR_EXPECTED,
+            others: &MONITOR_OTHERS,
+        },
+        &MONITOR_BINDS,
+        args,
+    )?;
+    if screens.len() != MONITOR_EXPECTED.len() + MONITOR_OTHERS.len() {
+        return Err(Error::new(format!(
+            "{arch}: {} of {} pictures were taken",
+            screens.len(),
+            MONITOR_EXPECTED.len() + MONITOR_OTHERS.len()
+        )));
+    }
+    // The two monitors are two pictures: a compositor drawing the same frame
+    // on both screens would match one of them and not the other, and this is
+    // what says so out loud.
+    if let (Some(left), Some(right)) = (screens.get(1), screens.get(2))
+        && left.pixels == right.pixels
+    {
+        return Err(Error::new(format!(
+            "{arch}: both monitors show the same picture"
+        )));
+    }
+    monitors_were_said(arch, &said)
+}
+
+/// What the two-monitor boot's `hyprctl` and event socket must have said:
+/// two monitors by name, and the window's move between them.
+fn monitors_were_said(arch: Arch, said: &[String]) -> Result<()> {
+    let has = |wanted: &str| said.iter().any(|line| line.contains(wanted));
+    for wanted in ["Monitor Virtual-1 (ID 0)", "Monitor Virtual-2 (ID 1)"] {
+        if !has(wanted) {
+            return Err(Error::new(format!(
+                "{arch}: `hyprctl monitors` did not say `{wanted}`"
+            )));
+        }
+    }
+    let added = said
+        .iter()
+        .filter(|line| line.contains("monitoradded>>"))
+        .count();
+    if added < 2 {
+        return Err(Error::new(format!(
+            "{arch}: the event socket announced {added} monitors, not two"
+        )));
+    }
+    if !has("movewindow>>") {
+        return Err(Error::new(format!(
+            "{arch}: nothing on the event socket said the window moved"
+        )));
+    }
+    println!("  {arch}: `hyprctl monitors` named both screens and the socket announced both");
+    Ok(())
+}
+
+/// What the first boot's `hyprctl` and event socket must have said.
+///
+/// `hyprctl clients` names both windows and `hyprctl activewindow` names the
+/// focused one, which after the swap is the checkerboard: the same window
+/// the third picture draws the active border round. The subscriber started
+/// before the clients did, so it was told the monitor and the workspace as
+/// well as each window, and the focus moving as each keybind was pressed.
+fn the_sockets_said(arch: Arch, said: &[String]) -> Result<()> {
+    let has = |wanted: &str| said.iter().any(|line| line.contains(wanted));
+    for wanted in [
+        // Both windows, from `clients`.
+        "title: one",
+        "title: two",
+        "class: rocks.magical.pattern",
+        // The focused one, from `activewindow`, on the workspace it is on.
+        "workspace: 1 (1)",
+    ] {
+        if !has(wanted) {
+            return Err(Error::new(format!(
+                "{arch}: `hyprctl` over the control socket did not say `{wanted}`"
+            )));
+        }
+    }
+    println!("  {arch}: `hyprctl clients` and `hyprctl activewindow` answered on the guest");
+
+    for wanted in [
+        "monitoradded>>",
+        "createworkspacev2>>1,1",
+        "openwindow>>",
+        "activewindow>>rocks.magical.pattern,one",
+        "activewindow>>rocks.magical.pattern,two",
+    ] {
+        if !has(wanted) {
+            return Err(Error::new(format!(
+                "{arch}: nothing on the event socket said `{wanted}`"
+            )));
+        }
+    }
+    let focus_changes = said
+        .iter()
+        .filter(|line| line.contains("activewindowv2>>"))
+        .count();
+    if focus_changes < 3 {
+        return Err(Error::new(format!(
+            "{arch}: the focus moved twice by keybind and the socket said so {focus_changes} \
+             times in all"
+        )));
+    }
+    println!(
+        "  {arch}: a subscriber on the event socket was told {focus_changes} focus changes and \
+         every window"
+    );
     Ok(())
 }
 
@@ -570,7 +751,10 @@ fn test_groups(arch: Arch, program: &Path, client: &Path, ctl: &Path, args: &Arg
         client,
         ctl,
         GROUP_CONFIG,
-        &GROUPED_EXPECTED,
+        &Wanted {
+            states: &GROUPED_EXPECTED,
+            others: &[],
+        },
         &GROUP_BINDS,
         args,
     )?;

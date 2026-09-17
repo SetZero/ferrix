@@ -1029,13 +1029,20 @@ fn qemu_command(
 /// ARMv7-A's machine has no virtio-gpu.
 fn attach_display(command: &mut Command, arch: Arch, args: &Args) {
     if args.display && arch != Arch::Armv7a {
-        let _ = command.args([
-            "-device",
-            &format!(
-                "virtio-gpu-pci,id={},disable-legacy=on,iommu_platform=on,xres=1024,yres=768",
-                crate::display::DEVICE_ID
-            ),
-        ]);
+        // One device a screen. QEMU gives each its own console, which is
+        // what a screendump names and what makes the guest's second card a
+        // second monitor; a second *output* of one device stays disabled
+        // until a host window manager resizes it, which a headless test has
+        // nothing to do.
+        for index in 0..args.screens.max(1) {
+            let _ = command.args([
+                "-device",
+                &format!(
+                    "virtio-gpu-pci,id={},disable-legacy=on,iommu_platform=on,xres=1024,yres=768",
+                    crate::display::device_id(index)
+                ),
+            ]);
+        }
     }
     // A keyboard and a tablet, which is what QEMU's own HID devices are and
     // what `input-send-event` over QMP drives. The tablet rather than the

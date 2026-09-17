@@ -35,7 +35,7 @@ use std::f64::consts::{FRAC_PI_2, PI};
 use compositor_config::{Bind, Config, Gaps};
 
 use crate::dispatch::{
-    Direction, Dispatcher, FullscreenMode, GroupMember, Locking, WorkspaceTarget,
+    Direction, Dispatcher, FullscreenMode, GroupMember, Locking, MonitorTarget, WorkspaceTarget,
 };
 use crate::dwindle::Dwindle;
 use crate::geometry::{self, Area, overlap, sticks};
@@ -467,7 +467,7 @@ impl State {
         let mut windows = self.placements(output, focus);
         if let Some(special) = output.special {
             let over = Output {
-                monitor: output.monitor,
+                monitor: output.monitor.clone(),
                 active: special,
                 special: None,
             };
@@ -533,14 +533,15 @@ impl State {
                 .first()
                 .copied()
                 .unwrap_or_else(|| state.first_free_workspace());
-            state.ensure_workspace(active, monitor.id);
+            let id = monitor.id;
+            state.ensure_workspace(active, id);
             state.outputs.push(Output {
                 monitor,
                 active,
                 special: None,
             });
             if state.focused_monitor.is_none() {
-                state.focused_monitor = Some(monitor.id);
+                state.focused_monitor = Some(id);
             }
             Vec::new()
         }))
@@ -695,6 +696,19 @@ impl State {
             Dispatcher::ChangeGroupActive(which) => state.change_group_active(which),
             Dispatcher::MoveIntoGroup(direction) => state.move_into_group(direction),
             Dispatcher::MoveOutOfGroup => state.move_out_of_group(),
+            Dispatcher::FocusMonitor(target) => state.focus_monitor(&target),
+            Dispatcher::MoveWindowToMonitor { monitor, silent } => {
+                state.move_window_to_monitor(&monitor, silent)
+            }
+            Dispatcher::MoveCurrentWorkspaceToMonitor(target) => {
+                state.move_current_workspace_to_monitor(&target)
+            }
+            Dispatcher::MoveWorkspaceToMonitor { workspace, monitor } => {
+                state.move_workspace_to_monitor(workspace, &monitor)
+            }
+            Dispatcher::SwapActiveWorkspaces { one, other } => {
+                state.swap_active_workspaces(&one, &other)
+            }
             Dispatcher::LockGroups(lock) => {
                 state.groups_locked = match lock {
                     Locking::Lock => true,
@@ -1484,6 +1498,198 @@ impl State {
                 ids.get(usize::try_from(next).ok()?).copied()
             }
         }
+    }
+
+    // -- Monitors -------------------------------------------------------------
+
+    /// The monitor a dispatcher's argument names, by
+    /// `CMonitorQueryCore::fromConfigString`'s rules.
+    fn monitor_target(&self, target: &MonitorTarget) -> Option<MonitorId> {
+        match target {
+            MonitorTarget::Current => self.focused_monitor,
+            MonitorTarget::Direction(direction) => self.monitor_towards(*direction),
+            MonitorTarget::Relative(offset) => self.monitor_along(*offset),
+            // Hyprland's monitor ids count from zero, and this tree's from
+            // one: the first monitor is `0` to a person and `MonitorId(1)`
+            // here, as `hyprctl monitors` prints it.
+            MonitorTarget::Id(id) => u32::try_from(id.saturating_add(1))
+                .ok()
+                .map(MonitorId)
+                .filter(|id| self.output(*id).is_some()),
+            MonitorTarget::Named(name) => self.monitor_named(name),
+        }
+    }
+
+    /// The monitor called `name`.
+    #[must_use]
+    pub fn monitor_named(&self, name: &str) -> Option<MonitorId> {
+        self.outputs
+            .iter()
+            .find(|output| output.monitor.name == name)
+            .map(|output| output.monitor.id)
+    }
+
+    /// The monitor `offset` places along from the focused one, wrapping
+    /// around: `focusmonitor +1`.
+    fn monitor_along(&self, offset: i64) -> Option<MonitorId> {
+        let count = i64::try_from(self.outputs.len()).ok()?;
+        if count == 0 {
+            return None;
+        }
+        let at = self
+            .outputs
+            .iter()
+            .position(|output| Some(output.monitor.id) == self.focused_monitor)
+            .and_then(|at| i64::try_from(at).ok())
+            .unwrap_or(0);
+        let wrapped = (at + offset % count + count) % count;
+        let index = usize::try_from(wrapped).ok()?;
+        self.outputs.get(index).map(|output| output.monitor.id)
+    }
+
+    /// `focusmonitor`: focus a monitor, and whatever window was last
+    /// focused on the workspace it shows.
+    fn focus_monitor(&mut self, target: &MonitorTarget) -> Vec<Change> {
+        let Some(monitor) = self.monitor_target(target) else {
+            return Vec::new();
+        };
+        self.focused_monitor = Some(monitor);
+        if let Some(window) = self
+            .active_workspace(monitor)
+            .and_then(|workspace| self.focused_on(workspace))
+        {
+            self.focus(window);
+        }
+        Vec::new()
+    }
+
+    /// `movewindow mon:<monitor>`: send the focused window to a monitor's
+    /// active workspace.
+    fn move_window_to_monitor(&mut self, target: &MonitorTarget, silent: bool) -> Vec<Change> {
+        let (Some(window), Some(monitor)) = (self.focused_window(), self.monitor_target(target))
+        else {
+            return Vec::new();
+        };
+        let Some(to) = self.active_workspace(monitor) else {
+            return Vec::new();
+        };
+        if self.workspace_of(window) == Some(to) {
+            return Vec::new();
+        }
+        self.move_window_to(window, to);
+        if silent {
+            // The window went; the focus stays where it was, which is what
+            // `silent` means.
+            if let Some(stay) = self.focused_window() {
+                self.focus(stay);
+            }
+        } else {
+            self.focused_monitor = Some(monitor);
+            self.focus(window);
+        }
+        vec![Change::MoveToWorkspace {
+            window,
+            workspace: to,
+        }]
+    }
+
+    /// `movecurrentworkspacetomonitor`: the focused monitor's workspace goes
+    /// to another monitor, which then shows it.
+    fn move_current_workspace_to_monitor(&mut self, target: &MonitorTarget) -> Vec<Change> {
+        let Some(workspace) = self.current_workspace() else {
+            return Vec::new();
+        };
+        self.workspace_onto(workspace, target)
+    }
+
+    /// `moveworkspacetomonitor`: a workspace goes to a monitor.
+    fn move_workspace_to_monitor(
+        &mut self,
+        workspace: WorkspaceTarget,
+        target: &MonitorTarget,
+    ) -> Vec<Change> {
+        let Some(workspace) = self.resolve(workspace) else {
+            return Vec::new();
+        };
+        self.workspace_onto(workspace, target)
+    }
+
+    /// Put `workspace` on the monitor `target` names, and show it there.
+    ///
+    /// The monitor it came from is left showing something: the workspace it
+    /// showed before, or a new one, since a monitor showing nothing at all
+    /// is not a state Hyprland leaves a screen in.
+    fn workspace_onto(&mut self, workspace: WorkspaceId, target: &MonitorTarget) -> Vec<Change> {
+        let Some(monitor) = self.monitor_target(target) else {
+            return Vec::new();
+        };
+        let from = self.workspace_monitor(workspace);
+        if from == Some(monitor) {
+            return Vec::new();
+        }
+        self.ensure_workspace(workspace, monitor);
+        if let Some(ws) = self.workspaces.get_mut(&workspace) {
+            ws.monitor = monitor;
+        }
+        if let Some(output) = self
+            .outputs
+            .iter_mut()
+            .find(|output| output.monitor.id == monitor)
+        {
+            output.active = workspace;
+        }
+        if let Some(from) = from {
+            let replacement = self
+                .workspaces
+                .iter()
+                .find(|(id, ws)| ws.monitor == from && **id != workspace)
+                .map(|(id, _)| *id)
+                .unwrap_or_else(|| self.first_free_workspace());
+            self.ensure_workspace(replacement, from);
+            if let Some(output) = self
+                .outputs
+                .iter_mut()
+                .find(|output| output.monitor.id == from)
+            {
+                output.active = replacement;
+            }
+        }
+        Vec::new()
+    }
+
+    /// `swapactiveworkspaces`: two monitors exchange what they are showing.
+    fn swap_active_workspaces(
+        &mut self,
+        one: &MonitorTarget,
+        other: &MonitorTarget,
+    ) -> Vec<Change> {
+        let (Some(first), Some(second)) = (self.monitor_target(one), self.monitor_target(other))
+        else {
+            return Vec::new();
+        };
+        if first == second {
+            return Vec::new();
+        }
+        let (Some(here), Some(there)) =
+            (self.active_workspace(first), self.active_workspace(second))
+        else {
+            return Vec::new();
+        };
+        for (workspace, monitor) in [(here, second), (there, first)] {
+            if let Some(ws) = self.workspaces.get_mut(&workspace) {
+                ws.monitor = monitor;
+            }
+        }
+        for (monitor, workspace) in [(first, there), (second, here)] {
+            if let Some(output) = self
+                .outputs
+                .iter_mut()
+                .find(|output| output.monitor.id == monitor)
+            {
+                output.active = workspace;
+            }
+        }
+        Vec::new()
     }
 
     // -- Groups ---------------------------------------------------------------

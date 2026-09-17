@@ -5,7 +5,10 @@
 //! one master): the open holds the dumb buffers it created, the framebuffers
 //! it added and the page-flip events it has not read. The card has one
 //! connector, one encoder, one CRTC and one primary plane with its immutable
-//! `type` property, with fixed object ids below the framebuffers'. Dumb buffers
+//! `type` property *per scanout the driver reported*, each in a block of
+//! four ids of its own below the framebuffers'. A compositor with two
+//! monitors is two connectors here, each with a CRTC that shows a
+//! framebuffer of its own. Dumb buffers
 //! are ranges of the card VMO the core hands out, and takes back decommitted
 //! once the device has let go of them; a program maps them through the
 //! card's own inode, whose `mapping()` is that VMO, at the offset
@@ -20,7 +23,7 @@
 //! device has the frame, and a page flip's event is queued then. Letting go
 //! of a buffer does not wait.
 
-use alloc::collections::VecDeque;
+use alloc::collections::{BTreeMap, VecDeque};
 use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -28,7 +31,7 @@ use core::any::Any;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use ferrix_bootinfo::PAGE_SIZE;
-use ferrix_displayctl::message::{MAX_DIMENSION, Rect, Status};
+use ferrix_displayctl::message::{MAX_DIMENSION, MAX_SCANOUTS, Rect, Status};
 use ferrix_linux_abi::drm::{
     self, CardRes, ClipRect, CreateDumb, Crtc, CrtcPageFlip, DestroyDumb, Event, EventVblank,
     FbCmd, FbCmd2, FbDirtyCmd, Field, GetCap, GetConnector, GetEncoder, GetPlane, GetPlaneRes,
@@ -53,18 +56,47 @@ use crate::timer;
 // ids below `FIRST_FRAMEBUFFER_ID`, and framebuffers are numbered from there
 // up, never reused within an open, as `add_framebuffer` counts.
 
-/// The CRTC's object id.
-const CRTC_ID: u32 = 1;
-/// The encoder's.
-const ENCODER_ID: u32 = 2;
+/// How many objects one head has: a CRTC, an encoder, a connector and a
+/// primary plane, in a block of ids of its own.
+const PER_HEAD: u32 = 4;
+
+/// Which of a head's four an id is.
+const CRTC: u32 = 0;
+/// The encoder's place in the block.
+const ENCODER: u32 = 1;
 /// The connector's.
-const CONNECTOR_ID: u32 = 3;
+const CONNECTOR: u32 = 2;
 /// The primary plane's.
-const PLANE_ID: u32 = 4;
-/// The plane `type` property's.
-const TYPE_PROPERTY_ID: u32 = 5;
+const PLANE: u32 = 3;
+
+/// The object id of `head`'s `kind`, the blocks starting at 1.
+const fn object_id(head: usize, kind: u32) -> u32 {
+    1 + PER_HEAD * head as u32 + kind
+}
+
+/// The head an id names, if it is of `kind`.
+///
+/// The card answers for a head the driver reported; an id in a block past
+/// them is `ENOENT`, which is what Linux gives an id its idr does not hold.
+fn head_of(card: &Card, id: u32, kind: u32) -> Option<usize> {
+    let index = id.checked_sub(1)?;
+    if index % PER_HEAD != kind {
+        return None;
+    }
+    let head = (index / PER_HEAD) as usize;
+    (head < heads(card)).then_some(head)
+}
+
+/// How many heads the card has: one per scanout the driver reported, which
+/// is one connector each, connected or not.
+fn heads(card: &Card) -> usize {
+    card.modes().len().min(MAX_SCANOUTS)
+}
+
+/// The plane `type` property's id, above every head's block.
+const TYPE_PROPERTY_ID: u32 = 1 + PER_HEAD * MAX_SCANOUTS as u32;
 /// The first framebuffer id; everything below is a fixed object's.
-const FIRST_FRAMEBUFFER_ID: u32 = 32;
+const FIRST_FRAMEBUFFER_ID: u32 = 128;
 
 /// The one format the primary plane takes.
 const PLANE_FORMATS: [u32; 1] = [drm::FORMAT_XRGB8888];
@@ -120,8 +152,8 @@ struct OpenState {
     framebuffers: Vec<Framebuffer>,
     next_handle: u32,
     next_framebuffer: u32,
-    /// The framebuffer on the CRTC, and the mode it was set with.
-    shown: Option<(u32, ModeInfo)>,
+    /// The framebuffer on each head's CRTC, and the mode it was set with.
+    shown: BTreeMap<usize, (u32, ModeInfo)>,
     events: VecDeque<[u8; 32]>,
     sequence: u32,
 }
@@ -395,7 +427,7 @@ pub(crate) fn ioctl(
         drm::IOCTL_SET_CLIENT_CAP => set_client_cap(process, file, arg),
         drm::IOCTL_MODE_GETRESOURCES => get_resources(process, file, arg),
         drm::IOCTL_MODE_GETCONNECTOR => connector(process, &file.card, arg),
-        drm::IOCTL_MODE_GETENCODER => get_encoder(process, arg),
+        drm::IOCTL_MODE_GETENCODER => get_encoder(process, &file.card, arg),
         drm::IOCTL_MODE_GETCRTC => get_crtc(process, file, arg),
         drm::IOCTL_MODE_CREATE_DUMB => create_dumb(process, file, arg),
         drm::IOCTL_MODE_MAP_DUMB => map_dumb(process, file, arg),
@@ -475,16 +507,18 @@ fn write_prefix<T: Copy>(
 /// `drm_mode_getplane_res` lists only overlay planes then.
 fn get_plane_resources(process: &Process, file: &CardFile, arg: u64) -> Result<usize, Errno> {
     let mut resources: GetPlaneRes = read_arg(process, arg)?;
-    let planes: &[u32] = if file.universal_planes.load(Ordering::Relaxed) {
-        &[PLANE_ID]
+    let planes: Vec<u32> = if file.universal_planes.load(Ordering::Relaxed) {
+        (0..heads(&file.card))
+            .map(|head| object_id(head, PLANE))
+            .collect()
     } else {
-        &[]
+        Vec::new()
     };
     write_prefix(
         process,
         resources.plane_id_ptr,
         resources.count_planes,
-        planes,
+        &planes,
         |id| id.to_le_bytes().to_vec(),
     )?;
     resources.count_planes = u32::try_from(planes.len()).unwrap_or(u32::MAX);
@@ -497,13 +531,15 @@ fn get_plane_resources(process: &Process, file: &CardFile, arg: u64) -> Result<u
 /// all of them.
 fn get_plane(process: &Process, file: &CardFile, arg: u64) -> Result<usize, Errno> {
     let mut plane: GetPlane = read_arg(process, arg)?;
-    if plane.plane_id != PLANE_ID {
-        return Err(Errno::ENOENT);
-    }
-    let shown = file.state.lock().shown.map(|(id, _)| id);
-    plane.crtc_id = if shown.is_some() { CRTC_ID } else { 0 };
+    let head = head_of(&file.card, plane.plane_id, PLANE).ok_or(Errno::ENOENT)?;
+    let shown = file.state.lock().shown.get(&head).map(|(id, _)| *id);
+    plane.crtc_id = if shown.is_some() {
+        object_id(head, CRTC)
+    } else {
+        0
+    };
     plane.fb_id = shown.unwrap_or(0);
-    plane.possible_crtcs = 1;
+    plane.possible_crtcs = crtc_mask(head);
     plane.gamma_size = 0;
     if plane.count_format_types as usize >= PLANE_FORMATS.len() {
         let bytes: Vec<u8> = PLANE_FORMATS
@@ -519,20 +555,26 @@ fn get_plane(process: &Process, file: &CardFile, arg: u64) -> Result<usize, Errn
 
 /// What an object id names, with its `DRM_MODE_OBJECT_*` type.
 fn object_type(file: &CardFile, id: u32) -> Option<u32> {
-    match id {
-        CRTC_ID => Some(drm::MODE_OBJECT_CRTC),
-        ENCODER_ID => Some(drm::MODE_OBJECT_ENCODER),
-        CONNECTOR_ID => Some(drm::MODE_OBJECT_CONNECTOR),
-        PLANE_ID => Some(drm::MODE_OBJECT_PLANE),
-        TYPE_PROPERTY_ID => Some(drm::MODE_OBJECT_PROPERTY),
-        _ => file
-            .state
-            .lock()
-            .framebuffers
-            .iter()
-            .any(|fb| fb.id == id)
-            .then_some(drm::MODE_OBJECT_FB),
+    if id == TYPE_PROPERTY_ID {
+        return Some(drm::MODE_OBJECT_PROPERTY);
     }
+    let card = &file.card;
+    for (kind, object) in [
+        (CRTC, drm::MODE_OBJECT_CRTC),
+        (ENCODER, drm::MODE_OBJECT_ENCODER),
+        (CONNECTOR, drm::MODE_OBJECT_CONNECTOR),
+        (PLANE, drm::MODE_OBJECT_PLANE),
+    ] {
+        if head_of(card, id, kind).is_some() {
+            return Some(object);
+        }
+    }
+    file.state
+        .lock()
+        .framebuffers
+        .iter()
+        .any(|fb| fb.id == id)
+        .then_some(drm::MODE_OBJECT_FB)
 }
 
 /// `OBJ_GETPROPERTIES`, as `drm_mode_obj_get_properties_ioctl` answers a
@@ -640,28 +682,31 @@ fn get_resources(process: &Process, file: &CardFile, arg: u64) -> Result<usize, 
         resources.count_fbs,
         &framebuffers,
     )?;
+    let heads = heads(&file.card);
+    let ids = |kind: u32| -> Vec<u32> { (0..heads).map(|head| object_id(head, kind)).collect() };
     write_ids(
         process,
         resources.crtc_id_ptr,
         resources.count_crtcs,
-        &[CRTC_ID],
+        &ids(CRTC),
     )?;
     write_ids(
         process,
         resources.connector_id_ptr,
         resources.count_connectors,
-        &[CONNECTOR_ID],
+        &ids(CONNECTOR),
     )?;
     write_ids(
         process,
         resources.encoder_id_ptr,
         resources.count_encoders,
-        &[ENCODER_ID],
+        &ids(ENCODER),
     )?;
+    let count = u32::try_from(heads).unwrap_or(u32::MAX);
     resources.count_fbs = u32::try_from(framebuffers.len()).unwrap_or(u32::MAX);
-    resources.count_crtcs = 1;
-    resources.count_connectors = 1;
-    resources.count_encoders = 1;
+    resources.count_crtcs = count;
+    resources.count_connectors = count;
+    resources.count_encoders = count;
     resources.min_width = 1;
     resources.min_height = 1;
     resources.max_width = MAX_DIMENSION;
@@ -669,24 +714,31 @@ fn get_resources(process: &Process, file: &CardFile, arg: u64) -> Result<usize, 
     write_arg(process, arg, &resources)
 }
 
-fn get_encoder(process: &Process, arg: u64) -> Result<usize, Errno> {
+fn get_encoder(process: &Process, card: &Card, arg: u64) -> Result<usize, Errno> {
     let mut encoder: GetEncoder = read_arg(process, arg)?;
-    if encoder.encoder_id != ENCODER_ID {
-        return Err(Errno::ENOENT);
-    }
+    let head = head_of(card, encoder.encoder_id, ENCODER).ok_or(Errno::ENOENT)?;
     encoder.encoder_type = drm::ENCODER_VIRTUAL;
-    encoder.crtc_id = CRTC_ID;
-    encoder.possible_crtcs = 1;
+    encoder.crtc_id = object_id(head, CRTC);
+    // One CRTC drives one connector here, so the mask has the one bit: a
+    // head's CRTC is at its own index in `GETRESOURCES`' list.
+    encoder.possible_crtcs = crtc_mask(head);
     encoder.possible_clones = 0;
     write_arg(process, arg, &encoder)
 }
 
+/// The `possible_crtcs` bit of `head`'s CRTC, which counts in the order
+/// `GETRESOURCES` lists them.
+fn crtc_mask(head: usize) -> u32 {
+    u32::try_from(head)
+        .ok()
+        .and_then(|bit| 1u32.checked_shl(bit))
+        .unwrap_or(0)
+}
+
 fn get_crtc(process: &Process, file: &CardFile, arg: u64) -> Result<usize, Errno> {
     let mut crtc: Crtc = read_arg(process, arg)?;
-    if crtc.crtc_id != CRTC_ID {
-        return Err(Errno::ENOENT);
-    }
-    let shown = file.state.lock().shown;
+    let head = head_of(&file.card, crtc.crtc_id, CRTC).ok_or(Errno::ENOENT)?;
+    let shown = file.state.lock().shown.get(&head).copied();
     crtc.fb_id = shown.map_or(0, |(id, _)| id);
     crtc.mode_valid = u32::from(shown.is_some());
     crtc.mode = shown.map_or(ModeInfo::ZERO, |(_, mode)| mode);
@@ -741,18 +793,20 @@ fn add_fb2(process: &Process, file: &CardFile, arg: u64) -> Result<usize, Errno>
 
 fn page_flip(process: &Process, file: &CardFile, arg: u64) -> Result<usize, Errno> {
     let flip: CrtcPageFlip = read_arg(process, arg)?;
-    if flip.crtc_id != CRTC_ID || flip.reserved != 0 || flip.flags & !drm::PAGE_FLIP_EVENT != 0 {
+    if flip.reserved != 0 || flip.flags & !drm::PAGE_FLIP_EVENT != 0 {
         return Err(Errno::EINVAL);
     }
+    let head = head_of(&file.card, flip.crtc_id, CRTC).ok_or(Errno::EINVAL)?;
     let mode = file
         .state
         .lock()
         .shown
-        .map(|(_, mode)| mode)
+        .get(&head)
+        .map(|(_, mode)| *mode)
         .ok_or(Errno::EINVAL)?;
-    show(file, flip.fb_id, mode, false)?;
+    show(file, head, flip.fb_id, mode, false)?;
     if flip.flags & drm::PAGE_FLIP_EVENT != 0 {
-        queue_event(file, flip.user_data);
+        queue_event(file, head, flip.user_data);
     }
     Ok(0)
 }
@@ -793,10 +847,8 @@ fn version(process: &Process, arg: u64) -> Result<usize, Errno> {
 
 fn connector(process: &Process, card: &Card, arg: u64) -> Result<usize, Errno> {
     let mut connector: GetConnector = read_arg(process, arg)?;
-    if connector.connector_id != CONNECTOR_ID {
-        return Err(Errno::ENOENT);
-    }
-    let preferred = card.modes().first().copied().filter(|mode| mode.enabled);
+    let head = head_of(card, connector.connector_id, CONNECTOR).ok_or(Errno::ENOENT)?;
+    let preferred = card.modes().get(head).copied().filter(|mode| mode.enabled);
     let modes: Vec<ModeInfo> = preferred
         .map(|mode| mode_for(mode.width, mode.height))
         .into_iter()
@@ -816,14 +868,16 @@ fn connector(process: &Process, card: &Card, arg: u64) -> Result<usize, Errno> {
         process,
         connector.encoders_ptr,
         connector.count_encoders,
-        &[ENCODER_ID],
+        &[object_id(head, ENCODER)],
     )?;
     connector.count_modes = u32::try_from(modes.len()).unwrap_or(0);
     connector.count_props = 0;
     connector.count_encoders = 1;
-    connector.encoder_id = ENCODER_ID;
+    connector.encoder_id = object_id(head, ENCODER);
     connector.connector_type = drm::CONNECTOR_VIRTUAL;
-    connector.connector_type_id = 1;
+    // Linux numbers connectors of one type from one upwards, and a program
+    // prints the name as `Virtual-1`, `Virtual-2`.
+    connector.connector_type_id = u32::try_from(head).unwrap_or(0).saturating_add(1);
     connector.connection = if preferred.is_some() {
         drm::CONNECTION_CONNECTED
     } else {
@@ -957,16 +1011,22 @@ fn find_framebuffer(file: &CardFile, id: u32) -> Result<Framebuffer, Errno> {
 
 fn remove_framebuffer(file: &CardFile, id: u32) -> Result<(), Errno> {
     let framebuffer = find_framebuffer(file, id)?;
-    let shown = file
+    // A framebuffer may be on more than one head; every head showing it
+    // goes off, as Linux's `drm_framebuffer_remove` turns off every CRTC
+    // and plane that refers to one.
+    let showing: Vec<usize> = file
         .state
         .lock()
         .shown
-        .is_some_and(|(shown, _)| shown == id);
-    if shown {
+        .iter()
+        .filter(|(_, (shown, _))| *shown == id)
+        .map(|(head, _)| *head)
+        .collect();
+    for head in showing {
         file.card
-            .scanout(0, 0, Rect::default())
+            .scanout(scanout_of(head), 0, Rect::default())
             .map_err(card_error)?;
-        file.state.lock().shown = None;
+        let _ = file.state.lock().shown.remove(&head);
     }
     let orphaned = {
         let mut state = file.state.lock();
@@ -990,7 +1050,7 @@ fn remove_framebuffer(file: &CardFile, id: u32) -> Result<(), Errno> {
 
 /// Put framebuffer `id` on the CRTC at `mode`, setting the scanout again
 /// even if it is shown when `reset`, and wait for the device to have it.
-fn show(file: &CardFile, id: u32, mode: ModeInfo, reset: bool) -> Result<(), Errno> {
+fn show(file: &CardFile, head: usize, id: u32, mode: ModeInfo, reset: bool) -> Result<(), Errno> {
     let framebuffer = find_framebuffer(file, id)?;
     let (width, height) = (u32::from(mode.hdisplay), u32::from(mode.vdisplay));
     if width == 0 || height == 0 || width > framebuffer.width || height > framebuffer.height {
@@ -1006,13 +1066,14 @@ fn show(file: &CardFile, id: u32, mode: ModeInfo, reset: bool) -> Result<(), Err
         .state
         .lock()
         .shown
-        .is_some_and(|(shown, _)| shown == id);
+        .get(&head)
+        .is_some_and(|(shown, _)| *shown == id);
     if reset || !already {
         file.card
-            .scanout(0, framebuffer.buffer, rect)
+            .scanout(scanout_of(head), framebuffer.buffer, rect)
             .map_err(card_error)?;
         // The device shows it from here, whether or not the flush goes.
-        file.state.lock().shown = Some((id, mode));
+        let _ = file.state.lock().shown.insert(head, (id, mode));
     }
     let status = file
         .card
@@ -1026,17 +1087,15 @@ fn show(file: &CardFile, id: u32, mode: ModeInfo, reset: bool) -> Result<(), Err
 /// connector.
 fn set_crtc(process: &Process, file: &CardFile, arg: u64) -> Result<usize, Errno> {
     let crtc: Crtc = read_arg(process, arg)?;
-    if crtc.crtc_id != CRTC_ID {
-        return Err(Errno::ENOENT);
-    }
+    let head = head_of(&file.card, crtc.crtc_id, CRTC).ok_or(Errno::ENOENT)?;
     if crtc.mode_valid == 0 {
         if crtc.count_connectors != 0 {
             return Err(Errno::EINVAL);
         }
         file.card
-            .scanout(0, 0, Rect::default())
+            .scanout(scanout_of(head), 0, Rect::default())
             .map_err(card_error)?;
-        file.state.lock().shown = None;
+        let _ = file.state.lock().shown.remove(&head);
         return Ok(0);
     }
     if crtc.x != 0 || crtc.y != 0 || crtc.count_connectors != 1 {
@@ -1045,21 +1104,30 @@ fn set_crtc(process: &Process, file: &CardFile, arg: u64) -> Result<usize, Errno
     let mut connector = [0u8; 4];
     uaccess::copy_from_user(process.space(), crtc.set_connectors_ptr, &mut connector)
         .map_err(|_| Errno::EFAULT)?;
-    if u32::from_le_bytes(connector) != CONNECTOR_ID {
+    // The connector has to be the one this CRTC drives: nothing here can
+    // route a CRTC to another head's connector.
+    if u32::from_le_bytes(connector) != object_id(head, CONNECTOR) {
         return Err(Errno::EINVAL);
     }
     let fb = if crtc.fb_id == u32::MAX {
         file.state
             .lock()
             .shown
-            .map(|(id, _)| id)
+            .get(&head)
+            .map(|(id, _)| *id)
             .ok_or(Errno::EINVAL)?
     } else {
         crtc.fb_id
     };
     // A new mode on the framebuffer already shown is set again.
-    show(file, fb, crtc.mode, true)?;
+    show(file, head, fb, crtc.mode, true)?;
     Ok(0)
+}
+
+/// The scanout number of a head, which is its index: the card's connectors
+/// are its scanouts in the order the driver reported them.
+fn scanout_of(head: usize) -> u32 {
+    u32::try_from(head).unwrap_or(0)
 }
 
 fn dirty_rect(
@@ -1103,7 +1171,7 @@ fn dirty_rect(
     })
 }
 
-fn queue_event(file: &CardFile, user_data: u64) {
+fn queue_event(file: &CardFile, head: usize, user_data: u64) {
     let nanos = timer::now_nanos();
     let mut state = file.state.lock();
     state.sequence = state.sequence.wrapping_add(1);
@@ -1116,7 +1184,7 @@ fn queue_event(file: &CardFile, user_data: u64) {
         tv_sec: u32::try_from(nanos / 1_000_000_000).unwrap_or(u32::MAX),
         tv_usec: u32::try_from(nanos % 1_000_000_000 / 1000).unwrap_or(0),
         sequence: state.sequence,
-        crtc_id: CRTC_ID,
+        crtc_id: object_id(head, CRTC),
     };
     let mut bytes = [0u8; 32];
     if event.write(&mut bytes).is_some() && state.events.len() < MAX_EVENTS {

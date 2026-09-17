@@ -14,18 +14,26 @@ use crate::modeset;
 /// What the display test waits for, followed by the mode and the colour.
 const MARKER: &str = "compositor: scanout";
 
-/// The card.
+/// The first card, and the name every other is made from.
 const CARD: &CStr = c"/dev/dri/card0";
+
+/// The most cards looked for: a machine with more screens than this has
+/// them on one card's connectors, which is where they are looked for next.
+const MAX_CARDS: u32 = 8;
 
 /// An open card.
 pub struct Card {
     fd: libc::c_int,
+    /// `card0`, `card1`: the file's own name, which a monitor's name and the
+    /// compositor's log line carry.
+    name: String,
 }
 
 impl core::fmt::Debug for Card {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
             .debug_struct("Card")
+            .field("name", &self.name)
             .field("fd", &self.fd)
             .finish()
     }
@@ -44,7 +52,34 @@ impl Card {
         if fd < 0 {
             return Err(io::Error::last_os_error());
         }
-        Ok(Self { fd })
+        Ok(Self {
+            fd,
+            name: "card0".to_owned(),
+        })
+    }
+
+    /// Open `/dev/dri/card<index>`.
+    ///
+    /// # Errors
+    ///
+    /// Whatever `open` said, which for a card that is not there is `ENOENT`.
+    pub fn open_index(index: u32) -> io::Result<Self> {
+        let name = format!("card{index}");
+        let path = std::ffi::CString::new(format!("/dev/dri/{name}"))
+            .map_err(|_| io::Error::other("a card path with a NUL in it"))?;
+        // SAFETY: `path` is a NUL-terminated path held across the call; the
+        // flags are constants.
+        let fd = unsafe { libc::open(path.as_ptr(), libc::O_RDWR | libc::O_CLOEXEC) };
+        if fd < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(Self { fd, name })
+    }
+
+    /// What the card is called, which is what a monitor's name is made from.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
     }
 
     /// Run `request` with `value` as its argument, and read the kernel's
@@ -71,7 +106,7 @@ fn address<T>(items: &mut [T]) -> u64 {
 }
 
 /// What the modeset settled on.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct Plan {
     /// The connector the screen is on.
     pub connector: u32,
@@ -82,6 +117,8 @@ pub struct Plan {
     pub crtc_index: usize,
     /// The mode it was set to.
     pub mode: ModeInfo,
+    /// The monitor's name, made from the connector's type and number.
+    pub name: String,
 }
 
 impl Plan {
@@ -92,12 +129,50 @@ impl Plan {
     }
 }
 
+/// Every card the machine has, in order, from `/dev/dri/card0` up until one
+/// is not there.
+///
+/// A machine's screens are on one card's connectors or on a card each, and
+/// which it is is the machine's business rather than the compositor's: both
+/// are monitors to everything above this.
+#[must_use]
+pub fn cards() -> Vec<Card> {
+    let mut cards = Vec::new();
+    for index in 0..MAX_CARDS {
+        match Card::open_index(index) {
+            Ok(card) => cards.push(card),
+            // The first gap ends the search, as `/dev/dri` numbers cards
+            // from zero with no holes.
+            Err(_) => break,
+        }
+    }
+    cards
+}
+
 /// Find a connected connector with a mode, and a CRTC that can drive it.
 ///
 /// # Errors
 ///
 /// A card with no connected connector, or one whose encoder has no CRTC.
 pub fn plan(card: &Card) -> io::Result<Plan> {
+    plans(card)?
+        .into_iter()
+        .next()
+        .ok_or_else(|| io::Error::other("no connected connector with a mode"))
+}
+
+/// Every connected connector of `card` with a mode, each with a CRTC of its
+/// own.
+///
+/// A CRTC drives one connector at a time, so a connector whose only CRTC is
+/// already taken by another is left out rather than made to share: two
+/// monitors on one CRTC would be a clone, which is not what a second monitor
+/// is for.
+///
+/// # Errors
+///
+/// Whatever the card said.
+pub fn plans(card: &Card) -> io::Result<Vec<Plan>> {
     let mut resources = CardRes::ZERO;
     card.ioctl(drm::IOCTL_MODE_GETRESOURCES, &mut resources)?;
     let mut crtcs = vec![0u32; resources.count_crtcs as usize];
@@ -112,6 +187,8 @@ pub fn plan(card: &Card) -> io::Result<Plan> {
     };
     card.ioctl(drm::IOCTL_MODE_GETRESOURCES, &mut resources)?;
 
+    let mut found: Vec<Plan> = Vec::new();
+    let mut taken: Vec<u32> = Vec::new();
     for &connector_id in &connectors {
         let mut connector = GetConnector {
             connector_id,
@@ -147,20 +224,89 @@ pub fn plan(card: &Card) -> io::Result<Plan> {
             ..GetEncoder::ZERO
         };
         card.ioctl(drm::IOCTL_MODE_GETENCODER, &mut encoder)?;
-        let crtc = modeset::choose_crtc(encoder.crtc_id, encoder.possible_crtcs, &crtcs)
-            .ok_or_else(|| io::Error::other("no CRTC for the connector's encoder"))?;
+        // The CRTCs another connector of this card already has are not
+        // offered again.
+        let free: Vec<u32> = crtcs
+            .iter()
+            .copied()
+            .filter(|id| !taken.contains(id))
+            .collect();
+        let already = (!taken.contains(&encoder.crtc_id)).then_some(encoder.crtc_id);
+        let Some(crtc) = modeset::choose_crtc(
+            already.unwrap_or(0),
+            encoder.possible_crtcs & mask_of(&free, &crtcs),
+            &free,
+        ) else {
+            continue;
+        };
         let crtc_index = crtcs
             .iter()
             .position(|&id| id == crtc)
             .ok_or_else(|| io::Error::other("the encoder's CRTC is not the card's"))?;
-        return Ok(Plan {
+        taken.push(crtc);
+        found.push(Plan {
             connector: connector_id,
             crtc,
             crtc_index,
             mode,
+            name: connector_name(&connector),
         });
     }
-    Err(io::Error::other("no connected connector with a mode"))
+    Ok(found)
+}
+
+/// The `possible_crtcs` bits of the CRTCs in `free`, which count in the
+/// order `all` lists them.
+fn mask_of(free: &[u32], all: &[u32]) -> u32 {
+    let mut mask = 0u32;
+    for (index, id) in all.iter().enumerate() {
+        if free.contains(id)
+            && let Ok(bit) = u32::try_from(index)
+            && let Some(one) = 1u32.checked_shl(bit)
+        {
+            mask |= one;
+        }
+    }
+    mask
+}
+
+/// What to call the monitor on a connector.
+///
+/// Hyprland names a monitor after its connector -- `DP-1`, `HDMI-A-2` -- and
+/// a person's `monitor =` lines and `hyprctl monitors` both use that name.
+/// The type is the connector's; the number is the caller's, because two
+/// cards each have a `Virtual-1` and a person's two screens must not share
+/// a name. [`rename`] gives them theirs.
+fn connector_name(connector: &GetConnector) -> String {
+    format!(
+        "{}-{}",
+        modeset::connector_type_name(connector.connector_type),
+        connector.connector_type_id
+    )
+}
+
+/// Number `plans` as wlroots numbers outputs: each connector type counted
+/// from one across every card, so a machine with two virtio-gpu cards has
+/// `Virtual-1` and `Virtual-2` rather than two `Virtual-1`s.
+pub fn rename(plans: &mut [Plan]) {
+    let mut counts: Vec<(String, u32)> = Vec::new();
+    for plan in plans {
+        let kind = plan
+            .name
+            .rsplit_once('-')
+            .map_or(plan.name.clone(), |(kind, _)| kind.to_owned());
+        let number = match counts.iter_mut().find(|(known, _)| *known == kind) {
+            Some((_, count)) => {
+                *count = count.saturating_add(1);
+                *count
+            }
+            None => {
+                counts.push((kind.clone(), 1));
+                1
+            }
+        };
+        plan.name = format!("{kind}-{number}");
+    }
 }
 
 /// Fill the screen with one colour and show it: `compositor/blank`'s whole

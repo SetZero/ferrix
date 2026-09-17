@@ -130,6 +130,38 @@ pub fn describe_planes(
     }
 }
 
+/// What a connector of `kind` is called, by the names libdrm's
+/// `drmModeGetConnectorTypeName` gives -- which is what wlroots and so
+/// Hyprland name a monitor after, so `DP-1` here is `DP-1` there.
+///
+/// A type this list does not have is `Unknown`, as libdrm's is.
+#[must_use]
+pub fn connector_type_name(kind: u32) -> &'static str {
+    match kind {
+        1 => "VGA",
+        2 => "DVI-I",
+        3 => "DVI-D",
+        4 => "DVI-A",
+        5 => "Composite",
+        6 => "SVIDEO",
+        7 => "LVDS",
+        8 => "Component",
+        9 => "DIN",
+        10 => "DP",
+        11 => "HDMI-A",
+        12 => "HDMI-B",
+        13 => "TV",
+        14 => "eDP",
+        15 => "Virtual",
+        16 => "DSI",
+        17 => "DPI",
+        18 => "Writeback",
+        19 => "SPI",
+        20 => "USB",
+        _ => "Unknown",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use ferrix_linux_abi::drm::{Field, ModeInfo};
@@ -215,6 +247,18 @@ mod tests {
         assert!(describe_planes(core::slice::from_ref(&shown), 0, 1, 33).is_err());
         assert!(describe_planes(core::slice::from_ref(&shown), 0, 2, 32).is_err());
         assert!(describe_planes(&[shown], 0, 1, 32).is_ok());
+    }
+
+    /// The names are libdrm's, which is where every compositor's monitor
+    /// names come from. Virtual is virtio-gpu's, and so Ferrix's.
+    #[test]
+    fn a_connector_is_named_as_libdrm_names_it() {
+        assert_eq!(connector_type_name(15), "Virtual");
+        assert_eq!(connector_type_name(10), "DP");
+        assert_eq!(connector_type_name(11), "HDMI-A");
+        assert_eq!(connector_type_name(14), "eDP");
+        assert_eq!(connector_type_name(0), "Unknown");
+        assert_eq!(connector_type_name(99), "Unknown");
     }
 
     #[test]

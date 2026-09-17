@@ -29,6 +29,10 @@ pub trait Backend: core::fmt::Debug {
 
     /// What to say about this backend in the compositor's log line.
     fn describe(&self) -> String;
+
+    /// What the monitor on it is called: the connector's name, which
+    /// `hyprctl monitors`, a `monitor =` line and `focusmonitor` all use.
+    fn name(&self) -> String;
 }
 
 /// A screen that is only memory: the everyday one, and the one a test reads.
@@ -85,6 +89,11 @@ impl Backend for Headless {
     fn describe(&self) -> String {
         format!("headless {}x{}", self.width, self.height)
     }
+
+    fn name(&self) -> String {
+        // What Hyprland's own headless backend calls its output.
+        "HEADLESS-1".to_owned()
+    }
 }
 
 /// The screen: `/dev/dri/card0`, through the legacy mode-setting calls.
@@ -96,7 +105,9 @@ impl Backend for Headless {
 #[cfg(target_os = "linux")]
 #[derive(Debug)]
 pub struct Drm {
-    card: compositor_drm::Card,
+    /// The card, shared with the other screens on it: only one open of a
+    /// card is allowed, and a card with two connectors is two screens.
+    card: std::rc::Rc<compositor_drm::Card>,
     plan: compositor_drm::Plan,
     buffers: [compositor_drm::Dumb; 2],
     /// Which buffer is being drawn into.
@@ -115,8 +126,51 @@ impl Drm {
     /// Whatever the card said. A compositor with no screen is the one thing
     /// it cannot do without, so this is fatal.
     pub fn open() -> io::Result<Self> {
-        let card = compositor_drm::Card::open()?;
+        let card = std::rc::Rc::new(compositor_drm::Card::open()?);
         let plan = compositor_drm::plan(&card)?;
+        Self::on(card, plan)
+    }
+
+    /// Every screen the machine has: each connected connector of each card,
+    /// in card and connector order.
+    ///
+    /// A machine with two monitors has them on one card's two connectors or
+    /// on a card each, and both are two screens here. The order is the
+    /// order the kernel lists them in, which is what decides which monitor
+    /// is the first.
+    ///
+    /// # Errors
+    ///
+    /// Nothing: a card that will not open or a connector that will not take
+    /// a mode is left out, and a machine with no screen at all is the
+    /// caller's to report.
+    pub fn open_all() -> Vec<Self> {
+        let mut cards = Vec::new();
+        let mut plans = Vec::new();
+        for card in compositor_drm::cards() {
+            let card = std::rc::Rc::new(card);
+            let Ok(found) = compositor_drm::plans(&card) else {
+                continue;
+            };
+            for plan in found {
+                cards.push(std::rc::Rc::clone(&card));
+                plans.push(plan);
+            }
+        }
+        // The names are numbered across every card, so two cards with a
+        // `Virtual-1` each become `Virtual-1` and `Virtual-2`.
+        compositor_drm::rename(&mut plans);
+        let mut screens = Vec::new();
+        for (card, plan) in cards.into_iter().zip(plans) {
+            if let Ok(screen) = Self::on(card, plan) {
+                screens.push(screen);
+            }
+        }
+        screens
+    }
+
+    /// One screen: two buffers on `plan`'s connector, with its mode set.
+    fn on(card: std::rc::Rc<compositor_drm::Card>, plan: compositor_drm::Plan) -> io::Result<Self> {
         let (width, height) = plan.size();
         let first = compositor_drm::Dumb::new(&card, width, height)?;
         let second = compositor_drm::Dumb::new(&card, width, height)?;
@@ -182,11 +236,17 @@ impl Backend for Drm {
 
     fn describe(&self) -> String {
         format!(
-            "card0 {} {}x{}",
+            "{} {} {} {}x{}",
+            self.card.name(),
+            self.plan.name,
             compositor_drm::modeset::mode_name(&self.plan.mode),
             self.width,
             self.height
         )
+    }
+
+    fn name(&self) -> String {
+        self.plan.name.clone()
     }
 }
 

@@ -280,7 +280,7 @@ pub struct Subsurface {
 ///
 /// A client with no mode has no size to scale against, so every field here
 /// is one some toolkit reads.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Output {
     /// Where the screen is in the space all screens share.
     pub x: i32,
@@ -294,8 +294,9 @@ pub struct Output {
     pub refresh: i32,
     /// Buffer pixels per logical pixel.
     pub scale: i32,
-    /// The name a person sees, as `hyprctl monitors` prints it.
-    pub name: &'static str,
+    /// The name a person sees, as `hyprctl monitors` prints it, and as the
+    /// connector is called: `DP-1`, `Virtual-1`.
+    pub name: String,
 }
 
 impl Default for Output {
@@ -307,7 +308,7 @@ impl Default for Output {
             height: 1080,
             refresh: 60_000,
             scale: 1,
-            name: "HEADLESS-1",
+            name: "HEADLESS-1".to_owned(),
         }
     }
 }

@@ -72,6 +72,13 @@ pub(crate) struct Args {
     /// QMP's `input-send-event` drives. `test-input` turns it on, and
     /// `--display` brings them as well.
     pub(crate) input: bool,
+    /// `--screens N`: how many virtio-gpu devices are on the bus, one
+    /// screen each. Zero and one both mean one. A second device rather than
+    /// a second output of the first, because QEMU enables a second output
+    /// only when a window manager of the host's resizes it, and a test with
+    /// no window has none: two devices are two consoles, and a screendump
+    /// names each by its device id.
+    pub(crate) screens: u32,
     /// Where QEMU serves QMP. No flag sets it: `test-display` picks a port to
     /// ask QEMU for its screendump over.
     pub(crate) qmp_port: Option<u16>,
@@ -85,6 +92,7 @@ impl Args {
             smp: 4,
             memory: 512,
             timeout: 120,
+            screens: 1,
             ..Args::default()
         };
 
@@ -102,6 +110,7 @@ impl Args {
                 "--net" => args.net = true,
                 "--display" => args.display = true,
                 "--input" => args.input = true,
+                "--screens" => args.screens = number(&mut items, "--screens")?,
                 "--arch" => args.arch = Some(value(&mut items, "--arch")?),
                 "--smp" => {
                     args.smp = number(&mut items, "--smp")?;
