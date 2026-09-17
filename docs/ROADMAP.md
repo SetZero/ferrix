@@ -4164,6 +4164,53 @@ bezier curves, rounded corners, blur and shadows, dimming and opacity rules,
 special workspaces, groups, multi-monitor with per-monitor workspaces and
 scaling, the plugin-shaped extension points, and the rest of `hyprctl`.
 
+**Done — all four tiling layouts, and the options that shape them
+(2026-09-17).** Hyprland 0.56 has four: `dwindle`, `master`, `monocle` and
+`scrolling`. This compositor had two, and a person who wrote either of the
+other names got dwindle with no diagnostic.
+
+**Monocle** is the small one: every window fills the workspace and the
+focused one is shown. What makes it a layout rather than a fullscreen
+window is that the windows are still tiled -- `cyclenext` walks them,
+closing one shows the next, and the gaps and the border are the
+workspace's.
+
+**Scrolling** is the largest of the four and the one no other tiling
+compositor has: a *tape* of columns wider than the screen, with the screen
+a window onto it. A column's width is its own, so a wide editor and a
+narrow terminal sit side by side and a third column scrolls in beside them
+without either of the first two changing shape.
+`calculateCameraOffset` is the rule that makes it look right -- a tape
+narrower than the screen is centred rather than pushed left, and a tape
+wider than it never scrolls past its own start -- and eleven `layoutmsg`
+words move windows between columns, resize them and scroll the tape.
+
+The master layout grew the masters it was always meant to have: `addmaster`
+and `removemaster` did nothing, and two masters sharing the master column
+is the whole reason those messages exist. With them came
+`master:orientation = center` (the masters in the middle with the stack in
+two columns beside them, once there are `slave_count_for_center_master` of
+them), `center_master_fallback`, `always_keep_position`, `new_on_active`,
+`focus_master_on_close` and `allow_small_split`.
+
+And twelve more options across the other categories: `dwindle:split_bias`,
+`general:float_gaps`, `misc:background_color`,
+`misc:close_special_on_empty`, the two `special_scale_factor`s that make a
+scratchpad look like one, `binds:workspace_back_and_forth`,
+`binds:hide_special_on_workspace_change`, `binds:allow_pin_fullscreen`,
+`binds:movefocus_cycles_fullscreen`,
+`binds:window_direction_monitor_fallback`, and `workspace previous`,
+`next`, `empty` and `name:` as dispatcher arguments -- `workspace,
+previous` being the commonest keybind in any Hyprland configuration after
+the numbers themselves.
+
+The whole `binds` category was unreachable before this: `bind` takes its
+flags as letters glued to the keyword -- `bindl`, `bindrm`, `bindel` -- and
+the parser reached for a bind before an option, so
+`binds:workspace_back_and_forth` was read as `bind` with a flag `s` and
+answered `invalid flag :`. A keyword never has a colon in it and an option
+always does.
+
 **Done — a person's own configuration, run (2026-09-17).** The test of a
 clone is not a checklist, it is somebody's real file. This one is
 `~/.config/hypr/hyprland.conf` on `nazuna`: 377 lines, 55 binds, two window
