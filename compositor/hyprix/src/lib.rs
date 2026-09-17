@@ -20,6 +20,7 @@
 //! are compared without a display. `/dev/dri/card0` is the real one on
 //! Ferrix, through the same legacy mode-setting `compositor/blank` proved.
 
+pub mod animate;
 pub mod backend;
 pub mod control;
 pub mod deliver;

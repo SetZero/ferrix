@@ -20,6 +20,7 @@ path = "src/main.rs"
 compositor-evecho = { path = "../evecho" }
 # The keymap the seat hands every client.
 compositor-xkb = { path = "../xkb" }
+compositor-anim = { path = "../anim" }
 compositor-config = { path = "../config" }
 compositor-drm = { path = "../drm" }
 compositor-ipc = { path = "../ipc" }

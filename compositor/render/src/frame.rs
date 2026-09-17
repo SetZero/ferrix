@@ -188,7 +188,10 @@ pub fn render_with_layers(
             canvas.border(rect, placed.border, color, damage);
         }
         if let Some(surface) = surfaces.get(&placed.window) {
-            canvas.composite_with(
+            // Scaled, which is the exact path when the surface is already
+            // the rectangle's size -- which it is for every window that is
+            // not part-way through an animation.
+            canvas.composite_scaled(
                 surface,
                 rect,
                 style.rounding,

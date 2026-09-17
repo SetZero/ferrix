@@ -140,6 +140,10 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
         }
     };
     let mut seat = Seat::new(&config, width, height);
+    let mut animations = crate::animate::Animations::new(&config);
+    for reason in animations.diagnostics() {
+        report(&format!("hyprix: an animation line was dropped: {reason}"));
+    }
     let mut focus = Focus::new();
     let repeat = (
         i32::try_from(config.int("input:repeat_rate").unwrap_or(25)).unwrap_or(25),
@@ -211,6 +215,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
     let mut slots: Vec<Slot> = Vec::new();
     let mut sources: BTreeMap<WindowId, Source> = BTreeMap::new();
     let mut placed_layers: Vec<crate::frame::Placed> = Vec::new();
+    let mut settling = false;
     let mut next_window = 1u32;
     let mut drawn = 0u32;
     // The most windows at once, not the count at the end: a client that ran
@@ -397,11 +402,26 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
         }
 
         most = most.max(sources.len());
-        if changed || drawn == 0 {
+        // A frame is drawn when something changed, when nothing has been
+        // drawn yet, and while any window is still on its way somewhere: an
+        // animation is a frame a change does not ask for.
+        // The loop's `now` is milliseconds as a `u32`, which is what
+        // `wl_keyboard.key` and `wl_pointer.motion` carry; an animation's is
+        // the same clock, widened.
+        let millis = u64::from(now);
+        let animating = animations.busy(millis);
+        // `settling` is the one pass after the last moving one: the frame
+        // that is drawn while a window is still moving is a frame short of
+        // its goal, and without this the screen would keep that last frame
+        // for ever.
+        if changed || drawn == 0 || animating || settling {
+            settling = animating;
             let outputs = state.layout();
             let Some(output) = outputs.first() else {
                 continue;
             };
+            // Where each window *is*, rather than where the tiling put it.
+            let output = &animations.follow(output, millis);
             let full = Damage::full(width, height);
             let mut target = crate::frame::Output {
                 canvas: &mut canvas,

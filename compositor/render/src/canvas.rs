@@ -242,6 +242,79 @@ impl Canvas {
         }
     }
 
+    /// Draw `surface` stretched to fill `rect`, with the same rounding and
+    /// opacity [`Canvas::composite_with`] takes.
+    ///
+    /// For a window part-way through an animation, where the rectangle is
+    /// between the size the client drew at and the size it is going to.
+    /// Hyprland scales the window's texture for the same reason; the client
+    /// is configured at the goal and draws once, not once a frame.
+    ///
+    /// The sampling is bilinear, which is the one place in this crate where
+    /// a pixel is not a pixel. It is also the only place it can be: a
+    /// stretched surface has no whole-pixel mapping to stretch along. A
+    /// window that is not being animated goes through
+    /// [`Canvas::composite_with`] and is exact, which is why every expected
+    /// image in this tree still holds.
+    pub fn composite_scaled(
+        &mut self,
+        surface: &Surface<'_>,
+        rect: Rect,
+        rounding: i64,
+        opacity: f32,
+        damage: &Damage,
+    ) {
+        if is_empty(rect) || surface.width() == 0 || surface.height() == 0 {
+            return;
+        }
+        let opacity = opacity.clamp(0.0, 1.0);
+        if opacity == 0.0 {
+            return;
+        }
+        // The same size is the exact path: an animation that has arrived
+        // must draw what a still window draws, to the byte.
+        if rect.width == i64::from(surface.width()) && rect.height == i64::from(surface.height()) {
+            self.composite_with(surface, rect, rounding, opacity, damage);
+            return;
+        }
+        let clips = if rounding > 0 {
+            self.rounded_clips(rect, rounding, damage)
+        } else {
+            self.clips(rect, damage)
+        };
+        if clips.is_empty() {
+            return;
+        }
+        let gathered = opaque_rows(surface);
+        let Some(pixmap) = PixmapRef::from_bytes(&gathered, surface.width(), surface.height())
+        else {
+            return;
+        };
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "a window's size in pixels; the loss is far below one"
+        )]
+        let (scale_x, scale_y) = (
+            rect.width as f32 / f32::from(u16::try_from(surface.width()).unwrap_or(u16::MAX)),
+            rect.height as f32 / f32::from(u16::try_from(surface.height()).unwrap_or(u16::MAX)),
+        );
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "as above: a position on a screen"
+        )]
+        let transform = tiny_skia::Transform::from_translate(rect.x as f32, rect.y as f32)
+            .pre_scale(scale_x, scale_y);
+        let shader = Pattern::new(
+            pixmap,
+            SpreadMode::Pad,
+            FilterQuality::Bilinear,
+            opacity,
+            transform,
+        );
+        let paint = paint(shader, BlendMode::SourceOver);
+        self.fill_clips(&clips, &paint);
+    }
+
     /// The parts of `rect` inside `damage` and the canvas, with its corners
     /// cut to `radius`.
     ///
@@ -323,22 +396,7 @@ impl Canvas {
         // padded buffer is gathered into tight rows first.
         let gathered: Vec<u8>;
         let bytes = if surface.format() == Format::Xrgb8888 {
-            // An opaque surface's fourth byte is the X byte, which a client
-            // leaves at whatever it likes; read as alpha it would make the
-            // window blotchy. It is forced to `0xFF` so the shader sees the
-            // opaque pixels the format promises.
-            gathered = (0..surface.height())
-                .filter_map(|y| surface.row(y))
-                .flat_map(|row| row.chunks(4))
-                .flat_map(|pixel| {
-                    [
-                        pixel.first().copied().unwrap_or(0),
-                        pixel.get(1).copied().unwrap_or(0),
-                        pixel.get(2).copied().unwrap_or(0),
-                        0xFF,
-                    ]
-                })
-                .collect();
+            gathered = opaque_rows(surface);
             &gathered
         } else if let Some(tight) = surface.tight() {
             tight
@@ -431,4 +489,29 @@ fn corner_inset(radius: i64, row: i64) -> i64 {
     )]
     let inset = (radius_f - dx).round() as i64;
     inset.clamp(0, radius)
+}
+
+/// A surface's pixels as tight rows the shader can read.
+///
+/// An opaque surface's fourth byte is the X byte, which a client leaves at
+/// whatever it likes; read as alpha it would make the window blotchy, so it
+/// is forced to `0xFF`. A premultiplied one is copied as it is.
+fn opaque_rows(surface: &Surface<'_>) -> Vec<u8> {
+    let opaque = surface.format() == Format::Xrgb8888;
+    (0..surface.height())
+        .filter_map(|y| surface.row(y))
+        .flat_map(|row| row.chunks(4))
+        .flat_map(|pixel| {
+            [
+                pixel.first().copied().unwrap_or(0),
+                pixel.get(1).copied().unwrap_or(0),
+                pixel.get(2).copied().unwrap_or(0),
+                if opaque {
+                    0xFF
+                } else {
+                    pixel.get(3).copied().unwrap_or(0)
+                },
+            ]
+        })
+        .collect()
 }

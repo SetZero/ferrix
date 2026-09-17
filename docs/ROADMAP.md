@@ -4158,6 +4158,42 @@ bezier curves, rounded corners, blur and shadows, dimming and opacity rules,
 special workspaces, groups, multi-monitor with per-monitor workspaces and
 scaling, the plugin-shaped extension points, and the rest of `hyprctl`.
 
+**Begun — animations with Hyprland's curves (2026-09-17).** `compositor/anim`
+is the curves, the tree and the values they move, and it holds no window and
+no clock: a value is asked what it is at a time the caller gives it, so every
+curve and every inheritance rule is host-tested.
+
+The curve is `hyprutils`' `CBezierCurve` to the point: 255 points baked at
+`t = (i + 1) / 255`, the binary search over their `x`s, and the linear
+interpolation between two of them. `default` is `DEFAULTBEZIERPOINTS`,
+`(0, 0.75)` and `(0.15, 1.0)`, which puts a quarter of the time at 0.843 of
+the distance -- a number worked out from the control points by hand and
+pinned by a test, because a curve that is nearly Hyprland's is an animation
+that looks nearly right and cannot be compared against anything.
+
+The tree is `AnimationTree.cpp`'s names and parents, so `animation = windows,
+1, 3, myCurve` reaches `windowsMove` and leaves `fade` alone, and `global` is
+on at speed 8 with the default curve. Speed is in deciseconds, which nothing
+in Hyprland's configuration says and only `getPercent` does:
+`clamp((ms / 100) / speed, 0, 1)`. Every refusal is Hyprland's
+`handleAnimation` word for word -- `no such animation`, `invalid animation
+on/off state`, `invalid speed`, `no such bezier` -- and a bad line is
+reported with the rest of the file still applied.
+
+A window the layout moves slides there along `windowsMove`'s curve. The
+client is configured at the goal and draws once, as Hyprland's is, and the
+renderer scales its surface into the rectangle while it moves -- the one
+place in this renderer where a pixel is not a pixel, and the only place it
+can be. A window that is not moving goes through the exact path, which is why
+every expected image in this tree still holds to the byte.
+
+The proof is the frames themselves. The compositor writes a PPM a frame, and
+a test swaps two windows through `hyprctl dispatch movewindow l` and follows
+the moving window's left edge across them: it must be at more than three
+places, it must not go backwards, and by the middle frame it must be more
+than half way -- which a straight line is not. With `animations:enabled = 0`
+the same swap puts it at two places and no more.
+
 **Begun — rounded corners and opacity (2026-09-17).** `decoration:rounding`
 cuts a window's corners and the border follows them, at the window's rounding
 plus the border's width as Hyprland draws it; `decoration:active_opacity`,

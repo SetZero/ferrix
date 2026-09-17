@@ -698,3 +698,224 @@ fn a_bar_takes_its_strip_and_the_windows_tile_under_it() {
          first difference {first:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Animations
+//
+// `compositor/anim`'s tests check the curves against the numbers hyprutils'
+// own algorithm produces. This checks that a window really slides: that the
+// frames between two layouts hold the window at places neither layout put it,
+// and that those places are on the curve rather than a straight line.
+// ---------------------------------------------------------------------------
+
+/// Run the compositor with two clients and a configuration, dispatching
+/// `after` through the control socket once both windows are up, and give
+/// back every frame it drew.
+fn frames_after(name: &str, config: &str, after: &str) -> Vec<Vec<u8>> {
+    let work = workspace(name);
+    let socket = work.join("wayland");
+    let frames = work.join("frames");
+    let runtime = work.join("runtime");
+    let instance = runtime.join("hypr").join("ferrix-test");
+    std::fs::create_dir_all(&instance).expect("an instance directory");
+    let requests = instance.join(compositor_ipc::REQUEST_SOCKET);
+    let config_path = work.join("hyprland.conf");
+    std::fs::write(&config_path, config).expect("a configuration");
+
+    let options = Options {
+        display: socket.to_string_lossy().into_owned(),
+        headless: Some((WIDTH, HEIGHT)),
+        instance: Some(instance.to_string_lossy().into_owned()),
+        config: Some(config_path),
+        dump: Some(frames.clone()),
+        deadline: Some(4000),
+        ..Options::default()
+    };
+
+    let socket_for_clients = socket.clone();
+    let after = after.to_owned();
+    let clients = std::thread::spawn(move || {
+        for _ in 0..400 {
+            if socket_for_clients.exists() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let mut handles = Vec::new();
+        for (pattern, title) in [(Pattern::Checkerboard, "one"), (Pattern::Gradient, "two")] {
+            let path = socket_for_clients.clone();
+            handles.push(std::thread::spawn(move || {
+                connect(&path, pattern, title, Shape::Window)
+            }));
+            std::thread::sleep(Duration::from_millis(250));
+        }
+        // Both windows are up and settled; now make them move.
+        std::thread::sleep(Duration::from_millis(900));
+        let _ = compositor_ctl::ask(&requests, &after);
+        for handle in handles {
+            let _ = handle.join();
+        }
+    });
+
+    let _ = hyprix::run(&options).expect("the compositor ran");
+    clients.join().expect("the clients finished");
+
+    let mut names: Vec<PathBuf> = std::fs::read_dir(&frames)
+        .expect("the compositor wrote frames")
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| path.extension().is_some_and(|kind| kind == "ppm"))
+        .collect();
+    names.sort();
+    let drawn = names
+        .iter()
+        .map(|path| {
+            let bytes = std::fs::read(path).expect("a frame");
+            let mut parts = bytes.splitn(4, |byte| *byte == b'\n');
+            let _ = parts.next();
+            let _ = parts.next();
+            let _ = parts.next();
+            parts.next().expect("pixels").to_vec()
+        })
+        .collect();
+    let _ = std::fs::remove_dir_all(&work);
+    drawn
+}
+
+/// Where the gradient window's left edge is on a row, once both windows are
+/// on the screen.
+///
+/// The gradient is the only thing on the screen whose pixels are none of the
+/// colours everything else is: the compositor's background, the
+/// checkerboard's two greys and the two border colours. So the first column
+/// that is none of them is its left edge, wherever it is -- including while
+/// it is drawn scaled, part-way through a move, where a measure that looked
+/// for the gap between two windows finds several.
+///
+/// `None` until the row holds both patterns, which is the frames before the
+/// second client has drawn: a screen with one window on it says nothing
+/// about where two of them are.
+fn gradient_edge(frame: &[u8], row: usize) -> Option<usize> {
+    let checkerboard: [[u8; 3]; 2] = [[0xE0, 0xE0, 0xE0], [0x30, 0x30, 0x30]];
+    let others: [[u8; 3]; 3] = [[0x11, 0x11, 0x11], [0xFF, 0xFF, 0xFF], [0x44, 0x44, 0x44]];
+    let pixel = |x: usize| -> Option<&[u8]> {
+        let at = (row * WIDTH as usize + x) * 3;
+        frame.get(at..at + 3)
+    };
+    let is_gradient = |x: usize| {
+        pixel(x).is_some_and(|colour| {
+            !checkerboard.iter().any(|one| one == colour) && !others.iter().any(|one| one == colour)
+        })
+    };
+    let has_checkerboard = (0..WIDTH as usize)
+        .any(|x| pixel(x).is_some_and(|colour| checkerboard.iter().any(|one| one == colour)));
+    if !has_checkerboard {
+        return None;
+    }
+    let edge = (0..WIDTH as usize).find(|x| is_gradient(*x))?;
+    Some(edge)
+}
+
+/// The edges from the moment the two windows were settled in their first
+/// arrangement, which is the first frame the moving window is at its
+/// right-hand place.
+///
+/// The frames before it are the two clients arriving: a window whose client
+/// has not redrawn at the size it was just configured to is drawn stretched,
+/// and a stretched checkerboard has greys between its two, which the edge
+/// measure cannot tell from the gradient. Nothing about the move is in those
+/// frames.
+fn once_settled(edges: &[usize]) -> &[usize] {
+    let Some(&start) = edges.iter().max() else {
+        return &[];
+    };
+    let at = edges.iter().position(|edge| *edge == start).unwrap_or(0);
+    edges.get(at..).unwrap_or(&[])
+}
+
+/// A window swapped with its neighbour slides there, and the frames on the
+/// way hold it at places neither layout put it.
+#[test]
+fn a_window_moves_through_the_frames_between_two_layouts() {
+    let frames = frames_after(
+        "animated",
+        "animation = windows, 1, 8, default\n",
+        "dispatch movewindow l",
+    );
+    assert!(frames.len() > 10, "only {} frames", frames.len());
+
+    // The upper quarter, which is the gradient's opaque half.
+    let row = HEIGHT as usize / 4;
+    let measured: Vec<usize> = frames
+        .iter()
+        .filter_map(|frame| gradient_edge(frame, row))
+        .collect();
+    let seams = once_settled(&measured).to_vec();
+    assert!(seams.len() > 5, "the window was never found: {seams:?}");
+
+    // A swap moves the seam, and the frames in between hold it somewhere
+    // else again: with no animation there would be two positions and no
+    // more.
+    let mut distinct: Vec<usize> = seams.clone();
+    distinct.sort_unstable();
+    distinct.dedup();
+    assert!(
+        distinct.len() > 3,
+        "the seam only ever had {} positions, so nothing slid: {distinct:?}",
+        distinct.len()
+    );
+
+    // It slid one way and did not wander: the seam never goes backwards
+    // once it has started, which a window drawn from a stale rectangle
+    // would.
+    let start = seams.first().copied();
+    let moving: Vec<usize> = seams
+        .iter()
+        .copied()
+        .skip_while(|at| Some(*at) == start)
+        .collect();
+    let forwards = moving.windows(2).all(|pair| pair[0] <= pair[1]);
+    let backwards = moving.windows(2).all(|pair| pair[0] >= pair[1]);
+    assert!(forwards || backwards, "the seam wandered: {moving:?}");
+
+    // And it is on a curve rather than a straight line. Hyprland's
+    // `default` starts fast: by the middle frame of the move it is well
+    // past half way, which `compositor/anim`'s own test puts at 0.843 of
+    // the distance a quarter of the way in.
+    let (Some(first), Some(last)) = (seams.first().copied(), seams.last().copied()) else {
+        panic!("no seam at all");
+    };
+    let span = last.abs_diff(first);
+    assert!(span > 100, "the seam moved only {span} pixels");
+    let middle = seams.get(seams.len() / 2).copied().expect("a middle frame");
+    let covered = middle.abs_diff(first);
+    assert!(
+        covered * 2 > span,
+        "half way through the move it had covered {covered} of {span}, which is not a curve \
+         that starts fast"
+    );
+}
+
+/// With `animations:enabled = 0` the same swap is instant: the seam has the
+/// two positions the two layouts give it and nothing between.
+#[test]
+fn animations_can_be_turned_off() {
+    let frames = frames_after(
+        "instant",
+        "animations:enabled = 0\n",
+        "dispatch movewindow l",
+    );
+    let row = HEIGHT as usize / 4;
+    let measured: Vec<usize> = frames
+        .iter()
+        .filter_map(|frame| gradient_edge(frame, row))
+        .collect();
+    let order = once_settled(&measured).to_vec();
+    let mut distinct: Vec<usize> = order.clone();
+    distinct.sort_unstable();
+    distinct.dedup();
+    assert!(
+        distinct.len() <= 2,
+        "with animations off the window was at {} places: {order:?}",
+        distinct.len()
+    );
+}
