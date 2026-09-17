@@ -8,7 +8,7 @@
 //! grid of characters, and a byte written to the pseudoterminal.
 
 use std::collections::BTreeMap;
-use std::os::fd::FromRawFd;
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::time::{Duration, Instant};
 
 use compositor_protocol::core::{
@@ -453,15 +453,66 @@ impl Terminal {
         let Some(fd) = args.get(1).and_then(Arg::as_fd) else {
             return;
         };
-        let size = args.get(2).and_then(Arg::as_uint).unwrap_or(0) as usize;
-        let mut file = unsafe { std::fs::File::from_raw_fd(fd.0) };
-        let mut text = String::new();
-        // The length counts the terminating NUL, which is not part of the
-        // text: a client that keeps it hands a NUL to its own parser.
-        if std::io::Read::read_to_string(&mut file, &mut text).is_ok() {
-            let end = text.find('\0').unwrap_or(text.len()).min(size);
-            self.layouts = compositor_xkb::groups_of(&text[..end]);
+        let Ok(size) = usize::try_from(args.get(2).and_then(Arg::as_uint).unwrap_or(0)) else {
+            return;
+        };
+        // The descriptor is owned from here: taking it means it is closed
+        // when this returns, mapping and all.
+        #[expect(
+            unsafe_code,
+            reason = "AUDIT: the descriptor arrived with this message and is                       this client's to own and to close"
+        )]
+        // SAFETY: the wire reader hands over a descriptor nothing else holds.
+        let owned = unsafe { OwnedFd::from_raw_fd(fd.0) };
+        if size == 0 {
+            return;
         }
+        // Mapped read-only rather than read: a descriptor that arrived over
+        // a socket shares its file offset with the one the compositor sent,
+        // so reading it sequentially would move the compositor's offset and
+        // leave the next client's keymap empty. The protocol says a client
+        // maps this file, and that is why.
+        #[expect(
+            unsafe_code,
+            reason = "AUDIT: mmap is not in std; it maps a descriptor this \
+                      process owns at the length the compositor stated, and the \
+                      result is checked against MAP_FAILED"
+        )]
+        // SAFETY: a null hint lets the kernel choose the address.
+        let address = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                size,
+                libc::PROT_READ,
+                libc::MAP_PRIVATE,
+                owned.as_raw_fd(),
+                0,
+            )
+        };
+        if address == libc::MAP_FAILED {
+            return;
+        }
+        #[expect(
+            unsafe_code,
+            reason = "AUDIT: the mapping is this length by construction and is \
+                      read as bytes, which any byte pattern is valid for"
+        )]
+        // SAFETY: `size` bytes were just mapped at `address`.
+        let mapped = unsafe { std::slice::from_raw_parts(address.cast::<u8>(), size) };
+        // The length counts the terminating NUL, which is not part of the
+        // text. A keymap that is not UTF-8 is not one this can read, and
+        // leaving `layouts` empty falls back to the default table.
+        if let Some(bytes) = mapped.get(..size.saturating_sub(1))
+            && let Ok(text) = std::str::from_utf8(bytes)
+        {
+            self.layouts = compositor_xkb::groups_of(text);
+        }
+        #[expect(
+            unsafe_code,
+            reason = "AUDIT: unmapping exactly the mapping made above"
+        )]
+        // SAFETY: the address and length are the ones just mapped.
+        let _ = unsafe { libc::munmap(address, size) };
     }
 
     /// The table a key is read in: the group in force, or the default.
