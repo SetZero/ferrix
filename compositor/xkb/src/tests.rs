@@ -215,10 +215,12 @@ fn a_lock_toggles_on_the_press_and_survives_the_release() {
     );
 }
 
-/// Latched modifiers and layout groups are not kept, and the crate says so;
-/// a test that did not pin it would let one appear by accident.
+/// Latched modifiers are not kept, and the crate says so; a test that did
+/// not pin it would let one appear by accident. A keyboard with one layout
+/// reports group zero, which is every keyboard until a configuration names a
+/// second layout.
 #[test]
-fn nothing_is_ever_latched_and_there_is_one_group() {
+fn nothing_is_ever_latched_and_one_layout_is_group_zero() {
     let mut keyboard = super::Keyboard::new();
     let _ = keyboard.key(KEY_LEFTSHIFT, true);
     let _ = keyboard.key(KEY_CAPSLOCK, true);
@@ -228,4 +230,125 @@ fn nothing_is_ever_latched_and_there_is_one_group() {
 
     keyboard.clear();
     assert_eq!(keyboard.modifiers(), super::Modifiers::default());
+}
+
+/// The group cycles and wraps, which is what `hyprctl switchxkblayout next`
+/// and `prev` do. Hyprland asks for the index *after* the last one and lets
+/// libxkbcommon's modulus bring it back, so a state that refused an
+/// out-of-range index would stop `next` cycling.
+#[test]
+fn the_layout_group_cycles_and_wraps_both_ways() {
+    let mut keyboard = super::Keyboard::new();
+    keyboard.set_groups(3);
+    assert_eq!(keyboard.groups(), 3);
+    assert_eq!(keyboard.group(), 0);
+
+    assert!(keyboard.next_group());
+    assert_eq!(keyboard.group(), 1);
+    assert!(keyboard.next_group());
+    assert_eq!(keyboard.group(), 2);
+    // Off the end, back to the first.
+    assert!(keyboard.next_group());
+    assert_eq!(keyboard.group(), 0);
+    // And backwards off the start, to the last.
+    assert!(keyboard.previous_group());
+    assert_eq!(keyboard.group(), 2);
+
+    // An index beyond the last is brought back by modulus, as an effective
+    // layout out of range is in libxkbcommon.
+    assert!(keyboard.set_group(4));
+    assert_eq!(keyboard.group(), 1);
+    // And a set to what is already in force changed nothing, which is what
+    // stops a redundant `wl_keyboard.modifiers` going out.
+    assert!(!keyboard.set_group(1));
+}
+
+/// One layout is one group: `next` on it stays put and reports no change, so
+/// a keyboard nobody configured a second layout for sends no modifiers event
+/// when a key bound to the switch is pressed.
+#[test]
+fn a_keyboard_with_one_layout_has_nowhere_to_switch() {
+    let mut keyboard = super::Keyboard::new();
+    assert_eq!(keyboard.groups(), 1);
+    assert!(!keyboard.next_group());
+    assert!(!keyboard.previous_group());
+    assert_eq!(keyboard.group(), 0);
+}
+
+/// A keymap change that leaves fewer layouts than the group in force brings
+/// the group inside the new keymap rather than reporting one no client could
+/// look up.
+#[test]
+fn shrinking_the_keymap_brings_the_group_inside_it() {
+    let mut keyboard = super::Keyboard::new();
+    keyboard.set_groups(4);
+    assert!(keyboard.set_group(3));
+    keyboard.set_groups(2);
+    assert_eq!(keyboard.groups(), 2);
+    assert_eq!(keyboard.group(), 1);
+    assert_eq!(keyboard.modifiers().group, 1);
+
+    // Zero layouts is not a keymap a client could be told about.
+    keyboard.set_groups(0);
+    assert_eq!(keyboard.groups(), 1);
+    assert_eq!(keyboard.group(), 0);
+}
+
+/// The group survives losing the keys: it is what the configuration and the
+/// switch said, not a finger's doing.
+#[test]
+fn clearing_the_keys_keeps_the_layout() {
+    let mut keyboard = super::Keyboard::new();
+    keyboard.set_groups(2);
+    assert!(keyboard.next_group());
+    let _ = keyboard.key(KEY_LEFTSHIFT, true);
+    keyboard.clear();
+    assert_eq!(keyboard.group(), 1);
+    assert_eq!(keyboard.modifiers().depressed, 0);
+}
+
+/// `input:kb_layout = de,us` is two groups, and the variants are read
+/// alongside the names: the pairing is positional, as XKB's own grammar has
+/// it, so a variant for the first layout and none for the second is
+/// `nodeadkeys,`.
+#[test]
+fn a_comma_separated_layout_list_is_a_layout_each() {
+    let names = |asked: &str, variants: &str| {
+        super::layouts(asked, variants)
+            .into_iter()
+            .map(|(layout, exact)| (layout.name, layout.variant, exact))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(names("de,us", ""), [("de", "", true), ("us", "", true)]);
+    assert_eq!(
+        names("de,us", "nodeadkeys,"),
+        [("de", "nodeadkeys", true), ("us", "", true)]
+    );
+    // A person aligning their configuration file has not changed it.
+    assert_eq!(names("de , us", ""), [("de", "", true), ("us", "", true)]);
+    // One layout is still a list of one, and an empty list is the default.
+    assert_eq!(names("de", ""), [("de", "", true)]);
+    assert_eq!(names("", ""), [("us", "", true)]);
+}
+
+/// A layout the compositor does not ship is reported as not the one asked
+/// for, in a list as on its own: a person whose second group silently became
+/// English would have no way to tell.
+#[test]
+fn a_layout_that_is_not_shipped_says_so_inside_a_list() {
+    let asked = super::layouts("de,ru", "");
+    assert_eq!(asked.len(), 2);
+    assert_eq!((asked[0].0.name, asked[0].1), ("de", true));
+    assert_eq!((asked[1].0.name, asked[1].1), ("us", false));
+}
+
+/// XKB allows four groups and libxkbcommon refuses the fifth, so a
+/// configuration naming more gets the first four rather than a keymap
+/// libxkbcommon would reject.
+#[test]
+fn at_most_four_groups_are_taken() {
+    let asked = super::layouts("de,us,fr,gb,us", "");
+    assert_eq!(asked.len(), super::MAX_GROUPS);
+    let names = asked.iter().map(|(layout, _)| layout.name).collect::<Vec<_>>();
+    assert_eq!(names, ["de", "us", "fr", "gb"]);
 }
