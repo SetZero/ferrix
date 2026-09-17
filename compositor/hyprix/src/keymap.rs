@@ -30,8 +30,8 @@ impl Keymap {
     /// Whatever the call said. Sealing that fails is not an error: the client
     /// then guards against a shrink it will never see, which costs it a
     /// signal handler and nothing else.
-    pub fn new(layout: &compositor_xkb::generated::Layout) -> io::Result<Self> {
-        let text = layout.keymap.as_bytes();
+    pub fn new(keymap: &str) -> io::Result<Self> {
+        let text = keymap.as_bytes();
         // The length a client is told counts the terminating NUL, which the
         // text does not carry: `xkb_keymap_new_from_string` reads a C string.
         let size = u32::try_from(text.len() + 1).map_err(|_| io::Error::other("too large"))?;

@@ -273,6 +273,10 @@ impl Seat {
             layout: chosen(config).0,
             eaten: Vec::new(),
         };
+        // How many layouts the keymap carries, so `switchxkblayout` and a
+        // `grp:` toggle have somewhere to go. The keymap a client is handed
+        // has one group for each.
+        seat.keyboard.set_groups(groups_count(config));
         seat.set_binds(config);
         seat
     }
@@ -284,6 +288,7 @@ impl Seat {
         // A reload may have changed the keymap, and every bind is resolved
         // against it.
         self.layout = chosen(config).0;
+        self.keyboard.set_groups(groups_count(config));
         // A reload takes away the map that was in force, as it takes away
         // the binds: a submap the new configuration does not have is one
         // nothing could leave.
@@ -602,18 +607,47 @@ impl Seat {
     }
 }
 
-/// The keymap `config` asks for, and whether it is the one it asked for.
-///
-/// `input:kb_layout` and `input:kb_variant`, the way Hyprland reads them.
-/// The second half is for the caller to report: a person who wrote
-/// `kb_layout = ru` and got `us` is owed a sentence saying so, because
-/// otherwise their keyboard types the wrong letters for no visible reason.
+/// How many layouts `config` asks for, which is how many groups the keymap
+/// a client is handed will have.
 #[must_use]
-pub fn chosen(config: &Config) -> (&'static Layout, bool) {
-    compositor_xkb::layout(
+pub fn groups_count(config: &Config) -> u32 {
+    u32::try_from(groups(config).len()).unwrap_or(1).max(1)
+}
+
+/// Every layout `config` asks for, in group order, each with whether it is
+/// the one it asked for.
+///
+/// `input:kb_layout` and `input:kb_variant` are comma-separated lists read
+/// side by side, the way Hyprland reads them -- which is to say the way
+/// libxkbcommon does, since Hyprland hands both strings on unread and gets
+/// back one keymap with a group for each. The second half of each pair is
+/// for the caller to report: a person who wrote `kb_layout = ru` and got
+/// `us` is owed a sentence saying so.
+#[must_use]
+pub fn groups(config: &Config) -> Vec<(&'static Layout, bool)> {
+    compositor_xkb::layouts(
         config.str("input:kb_layout").unwrap_or_default(),
         config.str("input:kb_variant").unwrap_or_default(),
     )
+}
+
+/// The keymap a bind is resolved against, and whether it is the one the
+/// configuration asked for.
+///
+/// The first layout, which is group zero. Hyprland resolves a bind against a
+/// state it never gives a group or a modifier to
+/// (`CKeybindManager::m_xkbTranslationState`), so a bind stays on the
+/// physical key group zero puts it on however many layouts a person
+/// configures and whichever of them they are typing in. That is deliberate
+/// there and it is deliberate here: `SUPER, Q` must not move when the layout
+/// does.
+#[must_use]
+pub fn chosen(config: &Config) -> (&'static Layout, bool) {
+    let asked = groups(config);
+    asked
+        .first()
+        .copied()
+        .unwrap_or_else(|| compositor_xkb::layout("", ""))
 }
 
 /// What sets `key` off, or `None` for a key this keymap does not have.

@@ -241,16 +241,26 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
     // `input:kb_layout` and `input:kb_variant`, and a sentence when the
     // configuration asked for a layout this compositor does not ship: a
     // person whose keyboard suddenly types English is owed a reason.
-    let (chosen, exact) = crate::seat::chosen(&config);
-    if !exact {
-        report(&format!(
-            "hyprix: no keymap for kb_layout = {}, kb_variant = {}; using {}",
-            config.str("input:kb_layout").unwrap_or_default(),
-            config.str("input:kb_variant").unwrap_or_default(),
-            chosen.described()
-        ));
+    let asked = crate::seat::groups(&config);
+    for (chosen, exact) in &asked {
+        if !*exact {
+            report(&format!(
+                "hyprix: no keymap for kb_layout = {}, kb_variant = {}; using {}",
+                config.str("input:kb_layout").unwrap_or_default(),
+                config.str("input:kb_variant").unwrap_or_default(),
+                chosen.described()
+            ));
+        }
     }
-    let keymap = match Keymap::new(chosen) {
+    // One keymap with a group for each layout, which is what libxkbcommon
+    // hands Hyprland for `kb_layout = de,us` and what lets a switch send
+    // only a new group rather than a new keymap.
+    let layouts = asked
+        .iter()
+        .map(|(layout, _)| *layout)
+        .collect::<Vec<_>>();
+    let text = compositor_xkb::merged(&layouts);
+    let keymap = match Keymap::new(&text) {
         Ok(keymap) => Some(keymap),
         Err(error) => {
             report(&format!("hyprix: no keymap: {error}"));
