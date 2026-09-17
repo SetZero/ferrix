@@ -186,6 +186,13 @@ impl Devices {
         (keyboard, pointer)
     }
 
+    /// Whether any device is a pointer, which is whether there is a pointer
+    /// to draw.
+    #[must_use]
+    pub fn has_pointer(&self) -> bool {
+        self.capabilities().1
+    }
+
     /// Read whatever is waiting on every device, in the order it arrived.
     ///
     /// Nothing waiting is an empty answer, not an error: this is called every

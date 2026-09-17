@@ -4193,6 +4193,34 @@ grid, printed a row at a time.
 /bin/hyprctl` and requires the picture the terminal makes, pixel for pixel,
 on x86-64 and on AArch64.
 
+**Done — the pointer (2026-09-17).** A compositor with a mouse and no arrow
+on the screen is one a person cannot use, and there was none: `wl_pointer`
+carried motion and buttons to the clients and nothing was ever drawn.
+
+The arrow is in `compositor/render`, in code, as a shape rather than as a
+file: Hyprland loads an XCursor or a `hyprcursor` theme and Ferrix has
+neither the files nor a library to read them with, so the one this draws is
+written out -- a 24x24 left-pointing arrow with a black outline and a white
+fill, every pixel opaque or clear, its tip at the pointer. A client replaces
+it with `wl_pointer.set_cursor`, which is how a text field shows an I-beam
+and a link a hand; a client that asks for a null surface gets no pointer at
+all, which is what a video player playing full screen does.
+
+It is drawn over everything -- windows, bars and menus -- because a pointer
+that goes under a menu is one nobody can follow, and it is not drawn while
+the session is locked, because a lock screen draws its own.
+
+**It is also not drawn until it has moved.** The seat starts the pointer in
+the middle of the screen, which is a guess: nothing has said where the mouse
+is until a device does. An arrow drawn at a guess is worse than none, and a
+machine with a mouse plugged in and never touched should look like a machine
+with no mouse.
+
+`cargo xtask test-compositor` boots a seventeenth time and takes two
+pictures: the tiled pair with nothing on it, and then -- after QMP moves the
+mouse -- the same pair with the arrow's tip where it was put, which must be
+the picture `compositor/render` blesses for exactly that.
+
 **Done — menus (2026-09-17).** `xdg_popup`, which is what every right-click
 menu, dropdown, tooltip and combo box in every toolkit is. The objects were
 being made and nothing else: a positioner was a bag of numbers nobody read,

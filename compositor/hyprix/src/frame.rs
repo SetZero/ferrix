@@ -34,6 +34,21 @@ pub struct Output<'a> {
     /// Everything above the renderer works in logical pixels, and this is
     /// where they become the screen's own.
     pub scale: f64,
+    /// Where the pointer is and what it looks like, or `None` for a screen
+    /// with no pointer on it.
+    pub cursor: Option<Cursor>,
+}
+
+/// The pointer, as the frame draws it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Cursor {
+    /// Where its hotspot is, in the space every window's rectangle is in.
+    pub at: (i64, i64),
+    /// The client's own cursor surface and the hotspot inside it, or `None`
+    /// for the compositor's built-in arrow.
+    pub surface: Option<(usize, ObjectId, (i32, i32))>,
+    /// Whether it is drawn at all: a client may ask for no pointer.
+    pub shown: bool,
 }
 
 /// Where one layer surface is, and whose it is.
@@ -121,7 +136,9 @@ fn draw_windows(
         style,
         styles,
         scale,
+        cursor,
     } = target;
+    let cursor = *cursor;
     let (origin, scale) = (*origin, *scale);
     // The layout, the decorations and the layer surfaces are all in logical
     // pixels; a scaled monitor draws each of them as `scale` buffer pixels.
@@ -162,6 +179,52 @@ fn draw_windows(
         windows: styles,
     };
     let _ = render_with_layers(canvas, output, origin, &styles, &surfaces, &drawn, damage);
+
+    // The pointer last, over everything: it is not a window, not a layer
+    // surface and not part of the layout, and a compositor that drew it
+    // under a menu would have a pointer nobody can follow.
+    //
+    // The arrow is kept here rather than made once and held, because it is
+    // 24x24 and a frame that has to allocate it is a frame that has already
+    // blurred a window.
+    let arrow;
+    if let Some(cursor) = cursor.filter(|cursor| cursor.shown) {
+        let own = cursor.surface.and_then(|(client, surface, hotspot)| {
+            let slot = clients.get(client)?;
+            Some((pixels(slot.client(), slot.pools(), surface)?, hotspot))
+        });
+        let (surface, hotspot) = match own {
+            Some((surface, hotspot)) => (Some(surface), hotspot),
+            None => {
+                arrow = compositor_render::cursor::arrow();
+                (
+                    compositor_render::cursor::surface(&arrow).ok(),
+                    compositor_render::cursor::HOTSPOT,
+                )
+            }
+        };
+        if let Some(surface) = surface {
+            let at = scale_rect(
+                Rect::new(
+                    cursor.at.0.saturating_sub(i64::from(hotspot.0)),
+                    cursor.at.1.saturating_sub(i64::from(hotspot.1)),
+                    i64::from(surface.width()),
+                    i64::from(surface.height()),
+                ),
+                origin,
+                scale,
+            );
+            // The canvas is this monitor's, so the rectangle is moved into
+            // its own pixels the way every other one is.
+            let at = Rect::new(
+                at.x.saturating_sub(origin.0),
+                at.y.saturating_sub(origin.1),
+                at.width,
+                at.height,
+            );
+            canvas.composite(&surface, at, damage);
+        }
+    }
 
     let (width, height) = backend.size();
     let stride = backend.stride();

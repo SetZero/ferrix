@@ -6,7 +6,7 @@ use compositor_layout::{Monitor, MonitorId, MonitorLayout, Placed, Settings, Sta
 use crate::golden::{self, Mismatch};
 use crate::{
     Canvas, Color, Damage, Error, Format, LayerFrame, Pattern, Rect, Style, Styles, Surface,
-    Target, damage_between, outer, render, render_with_layers,
+    Target, cursor, damage_between, outer, render, render_with_layers,
 };
 
 const BG: u32 = 0x0020_4060;
@@ -907,6 +907,52 @@ const GROUPING: [(&str, &str); 3] = [
 fn two_pattern_clients_tiled_by_dwindle_match_the_expected_image() {
     golden::check("dwindle-two-clients", WIDTH, HEIGHT, &two_client_frame());
 }
+
+/// The pointer, drawn over the two tiled windows.
+///
+/// This is the picture `cargo xtask test-compositor` requires after the
+/// pointer has been moved: the compositor's own arrow, its tip at the point
+/// the mouse is, over everything else -- not under a window and not under a
+/// menu, because a pointer nobody can follow is worse than none.
+#[test]
+fn the_pointer_is_drawn_over_the_windows() {
+    let (_, layout) = two_clients();
+    let buffers = client_buffers(&layout);
+    let mut canvas = Canvas::new(WIDTH, HEIGHT).unwrap();
+    let full = Damage::full(WIDTH, HEIGHT);
+    let produced = render(
+        &mut canvas,
+        &layout,
+        (0, 0),
+        &Style::default(),
+        &surfaces(&buffers),
+        &full,
+    );
+    assert_eq!(produced, full);
+
+    let arrow = cursor::arrow();
+    let surface = cursor::surface(&arrow).unwrap();
+    canvas.composite(
+        &surface,
+        Rect::new(
+            i64::from(POINTER.0 - cursor::HOTSPOT.0),
+            i64::from(POINTER.1 - cursor::HOTSPOT.1),
+            i64::from(cursor::SIDE),
+            i64::from(cursor::SIDE),
+        ),
+        &full,
+    );
+    golden::check("pointer-on-two-clients", WIDTH, HEIGHT, canvas.data());
+}
+
+/// Where the pointer is put, which the boot's QMP movement must match.
+///
+/// Inside the *focused* window, which is the one opened second. Hyprland's
+/// `input:follow_mouse` is on by default and this compositor's is too, so a
+/// pointer moved into the other window would take the focus with it and
+/// change which border is drawn active -- a different picture, and one this
+/// test is not about.
+const POINTER: (i32, i32) = (700, 300);
 
 /// A window with a menu on it: the popup drawn over the window, at the
 /// rectangle `xdg_positioner`'s rules put it.

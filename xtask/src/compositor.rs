@@ -333,6 +333,45 @@ exec-once = /bin/pattern checkerboard one
 exec-once = /bin/pattern gradient two
 ";
 
+/// The two pictures the pointer boot requires: the windows, and the same
+/// windows with the pointer on them.
+///
+/// The pointer is not drawn until it has moved, because until then the
+/// compositor has only its own guess at where the mouse is -- the middle of
+/// the screen -- and an arrow drawn at a guess is worse than none. So the
+/// first picture is every other boot's, and the second is the one the
+/// movement makes.
+const POINTER_EXPECTED: [(&str, &str); 2] = [
+    (
+        "tiled, with no pointer drawn because none has moved",
+        "compositor/render/tests/data/dwindle-two-clients.xrle",
+    ),
+    (
+        "the pointer over the windows, its tip where the mouse was put",
+        "compositor/render/tests/data/pointer-on-two-clients.xrle",
+    ),
+];
+
+/// Where the pointer is put, in QMP's 0..0x7FFF across the screen.
+///
+/// `compositor/render` blesses the picture with the arrow's tip at
+/// (700, 300) on a 1024x768 screen, and these are those two as a fraction
+/// of the axis QEMU's virtio tablet reports.
+///
+/// Inside the window that already has the focus, because
+/// `input:follow_mouse` is on: a pointer moved into the other one would
+/// take the focus with it and draw the active border somewhere else, which
+/// is a different picture and not the one this boot is about.
+const POINTER_AT: (i32, i32) = (22401, 12800);
+
+/// The configuration the seventeenth boot is given: the two windows, and
+/// nothing else.
+const POINTER_CONFIG: &str = "\
+# Carried into the initramfs by `cargo xtask test-compositor`.
+exec-once = /bin/pattern checkerboard one
+exec-once = /bin/pattern gradient two
+";
+
 /// The picture a window with a menu on it makes, which the sixteenth boot
 /// requires.
 ///
@@ -753,6 +792,14 @@ struct Wanted<'a> {
     /// A window sliding: the keybind that starts it and the picture it ends
     /// in, with every distinct screendump along the way kept.
     moving: Option<Moving<'a>>,
+    /// Where to put the pointer, in QMP's own 0..0x7FFF coordinates, before
+    /// the second picture is judged.
+    ///
+    /// Once and before that one picture, because that is the whole of what a
+    /// pointer test needs: the first picture is the screen with no pointer
+    /// on it and the second is the same screen with one, and a compositor
+    /// that drew it in the wrong place fails the comparison.
+    pointer: Option<(i32, i32)>,
     /// Lines the boot is waited for before its transcript is taken.
     ///
     /// A picture can be right before the guest has finished saying what it
@@ -824,13 +871,7 @@ fn boot_and_dump(
         say_the_marker(watching, arch);
 
         for (index, (what, path)) in wanted.states.iter().enumerate() {
-            // Each keybind but the first is sent after the picture before it
-            // has settled, so that a state is never judged before the
-            // compositor has been asked to make it.
-            if let Some((name, keys)) = binds.get(index.wrapping_sub(1)) {
-                press(&mut qmp, keys)?;
-                println!("  {arch}: pressed {name}");
-            }
+            ask_for_state(&mut qmp, arch, index, binds, wanted.pointer)?;
             let want = expected(path)?;
             let screen = settle(&mut qmp, &dump, &want)?;
             let (found, count) = differences(&screen, &want);
@@ -1003,6 +1044,43 @@ fn ask_the_sockets(qmp: &mut Qmp, watching: &mut Watching<'_>, arch: Arch) -> Re
     Ok(())
 }
 
+/// Do whatever the state at `index` is reached by: the keybind before it,
+/// and the pointer movement if the boot asked for one.
+///
+/// Each keybind but the first is sent after the picture before it has
+/// settled, so that a state is never judged before the compositor has been
+/// asked to make it.
+fn ask_for_state(
+    qmp: &mut Qmp,
+    arch: Arch,
+    index: usize,
+    binds: &[(&str, &[&str])],
+    pointer: Option<(i32, i32)>,
+) -> Result<()> {
+    if let Some((name, keys)) = binds.get(index.wrapping_sub(1)) {
+        press(qmp, keys)?;
+        println!("  {arch}: pressed {name}");
+    }
+    if index == 1
+        && let Some((x, y)) = pointer
+    {
+        qmp.input_send_event(&[absolute("x", x), absolute("y", y)])?;
+        println!("  {arch}: moved the pointer");
+    }
+    Ok(())
+}
+
+/// One axis of an absolute pointer movement, as QMP takes it.
+///
+/// The value is 0..0x7FFF across the screen, which is what QEMU's virtio
+/// tablet reports and what the compositor's seat turns back into pixels.
+fn absolute(axis: &str, value: i32) -> String {
+    format!(
+        "{{\"type\":\"abs\",\"data\":{{\"axis\":{},\"value\":{value}}}}}",
+        crate::display::json_string(axis)
+    )
+}
+
 /// Press and release `keys` in order, as a hand does: the modifiers first,
 /// the key last, and everything let go in reverse.
 fn press(qmp: &mut Qmp, keys: &[&str]) -> Result<()> {
@@ -1153,6 +1231,7 @@ fn test_monitors(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
             states: &MONITOR_EXPECTED,
             others: &MONITOR_OTHERS,
             moving: None,
+            pointer: None,
             awaiting: &[],
         },
         &MONITOR_BINDS,
@@ -1192,6 +1271,7 @@ fn test_rules(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
             states: &RULED_EXPECTED,
             others: &[],
             moving: None,
+            pointer: None,
             awaiting: &[],
         },
         &[],
@@ -1230,7 +1310,7 @@ fn said_on_its_own(line: &str) -> &str {
 /// each takes minutes under emulation and there are fourteen of them, so a
 /// change to one is otherwise an hour a try.
 type Boot = fn(Arch, &Programs, &Args) -> Result<()>;
-const BOOTS: [(&str, Boot); 16] = [
+const BOOTS: [(&str, Boot); 17] = [
     ("dispatchers", test_dispatchers),
     ("bar", test_bar),
     ("decorations", test_decorations),
@@ -1247,6 +1327,7 @@ const BOOTS: [(&str, Boot); 16] = [
     ("screenshot", test_screenshot),
     ("lock", test_lock),
     ("menu", test_menu),
+    ("pointer", test_pointer),
 ];
 
 /// Whether `--boot` asked for this one.
@@ -1267,6 +1348,7 @@ fn test_dispatchers(arch: Arch, programs: &Programs, args: &Args) -> Result<()> 
             states: &EXPECTED,
             others: &[],
             moving: None,
+            pointer: None,
             awaiting: &[],
         },
         &BINDS,
@@ -1315,6 +1397,7 @@ fn test_bar(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
             states: &BAR_PICTURES,
             others: &[],
             moving: None,
+            pointer: None,
             awaiting: &["Layer level 2 (top)"],
         },
         &BAR_BINDS,
@@ -1413,6 +1496,7 @@ fn one_picture(
             states: &[wanted],
             others: &[],
             moving: None,
+            pointer: None,
             awaiting: &[],
         },
         &[],
@@ -1424,6 +1508,47 @@ fn one_picture(
     println!(
         "  {arch}: {what}, every one of {} pixels",
         screen.width * screen.height
+    );
+    Ok(())
+}
+
+/// A seventeenth boot: the pointer, drawn.
+///
+/// A compositor with a mouse and no arrow on the screen is one a person
+/// cannot use. This moves the pointer with QMP and requires the screen to
+/// become the picture `compositor/render` blesses for the arrow at that
+/// point -- and to have been the ordinary tiled pair before it, because the
+/// pointer is not drawn until it has moved.
+fn test_pointer(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
+    let (screens, _) = boot_and_dump(
+        arch,
+        programs,
+        POINTER_CONFIG,
+        &Wanted {
+            states: &POINTER_EXPECTED,
+            others: &[],
+            moving: None,
+            pointer: Some(POINTER_AT),
+            awaiting: &[],
+        },
+        &[],
+        args,
+    )?;
+    let (Some(before), Some(after)) = (screens.first(), screens.get(1)) else {
+        return Err(Error::new(format!(
+            "{arch}: the pointer boot took {} pictures",
+            screens.len()
+        )));
+    };
+    if before.pixels == after.pixels {
+        return Err(Error::new(format!(
+            "{arch}: moving the pointer drew nothing"
+        )));
+    }
+    println!(
+        "  {arch}: the pointer was drawn where the mouse was put, over the windows, in every one \
+         of {} pixels",
+        after.width * after.height
     );
     Ok(())
 }
@@ -1446,6 +1571,7 @@ fn test_menu(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
             states: &MENU_EXPECTED,
             others: &[],
             moving: None,
+            pointer: None,
             awaiting: &["menu at"],
         },
         &[],
@@ -1494,6 +1620,7 @@ fn test_lock(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
             states: &LOCK_EXPECTED,
             others: &[],
             moving: None,
+            pointer: None,
             awaiting: &["lock: locked"],
         },
         &LOCK_BINDS,
@@ -1572,6 +1699,7 @@ fn test_screenshot(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
             states: &SHOT_EXPECTED,
             others: &[],
             moving: None,
+            pointer: None,
             awaiting: &["shot: "],
         },
         &SHOT_BINDS,
@@ -1653,6 +1781,7 @@ fn test_taskbar(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
             states: &TASKBAR_EXPECTED,
             others: &[],
             moving: None,
+            pointer: None,
             awaiting: &["lswt: left"],
         },
         &TASKBAR_BINDS,
@@ -1705,6 +1834,7 @@ fn test_submap(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
             states: &SUBMAP_EXPECTED,
             others: &[],
             moving: None,
+            pointer: None,
             awaiting: &["submap>>resize", "hyprix: the global keymap", "default"],
         },
         &SUBMAP_BINDS,
@@ -1783,6 +1913,7 @@ fn test_clipboard(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
             states: &CLIPBOARD_EXPECTED,
             others: &[],
             moving: None,
+            pointer: None,
             awaiting: &[asked.as_str(), pasted.as_str()],
         },
         &[],
@@ -1845,6 +1976,7 @@ fn test_terminal(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
             states: &TERMINAL_EXPECTED,
             others: &[],
             moving: None,
+            pointer: None,
             awaiting: &[],
         },
         &[],
@@ -1888,6 +2020,7 @@ fn test_animation(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
             states: &ANIMATED_EXPECTED,
             others: &[],
             moving: Some(ANIMATED_MOVING),
+            pointer: None,
             awaiting: &[],
         },
         &[],
@@ -1978,6 +2111,7 @@ fn test_plugins(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
             states: &PLUGIN_EXPECTED,
             others: &[],
             moving: None,
+            pointer: None,
             awaiting: &[],
         },
         &PLUGIN_BINDS,
@@ -2120,6 +2254,7 @@ fn test_groups(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
             states: &GROUPED_EXPECTED,
             others: &[],
             moving: None,
+            pointer: None,
             awaiting: &[],
         },
         &GROUP_BINDS,

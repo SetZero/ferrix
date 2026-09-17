@@ -184,6 +184,15 @@ pub struct Seat {
     binds: Vec<Bound>,
     /// Where the pointer is on the screen, in pixels.
     pointer: (f64, f64),
+    /// Whether the pointer has ever been used.
+    ///
+    /// The position above starts in the middle of the screen, which is a
+    /// guess: nothing has said where the mouse is until it moves. A
+    /// compositor that drew an arrow there would be drawing one at a place
+    /// it made up, so the pointer is drawn from its first movement and not
+    /// before -- which is also what a machine with a mouse plugged in and
+    /// never touched should look like.
+    used: bool,
     /// The screen, which the pointer may not leave.
     screen: (f64, f64),
     /// The submap in force, `None` for the global map.
@@ -213,6 +222,7 @@ impl Seat {
             binds: Vec::new(),
             // The pointer starts in the middle, as Hyprland's does.
             pointer: (f64::from(width) / 2.0, f64::from(height) / 2.0),
+            used: false,
             screen: (f64::from(width), f64::from(height)),
             submap: None,
             locked: false,
@@ -326,6 +336,13 @@ impl Seat {
         self.pointer
     }
 
+    /// Whether the pointer has been used, which is whether its position is
+    /// something a device said rather than where it was put to start with.
+    #[must_use]
+    pub const fn pointer_used(&self) -> bool {
+        self.used
+    }
+
     /// Take one input, and say what to do about it.
     pub fn input(&mut self, input: Input) -> Vec<Action> {
         match input {
@@ -337,6 +354,7 @@ impl Seat {
             Input::Motion { dx, dy } => self.move_to(self.pointer.0 + dx, self.pointer.1 + dy),
             Input::Absolute { x, y } => self.move_to(x * self.screen.0, y * self.screen.1),
             Input::Button { button, pressed } => {
+                self.used = true;
                 let mut actions = self.fired(Trigger::Button(button), pressed, false);
                 actions.push(Action::Button { button, pressed });
                 actions
@@ -424,6 +442,7 @@ impl Seat {
     }
 
     fn move_to(&mut self, x: f64, y: f64) -> Vec<Action> {
+        self.used = true;
         // The pointer may not leave the screen, and a NaN from a device that
         // reported nonsense must not become the position.
         let hold = |value: f64, limit: f64| {

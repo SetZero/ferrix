@@ -283,6 +283,13 @@ pub enum Event {
         /// Whether the client asked, rather than having gone.
         asked: bool,
     },
+    /// A client said what the pointer looks like over its windows.
+    CursorSet {
+        /// The surface it drew, or `None` for a pointer it wants hidden.
+        surface: Option<ObjectId>,
+        /// Where in that surface the pointer is.
+        hotspot: (i32, i32),
+    },
     /// A client made a popup: a menu, a tooltip, a dropdown. It has to be
     /// placed and configured before it may draw anything at all.
     PopupCreated {
@@ -402,6 +409,12 @@ pub struct Client {
     /// has been handed over already. A frame may be copied into once, which
     /// is `zwlr_screencopy_frame_v1`'s `already_used`.
     frames: BTreeMap<ObjectId, Capture>,
+    /// What the client last asked the pointer to look like: the surface and
+    /// the hotspot, or `None` for a pointer it asked to be hidden.
+    cursor: Option<(ObjectId, (i32, i32))>,
+    /// Whether it has ever asked, which is not the same as having asked for
+    /// nothing.
+    said_cursor: bool,
     /// Each `xdg_positioner` this client made, and what it has set on it.
     positioners: BTreeMap<ObjectId, Positioner>,
     /// Each `xdg_popup` it has made.
@@ -517,6 +530,8 @@ impl Client {
             handles: BTreeMap::new(),
             told: BTreeMap::new(),
             frames: BTreeMap::new(),
+            cursor: None,
+            said_cursor: false,
             positioners: BTreeMap::new(),
             popups: BTreeMap::new(),
             lock: None,
@@ -1306,6 +1321,7 @@ impl Client {
             Role::XdgToplevel => self.xdg_toplevel_request(sender, opcode, args),
             Role::DecorationManager => self.decoration_manager(version, opcode, args),
             Role::ToplevelDecoration => self.toplevel_decoration(sender, opcode, args),
+            Role::Pointer => self.pointer_request(opcode, args),
             Role::XdgPositioner => self.positioner(sender, opcode, args),
             Role::XdgPopup => self.popup_request(sender, opcode, args),
             Role::SessionLockManager => self.lock_manager(version, opcode, args),
@@ -2116,6 +2132,58 @@ impl Client {
             }
             _ => {}
         }
+    }
+
+    /// `wl_pointer`: `set_cursor`, which is how a client says what the
+    /// pointer looks like over its window.
+    ///
+    /// A text field asks for an I-beam, a link for a hand, a resize edge for
+    /// an arrow with two heads: all of them are this one request with a
+    /// surface the client drew. A null surface hides the pointer, which is
+    /// what a video player full-screen does.
+    ///
+    /// The serial is not checked. libwayland's own compositors check it
+    /// against the last `enter` so that a client cannot change the cursor
+    /// while the pointer is somebody else's; this compositor has one pointer
+    /// and gives it to the surface under it, so the client that is asking is
+    /// the client that has it.
+    fn pointer_request(&mut self, opcode: u16, args: &[Arg<'_>]) {
+        if opcode != core::wl_pointer::request::SET_CURSOR {
+            return;
+        }
+        let surface = args.get(1).and_then(Arg::as_object);
+        let hotspot = (
+            args.get(2).and_then(Arg::as_int).unwrap_or(0),
+            args.get(3).and_then(Arg::as_int).unwrap_or(0),
+        );
+        self.cursor = surface
+            .filter(|surface| !surface.is_null() && self.surfaces.contains_key(surface))
+            .map(|surface| (surface, hotspot));
+        self.said_cursor = true;
+        self.events.push(Event::CursorSet {
+            surface: self.cursor.map(|(surface, _)| surface),
+            hotspot,
+        });
+    }
+
+    /// What this client last asked the pointer to look like over its
+    /// windows: the surface and where in it the pointer is.
+    ///
+    /// `None` is a client that has asked for no cursor at all, which is what
+    /// hides the pointer.
+    #[must_use]
+    pub const fn cursor(&self) -> Option<(ObjectId, (i32, i32))> {
+        self.cursor
+    }
+
+    /// Whether this client has ever said anything about the cursor.
+    ///
+    /// A client that has not is drawn the compositor's own arrow; one that
+    /// has asked for nothing is drawn none, and the two are different
+    /// things.
+    #[must_use]
+    pub const fn said_cursor(&self) -> bool {
+        self.said_cursor
     }
 
     /// `xdg_positioner`: the numbers a popup is placed with.

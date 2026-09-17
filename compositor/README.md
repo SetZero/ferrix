@@ -123,6 +123,9 @@ names the part of Hyprland or hyprlang it follows.
   byte (`tests/data/*.xrle`, written only with `COMPOSITOR_RENDER_BLESS=1`;
   `COMPOSITOR_RENDER_PPM=<dir>` dumps the frames to look at) with a
   one-pixel negative control.
+  `cursor` is the arrow the compositor draws when no client has said
+  otherwise: a shape in code rather than a theme file, since Ferrix has
+  neither the files nor a library to read them with.
 * **`blank`** is iteration 1 on screen (`docs/DISPLAY.md`): it opens
   `/dev/dri/card0`, sets the connected connector's preferred mode with the
   legacy calls, fills a dumb buffer with `0x1E1E2E` and prints

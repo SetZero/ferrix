@@ -416,6 +416,16 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
             if actions.is_empty() {
                 continue;
             }
+            // The pointer is drawn into the frame, so moving it is a change
+            // to the screen even when nothing else moved: without this the
+            // arrow would stay where the last redraw left it and catch up
+            // only when a window did something.
+            if actions
+                .iter()
+                .any(|action| matches!(action, crate::seat::Action::Pointer { .. }))
+            {
+                changed = true;
+            }
             let done = crate::deliver::deliver(
                 &actions,
                 &mut focus,
@@ -663,6 +673,19 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                     style: &style,
                     styles: window_rules.styles(),
                     scale: screen.scale,
+                    // The pointer, unless the session is locked: a lock
+                    // screen draws its own and the compositor's arrow over
+                    // it would be two pointers.
+                    cursor: (lock.is_none() && devices.has_pointer() && seat.pointer_used()).then(
+                        || {
+                            let (x, y) = seat.pointer();
+                            crate::frame::Cursor {
+                                at: (x as i64, y as i64),
+                                surface: cursor_surface(&slots, &focus),
+                                shown: cursor_shown(&slots, &focus),
+                            }
+                        },
+                    ),
                 };
                 // While the session is locked the screen shows the lock's
                 // own surface and nothing else -- not the windows, not the
@@ -1606,6 +1629,31 @@ fn as_reported<'a>(
         cursor: (x as i32, y as i32),
         locked,
     }
+}
+
+/// The cursor surface the client under the pointer asked for, if it asked
+/// for one of its own.
+///
+/// A text field asks for an I-beam and a link for a hand; a client that has
+/// said nothing is drawn the compositor's own arrow.
+fn cursor_surface(slots: &[Slot], focus: &Focus) -> Option<(usize, ObjectId, (i32, i32))> {
+    let (client, _) = focus.pointer_on()?;
+    let slot = slots.get(client)?;
+    let (surface, hotspot) = slot.client().cursor()?;
+    Some((client, surface, hotspot))
+}
+
+/// Whether the pointer is drawn at all.
+///
+/// A client that asked for no cursor gets none, which is what a video player
+/// playing full screen does. One that has never asked gets the arrow.
+fn cursor_shown(slots: &[Slot], focus: &Focus) -> bool {
+    let Some((client, _)) = focus.pointer_on() else {
+        return true;
+    };
+    slots
+        .get(client)
+        .is_none_or(|slot| !slot.client().said_cursor() || slot.client().cursor().is_some())
 }
 
 /// Where every popup is on the screen, in the order they were made.

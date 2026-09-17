@@ -91,6 +91,7 @@
 mod blur;
 mod buffer;
 mod canvas;
+pub mod cursor;
 mod damage;
 mod frame;
 mod patterns;

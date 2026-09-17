@@ -55,6 +55,16 @@ impl Focus {
         }
     }
 
+    /// The surface the pointer is on, if any.
+    ///
+    /// Which client that is decides what the cursor looks like: a client
+    /// says with `wl_pointer.set_cursor`, and the one it is saying about is
+    /// the one the pointer is over.
+    #[must_use]
+    pub const fn pointer_on(&self) -> Option<(usize, ObjectId)> {
+        self.pointer
+    }
+
     /// The window the keyboard is on, if any.
     #[must_use]
     pub const fn keyboard(&self) -> Option<(usize, ObjectId)> {
