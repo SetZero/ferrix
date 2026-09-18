@@ -18,7 +18,7 @@
 //! are kept here by window, and the frame reads them: a window with no rule
 //! is drawn as every window is.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use compositor_config::{Config, Decoration, Effect, Window, WindowRule};
 use compositor_layout::{Rect, State, WindowId};
@@ -41,6 +41,20 @@ pub struct Rules {
     /// Every effect a rule asked for that this compositor does not carry
     /// out, so that it can be reported rather than silently dropped.
     unhandled: Vec<String>,
+    /// `persistent_size`: which windows asked for it, so that the size is
+    /// kept when one of them closes.
+    persistent: BTreeSet<WindowId>,
+    /// The size the last window of each name closed at, for those that did:
+    /// Hyprland's `CFloatStateCache`, keyed by the class and the title.
+    ///
+    /// Hyprland keys on the xdg tag as well, which is a third thing a
+    /// window may be called; two windows of the same class and title that
+    /// differ only in their tag share an entry here and would not there.
+    /// Nothing in this tree sets a tag.
+    ///
+    /// In memory and not on disk, as Hyprland's is: the size outlives a
+    /// window and not the session.
+    remembered: BTreeMap<(String, String), (i64, i64)>,
 }
 
 impl Rules {
@@ -60,6 +74,8 @@ impl Rules {
             closeable: BTreeMap::new(),
             grouped: BTreeMap::new(),
             unhandled: Vec::new(),
+            persistent: BTreeSet::new(),
+            remembered: BTreeMap::new(),
         }
     }
 
@@ -147,6 +163,23 @@ impl Rules {
         let _ = self.suppressed.remove(&window);
         let _ = self.closeable.remove(&window);
         let _ = self.grouped.remove(&window);
+        let _ = self.persistent.remove(&window);
+    }
+
+    /// `persistent_size`: keep the size a window closed at, so the next
+    /// window of the same name opens at it.
+    ///
+    /// Called as the window goes and before [`Rules::window_gone`], which
+    /// is where Hyprland does it -- `CWindow::unmap`, for a floating window
+    /// that is not X11 and whose rule asked. A tiled window's size is the
+    /// tiling's and there is nothing of its own to keep.
+    pub fn remember_size(&mut self, window: WindowId, class: &str, title: &str, size: (i64, i64)) {
+        if !self.persistent.contains(&window) {
+            return;
+        }
+        let _ = self
+            .remembered
+            .insert((class.to_owned(), title.to_owned()), size);
     }
 
     /// How many rules there are.
@@ -196,6 +229,7 @@ impl Rules {
         let mut size = None;
         let mut position = None;
         let mut centred = false;
+        let mut persistent = false;
         let mut pin = false;
         let mut pseudo = false;
         // `min_size`, `max_size`, `no_max_size` and `keep_aspect_ratio`,
@@ -220,6 +254,7 @@ impl Rules {
                 Effect::Move(x, y) => {
                     position = Some((x.against(area.width), y.against(area.height)));
                 }
+                Effect::PersistentSize(on) => persistent = *on,
                 Effect::Center => centred = true,
                 Effect::Opacity(opacity) => {
                     style.opacity = Some(*opacity);
@@ -398,6 +433,20 @@ impl Rules {
             changed |= !made.is_empty();
         }
 
+        // `persistent_size`: the size the last window of this name closed
+        // at, unless a `size` rule said one -- Hyprland reads the stored
+        // size over the size the *client* asked for, and a rule that names
+        // a size is a person overruling both.
+        if persistent {
+            let _ = self.persistent.insert(window);
+            if size.is_none() {
+                size = self
+                    .remembered
+                    .get(&(what.class.to_owned(), what.title.to_owned()))
+                    .copied();
+            }
+        }
+
         // Floating last, so that a `size` written after a `float` is still
         // the size the window floats at.
         if floating == Some(true) || size.is_some() || position.is_some() || centred {
@@ -509,6 +558,83 @@ mod tests {
             initial_class: class,
             ..compositor_config::Window::default()
         }
+    }
+
+    /// `persistent_size`: a floating window opens at the size the last
+    /// window of the same name closed at.
+    ///
+    /// Hyprland's is an in-memory cache, written in `CWindow::unmap` and
+    /// read when the next window's geometry is worked out. So the test is
+    /// the round trip: one window floats, is resized, and closes; the next
+    /// of the same name opens at the size the first had rather than at the
+    /// half-screen a window floats at by default.
+    #[test]
+    fn persistent_size_reopens_a_window_at_the_size_it_closed_at() {
+        let config = config("windowrule = float, persistent_size, match:class ^(foot)$\n");
+        let mut state = state(&config);
+        let mut rules = Rules::new(&config, &mut |_| {});
+        let _changed = rules.apply(WindowId(1), &what("foot"), &mut state, &mut |_| {});
+        // A `float` rule with no size floats the window at the size it has,
+        // which for the only window on a workspace is the work area. What
+        // it is does not matter; that the second window does *not* get it
+        // does.
+        let first = rect_of(&state, WindowId(1));
+        assert_ne!((first.width, first.height), (700, 400));
+
+        // Resized by hand, the way a person would, and then closed.
+        let _resized = state
+            .float_window(WindowId(1), Rect::new(100, 100, 700, 400))
+            .expect("resized");
+        rules.remember_size(WindowId(1), "foot", "", (700, 400));
+        rules.window_gone(WindowId(1));
+        let _gone = state.window_gone(WindowId(1)).expect("closed");
+
+        // The next window of the same name opens at 700x400.
+        let _opened = state.open_window(WindowId(2)).expect("a window");
+        let _changed = rules.apply(WindowId(2), &what("foot"), &mut state, &mut |_| {});
+        let at = rect_of(&state, WindowId(2));
+        assert_eq!(
+            (at.width, at.height),
+            (700, 400),
+            "the size came back, and only the size: Hyprland keeps no place"
+        );
+    }
+
+    /// Without the rule nothing is kept, whatever a window closed at.
+    #[test]
+    fn a_window_with_no_rule_keeps_no_size() {
+        let config = config("windowrule = float, match:class ^(foot)$\n");
+        let mut state = state(&config);
+        let mut rules = Rules::new(&config, &mut |_| {});
+        let _changed = rules.apply(WindowId(1), &what("foot"), &mut state, &mut |_| {});
+        let first = rect_of(&state, WindowId(1));
+        let _resized = state
+            .float_window(WindowId(1), Rect::new(100, 100, 700, 400))
+            .expect("resized");
+        // Asked to remember, and it declines: the window never asked.
+        rules.remember_size(WindowId(1), "foot", "", (700, 400));
+        rules.window_gone(WindowId(1));
+        let _gone = state.window_gone(WindowId(1)).expect("closed");
+
+        let _opened = state.open_window(WindowId(2)).expect("a window");
+        let _changed = rules.apply(WindowId(2), &what("foot"), &mut state, &mut |_| {});
+        let second = rect_of(&state, WindowId(2));
+        assert_eq!(
+            (second.width, second.height),
+            (first.width, first.height),
+            "the second window opened as the first did, not at what it was resized to"
+        );
+    }
+
+    /// Where a window is now.
+    fn rect_of(state: &State, window: WindowId) -> Rect {
+        state
+            .layout()
+            .iter()
+            .flat_map(|output| output.windows.iter())
+            .find(|placed| placed.window == window)
+            .map(|placed| placed.rect)
+            .expect("the window is on a screen")
     }
 
     /// `suppress_event maximize` is recorded against the window, which is

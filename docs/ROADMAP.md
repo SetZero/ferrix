@@ -4307,9 +4307,8 @@ with `killactive` saying why rather than doing nothing.
 What is left is `no_screen_share`, which does need a second pass --
 drawing the frame again without one surface in it -- the five that belong
 to a GPU this compositor has not got (`immediate`, `no_vrr`,
-`no_auto_hdr`, `tonemap`, `force_rgbx`), `persistent_size`, which needs a
-close path that fires for one window rather than for a whole connection,
-and the input ones. `xray` was on this list and is done (2026-09-18): it
+`no_auto_hdr`, `tonemap`, `force_rgbx`), `persistent_size`, which is done
+(2026-09-18), and the input ones. `xray` was on this list and is done (2026-09-18): it
 asks for the blur of what is behind the windows, which is the picture the
 renderer's `Backdrop` already keeps, so it needed no second pass at all.
 
@@ -5482,9 +5481,11 @@ the layout is given the pointer, and `use_active_for_splits`,
 `force_split = 0` and `smart_split` read it. What is left of it is
 `precise_mouse_move`, which waits on dropping a dragged window back into
 the tiling; `no_screen_share`, which needs a second pass -- `xray` turned out not to,
-since the blur optimisation's backdrop is the picture it asks for; and
-`persistent_size`, which waits on a close path that fires for one window
-rather than for a whole connection. The
+since the blur optimisation's backdrop is the picture it asks for; `persistent_size`
+followed once that close path existed, and the close path was a bug of its
+own: only a whole connection going took a window out of the layout, so a
+client that closed one of two left the layout tiling a window that was not
+there. The
 frame rate the exit asks for under the GPU path comes with the GPU path.
 
 ---

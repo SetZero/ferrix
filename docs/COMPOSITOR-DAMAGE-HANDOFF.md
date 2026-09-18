@@ -434,9 +434,11 @@ Not part of this handoff, but the next person will ask.
   `draw_layer` plus the rule reaching it. It pays back twice: a bar that
   reads the backdrop is no longer redrawn whole when a window moves under
   it (`Blurred::live` is false for one), which was 8.6 ms a frame.
-- **`persistent_size`**, which does *not* need state on disk: Hyprland's is
-  an in-memory cache (`CFloatStateCache`) keyed by class, title and xdg tag,
-  written when a floating window closes and read when a matching one opens.
+- **`persistent_size` is done** (2026-09-18). It did *not* need state on
+  disk: Hyprland's is an in-memory cache (`CFloatStateCache`) keyed by
+  class, title and xdg tag, written when a floating window closes and read
+  when a matching one opens. This one keys on the class and the title;
+  nothing in this tree sets an xdg tag.
   What it needs here is a window-close path, and there is one now:
   destroying an `xdg_toplevel` takes the window out of the layout
   (2026-09-18). Before that only a whole connection going did, so a client

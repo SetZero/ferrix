@@ -189,6 +189,9 @@ pub enum Effect {
     /// `suppress_event <event> ...`: what the window asks for and does not
     /// get.
     Suppress(Vec<String>),
+    /// `persistent_size <yes-or-no>`: a floating window opens at the size
+    /// the last window of the same name closed at.
+    PersistentSize(bool),
     /// An effect Hyprland has that this compositor does not carry out,
     /// kept by name rather than refused.
     Unhandled(String),
@@ -609,6 +612,7 @@ fn effect(field: &str) -> Result<Effect, String> {
         "border_color" => crate::value::parse_gradient(value)
             .map(Effect::BorderColor)
             .map_err(|why| format!("invalid field border_color: {why}")),
+        "persistent_size" => Ok(Effect::PersistentSize(yes(value))),
         "decorate" => Ok(Effect::Decorate(yes(value))),
         "opaque" => Ok(Effect::Opaque(yes(value))),
         "nearest_neighbor" => Ok(Effect::NearestNeighbor(yes(value))),

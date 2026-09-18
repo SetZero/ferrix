@@ -874,6 +874,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                     .map(|slot| slot.windows.clone())
                     .unwrap_or_default();
                 for (_, window) in windows {
+                    remember_size(window, &mut slots, index, &mut state, &mut window_rules);
                     let _ = state.window_gone(window);
                     let _ = sources.remove(&window);
                     // What a rule gave it goes with it, so that a window id
@@ -2006,8 +2007,9 @@ fn serve(
         ));
     }
     // The windows the client closed, now that its own borrow is over:
-    // the same three things a gone connection's windows are given.
+    // the same things a gone connection's windows are given.
     for window in closed {
+        remember_size(window, slots, index, state, rules);
         let _ = state.window_gone(window);
         let _ = sources.remove(&window);
         rules.window_gone(window);
@@ -3153,6 +3155,40 @@ fn blurs_behind(
             live: !(placed.above && placed.rules.xray),
         });
     windows.chain(layers).collect()
+}
+
+/// `persistent_size`: keep the size a floating window closed at.
+///
+/// Hyprland does this in `CWindow::unmap`, for a floating window whose rule
+/// asked, and reads it back when the next window of the same class and
+/// title opens. A tiled window has no size of its own to keep -- its box is
+/// the tiling's -- and is skipped, as Hyprland skips it.
+///
+/// Called while the window is still in the layout, because its rectangle is
+/// what is being kept.
+fn remember_size(
+    window: WindowId,
+    slots: &mut [Slot],
+    index: usize,
+    state: &mut State,
+    rules: &mut crate::rules::Rules,
+) {
+    if !state.is_floating(window) {
+        return;
+    }
+    let Some((class, title)) = slots.get(index).and_then(|slot| slot.first_called(window)) else {
+        return;
+    };
+    let Some(rect) = state
+        .layout()
+        .iter()
+        .flat_map(|output| output.windows.iter())
+        .find(|placed| placed.window == window)
+        .map(|placed| placed.rect)
+    else {
+        return;
+    };
+    rules.remember_size(window, class, title, (rect.width, rect.height));
 }
 
 /// Every surface of `client` whose buffer is in `pool`.
