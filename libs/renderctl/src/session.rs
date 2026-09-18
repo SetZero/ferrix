@@ -221,6 +221,19 @@ impl Session {
         self.features
     }
 
+    /// The largest object this driver will be asked for, in bytes: the
+    /// smaller of what it offered and what the protocol allows.
+    #[must_use]
+    pub const fn object_limit(&self) -> u64 {
+        self.object_limit
+    }
+
+    /// How much of the work VMO the core has to hand out.
+    #[must_use]
+    pub const fn work_bytes(&self) -> u64 {
+        self.work_bytes
+    }
+
     /// Whether the conversation has ended badly.
     #[must_use]
     pub const fn is_broken(&self) -> bool {

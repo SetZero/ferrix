@@ -163,6 +163,7 @@ pub(crate) fn dispatch(args: &SyscallArgs, process: Option<&Process>) -> Result<
         NativeCall::BlockRingCreate => block_ring_create(process, handle(a[0])),
         NativeCall::NetRingCreate => net_ring_create(process, handle(a[0])),
         NativeCall::DisplayControlCreate => display_control_create(process, handle(a[0])),
+        NativeCall::RenderControlCreate => render_control_create(process, handle(a[0])),
         NativeCall::InputControlCreate => input_control_create(process, handle(a[0])),
         NativeCall::DeviceInfo => device_info(process, handle(a[0]), a[1]),
         NativeCall::DeviceQuiesce => device_quiesce(process, handle(a[0])),
@@ -1129,6 +1130,23 @@ fn display_control_create(process: &Process, device: Handle) -> Result<usize, Er
     let driver_end = crate::display::create(&node).map_err(|why| match why {
         crate::display::CreateError::InUse => status::ALREADY_BOUND,
         crate::display::CreateError::NoMemory => status::NO_MEMORY,
+    })?;
+    insert_new(
+        process,
+        Object::Channel(driver_end),
+        ferrix_blkring::control::CONTROL_RIGHTS,
+    )
+}
+
+/// `render_control_create`.
+///
+/// As the display's, for the other of a card's two conversations: the
+/// device's own channel, one per device, and the driver's end of it back.
+fn render_control_create(process: &Process, device: Handle) -> Result<usize, Errno> {
+    let node = device_in(process, device, Rights::MANAGE)?;
+    let driver_end = crate::render::create(&node).map_err(|why| match why {
+        crate::render::CreateError::InUse => status::ALREADY_BOUND,
+        crate::render::CreateError::NoMemory => status::NO_MEMORY,
     })?;
     insert_new(
         process,

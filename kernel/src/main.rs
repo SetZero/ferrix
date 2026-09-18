@@ -42,6 +42,7 @@ mod panic;
 mod pci;
 mod power;
 mod random;
+mod render;
 mod sched;
 mod smp;
 mod sync;

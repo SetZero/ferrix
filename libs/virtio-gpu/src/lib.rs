@@ -571,6 +571,20 @@ where
     /// Write `command` into the command area, publish it with a response
     /// buffer, and notify the device.
     pub fn submit(&mut self, command: &Command<'_>) -> Result<(), SubmitError> {
+        self.submit_in(gpu::Context::NONE, command)
+    }
+
+    /// The same for a command that belongs to a context, or asks for a
+    /// fence, or both: the header's fields rather than zeros.
+    ///
+    /// # Errors
+    ///
+    /// As [`Driver::submit`].
+    pub fn submit_in(
+        &mut self,
+        context: gpu::Context,
+        command: &Command<'_>,
+    ) -> Result<(), SubmitError> {
         if self.fault.is_some() {
             return Err(SubmitError::Broken);
         }
@@ -622,7 +636,7 @@ where
 
         let area = &mut *self.area;
         let _ = command
-            .write_with(|at, bytes| {
+            .write_with_in(context, |at, bytes| {
                 for (index, &byte) in bytes.iter().enumerate() {
                     area.write_u8(at + index, byte);
                 }

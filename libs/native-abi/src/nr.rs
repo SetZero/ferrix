@@ -85,6 +85,8 @@ pub const NET_RING_CREATE: usize = 0x104B;
 pub const DISPLAY_CONTROL_CREATE: usize = 0x104C;
 /// [`NativeCall::InputControlCreate`].
 pub const INPUT_CONTROL_CREATE: usize = 0x104D;
+/// [`NativeCall::RenderControlCreate`].
+pub const RENDER_CONTROL_CREATE: usize = 0x104E;
 /// [`NativeCall::DeviceInfo`].
 pub const DEVICE_INFO: usize = 0x1049;
 /// [`NativeCall::DeviceQuiesce`].
@@ -206,6 +208,13 @@ pub enum NativeCall {
     /// process holds with `MANAGE`, and answer the driver's end of it
     /// (`docs/INPUT.md` §3.2). One per device.
     InputControlCreate,
+    /// `(device)` → handle. Make the *render* control channel for a device
+    /// this process holds with `MANAGE`, and answer the driver's end of it
+    /// (`docs/GPU.md` §3.3). One per device, and separate from the display's:
+    /// a card has two conversations, one about what is on the screen and one
+    /// about what the GPU computes, and only the second has a second driver
+    /// coming.
+    RenderControlCreate,
     /// `(device, info)` → 0. Write a `DeviceInfo` at `info`: the device as
     /// enumeration found it, which is what whoever starts a driver on it puts
     /// in the driver's START. Any device handle will do.
@@ -218,7 +227,7 @@ pub enum NativeCall {
 }
 
 /// Every native call, in number order.
-pub const ALL: [NativeCall; 33] = [
+pub const ALL: [NativeCall; 34] = [
     NativeCall::HandleClose,
     NativeCall::HandleDuplicate,
     NativeCall::HandleReplace,
@@ -252,6 +261,7 @@ pub const ALL: [NativeCall; 33] = [
     NativeCall::NetRingCreate,
     NativeCall::DisplayControlCreate,
     NativeCall::InputControlCreate,
+    NativeCall::RenderControlCreate,
 ];
 
 /// Whether `number` is in the native range at all.
@@ -298,6 +308,7 @@ pub const fn decode(number: usize) -> Option<NativeCall> {
         NET_RING_CREATE => NativeCall::NetRingCreate,
         DISPLAY_CONTROL_CREATE => NativeCall::DisplayControlCreate,
         INPUT_CONTROL_CREATE => NativeCall::InputControlCreate,
+        RENDER_CONTROL_CREATE => NativeCall::RenderControlCreate,
         DEVICE_INFO => NativeCall::DeviceInfo,
         DEVICE_QUIESCE => NativeCall::DeviceQuiesce,
         _ => return None,
@@ -340,6 +351,7 @@ pub const fn number(call: NativeCall) -> usize {
         NativeCall::NetRingCreate => NET_RING_CREATE,
         NativeCall::DisplayControlCreate => DISPLAY_CONTROL_CREATE,
         NativeCall::InputControlCreate => INPUT_CONTROL_CREATE,
+        NativeCall::RenderControlCreate => RENDER_CONTROL_CREATE,
         NativeCall::DeviceInfo => DEVICE_INFO,
         NativeCall::DeviceQuiesce => DEVICE_QUIESCE,
     }

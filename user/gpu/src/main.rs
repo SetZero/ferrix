@@ -444,6 +444,142 @@ fn started(boot: &Channel<Kernel>) -> Result<Started, Step> {
     }
 }
 
+/// The render half of the card: `libs/renderctl`'s HELLO, and then the one
+/// context the core asks for.
+///
+/// A card has two conversations (`docs/GPU.md` §3.3) and this driver serves
+/// both, as one Linux driver serves `card0` and `renderD128`. What is here
+/// is the *adapter*: renderctl's messages in, virtio-gpu's 3D commands out.
+/// A second driver for another GPU writes this function against its own
+/// device and nothing above it changes.
+fn render(
+    driver: &mut Gpu,
+    port: &Port<Kernel>,
+    device: &Device<Kernel>,
+    location: u32,
+) -> Result<(), Step> {
+    use ferrix_renderctl::message::{
+        self as rc, MAX_BYTES as RENDER_MAX_BYTES, Message as RenderMessage,
+    };
+
+    // A card with no 3D behind it has no render node to serve.
+    if driver.info().features & gpu::FEATURE_VIRGL == 0 {
+        return Ok(());
+    }
+    let Ok(control) = device.render_control() else {
+        return Ok(());
+    };
+    let Some(name) = rc::Hello::named("virtio_gpu") else {
+        return Ok(());
+    };
+    let hello = RenderMessage::Hello(rc::Hello {
+        version: rc::VERSION,
+        location,
+        name,
+        // Fences are encoded but nothing waits on one yet, so they are not
+        // offered: a feature bit is a promise the core would hold us to.
+        features: rc::features::SUBMIT,
+        // Which capability set this device's streams are in, asked for
+        // afresh: the display's HELLO read it too, and a driver that kept
+        // one number in two places would eventually disagree with itself.
+        capset: match run_command(driver, port, &Command::GetCapsetInfo { index: 0 })? {
+            Ok(Response::CapsetInfo(info)) => info.id,
+            _ => 0,
+        },
+        object_max: MAX_OBJECT_BYTES,
+    });
+    let share = port
+        .as_owned()
+        .duplicate(Requested::Exactly(PORT_RIGHTS))
+        .map_err(|_| Step::Hello)?;
+    control
+        .write_with(hello.encode().as_bytes(), [share])
+        .map_err(|_| Step::Hello)?;
+
+    // READY, and then whatever the core asks. Only MAKE_CTX today, which is
+    // what says the 3D commands work against the device rather than against
+    // QEMU's header.
+    let mut bytes = [0_u8; RENDER_MAX_BYTES];
+    let mut handles = [Handle::INVALID; 2];
+    loop {
+        let _ = control
+            .wait_one(Signals::READABLE | Signals::PEER_CLOSED, Deadline::Never)
+            .map_err(|_| Step::Events)?;
+        let Ok(received) = control.read(&mut bytes, &mut handles) else {
+            return Ok(());
+        };
+        for handle in handles.iter_mut().take(received.handles) {
+            drop(OwnedHandle::from_raw(Kernel, *handle));
+            *handle = Handle::INVALID;
+        }
+        let Some(message) = RenderMessage::decode(bytes.get(..received.bytes).unwrap_or_default())
+        else {
+            return Ok(());
+        };
+        let answer = match message {
+            RenderMessage::Ready(_) => continue,
+            RenderMessage::Refused(_) => return Ok(()),
+            RenderMessage::MakeContext { context, capset } => {
+                // virtio's own: the id rides in the header, and
+                // `context_init` carries the capability set.
+                let made = run_command_in(
+                    driver,
+                    port,
+                    gpu::Context {
+                        id: context,
+                        ..gpu::Context::NONE
+                    },
+                    &Command::CtxCreate {
+                        capset: u8::try_from(capset).unwrap_or(0),
+                        name: "ferrix",
+                    },
+                )?;
+                RenderMessage::ContextMade {
+                    context,
+                    status: match made {
+                        Ok(_) => rc::Status::Ok,
+                        Err(_) => rc::Status::DeviceRefused,
+                    },
+                }
+            }
+            RenderMessage::Stop => RenderMessage::Stopped,
+            _ => return Ok(()),
+        };
+        let stopping = matches!(answer, RenderMessage::Stopped);
+        control
+            .write(answer.encode().as_bytes())
+            .map_err(|_| Step::Control)?;
+        if stopping {
+            return Ok(());
+        }
+    }
+}
+
+/// The largest object this driver will make: what one virtio-gpu resource
+/// may reasonably be, and far inside what the protocol allows.
+const MAX_OBJECT_BYTES: u64 = 64 * 1024 * 1024;
+
+/// [`run_command`] for a command that belongs to a context.
+fn run_command_in(
+    driver: &mut Gpu,
+    port: &Port<Kernel>,
+    context: gpu::Context,
+    command: &Command<'_>,
+) -> Result<Result<Response, Refusal>, Step> {
+    driver
+        .submit_in(context, command)
+        .map_err(|_| Step::Device)?;
+    loop {
+        let packet = port.wait(Deadline::Never).map_err(|_| Step::Events)?;
+        if (packet.kind, packet.key) != (PACKET_INTERRUPT, KEY_INTERRUPT) {
+            continue;
+        }
+        if let (Some(done), _) = driver.on_interrupt().map_err(|_| Step::Device)? {
+            return Ok(done.result);
+        }
+    }
+}
+
 /// Submit a command and wait for its outcome, before the pipeline runs.
 fn run_command(
     driver: &mut Gpu,
@@ -642,6 +778,10 @@ fn run(boot: &Channel<Kernel>) -> Result<(), Step> {
             };
         }
     };
+
+    // The card's other conversation, which is where the GPU is. A card with
+    // no 3D behind it says nothing and serves the display as before.
+    render(&mut driver, &port, &device, start.location)?;
 
     let mut serving = Serving {
         driver,
