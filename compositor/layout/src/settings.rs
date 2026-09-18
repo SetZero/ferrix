@@ -194,6 +194,15 @@ pub struct DwindleSettings {
     /// favours the window that was already there rather than whichever of
     /// the two ends up first.
     pub split_bias_current: bool,
+    /// `dwindle:use_active_for_splits`, on by default: a new window splits
+    /// the *focused* window's box. With it off it splits the box the
+    /// pointer is over, which is what a person pointing at a window and
+    /// starting a terminal means.
+    pub use_active_for_splits: bool,
+    /// `dwindle:smart_split`: the pointer picks the quarter of the box the
+    /// new window takes, rather than the half, so it decides the split's
+    /// direction as well as its side.
+    pub smart_split: bool,
 }
 
 /// The master layout's options.
@@ -451,6 +460,8 @@ impl Settings {
                 split_bias_current: config.int("dwindle:split_bias").unwrap_or(0) == 1,
                 default_split_ratio: finite(config.float("dwindle:default_split_ratio"), 1.0)
                     .clamp(0.1, 1.9),
+                use_active_for_splits: config.bool("dwindle:use_active_for_splits").unwrap_or(true),
+                smart_split: config.bool("dwindle:smart_split").unwrap_or(false),
             },
             master: MasterSettings {
                 mfact: finite(config.float("master:mfact"), 0.55).clamp(0.05, 0.95),

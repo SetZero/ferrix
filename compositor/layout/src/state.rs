@@ -167,11 +167,12 @@ impl Tiling {
         &mut self,
         new: WindowId,
         focused: Option<WindowId>,
+        cursor: Option<(f64, f64)>,
         area: Area,
         settings: &Settings,
     ) {
         match self {
-            Self::Dwindle(dwindle) => dwindle.insert(new, focused, area, settings),
+            Self::Dwindle(dwindle) => dwindle.insert(new, focused, cursor, area, settings),
             Self::Master(master) => master.insert(new, focused, settings),
             Self::Monocle(monocle) => monocle.insert(new),
             Self::Scrolling(scrolling) => scrolling.insert(new, focused, settings, area.w),
@@ -395,6 +396,15 @@ pub struct State {
     /// so it moves with the window between monitors, kept while the window
     /// is tiled so floating it again puts it back.
     floating_rects: BTreeMap<WindowId, Rect>,
+    /// Where the pointer is, in the global space the monitors share, or
+    /// `None` on a compositor that has not seen one move.
+    ///
+    /// The layouts are arithmetic and have no devices, but three of
+    /// Hyprland's dwindle options are about where the pointer *is* when a
+    /// window opens -- it reads `getMouseCoordsInternal()` from the input
+    /// manager at that moment -- so the compositor keeps this up to date
+    /// and the tree reads it. Nothing else in the crate looks at it.
+    pointer: Option<(f64, f64)>,
     /// Every window, most recently focused last.
     history: Vec<WindowId>,
     /// The name of each workspace that has one, which is the special ones:
@@ -489,7 +499,19 @@ impl State {
             limits: BTreeMap::new(),
             tags: BTreeMap::new(),
             deny_from_group: false,
+            pointer: None,
         }
+    }
+
+    /// Tell the layouts where the pointer is.
+    ///
+    /// `dwindle:use_active_for_splits`, `dwindle:force_split = 0` and
+    /// `dwindle:smart_split` are all about the window the pointer is over
+    /// when a new one opens, and this is how they know. A compositor that
+    /// never calls it leaves every layout behaving as if it had no pointer,
+    /// which is what a headless test wants.
+    pub const fn set_pointer(&mut self, at: (f64, f64)) {
+        self.pointer = Some(at);
     }
 
     /// No monitors and no windows, with the options `config` sets.
@@ -1097,7 +1119,11 @@ impl State {
             ws.tiling = Tiling::new(self.settings.layout);
             let mut previous = None;
             for window in windows {
-                ws.tiling.insert(window, previous, area, &self.settings);
+                // No cursor: this is the same windows in the same order,
+                // laid out again because an option changed, and where the
+                // pointer happens to be is not part of that.
+                ws.tiling
+                    .insert(window, previous, None, area, &self.settings);
                 previous = Some(window);
             }
         }
@@ -2067,6 +2093,7 @@ impl State {
             .unwrap_or_default();
         let area = Area::of(self.work_area_of(workspace));
         let beside = self.recent_tiled(workspace);
+        let cursor = self.pointer;
         if !floating && !self.floating_rects.contains_key(&window) {
             // A window floated for the first time is centred at half the
             // monitor's size.
@@ -2090,7 +2117,8 @@ impl State {
         }
         if floating {
             ws.floating.retain(|id| *id != window);
-            ws.tiling.insert(window, beside, area, &self.settings);
+            ws.tiling
+                .insert(window, beside, cursor, area, &self.settings);
         } else {
             ws.tiling.remove(window);
             ws.floating.push(window);
@@ -2524,13 +2552,14 @@ impl State {
         let area = Area::of(self.work_area_of(workspace));
         let beside = self.recent_tiled(workspace);
         let settings = self.settings_at(workspace);
+        let cursor = self.pointer;
         let Some(ws) = self.workspaces.get_mut(&workspace) else {
             return;
         };
         if floating {
             ws.floating.push(window);
         } else {
-            ws.tiling.insert(window, beside, area, &settings);
+            ws.tiling.insert(window, beside, cursor, area, &settings);
         }
         let _previous = self.windows.insert(window, workspace);
     }
@@ -2988,7 +3017,9 @@ impl State {
             let settings = self.settings;
             if let Some(ws) = self.workspaces.get_mut(&workspace) {
                 for member in group.members.iter().skip(1) {
-                    ws.tiling.insert(*member, Some(head), area, &settings);
+                    // No cursor: a group breaking up puts its members back
+                    // beside their head, and that is not a window opening.
+                    ws.tiling.insert(*member, Some(head), None, area, &settings);
                 }
             }
             self.focus(window);
@@ -3616,13 +3647,13 @@ impl State {
                 // tree, and the window that left goes beside it.
                 ws.tiling.remove(head);
                 if let Some(next) = group.members.first().copied() {
-                    ws.tiling.insert(next, None, area, &settings);
-                    ws.tiling.insert(window, Some(next), area, &settings);
+                    ws.tiling.insert(next, None, None, area, &settings);
+                    ws.tiling.insert(window, Some(next), None, area, &settings);
                 } else {
-                    ws.tiling.insert(window, None, area, &settings);
+                    ws.tiling.insert(window, None, None, area, &settings);
                 }
             } else {
-                ws.tiling.insert(window, Some(head), area, &settings);
+                ws.tiling.insert(window, Some(head), None, area, &settings);
             }
         }
         // A group of one is no group, which is what Hyprland's own
@@ -3656,7 +3687,7 @@ impl State {
                 let area = Area::of(self.work_area_of(workspace));
                 let settings = self.settings;
                 if let Some(ws) = self.workspaces.get_mut(&workspace) {
-                    ws.tiling.insert(next, None, area, &settings);
+                    ws.tiling.insert(next, None, None, area, &settings);
                 }
             }
         }

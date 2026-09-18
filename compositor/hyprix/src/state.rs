@@ -600,6 +600,13 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
             last_input = Instant::now();
             forced = None;
             let actions = seat.input(input);
+            // Where the pointer is, for the layout: Hyprland's dwindle tree
+            // asks the input manager for it at the moment a window opens,
+            // and `dwindle:use_active_for_splits`, `force_split = 0` and
+            // `smart_split` are all about which window it was over then.
+            // Kept up to date here rather than passed in at the open,
+            // because a window can open long after the pointer last moved.
+            state.set_pointer(seat.pointer());
             if actions.is_empty() {
                 continue;
             }

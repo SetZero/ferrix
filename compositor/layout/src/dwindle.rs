@@ -24,16 +24,20 @@
 //! direction, it lands on that sibling's far side. Either way the new split
 //! gets `dwindle:default_split_ratio`.
 //!
-//! Where it departs from Hyprland: a new window's split is beside the
-//! workspace's most recently focused tiled window, where Hyprland's
-//! `use_active_for_splits` takes the focused window only if it is tiled and
-//! otherwise the one under the cursor; with `dwindle:force_split` at 0
-//! Hyprland puts the new window on the half of the split the cursor is
-//! over, and there is no cursor here, so the new window always takes the
-//! second half; `smart_split`, `split_bias`,
-//! `permanent_direction_override` and pseudotiling are not implemented.
-//! `dwindle:smart_resizing` is, and is the only behaviour: it is Hyprland's
-//! default and the setting is not read, so turning it off changes nothing.
+//! Three options are about where the pointer is when a window opens, and
+//! the tree is told (`State::set_pointer`) rather than asking a device:
+//! `use_active_for_splits` splits the focused window's box or, with it off,
+//! the box the pointer is over; `force_split = 0` puts the new window on
+//! the half of that box the pointer is in; and `smart_split` on the quarter
+//! it is in, which picks the split's direction as well as its side. A
+//! compositor that has seen no pointer gets the behaviour these had before
+//! there was one -- the focused window's box, and the second half.
+//!
+//! Where it departs from Hyprland: `precise_mouse_move`,
+//! `permanent_direction_override`, `split_bias` and pseudotiling are not
+//! implemented. `dwindle:smart_resizing` is, and is the only behaviour: it
+//! is Hyprland's default and the setting is not read, so turning it off
+//! changes nothing.
 
 use crate::dispatch::Direction;
 use crate::geometry::Area;
@@ -48,6 +52,12 @@ enum Place {
     Configured,
     /// The half of the box this point is in.
     Point(f64, f64),
+    /// `dwindle:smart_split`: the *quarter* of the box this point is in,
+    /// which decides the split's direction as well as its order -- a point
+    /// left of centre and near the middle height splits side by side with
+    /// the new window on the left, one near the top splits stacked with the
+    /// new window on top.
+    Quadrant(f64, f64),
     /// First for a move left or up, second for right or down, and the split
     /// along that direction's axis.
     Toward(Direction),
@@ -78,8 +88,15 @@ struct Split {
 
 impl Split {
     /// The direction this split lays out with in `area`.
+    ///
+    /// Worked out afresh from the box, unless something chose it on purpose
+    /// and would have its choice thrown away: `dwindle:preserve_split`, and
+    /// `dwindle:smart_split`, whose whole point is that the pointer picked
+    /// the direction. Hyprland's `recalcSizePosRecursive` asks the same
+    /// question -- it recomputes `splitTop` only when all three of
+    /// `preserve_split`, `smart_split` and `precise_mouse_move` are off.
     fn stacked_in(&self, area: Area, settings: &Settings) -> bool {
-        if settings.dwindle.preserve_split {
+        if settings.dwindle.preserve_split || settings.dwindle.smart_split {
             self.stacked
         } else {
             area.h * settings.dwindle.split_width_multiplier > area.w
@@ -308,6 +325,22 @@ impl Node {
                 }
                 let old = *id;
                 let side_by_side = area.w > area.h * settings.dwindle.split_width_multiplier;
+                // `dwindle:smart_split`: which quarter of the box the point
+                // is in. Hyprland compares the slope of the line from the
+                // box's centre to the point against the box's own
+                // proportions, which is the same as asking which of the
+                // four triangles the box's diagonals cut it into the point
+                // landed in -- so a wide box is split side by side over
+                // most of its area and stacked only near the top and
+                // bottom edges.
+                let quarter = |x: f64, y: f64| {
+                    let (dx, dy) = (x - (area.x + area.w / 2.0), y - (area.y + area.h / 2.0));
+                    if (dy / dx).abs() < area.h / area.w {
+                        (false, dx < 0.0)
+                    } else {
+                        (true, dy < 0.0)
+                    }
+                };
                 let new_first = match place {
                     Place::Configured => settings.dwindle.force_split == ForceSplit::First,
                     // Hyprland's `force_split` 0 branch, which a moved window
@@ -319,6 +352,7 @@ impl Node {
                             y < area.y + area.h / 2.0
                         }
                     }
+                    Place::Quadrant(x, y) => quarter(x, y).1,
                     Place::Toward(direction) => {
                         matches!(direction, Direction::Left | Direction::Up)
                     }
@@ -327,6 +361,7 @@ impl Node {
                     Place::Toward(direction) => {
                         matches!(direction, Direction::Up | Direction::Down)
                     }
+                    Place::Quadrant(x, y) => quarter(x, y).0,
                     Place::Configured | Place::Point(..) => !side_by_side,
                 };
                 let (first, second) = if new_first { (new, old) } else { (old, new) };
@@ -419,10 +454,20 @@ pub(crate) struct Dwindle {
 impl Dwindle {
     /// Add `new` beside `target`, or beside the last window if `target` is
     /// not in the tree, when the workspace's work area is `area`.
+    ///
+    /// `cursor` is where the pointer is, which Hyprland's
+    /// `CDwindleAlgorithm::addTarget` reads from the input manager and three
+    /// options here read from it: `dwindle:use_active_for_splits = 0` opens
+    /// beside the window it is over rather than beside the focused one, and
+    /// `dwindle:force_split = 0` and `dwindle:smart_split` put the new
+    /// window on the half or the quarter of that window's box it is in. A
+    /// compositor that has not seen a pointer gives `None`, and each of the
+    /// three falls back to what it did before there was one.
     pub(crate) fn insert(
         &mut self,
         new: WindowId,
         target: Option<WindowId>,
+        cursor: Option<(f64, f64)>,
         area: Area,
         settings: &Settings,
     ) {
@@ -430,15 +475,31 @@ impl Dwindle {
             self.root = Some(Node::Leaf(new));
             return;
         };
-        let target = target
-            .filter(|target| root.contains(*target))
-            .or_else(|| leaves(&root).last().copied());
+        // Whose box to split. Hyprland's default is the focused window
+        // (`use_active_for_splits`); with it off, the window the pointer is
+        // over, and the nearest one when the pointer is over none -- a bar's
+        // strip, or a gap.
+        let under = cursor.and_then(|at| nearest(&root, at, area, settings));
+        let target = if settings.dwindle.use_active_for_splits {
+            target
+                .filter(|target| root.contains(*target))
+                .or(under)
+                .or_else(|| leaves(&root).last().copied())
+        } else {
+            under
+                .or_else(|| target.filter(|target| root.contains(*target)))
+                .or_else(|| leaves(&root).last().copied())
+        };
         if let Some(target) = target {
             // `layoutmsg preselect` names the side for one window only.
-            let place = self
-                .preselect
-                .take()
-                .map_or(Place::Configured, Place::Toward);
+            let place = match (self.preselect.take(), cursor) {
+                (Some(direction), _) => Place::Toward(direction),
+                (None, Some((x, y))) if settings.dwindle.smart_split => Place::Quadrant(x, y),
+                (None, Some((x, y))) if settings.dwindle.force_split == ForceSplit::Auto => {
+                    Place::Point(x, y)
+                }
+                (None, _) => Place::Configured,
+            };
             let _found = root.split_leaf(target, new, area, settings, place);
         }
         self.root = Some(root);
@@ -460,19 +521,8 @@ impl Dwindle {
             self.root = Some(Node::Leaf(new));
             return;
         };
-        let mut slots = Vec::new();
-        root.slots(area, settings, &mut slots);
-        let mut nearest: Option<(f64, WindowId)> = None;
-        for (window, slot) in slots {
-            let dx = (slot.x - x).max(x - (slot.x + slot.w)).max(0.0);
-            let dy = (slot.y - y).max(y - (slot.y + slot.h)).max(0.0);
-            let distance = dx * dx + dy * dy;
-            if nearest.is_none_or(|(best, _)| distance < best) {
-                nearest = Some((distance, window));
-            }
-        }
         let place = toward.map_or(Place::Point(x, y), Place::Toward);
-        if let Some((_, target)) = nearest {
+        if let Some(target) = nearest(&root, (x, y), area, settings) {
             let _found = root.split_leaf(target, new, area, settings, place);
         }
         self.root = Some(root);
@@ -782,6 +832,26 @@ impl Dwindle {
             root.settle(area, settings);
         }
     }
+}
+
+/// The window whose box is nearest `at`, which is the one the point is in
+/// when it is in any of them: Hyprland's `getClosestNode`.
+///
+/// The distance is to the box rather than to its centre -- zero inside it --
+/// so a point in a gap or on a bar's strip picks the window it is beside.
+fn nearest(root: &Node, (x, y): (f64, f64), area: Area, settings: &Settings) -> Option<WindowId> {
+    let mut slots = Vec::new();
+    root.slots(area, settings, &mut slots);
+    let mut nearest: Option<(f64, WindowId)> = None;
+    for (window, slot) in slots {
+        let dx = (slot.x - x).max(x - (slot.x + slot.w)).max(0.0);
+        let dy = (slot.y - y).max(y - (slot.y + slot.h)).max(0.0);
+        let distance = dx * dx + dy * dy;
+        if nearest.is_none_or(|(best, _)| distance < best) {
+            nearest = Some((distance, window));
+        }
+    }
+    nearest.map(|(_, window)| window)
 }
 
 /// The leaves of `root`, in order.

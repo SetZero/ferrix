@@ -5475,9 +5475,11 @@ about 8 when it was counted, of which `resize_on_border` and
 `extend_border_grab_area` landed on 2026-09-18 -- with the tiled resize
 they turned out to need, since `resizeactive` did nothing to a tiled
 window until the dwindle tree would move a split. `general:snap` followed the same day, on the
-drag the border grab had just built. What is left of it is dwindle's
-cursor-placed splits, `xray` and `no_screen_share`, which need a second
-pass, and `persistent_size`. The
+drag the border grab had just built. Dwindle's cursor-placed splits followed:
+the layout is given the pointer, and `use_active_for_splits`,
+`force_split = 0` and `smart_split` read it. What is left of it is
+`precise_mouse_move` and `permanent_direction_override`, `xray` and
+`no_screen_share`, which need a second pass, and `persistent_size`. The
 frame rate the exit asks for under the GPU path comes with the GPU path.
 
 ---

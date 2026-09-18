@@ -2672,6 +2672,146 @@ fn nothing_snaps_when_the_option_is_off() {
     assert_eq!(rects(&state)[0].1, Rect::new(5, 100, 400, 200));
 }
 
+/// `dwindle:force_split = 0`, Hyprland's default: a new window takes the
+/// half of the split the pointer is over, rather than always the second.
+#[test]
+fn a_new_window_takes_the_half_the_pointer_is_over() {
+    // The pointer on the left of the screen: the new window goes first.
+    let mut state = setup(BARE);
+    state.set_pointer((100.0, 500.0));
+    open(&mut state, &[1]);
+    focus(&mut state, 1);
+    open(&mut state, &[2]);
+    assert_eq!(
+        rects(&state),
+        [
+            (1, Rect::new(960, 0, 960, 1080)),
+            (2, Rect::new(0, 0, 960, 1080))
+        ],
+        "window 2 opened on the half the pointer was over"
+    );
+
+    // And on the right: the new window goes second, which is what this
+    // layout used to do whatever the pointer said.
+    let mut state = setup(BARE);
+    state.set_pointer((1800.0, 500.0));
+    open(&mut state, &[1]);
+    focus(&mut state, 1);
+    open(&mut state, &[2]);
+    assert_eq!(
+        rects(&state),
+        [
+            (1, Rect::new(0, 0, 960, 1080)),
+            (2, Rect::new(960, 0, 960, 1080))
+        ]
+    );
+}
+
+/// A compositor that has seen no pointer behaves as it did before there was
+/// one, which is what every headless test relies on.
+#[test]
+fn a_layout_with_no_pointer_splits_as_it_always_did() {
+    let mut state = setup(BARE);
+    open(&mut state, &[1]);
+    focus(&mut state, 1);
+    open(&mut state, &[2]);
+    assert_eq!(
+        rects(&state),
+        [
+            (1, Rect::new(0, 0, 960, 1080)),
+            (2, Rect::new(960, 0, 960, 1080))
+        ]
+    );
+}
+
+/// `dwindle:force_split` names a side and the pointer is then not consulted.
+#[test]
+fn force_split_overrules_the_pointer() {
+    const FIRST: &str = "general:gaps_in = 0\ngeneral:gaps_out = 0\ngeneral:border_size = 0\n\
+                         dwindle:force_split = 1\n";
+    let mut state = setup(FIRST);
+    // The pointer on the right, which `force_split = 0` would have put the
+    // new window on.
+    state.set_pointer((1800.0, 500.0));
+    open(&mut state, &[1]);
+    focus(&mut state, 1);
+    open(&mut state, &[2]);
+    assert_eq!(
+        rects(&state),
+        [
+            (1, Rect::new(960, 0, 960, 1080)),
+            (2, Rect::new(0, 0, 960, 1080))
+        ],
+        "first, as the option says, wherever the pointer is"
+    );
+}
+
+/// `dwindle:use_active_for_splits = 0`: a new window splits the box the
+/// pointer is over rather than the focused window's.
+#[test]
+fn use_active_for_splits_off_opens_beside_the_window_under_the_pointer() {
+    const BY_POINTER: &str = "general:gaps_in = 0\ngeneral:gaps_out = 0\n\
+                              general:border_size = 0\ndwindle:use_active_for_splits = 0\n\
+                              dwindle:force_split = 2\n";
+    let mut state = setup(BY_POINTER);
+    open(&mut state, &[1]);
+    focus(&mut state, 1);
+    open(&mut state, &[2]);
+    // Window 1 is 0..960 and window 2 is 960..1920. The focus is on window
+    // 2 -- a new window is focused as it opens -- and the pointer is over
+    // window 1, so window 1's box is the one that splits.
+    state.set_pointer((100.0, 500.0));
+    open(&mut state, &[3]);
+    assert_eq!(
+        rects(&state),
+        [
+            (1, Rect::new(0, 0, 960, 540)),
+            (2, Rect::new(960, 0, 960, 1080)),
+            (3, Rect::new(0, 540, 960, 540)),
+        ],
+        "window 1's box split, stacked because it is taller than it is wide"
+    );
+}
+
+/// `dwindle:smart_split`: the *quarter* of the box the pointer is in, which
+/// picks the split's direction as well as its side.
+#[test]
+fn smart_split_takes_the_quarter_the_pointer_is_in() {
+    const SMART: &str = "general:gaps_in = 0\ngeneral:gaps_out = 0\ngeneral:border_size = 0\n\
+                         dwindle:smart_split = true\n";
+    // Near the top edge of a 1920x1080 screen: above both diagonals, so the
+    // split is stacked and the new window takes the top.
+    let mut state = setup(SMART);
+    state.set_pointer((960.0, 20.0));
+    open(&mut state, &[1]);
+    focus(&mut state, 1);
+    open(&mut state, &[2]);
+    assert_eq!(
+        rects(&state),
+        [
+            (1, Rect::new(0, 540, 1920, 540)),
+            (2, Rect::new(0, 0, 1920, 540))
+        ]
+    );
+
+    // Near the left edge: left of both diagonals, so side by side with the
+    // new window on the left -- a direction the half-the-box rule could
+    // never have chosen, since a 1920x1080 box splits side by side anyway
+    // but the *stacked* case above could not be reached at all.
+    let mut state = setup(SMART);
+    state.set_pointer((20.0, 540.0));
+    open(&mut state, &[1]);
+    focus(&mut state, 1);
+    open(&mut state, &[2]);
+    assert_eq!(
+        rects(&state),
+        [
+            (1, Rect::new(960, 0, 960, 1080)),
+            (2, Rect::new(0, 0, 960, 1080))
+        ]
+    );
+}
+
 /// `swapwindow` exchanges two tiled windows and leaves the focus on the one
 /// that moved, so a run of them walks a window across the screen.
 #[test]
