@@ -55,7 +55,7 @@ In dependency order, with sizes in story points:
 | # | what | points |
 |---|---|---|
 | 1 | **virtio-gpu 3D in the ring-3 driver.** `VIRTIO_GPU_F_VIRGL` and `CONTEXT_INIT` negotiated, `GET_CAPSET_INFO`/`GET_CAPSET`, `CTX_CREATE`/`CTX_DESTROY`/`CTX_ATTACH_RESOURCE`, `RESOURCE_CREATE_3D`, `SUBMIT_3D`, `TRANSFER_TO_HOST_3D`/`FROM_HOST_3D`, and fences. `libs/virtio::gpu` already has the 2D commands and their fuzz target, and this extends both. **Mostly done -- §3.2.** | 13 |
-| 2 | **A render node and the `virtgpu` ioctls.** `/dev/dri/renderD128`, GEM handles, `DRM_IOCTL_VIRTGPU_GETPARAM`, `GET_CAPS`, `CONTEXT_INIT`, `RESOURCE_CREATE`, `RESOURCE_INFO`, `MAP`, `EXECBUFFER`, `TRANSFER_TO_HOST`/`FROM_HOST` and `WAIT`, in `libs/linux-abi` from a committed probe as every other ABI table is. And **scanout of a 3D resource**, so the finished frame never leaves the GPU: no per-frame transfer at all, where today's best is the damaged rectangles. | 13 |
+| 2 | **A render node and the `virtgpu` ioctls.** *Begun: `libs/renderctl` and `kernel::render` are written, §3.3; the node, the handle table and the work VMO are what is left.* `/dev/dri/renderD128`, GEM handles, `DRM_IOCTL_VIRTGPU_GETPARAM`, `GET_CAPS`, `CONTEXT_INIT`, `RESOURCE_CREATE`, `RESOURCE_INFO`, `MAP`, `EXECBUFFER`, `TRANSFER_TO_HOST`/`FROM_HOST` and `WAIT`, in `libs/linux-abi` from a committed probe as every other ABI table is. And **scanout of a 3D resource**, so the finished frame never leaves the GPU: no per-frame transfer at all, where today's best is the damaged rectangles. | 13 |
 | 5 | **The host half, in xtask.** `-device virtio-gpu-gl` and a GL display where QEMU has them, asked for as `window.rs` asks for a display today, with the 2D device otherwise. The gate host's QEMU rebuilt with OpenGL and virglrenderer, and `egl-headless` for judged boots. GPU output is not byte-exact across drivers, so a judged GPU boot compares within a stated tolerance, or against a software GL pinned on the gate host; the software renderer's images stay byte-exact. **Judging one needs a way to read its pixels that is not `screendump` -- see §3.1.** | 5 |
 | 3b | **A GPU renderer for the compositor, in Rust.** A `compositor/virgl` crate that encodes virgl's command stream -- object creation, state, `draw_vbo`, resource transfers -- with shaders as the TGSI text virgl takes. Hyprland's effects are about eight shaders: the two blur kernels, `blurprepare`, `blurFinish`, the rounded texture, the border gradient, the shadow. `compositor/render` gains a renderer trait with the software renderer as the fallback the roadmap already requires -- the compositor is never GPU-only. Clients stay `wl_shm`; their damaged rectangles are uploaded as textures. | 21 |
 | 4 | **`zwp_linux_dmabuf` and a GBM-shaped allocator.** Only once clients render on the GPU themselves. Not needed for 3b, and deferred with 3a. | 8 |
@@ -133,10 +133,18 @@ Two things a person picking this up should know:
   declines to ask for a set larger than it rather than have the device
   write past the end.
 
-**What is left of step 1** is a driver that actually *uses* the commands:
-making a context, creating a 3D resource, submitting a stream. That is
-bound up with step 2, because what a context is *for* is the render node,
-and neither is testable without the other.
+**A context is made on the device** through the seam §3.3 describes:
+
+    render   renderD128 is `virtio_gpu`, version 1, capset 1, objects to 64 MiB
+    render   renderD128 made context 1 on the device
+
+`kernel::render` names no virtio type; what turns `MAKE_CTX` into
+`CTX_CREATE` is thirty lines in `user/gpu`, which is the adapter a second
+GPU replaces.
+
+**What is left of step 1** is `RESOURCE_CREATE_3D` and `SUBMIT_3D` against
+the device, which need the work VMO and the objects the node hands out --
+in other words they are step 2's, and that is where they belong.
 
 ### 3.3 The render node's seam, and what Path B inherits (2026-09-18)
 
