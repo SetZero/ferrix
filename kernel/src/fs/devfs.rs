@@ -521,6 +521,8 @@ enum Place {
     Dri,
     /// `/dev/dri/card<N>`.
     Card(u32),
+    /// `/dev/dri/renderD<N>`, the same card's other conversation.
+    Render(u32),
     /// `/dev/input`, while an input device is published.
     Input,
     /// `/dev/input/event<N>`.
@@ -550,6 +552,7 @@ impl Node {
             | Place::Block(_)
             | Place::Dri
             | Place::Card(_)
+            | Place::Render(_)
             | Place::Input
             | Place::Event(_)
             | Place::Pts
@@ -642,6 +645,21 @@ impl Inode for Node {
                     ..card.metadata()
                 },
             ),
+            // The same major as a card, with the node's own number for its
+            // minor, as Linux numbers `renderD128` 226:128.
+            (Place::Render(index), _) => crate::render::renderer(index).map_or(
+                Metadata {
+                    kind: FileType::CharDevice,
+                    rdev: makedev(crate::display::DRM_MAJOR, index),
+                    ..directory
+                },
+                |renderer| Metadata {
+                    atime: self.made,
+                    mtime: self.made,
+                    ctime: self.made,
+                    ..renderer.metadata()
+                },
+            ),
             _ => directory,
         }
     }
@@ -677,6 +695,14 @@ impl Inode for Node {
             let file: Arc<dyn Inode> = crate::display::drm::CardFile::open(card)?;
             return Ok(Some(file));
         }
+        // Every open of a render node is its own, and there may be any
+        // number: a render node is not the display's master, which is what
+        // Linux has them for and what `docs/GPU.md` §3.3 keeps.
+        if let Place::Render(index) = self.place {
+            let renderer = crate::render::renderer(index).ok_or(Errno::ENXIO)?;
+            let file: Arc<dyn Inode> = crate::render::node::RenderFile::open(renderer)?;
+            return Ok(Some(file));
+        }
         // Every open of an input device gets its own object, with its own
         // queue, clock and grab: `docs/INPUT.md` §3.3 allows any number,
         // as Linux does.
@@ -708,7 +734,12 @@ impl Inode for Node {
     }
 
     fn read_at(&self, offset: u64, buf: &mut [u8]) -> Result<usize> {
-        if let Place::Block(_) | Place::Card(_) | Place::Event(_) | Place::Slave(_) = self.place {
+        if let Place::Block(_)
+        | Place::Card(_)
+        | Place::Render(_)
+        | Place::Event(_)
+        | Place::Slave(_) = self.place
+        {
             return Err(Errno::ENXIO);
         }
         let device = self.device().ok_or(Errno::EISDIR)?;
@@ -730,7 +761,12 @@ impl Inode for Node {
     }
 
     fn write_at(&self, offset: u64, data: &[u8], append: bool) -> Result<(usize, u64)> {
-        if let Place::Block(_) | Place::Card(_) | Place::Event(_) | Place::Slave(_) = self.place {
+        if let Place::Block(_)
+        | Place::Card(_)
+        | Place::Render(_)
+        | Place::Event(_)
+        | Place::Slave(_) = self.place
+        {
             return Err(Errno::ENXIO);
         }
         let device = self.device().ok_or(Errno::EISDIR)?;
@@ -746,6 +782,15 @@ impl Inode for Node {
 
     fn lookup(&self, name: &[u8]) -> Result<Arc<dyn Inode>> {
         if self.place == Place::Dri {
+            // `renderD<N>` first: a card's name cannot be mistaken for one,
+            // and a render node is not a card with another name.
+            if let Some(index) = crate::render::node::render_number(name) {
+                let _renderer = crate::render::renderer(index).ok_or(Errno::ENOENT)?;
+                return Ok(Arc::new(Node {
+                    place: Place::Render(index),
+                    made: self.made,
+                }));
+            }
             let index = card_number(name).ok_or(Errno::ENOENT)?;
             let _card = crate::display::card(index).ok_or(Errno::ENOENT)?;
             return Ok(Arc::new(Node {
@@ -774,7 +819,10 @@ impl Inode for Node {
         if self.place != Place::Root {
             return Err(Errno::ENOTDIR);
         }
-        if name == DRI && !crate::display::card_indices().is_empty() {
+        if name == DRI
+            && !(crate::display::card_indices().is_empty()
+                && crate::render::renderer_indices().is_empty())
+        {
             return Ok(Arc::new(Node {
                 place: Place::Dri,
                 made: self.made,
@@ -949,6 +997,23 @@ fn read_dri(cursor: u64, emit: &mut dyn FnMut(DirEntry<'_>) -> bool) -> Result<(
         let name = alloc::format!("card{index}");
         let entry = DirEntry {
             ino: (1u64 << 40) + u64::from(index),
+            kind: FileType::CharDevice,
+            name: name.as_bytes(),
+            next: FIRST_CURSOR + u64::from(index) + 1,
+        };
+        if !emit(entry) {
+            break;
+        }
+    }
+    // Then the render nodes, which are numbered from 128 upwards where a
+    // card's number is small, so one cursor counts through both in order.
+    for index in crate::render::renderer_indices() {
+        if u64::from(index) < first {
+            continue;
+        }
+        let name = alloc::format!("renderD{index}");
+        let entry = DirEntry {
+            ino: (1u64 << 41) + u64::from(index),
             kind: FileType::CharDevice,
             name: name.as_bytes(),
             next: FIRST_CURSOR + u64::from(index) + 1,

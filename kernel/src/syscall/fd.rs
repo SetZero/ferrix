@@ -483,6 +483,12 @@ pub(crate) fn sys_ioctl(
     if let Some(card) = crate::display::drm::of(file.io()) {
         return crate::display::drm::ioctl(process, &card, request, arg);
     }
+    // An open render node (`docs/GPU.md` §3.3), by its per-open object. A
+    // card and a render node are different files with different ioctls, so
+    // neither answers the other's.
+    if let Some(node) = crate::render::node::of(file.io()) {
+        return crate::render::node::ioctl(process, &node, request, arg);
+    }
     // An open input device (`docs/INPUT.md` §3.3), by its per-open object.
     if let Some(device) = crate::input::evdev::of(file.io()) {
         return crate::input::evdev::ioctl(process, &device, request, arg);

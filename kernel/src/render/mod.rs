@@ -54,6 +54,8 @@ use crate::sync::SpinLock;
 use crate::timer;
 use crate::user::vmo::Vmo;
 
+pub(crate) mod node;
+
 /// How much work VMO one renderer gets: command buffers and object
 /// descriptions on their way to the device.
 ///
@@ -171,7 +173,6 @@ fn unclaim(node: &Arc<DeviceNode>) {
 }
 
 /// The numbers of every published renderer, lowest first.
-#[expect(dead_code, reason = "the node that lists these is the next step")]
 pub(crate) fn renderer_indices() -> Vec<u32> {
     let mut indices: Vec<u32> = RENDERERS
         .lock()
@@ -183,7 +184,6 @@ pub(crate) fn renderer_indices() -> Vec<u32> {
 }
 
 /// The renderer published as `renderD<index>`, if its driver is serving it.
-#[expect(dead_code, reason = "the node that opens this is the next step")]
 pub(crate) fn renderer(index: u32) -> Option<Arc<Renderer>> {
     RENDERERS
         .lock()
@@ -321,9 +321,24 @@ fn accept(start: &Start, message: &ChannelMessage) -> Result<Arc<Renderer>, Refu
 
 impl Renderer {
     /// Whether the driver is gone.
-    #[expect(dead_code, reason = "the node that asks is the next step")]
     pub(crate) fn is_gone(&self) -> bool {
         self.state.lock().gone
+    }
+
+    /// What the driver calls itself: `virtio_gpu` here, something else for
+    /// the card §4 describes.
+    ///
+    /// Copied out rather than borrowed, because the name lives under the
+    /// lock and `DRM_IOCTL_VERSION` copies it to a program afterwards.
+    pub(crate) fn name(&self) -> alloc::string::String {
+        alloc::string::String::from(self.state.lock().session.name())
+    }
+
+    /// Which capability set the driver's command streams are in, as its
+    /// HELLO gave it: virgl's `CAPSET_VIRGL` here, and 0 for a device whose
+    /// streams are in none.
+    pub(crate) fn capset(&self) -> u32 {
+        self.state.lock().session.capset()
     }
 
     /// What `stat` says of the render node: a character device of major 226
@@ -332,7 +347,6 @@ impl Renderer {
     /// Its size is zero: unlike a card, whose VMO is what `MODE_MAP_DUMB`'s
     /// offsets are into, nothing is mapped through this inode yet. An object
     /// has no backing to map until the protocol carries one.
-    #[expect(dead_code, reason = "the node that reports this is the next step")]
     pub(crate) fn metadata(&self) -> ferrix_vfs::Metadata {
         use ferrix_vfs::{FileType, Metadata, Timespec};
         Metadata {
