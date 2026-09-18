@@ -54,7 +54,7 @@ In dependency order, with sizes in story points:
 
 | # | what | points |
 |---|---|---|
-| 1 | **virtio-gpu 3D in the ring-3 driver.** `VIRTIO_GPU_F_VIRGL` and `CONTEXT_INIT` negotiated, `GET_CAPSET_INFO`/`GET_CAPSET`, `CTX_CREATE`/`CTX_DESTROY`/`CTX_ATTACH_RESOURCE`, `RESOURCE_CREATE_3D`, `SUBMIT_3D`, `TRANSFER_TO_HOST_3D`/`FROM_HOST_3D`, and fences. `libs/virtio::gpu` already has the 2D commands and their fuzz target, and this extends both. | 13 |
+| 1 | **virtio-gpu 3D in the ring-3 driver.** `VIRTIO_GPU_F_VIRGL` and `CONTEXT_INIT` negotiated, `GET_CAPSET_INFO`/`GET_CAPSET`, `CTX_CREATE`/`CTX_DESTROY`/`CTX_ATTACH_RESOURCE`, `RESOURCE_CREATE_3D`, `SUBMIT_3D`, `TRANSFER_TO_HOST_3D`/`FROM_HOST_3D`, and fences. `libs/virtio::gpu` already has the 2D commands and their fuzz target, and this extends both. **Mostly done -- §3.2.** | 13 |
 | 2 | **A render node and the `virtgpu` ioctls.** `/dev/dri/renderD128`, GEM handles, `DRM_IOCTL_VIRTGPU_GETPARAM`, `GET_CAPS`, `CONTEXT_INIT`, `RESOURCE_CREATE`, `RESOURCE_INFO`, `MAP`, `EXECBUFFER`, `TRANSFER_TO_HOST`/`FROM_HOST` and `WAIT`, in `libs/linux-abi` from a committed probe as every other ABI table is. And **scanout of a 3D resource**, so the finished frame never leaves the GPU: no per-frame transfer at all, where today's best is the damaged rectangles. | 13 |
 | 5 | **The host half, in xtask.** `-device virtio-gpu-gl` and a GL display where QEMU has them, asked for as `window.rs` asks for a display today, with the 2D device otherwise. The gate host's QEMU rebuilt with OpenGL and virglrenderer, and `egl-headless` for judged boots. GPU output is not byte-exact across drivers, so a judged GPU boot compares within a stated tolerance, or against a software GL pinned on the gate host; the software renderer's images stay byte-exact. **Judging one needs a way to read its pixels that is not `screendump` -- see §3.1.** | 5 |
 | 3b | **A GPU renderer for the compositor, in Rust.** A `compositor/virgl` crate that encodes virgl's command stream -- object creation, state, `draw_vbo`, resource transfers -- with shaders as the TGSI text virgl takes. Hyprland's effects are about eight shaders: the two blur kernels, `blurprepare`, `blurFinish`, the rounded texture, the border gradient, the shadow. `compositor/render` gains a renderer trait with the software renderer as the fallback the roadmap already requires -- the compositor is never GPU-only. Clients stay `wl_shm`; their damaged rectangles are uploaded as textures. | 21 |
@@ -102,6 +102,41 @@ real constraint on the plan.
   for the 2D path, where the guest's bytes are still the renderer's own.
   Whether a newer QEMU grew a GL screendump is worth checking before
   writing anything.
+
+### 3.2 Where step 1 stands (2026-09-18)
+
+**The wire format is complete** and every command is unit-tested against
+`virtio_gpu.h` by hand and fuzzed: the capability sets, the four context
+commands, `RESOURCE_CREATE_3D`, both 3D transfers and `SUBMIT_3D`, with the
+control header's context, fence and ring (`gpu::Context`), which a 2D
+driver had been writing as zeros.
+
+**Four of them are proved against real virglrenderer**, not just against
+the header. `cargo xtask test-display --gl` prints
+
+    display  card0 is a 3D card: virgl, 2 capability sets,
+             the first #1 of 308 bytes
+
+which is feature negotiation granting `VIRTIO_GPU_F_VIRGL`,
+`num_capsets` read from the configuration block, `GET_CAPSET_INFO`
+answering, and `GET_CAPSET` returning `virgl_caps_v1`'s 308 bytes. Without
+`--gl` the same boot says `card0 is a scanout: no 3D`.
+
+Two things a person picking this up should know:
+
+* **QEMU offers two capability sets and index 0 is `VIRGL` (#1), not
+  `VIRGL2` (#2).** A renderer that wants VIRGL2 walks the indices; taking
+  index 0 gets the older set.
+* **The driver's response buffer is a page now** (`RESPONSE_BYTES`), up
+  from 512 bytes, because a capability set is longer than anything the 2D
+  half ever read. `CAPSET_ROOM` is what that leaves, and the driver
+  declines to ask for a set larger than it rather than have the device
+  write past the end.
+
+**What is left of step 1** is a driver that actually *uses* the commands:
+making a context, creating a 3D resource, submitting a stream. That is
+bound up with step 2, because what a context is *for* is the render node,
+and neither is testable without the other.
 
 ### 3a, which was not chosen for the compositor
 
