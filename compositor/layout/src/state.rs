@@ -294,6 +294,27 @@ impl Tiling {
         }
     }
 
+    /// Resize a tiled window, which each layout does by moving whatever
+    /// decides its size. Gives whether anything moved.
+    ///
+    /// Only the dwindle layout so far, whose splits are what a tiled window's
+    /// box comes from. The master layout's `mfact` and the scrolling
+    /// layout's column widths are the same idea and are not done here; the
+    /// monocle layout has nothing to move, since its window is the
+    /// workspace.
+    fn resize(
+        &mut self,
+        window: WindowId,
+        by: (f64, f64),
+        area: Area,
+        settings: &Settings,
+    ) -> bool {
+        match self {
+            Self::Dwindle(dwindle) => dwindle.resize(window, by, area, settings),
+            Self::Master(_) | Self::Monocle(_) | Self::Scrolling(_) => false,
+        }
+    }
+
     fn settle(&mut self, area: Area, settings: &Settings) {
         if let Self::Dwindle(dwindle) = self {
             dwindle.settle(area, settings);
@@ -1524,9 +1545,10 @@ impl State {
 
     /// `resizeactive`: make the focused window larger or smaller.
     ///
-    /// A floating window is resized where it is; a tiled one is not, because
-    /// its size is the tiling's to decide -- Hyprland resizes a tiled window
-    /// by moving the split it is on, which this layout does not expose.
+    /// A floating window is resized where it is; a tiled one has no
+    /// rectangle of its own, so its size is the tiling's to decide and the
+    /// tiling is asked instead -- which for the dwindle layout is moving
+    /// the split it sits under, as Hyprland's does.
     fn resize_active(&mut self, by: &Move) -> Vec<Change> {
         let Some(window) = self.focused_window() else {
             return Vec::new();
@@ -1542,15 +1564,22 @@ impl State {
         self.move_floating(window, by, false)
     }
 
-    /// Move or resize one floating window, which is what all four of
-    /// `moveactive`, `resizeactive`, `movewindowpixel` and
-    /// `resizewindowpixel` come down to.
+    /// Move or resize one window, which is what all four of `moveactive`,
+    /// `resizeactive`, `movewindowpixel` and `resizewindowpixel` come down
+    /// to.
     ///
-    /// A tiled window is left alone: its rectangle is the tiling's, and
-    /// Hyprland's own dispatchers do nothing to one either.
+    /// A tiled window cannot be *moved* -- where it is belongs to the
+    /// tiling, and Hyprland's own dispatchers do nothing to one either --
+    /// but it can be resized, by moving whatever decides its size.
     fn move_floating(&mut self, window: WindowId, by: &Move, resizing: bool) -> Vec<Change> {
         if !self.is_floating(window) {
-            return Vec::new();
+            // A tiled window has no rectangle of its own to move, but its
+            // size is still something the tiling can be asked for.
+            return if resizing {
+                self.resize_tiled(window, by)
+            } else {
+                Vec::new()
+            };
         }
         let Some(rect) = self.rect_of(window) else {
             return Vec::new();
@@ -1574,6 +1603,43 @@ impl State {
             Rect::new(at(rect.x, by.x), at(rect.y, by.y), rect.width, rect.height)
         };
         self.place_floating(window, rect)
+    }
+
+    /// Resize a tiled window by asking its tiling to give it more or less
+    /// room, which the dwindle layout does by moving the splits above it.
+    ///
+    /// `exact` is a size rather than a distance, and the tiling is told the
+    /// difference from the size the window has now: a tiling holds
+    /// proportions, so "600 wide" only means anything beside what it is.
+    fn resize_tiled(&mut self, window: WindowId, by: &Move) -> Vec<Change> {
+        let Some(workspace) = self.workspace_of(window) else {
+            return Vec::new();
+        };
+        let Some(rect) = self.rect_of(window) else {
+            return Vec::new();
+        };
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "a screen's pixels are far inside f64's exact integers"
+        )]
+        let by = if by.exact {
+            ((by.x - rect.width) as f64, (by.y - rect.height) as f64)
+        } else {
+            (by.x as f64, by.y as f64)
+        };
+        let area = Area::of(self.work_area_of(workspace));
+        let settings = self.settings;
+        let moved = self
+            .workspaces
+            .get_mut(&workspace)
+            .is_some_and(|ws| ws.tiling.resize(window, by, area, &settings));
+        if !moved {
+            return Vec::new();
+        }
+        self.workspace_monitor(workspace)
+            .map(Change::Layout)
+            .into_iter()
+            .collect()
     }
 
     /// Where a window is now: its floating rectangle, or the slot the

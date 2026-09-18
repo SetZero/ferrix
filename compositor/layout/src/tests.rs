@@ -2212,6 +2212,108 @@ fn moveactive_and_resizeactive_move_and_size_a_floating_window() {
     assert!(at.width >= 1 && at.height >= 1, "{at:?}");
 }
 
+/// `resizeactive` on a *tiled* window moves the split it sits under, which
+/// is the only thing a tiled window's size can come from.
+///
+/// Hyprland's `CDwindleAlgorithm::resizeTarget` at `CORNER_NONE`: the
+/// nearest split running down the screen takes the sideways distance as a
+/// share of half the box it divides, and the nearest running across takes
+/// the downward one.
+#[test]
+fn resizeactive_on_a_tiled_window_moves_the_split_under_it() {
+    let mut state = setup(BARE);
+    open(&mut state, &[1, 2]);
+    focus(&mut state, 1);
+    assert_eq!(
+        rects(&state),
+        [
+            (1, Rect::new(0, 0, 960, 1080)),
+            (2, Rect::new(960, 0, 960, 1080))
+        ],
+        "1920 wide splits side by side, in half"
+    );
+
+    // 100 pixels of a box 1920 wide is 100 * 2 / 1920 of the ratio, and the
+    // first child is `box.w / 2 * ratio`: 960 * (1 + 100 * 2 / 1920) = 1060.
+    let _ = dispatch(&mut state, "resizeactive", "100 0");
+    assert_eq!(
+        rects(&state),
+        [
+            (1, Rect::new(0, 0, 1060, 1080)),
+            (2, Rect::new(1060, 0, 860, 1080))
+        ],
+        "the split moved, and the window beside it gave up what this one took"
+    );
+
+    // Both windows run the full height of the work area, so there is no
+    // split across the screen to move and no edge of its own to move
+    // either: Hyprland drops that part of the distance rather than
+    // applying it somewhere arbitrary.
+    let before = rects(&state);
+    let _ = dispatch(&mut state, "resizeactive", "0 100");
+    assert_eq!(rects(&state), before, "nothing to move downwards");
+}
+
+/// A tiled window against the work area's far edge moves the one edge it
+/// has, which makes a positive distance *narrow* it.
+///
+/// This looks backwards and is Hyprland's: at `CORNER_NONE` the ratio only
+/// ever grows with the distance, and a ratio that grows gives the room to
+/// the left-hand window. The window on the right is against the screen's
+/// right edge, so the only edge it can move is its left one, and dragging
+/// that rightwards is asking for less. A drag that grabbed a border says
+/// which corner it grabbed and does not need the guess.
+#[test]
+fn a_tiled_window_against_the_far_edge_moves_its_only_free_edge() {
+    let mut state = setup(BARE);
+    open(&mut state, &[1, 2]);
+    focus(&mut state, 2);
+
+    let _ = dispatch(&mut state, "resizeactive", "100 0");
+    assert_eq!(
+        rects(&state),
+        [
+            (1, Rect::new(0, 0, 1060, 1080)),
+            (2, Rect::new(1060, 0, 860, 1080))
+        ]
+    );
+}
+
+/// `exact` is a size, and a tiling is told the difference from the size the
+/// window has now: a tree holds proportions, so a number of pixels only
+/// means something beside what is there.
+#[test]
+fn resizeactive_exact_asks_a_tiling_for_the_difference() {
+    let mut state = setup(BARE);
+    open(&mut state, &[1, 2]);
+    focus(&mut state, 1);
+
+    let _ = dispatch(&mut state, "resizeactive", "exact 1060 1080");
+    assert_eq!(rects(&state)[0].1, Rect::new(0, 0, 1060, 1080));
+}
+
+/// The only window on a workspace has no split above it to move, and a
+/// ratio is held to Hyprland's own 0.1 to 1.9 however far a resize asks.
+#[test]
+fn a_tiled_resize_needs_a_split_and_is_held_inside_its_bounds() {
+    let mut state = setup(BARE);
+    open(&mut state, &[1]);
+    focus(&mut state, 1);
+    let alone = rects(&state);
+    let changes = dispatch(&mut state, "resizeactive", "100 0");
+    assert_eq!(changes, [], "nothing above it to move");
+    assert_eq!(rects(&state), alone);
+
+    open(&mut state, &[2]);
+    focus(&mut state, 1);
+    let _ = dispatch(&mut state, "resizeactive", "100000 0");
+    assert_eq!(
+        rects(&state)[0].1,
+        Rect::new(0, 0, 1824, 1080),
+        "the ratio stops at 1.9, which is 960 * 1.9"
+    );
+}
+
 /// `swapwindow` exchanges two tiled windows and leaves the focus on the one
 /// that moved, so a run of them walks a window across the screen.
 #[test]

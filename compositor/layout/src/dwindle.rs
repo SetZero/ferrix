@@ -109,6 +109,21 @@ impl Split {
     }
 }
 
+/// One split on the way down to a window, as [`Node::ancestors_of`] writes
+/// it out.
+#[derive(Debug, Clone, PartialEq)]
+struct Ancestor {
+    /// The way to this split from the root, for [`Node::split_at`].
+    path: Vec<bool>,
+    /// The box it divides.
+    area: Area,
+    /// Whether it lays that box out stacked.
+    stacked: bool,
+    /// Which of its two children holds the window: `false` for the left or
+    /// top one.
+    side: bool,
+}
+
 impl Node {
     /// Whether `window` is a leaf of this subtree.
     fn contains(&self, window: WindowId) -> bool {
@@ -152,6 +167,53 @@ impl Node {
             }
         }
         None
+    }
+
+    /// Every split from this node down to `window`'s leaf, root first, with
+    /// the box each one divides and the child the way down takes, and the
+    /// leaf's own box last.
+    ///
+    /// A resize moves a split, and which split it moves depends on the
+    /// direction each one lays out with *and* on the boxes, which this tree
+    /// works out on the way down rather than storing. So the way down is
+    /// walked once and written out, and the walk back up is over this.
+    ///
+    /// `None` when the window is not a leaf of this subtree, and when it is
+    /// the only one: a lone window has no split above it to move.
+    fn ancestors_of(
+        &self,
+        window: WindowId,
+        area: Area,
+        settings: &Settings,
+    ) -> Option<(Vec<Ancestor>, Area)> {
+        let mut out: Vec<Ancestor> = Vec::new();
+        let mut node = self;
+        let mut area = area;
+        loop {
+            match node {
+                Self::Leaf(id) if *id == window && !out.is_empty() => return Some((out, area)),
+                Self::Leaf(_) => return None,
+                Self::Split(split) => {
+                    let side = if split.first.contains(window) {
+                        false
+                    } else if split.second.contains(window) {
+                        true
+                    } else {
+                        return None;
+                    };
+                    let (first, second) = split.children(area, settings);
+                    let path = out.iter().map(|above| above.side).collect();
+                    out.push(Ancestor {
+                        path,
+                        area,
+                        stacked: split.stacked_in(area, settings),
+                        side,
+                    });
+                    node = if side { &split.second } else { &split.first };
+                    area = if side { second } else { first };
+                }
+            }
+        }
     }
 
     /// The node a path leads to.
@@ -534,6 +596,82 @@ impl Dwindle {
             root.slots(area, settings, &mut out);
         }
         out
+    }
+
+    /// Resize a tiled window by moving the splits it sits under, when the
+    /// workspace's work area is `area`. Gives whether anything moved.
+    ///
+    /// Hyprland's `CDwindleAlgorithm::resizeTarget`. A tiled window has no
+    /// rectangle of its own -- its box is whatever the tree gives it -- so
+    /// making it wider is moving the nearest split that runs down the
+    /// screen, and making it taller is moving the nearest that runs across.
+    /// Each ratio changes by the distance as a share of half the box that
+    /// split divides, and is held to Hyprland's own 0.1 to 1.9.
+    ///
+    /// Two things are Hyprland's that are worth knowing. A window against
+    /// *both* of the work area's sides cannot be made wider by moving
+    /// anything, so the sideways part of the distance is dropped rather
+    /// than applied to some split further up (`STICKS`, within two pixels);
+    /// the same downward. And a split is only moved if there is one in that
+    /// direction -- a row of windows side by side has no split across it,
+    /// and asking for one taller does nothing rather than something
+    /// arbitrary.
+    ///
+    /// What is not here is the corner: Hyprland resizes towards the corner
+    /// a drag grabbed, which decides *which* of the splits above a window
+    /// moves when several run the same way. `resizeactive` and
+    /// `resizewindowpixel` grab no corner, which is Hyprland's `CORNER_NONE`
+    /// -- and at `CORNER_NONE` both `dwindle:smart_resizing` and the plain
+    /// path pick the nearest split of each direction, which is this.
+    pub(crate) fn resize(
+        &mut self,
+        window: WindowId,
+        by: (f64, f64),
+        area: Area,
+        settings: &Settings,
+    ) -> bool {
+        let Some(root) = &self.root else {
+            return false;
+        };
+        let Some((chain, box_of)) = root.ancestors_of(window, area, settings) else {
+            return false;
+        };
+        // Hyprland's `STICKS`: an edge is against the work area's when it is
+        // within two pixels of it, which is what a box divided by ratios
+        // leaves.
+        let sticks = |a: f64, b: f64| (a - b).abs() < 2.0;
+        let held_across = sticks(box_of.x, area.x) && sticks(box_of.x + box_of.w, area.x + area.w);
+        let held_down = sticks(box_of.y, area.y) && sticks(box_of.y + box_of.h, area.y + area.h);
+        let allowed = (
+            if held_across { 0.0 } else { by.0 },
+            if held_down { 0.0 } else { by.1 },
+        );
+        // Nearest first, which is the way Hyprland walks up from the window.
+        let across = chain
+            .iter()
+            .rev()
+            .find(|above| !above.stacked)
+            .map(|above| (above.path.clone(), allowed.0 * 2.0 / above.area.w));
+        let down = chain
+            .iter()
+            .rev()
+            .find(|above| above.stacked)
+            .map(|above| (above.path.clone(), allowed.1 * 2.0 / above.area.h));
+        let Some(root) = &mut self.root else {
+            return false;
+        };
+        let mut moved = false;
+        for (path, change) in [across, down].into_iter().flatten() {
+            if !change.is_finite() || change == 0.0 {
+                continue;
+            }
+            if let Some(split) = root.split_at(&path) {
+                let was = split.ratio;
+                split.ratio = (split.ratio + change).clamp(0.1, 1.9);
+                moved |= split.ratio != was;
+            }
+        }
+        moved
     }
 
     /// Record the directions the splits lay out with in `area`.
