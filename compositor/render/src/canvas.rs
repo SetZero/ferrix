@@ -756,7 +756,9 @@ impl Canvas {
 
         let (wide, tall) = (index(read.width), index(read.height));
         let stride = index(i64::from(self.width())) * 4;
-        let mut block = vec![0_u8; wide * tall * 4];
+        // Every row of it is copied in below before the blur reads any, so
+        // it is taken from the kept buffers with whatever it last held.
+        let mut block = crate::scratch::bytes(wide * tall * 4);
         let source = backdrop.map_or_else(|| self.pixmap.data(), |from| from.pixmap.data());
         for row in 0..tall {
             let from = (index(read.y) + row) * stride + index(read.x) * 4;
@@ -793,6 +795,7 @@ impl Canvas {
             }
             self.damage.add(clip);
         }
+        crate::scratch::bytes_back(block);
     }
 
     /// Fill `rect` with `color` and its corners cut to `radius`: the shape a
@@ -848,7 +851,7 @@ impl Canvas {
             i64::from(surface.width()),
             i64::from(surface.height()),
         );
-        let gathered: Vec<u8>;
+        let mut gathered: Option<Vec<u8>> = None;
         let (bytes, part) = match surface.tight() {
             Some(tight) if surface.format() == Format::Argb8888 => (tight, whole),
             _ => {
@@ -860,8 +863,7 @@ impl Canvas {
                 else {
                     return;
                 };
-                gathered = part_rows(surface, part);
-                (gathered.as_slice(), part)
+                (gathered.insert(part_rows(surface, part)).as_slice(), part)
             }
         };
         let (Ok(width), Ok(height)) = (u32::try_from(part.width), u32::try_from(part.height))
@@ -897,6 +899,9 @@ impl Canvas {
         });
         for &clip in clips {
             self.damage.add(clip);
+        }
+        if let Some(rows) = gathered {
+            crate::scratch::bytes_back(rows);
         }
     }
 
@@ -1088,7 +1093,11 @@ impl Default for Rounding {
 fn part_rows(surface: &Surface<'_>, part: Rect) -> Vec<u8> {
     let opaque = surface.format() == Format::Xrgb8888;
     let (from, to) = (index(part.x) * 4, index(part.right()) * 4);
-    let mut rows = Vec::with_capacity(index(part.width) * index(part.height) * 4);
+    // From the kept buffers, and given back by the caller once drawn: a
+    // full-screen terminal's rows are eight megabytes, which was a mapping
+    // and its page faults for every frame that drew it whole.
+    let mut rows = crate::scratch::bytes(0);
+    rows.reserve(index(part.width) * index(part.height) * 4);
     for y in part.y..part.bottom() {
         let Some(row) = u32::try_from(y)
             .ok()

@@ -81,6 +81,7 @@
 //! core.
 
 use crate::cores::bands;
+use crate::scratch;
 
 /// What `decoration:blur` asks for: the shape of the blur, and the grading
 /// over it.
@@ -209,12 +210,20 @@ struct Plane {
 }
 
 impl Plane {
+    /// A plane, from the ones kept ([`crate::scratch`]): every pixel of it
+    /// is written by the pass that fills it before anything reads one, so
+    /// what it held before does not matter.
     fn new(width: usize, height: usize) -> Self {
         Self {
             width: width.max(1),
             height: height.max(1),
-            pixels: vec![[0.0; 4]; width.max(1) * height.max(1)],
+            pixels: scratch::planes(width.max(1) * height.max(1)),
         }
+    }
+
+    /// Keep the plane's memory for the next one.
+    fn back(self) {
+        scratch::planes_back(self.pixels);
     }
 
     /// One row, with the edges clamped.
@@ -370,7 +379,7 @@ fn pass_rows<const HEIGHTS: usize, const TAPS: usize>(
     // taps read them at every pixel, and a row behind a pointer of its own
     // is a pointer followed twenty million times.
     let stride = from.width.max(1);
-    let mut mixed = vec![[0.0_f32; 4]; stride.saturating_mul(heights.len())];
+    let mut mixed = scratch::planes(stride.saturating_mul(heights.len()));
     for (y, row) in (first..).zip(band.chunks_exact_mut(width.max(1))) {
         #[expect(
             clippy::cast_precision_loss,
@@ -408,6 +417,7 @@ fn pass_rows<const HEIGHTS: usize, const TAPS: usize>(
             ]);
         }
     }
+    scratch::planes_back(mixed);
 }
 
 /// `blur1.glsl`'s five taps: read `from` at twice this buffer's scale, and
@@ -830,14 +840,20 @@ pub(crate) fn blur(pixels: &mut [u8], block: &Block, settings: &Blur) {
     });
 
     // Down, keeping each level's size so the way back up lands on it.
+    // Each level's plane goes back to the kept ones as soon as the next has
+    // been made from it, and comes out again for the level of the same
+    // size on the way up: a frame's blur maps no memory once the first
+    // frame has.
     let mut sizes = Vec::with_capacity(settings.passes as usize);
     for _ in 0..settings.passes {
         sizes.push((plane.width, plane.height));
-        plane = down(&plane, radius, settings);
+        let next = down(&plane, radius, settings);
+        std::mem::replace(&mut plane, next).back();
     }
     // And back up, in reverse.
     for (wide, tall) in sizes.into_iter().rev() {
-        plane = up(&plane, wide, tall, radius);
+        let next = up(&plane, wide, tall, radius);
+        std::mem::replace(&mut plane, next).back();
     }
     finish(&mut plane, block, settings);
 
@@ -848,6 +864,7 @@ pub(crate) fn blur(pixels: &mut [u8], block: &Block, settings: &Blur) {
             written(*value, bytes);
         }
     });
+    plane.back();
 }
 
 /// One blurred pixel as the four bytes it is written back as.

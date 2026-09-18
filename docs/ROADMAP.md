@@ -4454,6 +4454,20 @@ a thread, which is the same bytes on one thread as on sixteen (the blur 85
 ms to 20, the terminal 7.0 to 1.1, the video 5.8 to 1.1). A frame that owes
 a whole blur is 22 ms, which is a 30 fps video kept up with.
 
+**Done — the frame stopped mapping its memory every time (2026-09-19).**
+In the guest -- KVM, four processors, the video wallpaper behind a
+translucent terminal -- the frame that owes a whole blur was 77 ms where the
+host draws it in 22, and most of the difference was `mmap`: every plane of
+the blur and every gathered surface was a fresh allocation over musl's
+128 KiB threshold, so a frame was some 25,000 page faults under the address
+space's lock and seven shootdowns. `compositor_render::scratch` keeps those
+buffers per thread, and the video client keeps its scaled frame and copies
+into each buffer only the rows it lacks. 46 ms at four processors, 38 at
+sixteen; 37 of the 46 is the renderer's own arithmetic and 5.5 the card's
+transfer. That is the software renderer's floor, and the customer's answer
+to it is `docs/GPU.md`'s Path A, taken first before the AV1 wallpaper
+(`docs/COMPOSITOR-DAMAGE-HANDOFF.md` §2.7).
+
 **Done — a video wallpaper stopped being everybody's problem (2026-09-19).**
 Software-rendered video playback did not merely cost the frames it drew: it
 made the whole desktop stutter, the pointer and the bar with it. Three things

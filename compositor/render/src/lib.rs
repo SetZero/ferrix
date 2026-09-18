@@ -98,6 +98,7 @@ mod damage;
 mod frame;
 mod gradient;
 mod patterns;
+mod scratch;
 
 // Public, and not only for this crate's own tests: `compositor/term` draws
 // its expected image with its own font and its own grid, and the images live

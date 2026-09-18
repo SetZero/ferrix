@@ -307,6 +307,49 @@ blur. That is what a software dual-Kawase is; the next lever is the tap's
 own arithmetic (the bilinear weights of a pass repeat every two pixels
 across and are worked out again for each), and after that the GPU.
 
+### 2.7 What the same frame costs in the guest, and the pool (2026-09-19)
+
+Everything above was measured on the host. The customer's desktop is the
+guest: `cargo xtask run-compositor --arch x86_64 --gl --wallpaper <video>`,
+KVM, four processors, the video wallpaper behind a translucent terminal.
+There the frame that owes a whole blur was **77 ms** (ten a second, which
+is the video's rate, at 700-800 ms of drawing a second), where the host
+draws it in 22.
+
+Most of the difference was not arithmetic. Every large buffer the renderer
+worked in was a fresh `Vec` dropped at the end of its operation -- the
+blur's float planes (33 MB for a screen, 88 MB for the pyramid of three
+passes), the block a blur is cut out of the canvas into (8 MB), the tight
+rows a padded surface is gathered into (8 MB) -- and these programs are
+linked against musl, whose `malloc` maps every block over 128 KiB on its
+own and unmaps it on `free`. So a frame was some 25,000 page faults, each
+a trap into Ferrix and its address space's one lock, taken by the four
+threads of the blur at once, and seven TLB shootdowns across every
+processor for the unmaps. `compositor/render/src/scratch.rs` keeps those
+buffers now, per thread, handed out with whatever they last held (every
+taker writes every byte before reading one, which is the promise the golden
+images hold). The video client kept an 8 MB frame the same way: it scaled
+only the rows the video changed into a buffer it keeps, and copies into
+each `wl_shm` buffer only the rows that buffer lacks.
+
+| guest, 1920x1080, video behind a translucent terminal | a frame |
+|---|---|
+| before, 4 processors | 77 ms |
+| the pool, 4 processors | **46 ms** |
+| the pool, 16 processors (8 blur threads) | 38 ms |
+
+Timed inside the frame at 4 processors: 37 ms rendering, 0.5 ms copying
+the canvas to the screen, 5.5 ms in `DIRTYFB` (the driver's
+`TRANSFER_TO_HOST_2D` of the damage, waited for). That is the software
+renderer's arithmetic and its serial copies, and there is no lever left in
+it worth the pull: 16 processors bought 8 ms. The rest is `docs/GPU.md`'s
+Path A, which is what the customer chose on 2026-09-19 -- the GPU draws
+these frames, and the software renderer stays as the fallback and the
+reference.
+
+The "first frames of a boot take a second" note in §2.4 has the same cause
+and is paid once now rather than partly again every frame.
+
 ---
 
 ## 3. How to measure, exactly

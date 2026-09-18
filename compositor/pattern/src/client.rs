@@ -174,18 +174,82 @@ impl Picture {
         if (width, height) == (self.width, self.height) {
             return self.pixels.clone();
         }
-        let (from_w, _) = (u64::from(self.width), u64::from(self.height));
         let (to_w, to_h) = (u64::from(width.max(1)), u64::from(height.max(1)));
+        let mut out = vec![0; usize::try_from(to_w * to_h * 4).unwrap_or(0)];
+        self.cover_rows_into(
+            width,
+            height,
+            &[(0, i32::try_from(to_h).unwrap_or(i32::MAX))],
+            &mut out,
+        );
+        out
+    }
+
+    /// Scale the rows `bands` names -- each a `(top, height)` of the buffer
+    /// -- of a `width` by `height` cover of this picture into `out`, which
+    /// holds such a cover's rows tightly; the rest of `out` is left alone.
+    ///
+    /// The pixel each row takes is the one [`Picture::cover`] takes, so
+    /// covering every row this way is the same bytes as `cover`. What
+    /// differs is the cost: which source pixel a column takes is the same
+    /// for every row and is worked out once rather than as a division a
+    /// pixel, and a row the scale takes from the same source row as the
+    /// row above it is a copy of that row. A wallpaper that moves covers
+    /// only the rows a frame changed, which is what makes a frame of it
+    /// cheaper than the screen.
+    pub fn cover_rows_into(&self, width: u32, height: u32, bands: &[(i32, i32)], out: &mut [u8]) {
+        let from_w = u64::from(self.width);
+        let (to_w, to_h) = (u64::from(width.max(1)), u64::from(height.max(1)));
+        let stride = usize::try_from(to_w * 4).unwrap_or(usize::MAX);
+        let source_stride = usize::try_from(from_w * 4).unwrap_or(usize::MAX);
         let cut = self.cut(width, height);
-        let mut out = Vec::with_capacity(usize::try_from(to_w * to_h * 4).unwrap_or(0));
-        for y in 0..to_h {
-            let row = cut.row(y) * from_w;
-            for x in 0..to_w {
-                let at = usize::try_from((row + cut.left + x * cut.part_w / to_w) * 4).unwrap_or(0);
-                out.extend_from_slice(self.pixels.get(at..at + 4).unwrap_or(&[0, 0, 0, 0xFF]));
+        // Which byte of a source row each pixel of a row begins at. Empty
+        // when the buffer is the picture's own size, where a row is a copy.
+        let columns: Vec<usize> = if (width, height) == (self.width, self.height) {
+            Vec::new()
+        } else {
+            (0..to_w)
+                .map(|x| {
+                    usize::try_from((cut.left + x * cut.part_w / to_w) * 4).unwrap_or(usize::MAX)
+                })
+                .collect()
+        };
+        for &(top, tall) in bands {
+            let first = u64::try_from(top.max(0)).unwrap_or(0).min(to_h);
+            let end = u64::try_from(top.max(0).saturating_add(tall.max(0)))
+                .unwrap_or(0)
+                .min(to_h);
+            // The source row the row above took, and where that row is.
+            let mut last: Option<(u64, usize)> = None;
+            for y in first..end {
+                let source_row = cut.row(y);
+                let out_at = usize::try_from(y)
+                    .unwrap_or(usize::MAX)
+                    .saturating_mul(stride);
+                let Some(out_end) = out_at.checked_add(stride).filter(|end| *end <= out.len())
+                else {
+                    break;
+                };
+                if let Some((row, previous)) = last
+                    && row == source_row
+                    && previous.saturating_add(stride) <= out_at
+                {
+                    out.copy_within(previous..previous.saturating_add(stride), out_at);
+                    last = Some((source_row, out_at));
+                    continue;
+                }
+                let base = usize::try_from(source_row * from_w * 4).unwrap_or(usize::MAX);
+                let source = base
+                    .checked_add(source_stride)
+                    .and_then(|end| self.pixels.get(base..end))
+                    .unwrap_or(&[]);
+                let Some(target) = out.get_mut(out_at..out_end) else {
+                    break;
+                };
+                scale_row(target, source, &columns);
+                last = Some((source_row, out_at));
             }
         }
-        out
     }
 
     /// Which part of the picture a `width` by `height` buffer shows, and
@@ -236,6 +300,25 @@ impl Picture {
     }
 }
 
+/// One row of a cover: `target` takes the pixel of `source` each of
+/// `columns` begins at, or the whole of `source` when there are none, which
+/// is a buffer the picture's own width.
+fn scale_row(target: &mut [u8], source: &[u8], columns: &[usize]) {
+    if columns.is_empty() {
+        if source.len() == target.len() {
+            target.copy_from_slice(source);
+        }
+        return;
+    }
+    for (pixel, &column) in target.chunks_exact_mut(4).zip(columns) {
+        let taken = column
+            .checked_add(4)
+            .and_then(|end| source.get(column..end))
+            .unwrap_or(&[0, 0, 0, 0xFF]);
+        pixel.copy_from_slice(taken);
+    }
+}
+
 /// Where a buffer's pixels come from in the picture it covers.
 #[derive(Clone, Copy, Debug)]
 struct Cut {
@@ -251,6 +334,30 @@ impl Cut {
     fn row(&self, y: u64) -> u64 {
         self.top + y * self.part_h / self.to_h.max(1)
     }
+}
+
+/// Mark the rows `bands` names -- each a `(top, height)` -- stale.
+fn mark_stale(stale: &mut [bool], bands: &[(i32, i32)]) {
+    for &(top, tall) in bands {
+        let first = usize::try_from(top.max(0)).unwrap_or(usize::MAX);
+        let end = usize::try_from(top.max(0).saturating_add(tall.max(0))).unwrap_or(usize::MAX);
+        for flag in stale.iter_mut().take(end).skip(first) {
+            *flag = true;
+        }
+    }
+}
+
+/// Copy every stale row of `scaled`, `row_bytes` each, into `room`, and mark
+/// them fresh.
+fn copy_stale(scaled: &[u8], stale: &mut [bool], room: &mut [u8], row_bytes: usize) {
+    for (top, tall) in spans(stale.iter().copied(), stale.len()) {
+        let from = usize::try_from(top).unwrap_or(0).saturating_mul(row_bytes);
+        let to = from.saturating_add(usize::try_from(tall).unwrap_or(0).saturating_mul(row_bytes));
+        if let (Some(source), Some(target)) = (scaled.get(from..to), room.get_mut(from..to)) {
+            target.copy_from_slice(source);
+        }
+    }
+    stale.fill(false);
 }
 
 /// The runs of `true` in `marked`, as `(start, length)`.
@@ -743,6 +850,8 @@ fn run_with(
         menu_asked: false,
         menu_size: (0, 0),
         menu: None,
+        scaled: Vec::new(),
+        stale: [Vec::new(), Vec::new()],
     };
 
     let started = Instant::now();
@@ -872,6 +981,15 @@ struct Client {
     menu_size: (i32, i32),
     /// The memory the menu is drawn into, once its size is known.
     menu: Option<Shared>,
+    /// A moving wallpaper's frame, scaled to the buffer's size and kept
+    /// between frames, so that a frame scales only the rows the video
+    /// changed rather than the screen: the rest are what they were.
+    scaled: Vec<u8>,
+    /// Which rows of each buffer are not what `scaled` holds. A frame is
+    /// copied into a buffer a stale row at a time, and marks the rows it
+    /// changed stale in every other buffer; a buffer just made is stale
+    /// throughout, since it holds nothing.
+    stale: [Vec<bool>; BUFFERS.len()],
 }
 
 impl Client {
@@ -1750,17 +1868,57 @@ impl Client {
             u32::try_from(width).unwrap_or(0),
             u32::try_from(height).unwrap_or(0),
         );
-        let pixels = match self.shown.picture() {
-            Some(picture) => picture.cover(size.0, size.1),
-            None => self.pattern.draw(size.0, size.1),
-        };
-        if let Some(shared) = self.shared.as_mut() {
-            let at = slot.checked_mul(len).ok_or("a window too large to draw")?;
-            let room = shared.bytes_mut();
-            let take = pixels.len().min(len);
-            let upto = at.checked_add(take).ok_or("a window too large to draw")?;
-            if let (Some(to), Some(from)) = (room.get_mut(at..upto), pixels.get(..take)) {
-                to.copy_from_slice(from);
+        let at = slot.checked_mul(len).ok_or("a window too large to draw")?;
+        if let Shown::Moving(movie) = &self.shown {
+            // A frame of a wallpaper that moves is not scaled whole: the
+            // rows the video changed are scaled into the kept frame, and
+            // the buffer takes the rows it does not have -- those, and
+            // whatever earlier frames changed while the other buffer was
+            // being shown. Whole only when there is no kept frame of this
+            // size, and into every buffer when the pool is new.
+            let rows = usize::try_from(height).unwrap_or(0);
+            let whole = self.scaled.len() != len;
+            if whole {
+                self.scaled.clear();
+                self.scaled.resize(len, 0);
+            }
+            let changed: Vec<(i32, i32)> = if whole {
+                vec![(0, height)]
+            } else {
+                movie.damage(size.0, size.1)
+            };
+            movie
+                .shown()
+                .cover_rows_into(size.0, size.1, &changed, &mut self.scaled);
+            for stale in &mut self.stale {
+                if whole || fresh || stale.len() != rows {
+                    stale.clear();
+                    stale.resize(rows, true);
+                } else {
+                    mark_stale(stale, &changed);
+                }
+            }
+            if let (Some(shared), Some(stale)) = (self.shared.as_mut(), self.stale.get_mut(slot)) {
+                let room = shared.bytes_mut().get_mut(at..).unwrap_or(&mut []);
+                copy_stale(
+                    &self.scaled,
+                    stale,
+                    room,
+                    usize::try_from(stride).unwrap_or(0),
+                );
+            }
+        } else {
+            let pixels = match self.shown.picture() {
+                Some(picture) => picture.cover(size.0, size.1),
+                None => self.pattern.draw(size.0, size.1),
+            };
+            if let Some(shared) = self.shared.as_mut() {
+                let room = shared.bytes_mut();
+                let take = pixels.len().min(len);
+                let upto = at.checked_add(take).ok_or("a window too large to draw")?;
+                if let (Some(to), Some(from)) = (room.get_mut(at..upto), pixels.get(..take)) {
+                    to.copy_from_slice(from);
+                }
             }
         }
         if let Some(with) = self.busy.get_mut(slot) {
@@ -2034,6 +2192,42 @@ mod tests {
         let first = [runs(&[(2, 0x00FF_0000)]), vec![0x00]].concat();
         let second = [runs(&[(1, 0x0000_FF00), (1, 0x0000_00FF)]), vec![0x02]].concat();
         reel(2, 2, 40, &[first, second])
+    }
+
+    /// Covering every row of a buffer a band at a time is the same bytes
+    /// as covering it whole, and a band touches only its own rows: what
+    /// lets a wallpaper that moves scale the rows a frame changed and no
+    /// others.
+    #[test]
+    fn rows_covered_in_bands_are_the_rows_of_the_whole_cover() {
+        let pixels: Vec<u8> = (0..5 * 3 * 4).map(|byte| byte as u8).collect();
+        let picture = Picture::parse(&file(5, 3, &pixels)).expect("a picture");
+        for (width, height) in [(13, 7), (5, 3), (2, 9)] {
+            let whole = picture.cover(width, height);
+            let stride = width as usize * 4;
+            let mut banded = vec![0xAA; whole.len()];
+            let top = height as i32 / 2;
+            picture.cover_rows_into(width, height, &[(0, 1), (top, 2)], &mut banded);
+            for row in 0..height as usize {
+                let (from, to) = (row * stride, (row + 1) * stride);
+                let covered = row == 0 || (row as i32 >= top && (row as i32) < top + 2);
+                if covered {
+                    assert_eq!(
+                        banded[from..to],
+                        whole[from..to],
+                        "{width}x{height} row {row}"
+                    );
+                } else {
+                    assert!(
+                        banded[from..to].iter().all(|byte| *byte == 0xAA),
+                        "{width}x{height} row {row} was touched"
+                    );
+                }
+            }
+            let mut all = vec![0; whole.len()];
+            picture.cover_rows_into(width, height, &[(0, height as i32)], &mut all);
+            assert_eq!(all, whole, "{width}x{height} covered whole");
+        }
     }
 
     #[test]
