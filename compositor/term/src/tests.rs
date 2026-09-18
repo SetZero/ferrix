@@ -263,20 +263,8 @@ fn painting_the_changed_rows_is_painting_the_whole() {
     // One more line: two rows change, the one written and the one the
     // cursor moved to. Then more lines than there are rows: every row.
     for (bytes, rows_changed) in [
-        (
-            b"three
-
-"
-            .to_vec(),
-            1..=2,
-        ),
-        (
-            b"x
-
-"
-            .repeat(rows + 3),
-            rows..=rows,
-        ),
+        (b"three\r\n".to_vec(), 1..=2),
+        (b"x\r\n".repeat(rows + 3), rows..=rows),
     ] {
         grid.write(&bytes);
         let now: Vec<paint::Painted> = (0..rows)
