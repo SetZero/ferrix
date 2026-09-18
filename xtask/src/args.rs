@@ -76,6 +76,15 @@ pub(crate) struct Args {
     /// `--display`: a virtio-gpu device on the bus, and for `run` a window
     /// that shows it. `test-display` turns it on.
     pub(crate) display: bool,
+    /// `--gl`: the virtio-gpu is the *3D* device, `virtio-gpu-gl-pci`, so
+    /// the guest can negotiate `VIRTIO_GPU_F_VIRGL` and the host's own GPU
+    /// driver is behind it through virglrenderer (`docs/GPU.md` Path A).
+    ///
+    /// Asked for rather than assumed: a QEMU built without OpenGL and
+    /// virglrenderer has no such device, and a GPU boot is not what most
+    /// boots want. A QEMU that has not got it says so and the 2D device is
+    /// used instead.
+    pub(crate) gl: bool,
     /// `--input`: a virtio keyboard and a virtio tablet on the bus, which
     /// QMP's `input-send-event` drives. `test-input` turns it on, and
     /// `--display` brings them as well.
@@ -150,6 +159,12 @@ impl Args {
                 "--net" => args.net = true,
                 "--no-net" => args.no_net = true,
                 "--display" => args.display = true,
+                // A 3D card is still a card: `--gl` on its own turns the
+                // display on, so nobody has to write both.
+                "--gl" => {
+                    args.gl = true;
+                    args.display = true;
+                }
                 "--input" => args.input = true,
                 "--screens" => args.screens = number(&mut items, "--screens")?,
                 "--arch" => args.arch = Some(value(&mut items, "--arch")?),

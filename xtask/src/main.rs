@@ -162,6 +162,9 @@ OPTIONS:
                                          run-compositor has one unless --no-net
     --no-net                             run-compositor: no network device and no gateway
     --display                            run, test-boot: a virtio-gpu device; run: and a window showing it
+    --gl                                 that virtio-gpu is the 3D card, `virtio-gpu-gl-pci`, with the
+                                         host's GPU behind it through virglrenderer; turns --display on.
+                                         A QEMU built without it says so and the 2D card is used
     --vnc <DISPLAY>                      run --display, run-compositor: serve the screen over VNC
                                          at e.g. `:0` (127.0.0.1) rather than in a window of this host's
     --config <PATH>                      run-compositor: the hyprland.conf the guest is given

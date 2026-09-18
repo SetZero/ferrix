@@ -921,7 +921,11 @@ fn qemu_command(
     // Which console the person means: the card, on a machine that has one and
     // a boot that asked for it. `attach_display` puts it there.
     let card = (args.display && arch != Arch::Armv7a).then(|| crate::display::device_id(0));
-    let _ = command.args(window.arguments(card.as_deref()));
+    // Whether the card on the bus will be the 3D one, which the backend has
+    // to know: `attach_display` asks the same question of the same QEMU and
+    // gets the same answer.
+    let (_, gl) = crate::window::card(&binary, args.gl && card.is_some());
+    let _ = command.args(window.arguments_with(card.as_deref(), gl));
     window.announce(card.as_deref());
     // The serial port, which is this machine's whole console.
     let _ = command.args(console.arguments()?);
@@ -1033,7 +1037,7 @@ fn qemu_command(
         "virtio-rng-pci,disable-legacy=on,iommu_platform=on"
     };
     let _ = command.args(["-device", rng]);
-    attach_display(&mut command, arch, args);
+    attach_display(&mut command, arch, args, &binary);
     attach_test_disk(&mut command, arch)?;
     attach_btrfs_disk(&mut command, arch)?;
     let network = attach_network(&mut command, arch, args)?;
@@ -1065,13 +1069,16 @@ fn qemu_command(
 /// head, so the panic screen keeps the head it has, through the IOMMU like
 /// every other PCI virtio device; and QMP, when a port was picked for it.
 /// ARMv7-A's machine has no virtio-gpu.
-fn attach_display(command: &mut Command, arch: Arch, args: &Args) {
+fn attach_display(command: &mut Command, arch: Arch, args: &Args, binary: &Path) {
     if args.display && arch != Arch::Armv7a {
         // One device a screen. QEMU gives each its own console, which is
         // what a screendump names and what makes the guest's second card a
         // second monitor; a second *output* of one device stays disabled
         // until a host window manager resizes it, which a headless test has
         // nothing to do.
+        // Which card, and whether it turned out to be the 3D one: a display
+        // backend without GL will not have it, and the answer decides both.
+        let (gl_card, _) = crate::window::card(binary, args.gl);
         for index in 0..args.screens.max(1) {
             // A watched boot pins the cards high on the bus, for the reason
             // `WATCHED_CARD_SLOT` gives. A judged one says nothing and lets
@@ -1087,7 +1094,8 @@ fn attach_display(command: &mut Command, arch: Arch, args: &Args) {
                 // 1024x768 is what every judged boot's pictures are of;
                 // `run-compositor` says another.
                 &format!(
-                    "virtio-gpu-pci,id={id}{slot},disable-legacy=on,iommu_platform=on,xres={wide},yres={tall}",
+                    "{card},id={id}{slot},disable-legacy=on,iommu_platform=on,xres={wide},yres={tall}",
+                    card = gl_card,
                     id = crate::display::device_id(index),
                     wide = args.size.map_or(1024, |size| size.0),
                     tall = args.size.map_or(768, |size| size.1),

@@ -84,9 +84,17 @@ pub(crate) type Card<'a> = Option<&'a str>;
 impl Window {
     /// The `-display` argument this is, pointed at `card` where the backend
     /// can be told which console to serve.
-    pub(crate) fn arguments(&self, card: Card<'_>) -> [String; 2] {
+    /// `gl` is for a boot whose card is the 3D one. QEMU refuses
+    /// `virtio-gpu-gl-pci` on a backend without OpenGL -- *"The display
+    /// backend does not have OpenGL support enabled"* -- so the backend has
+    /// to be told. A headless boot cannot simply say `gl=on`, because `none`
+    /// has no GL to turn on; `egl-headless` is the backend for exactly this.
+    pub(crate) fn arguments_with(&self, card: Card<'_>, gl: bool) -> [String; 2] {
         let backend = match self {
+            Window::Headless if gl => "egl-headless".to_owned(),
             Window::Headless => "none".to_owned(),
+            Window::Local("gtk") if gl => "gtk,show-tabs=on,gl=on".to_owned(),
+            Window::Local(name) if gl => format!("{name},gl=on"),
             // `show-tabs=on`: the window has a tab per console and the
             // compositor's is not the one it opens on. GTK can be told to
             // show the tab bar but not which tab to start on, so the bar is
@@ -313,6 +321,67 @@ fn offered(binary: &Path) -> Vec<String> {
     }
 }
 
+/// The `-device` name of the virtio-gpu to put on the bus, and the display
+/// backend that card needs.
+///
+/// `--gl` asks for `virtio-gpu-gl-pci`, the 3D device: QEMU replays the
+/// guest's GL command stream into the host's own driver through
+/// virglrenderer, which is what `docs/GPU.md`'s Path A stands on. Two things
+/// have to be true for it and both are the *host's*, so both are checked
+/// here rather than assumed:
+///
+/// 1. This QEMU was built with OpenGL and virglrenderer, or it has no such
+///    device. A QEMU that has not got it is not an error -- the 2D device
+///    still boots, and every test but a GPU one passes either way -- so the
+///    card falls back and a line says it did.
+/// 2. The display backend has GL turned on. QEMU refuses the 3D device
+///    outright with `-display none`: *"The display backend does not have
+///    OpenGL support enabled"*. So a headless boot that wants GL gets
+///    `egl-headless`, which draws into a host GPU's buffer that a
+///    screendump can still read, and a window gets `gl=on`.
+pub(crate) fn card(binary: &Path, want_gl: bool) -> (&'static str, bool) {
+    if !want_gl {
+        return ("virtio-gpu-pci", false);
+    }
+    if !devices(binary).iter().any(|name| name == GL_CARD) {
+        println!(
+            "  this QEMU has no `{GL_CARD}`; using the 2D card. Build QEMU with              --enable-opengl --enable-virglrenderer for the 3D one."
+        );
+        return ("virtio-gpu-pci", false);
+    }
+    (GL_CARD, true)
+}
+
+/// The 3D card's `-device` name.
+pub(crate) const GL_CARD: &str = "virtio-gpu-gl-pci";
+
+/// The device names this QEMU was built with, as `-device help` lists them.
+///
+/// Each line is `name "the-name", bus ...`; only the quoted name matters,
+/// and an alias line names the alias the same way. A QEMU that cannot be
+/// asked offers nothing, as with [`offered`].
+fn devices(binary: &Path) -> Vec<String> {
+    let mut command = Command::new(binary);
+    let _ = command.args(["-device", "help"]);
+    let Ok(output) = command.output() else {
+        return Vec::new();
+    };
+    let text = String::from_utf8_lossy(&output.stdout);
+    named(&text)
+}
+
+/// Every `name "..."` in `text`, which is how `-device help` writes each
+/// device and each alias.
+fn named(text: &str) -> Vec<String> {
+    text.lines()
+        .filter_map(|line| {
+            let rest = line.trim().strip_prefix("name \"")?;
+            let (name, _) = rest.split_once('"')?;
+            Some(name.to_owned())
+        })
+        .collect()
+}
+
 /// The backend names under `Available display backend types:`, which is one a
 /// line until the blank line before the note about suboptions.
 fn listed(text: &str) -> Vec<String> {
@@ -495,17 +564,63 @@ Some display backends support suboptions, which can be set with
     }
 
     #[test]
+    fn a_device_listing_is_read_by_the_quoted_name() {
+        // `-device help` as QEMU writes it, aliases and all.
+        let listing = "Display devices:\n\
+                       name \"virtio-gpu-pci\", bus PCI, alias \"virtio-gpu\"\n\
+                       name \"virtio-gpu-gl-pci\", bus PCI, alias \"virtio-gpu-gl\"\n\
+                       \n\
+                       Input devices:\n\
+                       name \"virtio-keyboard-pci\", bus PCI\n";
+        let names = named(listing);
+        assert!(names.iter().any(|name| name == GL_CARD));
+        assert!(names.iter().any(|name| name == "virtio-gpu-pci"));
+        assert_eq!(names.len(), 3, "one a line, and no alias lines: {names:?}");
+    }
+
+    /// A QEMU built without OpenGL lists no such device, and nothing in the
+    /// listing is mistaken for one.
+    #[test]
+    fn a_qemu_without_the_3d_device_offers_no_name_like_it() {
+        let listing = "name \"virtio-gpu-pci\", bus PCI\nname \"virtio-vga\", bus PCI\n";
+        assert!(!named(listing).iter().any(|name| name == GL_CARD));
+    }
+
+    /// The 3D card needs a backend with OpenGL on, and `none` has none to
+    /// turn on: a headless GPU boot gets `egl-headless` instead.
+    #[test]
+    fn a_3d_card_takes_a_backend_that_has_opengl() {
+        assert_eq!(
+            Window::Headless.arguments_with(None, true),
+            ["-display".to_owned(), "egl-headless".to_owned()]
+        );
+        assert_eq!(
+            Window::Local("gtk").arguments_with(None, true),
+            ["-display".to_owned(), "gtk,show-tabs=on,gl=on".to_owned()]
+        );
+        // And without it, exactly what it always was.
+        assert_eq!(
+            Window::Headless.arguments_with(None, false),
+            Window::Headless.arguments_with(None, false)
+        );
+        assert_eq!(
+            Window::Local("gtk").arguments_with(Some("gpu0"), false),
+            Window::Local("gtk").arguments_with(Some("gpu0"), false)
+        );
+    }
+
+    #[test]
     fn the_display_argument_is_what_qemu_takes() {
         assert_eq!(
-            Window::Headless.arguments(None),
+            Window::Headless.arguments_with(None, false),
             ["-display".to_owned(), "none".to_owned()]
         );
         assert_eq!(
-            Window::Local("sdl").arguments(None),
+            Window::Local("sdl").arguments_with(None, false),
             ["-display".to_owned(), "sdl".to_owned()]
         );
         assert_eq!(
-            Window::Vnc("127.0.0.1:0".to_owned()).arguments(None),
+            Window::Vnc("127.0.0.1:0".to_owned()).arguments_with(None, false),
             ["-display".to_owned(), "vnc=127.0.0.1:0".to_owned()]
         );
     }
@@ -515,11 +630,11 @@ Some display backends support suboptions, which can be set with
         // GTK cannot be told which tab to open on, so it is told to show
         // them; VNC serves one console and is pointed at the card.
         assert_eq!(
-            Window::Local("gtk").arguments(Some("gpu0")),
+            Window::Local("gtk").arguments_with(Some("gpu0"), false),
             ["-display".to_owned(), "gtk,show-tabs=on".to_owned()]
         );
         assert_eq!(
-            Window::Vnc(":1".to_owned()).arguments(Some("gpu0")),
+            Window::Vnc(":1".to_owned()).arguments_with(Some("gpu0"), false),
             [
                 "-display".to_owned(),
                 "vnc=:1,display=gpu0,head=0".to_owned()

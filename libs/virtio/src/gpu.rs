@@ -206,6 +206,67 @@ pub const RESP_ERR_INVALID_PARAMETER: u32 = 0x1205;
 
 /// Bytes of `struct virtio_gpu_ctrl_hdr`.
 pub const HEADER_LEN: usize = 24;
+
+/// `VIRTIO_GPU_FLAG_FENCE`: the device answers only once the command has
+/// actually finished, and its response carries the `fence_id` back.
+pub const FLAG_FENCE: u32 = 1 << 0;
+/// `VIRTIO_GPU_FLAG_INFO_RING_IDX`: the header's `ring_idx` names which of
+/// a context's timelines the fence is on, rather than the context's own.
+pub const FLAG_INFO_RING_IDX: u32 = 1 << 1;
+
+/// What goes in a command's header besides its type: which context it is
+/// for, and whether the device must fence it.
+///
+/// A 2D driver needs none of this -- it sends one command, waits for the
+/// response and sends the next -- and [`Context::NONE`] is that. A 3D
+/// command belongs to a context, and one whose result another command
+/// depends on is fenced, which is how a driver stops waiting for each one
+/// in turn.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct Context {
+    /// The context id, or 0 for a command that belongs to none.
+    pub id: u32,
+    /// The fence to ask for, if any: the device answers when the command
+    /// has finished rather than when it has been read, and echoes this
+    /// number back in the response's header.
+    pub fence: Option<u64>,
+    /// Which timeline of the context the fence is on, for a device that
+    /// negotiated [`FEATURE_CONTEXT_INIT`]. `None` is the context's own.
+    pub ring: Option<u8>,
+}
+
+impl Context {
+    /// No context and no fence: what every 2D command carries.
+    pub const NONE: Self = Self {
+        id: 0,
+        fence: None,
+        ring: None,
+    };
+
+    /// The header's `flags`.
+    #[must_use]
+    pub const fn flags(self) -> u32 {
+        let mut flags = 0;
+        if self.fence.is_some() {
+            flags |= FLAG_FENCE;
+        }
+        if self.ring.is_some() {
+            flags |= FLAG_INFO_RING_IDX;
+        }
+        flags
+    }
+
+    /// Write the header's fields after its type, which is the caller's.
+    ///
+    /// Every byte from 4 to [`HEADER_LEN`] is written exactly once, padding
+    /// included, so a caller's buffer need not be cleared first.
+    fn write_with(self, put: &mut dyn FnMut(usize, &[u8])) {
+        put(4, &self.flags().to_le_bytes());
+        put(8, &self.fence.unwrap_or(0).to_le_bytes());
+        put(16, &self.id.to_le_bytes());
+        put(20, &[self.ring.unwrap_or(0), 0, 0, 0]);
+    }
+}
 /// Bytes of `struct virtio_gpu_rect`.
 pub const RECT_LEN: usize = 16;
 /// Bytes of `struct virtio_gpu_mem_entry`.
@@ -449,8 +510,15 @@ impl Command<'_> {
     /// Encode the request into the start of `out`, returning its length.
     ///
     /// The header's flags, fence and context are zero: a 2D driver waits for
-    /// each response and needs no fence.
+    /// each response and needs no fence. [`Command::encode_in`] is the same
+    /// for a command that belongs to a context.
     pub fn encode(&self, out: &mut [u8]) -> Result<usize, GpuError> {
+        self.encode_in(Context::NONE, out)
+    }
+
+    /// [`Command::encode`] for a command sent inside a context, or fenced,
+    /// or both.
+    pub fn encode_in(&self, context: Context, out: &mut [u8]) -> Result<usize, GpuError> {
         let len = self.len();
         let short = GpuError::BufferTooShort {
             needed: len,
@@ -460,7 +528,7 @@ impl Command<'_> {
             self.check()?;
             return Err(short);
         }
-        self.write_with(|at, bytes| {
+        self.write_with_in(context, |at, bytes| {
             if let Some(slot) = at
                 .checked_add(bytes.len())
                 .and_then(|end| out.get_mut(at..end))
@@ -475,11 +543,21 @@ impl Command<'_> {
     /// exactly once, padding as zero, so memory `put` writes need not be
     /// cleared first. For a driver writing a request into shared memory that
     /// is not one slice, such as a large `RESOURCE_ATTACH_BACKING`.
-    pub fn write_with(&self, mut put: impl FnMut(usize, &[u8])) -> Result<usize, GpuError> {
+    pub fn write_with(&self, put: impl FnMut(usize, &[u8])) -> Result<usize, GpuError> {
+        self.write_with_in(Context::NONE, put)
+    }
+
+    /// [`Command::write_with`] for a command sent inside a context, or
+    /// fenced, or both.
+    pub fn write_with_in(
+        &self,
+        context: Context,
+        mut put: impl FnMut(usize, &[u8]),
+    ) -> Result<usize, GpuError> {
         self.check()?;
         let body = HEADER_LEN;
         put(0, &self.code().to_le_bytes());
-        put(4, &[0; HEADER_LEN - 4]);
+        context.write_with(&mut put);
         let rect = |put: &mut dyn FnMut(usize, &[u8]), at: usize, rect: Rect| {
             put(at, &rect.x.to_le_bytes());
             put(at + 4, &rect.y.to_le_bytes());

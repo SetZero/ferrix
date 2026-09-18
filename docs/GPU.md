@@ -35,9 +35,9 @@ shaders. Hyprland is fast on the same desktop because a GPU runs them.
   `virtio-vga-gl` and the `gtk`, `sdl` and `egl-headless` displays. That is
   the machine `cargo xtask run-compositor` is watched on, so **the host half
   of Path A is already installed where it matters**.
-* The Linux gate host's QEMU, 9.2.4, was built headless and offers no `-gl`
-  device, though `libvirglrenderer` is installed there. Gating Path A on it
-  needs that QEMU rebuilt (§3, step 5).
+* The Linux gate host's QEMU, 9.2.4, was built headless and offered no
+  `-gl` device, though `libvirglrenderer` was installed there. It has been
+  rebuilt since, and does now: §3.1.
 * Ferrix drives virtio-gpu in 2D only: `libs/virtio::gpu` has the 2D control
   commands, `/dev/dri/card0` has dumb buffers, `SETCRTC`, `PAGE_FLIP` and
   `DIRTYFB`, and there is no render node (`docs/DISPLAY.md`).
@@ -56,13 +56,47 @@ In dependency order, with sizes in story points:
 |---|---|---|
 | 1 | **virtio-gpu 3D in the ring-3 driver.** `VIRTIO_GPU_F_VIRGL` and `CONTEXT_INIT` negotiated, `GET_CAPSET_INFO`/`GET_CAPSET`, `CTX_CREATE`/`CTX_DESTROY`/`CTX_ATTACH_RESOURCE`, `RESOURCE_CREATE_3D`, `SUBMIT_3D`, `TRANSFER_TO_HOST_3D`/`FROM_HOST_3D`, and fences. `libs/virtio::gpu` already has the 2D commands and their fuzz target, and this extends both. | 13 |
 | 2 | **A render node and the `virtgpu` ioctls.** `/dev/dri/renderD128`, GEM handles, `DRM_IOCTL_VIRTGPU_GETPARAM`, `GET_CAPS`, `CONTEXT_INIT`, `RESOURCE_CREATE`, `RESOURCE_INFO`, `MAP`, `EXECBUFFER`, `TRANSFER_TO_HOST`/`FROM_HOST` and `WAIT`, in `libs/linux-abi` from a committed probe as every other ABI table is. And **scanout of a 3D resource**, so the finished frame never leaves the GPU: no per-frame transfer at all, where today's best is the damaged rectangles. | 13 |
-| 5 | **The host half, in xtask.** `-device virtio-gpu-gl` and a GL display where QEMU has them, asked for as `window.rs` asks for a display today, with the 2D device otherwise. The gate host's QEMU rebuilt with OpenGL and virglrenderer, and `egl-headless` for judged boots. GPU output is not byte-exact across drivers, so a judged GPU boot compares within a stated tolerance, or against a software GL pinned on the gate host; the software renderer's images stay byte-exact. | 5 |
+| 5 | **The host half, in xtask.** `-device virtio-gpu-gl` and a GL display where QEMU has them, asked for as `window.rs` asks for a display today, with the 2D device otherwise. The gate host's QEMU rebuilt with OpenGL and virglrenderer, and `egl-headless` for judged boots. GPU output is not byte-exact across drivers, so a judged GPU boot compares within a stated tolerance, or against a software GL pinned on the gate host; the software renderer's images stay byte-exact. **Judging one needs a way to read its pixels that is not `screendump` -- see §3.1.** | 5 |
 | 3b | **A GPU renderer for the compositor, in Rust.** A `compositor/virgl` crate that encodes virgl's command stream -- object creation, state, `draw_vbo`, resource transfers -- with shaders as the TGSI text virgl takes. Hyprland's effects are about eight shaders: the two blur kernels, `blurprepare`, `blurFinish`, the rounded texture, the border gradient, the shadow. `compositor/render` gains a renderer trait with the software renderer as the fallback the roadmap already requires -- the compositor is never GPU-only. Clients stay `wl_shm`; their damaged rectangles are uploaded as textures. | 21 |
 | 4 | **`zwp_linux_dmabuf` and a GBM-shaped allocator.** Only once clients render on the GPU themselves. Not needed for 3b, and deferred with 3a. | 8 |
 
 **52 points to a GPU-composited desktop** (1, 2, 5, 3b), in that order: the
 driver and the node first because nothing above can be tested without them,
 the host plumbing third so that the renderer is gated from its first commit.
+
+### 3.1 What was found when the gate host was given the device (2026-09-18)
+
+The Linux gate host's QEMU was rebuilt as step 5 asks: the 9.2.4 tree at
+`~/Documents/qemu/qemu`, reconfigured with `--enable-virglrenderer
+--enable-opengl`, which gives it `virtio-gpu-gl-pci`, `virtio-vga-gl`,
+`egl-headless` and `gtk`. Two things had to be worked around and one is a
+real constraint on the plan.
+
+* **`--disable-werror` is needed on this host.** QEMU 9.2.4 does not
+  compile with the distribution's current GCC: `util/log.c` trips
+  `-Werror=discarded-qualifiers`. Nothing to do with the GPU, and no reason
+  to patch someone else's tree over it.
+
+* **`xtask --gl` boots.** Ferrix comes up on `virtio-gpu-gl-pci` exactly as
+  on the 2D device -- the 3D card is a superset, and the 2D driver drives it
+  unchanged. That is the whole of the host half working.
+
+* **`screendump` cannot read a GL console, and this is not a setting.**
+  QEMU 9.2.4's `qmp_screendump` (`ui/ui-qmp-cmds.c`) asks for a
+  `DisplaySurface` and gives up with *"no surface"* when there is none;
+  there is no GL path in it. With `egl-headless` the console holds a scanout
+  texture on the host GPU and no surface, so every judged boot's way of
+  reading pixels stops working the moment the card is the 3D one. `cargo
+  xtask test-display --gl` shows it: the guest boots, the compositor sets
+  its scanout, and the dump fails.
+
+  So step 5 owes a second way to read a frame, and the cheapest one is
+  probably from *inside* the guest -- the compositor already knows how to
+  write its own frame out (`compositor/shot`), and a picture judged there
+  needs no host console at all. That also sidesteps the tolerance question
+  for the 2D path, where the guest's bytes are still the renderer's own.
+  Whether a newer QEMU grew a GL screendump is worth checking before
+  writing anything.
 
 ### 3a, which was not chosen for the compositor
 
