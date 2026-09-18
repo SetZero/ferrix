@@ -27,11 +27,12 @@
 //!
 //! What is not handled yet: `dwindle:pseudotile` (the option is left unread
 //! and every tiled window fills its slot), `scrolling:direction` other than
-//! `right`, the dwindle options that need a cursor (`smart_split`, `smart_resizing`,
-//! `use_active_for_splits`, `precise_mouse_move`, `permanent_direction_override`),
-//! per-node resizing in the master layout, window selectors as dispatcher
-//! arguments, and `movewindow` on a floating window, which in Hyprland
-//! pushes it against the monitor's edge and here does nothing.
+//! `right`, the dwindle options that place a new window under the cursor
+//! (`smart_split`, `use_active_for_splits`, `precise_mouse_move`,
+//! `permanent_direction_override`), resizing in the master and scrolling
+//! layouts, window selectors as dispatcher arguments, and `movewindow` on a
+//! floating window, which in Hyprland pushes it against the monitor's edge
+//! and here does nothing.
 
 #![forbid(unsafe_code)]
 
@@ -158,6 +159,44 @@ pub struct Monitor {
     /// The three parts of it -- the make, the model and the serial -- which
     /// `hyprctl monitors` prints apart as well as together.
     pub made: (String, String, String),
+}
+
+/// Which edges of a window a resize pulls on: Hyprland's `eRectCorner`.
+///
+/// A dispatcher pulls on none of them ([`Corner::NONE`], Hyprland's
+/// `CORNER_NONE`), and the layout has to guess which way to go. A drag that
+/// grabbed a border knows, and the guess is not needed -- which is the
+/// whole reason the type exists.
+///
+/// Both edges of an axis are never set at once: a grab is at one corner or
+/// along one edge, and `left` with `right` would be asking for two
+/// directions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Corner {
+    /// The left edge is being pulled.
+    pub left: bool,
+    /// The right edge is being pulled.
+    pub right: bool,
+    /// The top edge is being pulled.
+    pub top: bool,
+    /// The bottom edge is being pulled.
+    pub bottom: bool,
+}
+
+impl Corner {
+    /// No edge: what a dispatcher pulls on.
+    pub const NONE: Self = Self {
+        left: false,
+        right: false,
+        top: false,
+        bottom: false,
+    };
+
+    /// Whether no edge is named.
+    #[must_use]
+    pub const fn is_none(self) -> bool {
+        !self.left && !self.right && !self.top && !self.bottom
+    }
 }
 
 /// How big a window may be: `min_size`, `max_size`, `no_max_size` and

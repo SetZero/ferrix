@@ -2,8 +2,8 @@ use compositor_config::{Config, Gaps, NoSources, parse};
 
 use crate::Group;
 use crate::{
-    Change, Direction, Dispatcher, Error, ForceSplit, FullscreenMode, Layout, Limits, Monitor,
-    MonitorId, Move, NewStatus, Orientation, Rect, Settings, State, WindowId, WorkspaceId,
+    Change, Corner, Direction, Dispatcher, Error, ForceSplit, FullscreenMode, Layout, Limits,
+    Monitor, MonitorId, Move, NewStatus, Orientation, Rect, Settings, State, WindowId, WorkspaceId,
     WorkspaceTarget,
 };
 
@@ -56,6 +56,40 @@ fn dispatch(state: &mut State, name: &str, arg: &str) -> Vec<Change> {
 
 fn focus(state: &mut State, id: u64) {
     let _changes = state.focus_window(WindowId(id)).unwrap();
+}
+
+/// Three tiled windows with *two* splits running down the screen above the
+/// second, which is what a corner has to choose between.
+///
+/// 3840 wide, because a split's direction comes from the box it divides: on
+/// a 1920 screen the right half is taller than it is wide and divides the
+/// other way, and there is then only one split of each direction to pick.
+fn wide_three() -> State {
+    let mut state = state_on(BARE, monitor(M1, 0, 0, 3840, 1080));
+    open(&mut state, &[1]);
+    focus(&mut state, 1);
+    open(&mut state, &[2]);
+    focus(&mut state, 2);
+    open(&mut state, &[3]);
+    assert_eq!(
+        rects(&state),
+        [
+            (1, Rect::new(0, 0, 1920, 1080)),
+            (2, Rect::new(1920, 0, 960, 1080)),
+            (3, Rect::new(2880, 0, 960, 1080)),
+        ],
+        "the right half divides side by side too"
+    );
+    state
+}
+
+/// A resize of `pixels` across and none downwards.
+const fn distance(pixels: i64) -> Move {
+    Move {
+        x: pixels,
+        y: 0,
+        exact: false,
+    }
 }
 
 /// The windows the given monitor shows, with their client rectangles.
@@ -2312,6 +2346,177 @@ fn a_tiled_resize_needs_a_split_and_is_held_inside_its_bounds() {
         Rect::new(0, 0, 1824, 1080),
         "the ratio stops at 1.9, which is 960 * 1.9"
     );
+}
+
+/// A grabbed corner says which of the splits above a tiled window moves,
+/// which is what the guess at `CORNER_NONE` was standing in for.
+///
+/// Three windows on a screen wide enough that both splits run down it: the
+/// root divides 3840 in half, and the right half divides again, so window 2
+/// has two such splits above it. Grabbing its right edge moves the inner
+/// one -- the split that edge *is* -- and takes the room from window 3,
+/// leaving window 1 alone.
+#[test]
+fn a_grabbed_corner_picks_which_split_moves() {
+    let mut state = wide_three();
+    let _ = state
+        .resize_window_pixel_at(
+            WindowId(2),
+            &distance(100),
+            Corner {
+                right: true,
+                ..Corner::NONE
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        rects(&state),
+        [
+            (1, Rect::new(0, 0, 1920, 1080)),
+            (2, Rect::new(1920, 0, 1060, 1080)),
+            (3, Rect::new(2980, 0, 860, 1080)),
+        ]
+    );
+}
+
+/// `dwindle:smart_resizing`, Hyprland's default: with the split on the
+/// grabbed side moved, the next one the other way moves back by as much, so
+/// only the two windows either side of the grabbed edge change size.
+///
+/// The same three windows, and window 2's *left* edge. That edge is the
+/// root's split, so the root moves and window 1 takes the 100 pixels. What
+/// the second half of the algorithm is for is window 3: the inner split
+/// divides a box that just got 100 narrower, so without moving it back
+/// windows 2 and 3 would come out 910 each and window 3 would have shrunk
+/// for a drag on the other side of window 2. Moved back, window 2 pays the
+/// whole 100 and window 3 keeps its 960.
+#[test]
+fn smart_resizing_gives_the_room_back_to_the_inner_split() {
+    let mut state = wide_three();
+    let _ = state
+        .resize_window_pixel_at(
+            WindowId(2),
+            &distance(100),
+            Corner {
+                left: true,
+                ..Corner::NONE
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        rects(&state),
+        [
+            (1, Rect::new(0, 0, 2020, 1080)),
+            (2, Rect::new(2020, 0, 860, 1080)),
+            (3, Rect::new(2880, 0, 960, 1080)),
+        ]
+    );
+}
+
+/// A floating window resized by a grabbed edge moves that edge and leaves
+/// the opposite one where it is, which is what makes a border drag look
+/// like one.
+#[test]
+fn a_grabbed_edge_moves_a_floating_window_by_that_edge() {
+    let mut state = setup(BARE);
+    open(&mut state, &[1]);
+    focus(&mut state, 1);
+    let _ = dispatch(&mut state, "setfloating", "");
+    let _ = state
+        .float_window(WindowId(1), Rect::new(100, 100, 400, 200))
+        .unwrap();
+
+    // The left edge: the origin moves with it and the right edge, at 500,
+    // stays where it is.
+    let by = Move {
+        x: 40,
+        y: 0,
+        exact: false,
+    };
+    let _ = state
+        .resize_window_pixel_at(
+            WindowId(1),
+            &by,
+            Corner {
+                left: true,
+                ..Corner::NONE
+            },
+        )
+        .unwrap();
+    assert_eq!(rects(&state)[0].1, Rect::new(140, 100, 360, 200));
+
+    // The bottom edge: the origin is left alone.
+    let by = Move {
+        x: 0,
+        y: 30,
+        exact: false,
+    };
+    let _ = state
+        .resize_window_pixel_at(
+            WindowId(1),
+            &by,
+            Corner {
+                bottom: true,
+                ..Corner::NONE
+            },
+        )
+        .unwrap();
+    assert_eq!(rects(&state)[0].1, Rect::new(140, 100, 360, 230));
+}
+
+/// `general:resize_on_border`: the ring around a window, as wide as the
+/// border plus `general:extend_border_grab_area`, grabs an edge; inside the
+/// window belongs to the client and nothing is grabbed.
+#[test]
+fn a_border_is_grabbed_around_a_window_and_not_inside_it() {
+    const ON: &str = "general:gaps_in = 0\ngeneral:gaps_out = 0\ngeneral:border_size = 0\n\
+                      general:resize_on_border = true\ngeneral:extend_border_grab_area = 10\n";
+    let mut state = setup(ON);
+    open(&mut state, &[1, 2]);
+    // Window 1 is 0..960, window 2 is 960..1920, both the full height.
+
+    // Inside window 1, nowhere near an edge: the client's.
+    assert_eq!(state.border_at((400.0, 500.0)), None);
+
+    // Just past window 1's right edge, which is window 2's left edge: the
+    // topmost window wins, and window 2 is the one drawn later.
+    assert_eq!(
+        state.border_at((955.0, 500.0)),
+        Some((
+            WindowId(2),
+            Corner {
+                left: true,
+                ..Corner::NONE
+            }
+        )),
+        "within 10 of window 2's left edge, and outside window 2"
+    );
+
+    // Ten pixels is the reach: eleven away from any edge is nobody's.
+    assert_eq!(state.border_at((948.0, 500.0)), None);
+
+    // The screen's own top-left corner names both edges of window 1.
+    assert_eq!(
+        state.border_at((-3.0, -3.0)),
+        Some((
+            WindowId(1),
+            Corner {
+                left: true,
+                top: true,
+                ..Corner::NONE
+            }
+        ))
+    );
+}
+
+/// With `general:resize_on_border` off -- Hyprland's default -- no press is
+/// ever a border grab, whatever the grab area says.
+#[test]
+fn no_border_is_grabbed_when_the_option_is_off() {
+    let mut state = setup(BARE);
+    open(&mut state, &[1, 2]);
+    assert_eq!(state.border_at((955.0, 500.0)), None);
+    assert_eq!(state.border_at((-3.0, -3.0)), None);
 }
 
 /// `swapwindow` exchanges two tiled windows and leaves the focus on the one

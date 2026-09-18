@@ -59,6 +59,12 @@ pub(crate) const fn sticks(a: i64, b: i64) -> bool {
     a.abs_diff(b) < 2
 }
 
+/// [`sticks`] for the fractional edges a layout divides a workspace into,
+/// before they are rounded to whole pixels.
+pub(crate) fn sticks_fine(a: f64, b: f64) -> bool {
+    (a - b).abs() < 2.0
+}
+
 /// How long the spans `a0..a1` and `b0..b1` overlap, zero if they do not.
 pub(crate) fn overlap(a0: i64, a1: i64, b0: i64, b1: i64) -> i64 {
     a1.min(b1).saturating_sub(a0.max(b0)).max(0)

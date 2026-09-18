@@ -44,7 +44,7 @@ use crate::master::Master;
 use crate::monocle::Monocle;
 use crate::scrolling::Scrolling;
 use crate::settings::{Layout, Orientation, Settings};
-use crate::{Error, Limits, Monitor, MonitorId, Rect, WindowId, WorkspaceId};
+use crate::{Corner, Error, Limits, Monitor, MonitorId, Rect, WindowId, WorkspaceId};
 
 /// Something a change to the state did that the caller acts on.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -306,11 +306,12 @@ impl Tiling {
         &mut self,
         window: WindowId,
         by: (f64, f64),
+        corner: Corner,
         area: Area,
         settings: &Settings,
     ) -> bool {
         match self {
-            Self::Dwindle(dwindle) => dwindle.resize(window, by, area, settings),
+            Self::Dwindle(dwindle) => dwindle.resize(window, by, corner, area, settings),
             Self::Master(_) | Self::Monocle(_) | Self::Scrolling(_) => false,
         }
     }
@@ -1553,7 +1554,7 @@ impl State {
         let Some(window) = self.focused_window() else {
             return Vec::new();
         };
-        self.move_floating(window, by, true)
+        self.move_floating(window, by, true, Corner::NONE)
     }
 
     /// `moveactive`: move a floating window, by a distance or to a place.
@@ -1561,7 +1562,7 @@ impl State {
         let Some(window) = self.focused_window() else {
             return Vec::new();
         };
-        self.move_floating(window, by, false)
+        self.move_floating(window, by, false, Corner::NONE)
     }
 
     /// Move or resize one window, which is what all four of `moveactive`,
@@ -1571,12 +1572,18 @@ impl State {
     /// A tiled window cannot be *moved* -- where it is belongs to the
     /// tiling, and Hyprland's own dispatchers do nothing to one either --
     /// but it can be resized, by moving whatever decides its size.
-    fn move_floating(&mut self, window: WindowId, by: &Move, resizing: bool) -> Vec<Change> {
+    fn move_floating(
+        &mut self,
+        window: WindowId,
+        by: &Move,
+        resizing: bool,
+        corner: Corner,
+    ) -> Vec<Change> {
         if !self.is_floating(window) {
             // A tiled window has no rectangle of its own to move, but its
             // size is still something the tiling can be asked for.
             return if resizing {
-                self.resize_tiled(window, by)
+                self.resize_tiled(window, by, corner)
             } else {
                 Vec::new()
             };
@@ -1592,12 +1599,21 @@ impl State {
             }
         };
         let rect = if resizing {
-            // A window is never resized out of existence.
+            // Which edge moves is the corner's to say, as Hyprland's drag
+            // does it: the right edge takes the distance and the left edge
+            // takes it the other way round, moving the window's origin by
+            // as much so that the edge nobody grabbed stays where it is. A
+            // dispatcher grabs nothing and the origin is left alone, which
+            // is the corner-less resize this has always done.
+            let width = at(rect.width, if corner.left { -by.x } else { by.x }).max(1);
+            let height = at(rect.height, if corner.top { -by.y } else { by.y }).max(1);
+            // A window is never resized out of existence, and an edge that
+            // ran into that limit stops rather than carrying the origin on.
             Rect::new(
-                rect.x,
-                rect.y,
-                at(rect.width, by.x).max(1),
-                at(rect.height, by.y).max(1),
+                rect.x + if corner.left { rect.width - width } else { 0 },
+                rect.y + if corner.top { rect.height - height } else { 0 },
+                width,
+                height,
             )
         } else {
             Rect::new(at(rect.x, by.x), at(rect.y, by.y), rect.width, rect.height)
@@ -1611,7 +1627,7 @@ impl State {
     /// `exact` is a size rather than a distance, and the tiling is told the
     /// difference from the size the window has now: a tiling holds
     /// proportions, so "600 wide" only means anything beside what it is.
-    fn resize_tiled(&mut self, window: WindowId, by: &Move) -> Vec<Change> {
+    fn resize_tiled(&mut self, window: WindowId, by: &Move, corner: Corner) -> Vec<Change> {
         let Some(workspace) = self.workspace_of(window) else {
             return Vec::new();
         };
@@ -1632,7 +1648,7 @@ impl State {
         let moved = self
             .workspaces
             .get_mut(&workspace)
-            .is_some_and(|ws| ws.tiling.resize(window, by, area, &settings));
+            .is_some_and(|ws| ws.tiling.resize(window, by, corner, area, &settings));
         if !moved {
             return Vec::new();
         }
@@ -3375,10 +3391,11 @@ impl State {
         if !self.windows.contains_key(&window) {
             return Err(Error::UnknownWindow(window));
         }
-        Ok(self.run(|state| state.move_floating(window, by, false)))
+        Ok(self.run(|state| state.move_floating(window, by, false, Corner::NONE)))
     }
 
-    /// `resizewindowpixel`: resize a window the compositor picked out.
+    /// `resizewindowpixel`: resize a window the compositor picked out,
+    /// pulling on no particular edge.
     ///
     /// # Errors
     ///
@@ -3388,10 +3405,102 @@ impl State {
         window: WindowId,
         by: &Move,
     ) -> Result<Vec<Change>, Error> {
+        self.resize_window_pixel_at(window, by, Corner::NONE)
+    }
+
+    /// Resize a window, pulling on the edge a drag grabbed.
+    ///
+    /// The same as [`State::resize_window_pixel`] but for the corner, which
+    /// says which edge moves and -- for a tiled window -- which of the
+    /// splits above it. A drag that grabbed a border has one; a dispatcher
+    /// has not.
+    ///
+    /// # Errors
+    ///
+    /// The window is not one this layout holds.
+    pub fn resize_window_pixel_at(
+        &mut self,
+        window: WindowId,
+        by: &Move,
+        corner: Corner,
+    ) -> Result<Vec<Change>, Error> {
         if !self.windows.contains_key(&window) {
             return Err(Error::UnknownWindow(window));
         }
-        Ok(self.run(|state| state.move_floating(window, by, true)))
+        Ok(self.run(|state| state.move_floating(window, by, true, corner)))
+    }
+
+    /// The window whose border is under `at`, and which of its edges that
+    /// is, when `general:resize_on_border` says a border may be grabbed.
+    ///
+    /// Hyprland's `processMouseDownNormal`: the window's box grown by
+    /// `general:border_size + general:extend_border_grab_area` on every
+    /// side is what counts as its border, *less the window itself* -- a
+    /// press inside a window belongs to the client, and only the ring
+    /// around it resizes. The grab area is why a one-pixel border can be
+    /// hit at all.
+    ///
+    /// The topmost window wins, which is the order [`State::layout`] draws
+    /// in read backwards, so a floating window's border is grabbed rather
+    /// than that of the tiled window beneath it. A fullscreen window has no
+    /// border to grab.
+    ///
+    /// The corner is the edge or edges `at` is beyond; a press off the end
+    /// of one side, in the ring's corner, names both.
+    #[must_use]
+    pub fn border_at(&self, at: (f64, f64)) -> Option<(WindowId, Corner)> {
+        if !self.settings.resize_on_border {
+            return None;
+        }
+        let reach = self.settings.border_size + self.settings.border_grab_extend;
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "a window's edge is a screen coordinate, far inside f64"
+        )]
+        let edges = |rect: Rect| {
+            (
+                rect.x as f64,
+                rect.y as f64,
+                (rect.x + rect.width) as f64,
+                (rect.y + rect.height) as f64,
+            )
+        };
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "as above: a configured reach is a handful of pixels"
+        )]
+        let reach = reach as f64;
+        self.layout()
+            .iter()
+            .flat_map(|output| output.windows.iter())
+            .rev()
+            .find_map(|placed| {
+                if self
+                    .workspace_of(placed.window)
+                    .and_then(|workspace| self.fullscreen(workspace))
+                    .is_some_and(|(id, _)| id == placed.window)
+                {
+                    return None;
+                }
+                let (left, top, right, bottom) = edges(placed.rect);
+                let inside = at.0 >= left && at.0 < right && at.1 >= top && at.1 < bottom;
+                let within = at.0 >= left - reach
+                    && at.0 < right + reach
+                    && at.1 >= top - reach
+                    && at.1 < bottom + reach;
+                if inside || !within {
+                    return None;
+                }
+                Some((
+                    placed.window,
+                    Corner {
+                        left: at.0 < left,
+                        right: at.0 >= right,
+                        top: at.1 < top,
+                        bottom: at.1 >= bottom,
+                    },
+                ))
+            })
     }
 
     /// `moveoutofgroup`: take the focused window out of its group and put it

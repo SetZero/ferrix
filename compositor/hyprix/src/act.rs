@@ -21,21 +21,31 @@
 
 use std::collections::BTreeMap;
 
-use compositor_layout::{Move, State, WindowId};
+use compositor_layout::{Corner, Move, State, WindowId};
 
 use crate::frame::Source;
 use crate::seat::{Action, Seat};
 use crate::select::Selector;
 use crate::state::Slot;
 
-/// A drag with the mouse: `bindm = SUPER, mouse:272, movewindow`.
+/// A drag with the mouse: `bindm = SUPER, mouse:272, movewindow`, or a
+/// press on a window's border with `general:resize_on_border` on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Drag {
     /// Which window is being dragged.
     pub window: WindowId,
     /// Whether it is being resized rather than moved.
     pub resizing: bool,
-    /// Where the pointer was when it started.
+    /// Which edge of the window is being pulled, for a resize that grabbed
+    /// one. A `bindm` grabs no edge and resizes about the window's origin,
+    /// which is [`Corner::NONE`].
+    pub corner: Corner,
+    /// Whether a press on a border started it rather than a bind, which is
+    /// what says the button release ends it -- a bind ends when its own key
+    /// goes up, and there is no key here.
+    pub border: bool,
+    /// Where the pointer was when it started, and where it was last seen: a
+    /// drag is carried on by the distance since the last look.
     pub from: (i64, i64),
 }
 
@@ -377,9 +387,75 @@ fn mouse(argument: &str, state: &mut State, around: &mut Around<'_>) -> bool {
     *around.drag = Some(Drag {
         window,
         resizing,
+        corner: Corner::NONE,
+        border: false,
         from,
     });
     true
+}
+
+/// The left button, which is what a border is grabbed with: `BTN_LEFT`.
+const BTN_LEFT: u32 = 0x110;
+
+/// Start or end a border drag, and give back the actions the clients should
+/// still be told about.
+///
+/// `general:resize_on_border`: Hyprland's `processMouseDownNormal` hit-tests
+/// the press against every window's border -- the ring around it, as wide as
+/// `general:border_size + general:extend_border_grab_area` -- and resizes
+/// instead of passing the press on. The hit test is
+/// [`State::border_at`], because it is geometry and the layout holds the
+/// rectangles; what is here is the part that is about buttons.
+///
+/// The press is swallowed only when it grabbed something, so a press on a
+/// window's own pixels reaches the client as it always did. The release is
+/// swallowed only when it ends a border drag: a `bindm` drag ends when its
+/// bind's key goes up and its button is the client's business.
+pub fn grab_border(
+    actions: Vec<Action>,
+    state: &State,
+    seat: &Seat,
+    drag: &mut Option<Drag>,
+) -> Vec<Action> {
+    let mut kept = Vec::with_capacity(actions.len());
+    for action in actions {
+        let Action::Button {
+            button: BTN_LEFT,
+            pressed,
+        } = action
+        else {
+            kept.push(action);
+            continue;
+        };
+        if pressed {
+            if drag.is_some() {
+                kept.push(action);
+                continue;
+            }
+            let (x, y) = seat.pointer();
+            let Some((window, corner)) = state.border_at((x, y)) else {
+                kept.push(action);
+                continue;
+            };
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "the pointer is held inside the screen, which is far inside i64"
+            )]
+            let from = (x as i64, y as i64);
+            *drag = Some(Drag {
+                window,
+                resizing: true,
+                corner,
+                border: true,
+                from,
+            });
+        } else if drag.is_some_and(|held| held.border) {
+            *drag = None;
+        } else {
+            kept.push(action);
+        }
+    }
+    kept
 }
 
 /// Carry a drag on: the pointer has moved to `(x, y)`.
@@ -398,7 +474,7 @@ pub fn dragged(drag: &mut Drag, state: &mut State, (x, y): (i64, i64)) -> bool {
     }
     drag.from = (x, y);
     let moved = if drag.resizing {
-        state.resize_window_pixel(drag.window, &by)
+        state.resize_window_pixel_at(drag.window, &by, drag.corner)
     } else {
         state.move_window_pixel(drag.window, &by)
     };
@@ -656,4 +732,109 @@ fn pid_of(window: WindowId, around: &Around<'_>) -> Option<i32> {
     let source = around.sources.get(&window)?;
     let slot = around.slots.get(source.client)?;
     Some(slot.pid()).filter(|pid| *pid > 0)
+}
+
+#[cfg(test)]
+mod tests {
+    //! What a press on a border does, and what it leaves for the client.
+
+    use compositor_config::NoSources;
+    use compositor_layout::{Corner, Monitor, MonitorId, Rect, State, WindowId};
+
+    use super::{Action, Drag, Seat, grab_border};
+
+    /// `BTN_LEFT`, as the seat reports it.
+    const LEFT: u32 = 0x110;
+
+    /// A compositor with `resize_on_border` on, one 1024x768 screen and two
+    /// tiled windows: 0..512 and 512..1024, both the full height.
+    fn ready(text: &str) -> (State, Seat) {
+        let config = compositor_config::parse("test", text, &mut NoSources).config;
+        let mut state = State::from_config(&config);
+        let _changes = state
+            .add_monitor(Monitor {
+                scale: 1.0,
+                name: "Virtual-1".to_owned(),
+                id: MonitorId(1),
+                rect: Rect::new(0, 0, 1024, 768),
+                reserved: compositor_layout::Gaps::all(0),
+                description: String::new(),
+                made: <(String, String, String)>::default(),
+            })
+            .unwrap();
+        for id in [1, 2] {
+            let _changes = state.open_window(WindowId(id)).unwrap();
+        }
+        (state, Seat::new(&config, 1024, 768))
+    }
+
+    const ON: &str = "general:gaps_in = 0\ngeneral:gaps_out = 0\ngeneral:border_size = 0\n\
+                      general:resize_on_border = true\ngeneral:extend_border_grab_area = 10\n";
+
+    fn pressed(down: bool) -> Action {
+        Action::Button {
+            button: LEFT,
+            pressed: down,
+        }
+    }
+
+    /// A press on the ring around a window starts a resize and is swallowed;
+    /// the release that ends it is swallowed too, so the client is never
+    /// told about half a click.
+    #[test]
+    fn a_press_on_a_border_grabs_it_and_never_reaches_the_client() {
+        let (state, mut seat) = ready(ON);
+        // Just inside window 2's left edge's grab ring, and outside window 2.
+        let _moved = seat.warp(508.0, 400.0);
+        let mut drag = None;
+
+        let kept = grab_border(vec![pressed(true)], &state, &seat, &mut drag);
+        assert_eq!(kept, [], "the press was swallowed");
+        assert_eq!(
+            drag,
+            Some(Drag {
+                window: WindowId(2),
+                resizing: true,
+                corner: Corner {
+                    left: true,
+                    ..Corner::NONE
+                },
+                border: true,
+                from: (508, 400),
+            })
+        );
+
+        let kept = grab_border(vec![pressed(false)], &state, &seat, &mut drag);
+        assert_eq!(kept, [], "and so was the release that ended it");
+        assert_eq!(drag, None);
+    }
+
+    /// A press on a window's own pixels is the client's, and leaves no drag
+    /// behind.
+    #[test]
+    fn a_press_inside_a_window_reaches_the_client() {
+        let (state, mut seat) = ready(ON);
+        let _moved = seat.warp(200.0, 400.0);
+        let mut drag = None;
+
+        let kept = grab_border(vec![pressed(true)], &state, &seat, &mut drag);
+        assert_eq!(kept, [pressed(true)]);
+        assert_eq!(drag, None);
+
+        // And the release, with no border drag to end, goes through as well.
+        let kept = grab_border(vec![pressed(false)], &state, &seat, &mut drag);
+        assert_eq!(kept, [pressed(false)]);
+    }
+
+    /// With the option off there is no ring at all, which is Hyprland's
+    /// default and what every other boot of this compositor has had.
+    #[test]
+    fn a_border_is_not_grabbed_when_the_option_is_off() {
+        let (state, mut seat) = ready("general:gaps_in = 0\ngeneral:gaps_out = 0\n");
+        let _moved = seat.warp(508.0, 400.0);
+        let mut drag = None;
+        let kept = grab_border(vec![pressed(true)], &state, &seat, &mut drag);
+        assert_eq!(kept, [pressed(true)]);
+        assert_eq!(drag, None);
+    }
 }

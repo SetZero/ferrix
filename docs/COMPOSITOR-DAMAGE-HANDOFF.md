@@ -402,11 +402,17 @@ Not part of this handoff, but the next person will ask.
   `wp_linux_drm_syncobj_manager_v1`, `wl_drm`, `wp_color_manager_v1`, and
   the five `windowrule` effects that only mean something with a GPU
   (`immediate`, `no_vrr`, `no_auto_hdr`, `tonemap`, `force_rgbx`).
-- **The pointer-driven options.** `general:resize_on_border`,
-  `general:snap:*`, `general:extend_border_grab_area`, and the dwindle
-  options that need a cursor (`smart_split`, `smart_resizing`,
+- **The pointer-driven options.** `general:snap:*`, and the dwindle options
+  that place a new window under the cursor (`smart_split`,
   `use_active_for_splits`, `precise_mouse_move`,
   `permanent_direction_override`).
+
+  `general:resize_on_border` and `general:extend_border_grab_area` are done
+  (2026-09-18), and with them a tiled window can be resized at all:
+  `resizeactive` used to do nothing to one, because moving the split it
+  sits under was not something the layout exposed. It is
+  `CDwindleAlgorithm::resizeTarget`, `dwindle:smart_resizing` and all, and
+  the corner a drag grabs is what says which split moves.
 - **`xray` and `no_screen_share`.** These two genuinely do need a second
   pass: `xray` reads what is behind the frame being drawn, and
   `no_screen_share` means drawing the frame again without one surface in

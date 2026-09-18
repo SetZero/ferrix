@@ -603,6 +603,16 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
             if actions.is_empty() {
                 continue;
             }
+            // `general:resize_on_border`: a press on the ring around a
+            // window grabs that edge, and neither the press nor the release
+            // that ends it reaches the client -- a client that was sent a
+            // press it never saw the end of would think the button is still
+            // held. Hyprland's `processMouseDownNormal` returns before
+            // `sendPointerButton` for the same reason.
+            let actions = crate::act::grab_border(actions, &state, &seat, &mut drag);
+            if actions.is_empty() {
+                continue;
+            }
             // The pointer is drawn into the frame, so moving it is a change
             // to the screen even when nothing else moved: without this the
             // arrow would stay where the last redraw left it and catch up

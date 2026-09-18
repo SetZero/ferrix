@@ -32,11 +32,14 @@
 //! over, and there is no cursor here, so the new window always takes the
 //! second half; `smart_split`, `split_bias`,
 //! `permanent_direction_override` and pseudotiling are not implemented.
+//! `dwindle:smart_resizing` is, and is the only behaviour: it is Hyprland's
+//! default and the setting is not read, so turning it off changes nothing.
 
-use crate::WindowId;
 use crate::dispatch::Direction;
 use crate::geometry::Area;
+use crate::geometry::sticks_fine;
 use crate::settings::{ForceSplit, Settings};
+use crate::{Corner, WindowId};
 
 /// Which side of a new split a new window takes.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -117,6 +120,9 @@ struct Ancestor {
     path: Vec<bool>,
     /// The box it divides.
     area: Area,
+    /// The box it gives the child the way down takes, which is Hyprland's
+    /// `PHINNER->box` where the split itself is `PHINNER->pParent->box`.
+    below: Area,
     /// Whether it lays that box out stacked.
     stacked: bool,
     /// Which of its two children holds the window: `false` for the left or
@@ -203,14 +209,16 @@ impl Node {
                     };
                     let (first, second) = split.children(area, settings);
                     let path = out.iter().map(|above| above.side).collect();
+                    let below = if side { second } else { first };
                     out.push(Ancestor {
                         path,
                         area,
+                        below,
                         stacked: split.stacked_in(area, settings),
                         side,
                     });
                     node = if side { &split.second } else { &split.first };
-                    area = if side { second } else { first };
+                    area = below;
                 }
             }
         }
@@ -617,16 +625,25 @@ impl Dwindle {
     /// and asking for one taller does nothing rather than something
     /// arbitrary.
     ///
-    /// What is not here is the corner: Hyprland resizes towards the corner
-    /// a drag grabbed, which decides *which* of the splits above a window
-    /// moves when several run the same way. `resizeactive` and
-    /// `resizewindowpixel` grab no corner, which is Hyprland's `CORNER_NONE`
-    /// -- and at `CORNER_NONE` both `dwindle:smart_resizing` and the plain
-    /// path pick the nearest split of each direction, which is this.
+    /// `corner` is the edge the pull is on, which decides *which* of the
+    /// splits above a window moves when several run the same way. A
+    /// dispatcher pulls on no edge ([`Corner::NONE`]) and the nearest of
+    /// each direction is taken; a drag that grabbed a border names one, and
+    /// the split taken is the one on that side. A window against the work
+    /// area's far edge counts as having grabbed the near one, since that is
+    /// the only edge it can move.
+    ///
+    /// `dwindle:smart_resizing` -- Hyprland's default -- is the second half:
+    /// once the split on the grabbed side has moved, the *next* one the
+    /// other way is moved back by as much, so the window beyond it keeps the
+    /// size it had and only the two either side of the grabbed edge change.
+    /// At [`Corner::NONE`] there is never an inner split to move, so both
+    /// settings agree and a dispatcher cannot tell them apart.
     pub(crate) fn resize(
         &mut self,
         window: WindowId,
         by: (f64, f64),
+        corner: Corner,
         area: Area,
         settings: &Settings,
     ) -> bool {
@@ -636,42 +653,127 @@ impl Dwindle {
         let Some((chain, box_of)) = root.ancestors_of(window, area, settings) else {
             return false;
         };
-        // Hyprland's `STICKS`: an edge is against the work area's when it is
-        // within two pixels of it, which is what a box divided by ratios
+        // Hyprland's `STICKS`: an edge is against the work area's when it
+        // is within two pixels of it, which is what a box divided by ratios
         // leaves.
-        let sticks = |a: f64, b: f64| (a - b).abs() < 2.0;
-        let held_across = sticks(box_of.x, area.x) && sticks(box_of.x + box_of.w, area.x + area.w);
-        let held_down = sticks(box_of.y, area.y) && sticks(box_of.y + box_of.h, area.y + area.h);
-        let allowed = (
-            if held_across { 0.0 } else { by.0 },
-            if held_down { 0.0 } else { by.1 },
+        let (against_left, against_right) = (
+            sticks_fine(box_of.x, area.x),
+            sticks_fine(box_of.x + box_of.w, area.x + area.w),
         );
-        // Nearest first, which is the way Hyprland walks up from the window.
-        let across = chain
-            .iter()
-            .rev()
-            .find(|above| !above.stacked)
-            .map(|above| (above.path.clone(), allowed.0 * 2.0 / above.area.w));
-        let down = chain
-            .iter()
-            .rev()
-            .find(|above| above.stacked)
-            .map(|above| (above.path.clone(), allowed.1 * 2.0 / above.area.h));
+        let (against_top, against_bottom) = (
+            sticks_fine(box_of.y, area.y),
+            sticks_fine(box_of.y + box_of.h, area.y + area.h),
+        );
+        let allowed = (
+            if against_left && against_right {
+                0.0
+            } else {
+                by.0
+            },
+            if against_top && against_bottom {
+                0.0
+            } else {
+                by.1
+            },
+        );
+        // Hyprland's `LEFT`, `TOP`, `RIGHT`, `BOTTOM`: the edge that was
+        // grabbed, or -- for a window with its back to one side of the work
+        // area -- the only edge it has.
+        let none = corner.is_none();
+        let (left, right) = (corner.left || against_right, corner.right || against_left);
+        let (top, bottom) = (corner.top || against_bottom, corner.bottom || against_top);
+        // Walking up from the window, as Hyprland does: the first split of
+        // each direction that the pull is *towards* is the outer one, and the
+        // first that is not is the inner one. `side` is which child the way
+        // down took, so a `true` is Hyprland's `children[1] == PCURRENT`.
+        let (mut across, mut across_in) = (None::<&Ancestor>, None::<&Ancestor>);
+        let (mut down, mut down_in) = (None::<&Ancestor>, None::<&Ancestor>);
+        for above in chain.iter().rev() {
+            if down.is_none()
+                && above.stacked
+                && (none || (top && above.side) || (bottom && !above.side))
+            {
+                down = Some(above);
+            } else if down.is_none() && down_in.is_none() && above.stacked {
+                down_in = Some(above);
+            } else if across.is_none()
+                && !above.stacked
+                && (none || (left && above.side) || (right && !above.side))
+            {
+                across = Some(above);
+            } else if across.is_none() && across_in.is_none() && !above.stacked {
+                across_in = Some(above);
+            }
+            if down.is_some() && across.is_some() {
+                break;
+            }
+        }
+        let mut moved = false;
+        for (outer, inner, sideways) in [(across, across_in, true), (down, down_in, false)] {
+            let Some(outer) = outer else {
+                continue;
+            };
+            let distance = if sideways { allowed.0 } else { allowed.1 };
+            // What the inner split's own box measures now, which is what it
+            // has to go on measuring: read before the outer one moves, as
+            // Hyprland's `ORIGINAL` is.
+            let was = inner.map(|inner| {
+                if sideways {
+                    inner.below.w
+                } else {
+                    inner.below.h
+                }
+            });
+            let whole = if sideways { outer.area.w } else { outer.area.h };
+            moved |= self.turn(&outer.path, distance * 2.0 / whole, None);
+            let (Some(inner), Some(was)) = (inner, was) else {
+                continue;
+            };
+            // The inner split's box has just changed, so it is measured
+            // again -- the way down is walked afresh, and the split is the
+            // one at the same path, since moving a ratio does not reshape
+            // the tree. The ratio that leaves the node beyond it where it
+            // was is Hyprland's, and which way round depends on the side.
+            let Some(now) = self
+                .root
+                .as_ref()
+                .and_then(|root| root.ancestors_of(window, area, settings))
+                .and_then(|(chain, _)| chain.into_iter().find(|above| above.path == inner.path))
+            else {
+                continue;
+            };
+            let whole = if sideways { now.area.w } else { now.area.h };
+            let ratio = if now.side {
+                2.0 - (was + distance) / whole * 2.0
+            } else {
+                (was - distance) / whole * 2.0
+            };
+            moved |= self.turn(&now.path, 0.0, Some(ratio));
+        }
+        moved
+    }
+
+    /// Move the split a path leads to, by `change` or to `exactly`, held to
+    /// Hyprland's 0.1 to 1.9. Gives whether it moved.
+    fn turn(&mut self, path: &[bool], change: f64, exactly: Option<f64>) -> bool {
+        let wanted = exactly.unwrap_or(f64::NAN);
         let Some(root) = &mut self.root else {
             return false;
         };
-        let mut moved = false;
-        for (path, change) in [across, down].into_iter().flatten() {
-            if !change.is_finite() || change == 0.0 {
-                continue;
-            }
-            if let Some(split) = root.split_at(&path) {
-                let was = split.ratio;
-                split.ratio = (split.ratio + change).clamp(0.1, 1.9);
-                moved |= split.ratio != was;
-            }
+        let Some(split) = root.split_at(path) else {
+            return false;
+        };
+        let now = if exactly.is_some() {
+            wanted
+        } else {
+            split.ratio + change
+        };
+        if !now.is_finite() {
+            return false;
         }
-        moved
+        let was = split.ratio;
+        split.ratio = now.clamp(0.1, 1.9);
+        split.ratio != was
     }
 
     /// Record the directions the splits lay out with in `area`.

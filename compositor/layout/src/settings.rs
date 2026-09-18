@@ -243,6 +243,15 @@ pub struct Settings {
     /// `general:border_size`, not negative: reserved inside the gap on every
     /// edge of a window that is not fullscreen.
     pub border_size: i64,
+    /// `general:resize_on_border`: a press on a window's border, or just
+    /// outside it, grabs that edge and resizes rather than reaching the
+    /// client.
+    pub resize_on_border: bool,
+    /// `general:extend_border_grab_area`: how far outside the border that
+    /// press still counts, which is the difference between a border a
+    /// person can hit and one they cannot. Only read when
+    /// `resize_on_border` is on, as Hyprland's own description says.
+    pub border_grab_extend: i64,
     /// `general:no_focus_fallback`: when `movefocus` finds no window and no
     /// monitor in its direction, do nothing rather than wrap around to the
     /// far edge of the monitor.
@@ -353,6 +362,11 @@ impl Settings {
                 }
             },
             border_size: config.int("general:border_size").unwrap_or(1).max(0),
+            resize_on_border: config.bool("general:resize_on_border").unwrap_or(false),
+            border_grab_extend: config
+                .int("general:extend_border_grab_area")
+                .unwrap_or(15)
+                .max(0),
             no_focus_fallback: config.bool("general:no_focus_fallback").unwrap_or(false),
             workspace_back_and_forth: config
                 .bool("binds:workspace_back_and_forth")
