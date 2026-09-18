@@ -1418,6 +1418,9 @@ fn serve(
     // The windows `xdg_dialog_v1` called modal in this pass, which the
     // layout floats once the client's own borrow is over.
     let mut modals: Vec<(WindowId, bool)> = Vec::new();
+    // The windows whose `xdg_toplevel` the client destroyed in this pass,
+    // taken out of the layout once its borrow is over.
+    let mut closed: Vec<WindowId> = Vec::new();
     // What a window asked `xdg_toplevel` for in this pass: the last
     // `set_fullscreen`/`set_maximized` state each one is in, acted on once
     // the client's own borrow is over.
@@ -1469,6 +1472,21 @@ fn serve(
                     };
                     for surface in showing {
                         commits.painted(whole_of(index, surface));
+                    }
+                }
+                // A window the client closed. Destroying the
+                // `xdg_toplevel` is how a client with more than one window
+                // shuts one of them: the connection stays open, so the loop
+                // that takes a gone client's windows away never runs, and
+                // without this the layout would keep tiling a window that
+                // no longer exists.
+                Event::Destroyed {
+                    object,
+                    role: Role::XdgToplevel,
+                } => {
+                    if let Some(at) = slot.windows.iter().position(|(top, _)| *top == object) {
+                        let (_, window) = slot.windows.remove(at);
+                        closed.push(window);
                     }
                 }
                 Event::Destroyed {
@@ -1986,6 +2004,14 @@ fn serve(
             "hyprix: client {client} put the pointer at {}, {}",
             at.0, at.1
         ));
+    }
+    // The windows the client closed, now that its own borrow is over:
+    // the same three things a gone connection's windows are given.
+    for window in closed {
+        let _ = state.window_gone(window);
+        let _ = sources.remove(&window);
+        rules.window_gone(window);
+        changed = true;
     }
     for (window, maximized, fullscreen) in asked_states {
         // Hyprland's fullscreen modes: 0 is the whole screen, 1 is

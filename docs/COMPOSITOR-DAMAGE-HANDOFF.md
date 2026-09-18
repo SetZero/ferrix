@@ -437,11 +437,18 @@ Not part of this handoff, but the next person will ask.
 - **`persistent_size`**, which does *not* need state on disk: Hyprland's is
   an in-memory cache (`CFloatStateCache`) keyed by class, title and xdg tag,
   written when a floating window closes and read when a matching one opens.
-  What it needs here is a window-close path. `hyprix` has one and it only
-  fires when the whole *connection* goes -- the "a connection that ended
-  takes its windows with it" loop in `state.rs`. A client that destroys one
-  `xdg_toplevel` and stays alive is not handled anywhere, which is worth
-  looking at on its own account and is what this option would hang off.
+  What it needs here is a window-close path, and there is one now:
+  destroying an `xdg_toplevel` takes the window out of the layout
+  (2026-09-18). Before that only a whole connection going did, so a client
+  with two windows that closed one left the layout tiling a window that no
+  longer existed.
+
+  **That fix has no test**, and should get one. Nothing in this tree opens
+  two windows from one client: every gate boot starts two
+  `compositor/pattern` processes, and `pattern` exits when its one window
+  is closed, which takes the connection with it and goes down the path
+  that was already there. A client that opens a second window and destroys
+  it is what the test needs, and writing one is the work.
 - **`hyprland-input-capture-v1`** (its whole conversation is a `libei`
   socket, and there is no `libei`) and **`hyprland-ctm-control-v1`** (its
   vendored XML has a `<description>` with no `summary`, which this
