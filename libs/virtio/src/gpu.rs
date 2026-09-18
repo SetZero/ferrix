@@ -70,6 +70,21 @@ pub const FEATURE_CONTEXT_INIT: u64 = 1 << 4;
 /// declined, since each only matters to a driver that sends its commands.
 pub const DRIVER_FEATURES: u64 = FEATURE_VERSION_1 | FEATURE_ACCESS_PLATFORM;
 
+/// The features a driver that means to send 3D commands accepts:
+/// [`DRIVER_FEATURES`] and the two that 3D needs.
+///
+/// Accepted rather than required. A device that offers neither is a 2D
+/// card, and the driver that asked for 3D still drives it -- virtio's
+/// negotiation is the driver naming what it *can* take -- so what came back
+/// is what says whether there is a GPU behind this one. [`FEATURE_VIRGL`]
+/// in the negotiated set is that answer.
+///
+/// Separate from [`DRIVER_FEATURES`] because accepting a feature changes
+/// what the device does: QEMU brings virglrenderer up for a driver that
+/// took [`FEATURE_VIRGL`], and a boot that is judged on the 2D path has no
+/// business asking for that.
+pub const DRIVER_FEATURES_3D: u64 = DRIVER_FEATURES | FEATURE_VIRGL | FEATURE_CONTEXT_INIT;
+
 /// The features without which the driver gives up.
 pub const REQUIRED_FEATURES: u64 = FEATURE_VERSION_1;
 

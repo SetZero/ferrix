@@ -709,6 +709,22 @@ fn accept(start: &Start, message: &ChannelMessage) -> Result<Arc<Card>, Refusal>
         .map_err(|_| Refusal::Malformed)?;
 
     CARDS.lock().push(Arc::clone(&card));
+    // What the card is, before what it shows: a line a person reading a
+    // boot log can tell a GPU from a framebuffer by, and the one thing
+    // `docs/GPU.md`'s Path A can be checked against from outside the guest.
+    crate::console::println!(
+        "  display  card{index} {}",
+        if hello.virgl {
+            alloc::format!(
+                "is a 3D card: virgl, {} capability set{}, the first #{}",
+                hello.capsets,
+                if hello.capsets == 1 { "" } else { "s" },
+                hello.capset
+            )
+        } else {
+            alloc::string::String::from("is a scanout: no 3D")
+        }
+    );
     for (scanout, mode) in card.modes().iter().enumerate() {
         crate::console::println!(
             "  display  card{index} scanout {scanout}: {}x{}{}",

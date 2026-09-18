@@ -31,7 +31,14 @@ fn build(mode: (u32, u32)) -> (Rc<Bus>, Rc<RefCell<Device>>, TestDriver) {
         rings: bus.pin(2, false),
         area: bus.pin(2, true),
     };
-    let driver = Driver::init(parts, Options { reset_polls: 4 }).expect("the device comes up");
+    let driver = Driver::init(
+        parts,
+        Options {
+            reset_polls: 4,
+            ..Options::default()
+        },
+    )
+    .expect("the device comes up");
     (bus, device, driver)
 }
 

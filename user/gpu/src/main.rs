@@ -50,7 +50,7 @@ use ferrix_rt::native::port::{self, Port};
 use ferrix_rt::native::vmo::{self, Vmo};
 use ferrix_rt::{Bootstrap, Kernel};
 use ferrix_virtio::QueueMemory;
-use ferrix_virtio::gpu::{Command, DeviceConfig, DeviceError as Refusal, MemEntry, Response};
+use ferrix_virtio::gpu::{self, Command, DeviceConfig, DeviceError as Refusal, MemEntry, Response};
 use ferrix_virtio::pci::{CommonConfig, NO_VECTOR};
 use ferrix_virtio_gpu::pipeline::{Pipeline, Request, Step as Next};
 use ferrix_virtio_gpu::{
@@ -480,11 +480,34 @@ fn hello(driver: &mut Gpu, port: &Port<Kernel>, location: u32) -> Result<Hello, 
             };
         }
     }
+    // What the card can do in 3D, which is the device's answer and not the
+    // driver's wish: `VIRTIO_GPU_F_VIRGL` is granted or it is not, and the
+    // capability sets are only worth walking when it was. The first set's
+    // id is what a renderer would go on -- `CAPSET_VIRGL2` on anything
+    // recent -- and one is enough to say which renderer is behind the card.
+    let virgl = driver.info().features & gpu::FEATURE_VIRGL != 0;
+    let capsets = if virgl {
+        u16::try_from(driver.info().config.num_capsets).unwrap_or(u16::MAX)
+    } else {
+        0
+    };
+    let capset = match capsets {
+        0 => 0,
+        _ => match run_command(driver, port, &Command::GetCapsetInfo { index: 0 })? {
+            Ok(Response::CapsetInfo(info)) => info.id,
+            // A device that will not say what its first set is has one this
+            // driver cannot use; the card is still a scanout.
+            _ => 0,
+        },
+    };
     Ok(Hello {
         version: VERSION,
         scanouts: u16::try_from(count).map_err(|_| Step::Device)?,
         location,
         modes,
+        virgl,
+        capsets: if capset == 0 { 0 } else { capsets },
+        capset,
     })
 }
 
@@ -564,7 +587,13 @@ fn run(boot: &Channel<Kernel>) -> Result<(), Step> {
             rings,
             area,
         },
-        Options::default(),
+        Options {
+            // Ask the card whether there is a GPU behind it. A 2D card says
+            // no and is driven as it always was; a `virtio-gpu-gl` says yes
+            // and brings virglrenderer up on the host.
+            want_3d: true,
+            ..Options::default()
+        },
     ) {
         Ok(driver) => driver,
         Err(failure) => {

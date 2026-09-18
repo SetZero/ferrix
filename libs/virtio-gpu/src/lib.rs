@@ -126,12 +126,23 @@ pub struct Parts<T, R, A> {
 pub struct Options {
     /// Reads of `device_status` a reset may take.
     pub reset_polls: u32,
+    /// Whether to accept the features 3D needs, which is what makes a
+    /// `virtio-gpu-gl` device bring its renderer up: `gpu::DRIVER_FEATURES_3D`
+    /// rather than `gpu::DRIVER_FEATURES`.
+    ///
+    /// Off by default, because accepting a feature is not free and a
+    /// driver that will never send a 3D command has no business asking a
+    /// host to start a renderer. A driver that wants to *know* what the
+    /// card is turns it on: a 2D device cannot offer the feature, so asking
+    /// costs that device nothing, and on a 3D one the answer is the point.
+    pub want_3d: bool,
 }
 
 impl Default for Options {
     fn default() -> Self {
         Self {
             reset_polls: 100_000,
+            want_3d: false,
         }
     }
 }
@@ -416,9 +427,14 @@ where
             })
         };
 
+        let wanted = if options.want_3d {
+            gpu::DRIVER_FEATURES_3D
+        } else {
+            gpu::DRIVER_FEATURES
+        };
         let features = match pci::negotiate(
             &mut transport,
-            gpu::DRIVER_FEATURES,
+            wanted,
             gpu::REQUIRED_FEATURES,
             options.reset_polls,
         ) {

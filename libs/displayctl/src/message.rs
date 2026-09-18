@@ -36,7 +36,7 @@ use ferrix_linux_abi::drm::FORMAT_XRGB8888;
 use ferrix_native_abi::rights::Rights;
 
 /// The protocol version this crate speaks.
-pub const VERSION: u16 = 1;
+pub const VERSION: u16 = 2;
 
 /// HELLO's type.
 pub const HELLO: u32 = 1;
@@ -70,7 +70,7 @@ pub const MAX_SCANOUTS: usize = 16;
 /// Bytes of one scanout in HELLO.
 pub const SCANOUT_BYTES: usize = 12;
 /// Bytes of HELLO.
-pub const HELLO_BYTES: usize = 16 + MAX_SCANOUTS * SCANOUT_BYTES;
+pub const HELLO_BYTES: usize = 16 + MAX_SCANOUTS * SCANOUT_BYTES + 8;
 /// Bytes of the longest message.
 pub const MAX_BYTES: usize = HELLO_BYTES;
 
@@ -149,6 +149,20 @@ pub struct Hello {
     pub location: u32,
     /// Each scanout's preferred mode; entries past `scanouts` are zero.
     pub modes: [ScanoutMode; MAX_SCANOUTS],
+    /// Whether the device granted `VIRTIO_GPU_F_VIRGL`, which is the whole
+    /// of "is there a GPU behind this card".
+    ///
+    /// Answered by the device, not chosen by the driver: a driver that
+    /// asked for 3D on a 2D card gets a no and drives it as a scanout, so
+    /// this is what came back rather than what was wanted.
+    pub virgl: bool,
+    /// How many capability sets the device has, from its configuration
+    /// block. Zero on a 2D card, and on a 3D one the count the driver walks
+    /// with `GET_CAPSET_INFO`.
+    pub capsets: u16,
+    /// The first capability set's id, or 0 when there are none:
+    /// `gpu::CAPSET_VIRGL2` on a virglrenderer this decade.
+    pub capset: u32,
 }
 
 /// Why the core refuses a driver.
@@ -176,6 +190,10 @@ pub enum Refusal {
     /// The firmware's framebuffer is in memory the frame allocator owns
     /// (`docs/DISPLAY.md` §2.4), so no card is published. Decided by the core.
     Framebuffer = 8,
+    /// What the driver said about 3D does not hang together: capability
+    /// sets on a card that was not granted `VIRTIO_GPU_F_VIRGL`, or a
+    /// capability set named where there are none.
+    Capsets = 9,
 }
 
 impl Refusal {
@@ -191,6 +209,7 @@ impl Refusal {
             6 => Self::WrongLocation,
             7 => Self::Protocol,
             8 => Self::Framebuffer,
+            9 => Self::Capsets,
             _ => return None,
         })
     }
@@ -207,6 +226,7 @@ impl fmt::Display for Refusal {
             Self::WrongLocation => "HELLO names another device",
             Self::Protocol => "the driver broke the protocol",
             Self::Framebuffer => "the firmware framebuffer is in memory the kernel reclaims",
+            Self::Capsets => "HELLO's capability sets do not match what it says about 3D",
         })
     }
 }
@@ -236,6 +256,16 @@ impl Hello {
             if !fine {
                 return Err(Refusal::Mode);
             }
+        }
+        // A card that did not get `VIRTIO_GPU_F_VIRGL` has no capability
+        // sets to speak of, and one that did and reports none has nothing a
+        // 3D driver could use. Either way the pair has to agree, or the
+        // driver is saying something it cannot know.
+        if !self.virgl && (self.capsets != 0 || self.capset != 0) {
+            return Err(Refusal::Capsets);
+        }
+        if self.capsets == 0 && self.capset != 0 {
+            return Err(Refusal::Capsets);
         }
         if handle_rights != Self::HANDLE_RIGHTS {
             return Err(Refusal::Rights);
@@ -504,6 +534,12 @@ impl Message {
                     put32(bytes, at + 4, mode.height);
                     put32(bytes, at + 8, u32::from(mode.enabled));
                 }
+                // After the modes, so that every offset above is where it
+                // has always been and only the length grew.
+                let at = 16 + MAX_SCANOUTS * SCANOUT_BYTES;
+                put16(bytes, at, u16::from(hello.virgl));
+                put16(bytes, at + 2, hello.capsets);
+                put32(bytes, at + 4, hello.capset);
             }
             Self::Ready(ready) => {
                 put32(bytes, 8, ready.card);
@@ -581,11 +617,19 @@ fn decode_body(kind: u32, bytes: &[u8]) -> Option<Message> {
                     },
                 };
             }
+            let at = 16 + MAX_SCANOUTS * SCANOUT_BYTES;
             Message::Hello(Hello {
                 version: get16(bytes, 8)?,
                 scanouts: get16(bytes, 10)?,
                 location: get32(bytes, 12)?,
                 modes,
+                virgl: match get16(bytes, at)? {
+                    0 => false,
+                    1 => true,
+                    _ => return None,
+                },
+                capsets: get16(bytes, at + 2)?,
+                capset: get32(bytes, at + 4)?,
             })
         }
         READY => {
