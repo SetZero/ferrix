@@ -54,7 +54,7 @@ use ferrix_virtio::gpu::{self, Command, DeviceConfig, DeviceError as Refusal, Me
 use ferrix_virtio::pci::{CommonConfig, NO_VECTOR};
 use ferrix_virtio_gpu::pipeline::{Pipeline, Request, Step as Next};
 use ferrix_virtio_gpu::{
-    CommandArea, DevicePages, Driver, ISR_QUEUE, Options, Parts, Teardown, Transport,
+    CAPSET_ROOM, CommandArea, DevicePages, Driver, ISR_QUEUE, Options, Parts, Teardown, Transport,
 };
 
 ferrix_rt::entry!(main);
@@ -491,15 +491,36 @@ fn hello(driver: &mut Gpu, port: &Port<Kernel>, location: u32) -> Result<Hello, 
     } else {
         0
     };
-    let capset = match capsets {
-        0 => 0,
+    let first = match capsets {
+        0 => None,
         _ => match run_command(driver, port, &Command::GetCapsetInfo { index: 0 })? {
-            Ok(Response::CapsetInfo(info)) => info.id,
+            Ok(Response::CapsetInfo(info)) => Some(info),
             // A device that will not say what its first set is has one this
             // driver cannot use; the card is still a scanout.
-            _ => 0,
+            _ => None,
         },
     };
+    // And the set itself, which is the blob a renderer reads to find out
+    // what the host can do. Asked for at the size the device named, and
+    // only when that fits the response buffer: a set larger than the buffer
+    // is one this driver cannot fetch, and asking for it anyway would have
+    // the device write past the end of it.
+    let mut capset_bytes = 0;
+    if let Some(info) = first
+        && info.max_size <= CAPSET_ROOM
+        && let Ok(Response::Capset { len }) = run_command(
+            driver,
+            port,
+            &Command::GetCapset {
+                capset_id: info.id,
+                capset_version: info.max_version,
+                max_size: info.max_size,
+            },
+        )?
+    {
+        capset_bytes = u32::try_from(len).unwrap_or(0);
+    }
+    let capset = first.map_or(0, |info| info.id);
     Ok(Hello {
         version: VERSION,
         scanouts: u16::try_from(count).map_err(|_| Step::Device)?,
@@ -508,6 +529,7 @@ fn hello(driver: &mut Gpu, port: &Port<Kernel>, location: u32) -> Result<Hello, 
         virgl,
         capsets: if capset == 0 { 0 } else { capsets },
         capset,
+        capset_bytes,
     })
 }
 

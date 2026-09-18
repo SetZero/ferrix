@@ -68,9 +68,24 @@ pub const ISR_QUEUE: u8 = 1;
 /// display was attached or detached.
 pub const ISR_CONFIG: u8 = 2;
 
-/// Bytes at the end of the command area kept for the response: the longest
-/// response iteration 1 reads, `GET_DISPLAY_INFO`'s, rounded up.
-pub const RESPONSE_BYTES: usize = 512;
+/// Bytes at the end of the command area kept for the response.
+///
+/// One page. `GET_DISPLAY_INFO`'s 408 bytes were the longest response until
+/// 3D, and 512 was that rounded up; a capability set is the longest now.
+/// virglrenderer's `virgl_caps_v2` is about 1.4 KiB and a device names its
+/// own size, so the driver either has room for what the device offers or
+/// cannot fetch it -- and a page is comfortably more than any renderer's
+/// today while staying one page of pinned memory per card.
+///
+/// [`CAPSET_ROOM`] is what that leaves for a capability set itself.
+pub const RESPONSE_BYTES: usize = 4096;
+
+/// Bytes of a capability set the response buffer has room for: everything
+/// but the header a `GET_CAPSET` response starts with.
+///
+/// A driver asks for `min(what the device says, this)` and says so when the
+/// device's is larger, rather than asking for a set that will not fit.
+pub const CAPSET_ROOM: u32 = (RESPONSE_BYTES - gpu::HEADER_LEN) as u32;
 
 /// The control queue's size. A command is at most a few chains' worth of
 /// request pages and one response buffer, and only one is in flight.

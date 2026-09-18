@@ -70,7 +70,7 @@ pub const MAX_SCANOUTS: usize = 16;
 /// Bytes of one scanout in HELLO.
 pub const SCANOUT_BYTES: usize = 12;
 /// Bytes of HELLO.
-pub const HELLO_BYTES: usize = 16 + MAX_SCANOUTS * SCANOUT_BYTES + 8;
+pub const HELLO_BYTES: usize = 16 + MAX_SCANOUTS * SCANOUT_BYTES + 12;
 /// Bytes of the longest message.
 pub const MAX_BYTES: usize = HELLO_BYTES;
 
@@ -163,6 +163,10 @@ pub struct Hello {
     /// The first capability set's id, or 0 when there are none:
     /// `gpu::CAPSET_VIRGL2` on a virglrenderer this decade.
     pub capset: u32,
+    /// How many bytes of that set the driver actually fetched, which is
+    /// what says `GET_CAPSET` ran and not merely `GET_CAPSET_INFO`. Zero
+    /// when there was none to fetch, or when it would not fit.
+    pub capset_bytes: u32,
 }
 
 /// Why the core refuses a driver.
@@ -265,6 +269,10 @@ impl Hello {
             return Err(Refusal::Capsets);
         }
         if self.capsets == 0 && self.capset != 0 {
+            return Err(Refusal::Capsets);
+        }
+        // Bytes of a set that was never named are bytes of nothing.
+        if self.capset == 0 && self.capset_bytes != 0 {
             return Err(Refusal::Capsets);
         }
         if handle_rights != Self::HANDLE_RIGHTS {
@@ -540,6 +548,7 @@ impl Message {
                 put16(bytes, at, u16::from(hello.virgl));
                 put16(bytes, at + 2, hello.capsets);
                 put32(bytes, at + 4, hello.capset);
+                put32(bytes, at + 8, hello.capset_bytes);
             }
             Self::Ready(ready) => {
                 put32(bytes, 8, ready.card);
@@ -630,6 +639,7 @@ fn decode_body(kind: u32, bytes: &[u8]) -> Option<Message> {
                 },
                 capsets: get16(bytes, at + 2)?,
                 capset: get32(bytes, at + 4)?,
+                capset_bytes: get32(bytes, at + 8)?,
             })
         }
         READY => {

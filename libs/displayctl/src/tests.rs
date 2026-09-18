@@ -33,6 +33,7 @@ fn hello() -> Hello {
         virgl: false,
         capsets: 0,
         capset: 0,
+        capset_bytes: 0,
     }
 }
 
@@ -112,9 +113,9 @@ fn every_message_round_trips_at_its_fixed_length() {
 fn fields_lie_where_the_specification_puts_them() {
     let plain = Message::Hello(hello()).encode();
     let bytes = plain.as_bytes();
-    // 16 of header and fields, 16 scanouts of 12, and 8 for what the card
+    // 16 of header and fields, 16 scanouts of 12, and 12 for what the card
     // said about 3D.
-    assert_eq!(bytes.len(), 216);
+    assert_eq!(bytes.len(), 220);
     assert_eq!(u16::from_le_bytes([bytes[8], bytes[9]]), 2, "VERSION");
     assert_eq!(u16::from_le_bytes([bytes[10], bytes[11]]), 1);
     assert_eq!(u32_at(bytes, 12), 0x800);
@@ -126,6 +127,7 @@ fn fields_lie_where_the_specification_puts_them() {
     assert_eq!(u16::from_le_bytes([bytes[208], bytes[209]]), 0, "virgl");
     assert_eq!(u16::from_le_bytes([bytes[210], bytes[211]]), 0, "capsets");
     assert_eq!(u32_at(bytes, 212), 0, "the first capset");
+    assert_eq!(u32_at(bytes, 216), 0, "and how much of it was fetched");
 
     assert!(bytes[28..].iter().all(|&byte| byte == 0));
     // And a 3D card's, which is what a `virtio-gpu-gl` answers.
@@ -133,11 +135,13 @@ fn fields_lie_where_the_specification_puts_them() {
     card.virgl = true;
     card.capsets = 2;
     card.capset = 1;
+    card.capset_bytes = 308;
     let encoded = Message::Hello(card).encode();
     let bytes = encoded.as_bytes();
     assert_eq!(u16::from_le_bytes([bytes[208], bytes[209]]), 1);
     assert_eq!(u16::from_le_bytes([bytes[210], bytes[211]]), 2);
     assert_eq!(u32_at(bytes, 212), 1);
+    assert_eq!(u32_at(bytes, 216), 308);
     assert_eq!(Message::decode(bytes), Ok(Message::Hello(card)));
 
     let attach = Message::Attach(buffer(7, 8192)).encode();
@@ -241,11 +245,18 @@ fn hello_is_validated_field_by_field_and_by_its_rights() {
     wrong.virgl = true;
     wrong.capset = 2;
     assert_eq!(wrong.validate(&rights), Err(Refusal::Capsets));
+    // Bytes of a set that was never named are bytes of nothing.
+    let mut wrong = hello();
+    wrong.virgl = true;
+    wrong.capsets = 1;
+    wrong.capset_bytes = 8;
+    assert_eq!(wrong.validate(&rights), Err(Refusal::Capsets));
     // And a 3D card that hangs together.
     let mut fine = hello();
     fine.virgl = true;
     fine.capsets = 2;
     fine.capset = 1;
+    fine.capset_bytes = 308;
     assert_eq!(fine.validate(&rights), Ok(()));
 
     for scanouts in [0, 17] {

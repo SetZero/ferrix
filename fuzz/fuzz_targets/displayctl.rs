@@ -63,6 +63,7 @@ fuzz_target!(|bytes: &[u8]| {
         virgl: false,
         capsets: 0,
         capset: 0,
+        capset_bytes: 0,
     };
     let mut session =
         Session::accept(&hello, &Hello::HANDLE_RIGHTS, CARD).expect("a good HELLO is accepted");

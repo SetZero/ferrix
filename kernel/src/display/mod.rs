@@ -716,10 +716,11 @@ fn accept(start: &Start, message: &ChannelMessage) -> Result<Arc<Card>, Refusal>
         "  display  card{index} {}",
         if hello.virgl {
             alloc::format!(
-                "is a 3D card: virgl, {} capability set{}, the first #{}",
+                "is a 3D card: virgl, {} capability set{}, the first #{} of {} bytes",
                 hello.capsets,
                 if hello.capsets == 1 { "" } else { "s" },
-                hello.capset
+                hello.capset,
+                hello.capset_bytes
             )
         } else {
             alloc::string::String::from("is a scanout: no 3D")
