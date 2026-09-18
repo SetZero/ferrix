@@ -39,7 +39,9 @@ use ferrix_displayctl::message::{
 use ferrix_native_abi::handle::Handle;
 use ferrix_native_abi::rights::Requested;
 use ferrix_native_abi::signals::Signals;
-use ferrix_native_abi::types::{IoMappingSpec, PACKET_INTERRUPT, PACKET_SIGNAL};
+use ferrix_native_abi::types::{
+    IoMappingSpec, PACKET_INTERRUPT, PACKET_SIGNAL, PACKET_USER, PortPacket,
+};
 use ferrix_rt::native::channel::{Channel, ReadError};
 use ferrix_rt::native::device::{Device, Interrupt, IoMapping};
 use ferrix_rt::native::error::Error;
@@ -91,6 +93,8 @@ const VIRTIO_GPU_ID: u16 = 0x1050;
 /// Port keys.
 const KEY_INTERRUPT: u64 = 1;
 const KEY_CONTROL: u64 = 2;
+/// The render core's channel, the card's other conversation.
+const KEY_RENDER: u64 = 3;
 
 /// Where a run stopped, as the exit status.
 #[derive(Clone, Copy, Debug)]
@@ -452,25 +456,29 @@ fn started(boot: &Channel<Kernel>) -> Result<Started, Step> {
 /// is the *adapter*: renderctl's messages in, virtio-gpu's 3D commands out.
 /// A second driver for another GPU writes this function against its own
 /// device and nothing above it changes.
-fn render(
+///
+/// This half is only the introduction -- HELLO, and READY's work VMO. The
+/// requests that follow are served by [`Serving`], because the core keeps
+/// the conversation open for as long as the render node exists.
+fn render_introduce(
     driver: &mut Gpu,
     port: &Port<Kernel>,
     device: &Device<Kernel>,
     location: u32,
-) -> Result<(), Step> {
+) -> Result<Option<RenderSide>, Step> {
     use ferrix_renderctl::message::{
         self as rc, MAX_BYTES as RENDER_MAX_BYTES, Message as RenderMessage,
     };
 
     // A card with no 3D behind it has no render node to serve.
     if driver.info().features & gpu::FEATURE_VIRGL == 0 {
-        return Ok(());
+        return Ok(None);
     }
     let Ok(control) = device.render_control() else {
-        return Ok(());
+        return Ok(None);
     };
     let Some(name) = rc::Hello::named("virtio_gpu") else {
-        return Ok(());
+        return Ok(None);
     };
     let hello = RenderMessage::Hello(rc::Hello {
         version: rc::VERSION,
@@ -496,9 +504,11 @@ fn render(
         .write_with(hello.encode().as_bytes(), [share])
         .map_err(|_| Step::Hello)?;
 
-    // READY, and then whatever the core asks. Only MAKE_CTX today, which is
-    // what says the 3D commands work against the device rather than against
-    // QEMU's header.
+    // READY ends the setup, and the conversation is served from the driver's
+    // own event loop after that. It cannot be served here: this function
+    // would then hold the process while the core kept the channel open, and
+    // the display -- the card's other conversation, on the same thread and
+    // the same device -- would never run again.
     let mut bytes = [0_u8; RENDER_MAX_BYTES];
     let mut handles = [Handle::INVALID; 2];
     // READY's work VMO, kept for as long as the conversation lasts: an
@@ -507,47 +517,40 @@ fn render(
     // which comes beside it, is for fences and is closed until something
     // waits on one.
     let mut work: Option<Vmo<Kernel>> = None;
-    loop {
-        let _ = control
-            .wait_one(Signals::READABLE | Signals::PEER_CLOSED, Deadline::Never)
-            .map_err(|_| Step::Events)?;
-        let Ok(received) = control.read(&mut bytes, &mut handles) else {
-            return Ok(());
-        };
-        let taken = RenderMessage::decode(bytes.get(..received.bytes).unwrap_or_default())
-            .is_some_and(|message| matches!(message, RenderMessage::Ready(_)))
-            && received.handles == 2;
-        for (index, handle) in handles.iter_mut().enumerate().take(received.handles) {
-            let owned = OwnedHandle::from_raw(Kernel, *handle);
-            match (taken, index) {
-                (true, 0) => work = Some(Vmo::from_owned(owned)),
-                _ => drop(owned),
-            }
-            *handle = Handle::INVALID;
+    let _ = control
+        .wait_one(Signals::READABLE | Signals::PEER_CLOSED, Deadline::Never)
+        .map_err(|_| Step::Events)?;
+    let Ok(received) = control.read(&mut bytes, &mut handles) else {
+        return Ok(None);
+    };
+    let taken = RenderMessage::decode(bytes.get(..received.bytes).unwrap_or_default())
+        .is_some_and(|message| matches!(message, RenderMessage::Ready(_)))
+        && received.handles == 2;
+    for (index, handle) in handles.iter_mut().enumerate().take(received.handles) {
+        let owned = OwnedHandle::from_raw(Kernel, *handle);
+        match (taken, index) {
+            (true, 0) => work = Some(Vmo::from_owned(owned)),
+            _ => drop(owned),
         }
-        let Some(message) = RenderMessage::decode(bytes.get(..received.bytes).unwrap_or_default())
-        else {
-            return Ok(());
-        };
-        let answer = match message {
-            RenderMessage::Ready(_) => continue,
-            RenderMessage::Refused(_) => return Ok(()),
-            RenderMessage::MakeContext { context, capset } => {
-                make_context(driver, port, context, capset)?
-            }
-            RenderMessage::MakeObject(make) => make_object(driver, port, work.as_ref(), &make)?,
-            RenderMessage::DropObject { object } => drop_object(driver, port, object)?,
-            RenderMessage::Stop => RenderMessage::Stopped,
-            _ => return Ok(()),
-        };
-        let stopping = matches!(answer, RenderMessage::Stopped);
-        control
-            .write(answer.encode().as_bytes())
-            .map_err(|_| Step::Control)?;
-        if stopping {
-            return Ok(());
-        }
+        *handle = Handle::INVALID;
     }
+    // Anything but READY with its two handles is a core this driver cannot
+    // talk to, and the render node simply does not appear.
+    if !taken {
+        return Ok(None);
+    }
+    Ok(Some(RenderSide { control, work }))
+}
+
+/// The render conversation, once the core has answered READY.
+///
+/// Served from [`Serving::serve`] rather than by a loop of its own, so that
+/// the display and the GPU take the device's one command slot in turn.
+struct RenderSide {
+    control: Channel<Kernel>,
+    /// READY's work VMO: an object's description and a command buffer are
+    /// ranges of it. The driver reads those ranges and never writes them.
+    work: Option<Vmo<Kernel>>,
 }
 
 /// Make one rendering context on the device.
@@ -740,15 +743,19 @@ fn run_command_in(
     driver
         .submit_in(context, command)
         .map_err(|_| Step::Device)?;
-    loop {
+    let mut deferred = Deferred::new();
+    let result = loop {
         let packet = port.wait(Deadline::Never).map_err(|_| Step::Events)?;
         if (packet.kind, packet.key) != (PACKET_INTERRUPT, KEY_INTERRUPT) {
+            deferred.keep(&packet);
             continue;
         }
         if let (Some(done), _) = driver.on_interrupt().map_err(|_| Step::Device)? {
-            return Ok(done.result);
+            break done.result;
         }
-    }
+    };
+    deferred.give_back(port);
+    Ok(result)
 }
 
 /// Submit a command and wait for its outcome, before the pipeline runs.
@@ -758,13 +765,71 @@ fn run_command(
     command: &Command<'_>,
 ) -> Result<Result<Response, Refusal>, Step> {
     driver.submit(command).map_err(|_| Step::Device)?;
-    loop {
+    let mut deferred = Deferred::new();
+    let result = loop {
         let packet = port.wait(Deadline::Never).map_err(|_| Step::Events)?;
         if (packet.kind, packet.key) != (PACKET_INTERRUPT, KEY_INTERRUPT) {
+            deferred.keep(&packet);
             continue;
         }
         if let (Some(done), _) = driver.on_interrupt().map_err(|_| Step::Device)? {
-            return Ok(done.result);
+            break done.result;
+        }
+    };
+    deferred.give_back(port);
+    Ok(result)
+}
+
+/// How many packets one wait may keep: the display's channel, the render
+/// core's, and room to spare.
+const MAX_DEFERRED: usize = 4;
+
+/// Packets taken off the port while waiting for a command's interrupt.
+///
+/// They belong to whoever armed them and cannot be answered here, in the
+/// middle of a device command -- but they must not be dropped either:
+/// `wait_async` delivers once, so a packet thrown away is a channel nobody
+/// is ever woken for again, which is a driver that stops serving the
+/// display. They are given back to the port when the command is done, as
+/// user packets standing for the signal they were, and the serve loop reads
+/// both forms alike.
+///
+/// Giving one back before then would only fetch it straight out of the port
+/// again, so they are kept until the wait is over.
+struct Deferred {
+    kept: [(u64, u32); MAX_DEFERRED],
+    count: usize,
+}
+
+impl Deferred {
+    const fn new() -> Self {
+        Self {
+            kept: [(0, 0); MAX_DEFERRED],
+            count: 0,
+        }
+    }
+
+    /// Keep `packet`, unless its key is kept already: a second signal for
+    /// one wait says no more than the first, and the room is small.
+    fn keep(&mut self, packet: &PortPacket) {
+        if self
+            .kept
+            .iter()
+            .take(self.count)
+            .any(|(key, _)| *key == packet.key)
+        {
+            return;
+        }
+        if let Some(slot) = self.kept.get_mut(self.count) {
+            *slot = (packet.key, packet.signals);
+            self.count += 1;
+        }
+    }
+
+    /// Give them back, in the order they arrived.
+    fn give_back(&self, port: &Port<Kernel>) {
+        for (key, signals) in self.kept.iter().take(self.count) {
+            let _ = port.queue(*key, [u64::from(*signals), 0]);
         }
     }
 }
@@ -877,10 +942,34 @@ fn introduce(
         .write_with(Message::Hello(hello).encode().as_bytes(), [port_share])
         .map_err(|_| Step::Hello)?;
     let card = ready(control)?;
+    // The wait is armed by `run`, once every conversation's blocking setup
+    // commands are done. A command waiting on the device takes packets off
+    // the port and drops the ones that are not its interrupt, and an armed
+    // wait is delivered once: arming before then can lose the core's first
+    // message and leave nothing listening for another.
+    Ok((scratch, card))
+}
+
+/// Arm the waits for both of the card's conversations.
+///
+/// Only once every conversation's blocking setup commands are done. A
+/// command waiting on the device takes packets off the port, and an armed
+/// wait is delivered once: arming earlier can spend a channel's wakeup on a
+/// wait nobody is in a position to answer.
+fn arm_waits(
+    port: &Port<Kernel>,
+    control: &Channel<Kernel>,
+    render: Option<&RenderSide>,
+) -> Result<(), Step> {
     control
         .wait_async(port, Signals::READABLE | Signals::PEER_CLOSED, KEY_CONTROL)
         .map_err(|_| Step::Events)?;
-    Ok((scratch, card))
+    if let Some(side) = render {
+        side.control
+            .wait_async(port, Signals::READABLE | Signals::PEER_CLOSED, KEY_RENDER)
+            .map_err(|_| Step::Events)?;
+    }
+    Ok(())
 }
 
 fn run(boot: &Channel<Kernel>) -> Result<(), Step> {
@@ -952,7 +1041,13 @@ fn run(boot: &Channel<Kernel>) -> Result<(), Step> {
 
     // The card's other conversation, which is where the GPU is. A card with
     // no 3D behind it says nothing and serves the display as before.
-    render(&mut driver, &port, &device, start.location)?;
+    //
+    // Its introduction runs device commands of its own, so it happens before
+    // either wait is armed: an armed wait is delivered once, and a command
+    // waiting on the device takes packets off the port.
+    let render = render_introduce(&mut driver, &port, &device, start.location)?;
+
+    arm_waits(&port, &control, render.as_ref())?;
 
     let mut serving = Serving {
         driver,
@@ -964,6 +1059,8 @@ fn run(boot: &Channel<Kernel>) -> Result<(), Step> {
         control,
         port,
         paused: false,
+        render,
+        render_waiting: false,
     };
     let ended = serving.serve();
     let Serving {
@@ -1002,6 +1099,12 @@ struct Serving {
     /// Whether reading the control channel stopped because the pipeline was
     /// full: its wait is not armed until there is room again.
     paused: bool,
+    /// The render conversation, while the core keeps it open. `None` for a
+    /// card with no GPU behind it, and once the core has gone.
+    render: Option<RenderSide>,
+    /// Whether the render core has sent something not served yet, because
+    /// the device's one command slot was the display's at the time.
+    render_waiting: bool,
 }
 
 impl Serving {
@@ -1009,6 +1112,10 @@ impl Serving {
     fn serve(&mut self) -> Result<bool, Step> {
         loop {
             self.pump()?;
+            // The GPU's requests take the device's one command slot, so they
+            // go between the display's: `pump` has just left the pipeline
+            // waiting on the device or with nothing to do.
+            self.serve_render()?;
             if self.paused && !self.pipeline.is_full() {
                 self.paused = false;
                 if let Some(stopped) = self.listen()? {
@@ -1017,6 +1124,8 @@ impl Serving {
                 continue;
             }
             let packet = self.port.wait(Deadline::Never).map_err(|_| Step::Events)?;
+            // A packet given back by a command's wait is a user packet
+            // standing for the signal it was, so both forms are read alike.
             match (packet.kind, packet.key) {
                 (PACKET_INTERRUPT, KEY_INTERRUPT) => {
                     if let (Some(done), _) =
@@ -1025,11 +1134,12 @@ impl Serving {
                         self.pipeline.done(done.result).map_err(|_| Step::Faulted)?;
                     }
                 }
-                (PACKET_SIGNAL, KEY_CONTROL) => {
+                (PACKET_SIGNAL | PACKET_USER, KEY_CONTROL) => {
                     if let Some(stopped) = self.listen()? {
                         return Ok(stopped);
                     }
                 }
+                (PACKET_SIGNAL | PACKET_USER, KEY_RENDER) => self.render_waiting = true,
                 _ => {}
             }
         }
@@ -1110,6 +1220,80 @@ impl Serving {
                 Next::Wait | Next::Idle => return Ok(()),
             }
         }
+    }
+
+    /// Serve what the render core has asked for, while the display's
+    /// pipeline is idle and the device's one command slot is free.
+    ///
+    /// A request runs to completion here, waiting on the device itself.
+    /// That is only safe because nothing of the display's can be in flight:
+    /// the device takes one command at a time, so the only completion that
+    /// can arrive is this command's. The display waits a command or two,
+    /// which is microseconds, rather than the GPU waiting for a frame.
+    fn serve_render(&mut self) -> Result<(), Step> {
+        while self.render_waiting && self.pipeline.is_idle() && !self.driver.is_busy() {
+            match self.render_one()? {
+                None => break,
+                Some(true) => {}
+                Some(false) => {
+                    // STOP, or a core this driver cannot answer: the render
+                    // node goes and the display carries on without it.
+                    self.render = None;
+                    self.render_waiting = false;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Take one request from the render core and answer it. `None` when the
+    /// channel had nothing left; `Some(false)` when the conversation is over.
+    fn render_one(&mut self) -> Result<Option<bool>, Step> {
+        use ferrix_renderctl::message::{MAX_BYTES as RENDER_MAX_BYTES, Message as RenderMessage};
+
+        let Some(side) = self.render.as_ref() else {
+            self.render_waiting = false;
+            return Ok(None);
+        };
+        let mut bytes = [0_u8; RENDER_MAX_BYTES];
+        let received = match side.control.read(&mut bytes, &mut []) {
+            Ok(received) => received,
+            Err(ReadError::Failed(Error::ShouldWait)) => {
+                // Nothing more until the core speaks again.
+                self.render_waiting = false;
+                side.control
+                    .wait_async(
+                        &self.port,
+                        Signals::READABLE | Signals::PEER_CLOSED,
+                        KEY_RENDER,
+                    )
+                    .map_err(|_| Step::Events)?;
+                return Ok(None);
+            }
+            Err(_) => return Ok(Some(false)),
+        };
+        let Some(message) = RenderMessage::decode(bytes.get(..received.bytes).unwrap_or_default())
+        else {
+            return Ok(Some(false));
+        };
+        let answer = match message {
+            RenderMessage::MakeContext { context, capset } => {
+                make_context(&mut self.driver, &self.port, context, capset)?
+            }
+            RenderMessage::MakeObject(make) => {
+                make_object(&mut self.driver, &self.port, side.work.as_ref(), &make)?
+            }
+            RenderMessage::DropObject { object } => {
+                drop_object(&mut self.driver, &self.port, object)?
+            }
+            RenderMessage::Stop => RenderMessage::Stopped,
+            _ => return Ok(Some(false)),
+        };
+        let stopping = matches!(answer, RenderMessage::Stopped);
+        side.control
+            .write(answer.encode().as_bytes())
+            .map_err(|_| Step::Control)?;
+        Ok(Some(!stopping))
     }
 
     /// Close `buffer`'s pin: the device no longer holds its pages.
