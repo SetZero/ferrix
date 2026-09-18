@@ -324,6 +324,23 @@ pub(crate) fn mismatches(
     (found, count)
 }
 
+/// What the program prints about the render node, before its own marker.
+pub(crate) const RENDER: &str = "render:";
+
+/// The driver the render line names, if it found a node: the line is
+/// `render: renderD128 <driver> 3d <n> capsets 0x<mask>`, and `render: none
+/// <why>` when there was none. Read from the marker rather than from the
+/// start, because a console line carries a timestamp before it.
+pub(crate) fn render_driver(line: &str) -> Option<&str> {
+    let (_, rest) = line.split_once(RENDER)?;
+    let mut words = rest.split_whitespace();
+    let node = words.next()?;
+    if !node.starts_with("renderD") {
+        return None;
+    }
+    words.next().filter(|driver| !driver.is_empty())
+}
+
 /// The id of the primary plane the marker line names, if it names one: its
 /// last three words are `plane <id> Primary`.
 pub(crate) fn primary_plane(line: &str) -> Option<u32> {
@@ -385,6 +402,34 @@ fn boot_and_dump(arch: Arch, program: &Path, args: &Args, name: &str) -> Result<
             )));
         };
         println!("  {arch}: the card's primary plane {plane} shows the framebuffer");
+        // The render node, from the same boot. `--gl` puts a GPU behind the
+        // card, and then `/dev/dri/renderD128` must be there and name the
+        // driver serving it; without `--gl` there is no GPU, no node, and
+        // the program must say so. Each boot is the other's control: a check
+        // that cannot fail proves nothing (`docs/GPU.md` step 2).
+        let render = lines
+            .iter()
+            .rev()
+            .find(|line| line.contains(RENDER))
+            .map_or("", |line| line.trim());
+        match (args.gl, render_driver(render)) {
+            (true, Some(driver)) => {
+                println!("  {arch}: the render node is `{driver}`");
+            }
+            (true, None) => {
+                return Err(Error::new(format!(
+                    "{arch}: the 3D card has no render node: `{render}`"
+                )));
+            }
+            (false, Some(driver)) => {
+                return Err(Error::new(format!(
+                    "{arch}: a card with no GPU answered a render node `{driver}`"
+                )));
+            }
+            (false, None) => {
+                println!("  {arch}: no render node, as a card with no GPU has none");
+            }
+        }
         let settle = Instant::now() + SETTLE;
         loop {
             let screen = read_dump(&mut qmp, Some(DEVICE_ID), &dump)?;

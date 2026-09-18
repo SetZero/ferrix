@@ -14,13 +14,18 @@
 fn main() {
     use std::io::Write;
 
-    use compositor_drm::{Card, show};
+    use compositor_drm::{Card, probe, show};
 
+    let mut out = std::io::stdout();
+    // The render node first, and always: the display test watches the boot
+    // for the compositor's own prefix and reads back from it, so this line
+    // has a prefix of its own and is already printed when that one comes.
+    // A card with no GPU behind it says so here rather than failing.
+    let _ = writeln!(out, "{}", probe());
     let line = match Card::open().and_then(|card| show(&card)) {
         Ok(line) => line,
         Err(error) => format!("compositor: failed: {error}"),
     };
-    let mut out = std::io::stdout();
     let _ = writeln!(out, "{line}");
     let _ = out.flush();
     // As init, exiting would end the machine; as a program, the scanout lasts
