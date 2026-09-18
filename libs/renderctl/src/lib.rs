@@ -21,12 +21,21 @@
 //! its type and length first, decoded strictly, handles in the channel
 //! message's array, and a message on the channel as its own doorbell.
 //!
+//! [`message`] is the bytes. [`session`] is the core's half of the
+//! conversation as a state machine: it hands out the messages the core
+//! sends and judges each reply against what it is waiting for, so a driver
+//! that answers a question nobody asked is caught here, host-tested, and
+//! not in the kernel. That half is the one a second driver inherits
+//! whole -- it knows what an id's life looks like and nothing about what a
+//! command buffer says.
+//!
 //! Nothing here sends, maps or waits; the glue does.
 
 #![no_std]
 #![forbid(unsafe_code)]
 
 pub mod message;
+pub mod session;
 
 #[cfg(test)]
 mod tests;

@@ -308,3 +308,290 @@ fn the_enumerations_round_trip() {
     }
     assert_eq!(Status::from_raw(6), None);
 }
+
+// -- The session ----------------------------------------------------------
+
+use crate::session::{Event, RequestError, Session};
+
+fn session() -> Session {
+    Session::accept(&hello(), &Hello::HANDLE_RIGHTS, 1 << 20).expect("a good HELLO is accepted")
+}
+
+/// A context is made before it is used and answered once, and the session
+/// hands out exactly the message that says so.
+#[test]
+fn a_context_is_made_before_anything_uses_it() {
+    let mut core = session();
+    assert_eq!(core.name(), "virtio_gpu");
+
+    // Nothing may be submitted into a context that is not there.
+    assert_eq!(
+        core.submit(1, 1, Work { at: 0, len: 16 }),
+        Err(RequestError::NoSuchContext)
+    );
+
+    let asked = core.make_context(1, 2).expect("a context may be asked for");
+    assert_eq!(
+        asked,
+        Message::MakeContext {
+            context: 1,
+            capset: 2
+        }
+    );
+    // Still not usable: it has not been made yet.
+    assert_eq!(
+        core.submit(1, 1, Work { at: 0, len: 16 }),
+        Err(RequestError::NoSuchContext)
+    );
+    // And the id is taken, so it cannot be asked for twice.
+    assert_eq!(core.make_context(1, 2), Err(RequestError::InUse));
+
+    assert_eq!(
+        core.receive(&Message::ContextMade {
+            context: 1,
+            status: Status::Ok
+        }),
+        Ok(Event::ContextMade {
+            context: 1,
+            status: Status::Ok
+        })
+    );
+    assert!(core.submit(1, 1, Work { at: 0, len: 16 }).is_ok());
+
+    // The same answer twice is a driver answering a question nobody asked.
+    assert_eq!(
+        core.receive(&Message::ContextMade {
+            context: 1,
+            status: Status::Ok
+        }),
+        Err(Refusal::Protocol)
+    );
+    assert!(core.is_broken());
+    assert_eq!(core.make_context(2, 0), Err(RequestError::Closed));
+}
+
+/// A context the device refused leaves no context behind, and its id can be
+/// asked for again.
+#[test]
+fn a_refused_context_leaves_nothing() {
+    let mut core = session();
+    let _asked = core.make_context(1, 0).expect("asked");
+    assert_eq!(
+        core.receive(&Message::ContextMade {
+            context: 1,
+            status: Status::OutOfMemory
+        }),
+        Ok(Event::ContextMade {
+            context: 1,
+            status: Status::OutOfMemory
+        })
+    );
+    assert!(core.make_context(1, 0).is_ok(), "the id is free again");
+}
+
+/// An object belongs to a context, is checked against what the driver said
+/// it would make, and its range has to be one the core handed out.
+#[test]
+fn an_object_is_checked_against_what_the_driver_promised() {
+    let mut core = session();
+    let _ = core.make_context(1, 0).expect("asked");
+    let _ = core
+        .receive(&Message::ContextMade {
+            context: 1,
+            status: Status::Ok,
+        })
+        .expect("made");
+
+    let fine = Work { at: 0, len: 48 };
+    assert_eq!(
+        core.make_object(5, 2, 4096, flags::TO_DEVICE, fine),
+        Err(RequestError::NoSuchContext),
+        "a context that is not there"
+    );
+    assert_eq!(
+        core.make_object(0, 1, 4096, flags::TO_DEVICE, fine),
+        Err(RequestError::ZeroId)
+    );
+    assert_eq!(
+        core.make_object(5, 1, 0, flags::TO_DEVICE, fine),
+        Err(RequestError::ObjectBytes)
+    );
+    assert_eq!(
+        core.make_object(5, 1, 1 << 30, flags::TO_DEVICE, fine),
+        Err(RequestError::ObjectBytes),
+        "past what this driver said it would make"
+    );
+    assert_eq!(
+        core.make_object(5, 1, 4096, flags::MAPPABLE, fine),
+        Err(RequestError::ObjectFlags),
+        "no direction at all"
+    );
+    assert_eq!(
+        core.make_object(5, 1, 4096, 1 << 31, fine),
+        Err(RequestError::ObjectFlags)
+    );
+    assert_eq!(
+        core.make_object(
+            5,
+            1,
+            4096,
+            flags::TO_DEVICE,
+            Work {
+                at: 0,
+                len: 1 << 30
+            }
+        ),
+        Err(RequestError::Work),
+        "a range past the work VMO"
+    );
+
+    assert!(core.make_object(5, 1, 4096, flags::TO_DEVICE, fine).is_ok());
+    // And a context with an object in it is not one to take away.
+    assert_eq!(core.drop_context(1), Err(RequestError::Busy));
+}
+
+/// An object the device would not let go of stays live, so the core never
+/// hands its memory out again. This is the display's rule, and it belongs
+/// to the core rather than to any one device.
+#[test]
+fn an_object_the_device_kept_is_never_reused() {
+    let mut core = session();
+    let _ = core.make_context(1, 0).expect("asked");
+    let _ = core
+        .receive(&Message::ContextMade {
+            context: 1,
+            status: Status::Ok,
+        })
+        .expect("made");
+    let _ = core
+        .make_object(5, 1, 4096, flags::TO_DEVICE, Work { at: 0, len: 48 })
+        .expect("asked");
+    let _ = core
+        .receive(&Message::ObjectMade {
+            object: 5,
+            status: Status::Ok,
+        })
+        .expect("made");
+
+    let _ = core.drop_object(5).expect("asked to go");
+    let _ = core
+        .receive(&Message::ObjectGone {
+            object: 5,
+            status: Status::DeviceRefused,
+        })
+        .expect("answered");
+    assert_eq!(
+        core.make_object(5, 1, 4096, flags::TO_DEVICE, Work { at: 0, len: 48 }),
+        Err(RequestError::InUse),
+        "the id is still spoken for, because the device may still hold it"
+    );
+
+    // Where the device did let go, the id comes back.
+    let _ = core
+        .make_object(6, 1, 4096, flags::TO_DEVICE, Work { at: 0, len: 48 })
+        .expect("asked");
+    let _ = core
+        .receive(&Message::ObjectMade {
+            object: 6,
+            status: Status::Ok,
+        })
+        .expect("made");
+    let _ = core.drop_object(6).expect("asked to go");
+    let _ = core
+        .receive(&Message::ObjectGone {
+            object: 6,
+            status: Status::Ok,
+        })
+        .expect("answered");
+    assert!(
+        core.make_object(6, 1, 4096, flags::TO_DEVICE, Work { at: 0, len: 48 })
+            .is_ok()
+    );
+}
+
+/// A submission and its wait are two separate things in flight, each
+/// answered once, and a command buffer of no bytes is nothing to run.
+#[test]
+fn a_fence_is_answered_once_for_each_thing_it_was_asked_about() {
+    let mut core = session();
+    let _ = core.make_context(1, 0).expect("asked");
+    let _ = core
+        .receive(&Message::ContextMade {
+            context: 1,
+            status: Status::Ok,
+        })
+        .expect("made");
+
+    assert_eq!(
+        core.submit(1, 7, Work { at: 0, len: 0 }),
+        Err(RequestError::Work),
+        "nothing to run"
+    );
+    let _ = core
+        .submit(1, 7, Work { at: 0, len: 64 })
+        .expect("submitted");
+    assert_eq!(
+        core.submit(1, 7, Work { at: 0, len: 64 }),
+        Err(RequestError::InUse),
+        "one fence, one submission"
+    );
+    // The wait is its own thing in flight, under the same fence.
+    let _ = core.wait(1, 7).expect("waited");
+    assert_eq!(core.wait(1, 7), Err(RequestError::InUse));
+
+    assert_eq!(
+        core.receive(&Message::Submitted {
+            fence: 7,
+            status: Status::Ok
+        }),
+        Ok(Event::Submitted {
+            fence: 7,
+            status: Status::Ok
+        })
+    );
+    assert_eq!(
+        core.receive(&Message::Waited {
+            fence: 7,
+            status: Status::TimedOut
+        }),
+        Ok(Event::Waited {
+            fence: 7,
+            status: Status::TimedOut
+        })
+    );
+    // And neither is answered twice.
+    assert_eq!(
+        core.receive(&Message::Waited {
+            fence: 7,
+            status: Status::Ok
+        }),
+        Err(Refusal::Protocol)
+    );
+}
+
+/// STOPPED is only ever an answer to STOP.
+#[test]
+fn stopped_is_only_an_answer_to_stop() {
+    let mut core = session();
+    assert_eq!(core.receive(&Message::Stopped), Err(Refusal::Protocol));
+
+    let mut core = session();
+    assert_eq!(core.stop(), Ok(Message::Stop));
+    assert_eq!(
+        core.make_context(1, 0),
+        Err(RequestError::Closed),
+        "nothing more is asked after STOP"
+    );
+    assert_eq!(core.receive(&Message::Stopped), Ok(Event::Stopped));
+}
+
+/// A HELLO the core refuses never becomes a session at all.
+#[test]
+fn a_refused_hello_is_no_session() {
+    let mut told = hello();
+    told.features = features::FENCES;
+    assert_eq!(
+        Session::accept(&told, &Hello::HANDLE_RIGHTS, 1 << 20).map(|_| ()),
+        Err(Refusal::Features)
+    );
+}

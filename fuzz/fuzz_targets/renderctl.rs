@@ -20,13 +20,21 @@
 //!    render node needs, and the object limit is inside the protocol's.
 //! 3. **A work range that fits lies inside the VMO**, and one that does not
 //!    is refused whatever arithmetic it was built from.
+//! 4. **The session never contradicts itself.** Driven with requests and
+//!    replies from the input: an id the core was given back can be asked
+//!    for again and one the device may still hold cannot; a broken session
+//!    stays broken and answers nothing; and the number of things in flight
+//!    never passes the fixed capacity, since the kernel allocates none of
+//!    it.
 
 #![no_main]
 
 use ferrix_native_abi::rights::Rights;
 use ferrix_renderctl::message::{
-    Hello, MAX_OBJECT_BYTES, MAX_WORK_BYTES, Message, NAME_BYTES, VERSION, Work, features,
+    Hello, MAX_OBJECT_BYTES, MAX_WORK_BYTES, Message, NAME_BYTES, Status, VERSION, Work, features,
+    flags,
 };
+use ferrix_renderctl::session::{MAX_IN_FLIGHT, RequestError, Session};
 use libfuzzer_sys::fuzz_target;
 
 fn u32_at(bytes: &[u8], at: usize) -> u32 {
@@ -80,6 +88,82 @@ fuzz_target!(|bytes: &[u8]| {
         assert!(range.len <= MAX_WORK_BYTES);
         let end = u64::from(range.at) + u64::from(range.len);
         assert!(end <= vmo);
+    }
+
+    // 4. The session, driven by the input.
+    let work = 1 << 16;
+    let named = Hello::named("virtio_gpu").expect("a name");
+    let told = Hello {
+        version: VERSION,
+        location: 0,
+        name: named,
+        features: features::SUBMIT | features::FENCES,
+        capset: 2,
+        object_max: 1 << 20,
+    };
+    let rights = [Rights(Rights::WRITE.0 | Rights::TRANSFER.0)];
+    if let Ok(mut core) = Session::accept(&told, &rights, work) {
+        let mut in_flight = 0usize;
+        for step in bytes.iter().take(256) {
+            let id = u32::from(step >> 4) + 1;
+            let fence = u64::from(*step);
+            let was_broken = core.is_broken();
+            match step & 0x7 {
+                0 => drop(core.make_context(id, 0)),
+                1 => drop(core.drop_context(id)),
+                2 => drop(core.make_object(
+                    id,
+                    u32::from(step >> 5),
+                    4096,
+                    flags::TO_DEVICE,
+                    Work { at: 0, len: 16 },
+                )),
+                3 => drop(core.drop_object(id)),
+                4 => {
+                    if core.submit(id, fence, Work { at: 0, len: 16 }).is_ok() {
+                        in_flight += 1;
+                    }
+                }
+                5 => {
+                    if core.wait(id, fence).is_ok() {
+                        in_flight += 1;
+                    }
+                }
+                6 => {
+                    let reply = match step >> 3 & 3 {
+                        0 => Message::ContextMade {
+                            context: id,
+                            status: Status::Ok,
+                        },
+                        1 => Message::ObjectMade {
+                            object: id,
+                            status: Status::Ok,
+                        },
+                        2 => Message::Submitted {
+                            fence,
+                            status: Status::Ok,
+                        },
+                        _ => Message::Waited {
+                            fence,
+                            status: Status::Ok,
+                        },
+                    };
+                    if core.receive(&reply).is_ok()
+                        && matches!(reply, Message::Submitted { .. } | Message::Waited { .. })
+                    {
+                        in_flight -= 1;
+                    }
+                }
+                _ => drop(core.stop()),
+            }
+            // A broken session stays broken and takes nothing more.
+            if was_broken {
+                assert!(core.is_broken());
+                assert_eq!(core.make_context(1, 0), Err(RequestError::Closed));
+            }
+            // The capacity is fixed, because nothing here allocates.
+            assert!(in_flight <= MAX_IN_FLIGHT);
+        }
     }
 
     // And a name made from the input is either refused or reads back.
