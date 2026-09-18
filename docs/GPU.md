@@ -133,18 +133,37 @@ Two things a person picking this up should know:
   declines to ask for a set larger than it rather than have the device
   write past the end.
 
-**A context is made on the device** through the seam §3.3 describes:
+**A context and a resource are made on the device** through the seam §3.3
+describes:
 
     render   renderD128 is `virtio_gpu`, version 1, capset 1, objects to 64 MiB
     render   renderD128 made context 1 on the device
+    render   renderD128 made object 1 of 4096 bytes in context 1
+    render   renderD128 gave object 1 back
 
-`kernel::render` names no virtio type; what turns `MAKE_CTX` into
-`CTX_CREATE` is thirty lines in `user/gpu`, which is the adapter a second
-GPU replaces.
+`kernel::render` names no virtio type. What turns `MAKE_CTX` into
+`CTX_CREATE`, `MAKE_OBJ` into `RESOURCE_CREATE_3D` with
+`CTX_ATTACH_RESOURCE` behind it, and `DROP_OBJ` into `RESOURCE_UNREF`, is a
+hundred lines in `user/gpu`: the adapter a second GPU replaces.
 
-**What is left of step 1** is `RESOURCE_CREATE_3D` and `SUBMIT_3D` against
-the device, which need the work VMO and the objects the node hands out --
-in other words they are step 2's, and that is where they belong.
+**READY carries the work VMO**, as `Ready::HANDLE_RIGHTS` always said it
+would: a megabyte the core owns, handed over `READ | TRANSFER` with the
+core's port beside it. An object's description and a command buffer are
+ranges of it, and the core writes neither.
+
+**The description the core sent was empty, and that is the seam working.**
+`MAKE_OBJ` said four thousand and ninety-six bytes and nothing about what a
+resource is; the driver chose `PIPE_BUFFER`, `VIRGL_FORMAT_R8_UNORM` and
+`VIRGL_BIND_VERTEX_BUFFER` itself. Those numbers come from Mesa's
+`p_defines.h` and virglrenderer's `virgl_hw.h`, because virgl validates them
+and `libs/virtio` defines none of them -- they are the renderer's language,
+not virtio's. A core that wrote them would be a core the NVIDIA path could
+not reuse.
+
+**What is left of step 1** is `SUBMIT_3D` against the device. It needs a
+command buffer, and a command buffer is virgl's own language: the encoder is
+step 3b's, and until the render node lets a program write one there is
+nobody to write it. The core will not invent one, for the reason §3.3 gives.
 
 ### 3.3 The render node's seam, and what Path B inherits (2026-09-18)
 

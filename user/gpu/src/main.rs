@@ -501,6 +501,12 @@ fn render(
     // QEMU's header.
     let mut bytes = [0_u8; RENDER_MAX_BYTES];
     let mut handles = [Handle::INVALID; 2];
+    // READY's work VMO, kept for as long as the conversation lasts: an
+    // object's description and a command buffer are ranges of it, and the
+    // core writes them there rather than into a message. The core's port,
+    // which comes beside it, is for fences and is closed until something
+    // waits on one.
+    let mut work: Option<Vmo<Kernel>> = None;
     loop {
         let _ = control
             .wait_one(Signals::READABLE | Signals::PEER_CLOSED, Deadline::Never)
@@ -508,8 +514,15 @@ fn render(
         let Ok(received) = control.read(&mut bytes, &mut handles) else {
             return Ok(());
         };
-        for handle in handles.iter_mut().take(received.handles) {
-            drop(OwnedHandle::from_raw(Kernel, *handle));
+        let taken = RenderMessage::decode(bytes.get(..received.bytes).unwrap_or_default())
+            .is_some_and(|message| matches!(message, RenderMessage::Ready(_)))
+            && received.handles == 2;
+        for (index, handle) in handles.iter_mut().enumerate().take(received.handles) {
+            let owned = OwnedHandle::from_raw(Kernel, *handle);
+            match (taken, index) {
+                (true, 0) => work = Some(Vmo::from_owned(owned)),
+                _ => drop(owned),
+            }
             *handle = Handle::INVALID;
         }
         let Some(message) = RenderMessage::decode(bytes.get(..received.bytes).unwrap_or_default())
@@ -520,28 +533,10 @@ fn render(
             RenderMessage::Ready(_) => continue,
             RenderMessage::Refused(_) => return Ok(()),
             RenderMessage::MakeContext { context, capset } => {
-                // virtio's own: the id rides in the header, and
-                // `context_init` carries the capability set.
-                let made = run_command_in(
-                    driver,
-                    port,
-                    gpu::Context {
-                        id: context,
-                        ..gpu::Context::NONE
-                    },
-                    &Command::CtxCreate {
-                        capset: u8::try_from(capset).unwrap_or(0),
-                        name: "ferrix",
-                    },
-                )?;
-                RenderMessage::ContextMade {
-                    context,
-                    status: match made {
-                        Ok(_) => rc::Status::Ok,
-                        Err(_) => rc::Status::DeviceRefused,
-                    },
-                }
+                make_context(driver, port, context, capset)?
             }
+            RenderMessage::MakeObject(make) => make_object(driver, port, work.as_ref(), &make)?,
+            RenderMessage::DropObject { object } => drop_object(driver, port, object)?,
             RenderMessage::Stop => RenderMessage::Stopped,
             _ => return Ok(()),
         };
@@ -555,9 +550,185 @@ fn render(
     }
 }
 
+/// Make one rendering context on the device.
+///
+/// virtio's own shape: the id rides in the header, and `context_init`
+/// carries the capability set.
+fn make_context(
+    driver: &mut Gpu,
+    port: &Port<Kernel>,
+    context: u32,
+    capset: u32,
+) -> Result<ferrix_renderctl::message::Message, Step> {
+    let made = run_command_in(
+        driver,
+        port,
+        gpu::Context {
+            id: context,
+            ..gpu::Context::NONE
+        },
+        &Command::CtxCreate {
+            capset: u8::try_from(capset).unwrap_or(0),
+            name: "ferrix",
+        },
+    )?;
+    Ok(ferrix_renderctl::message::Message::ContextMade {
+        context,
+        status: status_of(made),
+    })
+}
+
+/// Give one object back to the device.
+fn drop_object(
+    driver: &mut Gpu,
+    port: &Port<Kernel>,
+    object: u32,
+) -> Result<ferrix_renderctl::message::Message, Step> {
+    let gone = run_command(
+        driver,
+        port,
+        &Command::ResourceUnref {
+            resource_id: object,
+        },
+    )?;
+    Ok(ferrix_renderctl::message::Message::ObjectGone {
+        object,
+        status: status_of(gone),
+    })
+}
+
+/// Make one object on the device: the resource itself, and the context's
+/// right to name it.
+///
+/// This is the device-specific half of the adapter, and the whole of what a
+/// second GPU rewrites (`docs/GPU.md` §3.3). The core said how many bytes it
+/// wants and nothing else; what a resource *is* on this device is known
+/// here and nowhere above.
+fn make_object(
+    driver: &mut Gpu,
+    port: &Port<Kernel>,
+    work: Option<&Vmo<Kernel>>,
+    make: &ferrix_renderctl::message::MakeObject,
+) -> Result<ferrix_renderctl::message::Message, Step> {
+    use ferrix_renderctl::message::Message as RenderMessage;
+
+    // An empty description is the core asking for a plain buffer; a
+    // description of its own will be the render node's, once a program can
+    // write one.
+    let (target, format, bind) = described(work, make.describe);
+    let made = run_command_in(
+        driver,
+        port,
+        gpu::Context {
+            id: make.context,
+            ..gpu::Context::NONE
+        },
+        &Command::ResourceCreate3d {
+            resource_id: make.object,
+            target,
+            format,
+            bind,
+            size: gpu::Box3d {
+                x: 0,
+                y: 0,
+                z: 0,
+                width: u32::try_from(make.bytes).unwrap_or(u32::MAX),
+                height: 1,
+                depth: 1,
+            },
+            array_size: 1,
+            last_level: 0,
+            samples: 0,
+            flags: 0,
+        },
+    )?;
+    // A resource a context may name has to be given to it: a 3D command
+    // naming one that was not is refused by the device.
+    let attached = match (&made, make.context) {
+        (Ok(_), context) if context != 0 => run_command_in(
+            driver,
+            port,
+            gpu::Context {
+                id: context,
+                ..gpu::Context::NONE
+            },
+            &Command::CtxAttachResource {
+                resource_id: make.object,
+            },
+        )?,
+        _ => Ok(Response::NoData),
+    };
+    Ok(RenderMessage::ObjectMade {
+        object: make.object,
+        status: status_of(made.and(attached)),
+    })
+}
+
 /// The largest object this driver will make: what one virtio-gpu resource
 /// may reasonably be, and far inside what the protocol allows.
 const MAX_OBJECT_BYTES: u64 = 64 * 1024 * 1024;
+
+/// virgl's `PIPE_BUFFER`, from Mesa's `p_defines.h`: a resource with no
+/// shape, which is what bytes on their way to a shader are.
+const PIPE_BUFFER: u32 = 0;
+
+/// virgl's `VIRGL_FORMAT_R8_UNORM`, from virglrenderer's `virgl_hw.h`: one
+/// byte a pixel, which is how a buffer's bytes are counted.
+const VIRGL_FORMAT_R8_UNORM: u32 = 64;
+
+/// virgl's `VIRGL_BIND_VERTEX_BUFFER`, from the same header. virgl numbers
+/// some of its bind bits differently from Mesa's `PIPE_BIND_*`, so they are
+/// taken from virgl's header and not from gallium's.
+const VIRGL_BIND_VERTEX_BUFFER: u32 = 1 << 4;
+
+/// What to make of a `MAKE_OBJ`'s description: the target, format and bind
+/// words for the device.
+///
+/// An empty description is the core saying "so many bytes, and the rest is
+/// yours", which is a plain buffer. A description of its own is four
+/// little-endian words -- target, format, bind, and a reserved zero -- which
+/// is what the render node will write once a program can ask for a texture.
+/// Anything shorter is treated as empty rather than half-read.
+fn described(
+    work: Option<&Vmo<Kernel>>,
+    describe: ferrix_renderctl::message::Work,
+) -> (u32, u32, u32) {
+    const DESCRIBED_BYTES: usize = 16;
+    let plain = (PIPE_BUFFER, VIRGL_FORMAT_R8_UNORM, VIRGL_BIND_VERTEX_BUFFER);
+    if describe.len as usize != DESCRIBED_BYTES {
+        return plain;
+    }
+    let Some(work) = work else {
+        return plain;
+    };
+    // Three words and a reserved zero, each read as its own four bytes:
+    // indexing one buffer would be four places this could panic on a
+    // description the node wrote wrong.
+    let mut word = [0_u8; 4];
+    let mut at = u64::from(describe.at);
+    let mut next = || {
+        let read = work.read(&mut word, at).is_ok();
+        at = at.saturating_add(4);
+        read.then(|| u32::from_le_bytes(word))
+    };
+    match (next(), next(), next()) {
+        (Some(target), Some(format), Some(bind)) => (target, format, bind),
+        _ => plain,
+    }
+}
+
+/// A device's answer, as the render protocol says it.
+fn status_of(answer: Result<Response, Refusal>) -> ferrix_renderctl::message::Status {
+    use ferrix_renderctl::message::Status;
+    match answer {
+        Ok(_) => Status::Ok,
+        Err(Refusal::OutOfMemory) => Status::OutOfMemory,
+        Err(Refusal::InvalidParameter | Refusal::InvalidResourceId | Refusal::InvalidContextId) => {
+            Status::Invalid
+        }
+        Err(_) => Status::DeviceRefused,
+    }
+}
 
 /// [`run_command`] for a command that belongs to a context.
 fn run_command_in(

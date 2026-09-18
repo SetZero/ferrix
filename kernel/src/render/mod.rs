@@ -18,23 +18,29 @@
 //! nobody asked is caught before the kernel acts on it.
 
 use alloc::sync::Arc;
+use alloc::vec;
 use alloc::vec::Vec;
 use core::convert::Infallible;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 use ferrix_blkring::identity::Location;
+use ferrix_bootinfo::PAGE_SIZE;
 use ferrix_native_abi::rights::Rights;
 use ferrix_native_abi::signals::Signals;
 use ferrix_native_abi::types::CHANNEL_MAX_HANDLES;
-use ferrix_renderctl::message::{MAX_BYTES, Message, Ready, Refusal, Status, VERSION, Work};
+use ferrix_renderctl::message::{
+    MAX_BYTES, Message, Ready, Refusal, Status, VERSION, WORK_VMO_RIGHTS, Work, flags,
+};
 use ferrix_renderctl::session::{Event, Session};
 
 use crate::device::DeviceNode;
 use crate::object::channel::{ChannelMessage, Endpoint, ReadError};
+use crate::object::port::Port;
 use crate::object::{Object, Transfer};
 use crate::sched;
 use crate::sync::SpinLock;
 use crate::timer;
+use crate::user::vmo::Vmo;
 
 /// How much work VMO one renderer gets: command buffers and object
 /// descriptions on their way to the device.
@@ -179,19 +185,28 @@ fn accept(start: &Start, message: &ChannelMessage) -> Result<(Session, u32), Ref
     }
     let renderer = NEXT_RENDERER.fetch_add(1, Ordering::Relaxed);
     let renderer = u32::try_from(renderer).unwrap_or(128);
-    // READY without the work VMO or the core's port yet: nothing submits a
-    // command buffer until the node above is written, and a handle handed
-    // over now would be one the driver could not be told the meaning of.
-    // The driver's HELLO is what this conversation is for today.
-    if !send(
-        &start.control,
-        &Message::Ready(Ready {
-            renderer,
-            work_bytes: 0,
-        }),
-    ) {
-        return Err(Refusal::Malformed);
-    }
+    // READY carries the two handles `Ready::HANDLE_RIGHTS` fixes: the work
+    // VMO, which is where an object's description and a command buffer live
+    // on their way to the device, and the core's port, which is how a driver
+    // will say a fence has passed. The VMO is the core's: it hands out ranges
+    // of it and never reads what is written there (`docs/GPU.md` §3.3).
+    let work = Vmo::new_anonymous(WORK_BYTES / PAGE_SIZE);
+    let core_port = Port::new();
+    let ready = Message::Ready(Ready {
+        renderer,
+        work_bytes: WORK_BYTES,
+    })
+    .encode()
+    .as_bytes()
+    .to_vec();
+    let handed = vec![
+        (Object::Vmo(work), WORK_VMO_RIGHTS),
+        (Object::Port(core_port), Rights::WRITE),
+    ];
+    start
+        .control
+        .write(ready, 2, || Ok::<Vec<Transfer>, Infallible>(handed))
+        .map_err(|_| Refusal::Malformed)?;
     crate::console::println!(
         "  render   renderD{renderer} is `{}`, version {VERSION}, capset {}, objects to {} MiB",
         session.name(),
@@ -231,12 +246,87 @@ fn prove(start: &Start, session: &mut Session, renderer: u32) {
                 crate::console::println!(
                     "  render   renderD{renderer} made context {context} on the device"
                 );
+                prove_object(start, session, renderer, context);
             } else {
                 crate::console::println!("  render   the device refused a context: {status:?}");
             }
         }
         Ok(_) => {}
         Err(refusal) => refuse(&start.control, refusal),
+    }
+}
+
+/// How big the object the proof asks for is: one page, which is enough to be
+/// a real resource on the device and small enough to cost nothing.
+const PROOF_OBJECT_BYTES: u64 = PAGE_SIZE;
+
+/// Make an object in `context` and take it away again.
+///
+/// This is `prove`'s second half and the rest of `docs/GPU.md` step 1:
+/// `RESOURCE_CREATE_3D` against the device rather than against QEMU's
+/// header. The description is **empty** -- `Work { at: 0, len: 0 }` -- and
+/// that is the point of the seam: the core says how many bytes it wants and
+/// nothing about what the resource is, and the driver, which is the only
+/// side that knows virgl, chooses the target, format and bind words. A core
+/// that wrote them would be a core an NVIDIA driver could not reuse.
+fn prove_object(start: &Start, session: &mut Session, renderer: u32, context: u32) {
+    let object = 1;
+    let Ok(ask) = session.make_object(
+        object,
+        context,
+        PROOF_OBJECT_BYTES,
+        flags::TO_DEVICE,
+        Work { at: 0, len: 0 },
+    ) else {
+        return;
+    };
+    match exchange(start, session, &ask) {
+        Some(Event::ObjectMade {
+            status: Status::Ok, ..
+        }) => {
+            crate::console::println!(
+                "  render   renderD{renderer} made object {object} of {PROOF_OBJECT_BYTES} bytes in context {context}"
+            );
+        }
+        Some(Event::ObjectMade { status, .. }) => {
+            crate::console::println!("  render   the device refused an object: {status:?}");
+            return;
+        }
+        _ => return,
+    }
+    let Ok(ask) = session.drop_object(object) else {
+        return;
+    };
+    match exchange(start, session, &ask) {
+        Some(Event::ObjectGone {
+            status: Status::Ok, ..
+        }) => {
+            crate::console::println!("  render   renderD{renderer} gave object {object} back");
+        }
+        Some(Event::ObjectGone { status, .. }) => {
+            // The device may still hold the backing, so the core keeps the
+            // memory rather than handing it out again: `docs/DISPLAY.md`
+            // §2.2's rule, which belongs to the core and not to virtio.
+            crate::console::println!("  render   the device kept an object: {status:?}");
+        }
+        _ => {}
+    }
+}
+
+/// Send `ask` and take the one reply the session is waiting for.
+fn exchange(start: &Start, session: &mut Session, ask: &Message) -> Option<Event> {
+    if !send(&start.control, ask) {
+        return None;
+    }
+    let deadline = timer::now_nanos().saturating_add(REPLY_PATIENCE_NANOS);
+    let reply = receive(&start.control, deadline)?;
+    let message = Message::decode(&reply.bytes)?;
+    match session.receive(&message) {
+        Ok(event) => Some(event),
+        Err(refusal) => {
+            refuse(&start.control, refusal);
+            None
+        }
     }
 }
 
