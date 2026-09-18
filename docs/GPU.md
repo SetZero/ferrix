@@ -55,7 +55,7 @@ In dependency order, with sizes in story points:
 | # | what | points |
 |---|---|---|
 | 1 | **virtio-gpu 3D in the ring-3 driver.** `VIRTIO_GPU_F_VIRGL` and `CONTEXT_INIT` negotiated, `GET_CAPSET_INFO`/`GET_CAPSET`, `CTX_CREATE`/`CTX_DESTROY`/`CTX_ATTACH_RESOURCE`, `RESOURCE_CREATE_3D`, `SUBMIT_3D`, `TRANSFER_TO_HOST_3D`/`FROM_HOST_3D`, and fences. `libs/virtio::gpu` already has the 2D commands and their fuzz target, and this extends both. **Mostly done -- §3.2.** | 13 |
-| 2 | **A render node and the `virtgpu` ioctls.** *Begun: `libs/renderctl` and `kernel::render` are written, §3.3; the node, the handle table and the work VMO are what is left.* `/dev/dri/renderD128`, GEM handles, `DRM_IOCTL_VIRTGPU_GETPARAM`, `GET_CAPS`, `CONTEXT_INIT`, `RESOURCE_CREATE`, `RESOURCE_INFO`, `MAP`, `EXECBUFFER`, `TRANSFER_TO_HOST`/`FROM_HOST` and `WAIT`, in `libs/linux-abi` from a committed probe as every other ABI table is. And **scanout of a 3D resource**, so the finished frame never leaves the GPU: no per-frame transfer at all, where today's best is the damaged rectangles. | 13 |
+| 2 | **A render node and the `virtgpu` ioctls.** *Begun: `libs/renderctl`, `kernel::render`, the ABI table and the node itself are written, and a program opens it -- §3.4. The handle table, the calls that need an object, and scanout are what is left.* `/dev/dri/renderD128`, GEM handles, `DRM_IOCTL_VIRTGPU_GETPARAM`, `GET_CAPS`, `CONTEXT_INIT`, `RESOURCE_CREATE`, `RESOURCE_INFO`, `MAP`, `EXECBUFFER`, `TRANSFER_TO_HOST`/`FROM_HOST` and `WAIT`, in `libs/linux-abi` from a committed probe as every other ABI table is. And **scanout of a 3D resource**, so the finished frame never leaves the GPU: no per-frame transfer at all, where today's best is the damaged rectangles. | 13 |
 | 5 | **The host half, in xtask.** `-device virtio-gpu-gl` and a GL display where QEMU has them, asked for as `window.rs` asks for a display today, with the 2D device otherwise. The gate host's QEMU rebuilt with OpenGL and virglrenderer, and `egl-headless` for judged boots. GPU output is not byte-exact across drivers, so a judged GPU boot compares within a stated tolerance, or against a software GL pinned on the gate host; the software renderer's images stay byte-exact. **Judging one needs a way to read its pixels that is not `screendump` -- see §3.1.** | 5 |
 | 3b | **A GPU renderer for the compositor, in Rust.** A `compositor/virgl` crate that encodes virgl's command stream -- object creation, state, `draw_vbo`, resource transfers -- with shaders as the TGSI text virgl takes. Hyprland's effects are about eight shaders: the two blur kernels, `blurprepare`, `blurFinish`, the rounded texture, the border gradient, the shadow. `compositor/render` gains a renderer trait with the software renderer as the fallback the roadmap already requires -- the compositor is never GPU-only. Clients stay `wl_shm`; their damaged rectangles are uploaded as textures. | 21 |
 | 4 | **`zwp_linux_dmabuf` and a GBM-shaped allocator.** Only once clients render on the GPU themselves. Not needed for 3b, and deferred with 3a. | 8 |
@@ -162,8 +162,10 @@ not reuse.
 
 **What is left of step 1** is `SUBMIT_3D` against the device. It needs a
 command buffer, and a command buffer is virgl's own language: the encoder is
-step 3b's, and until the render node lets a program write one there is
-nobody to write it. The core will not invent one, for the reason §3.3 gives.
+step 3b's. A program can open the render node now (§3.4), so what is missing
+is no longer somewhere to write one from -- it is the encoder itself, and the
+`EXECBUFFER` path under it. The core will not invent a command buffer, for
+the reason §3.3 gives.
 
 ### 3.3 The render node's seam, and what Path B inherits (2026-09-18)
 
@@ -218,6 +220,68 @@ ring-3 placement, and the gates. What it adds is one more implementation of
 **What it does not inherit** is the command encoder: `compositor/virgl`
 (step 3b) speaks virgl, and an NVIDIA path needs its own, or Mesa (§3a).
 That is the same boundary Linux draws and it is drawn here on purpose.
+
+### 3.4 Where step 2 stands (2026-09-18)
+
+**The ABI table is written down**, in `libs/linux-abi/src/virtgpu.rs`, from
+`probe/virtgpu.c` as every other table in that crate is: every `virtgpu`
+ioctl, parameter, context and execbuffer flag, and twelve structure layouts,
+printed from `<drm/virtgpu_drm.h>` at both widths and pinned by tests. It is
+probed apart from `drm.c` because each test module requires every line of
+the probe file it reads to be claimed by that module, and because a driver's
+header is not DRM's. Nothing here has a width: these structures carry their
+user pointers as `__u64`, so both probe files are identical and a test says
+so, rather than listing exceptions the way `drm::Version` must.
+
+**The renderer outlives its proof.** `kernel::render` used to prove a
+context and an object and let its task return; a node's ioctls arrive later,
+from whichever process opened it, so a `Renderer` is now published and
+served -- replies taken off the channel, judged by the session, left where
+the request waiting for one will find them. The proof runs before it is
+published, so nothing can open the node while the core is still asking its
+own questions.
+
+**That cost the display, and the fix is worth writing down.** A card has two
+conversations on one thread and the driver served the render one in a loop
+that ended only when the core closed the channel -- which the core used to
+do, by returning. With the renderer kept alive the display was never served
+again and the compositor timed out. The driver now takes render requests
+from its own event loop, between the display's: the device runs one command
+at a time, so a render command goes only when the pipeline is idle and
+nothing is in flight. Underneath was an older bug: a command waiting on the
+device dropped every packet that was not its interrupt, while `wait_async`
+delivers one once, so a display message arriving during the render proof was
+a wakeup nobody would ever hear again. Such packets are kept and given back.
+
+**The node is in `/dev/dri`**, and a program opens it:
+
+    render: renderD128 virtio_gpu 3d 1 capsets 0x2
+
+It takes any number of opens, unlike `card<N>`, which takes one: a render
+node exists so that a client can render without being the display's master,
+which is why §3.3 puts the handle table at the open. `DRM_IOCTL_VERSION`
+reports the driver's own name, from its HELLO, because that is what
+userspace picks a back end by; `VIRTGPU_GETPARAM` is answered from the HELLO
+too, so neither call wakes the driver. The two display boots are a pair and
+each is the other's control: with `--gl` the node must be there and name its
+driver, without it there is none and the program must say so.
+
+**What is left, and what is in the way of each.**
+
+* **The handle table, `RESOURCE_CREATE` and `RESOURCE_INFO`.** Nothing is in
+  the way: the core needs an object-id counter and the open needs a table of
+  its own, and `MAKE_OBJ` already works -- it is what the proof does.
+* **`MAP`, and mapping an object into a process.** Blocked on the protocol:
+  `MakeObject` carries a size and no backing, and the driver attaches none,
+  so an object has no guest pages to map. `flags::MAPPABLE` is defined and
+  nothing implements it. Deciding where an object's backing comes from is
+  the next seam question, not an implementation detail.
+* **`GET_CAPS`.** The core knows a capability set's *number*, not its bytes;
+  the driver read the bytes. Either the core asks for them or the node
+  passes the question down.
+* **`EXECBUFFER`, the transfers and `WAIT`.** They need step 3b's encoder to
+  have something to say, and `SUBMIT`/`WAIT` are already in the protocol.
+* **Scanout of a 3D resource**, which is the other half of this row.
 
 ### 3a, which was not chosen for the compositor
 
