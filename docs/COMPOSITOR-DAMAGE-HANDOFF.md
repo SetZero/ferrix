@@ -402,14 +402,16 @@ Not part of this handoff, but the next person will ask.
   `wp_linux_drm_syncobj_manager_v1`, `wl_drm`, `wp_color_manager_v1`, and
   the five `windowrule` effects that only mean something with a GPU
   (`immediate`, `no_vrr`, `no_auto_hdr`, `tonemap`, `force_rgbx`).
-- **The pointer-driven options.** `dwindle:precise_mouse_move` and
-  `dwindle:permanent_direction_override`, which are both about a window
-  being dragged rather than opened.
+- **`dwindle:precise_mouse_move`**, which decides where a *dragged* window
+  lands when it is dropped back into the tiling. Nothing drops one back in
+  -- a drag floats a tiled window and leaves it floating, where Hyprland
+  re-tiles it -- so there is no moment for the option to decide, and that
+  drag is what would have to be written first.
 
   The layout is given the pointer now (`State::set_pointer`), and with it
   `dwindle:use_active_for_splits`, `dwindle:force_split = 0` -- Hyprland's
-  *default*, which this tree did not obey -- and `dwindle:smart_split`
-  (2026-09-18). `general:snap:*` is done (2026-09-18) -- `performSnap`, windows and
+  *default*, which this tree did not obey -- and `dwindle:smart_split` and
+  `dwindle:permanent_direction_override` (2026-09-18). `general:snap:*` is done (2026-09-18) -- `performSnap`, windows and
   monitor edges, `respect_gaps` and the corner pass -- except
   `border_overlap`, which decides whether a window's shadow may hang over
   the screen's edge and has nothing to decide where a rectangle is the
@@ -425,7 +427,14 @@ Not part of this handoff, but the next person will ask.
   pass: `xray` reads what is behind the frame being drawn, and
   `no_screen_share` means drawing the frame again without one surface in
   it. Everything else once on that list has been done.
-- **`persistent_size`**, which needs state on disk.
+- **`persistent_size`**, which does *not* need state on disk: Hyprland's is
+  an in-memory cache (`CFloatStateCache`) keyed by class, title and xdg tag,
+  written when a floating window closes and read when a matching one opens.
+  What it needs here is a window-close path. `hyprix` has one and it only
+  fires when the whole *connection* goes -- the "a connection that ended
+  takes its windows with it" loop in `state.rs`. A client that destroys one
+  `xdg_toplevel` and stays alive is not handled anywhere, which is worth
+  looking at on its own account and is what this option would hang off.
 - **`hyprland-input-capture-v1`** (its whole conversation is a `libei`
   socket, and there is no `libei`) and **`hyprland-ctm-control-v1`** (its
   vendored XML has a `<description>` with no `summary`, which this

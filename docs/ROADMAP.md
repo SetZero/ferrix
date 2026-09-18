@@ -5478,8 +5478,10 @@ window until the dwindle tree would move a split. `general:snap` followed the sa
 drag the border grab had just built. Dwindle's cursor-placed splits followed:
 the layout is given the pointer, and `use_active_for_splits`,
 `force_split = 0` and `smart_split` read it. What is left of it is
-`precise_mouse_move` and `permanent_direction_override`, `xray` and
-`no_screen_share`, which need a second pass, and `persistent_size`. The
+`precise_mouse_move`, which waits on dropping a dragged window back into
+the tiling; `xray` and `no_screen_share`, which need a second pass; and
+`persistent_size`, which waits on a close path that fires for one window
+rather than for a whole connection. The
 frame rate the exit asks for under the GPU path comes with the GPU path.
 
 ---

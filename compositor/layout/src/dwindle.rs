@@ -33,9 +33,11 @@
 //! compositor that has seen no pointer gets the behaviour these had before
 //! there was one -- the focused window's box, and the second half.
 //!
-//! Where it departs from Hyprland: `precise_mouse_move`,
-//! `permanent_direction_override`, `split_bias` and pseudotiling are not
-//! implemented. `dwindle:smart_resizing` is, and is the only behaviour: it
+//! Where it departs from Hyprland: `precise_mouse_move`, which decides
+//! where a *dragged* window lands when it is dropped back into the tiling,
+//! and nothing here drops one back in -- a drag floats a tiled window and
+//! leaves it floating -- so there is no moment for it to decide. `split_bias`
+//! and pseudotiling are not implemented. `dwindle:smart_resizing` is, and is the only behaviour: it
 //! is Hyprland's default and the setting is not read, so turning it off
 //! changes nothing.
 
@@ -491,8 +493,17 @@ impl Dwindle {
                 .or_else(|| leaves(&root).last().copied())
         };
         if let Some(target) = target {
-            // `layoutmsg preselect` names the side for one window only.
-            let place = match (self.preselect.take(), cursor) {
+            // `layoutmsg preselect` names the side for one window, or --
+            // with `dwindle:permanent_direction_override` -- for every
+            // window until it is cleared. Hyprland resets its
+            // `m_overrideDirection` after one window unless the option is
+            // on, and `preselect none` clears it either way.
+            let chosen = if settings.dwindle.permanent_direction_override {
+                self.preselect
+            } else {
+                self.preselect.take()
+            };
+            let place = match (chosen, cursor) {
                 (Some(direction), _) => Place::Toward(direction),
                 (None, Some((x, y))) if settings.dwindle.smart_split => Place::Quadrant(x, y),
                 (None, Some((x, y))) if settings.dwindle.force_split == ForceSplit::Auto => {

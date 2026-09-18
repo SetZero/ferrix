@@ -27,8 +27,7 @@
 //!
 //! What is not handled yet: `dwindle:pseudotile` (the option is left unread
 //! and every tiled window fills its slot), `scrolling:direction` other than
-//! `right`, the dwindle options `precise_mouse_move` and
-//! `permanent_direction_override`, resizing in the master and scrolling
+//! `right`, `dwindle:precise_mouse_move`, resizing in the master and scrolling
 //! layouts, window selectors as dispatcher arguments, and `movewindow` on a
 //! floating window, which in Hyprland pushes it against the monitor's edge
 //! and here does nothing.

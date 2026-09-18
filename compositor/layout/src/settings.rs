@@ -203,6 +203,10 @@ pub struct DwindleSettings {
     /// new window takes, rather than the half, so it decides the split's
     /// direction as well as its side.
     pub smart_split: bool,
+    /// `dwindle:permanent_direction_override`: `layoutmsg preselect` keeps
+    /// naming the side for every window until it is cleared, rather than
+    /// for the next one only.
+    pub permanent_direction_override: bool,
 }
 
 /// The master layout's options.
@@ -462,6 +466,9 @@ impl Settings {
                     .clamp(0.1, 1.9),
                 use_active_for_splits: config.bool("dwindle:use_active_for_splits").unwrap_or(true),
                 smart_split: config.bool("dwindle:smart_split").unwrap_or(false),
+                permanent_direction_override: config
+                    .bool("dwindle:permanent_direction_override")
+                    .unwrap_or(false),
             },
             master: MasterSettings {
                 mfact: finite(config.float("master:mfact"), 0.55).clamp(0.05, 0.95),

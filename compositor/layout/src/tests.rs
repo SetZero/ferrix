@@ -3141,6 +3141,31 @@ fn layoutmsg_preselect_places_the_next_window() {
     assert_eq!(rects(&state)[2].1.height, 540, "not a third of the screen");
 }
 
+/// `dwindle:permanent_direction_override`: `preselect` keeps naming the
+/// side until it is cleared, rather than for the next window only.
+#[test]
+fn permanent_direction_override_keeps_a_preselected_side() {
+    let mut state = setup(&format!(
+        "{BARE}dwindle:preserve_split = true\ndwindle:permanent_direction_override = true\n"
+    ));
+    open(&mut state, &[1]);
+    let _ = dispatch(&mut state, "layoutmsg", "preselect u");
+    open(&mut state, &[2]);
+    // The second window went above, and so does the third: without the
+    // option the third would have split the usual way and been 540 tall.
+    open(&mut state, &[3]);
+    assert_eq!(
+        rects(&state)[2].1.height,
+        270,
+        "the side stuck, so the third window split the second's half again"
+    );
+
+    // `preselect none` clears it, with the option on as without.
+    let _ = dispatch(&mut state, "layoutmsg", "preselect none");
+    open(&mut state, &[4]);
+    assert_ne!(rects(&state)[3].1.height, 135);
+}
+
 /// The master layout's own messages: which window is the master, where it
 /// is and how much it takes.
 #[test]
