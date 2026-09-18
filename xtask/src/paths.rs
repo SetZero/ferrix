@@ -306,8 +306,46 @@ fn find_in(roots: &[PathBuf], names: &[&str]) -> Option<PathBuf> {
     None
 }
 
+/// What `FERRIX_QEMU` names, for `program`: a directory holding the QEMU
+/// binaries, or one binary.
+///
+/// A binary only answers for the architecture it is. A `FERRIX_QEMU`
+/// pointing straight at `qemu-system-x86_64` cannot serve an aarch64 boot,
+/// and saying nothing there lets `PATH` answer that one rather than
+/// failing the boot.
+fn named_qemu(named: &Path, program: &str) -> Option<PathBuf> {
+    let suffixes: &[&str] = if cfg!(windows) { &[".exe", ""] } else { &[""] };
+    for suffix in suffixes {
+        let candidate = named.join(format!("{program}{suffix}"));
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+    let wanted = suffixes
+        .iter()
+        .map(|suffix| format!("{program}{suffix}"))
+        .any(|name| {
+            named
+                .file_name()
+                .is_some_and(|found| found == name.as_str())
+        });
+    (named.is_file() && wanted).then(|| named.to_path_buf())
+}
+
 /// Look up an executable on `PATH`, the way `which` does.
+///
+/// `FERRIX_QEMU` comes first and is taken as written: a directory holding
+/// the QEMU binaries, or one binary. A QEMU built by hand -- for the 3D
+/// card, which a distribution's package is unlikely to have
+/// (`docs/GPU.md` §3.1) -- is then usable without being installed over the
+/// one the machine already has, which needs root and replaces something a
+/// person may be relying on.
 pub(crate) fn which(program: &str) -> Option<PathBuf> {
+    if let Some(named) = std::env::var_os("FERRIX_QEMU").filter(|value| !value.is_empty())
+        && let Some(found) = named_qemu(Path::new(&named), program)
+    {
+        return Some(found);
+    }
     let path = std::env::var_os("PATH")?;
     let suffixes: &[&str] = if cfg!(windows) { &[".exe", ""] } else { &[""] };
 
@@ -336,6 +374,39 @@ pub(crate) fn which(program: &str) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `FERRIX_QEMU` takes a directory of QEMU binaries or one binary, and
+    /// a binary answers only for the architecture it is.
+    #[test]
+    fn a_named_qemu_is_a_directory_or_one_binary() {
+        let scratch = std::env::temp_dir().join(format!("ferrix-qemu-{}", std::process::id()));
+        std::fs::create_dir_all(&scratch).expect("a scratch directory");
+        let binary = scratch.join("qemu-system-x86_64");
+        std::fs::write(&binary, b"not really qemu").expect("a file");
+
+        // A directory: the binary inside it, by name.
+        assert_eq!(
+            named_qemu(&scratch, "qemu-system-x86_64"),
+            Some(binary.clone())
+        );
+        // And nothing for an architecture whose binary is not there, so
+        // that `PATH` still answers that one.
+        assert_eq!(named_qemu(&scratch, "qemu-system-aarch64"), None);
+
+        // A binary: itself, and only for its own architecture.
+        assert_eq!(
+            named_qemu(&binary, "qemu-system-x86_64"),
+            Some(binary.clone())
+        );
+        assert_eq!(named_qemu(&binary, "qemu-system-aarch64"), None);
+
+        // Something that is neither.
+        assert_eq!(
+            named_qemu(&scratch.join("nowhere"), "qemu-system-x86_64"),
+            None
+        );
+        std::fs::remove_dir_all(&scratch).expect("cleaned up");
+    }
 
     #[test]
     fn parses_every_architecture_spelling() {

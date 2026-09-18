@@ -81,6 +81,11 @@ real constraint on the plan.
   on the 2D device -- the 3D card is a superset, and the 2D driver drives it
   unchanged. That is the whole of the host half working.
 
+* **`FERRIX_QEMU` points at the rebuilt one.** A hand-built QEMU does not
+  have to be installed over the machine's, which needs root and replaces
+  something a person may be relying on. `FERRIX_QEMU=~/Documents/qemu/qemu/build
+  cargo xtask test-display --gl` is the whole invocation on this host.
+
 * **`screendump` cannot read a GL console, and this is not a setting.**
   QEMU 9.2.4's `qmp_screendump` (`ui/ui-qmp-cmds.c`) asks for a
   `DisplaySurface` and gives up with *"no surface"* when there is none;

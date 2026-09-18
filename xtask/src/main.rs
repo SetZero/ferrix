@@ -165,6 +165,8 @@ OPTIONS:
     --gl                                 that virtio-gpu is the 3D card, `virtio-gpu-gl-pci`, with the
                                          host's GPU behind it through virglrenderer; turns --display on.
                                          A QEMU built without it says so and the 2D card is used
+                                         [FERRIX_QEMU names a QEMU that is not the one on PATH: a
+                                         directory of its binaries, or one binary]
     --vnc <DISPLAY>                      run --display, run-compositor: serve the screen over VNC
                                          at e.g. `:0` (127.0.0.1) rather than in a window of this host's
     --config <PATH>                      run-compositor: the hyprland.conf the guest is given
