@@ -300,6 +300,132 @@ driver, without it there is none and the program must say so.
   have something to say, and `SUBMIT`/`WAIT` are already in the protocol.
 * **Scanout of a 3D resource**, which is the other half of this row.
 
+### 3.5 The build plan for steps 2 and 3b, researched (2026-09-19)
+
+The customer chose Path A first, then the AV1 wallpaper (§3.6). What the
+software renderer can give was reached on 2026-09-19: a video frame in the
+guest is 46 ms, of which 37 is the renderer's own arithmetic and the rest a
+serial copy (`docs/COMPOSITOR-DAMAGE-HANDOFF.md` §2.7). 60 fps (16.7 ms) is
+below that floor; only the GPU drawing the pixels reaches it. This is the
+path, in the order each piece can be *tested*, with the wire details already
+looked up so the next session does not repeat the reading. Reference sources
+are cloned at `~/.local/share/ferrix/virgl-ref`: virglrenderer 1.2.0
+(`src/virgl_protocol.h`, `src/virgl_hw.h`) and Mesa's virgl driver
+(`src/gallium/drivers/virgl/virgl_encode.c`, the encoder to copy). QEMU's
+`hw/display/virtio-gpu-virgl.c` at `~/Documents/qemu/qemu` shows the host
+side of each command.
+
+**rav1d builds for the target already** (proven 2026-09-19): a static musl
+binary against the repo toolchain, C-shaped API at `rav1d::src::lib::dav1d_*`,
+`default-features=false, features=["bitdepth_8"]`, BSD-2-Clause (already on
+deny.toml's allow-list). That is what §3.6 stands on and is why AV1 waits
+without risk.
+
+The pieces, each landable on its own:
+
+1. **`CONTEXT_INIT` and `GET_CAPS` through the node** (step 2 tail, ~3 pts).
+   `context_init` in `user/gpu` maps onto `MAKE_CTX` with a capset; the node
+   answers `VIRTGPU_GETPARAM` from the HELLO already. `GET_CAPS` needs the
+   core to carry the capset *bytes*: add a `Capset` message to
+   `libs/renderctl` (core asks, driver runs `GetCapset`, bytes ride a work
+   VMO range as a description does). Testable by the `--gl` display gate
+   reading a capset back, as it reads a resource now.
+
+2. **`MAP`, and an object's backing** (step 2, ~5 pts). This is the seam
+   question §3.4 flags: `MakeObject` carries a size and no backing. Decision
+   to make: the object's guest pages come from the *work VMO's* allocator
+   extended, or a VMO per object. Recommend a VMO per mappable object owned
+   by the core (like the card's one big VMO but per resource), attached to
+   the device with `ResourceAttachBacking` (the driver already pins for the
+   display's `attach`). The node's `MAP` returns an mmap offset into that
+   VMO exactly as `map_dumb` does (`kernel/src/display/drm.rs:789`, and
+   `devfs::mapping` at `kernel/src/fs/devfs.rs:938` is the hook — the render
+   inode needs its own `mapping()` returning the object's VMO). Testable:
+   a program creates a resource, maps it, writes a byte, reads it back.
+
+3. **`compositor/virgl`, the command encoder** (step 3b core, ~8 pts). A new
+   crate, pure Rust, encoding virgl's command stream into a byte buffer the
+   compositor hands to `EXECBUFFER`. The header is
+   `VIRGL_CMD0(cmd,obj,len) = cmd | obj<<8 | len<<16`, len in dwords
+   (`virgl_protocol.h:141`). The commands the compositor needs, with their
+   dword layouts already in `virgl_protocol.h` and Mesa's writer in
+   `virgl_encode.c`:
+   * `CREATE_OBJECT`/`BIND_OBJECT`/`DESTROY_OBJECT` for blend, rasterizer,
+     DSA, vertex-elements, sampler-state, sampler-view, surface, shader
+     (object types in `enum virgl_object_type`).
+   * `SET_FRAMEBUFFER_STATE`, `SET_VIEWPORT_STATE`, `SET_VERTEX_BUFFERS`,
+     `SET_SAMPLER_VIEWS`, `BIND_SAMPLER_STATES`, `BIND_SHADER`,
+     `SET_CONSTANT_BUFFER`, `CLEAR`, `DRAW_VBO` (layouts at the matching
+     `VIRGL_*` defines; Mesa's `virgl_encoder_draw_vbo` etc. are the model).
+   * `TRANSFER3D`/`RESOURCE_INLINE_WRITE` to upload a client's `wl_shm`
+     damaged rectangles as textures.
+   Shaders are TGSI *text* (Mesa's `virgl_encode_shader_state` dumps
+   `tgsi_dump_str`), uploaded in a `CREATE_OBJECT VIRGL_OBJECT_SHADER`.
+   Hyprland's effects are about eight shaders: the two blur kernels,
+   `blurprepare`, `blurFinish`, the rounded-texture sampler, the border
+   gradient, the shadow. Write them as TGSI by hand or translate the GLSL.
+   Everything here is host-testable without a device by asserting the byte
+   stream, the way the software renderer's images are golden.
+
+4. **`EXECBUFFER`, transfers and `WAIT` through the node** (step 2 + 3b glue,
+   ~4 pts). The node's `EXECBUFFER` copies the command bytes into a work VMO
+   range and sends `SUBMIT`; `SUBMIT`/`WAIT` are already in `libs/renderctl`
+   and the session. The driver's `run_command`/`serve_render` loop already
+   runs one device command at a time between the display's — `Submit3d`
+   carries the bytes (`libs/virtio::gpu::Command::Submit3d`). `WAIT` maps
+   onto a fenced header (FLAG_FENCE). Fences are encoded but the driver does
+   not offer the `FENCES` feature yet; offer it and wire `on_interrupt`'s
+   fence to `WAITED`.
+
+5. **A renderer trait in `compositor/render`** (step 3b integration, ~5 pts).
+   `render_onto` and the `Canvas` operations become a trait with two impls:
+   the software one that exists, and a `virgl` one that emits commands. The
+   fallback is mandatory (roadmap) — the compositor is never GPU-only, and
+   the software images stay the byte-exact reference. `hyprix` opens
+   `/dev/dri/renderD128` when it is there and falls back when it is not.
+
+6. **Scanout of a 3D resource** (step 2, ~4 pts). `SET_SCANOUT` on the 3D
+   resource the compositor drew into, so the finished frame never leaves the
+   GPU — no per-frame `TRANSFER_TO_HOST` at all, which is the 5.5 ms the
+   software path spends in `DIRTYFB`. QEMU's `virgl_cmd_set_scanout`
+   (`dpy_gl_scanout_texture`) is the host side; the display core's `scanout`
+   path takes a buffer id, and a 3D resource id has to reach it. Needs the
+   card and render conversations, today separate, to name one resource.
+
+7. **The host half** (step 5, ~5 pts, mostly done). `--gl` boots; what is
+   left is judging a GPU frame — `screendump` cannot read a GL console
+   (§3.1), so judge from inside the guest with `compositor/shot`, or check
+   whether a newer QEMU grew a GL screendump.
+
+Order 1→2→3→4→6→5, with 5's renderer trait landing beside 3. Each of 1, 2,
+4, 6 is a display-gate boot that proves the new call; 3 and 5 are
+host-tested byte-for-byte. The whole is ~30 points and cannot be verified
+piecemeal below the level of these seven — a virgl command means nothing
+until `EXECBUFFER` carries it and a scanout shows it, so land 1–2 first to
+have somewhere to submit from.
+
+### 3.6 The AV1 wallpaper, after the GPU (2026-09-19)
+
+The customer asked (2026-09-19) that the wallpaper load a real container
+rather than the run-length `.fxvid` frames, which for a long clip run to
+gigabytes. The path chosen is **AV1 decoded by rav1d in the guest**:
+
+* **Host side** (`xtask/src/wallpaper.rs`): transcode the source to a small
+  AV1 elementary stream (or keep an `.mp4`/`.webm`'s AV1 track), rather than
+  decoding to `.fxvid` frames. `ffmpeg` on this host has `libaom-av1`,
+  `librav1e` and `libsvtav1`. Keep the container/stream on the image; it is
+  megabytes, not the initramfs-busting hundreds of `.fxvid`.
+* **Guest side** (`compositor/pattern`): add rav1d as a dependency, demux
+  the stream (a small IVF or a minimal mp4/Matroska demuxer for the AV1
+  track), feed OBUs to `dav1d_send_data`, pull frames with
+  `dav1d_get_picture`, convert YUV→RGB into the buffer the client already
+  scales and damages. `Movie` becomes a decoder rather than a run-length
+  reader; `Movie::damage` can stay whole-frame or diff decoded frames.
+* rav1d is BSD-2-Clause and builds static-musl for the target already
+  (proven). It is a large dependency; deny.toml allows its licence. The
+  decode cost is real CPU, but a wallpaper under an opaque window pauses on
+  frame callbacks as it does now, and the GPU by then draws the compositing.
+
 ### 3a, which was not chosen for the compositor
 
 Mesa's virgl driver built on ferrousli would give *every client* OpenGL ES
