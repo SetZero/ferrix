@@ -626,6 +626,7 @@ fn bar_and_two_clients_frame() -> Vec<u8> {
         surface: Some(bar_surface),
         dim_around: false,
         blur: false,
+        xray: false,
     }];
     let produced = render_with_layers(
         &mut canvas,
@@ -1041,6 +1042,7 @@ fn a_window_with_a_menu_on_it_matches_the_expected_image() {
         surface: Some(surface),
         dim_around: false,
         blur: false,
+        xray: false,
     }];
     let mut canvas = Canvas::new(WIDTH, HEIGHT).unwrap();
     let full = Damage::full(WIDTH, HEIGHT);
@@ -1087,6 +1089,7 @@ fn a_locked_screen_is_the_lock_surface_and_nothing_else() {
         surface: Some(surface),
         dim_around: false,
         blur: false,
+        xray: false,
     }];
     let _ = render_with_layers(
         &mut canvas,
@@ -2275,6 +2278,7 @@ fn graded_frame(style: &Style) -> Vec<u8> {
         ),
         dim_around: false,
         blur: false,
+        xray: false,
     }];
     let mut canvas = Canvas::new(width, height).unwrap();
     let full = Damage::full(width, height);
@@ -2807,6 +2811,7 @@ fn frame_over(
         ),
         dim_around: false,
         blur: false,
+        xray: false,
     }];
     let _ = render_onto(
         canvas,
@@ -3050,4 +3055,107 @@ fn two_pattern_clients_on_a_1920x1080_screen_match_the_expected_image() {
     let size = (1920, 1080);
     let frame = frame_on(size, &plain_style(), Settings::default());
     golden::check("dwindle-two-clients-1920x1080", size.0, size.1, &frame);
+}
+
+/// `layerrule = xray`: a bar's blur is of the wallpaper rather than of
+/// whatever happens to be under it.
+///
+/// Hyprland's `m_blurFB` is everything behind the windows, blurred and
+/// kept, and a layer surface takes its blur from the frame as it stands
+/// unless this rule asks for that picture instead. So the test is what the
+/// rule promises: with it on, the bar's pixels do not depend on what is
+/// under the bar. Rendered twice with the same wallpaper and two different
+/// sets of windows, the strip must come out byte for byte the same -- and
+/// with the rule off it must not, which is the control that says the two
+/// frames were not identical for some other reason.
+#[test]
+fn an_xray_bar_blurs_the_wallpaper_and_not_the_windows_under_it() {
+    let style = Style {
+        blur: Some(Blur::new(8, 2)),
+        ..plain_style()
+    };
+    let full = Damage::full(WIDTH, HEIGHT);
+    // Across the middle of the screen, where the windows certainly are.
+    let strip = Rect::new(0, 300, i64::from(WIDTH), 120);
+    let bar = Pattern::Gradient.draw(strip.width as u32, strip.height as u32);
+
+    let behind = wallpaper(None);
+    let draw = |windows: bool, xray: bool| {
+        let (_, mut layout) = two_clients();
+        let buffers = client_buffers(&layout);
+        if !windows {
+            layout.windows.clear();
+        }
+        let over = [
+            LayerFrame {
+                rect: Rect::new(0, 0, i64::from(WIDTH), i64::from(HEIGHT)),
+                above: false,
+                surface: Some(
+                    Surface::new(
+                        &behind,
+                        WIDTH,
+                        HEIGHT,
+                        WIDTH * 4,
+                        Pattern::Checkerboard.format(),
+                    )
+                    .unwrap(),
+                ),
+                dim_around: false,
+                blur: false,
+                xray: false,
+            },
+            LayerFrame {
+                rect: strip,
+                above: true,
+                surface: Some(
+                    Surface::new(
+                        &bar,
+                        strip.width as u32,
+                        strip.height as u32,
+                        strip.width as u32 * 4,
+                        Pattern::Gradient.format(),
+                    )
+                    .unwrap(),
+                ),
+                dim_around: false,
+                blur: true,
+                xray,
+            },
+        ];
+        let mut canvas = Canvas::new(WIDTH, HEIGHT).unwrap();
+        let mut backdrop = Backdrop::new(WIDTH, HEIGHT).unwrap();
+        let _ = render_onto(
+            &mut canvas,
+            Some(&mut backdrop),
+            &layout,
+            (0, 0),
+            &Styles::plain(&style),
+            &surfaces(&buffers),
+            &over,
+            &full,
+        );
+        rows(canvas.data(), strip)
+    };
+
+    assert_eq!(
+        draw(true, true),
+        draw(false, true),
+        "an xray bar is the same pixels whether or not there are windows under it"
+    );
+    assert_ne!(
+        draw(true, false),
+        draw(false, false),
+        "without the rule the windows under it are what it blurs"
+    );
+}
+
+/// The bytes of `rect`'s rows out of a canvas `WIDTH` pixels across.
+fn rows(data: &[u8], rect: Rect) -> Vec<u8> {
+    let stride = WIDTH as usize * 4;
+    (rect.y..rect.bottom())
+        .flat_map(|y| {
+            let at = y as usize * stride + rect.x as usize * 4;
+            data[at..at + rect.width as usize * 4].to_vec()
+        })
+        .collect()
 }

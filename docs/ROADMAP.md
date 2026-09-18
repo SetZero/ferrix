@@ -4304,12 +4304,14 @@ workspace, with all seven of Hyprland's group words read as
 `applyDynamicRules` reads them; and `no_close_for` holds a window open,
 with `killactive` saying why rather than doing nothing.
 
-What is left is `xray` and `no_screen_share`, which do need a second pass
--- the first reads what is behind the frame being drawn and the second
-means drawing the frame again without one surface in it -- the five that
-belong to a GPU this compositor has not got (`immediate`, `no_vrr`,
-`no_auto_hdr`, `tonemap`, `force_rgbx`), `persistent_size`, which needs
-state on disk, and the input ones.
+What is left is `no_screen_share`, which does need a second pass --
+drawing the frame again without one surface in it -- the five that belong
+to a GPU this compositor has not got (`immediate`, `no_vrr`,
+`no_auto_hdr`, `tonemap`, `force_rgbx`), `persistent_size`, which needs a
+close path that fires for one window rather than for a whole connection,
+and the input ones. `xray` was on this list and is done (2026-09-18): it
+asks for the blur of what is behind the windows, which is the picture the
+renderer's `Backdrop` already keeps, so it needed no second pass at all.
 
 **Done — all four tiling layouts, and the options that shape them
 (2026-09-17).** Hyprland 0.56 has four: `dwindle`, `master`, `monocle` and
@@ -5479,7 +5481,8 @@ drag the border grab had just built. Dwindle's cursor-placed splits followed:
 the layout is given the pointer, and `use_active_for_splits`,
 `force_split = 0` and `smart_split` read it. What is left of it is
 `precise_mouse_move`, which waits on dropping a dragged window back into
-the tiling; `xray` and `no_screen_share`, which need a second pass; and
+the tiling; `no_screen_share`, which needs a second pass -- `xray` turned out not to,
+since the blur optimisation's backdrop is the picture it asks for; and
 `persistent_size`, which waits on a close path that fires for one window
 rather than for a whole connection. The
 frame rate the exit asks for under the GPU path comes with the GPU path.

@@ -423,10 +423,17 @@ Not part of this handoff, but the next person will ask.
   sits under was not something the layout exposed. It is
   `CDwindleAlgorithm::resizeTarget`, `dwindle:smart_resizing` and all, and
   the corner a drag grabs is what says which split moves.
-- **`xray` and `no_screen_share`.** These two genuinely do need a second
-  pass: `xray` reads what is behind the frame being drawn, and
+- **`no_screen_share` and `blur_popups`.** These do need a second pass:
   `no_screen_share` means drawing the frame again without one surface in
-  it. Everything else once on that list has been done.
+  it, and `blur_popups` reads what is behind the frame being drawn.
+
+  **`xray` did not, in the end** (2026-09-18). It asks for the blur of
+  everything behind the windows, and that is exactly the picture §2.2's
+  `Backdrop` already keeps and blurs for tiled windows -- so an `xray` bar
+  reads the backdrop the way such a window does, and it is three lines in
+  `draw_layer` plus the rule reaching it. It pays back twice: a bar that
+  reads the backdrop is no longer redrawn whole when a window moves under
+  it (`Blurred::live` is false for one), which was 8.6 ms a frame.
 - **`persistent_size`**, which does *not* need state on disk: Hyprland's is
   an in-memory cache (`CFloatStateCache`) keyed by class, title and xdg tag,
   written when a floating window closes and read when a matching one opens.

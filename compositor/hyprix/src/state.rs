@@ -3117,7 +3117,14 @@ fn blurs_behind(
         })
         .map(|placed| crate::damage::Blurred {
             rect: crate::frame::local(placed.rect, origin, scale),
-            live: true,
+            // `layerrule = xray` takes the blur from the kept backdrop, as
+            // a tiled window does, so it is owed what such a window is owed
+            // and not what a blur of the frame as it stands is: it is not
+            // redrawn whole when something moves under it, and it *is*
+            // grown by the blur's reach when what is behind the windows
+            // changes. Only above the windows, where the renderer reads the
+            // rule at all.
+            live: !(placed.above && placed.rules.xray),
         });
     windows.chain(layers).collect()
 }
@@ -4440,6 +4447,7 @@ fn place_layers(
                 on,
                 crate::frame::LayerRules {
                     blur: named.blur,
+                    xray: named.xray,
                     dim_around: named.dim_around,
                     above_lock: named.above_lock,
                     no_screen_share: named.no_screen_share,

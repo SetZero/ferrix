@@ -199,6 +199,9 @@ pub struct Placed {
 pub struct LayerRules {
     /// `blur`: what is behind it is blurred.
     pub blur: bool,
+    /// `xray`: that blur is of the wallpaper -- everything behind the
+    /// windows -- rather than of what is directly behind it.
+    pub xray: bool,
     /// `dim_around`: everything behind it is darkened while it is up,
     /// which is what a launcher does to the desktop.
     pub dim_around: bool,
@@ -349,6 +352,7 @@ fn draw_windows(
                 .and_then(|slot| pixels(slot.client(), slot.pools(), placed.surface)),
             dim_around: placed.rules.dim_around,
             blur: placed.rules.blur,
+            xray: placed.rules.xray,
         })
         .collect();
 

@@ -323,6 +323,20 @@ pub struct LayerFrame<'pixels> {
     /// blurring behind an opaque bar costs a pyramid of passes and changes
     /// not one pixel.
     pub blur: bool,
+    /// Whether that blur is of the *wallpaper* rather than of what is
+    /// directly behind it: `layerrule = xray`.
+    ///
+    /// A bar over a window blurs the window, and a person who wants the
+    /// desktop showing through their bar however many windows are under it
+    /// asks for this. It is the same picture a tiled window's blur is taken
+    /// from -- everything behind the windows, kept and blurred -- so it
+    /// costs nothing a frame was not paying already, and a bar that reads it
+    /// is one the windows moving underneath no longer redraws.
+    ///
+    /// Only read for a surface drawn *above* the windows. One drawn below
+    /// them is part of what the backdrop is a copy of, and a blur of the
+    /// backdrop there would be a blur of itself.
+    pub xray: bool,
 }
 
 /// What one window is drawn with, where a `windowrule` asked for something
@@ -603,7 +617,14 @@ pub fn render_onto(
         if layer.dim_around {
             dim_behind(canvas, style, damage);
         }
-        draw_layer(canvas, layer, local(layer.rect), style, damage);
+        draw_layer(
+            canvas,
+            backdrop.as_deref_mut().filter(|_| layer.xray),
+            layer,
+            local(layer.rect),
+            style,
+            damage,
+        );
     }
     damage.clipped(canvas.bounds())
 }
@@ -625,7 +646,9 @@ fn behind_windows(
         let rect = layer
             .rect
             .translate(origin.0.saturating_neg(), origin.1.saturating_neg());
-        draw_layer(canvas, layer, rect, style, damage);
+        // No backdrop: this surface is part of what the backdrop is a copy
+        // of, so `xray` here would be a blur of itself.
+        draw_layer(canvas, None, layer, rect, style, damage);
     }
 }
 
@@ -691,6 +714,7 @@ pub fn reads_backdrop(windows: &[Placed], at: usize, styles: &Styles<'_>) -> boo
 /// across the screen.
 fn draw_layer(
     canvas: &mut Canvas,
+    backdrop: Option<&mut Backdrop>,
     layer: &LayerFrame<'_>,
     rect: Rect,
     style: &Style,
@@ -704,7 +728,15 @@ fn draw_layer(
     if let Some(blur) = style.blur.filter(|_| layer.blur)
         && surface.format() == Format::Argb8888
     {
-        canvas.blur(rect, Rounding::none(), &blur, damage);
+        // `layerrule = xray`: the kept blur of what is behind the windows,
+        // which is the wallpaper and whatever is under them, rather than a
+        // blur of the frame as it stands with the windows in it. The caller
+        // hands over a backdrop only for a surface that asked and is drawn
+        // above the windows.
+        match backdrop {
+            Some(behind) => behind.blur_onto(canvas, rect, Rounding::none(), &blur, damage),
+            None => canvas.blur(rect, Rounding::none(), &blur, damage),
+        }
     }
     canvas.composite(surface, rect, damage);
 }
