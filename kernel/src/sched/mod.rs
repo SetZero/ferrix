@@ -347,6 +347,18 @@ fn set_idle(cpu: Option<usize>, idle: bool) {
 /// and wait for them.
 static ZOMBIES: IrqSpinLock<Vec<Arc<Task>>, arch::Irq> = IrqSpinLock::new(Vec::new());
 
+/// How many stacks one pass of the idle loop's reaper frees.
+///
+/// A shootdown costs the same whether it invalidates one stack or sixteen,
+/// and it is an interrupt every other processor has to answer: the batch is
+/// what stops a program's thread churn being paid for by every other program
+/// on the machine. Sixteen rather than the whole list because the batch is
+/// freed with preemption off — see [`reap_batch`] — so it is also how long this
+/// processor may be from taking the task an interrupt has just woken. The
+/// stacks themselves are four pages each and give their frames straight back,
+/// so a batch is not memory held either.
+const REAP_BATCH: usize = 16;
+
 /// Switches away from a dead task that a run queue still counted as queued.
 ///
 /// Counted in [`finish_switch`], the one place that sees every dead task
@@ -359,7 +371,7 @@ static DEAD_STILL_QUEUED: AtomicU64 = AtomicU64::new(0);
 /// Tasks that have exited and whose reaper has not yet dropped them.
 ///
 /// Raised in [`exit`] before the task is marked dead, so before anything can
-/// see it as not running, and lowered in [`reap_one`] and [`reap`] only once
+/// see it as not running, and lowered in [`reap_batch`] and [`reap`] only once
 /// the reaper's reference is dropped. For [`wait_until_reaper_quiet`]: the
 /// zombie list misses a task that has exited and not yet switched away, and
 /// one an idle processor has taken off the list and not yet dropped.
@@ -613,18 +625,18 @@ pub(crate) fn enter_idle() -> ! {
 /// One exited task's stack per turn, and a look at the queue between stacks:
 /// the idle task runs only while nothing else can, so anything it holds while
 /// it is switched out is held for as long as the processor stays busy. See
-/// [`reap_one`] for the boot that showed why.
+/// [`reap_batch`] for the boot that showed why.
 fn idle_loop() -> ! {
     let cpu = this_cpu();
     // A secondary arrives here with interrupts masked, from the look-and-wait
     // step of `smp::secondary_main` that handed it over, and the first thing
     // below is a reap, which frees a stack, which is a shootdown that waits
     // for every other processor: that must run with interrupts on, as
-    // `reap_one` says and `smp` checks. The halt path enables them in any
+    // `reap_batch` says and `smp` checks. The halt path enables them in any
     // case; enabling here makes the first pass like every later one.
     arch::enable_interrupts();
     loop {
-        let reaped = reap_one();
+        let reaped = reap_batch(false);
         // An interrupt that arrived while the stack was held was not allowed
         // to switch this task out. Make the decision it asked for now, through
         // `schedule` and not through the look at the queue below: a sleeper
@@ -658,11 +670,43 @@ fn idle_loop() -> ! {
             // More may be waiting: look again rather than halt with stacks
             // still to free.
             arch::enable_interrupts();
+        } else if machine_is_quiet() && !ZOMBIES.lock().is_empty() {
+            // Nothing anywhere else to do, and stacks waiting for a batch
+            // that may never fill. Free them now -- all of them under one
+            // shootdown -- rather than halt holding them: a processor that
+            // halts arms nothing, so "later" could be the next interrupt from
+            // anywhere.
+            //
+            // **Only when every other processor is idle too.** The cost a
+            // shootdown imposes is paid by whoever it interrupts, so a
+            // straggler freed while the rest of the machine works is the very
+            // thing `REAP_BATCH` exists to stop. While anything else is
+            // running, a partial batch waits: at sixteen stacks it goes
+            // regardless, and sixteen stacks is 256 KiB.
+            arch::enable_interrupts();
+            let _ = reap_batch(true);
         } else {
             arch::wait_for_work();
             set_idle(cpu, false);
         }
     }
+}
+
+/// Whether every processor that has a run queue is in its idle loop.
+///
+/// Read from [`IDLE`], whose bit is set before a processor looks for work and
+/// cleared when it finds some, so this is a snapshot that may be stale the
+/// moment it is taken. That is what it is for: it decides whether a reap that
+/// could wait should happen now, and being wrong either way costs one
+/// shootdown or delays one, never correctness.
+fn machine_is_quiet() -> bool {
+    let Some(queues) = QUEUES.get() else {
+        return true;
+    };
+    let Some(all) = (1u64 << queues.len().min(64)).checked_sub(1) else {
+        return false;
+    };
+    IDLE.load(Ordering::SeqCst) & all == all
 }
 
 /// Whether this processor has anything but its idle task to run.
@@ -1230,6 +1274,56 @@ pub(crate) fn wake(task: &Arc<Task>) {
 pub(crate) fn interrupt(task: &Arc<Task>) {
     let cpu = task.cpu();
     if this_cpu() != Some(cpu) {
+        kick(cpu);
+    }
+}
+
+/// Give `task` a new scheduling weight, and ask for a decision if that has
+/// changed which task should be running.
+///
+/// What a nice value means, once it has been turned into a weight: see
+/// [`crate::syscall::attributes::sys_setpriority`]. The queue holding the
+/// task is found and locked the way [`wake`] finds it, because a task moves
+/// between processors and the weight has to reach the queue that really has
+/// it; a task on no queue still has its own record set, and is enqueued with
+/// it next time.
+pub(crate) fn set_weight(task: &Arc<Task>, weight: u32) {
+    let saved = <arch::Irq as IrqControl>::disable();
+    let mut kick_cpu = None;
+    loop {
+        let cpu = task.cpu();
+        let Some(lock) = queue_of(cpu) else {
+            task.set_weight(weight);
+            break;
+        };
+        let mut queue = lock.lock();
+        // It may have moved between the read and the lock, as in `wake`.
+        if task.cpu() != cpu {
+            continue;
+        }
+        queue.set_weight(task, weight);
+        // A task made heavier may now deserve the processor its own change
+        // just took it off the front of, and one made lighter may owe it to
+        // somebody else. Either way the decision is due now rather than at
+        // the end of a slice granted under the old weight.
+        if queue.should_preempt() {
+            kick_cpu = Some(cpu);
+        }
+        break;
+    }
+    // As `wake`: a processor asked to reschedule itself is told before
+    // interrupts come back, and another is interrupted once they have.
+    let here = this_cpu();
+    let remote = match kick_cpu {
+        Some(cpu) if here == Some(cpu) => {
+            resched_here(cpu);
+            None
+        }
+        other => other,
+    };
+    <arch::Irq as IrqControl>::restore(saved);
+
+    if let Some(cpu) = remote {
         kick(cpu);
     }
 }
@@ -1831,7 +1925,15 @@ fn steal_from(me: usize, victim: usize) -> bool {
     moved
 }
 
-/// Free one exited task's stack, if one is waiting, and say whether one was.
+/// Free a batch of exited tasks' stacks, and say whether any were freed.
+///
+/// `whatever_is_there` frees however few are waiting; without it a batch is
+/// freed only once [`REAP_BATCH`] of them have gathered. The idle loop asks
+/// the second way first and the first way when it has nothing else left to
+/// do, which is what keeps the batch from being a batch of one: a thousand
+/// threads that exit while their processors are busy gather, and are freed a
+/// batch at a time, where reaping each the moment it appeared was a thousand
+/// shootdowns.
 ///
 /// The idle loop's reaper, and its shape is the point. [`reap`] takes the
 /// whole list and frees it in a loop with interrupts on, which is right for a
@@ -1852,42 +1954,66 @@ fn steal_from(me: usize, victim: usize) -> bool {
 /// batch: one, seven, and once three hundred and ninety-nine. One boot in
 /// three to six on a loaded host, on every architecture.
 ///
-/// So: one stack at a time, with [`REAPING`] set while it is held, so that the
-/// switch an interrupt asks for waits until the stack is free — and the idle
-/// loop looks at its queue between stacks. Interrupts stay on throughout,
-/// and must: freeing a stack invalidates other processors' translations and
-/// waits for them to say so, and they may be waiting for this one the same
-/// way.
-fn reap_one() -> bool {
+/// So: a bounded batch, with [`REAPING`] set while it is held, so that the
+/// switch an interrupt asks for waits until the stacks are free — and the
+/// idle loop looks at its queue between batches. Interrupts stay on
+/// throughout, and must: freeing a stack invalidates other processors'
+/// translations and waits for them to say so, and they may be waiting for
+/// this one the same way.
+///
+/// **Bounded, and not one.** One at a time was one shootdown per stack, and
+/// a shootdown interrupts every other processor and waits for each to answer
+/// before this one goes on. A program whose threads are short-lived — the
+/// compositor draws a frame's bands on a thread each — then pays for its own
+/// threads in interruptions to every *other* program on the machine, which
+/// is the cost landing on the wrong task. [`REAP_BATCH`] stacks go under one
+/// shootdown, which is what [`crate::mm::unmap_kernel_all`] is for.
+fn reap_batch(whatever_is_there: bool) -> bool {
     let Some(cpu) = this_cpu() else {
         return false;
     };
-    // Set before the stack is taken, not after: between the two is an
+    // Looked at before the flag and the count go up, so that a processor with
+    // nothing to free does not make every other one wait for its preemption
+    // count on the way past.
+    if !whatever_is_there && ZOMBIES.lock().len() < REAP_BATCH {
+        return false;
+    }
+    // Set before the stacks are taken, not after: between the two is an
     // interrupt exit like any other. The count is what keeps this task on
     // its processor; the flag is for the checks that count frames.
     preempt_disable();
     set_reaping(cpu, true);
-    // A statement of its own, so the list's lock — which masks interrupts —
-    // is released here and not at the end of the `match`, where a scrutinee's
-    // temporaries live. Freeing the stack below waits for other processors to
-    // answer an interrupt, and they may be waiting for this lock to file a
-    // zombie of their own, with interrupts masked in turn.
-    let task = ZOMBIES.lock().pop();
-    let reaped = match task {
-        Some(task) => {
-            if let Some(stack) = task.stack() {
-                // SAFETY: as in `reap`: dead, on no queue, and switched away
-                // from, so nothing is running on this stack.
-                let _ = unsafe { crate::vmap::free_stack(stack) };
+    // Room made before the lock is taken, not under it: the list's lock masks
+    // interrupts, and a growing `Vec` under it is the heap's lock taken
+    // inside this one for no reason. Freeing the stacks below waits for other
+    // processors to answer an interrupt, and they may be waiting for this
+    // lock to file a zombie of their own, with interrupts masked in turn — so
+    // the lock is released before any of that, at the end of this statement.
+    let mut taken: Vec<Arc<Task>> = Vec::with_capacity(REAP_BATCH);
+    {
+        let mut zombies = ZOMBIES.lock();
+        while taken.len() < REAP_BATCH {
+            match zombies.pop() {
+                Some(task) => taken.push(task),
+                None => break,
             }
-            // Inside the window as well: dropping the last reference to a
-            // task gives back its address space and its process, and those
-            // are no better held across a switch than the stack was.
-            drop(task);
-            note_reaped(1);
-            true
         }
-        None => false,
+    }
+    let reaped = if taken.is_empty() {
+        false
+    } else {
+        let stacks: Vec<crate::vmap::Stack> =
+            taken.iter().filter_map(|task| task.stack()).collect();
+        // SAFETY: as in `reap`: every one of them is dead, on no queue, and
+        // switched away from, so nothing is running on any of these stacks.
+        let _ = unsafe { crate::vmap::free_stacks(&stacks) };
+        let count = taken.len();
+        // Inside the window as well: dropping the last reference to a task
+        // gives back its address space and its process, and those are no
+        // better held across a switch than the stacks were.
+        drop(taken);
+        note_reaped(count);
+        true
     };
     set_reaping(cpu, false);
     preempt_enable();
@@ -1897,7 +2023,7 @@ fn reap_one() -> bool {
 /// Free the stacks of tasks that have exited, and return how many.
 ///
 /// For a task that can afford to be switched out part-way, which the idle
-/// task cannot: it uses [`reap_one`].
+/// task cannot: it uses [`reap_batch`].
 pub(crate) fn reap() -> usize {
     let dead = core::mem::take(&mut *ZOMBIES.lock());
     let count = dead.len();

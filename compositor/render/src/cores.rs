@@ -12,6 +12,28 @@
 //! wallpaper that moves: everything behind the windows changes every frame
 //! of the video, so the blur of it and the terminal over it are owed every
 //! frame, and on one core that was a dozen frames a second.
+//!
+//! # Workers, not a thread per band
+//!
+//! The bands went to a `std::thread::scope` at first, which starts a thread
+//! for each and joins them all. That is a thread started and ended per band,
+//! per operation, per frame: a blurred frame is six passes and the
+//! conversions either side of them, so a 30 fps video wallpaper was on the
+//! order of a thousand threads a second -- and what a thread costs is not
+//! only the starting. Ferrix frees an exited task's kernel stack by
+//! invalidating the address everywhere, which interrupts every processor on
+//! the machine and waits for each to answer; the pointer stuttered and the
+//! bar stuttered while the video played, because the cost of *this* program's
+//! threads was being paid by every other program on the machine.
+//!
+//! So the threads are started once and kept: [`fan_out`] hands each band to a
+//! worker that is already there, and returns when the last of them says it
+//! has finished. The thread that asked for the work is one of the workers --
+//! it runs bands itself while it waits -- which is why the pool starts one
+//! fewer than there are cores, and why a machine that says it has one core
+//! starts none and draws exactly as it did.
+
+use compositor_fan::fan_out;
 
 /// The fewest items a band is worth a thread for.
 ///
@@ -20,7 +42,8 @@
 /// worth is spread over every core there is.
 pub(crate) const BAND: usize = 32 * 1024;
 
-/// How many threads an operation may use.
+/// How many threads an operation may use: the workers there are, which
+/// `compositor_fan` sizes and which include the thread asking for the work.
 ///
 /// Every processor of a small machine, and half of a large one's to at most
 /// eight. Measured on twelve cores and twenty-four threads, with a video
@@ -30,22 +53,17 @@ pub(crate) const BAND: usize = 32 * 1024;
 /// or two it bought. Half the processors are the cores where each core is
 /// two, and past eight the planes' memory is what is waited for.
 ///
-/// One where the machine has one or will not say, which is one thread and
-/// none started: a guest with a single processor draws exactly as it did.
+/// One where the machine has one or will not say, which is one band and no
+/// worker started: a guest with a single processor draws exactly as it did.
+/// Asked of the fan rather than worked out again here, so that the number of
+/// bands a frame is cut into and the number of threads there are to draw them
+/// cannot drift apart.
 pub(crate) fn cores() -> usize {
-    static CORES: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
     #[cfg(test)]
     if let Some(forced) = tests::forced() {
         return forced;
     }
-    *CORES.get_or_init(|| {
-        let processors = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
-        if processors <= 4 {
-            processors
-        } else {
-            (processors / 2).clamp(4, 8)
-        }
-    })
+    compositor_fan::workers()
 }
 
 /// How many threads `work` items are worth.
@@ -65,10 +83,10 @@ pub(crate) fn bands<T: Send>(rows: &mut [T], width: usize, each: impl Fn(usize, 
         return;
     }
     let tall = height.div_ceil(threads).max(1);
-    std::thread::scope(|scope| {
+    fan_out(|fan| {
         for (at, band) in rows.chunks_mut(tall.saturating_mul(width)).enumerate() {
             let each = &each;
-            let _ = scope.spawn(move || each(at.saturating_mul(tall), band));
+            fan.spawn(move || each(at.saturating_mul(tall), band));
         }
     });
 }

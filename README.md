@@ -278,12 +278,30 @@ that is not the one on `PATH`.
 
 The wallpaper comes from this machine's pictures and from nowhere else.
 `cargo xtask wallpapers --from <directory>`, or `--from host:directory` for a
-machine `ssh` reaches, converts them with `ffmpeg` -- the first frame of a
-video, scaled until it covers the screen -- and keeps the rows under
+machine `ssh` reaches, converts them with `ffmpeg` -- scaled until it covers
+the screen -- and keeps the rows under
 `~/.local/share/ferrix/wallpapers`, or `$FERRIX_WALLPAPERS`. A run reads that
 directory and opens no connection of its own; with nothing in it the
 background is plain and a line says how to change that. `--wallpaper <NAME>`
 picks one by part of its name.
+
+A video in that directory becomes a wallpaper that moves, which on a Linux
+desktop is `exec-once = mpvpaper ALL <file>` and here is the same
+`background` layer surface with the decoding done on the machine that has a
+decoder: `ffmpeg` takes four seconds of it at ten frames a second, a quarter
+of the screen each way, and the frames are kept run-length encoded against
+the frame before them -- five seconds of `testsrc` is 3.7 MB where its raw
+rows are 20.7 MB. `run-compositor` starts `/bin/pattern --video` on it.
+The client damages the rows that changed rather than the screen, and waits
+for a frame callback before drawing the next one, so a wallpaper under a
+full-screen window stops playing on its own -- what `mpvpaper-stop` is for.
+[The display design](docs/DISPLAY.md) says what it costs, which on a machine
+that has to emulate is about a frame a second, and says why that is the
+compositor rather than the video.
+
+`cargo xtask test-video` boots a wallpaper that moves -- two frames, each one
+flat colour, made in code so the gate needs no `ffmpeg` -- and requires the
+screen to show both of them in turn.
 
 `cargo xtask test-compositor` judges the same picture pixel by pixel,
 `test-input` and `test-seat` send a key and a touch through QEMU and require

@@ -392,6 +392,25 @@ impl CpuQueue {
         self.rescale_slice();
     }
 
+    /// Give a task a new weight, whether it is running here, queued here or
+    /// neither.
+    ///
+    /// The task's own record is set either way, because that is what it is
+    /// enqueued with next and it may be on no queue at all. The fair class is
+    /// told as well when it holds the task, and answers whether it did.
+    pub(crate) fn set_weight(&mut self, task: &Arc<Task>, weight: u32) {
+        // Charged first for the reason `insert` and `release` are: a weight is
+        // the rate the running task accrues virtual time at, and time it has
+        // already run is owed at the rate it ran under.
+        if self.current.is_some() {
+            self.account(crate::timer::now_nanos());
+        }
+        task.set_weight(weight);
+        // The only refusal is a weight of zero, which `weight_of_nice` never
+        // answers and no caller here passes.
+        let _ = self.fair.set_weight(task.id, weight);
+    }
+
     /// Take the running task out of the fair class, keeping what it needs to
     /// come back with.
     pub(crate) fn detach_current(&mut self) {

@@ -111,6 +111,11 @@ const CONFIG_PATH: &str = "etc/hyprland.conf";
 /// Where `run-compositor` puts the wallpaper it carries.
 const WALLPAPER_PATH: &str = "etc/wallpaper.fxwall";
 
+/// Where it puts one that moves, which is a different file and a different
+/// flag rather than the same name holding either: a boot that carried the
+/// wrong one would say nothing until the screen was grey.
+const MOVIE_PATH: &str = "etc/wallpaper.fxvid";
+
 /// The instance the control socket is under, which `hyprctl` finds by
 /// looking when `HYPRLAND_INSTANCE_SIGNATURE` is not set.
 const INSTANCE: &str = "ferrix";
@@ -1220,6 +1225,138 @@ fn press(qmp: &mut Qmp, keys: &[&str]) -> Result<()> {
     Ok(())
 }
 
+/// `cargo xtask test-video`: boot a wallpaper that moves, and require the
+/// screen to show its frames in turn.
+///
+/// The video is two frames, each one flat colour, made in code by
+/// `crate::wallpaper::fixture` -- so the gate needs no `ffmpeg` on the
+/// machine that runs it, and so a screendump is judged against a colour
+/// rather than against a picture. What is being tested is the whole path:
+/// the format, the client that decodes and plays it, the layer surface it
+/// plays on, and the compositor drawing frame after frame of it.
+///
+/// Nothing else is started, so the wallpaper is the whole screen.
+///
+/// # Errors
+///
+/// A guest whose screen never showed both frames.
+pub(crate) fn test_video(args: &Args) -> Result<()> {
+    for arch in args.arches()? {
+        if crate::display::target(arch).is_none() {
+            println!("  {arch}: no virtio-gpu in QEMU's machine; skipped");
+            continue;
+        }
+        let programs = Programs::build(arch)?;
+        video_boot(arch, &programs, args)?;
+    }
+    Ok(())
+}
+
+/// The boot `test_video` judges.
+fn video_boot(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
+    let size = args.size.unwrap_or(crate::wallpaper::SCREEN);
+    // Frames the size of the screen, so that what a screendump holds is the
+    // frame's own colour and not a scale of it.
+    let video = crate::wallpaper::fixture(size.0, size.1)
+        .ok_or_else(|| Error::new("the video fixture would not encode".to_owned()))?;
+    println!(
+        "  {arch}: a video of two frames, {}x{}, {} KiB",
+        size.0,
+        size.1,
+        video.len() / 1024
+    );
+    let config = format!(
+        "# Written into the initramfs by `cargo xtask test-video`.\n\
+         monitor = , {}x{}@60, auto, 1\n\
+         exec-once = /{CLIENT_PATH} --video /{MOVIE_PATH}\n",
+        size.0, size.1
+    );
+    let mut carried = Carried::none();
+    carried.ports.push(crate::ports::File {
+        path: MOVIE_PATH.to_owned(),
+        mode: 0o644,
+        content: crate::ports::Content::Bytes(video),
+    });
+    let mut qemu_args = args.clone();
+    qemu_args.size = Some(size);
+    let (image, kernel) = build_image(arch, programs, &config, carried, &qemu_args)?;
+
+    let port = free_port()?;
+    qemu_args.display = true;
+    qemu_args.qmp_port = Some(port);
+    let dump = paths::build_dir(arch).join("video.ppm");
+    let hook = |watching: &mut Watching<'_>| -> Result<()> {
+        let mut qmp = Qmp::connect(port, Instant::now() + Duration::from_secs(10))?;
+        let seen =
+            both_frames(&mut qmp, &dump).map_err(|error| with_the_transcript(&error, watching))?;
+        println!("  {arch}: the screen showed both frames of the video, {seen} screendumps apart");
+        Ok(())
+    };
+    let _ = crate::qemu::watch_then(arch, &image, &kernel, &qemu_args, MARKER, hook)?;
+    Ok(())
+}
+
+/// Take screendumps until the screen has been each of the video's two
+/// colours, and say how many dumps that took.
+///
+/// A dump is judged by which colour most of it is: the frame is the whole
+/// screen, so a screen that is neither colour is not a frame at all, and one
+/// that is mostly a colour is that frame however the pointer or a cursor
+/// plane happens to sit on it.
+fn both_frames(qmp: &mut Qmp, dump: &Path) -> Result<usize> {
+    let deadline = Instant::now() + SETTLE;
+    let mut seen = [false; crate::wallpaper::FIXTURE.len()];
+    let mut dumps = 0_usize;
+    let mut last;
+    loop {
+        qmp.screendump(Some(DEVICE_ID), dump)?;
+        let bytes = std::fs::read(dump)
+            .map_err(|error| Error::new(format!("reading {}: {error}", dump.display())))?;
+        let screen = parse_ppm(&bytes)?;
+        dumps = dumps.saturating_add(1);
+        let pixels = screen.width.saturating_mul(screen.height);
+        let mut counts = [0_usize; crate::wallpaper::FIXTURE.len()];
+        for pixel in screen.pixels.chunks_exact(3) {
+            for (at, (red, green, blue)) in crate::wallpaper::FIXTURE.iter().enumerate() {
+                if pixel == [*red, *green, *blue]
+                    && let Some(count) = counts.get_mut(at)
+                {
+                    *count = count.saturating_add(1);
+                }
+            }
+        }
+        last = format!(
+            "{}x{}, {} of {pixels} the first colour and {} the second",
+            screen.width,
+            screen.height,
+            counts.first().copied().unwrap_or(0),
+            counts.get(1).copied().unwrap_or(0)
+        );
+        // Most of the screen, rather than all of it: the frame is the screen,
+        // so a majority is the frame and the rest is whatever the compositor
+        // drew over it.
+        for (at, count) in counts.iter().enumerate() {
+            if pixels > 0
+                && count.saturating_mul(2) > pixels
+                && let Some(was) = seen.get_mut(at)
+            {
+                *was = true;
+            }
+        }
+        if seen.iter().all(|was| *was) {
+            return Ok(dumps);
+        }
+        if Instant::now() >= deadline {
+            return Err(Error::new(format!(
+                "the screen never showed both frames of the video in {}s: {} dumps, the last {last}",
+                SETTLE.as_secs(),
+                dumps
+            )));
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
 /// One `key` event of QMP's `input-send-event`, as its JSON.
 fn key(name: &str, down: bool) -> String {
     format!(
@@ -1588,14 +1725,33 @@ pub(crate) fn run_compositor(args: &Args) -> Result<()> {
     // comes later and wins.
     let size = args.size.unwrap_or(crate::wallpaper::SCREEN);
     let config = format!("monitor = , {}x{}@60, auto, 1\n{config}", size.0, size.1);
+    // A wallpaper that moves is started the way a still one is, and the way
+    // `mpvpaper ALL <file>` is started from a Linux desktop's `exec-once`:
+    // the difference is the flag, and that the frames were decoded on a
+    // machine that has a decoder.
     let config = match crate::wallpaper::file(args, size) {
-        Some(picture) => {
+        Some(chosen) => {
+            // A moving one is started the way `mpvpaper` is on a desktop,
+            // down to the words: `-o no-audio` and `ALL` mean here what they
+            // mean there, so a line copied either way says the same thing.
+            let (path, how) = match chosen {
+                crate::wallpaper::Chosen::Still(_) => {
+                    (WALLPAPER_PATH, format!("--wallpaper /{WALLPAPER_PATH}"))
+                }
+                // One word after `-o`, because `exec-once` is split on
+                // whitespace here and not by a shell: `hyprix::state` reads
+                // it with `split_whitespace`, so a quoted string would
+                // arrive as three arguments and two of them with quotes in.
+                crate::wallpaper::Chosen::Moving(_) => {
+                    (MOVIE_PATH, format!("--video -o no-audio ALL /{MOVIE_PATH}"))
+                }
+            };
             carried.ports.push(crate::ports::File {
-                path: WALLPAPER_PATH.to_owned(),
+                path: path.to_owned(),
                 mode: 0o644,
-                content: crate::ports::Content::Bytes(picture),
+                content: crate::ports::Content::Bytes(chosen.bytes()),
             });
-            format!("exec-once = /{CLIENT_PATH} --wallpaper /{WALLPAPER_PATH}\n{config}")
+            format!("exec-once = /{CLIENT_PATH} {how}\n{config}")
         }
         None => config,
     };

@@ -124,6 +124,18 @@ pub(crate) struct Args {
     /// `--size <W>x<H>`: the screen `run-compositor` gives the guest and
     /// `wallpapers` cuts pictures for, 1920x1080 for both when not given.
     pub(crate) size: Option<(u32, u32)>,
+    /// `--fps <N>`: how many frames a second of a video `wallpapers` keeps.
+    ///
+    /// A wallpaper that moves is its frames, so this is a size as much as a
+    /// rate: twice the rate is twice the initramfs.
+    pub(crate) fps: Option<u32>,
+    /// `--seconds <N>`: how many seconds of a video `wallpapers` keeps,
+    /// after which the wallpaper begins again.
+    pub(crate) seconds: Option<u32>,
+    /// `--video-size <W>x<H>`: how large a video's frames are kept, where
+    /// they are not to be a quarter of `--size` each way. The client scales
+    /// whatever it is given to cover the screen.
+    pub(crate) video_size: Option<(u32, u32)>,
     /// `--boot <name>`: run only the boots of `test-compositor` whose name
     /// holds this, rather than all of them.
     ///
@@ -187,14 +199,14 @@ impl Args {
                 "--from" => args.from = Some(value(&mut items, "--from")?),
                 "--size" => {
                     let raw = value(&mut items, "--size")?;
-                    let size = raw
-                        .split_once('x')
-                        .and_then(|(wide, tall)| wide.parse().ok().zip(tall.parse().ok()))
-                        .filter(|&(wide, tall): &(u32, u32)| wide > 0 && tall > 0);
-                    args.size = Some(size.ok_or_else(|| {
-                        Error::new(format!("--size wants <width>x<height>, got `{raw}`"))
-                    })?);
+                    args.size = Some(dimensions(&raw, "--size")?);
                 }
+                "--video-size" => {
+                    let raw = value(&mut items, "--video-size")?;
+                    args.video_size = Some(dimensions(&raw, "--video-size")?);
+                }
+                "--fps" => args.fps = Some(count(&mut items, "--fps")?),
+                "--seconds" => args.seconds = Some(count(&mut items, "--seconds")?),
                 other if other.starts_with('-') => {
                     return Err(Error::new(format!("unknown option `{other}`")));
                 }
@@ -245,6 +257,24 @@ fn number<T: std::str::FromStr>(items: &mut impl Iterator<Item = String>, key: &
     let raw = value(items, key)?;
     raw.parse()
         .map_err(|_| Error::new(format!("{key} wants a number, got `{raw}`")))
+}
+
+/// Take a count following a `--key`, which may not be none: a video of no
+/// frames a second is not a slower video, it is no video.
+fn count(items: &mut impl Iterator<Item = String>, key: &str) -> Result<u32> {
+    let taken: u32 = number(items, key)?;
+    if taken == 0 {
+        return Err(Error::new(format!("{key} wants more than none")));
+    }
+    Ok(taken)
+}
+
+/// `<width>x<height>`, both more than none.
+fn dimensions(raw: &str, key: &str) -> Result<(u32, u32)> {
+    raw.split_once('x')
+        .and_then(|(wide, tall)| wide.parse().ok().zip(tall.parse().ok()))
+        .filter(|&(wide, tall): &(u32, u32)| wide > 0 && tall > 0)
+        .ok_or_else(|| Error::new(format!("{key} wants <width>x<height>, got `{raw}`")))
 }
 
 #[cfg(test)]

@@ -1267,8 +1267,13 @@ fn start_scheduler(cpus: &'static smp::Topology) {
     };
 
     println!(
-        "  tasks    {} threads run to completion on {} processors ({:#b}), {} switches, {} steals",
-        report.threads, report.processors, report.processor_mask, report.switches, report.steals,
+        "  tasks    {} threads run to completion on {} processors ({:#b}), {} switches, {} steals,          {} shootdowns to free their stacks",
+        report.threads,
+        report.processors,
+        report.processor_mask,
+        report.switches,
+        report.steals,
+        report.shootdowns,
     );
     println!(
         "  sleep    one task slept {} us and came back",

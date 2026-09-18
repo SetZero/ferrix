@@ -55,7 +55,7 @@ In dependency order, with sizes in story points:
 | # | what | points |
 |---|---|---|
 | 1 | **virtio-gpu 3D in the ring-3 driver.** `VIRTIO_GPU_F_VIRGL` and `CONTEXT_INIT` negotiated, `GET_CAPSET_INFO`/`GET_CAPSET`, `CTX_CREATE`/`CTX_DESTROY`/`CTX_ATTACH_RESOURCE`, `RESOURCE_CREATE_3D`, `SUBMIT_3D`, `TRANSFER_TO_HOST_3D`/`FROM_HOST_3D`, and fences. `libs/virtio::gpu` already has the 2D commands and their fuzz target, and this extends both. **Mostly done -- §3.2.** | 13 |
-| 2 | **A render node and the `virtgpu` ioctls.** *Begun: `libs/renderctl`, `kernel::render`, the ABI table and the node itself are written, and a program opens it -- §3.4. The handle table, the calls that need an object, and scanout are what is left.* `/dev/dri/renderD128`, GEM handles, `DRM_IOCTL_VIRTGPU_GETPARAM`, `GET_CAPS`, `CONTEXT_INIT`, `RESOURCE_CREATE`, `RESOURCE_INFO`, `MAP`, `EXECBUFFER`, `TRANSFER_TO_HOST`/`FROM_HOST` and `WAIT`, in `libs/linux-abi` from a committed probe as every other ABI table is. And **scanout of a 3D resource**, so the finished frame never leaves the GPU: no per-frame transfer at all, where today's best is the damaged rectangles. | 13 |
+| 2 | **A render node and the `virtgpu` ioctls.** *Begun: `libs/renderctl`, `kernel::render`, the ABI table and the node itself are written, a program opens it, and `RESOURCE_CREATE`/`RESOURCE_INFO` make a real resource through the open's handle table -- §3.4. `MAP`, the calls that need a context, and scanout are what is left.* `/dev/dri/renderD128`, GEM handles, `DRM_IOCTL_VIRTGPU_GETPARAM`, `GET_CAPS`, `CONTEXT_INIT`, `RESOURCE_CREATE`, `RESOURCE_INFO`, `MAP`, `EXECBUFFER`, `TRANSFER_TO_HOST`/`FROM_HOST` and `WAIT`, in `libs/linux-abi` from a committed probe as every other ABI table is. And **scanout of a 3D resource**, so the finished frame never leaves the GPU: no per-frame transfer at all, where today's best is the damaged rectangles. | 13 |
 | 5 | **The host half, in xtask.** `-device virtio-gpu-gl` and a GL display where QEMU has them, asked for as `window.rs` asks for a display today, with the 2D device otherwise. The gate host's QEMU rebuilt with OpenGL and virglrenderer, and `egl-headless` for judged boots. GPU output is not byte-exact across drivers, so a judged GPU boot compares within a stated tolerance, or against a software GL pinned on the gate host; the software renderer's images stay byte-exact. **Judging one needs a way to read its pixels that is not `screendump` -- see §3.1.** | 5 |
 | 3b | **A GPU renderer for the compositor, in Rust.** A `compositor/virgl` crate that encodes virgl's command stream -- object creation, state, `draw_vbo`, resource transfers -- with shaders as the TGSI text virgl takes. Hyprland's effects are about eight shaders: the two blur kernels, `blurprepare`, `blurFinish`, the rounded texture, the border gradient, the shadow. `compositor/render` gains a renderer trait with the software renderer as the fallback the roadmap already requires -- the compositor is never GPU-only. Clients stay `wl_shm`; their damaged rectangles are uploaded as textures. | 21 |
 | 4 | **`zwp_linux_dmabuf` and a GBM-shaped allocator.** Only once clients render on the GPU themselves. Not needed for 3b, and deferred with 3a. | 8 |
@@ -268,9 +268,26 @@ driver, without it there is none and the program must say so.
 
 **What is left, and what is in the way of each.**
 
-* **The handle table, `RESOURCE_CREATE` and `RESOURCE_INFO`.** Nothing is in
-  the way: the core needs an object-id counter and the open needs a table of
-  its own, and `MAKE_OBJ` already works -- it is what the proof does.
+* **The handle table, `RESOURCE_CREATE` and `RESOURCE_INFO`.** *Done.* The
+  open holds the table, which is why a render node takes any number of opens:
+  two programs' `bo_handle` 1 are different objects. The core holds the
+  object-id counter and hands ids out in turn, so a driver's late reply names
+  an object that is gone rather than one just made; an id the device would
+  not let go of is stepped over for good. A resource's `res_handle` is the
+  core's object id, because the driver names the device's resource by it.
+  The judged `--gl` boot now makes one and reads it back, which is the first
+  thing in this path that costs the device a message rather than being
+  answered from the driver's HELLO.
+
+  Two things it does not do yet, neither of them in the way of step 3b:
+  **a handle released on purpose**, because `DRM_IOCTL_GEM_CLOSE` is not in
+  `libs/linux-abi`, which takes every number from a committed probe -- adding
+  it means running `probe/drm.sh` on a Linux host, and until then an open's
+  objects go when the open does; and **a resource's shape**, because
+  `MAKE_OBJ`'s description carries target, format and bind and nothing else,
+  so every resource is a buffer. Carrying width, height and stride is a
+  change to the description both sides read, and belongs with the transfers
+  that would be the first to need it.
 * **`MAP`, and mapping an object into a process.** Blocked on the protocol:
   `MakeObject` carries a size and no backing, and the driver attaches none,
   so an object has no guest pages to map. `flags::MAPPABLE` is defined and

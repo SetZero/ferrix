@@ -4454,6 +4454,42 @@ a thread, which is the same bytes on one thread as on sixteen (the blur 85
 ms to 20, the terminal 7.0 to 1.1, the video 5.8 to 1.1). A frame that owes
 a whole blur is 22 ms, which is a 30 fps video kept up with.
 
+**Done — a video wallpaper stopped being everybody's problem (2026-09-19).**
+Software-rendered video playback did not merely cost the frames it drew: it
+made the whole desktop stutter, the pointer and the bar with it. Three things
+were wrong, and only the first is about drawing at all.
+
+* **A thread per band, per operation, per frame.** `compositor_render` spread
+  its rows with `std::thread::scope`, which starts the threads and joins
+  them. A blurred frame is six blur passes and the conversions either side of
+  them, so a 30 fps wallpaper that moves was on the order of a thousand
+  threads started and ended a second. The bands are the same bands now, given
+  to workers that are already there: `compositor/fan`, started once, waiting
+  on a condition variable between frames. The thread that asks for the work
+  is one of them, which is why the pool starts one fewer than there are
+  cores and a single-processor guest starts none.
+* **Every one of those exits interrupted the whole machine.** Ferrix frees an
+  exited task's kernel stack by invalidating its address on every processor
+  and waiting for each to answer, and the idle loop's reaper did that one
+  stack at a time -- so a program whose threads were short-lived spent every
+  other program's time, which is the cost landing on the wrong task. It frees
+  a batch of sixteen under one shootdown now, and while any other processor
+  is still working a partial batch waits rather than interrupting it; when
+  the machine is quiet, whatever is there goes under one. `cargo xtask
+  test-boot` prints the number on its `tasks` line, and stage 5's thousand
+  threads went from 1015 shootdowns to 826 -- a boot that is idle between its
+  phases, and so the mild end of what this costs.
+* **Nothing could be told to matter less.** `setpriority` stored a nice value
+  and the scheduler never read it, and `sched_setscheduler` refused every
+  policy but `SCHED_OTHER`, so a video decoder and the compositor drawing its
+  frames competed on exactly equal terms. `ferrix_sched` has carried weights
+  since stage 5; a nice value now becomes one, on every task of the process
+  and on the threads it starts afterwards. `RunQueue::set_weight` keeps what
+  an entity is owed in *real* time across the change, as Linux's
+  `reweight_entity` does, so a renice neither hands out a turn nor takes one
+  away. Namespaces and cgroups are still stage 13; this is what there is
+  before them.
+
 **Done — the rest of Hyprland's dispatcher table (2026-09-17).**
 Twenty-seven names in Hyprland's `m_dispMap` had no answer here; every one
 of them does now. The split is by what they touch. `compositor/layout`

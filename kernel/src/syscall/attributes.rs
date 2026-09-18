@@ -1,8 +1,8 @@
-//! What a process has said about itself that nothing in the kernel acts on
-//! yet: its name, its nice value, its I/O priority, its personality, its
-//! robust futex list, and the switches `prctl` flips.
+//! What a process has said about itself: its name, its nice value, its I/O
+//! priority, its personality, its robust futex list, and the switches `prctl`
+//! flips. The nice value is acted on; the rest are kept and read back.
 //!
-//! # Why these are kept at all
+//! # Why the ones that are not acted on are kept
 //!
 //! Because a program that sets one reads it back, and a program that reads
 //! back something other than what it set concludes that the call failed.
@@ -10,8 +10,19 @@
 //! command prints what `ioprio_get` says; `setarch` checks the persona it asked
 //! for took. Answering `ENOSYS` makes every one of those applets fail, and
 //! answering "accepted" while reading back the default makes them lie. So the
-//! values are stored, reported, and -- until the scheduler has a use for a nice
-//! value, or a block layer for an I/O class -- nothing else.
+//! values are stored, reported, and -- until a block layer has a use for an
+//! I/O class -- nothing else.
+//!
+//! # What the nice value does
+//!
+//! It is the scheduler's weight, through [`apply_nice`]: `ferrix_sched`'s
+//! fair class has carried weights since stage 5 and `weight_of_nice` is
+//! Linux's own table, so a nice value has somewhere to go. Until it was
+//! plumbed through, nothing a program could say made the machine prefer one
+//! of its programs to another -- a video decoder and the compositor drawing
+//! its frames competed on equal terms, and the compositor lost as often as it
+//! won. Namespaces and cgroups are stage 13 (`docs/ROADMAP.md`); a nice value
+//! is what there is before them.
 //!
 //! # Why they are not fields of `Process`
 //!
@@ -42,7 +53,9 @@ use core::ops::Deref;
 use crate::sync::SpinLock;
 use ferrix_linux_abi::errno::Errno;
 use ferrix_linux_abi::nr::Syscall;
+use ferrix_sched::weight_of_nice;
 
+use crate::sched::Task;
 use crate::syscall::credentials::{self, CAP_LAST_CAP};
 use crate::syscall::process::Process;
 use crate::syscall::registry;
@@ -497,9 +510,7 @@ pub(crate) fn sys_getpriority(process: &Process, which: i32, who: i32) -> Result
 }
 
 /// `setpriority`: store a nice value, clamped to -20..=19 as Linux clamps it,
-/// on every process named.
-///
-/// Stored and not acted on: the scheduler's weights do not read it yet.
+/// on every process named, and give every task of each the weight it means.
 ///
 /// Linux's `set_one_prio` for each: a process the caller does not own is
 /// `EPERM`, and lowering one's nice value without privilege `EACCES`. The
@@ -524,11 +535,29 @@ pub(crate) fn sys_setpriority(
             continue;
         }
         update(subject, |a| a.nice = nice);
+        for task in subject.tasks() {
+            apply_nice(subject, &task);
+        }
         if answer == Err(Errno::ESRCH) {
             answer = Ok(0);
         }
     }
     answer
+}
+
+/// Give `task` the scheduling weight `process`'s nice value means.
+///
+/// One task and not all of them, because the two callers have different ones
+/// in hand: `setpriority` has every task the process has now, and a thread
+/// starting has only itself, before anything else can see it.
+///
+/// A nice value outside Linux's table has no weight and is left alone, which
+/// cannot happen from here -- both callers read a value already clamped to
+/// -20..=19 -- and is not worth a panic if it ever does.
+pub(crate) fn apply_nice(process: &Process, task: &Arc<Task>) {
+    if let Some(weight) = weight_of_nice(get(process).nice) {
+        crate::sched::set_weight(task, weight);
+    }
 }
 
 /// Bits below the class in an I/O priority: `IOPRIO_CLASS_SHIFT`.

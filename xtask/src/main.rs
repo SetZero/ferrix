@@ -128,6 +128,7 @@ COMMANDS:
     test-net      Boot with a network device and require busybox to configure it and fetch a file
     test-display  Boot compositor/blank as init with a virtio-gpu, and require its colour on every pixel
     test-compositor  Boot compositor/hyprix as init with a virtio-gpu, and require its background on every pixel
+    test-video    Boot a wallpaper that moves and require the screen to show its frames in turn
     test-input    Boot compositor/evecho as init with virtio-input, send a key and a touch over QMP, and require them back
     test-seat     Boot the compositor with a client, type into it over QMP, and require the key and the keybind to land
     test-pty      Boot compositor/term as init, run a program on a pseudoterminal, and require its output back
@@ -281,6 +282,7 @@ fn run() -> Result<()> {
         "run-compositor" => compositor::run_compositor(&args),
         "wallpapers" => wallpaper::import(&args),
         "test-compositor" => compositor::test_compositor(&args),
+        "test-video" => compositor::test_video(&args),
         "test-input" => input::test_input(&args),
         "test-seat" => seat::test_seat(&args),
         "test-pty" => pty::test_pty(&args),

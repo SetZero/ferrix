@@ -326,6 +326,16 @@ impl Task {
         }
     }
 
+    /// Give it a new scheduling weight.
+    ///
+    /// The record a task carries between queues, and what it is enqueued with
+    /// next. A task that is on a queue now has that queue's copy changed as
+    /// well, which is [`crate::sched::set_weight`]'s job and not this one's:
+    /// this one is only reached under the queue's lock.
+    pub(crate) fn set_weight(&self, weight: u32) {
+        self.weight.store(weight, Ordering::Relaxed);
+    }
+
     /// Remember what it left a queue with.
     pub(crate) fn store_entity_state(&self, state: EntityState) {
         self.weight.store(state.weight, Ordering::Relaxed);

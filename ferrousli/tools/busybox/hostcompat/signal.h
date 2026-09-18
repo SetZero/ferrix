@@ -31,6 +31,13 @@ static inline int sigprocmask(int how, const hostcompat_sigset_t *set, hostcompa
 	return 0;
 }
 
+static inline int sigpending(hostcompat_sigset_t *set)
+{
+	(void)set;
+	errno = ENOSYS;
+	return -1;
+}
+
 static inline int hostcompat_sigaction(int n, const struct hostcompat_sigaction *sa,
 				       struct hostcompat_sigaction *old)
 {

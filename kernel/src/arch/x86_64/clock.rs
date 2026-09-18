@@ -1,16 +1,34 @@
 //! The free-running counter on x86-64.
 //!
-//! Two candidates, in order of preference.
+//! Two candidates, and the choice between them is about what a read costs.
 //!
 //! The **HPET** is a counter in the chipset with a period firmware states
 //! exactly, in femtoseconds, in a table. Nothing has to be calibrated: the
 //! frequency is read, not measured, which means it carries no error at all.
+//! But it lives behind a device window, and [`main_counter`] reads it three
+//! times over to see a 32-bit wrap untorn — so one reading of the clock is
+//! three loads from memory-mapped I/O.
 //!
-//! The **TSC** is a counter in the CPU. It is faster to read and it is what a
-//! grown kernel ends up using, but nothing tells you its frequency — it has to
-//! be measured against something else, and the only clock guaranteed to exist
-//! for that is the PIT, a part designed in 1981. So the TSC is the fallback,
-//! for a machine with no HPET table.
+//! The **TSC** is a counter in the CPU, read with one instruction and no bus
+//! cycle at all. Nothing reports its frequency, so it has to be measured
+//! against something else — but the HPET is exactly the something else worth
+//! measuring against, and ten milliseconds of it is enough.
+//!
+//! So an **invariant** TSC is preferred, and the HPET is what it is measured
+//! against. The frequency still comes from the one number firmware states
+//! exactly; what changes is that reading the clock afterwards costs a register
+//! read rather than three trips to a device. On real hardware that is twenty
+//! nanoseconds against a microsecond. Under a hypervisor it is the difference
+//! between a trap into an instruction emulator and no trap whatever, and the
+//! kernel reads this clock twice on every timer tick: at a kilohertz, under
+//! `WHPX`, the HPET alone was six thousand virtual-machine exits a second, and
+//! stage 3 measured the timer running at a quarter of the rate it asked for.
+//!
+//! *Invariant* is the whole of the condition. Without that bit the TSC slows
+//! with the core and stops in the deeper sleep states, which makes it a cycle
+//! counter and not a clock; then the HPET, slow as it is to read, is the only
+//! honest answer. A machine with no HPET table at all falls back to measuring
+//! the TSC against the PIT, a part designed in 1981.
 //!
 //! Either way the answer is a counter and a frequency, and the rest of the
 //! kernel is told neither which one it got nor that there was a choice.
@@ -122,6 +140,18 @@ fn start_hpet(phys: u64) -> Result<&'static str, &'static str> {
         }
     }
 
+    // An invariant TSC is the counter whatever the HPET's width, for the
+    // reason this module opens with: the rate still comes from the HPET, and
+    // every later reading costs a register read instead of three loads from a
+    // device window. A measurement that does not come off leaves the HPET to
+    // answer for itself below.
+    if invariant_tsc()
+        && let Some(tsc_hz) = calibrate_tsc_against_hpet(regs, hpet_hz, caps.counter_mask())
+    {
+        COUNTER_HZ.store(tsc_hz, Ordering::Relaxed);
+        return Ok("TSC, calibrated against the HPET");
+    }
+
     if caps.counter_is_64_bit() {
         HPET.store(base, Ordering::Relaxed);
         COUNTER_HZ.store(hpet_hz, Ordering::Relaxed);
@@ -136,6 +166,21 @@ fn start_hpet(phys: u64) -> Result<&'static str, &'static str> {
         .ok_or("the HPET is 32 bits wide, and the TSC could not be measured against it")?;
     COUNTER_HZ.store(tsc_hz, Ordering::Relaxed);
     Ok("TSC, calibrated against a 32-bit HPET")
+}
+
+/// Whether the TSC counts at a rate nothing disturbs: `CPUID.80000007H:EDX[8]`.
+///
+/// The extended leaves have to be asked for before they are read — a CPU that
+/// has none reports its highest as a number below the one being asked about,
+/// and reading past it gives whatever the highest leaf returns rather than a
+/// zero.
+fn invariant_tsc() -> bool {
+    use core::arch::x86_64::__cpuid;
+    /// The highest extended leaf, and the leaf the bit lives in.
+    const HIGHEST: u32 = 0x8000_0000;
+    /// Advanced power management information.
+    const POWER: u32 = 0x8000_0007;
+    __cpuid(HIGHEST).eax >= POWER && __cpuid(POWER).edx & (1 << 8) != 0
 }
 
 /// Count TSC ticks over [`CALIBRATION_MILLIS`] of an HPET counting at

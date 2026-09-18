@@ -2,10 +2,10 @@
 //!
 //! The card next door is the screen; this is where the GPU is
 //! (`docs/GPU.md` §3.3). A compositor that draws on the GPU opens both: the
-//! card to show a frame, the render node to make one. What is here is only
-//! as much as says the node is real -- who is driving it and what it can do
-//! -- because the calls that make an object need a handle table the kernel
-//! does not have yet.
+//! card to show a frame, the render node to make one. What is here says the
+//! node is real -- who is driving it and what it can do -- and then makes one
+//! resource and asks about it, which is the first thing that costs the
+//! device a message rather than being answered from the driver's HELLO.
 //!
 //! # Why this reports rather than fails
 //!
@@ -21,7 +21,7 @@ use std::io;
 
 use ferrix_linux_abi::drm::{self, Version};
 use ferrix_linux_abi::socket::Width;
-use ferrix_linux_abi::virtgpu::{self, GetParam, Layout};
+use ferrix_linux_abi::virtgpu::{self, GetParam, Layout, ResourceCreate, ResourceInfo};
 
 /// What the display test reads this program's render line by. Deliberately
 /// not the compositor's own prefix: that one is what the boot is watched
@@ -160,7 +160,74 @@ impl Render {
         self.ioctl(virtgpu::IOCTL_GETPARAM, &mut request)?;
         Ok(answer)
     }
+
+    /// Make a resource of `size` bytes, and answer its object handle and the
+    /// resource behind it.
+    ///
+    /// The target, format and bind words are virgl's and go to the driver
+    /// untouched; a plain buffer is what they say here, because a buffer is
+    /// the one shape `MAKE_OBJ` carries today. The shape fields are left at
+    /// what a buffer means -- one row, one layer, no mip levels.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the node said; `ENODEV` when the driver has gone.
+    pub fn create_resource(&self, size: u32) -> io::Result<(u32, u32)> {
+        let mut request = ResourceCreate {
+            target: PIPE_BUFFER,
+            format: VIRGL_FORMAT_R8_UNORM,
+            bind: VIRGL_BIND_VERTEX_BUFFER,
+            width: size,
+            height: 1,
+            depth: 1,
+            array_size: 1,
+            last_level: 0,
+            nr_samples: 0,
+            flags: 0,
+            bo_handle: 0,
+            res_handle: 0,
+            size,
+            stride: size,
+        };
+        self.ioctl(virtgpu::IOCTL_RESOURCE_CREATE, &mut request)?;
+        Ok((request.bo_handle, request.res_handle))
+    }
+
+    /// What `VIRTGPU_RESOURCE_INFO` says is behind object `handle`: its
+    /// resource and its size.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the node said; `ENOENT` for a handle this open has not got.
+    pub fn resource_info(&self, handle: u32) -> io::Result<(u32, u32)> {
+        let mut request = ResourceInfo {
+            bo_handle: handle,
+            res_handle: 0,
+            size: 0,
+            blob_mem: 0,
+        };
+        self.ioctl(virtgpu::IOCTL_RESOURCE_INFO, &mut request)?;
+        Ok((request.res_handle, request.size))
+    }
 }
+
+/// virgl's `PIPE_BUFFER`: a resource with no shape, which is what bytes on
+/// their way to a shader are. From Mesa's `p_defines.h`, as `user/gpu` takes
+/// it.
+const PIPE_BUFFER: u32 = 0;
+
+/// virgl's `VIRGL_FORMAT_R8_UNORM`: one byte a pixel, which is how a
+/// buffer's bytes are counted.
+const VIRGL_FORMAT_R8_UNORM: u32 = 64;
+
+/// virgl's `VIRGL_BIND_VERTEX_BUFFER`. virgl numbers some of its bind bits
+/// differently from Mesa's `PIPE_BIND_*`, so it is taken from virgl's header.
+const VIRGL_BIND_VERTEX_BUFFER: u32 = 1 << 4;
+
+/// How big the resource the probe asks for is: one page, which is enough to
+/// be a real resource on the device and small enough to cost nothing. The
+/// same size the kernel's own proof uses.
+const PROBE_BYTES: u32 = 4096;
 
 /// One line saying what the render node is, or that there is none.
 ///
@@ -182,7 +249,39 @@ pub fn probe() -> String {
     // error rather than a zero, so each is reported as it answered.
     let three_d = node.param(virtgpu::PARAM_3D_FEATURES).unwrap_or(0);
     let capsets = node.param(virtgpu::PARAM_SUPPORTED_CAPSET_IDS).unwrap_or(0);
-    format!("{MARKER} renderD128 {driver} 3d {three_d} capsets 0x{capsets:x}")
+    format!(
+        "{MARKER} renderD128 {driver} 3d {three_d} capsets 0x{capsets:x} {}",
+        object(&node)
+    )
+}
+
+/// What making one resource and asking about it said: `object <handle>/<res>
+/// of <size> bytes`, or `object none <why>`.
+///
+/// This is the half of the line that costs the device a message. Everything
+/// before it is answered from the driver's HELLO, so a node that names a
+/// driver proves only that the core was told about one; a resource proves
+/// the whole path -- the node's handle table, the core's session, the driver
+/// and the device.
+///
+/// The resource is let go of when the node closes, which is the only way an
+/// open has to let go of one today.
+fn object(node: &Render) -> String {
+    let (handle, resource) = match node.create_resource(PROBE_BYTES) {
+        Ok(made) => made,
+        Err(error) => return format!("object none create failed: {}", reason(&error)),
+    };
+    match node.resource_info(handle) {
+        // The node answers its own table, so a disagreement here is the
+        // table being wrong rather than the device saying something else.
+        Ok((told, size)) if told == resource && size == PROBE_BYTES => {
+            format!("object {handle}/{resource} of {size} bytes")
+        }
+        Ok((told, size)) => {
+            format!("object none info said {told}/{size}, not {resource}/{PROBE_BYTES}")
+        }
+        Err(error) => format!("object none info failed: {}", reason(&error)),
+    }
 }
 
 /// An error as one word and its message, with no newline in it.

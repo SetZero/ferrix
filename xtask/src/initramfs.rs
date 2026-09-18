@@ -519,14 +519,6 @@ fn build_with_shell(
             }
             archive.symlink(&format!("bin/{applet}"), "busybox")?;
         }
-        // Only beside a program too: zinc is a shell a person starts from
-        // the busybox one, and the boot check's archive stays the same bytes.
-        if let Some(zinc) = zinc {
-            archive.file(ZINC_PATH, 0o755, zinc)?;
-            for name in ZINC_NAMES {
-                archive.symlink(&format!("bin/{name}"), "zinc")?;
-            }
-        }
         // uutils/coreutils, beside a program for the same reason zinc is: the
         // boot check carries none and its archive stays the bytes it was. The
         // links are absolute, unlike busybox's, because they point out of the
@@ -538,6 +530,21 @@ fn build_with_shell(
             for link in links_of(name) {
                 archive.symlink(&format!("{UUTILS_DIR}/{link}"), name)?;
             }
+        }
+    }
+    // zinc, whether or not busybox is beside it: `run-compositor` boots the
+    // compositor as init, with no program carried at all, and starts zinc on
+    // a pseudoterminal directly (`docs/DISPLAY.md`'s desktop). It was written
+    // only inside the branch above, which needs a program, so that boot
+    // forked a shell that was never actually in the archive -- the same
+    // mistake the ports below were already moved out of. Outside the branch,
+    // because a caller that hands over zinc's bytes means it to be there
+    // whether or not busybox is too; the boot check carries neither and its
+    // archive stays the bytes it was.
+    if let Some(zinc) = zinc {
+        archive.file(ZINC_PATH, 0o755, zinc)?;
+        for name in ZINC_NAMES {
+            archive.symlink(&format!("bin/{name}"), "zinc")?;
         }
     }
     // The files a caller asked to carry: the ports, and whatever else a test
@@ -651,23 +658,27 @@ mod tests {
     }
 
     #[test]
-    fn zinc_goes_in_bin_as_zinc_and_zsh_only_beside_a_program() {
+    fn zinc_goes_in_bin_as_zinc_and_zsh_whether_or_not_a_program_is_beside_it() {
         let with = build_with_shell(Some(b"program"), &[], Some(b"shell"), &[], &[]).unwrap();
-        let without = build_with_shell(None, &[], Some(b"shell"), &[], &[]).unwrap();
+        let without_program = build_with_shell(None, &[], Some(b"shell"), &[], &[]).unwrap();
+        let without_either = build_with_shell(None, &[], None, &[], &[]).unwrap();
+        for archive in [&with, &without_program] {
+            assert!(
+                archive
+                    .windows(ZINC_PATH.len())
+                    .any(|w| w == ZINC_PATH.as_bytes()),
+                "bin/zinc is in the archive whether or not a program is beside it"
+            );
+            assert!(
+                archive.windows(b"bin/zsh".len()).any(|w| w == b"bin/zsh"),
+                "bin/zsh links to it"
+            );
+        }
         assert!(
-            with.windows(ZINC_PATH.len())
-                .any(|w| w == ZINC_PATH.as_bytes()),
-            "bin/zinc is in the archive beside a program"
-        );
-        assert!(
-            with.windows(b"bin/zsh".len()).any(|w| w == b"bin/zsh"),
-            "bin/zsh links to it"
-        );
-        assert!(
-            !without
+            !without_either
                 .windows(ZINC_PATH.len())
                 .any(|w| w == ZINC_PATH.as_bytes()),
-            "without a program the archive is the one the boot check reads"
+            "without zinc's bytes the archive is the one the boot check reads"
         );
     }
 

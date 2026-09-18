@@ -172,7 +172,7 @@ impl Canvas {
         else {
             return;
         };
-        std::thread::scope(|scope| {
+        compositor_fan::fan_out(|fan| {
             for (at, band) in rows.chunks_mut(tall * stride).enumerate() {
                 let top = covered.y + i64::try_from(at * tall).unwrap_or(0);
                 let inside = Rect::new(
@@ -187,7 +187,7 @@ impl Canvas {
                     .map(|clip| clip.translate(0, top.saturating_neg()))
                     .collect();
                 let draw = &draw;
-                let _ = scope.spawn(move || draw(band, top, &local));
+                fan.spawn(move || draw(band, top, &local));
             }
         });
     }

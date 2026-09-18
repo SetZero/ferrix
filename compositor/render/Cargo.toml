@@ -9,6 +9,7 @@ publish.workspace = true
 
 [dependencies]
 compositor-config = { path = "../config" }
+compositor-fan = { path = "../fan" }
 compositor-layout = { path = "../layout" }
 # The rasteriser: pure Rust with no build script. Pinned exactly, since the
 # committed expected images are byte-exact and a new tiny-skia may round a

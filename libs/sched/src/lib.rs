@@ -685,6 +685,82 @@ impl<T> RunQueue<T> {
         Some((payload, state))
     }
 
+    /// Give entity `id` the weight `weight`, running or waiting, and say
+    /// whether it was there to be given one.
+    ///
+    /// Its virtual runtime is kept, so what the entity is owed survives the
+    /// change; what moves is the rate virtual time accrues at, which is the
+    /// whole of what a weight is. The deadline is measured again from where
+    /// the entity stands, because a request is one slice at the weight it is
+    /// made with — and only when the weight really changes, so that setting
+    /// the weight an entity already has cannot extend a running entity's turn
+    /// however often it is asked for.
+    ///
+    /// # Errors
+    ///
+    /// [`SchedError::ZeroWeight`], for the reason [`RunQueue::enqueue`] gives.
+    pub fn set_weight(&mut self, id: u64, weight: u32) -> Result<bool, SchedError> {
+        if weight == 0 {
+            return Err(SchedError::ZeroWeight);
+        }
+        if let Some(curr) = self.curr.as_ref().filter(|curr| curr.id == id) {
+            let (vruntime, was) = (curr.vruntime, curr.weight);
+            if was != weight {
+                let (at, deadline) = self.reweigh(vruntime, was, weight);
+                if let Some(curr) = self.curr.as_mut() {
+                    curr.weight = weight;
+                    curr.vruntime = at;
+                    curr.deadline = deadline;
+                }
+                self.normalize();
+            }
+            return Ok(true);
+        }
+        // Out of the tree and back into it, because the deadline it is keyed
+        // by is one of the things the new weight changes.
+        let Some(deadline) = self.deadlines.remove(&id) else {
+            return Ok(false);
+        };
+        let Some(mut entity) = self.tree.remove(Key { deadline, id }) else {
+            return Ok(false);
+        };
+        if entity.weight != weight {
+            let (at, deadline) = self.reweigh(entity.vruntime, entity.weight, weight);
+            entity.weight = weight;
+            entity.vruntime = at;
+            entity.deadline = deadline;
+        }
+        let _ = self.deadlines.insert(id, entity.deadline);
+        self.tree.insert(entity);
+        self.normalize();
+        Ok(true)
+    }
+
+    /// Count an entity at `vruntime` out of the virtual time at `was` and back
+    /// into it at `weight`, and answer where it now stands and when its next
+    /// request ends.
+    ///
+    /// **What is kept is the real time it is owed, not the virtual.** Virtual
+    /// time runs at a rate the weight sets, so the same lag means a different
+    /// number of nanoseconds of CPU either side of the change; an entity owed
+    /// a millisecond before is owed a millisecond after, and the virtual lag
+    /// is scaled by the old weight over the new to say so. Linux's
+    /// `reweight_entity` moves `vruntime` by exactly this, and takes the
+    /// virtual time while the entity is still counted at the weight it had,
+    /// as [`RunQueue::detach`] takes a leaving entity's lag.
+    ///
+    /// The entity's own `weight` field is the caller's to set: the sums are
+    /// what this keeps right between the two.
+    fn reweigh(&mut self, vruntime: u64, was: u32, weight: u32) -> (u64, u64) {
+        let virtual_time = self.avg_vruntime();
+        let owed = i128::from(self.lag_at(vruntime)) * i128::from(was) / i128::from(weight);
+        let owed = i64::try_from(owed).unwrap_or(if owed < 0 { i64::MIN } else { i64::MAX });
+        let at = virtual_time.wrapping_sub(owed as u64);
+        self.sub_load(vruntime, was);
+        self.add_load(at, weight);
+        (at, at.wrapping_add(self.vslice(weight)))
+    }
+
     /// Record an entity's lag, uncount it, and hand its parts back.
     ///
     /// The lag is taken while the entity is still counted, because it is a

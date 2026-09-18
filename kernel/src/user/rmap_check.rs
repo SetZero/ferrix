@@ -292,7 +292,7 @@ fn check(a: usize) -> Result<Report, &'static str> {
     // once a release has come, and a killed one is released when its last
     // thread leaves, before its task is dead. But the release keeps the address
     // space, whose last reference goes when the last task holding it is reaped,
-    // in the reaper's `reap_one`, so this waits on the reaper. The caller's
+    // in the reaper's `reap_batch`, so this waits on the reaper. The caller's
     // `wait_until_reaper_quiet` is not enough on its own, because it says the
     // reaper is idle, not that these two spaces were among what it reaped.
     let child_signal = child.ended_by_signal();

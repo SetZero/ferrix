@@ -689,6 +689,117 @@ fn shares_come_out_in_proportion_to_weight() {
     }
 }
 
+/// Run `queue` for `picks` decisions, each entity taking the whole of what it
+/// is given, and answer what each has run for in all.
+fn run_for(queue: &mut RunQueue<u64>, picks: usize, entities: usize) -> Vec<u64> {
+    for _ in 0..picks {
+        let _ = queue.pick_next();
+        let remaining = queue.remaining_ns().unwrap();
+        let _ = queue.update_curr(remaining);
+    }
+    let mut ran = alloc::vec![0u64; entities];
+    queue.for_each(|view| ran[view.id as usize] = view.sum_exec);
+    ran
+}
+
+#[test]
+fn a_reweighed_entity_takes_the_share_its_new_weight_asks_for() {
+    // Three equals, and then one of them is given four times the weight: what
+    // it runs for from there is four times what each of the others does. The
+    // entity being reweighed is a queued one, not the running one, because
+    // `pick_next` leaves no entity running between decisions.
+    let mut queue = queue();
+    for id in 0..3u64 {
+        queue.enqueue(id, id, EntityState::new(1024)).unwrap();
+    }
+    let before = run_for(&mut queue, 3_000, 3);
+    assert_eq!(queue.set_weight(2, 4096), Ok(true));
+    check(&queue);
+    let after = run_for(&mut queue, 30_000, 3);
+
+    let ran: Vec<u64> = after
+        .iter()
+        .zip(&before)
+        .map(|(after, before)| after - before)
+        .collect();
+    let total: u64 = ran.iter().sum();
+    for (id, weight) in [1024u64, 1024, 4096].iter().enumerate() {
+        let owed = total * weight / (1024 + 1024 + 4096);
+        assert!(
+            ran[id].abs_diff(owed) <= SLICE,
+            "the entity of weight {weight} ran {} ns where {owed} ns was owed",
+            ran[id]
+        );
+    }
+}
+
+#[test]
+fn a_reweighed_running_entity_keeps_what_it_is_owed() {
+    // The lag an entity carries is a statement in virtual time, and a weight
+    // is the rate virtual time runs at: the change must not hand it a turn or
+    // take one away. So its lag either side of the change is compared, and the
+    // queue's own invariants are what say the sums followed.
+    let mut queue = queue();
+    for id in 0..3u64 {
+        queue.enqueue(id, id, EntityState::new(1024)).unwrap();
+    }
+    let _ = queue.pick_next();
+    let running = queue.current_id().unwrap();
+    let _ = queue.update_curr(SLICE / 2);
+    let before = real_lag(&queue, running);
+
+    assert_eq!(queue.set_weight(running, 2048), Ok(true));
+    check(&queue);
+
+    assert_eq!(queue.current_id(), Some(running), "it stopped running");
+    assert_eq!(queue.get(running).unwrap().weight, 2048);
+    let after = real_lag(&queue, running);
+    assert!(
+        after.abs_diff(before) <= 1_000,
+        "it was owed {before} ns of the CPU and is now owed {after} ns"
+    );
+}
+
+/// What entity `id` is owed in real nanoseconds: its virtual lag runs at the
+/// rate its weight sets, so the two are only the same thing at nice 0.
+fn real_lag(queue: &RunQueue<u64>, id: u64) -> i64 {
+    let view = queue.get(id).unwrap();
+    (i128::from(view.lag) * i128::from(view.weight) / i128::from(NICE_0_WEIGHT)) as i64
+}
+
+#[test]
+fn reweighing_the_same_weight_does_not_extend_a_turn() {
+    // A program may set the nice value it already has as often as it likes;
+    // that must not be a way to ask for a fresh slice each time.
+    let mut queue = queue();
+    for id in 0..2u64 {
+        queue.enqueue(id, id, EntityState::new(1024)).unwrap();
+    }
+    let _ = queue.pick_next();
+    let running = queue.current_id().unwrap();
+    let _ = queue.update_curr(SLICE / 2);
+    let left = queue.remaining_ns().unwrap();
+    for _ in 0..10 {
+        assert_eq!(queue.set_weight(running, 1024), Ok(true));
+    }
+    assert_eq!(
+        queue.remaining_ns(),
+        Some(left),
+        "asking for the weight it had gave it more of the CPU"
+    );
+    check(&queue);
+}
+
+#[test]
+fn a_weight_is_refused_for_nobody_and_for_zero() {
+    let mut queue = queue();
+    queue.enqueue(1, 1, EntityState::new(1024)).unwrap();
+    assert_eq!(queue.set_weight(7, 1024), Ok(false), "seven is not there");
+    assert_eq!(queue.set_weight(1, 0), Err(SchedError::ZeroWeight));
+    assert_eq!(queue.get(1).unwrap().weight, 1024, "the refusal changed it");
+    check(&queue);
+}
+
 // ---------------------------------------------------------------------------
 // Domains and modes
 // ---------------------------------------------------------------------------

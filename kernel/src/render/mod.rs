@@ -63,6 +63,23 @@ pub(crate) mod node;
 /// many in flight without being memory a guest notices.
 pub(crate) const WORK_BYTES: u64 = 1024 * 1024;
 
+/// How many bytes one object's description takes at the base of the work
+/// VMO: the four little-endian words `user/gpu` reads back -- target, format,
+/// bind and a reserved zero.
+///
+/// What they *mean* is the driver's language and the core never looks at
+/// them; it only says where they are (`docs/GPU.md` §3.3).
+pub(crate) const DESCRIBE_BYTES: u64 = 16;
+
+/// How many descriptions the work VMO holds at once: one per object the
+/// session will track, so a description slot is never what refuses a request
+/// the session itself would have taken.
+const DESCRIBE_SLOTS: usize = ferrix_renderctl::session::MAX_OBJECTS;
+
+/// The bytes at the base of the work VMO that the description slots own.
+/// Command buffers come after them.
+const DESCRIBE_REGION: u64 = DESCRIBE_BYTES * DESCRIBE_SLOTS as u64;
+
 /// How long the core waits for its driver's HELLO.
 const HELLO_PATIENCE_NANOS: u64 = 10_000_000_000;
 
@@ -84,13 +101,12 @@ pub(crate) enum CreateError {
 
 /// Why a request on a published renderer could not be answered.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-#[expect(
-    dead_code,
-    reason = "the node that answers with these is the next step"
-)]
 pub(crate) enum RenderError {
     /// The request is not one the protocol has a state for now.
     Request(RequestError),
+    /// The device was asked and said no. Nothing is tracked either way, and
+    /// the driver is still there: this is the device's answer, not a fault.
+    Refused(Status),
     /// The driver's channel is full: it is behind, and the request can be
     /// made again once it has read.
     Busy,
@@ -113,7 +129,53 @@ struct State {
     session: Session,
     /// Accepted replies, for the requests waiting on them.
     events: Vec<Event>,
+    /// Which description slots are spoken for. A slot is held only while the
+    /// driver could still be reading it -- from before the `MAKE_OBJ` is sent
+    /// until its reply has been taken.
+    describing: [bool; DESCRIBE_SLOTS],
+    /// Where the search for the next object id starts.
+    next_object: u32,
+    /// Objects whose reply nobody is waiting for any more: an open that
+    /// closed without waiting, or a request that timed out. [`serve`] drops
+    /// their replies instead of leaving them in `events` for ever.
+    abandoned: Vec<u32>,
     gone: bool,
+}
+
+impl State {
+    /// Take a description slot, or `None` when every one is spoken for.
+    fn take_describe(&mut self) -> Option<u64> {
+        let at = self.describing.iter().position(|held| !held)?;
+        *self.describing.get_mut(at)? = true;
+        Some(at as u64 * DESCRIBE_BYTES)
+    }
+
+    /// Give one back.
+    fn give_describe(&mut self, at: u64) {
+        if let Some(held) = self.describing.get_mut((at / DESCRIBE_BYTES) as usize) {
+            *held = false;
+        }
+    }
+
+    /// Choose an object id no live object has.
+    ///
+    /// Ids are handed out in turn rather than reused at once, so that a
+    /// driver's late reply about an object names one that is gone rather than
+    /// one that has just been made. An id the device refused to let go of
+    /// stays tracked, and so is stepped over here for good.
+    fn take_object_id(&mut self) -> Option<u32> {
+        // One candidate per slot the session has, plus one for the id 0 a
+        // wrap steps over: among that many consecutive ids at least one is
+        // free whenever the session has room at all.
+        for _ in 0..=DESCRIBE_SLOTS + 1 {
+            let object = self.next_object;
+            self.next_object = self.next_object.checked_add(1).unwrap_or(1);
+            if object != 0 && !self.session.holds_object(object) {
+                return Some(object);
+            }
+        }
+        None
+    }
 }
 
 /// A published renderer: `/dev/dri/renderD<index>`.
@@ -123,7 +185,6 @@ pub(crate) struct Renderer {
     /// The work VMO, whose ranges carry object descriptions and command
     /// buffers. The core hands out ranges of it and never reads what is
     /// written there (`docs/GPU.md` §3.3).
-    #[expect(dead_code, reason = "the node that hands out ranges is the next step")]
     pub(crate) work: Arc<Vmo>,
     control: Arc<Endpoint>,
     state: SpinLock<State>,
@@ -289,6 +350,9 @@ fn accept(start: &Start, message: &ChannelMessage) -> Result<Arc<Renderer>, Refu
         state: SpinLock::new(State {
             session,
             events: Vec::new(),
+            describing: [false; DESCRIBE_SLOTS],
+            next_object: 1,
+            abandoned: Vec::new(),
             gone: false,
         }),
         changed: Arc::new(WaitQueue::new()),
@@ -369,7 +433,6 @@ impl Renderer {
 
     /// Run `make` on the session and send the message it makes, with the
     /// state locked throughout.
-    #[expect(dead_code, reason = "the node that makes requests is the next step")]
     fn request<T>(
         &self,
         make: impl FnOnce(&mut State) -> Result<(Message, T), RenderError>,
@@ -396,7 +459,6 @@ impl Renderer {
     /// Wait for the event `wanted` picks out, and take it. On a timeout,
     /// `abandon` runs with the state locked, so the reply is dealt with
     /// whenever it comes.
-    #[expect(dead_code, reason = "the node that waits for replies is the next step")]
     fn collect(
         &self,
         wanted: impl Fn(&Event) -> bool,
@@ -419,6 +481,125 @@ impl Renderer {
         }
         abandon(&mut state);
         Err(RenderError::TimedOut)
+    }
+
+    /// Make an object of `bytes` on the device, described by `words`, and
+    /// answer the id it was given.
+    ///
+    /// `words` is the target, format and bind the caller asked for, which
+    /// go into the work VMO untouched: this side chooses how many bytes and
+    /// where the description is, and the driver is the only side that knows
+    /// what the words say (`docs/GPU.md` §3.3). A core that read them would
+    /// be a core §4's driver could not reuse.
+    ///
+    /// # Errors
+    ///
+    /// [`RenderError`], including the device's own refusal as
+    /// [`RenderError::Request`] is not: a device that says no leaves nothing
+    /// tracked.
+    pub(crate) fn make_object(
+        &self,
+        context: u32,
+        bytes: u64,
+        object_flags: u32,
+        words: [u32; 3],
+    ) -> Result<u32, RenderError> {
+        // The id and the slot are taken together, under the lock; the write
+        // that fills the slot happens after it, because `Vmo::write_page` may
+        // wait for a shootdown and no spin lock is ever held across that.
+        let (object, at) = {
+            let mut state = self.state.lock();
+            if state.gone {
+                return Err(RenderError::Gone);
+            }
+            let object = state
+                .take_object_id()
+                .ok_or(RenderError::Request(RequestError::Full))?;
+            let Some(at) = state.take_describe() else {
+                return Err(RenderError::Request(RequestError::Full));
+            };
+            (object, at)
+        };
+        let made = self.describe_and_make(object, at, context, bytes, object_flags, words);
+        self.state.lock().give_describe(at);
+        made
+    }
+
+    /// [`Renderer::make_object`] once its id and slot are in hand, so that the
+    /// slot is given back by one line whichever way this goes.
+    fn describe_and_make(
+        &self,
+        object: u32,
+        at: u64,
+        context: u32,
+        bytes: u64,
+        object_flags: u32,
+        words: [u32; 3],
+    ) -> Result<u32, RenderError> {
+        let mut description = [0_u8; DESCRIBE_BYTES as usize];
+        for (word, into) in words.iter().zip(description.chunks_exact_mut(4)) {
+            into.copy_from_slice(&word.to_le_bytes());
+        }
+        self.work
+            .write_page(at / PAGE_SIZE, (at % PAGE_SIZE) as usize, &description)
+            .map_err(|_| RenderError::Request(RequestError::Work))?;
+        let describe = Work {
+            at: u32::try_from(at).map_err(|_| RenderError::Request(RequestError::Work))?,
+            len: DESCRIBE_BYTES as u32,
+        };
+        self.request(|state| {
+            let message = state
+                .session
+                .make_object(object, context, bytes, object_flags, describe)
+                .map_err(RenderError::Request)?;
+            Ok((message, ()))
+        })?;
+        let event = self.collect(
+            |event| matches!(event, Event::ObjectMade { object: made, .. } if *made == object),
+            // The driver may still answer. Nothing waits for that reply, so
+            // it is dropped rather than left in `events` for ever. The
+            // description slot is given back even so: a driver reads a
+            // description while it is making the object, which is before the
+            // reply this gave up on, so a late answer is never a late read.
+            |state| state.abandoned.push(object),
+        )?;
+        match event {
+            Event::ObjectMade {
+                status: Status::Ok, ..
+            } => Ok(object),
+            // A refusal is the device's answer and leaves the id free, which
+            // is not the same as a driver that has gone.
+            Event::ObjectMade { status, .. } => Err(RenderError::Refused(status)),
+            _ => Err(RenderError::Gone),
+        }
+    }
+
+    /// Let go of `objects` without waiting for the device to answer.
+    ///
+    /// The same bargain [`crate::display::Card::release`] makes when a card's
+    /// open closes: a close does not wait on a device, so the replies go to
+    /// [`serve`], which drops them. An object the device would not let go of
+    /// stays tracked and its id is never handed out again.
+    pub(crate) fn release(&self, objects: &[u32]) {
+        let mut state = self.state.lock();
+        if state.gone {
+            return;
+        }
+        for &object in objects {
+            if !self.control.peer_has_room() {
+                break;
+            }
+            // Only an id the session took the request for is abandoned: one
+            // it refused was never asked about, so no reply is coming and
+            // recording it would leave an entry nothing ever clears.
+            let Ok(message) = state.session.drop_object(object) else {
+                continue;
+            };
+            state.abandoned.push(object);
+            if !send(&self.control, &message) {
+                break;
+            }
+        }
     }
 }
 
@@ -460,7 +641,16 @@ fn serve(renderer: &Renderer) {
         match accepted {
             Ok(Event::Stopped) => break,
             Ok(event) => {
-                renderer.state.lock().events.push(event);
+                let mut state = renderer.state.lock();
+                // The session has settled the id either way; what is left is
+                // whether anyone is still waiting to be told. An abandoned
+                // one is dropped here rather than growing `events` for ever.
+                if let Some(at) = abandoned_at(&state, event) {
+                    let _ = state.abandoned.remove(at);
+                    continue;
+                }
+                state.events.push(event);
+                drop(state);
                 renderer.changed.wake_all();
             }
             Err(refusal) => {
@@ -590,11 +780,26 @@ fn exchange(renderer: &Renderer, ask: &Message) -> Option<Event> {
     }
 }
 
-/// A range of the work VMO, for the node above when it is written.
-#[expect(dead_code, reason = "the node that hands these out is the next step")]
-pub(crate) const fn whole_work() -> Work {
+/// Where an event about an abandoned object is recorded, if it is one.
+///
+/// Only an object's replies are ever abandoned: a submission's fence is
+/// waited for by the caller that made it, and a context outlives the open.
+fn abandoned_at(state: &State, event: Event) -> Option<usize> {
+    let (Event::ObjectMade { object, .. } | Event::ObjectGone { object, .. }) = event else {
+        return None;
+    };
+    state
+        .abandoned
+        .iter()
+        .position(|&waiting| waiting == object)
+}
+
+/// The part of the work VMO a command buffer may use: everything after the
+/// description slots, which own the base.
+#[expect(dead_code, reason = "the node that submits command buffers is next")]
+pub(crate) const fn command_work() -> Work {
     Work {
-        at: 0,
-        len: WORK_BYTES as u32,
+        at: DESCRIBE_REGION as u32,
+        len: (WORK_BYTES - DESCRIBE_REGION) as u32,
     }
 }

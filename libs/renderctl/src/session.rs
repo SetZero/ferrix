@@ -240,6 +240,18 @@ impl Session {
         self.broken
     }
 
+    /// Whether `object` is tracked at all -- made, on its way, or on its way
+    /// out.
+    ///
+    /// The core chooses object ids and the session refuses one it is already
+    /// holding, so the core has to be able to ask before it chooses. An id
+    /// the device would not let go of stays tracked for ever, which is what
+    /// stops it being handed out a second time.
+    #[must_use]
+    pub fn holds_object(&self, object: u32) -> bool {
+        find(&self.objects, object).is_some()
+    }
+
     /// Ask for a context.
     ///
     /// # Errors

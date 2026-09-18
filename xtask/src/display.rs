@@ -328,9 +328,10 @@ pub(crate) fn mismatches(
 pub(crate) const RENDER: &str = "render:";
 
 /// The driver the render line names, if it found a node: the line is
-/// `render: renderD128 <driver> 3d <n> capsets 0x<mask>`, and `render: none
-/// <why>` when there was none. Read from the marker rather than from the
-/// start, because a console line carries a timestamp before it.
+/// `render: renderD128 <driver> 3d <n> capsets 0x<mask> object <h>/<r> of <n>
+/// bytes`, and `render: none <why>` when there was none. Read from the marker
+/// rather than from the start, because a console line carries a timestamp
+/// before it.
 pub(crate) fn render_driver(line: &str) -> Option<&str> {
     let (_, rest) = line.split_once(RENDER)?;
     let mut words = rest.split_whitespace();
@@ -339,6 +340,21 @@ pub(crate) fn render_driver(line: &str) -> Option<&str> {
         return None;
     }
     words.next().filter(|driver| !driver.is_empty())
+}
+
+/// The resource the render line says it made: `<handle>/<resource>`, from the
+/// `object` word onwards. `None` when the program could not make one, which
+/// includes it saying `object none <why>`.
+///
+/// A node that names a driver has only proved the core was told about one:
+/// the name comes from the HELLO. Making a resource is what proves the rest
+/// of the path -- the handle table, the session, the driver and the device --
+/// so the 3D boot judges this as well (`docs/GPU.md` step 2).
+pub(crate) fn render_object(line: &str) -> Option<&str> {
+    let (_, rest) = line.split_once(RENDER)?;
+    let mut words = rest.split_whitespace().skip_while(|word| *word != "object");
+    let _ = words.next()?;
+    words.next().filter(|made| made.contains('/'))
 }
 
 /// The id of the primary plane the marker line names, if it names one: its
@@ -414,7 +430,12 @@ fn boot_and_dump(arch: Arch, program: &Path, args: &Args, name: &str) -> Result<
             .map_or("", |line| line.trim());
         match (args.gl, render_driver(render)) {
             (true, Some(driver)) => {
-                println!("  {arch}: the render node is `{driver}`");
+                let Some(made) = render_object(render) else {
+                    return Err(Error::new(format!(
+                        "{arch}: the render node `{driver}` made no resource: `{render}`"
+                    )));
+                };
+                println!("  {arch}: the render node is `{driver}`, and made resource {made}");
             }
             (true, None) => {
                 return Err(Error::new(format!(

@@ -408,6 +408,72 @@ from `BootInfo`. What changes is what a person sees:
   one. `--wallpaper none`, or an empty directory, is the plain background,
   and a line says which. A gate boot carries none and its archive is what it
   was.
+* **A wallpaper that moves, which is what `mpvpaper` is for (2026-09-18).**
+  Hyprland has no video wallpaper of its own: its wiki sends a person to
+  `mpvpaper`, started from `exec-once`, which puts mpv on the same
+  `background` layer surface `hyprpaper` and `swaybg` use. Ferrix cannot put
+  mpv there, so the decoding moves to the side of the conversion that has a
+  decoder. An `mp4`, `webm`, `mkv` or `gif` in the pictures directory is now
+  kept as frames rather than as its first one, and `run-compositor` carries
+  it at `/etc/wallpaper.fxvid` and starts `/bin/pattern --video` on it
+  instead of `--wallpaper`. The format is `compositor_pattern::Movie`:
+  `FXVID01`, a width, a height, a count and a period, then each frame's
+  rows, each row either runs of a count and a pixel, the row above it, or
+  *what the frame before left there* — which, against a canvas kept between
+  frames, is no work at all. That last one is what makes it affordable: a
+  raw second of 1920x1080 is 250 MB and the initramfs is built into the
+  kernel. Frames are kept a quarter of the screen each way, ten a second,
+  for four seconds, and the client scales them to cover the screen the way
+  it scales any picture cut for another one. Five seconds of `ffmpeg`'s own
+  `testsrc` keeps as 40 frames of 480x270 in 3.7 MB, against 20.7 MB of raw
+  rows. The client keeps **two** buffers where a still wallpaper keeps one,
+  because a compositor releases a buffer when a later commit replaces it: a
+  client that drew once and waited for the release would wait for ever.
+* **The client damages the rows that changed, not the screen (2026-09-18).**
+  A `0x02` row *is* a row the frame before left in place, so a frame knows
+  its own damage: `Movie::damage` maps those rows through the same scale the
+  pixels went through — one arithmetic in `Picture::cut`, because a row said
+  to have changed whose pixels the scale took from somewhere else is a row
+  the compositor would not redraw — and the client sends a
+  `damage_buffer` band for each run of them, up to sixty-four, after which
+  one rectangle is cheaper than the list. A buffer not yet drawn into is
+  damaged whole whatever the video says, since it holds nothing.
+* **And it paces on frame callbacks, which is what stops it (2026-09-18).**
+  The next frame waits for `wl_surface.frame` on the last, so a wallpaper
+  under a full-screen opaque window is not drawn, is told nothing, and stops
+  playing — `mpvpaper-stop`'s job, done by the protocol rather than by a
+  person. Five seconds without an answer draws anyway, so a compositor that
+  fires no callbacks is a slow wallpaper rather than a stopped one. It also
+  keeps **two** buffers where a still wallpaper keeps one: a compositor
+  releases a buffer when a later commit replaces it, so a client that drew
+  once and waited for the release would wait for ever. That one was found by
+  waiting for ever.
+* **`cargo xtask test-video` is the gate (2026-09-18).** Two frames, each one
+  flat colour, encoded by `crate::wallpaper::fixture` in code rather than by
+  `ffmpeg` — so the gate needs no decoder on the machine running it, and so
+  a screendump is judged against a colour rather than against a picture. It
+  boots the compositor with that wallpaper and **nothing else started**, so
+  the frame is the whole screen, and takes screendumps over QMP until it has
+  seen a screen that is mostly the first colour and a screen that is mostly
+  the second. What it proves is the whole path at once: the format, the
+  client that decodes and plays it, the layer surface, and the compositor
+  drawing one frame after another. It passes on x86-64 in four screendumps.
+  CI runs `test-boot` and no display gate, so this one is run by hand, as
+  `test-display` and `test-compositor` are.
+* **What it costs, measured (2026-09-18), and the honest answer.** About one
+  frame a second in `run-compositor` on this Windows machine — and **that is
+  not the video path**. The guest runs under `tcg`: WHPX is compiled into
+  this QEMU and initialises, but Ferrix panics under it at stage 3 ("the
+  timer and the counter disagree about how long a second is"), which is the
+  same fragility `xtask/src/qemu.rs` records as the reason `tcg` is the
+  default. Under full emulation the compositor is 1.1 to 2.1 seconds a
+  frame with the video playing — and 2.5 seconds a frame with a **still**
+  wallpaper and no video at all. The ceiling is a software compositor
+  drawing 1920x1080 through an interpreter, not the frames reaching it.
+  `docs/COMPOSITOR-DAMAGE-HANDOFF.md` §2.6 measures the same frame at 22 ms
+  on a host that is not emulating. What is still owed on the client's own
+  side: `Picture::cover` allocates and scales a fresh 1920x1080 buffer every
+  frame, 8.3 MB of it, which the damage does not save.
 * **A watched desktop is 1920x1080, and a `monitor =` line is how
   (2026-09-18).** Under a window the card prefers the *window's* size --
   the next item but one found 640x480 on Windows whatever `xres` said --

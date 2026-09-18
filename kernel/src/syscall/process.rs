@@ -679,8 +679,18 @@ impl Process {
     /// taken out of the list before they are looked at, so none is dropped
     /// under its lock.
     pub(crate) fn every_task_blocked(&self) -> bool {
-        let tasks: Vec<Arc<Task>> = self.tasks.lock().iter().filter_map(Weak::upgrade).collect();
-        tasks.iter().all(|task| task.is_blocked() || task.is_dead())
+        self.tasks()
+            .iter()
+            .all(|task| task.is_blocked() || task.is_dead())
+    }
+
+    /// The tasks running its code that are still alive.
+    ///
+    /// Taken out of the list rather than looked at under its lock, so that
+    /// dropping the last reference to one -- which gives back an address
+    /// space -- never happens with the lock held.
+    pub(crate) fn tasks(&self) -> Vec<Arc<Task>> {
+        self.tasks.lock().iter().filter_map(Weak::upgrade).collect()
     }
 
     /// Whether the running task, waiting on behalf of this process, is to stop
@@ -1121,8 +1131,7 @@ impl Process {
     /// Wake `thread`'s task from any wait it is in, and interrupt it if it is
     /// running.
     fn wake_thread(&self, thread: &Thread) {
-        let tasks: Vec<Arc<Task>> = self.tasks.lock().iter().filter_map(Weak::upgrade).collect();
-        for task in &tasks {
+        for task in &self.tasks() {
             if task
                 .thread()
                 .is_some_and(|own| core::ptr::eq(Arc::as_ptr(own), thread))
@@ -1911,6 +1920,11 @@ pub(crate) fn start_thread(
     process.add_thread(&thread);
     let task = sched::spawn_user("thread", run_program, thread, None, Some(state))?;
     process.tasks.lock().push(Arc::downgrade(&task));
+    // At the weight the rest of the process runs at, not at nice 0: a program
+    // that was reniced and then started a thread would otherwise take back
+    // with every thread what the renice gave away. Linux copies the nice
+    // value into the new thread; this reads the same one from the same place.
+    attributes::apply_nice(&process, &task);
     // As for a process's first thread: an end requested between the spawn and
     // the push found no task to wake or interrupt, so it is told now -- and so
     // is a thread replacing the program, which waits for this one to leave.

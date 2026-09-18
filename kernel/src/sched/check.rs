@@ -103,6 +103,15 @@ pub(crate) struct Report {
     pub(crate) switches: u64,
     /// Tasks moved between processors by work stealing.
     pub(crate) steals: u64,
+    /// Shootdowns taken while the thousand ran and were reaped.
+    ///
+    /// A thread's kernel stack is given back by invalidating its address on
+    /// every processor and waiting for each to answer, so this is the number
+    /// that says what one program's threads cost every other program on the
+    /// machine. The reaper frees a batch of them under one shootdown
+    /// (`crate::sched::REAP_BATCH`), which is why this is far below the
+    /// thread count; a boot where it approaches that count is a regression.
+    pub(crate) shootdowns: u64,
     /// How many processors ran some of the thousand.
     pub(crate) processors: u32,
     /// Which ones, as a bit per processor. Printed beside the count because
@@ -164,6 +173,9 @@ static FINISHED: WaitQueue = WaitQueue::new();
 /// The first check that fails, as a sentence.
 pub(crate) fn run(topology: &Topology) -> Result<Report, &'static str> {
     let mut report = Report::default();
+    // Taken before anything is started, so that what is counted is what these
+    // checks' own thousand threads cost: see `Report::shootdowns`.
+    let shootdowns_before = crate::smp::shootdowns();
     // Guest milliseconds per phase, collected and printed once at the end
     // rather than as each finishes: these checks cost the armv7a boot test
     // more than every other stage put together, and an attribution nobody can
@@ -212,6 +224,7 @@ pub(crate) fn run(topology: &Topology) -> Result<Report, &'static str> {
     let summary = super::summary();
     report.switches = summary.switches;
     report.steals = summary.steals;
+    report.shootdowns = crate::smp::shootdowns().saturating_sub(shootdowns_before);
     super::check_invariants()?;
     Ok(report)
 }

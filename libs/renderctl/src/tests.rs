@@ -450,6 +450,64 @@ fn an_object_is_checked_against_what_the_driver_promised() {
     assert_eq!(core.drop_context(1), Err(RequestError::Busy));
 }
 
+/// The core chooses object ids and the session refuses one it already holds,
+/// so the core has to be able to ask first. `holds_object` is what it asks
+/// with, and it has to say yes for every state an id can be in -- on its way,
+/// made, and on its way out -- or the core would choose an id the session is
+/// about to refuse.
+#[test]
+fn an_id_is_held_from_the_moment_it_is_asked_for() {
+    let mut core = session();
+    assert!(
+        !core.holds_object(5),
+        "nothing is held before it is asked for"
+    );
+
+    let _ = core
+        .make_object(5, 0, 4096, flags::TO_DEVICE, Work { at: 0, len: 16 })
+        .expect("asked");
+    assert!(core.holds_object(5), "held while it is being made");
+
+    let _ = core
+        .receive(&Message::ObjectMade {
+            object: 5,
+            status: Status::Ok,
+        })
+        .expect("made");
+    assert!(core.holds_object(5), "held once it is made");
+
+    let _ = core.drop_object(5).expect("asked to go");
+    assert!(core.holds_object(5), "held while it is going");
+
+    let _ = core
+        .receive(&Message::ObjectGone {
+            object: 5,
+            status: Status::Ok,
+        })
+        .expect("gone");
+    assert!(!core.holds_object(5), "free once the device has let go");
+
+    // An object the device kept is held for ever, which is the one case
+    // where a free-looking id must still not be chosen.
+    let _ = core
+        .make_object(6, 0, 4096, flags::TO_DEVICE, Work { at: 0, len: 16 })
+        .expect("asked");
+    let _ = core
+        .receive(&Message::ObjectMade {
+            object: 6,
+            status: Status::Ok,
+        })
+        .expect("made");
+    let _ = core.drop_object(6).expect("asked to go");
+    let _ = core
+        .receive(&Message::ObjectGone {
+            object: 6,
+            status: Status::DeviceRefused,
+        })
+        .expect("answered");
+    assert!(core.holds_object(6), "the device may still hold it");
+}
+
 /// An object the device would not let go of stays live, so the core never
 /// hands its memory out again. This is the display's rule, and it belongs
 /// to the core rather than to any one device.

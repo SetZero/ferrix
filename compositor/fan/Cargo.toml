@@ -1,0 +1,13 @@
+[package]
+name = "compositor-fan"
+description = "Worker threads that are already there, for a renderer that draws a frame in bands"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

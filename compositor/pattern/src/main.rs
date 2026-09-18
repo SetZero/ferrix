@@ -12,6 +12,14 @@ fn main() {
     if let Some(at) = arguments.iter().position(|word| word == "--wallpaper") {
         wallpaper(arguments.get(at + 1).map(String::as_str));
     }
+    // `--video [-o <options>] [<output>] <file>`: the same, moving.
+    // `mpvpaper [-o "..."] ALL <file>` is the line this stands in for on a
+    // Linux desktop, and it is read the same way round; the file is frames
+    // rather than a video because the decoding happened on a machine that
+    // had a decoder.
+    if let Some(at) = arguments.iter().position(|word| word == "--video") {
+        video(arguments.get(at + 1..).unwrap_or(&[]));
+    }
     let pattern = match arguments.first().map(String::as_str) {
         Some("checkerboard") | None => compositor_render::Pattern::Checkerboard,
         Some("gradient") => compositor_render::Pattern::Gradient,
@@ -68,6 +76,70 @@ fn wallpaper(file: Option<&str>) -> ! {
         .map_err(|error| format!("reading {file}: {error}"))
         .and_then(|bytes| compositor_pattern::Picture::parse(&bytes))
         .and_then(compositor_pattern::run_wallpaper);
+    match shown {
+        Ok(line) => {
+            say(&line);
+            std::process::exit(0)
+        }
+        Err(error) => {
+            say(&format!("pattern: no wallpaper: {error}"));
+            std::process::exit(1)
+        }
+    }
+}
+
+/// Be the moving wallpaper the rest of the command line names, and end when
+/// the compositor does.
+///
+/// `mpvpaper`'s own shape, so that a `hyprland.conf` written for that says
+/// the same thing here: `[-o <options>] [<output>|ALL] <file>`. The options
+/// are mpv's and there is no mpv, so what is understood of them is what has
+/// a meaning without one, and the rest is said and ignored rather than
+/// refused -- a configuration carried from a desktop should start a
+/// wallpaper, not an error.
+fn video(rest: &[String]) -> ! {
+    let mut options: Vec<String> = Vec::new();
+    let mut words: Vec<&str> = Vec::new();
+    let mut at = 0;
+    while let Some(word) = rest.get(at) {
+        match word.as_str() {
+            "-o" | "--mpv-options" => {
+                if let Some(given) = rest.get(at + 1) {
+                    options.extend(given.split_whitespace().map(str::to_owned));
+                }
+                at += 2;
+            }
+            other => {
+                words.push(other);
+                at += 1;
+            }
+        }
+    }
+    // The file is the last word; an output before it is which screen, and
+    // this guest has one, so it is taken and said.
+    let Some((file, before)) = words.split_last() else {
+        say("pattern: --video takes [-o <options>] [<output>] <file>");
+        std::process::exit(2);
+    };
+    if let Some(output) = before.last()
+        && !output.eq_ignore_ascii_case("all")
+    {
+        say(&format!(
+            "pattern: one screen here, so the wallpaper goes on it rather than on {output}"
+        ));
+    }
+    for option in &options {
+        match option.trim_start_matches('-') {
+            // There is no audio on this machine at all, so the option every
+            // `mpvpaper` line carries is already true.
+            "no-audio" | "loop" | "loop-playlist" | "loop-file" => {}
+            other => say(&format!("pattern: no mpv here, so `{other}` does nothing")),
+        }
+    }
+    let shown = std::fs::read(file)
+        .map_err(|error| format!("reading {file}: {error}"))
+        .and_then(|bytes| compositor_pattern::Movie::parse(&bytes))
+        .and_then(compositor_pattern::run_video);
     match shown {
         Ok(line) => {
             say(&line);
