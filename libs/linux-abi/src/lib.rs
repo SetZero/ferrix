@@ -47,6 +47,7 @@ pub mod netlink;
 pub mod nr;
 pub mod socket;
 pub mod types;
+pub mod virtgpu;
 mod wire;
 
 #[cfg(test)]
