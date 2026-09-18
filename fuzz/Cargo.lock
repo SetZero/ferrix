@@ -109,6 +109,7 @@ dependencies = [
  "ferrix-netwire",
  "ferrix-objects",
  "ferrix-pci",
+ "ferrix-renderctl",
  "ferrix-sync",
  "ferrix-ustack",
  "ferrix-vfs",
@@ -175,6 +176,13 @@ dependencies = [
 [[package]]
 name = "ferrix-pci"
 version = "0.1.0"
+
+[[package]]
+name = "ferrix-renderctl"
+version = "0.1.0"
+dependencies = [
+ "ferrix-native-abi",
+]
 
 [[package]]
 name = "ferrix-sync"

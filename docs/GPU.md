@@ -138,6 +138,60 @@ making a context, creating a 3D resource, submitting a stream. That is
 bound up with step 2, because what a context is *for* is the render node,
 and neither is testable without the other.
 
+### 3.3 The render node's seam, and what Path B inherits (2026-09-18)
+
+Decided when step 2 was started, because where the seam goes is the whole
+of whether Path B reuses this or rewrites it. The customer asked for a
+driver adapter that an NVIDIA driver can be loaded behind later; this is
+what that means concretely, and what it honestly cannot mean.
+
+**The seam is the control protocol, not the ioctls.** Three layers, and
+only the middle one is new work per device:
+
+1. **`/dev/dri/renderD<N>`, the node.** The kernel owns it, as it owns
+   `/dev/dri/card<N>`. What lives here is device-*independent*: the inode,
+   the GEM handle table, an object's lifetime and its reference counts,
+   mapping an object into a process, and the generic ioctls (`VERSION`,
+   `GEM_CLOSE`, and the `PRIME` pair when dmabuf lands). Linux keeps the
+   same things in `drm_gem.c` for the same reason.
+
+2. **`libs/renderctl`, the control protocol.** The sibling of
+   `libs/displayctl`: a fixed-size little-endian message on one `Channel`
+   per device, `HELLO`/`READY`/`REFUSED`, a doorbell each way, validation
+   in the order fields are read, host-tested and fuzzed. Its messages are
+   what *every* GPU can do -- make a context, allocate an object of so many
+   bytes, give an object to a context, map it, submit a command buffer,
+   move bytes in or out, wait for a fence -- and nothing narrower.
+
+3. **The ring-3 driver**, which maps those onto its device. virtio-gpu maps
+   `SUBMIT` onto `SUBMIT_3D`, `CREATE_OBJECT` onto `RESOURCE_CREATE_3D`,
+   `WAIT` onto a fenced header. An NVIDIA driver would map the same
+   messages onto a channel and a pushbuffer. Drivers stay in ring 3, which
+   the decision of 2026-09-13 requires of this one as of any other.
+
+**What is deliberately opaque, and why pretending otherwise would be
+worse.** A command buffer's *contents* and an object's format and binding
+words are the renderer's own language: virgl's TGSI and `PIPE_*`
+enumerations here, NVIDIA's classes and methods there. There is no honest
+portable abstraction over them -- Linux does not attempt one either, which
+is why `DRM_IOCTL_VIRTGPU_*` and `DRM_IOCTL_NOUVEAU_*` are different
+ioctls and why Mesa has a back end per driver. So they pass through as
+bytes, and userspace learns which language to speak from the node's driver
+*name*, exactly as it does on Linux. An abstraction that claimed to hide
+this would be a lie that costs a rewrite the first time it is tested.
+
+**What Path B therefore inherits, unmodified:** the node, the handle table
+and object lifetime, the protocol's shape and its refusal rules -- including
+"pages the device may still hold are never unpinned" (§2.2 of
+`docs/DISPLAY.md`), which is a property of the *core*, not of virtio --
+the fence and wait model, devmgr bring-up and the `START` message, the
+ring-3 placement, and the gates. What it adds is one more implementation of
+`libs/renderctl` and one more driver-specific ioctl range.
+
+**What it does not inherit** is the command encoder: `compositor/virgl`
+(step 3b) speaks virgl, and an NVIDIA path needs its own, or Mesa (§3a).
+That is the same boundary Linux draws and it is drawn here on purpose.
+
 ### 3a, which was not chosen for the compositor
 
 Mesa's virgl driver built on ferrousli would give *every client* OpenGL ES
@@ -172,7 +226,9 @@ GPU. What it would take:
 
 * **The kernel side.** NVIDIA's open kernel modules (MIT and GPLv2, Turing
   and newer) are an OS-agnostic core over an OS interface layer, which is
-  how a FreeBSD driver exists. Reusing them means writing that layer for
+  how a FreeBSD driver exists. What it plugs into on this side is
+  `libs/renderctl` and the render node above it, which §3.3 built to take a
+  second implementation. Reusing them means writing that layer for
   Ferrix: PCI configuration and BARs, MSI-X, DMA mappings under the IOMMU,
   threads, timers, locks, allocation and firmware loading, and then the
   modesetting and DRM halves. On Ferrix that is a very large C program in a
