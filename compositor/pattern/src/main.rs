@@ -12,6 +12,22 @@ fn main() {
     if let Some(at) = arguments.iter().position(|word| word == "--wallpaper") {
         wallpaper(arguments.get(at + 1).map(String::as_str));
     }
+    // `--scroll <lines>`: not a client at all, but a program for a terminal
+    // to run: it prints that many numbered lines a few milliseconds apart
+    // and exits, which is what a build's output or a log does to a terminal
+    // and what `cargo xtask test-compositor`'s scroll boot watches the
+    // compositor keep up with.
+    if let Some(at) = arguments.iter().position(|word| word == "--scroll") {
+        let lines = arguments
+            .get(at + 1)
+            .and_then(|word| word.parse::<u32>().ok())
+            .unwrap_or(80);
+        for line in 0..lines {
+            say(&format!("scrolling line {line}"));
+            std::thread::sleep(std::time::Duration::from_millis(40));
+        }
+        std::process::exit(0);
+    }
     let pattern = match arguments.first().map(String::as_str) {
         Some("checkerboard") | None => compositor_render::Pattern::Checkerboard,
         Some("gradient") => compositor_render::Pattern::Gradient,

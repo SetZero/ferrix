@@ -781,7 +781,9 @@ fn hsl_to_rgb(hue: f32, saturation: f32, lightness: f32) -> (f32, f32, f32) {
 /// bytes every run, and the shader's dither is a function of where the pixel
 /// is and nothing else.
 fn hash(x: f32, y: f32) -> f32 {
-    let fract = |value: f32| value - value.floor();
+    // What is left of a value over its whole part, by this file's own
+    // `floor` rather than the library's: three of these a pixel.
+    let fract = |value: f32| floor(value).1;
     let seeded = [
         fract(x * 1689.1984),
         fract(y * 1689.1984),
@@ -853,13 +855,7 @@ pub(crate) fn blur(pixels: &mut [u8], block: &Block, settings: &Blur) {
 /// One blurred pixel as the four bytes it is written back as.
 fn written(value: [f32; 4], bytes: &mut [u8]) {
     for (channel, slot) in value.into_iter().zip(bytes.iter_mut()) {
-        #[expect(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            reason = "a channel between zero and one becomes a byte"
-        )]
-        let byte = (channel.clamp(0.0, 1.0) * 255.0).round() as u8;
-        *slot = byte;
+        *slot = crate::exact::byte(channel.clamp(0.0, 1.0) * 255.0);
     }
 }
 

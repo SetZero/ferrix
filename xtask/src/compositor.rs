@@ -695,6 +695,27 @@ const TERMINAL_EXPECTED: [(&str, &str); 1] = [(
     "compositor/render/tests/data/terminal-hyprctl-version.xrle",
 )];
 
+/// The picture the scroll boot requires: the terminal after eighty lines
+/// went through it.
+const SCROLL_EXPECTED: [(&str, &str); 1] = [(
+    "a terminal that eighty lines scrolled through",
+    "compositor/render/tests/data/terminal-scrolled.xrle",
+)];
+
+/// The configuration the scroll boot is given: the terminal running a
+/// program that prints eighty lines a few milliseconds apart.
+const SCROLL_CONFIG: &str = "\
+# Carried into the initramfs by `cargo xtask test-compositor`.
+exec-once = /bin/term /bin/pattern --scroll 80
+";
+
+/// The most of the screen the smallest frame of a report's window may have
+/// redrawn while the terminal scrolled: an eighth. A terminal that damages
+/// its whole window for a line makes every frame the whole window, which is
+/// 730112 of 786432 pixels here; one that damages the rows that changed
+/// makes most frames a row or two.
+const SCROLL_FRACTION: i64 = 8;
+
 /// The configuration the ninth boot is given: a terminal, and nothing else.
 ///
 /// `docs/ROADMAP.md` stage 18's exit asks for a terminal on the compositor.
@@ -1333,6 +1354,18 @@ pub(crate) fn test_compositor(args: &Args) -> Result<()> {
             println!("  {arch}: no virtio-gpu in QEMU's machine; skipped");
             continue;
         }
+        // A `--boot` that names none of them is a mistake, not a run with
+        // nothing to do: `--boot tiled` -- a picture's name, not a boot's --
+        // built every program, booted nothing and exited 0, forty times in a
+        // loop that was then read as forty boots passing.
+        if !BOOTS.iter().any(|(name, _)| wanted(args, name)) {
+            let names: Vec<&str> = BOOTS.iter().map(|(name, _)| *name).collect();
+            return Err(Error::new(format!(
+                "--boot {} names no boot; they are {}",
+                args.boot.as_deref().unwrap_or_default(),
+                names.join(", ")
+            )));
+        }
         let programs = Programs::build(arch)?;
         for (name, boot) in BOOTS {
             if wanted(args, name) {
@@ -1704,7 +1737,7 @@ fn said_on_its_own(line: &str) -> &str {
 /// each takes minutes under emulation and there are fourteen of them, so a
 /// change to one is otherwise an hour a try.
 type Boot = fn(Arch, &Programs, &Args) -> Result<()>;
-const BOOTS: [(&str, Boot); 19] = [
+const BOOTS: [(&str, Boot); 20] = [
     ("dispatchers", test_dispatchers),
     ("bar", test_bar),
     ("decorations", test_decorations),
@@ -1723,6 +1756,7 @@ const BOOTS: [(&str, Boot); 19] = [
     ("menu", test_menu),
     ("pointer", test_pointer),
     ("mode", test_mode),
+    ("scroll", test_scroll),
     ("typing", test_typing),
 ];
 
@@ -2023,6 +2057,81 @@ fn test_mode(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
         screen.height,
         screen.width * screen.height
     );
+    Ok(())
+}
+
+/// A boot for a terminal being written to: eighty lines a few milliseconds
+/// apart, which is what a build or a log does to one.
+///
+/// Two things are required. The picture at the end is the one the terminal's
+/// own tests bless for those eighty lines, to the pixel, which says that
+/// painting and damaging a row at a time -- what `compositor/term` does
+/// since 2026-09-18 -- leaves the same terminal on the screen as painting
+/// all of it did. And at least one of the compositor's frame reports counts
+/// a frame that redrew under an eighth of the screen, which says the
+/// compositor was told about rows and not about the window: before this, a
+/// line in a terminal was a whole window for the terminal to paint, for the
+/// compositor to draw again and for the card to send to the host, most of a
+/// second a line in a guest with one processor.
+fn test_scroll(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
+    let (screens, said) = boot_and_dump(
+        arch,
+        programs,
+        SCROLL_CONFIG,
+        &Wanted {
+            states: &SCROLL_EXPECTED,
+            others: &[],
+            moving: None,
+            pointer: None,
+            awaiting: &[],
+        },
+        &[],
+        args,
+    )?;
+    let Some(screen) = screens.first() else {
+        return Err(Error::new(format!(
+            "{arch}: the scroll boot took no picture"
+        )));
+    };
+    // `hyprix: frames N slowest of the last M X us, all of them Y us, least
+    // Z px`: the fewest pixels a frame in each report's window redrew.
+    let least: Vec<i64> = said
+        .iter()
+        .filter_map(|line| {
+            line.split_once(", least ")?
+                .1
+                .split(' ')
+                .next()?
+                .parse()
+                .ok()
+        })
+        .collect();
+    let Some(smallest) = least.iter().copied().min() else {
+        return Err(Error::new(format!(
+            "{arch}: the compositor never said how much of the screen a frame redrew"
+        )));
+    };
+    let screen_pixels = i64::try_from(screen.width * screen.height).unwrap_or(i64::MAX);
+    if smallest > screen_pixels / SCROLL_FRACTION {
+        return Err(Error::new(format!(
+            "{arch}: the smallest frame while the terminal scrolled redrew {smallest} of \
+             {screen_pixels} pixels, over an {SCROLL_FRACTION}th of the screen: the terminal is \
+             damaging its whole window for each line"
+        )));
+    }
+    let reports: Vec<&str> = said
+        .iter()
+        .filter(|line| line.contains("slowest of the last"))
+        .map(|line| line.trim())
+        .collect();
+    println!(
+        "  {arch}: eighty lines scrolled through a terminal, painted and damaged a row at a time \
+         (the smallest frame redrew {smallest} of {screen_pixels} pixels), and left the picture \
+         the terminal's tests bless, every one of {screen_pixels} pixels"
+    );
+    for report in reports {
+        println!("    {report}");
+    }
     Ok(())
 }
 

@@ -4453,6 +4453,17 @@ a thread, which is the same bytes on one thread as on sixteen (the blur 85
 ms to 20, the terminal 7.0 to 1.1, the video 5.8 to 1.1). A frame that owes
 a whole blur is 22 ms, which is a 30 fps video kept up with.
 
+In a guest the same frames were thirty times dearer than on the host, and
+neither the arithmetic nor the pages were why: the guest's compositor is a
+static musl program, whose `roundf`, `floorf` and `memcmp` are portable C
+called once a channel a pixel, and `compositor/term` painted and damaged its
+whole window for every line. `compositor_render::exact` is the rounding and
+the compare without a call, the same bytes out; the terminal paints and
+damages the rows that changed; and `test-compositor --boot scroll` holds
+both, requiring the blessed picture after eighty scrolled lines and a frame
+that redrew under an eighth of the screen (two rows, 33,456 pixels; a
+whole-window frame about 6 ms where it was half a second).
+
 **Done — the rest of Hyprland's dispatcher table (2026-09-17).**
 Twenty-seven names in Hyprland's `m_dispMap` had no answer here; every one
 of them does now. The split is by what they touch. `compositor/layout`

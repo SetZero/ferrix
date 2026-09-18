@@ -7,8 +7,9 @@ that whoever touches it next does not have to rediscover any of it.
 
 The short version: **a frame that changes a little costs a little, whatever
 is on the screen: 120 ms → 0.06 ms for a terminal rewriting a line,
-translucent or not. What is left is a wallpaper that changes every frame,
-which is a blur every frame (§2.5).**
+translucent or not, on the host; in a guest a whole-window frame is about
+6 ms rather than most of a second (§2.5). What is left is a wallpaper that
+changes every frame, which is a blur every frame (§2.6, §2.7).**
 
 ---
 
@@ -236,26 +237,46 @@ that.
 * The report line ends `, all of them N us` now: what the window's frames
   cost together, which a slowest frame cannot say.
 
-Still to be looked at there: the first frames of a boot take about a second
-each in the guest (`frames 4 slowest of the last 4 1142353 us`) where the
-host draws the same frame in tens of milliseconds. Not the blur's
-arithmetic; probably what a fresh fifteen megabytes of planes costs in page
-faults on Ferrix. It is paid once a boot now rather than once a frame,
-which is why it is a note and not a fix.
+The first frames of a boot took about a second each in the guest where the
+host drew the same frame in tens of milliseconds; §2.5 says why, and it was
+not page faults.
 
-### 2.5 What is left
+### 2.5 The guest: a static musl program, and a terminal that damaged its window
 
-* **A wallpaper that changes every frame** (`mpvpaper`) is what §2.6 is
-  about: it keeps up with a 30 fps video now, and costs cores to do it.
-* **A floating translucent window, and a blurred bar,** are still redrawn
-  whole when touched. A bar is 8.6 ms. A large floating terminal is the case
-  that would be felt.
-* **The loop polls** for input, 2 ms at a time, and builds a description of every
-  window each pass while a bar is watching. Not the frame time, but it is a
-  core that is never idle on a machine with one.
-* **`composite_scaled` still gathers a whole surface**, for a window
-  part-way through an animation. The whole window is damaged then, so it is
-  proportionate; it is also 3 ms a window a frame.
+Timed stage by stage in a KVM guest at 1024x768 (`TIMING` prints on a
+throwaway commit), one window's **shadow took 170 ms** where the host takes
+5, and the backdrop's compare 5–13 ms where the host takes 0.15 -- thirty
+to forty times slower -- while plain copies were only three times slower.
+The guest binary is a static musl build. There `f32::round` and
+`f32::floor` are calls into libm, and `==` on two slices is `memcmp`; on
+the host those are glibc's, picked for the processor at load time, and on
+musl they are portable C, a `roundf` per channel per pixel and a byte loop.
+`blur::floor` had found the same thing first, for the blur alone.
+
+`compositor/render/src/exact.rs` has the three pieces without a call --
+`byte`, `nearest`, `same` -- each tested against the library over every
+value that could differ, and the shadow, the blur's write-out and its noise,
+the gradient fill and the backdrop's compare use them. Every expected image
+is unchanged.
+
+The other half was the terminal. `compositor/term` painted its whole grid
+and damaged its whole buffer on every change, so every keystroke and every
+line of output was a whole window for the terminal to paint, for the
+compositor to draw and for the card to send -- the ~0.9 s frame once a
+second in `run-compositor` on Windows. It keeps what each row was painted
+as (`paint::Painted`) and paints and damages only the rows that differ;
+`painting_the_changed_rows_is_painting_the_whole` says that is the same
+picture to the byte.
+
+`test-compositor --boot scroll` holds both in a guest: `pattern --scroll
+80` writes eighty lines into the terminal, the last picture must be the
+terminal's own blessed image, and one frame report must count a frame that
+redrew under an eighth of the screen. The report line ends `, least N px`
+now, the fewest pixels a frame in its window redrew. Measured (KVM,
+1024x768): while lines are added, the smallest frame is two rows, 33,456
+px, and 25 frames cost 67 ms together; once the screen is full and every
+line scrolls every row, a whole-window frame is about 6.6 ms, where the
+same frame was half a second before this section's first half.
 
 ### 2.6 A wallpaper that moves
 
@@ -306,6 +327,20 @@ What it costs is cores: four or so of twelve while every frame owes a
 blur. That is what a software dual-Kawase is; the next lever is the tap's
 own arithmetic (the bilinear weights of a pass repeat every two pixels
 across and are worked out again for each), and after that the GPU.
+
+### 2.7 What is left
+
+* **A wallpaper that changes every frame** (`mpvpaper`) is what §2.6 is
+  about: it keeps up with a 30 fps video now, and costs cores to do it.
+* **A floating translucent window, and a blurred bar,** are still redrawn
+  whole when touched. A bar is 8.6 ms. A large floating terminal is the case
+  that would be felt.
+* **The loop polls** for input, 2 ms at a time, and builds a description of every
+  window each pass while a bar is watching. Not the frame time, but it is a
+  core that is never idle on a machine with one.
+* **`composite_scaled` still gathers a whole surface**, for a window
+  part-way through an animation. The whole window is damaged then, so it is
+  proportionate; it is also 3 ms a window a frame.
 
 ---
 

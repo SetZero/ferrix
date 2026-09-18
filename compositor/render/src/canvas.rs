@@ -353,11 +353,10 @@ impl Canvas {
             #[expect(clippy::cast_precision_loss, reason = "as above")]
             let nx = ((x - box_rect.x) as f32 + 0.5) / wide;
             #[expect(
-                clippy::cast_possible_truncation,
-                clippy::cast_sign_loss,
-                reason = "a progress between zero and one over an index of a few thousand"
+                clippy::cast_precision_loss,
+                reason = "an index of a few thousand, which an f32 holds exactly"
             )]
-            let at = (axis.at(nx, ny) * last as f32).round() as usize;
+            let at = crate::exact::nearest(axis.at(nx, ny) * last as f32);
             let Some(color) = ramp.get(at.min(last)) else {
                 continue;
             };
@@ -1242,6 +1241,6 @@ fn over(pixel: &mut [u8], colour: [u8; 3], alpha: f32) {
         };
         let source = f32::from(*channel) * alpha;
         let blended = source + f32::from(*slot) * keep;
-        *slot = blended.round().clamp(0.0, 255.0) as u8;
+        *slot = crate::exact::byte(blended);
     }
 }
