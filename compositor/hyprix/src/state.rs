@@ -418,6 +418,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
     // silent while nothing is drawn.
     let mut since = Duration::ZERO;
     let mut spent = Duration::ZERO;
+    let mut fewest = i64::MAX;
     let mut counted = 0u32;
     let mut reported = Instant::now();
     let mut next_window = 1u32;
@@ -1279,17 +1280,25 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
             // the machine spent drawing: one frame in sixty may be slow for
             // a reason of its own, and a slowest frame cannot tell that
             // from sixty slow ones.
+            //
+            // And the fewest pixels any of them redrew, which is what says
+            // whether a change that was small was drawn small: a terminal
+            // that damages its whole window for one line makes every frame
+            // the screen, and the times alone cannot tell that from a slow
+            // machine.
             since = since.max(took);
             spent = spent.saturating_add(took);
+            fewest = fewest.min(redrew);
             counted = counted.saturating_add(1);
             if reported.elapsed() >= FRAME_REPORT {
                 report(&format!(
-                    "hyprix: frames {drawn} slowest of the last {counted} {} us, all of them {} us",
+                    "hyprix: frames {drawn} slowest of the last {counted} {} us, all of them {} us, \
+                     least {fewest} px",
                     since.as_micros(),
                     spent.as_micros()
                 ));
-                (since, spent, counted, reported) =
-                    (Duration::ZERO, Duration::ZERO, 0, Instant::now());
+                (since, spent, fewest, counted, reported) =
+                    (Duration::ZERO, Duration::ZERO, i64::MAX, 0, Instant::now());
             }
             if drawn == 1 {
                 // The screens are up and the first frame is on them. This is

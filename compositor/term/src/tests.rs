@@ -233,6 +233,82 @@ fn version_grid(columns: usize, rows: usize) -> Grid {
     grid
 }
 
+/// The grid a terminal shows after `pattern --scroll 80` has run in it:
+/// eighty numbered lines through a grid of fewer rows, so it scrolled.
+fn scrolled_grid(columns: usize, rows: usize) -> Grid {
+    let mut grid = Grid::new(columns, rows);
+    for line in 0..80 {
+        grid.write(format!("scrolling line {line}\r\n").as_bytes());
+    }
+    grid
+}
+
+/// The rows a terminal paints again are the rows that changed, and painting
+/// only those over the buffer it holds is the picture painting all of them
+/// makes -- to the byte, over a scroll, which changes every row, and over
+/// one more line, which changes two.
+#[test]
+fn painting_the_changed_rows_is_painting_the_whole() {
+    let (width, height) = (400usize, 200usize);
+    let (columns, rows) = paint::fits(width, height, 1);
+    let colours = paint::Colours::default();
+    let mut grid = Grid::new(columns, rows);
+    grid.write(b"one\r\ntwo\r\n");
+    let mut kept = vec![0u8; width * height * 4];
+    paint::draw(&mut kept, (width, height), width * 4, &grid, &colours, 1);
+    let mut painted: Vec<paint::Painted> = (0..rows)
+        .map(|row| paint::Painted::of(&grid, row))
+        .collect();
+
+    // One more line: two rows change, the one written and the one the
+    // cursor moved to. Then more lines than there are rows: every row.
+    for (bytes, rows_changed) in [
+        (
+            b"three
+
+"
+            .to_vec(),
+            1..=2,
+        ),
+        (
+            b"x
+
+"
+            .repeat(rows + 3),
+            rows..=rows,
+        ),
+    ] {
+        grid.write(&bytes);
+        let now: Vec<paint::Painted> = (0..rows)
+            .map(|row| paint::Painted::of(&grid, row))
+            .collect();
+        let changed: Vec<usize> = (0..rows).filter(|&row| painted[row] != now[row]).collect();
+        assert!(
+            rows_changed.contains(&changed.len()),
+            "{} rows changed",
+            changed.len()
+        );
+        for &row in &changed {
+            paint::draw_rows(
+                &mut kept,
+                (width, height),
+                width * 4,
+                &grid,
+                &colours,
+                1,
+                row..row + 1,
+            );
+        }
+        painted = now;
+        let mut whole = vec![0u8; width * height * 4];
+        paint::draw(&mut whole, (width, height), width * 4, &grid, &colours, 1);
+        assert!(
+            kept == whole,
+            "the rows painted apart differ from the whole"
+        );
+    }
+}
+
 /// A terminal's picture, drawn the way its window draws it.
 fn version_frame(width: usize, height: usize) -> Vec<u8> {
     let (columns, rows) = paint::fits(width, height, 1);
@@ -257,15 +333,40 @@ fn version_frame(width: usize, height: usize) -> Vec<u8> {
 /// `compositor/render` gives it, and the terminal's pixels inside.
 #[test]
 fn a_terminal_running_a_program_is_the_expected_image() {
+    let (width, height) = window_size();
+    screen_of(&version_frame(width, height), "terminal-hyprctl-version");
+}
+
+/// The same, after `pattern --scroll 80` ran in it: what `cargo xtask
+/// test-compositor`'s scroll boot requires of the guest, where every one of
+/// those lines was painted and damaged a row at a time.
+#[test]
+fn a_terminal_that_scrolled_is_the_expected_image() {
+    let (width, height) = window_size();
+    let (columns, rows) = paint::fits(width, height, 1);
+    let mut pixels = vec![0u8; width * height * 4];
+    paint::draw(
+        &mut pixels,
+        (width, height),
+        width * 4,
+        &scrolled_grid(columns, rows),
+        &paint::Colours::default(),
+        1,
+    );
+    screen_of(&pixels, "terminal-scrolled");
+}
+
+/// The screen a terminal showing `buffer` makes, compared with the image
+/// blessed as `name`.
+fn screen_of(buffer: &[u8], name: &str) {
     use std::collections::BTreeMap;
 
     use compositor_render::{Canvas, Damage, Format, Style, Surface, Target};
 
     let layout = one_window();
     let (width, height) = window_size();
-    let buffer = version_frame(width, height);
     let surface = Surface::new(
-        &buffer,
+        buffer,
         u32::try_from(width).unwrap_or(0),
         u32::try_from(height).unwrap_or(0),
         u32::try_from(width * 4).unwrap_or(0),
@@ -297,13 +398,7 @@ fn a_terminal_running_a_program_is_the_expected_image() {
         .join("render")
         .join("tests")
         .join("data");
-    compositor_render::golden::check_in(
-        &directory,
-        "terminal-hyprctl-version",
-        WIDTH,
-        HEIGHT,
-        &pixels,
-    );
+    compositor_render::golden::check_in(&directory, name, WIDTH, HEIGHT, &pixels);
 }
 
 /// The glyphs land where the grid says, and the cursor is drawn as a block.
