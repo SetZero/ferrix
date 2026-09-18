@@ -22,8 +22,9 @@
 #![no_main]
 
 use ferrix_virtio::gpu::{
-    CAPSET_VIRGL2, Command, DISPLAY_INFO_LEN, Format, GpuError, HEADER_LEN, MAX_CAPSET_SIZE,
-    MAX_DIMENSION, MemEntry, PAGE_SIZE, Rect, Response, backing_entries,
+    Box3d, CAPSET_VIRGL2, CONTEXT_NAME_LEN, Command, Context, DISPLAY_INFO_LEN, Format, GpuError,
+    HEADER_LEN, MAX_CAPSET_SIZE, MAX_DIMENSION, MemEntry, PAGE_SIZE, Rect, Response,
+    backing_entries,
 };
 use libfuzzer_sys::fuzz_target;
 
@@ -33,7 +34,7 @@ fn u32_at(bytes: &[u8], at: usize) -> u32 {
         .map_or(0, |field| u32::from_le_bytes(field.try_into().expect("four bytes")))
 }
 
-fn commands(bytes: &[u8]) -> [Command<'static>; 6] {
+fn commands(bytes: &[u8]) -> [Command<'static>; 10] {
     let rect = Rect {
         x: u32_at(bytes, 0),
         y: u32_at(bytes, 4),
@@ -67,6 +68,39 @@ fn commands(bytes: &[u8]) -> [Command<'static>; 6] {
             capset_id: CAPSET_VIRGL2,
             capset_version: u32_at(bytes, 40),
             max_size: u32_at(bytes, 44) % MAX_CAPSET_SIZE + 1,
+        },
+        Command::CtxCreate {
+            capset: bytes.first().copied().unwrap_or(0),
+            // Inside the field, so that it encodes: a longer one is refused,
+            // which the module's own tests cover.
+            name: "fuzz",
+        },
+        Command::CtxDestroy,
+        Command::ResourceCreate3d {
+            resource_id: u32_at(bytes, 48),
+            target: u32_at(bytes, 52),
+            format: u32_at(bytes, 56),
+            bind: u32_at(bytes, 60),
+            size: Box3d {
+                x: u32_at(bytes, 64),
+                y: u32_at(bytes, 68),
+                z: u32_at(bytes, 72),
+                width: rect.width,
+                height: rect.height,
+                depth: u32_at(bytes, 76),
+            },
+            array_size: u32_at(bytes, 80),
+            last_level: u32_at(bytes, 84),
+            samples: u32_at(bytes, 88),
+            flags: u32_at(bytes, 92),
+        },
+        Command::TransferToHost3d {
+            region: Box3d::flat(rect.width, rect.height),
+            offset: u64::from(u32_at(bytes, 96)),
+            resource_id: u32_at(bytes, 100),
+            level: u32_at(bytes, 104),
+            stride: u32_at(bytes, 108),
+            layer_stride: u32_at(bytes, 112),
         },
     ]
 }
@@ -111,12 +145,39 @@ fuzz_target!(|bytes: &[u8]| {
             Err(_) => {}
         }
 
+        // 3. A context command carries its context and its fence in the
+        // header, and the header is written whole whatever they are.
+        let context = Context {
+            id: u32_at(rest, 0),
+            fence: (selector & 4 == 4).then(|| u64::from(u32_at(rest, 4))),
+            ring: (selector & 8 == 8).then_some(selector),
+        };
+        let mut wide = [0u8; 128];
+        if let Ok(len) = command.encode_in(context, &mut wide) {
+            assert_eq!(len, command.len());
+            assert_eq!(u32_at(&wide, 0), command.code());
+            assert_eq!(u32_at(&wide, 4), context.flags());
+            assert_eq!(u32_at(&wide, 16), context.id);
+            // Every byte of a context name's field is written, so nothing
+            // of whatever was in the buffer survives into the request.
+            if let Command::CtxCreate { name, .. } = command {
+                assert!(name.len() <= CONTEXT_NAME_LEN);
+            }
+        }
+
         // 3.
         let mut out = [0u8; 64];
-        let len = command.encode(&mut out).expect("a fixed command fits 64 bytes");
-        assert_eq!(len, command.len());
-        assert_eq!(u32_at(&out, 0), command.code());
-        assert!(command.encode(&mut out[..len - 1]).is_err());
+        // Only the ones that fit: `CTX_CREATE` and `RESOURCE_CREATE_3D` are
+        // longer than this buffer, and a short buffer is refused, which is
+        // the property below.
+        if command.len() <= out.len() {
+            let len = command.encode(&mut out).expect("it fits");
+            assert_eq!(len, command.len());
+            assert_eq!(u32_at(&out, 0), command.code());
+            assert!(command.encode(&mut out[..len - 1]).is_err());
+        } else {
+            assert!(command.encode(&mut out).is_err());
+        }
     }
 
     // 2. Page addresses from the input, mostly aligned, with runs when the

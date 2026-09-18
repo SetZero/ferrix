@@ -623,3 +623,252 @@ fn a_capset_command_takes_only_its_own_response() {
     assert_eq!(expects(CMD_GET_CAPSET_INFO), 0x1102);
     assert_eq!(expects(CMD_GET_CAPSET), 0x1103);
 }
+
+/// A context command carries its id in the *header*, not in its body, and
+/// `CTX_CREATE` carries a capset and a name in a fixed 64-byte field.
+///
+/// Offsets by hand from `struct virtio_gpu_ctx_create`: `nlen` at 24,
+/// `context_init` at 28, and 64 bytes of `debug_name` from 32. The header's
+/// `ctx_id` is at 16, from `struct virtio_gpu_ctrl_hdr`.
+#[test]
+fn a_context_is_created_by_a_command_that_names_it_in_its_header() {
+    let command = Command::CtxCreate {
+        capset: 2,
+        name: "ferrix",
+    };
+    let mut out = vec![0xAAu8; 256];
+    let len = command
+        .encode_in(
+            Context {
+                id: 7,
+                ..Context::NONE
+            },
+            &mut out,
+        )
+        .expect("the command encodes");
+    assert_eq!(len, 24 + 8 + 64);
+    assert_eq!(u32_at(&out, 0), 0x0200, "VIRTIO_GPU_CMD_CTX_CREATE");
+    assert_eq!(u32_at(&out, 16), 7, "the header's ctx_id");
+    assert_eq!(u32_at(&out, 24), 6, "nlen, the name's length");
+    assert_eq!(u32_at(&out, 28), 2, "context_init's capset");
+    assert_eq!(&out[32..38], b"ferrix");
+    assert!(
+        out[38..24 + 8 + 64].iter().all(|&byte| byte == 0),
+        "the rest of debug_name is written, not left"
+    );
+}
+
+/// A name that does not fit the field is refused rather than cut: a name
+/// that is not the name is worse than none.
+#[test]
+fn a_context_name_longer_than_the_field_is_refused() {
+    let long = "x".repeat(65);
+    let mut out = vec![0u8; 256];
+    assert_eq!(
+        Command::CtxCreate {
+            capset: 0,
+            name: &long,
+        }
+        .encode(&mut out),
+        Err(GpuError::ContextName(65))
+    );
+    // And exactly the field's worth fits.
+    let fits = "y".repeat(64);
+    assert!(
+        Command::CtxCreate {
+            capset: 0,
+            name: &fits,
+        }
+        .encode(&mut out)
+        .is_ok()
+    );
+}
+
+/// `CTX_DESTROY` is a header and nothing else; attaching and detaching a
+/// resource is a header, the resource and its padding.
+#[test]
+fn the_other_context_commands_are_their_headers_and_a_resource() {
+    let bytes = encoded(&Command::CtxDestroy);
+    assert_eq!(bytes.len(), 24);
+    assert_eq!(u32_at(&bytes, 0), 0x0201);
+
+    for (command, code) in [
+        (Command::CtxAttachResource { resource_id: 9 }, 0x0202),
+        (Command::CtxDetachResource { resource_id: 9 }, 0x0203),
+    ] {
+        let bytes = encoded(&command);
+        assert_eq!(bytes.len(), 24 + 8);
+        assert_eq!(u32_at(&bytes, 0), code);
+        assert_eq!(u32_at(&bytes, 24), 9);
+        assert_eq!(u32_at(&bytes, 28), 0, "the padding");
+        // Each is answered with a plain OK.
+        assert_eq!(expects(command.code()), 0x1100);
+    }
+}
+
+/// The header's own fields: a fence asks the device to answer when the
+/// command has finished, and a ring says which timeline it is on.
+///
+/// `VIRTIO_GPU_FLAG_FENCE` is 1 and `VIRTIO_GPU_FLAG_INFO_RING_IDX` is 2,
+/// `flags` is at 4, `fence_id` at 8 and `ring_idx` at 20.
+#[test]
+fn a_fenced_command_says_so_in_its_header() {
+    let mut out = vec![0xAAu8; 64];
+    let _ = Command::CtxDestroy
+        .encode_in(
+            Context {
+                id: 3,
+                fence: Some(0x1234_5678_9abc_def0),
+                ring: Some(1),
+            },
+            &mut out,
+        )
+        .expect("encodes");
+    assert_eq!(u32_at(&out, 4), 1 | 2, "FENCE and INFO_RING_IDX");
+    assert_eq!(u64_at(&out, 8), 0x1234_5678_9abc_def0);
+    assert_eq!(u32_at(&out, 16), 3);
+    assert_eq!(out[20], 1, "ring_idx");
+    assert_eq!(&out[21..24], &[0, 0, 0], "its padding");
+
+    // And a command with neither says neither.
+    let _ = Command::CtxDestroy
+        .encode_in(Context::NONE, &mut out)
+        .expect("encodes");
+    assert_eq!(u32_at(&out, 4), 0);
+    assert_eq!(u64_at(&out, 8), 0);
+    assert_eq!(u32_at(&out, 16), 0);
+    assert_eq!(out[20], 0);
+}
+
+/// `RESOURCE_CREATE_3D` is eleven words after the header, and the ones this
+/// module does not interpret go through untouched.
+///
+/// Offsets by hand from `struct virtio_gpu_resource_create_3d`: resource,
+/// target, format, bind at 24, 28, 32, 36; width, height, depth at 40, 44,
+/// 48; `array_size`, `last_level`, `nr_samples`, `flags` at 52, 56, 60, 64;
+/// and
+/// four bytes of padding.
+#[test]
+fn a_3d_resource_carries_virgls_own_numbers() {
+    let command = Command::ResourceCreate3d {
+        resource_id: 5,
+        target: 2,
+        format: 67,
+        bind: 0x0002,
+        size: Box3d::flat(640, 480),
+        array_size: 1,
+        last_level: 0,
+        samples: 0,
+        flags: RESOURCE_FLAG_Y_0_TOP,
+    };
+    let bytes = encoded(&command);
+    assert_eq!(bytes.len(), 24 + 48);
+    assert_eq!(
+        u32_at(&bytes, 0),
+        0x0204,
+        "VIRTIO_GPU_CMD_RESOURCE_CREATE_3D"
+    );
+    assert_eq!(
+        [
+            u32_at(&bytes, 24),
+            u32_at(&bytes, 28),
+            u32_at(&bytes, 32),
+            u32_at(&bytes, 36)
+        ],
+        [5, 2, 67, 0x0002]
+    );
+    assert_eq!(
+        [u32_at(&bytes, 40), u32_at(&bytes, 44), u32_at(&bytes, 48)],
+        [640, 480, 1],
+        "a flat texture is a box one deep"
+    );
+    assert_eq!(
+        [
+            u32_at(&bytes, 52),
+            u32_at(&bytes, 56),
+            u32_at(&bytes, 60),
+            u32_at(&bytes, 64)
+        ],
+        [1, 0, 0, 1]
+    );
+    assert_eq!(u32_at(&bytes, 68), 0, "the padding");
+}
+
+/// A 3D transfer names a *box* where a 2D one names a rectangle, and the two
+/// directions are the same body under different codes.
+///
+/// `struct virtio_gpu_transfer_host_3d`: the box at 24, then offset at 48,
+/// resource at 56, level at 60, stride at 64 and `layer_stride` at 68.
+#[test]
+fn a_3d_transfer_names_a_box_in_both_directions() {
+    let region = Box3d {
+        x: 1,
+        y: 2,
+        z: 3,
+        width: 4,
+        height: 5,
+        depth: 6,
+    };
+    for (command, code) in [
+        (
+            Command::TransferToHost3d {
+                region,
+                offset: 0x4000,
+                resource_id: 5,
+                level: 0,
+                stride: 2560,
+                layer_stride: 0,
+            },
+            0x0205,
+        ),
+        (
+            Command::TransferFromHost3d {
+                region,
+                offset: 0x4000,
+                resource_id: 5,
+                level: 0,
+                stride: 2560,
+                layer_stride: 0,
+            },
+            0x0206,
+        ),
+    ] {
+        let bytes = encoded(&command);
+        assert_eq!(bytes.len(), 24 + 24 + 24);
+        assert_eq!(u32_at(&bytes, 0), code);
+        assert_eq!(
+            (24..48)
+                .step_by(4)
+                .map(|at| u32_at(&bytes, at))
+                .collect::<Vec<u32>>(),
+            [1, 2, 3, 4, 5, 6],
+            "the box, in order"
+        );
+        assert_eq!(u64_at(&bytes, 48), 0x4000);
+        assert_eq!(u32_at(&bytes, 56), 5);
+        assert_eq!(u32_at(&bytes, 60), 0);
+        assert_eq!(u32_at(&bytes, 64), 2560);
+        assert_eq!(u32_at(&bytes, 68), 0);
+    }
+}
+
+/// `SUBMIT_3D` is a length and then the stream, which this module carries
+/// and does not read.
+#[test]
+fn a_submitted_stream_is_carried_whole() {
+    let stream: Vec<u8> = (0..32u8).collect();
+    let command = Command::Submit3d { commands: &stream };
+    let bytes = encoded(&command);
+    assert_eq!(bytes.len(), 24 + 8 + 32);
+    assert_eq!(u32_at(&bytes, 0), 0x0207, "VIRTIO_GPU_CMD_SUBMIT_3D");
+    assert_eq!(u32_at(&bytes, 24), 32, "size, in bytes");
+    assert_eq!(u32_at(&bytes, 28), 0, "the padding");
+    assert_eq!(&bytes[32..], stream.as_slice());
+
+    // And nothing to submit is not a command.
+    let mut out = vec![0u8; 64];
+    assert_eq!(
+        Command::Submit3d { commands: &[] }.encode(&mut out),
+        Err(GpuError::StreamSize(0))
+    );
+}

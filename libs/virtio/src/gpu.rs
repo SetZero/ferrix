@@ -197,6 +197,22 @@ pub const CMD_RESOURCE_DETACH_BACKING: u32 = 0x0107;
 pub const CMD_GET_CAPSET_INFO: u32 = 0x0108;
 /// `VIRTIO_GPU_CMD_GET_CAPSET`.
 pub const CMD_GET_CAPSET: u32 = 0x0109;
+/// `VIRTIO_GPU_CMD_CTX_CREATE`, the first of the 3D commands.
+pub const CMD_CTX_CREATE: u32 = 0x0200;
+/// `VIRTIO_GPU_CMD_CTX_DESTROY`.
+pub const CMD_CTX_DESTROY: u32 = 0x0201;
+/// `VIRTIO_GPU_CMD_CTX_ATTACH_RESOURCE`.
+pub const CMD_CTX_ATTACH_RESOURCE: u32 = 0x0202;
+/// `VIRTIO_GPU_CMD_CTX_DETACH_RESOURCE`.
+pub const CMD_CTX_DETACH_RESOURCE: u32 = 0x0203;
+/// `VIRTIO_GPU_CMD_RESOURCE_CREATE_3D`.
+pub const CMD_RESOURCE_CREATE_3D: u32 = 0x0204;
+/// `VIRTIO_GPU_CMD_TRANSFER_TO_HOST_3D`.
+pub const CMD_TRANSFER_TO_HOST_3D: u32 = 0x0205;
+/// `VIRTIO_GPU_CMD_TRANSFER_FROM_HOST_3D`.
+pub const CMD_TRANSFER_FROM_HOST_3D: u32 = 0x0206;
+/// `VIRTIO_GPU_CMD_SUBMIT_3D`.
+pub const CMD_SUBMIT_3D: u32 = 0x0207;
 
 /// `VIRTIO_GPU_RESP_OK_NODATA`.
 pub const RESP_OK_NODATA: u32 = 0x1100;
@@ -313,6 +329,27 @@ pub const CAPSET_VENUS: u32 = 4;
 /// `VIRTIO_GPU_CAPSET_DRM`: the native-context capability set.
 pub const CAPSET_DRM: u32 = 6;
 
+/// Bytes of `struct virtio_gpu_box`: a rectangle with a depth, which is what
+/// a 3D transfer names instead of a [`Rect`].
+pub const BOX_LEN: usize = 24;
+
+/// `VIRTIO_GPU_RESOURCE_FLAG_Y_0_TOP`: row zero is the top of the resource
+/// rather than the bottom, which is the way every other thing in this tree
+/// counts rows and the opposite of OpenGL's.
+pub const RESOURCE_FLAG_Y_0_TOP: u32 = 1 << 0;
+
+/// Bytes of `virtio_gpu_ctx_create`'s `debug_name`, which is not a C string:
+/// `nlen` says how much of it is the name.
+pub const CONTEXT_NAME_LEN: usize = 64;
+
+/// `VIRTIO_GPU_CONTEXT_INIT_CAPSET_ID_MASK`: which capability set a context
+/// is for, in the low byte of `context_init`.
+///
+/// Only meaningful to a device that granted [`FEATURE_CONTEXT_INIT`]. To one
+/// that did not, `context_init` is zero and the context is whatever the
+/// device's single renderer is.
+pub const CONTEXT_INIT_CAPSET_MASK: u32 = 0x0000_00ff;
+
 /// The largest capability set this driver will ask a device for.
 ///
 /// A capset is a blob of what the host's renderer can do, and the driver
@@ -369,6 +406,41 @@ impl Rect {
     }
 }
 
+/// `struct virtio_gpu_box`: where in a 3D resource a transfer goes.
+///
+/// A 2D transfer names a [`Rect`]; a 3D one names a box, because a resource
+/// may have depth, layers and mip levels. A flat texture is a box one deep.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct Box3d {
+    /// Left.
+    pub x: u32,
+    /// Top.
+    pub y: u32,
+    /// Front.
+    pub z: u32,
+    /// Width.
+    pub width: u32,
+    /// Height.
+    pub height: u32,
+    /// Depth, which is 1 for a flat texture.
+    pub depth: u32,
+}
+
+impl Box3d {
+    /// A box covering a flat `width` x `height` texture.
+    #[must_use]
+    pub const fn flat(width: u32, height: u32) -> Self {
+        Self {
+            x: 0,
+            y: 0,
+            z: 0,
+            width,
+            height,
+            depth: 1,
+        }
+    }
+}
+
 /// `struct virtio_gpu_mem_entry`: one run of backing.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct MemEntry {
@@ -414,6 +486,101 @@ pub enum Command<'a> {
         /// How many bytes the response buffer has for the set, which is the
         /// `max_size` that gave. The device writes that many.
         max_size: u32,
+    },
+    /// Make a rendering context, which every 3D command afterwards names in
+    /// its header.
+    ///
+    /// The id is the header's, not a field here: it is the driver's to
+    /// choose and the device's to remember, and [`Context`] is how every
+    /// command carries it.
+    CtxCreate {
+        /// Which capability set this context is for, for a device that
+        /// granted [`FEATURE_CONTEXT_INIT`]; 0 for its default renderer.
+        capset: u8,
+        /// A name for the context, which is for a person reading the host's
+        /// log and nothing else. Longer than [`CONTEXT_NAME_LEN`] is
+        /// refused rather than cut, since a name that is not the name is
+        /// worse than none.
+        name: &'a str,
+    },
+    /// Destroy a context and everything the device kept for it.
+    CtxDestroy,
+    /// Let a context use a resource. A 3D command may only name a resource
+    /// its own context has been given.
+    CtxAttachResource {
+        /// The resource.
+        resource_id: u32,
+    },
+    /// Take it away again.
+    CtxDetachResource {
+        /// The resource.
+        resource_id: u32,
+    },
+    /// Create a 3D resource: a texture or a buffer the host's renderer owns,
+    /// which is what a context draws into and reads from.
+    ///
+    /// The fields are virgl's own and this module does not interpret them:
+    /// `target`, `format` and `bind` are the renderer's enumerations, not
+    /// virtio's, and a driver takes them from the capability set rather than
+    /// from here.
+    ResourceCreate3d {
+        /// The id to give it, not 0.
+        resource_id: u32,
+        /// virgl's `PIPE_TEXTURE_*`.
+        target: u32,
+        /// virgl's `PIPE_FORMAT_*`, which is *not* [`Format`].
+        format: u32,
+        /// virgl's `PIPE_BIND_*`: what the resource may be used as.
+        bind: u32,
+        /// Its size.
+        size: Box3d,
+        /// How many array layers.
+        array_size: u32,
+        /// The highest mip level.
+        last_level: u32,
+        /// How many samples, for a multisampled target.
+        samples: u32,
+        /// [`RESOURCE_FLAG_Y_0_TOP`], or none.
+        flags: u32,
+    },
+    /// Copy guest memory into a 3D resource the host owns.
+    TransferToHost3d {
+        /// Which part of the resource.
+        region: Box3d,
+        /// Where in the resource's backing the bytes start.
+        offset: u64,
+        /// The resource.
+        resource_id: u32,
+        /// Which mip level.
+        level: u32,
+        /// Bytes a row, or 0 for the resource's own.
+        stride: u32,
+        /// Bytes a layer, or 0 for the resource's own.
+        layer_stride: u32,
+    },
+    /// The same the other way: the host's resource into guest memory.
+    TransferFromHost3d {
+        /// Which part of the resource.
+        region: Box3d,
+        /// Where in the resource's backing the bytes go.
+        offset: u64,
+        /// The resource.
+        resource_id: u32,
+        /// Which mip level.
+        level: u32,
+        /// Bytes a row, or 0 for the resource's own.
+        stride: u32,
+        /// Bytes a layer, or 0 for the resource's own.
+        layer_stride: u32,
+    },
+    /// Hand the host's renderer a command stream to run.
+    ///
+    /// The bytes are virgl's protocol, not virtio's: this carries them and
+    /// says how many there are, and `compositor/virgl` is what will write
+    /// them (`docs/GPU.md` step 3b).
+    Submit3d {
+        /// The stream.
+        commands: &'a [u8],
     },
     /// Destroy a resource.
     ResourceUnref {
@@ -476,6 +643,14 @@ impl Command<'_> {
             Self::ResourceDetachBacking { .. } => CMD_RESOURCE_DETACH_BACKING,
             Self::GetCapsetInfo { .. } => CMD_GET_CAPSET_INFO,
             Self::GetCapset { .. } => CMD_GET_CAPSET,
+            Self::CtxCreate { .. } => CMD_CTX_CREATE,
+            Self::CtxDestroy => CMD_CTX_DESTROY,
+            Self::CtxAttachResource { .. } => CMD_CTX_ATTACH_RESOURCE,
+            Self::CtxDetachResource { .. } => CMD_CTX_DETACH_RESOURCE,
+            Self::ResourceCreate3d { .. } => CMD_RESOURCE_CREATE_3D,
+            Self::TransferToHost3d { .. } => CMD_TRANSFER_TO_HOST_3D,
+            Self::TransferFromHost3d { .. } => CMD_TRANSFER_FROM_HOST_3D,
+            Self::Submit3d { .. } => CMD_SUBMIT_3D,
         }
     }
 
@@ -483,12 +658,22 @@ impl Command<'_> {
     #[must_use]
     pub const fn len(&self) -> usize {
         match self {
-            Self::GetDisplayInfo => HEADER_LEN,
+            Self::GetDisplayInfo | Self::CtxDestroy => HEADER_LEN,
+            Self::CtxCreate { .. } => HEADER_LEN + 8 + CONTEXT_NAME_LEN,
+            // `virtio_gpu_resource_create_3d`: eleven words and a padding.
+            Self::ResourceCreate3d { .. } => HEADER_LEN + 48,
+            Self::TransferToHost3d { .. } | Self::TransferFromHost3d { .. } => {
+                HEADER_LEN + BOX_LEN + 24
+            }
+            // The stream follows the `size` and its padding.
+            Self::Submit3d { commands } => HEADER_LEN + 8 + commands.len(),
             Self::ResourceCreate2d { .. } => HEADER_LEN + 16,
             Self::ResourceUnref { .. }
             | Self::ResourceDetachBacking { .. }
             | Self::GetCapsetInfo { .. }
-            | Self::GetCapset { .. } => HEADER_LEN + 8,
+            | Self::GetCapset { .. }
+            | Self::CtxAttachResource { .. }
+            | Self::CtxDetachResource { .. } => HEADER_LEN + 8,
             Self::SetScanout { .. } | Self::ResourceFlush { .. } => HEADER_LEN + RECT_LEN + 8,
             Self::TransferToHost2d { .. } => HEADER_LEN + RECT_LEN + 16,
             Self::ResourceAttachBacking { entries, .. } => {
@@ -623,6 +808,14 @@ impl Command<'_> {
                 put(body + RECT_LEN + 8, &resource_id.to_le_bytes());
                 put(body + RECT_LEN + 12, &[0; 4]);
             }
+            Self::CtxCreate { .. }
+            | Self::CtxDestroy
+            | Self::CtxAttachResource { .. }
+            | Self::CtxDetachResource { .. }
+            | Self::ResourceCreate3d { .. }
+            | Self::TransferToHost3d { .. }
+            | Self::TransferFromHost3d { .. }
+            | Self::Submit3d { .. } => self.write_3d(body, &mut put),
             Self::GetCapsetInfo { index } => {
                 put(body, &index.to_le_bytes());
                 put(body + 4, &[0; 4]);
@@ -654,9 +847,101 @@ impl Command<'_> {
         Ok(self.len())
     }
 
+    /// The body of every 3D command -- virtio's `0x02xx` -- which is the
+    /// bulk of the encoding and lives here so that
+    /// [`Command::write_with_in`] stays one screen.
+    ///
+    /// Every field is virgl's or virtio's as `virtio_gpu.h` writes it, and
+    /// the padding is written rather than left, as everywhere else here.
+    fn write_3d(&self, body: usize, put: &mut dyn FnMut(usize, &[u8])) {
+        match *self {
+            Self::CtxCreate { capset, name } => {
+                // `nlen` is how much of the fixed 64 bytes is the name; the
+                // rest is padding and is written, not left.
+                let bytes = name.as_bytes();
+                let len = u32::try_from(bytes.len()).unwrap_or(u32::MAX);
+                put(body, &len.to_le_bytes());
+                put(
+                    body + 4,
+                    &(u32::from(capset) & CONTEXT_INIT_CAPSET_MASK).to_le_bytes(),
+                );
+                let bytes = bytes.get(..CONTEXT_NAME_LEN).unwrap_or(bytes);
+                put(body + 8, bytes);
+                let rest = CONTEXT_NAME_LEN.saturating_sub(bytes.len());
+                let zeros = [0u8; CONTEXT_NAME_LEN];
+                put(body + 8 + bytes.len(), zeros.get(..rest).unwrap_or(&[]));
+            }
+            Self::CtxDestroy => {}
+            Self::CtxAttachResource { resource_id } | Self::CtxDetachResource { resource_id } => {
+                put(body, &resource_id.to_le_bytes());
+                put(body + 4, &[0; 4]);
+            }
+            Self::ResourceCreate3d {
+                resource_id,
+                target,
+                format,
+                bind,
+                size,
+                array_size,
+                last_level,
+                samples,
+                flags,
+            } => {
+                put(body, &resource_id.to_le_bytes());
+                put(body + 4, &target.to_le_bytes());
+                put(body + 8, &format.to_le_bytes());
+                put(body + 12, &bind.to_le_bytes());
+                put(body + 16, &size.width.to_le_bytes());
+                put(body + 20, &size.height.to_le_bytes());
+                put(body + 24, &size.depth.to_le_bytes());
+                put(body + 28, &array_size.to_le_bytes());
+                put(body + 32, &last_level.to_le_bytes());
+                put(body + 36, &samples.to_le_bytes());
+                put(body + 40, &flags.to_le_bytes());
+                put(body + 44, &[0; 4]);
+            }
+            Self::TransferToHost3d {
+                region,
+                offset,
+                resource_id,
+                level,
+                stride,
+                layer_stride,
+            }
+            | Self::TransferFromHost3d {
+                region,
+                offset,
+                resource_id,
+                level,
+                stride,
+                layer_stride,
+            } => {
+                put(body, &region.x.to_le_bytes());
+                put(body + 4, &region.y.to_le_bytes());
+                put(body + 8, &region.z.to_le_bytes());
+                put(body + 12, &region.width.to_le_bytes());
+                put(body + 16, &region.height.to_le_bytes());
+                put(body + 20, &region.depth.to_le_bytes());
+                put(body + BOX_LEN, &offset.to_le_bytes());
+                put(body + BOX_LEN + 8, &resource_id.to_le_bytes());
+                put(body + BOX_LEN + 12, &level.to_le_bytes());
+                put(body + BOX_LEN + 16, &stride.to_le_bytes());
+                put(body + BOX_LEN + 20, &layer_stride.to_le_bytes());
+            }
+            Self::Submit3d { commands } => {
+                let size = u32::try_from(commands.len()).unwrap_or(u32::MAX);
+                put(body, &size.to_le_bytes());
+                put(body + 4, &[0; 4]);
+                put(body + 8, commands);
+            }
+            _ => {}
+        }
+    }
+
     /// Refuse a backing list with no entries or more than
-    /// [`MAX_BACKING_ENTRIES`], and a capability set larger than
-    /// [`MAX_CAPSET_SIZE`].
+    /// [`MAX_BACKING_ENTRIES`], a capability set larger than
+    /// [`MAX_CAPSET_SIZE`], and a context name longer than
+    /// [`CONTEXT_NAME_LEN`].
     fn check(&self) -> Result<(), GpuError> {
         match *self {
             Self::ResourceAttachBacking { entries, .. }
@@ -666,6 +951,16 @@ impl Command<'_> {
             }
             Self::GetCapset { max_size, .. } if max_size == 0 || max_size > MAX_CAPSET_SIZE => {
                 Err(GpuError::CapsetSize(max_size))
+            }
+            Self::CtxCreate { name, .. } if name.len() > CONTEXT_NAME_LEN => {
+                Err(GpuError::ContextName(name.len()))
+            }
+            // A stream of no commands is nothing to submit, and one whose
+            // length does not fit the `size` field cannot be described.
+            Self::Submit3d { commands }
+                if commands.is_empty() || u32::try_from(commands.len()).is_err() =>
+            {
+                Err(GpuError::StreamSize(commands.len()))
             }
             _ => Ok(()),
         }
@@ -937,6 +1232,10 @@ pub enum GpuError {
     },
     /// A capability set of no size, or larger than [`MAX_CAPSET_SIZE`].
     CapsetSize(u32),
+    /// A context name longer than [`CONTEXT_NAME_LEN`].
+    ContextName(usize),
+    /// A command stream of no bytes, or more than its length field holds.
+    StreamSize(usize),
     /// The device refused the command.
     Device(DeviceError),
 }
@@ -980,6 +1279,12 @@ impl fmt::Display for GpuError {
             ),
             Self::CapsetSize(size) => {
                 write!(f, "virtio-gpu offered a {size}-byte capability set")
+            }
+            Self::ContextName(len) => {
+                write!(f, "a {len}-byte virtio-gpu context name")
+            }
+            Self::StreamSize(len) => {
+                write!(f, "a {len}-byte virgl command stream")
             }
             Self::Device(error) => write!(f, "virtio-gpu refused the command: {error:?}"),
         }
