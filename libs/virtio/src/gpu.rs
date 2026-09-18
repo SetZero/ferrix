@@ -178,11 +178,19 @@ pub const CMD_TRANSFER_TO_HOST_2D: u32 = 0x0105;
 pub const CMD_RESOURCE_ATTACH_BACKING: u32 = 0x0106;
 /// `VIRTIO_GPU_CMD_RESOURCE_DETACH_BACKING`.
 pub const CMD_RESOURCE_DETACH_BACKING: u32 = 0x0107;
+/// `VIRTIO_GPU_CMD_GET_CAPSET_INFO`.
+pub const CMD_GET_CAPSET_INFO: u32 = 0x0108;
+/// `VIRTIO_GPU_CMD_GET_CAPSET`.
+pub const CMD_GET_CAPSET: u32 = 0x0109;
 
 /// `VIRTIO_GPU_RESP_OK_NODATA`.
 pub const RESP_OK_NODATA: u32 = 0x1100;
 /// `VIRTIO_GPU_RESP_OK_DISPLAY_INFO`.
 pub const RESP_OK_DISPLAY_INFO: u32 = 0x1101;
+/// `VIRTIO_GPU_RESP_OK_CAPSET_INFO`.
+pub const RESP_OK_CAPSET_INFO: u32 = 0x1102;
+/// `VIRTIO_GPU_RESP_OK_CAPSET`.
+pub const RESP_OK_CAPSET: u32 = 0x1103;
 /// `VIRTIO_GPU_RESP_ERR_UNSPEC`, the first error response.
 pub const RESP_ERR_UNSPEC: u32 = 0x1200;
 /// `VIRTIO_GPU_RESP_ERR_OUT_OF_MEMORY`.
@@ -216,6 +224,27 @@ pub const MAX_BACKING_ENTRIES: usize = 16384;
 /// allows up to 16384 per side on its virtio-gpu; a device claiming more is
 /// broken.
 pub const MAX_DIMENSION: u32 = 16384;
+
+/// `VIRTIO_GPU_CAPSET_VIRGL`: virgl's first capability set, OpenGL as
+/// virglrenderer's original protocol carried it.
+pub const CAPSET_VIRGL: u32 = 1;
+/// `VIRTIO_GPU_CAPSET_VIRGL2`: the second, which is what a virglrenderer
+/// built this decade offers and what a GL renderer asks for.
+pub const CAPSET_VIRGL2: u32 = 2;
+/// `VIRTIO_GPU_CAPSET_VENUS`: Vulkan over virtio-gpu, which needs a Linux
+/// host with KVM (`docs/GPU.md` §3).
+pub const CAPSET_VENUS: u32 = 4;
+/// `VIRTIO_GPU_CAPSET_DRM`: the native-context capability set.
+pub const CAPSET_DRM: u32 = 6;
+
+/// The largest capability set this driver will ask a device for.
+///
+/// A capset is a blob of what the host's renderer can do, and the driver
+/// has to find room for one before it asks: `GET_CAPSET_INFO` says how big,
+/// and the driver believes it. virglrenderer's `virgl_caps_v2` is under two
+/// kilobytes, so a device naming a size past this is either broken or
+/// asking for an allocation no driver should make on its word.
+pub const MAX_CAPSET_SIZE: u32 = 64 * 1024;
 
 /// `struct virtio_gpu_rect`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -289,6 +318,27 @@ pub enum Command<'a> {
         /// Its height.
         height: u32,
     },
+    /// Ask what the capability set at `index` is: which renderer it
+    /// belongs to, and how big a buffer [`Command::GetCapset`] needs.
+    ///
+    /// `index` counts from zero and runs to the `num_capsets` in the
+    /// device's configuration, which is *not* the capset id: a device with
+    /// one capset at index 0 may call it [`CAPSET_VIRGL2`].
+    GetCapsetInfo {
+        /// Which of the device's capability sets, counting from zero.
+        index: u32,
+    },
+    /// Fetch a capability set itself: the blob saying what the host's
+    /// renderer can do, which a GL driver reads before it builds anything.
+    GetCapset {
+        /// Which set, by the id [`Command::GetCapsetInfo`] gave.
+        capset_id: u32,
+        /// Which version of it, at most the `max_version` that gave.
+        capset_version: u32,
+        /// How many bytes the response buffer has for the set, which is the
+        /// `max_size` that gave. The device writes that many.
+        max_size: u32,
+    },
     /// Destroy a resource.
     ResourceUnref {
         /// The resource.
@@ -348,6 +398,8 @@ impl Command<'_> {
             Self::TransferToHost2d { .. } => CMD_TRANSFER_TO_HOST_2D,
             Self::ResourceAttachBacking { .. } => CMD_RESOURCE_ATTACH_BACKING,
             Self::ResourceDetachBacking { .. } => CMD_RESOURCE_DETACH_BACKING,
+            Self::GetCapsetInfo { .. } => CMD_GET_CAPSET_INFO,
+            Self::GetCapset { .. } => CMD_GET_CAPSET,
         }
     }
 
@@ -357,7 +409,10 @@ impl Command<'_> {
         match self {
             Self::GetDisplayInfo => HEADER_LEN,
             Self::ResourceCreate2d { .. } => HEADER_LEN + 16,
-            Self::ResourceUnref { .. } | Self::ResourceDetachBacking { .. } => HEADER_LEN + 8,
+            Self::ResourceUnref { .. }
+            | Self::ResourceDetachBacking { .. }
+            | Self::GetCapsetInfo { .. }
+            | Self::GetCapset { .. } => HEADER_LEN + 8,
             Self::SetScanout { .. } | Self::ResourceFlush { .. } => HEADER_LEN + RECT_LEN + 8,
             Self::TransferToHost2d { .. } => HEADER_LEN + RECT_LEN + 16,
             Self::ResourceAttachBacking { entries, .. } => {
@@ -375,8 +430,12 @@ impl Command<'_> {
     /// Bytes the response buffer must have.
     #[must_use]
     pub const fn response_len(&self) -> usize {
-        match self {
+        match *self {
             Self::GetDisplayInfo => DISPLAY_INFO_LEN,
+            Self::GetCapsetInfo { .. } => CAPSET_INFO_LEN,
+            // The set itself is as long as the device said it would be,
+            // which the caller took from `GET_CAPSET_INFO` and passed back.
+            Self::GetCapset { max_size, .. } => HEADER_LEN + max_size as usize,
             _ => HEADER_LEN,
         }
     }
@@ -471,6 +530,18 @@ impl Command<'_> {
                 put(body + RECT_LEN + 8, &resource_id.to_le_bytes());
                 put(body + RECT_LEN + 12, &[0; 4]);
             }
+            Self::GetCapsetInfo { index } => {
+                put(body, &index.to_le_bytes());
+                put(body + 4, &[0; 4]);
+            }
+            Self::GetCapset {
+                capset_id,
+                capset_version,
+                ..
+            } => {
+                put(body, &capset_id.to_le_bytes());
+                put(body + 4, &capset_version.to_le_bytes());
+            }
             Self::ResourceAttachBacking {
                 resource_id,
                 entries,
@@ -491,25 +562,46 @@ impl Command<'_> {
     }
 
     /// Refuse a backing list with no entries or more than
-    /// [`MAX_BACKING_ENTRIES`].
+    /// [`MAX_BACKING_ENTRIES`], and a capability set larger than
+    /// [`MAX_CAPSET_SIZE`].
     fn check(&self) -> Result<(), GpuError> {
-        if let Self::ResourceAttachBacking { entries, .. } = self
-            && (entries.is_empty() || entries.len() > MAX_BACKING_ENTRIES)
-        {
-            return Err(GpuError::BackingEntries(entries.len()));
+        match *self {
+            Self::ResourceAttachBacking { entries, .. }
+                if entries.is_empty() || entries.len() > MAX_BACKING_ENTRIES =>
+            {
+                Err(GpuError::BackingEntries(entries.len()))
+            }
+            Self::GetCapset { max_size, .. } if max_size == 0 || max_size > MAX_CAPSET_SIZE => {
+                Err(GpuError::CapsetSize(max_size))
+            }
+            _ => Ok(()),
         }
-        Ok(())
     }
 }
 
 /// The success response command `code` expects.
 #[must_use]
 pub const fn expects(code: u32) -> u32 {
-    if code == CMD_GET_DISPLAY_INFO {
-        RESP_OK_DISPLAY_INFO
-    } else {
-        RESP_OK_NODATA
+    match code {
+        CMD_GET_DISPLAY_INFO => RESP_OK_DISPLAY_INFO,
+        CMD_GET_CAPSET_INFO => RESP_OK_CAPSET_INFO,
+        CMD_GET_CAPSET => RESP_OK_CAPSET,
+        _ => RESP_OK_NODATA,
     }
+}
+
+/// Bytes of `struct virtio_gpu_resp_capset_info`.
+pub const CAPSET_INFO_LEN: usize = HEADER_LEN + 16;
+
+/// What `GET_CAPSET_INFO` said about one capability set.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct CapsetInfo {
+    /// Which renderer it belongs to: [`CAPSET_VIRGL2`] and the rest.
+    pub id: u32,
+    /// The highest version of it the host offers.
+    pub max_version: u32,
+    /// How many bytes [`Command::GetCapset`] needs room for.
+    pub max_size: u32,
 }
 
 /// One scanout's entry in `GET_DISPLAY_INFO`'s response.
@@ -534,6 +626,18 @@ pub enum Response {
     NoData,
     /// Every scanout, in index order; those past `num_scanouts` are zero.
     DisplayInfo([Scanout; MAX_SCANOUTS]),
+    /// What one capability set is, from `GET_CAPSET_INFO`.
+    CapsetInfo(CapsetInfo),
+    /// A capability set, from `GET_CAPSET`: how many bytes of the response
+    /// buffer *after the header* the device wrote.
+    ///
+    /// The bytes themselves are left where they are. They are the host
+    /// renderer's own blob, as long as the device said and no longer, and
+    /// this module has nothing to say about what is in them.
+    Capset {
+        /// How many bytes of the set there are, from the header onwards.
+        len: usize,
+    },
 }
 
 /// An error response, by its code.
@@ -585,7 +689,7 @@ impl Response {
             RESP_ERR_INVALID_RESOURCE_ID => Some(DeviceError::InvalidResourceId),
             RESP_ERR_INVALID_CONTEXT_ID => Some(DeviceError::InvalidContextId),
             RESP_ERR_INVALID_PARAMETER => Some(DeviceError::InvalidParameter),
-            RESP_OK_NODATA | RESP_OK_DISPLAY_INFO => None,
+            RESP_OK_NODATA | RESP_OK_DISPLAY_INFO | RESP_OK_CAPSET_INFO | RESP_OK_CAPSET => None,
             other => return Err(GpuError::UnknownResponse(other)),
         };
         if let Some(error) = error {
@@ -599,6 +703,33 @@ impl Response {
         }
         if code == RESP_OK_NODATA {
             return Ok(Self::NoData);
+        }
+        if code == RESP_OK_CAPSET_INFO {
+            if written < CAPSET_INFO_LEN {
+                return Err(GpuError::ResponseTooShort(written));
+            }
+            let short = GpuError::ResponseTooShort(written);
+            let info = CapsetInfo {
+                id: get32(bytes, HEADER_LEN).ok_or(short)?,
+                max_version: get32(bytes, HEADER_LEN + 4).ok_or(short)?,
+                max_size: get32(bytes, HEADER_LEN + 8).ok_or(short)?,
+            };
+            // The size is what the driver will allocate next, on the
+            // device's word alone, so it is held to what a capability set
+            // can be rather than believed.
+            if info.max_size > MAX_CAPSET_SIZE {
+                return Err(GpuError::CapsetSize(info.max_size));
+            }
+            return Ok(Self::CapsetInfo(info));
+        }
+        if code == RESP_OK_CAPSET {
+            // Everything after the header is the set. A device that wrote
+            // only the header sent no capability set at all.
+            let len = written.saturating_sub(HEADER_LEN);
+            if len == 0 {
+                return Err(GpuError::ResponseTooShort(written));
+            }
+            return Ok(Self::Capset { len });
         }
         if written < DISPLAY_INFO_LEN {
             return Err(GpuError::ResponseTooShort(written));
@@ -711,6 +842,8 @@ pub enum GpuError {
         /// What it reported.
         rect: Rect,
     },
+    /// A capability set of no size, or larger than [`MAX_CAPSET_SIZE`].
+    CapsetSize(u32),
     /// The device refused the command.
     Device(DeviceError),
 }
@@ -752,6 +885,9 @@ impl fmt::Display for GpuError {
                 "virtio-gpu scanout {index} is {}x{} at {},{}",
                 rect.width, rect.height, rect.x, rect.y
             ),
+            Self::CapsetSize(size) => {
+                write!(f, "virtio-gpu offered a {size}-byte capability set")
+            }
             Self::Device(error) => write!(f, "virtio-gpu refused the command: {error:?}"),
         }
     }

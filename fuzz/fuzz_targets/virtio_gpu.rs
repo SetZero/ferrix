@@ -22,8 +22,8 @@
 #![no_main]
 
 use ferrix_virtio::gpu::{
-    Command, DISPLAY_INFO_LEN, Format, GpuError, HEADER_LEN, MAX_DIMENSION, MemEntry, PAGE_SIZE,
-    Rect, Response, backing_entries,
+    CAPSET_VIRGL2, Command, DISPLAY_INFO_LEN, Format, GpuError, HEADER_LEN, MAX_CAPSET_SIZE,
+    MAX_DIMENSION, MemEntry, PAGE_SIZE, Rect, Response, backing_entries,
 };
 use libfuzzer_sys::fuzz_target;
 
@@ -33,7 +33,7 @@ fn u32_at(bytes: &[u8], at: usize) -> u32 {
         .map_or(0, |field| u32::from_le_bytes(field.try_into().expect("four bytes")))
 }
 
-fn commands(bytes: &[u8]) -> [Command<'static>; 4] {
+fn commands(bytes: &[u8]) -> [Command<'static>; 6] {
     let rect = Rect {
         x: u32_at(bytes, 0),
         y: u32_at(bytes, 4),
@@ -58,6 +58,16 @@ fn commands(bytes: &[u8]) -> [Command<'static>; 4] {
             offset: u64::from(u32_at(bytes, 28)),
             resource_id: u32_at(bytes, 32),
         },
+        Command::GetCapsetInfo {
+            index: u32_at(bytes, 36),
+        },
+        // A size inside the bound, so that the command encodes: asking for
+        // one outside it is refused, which the module's own tests cover.
+        Command::GetCapset {
+            capset_id: CAPSET_VIRGL2,
+            capset_version: u32_at(bytes, 40),
+            max_size: u32_at(bytes, 44) % MAX_CAPSET_SIZE + 1,
+        },
     ]
 }
 
@@ -75,6 +85,17 @@ fuzz_target!(|bytes: &[u8]| {
                 let written = written as usize;
                 assert!((HEADER_LEN..=buffer.len()).contains(&written));
                 assert_eq!(u32_at(buffer, 0), command.expects());
+                if let Response::CapsetInfo(info) = response {
+                    // The size the driver would allocate on the device's
+                    // word is inside the bound, whatever the device said.
+                    assert!(info.max_size <= MAX_CAPSET_SIZE);
+                }
+                if let Response::Capset { len } = response {
+                    // A capability set is what came after the header, and a
+                    // device that sent none did not succeed.
+                    assert!(len > 0);
+                    assert_eq!(len, written - HEADER_LEN);
+                }
                 if let Response::DisplayInfo(scanouts) = response {
                     assert!(written >= DISPLAY_INFO_LEN);
                     for scanout in scanouts.iter().filter(|scanout| scanout.enabled) {

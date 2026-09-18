@@ -496,3 +496,130 @@ fn write_with_puts_every_byte_once_and_agrees_with_encode() {
         assert_eq!(out, encoded(&command), "{command:?}");
     }
 }
+
+/// `GET_CAPSET_INFO` is a header and a capset *index*, and its response says
+/// which set that index is and how big.
+///
+/// Offsets by hand from `struct virtio_gpu_get_capset_info` and
+/// `struct virtio_gpu_resp_capset_info`: an index at 24 with four bytes of
+/// padding after it, and a response of an id, a maximum version and a
+/// maximum size at 24, 28 and 32.
+#[test]
+fn get_capset_info_asks_by_index_and_is_answered_by_id() {
+    let bytes = encoded(&Command::GetCapsetInfo { index: 0 });
+    assert_eq!(bytes.len(), 24 + 8);
+    assert_eq!(u32_at(&bytes, 0), 0x0108, "VIRTIO_GPU_CMD_GET_CAPSET_INFO");
+    assert_eq!(u32_at(&bytes, 24), 0, "the index");
+    assert_eq!(u32_at(&bytes, 28), 0, "the padding is written, not left");
+
+    let mut body = Vec::new();
+    body.extend_from_slice(&2u32.to_le_bytes()); // VIRTIO_GPU_CAPSET_VIRGL2
+    body.extend_from_slice(&3u32.to_le_bytes()); // max version
+    body.extend_from_slice(&1432u32.to_le_bytes()); // max size
+    body.extend_from_slice(&0u32.to_le_bytes()); // padding
+    let buffer = response(0x1102, &body);
+    let parsed = Response::parse_for(0x0108, &buffer, written(&buffer)).expect("a capset info");
+    assert_eq!(
+        parsed,
+        Response::CapsetInfo(CapsetInfo {
+            id: CAPSET_VIRGL2,
+            max_version: 3,
+            max_size: 1432,
+        })
+    );
+}
+
+/// The size in that response is what the driver allocates next, on the
+/// device's word alone, so it is held to what a capability set can be.
+#[test]
+fn a_capset_larger_than_the_bound_is_refused() {
+    let mut body = Vec::new();
+    body.extend_from_slice(&CAPSET_VIRGL2.to_le_bytes());
+    body.extend_from_slice(&1u32.to_le_bytes());
+    body.extend_from_slice(&(MAX_CAPSET_SIZE + 1).to_le_bytes());
+    body.extend_from_slice(&0u32.to_le_bytes());
+    let buffer = response(0x1102, &body);
+    assert_eq!(
+        Response::parse_for(0x0108, &buffer, written(&buffer)),
+        Err(GpuError::CapsetSize(MAX_CAPSET_SIZE + 1))
+    );
+
+    // And a command that would ask for one is refused before it is sent.
+    let mut out = vec![0u8; 64];
+    assert_eq!(
+        Command::GetCapset {
+            capset_id: CAPSET_VIRGL2,
+            capset_version: 1,
+            max_size: MAX_CAPSET_SIZE + 1,
+        }
+        .encode(&mut out),
+        Err(GpuError::CapsetSize(MAX_CAPSET_SIZE + 1))
+    );
+    assert_eq!(
+        Command::GetCapset {
+            capset_id: CAPSET_VIRGL2,
+            capset_version: 1,
+            max_size: 0,
+        }
+        .encode(&mut out),
+        Err(GpuError::CapsetSize(0)),
+        "a set of no size is nothing to ask for"
+    );
+}
+
+/// `GET_CAPSET` asks by id and version, and needs a response buffer as long
+/// as the header plus the size the device named.
+#[test]
+fn get_capset_asks_by_id_and_sizes_its_own_response() {
+    let command = Command::GetCapset {
+        capset_id: CAPSET_VIRGL2,
+        capset_version: 1,
+        max_size: 1432,
+    };
+    let bytes = encoded(&command);
+    assert_eq!(bytes.len(), 24 + 8);
+    assert_eq!(u32_at(&bytes, 0), 0x0109, "VIRTIO_GPU_CMD_GET_CAPSET");
+    assert_eq!(u32_at(&bytes, 24), 2, "the capset id");
+    assert_eq!(u32_at(&bytes, 28), 1, "the version");
+    assert_eq!(
+        command.response_len(),
+        24 + 1432,
+        "the header and the set the device said it would write"
+    );
+
+    // The set itself is left where it is; the response says how much of it
+    // there is.
+    let buffer = response(0x1103, &[0x5Au8; 1432]);
+    assert_eq!(
+        Response::parse_for(0x0109, &buffer, written(&buffer)),
+        Ok(Response::Capset { len: 1432 })
+    );
+}
+
+/// A device that answers `GET_CAPSET` with a header and nothing after it
+/// sent no capability set, which is not a success.
+#[test]
+fn an_empty_capset_response_is_refused() {
+    let buffer = response(0x1103, &[]);
+    assert_eq!(
+        Response::parse_for(0x0109, &buffer, written(&buffer)),
+        Err(GpuError::ResponseTooShort(HEADER_LEN))
+    );
+}
+
+/// Each of the two is answered with its own response type and no other:
+/// `RESP_OK_NODATA` for a `GET_CAPSET` is a device saying something the
+/// command cannot have produced.
+#[test]
+fn a_capset_command_takes_only_its_own_response() {
+    let nodata = response(0x1100, &[]);
+    assert_eq!(
+        Response::parse_for(0x0109, &nodata, written(&nodata)),
+        Err(GpuError::UnexpectedResponse {
+            command: 0x0109,
+            response: 0x1100,
+        })
+    );
+    assert_eq!(expects(CMD_GET_CAPSET_INFO), 0x1102);
+    assert_eq!(expects(CMD_GET_CAPSET), 0x1103);
+}
