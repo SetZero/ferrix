@@ -48,7 +48,12 @@ const DEADLINE: Duration = Duration::from_secs(600);
 
 /// How long to keep drawing after the program has finished, so that what it
 /// wrote last is on the screen and can be looked at.
-const LINGER: Duration = Duration::from_secs(60);
+///
+/// Long enough to read a line or two, short enough that a shell's `exit`
+/// closes the window rather than seeming to hang: `test_terminal`'s
+/// screendump, the other thing this protects, happens within `SETTLE` of
+/// boot -- a few seconds -- so it never comes close to this either way.
+const LINGER: Duration = Duration::from_secs(2);
 
 /// What the client knows.
 struct Terminal {
@@ -89,6 +94,16 @@ struct Terminal {
     layouts: Vec<&'static compositor_xkb::generated::Layout>,
     /// When the program finished, if it has.
     finished: Option<Instant>,
+    /// The key held down, if any is, and what retyping it next means.
+    repeat: Option<Repeating>,
+    /// How long a key waits before its first repeat: `wl_keyboard.repeat_info`'s
+    /// delay, zero until that event arrives. The protocol guarantees it
+    /// arrives before any key press does.
+    repeat_delay: Duration,
+    /// The gap between repeats after the first, from `repeat_info`'s rate in
+    /// keys a second. `None` for a rate of zero, which means "do not repeat"
+    /// rather than "repeat as fast as possible".
+    repeat_interval: Option<Duration>,
 }
 
 /// Which bit `wl_keyboard.modifiers` uses for control.
@@ -99,6 +114,23 @@ struct Terminal {
 /// `Key::keysym` answers it from every mask the key declares rather than
 /// from this one bit.
 const CONTROL: u32 = 1 << 2;
+
+/// The key a held `wl_keyboard.key` is retyping, and when it does that next.
+///
+/// Wayland sends a key's press and its release and nothing in between --
+/// autorepeat is the client's to do, from `wl_keyboard.repeat_info` -- so
+/// this is what `run`'s loop consults on every pass. Only one key at a
+/// time: a second key pressed while the first is still down replaces it,
+/// which is the one case a real keyboard cannot make happen anyway.
+#[derive(Clone)]
+struct Repeating {
+    /// The evdev code, so the matching release can find it.
+    code: u16,
+    /// What it sends, worked out once rather than on every retype.
+    bytes: Vec<u8>,
+    /// When this key next retypes itself.
+    next: Instant,
+}
 
 /// Run a terminal on `socket`, with `program` on the pseudoterminal.
 ///
@@ -159,6 +191,9 @@ pub fn run(
         group: 0,
         layouts: Vec::new(),
         finished: None,
+        repeat: None,
+        repeat_delay: Duration::ZERO,
+        repeat_interval: None,
     };
 
     let started = Instant::now();
@@ -173,8 +208,10 @@ pub fn run(
         if consumed > 0 {
             connection.consume(consumed, 0);
         }
-        // What the program wrote, then the frame it changed.
+        // What the program wrote, then a held key retyping itself, then the
+        // frame either changed.
         state.pump()?;
+        state.autorepeat();
         if state.dirty {
             state.draw(&mut out)?;
         }
@@ -425,13 +462,25 @@ impl Terminal {
                 self.modifiers = mask(1) | mask(2) | mask(3);
                 self.group = usize::try_from(mask(4)).unwrap_or(0);
             }
+            wl_keyboard::event::REPEAT_INFO => {
+                let rate = args.first().and_then(Arg::as_int).unwrap_or(0);
+                let delay = args.get(1).and_then(Arg::as_int).unwrap_or(0);
+                self.repeat_delay = Duration::from_millis(delay.max(0).unsigned_abs().into());
+                self.repeat_interval = u32::try_from(rate)
+                    .ok()
+                    .filter(|&rate| rate > 0)
+                    .map(|rate| Duration::from_millis(1000 / u64::from(rate)));
+            }
             wl_keyboard::event::KEY => {
                 let code = args.get(2).and_then(Arg::as_uint).unwrap_or(0);
                 let state = args.get(3).and_then(Arg::as_uint).unwrap_or(0);
-                if state != wl_keyboard::key_state::PRESSED {
-                    return Ok(());
+                if state == wl_keyboard::key_state::PRESSED {
+                    self.typed(code);
+                } else if let Ok(code) = u16::try_from(code)
+                    && self.repeat.as_ref().is_some_and(|held| held.code == code)
+                {
+                    self.repeat = None;
                 }
-                self.typed(code);
             }
             _ => {}
         }
@@ -523,7 +572,8 @@ impl Terminal {
             .copied()
     }
 
-    /// Send what the key with this evdev code types.
+    /// Send what the key with this evdev code types, and arm it to retype
+    /// itself while it is held, if the compositor has said keys repeat.
     fn typed(&mut self, code: u32) {
         let Ok(code) = u16::try_from(code) else {
             return;
@@ -539,8 +589,43 @@ impl Terminal {
             return;
         };
         let control = self.modifiers & CONTROL != 0;
-        if let Some(bytes) = crate::keys::bytes(keysym, control) {
-            let _ = self.pty.write(&bytes);
+        // A modifier, or a key this terminal has no bytes for: nothing is
+        // typed, so nothing should retype itself either.
+        let Some(bytes) = crate::keys::bytes(keysym, control) else {
+            return;
+        };
+        let _ = self.pty.write(&bytes);
+        if self.repeat_interval.is_some() {
+            self.repeat = Some(Repeating {
+                code,
+                bytes,
+                next: Instant::now() + self.repeat_delay,
+            });
+        }
+    }
+
+    /// Retype the held key if its time has come, and arm the next one.
+    ///
+    /// Called every pass of `run`'s loop rather than from a timer: the loop
+    /// already turns every few milliseconds to read the pseudoterminal, and
+    /// a retype that is a few milliseconds late is not one anybody notices.
+    fn autorepeat(&mut self) {
+        let Some(held) = &self.repeat else {
+            return;
+        };
+        let now = Instant::now();
+        if now < held.next {
+            return;
+        }
+        // A rate of zero arrived since this key was armed: stop, rather than
+        // guess at a gap the compositor no longer says.
+        let Some(interval) = self.repeat_interval else {
+            self.repeat = None;
+            return;
+        };
+        let _ = self.pty.write(&held.bytes);
+        if let Some(held) = &mut self.repeat {
+            held.next = now + interval;
         }
     }
 

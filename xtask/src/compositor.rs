@@ -1362,6 +1362,12 @@ const RUN_CONFIG: &str = "# Written into the initramfs by `cargo xtask run-compo
 # is the shell, with the busybox applets the image carries beside it. The
 # pattern clients a gate boot tiles are a keybind away rather than started
 # here: somebody who opened a desktop wants a shell, not a test pattern.
+#
+# `decoration:blur:enabled` is already Hyprland's own default, but the blur
+# it draws is only what shows through a translucent window -- an opaque one
+# covers it completely -- so the terminal needs an opacity below 1 for its
+# own default to be visible at all.
+windowrule = opacity 0.88, match:class ^(rocks\\.magical\\.term)$
 exec-once = /bin/term /bin/zinc
 bind = SUPER, RETURN, exec, /bin/term /bin/zinc
 bind = SUPER, P, exec, /bin/pattern gradient another
