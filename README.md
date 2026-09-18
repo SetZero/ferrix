@@ -234,6 +234,62 @@ screendump over QMP, and requires every pixel to be that colour; then it
 boots a build that draws one pixel wrong and requires the check to catch
 exactly that pixel.
 
+### The desktop, and zinc in a window
+
+```
+cargo xtask run-compositor --arch x86_64             # a desktop in a window, with a shell in it
+cargo xtask run-compositor --arch x86_64 --vnc :0    # the same, served over VNC rather than shown
+cargo xtask run-compositor --arch x86_64 --gl        # the same, on the 3D card
+```
+
+`run-compositor` boots [`compositor/hyprix`](compositor/README.md) as init on
+a virtio-gpu card: the compositor reads a `hyprland.conf`, listens on a
+Wayland socket, tiles what connects to it and puts the frame on the screen.
+The configuration it writes into the initramfs starts a terminal first --
+`exec-once = /bin/term /bin/zinc` -- so the boot ends at a shell prompt rather
+than at a picture. [`compositor/term`](compositor/README.md) is the terminal,
+a character grid with the escape sequences a shell actually sends, and it runs
+the program it is given on a pseudoterminal; that program is
+[zinc](zinc/README.md), with the busybox applets, the uutils and the ported
+programs the image carries beside it.
+
+What the keyboard does, in the configuration it writes itself:
+
+| keys | |
+|---|---|
+| `SUPER`+`RETURN` | another terminal running zinc |
+| `SUPER`+`P` | a `compositor/pattern` client, the picture the gates tile |
+| `SUPER`+`Q` | close the focused window |
+| `SUPER`+`F`, `SUPER`+`V` | fullscreen, floating |
+| `SUPER`+`H`, `SUPER`+`L` | move the focus; with `SHIFT`, move the window |
+| `SUPER`+`1`, `SUPER`+`2` | workspaces; with `SHIFT`, send the window to one |
+| `SUPER`+`C`, `SUPER`+`W` | `hyprctl clients`, `hyprctl activewindow` |
+
+`--config <PATH>` carries a real `hyprland.conf` instead, and what that one
+starts is yours. `--layout de,us` is `input:kb_layout`; `--size <W>x<H>` is
+the screen, 1920x1080 when not given. The boot has a network unless
+`--no-net` -- `udhcpc` runs as an `exec-once`, so `curl` in the terminal
+reaches the host's own resolver -- and `--vnc <DISPLAY>` serves the screen at
+e.g. `:0` rather than opening a window, which is what a machine reached over
+`ssh` wants. `--gl` asks QEMU for `virtio-gpu-gl-pci`, the 3D card, with this
+host's GPU behind it through virglrenderer; [the GPU decision](docs/GPU.md)
+says what that gives and what it does not, and `FERRIX_QEMU` names a QEMU
+that is not the one on `PATH`.
+
+The wallpaper comes from this machine's pictures and from nowhere else.
+`cargo xtask wallpapers --from <directory>`, or `--from host:directory` for a
+machine `ssh` reaches, converts them with `ffmpeg` -- the first frame of a
+video, scaled until it covers the screen -- and keeps the rows under
+`~/.local/share/ferrix/wallpapers`, or `$FERRIX_WALLPAPERS`. A run reads that
+directory and opens no connection of its own; with nothing in it the
+background is plain and a line says how to change that. `--wallpaper <NAME>`
+picks one by part of its name.
+
+`cargo xtask test-compositor` judges the same picture pixel by pixel,
+`test-input` and `test-seat` send a key and a touch through QEMU and require
+them back, and `test-pty` runs a program on a pseudoterminal with no window
+at all. x86-64 and AArch64 only, as `--display` is.
+
 ### On an STM32MP157-DK1 board
 
 The same ARMv7-A image boots the STM32MP157D-DK1 from its SD card, under
