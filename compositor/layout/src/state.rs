@@ -1554,7 +1554,7 @@ impl State {
         let Some(window) = self.focused_window() else {
             return Vec::new();
         };
-        self.move_floating(window, by, true, Corner::NONE)
+        self.move_floating(window, by, true, Corner::NONE, false)
     }
 
     /// `moveactive`: move a floating window, by a distance or to a place.
@@ -1562,7 +1562,7 @@ impl State {
         let Some(window) = self.focused_window() else {
             return Vec::new();
         };
-        self.move_floating(window, by, false, Corner::NONE)
+        self.move_floating(window, by, false, Corner::NONE, false)
     }
 
     /// Move or resize one window, which is what all four of `moveactive`,
@@ -1578,6 +1578,7 @@ impl State {
         by: &Move,
         resizing: bool,
         corner: Corner,
+        snapping: bool,
     ) -> Vec<Change> {
         if !self.is_floating(window) {
             // A tiled window has no rectangle of its own to move, but its
@@ -1618,7 +1619,46 @@ impl State {
         } else {
             Rect::new(at(rect.x, by.x), at(rect.y, by.y), rect.width, rect.height)
         };
+        let rect = if snapping {
+            self.snapped(window, rect, !resizing, corner)
+        } else {
+            rect
+        };
         self.place_floating(window, rect)
+    }
+
+    /// `general:snap:*`: a dragged floating window that came near another
+    /// window's edge, or the screen's, lands flush against it.
+    ///
+    /// Only a drag, which is why this is not in `move_floating` itself:
+    /// Hyprland's drag controller calls `performSnap` and its dispatchers do
+    /// not, so `moveactive 10 0` moves by ten pixels and means it.
+    fn snapped(&self, window: WindowId, rect: Rect, moving: bool, corner: Corner) -> Rect {
+        let Some(workspace) = self.workspace_of(window) else {
+            return rect;
+        };
+        let Some(monitor) = self
+            .workspace_monitor(workspace)
+            .and_then(|id| self.monitors().find(|monitor| monitor.id == id))
+        else {
+            return rect;
+        };
+        let others: Vec<Rect> = self
+            .layout()
+            .iter()
+            .flat_map(|output| output.windows.iter())
+            .filter(|placed| placed.window != window)
+            .map(|placed| placed.rect)
+            .collect();
+        crate::snap::perform(
+            rect,
+            moving,
+            corner,
+            &others,
+            monitor.rect,
+            monitor.reserved,
+            &self.settings,
+        )
     }
 
     /// Resize a tiled window by asking its tiling to give it more or less
@@ -3391,7 +3431,7 @@ impl State {
         if !self.windows.contains_key(&window) {
             return Err(Error::UnknownWindow(window));
         }
-        Ok(self.run(|state| state.move_floating(window, by, false, Corner::NONE)))
+        Ok(self.run(|state| state.move_floating(window, by, false, Corner::NONE, false)))
     }
 
     /// `resizewindowpixel`: resize a window the compositor picked out,
@@ -3424,10 +3464,54 @@ impl State {
         by: &Move,
         corner: Corner,
     ) -> Result<Vec<Change>, Error> {
+        self.resize_window(window, by, corner, false)
+    }
+
+    /// Move a window because the pointer is dragging it, which is
+    /// [`State::move_window_pixel`] with `general:snap:*` on top.
+    ///
+    /// A dispatcher and a drag are different callers on purpose: Hyprland's
+    /// drag controller is the only thing that calls `performSnap`, so
+    /// `movewindowpixel 10 0` moves by ten pixels and means it while a hand
+    /// dragging a window is helped to the edge.
+    ///
+    /// # Errors
+    ///
+    /// The window is not one this layout holds.
+    pub fn drag_window_pixel(&mut self, window: WindowId, by: &Move) -> Result<Vec<Change>, Error> {
         if !self.windows.contains_key(&window) {
             return Err(Error::UnknownWindow(window));
         }
-        Ok(self.run(|state| state.move_floating(window, by, true, corner)))
+        Ok(self.run(|state| state.move_floating(window, by, false, Corner::NONE, true)))
+    }
+
+    /// Resize a window because the pointer is dragging an edge of it:
+    /// [`State::resize_window_pixel_at`] with `general:snap:*` on top.
+    ///
+    /// # Errors
+    ///
+    /// The window is not one this layout holds.
+    pub fn drag_resize_window_pixel(
+        &mut self,
+        window: WindowId,
+        by: &Move,
+        corner: Corner,
+    ) -> Result<Vec<Change>, Error> {
+        self.resize_window(window, by, corner, true)
+    }
+
+    /// What both resize entry points come down to.
+    fn resize_window(
+        &mut self,
+        window: WindowId,
+        by: &Move,
+        corner: Corner,
+        snapping: bool,
+    ) -> Result<Vec<Change>, Error> {
+        if !self.windows.contains_key(&window) {
+            return Err(Error::UnknownWindow(window));
+        }
+        Ok(self.run(|state| state.move_floating(window, by, true, corner, snapping)))
     }
 
     /// The window whose border is under `at`, and which of its edges that

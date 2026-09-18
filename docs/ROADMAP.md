@@ -5474,9 +5474,10 @@ needs; and the small remainder `docs/COMPOSITOR-DAMAGE-HANDOFF.md` §5 lists,
 about 8 when it was counted, of which `resize_on_border` and
 `extend_border_grab_area` landed on 2026-09-18 -- with the tiled resize
 they turned out to need, since `resizeactive` did nothing to a tiled
-window until the dwindle tree would move a split. What is left of it is
-`general:snap`, dwindle's cursor-placed splits, `xray` and
-`no_screen_share`, which need a second pass, and `persistent_size`. The
+window until the dwindle tree would move a split. `general:snap` followed the same day, on the
+drag the border grab had just built. What is left of it is dwindle's
+cursor-placed splits, `xray` and `no_screen_share`, which need a second
+pass, and `persistent_size`. The
 frame rate the exit asks for under the GPU path comes with the GPU path.
 
 ---

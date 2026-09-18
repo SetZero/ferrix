@@ -473,10 +473,13 @@ pub fn dragged(drag: &mut Drag, state: &mut State, (x, y): (i64, i64)) -> bool {
         return false;
     }
     drag.from = (x, y);
+    // The drag entry points, not the dispatchers': a hand dragging a window
+    // is helped to an edge by `general:snap:*` and a dispatcher asked for a
+    // number of pixels and means it.
     let moved = if drag.resizing {
-        state.resize_window_pixel_at(drag.window, &by, drag.corner)
+        state.drag_resize_window_pixel(drag.window, &by, drag.corner)
     } else {
-        state.move_window_pixel(drag.window, &by)
+        state.drag_window_pixel(drag.window, &by)
     };
     moved.is_ok_and(|changes| !changes.is_empty())
 }

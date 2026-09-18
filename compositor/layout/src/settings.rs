@@ -154,6 +154,28 @@ pub enum NewStatus {
     Inherit,
 }
 
+/// `general:snap:*`: how near a dragged floating window has to come to
+/// another window's edge, or the screen's, to land flush against it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SnapSettings {
+    /// `general:snap:enabled`. Off, as Hyprland has it.
+    pub enabled: bool,
+    /// `general:snap:window_gap`: how near another window's edge counts.
+    /// Zero turns window snapping off and leaves the monitor's edges on.
+    pub window_gap: i64,
+    /// `general:snap:monitor_gap`: the same for the screen's own edges.
+    pub monitor_gap: i64,
+    /// `general:snap:respect_gaps`: leave `general:gaps_in` between two
+    /// windows that snapped together, and `general:gaps_out` between a
+    /// window and the screen's edge, rather than putting them flush.
+    pub respect_gaps: bool,
+    /// `general:snap:border_overlap`, which is read and does nothing: it
+    /// decides whether a window's shadow and border may hang over the
+    /// screen's edge, and a rectangle in this layout has nothing outside
+    /// it. `crate::snap` says so at more length.
+    pub border_overlap: bool,
+}
+
 /// The dwindle layout's options.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DwindleSettings {
@@ -252,6 +274,8 @@ pub struct Settings {
     /// person can hit and one they cannot. Only read when
     /// `resize_on_border` is on, as Hyprland's own description says.
     pub border_grab_extend: i64,
+    /// `general:snap:*`: where a dragged floating window lands.
+    pub snap: SnapSettings,
     /// `general:no_focus_fallback`: when `movefocus` finds no window and no
     /// monitor in its direction, do nothing rather than wrap around to the
     /// far edge of the monitor.
@@ -367,6 +391,13 @@ impl Settings {
                 .int("general:extend_border_grab_area")
                 .unwrap_or(15)
                 .max(0),
+            snap: SnapSettings {
+                enabled: config.bool("general:snap:enabled").unwrap_or(false),
+                window_gap: config.int("general:snap:window_gap").unwrap_or(10).max(0),
+                monitor_gap: config.int("general:snap:monitor_gap").unwrap_or(10).max(0),
+                respect_gaps: config.bool("general:snap:respect_gaps").unwrap_or(false),
+                border_overlap: config.bool("general:snap:border_overlap").unwrap_or(false),
+            },
             no_focus_fallback: config.bool("general:no_focus_fallback").unwrap_or(false),
             workspace_back_and_forth: config
                 .bool("binds:workspace_back_and_forth")

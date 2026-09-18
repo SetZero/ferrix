@@ -45,6 +45,7 @@ mod monocle;
 pub mod popup;
 mod scrolling;
 mod settings;
+mod snap;
 mod state;
 
 #[cfg(test)]
@@ -58,6 +59,7 @@ pub use dispatch::{
 };
 pub use settings::{
     DwindleSettings, ForceSplit, Layout, MasterSettings, NewStatus, Orientation, Settings,
+    SnapSettings,
 };
 pub use state::{Change, Group, MonitorLayout, Placed, State};
 

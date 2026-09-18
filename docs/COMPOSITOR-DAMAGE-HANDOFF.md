@@ -402,10 +402,16 @@ Not part of this handoff, but the next person will ask.
   `wp_linux_drm_syncobj_manager_v1`, `wl_drm`, `wp_color_manager_v1`, and
   the five `windowrule` effects that only mean something with a GPU
   (`immediate`, `no_vrr`, `no_auto_hdr`, `tonemap`, `force_rgbx`).
-- **The pointer-driven options.** `general:snap:*`, and the dwindle options
-  that place a new window under the cursor (`smart_split`,
-  `use_active_for_splits`, `precise_mouse_move`,
-  `permanent_direction_override`).
+- **The pointer-driven options.** The dwindle options that place a new
+  window under the cursor (`smart_split`, `use_active_for_splits`,
+  `precise_mouse_move`, `permanent_direction_override`), which need a
+  cursor position the layout is not given.
+
+  `general:snap:*` is done (2026-09-18) -- `performSnap`, windows and
+  monitor edges, `respect_gaps` and the corner pass -- except
+  `border_overlap`, which decides whether a window's shadow may hang over
+  the screen's edge and has nothing to decide where a rectangle is the
+  window box.
 
   `general:resize_on_border` and `general:extend_border_grab_area` are done
   (2026-09-18), and with them a tiled window can be resized at all:

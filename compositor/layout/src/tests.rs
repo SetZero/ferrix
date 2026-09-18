@@ -2519,6 +2519,159 @@ fn no_border_is_grabbed_when_the_option_is_off() {
     assert_eq!(state.border_at((-3.0, -3.0)), None);
 }
 
+/// `general:snap:enabled`: a dragged floating window that comes near the
+/// screen's edge lands flush against it, keeping its size.
+#[test]
+fn a_dragged_window_snaps_to_the_screens_edge() {
+    const SNAP: &str = "general:gaps_in = 0\ngeneral:gaps_out = 0\ngeneral:border_size = 0\n\
+                        general:snap:enabled = true\ngeneral:snap:monitor_gap = 10\n";
+    let mut state = setup(SNAP);
+    open(&mut state, &[1]);
+    focus(&mut state, 1);
+    let _ = dispatch(&mut state, "setfloating", "");
+    let _ = state
+        .float_window(WindowId(1), Rect::new(100, 100, 400, 200))
+        .unwrap();
+
+    // Dragged to within the gap of the left edge: it lands on it, and keeps
+    // its 400 by 200.
+    let _ = state
+        .drag_window_pixel(
+            WindowId(1),
+            &Move {
+                x: -95,
+                y: 0,
+                exact: false,
+            },
+        )
+        .unwrap();
+    assert_eq!(rects(&state)[0].1, Rect::new(0, 100, 400, 200));
+
+    // A drag that stops further out than the gap is left where it was put.
+    let _ = state
+        .drag_window_pixel(
+            WindowId(1),
+            &Move {
+                x: 300,
+                y: 0,
+                exact: false,
+            },
+        )
+        .unwrap();
+    assert_eq!(rects(&state)[0].1, Rect::new(300, 100, 400, 200));
+}
+
+/// A drag *resizing* a window moves only the grabbed edge to the snap, so
+/// the window changes size rather than sliding: Hyprland's `snapResize`
+/// against its `snapMove`.
+#[test]
+fn a_dragged_edge_snaps_without_taking_the_window_with_it() {
+    const SNAP: &str = "general:gaps_in = 0\ngeneral:gaps_out = 0\ngeneral:border_size = 0\n\
+                        general:snap:enabled = true\ngeneral:snap:monitor_gap = 10\n";
+    let mut state = setup(SNAP);
+    open(&mut state, &[1]);
+    focus(&mut state, 1);
+    let _ = dispatch(&mut state, "setfloating", "");
+    let _ = state
+        .float_window(WindowId(1), Rect::new(100, 100, 400, 200))
+        .unwrap();
+
+    // The left edge, dragged to within the gap of the screen's: it lands on
+    // 0 and the right edge stays at 500, so the window is 500 wide.
+    let _ = state
+        .drag_resize_window_pixel(
+            WindowId(1),
+            &Move {
+                x: -95,
+                y: 0,
+                exact: false,
+            },
+            Corner {
+                left: true,
+                ..Corner::NONE
+            },
+        )
+        .unwrap();
+    assert_eq!(rects(&state)[0].1, Rect::new(0, 100, 500, 200));
+}
+
+/// Two floating windows snap to each other, and a dispatcher never snaps:
+/// Hyprland calls `performSnap` from its drag controller alone.
+#[test]
+fn windows_snap_to_each_other_and_dispatchers_do_not_snap() {
+    const SNAP: &str = "general:gaps_in = 0\ngeneral:gaps_out = 0\ngeneral:border_size = 0\n\
+                        general:snap:enabled = true\ngeneral:snap:window_gap = 10\n\
+                        general:snap:monitor_gap = 0\n";
+    let mut state = setup(SNAP);
+    open(&mut state, &[1, 2]);
+    for id in [1, 2] {
+        focus(&mut state, id);
+        let _ = dispatch(&mut state, "setfloating", "");
+    }
+    let _ = state
+        .float_window(WindowId(1), Rect::new(100, 100, 400, 200))
+        .unwrap();
+    // Window 2 starts eight pixels right of window 1's right edge at 500.
+    let _ = state
+        .float_window(WindowId(2), Rect::new(508, 100, 300, 200))
+        .unwrap();
+
+    let nudge = Move {
+        x: 0,
+        y: 0,
+        exact: false,
+    };
+    // A drag that does not move it at all still snaps it: the rectangle is
+    // judged where it is, which is what makes a drag settle.
+    let _ = state.drag_window_pixel(WindowId(2), &nudge).unwrap();
+    assert_eq!(
+        rects(&state)[1].1,
+        Rect::new(500, 100, 300, 200),
+        "flush against window 1's right edge"
+    );
+
+    // The dispatcher moves by what it was asked for and leaves it there,
+    // eight pixels short of the edge it would have snapped to.
+    let _ = state
+        .float_window(WindowId(2), Rect::new(508, 100, 300, 200))
+        .unwrap();
+    let _ = state
+        .move_window_pixel(
+            WindowId(2),
+            &Move {
+                x: 0,
+                y: 0,
+                exact: false,
+            },
+        )
+        .unwrap();
+    assert_eq!(rects(&state)[1].1, Rect::new(508, 100, 300, 200));
+}
+
+/// With `general:snap:enabled` off -- Hyprland's default -- a drag puts a
+/// window exactly where it was dragged.
+#[test]
+fn nothing_snaps_when_the_option_is_off() {
+    let mut state = setup(BARE);
+    open(&mut state, &[1]);
+    focus(&mut state, 1);
+    let _ = dispatch(&mut state, "setfloating", "");
+    let _ = state
+        .float_window(WindowId(1), Rect::new(100, 100, 400, 200))
+        .unwrap();
+    let _ = state
+        .drag_window_pixel(
+            WindowId(1),
+            &Move {
+                x: -95,
+                y: 0,
+                exact: false,
+            },
+        )
+        .unwrap();
+    assert_eq!(rects(&state)[0].1, Rect::new(5, 100, 400, 200));
+}
+
 /// `swapwindow` exchanges two tiled windows and leaves the focus on the one
 /// that moved, so a run of them walks a window across the screen.
 #[test]
