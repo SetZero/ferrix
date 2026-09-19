@@ -185,6 +185,16 @@ pub(crate) fn run(mut command: Command, description: &str) -> Result<()> {
         .status()
         .map_err(|error| Error::new(format!("could not run {description}: {error}")))?;
 
+    finished(status, description)
+}
+
+/// Turn a finished command's `status` into an error that names it, or into
+/// nothing at all.
+///
+/// Apart from [`run`], which waits itself, a caller that had to spawn the
+/// command to get at its output — `noise::run` — ends up here, so that a
+/// failure reads the same whichever of them started it.
+pub(crate) fn finished(status: std::process::ExitStatus, description: &str) -> Result<()> {
     if !status.success() {
         return Err(Error::new(format!(
             "{description} failed{}",

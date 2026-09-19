@@ -2874,7 +2874,7 @@ fn test_clipboard(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
 /// The whole path at once: the compositor starts `compositor/term`, which
 /// opens `/dev/ptmx`, opens the slave, runs a program on it with the slave
 /// for its session and its three descriptors, reads what it wrote back
-/// through the master, draws it in a grid with `libs/fbtext`'s font, and
+/// through the master, draws it in a grid with its antialiased Hack, and
 /// puts that in a `wl_shm` buffer the compositor composes into the frame.
 /// Every pixel of that frame is compared against the one
 /// `compositor/term`'s own test blesses.

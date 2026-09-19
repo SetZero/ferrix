@@ -1,10 +1,18 @@
 //! Drawing a grid into a window's buffer.
 //!
-//! The font is `libs/fbtext`'s -- Spleen 8x16, which the kernel's panic
-//! screen already carries, so the terminal and the panic report are written
-//! in one typeface and the image carries one font. `fbtext` draws a glyph
-//! into a linear 32-bit framebuffer, which is exactly what a `wl_shm` buffer
-//! is.
+//! The font is Hack, at 20 pixels per em in a 12x24 cell: `font.rs`, which
+//! `scripts/gen-term-font.py` rasterises from the TrueType outlines vendored
+//! in `font/`. The panic screen's 8x16 bitmap is the right font for a panic --
+//! no filesystem, no allocator, every byte a byte of kernel image -- and the
+//! wrong one for the thing a person reads all day, which is why the terminal
+//! carries its own.
+//!
+//! A cell is coverage, one byte a pixel, so a stem that falls between two
+//! pixels is two grey pixels rather than one snapped to the grid. Drawing is
+//! therefore a blend: the cell's background is painted first and known, so the
+//! colour of a pixel is [`mix`] of the two, written straight out rather than
+//! read back. Runs of equal coverage are filled in one call, as the panic
+//! screen's runs of set bits are, because most of a glyph's row is one value.
 //!
 //! Every length here is in buffer pixels: a terminal on a monitor at
 //! `scale = 2` is handed a buffer twice the size and draws its glyphs twice
@@ -12,10 +20,11 @@
 
 use ferrix_fbtext::{PixelOrder, Rgb, Surface};
 
+use crate::font;
 use crate::grid::Grid;
 
-/// The font's cell, in pixels: `libs/fbtext` is Spleen 8x16.
-pub const CELL: (usize, usize) = (8, 16);
+/// The font's cell, in pixels: Hack at 20 pixels per em is 12 by 24.
+pub const CELL: (usize, usize) = (font::WIDTH, font::HEIGHT);
 
 /// What the terminal is drawn in.
 #[derive(Clone, Copy, Debug)]
@@ -64,10 +73,10 @@ pub fn fits(width: usize, height: usize, scale: usize) -> (usize, usize) {
 /// Draw `grid` into `pixels`, a `width` by `height` buffer of `XRGB8888`
 /// with `stride` bytes a row.
 ///
-/// The whole buffer is painted: the background first, then a glyph a cell,
-/// then the cursor over the cell it is on. A terminal that drew only what
-/// changed would need to know what was there before, and this one is handed
-/// a fresh buffer whenever the window is resized.
+/// The whole buffer is painted: the background first, then the cursor's
+/// block, then a glyph a cell. A terminal that drew only what changed would
+/// need to know what was there before, and this one is handed a fresh buffer
+/// whenever the window is resized.
 pub fn draw(
     pixels: &mut [u8],
     (width, height): (usize, usize),
@@ -98,16 +107,95 @@ pub fn draw(
             // a terminal with no blinking draws.
             let on_cursor = grid.cursor_visible() && grid.cursor() == (column, row);
             let (fg, bg) = if on_cursor {
-                (colours.background, Some(colours.cursor))
+                surface.fill_rect(x, y, CELL.0 * scale, CELL.1 * scale, colours.cursor);
+                (colours.background, colours.cursor)
             } else {
-                (colour(cell.colour, cell.bold, colours), None)
+                (colour(cell.colour, cell.bold, colours), colours.background)
             };
-            if cell.ch == ' ' && bg.is_none() {
+            if cell.ch == ' ' {
                 continue;
             }
-            surface.draw_char(x, y, cell.ch, scale, fg, bg);
+            glyph(&mut surface, (x, y), cell.ch, cell.bold, scale, (fg, bg));
         }
     }
+}
+
+/// Blend one glyph over a cell whose background is already `bg`.
+///
+/// A row of coverage is drawn as runs of one value: a filled span is one
+/// `fill_rect`, and a span of no coverage is the background, which is already
+/// there.
+fn glyph(
+    surface: &mut Surface<'_>,
+    (x, y): (usize, usize),
+    ch: char,
+    bold: bool,
+    scale: usize,
+    (fg, bg): (Rgb, Rgb),
+) {
+    let cell = cell(ch, bold);
+    for row in 0..font::HEIGHT {
+        let top = y + row * scale;
+        if top >= surface.height() {
+            return;
+        }
+        let Some(line) = cell.get(row * font::WIDTH..(row + 1) * font::WIDTH) else {
+            return;
+        };
+        let mut start = 0;
+        while start < font::WIDTH {
+            let Some(&value) = line.get(start) else {
+                return;
+            };
+            let end = (start..font::WIDTH)
+                .find(|column| line.get(*column) != Some(&value))
+                .unwrap_or(font::WIDTH);
+            if value != 0 {
+                let left = x + start * scale;
+                let run = (end - start) * scale;
+                surface.fill_rect(left, top, run, scale, mix(bg, fg, value));
+            }
+            start = end;
+        }
+    }
+}
+
+/// The coverage cell for `ch` in the face the cell asks for.
+///
+/// Printable ASCII has its own glyph; every other character, control
+/// characters included, is drawn as a hollow box, as the panic screen's font
+/// draws one.
+fn cell(ch: char, bold: bool) -> &'static font::Cell {
+    let (glyphs, replacement) = if bold {
+        (&font::BOLD, &font::BOLD_REPLACEMENT)
+    } else {
+        (&font::REGULAR, &font::REGULAR_REPLACEMENT)
+    };
+    u32::from(ch)
+        .checked_sub(font::FIRST)
+        .and_then(|index| usize::try_from(index).ok())
+        .and_then(|index| glyphs.get(index))
+        .unwrap_or(replacement)
+}
+
+/// `bg` where `coverage` is zero, `fg` where it is `0xFF`, and the line
+/// between them elsewhere.
+///
+/// The blend is on the values in the buffer, which is what every terminal
+/// without a colour-managed compositor behind it does: the alternative is to
+/// linearise, blend and encode again, and on the greys a terminal actually
+/// uses the difference is less than a level.
+fn mix(bg: Rgb, fg: Rgb, coverage: u8) -> Rgb {
+    let channel = |from: u8, to: u8| {
+        let (from, to) = (u32::from(from), u32::from(to));
+        let value = from * u32::from(0xFF - coverage) + to * u32::from(coverage) + 0x7F;
+        u8::try_from(value / 0xFF).unwrap_or(0xFF)
+    };
+    Rgb::new(
+        channel(bg.r, fg.r),
+        channel(bg.g, fg.g),
+        channel(bg.b, fg.b),
+    )
 }
 
 /// One cell's colour: the palette's, brightened when it is bold.

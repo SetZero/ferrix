@@ -685,7 +685,11 @@ fn watch_hooked(
 ) -> Result<Watched> {
     let symbols = Symbolizer::open(kernel);
     let (mut command, network) = qemu_command(arch, image, args, &Console::Owned)?;
-    let _ = command.stdout(Stdio::piped()).stderr(Stdio::inherit());
+    // Stderr is piped rather than inherited so that one message can be taken
+    // out of it; everything else QEMU says there still reaches the terminal,
+    // which the error below about a boot that never started depends on.
+    // `crate::noise` says which message and why.
+    let _ = command.stdout(Stdio::piped()).stderr(Stdio::piped());
 
     let mut child = command
         .spawn()
@@ -695,6 +699,7 @@ fn watch_hooked(
         .stdout
         .take()
         .ok_or_else(|| Error::new("QEMU produced no stdout to read"))?;
+    let noise = child.stderr.take().map(crate::noise::Filter::start);
 
     // A reader thread and a channel, rather than a non-blocking read: the guest
     // may say nothing for seconds at a time, and the timeout has to apply to
@@ -773,6 +778,9 @@ fn watch_hooked(
     let status = finish(&mut child, verdict != Verdict::Silent)?;
     drop(receiver);
     let _ = reader.join();
+    // Before the error below says QEMU's own is "above": joining the sieve's
+    // thread is what makes that true, since it ends when stderr does.
+    crate::noise::report(noise.map_or(0, crate::noise::Filter::finish));
     log.flush()?;
     // After QEMU has gone, so that the numbers are final and the gateway's
     // thread is not still being fed while they are read.

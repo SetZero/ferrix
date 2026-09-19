@@ -55,6 +55,7 @@ mod initramfs;
 mod input;
 mod native;
 mod net;
+mod noise;
 mod paths;
 mod pe;
 mod ports;

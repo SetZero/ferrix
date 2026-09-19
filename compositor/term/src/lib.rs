@@ -7,8 +7,8 @@
 //! * [`grid`] is the screen a program writes at -- the cells, the cursor and
 //!   the escape sequences -- and is a pure function of the bytes, so every
 //!   rule it has is host-tested.
-//! * [`paint`] draws a grid into a buffer with `libs/fbtext`'s font, the
-//!   same one the kernel's panic screen uses.
+//! * [`paint`] draws a grid into a buffer with the Hack faces in `font`,
+//!   rasterised into coverage cells beside it.
 //! * [`pty`] is `/dev/ptmx`, the slave, and the program on it.
 //! * [`keys`] turns what the compositor says about the keyboard into the
 //!   bytes a terminal sends.
@@ -18,6 +18,8 @@
 /// The window the grid is drawn in.
 #[cfg(target_os = "linux")]
 pub mod client;
+/// The font, as coverage cells: generated, and read only by [`paint`].
+mod font;
 /// The character grid and its escape sequences.
 pub mod grid;
 /// What a key sends.

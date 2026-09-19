@@ -127,7 +127,10 @@ impl Console {
     /// than a failure.
     pub(crate) fn attach(self, command: Command) -> Result<()> {
         match self {
-            Console::Owned => crate::cargo::run(command, "qemu"),
+            // Through the sieve, not straight to the terminal: QEMU's stderr
+            // carries one message that would otherwise bury the guest's
+            // serial output, and `crate::noise` says which and why.
+            Console::Owned => crate::noise::run(command, "qemu"),
             #[cfg(windows)]
             Console::Relayed(listener) => relay::carry(&listener, command),
         }

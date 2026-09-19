@@ -142,10 +142,11 @@ fn resizing_keeps_what_is_still_on_the_grid() {
 
 #[test]
 fn a_window_holds_as_many_cells_as_the_font_fits_in_it() {
-    // Spleen is 8x16, so a 1024x768 window is 128 by 48.
-    assert_eq!(paint::fits(1024, 768, 1), (128, 48));
+    // Hack's cell is 12x24, so a 1024x768 window is 85 by 32, with the four
+    // pixels the columns do not fill left as background.
+    assert_eq!(paint::fits(1024, 768, 1), (85, 32));
     // At scale two a cell is twice the size, so half as many fit.
-    assert_eq!(paint::fits(1024, 768, 2), (64, 24));
+    assert_eq!(paint::fits(1024, 768, 2), (42, 16));
     // A window too small for one cell still has one: a grid with no cells
     // has nowhere to put a character.
     assert_eq!(paint::fits(3, 3, 1), (1, 1));
@@ -325,7 +326,7 @@ fn the_grid_is_drawn_cell_by_cell() {
         u32::from(colour.b) | (u32::from(colour.g) << 8) | (u32::from(colour.r) << 16)
     };
     // The corner of the first cell is background: no glyph's top-left pixel
-    // is set in this font.
+    // covers this font's top-left pixel.
     assert_eq!(at(0, 0), as_pixel(background));
     // Somewhere in the first row of glyphs there is text, which is not the
     // background.

@@ -152,8 +152,10 @@ names the part of Hyprland or hyprlang it follows.
   what the compositor's tests put on screen, and it exercises the same crates
   from the client's side.
 * **`term`** is the terminal: a character grid with the escape sequences a
-  shell and its programs actually send, drawn with `libs/fbtext`'s Spleen
-  font into a `wl_shm` buffer. It starts a program on a pseudoterminal with
+  shell and its programs actually send, drawn with Hack -- rasterised from
+  the TrueType faces in `term/font/` into coverage cells by
+  `scripts/gen-term-font.py`, and blended a pixel at a time -- into a
+  `wl_shm` buffer. It starts a program on a pseudoterminal with
   the slave for its session and its three descriptors, and `--headless` runs
   one with no window at all, which is what `cargo xtask test-pty` boots.
 * **`clip`** is `wl-copy` and `wl-paste`, neither of which is on Ferrix:

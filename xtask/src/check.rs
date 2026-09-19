@@ -77,6 +77,14 @@ pub(crate) fn run(args: &Args) -> Result<()> {
     // and a hand edit to either would otherwise drift silently.
     step("font", || python_with("scripts/gen-font.py", &["--check"]))?;
 
+    // The terminal's font is rasterised from the TrueType faces committed
+    // beside it, by a rasteriser in the repository rather than by whatever
+    // FreeType the machine has: that is what makes "byte-identical" a demand
+    // this gate can make of every checkout.
+    step("terminal font", || {
+        python_with("scripts/gen-term-font.py", &["--check"])
+    })?;
+
     // The explanations a panic prints are rendered into a document, which
     // goes stale the moment an entry changes without it.
     step("panic catalog", || {

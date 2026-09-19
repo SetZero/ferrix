@@ -118,8 +118,8 @@ to the caller. It is a small fix and it is worth making on its own account.
   corrupting, and it is slow.
 * **Four C ports that do not exist:** libwayland-client and libxkbcommon, which
   Ozone links; and fontconfig with freetype and expat, plus an actual font on
-  the image. The compositor draws its own text with `libs/fbtext`'s Spleen and
-  carries no font a client could use. Note that `compositor/README.md`'s "no C
+  the image. The compositor draws its own text with the coverage cells
+  `compositor/term` carries, and no client could ask it for a font. Note that `compositor/README.md`'s "no C
   device stack, ever" is a rule about the compositor, not about its clients.
 * **No audio at all**, which a browser survives and a person notices.
 

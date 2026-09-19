@@ -4797,9 +4797,10 @@ group; the master answers those that act on the pair, as Linux's does.
 
 `compositor/term` is the terminal: a character grid with the escape
 sequences a shell and its programs actually send (the cursor, the erases,
-the colours, the cursor's visibility), drawn with `libs/fbtext`'s Spleen
-font -- the same one the kernel's panic screen uses, so the image carries
-one typeface -- into a `wl_shm` buffer. It starts a program on a pair with
+the colours, the cursor's visibility), drawn with Hack, antialiased --
+`scripts/gen-term-font.py` rasterises the TrueType faces vendored beside
+it into coverage cells, and the terminal blends them over the cell's
+background -- into a `wl_shm` buffer. It starts a program on a pair with
 the slave for its session and its three descriptors, sends what is typed
 back through the master, and tells the program when the window is resized.
 `--headless` runs the program with no window at all, which is what

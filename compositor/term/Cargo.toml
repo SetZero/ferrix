@@ -4,6 +4,9 @@ description = "A terminal emulator: a pseudoterminal, a character grid, and a wi
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+# The code is the workspace's licence. The fonts in `font/`, and the coverage
+# cells `src/font.rs` holds, are Hack: MIT and the Bitstream Vera License, see
+# LICENSE-hack, which a binary shipping this crate must reproduce.
 license.workspace = true
 publish.workspace = true
 
