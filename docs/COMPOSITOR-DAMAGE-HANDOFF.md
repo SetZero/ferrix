@@ -250,12 +250,15 @@ which is why it is a note and not a fix.
 * **A floating translucent window, and a blurred bar,** are still redrawn
   whole when touched. A bar is 8.6 ms. A large floating terminal is the case
   that would be felt.
-* **The loop polls** for input, 2 ms at a time, and builds a description of every
-  window each pass while a bar is watching. Not the frame time, but it is a
-  core that is never idle on a machine with one.
 * **`composite_scaled` still gathers a whole surface**, for a window
   part-way through an animation. The whole window is damaged then, so it is
   proportionate; it is also 3 ms a window a frame.
+
+The loop and IPC work landed on 2026-09-19: `poll` waits for Wayland, input,
+control, event, and plugin descriptors, then dispatches only those that woke.
+An animation's timer wake reads no descriptors, and a full IPC snapshot is
+built only when an event subscriber, plugin watcher, or Wayland protocol
+watcher can consume it. An idle desktop therefore uses no fixed polling core.
 
 ### 2.6 A wallpaper that moves
 
