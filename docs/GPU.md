@@ -618,7 +618,8 @@ worth naming.** The wallpaper was the *run-length* `.fxvid` one -- a whole
 §3.6's AV1 work has since replaced with `.ivf`, so `--wallpaper` no longer
 matches the file these were taken on. Under AV1 the client decodes with
 rav1d instead, which changes the CPU side of the scene; the upload is the
-same size, so the shape should hold, but nobody has measured it. Three of
+same size, so the shape holds -- the batching table below is on the AV1
+scene and lands in the same place -- but this row is not that run. Three of
 the four numbers a later run of this comparison produced were also thrown
 away because another session was booting throughout: on a contended host the
 same code measured 18 ms and 22 ms in the same hour, which is several times
@@ -640,10 +641,23 @@ What the frame costs is *moving client pixels* -- every `wl_shm` surface
 memcpy'd into a pinned backing and then transferred, at roughly 800 MB/s for
 this scene -- and round trips, each submission about 0.95 ms through the
 render core, the driver, the virtio queue and virglrenderer, with the driver
-running one device command at a time. Batching a frame's drawing into one
-submission took the second row to one submission and about 1.0 ms. The first
-row is what step 4 is for: a client rendering into a GPU buffer the
-compositor samples costs nothing to move at all.
+running one device command at a time. The first row is what step 4 is for: a
+client rendering into a GPU buffer the compositor samples costs nothing to
+move at all.
+
+**Batching a frame's drawing into one submission** is the second row's
+answer, and it was measured rather than reasoned about. The scene above with
+the AV1 wallpaper, 1920x1080 under KVM, each run two and a half minutes on
+an otherwise idle host, the first twenty reports dropped as warm-up:
+
+| | run 1 | run 2 |
+|---|---|---|
+| a frame before, three submissions | 12.35 ms mean, 12.18 median | 12.03 ms mean, 11.65 median |
+| a frame after, one submission | **10.73 ms** mean, 9.88 median | **10.94 ms** mean, 10.58 median |
+
+About 1.3 ms a frame, repeatably, which is close to the two round trips the
+change removes at roughly 0.95 ms each. It is a small number honestly come
+by: what is left is the first row, and no amount of batching touches that.
 
 **A handle can be let go of now** (2026-09-19). `probe/drm.sh` was run on
 this host -- it needs a Linux host with the UAPI headers, an ARM cross
