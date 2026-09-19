@@ -288,10 +288,30 @@ picks one by part of its name.
 A video in that directory becomes a wallpaper that moves, which on a Linux
 desktop is `exec-once = mpvpaper ALL <file>` and here is the same
 `background` layer surface with the decoding done on the machine that has a
-decoder: `ffmpeg` takes four seconds of it at ten frames a second, a quarter
-of the screen each way, and the frames are kept run-length encoded against
-the frame before them -- five seconds of `testsrc` is 3.7 MB where its raw
-rows are 20.7 MB. `run-compositor` starts `/bin/pattern --video` on it.
+decoder: `ffmpeg` takes ten seconds of it at thirty frames a second, the
+screen's size, and keeps the frames as AV1 in IVF -- about a megabyte, where
+a single raw 1920x1080 frame is 8.3 MB. `run-compositor` starts
+`/bin/pattern --video` on it.
+
+How much is kept is a person's to change, and is not a compositor option:
+Hyprland has none for a wallpaper either, which is why this machine's
+`hyprland.conf` says `exec-once = booru-wallpaper daemon` and that daemon
+keeps its own commented file. So does this one --
+`~/.config/ferrix/wallpaper.toml`, written with its defaults in it the first
+time `wallpapers` runs:
+
+```toml
+fps = 30        # frames a second kept
+seconds = 10    # seconds kept, after which it begins again
+scale = 1.0     # frame size as a multiple of the screen; 0.5 is a quarter
+                # of the pixels and a quarter of the guest's decoding
+size = ""       # an exact frame size instead, as "1280x720"
+name = ""       # which wallpaper to show, by part of its name
+```
+
+`--fps`, `--seconds`, `--video-size` and `--wallpaper` beat the file, the
+file beats the defaults, and a line it cannot read is said and skipped
+rather than fatal.
 The client damages the rows that changed rather than the screen, and waits
 for a frame callback before drawing the next one, so a wallpaper under a
 full-screen window stops playing on its own -- what `mpvpaper-stop` is for.

@@ -421,9 +421,24 @@ from `BootInfo`. What changes is what a person sees:
   its AV1 temporal units to rav1d, and converts I420 to XRGB8888 only as each
   frame is due. The image retains compressed packets rather than raw frames:
   a raw 1920x1080 second is 250 MB and the initramfs is built into the
-  kernel. Frames are kept a quarter of the screen each way, ten a second,
-  for four seconds, and the client scales them to cover the screen the way it
-  scales any picture cut for another one. The client keeps **two** buffers
+  kernel.
+* **What is kept, and where that is decided (2026-09-19).** Frames were kept
+  a quarter of the screen each way, ten a second, for four seconds, and the
+  client scaled them up to cover the screen. That was the raw-frame budget
+  outliving raw frames: measured against this tree's encoder, ten seconds of
+  1920x1080 at thirty costs 1.1 MB of initramfs, where the 480x270 four
+  seconds it replaces cost 36 KB. The default is now the screen's own size at
+  thirty for ten seconds, and the remaining argument for keeping less is the
+  **guest's** decode, not the image -- sixteen times the pixels through rav1d
+  on an emulated CPU -- which is what `scale` is for. None of it is a
+  compositor option: Hyprland has none for a wallpaper, this machine's
+  `hyprland.conf` delegates to `booru-wallpaper daemon` and that daemon's own
+  commented `config.toml`, and `xtask/src/wallpaper/config.rs` is the same
+  file for the same job at `~/.config/ferrix/wallpaper.toml`. It could not be
+  a compositor option anyway: every setting in it is spent by `ffmpeg` on the
+  host when the image is built, and the guest has no encoder to change its
+  mind with. `compositor/config`'s table stays exactly Hyprland 0.56's, which
+  is what lets the differential harness compare it. The client keeps **two** buffers
   where a still wallpaper keeps one, because a compositor releases a buffer
   when a later commit replaces it: a client that drew once and waited for the
   release would wait for ever.

@@ -187,6 +187,11 @@ OPTIONS:
                                          <host>:<directory> for one `ssh` reaches
     --size <W>x<H>                       run-compositor: the guest's screen; wallpapers: the screen
                                          to cut pictures for (1920x1080 for both)
+    --fps <N>                            wallpapers: frames a second kept of a video
+    --seconds <N>                        wallpapers: seconds of it kept, after which it begins again
+    --video-size <W>x<H>                 wallpapers: how large its frames are kept
+                                         These three, and which wallpaper to show, are also
+                                         ~/.config/ferrix/wallpaper.toml, which a flag here beats
     --fast                               check: skip the cross-target clippy passes
     --ferrousli                          check: also ferrousli's fmt, clippy and tests, debug and release
     --zinc                               check: also zinc's fmt, clippy, tests and pty completion test
