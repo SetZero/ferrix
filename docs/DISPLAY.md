@@ -323,8 +323,9 @@ additive later landing. Stage 17's text names it and stays as written.
   and closed it can still read whatever the next opener draws. The node is
   `0660` root's, as Linux's `video` group has it, until per-open windows onto
   the card VMO (stage 19's render node) close that.
-* **`poll`/`epoll` readiness** on the node when os-26's epoll lands. Iteration
-  1's binary doesn't wait on events.
+* **`poll`/`epoll` readiness** on the node when os-26's epoll lands. The
+  compositor already waits on its Wayland, input, control, event, and plugin
+  descriptors, so an inactive desktop does not scan them on a fixed timer.
 
 ### 2.4 A panic once the driver owns scanout
 

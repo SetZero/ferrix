@@ -13,6 +13,7 @@
 
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
+use std::os::fd::AsRawFd;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -82,6 +83,12 @@ impl Control {
     #[must_use]
     pub fn directory(&self) -> &Path {
         &self.directory
+    }
+
+    /// The request listener descriptor, for the compositor's event wait.
+    #[must_use]
+    pub fn raw_fd(&self) -> i32 {
+        self.listener.as_raw_fd()
     }
 
     /// Take one waiting connection, if there is one.
@@ -793,6 +800,12 @@ impl Events {
     #[must_use]
     pub fn counts(&self) -> (usize, u64) {
         (self.subscribers.len(), self.written)
+    }
+
+    /// The subscriber listener descriptor, for the compositor's event wait.
+    #[must_use]
+    pub fn raw_fd(&self) -> i32 {
+        self.listener.as_raw_fd()
     }
 
     /// Write one line to every subscriber, as `dispatch event` does.

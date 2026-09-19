@@ -4,6 +4,8 @@
 //! `compositor/wire`'s own probe has already shown to be libwayland's bytes,
 //! so a test that writes a request writes the one a real client would.
 
+use std::time::Duration;
+
 use compositor_protocol::{core, xdg_shell};
 use compositor_wire::{Arg, ArgType, Fd, Fixed, Header, ObjectId, Reader, Writer};
 
@@ -2957,6 +2959,12 @@ fn idle_notifications_fire_once_and_an_inhibitor_needs_a_mapped_surface() {
             .map(|event| event.opcode)
             .collect::<Vec<u16>>()
     };
+    assert_eq!(
+        client.idle_wait(999, false),
+        Some(Duration::from_millis(1)),
+        "the event loop wakes at the notification's deadline"
+    );
+    assert_eq!(client.idle_wait(1_000, false), Some(Duration::ZERO));
     assert!(!client.idle_tick(999, false), "not yet");
     assert!(client.idle_tick(1_000, false), "now");
     assert_eq!(
@@ -2979,6 +2987,11 @@ fn idle_notifications_fire_once_and_an_inhibitor_needs_a_mapped_surface() {
     let _ = sent(&mut client);
     // And with it held off, the notification goes back to not-idle.
     assert!(client.idle_tick(5_000, true));
+    assert_eq!(
+        client.idle_wait(5_000, true),
+        None,
+        "the inhibitor has no timer"
+    );
     assert_eq!(
         opcodes(&mut client),
         [compositor_protocol::idle_notify::ext_idle_notification_v1::event::RESUMED]

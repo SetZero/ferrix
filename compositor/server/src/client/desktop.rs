@@ -14,6 +14,8 @@
 //! protocols and is long enough; a child module sees its parent's private
 //! fields, so nothing had to be opened up to move them.
 
+use std::time::Duration;
+
 use compositor_protocol::alpha_modifier::{wp_alpha_modifier_surface_v1, wp_alpha_modifier_v1};
 use compositor_protocol::content_type::{wp_content_type_manager_v1, wp_content_type_v1};
 use compositor_protocol::idle_inhibit::zwp_idle_inhibit_manager_v1;
@@ -669,6 +671,23 @@ impl Client {
             said = true;
         }
         said
+    }
+
+    /// How long until this client needs another idle check.
+    ///
+    /// Notifications that have already said `idled`, or that an inhibitor is
+    /// holding off, cannot change until input or another client request wakes
+    /// the compositor.  The remaining one with the shortest timeout decides
+    /// when the event loop's timer expires.
+    #[must_use]
+    pub fn idle_wait(&self, idle: u64, inhibited: bool) -> Option<Duration> {
+        self.idles
+            .values()
+            .filter(|notification| !notification.idled && !(inhibited && notification.inhibitable))
+            .map(|notification| {
+                Duration::from_millis(u64::from(notification.timeout).saturating_sub(idle))
+            })
+            .min()
     }
 
     /// What each of this client's surfaces is showing, for the compositor:

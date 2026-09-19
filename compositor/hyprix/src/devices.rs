@@ -165,6 +165,11 @@ impl Devices {
         self.open.is_empty()
     }
 
+    /// The device descriptors that wake the compositor when input arrives.
+    pub fn raw_fds(&self) -> impl Iterator<Item = libc::c_int> + '_ {
+        self.open.iter().map(|open| open.device.raw_fd())
+    }
+
     /// Whether any device reports keys, and whether any reports a pointer:
     /// the two `wl_seat.capability` bits.
     #[must_use]

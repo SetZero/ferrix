@@ -33,6 +33,7 @@
 
 use std::collections::VecDeque;
 use std::io::{Read, Write};
+use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
 
 use compositor_ipc::{Event, Plugin, Reply, Request, Snapshot};
@@ -145,6 +146,21 @@ impl Plugins {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.loaded.is_empty()
+    }
+
+    /// The plugin descriptors which can carry a new request.
+    pub fn raw_fds(&self) -> impl Iterator<Item = i32> + '_ {
+        self.loaded.iter().map(|plugin| plugin.stream.as_raw_fd())
+    }
+
+    /// Whether a line was received with a plugin's hello and still needs
+    /// dispatching. Its descriptor is no longer readable in that case, so
+    /// the event loop must take another pass without waiting for it.
+    #[must_use]
+    pub fn needs_poll(&self) -> bool {
+        self.loaded
+            .iter()
+            .any(|plugin| plugin.partial.contains('\n'))
     }
 
     /// Whether some plugin handles the dispatcher `name`.

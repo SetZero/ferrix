@@ -31,6 +31,15 @@ pub(crate) struct Pace {
 }
 
 impl Pace {
+    /// How long remains before a paced frame may be drawn.
+    ///
+    /// There is no timer before the first frame: work which needs that frame
+    /// draws it immediately.
+    #[must_use]
+    pub(crate) fn until(&self, now: Instant) -> Option<Duration> {
+        self.next.map(|next| next.saturating_duration_since(now))
+    }
+
     /// Whether a frame may be drawn at `now`, on a screen whose refresh is
     /// `period` nanoseconds; and if so, that one is about to be.
     ///
@@ -95,6 +104,22 @@ mod tests {
         assert!(
             !pace.due(later + Duration::from_millis(1), PERIOD),
             "the quiet was paid back in frames"
+        );
+    }
+
+    #[test]
+    fn the_next_frame_has_a_wait_until_its_clock() {
+        let start = Instant::now();
+        let mut pace = Pace::default();
+        assert_eq!(pace.until(start), None, "the first frame is immediate");
+        assert!(pace.due(start, PERIOD));
+        assert_eq!(
+            pace.until(start),
+            Some(Duration::from_nanos(u64::from(PERIOD)))
+        );
+        assert_eq!(
+            pace.until(start + Duration::from_nanos(u64::from(PERIOD))),
+            Some(Duration::ZERO)
         );
     }
 }

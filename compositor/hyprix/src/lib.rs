@@ -39,6 +39,7 @@ pub mod rules;
 pub mod seat;
 pub mod select;
 pub mod state;
+pub(crate) mod wait;
 
 pub use options::{Options, Renderer};
 pub use state::{run, run_with};

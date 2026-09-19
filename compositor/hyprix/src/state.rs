@@ -69,6 +69,12 @@ impl Slot {
         &self.client
     }
 
+    /// The client descriptor that wakes the compositor for a request.
+    #[must_use]
+    pub(crate) fn raw_fd(&self) -> i32 {
+        self.connection.as_raw_fd()
+    }
+
     /// Send whatever this client has queued, now.
     ///
     /// The loop sends at the end of every pass, and that is soon enough for
@@ -1350,7 +1356,69 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
             }
         }
 
-        std::thread::sleep(Duration::from_millis(2));
+        // A request may have changed the layout after the event snapshot was
+        // made above, and a plugin's hello may have carried its first command
+        // too. Run that follow-up pass now, before waiting for another
+        // descriptor edge.
+        if changed || plugins.needs_poll() {
+            continue;
+        }
+
+        // `frames_done`, screenshots, and desktop protocol timers can queue
+        // output after their slot was served. Send it before the next wait:
+        // the old fixed polling pass happened to do this two milliseconds
+        // later, whereas an idle compositor may otherwise wait forever for a
+        // client which is waiting for this very reply.
+        if slots.iter_mut().any(|slot| !slot.flush()) {
+            // Let the normal connection cleanup above remove a client whose
+            // queued reply could not be written before it enters the wait
+            // set.
+            continue;
+        }
+
+        // Nothing changes until an input descriptor, a client, a control
+        // socket or a plugin becomes ready. Do not wake merely to discover
+        // that: wait for one of them, or for the next frame, idle, or test
+        // timer.
+        let frame_wait = (owed || animating || settling)
+            .then(|| pace.until(Instant::now()))
+            .flatten();
+        let idle = u64::try_from(forced.unwrap_or_else(|| last_input.elapsed()).as_millis())
+            .unwrap_or(u64::MAX);
+        let inhibited = slots.iter().any(|slot| slot.client().inhibits_idle());
+        let idle_wait = forced
+            .is_none()
+            .then(|| {
+                slots
+                    .iter()
+                    .filter_map(|slot| slot.client().idle_wait(idle, inhibited))
+                    .min()
+            })
+            .flatten();
+        let deadline_wait = deadline.map(|limit| limit.saturating_sub(started.elapsed()));
+        let timeout = [frame_wait, idle_wait, deadline_wait]
+            .into_iter()
+            .flatten()
+            .min();
+
+        let mut fds = Vec::with_capacity(
+            1 + slots.len()
+                + devices.len()
+                + usize::from(control.is_some())
+                + usize::from(events.is_some())
+                + plugins.len(),
+        );
+        fds.push(listener.as_raw_fd());
+        fds.extend(slots.iter().map(Slot::raw_fd));
+        fds.extend(devices.raw_fds());
+        if let Some(socket) = control.as_ref() {
+            fds.push(socket.raw_fd());
+        }
+        if let Some(socket) = events.as_ref() {
+            fds.push(socket.raw_fd());
+        }
+        fds.extend(plugins.raw_fds());
+        crate::wait::wait(&fds, timeout).map_err(|error| format!("hyprix: event wait: {error}"))?;
     }
 
     let (subscribers, told) = events
