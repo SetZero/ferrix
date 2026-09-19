@@ -138,7 +138,7 @@ impl<D: Device> Canvas<D> {
         // blurprepare.glsl.
         let (wide, tall) = inverse(first);
         self.aim(first);
-        self.sample(source.opaque_view, SAMPLER_NEAREST);
+        self.sample(source.opaque_view, source.resource, SAMPLER_NEAREST);
         self.program(
             Program::BlurPrepare,
             BLEND_REPLACE,
@@ -168,7 +168,7 @@ impl<D: Device> Canvas<D> {
             };
             let (wide, tall) = inverse(*from);
             self.aim(*to);
-            self.sample(from.view, SAMPLER_LINEAR);
+            self.sample(from.view, from.resource, SAMPLER_LINEAR);
             self.program(
                 Program::BlurDown,
                 BLEND_REPLACE,
@@ -185,7 +185,7 @@ impl<D: Device> Canvas<D> {
             };
             let (wide, tall) = inverse(*from);
             self.aim(*to);
-            self.sample(from.view, SAMPLER_LINEAR);
+            self.sample(from.view, from.resource, SAMPLER_LINEAR);
             self.program(
                 Program::BlurUp,
                 BLEND_REPLACE,
@@ -198,7 +198,7 @@ impl<D: Device> Canvas<D> {
         let (wide, tall) = inverse(first);
         let bounds = Painter::bounds(self);
         self.aim(into);
-        self.sample(first.view, SAMPLER_NEAREST);
+        self.sample(first.view, first.resource, SAMPLER_NEAREST);
         self.program(
             Program::BlurFinish,
             BLEND_REPLACE,
@@ -260,6 +260,7 @@ impl<D: Device> Canvas<D> {
         self.aim(self.target);
         self.textured(
             from.opaque_view,
+            from.resource,
             SAMPLER_NEAREST,
             bounds,
             (rect, rounding),

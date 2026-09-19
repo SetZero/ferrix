@@ -149,10 +149,11 @@ impl<D: Device> Canvas<D> {
         let Some((sharp, _)) = self.backdrop_images(backdrop) else {
             return;
         };
-        let view = self.target.opaque_view;
+        let (view, resource) = (self.target.opaque_view, self.target.resource);
         self.aim(sharp);
         self.textured(
             view,
+            resource,
             SAMPLER_NEAREST,
             bounds,
             (bounds, Rounding::none()),

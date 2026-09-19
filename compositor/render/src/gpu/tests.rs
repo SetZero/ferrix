@@ -428,3 +428,59 @@ fn textures_of_sizes_long_out_of_use_are_let_go_of() {
     let drawn = gpu.read(Rect::new(0, 0, 4, 1)).expect("read back");
     assert_eq!(drawn.get(..3), Some(&[0x60, 0x40, 0x20][..]));
 }
+
+/// A draw waiting to be submitted keeps the pixels it was written with, even
+/// when the texture it reads is written again before the frame ends.
+///
+/// The renderer batches a frame into one submission, which it can only do
+/// because moving pixels into a texture nothing waiting reads changes
+/// nothing. This is the case where something waiting *does* read it: one
+/// surface drawn twice in a frame, with different pixels each time. The
+/// first draw must show the first pixels -- which it does only if the
+/// second upload submitted what was waiting first.
+#[test]
+fn a_waiting_draw_keeps_the_pixels_it_was_written_with() {
+    let Some(server) = server("reused") else {
+        return;
+    };
+    let (wide, tall) = (64, 32);
+    let mut gpu = Canvas::new(server, wide, tall).expect("a GPU canvas");
+    let whole = Damage::full(wide, tall);
+    Painter::clear(&mut gpu, crate::Color(0xff00_0000), &whole);
+
+    // One surface by one name, drawn twice, its pixels changed between.
+    let side = 16;
+    let bytes = (side * side * 4) as usize;
+    let red = vec![[0x00, 0x00, 0xff, 0xff]; bytes / 4].concat();
+    let blue = vec![[0xff, 0x00, 0x00, 0xff]; bytes / 4].concat();
+    // One name, so the renderer keeps one texture for both.
+    let first = Surface::new(&red, side, side, side * 4, Format::Xrgb8888)
+        .expect("a surface")
+        .named(7);
+    let second = Surface::new(&blue, side, side, side * 4, Format::Xrgb8888)
+        .expect("a surface")
+        .named(7);
+    Painter::composite(
+        &mut gpu,
+        &first,
+        Rect::new(0, 0, i64::from(side), i64::from(side)),
+        &whole,
+    );
+    Painter::composite(
+        &mut gpu,
+        &second,
+        Rect::new(32, 0, i64::from(side), i64::from(side)),
+        &whole,
+    );
+    gpu.finish().expect("the frame was drawn");
+
+    let drawn = gpu
+        .read(Rect::new(0, 0, i64::from(wide), i64::from(tall)))
+        .expect("read back");
+    let at = |x: u32, y: u32| {
+        let start = ((y * wide + x) * 4) as usize;
+        drawn.get(start..start + 3).map(<[u8]>::to_vec)
+    };
+    assert_eq!(at(8, 8), Some(vec![0x00, 0x00, 0xff]), "the first draw");
+    assert_eq!(at(40, 8), Some(vec![0xff, 0x00, 0x00]), "the second");
+}

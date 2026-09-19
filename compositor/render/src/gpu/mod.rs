@@ -176,6 +176,14 @@ pub struct Canvas<D: Device> {
     surfaces: BTreeMap<u64, Kept>,
     spare: Vec<Image>,
     ramps: Vec<(Gradient, Image)>,
+    /// The resources the draws written since the last submission read from.
+    ///
+    /// Moving pixels into a texture is not part of the command stream: it
+    /// happens when it is asked for, while what is in the stream happens
+    /// when the stream is submitted. So a draw that is written but not yet
+    /// submitted would read pixels that arrived after it -- but only if it
+    /// reads *that* texture, and this is how that is known.
+    sampled: Vec<u32>,
     frame: u64,
     failed: Option<io::Error>,
 }
@@ -258,6 +266,7 @@ impl<D: Device> Canvas<D> {
             surfaces: BTreeMap::new(),
             spare: Vec::new(),
             ramps: Vec::new(),
+            sampled: Vec::new(),
             frame: 0,
             failed: None,
         };
@@ -429,6 +438,23 @@ impl<D: Device> Canvas<D> {
             self.fail(error);
         }
         self.stream.reset();
+        // Nothing is waiting to be submitted any more, so nothing waiting
+        // can read a texture written after it.
+        self.sampled.clear();
+    }
+
+    /// Submit what is waiting if any of it reads `resource`, which pixels
+    /// are about to be moved into.
+    ///
+    /// The ordering [`Canvas::sampled`] describes. In a frame as this
+    /// compositor draws one each surface is brought up to date and then
+    /// drawn, so the texture being written is one nothing waiting reads and
+    /// this costs nothing -- which is the point, since a submission is a
+    /// round trip through the driver and the device.
+    fn flush_readers_of(&mut self, resource: u32) {
+        if self.sampled.contains(&resource) {
+            self.flush();
+        }
     }
 
     /// Submit if the stream is getting full. Between operations only: an
@@ -530,8 +556,15 @@ impl<D: Device> Canvas<D> {
         self.stream.set_constants(pipe::SHADER_FRAGMENT, constants);
     }
 
-    /// Read `view` through `sampler` from here on.
-    fn sample(&mut self, view: u32, sampler: u32) {
+    /// Read `view`, which is a view of `resource`, through `sampler` from
+    /// here on.
+    fn sample(&mut self, view: u32, resource: u32, sampler: u32) {
+        // Written down even when the view is bound already: what matters is
+        // that the draws waiting to be submitted read this resource, and a
+        // second draw through the same view is one more of them.
+        if !self.sampled.contains(&resource) {
+            self.sampled.push(resource);
+        }
         if self.bound_view == Some((view, sampler)) {
             return;
         }
@@ -630,6 +663,7 @@ impl<D: Device> Canvas<D> {
     fn textured(
         &mut self,
         view: u32,
+        resource: u32,
         sampler: u32,
         rect: Rect,
         shape: (Rect, Rounding),
@@ -639,7 +673,7 @@ impl<D: Device> Canvas<D> {
     ) {
         let [radius, power] = rounding_floats(shape.1);
         let [x, y, wide, tall] = rect_floats(shape.0);
-        self.sample(view, sampler);
+        self.sample(view, resource, sampler);
         self.program(
             Program::Surface,
             blend,
@@ -706,9 +740,9 @@ impl<D: Device> Canvas<D> {
                 + unsigned(moved.x) as usize * 4;
             let data = surface.data().get(start..).unwrap_or(&[]);
             // The pixels must be there before the draw that reads them, and
-            // a transfer is not part of the stream: what was drawn before
-            // goes first.
-            self.flush();
+            // a transfer is not part of the stream: anything waiting to be
+            // submitted that reads this texture goes first.
+            self.flush_readers_of(image.resource);
             if let Err(error) = self.device.upload(
                 image.resource,
                 Region {
@@ -780,7 +814,9 @@ impl<D: Device> Canvas<D> {
                 color.alpha(),
             ]);
         }
-        self.flush();
+        // A ramp is made the first time its gradient is drawn, so nothing
+        // waiting reads it; the rule is the same either way.
+        self.flush_readers_of(image.resource);
         if let Err(error) = self.device.upload(
             image.resource,
             Region {
@@ -825,7 +861,7 @@ impl<D: Device> Canvas<D> {
             return;
         };
         self.aim(self.target);
-        self.sample(ramp.view, SAMPLER_NEAREST);
+        self.sample(ramp.view, ramp.resource, SAMPLER_NEAREST);
         let (sine, flip_x, flip_y) = gradient.axis().parts();
         let [radius, power] = rounding_floats(rounding);
         let [ax, ay, aw, ah] = rect_floats(across);
@@ -1100,6 +1136,15 @@ impl<D: Device> Canvas<D> {
         } else {
             SAMPLER_LINEAR
         };
-        self.textured(view, sampler, across, shape, opacity, BLEND_OVER, &quads);
+        self.textured(
+            view,
+            image.resource,
+            sampler,
+            across,
+            shape,
+            opacity,
+            BLEND_OVER,
+            &quads,
+        );
     }
 }
