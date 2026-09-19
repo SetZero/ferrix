@@ -198,8 +198,8 @@ pub(crate) fn test_jobs(args: &Args) -> Result<()> {
              suspend would prove nothing",
         ));
     }
-    let shell = zinc::built(arch)?
-        .ok_or_else(|| Error::new("zinc could not be built for x86-64"))?;
+    let shell =
+        zinc::built(arch)?.ok_or_else(|| Error::new("zinc could not be built for x86-64"))?;
     println!("  {arch}: building an image whose init is an interactive shell");
     let loader = cargo::build_loader(arch, args.release)?;
     // No script: the kernel starts `sh -i`, which is the thing under test.
@@ -223,7 +223,10 @@ pub(crate) fn test_jobs(args: &Args) -> Result<()> {
     )?;
     let image = fat::write_image_with(arch, &loader, &kernel, &archive, None)?;
 
-    println!("  {arch}: typing a session at the serial console (timeout {}s)", args.timeout);
+    println!(
+        "  {arch}: typing a session at the serial console (timeout {}s)",
+        args.timeout
+    );
     let mut failures: Vec<String> = Vec::new();
     let lines = qemu::watch_then(
         arch,
