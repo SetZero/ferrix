@@ -6,6 +6,13 @@ a browser needs, what Ferrix has, what is missing, and what the missing part
 would cost. Whether any of it is worth doing is the product owner's, and
 `docs/BACKLOG.md` carries no row for it until they write one.
 
+**Re-checked on 2026-09-19**, against a tree 37 commits further on. Everything
+in §2, §3 and §4 still holds but the two loose fixes in §6, which are now
+done, and §5's last paragraph, which was overtaken the day after it was
+written. Each is marked where it stands. One of the two turned out not to cost
+what this document said it did, which is recorded rather than quietly
+corrected: see §3.
+
 `docs/ROADMAP.md` stage 22 already names a browser once -- Steam's client
 starts one as a helper -- but a browser of Ferrix's own is on no stage, and
 nothing on the roadmap arrives at one on the way to something else.
@@ -89,16 +96,25 @@ Ferrix has neither: `unshare` refuses everything it cannot honour
 at all. Running `--no-sandbox` is the honest first target; stage 13 is the
 other answer.
 
-But `clone` and `clone3` do not check the `CLONE_NEW*` flags at all.
+**Done, 2026-09-19:** `clone` and `clone3` refuse the `CLONE_NEW*` flags with
+`EINVAL`, as `unshare` always did and as a Linux built without `CONFIG_*_NS`
+does. A ring-3 program on all three architectures proves it. What follows is
+what the state was, and why it mattered.
+
+But `clone` and `clone3` did not check the `CLONE_NEW*` flags at all.
 `libs/linux-abi` defines them -- `CLONE_NEWNS`, `CLONE_NEWUSER`, `CLONE_NEWPID`
 and `CLONE_NEWNET` are all in `types.rs` -- and no line of
-`kernel/src/syscall/family.rs` ever tests one: `clone_with` checks the
+`kernel/src/syscall/family.rs` ever tested one: `clone_with` checked the
 `CLONE_THREAD`, `CLONE_SIGHAND` and `CLONE_VM` combinations and `CLONE_PIDFD`,
-and nothing else. So `clone(CLONE_NEWUSER|CLONE_NEWPID|SIGCHLD)` succeeds and
-hands back an ordinary child in the one namespace there is. A program that asks
-for a sandbox is told it got one. `unshare` is honest about exactly the same
-request, which makes this an inconsistency inside the kernel as well as a lie
-to the caller. It is a small fix and it is worth making on its own account.
+and nothing else. So `clone(CLONE_NEWUSER|CLONE_NEWPID|SIGCHLD)` succeeded and
+handed back an ordinary child in the one namespace there is. A program that
+asked for a sandbox was told it got one. `unshare` was honest about exactly the
+same request, which made it an inconsistency inside the kernel as well as a lie
+to the caller. It was a small fix and it was worth making on its own account.
+
+It changes nothing about §2.4's real answer: `--no-sandbox` is still the
+honest first target, and stage 13 is still the other one. What it changes is
+that a program which asks for isolation now finds out it cannot have it.
 
 ---
 
@@ -107,10 +123,19 @@ to the caller. It is a small fix and it is worth making on its own account.
 * **No vDSO.** `AT_SYSINFO_EHDR` is deliberately absent, so every
   `clock_gettime` is a trap. Chrome calls it per task, per timer and per trace
   point.
-* **No `/dev/shm`.** The initramfs makes `bin`, `dev`, `etc`, `proc` and `tmp`
-  and nothing else, though `mount -t tmpfs` works at run time. Chromium's
-  shared memory prefers `memfd_create`, which exists with seals, but falls back
-  to `/dev/shm`, and ferrousli's named semaphores live there too. One line.
+* ~~**No `/dev/shm`.**~~ **Done, 2026-09-19**, and it was not one line, which
+  is what this said. Chromium's shared memory prefers `memfd_create`, which
+  exists with seals, but falls back to `/dev/shm`, and ferrousli's named
+  semaphores live there too. Adding the directory to the initramfs would have
+  done nothing: the boot mounts devfs on `/dev` and that shadows whatever the
+  archive unpacked there. devfs cannot create a name and has no storage, so
+  `/dev/shm` has to be a tmpfs mount — and nothing could be mounted anywhere
+  inside `/dev`, because devfs does not cache lookups and a mount point is a
+  cached dentry. That took a VFS change, `Inode::caches_lookup_of`, which lets
+  a directory of coming-and-going names keep the one name that never changes.
+  Roughly 200 lines with its two checks rather than one. The lesson is the
+  usual one: a cost this document calls trivial is the kind most worth
+  checking before it is quoted.
 * **No `timerfd` and no `signalfd`.**
 * **No AVX.** `kernel/src/arch/x86_64/switch.rs` saves a 512-byte `FXSAVE`
   area -- x87 and SSE -- and `CR4.OSXSAVE` is never set, so `CPUID` reports no
@@ -202,17 +227,18 @@ separately for that reason.
 | ~~**Already planned:** stage 12, btrfs write~~ *landed 2026-09-21* | ~~≈ 60~~ |
 | **Already planned, only if the sandbox is wanted:** stage 13 | ≈ 60 |
 | Demand-paged file-backed `execve`, and binaries past 64 MiB | 13 |
-| `madvise`, a vDSO, `/dev/shm`, `timerfd` and `signalfd` | ≈ 15 |
+| `madvise`, a vDSO, `timerfd` and `signalfd` (`/dev/shm` is done) | ≈ 13 |
 | libwayland-client, libxkbcommon, fontconfig with freetype and expat, a font | 13 |
 | The Chromium cross-build against ferrousli, with Alpine's musl patches rebased | 40+, mostly unknown |
 | What running it finds missing | unsized, ≥ 40 |
 
 The GPU path of stage 19 (52 points, `docs/GPU.md`) is not required and is the
 difference between a browser and a slideshow. It began on 2026-09-18, while
-this was being written: step 1's wire format is complete and a program can
-open step 2's render node, and what stands between that and a frame the GPU
-drew is virgl's encoder, which is step 3b. The compositor still draws every
-pixel on the CPU.
+this was being written, and **it landed on 2026-09-19**: steps 1, 2, 3b and 5
+are done, the desktop composites on the GPU, and a 1080p frame went from 39 ms
+to 12 ms (`docs/GPU.md` §3.7 and §3.8). The sentence that stood here -- "the
+compositor still draws every pixel on the CPU" -- was true for one more day.
+So the row is not a cost a browser would have to carry; it is already paid.
 
 ---
 
@@ -235,9 +261,13 @@ exercises everything genuinely hard: the multi-process model, Mojo over
 writes a PNG on Ferrix, the Wayland half afterwards is comparatively small,
 because §1 says the compositor is already ready for it.
 
-And two fixes that stand on their own merits, whatever is decided about any of
+And two fixes that stood on their own merits, whatever is decided about any of
 the above: mount `/dev/shm`, and make `clone` refuse `CLONE_NEW*` rather than
-ignore it.
+ignore it. **Both are done, 2026-09-19.** They were the only part of this
+document that was worth doing before anyone decides whether a browser is
+wanted, because neither needs a browser to be worth having: the first is where
+ferrousli's named semaphores already live, and the second was the kernel
+telling a caller something untrue.
 
 ---
 
@@ -250,6 +280,13 @@ Read for this: `kernel/src/syscall/` against the `Syscall` enum, `libs/elf`,
 the two prerequisites in §4. Chromium's own requirements were taken from
 Alpine's `community/chromium` APKBUILD and its musl patch set, which is the
 only evidence that a Chromium against a musl-shaped C library builds at all.
+
+Read again on 2026-09-19, for the re-check at the top: `kernel/src/fs/devfs.rs`
+and `libs/vfs`'s dentry cache, for what `/dev/shm` actually costs;
+`kernel/src/syscall/family.rs` again; and, for §4, that no loader has appeared
+(`DT_NEEDED` and `JUMP_SLOT` are still in no Rust in the tree), that
+`libs/btrfs-vfs` still answers `EROFS`, and that `madvise`, `AT_SYSINFO_EHDR`,
+`timerfd` and `signalfd` are all still where §3 left them.
 
 Not checked, and each could move the numbers: whether Chromium's build system
 can be pointed at a sysroot shaped like ferrousli's without a patch of its own;
