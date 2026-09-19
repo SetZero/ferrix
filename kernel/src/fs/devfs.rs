@@ -65,8 +65,21 @@
 //!   asks the table. Invalidating instead would need the registry to reach
 //!   every devtmpfs mount's dentries, which `libs/vfs` offers no way to do; and
 //!   what not caching costs here is small: a scan of seven names and a short
-//!   locked list, and no mount point inside `/dev`, where nothing can be
-//!   created to mount on anyway.
+//!   locked list. The one thing it would have cost is a mount point inside
+//!   `/dev`, which `/dev/shm` needs; `Inode::caches_lookup_of` buys that one
+//!   name back, and only that one, because `shm` is the only name here that
+//!   never comes or goes.
+//!
+//! # `/dev/shm`
+//!
+//! A directory, not a device, and the only name here that is not one. POSIX
+//! shared memory and named semaphores live in it: ferrousli's `sem_open` makes
+//! a file there and maps it shared, and a program whose `memfd_create` is not
+//! available falls back to it. The node this filesystem carries is an empty
+//! directory with nothing behind it; [`crate::fs::init`] mounts a tmpfs over
+//! it at boot, which is where the files actually are, exactly as a Linux init
+//! script mounts one there. A devtmpfs mounted somewhere else by a program has
+//! the node and not the tmpfs, which is what Linux gives that program too.
 //!
 //! # Why it says it is devtmpfs
 //!
@@ -253,6 +266,16 @@ const PTS_CURSOR: u64 = (1 << 48) + 4;
 /// The name of the directory pseudoterminal slaves are in.
 const PTS: &[u8] = b"pts";
 
+/// `/dev/shm`'s inode number.
+const SHM_INO: u64 = 1 << 39;
+
+/// The root's cursor for `/dev/shm`, after `/dev/pts`'s.
+const SHM_CURSOR: u64 = (1 << 48) + 6;
+
+/// The name of the directory POSIX shared memory and named semaphores live
+/// in.
+const SHM: &[u8] = b"shm";
+
 /// A devfs instance.
 #[derive(Debug)]
 pub(crate) struct Devfs {
@@ -417,7 +440,12 @@ pub(crate) fn register_block(
         Some(slot) if valid => slot.copy_from_slice(name),
         _ => return Err(BlockRefused::InvalidName),
     }
-    if DEVICES.iter().any(|static_node| static_node.name == name) {
+    if DEVICES.iter().any(|static_node| static_node.name == name)
+        || name == SHM
+        || name == DRI
+        || name == INPUT
+        || name == PTS
+    {
         return Err(BlockRefused::NameInUse);
     }
     let mut registry = BLOCKS.lock();
@@ -531,6 +559,10 @@ enum Place {
     Pts,
     /// `/dev/pts/<N>`.
     Slave(u32),
+    /// `/dev/shm`, the directory a tmpfs is mounted on. Empty in itself: the
+    /// boot mounts the filesystem that holds the files, and what this node is
+    /// for is being somewhere to mount it.
+    Shm,
 }
 
 /// A devfs inode.
@@ -556,7 +588,8 @@ impl Node {
             | Place::Input
             | Place::Event(_)
             | Place::Pts
-            | Place::Slave(_) => None,
+            | Place::Slave(_)
+            | Place::Shm => None,
         }
     }
 }
@@ -620,6 +653,15 @@ impl Inode for Node {
                 ino: PTS_INO,
                 ..directory
             },
+            // Sticky and writable by everyone, as `/tmp` is and as every
+            // `/dev/shm` is: the mode a program checks before trusting the
+            // directory. The tmpfs mounted over it carries the same mode, so
+            // the answer does not change when the mount is stepped onto.
+            (Place::Shm, _) => Metadata {
+                ino: SHM_INO,
+                permissions: 0o1777,
+                ..directory
+            },
             (Place::Slave(number), _) => Metadata {
                 atime: self.made,
                 mtime: self.made,
@@ -671,7 +713,7 @@ impl Inode for Node {
     fn is_stream(&self) -> bool {
         !matches!(
             self.place,
-            Place::Root | Place::Dri | Place::Input | Place::Pts
+            Place::Root | Place::Dri | Place::Input | Place::Pts | Place::Shm
         )
     }
 
@@ -680,6 +722,14 @@ impl Inode for Node {
     /// rather than invalidating.
     fn caches_lookups(&self) -> bool {
         false
+    }
+
+    /// Except `shm` in the root, which is always there and always the same
+    /// node. Nothing else in `/dev` is, and a mount point has to be a
+    /// remembered dentry, so this is what lets the boot put a tmpfs on
+    /// `/dev/shm`; see [`Inode::caches_lookup_of`].
+    fn caches_lookup_of(&self, name: &[u8]) -> bool {
+        self.place == Place::Root && name == SHM
     }
 
     /// The console's own inode takes the reads and writes, so that whatever
@@ -843,6 +893,12 @@ impl Inode for Node {
                 made: self.made,
             }));
         }
+        if name == SHM {
+            return Ok(Arc::new(Node {
+                place: Place::Shm,
+                made: self.made,
+            }));
+        }
         if let Some(index) = DEVICES.iter().position(|device| device.name == name) {
             return Ok(node(index, self.made));
         }
@@ -864,6 +920,12 @@ impl Inode for Node {
         }
         if self.place == Place::Pts {
             return read_pts(cursor, emit);
+        }
+        // Nothing of its own is ever in it: a listing of `/dev/shm` is a
+        // listing of the tmpfs mounted over it, and this node is only what
+        // the walk sees if that mount is not there.
+        if self.place == Place::Shm {
+            return Ok(());
         }
         if self.place != Place::Root {
             return Err(Errno::ENOTDIR);
@@ -925,11 +987,25 @@ impl Inode for Node {
             }
         }
         if cursor <= PTS_CURSOR && pty::made() > 0 {
-            let _ = emit(DirEntry {
+            let kept = emit(DirEntry {
                 ino: PTS_INO,
                 kind: FileType::Directory,
                 name: PTS,
                 next: PTS_CURSOR + 1,
+            });
+            if !kept {
+                return Ok(());
+            }
+        }
+        // Unconditional, unlike the three above: `shm` does not wait for a
+        // device to be published, because nothing publishes it. It is there
+        // from the first listing.
+        if cursor <= SHM_CURSOR {
+            let _ = emit(DirEntry {
+                ino: SHM_INO,
+                kind: FileType::Directory,
+                name: SHM,
+                next: SHM_CURSOR + 1,
             });
         }
         Ok(())

@@ -289,7 +289,7 @@ impl Namespace {
     /// The child dentry called `name`, from the cache or the filesystem.
     fn child(&self, dir: &Arc<Dentry>, name: &[u8]) -> Result<Arc<Dentry>> {
         let inode = dir.inode().ok_or(Errno::ENOENT)?;
-        if !inode.caches_lookups() {
+        if !inode.caches_lookups() && !inode.caches_lookup_of(name) {
             let found = look_up(inode.as_ref(), name)?;
             return Ok(dir.uncached_child(name, found));
         }

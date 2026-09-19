@@ -602,6 +602,8 @@ const AT_BACK: u64 = 256;
 const AT_STATFS: u64 = 512;
 /// `sendfile`'s offset.
 const AT_OFFSET: u64 = 768;
+/// The file the `/dev/shm` check makes; in the room left after the offset.
+const AT_SHM_FILE: u64 = 776;
 /// The directory a second procfs is mounted on.
 const AT_PROC_DIR: u64 = 800;
 /// The directory a second devtmpfs is mounted on.
@@ -649,6 +651,7 @@ const PROC_SELF: &[u8] = b"/tmp/stage8-proc/self\0";
 const SELF: &[u8] = b"/proc/self\0";
 const DEV_ZERO: &[u8] = b"/tmp/stage8-dev/zero\0";
 const MOUNTS: &[u8] = b"/proc/mounts\0";
+const SHM_FILE: &[u8] = b"/dev/shm/stage8\0";
 
 /// The flags an init script mounts `/proc` with.
 const PROC_FLAGS: u32 = MS_NOSUID | MS_NODEV | MS_NOEXEC | MS_RELATIME;
@@ -739,6 +742,7 @@ fn check_the_calls(process: &Process) -> Result<u64, &'static str> {
         (AT_SELF, SELF),
         (AT_DEV_ZERO, DEV_ZERO),
         (AT_MOUNTS, MOUNTS),
+        (AT_SHM_FILE, SHM_FILE),
     ] {
         uaccess::copy_to_user(process.space(), page + offset, bytes)
             .map_err(|_| "could not stage the file system call checks")?;
@@ -751,6 +755,7 @@ fn check_the_calls(process: &Process) -> Result<u64, &'static str> {
         .and_then(|bytes| check_statfs_says_tmp_is_tmpfs(process, page).map(|()| bytes))
         .and_then(|bytes| check_truncate_and_fallocate_grow(process, page).map(|()| bytes))
         .and_then(|bytes| check_sendfile_copies_a_file(process, page).map(|sent| bytes + sent))
+        .and_then(|bytes| check_dev_shm_holds_a_file(process, page).map(|()| bytes))
         .and_then(|bytes| check_proc_and_devtmpfs_mount(process, page).map(|()| bytes));
 
     // Cleaned up whatever happened, so a failure reports itself and not also
@@ -768,7 +773,7 @@ fn check_the_calls(process: &Process) -> Result<u64, &'static str> {
     }
     let ns = fs::namespace();
     let ctx = ns.context();
-    for path in [FIFO, FILE, COPY] {
+    for path in [FIFO, FILE, COPY, SHM_FILE] {
         let _ = ns.unlink(&ctx, None, name(path));
     }
     let _ = memory::sys_munmap(process, page, PAGE_SIZE);
@@ -1290,6 +1295,68 @@ fn by_number(process: &Process, call: Syscall, args: [u64; 6]) -> Result<usize, 
 /// A descriptor, as a register carries it.
 fn register(fd: i32) -> u64 {
     u64::from(fd.unsigned_abs())
+}
+
+/// `/dev/shm` is a directory a program can make a file in, and `/proc/mounts`
+/// says what it is.
+///
+/// devfs cannot create a name and has no storage, so the directory alone would
+/// be useless: what makes `/dev/shm` work is the tmpfs [`fs::init`] mounts over
+/// it. This is the check that the mount is there and is the thing walked into
+/// — a file created, written, read back and removed — rather than the empty
+/// devfs node underneath, which would take the `create` and answer `EROFS`.
+///
+/// ferrousli's named semaphores are the first caller: `sem_open` makes a
+/// 32-byte file here and maps it shared. Chromium's shared memory is the other,
+/// when its `memfd_create` path is not taken.
+fn check_dev_shm_holds_a_file(process: &Process, page: u64) -> Result<(), &'static str> {
+    let made = descriptor(
+        fd::sys_openat(
+            process,
+            AT_FDCWD,
+            page + AT_SHM_FILE,
+            O_RDWR | O_CREAT | O_TRUNC,
+            0o600,
+        ),
+        "a file could not be created in /dev/shm",
+    )?;
+    let len = DATA.len();
+    answers(
+        file::sys_write(process, made, page + AT_DATA, len as u64),
+        len,
+        "a write to a file in /dev/shm came back short",
+    )?;
+    answers(
+        file::sys_pread64(process, made, page + AT_BACK, len as u64, 0),
+        len,
+        "a file in /dev/shm did not read back what was written to it",
+    )?;
+    let mut back = vec![0_u8; len];
+    uaccess::copy_from_user(process.space(), page + AT_BACK, &mut back)
+        .map_err(|_| "what /dev/shm read back could not be copied out")?;
+    if back != DATA {
+        return Err("a file in /dev/shm read back bytes other than the ones written");
+    }
+    size_is(
+        SHM_FILE,
+        len as u64,
+        "a file in /dev/shm has the wrong size",
+    )?;
+    answers(
+        fd::sys_close(process, made),
+        0,
+        "a file in /dev/shm would not close",
+    )?;
+
+    let listing = read_mounts(process, page)?;
+    let line = &b"tmpfs /dev/shm tmpfs rw 0 0\n"[..];
+    if !listing.windows(line.len()).any(|window| window == line) {
+        return Err("/proc/mounts does not list a tmpfs on /dev/shm");
+    }
+
+    let ns = fs::namespace();
+    ns.unlink(&ns.context(), None, name(SHM_FILE))
+        .map_err(|_| "a file in /dev/shm would not unlink")
 }
 
 /// `mount -t proc` and `mount -t devtmpfs`, by number, as an init script makes

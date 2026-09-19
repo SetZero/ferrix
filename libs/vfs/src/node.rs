@@ -484,9 +484,30 @@ pub trait Inode: Send + Sync + fmt::Debug {
     /// per directory is enough for the directories that exist.
     ///
     /// The cost is that nothing can be mounted inside such a directory: a
-    /// mount point is a remembered dentry, and none is remembered here.
+    /// mount point is a remembered dentry, and none is remembered here. A
+    /// directory with one name that does not come and go can make that one
+    /// name an exception with [`Inode::caches_lookup_of`].
     fn caches_lookups(&self) -> bool {
         true
+    }
+
+    /// Whether this one name may be remembered although the directory itself
+    /// says its names are not.
+    ///
+    /// The exception a directory of coming-and-going names needs for the one
+    /// name that never does. `/dev` is the case it was added for: its device
+    /// names appear and vanish as drivers register, so it answers
+    /// [`Inode::caches_lookups`] with false, but `shm` is always there and
+    /// something has to be mounted on it. A mount point is a remembered
+    /// dentry, so without this there is no way to put a filesystem anywhere
+    /// inside such a directory.
+    ///
+    /// Answer true only for a name that is always present and always the same
+    /// object, because nothing will ever look it up again: the cached answer
+    /// stands for the life of the dentry, and there is no invalidation.
+    fn caches_lookup_of(&self, name: &[u8]) -> bool {
+        let _ = name;
+        false
     }
 
     /// The object called `name` in this directory, or `ENOENT`.

@@ -344,6 +344,24 @@ pub(crate) fn init(view: &BootView<'_>) -> Result<Report, InitError> {
 
     devfs::mount().map_err(|errno| InitError::Mount("/dev", errno))?;
     procfs::mount().map_err(|errno| InitError::Mount("/proc", errno))?;
+
+    // `/dev/shm`, where POSIX shared memory and named semaphores live. devfs
+    // carries the directory and nothing else; the files are in a tmpfs mounted
+    // over it, as a Linux init script mounts one there. It is mounted here
+    // rather than left to an init program because there is not always one: a
+    // static busybox, a compositor started as init, and the kernel's own
+    // checks all expect the directory to work.
+    let shm = ns
+        .resolve(&ctx, None, b"/dev/shm", true)
+        .map_err(|errno| InitError::Mount("/dev/shm", errno))?;
+    let _ = ns
+        .mount(new_tmpfs(), &shm)
+        .map_err(|errno| InitError::Mount("/dev/shm", errno))?;
+    let mounted = ns
+        .resolve(&ctx, None, b"/dev/shm", true)
+        .map_err(|errno| InitError::Mount("/dev/shm", errno))?;
+    ns.set_attributes(&mounted, &sticky)
+        .map_err(|errno| InitError::Mount("/dev/shm", errno))?;
     Ok(report)
 }
 
