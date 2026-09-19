@@ -28,8 +28,8 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use ferrix_bootinfo::PAGE_SIZE;
 use ferrix_linux_abi::nr::Syscall;
 use ferrix_linux_abi::types::{
-    AT_FDCWD, DT_BLK, DT_CHR, MAP_ANONYMOUS, MAP_PRIVATE, O_PATH, O_RDONLY, PROT_READ, PROT_WRITE,
-    S_IFBLK, STATX_BASIC_STATS, Statx,
+    AT_FDCWD, DT_BLK, DT_CHR, DT_DIR, MAP_ANONYMOUS, MAP_PRIVATE, O_PATH, O_RDONLY, PROT_READ,
+    PROT_WRITE, S_IFBLK, STATX_BASIC_STATS, Statx,
 };
 use ferrix_vfs::Errno;
 use ferrix_vfs::dirent;
@@ -83,6 +83,11 @@ const PARTITIONS: &[u8] = b"major minor  #blocks  name\n\n 254      250         
 const STATIC_NODES: [&[u8]; 8] = [
     b"null", b"zero", b"full", b"random", b"urandom", b"tty", b"console", b"ptmx",
 ];
+
+/// `shm`, which `/dev` lists after the disks and always: the one directory
+/// there unconditionally, and the one this filesystem does not publish a
+/// device for.
+const SHM: &[u8] = b"shm";
 
 /// Where `/dev` is staged in the check's page.
 const AT_DEV: u64 = 0;
@@ -545,25 +550,32 @@ fn read_listing(
     Err("listing /dev a few entries at a time never ended")
 }
 
-/// Require a listing to be the character nodes, each once and in order, and
-/// then `disks`, each once and in order, with the kinds they have. Returns the
-/// first disk's inode number, or 0 with none.
+/// Require a listing to be the character nodes, each once and in order, then
+/// `disks`, each once and in order, and `shm` last, with the kinds they have.
+/// Returns the first disk's inode number, or 0 with none.
 fn expect_listing(
     listed: &Listed,
     disks: &[&[u8]],
     what: &'static str,
 ) -> Result<u64, &'static str> {
     let names = listed.iter().map(|(name, _, _)| name.as_slice());
-    let want = STATIC_NODES.iter().chain(disks.iter()).copied();
+    let want = STATIC_NODES
+        .iter()
+        .chain(disks.iter())
+        .chain(core::iter::once(&SHM))
+        .copied();
     if !names.eq(want) {
         return Err(what);
     }
+    let last = STATIC_NODES.len() + disks.len();
     let kinds_right = listed.iter().enumerate().all(|(at, (_, kind, _))| {
         *kind
             == if at < STATIC_NODES.len() {
                 DT_CHR
-            } else {
+            } else if at < last {
                 DT_BLK
+            } else {
+                DT_DIR
             }
     });
     if !kinds_right {
