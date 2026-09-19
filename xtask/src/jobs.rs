@@ -55,7 +55,8 @@ struct Step {
     wants: &'static [&'static str],
     /// What this step is evidence of, for the message when it fails.
     proves: &'static str,
-    /// Wait for the job to be running before typing the next thing.
+    /// Give the guest a moment before the next keystroke: for a job to have
+    /// been forked and exec'd, or for a signal just sent to have arrived.
     settle: bool,
 }
 
@@ -81,10 +82,20 @@ const SESSION: &[Step] = &[
         proves: "the shell keeps a job table",
         settle: false,
     },
+    // A signal sent now is not a death yet. The shell reports what its jobs
+    // did at the prompt, so a job killed here is still running when this
+    // command's prompt comes round, and is reported at the next one: the
+    // `jobs` below is that next one. zsh without NOTIFY reports the same way.
     Step {
         keys: b"kill %1\n",
+        wants: &[],
+        proves: "`kill %1` is accepted for a job that exists",
+        settle: true,
+    },
+    Step {
+        keys: b"jobs\n",
         wants: &["terminated"],
-        proves: "`kill %1` signals the job, and the shell reports how it died",
+        proves: "the job died of the signal, and the shell says so",
         settle: false,
     },
     // A pipeline: two processes, one job, one process group. `kill %1`
@@ -98,14 +109,14 @@ const SESSION: &[Step] = &[
     },
     Step {
         keys: b"kill %1\n",
-        wants: &["terminated"],
-        proves: "one signal ends a whole pipeline: its processes share a group",
-        settle: false,
+        wants: &[],
+        proves: "`kill %1` is accepted for the pipeline",
+        settle: true,
     },
     Step {
         keys: b"jobs\n",
-        wants: &[],
-        proves: "the table is empty again once the job has gone",
+        wants: &["terminated"],
+        proves: "one signal ends a whole pipeline: its processes share a group",
         settle: false,
     },
     // The foreground job, and the three keystrokes that are the whole point
@@ -286,10 +297,50 @@ pub(crate) fn test_jobs(args: &Args) -> Result<()> {
 }
 
 /// Whether `wants` all appear in `lines`, each in a line at or after the one
-/// before it -- the same reading `test-shell` gives its transcript.
+/// the want before it matched.
+///
+/// *At or after*, rather than after, because a shell says several of these
+/// things on one line: `[1]  + suspended  sleep 30` is both the state and
+/// the command, and a reading that demanded a new line for each would be
+/// asking for output no shell produces.
 fn seen_in_order(lines: &[String], wants: &[&str]) -> bool {
-    let mut rest = lines.iter();
-    wants
-        .iter()
-        .all(|want| rest.any(|line| line.contains(want)))
+    let mut from = 0;
+    for want in wants {
+        let found = lines
+            .iter()
+            .enumerate()
+            .skip(from)
+            .find(|(_, line)| line.contains(want));
+        match found {
+            Some((at, _)) => from = at,
+            None => return false,
+        }
+    }
+    true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::seen_in_order;
+
+    fn lines(text: &[&str]) -> Vec<String> {
+        text.iter().map(|line| (*line).to_owned()).collect()
+    }
+
+    #[test]
+    fn two_wants_may_share_one_line() {
+        let shown = lines(&["[1]  + suspended  sleep 30"]);
+        assert!(seen_in_order(&shown, &["suspended", "sleep 30"]));
+    }
+
+    #[test]
+    fn a_want_may_not_be_matched_by_an_earlier_line() {
+        let shown = lines(&["sleep 30", "[1]  + suspended"]);
+        assert!(!seen_in_order(&shown, &["suspended", "sleep 30"]));
+    }
+
+    #[test]
+    fn nothing_wanted_is_always_seen() {
+        assert!(seen_in_order(&lines(&[]), &[]));
+    }
 }

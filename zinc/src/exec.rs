@@ -948,10 +948,19 @@ fn run_simple(
 }
 
 /// Restore default signal dispositions in a child about to exec.
+///
+/// Every signal the interactive shell ignores is here, and `SIGTERM` is why
+/// the list is not shorter: an ignored disposition survives `execve`, so a
+/// child that kept the shell's would ignore `kill %1` -- and so would the
+/// program it exec'd. The job would then be reported *done* thirty seconds
+/// later when `sleep` ended on its own, with nothing to say the signal had
+/// been dropped on the floor. Found by `cargo xtask test-jobs` on Ferrix.
 pub(crate) fn reset_signals() {
     for sig in [
         libc::SIGINT,
         libc::SIGQUIT,
+        libc::SIGTERM,
+        libc::SIGHUP,
         libc::SIGTSTP,
         libc::SIGTTIN,
         libc::SIGTTOU,

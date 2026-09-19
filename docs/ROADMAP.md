@@ -100,7 +100,7 @@ session sizes them.
 | Stage 22, Steam: the parts with a first guess (glibc under the runtime 13, bubblewrap's rest 13, sound 30, Venus 8, XWayland counted above) | 64 | 2026-09-23 to -24 |
 | Stage 22, Steam: the 32-bit x86 ABI and what the runtime and Proton find missing | unsized, ≈ 100 as a guess | 2026-09-24 to -25 |
 | Stage 14, real-time domains | *month* ≈ 40 | 2026-09-25 to -26 |
-| Stage 15, a real userland | *week* ≈ 20; most of it landed as zinc and uutils | 2026-09-26 |
+| Stage 15, a real userland | *week* ≈ 20, of which job control is spent; most of the rest landed as zinc and uutils, and what is left is an init | 2026-09-26 |
 | Stage 16, `rustc` | *the goal* ≈ 40 | 2026-09-26 to -27 |
 | Stage 20, self-hosting | *longer*, unsized | after 16 |
 | Stage 21, bare metal and a GPU of Ferrix's own | over 100, unsized | when the customer wants bare metal |
@@ -3431,6 +3431,53 @@ Static musl busybox as `/bin`, a working init, job control, ttys, pipes. Enough
 of a system to be used rather than demonstrated.
 
 **Exit:** an interactive shell over the serial console that a person can use.
+
+**Most of this stage arrived early, under other stages' names.** `/bin` is
+the uutils family and zinc rather than busybox (`docs/UUTILS.md`), pipes and
+the pseudo-terminals are stage 8's and stage 18's, and the console's line
+discipline -- `ICANON`, `ISIG`, `ECHO`, the signal characters -- has been
+honoured since stage 8, over a receive interrupt since the UART drivers
+gained one. What was left when this stage was looked at properly on
+2026-09-19 was not the kernel's at all: every system call job control is made
+of had been answered since stage 7 and nothing in user space used them.
+
+**Done -- job control, and a gate that types (2026-09-19).** `zinc/src/jobs.rs`
+is the shell's half of what the kernel already offered. A pipeline is one
+process group, so `kill %1` and the terminal's Ctrl-C reach all of it; a
+foreground job is handed the terminal with `tcsetpgrp` and the shell takes it
+back when the job ends or stops; a job stopped by Ctrl-Z stays in a table
+that `jobs`, `fg`, `bg`, `wait`, `disown` and `kill %1` name, with zsh's `%+`,
+`%-`, `%n`, `%name` and `%?text` specifications and zsh's lines
+(`[1]  + suspended  sleep 30`). The shell steals the terminal before its
+first prompt, stopping its own group until it has it, as the glibc manual's
+job-control shell does -- a shell started in the background is otherwise
+stopped by `SIGTTOU` at its first prompt with nothing on the screen to say
+why. `exit` with a job suspended is refused once and obeyed the second time.
+Before this the shipped shell answered `fg` with *no job control in this
+shell*.
+
+Two gates, because a process group is invisible in a transcript.
+`zinc/tests/pty_jobs.py`, in `cargo xtask check --zinc`, drives the shell on
+a host pseudo-terminal and reads the process groups themselves out of
+`/proc/<pid>/stat`: that the job's group is not the shell's, that a job's own
+children share it, and that the terminal's foreground group is the job's
+while it runs and the shell's again afterwards. Its negative control -- the
+same shell with the terminal handover taken out -- fails ten of its checks.
+`cargo xtask test-jobs` is the stage's exit read literally: it boots zinc as
+init on x86-64 with no script, so the kernel starts `sh -i`, and types a
+session at the serial port through QEMU's stdin -- `sleep 30 &`, `jobs`,
+`kill %1`, a pipeline, Ctrl-Z, `bg`, `fg`, Ctrl-C, `exit` -- requiring the
+answer to each keystroke. `qemu::Watching::type_in` is the new half of the
+harness: until now every gate here only read what the guest said.
+
+**Still to do:** a real init. The kernel starts the shell itself as pid 1
+(`kernel/src/init.rs`), so nothing in user space mounts `/proc` and `/dev`,
+reaps what a session orphans, gives a shell a session and a controlling
+terminal of its own, respawns one that dies, or brings the machine down. That
+is the rest of "a working init", and the other half of the word *ttys*: one
+console is one terminal, and a getty per terminal is what makes more of them.
+`test-jobs` is x86-64 only, because `sleep` is uutils' and uutils is built
+for x86-64 alone (`docs/UUTILS.md` D3).
 
 ---
 

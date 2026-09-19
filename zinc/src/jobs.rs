@@ -646,7 +646,17 @@ impl Jobs {
     }
 
     /// What `jobs` prints: one line per job, oldest first.
-    pub(crate) fn list(&self) -> Vec<u8> {
+    ///
+    /// The caller asks the kernel first ([`Jobs::update`]), so that a job
+    /// which has finished since the last prompt is listed as finished rather
+    /// than as what it was doing when it was last looked at.
+    pub(crate) fn list(&mut self) -> Vec<u8> {
+        self.update(false);
+        self.lines()
+    }
+
+    /// The same lines, without asking the kernel again.
+    fn lines(&self) -> Vec<u8> {
         let mut out = Vec::new();
         for job in &self.table {
             out.extend(line_for(job, self.mark_of(job.id)));
@@ -661,6 +671,7 @@ impl Jobs {
         self.update(false);
         let mut out = Vec::new();
         let mut finished = Vec::new();
+        let mut reported = Vec::new();
         for job in &self.table {
             let state = job.state();
             if state == JobState::Done {
@@ -670,9 +681,17 @@ impl Jobs {
                 continue;
             }
             out.extend(line_for(job, self.mark_of(job.id)));
+            reported.push(job.id);
         }
+        // Only what was printed counts as told. Marking a job that is still
+        // running would lose the one report that matters: a job killed a
+        // moment ago is still running at this prompt and finishes between
+        // this call and the next, and it is at the next one that the user
+        // has to be told it has gone.
         for job in &mut self.table {
-            job.notified = true;
+            if reported.contains(&job.id) {
+                job.notified = true;
+            }
         }
         if !out.is_empty() {
             let _ok = write_fd(2, &out);
@@ -790,4 +809,117 @@ fn join(words: &[Vec<u8>]) -> Vec<u8> {
         out.extend(crate::tok::unmetafy(word));
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{JobBuild, JobState, Jobs, ProcState};
+
+    /// A table with jobs in it, without forking anything: the pids are
+    /// numbers nobody waits for, which is all the bookkeeping needs.
+    fn table(jobs: &[(&str, i32)]) -> Jobs {
+        let mut table = Jobs::new();
+        for (text, pid) in jobs {
+            let mut build = JobBuild::new(false);
+            build.started(*pid);
+            build.text = text.as_bytes().to_vec();
+            let _id = table.add(build);
+        }
+        table
+    }
+
+    /// Say what the kernel would have said about a process, without one.
+    fn mark(table: &mut Jobs, pid: i32, state: ProcState) {
+        for job in &mut table.table {
+            for proc in &mut job.procs {
+                if proc.pid == pid {
+                    proc.state = state;
+                    job.notified = false;
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn job_numbers_fill_the_lowest_gap() {
+        let mut table = table(&[("one", 10), ("two", 11), ("three", 12)]);
+        table.remove(2);
+        let mut build = JobBuild::new(false);
+        build.started(13);
+        assert_eq!(table.add(build), 2);
+    }
+
+    #[test]
+    fn specifications_name_the_jobs_zsh_names() {
+        let table = table(&[("sleep 30", 10), ("cat file", 11)]);
+        // The last job started is `%+`, the one before it `%-`.
+        assert_eq!(table.find(b"%+"), Some(2));
+        assert_eq!(table.find(b"%%"), Some(2));
+        assert_eq!(table.find(b"%-"), Some(1));
+        assert_eq!(table.find(b"%1"), Some(1));
+        assert_eq!(table.find(b"1"), Some(1));
+        // By the command's first words, and by any text in it.
+        assert_eq!(table.find(b"%sleep"), Some(1));
+        assert_eq!(table.find(b"%?file"), Some(2));
+        assert_eq!(table.find(b"%nothing"), None);
+        assert_eq!(table.find(b"%9"), None);
+    }
+
+    #[test]
+    fn a_stopped_process_stops_the_job_and_makes_it_current() {
+        let mut table = table(&[("first", 10), ("second", 11)]);
+        mark(&mut table, 10, ProcState::Stopped(libc::SIGTSTP));
+        table.make_current(1);
+        assert_eq!(table.job(1).map(super::Job::state), Some(JobState::Stopped));
+        assert!(table.any_stopped());
+        assert_eq!(table.find(b"%+"), Some(1));
+    }
+
+    #[test]
+    fn a_job_runs_while_any_of_its_processes_does() {
+        let mut build = JobBuild::new(true);
+        build.started(20);
+        build.started(21);
+        let mut table = Jobs::new();
+        let id = table.add(build);
+        mark(&mut table, 20, ProcState::Exited(0));
+        assert_eq!(
+            table.job(id).map(super::Job::state),
+            Some(JobState::Running)
+        );
+        mark(&mut table, 21, ProcState::Exited(3));
+        assert_eq!(table.job(id).map(super::Job::state), Some(JobState::Done));
+        // The status is the last process's, as a pipeline's is.
+        assert_eq!(table.job(id).map(super::Job::status), Some(3));
+    }
+
+    #[test]
+    fn lines_read_as_zshs_do() {
+        let mut table = table(&[("sleep 30", 10)]);
+        mark(&mut table, 10, ProcState::Stopped(libc::SIGTSTP));
+        assert_eq!(
+            String::from_utf8_lossy(&table.lines()),
+            "[1]  + suspended  sleep 30\n"
+        );
+        mark(&mut table, 10, ProcState::Signalled(libc::SIGTERM));
+        assert_eq!(
+            String::from_utf8_lossy(&table.lines()),
+            "[1]  + terminated sleep 30\n"
+        );
+        mark(&mut table, 10, ProcState::Exited(2));
+        assert_eq!(
+            String::from_utf8_lossy(&table.lines()),
+            "[1]  + exit 2     sleep 30\n"
+        );
+    }
+
+    #[test]
+    fn a_pipelines_text_names_both_commands() {
+        let mut build = JobBuild::new(true);
+        build.add_text(&[b"sleep".to_vec(), b"30".to_vec()]);
+        build.add_text(&[b"cat".to_vec()]);
+        assert_eq!(build.text, b"sleep 30 | cat");
+        build.text_if_empty(b"not used");
+        assert_eq!(build.text, b"sleep 30 | cat");
+    }
 }

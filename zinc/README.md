@@ -39,8 +39,16 @@ the parser's trees.
   :gs`, arithmetic, `$'...'`, brace expansion, `~`, globbing with `(N)`.
 * **Builtins:** the ones scripts use first, from `echo`, `print` and `printf`
   to `typeset`, `read`, `source`, `autoload`, `getopts` and `trap EXIT`.
-* **Interactive:** a prompt with the plain `%` escapes and continuation lines.
-  No line editor, completion, job control or history yet.
+* **Interactive:** a prompt with the plain `%` escapes and continuation
+  lines, the line editor with completion and history, and job control: a
+  pipeline is one process group, the terminal is handed to the foreground
+  job and taken back, and `jobs`, `fg`, `bg`, `wait`, `disown` and `kill %1`
+  work over `%+`, `%-`, `%n`, `%name` and `%?text`. Ctrl-Z suspends, `fg`
+  and `bg` resume, and `exit` with a job suspended is refused once. What is
+  not there: no `SIGCHLD` handler, so a background job that finishes is
+  reported at the next prompt rather than at once (zsh's `NOTIFY`), and a
+  pipeline whose last element is a builtin runs that element in the shell,
+  which is not in the job's group and so is not suspended with it.
 * **A login shell:** `-l`, or a name beginning with `-`, as `login` and `su -`
   start one; `/etc/zshenv`, `.zshenv`, `/etc/zprofile`, `.zprofile`,
   `/etc/zshrc`, `.zshrc`, `/etc/zlogin` and `.zlogin` in zsh's order. It is

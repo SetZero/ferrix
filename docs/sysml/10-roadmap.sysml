@@ -400,12 +400,32 @@ package FerrixRoadmap {
              * that refuses an unschedulable set. */
     }
 
-    #planned requirement <'S15'> stage15Userland : Stage {
+    #inProgress requirement <'S15'> stage15Userland : Stage {
         attribute :>> number = 15;
-        attribute :>> status = StageStatus::Planned;
-        attribute :>> size = "week";
+        attribute :>> status = StageStatus::InProgress;
+        attribute :>> size = "week, about 20 points, of which job control is spent";
         doc /* Static musl busybox as /bin, a working init, job control, ttys,
-             * pipes. Exit: an interactive shell over serial a person can use. */
+             * pipes. Exit: an interactive shell over serial a person can use.
+             *
+             * Most of it arrived under other stages' names: /bin is the
+             * uutils family and zinc rather than busybox, pipes are stage
+             * 8's, pseudo-terminals stage 18's, and the console's line
+             * discipline stage 8's over stage 7's receive interrupt.
+             *
+             * Job control landed on 2026-09-19, in the shell rather than the
+             * kernel: every call it is made of -- setpgid, TIOCSPGRP,
+             * TIOCSCTTY, the line discipline's SIGTSTP, wait4's WUNTRACED --
+             * had been answered since stage 7 with nothing using them.
+             * zinc/src/jobs.rs puts a pipeline in one process group, hands
+             * the terminal to the foreground job and takes it back, and
+             * keeps the table jobs, fg, bg, wait, disown and kill %1 name.
+             * Verified by jobsSession and by zinc's pty gate.
+             *
+             * Left: a real init. The kernel starts the shell itself as pid
+             * 1, so nothing in user space mounts the pseudo-filesystems,
+             * reaps what a session orphans, gives a shell a session and a
+             * controlling terminal of its own, respawns it, or brings the
+             * machine down. That is also what a second tty would need. */
     }
 
     #planned requirement <'S16'> stage16Rustc : Stage {
@@ -648,6 +668,20 @@ package FerrixRoadmap {
         subject os : Ferrix;
         objective { verify armv7aPort; }
     }
+
+    verification def JobsSession {
+        doc /* cargo xtask test-jobs: boot zinc as init on x86-64 with no
+             * script, so the kernel starts sh -i, and type a session at the
+             * serial port through QEMU's stdin -- sleep 30 &, jobs, kill %1,
+             * a pipeline, Ctrl-Z, bg, fg, Ctrl-C, exit -- requiring the
+             * answer to each keystroke. The only gate here that types
+             * rather than reading what the guest said. x86-64 only: sleep is
+             * uutils', which is built for x86-64 alone. */
+        subject os : Ferrix;
+        objective { verify stage15Userland; }
+    }
+
+    verification jobsSession : JobsSession;
 
     #planned verification def RustcTest {
         doc /* The acceptance test itself: rustc hello.rs && ./hello inside
