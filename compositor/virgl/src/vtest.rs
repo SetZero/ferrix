@@ -21,7 +21,7 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-use crate::Region;
+use crate::{Device, Region, Texture, pipe};
 
 /// The server's name, looked for on `PATH`.
 const SERVER: &str = "virgl_test_server";
@@ -206,5 +206,52 @@ impl Vtest {
         let mut data = vec![0_u8; len as usize];
         self.stream.read_exact(&mut data)?;
         Ok(data)
+    }
+}
+
+impl Device for Vtest {
+    fn texture(&mut self, texture: Texture) -> io::Result<u32> {
+        self.create(
+            pipe::TEXTURE_2D,
+            texture.format,
+            texture.bind,
+            texture.width,
+            texture.height,
+        )
+    }
+
+    fn buffer(&mut self, bytes: u32) -> io::Result<u32> {
+        self.create(
+            pipe::BUFFER,
+            pipe::FORMAT_R8_UNORM,
+            pipe::BIND_VERTEX_BUFFER,
+            bytes,
+            1,
+        )
+    }
+
+    fn upload(
+        &mut self,
+        resource: u32,
+        region: Region,
+        stride: u32,
+        data: &[u8],
+    ) -> io::Result<()> {
+        // The socket carries exactly the bytes the region covers: whole
+        // strides for every row but the last, and that one's pixels.
+        let rows = region.height.saturating_sub(1) as usize;
+        let needed = rows * stride as usize + region.width as usize * 4;
+        let data = data
+            .get(..needed)
+            .ok_or_else(|| io::Error::other("pixels too short for their region"))?;
+        self.put(resource, region, stride, data)
+    }
+
+    fn submit(&mut self, words: &[u32]) -> io::Result<()> {
+        Self::submit(self, words)
+    }
+
+    fn read(&mut self, resource: u32, region: Region) -> io::Result<Vec<u8>> {
+        self.get(resource, region)
     }
 }

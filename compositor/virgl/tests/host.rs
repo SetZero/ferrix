@@ -146,7 +146,14 @@ fn a_solid_rectangle_lands_where_its_pixels_say() {
         shaders::TOKENS
     ));
     stream.bind_shader(FRAGMENT, pipe::SHADER_FRAGMENT);
-    stream.set_constants(pipe::SHADER_FRAGMENT, &[0.0, 1.0, 0.0, 1.0]);
+    stream.set_constants(
+        pipe::SHADER_FRAGMENT,
+        &[
+            0.0, 1.0, 0.0, 1.0, // green
+            32.0, 0.0, 32.0, 32.0, // the rectangle
+            0.0, 2.0, 0.0, 0.0, // square corners
+        ],
+    );
     // The top right quarter.
     quad(&mut stream, vertices, [32.0, 0.0, 64.0, 32.0]);
     server.submit(stream.words()).expect("submitted");
@@ -230,7 +237,7 @@ fn a_texture_is_drawn_the_way_up_it_was_written() {
     assert!(stream.create_shader(
         FRAGMENT,
         pipe::SHADER_FRAGMENT,
-        shaders::TEXTURED,
+        shaders::SURFACE,
         shaders::TOKENS
     ));
     stream.bind_shader(FRAGMENT, pipe::SHADER_FRAGMENT);
@@ -251,7 +258,14 @@ fn a_texture_is_drawn_the_way_up_it_was_written() {
     );
     stream.bind_sampler_states(pipe::SHADER_FRAGMENT, &[SAMPLER]);
     // Half opacity, over black: every channel halves.
-    stream.set_constants(pipe::SHADER_FRAGMENT, &[0.5, 0.0, 0.0, 0.0]);
+    stream.set_constants(
+        pipe::SHADER_FRAGMENT,
+        &[
+            0.5, 0.0, 0.0, 0.0, //
+            0.0, 0.0, 64.0, 64.0, //
+            0.0, 2.0, 0.0, 0.0,
+        ],
+    );
     quad(&mut stream, vertices, [0.0, 0.0, 64.0, 64.0]);
     server.submit(stream.words()).expect("submitted");
 
@@ -282,5 +296,175 @@ fn a_texture_is_drawn_the_way_up_it_was_written() {
     let wanted = [0xff00_0080, 0xff00_8000, 0xff80_0000, 0xff80_8080];
     for (found, wanted) in found.iter().zip(wanted) {
         assert!(close(*found, wanted), "{found:08x} is not {wanted:08x}");
+    }
+}
+
+/// A rounded rectangle is cut where `compositor/render` cuts one: a circle
+/// of radius 16 leaves the corner's own pixel out and the pixel on the
+/// diagonal at the curve in.
+#[test]
+fn a_corner_is_cut_by_the_superellipse() {
+    let Some(mut server) = server("rounded") else {
+        return;
+    };
+    let side = 64;
+    let target = server
+        .create(
+            pipe::TEXTURE_2D,
+            pipe::FORMAT_B8G8R8A8_UNORM,
+            pipe::BIND_RENDER_TARGET | pipe::BIND_SAMPLER_VIEW,
+            side,
+            side,
+        )
+        .expect("a target");
+    let vertices = server
+        .create(
+            pipe::BUFFER,
+            pipe::FORMAT_R8_UNORM,
+            pipe::BIND_VERTEX_BUFFER,
+            4096,
+            1,
+        )
+        .expect("a vertex buffer");
+    let mut stream = Stream::new();
+    begin(&mut stream, target, side, Blend::PREMULTIPLIED_OVER);
+    stream.clear([0.0, 0.0, 0.0, 1.0]);
+    assert!(stream.create_shader(
+        FRAGMENT,
+        pipe::SHADER_FRAGMENT,
+        shaders::SOLID,
+        shaders::TOKENS
+    ));
+    stream.bind_shader(FRAGMENT, pipe::SHADER_FRAGMENT);
+    stream.set_constants(
+        pipe::SHADER_FRAGMENT,
+        &[
+            1.0, 1.0, 1.0, 1.0, //
+            0.0, 0.0, 64.0, 64.0, //
+            16.0, 2.0, 0.0, 0.0,
+        ],
+    );
+    quad(&mut stream, vertices, [0.0, 0.0, 64.0, 64.0]);
+    server.submit(stream.words()).expect("submitted");
+    let data = server
+        .get(
+            target,
+            Region {
+                x: 0,
+                y: 0,
+                width: side,
+                height: side,
+            },
+        )
+        .expect("read back");
+    // Row 0's centre is 15.5 from the corner's centre line, so the circle
+    // reaches in to sqrt(16^2 - 15.5^2) = 3.97 of it: columns 0 to 11 are
+    // out, from 12 -- whose centre is 3.5 away -- in.
+    assert_eq!(pixel(&data, side, 0, 0), 0xff00_0000);
+    assert_eq!(pixel(&data, side, 11, 0), 0xff00_0000);
+    assert_eq!(pixel(&data, side, 12, 0), 0xffff_ffff);
+    // The same cut at every corner.
+    assert_eq!(pixel(&data, side, 63, 63), 0xff00_0000);
+    assert_eq!(pixel(&data, side, 52, 63), 0xff00_0000);
+    assert_eq!(pixel(&data, side, 51, 63), 0xffff_ffff);
+    assert_eq!(pixel(&data, side, 32, 32), 0xffff_ffff);
+}
+
+/// virglrenderer takes every shader here: each is made, bound and drawn
+/// with, and the context is still one that draws afterwards. A shader it
+/// could not parse puts the context in error, and nothing after it is run.
+#[test]
+fn every_shader_is_one_virglrenderer_takes() {
+    for (name, text) in shaders::FRAGMENTS {
+        // A socket of its own: the tests run side by side, and one of them
+        // is named for a shader too.
+        let Some(mut server) = server(&format!("every-{name}")) else {
+            return;
+        };
+        let side = 64;
+        let target = server
+            .create(
+                pipe::TEXTURE_2D,
+                pipe::FORMAT_B8G8R8A8_UNORM,
+                pipe::BIND_RENDER_TARGET | pipe::BIND_SAMPLER_VIEW,
+                side,
+                side,
+            )
+            .expect("a target");
+        let source = server
+            .create(
+                pipe::TEXTURE_2D,
+                pipe::FORMAT_B8G8R8A8_UNORM,
+                pipe::BIND_SAMPLER_VIEW,
+                side,
+                side,
+            )
+            .expect("a source");
+        let vertices = server
+            .create(
+                pipe::BUFFER,
+                pipe::FORMAT_R8_UNORM,
+                pipe::BIND_VERTEX_BUFFER,
+                4096,
+                1,
+            )
+            .expect("a vertex buffer");
+        let mut stream = Stream::new();
+        begin(&mut stream, target, side, Blend::REPLACE);
+        stream.clear([0.0, 0.0, 0.0, 1.0]);
+        stream.create_sampler_view(
+            VIEW,
+            View {
+                resource: source,
+                format: pipe::FORMAT_B8G8R8A8_UNORM,
+                opaque: false,
+            },
+        );
+        stream.set_sampler_views(pipe::SHADER_FRAGMENT, &[VIEW]);
+        stream.create_sampler_state(
+            SAMPLER,
+            Sampler {
+                filter: pipe::TEX_FILTER_LINEAR,
+            },
+        );
+        stream.bind_sampler_states(pipe::SHADER_FRAGMENT, &[SAMPLER]);
+        assert!(stream.create_shader(FRAGMENT, pipe::SHADER_FRAGMENT, text, shaders::TOKENS));
+        stream.bind_shader(FRAGMENT, pipe::SHADER_FRAGMENT);
+        stream.set_constants(pipe::SHADER_FRAGMENT, &[1.0; 16]);
+        quad(&mut stream, vertices, [0.0, 0.0, 32.0, 32.0]);
+        // And then one whose answer is known, in the other half.
+        assert!(stream.create_shader(
+            FRAGMENT + 100,
+            pipe::SHADER_FRAGMENT,
+            shaders::SOLID,
+            shaders::TOKENS
+        ));
+        stream.bind_shader(FRAGMENT + 100, pipe::SHADER_FRAGMENT);
+        stream.set_constants(
+            pipe::SHADER_FRAGMENT,
+            &[
+                0.0, 0.0, 1.0, 1.0, //
+                32.0, 32.0, 32.0, 32.0, //
+                0.0, 2.0, 0.0, 0.0,
+            ],
+        );
+        quad(&mut stream, vertices, [32.0, 32.0, 64.0, 64.0]);
+        server.submit(stream.words()).expect("submitted");
+        let data = server
+            .get(
+                target,
+                Region {
+                    x: 0,
+                    y: 0,
+                    width: side,
+                    height: side,
+                },
+            )
+            .expect("read back");
+        assert_eq!(
+            pixel(&data, side, 48, 48),
+            0xff00_00ff,
+            "{name}: the context stopped drawing"
+        );
     }
 }

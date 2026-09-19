@@ -309,11 +309,8 @@ fn bytes_written_into_a_buffer_are_padded_to_words() {
 #[test]
 fn every_shader_is_numbered_and_ends() {
     use crate::shaders;
-    for (text, stage) in [
-        (shaders::VERTEX, "VERT"),
-        (shaders::SOLID, "FRAG"),
-        (shaders::TEXTURED, "FRAG"),
-    ] {
+    let fragments = shaders::FRAGMENTS.iter().map(|(_, text)| (*text, "FRAG"));
+    for (text, stage) in core::iter::once((shaders::VERTEX, "VERT")).chain(fragments) {
         assert_eq!(text.lines().next(), Some(stage));
         let numbered: Vec<&str> = text
             .lines()
@@ -325,5 +322,11 @@ fn every_shader_is_numbered_and_ends() {
         }
         assert!(text.trim_end().ends_with("END"), "{text}");
         assert!(text.is_ascii());
+        // Every fragment shader takes the one vector the vertex shader
+        // hands on, by its semantic.
+        if stage == "FRAG" {
+            assert!(text.contains("DCL IN[0], GENERIC[0]"), "{text}");
+        }
     }
+    assert!(shaders::VERTEX.contains("DCL OUT[1], GENERIC[0]"));
 }

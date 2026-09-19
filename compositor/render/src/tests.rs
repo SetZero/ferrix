@@ -20,7 +20,7 @@ const BG: u32 = 0x0020_4060;
 /// picture here is of the layout and the decorations, and a dither over
 /// all of them costs eight megabytes of run-length encoding to say the
 /// same thing eleven times.
-fn plain_style() -> Style {
+pub(crate) fn plain_style() -> Style {
     Style::default().undithered()
 }
 
@@ -77,7 +77,7 @@ fn two_clients_tiled(settings: Settings) -> (State, MonitorLayout) {
 
 /// The same two clients on a monitor of another size, for a picture that
 /// wants to be smaller than the screen this crate's images are usually of.
-fn two_clients_on(size: (u32, u32), settings: Settings) -> (State, MonitorLayout) {
+pub(crate) fn two_clients_on(size: (u32, u32), settings: Settings) -> (State, MonitorLayout) {
     let mut state = State::new(settings);
     let _ = state
         .add_monitor(Monitor {
@@ -97,7 +97,9 @@ fn two_clients_on(size: (u32, u32), settings: Settings) -> (State, MonitorLayout
 }
 
 /// Each window's pattern, drawn at its client rectangle's size.
-fn client_buffers(layout: &MonitorLayout) -> BTreeMap<WindowId, (Vec<u8>, u32, u32, Format)> {
+pub(crate) fn client_buffers(
+    layout: &MonitorLayout,
+) -> BTreeMap<WindowId, (Vec<u8>, u32, u32, Format)> {
     layout
         .windows
         .iter()
@@ -116,7 +118,7 @@ fn client_buffers(layout: &MonitorLayout) -> BTreeMap<WindowId, (Vec<u8>, u32, u
         .collect()
 }
 
-fn surfaces(
+pub(crate) fn surfaces(
     buffers: &BTreeMap<WindowId, (Vec<u8>, u32, u32, Format)>,
 ) -> BTreeMap<WindowId, Surface<'_>> {
     buffers
@@ -663,7 +665,7 @@ fn a_bar_takes_its_strip_and_the_windows_tile_under_it() {
 /// The same two clients with Hyprland's two decorations on: corners cut to
 /// `decoration:rounding` and the unfocused window at
 /// `decoration:inactive_opacity`.
-fn decorated_style() -> Style {
+pub(crate) fn decorated_style() -> Style {
     let config = parse(
         "test",
         "decoration:rounding = 12\n\

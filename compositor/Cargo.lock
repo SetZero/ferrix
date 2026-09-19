@@ -161,6 +161,7 @@ dependencies = [
  "compositor-config",
  "compositor-fan",
  "compositor-layout",
+ "compositor-virgl",
  "tiny-skia",
 ]
 

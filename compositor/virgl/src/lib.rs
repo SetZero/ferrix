@@ -30,6 +30,7 @@
 //! parses and translates to GLSL. [`Stream::create_shader`] pads the text to
 //! words and says how long it was; what the text says is [`shaders`]'.
 
+mod device;
 pub mod pipe;
 pub mod shaders;
 mod stream;
@@ -38,6 +39,7 @@ pub mod vtest;
 #[cfg(test)]
 mod tests;
 
+pub use device::{Device, Texture};
 pub use stream::{
     Blend, Blit, Rasterizer, Region, Sampler, Stream, VertexBuffer, VertexElement, View,
 };

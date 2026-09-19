@@ -481,9 +481,45 @@ host's GL in under a second. A host without it skips them and says so.
 screen's pixels are the 2D boot's to judge, because `screendump` cannot read
 a GL console (§3.1).
 
-What is left of §3.5, in order: the rest of piece 3 (the rounded, bordered,
-shadowed and blurred shaders), piece 5 (the renderer behind a trait, with
-the software one the fallback), and piece 6 (scanout of what was drawn).
+**The shaders are GLSL, and Mesa compiles them -- on the gate host**
+(pieces 3 and 5, 2026-09-19). virgl carries a shader as TGSI assembly, and
+there is no Mesa on Ferrix to make it. So `compositor/virgl/shaders/` is
+GLSL, `tools/regenerate.sh` compiles each with Mesa's own virgl driver run
+against the test server (`GALLIUM_DRIVER=virpipe`, `VIRGL_DEBUG=tgsi`), and
+the TGSI text that driver sends is what is committed under `src/tgsi/`: the
+text a Linux guest's Mesa would have sent for the same shader. One vertex
+shader serves every fragment shader, which needed one thing a person would
+not guess: a linker packs two varyings to suit whichever of them a fragment
+shader reads, so the texture coordinate and the pixel's place travel in one
+`vec4`, packed by hand. Eight fragment shaders: a solid colour and a surface,
+each inside a rounded rectangle cut by the superellipse the software
+renderer cuts; a gradient read from the ramp `compositor/render` builds; the
+shadow's falloff; and Hyprland's four blur passes.
+
+**The frame is drawn through a trait, `compositor_render::Painter`**, which
+is the ten operations `render_onto` calls. `Canvas` implements it by calling
+itself, so not one byte of any expected image moved. `gpu::Canvas` implements
+it by writing streams for a `compositor_virgl::Device`, which is the render
+node in a guest and the test server on a host. Damage is geometry, not a
+scissor: a quad is an operation's rectangle cut by each rectangle of the
+damage, and a shape is cut in the fragment shader from the pixel's own
+place. A surface is a texture kept by the surface's *name* -- a client that
+draws into two buffers in turn is one surface and two addresses -- and what
+is moved each frame is the part under the damage. The blur is a pyramid of
+textures anchored to the canvas, so a level's pixel is always the same four
+of the level above whatever region is blurred, which is what the software
+blur snaps its region to a lattice to get.
+
+**It is the same picture.** `render/src/gpu/tests.rs` draws five scenes with
+both painters -- plain, decorated, a blur of the backdrop, a blur of the
+frame so far, and a second frame drawn only inside its damage -- and on the
+gate host no channel of any of them is more than two steps from the software
+frame, corners and blur included. The last also holds the GPU's frame to
+being byte-identical outside the damage.
+
+What is left of §3.5, in order: `hyprix` choosing the painter (piece 5's
+other half), and piece 6, scanout of what was drawn. Until piece 6 a GPU
+frame reaches the screen by being read back into the dumb buffer.
 
 ### 3a, which was not chosen for the compositor
 

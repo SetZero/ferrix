@@ -8,7 +8,8 @@ use compositor_layout::{MonitorLayout, Placed, WindowId};
 
 use crate::damage::intersect;
 use crate::{
-    Backdrop, Blur, Canvas, Color, Damage, Format, Gradient, Rect, Rounding, Shadow, Surface,
+    Backdrop, Blur, Canvas, Color, Damage, Format, Gradient, Painter, Rect, Rounding, Shadow,
+    Surface,
 };
 
 /// The colours a frame is drawn in, and the decorations it is drawn with.
@@ -579,9 +580,9 @@ pub fn render_with_layers(
     clippy::too_many_arguments,
     reason = "a frame is its canvas, its backdrop, its layout, its styles, its pixels and its damage"
 )]
-pub fn render_onto(
-    canvas: &mut Canvas,
-    mut backdrop: Option<&mut Backdrop>,
+pub fn render_onto<P: Painter>(
+    canvas: &mut P,
+    mut backdrop: Option<&mut P::Backdrop>,
     output: &MonitorLayout,
     origin: (i64, i64),
     styles: &Styles<'_>,
@@ -595,7 +596,7 @@ pub fn render_onto(
     // Everything behind the windows is drawn; that is the backdrop, and it
     // is taken now, before a window goes over it.
     if let Some(behind) = backdrop.as_deref_mut() {
-        behind.take(canvas, damage);
+        canvas.keep_backdrop(behind, damage);
     }
     for (at, placed) in output.windows.iter().enumerate() {
         if styles.of(placed.window).dim_around {
@@ -631,8 +632,8 @@ pub fn render_onto(
 
 /// Everything behind the windows: the background, and the layer surfaces
 /// under them. What a [`Backdrop`] is a copy of.
-fn behind_windows(
-    canvas: &mut Canvas,
+fn behind_windows<P: Painter>(
+    canvas: &mut P,
     origin: (i64, i64),
     style: &Style,
     layers: &[LayerFrame<'_>],
@@ -657,7 +658,7 @@ fn behind_windows(
 /// behind such a thing; drawing in order means "behind" is "already drawn",
 /// so one fill in the right place is the whole of it -- no second pass and
 /// no second canvas.
-fn dim_behind(canvas: &mut Canvas, style: &Style, damage: &Damage) {
+fn dim_behind<P: Painter>(canvas: &mut P, style: &Style, damage: &Damage) {
     if style.dim_around <= 0.0 {
         return;
     }
@@ -712,9 +713,9 @@ pub fn reads_backdrop(windows: &[Placed], at: usize, styles: &Styles<'_>) -> boo
 /// No border, no rounding and no shadow: a bar draws its own corners, and a
 /// compositor that put a border round a wallpaper would be drawing a line
 /// across the screen.
-fn draw_layer(
-    canvas: &mut Canvas,
-    backdrop: Option<&mut Backdrop>,
+fn draw_layer<P: Painter>(
+    canvas: &mut P,
+    backdrop: Option<&mut P::Backdrop>,
     layer: &LayerFrame<'_>,
     rect: Rect,
     style: &Style,
@@ -734,7 +735,7 @@ fn draw_layer(
         // hands over a backdrop only for a surface that asked and is drawn
         // above the windows.
         match backdrop {
-            Some(behind) => behind.blur_onto(canvas, rect, Rounding::none(), &blur, damage),
+            Some(behind) => canvas.blur_backdrop(behind, rect, Rounding::none(), &blur, damage),
             None => canvas.blur(rect, Rounding::none(), &blur, damage),
         }
     }
@@ -743,9 +744,9 @@ fn draw_layer(
 
 /// One window: its shadow, its border, the blur behind it, its own pixels
 /// and the dim over them, with whatever a `windowrule` changed.
-fn window(
-    canvas: &mut Canvas,
-    backdrop: Option<&mut Backdrop>,
+fn window<P: Painter>(
+    canvas: &mut P,
+    backdrop: Option<&mut P::Backdrop>,
     placed: &Placed,
     rect: Rect,
     styles: &Styles<'_>,
@@ -801,7 +802,7 @@ fn window(
     let overwritten = (blur.is_some_and(|blur| blur.size > 0 && blur.passes > 0)
         && backdrop
             .as_deref()
-            .is_some_and(|behind| behind.fits(canvas)))
+            .is_some_and(|behind| canvas.backdrop_fits(behind)))
         || surfaces.get(&placed.window).is_some_and(|surface| {
             (own.opaque || surface.format() == Format::Xrgb8888)
                 && opacity >= 1.0
@@ -870,7 +871,7 @@ fn window(
     }
     if let Some(blur) = blur {
         match backdrop {
-            Some(behind) => behind.blur_onto(canvas, rect, rounding, &blur, damage),
+            Some(behind) => canvas.blur_backdrop(behind, rect, rounding, &blur, damage),
             None => canvas.blur(rect, rounding, &blur, damage),
         }
     }

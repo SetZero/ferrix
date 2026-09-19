@@ -249,6 +249,11 @@ pub(crate) struct Axis {
 }
 
 impl Axis {
+    /// The sine, and whether each axis is flipped: what a shader is handed.
+    pub(crate) const fn parts(&self) -> (f32, bool, bool) {
+        (self.sine, self.flip_x, self.flip_y)
+    }
+
     /// The progress at `(x, y)`, 0 at the first colour and 1 at the last:
     /// `y·sin + x·(1 − sin)` of the folded coordinate.
     ///

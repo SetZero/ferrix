@@ -74,6 +74,7 @@ pub struct Surface<'a> {
     height: u32,
     stride: u32,
     format: Format,
+    name: u64,
 }
 
 impl<'a> Surface<'a> {
@@ -98,7 +99,30 @@ impl<'a> Surface<'a> {
             height,
             stride,
             format,
+            name: 0,
         })
+    }
+
+    /// The same pixels, said to be those of the thing called `name`: a
+    /// `wl_surface`, say, by its client and its id.
+    ///
+    /// The software renderer reads a surface's pixels afresh every time and
+    /// has no use for this. A renderer that keeps a copy of them somewhere
+    /// slower to reach -- a texture on a GPU -- needs to know that this
+    /// frame's pixels and the last one's are the *same surface*, so that it
+    /// moves only what changed; a client that draws into two buffers in
+    /// turn is one surface, and its pixels' address is not. Zero is no name
+    /// at all, and such a surface is moved whole every time it is drawn.
+    #[must_use]
+    pub const fn named(mut self, name: u64) -> Self {
+        self.name = name;
+        self
+    }
+
+    /// What [`Surface::named`] called it, or zero.
+    #[must_use]
+    pub const fn name(&self) -> u64 {
+        self.name
     }
 
     /// The same bytes read as opaque, whatever the client's format said.

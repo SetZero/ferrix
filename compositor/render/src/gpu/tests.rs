@@ -1,0 +1,382 @@
+//! The GPU's frame against the software one.
+//!
+//! The same [`render_onto`], the same layout, styles and pixels, drawn once
+//! by [`crate::Canvas`] and once by [`Canvas`] on virglrenderer's test
+//! server -- the renderer a guest's frames reach through QEMU, run on this
+//! host's GL. The software frame is the reference, byte-exact against its
+//! own expected images elsewhere in this crate; what is asked here is that
+//! the GPU's is the same picture.
+//!
+//! "The same" is not byte for byte, and the module's own comment says why.
+//! So a frame is judged by how many of its pixels are further than a small
+//! step from the reference's, and how far the furthest is: a shape cut a
+//! pixel differently at a corner is a handful of pixels, and a wrong colour,
+//! a missing decoration or a flipped texture is thousands.
+//!
+//! A host with no `virgl_test_server` runs none of this, and says so.
+
+use std::collections::BTreeMap;
+
+use compositor_layout::{MonitorLayout, Settings, WindowId};
+use compositor_virgl::vtest::Vtest;
+
+use super::{Backdrop, Canvas};
+use crate::tests::{client_buffers, decorated_style, plain_style, surfaces, two_clients_on};
+use crate::{Blur, Damage, Format, LayerFrame, Pattern, Rect, Style, Styles, Surface, render_onto};
+
+const SIZE: (u32, u32) = (512, 384);
+
+/// How far apart a channel may be and the two frames still be one picture.
+///
+/// On the host these were first run on, no channel of any frame here is
+/// more than two apart, corners and blur included: the shapes are cut at
+/// the same pixels and the rest is a GPU's rounding. Three leaves another
+/// host's GPU a step of its own, and anything wrong is tens.
+const STEP: u8 = 3;
+
+/// A server, or `None` with a line saying the test was skipped.
+#[expect(
+    clippy::print_stderr,
+    reason = "a test that did not run says so where a person reading the run will see it"
+)]
+fn server(name: &str) -> Option<Vtest> {
+    match Vtest::start(name) {
+        Ok(Some(server)) => Some(server),
+        Ok(None) => {
+            eprintln!("{name}: no virgl_test_server on this host; skipped");
+            None
+        }
+        Err(error) => {
+            eprintln!("{name}: virgl_test_server would not start ({error}); skipped");
+            None
+        }
+    }
+}
+
+/// How two frames differ: how many pixels have a colour channel more than
+/// `step` apart, and the furthest any channel is.
+fn difference(one: &[u8], other: &[u8], step: u8) -> (usize, u8) {
+    assert_eq!(one.len(), other.len());
+    let mut count = 0;
+    let mut furthest = 0;
+    for (a, b) in one.chunks_exact(4).zip(other.chunks_exact(4)) {
+        // Blue, green and red; the fourth byte is not part of the picture.
+        let apart = a
+            .iter()
+            .zip(b)
+            .take(3)
+            .map(|(a, b)| a.abs_diff(*b))
+            .max()
+            .unwrap_or(0);
+        furthest = furthest.max(apart);
+        if apart > step {
+            count += 1;
+        }
+    }
+    (count, furthest)
+}
+
+/// Both frames of one scene: the software one's bytes and the GPU's.
+/// `kept` is whether a backdrop is handed over, which decides where a tiled
+/// window's blur is read from.
+fn both(
+    name: &str,
+    layout: &MonitorLayout,
+    style: &Style,
+    surfaces: &BTreeMap<WindowId, Surface<'_>>,
+    layers: &[LayerFrame<'_>],
+    kept: bool,
+) -> Option<(Vec<u8>, Vec<u8>)> {
+    let server = server(name)?;
+    let whole = Damage::full(SIZE.0, SIZE.1);
+    let styles = Styles::plain(style);
+
+    let mut software = crate::Canvas::new(SIZE.0, SIZE.1).expect("a canvas");
+    let mut behind = crate::Backdrop::new(SIZE.0, SIZE.1).expect("a backdrop");
+    let _ = render_onto(
+        &mut software,
+        kept.then_some(&mut behind),
+        layout,
+        (0, 0),
+        &styles,
+        surfaces,
+        layers,
+        &whole,
+    );
+
+    let mut gpu = Canvas::new(server, SIZE.0, SIZE.1).expect("a GPU canvas");
+    let mut gpu_behind = Backdrop::new(SIZE.0, SIZE.1);
+    let _ = render_onto(
+        &mut gpu,
+        kept.then_some(&mut gpu_behind),
+        layout,
+        (0, 0),
+        &styles,
+        surfaces,
+        layers,
+        &whole,
+    );
+    gpu.finish().expect("the frame was drawn");
+    let drawn = gpu
+        .read(Rect::new(0, 0, i64::from(SIZE.0), i64::from(SIZE.1)))
+        .expect("read back");
+    Some((software.data().to_vec(), drawn))
+}
+
+#[test]
+fn two_plain_clients_are_the_same_picture() {
+    let (_, layout) = two_clients_on(SIZE, Settings::default());
+    let buffers = client_buffers(&layout);
+    let Some((software, gpu)) = both(
+        "plain",
+        &layout,
+        &plain_style(),
+        &surfaces(&buffers),
+        &[],
+        true,
+    ) else {
+        return;
+    };
+    let (count, furthest) = difference(&software, &gpu, STEP);
+    assert!(
+        count == 0,
+        "{count} pixels differ by more than {STEP}, the furthest by {furthest}"
+    );
+}
+
+#[test]
+fn rounding_opacity_shadow_and_dim_are_the_same_picture() {
+    let (_, layout) = two_clients_on(SIZE, Settings::default());
+    let buffers = client_buffers(&layout);
+    let Some((software, gpu)) = both(
+        "decorated",
+        &layout,
+        &decorated_style(),
+        &surfaces(&buffers),
+        &[],
+        true,
+    ) else {
+        return;
+    };
+    let (count, furthest) = difference(&software, &gpu, STEP);
+    assert!(
+        count == 0,
+        "{count} pixels differ by more than {STEP}, the furthest by {furthest}"
+    );
+}
+
+/// Two translucent windows over a wallpaper that is a checkerboard: a blur
+/// of one colour is that colour, and would prove nothing.
+fn blurred_scene(name: &str, kept: bool) -> Option<(Vec<u8>, Vec<u8>)> {
+    let (_, layout) = two_clients_on(SIZE, Settings::default());
+    let mut buffers = client_buffers(&layout);
+    for (data, _, _, format) in buffers.values_mut() {
+        *format = Format::Argb8888;
+        // One tint at a third, premultiplied: whatever edges show through
+        // the window are then the wallpaper's and not its own.
+        for pixel in data.chunks_exact_mut(4) {
+            pixel.copy_from_slice(&[40, 20, 10, 85]);
+        }
+    }
+    let wallpaper = Pattern::Checkerboard.draw(SIZE.0, SIZE.1);
+    let layers = [LayerFrame {
+        rect: Rect::new(0, 0, i64::from(SIZE.0), i64::from(SIZE.1)),
+        above: false,
+        surface: Some(
+            Surface::new(
+                &wallpaper,
+                SIZE.0,
+                SIZE.1,
+                SIZE.0 * 4,
+                Pattern::Checkerboard.format(),
+            )
+            .expect("a wallpaper"),
+        ),
+        dim_around: false,
+        blur: false,
+        xray: false,
+    }];
+    let style = Style {
+        blur: Some(Blur {
+            noise: 0.0,
+            ..Blur::new(4, 2)
+        }),
+        ..plain_style()
+    };
+    both(name, &layout, &style, &surfaces(&buffers), &layers, kept)
+}
+
+/// The blur is a blur: the checkerboard's hard edges, seen through a window,
+/// are gone from both frames. Without this the two could agree by neither
+/// having blurred anything.
+fn edges_through_the_window(frame: &[u8]) -> usize {
+    let (wide, tall) = (SIZE.0 as usize, SIZE.1 as usize);
+    let row = tall / 2;
+    (wide / 8..wide / 2 - wide / 8)
+        .filter(|x| {
+            let at = (row * wide + x) * 4;
+            match (frame.get(at), frame.get(at + 4)) {
+                (Some(here), Some(next)) => here.abs_diff(*next) > 24,
+                _ => false,
+            }
+        })
+        .count()
+}
+
+#[test]
+fn a_blur_of_the_backdrop_is_the_same_picture() {
+    let Some((software, gpu)) = blurred_scene("blurred-backdrop", true) else {
+        return;
+    };
+    assert_eq!(edges_through_the_window(&software), 0, "the reference");
+    assert_eq!(edges_through_the_window(&gpu), 0, "the GPU's");
+    let (count, furthest) = difference(&software, &gpu, STEP);
+    assert!(
+        count == 0,
+        "{count} pixels differ by more than {STEP}, the furthest by {furthest}"
+    );
+}
+
+#[test]
+fn a_blur_of_the_frame_so_far_is_the_same_picture() {
+    let Some((software, gpu)) = blurred_scene("blurred-frame", false) else {
+        return;
+    };
+    assert_eq!(edges_through_the_window(&software), 0, "the reference");
+    assert_eq!(edges_through_the_window(&gpu), 0, "the GPU's");
+    let (count, furthest) = difference(&software, &gpu, STEP);
+    assert!(
+        count == 0,
+        "{count} pixels differ by more than {STEP}, the furthest by {furthest}"
+    );
+}
+
+/// A second frame, drawn only inside its damage, is the software's second
+/// frame: part of a named surface is moved and no more, the backdrop's
+/// tiles outside the damage are not blurred again, and nothing outside the
+/// damage is touched.
+#[test]
+fn a_frame_drawn_inside_its_damage_is_the_same_picture() {
+    let Some(server) = server("damaged") else {
+        return;
+    };
+    let (_, layout) = two_clients_on(SIZE, Settings::default());
+    let mut buffers = client_buffers(&layout);
+    for (data, _, _, format) in buffers.values_mut() {
+        *format = Format::Argb8888;
+        for pixel in data.chunks_exact_mut(4) {
+            pixel.copy_from_slice(&[40, 20, 10, 85]);
+        }
+    }
+    let wallpaper = Pattern::Checkerboard.draw(SIZE.0, SIZE.1);
+    let style = Style {
+        blur: Some(Blur {
+            noise: 0.0,
+            ..Blur::new(4, 2)
+        }),
+        ..decorated_style()
+    };
+    let styles = Styles::plain(&style);
+    let mut software = crate::Canvas::new(SIZE.0, SIZE.1).expect("a canvas");
+    let mut behind = crate::Backdrop::new(SIZE.0, SIZE.1).expect("a backdrop");
+    let mut gpu = Canvas::new(server, SIZE.0, SIZE.1).expect("a GPU canvas");
+    let mut gpu_behind = Backdrop::new(SIZE.0, SIZE.1);
+
+    let mut before = Vec::new();
+    let first = layout.windows.first().expect("a window");
+    // A patch in the first window, which is what its client draws next.
+    let patch = Rect::new(first.rect.x + 30, first.rect.y + 40, 50, 20);
+    for (frame, damage) in [Damage::full(SIZE.0, SIZE.1), {
+        let mut damage = Damage::default();
+        damage.add(patch);
+        damage
+    }]
+    .into_iter()
+    .enumerate()
+    {
+        if frame == 1 {
+            let (data, wide, _, _) = buffers.get_mut(&first.window).expect("its buffer");
+            let wide = *wide as usize;
+            for row in data.chunks_exact_mut(wide * 4).skip(40).take(20) {
+                for pixel in row.chunks_exact_mut(4).skip(30).take(50) {
+                    pixel.copy_from_slice(&[0, 0, 200, 255]);
+                }
+            }
+        }
+        let named: BTreeMap<WindowId, Surface<'_>> = surfaces(&buffers)
+            .into_iter()
+            .map(|(window, surface)| (window, surface.named(window.0)))
+            .collect();
+        let layers = [LayerFrame {
+            rect: Rect::new(0, 0, i64::from(SIZE.0), i64::from(SIZE.1)),
+            above: false,
+            surface: Some(
+                Surface::new(
+                    &wallpaper,
+                    SIZE.0,
+                    SIZE.1,
+                    SIZE.0 * 4,
+                    Pattern::Checkerboard.format(),
+                )
+                .expect("a wallpaper")
+                .named(1 << 32),
+            ),
+            dim_around: false,
+            blur: false,
+            xray: false,
+        }];
+        let _ = render_onto(
+            &mut software,
+            Some(&mut behind),
+            &layout,
+            (0, 0),
+            &styles,
+            &named,
+            &layers,
+            &damage,
+        );
+        let _ = render_onto(
+            &mut gpu,
+            Some(&mut gpu_behind),
+            &layout,
+            (0, 0),
+            &styles,
+            &named,
+            &layers,
+            &damage,
+        );
+        gpu.finish().expect("the frame was drawn");
+        if frame == 0 {
+            before = gpu
+                .read(Rect::new(0, 0, i64::from(SIZE.0), i64::from(SIZE.1)))
+                .expect("read back");
+        }
+    }
+    let drawn = gpu
+        .read(Rect::new(0, 0, i64::from(SIZE.0), i64::from(SIZE.1)))
+        .expect("read back");
+    let (count, furthest) = difference(software.data(), &drawn, STEP);
+    assert!(
+        count == 0,
+        "{count} pixels differ by more than {STEP}, the furthest by {furthest}"
+    );
+    // And the second frame changed the patch and nothing but the patch:
+    // outside the damage the GPU's frame is the first frame's bytes.
+    let mut inside = 0;
+    for (at, (was, is)) in before
+        .chunks_exact(4)
+        .zip(drawn.chunks_exact(4))
+        .enumerate()
+    {
+        let (x, y) = (at % SIZE.0 as usize, at / SIZE.0 as usize);
+        let place = (i64::try_from(x).unwrap_or(0), i64::try_from(y).unwrap_or(0));
+        let within = (patch.x..patch.right()).contains(&place.0)
+            && (patch.y..patch.bottom()).contains(&place.1);
+        if within {
+            inside += usize::from(was != is);
+        } else {
+            assert_eq!(was, is, "({x}, {y}) is outside the damage");
+        }
+    }
+    assert!(inside > 500, "only {inside} pixels of the patch changed");
+}

@@ -39,7 +39,7 @@ use crate::{Damage, Error, Rect};
 /// A multiple of every lattice [`Canvas::blur_from`] snaps to, the coarsest
 /// of which is `2^6`; small enough that a bar's blur is a row of them and
 /// large enough that a screen's worth of flags is a few hundred.
-const TILE: i64 = 64;
+pub(crate) const TILE: i64 = 64;
 
 /// What is behind the windows of one screen, and the blur of it.
 #[derive(Debug, Clone)]
@@ -108,7 +108,7 @@ fn cheaper_together(regions: &[Rect], reach: i64) -> Option<(usize, usize)> {
 /// whenever reading their one box costs no more than reading each, until no
 /// two are; whatever order they are joined in, each blur writes the pixels
 /// a blur of the whole window would.
-fn gathered(tiles: Vec<Rect>, reach: i64) -> Vec<Rect> {
+pub(crate) fn gathered(tiles: Vec<Rect>, reach: i64) -> Vec<Rect> {
     let mut regions = tiles;
     regions.sort_unstable_by_key(|tile| (tile.y, tile.x));
     regions.dedup();

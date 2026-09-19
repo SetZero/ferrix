@@ -1,0 +1,170 @@
+FRAG
+DCL IN[0], GENERIC[0], PERSPECTIVE
+DCL OUT[0], COLOR
+DCL SAMP[0]
+DCL SVIEW[0], 2D, FLOAT
+DCL CONST[0..1]
+DCL TEMP[0..128]
+IMM[0] UINT32 {1073741824, 1082130432, 3212836864, 1090519040}
+IMM[1] UINT32 {0, 1056964608, 1065353216, 1086324736}
+IMM[2] UINT32 {0, 1073741824, 1082130432, 1058605990}
+IMM[3] FLT32 {0x3f800000, 0x00000000, 0x00000000, 0x00000000}
+IMM[4] UINT32 {1050220167, 1058424226, 1038710997, 1062024951}
+IMM[5] UINT32 {1061997773, 1038174126, 3198744003, 1051260355}
+IMM[6] UINT32 {1077936128, 1051372203, 1059760811, 1065353216}
+IMM[7] UINT32 {3198855851, 3207244459, 0, 0}
+DCL TEMP[129..132]
+  0: MUL TEMP[9].xy, IN[0].zwxx, IMM[0].xxxx
+  1: MUL TEMP[10].xy, TEMP[9].xyxx, CONST[0].xyxx
+  2: TEX TEMP[11], TEMP[10].xyxx, SAMP[0], 2D
+  3: MUL TEMP[12], TEMP[11], IMM[0].yyyy
+  4: MUL TEMP[13].x, CONST[0].zxxx, IMM[0].zzzz
+  5: ADD TEMP[14].xy, TEMP[9].xyxx, TEMP[13].xxxx
+  6: MUL TEMP[15].xy, TEMP[14].xyxx, CONST[0].xyxx
+  7: TEX TEMP[16], TEMP[15].xyxx, SAMP[0], 2D
+  8: ADD TEMP[17], TEMP[12], TEMP[16]
+  9: ADD TEMP[18].xy, TEMP[9].xyxx, CONST[0].zzxx
+ 10: MUL TEMP[19].xy, TEMP[18].xyxx, CONST[0].xyxx
+ 11: TEX TEMP[20], TEMP[19].xyxx, SAMP[0], 2D
+ 12: ADD TEMP[21], TEMP[17], TEMP[20]
+ 13: MOV TEMP[4].x, CONST[0].zxxx
+ 14: MOV TEMP[4].y, TEMP[13].xxxx
+ 15: MUL TEMP[22].xy, TEMP[4].xyxx, IMM[0].zzzz
+ 16: ADD TEMP[23].xy, TEMP[9].xyxx, TEMP[4].xyxx
+ 17: MUL TEMP[24].xy, TEMP[23].xyxx, CONST[0].xyxx
+ 18: TEX TEMP[25], TEMP[24].xyxx, SAMP[0], 2D
+ 19: ADD TEMP[26], TEMP[21], TEMP[25]
+ 20: ADD TEMP[27].xy, TEMP[9].xyxx, TEMP[22].xyxx
+ 21: MUL TEMP[28].xy, TEMP[27].xyxx, CONST[0].xyxx
+ 22: TEX TEMP[29], TEMP[28].xyxx, SAMP[0], 2D
+ 23: ADD TEMP[30], TEMP[26], TEMP[29]
+ 24: DIV TEMP[8], TEMP[30], IMM[0].wwww
+ 25: MUL TEMP[31].xyz, TEMP[8].zxyx, IMM[0].zzzz
+ 26: FSNE TEMP[32].x, CONST[1].xxxx, IMM[1].xxxx
+ 27: UIF TEMP[32].xxxx :151
+ 28:   MIN TEMP[33].x, TEMP[8].yxxx, TEMP[8].zxxx
+ 29:   MIN TEMP[34].x, TEMP[8].xxxx, TEMP[33].xxxx
+ 30:   MUL TEMP[35].x, TEMP[34].xxxx, IMM[0].zzzz
+ 31:   MAX TEMP[36].x, TEMP[8].yxxx, TEMP[8].zxxx
+ 32:   MAX TEMP[37].x, TEMP[8].xxxx, TEMP[36].xxxx
+ 33:   ADD TEMP[38].x, TEMP[37].xxxx, TEMP[35].xxxx
+ 34:   ADD TEMP[39].x, TEMP[34].xxxx, TEMP[37].xxxx
+ 35:   MUL TEMP[40].x, TEMP[39].xxxx, IMM[1].yyyy
+ 36:   MUL TEMP[41].x, TEMP[40].xxxx, IMM[0].zzzz
+ 37:   FSLT TEMP[42].xy, TEMP[40].xxxx, IMM[1].zyzz
+ 38:   FSLT TEMP[43].x, IMM[1].xxxx, TEMP[40].xxxx
+ 39:   AND TEMP[44].x, TEMP[43].xxxx, TEMP[42].xxxx
+ 40:   ADD TEMP[45].x, IMM[1].zzzz, TEMP[41].xxxx
+ 41:   UCMP TEMP[46].x, TEMP[42].yxxx, TEMP[40].xxxx, TEMP[45].xxxx
+ 42:   MUL TEMP[47].x, TEMP[46].xxxx, IMM[0].xxxx
+ 43:   DIV TEMP[48].x, TEMP[38].xxxx, TEMP[47].xxxx
+ 44:   UCMP TEMP[49].x, TEMP[44].xxxx, TEMP[48].xxxx, IMM[1].xxxx
+ 45:   FSLT TEMP[50].x, IMM[1].xxxx, TEMP[38].xxxx
+ 46:   UIF TEMP[50].xxxx :59
+ 47:     ADD TEMP[51].xyz, TEMP[8].yzxx, TEMP[31].xyzx
+ 48:     DIV TEMP[52].xyz, TEMP[51].xyzx, TEMP[38].xxxx
+ 49:     ADD TEMP[53].xyz, IMM[2].xyzx, TEMP[52].xyzx
+ 50:     FSNE TEMP[54].xyz, TEMP[37].xxxx, TEMP[8].yzxx
+ 51:     FSEQ TEMP[55].xyz, TEMP[37].xxxx, TEMP[8].xyzx
+ 52:     AND TEMP[56].xyz, TEMP[55].xyzx, TEMP[54].xyzx
+ 53:     AND TEMP[57].xyz, TEMP[56].xyzx, IMM[3].xxxx
+ 54:     DP3 TEMP[58].x, TEMP[53].xyzx, TEMP[57].xyzx
+ 55:     DIV TEMP[59].x, TEMP[58].xxxx, IMM[1].wwww
+ 56:     ADD TEMP[60].x, TEMP[59].xxxx, IMM[1].zzzz
+ 57:     FSLT TEMP[61].x, TEMP[59].xxxx, IMM[1].xxxx
+ 58:     UCMP TEMP[7].x, TEMP[61].xxxx, TEMP[60].xxxx, TEMP[59].xxxx
+ 59:   ELSE :61
+ 60:     MOV TEMP[7].x, IMM[1].xxxx
+ 61:   ENDIF
+ 62:   MUL TEMP[62].xyz, TEMP[8], IMM[4].xyzx
+ 63:   MUL TEMP[63].xyz, TEMP[62].xyzx, TEMP[8]
+ 64:   ADD TEMP[64].x, TEMP[63].xxxx, TEMP[63].yxxx
+ 65:   ADD TEMP[65].x, TEMP[64].xxxx, TEMP[63].zxxx
+ 66:   RSQ TEMP[66].x, TEMP[65].xxxx
+ 67:   RCP TEMP[67].x, TEMP[66].xxxx
+ 68:   MUL TEMP[68].xy, IMM[5].xyxx, CONST[1].yyyy
+ 69:   MOV_SAT TEMP[69].x, TEMP[68].xxxx
+ 70:   MUL TEMP[70].x, TEMP[69].xxxx, IMM[0].zzzz
+ 71:   FSGE TEMP[71].x, TEMP[69].xxxx, TEMP[67].xxxx
+ 72:   UIF TEMP[71].xxxx :81
+ 73:     MUL TEMP[72].x, TEMP[69].xxxx, TEMP[69].xxxx
+ 74:     MAX TEMP[73].x, TEMP[65].xxxx, -TEMP[65].xxxx
+ 75:     MUL TEMP[74].x, TEMP[73].xxxx, IMM[0].zzzz
+ 76:     ADD TEMP[75].x, TEMP[72].xxxx, TEMP[74].xxxx
+ 77:     RSQ TEMP[76].x, TEMP[75].xxxx
+ 78:     RCP TEMP[77].x, TEMP[76].xxxx
+ 79:     MUL TEMP[78].x, TEMP[77].xxxx, IMM[0].zzzz
+ 80:     ADD TEMP[5].x, TEMP[69].xxxx, TEMP[78].xxxx
+ 81:   ELSE :91
+ 82:     ADD TEMP[79].x, IMM[1].zzzz, TEMP[70].xxxx
+ 83:     MUL TEMP[80].x, TEMP[79].xxxx, TEMP[79].xxxx
+ 84:     ADD TEMP[81].x, TEMP[67].xxxx, IMM[0].zzzz
+ 85:     MUL TEMP[82].x, TEMP[81].xxxx, TEMP[81].xxxx
+ 86:     MUL TEMP[83].x, TEMP[82].xxxx, IMM[0].zzzz
+ 87:     ADD TEMP[84].x, TEMP[80].xxxx, TEMP[83].xxxx
+ 88:     RSQ TEMP[85].x, TEMP[84].xxxx
+ 89:     RCP TEMP[86].x, TEMP[85].xxxx
+ 90:     ADD TEMP[5].x, TEMP[69].xxxx, TEMP[86].xxxx
+ 91:   ENDIF
+ 92:   FSLT TEMP[87].x, IMM[1].xxxx, TEMP[49].xxxx
+ 93:   UIF TEMP[87].xxxx :115
+ 94:     MUL TEMP[88].x, TEMP[49].xxxx, IMM[2].wwww
+ 95:     MUL TEMP[89].x, TEMP[88].xxxx, IMM[0].zzzz
+ 96:     ADD TEMP[90].x, IMM[1].zzzz, TEMP[89].xxxx
+ 97:     MUL TEMP[91].x, TEMP[90].xxxx, TEMP[90].xxxx
+ 98:     MUL TEMP[92].x, TEMP[5].xxxx, IMM[4].wwww
+ 99:     MUL TEMP[93].x, TEMP[92].xxxx, IMM[0].zzzz
+100:     ADD TEMP[94].x, IMM[1].zzzz, TEMP[93].xxxx
+101:     MUL TEMP[95].x, TEMP[94].xxxx, TEMP[94].xxxx
+102:     ADD TEMP[96].x, TEMP[91].xxxx, TEMP[95].xxxx
+103:     MUL TEMP[97].x, TEMP[96].xxxx, IMM[0].zzzz
+104:     ADD TEMP[98].x, IMM[1].zzzz, TEMP[97].xxxx
+105:     ADD TEMP[99].xy, TEMP[68].yyxx, IMM[5].zwzz
+106:     MUL TEMP[100].x, TEMP[99].xxxx, IMM[0].zzzz
+107:     ADD TEMP[101].x, TEMP[98].xxxx, TEMP[100].xxxx
+108:     ADD TEMP[102].x, TEMP[99].yxxx, TEMP[100].xxxx
+109:     DIV_SAT TEMP[103].x, TEMP[101].xxxx, TEMP[102].xxxx
+110:     MUL TEMP[104].x, IMM[0].xxxx, TEMP[103].xxxx
+111:     MUL TEMP[105].x, TEMP[104].xxxx, IMM[0].zzzz
+112:     ADD TEMP[106].x, IMM[6].xxxx, TEMP[105].xxxx
+113:     MUL TEMP[107].x, TEMP[103].xxxx, TEMP[106].xxxx
+114:     MUL TEMP[6].x, TEMP[103].xxxx, TEMP[107].xxxx
+115:   ELSE :117
+116:     MOV TEMP[6].x, IMM[1].xxxx
+117:   ENDIF
+118:   MUL TEMP[108].x, TEMP[6].xxxx, CONST[1].xxxx
+119:   ADD_SAT TEMP[109].x, TEMP[49].xxxx, TEMP[108].xxxx
+120:   MUL TEMP[110].x, TEMP[109].xxxx, IMM[0].zzzz
+121:   MUL TEMP[111].x, TEMP[7].xxxx, IMM[0].zzzz
+122:   ADD TEMP[112].xyz, IMM[6].yzwy, TEMP[111].xxxx
+123:   MUL TEMP[113].xyz, IMM[1].wwww, TEMP[112].xyzx
+124:   MUL TEMP[1].y, IMM[1].wwww, TEMP[7].xxxx
+125:   ADD TEMP[114].xy, TEMP[7].xxzw, IMM[7].xyxx
+126:   MUL TEMP[115].xy, IMM[1].wwww, TEMP[114].xyxx
+127:   MOV TEMP[3].x, TEMP[115].yxxx
+128:   MOV TEMP[3].y, IMM[1].xxxx
+129:   MOV TEMP[3].z, TEMP[113].xxzx
+130:   FSLT TEMP[116].xy, TEMP[7].xxzw, IMM[6].yzyy
+131:   MOV TEMP[2].x, IMM[1].xxxx
+132:   MOV TEMP[2].y, TEMP[113].xyxx
+133:   MOV TEMP[2].z, TEMP[115].xxxx
+134:   UCMP TEMP[117].xyz, TEMP[116].yyyx, TEMP[2].xyzx, TEMP[3].xyzx
+135:   MOV TEMP[1].x, TEMP[113].xxxx
+136:   MOV TEMP[1].z, IMM[1].xxxx
+137:   UCMP TEMP[118].xyz, TEMP[116].xxxx, TEMP[1], TEMP[117].xyzx
+138:   MIN TEMP[119].xyz, TEMP[118].xyzx, IMM[1].zzzz
+139:   MUL TEMP[120].x, IMM[0].xxxx, TEMP[109].xxxx
+140:   MUL TEMP[121].xyz, TEMP[120].xxxx, TEMP[119].xyzx
+141:   ADD TEMP[122].x, IMM[1].zzzz, TEMP[110].xxxx
+142:   ADD TEMP[123].xyz, TEMP[121].xyzx, TEMP[122].xxxx
+143:   MUL TEMP[124].xyz, TEMP[45].xxxx, TEMP[123].xyzx
+144:   ADD TEMP[125].x, TEMP[39].xxxx, IMM[0].zzzz
+145:   ADD TEMP[126].xyz, TEMP[124].xyzx, TEMP[125].xxxx
+146:   MUL TEMP[127].xyz, TEMP[40].xxxx, TEMP[123].xyzx
+147:   FSGE TEMP[128].x, TEMP[40].xxxx, IMM[1].yyyy
+148:   UCMP TEMP[0].xyz, TEMP[128].xxxx, TEMP[126].xyzx, TEMP[127].xyzx
+149:   MOV TEMP[0].w, TEMP[8].xxxw
+150:   MOV TEMP[8], TEMP[0]
+151: ENDIF
+152: MOV OUT[0], TEMP[8]
+153: END

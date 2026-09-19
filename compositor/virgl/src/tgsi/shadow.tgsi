@@ -1,0 +1,43 @@
+FRAG
+DCL IN[0], GENERIC[0], PERSPECTIVE
+DCL OUT[0], COLOR
+DCL CONST[0..2]
+DCL TEMP[0..29]
+IMM[0] UINT32 {3212836864, 0, 1065353216, 0}
+DCL TEMP[30..33]
+  0: MUL TEMP[1].xy, CONST[1].xyxx, IMM[0].xxxx
+  1: ADD TEMP[2].xy, IN[0].zwxx, TEMP[1].xyxx
+  2: MUL TEMP[3].xy, TEMP[2].xyxx, IMM[0].xxxx
+  3: ADD TEMP[4].xy, CONST[2].xxxx, TEMP[3].xyxx
+  4: MUL TEMP[5].xy, CONST[2].xyxx, IMM[0].xxxx
+  5: ADD TEMP[6].xy, CONST[1].zwxx, TEMP[5].xxxx
+  6: MUL TEMP[7].xy, TEMP[6].xyxx, IMM[0].xxxx
+  7: ADD TEMP[8].xy, TEMP[2].xyxx, TEMP[7].xyxx
+  8: MAX TEMP[9].xy, TEMP[4].xyxx, TEMP[8].xyxx
+  9: MAX TEMP[10].xy, TEMP[9].xyxx, IMM[0].yyyy
+ 10: MIN TEMP[11].x, TEMP[10].xxxx, TEMP[10].yxxx
+ 11: FSLT TEMP[12].x, IMM[0].yyyy, TEMP[11].xxxx
+ 12: UIF TEMP[12].xxxx :25
+ 13:   DP2 TEMP[13].x, TEMP[10].xyxx, TEMP[10].xyxx
+ 14:   RSQ TEMP[14].x, TEMP[13].xxxx
+ 15:   RCP TEMP[15].x, TEMP[14].xxxx
+ 16:   MUL TEMP[16].x, TEMP[15].xxxx, IMM[0].xxxx
+ 17:   ADD TEMP[17].x, CONST[2].xxxx, TEMP[5].yxxx
+ 18:   ADD TEMP[18].x, CONST[2].xxxx, TEMP[16].xxxx
+ 19:   DIV_SAT TEMP[19].x, TEMP[18].xxxx, CONST[2].yxxx
+ 20:   POW TEMP[20].x, TEMP[19].xxxx, CONST[2].zzzz
+ 21:   FSLT TEMP[21].x, TEMP[17].xxxx, TEMP[15].xxxx
+ 22:   UCMP TEMP[22].x, TEMP[21].xxxx, TEMP[20].xxxx, IMM[0].zzzz
+ 23:   FSLT TEMP[23].x, CONST[2].xxxx, TEMP[15].xxxx
+ 24:   UCMP TEMP[0].x, TEMP[23].xxxx, IMM[0].yyyy, TEMP[22].xxxx
+ 25: ELSE :33
+ 26:   ADD TEMP[24].xy, CONST[1].wzzw, TEMP[3].yxyx
+ 27:   MIN TEMP[25].xy, TEMP[2].yxxx, TEMP[24].xyxx
+ 28:   MIN TEMP[26].x, TEMP[25].xxxx, TEMP[25].yxxx
+ 29:   DIV_SAT TEMP[27].x, TEMP[26].xxxx, CONST[2].yxxx
+ 30:   POW TEMP[28].x, TEMP[27].xxxx, CONST[2].zzzz
+ 31:   FSLT TEMP[29].x, TEMP[26].xxxx, CONST[2].yxxx
+ 32:   UCMP TEMP[0].x, TEMP[29].xxxx, TEMP[28].xxxx, IMM[0].zzzz
+ 33: ENDIF
+ 34: MUL OUT[0], CONST[0], TEMP[0].xxxx
+ 35: END

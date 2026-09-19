@@ -11,6 +11,8 @@ publish.workspace = true
 compositor-config = { path = "../config" }
 compositor-fan = { path = "../fan" }
 compositor-layout = { path = "../layout" }
+# The GPU painter's streams. Pure Rust: words in a vector.
+compositor-virgl = { path = "../virgl" }
 # The rasteriser: pure Rust with no build script. Pinned exactly, since the
 # committed expected images are byte-exact and a new tiny-skia may round a
 # blend differently. Default features are off because `png-format` pulls in

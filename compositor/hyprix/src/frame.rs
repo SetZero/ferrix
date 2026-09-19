@@ -362,7 +362,9 @@ fn draw_windows(
         base: style,
         windows: styles,
     };
-    let _ = render_onto(
+    // Named outright: the frame is drawn by whichever painter it is handed,
+    // so nothing here is turned into one on the way in.
+    let _ = render_onto::<Canvas>(
         canvas,
         Some(backdrop),
         output,

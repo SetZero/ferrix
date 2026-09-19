@@ -1,0 +1,35 @@
+FRAG
+DCL IN[0], GENERIC[0], PERSPECTIVE
+DCL OUT[0], COLOR
+DCL SAMP[0]
+DCL SVIEW[0], 2D, FLOAT
+DCL CONST[0..2]
+DCL TEMP[0..21]
+IMM[0] UINT32 {3212836864, 0, 0, 0}
+IMM[1] FLT32 {0x3f800000, 0x00000000, 0x00000000, 0x00000000}
+DCL TEMP[22..25]
+  0: MOV TEMP[0].xy, IN[0].xyxx
+  1: TEX TEMP[1], TEMP[0].xyxx, SAMP[0], 2D
+  2: ADD TEMP[2].xy, CONST[1].xyxx, CONST[2].xxxx
+  3: MUL TEMP[3].xy, IN[0].zwxx, IMM[0].xxxx
+  4: ADD TEMP[4].xy, TEMP[2].xyxx, TEMP[3].xyxx
+  5: ADD TEMP[5].xy, CONST[1].xyxx, CONST[1].zwxx
+  6: MUL TEMP[6].x, CONST[2].xxxx, IMM[0].xxxx
+  7: ADD TEMP[7].xy, TEMP[5].xyxx, TEMP[6].xxxx
+  8: MUL TEMP[8].xy, TEMP[7].xyxx, IMM[0].xxxx
+  9: ADD TEMP[9].xy, IN[0].zwxx, TEMP[8].xyxx
+ 10: MAX TEMP[10].xy, TEMP[4].xyxx, TEMP[9].xyxx
+ 11: MAX TEMP[11].xy, TEMP[10].xyxx, IMM[0].yyyy
+ 12: MIN_PRECISE TEMP[12].x, CONST[2].xxxx, TEMP[11].xxxx
+ 13: MIN_PRECISE TEMP[13].x, TEMP[12].xxxx, TEMP[10].yxxx
+ 14: POW TEMP[14].x, TEMP[11].xxxx, CONST[2].yyyy
+ 15: POW TEMP[14].y, TEMP[11].yyyy, CONST[2].yyyy
+ 16: POW TEMP[15].x, CONST[2].xxxx, CONST[2].yyyy
+ 17: ADD TEMP[16].x, TEMP[14].xxxx, TEMP[14].yxxx
+ 18: FSLT TEMP[17].x, TEMP[16].xxxx, TEMP[15].xxxx
+ 19: FSGE TEMP[18].x, IMM[0].yyyy, TEMP[13].xxxx
+ 20: OR TEMP[19].x, TEMP[18].xxxx, TEMP[17].xxxx
+ 21: AND TEMP[20].x, TEMP[19].xxxx, IMM[1].xxxx
+ 22: MUL TEMP[21].x, CONST[0].xxxx, TEMP[20].xxxx
+ 23: MUL OUT[0], TEMP[1], TEMP[21].xxxx
+ 24: END

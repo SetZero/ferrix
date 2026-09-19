@@ -1,0 +1,63 @@
+FRAG
+DCL IN[0], GENERIC[0], PERSPECTIVE
+DCL OUT[0], COLOR
+DCL SAMP[0]
+DCL SVIEW[0], 2D, FLOAT
+DCL CONST[0]
+DCL TEMP[0..44]
+IMM[0] UINT32 {1056964608, 1073741824, 3212836864, 0}
+IMM[1] UINT32 {1094713344, 0, 0, 0}
+DCL TEMP[45..48]
+  0: MUL TEMP[6].xy, IN[0].zwxx, IMM[0].xxxx
+  1: MUL TEMP[7].x, IMM[0].yyyy, CONST[0].zxxx
+  2: MUL TEMP[8].x, TEMP[7].xxxx, IMM[0].zzzz
+  3: MOV TEMP[5].x, TEMP[8].xxxx
+  4: MOV TEMP[5].y, IMM[0].wwww
+  5: ADD TEMP[9].xy, TEMP[6].xyxx, TEMP[5].xyxx
+  6: MUL TEMP[10].xy, TEMP[9].xyxx, CONST[0].xyxx
+  7: TEX TEMP[11], TEMP[10].xyxx, SAMP[0], 2D
+  8: MUL TEMP[12].x, CONST[0].zxxx, IMM[0].zzzz
+  9: MOV TEMP[4].x, TEMP[12].xxxx
+ 10: MOV TEMP[4].y, CONST[0].xzxx
+ 11: ADD TEMP[13].xy, TEMP[6].xyxx, TEMP[4].xyxx
+ 12: MUL TEMP[14].xy, TEMP[13].xyxx, CONST[0].xyxx
+ 13: TEX TEMP[15], TEMP[14].xyxx, SAMP[0], 2D
+ 14: MUL TEMP[16], TEMP[15], IMM[0].yyyy
+ 15: ADD TEMP[17], TEMP[11], TEMP[16]
+ 16: MOV TEMP[3].x, IMM[0].wwww
+ 17: MOV TEMP[3].y, TEMP[7].xxxx
+ 18: ADD TEMP[18].xy, TEMP[6].xyxx, TEMP[3].xyxx
+ 19: MUL TEMP[19].xy, TEMP[18].xyxx, CONST[0].xyxx
+ 20: TEX TEMP[20], TEMP[19].xyxx, SAMP[0], 2D
+ 21: ADD TEMP[21], TEMP[17], TEMP[20]
+ 22: ADD TEMP[22].xy, TEMP[6].xyxx, CONST[0].zzxx
+ 23: MUL TEMP[23].xy, TEMP[22].xyxx, CONST[0].xyxx
+ 24: TEX TEMP[24], TEMP[23].xyxx, SAMP[0], 2D
+ 25: MUL TEMP[25], TEMP[24], IMM[0].yyyy
+ 26: ADD TEMP[26], TEMP[21], TEMP[25]
+ 27: MOV TEMP[2].x, TEMP[7].xxxx
+ 28: MOV TEMP[2].y, IMM[0].wwww
+ 29: ADD TEMP[27].xy, TEMP[6].xyxx, TEMP[2].xyxx
+ 30: MUL TEMP[28].xy, TEMP[27].xyxx, CONST[0].xyxx
+ 31: TEX TEMP[29], TEMP[28].xyxx, SAMP[0], 2D
+ 32: ADD TEMP[30], TEMP[26], TEMP[29]
+ 33: MOV TEMP[1].x, CONST[0].zxxx
+ 34: MOV TEMP[1].y, TEMP[12].xxxx
+ 35: ADD TEMP[31].xy, TEMP[6].xyxx, TEMP[1].xyxx
+ 36: MUL TEMP[32].xy, TEMP[31].xyxx, CONST[0].xyxx
+ 37: TEX TEMP[33], TEMP[32].xyxx, SAMP[0], 2D
+ 38: MUL TEMP[34], TEMP[33], IMM[0].yyyy
+ 39: ADD TEMP[35], TEMP[30], TEMP[34]
+ 40: MOV TEMP[0].x, IMM[0].wwww
+ 41: MOV TEMP[0].y, TEMP[8].xxxx
+ 42: ADD TEMP[36].xy, TEMP[6].xyxx, TEMP[0].xyxx
+ 43: MUL TEMP[37].xy, TEMP[36].xyxx, CONST[0].xyxx
+ 44: TEX TEMP[38], TEMP[37].xyxx, SAMP[0], 2D
+ 45: ADD TEMP[39], TEMP[35], TEMP[38]
+ 46: ADD TEMP[40].xy, TEMP[6].xyxx, TEMP[12].xxxx
+ 47: MUL TEMP[41].xy, TEMP[40].xyxx, CONST[0].xyxx
+ 48: TEX TEMP[42], TEMP[41].xyxx, SAMP[0], 2D
+ 49: MUL TEMP[43], TEMP[42], IMM[0].yyyy
+ 50: ADD TEMP[44], TEMP[39], TEMP[43]
+ 51: DIV OUT[0], TEMP[44], IMM[1].xxxx
+ 52: END

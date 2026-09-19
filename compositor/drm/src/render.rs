@@ -607,12 +607,18 @@ fn draw_and_read(node: &Render) -> io::Result<[u32; 3]> {
     stream.bind_shader(FRAGMENT, pipe::SHADER_FRAGMENT);
     let side = SIDE as f32;
     stream.set_constants(pipe::SHADER_VERTEX, &[2.0 / side, 2.0 / side, -1.0, -1.0]);
-    stream.set_constants(pipe::SHADER_FRAGMENT, &[0.0, 1.0, 0.0, 1.0]);
+    // Green, the rectangle it fills, and square corners.
+    let half = side / 2.0;
+    stream.set_constants(
+        pipe::SHADER_FRAGMENT,
+        &[
+            0.0, 1.0, 0.0, 1.0, half, 0.0, half, half, 0.0, 2.0, 0.0, 0.0,
+        ],
+    );
     stream.set_viewport(SIDE, SIDE);
 
     // The top right quarter as a strip, in pixels, each vertex its place
     // and a texture coordinate nothing reads.
-    let half = side / 2.0;
     let corners = [[half, 0.0], [side, 0.0], [half, half], [side, half]];
     let mut data = Vec::new();
     for corner in corners {

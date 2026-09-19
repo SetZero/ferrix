@@ -1,0 +1,16 @@
+VERT
+DCL IN[0]
+DCL IN[1]
+DCL OUT[0], POSITION
+DCL OUT[1], GENERIC[0]
+DCL CONST[0]
+DCL TEMP[0]
+IMM[0] UINT32 {0, 1065353216, 0, 0}
+DCL TEMP[1..4]
+  0: MUL TEMP[0].xy, IN[0].xyxx, CONST[0].xyxx
+  1: ADD OUT[0].xy, TEMP[0].xyxx, CONST[0].zwzz
+  2: MOV OUT[0].z, IMM[0].xxxx
+  3: MOV OUT[0].w, IMM[0].yyyy
+  4: MOV OUT[1].xy, IN[1].xyxx
+  5: MOV OUT[1].zw, IN[0].xxxy
+  6: END

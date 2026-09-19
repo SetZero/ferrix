@@ -96,7 +96,9 @@ mod cores;
 pub mod cursor;
 mod damage;
 mod frame;
+pub mod gpu;
 mod gradient;
+mod paint;
 mod patterns;
 mod scratch;
 
@@ -121,6 +123,7 @@ pub use frame::{
     render_onto, render_with_layers, scaled,
 };
 pub use gradient::Gradient;
+pub use paint::Painter;
 pub use patterns::Pattern;
 
 /// What the renderer could not do.
