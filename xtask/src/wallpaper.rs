@@ -98,13 +98,25 @@ const KINDS: [&str; 9] = [
 /// since the client copies that and scales any other.
 ///
 /// `None`, having said why, when there is to be none: `--wallpaper none`, or
-/// nothing kept.
-pub(crate) fn file(args: &Args, size: (u32, u32)) -> Option<Chosen> {
+/// nothing kept and none asked for.
+///
+/// # Errors
+///
+/// A `--wallpaper <name>` that names nothing kept. A name given is a
+/// request, and a request that cannot be met stops the run rather than
+/// quietly drawing a different desktop: a boot watched for a wallpaper that
+/// is not there shows a bare one, and a frame time measured on it is a wrong
+/// number rather than a missing one. Four measured runs were lost to that
+/// when the AV1 landing left `.fxvid` behind and the name went on matching
+/// nothing.
+pub(crate) fn file(args: &Args, size: (u32, u32)) -> Result<Option<Chosen>> {
     let asked = args.wallpaper.as_deref();
     if asked == Some("none") {
-        return None;
+        return Ok(None);
     }
-    let dir = kept_dir()?;
+    let Some(dir) = kept_dir() else {
+        return refuse_or_none(asked, "there is nowhere wallpapers are kept");
+    };
     let mut kept: Vec<String> = std::fs::read_dir(&dir)
         .ok()
         .into_iter()
@@ -123,22 +135,24 @@ pub(crate) fn file(args: &Args, size: (u32, u32)) -> Option<Chosen> {
         kept.retain(for_this_screen);
     }
     let Some(name) = choose(&kept, asked) else {
-        if asked.is_none() {
-            println!(
-                "  no wallpaper: {} holds none; `cargo xtask wallpapers --from <directory>`, or \
+        return refuse_or_none(
+            asked,
+            &format!(
+                "{} holds none; `cargo xtask wallpapers --from <directory>`, or \
                  `--from <host>:<directory>`, puts some there",
                 dir.display()
-            );
-        }
-        return None;
+            ),
+        );
     };
     let chosen = read_kept(&dir.join(&name));
     match &chosen {
         Some(Chosen::Still(_)) => println!("  wallpaper {name}"),
         Some(Chosen::Moving(_)) => println!("  wallpaper {name}, which moves"),
-        None => println!("  no wallpaper: {name} is not a picture `wallpapers` made"),
+        None => {
+            return refuse_or_none(asked, &format!("{name} is not a picture `wallpapers` made"));
+        }
     }
-    chosen
+    Ok(chosen)
 }
 
 /// What a run found to put behind the desktop.
@@ -284,6 +298,20 @@ fn names(source: &str) -> Option<Vec<String>> {
     (!pictures.is_empty()).then_some(pictures)
 }
 
+/// What a run with no wallpaper to show does: stop when one was asked for
+/// by name, and carry on, having said `why`, when none was.
+fn refuse_or_none(asked: Option<&str>, why: &str) -> Result<Option<Chosen>> {
+    match asked {
+        Some(asked) => Err(Error::new(format!(
+            "--wallpaper {asked}: no wallpaper is called anything like it, and {why}"
+        ))),
+        None => {
+            println!("  no wallpaper: {why}");
+            Ok(None)
+        }
+    }
+}
+
 /// Whether `name` ends in one of [`KINDS`].
 fn is_picture(name: &str) -> bool {
     Path::new(name)
@@ -297,11 +325,9 @@ fn is_picture(name: &str) -> bool {
 /// same desktop twice.
 fn choose(names: &[String], asked: Option<&str>) -> Option<String> {
     if let Some(asked) = asked {
-        let found = names.iter().find(|name| name.contains(asked));
-        if found.is_none() {
-            println!("  no wallpaper is called anything like {asked}");
-        }
-        return found.cloned();
+        // Saying nothing here: a name that matches nothing stops the run,
+        // and `refuse_or_none` is where that is said.
+        return names.iter().find(|name| name.contains(asked)).cloned();
     }
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -547,6 +573,31 @@ mod tests {
         assert_eq!(choose(&names, Some("hoshino")), None);
         assert!(choose(&names, None).is_some_and(|name| names.contains(&name)));
         assert_eq!(choose(&[], None), None);
+    }
+
+    /// A name that was asked for and cannot be met stops the run; asked for
+    /// nothing, the same emptiness is only a plain background.
+    ///
+    /// The difference is the whole of the rule: a boot told to show a
+    /// particular wallpaper and showing none is a different scene, and
+    /// anything measured on it is a wrong number rather than a missing one.
+    #[test]
+    fn a_wallpaper_asked_for_by_name_must_be_there() {
+        let refused = refuse_or_none(Some("amiya"), "nothing is kept");
+        let message = refused
+            .expect_err("a name that matches nothing stops")
+            .to_string();
+        assert!(
+            message.contains("amiya"),
+            "it says what was asked for: {message}"
+        );
+        assert!(message.contains("nothing is kept"), "and why: {message}");
+
+        let quiet = refuse_or_none(None, "nothing is kept");
+        assert!(
+            matches!(quiet, Ok(None)),
+            "asked for nothing, an empty directory is a plain background"
+        );
     }
 
     /// A kept picture is named for what it is of and the screen it was cut

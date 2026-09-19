@@ -1920,7 +1920,7 @@ pub(crate) fn run_compositor(args: &Args) -> Result<()> {
     // `mpvpaper ALL <file>` is started from a Linux desktop's `exec-once`:
     // the difference is the flag, and that the frames were decoded on a
     // machine that has a decoder.
-    let config = match crate::wallpaper::file(args, size) {
+    let config = match crate::wallpaper::file(args, size)? {
         Some(chosen) => {
             // A moving one is started the way `mpvpaper` is on a desktop,
             // down to the words: `-o no-audio` and `ALL` mean here what they
