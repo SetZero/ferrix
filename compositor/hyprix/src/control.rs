@@ -802,6 +802,12 @@ impl Events {
         (self.subscribers.len(), self.written)
     }
 
+    /// Whether an event subscriber needs state changes to be published.
+    #[must_use]
+    pub fn has_subscribers(&self) -> bool {
+        !self.subscribers.is_empty()
+    }
+
     /// The subscriber listener descriptor, for the compositor's event wait.
     #[must_use]
     pub fn raw_fd(&self) -> i32 {

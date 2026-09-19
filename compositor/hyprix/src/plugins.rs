@@ -163,6 +163,12 @@ impl Plugins {
             .any(|plugin| plugin.partial.contains('\n'))
     }
 
+    /// Whether a plugin subscribed to the compositor's state-change stream.
+    #[must_use]
+    pub fn watches(&self) -> bool {
+        self.loaded.iter().any(|plugin| plugin.subscribed)
+    }
+
     /// Whether some plugin handles the dispatcher `name`.
     #[must_use]
     pub fn handles(&self, name: &str) -> bool {

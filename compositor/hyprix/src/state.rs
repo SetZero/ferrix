@@ -1052,7 +1052,19 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
             .iter()
             .any(|slot| slot.client().watches_toplevels() || slot.client().lists_toplevels());
         let workspaces_watched = slots.iter().any(|slot| slot.client().watches_workspaces());
-        if events.is_some() || !plugins.is_empty() || watched || workspaces_watched {
+        let event_ready = events.as_ref().is_some_and(|socket| {
+            ready
+                .as_ref()
+                .is_none_or(|fds| fds.contains(&socket.raw_fd()))
+        });
+        let events_watched = events
+            .as_ref()
+            .is_some_and(crate::control::Events::has_subscribers);
+        // A plugin watcher needs every state change, even before it
+        // subscribes: its `Watcher` then starts at the state the plugin saw
+        // rather than replaying events from before `subscribe`.
+        let plugins_tracking = !plugins.is_empty() && (plugins.watches() || changed);
+        if event_ready || events_watched || plugins_tracking || watched || workspaces_watched {
             let snapshot = crate::control::snapshot(
                 &state,
                 &slots,
