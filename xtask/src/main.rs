@@ -53,6 +53,7 @@ mod flash;
 mod gateway;
 mod initramfs;
 mod input;
+mod jobs;
 mod native;
 mod net;
 mod noise;
@@ -133,6 +134,7 @@ COMMANDS:
     test-input    Boot compositor/evecho as init with virtio-input, send a key and a touch over QMP, and require them back
     test-seat     Boot the compositor with a client, type into it over QMP, and require the key and the keybind to land
     test-pty      Boot compositor/term as init, run a program on a pseudoterminal, and require its output back
+    test-jobs     Boot an interactive shell on the console, type a session with jobs at it, and require the answers
     test-threads  Boot threads-test as init and require std::thread, Mutex, mpsc and /proc's thread count
     check         Run every quality gate (fmt, clippy, layering, audits, tests, docs)
     host-clippy   check's host clippy step alone, as CI runs it
@@ -292,6 +294,7 @@ fn run() -> Result<()> {
         "test-input" => input::test_input(&args),
         "test-seat" => seat::test_seat(&args),
         "test-pty" => pty::test_pty(&args),
+        "test-jobs" => jobs::test_jobs(&args),
         "test-threads" => threads::test_threads(&args),
         "check" => check::run(&args),
         "host-clippy" => check::host_clippy(),

@@ -9,6 +9,7 @@ use crate::ast::{
 };
 use crate::ast::{Redir, RedirKind, Sublist, Sublist2};
 use crate::expand::{expand_pattern, expand_single, expand_words};
+use crate::jobs::JobBuild;
 use crate::lex::{AliasDef, Lexer};
 use crate::parse::Parser;
 use crate::pattern::Pattern;
@@ -43,6 +44,118 @@ pub(crate) fn write_fd(fd: i32, bytes: &[u8]) -> bool {
 fn fork() -> i32 {
     // SAFETY: the shell is single-threaded, so the child may run any code.
     unsafe { libc::fork() }
+}
+
+/// What a forked child of the shell becomes before it runs anything: a
+/// subshell, with no job table and no job being built.
+///
+/// A subshell's children are part of the job the parent shell started, not
+/// jobs of their own, so it neither makes process groups nor touches the
+/// terminal. This is also what stops a child from reaping, or reporting, the
+/// processes its parent is waiting for.
+fn enter_subshell(sh: &mut Shell) {
+    sh.subshell = true;
+    sh.building = None;
+    sh.jobs.disable();
+}
+
+/// Fork a process of the job being built and run `child` in it.
+///
+/// The child joins the job's process group, and takes the terminal when the
+/// job is a foreground one. Both sides set the group and both sides hand the
+/// terminal over, because which of the two runs first is not ordered: a child
+/// that reached `execve` before its parent had moved it would run in the
+/// shell's own group, where a Ctrl-C meant for it would reach the shell.
+fn spawn(sh: &mut Shell, child: impl FnOnce(&mut Shell) -> i32) -> i32 {
+    let control = sh.jobs.enabled() && sh.building.is_some();
+    let (pgid, foreground) = match &sh.building {
+        Some(build) => (build.pgid, build.foreground),
+        None => (0, false),
+    };
+    let tty = sh.jobs.tty();
+    let pid = fork();
+    if pid == 0 {
+        if control {
+            // SAFETY: setpgid has no memory-safety preconditions.
+            let _p = unsafe { libc::setpgid(0, pgid) };
+            if foreground && tty >= 0 {
+                let group = if pgid == 0 {
+                    // SAFETY: getpid has no preconditions.
+                    unsafe { libc::getpid() }
+                } else {
+                    pgid
+                };
+                // SAFETY: tcsetpgrp has no memory-safety preconditions.
+                let _t = unsafe { libc::tcsetpgrp(tty, group) };
+            }
+        }
+        enter_subshell(sh);
+        reset_signals();
+        let status = child(sh);
+        exit_now(status)
+    }
+    if pid > 0 {
+        if control {
+            let group = if pgid == 0 { pid } else { pgid };
+            // SAFETY: setpgid has no memory-safety preconditions.
+            let _p = unsafe { libc::setpgid(pid, group) };
+        }
+        if let Some(build) = &mut sh.building {
+            build.started(pid);
+        }
+    }
+    pid
+}
+
+/// Start the job a pipeline is, unless one is being built already.
+///
+/// Returns whether this call started it, which is what says who finishes it.
+fn begin_job(sh: &mut Shell, foreground: bool) -> bool {
+    if sh.building.is_some() {
+        return false;
+    }
+    sh.building = Some(JobBuild::new(foreground));
+    true
+}
+
+/// Put the job that has just been started in the table, and wait for it if
+/// it is a foreground one.
+///
+/// `elements` is how many commands the pipeline had. A job whose processes
+/// number fewer than that ended in the shell itself -- `seq 3 | read line`,
+/// whose last element is a builtin -- and then the status is already the
+/// shell's and the job's last process does not decide it.
+fn finish_job(sh: &mut Shell, elements: usize) {
+    let Some(mut build) = sh.building.take() else {
+        return;
+    };
+    if build.procs.is_empty() {
+        return;
+    }
+    // A pipeline's parts are expanded in the processes that run them, so the
+    // shell knows the words of a single command and not of a pipeline's
+    // elements. What the user typed names the job instead, and a job started
+    // where there is no such line -- a script's -- keeps the words it has.
+    if elements > 1 && !sh.line_text.is_empty() {
+        build.text = sh.line_text.clone();
+    }
+    build.text_if_empty(&sh.line_text);
+    let complete = build.procs.len() == elements;
+    let (foreground, last_pid) = (build.foreground, build.last_pid());
+    let id = sh.jobs.add(build);
+    if foreground {
+        let status = sh.jobs.foreground(id, false);
+        if complete {
+            sh.status = status;
+        }
+        return;
+    }
+    sh.last_bg = last_pid;
+    if sh.interactive {
+        let line = format!("[{id}] {last_pid}\n");
+        let _ok = write_fd(2, line.as_bytes());
+    }
+    sh.status = 0;
 }
 
 /// Wait for `pid` and turn its wait status into a shell status.
@@ -107,7 +220,7 @@ pub(crate) fn capture(sh: &mut Shell, cmd: &[u8]) -> Vec<u8> {
         close(r);
         dup2(w, 1);
         close(w);
-        sh.subshell = true;
+        enter_subshell(sh);
         run_string(sh, cmd);
         exit_now(sh.status);
     }
@@ -155,17 +268,29 @@ pub(crate) fn run_list(sh: &mut Shell, list: &List) {
         match item.mode {
             ListMode::Sync => run_sublist(sh, &item.sublist),
             ListMode::Async | ListMode::Disown => {
-                let pid = fork();
-                if pid == 0 {
-                    sh.subshell = true;
-                    run_sublist(sh, &item.sublist);
-                    exit_now(sh.status);
+                // The whole sublist runs in one process, which is the job's
+                // group leader: `a && b &` is one job, and its own children
+                // inherit the group, so one signal reaches all of it.
+                let mine = begin_job(sh, false);
+                let sublist = item.sublist.clone();
+                let pid = spawn(sh, move |sh| {
+                    run_sublist(sh, &sublist);
+                    sh.status
+                });
+                if pid < 0 {
+                    sh.building = None;
+                    sh.error("fork failed");
+                    sh.status = 1;
+                    return;
                 }
-                sh.last_bg = pid;
-                if item.mode == ListMode::Async {
-                    sh.jobs.push(pid);
+                if item.mode == ListMode::Disown {
+                    // Disowned: started, and then not this shell's business.
+                    sh.building = None;
+                    sh.last_bg = pid;
+                    sh.status = 0;
+                } else if mine {
+                    finish_job(sh, 1);
                 }
-                sh.status = 0;
             }
         }
     }
@@ -196,19 +321,34 @@ pub(crate) fn run_sublist2(sh: &mut Shell, s: &Sublist2) {
     }
 }
 
+/// Run a pipeline, which is what a job is made of.
+///
+/// Every process forked here joins one process group, so the terminal's
+/// signals reach the pipeline whole; `crate::jobs` says why that matters.
+/// The shell waits for them together in [`finish_job`] rather than one at a
+/// time, so that a Ctrl-Z in the middle of `a | b` suspends both.
 fn run_pipeline(sh: &mut Shell, p: &Pipeline) {
     let n = p.cmds.len();
-    if n <= 1 {
+    if n == 0 {
+        return;
+    }
+    let mine = begin_job(sh, true);
+    if n == 1 {
         if let Some(cmd) = p.cmds.first() {
             run_command(sh, cmd, false);
+        }
+        if mine {
+            finish_job(sh, 1);
         }
         return;
     }
     let mut prev: i32 = -1;
-    let mut pids = Vec::new();
     for (i, cmd) in p.cmds.iter().enumerate() {
         if i + 1 == n {
             // The last element runs in the shell, as in zsh: `x | read v`.
+            // An external command forks from there and joins the job like
+            // any other element; a builtin runs in the shell, which is not
+            // in the job's group and so cannot be suspended with it.
             let saved = if prev >= 0 { save_fd(0) } else { -2 };
             if prev >= 0 {
                 dup2(prev, 0);
@@ -225,11 +365,12 @@ fn run_pipeline(sh: &mut Shell, p: &Pipeline) {
         if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
             sh.error("pipe failed");
             sh.status = 1;
+            sh.building = None;
             return;
         }
         let [r, w] = fds;
-        let pid = fork();
-        if pid == 0 {
+        let cmd = cmd.clone();
+        let pid = spawn(sh, move |sh| {
             close(r);
             if prev >= 0 {
                 dup2(prev, 0);
@@ -237,22 +378,23 @@ fn run_pipeline(sh: &mut Shell, p: &Pipeline) {
             }
             dup2(w, 1);
             close(w);
-            sh.subshell = true;
-            run_command(sh, cmd, true);
-            exit_now(sh.status);
-        }
-        pids.push(pid);
+            run_command(sh, &cmd, true);
+            sh.status
+        });
         close(w);
         if prev >= 0 {
             close(prev);
         }
         prev = r;
+        if pid < 0 {
+            sh.error("fork failed");
+            sh.status = 1;
+            break;
+        }
     }
-    let status = sh.status;
-    for pid in pids {
-        let _s = wait_pid(pid);
+    if mine {
+        finish_job(sh, n);
     }
-    sh.status = status;
 }
 
 /// Duplicate `fd` above the user's range so it can be restored; -1 if closed.
@@ -770,7 +912,7 @@ fn run_simple(
         }
         return;
     }
-    let child = |sh: &mut Shell| -> ! {
+    let child = |sh: &mut Shell| -> i32 {
         for a in assigns {
             if let Err(e) = assign(sh, a, false) {
                 sh.error(&e);
@@ -786,20 +928,23 @@ fn run_simple(
         exec_program(sh, &args)
     };
     if in_child || exec {
-        child(sh);
+        exit_now(child(sh));
     }
-    let pid = fork();
-    if pid == 0 {
-        sh.subshell = true;
-        reset_signals();
-        child(sh);
+    if let Some(build) = &mut sh.building {
+        build.add_text(&args);
     }
+    let waiting = sh.building.is_none();
+    let pid = spawn(sh, child);
     if pid < 0 {
         sh.error("fork failed");
         sh.status = 1;
         return;
     }
-    sh.status = wait_pid(pid);
+    // A process of a job is waited for with the job, by `finish_job`, so
+    // that a pipeline is suspended and resumed as one thing.
+    if waiting {
+        sh.status = wait_pid(pid);
+    }
 }
 
 /// Restore default signal dispositions in a child about to exec.
@@ -1006,7 +1151,7 @@ fn run_compound(sh: &mut Shell, kind: &CmdKind) {
         CmdKind::Subsh(list) => {
             let pid = fork();
             if pid == 0 {
-                sh.subshell = true;
+                enter_subshell(sh);
                 run_list(sh, list);
                 exit_now(sh.status);
             }

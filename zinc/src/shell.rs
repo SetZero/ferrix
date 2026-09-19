@@ -104,8 +104,15 @@ pub(crate) struct Shell {
     /// The line an error counts from: the first line of the file, or of the
     /// body of the function being run.
     pub(crate) line_base: u64,
-    /// Children started with `&`.
-    pub(crate) jobs: Vec<i32>,
+    /// The jobs this shell started, and its side of the terminal.
+    pub(crate) jobs: crate::jobs::Jobs,
+    /// The job being built: the pipeline whose processes are being forked
+    /// now. Every fork made while it is set joins that job's process group
+    /// and is waited for by the pipeline rather than by the command.
+    pub(crate) building: Option<crate::jobs::JobBuild>,
+    /// The text of the line being run, which names a job that is not a
+    /// simple command -- `for ... done &`, a subshell.
+    pub(crate) line_text: Vec<u8>,
     /// Nesting of `source` and `.`: `return` leaves the file.
     pub(crate) source_depth: u32,
     /// `getopts`' position inside a bundled option argument.
@@ -271,7 +278,9 @@ impl Shell {
             subshell: false,
             lineno: 0,
             line_base: 0,
-            jobs: Vec::new(),
+            jobs: crate::jobs::Jobs::new(),
+            building: None,
+            line_text: Vec::new(),
             source_depth: 0,
             optpos: 1,
             subst_status: None,

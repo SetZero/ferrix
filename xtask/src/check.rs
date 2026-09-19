@@ -209,8 +209,9 @@ fn ferrousli(root: &std::path::Path) -> Result<()> {
 ///
 /// zinc is a workspace of its own too, and `build` only compiles it into the
 /// initramfs. These are the gates a zinc landing runs: formatting, clippy,
-/// the unit tests, and the line editor's completion driven through a
-/// pseudo-terminal, which is the only way to see what a Tab does.
+/// the unit tests, and two gates driven through a pseudo-terminal: the line
+/// editor's completion, which is the only way to see what a Tab does, and
+/// job control, which is the only way to see a process group at all.
 ///
 /// Clippy and the tests build with the `next` feature, so `zinc-next`, the
 /// port of zsh's runtime that lands in slices, meets the same gate as
@@ -274,6 +275,21 @@ fn zinc(root: &std::path::Path) -> Result<()> {
             command
         };
         cargo::run(command, "zinc/tests/pty_completion.py")
+    })?;
+    step("zinc: job control on a pty", || {
+        let script = "cargo build --release --target \"$1\" && \
+                      python3 tests/pty_jobs.py \"$CARGO_TARGET_DIR/$1/release/zinc\"";
+        let command = if cfg!(windows) {
+            crate::wsl::bash(&dir, script, &[TARGET])
+        } else {
+            let mut command = Command::new("bash");
+            let _ = command
+                .current_dir(&dir)
+                .env("CARGO_TARGET_DIR", paths::target_dir().join("zinc-check"))
+                .args(["-c", script, "bash", TARGET]);
+            command
+        };
+        cargo::run(command, "zinc/tests/pty_jobs.py")
     })
 }
 

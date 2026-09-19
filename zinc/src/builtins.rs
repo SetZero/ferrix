@@ -22,6 +22,7 @@ const BUILTINS: &[&[u8]] = &[
     b"compdef",
     b"continue",
     b"declare",
+    b"disown",
     b"echo",
     b"emulate",
     b"eval",
@@ -244,33 +245,13 @@ pub(crate) fn run(sh: &mut Shell, args: &[Vec<u8>]) -> i32 {
             i32::from(v == 0)
         }
         b"trap" => trap(sh, rest),
-        b"wait" => {
-            let pids: Vec<i32> = if rest.is_empty() {
-                std::mem::take(&mut sh.jobs)
-            } else {
-                rest.iter()
-                    .filter_map(|a| std::str::from_utf8(a).ok()?.parse().ok())
-                    .collect()
-            };
-            let mut st = 0;
-            for p in pids {
-                st = exec::wait_pid(p);
-            }
-            st
-        }
+        b"wait" => wait(sh, rest),
         b"jobs" => {
-            let text: String = sh
-                .jobs
-                .iter()
-                .enumerate()
-                .map(|(i, p)| format!("[{}]  running  {p}\n", i + 1))
-                .collect();
-            out(sh, 1, text.as_bytes())
+            let text = sh.jobs.list();
+            out(sh, 1, &text)
         }
-        b"fg" | b"bg" => {
-            sh.error(&format!("{}: no job control in this shell", lossy(name)));
-            1
-        }
+        b"fg" | b"bg" => resume(sh, name, rest),
+        b"disown" => disown(sh, rest),
         b"kill" => kill(sh, rest),
         b"umask" => umask(sh, rest),
         b"functions" => {
@@ -1284,6 +1265,88 @@ fn shift_builtin(sh: &mut Shell, args: &[Vec<u8>]) -> i32 {
     0
 }
 
+/// `fg` and `bg`: move a job between the foreground and the background.
+///
+/// With no argument both take `%+`, the job most recently started or
+/// stopped, which is what makes `fg` the answer to a Ctrl-Z.
+fn resume(sh: &mut Shell, name: &[u8], args: &[Vec<u8>]) -> i32 {
+    let specs: Vec<Vec<u8>> = if args.is_empty() {
+        vec![b"%+".to_vec()]
+    } else {
+        args.to_vec()
+    };
+    let mut status = 0;
+    for spec in &specs {
+        let Some(id) = sh.jobs.find(spec) else {
+            sh.error_at(&lossy(name), &format!("no such job: {}", lossy(spec)));
+            status = 1;
+            continue;
+        };
+        status = if name == b"fg" {
+            // The command comes back on the screen first, as zsh prints it,
+            // so that a job resumed minutes later says what it is.
+            let text = sh.jobs.text_of(id);
+            let mut line = text;
+            line.push(b'\n');
+            let _ok = write_fd(2, &line);
+            sh.jobs.foreground(id, true)
+        } else {
+            sh.jobs.background(id)
+        };
+    }
+    status
+}
+
+/// `wait`: for the jobs named, or for every job this shell started.
+///
+/// A number is a process id, as in zsh, and is waited for whether or not it
+/// is one of this shell's jobs; `%1` and its family name a job.
+fn wait(sh: &mut Shell, args: &[Vec<u8>]) -> i32 {
+    if args.is_empty() {
+        let mut status = 0;
+        for id in sh.jobs.ids() {
+            status = sh.jobs.wait_for(id);
+        }
+        return status;
+    }
+    let mut status = 0;
+    for arg in args {
+        if let Some(id) = sh.jobs.find(arg) {
+            status = sh.jobs.wait_for(id);
+            continue;
+        }
+        match std::str::from_utf8(arg).ok().and_then(|t| t.parse().ok()) {
+            Some(pid) => status = exec::wait_pid(pid),
+            None => {
+                sh.error_at("wait", &format!("no such job: {}", lossy(arg)));
+                status = 127;
+            }
+        }
+    }
+    status
+}
+
+/// `disown`: forget a job, so that nothing here waits for it or reports it
+/// again. The processes are left running.
+fn disown(sh: &mut Shell, args: &[Vec<u8>]) -> i32 {
+    let specs: Vec<Vec<u8>> = if args.is_empty() {
+        vec![b"%+".to_vec()]
+    } else {
+        args.to_vec()
+    };
+    let mut status = 0;
+    for spec in &specs {
+        match sh.jobs.find(spec) {
+            Some(id) => sh.jobs.remove(id),
+            None => {
+                sh.error_at("disown", &format!("no such job: {}", lossy(spec)));
+                status = 1;
+            }
+        }
+    }
+    status
+}
+
 fn kill(sh: &mut Shell, args: &[Vec<u8>]) -> i32 {
     let mut sig = libc::SIGTERM;
     let mut status = 0;
@@ -1298,6 +1361,28 @@ fn kill(sh: &mut Shell, args: &[Vec<u8>]) -> i32 {
                 None => {
                     sh.error_at("kill", &format!("unknown signal: {}", lossy(a)));
                     return 1;
+                }
+            }
+            continue;
+        }
+        // `kill %1` signals the job's whole process group, which is the
+        // point of the group: one signal for every part of a pipeline.
+        if a.first() == Some(&b'%') {
+            match sh.jobs.find(a).and_then(|id| sh.jobs.pgid(id)) {
+                Some(pgid) => {
+                    // SAFETY: kill has no memory-safety preconditions.
+                    if unsafe { libc::kill(-pgid, sig) } != 0 {
+                        let err = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
+                        sh.error_at(
+                            "kill",
+                            &format!("kill {} failed: {}", lossy(a), exec::errmsg(err)),
+                        );
+                        status = 1;
+                    }
+                }
+                None => {
+                    sh.error_at("kill", &format!("no such job: {}", lossy(a)));
+                    status = 1;
                 }
             }
             continue;

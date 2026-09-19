@@ -609,6 +609,9 @@ pub(crate) struct Watching<'a> {
     log: &'a mut std::fs::File,
     started: Instant,
     after: Vec<String>,
+    /// QEMU's standard input, which `-serial stdio` gives to the guest's
+    /// console: what a person at the terminal would type goes here.
+    keyboard: Option<&'a mut std::process::ChildStdin>,
 }
 
 impl std::fmt::Debug for Watching<'_> {
@@ -630,6 +633,36 @@ impl Watching<'_> {
     /// The lines read since, by [`Watching::read_more`].
     pub(crate) fn after(&self) -> &[String] {
         &self.after
+    }
+
+    /// Type `keys` at the guest's console, as a person at the terminal
+    /// would: the bytes reach the serial port, and the kernel's line
+    /// discipline and whatever is reading it do the rest.
+    ///
+    /// The transcript records what was typed, so a log read afterwards says
+    /// what the guest was answering.
+    ///
+    /// # Errors
+    ///
+    /// When there is no console to type at -- a run whose QEMU was not given
+    /// one -- or when the bytes cannot be written, which is QEMU having gone.
+    pub(crate) fn type_in(&mut self, keys: &[u8]) -> Result<()> {
+        let at = self.started.elapsed().as_secs_f64();
+        let shown = String::from_utf8_lossy(keys)
+            .replace('\n', "\\n")
+            .replace('\x03', "^C")
+            .replace('\x1a', "^Z")
+            .replace('\x04', "^D");
+        println!("  {at:6.2} > {shown}");
+        writeln!(self.log, "{at:6.2} > {shown}")?;
+        let Some(keyboard) = self.keyboard.as_mut() else {
+            return Err(Error::new(
+                "this boot has no console to type at: QEMU was started without one",
+            ));
+        };
+        keyboard.write_all(keys)?;
+        keyboard.flush()?;
+        Ok(())
     }
 
     /// Read lines until `enough` is true of them all, or until `deadline`.
@@ -689,7 +722,10 @@ fn watch_hooked(
     // out of it; everything else QEMU says there still reaches the terminal,
     // which the error below about a boot that never started depends on.
     // `crate::noise` says which message and why.
-    let _ = command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let _ = command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
 
     let mut child = command
         .spawn()
@@ -700,6 +736,11 @@ fn watch_hooked(
         .take()
         .ok_or_else(|| Error::new("QEMU produced no stdout to read"))?;
     let noise = child.stderr.take().map(crate::noise::Filter::start);
+    // The guest's keyboard. Held for the whole boot rather than dropped,
+    // because `-serial stdio` gives it to the guest's console: closing it
+    // would be a person walking away from the terminal, and a shell reading
+    // it would see end of input. A gate that types uses `Watching::type_in`.
+    let mut keyboard = child.stdin.take();
 
     // A reader thread and a channel, rather than a non-blocking read: the guest
     // may say nothing for seconds at a time, and the timeout has to apply to
@@ -774,7 +815,15 @@ fn watch_hooked(
     }
     // While QEMU still runs, so the hook can ask it things; a hook that fails
     // still lets QEMU be stopped and the log be kept.
-    let hooked = run_hook(at_marker, verdict, &mut lines, &receiver, &mut log, started);
+    let hooked = run_hook(
+        at_marker,
+        verdict,
+        &mut lines,
+        &receiver,
+        &mut log,
+        started,
+        keyboard.as_mut(),
+    );
     let status = finish(&mut child, verdict != Verdict::Silent)?;
     drop(receiver);
     let _ = reader.join();
@@ -818,6 +867,7 @@ fn run_hook(
     receiver: &mpsc::Receiver<String>,
     log: &mut std::fs::File,
     started: Instant,
+    keyboard: Option<&mut std::process::ChildStdin>,
 ) -> Result<()> {
     let Some(hook) = at_marker else { return Ok(()) };
     if verdict != Verdict::Reached {
@@ -829,6 +879,7 @@ fn run_hook(
         log,
         started,
         after: Vec::new(),
+        keyboard,
     };
     let answered = hook(&mut watching);
     let after = watching.after;

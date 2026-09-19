@@ -17,6 +17,7 @@ mod dquote;
 mod exec;
 mod expand;
 mod input;
+mod jobs;
 mod lex;
 mod lexword;
 mod param;
@@ -119,6 +120,11 @@ fn interactive_loop(sh: &mut Shell) -> ! {
     let mut buffer: Vec<u8> = Vec::new();
     let mut editor = zle::Editor::default();
     sh.at_prompt = true;
+    // Whether the last thing typed was an `exit` that was refused because
+    // jobs were suspended. zsh refuses once and obeys the second time, so
+    // that a session is never ended by a keystroke while work is stopped in
+    // it, and never held hostage either.
+    let mut warned = false;
     loop {
         let which: &[u8] = if buffer.is_empty() { b"PS1" } else { b"PS2" };
         let ps = sh.get(which).map(|v| v.joined()).unwrap_or_default();
@@ -136,24 +142,52 @@ fn interactive_loop(sh: &mut Shell) -> ! {
         }
         let text = std::mem::take(&mut buffer);
         editor.add_history(&tok::unmetafy(&text));
+        // What a job started on this line is called in `jobs`: a pipeline's
+        // elements are expanded in the processes that run them, so the line
+        // is the only place the whole command is known at once.
+        sh.line_text = trimmed(&tok::unmetafy(&text));
         exec::run_string(sh, &text);
+        sh.line_text.clear();
         sh.at_prompt = true;
         reap(sh);
-        match sh.flow {
-            Flow::Exit => finish(sh),
-            _ => sh.flow = Flow::Normal,
+        if sh.flow == Flow::Exit {
+            if leaving(sh, &mut warned) {
+                finish(sh);
+            }
+            sh.flow = Flow::Normal;
+            continue;
         }
+        sh.flow = Flow::Normal;
+        warned = false;
     }
 }
 
-/// Collect background children that have finished.
+/// Whether the shell should leave now, or refuse this once because jobs are
+/// suspended in it and say so.
+fn leaving(sh: &mut Shell, warned: &mut bool) -> bool {
+    if *warned || !sh.jobs.any_stopped() {
+        return true;
+    }
+    *warned = true;
+    let message = format!("{}: you have suspended jobs.\n", sh.name);
+    let _ok = exec::write_fd(2, message.as_bytes());
+    false
+}
+
+/// `text` without the white space around it: a job's line, as typed.
+fn trimmed(text: &[u8]) -> Vec<u8> {
+    let start = text.iter().position(|b| !b.is_ascii_whitespace());
+    let end = text.iter().rposition(|b| !b.is_ascii_whitespace());
+    match (start, end) {
+        (Some(start), Some(end)) => text.get(start..=end).unwrap_or(&[]).to_vec(),
+        _ => Vec::new(),
+    }
+}
+
+/// Report what the jobs did while the user was typing, and forget the ones
+/// that have finished: the prompt is where zsh says so without `NOTIFY`.
 fn reap(sh: &mut Shell) {
-    sh.jobs.retain(|&pid| {
-        let mut st = 0;
-        // SAFETY: st is a valid out-pointer.
-        let r = unsafe { libc::waitpid(pid, &raw mut st, libc::WNOHANG) };
-        r == 0
-    });
+    sh.jobs.notify();
 }
 
 fn source_if_exists(sh: &mut Shell, path: &[u8]) {
@@ -279,6 +313,13 @@ fn main() {
         exec::run_string(&mut sh, &tok::metafy(&text));
         finish(&mut sh);
     }
+    // Job control, before the signals below are ignored: taking the terminal
+    // means stopping the shell's own group until it has it, and a shell that
+    // ignored SIGTTIN could not be stopped that way. A shell whose terminal
+    // cannot be had -- no controlling terminal to be given -- runs on without
+    // it: jobs are still tracked and waited for, but nothing is moved between
+    // process groups.
+    let _control = sh.jobs.take_terminal();
     for sig in [
         libc::SIGINT,
         libc::SIGQUIT,
