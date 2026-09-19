@@ -12,6 +12,14 @@
 //! shared between processes, and a thread with a descriptor table or
 //! directories of its own. Nothing a C library makes asks for those.
 //!
+//! # Namespaces
+//!
+//! There are none, and a `CLONE_NEW*` flag is `EINVAL` here, which is what a
+//! Linux built without the matching `CONFIG_*_NS` answers. `unshare` has
+//! always said so; `clone` used to ignore the flags and hand back an ordinary
+//! child in the one namespace there is, so a program that asked to be
+//! sandboxed was told it got what it asked for. The two calls now agree.
+//!
 //! # `vfork` copies
 //!
 //! Linux's `vfork` child borrows its parent's memory until it calls `execve`
@@ -83,6 +91,32 @@ const CLONE_CHILD_CLEARTID: u64 = 0x0020_0000;
 /// Write the child's id into the child's memory.
 const CLONE_CHILD_SETTID: u64 = 0x0100_0000;
 
+/// Give the child a mount namespace of its own.
+const CLONE_NEWNS: u64 = 0x0002_0000;
+/// ... a cgroup namespace.
+const CLONE_NEWCGROUP: u64 = 0x0200_0000;
+/// ... a UTS namespace: its own host and domain name.
+const CLONE_NEWUTS: u64 = 0x0400_0000;
+/// ... a System V IPC and POSIX message queue namespace.
+const CLONE_NEWIPC: u64 = 0x0800_0000;
+/// ... a user namespace, which is what an unprivileged sandbox asks for first.
+const CLONE_NEWUSER: u64 = 0x1000_0000;
+/// ... a pid namespace.
+const CLONE_NEWPID: u64 = 0x2000_0000;
+/// ... a network namespace.
+const CLONE_NEWNET: u64 = 0x4000_0000;
+/// Every namespace a child could be asked to be given, and none of which
+/// exists. `CLONE_NEWTIME` is not among them because it is not reachable:
+/// its bit is inside `CSIGNAL`, so `clone` reads it as an exit signal, as
+/// Linux does, and [`clone3_request`] refuses `CSIGNAL` outright.
+const CLONE_NAMESPACES: u64 = CLONE_NEWNS
+    | CLONE_NEWCGROUP
+    | CLONE_NEWUTS
+    | CLONE_NEWIPC
+    | CLONE_NEWUSER
+    | CLONE_NEWPID
+    | CLONE_NEWNET;
+
 /// `wait4`: return at once if nothing has ended.
 const WNOHANG: u32 = 1;
 /// `wait4`: report stopped children too; `WSTOPPED` to `waitid`.
@@ -130,9 +164,10 @@ struct CloneRequest {
 ///
 /// # Errors
 ///
-/// `ENOSYS` for a thread or a pidfd; `ENOMEM` if the address space cannot be
-/// copied; `EAGAIN` with every pid in use or no task for the child; `EFAULT`
-/// for a bad id pointer; and what [`clone3_request`] refuses.
+/// `ENOSYS` for a thread or a pidfd; `EINVAL` for a `CLONE_NEW*` namespace,
+/// none of which exists; `ENOMEM` if the address space cannot be copied;
+/// `EAGAIN` with every pid in use or no task for the child; `EFAULT` for a bad
+/// id pointer; and what [`clone3_request`] refuses.
 pub(crate) fn sys_clone(
     parent: &Arc<Process>,
     call: Syscall,
@@ -310,6 +345,14 @@ fn clone_with(
         child_tid,
         tls,
     } = *request;
+    // A namespace asked for is a namespace that has to exist. Ignoring the
+    // flag would answer a sandbox's request for isolation with a child that
+    // has none and no way to tell, which is worse than refusing; `EINVAL` is
+    // what a kernel built without the namespace answers, and what `unshare`
+    // here has always answered for the same flags.
+    if flags & CLONE_NAMESPACES != 0 {
+        return Err(Errno::EINVAL);
+    }
     // Linux's own refusals: a thread shares its process's handlers, and
     // handlers shared without the memory they are in would run nothing.
     if flags & CLONE_THREAD != 0 && flags & CLONE_SIGHAND == 0 {

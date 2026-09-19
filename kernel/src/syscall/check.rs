@@ -197,6 +197,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     mark!(4);
     let forked = check_a_forked_child_is_waited_for()?;
     let threaded = check_a_thread_shares_its_process_and_ends_alone()?;
+    check_clone_refuses_every_namespace()?;
     let exits_together = check_two_last_threads_exiting_together_end_their_process()?;
     check_a_reader_blocked_in_syslog_is_released_by_a_kill()?;
     // The hand-off decided in the kernel first, so that a fault at one of its
@@ -5018,6 +5019,46 @@ fn check_a_thread_shares_its_process_and_ends_alone() -> Result<Option<i32>, &'s
         98 => Err("clone did not write a thread's id to parent_tid"),
         99 => Err("a thread's id was its process's pid"),
         _ => Err("a program that makes threads did not exit as it should"),
+    }
+}
+
+/// What [`arch::USER_NAMESPACE_PROGRAM`] exits with when both `clone` calls
+/// were refused.
+const NAMESPACE_STATUS: i32 = 44;
+
+/// A program asking `clone` for a namespace is refused, whichever it asks for.
+///
+/// There are no namespaces here, and `unshare` has always said so. `clone` and
+/// `clone3` did not: they never looked at the `CLONE_NEW*` bits, so a program
+/// that asked for a sandbox got an ordinary child in the one namespace there
+/// is, and no way to tell. The two calls now answer alike, with the `EINVAL` a
+/// Linux built without `CONFIG_*_NS` answers. The program's two calls name
+/// every namespace flag `clone` can reach between them; see
+/// [`arch::USER_NAMESPACE_PROGRAM`] for why `CLONE_NEWTIME` is not among them.
+fn check_clone_refuses_every_namespace() -> Result<(), &'static str> {
+    if arch::USER_NAMESPACE_PROGRAM.is_empty() {
+        return Ok(());
+    }
+    let file = image::build_with(
+        class_of_this_build(),
+        arch::ARCH.elf_machine(),
+        image::Shape::Good,
+        arch::USER_NAMESPACE_PROGRAM,
+    );
+    let status = exec::run(
+        &file,
+        &[b"/namespaces"],
+        &[],
+        [0x5a; ferrix_ustack::RANDOM_BYTES],
+    )
+    .map_err(|_| "a program that asks clone for namespaces could not be started")?;
+    match status {
+        NAMESPACE_STATUS => Ok(()),
+        98 => Err("clone with CLONE_NEWUSER, CLONE_NEWPID and CLONE_NEWNS was not refused"),
+        97 => Err(
+            "clone with CLONE_NEWCGROUP, CLONE_NEWUTS, CLONE_NEWIPC and CLONE_NEWNET was not refused",
+        ),
+        _ => Err("a program that asks clone for namespaces did not exit as it should"),
     }
 }
 
