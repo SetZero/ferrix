@@ -1,9 +1,11 @@
 # Clipboard: the host's selection and the guest's, joined over vdagent
 
-Version 1, drafted. Written by ferrix-a8 on 2026-09-19 at the user's asking
+Version 1, drafted. Written by ferrix-d3 on 2026-09-19 at the user's asking
 ("shared copy and paste between QEMU Ferrix and the host"). **Not yet approved
-by the product owner (ferrix-32);** §7 is the list of decisions that are the
-owner's and not this document's.
+by a product owner:** §7 is the list of decisions that are the owner's and not
+this document's, and no owner session was running when this was written --
+`ferrix-32`, whom `docs/BACKLOG.md` names, has ended. Until one answers, §7's
+draft answers are what the code assumes and each is marked where it is used.
 
 It has the shape of `docs/INPUT.md` on purpose, because it is the same kind of
 thing: a small, rare byte stream between a ring-3 virtio driver and a program
@@ -296,16 +298,26 @@ boot with an error.
 Each row is one landing and each is gated on its own. The first two need
 nothing from the kernel and are pure host-tested logic.
 
-| # | What | Where |
-|---|---|---|
-| 1 | this document | `docs/CLIPBOARD.md` |
-| 2 | the vdagent protocol, encode and decode | `libs/vdagent` |
-| 3 | the virtio-console device protocol | `libs/virtio/src/console.rs` |
-| 4 | the port control protocol | `libs/portctl` |
-| 5 | the kernel's port core and `/dev/vport0p1` | `kernel/src/port/`, `kernel/src/fs/devfs.rs` |
-| 6 | the driver, and `devmgr`'s table | `user/vport`, `user/devmgr` |
-| 7 | the agent | `user/vdagent` or `compositor/vdagent` |
-| 8 | `--clipboard`, and `test-clipboard` | `xtask` |
+| # | What | Where | State |
+|---|---|---|---|
+| 1 | this document | `docs/CLIPBOARD.md` | landed |
+| 2 | the vdagent protocol, encode and decode | `libs/vdagent` | landed |
+| 3 | the virtio-console device protocol | `libs/virtio/src/console.rs` | landed |
+| 4 | the port control protocol | `libs/portctl` | to do |
+| 5 | the kernel's port core and `/dev/vport0p1` | `kernel/src/port/`, `kernel/src/fs/devfs.rs` | to do |
+| 6 | the driver, and `devmgr`'s table | `user/vport`, `user/devmgr` | to do |
+| 7 | the agent | `user/vdagent` or `compositor/vdagent` | to do |
+| 8a | `--clipboard`: the device on the bus | `xtask` | landed |
+| 8b | `test-clipboard` | `xtask` | to do |
+
+Landings 2, 3 and 8a are on `clipboard-vdagent`. The three that are not yet
+done are the ones that need a decision in §7 or a new piece of kernel, and
+8a is worth its place in the order after all: `test-boot --arch x86_64
+--clipboard` reaches `FERRIX-BOOT-OK` with 9 PCI functions and 4 virtio
+transports where a plain boot has 8 and 3, and `devmgr` starts the same two
+drivers and fails none. So the device is enumerated, a node is published for
+it, and nothing claims it -- which is exactly the state landing 6 begins
+from, proven rather than assumed.
 
 ## 9. The test
 
