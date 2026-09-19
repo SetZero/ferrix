@@ -308,6 +308,57 @@ screen to show both of them in turn.
 them back, and `test-pty` runs a program on a pseudoterminal with no window
 at all. x86-64 and AArch64 only, as `--display` is.
 
+### Everything at once
+
+One command with every part of Ferrix that has a switch turned on:
+
+```
+FERRIX_QEMU=<a QEMU with a window and virglrenderer, if the one on PATH has neither> \
+cargo xtask run-compositor --arch x86_64 --gl --clipboard \
+    --size 1920x1080 --layout de,us --smp 4 --memory 1024
+```
+
+That is the desktop on the 3D card, in a window of this host's, at
+1920x1080, with two keyboard layouts a switch moves between, four CPUs,
+twice the default memory, a network, a wallpaper from
+`~/.local/share/ferrix/wallpapers` and a terminal running zinc already open.
+Every flag is described above or in `cargo xtask --help`; the ones worth
+saying twice:
+
+| | |
+|---|---|
+| `FERRIX_QEMU` | a QEMU that is not the one on `PATH`, a directory of its binaries or one binary. Distributions often build QEMU without a local display backend, and then there is no window to open -- xtask asks whichever QEMU it is what it has, falls back to VNC when it has none, and says which it chose. `--gl` wants virglrenderer as well |
+| `--gl` | the 3D card, with this host's GPU behind it. Turns `--display` on by itself. Without it the card is the 2D one and the compositor composites on the CPU |
+| `--smp`, `--memory` | 4 and 512 MiB by default. A desktop with a video wallpaper is the one workload here that notices more of either |
+| `--vnc :0` | instead of a window, for a machine reached over `ssh`. `--gl` still works: the frames are drawn off screen and copied out |
+| `--no-net` | the one thing in that command that is on by default and can only be turned *off* |
+
+There is no `--everything`, deliberately: every device a boot does not need
+is one fewer on the bus, and several of the gates exist to assert exactly
+what a machine enumerates.
+
+The same shape for `run`, which boots a program of your choosing rather than
+the compositor -- here `compositor/blank`, and `--init ferrousli` or a path
+to a busybox for a shell instead:
+
+```
+cargo xtask run --arch x86_64 --display --gl --input --net --clipboard --init blank
+```
+
+`--input` is the keyboard and the tablet, which `--display` brings along
+anyway; `run` is the one command that wants it said.
+
+**What `--clipboard` does today.** It puts a `virtio-serial` device on the
+bus with the port SPICE's agent protocol uses, and QEMU's own half of that
+protocol behind it, so the wire between the guest and the clipboard of
+whoever is watching is there and QEMU is talking on it. **Nothing in the
+guest answers yet** -- there is no driver for the device, no
+`/dev/vport0p1` and no agent, so copy and paste between Ferrix and the host
+does not work, and pressing `CTRL`+`V` will do nothing across that boundary.
+Copy and paste *between two Ferrix programs* is a different path and does
+work. [The clipboard design](docs/CLIPBOARD.md) is the whole plan and §8
+says which parts of it are built.
+
 ### On an STM32MP157-DK1 board
 
 The same ARMv7-A image boots the STM32MP157D-DK1 from its SD card, under

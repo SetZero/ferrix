@@ -87,8 +87,13 @@ pub(crate) struct Args {
     pub(crate) gl: bool,
     /// `--clipboard`: a `virtio-serial` device carrying the port named
     /// `com.redhat.spice.0`, with QEMU's own half of the SPICE agent
-    /// protocol behind it, so that the guest's clipboard and the clipboard of
-    /// whoever is watching the screen are joined (`docs/CLIPBOARD.md`).
+    /// protocol behind it, for a clipboard shared with whoever is watching
+    /// the screen (`docs/CLIPBOARD.md`).
+    ///
+    /// The device and the host's half of the protocol only: the guest has no
+    /// driver for it, no `/dev/vport0p1` and no agent, so today this puts a
+    /// device on the bus that nothing claims and shares nothing. §8 of that
+    /// document says what is still to build.
     ///
     /// Off by default, and asked for rather than brought by `--display`, for
     /// the reason `net` gives: it puts another device on the bus, and the bus

@@ -169,9 +169,11 @@ OPTIONS:
                                          A QEMU built without it says so and the 2D card is used
                                          [FERRIX_QEMU names a QEMU that is not the one on PATH: a
                                          directory of its binaries, or one binary]
-    --clipboard                          run, run-compositor: join the guest's clipboard to the
-                                         clipboard of whoever is watching, over a virtio-serial port
-                                         and QEMU's own half of the SPICE agent protocol
+    --clipboard                          run, run-compositor: a virtio-serial port carrying SPICE's
+                                         agent protocol, with QEMU's own host half behind it, for a
+                                         clipboard shared with whoever is watching. The device only:
+                                         no guest driver or agent exists yet, so nothing is shared
+                                         today (docs/CLIPBOARD.md §8)
     --vnc <DISPLAY>                      run --display, run-compositor: serve the screen over VNC
                                          at e.g. `:0` (127.0.0.1) rather than in a window of this host's
     --config <PATH>                      run-compositor: the hyprland.conf the guest is given
