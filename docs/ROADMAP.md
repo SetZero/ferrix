@@ -5487,26 +5487,36 @@ it; and a driver for a card of Ferrix's own later, in stage 21, when Ferrix
 runs on bare metal. Every effect keeps its software fallback with a stated
 frame-time bound, so the compositor is never GPU-only.
 
-**What this stage still owes.** The GPU, which is the largest thing left in
-this tree, in the order `docs/GPU.md` §3 gives and with its sizes: virtio-gpu
-3D in the ring-3 driver (13), a render node with the `virtgpu` ioctls and
-scanout of a 3D resource (13), the host half in xtask with a gate that can
-judge a GPU's picture (5), and a Rust virgl encoder as the compositor's own
-renderer behind a renderer trait, with the eight shaders of Hyprland's
-effects as TGSI (21) -- 52 points to a GPU-composited desktop. Mesa on
+**Done -- the GPU, Path A (2026-09-19).** The 52 points this paragraph used
+to owe are spent, in the four pieces `docs/GPU.md` §3 named: virtio-gpu 3D in
+the ring-3 driver, `/dev/dri/renderD128` with the `virtgpu` ioctls and
+scanout of a 3D resource, the host half in xtask, and a Rust virgl encoder
+behind a renderer trait with the software renderer still under it. The
+desktop composites on the GPU and the screen is shown the very texture the
+compositor drew into: a 1920x1080 frame of a video wallpaper behind a
+blurred translucent terminal went from 39 ms in software to 12, where 60 fps
+is 16.7 (§3.7 and §3.8). `cargo xtask test-compositor --gl` judges it from
+inside the guest, because QEMU cannot screendump a GL console. Mesa on
 ferrousli and `zwp_linux_dmabuf` come after, when clients render on the GPU
-themselves.
+themselves; they are the only part of the GPU road left.
 
-Of the protocols and keywords a Hyprland setup uses, what is left is:
+The protocols and keywords this paragraph used to list as left --
 `layerrule`, `zwp_virtual_keyboard`, `zwp_pointer_constraints` and
 `relative-pointer` (a game that grabs the pointer), `presentation-time`,
-drag-and-drop -- the other half of the four interfaces the clipboard already
-uses -- and `hyprctl getoption`. Each is a protocol or a table rather than a
-subsystem, and each is written the way the four above were: the XML
-vendored, the tables checked against libwayland's own, a program in
-`compositor/` that speaks it with no screen, a host test against the image
-the renderer blesses, and a boot of `cargo xtask test-compositor` that does
-it on Ferrix.
+drag-and-drop and `hyprctl getoption` -- have all landed, each written the
+way the four before them were: the XML vendored, the tables checked against
+libwayland's own, a program in `compositor/` that speaks it with no screen,
+a host test against the image the renderer blesses, and a boot of `cargo
+xtask test-compositor` that does it on Ferrix.
+
+**What this stage still owes** is XWayland (40 as a first guess:
+`xwayland_shell_v1` on the compositor's side and an X server on Ferrix,
+which stage 22 is what finally needs), the second-pass effects
+(`no_screen_share`, which means drawing the frame again without one surface
+in it, and `blur_popups`, which reads what is behind the frame being drawn),
+and `dwindle:precise_mouse_move`, which waits on dropping a dragged window
+back into the tiling. `docs/COMPOSITOR-DAMAGE-HANDOFF.md` §5 keeps that list
+and why each one is where it is.
 
 **Exit:** the stage 18 test with animations on, requiring a sequence of
 screendumps to show a window moving along the configured curve with rounded
@@ -5526,9 +5536,11 @@ met, and by `cargo xtask test-compositor` on x86-64 and on AArch64:
 * a plugin loaded from `plugin = /bin/plug`, adding a dispatcher a keybind
   presses.
 
-**Where the points stand (2026-09-18).** Of the stage's 144, about 100 are
-left, in three parts: the GPU path, 52, in the four pieces above, none of
-which is begun; XWayland, 40 as a first guess -- `xwayland_shell_v1` on the
+**Where the points stand (2026-09-19).** Of the stage's 144, about 48 are
+left. The GPU path's 52 are spent -- Path A landed on 2026-09-19, and what
+is left of that road is `zwp_linux_dmabuf` and a Mesa on ferrousli, for
+clients that render for themselves. What remains of the stage is XWayland,
+40 as a first guess -- `xwayland_shell_v1` on the
 compositor's side and an X server on Ferrix, which stage 22 is what finally
 needs; and the small remainder `docs/COMPOSITOR-DAMAGE-HANDOFF.md` §5 lists,
 about 8 when it was counted, of which `resize_on_border` and
@@ -5544,8 +5556,13 @@ since the blur optimisation's backdrop is the picture it asks for; `persistent_s
 followed once that close path existed, and the close path was a bug of its
 own: only a whole connection going took a window out of the layout, so a
 client that closed one of two left the layout tiling a window that was not
-there. The
-frame rate the exit asks for under the GPU path comes with the GPU path.
+there. That close path has its own test since 2026-09-19:
+`compositor/pattern`'s `Shape::Twin` is a client that opens a second
+`xdg_toplevel` once the first has drawn and destroys it with the connection
+still open, and the compositor must show the window that was kept, alone and
+filling the workspace. Nothing else in the tree opens two windows from one
+client, which is why the fix went in without one. The frame rate the exit
+asks for under the GPU path came with the GPU path.
 
 ---
 
