@@ -1353,6 +1353,42 @@ fn a_bar_is_told_which_windows_there_are_and_can_close_one() {
     );
 }
 
+/// The screen once it has stopped changing: shots until [`SAME`] of them in
+/// a row are equal, and that one.
+///
+/// This is what the 500 ms sleep it replaced was reaching for. It waits on
+/// the screen itself rather than on a clock, so a host that takes ten times
+/// as long to paint two windows gives the same picture rather than an
+/// earlier one. It never looks at what is *in* a shot, only at whether two
+/// are the same, so it cannot make a wrong frame pass.
+fn settled(socket: &Path) -> Result<compositor_shot::Shot, String> {
+    /// How many equal shots in a row mean the screen has stopped.
+    const SAME: usize = 4;
+    /// Between shots.
+    const APART: Duration = Duration::from_millis(100);
+    /// At most, which is well inside the compositor's own deadline.
+    const TRIES: usize = 60;
+
+    let mut last: Option<compositor_shot::Shot> = None;
+    let mut run = 0;
+    let mut latest = Err("no screenshot was ever taken".to_string());
+    for _ in 0..TRIES {
+        let taken = compositor_shot::take(socket, 0);
+        run = match (&taken, &last) {
+            (Ok(now), Some(before)) if now == before => run + 1,
+            (Ok(_), _) => 1,
+            (Err(_), _) => 0,
+        };
+        last = taken.as_ref().ok().cloned();
+        latest = taken;
+        if run >= SAME {
+            break;
+        }
+        std::thread::sleep(APART);
+    }
+    latest
+}
+
 /// A screenshot, through `zwlr_screencopy_v1`.
 ///
 /// `compositor/shot` is `grim` without the file format: it binds the
@@ -1371,7 +1407,10 @@ fn a_screenshot_is_the_frame_the_renderer_blesses() {
     let options = Options {
         display: socket.to_string_lossy().into_owned(),
         headless: Some((WIDTH, HEIGHT)),
-        deadline: Some(8000),
+        // Room for `settled` to wait out a busy host: it gives up long
+        // before this, and a run that reaches the deadline has gone wrong
+        // in some other way.
+        deadline: Some(30_000),
         config: Some(undithered(&work)),
         ..Options::default()
     };
@@ -1392,9 +1431,21 @@ fn a_screenshot_is_the_frame_the_renderer_blesses() {
             }));
             std::thread::sleep(Duration::from_millis(250));
         }
-        // Both windows are drawn by now, which is what the picture is of.
-        std::thread::sleep(Duration::from_millis(500));
-        let taken = compositor_shot::take(&for_clients, 0);
+        // Both windows are drawn by now, which is what the picture is of --
+        // and *by now* is not a length of time. A window is listed and laid
+        // out on its first commit, the one that carries no buffer, so the
+        // screen holds it as border and background alone for a while before
+        // its client paints. Sleeping through that gap works until the host
+        // is busy, and then the screenshot is of one particular wrong
+        // picture: both windows placed, the second unpainted.
+        //
+        // So wait for the screen to stop changing instead. Shots are taken
+        // until several in a row are the same one, which is the frame both
+        // clients have finished with, however long the host took to get
+        // there. Nothing here compares against the expected image, so a
+        // compositor that settles on the wrong picture still fails below
+        // with the real difference.
+        let taken = settled(&for_clients);
         for window in windows {
             let _ = window.join();
         }
