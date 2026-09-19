@@ -114,7 +114,7 @@ const WALLPAPER_PATH: &str = "etc/wallpaper.fxwall";
 /// Where it puts one that moves, which is a different file and a different
 /// flag rather than the same name holding either: a boot that carried the
 /// wrong one would say nothing until the screen was grey.
-const MOVIE_PATH: &str = "etc/wallpaper.fxvid";
+const MOVIE_PATH: &str = "etc/wallpaper.ivf";
 
 /// The instance the control socket is under, which `hyprctl` finds by
 /// looking when `HYPRLAND_INSTANCE_SIGNATURE` is not set.
@@ -1228,12 +1228,11 @@ fn press(qmp: &mut Qmp, keys: &[&str]) -> Result<()> {
 /// `cargo xtask test-video`: boot a wallpaper that moves, and require the
 /// screen to show its frames in turn.
 ///
-/// The video is two frames, each one flat colour, made in code by
-/// `crate::wallpaper::fixture` -- so the gate needs no `ffmpeg` on the
-/// machine that runs it, and so a screendump is judged against a colour
-/// rather than against a picture. What is being tested is the whole path:
-/// the format, the client that decodes and plays it, the layer surface it
-/// plays on, and the compositor drawing frame after frame of it.
+/// The video is a four-frame AV1 test pattern checked into the repository,
+/// so the gate needs no `ffmpeg` on the machine that runs it. What is being
+/// tested is the whole path: the format, the client that decodes and plays
+/// it, the layer surface it plays on, and the compositor drawing frame after
+/// frame of it.
 ///
 /// Nothing else is started, so the wallpaper is the whole screen.
 ///
@@ -1255,12 +1254,9 @@ pub(crate) fn test_video(args: &Args) -> Result<()> {
 /// The boot `test_video` judges.
 fn video_boot(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
     let size = args.size.unwrap_or(crate::wallpaper::SCREEN);
-    // Frames the size of the screen, so that what a screendump holds is the
-    // frame's own colour and not a scale of it.
-    let video = crate::wallpaper::fixture(size.0, size.1)
-        .ok_or_else(|| Error::new("the video fixture would not encode".to_owned()))?;
+    let video = crate::wallpaper::fixture();
     println!(
-        "  {arch}: a video of two frames, {}x{}, {} KiB",
+        "  {arch}: a four-frame AV1 video, scaled to {}x{}, {} KiB",
         size.0,
         size.1,
         video.len() / 1024
@@ -1289,23 +1285,21 @@ fn video_boot(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
         let mut qmp = Qmp::connect(port, Instant::now() + Duration::from_secs(10))?;
         let seen =
             both_frames(&mut qmp, &dump).map_err(|error| with_the_transcript(&error, watching))?;
-        println!("  {arch}: the screen showed both frames of the video, {seen} screendumps apart");
+        println!(
+            "  {arch}: the screen showed two AV1 frames of the video, {seen} screendumps apart"
+        );
         Ok(())
     };
     let _ = crate::qemu::watch_then(arch, &image, &kernel, &qemu_args, MARKER, hook)?;
     Ok(())
 }
 
-/// Take screendumps until the screen has been each of the video's two
-/// colours, and say how many dumps that took.
-///
-/// A dump is judged by which colour most of it is: the frame is the whole
-/// screen, so a screen that is neither colour is not a frame at all, and one
-/// that is mostly a colour is that frame however the pointer or a cursor
-/// plane happens to sit on it.
+/// Take screendumps until the moving AV1 clip produced two distinct, non-flat
+/// screens, and say how many dumps that took.
 fn both_frames(qmp: &mut Qmp, dump: &Path) -> Result<usize> {
     let deadline = Instant::now() + SETTLE;
-    let mut seen = [false; crate::wallpaper::FIXTURE.len()];
+    let mut first: Option<Vec<u8>> = None;
+    let mut distinct = false;
     let mut dumps = 0_usize;
     let mut last;
     loop {
@@ -1315,40 +1309,32 @@ fn both_frames(qmp: &mut Qmp, dump: &Path) -> Result<usize> {
         let screen = parse_ppm(&bytes)?;
         dumps = dumps.saturating_add(1);
         let pixels = screen.width.saturating_mul(screen.height);
-        let mut counts = [0_usize; crate::wallpaper::FIXTURE.len()];
-        for pixel in screen.pixels.chunks_exact(3) {
-            for (at, (red, green, blue)) in crate::wallpaper::FIXTURE.iter().enumerate() {
-                if pixel == [*red, *green, *blue]
-                    && let Some(count) = counts.get_mut(at)
-                {
-                    *count = count.saturating_add(1);
-                }
-            }
-        }
+        let varied = screen
+            .pixels
+            .chunks_exact(3)
+            .any(|pixel| pixel != screen.pixels.get(..3).unwrap_or(&[]));
         last = format!(
-            "{}x{}, {} of {pixels} the first colour and {} the second",
+            "{}x{}, {pixels} pixels, {}",
             screen.width,
             screen.height,
-            counts.first().copied().unwrap_or(0),
-            counts.get(1).copied().unwrap_or(0)
+            if varied {
+                "a non-flat frame"
+            } else {
+                "a flat frame"
+            }
         );
-        // Most of the screen, rather than all of it: the frame is the screen,
-        // so a majority is the frame and the rest is whatever the compositor
-        // drew over it.
-        for (at, count) in counts.iter().enumerate() {
-            if pixels > 0
-                && count.saturating_mul(2) > pixels
-                && let Some(was) = seen.get_mut(at)
-            {
-                *was = true;
+        if varied && pixels > 0 {
+            match &first {
+                Some(previous) => distinct |= previous != &screen.pixels,
+                None => first = Some(screen.pixels),
             }
         }
-        if seen.iter().all(|was| *was) {
+        if distinct {
             return Ok(dumps);
         }
         if Instant::now() >= deadline {
             return Err(Error::new(format!(
-                "the screen never showed both frames of the video in {}s: {} dumps, the last {last}",
+                "the screen never showed two AV1 frames of the video in {}s: {} dumps, the last {last}",
                 SETTLE.as_secs(),
                 dumps
             )));

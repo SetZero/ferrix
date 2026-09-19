@@ -23,6 +23,11 @@ compositor-socket = { path = "../socket" }
 compositor-wire = { path = "../wire" }
 # Declarations only: `memfd_create` and `mmap` for the shared buffer.
 libc = "0.2.189"
+# The AV1 decoder for a video wallpaper, dav1d ported to Rust. No default
+# features: `asm` is off, so it is pure Rust and needs no nasm or C, which
+# is what lets it cross-build static-musl for the initramfs (`docs/GPU.md`
+# §3.6). One bit depth: the wallpaper's stream is 8-bit.
+rav1d = { version = "1.1.0", default-features = false, features = ["bitdepth_8"] }
 
 [lints]
 workspace = true
