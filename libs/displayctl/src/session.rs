@@ -16,6 +16,7 @@
 //! Capacity is fixed, so the kernel side allocates nothing per message:
 //! [`MAX_BUFFERS`] buffers and [`MAX_IN_FLIGHT`] flushes waiting for FLIPPED.
 
+use crate::message::AttachObject;
 use crate::message::{
     Attach, AttachError, Hello, MAX_SCANOUTS, Message, Rect, Refusal, ScanoutMode, Status,
 };
@@ -81,12 +82,28 @@ pub enum Event {
     Stopped,
 }
 
+/// What the session remembers of a buffer, whichever way it was made.
+///
+/// Its id and its shape, which is all the rules here are about: a rectangle
+/// shown or flushed has to be inside it. Where its pixels *are* -- a range
+/// of the card VMO, or a resource the device already holds -- is the
+/// driver's business once the buffer is made.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Buffer {
+    /// Its id.
+    pub buffer: u32,
+    /// Width in pixels.
+    pub width: u32,
+    /// Height in pixels.
+    pub height: u32,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Slot {
     Free,
-    Attaching(Attach),
-    Attached(Attach),
-    Detaching(Attach),
+    Attaching(Buffer),
+    Attached(Buffer),
+    Detaching(Buffer),
     /// A buffer whose DETACH the device refused: its pages may still be the
     /// device's, so the id and the slot are never used again.
     Lost(u32),
@@ -178,7 +195,7 @@ impl Session {
             .position(|slot| slot.buffer() == Some(buffer))
     }
 
-    fn attached(&self, buffer: u32) -> Result<Attach, RequestError> {
+    fn attached(&self, buffer: u32) -> Result<Buffer, RequestError> {
         match self.find(buffer).and_then(|index| self.slots.get(index)) {
             Some(Slot::Attached(attach)) => Ok(*attach),
             _ => Err(RequestError::NotAttached),
@@ -212,8 +229,40 @@ impl Session {
             .iter_mut()
             .find(|slot| **slot == Slot::Free)
             .ok_or(RequestError::Full)?;
-        *slot = Slot::Attaching(attach);
+        *slot = Slot::Attaching(Buffer {
+            buffer: attach.buffer,
+            width: attach.width,
+            height: attach.height,
+        });
         Ok(Message::Attach(attach))
+    }
+
+    /// `ATTACH_OBJ` a buffer whose pixels the device holds already.
+    ///
+    /// The same rules as [`Session::attach`] but for the range, which such a
+    /// buffer has not got: an id no live buffer has, a shape the device can
+    /// show, and room in the table.
+    ///
+    /// # Errors
+    ///
+    /// A request the conversation has no room or no state for.
+    pub fn attach_object(&mut self, attach: AttachObject) -> Result<Message, RequestError> {
+        self.open()?;
+        attach.validate().map_err(RequestError::Attach)?;
+        if self.find(attach.buffer).is_some() {
+            return Err(RequestError::InUse);
+        }
+        let slot = self
+            .slots
+            .iter_mut()
+            .find(|slot| **slot == Slot::Free)
+            .ok_or(RequestError::Full)?;
+        *slot = Slot::Attaching(Buffer {
+            buffer: attach.buffer,
+            width: attach.width,
+            height: attach.height,
+        });
+        Ok(Message::AttachObject(attach))
     }
 
     /// Show `rect` of `buffer` on `scanout`, or with buffer 0, turn it off.

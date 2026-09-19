@@ -18,8 +18,9 @@
 
 use std::ffi::CStr;
 use std::io;
+use std::os::fd::{FromRawFd, OwnedFd};
 
-use ferrix_linux_abi::drm::{self, GemClose, Version};
+use ferrix_linux_abi::drm::{self, GemClose, PrimeHandle, Version};
 use ferrix_linux_abi::socket::Width;
 use ferrix_linux_abi::virtgpu::{
     self, ExecBuffer, GetCaps, GetParam, Layout, Map, ResourceInfo, TransferFromHost,
@@ -339,6 +340,35 @@ impl Render {
         };
         self.ioctl(virtgpu::IOCTL_GET_CAPS, &mut request)?;
         Ok(bytes)
+    }
+
+    /// Export object `handle` as a descriptor another node of the card can
+    /// be given: `DRM_IOCTL_PRIME_HANDLE_TO_FD`.
+    ///
+    /// What a compositor does with it is hand it to the card, which then
+    /// shows what was drawn without the pixels leaving the device. The
+    /// descriptor holds the object alive, so the handle may be closed
+    /// afterwards.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the node said; `EINVAL` for a handle this open has not got.
+    pub fn export(&self, handle: u32) -> io::Result<OwnedFd> {
+        let mut request = PrimeHandle {
+            handle,
+            flags: libc::O_CLOEXEC as u32,
+            fd: -1,
+        };
+        self.ioctl(drm::IOCTL_PRIME_HANDLE_TO_FD, &mut request)?;
+        if request.fd < 0 {
+            return Err(io::Error::other("the node gave no descriptor"));
+        }
+        #[expect(
+            unsafe_code,
+            reason = "AUDIT: the descriptor the node just made, which nothing else owns"
+        )]
+        // SAFETY: as the reason says.
+        Ok(unsafe { OwnedFd::from_raw_fd(request.fd) })
     }
 
     /// Let go of object `handle`: `DRM_IOCTL_GEM_CLOSE`.

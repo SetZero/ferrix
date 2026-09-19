@@ -2,11 +2,12 @@
 
 use std::ffi::CStr;
 use std::io;
+use std::os::fd::{AsRawFd, BorrowedFd};
 
 use ferrix_linux_abi::drm::{
     self, CardRes, ClipRect, CreateDumb, Crtc, CrtcPageFlip, FbCmd2, FbDirtyCmd, Field, GetBlob,
     GetConnector, GetEncoder, GetPlane, GetPlaneRes, GetProperty, Layout, MapDumb, ModeInfo,
-    ObjGetProperties, PropertyEnum, SetClientCap, Version,
+    ObjGetProperties, PrimeHandle, PropertyEnum, SetClientCap, Version,
 };
 use ferrix_linux_abi::socket::Width;
 
@@ -571,6 +572,14 @@ fn plane_type(card: &Card, id: u32) -> io::Result<Option<String>> {
     Ok(None)
 }
 
+/// Something the card can be told to show: a framebuffer id, whatever the
+/// pixels behind it are.
+pub trait Shown {
+    /// Its `ADDFB2` id, which a `SETCRTC`, a `PAGE_FLIP` or a `DIRTYFB`
+    /// names.
+    fn framebuffer(&self) -> u32;
+}
+
 /// A dumb buffer: memory the card can scan out of, mapped for the program to
 /// draw into.
 ///
@@ -652,6 +661,77 @@ impl Dumb {
     }
 }
 
+impl Shown for Dumb {
+    fn framebuffer(&self) -> u32 {
+        self.framebuffer
+    }
+}
+
+/// A buffer object made somewhere else and imported into this card: what a
+/// compositor that drew on the GPU shows.
+///
+/// `DRM_IOCTL_PRIME_FD_TO_HANDLE` takes the descriptor the render node gave
+/// for a resource the device holds, and `ADDFB2` makes a framebuffer of it.
+/// Showing it is the ordinary `SETCRTC`, page flip and `DIRTYFB` -- and on a
+/// virtio-gpu the dirty call costs a `RESOURCE_FLUSH` and nothing else,
+/// because the host has the pixels already. That is the whole of what this
+/// saves: a frame that would otherwise be fetched out of the device and
+/// handed straight back to it.
+#[derive(Debug)]
+pub struct Imported {
+    framebuffer: u32,
+    handle: u32,
+}
+
+impl Imported {
+    /// Import the buffer object `fd` names and give the card a framebuffer
+    /// id for it.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the card said; `EINVAL` for a descriptor that is not a
+    /// buffer object of this card.
+    pub fn new(
+        card: &Card,
+        fd: BorrowedFd<'_>,
+        width: u32,
+        height: u32,
+        pitch: u32,
+    ) -> io::Result<Self> {
+        let mut prime = PrimeHandle {
+            handle: 0,
+            flags: 0,
+            fd: fd.as_raw_fd(),
+        };
+        card.ioctl(drm::IOCTL_PRIME_FD_TO_HANDLE, &mut prime)?;
+        let mut framebuffer = FbCmd2 {
+            width,
+            height,
+            pixel_format: drm::FORMAT_XRGB8888,
+            handles: [prime.handle, 0, 0, 0],
+            pitches: [pitch, 0, 0, 0],
+            ..FbCmd2::ZERO
+        };
+        card.ioctl(drm::IOCTL_MODE_ADDFB2, &mut framebuffer)?;
+        Ok(Self {
+            framebuffer: framebuffer.fb_id,
+            handle: prime.handle,
+        })
+    }
+
+    /// The handle the kernel knows the buffer by.
+    #[must_use]
+    pub const fn handle(&self) -> u32 {
+        self.handle
+    }
+}
+
+impl Shown for Imported {
+    fn framebuffer(&self) -> u32 {
+        self.framebuffer
+    }
+}
+
 impl Card {
     /// Show `buffer` on the plan's CRTC, which is the first frame: a page
     /// flip needs a mode already set.
@@ -659,13 +739,13 @@ impl Card {
     /// # Errors
     ///
     /// Whatever the card said.
-    pub fn set_mode(&self, plan: &Plan, buffer: &Dumb) -> io::Result<ModeInfo> {
+    pub fn set_mode(&self, plan: &Plan, buffer: &dyn Shown) -> io::Result<ModeInfo> {
         let mut connectors = [plan.connector];
         let mut crtc = Crtc {
             set_connectors_ptr: address(&mut connectors),
             count_connectors: 1,
             crtc_id: plan.crtc,
-            fb_id: buffer.framebuffer,
+            fb_id: buffer.framebuffer(),
             mode_valid: 1,
             mode: plan.mode,
             ..Crtc::ZERO
@@ -685,10 +765,10 @@ impl Card {
     /// # Errors
     ///
     /// Whatever the card said.
-    pub fn page_flip(&self, plan: &Plan, buffer: &Dumb) -> io::Result<()> {
+    pub fn page_flip(&self, plan: &Plan, buffer: &dyn Shown) -> io::Result<()> {
         let mut flip = CrtcPageFlip {
             crtc_id: plan.crtc,
-            fb_id: buffer.framebuffer,
+            fb_id: buffer.framebuffer(),
             flags: drm::PAGE_FLIP_EVENT,
             ..CrtcPageFlip::ZERO
         };
@@ -754,7 +834,7 @@ impl Card {
     /// # Errors
     ///
     /// Whatever the card said.
-    pub fn dirty(&self, buffer: &Dumb, clips: &[(u32, u32, u32, u32)]) -> io::Result<()> {
+    pub fn dirty(&self, buffer: &dyn Shown, clips: &[(u32, u32, u32, u32)]) -> io::Result<()> {
         let edge = |value: u32| u16::try_from(value).unwrap_or(u16::MAX);
         let mut bytes = vec![0u8; clips.len().min(MAX_CLIPS) * ClipRect::SIZE];
         for (&(x, y, width, height), out) in
@@ -770,7 +850,7 @@ impl Card {
             .ok_or_else(|| io::Error::other("a clip larger than its buffer"))?;
         }
         let mut command = FbDirtyCmd {
-            fb_id: buffer.framebuffer,
+            fb_id: buffer.framebuffer(),
             // More clips than the call takes is all of it, which is what
             // none at all says.
             num_clips: if clips.len() > MAX_CLIPS {

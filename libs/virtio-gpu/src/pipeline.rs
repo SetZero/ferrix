@@ -21,7 +21,9 @@
 //! to do — pin, submit a command, unpin, reply, or wait — and the glue reports
 //! back with [`Pipeline::pinned`] and [`Pipeline::done`].
 
-use ferrix_displayctl::message::{Attach, BYTES_PER_PIXEL, Message, Rect as CtlRect, Status};
+use ferrix_displayctl::message::{
+    Attach, AttachObject, BYTES_PER_PIXEL, Message, Rect as CtlRect, Status,
+};
 use ferrix_virtio::gpu::{Command, DeviceError as Refusal, Format, MemEntry, Rect, Response};
 
 /// Requests waiting behind the one being run.
@@ -35,6 +37,8 @@ pub const MAX_BUFFERS: usize = 32;
 pub enum Request {
     /// ATTACH.
     Attach(Attach),
+    /// `ATTACH_OBJ`: a buffer whose pixels the device holds already.
+    AttachObject(AttachObject),
     /// SCANOUT.
     Scanout {
         /// The scanout.
@@ -66,6 +70,7 @@ impl Request {
     pub const fn from_message(message: &Message) -> Option<Self> {
         Some(match *message {
             Message::Attach(attach) => Self::Attach(attach),
+            Message::AttachObject(attach) => Self::AttachObject(attach),
             Message::Scanout {
                 scanout,
                 buffer,
@@ -92,6 +97,7 @@ impl Request {
     const fn buffer(&self) -> u32 {
         match *self {
             Self::Attach(attach) => attach.buffer,
+            Self::AttachObject(attach) => attach.buffer,
             Self::Scanout { buffer, .. } | Self::Flush { buffer, .. } | Self::Detach { buffer } => {
                 buffer
             }
@@ -167,9 +173,18 @@ struct Op {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 struct Geometry {
     buffer: u32,
+    /// What the *device* calls the buffer's pixels. The driver makes a
+    /// resource of its own for an ATTACH and numbers it by the buffer id;
+    /// an `ATTACH_OBJ`'s resource was made through the render conversation
+    /// and is named by its object id, which is why the two are not one
+    /// number.
+    resource: u32,
     width: u32,
     height: u32,
     stride: u32,
+    /// Whether the driver made the resource, and so has to unref it when
+    /// the buffer is detached. An object's belongs to the renderer.
+    own: bool,
 }
 
 /// The requests in hand and the one being run.
@@ -271,15 +286,29 @@ impl Pipeline {
             .copied()
     }
 
-    fn remember(&mut self, attach: &Attach) {
+    fn remember(&mut self, geometry: Geometry) {
         if let Some(slot) = self.buffers.iter_mut().find(|slot| slot.is_none()) {
-            *slot = Some(Geometry {
-                buffer: attach.buffer,
-                width: attach.width,
-                height: attach.height,
-                stride: attach.stride,
-            });
+            *slot = Some(geometry);
         }
+    }
+
+    /// What the device calls `buffer`'s pixels.
+    ///
+    /// A buffer not remembered yet is one being attached, which is the
+    /// driver's own resource and numbered by the buffer id.
+    fn resource(&self, buffer: u32) -> u32 {
+        self.geometry(buffer).map_or(buffer, |held| held.resource)
+    }
+
+    /// Whether the driver made `buffer`'s resource, and so owes the device
+    /// the commands that take it away.
+    ///
+    /// A buffer nothing was written down for is one of the driver's own:
+    /// that is what every buffer was before `ATTACH_OBJ` existed, and a
+    /// DETACH of a buffer whose ATTACH never finished still owes the
+    /// device its half of the undoing.
+    fn own(&self, buffer: u32) -> bool {
+        self.geometry(buffer).is_none_or(|held| held.own)
     }
 
     fn forget(&mut self, buffer: u32) {
@@ -287,6 +316,24 @@ impl Pipeline {
             if slot.is_some_and(|geometry| geometry.buffer == buffer) {
                 *slot = None;
             }
+        }
+    }
+
+    /// Where a request starts.
+    ///
+    /// A buffer made of an object the render conversation holds costs the
+    /// device nothing to make, nothing to send when it changes and nothing
+    /// to take away: its pixels are the device's already, which is the
+    /// whole reason for the second way of making one.
+    fn first(&self, request: Request) -> Stage {
+        match request {
+            Request::Attach(_) => Stage::Pin,
+            Request::AttachObject(_) => Stage::ReplyAttached(Status::Ok),
+            Request::Scanout { .. } => Stage::SetScanout,
+            Request::Flush { buffer, .. } if self.own(buffer) => Stage::Transfer,
+            Request::Flush { .. } => Stage::FlushResource,
+            Request::Detach { buffer } if self.own(buffer) => Stage::DetachBacking,
+            Request::Detach { .. } => Stage::ReplyDetached(Status::Ok),
         }
     }
 
@@ -298,15 +345,9 @@ impl Pipeline {
             let Some(request) = self.pop() else {
                 return Step::Idle;
             };
-            let stage = match request {
-                Request::Attach(_) => Stage::Pin,
-                Request::Scanout { .. } => Stage::SetScanout,
-                Request::Flush { .. } => Stage::Transfer,
-                Request::Detach { .. } => Stage::DetachBacking,
-            };
             self.current = Some(Op {
                 request,
-                stage,
+                stage: self.first(request),
                 waiting: false,
                 entries: 0,
             });
@@ -338,7 +379,28 @@ impl Pipeline {
             (Request::Attach(attach), Stage::ReplyAttached(status)) => {
                 self.current = None;
                 if status == Status::Ok {
-                    self.remember(&attach);
+                    self.remember(Geometry {
+                        buffer: attach.buffer,
+                        resource: attach.buffer,
+                        width: attach.width,
+                        height: attach.height,
+                        stride: attach.stride,
+                        own: true,
+                    });
+                }
+                return Step::Reply(Message::Attached { buffer, status });
+            }
+            (Request::AttachObject(attach), Stage::ReplyAttached(status)) => {
+                self.current = None;
+                if status == Status::Ok {
+                    self.remember(Geometry {
+                        buffer: attach.buffer,
+                        resource: attach.object,
+                        width: attach.width,
+                        height: attach.height,
+                        stride: attach.stride,
+                        own: false,
+                    });
                 }
                 return Step::Reply(Message::Attached { buffer, status });
             }
@@ -368,7 +430,7 @@ impl Pipeline {
 
     /// The device command `op`'s stage submits, if it submits one.
     fn command<'e>(&self, op: &Op, entries: &'e [MemEntry]) -> Option<Command<'e>> {
-        let resource_id = op.request.buffer();
+        let resource_id = self.resource(op.request.buffer());
         Some(match (op.request, op.stage) {
             (Request::Attach(attach), Stage::Create) => Command::ResourceCreate2d {
                 resource_id,
@@ -397,11 +459,15 @@ impl Pipeline {
                     rect(area)
                 },
                 scanout_id: scanout,
-                resource_id: buffer,
+                resource_id: if buffer == 0 {
+                    0
+                } else {
+                    self.resource(buffer)
+                },
             },
             (Request::Flush { rect: area, .. }, Stage::Transfer) => {
                 let stride = self
-                    .geometry(resource_id)
+                    .geometry(op.request.buffer())
                     .map_or(0, |geometry| geometry.stride);
                 Command::TransferToHost2d {
                     rect: rect(area),

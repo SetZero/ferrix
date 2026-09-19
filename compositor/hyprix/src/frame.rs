@@ -470,13 +470,20 @@ fn shown(target: &mut Output<'_>) -> Result<(), String> {
             gpu.canvas
                 .finish()
                 .map_err(|error| format!("{GPU_FAILED}{error}"))?;
-            let bounds = Rect::new(0, 0, i64::from(width), i64::from(height));
-            for &rect in present.clipped(bounds).rects() {
-                let pixels = gpu
-                    .canvas
-                    .read(rect)
-                    .map_err(|error| format!("{GPU_FAILED}{error}"))?;
-                fetched(backend.buffer(), stride, rect, &pixels);
+            // A screen shown the texture the frame was drawn into needs
+            // nothing fetched at all, which is the whole of what adopting it
+            // saves. The night-light is the exception: its ramps are applied
+            // to pixels on their way out, and the only pixels this
+            // compositor can reach are the ones it fetches.
+            if !backend.adopted() || gamma.is_some() {
+                let bounds = Rect::new(0, 0, i64::from(width), i64::from(height));
+                for &rect in present.clipped(bounds).rects() {
+                    let pixels = gpu
+                        .canvas
+                        .read(rect)
+                        .map_err(|error| format!("{GPU_FAILED}{error}"))?;
+                    fetched(backend.buffer(), stride, rect, &pixels);
+                }
             }
         }
         None => {
@@ -497,7 +504,7 @@ fn shown(target: &mut Output<'_>) -> Result<(), String> {
 }
 
 /// Write `pixels`, `rect`'s rows packed, into a screen's buffer at `rect`.
-fn fetched(buffer: &mut [u8], stride: u32, rect: Rect, pixels: &[u8]) {
+pub(crate) fn fetched(buffer: &mut [u8], stride: u32, rect: Rect, pixels: &[u8]) {
     let index = |value: i64| usize::try_from(value.max(0)).unwrap_or(0);
     let row_bytes = index(rect.width) * 4;
     if row_bytes == 0 {

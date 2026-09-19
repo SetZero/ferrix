@@ -35,7 +35,8 @@ use ferrix_displayctl::message::{MAX_DIMENSION, MAX_SCANOUTS, Rect, Status};
 use ferrix_linux_abi::drm::{
     self, CardRes, ClipRect, CreateDumb, Crtc, CrtcPageFlip, DestroyDumb, Event, EventVblank,
     FbCmd, FbCmd2, FbDirtyCmd, Field, GetCap, GetConnector, GetEncoder, GetPlane, GetPlaneRes,
-    GetProperty, Layout, MapDumb, ModeInfo, ObjGetProperties, PropertyEnum, SetClientCap, Version,
+    GetProperty, Layout, MapDumb, ModeInfo, ObjGetProperties, PrimeHandle, PropertyEnum,
+    SetClientCap, Version,
 };
 use ferrix_linux_abi::errno::Errno;
 use ferrix_linux_abi::socket::Width;
@@ -122,13 +123,20 @@ const MAX_EVENTS: usize = 64;
 /// The most framebuffers one open may have, as the session caps buffers.
 const MAX_FRAMEBUFFERS: usize = 64;
 
-/// A dumb buffer.
+/// A buffer object of this open: a dumb buffer, or one imported from the
+/// render node.
 #[derive(Clone, Copy, Debug)]
 struct Dumb {
     handle: u32,
     /// The core's id for it.
     buffer: u32,
-    offset: u64,
+    /// Where its pixels are in the card VMO, for a dumb buffer.
+    ///
+    /// `None` for an imported one, whose pixels are on the device and are
+    /// not in the card VMO at all: `MODE_MAP_DUMB` of such a handle answers
+    /// nothing rather than an offset, which would be some other buffer's
+    /// pixels.
+    offset: Option<u64>,
     width: u32,
     height: u32,
     pitch: u32,
@@ -149,6 +157,11 @@ struct Framebuffer {
 #[derive(Debug, Default)]
 struct OpenState {
     dumbs: Vec<Dumb>,
+    /// The objects imported from the render node, by the handle each was
+    /// given. Holding one keeps the renderer's object alive for as long as
+    /// this open can show it, whatever the program does with the handle it
+    /// drew through.
+    imports: Vec<(u32, Arc<crate::render::node::Object>)>,
     framebuffers: Vec<Framebuffer>,
     next_handle: u32,
     next_framebuffer: u32,
@@ -469,6 +482,7 @@ pub(crate) fn ioctl(
         drm::IOCTL_MODE_GETCRTC => get_crtc(process, file, arg),
         drm::IOCTL_MODE_CREATE_DUMB => create_dumb(process, file, arg),
         drm::IOCTL_MODE_MAP_DUMB => map_dumb(process, file, arg),
+        drm::IOCTL_PRIME_FD_TO_HANDLE => prime_fd_to_handle(process, file, arg),
         drm::IOCTL_MODE_DESTROY_DUMB => {
             let destroy: DestroyDumb = read_arg(process, arg)?;
             destroy_dumb(file, destroy.handle).map(|()| 0)
@@ -794,9 +808,79 @@ fn map_dumb(process: &Process, file: &CardFile, arg: u64) -> Result<usize, Errno
         .dumbs
         .iter()
         .find(|dumb| dumb.handle == map.handle && !dumb.destroyed)
-        .map(|dumb| dumb.offset)
+        .and_then(|dumb| dumb.offset)
         .ok_or(Errno::ENOENT)?;
     write_arg(process, arg, &map)
+}
+
+/// `DRM_IOCTL_PRIME_FD_TO_HANDLE`: take a buffer object the render node
+/// exported, and give it a handle on this card.
+///
+/// This is where a frame drawn on the GPU meets the screen. The descriptor
+/// names a resource the device holds already, so what the card is given is
+/// a buffer with no range: `ATTACH_OBJ` rather than ATTACH, nothing pinned,
+/// and a flush that sends no pixels (`docs/GPU.md` §3.5 piece 6). The rest
+/// of the card -- `ADDFB2`, `SETCRTC`, a page flip, `DIRTYFB` -- knows
+/// nothing about it and works unchanged.
+///
+/// The handle holds the object alive, so a program may close the render
+/// node's handle, or the render node itself, while the screen shows what it
+/// drew.
+///
+/// A descriptor that is not an exported object is `EINVAL`, as Linux
+/// answers one that is not a dmabuf.
+fn prime_fd_to_handle(process: &Process, file: &CardFile, arg: u64) -> Result<usize, Errno> {
+    let mut prime: PrimeHandle = read_arg(process, arg)?;
+    let descriptor = crate::syscall::fd::file(process, crate::syscall::fd::arg(prime.fd as u64))
+        .map_err(|_| Errno::EBADF)?;
+    let exported = crate::render::node::exported(descriptor.io()).ok_or(Errno::EINVAL)?;
+    let object = exported.object();
+    let (id, width, height, stride) = object.shown();
+    // One handle an object, as Linux gives one: a second import of the same
+    // buffer answers the handle the first was given, and the object is not
+    // attached twice.
+    if let Some((handle, _)) = file
+        .state
+        .lock()
+        .imports
+        .iter()
+        .find(|(_, held)| Arc::ptr_eq(held, &object))
+    {
+        prime.handle = *handle;
+        return write_arg(process, arg, &prime);
+    }
+    let (buffer, status) = file
+        .card
+        .attach_object(id, width, height, stride)
+        .map_err(card_error)?;
+    status_error(status)?;
+    let handle = {
+        let mut state = file.state.lock();
+        let handle = state.next_handle;
+        match handle.checked_add(1) {
+            Some(next) => {
+                state.next_handle = next;
+                state.dumbs.push(Dumb {
+                    handle,
+                    buffer,
+                    offset: None,
+                    width,
+                    height,
+                    pitch: stride,
+                    destroyed: false,
+                });
+                state.imports.push((handle, object));
+                Some(handle)
+            }
+            None => None,
+        }
+    };
+    let Some(handle) = handle else {
+        file.card.let_go(&[buffer]);
+        return Err(Errno::ENOMEM);
+    };
+    prime.handle = handle;
+    write_arg(process, arg, &prime)
 }
 
 fn add_fb(process: &Process, file: &CardFile, arg: u64) -> Result<usize, Errno> {
@@ -952,7 +1036,7 @@ fn create_dumb(process: &Process, file: &CardFile, arg: u64) -> Result<usize, Er
                 state.dumbs.push(Dumb {
                     handle,
                     buffer,
-                    offset,
+                    offset: Some(offset),
                     width: create.width,
                     height: create.height,
                     pitch,
@@ -994,6 +1078,12 @@ fn destroy_dumb(file: &CardFile, handle: u32) -> Result<(), Errno> {
         }
     };
     if let Some(buffer) = gone {
+        // The object an import held goes with the handle, unless the
+        // program that drew it still has one of its own.
+        file.state
+            .lock()
+            .imports
+            .retain(|(held, _)| *held != handle);
         file.card.let_go(&[buffer]);
     }
     Ok(())

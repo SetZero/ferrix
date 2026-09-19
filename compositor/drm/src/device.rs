@@ -13,6 +13,7 @@
 
 use std::collections::BTreeMap;
 use std::io;
+use std::os::fd::OwnedFd;
 
 use compositor_virgl::{Device, Region, Texture, pipe};
 use ferrix_linux_abi::virtgpu::{Box3d, ResourceCreate};
@@ -108,16 +109,28 @@ impl Device for RenderDevice {
             .checked_mul(texture.height)
             .and_then(|pixels| pixels.checked_mul(4))
             .ok_or_else(|| io::Error::other("a texture too large to describe"))?;
+        let bind = if texture.scanout {
+            texture.bind | pipe::BIND_SCANOUT
+        } else {
+            texture.bind
+        };
         let (handle, resource) = self.node.create(ResourceCreate {
             target: pipe::TEXTURE_2D,
             format: texture.format,
-            bind: texture.bind,
+            bind,
             width: texture.width,
             height: texture.height,
             depth: 1,
             array_size: 1,
             last_level: 0,
             nr_samples: 0,
+            // Not `VIRGL_RESOURCE_Y_0_TOP`. It says which way up a
+            // texture's rows are, and *both* the transfers and the scanout
+            // honour it, while what a renderer draws into the texture is
+            // unaffected by it -- so setting it turned the screen and the
+            // readback upside down together, which is what the first GPU
+            // scanout showed. The rows stay the way GL keeps them and the
+            // two readers agree.
             flags: 0,
             bo_handle: 0,
             res_handle: 0,
@@ -190,6 +203,16 @@ impl Device for RenderDevice {
 
     fn submit(&mut self, words: &[u32]) -> io::Result<()> {
         self.node.exec(words)
+    }
+
+    fn export(&mut self, resource: u32) -> io::Result<Option<OwnedFd>> {
+        // Only a texture pixels move to or from is written down, and that is
+        // what a compositor draws its frame into; a blur's scratch has no
+        // handle to export and no reason to be shown.
+        let Some(held) = self.moved.get(&resource) else {
+            return Ok(None);
+        };
+        self.node.export(held.handle).map(Some)
     }
 
     fn release(&mut self, resource: u32) -> io::Result<()> {

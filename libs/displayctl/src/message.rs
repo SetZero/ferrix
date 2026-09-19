@@ -15,6 +15,9 @@
 //! ATTACH    core -> driver, 48 bytes
 //!   8 buffer u32   12 format u32   16 offset u64   24 length u64
 //!   32 width u32   36 height u32   40 stride u32   44 reserved
+//! ATTACH_OBJ core -> driver, 32 bytes
+//!   8 buffer u32   12 object u32   16 format u32
+//!   20 width u32   24 height u32   28 stride u32
 //! ATTACHED  driver -> core, 16 bytes: 8 buffer u32   12 status u32
 //! SCANOUT   core -> driver, 32 bytes
 //!   8 scanout u32   12 buffer u32 (0: off)   16 rect x, y, width, height u32
@@ -36,7 +39,7 @@ use ferrix_linux_abi::drm::FORMAT_XRGB8888;
 use ferrix_native_abi::rights::Rights;
 
 /// The protocol version this crate speaks.
-pub const VERSION: u16 = 2;
+pub const VERSION: u16 = 3;
 
 /// HELLO's type.
 pub const HELLO: u32 = 1;
@@ -62,6 +65,8 @@ pub const DETACHED: u32 = 10;
 pub const STOP: u32 = 11;
 /// STOPPED's type.
 pub const STOPPED: u32 = 12;
+/// `ATTACH_OBJ`'s type.
+pub const ATTACH_OBJECT: u32 = 13;
 
 /// Bytes of the type and length, and all of STOP and STOPPED.
 pub const HEADER_BYTES: usize = 8;
@@ -315,6 +320,63 @@ pub struct Attach {
     pub stride: u32,
 }
 
+/// `ATTACH_OBJ`: make an object the *render* conversation created a buffer
+/// the device can show.
+///
+/// The other way to make a buffer, and the reason there are two: an ATTACH's
+/// pixels are guest memory the device is given, and these pixels are on the
+/// GPU already. A compositor that drew its frame there would otherwise have
+/// to fetch it and hand it back, which is the whole picture crossing between
+/// host and guest twice a frame.
+///
+/// What the driver is given is the *device's* own name for the resource --
+/// `docs/GPU.md` §3.3's rule, that what crosses this seam untouched is the
+/// driver's language -- and the core knows it only as a number it was told
+/// by the render core, which hands out object ids from a range no display
+/// buffer uses.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct AttachObject {
+    /// The buffer's id, not 0.
+    pub buffer: u32,
+    /// The renderer's object, not 0.
+    pub object: u32,
+    /// Its fourcc, [`FORMAT`].
+    pub format: u32,
+    /// Width in pixels.
+    pub width: u32,
+    /// Height in pixels.
+    pub height: u32,
+    /// Bytes per row.
+    pub stride: u32,
+}
+
+impl AttachObject {
+    /// Check the buffer against itself.
+    ///
+    /// No range to check: the pixels are the device's own and the core never
+    /// says where they are.
+    ///
+    /// # Errors
+    ///
+    /// Why it is not one a driver can act on.
+    pub fn validate(&self) -> Result<(), AttachError> {
+        if self.buffer == 0 || self.object == 0 {
+            return Err(AttachError::Id);
+        }
+        if self.format != FORMAT {
+            return Err(AttachError::Format);
+        }
+        if !(1..=MAX_DIMENSION).contains(&self.width) || !(1..=MAX_DIMENSION).contains(&self.height)
+        {
+            return Err(AttachError::Size);
+        }
+        if u64::from(self.stride) < u64::from(self.width) * u64::from(BYTES_PER_PIXEL) {
+            return Err(AttachError::Stride);
+        }
+        Ok(())
+    }
+}
+
 /// Why an ATTACH is not one a driver can act on.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum AttachError {
@@ -404,6 +466,8 @@ pub enum Message {
     Refused(Refusal),
     /// Core to driver.
     Attach(Attach),
+    /// Core to driver: a buffer whose pixels are already on the device.
+    AttachObject(AttachObject),
     /// Driver to core.
     Attached {
         /// The buffer.
@@ -491,6 +555,7 @@ impl Message {
             Self::Ready(_) => READY,
             Self::Refused(_) => REFUSED,
             Self::Attach(_) => ATTACH,
+            Self::AttachObject(_) => ATTACH_OBJECT,
             Self::Attached { .. } => ATTACHED,
             Self::Scanout { .. } => SCANOUT,
             Self::Flush { .. } => FLUSH,
@@ -510,6 +575,7 @@ impl Message {
             READY => 24,
             REFUSED => 12,
             ATTACH => 48,
+            ATTACH_OBJECT => 32,
             ATTACHED | DETACH | DETACHED => 16,
             SCANOUT => 32,
             FLUSH => 40,
@@ -563,6 +629,14 @@ impl Message {
                 put32(bytes, 32, attach.width);
                 put32(bytes, 36, attach.height);
                 put32(bytes, 40, attach.stride);
+            }
+            Self::AttachObject(attach) => {
+                put32(bytes, 8, attach.buffer);
+                put32(bytes, 12, attach.object);
+                put32(bytes, 16, attach.format);
+                put32(bytes, 20, attach.width);
+                put32(bytes, 24, attach.height);
+                put32(bytes, 28, attach.stride);
             }
             Self::Attached { buffer, status } | Self::Detached { buffer, status } => {
                 put32(bytes, 8, buffer);
@@ -650,6 +724,14 @@ fn decode_body(kind: u32, bytes: &[u8]) -> Option<Message> {
             })
         }
         REFUSED => Message::Refused(Refusal::from_raw(get32(bytes, 8)?)?),
+        ATTACH_OBJECT => Message::AttachObject(AttachObject {
+            buffer: get32(bytes, 8)?,
+            object: get32(bytes, 12)?,
+            format: get32(bytes, 16)?,
+            width: get32(bytes, 20)?,
+            height: get32(bytes, 24)?,
+            stride: get32(bytes, 28)?,
+        }),
         ATTACH => {
             zero32(44)?;
             Message::Attach(Attach {

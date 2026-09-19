@@ -51,9 +51,10 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::any::Any;
 
-use ferrix_linux_abi::drm::{self, GemClose, Version};
+use ferrix_linux_abi::drm::{self, GemClose, PrimeHandle, Version};
 use ferrix_linux_abi::errno::Errno;
 use ferrix_linux_abi::socket::Width;
+use ferrix_linux_abi::types;
 use ferrix_linux_abi::virtgpu::{
     self, ExecBuffer, Field, GetCaps, GetParam, Layout, Map, ResourceCreate, ResourceInfo,
     TransferToHost, Wait,
@@ -87,19 +88,63 @@ const VERSION_MAJOR: i32 = 0;
 const VERSION_MINOR: i32 = 1;
 const VERSION_PATCH: i32 = 0;
 
+/// An object of the renderer, and everything about it that outlives the
+/// handle a program names it by.
+///
+/// Held by whatever names it -- an open's handle table, a descriptor
+/// [`export`] made -- and let go of when the last of them goes. That is what
+/// lets a program hand its drawn frame to the card and then close the
+/// handle, without the resource going while the screen is showing it.
+pub(crate) struct Object {
+    renderer: Arc<Renderer>,
+    /// What the core and the device call it. It is also the `res_handle`
+    /// answered to a program: the driver names the device's resource by the
+    /// core's object id, so the two are one number and not two.
+    id: u32,
+    /// The shape it was made with, which is what a card needs to show it.
+    width: u32,
+    height: u32,
+    stride: u32,
+    /// How many bytes of backing it was made with.
+    bytes: u32,
+    /// That backing, which `mmap` maps and the driver pinned for the device.
+    backing: Option<Arc<Vmo>>,
+}
+
+impl core::fmt::Debug for Object {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Object")
+            .field("id", &self.id)
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Object {
+    /// What the device calls it, and its shape: what a card is told to show
+    /// it by.
+    pub(crate) const fn shown(&self) -> (u32, u32, u32, u32) {
+        (self.id, self.width, self.height, self.stride)
+    }
+}
+
+impl Drop for Object {
+    /// Give it back to the device, without waiting: the reply goes to the
+    /// renderer's task, which drops it. The same bargain a close makes.
+    fn drop(&mut self) {
+        self.renderer.release(&[self.id], None);
+    }
+}
+
 /// One object this open has a handle for.
 #[derive(Clone, Debug)]
 struct Handle {
     /// What a program calls it: `bo_handle`, small and this open's alone.
     handle: u32,
-    /// What the core and the device call it. It is also the `res_handle`
-    /// answered to a program: the driver names the device's resource by the
-    /// core's object id, so the two are one number and not two.
-    object: u32,
-    /// How many bytes it was made with.
-    bytes: u32,
-    /// Its backing, which `mmap` maps and the driver pinned for the device.
-    backing: Option<Arc<Vmo>>,
+    /// The object itself, which outlives this handle if anything else names
+    /// it.
+    object: Arc<Object>,
 }
 
 /// One open of a render node.
@@ -196,9 +241,14 @@ impl Drop for RenderFile {
             .get_mut()
             .live
             .iter()
-            .map(|held| held.object)
+            .map(|held| held.object.id)
             .collect();
-        self.renderer.release(&objects, *self.context.get_mut());
+        // The objects go with the handles, which is what dropping them does;
+        // what is left is the context, which the core takes away once they
+        // have. Nothing is said about the objects here, so a handle another
+        // descriptor still names keeps its object.
+        let _ = objects;
+        self.renderer.release(&[], *self.context.get_mut());
     }
 }
 
@@ -224,7 +274,7 @@ impl Inode for RenderFile {
     /// The backing of the object a `VIRTGPU_MAP` offset names.
     fn mapping_at(&self, offset: u64) -> Option<(Arc<dyn Any + Send + Sync>, u64)> {
         let handle = u32::try_from(offset >> MAP_SHIFT).ok()?;
-        let backing = self.held(handle).ok()?.backing?;
+        let backing = self.held(handle).ok()?.object.backing.clone()?;
         let object: Arc<dyn Any + Send + Sync> = backing;
         Some((object, offset & ((1 << MAP_SHIFT) - 1)))
     }
@@ -271,6 +321,7 @@ pub(crate) fn ioctl(
         virtgpu::IOCTL_WAIT => wait(process, file, arg),
         virtgpu::IOCTL_GET_CAPS => get_caps(process, file, arg),
         drm::IOCTL_GEM_CLOSE => gem_close(process, file, arg),
+        drm::IOCTL_PRIME_HANDLE_TO_FD => export(process, file, arg),
         _ => Err(Errno::ENOTTY),
     }
 }
@@ -337,15 +388,22 @@ fn resource_create(process: &Process, file: &RenderFile, arg: u64) -> Result<usi
             ],
         )
         .map_err(errno_of)?;
+    let held = Arc::new(Object {
+        renderer: Arc::clone(&file.renderer),
+        id: object,
+        width: create.width,
+        height: create.height,
+        stride: create.stride,
+        bytes: create.size,
+        backing,
+    });
     let handle = {
         let mut handles = file.handles.lock();
         let handle = handles.next;
         handles.next = handles.next.saturating_add(1);
         handles.live.push(Handle {
             handle,
-            object,
-            bytes: create.size,
-            backing,
+            object: held,
         });
         handle
     };
@@ -366,7 +424,7 @@ fn map(process: &Process, file: &RenderFile, arg: u64) -> Result<usize, Errno> {
     let mut bytes = vec![0u8; Map::SIZE];
     uaccess::copy_from_user(process.space(), arg, &mut bytes).map_err(|_| Errno::EFAULT)?;
     let mut map = Map::read(&bytes).ok_or(Errno::EFAULT)?;
-    if file.held(map.handle)?.backing.is_none() {
+    if file.held(map.handle)?.object.backing.is_none() {
         return Err(Errno::EINVAL);
     }
     map.offset = u64::from(map.handle) << MAP_SHIFT;
@@ -394,7 +452,7 @@ fn transfer(
     let context = file.context()?;
     file.renderer
         .transfer(Transfer {
-            object: held.object,
+            object: held.object.id,
             context,
             direction,
             level: asked.level,
@@ -488,12 +546,92 @@ fn resource_info(process: &Process, file: &RenderFile, arg: u64) -> Result<usize
     uaccess::copy_from_user(process.space(), arg, &mut bytes).map_err(|_| Errno::EFAULT)?;
     let mut info = ResourceInfo::read(&bytes).ok_or(Errno::EFAULT)?;
     let held = file.held(info.bo_handle)?;
-    info.res_handle = held.object;
-    info.size = held.bytes;
+    info.res_handle = held.object.id;
+    info.size = held.object.bytes;
     // Not a blob resource: `PARAM_RESOURCE_BLOB` says the device offers
     // none, so nothing here can be one.
     info.blob_mem = 0;
     info.write(&mut bytes).ok_or(Errno::EFAULT)?;
+    uaccess::copy_to_user(process.space(), arg, &bytes).map_err(|_| Errno::EFAULT)?;
+    Ok(0)
+}
+
+/// What `/proc/self/fd` calls an exported buffer object.
+const EXPORTED_NAME: &[u8] = b"anon_inode:[dmabuf]";
+
+/// A buffer object as a descriptor: what `DRM_IOCTL_PRIME_HANDLE_TO_FD`
+/// answers, and what the card's `FD_TO_HANDLE` takes.
+///
+/// A dmabuf on Linux, and the same job here: a name for the object that
+/// another node of the card can be given, which holds the object alive for
+/// as long as it is held. What it is *not* is a buffer another process can
+/// map or another device can read -- there is one device, and the whole of
+/// what this carries between the two nodes is which resource the device
+/// already holds.
+#[derive(Debug)]
+pub(crate) struct Exported {
+    object: Arc<Object>,
+}
+
+impl Exported {
+    /// The object it names.
+    pub(crate) fn object(&self) -> Arc<Object> {
+        Arc::clone(&self.object)
+    }
+}
+
+impl Inode for Exported {
+    fn metadata(&self) -> Metadata {
+        crate::fs::anon::metadata()
+    }
+
+    fn into_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync> {
+        self
+    }
+
+    fn is_stream(&self) -> bool {
+        true
+    }
+
+    /// Nothing is read from it: it is a name for an object and not a stream
+    /// of bytes, which is what Linux's dmabuf answers `read` for too.
+    fn read_at(&self, _offset: u64, _buf: &mut [u8]) -> VfsResult<usize> {
+        Err(Errno::EINVAL)
+    }
+}
+
+/// The open render node an exported object came from, if `file` is one.
+pub(crate) fn exported(io: &Arc<dyn Inode>) -> Option<Arc<Exported>> {
+    Arc::clone(io).into_any().downcast::<Exported>().ok()
+}
+
+/// `DRM_IOCTL_PRIME_HANDLE_TO_FD`: a buffer object as a descriptor.
+///
+/// What a compositor does with it is give it to the card, which shows what
+/// was drawn without the pixels ever leaving the device (`docs/GPU.md` §3.5
+/// piece 6). The descriptor holds the object alive, so the handle may be
+/// closed afterwards, as it may on Linux.
+///
+/// `DRM_RDWR` is taken and ignored: there is nothing to read or write
+/// through it. `DRM_CLOEXEC` is the only flag that means anything here.
+fn export(process: &Process, file: &RenderFile, arg: u64) -> Result<usize, Errno> {
+    let mut bytes = vec![0u8; PrimeHandle::SIZE];
+    uaccess::copy_from_user(process.space(), arg, &mut bytes).map_err(|_| Errno::EFAULT)?;
+    let mut prime = PrimeHandle::read(&bytes).ok_or(Errno::EFAULT)?;
+    if prime.flags & !(types::O_CLOEXEC | types::O_RDWR) != 0 {
+        return Err(Errno::EINVAL);
+    }
+    let held = file.held(prime.handle)?;
+    let exported = Arc::new(Exported {
+        object: held.object,
+    });
+    let open = crate::fs::anon::open(exported, EXPORTED_NAME, false)?;
+    let descriptor = process
+        .files()
+        .lock()
+        .insert(open, prime.flags & types::O_CLOEXEC != 0)?;
+    prime.fd = descriptor;
+    prime.write(&mut bytes).ok_or(Errno::EFAULT)?;
     uaccess::copy_to_user(process.space(), arg, &bytes).map_err(|_| Errno::EFAULT)?;
     Ok(0)
 }
@@ -519,9 +657,11 @@ fn gem_close(process: &Process, file: &RenderFile, arg: u64) -> Result<usize, Er
             .iter()
             .position(|held| held.handle == close.handle)
             .ok_or(Errno::EINVAL)?;
-        handles.live.swap_remove(at).object
+        handles.live.swap_remove(at)
     };
-    file.renderer.release(&[object], None);
+    // The object goes when the last thing naming it does, which is here
+    // unless a descriptor [`export`] made still holds it.
+    drop(object);
     Ok(0)
 }
 

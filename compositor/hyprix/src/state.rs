@@ -796,7 +796,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
         // The screenshots asked for in this pass, now that the screens are
         // in reach again.
         for shot in shots.drain(..) {
-            take_shot(&shot, &screens, &mut slots);
+            take_shot(&shot, &mut screens, &mut slots);
         }
         // Where a `zwp_pointer_constraints_v1` is holding the pointer, and
         // whether a client has asked for the keybinds. Both are worked out
@@ -1346,7 +1346,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                 report(&format!("hyprix: {} {display}", described(&screens)));
             }
             if let Some(directory) = options.dump.as_ref() {
-                dump(&screens, directory, drawn)?;
+                dump(&mut screens, directory, drawn)?;
             }
         }
 
@@ -2468,10 +2468,13 @@ fn described(screens: &[Screen]) -> String {
 ///
 /// One screen writes `frame-0001.ppm`, as it always did; two write
 /// `frame-0001-<name>.ppm` each, so a test can tell the monitors apart.
-fn dump(screens: &[Screen], directory: &std::path::Path, drawn: u32) -> Result<(), String> {
+fn dump(screens: &mut [Screen], directory: &std::path::Path, drawn: u32) -> Result<(), String> {
     let _ = std::fs::create_dir_all(directory);
-    for screen in screens {
-        let path = if screens.len() == 1 {
+    let one = screens.len() == 1;
+    for screen in screens.iter_mut() {
+        // As `take_shot` does, and for the same reason.
+        screen.fetch();
+        let path = if one {
             directory.join(format!("frame-{drawn:04}.ppm"))
         } else {
             directory.join(format!("frame-{drawn:04}-{}.ppm", screen.name))
@@ -2518,6 +2521,29 @@ struct Screen {
 }
 
 impl Screen {
+    /// Put the frame where a reader of this screen's pixels will find it.
+    ///
+    /// A frame drawn in software is in the backend's buffer already. One
+    /// drawn on the GPU and *shown* from there never reaches it, so the
+    /// whole of it is fetched here -- for a screenshot or a dumped PPM,
+    /// which is a reader that is usually not there at all.
+    fn fetch(&mut self) {
+        let Some(gpu) = self.gpu.as_mut() else {
+            return;
+        };
+        if !self.backend.adopted() {
+            return;
+        }
+        let (width, height) = self.backend.size();
+        let stride = self.backend.stride();
+        let whole = Rect::new(0, 0, i64::from(width), i64::from(height));
+        if let Ok(pixels) = gpu.canvas.read(whole) {
+            crate::frame::fetched(self.backend.buffer(), stride, whole, &pixels);
+        }
+    }
+}
+
+impl Screen {
     /// Every screen, laid out side by side from the left in the order the
     /// backends came.
     ///
@@ -2534,7 +2560,7 @@ impl Screen {
         let mut screens = Vec::with_capacity(backends.len());
         let mut x = 0i64;
         let mut id = 0u32;
-        for backend in backends {
+        for mut backend in backends {
             let name = backend.name();
             let description = backend.description();
             // The last rule that names this monitor, or the last rule with
@@ -2555,7 +2581,13 @@ impl Screen {
                 Canvas::new(width, height).map_err(|error| format!("a canvas: {error:?}"))?;
             let backdrop = compositor_render::Backdrop::new(width, height)
                 .map_err(|error| format!("a backdrop: {error:?}"))?;
-            let gpu = gpu_for(renderer, &name, (width, height), report)?;
+            let mut gpu = gpu_for(renderer, &name, (width, height), report)?;
+            // And if this screen can be pointed at what that renderer draws
+            // into, point it: the frame is then shown where it was made,
+            // and nothing of it crosses between the device and the guest.
+            if let Some(held) = gpu.as_mut() {
+                adopt(held, backend.as_mut(), (width, height), &name, report);
+            }
             // The monitor is laid out in logical pixels: a 1024x768 screen
             // at `scale = 2` tiles its windows in 512x384, as Hyprland's
             // does.
@@ -2708,6 +2740,41 @@ fn gpu_for(
             Ok(None)
         }
         Err(why) => Err(format!("--renderer asked for a GPU: {why}")),
+    }
+}
+
+/// Show what the renderer draws into on `backend`, if both can.
+///
+/// `docs/GPU.md` §3.5 piece 6. A backend that cannot -- anything but a real
+/// card -- and a renderer with nothing to export -- the test server, which
+/// has no card beside it -- leave the frame to be fetched, which is right
+/// and only slower.
+fn adopt(
+    gpu: &mut crate::frame::Gpu,
+    backend: &mut dyn Backend,
+    (width, height): (u32, u32),
+    screen: &str,
+    report: &mut dyn FnMut(&str),
+) {
+    use std::os::fd::AsFd;
+
+    let exported = match gpu.canvas.export() {
+        Ok(Some(fd)) => fd,
+        Ok(None) => return,
+        Err(error) => {
+            report(&format!(
+                "hyprix: {screen}: the frame cannot be handed to the card ({error}); it is fetched"
+            ));
+            return;
+        }
+    };
+    match backend.adopt(exported.as_fd(), width, height, width.saturating_mul(4)) {
+        Ok(()) => report(&format!(
+            "hyprix: {screen}: the screen shows what the GPU drew, where it drew it"
+        )),
+        Err(error) => report(&format!(
+            "hyprix: {screen}: the screen will not show the GPU's own frame ({error}); it is fetched"
+        )),
     }
 }
 
@@ -3353,7 +3420,15 @@ fn release_retired_pools(slot: &mut Slot) -> bool {
 }
 
 /// Answer one half of a screenshot.
-fn take_shot(shot: &Shot, screens: &[Screen], slots: &mut [Slot]) {
+fn take_shot(shot: &Shot, screens: &mut [Screen], slots: &mut [Slot]) {
+    // A screen showing what the GPU drew has nothing in the buffer a
+    // screenshot is copied out of: the frame is fetched now, for this one
+    // reader, rather than every frame for a reader that is usually not
+    // there.
+    for screen in screens.iter_mut() {
+        screen.fetch();
+    }
+    let screens: &[Screen] = screens;
     match *shot {
         Shot::Wanted {
             client,

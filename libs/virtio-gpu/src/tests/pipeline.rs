@@ -1,7 +1,9 @@
 //! The pipeline, step by step: each request's commands in order, each failure
 //! undone as far as is safe, and reports it was not waiting for refused.
 
-use ferrix_displayctl::message::{Attach, FORMAT, Message, PAGE_SIZE, Rect as CtlRect, Status};
+use ferrix_displayctl::message::{
+    Attach, AttachObject, FORMAT, Message, PAGE_SIZE, Rect as CtlRect, Status,
+};
 use ferrix_virtio::gpu::{Command, DeviceError as Refusal, Format, MemEntry, Rect, Response};
 
 use crate::pipeline::{Pipeline, PipelineError, QUEUE_DEPTH, Request, Step};
@@ -345,4 +347,129 @@ fn requests_come_from_core_messages_only() {
         }),
         None
     );
+}
+
+/// An object buffer: the renderer's resource, given a buffer id.
+fn attach_object(buffer: u32, object: u32) -> AttachObject {
+    AttachObject {
+        buffer,
+        object,
+        format: FORMAT,
+        width: 64,
+        height: 16,
+        stride: 256,
+    }
+}
+
+/// A buffer whose pixels the device holds already is made by writing it
+/// down: nothing is pinned, created or backed, because there is nothing to
+/// make.
+#[test]
+fn an_object_buffer_is_attached_without_a_command() {
+    let mut pipeline = Pipeline::new();
+    pipeline
+        .push(Request::AttachObject(attach_object(7, 1 << 30)))
+        .expect("room");
+    assert_eq!(
+        pipeline.next(&ENTRIES),
+        Step::Reply(Message::Attached {
+            buffer: 7,
+            status: Status::Ok
+        })
+    );
+    assert_eq!(pipeline.next(&ENTRIES), Step::Idle);
+}
+
+/// Every command about such a buffer names the *renderer's* resource, and
+/// its flush sends no pixels: they are the device's already, which is the
+/// whole reason for the second way of making a buffer.
+#[test]
+fn an_object_buffers_commands_name_its_object_and_send_no_pixels() {
+    let mut pipeline = Pipeline::new();
+    // One of each kind, so that a buffer id and a resource id cannot be
+    // confused: buffer 7 is the driver's own resource 7, buffer 8 is the
+    // renderer's object.
+    attached(&mut pipeline, 7);
+    pipeline
+        .push(Request::AttachObject(attach_object(8, 1 << 30)))
+        .expect("room");
+    let _ = pipeline.next(&ENTRIES);
+
+    let area = CtlRect {
+        x: 0,
+        y: 0,
+        width: 64,
+        height: 16,
+    };
+    let rect = Rect {
+        x: 0,
+        y: 0,
+        width: 64,
+        height: 16,
+    };
+    pipeline
+        .push(Request::Scanout {
+            scanout: 0,
+            buffer: 8,
+            rect: area,
+        })
+        .expect("room");
+    assert_eq!(
+        pipeline.next(&ENTRIES),
+        Step::Submit(Command::SetScanout {
+            rect,
+            scanout_id: 0,
+            resource_id: 1 << 30,
+        })
+    );
+    pipeline.done(OK).expect("waiting");
+
+    // No `TRANSFER_TO_HOST_2D`: straight to the flush.
+    pipeline
+        .push(Request::Flush {
+            buffer: 8,
+            sequence: 3,
+            rect: area,
+        })
+        .expect("room");
+    assert_eq!(
+        pipeline.next(&ENTRIES),
+        Step::Submit(Command::ResourceFlush {
+            rect,
+            resource_id: 1 << 30,
+        })
+    );
+    pipeline.done(OK).expect("waiting");
+    assert_eq!(
+        pipeline.next(&ENTRIES),
+        Step::Reply(Message::Flipped {
+            sequence: 3,
+            status: Status::Ok
+        })
+    );
+
+    // And letting it go takes nothing away from the device: the resource is
+    // the render conversation's, and unreffing it here would take a
+    // compositor's frame out from under it.
+    pipeline.push(Request::Detach { buffer: 8 }).expect("room");
+    assert_eq!(
+        pipeline.next(&ENTRIES),
+        Step::Reply(Message::Detached {
+            buffer: 8,
+            status: Status::Ok
+        })
+    );
+
+    // The buffer beside it is untouched: its flush still sends its pixels.
+    pipeline
+        .push(Request::Flush {
+            buffer: 7,
+            sequence: 4,
+            rect: area,
+        })
+        .expect("room");
+    assert!(matches!(
+        pipeline.next(&ENTRIES),
+        Step::Submit(Command::TransferToHost2d { resource_id: 7, .. })
+    ));
 }

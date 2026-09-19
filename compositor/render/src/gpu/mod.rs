@@ -263,7 +263,10 @@ impl<D: Device> Canvas<D> {
         };
         canvas.vertices = canvas.device.buffer(VERTEX_BYTES)?;
         canvas.begin();
-        canvas.target = canvas.image(width, height, true, true)?;
+        // The frame's own texture is one a screen may be pointed at, so that
+        // a card with a screen beside this renderer can show what was drawn
+        // rather than being handed a copy of it.
+        canvas.target = canvas.made(width, height, true, true, true)?;
         let whole = Damage::full(width, height);
         Painter::clear(&mut canvas, Color(0xff00_0000), &whole);
         canvas.finish()?;
@@ -292,6 +295,21 @@ impl<D: Device> Canvas<D> {
     /// The device, for whoever shows the frame.
     pub const fn device(&mut self) -> &mut D {
         &mut self.device
+    }
+
+    /// A descriptor for the frame's own texture that a card can be shown, if
+    /// this device has one.
+    ///
+    /// A screen pointed at it shows what was drawn without the pixels
+    /// leaving the device, which is what [`Canvas::read`] otherwise costs
+    /// every frame.
+    ///
+    /// # Errors
+    ///
+    /// The device's.
+    pub fn export(&mut self) -> io::Result<Option<std::os::fd::OwnedFd>> {
+        let resource = self.target.resource;
+        self.device.export(resource)
     }
 
     /// Submit what has been drawn, and say whether all of it could be.
@@ -431,6 +449,18 @@ impl<D: Device> Canvas<D> {
     /// Make a texture with its surface and its views. `moved` is whether
     /// pixels go to or from it; `drawn` whether it is ever a target.
     fn image(&mut self, width: u32, height: u32, moved: bool, drawn: bool) -> io::Result<Image> {
+        self.made(width, height, moved, drawn, false)
+    }
+
+    /// The same, saying whether a screen may be shown it.
+    fn made(
+        &mut self,
+        width: u32,
+        height: u32,
+        moved: bool,
+        drawn: bool,
+        scanout: bool,
+    ) -> io::Result<Image> {
         let bind = if drawn {
             pipe::BIND_RENDER_TARGET | pipe::BIND_SAMPLER_VIEW
         } else {
@@ -442,6 +472,7 @@ impl<D: Device> Canvas<D> {
             format: pipe::FORMAT_B8G8R8A8_UNORM,
             bind,
             moved,
+            scanout,
         })?;
         let image = Image {
             resource,

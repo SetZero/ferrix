@@ -53,10 +53,14 @@ Networking is done: sockets, a net core and a ring-3 virtio-net driver, with
 `curl` fetching over HTTPS and `git` cloning inside the guest. Stages 17 and
 18 are met, and the compositor runs: `cargo xtask test-compositor` boots it
 as init on Ferrix, and two Wayland clients tile on the card, pixel for pixel
-as the renderer draws them, on x86-64 and AArch64. Stage 19 is under way and
-every part of its exit but the GPU is met; the GPU path was decided on
-2026-09-18 (`docs/GPU.md`), stage 21 is bare metal with a card of Ferrix's
-own, and stage 22 is Steam. Stage 17's display iteration is done:
+as the renderer draws them, on x86-64 and AArch64. Stage 19 is under way, and the
+GPU path chosen on 2026-09-18 is built: the desktop composites on the GPU
+through `/dev/dri/renderD128`, and the screen is shown the very texture the
+compositor drew into, which takes a 1920x1080 frame of a video wallpaper
+behind a blurred translucent terminal from 39 ms in software to 12
+(`docs/GPU.md` §3.7 and §3.8; 60 fps is 16.7). What stage 19 still owes is
+XWayland, the pointer-driven options and the second-pass effects. Stage 21
+is bare metal with a card of Ferrix's own, and stage 22 is Steam. Stage 17's display iteration is done:
 `/dev/dri/card0` served by a ring-3 virtio-gpu driver, with `cargo xtask
 test-display` requiring a compositor's colour pixel for pixel on x86-64 and
 AArch64. Its input iteration is done too, to the same standard:
@@ -88,7 +92,7 @@ session sizes them.
 
 | what | points | lands, roundabout |
 |---|---|---|
-| Stage 19: the GPU path, Path A (`docs/GPU.md` §3) | 52 | 2026-09-19 |
+| ~~Stage 19: the GPU path, Path A (`docs/GPU.md` §3)~~ *done 2026-09-19* | ~~52~~ | landed 2026-09-19 |
 | Stage 19: XWayland, the pointer-driven options, the second-pass effects | 48 | 2026-09-19 to -20 |
 | Dynamic linking: the kernel half, ferrousli's loader, glibc's names | 39 | 2026-09-20 to -21 |
 | Stage 12, btrfs write | *longer* ≈ 60 | 2026-09-21 to -22 |

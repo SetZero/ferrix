@@ -7,6 +7,7 @@
 //! will reach through QEMU.
 
 use std::io;
+use std::os::fd::OwnedFd;
 
 use crate::Region;
 
@@ -26,6 +27,11 @@ pub struct Texture {
     /// this side at all, and on a guest that is the difference between a
     /// page and a screen's worth of pinned pages.
     pub moved: bool,
+    /// Whether a screen may be shown it: what a compositor's own frame is
+    /// made with, so that the finished picture never has to leave the
+    /// device. It costs the texture nothing to say so and a device may
+    /// refuse a scanout of one that did not.
+    pub scanout: bool,
 }
 
 /// Somewhere streams run.
@@ -72,6 +78,21 @@ pub trait Device: core::fmt::Debug {
     /// The device's.
     fn read(&mut self, resource: u32, region: Region) -> io::Result<Vec<u8>>;
 
+    /// A descriptor for `resource` that a card can be shown, if this device
+    /// is the kind that has one.
+    ///
+    /// `None` is a device whose resources no screen can be pointed at --
+    /// a test server, which has no card beside it -- and the answer for a
+    /// renderer that asks is to fetch its frame instead.
+    ///
+    /// # Errors
+    ///
+    /// The device's.
+    fn export(&mut self, resource: u32) -> io::Result<Option<OwnedFd>> {
+        let _ = resource;
+        Ok(None)
+    }
+
     /// Let go of a resource nothing will name again.
     ///
     /// A renderer keeps a texture for the next thing of its size, because
@@ -117,5 +138,9 @@ impl<D: Device + ?Sized> Device for Box<D> {
 
     fn release(&mut self, resource: u32) -> io::Result<()> {
         (**self).release(resource)
+    }
+
+    fn export(&mut self, resource: u32) -> io::Result<Option<OwnedFd>> {
+        (**self).export(resource)
     }
 }

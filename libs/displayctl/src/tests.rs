@@ -50,6 +50,19 @@ fn buffer(id: u32, offset: u64) -> Attach {
     }
 }
 
+/// A buffer whose pixels the device holds already: the same shape, named by
+/// the renderer's object rather than by a range.
+fn object_buffer(id: u32) -> AttachObject {
+    AttachObject {
+        buffer: id,
+        object: 1 << 30,
+        format: FORMAT,
+        width: 1280,
+        height: 800,
+        stride: 5120,
+    }
+}
+
 const CARD: u64 = 256 * 1024 * 1024;
 
 fn every_message() -> Vec<Message> {
@@ -67,6 +80,7 @@ fn every_message() -> Vec<Message> {
         }),
         Message::Refused(Refusal::Protocol),
         Message::Attach(buffer(7, 4096)),
+        Message::AttachObject(object_buffer(9)),
         Message::Attached {
             buffer: 7,
             status: Status::PinFailed,
@@ -116,7 +130,7 @@ fn fields_lie_where_the_specification_puts_them() {
     // 16 of header and fields, 16 scanouts of 12, and 12 for what the card
     // said about 3D.
     assert_eq!(bytes.len(), 220);
-    assert_eq!(u16::from_le_bytes([bytes[8], bytes[9]]), 2, "VERSION");
+    assert_eq!(u16::from_le_bytes([bytes[8], bytes[9]]), 3, "VERSION");
     assert_eq!(u16::from_le_bytes([bytes[10], bytes[11]]), 1);
     assert_eq!(u32_at(bytes, 12), 0x800);
     assert_eq!(
@@ -597,4 +611,95 @@ fn accept_refuses_what_validate_refuses() {
         Session::accept(&wrong, &Hello::HANDLE_RIGHTS, CARD).map(|_| ()),
         Err(Refusal::Scanouts)
     );
+}
+
+/// `ATTACH_OBJ`'s fields lie where the specification puts them, and it is
+/// checked the way an ATTACH is but for the range it has not got.
+#[test]
+fn an_object_buffer_is_checked_without_a_range() {
+    let encoded = Message::AttachObject(object_buffer(9)).encode();
+    let bytes = encoded.as_bytes();
+    assert_eq!(bytes.len(), 32);
+    assert_eq!(u32_at(bytes, 0), 13, "ATTACH_OBJ");
+    assert_eq!(u32_at(bytes, 8), 9, "the buffer");
+    assert_eq!(u32_at(bytes, 12), 1 << 30, "the object");
+    assert_eq!(u32_at(bytes, 16), FORMAT);
+    assert_eq!(u32_at(bytes, 20), 1280);
+    assert_eq!(u32_at(bytes, 24), 800);
+    assert_eq!(u32_at(bytes, 28), 5120);
+
+    let refused = |change: fn(&mut AttachObject)| {
+        let mut attach = object_buffer(9);
+        change(&mut attach);
+        attach.validate().expect_err("refused")
+    };
+    assert_eq!(refused(|a| a.buffer = 0), AttachError::Id);
+    assert_eq!(refused(|a| a.object = 0), AttachError::Id, "no object");
+    assert_eq!(refused(|a| a.format = FORMAT + 1), AttachError::Format);
+    assert_eq!(refused(|a| a.width = 0), AttachError::Size);
+    assert_eq!(refused(|a| a.height = MAX_DIMENSION + 1), AttachError::Size);
+    assert_eq!(refused(|a| a.stride = 5119), AttachError::Stride);
+    // A card VMO it is not in: there is no range to be outside of, and a
+    // buffer of pixels the device holds is not bounded by one.
+    object_buffer(9).validate().expect("nothing else to check");
+}
+
+/// A buffer made either way is the same buffer to the conversation: it is
+/// attached once, shown and flushed inside its own shape, and detached.
+#[test]
+fn an_object_buffer_is_shown_and_flushed_like_any_other() {
+    let mut core = session();
+    let _ = core
+        .attach_object(object_buffer(9))
+        .expect("a buffer with no range");
+    assert_eq!(
+        core.attach_object(object_buffer(9)),
+        Err(RequestError::InUse),
+        "one id, one buffer"
+    );
+    // An id a range-backed buffer has is the same id.
+    assert_eq!(
+        core.attach(buffer(9, 4096)),
+        Err(RequestError::InUse),
+        "whichever way it was made"
+    );
+    assert_eq!(
+        core.scanout(0, 9, full()),
+        Err(RequestError::NotAttached),
+        "not until the driver has answered"
+    );
+    let _ = core
+        .receive(&Message::Attached {
+            buffer: 9,
+            status: Status::Ok,
+        })
+        .expect("attached");
+    let _ = core.scanout(0, 9, full()).expect("shown");
+    assert_eq!(
+        core.scanout(
+            0,
+            9,
+            Rect {
+                x: 0,
+                y: 0,
+                width: 1281,
+                height: 800,
+            }
+        ),
+        Err(RequestError::Rect),
+        "outside its own shape"
+    );
+    let Message::Flush { sequence, .. } = core.flush(9, full()).expect("flushed") else {
+        panic!("a flush is a FLUSH");
+    };
+    // Not while the device may still be reading it, whatever its pixels are.
+    assert_eq!(core.detach(9), Err(RequestError::Busy));
+    let _ = core
+        .receive(&Message::Flipped {
+            sequence,
+            status: Status::Ok,
+        })
+        .expect("flipped");
+    let _ = core.scanout(0, 0, full()).expect("the screen off");
+    let _ = core.detach(9).expect("let go of");
 }

@@ -31,6 +31,36 @@ pub trait Backend: core::fmt::Debug {
     /// Whatever the screen said.
     fn present(&mut self, drawn: &compositor_render::Damage) -> io::Result<()>;
 
+    /// Show what was drawn on the GPU, from now on, rather than this
+    /// backend's own buffer: `fd` names the buffer object the renderer drew
+    /// into, which the card is given and points its screen at.
+    ///
+    /// A backend that cannot -- one with no card, which is every backend
+    /// but a real screen's -- says so, and the renderer fetches its frame
+    /// into [`Backend::buffer`] as before. `docs/GPU.md` §3.5 piece 6 is
+    /// what this is for: a frame that is already the device's, shown
+    /// without being handed back to it.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the card said. A backend that adopted nothing is unchanged.
+    fn adopt(
+        &mut self,
+        fd: std::os::fd::BorrowedFd<'_>,
+        width: u32,
+        height: u32,
+        pitch: u32,
+    ) -> io::Result<()> {
+        let _ = (fd, width, height, pitch);
+        Err(io::Error::other("this screen shows only its own buffer"))
+    }
+
+    /// Whether [`Backend::adopt`] took: a frame that is shown from the
+    /// device needs no fetching.
+    fn adopted(&self) -> bool {
+        false
+    }
+
     /// How many frames old the buffer [`Backend::buffer`] gives is: one for
     /// a screen with one buffer, two for one that draws into two in turn.
     ///
@@ -158,6 +188,9 @@ pub struct Drm {
     /// Whether the card shows a copy of the buffer it is told to bring up
     /// to date, so that the first buffer is the only one drawn into.
     copied: bool,
+    /// What the GPU drew, once a renderer has handed it over: the screen is
+    /// pointed at it and the buffers above are never shown again.
+    adopted: Option<compositor_drm::Imported>,
     width: u32,
     height: u32,
     frames: u32,
@@ -252,6 +285,7 @@ impl Drm {
         Ok(Self {
             card,
             plan,
+            adopted: None,
             buffers: [first, second],
             back: usize::from(!copied),
             copied,
@@ -298,11 +332,39 @@ impl Backend for Drm {
             .map_or_else(|| self.width.saturating_mul(4), |buffer| buffer.pitch)
     }
 
+    fn adopt(
+        &mut self,
+        fd: std::os::fd::BorrowedFd<'_>,
+        width: u32,
+        height: u32,
+        pitch: u32,
+    ) -> io::Result<()> {
+        let imported = compositor_drm::Imported::new(&self.card, fd, width, height, pitch)?;
+        // Shown the long way round, as the first frame is: a page flip needs
+        // a mode already set, and the mode is set to another buffer now.
+        let _ = self.card.set_mode(&self.plan, &imported)?;
+        self.adopted = Some(imported);
+        Ok(())
+    }
+
+    fn adopted(&self) -> bool {
+        self.adopted.is_some()
+    }
+
     fn present(&mut self, drawn: &compositor_render::Damage) -> io::Result<()> {
-        let Some(buffer) = self.buffers.get(self.back) else {
-            return Ok(());
+        // What the GPU drew is one texture, shown where it lies: there is no
+        // second buffer to flip to and nothing to copy into it, so every
+        // frame is a dirty rectangle -- which on this card costs the host
+        // being told what changed and not one pixel.
+        let shown: &dyn compositor_drm::Shown = match self.adopted.as_ref() {
+            Some(imported) => imported,
+            None => match self.buffers.get(self.back) {
+                Some(buffer) => buffer,
+                None => return Ok(()),
+            },
         };
-        if self.copied {
+        let buffer = shown;
+        if self.copied || self.adopted.is_some() {
             let edge = |value: i64| u32::try_from(value.max(0)).unwrap_or(u32::MAX);
             let clips: Vec<(u32, u32, u32, u32)> = drawn
                 .rects()
@@ -330,7 +392,13 @@ impl Backend for Drm {
     }
 
     fn age(&self) -> u32 {
-        if self.copied { 1 } else { 2 }
+        // What the GPU drew is one texture drawn into every frame, so a
+        // frame owes it only its own damage, as a copied buffer does.
+        if self.copied || self.adopted.is_some() {
+            1
+        } else {
+            2
+        }
     }
 
     fn describe(&self) -> String {

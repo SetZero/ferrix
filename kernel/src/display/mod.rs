@@ -31,8 +31,8 @@ use core::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use ferrix_blkring::identity::Location;
 use ferrix_bootinfo::PAGE_SIZE;
 use ferrix_displayctl::message::{
-    Attach, CARD_VMO_RIGHTS, FORMAT, MAX_BUFFER_PAGES, MAX_BYTES, MAX_SCANOUTS, Message, Ready,
-    Rect, Refusal, ScanoutMode, Status,
+    Attach, AttachObject, CARD_VMO_RIGHTS, FORMAT, MAX_BUFFER_PAGES, MAX_BYTES, MAX_SCANOUTS,
+    Message, Ready, Rect, Refusal, ScanoutMode, Status,
 };
 use ferrix_displayctl::session::{Event, RequestError, Session};
 use ferrix_native_abi::rights::Rights;
@@ -467,6 +467,55 @@ impl Card {
         )?;
         match event {
             Event::Attached { status, .. } => Ok((buffer, offset, status)),
+            _ => Err(CardError::Gone),
+        }
+    }
+
+    /// Give an object the render core made a buffer id, `ATTACH_OBJ` it and
+    /// wait for ATTACHED: the id and how the attach went.
+    ///
+    /// The other way to make a buffer, and the difference is where the
+    /// pixels are. An ATTACH's are a range of the card VMO, which the driver
+    /// pins for the device; these are the device's own already, so there is
+    /// no range to allocate, nothing to pin, and nothing to send when the
+    /// frame changes -- which is the whole of why it exists. What the driver
+    /// is handed is the renderer's object id, which is the device's name for
+    /// the resource and no business of this core's beyond passing it on.
+    ///
+    /// # Errors
+    ///
+    /// [`CardError`], including the driver's own refusal.
+    pub(crate) fn attach_object(
+        &self,
+        object: u32,
+        width: u32,
+        height: u32,
+        stride: u32,
+    ) -> Result<(u32, Status), CardError> {
+        let buffer = self.send(|state| {
+            let buffer = state.next_buffer;
+            let next = buffer.checked_add(1).ok_or(CardError::NoRoom)?;
+            let attach = AttachObject {
+                buffer,
+                object,
+                format: FORMAT,
+                width,
+                height,
+                stride,
+            };
+            let message = state
+                .session
+                .attach_object(attach)
+                .map_err(CardError::Request)?;
+            state.next_buffer = next;
+            Ok((message, buffer))
+        })?;
+        let event = self.collect(
+            |event| matches!(event, Event::Attached { buffer: b, .. } if *b == buffer),
+            |state| state.orphans.push(buffer),
+        )?;
+        match event {
+            Event::Attached { status, .. } => Ok((buffer, status)),
             _ => Err(CardError::Gone),
         }
     }

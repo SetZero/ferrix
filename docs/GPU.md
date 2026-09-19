@@ -64,6 +64,13 @@ In dependency order, with sizes in story points:
 driver and the node first because nothing above can be tested without them,
 the host plumbing third so that the renderer is gated from its first commit.
 
+**Built, 2026-09-19 (§3.7 and §3.8).** Steps 1, 2, 3b and 5 are done and the
+desktop composites on the GPU: the compositor draws its frame there and the
+screen is shown that very texture. 1920x1080, a video wallpaper behind a
+blurred translucent terminal, under KVM on the gate host: **39 ms a frame in
+software, 12 ms on the GPU**, where 60 fps is 16.7. Step 4 is still only for
+clients that render for themselves.
+
 ### 3.1 What was found when the gate host was given the device (2026-09-18)
 
 The Linux gate host's QEMU was rebuilt as step 5 asks: the 9.2.4 tree at
@@ -542,13 +549,68 @@ guest's filesystem, and says over the serial port how far apart they are:
     shot: 1024x768 against /etc/expected.xrle: 0 channels more than 3
     apart, the furthest 2
 
-What is left of §3.5 is piece 6, scanout of what was drawn. Until then a GPU
-frame reaches the screen by being fetched: the rectangles the software
-canvas would have copied into the dumb buffer are read back from the GPU and
-written there instead, so the night-light, the flip and a screenshot see
-what they always saw. That costs the frame the transfer piece 6 removes,
-and one thing more: a screenshot taken while a night-light is on has its
-ramps in it, because what was fetched is the screen's own buffer.
+### 3.8 The screen shows what was drawn, where it was drawn (2026-09-19)
+
+Piece 6, and with it §3.5 is built. The frame was being *fetched*: read out
+of the device into the dumb buffer and handed straight back to it by
+`DIRTYFB`, a megabyte or eight crossing between host and guest twice a
+frame for pixels the host already had.
+
+**The seam is a second way of making a display buffer.** `libs/displayctl`
+is version 3, with `ATTACH_OBJ` beside ATTACH: a buffer whose pixels are a
+resource the *render* conversation made, named by its object id, with no
+range of the card VMO, nothing pinned, and a flush that sends nothing --
+QEMU's `virgl_cmd_resource_flush` tells the display what changed and
+transfers not one pixel. The driver's pipeline had been naming the device's
+resource by the buffer id; it now keeps what the device calls each buffer
+beside its shape, which is what lets the two kinds live side by side.
+
+**The two nodes meet through PRIME, as they do on Linux.**
+`DRM_IOCTL_PRIME_HANDLE_TO_FD` on the render node answers a descriptor
+holding the object -- a dmabuf in every way that matters here, though it is
+not one a second process or a second device could read -- and
+`DRM_IOCTL_PRIME_FD_TO_HANDLE` on the card takes it, `ATTACH_OBJ`s it and
+gives it a handle. `ADDFB2`, `SETCRTC`, the page flip and `DIRTYFB` know
+nothing about any of it. A render object is refcounted now, so the
+descriptor and the card's handle each hold it: a program may close the
+handle it drew through, or the render node itself, while the screen shows
+what it drew.
+
+**A dumb buffer's offset is an `Option` for the reason that matters**: an
+imported object has no range in the card VMO, and `MODE_MAP_DUMB` of one
+answers nothing rather than an offset, which would have been some other
+buffer's pixels.
+
+**`hyprix` adopts it when both ends can.** The renderer exports the texture
+it draws into, the backend imports it and sets the mode to it, and after
+that a frame is `DIRTYFB` and nothing else. A backend that cannot, and a
+renderer with nothing to export -- the test server, which has no card --
+leave the frame to be fetched, which is right and only slower. The two
+readers that want the pixels on this side, a screenshot and a dumped PPM,
+fetch the frame when they ask rather than every frame for a reader who is
+usually not there; a night-light still fetches every frame, because its
+ramps are applied to pixels on the way out and the fetched ones are the only
+pixels this compositor can reach.
+
+**`VIRGL_RESOURCE_Y_0_TOP` is not set, and this is worth writing down.** It
+says which way up a texture's rows are, and *both* the transfers and the
+scanout honour it, while what the renderer draws is unaffected by it -- so
+setting it turned the screen and the readback upside down together. The
+guest's own screenshot caught the readback; nothing in the gate could have
+caught the screen, because a GL console cannot be dumped. What caught it was
+looking: `compositor/hyprix/probe/vncshot.py` grabs a frame from the VNC
+server beside `egl-headless`, which is the screen as a person sees it.
+
+**What it is worth**, 1920x1080, the AV1-shaped video wallpaper behind a
+blurred translucent terminal, under KVM on the gate host:
+
+| | a frame, mean | slowest of ten |
+|---|---|---|
+| the software renderer | 39 ms | 46 ms |
+| the GPU, frame fetched | 22 ms | 28 ms |
+| the GPU, screen shown it | **12 ms** | 17 ms |
+
+60 fps is 16.7 ms. The goal of `docs/GPU.md` is met on this host.
 
 **A handle can be let go of now** (2026-09-19). `probe/drm.sh` was run on
 this host -- it needs a Linux host with the UAPI headers, an ARM cross
