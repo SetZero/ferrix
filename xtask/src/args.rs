@@ -85,6 +85,15 @@ pub(crate) struct Args {
     /// boots want. A QEMU that has not got it says so and the 2D device is
     /// used instead.
     pub(crate) gl: bool,
+    /// `--clipboard`: a `virtio-serial` device carrying the port named
+    /// `com.redhat.spice.0`, with QEMU's own half of the SPICE agent
+    /// protocol behind it, so that the guest's clipboard and the clipboard of
+    /// whoever is watching the screen are joined (`docs/CLIPBOARD.md`).
+    ///
+    /// Off by default, and asked for rather than brought by `--display`, for
+    /// the reason `net` gives: it puts another device on the bus, and the bus
+    /// a check enumerates should be the bus it has always enumerated.
+    pub(crate) clipboard: bool,
     /// `--input`: a virtio keyboard and a virtio tablet on the bus, which
     /// QMP's `input-send-event` drives. `test-input` turns it on, and
     /// `--display` brings them as well.
@@ -177,6 +186,7 @@ impl Args {
                     args.gl = true;
                     args.display = true;
                 }
+                "--clipboard" => args.clipboard = true,
                 "--input" => args.input = true,
                 "--screens" => args.screens = number(&mut items, "--screens")?,
                 "--arch" => args.arch = Some(value(&mut items, "--arch")?),
@@ -408,6 +418,20 @@ mod tests {
     fn reset_is_off_unless_asked_for() {
         assert!(!parse(&["test-boot"]).unwrap().reset);
         assert!(parse(&["test-boot", "--reset"]).unwrap().reset);
+    }
+
+    #[test]
+    fn the_clipboard_is_off_unless_asked_for() {
+        assert!(
+            !parse(&["run"]).unwrap().clipboard,
+            "a boot has no virtio-serial device unless one was asked for"
+        );
+        assert!(
+            !parse(&["run", "--display"]).unwrap().clipboard,
+            "a screen does not bring one: the bus a check enumerates should \
+             be the bus it has always enumerated"
+        );
+        assert!(parse(&["run", "--clipboard"]).unwrap().clipboard);
     }
 
     #[test]

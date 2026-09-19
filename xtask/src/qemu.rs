@@ -1026,26 +1026,9 @@ fn qemu_command(
         }
     }
 
-    // A virtio device on PCI, on every machine, for stage 10's enumeration to
-    // find: a 64-bit BAR to size, MSI-X and virtio's vendor capabilities to
-    // walk. An entropy source because it needs no backend and nothing on the
-    // guest side depends on it, so it changes what firmware and the kernel see
-    // on the bus and nothing else.
-    //
-    // `disable-legacy=on,iommu_platform=on` sends the device's DMA through the
-    // machine's IOMMU, which QEMU otherwise lets virtio bypass, and which the
-    // out-of-domain fault stage 10 exits on needs. Not on ARMv7-A: U-Boot
-    // 2025.10's virtio-pci driver fails a heap assertion
-    // (`do_check_inuse_chunk`) and resets when a device offers
-    // VIRTIO_F_ACCESS_PLATFORM, with or without an SMMU, while the loader is
-    // still running on its boot services.
-    let rng = if arch == Arch::Armv7a {
-        "virtio-rng-pci,disable-legacy=on"
-    } else {
-        "virtio-rng-pci,disable-legacy=on,iommu_platform=on"
-    };
-    let _ = command.args(["-device", rng]);
+    attach_rng(&mut command, arch);
     attach_display(&mut command, arch, args, &binary);
+    attach_clipboard(&mut command, arch, args);
     attach_test_disk(&mut command, arch)?;
     attach_btrfs_disk(&mut command, arch)?;
     let network = attach_network(&mut command, arch, args)?;
@@ -1070,6 +1053,67 @@ fn qemu_command(
     }
 
     Ok((command, network))
+}
+
+/// A virtio device on PCI, on every machine, for stage 10's enumeration to
+/// find: a 64-bit BAR to size, MSI-X and virtio's vendor capabilities to
+/// walk. An entropy source because it needs no backend and nothing on the
+/// guest side depends on it, so it changes what firmware and the kernel see
+/// on the bus and nothing else.
+///
+/// `disable-legacy=on,iommu_platform=on` sends the device's DMA through the
+/// machine's IOMMU, which QEMU otherwise lets virtio bypass, and which the
+/// out-of-domain fault stage 10 exits on needs. Not on ARMv7-A: U-Boot
+/// 2025.10's virtio-pci driver fails a heap assertion
+/// (`do_check_inuse_chunk`) and resets when a device offers
+/// `VIRTIO_F_ACCESS_PLATFORM`, with or without an SMMU, while the loader is
+/// still running on its boot services.
+fn attach_rng(command: &mut Command, arch: Arch) {
+    let rng = if arch == Arch::Armv7a {
+        "virtio-rng-pci,disable-legacy=on"
+    } else {
+        "virtio-rng-pci,disable-legacy=on,iommu_platform=on"
+    };
+    let _ = command.args(["-device", rng]);
+}
+
+/// The clipboard of `--clipboard` (`docs/CLIPBOARD.md` §3.1): a
+/// `virtio-serial` device with the one port SPICE's agent protocol has always
+/// used, and QEMU's own half of that protocol behind it.
+///
+/// `qemu-vdagent` is a character device that speaks the host end of vdagent
+/// with no SPICE server anywhere: it is a peer of whatever clipboard QEMU's
+/// UI has -- a window's, or a VNC client's through the RFB extended clipboard
+/// -- so the guest reaches the clipboard of whoever is watching it, on
+/// whichever machine that is. `clipboard=on` is what makes it that peer;
+/// without it the chardev exists and carries nothing.
+///
+/// `mouse` is left off: the agent announces no mouse capability, QEMU sends
+/// no mouse state to an agent that has not asked for it, and the machine
+/// already has a virtio tablet for that.
+///
+/// ARMv7-A is left out for the reason every other PCI virtio device here
+/// leaves it out: U-Boot 2025.10's virtio-pci driver fails a heap assertion
+/// on the bus this would add a device to.
+fn attach_clipboard(command: &mut Command, arch: Arch, args: &Args) {
+    if !args.clipboard || arch == Arch::Armv7a {
+        return;
+    }
+    let _ = command.args([
+        "-chardev",
+        "qemu-vdagent,id=vdagent,name=vdagent,clipboard=on,mouse=off",
+    ]);
+    let _ = command.args([
+        "-device",
+        "virtio-serial-pci,id=vdagent-bus,disable-legacy=on,iommu_platform=on",
+    ]);
+    // The port's name is how the guest finds it; its number is QEMU's to
+    // choose, and the guest matches on the name (`docs/CLIPBOARD.md` §3.3).
+    let _ = command.args([
+        "-device",
+        "virtserialport,bus=vdagent-bus.0,chardev=vdagent,name=com.redhat.spice.0",
+    ]);
+    println!("  {arch}: clipboard over virtio-serial, port com.redhat.spice.0");
 }
 
 /// The display of iteration 1 (`docs/DISPLAY.md` §3), when `--display` or
