@@ -192,6 +192,17 @@ impl Device for RenderDevice {
         self.node.exec(words)
     }
 
+    fn release(&mut self, resource: u32) -> io::Result<()> {
+        // A texture pixels are moved to or from is known by its resource;
+        // one that is not was never written down, and there is no handle to
+        // close. That is a renderer letting go of something it never
+        // tracked, which is not an error.
+        let Some(held) = self.moved.remove(&resource) else {
+            return Ok(());
+        };
+        self.node.close(held.handle)
+    }
+
     fn read(&mut self, resource: u32, region: Region) -> io::Result<Vec<u8>> {
         let held = self
             .moved

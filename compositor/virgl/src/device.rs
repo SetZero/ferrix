@@ -71,6 +71,19 @@ pub trait Device: core::fmt::Debug {
     ///
     /// The device's.
     fn read(&mut self, resource: u32, region: Region) -> io::Result<Vec<u8>>;
+
+    /// Let go of a resource nothing will name again.
+    ///
+    /// A renderer keeps a texture for the next thing of its size, because
+    /// making one costs a message and a pinned backing; what it may not do
+    /// is keep every size anything ever was. This is how the ones it has
+    /// given up on go.
+    ///
+    /// # Errors
+    ///
+    /// The device's. A caller that cannot let go keeps the resource, which
+    /// is not wrong -- only wasteful.
+    fn release(&mut self, resource: u32) -> io::Result<()>;
 }
 
 /// A device behind a pointer is one too, which is how a compositor holds
@@ -100,5 +113,9 @@ impl<D: Device + ?Sized> Device for Box<D> {
 
     fn read(&mut self, resource: u32, region: Region) -> io::Result<Vec<u8>> {
         (**self).read(resource, region)
+    }
+
+    fn release(&mut self, resource: u32) -> io::Result<()> {
+        (**self).release(resource)
     }
 }

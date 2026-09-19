@@ -82,6 +82,17 @@ pub const IOCTL_MODE_GETPROPERTY: u32 = 0xC040_64AA;
 pub const IOCTL_MODE_GETPROPBLOB: u32 = 0xC010_64AC;
 /// `DRM_IOCTL_MODE_GETPLANERESOURCES`.
 pub const IOCTL_MODE_GETPLANERESOURCES: u32 = 0xC010_64B5;
+/// `DRM_IOCTL_GEM_CLOSE`: let a handle go.
+///
+/// The one call that takes a buffer object away from an open. Without it an
+/// open's objects live as long as the open does, which for a compositor is
+/// as long as the session.
+pub const IOCTL_GEM_CLOSE: u32 = 0x4008_6409;
+/// `DRM_IOCTL_PRIME_HANDLE_TO_FD`: a buffer object as a descriptor, which
+/// another node of the same card can be given.
+pub const IOCTL_PRIME_HANDLE_TO_FD: u32 = 0xC00C_642D;
+/// `DRM_IOCTL_PRIME_FD_TO_HANDLE`: the other way about.
+pub const IOCTL_PRIME_FD_TO_HANDLE: u32 = 0xC00C_642E;
 /// `DRM_IOCTL_MODE_GETPLANE`.
 pub const IOCTL_MODE_GETPLANE: u32 = 0xC020_64B6;
 /// `DRM_IOCTL_MODE_OBJ_GETPROPERTIES`.
@@ -297,6 +308,32 @@ pub const PLANE_TYPE_CURSOR: u64 = 2;
 // ---------------------------------------------------------------------------
 // Layouts
 // ---------------------------------------------------------------------------
+
+layout! {
+    /// `struct drm_gem_close`: `DRM_IOCTL_GEM_CLOSE`'s argument.
+    GemClose = "drm_gem_close", 8 {
+        /// The handle to let go of.
+        handle: u32 = 0 / "handle",
+        /// Written as zero.
+        pad: u32 = 4 / "pad",
+    }
+}
+
+layout! {
+    /// `struct drm_prime_handle`: the argument of both PRIME calls.
+    ///
+    /// One structure for the two directions: `HANDLE_TO_FD` reads `handle`
+    /// and writes `fd`, `FD_TO_HANDLE` reads `fd` and writes `handle`.
+    PrimeHandle = "drm_prime_handle", 12 {
+        /// The buffer object, on the node the call is made on.
+        handle: u32 = 0 / "handle",
+        /// `DRM_CLOEXEC` and `DRM_RDWR`, which are `O_CLOEXEC` and
+        /// `O_RDWR`; `FD_TO_HANDLE` ignores them.
+        flags: u32 = 4 / "flags",
+        /// The descriptor.
+        fd: i32 = 8 / "fd",
+    }
+}
 
 layout! {
     /// `struct drm_get_cap`: `DRM_IOCTL_GET_CAP`'s argument.

@@ -16,6 +16,9 @@ DRM_IOCTL_MODE_DIRTYFB 3222824113
 DRM_IOCTL_MODE_CREATE_DUMB 3223348402
 DRM_IOCTL_MODE_MAP_DUMB 3222299827
 DRM_IOCTL_MODE_DESTROY_DUMB 3221513396
+DRM_IOCTL_GEM_CLOSE 1074291721
+DRM_IOCTL_PRIME_HANDLE_TO_FD 3222037549
+DRM_IOCTL_PRIME_FD_TO_HANDLE 3222037550
 DRM_IOCTL_MODE_GETPLANERESOURCES 3222299829
 DRM_IOCTL_MODE_GETPLANE 3223348406
 DRM_IOCTL_MODE_OBJ_GETPROPERTIES 3223348409
@@ -248,6 +251,13 @@ offsetof.drm_mode_get_property.count_enum_blobs 60
 sizeof.drm_mode_property_enum 40
 offsetof.drm_mode_property_enum.value 0
 offsetof.drm_mode_property_enum.name 8
+sizeof.drm_gem_close 8
+offsetof.drm_gem_close.handle 0
+offsetof.drm_gem_close.pad 4
+sizeof.drm_prime_handle 12
+offsetof.drm_prime_handle.handle 0
+offsetof.drm_prime_handle.flags 4
+offsetof.drm_prime_handle.fd 8
 sizeof.drm_event 8
 offsetof.drm_event.type 0
 offsetof.drm_event.length 4

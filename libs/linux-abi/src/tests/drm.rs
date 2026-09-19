@@ -77,6 +77,15 @@ fn ioctls(width: Width) -> Vec<(&'static str, u64)> {
             drm::IOCTL_MODE_GETPLANERESOURCES.into(),
         ),
         ("DRM_IOCTL_MODE_GETPLANE", drm::IOCTL_MODE_GETPLANE.into()),
+        ("DRM_IOCTL_GEM_CLOSE", drm::IOCTL_GEM_CLOSE.into()),
+        (
+            "DRM_IOCTL_PRIME_HANDLE_TO_FD",
+            drm::IOCTL_PRIME_HANDLE_TO_FD.into(),
+        ),
+        (
+            "DRM_IOCTL_PRIME_FD_TO_HANDLE",
+            drm::IOCTL_PRIME_FD_TO_HANDLE.into(),
+        ),
         (
             "DRM_IOCTL_MODE_OBJ_GETPROPERTIES",
             drm::IOCTL_MODE_OBJ_GETPROPERTIES.into(),
@@ -256,6 +265,8 @@ fn expected(width: Width) -> BTreeMap<String, u64> {
     lines.extend(layouts::<drm::GetProperty>());
     lines.extend(layouts::<drm::GetBlob>());
     lines.extend(layouts::<drm::PropertyEnum>());
+    lines.extend(layouts::<drm::GemClose>());
+    lines.extend(layouts::<drm::PrimeHandle>());
     lines.extend(layouts::<drm::Event>());
     lines.extend(layouts::<drm::EventVblank>());
     let count = lines.len();

@@ -44,6 +44,17 @@ int main(void)
 	VALUE(DRM_IOCTL_MODE_CREATE_DUMB);
 	VALUE(DRM_IOCTL_MODE_MAP_DUMB);
 	VALUE(DRM_IOCTL_MODE_DESTROY_DUMB);
+	/* Letting a handle go, and passing a buffer object between two nodes
+	 * of one card: what a compositor drawing on the render node and
+	 * showing on the card needs (docs/GPU.md step 2 and piece 6).
+	 *
+	 * `DRM_CLOEXEC` and `DRM_RDWR`, which are the flags a handle is
+	 * exported with, are `O_CLOEXEC` and `O_RDWR` and are probed with the
+	 * rest of `fcntl.h`'s numbers rather than here. */
+	VALUE(DRM_IOCTL_GEM_CLOSE);
+	VALUE(DRM_IOCTL_PRIME_HANDLE_TO_FD);
+	VALUE(DRM_IOCTL_PRIME_FD_TO_HANDLE);
+
 	/* Planes and properties, iteration 2 (E4). */
 	VALUE(DRM_IOCTL_MODE_GETPLANERESOURCES);
 	VALUE(DRM_IOCTL_MODE_GETPLANE);
@@ -310,6 +321,15 @@ int main(void)
 	SIZE(drm_mode_property_enum);
 	FIELD(drm_mode_property_enum, value);
 	FIELD(drm_mode_property_enum, name);
+
+	SIZE(drm_gem_close);
+	FIELD(drm_gem_close, handle);
+	FIELD(drm_gem_close, pad);
+
+	SIZE(drm_prime_handle);
+	FIELD(drm_prime_handle, handle);
+	FIELD(drm_prime_handle, flags);
+	FIELD(drm_prime_handle, fd);
 
 	SIZE(drm_event);
 	FIELD(drm_event, type);

@@ -19,7 +19,7 @@
 use std::ffi::CStr;
 use std::io;
 
-use ferrix_linux_abi::drm::{self, Version};
+use ferrix_linux_abi::drm::{self, GemClose, Version};
 use ferrix_linux_abi::socket::Width;
 use ferrix_linux_abi::virtgpu::{
     self, ExecBuffer, GetCaps, GetParam, Layout, Map, ResourceInfo, TransferFromHost,
@@ -339,6 +339,16 @@ impl Render {
         };
         self.ioctl(virtgpu::IOCTL_GET_CAPS, &mut request)?;
         Ok(bytes)
+    }
+
+    /// Let go of object `handle`: `DRM_IOCTL_GEM_CLOSE`.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the node said; `EINVAL` for a handle this open has not got.
+    pub fn close(&self, handle: u32) -> io::Result<()> {
+        let mut request = GemClose { handle, pad: 0 };
+        self.ioctl(drm::IOCTL_GEM_CLOSE, &mut request)
     }
 
     /// What `VIRTGPU_RESOURCE_INFO` says is behind object `handle`: its

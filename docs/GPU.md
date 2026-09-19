@@ -550,11 +550,14 @@ what they always saw. That costs the frame the transfer piece 6 removes,
 and one thing more: a screenshot taken while a night-light is on has its
 ramps in it, because what was fetched is the screen's own buffer.
 
-Two things are owed beside it. `DRM_IOCTL_GEM_CLOSE`: a texture cannot be
-let go of while its open lives, so a texture no surface uses is kept for the
-next surface of its size, and a long session of windows resized by hand
-will run the renderer out of objects -- at which point it falls back, as
-above. And the 32 MiB a pinned backing may be, which a 4K surface is over.
+**A handle can be let go of now** (2026-09-19). `probe/drm.sh` was run on
+this host -- it needs a Linux host with the UAPI headers, an ARM cross
+compiler and `qemu-arm`, all of which the gate host has -- and
+`DRM_IOCTL_GEM_CLOSE` and the two PRIME calls came out of it at both widths,
+identical, as structures carrying no pointer are. The render node answers
+`GEM_CLOSE`, and the renderer keeps at most a handful of textures for the
+next surface of their size and lets the rest go, so a session of windows
+resized by hand no longer ends in a renderer with no objects left.
 
 ### 3a, which was not chosen for the compositor
 

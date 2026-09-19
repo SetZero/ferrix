@@ -122,6 +122,15 @@ const FLUSH_BYTES: usize = 32 * 1024;
 /// handed to the next surface of its size.
 const KEPT_FRAMES: u64 = 120;
 
+/// How many textures are kept for the next surface of their size.
+///
+/// A desktop has a few sizes in play -- the windows, and each animation
+/// step of one being resized -- and making a texture costs a message and a
+/// backing the kernel pins, so a handful are worth keeping. Past that they
+/// are let go of: a session of windows dragged by their corners would
+/// otherwise keep a texture for every width they were ever at.
+const MAX_SPARE: usize = 8;
+
 /// A texture with the two ways of using it: drawn into, and read from.
 #[derive(Clone, Copy, Debug)]
 struct Image {
@@ -688,7 +697,8 @@ impl<D: Device> Canvas<D> {
     }
 
     /// Hand the textures of surfaces not drawn for a while to whatever
-    /// surface of their size comes next.
+    /// surface of their size comes next, and let go of the ones beyond what
+    /// is worth keeping.
     fn retire(&mut self) {
         let frame = self.frame;
         let gone: Vec<u64> = self
@@ -701,6 +711,13 @@ impl<D: Device> Canvas<D> {
             if let Some(kept) = self.surfaces.remove(&key) {
                 self.spare.push(kept.image);
             }
+        }
+        // The oldest first, which are the sizes longest out of use. A
+        // device that will not let go is one that keeps them, which costs
+        // memory and nothing else, so the answer is dropped.
+        while self.spare.len() > MAX_SPARE {
+            let image = self.spare.remove(0);
+            let _ = self.device.release(image.resource);
         }
     }
 

@@ -22,7 +22,9 @@ use compositor_virgl::vtest::Vtest;
 
 use super::{Backdrop, Canvas};
 use crate::tests::{client_buffers, decorated_style, plain_style, surfaces, two_clients_on};
-use crate::{Blur, Damage, Format, LayerFrame, Pattern, Rect, Style, Styles, Surface, render_onto};
+use crate::{
+    Blur, Damage, Format, LayerFrame, Painter, Pattern, Rect, Style, Styles, Surface, render_onto,
+};
 
 const SIZE: (u32, u32) = (512, 384);
 
@@ -379,4 +381,50 @@ fn a_frame_drawn_inside_its_damage_is_the_same_picture() {
         }
     }
     assert!(inside > 500, "only {inside} pixels of the patch changed");
+}
+
+/// A renderer that has seen many sizes keeps only a few of their textures,
+/// and still draws after letting the rest go.
+///
+/// Two things, and the second is the one worth a test: that what is kept is
+/// bounded, and that the renderer goes on drawing afterwards -- which it
+/// would not if it let go of a texture something still names, since
+/// virglrenderer refuses a resource it has unreferenced.
+#[test]
+fn textures_of_sizes_long_out_of_use_are_let_go_of() {
+    let Some(server) = server("retired") else {
+        return;
+    };
+    let mut gpu = Canvas::new(server, SIZE.0, SIZE.1).expect("a GPU canvas");
+    let whole = Damage::full(SIZE.0, SIZE.1);
+    // Each frame a surface of its own size, named so that it is kept, and
+    // never drawn again.
+    for step in 0..(super::MAX_SPARE * 3) as u32 {
+        let (wide, tall) = (16 + step, 16 + step);
+        let data = vec![0x80_u8; (wide * tall * 4) as usize];
+        let surface = Surface::new(&data, wide, tall, wide * 4, Format::Argb8888)
+            .expect("a surface")
+            .named(u64::from(step) + 1);
+        Painter::composite(
+            &mut gpu,
+            &surface,
+            Rect::new(0, 0, i64::from(wide), i64::from(tall)),
+            &whole,
+        );
+        gpu.finish().expect("the frame was drawn");
+        // Each frame counts against what a surface is kept for, so nothing
+        // retires until they have all been seen; wind the clock instead.
+        gpu.frame = gpu.frame.saturating_add(super::KEPT_FRAMES);
+        gpu.retire();
+    }
+    assert!(
+        gpu.spare.len() <= super::MAX_SPARE,
+        "{} textures kept for the next surface of their size",
+        gpu.spare.len()
+    );
+    // And the canvas still draws: a clear, read back.
+    Painter::clear(&mut gpu, crate::Color(0xff20_4060), &whole);
+    gpu.finish().expect("the frame was drawn");
+    let drawn = gpu.read(Rect::new(0, 0, 4, 1)).expect("read back");
+    assert_eq!(drawn.get(..3), Some(&[0x60, 0x40, 0x20][..]));
 }

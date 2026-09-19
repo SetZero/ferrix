@@ -28,6 +28,7 @@ const SERVER: &str = "virgl_test_server";
 
 /// `VCMD_*`, from `vtest_protocol.h`.
 const RESOURCE_CREATE: u32 = 2;
+const RESOURCE_UNREF: u32 = 3;
 const TRANSFER_GET: u32 = 4;
 const TRANSFER_PUT: u32 = 5;
 const SUBMIT_CMD: u32 = 6;
@@ -253,5 +254,10 @@ impl Device for Vtest {
 
     fn read(&mut self, resource: u32, region: Region) -> io::Result<Vec<u8>> {
         self.get(resource, region)
+    }
+
+    fn release(&mut self, resource: u32) -> io::Result<()> {
+        self.header(1, RESOURCE_UNREF)?;
+        self.words(&[resource])
     }
 }

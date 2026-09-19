@@ -34,12 +34,11 @@
 //! one for a device that has no `CONTEXT_INIT`: what one program draws and
 //! the resources it may name are apart from every other's.
 //!
+//! `DRM_IOCTL_GEM_CLOSE` lets a handle go, and an open that closes lets go
+//! of the rest.
+//!
 //! What is not answered, and what is in the way of each:
 //!
-//! * **A handle released on purpose.** `DRM_IOCTL_GEM_CLOSE` is the call for
-//!   it and its number is not in [`ferrix_linux_abi::drm`], which takes
-//!   every number from a committed probe. Until then an open's objects go
-//!   when the open does, which [`RenderFile::drop`] does do.
 //! * **`WAIT` that waits.** The driver does not offer fences, so nothing
 //!   says when the GPU has *finished* a stream rather than taken it. A
 //!   transfer from the device is ordered after every stream before it, which
@@ -52,7 +51,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::any::Any;
 
-use ferrix_linux_abi::drm::{self, Version};
+use ferrix_linux_abi::drm::{self, GemClose, Version};
 use ferrix_linux_abi::errno::Errno;
 use ferrix_linux_abi::socket::Width;
 use ferrix_linux_abi::virtgpu::{
@@ -271,6 +270,7 @@ pub(crate) fn ioctl(
         virtgpu::IOCTL_EXECBUFFER => exec_buffer(process, file, arg),
         virtgpu::IOCTL_WAIT => wait(process, file, arg),
         virtgpu::IOCTL_GET_CAPS => get_caps(process, file, arg),
+        drm::IOCTL_GEM_CLOSE => gem_close(process, file, arg),
         _ => Err(Errno::ENOTTY),
     }
 }
@@ -495,6 +495,33 @@ fn resource_info(process: &Process, file: &RenderFile, arg: u64) -> Result<usize
     info.blob_mem = 0;
     info.write(&mut bytes).ok_or(Errno::EFAULT)?;
     uaccess::copy_to_user(process.space(), arg, &bytes).map_err(|_| Errno::EFAULT)?;
+    Ok(0)
+}
+
+/// `DRM_IOCTL_GEM_CLOSE`: let a handle go.
+///
+/// The object goes with it, without waiting for the device: the same bargain
+/// a close makes, and Linux's `drm_gem_close_ioctl` does not wait either. A
+/// handle this open has not got is `EINVAL`, as Linux answers one.
+///
+/// Whatever the device does with the resource, the *handle* is gone here, so
+/// a program that closes what it no longer draws with can go on making
+/// objects for as long as it runs. Without this a compositor's textures
+/// accumulated for the length of a session.
+fn gem_close(process: &Process, file: &RenderFile, arg: u64) -> Result<usize, Errno> {
+    let mut bytes = vec![0u8; GemClose::SIZE];
+    uaccess::copy_from_user(process.space(), arg, &mut bytes).map_err(|_| Errno::EFAULT)?;
+    let close = GemClose::read(&bytes).ok_or(Errno::EFAULT)?;
+    let object = {
+        let mut handles = file.handles.lock();
+        let at = handles
+            .live
+            .iter()
+            .position(|held| held.handle == close.handle)
+            .ok_or(Errno::EINVAL)?;
+        handles.live.swap_remove(at).object
+    };
+    file.renderer.release(&[object], None);
     Ok(0)
 }
 
