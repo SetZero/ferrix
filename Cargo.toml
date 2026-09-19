@@ -36,6 +36,7 @@ members = [
     "libs/objects",
     "libs/sync",
     "libs/ustack",
+    "libs/vdagent",
     "libs/virtio",
     "libs/virtio-blk",
     "libs/virtio-gpu",

@@ -1,0 +1,11 @@
+[package]
+name = "ferrix-vdagent"
+description = "SPICE's vdagent protocol: the chunk framing and the clipboard messages, as bytes"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
