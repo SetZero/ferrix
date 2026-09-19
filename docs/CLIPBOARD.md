@@ -339,3 +339,21 @@ Two directions, one boot:
 
 A person's own check, which no gate can make, is
 `cargo xtask run --display --clipboard` and their own keyboard.
+
+**And that check can be made on this machine**, which §2 and the paragraph
+above would suggest it cannot. The QEMU on `PATH` here is a headless build
+whose `-display help` offers only `none`, `spice-app` and `dbus`, and that is
+what made VNC the fallback (`xtask/src/window.rs`). But there is a second
+QEMU on this host, built from source at
+`~/Documents/qemu/qemu/build`, and it has `gtk`, `egl-headless` and `curses`
+as well as the `qemu-vdagent` chardev. `FERRIX_QEMU` names it:
+
+```text
+FERRIX_QEMU=~/Documents/qemu/qemu/build cargo xtask run --display --clipboard
+```
+
+That opens a real window whose clipboard is this host's, which is the whole
+path end to end with a person at the keyboard. It does not change the gate --
+a gate may not depend on which QEMU a host happens to have built, which is why
+§9's test speaks vdagent over a socket instead -- but it does mean the manual
+check needs no second machine and no VNC viewer.
