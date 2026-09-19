@@ -310,27 +310,33 @@ at all. x86-64 and AArch64 only, as `--display` is.
 
 ### Everything at once
 
-One command with every part of Ferrix that has a switch turned on:
+One command with every part of Ferrix that composes with the others turned
+on. The few that do not are under it: a screen served instead of shown, a
+second monitor, and the network, which is on already.
 
 ```
 FERRIX_QEMU=<a QEMU with a window and virglrenderer, if the one on PATH has neither> \
-cargo xtask run-compositor --arch x86_64 --gl --clipboard \
-    --size 1920x1080 --layout de,us --smp 4 --memory 1024
+cargo xtask run-compositor --arch x86_64 --release --gl --clipboard \
+    --size 1920x1080 --layout de,us --variant nodeadkeys, \
+    --wallpaper <part of a name> --smp 4 --memory 1024
 ```
 
 That is the desktop on the 3D card, in a window of this host's, at
-1920x1080, with two keyboard layouts a switch moves between, four CPUs,
-twice the default memory, a network, a wallpaper from
-`~/.local/share/ferrix/wallpapers` and a terminal running zinc already open.
-Every flag is described above or in `cargo xtask --help`; the ones worth
-saying twice:
+1920x1080, with two keyboard layouts a switch moves between and no dead keys
+on the first, that wallpaper, four CPUs, twice the default memory, a
+network, and a terminal running zinc already open. Every flag is described
+above or in `cargo xtask --help`; these are the ones worth saying twice,
+the last three being the ones not in the line:
 
 | | |
 |---|---|
 | `FERRIX_QEMU` | a QEMU that is not the one on `PATH`, a directory of its binaries or one binary. Distributions often build QEMU without a local display backend, and then there is no window to open -- xtask asks whichever QEMU it is what it has, falls back to VNC when it has none, and says which it chose. `--gl` wants virglrenderer as well |
 | `--gl` | the 3D card, with this host's GPU behind it. Turns `--display` on by itself. Without it the card is the 2D one and the compositor composites on the CPU |
 | `--smp`, `--memory` | 4 and 512 MiB by default. A desktop with a video wallpaper is the one workload here that notices more of either |
+| `--release` | builds the loader and kernel with optimisations. Worth it for a desktop somebody is going to use rather than watch boot |
+| `--wallpaper` | matches part of the name of one kept by `cargo xtask wallpapers`. Leave it out and a run picks one of them, a different one each time; `--wallpaper none` for a plain background. A **video** in that directory becomes a wallpaper that moves, which is the most expensive thing this desktop does -- about a frame a second on a machine that has to emulate |
 | `--vnc :0` | instead of a window, for a machine reached over `ssh`. `--gl` still works: the frames are drawn off screen and copied out |
+| `--screens 2` | two cards, so two monitors, which the compositor tiles across and `test-compositor`'s monitor boot judges. Accepted by `run-compositor` too, though the boots that are gated are the headless ones |
 | `--no-net` | the one thing in that command that is on by default and can only be turned *off* |
 
 There is no `--everything`, deliberately: every device a boot does not need
