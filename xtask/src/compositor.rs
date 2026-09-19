@@ -575,6 +575,30 @@ const TASKBAR_BINDS: [(&str, &[&str]); 2] = [
     ("K, which closes one of them", &["k"]),
 ];
 
+/// The one picture the twin boot requires.
+///
+/// There is no "before" picture and no keybind: the client opens its second
+/// window and destroys it on its own clock, so a picture taken at a
+/// particular moment would be a race. `settle` takes screendumps until the
+/// screen is the one expected, which is exactly the claim -- the screen
+/// *becomes* one window -- and the transcript says the second window was
+/// really there and really went.
+const TWIN_EXPECTED: [(&str, &str); 1] = [(
+    "one window left, after the client that owned two destroyed one of them",
+    "compositor/render/tests/data/one-client-alone.xrle",
+)];
+
+/// The configuration the twentieth boot is given: one client with two
+/// windows.
+///
+/// The kept window is the gradient because that is the window
+/// `compositor/render` blesses alone; `--twin` draws the other pattern in
+/// the second one, so the screen while both are up is plainly two windows.
+const TWIN_CONFIG: &str = "\
+# Carried into the initramfs by `cargo xtask test-compositor`.
+exec-once = /bin/pattern gradient two --twin
+";
+
 /// The configuration the thirteenth boot is given: two windows, and a
 /// program that reads them through the foreign-toplevel protocol.
 const TASKBAR_CONFIG: &str = "\
@@ -2030,10 +2054,10 @@ fn said_on_its_own(line: &str) -> &str {
 /// Every boot `test-compositor` makes, in the order it makes them.
 ///
 /// A table rather than a list of calls so that `--boot <name>` can pick one:
-/// each takes minutes under emulation and there are fourteen of them, so a
+/// each takes minutes under emulation and there are twenty of them, so a
 /// change to one is otherwise an hour a try.
 type Boot = fn(Arch, &Programs, &Args) -> Result<()>;
-const BOOTS: [(&str, Boot); 19] = [
+const BOOTS: [(&str, Boot); 20] = [
     ("dispatchers", test_dispatchers),
     ("bar", test_bar),
     ("decorations", test_decorations),
@@ -2047,6 +2071,7 @@ const BOOTS: [(&str, Boot); 19] = [
     ("clipboard", test_clipboard),
     ("submap", test_submap),
     ("taskbar", test_taskbar),
+    ("twin", test_twin),
     ("screenshot", test_screenshot),
     ("lock", test_lock),
     ("menu", test_menu),
@@ -2651,6 +2676,57 @@ fn fnv1a(bytes: &[u8]) -> u64 {
         hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
     }
     hash
+}
+
+/// A twentieth boot: one client with two windows, one of which it closes.
+///
+/// Every other boot in this table gives each window a client of its own, so
+/// the only way one has ever gone is with its connection. This one is the
+/// other way: the client stays and destroys one of its two
+/// `xdg_toplevel`s, which until 2026-09-18 left the layout tiling a window
+/// that was not there. The host test in
+/// `compositor/hyprix/tests/two_clients.rs` makes the same claim against
+/// the compositor in a process; this makes it on Ferrix, on the card.
+fn test_twin(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
+    let (screens, said) = boot_and_dump(
+        arch,
+        programs,
+        TWIN_CONFIG,
+        &Wanted {
+            states: &TWIN_EXPECTED,
+            others: &[],
+            moving: None,
+            pointer: None,
+            awaiting: &["destroyed its second window"],
+        },
+        &[],
+        args,
+    )?;
+    let Some(last) = screens.last() else {
+        return Err(Error::new(format!("{arch}: the twin boot took no picture")));
+    };
+    // The picture alone would also be what a client that never managed to
+    // open its second window drew, and that is a different thing entirely:
+    // these two lines are what say the screen went from two windows to one
+    // rather than never having had two.
+    let has = |wanted: &str| said.iter().any(|line| line.contains(wanted));
+    for wanted in [
+        "pattern: two second window",
+        "pattern: two destroyed its second window",
+    ] {
+        if !has(wanted) {
+            return Err(Error::new(format!(
+                "{arch}: the client never said `{wanted}`, so it did not have two windows to \
+                 close one of"
+            )));
+        }
+    }
+    println!(
+        "  {arch}: a client opened a second window and destroyed it, and every one of {} pixels \
+         is the renderer's own picture of the window it kept",
+        last.width * last.height
+    );
+    Ok(())
 }
 
 /// A thirteenth boot: a taskbar, through
