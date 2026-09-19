@@ -5,13 +5,11 @@ use std::collections::BTreeMap;
 use compositor_layout::Rect;
 use compositor_layout::{MonitorLayout, WindowId};
 use compositor_render::{
-    Backdrop, Canvas, Damage, Format, LayerFrame, Style, Surface, Target, render_onto,
+    Backdrop, Canvas, Damage, Format, LayerFrame, Painter, Style, Surface, Target, render_onto,
 };
-use compositor_server::Client;
 use compositor_wire::ObjectId;
 
 use crate::backend::Backend;
-use crate::pool::Mapping;
 use crate::state::Slot;
 
 /// Where a frame is drawn: the canvas, the screen it goes to, where the
@@ -25,6 +23,9 @@ pub struct Output<'a> {
     /// frame so that a tiled window's blur is a copy: `crate::damage` says
     /// what that does to a frame's damage.
     pub backdrop: &'a mut Backdrop,
+    /// The GPU's canvas and backdrop, when the frame is drawn there rather
+    /// than on the two above.
+    pub gpu: Option<&'a mut Gpu>,
     /// The screen it is shown on.
     pub backend: &'a mut dyn Backend,
     /// Where the monitor is in the global space.
@@ -55,6 +56,23 @@ pub struct Output<'a> {
     /// damage as well as this one's. `crate::damage` says the rest.
     pub present: Damage,
 }
+
+/// A frame drawn on a GPU: the canvas, and what is kept behind the windows.
+///
+/// The device is whichever there was -- the render node in a guest, the
+/// test server on a host -- and nothing here knows which.
+#[derive(Debug)]
+pub struct Gpu {
+    /// The canvas the frame is composed on.
+    pub canvas: compositor_render::gpu::Canvas<Box<dyn compositor_virgl::Device>>,
+    /// What is behind the windows, and the blur of it.
+    pub backdrop: compositor_render::gpu::Backdrop,
+}
+
+/// What a frame that could not be drawn on the GPU says first, so that the
+/// loop can tell a GPU that has gone from a screen that has: the first is
+/// answered by drawing in software from then on.
+pub const GPU_FAILED: &str = "the GPU: ";
 
 /// A night-light's three ramps, one entry a level.
 ///
@@ -278,21 +296,27 @@ pub fn draw_locked(
 /// equivalent of; what a person sees is the same, and what the compositor
 /// must *not* show -- the windows that were there -- is gone either way.
 pub fn draw_dark(target: &mut Output<'_>, damage: &Damage) -> Result<(), String> {
-    let Output {
-        canvas,
-        backend,
-        present,
-        ..
-    } = target;
-    canvas.clear(compositor_render::Color(0xff00_0000), damage);
-    let (width, height) = backend.size();
-    let stride = backend.stride();
-    let mut screen = Target::new(backend.buffer(), width, height, stride)
-        .map_err(|error| format!("the screen's buffer is not one: {error:?}"))?;
-    canvas
-        .present(&mut screen, present)
-        .map_err(|error| format!("the frame does not fit the screen: {error:?}"))?;
-    backend.present(present).map_err(|error| error.to_string())
+    let black = compositor_render::Color(0xff00_0000);
+    match target.gpu.as_deref_mut() {
+        Some(gpu) => Painter::clear(&mut gpu.canvas, black, damage),
+        None => target.canvas.clear(black, damage),
+    }
+    shown(target)
+}
+
+/// Everything a frame is drawn from, whichever painter draws it.
+struct Scene<'a> {
+    output: &'a MonitorLayout,
+    clients: &'a [Slot],
+    sources: &'a BTreeMap<WindowId, Source>,
+    layers: &'a [Placed],
+    damage: &'a Damage,
+    origin: (i64, i64),
+    scale: f64,
+    style: &'a Style,
+    styles: &'a BTreeMap<WindowId, compositor_render::WindowStyle>,
+    cursor: Option<Cursor>,
+    drag_icon: Option<Placed>,
 }
 
 /// The two above, which differ only in what they are given to draw.
@@ -304,52 +328,62 @@ fn draw_windows(
     layers: &[Placed],
     damage: &Damage,
 ) -> Result<(), String> {
-    let Output {
-        canvas,
-        backdrop,
-        backend,
-        origin,
-        style,
-        styles,
-        scale,
-        cursor,
-        gamma,
-        drag_icon,
-        present,
-    } = target;
-    let gamma = *gamma;
-    let drag_icon = *drag_icon;
-    let cursor = *cursor;
-    let (origin, scale) = (*origin, *scale);
+    let scene = Scene {
+        output,
+        clients,
+        sources,
+        layers,
+        damage,
+        origin: target.origin,
+        scale: target.scale,
+        style: target.style,
+        styles: target.styles,
+        cursor: target.cursor,
+        drag_icon: target.drag_icon,
+    };
+    // The same frame on whichever painter there is: what differs is where
+    // its pixels are when it is done, which is `shown`'s business.
+    match target.gpu.as_deref_mut() {
+        Some(gpu) => composed(&mut gpu.canvas, &mut gpu.backdrop, &scene),
+        None => composed(&mut *target.canvas, &mut *target.backdrop, &scene),
+    }
+    shown(target)
+}
+
+/// Draw `scene` with `painter`: the windows and the layer surfaces, then
+/// what a drag carries, then the pointer.
+fn composed<P: Painter>(painter: &mut P, backdrop: &mut P::Backdrop, scene: &Scene<'_>) {
+    let (origin, scale, clients, damage) = (scene.origin, scene.scale, scene.clients, scene.damage);
     // The layout, the decorations and the layer surfaces are all in logical
     // pixels; a scaled monitor draws each of them as `scale` buffer pixels.
-    let output = &compositor_render::scaled(output, origin, scale);
-    let style = &style.at_scale(scale);
+    let output = &compositor_render::scaled(scene.output, origin, scale);
+    let style = &scene.style.at_scale(scale);
     // Gather every window's pixels first: `render` takes them all at once, so
     // each borrow of a mapping has to live as long as the call.
     let mut surfaces: BTreeMap<WindowId, Surface<'_>> = BTreeMap::new();
     for placed in &output.windows {
-        let Some(source) = sources.get(&placed.window) else {
+        let Some(source) = scene.sources.get(&placed.window) else {
             continue;
         };
         let Some(slot) = clients.get(source.client) else {
             continue;
         };
-        if let Some(surface) = pixels(slot.client(), slot.pools(), source.surface) {
+        if let Some(surface) = pixels(slot, source.surface) {
             let _ = surfaces.insert(placed.window, surface);
         }
     }
 
     // The bars and wallpapers, in the order they were made, which is the
     // order they were placed in.
-    let drawn: Vec<LayerFrame<'_>> = layers
+    let drawn: Vec<LayerFrame<'_>> = scene
+        .layers
         .iter()
         .map(|placed| LayerFrame {
             rect: scale_rect(placed.rect, origin, scale),
             above: placed.above,
             surface: clients
                 .get(placed.client)
-                .and_then(|slot| pixels(slot.client(), slot.pools(), placed.surface)),
+                .and_then(|slot| pixels(slot, placed.surface)),
             dim_around: placed.rules.dim_around,
             blur: placed.rules.blur,
             xray: placed.rules.xray,
@@ -360,12 +394,10 @@ fn draw_windows(
     // the canvas is this monitor's, so the origin is where the monitor is.
     let styles = compositor_render::Styles {
         base: style,
-        windows: styles,
+        windows: scene.styles,
     };
-    // Named outright: the frame is drawn by whichever painter it is handed,
-    // so nothing here is turned into one on the way in.
-    let _ = render_onto::<Canvas>(
-        canvas,
+    let _ = render_onto(
+        painter,
         Some(backdrop),
         output,
         origin,
@@ -378,12 +410,12 @@ fn draw_windows(
     // The drag icon under the pointer and over everything else: what a
     // drag looks like is a thing following the pointer, and a compositor
     // that drew it under a window would have a drag nobody can see.
-    if let Some(icon) = drag_icon
+    if let Some(icon) = scene.drag_icon
         && let Some(at) = drag_rect(clients, &icon, origin, scale)
         && let Some(slot) = clients.get(icon.client)
-        && let Some(surface) = pixels(slot.client(), slot.pools(), icon.surface)
+        && let Some(surface) = pixels(slot, icon.surface)
     {
-        canvas.composite(&surface, at, damage);
+        painter.composite(&surface, at, damage);
     }
 
     // The pointer last, over everything: it is not a window, not a layer
@@ -394,12 +426,12 @@ fn draw_windows(
     // 24x24 and a frame that has to allocate it is a frame that has already
     // blurred a window.
     let arrow;
-    if let Some(cursor) = cursor.filter(|cursor| cursor.shown)
+    if let Some(cursor) = scene.cursor.filter(|cursor| cursor.shown)
         && let Some(at) = cursor_rect(clients, &cursor, origin, scale)
     {
         let own = cursor.surface.and_then(|(client, surface, _)| {
             let slot = clients.get(client)?;
-            pixels(slot.client(), slot.pools(), surface)
+            pixels(slot, surface)
         });
         let surface = match own {
             Some(surface) => Some(surface),
@@ -409,17 +441,52 @@ fn draw_windows(
             }
         };
         if let Some(surface) = surface {
-            canvas.composite(&surface, at, damage);
+            painter.composite(&surface, at, damage);
         }
     }
+}
 
+/// Put the frame that was composed on the screen.
+///
+/// The software canvas copies what `present` names into the screen's
+/// buffer. The GPU's frame is on the GPU, and until the screen can be
+/// pointed at it there (`docs/GPU.md` §3.5, piece 6) it is fetched: the
+/// same rectangles, read back and written where the software canvas would
+/// have written them, so everything after this -- the night-light's ramps,
+/// the flip, a screenshot -- sees the frame it always saw.
+fn shown(target: &mut Output<'_>) -> Result<(), String> {
+    let Output {
+        canvas,
+        backend,
+        gpu,
+        gamma,
+        present,
+        ..
+    } = target;
     let (width, height) = backend.size();
     let stride = backend.stride();
-    let mut target = Target::new(backend.buffer(), width, height, stride)
-        .map_err(|error| format!("the screen's buffer is not one: {error:?}"))?;
-    canvas
-        .present(&mut target, present)
-        .map_err(|error| format!("the frame does not fit the screen: {error:?}"))?;
+    match gpu.as_deref_mut() {
+        Some(gpu) => {
+            gpu.canvas
+                .finish()
+                .map_err(|error| format!("{GPU_FAILED}{error}"))?;
+            let bounds = Rect::new(0, 0, i64::from(width), i64::from(height));
+            for &rect in present.clipped(bounds).rects() {
+                let pixels = gpu
+                    .canvas
+                    .read(rect)
+                    .map_err(|error| format!("{GPU_FAILED}{error}"))?;
+                fetched(backend.buffer(), stride, rect, &pixels);
+            }
+        }
+        None => {
+            let mut screen = Target::new(backend.buffer(), width, height, stride)
+                .map_err(|error| format!("the screen's buffer is not one: {error:?}"))?;
+            canvas
+                .present(&mut screen, present)
+                .map_err(|error| format!("the frame does not fit the screen: {error:?}"))?;
+        }
+    }
     // The night-light's ramps, over what was drawn: on hardware the
     // connector does this, and here the compositor does -- the same picture
     // by a slower road.
@@ -427,6 +494,25 @@ fn draw_windows(
         gamma.apply(backend.buffer(), stride, present);
     }
     backend.present(present).map_err(|error| error.to_string())
+}
+
+/// Write `pixels`, `rect`'s rows packed, into a screen's buffer at `rect`.
+fn fetched(buffer: &mut [u8], stride: u32, rect: Rect, pixels: &[u8]) {
+    let index = |value: i64| usize::try_from(value.max(0)).unwrap_or(0);
+    let row_bytes = index(rect.width) * 4;
+    if row_bytes == 0 {
+        return;
+    }
+    let first = index(rect.y) * stride as usize + index(rect.x) * 4;
+    let rows = buffer
+        .get_mut(first..)
+        .unwrap_or(&mut [])
+        .chunks_mut(stride.max(1) as usize);
+    for (into, from) in rows.zip(pixels.chunks_exact(row_bytes)) {
+        if let Some(into) = into.get_mut(..row_bytes) {
+            into.copy_from_slice(from);
+        }
+    }
 }
 
 /// One rectangle in the buffer pixels of a monitor at `scale`, grown away
@@ -477,7 +563,7 @@ pub(crate) fn local(rect: Rect, origin: (i64, i64), scale: f64) -> Rect {
 pub(crate) fn translucent(clients: &[Slot], client: usize, surface: ObjectId) -> bool {
     clients
         .get(client)
-        .and_then(|slot| pixels(slot.client(), slot.pools(), surface))
+        .and_then(|slot| pixels(slot, surface))
         .is_some_and(|pixels| pixels.format() == Format::Argb8888)
 }
 
@@ -493,7 +579,7 @@ pub(crate) fn drag_rect(
     scale: f64,
 ) -> Option<Rect> {
     let slot = clients.get(icon.client)?;
-    let surface = pixels(slot.client(), slot.pools(), icon.surface)?;
+    let surface = pixels(slot, icon.surface)?;
     Some(local(
         Rect::new(
             icon.rect.x,
@@ -523,7 +609,7 @@ pub(crate) fn cursor_rect(
     }
     let own = cursor.surface.and_then(|(client, surface, hotspot)| {
         let slot = clients.get(client)?;
-        let pixels = pixels(slot.client(), slot.pools(), surface)?;
+        let pixels = pixels(slot, surface)?;
         Some(((pixels.width(), pixels.height()), hotspot))
     });
     let ((width, height), hotspot) = own.unwrap_or((
@@ -546,11 +632,12 @@ pub(crate) fn cursor_rect(
 }
 
 /// The pixels a surface is showing, if it is showing any.
-fn pixels<'a>(
-    client: &'a Client,
-    pools: &'a BTreeMap<ObjectId, Mapping>,
-    surface: ObjectId,
-) -> Option<Surface<'a>> {
+fn pixels(slot: &Slot, surface: ObjectId) -> Option<Surface<'_>> {
+    let (client, pools) = (slot.client(), slot.pools());
+    // What the surface is called from frame to frame: the connection, which
+    // a slot's place is not, and the `wl_surface` on it. A renderer that
+    // keeps a surface's pixels somewhere of its own keeps them by this.
+    let name = (slot.serial() << 32) | u64::from(surface.0);
     let state = client.surface(surface)?;
     let buffer = client.buffer(state.current.buffer?)?;
     // A `wp_single_pixel_buffer_v1` is in no pool: the colour is the
@@ -580,4 +667,11 @@ fn pixels<'a>(
         format,
     )
     .ok()
+    // A single-pixel buffer's four bytes are the buffer's own and may be
+    // any colour next frame at the same size, under damage that is the
+    // whole window: it is moved whole like anything else without a name.
+    .map(|made| match buffer.solid {
+        Some(_) => made,
+        None => made.named(name),
+    })
 }

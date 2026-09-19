@@ -40,5 +40,5 @@ pub mod seat;
 pub mod select;
 pub mod state;
 
-pub use options::Options;
+pub use options::{Options, Renderer};
 pub use state::{run, run_with};

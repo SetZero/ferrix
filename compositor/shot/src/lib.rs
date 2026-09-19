@@ -17,6 +17,7 @@
 //! a whole screen through a serial port.
 
 /// The Wayland client.
+pub mod against;
 pub mod client;
 
 pub use client::{Shot, digest, take};

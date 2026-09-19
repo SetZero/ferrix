@@ -270,6 +270,7 @@ dependencies = [
  "compositor-shm",
  "compositor-shot",
  "compositor-socket",
+ "compositor-virgl",
  "compositor-wire",
  "compositor-xkb",
  "ferrix-linux-abi",

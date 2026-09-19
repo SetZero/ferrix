@@ -33,7 +33,7 @@ use std::time::Duration;
 
 use compositor_pattern::Shape;
 use compositor_render::Pattern;
-use hyprix::Options;
+use hyprix::{Options, Renderer};
 
 /// The screen, which is the size `compositor/render`'s expected image is.
 const WIDTH: u32 = 1024;
@@ -82,6 +82,17 @@ fn run(name: &str, patterns: &[(Pattern, &str)]) -> (Vec<u8>, String) {
 /// The same, with each client given the role it asks for: a window, or a bar
 /// through `zwlr_layer_shell_v1`.
 fn run_shaped(name: &str, patterns: &[(Pattern, &str, Shape)]) -> (Vec<u8>, String) {
+    run_drawn_by(name, patterns, Renderer::Software).expect("the compositor ran")
+}
+
+/// The same, with the frame drawn by `renderer`. `Err` is the compositor
+/// saying it could not run at all, which for a renderer that needs something
+/// of the host is how a test finds out the host has not got it.
+fn run_drawn_by(
+    name: &str,
+    patterns: &[(Pattern, &str, Shape)],
+    renderer: Renderer,
+) -> Result<(Vec<u8>, String), String> {
     let work = workspace(name);
     let socket = work.join("wayland");
     let frames = work.join("frames");
@@ -92,6 +103,7 @@ fn run_shaped(name: &str, patterns: &[(Pattern, &str, Shape)]) -> (Vec<u8>, Stri
         dump: Some(frames.clone()),
         deadline: Some(8000),
         config: Some(undithered(&work)),
+        renderer,
         ..Options::default()
     };
 
@@ -132,12 +144,19 @@ fn run_shaped(name: &str, patterns: &[(Pattern, &str, Shape)]) -> (Vec<u8>, Stri
         lines.join("; ")
     });
 
-    let line = hyprix::run(&options).expect("the compositor ran");
+    let ran = hyprix::run(&options);
     let clients = started.join().expect("the clients finished");
+    let line = match ran {
+        Ok(line) => line,
+        Err(why) => {
+            let _ = std::fs::remove_dir_all(&work);
+            return Err(why);
+        }
+    };
 
     let last = last_frame(&frames);
     let _ = std::fs::remove_dir_all(&work);
-    (last, format!("{line} | {clients}"))
+    Ok((last, format!("{line} | {clients}")))
 }
 
 /// One client, connected to `socket`.
@@ -274,6 +293,45 @@ fn two_clients_are_tiled_and_drawn_exactly_as_the_renderer_says() {
         differing, 0,
         "the compositor drew something else than the renderer's expected image; \
          first difference {first:?}"
+    );
+}
+
+/// The same two clients, the same compositor, the frame drawn on a GPU --
+/// virglrenderer's test server, which is the renderer a guest's frames reach
+/// through QEMU -- and held to the same expected image.
+///
+/// Not to the byte: `compositor/render`'s `gpu` module says why a GPU's
+/// frame is a step or two of a channel from the software one, and its own
+/// tests hold the painter to that. What this adds is everything round it:
+/// real clients' buffers named by their connection, moved as textures under
+/// each frame's damage over a run of frames, fetched back for the screen and
+/// dumped where a screenshot would read them.
+#[test]
+fn the_same_frame_is_drawn_on_a_gpu() {
+    let shaped = [
+        (Pattern::Checkerboard, "one", Shape::Window),
+        (Pattern::Gradient, "two", Shape::Window),
+    ];
+    let (frame, report) = match run_drawn_by("tiled-gpu", &shaped, Renderer::Vtest) {
+        Ok(ran) => ran,
+        // No test server on this host: nothing to run the GPU's frames on.
+        Err(why) if why.contains("virgl_test_server") => return,
+        Err(why) => panic!("the compositor did not run: {why}"),
+    };
+    assert!(
+        report.contains("most 2") && !report.contains("failed"),
+        "the compositor should have had two windows: {report}"
+    );
+    let want = expected();
+    let apart = frame
+        .iter()
+        .zip(&want)
+        .filter(|(mine, theirs)| mine.abs_diff(**theirs) > 3)
+        .count();
+    assert_eq!(frame.len(), want.len());
+    assert_eq!(
+        apart, 0,
+        "{apart} channels of the GPU's frame are more than 3 from the expected image"
     );
 }
 

@@ -25,6 +25,25 @@ pub struct Options {
     /// `$XDG_RUNTIME_DIR/hypr/<instance>/`. Without one the socket is not
     /// bound at all, which is what a test that does not want it asks for.
     pub instance: Option<String>,
+    /// What draws the frame.
+    pub renderer: Renderer,
+}
+
+/// What draws the frame: `--renderer`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Renderer {
+    /// The GPU when the card has one behind it and its render node speaks
+    /// virgl, and the software renderer otherwise. What a person wants.
+    #[default]
+    Auto,
+    /// The software renderer, whatever the card has.
+    Software,
+    /// The GPU, and it is an error for there to be none: what a test of the
+    /// GPU's frames asks for, so that a missing GPU is not a pass.
+    Gpu,
+    /// virglrenderer's test server on this host, started by the compositor:
+    /// the GPU's frames with no guest, which is how they are developed.
+    Vtest,
 }
 
 impl Default for Options {
@@ -38,6 +57,7 @@ impl Default for Options {
             exec: Vec::new(),
             deadline: None,
             instance: None,
+            renderer: Renderer::Auto,
         }
     }
 }
@@ -54,7 +74,8 @@ usage: hyprix [options]
   --dump <dir>        write each frame there as a PPM
   --exec <command>    start this once the socket is listening, repeatable
   --deadline <ms>     give up after this long
-  --instance <name>   bind hyprctl's socket under $XDG_RUNTIME_DIR/hypr/<name>";
+  --instance <name>   bind hyprctl's socket under $XDG_RUNTIME_DIR/hypr/<name>
+  --renderer <which>  auto, software, gpu or vtest (default auto)";
 
     /// Read the arguments.
     ///
@@ -89,6 +110,19 @@ usage: hyprix [options]
                             .parse()
                             .map_err(|_| "--deadline takes milliseconds".to_owned())?,
                     );
+                }
+                "--renderer" => {
+                    options.renderer = match value()?.as_str() {
+                        "auto" => Renderer::Auto,
+                        "software" => Renderer::Software,
+                        "gpu" => Renderer::Gpu,
+                        "vtest" => Renderer::Vtest,
+                        other => {
+                            return Err(format!(
+                                "--renderer takes auto, software, gpu or vtest, not {other}"
+                            ));
+                        }
+                    };
                 }
                 "--help" | "-h" => return Err("help".to_owned()),
                 other => return Err(format!("{other} is not an option")),

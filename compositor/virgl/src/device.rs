@@ -29,7 +29,7 @@ pub struct Texture {
 }
 
 /// Somewhere streams run.
-pub trait Device {
+pub trait Device: core::fmt::Debug {
     /// Make a texture, and answer the number a stream names it by.
     ///
     /// # Errors
@@ -71,4 +71,34 @@ pub trait Device {
     ///
     /// The device's.
     fn read(&mut self, resource: u32, region: Region) -> io::Result<Vec<u8>>;
+}
+
+/// A device behind a pointer is one too, which is how a compositor holds
+/// "whichever there was" without being written twice.
+impl<D: Device + ?Sized> Device for Box<D> {
+    fn texture(&mut self, texture: Texture) -> io::Result<u32> {
+        (**self).texture(texture)
+    }
+
+    fn buffer(&mut self, bytes: u32) -> io::Result<u32> {
+        (**self).buffer(bytes)
+    }
+
+    fn upload(
+        &mut self,
+        resource: u32,
+        region: Region,
+        stride: u32,
+        data: &[u8],
+    ) -> io::Result<()> {
+        (**self).upload(resource, region, stride, data)
+    }
+
+    fn submit(&mut self, words: &[u32]) -> io::Result<()> {
+        (**self).submit(words)
+    }
+
+    fn read(&mut self, resource: u32, region: Region) -> io::Result<Vec<u8>> {
+        (**self).read(resource, region)
+    }
 }

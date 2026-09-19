@@ -13,6 +13,8 @@
 
 #[cfg(target_os = "linux")]
 mod card;
+#[cfg(target_os = "linux")]
+mod device;
 mod edid;
 pub mod modeset;
 #[cfg(target_os = "linux")]
@@ -20,6 +22,8 @@ mod render;
 
 #[cfg(target_os = "linux")]
 pub use card::{Card, Dumb, Plan, cards, plan, planes, plans, rename, show};
+#[cfg(target_os = "linux")]
+pub use device::RenderDevice;
 pub use edid::{Edid, registered};
 #[cfg(target_os = "linux")]
 pub use render::{Box3d, Mapping, Render, ResourceCreate, probe};

@@ -1471,12 +1471,193 @@ pub(crate) fn test_compositor(args: &Args) -> Result<()> {
             continue;
         }
         let programs = Programs::build(arch)?;
+        // `--gl` puts a GPU behind the card, and then the compositor draws
+        // on it. Every boot below judges QEMU's screendump, which cannot
+        // read such a card's console (`docs/GPU.md` §3.1), so a GPU boot is
+        // one of its own, judged from inside the guest.
+        if args.gl {
+            test_gpu(arch, &programs, args)?;
+            continue;
+        }
         for (name, boot) in BOOTS {
             if wanted(args, name) {
                 boot(arch, &programs, args)?;
             }
         }
     }
+    Ok(())
+}
+
+/// Where the GPU boot's expected image is on the guest.
+const GPU_EXPECTED_PATH: &str = "etc/expected.xrle";
+
+/// The configuration the GPU boot is given: the decorated pair -- corners,
+/// shadows, an opacity and a dim, which between them are every shader but
+/// the blur's -- and a key that holds a screenshot to the expected image.
+///
+/// The settings are `DECORATED_CONFIG`'s, for its reason: the picture is
+/// `compositor/render`'s `decorated_style`.
+const GPU_CONFIG: &str = "\
+# Carried into the initramfs by `cargo xtask test-compositor --gl`.
+decoration:rounding = 12
+decoration:inactive_opacity = 0.6
+decoration:shadow:range = 12
+decoration:shadow:render_power = 2
+decoration:dim_inactive = 1
+decoration:dim_strength = 0.4
+exec-once = /bin/pattern checkerboard one
+exec-once = /bin/pattern gradient two
+bind = , S, exec, /bin/shot 0 /etc/expected.xrle
+";
+
+/// What the compositor says when a screen's frames are drawn on the GPU,
+/// and what it says when they stop being.
+const ON_THE_GPU: &str = "frames are drawn on the GPU";
+const IN_SOFTWARE: &str = "drawing in software";
+
+/// How long the GPU boot keeps asking for a screenshot that matches: the
+/// clients have to connect, draw and be tiled first, and a picture taken
+/// before they have is a true picture of something else.
+const GPU_PATIENCE: Duration = Duration::from_secs(90);
+
+/// `test-compositor --gl`: the compositor drawing on the GPU, in the guest.
+///
+/// The frame is drawn by `compositor/render`'s GPU painter through
+/// `/dev/dri/renderD128` -- the kernel's render node, the ring-3 driver,
+/// virtio-gpu's 3D commands and the host's virglrenderer -- and what is
+/// required is that it is the picture the software renderer blesses.
+///
+/// QEMU cannot be asked: `screendump` reads a surface and a GL console has
+/// none. So the guest judges itself. `/bin/shot` takes a screenshot through
+/// `zwlr_screencopy_v1`, reads the expected image off its own filesystem,
+/// and says how many channels are more than a step from it; a GPU's frame
+/// is the same picture and not the same bytes, which is why the verdict
+/// crosses the serial port and a digest does not. Two more things are
+/// required, because a screenshot that matches proves the picture and not
+/// who drew it: the compositor must say it draws on the GPU, and must not
+/// say it fell back.
+fn test_gpu(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
+    let expected_image = std::fs::read(paths::workspace_root().join(DECORATED_EXPECTED.1))
+        .map_err(|error| Error::new(format!("{}: {error}", DECORATED_EXPECTED.1)))?;
+    let carried = Carried {
+        ports: vec![crate::ports::File {
+            path: GPU_EXPECTED_PATH.to_owned(),
+            mode: 0o644,
+            content: crate::ports::Content::Bytes(expected_image),
+        }],
+        ..Carried::none()
+    };
+    let (image, kernel) = build_image(arch, programs, &undithered(GPU_CONFIG), carried, args)?;
+    let port = free_port()?;
+    let mut qemu_args = args.clone();
+    qemu_args.display = true;
+    qemu_args.qmp_port = Some(port);
+    let mut said: Vec<String> = Vec::new();
+    let hook = |watching: &mut Watching<'_>| -> Result<()> {
+        let mut qmp = Qmp::connect(port, Instant::now() + Duration::from_secs(10))?;
+        let up = watching.read_more(Instant::now() + SETTLE, |lines| {
+            lines
+                .iter()
+                .any(|line| line.contains(MARKER) || line.contains(FAILED))
+        })?;
+        if !up {
+            return Err(with_the_transcript(
+                &Error::new(format!("{arch}: the compositor never printed `{MARKER}`")),
+                watching,
+            ));
+        }
+        say_the_marker(watching, arch);
+        // Ask until the picture is the expected one. Each press is one more
+        // `shot:` line; the last of them is what is judged.
+        let deadline = Instant::now() + GPU_PATIENCE;
+        loop {
+            press(&mut qmp, &["s"])?;
+            // `shot: ` begins its own line and ends the compositor's
+            // `started /bin/shot`: only the first is an answer.
+            let answers = |lines: &[String]| {
+                lines
+                    .iter()
+                    .filter(|line| said_on_its_own(line).starts_with("shot: "))
+                    .count()
+            };
+            // What `read_more` hands its closure is what was said after the
+            // boot's first line, so that is what is counted before too.
+            let before = answers(watching.after());
+            let _ = watching.read_more(Instant::now() + Duration::from_secs(20), |lines| {
+                answers(lines) > before
+            })?;
+            let matched = watching
+                .lines()
+                .iter()
+                .chain(watching.after())
+                .rev()
+                .map(|line| said_on_its_own(line))
+                .find(|line| line.starts_with("shot: "))
+                .is_some_and(|line| line.contains(": 0 channels more than"));
+            if matched || Instant::now() >= deadline {
+                break;
+            }
+            std::thread::sleep(Duration::from_secs(2));
+        }
+        let _ = watching.read_more(Instant::now() + Duration::from_secs(2), |_| false)?;
+        said = watching
+            .lines()
+            .iter()
+            .chain(watching.after())
+            .cloned()
+            .collect();
+        Ok(())
+    };
+    let _ = crate::qemu::watch_then(arch, &image, &kernel, &qemu_args, EITHER, hook)?;
+    judge_gpu(arch, &said)
+}
+
+/// What [`test_gpu`] requires of what the guest said.
+fn judge_gpu(arch: Arch, said: &[String]) -> Result<()> {
+    let transcript = || {
+        said.iter()
+            .map(|line| said_on_its_own(line).to_owned())
+            .filter(|line| line.starts_with("hyprix: ") || line.starts_with("shot: "))
+            .collect::<Vec<_>>()
+            .join("\n    ")
+    };
+    if let Some(line) = said.iter().find(|line| line.contains("FERRIX-PANIC")) {
+        return Err(Error::new(format!(
+            "{arch}: the kernel stopped while the compositor ran: {}",
+            line.trim()
+        )));
+    }
+    if !said.iter().any(|line| line.contains(ON_THE_GPU)) {
+        return Err(Error::new(format!(
+            "{arch}: the compositor did not say it draws on the GPU:\n    {}",
+            transcript()
+        )));
+    }
+    if let Some(line) = said.iter().find(|line| line.contains(IN_SOFTWARE)) {
+        return Err(Error::new(format!(
+            "{arch}: the compositor gave the GPU up: {}",
+            line.trim()
+        )));
+    }
+    let Some(verdict) = said
+        .iter()
+        .rev()
+        .map(|line| said_on_its_own(line))
+        .find(|line| line.starts_with("shot: "))
+    else {
+        return Err(Error::new(format!(
+            "{arch}: the guest took no screenshot:\n    {}",
+            transcript()
+        )));
+    };
+    if !verdict.contains(": 0 channels more than") {
+        return Err(Error::new(format!(
+            "{arch}: the GPU's frame is not the expected image: `{verdict}`\n    {}",
+            transcript()
+        )));
+    }
+    println!("  {arch}: the compositor draws on the GPU, and the guest's own screenshot says:");
+    println!("  {arch}:   {verdict}");
     Ok(())
 }
 

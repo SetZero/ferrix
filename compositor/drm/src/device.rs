@@ -1,0 +1,223 @@
+//! The render node as somewhere `compositor/virgl`'s streams run.
+//!
+//! [`compositor_virgl::Device`] is what a GPU renderer asks of whatever runs
+//! its streams, and on a host that is virglrenderer's test server. In a
+//! guest it is this: `/dev/dri/renderD128`, a resource a texture, its
+//! backing mapped where pixels are to be moved, and a transfer either way.
+//!
+//! A texture that pixels are moved to or from has a backing as big as
+//! itself, which the kernel pins for the device for as long as the texture
+//! lives. One that is only drawn into and sampled from -- a blur's pyramid
+//! -- is asked for with a page: `VIRTGPU_RESOURCE_CREATE`'s `size` is how
+//! much backing, not how big the texture is, on Ferrix as on Linux.
+
+use std::collections::BTreeMap;
+use std::io;
+
+use compositor_virgl::{Device, Region, Texture, pipe};
+use ferrix_linux_abi::virtgpu::{Box3d, ResourceCreate};
+
+use crate::render::{Mapping, Render};
+
+/// The backing of a resource nothing is moved to or from: a page.
+const NO_BACKING: u32 = 4096;
+
+/// A texture pixels are moved to or from: where its backing is mapped.
+#[derive(Debug)]
+struct Moved {
+    handle: u32,
+    mapping: Mapping,
+    width: u32,
+    height: u32,
+}
+
+/// An open render node, as a [`Device`].
+#[derive(Debug)]
+pub struct RenderDevice {
+    node: Render,
+    moved: BTreeMap<u32, Moved>,
+}
+
+impl RenderDevice {
+    /// Open the render node.
+    ///
+    /// # Errors
+    ///
+    /// Whatever `open` said; `ENOENT` when the card has no GPU behind it.
+    pub fn open() -> io::Result<Self> {
+        Ok(Self {
+            node: Render::open()?,
+            moved: BTreeMap::new(),
+        })
+    }
+
+    /// Who is driving the node: `virtio_gpu` is the one whose streams
+    /// `compositor/virgl` writes.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the node said.
+    pub fn driver(&self) -> io::Result<String> {
+        self.node.driver()
+    }
+}
+
+/// Where `region`'s first byte is in a backing `width` pixels wide.
+fn offset_of(region: Region, width: u32) -> Option<u32> {
+    region
+        .y
+        .checked_mul(width)?
+        .checked_add(region.x)?
+        .checked_mul(4)
+}
+
+/// `region`, checked to lie inside a `width` by `height` texture.
+fn inside(region: Region, width: u32, height: u32) -> io::Result<()> {
+    let fits = region.width > 0
+        && region.height > 0
+        && region
+            .x
+            .checked_add(region.width)
+            .is_some_and(|right| right <= width)
+        && region
+            .y
+            .checked_add(region.height)
+            .is_some_and(|bottom| bottom <= height);
+    if fits {
+        Ok(())
+    } else {
+        Err(io::Error::other("a region outside its texture"))
+    }
+}
+
+const fn box_of(region: Region) -> Box3d {
+    Box3d {
+        x: region.x,
+        y: region.y,
+        z: 0,
+        w: region.width,
+        h: region.height,
+        d: 1,
+    }
+}
+
+impl Device for RenderDevice {
+    fn texture(&mut self, texture: Texture) -> io::Result<u32> {
+        let bytes = texture
+            .width
+            .checked_mul(texture.height)
+            .and_then(|pixels| pixels.checked_mul(4))
+            .ok_or_else(|| io::Error::other("a texture too large to describe"))?;
+        let (handle, resource) = self.node.create(ResourceCreate {
+            target: pipe::TEXTURE_2D,
+            format: texture.format,
+            bind: texture.bind,
+            width: texture.width,
+            height: texture.height,
+            depth: 1,
+            array_size: 1,
+            last_level: 0,
+            nr_samples: 0,
+            flags: 0,
+            bo_handle: 0,
+            res_handle: 0,
+            size: if texture.moved { bytes } else { NO_BACKING },
+            stride: texture.width.saturating_mul(4),
+        })?;
+        if texture.moved {
+            let mapping = self.node.map(handle, bytes as usize)?;
+            let _ = self.moved.insert(
+                resource,
+                Moved {
+                    handle,
+                    mapping,
+                    width: texture.width,
+                    height: texture.height,
+                },
+            );
+        }
+        Ok(resource)
+    }
+
+    fn buffer(&mut self, bytes: u32) -> io::Result<u32> {
+        let (_, resource) = self.node.create_resource(bytes)?;
+        Ok(resource)
+    }
+
+    fn upload(
+        &mut self,
+        resource: u32,
+        region: Region,
+        stride: u32,
+        data: &[u8],
+    ) -> io::Result<()> {
+        let held = self
+            .moved
+            .get_mut(&resource)
+            .ok_or_else(|| io::Error::other("a texture with no backing to write"))?;
+        inside(region, held.width, held.height)?;
+        let first = offset_of(region, held.width)
+            .ok_or_else(|| io::Error::other("a region too far in to describe"))?;
+        let own_stride = held.width as usize * 4;
+        let row_bytes = region.width as usize * 4;
+        // Row by row into the backing, at the place the region has in the
+        // texture: the device is then told the region and where it begins.
+        let rows = data.chunks(stride.max(1) as usize);
+        let into = held
+            .mapping
+            .bytes_mut()
+            .get_mut(first as usize..)
+            .unwrap_or(&mut [])
+            .chunks_mut(own_stride);
+        let mut written = 0;
+        for (from, to) in rows.zip(into).take(region.height as usize) {
+            let (Some(from), Some(to)) = (from.get(..row_bytes), to.get_mut(..row_bytes)) else {
+                break;
+            };
+            to.copy_from_slice(from);
+            written += 1;
+        }
+        if written != region.height {
+            return Err(io::Error::other("pixels too short for their region"));
+        }
+        self.node.transfer_to_host(
+            held.handle,
+            box_of(region),
+            first,
+            held.width.saturating_mul(4),
+        )
+    }
+
+    fn submit(&mut self, words: &[u32]) -> io::Result<()> {
+        self.node.exec(words)
+    }
+
+    fn read(&mut self, resource: u32, region: Region) -> io::Result<Vec<u8>> {
+        let held = self
+            .moved
+            .get(&resource)
+            .ok_or_else(|| io::Error::other("a texture with no backing to read"))?;
+        inside(region, held.width, held.height)?;
+        let first = offset_of(region, held.width)
+            .ok_or_else(|| io::Error::other("a region too far in to describe"))?;
+        self.node.transfer_from_host(
+            held.handle,
+            box_of(region),
+            first,
+            held.width.saturating_mul(4),
+        )?;
+        let own_stride = held.width as usize * 4;
+        let row_bytes = region.width as usize * 4;
+        let mut data = Vec::with_capacity(row_bytes * region.height as usize);
+        let rows = held
+            .mapping
+            .bytes()
+            .get(first as usize..)
+            .unwrap_or(&[])
+            .chunks(own_stride);
+        for row in rows.take(region.height as usize) {
+            data.extend_from_slice(row.get(..row_bytes).unwrap_or(&[]));
+        }
+        Ok(data)
+    }
+}

@@ -51,9 +51,19 @@ pub struct Slot {
     pid: i32,
     /// Whether it is finished and waiting to be dropped.
     gone: bool,
+    /// Which connection this is of all the compositor has had, counting
+    /// from one. A slot's *place* changes when another connection ends;
+    /// this does not, which is what something kept across frames for one of
+    /// its surfaces -- a texture -- has to be kept by.
+    serial: u64,
 }
 
 impl Slot {
+    /// Which connection this is of all the compositor has had.
+    pub(crate) const fn serial(&self) -> u64 {
+        self.serial
+    }
+
     /// The protocol side of this connection.
     pub const fn client(&self) -> &Client {
         &self.client
@@ -168,7 +178,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
         Some((width, height)) => vec![Box::new(Headless::new(width, height))],
         None => open_screens(&rules)?,
     };
-    let mut screens = Screen::all(backends, &rules)?;
+    let mut screens = Screen::all(backends, &rules, options.renderer, report)?;
     // The `windowrule` lines, which are applied when a window maps.
     let mut window_rules = crate::rules::Rules::new(&config, report);
     // `layerrule = <rule>, <namespace>`: what a bar, a wallpaper or a
@@ -399,6 +409,8 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
     }
 
     let mut slots: Vec<Slot> = Vec::new();
+    // How many connections there have been: a slot's serial.
+    let mut connections: u64 = 0;
     let mut sources: BTreeMap<WindowId, Source> = BTreeMap::new();
     let mut placed_layers: Vec<crate::frame::Placed> = Vec::new();
     let mut settling = false;
@@ -479,6 +491,10 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
         while let Ok(Some(stream)) = listener.accept() {
             match Connection::new(stream) {
                 Ok(connection) => slots.push(Slot {
+                    serial: {
+                        connections = connections.saturating_add(1);
+                        connections
+                    },
                     pid: connection.peer_pid(),
                     client: {
                         let mut client = Client::new(globals(screens.len()));
@@ -1225,6 +1241,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                 let mut target = crate::frame::Output {
                     canvas: &mut screen.canvas,
                     backdrop: &mut screen.backdrop,
+                    gpu: screen.gpu.as_mut(),
                     backend: screen.backend.as_mut(),
                     origin,
                     style: &style,
@@ -1235,8 +1252,8 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                     cursor,
                     present: frame.screen,
                 };
-                if dark {
-                    crate::frame::draw_dark(&mut target, &frame.canvas)?;
+                let drew = if dark {
+                    crate::frame::draw_dark(&mut target, &frame.canvas)
                 } else if lock.is_some() {
                     // The lock's own surface is the first of `over`, which
                     // is where the damage above expects it too: the drawing
@@ -1248,16 +1265,29 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                         None,
                         &over,
                         &frame.canvas,
-                    )?;
+                    )
                 } else {
-                    crate::frame::draw(
-                        &mut target,
-                        output,
-                        &slots,
-                        &sources,
-                        &over,
-                        &frame.canvas,
-                    )?;
+                    crate::frame::draw(&mut target, output, &slots, &sources, &over, &frame.canvas)
+                };
+                match drew {
+                    Ok(()) => {}
+                    // A GPU that has gone is not a screen that has. The
+                    // software canvas has drawn nothing while the GPU was
+                    // drawing, so what it is owed is everything: the watch
+                    // forgets what it saw, which makes the next frame a
+                    // whole one, and that frame is owed now.
+                    Err(why)
+                        if screen.gpu.is_some() && why.starts_with(crate::frame::GPU_FAILED) =>
+                    {
+                        report(&format!(
+                            "hyprix: {}: {why}; drawing in software from here on",
+                            screen.name
+                        ));
+                        screen.gpu = None;
+                        screen.watch = crate::damage::Watch::default();
+                        owed = true;
+                    }
+                    Err(why) => return Err(why),
                 }
             }
             // The frame has been drawn from them, so the next one starts
@@ -2464,6 +2494,9 @@ struct Screen {
     canvas: Canvas,
     /// What is behind its windows, and the blur of that.
     backdrop: compositor_render::Backdrop,
+    /// The same two on a GPU, when there is one to draw the frame: the
+    /// software pair is then what is fallen back to if it goes.
+    gpu: Option<crate::frame::Gpu>,
     /// The monitor it is, in the layout.
     monitor: MonitorId,
     /// Where it is and how big, in the logical pixels every window's
@@ -2492,7 +2525,12 @@ impl Screen {
     /// position goes to the right of the ones already placed, so two
     /// 1024-wide screens cover 0..1024 and 1024..2048 and the pointer walks
     /// from one to the other.
-    fn all(backends: Vec<Box<dyn Backend>>, rules: &[MonitorRule]) -> Result<Vec<Self>, String> {
+    fn all(
+        backends: Vec<Box<dyn Backend>>,
+        rules: &[MonitorRule],
+        renderer: crate::options::Renderer,
+        report: &mut dyn FnMut(&str),
+    ) -> Result<Vec<Self>, String> {
         let mut screens = Vec::with_capacity(backends.len());
         let mut x = 0i64;
         let mut id = 0u32;
@@ -2517,6 +2555,7 @@ impl Screen {
                 Canvas::new(width, height).map_err(|error| format!("a canvas: {error:?}"))?;
             let backdrop = compositor_render::Backdrop::new(width, height)
                 .map_err(|error| format!("a backdrop: {error:?}"))?;
+            let gpu = gpu_for(renderer, &name, (width, height), report)?;
             // The monitor is laid out in logical pixels: a 1024x768 screen
             // at `scale = 2` tiles its windows in 512x384, as Hyprland's
             // does.
@@ -2535,6 +2574,7 @@ impl Screen {
                 backend,
                 canvas,
                 backdrop,
+                gpu,
                 monitor: MonitorId(id),
                 rect: Rect::new(at_x, at_y, logical_width, logical_height),
                 scale,
@@ -2620,6 +2660,74 @@ fn logical(pixels: u32, scale: f64) -> i64 {
     )]
     let logical = (f64::from(pixels) / scale).round() as i64;
     logical.max(1)
+}
+
+/// The GPU a screen's frames are drawn on, if `renderer` asks for one and
+/// there is one.
+///
+/// A render node is taken only when its driver is the one whose streams this
+/// compositor writes: the name is what a back end is picked by, here as on
+/// Linux, and a development host's own render node names another.
+///
+/// # Errors
+///
+/// `--renderer gpu` or `vtest` with none to be had, which is a test asking
+/// not to be passed by the software renderer.
+fn gpu_for(
+    renderer: crate::options::Renderer,
+    screen: &str,
+    (width, height): (u32, u32),
+    report: &mut dyn FnMut(&str),
+) -> Result<Option<crate::frame::Gpu>, String> {
+    use crate::options::Renderer;
+
+    let device: Result<Box<dyn compositor_virgl::Device>, String> = match renderer {
+        Renderer::Software => return Ok(None),
+        Renderer::Vtest => compositor_virgl::vtest::Vtest::start(&format!("hyprix-{screen}"))
+            .map_err(|error| error.to_string())
+            .and_then(|server| server.ok_or_else(|| "no virgl_test_server".to_owned()))
+            .map(|server| Box::new(server) as Box<dyn compositor_virgl::Device>),
+        Renderer::Auto | Renderer::Gpu => render_node(),
+    };
+    let made = device.and_then(|device| {
+        compositor_render::gpu::Canvas::new(device, width, height)
+            .map_err(|error| error.to_string())
+    });
+    match made {
+        Ok(canvas) => {
+            report(&format!("hyprix: {screen}: frames are drawn on the GPU"));
+            Ok(Some(crate::frame::Gpu {
+                canvas,
+                backdrop: compositor_render::gpu::Backdrop::new(width, height),
+            }))
+        }
+        Err(why) if renderer == Renderer::Auto => {
+            report(&format!(
+                "hyprix: {screen}: no GPU to draw on ({why}); drawing in software"
+            ));
+            Ok(None)
+        }
+        Err(why) => Err(format!("--renderer asked for a GPU: {why}")),
+    }
+}
+
+/// The card's render node, when its driver speaks virgl.
+#[cfg(target_os = "linux")]
+fn render_node() -> Result<Box<dyn compositor_virgl::Device>, String> {
+    let device = compositor_drm::RenderDevice::open().map_err(|error| error.to_string())?;
+    match device.driver() {
+        Ok(driver) if driver == "virtio_gpu" => Ok(Box::new(device)),
+        Ok(driver) => Err(format!(
+            "the render node's driver is `{driver}`, not virtio_gpu"
+        )),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+/// The same, where there is no `/dev/dri`.
+#[cfg(not(target_os = "linux"))]
+fn render_node() -> Result<Box<dyn compositor_virgl::Device>, String> {
+    Err("this host has no /dev/dri".to_owned())
 }
 
 /// Open every screen the machine has, or say why there is none.
@@ -3410,8 +3518,12 @@ fn copy_screen(
     let Some(screen) = screens.get(output) else {
         return false;
     };
-    let from = screen.canvas.data();
-    let stride = screen.canvas.width() as usize * 4;
+    // The software canvas is the frame; a GPU's frame is not there, and
+    // what was fetched of it for the screen is the screen's own buffer.
+    let (from, stride) = match screen.gpu {
+        Some(_) => (screen.backend.drawn(), screen.backend.stride() as usize),
+        None => (screen.canvas.data(), screen.canvas.width() as usize * 4),
+    };
     let (left, top) = region.map_or((0, 0), |rect| {
         (rect.x.max(0) as usize * 4, rect.y.max(0) as usize)
     });

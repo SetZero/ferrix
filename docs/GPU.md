@@ -517,9 +517,44 @@ gate host no channel of any of them is more than two steps from the software
 frame, corners and blur included. The last also holds the GPU's frame to
 being byte-identical outside the damage.
 
-What is left of §3.5, in order: `hyprix` choosing the painter (piece 5's
-other half), and piece 6, scanout of what was drawn. Until piece 6 a GPU
-frame reaches the screen by being read back into the dumb buffer.
+**`hyprix` draws on the GPU when there is one** (piece 5's other half,
+2026-09-19). `--renderer auto`, the default, takes the card's render node
+when its driver's name is `virtio_gpu` -- the name is what a back end is
+picked by, here as on Linux, which is also what keeps a development host's
+own render node from being taken -- and the software renderer otherwise,
+saying which and why. `software` and `gpu` force either, and `vtest` starts
+virglrenderer's test server on the host, which is how the whole compositor
+is tested on a GPU without a guest: `hyprix/tests/two_clients.rs` runs real
+Wayland clients against it and holds the frame to the expected image the
+software path is held to. A surface's texture is kept by the *connection's
+serial* and the surface's id, since a slot's place changes when another
+client goes. A GPU that fails is not a screen that fails: the screen's
+watch forgets what it saw, the next frame is a whole one, and it is drawn
+in software from then on.
+
+**In the guest it is the same picture.** `cargo xtask test-compositor --gl`
+boots the decorated pair on `virtio-gpu-gl`, requires the compositor to say
+it draws on the GPU and never that it gave it up, and has the guest judge
+its own frame, because QEMU cannot (§3.1): `/bin/shot 0 <image>` takes a
+screenshot through `zwlr_screencopy_v1`, reads the expected image off the
+guest's filesystem, and says over the serial port how far apart they are:
+
+    shot: 1024x768 against /etc/expected.xrle: 0 channels more than 3
+    apart, the furthest 2
+
+What is left of §3.5 is piece 6, scanout of what was drawn. Until then a GPU
+frame reaches the screen by being fetched: the rectangles the software
+canvas would have copied into the dumb buffer are read back from the GPU and
+written there instead, so the night-light, the flip and a screenshot see
+what they always saw. That costs the frame the transfer piece 6 removes,
+and one thing more: a screenshot taken while a night-light is on has its
+ramps in it, because what was fetched is the screen's own buffer.
+
+Two things are owed beside it. `DRM_IOCTL_GEM_CLOSE`: a texture cannot be
+let go of while its open lives, so a texture no surface uses is kept for the
+next surface of its size, and a long session of windows resized by hand
+will run the renderer out of objects -- at which point it falls back, as
+above. And the 32 MiB a pinned backing may be, which a 4K surface is over.
 
 ### 3a, which was not chosen for the compositor
 
