@@ -90,6 +90,20 @@ fn every_message_is_its_own_length_and_reads_back() {
             fence: 9,
             status: Status::TimedOut,
         },
+        Message::Transfer(a_transfer()),
+        Message::Transferred {
+            object: 4,
+            status: Status::Invalid,
+        },
+        Message::GetCaps {
+            capset: 2,
+            version: 1,
+        },
+        Message::Caps {
+            capset: 2,
+            status: Status::Ok,
+            len: 1384,
+        },
         Message::Stop,
         Message::Stopped,
     ];
@@ -110,7 +124,7 @@ fn fields_lie_where_the_diagram_puts_them() {
     let bytes = encoded.as_bytes();
     assert_eq!(bytes.len(), 48);
     assert_eq!(u32_at(bytes, 0), 1, "HELLO");
-    assert_eq!(u16::from_le_bytes([bytes[8], bytes[9]]), 1, "VERSION");
+    assert_eq!(u16::from_le_bytes([bytes[8], bytes[9]]), 2, "VERSION");
     assert_eq!(u32_at(bytes, 12), 0x800, "location");
     assert_eq!(&bytes[16..26], b"virtio_gpu");
     assert!(bytes[26..32].iter().all(|&byte| byte == 0), "zero-padded");
@@ -312,6 +326,186 @@ fn the_enumerations_round_trip() {
 // -- The session ----------------------------------------------------------
 
 use crate::session::{Event, RequestError, Session};
+
+fn a_transfer() -> Transfer {
+    Transfer {
+        object: 4,
+        context: 1,
+        direction: Direction::FromDevice,
+        level: 3,
+        offset: 0x1_0000_0040,
+        region: Region {
+            x: 10,
+            y: 11,
+            z: 12,
+            width: 13,
+            height: 14,
+            depth: 15,
+        },
+        stride: 4096,
+        layer_stride: 8192,
+    }
+}
+
+/// A transfer's fields lie where the diagram says, and a direction that is
+/// not one is no message.
+#[test]
+fn a_transfer_lies_where_the_diagram_puts_it() {
+    let encoded = Message::Transfer(a_transfer()).encode();
+    let bytes = encoded.as_bytes();
+    assert_eq!(bytes.len(), 64);
+    assert_eq!(u32_at(bytes, 0), 18);
+    assert_eq!(u32_at(bytes, 8), 4);
+    assert_eq!(u32_at(bytes, 12), 1);
+    assert_eq!(u32_at(bytes, 16), 2);
+    assert_eq!(u32_at(bytes, 20), 3);
+    assert_eq!(u64_at(bytes, 24), 0x1_0000_0040);
+    for (index, word) in (10..=15).enumerate() {
+        assert_eq!(u32_at(bytes, 32 + index * 4), word);
+    }
+    assert_eq!(u32_at(bytes, 56), 4096);
+    assert_eq!(u32_at(bytes, 60), 8192);
+
+    let mut wrong: Vec<u8> = bytes.to_vec();
+    wrong[16..20].copy_from_slice(&3_u32.to_le_bytes());
+    assert_eq!(Message::decode(&wrong), None, "no third direction");
+
+    let caps = Message::Caps {
+        capset: 2,
+        status: Status::Ok,
+        len: 308,
+    }
+    .encode();
+    let bytes = caps.as_bytes();
+    assert_eq!(bytes.len(), 24);
+    assert_eq!(u32_at(bytes, 0), 21);
+    assert_eq!(u32_at(bytes, 8), 2);
+    assert_eq!(u32_at(bytes, 12), 0);
+    assert_eq!(u32_at(bytes, 16), 308);
+    let mut wrong: Vec<u8> = bytes.to_vec();
+    wrong[20] = 1;
+    assert_eq!(Message::decode(&wrong), None, "a reserved word that is set");
+}
+
+/// Bytes move only to or from an object that has a backing, only the way it
+/// was made for, one transfer at a time, and the object stays until they
+/// have.
+#[test]
+fn a_transfer_needs_a_backing_and_holds_its_object() {
+    let mut core = session();
+    let _ = core.make_context(1, 0).expect("asked");
+    let _ = core
+        .receive(&Message::ContextMade {
+            context: 1,
+            status: Status::Ok,
+        })
+        .expect("made");
+    let made = |core: &mut Session, object: u32, purpose: u32| {
+        let _ = core
+            .make_object(object, 1, 4096, purpose, Work::default())
+            .expect("asked");
+        let _ = core
+            .receive(&Message::ObjectMade {
+                object,
+                status: Status::Ok,
+            })
+            .expect("made");
+    };
+    made(&mut core, 4, flags::MAPPABLE | flags::FROM_DEVICE);
+    made(&mut core, 5, flags::TO_DEVICE);
+
+    let mut transfer = a_transfer();
+    transfer.object = 9;
+    assert_eq!(core.transfer(transfer), Err(RequestError::NoSuchObject));
+    transfer.object = 5;
+    assert_eq!(
+        core.transfer(transfer),
+        Err(RequestError::Transfer),
+        "no backing"
+    );
+    transfer.object = 4;
+    transfer.direction = Direction::ToDevice;
+    assert_eq!(
+        core.transfer(transfer),
+        Err(RequestError::Transfer),
+        "made to be read from, not written to"
+    );
+    transfer.direction = Direction::FromDevice;
+    transfer.region.depth = 0;
+    assert_eq!(core.transfer(transfer), Err(RequestError::Transfer));
+    transfer.region.depth = 1;
+    transfer.context = 2;
+    assert_eq!(core.transfer(transfer), Err(RequestError::NoSuchContext));
+    transfer.context = 1;
+
+    let _ = core.transfer(transfer).expect("asked");
+    assert_eq!(core.transfer(transfer), Err(RequestError::InUse));
+    assert_eq!(core.drop_object(4), Err(RequestError::Busy));
+    assert_eq!(
+        core.receive(&Message::Transferred {
+            object: 4,
+            status: Status::Ok,
+        }),
+        Ok(Event::Transferred {
+            object: 4,
+            status: Status::Ok,
+        })
+    );
+    let _ = core.drop_object(4).expect("nothing is moving now");
+
+    // Answered once: a second answer is one nobody asked for.
+    assert_eq!(
+        core.receive(&Message::Transferred {
+            object: 4,
+            status: Status::Ok,
+        }),
+        Err(Refusal::Protocol)
+    );
+    assert!(core.is_broken());
+}
+
+/// A capability set is asked for one at a time and answered with the set
+/// that was asked for, at a length a core would copy.
+#[test]
+fn a_capability_set_is_the_one_asked_for() {
+    let mut core = session();
+    let _ = core.get_caps(2, 1).expect("asked");
+    assert_eq!(core.get_caps(2, 1), Err(RequestError::InUse));
+    assert_eq!(
+        core.receive(&Message::Caps {
+            capset: 2,
+            status: Status::Ok,
+            len: 1384,
+        }),
+        Ok(Event::Caps {
+            capset: 2,
+            status: Status::Ok,
+            len: 1384,
+        })
+    );
+    let _ = core.get_caps(1, 1).expect("asked again");
+    assert_eq!(
+        core.receive(&Message::Caps {
+            capset: 2,
+            status: Status::Ok,
+            len: 308,
+        }),
+        Err(Refusal::Protocol),
+        "another set than the one asked for"
+    );
+
+    let mut core = session();
+    let _ = core.get_caps(2, 1).expect("asked");
+    assert_eq!(
+        core.receive(&Message::Caps {
+            capset: 2,
+            status: Status::Ok,
+            len: 64 * 1024 + 1,
+        }),
+        Err(Refusal::Protocol),
+        "longer than a core copies"
+    );
+}
 
 fn session() -> Session {
     Session::accept(&hello(), &Hello::HANDLE_RIGHTS, 1 << 20).expect("a good HELLO is accepted")

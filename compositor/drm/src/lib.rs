@@ -22,7 +22,7 @@ mod render;
 pub use card::{Card, Dumb, Plan, cards, plan, planes, plans, rename, show};
 pub use edid::{Edid, registered};
 #[cfg(target_os = "linux")]
-pub use render::{Render, probe};
+pub use render::{Box3d, Mapping, Render, ResourceCreate, probe};
 
 #[cfg(test)]
 mod tests;

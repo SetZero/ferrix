@@ -324,6 +324,10 @@ pub(crate) fn mismatches(
     (found, count)
 }
 
+/// The three pixels the render probe reads back after drawing: see
+/// `compositor/drm`'s `drew`.
+const DREW: &str = "0xff0000 0x00ff00 0xff0000";
+
 /// What the program prints about the render node, before its own marker.
 pub(crate) const RENDER: &str = "render:";
 
@@ -357,6 +361,17 @@ pub(crate) fn render_object(line: &str) -> Option<&str> {
     words.next().filter(|made| made.contains('/'))
 }
 
+/// What follows `word` on the render line, when it is not `none`: the
+/// capability set's size after `caps`, the bytes that came back after
+/// `moved`. `None` when the program could not do it, which it says as
+/// `<word> none <why>`.
+pub(crate) fn render_did<'a>(line: &'a str, word: &str) -> Option<&'a str> {
+    let (_, rest) = line.split_once(RENDER)?;
+    let mut words = rest.split_whitespace().skip_while(|found| *found != word);
+    let _ = words.next()?;
+    words.next().filter(|said| *said != "none")
+}
+
 /// The id of the primary plane the marker line names, if it names one: its
 /// last three words are `plane <id> Primary`.
 pub(crate) fn primary_plane(line: &str) -> Option<u32> {
@@ -376,10 +391,76 @@ fn read_dump(qmp: &mut Qmp, device: Option<&str>, file: &Path) -> Result<Image> 
     parse_ppm(&bytes)
 }
 
+/// Judge the render node's line from a boot's `lines`.
+///
+/// `--gl` puts a GPU behind the card, and then `/dev/dri/renderD128` must be
+/// there, name the driver serving it, and have done each thing the probe
+/// tries; without `--gl` there is no GPU, no node, and the program must say
+/// so. Each boot is the other's control: a check that cannot fail proves
+/// nothing (`docs/GPU.md` step 2).
+fn judge_render(arch: Arch, gl: bool, lines: &[String]) -> Result<()> {
+    let render = lines
+        .iter()
+        .rev()
+        .find(|line| line.contains(RENDER))
+        .map_or("", |line| line.trim());
+    match (gl, render_driver(render)) {
+        (true, Some(driver)) => {
+            let Some(made) = render_object(render) else {
+                return Err(Error::new(format!(
+                    "{arch}: the render node `{driver}` made no resource: `{render}`"
+                )));
+            };
+            println!("  {arch}: the render node is `{driver}`, and made resource {made}");
+            // The rest of step 2, each proved by the device and not by
+            // the node's own tables: the capability set came from it,
+            // and bytes went to it and came back.
+            for (word, what) in [
+                ("caps", "read no capability set"),
+                ("moved", "moved no bytes to the device and back"),
+                ("drew", "drew nothing on the GPU"),
+            ] {
+                let Some(said) = render_did(render, word) else {
+                    return Err(Error::new(format!(
+                        "{arch}: the render node `{driver}` {what}: `{render}`"
+                    )));
+                };
+                println!("  {arch}: the render node: {word} {said}");
+            }
+            // And what it drew: red where the clear was left, green in
+            // the top right quarter where the rectangle went, red below
+            // it. The third is what says rows are read back the way
+            // they were drawn.
+            let (_, picture) = render.split_once("drew ").unwrap_or_default();
+            if picture.trim() != DREW {
+                return Err(Error::new(format!(
+                    "{arch}: the GPU drew `{picture}`, not `{DREW}`: `{render}`"
+                )));
+            }
+        }
+        (true, None) => {
+            return Err(Error::new(format!(
+                "{arch}: the 3D card has no render node: `{render}`"
+            )));
+        }
+        (false, Some(driver)) => {
+            return Err(Error::new(format!(
+                "{arch}: a card with no GPU answered a render node `{driver}`"
+            )));
+        }
+        (false, None) => {
+            println!("  {arch}: no render node, as a card with no GPU has none");
+        }
+    }
+    Ok(())
+}
+
 /// Boot `arch` with `program` as init and a virtio-gpu, and return the
 /// screendump taken once the program has printed its marker and the screen
 /// has had [`SETTLE`] to show it — or as soon as it is all `BACKGROUND`.
-fn boot_and_dump(arch: Arch, program: &Path, args: &Args, name: &str) -> Result<Image> {
+///
+/// `None` for a `--gl` boot that was judged without one.
+fn boot_and_dump(arch: Arch, program: &Path, args: &Args, name: &str) -> Result<Option<Image>> {
     let loader = crate::cargo::build_loader(arch, args.release)?;
     let kernel = crate::cargo::build_kernel_with_init(arch, args.release, program, "")?;
     let natives = crate::native::build(arch, args.release)?;
@@ -391,6 +472,7 @@ fn boot_and_dump(arch: Arch, program: &Path, args: &Args, name: &str) -> Result<
     qemu_args.qmp_port = Some(port);
     let dump = paths::build_dir(arch).join(format!("{name}.ppm"));
     let mut taken = None;
+    let mut judged_without_a_dump = false;
     let hook = |watching: &mut crate::qemu::Watching<'_>| -> Result<()> {
         let lines = watching.lines();
         let mut qmp = Qmp::connect(port, Instant::now() + Duration::from_secs(10))?;
@@ -418,38 +500,14 @@ fn boot_and_dump(arch: Arch, program: &Path, args: &Args, name: &str) -> Result<
             )));
         };
         println!("  {arch}: the card's primary plane {plane} shows the framebuffer");
-        // The render node, from the same boot. `--gl` puts a GPU behind the
-        // card, and then `/dev/dri/renderD128` must be there and name the
-        // driver serving it; without `--gl` there is no GPU, no node, and
-        // the program must say so. Each boot is the other's control: a check
-        // that cannot fail proves nothing (`docs/GPU.md` step 2).
-        let render = lines
-            .iter()
-            .rev()
-            .find(|line| line.contains(RENDER))
-            .map_or("", |line| line.trim());
-        match (args.gl, render_driver(render)) {
-            (true, Some(driver)) => {
-                let Some(made) = render_object(render) else {
-                    return Err(Error::new(format!(
-                        "{arch}: the render node `{driver}` made no resource: `{render}`"
-                    )));
-                };
-                println!("  {arch}: the render node is `{driver}`, and made resource {made}");
-            }
-            (true, None) => {
-                return Err(Error::new(format!(
-                    "{arch}: the 3D card has no render node: `{render}`"
-                )));
-            }
-            (false, Some(driver)) => {
-                return Err(Error::new(format!(
-                    "{arch}: a card with no GPU answered a render node `{driver}`"
-                )));
-            }
-            (false, None) => {
-                println!("  {arch}: no render node, as a card with no GPU has none");
-            }
+        judge_render(arch, args.gl, lines)?;
+        // A GL console holds a texture on the host's GPU and no surface, and
+        // QEMU's `screendump` reads only a surface (`docs/GPU.md` §3.1). So
+        // the 3D boot is judged by what its render node did, above, and the
+        // screen's pixels by the 2D boot, which drives the same display path.
+        if args.gl {
+            judged_without_a_dump = true;
+            return Ok(());
         }
         let settle = Instant::now() + SETTLE;
         loop {
@@ -463,7 +521,10 @@ fn boot_and_dump(arch: Arch, program: &Path, args: &Args, name: &str) -> Result<
         }
     };
     let _ = crate::qemu::watch_then(arch, &image, &kernel, &qemu_args, EITHER, hook)?;
-    taken.ok_or_else(|| {
+    if judged_without_a_dump {
+        return Ok(None);
+    }
+    taken.map(Some).ok_or_else(|| {
         Error::new(format!(
             "{arch}: the program never printed `{MARKER}` within {}s",
             args.timeout
@@ -479,7 +540,12 @@ pub(crate) fn test_display(args: &Args) -> Result<()> {
             continue;
         }
         let plain = build_blank(arch, false)?;
-        let screen = boot_and_dump(arch, &plain, args, "display")?;
+        let Some(screen) = boot_and_dump(arch, &plain, args, "display")? else {
+            println!(
+                "  {arch}: a GL console cannot be dumped; the screen's pixels are the 2D boot's to judge"
+            );
+            continue;
+        };
         let (found, count) = mismatches(&screen, BACKGROUND, 8);
         if count != 0 {
             return Err(Error::new(format!(
@@ -495,7 +561,9 @@ pub(crate) fn test_display(args: &Args) -> Result<()> {
         );
 
         let negative = build_blank(arch, true)?;
-        let screen = boot_and_dump(arch, &negative, args, "display-negative")?;
+        let Some(screen) = boot_and_dump(arch, &negative, args, "display-negative")? else {
+            continue;
+        };
         let (found, count) = mismatches(&screen, BACKGROUND, 8);
         if count != 1 || found.first().map(|&(x, y, _)| (x, y)) != Some((0, 0)) {
             return Err(Error::new(format!(

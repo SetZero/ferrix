@@ -237,10 +237,14 @@ fn map_file(
     if !file.readable() || (vma.shared && vma.write && !file.writable()) {
         return Err(Errno::EACCES);
     }
-    let vmo = file
-        .inode()
-        .mapping()
-        .and_then(|object| object.downcast::<Vmo>().ok())
+    // The open's own object is asked first: a render node's buffer objects
+    // belong to the open, not to the name it was opened by. For a file whose
+    // open is its inode this is one question asked once.
+    let (vmo, offset) = file
+        .io()
+        .mapping_at(offset)
+        .or_else(|| file.inode().mapping_at(offset))
+        .and_then(|(object, offset)| Some((object.downcast::<Vmo>().ok()?, offset)))
         .ok_or(Errno::ENODEV)?;
     // A sealed file: a shared writable mapping is `EPERM`, and a shared
     // read-only one may never be made writable. Linux's `seal_check_write`.

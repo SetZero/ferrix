@@ -24,7 +24,10 @@
 
 use ferrix_native_abi::rights::Rights;
 
-use crate::message::{Hello, MakeObject, Message, Refusal, Status, Submit, Work, flags};
+use crate::message::{
+    Direction, Hello, MAX_CAPS_BYTES, MakeObject, Message, Refusal, Status, Submit, Transfer, Work,
+    flags,
+};
 
 /// The most contexts one session tracks.
 pub const MAX_CONTEXTS: usize = 16;
@@ -60,6 +63,9 @@ pub enum RequestError {
     /// A range that is not inside the work VMO, or a command buffer of no
     /// bytes.
     Work,
+    /// A transfer on an object with no backing to move bytes to or from, or
+    /// of a box with no volume, or the wrong way for what the object is for.
+    Transfer,
 }
 
 /// What a message from the driver meant.
@@ -112,6 +118,22 @@ pub enum Event {
         /// How it went.
         status: Status,
     },
+    /// Bytes were moved, or were not.
+    Transferred {
+        /// Which object's.
+        object: u32,
+        /// How it went.
+        status: Status,
+    },
+    /// A capability set came, in the VMO beside the message, or did not.
+    Caps {
+        /// Which set.
+        capset: u32,
+        /// How it went.
+        status: Status,
+        /// How many bytes of the VMO are the set.
+        len: u32,
+    },
     /// The driver has stopped.
     Stopped,
 }
@@ -159,6 +181,13 @@ pub struct Session {
     objects: [Slot; MAX_OBJECTS],
     /// Which context each object belongs to, beside `objects`.
     owners: [u32; MAX_OBJECTS],
+    /// What each object was made for, beside `objects`: its `flags`, which
+    /// fit a byte, and a session is copied about on a kernel stack.
+    purposes: [u8; MAX_OBJECTS],
+    /// Objects with a transfer the driver has not answered, 0 for none.
+    moving: [u32; MAX_IN_FLIGHT],
+    /// The capability set asked for and not yet answered.
+    caps: Option<u32>,
     pending: [Pending; MAX_IN_FLIGHT],
     pending_count: usize,
     stopping: bool,
@@ -187,6 +216,9 @@ impl Session {
             contexts: [Slot::Free; MAX_CONTEXTS],
             objects: [Slot::Free; MAX_OBJECTS],
             owners: [0; MAX_OBJECTS],
+            purposes: [0; MAX_OBJECTS],
+            moving: [0; MAX_IN_FLIGHT],
+            caps: None,
             pending: [Pending {
                 fence: 0,
                 waiting: false,
@@ -340,6 +372,10 @@ impl Session {
         if let Some(owner) = self.owners.get_mut(at) {
             *owner = context;
         }
+        if let Some(purpose) = self.purposes.get_mut(at) {
+            // `KNOWN` was checked above and fits.
+            *purpose = (object_flags & flags::KNOWN) as u8;
+        }
         Ok(Message::MakeObject(MakeObject {
             object,
             context,
@@ -357,6 +393,11 @@ impl Session {
     pub fn drop_object(&mut self, object: u32) -> Result<Message, RequestError> {
         self.open()?;
         let at = live(&self.objects, object).ok_or(RequestError::NoSuchObject)?;
+        // Bytes on their way to or from the backing: the driver is still
+        // using what a drop would take away.
+        if self.moving.contains(&object) {
+            return Err(RequestError::Busy);
+        }
         if let Some(slot) = self.objects.get_mut(at) {
             *slot = Slot::Dropping(object);
         }
@@ -423,6 +464,60 @@ impl Session {
         Ok(Message::Wait { context, fence })
     }
 
+    /// Move bytes between a mappable object's backing and the device.
+    ///
+    /// One transfer an object at a time: the reply names the object and
+    /// nothing else, so two outstanding could not be told apart.
+    ///
+    /// # Errors
+    ///
+    /// A request the conversation has no room or no state for.
+    pub fn transfer(&mut self, transfer: Transfer) -> Result<Message, RequestError> {
+        self.open()?;
+        let at = live(&self.objects, transfer.object).ok_or(RequestError::NoSuchObject)?;
+        if transfer.context != 0 && live(&self.contexts, transfer.context).is_none() {
+            return Err(RequestError::NoSuchContext);
+        }
+        let purpose = u32::from(self.purposes.get(at).copied().unwrap_or(0));
+        let way = match transfer.direction {
+            Direction::ToDevice => flags::TO_DEVICE,
+            Direction::FromDevice => flags::FROM_DEVICE,
+        };
+        let region = transfer.region;
+        if purpose & flags::MAPPABLE == 0
+            || purpose & way == 0
+            || region.width == 0
+            || region.height == 0
+            || region.depth == 0
+        {
+            return Err(RequestError::Transfer);
+        }
+        if self.moving.contains(&transfer.object) {
+            return Err(RequestError::InUse);
+        }
+        let slot = self
+            .moving
+            .iter_mut()
+            .find(|held| **held == 0)
+            .ok_or(RequestError::Full)?;
+        *slot = transfer.object;
+        Ok(Message::Transfer(transfer))
+    }
+
+    /// Ask for a capability set's bytes. One question at a time.
+    ///
+    /// # Errors
+    ///
+    /// The session is closed, or a question is already outstanding.
+    pub fn get_caps(&mut self, capset: u32, version: u32) -> Result<Message, RequestError> {
+        self.open()?;
+        if self.caps.is_some() {
+            return Err(RequestError::InUse);
+        }
+        self.caps = Some(capset);
+        Ok(Message::GetCaps { capset, version })
+    }
+
     /// Ask the driver to stop.
     ///
     /// # Errors
@@ -486,6 +581,32 @@ impl Session {
                 self.remove(at);
                 Ok(Event::Waited { fence, status })
             }
+            Message::Transferred { object, status } => {
+                let slot = self
+                    .moving
+                    .iter_mut()
+                    .find(|held| **held == object && object != 0)
+                    .ok_or(Refusal::Protocol)?;
+                *slot = 0;
+                Ok(Event::Transferred { object, status })
+            }
+            Message::Caps {
+                capset,
+                status,
+                len,
+            } => {
+                // The set that was asked for, and no longer than a core
+                // takes: a length is what the core will copy by.
+                if self.caps != Some(capset) || len > MAX_CAPS_BYTES {
+                    return Err(Refusal::Protocol);
+                }
+                self.caps = None;
+                Ok(Event::Caps {
+                    capset,
+                    status,
+                    len,
+                })
+            }
             Message::Stopped if self.stopping => Ok(Event::Stopped),
             _ => Err(Refusal::Protocol),
         }
@@ -536,10 +657,13 @@ impl Session {
             (_, false) => Slot::Live(id),
         };
         *slot = settled;
-        if settled == Slot::Free
-            && let Some(owner) = self.owners.get_mut(at)
-        {
-            *owner = 0;
+        if settled == Slot::Free {
+            if let Some(owner) = self.owners.get_mut(at) {
+                *owner = 0;
+            }
+            if let Some(purpose) = self.purposes.get_mut(at) {
+                *purpose = 0;
+            }
         }
     }
 

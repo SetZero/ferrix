@@ -70,6 +70,7 @@ dependencies = [
 name = "compositor-drm"
 version = "0.1.0"
 dependencies = [
+ "compositor-virgl",
  "ferrix-linux-abi",
  "libc",
 ]
@@ -214,6 +215,10 @@ dependencies = [
  "ferrix-fbtext",
  "libc",
 ]
+
+[[package]]
+name = "compositor-virgl"
+version = "0.1.0"
 
 [[package]]
 name = "compositor-vkbd"

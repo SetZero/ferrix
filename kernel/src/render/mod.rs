@@ -28,6 +28,7 @@
 //! state locked, [`Renderer::collect`] sleeps on the wait queue, and no spin
 //! lock is ever held across the sleep.
 
+use alloc::boxed::Box;
 use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -40,7 +41,8 @@ use ferrix_native_abi::rights::Rights;
 use ferrix_native_abi::signals::Signals;
 use ferrix_native_abi::types::CHANNEL_MAX_HANDLES;
 use ferrix_renderctl::message::{
-    MAX_BYTES, Message, Ready, Refusal, Status, VERSION, WORK_VMO_RIGHTS, Work, flags,
+    BACKING_RIGHTS, MAX_BYTES, Message, Ready, Refusal, Status, Transfer as Move, VERSION,
+    WORK_VMO_RIGHTS, Work, flags,
 };
 use ferrix_renderctl::session::{Event, RequestError, Session};
 
@@ -63,13 +65,40 @@ pub(crate) mod node;
 /// many in flight without being memory a guest notices.
 pub(crate) const WORK_BYTES: u64 = 1024 * 1024;
 
-/// How many bytes one object's description takes at the base of the work
-/// VMO: the four little-endian words `user/gpu` reads back -- target, format,
-/// bind and a reserved zero.
+/// How many words an object's description is: the ten `user/gpu` reads back
+/// -- target, format, bind, width, height, depth, array size, last level,
+/// samples and flags, which is a virtio-gpu resource's whole shape.
 ///
 /// What they *mean* is the driver's language and the core never looks at
-/// them; it only says where they are (`docs/GPU.md` §3.3).
-pub(crate) const DESCRIBE_BYTES: u64 = 16;
+/// them; it only says where they are (`docs/GPU.md` §3.3). Another driver
+/// would be handed other words by another node, in the same slots.
+pub(crate) const DESCRIBE_WORDS: usize = 10;
+
+/// How many bytes of the work VMO one description's slot is: the words, and
+/// room to the next power of two so that a slot's place is a shift.
+pub(crate) const DESCRIBE_BYTES: u64 = 64;
+
+/// How many bytes one command buffer's slot is, and so the longest command
+/// buffer one submission carries.
+///
+/// A frame of virgl is state and draws -- pixels go by `TRANSFER`, not
+/// inline -- so tens of kilobytes is a great many windows, and the driver's
+/// command area, which a submission is copied into whole, has room for it.
+pub(crate) const COMMAND_BYTES: u64 = 64 * 1024;
+
+/// How many command buffers can be on their way at once: what is left of
+/// the work VMO after the descriptions, in slots.
+const COMMAND_SLOTS: usize = ((WORK_BYTES - DESCRIBE_REGION) / COMMAND_BYTES) as usize;
+
+/// Where object ids start.
+///
+/// A card has two conversations and one device, and the device names a
+/// display buffer and a render object from the same set of numbers: the
+/// display core counts its buffers from 1, so this core counts from far
+/// above anything that will reach. The number is also the `res_handle` a
+/// program writes into its command streams, so it cannot be translated on
+/// the way down -- it has to be apart from the start.
+const FIRST_OBJECT: u32 = 1 << 30;
 
 /// How many descriptions the work VMO holds at once: one per object the
 /// session will track, so a description slot is never what refuses a request
@@ -124,9 +153,32 @@ struct Start {
     location: Option<Location>,
 }
 
+/// A reply nobody is waiting for any more: an open that closed without
+/// waiting, or a request that timed out. [`serve`] drops it when it comes
+/// instead of leaving it in `events` for ever.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Abandoned {
+    /// An object's `OBJ_MADE` or `OBJ_GONE`.
+    Object(u32),
+    /// A context's `CTX_MADE` or `CTX_GONE`.
+    Context(u32),
+    /// A submission's `SUBMITTED`, and the command slot the driver may still
+    /// be reading, which is given back only now.
+    Submit {
+        /// Its fence.
+        fence: u64,
+        /// Its slot.
+        slot: usize,
+    },
+    /// An object's `TRANSFERRED`.
+    Transfer(u32),
+}
+
 /// What the core knows about one renderer's conversation.
 struct State {
-    session: Session,
+    /// Boxed because it is kilobytes of fixed tables, and a `State` is moved
+    /// into place on this task's stack.
+    session: Box<Session>,
     /// Accepted replies, for the requests waiting on them.
     events: Vec<Event>,
     /// Which description slots are spoken for. A slot is held only while the
@@ -135,10 +187,21 @@ struct State {
     describing: [bool; DESCRIBE_SLOTS],
     /// Where the search for the next object id starts.
     next_object: u32,
-    /// Objects whose reply nobody is waiting for any more: an open that
-    /// closed without waiting, or a request that timed out. [`serve`] drops
-    /// their replies instead of leaving them in `events` for ever.
-    abandoned: Vec<u32>,
+    /// Which command slots are spoken for, held the same way.
+    commanding: [bool; COMMAND_SLOTS],
+    /// The next context id and the next fence to hand out.
+    next_context: u32,
+    next_fence: u64,
+    /// Replies nobody is waiting for any more.
+    abandoned: Vec<Abandoned>,
+    /// Objects a closed open left, not yet asked to go because the driver's
+    /// channel was full, and contexts that go once their objects have.
+    leaving: Vec<u32>,
+    closing: Vec<u32>,
+    /// The capability set the driver's streams are in, as the device gave
+    /// it: fetched once, before the renderer is published, so that
+    /// `VIRTGPU_GET_CAPS` wakes nobody.
+    caps: Vec<u8>,
     gone: bool,
 }
 
@@ -169,12 +232,68 @@ impl State {
         // free whenever the session has room at all.
         for _ in 0..=DESCRIBE_SLOTS + 1 {
             let object = self.next_object;
-            self.next_object = self.next_object.checked_add(1).unwrap_or(1);
+            self.next_object = self.next_object.checked_add(1).unwrap_or(FIRST_OBJECT);
             if object != 0 && !self.session.holds_object(object) {
                 return Some(object);
             }
         }
         None
+    }
+
+    /// Take a command slot, or `None` when every one is spoken for.
+    fn take_command(&mut self) -> Option<usize> {
+        let at = self.commanding.iter().position(|held| !held)?;
+        *self.commanding.get_mut(at)? = true;
+        Some(at)
+    }
+
+    /// Give one back.
+    fn give_command(&mut self, at: usize) {
+        if let Some(held) = self.commanding.get_mut(at) {
+            *held = false;
+        }
+    }
+
+    /// Ask for what closed opens left behind to go, as far as the driver's
+    /// channel has room: objects first, then each context whose objects have
+    /// all gone. Whatever is left waits for the next reply to make room.
+    fn let_go(&mut self, control: &Endpoint) {
+        while let Some(&object) = self.leaving.last() {
+            if !control.peer_has_room() {
+                return;
+            }
+            let _ = self.leaving.pop();
+            // Only an id the session took the request for is abandoned: one
+            // it refused was never asked about, so no reply is coming and
+            // recording it would leave an entry nothing ever clears.
+            let Ok(message) = self.session.drop_object(object) else {
+                continue;
+            };
+            self.abandoned.push(Abandoned::Object(object));
+            if !send(control, &message) {
+                return;
+            }
+        }
+        let mut at = 0;
+        while let Some(&context) = self.closing.get(at) {
+            if !control.peer_has_room() {
+                return;
+            }
+            match self.session.drop_context(context) {
+                Ok(message) => {
+                    let _ = self.closing.remove(at);
+                    self.abandoned.push(Abandoned::Context(context));
+                    if !send(control, &message) {
+                        return;
+                    }
+                }
+                // Its objects are still on their way out.
+                Err(RequestError::Busy) => at += 1,
+                Err(_) => {
+                    let _ = self.closing.remove(at);
+                }
+            }
+        }
     }
 }
 
@@ -297,9 +416,16 @@ fn receive(control: &Endpoint, deadline: u64) -> Option<ChannelMessage> {
 }
 
 fn send(control: &Endpoint, message: &Message) -> bool {
+    send_with(control, message, Vec::new())
+}
+
+/// [`send`] for a message that hands something over.
+fn send_with(control: &Endpoint, message: &Message, handed: Vec<Transfer>) -> bool {
     let bytes = message.encode().as_bytes().to_vec();
     control
-        .write(bytes, 0, || Ok::<Vec<Transfer>, Infallible>(Vec::new()))
+        .write(bytes, handed.len(), || {
+            Ok::<Vec<Transfer>, Infallible>(handed)
+        })
         .is_ok()
 }
 
@@ -326,7 +452,7 @@ fn accept(start: &Start, message: &ChannelMessage) -> Result<Arc<Renderer>, Refu
         return Err(Refusal::Malformed);
     };
     let rights: Vec<Rights> = message.handles.iter().map(|(_, rights)| *rights).collect();
-    let session = Session::accept(&hello, &rights, WORK_BYTES)?;
+    let session = Box::new(Session::accept(&hello, &rights, WORK_BYTES)?);
     let Some((Object::Port(_driver_port), _)) = message.handles.first() else {
         return Err(Refusal::Rights);
     };
@@ -351,8 +477,14 @@ fn accept(start: &Start, message: &ChannelMessage) -> Result<Arc<Renderer>, Refu
             session,
             events: Vec::new(),
             describing: [false; DESCRIBE_SLOTS],
-            next_object: 1,
+            next_object: FIRST_OBJECT,
+            commanding: [false; COMMAND_SLOTS],
+            next_context: 1,
+            next_fence: 1,
             abandoned: Vec::new(),
+            leaving: Vec::new(),
+            closing: Vec::new(),
+            caps: Vec::new(),
             gone: false,
         }),
         changed: Arc::new(WaitQueue::new()),
@@ -408,9 +540,9 @@ impl Renderer {
     /// What `stat` says of the render node: a character device of major 226
     /// whose minor is its number, as Linux numbers `renderD128` 226:128.
     ///
-    /// Its size is zero: unlike a card, whose VMO is what `MODE_MAP_DUMB`'s
-    /// offsets are into, nothing is mapped through this inode yet. An object
-    /// has no backing to map until the protocol carries one.
+    /// Its size is zero: unlike a card, whose one VMO is what
+    /// `MODE_MAP_DUMB`'s offsets are into, each object here has a backing of
+    /// its own and the node's offsets name an object, not a place in a file.
     pub(crate) fn metadata(&self) -> ferrix_vfs::Metadata {
         use ferrix_vfs::{FileType, Metadata, Timespec};
         Metadata {
@@ -437,6 +569,15 @@ impl Renderer {
         &self,
         make: impl FnOnce(&mut State) -> Result<(Message, T), RenderError>,
     ) -> Result<T, RenderError> {
+        self.request_with(Vec::new(), make)
+    }
+
+    /// [`Renderer::request`] for a message that hands `handed` over with it.
+    fn request_with<T>(
+        &self,
+        handed: Vec<Transfer>,
+        make: impl FnOnce(&mut State) -> Result<(Message, T), RenderError>,
+    ) -> Result<T, RenderError> {
         let mut state = self.state.lock();
         if state.gone || self.control.peer_closed() {
             return Err(RenderError::Gone);
@@ -449,7 +590,7 @@ impl Renderer {
             return Err(RenderError::Busy);
         }
         let (message, made) = make(&mut state)?;
-        if !send(&self.control, &message) {
+        if !send_with(&self.control, &message, handed) {
             return Err(RenderError::Gone);
         }
         drop(state);
@@ -483,11 +624,63 @@ impl Renderer {
         Err(RenderError::TimedOut)
     }
 
-    /// Make an object of `bytes` on the device, described by `words`, and
-    /// answer the id it was given.
+    /// Make a context on the device, and answer the id it was given.
     ///
-    /// `words` is the target, format and bind the caller asked for, which
-    /// go into the work VMO untouched: this side chooses how many bytes and
+    /// A context is an open's own: what one program draws, and the objects
+    /// it may name, are apart from every other's. The capability set is the
+    /// one the driver's streams are in, which its HELLO said.
+    ///
+    /// # Errors
+    ///
+    /// [`RenderError`].
+    pub(crate) fn make_context(&self) -> Result<u32, RenderError> {
+        let context = self.request(|state| {
+            // The session refuses an id it holds, so the next one it does
+            // not is found by asking: there are few contexts and the ids
+            // are dense.
+            let capset = state.session.capset();
+            for _ in 0..=ferrix_renderctl::session::MAX_CONTEXTS {
+                let context = state.next_context;
+                state.next_context = state.next_context.checked_add(1).unwrap_or(1);
+                match state.session.make_context(context, capset) {
+                    Ok(message) => return Ok((message, context)),
+                    Err(RequestError::InUse | RequestError::ZeroId) => {}
+                    Err(other) => return Err(RenderError::Request(other)),
+                }
+            }
+            Err(RenderError::Request(RequestError::Full))
+        })?;
+        let event = self.collect(
+            |event| matches!(event, Event::ContextMade { context: made, .. } if *made == context),
+            |state| state.abandoned.push(Abandoned::Context(context)),
+        )?;
+        match event {
+            Event::ContextMade {
+                status: Status::Ok, ..
+            } => Ok(context),
+            Event::ContextMade { status, .. } => Err(RenderError::Refused(status)),
+            _ => Err(RenderError::Gone),
+        }
+    }
+
+    /// The capability set the driver's streams are in: its number, and its
+    /// bytes as the device gave them.
+    pub(crate) fn caps(&self) -> (u32, Vec<u8>) {
+        let state = self.state.lock();
+        (state.session.capset(), state.caps.clone())
+    }
+
+    /// Make an object of `bytes` on the device, described by `words`, and
+    /// answer the id it was given and the backing it was made with.
+    ///
+    /// A [`flags::MAPPABLE`] object gets a VMO of whole pages, which is the
+    /// core's: it is what a program maps through the node, and the driver is
+    /// handed it only to pin for the device. It lives as long as either side
+    /// holds it, so an object the device would not let go of keeps its pages
+    /// through the driver's pin and nothing here has to remember that.
+    ///
+    /// `words` is the shape the caller asked for, which
+    /// goes into the work VMO untouched: this side chooses how many bytes and
     /// where the description is, and the driver is the only side that knows
     /// what the words say (`docs/GPU.md` §3.3). A core that read them would
     /// be a core §4's driver could not reuse.
@@ -502,8 +695,8 @@ impl Renderer {
         context: u32,
         bytes: u64,
         object_flags: u32,
-        words: [u32; 3],
-    ) -> Result<u32, RenderError> {
+        words: [u32; DESCRIBE_WORDS],
+    ) -> Result<(u32, Option<Arc<Vmo>>), RenderError> {
         // The id and the slot are taken together, under the lock; the write
         // that fills the slot happens after it, because `Vmo::write_page` may
         // wait for a shootdown and no spin lock is ever held across that.
@@ -520,13 +713,27 @@ impl Renderer {
             };
             (object, at)
         };
-        let made = self.describe_and_make(object, at, context, bytes, object_flags, words);
+        let backing = (object_flags & flags::MAPPABLE != 0)
+            .then(|| Vmo::new_anonymous(bytes.div_ceil(PAGE_SIZE)));
+        let made = self.describe_and_make(
+            object,
+            at,
+            context,
+            bytes,
+            object_flags,
+            words,
+            backing.as_ref(),
+        );
         self.state.lock().give_describe(at);
-        made
+        made.map(|object| (object, backing))
     }
 
     /// [`Renderer::make_object`] once its id and slot are in hand, so that the
     /// slot is given back by one line whichever way this goes.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one request's fields, passed once"
+    )]
     fn describe_and_make(
         &self,
         object: u32,
@@ -534,7 +741,8 @@ impl Renderer {
         context: u32,
         bytes: u64,
         object_flags: u32,
-        words: [u32; 3],
+        words: [u32; DESCRIBE_WORDS],
+        backing: Option<&Arc<Vmo>>,
     ) -> Result<u32, RenderError> {
         let mut description = [0_u8; DESCRIBE_BYTES as usize];
         for (word, into) in words.iter().zip(description.chunks_exact_mut(4)) {
@@ -545,9 +753,13 @@ impl Renderer {
             .map_err(|_| RenderError::Request(RequestError::Work))?;
         let describe = Work {
             at: u32::try_from(at).map_err(|_| RenderError::Request(RequestError::Work))?,
-            len: DESCRIBE_BYTES as u32,
+            len: (DESCRIBE_WORDS * 4) as u32,
         };
-        self.request(|state| {
+        let handed = backing
+            .map(|vmo| (Object::Vmo(Arc::clone(vmo)), BACKING_RIGHTS))
+            .into_iter()
+            .collect();
+        self.request_with(handed, |state| {
             let message = state
                 .session
                 .make_object(object, context, bytes, object_flags, describe)
@@ -561,7 +773,7 @@ impl Renderer {
             // description slot is given back even so: a driver reads a
             // description while it is making the object, which is before the
             // reply this gave up on, so a late answer is never a late read.
-            |state| state.abandoned.push(object),
+            |state| state.abandoned.push(Abandoned::Object(object)),
         )?;
         match event {
             Event::ObjectMade {
@@ -574,32 +786,126 @@ impl Renderer {
         }
     }
 
-    /// Let go of `objects` without waiting for the device to answer.
+    /// Move bytes between an object's backing and the device's copy of it,
+    /// and wait until they have moved.
+    ///
+    /// # Errors
+    ///
+    /// [`RenderError`]; the session refuses an object with no backing.
+    pub(crate) fn transfer(&self, transfer: Move) -> Result<(), RenderError> {
+        let object = transfer.object;
+        self.request(|state| {
+            let message = state
+                .session
+                .transfer(transfer)
+                .map_err(RenderError::Request)?;
+            Ok((message, ()))
+        })?;
+        let event = self.collect(
+            |event| matches!(event, Event::Transferred { object: moved, .. } if *moved == object),
+            |state| state.abandoned.push(Abandoned::Transfer(object)),
+        )?;
+        match event {
+            Event::Transferred {
+                status: Status::Ok, ..
+            } => Ok(()),
+            Event::Transferred { status, .. } => Err(RenderError::Refused(status)),
+            _ => Err(RenderError::Gone),
+        }
+    }
+
+    /// Run `commands` in `context`, and wait until the device has taken
+    /// them.
+    ///
+    /// The bytes are the renderer's own language and go into a slot of the
+    /// work VMO untouched (`docs/GPU.md` §3.3). The slot is held until the
+    /// driver has answered, because until then it may still be reading it;
+    /// a submission that timed out keeps its slot until the answer does
+    /// come.
+    ///
+    /// # Errors
+    ///
+    /// [`RenderError`]; [`RequestError::Work`] for a command buffer of no
+    /// bytes or more than [`COMMAND_BYTES`].
+    pub(crate) fn submit(&self, context: u32, commands: &[u8]) -> Result<(), RenderError> {
+        if commands.is_empty() || commands.len() as u64 > COMMAND_BYTES {
+            return Err(RenderError::Request(RequestError::Work));
+        }
+        let (slot, fence) = {
+            let mut state = self.state.lock();
+            if state.gone {
+                return Err(RenderError::Gone);
+            }
+            let slot = state
+                .take_command()
+                .ok_or(RenderError::Request(RequestError::Full))?;
+            let fence = state.next_fence;
+            state.next_fence = state.next_fence.wrapping_add(1).max(1);
+            (slot, fence)
+        };
+        let outcome = self.write_and_submit(context, commands, slot, fence);
+        // A timed-out submission's slot went with its abandoned reply.
+        if !matches!(outcome, Err(RenderError::TimedOut)) {
+            self.state.lock().give_command(slot);
+        }
+        outcome
+    }
+
+    /// [`Renderer::submit`] once its slot and fence are in hand.
+    fn write_and_submit(
+        &self,
+        context: u32,
+        commands: &[u8],
+        slot: usize,
+        fence: u64,
+    ) -> Result<(), RenderError> {
+        let at = DESCRIBE_REGION + slot as u64 * COMMAND_BYTES;
+        for (index, chunk) in commands.chunks(PAGE_SIZE as usize).enumerate() {
+            // A slot starts on a page boundary, so a chunk is a page's.
+            self.work
+                .write_page(at / PAGE_SIZE + index as u64, 0, chunk)
+                .map_err(|_| RenderError::Request(RequestError::Work))?;
+        }
+        let range = Work {
+            at: u32::try_from(at).map_err(|_| RenderError::Request(RequestError::Work))?,
+            len: commands.len() as u32,
+        };
+        self.request(|state| {
+            let message = state
+                .session
+                .submit(context, fence, range)
+                .map_err(RenderError::Request)?;
+            Ok((message, ()))
+        })?;
+        let event = self.collect(
+            |event| matches!(event, Event::Submitted { fence: taken, .. } if *taken == fence),
+            |state| state.abandoned.push(Abandoned::Submit { fence, slot }),
+        )?;
+        match event {
+            Event::Submitted {
+                status: Status::Ok, ..
+            } => Ok(()),
+            Event::Submitted { status, .. } => Err(RenderError::Refused(status)),
+            _ => Err(RenderError::Gone),
+        }
+    }
+
+    /// Let go of `objects`, and then of `context`, without waiting for the
+    /// device to answer.
     ///
     /// The same bargain [`crate::display::Card::release`] makes when a card's
     /// open closes: a close does not wait on a device, so the replies go to
     /// [`serve`], which drops them. An object the device would not let go of
-    /// stays tracked and its id is never handed out again.
-    pub(crate) fn release(&self, objects: &[u32]) {
+    /// stays tracked and its id is never handed out again. What the driver's
+    /// channel has no room for now is asked for as its replies make room.
+    pub(crate) fn release(&self, objects: &[u32], context: Option<u32>) {
         let mut state = self.state.lock();
         if state.gone {
             return;
         }
-        for &object in objects {
-            if !self.control.peer_has_room() {
-                break;
-            }
-            // Only an id the session took the request for is abandoned: one
-            // it refused was never asked about, so no reply is coming and
-            // recording it would leave an entry nothing ever clears.
-            let Ok(message) = state.session.drop_object(object) else {
-                continue;
-            };
-            state.abandoned.push(object);
-            if !send(&self.control, &message) {
-                break;
-            }
-        }
+        state.leaving.extend_from_slice(objects);
+        state.closing.extend(context);
+        state.let_go(&self.control);
     }
 }
 
@@ -617,6 +923,7 @@ fn serve(renderer: &Renderer) {
                 if renderer.control.signals().intersects(Signals::PEER_CLOSED) {
                     break;
                 }
+                renderer.state.lock().let_go(&renderer.control);
                 let _ = renderer.control.waiters().wait_until_deadline(
                     || {
                         renderer
@@ -642,11 +949,16 @@ fn serve(renderer: &Renderer) {
             Ok(Event::Stopped) => break,
             Ok(event) => {
                 let mut state = renderer.state.lock();
+                // A reply is room in the driver's channel, and an object
+                // that has gone may be the last its context was waiting for.
+                state.let_go(&renderer.control);
                 // The session has settled the id either way; what is left is
                 // whether anyone is still waiting to be told. An abandoned
                 // one is dropped here rather than growing `events` for ever.
                 if let Some(at) = abandoned_at(&state, event) {
-                    let _ = state.abandoned.remove(at);
+                    if let Abandoned::Submit { slot, .. } = state.abandoned.remove(at) {
+                        state.give_command(slot);
+                    }
                     continue;
                 }
                 state.events.push(event);
@@ -689,6 +1001,8 @@ fn prove(renderer: &Renderer) {
                 renderer.index
             );
             prove_object(renderer, context);
+            prove_caps(renderer);
+            prove_context_goes(renderer, context);
         }
         Some(Event::ContextMade { status, .. }) => {
             crate::console::println!("  render   the device refused a context: {status:?}");
@@ -711,7 +1025,9 @@ const PROOF_OBJECT_BYTES: u64 = PAGE_SIZE;
 /// side that knows virgl, chooses the target, format and bind words. A core
 /// that wrote them would be a core an NVIDIA driver could not reuse.
 fn prove_object(renderer: &Renderer, context: u32) {
-    let object = 1;
+    // The first id a program's object would get, and for its reason: the
+    // device's numbers are the display's too.
+    let object = FIRST_OBJECT;
     let Ok(ask) = renderer.state.lock().session.make_object(
         object,
         context,
@@ -758,48 +1074,120 @@ fn prove_object(renderer: &Renderer, context: u32) {
     }
 }
 
+/// Fetch the capability set the driver's streams are in, and keep it.
+///
+/// Asked once, here, while the core still has the channel to itself: the
+/// set is a property of the device and does not change, and a reply that
+/// brings a handle is one [`serve`] has no business with. Version 0 asks for
+/// the newest the device has.
+fn prove_caps(renderer: &Renderer) {
+    let capset = renderer.state.lock().session.capset();
+    if capset == 0 {
+        return;
+    }
+    let Ok(ask) = renderer.state.lock().session.get_caps(capset, 0) else {
+        return;
+    };
+    let Some((event, handles)) = exchange_with(renderer, &ask) else {
+        return;
+    };
+    let mut caps = Vec::new();
+    if let (
+        Event::Caps {
+            status: Status::Ok,
+            len,
+            ..
+        },
+        Some((Object::Vmo(vmo), _)),
+    ) = (event, handles.first())
+    {
+        caps = vec![0_u8; len as usize];
+        for (index, chunk) in caps.chunks_mut(PAGE_SIZE as usize).enumerate() {
+            if vmo.read_page(index as u64, 0, chunk).is_err() {
+                caps = Vec::new();
+                break;
+            }
+        }
+    }
+    crate::object::dispose(handles.into_iter().map(|(object, _)| object));
+    crate::console::println!(
+        "  render   renderD{} read capability set {capset}: {} bytes",
+        renderer.index,
+        caps.len()
+    );
+    renderer.state.lock().caps = caps;
+}
+
+/// Take the proof's context away again, so that a published renderer starts
+/// with nothing on the device that no open owns.
+fn prove_context_goes(renderer: &Renderer, context: u32) {
+    let Ok(ask) = renderer.state.lock().session.drop_context(context) else {
+        return;
+    };
+    match exchange(renderer, &ask) {
+        Some(Event::ContextGone {
+            status: Status::Ok, ..
+        }) => {
+            crate::console::println!(
+                "  render   renderD{} gave context {context} back",
+                renderer.index
+            );
+        }
+        Some(Event::ContextGone { status, .. }) => {
+            crate::console::println!("  render   the device kept a context: {status:?}");
+        }
+        _ => {}
+    }
+}
+
 /// Send `ask` and take the one reply the session is waiting for.
 ///
 /// Only [`prove`] uses this, and only before the renderer is published: it
 /// reads the channel itself, which nothing may do once [`serve`] is the one
 /// taking replies off it.
 fn exchange(renderer: &Renderer, ask: &Message) -> Option<Event> {
+    let (event, handles) = exchange_with(renderer, ask)?;
+    crate::object::dispose(handles.into_iter().map(|(object, _)| object));
+    Some(event)
+}
+
+/// [`exchange`], answering what the reply brought with it as well.
+fn exchange_with(renderer: &Renderer, ask: &Message) -> Option<(Event, Vec<Transfer>)> {
     if !send(&renderer.control, ask) {
         return None;
     }
     let deadline = timer::now_nanos().saturating_add(REPLY_PATIENCE_NANOS);
     let reply = receive(&renderer.control, deadline)?;
-    let message = Message::decode(&reply.bytes)?;
-    let accepted = renderer.state.lock().session.receive(&message);
+    let decoded = Message::decode(&reply.bytes);
+    let accepted = decoded.map(|message| renderer.state.lock().session.receive(&message));
     match accepted {
-        Ok(event) => Some(event),
-        Err(refusal) => {
-            refuse(&renderer.control, refusal);
+        Some(Ok(event)) => Some((event, reply.handles)),
+        other => {
+            crate::object::dispose(reply.handles.into_iter().map(|(object, _)| object));
+            if let Some(Err(refusal)) = other {
+                refuse(&renderer.control, refusal);
+            }
             None
         }
     }
 }
 
-/// Where an event about an abandoned object is recorded, if it is one.
-///
-/// Only an object's replies are ever abandoned: a submission's fence is
-/// waited for by the caller that made it, and a context outlives the open.
+/// Where an abandoned reply is recorded, if `event` is one.
 fn abandoned_at(state: &State, event: Event) -> Option<usize> {
-    let (Event::ObjectMade { object, .. } | Event::ObjectGone { object, .. }) = event else {
-        return None;
+    let which = match event {
+        Event::ObjectMade { object, .. } | Event::ObjectGone { object, .. } => {
+            Abandoned::Object(object)
+        }
+        Event::ContextMade { context, .. } | Event::ContextGone { context, .. } => {
+            Abandoned::Context(context)
+        }
+        Event::Transferred { object, .. } => Abandoned::Transfer(object),
+        Event::Submitted { fence, .. } => {
+            return state.abandoned.iter().position(
+                |held| matches!(held, Abandoned::Submit { fence: kept, .. } if *kept == fence),
+            );
+        }
+        _ => return None,
     };
-    state
-        .abandoned
-        .iter()
-        .position(|&waiting| waiting == object)
-}
-
-/// The part of the work VMO a command buffer may use: everything after the
-/// description slots, which own the base.
-#[expect(dead_code, reason = "the node that submits command buffers is next")]
-pub(crate) const fn command_work() -> Work {
-    Work {
-        at: DESCRIBE_REGION as u32,
-        len: (WORK_BYTES - DESCRIBE_REGION) as u32,
-    }
+    state.abandoned.iter().position(|held| *held == which)
 }

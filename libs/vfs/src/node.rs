@@ -542,6 +542,18 @@ pub trait Inode: Send + Sync + fmt::Debug {
         None
     }
 
+    /// The object a memory mapping of this file *at byte `offset`* maps, and
+    /// the byte of that object the mapping starts at.
+    ///
+    /// For every file whose pages are one object this is [`Inode::mapping`]
+    /// and the same offset, which is the default. A device whose offsets are
+    /// names rather than places -- a DRM render node, where each buffer
+    /// object has pages of its own and `VIRTGPU_MAP` hands out an offset that
+    /// stands for one -- answers the object the offset names instead.
+    fn mapping_at(&self, offset: u64) -> Option<(Arc<dyn Any + Send + Sync>, u64)> {
+        self.mapping().map(|object| (object, offset))
+    }
+
     /// The seals on this file, as `fcntl(F_GET_SEALS)` reports them.
     ///
     /// `EINVAL`, the default, for a filesystem that cannot seal, which is

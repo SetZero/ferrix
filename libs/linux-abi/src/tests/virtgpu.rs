@@ -231,6 +231,43 @@ fn every_structure_reads_and_writes_back() {
     round_trip::<virtgpu::Wait>();
 }
 
+/// The two transfers are one layout under two names, which is what lets a
+/// kernel read either with one reader: written as one and read as the
+/// other, every field comes back.
+#[test]
+fn the_two_transfers_are_one_layout() {
+    assert_eq!(
+        virtgpu::TransferToHost::SIZE,
+        virtgpu::TransferFromHost::SIZE
+    );
+    let mut bytes = vec![0u8; virtgpu::TransferToHost::SIZE];
+    virtgpu::TransferToHost {
+        bo_handle: 1,
+        r#box: virtgpu::Box3d {
+            x: 2,
+            y: 3,
+            z: 4,
+            w: 5,
+            h: 6,
+            d: 7,
+        },
+        level: 8,
+        offset: 9,
+        stride: 10,
+        layer_stride: 11,
+    }
+    .write(&mut bytes)
+    .expect("it fits");
+    let other = virtgpu::TransferFromHost::read(&bytes).expect("it reads");
+    assert_eq!(other.bo_handle, 1);
+    assert_eq!((other.r#box.x, other.r#box.y, other.r#box.z), (2, 3, 4));
+    assert_eq!((other.r#box.w, other.r#box.h, other.r#box.d), (5, 6, 7));
+    assert_eq!(
+        (other.level, other.offset, other.stride, other.layer_stride),
+        (8, 9, 10, 11)
+    );
+}
+
 #[test]
 fn fields_land_where_the_headers_put_them() {
     // The buffer the driver already creates on the device: a 4096-byte

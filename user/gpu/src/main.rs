@@ -480,6 +480,22 @@ fn render_introduce(
     let Some(name) = rc::Hello::named("virtio_gpu") else {
         return Ok(None);
     };
+    // Which capability set this device's streams are in, asked for afresh:
+    // the display's HELLO read one too, and a driver that kept one number in
+    // two places would eventually disagree with itself. The device lists
+    // its sets oldest first and a renderer wants the newest it knows, so
+    // `CAPSET_VIRGL2` is taken over `CAPSET_VIRGL` when both are there.
+    let mut capset: Option<gpu::CapsetInfo> = None;
+    for index in 0..driver.info().config.num_capsets.min(MAX_CAPSETS) {
+        if let Ok(Response::CapsetInfo(info)) =
+            run_command(driver, port, &Command::GetCapsetInfo { index })?
+            && matches!(info.id, gpu::CAPSET_VIRGL | gpu::CAPSET_VIRGL2)
+            && capset.is_none_or(|held| info.id > held.id)
+        {
+            capset = Some(info);
+        }
+    }
+    let stream = Stream::new()?;
     let hello = RenderMessage::Hello(rc::Hello {
         version: rc::VERSION,
         location,
@@ -487,13 +503,7 @@ fn render_introduce(
         // Fences are encoded but nothing waits on one yet, so they are not
         // offered: a feature bit is a promise the core would hold us to.
         features: rc::features::SUBMIT,
-        // Which capability set this device's streams are in, asked for
-        // afresh: the display's HELLO read it too, and a driver that kept
-        // one number in two places would eventually disagree with itself.
-        capset: match run_command(driver, port, &Command::GetCapsetInfo { index: 0 })? {
-            Ok(Response::CapsetInfo(info)) => info.id,
-            _ => 0,
-        },
+        capset: capset.map_or(0, |info| info.id),
         object_max: MAX_OBJECT_BYTES,
     });
     let share = port
@@ -539,7 +549,13 @@ fn render_introduce(
     if !taken {
         return Ok(None);
     }
-    Ok(Some(RenderSide { control, work }))
+    Ok(Some(RenderSide {
+        control,
+        work,
+        capset,
+        stream,
+        backings: [const { None }; MAX_BACKINGS],
+    }))
 }
 
 /// The render conversation, once the core has answered READY.
@@ -551,6 +567,57 @@ struct RenderSide {
     /// READY's work VMO: an object's description and a command buffer are
     /// ranges of it. The driver reads those ranges and never writes them.
     work: Option<Vmo<Kernel>>,
+    /// The capability set HELLO named, which `GET_CAPS` fetches.
+    capset: Option<gpu::CapsetInfo>,
+    /// Where a command buffer is copied to on its way from the work VMO,
+    /// which this process may read and may not map, to the command area.
+    stream: Stream,
+    /// The backing of every mappable object the device holds: the core's
+    /// VMO and this driver's pin of it. One stays here for good if the
+    /// device would not let its object go, which is the rule that pages a
+    /// device may still hold are never unpinned.
+    backings: [Option<Backing>; MAX_BACKINGS],
+}
+
+/// One mappable object's backing, pinned for the device.
+struct Backing {
+    object: u32,
+    _pin: Pin<Kernel>,
+    _vmo: Vmo<Kernel>,
+}
+
+/// The most mappable objects pinned at once: as many as the core's session
+/// tracks, so a pin slot is never what refuses an object it would take.
+const MAX_BACKINGS: usize = ferrix_renderctl::session::MAX_OBJECTS;
+
+/// The most capability sets asked about. virtio-gpu defines a handful.
+const MAX_CAPSETS: u32 = 8;
+
+/// The longest command buffer one `SUBMIT` may name, which is the core's
+/// slot and fits the command area beside its header and the response.
+const STREAM_BYTES: usize = 64 * 1024;
+
+/// A private buffer a command buffer is read into.
+struct Stream {
+    _vmo: Vmo<Kernel>,
+    base: usize,
+}
+
+impl Stream {
+    fn new() -> Result<Stream, Step> {
+        let vmo = vmo::create(Kernel, STREAM_BYTES).map_err(|_| Step::Memory)?;
+        let base = vmo
+            .map(None, STREAM_BYTES, Protection::ReadWrite, 0)
+            .map_err(|_| Step::Memory)?;
+        Ok(Stream { _vmo: vmo, base })
+    }
+
+    fn bytes(&mut self, len: usize) -> &mut [u8] {
+        // SAFETY: `base` starts a private, zero-filled, writable mapping of
+        // `STREAM_BYTES` that lives as long as this process; `len` is capped
+        // to it; the `&mut self` borrow keeps the slice unique.
+        unsafe { core::slice::from_raw_parts_mut(self.base as *mut u8, len.min(STREAM_BYTES)) }
+    }
 }
 
 /// Make one rendering context on the device.
@@ -581,10 +648,36 @@ fn make_context(
     })
 }
 
-/// Give one object back to the device.
+/// Destroy one rendering context.
+fn drop_context(
+    driver: &mut Gpu,
+    port: &Port<Kernel>,
+    context: u32,
+) -> Result<ferrix_renderctl::message::Message, Step> {
+    let gone = run_command_in(
+        driver,
+        port,
+        gpu::Context {
+            id: context,
+            ..gpu::Context::NONE
+        },
+        &Command::CtxDestroy,
+    )?;
+    Ok(ferrix_renderctl::message::Message::ContextGone {
+        context,
+        status: status_of(gone),
+    })
+}
+
+/// Give one object back to the device, and its backing back to the core.
+///
+/// The pin goes only when the device has said the resource is gone. One it
+/// would not let go of keeps its pages pinned for as long as this process
+/// lives, because the device may still read or write them.
 fn drop_object(
     driver: &mut Gpu,
     port: &Port<Kernel>,
+    side: &mut RenderSide,
     object: u32,
 ) -> Result<ferrix_renderctl::message::Message, Step> {
     let gone = run_command(
@@ -594,31 +687,53 @@ fn drop_object(
             resource_id: object,
         },
     )?;
+    if gone.is_ok()
+        && let Some(slot) = side
+            .backings
+            .iter_mut()
+            .find(|slot| slot.as_ref().is_some_and(|held| held.object == object))
+    {
+        *slot = None;
+    }
     Ok(ferrix_renderctl::message::Message::ObjectGone {
         object,
         status: status_of(gone),
     })
 }
 
-/// Make one object on the device: the resource itself, and the context's
-/// right to name it.
+/// Make one object on the device: the resource itself, its backing, and the
+/// context's right to name it.
 ///
 /// This is the device-specific half of the adapter, and the whole of what a
 /// second GPU rewrites (`docs/GPU.md` §3.3). The core said how many bytes it
-/// wants and nothing else; what a resource *is* on this device is known
-/// here and nowhere above.
+/// wants and handed over where they live; what a resource *is* on this
+/// device is known here and nowhere above.
 fn make_object(
     driver: &mut Gpu,
     port: &Port<Kernel>,
-    work: Option<&Vmo<Kernel>>,
+    device: &Device<Kernel>,
+    scratch: &mut Scratch,
+    side: &mut RenderSide,
     make: &ferrix_renderctl::message::MakeObject,
+    backing: Option<Vmo<Kernel>>,
 ) -> Result<ferrix_renderctl::message::Message, Step> {
-    use ferrix_renderctl::message::Message as RenderMessage;
+    use ferrix_renderctl::message::{Message as RenderMessage, Status, flags};
 
-    // An empty description is the core asking for a plain buffer; a
-    // description of its own will be the render node's, once a program can
-    // write one.
-    let (target, format, bind) = described(work, make.describe);
+    let answer = |status| {
+        Ok(RenderMessage::ObjectMade {
+            object: make.object,
+            status,
+        })
+    };
+    // A mappable object is one that came with its backing, and the other
+    // way about: either without the other is a core this cannot serve.
+    if (make.flags & flags::MAPPABLE != 0) != backing.is_some() {
+        return answer(Status::Invalid);
+    }
+    let Some(slot) = side.backings.iter().position(Option::is_none) else {
+        return answer(Status::OutOfMemory);
+    };
+    let shape = described(side.work.as_ref(), make);
     let made = run_command_in(
         driver,
         port,
@@ -628,43 +743,238 @@ fn make_object(
         },
         &Command::ResourceCreate3d {
             resource_id: make.object,
-            target,
-            format,
-            bind,
+            target: shape.target,
+            format: shape.format,
+            bind: shape.bind,
             size: gpu::Box3d {
                 x: 0,
                 y: 0,
                 z: 0,
-                width: u32::try_from(make.bytes).unwrap_or(u32::MAX),
-                height: 1,
-                depth: 1,
+                width: shape.width,
+                height: shape.height,
+                depth: shape.depth,
             },
-            array_size: 1,
-            last_level: 0,
-            samples: 0,
-            flags: 0,
+            array_size: shape.array_size,
+            last_level: shape.last_level,
+            samples: shape.samples,
+            flags: shape.flags,
         },
     )?;
+    if made.is_err() {
+        return answer(status_of(made));
+    }
+    // The backing, pinned for as long as the device has the resource. The
+    // device writes it on a transfer from itself, so an object made to be
+    // read back is pinned writable and any other is not.
+    let mut status = Status::Ok;
+    if let Some(vmo) = backing {
+        let access = if make.flags & flags::FROM_DEVICE != 0 {
+            PinAccess::ReadWrite
+        } else {
+            PinAccess::ReadOnly
+        };
+        let pages = usize::try_from(make.bytes)
+            .unwrap_or(usize::MAX)
+            .div_ceil(PAGE);
+        match pin_entries(device, scratch, &vmo, 0, pages.saturating_mul(PAGE), access) {
+            Ok((pin, count)) => {
+                let attached = run_command(
+                    driver,
+                    port,
+                    &Command::ResourceAttachBacking {
+                        resource_id: make.object,
+                        entries: scratch.entries().get(..count).unwrap_or_default(),
+                    },
+                )?;
+                status = status_of(attached);
+                if let Some(held) = side.backings.get_mut(slot) {
+                    // Kept even when the attach was refused: the unref below
+                    // decides whether the device still holds anything.
+                    *held = Some(Backing {
+                        object: make.object,
+                        _pin: pin,
+                        _vmo: vmo,
+                    });
+                }
+            }
+            Err(()) => status = Status::PinFailed,
+        }
+    }
     // A resource a context may name has to be given to it: a 3D command
     // naming one that was not is refused by the device.
-    let attached = match (&made, make.context) {
-        (Ok(_), context) if context != 0 => run_command_in(
+    if status == Status::Ok && make.context != 0 {
+        let attached = run_command_in(
             driver,
             port,
             gpu::Context {
-                id: context,
+                id: make.context,
                 ..gpu::Context::NONE
             },
             &Command::CtxAttachResource {
                 resource_id: make.object,
             },
-        )?,
-        _ => Ok(Response::NoData),
+        )?;
+        status = status_of(attached);
+    }
+    // Half-made is not made: the core frees the id on anything but `Ok`, so
+    // the resource must not outlive the refusal.
+    if status != Status::Ok {
+        let _ = drop_object(driver, port, side, make.object)?;
+    }
+    answer(status)
+}
+
+/// Move bytes between an object's backing and the device's copy.
+fn transfer(
+    driver: &mut Gpu,
+    port: &Port<Kernel>,
+    transfer: &ferrix_renderctl::message::Transfer,
+) -> Result<ferrix_renderctl::message::Message, Step> {
+    use ferrix_renderctl::message::Direction;
+
+    let region = gpu::Box3d {
+        x: transfer.region.x,
+        y: transfer.region.y,
+        z: transfer.region.z,
+        width: transfer.region.width,
+        height: transfer.region.height,
+        depth: transfer.region.depth,
     };
-    Ok(RenderMessage::ObjectMade {
-        object: make.object,
-        status: status_of(made.and(attached)),
+    let command = match transfer.direction {
+        Direction::ToDevice => Command::TransferToHost3d {
+            region,
+            offset: transfer.offset,
+            resource_id: transfer.object,
+            level: transfer.level,
+            stride: transfer.stride,
+            layer_stride: transfer.layer_stride,
+        },
+        Direction::FromDevice => Command::TransferFromHost3d {
+            region,
+            offset: transfer.offset,
+            resource_id: transfer.object,
+            level: transfer.level,
+            stride: transfer.stride,
+            layer_stride: transfer.layer_stride,
+        },
+    };
+    let moved = run_command_in(
+        driver,
+        port,
+        gpu::Context {
+            id: transfer.context,
+            ..gpu::Context::NONE
+        },
+        &command,
+    )?;
+    Ok(ferrix_renderctl::message::Message::Transferred {
+        object: transfer.object,
+        status: status_of(moved),
     })
+}
+
+/// Hand the device a command buffer, copied out of the work VMO.
+fn submit(
+    driver: &mut Gpu,
+    port: &Port<Kernel>,
+    side: &mut RenderSide,
+    submit: &ferrix_renderctl::message::Submit,
+) -> Result<ferrix_renderctl::message::Message, Step> {
+    use ferrix_renderctl::message::{Message as RenderMessage, Status};
+
+    let len = submit.commands.len as usize;
+    let read = len <= STREAM_BYTES
+        && side.work.as_ref().is_some_and(|work| {
+            work.read(side.stream.bytes(len), u64::from(submit.commands.at))
+                .is_ok()
+        });
+    let status = if read {
+        status_of(run_command_in(
+            driver,
+            port,
+            gpu::Context {
+                id: submit.context,
+                ..gpu::Context::NONE
+            },
+            &Command::Submit3d {
+                commands: side.stream.bytes(len),
+            },
+        )?)
+    } else {
+        Status::Invalid
+    };
+    Ok(RenderMessage::Submitted {
+        fence: submit.fence,
+        status,
+    })
+}
+
+/// Fetch a capability set and hand its bytes over in a VMO of this
+/// process's making. `None` is a reply that could not be sent at all.
+fn get_caps(
+    driver: &mut Gpu,
+    port: &Port<Kernel>,
+    side: &RenderSide,
+    capset: u32,
+    version: u32,
+) -> Result<Option<()>, Step> {
+    use ferrix_renderctl::message::{Message as RenderMessage, Status};
+
+    let refuse = |status| {
+        side.control
+            .write(
+                RenderMessage::Caps {
+                    capset,
+                    status,
+                    len: 0,
+                }
+                .encode()
+                .as_bytes(),
+            )
+            .map_err(|_| Step::Control)
+            .map(Some)
+    };
+    let Some(info) = side.capset.filter(|info| info.id == capset) else {
+        return refuse(Status::Invalid);
+    };
+    if info.max_size > CAPSET_ROOM {
+        return refuse(Status::Invalid);
+    }
+    let fetched = run_command(
+        driver,
+        port,
+        &Command::GetCapset {
+            capset_id: info.id,
+            // Version 0 is the core asking for the newest there is.
+            capset_version: if version == 0 {
+                info.max_version
+            } else {
+                version
+            },
+            max_size: info.max_size,
+        },
+    )?;
+    let Ok(Response::Capset { len }) = fetched else {
+        return refuse(status_of(fetched));
+    };
+    let mut bytes = [0_u8; CAPSET_ROOM as usize];
+    let set = bytes.get_mut(..len).ok_or(Step::Device)?;
+    driver.read_response(0, set);
+    let Ok(vmo) = vmo::create(Kernel, len.div_ceil(PAGE).max(1) * PAGE) else {
+        return refuse(Status::OutOfMemory);
+    };
+    if vmo.write(set, 0).is_err() {
+        return refuse(Status::OutOfMemory);
+    }
+    let caps = RenderMessage::Caps {
+        capset,
+        status: Status::Ok,
+        len: u32::try_from(len).unwrap_or(0),
+    };
+    side.control
+        .write_with(caps.encode().as_bytes(), [vmo.into_owned()])
+        .map_err(|_| Step::Control)?;
+    Ok(Some(()))
 }
 
 /// The largest object this driver will make: what one virtio-gpu resource
@@ -684,39 +994,66 @@ const VIRGL_FORMAT_R8_UNORM: u32 = 64;
 /// taken from virgl's header and not from gallium's.
 const VIRGL_BIND_VERTEX_BUFFER: u32 = 1 << 4;
 
-/// What to make of a `MAKE_OBJ`'s description: the target, format and bind
-/// words for the device.
+/// A resource's shape, in virgl's words.
+struct Shape {
+    target: u32,
+    format: u32,
+    bind: u32,
+    width: u32,
+    height: u32,
+    depth: u32,
+    array_size: u32,
+    last_level: u32,
+    samples: u32,
+    flags: u32,
+}
+
+/// What to make of a `MAKE_OBJ`'s description: the resource's shape.
 ///
 /// An empty description is the core saying "so many bytes, and the rest is
-/// yours", which is a plain buffer. A description of its own is four
-/// little-endian words -- target, format, bind, and a reserved zero -- which
-/// is what the render node will write once a program can ask for a texture.
-/// Anything shorter is treated as empty rather than half-read.
-fn described(
-    work: Option<&Vmo<Kernel>>,
-    describe: ferrix_renderctl::message::Work,
-) -> (u32, u32, u32) {
-    const DESCRIBED_BYTES: usize = 16;
-    let plain = (PIPE_BUFFER, VIRGL_FORMAT_R8_UNORM, VIRGL_BIND_VERTEX_BUFFER);
-    if describe.len as usize != DESCRIBED_BYTES {
+/// yours", which is a plain buffer. A description of its own is ten
+/// little-endian words, the ones `VIRTGPU_RESOURCE_CREATE` carries and in
+/// its order, which the render node writes and never reads. Anything else
+/// is treated as empty rather than half-read.
+fn described(work: Option<&Vmo<Kernel>>, make: &ferrix_renderctl::message::MakeObject) -> Shape {
+    const WORDS: usize = 10;
+    let plain = Shape {
+        target: PIPE_BUFFER,
+        format: VIRGL_FORMAT_R8_UNORM,
+        bind: VIRGL_BIND_VERTEX_BUFFER,
+        width: u32::try_from(make.bytes).unwrap_or(u32::MAX),
+        height: 1,
+        depth: 1,
+        array_size: 1,
+        last_level: 0,
+        samples: 0,
+        flags: 0,
+    };
+    let mut bytes = [0_u8; WORDS * 4];
+    if make.describe.len as usize != bytes.len() {
         return plain;
     }
     let Some(work) = work else {
         return plain;
     };
-    // Three words and a reserved zero, each read as its own four bytes:
-    // indexing one buffer would be four places this could panic on a
-    // description the node wrote wrong.
-    let mut word = [0_u8; 4];
-    let mut at = u64::from(describe.at);
-    let mut next = || {
-        let read = work.read(&mut word, at).is_ok();
-        at = at.saturating_add(4);
-        read.then(|| u32::from_le_bytes(word))
-    };
-    match (next(), next(), next()) {
-        (Some(target), Some(format), Some(bind)) => (target, format, bind),
-        _ => plain,
+    if work.read(&mut bytes, u64::from(make.describe.at)).is_err() {
+        return plain;
+    }
+    let mut words = bytes
+        .chunks_exact(4)
+        .map(|word| u32::from_le_bytes(word.try_into().unwrap_or_default()));
+    let mut next = || words.next().unwrap_or(0);
+    Shape {
+        target: next(),
+        format: next(),
+        bind: next(),
+        width: next(),
+        height: next(),
+        depth: next(),
+        array_size: next(),
+        last_level: next(),
+        samples: next(),
+        flags: next(),
     }
 }
 
@@ -1251,12 +1588,14 @@ impl Serving {
     fn render_one(&mut self) -> Result<Option<bool>, Step> {
         use ferrix_renderctl::message::{MAX_BYTES as RENDER_MAX_BYTES, Message as RenderMessage};
 
-        let Some(side) = self.render.as_ref() else {
+        let Some(side) = self.render.as_mut() else {
             self.render_waiting = false;
             return Ok(None);
         };
         let mut bytes = [0_u8; RENDER_MAX_BYTES];
-        let received = match side.control.read(&mut bytes, &mut []) {
+        // One handle at most: a mappable object's backing.
+        let mut handles = [Handle::INVALID; 1];
+        let received = match side.control.read(&mut bytes, &mut handles) {
             Ok(received) => received,
             Err(ReadError::Failed(Error::ShouldWait)) => {
                 // Nothing more until the core speaks again.
@@ -1272,6 +1611,10 @@ impl Serving {
             }
             Err(_) => return Ok(Some(false)),
         };
+        // Owned before anything can return, so that a handle is closed
+        // whichever way this goes.
+        let handed = (received.handles == 1)
+            .then(|| Vmo::from_owned(OwnedHandle::from_raw(Kernel, handles[0])));
         let Some(message) = RenderMessage::decode(bytes.get(..received.bytes).unwrap_or_default())
         else {
             return Ok(Some(false));
@@ -1280,11 +1623,30 @@ impl Serving {
             RenderMessage::MakeContext { context, capset } => {
                 make_context(&mut self.driver, &self.port, context, capset)?
             }
-            RenderMessage::MakeObject(make) => {
-                make_object(&mut self.driver, &self.port, side.work.as_ref(), &make)?
+            RenderMessage::DropContext { context } => {
+                drop_context(&mut self.driver, &self.port, context)?
             }
+            RenderMessage::MakeObject(make) => make_object(
+                &mut self.driver,
+                &self.port,
+                &self.device,
+                &mut self.scratch,
+                side,
+                &make,
+                handed,
+            )?,
             RenderMessage::DropObject { object } => {
-                drop_object(&mut self.driver, &self.port, object)?
+                drop_object(&mut self.driver, &self.port, side, object)?
+            }
+            RenderMessage::Transfer(moving) => transfer(&mut self.driver, &self.port, &moving)?,
+            RenderMessage::Submit(submitted) => {
+                submit(&mut self.driver, &self.port, side, &submitted)?
+            }
+            RenderMessage::GetCaps { capset, version } => {
+                // Its reply carries a handle, so it is written there.
+                return Ok(
+                    get_caps(&mut self.driver, &self.port, side, capset, version)?.map(|()| true),
+                );
             }
             RenderMessage::Stop => RenderMessage::Stopped,
             _ => return Ok(Some(false)),
@@ -1312,56 +1674,75 @@ impl Serving {
     fn pin(&mut self, buffer: u32, offset: u64, length: u64) -> Result<usize, ()> {
         let offset = usize::try_from(offset).map_err(drop)?;
         let length = usize::try_from(length).map_err(drop)?;
-        let pages = length / PAGE;
-        if pages == 0 || pages > MAX_BUFFER_PAGES {
-            return Err(());
-        }
         // An id the device may still hold pages under is never pinned twice:
         // the core never reuses one, so this is a broken core.
         if self.pins.iter().flatten().any(|(held, _)| *held == buffer) {
             return Err(());
         }
         let slot = self.pins.iter().position(Option::is_none).ok_or(())?;
-        let pin = self
-            .device
-            .pin(&self.card, offset, length, PinAccess::ReadOnly)
-            .map_err(drop)?;
-        let got = pin.addresses(self.scratch.raw(pages)).map_err(drop)?;
-        if !got.is_complete() || got.pages != pages {
-            return Err(());
-        }
-        // One entry per run of device-consecutive pages, as
-        // `backing_entries` makes them, without a second array of addresses.
-        let page = PAGE as u64;
-        let mut count = 0usize;
-        for index in 0..pages {
-            let bytes = self.scratch.raw(pages).get(index).copied().ok_or(())?;
-            let address = device_address(bytes);
-            if !address.is_multiple_of(page) {
-                return Err(());
-            }
-            let entries = self.scratch.entries_mut();
-            let joined = count
-                .checked_sub(1)
-                .and_then(|last| entries.get_mut(last))
-                .filter(|entry| {
-                    entry.addr.checked_add(u64::from(entry.length)) == Some(address)
-                        && entry.length.checked_add(PAGE as u32).is_some()
-                });
-            if let Some(entry) = joined {
-                entry.length += PAGE as u32;
-            } else {
-                let fresh = entries.get_mut(count).ok_or(())?;
-                *fresh = MemEntry {
-                    addr: address,
-                    length: PAGE as u32,
-                };
-                count += 1;
-            }
-        }
+        let (pin, count) = pin_entries(
+            &self.device,
+            &mut self.scratch,
+            &self.card,
+            offset,
+            length,
+            PinAccess::ReadOnly,
+        )?;
         if let Some(held) = self.pins.get_mut(slot) {
             *held = Some((buffer, pin));
         }
         Ok(count)
     }
+}
+
+/// Pin `length` bytes of `vmo` from `offset` for the device and make the
+/// backing entries in `scratch`: the pin and how many entries, or `Err` when
+/// it cannot be done.
+fn pin_entries(
+    device: &Device<Kernel>,
+    scratch: &mut Scratch,
+    vmo: &Vmo<Kernel>,
+    offset: usize,
+    length: usize,
+    access: PinAccess,
+) -> Result<(Pin<Kernel>, usize), ()> {
+    let pages = length / PAGE;
+    if pages == 0 || pages > MAX_BUFFER_PAGES {
+        return Err(());
+    }
+    let pin = device.pin(vmo, offset, length, access).map_err(drop)?;
+    let got = pin.addresses(scratch.raw(pages)).map_err(drop)?;
+    if !got.is_complete() || got.pages != pages {
+        return Err(());
+    }
+    // One entry per run of device-consecutive pages, as
+    // `backing_entries` makes them, without a second array of addresses.
+    let page = PAGE as u64;
+    let mut count = 0usize;
+    for index in 0..pages {
+        let bytes = scratch.raw(pages).get(index).copied().ok_or(())?;
+        let address = device_address(bytes);
+        if !address.is_multiple_of(page) {
+            return Err(());
+        }
+        let entries = scratch.entries_mut();
+        let joined = count
+            .checked_sub(1)
+            .and_then(|last| entries.get_mut(last))
+            .filter(|entry| {
+                entry.addr.checked_add(u64::from(entry.length)) == Some(address)
+                    && entry.length.checked_add(PAGE as u32).is_some()
+            });
+        if let Some(entry) = joined {
+            entry.length += PAGE as u32;
+        } else {
+            let fresh = entries.get_mut(count).ok_or(())?;
+            *fresh = MemEntry {
+                addr: address,
+                length: PAGE as u32,
+            };
+            count += 1;
+        }
+    }
+    Ok((pin, count))
 }

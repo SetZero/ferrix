@@ -13,6 +13,7 @@ publish.workspace = true
 negative-control = []
 
 [dependencies]
+compositor-virgl = { path = "../virgl" }
 # Declarations only, as in zinc: open, ioctl and mmap are the C library std
 # already links.
 libc = "0.2.189"

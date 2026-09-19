@@ -17,7 +17,7 @@
 //! CTX_MADE   driver -> core, 16 bytes: 8 context u32   12 status u32
 //! DROP_CTX   core -> driver, 16 bytes: 8 context u32   12 reserved
 //! CTX_GONE   driver -> core, 16 bytes: 8 context u32   12 status u32
-//! MAKE_OBJ   core -> driver, 40 bytes
+//! MAKE_OBJ   core -> driver, 40 bytes, handles [backing VMO] when MAPPABLE
 //!   8 object u32   12 context u32 (0: none)   16 bytes u64
 //!   24 flags u32   28 reserved   32 describe_at u32   36 describe_len u32
 //! OBJ_MADE   driver -> core, 16 bytes: 8 object u32   12 status u32
@@ -28,6 +28,14 @@
 //! SUBMITTED  driver -> core, 24 bytes: 8 fence u64   16 status u32   20 reserved
 //! WAIT       core -> driver, 24 bytes: 8 context u32   12 reserved   16 fence u64
 //! WAITED     driver -> core, 24 bytes: 8 fence u64   16 status u32   20 reserved
+//! TRANSFER   core -> driver, 64 bytes
+//!   8 object u32   12 context u32 (0: none)   16 direction u32   20 level u32
+//!   24 offset u64   32 x y z width height depth, u32 each
+//!   56 stride u32   60 layer_stride u32
+//! TRANSFERRED driver -> core, 16 bytes: 8 object u32   12 status u32
+//! GET_CAPS   core -> driver, 16 bytes: 8 capset u32   12 version u32
+//! CAPS       driver -> core, 24 bytes, handles [caps VMO] when status is Ok
+//!   8 capset u32   12 status u32   16 len u32   20 reserved
 //! STOP, STOPPED                8 bytes
 //! ```
 //!
@@ -44,13 +52,27 @@
 //! the device. This is the seam `docs/GPU.md` §3.3 describes, and the
 //! reason the core can stay the same for a second GPU: what those bytes
 //! *mean* is the driver's business and no part of this protocol.
+//!
+//! An object's *backing* does not ride in the work VMO either. A mappable
+//! object has a VMO of its own, which the core makes and keeps -- it is what
+//! a program maps through the render node -- and hands to the driver with
+//! `MAKE_OBJ`. The driver pins it for the device and keeps the pin until the
+//! device has let the object go, which is `docs/DISPLAY.md` §2.2's rule once
+//! more: a VMO the device may still hold is never unpinned. `TRANSFER` then
+//! moves bytes between that backing and the device's own copy, and names
+//! the part of the object by a box, a level and two strides, which is as
+//! much as any GPU's texture has and no more than that.
+//!
+//! A capability set is the other way about: the *driver* read it from the
+//! device, so `CAPS` brings a VMO of the driver's making, and the core
+//! copies the bytes out and lets it go.
 
 use ::core::fmt;
 
 use ferrix_native_abi::rights::Rights;
 
 /// The protocol version this crate speaks.
-pub const VERSION: u16 = 1;
+pub const VERSION: u16 = 2;
 
 /// HELLO's type.
 pub const HELLO: u32 = 1;
@@ -86,6 +108,14 @@ pub const WAITED: u32 = 15;
 pub const STOP: u32 = 16;
 /// STOPPED's type.
 pub const STOPPED: u32 = 17;
+/// TRANSFER's type.
+pub const TRANSFER: u32 = 18;
+/// `TRANSFERRED`'s type.
+pub const TRANSFERRED: u32 = 19;
+/// `GET_CAPS`'s type.
+pub const GET_CAPS: u32 = 20;
+/// CAPS's type.
+pub const CAPS: u32 = 21;
 
 /// Bytes of the type and length, and all of STOP and STOPPED.
 pub const HEADER_BYTES: usize = 8;
@@ -112,8 +142,10 @@ pub const SUBMIT_BYTES: usize = 32;
 pub const PAIR_BYTES: usize = 16;
 /// Bytes of a message carrying a fence and a status.
 pub const FENCE_BYTES: usize = 24;
+/// Bytes of `TRANSFER`.
+pub const TRANSFER_BYTES: usize = 64;
 /// Bytes of the longest message.
-pub const MAX_BYTES: usize = HELLO_BYTES;
+pub const MAX_BYTES: usize = TRANSFER_BYTES;
 
 /// Exactly the rights each side holds the other's port with.
 pub const PORT_RIGHTS: Rights = Rights(Rights::WRITE.0 | Rights::TRANSFER.0);
@@ -121,6 +153,15 @@ pub const PORT_RIGHTS: Rights = Rights(Rights::WRITE.0 | Rights::TRANSFER.0);
 /// Exactly the rights the driver holds the work VMO with: it reads what the
 /// core wrote there and pins it for the device, and never writes it.
 pub const WORK_VMO_RIGHTS: Rights = Rights(Rights::READ.0 | Rights::TRANSFER.0);
+
+/// Exactly the rights the driver holds a mappable object's backing with:
+/// it pins the pages for the device, which may write them on a transfer
+/// from it, and never maps them.
+pub const BACKING_RIGHTS: Rights = Rights(Rights::READ.0 | Rights::WRITE.0 | Rights::TRANSFER.0);
+
+/// The largest capability set a core takes from a driver: 64 KiB, which is
+/// many times any renderer's and small enough to copy without thought.
+pub const MAX_CAPS_BYTES: u32 = 64 * 1024;
 
 /// The largest object a core will ask a driver to make: 256 MiB.
 ///
@@ -429,6 +470,68 @@ pub struct Submit {
     pub commands: Work,
 }
 
+/// Which way a `TRANSFER` moves bytes.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(u32)]
+pub enum Direction {
+    /// From the object's backing to the device's copy.
+    ToDevice = 1,
+    /// From the device's copy to the object's backing.
+    FromDevice = 2,
+}
+
+impl Direction {
+    /// The direction a word names, if any.
+    #[must_use]
+    pub const fn from_raw(raw: u32) -> Option<Self> {
+        Some(match raw {
+            1 => Self::ToDevice,
+            2 => Self::FromDevice,
+            _ => return None,
+        })
+    }
+}
+
+/// A part of an object: a box of texels. A buffer is a box one texel high
+/// and one deep.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct Region {
+    /// Where it starts.
+    pub x: u32,
+    /// Where it starts.
+    pub y: u32,
+    /// Where it starts.
+    pub z: u32,
+    /// How wide.
+    pub width: u32,
+    /// How high.
+    pub height: u32,
+    /// How deep.
+    pub depth: u32,
+}
+
+/// `TRANSFER`: move bytes between a mappable object's backing and the
+/// device's copy of it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Transfer {
+    /// Which object, which must be mappable.
+    pub object: u32,
+    /// Which context asks, or 0 for none.
+    pub context: u32,
+    /// Which way.
+    pub direction: Direction,
+    /// Which mip level.
+    pub level: u32,
+    /// Where in the backing the region's first byte is.
+    pub offset: u64,
+    /// Which part of the object.
+    pub region: Region,
+    /// Bytes a row in the backing, or 0 for the object's own.
+    pub stride: u32,
+    /// Bytes a layer in the backing, or 0 for the object's own.
+    pub layer_stride: u32,
+}
+
 /// A message on the control channel.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Message {
@@ -513,6 +616,31 @@ pub enum Message {
         /// How it went.
         status: Status,
     },
+    /// Move bytes between an object's backing and the device.
+    Transfer(Transfer),
+    /// They were moved, or were not.
+    Transferred {
+        /// Which object.
+        object: u32,
+        /// How it went.
+        status: Status,
+    },
+    /// Ask for a capability set's bytes.
+    GetCaps {
+        /// Which set.
+        capset: u32,
+        /// Which version of it.
+        version: u32,
+    },
+    /// Here they are, in the VMO this came with, or here they are not.
+    Caps {
+        /// Which set.
+        capset: u32,
+        /// How it went.
+        status: Status,
+        /// How many bytes of the VMO are the set.
+        len: u32,
+    },
     /// The core asks the driver to stop.
     Stop,
     /// It has.
@@ -554,6 +682,10 @@ impl Message {
             Self::Submitted { .. } => SUBMITTED,
             Self::Wait { .. } => WAIT,
             Self::Waited { .. } => WAITED,
+            Self::Transfer(_) => TRANSFER,
+            Self::Transferred { .. } => TRANSFERRED,
+            Self::GetCaps { .. } => GET_CAPS,
+            Self::Caps { .. } => CAPS,
             Self::Stop => STOP,
             Self::Stopped => STOPPED,
         }
@@ -566,12 +698,12 @@ impl Message {
             HELLO => HELLO_BYTES,
             READY => READY_BYTES,
             REFUSED => REFUSED_BYTES,
-            MAKE_CTX | CTX_MADE | DROP_CTX | CTX_GONE | OBJ_MADE | DROP_OBJ | OBJ_GONE => {
-                PAIR_BYTES
-            }
+            MAKE_CTX | CTX_MADE | DROP_CTX | CTX_GONE | OBJ_MADE | DROP_OBJ | OBJ_GONE
+            | TRANSFERRED | GET_CAPS => PAIR_BYTES,
             MAKE_OBJ => MAKE_OBJ_BYTES,
             SUBMIT => SUBMIT_BYTES,
-            SUBMITTED | WAIT | WAITED => FENCE_BYTES,
+            SUBMITTED | WAIT | WAITED | CAPS => FENCE_BYTES,
+            TRANSFER => TRANSFER_BYTES,
             STOP | STOPPED => HEADER_BYTES,
             _ => return None,
         })
@@ -639,6 +771,24 @@ impl Message {
                 put32(bytes, 8, context);
                 put64(bytes, 16, fence);
             }
+            Self::Transfer(transfer) => put_transfer(bytes, &transfer),
+            Self::Transferred { object, status } => {
+                put32(bytes, 8, object);
+                put32(bytes, 12, status as u32);
+            }
+            Self::GetCaps { capset, version } => {
+                put32(bytes, 8, capset);
+                put32(bytes, 12, version);
+            }
+            Self::Caps {
+                capset,
+                status,
+                len,
+            } => {
+                put32(bytes, 8, capset);
+                put32(bytes, 12, status as u32);
+                put32(bytes, 16, len);
+            }
             Self::Stop | Self::Stopped => {}
         }
         out
@@ -684,6 +834,14 @@ impl Message {
             OBJ_GONE => Message::ObjectGone {
                 object: get32(bytes, 8)?,
                 status: status(12)?,
+            },
+            TRANSFERRED => Message::Transferred {
+                object: get32(bytes, 8)?,
+                status: status(12)?,
+            },
+            GET_CAPS => Message::GetCaps {
+                capset: get32(bytes, 8)?,
+                version: get32(bytes, 12)?,
             },
             STOP => Message::Stop,
             STOPPED => Message::Stopped,
@@ -780,9 +938,65 @@ impl Message {
                     status: status(16)?,
                 }
             }
+            TRANSFER => Message::Transfer(get_transfer(bytes)?),
+            CAPS => {
+                zero32(20)?;
+                Message::Caps {
+                    capset: get32(bytes, 8)?,
+                    status: status(12)?,
+                    len: get32(bytes, 16)?,
+                }
+            }
             _ => return None,
         })
     }
+}
+
+/// `TRANSFER`'s fields, kept apart so that [`Message::encode`] stays one
+/// screen.
+fn put_transfer(bytes: &mut [u8], transfer: &Transfer) {
+    put32(bytes, 8, transfer.object);
+    put32(bytes, 12, transfer.context);
+    put32(bytes, 16, transfer.direction as u32);
+    put32(bytes, 20, transfer.level);
+    put64(bytes, 24, transfer.offset);
+    let region = transfer.region;
+    for (index, word) in [
+        region.x,
+        region.y,
+        region.z,
+        region.width,
+        region.height,
+        region.depth,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        put32(bytes, 32 + index * 4, word);
+    }
+    put32(bytes, 56, transfer.stride);
+    put32(bytes, 60, transfer.layer_stride);
+}
+
+/// The same, read back.
+fn get_transfer(bytes: &[u8]) -> Option<Transfer> {
+    Some(Transfer {
+        object: get32(bytes, 8)?,
+        context: get32(bytes, 12)?,
+        direction: Direction::from_raw(get32(bytes, 16)?)?,
+        level: get32(bytes, 20)?,
+        offset: get64(bytes, 24)?,
+        region: Region {
+            x: get32(bytes, 32)?,
+            y: get32(bytes, 36)?,
+            z: get32(bytes, 40)?,
+            width: get32(bytes, 44)?,
+            height: get32(bytes, 48)?,
+            depth: get32(bytes, 52)?,
+        },
+        stride: get32(bytes, 56)?,
+        layer_stride: get32(bytes, 60)?,
+    })
 }
 
 fn get16(bytes: &[u8], at: usize) -> Option<u16> {

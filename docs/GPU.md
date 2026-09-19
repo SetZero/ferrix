@@ -288,16 +288,10 @@ driver, without it there is none and the program must say so.
   so every resource is a buffer. Carrying width, height and stride is a
   change to the description both sides read, and belongs with the transfers
   that would be the first to need it.
-* **`MAP`, and mapping an object into a process.** Blocked on the protocol:
-  `MakeObject` carries a size and no backing, and the driver attaches none,
-  so an object has no guest pages to map. `flags::MAPPABLE` is defined and
-  nothing implements it. Deciding where an object's backing comes from is
-  the next seam question, not an implementation detail.
-* **`GET_CAPS`.** The core knows a capability set's *number*, not its bytes;
-  the driver read the bytes. Either the core asks for them or the node
-  passes the question down.
-* **`EXECBUFFER`, the transfers and `WAIT`.** They need step 3b's encoder to
-  have something to say, and `SUBMIT`/`WAIT` are already in the protocol.
+* **`MAP`, `GET_CAPS`, the transfers and `EXECBUFFER`.** *Done, 2026-09-19;
+  §3.7 says how.*
+* **`WAIT` that waits, and `GEM_CLOSE`.** Neither is in the way of a frame;
+  §3.7 says what each is waiting for.
 * **Scanout of a 3D resource**, which is the other half of this row.
 
 ### 3.5 The build plan for steps 2 and 3b, researched (2026-09-19)
@@ -425,6 +419,71 @@ gigabytes. The path chosen is **AV1 decoded by rav1d in the guest**:
   (proven). It is a large dependency; deny.toml allows its licence. The
   decode cost is real CPU, but a wallpaper under an opaque window pauses on
   frame callbacks as it does now, and the GPU by then draws the compositing.
+
+### 3.7 Where steps 2 and 3b stand (2026-09-19)
+
+Pieces 1, 2 and 4 of §3.5 are built, and the first of piece 3. A program in
+the image now does on the GPU what the whole path exists for, and the judged
+`--gl` boot holds it to the answer:
+
+    render: renderD128 virtio_gpu 3d 1 capsets 0x4 object 1/1073741824 of
+    4096 bytes caps 1405 bytes v2 moved 4096 bytes drew 0xff0000 0x00ff00
+    0xff0000
+
+**An object's backing is a VMO of its own** (`libs/renderctl` version 2). The
+core makes it, keeps it -- it is what a program maps -- and hands it to the
+driver with `MAKE_OBJ`; the driver pins it, attaches it, and keeps the pin
+until the device has said the resource is gone. An object the device would
+not let go of keeps its pages through that pin, so the rule that a device's
+pages are never unpinned needs nothing remembered in the core. `mmap` reaches
+it through a new `Inode::mapping_at`: a render node's offsets are *names* --
+`VIRTGPU_MAP` answers `handle << 32` -- where every other file's are places,
+and the default keeps every other file as it was.
+
+**The two conversations of a card no longer share numbers.** The display
+core counts buffers from 1 and the render core counted objects from 1, and
+the device names both from one set: render object 1 *was* display buffer 1.
+Nothing had collided only because nothing had lived long enough. Render
+objects now count from 2^30. The number cannot be translated on the way down
+instead, because it is the `res_handle` a program writes into its command
+streams.
+
+**An open has a context of its own**, made the first time it is needed, as
+Linux makes one for a device without `CONTEXT_INIT`; it goes after the
+open's objects have, and what the driver's channel has no room for is asked
+for as replies make room, so closing a program with many textures leaks
+none of them. `GET_CAPS` is answered from bytes the core fetched once, before
+publishing the renderer, so it wakes nobody; the driver now names
+`CAPSET_VIRGL2` when the device has it.
+
+**`TRANSFER` names a box, a level and two strides**, which is as much as any
+GPU's texture has. `SUBMIT` was already in the protocol: the node copies a
+stream into a 64 KiB slot of the work VMO and the driver copies it on into
+the command area. The driver runs each to completion in the device's one
+command slot, between the display's commands, as it did a `MAKE_OBJ`.
+
+**What `WAIT` does not do.** The driver offers no fences, so nothing says
+when the GPU has *finished* a stream rather than taken it. A transfer from
+the device is ordered after every stream before it, which is the one place
+this path needs to know, so `WAIT` answers at once and says why. QEMU 9.2
+polls fences on a 10 ms timer, so a frame that waited on one would lose more
+than it gained; a frame is paced by the display's flip, not by a fence.
+
+**`compositor/virgl` writes the streams**, host-tested word for word against
+`virgl_protocol.h`, and its shaders are TGSI text. The text is what no
+word-for-word test can judge, and a guest boot is a minute and a black
+screen per mistake, so the crate also speaks to `virgl_test_server` --
+virglrenderer 1.2.0 with a socket where QEMU would be, installed on the gate
+host as `virgl-server` -- and `tests/host.rs` runs the same streams on the
+host's GL in under a second. A host without it skips them and says so.
+
+**`test-display --gl` passes**, judged by what the render node did; the
+screen's pixels are the 2D boot's to judge, because `screendump` cannot read
+a GL console (§3.1).
+
+What is left of §3.5, in order: the rest of piece 3 (the rounded, bordered,
+shadowed and blurred shaders), piece 5 (the renderer behind a trait, with
+the software one the fallback), and piece 6 (scanout of what was drawn).
 
 ### 3a, which was not chosen for the compositor
 

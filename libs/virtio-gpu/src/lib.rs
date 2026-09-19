@@ -718,6 +718,24 @@ where
         ))
     }
 
+    /// Copy out what followed the header of the last response, from
+    /// `offset` bytes into it: a capability set's bytes, which
+    /// [`Response::Capset`] gives only the length of.
+    ///
+    /// The response stays where the device wrote it until the next command
+    /// is submitted, so this is asked between the two. Bytes past the
+    /// response buffer's end are left as they were.
+    pub fn read_response(&self, offset: usize, out: &mut [u8]) {
+        let at = self.request_room() + gpu::HEADER_LEN;
+        let room = RESPONSE_BYTES - gpu::HEADER_LEN;
+        for (index, byte) in out.iter_mut().enumerate() {
+            let Some(place) = offset.checked_add(index).filter(|place| *place < room) else {
+                break;
+            };
+            *byte = self.area.read_u8(at + place);
+        }
+    }
+
     /// Read the configuration's pending events and acknowledge them.
     pub fn take_events(&mut self) -> u32 {
         let events = self.transport.config_read32(gpu::CONFIG_EVENTS_READ);

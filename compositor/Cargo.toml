@@ -14,7 +14,7 @@ resolver = "3"
 members = [
     "anim", "blank", "clip", "config", "ctl", "drm", "evecho", "fan", "hyprix",
     "ipc", "layout", "lock", "lswt", "pattern", "plug", "protocol", "regex",
-    "render", "server", "shm", "shot", "socket", "term", "vkbd", "wire", "xkb",
+    "render", "server", "shm", "shot", "socket", "term", "virgl", "vkbd", "wire", "xkb",
 ]
 
 [workspace.package]

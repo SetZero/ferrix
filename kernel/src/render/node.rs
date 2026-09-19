@@ -16,30 +16,36 @@
 //! display's master, and §3.3 puts the handle table at the open for that
 //! reason. So this refuses nobody, and what an open owns it owns alone.
 //!
-//! # What is answered so far
+//! # What is answered
 //!
-//! `DRM_IOCTL_VERSION`, which names the driver, and `VIRTGPU_GETPARAM`,
-//! which says what the device can do. Both are answered from what the
-//! driver said in its HELLO, so neither costs a message.
+//! `DRM_IOCTL_VERSION`, which names the driver, `VIRTGPU_GETPARAM`, which
+//! says what the device can do, and `VIRTGPU_GET_CAPS`, the capability set
+//! itself. All three are answered from what the core learned before it
+//! published the renderer, so none costs a message.
 //!
-//! `RESOURCE_CREATE` makes an object on the device and puts it in this
-//! open's handle table; `RESOURCE_INFO` reads that table back. They are the
-//! first two calls that cost a message, and the first that leave anything
-//! behind.
+//! `RESOURCE_CREATE` makes an object on the device, with a backing of its
+//! own, and puts it in this open's handle table; `RESOURCE_INFO` reads that
+//! table back and `MAP` names the backing for `mmap`. `TRANSFER_TO_HOST` and
+//! `TRANSFER_FROM_HOST` move bytes between the backing and the device's copy,
+//! and `EXECBUFFER` runs a command stream, whose bytes are the renderer's
+//! own language and are never read here.
 //!
-//! What is not answered yet, and what is in the way of each:
+//! An open has one context, made the first time it is needed, as Linux makes
+//! one for a device that has no `CONTEXT_INIT`: what one program draws and
+//! the resources it may name are apart from every other's.
+//!
+//! What is not answered, and what is in the way of each:
 //!
 //! * **A handle released on purpose.** `DRM_IOCTL_GEM_CLOSE` is the call for
 //!   it and its number is not in [`ferrix_linux_abi::drm`], which takes
-//!   every number from a committed probe. Adding it means running
-//!   `probe/drm.sh` on a Linux host. Until then an open's objects go when
-//!   the open does, which [`RenderFile::drop`] does do.
-//! * **`MAP`.** Blocked on the protocol, not on this: `MAKE_OBJ` carries a
-//!   size and no backing, so an object has no guest pages to map.
-//! * **`GET_CAPS`.** The core knows a capability set's number, not its
-//!   bytes; the driver read those.
-//! * **`CONTEXT_INIT`, `EXECBUFFER`, the transfers and `WAIT`**, which is
-//!   why an object made here is in no context yet.
+//!   every number from a committed probe. Until then an open's objects go
+//!   when the open does, which [`RenderFile::drop`] does do.
+//! * **`WAIT` that waits.** The driver does not offer fences, so nothing
+//!   says when the GPU has *finished* a stream rather than taken it. A
+//!   transfer from the device is ordered after every stream before it, which
+//!   is the one place this path needs to know, so `WAIT` answers at once.
+//! * **`CONTEXT_INIT` and blob resources**, which `GETPARAM` says are not
+//!   offered.
 
 use alloc::sync::Arc;
 use alloc::vec;
@@ -49,15 +55,25 @@ use core::any::Any;
 use ferrix_linux_abi::drm::{self, Version};
 use ferrix_linux_abi::errno::Errno;
 use ferrix_linux_abi::socket::Width;
-use ferrix_linux_abi::virtgpu::{self, Field, GetParam, Layout, ResourceCreate, ResourceInfo};
-use ferrix_renderctl::message::{Status, flags};
+use ferrix_linux_abi::virtgpu::{
+    self, ExecBuffer, Field, GetCaps, GetParam, Layout, Map, ResourceCreate, ResourceInfo,
+    TransferToHost, Wait,
+};
+use ferrix_renderctl::message::{Direction, Region, Status, Transfer, flags};
 use ferrix_renderctl::session::RequestError;
 use ferrix_vfs::{Inode, Metadata, Result as VfsResult};
 
-use super::{RenderError, Renderer};
+use super::{COMMAND_BYTES, RenderError, Renderer};
 use crate::sync::SpinLock;
 use crate::syscall::process::Process;
 use crate::syscall::uaccess;
+use crate::user::vmo::Vmo;
+
+/// How far up a `VIRTGPU_MAP` offset the handle is: the low half is a place
+/// in the object, which no object is too big for, and the high half is
+/// which object. An offset is a name here, not a place in a file, as it is
+/// on Linux, where the numbers come out of a fake-offset allocator instead.
+const MAP_SHIFT: u32 = 32;
 
 /// The width this kernel's programs use, which is the width its structures
 /// are read and written at.
@@ -73,7 +89,7 @@ const VERSION_MINOR: i32 = 1;
 const VERSION_PATCH: i32 = 0;
 
 /// One object this open has a handle for.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct Handle {
     /// What a program calls it: `bo_handle`, small and this open's alone.
     handle: u32,
@@ -83,6 +99,8 @@ struct Handle {
     object: u32,
     /// How many bytes it was made with.
     bytes: u32,
+    /// Its backing, which `mmap` maps and the driver pinned for the device.
+    backing: Option<Arc<Vmo>>,
 }
 
 /// One open of a render node.
@@ -96,6 +114,8 @@ struct Handle {
 pub(crate) struct RenderFile {
     renderer: Arc<Renderer>,
     handles: SpinLock<Handles>,
+    /// This open's context on the device, once something has needed one.
+    context: SpinLock<Option<u32>>,
 }
 
 /// An open's handle table.
@@ -126,7 +146,43 @@ impl RenderFile {
                 live: Vec::new(),
                 next: 1,
             }),
+            context: SpinLock::new(None),
         }))
+    }
+
+    /// This open's context, made now if it has none.
+    ///
+    /// Two threads of one program may both find none and both make one; the
+    /// second is given straight back. Making one sleeps, so the lock cannot
+    /// be held across it.
+    fn context(&self) -> Result<u32, Errno> {
+        if let Some(context) = *self.context.lock() {
+            return Ok(context);
+        }
+        let made = self.renderer.make_context().map_err(errno_of)?;
+        let mut held = self.context.lock();
+        match *held {
+            Some(first) => {
+                drop(held);
+                self.renderer.release(&[], Some(made));
+                Ok(first)
+            }
+            None => {
+                *held = Some(made);
+                Ok(made)
+            }
+        }
+    }
+
+    /// What is behind `handle`, if this open has it.
+    fn held(&self, handle: u32) -> Result<Handle, Errno> {
+        self.handles
+            .lock()
+            .live
+            .iter()
+            .find(|held| held.handle == handle)
+            .cloned()
+            .ok_or(Errno::ENOENT)
     }
 }
 
@@ -143,7 +199,7 @@ impl Drop for RenderFile {
             .iter()
             .map(|held| held.object)
             .collect();
-        self.renderer.release(&objects);
+        self.renderer.release(&objects, *self.context.get_mut());
     }
 }
 
@@ -164,6 +220,14 @@ impl Inode for RenderFile {
     /// ioctl, and Linux answers a read of one with `EINVAL`.
     fn read_at(&self, _offset: u64, _buf: &mut [u8]) -> VfsResult<usize> {
         Err(Errno::EINVAL)
+    }
+
+    /// The backing of the object a `VIRTGPU_MAP` offset names.
+    fn mapping_at(&self, offset: u64) -> Option<(Arc<dyn Any + Send + Sync>, u64)> {
+        let handle = u32::try_from(offset >> MAP_SHIFT).ok()?;
+        let backing = self.held(handle).ok()?.backing?;
+        let object: Arc<dyn Any + Send + Sync> = backing;
+        Some((object, offset & ((1 << MAP_SHIFT) - 1)))
     }
 }
 
@@ -201,6 +265,12 @@ pub(crate) fn ioctl(
         virtgpu::IOCTL_GETPARAM => get_param(process, file, arg),
         virtgpu::IOCTL_RESOURCE_CREATE => resource_create(process, file, arg),
         virtgpu::IOCTL_RESOURCE_INFO => resource_info(process, file, arg),
+        virtgpu::IOCTL_MAP => map(process, file, arg),
+        virtgpu::IOCTL_TRANSFER_TO_HOST => transfer(process, file, arg, Direction::ToDevice),
+        virtgpu::IOCTL_TRANSFER_FROM_HOST => transfer(process, file, arg, Direction::FromDevice),
+        virtgpu::IOCTL_EXECBUFFER => exec_buffer(process, file, arg),
+        virtgpu::IOCTL_WAIT => wait(process, file, arg),
+        virtgpu::IOCTL_GET_CAPS => get_caps(process, file, arg),
         _ => Err(Errno::ENOTTY),
     }
 }
@@ -225,24 +295,17 @@ fn errno_of(error: RenderError) -> Errno {
 
 /// `VIRTGPU_RESOURCE_CREATE`: make a resource, and a handle for it.
 ///
-/// The caller's `target`, `format` and `bind` are virgl's words and are
-/// passed down as bytes; what they say is the driver's business and this
-/// side never reads them (`docs/GPU.md` §3.3). What this side decides is how
-/// many bytes the object is, which is `size`.
+/// The caller's words -- target, format, bind and the resource's shape --
+/// are virgl's and are passed down as bytes; what they say is the driver's
+/// business and this side never reads them (`docs/GPU.md` §3.3). What this
+/// side decides is how many bytes of backing the object has, which is
+/// `size`, as it is on Linux: a caller that will never move bytes to or from
+/// a resource asks for a page and the device's copy is as big as its shape
+/// says regardless.
 ///
 /// `bo_handle` must be zero: attaching a resource to an object that already
 /// exists is what a second resource on one buffer needs, and nothing here
-/// makes one yet.
-///
-/// **Only the three words cross the seam.** `MAKE_OBJ` carries a size and a
-/// description, and the description `user/gpu` reads is target, format and
-/// bind -- so `width`, `height`, `depth`, `array_size`, `last_level`,
-/// `nr_samples` and `stride` are *not* carried, and the driver shapes every
-/// resource as `size` by 1 by 1. That is a buffer. A caller asking for a
-/// texture gets an object of the right size and the wrong shape, which is
-/// why nothing asks for one yet: carrying the shape is a change to the
-/// description both sides read, and belongs with the transfers that would
-/// first need it.
+/// makes one.
 fn resource_create(process: &Process, file: &RenderFile, arg: u64) -> Result<usize, Errno> {
     let mut bytes = vec![0u8; ResourceCreate::SIZE];
     uaccess::copy_from_user(process.space(), arg, &mut bytes).map_err(|_| Errno::EFAULT)?;
@@ -253,16 +316,25 @@ fn resource_create(process: &Process, file: &RenderFile, arg: u64) -> Result<usi
     if create.size == 0 {
         return Err(Errno::EINVAL);
     }
-    // An object is made outside any context: a context is `CONTEXT_INIT`'s to
-    // set up, and that call is not answered yet, so there is none to put it
-    // in. The driver attaches a resource to a context when it is told one.
-    let object = file
+    let context = file.context()?;
+    let (object, backing) = file
         .renderer
         .make_object(
-            0,
+            context,
             u64::from(create.size),
-            flags::TO_DEVICE | flags::FROM_DEVICE,
-            [create.target, create.format, create.bind],
+            flags::MAPPABLE | flags::TO_DEVICE | flags::FROM_DEVICE,
+            [
+                create.target,
+                create.format,
+                create.bind,
+                create.width,
+                create.height,
+                create.depth,
+                create.array_size,
+                create.last_level,
+                create.nr_samples,
+                create.flags,
+            ],
         )
         .map_err(errno_of)?;
     let handle = {
@@ -273,6 +345,7 @@ fn resource_create(process: &Process, file: &RenderFile, arg: u64) -> Result<usi
             handle,
             object,
             bytes: create.size,
+            backing,
         });
         handle
     };
@@ -287,6 +360,123 @@ fn resource_create(process: &Process, file: &RenderFile, arg: u64) -> Result<usi
     Ok(0)
 }
 
+/// `VIRTGPU_MAP`: the offset to `mmap` this node at to reach an object's
+/// backing.
+fn map(process: &Process, file: &RenderFile, arg: u64) -> Result<usize, Errno> {
+    let mut bytes = vec![0u8; Map::SIZE];
+    uaccess::copy_from_user(process.space(), arg, &mut bytes).map_err(|_| Errno::EFAULT)?;
+    let mut map = Map::read(&bytes).ok_or(Errno::EFAULT)?;
+    if file.held(map.handle)?.backing.is_none() {
+        return Err(Errno::EINVAL);
+    }
+    map.offset = u64::from(map.handle) << MAP_SHIFT;
+    map.write(&mut bytes).ok_or(Errno::EFAULT)?;
+    uaccess::copy_to_user(process.space(), arg, &bytes).map_err(|_| Errno::EFAULT)?;
+    Ok(0)
+}
+
+/// `VIRTGPU_TRANSFER_TO_HOST` and `VIRTGPU_TRANSFER_FROM_HOST`: move bytes
+/// between an object's backing and the device's copy, and wait until they
+/// have moved.
+///
+/// The two structures are one layout, which a test in `libs/linux-abi`
+/// holds them to, so one reader serves both.
+fn transfer(
+    process: &Process,
+    file: &RenderFile,
+    arg: u64,
+    direction: Direction,
+) -> Result<usize, Errno> {
+    let mut bytes = vec![0u8; TransferToHost::SIZE];
+    uaccess::copy_from_user(process.space(), arg, &mut bytes).map_err(|_| Errno::EFAULT)?;
+    let asked = TransferToHost::read(&bytes).ok_or(Errno::EFAULT)?;
+    let held = file.held(asked.bo_handle)?;
+    let context = file.context()?;
+    file.renderer
+        .transfer(Transfer {
+            object: held.object,
+            context,
+            direction,
+            level: asked.level,
+            offset: u64::from(asked.offset),
+            region: Region {
+                x: asked.r#box.x,
+                y: asked.r#box.y,
+                z: asked.r#box.z,
+                width: asked.r#box.w,
+                height: asked.r#box.h,
+                depth: asked.r#box.d,
+            },
+            stride: asked.stride,
+            layer_stride: asked.layer_stride,
+        })
+        .map_err(errno_of)?;
+    Ok(0)
+}
+
+/// `VIRTGPU_EXECBUFFER`: run a command stream in this open's context.
+///
+/// The stream is copied once, into the core, and from there into the work
+/// VMO: a program's memory is not something a driver in another process can
+/// be pointed at. No fence comes in or goes out, and no ring is named: the
+/// flags that ask for those are refused, as `GETPARAM` said they would be.
+/// `bo_handles` is a hint on Linux -- which objects the stream touches, for
+/// fencing them -- and with no fences to hang on them it is not read.
+fn exec_buffer(process: &Process, file: &RenderFile, arg: u64) -> Result<usize, Errno> {
+    let mut bytes = vec![0u8; ExecBuffer::SIZE];
+    uaccess::copy_from_user(process.space(), arg, &mut bytes).map_err(|_| Errno::EFAULT)?;
+    let exec = ExecBuffer::read(&bytes).ok_or(Errno::EFAULT)?;
+    if exec.flags != 0 || exec.num_in_syncobjs != 0 || exec.num_out_syncobjs != 0 {
+        return Err(Errno::EINVAL);
+    }
+    // A stream is words, and one longer than a slot is not split: only its
+    // writer knows where a command ends.
+    if exec.size == 0 || !exec.size.is_multiple_of(4) || u64::from(exec.size) > COMMAND_BYTES {
+        return Err(Errno::EINVAL);
+    }
+    let mut commands = vec![0u8; exec.size as usize];
+    uaccess::copy_from_user(process.space(), exec.command, &mut commands)
+        .map_err(|_| Errno::EFAULT)?;
+    let context = file.context()?;
+    file.renderer.submit(context, &commands).map_err(errno_of)?;
+    Ok(0)
+}
+
+/// `VIRTGPU_WAIT`: wait until an object is idle.
+///
+/// Answered at once for an object this open has; see the module's note on
+/// why that is honest here and what would make it wait.
+fn wait(process: &Process, file: &RenderFile, arg: u64) -> Result<usize, Errno> {
+    let mut bytes = vec![0u8; Wait::SIZE];
+    uaccess::copy_from_user(process.space(), arg, &mut bytes).map_err(|_| Errno::EFAULT)?;
+    let wait = Wait::read(&bytes).ok_or(Errno::EFAULT)?;
+    let _ = file.held(wait.handle)?;
+    Ok(0)
+}
+
+/// `VIRTGPU_GET_CAPS`: the capability set, as the device gave it.
+///
+/// As many bytes as the caller has room for, which is how Linux answers it:
+/// a renderer built against an older, shorter set reads the front of a
+/// newer one. A set the driver's streams are not in is `EINVAL`.
+fn get_caps(process: &Process, file: &RenderFile, arg: u64) -> Result<usize, Errno> {
+    let mut bytes = vec![0u8; GetCaps::SIZE];
+    uaccess::copy_from_user(process.space(), arg, &mut bytes).map_err(|_| Errno::EFAULT)?;
+    let asked = GetCaps::read(&bytes).ok_or(Errno::EFAULT)?;
+    let (capset, caps) = file.renderer.caps();
+    if asked.cap_set_id != capset || caps.is_empty() {
+        return Err(Errno::EINVAL);
+    }
+    let given = caps
+        .get(..caps.len().min(asked.size as usize))
+        .unwrap_or(&[]);
+    if asked.addr == 0 {
+        return Err(Errno::EFAULT);
+    }
+    uaccess::copy_to_user(process.space(), asked.addr, given).map_err(|_| Errno::EFAULT)?;
+    Ok(0)
+}
+
 /// `VIRTGPU_RESOURCE_INFO`: what is behind a handle.
 ///
 /// Answered from the open's own table rather than by asking the driver: the
@@ -297,14 +487,7 @@ fn resource_info(process: &Process, file: &RenderFile, arg: u64) -> Result<usize
     let mut bytes = vec![0u8; ResourceInfo::SIZE];
     uaccess::copy_from_user(process.space(), arg, &mut bytes).map_err(|_| Errno::EFAULT)?;
     let mut info = ResourceInfo::read(&bytes).ok_or(Errno::EFAULT)?;
-    let held = file
-        .handles
-        .lock()
-        .live
-        .iter()
-        .find(|held| held.handle == info.bo_handle)
-        .copied()
-        .ok_or(Errno::ENOENT)?;
+    let held = file.held(info.bo_handle)?;
     info.res_handle = held.object;
     info.size = held.bytes;
     // Not a blob resource: `PARAM_RESOURCE_BLOB` says the device offers
