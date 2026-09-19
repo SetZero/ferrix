@@ -68,8 +68,9 @@ the host plumbing third so that the renderer is gated from its first commit.
 desktop composites on the GPU: the compositor draws its frame there and the
 screen is shown that very texture. 1920x1080, a video wallpaper behind a
 blurred translucent terminal, under KVM on the gate host: **39 ms a frame in
-software, 12 ms on the GPU**, where 60 fps is 16.7. Step 4 is still only for
-clients that render for themselves.
+software, 12 ms on the GPU**, where 60 fps is 16.7 -- on the scene and the
+quiet host §3.8 describes, which is worth reading before quoting the number.
+Step 4 is still only for clients that render for themselves.
 
 ### 3.1 What was found when the gate host was given the device (2026-09-18)
 
@@ -600,8 +601,8 @@ caught the screen, because a GL console cannot be dumped. What caught it was
 looking: `compositor/hyprix/probe/vncshot.py` grabs a frame from the VNC
 server beside `egl-headless`, which is the screen as a person sees it.
 
-**What it is worth**, 1920x1080, the AV1-shaped video wallpaper behind a
-blurred translucent terminal, under KVM on the gate host:
+**What it is worth**, 1920x1080 under KVM on the gate host, behind a blurred
+translucent terminal:
 
 | | a frame, mean | slowest of ten |
 |---|---|---|
@@ -610,6 +611,39 @@ blurred translucent terminal, under KVM on the gate host:
 | the GPU, screen shown it | **12 ms** | 17 ms |
 
 60 fps is 16.7 ms. The goal of `docs/GPU.md` is met on this host.
+
+**These three cannot be reproduced as they stand, and what they measured is
+worth naming.** The wallpaper was the *run-length* `.fxvid` one -- a whole
+1920x1080 frame decoded by the client and handed over every frame -- which
+§3.6's AV1 work has since replaced with `.ivf`, so `--wallpaper` no longer
+matches the file these were taken on. Under AV1 the client decodes with
+rav1d instead, which changes the CPU side of the scene; the upload is the
+same size, so the shape should hold, but nobody has measured it. Three of
+the four numbers a later run of this comparison produced were also thrown
+away because another session was booting throughout: on a contended host the
+same code measured 18 ms and 22 ms in the same hour, which is several times
+the effect being looked for. A frame time from this scene is worth having
+only from an unloaded machine.
+
+**Where a GPU frame's time actually goes**, measured in the guest with
+temporary counters on the scene above, is the more useful number, because it
+is the one that says what to fix next:
+
+| | a frame |
+|---|---|
+| moving client pixels into textures | 5.4--6.3 ms, 2 uploads, **13.6 MB** |
+| submitting commands | 2.8--3.5 ms, 3 submissions, **6 KB** of commands |
+| reading the frame back | 0 ms -- the screen is shown it |
+
+Six kilobytes of drawing a frame: the GPU itself is idle nearly all of it.
+What the frame costs is *moving client pixels* -- every `wl_shm` surface
+memcpy'd into a pinned backing and then transferred, at roughly 800 MB/s for
+this scene -- and round trips, each submission about 0.95 ms through the
+render core, the driver, the virtio queue and virglrenderer, with the driver
+running one device command at a time. Batching a frame's drawing into one
+submission took the second row to one submission and about 1.0 ms. The first
+row is what step 4 is for: a client rendering into a GPU buffer the
+compositor samples costs nothing to move at all.
 
 **A handle can be let go of now** (2026-09-19). `probe/drm.sh` was run on
 this host -- it needs a Linux host with the UAPI headers, an ARM cross
