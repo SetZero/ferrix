@@ -101,6 +101,11 @@ jobs:
       - name: Text files use LF
         run: python3 scripts/check-line-endings.py
 
+      # The kernel enumerates devices and drives none. Without this, the
+      # claim survives exactly as long as nobody is in a hurry.
+      - name: Device registers are touched only where the architecture allows
+        run: python3 scripts/check-device-access.py
+
       - name: Every unsafe construct is justified at the site
         run: python3 scripts/check-unsafe-audit.py
 

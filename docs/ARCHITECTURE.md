@@ -258,6 +258,17 @@ The kernel enumerates buses, because that needs ACPI (x86-64, AArch64) or a
 device tree (ARMv7-A, and AArch64 firmware that offers one) and privileged
 access. It does not drive devices.
 
+**And that is gated, not merely meant.** `scripts/check-device-access.py` reads
+every volatile access and port instruction under `kernel/` against
+`scripts/device-access-allowlist.json`, which says for each file whether it
+touches a device register, RAM a device also reads, or ordinary memory made
+volatile so a boot check cannot be optimised away. A register access outside the
+paths this section and §1 permit is refused, a file over its budget is refused,
+and an entry whose file no longer makes one is refused too, so the list cannot
+be kept warm. It runs in `cargo xtask check` and in CI. A script cannot tell the
+three kinds apart -- they are the same call in Rust -- so what it enforces is
+that somebody said which, in a diff, with a reason.
+
 For each device found, the kernel creates a device node and hands `devmgr` a
 handle (`docs/DEVMGR.md` is the protocol). `devmgr` matches a driver, spawns
 it in its own `Job`, and gives it:
