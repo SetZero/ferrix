@@ -477,6 +477,9 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
     // later, which is the same delay a real device's event has when it
     // arrives a moment after the read.
     let mut injected: Vec<crate::seat::Input> = Vec::new();
+    // `None` is the first non-blocking sweep. Every following pass receives
+    // exactly the descriptors `poll` woke for; a timer wake is `Some([])`.
+    let mut ready: Option<Vec<i32>> = None;
 
     loop {
         if quit {
@@ -494,36 +497,42 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
         }
 
         // New connections.
-        while let Ok(Some(stream)) = listener.accept() {
-            match Connection::new(stream) {
-                Ok(connection) => slots.push(Slot {
-                    serial: {
-                        connections = connections.saturating_add(1);
-                        connections
-                    },
-                    pid: connection.peer_pid(),
-                    client: {
-                        let mut client = Client::new(globals(screens.len()));
-                        // What each screen is, and what the seat has: only
-                        // the capabilities there are devices for, since a
-                        // client may not ask for one the seat did not
-                        // announce and should not wait for keys that will
-                        // never come.
-                        client.set_outputs(screens.iter().map(Screen::output).collect());
-                        client.set_seat_capabilities(capabilities);
-                        client.set_keymap(keymap.as_ref().map(Keymap::handed));
-                        client.set_repeat_info(repeat.0, repeat.1);
-                        client
-                    },
-                    connection,
-                    pools: BTreeMap::new(),
-                    retired: std::collections::BTreeSet::new(),
-                    windows: Vec::new(),
-                    layers: Vec::new(),
-                    firsts: BTreeMap::new(),
-                    gone: false,
-                }),
-                Err(_) => continue,
+        let first_new = slots.len();
+        if ready
+            .as_ref()
+            .is_none_or(|fds| fds.contains(&listener.as_raw_fd()))
+        {
+            while let Ok(Some(stream)) = listener.accept() {
+                match Connection::new(stream) {
+                    Ok(connection) => slots.push(Slot {
+                        serial: {
+                            connections = connections.saturating_add(1);
+                            connections
+                        },
+                        pid: connection.peer_pid(),
+                        client: {
+                            let mut client = Client::new(globals(screens.len()));
+                            // What each screen is, and what the seat has: only
+                            // the capabilities there are devices for, since a
+                            // client may not ask for one the seat did not
+                            // announce and should not wait for keys that will
+                            // never come.
+                            client.set_outputs(screens.iter().map(Screen::output).collect());
+                            client.set_seat_capabilities(capabilities);
+                            client.set_keymap(keymap.as_ref().map(Keymap::handed));
+                            client.set_repeat_info(repeat.0, repeat.1);
+                            client
+                        },
+                        connection,
+                        pools: BTreeMap::new(),
+                        retired: std::collections::BTreeSet::new(),
+                        windows: Vec::new(),
+                        layers: Vec::new(),
+                        firsts: BTreeMap::new(),
+                        gone: false,
+                    }),
+                    Err(_) => continue,
+                }
             }
         }
 
@@ -534,7 +543,12 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
         // A description of the compositor is not free -- it walks every
         // window of every monitor -- so it is made only when there is a
         // plugin to answer.
-        if !plugins.is_empty() {
+        if !plugins.is_empty()
+            && (ready
+                .as_ref()
+                .is_none_or(|fds| plugins.raw_fds().any(|fd| fds.contains(&fd)))
+                || plugins.needs_poll())
+        {
             let snapshot = crate::control::snapshot(
                 &state,
                 &slots,
@@ -555,6 +569,9 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
             asked.extend(plugins.poll(&snapshot));
         }
         if let Some(control) = control.as_ref()
+            && ready
+                .as_ref()
+                .is_none_or(|fds| fds.contains(&control.raw_fd()))
             && let Some(mut stream) = control.accept()
         {
             let snapshot = crate::control::snapshot(
@@ -612,11 +629,11 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
         // `ext-session-lock-v1`'s other half -- a lock that showed a picture
         // and still let a key reach the browser under it would not be one.
         seat.set_locked(lock.is_some());
-        for input in devices
-            .read()
-            .into_iter()
-            .chain(std::mem::take(&mut injected))
-        {
+        let inputs = match ready.as_deref() {
+            Some(fds) => devices.read_ready(fds),
+            None => devices.read(),
+        };
+        for input in inputs.into_iter().chain(std::mem::take(&mut injected)) {
             // Any input at all ends the idle: that is what the protocol
             // measures, and what `forceidle` was pretending about.
             last_input = Instant::now();
@@ -731,6 +748,14 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
         // these reaches one of them.
         let mut asks = ScreenAsks::default();
         for index in 0..slots.len() {
+            let woke = ready.as_ref().is_none_or(|fds| {
+                slots
+                    .get(index)
+                    .is_none_or(|slot| fds.contains(&slot.raw_fd()))
+            });
+            if !woke && index < first_new {
+                continue;
+            }
             if serve(
                 &mut slots,
                 index,
@@ -1418,7 +1443,10 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
             fds.push(socket.raw_fd());
         }
         fds.extend(plugins.raw_fds());
-        crate::wait::wait(&fds, timeout).map_err(|error| format!("hyprix: event wait: {error}"))?;
+        ready = Some(
+            crate::wait::wait(&fds, timeout)
+                .map_err(|error| format!("hyprix: event wait: {error}"))?,
+        );
     }
 
     let (subscribers, told) = events

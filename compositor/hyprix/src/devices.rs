@@ -200,11 +200,23 @@ impl Devices {
 
     /// Read whatever is waiting on every device, in the order it arrived.
     ///
-    /// Nothing waiting is an empty answer, not an error: this is called every
-    /// time round the compositor's loop.
+    /// Nothing waiting is an empty answer, not an error. The first pass uses
+    /// this to sweep devices that were open before the event loop started;
+    /// subsequent passes use [`Self::read_ready`].
     pub fn read(&mut self) -> Vec<Input> {
+        self.read_ready(&self.raw_fds().collect::<Vec<_>>())
+    }
+
+    /// Read only devices whose descriptors `poll` reported ready.
+    ///
+    /// A ready device may have more than one input report waiting, so its
+    /// whole non-blocking queue is drained. Other devices are left alone.
+    pub fn read_ready(&mut self, ready: &[libc::c_int]) -> Vec<Input> {
         let mut inputs = Vec::new();
         for open in &mut self.open {
+            if !ready.contains(&open.device.raw_fd()) {
+                continue;
+            }
             self.events.clear();
             // Nothing waiting is `Ok(0)`; an error is a device that has gone,
             // and the next pass will find it gone too.

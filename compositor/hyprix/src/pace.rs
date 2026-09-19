@@ -17,9 +17,9 @@
 //! that, and the pointer stuttered over everything -- worse than when every
 //! frame was slow, which is how this was found.
 //!
-//! The input is still read every pass and everything it does still happens
-//! at once. Only the drawing waits, and what it draws is where the pointer
-//! is by then.
+//! Input is read as soon as its device is ready and everything it does still
+//! happens at once. Only the drawing waits, and what it draws is where the
+//! pointer is by then.
 
 use std::time::{Duration, Instant};
 
@@ -71,9 +71,8 @@ mod tests {
     /// Sixty frames a second, as `wl_output` says it.
     const PERIOD: u32 = 16_666_666;
 
-    /// A loop that asks every two milliseconds, which is this compositor's,
-    /// draws a second's worth of frames in a second and no more, however
-    /// many times it asked.
+    /// Even a loop that asks more often than a refresh draws a second's worth
+    /// of frames in a second and no more.
     #[test]
     fn a_second_of_asking_is_a_second_of_frames() {
         let start = Instant::now();

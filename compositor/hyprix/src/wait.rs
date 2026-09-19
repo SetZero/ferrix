@@ -10,12 +10,13 @@ use std::io;
 use std::os::fd::RawFd;
 use std::time::Duration;
 
-/// Wait for an input descriptor or a timer.
+/// Wait for input descriptors or a timer, and return the descriptors that
+/// need servicing.
 ///
 /// `None` waits until a descriptor is ready.  A zero duration asks whether a
 /// descriptor is ready without sleeping.  Interrupted waits simply begin
 /// again: a signal has not made any compositor work ready.
-pub(crate) fn wait(fds: &[RawFd], timeout: Option<Duration>) -> io::Result<()> {
+pub(crate) fn wait(fds: &[RawFd], timeout: Option<Duration>) -> io::Result<Vec<RawFd>> {
     let mut fds: Vec<libc::pollfd> = fds
         .iter()
         .copied()
@@ -31,7 +32,14 @@ pub(crate) fn wait(fds: &[RawFd], timeout: Option<Duration>) -> io::Result<()> {
         // an empty vector's pointer is valid because its count is zero.
         let waited = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, timeout) };
         if waited >= 0 {
-            return Ok(());
+            return Ok(fds
+                .iter()
+                .filter(|poll| {
+                    poll.revents & (libc::POLLIN | libc::POLLERR | libc::POLLHUP | libc::POLLNVAL)
+                        != 0
+                })
+                .map(|poll| poll.fd)
+                .collect());
         }
         let error = io::Error::last_os_error();
         if error.kind() != io::ErrorKind::Interrupted {
@@ -52,6 +60,10 @@ fn timeout_millis(timeout: Duration) -> i32 {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Write;
+    use std::os::fd::AsRawFd;
+    use std::os::unix::net::UnixStream;
+
     use super::*;
 
     #[test]
@@ -64,6 +76,18 @@ mod tests {
 
     #[test]
     fn no_descriptors_can_still_wait_for_a_timer() {
-        wait(&[], Some(Duration::ZERO)).expect("zero timeout");
+        assert_eq!(wait(&[], Some(Duration::ZERO)).expect("zero timeout"), []);
+    }
+
+    #[test]
+    fn only_the_descriptor_that_woke_is_returned() {
+        let (mut sender, receiver) = UnixStream::pair().expect("pair");
+        let (_quiet_sender, quiet) = UnixStream::pair().expect("quiet pair");
+        sender.write_all(b"ready").expect("write");
+        let fds = [receiver.as_raw_fd(), quiet.as_raw_fd()];
+        assert_eq!(
+            wait(&fds, Some(Duration::ZERO)).expect("ready descriptor"),
+            [receiver.as_raw_fd()]
+        );
     }
 }
