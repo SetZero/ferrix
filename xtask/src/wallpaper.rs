@@ -38,6 +38,10 @@ use std::process::{Command, Stdio};
 use crate::args::Args;
 use crate::{Error, Result};
 
+mod config;
+
+pub(crate) use config::Settings;
+
 /// The variable that names the wallpapers directory, where it is not the
 /// usual one.
 const VAR: &str = "FERRIX_WALLPAPERS";
@@ -64,27 +68,9 @@ const MOVIE_KIND: &str = ".ivf";
 /// The rest of [`KINDS`] is a still picture however many frames it has.
 const MOVING: [&str; 4] = ["mp4", "webm", "mkv", "gif"];
 
-/// How much smaller than the screen a moving wallpaper's frames are kept.
-///
-/// A frame of 1920x1080 is 8.3 MB, and a second of them is half a gigabyte:
-/// an initramfs is built into the kernel here, so a wallpaper that size is
-/// not a wallpaper, it is the image. A quarter each way is 480x270, which
-/// the client scales up to cover the screen the way it scales any picture cut
-/// for another screen -- behind a blurred, translucent desktop, which is what
-/// a wallpaper is behind, that is what it looks like on the screen it came
-/// from.
-const MOVING_SMALLER: u32 = 4;
-
-/// How many frames a second of a video are kept.
-///
-/// Hyprland's own answer to this is `mpvpaper`, which plays the file at
-/// whatever rate it was made at because it has mpv behind it. This has the
-/// frames themselves, so the rate is a size: ten is motion, and twenty-five
-/// is two and a half times the initramfs.
-const MOVING_RATE: u32 = 10;
-
-/// How many seconds of a video are kept, after which it begins again.
-const MOVING_SECONDS: u32 = 4;
+// How finely and how much of a video is kept -- the frame rate, the length
+// and the frame size -- is `config`'s, because it is a person's to change:
+// `~/.config/ferrix/wallpaper.toml`, over the defaults that module holds.
 
 /// What `ffmpeg` can take a frame from, among what a pictures directory
 /// holds.
@@ -100,18 +86,39 @@ const KINDS: [&str; 9] = [
 /// `None`, having said why, when there is to be none: `--wallpaper none`, or
 /// nothing kept and none asked for.
 ///
+/// A name comes from `--wallpaper`, or from `name =` in the settings file
+/// where the flag is not given.
+///
 /// # Errors
 ///
-/// A `--wallpaper <name>` that names nothing kept. A name given is a
-/// request, and a request that cannot be met stops the run rather than
+/// A name that matches nothing kept, wherever it was asked for. A name given
+/// is a request, and a request that cannot be met stops the run rather than
 /// quietly drawing a different desktop: a boot watched for a wallpaper that
 /// is not there shows a bare one, and a frame time measured on it is a wrong
 /// number rather than a missing one. Four measured runs were lost to that
 /// when the AV1 landing left `.fxvid` behind and the name went on matching
-/// nothing.
+/// nothing. A name from the settings file is refused the same way and for
+/// the same reason -- a file written once is a request that outlives being
+/// typed, and one that has gone stale should say so rather than show
+/// something else every boot for a month.
 pub(crate) fn file(args: &Args, size: (u32, u32)) -> Result<Option<Chosen>> {
-    let asked = args.wallpaper.as_deref();
-    if asked == Some("none") {
+    let settings = Settings::load();
+    let named = config::path().map_or_else(
+        || "the settings file's `name`".to_owned(),
+        |path| format!("`name` in {}", path.display()),
+    );
+    let asked = match (args.wallpaper.as_deref(), settings.name.as_deref()) {
+        (Some(name), _) => Some(Asked {
+            name,
+            source: "--wallpaper",
+        }),
+        (None, Some(name)) => Some(Asked {
+            name,
+            source: &named,
+        }),
+        (None, None) => None,
+    };
+    if asked.is_some_and(|asked| asked.name == "none") {
         return Ok(None);
     }
     let Some(dir) = kept_dir() else {
@@ -134,7 +141,7 @@ pub(crate) fn file(args: &Args, size: (u32, u32)) -> Result<Option<Chosen>> {
     if kept.iter().any(for_this_screen) {
         kept.retain(for_this_screen);
     }
-    let Some(name) = choose(&kept, asked) else {
+    let Some(name) = choose(&kept, asked.map(|asked| asked.name)) else {
         return refuse_or_none(
             asked,
             &format!(
@@ -191,6 +198,8 @@ pub(crate) fn import(args: &Args) -> Result<()> {
         )
     })?;
     let size = args.size.unwrap_or(SCREEN);
+    let settings = Settings::load();
+    config::write_example();
     let dir = kept_dir().ok_or_else(|| {
         Error::new(format!(
             "no home directory to keep wallpapers under; set {VAR}"
@@ -221,7 +230,7 @@ pub(crate) fn import(args: &Args) -> Result<()> {
         // put a video in the directory asked for; everything else becomes the
         // one picture it is.
         let converted = if is_moving(name) {
-            convert_moving(source, name, size, Moving::asked(args))
+            convert_moving(source, name, Moving::asked(args, &settings, size))
         } else {
             convert(source, name, size)
         };
@@ -298,12 +307,26 @@ fn names(source: &str) -> Option<Vec<String>> {
     (!pictures.is_empty()).then_some(pictures)
 }
 
+/// A wallpaper asked for by name, and where it was asked for.
+///
+/// The source is carried rather than assumed because a refusal has to be
+/// actionable: `--wallpaper shiroko` is fixed at the command line, and a
+/// `name` left in the settings file months ago is fixed in that file, which
+/// the person has to be told the path of.
+#[derive(Clone, Copy, Debug)]
+struct Asked<'a> {
+    /// The part of a kept wallpaper's name to look for.
+    name: &'a str,
+    /// How to say where it was asked for.
+    source: &'a str,
+}
+
 /// What a run with no wallpaper to show does: stop when one was asked for
 /// by name, and carry on, having said `why`, when none was.
-fn refuse_or_none(asked: Option<&str>, why: &str) -> Result<Option<Chosen>> {
+fn refuse_or_none(asked: Option<Asked<'_>>, why: &str) -> Result<Option<Chosen>> {
     match asked {
-        Some(asked) => Err(Error::new(format!(
-            "--wallpaper {asked}: no wallpaper is called anything like it, and {why}"
+        Some(Asked { name, source }) => Err(Error::new(format!(
+            "{source} {name}: no wallpaper is called anything like it, and {why}"
         ))),
         None => {
             println!("  no wallpaper: {why}");
@@ -403,11 +426,8 @@ fn is_moving(name: &str) -> bool {
 /// The same conversion as [`convert`] with a frame rate and length, then AV1
 /// compression. IVF is deliberately simple to demux in the guest and is what
 /// `rav1d` takes one temporal unit at a time.
-fn convert_moving(source: &str, name: &str, screen: (u32, u32), how: Moving) -> Option<Vec<u8>> {
-    let (width, height) = how.frame.unwrap_or((
-        (screen.0 / MOVING_SMALLER).max(1),
-        (screen.1 / MOVING_SMALLER).max(1),
-    ));
+fn convert_moving(source: &str, name: &str, how: Moving) -> Option<Vec<u8>> {
+    let (width, height) = how.frame;
     let rate = how.rate;
     let filter = format!(
         "fps={rate},scale={width}:{height}:force_original_aspect_ratio=increase,\
@@ -474,17 +494,18 @@ pub(crate) struct Moving {
     rate: u32,
     /// Seconds of it, after which the wallpaper begins again.
     seconds: u32,
-    /// How large a frame is kept, where that is not a fraction of the screen.
-    frame: Option<(u32, u32)>,
+    /// How large a frame is kept.
+    frame: (u32, u32),
 }
 
 impl Moving {
-    /// What the command line asked for, and the defaults for what it did not.
-    fn asked(args: &Args) -> Self {
+    /// What the command line asked for, what the settings file asked for
+    /// where it did not, and the defaults under both.
+    fn asked(args: &Args, settings: &Settings, screen: (u32, u32)) -> Self {
         Self {
-            rate: args.fps.unwrap_or(MOVING_RATE),
-            seconds: args.seconds.unwrap_or(MOVING_SECONDS),
-            frame: args.video_size,
+            rate: args.fps.unwrap_or(settings.fps),
+            seconds: args.seconds.unwrap_or(settings.seconds),
+            frame: args.video_size.unwrap_or_else(|| settings.frame(screen)),
         }
     }
 }
@@ -583,7 +604,11 @@ mod tests {
     /// anything measured on it is a wrong number rather than a missing one.
     #[test]
     fn a_wallpaper_asked_for_by_name_must_be_there() {
-        let refused = refuse_or_none(Some("amiya"), "nothing is kept");
+        let flag = Asked {
+            name: "amiya",
+            source: "--wallpaper",
+        };
+        let refused = refuse_or_none(Some(flag), "nothing is kept");
         let message = refused
             .expect_err("a name that matches nothing stops")
             .to_string();
@@ -592,6 +617,24 @@ mod tests {
             "it says what was asked for: {message}"
         );
         assert!(message.contains("nothing is kept"), "and why: {message}");
+        assert!(
+            message.contains("--wallpaper"),
+            "and where it was asked for: {message}"
+        );
+
+        // The same name out of the settings file is refused too, and says
+        // which file to go and change rather than naming a flag nobody typed.
+        let written = Asked {
+            name: "amiya",
+            source: "`name` in /home/u/.config/ferrix/wallpaper.toml",
+        };
+        let message = refuse_or_none(Some(written), "nothing is kept")
+            .expect_err("a stale name in the file stops the same way")
+            .to_string();
+        assert!(
+            message.contains("wallpaper.toml") && !message.contains("--wallpaper"),
+            "it sends the person to the file: {message}"
+        );
 
         let quiet = refuse_or_none(None, "nothing is kept");
         assert!(
