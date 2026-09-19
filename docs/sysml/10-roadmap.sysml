@@ -451,7 +451,7 @@ package FerrixRoadmap {
     #inProgress requirement <'S19'> stage19HyprlandFidelity : Stage {
         attribute :>> number = 19;
         attribute :>> status = StageStatus::InProgress;
-        attribute :>> size = "144 points, about 100 left";
+        attribute :>> size = "144 points, about 48 left";
         doc /* What makes a Hyprland rather than a tiling compositor:
              * animations with bezier curves, rounded corners, blur, shadows,
              * opacity rules, special workspaces, groups, multiple monitors,
@@ -460,18 +460,25 @@ package FerrixRoadmap {
              * Well under way: every one of Hyprland's globals, dispatchers
              * and hyprctl commands is answered, and a person's own
              * hyprland.conf -- 377 lines, a bar, a dock and a wallpaper
-             * daemon -- runs with no diagnostic. What is left is XWayland,
-             * the GPU, and the layer-rule effects that need a second render
-             * pass.
+             * daemon -- runs with no diagnostic.
              *
-             * The GPU path was decided on 2026-09-18 (docs/GPU.md): the
-             * host's driver through virtio-gpu 3D -- the ring-3 driver's 3D
-             * commands, a render node with the virtgpu ioctls and 3D
-             * scanout, the host half in xtask, and a Rust virgl encoder as
-             * the compositor's renderer behind a renderer trait, 52 points
-             * in that order. A card of Ferrix's own is stage 21. Of the
-             * 144, about 100 are left: the GPU's 52, XWayland's 40, and
-             * about 8 of pointer-driven options and second-pass effects. */
+             * The GPU path, decided on 2026-09-18 and built on 2026-09-19
+             * (docs/GPU.md 3.7 and 3.8), is Path A: the host's driver
+             * through virtio-gpu 3D. All four of its pieces are in -- the
+             * ring-3 driver's 3D commands, a render node with the virtgpu
+             * ioctls and 3D scanout, the host half in xtask, and a Rust
+             * virgl encoder behind a renderer trait with the software
+             * renderer still under it. The desktop composites on the GPU:
+             * a 1920x1080 frame of a video wallpaper behind a blurred
+             * translucent terminal went from 39 ms to 12, where 60 fps is
+             * 16.7. A card of Ferrix's own is stage 21.
+             *
+             * Of the 144, about 48 are left: XWayland's 40, and the
+             * pointer-driven options and second-pass effects
+             * (no_screen_share, blur_popups, precise_mouse_move). The rest
+             * of the GPU road -- zwp_linux_dmabuf and a Mesa on ferrousli --
+             * is for clients that render for themselves, not for the
+             * compositor. */
     }
 
     #planned requirement <'S21'> stage21BareMetalGpu : Stage {
