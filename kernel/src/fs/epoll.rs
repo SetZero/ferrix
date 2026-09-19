@@ -45,6 +45,7 @@
 //! copies the registrations out, polls them unlocked, and takes the lock again
 //! to record what it saw against whichever registrations are still there.
 
+use alloc::collections::BTreeMap;
 use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
 use core::any::Any;
@@ -69,6 +70,11 @@ const NAME: &[u8] = b"anon_inode:[eventpoll]";
 /// One registration.
 #[derive(Debug)]
 struct Item {
+    /// The incarnation of this registration.  An `EPOLL_CTL_DEL` followed by
+    /// an add may reuse the file and descriptor while a scan has its file
+    /// reference unlocked, so the scan must not apply its old look to the
+    /// new registration.
+    serial: u64,
     /// The number it was added under.
     fd: i32,
     /// The open file's address, which with `fd` is the key. Stable for as
@@ -83,6 +89,9 @@ struct Item {
     events: u32,
     /// The program's cookie.
     data: u64,
+    /// Set while a scan is reconciling a file that went away.  Removal waits
+    /// until every sample has used its stable slot.
+    gone: bool,
     /// Whether it may report: `EPOLLONESHOT` clears it once it has.
     armed: bool,
     /// For `EPOLLET`: a report is due.
@@ -98,6 +107,11 @@ struct Item {
 struct State {
     /// The registrations, in the order waits consider them.
     items: Vec<Item>,
+    /// The serial handed to the next registration.
+    next_serial: u64,
+    /// Every change to registration order or state that can race the unlocked
+    /// file looks.  It lets the ordinary, uncontended scan reconcile by slot.
+    revision: u64,
     /// The sets this one is registered in, for the depth check.
     parents: Vec<Weak<Epoll>>,
     /// Bumped by every change to `items`, so a set holding this one sees a
@@ -182,11 +196,47 @@ const fn bits(ready: Readiness) -> u32 {
 /// or nothing when the file is gone.
 type Look = Option<(u32, u64)>;
 
+/// A registration looked at while the set lock was released.  `serial` names
+/// this exact incarnation rather than merely its file and descriptor.
+#[derive(Debug)]
+struct Sample {
+    serial: u64,
+    file: Weak<OpenFile>,
+}
+
 /// Look at a file, with no lock held.
 fn look(file: &Weak<OpenFile>) -> Look {
     let file = file.upgrade()?;
     let changes = file.poll_changes().unwrap_or(0);
     Some((bits(file.poll()), changes))
+}
+
+/// Record what a scan found for one registration, returning whether its file
+/// went away.  The caller removes gone registrations after every sample has
+/// used its stable slot.
+fn record(item: &mut Item, seen: Look, events: &mut Vec<Event>, limit: usize) -> bool {
+    let Some((now, changes)) = seen else {
+        item.gone = true;
+        return true;
+    };
+    let wanted = now & item.events;
+    if item.events & EPOLLET != 0 {
+        let happened = changes != item.seen_changes || now & !item.seen_bits != 0;
+        if happened && wanted != 0 {
+            item.due = true;
+        }
+        item.seen_changes = changes;
+        item.seen_bits = now;
+    }
+    let reports = item.armed && wanted != 0 && (item.events & EPOLLET == 0 || item.due);
+    if reports && events.len() < limit {
+        events.push(Event {
+            events: wanted,
+            data: item.data,
+            key: (item.key, item.fd),
+        });
+    }
+    false
 }
 
 impl Epoll {
@@ -220,19 +270,24 @@ impl Epoll {
                 return Err(Errno::EEXIST);
             }
             let events = interest.events | EPOLLERR | EPOLLHUP;
+            let serial = state.next_serial;
+            state.next_serial = state.next_serial.wrapping_add(1);
             state.items.push(Item {
+                serial,
                 fd,
                 key,
                 file: weak,
                 nested: nested.as_ref().map(Arc::downgrade),
                 events,
                 data: interest.data,
+                gone: false,
                 armed: true,
                 due: seen.0 & events != 0,
                 seen_changes: seen.1,
                 seen_bits: seen.0,
             });
             state.generation = state.generation.wrapping_add(1);
+            state.revision = state.revision.wrapping_add(1);
         }
         if let Some(inner) = nested {
             inner.state.lock().parents.push(self.this.clone());
@@ -279,6 +334,7 @@ impl Epoll {
         item.seen_changes = seen.1;
         item.seen_bits = seen.0;
         state.generation = state.generation.wrapping_add(1);
+        state.revision = state.revision.wrapping_add(1);
         Ok(())
     }
 
@@ -297,6 +353,7 @@ impl Epoll {
                 .position(|item| (item.key, item.fd) == (key, fd))
                 .ok_or(Errno::ENOENT)?;
             state.generation = state.generation.wrapping_add(1);
+            state.revision = state.revision.wrapping_add(1);
             state.items.remove(at)
         };
         if let Some(inner) = removed.nested.as_ref().and_then(Weak::upgrade) {
@@ -371,58 +428,60 @@ impl Epoll {
     /// What a wait would deliver now, at most `limit` events, without
     /// delivering it: [`Epoll::delivered`] does that for the ones the program
     /// received. A registration whose file is gone is dropped here.
+    ///
+    /// The files are looked at with no set lock held.  With no concurrent
+    /// control operation, their slots are still the snapshot's slots, so
+    /// reconciliation is one pass.  A racing control operation takes the
+    /// slower incarnation-to-slot index instead, preserving snapshot order
+    /// without applying an old look to a remove-and-readd registration.
     pub(crate) fn ready(&self, limit: usize) -> Vec<Event> {
-        let snapshot: Vec<((usize, i32), Weak<OpenFile>)> = self
-            .state
-            .lock()
-            .items
-            .iter()
-            .map(|item| ((item.key, item.fd), item.file.clone()))
-            .collect();
-        let looks: Vec<((usize, i32), Look)> = snapshot
+        let (revision, snapshot): (u64, Vec<Sample>) = {
+            let state = self.state.lock();
+            (
+                state.revision,
+                state
+                    .items
+                    .iter()
+                    .map(|item| Sample {
+                        serial: item.serial,
+                        file: item.file.clone(),
+                    })
+                    .collect(),
+            )
+        };
+        let looks: Vec<(u64, Look)> = snapshot
             .into_iter()
-            .map(|(key, file)| (key, look(&file)))
+            .map(|sample| (sample.serial, look(&sample.file)))
             .collect();
 
         let mut events = Vec::new();
         let mut state = self.state.lock();
         let mut dropped = false;
-        for (key, seen) in looks {
-            let Some(at) = state
+        if state.revision == revision {
+            for (item, (_, seen)) in state.items.iter_mut().zip(looks) {
+                dropped |= record(item, seen, &mut events, limit);
+            }
+        } else {
+            let slots: BTreeMap<u64, usize> = state
                 .items
                 .iter()
-                .position(|item| (item.key, item.fd) == key)
-            else {
-                continue;
-            };
-            let Some((now, changes)) = seen else {
-                let _ = state.items.remove(at);
-                dropped = true;
-                continue;
-            };
-            let Some(item) = state.items.get_mut(at) else {
-                continue;
-            };
-            let wanted = now & item.events;
-            if item.events & EPOLLET != 0 {
-                let happened = changes != item.seen_changes || now & !item.seen_bits != 0;
-                if happened && wanted != 0 {
-                    item.due = true;
-                }
-                item.seen_changes = changes;
-                item.seen_bits = now;
-            }
-            let reports = item.armed && wanted != 0 && (item.events & EPOLLET == 0 || item.due);
-            if reports && events.len() < limit {
-                events.push(Event {
-                    events: wanted,
-                    data: item.data,
-                    key,
-                });
+                .enumerate()
+                .map(|(at, item)| (item.serial, at))
+                .collect();
+            for (serial, seen) in looks {
+                let Some(&at) = slots.get(&serial) else {
+                    continue;
+                };
+                let Some(item) = state.items.get_mut(at) else {
+                    continue;
+                };
+                dropped |= record(item, seen, &mut events, limit);
             }
         }
         if dropped {
+            state.items.retain(|item| !item.gone);
             state.generation = state.generation.wrapping_add(1);
+            state.revision = state.revision.wrapping_add(1);
         }
         events
     }
@@ -455,6 +514,9 @@ impl Epoll {
             }
         }
         state.items.extend(behind);
+        if !events.is_empty() {
+            state.revision = state.revision.wrapping_add(1);
+        }
     }
 }
 
