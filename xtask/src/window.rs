@@ -89,7 +89,7 @@ impl Window {
     /// backend does not have OpenGL support enabled"* -- so the backend has
     /// to be told. A headless boot cannot simply say `gl=on`, because `none`
     /// has no GL to turn on; `egl-headless` is the backend for exactly this.
-    pub(crate) fn arguments_with(&self, card: Card<'_>, gl: bool) -> [String; 2] {
+    pub(crate) fn arguments_with(&self, card: Card<'_>, gl: bool) -> Vec<String> {
         let backend = match self {
             Window::Headless if gl => "egl-headless".to_owned(),
             Window::Headless => "none".to_owned(),
@@ -103,12 +103,28 @@ impl Window {
             Window::Local(name) => (*name).to_owned(),
             // VNC serves one console and can be told which, so a viewer
             // connects straight to the card rather than to firmware's head.
+            // And with a 3D card it cannot be the display at all: VNC has no
+            // OpenGL to give the card. `egl-headless` is the display then,
+            // which draws off screen and copies each frame out for whoever
+            // else is listening -- and a `-vnc` server is who.
+            Window::Vnc(address) if gl => {
+                let server = match card {
+                    Some(card) => format!("{address},display={card},head=0"),
+                    None => address.clone(),
+                };
+                return vec![
+                    "-display".to_owned(),
+                    "egl-headless".to_owned(),
+                    "-vnc".to_owned(),
+                    server,
+                ];
+            }
             Window::Vnc(address) => match card {
                 Some(card) => format!("vnc={address},display={card},head=0"),
                 None => format!("vnc={address}"),
             },
         };
-        ["-display".to_owned(), backend]
+        vec!["-display".to_owned(), backend]
     }
 
     /// Say where the screen is, for the person who asked to watch it.
@@ -597,6 +613,17 @@ Some display backends support suboptions, which can be set with
         assert_eq!(
             Window::Local("gtk").arguments_with(None, true),
             ["-display".to_owned(), "gtk,show-tabs=on,gl=on".to_owned()]
+        );
+        // VNC has no OpenGL of its own, so it is served beside the backend
+        // that has rather than being the display.
+        assert_eq!(
+            Window::Vnc(":7".to_owned()).arguments_with(Some("gpu0"), true),
+            [
+                "-display".to_owned(),
+                "egl-headless".to_owned(),
+                "-vnc".to_owned(),
+                ":7,display=gpu0,head=0".to_owned()
+            ]
         );
         // And without it, exactly what it always was.
         assert_eq!(
