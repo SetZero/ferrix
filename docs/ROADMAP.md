@@ -2690,7 +2690,11 @@ the disks `devmgr` started.
 * **Trusting a BAR firmware placed but did not enable**, so a device no
   firmware driver used — as virtio-rng on AArch64 was until its legacy
   interface was turned off — can still be given to a ring-3 driver. Worked
-  out with the review that found the gap:
+  out with the review that found the gap. **Started on 2026-09-19:** the
+  device-tree half of the first bullet has landed — `libs/fdt` reads a host
+  bridge's `ranges` into `PciWindow`s that keep the bus and the CPU address
+  apart, refusing a BAR only half inside a window, an empty or wrapping range,
+  and a node whose cell counts are not PCI's — and the rest below is untouched:
   * *Where the windows are.* The device tree's `ranges` on the Arm machines.
     Under ACPI they are in `_CRS`, which is AML — but before
     `ExitBootServices` the loader can ask each root bridge's
