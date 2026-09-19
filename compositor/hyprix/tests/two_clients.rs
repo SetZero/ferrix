@@ -1505,6 +1505,124 @@ fn the_window_left_after_a_close_is_drawn_from_its_own_buffer() {
     );
 }
 
+/// One client, two windows, and the second one destroyed: the layout must
+/// stop tiling the window that went.
+///
+/// The test beside this one closes a whole *connection* and is passed by a
+/// compositor that notices nothing smaller. Until 2026-09-18 this tree was
+/// exactly that compositor: only a client going took its windows out of the
+/// layout, so a client that destroyed one of its two `xdg_toplevel`s left
+/// the layout tiling a window that no longer existed, and the window that
+/// remained kept half the screen.
+///
+/// Nothing else in this tree opens two windows from one client, which is
+/// why the fix had no test. `Shape::Twin` is a client that does: it opens a
+/// second window once the first has drawn, and destroys it once it has
+/// drawn in its turn, with the connection open throughout.
+///
+/// Three claims, in order: the taskbar's list has both windows while they
+/// are up; it has one after the destroy; and the picture is the one
+/// `compositor/render` blesses for a single window with the whole
+/// workspace, which a compositor still tiling a ghost cannot produce.
+#[test]
+fn a_client_that_destroys_one_of_its_two_windows_leaves_the_other_alone() {
+    let work = workspace("twin");
+    let socket = work.join("wayland");
+
+    let options = Options {
+        display: socket.to_string_lossy().into_owned(),
+        headless: Some((WIDTH, HEIGHT)),
+        deadline: Some(16000),
+        config: Some(undithered(&work)),
+        ..Options::default()
+    };
+
+    let for_clients = socket.clone();
+    let clients = std::thread::spawn(move || {
+        for _ in 0..400 {
+            if for_clients.exists() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        // One client, whose kept window is the gradient: that is the window
+        // `compositor/render` blesses alone, and the second window this
+        // client opens draws the other pattern.
+        let path = for_clients.clone();
+        let client =
+            std::thread::spawn(move || connect(&path, Pattern::Gradient, "two", Shape::Twin));
+
+        let both = titles_until(&for_clients, 2);
+        let left = titles_until(&for_clients, 1);
+        // Long enough for the window that is left to be told its new size
+        // and to draw at it, as the close test beside this one waits.
+        std::thread::sleep(Duration::from_millis(2500));
+        let taken = compositor_shot::take(&for_clients, 0);
+        let _ = client.join();
+        (both, left, taken)
+    });
+
+    let line = hyprix::run(&options).expect("the compositor ran");
+    let (both, left, taken) = clients.join().expect("the clients finished");
+    let taken = taken.unwrap_or_else(|why| panic!("the screenshot: {why}"));
+
+    assert_eq!(
+        both.len(),
+        2,
+        "both of the client's windows should have been in the list while they were up, not {both:?}"
+    );
+    assert!(
+        both.iter().any(|title| title.contains("two second")),
+        "the second window should have been in the list under its own title, not {both:?}"
+    );
+    assert_eq!(
+        left.len(),
+        1,
+        "destroying one xdg_toplevel should leave one window in the list, not {left:?}"
+    );
+    assert!(
+        left.first()
+            .is_some_and(|title| title.contains("two") && !title.contains("second")),
+        "the window left should be the one the client kept, not {left:?}"
+    );
+
+    let want = image(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("../render/tests/data/one-client-alone.xrle"),
+    );
+    let differing = taken
+        .pixels
+        .chunks_exact(3)
+        .zip(want.chunks_exact(3))
+        .filter(|(shot, blessed)| shot != blessed)
+        .count();
+    assert_eq!(
+        differing, 0,
+        "{differing} pixels are not those of the window that was kept, drawn alone; the \
+         compositor said {line}"
+    );
+}
+
+/// The windows a taskbar can see, once there are `count` of them.
+///
+/// Polled rather than slept for, because what this waits on is a client
+/// making a window and the compositor telling a third program about it --
+/// two round trips whose timing is the machine's, not the test's. Gives
+/// what the list held on the last look, so a caller that never saw `count`
+/// windows fails with the list it did see.
+fn titles_until(socket: &Path, count: usize) -> Vec<String> {
+    let mut seen = Vec::new();
+    for _ in 0..100 {
+        if let Ok(lines) = compositor_lswt::run(socket, &compositor_lswt::Want::List) {
+            seen = lines;
+            if seen.len() == count {
+                return seen;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    seen
+}
+
 /// A locked screen shows the lock and nothing of what was under it.
 ///
 /// `ext-session-lock-v1` is the one protocol whose whole point is that the

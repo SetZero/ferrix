@@ -43,6 +43,21 @@ fn main() {
     // `--bar <height>`: a `zwlr_layer_surface_v1` across the top rather than
     // a window. `--menu <side>`: a window with an `xdg_popup` on it, which
     // is what every right-click menu and dropdown is.
+    // `--twin`: two windows on this one connection, the second of which is
+    // destroyed once both have been drawn. What it proves is in
+    // `compositor_pattern::Shape::Twin`.
+    if arguments.iter().any(|word| word == "--twin") {
+        match compositor_pattern::run_shaped(pattern, &title, compositor_pattern::Shape::Twin) {
+            Ok(line) => {
+                say(&line);
+                std::process::exit(0)
+            }
+            Err(error) => {
+                say(&format!("pattern: failed: {error}"));
+                std::process::exit(1)
+            }
+        }
+    }
     let shape = match (sized("--bar"), sized("--menu")) {
         (Some(Some(height)), _) => compositor_pattern::Shape::Bar(height),
         (Some(None), _) => {

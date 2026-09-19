@@ -491,12 +491,25 @@ Not part of this handoff, but the next person will ask.
   with two windows that closed one left the layout tiling a window that no
   longer existed.
 
-  **That fix has no test**, and should get one. Nothing in this tree opens
-  two windows from one client: every gate boot starts two
+  **That fix has a test since 2026-09-19.** Nothing in this tree opened two
+  windows from one client -- every gate boot starts two
   `compositor/pattern` processes, and `pattern` exits when its one window
   is closed, which takes the connection with it and goes down the path
-  that was already there. A client that opens a second window and destroys
-  it is what the test needs, and writing one is the work.
+  that was already there -- so `compositor/pattern` gained a client that
+  does: `Shape::Twin` (`--twin` on the command line) opens a second
+  `xdg_toplevel` once the first has drawn, draws it, and destroys it two
+  seconds later with the connection still open.
+
+  `a_client_that_destroys_one_of_its_two_windows_leaves_the_other_alone` in
+  `hyprix/tests/two_clients.rs` makes three claims in order: a taskbar's
+  list has both windows while they are up, it has one after the destroy,
+  and a screenshot is the `one-client-alone` image `compositor/render`
+  blesses -- the kept window alone, filling the workspace. Its negative
+  control, not committed: with the `for window in closed` loop in
+  `hyprix/src/state.rs` short-circuited, the list after the destroy is
+  `["... \"two\" []", "lswt:  \"\" [activated]"]` -- the ghost, still
+  focused, with no title because its `xdg_toplevel` is gone -- and the kept
+  window is never reconfigured back to the full width.
 - **`hyprland-input-capture-v1`** (its whole conversation is a `libei`
   socket, and there is no `libei`) and **`hyprland-ctm-control-v1`** (its
   vendored XML has a `<description>` with no `summary`, which this

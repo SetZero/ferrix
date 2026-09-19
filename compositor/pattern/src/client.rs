@@ -63,6 +63,14 @@ mod id {
     /// again only once its `done` has come: a `wl_callback` is destroyed by
     /// the event, so the number is the client's again by then.
     pub(super) const FRAME: ObjectId = ObjectId(27);
+    /// The extra window a [`Shape::Twin`] client opens and then destroys: a
+    /// second `xdg_toplevel` on the same connection, with memory of its own
+    /// because its size is not the first window's.
+    pub(super) const TWIN_SURFACE: ObjectId = ObjectId(28);
+    pub(super) const TWIN_XDG: ObjectId = ObjectId(29);
+    pub(super) const TWIN_TOPLEVEL: ObjectId = ObjectId(30);
+    pub(super) const TWIN_POOL: ObjectId = ObjectId(31);
+    pub(super) const TWIN_BUFFER: ObjectId = ObjectId(32);
 }
 
 /// The buffers a client may keep, in the order it fills them.
@@ -93,6 +101,16 @@ const UNPACED: Duration = Duration::from_secs(5);
 /// closed it.
 const DEADLINE: Duration = Duration::from_secs(600);
 
+/// How long [`Shape::Twin`]'s extra window stays up before the client
+/// destroys it.
+///
+/// It has to be up long enough to have been *tiled*: closing a window the
+/// compositor has drawn once is a different claim from closing one it never
+/// laid out, and only the first is the bug this shape is written for.
+/// Long enough, too, for a test to see both windows in a taskbar's list
+/// before one of them goes.
+const TWIN_LINGER: Duration = Duration::from_millis(2000);
+
 /// What this client asks the compositor to make of its surface.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum Shape {
@@ -106,6 +124,17 @@ pub enum Shape {
     /// A window with an `xdg_popup` on it, this many pixels square, hanging
     /// off the window's top-left corner: what a menu is.
     Menu(u32),
+    /// Two windows on one connection: the pattern's own, and a second
+    /// `xdg_toplevel` opened once the first has drawn and destroyed once it
+    /// has drawn in its turn -- a document window and a dialog that is
+    /// dismissed.
+    ///
+    /// The connection stays open throughout, so the only thing that can take
+    /// the closed window out of the layout is the `xdg_toplevel.destroy`
+    /// itself. That is what this shape is for: until 2026-09-18 only a whole
+    /// connection going did, and a client that closed one of its two windows
+    /// left the compositor tiling a window that was not there.
+    Twin,
     /// A `zwlr_layer_surface_v1` on the `background` layer, anchored to all
     /// four edges and reserving nothing: what a wallpaper asks for. It draws
     /// the [`Picture`] it was given rather than a pattern.
@@ -742,6 +771,11 @@ fn run_with(
         menu_asked: false,
         menu_size: (0, 0),
         menu: None,
+        twin_asked: false,
+        twin_size: (0, 0),
+        twin: None,
+        twin_drawn: None,
+        twin_closed: false,
         scaled: Vec::new(),
         stale: [Vec::new(), Vec::new()],
     };
@@ -789,6 +823,17 @@ fn run_with(
             if due.elapsed() >= period {
                 due = Instant::now();
             }
+        }
+        // The extra window goes once it has been up for a moment. This is
+        // in the loop rather than in the handler that drew it because a
+        // client that destroyed a window in the same breath as it committed
+        // one would never have had two on the screen.
+        if state.shape == Shape::Twin
+            && state
+                .twin_drawn
+                .is_some_and(|at| at.elapsed() >= TWIN_LINGER)
+        {
+            state.close_twin(&mut out);
         }
         flush(&mut connection, &mut out)?;
     }
@@ -873,6 +918,14 @@ struct Client {
     menu_size: (i32, i32),
     /// The memory the menu is drawn into, once its size is known.
     menu: Option<Shared>,
+    /// [`Shape::Twin`]'s extra window: whether it has been asked for, the
+    /// size the compositor gave it, the memory it draws in, when it was
+    /// first drawn, and whether it has been destroyed.
+    twin_asked: bool,
+    twin_size: (i32, i32),
+    twin: Option<Shared>,
+    twin_drawn: Option<Instant>,
+    twin_closed: bool,
     /// A moving wallpaper's frame, scaled to the buffer's size and kept
     /// between frames, so that a frame scales only the rows the video
     /// changed rather than the screen: the rest are what they were.
@@ -936,6 +989,11 @@ impl Client {
             id::POPUP => &xdg_shell::XDG_POPUP,
             id::POPUP_POOL => &core::WL_SHM_POOL,
             id::POPUP_BUFFER => &core::WL_BUFFER,
+            id::TWIN_SURFACE => &core::WL_SURFACE,
+            id::TWIN_XDG => &xdg_shell::XDG_SURFACE,
+            id::TWIN_TOPLEVEL => &xdg_shell::XDG_TOPLEVEL,
+            id::TWIN_POOL => &core::WL_SHM_POOL,
+            id::TWIN_BUFFER => &core::WL_BUFFER,
             _ => return None,
         })
     }
@@ -1023,6 +1081,13 @@ impl Client {
                 if let Shape::Menu(side) = self.shape {
                     self.open_menu(side, out);
                 }
+                // The second window, for the same reason a menu waits: a
+                // client opens its dialog after its document window is up,
+                // and a layout given two windows at once would not be
+                // showing what a layout given a second one does.
+                if self.shape == Shape::Twin {
+                    self.open_twin(out);
+                }
             }
             id::POPUP_XDG if opcode == xdg_surface::event::CONFIGURE => {
                 let serial = args.first().and_then(Arg::as_uint).unwrap_or(0);
@@ -1048,6 +1113,40 @@ impl Client {
                     value(1),
                     value(2),
                     value(3)
+                ));
+            }
+            id::TWIN_TOPLEVEL if opcode == xdg_toplevel::event::CONFIGURE => {
+                let (width, height) = (
+                    args.first().and_then(Arg::as_int).unwrap_or(0),
+                    args.get(1).and_then(Arg::as_int).unwrap_or(0),
+                );
+                // A zero is "you choose", answered as the first window
+                // answers it.
+                self.twin_size = (
+                    if width > 0 { width } else { 640 },
+                    if height > 0 { height } else { 480 },
+                );
+            }
+            id::TWIN_XDG if opcode == xdg_surface::event::CONFIGURE => {
+                let serial = args.first().and_then(Arg::as_uint).unwrap_or(0);
+                request(
+                    out,
+                    id::TWIN_XDG,
+                    xdg_surface::request::ACK_CONFIGURE,
+                    &[ArgType::Uint],
+                    &[Arg::Uint(serial)],
+                );
+                let (width, height) = self.twin_size;
+                self.draw_twin(width, height, out)?;
+            }
+            id::TWIN_TOPLEVEL if opcode == xdg_toplevel::event::CLOSE => {
+                // Nothing in this shape asks for that, and a compositor that
+                // sent it would be closing a window the client is about to
+                // close itself -- which is the one thing this client must
+                // not be able to confuse with its own destroy.
+                return Err(format!(
+                    "the compositor asked the second window of {} to close",
+                    self.title
                 ));
             }
             id::POPUP if opcode == xdg_popup::event::POPUP_DONE => {
@@ -1541,6 +1640,200 @@ impl Client {
             &[],
         );
         Ok(())
+    }
+
+    /// Open the extra window: a second `xdg_toplevel` on this connection,
+    /// made in the same order and with the same requests as the first.
+    fn open_twin(&mut self, out: &mut Writer) {
+        if self.twin_asked {
+            return;
+        }
+        self.twin_asked = true;
+        request(
+            out,
+            id::COMPOSITOR,
+            wl_compositor::request::CREATE_SURFACE,
+            &[ArgType::NewId],
+            &[Arg::NewId(id::TWIN_SURFACE)],
+        );
+        request(
+            out,
+            id::SHELL,
+            xdg_wm_base::request::GET_XDG_SURFACE,
+            &[ArgType::NewId, ArgType::Object { nullable: false }],
+            &[Arg::NewId(id::TWIN_XDG), Arg::Object(id::TWIN_SURFACE)],
+        );
+        request(
+            out,
+            id::TWIN_XDG,
+            xdg_surface::request::GET_TOPLEVEL,
+            &[ArgType::NewId],
+            &[Arg::NewId(id::TWIN_TOPLEVEL)],
+        );
+        // A title of its own, so a taskbar's list and this test's log say
+        // which of the client's two windows each line is about.
+        let title = format!("{} second", self.title);
+        request(
+            out,
+            id::TWIN_TOPLEVEL,
+            xdg_toplevel::request::SET_TITLE,
+            &[ArgType::Str { nullable: false }],
+            &[Arg::Str(Some(&title))],
+        );
+        request(
+            out,
+            id::TWIN_TOPLEVEL,
+            xdg_toplevel::request::SET_APP_ID,
+            &[ArgType::Str { nullable: false }],
+            &[Arg::Str(Some("rocks.magical.pattern"))],
+        );
+        // The first commit carries no buffer: it asks to be configured.
+        request(out, id::TWIN_SURFACE, wl_surface::request::COMMIT, &[], &[]);
+    }
+
+    /// Draw the extra window at the size the compositor gave it.
+    ///
+    /// The other pattern, so that a picture taken while both are up shows
+    /// two windows rather than one twice, and so that a picture taken after
+    /// the close is plainly the window that was kept.
+    fn draw_twin(&mut self, width: i32, height: i32, out: &mut Writer) -> Result<(), String> {
+        if self.twin_closed {
+            return Ok(());
+        }
+        let (width, height) = (width.max(1), height.max(1));
+        let stride = width.saturating_mul(4);
+        let len = usize::try_from(stride.saturating_mul(height))
+            .map_err(|_| "a second window too large to draw".to_owned())?;
+        if self.twin.is_none() {
+            let shared = Shared::new(len).map_err(|error| format!("shared memory: {error}"))?;
+            let fd = shared.as_raw_fd();
+            self.twin = Some(shared);
+            request_with_fd(
+                out,
+                id::SHM,
+                wl_shm::request::CREATE_POOL,
+                &[ArgType::NewId, ArgType::Fd, ArgType::Int],
+                &[
+                    Arg::NewId(id::TWIN_POOL),
+                    Arg::Fd(Fd(fd)),
+                    Arg::Int(i32::try_from(len).unwrap_or(i32::MAX)),
+                ],
+            );
+            request(
+                out,
+                id::TWIN_POOL,
+                wl_shm_pool::request::CREATE_BUFFER,
+                &[
+                    ArgType::NewId,
+                    ArgType::Int,
+                    ArgType::Int,
+                    ArgType::Int,
+                    ArgType::Int,
+                    ArgType::Uint,
+                ],
+                &[
+                    Arg::NewId(id::TWIN_BUFFER),
+                    Arg::Int(0),
+                    Arg::Int(width),
+                    Arg::Int(height),
+                    Arg::Int(stride),
+                    Arg::Uint(self.twin_pattern().format().wl_shm()),
+                ],
+            );
+        }
+        let pixels = self.twin_pattern().draw(
+            u32::try_from(width).unwrap_or(0),
+            u32::try_from(height).unwrap_or(0),
+        );
+        if let Some(shared) = self.twin.as_mut() {
+            let room = shared.bytes_mut();
+            let take = pixels.len().min(room.len());
+            if let (Some(to), Some(from)) = (room.get_mut(..take), pixels.get(..take)) {
+                to.copy_from_slice(from);
+            }
+        }
+        request(
+            out,
+            id::TWIN_SURFACE,
+            wl_surface::request::ATTACH,
+            &[
+                ArgType::Object { nullable: true },
+                ArgType::Int,
+                ArgType::Int,
+            ],
+            &[Arg::Object(id::TWIN_BUFFER), Arg::Int(0), Arg::Int(0)],
+        );
+        request(
+            out,
+            id::TWIN_SURFACE,
+            wl_surface::request::DAMAGE_BUFFER,
+            &[ArgType::Int, ArgType::Int, ArgType::Int, ArgType::Int],
+            &[Arg::Int(0), Arg::Int(0), Arg::Int(width), Arg::Int(height)],
+        );
+        request(out, id::TWIN_SURFACE, wl_surface::request::COMMIT, &[], &[]);
+        if self.twin_drawn.is_none() {
+            self.twin_drawn = Some(Instant::now());
+            say(&format!(
+                "pattern: {} second window {width}x{height}",
+                self.title
+            ));
+        }
+        Ok(())
+    }
+
+    /// Destroy the extra window and nothing else.
+    ///
+    /// The connection stays, the first window stays, and its `wl_surface`
+    /// is never touched -- so a compositor that still tiles two windows
+    /// after this is one that only notices a window going when its whole
+    /// client does.
+    fn close_twin(&mut self, out: &mut Writer) {
+        if self.twin_closed || !self.twin_asked {
+            return;
+        }
+        self.twin_closed = true;
+        // A toolkit destroys the role before the surface under it, and the
+        // buffer last, because a surface with a buffer attached is a surface
+        // the compositor may still be reading.
+        request(
+            out,
+            id::TWIN_TOPLEVEL,
+            xdg_toplevel::request::DESTROY,
+            &[],
+            &[],
+        );
+        request(out, id::TWIN_XDG, xdg_surface::request::DESTROY, &[], &[]);
+        request(
+            out,
+            id::TWIN_SURFACE,
+            wl_surface::request::DESTROY,
+            &[],
+            &[],
+        );
+        if self.twin.is_some() {
+            request(
+                out,
+                id::TWIN_BUFFER,
+                core::wl_buffer::request::DESTROY,
+                &[],
+                &[],
+            );
+            request(out, id::TWIN_POOL, wl_shm_pool::request::DESTROY, &[], &[]);
+        }
+        self.twin = None;
+        say(&format!(
+            "pattern: {} destroyed its second window",
+            self.title
+        ));
+    }
+
+    /// The pattern the extra window draws: the one the first window does
+    /// not.
+    const fn twin_pattern(&self) -> Pattern {
+        match self.pattern {
+            Pattern::Checkerboard => Pattern::Gradient,
+            Pattern::Gradient => Pattern::Checkerboard,
+        }
     }
 
     /// Draw the pattern at the size the compositor gave, and commit it.
