@@ -22,6 +22,8 @@ use compositor_wire::{Arg, ArgType, Fd, Interface, ObjectId, Reader, Writer};
 
 use compositor_shm::Shared;
 
+use crate::av1::{Decoder, Frame, demux_ivf};
+
 /// The objects this client makes, at fixed ids. A client may name its own
 /// objects however it likes as long as it does not reuse one, and fixed
 /// numbers make the code and its log readable.
@@ -382,173 +384,82 @@ fn spans(marked: impl Iterator<Item = bool>, len: usize) -> Vec<(i32, i32)> {
     spans
 }
 
-/// A little-endian `u16` at `at`, if the bytes hold one.
-fn le16(bytes: &[u8], at: usize) -> Option<u16> {
-    let field = bytes.get(at..at.checked_add(2)?)?;
-    Some(u16::from_le_bytes(field.try_into().ok()?))
-}
-
-/// A little-endian `u32` at `at`, if the bytes hold one.
-fn le32(bytes: &[u8], at: usize) -> Option<u32> {
-    let field = bytes.get(at..at.checked_add(4)?)?;
-    Some(u32::from_le_bytes(field.try_into().ok()?))
-}
-
-/// Fill `row` from the runs `payload` holds at `at`, and say where they
-/// ended.
+/// A wallpaper that moves: its compressed AV1 temporal units, a live decoder,
+/// and the picture it most recently produced.
 ///
-/// A run is a count and a pixel, and the counts add up to `columns`: a row
-/// whose runs stop short, overrun, or say a count of none is a row this
-/// refuses rather than one it guesses at.
-fn runs_into(
-    payload: &[u8],
-    mut at: usize,
-    row: &mut [u8],
-    columns: usize,
-) -> Result<usize, String> {
-    let mut done = 0_usize;
-    while done < columns {
-        let count = usize::from(le16(payload, at).ok_or("a row that ends inside a run")?);
-        let pixel = le32(payload, at.checked_add(2).ok_or("a row too long to read")?)
-            .ok_or("a row that ends inside a run")?;
-        at = at.checked_add(6).ok_or("a row too long to read")?;
-        if count == 0 {
-            return Err("a run of no pixels".to_owned());
-        }
-        let upto = done.checked_add(count).ok_or("a row too long to read")?;
-        if upto > columns {
-            return Err("a row whose runs are wider than the video".to_owned());
-        }
-        let from = done.checked_mul(4).ok_or("a row too long to read")?;
-        let to = upto.checked_mul(4).ok_or("a row too long to read")?;
-        let part = row
-            .get_mut(from..to)
-            .ok_or("a row whose runs are wider than the video")?;
-        for place in part.chunks_exact_mut(4) {
-            place.copy_from_slice(&pixel.to_le_bytes());
-        }
-        done = upto;
-    }
-    Ok(at)
-}
-
-/// A wallpaper that moves: a video's frames, decoded where there was a
-/// decoder, and how long each of them is shown.
-///
-/// Read from a file that is [`Movie::MAGIC`] and then four little-endian
-/// `u32`s -- the width, the height, how many frames there are, and how many
-/// milliseconds one frame is shown -- and then that many frames, each a
-/// little-endian `u32` length and that many bytes of rows.
-///
-/// A frame's rows are one of three things each, and the two that carry no
-/// pixels are what make a video small enough to put in an initramfs:
-///
-/// * `0x00` -- the row above this one, in this frame. What `compositor/render`'s
-///   expected images do, and it earns the same here: a wallpaper has skies and
-///   flat fills in it.
-/// * `0x02` -- this row as the frame before this one left it, which against a
-///   canvas kept between frames is no work at all. Most of most frames of most
-///   video is this row, and it is why a second of video is not eight megabytes
-///   a frame.
-/// * `0x01` -- runs, each a count (`u16`) and an `XRGB8888` pixel (`u32`),
-///   the counts adding up to the width.
-///
-/// The first frame names no frame before it, so a loop that has reached the
-/// end begins again from it without keeping anything of the last.
-///
-/// Not a format anybody else has, for [`Picture`]'s reason and more so:
-/// Ferrix has no video decoder, carrying one to show a wallpaper is the wrong
-/// trade, and whoever puts the file on the image (`cargo xtask wallpapers`)
-/// has `ffmpeg` and a whole machine to decode with. What is left here is
-/// undoing a run length, which is a loop over bytes.
-#[derive(Clone, Debug)]
+/// The file is IVF: its `DKIF` header says AV1 and the time base, followed by
+/// length-prefixed temporal units. Keeping those units rather than raw pixels
+/// is what makes a useful clip fit in the initramfs. A frame is decoded only
+/// when it is due, so the guest holds one decoded frame and the decoder's
+/// reference pictures rather than every frame of the clip.
 pub struct Movie {
-    /// Every frame's rows, still encoded.
-    frames: Vec<Vec<u8>>,
+    /// Every AV1 temporal unit, still compressed.
+    packets: Vec<Vec<u8>>,
+    /// The decoder, which has seen packets through `at`.
+    decoder: Decoder,
     /// How long one frame is shown.
     period: Duration,
-    /// Which frame `shown` holds.
+    /// Which packet made `shown`.
     at: usize,
     /// The frame last decoded, which the next one is a difference against.
     shown: Picture,
-    /// Which of that frame's rows are not what the frame before left there,
-    /// which is exactly the rows a `0x02` did not stand for. This is the
-    /// damage: the compositor is told these rows and redraws the blur under
-    /// them alone, rather than the screen.
+    /// Which rows differ from the preceding decoded frame. This is the
+    /// damage: the compositor redraws the blur under those rows alone.
     changed: Vec<bool>,
 }
 
-impl Movie {
-    /// What a video's file begins with.
-    pub const MAGIC: &'static [u8; 8] = b"FXVID01\n";
+impl std::fmt::Debug for Movie {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Movie")
+            .field("packets", &self.packets.len())
+            .field("period", &self.period)
+            .field("at", &self.at)
+            .field("shown", &self.shown)
+            .field("changed", &self.changed)
+            .finish_non_exhaustive()
+    }
+}
 
+impl Movie {
     /// A video from its file's bytes, with its first frame shown.
     ///
-    /// Every frame is decoded once here rather than when it is due: a file
-    /// that will not play is a diagnostic before the desktop is up, and a
-    /// wallpaper that stopped half way through a loop would be a puzzle.
+    /// The stream is decoded once before the desktop starts, so malformed AV1
+    /// is reported at startup rather than leaving a wallpaper stuck half way
+    /// through its loop. Those decoded pixels are then discarded; playback
+    /// opens a fresh decoder and keeps only its current picture.
     ///
     /// # Errors
     ///
     /// A sentence saying what is wrong with them.
     pub fn parse(bytes: &[u8]) -> Result<Self, String> {
-        let (magic, rest) = bytes
-            .split_at_checked(Self::MAGIC.len())
-            .ok_or("a video shorter than its header")?;
-        if magic != Self::MAGIC {
-            return Err("not a video: the file does not begin FXVID01".to_owned());
-        }
-        let header = |at: usize| le32(rest, at).ok_or("a video shorter than its header");
-        let (width, height) = (header(0)?, header(4)?);
-        let (count, period) = (header(8)?, header(12)?);
-        if width == 0 || height == 0 {
-            return Err(format!("a video {width} by {height}"));
-        }
-        if count == 0 {
-            return Err("a video with no frames".to_owned());
-        }
-        if period == 0 {
-            return Err("a video whose frames are shown for no time".to_owned());
-        }
-        let pixels = usize::try_from(u64::from(width) * u64::from(height) * 4)
-            .map_err(|_| "a video too large to hold".to_owned())?;
+        let ivf = demux_ivf(bytes)?;
+        let period = Duration::from_millis(1_000 / u64::from(ivf.rate));
 
-        let mut frames = Vec::new();
-        let mut at = 16;
-        for _ in 0..count {
-            let len = usize::try_from(le32(rest, at).ok_or("a video that ends between frames")?)
-                .map_err(|_| "a frame too large to hold".to_owned())?;
-            at = at.checked_add(4).ok_or("a video too large to read")?;
-            let payload = rest
-                .get(at..at.checked_add(len).ok_or("a video too large to read")?)
-                .ok_or("a video that ends inside a frame")?;
-            frames.push(payload.to_vec());
-            at = at.checked_add(len).ok_or("a video too large to read")?;
-        }
-        if at != rest.len() {
-            return Err("a video with bytes after its last frame".to_owned());
+        // Decode every temporal unit now.  A packet can depend on the ones
+        // before it, so one decoder verifies the stream in playback order.
+        let mut checked = Decoder::new()?;
+        for packet in &ivf.packets {
+            let frame = decode(&mut checked, packet)?;
+            if (frame.width, frame.height) != (ivf.width, ivf.height) {
+                return Err("a frame whose size differs from its IVF header".to_owned());
+            }
         }
 
-        let mut movie = Self {
-            frames,
-            period: Duration::from_millis(u64::from(period)),
+        let mut decoder = Decoder::new()?;
+        let first = decode(
+            &mut decoder,
+            ivf.packets.first().ok_or("a video with no frames")?,
+        )?;
+        let rows = usize::try_from(first.height).map_err(|_| "a video too tall to hold")?;
+        Ok(Self {
+            packets: ivf.packets,
+            decoder,
+            period,
             at: 0,
-            shown: Picture {
-                width,
-                height,
-                pixels: vec![0; pixels],
-            },
-            changed: vec![true; usize::try_from(height).unwrap_or(0)],
-        };
-        // Every frame, in order, so that a file which will not play says so
-        // now; then the first again, which names no frame before it and so
-        // leaves the canvas as a loop's first frame found it.
-        for index in 0..movie.frames.len() {
-            movie.play(index)?;
-        }
-        movie.play(0)?;
-        movie.at = 0;
-        Ok(movie)
+            shown: picture(first),
+            changed: vec![true; rows],
+        })
     }
 
     /// How long one frame is shown.
@@ -560,7 +471,7 @@ impl Movie {
     /// How many frames there are.
     #[must_use]
     pub fn frames(&self) -> usize {
-        self.frames.len()
+        self.packets.len()
     }
 
     /// The frame being shown, which is a [`Picture`] and scales like one.
@@ -583,82 +494,63 @@ impl Movie {
 
     /// Show the next frame, beginning again after the last.
     ///
-    /// Nothing here can fail: [`Movie::parse`] has already played every frame
-    /// through this once.
+    /// Nothing here can fail: [`Movie::parse`] decoded every packet once.
     pub fn advance(&mut self) {
         let next = match self.at.checked_add(1) {
-            Some(next) if next < self.frames.len() => next,
+            Some(next) if next < self.packets.len() => next,
             _ => 0,
         };
-        let _played = self.play(next);
+        // AV1 reference pictures belong to one pass through the stream. A
+        // loop starts a fresh decoder, then its first keyframe, exactly as a
+        // player reopening an IVF file would.
+        if next == 0 {
+            let Ok(decoder) = Decoder::new() else {
+                return;
+            };
+            self.decoder = decoder;
+        }
+        let Some(packet) = self.packets.get(next) else {
+            return;
+        };
+        let Ok(frame) = decode(&mut self.decoder, packet) else {
+            return;
+        };
+        self.play(next, frame);
     }
 
-    /// Draw frame `index` over the canvas, which holds the frame before it.
-    fn play(&mut self, index: usize) -> Result<(), String> {
-        let payload = self
-            .frames
-            .get(index)
-            .ok_or("a frame that is not in the video")?;
-        let (width, height) = (self.shown.width, self.shown.height);
-        let stride = usize::try_from(u64::from(width) * 4)
-            .map_err(|_| "a frame too wide to hold".to_owned())?;
-        let rows = usize::try_from(height).map_err(|_| "a frame too tall to hold".to_owned())?;
-        let columns = usize::try_from(width).map_err(|_| "a frame too wide to hold".to_owned())?;
-        self.changed.clear();
-        self.changed.resize(rows, false);
-        let canvas = &mut self.shown.pixels;
-        let changed = &mut self.changed;
-
-        let mut at = 0_usize;
-        for y in 0..rows {
-            let kind = *payload
-                .get(at)
-                .ok_or("a frame that ends between its rows")?;
-            at = at.checked_add(1).ok_or("a frame too large to read")?;
-            let row_at = y.checked_mul(stride).ok_or("a frame too large to read")?;
-            let row_end = row_at
-                .checked_add(stride)
-                .ok_or("a frame too large to read")?;
-            // Every row but a `0x02` is a row the frame before this one did
-            // not have here, which is what the compositor is told changed.
-            if let Some(row) = changed.get_mut(y) {
-                *row = kind != 0x02;
-            }
-            match kind {
-                // The row above this one, which the canvas already holds.
-                0x00 => {
-                    let above = row_at
-                        .checked_sub(stride)
-                        .ok_or("a first row that is the row above it")?;
-                    if row_end > canvas.len() {
-                        return Err("a frame taller than the video says".to_owned());
-                    }
-                    canvas.copy_within(above..row_at, row_at);
-                }
-                // What the frame before this one left here.
-                0x02 => {
-                    if index == 0 {
-                        return Err(
-                            "a first frame that is a difference against the frame before it"
-                                .to_owned(),
-                        );
-                    }
-                }
-                // Runs, adding up to the width.
-                0x01 => {
-                    let row = canvas
-                        .get_mut(row_at..row_end)
-                        .ok_or("a frame taller than the video says")?;
-                    at = runs_into(payload, at, row, columns)?;
-                }
-                other => return Err(format!("a row that begins {other:#04x}")),
-            }
-        }
-        if at != payload.len() {
-            return Err("a frame with bytes after its last row".to_owned());
-        }
+    /// Replace the picture and mark every source row whose decoded bytes
+    /// differ. AV1's motion compensation often leaves large regions exactly
+    /// unchanged; preserving that fact keeps the compositor's blur bounded.
+    fn play(&mut self, index: usize, frame: Frame) {
+        let next = picture(frame);
+        let stride = usize::try_from(u64::from(next.width) * 4).unwrap_or(0);
+        self.changed = next
+            .pixels
+            .chunks(stride.max(1))
+            .zip(self.shown.pixels.chunks(stride.max(1)))
+            .map(|(next, previous)| next != previous)
+            .collect();
+        self.shown = next;
         self.at = index;
-        Ok(())
+    }
+}
+
+/// Feed one temporal unit and take the picture it makes. The decoder uses a
+/// one-frame delay, so the configured single-threaded stream produces one
+/// picture per unit; a different stream is rejected before playback starts.
+fn decode(decoder: &mut Decoder, packet: &[u8]) -> Result<Frame, String> {
+    decoder.feed(packet)?;
+    decoder
+        .take()
+        .ok_or("a video packet that made no picture".to_owned())
+}
+
+/// An AV1 frame as the picture the Wayland client draws.
+fn picture(frame: Frame) -> Picture {
+    Picture {
+        width: frame.width,
+        height: frame.height,
+        pixels: frame.pixels,
     }
 }
 
@@ -753,7 +645,7 @@ fn be_wallpaper(shown: Shown) -> Result<String, String> {
 }
 
 /// What this client draws.
-#[derive(Clone, Debug, Default)]
+#[derive(Default)]
 enum Shown {
     /// The pattern it was given, which is what every entry point but a
     /// wallpaper's asks for.
@@ -2148,51 +2040,10 @@ mod tests {
         assert_eq!(doubled.len(), 32);
     }
 
-    /// One row of runs: `0x01` and each run's count and pixel.
-    fn runs(runs: &[(u16, u32)]) -> Vec<u8> {
-        let mut row = vec![0x01];
-        for (count, pixel) in runs {
-            row.extend_from_slice(&count.to_le_bytes());
-            row.extend_from_slice(&pixel.to_le_bytes());
-        }
-        row
-    }
-
-    /// A video's file: the header, and then each frame behind its length.
-    fn reel(width: u32, height: u32, period: u32, frames: &[Vec<u8>]) -> Vec<u8> {
-        let mut bytes = Movie::MAGIC.to_vec();
-        for number in [
-            width,
-            height,
-            u32::try_from(frames.len()).unwrap_or(0),
-            period,
-        ] {
-            bytes.extend_from_slice(&number.to_le_bytes());
-        }
-        for frame in frames {
-            bytes.extend_from_slice(&u32::try_from(frame.len()).unwrap_or(0).to_le_bytes());
-            bytes.extend_from_slice(frame);
-        }
-        bytes
-    }
-
-    /// The `XRGB8888` values of a buffer.
-    fn values(buffer: &[u8]) -> Vec<u32> {
-        buffer
-            .chunks_exact(4)
-            .map(|pixel| u32::from_le_bytes([pixel[0], pixel[1], pixel[2], pixel[3]]))
-            .collect()
-    }
-
-    /// A two-frame video, two pixels by two. The first frame names no frame
-    /// before it: its first row is runs and its second is the row above.
-    /// The second frame changes the top row only and leaves the bottom as
-    /// the frame before it left it, which is the whole point of the format.
-    fn two_frames() -> Vec<u8> {
-        let first = [runs(&[(2, 0x00FF_0000)]), vec![0x00]].concat();
-        let second = [runs(&[(1, 0x0000_FF00), (1, 0x0000_00FF)]), vec![0x02]].concat();
-        reel(2, 2, 40, &[first, second])
-    }
+    /// Four 64x64 AV1 frames, made by ffmpeg's `testsrc` filter. This lives
+    /// in the repository so both the host tests and the QEMU gate need no
+    /// encoder installed.
+    const VIDEO: &[u8] = include_bytes!("../tests/fixtures/tiny.ivf");
 
     /// Covering every row of a buffer a band at a time is the same bytes
     /// as covering it whole, and a band touches only its own rows: what
@@ -2232,42 +2083,36 @@ mod tests {
 
     #[test]
     fn a_video_plays_its_frames_in_turn_and_begins_again() {
-        let mut movie = Movie::parse(&two_frames()).expect("a video");
-        assert_eq!(movie.frames(), 2);
-        assert_eq!(movie.period(), Duration::from_millis(40));
-        // Parsing leaves the first frame shown: red, and its second row is
-        // the row above it.
-        assert_eq!(values(&movie.shown().cover(2, 2)), [0x00FF_0000; 4]);
-        // The second frame rewrites the top row and says nothing about the
-        // bottom, which keeps the first frame's red.
+        let mut movie = Movie::parse(VIDEO).expect("a video");
+        assert_eq!(movie.frames(), 4);
+        assert_eq!(movie.period(), Duration::from_millis(100));
+        let first = movie.shown().pixels.clone();
+        assert!(first.windows(4).any(|pixels| pixels != &first[..4]));
+        // The fixture is an animated test pattern, so each decoded packet
+        // changes the shown picture. At the end a new decoder starts at the
+        // first keyframe and reproduces the first frame exactly.
         movie.advance();
-        assert_eq!(
-            values(&movie.shown().cover(2, 2)),
-            [0x0000_FF00, 0x0000_00FF, 0x00FF_0000, 0x00FF_0000]
-        );
-        // And after the last frame comes the first, which names no frame
-        // before it and so undoes the second's rows completely.
+        assert_ne!(movie.shown().pixels, first);
         movie.advance();
-        assert_eq!(values(&movie.shown().cover(2, 2)), [0x00FF_0000; 4]);
+        movie.advance();
+        movie.advance();
+        assert_eq!(movie.shown().pixels, first);
     }
 
-    /// The damage a frame reports is the rows it changed, mapped through the
-    /// same scale its pixels went through: a two-row video on a four-row
-    /// screen whose bottom row changed damages the bottom two.
+    /// Damage comes from the rows that differ between decoded AV1 frames,
+    /// then follows the same cover scale as the pixels.
     #[test]
     fn a_frames_damage_is_the_rows_it_changed_through_the_scale() {
-        let mut movie = Movie::parse(&two_frames()).expect("a video");
-        // The first frame carries every row, so all of it is damaged.
-        assert_eq!(movie.damage(2, 2), [(0, 2)]);
-        // The second changes its top row and leaves the bottom, so the top
-        // row alone is damaged -- and on a screen twice as tall, the top two.
+        let mut movie = Movie::parse(VIDEO).expect("a video");
+        assert_eq!(movie.damage(64, 64), [(0, 64)]);
         movie.advance();
-        assert_eq!(movie.damage(2, 2), [(0, 1)]);
-        assert_eq!(movie.damage(4, 4), [(0, 2)]);
-        // Beginning again redraws everything, since the first frame names no
-        // frame before it.
-        movie.advance();
-        assert_eq!(movie.damage(2, 2), [(0, 2)]);
+        let source = movie.damage(64, 64);
+        let scaled = movie.damage(128, 128);
+        assert!(!source.is_empty());
+        assert_eq!(
+            scaled.iter().map(|(_, tall)| *tall).sum::<i32>(),
+            source.iter().map(|(_, tall)| *tall * 2).sum::<i32>()
+        );
     }
 
     /// Bands are the runs of changed rows, and a row the scale never reads is
@@ -2286,54 +2131,14 @@ mod tests {
     }
 
     #[test]
-    fn a_video_is_its_header_and_exactly_its_frames() {
-        assert!(Movie::parse(&two_frames()).is_ok());
-        let sound = |frames: &[Vec<u8>]| reel(2, 2, 40, frames);
+    fn a_video_is_ivf_and_all_of_its_packets_decode() {
+        assert!(Movie::parse(VIDEO).is_ok());
         for (what, bytes) in [
-            ("no header", b"FXVID".to_vec()),
-            (
-                "another file",
-                two_frames().iter().map(|byte| byte ^ 1).collect(),
-            ),
-            ("no frames", sound(&[])),
-            ("no size", reel(0, 0, 40, &[runs(&[(1, 0)])])),
-            ("no period", reel(2, 2, 0, &[runs(&[(2, 0)]), vec![0x00]])),
-            // A first frame cannot be a difference against the frame before
-            // it, because a loop that has ended begins again at this one.
-            (
-                "a first frame that carries nothing",
-                sound(&[vec![0x02, 0x02]]),
-            ),
-            // A first row has no row above it to be.
-            (
-                "a first row that is the row above",
-                sound(&[vec![0x00, 0x00]]),
-            ),
-            ("a row that is neither", sound(&[vec![0x07, 0x00]])),
-            // Runs that do not add up to the width, either way.
-            (
-                "runs that stop short",
-                sound(&[[runs(&[(1, 0)]), vec![0x00]].concat()]),
-            ),
-            (
-                "runs that overrun",
-                sound(&[[runs(&[(3, 0)]), vec![0x00]].concat()]),
-            ),
-            (
-                "a run of none",
-                sound(&[[runs(&[(0, 0)]), vec![0x00]].concat()]),
-            ),
-            // A frame short of its rows, and one with bytes after them.
-            ("a row short", sound(&[runs(&[(2, 0)])])),
-            (
-                "bytes after the last row",
-                sound(&[[runs(&[(2, 0)]), vec![0x00, 0x00]].concat()]),
-            ),
+            ("no header", b"DKI".as_slice()),
+            ("wrong codec", b"DKIF\0\0\x20\0VP90".as_slice()),
+            ("truncated packet", &VIDEO[..VIDEO.len() - 1]),
         ] {
-            assert!(
-                Movie::parse(&bytes).is_err(),
-                "{what} was taken for a video"
-            );
+            assert!(Movie::parse(bytes).is_err(), "{what} was taken for a video");
         }
     }
 }

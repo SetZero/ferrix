@@ -413,28 +413,24 @@ from `BootInfo`. What changes is what a person sees:
   `mpvpaper`, started from `exec-once`, which puts mpv on the same
   `background` layer surface `hyprpaper` and `swaybg` use. Ferrix cannot put
   mpv there, so the decoding moves to the side of the conversion that has a
-  decoder. An `mp4`, `webm`, `mkv` or `gif` in the pictures directory is now
-  kept as frames rather than as its first one, and `run-compositor` carries
-  it at `/etc/wallpaper.fxvid` and starts `/bin/pattern --video` on it
-  instead of `--wallpaper`. The format is `compositor_pattern::Movie`:
-  `FXVID01`, a width, a height, a count and a period, then each frame's
-  rows, each row either runs of a count and a pixel, the row above it, or
-  *what the frame before left there* — which, against a canvas kept between
-  frames, is no work at all. That last one is what makes it affordable: a
-  raw second of 1920x1080 is 250 MB and the initramfs is built into the
+  decoder. An `mp4`, `webm`, `mkv` or `gif` in the pictures directory is
+  transcoded by `ffmpeg` to 8-bit 4:2:0 AV1 in IVF, and `run-compositor`
+  carries it at `/etc/wallpaper.ivf` and starts `/bin/pattern --video` on it
+  instead of `--wallpaper`. `compositor_pattern::Movie` demuxes `DKIF`, feeds
+  its AV1 temporal units to rav1d, and converts I420 to XRGB8888 only as each
+  frame is due. The image retains compressed packets rather than raw frames:
+  a raw 1920x1080 second is 250 MB and the initramfs is built into the
   kernel. Frames are kept a quarter of the screen each way, ten a second,
-  for four seconds, and the client scales them to cover the screen the way
-  it scales any picture cut for another one. Five seconds of `ffmpeg`'s own
-  `testsrc` keeps as 40 frames of 480x270 in 3.7 MB, against 20.7 MB of raw
-  rows. The client keeps **two** buffers where a still wallpaper keeps one,
-  because a compositor releases a buffer when a later commit replaces it: a
-  client that drew once and waited for the release would wait for ever.
+  for four seconds, and the client scales them to cover the screen the way it
+  scales any picture cut for another one. The client keeps **two** buffers
+  where a still wallpaper keeps one, because a compositor releases a buffer
+  when a later commit replaces it: a client that drew once and waited for the
+  release would wait for ever.
 * **The client damages the rows that changed, not the screen (2026-09-18).**
-  A `0x02` row *is* a row the frame before left in place, so a frame knows
-  its own damage: `Movie::damage` maps those rows through the same scale the
-  pixels went through — one arithmetic in `Picture::cut`, because a row said
-  to have changed whose pixels the scale took from somewhere else is a row
-  the compositor would not redraw — and the client sends a
+  `Movie::damage` compares decoded source rows, maps changed rows through the
+  same scale the pixels went through — one arithmetic in `Picture::cut`,
+  because a row said to have changed whose pixels the scale took from
+  somewhere else is a row the compositor would not redraw — and sends a
   `damage_buffer` band for each run of them, up to sixty-four, after which
   one rectangle is cheaper than the list. A buffer not yet drawn into is
   damaged whole whatever the video says, since it holds nothing.
@@ -448,18 +444,15 @@ from `BootInfo`. What changes is what a person sees:
   releases a buffer when a later commit replaces it, so a client that drew
   once and waited for the release would wait for ever. That one was found by
   waiting for ever.
-* **`cargo xtask test-video` is the gate (2026-09-18).** Two frames, each one
-  flat colour, encoded by `crate::wallpaper::fixture` in code rather than by
-  `ffmpeg` — so the gate needs no decoder on the machine running it, and so
-  a screendump is judged against a colour rather than against a picture. It
-  boots the compositor with that wallpaper and **nothing else started**, so
-  the frame is the whole screen, and takes screendumps over QMP until it has
-  seen a screen that is mostly the first colour and a screen that is mostly
-  the second. What it proves is the whole path at once: the format, the
-  client that decodes and plays it, the layer surface, and the compositor
-  drawing one frame after another. It passes on x86-64 in four screendumps.
-  CI runs `test-boot` and no display gate, so this one is run by hand, as
-  `test-display` and `test-compositor` are.
+* **`cargo xtask test-video` is the gate (2026-09-18).** A four-frame AV1
+  test pattern is checked in as IVF, so the gate needs no `ffmpeg` or AV1
+  encoder on the machine that runs it. It boots the compositor with that
+  wallpaper and **nothing else started**, then takes QMP screendumps until it
+  sees two distinct non-flat frames. What it proves is the whole path at
+  once: the format, the client that decodes and plays it, the layer surface,
+  and the compositor drawing one frame after another. CI runs `test-boot` and
+  no display gate, so this one is run by hand, as `test-display` and
+  `test-compositor` are.
 * **What it costs, measured (2026-09-18), and the honest answer.** About one
   frame a second in `run-compositor` on this Windows machine — and **that is
   not the video path**. The guest runs under `tcg`: WHPX is compiled into

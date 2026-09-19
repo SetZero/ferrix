@@ -14,6 +14,7 @@
 //! it a window, take the configure, ack it, draw at the size it was given,
 //! attach and commit, then redraw whenever it is configured again.
 
+mod av1;
 pub mod client;
 
 pub use client::{

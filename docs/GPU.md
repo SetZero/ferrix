@@ -408,24 +408,23 @@ have somewhere to submit from.
 ### 3.6 The AV1 wallpaper, after the GPU (2026-09-19)
 
 The customer asked (2026-09-19) that the wallpaper load a real container
-rather than the run-length `.fxvid` frames, which for a long clip run to
-gigabytes. The path chosen is **AV1 decoded by rav1d in the guest**:
+rather than run-length `.fxvid` frames, which for a long clip run to
+gigabytes. This is now **AV1 in IVF, decoded by rav1d in the guest**:
 
-* **Host side** (`xtask/src/wallpaper.rs`): transcode the source to a small
-  AV1 elementary stream (or keep an `.mp4`/`.webm`'s AV1 track), rather than
-  decoding to `.fxvid` frames. `ffmpeg` on this host has `libaom-av1`,
-  `librav1e` and `libsvtav1`. Keep the container/stream on the image; it is
-  megabytes, not the initramfs-busting hundreds of `.fxvid`.
-* **Guest side** (`compositor/pattern`): add rav1d as a dependency, demux
-  the stream (a small IVF or a minimal mp4/Matroska demuxer for the AV1
-  track), feed OBUs to `dav1d_send_data`, pull frames with
-  `dav1d_get_picture`, convert YUV→RGB into the buffer the client already
-  scales and damages. `Movie` becomes a decoder rather than a run-length
-  reader; `Movie::damage` can stay whole-frame or diff decoded frames.
-* rav1d is BSD-2-Clause and builds static-musl for the target already
-  (proven). It is a large dependency; deny.toml allows its licence. The
-  decode cost is real CPU, but a wallpaper under an opaque window pauses on
-  frame callbacks as it does now, and the GPU by then draws the compositing.
+* **Host side** (`xtask/src/wallpaper.rs`): `cargo xtask wallpapers` asks
+  `ffmpeg` for 8-bit 4:2:0 AV1 in an IVF container (`libaom-av1`, a bounded
+  CRF and fast encoding). The image carries the resulting `.ivf`, which is
+  megabytes rather than hundreds of megabytes of raw frames.
+* **Guest side** (`compositor/pattern`): a small IVF demuxer feeds temporal
+  units to rav1d, converts the decoder's 8-bit I420 pictures to XRGB8888,
+  and retains compressed packets plus one decoded frame. It validates the
+  stream before startup, reopens the decoder at a loop boundary, and damages
+  only decoded rows whose pixels changed.
+* `cargo xtask test-video` carries a checked-in four-frame IVF test pattern,
+  so its QEMU gate requires neither `ffmpeg` nor an AV1 encoder. rav1d is
+  BSD-2-Clause, pure Rust with assembly disabled, and builds for the static
+  target. Decode cost remains CPU work, but a wallpaper under an opaque
+  window pauses with its frame callbacks as before.
 
 ### 3.7 Where steps 2 and 3b stand (2026-09-19)
 
