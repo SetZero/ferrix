@@ -87,10 +87,14 @@ const IOTLB_DOMAIN: u64 = 2 << 60;
 
 /// FSTS: a fault was lost for want of a free record. Write one to clear.
 const PFO: u32 = 1 << 0;
-/// Fault recording register, high half: the record holds a fault.
-const FRCD_F: u64 = 1 << 63;
-/// Fault recording register, high half: the faulting access was a read.
-const FRCD_READ: u64 = 1 << 62;
+/// Fault recording register, the top 32 bits of its high quad: the record
+/// holds a fault.
+///
+/// Kept as a 32-bit mask because this bit must be read by itself, before the
+/// rest of the record. See [`Unit::take_fault`].
+const FRCD_F: u32 = 1 << 31;
+/// The same word: the faulting access was a read.
+const FRCD_READ: u32 = 1 << 30;
 
 /// Root and context entries: present.
 const PRESENT: u64 = 1;
@@ -207,8 +211,8 @@ impl Unit {
         self.invalidate_context(CCMD_GLOBAL)?;
         self.invalidate_iotlb(IOTLB_GLOBAL)?;
         // A fault firmware left recorded would otherwise be read as ours.
-        if read64(self.registers, self.faults + 8) & FRCD_F != 0 {
-            self.registers.write32(self.faults + 12, 1 << 31);
+        if self.registers.read32(self.faults + 12) & FRCD_F != 0 {
+            self.registers.write32(self.faults + 12, FRCD_F);
         }
         self.registers.write32(FSTS, PFO);
         self.command(TE, "it never started translating")
@@ -220,18 +224,36 @@ impl Unit {
     /// QEMU's unit has one record, and drops a second fault from the same
     /// device while it is full, so a caller that wants a particular fault clears
     /// the record before provoking it.
+    ///
+    /// **F is read first, and alone.** A fault recording register is 128 bits
+    /// and this kernel reads it 32 at a time, so the order matters. The unit
+    /// fills the record before it announces it: QEMU's `vtd_record_frcd`
+    /// writes the low quad and then the high quad with F still clear -- its
+    /// comment says "Must not update F field now, should be done later" --
+    /// and a second write then sets F. The source id lives in the *low* half
+    /// of the high quad and F in the high half, so a read of the whole quad
+    /// low-half-first can take the source id from an empty record, be
+    /// overtaken by the unit recording a fault, and then read the F bit the
+    /// unit just set. The record then reads as a real fault belonging to
+    /// stream 0, which is what FX-1001 was: the probe's own page, at stream
+    /// 0x0 instead of 0x10, once in a few boots under KVM on a loaded host --
+    /// where a vmexit between two halves of a read is likeliest -- and never
+    /// under TCG. Reading F by itself first, and the rest only once it is set,
+    /// is correct by construction against that write order.
     pub(crate) fn take_fault(&self) -> Option<Fault> {
-        let high = read64(self.registers, self.faults + 8);
-        if high & FRCD_F == 0 {
+        let flags = self.registers.read32(self.faults + 12);
+        if flags & FRCD_F == 0 {
             return None;
         }
+        // F is set, so every other field was written before it and is whole.
+        let stream = self.registers.read32(self.faults + 8) & 0xFFFF;
         let low = read64(self.registers, self.faults);
-        self.registers.write32(self.faults + 12, 1 << 31);
+        self.registers.write32(self.faults + 12, FRCD_F);
         self.registers.write32(FSTS, PFO);
         Some(Fault {
-            stream: (high & 0xFFFF) as u32,
+            stream,
             page: low & !0xFFF,
-            write: high & FRCD_READ == 0,
+            write: flags & FRCD_READ == 0,
         })
     }
 

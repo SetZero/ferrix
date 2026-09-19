@@ -258,6 +258,17 @@ The kernel enumerates buses, because that needs ACPI (x86-64, AArch64) or a
 device tree (ARMv7-A, and AArch64 firmware that offers one) and privileged
 access. It does not drive devices.
 
+**And that is gated, not merely meant.** `scripts/check-device-access.py` reads
+every volatile access and port instruction under `kernel/` against
+`scripts/device-access-allowlist.json`, which says for each file whether it
+touches a device register, RAM a device also reads, or ordinary memory made
+volatile so a boot check cannot be optimised away. A register access outside the
+paths this section and §1 permit is refused, a file over its budget is refused,
+and an entry whose file no longer makes one is refused too, so the list cannot
+be kept warm. It runs in `cargo xtask check` and in CI. A script cannot tell the
+three kinds apart -- they are the same call in Rust -- so what it enforces is
+that somebody said which, in a diff, with a reason.
+
 For each device found, the kernel creates a device node and hands `devmgr` a
 handle (`docs/DEVMGR.md` is the protocol). `devmgr` matches a driver, spawns
 it in its own `Job`, and gives it:
@@ -285,6 +296,43 @@ userspace process that can write to any physical address, which is worse than an
 in-kernel driver, not better. VT-d/AMD-Vi on x86-64, SMMUv3 on AArch64. Where no
 IOMMU exists, drivers run in a degraded trusted mode and the kernel says so
 loudly at boot.
+
+**Isolation, per platform.** Whether that degraded mode is the one a machine is
+in is not a matter of opinion, so it is written down here and the kernel prints
+the line that decides it. Every row below was read from a boot, not assumed.
+
+| Machine or board | Bus and IOMMU found from | Driver DMA | The line that decides it |
+|---|---|---|---|
+| x86-64 `q35` | ACPI: MCFG, DMAR endpoint scopes | **translated**, VT-d at `0xfed90000` | `iommu 1 VT-d units and 0 SMMUv3s translating, 0 left alone`, and the domain check's `through a device's translated domain` |
+| AArch64 `virt` | ACPI: MCFG, IORT root complex mapping | **translated**, `SMMUv3` at `0x9050000` | `iommu 0 VT-d units and 1 SMMUv3s translating, 0 left alone`, and `through a device's translated domain` |
+| ARMv7-A `virt` | device tree: `iommu-map` to an `arm,smmu-v3` node | **untranslated — degraded trusted mode** | `iommu 0 VT-d units and 0 SMMUv3s translating`, then `iommu degraded trusted mode: no IOMMU domain is programmed, so device DMA reaches all of memory` |
+| STM32MP157D-DK1 | device tree; no PCI host bridge on the board | **untranslated — degraded trusted mode** | the same degraded line; the stage 9 lines find no PCI and no IOMMU |
+
+Read the unit counts and the domain check's one word, not the function counts:
+how many functions a machine places behind a unit depends on which devices the
+gate asked QEMU for (six on a plain x86-64 boot, eight with the network on), and
+a machine can place every function behind a unit it never programs — ARMv7-A
+does exactly that, which is why its row is decided by the degraded line and not
+by `0 bypassing, 0 unresolved`.
+
+The two untranslated rows are different failures and are not to be conflated:
+
+* **ARMv7-A has an `SMMUv3`, and the kernel does not program it.** U-Boot
+  2025.10's virtio-pci driver fails a heap assertion and resets when a device
+  offers `VIRTIO_F_ACCESS_PLATFORM`, so the 32-bit machine's virtio devices are
+  built without it and would bypass the unit whatever the kernel did. Stage 10's
+  exit criterion accepts this and `xtask test-boot` does not ask that machine for
+  an out-of-domain fault. It is a firmware limit, and it ends when the loader
+  stops being the one to touch those devices.
+* **The DK1 has no IOMMU at all.** Read on the board on 2026-09-13 under the
+  `stage-9.1-console-and-iommu` tag, not inferred from the STM32MP157
+  documentation: the boot finds no PCI host bridge and no unit. Any ring-3
+  driver on that board can write to all of memory, and no amount of kernel work
+  changes that.
+
+So the safety claim §7 opens with — a driver cannot DMA over the kernel or over
+another driver — holds on x86-64 and AArch64, and on the other two the kernel
+says at every boot that it does not.
 
 ---
 

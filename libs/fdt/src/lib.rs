@@ -674,6 +674,36 @@ impl<'a> Node<'a> {
         }
     }
 
+    /// The windows this node forwards, read from `ranges` as a PCI host
+    /// bridge's.
+    ///
+    /// Empty unless the node declares the cell counts PCI requires -- three
+    /// address cells and two size cells -- because a `ranges` decoded with
+    /// the wrong widths is not a conservative error: it yields windows that
+    /// look plausible and are not there.
+    #[must_use]
+    pub fn pci_windows(&self) -> PciWindows<'a> {
+        let declares = |name: &str, want: u32| {
+            self.property(name)
+                .and_then(|property| property.as_u32())
+                .is_some_and(|found| found == want)
+        };
+        let value = match self.property("ranges") {
+            Some(property)
+                if declares("#address-cells", PCI_ADDRESS_CELLS)
+                    && declares("#size-cells", PCI_SIZE_CELLS) =>
+            {
+                property.value
+            }
+            _ => &[],
+        };
+        PciWindows {
+            value,
+            offset: 0,
+            parent_address_cells: self.address_cells,
+        }
+    }
+
     /// Whether the node is in use: its `status` is absent, `okay` or `ok`.
     #[must_use]
     pub fn is_enabled(&self) -> bool {
@@ -1371,6 +1401,15 @@ impl<'a> Fdt<'a> {
         }
     }
 
+    /// Every ECAM host bridge with the windows it forwards, in tree order.
+    /// The same bridges [`Fdt::ecam_hosts`] yields.
+    #[must_use]
+    pub const fn ecam_hosts_with_windows(&self) -> EcamHostsWithWindows<'a> {
+        EcamHostsWithWindows {
+            nodes: self.nodes(),
+        }
+    }
+
     /// Every processor in `/cpus` that has not failed, in tree order.
     ///
     /// [`Cpus`] says which nodes count as processors and why.
@@ -1615,6 +1654,168 @@ fn ecam_host(node: &Node<'_>) -> Option<EcamHost> {
         start_bus,
         end_bus,
     })
+}
+
+/// Which address space a host bridge forwards one of its windows into.
+///
+/// The two-bit space code of a `ranges` entry's `phys.hi`. Configuration
+/// space is not a window and is never yielded.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PciSpace {
+    /// I/O space. A memory BAR may never be placed here, however much the
+    /// addresses happen to line up.
+    Io,
+    /// 32-bit memory space.
+    Memory32,
+    /// 64-bit memory space.
+    Memory64,
+}
+
+/// One window a PCI host bridge forwards, decoded from its `ranges`.
+///
+/// The two addresses are the point of this type. A BAR holds a *bus* address,
+/// and on a machine whose bridge translates, that is not the address the
+/// processor uses. So a BAR is matched against [`PciWindow::bus`] and the
+/// aperture built from [`PciWindow::cpu`]. QEMU's `virt` translates by zero,
+/// which makes the two equal and hides the distinction on every machine this
+/// kernel currently boots -- which is exactly why it is kept in the type
+/// rather than left to whoever reads the code next.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct PciWindow {
+    /// Which space the window forwards into.
+    pub space: PciSpace,
+    /// Whether the window is prefetchable. A prefetchable BAR may sit in a
+    /// non-prefetchable window; the reverse is not allowed, because the
+    /// bridge may then combine or prefetch reads that have side effects.
+    pub prefetchable: bool,
+    /// First address of the window in PCI bus space: what a BAR holds.
+    pub bus: u64,
+    /// The address the processor reaches that same byte at.
+    pub cpu: u64,
+    /// Length of the window in bytes.
+    pub size: u64,
+}
+
+impl PciWindow {
+    /// Whether the whole of `len` bytes at bus address `at` is inside this
+    /// window.
+    ///
+    /// A BAR that runs off the end of a window is not forwarded past it, so a
+    /// partly covered BAR is no more trustworthy than an uncovered one.
+    #[must_use]
+    pub const fn holds(&self, at: u64, len: u64) -> bool {
+        let Some(end) = at.checked_add(len) else {
+            return false;
+        };
+        let Some(window_end) = self.bus.checked_add(self.size) else {
+            return false;
+        };
+        len > 0 && at >= self.bus && end <= window_end
+    }
+
+    /// Where the processor reaches bus address `at`, if this window holds it.
+    #[must_use]
+    pub const fn translate(&self, at: u64, len: u64) -> Option<u64> {
+        if !self.holds(at, len) {
+            return None;
+        }
+        self.cpu.checked_add(at - self.bus)
+    }
+}
+
+/// `phys.hi` bits 25:24, the space code.
+const PCI_SPACE_SHIFT: u32 = 24;
+/// `phys.hi` bit 30: the window is prefetchable.
+const PCI_PREFETCHABLE: u32 = 1 << 30;
+/// A PCI node addresses its children with three cells, always.
+const PCI_ADDRESS_CELLS: u32 = 3;
+/// And sizes them with two.
+const PCI_SIZE_CELLS: u32 = 2;
+
+/// The windows of one host bridge's `ranges`, in blob order.
+///
+/// Stops at the first entry that does not decode, rather than skipping it: a
+/// malformed entry means the cell counts are not what they were taken to be,
+/// and every entry after it would be read at the wrong offset.
+#[derive(Clone, Copy, Debug)]
+pub struct PciWindows<'a> {
+    /// The `ranges` value, or empty when the node has none.
+    value: &'a [u8],
+    /// How far into it the walk has got.
+    offset: usize,
+    /// The parent's `#address-cells`: how wide the CPU address is.
+    parent_address_cells: u32,
+}
+
+impl Iterator for PciWindows<'_> {
+    type Item = PciWindow;
+
+    fn next(&mut self) -> Option<PciWindow> {
+        loop {
+            let mut offset = self.offset;
+            let high = u32_at(self.value, offset)?;
+            offset = offset.checked_add(4)?;
+            // The child address, whose low two cells are the bus address.
+            let bus = read_cells(self.value, &mut offset, PCI_ADDRESS_CELLS - 1)?;
+            let cpu = read_cells(self.value, &mut offset, self.parent_address_cells)?;
+            let size = read_cells(self.value, &mut offset, PCI_SIZE_CELLS)?;
+            self.offset = offset;
+            let space = match (high >> PCI_SPACE_SHIFT) & 0b11 {
+                0b01 => PciSpace::Io,
+                0b10 => PciSpace::Memory32,
+                0b11 => PciSpace::Memory64,
+                // Configuration space: the ECAM window, not a window a BAR
+                // can be placed in. Skipped rather than ended on.
+                _ => continue,
+            };
+            if size == 0 {
+                continue;
+            }
+            return Some(PciWindow {
+                space,
+                prefetchable: high & PCI_PREFETCHABLE != 0,
+                bus,
+                cpu,
+                size,
+            });
+        }
+    }
+}
+
+/// A host bridge and the windows it forwards.
+#[derive(Clone, Copy, Debug)]
+pub struct EcamHostWindows<'a> {
+    /// The bridge, as [`EcamHosts`] decodes it.
+    pub host: EcamHost,
+    /// What it forwards.
+    pub windows: PciWindows<'a>,
+}
+
+/// Every ECAM host bridge, with its windows, in tree order.
+///
+/// Separate from [`EcamHosts`] because the windows borrow the blob and the
+/// bridge does not: a caller that only wants to find configuration space
+/// should keep using the plain one.
+#[derive(Clone, Copy, Debug)]
+pub struct EcamHostsWithWindows<'a> {
+    /// The walk the hosts are found in.
+    nodes: Nodes<'a>,
+}
+
+impl<'a> Iterator for EcamHostsWithWindows<'a> {
+    type Item = EcamHostWindows<'a>;
+
+    fn next(&mut self) -> Option<EcamHostWindows<'a>> {
+        loop {
+            let node = self.nodes.next()?;
+            if let Some(host) = ecam_host(&node) {
+                return Some(EcamHostWindows {
+                    host,
+                    windows: node.pci_windows(),
+                });
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

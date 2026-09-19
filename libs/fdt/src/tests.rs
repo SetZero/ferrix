@@ -2390,3 +2390,232 @@ fn a_plain_interrupt_whose_parent_is_not_the_gic_is_not_followed() {
     let uart = fdt.find_compatible("st,stm32h7-uart").unwrap();
     assert_eq!(fdt.gic_interrupt_of(&uart, 0), None);
 }
+
+// ---------------------------------------------------------------------------
+// A host bridge's windows: what a BAR is allowed to be inside
+// ---------------------------------------------------------------------------
+
+/// QEMU `virt`'s own three `ranges` entries, as the machine writes them.
+const QEMU_VIRT_RANGES: &[u32] = &[
+    // I/O space at bus 0, forwarded to 0x3eff_0000, 64 KiB.
+    0x0100_0000,
+    0x0000_0000,
+    0x0000_0000,
+    0x0000_0000,
+    0x3eff_0000,
+    0x0000_0000,
+    0x0001_0000,
+    // 32-bit memory, translated by zero.
+    0x0200_0000,
+    0x0000_0000,
+    0x1000_0000,
+    0x0000_0000,
+    0x1000_0000,
+    0x0000_0000,
+    0x2eff_0000,
+    // 64-bit memory, high.
+    0x0300_0000,
+    0x0000_0080,
+    0x0000_0000,
+    0x0000_0080,
+    0x0000_0000,
+    0x0000_0080,
+    0x0000_0000,
+];
+
+fn windows(blob: &[u8]) -> Vec<PciWindow> {
+    parse(blob)
+        .ecam_hosts_with_windows()
+        .next()
+        .expect("one host")
+        .windows
+        .take(16)
+        .collect()
+}
+
+#[test]
+fn qemu_virt_forwards_an_io_and_two_memory_windows() {
+    let blob = tree(|b| {
+        ecam_node(b, 0x4010_0000, 0x1000_0000, |b| {
+            b.prop_cells("ranges", QEMU_VIRT_RANGES);
+        });
+    });
+    assert_eq!(
+        windows(&blob),
+        vec![
+            PciWindow {
+                space: PciSpace::Io,
+                prefetchable: false,
+                bus: 0,
+                cpu: 0x3eff_0000,
+                size: 0x1_0000,
+            },
+            PciWindow {
+                space: PciSpace::Memory32,
+                prefetchable: false,
+                bus: 0x1000_0000,
+                cpu: 0x1000_0000,
+                size: 0x2eff_0000,
+            },
+            PciWindow {
+                space: PciSpace::Memory64,
+                prefetchable: false,
+                bus: 0x80_0000_0000,
+                cpu: 0x80_0000_0000,
+                size: 0x80_0000_0000,
+            },
+        ],
+        "the windows QEMU's virt machine forwards"
+    );
+}
+
+#[test]
+fn a_bridge_that_translates_gives_back_the_processor_address() {
+    // The case QEMU cannot show, because it translates by zero: a BAR holds
+    // the bus address, and the aperture must be built from the other one.
+    let window = PciWindow {
+        space: PciSpace::Memory32,
+        prefetchable: false,
+        bus: 0x1000_0000,
+        cpu: 0xC000_0000,
+        size: 0x1000_0000,
+    };
+    assert_eq!(
+        window.translate(0x1000_2000, 0x1000),
+        Some(0xC000_2000),
+        "a BAR at bus 0x10002000 is reached at 0xC0002000"
+    );
+    assert_eq!(
+        window.translate(0x0FFF_F000, 0x1000),
+        None,
+        "a bus address below the window is not in it"
+    );
+}
+
+#[test]
+fn a_bar_running_off_the_end_of_a_window_is_not_held_by_it() {
+    let window = PciWindow {
+        space: PciSpace::Memory32,
+        prefetchable: false,
+        bus: 0x1000_0000,
+        cpu: 0x1000_0000,
+        size: 0x1_0000,
+    };
+    assert!(window.holds(0x1000_F000, 0x1000), "the last page is inside");
+    assert!(
+        !window.holds(0x1000_F000, 0x2000),
+        "a BAR the window forwards only half of is not forwarded"
+    );
+    assert!(
+        !window.holds(0x1000_0000, 0),
+        "an empty range is no BAR at all"
+    );
+    assert!(
+        !window.holds(u64::MAX, 0x1000),
+        "a length that wraps is refused rather than wrapped"
+    );
+}
+
+#[test]
+fn configuration_space_is_not_a_window_a_bar_may_sit_in() {
+    let blob = tree(|b| {
+        ecam_node(b, 0x4010_0000, 0x1000_0000, |b| {
+            b.prop_cells(
+                "ranges",
+                &[
+                    // Space code 00: configuration space.
+                    0x0000_0000,
+                    0x0000_0000,
+                    0x0000_0000,
+                    0x0000_0000,
+                    0x4010_0000,
+                    0x0000_0000,
+                    0x1000_0000, // Then a real memory window, which must still be found.
+                    0x0200_0000,
+                    0x0000_0000,
+                    0x1000_0000,
+                    0x0000_0000,
+                    0x1000_0000,
+                    0x0000_0000,
+                    0x1000_0000,
+                ],
+            );
+        });
+    });
+    assert_eq!(
+        windows(&blob),
+        vec![PciWindow {
+            space: PciSpace::Memory32,
+            prefetchable: false,
+            bus: 0x1000_0000,
+            cpu: 0x1000_0000,
+            size: 0x1000_0000,
+        }],
+        "the configuration entry is skipped and the walk goes on"
+    );
+}
+
+#[test]
+fn a_prefetchable_window_says_so() {
+    let blob = tree(|b| {
+        ecam_node(b, 0x4010_0000, 0x1000_0000, |b| {
+            b.prop_cells(
+                "ranges",
+                &[
+                    // Bit 30 set, on a 64-bit memory window.
+                    0x4300_0000,
+                    0x0000_0080,
+                    0x0000_0000,
+                    0x0000_0080,
+                    0x0000_0000,
+                    0x0000_0000,
+                    0x1000_0000,
+                ],
+            );
+        });
+    });
+    let found = windows(&blob);
+    assert_eq!(found.len(), 1, "one window");
+    assert!(found[0].prefetchable, "phys.hi bit 30 is prefetchable");
+    assert_eq!(found[0].space, PciSpace::Memory64);
+}
+
+#[test]
+fn ranges_is_not_read_when_the_node_declares_other_cell_counts() {
+    // The dangerous case: decoded with the wrong widths, `ranges` yields
+    // windows that look plausible and are not there, so a BAR could be
+    // admitted against a window nothing forwards.
+    let blob = tree(|b| {
+        b.begin("pcie@10000000");
+        b.prop_str("compatible", PCI_HOST_ECAM_COMPATIBLE);
+        b.prop_cells("reg", &[0, 0x4010_0000, 0, 0x1000_0000]);
+        b.prop_u32("#address-cells", 2);
+        b.prop_u32("#size-cells", 2);
+        b.prop_cells("ranges", QEMU_VIRT_RANGES);
+        b.end();
+    });
+    let found: Vec<PciWindow> = parse(&blob)
+        .ecam_hosts_with_windows()
+        .next()
+        .expect("one host")
+        .windows
+        .take(16)
+        .collect();
+    assert!(
+        found.is_empty(),
+        "two address cells is not PCI's three, so ranges is not decoded at all"
+    );
+}
+
+#[test]
+fn a_host_bridge_without_ranges_forwards_nothing() {
+    let blob = tree(|b| {
+        ecam_node(b, 0x4010_0000, 0x1000_0000, |b| {
+            b.prop_cells("bus-range", &[0, 0xff]);
+        });
+    });
+    assert!(
+        windows(&blob).is_empty(),
+        "no ranges is no window, not an open one"
+    );
+}

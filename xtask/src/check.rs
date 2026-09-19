@@ -38,6 +38,13 @@ pub(crate) fn run(args: &Args) -> Result<()> {
         python("scripts/check-asm-budget.py")
     })?;
 
+    // The seam §7 is built on: the kernel enumerates devices and drives none.
+    // A convenient register access in the wrong file is how that claim decays,
+    // and it decays silently, so it is asserted here rather than reviewed for.
+    step("device-access allow-list", || {
+        python("scripts/check-device-access.py")
+    })?;
+
     step("unsafe audit", || python("scripts/check-unsafe-audit.py"))?;
     step("panic audit", || python("scripts/check-panic-audit.py"))?;
 
