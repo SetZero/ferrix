@@ -1,0 +1,14 @@
+[package]
+name = "ferrix-virtio-console"
+description = "virtio-console driver logic: bring-up, the control conversation that opens a port, and its bytes, over an abstract transport and DMA memory"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+license.workspace = true
+publish = false
+
+[dependencies]
+ferrix-virtio.workspace = true
+
+[lints]
+workspace = true
