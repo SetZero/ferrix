@@ -331,14 +331,16 @@ nothing from the kernel and are pure host-tested logic.
 | 1 | this document | `docs/CLIPBOARD.md` | landed |
 | 2 | the vdagent protocol, encode and decode | `libs/vdagent` | landed |
 | 3 | the virtio-console device protocol | `libs/virtio/src/console.rs` | landed |
-| 4 | the console driver library | `libs/virtio-console` | to do |
+| 4 | the console driver library | `libs/virtio-console` | landed |
 | 5 | the driver and its socket, and `devmgr`'s kind | `user/vport`, `user/devmgr` | to do |
 | 6 | the agent | `compositor/vdagent` | to do |
 | 7 | paste and copy in the terminal | `compositor/term` | to do |
 | 8a | `--clipboard`: the device on the bus | `xtask` | landed |
 | 8b | starting the agent, and `test-clipboard` | `xtask` | to do |
 
-Landings 1 to 3 and 8a are on `main`. What is left needs no kernel, which is
+Landings 1 to 4 and 8a are on `main`, so every part that can be driven from
+`cargo test` is built and only the programs are left. What is left needs no
+kernel, which is
 §5's whole point, and 8a is worth its place in the order after all: `test-boot --arch x86_64
 --clipboard` reaches `FERRIX-BOOT-OK` with 9 PCI functions and 4 virtio
 transports where a plain boot has 8 and 3, and `devmgr` starts the same two
