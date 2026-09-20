@@ -45,6 +45,12 @@ win() { cygpath -m "$1"; }
 
 # shellcheck source=sources.sh
 . "$here/sources.sh"
+# Which of sources.sh's projects this builds. It takes coreutils alone, and
+# the two others -- findutils and diffutils -- are a row of their own: every
+# name they own is busybox's in the image until then. Naming it is what
+# sources.sh asks of a caller; without this the variables it sets are unset
+# and `set -u` stops the script at its first use of one.
+project coreutils
 
 step "toolchain"
 toolchain=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' "$ferrousli/../rust-toolchain.toml")
@@ -136,13 +142,13 @@ encoded=${encoded%$'\x1f'}
 set +e
 (
     cd "$build" || exit 1
+    # shellcheck disable=SC2086
     CC_x86_64_unknown_linux_musl="$(win "$clang")" \
     CFLAGS_x86_64_unknown_linux_musl="$cflags" \
     AR_x86_64_unknown_linux_musl="$(win "$llvm_ar")" \
     CARGO_TARGET_DIR="$build/target" \
     CARGO_ENCODED_RUSTFLAGS="$encoded" \
-        cargo build --release --locked --target "$TARGET" \
-        --no-default-features --features "$FEATURES" --bin coreutils
+        cargo build --release --locked --target "$TARGET" $FEATURES --bin coreutils
 ) > "$out/build.log" 2>&1
 status=$?
 set -e
