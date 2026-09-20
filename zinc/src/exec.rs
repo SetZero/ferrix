@@ -518,8 +518,20 @@ pub(crate) fn apply_redirs(sh: &mut Shell, redirs: &[Redir]) -> Result<Vec<(i32,
             RedirKind::MergeIn | RedirKind::MergeOut => {
                 let t = expand_single(sh, &r.target)?;
                 if t == b"-" {
-                    saved.push((r.fd, save_fd(r.fd)));
-                    close(r.fd);
+                    // `{d}>&-` closes the descriptor the parameter holds,
+                    // which is the whole point of having asked the shell to
+                    // pick one. Closing `r.fd` instead -- standard output,
+                    // for an operator written with `>` -- is how zsh's own
+                    // `compdump` used to take a shell's stdout away.
+                    let fd = match &r.varid {
+                        Some(var) => match varid_fd(sh, var) {
+                            Some(fd) => fd,
+                            None => return Err("bad file descriptor".to_owned()),
+                        },
+                        None => r.fd,
+                    };
+                    saved.push((fd, save_fd(fd)));
+                    close(fd);
                     continue;
                 }
                 if t == b"p" {
@@ -577,13 +589,44 @@ pub(crate) fn apply_redirs(sh: &mut Shell, redirs: &[Redir]) -> Result<Vec<(i32,
             sh.set_scalar(var, high.to_string().into_bytes());
             continue;
         }
+        // The file was opened before the descriptors it is for were saved,
+        // so it may have landed on one of them -- `exec 3>file` with 3
+        // closed opens *as* 3. Saving that would save the file itself and
+        // the `close` below would then undo the redirection, which is how
+        // `exec 3>file` came to leave 3 closed.
+        let mut keep = false;
         for fd in fds {
+            if fd == src {
+                saved.push((fd, -1));
+                keep = true;
+                continue;
+            }
             saved.push((fd, save_fd(fd)));
             dup2(src, fd);
         }
-        close(src);
+        if keep {
+            // `open_file` asks for O_CLOEXEC so a descriptor cannot leak
+            // while it is being put in place; one the shell keeps is one a
+            // program it runs inherits, so take the flag off again.
+            // SAFETY: fcntl F_SETFD has no memory-safety preconditions.
+            let _flags = unsafe { libc::fcntl(src, libc::F_SETFD, 0) };
+        } else {
+            close(src);
+        }
     }
     Ok(saved)
+}
+
+/// The descriptor a `{name}>` parameter holds, for the `{name}>&-` that
+/// closes it again.
+fn varid_fd(sh: &Shell, var: &[u8]) -> Option<i32> {
+    let value = sh.get(var)?.joined();
+    std::str::from_utf8(&tok::unmetafy(&value))
+        .ok()?
+        .trim()
+        .parse::<i32>()
+        .ok()
+        .filter(|&fd| fd >= 0)
 }
 
 pub(crate) fn restore_redirs(saved: Vec<(i32, i32)>) {
