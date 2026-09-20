@@ -123,8 +123,13 @@ pub(crate) fn eval_cond(sh: &mut Shell, c: &Cond) -> Result<bool, String> {
             match op {
                 CondOp::StrEq | CondOp::StrDeq | CondOp::StrNeq => {
                     let pat = expand_pattern(sh, b)?;
-                    let hit = Pattern::compile(&pat, sh.opt("extendedglob"))
-                        .matches(&tok::unmetafy(&left));
+                    let prog = Pattern::compile(&pat, sh.opt("extendedglob"));
+                    let hit = prog.matches(&tok::unmetafy(&left));
+                    // A pattern carrying `(#b)` leaves `$match` behind, which
+                    // is how vcs_info's backends read a ref apart.
+                    if hit && prog.has_backrefs() {
+                        crate::param::set_backrefs(sh, &prog, &left);
+                    }
                     hit != (*op == CondOp::StrNeq)
                 }
                 CondOp::StrLt | CondOp::StrGt => {
