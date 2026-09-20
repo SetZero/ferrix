@@ -3451,3 +3451,168 @@ mod tests {
         assert!(RUN_CONFIG.contains("bind = SUPER, RETURN, exec, /bin/term /bin/zinc"));
     }
 }
+
+// ---------------------------------------------------------------------------
+// `cargo xtask test-clipboard`: the host's clipboard and the guest's
+// ---------------------------------------------------------------------------
+
+/// What the viewer puts on its clipboard for the guest to paste.
+const HOST_TEXT: &str = "the host copied this into the guest";
+
+/// What the guest puts on its clipboard for the viewer to paste. Different
+/// text from the host's, because a path that answered a paste out of the
+/// wrong side's buffer would pass with one string and fail with two.
+const GUEST_TEXT: &str = "the guest copied this back out";
+
+/// The key that makes the guest copy, and what it is bound to.
+///
+/// A keybind rather than a third `exec-once`, because the two directions
+/// have to happen in order: a guest program that took the selection while
+/// the host's grab was still being pasted would be answering the wrong
+/// question. `docs/CLIPBOARD.md` §9 asks for both directions in one boot,
+/// and this is what makes one boot enough.
+const COPY_KEY: &str = "c";
+
+/// The configuration the clipboard boot is given.
+fn host_clipboard_config() -> String {
+    format!(
+        "# Carried into the initramfs by `cargo xtask test-clipboard`.\n\
+         exec-once = /bin/vdagent\n\
+         exec-once = /bin/clip paste\n\
+         bind = , C, exec, /bin/clip copy {GUEST_TEXT}\n"
+    )
+}
+
+/// `cargo xtask test-clipboard`: the whole guest path, both ways, against a
+/// viewer `xtask` plays itself.
+///
+/// `docs/CLIPBOARD.md` §9. The host half is not QEMU's `qemu-vdagent`, which
+/// bridges to the UI's clipboard and so needs a UI: it is a socket chardev
+/// that `xtask` connects to and speaks vdagent on. So what is under test is
+/// the device, `user/vport`, `compositor/vdagent` and the compositor's
+/// selection, and the host's own clipboard is no part of it.
+///
+/// # Errors
+///
+/// A sentence naming the direction that did not work.
+pub(crate) fn test_host_clipboard(args: &Args) -> Result<()> {
+    for arch in args.arches()? {
+        if crate::display::target(arch).is_none() {
+            println!("  {arch}: no virtio-gpu in QEMU's machine; skipped");
+            continue;
+        }
+        if arch == Arch::Armv7a {
+            println!("  {arch}: no virtio-pci clipboard on this machine; skipped");
+            continue;
+        }
+        let programs = Programs::build(arch)?;
+        clipboard_boot(arch, &programs, args)?;
+    }
+    Ok(())
+}
+
+/// One architecture's boot.
+fn clipboard_boot(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
+    let (image, kernel) = build_image(
+        arch,
+        programs,
+        &undithered(&host_clipboard_config()),
+        Carried::none(),
+        args,
+    )?;
+    // Not under `build/`: a `sockaddr_un` path is 107 bytes and a worktree
+    // deep enough to hold this tree is already most of them. The name
+    // carries the process id so that two runs at once do not share one.
+    let socket = std::env::temp_dir().join(format!(
+        "ferrix-clipboard-{}-{arch}.sock",
+        std::process::id()
+    ));
+    // A socket left by a run that was killed is one QEMU will refuse to
+    // bind over.
+    let _ = std::fs::remove_file(&socket);
+    let port = free_port()?;
+    let mut qemu_args = args.clone();
+    qemu_args.display = true;
+    qemu_args.qmp_port = Some(port);
+    qemu_args.clipboard = true;
+    qemu_args.clipboard_socket = Some(socket.clone());
+
+    let pasted = format!("clip: pasted {HOST_TEXT}");
+    let copied = format!("clip: copied {} bytes to the clipboard", GUEST_TEXT.len());
+    let mut got_back = None;
+    let hook = |watching: &mut Watching<'_>| -> Result<()> {
+        let mut qmp = Qmp::connect(port, Instant::now() + Duration::from_secs(10))?;
+        let up = watching.read_more(Instant::now() + SETTLE, |lines| {
+            lines.iter().any(|line| line.contains(MARKER))
+        })?;
+        if !up && !watching.lines().iter().any(|line| line.contains(MARKER)) {
+            return Err(Error::new(format!(
+                "{arch}: the compositor never printed `{MARKER}`"
+            )));
+        }
+
+        let mut viewer =
+            crate::vdagent::Viewer::connect(&socket, Instant::now() + Duration::from_secs(10))?;
+        viewer.handshake(Instant::now() + SETTLE)?;
+        println!("  {arch}: the guest's agent announced itself over the port");
+
+        // One: the host grabs, and the guest's `clip paste` must print it.
+        viewer.grab()?;
+        if !viewer.serve(HOST_TEXT, Instant::now() + SETTLE)? {
+            return Err(with_the_transcript(
+                &Error::new(format!(
+                    "{arch}: the guest never asked for the clipboard the host grabbed"
+                )),
+                watching,
+            ));
+        }
+        let landed = watching.read_more(Instant::now() + SETTLE, |lines| {
+            lines.iter().any(|line| line.contains(&pasted))
+        })?;
+        if !landed && !watching.lines().iter().any(|line| line.contains(&pasted)) {
+            return Err(with_the_transcript(
+                &Error::new(format!("{arch}: nothing in the guest said `{pasted}`")),
+                watching,
+            ));
+        }
+        println!("  {arch}: a program in the guest pasted what the host had copied");
+
+        // Two: the guest copies, and the viewer must be able to paste it.
+        press(&mut qmp, &[COPY_KEY])?;
+        got_back = viewer.paste(Instant::now() + SETTLE)?;
+        let _ = watching.read_more(Instant::now() + SETTLE, |lines| {
+            lines.iter().any(|line| line.contains(&copied))
+        })?;
+        Ok(())
+    };
+    let said = crate::qemu::watch_then(arch, &image, &kernel, &qemu_args, EITHER, hook)?;
+    let _ = std::fs::remove_file(&socket);
+
+    match got_back.as_deref() {
+        Some(GUEST_TEXT) => {}
+        Some(other) => {
+            return Err(Error::new(format!(
+                "{arch}: the viewer pasted {other:?} and not {GUEST_TEXT:?}"
+            )));
+        }
+        None => {
+            return Err(Error::new(format!(
+                "{arch}: the guest never grabbed the clipboard, or never answered for it.\n  {}",
+                said.join("\n  ")
+            )));
+        }
+    }
+    if let Some(line) = said.iter().find(|line| line.contains("FERRIX-PANIC")) {
+        return Err(Error::new(format!(
+            "{arch}: the kernel stopped while the clipboard ran: {}",
+            line.trim()
+        )));
+    }
+    println!(
+        "  {arch}: {} bytes went from the host's clipboard into a guest program and {} came back \
+         out of another, through the device, the driver, the agent and the compositor",
+        HOST_TEXT.len(),
+        GUEST_TEXT.len()
+    );
+    Ok(())
+}

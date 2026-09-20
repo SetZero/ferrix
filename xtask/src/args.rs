@@ -99,6 +99,14 @@ pub(crate) struct Args {
     /// the reason `net` gives: it puts another device on the bus, and the bus
     /// a check enumerates should be the bus it has always enumerated.
     pub(crate) clipboard: bool,
+    /// Where the clipboard's chardev listens, when the gate is driving it.
+    ///
+    /// Not a command line flag: `cargo xtask test-clipboard` sets it,
+    /// because `docs/CLIPBOARD.md` §9's test does not use QEMU's
+    /// `qemu-vdagent` chardev at all. That one bridges to the UI's clipboard
+    /// and a headless boot has no UI to bridge to, so the gate attaches a
+    /// plain socket instead and speaks vdagent on it as a viewer would.
+    pub(crate) clipboard_socket: Option<std::path::PathBuf>,
     /// `--input`: a virtio keyboard and a virtio tablet on the bus, which
     /// QMP's `input-send-event` drives. `test-input` turns it on, and
     /// `--display` brings them as well.

@@ -1150,10 +1150,28 @@ fn attach_clipboard(command: &mut Command, arch: Arch, args: &Args) {
     if !args.clipboard || arch == Arch::Armv7a {
         return;
     }
-    let _ = command.args([
-        "-chardev",
-        "qemu-vdagent,id=vdagent,name=vdagent,clipboard=on,mouse=off",
-    ]);
+    match args.clipboard_socket.as_deref() {
+        // The gate's own peer (`docs/CLIPBOARD.md` §9): QEMU listens and
+        // `xtask` connects, which also makes the connection the moment the
+        // port's host end opens -- a socket chardev is open when, and only
+        // when, something is attached to it, which is exactly the
+        // `PORT_OPEN` the guest's driver waits for.
+        Some(path) => {
+            let _ = command.args([
+                "-chardev",
+                &format!(
+                    "socket,id=vdagent,path={},server=on,wait=off",
+                    path.display()
+                ),
+            ]);
+        }
+        None => {
+            let _ = command.args([
+                "-chardev",
+                "qemu-vdagent,id=vdagent,name=vdagent,clipboard=on,mouse=off",
+            ]);
+        }
+    }
     let _ = command.args([
         "-device",
         "virtio-serial-pci,id=vdagent-bus,disable-legacy=on,iommu_platform=on",

@@ -22,6 +22,11 @@ ferrix-elf.workspace = true
 # TCP parser in the build tool, disagreeing with the kernel's about a length
 # field at the worst possible moment; this one is already fuzzed.
 ferrix-netwire.workspace = true
+# The vdagent protocol, so that the clipboard gate speaks the host's half
+# with the same encoder and decoder the guest's agent uses. The crate is
+# bytes and nothing else -- it owns no clipboard and no state -- so a gate
+# built on it still asserts what the guest did, on the far side of a device.
+ferrix-vdagent.workspace = true
 
 [dev-dependencies]
 # The kernel's own cpio reader, so the archive `initramfs.rs` writes is tested
