@@ -1408,26 +1408,215 @@ fn kill(sh: &mut Shell, args: &[Vec<u8>]) -> i32 {
     status
 }
 
+/// `umask [-S] [mask]`, zsh's `bin_umask` in `builtin.c`.
+///
+/// With no mask the current one is printed; with one it is set, from octal
+/// digits or from a *symbolic mode* -- the `[ugoa][-+=][rwx]` form `chmod`
+/// takes, which zsh accepts here and which oh-my-zsh's installer opens with:
+///
+/// ```text
+/// umask g-w,o-w
+/// ```
+///
+/// A symbolic mode names the permissions to **leave**, so what it says has to
+/// be complemented before it becomes a mask; [`umask_symbolic_mask`] is that
+/// arithmetic.
 fn umask(sh: &mut Shell, args: &[Vec<u8>]) -> i32 {
-    match args.first() {
-        None => {
-            // SAFETY: umask has no memory-safety preconditions.
-            let m = unsafe { libc::umask(0o022) };
-            // SAFETY: as above; restores the value just read.
-            let _r = unsafe { libc::umask(m) };
-            out(sh, 1, format!("{m:03o}\n").as_bytes())
+    let mut symbolic = false;
+    let mut rest = args;
+    // An option is a `-` with letters after it. A lone `-` or a `--` ends
+    // them, and a mask never begins with a `-`, so anything else is one.
+    while let Some(arg) = rest.first() {
+        if arg.first() != Some(&b'-') {
+            break;
         }
-        Some(a) => match u32::from_str_radix(&lossy(a), 8) {
-            Ok(m) => {
-                // SAFETY: umask has no memory-safety preconditions.
-                let _old = unsafe { libc::umask(m as libc::mode_t) };
-                0
+        rest = rest.get(1..).unwrap_or(&[]);
+        if arg.len() < 2 || arg.as_slice() == b"--" {
+            break;
+        }
+        for &c in arg.get(1..).unwrap_or(&[]) {
+            if c == b'S' {
+                symbolic = true;
+            } else {
+                sh.error_at("umask", &format!("bad option: -{}", char::from(c)));
+                return 1;
             }
-            Err(_) => {
-                sh.error_at("umask", &format!("bad umask: {}", lossy(a)));
-                1
+        }
+    }
+    if rest.len() > 1 {
+        sh.error_at("umask", "too many arguments");
+        return 1;
+    }
+    let Some(spec) = rest.first() else {
+        let text = if symbolic {
+            umask_symbolic(current_umask())
+        } else {
+            umask_octal(current_umask())
+        };
+        return out(sh, 1, text.as_bytes());
+    };
+    let spec = tok::unmetafy(spec);
+    let mask = if spec.first().is_some_and(u8::is_ascii_digit) {
+        match umask_octal_mask(&spec) {
+            Some(mask) => mask,
+            None => {
+                sh.error_at("umask", "bad umask");
+                return 1;
             }
-        },
+        }
+    } else {
+        match umask_symbolic_mask(current_umask(), &spec) {
+            Ok(mask) => mask,
+            Err(bad) => {
+                sh.error_at("umask", &bad.message());
+                return 1;
+            }
+        }
+    };
+    // SAFETY: umask has no memory-safety preconditions.
+    let _old = unsafe { libc::umask(mask as libc::mode_t) };
+    0
+}
+
+/// The file-creation mask, read by setting it and putting it back: there is
+/// no system call that only reads it.
+fn current_umask() -> u32 {
+    // SAFETY: umask has no memory-safety preconditions.
+    let mask = unsafe { libc::umask(0o022) };
+    // SAFETY: as above; restores the value just read.
+    let _restored = unsafe { libc::umask(mask) };
+    mask
+}
+
+/// The mask in octal, printed as zsh prints it: three digits, with a leading
+/// zero in front of them when the owner's digit is not zero. `022` and `007`
+/// print as themselves, `222` as `0222`.
+fn umask_octal(mask: u32) -> String {
+    if mask & 0o700 == 0 {
+        format!("{mask:03o}\n")
+    } else {
+        format!("{mask:04o}\n")
+    }
+}
+
+/// The mask under `-S`: the permissions it *leaves*, in the form a symbolic
+/// mode is written in, so that `umask -S` prints something `umask` takes
+/// back. A mask of `022` is `u=rwx,g=rx,o=rx`.
+fn umask_symbolic(mask: u32) -> String {
+    let mut text = String::with_capacity(20);
+    for (who, shift) in [(b'u', 6), (b'g', 3), (b'o', 0)] {
+        if !text.is_empty() {
+            text.push(',');
+        }
+        text.push(char::from(who));
+        text.push('=');
+        let left = (!mask >> shift) & 7;
+        for (bit, letter) in [(4, 'r'), (2, 'w'), (1, 'x')] {
+            if left & bit != 0 {
+                text.push(letter);
+            }
+        }
+    }
+    text.push('\n');
+    text
+}
+
+/// An octal mask: `0` to `7` and nothing else, however many digits.
+///
+/// What overflows is what the kernel would ignore anyway -- it keeps the low
+/// nine bits -- so the digits are folded in and the excess left to it, as
+/// zsh's own loop does.
+fn umask_octal_mask(spec: &[u8]) -> Option<u32> {
+    let mut mask: u32 = 0;
+    for &c in spec {
+        if !(b'0'..=b'7').contains(&c) {
+            return None;
+        }
+        mask = mask.wrapping_mul(8).wrapping_add(u32::from(c - b'0'));
+    }
+    Some(mask)
+}
+
+/// What a symbolic mode can be wrong in, with the character that was wrong.
+#[derive(Debug, PartialEq, Eq)]
+enum BadMode {
+    /// Not `+`, `-` or `=` where an operator belongs.
+    Operator(u8),
+    /// Not `r`, `w` or `x` among the permissions.
+    Permission(u8),
+    /// It ended too soon: `u` with no operator after it, or nothing at all.
+    Short,
+}
+
+impl BadMode {
+    /// What zsh says about it.
+    fn message(&self) -> String {
+        match self {
+            BadMode::Operator(c) => {
+                format!("bad symbolic mode operator: {}", char::from(*c))
+            }
+            BadMode::Permission(c) => {
+                format!("bad symbolic mode permission: {}", char::from(*c))
+            }
+            BadMode::Short => "bad umask".to_owned(),
+        }
+    }
+}
+
+/// Apply a symbolic mode to `mask`: `[ugoa]*[-+=][rwx]*`, comma-separated.
+///
+/// Each clause names the permissions to leave, so the mask gets their
+/// complement: `g-w` takes write away from the group, which *sets* `0020` in
+/// the mask, and `u=rwx` leaves the owner everything, which clears `0700`.
+/// Naming nobody means everybody, as zsh reads it, so `+w` is `a+w`.
+fn umask_symbolic_mask(mut mask: u32, spec: &[u8]) -> Result<u32, BadMode> {
+    let mut rest = spec;
+    loop {
+        let mut whom = 0;
+        while let Some(&c) = rest.first() {
+            whom |= match c {
+                b'u' => 0o700,
+                b'g' => 0o070,
+                b'o' => 0o007,
+                b'a' => 0o777,
+                _ => break,
+            };
+            rest = rest.get(1..).unwrap_or(&[]);
+        }
+        if whom == 0 {
+            whom = 0o777;
+        }
+        let Some((&op, tail)) = rest.split_first() else {
+            return Err(BadMode::Short);
+        };
+        if !matches!(op, b'+' | b'-' | b'=') {
+            return Err(BadMode::Operator(op));
+        }
+        rest = tail;
+        let mut perm = 0;
+        while let Some(&c) = rest.first() {
+            if c == b',' {
+                break;
+            }
+            perm |= match c {
+                b'r' => 0o444,
+                b'w' => 0o222,
+                b'x' => 0o111,
+                _ => return Err(BadMode::Permission(c)),
+            };
+            rest = rest.get(1..).unwrap_or(&[]);
+        }
+        let perm: u32 = perm & whom;
+        mask = match op {
+            b'+' => mask & !perm,
+            b'-' => mask | perm,
+            _ => (mask & !whom) | (whom & !perm),
+        };
+        // What is left is nothing, or the comma before the next clause.
+        let Some(tail) = rest.get(1..) else {
+            return Ok(mask);
+        };
+        rest = tail;
     }
 }
 
@@ -1569,4 +1758,101 @@ fn getopts(sh: &mut Shell, args: &[Vec<u8>]) -> i32 {
         sh.optpos = idx + 1;
     }
     0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BadMode, umask_octal, umask_octal_mask, umask_symbolic, umask_symbolic_mask};
+
+    /// The form zsh prints a mask in: three octal digits, and a fourth `0` in
+    /// front of them once the owner's digit is not zero.
+    #[test]
+    fn a_mask_prints_the_way_zsh_prints_it() {
+        assert_eq!(umask_octal(0o022), "022\n");
+        assert_eq!(umask_octal(0o007), "007\n");
+        assert_eq!(umask_octal(0o000), "000\n");
+        assert_eq!(umask_octal(0o222), "0222\n");
+        assert_eq!(umask_octal(0o777), "0777\n");
+        assert_eq!(umask_octal(0o100), "0100\n");
+    }
+
+    /// `-S` prints the permissions the mask leaves, not the mask.
+    #[test]
+    fn dash_s_prints_what_the_mask_leaves() {
+        assert_eq!(umask_symbolic(0o022), "u=rwx,g=rx,o=rx\n");
+        assert_eq!(umask_symbolic(0o000), "u=rwx,g=rwx,o=rwx\n");
+        assert_eq!(umask_symbolic(0o777), "u=,g=,o=\n");
+        assert_eq!(umask_symbolic(0o111), "u=rw,g=rw,o=rw\n");
+    }
+
+    #[test]
+    fn octal_digits_are_seven_at_most() {
+        assert_eq!(umask_octal_mask(b"022"), Some(0o022));
+        assert_eq!(umask_octal_mask(b"0022"), Some(0o022));
+        assert_eq!(umask_octal_mask(b"8"), None);
+        assert_eq!(umask_octal_mask(b"09x"), None);
+    }
+
+    /// The line oh-my-zsh's installer opens with, from either of the two
+    /// masks a machine is likely to have.
+    #[test]
+    fn the_line_oh_my_zsh_installs_with() {
+        assert_eq!(umask_symbolic_mask(0o002, b"g-w,o-w"), Ok(0o022));
+        assert_eq!(umask_symbolic_mask(0o022, b"g-w,o-w"), Ok(0o022));
+    }
+
+    /// A clause names the permissions to leave, so the mask takes their
+    /// complement, and `=` decides every bit of everyone it names.
+    #[test]
+    fn a_clause_names_what_is_left_rather_than_what_is_masked() {
+        assert_eq!(umask_symbolic_mask(0o077, b"u=rwx,g=rx,o="), Ok(0o027));
+        assert_eq!(umask_symbolic_mask(0o022, b"ug=rw,o=r"), Ok(0o113));
+        assert_eq!(umask_symbolic_mask(0o022, b"go="), Ok(0o077));
+        assert_eq!(umask_symbolic_mask(0o022, b"="), Ok(0o777));
+    }
+
+    /// Naming nobody is naming everybody, as zsh reads it.
+    #[test]
+    fn no_one_named_is_everyone() {
+        assert_eq!(umask_symbolic_mask(0o022, b"a-w"), Ok(0o222));
+        assert_eq!(umask_symbolic_mask(0o022, b"-w"), Ok(0o222));
+        assert_eq!(umask_symbolic_mask(0o022, b"+w"), Ok(0o000));
+        assert_eq!(umask_symbolic_mask(0o022, b"a+rwx"), Ok(0o000));
+        // An operator with no permissions after it changes nothing.
+        assert_eq!(umask_symbolic_mask(0o022, b"+"), Ok(0o022));
+    }
+
+    /// The three things zsh complains about, and which it complains of.
+    #[test]
+    fn what_a_bad_mode_is_called() {
+        assert_eq!(
+            umask_symbolic_mask(0o022, b"q"),
+            Err(BadMode::Operator(b'q'))
+        );
+        assert_eq!(
+            umask_symbolic_mask(0o022, b"u=r,,g=w"),
+            Err(BadMode::Operator(b','))
+        );
+        assert_eq!(
+            umask_symbolic_mask(0o022, b"u=rwX"),
+            Err(BadMode::Permission(b'X'))
+        );
+        assert_eq!(
+            umask_symbolic_mask(0o022, b"ug+s"),
+            Err(BadMode::Permission(b's'))
+        );
+        // Who, and then nothing: zsh calls this one a bad umask.
+        assert_eq!(umask_symbolic_mask(0o022, b"u"), Err(BadMode::Short));
+        assert_eq!(umask_symbolic_mask(0o022, b"u+w,g"), Err(BadMode::Short));
+        assert_eq!(umask_symbolic_mask(0o022, b""), Err(BadMode::Short));
+        assert_eq!(
+            BadMode::Operator(b'q').message(),
+            "bad symbolic mode operator: q"
+        );
+        assert_eq!(
+            BadMode::Permission(b'X').message(),
+            "bad symbolic mode permission: X"
+        );
+        assert_eq!(BadMode::Short.message(), "bad umask");
+    }
 }
