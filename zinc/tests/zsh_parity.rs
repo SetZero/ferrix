@@ -219,3 +219,54 @@ fn a_replacement_pattern_may_escape_its_delimiter() {
     assert_eq!(run("r=a/b/c; echo \"${r/\\//-}\""), "a-b/c\n");
     assert_eq!(run("r=abc; echo \"${r/b/X}\""), "aXc\n");
 }
+
+/// `zstyle` keeps a real database: the most specific pattern that matches the
+/// context answers. A `zstyle` that answered everything made `vcs_info`
+/// believe its debug styles were set and print its whole trace into the
+/// middle of agnoster's prompt.
+#[test]
+fn a_style_is_answered_by_the_most_specific_pattern() {
+    let db = "zstyle ':a:*' col A1 A2; zstyle '*:b' col B1; ";
+    assert_eq!(
+        run(&format!("{db}zstyle -s ':a:b' col v; echo $v")),
+        "A1 A2\n"
+    );
+    assert_eq!(
+        run(&format!("{db}zstyle -s ':a:b' col v -; echo $v")),
+        "A1-A2\n"
+    );
+    assert_eq!(
+        run(&format!("{db}zstyle -a ':a:b' col a; echo ${{#a}}")),
+        "2\n"
+    );
+    // Weight, not the order they were written in: `*` is worth 2, `:` 3 and
+    // anything else 4, so the pattern that spells more out comes first.
+    let both = "zstyle ':*:b' k P1; zstyle ':a*' k P2; ";
+    assert_eq!(run(&format!("{both}zstyle -s ':a:b' k v; echo $v")), "P1\n");
+    // `-t` is false for an undefined style and `-T` is true, which is the
+    // difference vcs_info leans on.
+    assert_eq!(
+        run("zstyle ':x:*' f yes; zstyle -t ':x:1' f; echo $?"),
+        "0\n"
+    );
+    assert_eq!(
+        run("zstyle ':x:*' f no; zstyle -t ':x:1' f; echo $?"),
+        "1\n"
+    );
+    assert_eq!(run("zstyle -t ':none:1' f; echo $?"), "2\n");
+    assert_eq!(run("zstyle -T ':none:1' f; echo $?"), "0\n");
+    assert_eq!(
+        run("zstyle ':x:*' f yes; zstyle -b ':x:1' f v; echo $v"),
+        "yes\n"
+    );
+    assert_eq!(run("zstyle -b ':none:1' f v; echo $v"), "no\n");
+    // `-e` is code, run at each lookup, whose `reply` is the value.
+    assert_eq!(
+        run("zstyle -e ':e:*' k 'reply=(EV)'; zstyle -s ':e:1' k v; echo $v"),
+        "EV\n"
+    );
+    // `-d` forgets, and `-L` prints definitions back as commands.
+    assert_eq!(run("zstyle ':p:*' k v1; zstyle -L"), "zstyle ':p:*' k v1\n");
+    assert_eq!(run("zstyle ':p:*' k v1; zstyle -d; zstyle -L"), "");
+}
+

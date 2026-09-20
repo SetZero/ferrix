@@ -97,8 +97,9 @@ pub(crate) fn run(sh: &mut Shell, args: &[Vec<u8>]) -> i32 {
     let Some(name) = args.first() else { return 0 };
     let rest = args.get(1..).unwrap_or(&[]);
     match name.as_slice() {
-        b":" | b"true" | b"hash" | b"rehash" | b"unhash" | b"zstyle" | b"bindkey" | b"compdef"
-        | b"zle" | b"ulimit" => 0,
+        b":" | b"true" | b"hash" | b"rehash" | b"unhash" | b"bindkey" | b"compdef" | b"zle"
+        | b"ulimit" => 0,
+        b"zstyle" => crate::zstyle::run(sh, rest),
         // An unavailable optional module must fail quietly.  Returning success
         // makes callers such as compaudit invoke builtins the module did not
         // actually install (notably `zstat`).

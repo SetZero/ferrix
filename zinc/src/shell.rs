@@ -130,6 +130,8 @@ pub(crate) struct Shell {
     /// The shell's ends of the pipes `<(...)` and `>(...)` in the command
     /// being run opened, closed once it has finished with them.
     pub(crate) procsubs: Vec<i32>,
+    /// `zstyle`'s database: a style name and the patterns defined for it.
+    pub(crate) styles: Vec<crate::zstyle::Style>,
 }
 
 /// The id `name` asks for, read from the kernel each time rather than kept:
@@ -310,6 +312,7 @@ impl Shell {
             at_prompt: false,
             script: Vec::new(),
             procsubs: Vec::new(),
+            styles: Vec::new(),
         };
         for (k, v) in [
             ("IFS", &b" \t\n\x83 "[..]),

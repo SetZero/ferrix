@@ -30,6 +30,7 @@ mod regex;
 mod shell;
 mod tok;
 mod zle;
+mod zstyle;
 
 use std::os::unix::ffi::OsStrExt;
 
