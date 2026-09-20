@@ -137,6 +137,64 @@ fn commands_says_which_programs_exist() {
     assert_eq!(run("[[ -x $commands[sh] ]] && echo yes"), "yes\n");
 }
 
+/// `<(cmd)` and `>(cmd)`: the word is the name of a pipe the command runs
+/// on the other end of. oh-my-zsh's own lib reaches `source <(dircolors -b)`
+/// before any theme is loaded.
+#[test]
+fn process_substitution_names_a_pipe() {
+    assert_eq!(run("cat <(echo hi)"), "hi\n");
+    assert_eq!(run("source <(echo x=5); echo $x"), "5\n");
+    assert_eq!(run("cat <(echo a) <(echo b)"), "a\nb\n");
+    // The parentheses inside belong to the command, not to the construct.
+    assert_eq!(run("cat <(echo '(x)')"), "(x)\n");
+    assert_eq!(run("cat <((echo nested))"), "nested\n");
+    // As a redirection target, either way round.
+    assert_eq!(run("wc -l < <(printf 'a\\nb\\n')"), "2\n");
+    // The name is a word, so it can stand in the middle of one.
+    assert!(run("echo A<(echo b)C").starts_with("A/proc/self/fd/"));
+    // `<` also begins a numeric glob, which is a pattern and not a command.
+    assert_eq!(run("[[ 5 = <-> ]] && echo num"), "num\n");
+    assert_eq!(run("[[ 12 = <1-20> ]] && echo in"), "in\n");
+    assert_eq!(run("case 7 in <->) echo digits;; esac"), "digits\n");
+}
+
+/// A shell that keeps its end of the pipe open must also let go of it, or a
+/// prompt that substitutes on every draw runs the shell out of descriptors.
+#[test]
+fn process_substitution_closes_its_descriptors() {
+    assert_eq!(
+        run("for i in $(seq 1 300); do cat <(echo x) >/dev/null; done; echo done"),
+        "done\n"
+    );
+}
+
+/// A multibyte character survives being quoted. The shell escapes some
+/// bytes internally, and escaping them twice is what turned agnoster's and
+/// avit's glyphs into nonsense.
+#[test]
+fn a_multibyte_character_survives_quoting() {
+    // U+25B6, whose middle byte is one the shell uses for a token of its own.
+    assert_eq!(run("echo '\u{25b6}'"), "\u{25b6}\n");
+    assert_eq!(run("echo \"\u{25b6}\""), "\u{25b6}\n");
+    assert_eq!(run("echo \u{25b6}"), "\u{25b6}\n");
+    assert_eq!(run("v='\u{25b6}'; echo $v"), "\u{25b6}\n");
+    assert_eq!(run("echo $'\\u25b6'"), "\u{25b6}\n");
+    assert_eq!(run("echo $'\\xe2\\x96\\xb6'"), "\u{25b6}\n");
+    // Quoting still keeps a glob character literal.
+    assert_eq!(run("echo '*'"), "*\n");
+}
+
+/// `%n` and `$USERNAME` are the password database's answer, not `$USER`:
+/// agnoster asks `$USERNAME` whether the user is worth naming at all.
+#[test]
+fn the_user_is_named_by_the_password_database() {
+    let who = run("print -Pn -- '%n'");
+    assert!(!who.is_empty(), "%n gave nothing");
+    assert_eq!(run("echo $USERNAME"), format!("{who}\n"));
+    // A bogus $USER does not change either of them.
+    assert_eq!(run("USER=nobody; print -Pn -- '%n'"), who);
+}
+
 /// A `${v/pat/repl}` whose pattern holds an escaped delimiter. agnoster
 /// turns a ref into a branch name with `${ref/refs\/heads\//…}`.
 #[test]
