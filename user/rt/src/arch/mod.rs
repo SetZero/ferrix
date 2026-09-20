@@ -16,10 +16,12 @@
 //!
 //! It also owns the two things about a *Linux* call that are the
 //! architecture's rather than the caller's: the numbers, which are a
-//! different table per architecture, and the calls the tables disagree about
-//! spelling -- `unlink`, which the newer ones have only as `unlinkat`. A
-//! caller in `crate::linux` therefore names an operation and never an
-//! architecture.
+//! different table per architecture; the calls the tables disagree about
+//! spelling -- `unlink`, which the newer ones have only as `unlinkat`; and
+//! the width of a word a call writes, since a `timespec` is two of them and
+//! a caller that guessed wrong would be handing the kernel the wrong amount
+//! of its own stack. A caller in `crate::linux` therefore names an operation
+//! and never an architecture.
 //!
 //! This is the facade: the one place under `user/` that selects on
 //! `target_arch`, for the reason `kernel/src/arch/mod.rs` is the kernel's.
@@ -32,8 +34,8 @@ mod armv7a;
 mod x86_64;
 
 #[cfg(target_arch = "aarch64")]
-pub(crate) use aarch64::{call, exit, linux, nr, unlink};
+pub(crate) use aarch64::{call, exit, linux, monotonic_nanos, nr, unlink};
 #[cfg(target_arch = "arm")]
-pub(crate) use armv7a::{call, exit, linux, nr, unlink};
+pub(crate) use armv7a::{call, exit, linux, monotonic_nanos, nr, unlink};
 #[cfg(target_arch = "x86_64")]
-pub(crate) use x86_64::{call, exit, linux, nr, unlink};
+pub(crate) use x86_64::{call, exit, linux, monotonic_nanos, nr, unlink};

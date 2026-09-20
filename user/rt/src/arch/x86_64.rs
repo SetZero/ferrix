@@ -8,8 +8,10 @@
 
 use core::arch::{asm, naked_asm};
 
-use ferrix_linux_abi::nr::x86_64::{EXIT_GROUP, UNLINK};
+use ferrix_linux_abi::nr::x86_64::{CLOCK_GETTIME, EXIT_GROUP, UNLINK};
 use ferrix_native::Raw;
+
+use crate::linux::CLOCK_MONOTONIC;
 
 /// The numbers of the Linux calls `crate::linux` makes.
 ///
@@ -78,6 +80,27 @@ pub(crate) unsafe fn linux(number: usize, args: [usize; 6]) -> usize {
 pub(crate) unsafe fn unlink(at: usize) -> usize {
     // SAFETY: the caller's promise about `at`, forwarded unchanged.
     unsafe { linux(UNLINK, [at, 0, 0, 0, 0, 0]) }
+}
+
+/// Read `CLOCK_MONOTONIC` into `nanos`, and answer the call's own result.
+///
+/// A `timespec` is two words of the architecture's width, so its size is the
+/// architecture's and the caller is given nanoseconds instead. `nanos` is left
+/// alone unless the call succeeded, since the kernel wrote nothing then.
+pub(crate) fn monotonic_nanos(nanos: &mut u64) -> usize {
+    let mut when = [0_i64; 2];
+    let at = when.as_mut_ptr().addr();
+    // SAFETY: `when` is this frame's own, two 64-bit words as this
+    // architecture's `timespec` is, and the kernel only writes that much.
+    let result = unsafe { linux(CLOCK_GETTIME, [CLOCK_MONOTONIC, at, 0, 0, 0, 0]) };
+    if result == 0 {
+        let [seconds, rest] = when;
+        *nanos = seconds
+            .unsigned_abs()
+            .saturating_mul(1_000_000_000)
+            .saturating_add(rest.unsigned_abs());
+    }
+    result
 }
 
 /// The trap itself: a number, six argument registers, and the result.

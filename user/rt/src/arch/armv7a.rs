@@ -8,7 +8,9 @@
 
 use core::arch::{asm, naked_asm};
 
-use ferrix_linux_abi::nr::arm::{EXIT_GROUP, UNLINKAT};
+use ferrix_linux_abi::nr::arm::{CLOCK_GETTIME, EXIT_GROUP, UNLINKAT};
+
+use crate::linux::CLOCK_MONOTONIC;
 
 /// The numbers of the Linux calls `crate::linux` makes.
 ///
@@ -83,6 +85,33 @@ pub(crate) unsafe fn linux(number: usize, args: [usize; 6]) -> usize {
 pub(crate) unsafe fn unlink(at: usize) -> usize {
     // SAFETY: the caller's promise about `at`, forwarded unchanged.
     unsafe { linux(UNLINKAT, [AT_FDCWD, at, 0, 0, 0, 0]) }
+}
+
+/// Read `CLOCK_MONOTONIC` into `nanos`, and answer the call's own result.
+///
+/// A `timespec` is two words of the architecture's width, and this
+/// architecture's word is 32 bits: `CLOCK_GETTIME` is the kernel's
+/// `TimeWidth::Native`, so it writes two `i32`s here where the 64-bit
+/// architectures get two `i64`s. Asking for eight bytes more than the kernel
+/// writes would be reading this frame's own uninitialised memory, and asking
+/// for eight fewer would be letting it write past the array, which is why the
+/// width lives with the architecture rather than with the caller.
+///
+/// Seconds since boot, which is what this clock counts, do not come near a
+/// 32-bit overflow in a boot.
+pub(crate) fn monotonic_nanos(nanos: &mut u64) -> usize {
+    let mut when = [0_i32; 2];
+    let at = when.as_mut_ptr().addr();
+    // SAFETY: `when` is this frame's own, two 32-bit words as this
+    // architecture's `timespec` is, and the kernel only writes that much.
+    let result = unsafe { linux(CLOCK_GETTIME, [CLOCK_MONOTONIC, at, 0, 0, 0, 0]) };
+    if result == 0 {
+        let [seconds, rest] = when;
+        *nanos = u64::from(seconds.unsigned_abs())
+            .saturating_mul(1_000_000_000)
+            .saturating_add(u64::from(rest.unsigned_abs()));
+    }
+    result
 }
 
 /// The trap itself: a number, six argument registers, and the result.

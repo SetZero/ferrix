@@ -32,6 +32,12 @@ pub const SOCK_NONBLOCK: usize = 0o4000;
 pub const F_SETFL: usize = 4;
 /// `O_NONBLOCK`.
 pub const O_NONBLOCK: usize = 0o4000;
+
+/// `CLOCK_MONOTONIC`, the clock a native [`Deadline`] is measured against.
+///
+/// [`Deadline`]: ferrix_native::handle::Deadline
+pub const CLOCK_MONOTONIC: usize = 1;
+
 /// Bytes of a `sockaddr_un`: the family, then the path.
 pub const SOCKADDR_UN_BYTES: usize = 110;
 
@@ -177,4 +183,21 @@ pub fn unlink(path: &[u8]) -> Result<usize, Errno> {
     // caller; the kernel only reads it.
     let result = unsafe { arch::unlink(path.as_ptr().addr()) };
     decode(result)
+}
+
+/// Nanoseconds on `CLOCK_MONOTONIC`, which is the clock a native
+/// `Deadline::At` names.
+///
+/// This is here so that a driver waiting on a native port can say "for the
+/// next ten milliseconds" -- the kernel takes only absolute deadlines, so a
+/// relative wait is this plus the interval.
+///
+/// # Errors
+///
+/// Whatever the kernel answers. A `timespec` is two words of the
+/// architecture's width, so the reading itself is `crate::arch`'s.
+pub fn monotonic_nanos() -> Result<u64, Errno> {
+    let mut nanos = 0_u64;
+    let _read = decode(arch::monotonic_nanos(&mut nanos))?;
+    Ok(nanos)
 }
