@@ -403,3 +403,38 @@ fn a_brace_range_counts_a_parameter_in_its_endpoints() {
 "
     );
 }
+
+/// The path escapes take a count of components, and all but `%C` write a
+/// leading `$HOME` as `~`. robbyrussell, the theme Ferrix boots with, is
+/// `%c`, which is one trailing component of the contracted path -- in a home
+/// directory, `~` rather than the directory's name.
+#[test]
+fn a_path_escape_counts_components_of_the_contracted_path() {
+    // A directory of its own, two levels under the home, so that both ends
+    // of the path are visible. Made by the shell itself, because `cd` is
+    // what moves it: assigning `$PWD` moves zsh not at all.
+    let home = "/tmp/zinc-prompt-escapes";
+    let deep = format!("mkdir -p {home}/oh-my-zsh/lib; HOME={home}; cd {home}/oh-my-zsh/lib; ");
+    let show = |spec: &str| format!("{deep}print -P -- {spec}");
+    assert_eq!(run(&show("%d")), format!("{home}/oh-my-zsh/lib\n"));
+    assert_eq!(run(&show("%1d")), "lib\n");
+    assert_eq!(run(&show("%2d")), "oh-my-zsh/lib\n");
+    // A count larger than the path is the whole path, and a negative one
+    // counts from the front, keeping the root.
+    assert_eq!(run(&show("%9d")), format!("{home}/oh-my-zsh/lib\n"));
+    assert_eq!(run(&show("%-1d")), "/tmp\n");
+    assert_eq!(run(&show("%~")), "~/oh-my-zsh/lib\n");
+    assert_eq!(run(&show("%1~")), "lib\n");
+    assert_eq!(run(&show("%-1~")), "~\n");
+    // `%c` is `%~` with one component asked for by default; `%C` is `%c`
+    // without the contraction.
+    assert_eq!(run(&show("%c")), "lib\n");
+    assert_eq!(run(&show("%2c")), "oh-my-zsh/lib\n");
+    assert_eq!(run(&show("%9c")), "~/oh-my-zsh/lib\n");
+    // In the home directory itself the contraction is the whole answer.
+    let at_home = format!("mkdir -p {home}; HOME={home}; cd {home}; print -P -- ");
+    assert_eq!(run(&format!("{at_home}%c")), "~\n");
+    assert_eq!(run(&format!("{at_home}%C")), "zinc-prompt-escapes\n");
+    // The root has one component whatever is asked for.
+    assert_eq!(run("cd /; print -P -- %1c"), "/\n");
+}
