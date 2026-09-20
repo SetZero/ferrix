@@ -296,6 +296,14 @@ compositor's image and are what the existing clipboard gate drives, so the
 transport can be proven before the terminal is touched -- but it is not
 finished until the key works.
 
+**The key works**, and `cargo xtask test-clipboard` presses it: the terminal
+takes a `wl_data_device` from the seat, `CTRL`+`SHIFT`+`V` asks the
+selection for text on a pipe, and what comes back is written to the
+pseudoterminal and said on the console so a gate can see it. The shifted
+control keys are the terminal's to reserve, which is why this one is not
+`CTRL`+`V`: that is the line discipline's `VLNEXT` and must reach the
+program. The mouse selection is 7b in §8's table.
+
 ## 7. What the product owner decides
 
 * **(a) The maximum selection.** The draft says 1 MiB, refusing anything
@@ -334,15 +342,23 @@ nothing from the kernel and are pure host-tested logic.
 | 4 | the console driver library | `libs/virtio-console` | landed |
 | 5 | the driver and its socket, and `devmgr`'s kind | `user/vport`, `user/devmgr` | landed |
 | 6 | the agent | `compositor/vdagent` | landed |
-| 7 | paste and copy in the terminal | `compositor/term` | to do |
+| 7 | paste in the terminal | `compositor/term` | landed |
+| 7b | copy from a mouse selection in the terminal | `compositor/term` | to do |
 | 8a | `--clipboard`: the device on the bus | `xtask` | landed |
 | 8b | starting the agent, and `test-clipboard` | `xtask` | landed |
 
-Everything but landing 7 is built. `cargo xtask test-clipboard` passes on
-x86-64 and AArch64: text goes from the viewer's clipboard into a guest
-program and other text comes back out of another, through the device, the
-driver, the agent and the compositor. What is left is the terminal, which is
-the difference between a feature the gate has and a feature a person has.
+Everything but 7b is built. `cargo xtask test-clipboard` passes on x86-64
+and AArch64, in three directions: the host's clipboard into a guest program,
+the host's clipboard into a terminal through `CTRL`+`SHIFT`+`V`, and a guest
+program's clipboard back out to the host.
+
+What 7b is still owed, and why it is its own row: §6a asks for two halves of
+the terminal and they are not the same size. Paste is a key, a pipe and the
+bytes the program reads, and it is landed. Copying *from* the terminal is a
+mouse selection over the grid -- a pointer this client does not bind, a
+range in cell coordinates, the text under it, and a `wl_data_source` to
+offer it -- and none of that is clipboard work. It is a text selection in a
+terminal that happens to end in a clipboard.
 
 Two things the build settled that the plan above did not know:
 

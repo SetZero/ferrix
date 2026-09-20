@@ -3464,6 +3464,16 @@ const HOST_TEXT: &str = "the host copied this into the guest";
 /// wrong side's buffer would pass with one string and fail with two.
 const GUEST_TEXT: &str = "the guest copied this back out";
 
+/// The keys that paste into the terminal: `CTRL`+`SHIFT`+`V`, which is what
+/// every terminal pastes with and what `docs/CLIPBOARD.md` §6a says did
+/// nothing at all before landing 7.
+const PASTE_KEYS: [&str; 3] = ["ctrl", "shift", "v"];
+
+/// The program the terminal runs, which only has to outlive the keys: a
+/// terminal whose program has finished closes its window, and a window that
+/// is gone has no keyboard focus to press anything into.
+const TERMINAL_PROGRAM: &str = "/bin/hyprctl subscribe";
+
 /// The key that makes the guest copy, and what it is bound to.
 ///
 /// A keybind rather than a third `exec-once`, because the two directions
@@ -3479,6 +3489,7 @@ fn host_clipboard_config() -> String {
         "# Carried into the initramfs by `cargo xtask test-clipboard`.\n\
          exec-once = /bin/vdagent\n\
          exec-once = /bin/clip paste\n\
+         exec-once = /bin/term {TERMINAL_PROGRAM}\n\
          bind = , C, exec, /bin/clip copy {GUEST_TEXT}\n"
     )
 }
@@ -3537,7 +3548,6 @@ fn clipboard_boot(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
     qemu_args.clipboard = true;
     qemu_args.clipboard_socket = Some(socket.clone());
 
-    let pasted = format!("clip: pasted {HOST_TEXT}");
     let copied = format!("clip: copied {} bytes to the clipboard", GUEST_TEXT.len());
     let mut got_back = None;
     let hook = |watching: &mut Watching<'_>| -> Result<()> {
@@ -3556,28 +3566,10 @@ fn clipboard_boot(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
         viewer.handshake(Instant::now() + SETTLE)?;
         println!("  {arch}: the guest's agent announced itself over the port");
 
-        // One: the host grabs, and the guest's `clip paste` must print it.
-        viewer.grab()?;
-        if !viewer.serve(HOST_TEXT, Instant::now() + SETTLE)? {
-            return Err(with_the_transcript(
-                &Error::new(format!(
-                    "{arch}: the guest never asked for the clipboard the host grabbed"
-                )),
-                watching,
-            ));
-        }
-        let landed = watching.read_more(Instant::now() + SETTLE, |lines| {
-            lines.iter().any(|line| line.contains(&pasted))
-        })?;
-        if !landed && !watching.lines().iter().any(|line| line.contains(&pasted)) {
-            return Err(with_the_transcript(
-                &Error::new(format!("{arch}: nothing in the guest said `{pasted}`")),
-                watching,
-            ));
-        }
-        println!("  {arch}: a program in the guest pasted what the host had copied");
+        into_the_guest(arch, &mut viewer, watching)?;
+        into_the_terminal(arch, &mut viewer, &mut qmp, watching)?;
 
-        // Two: the guest copies, and the viewer must be able to paste it.
+        // Three: the guest copies, and the viewer must be able to paste it.
         press(&mut qmp, &[COPY_KEY])?;
         got_back = viewer.paste(Instant::now() + SETTLE)?;
         let _ = watching.read_more(Instant::now() + SETTLE, |lines| {
@@ -3614,5 +3606,81 @@ fn clipboard_boot(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
         HOST_TEXT.len(),
         GUEST_TEXT.len()
     );
+    Ok(())
+}
+
+/// One: the host grabs, and the guest's `/bin/clip paste` must print it.
+///
+/// The whole path in the direction a person copies on their own machine and
+/// pastes inside the guest: the viewer's grab, the driver's port, the
+/// agent's `set_selection`, the compositor's offer, and a program that asked
+/// for it on a pipe.
+fn into_the_guest(
+    arch: Arch,
+    viewer: &mut crate::vdagent::Viewer,
+    watching: &mut Watching<'_>,
+) -> Result<()> {
+    let pasted = format!("clip: pasted {HOST_TEXT}");
+    viewer.grab()?;
+    if !viewer.serve(HOST_TEXT, Instant::now() + SETTLE)? {
+        return Err(with_the_transcript(
+            &Error::new(format!(
+                "{arch}: the guest never asked for the clipboard the host grabbed"
+            )),
+            watching,
+        ));
+    }
+    let landed = watching.read_more(Instant::now() + SETTLE, |lines| {
+        lines.iter().any(|line| line.contains(&pasted))
+    })?;
+    if !landed && !watching.lines().iter().any(|line| line.contains(&pasted)) {
+        return Err(with_the_transcript(
+            &Error::new(format!("{arch}: nothing in the guest said `{pasted}`")),
+            watching,
+        ));
+    }
+    println!("  {arch}: a program in the guest pasted what the host had copied");
+    Ok(())
+}
+
+/// Two: the same clipboard again, into a terminal, with the keys a person
+/// presses.
+///
+/// `docs/CLIPBOARD.md` §6a: the transport can be proven without the
+/// terminal, and was, but the feature is not one a person has until the key
+/// works. The host still owns the selection here, so what this asks is the
+/// whole path started from a keyboard: the terminal asks the compositor, the
+/// compositor asks the agent, and the agent asks the host.
+fn into_the_terminal(
+    arch: Arch,
+    viewer: &mut crate::vdagent::Viewer,
+    qmp: &mut Qmp,
+    watching: &mut Watching<'_>,
+) -> Result<()> {
+    let in_terminal = format!("term: pasted {HOST_TEXT}");
+    press(qmp, &PASTE_KEYS)?;
+    if !viewer.serve(HOST_TEXT, Instant::now() + SETTLE)? {
+        return Err(with_the_transcript(
+            &Error::new(format!(
+                "{arch}: CTRL+SHIFT+V in the terminal asked the host for nothing"
+            )),
+            watching,
+        ));
+    }
+    let typed = watching.read_more(Instant::now() + SETTLE, |lines| {
+        lines.iter().any(|line| line.contains(&in_terminal))
+    })?;
+    if !typed
+        && !watching
+            .lines()
+            .iter()
+            .any(|line| line.contains(&in_terminal))
+    {
+        return Err(with_the_transcript(
+            &Error::new(format!("{arch}: the terminal never said `{in_terminal}`")),
+            watching,
+        ));
+    }
+    println!("  {arch}: CTRL+SHIFT+V in the terminal pasted the host's clipboard");
     Ok(())
 }

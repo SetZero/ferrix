@@ -12,8 +12,8 @@ use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::time::{Duration, Instant};
 
 use compositor_protocol::core::{
-    self, wl_compositor, wl_display, wl_keyboard, wl_registry, wl_seat, wl_shm, wl_shm_pool,
-    wl_surface,
+    self, wl_compositor, wl_data_device, wl_data_device_manager, wl_data_offer, wl_display,
+    wl_keyboard, wl_registry, wl_seat, wl_shm, wl_shm_pool, wl_surface,
 };
 use compositor_protocol::xdg_shell::{self, xdg_surface, xdg_toplevel, xdg_wm_base};
 use compositor_shm::Shared;
@@ -41,6 +41,8 @@ mod id {
     pub(super) const SEAT: ObjectId = ObjectId(12);
     pub(super) const KEYBOARD: ObjectId = ObjectId(13);
     pub(super) const OUTPUT: ObjectId = ObjectId(14);
+    pub(super) const DATA_MANAGER: ObjectId = ObjectId(15);
+    pub(super) const DATA_DEVICE: ObjectId = ObjectId(16);
 }
 
 /// How long to run before giving up, so a test can never hang.
@@ -104,7 +106,34 @@ struct Terminal {
     /// keys a second. `None` for a rate of zero, which means "do not repeat"
     /// rather than "repeat as fast as possible".
     repeat_interval: Option<Duration>,
+    /// The offer the compositor last made for the selection, and the types
+    /// it carries.
+    ///
+    /// `docs/CLIPBOARD.md` §6a: without these the terminal had no clipboard
+    /// of any kind, and `CTRL`+`SHIFT`+`V` in it did nothing -- which is how
+    /// that was found, by a person pressing the key.
+    offer: Option<ObjectId>,
+    /// The MIME types that offer named.
+    offers: Vec<String>,
+    /// Whether `CTRL`+`SHIFT`+`V` has been pressed and not yet served.
+    ///
+    /// A flag rather than the paste itself, because a paste has to send a
+    /// request and then block on a pipe, and an event is answered while the
+    /// bytes it came in are still borrowed from the connection.
+    wants_paste: bool,
 }
+
+/// Which bit `wl_keyboard.modifiers` uses for shift, which is
+/// libxkbcommon's first.
+const SHIFT: u32 = 1 << 0;
+
+/// The type a text selection is offered as, which every Wayland program
+/// agrees on for plain text. The same one `/bin/clip` uses.
+const TEXT: &str = "text/plain;charset=utf-8";
+
+/// The most a paste writes into the program: `docs/CLIPBOARD.md` §7a's
+/// megabyte, which is also what the agent will carry.
+const MAX_PASTE: usize = 1024 * 1024;
 
 /// Which bit `wl_keyboard.modifiers` uses for control.
 ///
@@ -194,6 +223,9 @@ pub fn run(
         repeat: None,
         repeat_delay: Duration::ZERO,
         repeat_interval: None,
+        offer: None,
+        offers: Vec::new(),
+        wants_paste: false,
     };
 
     let started = Instant::now();
@@ -211,6 +243,7 @@ pub fn run(
         // What the program wrote, then a held key retyping itself, then the
         // frame either changed.
         state.pump()?;
+        state.paste(&mut connection, &mut out)?;
         state.autorepeat();
         if state.dirty {
             state.draw(&mut out)?;
@@ -291,6 +324,24 @@ impl Terminal {
         out: &mut Writer,
     ) -> Result<(), String> {
         match sender {
+            id::DATA_DEVICE if opcode == wl_data_device::event::DATA_OFFER => {
+                self.offer = args.first().and_then(Arg::as_object);
+                self.offers.clear();
+            }
+            id::DATA_DEVICE if opcode == wl_data_device::event::SELECTION => {
+                let named = args.first().and_then(Arg::as_object);
+                if named.is_none_or(ObjectId::is_null) {
+                    self.offer = None;
+                    self.offers.clear();
+                }
+            }
+            other
+                if self.offer == Some(other) && opcode == wl_data_offer::event::OFFER =>
+            {
+                if let Some(mime) = args.first().and_then(Arg::as_str) {
+                    self.offers.push(mime.to_owned());
+                }
+            }
             id::DISPLAY if opcode == wl_display::event::ERROR => {
                 let text = args.get(2).and_then(Arg::as_str).unwrap_or("");
                 return Err(format!("the compositor refused this client: {text}"));
@@ -370,6 +421,7 @@ impl Terminal {
             ("xdg_wm_base", id::SHELL, 6, true),
             ("wl_seat", id::SEAT, 7, false),
             ("wl_output", id::OUTPUT, 4, false),
+            ("wl_data_device_manager", id::DATA_MANAGER, 3, false),
         ] {
             let offer = self.globals.get(interface).copied();
             let Some((name, offered)) = offer else {
@@ -392,6 +444,20 @@ impl Terminal {
                 ],
             )
             .map_err(|error| format!("binding {interface}: {error:?}"))?;
+        }
+        // The selection, for `CTRL`+`SHIFT`+`V`. Both globals are optional:
+        // a compositor without them is one this terminal runs on with no
+        // clipboard rather than one it refuses.
+        if self.globals.contains_key("wl_data_device_manager")
+            && self.globals.contains_key("wl_seat")
+        {
+            request(
+                out,
+                id::DATA_MANAGER,
+                wl_data_device_manager::request::GET_DATA_DEVICE,
+                &[ArgType::NewId, ArgType::Object { nullable: false }],
+                &[Arg::NewId(id::DATA_DEVICE), Arg::Object(id::SEAT)],
+            );
         }
         request(
             out,
@@ -589,6 +655,18 @@ impl Terminal {
             return;
         };
         let control = self.modifiers & CONTROL != 0;
+        // `CTRL`+`SHIFT`+`V` is a paste and not a byte. Every terminal
+        // reserves the shifted control keys for itself, because the
+        // unshifted ones are the program's: `CTRL`+`V` is the line
+        // discipline's `VLNEXT` and must reach it.
+        if control
+            && self.modifiers & SHIFT != 0
+            && keysym.eq_ignore_ascii_case("v")
+        {
+            self.wants_paste = true;
+            self.repeat = None;
+            return;
+        }
         // A modifier, or a key this terminal has no bytes for: nothing is
         // typed, so nothing should retype itself either.
         let Some(bytes) = crate::keys::bytes(keysym, control) else {
@@ -602,6 +680,64 @@ impl Terminal {
                 next: Instant::now() + self.repeat_delay,
             });
         }
+    }
+
+    /// Serve a `CTRL`+`SHIFT`+`V` that has been pressed: ask the selection
+    /// for its text on a pipe, and write what comes back to the program.
+    ///
+    /// Called from the loop rather than from the key event because the
+    /// request must reach the compositor before anything can be read, and an
+    /// event is answered while the bytes it arrived in are still borrowed
+    /// from the connection.
+    ///
+    /// A selection that is not text, or none at all, pastes nothing: there
+    /// is no sensible byte to type for a picture.
+    fn paste(
+        &mut self,
+        connection: &mut compositor_socket::Connection,
+        out: &mut Writer,
+    ) -> Result<(), String> {
+        if !std::mem::take(&mut self.wants_paste) {
+            return Ok(());
+        }
+        let Some(offer) = self.offer else {
+            return Ok(());
+        };
+        if !self.offers.iter().any(|mime| mime == TEXT) {
+            return Ok(());
+        }
+        let (read, write) = pipe()?;
+        request(
+            out,
+            offer,
+            wl_data_offer::request::RECEIVE,
+            &[ArgType::Str { nullable: false }, ArgType::Fd],
+            &[Arg::Str(Some(TEXT)), Arg::Fd(Fd(write))],
+        );
+        // The compositor has to see the request before anything is written,
+        // and this end of the pipe has to be closed here or the read never
+        // ends.
+        flush(connection, out)?;
+        close(write);
+        let file = unsafe_file(read);
+        let mut text = Vec::new();
+        // Bounded, so that a selection larger than §7a's megabyte fills
+        // neither this process's memory nor the program's input.
+        let mut taken = std::io::Read::take(file, MAX_PASTE as u64);
+        let _ = std::io::Read::read_to_end(&mut taken, &mut text)
+            .map_err(|error| format!("reading the selection: {error}"))?;
+        // A bracketed paste is not announced -- nothing here sends
+        // `?2004h` -- so what the program reads is what was on the
+        // clipboard, as though it had been typed.
+        let _ = self.pty.write(&text);
+        // On the console, because a paste that went to the program and not
+        // to the screen is otherwise invisible to a gate: this is what
+        // `cargo xtask test-clipboard` requires of `CTRL`+`SHIFT`+`V`.
+        say(&format!(
+            "term: pasted {}",
+            String::from_utf8_lossy(&text).escape_debug()
+        ));
+        Ok(())
     }
 
     /// Retype the held key if its time has come, and arm the next one.
@@ -788,8 +924,51 @@ fn interface_of(id: ObjectId) -> Option<&'static Interface> {
         id::SEAT => &core::WL_SEAT,
         id::KEYBOARD => &core::WL_KEYBOARD,
         id::OUTPUT => &core::WL_OUTPUT,
+        id::DATA_MANAGER => &core::WL_DATA_DEVICE_MANAGER,
+        id::DATA_DEVICE => &core::WL_DATA_DEVICE,
+        // Every offer is the compositor's object, and a client has none of
+        // its own: it neither copies nor drags.
+        other if other.is_server() => &core::WL_DATA_OFFER,
         _ => return None,
     })
+}
+
+/// A pipe: the read half for this terminal and the write half for whoever
+/// is asked to fill it.
+fn pipe() -> Result<(i32, i32), String> {
+    let mut ends = [0i32; 2];
+    #[expect(
+        unsafe_code,
+        reason = "AUDIT: pipe2 is not in std; it writes two descriptors into an array this frame \
+                  owns and the result is checked"
+    )]
+    // SAFETY: `ends` is two `int`s, which is what `pipe2` writes.
+    let made = unsafe { libc::pipe2(ends.as_mut_ptr(), libc::O_CLOEXEC) };
+    if made < 0 {
+        return Err(format!("a pipe: {}", std::io::Error::last_os_error()));
+    }
+    Ok((ends[0], ends[1]))
+}
+
+/// A descriptor as a file, so that `read` is `std`'s.
+fn unsafe_file(fd: i32) -> std::fs::File {
+    #[expect(
+        unsafe_code,
+        reason = "AUDIT: the descriptor is this process's own -- one end of a pipe it just made -- \
+                  and the File owns it from here"
+    )]
+    // SAFETY: as the comment says; nothing else holds it.
+    unsafe { std::fs::File::from_raw_fd(fd) }
+}
+
+/// Close a descriptor.
+fn close(fd: i32) {
+    #[expect(
+        unsafe_code,
+        reason = "AUDIT: close is not in std for a raw descriptor; this one is this process's own"
+    )]
+    // SAFETY: a descriptor this process owns.
+    let _ = unsafe { libc::close(fd) };
 }
 
 /// Queue one request.
