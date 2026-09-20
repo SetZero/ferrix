@@ -33,7 +33,35 @@ pub(crate) extern "C" fn _start() -> ! {
 
 /// Make the call `raw` describes.
 pub(crate) fn call(raw: &Raw<'_>) -> usize {
-    let [a0, a1, a2, a3, a4, a5] = raw.args();
+    trap(raw.number(), raw.args())
+}
+
+/// Make the Linux call `number` with `args`.
+///
+/// The same instruction and the same registers as [`call`]: the kernel picks
+/// the ABI by the number's range and by nothing else (`dispatch` in
+/// `kernel/src/syscall/mod.rs`), so a native program issues a Linux call
+/// exactly as it issues one of its own. `exit` below has done this since this
+/// file was written; `docs/CLIPBOARD.md` §5 is what made it worth naming.
+///
+/// # Safety
+///
+/// The caller is answerable for every pointer in `args`: each must be valid
+/// for whatever the named call does with it, for the whole of the call. The
+/// kernel checks that a pointer is the caller's before it touches it, so a
+/// wrong one is refused rather than followed -- but a pointer to the wrong
+/// *owned* memory is memory this program may see changed under it.
+pub(crate) unsafe fn linux(number: usize, args: [usize; 6]) -> usize {
+    trap(number, args)
+}
+
+/// The trap itself: a number, six argument registers, and the result.
+///
+/// One block for both ABIs, because it is one instruction and one register
+/// assignment -- which is the whole of what `asm!` is here, and what
+/// `scripts/asm-allowlist.json` admits.
+fn trap(number: usize, args: [usize; 6]) -> usize {
+    let [a0, a1, a2, a3, a4, a5] = args;
     let result;
     // SAFETY: `raw` was built by `libs/native`, which puts in a pointer
     // argument only the address of a slice `raw` borrows — shared if the
@@ -44,7 +72,7 @@ pub(crate) fn call(raw: &Raw<'_>) -> usize {
     unsafe {
         asm!(
             "svc #0",
-            in("r7") raw.number(),
+            in("r7") number,
             inlateout("r0") a0 => result,
             in("r1") a1,
             in("r2") a2,

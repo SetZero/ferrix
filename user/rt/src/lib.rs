@@ -48,6 +48,7 @@
 #![no_std]
 
 mod arch;
+pub mod linux;
 
 pub use ferrix_native as native;
 use ferrix_native::channel::Channel;
