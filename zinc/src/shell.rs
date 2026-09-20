@@ -185,6 +185,26 @@ fn collect_fpath_dirs(root: &std::path::Path, out: &mut Vec<Vec<u8>>) {
     }
 }
 
+/// The one name a prompt parameter is stored under.
+///
+/// zsh's `PS` prompts answer to a second name each -- `PS1` is `PROMPT` and
+/// `prompt`, `PS2` is `PROMPT2` -- and they are one parameter under both,
+/// not two kept in step. A theme that sets `PROMPT`, as oh-my-zsh's do, has
+/// set the prompt the shell prints.
+///
+/// The right-hand prompts are *not* in this: `RPROMPT` and `RPS1` really are
+/// two parameters in zsh, which reads whichever is set, so tying them here
+/// would be inventing a rule zsh does not have.
+pub(crate) fn prompt_name(name: &[u8]) -> &[u8] {
+    match name {
+        b"PROMPT" | b"prompt" => b"PS1",
+        b"PROMPT2" => b"PS2",
+        b"PROMPT3" => b"PS3",
+        b"PROMPT4" => b"PS4",
+        other => other,
+    }
+}
+
 /// Normalise an option name: lower case, no underscores.
 pub(crate) fn option_key(name: &[u8]) -> String {
     name.iter()
@@ -368,6 +388,7 @@ impl Shell {
 
     /// The value of parameter `name`, including the special ones.
     pub(crate) fn get(&self, name: &[u8]) -> Option<Value> {
+        let name = prompt_name(name);
         match name {
             b"?" => return Some(Value::Scalar(self.status.to_string().into_bytes())),
             b"$" => return Some(Value::Scalar(self.pid.to_string().into_bytes())),
@@ -450,6 +471,7 @@ impl Shell {
 
     /// Set any value, keeping attributes; `path` and `PATH` stay tied.
     pub(crate) fn set_value(&mut self, name: &[u8], value: Value) {
+        let name = prompt_name(name);
         if name == b"path" {
             let joined = match &value {
                 Value::Array(a) => a.join(&b':'),
@@ -536,7 +558,7 @@ impl Shell {
 
     /// Remove a parameter.
     pub(crate) fn unset(&mut self, name: &[u8]) {
-        let _old = self.vars.remove(name);
+        let _old = self.vars.remove(prompt_name(name));
     }
 
     /// Make `name` local to the current function, saving its old value.
