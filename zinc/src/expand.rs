@@ -436,6 +436,15 @@ fn walk(sh: &mut Shell, w: &[u8], out: &mut Out, mut dq: bool) -> Result<(), Str
                     None => out.push_plain(b"~"),
                 }
             }
+            // EXTENDED_GLOB's `x~y`. The token goes through so the matcher
+            // reads it as the operator, but the word is not marked as one to
+            // glob: `echo a~b` prints `a~b` rather than looking for a file,
+            // which is what zsh does with a `~` and no wildcard beside it.
+            // A word that is never globbed loses the token again, since
+            // `remove_nulls` puts every leftover token back to its character.
+            TILDE if sh.opt("extendedglob") && !dq && out.mode != Mode::Single => {
+                out.push_plain(&[c]);
+            }
             EQUALS | COMMA | tok::DASH | tok::BANG | INBRACE | OUTBRACE | TILDE => {
                 push_literal(out, tok::detok(c));
             }

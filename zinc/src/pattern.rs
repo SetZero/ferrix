@@ -2,11 +2,11 @@
 //! with EXTENDED_GLOB `#`, `##` and `^`. A plain byte is literal, which is how
 //! quoting reaches the matcher: quoted characters were never tokenized.
 //!
-//! A subset of zsh's `pattern.c`; the rest (`(#i)`, `(#b)`, `~`, `<a-b>`
-//! ranges) lands with the expansion milestone.
+//! A subset of zsh's `pattern.c`; the rest (`(#i)`, `(#b)`) lands with the
+//! expansion milestone.
 
 use crate::tok::{BANG, BAR, BNULL, DASH, HAT, INANG, INBRACK, INPAR, META, OUTANG, OUTBRACK};
-use crate::tok::{OUTPAR, POUND, QUEST, STAR};
+use crate::tok::{OUTPAR, POUND, QUEST, STAR, TILDE};
 
 /// One element of a compiled pattern.
 #[derive(Debug, Clone)]
@@ -19,17 +19,45 @@ enum Node {
         items: Vec<(u32, u32)>,
         named: Vec<Vec<u8>>,
     },
-    Group(Vec<Vec<Node>>),
+    Group(Vec<Branch>),
     /// `x#`: zero or more of the node; `x##`: one or more.
     Repeat(Box<Node>, bool),
     /// `<a-b>`: a decimal number in the range; bounds absent are open.
     Range(Option<u64>, Option<u64>),
 }
 
+/// One alternative of a pattern: what it matches, less what it must not.
+///
+/// EXTENDED_GLOB's `x~y` matches whatever `x` does except what `y` does, over
+/// the same whole string, and chains left to right: `a*~*b*~*c*` is `a*`
+/// without the strings holding a `b` and without those holding a `c`. `|`
+/// binds looser, so `a*~ab|ac` is `(a*~ab)` or `ac`.
+#[derive(Debug, Clone, Default)]
+struct Branch {
+    nodes: Vec<Node>,
+    excepts: Vec<Vec<Node>>,
+}
+
+impl Branch {
+    /// True if the whole of `s` matches this alternative.
+    fn matches(&self, s: &[u8]) -> bool {
+        match_nodes(&self.nodes, s) && !self.excepts.iter().any(|e| match_nodes(e, s))
+    }
+
+    /// Where the nodes go now: the last `~` operand, or the alternative
+    /// itself if it has none.
+    fn target(&mut self) -> &mut Vec<Node> {
+        match self.excepts.last_mut() {
+            Some(e) => e,
+            None => &mut self.nodes,
+        }
+    }
+}
+
 /// A compiled pattern.
 #[derive(Debug, Clone)]
 pub(crate) struct Pattern {
-    nodes: Vec<Node>,
+    branches: Vec<Branch>,
     negate: bool,
 }
 
@@ -64,18 +92,13 @@ impl Pattern {
         }
         let bytes = crate::tok::unmetafy(pat);
         let _ = bytes;
-        let (alts, _) = parse_alts(pat, &mut i, extended, false);
-        let nodes = if alts.len() == 1 {
-            alts.into_iter().next().unwrap_or_default()
-        } else {
-            vec![Node::Group(alts)]
-        };
-        Pattern { nodes, negate }
+        let (branches, _) = parse_alts(pat, &mut i, extended, false);
+        Pattern { branches, negate }
     }
 
     /// True if the whole of `s` (plain bytes) matches.
     pub(crate) fn matches(&self, s: &[u8]) -> bool {
-        match_nodes(&self.nodes, s) != self.negate
+        self.branches.iter().any(|b| b.matches(s)) != self.negate
     }
 
     /// Lengths of every prefix of `s` that matches, shortest first.
@@ -87,7 +110,12 @@ impl Pattern {
 
     /// True if the pattern has no special characters.
     pub(crate) fn is_literal(&self) -> bool {
-        !self.negate && self.nodes.iter().all(|n| matches!(n, Node::Lit(_)))
+        !self.negate
+            && self.branches.len() == 1
+            && self
+                .branches
+                .iter()
+                .all(|b| b.excepts.is_empty() && b.nodes.iter().all(|n| matches!(n, Node::Lit(_))))
     }
 }
 
@@ -113,8 +141,8 @@ pub(crate) fn has_wildcards(pat: &[u8], extended: bool) -> bool {
     false
 }
 
-fn parse_alts(pat: &[u8], i: &mut usize, extended: bool, nested: bool) -> (Vec<Vec<Node>>, bool) {
-    let mut alts = vec![Vec::new()];
+fn parse_alts(pat: &[u8], i: &mut usize, extended: bool, nested: bool) -> (Vec<Branch>, bool) {
+    let mut alts = vec![Branch::default()];
     while let Some(&c) = pat.get(*i) {
         *i += 1;
         let node = match c {
@@ -132,8 +160,26 @@ fn parse_alts(pat: &[u8], i: &mut usize, extended: bool, nested: bool) -> (Vec<V
             QUEST => Node::Any,
             INBRACK => parse_class(pat, i),
             INPAR => Node::Group(parse_alts(pat, i, extended, true).0),
-            BAR if nested => {
-                alts.push(Vec::new());
+            // A `|` that reached here as a token is always alternation, at
+            // the top of the pattern as much as inside a group: a literal
+            // one was quoted, and quoting keeps a character out of the
+            // tokens altogether.
+            BAR => {
+                alts.push(Branch::default());
+                continue;
+            }
+            // `x~y`: what follows is what this alternative must not match.
+            // A `~` with nothing after it is the character itself, which is
+            // how zsh reads a trailing one.
+            TILDE | b'~'
+                if extended
+                    && pat
+                        .get(*i)
+                        .is_some_and(|&n| n != BAR && !(nested && n == OUTPAR)) =>
+            {
+                if let Some(a) = alts.last_mut() {
+                    a.excepts.push(Vec::new());
+                }
                 continue;
             }
             OUTPAR if nested => return (alts, true),
@@ -143,7 +189,7 @@ fn parse_alts(pat: &[u8], i: &mut usize, extended: bool, nested: bool) -> (Vec<V
                 if two {
                     *i += 1;
                 }
-                if let Some(last) = alts.last_mut().and_then(Vec::pop) {
+                if let Some(last) = alts.last_mut().and_then(|a| a.target().pop()) {
                     Node::Repeat(Box::new(last), two)
                 } else {
                     Node::Lit(b'#')
@@ -152,7 +198,7 @@ fn parse_alts(pat: &[u8], i: &mut usize, extended: bool, nested: bool) -> (Vec<V
             _ => Node::Lit(crate::tok::detok(c)),
         };
         if let Some(a) = alts.last_mut() {
-            a.push(node);
+            a.target().push(node);
         }
     }
     (alts, false)
@@ -301,7 +347,7 @@ fn match_one(node: &Node, s: &[u8]) -> Vec<usize> {
             let mut out = Vec::new();
             for alt in alts {
                 for n in 0..=s.len() {
-                    if s.get(..n).is_some_and(|p| match_nodes(alt, p)) {
+                    if s.get(..n).is_some_and(|p| alt.matches(p)) {
                         out.push(n);
                     }
                 }
@@ -369,6 +415,7 @@ pub(crate) fn tokenize(p: &[u8]) -> Vec<u8> {
             b'|' => BAR,
             b'#' => POUND,
             b'^' => HAT,
+            b'~' => TILDE,
             _ => b,
         });
     }
@@ -396,5 +443,34 @@ mod tests {
         assert!(!m("a##b", "b"));
         assert!(m("^foo", "bar"));
         assert!(m("*.txt", "a.txt"));
+    }
+
+    /// EXTENDED_GLOB's `~`, checked against what zsh 5.9 answers.
+    #[test]
+    fn the_except_operator_takes_matches_away() {
+        let m = |p: &str, s: &str| Pattern::compile(&tokd(p), true).matches(s.as_bytes());
+        assert!(m("abc", "abc"));
+        assert!(m("*~*x", "abc"));
+        assert!(!m("*~abc", "abc"));
+        assert!(m("*~(x|y)", "abc"));
+        // `|` binds looser than `~`: this is `(a*~ab)` or `ac`.
+        assert!(!m("a*~ab|ac", "ab"));
+        assert!(m("a*~ab|ac", "ac"));
+        assert!(m("a*~ab|ac", "ad"));
+        // A chain takes each operand away in turn.
+        assert!(!m("a*~*b*~*c*", "abc"));
+        assert!(!m("a*~*b*~*c*", "axc"));
+        assert!(m("a*~*b*~*c*", "axy"));
+        // The backup and compiled files vcs_info's own glob leaves out.
+        assert!(m("*~*(\\~|.zwc)", "VCS_INFO_get_data_git"));
+        assert!(!m("*~*(\\~|.zwc)", "VCS_INFO_get_data_git~"));
+        assert!(!m("*~*(\\~|.zwc)", "VCS_INFO_get_data_git.zwc"));
+        // A `~` with nothing after it is the character itself.
+        assert!(m("*~", "f~"));
+        assert!(!m("*~", "foo"));
+        // Without EXTENDED_GLOB it is always the character.
+        let plain = |p: &str, s: &str| Pattern::compile(&tokd(p), false).matches(s.as_bytes());
+        assert!(plain("*~*x", "a~bx"));
+        assert!(!plain("*~*x", "abx"));
     }
 }
