@@ -68,6 +68,7 @@ const BUILTINS: &[&[u8]] = &[
     b"whence",
     b"where",
     b"which",
+    b"zcompile",
     b"zle",
     b"zmodload",
     b"zstyle",
@@ -102,6 +103,7 @@ pub(crate) fn run(sh: &mut Shell, args: &[Vec<u8>]) -> i32 {
         // makes callers such as compaudit invoke builtins the module did not
         // actually install (notably `zstat`).
         b"zmodload" => 1,
+        b"zcompile" => zcompile(sh, rest),
         b"false" => 1,
         b"echo" => echo(sh, rest),
         b"print" => print(sh, rest),
@@ -1758,6 +1760,165 @@ fn getopts(sh: &mut Shell, args: &[Vec<u8>]) -> i32 {
         sh.optpos = idx + 1;
     }
     0
+}
+
+/// The line a digest [`zcompile`] writes begins with, which is what tells it
+/// from zsh's own wordcode: that starts with the four bytes `07 06 05 04`.
+const DIGEST_MAGIC: &[u8] = b"#zinc-zwc-1\n";
+
+/// `zcompile [-t] [options] file.zwc [file ...]`, zsh's `bin_zcompile`.
+///
+/// zsh compiles scripts into *wordcode*, a binary form of its parse trees
+/// that a later shell maps instead of parsing the text again. zinc has no
+/// wordcode: it reads scripts as text, every time. What this writes is a
+/// digest of its own -- the source of each file named, behind a magic line
+/// nothing else uses -- and what a caller can observe of it is the two
+/// things that matter to one: **a syntax error in what it compiled is
+/// reported**, and `-t` lists what a digest holds, which is how `zrecompile`
+/// decides that one is stale.
+///
+/// So compiling makes nothing faster here, and nothing reads a digest back.
+/// It is a syntax check and a file whose timestamp says when it was made.
+/// oh-my-zsh compiles its completion dump at every start and refuses to go
+/// on if the command is missing, which is why this exists at all.
+fn zcompile(sh: &mut Shell, args: &[Vec<u8>]) -> i32 {
+    let mut list = false;
+    let mut rest = args;
+    while let Some(arg) = rest.first() {
+        if arg.first() != Some(&b'-') || arg.len() < 2 {
+            break;
+        }
+        rest = rest.get(1..).unwrap_or(&[]);
+        if arg.as_slice() == b"--" {
+            break;
+        }
+        for &c in arg.get(1..).unwrap_or(&[]) {
+            match c {
+                b't' => list = true,
+                // How zsh's wordcode is to be written or read back: mapped
+                // or copied, aliases expanded or not, which of the two
+                // autoload conventions the files follow. A digest of text
+                // has no opinion on any of them, and a caller written for
+                // zsh passes them, so they are taken and ignored.
+                b'U' | b'M' | b'R' | b'k' | b'z' | b'p' | b'c' | b'a' | b'm' | b'w' | b'q' => {}
+                _ => {
+                    sh.error_at("zcompile", &format!("bad option: -{}", char::from(c)));
+                    return 1;
+                }
+            }
+        }
+    }
+    let Some(first) = rest.first() else {
+        sh.error_at("zcompile", "not enough arguments");
+        return 1;
+    };
+    if list {
+        return list_digest(sh, first);
+    }
+    let named_digest = first.ends_with(b".zwc");
+    let (target, sources) = if named_digest {
+        let sources = if rest.len() > 1 {
+            rest.get(1..).unwrap_or(&[]).to_vec()
+        } else {
+            vec![
+                first
+                    .get(..first.len().saturating_sub(4))
+                    .unwrap_or(&[])
+                    .to_vec(),
+            ]
+        };
+        (first.clone(), sources)
+    } else if rest.len() == 1 {
+        let mut target = first.clone();
+        target.extend_from_slice(b".zwc");
+        (target, vec![first.clone()])
+    } else {
+        sh.error_at(
+            "zcompile",
+            "compiling functions into a digest is not supported: \
+             name a .zwc file and the files to put in it",
+        );
+        return 1;
+    };
+    let mut digest = DIGEST_MAGIC.to_vec();
+    for source in &sources {
+        let name = lossy(source);
+        let Ok(text) = std::fs::read(&name) else {
+            sh.error_at("zcompile", &format!("can't open file: {name}"));
+            return 1;
+        };
+        if let Some(problem) = syntax_error(sh, &text) {
+            sh.error_at("zcompile", &format!("{name}: {problem}"));
+            return 1;
+        }
+        digest.extend_from_slice(name.as_bytes());
+        digest.push(b'\n');
+        digest.extend_from_slice(text.len().to_string().as_bytes());
+        digest.push(b'\n');
+        digest.extend_from_slice(&text);
+    }
+    if let Err(error) = std::fs::write(lossy(&target), &digest) {
+        sh.error_at(
+            "zcompile",
+            &format!("can't write file: {}: {error}", lossy(&target)),
+        );
+        return 1;
+    }
+    0
+}
+
+/// `zcompile -t file`: the header line zsh prints, then the name of every
+/// file in the digest, one per line. A file that is not one of zinc's
+/// digests -- zsh's own wordcode, or anything else -- says so and fails, and
+/// `zrecompile` reads that as a digest to make again.
+fn list_digest(sh: &mut Shell, file: &[u8]) -> i32 {
+    let name = lossy(file);
+    let Ok(bytes) = std::fs::read(&name) else {
+        sh.error_at("zcompile", &format!("can't open file: {name}"));
+        return 1;
+    };
+    let Some(mut rest) = bytes.strip_prefix(DIGEST_MAGIC) else {
+        sh.error_at("zcompile", &format!("{name} is not a zinc digest"));
+        return 1;
+    };
+    let mut text = b"zwc file (read) for zinc\n".to_vec();
+    while !rest.is_empty() {
+        let Some((entry, tail)) = digest_entry(rest) else {
+            sh.error_at("zcompile", &format!("{name} is damaged"));
+            return 1;
+        };
+        text.extend_from_slice(entry);
+        text.push(b'\n');
+        rest = tail;
+    }
+    out(sh, 1, &text)
+}
+
+/// One entry of a digest: its name, and what is left after its bytes.
+fn digest_entry(rest: &[u8]) -> Option<(&[u8], &[u8])> {
+    let end = rest.iter().position(|&c| c == b'\n')?;
+    let name = rest.get(..end)?;
+    let after = rest.get(end + 1..)?;
+    let count = after.iter().position(|&c| c == b'\n')?;
+    let length: usize = std::str::from_utf8(after.get(..count)?)
+        .ok()?
+        .parse()
+        .ok()?;
+    let body = after.get(count + 1..)?;
+    Some((name, body.get(length..)?))
+}
+
+/// Where `text` stops parsing, in the words zsh's parser would use.
+fn syntax_error(sh: &Shell, text: &[u8]) -> Option<String> {
+    let mut lexer = crate::lex::Lexer::new(tok::metafy(text), sh.lex_opts());
+    loop {
+        let mut parser = crate::parse::Parser::new(&mut lexer, sh);
+        match parser.parse_event() {
+            Ok(Some(_list)) => {}
+            Ok(None) => return None,
+            Err(error) => return Some(format!("{}: {}", error.lineno, error.msg)),
+        }
+    }
 }
 
 #[cfg(test)]
