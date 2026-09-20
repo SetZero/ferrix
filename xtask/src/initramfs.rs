@@ -18,13 +18,15 @@
 //! `/bin/zinc` and uutils/coreutils at `/bin/coreutils`, and a link in `/bin`
 //! for every name each of them owns: `sh` is zinc's, the hundred names in
 //! [`UTILITIES`] are uutils', and busybox gets the rest of [`APPLETS`].
+//! Beside zinc it carries oh-my-zsh, at [`omz::DIRECTORY`] with the
+//! `/etc/zshrc` that sources it, so the shell comes up configured.
 //! Without a program it is the same bytes it was before programs could be
 //! added.
 
 use std::path::Path;
 
 use crate::{Error, Result};
-use crate::{native, ports};
+use crate::{native, omz, ports};
 
 /// Every timestamp in the archive: 2026-01-01 00:00:00 UTC, the same instant
 /// `fat.rs` stamps the boot image with.
@@ -547,6 +549,11 @@ fn build_with_shell(
             archive.symlink(&format!("bin/{name}"), "zinc")?;
         }
     }
+    // oh-my-zsh, wherever zinc is: the configuration the shell starts with,
+    // carried by the image rather than installed into a guest by hand, since
+    // a guest may have no network to install it over and would lose it at the
+    // next boot in any case. `/etc/zshrc`, which sources it, comes with it.
+    let configuration = omz::beside(zinc)?;
     // The files a caller asked to carry: the ports, and whatever else a test
     // needs beside init -- `cargo xtask test-compositor` carries the
     // compositor's clients this way. Outside the branch above, because a file
@@ -555,7 +562,7 @@ fn build_with_shell(
     // none. `bin` and `etc` are made above; any other directory a file is in
     // is made the first time one needs it.
     let mut made = vec!["bin".to_owned(), "etc".to_owned()];
-    for file in ports {
+    for file in ports.iter().chain(&configuration) {
         let mut directory = String::new();
         let parents = file.path.split('/').collect::<Vec<_>>();
         for name in parents.iter().take(parents.len().saturating_sub(1)) {

@@ -1,0 +1,258 @@
+//! oh-my-zsh, the configuration every shell in the image starts with.
+//!
+//! zinc's acceptance criterion is that oh-my-zsh runs in it, and a criterion
+//! nothing boots with is one nobody meets twice. The image therefore carries a
+//! checkout of oh-my-zsh at [`DIRECTORY`] and an `/etc/zshrc` that sources it,
+//! so the shell the kernel starts comes up with the theme, the aliases and the
+//! completion oh-my-zsh gives it, rather than as a bare shell someone must
+//! first install something into over a network the guest may not have.
+//!
+//! The checkout is a download rather than something in this repository, for
+//! the reason busybox and the ports are: it is another project's tree, under
+//! another project's licence, changing on their schedule and not on ours. It
+//! is installed under `~/.local/share/ferrix/oh-my-zsh` (or `$FERRIX_OMZ`) by
+//! `cargo xtask omz --from <DIRECTORY-OR-URL>`, the one thing here that
+//! reaches the network, and then only because it was asked for by name. An
+//! image built on a machine without it says so and boots without it.
+
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+use crate::ports::{Content, File};
+use crate::{Error, Result};
+
+/// Where the checkout goes in the image. Shared rather than in a home
+/// directory, because root and `ferrix` start the same shell and the tree is
+/// megabytes of the guest's memory, which it should be once.
+pub(crate) const DIRECTORY: &str = "usr/share/oh-my-zsh";
+
+/// What an image carrying the checkout writes to `/etc/zshrc`, which zinc
+/// sources before a user's own `~/.zshrc`, and only for an interactive shell.
+///
+/// `$ZSH` is where the tree is rather than the `$HOME/.oh-my-zsh` an install
+/// would have made, and everything oh-my-zsh writes as it starts -- its
+/// cache, its completion dump -- goes to `/tmp`, because the home of the user
+/// the kernel starts a shell as is `/`, and a start-up that writes into the
+/// root of the filesystem is not one to have on every boot.
+pub(crate) const ZSHRC: &[u8] = b"\
+# Ferrix starts its shells with oh-my-zsh, from the copy the image carries.
+# A user's own ~/.zshrc is sourced after this one and can undo any of it.
+export ZSH=/usr/share/oh-my-zsh
+export HOME=${HOME:-/}
+ZSH_THEME=${ZSH_THEME:-robbyrussell}
+plugins=(git)
+# Where oh-my-zsh writes: its cache and its completion dump. /tmp, because it
+# is the one directory every boot has and can write in.
+export ZSH_CACHE_DIR=/tmp/oh-my-zsh
+export ZSH_COMPDUMP=/tmp/oh-my-zsh/zcompdump
+mkdir -p $ZSH_CACHE_DIR/completions
+[[ -r $ZSH/oh-my-zsh.sh ]] && source $ZSH/oh-my-zsh.sh
+";
+
+/// Names in the checkout that are the project's own machinery rather than
+/// anything a shell sources: its history, how it is developed, and the cache
+/// a run of it on the build host left behind.
+const SKIPPED: &[&str] = &[".git", ".github", ".devcontainer", "cache"];
+
+/// Where the checkout is installed on this machine.
+fn root() -> Result<PathBuf> {
+    if let Some(dir) = std::env::var_os("FERRIX_OMZ") {
+        return Ok(PathBuf::from(dir));
+    }
+    std::env::home_dir()
+        .map(|home| {
+            [".local", "share", "ferrix", "oh-my-zsh"]
+                .iter()
+                .fold(home, |dir, name| dir.join(name))
+        })
+        .ok_or_else(|| Error::new("no home directory to find oh-my-zsh under; set FERRIX_OMZ"))
+}
+
+/// The permissions a file in the checkout is given: executable when it starts
+/// as a script, 0644 otherwise, rather than read off the build host, so that
+/// a checkout copied to a filesystem without them gives the same archive.
+fn mode_of(bytes: &[u8]) -> u32 {
+    if bytes.starts_with(b"#!") {
+        0o755
+    } else {
+        0o644
+    }
+}
+
+/// Read the tree at `path` into `out` as the archive path `name`, in name
+/// order, leaving out [`SKIPPED`].
+fn read_tree(path: &Path, name: &str, out: &mut Vec<File>) -> Result<()> {
+    let meta = std::fs::symlink_metadata(path)
+        .map_err(|error| Error::new(format!("reading {}: {error}", path.display())))?;
+    if meta.file_type().is_symlink() {
+        let target = std::fs::read_link(path)
+            .map_err(|error| Error::new(format!("reading {}: {error}", path.display())))?;
+        out.push(File {
+            path: name.to_owned(),
+            mode: 0o777,
+            content: Content::Link(target.to_string_lossy().replace('\\', "/")),
+        });
+    } else if meta.is_dir() {
+        out.push(File {
+            path: name.to_owned(),
+            mode: 0o755,
+            content: Content::Directory,
+        });
+        let mut children: Vec<String> = std::fs::read_dir(path)
+            .map_err(|error| Error::new(format!("reading {}: {error}", path.display())))?
+            .map(|entry| entry.map(|entry| entry.file_name().to_string_lossy().into_owned()))
+            .collect::<std::io::Result<_>>()?;
+        children.sort();
+        for child in children {
+            if SKIPPED.contains(&child.as_str()) {
+                continue;
+            }
+            read_tree(&path.join(&child), &format!("{name}/{child}"), out)?;
+        }
+    } else {
+        let bytes = std::fs::read(path)
+            .map_err(|error| Error::new(format!("reading {}: {error}", path.display())))?;
+        out.push(File {
+            path: name.to_owned(),
+            mode: mode_of(&bytes),
+            content: Content::Bytes(bytes),
+        });
+    }
+    Ok(())
+}
+
+/// What an image carrying `zinc` carries beside it, and nothing at all when
+/// there is no shell in it to configure.
+pub(crate) fn beside(zinc: Option<&[u8]>) -> Result<Vec<File>> {
+    if zinc.is_none() {
+        return Ok(Vec::new());
+    }
+    installed()
+}
+
+/// The checkout for an image to carry, with the `/etc/zshrc` that sources it,
+/// or nothing at all when it is not installed on this machine.
+fn installed() -> Result<Vec<File>> {
+    let root = root()?;
+    if !root.join("oh-my-zsh.sh").is_file() {
+        println!(
+            "  oh-my-zsh is not installed under {}, so not in the image \
+             (cargo xtask omz --from <DIRECTORY-OR-URL> installs it)",
+            root.display()
+        );
+        return Ok(Vec::new());
+    }
+    let mut files = vec![File {
+        path: "etc/zshrc".to_owned(),
+        mode: 0o644,
+        content: Content::Bytes(ZSHRC.to_vec()),
+    }];
+    read_tree(&root, DIRECTORY, &mut files)?;
+    Ok(files)
+}
+
+/// `cargo xtask omz --from <DIRECTORY-OR-URL>`: install the checkout every
+/// image carries, from a directory on this machine or from a git repository
+/// to clone.
+pub(crate) fn install(from: Option<&str>) -> Result<()> {
+    let from = from.ok_or_else(|| {
+        Error::new(
+            "say where oh-my-zsh comes from: --from <DIRECTORY>, a checkout on this machine, \
+             or --from https://github.com/ohmyzsh/ohmyzsh.git to clone one",
+        )
+    })?;
+    let root = root()?;
+    let source = Path::new(from);
+    if source.exists() && !source.join("oh-my-zsh.sh").is_file() {
+        return Err(Error::new(format!(
+            "{from} is not an oh-my-zsh checkout: it has no oh-my-zsh.sh"
+        )));
+    }
+    if root.exists() {
+        std::fs::remove_dir_all(&root)
+            .map_err(|error| Error::new(format!("removing {}: {error}", root.display())))?;
+    }
+    if let Some(parent) = root.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| Error::new(format!("making {}: {error}", parent.display())))?;
+    }
+    if source.exists() {
+        copy_tree(source, &root)?;
+    } else {
+        let mut command = Command::new("git");
+        let _ = command.args(["clone", "--depth", "1", from]).arg(&root);
+        crate::cargo::run(command, "git clone (oh-my-zsh)")?;
+    }
+    println!("\ninstalled oh-my-zsh under {}", root.display());
+    Ok(())
+}
+
+/// Copy the tree at `from` to `to`, [`SKIPPED`] names apart.
+fn copy_tree(from: &Path, to: &Path) -> Result<()> {
+    std::fs::create_dir_all(to)
+        .map_err(|error| Error::new(format!("making {}: {error}", to.display())))?;
+    let entries = std::fs::read_dir(from)
+        .map_err(|error| Error::new(format!("reading {}: {error}", from.display())))?;
+    for entry in entries {
+        let entry = entry.map_err(|error| Error::new(format!("reading a directory: {error}")))?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if SKIPPED.contains(&name.as_str()) {
+            continue;
+        }
+        let (source, target) = (entry.path(), to.join(&name));
+        let meta = std::fs::symlink_metadata(&source)
+            .map_err(|error| Error::new(format!("reading {}: {error}", source.display())))?;
+        if meta.is_dir() && !meta.file_type().is_symlink() {
+            copy_tree(&source, &target)?;
+        } else {
+            let _size = std::fs::copy(&source, &target)
+                .map_err(|error| Error::new(format!("copying {}: {error}", source.display())))?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_start_up_file_names_where_the_tree_is() {
+        let text = String::from_utf8(ZSHRC.to_vec()).unwrap();
+        assert!(text.contains(&format!("export ZSH=/{DIRECTORY}")));
+        assert!(text.contains("source $ZSH/oh-my-zsh.sh"));
+        // Nothing it writes goes anywhere but /tmp.
+        assert!(text.contains("export ZSH_CACHE_DIR=/tmp/oh-my-zsh"));
+        assert!(text.contains("export ZSH_COMPDUMP=/tmp/oh-my-zsh/zcompdump"));
+    }
+
+    #[test]
+    fn a_tree_is_read_in_name_order_without_the_projects_own_machinery() {
+        let dir = std::env::temp_dir().join(format!("xtask-omz-tree-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("lib")).unwrap();
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+        std::fs::write(dir.join(".git").join("HEAD"), b"ref: refs/heads/master").unwrap();
+        std::fs::write(dir.join("oh-my-zsh.sh"), b"# sourced\n").unwrap();
+        std::fs::write(dir.join("lib").join("git.zsh"), b"# sourced\n").unwrap();
+        std::fs::write(dir.join("tool.sh"), b"#!/bin/sh\n").unwrap();
+        let mut files = Vec::new();
+        read_tree(&dir, DIRECTORY, &mut files).unwrap();
+        let names: Vec<&str> = files.iter().map(|file| file.path.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                DIRECTORY,
+                "usr/share/oh-my-zsh/lib",
+                "usr/share/oh-my-zsh/lib/git.zsh",
+                "usr/share/oh-my-zsh/oh-my-zsh.sh",
+                "usr/share/oh-my-zsh/tool.sh",
+            ]
+        );
+        // A script is executable, anything else is not.
+        let mode = |name: &str| files.iter().find(|file| file.path == name).unwrap().mode;
+        assert_eq!(mode("usr/share/oh-my-zsh/tool.sh"), 0o755);
+        assert_eq!(mode("usr/share/oh-my-zsh/oh-my-zsh.sh"), 0o644);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+}

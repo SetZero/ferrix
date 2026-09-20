@@ -66,12 +66,28 @@ taking a symbolic mode, which is the installer's first line, and a pipeline
 written inside a function, an `if`, a `while` or a `{ }` becoming a job of
 its own rather than joining the job of the compound command around it --
 without which `git init "$ZSH" && cd "$ZSH"` ran the `cd` while `git` was
-still starting. **Starting** oh-my-zsh is the criterion that is still to
-meet: sourcing the `.zshrc` it writes reaches `zrecompile` and stops at
-`zcompile`, which is not a builtin here yet.
+still starting.
 
-Next, in the order oh-my-zsh needs them: the parser parity run against
-`zsh -n` over oh-my-zsh and zsh's function library; the rest of the
-expansion flags and glob qualifiers; `zstyle`, `zparseopts`, `zmodload` and
-the special parameter hashes; prompt colours and `precmd` hooks; ZLE; the
-completion system.
+**oh-my-zsh starts, and Ferrix boots into it.** Sourcing it runs to the end
+and leaves a themed prompt behind. The image carries a checkout at
+`/usr/share/oh-my-zsh` and an `/etc/zshrc` that sources it, installed on the
+build machine by `cargo xtask omz --from <DIRECTORY-OR-URL>`, so the shell
+the kernel starts is an oh-my-zsh shell: `cargo xtask test-jobs` now types
+its whole session at robbyrussell's prompt. What that took, in the order it
+was found: `zcompile` and a digest to read back; prompt expansion with
+`PROMPT_SUBST`, colours and ternaries; `$commands`; process substitution;
+`zstyle` as a real database rather than a no-op, which is what made
+`vcs_info` run at all; `$functions`; EXTENDED_GLOB's `~`; `(#b)`
+backreferences; and the path escapes' component counts.
+
+Not every theme is right yet. Of ten measured against zsh 5.9 by rendering
+`$PROMPT` in the same home, `robbyrussell` -- the one the image boots with
+-- `avit` and `simple` come out byte for byte. The other seven differ in
+three ways: a bold attribute zinc writes where zsh writes none, the
+256-colour escapes `spectrum.zsh` builds, and `vcs_info`, which reaches
+`zformat` and stops.
+
+Next, in the order the themes above need them: the bold attribute and the
+256-colour escapes; `zformat` and `zparseopts`, which is where `vcs_info`
+stops; the rest of the expansion flags and glob qualifiers; `zmodload` and
+the special parameter hashes; the completion system proper.

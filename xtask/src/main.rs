@@ -11,6 +11,7 @@
 //! cargo xtask check     [--fast] [--ferrousli] [--zinc] [--miri]
 //! cargo xtask busybox   [--arch x86_64]
 //! cargo xtask ports     [--arch x86_64]
+//! cargo xtask omz       --from DIRECTORY-OR-URL
 //! cargo xtask flash     [--arch armv7a] [--to MOUNT]
 //! cargo xtask watch-serial            [--port DEVICE] [--timeout SECONDS]
 //! cargo xtask deploy    [--arch armv7a] [--to MOUNT] [--port DEVICE]
@@ -25,6 +26,10 @@
 //! variable — build it into the kernel, which starts `sh -i` on the console,
 //! and put it in the initramfs at `/bin/busybox` with every applet linked
 //! beside it, so that the shell finds `ls` on its `PATH=/bin`.
+//!
+//! `omz` installs the oh-my-zsh checkout every image carries, from a directory
+//! on this machine or a git repository to clone. Without it an image boots to a
+//! shell with no configuration; with it, to the one oh-my-zsh gives.
 //!
 //! `busybox` builds busybox against ferrousli, on Linux or natively on Windows,
 //! and installs it for `--init ferrousli`, which names that binary instead of a
@@ -57,6 +62,7 @@ mod jobs;
 mod native;
 mod net;
 mod noise;
+mod omz;
 mod paths;
 mod pe;
 mod ports;
@@ -315,6 +321,7 @@ fn run() -> Result<()> {
         "busybox" => busybox::build(args.single_arch()?).map(|_| ()),
         "uutils" => uutils::build(args.single_arch()?).map(|_| ()),
         "ports" => ports::build(args.single_arch()?),
+        "omz" => omz::install(args.from.as_deref()),
         "flash" => {
             let arch = args.single_arch()?;
             let (loader, kernel, initramfs) = build_board_files(arch, &args)?;
