@@ -44,6 +44,7 @@ pub mod device;
 pub mod error;
 pub mod handle;
 pub mod job;
+pub mod linux;
 pub mod pending;
 pub mod pin;
 pub mod port;

@@ -16,6 +16,8 @@ use std::vec;
 use std::vec::Vec;
 
 use ferrix_linux_abi::errno::Errno;
+use ferrix_linux_abi::socket;
+use ferrix_linux_abi::types::AT_FDCWD;
 use ferrix_native_abi::handle::Handle;
 use ferrix_native_abi::nr;
 use ferrix_native_abi::rights::{Requested, Rights, SAME_RIGHTS};
@@ -32,6 +34,7 @@ use crate::device::{Device, Interrupt, IoMapping};
 use crate::error::{Error, decode, decode_handle};
 use crate::handle::{Deadline, Object, OwnedHandle, rights_register};
 use crate::job::Job;
+use crate::linux;
 use crate::pending::{self, Process, Protection};
 use crate::pin::{Addresses, Pin, PinAccess, device_address};
 use crate::port::{self, Port};
@@ -860,6 +863,174 @@ fn an_address_query_tells_a_short_buffer_from_a_complete_one() {
         made(nr::VMO_PIN_ADDRESSES, &[0xC3, 0, 0]),
         "empty is null"
     );
+}
+
+// ---------------------------------------------------------------------------
+// The Linux calls a native program makes
+// ---------------------------------------------------------------------------
+
+/// The host's table is x86-64's, which is what `linux::nr` picks here too.
+use ferrix_linux_abi::nr::x86_64 as lnr;
+
+/// The bytes `bind` should be handed for `path`.
+fn sockaddr_bytes(path: &[u8]) -> Vec<u8> {
+    let mut want = vec![0_u8; socket::SUN_PATH_OFFSET + path.len() + 1];
+    want[..2].copy_from_slice(&socket::AF_UNIX.to_ne_bytes());
+    want[socket::SUN_PATH_OFFSET..socket::SUN_PATH_OFFSET + path.len()].copy_from_slice(path);
+    want
+}
+
+#[test]
+fn a_socket_is_made_and_closed_when_it_is_dropped() {
+    let sys = Recorder::default();
+    sys.returns(7);
+    let fd = linux::socket(&sys, socket::AF_UNIX, socket::SOCK_STREAM, 0).unwrap();
+    assert_eq!(fd.raw(), 7);
+    assert_eq!(sys.take(), vec![made(lnr::SOCKET, &[1, 1, 0])]);
+
+    drop(fd);
+    assert_eq!(
+        sys.take(),
+        vec![made(lnr::CLOSE, &[7])],
+        "dropped means closed"
+    );
+}
+
+#[test]
+fn a_socket_that_cannot_be_made_is_an_errno_and_nothing_to_close() {
+    let sys = Recorder::default();
+    sys.fails(Errno::EAFNOSUPPORT);
+    let failed = linux::socket(&sys, 17, socket::SOCK_STREAM, 0);
+    assert_eq!(failed.err(), Some(Errno::EAFNOSUPPORT));
+    assert_eq!(
+        sys.numbers(),
+        vec![lnr::SOCKET],
+        "no close for a socket never made"
+    );
+}
+
+#[test]
+fn bind_names_a_sockaddr_un_with_the_nul_counted() {
+    let sys = Recorder::default();
+    let fd = linux::Fd::from_raw(&sys, 4);
+    let path = b"/run/vport";
+    let want = sockaddr_bytes(path);
+    sys.answer(move |raw| {
+        let address = raw.args()[1];
+        assert_eq!(raw.memory(address, want.len()), Some(want.as_slice()));
+        0
+    });
+    fd.bind_unix(path).unwrap();
+
+    let call = sys.take()[0];
+    assert_eq!(call.number, lnr::BIND);
+    assert_eq!(call.args[0], 4);
+    assert_eq!(
+        call.args[2],
+        socket::SUN_PATH_OFFSET + path.len() + 1,
+        "the length counts the NUL the agent opens the name through"
+    );
+}
+
+#[test]
+fn a_path_that_does_not_fit_is_refused_before_the_call() {
+    let sys = Recorder::default();
+    let fd = linux::Fd::from_raw(&sys, 4);
+    let long = vec![b'x'; socket::UNIX_PATH_MAX];
+    assert_eq!(fd.bind_unix(&long), Err(Errno::ENAMETOOLONG));
+    assert!(sys.take().is_empty(), "nothing is asked of the kernel");
+    // One shorter is the longest that fits, since the NUL takes the last byte.
+    assert!(linux::sockaddr_un(&long[1..]).is_ok());
+}
+
+#[test]
+fn listen_and_accept_carry_the_descriptor_and_the_flags() {
+    let sys = Recorder::default();
+    let fd = linux::Fd::from_raw(&sys, 4);
+    fd.listen(1).unwrap();
+
+    sys.returns(9);
+    let taken = fd.accept(socket::SOCK_NONBLOCK).unwrap();
+    assert_eq!(taken.raw(), 9);
+
+    assert_eq!(
+        sys.take(),
+        vec![
+            made(lnr::LISTEN, &[4, 1]),
+            made(lnr::ACCEPT4, &[4, 0, 0, socket::SOCK_NONBLOCK as usize]),
+        ],
+        "no address is wanted, so both address registers are null"
+    );
+
+    sys.fails(Errno::EAGAIN);
+    assert_eq!(fd.accept(0).err(), Some(Errno::EAGAIN), "nothing waiting");
+}
+
+#[test]
+fn a_read_names_the_buffer_the_kernel_writes_and_a_write_the_bytes_it_reads() {
+    let sys = Recorder::default();
+    let fd = linux::Fd::from_raw(&sys, 4);
+
+    sys.answer(|raw| {
+        let address = raw.args()[1];
+        write(raw, address, b"grab");
+        4
+    });
+    let mut room = [0_u8; 16];
+    assert_eq!(fd.read(&mut room).unwrap(), 4);
+    assert_eq!(&room[..4], b"grab");
+
+    sys.answer(|raw| {
+        let address = raw.args()[1];
+        assert_eq!(raw.memory(address, 5), Some(b"hello".as_slice()));
+        2
+    });
+    assert_eq!(
+        fd.write(b"hello").unwrap(),
+        2,
+        "a short write is the caller's to finish"
+    );
+
+    let calls = sys.take();
+    assert_eq!(calls[0].number, lnr::READ);
+    assert_eq!((calls[0].args[0], calls[0].args[2]), (4, 16));
+    assert_eq!(calls[1].number, lnr::WRITE);
+    assert_eq!((calls[1].args[0], calls[1].args[2]), (4, 5));
+}
+
+#[test]
+fn unlink_terminates_the_name_and_uses_the_working_directory() {
+    let sys = Recorder::default();
+    let path = b"/run/vport";
+    sys.answer(move |raw| {
+        let address = raw.args()[1];
+        assert_eq!(raw.memory(address, 11), Some(b"/run/vport\0".as_slice()));
+        0
+    });
+    linux::unlink(&sys, path).unwrap();
+
+    let call = sys.take()[0];
+    assert_eq!(call.number, lnr::UNLINKAT);
+    assert_eq!(call.args[0], AT_FDCWD.cast_unsigned() as usize);
+    assert_eq!(call.args[2], 0, "no AT_REMOVEDIR");
+}
+
+#[test]
+fn the_monotonic_clock_comes_back_as_one_number_of_nanoseconds() {
+    let sys = Recorder::default();
+    sys.answer(|raw| {
+        let address = raw.args()[1];
+        let mut timespec = [0_u8; 2 * size_of::<usize>()];
+        timespec[..size_of::<usize>()].copy_from_slice(&3_usize.to_ne_bytes());
+        timespec[size_of::<usize>()..].copy_from_slice(&500_usize.to_ne_bytes());
+        write(raw, address, &timespec);
+        0
+    });
+    assert_eq!(linux::monotonic_nanos(&sys).unwrap(), 3_000_000_500);
+    assert_eq!(sys.take()[0].number, lnr::CLOCK_GETTIME);
+
+    sys.fails(Errno::EINVAL);
+    assert_eq!(linux::monotonic_nanos(&sys).err(), Some(Errno::EINVAL));
 }
 
 // ---------------------------------------------------------------------------
