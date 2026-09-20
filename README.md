@@ -308,6 +308,83 @@ screen to show both of them in turn.
 them back, and `test-pty` runs a program on a pseudoterminal with no window
 at all. x86-64 and AArch64 only, as `--display` is.
 
+### Watching a desktop on another machine
+
+A machine reached over `ssh` has no window to open on, so QEMU serves the
+screen instead and a viewer here connects to it. Nothing extra has to be
+turned on: `run-compositor` asks this QEMU what display backends it was built
+with and this host whether there is a session to open a window on, and a
+shell with no `DISPLAY` and no `WAYLAND_DISPLAY` gets VNC on
+`127.0.0.1:5900` with a line saying so. `--vnc <DISPLAY>` asks for it
+outright, which is what a host that *could* open a window -- Windows, macOS,
+a desktop you are sitting at -- needs in order to serve one instead.
+
+On the machine with the QEMU:
+
+```
+cargo xtask run-compositor --arch x86_64 --vnc :0
+```
+
+On the machine with the eyes, a tunnel and a viewer. Display *n* is port
+5900 + *n*, as everywhere else that speaks the protocol:
+
+```
+ssh -L 5900:127.0.0.1:5900 <host>
+vncviewer localhost:5900          # RealVNC, TigerVNC, Remmina, macOS Screen Sharing
+```
+
+Or both at once, the tunnel carrying the command that fills it:
+
+```
+ssh -L 5900:127.0.0.1:5900 <host> "cd <the checkout> && cargo xtask run-compositor --arch x86_64 --vnc :0"
+```
+
+The serial console stays where it always was: on that `ssh` session's own
+output, which is where the compositor says what mode it set and where a
+panic would be. The screen and the console are two different pipes and it is
+worth keeping both in view.
+
+**The address is a loopback one on purpose.** `-vnc` without `password=on`
+accepts any client, and nothing here turns a password on, so a wider address
+is a machine anyone who can reach it can drive. `--vnc` takes QEMU's own
+spellings unchanged -- `:0`, `127.0.0.1:0`, `0.0.0.0:2` -- and a bare number
+is that display on the loopback. Binding something other than `127.0.0.1` is
+a thing you say deliberately, and then the tunnel is the part you have
+dropped, not a step you have skipped.
+
+What a viewer sees is the card the compositor draws on, not the firmware's
+head: VNC can be told which console to serve and xtask tells it
+(`display=<card>,head=0`), so the connection lands on the desktop rather
+than on the loader's text. That is the one thing a window cannot do -- GTK
+opens on whichever console QEMU made first and the other is a tab in the
+View menu.
+
+Everything else about the desktop is unchanged by being served rather than
+shown. `--size`, `--layout`, `--variant`, `--config`, `--wallpaper`,
+`--clipboard`, `--smp`, `--memory`, `--release`, `--no-net` and a
+`hyprland.conf` of your own all mean what they mean above. Four things are
+worth knowing before you go looking for a fault that is not there:
+
+| | |
+|---|---|
+| `--gl` | wants a QEMU built `--enable-opengl --enable-virglrenderer`, which many distributions' builds are not. Then there is no `virtio-gpu-gl-pci` on it, a line says so, and the boot goes on with the 2D card -- it does not fail. With the 3D card present the screen is drawn off screen through `egl-headless` and copied out to the VNC server, so `--gl --vnc` is a real combination and not a fallback |
+| `--screens 2` | puts two cards on the bus and the compositor tiles across both, but a VNC server serves one console, and that console is the first card. The second monitor is there and being drawn; you are watching one of them. `test-compositor`'s monitor boot is what judges both |
+| `SUPER` | every binding in the keyboard table above is on it, and whether a viewer passes it to the guest or eats it for its own menu is the viewer's business, not Ferrix's. Most have a setting for it, or a menu that sends one key |
+| speed | a desktop over a tunnel is a desktop over a tunnel. VNC sends what changed, and the compositor already damages only the rows that did, so a shell prompt is fine and a video wallpaper on a machine that has to emulate is the frame a second it already was |
+
+Two ways this refuses rather than guesses. `--vnc` given to a boot with no
+screen at all says so and names the two commands that have one, because a
+display to serve is the thing it was missing. And a QEMU built
+`--disable-vnc` -- asked with `-vnc help`, and judged by what it printed --
+says that too, rather than starting and dying on an option it does not have.
+
+None of this is needed to *test* a desktop on a remote machine.
+`test-compositor`, `test-display`, `test-video`, `test-input`, `test-seat`
+and `test-pty` read the screen with a QMP screendump and open no window and
+no server at all; they are what `cargo xtask check` runs and they run over
+`ssh` with nothing forwarded. VNC is for the case where the judging is
+yours.
+
 ### Everything at once
 
 One command with every part of Ferrix that composes with the others turned
@@ -335,7 +412,7 @@ the last three being the ones not in the line:
 | `--smp`, `--memory` | 4 and 512 MiB by default. A desktop with a video wallpaper is the one workload here that notices more of either |
 | `--release` | builds the loader and kernel with optimisations. Worth it for a desktop somebody is going to use rather than watch boot |
 | `--wallpaper` | matches part of the name of one kept by `cargo xtask wallpapers`. Leave it out and a run picks one of them, a different one each time; `--wallpaper none` for a plain background. A **video** in that directory becomes a wallpaper that moves, which is the most expensive thing this desktop does -- about a frame a second on a machine that has to emulate |
-| `--vnc :0` | instead of a window, for a machine reached over `ssh`. `--gl` still works: the frames are drawn off screen and copied out |
+| `--vnc :0` | instead of a window, for a machine reached over `ssh`. `--gl` still works: the frames are drawn off screen and copied out. [Watching a desktop on another machine](#watching-a-desktop-on-another-machine) is the whole of it -- the tunnel, the viewer, and what a served screen does not carry |
 | `--screens 2` | two cards, so two monitors, which the compositor tiles across and `test-compositor`'s monitor boot judges. Accepted by `run-compositor` too, though the boots that are gated are the headless ones |
 | `--no-net` | the one thing in that command that is on by default and can only be turned *off* |
 
