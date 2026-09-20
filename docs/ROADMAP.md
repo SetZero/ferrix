@@ -94,7 +94,7 @@ session sizes them.
 |---|---|---|
 | ~~Stage 19: the GPU path, Path A (`docs/GPU.md` §3)~~ *done 2026-09-19* | ~~52~~ | landed 2026-09-19 |
 | Stage 19: XWayland, the pointer-driven options, the second-pass effects | 48 | 2026-09-19 to -20 |
-| Dynamic linking: the kernel half, ferrousli's loader, glibc's names | 39 *(3 done)* | 2026-09-20 to -21 |
+| Dynamic linking: the kernel half, ferrousli's loader, glibc's names | 39 *(4 done)* | 2026-09-20 to -21 |
 | Stage 12, btrfs write | *longer* ≈ 60 | 2026-09-21 to -22 |
 | Stage 13, namespaces, cgroups, seccomp | *month* ≈ 60 | 2026-09-22 to -23 |
 | Stage 22, Steam: the parts with a first guess (glibc under the runtime 13, bubblewrap's rest 13, sound 30, Venus 8, XWayland counted above) | 64 | 2026-09-23 to -24 |
@@ -3320,7 +3320,7 @@ every architecture, and by `su`, which reaches `/etc/group` only because a
 
 ---
 
-## Dynamic linking — PIE, `PT_INTERP`, a loader  ·  *39 points, 36 left*
+## Dynamic linking — PIE, `PT_INTERP`, a loader  ·  *39 points, 35 left*
 
 Placed after *Networking* without a number of its own, for the same reason:
 nothing on the path to `rustc` needs it, since Rust's `std` targets static
@@ -3329,8 +3329,10 @@ somebody else's Linux binary runs unchanged — which today holds only for a
 static, fixed-address executable. Nearly every binary a distribution ships is a position-independent executable
 that asks for glibc's `ld-linux`. `kernel/src/syscall/load.rs` used to refuse
 `PT_INTERP` by name; since 2026-09-20 it loads the linker the program asks for
-and enters it, which is the first bullet below. What is still missing is a
-linker to name. The question of 2026-09-16 that put this here was
+and enters it, which is the first bullet below. Since the same day there is a
+linker to name — `ferrousli/ld`, proven against a host-built fixture but not
+yet run inside Ferrix itself — which is the second bullet's first version.
+The question of 2026-09-16 that put this here was
 whether Steam could run; the answer began with this section, before the
 32-bit ABI, networking and the display stages it also waits on. The 32-bit
 x86 ABI is not part of it; since 2026-09-18 it is stage 22's, where the rest
@@ -3338,7 +3340,7 @@ of that answer is.
 
 Three parts, in the order they can be tested:
 
-* **The kernel half, 5 points — 3 of them done, 2026-09-20.** `execve` loads
+* **The kernel half, 5 points — 4 of them done, 2026-09-20.** `execve` loads
   an `ET_DYN` executable at a
   base of its own — Linux's `ELF_ET_DYN_BASE`, unrandomised until stage 13 —
   and applies its relative relocations, which `libs/elf` already reads
@@ -3366,24 +3368,32 @@ Three parts, in the order they can be tested:
   was loaded and entered with no linker and every imported symbol an
   unrelocated zero.
 
-  **What is left of the kernel half, 2 points.** `AT_PLATFORM`, which `execve`
-  still passes as `None`; and the test that drives file-backed `mmap` with
-  `MAP_FIXED` and `PROT_EXEC` and `mprotect` over a `PT_GNU_RELRO` the way a
-  real `ld.so` does — the calls exist and nothing yet uses them in that
-  pattern. Neither is in the way of the loader: a linker can be written and run
-  against what is there now.
-* **ferrousli's loader, 21 points.** The fifth item of `ferrousli/README.md`:
-  a dynamic loader in Rust, shipped as ferrousli's `ld.so` with
-  `libferrousli.so` beside `libferrousli.a`. The `PT_DYNAMIC` section, symbol
-  lookup through the GNU hash table, the relocation types of all three
-  architectures (`GLOB_DAT`, `JUMP_SLOT`, the TLS forms, `IRELATIVE`),
-  `PT_TLS` for loaded modules with `__tls_get_addr` and the dynamic thread
-  vector, `DT_INIT_ARRAY` and `DT_FINI_ARRAY` in dependency order,
-  `LD_LIBRARY_PATH` and `DT_RUNPATH`, and `dlfcn.h` — `dlopen`, `dlsym`,
-  `dlclose`, `dlerror`, `dladdr` — which `docs/POSIX-2024.md` lists as
-  ferrousli's dynamic-loading area and does not price. Lazy binding is not
-  in it: everything is bound at load, as `LD_BIND_NOW` does, so there is no
-  resolver trampoline to write per architecture.
+  `AT_PLATFORM` landed 2026-09-20 too: `arch::user_platform` gives `"x86_64"`
+  on x86-64 and `"v7l"` on ARMv7-A, as the Linux kernels for those
+  architectures do, and `None` on AArch64, which defines no `ELF_PLATFORM`
+  string at all.
+
+  **What is left of the kernel half, 1 point.** The test that drives
+  file-backed `mmap` with `MAP_FIXED` and `PROT_EXEC` and `mprotect` over a
+  `PT_GNU_RELRO` the way a real `ld.so` does — the calls exist and nothing yet
+  uses them in that pattern. Not in the way of the loader: a linker can be
+  written and run against what is there now.
+* **ferrousli's loader, 21 points — a first version done, 2026-09-20.** The
+  fifth item of `ferrousli/README.md`: a dynamic loader in Rust, shipped as
+  ferrousli's `ld.so` with `libferrousli.so` beside `libferrousli.a`.
+  `ferrousli/ld` reads `PT_DYNAMIC`, resolves `DT_NEEDED` libraries (through
+  `LD_LIBRARY_PATH` when a name carries no path of its own), looks symbols up
+  through the GNU hash table, and applies `GLOB_DAT`, `JUMP_SLOT` and
+  `IRELATIVE` relocations, then runs `DT_INIT_ARRAY` in dependency order and
+  enters the program. `tests/link.rs` proves it end to end against a fixture
+  built by the host's own `cc`, checking a data symbol, a function pointer and
+  a pointer into a library's own data all resolved. Still missing: the TLS
+  forms and `__tls_get_addr`, `DT_FINI_ARRAY`, `DT_RUNPATH`, and `dlfcn.h`
+  (`dlopen`, `dlsym`, `dlclose`, `dlerror`, `dladdr`) — which
+  `docs/POSIX-2024.md` lists as ferrousli's dynamic-loading area and does not
+  price — plus a run inside Ferrix itself rather than on the host. Lazy
+  binding is not in it: everything is bound at load, as `LD_BIND_NOW` does, so
+  there is no resolver trampoline to write per architecture.
 * **glibc's names, 13 points.** The README's "then glibc's symbol versions":
   `GLIBC_2.2.5` and its successors as `libferrousli.so`'s version
   definitions, `libc.so.6`, `libm.so.6` and `libpthread.so.0` as its

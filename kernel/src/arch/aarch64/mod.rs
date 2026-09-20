@@ -846,6 +846,17 @@ pub(crate) fn user_hwcaps() -> (u64, u64) {
     (hwcap(ids), hwcap2(ids))
 }
 
+/// `AT_PLATFORM` for a program started on this machine: none.
+///
+/// `arch/arm64/include/asm/elf.h` defines no `ELF_PLATFORM` string, unlike
+/// ARMv7-A and x86, where it distinguishes cores an ABI otherwise treats
+/// alike. `AT_HWCAP` and `AT_HWCAP2` already say what this core can do; a
+/// linker that wants a platform-specific library path has nothing here to
+/// build one from, and glibc's `dl_platform` stays null on this architecture.
+pub(crate) const fn user_platform() -> Option<&'static [u8]> {
+    None
+}
+
 /// Make a freshly allocated user root usable.
 ///
 /// Nothing to do: the kernel's half is reached through `TTBR1_EL1` and a user root is

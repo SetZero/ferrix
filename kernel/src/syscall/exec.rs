@@ -359,7 +359,7 @@ fn populate(
         auxv: &auxv,
         random,
         exec_fn,
-        platform: None,
+        platform: arch::user_platform(),
         width: width(),
     };
     let startup = ferrix_ustack::build(&spec, top, &mut scratch).map_err(|_| ExecError::Startup)?;

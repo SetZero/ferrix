@@ -879,6 +879,17 @@ pub(crate) fn user_hwcaps() -> (u64, u64) {
     (u64::from(hwcap(ids)), 0)
 }
 
+/// `AT_PLATFORM` for a program started on this machine.
+///
+/// `arch/arm/include/asm/elf.h` sets `ELF_PLATFORM` from the core's
+/// architecture number in `CPUID`, as `"v6l"`, `"v7l"` and so on for a
+/// little-endian kernel. Ferrix targets ARMv7-A only, on the DK1 board and
+/// under QEMU's `virt` machine, so this is always `"v7l"` rather than a value
+/// read out of an identification register the way `user_hwcaps` reads several.
+pub(crate) const fn user_platform() -> Option<&'static [u8]> {
+    Some(b"v7l")
+}
+
 /// Make a freshly allocated user root usable.
 ///
 /// Nothing to do: the kernel's half is reached through `TTBR1` and a user root is

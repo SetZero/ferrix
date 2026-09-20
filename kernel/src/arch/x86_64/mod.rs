@@ -942,6 +942,15 @@ pub(crate) fn user_hwcaps() -> (u64, u64) {
     (u64::from(core::arch::x86_64::__cpuid(1).edx), 0)
 }
 
+/// `AT_PLATFORM` for a program started on this machine.
+///
+/// `arch/x86/include/asm/elf.h` defines `ELF_PLATFORM` as `utsname()->machine`,
+/// which is `"x86_64"` on this architecture and never anything else -- there is
+/// no second string the way ARMv7-A has one per core generation.
+pub(crate) const fn user_platform() -> Option<&'static [u8]> {
+    Some(b"x86_64")
+}
+
 /// Enter ring 3 for the first time, at `entry` on `stack`, with `argument` in
 /// the first argument register. Does not return.
 ///
