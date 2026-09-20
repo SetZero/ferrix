@@ -31,6 +31,10 @@ struct Field {
     /// quote, which would otherwise mark the field quoted again and keep an
     /// empty word that zsh does not keep.
     no_word: bool,
+    /// One of the fields a split at `$IFS` made. An empty one of those is a
+    /// word: `${=v}` over `a..b` under `IFS=.` is three words, the middle
+    /// one empty, where an expansion that is merely empty is no word at all.
+    from_split: bool,
 }
 
 struct Out {
@@ -109,14 +113,22 @@ impl Out {
     /// Insert expansion results: the first joins the current field, the rest
     /// start new ones.
     fn push_values(&mut self, vals: &[Vec<u8>], quoted: bool) {
+        self.push_values_split(vals, quoted, false);
+    }
+
+    /// [`Out::push_values`], marking the fields as a split's, which is what
+    /// keeps an empty one from being dropped as an empty word.
+    fn push_values_split(&mut self, vals: &[Vec<u8>], quoted: bool, from_split: bool) {
         let cur = self.cur();
         cur.expanded = true;
         cur.quoted |= quoted;
+        cur.from_split |= from_split && vals.len() > 1;
         for (i, v) in vals.iter().enumerate() {
             if i > 0 {
                 self.fields.push(Field {
                     expanded: true,
                     quoted,
+                    from_split,
                     ..Field::default()
                 });
             }
@@ -188,7 +200,7 @@ pub(crate) fn expand_words(sh: &mut Shell, words: &[Vec<u8>]) -> Result<Vec<Vec<
                 // An empty word goes unless it was quoted into being; a `$@`
                 // with no elements is not such a quote, however it was
                 // written.
-                if f.bytes.is_empty() && (f.no_word || (f.expanded && !f.quoted)) {
+                if f.bytes.is_empty() && !f.from_split && (f.no_word || (f.expanded && !f.quoted)) {
                     continue;
                 }
                 args.push(tok::remove_nulls(&f.bytes));
@@ -479,7 +491,10 @@ fn simple_name(w: &[u8]) -> (Vec<u8>, usize) {
 fn insert_param(out: &mut Out, r: param::Expansion, dq: bool) {
     match r.value {
         Value::Array(a) if r.splat => {
-            let vals: Vec<Vec<u8>> = if dq {
+            // An empty element is no word -- unless a split at IFS made it,
+            // where the emptiness is the point: `${=v}` over `a..b` under
+            // `IFS=.` is three words.
+            let vals: Vec<Vec<u8>> = if dq || r.split {
                 a
             } else {
                 a.into_iter().filter(|v| !v.is_empty()).collect()
@@ -494,7 +509,7 @@ fn insert_param(out: &mut Out, r: param::Expansion, dq: bool) {
             } else if r.rc {
                 out.push_values_rc(&vals, dq);
             } else {
-                out.push_values(&vals, dq);
+                out.push_values_split(&vals, dq, r.split);
             }
         }
         other => {
@@ -515,15 +530,66 @@ fn insert_output(sh: &Shell, out: &mut Out, raw: &[u8], dq: bool) {
         out.push_values(&[text], true);
         return;
     }
-    let ifs = sh
-        .get(b"IFS")
-        .map_or_else(|| b" \t\n".to_vec(), |v| v.joined());
-    let words: Vec<Vec<u8>> = text
-        .split(|b| ifs.contains(b))
-        .filter(|s| !s.is_empty())
-        .map(<[u8]>::to_vec)
-        .collect();
-    out.push_values(&words, false);
+    let words = split_ifs(&text, &ifs(sh));
+    out.push_values_split(&words, false, true);
+}
+
+/// `$IFS`, or the three characters it stands for when it has never been set.
+pub(crate) fn ifs(sh: &Shell) -> Vec<u8> {
+    sh.get(b"IFS")
+        .map_or_else(|| b" \t\n".to_vec(), |v| v.joined())
+}
+
+/// Split `text` into fields at `ifs`, by the rule every shell shares.
+///
+/// An IFS character that is whitespace and one that is not are not the same
+/// thing. A run of IFS whitespace is one delimiter and is dropped at either
+/// end, so `  a  b ` is two fields; an IFS character that is not whitespace
+/// delimits one field of its own, with any whitespace around it absorbed, so
+/// `a..b` under `IFS=.` is three fields and `.a.` is three as well -- the
+/// empty ones at the ends are real. Splitting an empty string gives nothing,
+/// and an empty `IFS` splits nothing.
+pub(crate) fn split_ifs(text: &[u8], ifs: &[u8]) -> Vec<Vec<u8>> {
+    if text.is_empty() {
+        return Vec::new();
+    }
+    if ifs.is_empty() {
+        return vec![text.to_vec()];
+    }
+    let white = |c: u8| ifs.contains(&c) && matches!(c, b' ' | b'\t' | b'\n');
+    let separates = |c: u8| ifs.contains(&c);
+    let mut out: Vec<Vec<u8>> = Vec::new();
+    let mut field: Vec<u8> = Vec::new();
+    // Whether the delimiter last crossed held a character that was not
+    // whitespace, which is what decides an empty field at the very end.
+    let mut hard = false;
+    let mut i = 0;
+    while text.get(i).is_some_and(|&c| white(c)) {
+        i += 1;
+    }
+    while let Some(&c) = text.get(i) {
+        if !separates(c) {
+            field.push(c);
+            i += 1;
+            continue;
+        }
+        out.push(std::mem::take(&mut field));
+        hard = false;
+        while text.get(i).is_some_and(|&c| white(c)) {
+            i += 1;
+        }
+        if text.get(i).is_some_and(|&c| separates(c) && !white(c)) {
+            hard = true;
+            i += 1;
+            while text.get(i).is_some_and(|&c| white(c)) {
+                i += 1;
+            }
+        }
+    }
+    if !field.is_empty() || hard {
+        out.push(field);
+    }
+    out
 }
 
 /// Interpret the escapes of `$'...'`.
