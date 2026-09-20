@@ -3,6 +3,24 @@
 
 use crate::shell::{Shell, Value};
 
+/// `%n`: the name the effective user id belongs to.
+///
+/// This is the password database's answer, not `$USER`, because that is
+/// what zsh's `USERNAME` is -- a shell started with no environment at all
+/// still knows whose it is, and agnoster's context segment says so.
+pub(crate) fn username() -> Vec<u8> {
+    // SAFETY: geteuid has no preconditions; getpwuid returns a pointer to
+    // static storage, or null when there is no such entry.
+    let pw = unsafe { libc::getpwuid(libc::geteuid()) };
+    if !pw.is_null() {
+        // SAFETY: pw is non-null, and pw_name is a NUL-terminated string
+        // owned by the library.
+        let name = unsafe { std::ffi::CStr::from_ptr((*pw).pw_name) };
+        return name.to_bytes().to_vec();
+    }
+    Vec::new()
+}
+
 fn hostname() -> Vec<u8> {
     std::fs::read("/etc/hostname")
         .or_else(|_| std::fs::read("/proc/sys/kernel/hostname"))
@@ -240,11 +258,7 @@ fn escapes(sh: &Shell, ps: &[u8]) -> Vec<u8> {
                 });
             }
             b'm' | b'M' => out.extend(hostname()),
-            b'n' => out.extend(
-                sh.get(b"USER")
-                    .map(|v| v.joined())
-                    .unwrap_or_else(|| b"root".to_vec()),
-            ),
+            b'n' => out.extend(username()),
             b'?' => out.extend(sh.status.to_string().into_bytes()),
             b'd' | b'/' => out.extend_from_slice(&pwd),
             b'~' => {
