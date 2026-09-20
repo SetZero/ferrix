@@ -30,7 +30,8 @@ the parser's trees.
 * **Lexer and parser:** zsh's `lex.c` and `parse.c`, in zsh's in-band token
   representation: every command form, here-documents, aliases, `[[ ]]`.
 * **Execution:** lists, pipelines (the last element in the shell, as zsh
-  does), redirections including here-documents and `{fd}>`, subshells,
+  does, and each its own job, so a command written in a function or an `if`
+  is waited for before the next one starts), redirections including here-documents and `{fd}>`, subshells,
   functions with `local`, `&`, command substitution, `if`/`for`/`while`/
   `until`/`repeat`/`case` with `;&` and `;|`, `{ } always { }`.
 * **Expansion:** `$name`, `${...}` with the common flags (`j s f z U L C o O u
@@ -38,7 +39,9 @@ the parser's trees.
   operators, `#`/`%`/`/` pattern operators, substrings, `:h :t :r :e :l :u :a
   :gs`, arithmetic, `$'...'`, brace expansion, `~`, globbing with `(N)`.
 * **Builtins:** the ones scripts use first, from `echo`, `print` and `printf`
-  to `typeset`, `read`, `source`, `autoload`, `getopts` and `trap EXIT`.
+  to `typeset`, `read`, `source`, `autoload`, `getopts` and `trap EXIT`, and
+  `umask` in both of zsh's forms -- octal, and a symbolic mode such as
+  `umask g-w,o-w`, printed back by `umask -S`.
 * **Interactive:** a prompt with the plain `%` escapes and continuation
   lines, the line editor with completion and history, and job control: a
   pipeline is one process group, the terminal is handed to the foreground
@@ -55,6 +58,17 @@ the parser's trees.
   the `ferrix` user's shell in Ferrix's image, so `su - ferrix` starts it.
 * **Who is running it:** `UID`, `EUID`, `GID` and `EGID`, read from the
   kernel at each use, which is what `%#` and a theme's prompt ask.
+
+**oh-my-zsh's installer runs.** `sh -c "$(curl -fsSL .../tools/install.sh)"`
+clones the repository, writes a `.zshrc` from the template and prints the
+banner, on this host and on Ferrix. What it needed was two fixes: `umask`
+taking a symbolic mode, which is the installer's first line, and a pipeline
+written inside a function, an `if`, a `while` or a `{ }` becoming a job of
+its own rather than joining the job of the compound command around it --
+without which `git init "$ZSH" && cd "$ZSH"` ran the `cd` while `git` was
+still starting. **Starting** oh-my-zsh is the criterion that is still to
+meet: sourcing the `.zshrc` it writes reaches `zrecompile` and stops at
+`zcompile`, which is not a builtin here yet.
 
 Next, in the order oh-my-zsh needs them: the parser parity run against
 `zsh -n` over oh-my-zsh and zsh's function library; the rest of the
