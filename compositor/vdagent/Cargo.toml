@@ -1,0 +1,25 @@
+[package]
+name = "compositor-vdagent"
+description = "The clipboard agent: SPICE's vdagent on one side and Wayland's selection on the other"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "vdagent"
+path = "src/main.rs"
+
+[dependencies]
+compositor-clip = { path = "../clip" }
+compositor-evecho = { path = "../evecho" }
+compositor-protocol = { path = "../protocol" }
+compositor-socket = { path = "../socket" }
+compositor-wire = { path = "../wire" }
+ferrix-vdagent = { path = "../../libs/vdagent" }
+# Declarations only: the pipe a selection is read and written through.
+libc = "0.2.189"
+
+[lints]
+workspace = true

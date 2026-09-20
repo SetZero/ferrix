@@ -106,6 +106,8 @@ const LSWT_PATH: &str = "bin/lswt";
 const SHOT_PATH: &str = "bin/shot";
 const LOCK_PATH: &str = "bin/lock";
 const VKBD_PATH: &str = "bin/vkbd";
+/// The clipboard agent, which joins the host's clipboard to the selection.
+const VDAGENT_PATH: &str = "bin/vdagent";
 const CONFIG_PATH: &str = "etc/hyprland.conf";
 
 /// Where `run-compositor` puts the wallpaper it carries.
@@ -822,6 +824,8 @@ struct Programs {
     lock: PathBuf,
     /// `vkbd`, which types as `wtype` does.
     vkbd: PathBuf,
+    /// `vdagent`, the clipboard agent of `docs/CLIPBOARD.md` §6.
+    vdagent: PathBuf,
 }
 
 impl Programs {
@@ -838,11 +842,12 @@ impl Programs {
             shot: build(arch, "compositor-shot", "shot")?,
             lock: build(arch, "compositor-lock", "lock")?,
             vkbd: build(arch, "compositor-vkbd", "vkbd")?,
+            vdagent: build(arch, "compositor-vdagent", "vdagent")?,
         })
     }
 
     /// The ones the initramfs carries, each with the path it goes at.
-    fn carried(&self) -> [(&'static str, &Path); 9] {
+    fn carried(&self) -> [(&'static str, &Path); 10] {
         [
             (CLIENT_PATH, self.client.as_path()),
             (CTL_PATH, self.ctl.as_path()),
@@ -853,6 +858,7 @@ impl Programs {
             (SHOT_PATH, self.shot.as_path()),
             (LOCK_PATH, self.lock.as_path()),
             (VKBD_PATH, self.vkbd.as_path()),
+            (VDAGENT_PATH, self.vdagent.as_path()),
         ]
     }
 }
