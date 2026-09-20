@@ -73,3 +73,17 @@ fn subscript_flags_on_a_hash_answer_with_keys_and_values() {
     assert_eq!(run("a=(x y z y); echo ${a[(I)y]} ${a[(i)y]}"), "4 2\n");
     assert_eq!(run("a=(x y); echo ${a[(I)q]}"), "0\n");
 }
+
+/// The prompt has two names and is one parameter, which is how a theme that
+/// sets `PROMPT` changes the prompt the shell prints.
+#[test]
+fn the_prompt_parameters_share_one_value() {
+    assert_eq!(run("PROMPT='x> '; echo \"[$PS1]\""), "[x> ]\n");
+    assert_eq!(
+        run("PS1='y> '; echo \"[$PROMPT][$prompt]\""),
+        "[y> ][y> ]\n"
+    );
+    assert_eq!(run("PROMPT2='c> '; echo \"[$PS2]\""), "[c> ]\n");
+    // The right-hand prompts are two parameters in zsh, not one.
+    assert_eq!(run("RPROMPT=r; echo \"[$RPS1]\""), "[]\n");
+}
