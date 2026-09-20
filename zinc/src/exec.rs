@@ -881,10 +881,6 @@ fn word_text(w: &[u8]) -> Vec<u8> {
     tok::remove_nulls(w)
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "precommand modifiers, functions, builtins and programs"
-)]
 /// A simple command, and then the descriptors any `<(...)` in it left open.
 ///
 /// The shell holds its end of each process substitution's pipe so the
