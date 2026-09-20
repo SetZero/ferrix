@@ -87,3 +87,64 @@ fn the_prompt_parameters_share_one_value() {
     // The right-hand prompts are two parameters in zsh, not one.
     assert_eq!(run("RPROMPT=r; echo \"[$RPS1]\""), "[]\n");
 }
+
+/// The colour and attribute escapes, as the codes zsh's terminal
+/// capabilities produce for a 256-colour terminal. Agnoster is built out of
+/// these and nothing else.
+#[test]
+fn prompt_colours_are_the_sequences_zsh_writes() {
+    let p = |spec: &str| run(&format!("print -Pn -- '{spec}'"));
+    assert_eq!(p("%F{blue}"), "\x1b[34m");
+    assert_eq!(p("%F{black}"), "\x1b[30m");
+    assert_eq!(p("%K{blue}"), "\x1b[44m");
+    // 0-7 are the plain codes, 8-15 the bright ones, the rest are indexed.
+    assert_eq!(p("%F{7}"), "\x1b[37m");
+    assert_eq!(p("%F{9}"), "\x1b[91m");
+    assert_eq!(p("%F{200}"), "\x1b[38;5;200m");
+    assert_eq!(p("%K{200}"), "\x1b[48;5;200m");
+    // A name the terminal would not know is the default colour, not an error.
+    assert_eq!(p("%F{default}"), "\x1b[39m");
+    assert_eq!(p("%F{bogus}"), "\x1b[39m");
+    assert_eq!(p("%f%k"), "\x1b[39m\x1b[49m");
+    // There is no "not bold", so `%b` resets everything, as zsh's does.
+    assert_eq!(p("%B%b"), "\x1b[1m\x1b[0m");
+    assert_eq!(p("%U%u%S%s"), "\x1b[4m\x1b[24m\x1b[7m\x1b[27m");
+    // `%{...%}` are markers; what they enclose is literal.
+    assert_eq!(p("%{raw%}"), "raw");
+    assert_eq!(p("%%"), "%");
+}
+
+/// `%(c.true.false)`, whose branches are themselves prompts.
+#[test]
+fn a_prompt_ternary_picks_a_branch() {
+    let p = |spec: &str| run(&format!("print -Pn -- '{spec}'"));
+    // The tests run unprivileged, so `!` is false and `?` starts true.
+    assert_eq!(p("%(!.root.user)"), "user");
+    assert_eq!(p("%(?.ok.bad)"), "ok");
+    assert_eq!(p("%(100j.busy.idle)"), "idle");
+    // The chosen branch is expanded in its turn.
+    assert_eq!(p("%(?.%F{green}ok%f.no)"), "\x1b[32mok\x1b[39m");
+    // Text after the ternary is not swallowed by it.
+    assert_eq!(p("%(!.a.b)c"), "bc");
+}
+
+/// `$commands` is every program on `$PATH` by name, which is how a script
+/// asks whether one is installed. oh-my-zsh asks constantly.
+#[test]
+fn commands_says_which_programs_exist() {
+    assert_eq!(run("echo $+commands[sh]"), "1\n");
+    assert_eq!(run("echo $+commands[definitely-not-here-xyzzy]"), "0\n");
+    assert_eq!(run("[[ -x $commands[sh] ]] && echo yes"), "yes\n");
+}
+
+/// A `${v/pat/repl}` whose pattern holds an escaped delimiter. agnoster
+/// turns a ref into a branch name with `${ref/refs\/heads\//…}`.
+#[test]
+fn a_replacement_pattern_may_escape_its_delimiter() {
+    assert_eq!(
+        run("r=refs/heads/master; echo \"${r/refs\\/heads\\//B }\""),
+        "B master\n"
+    );
+    assert_eq!(run("r=a/b/c; echo \"${r/\\//-}\""), "a-b/c\n");
+    assert_eq!(run("r=abc; echo \"${r/b/X}\""), "aXc\n");
+}
