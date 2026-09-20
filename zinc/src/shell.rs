@@ -359,7 +359,14 @@ impl Shell {
         // environment still has one.
         let name = crate::prompt::username();
         if !name.is_empty() {
-            sh.set_scalar(b"USERNAME", name);
+            sh.set_scalar(b"USERNAME", name.clone());
+            // LOGNAME comes from the same place when the environment has
+            // none of its own. Themes compare the two to tell whether the
+            // user has become somebody else, and two names that disagree
+            // only because one is missing read as exactly that.
+            if !sh.vars.contains_key(&b"LOGNAME"[..]) {
+                sh.set_scalar(b"LOGNAME", name);
+            }
         }
         if !sh.vars.contains_key(&b"PS1"[..]) {
             sh.set_scalar(b"PS1", b"%m%# ".to_vec());
