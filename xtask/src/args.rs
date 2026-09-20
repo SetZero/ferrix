@@ -117,6 +117,18 @@ pub(crate) struct Args {
     /// than in a window of this host's, which is what a machine reached over
     /// `ssh` has. `window` says why the default is the loopback.
     pub(crate) vnc: Option<String>,
+    /// `--rendernode <PATH>`: which GPU `egl-headless` draws `--gl`'s frames
+    /// on, as `/dev/dri/renderD128`.
+    ///
+    /// Only that backend takes one, and it is the backend a served screen
+    /// uses, so this is the `--gl --vnc` case and no other: a window's GL
+    /// goes to whichever GPU the host's own display is on, which is not a
+    /// thing QEMU lets anybody choose. Left out, QEMU opens the first render
+    /// node it can, which on a machine with one GPU is that GPU and on a
+    /// machine with several is a guess -- and the wrong guess is a
+    /// proprietary driver that does not do what virglrenderer asks, or an
+    /// idle card while the fast one watches.
+    pub(crate) rendernode: Option<String>,
     /// `--layout <LIST>`: the keyboard layouts a watched boot is configured
     /// with, as `input:kb_layout` takes them -- one name or a comma-separated
     /// list, `de` or `de,us`.
@@ -207,6 +219,7 @@ impl Args {
                 "--init" => args.init = Some(value(&mut items, "--init")?),
                 "--boot" => args.boot = Some(value(&mut items, "--boot")?),
                 "--vnc" => args.vnc = Some(value(&mut items, "--vnc")?),
+                "--rendernode" => args.rendernode = Some(value(&mut items, "--rendernode")?),
                 "--config" => args.config = Some(value(&mut items, "--config")?),
                 "--layout" => args.layout = Some(value(&mut items, "--layout")?),
                 "--variant" => args.variant = Some(value(&mut items, "--variant")?),

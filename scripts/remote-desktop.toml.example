@@ -44,6 +44,10 @@ arch = "x86_64"
 #   "--size", "1600x900"   the guest's screen
 #   "--layout", "de,us"    keyboard layouts a switch moves between
 #   "--gl"                 the 3D card, if that QEMU was built with one
+#   "--rendernode", "/dev/dri/renderD128"
+#                          which GPU --gl draws on, on a machine with two.
+#                          `ls -l /dev/dri/by-path/` says which node is which
+#                          card; QEMU takes the lowest-numbered one otherwise
 #   "--config", "/path/hyprland.conf"   a real config, on the remote machine
 #   "--no-net"             no network device
 args = []

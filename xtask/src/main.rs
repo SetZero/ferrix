@@ -178,6 +178,10 @@ OPTIONS:
                                          today (docs/CLIPBOARD.md §8)
     --vnc <DISPLAY>                      run --display, run-compositor: serve the screen over VNC
                                          at e.g. `:0` (127.0.0.1) rather than in a window of this host's
+    --rendernode <PATH>                  --gl on a served or headless screen: which GPU egl-headless
+                                         draws on, e.g. /dev/dri/renderD128. QEMU takes the first
+                                         render node otherwise, which on a machine with two GPUs is a
+                                         guess. A window's GL goes to the host display's GPU regardless
     --config <PATH>                      run-compositor: the hyprland.conf the guest is given
     --layout <LIST>                      run-compositor: the keyboard layout, as input:kb_layout
                                          takes it: `de`, or `de,us` for two a switch moves between

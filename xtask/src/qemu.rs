@@ -984,7 +984,7 @@ fn qemu_command(
     // to know: `attach_display` asks the same question of the same QEMU and
     // gets the same answer.
     let (_, gl) = crate::window::card(&binary, args.gl && card.is_some());
-    let _ = command.args(window.arguments_with(card.as_deref(), gl));
+    let _ = command.args(window.arguments_with(card.as_deref(), gl, args.rendernode.as_deref()));
     window.announce(card.as_deref());
     // The serial port, which is this machine's whole console.
     let _ = command.args(console.arguments()?);

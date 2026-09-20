@@ -89,9 +89,14 @@ impl Window {
     /// backend does not have OpenGL support enabled"* -- so the backend has
     /// to be told. A headless boot cannot simply say `gl=on`, because `none`
     /// has no GL to turn on; `egl-headless` is the backend for exactly this.
-    pub(crate) fn arguments_with(&self, card: Card<'_>, gl: bool) -> Vec<String> {
+    pub(crate) fn arguments_with(
+        &self,
+        card: Card<'_>,
+        gl: bool,
+        rendernode: Option<&str>,
+    ) -> Vec<String> {
         let backend = match self {
-            Window::Headless if gl => "egl-headless".to_owned(),
+            Window::Headless if gl => headless(rendernode),
             Window::Headless => "none".to_owned(),
             Window::Local("gtk") if gl => "gtk,show-tabs=on,gl=on".to_owned(),
             Window::Local(name) if gl => format!("{name},gl=on"),
@@ -114,7 +119,7 @@ impl Window {
                 };
                 return vec![
                     "-display".to_owned(),
-                    "egl-headless".to_owned(),
+                    headless(rendernode),
                     "-vnc".to_owned(),
                     server,
                 ];
@@ -162,6 +167,61 @@ impl Window {
             }
         }
     }
+}
+
+/// The `egl-headless` backend, drawing on `rendernode` where one was named.
+///
+/// Without one QEMU opens the first render node it can, which is right on a
+/// machine with one GPU and a guess on a machine with several -- and the
+/// guess is made by device number, not by which card is any good at this.
+fn headless(rendernode: Option<&str>) -> String {
+    match rendernode {
+        Some(node) => format!("egl-headless,rendernode={node}"),
+        None => "egl-headless".to_owned(),
+    }
+}
+
+/// Check `--rendernode` before QEMU has to, and say which nodes this machine
+/// has when it is wrong.
+///
+/// QEMU's own complaint about a node that is not there names the path and
+/// stops, which is fair but leaves the person to go and find what the right
+/// path would have been. The answer is a directory listing away and the two
+/// nodes on a dual-GPU machine are one digit apart, so a typo is the likely
+/// mistake and the listing is the likely fix.
+///
+/// # Errors
+///
+/// When `--rendernode` was given to a boot with no `--gl` to draw, or names
+/// something this machine does not have.
+fn check_rendernode(args: &Args) -> Result<()> {
+    let Some(node) = args.rendernode.as_deref() else {
+        return Ok(());
+    };
+    if !args.gl {
+        return Err(Error::new(
+            "--rendernode says which GPU --gl draws on, and this boot has no --gl.",
+        ));
+    }
+    if Path::new(node).exists() {
+        return Ok(());
+    }
+    let mut found: Vec<String> = std::fs::read_dir("/dev/dri")
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| entry.path().display().to_string())
+        .filter(|path| path.contains("renderD"))
+        .collect();
+    found.sort();
+    Err(Error::new(format!(
+        "--rendernode names {node}, which is not there.{}",
+        if found.is_empty() {
+            " This machine has no /dev/dri render node at all.".to_owned()
+        } else {
+            format!(" This machine has: {}", found.join(", "))
+        }
+    )))
 }
 
 /// Which port a VNC address serves: display *n* is 5900 + *n*, as everything
@@ -233,6 +293,13 @@ fn session() -> bool {
 /// When `--vnc` was given to a boot that has no screen, or when neither a
 /// window nor VNC can be had from this QEMU.
 pub(crate) fn choose(binary: &Path, args: &Args) -> Result<Window> {
+    // Before the question of where the screen goes, because a headless boot
+    // has a GPU to pick too: `test-display --gl` draws with `egl-headless`
+    // and reads the result back with a screendump.
+    check_rendernode(args)?;
+    if let Some(node) = args.rendernode.as_deref() {
+        println!("  gpu: egl-headless draws on {node}");
+    }
     if !wanted(args) {
         if args.vnc.is_some() {
             return Err(Error::new(
@@ -602,22 +669,81 @@ Some display backends support suboptions, which can be set with
         assert!(!named(listing).iter().any(|name| name == GL_CARD));
     }
 
+    /// A machine with two GPUs has two render nodes, and which one draws is
+    /// otherwise QEMU picking the lower device number.
+    #[test]
+    fn a_named_render_node_is_the_one_egl_headless_draws_on() {
+        assert_eq!(
+            Window::Headless.arguments_with(None, true, Some("/dev/dri/renderD128")),
+            [
+                "-display".to_owned(),
+                "egl-headless,rendernode=/dev/dri/renderD128".to_owned()
+            ]
+        );
+        // The served case is the one this exists for: a screen watched from
+        // somewhere else is a screen on a machine nobody is sitting at, and
+        // that is where a second GPU is most likely to be the idle one.
+        assert_eq!(
+            Window::Vnc(":0".to_owned()).arguments_with(
+                Some("gpu0"),
+                true,
+                Some("/dev/dri/renderD129")
+            ),
+            [
+                "-display".to_owned(),
+                "egl-headless,rendernode=/dev/dri/renderD129".to_owned(),
+                "-vnc".to_owned(),
+                ":0,display=gpu0,head=0".to_owned()
+            ]
+        );
+    }
+
+    /// A window's GL is the host display's GPU whatever anybody asks, so the
+    /// node is not written into a backend that would ignore it.
+    #[test]
+    fn a_window_takes_no_render_node() {
+        assert_eq!(
+            Window::Local("gtk").arguments_with(None, true, Some("/dev/dri/renderD128")),
+            ["-display".to_owned(), "gtk,show-tabs=on,gl=on".to_owned()]
+        );
+        assert_eq!(
+            Window::Local("sdl").arguments_with(None, true, Some("/dev/dri/renderD128")),
+            ["-display".to_owned(), "sdl,gl=on".to_owned()]
+        );
+    }
+
+    /// Naming a GPU for a boot that draws nothing on it is a mistake worth
+    /// saying, not a setting worth ignoring.
+    #[test]
+    fn a_render_node_without_gl_is_refused() {
+        let mut args = Args {
+            command: Some("run-compositor".to_owned()),
+            rendernode: Some("/dev/dri/renderD128".to_owned()),
+            ..Args::default()
+        };
+        assert!(check_rendernode(&args).is_err());
+        args.gl = true;
+        // With `--gl` the only remaining question is whether the node is
+        // there, which is this machine's business and not this test's.
+        let _ = check_rendernode(&args);
+    }
+
     /// The 3D card needs a backend with OpenGL on, and `none` has none to
     /// turn on: a headless GPU boot gets `egl-headless` instead.
     #[test]
     fn a_3d_card_takes_a_backend_that_has_opengl() {
         assert_eq!(
-            Window::Headless.arguments_with(None, true),
+            Window::Headless.arguments_with(None, true, None),
             ["-display".to_owned(), "egl-headless".to_owned()]
         );
         assert_eq!(
-            Window::Local("gtk").arguments_with(None, true),
+            Window::Local("gtk").arguments_with(None, true, None),
             ["-display".to_owned(), "gtk,show-tabs=on,gl=on".to_owned()]
         );
         // VNC has no OpenGL of its own, so it is served beside the backend
         // that has rather than being the display.
         assert_eq!(
-            Window::Vnc(":7".to_owned()).arguments_with(Some("gpu0"), true),
+            Window::Vnc(":7".to_owned()).arguments_with(Some("gpu0"), true, None),
             [
                 "-display".to_owned(),
                 "egl-headless".to_owned(),
@@ -627,27 +753,27 @@ Some display backends support suboptions, which can be set with
         );
         // And without it, exactly what it always was.
         assert_eq!(
-            Window::Headless.arguments_with(None, false),
-            Window::Headless.arguments_with(None, false)
+            Window::Headless.arguments_with(None, false, None),
+            Window::Headless.arguments_with(None, false, None)
         );
         assert_eq!(
-            Window::Local("gtk").arguments_with(Some("gpu0"), false),
-            Window::Local("gtk").arguments_with(Some("gpu0"), false)
+            Window::Local("gtk").arguments_with(Some("gpu0"), false, None),
+            Window::Local("gtk").arguments_with(Some("gpu0"), false, None)
         );
     }
 
     #[test]
     fn the_display_argument_is_what_qemu_takes() {
         assert_eq!(
-            Window::Headless.arguments_with(None, false),
+            Window::Headless.arguments_with(None, false, None),
             ["-display".to_owned(), "none".to_owned()]
         );
         assert_eq!(
-            Window::Local("sdl").arguments_with(None, false),
+            Window::Local("sdl").arguments_with(None, false, None),
             ["-display".to_owned(), "sdl".to_owned()]
         );
         assert_eq!(
-            Window::Vnc("127.0.0.1:0".to_owned()).arguments_with(None, false),
+            Window::Vnc("127.0.0.1:0".to_owned()).arguments_with(None, false, None),
             ["-display".to_owned(), "vnc=127.0.0.1:0".to_owned()]
         );
     }
@@ -657,11 +783,11 @@ Some display backends support suboptions, which can be set with
         // GTK cannot be told which tab to open on, so it is told to show
         // them; VNC serves one console and is pointed at the card.
         assert_eq!(
-            Window::Local("gtk").arguments_with(Some("gpu0"), false),
+            Window::Local("gtk").arguments_with(Some("gpu0"), false, None),
             ["-display".to_owned(), "gtk,show-tabs=on".to_owned()]
         );
         assert_eq!(
-            Window::Vnc(":1".to_owned()).arguments_with(Some("gpu0"), false),
+            Window::Vnc(":1".to_owned()).arguments_with(Some("gpu0"), false, None),
             [
                 "-display".to_owned(),
                 "vnc=:1,display=gpu0,head=0".to_owned()
