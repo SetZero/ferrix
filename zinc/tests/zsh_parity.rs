@@ -270,3 +270,18 @@ fn a_style_is_answered_by_the_most_specific_pattern() {
     assert_eq!(run("zstyle ':p:*' k v1; zstyle -d; zstyle -L"), "");
 }
 
+/// `$functions` names every function the shell knows, defined or only marked
+/// by `autoload`. vcs_info asks `(( $+functions[VCS_INFO_detect_git] ))`
+/// before it will use a backend.
+#[test]
+fn functions_says_which_functions_exist() {
+    assert_eq!(run("f() { :; }; echo ${+functions[f]}"), "1\n");
+    assert_eq!(run("echo ${+functions[nope]}"), "0\n");
+    assert_eq!(run("f() { :; }; v=f; echo ${+functions[$v]}"), "1\n");
+    // A name marked but never found on `fpath` answers as zsh's does.
+    assert_eq!(
+        run("fpath=(); autoload -Uz nowhere; echo $functions[nowhere]"),
+        "builtin autoload -XU\n"
+    );
+}
+
