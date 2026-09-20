@@ -108,7 +108,9 @@ fn map_opened(path: *const c_char, fd: c_int, page_size: usize) -> Result<Mapped
     if header.phnum > MAX_PHNUM {
         return Err(Error::NotAnObject(path));
     }
-    let headers = header.program_headers(&head).ok_or(Error::NotAnObject(path))?;
+    let headers = header
+        .program_headers(&head)
+        .ok_or(Error::NotAnObject(path))?;
 
     let (low, high) = span(headers, page_size).ok_or(Error::NotAnObject(path))?;
 
@@ -302,7 +304,11 @@ fn span(headers: &[Phdr], page_size: usize) -> Option<(usize, usize)> {
         low = low.min(start & !mask);
         high = high.max((end + mask) & !mask);
     }
-    if low == usize::MAX { None } else { Some((low, high)) }
+    if low == usize::MAX {
+        None
+    } else {
+        Some((low, high))
+    }
 }
 
 /// Just enough of the ELF file header to find the program headers.
@@ -326,7 +332,11 @@ impl ElfHead {
         // A loader is loaded into the process it links, so the class and the
         // byte order are never in question: an object of another class is one
         // this process could not run, not one to be read differently.
-        let class = if cfg!(target_pointer_width = "64") { 2 } else { 1 };
+        let class = if cfg!(target_pointer_width = "64") {
+            2
+        } else {
+            1
+        };
         if head.get(4) != Some(&class) || head.get(5) != Some(&1) {
             return None;
         }

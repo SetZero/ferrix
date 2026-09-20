@@ -25,7 +25,7 @@
 //! run-time and link-time addresses of `_DYNAMIC` is the bias in both cases,
 //! and it needs nothing but this object.
 
-use crate::elf::{DT_NULL, DT_RELA, DT_RELASZ, DT_RELAENT, Dyn, Rela};
+use crate::elf::{DT_NULL, DT_RELA, DT_RELAENT, DT_RELASZ, Dyn, Rela};
 
 /// The run-time address of this object's `_DYNAMIC`, from one PC-relative
 /// instruction and nothing else.

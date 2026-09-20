@@ -95,7 +95,10 @@ impl Scope {
             .get_mut(self.count)
             .ok_or(Error::TooManyObjects)?;
         *slot = object;
-        let slot = self.names.get_mut(self.count).ok_or(Error::TooManyObjects)?;
+        let slot = self
+            .names
+            .get_mut(self.count)
+            .ok_or(Error::TooManyObjects)?;
         *slot = name;
         self.count += 1;
         Ok(())
@@ -138,9 +141,9 @@ impl Scope {
             let object = *self.objects.get(at).ok_or(Error::TooManyObjects)?;
             for slot in 0..object.needed_count {
                 let offset = *object.needed.get(slot).ok_or(Error::TooManyObjects)?;
-                let name = object
-                    .name(offset)
-                    .ok_or(Error::MalformedObject("a DT_NEEDED outside the string table"))?;
+                let name = object.name(offset).ok_or(Error::MalformedObject(
+                    "a DT_NEEDED outside the string table",
+                ))?;
                 if self.already_loaded(name) {
                     continue;
                 }
@@ -232,8 +235,8 @@ impl Scope {
     fn add_mapped(&mut self, name: *const c_char, mapped: map::Mapped) -> Result<(), Error> {
         // SAFETY: `map::object` returns the object's own `PT_DYNAMIC` at its
         // run-time address, with the bias it was mapped at.
-        let mut object = unsafe { Object::read(mapped.base, mapped.dynamic) }
-            .ok_or(Error::TooManyObjects)?;
+        let mut object =
+            unsafe { Object::read(mapped.base, mapped.dynamic) }.ok_or(Error::TooManyObjects)?;
         object.relro = mapped.relro;
         self.push(name, object)
     }

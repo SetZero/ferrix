@@ -203,9 +203,9 @@ unsafe fn resolve(
     // SAFETY: the index came from a relocation of this object, whose symbol
     // table it indexes.
     let symbol = unsafe { object.symtab.add(index).read() };
-    let name = object
-        .name(symbol.st_name)
-        .ok_or(Error::MalformedObject("a symbol name outside the string table"))?;
+    let name = object.name(symbol.st_name).ok_or(Error::MalformedObject(
+        "a symbol name outside the string table",
+    ))?;
     // SAFETY: the scope's objects are mapped.
     if let Some(found) = unsafe { scope.lookup(name) } {
         return Ok(Some(found));
