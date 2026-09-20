@@ -138,7 +138,14 @@ default musl x86-64 target is a static PIE. `f7779ab5` is documentation: it
 staged the 39-point plan across the roadmap, the backlog and the model, and
 changed no code.
 
-What is not done is `PT_INTERP`, and the hook for it is one place --
+**Overtaken on 2026-09-20:** `PT_INTERP` is loaded now. `execve` places the
+linker the program names at `INTERP_BASE`, enters it, and fills `AT_BASE`;
+`libs/elf` reads the path. That is 3 of the kernel half's 5 points, so **31
+remain**, and what remains is the part this paragraph already said was the
+expensive one -- there is still no loader anywhere. What follows is how it
+stood on 2026-09-18.
+
+What was not done is `PT_INTERP`, and the hook for it is one place --
 `load.rs`'s refusal. `libs/elf` already parses the relative relocations a
 static PIE carries and reads symbol tables; ferrousli has the load-bias
 arithmetic, a real `dl_iterate_phdr` and a real `dladdr`, which is what makes

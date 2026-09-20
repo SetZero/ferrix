@@ -94,7 +94,7 @@ session sizes them.
 |---|---|---|
 | ~~Stage 19: the GPU path, Path A (`docs/GPU.md` §3)~~ *done 2026-09-19* | ~~52~~ | landed 2026-09-19 |
 | Stage 19: XWayland, the pointer-driven options, the second-pass effects | 48 | 2026-09-19 to -20 |
-| Dynamic linking: the kernel half, ferrousli's loader, glibc's names | 39 | 2026-09-20 to -21 |
+| Dynamic linking: the kernel half, ferrousli's loader, glibc's names | 39 *(3 done)* | 2026-09-20 to -21 |
 | Stage 12, btrfs write | *longer* ≈ 60 | 2026-09-21 to -22 |
 | Stage 13, namespaces, cgroups, seccomp | *month* ≈ 60 | 2026-09-22 to -23 |
 | Stage 22, Steam: the parts with a first guess (glibc under the runtime 13, bubblewrap's rest 13, sound 30, Venus 8, XWayland counted above) | 64 | 2026-09-23 to -24 |
@@ -3320,16 +3320,17 @@ every architecture, and by `su`, which reaches `/etc/group` only because a
 
 ---
 
-## Dynamic linking — PIE, `PT_INTERP`, a loader  ·  *39 points*
+## Dynamic linking — PIE, `PT_INTERP`, a loader  ·  *39 points, 36 left*
 
 Placed after *Networking* without a number of its own, for the same reason:
 nothing on the path to `rustc` needs it, since Rust's `std` targets static
 musl. What needs it is the promise `docs/ARCHITECTURE.md` §2 makes — that
 somebody else's Linux binary runs unchanged — which today holds only for a
-static, fixed-address executable. `kernel/src/syscall/load.rs` refuses
-`ET_DYN` by name (`NeedsRelocation`) and never reads `PT_INTERP`, and nearly
-every binary a distribution ships is a position-independent executable that
-asks for glibc's `ld-linux`. The question of 2026-09-16 that put this here was
+static, fixed-address executable. Nearly every binary a distribution ships is a position-independent executable
+that asks for glibc's `ld-linux`. `kernel/src/syscall/load.rs` used to refuse
+`PT_INTERP` by name; since 2026-09-20 it loads the linker the program asks for
+and enters it, which is the first bullet below. What is still missing is a
+linker to name. The question of 2026-09-16 that put this here was
 whether Steam could run; the answer began with this section, before the
 32-bit ABI, networking and the display stages it also waits on. The 32-bit
 x86 ABI is not part of it; since 2026-09-18 it is stage 22's, where the rest
@@ -3337,7 +3338,8 @@ of that answer is.
 
 Three parts, in the order they can be tested:
 
-* **The kernel half, 5 points.** `execve` loads an `ET_DYN` executable at a
+* **The kernel half, 5 points — 3 of them done, 2026-09-20.** `execve` loads
+  an `ET_DYN` executable at a
   base of its own — Linux's `ELF_ET_DYN_BASE`, unrandomised until stage 13 —
   and applies its relative relocations, which `libs/elf` already reads
   because the UEFI loader relocates itself. A `PT_INTERP` names a second
@@ -3350,6 +3352,26 @@ Three parts, in the order they can be tested:
   `PT_GNU_RELRO` — calls that exist and gain a test that uses them as
   `ld.so` does. `AT_SYSINFO_EHDR` stays absent: there is no vDSO, and glibc
   and musl both fall back to the real call.
+
+  **What landed on 2026-09-20.** Both images are placed — the program at
+  `PIE_BASE`, the linker at a new `INTERP_BASE` a third of the way up the user
+  half, below the program because the heap grows from where the program ends —
+  and the processor is entered at the linker's entry. `AT_BASE` is filled and
+  was not there at all before; `AT_PHDR`, `AT_PHNUM` and `AT_ENTRY` stay the
+  program's, which is why `Loaded` now carries `start` beside `entry`. The
+  linker's path comes from `Elf::interpreter`, new in `libs/elf` with five
+  tests, and is read before `execve`'s point of no return so a missing linker
+  leaves the caller running. One latent bug went with it: the old refusal
+  looked for `PT_INTERP` only on an `ET_DYN`, so a dynamically linked `ET_EXEC`
+  was loaded and entered with no linker and every imported symbol an
+  unrelocated zero.
+
+  **What is left of the kernel half, 2 points.** `AT_PLATFORM`, which `execve`
+  still passes as `None`; and the test that drives file-backed `mmap` with
+  `MAP_FIXED` and `PROT_EXEC` and `mprotect` over a `PT_GNU_RELRO` the way a
+  real `ld.so` does — the calls exist and nothing yet uses them in that
+  pattern. Neither is in the way of the loader: a linker can be written and run
+  against what is there now.
 * **ferrousli's loader, 21 points.** The fifth item of `ferrousli/README.md`:
   a dynamic loader in Rust, shipped as ferrousli's `ld.so` with
   `libferrousli.so` beside `libferrousli.a`. The `PT_DYNAMIC` section, symbol
