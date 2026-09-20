@@ -280,10 +280,10 @@ fn escapes(sh: &Shell, ps: &[u8]) -> Vec<u8> {
             // is already literal, and the width it does not take is
             // measured by skipping escapes rather than by these.
             b'{' | b'}' => {}
-            other => {
-                out.push(b'%');
-                out.push(other);
-            }
+            // An escape with no meaning expands to nothing, rather than to
+            // itself: zsh drops it, and a prompt holding a bare `% ` -- as
+            // the cloud theme's does -- would otherwise grow a stray sign.
+            _other => {}
         }
     }
     out
