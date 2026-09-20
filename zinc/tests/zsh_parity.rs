@@ -55,3 +55,21 @@ fn arithmetic_subscripts_a_parameter() {
         "8\n"
     );
 }
+
+/// A hash reads the subscript flags differently from an array: zsh's
+/// `colors` builds `$fg` out of `${color[(I)fg-*]}`, every matching key.
+#[test]
+fn subscript_flags_on_a_hash_answer_with_keys_and_values() {
+    const HASH: &str = "typeset -A c; c=(fg-red 31 fg-blue 34 bg-red 41); ";
+    assert_eq!(
+        run(&format!("{HASH}echo ${{c[(I)fg-*]}}")),
+        "fg-red fg-blue\n"
+    );
+    assert_eq!(run(&format!("{HASH}echo ${{c[(i)fg-*]}}")), "fg-red\n");
+    assert_eq!(run(&format!("{HASH}echo ${{c[(r)3*]}}")), "31\n");
+    assert_eq!(run(&format!("{HASH}echo ${{c[(R)3*]}}")), "31 34\n");
+    assert_eq!(run(&format!("{HASH}echo ${{c[(k)fg-red]}}")), "31\n");
+    // An array still answers with indices, the last one for `I`.
+    assert_eq!(run("a=(x y z y); echo ${a[(I)y]} ${a[(i)y]}"), "4 2\n");
+    assert_eq!(run("a=(x y); echo ${a[(I)q]}"), "0\n");
+}
