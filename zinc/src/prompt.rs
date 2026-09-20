@@ -173,6 +173,55 @@ pub(crate) fn expand(sh: &mut Shell, ps: &[u8]) -> Vec<u8> {
     escapes(sh, ps)
 }
 
+/// `path` with a leading `$HOME` written as `~`, as every path escape but
+/// `%C` shows it.
+fn contracted(path: &[u8], home: &[u8]) -> Vec<u8> {
+    // A home of `/` would contract every path, and a home that is a prefix
+    // of the directory's *name* -- `/home/fer` against `/home/ferrix` -- is
+    // not a prefix of the path at all.
+    if home.is_empty()
+        || home == b"/"
+        || !path.starts_with(home)
+        || !matches!(path.get(home.len()), None | Some(b'/'))
+    {
+        return path.to_vec();
+    }
+    [b"~", path.get(home.len()..).unwrap_or(&[])].concat()
+}
+
+/// The `n` trailing components of `path`, the `-n` leading ones when `n` is
+/// negative, or the whole of it when `n` is zero or names more components
+/// than there are -- which is what a count after the `%` of a path escape
+/// asks for.
+fn components(path: &[u8], n: i64) -> Vec<u8> {
+    let parts: Vec<&[u8]> = path
+        .split(|&c| c == b'/')
+        .filter(|p| !p.is_empty())
+        .collect();
+    let count = n.unsigned_abs() as usize;
+    if n == 0 || count >= parts.len() {
+        return path.to_vec();
+    }
+    let kept = if n > 0 {
+        parts.get(parts.len() - count..).unwrap_or(&[]).to_vec()
+    } else {
+        // The leading components keep the root they started at: `%-1d` in
+        // `/var/tmp` is `/var`, not `var`.
+        parts.get(..count).unwrap_or(&[]).to_vec()
+    };
+    let mut out = Vec::new();
+    if n < 0 && path.starts_with(b"/") {
+        out.push(b'/');
+    }
+    for (index, part) in kept.iter().enumerate() {
+        if index > 0 {
+            out.push(b'/');
+        }
+        out.extend_from_slice(part);
+    }
+    out
+}
+
 /// The `%` escapes alone, over text a `PROMPT_SUBST` has already been
 /// through. A ternary's chosen branch comes back through here.
 fn escapes(sh: &Shell, ps: &[u8]) -> Vec<u8> {
@@ -187,10 +236,13 @@ fn escapes(sh: &Shell, ps: &[u8]) -> Vec<u8> {
             continue;
         }
         let digits = i;
+        if ps.get(i) == Some(&b'-') {
+            i += 1;
+        }
         while ps.get(i).is_some_and(u8::is_ascii_digit) {
             i += 1;
         }
-        let num: Option<u16> = std::str::from_utf8(ps.get(digits..i).unwrap_or(&[]))
+        let num: Option<i64> = std::str::from_utf8(ps.get(digits..i).unwrap_or(&[]))
             .ok()
             .and_then(|d| d.parse().ok());
         let Some(&e) = ps.get(i) else { break };
@@ -260,22 +312,14 @@ fn escapes(sh: &Shell, ps: &[u8]) -> Vec<u8> {
             b'm' | b'M' => out.extend(hostname()),
             b'n' => out.extend(username()),
             b'?' => out.extend(sh.status.to_string().into_bytes()),
-            b'd' | b'/' => out.extend_from_slice(&pwd),
-            b'~' => {
-                if !home.is_empty() && home != b"/" && pwd.starts_with(&home) {
-                    out.push(b'~');
-                    out.extend_from_slice(pwd.get(home.len()..).unwrap_or(&[]));
-                } else {
-                    out.extend_from_slice(&pwd);
-                }
-            }
-            b'c' | b'.' | b'C' => {
-                out.extend_from_slice(
-                    pwd.rsplit(|&c| c == b'/')
-                        .find(|p| !p.is_empty())
-                        .unwrap_or(b"/"),
-                );
-            }
+            b'd' | b'/' => out.extend(components(&pwd, num.unwrap_or(0))),
+            b'~' => out.extend(components(&contracted(&pwd, &home), num.unwrap_or(0))),
+            // The trailing component rather than the whole path, and one of
+            // them rather than all, which is the only difference from `%~`.
+            // `%C` is the same again without the contraction: robbyrussell's
+            // prompt is `%c`, and in a home directory the two differ.
+            b'c' | b'.' => out.extend(components(&contracted(&pwd, &home), num.unwrap_or(1))),
+            b'C' => out.extend(components(&pwd, num.unwrap_or(1))),
             // The markers around a raw escape sequence. What they enclose
             // is already literal, and the width it does not take is
             // measured by skipping escapes rather than by these.
