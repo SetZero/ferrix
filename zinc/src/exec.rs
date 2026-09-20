@@ -260,6 +260,41 @@ pub(crate) fn capture(sh: &mut Shell, cmd: &[u8]) -> Vec<u8> {
     out
 }
 
+/// `<(cmd)` and `>(cmd)`: run `cmd` with one end of a pipe for its standard
+/// output or input, and give back the name of the other end.
+///
+/// The command is not waited for -- that is the point of the construct, the
+/// two run at once and the pipe joins them. The shell's end stays open, and
+/// is closed when the command it was expanded for has finished.
+pub(crate) fn proc_subst(sh: &mut Shell, cmd: &[u8], reading: bool) -> Option<Vec<u8>> {
+    let mut fds = [0i32; 2];
+    // SAFETY: fds is a two-element array.
+    if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
+        sh.error("pipe failed");
+        return None;
+    }
+    let [r, w] = fds;
+    // `<(cmd)` is read by the shell and written by the command; `>(cmd)` is
+    // the other way about.
+    let (keep, give, child_fd) = if reading { (r, w, 1) } else { (w, r, 0) };
+    let pid = fork();
+    if pid == 0 {
+        close(keep);
+        dup2(give, child_fd);
+        close(give);
+        enter_subshell(sh);
+        run_string(sh, cmd);
+        exit_now(sh.status);
+    }
+    close(give);
+    if pid < 0 {
+        close(keep);
+        return None;
+    }
+    sh.procsubs.push(keep);
+    Some(format!("/proc/self/fd/{keep}").into_bytes())
+}
+
 fn close(fd: i32) {
     // SAFETY: closing a descriptor has no memory-safety preconditions.
     let _r = unsafe { libc::close(fd) };
@@ -557,8 +592,19 @@ pub(crate) fn apply_redirs(sh: &mut Shell, redirs: &[Redir]) -> Result<Vec<(i32,
                     None => return Err("file number expected".to_string()),
                 }
             }
+            // `< <(cmd)` and `> >(cmd)`: the same pipe as the word form, with
+            // the descriptor put where the operator asks instead of its name
+            // being passed along. Expanding the target is what starts the
+            // command and gives back the name to open.
             RedirKind::InPipe | RedirKind::OutPipe => {
-                return Err("process substitution is not supported yet".to_owned());
+                let reading = r.kind == RedirKind::InPipe;
+                let name = expand_single(sh, &r.target)?;
+                let flags = if reading {
+                    libc::O_RDONLY
+                } else {
+                    libc::O_WRONLY
+                };
+                (vec![r.fd], open_file(&name, flags)?)
             }
             kind => {
                 let t = expand_single(sh, &r.target)?;
@@ -839,7 +885,28 @@ fn word_text(w: &[u8]) -> Vec<u8> {
     clippy::too_many_lines,
     reason = "precommand modifiers, functions, builtins and programs"
 )]
+/// A simple command, and then the descriptors any `<(...)` in it left open.
+///
+/// The shell holds its end of each process substitution's pipe so the
+/// command can open `/proc/self/fd/N`; once the command has finished,
+/// nothing will open it again. Closing here rather than at each of the many
+/// ways out of the command below is what keeps a prompt that substitutes on
+/// every draw from running the shell out of descriptors.
 fn run_simple(
+    sh: &mut Shell,
+    assigns: &[Assign],
+    words: &[Vec<u8>],
+    redirs: &[Redir],
+    in_child: bool,
+) {
+    let outer = std::mem::take(&mut sh.procsubs);
+    run_simple_body(sh, assigns, words, redirs, in_child);
+    for fd in std::mem::replace(&mut sh.procsubs, outer) {
+        close(fd);
+    }
+}
+
+fn run_simple_body(
     sh: &mut Shell,
     assigns: &[Assign],
     words: &[Vec<u8>],

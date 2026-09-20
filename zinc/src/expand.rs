@@ -4,10 +4,9 @@
 use crate::param;
 use crate::pattern::{Pattern, has_wildcards};
 use crate::shell::{Shell, Value};
-use crate::tok::{self, BNULL, COMMA, DNULL, EQUALS, INBRACE, INBRACK, INPAR, INPARMATH, META};
-use crate::tok::{
-    OUTBRACE, OUTBRACK, OUTPAR, OUTPARMATH, QSTRING, QTICK, SNULL, STRING, TICK, TILDE,
-};
+use crate::tok::{self, BNULL, COMMA, DNULL, EQUALS, INANG, INBRACE, INBRACK, INPAR, INPARMATH};
+use crate::tok::{META, OUTANGPROC, OUTBRACE, OUTBRACK, OUTPAR, OUTPARMATH, QSTRING, QTICK};
+use crate::tok::{SNULL, STRING, TICK, TILDE};
 
 /// How a word's result is used.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -280,6 +279,17 @@ fn walk(sh: &mut Shell, w: &[u8], out: &mut Out, mut dq: bool) -> Result<(), Str
                     if q == SNULL {
                         break;
                     }
+                    // A byte already standing for itself is copied with the
+                    // META before it: metafying it a second time is what
+                    // turned a `▶` inside single quotes into three bytes of
+                    // nonsense.
+                    if q == META {
+                        if let Some(&n) = w.get(i) {
+                            out.push_plain(&[META, n]);
+                            i += 1;
+                        }
+                        continue;
+                    }
                     push_literal(out, q);
                 }
             }
@@ -382,6 +392,27 @@ fn walk(sh: &mut Shell, w: &[u8], out: &mut Out, mut dq: bool) -> Result<(), Str
                 i = end + 1;
                 let output = crate::exec::capture(sh, &cmd);
                 insert_output(sh, out, &output, dq);
+            }
+            // `<(cmd)` and `>(cmd)`: the word is the name of a pipe the
+            // command is running on the other end of. The lexer has already
+            // marked where it starts, so what is left is to find its close.
+            // Only with the `(` right after it: `<` also begins the numeric
+            // glob `<1-20>`, which is a pattern and not a command at all.
+            INANG | OUTANGPROC if w.get(i) == Some(&INPAR) => {
+                // That `(` opens the command, so it is not one of the
+                // parentheses to count when looking for the close.
+                let start = i + 1;
+                let end = find_close(w, start, INPAR, OUTPAR);
+                let cmd = tok::remove_nulls(w.get(start..end).unwrap_or(&[]));
+                i = end + 1;
+                match crate::exec::proc_subst(sh, &cmd, c == INANG) {
+                    Some(path) => {
+                        out.cur().expanded = true;
+                        out.cur().quoted = true;
+                        out.push_plain(&path);
+                    }
+                    None => return Err("process substitution failed".to_owned()),
+                }
             }
             TILDE if i == 1 && !dq => {
                 let end = w
@@ -592,7 +623,11 @@ pub(crate) fn split_ifs(text: &[u8], ifs: &[u8]) -> Vec<Vec<u8>> {
     out
 }
 
-/// Interpret the escapes of `$'...'`.
+/// Interpret the escapes of `$'...'`, to the bytes they stand for.
+///
+/// The result is raw: a caller putting it into a word metafies it there,
+/// one byte at a time, so that a byte the shell uses for a token of its own
+/// cannot be mistaken for one.
 pub(crate) fn dollar_quote(body: &[u8]) -> Vec<u8> {
     let mut out = Vec::new();
     let mut i = 0;
@@ -663,7 +698,7 @@ pub(crate) fn dollar_quote(body: &[u8]) -> Vec<u8> {
             out.push(u8::try_from(n & 0xff).unwrap_or(0));
         }
     }
-    tok::metafy(&out)
+    out
 }
 
 /// Brace expansion: `x{a,b}y` and `{1..3}`, outermost first.

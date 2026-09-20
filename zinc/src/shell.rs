@@ -127,6 +127,9 @@ pub(crate) struct Shell {
     /// zsh prints as `/path/to/file:12: ...`. Empty while the shell's own
     /// input is being run.
     pub(crate) script: Vec<u8>,
+    /// The shell's ends of the pipes `<(...)` and `>(...)` in the command
+    /// being run opened, closed once it has finished with them.
+    pub(crate) procsubs: Vec<i32>,
 }
 
 /// The id `name` asks for, read from the kernel each time rather than kept:
@@ -306,6 +309,7 @@ impl Shell {
             subst_status: None,
             at_prompt: false,
             script: Vec::new(),
+            procsubs: Vec::new(),
         };
         for (k, v) in [
             ("IFS", &b" \t\n\x83 "[..]),
