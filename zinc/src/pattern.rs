@@ -19,7 +19,9 @@ enum Node {
         items: Vec<(u32, u32)>,
         named: Vec<Vec<u8>>,
     },
-    Group(Vec<Branch>),
+    /// `(...)`: alternatives, and the number the group has under `(#b)`,
+    /// counted from the opening parenthesis in the order they are written.
+    Group(Vec<Branch>, usize),
     /// `x#`: zero or more of the node; `x##`: one or more.
     Repeat(Box<Node>, bool),
     /// `<a-b>`: a decimal number in the range; bounds absent are open.
@@ -59,6 +61,10 @@ impl Branch {
 pub(crate) struct Pattern {
     branches: Vec<Branch>,
     negate: bool,
+    /// `(#b)`: the groups are to be remembered, for `$match` and its two
+    /// arrays of offsets.
+    backref: bool,
+    groups: usize,
 }
 
 /// Decode one UTF-8 character at `s`, falling back to one byte.
@@ -90,10 +96,48 @@ impl Pattern {
             negate = true;
             i = 1;
         }
-        let bytes = crate::tok::unmetafy(pat);
-        let _ = bytes;
-        let (branches, _) = parse_alts(pat, &mut i, extended, false);
-        Pattern { branches, negate }
+        // `(#b)` in front asks for the groups to be remembered. zsh takes
+        // the flag anywhere in the pattern; here it is read where every
+        // caller writes it, at the front.
+        let backref = pat.get(i..i + 4) == Some(&[INPAR, POUND, b'b', OUTPAR]);
+        if backref {
+            i += 4;
+        }
+        let mut groups = 0;
+        let (branches, _) = parse_alts(pat, &mut i, extended, false, &mut groups);
+        Pattern {
+            branches,
+            negate,
+            backref,
+            groups,
+        }
+    }
+
+    /// True if the pattern asked for its groups to be remembered.
+    pub(crate) fn has_backrefs(&self) -> bool {
+        self.backref
+    }
+
+    /// Where each group matched in `s`, once the whole of `s` has matched:
+    /// one entry per group, in the order the groups are written, empty for a
+    /// group the winning path never entered.
+    ///
+    /// The search takes the first path that matches the whole string, trying
+    /// the longest reach of a `*` first, which is the path zsh reports.
+    pub(crate) fn captures(&self, s: &[u8]) -> Option<Vec<(usize, usize)>> {
+        if self.negate {
+            return None;
+        }
+        for b in &self.branches {
+            let mut caps = vec![(0, 0); self.groups];
+            if b.excepts.iter().any(|e| match_nodes(e, s)) {
+                continue;
+            }
+            if walk(&b.nodes, s, 0, s.len(), &mut caps) {
+                return Some(caps);
+            }
+        }
+        None
     }
 
     /// True if the whole of `s` (plain bytes) matches.
@@ -141,7 +185,52 @@ pub(crate) fn has_wildcards(pat: &[u8], extended: bool) -> bool {
     false
 }
 
-fn parse_alts(pat: &[u8], i: &mut usize, extended: bool, nested: bool) -> (Vec<Branch>, bool) {
+/// Match `nodes` against the whole of `s` from `at`, writing down where each
+/// group landed. The first whole-string path wins, and `*` is tried at its
+/// longest first, so a group takes as much as it can -- zsh's rule.
+fn walk(nodes: &[Node], s: &[u8], at: usize, end: usize, caps: &mut [(usize, usize)]) -> bool {
+    let Some((first, rest)) = nodes.split_first() else {
+        return at == end;
+    };
+    let tail = s.get(at..end).unwrap_or(&[]);
+    if let Node::Group(alts, index) = first {
+        for alt in alts {
+            for n in (0..=tail.len()).rev() {
+                let Some(part) = tail.get(..n) else { continue };
+                if alt.excepts.iter().any(|e| match_nodes(e, part)) {
+                    continue;
+                }
+                let saved = caps.to_vec();
+                if let Some(slot) = caps.get_mut(*index) {
+                    *slot = (at, at + n);
+                }
+                if walk(&alt.nodes, s, at, at + n, caps) && walk(rest, s, at + n, end, caps) {
+                    return true;
+                }
+                caps.copy_from_slice(&saved);
+            }
+        }
+        return false;
+    }
+    let mut lengths = match_one(first, tail);
+    lengths.reverse();
+    for n in lengths {
+        let saved = caps.to_vec();
+        if walk(rest, s, at + n, end, caps) {
+            return true;
+        }
+        caps.copy_from_slice(&saved);
+    }
+    false
+}
+
+fn parse_alts(
+    pat: &[u8],
+    i: &mut usize,
+    extended: bool,
+    nested: bool,
+    groups: &mut usize,
+) -> (Vec<Branch>, bool) {
     let mut alts = vec![Branch::default()];
     while let Some(&c) = pat.get(*i) {
         *i += 1;
@@ -159,7 +248,11 @@ fn parse_alts(pat: &[u8], i: &mut usize, extended: bool, nested: bool) -> (Vec<B
             STAR => Node::Star,
             QUEST => Node::Any,
             INBRACK => parse_class(pat, i),
-            INPAR => Node::Group(parse_alts(pat, i, extended, true).0),
+            INPAR => {
+                let index = *groups;
+                *groups += 1;
+                Node::Group(parse_alts(pat, i, extended, true, groups).0, index)
+            }
             // A `|` that reached here as a token is always alternation, at
             // the top of the pattern as much as inside a group: a literal
             // one was quoted, and quoting keeps a character out of the
@@ -343,7 +436,7 @@ fn match_one(node: &Node, s: &[u8]) -> Vec<usize> {
                 .collect()
         }
         Node::Star => (0..=s.len()).collect(),
-        Node::Group(alts) => {
+        Node::Group(alts, _) => {
             let mut out = Vec::new();
             for alt in alts {
                 for n in 0..=s.len() {
