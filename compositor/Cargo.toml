@@ -67,6 +67,16 @@ doc_markdown = "warn"
 
 [profile.dev]
 overflow-checks = true
+# The integration tests drive the compositor in real time: they start clients,
+# sleep a fixed while, and screenshot what was drawn by then. That makes an
+# unoptimised build a test of the machine rather than of the compositor, and a
+# machine slow enough fails them for no reason of the compositor's -- Windows
+# through WSL took 1.1 seconds for a frame and missed a 2.5 second deadline,
+# where the same commit passes on the Linux box in the same profile.
+#
+# Optimised, with `overflow-checks` and `debug-assertions` still on, so
+# nothing the gate is there to catch is turned off: only the waiting is.
+opt-level = 2
 
 [profile.release]
 overflow-checks = true
