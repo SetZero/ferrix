@@ -386,6 +386,44 @@ impl Shell {
         true
     }
 
+    /// `$commands`: every external command on `$PATH`, by the name that
+    /// finds it. `(( $+commands[git] ))` is how a script asks whether a
+    /// program is installed, and oh-my-zsh asks it constantly.
+    ///
+    /// zsh keeps this as a hash it fills in as commands are looked up; here
+    /// it is read from the directories each time, so the answer is never a
+    /// stale one. The first name found wins, as `$PATH` order says.
+    fn commands(&self) -> Vec<(Vec<u8>, Vec<u8>)> {
+        use std::os::unix::ffi::OsStrExt;
+        let path = self.get(b"PATH").map_or_else(
+            || b"/bin:/usr/bin".to_vec(),
+            |v| crate::tok::unmetafy(&v.joined()),
+        );
+        let mut seen: std::collections::HashSet<Vec<u8>> = std::collections::HashSet::new();
+        let mut out = Vec::new();
+        for dir in path.split(|&c| c == b':') {
+            let d = if dir.is_empty() { &b"."[..] } else { dir };
+            let Ok(rd) = std::fs::read_dir(std::ffi::OsStr::from_bytes(d)) else {
+                continue;
+            };
+            for ent in rd.flatten() {
+                let name = ent.file_name();
+                let name = name.as_bytes().to_vec();
+                if seen.contains(&name) {
+                    continue;
+                }
+                let mut full = d.to_vec();
+                full.push(b'/');
+                full.extend_from_slice(&name);
+                if crate::exec::is_executable(&full) {
+                    let _new = seen.insert(name.clone());
+                    out.push((name, full));
+                }
+            }
+        }
+        out
+    }
+
     /// The value of parameter `name`, including the special ones.
     pub(crate) fn get(&self, name: &[u8]) -> Option<Value> {
         let name = prompt_name(name);
@@ -415,6 +453,7 @@ impl Shell {
                     .map_or(0, |d| d.as_secs());
                 return Some(Value::Scalar(secs.to_string().into_bytes()));
             }
+            b"commands" => return Some(Value::Assoc(self.commands())),
             b"-" => {
                 return Some(Value::Scalar(if self.interactive {
                     b"i".to_vec()
