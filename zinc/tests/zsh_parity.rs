@@ -285,3 +285,45 @@ fn functions_says_which_functions_exist() {
     );
 }
 
+/// EXTENDED_GLOB's `x~y`: what `x` matches, less what `y` does. vcs_info
+/// finds its backends with `${^fpath}/VCS_INFO_get_data_*~*(\~|.zwc)(N)`,
+/// which without the operator either finds everything or nothing.
+#[test]
+fn the_except_operator_takes_matches_away() {
+    let e = "setopt extendedglob; ";
+    assert_eq!(run(&format!("{e}[[ abc == *~*x ]] && echo yes")), "yes\n");
+    assert_eq!(run(&format!("{e}[[ abc == *~abc ]] || echo no")), "no\n");
+    assert_eq!(
+        run(&format!("{e}[[ abc == *~(x|y) ]] && echo yes")),
+        "yes\n"
+    );
+    // `|` binds looser than `~`, so this is `(a*~ab)` or `ac`. The bar is
+    // written inside a group because a bare one ends the condition, in zsh
+    // as here.
+    assert_eq!(
+        run(&format!("{e}[[ ac == (a*~ab|ac) ]] && echo yes")),
+        "yes\n"
+    );
+    assert_eq!(
+        run(&format!("{e}[[ ad == (a*~ab|ac) ]] && echo yes")),
+        "yes\n"
+    );
+    assert_eq!(
+        run(&format!("{e}[[ ab == (a*~ab|ac) ]] || echo no")),
+        "no\n"
+    );
+    // The backup and compiled files vcs_info's own glob leaves out.
+    let p = "*~*(\\~|.zwc)";
+    assert_eq!(
+        run(&format!("{e}[[ get_data_git == {p} ]] && echo yes")),
+        "yes\n"
+    );
+    assert_eq!(
+        run(&format!("{e}[[ get_data_git.zwc == {p} ]] || echo no")),
+        "no\n"
+    );
+    // A `~` with nothing after it is the character, and a word with no
+    // wildcard beside it is not a glob at all.
+    assert_eq!(run(&format!("{e}[[ f~ == *~ ]] && echo yes")), "yes\n");
+    assert_eq!(run(&format!("{e}echo a~b")), "a~b\n");
+}
