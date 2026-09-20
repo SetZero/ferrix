@@ -109,6 +109,8 @@ pub(crate) fn run() {
         exe: BUILT_IN_EXE,
         exec_fn: name,
         set_ids: fs::SetIds::NONE,
+        // A built-in program is linked static by the build that embedded it.
+        interpreter: None,
     };
     let status = exec::run_init(
         program,
@@ -198,11 +200,18 @@ fn run_commands(list: &[u8]) {
 /// a multicall binary reads it, or `argv[0]`, to know which of its programs
 /// it has been asked for.
 fn start(program: &[u8], exe: &[u8], path: &[u8], argv: &[&[u8]]) -> Result<i32, exec::ExecError> {
+    // init comes out of the initramfs like any other program, so it may be
+    // dynamically linked like any other program, and the linker it names is
+    // read from the same initramfs. There is no process to fail back to here,
+    // which is why this is the one caller that reports the failure itself.
+    let context = fs::namespace().context();
+    let linker = exec::linker_for(&context, program).map_err(exec::ExecError::Linker)?;
     let executable = exec::Executable {
         image: program,
         exe,
         exec_fn: path,
         set_ids: fs::SetIds::NONE,
+        interpreter: linker.as_deref(),
     };
     exec::run_init(executable, argv, ENVIRONMENT, random_bytes())
 }

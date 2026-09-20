@@ -20,7 +20,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use ferrix_bootinfo::{PAGE_SIZE, USER_VIRT_END};
-use ferrix_elf::{Class, PF_R, PF_W, PF_X, PT_LOAD};
+use ferrix_elf::{Class, PF_R, PF_W, PF_X, PT_INTERP, PT_LOAD};
 
 /// Where the synthetic image is linked. Well above zero and well below
 /// anything the kernel uses, on every architecture including the 32-bit one.
@@ -43,6 +43,14 @@ pub(crate) const DATA_MEMSZ: u64 = PAGE_SIZE + 32;
 /// not merely somewhere.
 pub(crate) const DATA_MARK: [u8; DATA_FILESZ] = *b"stage7-loaded-ok";
 
+/// Where a [`Shape::Dynamic`] image's `PT_INTERP` sits: inside the text
+/// segment, as a linked binary's does, and past the entry point's payload.
+const INTERP_OFFSET: u64 = 0x300;
+
+/// The path a [`Shape::Dynamic`] image names as its dynamic linker, with the
+/// NUL a `PT_INTERP` carries.
+pub(crate) const INTERP_PATH: &[u8] = b"/ld-check\0";
+
 /// How the image should be built, for the checks that want a broken one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Shape {
@@ -51,6 +59,10 @@ pub(crate) enum Shape {
     /// `ET_DYN` with no interpreter: a static PIE, placed at the loader's
     /// base rather than where it is linked.
     PositionIndependent,
+    /// `ET_DYN` naming [`INTERP_PATH`] as its dynamic linker: a program the
+    /// kernel may not enter, because something has to resolve what it imports
+    /// first.
+    Dynamic,
     /// A machine this kernel is not.
     ForeignMachine,
     /// Text and data linked into the same page, so the page would have to be
@@ -87,12 +99,14 @@ pub(crate) fn build_with(class: Class, machine: u16, shape: Shape, code: &[u8]) 
     let header = class.header_size();
     let phentsize = class.phdr_size();
     let phoff = header;
-    let text_filesz = phoff + phentsize * 2 + 0x400;
+    // A dynamic image carries a third program header, the `PT_INTERP`.
+    let phnum: u16 = if shape == Shape::Dynamic { 3 } else { 2 };
+    let text_filesz = phoff + phentsize * usize::from(phnum) + 0x400;
     let data_offset = usize::try_from(PAGE_SIZE).unwrap_or(4096);
 
     let mut file = vec![0_u8; data_offset + DATA_FILESZ];
 
-    write_header(&mut file, class, machine, shape, phoff);
+    write_header(&mut file, class, machine, shape, phoff, phnum);
     // The text segment covers the file from zero, which is what puts the
     // program headers at a real address and so gives `AT_PHDR` something to
     // point at -- exactly as a linked binary does.
@@ -101,6 +115,7 @@ pub(crate) fn build_with(class: Class, machine: u16, shape: Shape, code: &[u8]) 
         class,
         phoff,
         &Phdr {
+            kind: PT_LOAD,
             flags: PF_R | PF_X,
             offset: 0,
             vaddr: BASE,
@@ -113,6 +128,7 @@ pub(crate) fn build_with(class: Class, machine: u16, shape: Shape, code: &[u8]) 
         class,
         phoff + phentsize,
         &Phdr {
+            kind: PT_LOAD,
             flags: PF_R | PF_W,
             offset: data_offset as u64,
             vaddr: data_vaddr,
@@ -122,6 +138,28 @@ pub(crate) fn build_with(class: Class, machine: u16, shape: Shape, code: &[u8]) 
     );
     if let Some(slot) = file.get_mut(data_offset..data_offset + DATA_FILESZ) {
         slot.copy_from_slice(&DATA_MARK);
+    }
+
+    // The `PT_INTERP`: a window into the read-execute segment, which is where
+    // a linked binary carries its interpreter's name too.
+    if shape == Shape::Dynamic {
+        let at = usize::try_from(INTERP_OFFSET).unwrap_or(0);
+        if let Some(slot) = file.get_mut(at..at + INTERP_PATH.len()) {
+            slot.copy_from_slice(INTERP_PATH);
+        }
+        write_phdr(
+            &mut file,
+            class,
+            phoff + phentsize * 2,
+            &Phdr {
+                kind: PT_INTERP,
+                flags: PF_R,
+                offset: INTERP_OFFSET,
+                vaddr: BASE + INTERP_OFFSET,
+                filesz: INTERP_PATH.len() as u64,
+                memsz: INTERP_PATH.len() as u64,
+            },
+        );
     }
 
     // The entry point is `ENTRY - BASE` into the text segment, and that
@@ -136,6 +174,7 @@ pub(crate) fn build_with(class: Class, machine: u16, shape: Shape, code: &[u8]) 
 
 /// One program header, before it is written out.
 struct Phdr {
+    kind: u32,
     flags: u32,
     offset: u64,
     vaddr: u64,
@@ -144,7 +183,14 @@ struct Phdr {
 }
 
 /// `e_ident` and the fields after it, at the offsets the class puts them.
-fn write_header(file: &mut [u8], class: Class, machine: u16, shape: Shape, phoff: usize) {
+fn write_header(
+    file: &mut [u8],
+    class: Class,
+    machine: u16,
+    shape: Shape,
+    phoff: usize,
+    phnum: u16,
+) {
     put(file, 0, &[0x7F, b'E', b'L', b'F']);
     let (class_byte, header_size, phentsize) = match class {
         Class::Elf32 => (1_u8, 52_u16, 32_u16),
@@ -153,7 +199,7 @@ fn write_header(file: &mut [u8], class: Class, machine: u16, shape: Shape, phoff
     put(file, 4, &[class_byte, 1, 1, 0]);
 
     // ET_DYN is 3 and ET_EXEC is 2. The loader moves the former to its base.
-    let elf_type: u16 = if shape == Shape::PositionIndependent {
+    let elf_type: u16 = if matches!(shape, Shape::PositionIndependent | Shape::Dynamic) {
         3
     } else {
         2
@@ -173,14 +219,14 @@ fn write_header(file: &mut [u8], class: Class, machine: u16, shape: Shape, phoff
             put(file, 28, &(phoff as u32).to_le_bytes());
             put(file, 40, &header_size.to_le_bytes());
             put(file, 42, &phentsize.to_le_bytes());
-            put(file, 44, &2_u16.to_le_bytes());
+            put(file, 44, &phnum.to_le_bytes());
         }
         Class::Elf64 => {
             put(file, 24, &entry.to_le_bytes());
             put(file, 32, &(phoff as u64).to_le_bytes());
             put(file, 52, &header_size.to_le_bytes());
             put(file, 54, &phentsize.to_le_bytes());
-            put(file, 56, &2_u16.to_le_bytes());
+            put(file, 56, &phnum.to_le_bytes());
         }
     }
 }
@@ -190,7 +236,7 @@ fn write_header(file: &mut [u8], class: Class, machine: u16, shape: Shape, phoff
 fn write_phdr(file: &mut [u8], class: Class, at: usize, phdr: &Phdr) {
     match class {
         Class::Elf32 => {
-            put(file, at, &PT_LOAD.to_le_bytes());
+            put(file, at, &phdr.kind.to_le_bytes());
             put(file, at + 4, &(phdr.offset as u32).to_le_bytes());
             put(file, at + 8, &(phdr.vaddr as u32).to_le_bytes());
             put(file, at + 12, &(phdr.vaddr as u32).to_le_bytes());
@@ -200,7 +246,7 @@ fn write_phdr(file: &mut [u8], class: Class, at: usize, phdr: &Phdr) {
             put(file, at + 28, &(PAGE_SIZE as u32).to_le_bytes());
         }
         Class::Elf64 => {
-            put(file, at, &PT_LOAD.to_le_bytes());
+            put(file, at, &phdr.kind.to_le_bytes());
             put(file, at + 4, &phdr.flags.to_le_bytes());
             put(file, at + 8, &phdr.offset.to_le_bytes());
             put(file, at + 16, &phdr.vaddr.to_le_bytes());

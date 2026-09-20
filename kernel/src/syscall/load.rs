@@ -26,6 +26,21 @@
 //! two segments gets the union of their permissions, which is the only answer
 //! that lets both segments work.
 //!
+//! # Two images, when the program names a linker
+//!
+//! A dynamically linked program is not loaded and entered. Its `PT_INTERP`
+//! names a dynamic linker, and what the kernel does is load *both* images —
+//! the program at its own base, the linker at [`INTERP_BASE`] — and enter the
+//! linker, telling it through the auxiliary vector where the program is
+//! (`AT_PHDR`, `AT_PHNUM`, `AT_ENTRY`) and where the linker itself landed
+//! (`AT_BASE`). Resolving symbols and jumping to `AT_ENTRY` is then the
+//! linker's job and none of the kernel's. That division is Linux's, and it is
+//! why the kernel half of dynamic linking is small and the other half is not.
+//!
+//! The heap still starts past the *program*, not past the linker: it is the
+//! program's `brk`, and the linker is placed far enough below that the two
+//! cannot meet.
+//!
 //! And if that union comes out writable *and* executable, the image is
 //! refused. Ferrix sweeps its own mappings for W^X at boot and would be
 //! building one here on purpose otherwise. It does not happen for a binary
@@ -43,9 +58,7 @@
 //! anything reads an absolute address. So the loader does the same: every
 //! address the image names is moved by [`PIE_BASE`] less the image's lowest
 //! page, the entry, `AT_PHDR` and the heap's start with it, and `AT_BASE`, the
-//! interpreter's base, stays zero because there is none. An `ET_DYN` image
-//! that names an interpreter is a dynamically linked program, which needs a
-//! dynamic linker this kernel does not have, and is refused by name.
+//! interpreter's base, stays zero because there is none.
 
 use alloc::vec;
 use alloc::vec::Vec;
@@ -64,11 +77,33 @@ use crate::user::space::{AddressSpace, SpaceError};
 /// and far below the stack and the mappings that grow down from it.
 pub(crate) const PIE_BASE: u64 = (USER_VIRT_END / 3 * 2) & !(PAGE_SIZE - 1);
 
+/// Where a dynamic linker's lowest page is placed: one third of the way up the
+/// user half, page-aligned.
+///
+/// Below [`PIE_BASE`] and not above it, because what grows is the program's
+/// heap, which starts where the program ends. A linker placed above the
+/// program would be a wall the heap runs into; placed below, the whole span
+/// from the program up to the stack stays the program's. It is a fixed address
+/// rather than one `mmap` chooses because nothing else here allocates before
+/// the image is placed, and a fixed one is reproducible in a check.
+pub(crate) const INTERP_BASE: u64 = (USER_VIRT_END / 3) & !(PAGE_SIZE - 1);
+
+const _: () = assert!(
+    INTERP_BASE < PIE_BASE,
+    "the linker must be placed below the program, not in its heap's way"
+);
+
 /// What the loader learned, and the program needs to be told.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Loaded {
-    /// Where execution starts.
+    /// `AT_ENTRY`: the *program's* entry point, wherever it was placed. Not
+    /// where the processor starts when there is a dynamic linker -- that is
+    /// [`Loaded::start`] -- because the linker is what jumps here, once it has
+    /// resolved what the program imports.
     pub(crate) entry: u64,
+    /// Where the processor starts: the linker's entry when the program named
+    /// one, and the program's own when it did not.
+    pub(crate) start: u64,
     /// `AT_PHDR`: where the program headers ended up in memory. Zero if no
     /// loadable segment covers them, which a static binary's do.
     pub(crate) phdr: u64,
@@ -79,6 +114,9 @@ pub(crate) struct Loaded {
     /// One past the highest address the image occupies, which is where the
     /// heap goes.
     pub(crate) end: u64,
+    /// `AT_BASE`: where the dynamic linker was placed, or zero when the
+    /// program named none and so is its own linker.
+    pub(crate) base: u64,
 }
 
 /// Why an image could not be loaded.
@@ -88,9 +126,20 @@ pub(crate) enum LoadError {
     Malformed(ElfError),
     /// Built for another architecture.
     WrongMachine(u16),
-    /// Position-independent and naming an interpreter: a dynamically linked
-    /// program, which needs a dynamic linker to load it.
+    /// The image names an interpreter and the caller supplied none: a
+    /// dynamically linked program handed to a loader that only places one
+    /// image.
     NeedsInterpreter,
+    /// The image names an interpreter and does not say which: a `PT_INTERP`
+    /// that is not a path.
+    BadInterpreter,
+    /// The interpreter is not an `ET_DYN`. A linker is placed wherever the
+    /// kernel puts it and relocates itself; one linked to a fixed address
+    /// could not be placed at all.
+    InterpreterNotPie,
+    /// The interpreter names an interpreter of its own. Linux refuses this
+    /// rather than following the chain, and so does this.
+    InterpreterChain,
     /// It has no loadable segments at all.
     Empty,
     /// A page would have to be both writable and executable.
@@ -127,26 +176,73 @@ impl From<UserError> for LoadError {
 /// # Errors
 ///
 /// The [`LoadError`] [`load`] would return for the same image.
-pub(crate) fn check(image: &[u8]) -> Result<(), LoadError> {
+pub(crate) fn check(image: &[u8], interpreter: Option<&[u8]>) -> Result<(), LoadError> {
+    let elf = parse(image)?;
+    let (low, _) = elf.load_span(PAGE_SIZE).ok_or(LoadError::Empty)?;
+    let bias = bias_of(&elf, low, interpreter.is_some())?;
+    let _ = entry_point(&elf, bias)?;
+    if let Some(bytes) = interpreter {
+        let linker = parse(bytes)?;
+        check_is_a_linker(&linker)?;
+        let (low, _) = linker.load_span(PAGE_SIZE).ok_or(LoadError::Empty)?;
+        let _ = entry_point(&linker, INTERP_BASE.wrapping_sub(low))?;
+    }
+    Ok(())
+}
+
+/// Parse and refuse what is wrong with the bytes alone.
+fn parse(image: &[u8]) -> Result<Elf<'_>, LoadError> {
     let elf = Elf::parse(image).map_err(LoadError::Malformed)?;
     elf.check_machine(arch::ARCH.elf_machine())
         .map_err(|_| LoadError::WrongMachine(elf.machine()))?;
     elf.validate_segments().map_err(LoadError::Malformed)?;
-    let (low, _) = elf.load_span(PAGE_SIZE).ok_or(LoadError::Empty)?;
-    let bias = bias_of(&elf, low)?;
-    let _ = entry_point(&elf, bias)?;
+    Ok(elf)
+}
+
+/// What an image has to be to be somebody's dynamic linker.
+fn check_is_a_linker(linker: &Elf<'_>) -> Result<(), LoadError> {
+    if !linker.is_pie() {
+        return Err(LoadError::InterpreterNotPie);
+    }
+    if linker.interpreter().is_some() {
+        return Err(LoadError::InterpreterChain);
+    }
     Ok(())
 }
 
+/// The path of the linker `image` asks for, if it asks for one.
+///
+/// For `execve`, which has to open that file and read it before it can load
+/// anything; the loader is handed the bytes, not the name.
+///
+/// # Errors
+///
+/// [`LoadError::BadInterpreter`] for an image that asks for a linker and does
+/// not say which, and whatever `libs/elf` refuses about the image.
+pub(crate) fn interpreter_of(image: &[u8]) -> Result<Option<&[u8]>, LoadError> {
+    let elf = Elf::parse(image).map_err(LoadError::Malformed)?;
+    match elf.interpreter() {
+        None => Ok(None),
+        Some(Ok(path)) => Ok(Some(path)),
+        Some(Err(_)) => Err(LoadError::BadInterpreter),
+    }
+}
+
 /// How far the image is moved from where it is linked: zero for a
-/// fixed-address image, and from its lowest page `low` to [`PIE_BASE`] for a
-/// static PIE.
-fn bias_of(elf: &Elf<'_>, low: u64) -> Result<u64, LoadError> {
+/// fixed-address image, and from its lowest page `low` to [`PIE_BASE`] for one
+/// that may be placed.
+///
+/// `linked` says whether the caller brought a dynamic linker. An image that
+/// names one and was given none is refused whatever its type: an `ET_EXEC`
+/// naming a `PT_INTERP` is as unrunnable without its linker as an `ET_DYN` is,
+/// and placing it and entering it would run a program whose every imported
+/// symbol is an unrelocated zero.
+fn bias_of(elf: &Elf<'_>, low: u64, linked: bool) -> Result<u64, LoadError> {
+    if !linked && elf.segments().any(|segment| segment.kind == PT_INTERP) {
+        return Err(LoadError::NeedsInterpreter);
+    }
     if !elf.is_pie() {
         return Ok(0);
-    }
-    if elf.segments().any(|segment| segment.kind == PT_INTERP) {
-        return Err(LoadError::NeedsInterpreter);
     }
     Ok(PIE_BASE.wrapping_sub(low))
 }
@@ -184,14 +280,65 @@ fn entry_point(elf: &Elf<'_>, bias: u64) -> Result<u64, LoadError> {
 /// # Errors
 ///
 /// [`LoadError`]. On failure the space may hold part of the image.
-pub(crate) fn load(space: &AddressSpace, image: &[u8]) -> Result<Loaded, LoadError> {
-    let elf = Elf::parse(image).map_err(LoadError::Malformed)?;
-    elf.check_machine(arch::ARCH.elf_machine())
-        .map_err(|_| LoadError::WrongMachine(elf.machine()))?;
-    elf.validate_segments().map_err(LoadError::Malformed)?;
+pub(crate) fn load(
+    space: &AddressSpace,
+    image: &[u8],
+    interpreter: Option<&[u8]>,
+) -> Result<Loaded, LoadError> {
+    let elf = parse(image)?;
+    let (linked_low, _) = elf.load_span(PAGE_SIZE).ok_or(LoadError::Empty)?;
+    let program = place(
+        space,
+        &elf,
+        bias_of(&elf, linked_low, interpreter.is_some())?,
+    )?;
+
+    // The auxiliary vector always describes the *program*: its headers, its
+    // entry. What changes when there is a linker is only where the processor
+    // starts, and that `AT_BASE` says where the linker went.
+    let mut loaded = Loaded {
+        entry: program.entry,
+        start: program.entry,
+        phdr: program.phdr,
+        phent: u64::from(elf.header().phentsize),
+        phnum: u64::from(elf.header().phnum),
+        end: program.high,
+        base: 0,
+    };
+
+    if let Some(bytes) = interpreter {
+        let linker = parse(bytes)?;
+        check_is_a_linker(&linker)?;
+        let (low, _) = linker.load_span(PAGE_SIZE).ok_or(LoadError::Empty)?;
+        let placed = place(space, &linker, INTERP_BASE.wrapping_sub(low))?;
+        // Only where execution begins changes. `entry` stays the program's,
+        // because that is what the linker is told to jump to.
+        loaded.start = placed.entry;
+        loaded.base = placed.low;
+    }
+
+    Ok(loaded)
+}
+
+/// One image, mapped into `space` moved by `bias`.
+#[derive(Debug, Clone, Copy)]
+struct Placed {
+    /// Its entry point, moved.
+    entry: u64,
+    /// Its lowest page, moved: what `AT_BASE` is for a linker.
+    low: u64,
+    /// One past its highest page, moved.
+    high: u64,
+    /// Where its program headers landed, or zero.
+    phdr: u64,
+}
+
+/// Map `elf`'s loadable segments into `space`, moved by `bias`, and copy their
+/// contents in.
+fn place(space: &AddressSpace, elf: &Elf<'_>, bias: u64) -> Result<Placed, LoadError> {
+    let image = elf.image();
     let (linked_low, linked_high) = elf.load_span(PAGE_SIZE).ok_or(LoadError::Empty)?;
-    let bias = bias_of(&elf, linked_low)?;
-    let entry = entry_point(&elf, bias)?;
+    let entry = entry_point(elf, bias)?;
 
     let low = linked_low.wrapping_add(bias);
     let high = linked_high.wrapping_add(bias);
@@ -209,14 +356,13 @@ pub(crate) fn load(space: &AddressSpace, image: &[u8]) -> Result<Loaded, LoadErr
         // The rest of `p_memsz` is `.bss` and is already zero.
     }
 
-    apply_permissions(space, &elf, bias, low, high)?;
+    apply_permissions(space, elf, bias, low, high)?;
 
-    Ok(Loaded {
+    Ok(Placed {
         entry,
-        phdr: program_headers_at(&elf, bias),
-        phent: u64::from(elf.header().phentsize),
-        phnum: u64::from(elf.header().phnum),
-        end: high,
+        low,
+        high,
+        phdr: program_headers_at(elf, bias),
     })
 }
 

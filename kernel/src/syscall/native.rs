@@ -924,7 +924,10 @@ fn load_status(error: exec::ExecError) -> Errno {
         | exec::ExecError::Space(_)
         | exec::ExecError::Startup
         | exec::ExecError::Start(_) => status::NO_MEMORY,
-        exec::ExecError::Load(_) => status::INVALID_ARGS,
+        // A native process is loaded from bytes and never from a path, so it
+        // brings no linker and this cannot arise; it is the caller's image
+        // that would be at fault if it did.
+        exec::ExecError::Load(_) | exec::ExecError::Linker(_) => status::INVALID_ARGS,
     }
 }
 

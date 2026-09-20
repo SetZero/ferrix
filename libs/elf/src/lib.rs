@@ -235,6 +235,9 @@ pub enum ElfError {
     SegmentMalformed,
     /// A relocation type this loader does not resolve. Carries the type.
     UnsupportedRelocation(u32),
+    /// A `PT_INTERP` segment whose contents are not a path: empty, not
+    /// terminated by a NUL, or holding one before the end.
+    BadInterpreter,
 }
 
 impl fmt::Display for ElfError {
@@ -248,6 +251,9 @@ impl fmt::Display for ElfError {
             ElfError::NotLittleEndian => f.write_str("not a little-endian ELF image"),
             ElfError::BadMachine(found) => write!(f, "built for e_machine {found}"),
             ElfError::BadType(found) => write!(f, "e_type {found} is neither EXEC nor DYN"),
+            ElfError::BadInterpreter => {
+                f.write_str("the PT_INTERP segment does not hold a NUL-terminated path")
+            }
             ElfError::NotFixedAddress(found) => {
                 write!(
                     f,
@@ -566,6 +572,25 @@ impl<'a> Elf<'a> {
         self.segments().filter(Segment::is_load)
     }
 
+    /// The path of the dynamic linker this image asks to be started by,
+    /// without its terminating NUL.
+    ///
+    /// `None` when the image names none, which is every static binary and
+    /// every static PIE. `Some(Err(..))` when it names one and what it names
+    /// is not a path: a segment whose contents are outside the image, or are
+    /// empty, or do not end in a NUL, or hold one before the end. Those are
+    /// distinguished from `None` because an image that asks for an interpreter
+    /// and cannot say which cannot be run, where one that asks for none runs
+    /// perfectly well.
+    ///
+    /// The first `PT_INTERP` wins, as Linux takes the first. A second is not
+    /// an error here: `validate_segments` is where an image's shape is judged,
+    /// and this answers a question about the one segment that matters.
+    pub fn interpreter(&self) -> Option<Result<&'a [u8], ElfError>> {
+        let segment = self.segments().find(|segment| segment.kind == PT_INTERP)?;
+        Some(interpreter_path(&segment, self.image))
+    }
+
     /// One past the last address `segment` occupies, or `None` if that wraps
     /// the address space of this image's class.
     fn end_of(&self, segment: &Segment) -> Option<u64> {
@@ -881,3 +906,18 @@ pub use symbols::{
     MAX_LABEL_SPAN, SHDR_SIZE, SHDR32_SIZE, SHT_STRTAB, SHT_SYMTAB, STT_FUNC, STT_NOTYPE,
     STT_OBJECT, SYM_SIZE, SYM32_SIZE, Symbol, Symbols,
 };
+
+/// The path inside a `PT_INTERP` segment: its contents less the NUL, checked.
+fn interpreter_path<'a>(segment: &Segment, image: &'a [u8]) -> Result<&'a [u8], ElfError> {
+    let data = segment.data(image)?;
+    // A path, not a string: it is handed to the same name resolution an
+    // `execve` argument is, so the only shapes refused here are the ones no
+    // resolution could take. An empty segment names nothing; a segment that
+    // does not end in a NUL is a name the image did not finish writing; and a
+    // NUL before the end means the bytes after it are unreachable, which is a
+    // malformed segment rather than a path with a suffix.
+    match data.split_last() {
+        Some((0, rest)) if !rest.is_empty() && !rest.contains(&0) => Ok(rest),
+        _ => Err(ElfError::BadInterpreter),
+    }
+}

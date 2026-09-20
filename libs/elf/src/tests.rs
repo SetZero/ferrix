@@ -803,3 +803,88 @@ fn parsing_never_panics_on_arbitrary_bytes() {
         }
     }
 }
+
+#[test]
+fn an_image_naming_no_interpreter_answers_none() {
+    let image = kernel_image();
+    let elf = Elf::parse(&image).unwrap();
+    assert!(
+        elf.interpreter().is_none(),
+        "a static image asks for no dynamic linker"
+    );
+}
+
+#[test]
+fn reads_the_interpreter_path_without_its_nul() {
+    let image = Builder::new()
+        .elf_type(ET_DYN)
+        .segment(PT_LOAD, PF_R | PF_X, 0x1000, vec![0x90; 0x100], 0)
+        .segment(
+            PT_INTERP,
+            PF_R,
+            0x2000,
+            b"/lib/ld-ferrix.so.1\0".to_vec(),
+            0,
+        )
+        .build();
+    let elf = Elf::parse(&image).unwrap();
+    assert_eq!(elf.interpreter(), Some(Ok(&b"/lib/ld-ferrix.so.1"[..])));
+}
+
+#[test]
+fn an_interpreter_inside_the_segment_that_maps_it_is_read() {
+    // How a linked binary really carries it: the `PT_INTERP` is a window into
+    // the read-execute `PT_LOAD`, not bytes of its own.
+    let mut text = vec![0x90; 0x100];
+    text[0x20..0x20 + 9].copy_from_slice(b"/lib/ld\0\0");
+    let image = Builder::new()
+        .elf_type(ET_DYN)
+        .segment(PT_LOAD, PF_R | PF_X, 0x1000, text, 0)
+        .within(PT_INTERP, 0x1020, 0, 0x20, 8)
+        .build();
+    let elf = Elf::parse(&image).unwrap();
+    assert_eq!(elf.interpreter(), Some(Ok(&b"/lib/ld"[..])));
+}
+
+#[test]
+fn an_interpreter_that_is_not_a_path_is_refused_and_not_ignored() {
+    // Each of these asks for an interpreter and fails to say which, which is
+    // not the same as asking for none: the image cannot be run either way, but
+    // only one of the two answers is honest about why.
+    for (what, data) in [
+        ("empty", vec![]),
+        ("unterminated", b"/lib/ld".to_vec()),
+        ("only a NUL", vec![0]),
+        ("a NUL before the end", b"/lib\0/ld\0".to_vec()),
+    ] {
+        let image = Builder::new()
+            .elf_type(ET_DYN)
+            .segment(PT_LOAD, PF_R | PF_X, 0x1000, vec![0x90; 0x100], 0)
+            .segment(PT_INTERP, PF_R, 0x2000, data, 0)
+            .build();
+        let elf = Elf::parse(&image).unwrap();
+        assert_eq!(
+            elf.interpreter(),
+            Some(Err(ElfError::BadInterpreter)),
+            "a {what} PT_INTERP was not refused"
+        );
+    }
+}
+
+#[test]
+fn an_interpreter_segment_outside_the_image_is_refused() {
+    let mut image = Builder::new()
+        .elf_type(ET_DYN)
+        .segment(PT_LOAD, PF_R | PF_X, 0x1000, vec![0x90; 0x100], 0)
+        .segment(PT_INTERP, PF_R, 0x2000, b"/lib/ld\0".to_vec(), 0)
+        .build();
+    // Reach past the end of the file, which `Segment::data` is what refuses.
+    let phdr = EHDR_SIZE + PHDR_SIZE;
+    image[phdr + 32..phdr + 40].copy_from_slice(&u64::MAX.to_le_bytes());
+    let elf = Elf::parse(&image).unwrap();
+    assert_eq!(
+        elf.interpreter(),
+        Some(Err(ElfError::SegmentOutOfBounds)),
+        "a PT_INTERP running past the image was not refused"
+    );
+}

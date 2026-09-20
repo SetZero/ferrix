@@ -21,12 +21,12 @@ use alloc::vec::Vec;
 use ferrix_bootinfo::{PAGE_SIZE, USER_VIRT_END};
 use ferrix_linux_abi::errno::Errno;
 use ferrix_linux_abi::types::{
-    AT_CLKTCK, AT_EGID, AT_EMPTY_PATH, AT_ENTRY, AT_EUID, AT_FDCWD, AT_GID, AT_HWCAP, AT_HWCAP2,
-    AT_PAGESZ, AT_PHDR, AT_PHENT, AT_PHNUM, AT_SECURE, AT_SYMLINK_NOFOLLOW, AT_UID,
+    AT_BASE, AT_CLKTCK, AT_EGID, AT_EMPTY_PATH, AT_ENTRY, AT_EUID, AT_FDCWD, AT_GID, AT_HWCAP,
+    AT_HWCAP2, AT_PAGESZ, AT_PHDR, AT_PHENT, AT_PHNUM, AT_SECURE, AT_SYMLINK_NOFOLLOW, AT_UID,
 };
 use ferrix_ustack::{Spec, Width};
 use ferrix_vfs::access::MAY_EXEC;
-use ferrix_vfs::{Access, FileType, OpenFile, OpenFlags};
+use ferrix_vfs::{Access, Context, FileType, OpenFile, OpenFlags};
 
 use crate::fs::SetIds;
 use ferrix_vma::VmaFlags;
@@ -87,6 +87,8 @@ pub(crate) enum ExecError {
     Startup,
     /// The program was loaded, but its task could not be started.
     Start(&'static str),
+    /// The dynamic linker the program names could not be read.
+    Linker(Errno),
 }
 
 /// Where the stack goes: as high in the user half as a page allows.
@@ -129,6 +131,10 @@ pub(crate) struct Executable<'a> {
     pub(crate) exec_fn: &'a [u8],
     /// The ids the file's set-user-id and set-group-id bits give it.
     pub(crate) set_ids: SetIds,
+    /// The dynamic linker's image, when the program named one. Read from the
+    /// path its `PT_INTERP` holds, before anything is unmapped, because after
+    /// the point of no return there is no program left to fail back to.
+    pub(crate) interpreter: Option<&'a [u8]>,
 }
 
 /// Load `image`, which came from no file, into a new process, ready to run
@@ -152,6 +158,7 @@ pub(crate) fn load(
         exe: name,
         exec_fn: name,
         set_ids: SetIds::NONE,
+        interpreter: None,
     };
     load_executable(program, args, env, random)
 }
@@ -171,10 +178,10 @@ pub(crate) fn load(
 pub(crate) fn load_native(image: &[u8], name: &[u8]) -> Result<Arc<Process>, ExecError> {
     let space = AddressSpace::new().map_err(ExecError::Space)?;
     let process = Process::new(Arc::clone(&space));
-    let loaded = load_into(&space, image)?;
+    let loaded = load_into(&space, image, None)?;
     process.record_exec(name, &[name]);
     process.set_startup(Startup {
-        entry: loaded.loaded.entry,
+        entry: loaded.loaded.start,
         stack: loaded.stack_top,
         argument: 0,
     });
@@ -211,6 +218,32 @@ fn load_as(
     Ok(registry::register(process))
 }
 
+/// Read the dynamic linker `image` asks for, if it asks for one.
+///
+/// The program's `PT_INTERP` holds a path, and this is the one place that
+/// turns it into bytes. It is done before anything is unmapped, because there
+/// is no way back from the point of no return: a linker that cannot be read
+/// has to be an `execve` that fails and leaves the caller running, not a
+/// process killed halfway into being replaced.
+///
+/// Read with [`crate::fs::read_program`], not [`crate::fs::read_file`], so the
+/// linker needs execute permission exactly as the program does -- Linux opens
+/// it with `open_exec` for the same reason. Its set-user-id bits are read and
+/// dropped: what a program runs as is its own file's business, and a set-id
+/// linker would hand every dynamic program its owner's identity.
+///
+/// # Errors
+///
+/// `ENOEXEC` for an image that asks for a linker without saying which, and
+/// whatever resolving or reading the path refuses.
+pub(crate) fn linker_for(ctx: &Context, image: &[u8]) -> Result<Option<vmap::Buffer>, Errno> {
+    let Some(path) = load::interpreter_of(image).map_err(|_| Errno::ENOEXEC)? else {
+        return Ok(None);
+    };
+    let (bytes, _exe, _set_ids) = crate::fs::read_program(ctx, None, path)?;
+    Ok(Some(bytes))
+}
+
 /// An ELF image loaded into an empty address space, with its stack region
 /// reserved: what a Linux program and a native process both start from.
 #[derive(Debug)]
@@ -233,8 +266,12 @@ pub(crate) struct Image {
 /// # Errors
 ///
 /// [`ExecError`].
-pub(crate) fn load_into(space: &AddressSpace, image: &[u8]) -> Result<Image, ExecError> {
-    let loaded = load::load(space, image).map_err(ExecError::Load)?;
+pub(crate) fn load_into(
+    space: &AddressSpace,
+    image: &[u8],
+    interpreter: Option<&[u8]>,
+) -> Result<Image, ExecError> {
+    let loaded = load::load(space, image, interpreter).map_err(ExecError::Load)?;
 
     // The stack region. Reserved whole; paid for a page at a time.
     let top = stack_top();
@@ -275,7 +312,7 @@ fn populate(
     env: &[&[u8]],
     random: [u8; ferrix_ustack::RANDOM_BYTES],
 ) -> Result<Startup, ExecError> {
-    let image = load_into(space, program.image)?;
+    let image = load_into(space, program.image, program.interpreter)?;
     let loaded = &image.loaded;
     let top = image.stack_top;
     process.set_heap_base(loaded.end);
@@ -303,6 +340,11 @@ fn populate(
         (AT_PHENT, loaded.phent),
         (AT_PHNUM, loaded.phnum),
         (AT_ENTRY, loaded.entry),
+        // Where the dynamic linker was placed, and zero when there is none.
+        // A linker reads it to find its own segments before it can relocate
+        // itself; musl's and glibc's both refuse to start without it. Zero is
+        // the right answer for a static program and is what Linux gives one.
+        (AT_BASE, loaded.base),
         (AT_UID, u64::from(user.real)),
         (AT_EUID, u64::from(user.effective)),
         (AT_GID, u64::from(group.real)),
@@ -325,7 +367,7 @@ fn populate(
 
     process.record_exec(program.exe, args);
     Ok(Startup {
-        entry: loaded.entry,
+        entry: loaded.start,
         stack: startup.sp,
         argument: 0,
     })
@@ -352,6 +394,34 @@ pub(crate) fn run(
         exe: name,
         exec_fn: name,
         set_ids: SetIds::NONE,
+        interpreter: None,
+    };
+    run_executable(program, args, env, random)
+}
+
+/// [`run`], for a program that names a dynamic linker, with the linker's bytes
+/// supplied.
+///
+/// For the boot check, which has both images in hand and wants the whole path
+/// exercised without an `execve` to carry them.
+///
+/// # Errors
+///
+/// [`ExecError`].
+pub(crate) fn run_with_linker(
+    image: &[u8],
+    linker: &[u8],
+    args: &[&[u8]],
+    env: &[&[u8]],
+    random: [u8; ferrix_ustack::RANDOM_BYTES],
+) -> Result<i32, ExecError> {
+    let name = args.first().copied().unwrap_or(b"");
+    let program = Executable {
+        image,
+        exe: name,
+        exec_fn: name,
+        set_ids: SetIds::NONE,
+        interpreter: Some(linker),
     };
     run_executable(program, args, env, random)
 }
@@ -561,7 +631,11 @@ fn execve_at(
             return Err(Errno::ENOEXEC.into());
         }
     }
-    load::check(&image).map_err(|_| Errno::ENOEXEC)?;
+    // Before the point of no return: the linker is read here so that a program
+    // naming one that is missing or unreadable is an `execve` that fails, with
+    // the caller still running the program it had.
+    let linker = linker_for(&context, &image)?;
+    load::check(&image, linker.as_deref()).map_err(|_| Errno::ENOEXEC)?;
 
     let arg_slices: Vec<&[u8]> = args.iter().map(Vec::as_slice).collect();
     let env_slices: Vec<&[u8]> = env.iter().map(Vec::as_slice).collect();
@@ -600,6 +674,7 @@ fn execve_at(
         exe: &exe,
         exec_fn: &exec_fn,
         set_ids,
+        interpreter: linker.as_deref(),
     };
     let startup = populate(
         space,

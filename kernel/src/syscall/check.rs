@@ -765,6 +765,9 @@ fn check_handlers(output: Output) -> Result<u64, &'static str> {
     check_an_alternate_stack_is_recorded_and_refused_when_small(&process)?;
     check_an_image_loads_where_its_headers_say(&process)?;
     check_a_static_pie_loads_at_its_base()?;
+    check_a_dynamic_program_is_loaded_with_its_linker()?;
+    check_the_loader_refuses_a_linker_it_cannot_use()?;
+    check_a_dynamic_program_enters_its_linker()?;
     check_the_loader_refuses_what_it_cannot_run(&process)?;
     check_descriptors(&process)?;
     check_what_an_applet_asks_of_the_system(&process)?;
@@ -2379,7 +2382,8 @@ fn check_an_image_loads_where_its_headers_say(process: &Process) -> Result<(), &
     let class = class_of_this_build();
     let file = image::build(class, arch::ARCH.elf_machine(), image::Shape::Good);
 
-    let loaded = load::load(process.space(), &file).map_err(|_| "a good image was refused")?;
+    let loaded =
+        load::load(process.space(), &file, None).map_err(|_| "a good image was refused")?;
 
     if loaded.entry != image::ENTRY {
         return Err("the loader reported the wrong entry point");
@@ -2464,12 +2468,12 @@ fn check_a_static_pie_loads_at_its_base() -> Result<(), &'static str> {
         arch::ARCH.elf_machine(),
         image::Shape::PositionIndependent,
     );
-    if load::check(&file).is_err() {
+    if load::check(&file, None).is_err() {
         return Err("execve's image check refused a static PIE");
     }
     let scratch = process::new_for_check().map_err(|_| "could not make a process")?;
     let space = scratch.space();
-    let loaded = load::load(space, &file).map_err(|_| "the loader refused a static PIE")?;
+    let loaded = load::load(space, &file, None).map_err(|_| "the loader refused a static PIE")?;
     let moved = |linked: u64| linked - image::BASE + load::PIE_BASE;
 
     if loaded.entry != moved(image::ENTRY) {
@@ -2490,6 +2494,222 @@ fn check_a_static_pie_loads_at_its_base() -> Result<(), &'static str> {
     let mut magic = [0_u8; 4];
     if uaccess::copy_from_user(space, image::BASE, &mut magic).is_ok() {
         return Err("a static PIE left something mapped at its link-time address");
+    }
+    Ok(())
+}
+
+/// A dynamically linked program, started from files, enters its linker and not
+/// itself.
+///
+/// The numbers are checked next door in
+/// [`check_a_dynamic_program_is_loaded_with_its_linker`]; this is the same
+/// thing end to end, with a linker that is a real file read from a real path
+/// and a processor that really enters ring 3. It is the only check that proves
+/// the path in the program's `PT_INTERP` is the one opened.
+///
+/// The linker's payload is the program that prints a line and exits 42. The
+/// *program's* payload writes through a null pointer, so a kernel that entered
+/// the program rather than its linker does not quietly pass: it ends with a
+/// `SIGSEGV`, or with 98 if the write did not even fault. Either is a failure
+/// here, and 42 can only be reached through the linker.
+fn check_a_dynamic_program_enters_its_linker() -> Result<(), &'static str> {
+    if arch::USER_TEST_PROGRAM.is_empty() || arch::USER_FAULT_PROGRAM.is_empty() {
+        return Ok(());
+    }
+    let class = class_of_this_build();
+    let machine = arch::ARCH.elf_machine();
+    let program = image::build_with(
+        class,
+        machine,
+        image::Shape::Dynamic,
+        arch::USER_FAULT_PROGRAM,
+    );
+    let linker = image::build_with(
+        class,
+        machine,
+        image::Shape::PositionIndependent,
+        arch::USER_TEST_PROGRAM,
+    );
+
+    // The path the image names, without the NUL a `PT_INTERP` carries.
+    let path = image::INTERP_PATH
+        .split_last()
+        .map_or(&b""[..], |(_, rest)| rest);
+    let ns = crate::fs::namespace();
+    let ctx = ns.context();
+    let outcome = write_and_run(ns, &ctx, path, &program, &linker);
+    let _ = ns.unlink(&ctx, None, path);
+    outcome
+}
+
+/// [`check_a_dynamic_program_enters_its_linker`]'s middle, so that the file it
+/// makes is removed whatever happens.
+fn write_and_run(
+    ns: &ferrix_vfs::Namespace,
+    ctx: &ferrix_vfs::Context,
+    path: &[u8],
+    program: &[u8],
+    linker: &[u8],
+) -> Result<(), &'static str> {
+    let flags = ferrix_vfs::OpenFlags {
+        write: true,
+        create: true,
+        truncate: true,
+        ..ferrix_vfs::OpenFlags::default()
+    };
+    let file = ns
+        .open(ctx, None, path, &flags, 0o755)
+        .map_err(|_| "the linker's file could not be created")?;
+    if file
+        .write(linker)
+        .map_err(|_| "the linker would not write")?
+        != linker.len()
+    {
+        return Err("the linker's file came back short");
+    }
+    drop(file);
+
+    // Read back through the same path the kernel will use, which is what
+    // `execve` does and what proves the `PT_INTERP` names something findable.
+    let found = exec::linker_for(ctx, program)
+        .map_err(|_| "the linker named by PT_INTERP could not be read")?
+        .ok_or("a program naming a linker was read as naming none")?;
+    if found.len() != linker.len() {
+        return Err("the linker read back from its path is not the one written");
+    }
+
+    let status = exec::run_with_linker(
+        program,
+        &found,
+        &[b"/dynamic"],
+        &[],
+        [0x5a; ferrix_ustack::RANDOM_BYTES],
+    )
+    .map_err(|_| "a dynamically linked program could not be started")?;
+    match status {
+        arch::USER_TEST_STATUS => Ok(()),
+        98 => Err("a dynamic program was entered itself, and its null write did not fault"),
+        _ => Err("a dynamic program did not exit as its linker does"),
+    }
+}
+
+/// A program naming a dynamic linker is loaded as two images, and it is the
+/// linker the processor is given.
+///
+/// What the kernel owes a dynamically linked program is exactly this much:
+/// both images placed, and the auxiliary vector telling the linker where each
+/// one went. Resolving symbols is the linker's, so there is nothing else here
+/// to check and nothing else the kernel should be doing.
+///
+/// Four numbers, and each would be wrong in a different way:
+///
+/// * `start` is the linker's entry, because entering the program directly
+///   would run code whose every imported symbol is still zero.
+/// * `entry` is the *program's* entry and not the linker's, because that is
+///   what `AT_ENTRY` hands the linker to jump to when it has finished.
+/// * `base` is where the linker landed, which is what `AT_BASE` tells it, and
+///   without which it cannot find its own segments to relocate itself.
+/// * `end` is past the *program*, because that is where the heap starts; a
+///   heap placed past the linker would leave a hole, and one placed past
+///   whichever image happened to be higher would move with the linker's size.
+fn check_a_dynamic_program_is_loaded_with_its_linker() -> Result<(), &'static str> {
+    let class = class_of_this_build();
+    let machine = arch::ARCH.elf_machine();
+    let program = image::build(class, machine, image::Shape::Dynamic);
+    let linker = image::build(class, machine, image::Shape::PositionIndependent);
+
+    if load::check(&program, Some(&linker)).is_err() {
+        return Err("execve's image check refused a program with its linker");
+    }
+    let scratch = process::new_for_check().map_err(|_| "could not make a process")?;
+    let space = scratch.space();
+    let loaded = load::load(space, &program, Some(&linker))
+        .map_err(|_| "the loader refused a program with its linker")?;
+
+    let in_program = |linked: u64| linked - image::BASE + load::PIE_BASE;
+    let in_linker = |linked: u64| linked - image::BASE + load::INTERP_BASE;
+
+    if loaded.start != in_linker(image::ENTRY) {
+        return Err("a dynamic program does not start at its linker's entry point");
+    }
+    if loaded.entry != in_program(image::ENTRY) {
+        return Err("a dynamic program's AT_ENTRY is not the program's own entry point");
+    }
+    if loaded.base != load::INTERP_BASE {
+        return Err("a dynamic program's AT_BASE is not where the linker was placed");
+    }
+    if loaded.phdr != in_program(image::BASE + class.header_size() as u64) {
+        return Err("a dynamic program's AT_PHDR is not the program's program headers");
+    }
+    if loaded.end <= in_program(image::DATA_VADDR) {
+        return Err("a dynamic program's heap would start below its own data segment");
+    }
+    if loaded.end > load::PIE_BASE + (1 << 30) {
+        return Err("a dynamic program's heap starts past the program, not past the linker");
+    }
+
+    // Both images are really there, each at its own base, with their data
+    // segments holding their contents.
+    for at in [in_program(image::DATA_VADDR), in_linker(image::DATA_VADDR)] {
+        let mut read = [0_u8; image::DATA_FILESZ];
+        uaccess::copy_from_user(space, at, &mut read)
+            .map_err(|_| "an image of a dynamic program was not at the base it was given")?;
+        if read != image::DATA_MARK {
+            return Err("an image of a dynamic program does not hold its contents");
+        }
+    }
+    Ok(())
+}
+
+/// The three ways a dynamic program and its linker can be refused, each by
+/// name and before anything is entered.
+fn check_the_loader_refuses_a_linker_it_cannot_use() -> Result<(), &'static str> {
+    let class = class_of_this_build();
+    let machine = arch::ARCH.elf_machine();
+    let program = image::build(class, machine, image::Shape::Dynamic);
+
+    // A program that names a linker, handed to a loader given none. This is
+    // the state every caller but `execve` is in, and the answer it had before
+    // any of this existed.
+    let scratch = process::new_for_check().map_err(|_| "could not make a process")?;
+    if !matches!(
+        load::load(scratch.space(), &program, None),
+        Err(load::LoadError::NeedsInterpreter)
+    ) {
+        return Err("the loader entered a dynamic program with no linker");
+    }
+
+    // A linker linked to a fixed address: it could not be placed.
+    let fixed = image::build(class, machine, image::Shape::Good);
+    let scratch = process::new_for_check().map_err(|_| "could not make a process")?;
+    if !matches!(
+        load::load(scratch.space(), &program, Some(&fixed)),
+        Err(load::LoadError::InterpreterNotPie)
+    ) {
+        return Err("the loader accepted a linker that is not position-independent");
+    }
+
+    // A linker that names a linker of its own. Linux refuses rather than
+    // following the chain, because a chain has no end it can prove.
+    let scratch = process::new_for_check().map_err(|_| "could not make a process")?;
+    if !matches!(
+        load::load(scratch.space(), &program, Some(&program)),
+        Err(load::LoadError::InterpreterChain)
+    ) {
+        return Err("the loader followed a linker that names a linker of its own");
+    }
+
+    // And `execve`'s check refuses all three before its point of no return,
+    // which is the only reason a failed `execve` can leave the caller running.
+    for (linker, what) in [
+        (None, "a dynamic program with no linker"),
+        (Some(&fixed), "a linker that is not position-independent"),
+        (Some(&program), "a linker that names one of its own"),
+    ] {
+        if load::check(&program, linker.map(Vec::as_slice)).is_ok() {
+            let _ = what;
+            return Err("execve's image check accepted a linker the loader refuses");
+        }
     }
     Ok(())
 }
@@ -2515,14 +2735,14 @@ fn check_the_loader_refuses_what_it_cannot_run(process: &Process) -> Result<(), 
         // part of the image, and that is exactly why `execve` will load into a
         // fresh space and swap it in only on success.
         let scratch = process::new_for_check().map_err(|_| "could not make a process")?;
-        if load::load(scratch.space(), &file).is_ok() {
+        if load::load(scratch.space(), &file, None).is_ok() {
             return Err("the loader accepted an image it cannot run");
         }
     }
 
     // And bytes that are not an ELF at all.
     let scratch = process::new_for_check().map_err(|_| "could not make a process")?;
-    if load::load(scratch.space(), b"not an ELF image").is_ok() {
+    if load::load(scratch.space(), b"not an ELF image", None).is_ok() {
         return Err("the loader accepted something that is not an ELF image");
     }
 
@@ -2532,12 +2752,15 @@ fn check_the_loader_refuses_what_it_cannot_run(process: &Process) -> Result<(), 
     let file = image::build(class, machine, image::Shape::EntryOutsideUser);
     let scratch = process::new_for_check().map_err(|_| "could not make a process")?;
     if !matches!(
-        load::load(scratch.space(), &file),
+        load::load(scratch.space(), &file, None),
         Err(load::LoadError::EntryNotUser(_))
     ) {
         return Err("the loader accepted an entry point outside the user half");
     }
-    if !matches!(load::check(&file), Err(load::LoadError::EntryNotUser(_))) {
+    if !matches!(
+        load::check(&file, None),
+        Err(load::LoadError::EntryNotUser(_))
+    ) {
         return Err("execve's image check accepted an entry point outside the user half");
     }
     let _ = process;
