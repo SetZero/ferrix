@@ -38,7 +38,11 @@ def run(zinc, work):
     pid, fd = pty.fork()
     if pid == 0:
         os.chdir(work)
-        env = {"PATH": "/usr/bin:/bin", "HOME": work, "PS1": "% ", "TERM": "xterm"}
+        # A prompt with no `%` escape in it. `% ` was this until the prompt
+        # expander learned zsh's rule that an escape with no meaning expands
+        # to nothing -- under which `% ` is a `%` escape naming a space, and
+        # the whole prompt disappears, exactly as it does in zsh.
+        env = {"PATH": "/usr/bin:/bin", "HOME": work, "PS1": "zinc> ", "TERM": "xterm"}
         os.execve(zinc, [zinc, "-f", "-i"], env)
 
     def read(seconds):
@@ -75,7 +79,7 @@ def run(zinc, work):
     expect(b"\t", "alpha.txt   alpine.log", "the next Tab lists the matches")
     expect(b"\t\r", "\nalpha.txt\n", "the Tab after the listing inserts the first match")
     expect(b"echo be\t\r", "\nbeta dir/\n", "a directory completes with a slash, quoted")
-    expect(b"FOOBAR=1 FOOBAZ=2\r", "% ", "assignments")
+    expect(b"FOOBAR=1 FOOBAZ=2\r", "zinc> ", "assignments")
     expect(b"echo $FOOB\t\t", "FOOBAR  FOOBAZ", "parameters list without their dollar")
     os.write(fd, b"\x15exit\r")
     read(1.0)
