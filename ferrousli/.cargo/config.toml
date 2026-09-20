@@ -1,0 +1,17 @@
+# The loader is a program, and a freestanding one: it is the half of the C
+# library that runs before there is a C library, so it links against nothing
+# and brings its own `_start`. These flags say that.
+#
+# They are scoped to the target rather than set for the workspace because
+# `libferrousli.a` is a static library that is never linked here, so link flags
+# would mean nothing to it; scoping them keeps that visible.
+#
+# The musl target already passes `-static -pie --no-dynamic-linker`, which is
+# exactly the shape a dynamic loader has to be: an `ET_DYN` naming no
+# interpreter of its own. Nothing here has to ask for that.
+[target.x86_64-unknown-linux-musl]
+rustflags = [
+    "-Clink-self-contained=no",
+    "-Cdefault-linker-libraries=no",
+    "-Clink-arg=-nostartfiles",
+]
