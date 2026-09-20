@@ -1,12 +1,19 @@
-# The answers `scripts/remote-desktop.py` asks for. Copy this to one of
+# The answers `cargo xtask remote-desktop` asks for. Copy this to one of
 #
 #   ./remote-desktop.toml            (this checkout; git ignores it)
 #   ~/.config/ferrix/remote.toml     (every checkout on this machine)
 #
 # or name one with --config, or with $FERRIX_REMOTE. One file is one machine;
-# a second machine is a second file and a --config that names it.
+# a second machine is a second file and a --config that names it. A machine
+# tried once needs no file: `--host <ssh destination>` is enough.
 #
-# Every key below is at its default except `host`, which has none.
+# This is the full desktop flavour: release builds, 3D, clipboard, a large
+# screen, two keyboard layouts, a wallpaper, four CPUs and 1 GiB of memory.
+# Trim the list under [boot] to make a smaller profile. A key this reader does
+# not know is an error rather than a line quietly ignored, because a setting
+# that silently does not apply is the worst kind of bug in a tool whose whole
+# job is "the same every time". It reads strings, whole numbers and lists of
+# strings -- the file is answers, not a program.
 
 [remote]
 # An `ssh` destination. A name out of ~/.ssh/config is the point: the user,
@@ -29,7 +36,7 @@ cargo = "cargo"
 # binary -- which is how a machine whose distribution QEMU has no
 # virglrenderer still gets `--gl`.
 [remote.env]
-# FERRIX_QEMU = "/opt/qemu/bin"
+# FERRIX_QEMU = "/opt/qemu/bin" # Uncomment if this machine's QEMU lacks virgl.
 # FERRIX_WALLPAPERS = "/home/you/.local/share/ferrix/wallpapers"
 
 [boot]
@@ -39,22 +46,26 @@ command = "run-compositor"
 arch = "x86_64"
 
 # Everything else `cargo xtask` takes, as it is written on a command line.
-# See `cargo xtask --help`, or README.md. A few worth knowing:
-#   "--release"            optimised loader and kernel; worth it for a desktop
-#   "--size", "1600x900"   the guest's screen
-#   "--layout", "de,us"    keyboard layouts a switch moves between
-#   "--gl"                 the 3D card, if that QEMU was built with one
-#   "--rendernode", "/dev/dri/renderD128"
-#                          which GPU --gl draws on, on a machine with two.
-#                          `ls -l /dev/dri/by-path/` says which node is which
-#                          card; QEMU takes the lowest-numbered one otherwise
-#   "--config", "/path/hyprland.conf"   a real config, on the remote machine
-#   "--no-net"             no network device
-args = []
+# This remote command supplies `--vnc :0`; do not add another `--vnc` here.
+# Replace the wallpaper name, or use "none" for a plain background.
+args = [
+    "--release",
+    "--gl",
+    "--clipboard",
+    "--size", "1920x1080",
+    "--layout", "de,us",
+    "--variant", "nodeadkeys,",
+    "--wallpaper", "<part-of-a-wallpaper-name>",
+    "--smp", "4",
+    "--memory", "1024",
+]
+# "--rendernode", "/dev/dri/renderD128" # Select the GPU for --gl when needed.
+# "--config", "/path/hyprland.conf"     # A config that exists on the remote host.
+# "--no-net"                             # The network is enabled unless this is added.
 
 [screen]
 # The VNC display over there: display n is port 5900 + n. Two people on one
-# machine want two numbers.
+# machine want two numbers; `--vnc :1` says one for a single run.
 display = 0
 
 # The port the tunnel listens on here. `auto` takes 5900 + display when it is

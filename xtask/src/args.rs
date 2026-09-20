@@ -162,6 +162,32 @@ pub(crate) struct Args {
     /// they are not to be a quarter of `--size` each way. The client scales
     /// whatever it is given to cover the screen.
     pub(crate) video_size: Option<(u32, u32)>,
+    /// `--host <DESTINATION>`: the machine `remote-desktop` boots on, as
+    /// `ssh` names one, over whatever the config file said. No host is ever a
+    /// default here: this and the config file are the only two ways one is
+    /// named, which is the rule the rest of `xtask` follows.
+    pub(crate) host: Option<String>,
+    /// `--local-port <N>`: the port `remote-desktop`'s tunnel listens on
+    /// here. Left out, it takes 5900 + the display when that is free and the
+    /// next one up when it is not, which matters on a machine that runs a VNC
+    /// server of its own.
+    pub(crate) local_port: Option<u16>,
+    /// `--send <working-tree|head>`: whether `remote-desktop` boots what you
+    /// are looking at or your last commit, over what the config file said.
+    pub(crate) send: Option<String>,
+    /// `--no-viewer`: `remote-desktop` opens the tunnel and nothing else, for
+    /// somebody who would rather point their own viewer at it.
+    pub(crate) no_viewer: bool,
+    /// `--print-command`: say what `remote-desktop` would send, run and open,
+    /// and do none of it. The first thing to run when something is not where
+    /// it was expected.
+    pub(crate) print_command: bool,
+    /// `--stop`: end a boot left running over there, and do nothing else.
+    pub(crate) stop: bool,
+    /// Everything after `--`, passed to the remote `cargo xtask` as it
+    /// stands. Only `remote-desktop` reads it: it is the one command whose
+    /// arguments are partly another command's.
+    pub(crate) passthrough: Vec<String>,
     /// `--boot <name>`: run only the boots of `test-compositor` whose name
     /// holds this, rather than all of them.
     ///
@@ -218,6 +244,17 @@ impl Args {
                 "--port" => args.port = Some(value(&mut items, "--port")?),
                 "--init" => args.init = Some(value(&mut items, "--init")?),
                 "--boot" => args.boot = Some(value(&mut items, "--boot")?),
+                "--host" => args.host = Some(value(&mut items, "--host")?),
+                "--local-port" => args.local_port = Some(number(&mut items, "--local-port")?),
+                "--send" => args.send = Some(value(&mut items, "--send")?),
+                "--no-viewer" => args.no_viewer = true,
+                "--print-command" => args.print_command = true,
+                "--stop" => args.stop = true,
+                // Everything after `--` belongs to the `cargo xtask` at the
+                // other end of an `ssh`, and this parser must not have an
+                // opinion about any of it -- including whether it knows the
+                // option, which is the whole point of passing it on.
+                "--" => args.passthrough.extend(items.by_ref()),
                 "--vnc" => args.vnc = Some(value(&mut items, "--vnc")?),
                 "--rendernode" => args.rendernode = Some(value(&mut items, "--rendernode")?),
                 "--config" => args.config = Some(value(&mut items, "--config")?),
@@ -311,6 +348,35 @@ mod tests {
 
     fn parse(line: &[&str]) -> Result<Args> {
         Args::parse(line.iter().map(|item| (*item).to_owned()))
+    }
+
+    #[test]
+    fn remote_options_and_passthrough_are_kept_separate() {
+        let args = parse(&[
+            "remote-desktop",
+            "--host",
+            "builder",
+            "--local-port",
+            "5902",
+            "--send",
+            "head",
+            "--no-viewer",
+            "--print-command",
+            "--",
+            "--config",
+            "guest.conf",
+            "--future-option",
+        ])
+        .unwrap();
+        assert_eq!(args.host.as_deref(), Some("builder"));
+        assert_eq!(args.local_port, Some(5902));
+        assert_eq!(args.send.as_deref(), Some("head"));
+        assert!(args.no_viewer && args.print_command);
+        assert!(args.config.is_none());
+        assert_eq!(
+            args.passthrough,
+            ["--config", "guest.conf", "--future-option"]
+        );
     }
 
     #[test]

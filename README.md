@@ -393,16 +393,22 @@ says that too, rather than starting and dying on an option it does not have.
 The four steps above -- send the code, boot it there, tunnel, open a viewer
 -- are the same every time except for the first, and that is the one worth
 getting right: a boot of yesterday's code looks exactly like a boot of
-today's. `scripts/remote-desktop.py` does all four from a file of answers.
+today's. `remote-desktop` does all four from a file of answers.
 
 ```
-python3 scripts/remote-desktop.py
+cargo xtask remote-desktop
 ```
 
 Copy [`scripts/remote-desktop.toml.example`](scripts/remote-desktop.toml.example)
 to `~/.config/ferrix/remote.toml` -- or to `remote-desktop.toml` here, which
 git ignores, or anywhere and name it with `--config` or `$FERRIX_REMOTE` --
 and fill in the one key that has no default:
+
+On Windows, that home configuration is
+`%USERPROFILE%\.config\ferrix\remote.toml` (in PowerShell,
+`$env:USERPROFILE\.config\ferrix\remote.toml`). The command reads existing
+configurations from the former Python script unchanged; Python is no longer
+needed for this command.
 
 ```toml
 [remote]
@@ -412,11 +418,17 @@ host = "the-name-in-your-ssh-config"
 args = ["--release", "--size", "1600x900", "--layout", "de,us"]
 ```
 
+The copied example is the full desktop flavour: release builds, 3D graphics,
+clipboard sharing, 1920x1080, two keyboard layouts, a wallpaper, four CPUs
+and 1 GiB of memory. Replace its wallpaper placeholder and pare flags back
+for a smaller profile.
+
 `host` is an `ssh` destination and nothing more: the user, the key and a
 `ProxyJump` two hops away stay in `~/.ssh/config`, where they already are.
-No machine is named anywhere in this repository, which is the rule `xtask`
-follows too -- no host is a default and the network is only what an argument
-asked for.
+No machine is named anywhere in this repository, which is the rule the rest
+of `xtask` follows too -- no host is a default and the network is only what
+an argument asked for. `--host <destination>` is the other way to name one,
+for a machine tried once, and it needs no file at all.
 
 What the run does, and the two parts of it that are not obvious:
 
@@ -430,19 +442,21 @@ What the run does, and the two parts of it that are not obvious:
 
 `--print-command` says what all of that would be without doing any of it,
 which is the first thing to run when something is not where you expected it.
-`--stop` ends a boot left running over there, which happens when this script
-does not get to clean up after itself -- a hard kill, a laptop closing -- and
-matters because a QEMU nobody is watching still holds that machine's memory
-and its VNC port against the next run. Closing the connection is not enough
-on its own; that is measured, not assumed.
-`--display` and `--local-port` move the screen for a run -- two people on one
+`--stop` ends a boot left running over there, which happens when the command
+does not get to clean up after itself -- Ctrl-C, a hard kill, a laptop
+closing -- and matters because a QEMU nobody is watching still holds that
+machine's memory and its VNC port against the next run. Closing the
+connection is not enough on its own; that is measured, not assumed.
+`--vnc :1` and `--local-port` move the screen for a run -- two people on one
 machine want two displays -- and `[screen] local_port = "auto"`, the default,
 steps past a port this machine is already using rather than showing you
-someone else's desktop. Anything after `--` goes to the remote `cargo xtask`
-as it stands:
+someone else's desktop. `--send head` boots your last commit instead of your
+working tree for one run, and `--no-viewer` opens the tunnel and nothing
+else. Anything after `--` goes to the remote `cargo xtask` as it stands,
+whether or not this end knows the option:
 
 ```
-python3 scripts/remote-desktop.py -- --wallpaper none --smp 8
+cargo xtask remote-desktop -- --wallpaper none --smp 8
 ```
 
 The serial console comes back on this terminal throughout, which is where a
@@ -467,6 +481,21 @@ cargo xtask run-compositor --arch x86_64 --release --gl --clipboard \
     --size 1920x1080 --layout de,us --variant nodeadkeys, \
     --wallpaper <part of a name> --smp 4 --memory 1024
 ```
+
+For the same full flavour on a remote machine, copy the full-profile example,
+replace its host and wallpaper placeholder, then run:
+
+```
+cargo xtask remote-desktop
+```
+
+The profile supplies release builds, 3D, clipboard, 1920x1080, both keyboard
+layouts, a wallpaper, four CPUs and 1 GiB of memory. `remote-desktop` supplies
+`--vnc :0` itself, so the remote QEMU serves the desktop through the tunnel
+instead of opening a window on the build machine. Set `[remote.env]
+FERRIX_QEMU` when that machine needs a QEMU with virglrenderer. Add
+`--rendernode /dev/dri/renderD128` to the profile when it has more than one
+GPU.
 
 That is the desktop on the 3D card, in a window of this host's, at
 1920x1080, with two keyboard layouts a switch moves between and no dead keys

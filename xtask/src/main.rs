@@ -9,6 +9,8 @@
 //! cargo xtask test-vfs  --arch all --init PATH/{arch}/busybox [--timeout SECONDS]
 //! cargo xtask test-threads --arch all [--timeout SECONDS]
 //! cargo xtask check     [--fast] [--ferrousli] [--zinc] [--miri]
+//! cargo xtask remote-desktop [--host DEST] [--config PATH] [--vnc :N] [--send head]
+//!                       [--no-viewer] [--print-command] [--stop] [-- ARGS...]
 //! cargo xtask busybox   [--arch x86_64]
 //! cargo xtask ports     [--arch x86_64]
 //! cargo xtask omz       --from DIRECTORY-OR-URL
@@ -68,6 +70,7 @@ mod pe;
 mod ports;
 mod pty;
 mod qemu;
+mod remote;
 mod seat;
 mod serial;
 mod shell;
@@ -129,6 +132,7 @@ COMMANDS:
     build         Compile the loader and kernel and write a bootable image
     run           Boot the image under QEMU, attached to the terminal
     run-compositor  Boot compositor/hyprix as init with a virtio-gpu, on a screen this host can show
+    remote-desktop  Send this tree to another machine, boot the desktop there and watch it here over VNC
     wallpapers    Convert pictures for run-compositor's desktop and keep them on this machine
     test-boot     Boot the image under QEMU and assert the kernel came up
     test-shell    Boot with a static busybox built in and require its script's output
@@ -188,7 +192,25 @@ OPTIONS:
                                          draws on, e.g. /dev/dri/renderD128. QEMU takes the first
                                          render node otherwise, which on a machine with two GPUs is a
                                          guess. A window's GL goes to the host display's GPU regardless
-    --config <PATH>                      run-compositor: the hyprland.conf the guest is given
+    --config <PATH>                      run-compositor: the hyprland.conf the guest is given;
+                                         remote-desktop: the file of answers to read instead of
+                                         the ones searched [or $FERRIX_REMOTE]
+    --host <DESTINATION>                 remote-desktop: the machine to boot on, as `ssh` names
+                                         one, over what the config file said. No host is a
+                                         default anywhere in xtask; this and that file are the
+                                         only two ways one is named
+    --local-port <N>                     remote-desktop: the port the tunnel listens on here
+                                         [default: 5900 + the display, or the next one free]
+    --send <working-tree|head>           remote-desktop: boot what you are looking at,
+                                         uncommitted changes and all, or your last commit
+                                         [default: working-tree]
+    --no-viewer                          remote-desktop: open the tunnel and nothing else
+    --print-command                      remote-desktop: say what would be sent, run and opened,
+                                         and do none of it
+    --stop                               remote-desktop: end a boot left running over there, and
+                                         do nothing else
+    --                                   remote-desktop: everything after this goes to the
+                                         remote `cargo xtask` as it stands
     --layout <LIST>                      run-compositor: the keyboard layout, as input:kb_layout
                                          takes it: `de`, or `de,us` for two a switch moves between
     --variant <LIST>                     run-compositor: their variants, as input:kb_variant
@@ -298,6 +320,7 @@ fn run() -> Result<()> {
         "test-net" => test_net(&args),
         "test-display" => display::test_display(&args),
         "run-compositor" => compositor::run_compositor(&args),
+        "remote-desktop" => remote::remote_desktop(&args),
         "wallpapers" => wallpaper::import(&args),
         "test-compositor" => compositor::test_compositor(&args),
         "test-video" => compositor::test_video(&args),
