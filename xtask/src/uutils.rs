@@ -189,15 +189,32 @@ pub(crate) fn carried(arch: Arch) -> Result<Vec<(&'static str, Vec<u8>)>> {
         .parent()
         .map(Path::to_path_buf)
         .ok_or_else(|| Error::new(format!("{} has no directory", watched.display())))?;
-    crate::initramfs::FAMILY
-        .iter()
-        .map(|binary| {
-            let path = dir.join(binary.name);
-            let bytes = std::fs::read(&path)
-                .map_err(|error| Error::new(format!("reading {}: {error}", path.display())))?;
-            Ok((binary.name, bytes))
-        })
-        .collect()
+    // A family program that is not installed is left out rather than refused,
+    // and the names it owns fall to busybox in the image, exactly as they do
+    // on an architecture uutils is not built for. The Windows build makes
+    // coreutils alone -- findutils will not link against ferrousli there yet,
+    // `rust_begin_unwind` being defined twice -- and before this, an image
+    // built on Windows failed on the first name it could not find.
+    let mut carried = Vec::new();
+    let mut missing: Vec<&str> = Vec::new();
+    for binary in crate::initramfs::FAMILY {
+        let path = dir.join(binary.name);
+        if !path.is_file() {
+            missing.push(binary.name);
+            continue;
+        }
+        let bytes = std::fs::read(&path)
+            .map_err(|error| Error::new(format!("reading {}: {error}", path.display())))?;
+        carried.push((binary.name, bytes));
+    }
+    if !missing.is_empty() {
+        println!(
+            "  not built, so busybox keeps their names: {} (from {})",
+            missing.join(", "),
+            dir.display()
+        );
+    }
+    Ok(carried)
 }
 
 #[cfg(test)]
