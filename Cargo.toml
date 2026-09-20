@@ -39,6 +39,7 @@ members = [
     "libs/vdagent",
     "libs/virtio",
     "libs/virtio-blk",
+    "libs/virtio-console",
     "libs/virtio-gpu",
     "libs/virtio-input",
     "libs/virtio-net",
@@ -120,6 +121,7 @@ ferrix-ustack = { path = "libs/ustack" }
 ferrix-virtio = { path = "libs/virtio" }
 ferrix-virtio-blk = { path = "libs/virtio-blk" }
 ferrix-virtio-gpu = { path = "libs/virtio-gpu" }
+ferrix-virtio-console = { path = "libs/virtio-console" }
 ferrix-virtio-input = { path = "libs/virtio-input" }
 ferrix-virtio-net = { path = "libs/virtio-net" }
 ferrix-vma = { path = "libs/vma" }
