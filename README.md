@@ -378,6 +378,66 @@ display to serve is the thing it was missing. And a QEMU built
 `--disable-vnc` -- asked with `-vnc help`, and judged by what it printed --
 says that too, rather than starting and dying on an option it does not have.
 
+#### One command for a machine you use often
+
+The four steps above -- send the code, boot it there, tunnel, open a viewer
+-- are the same every time except for the first, and that is the one worth
+getting right: a boot of yesterday's code looks exactly like a boot of
+today's. `scripts/remote-desktop.py` does all four from a file of answers.
+
+```
+python3 scripts/remote-desktop.py
+```
+
+Copy [`scripts/remote-desktop.toml.example`](scripts/remote-desktop.toml.example)
+to `~/.config/ferrix/remote.toml` -- or to `remote-desktop.toml` here, which
+git ignores, or anywhere and name it with `--config` or `$FERRIX_REMOTE` --
+and fill in the one key that has no default:
+
+```toml
+[remote]
+host = "the-name-in-your-ssh-config"
+
+[boot]
+args = ["--release", "--size", "1600x900", "--layout", "de,us"]
+```
+
+`host` is an `ssh` destination and nothing more: the user, the key and a
+`ProxyJump` two hops away stay in `~/.ssh/config`, where they already are.
+No machine is named anywhere in this repository, which is the rule `xtask`
+follows too -- no host is a default and the network is only what an argument
+asked for.
+
+What the run does, and the two parts of it that are not obvious:
+
+| | |
+|---|---|
+| sends the **working tree** | uncommitted changes and all, because "does my change work" is the question being asked. It builds the commit in a private `GIT_INDEX_FILE`, so your index is untouched and no branch moves; `[source] send = "head"` sends your last commit instead, and `--send head` says so for one run |
+| pushes to a **side ref** | `refs/ferrix-desktop/head` in a checkout it makes the first time, not a branch -- a checkout refuses a push to the branch it has checked out, and a ref outside `refs/heads` is never that branch. The remote `target/` survives between runs, so the second boot builds almost nothing |
+| one `ssh` | carries both the forward and the boot, so the tunnel lives exactly as long as the machine does and neither can outlive the other |
+| waits for `RFB` | the protocol's own greeting, not a connection: `ssh` accepts on a forwarded port from the moment it starts, so a connection proves only that `ssh` is running |
+| opens the viewer | RealVNC, TigerVNC, UltraVNC, Remmina or macOS Screen Sharing, found on this machine; `[screen] viewer` takes a command line instead, or `none`. Closing the window stops the boot, and the boot ending closes the window |
+
+`--print-command` says what all of that would be without doing any of it,
+which is the first thing to run when something is not where you expected it.
+`--stop` ends a boot left running over there, which happens when this script
+does not get to clean up after itself -- a hard kill, a laptop closing -- and
+matters because a QEMU nobody is watching still holds that machine's memory
+and its VNC port against the next run. Closing the connection is not enough
+on its own; that is measured, not assumed.
+`--display` and `--local-port` move the screen for a run -- two people on one
+machine want two displays -- and `[screen] local_port = "auto"`, the default,
+steps past a port this machine is already using rather than showing you
+someone else's desktop. Anything after `--` goes to the remote `cargo xtask`
+as it stands:
+
+```
+python3 scripts/remote-desktop.py -- --wallpaper none --smp 8
+```
+
+The serial console comes back on this terminal throughout, which is where a
+boot that never reaches a screen says why.
+
 None of this is needed to *test* a desktop on a remote machine.
 `test-compositor`, `test-display`, `test-video`, `test-input`, `test-seat`
 and `test-pty` read the screen with a QMP screendump and open no window and

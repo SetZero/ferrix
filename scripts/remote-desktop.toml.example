@@ -1,0 +1,75 @@
+# The answers `scripts/remote-desktop.py` asks for. Copy this to one of
+#
+#   ./remote-desktop.toml            (this checkout; git ignores it)
+#   ~/.config/ferrix/remote.toml     (every checkout on this machine)
+#
+# or name one with --config, or with $FERRIX_REMOTE. One file is one machine;
+# a second machine is a second file and a --config that names it.
+#
+# Every key below is at its default except `host`, which has none.
+
+[remote]
+# An `ssh` destination. A name out of ~/.ssh/config is the point: the user,
+# the key and a ProxyJump two hops away are already written there, and
+# nothing about any machine belongs in this repository.
+host = "the-name-in-your-ssh-config"
+
+# The checkout over there, made the first time and reused after. Relative to
+# the remote home unless it starts with `/`. It holds a `target/` directory
+# too, which is why reusing one matters: the second boot builds almost
+# nothing.
+dir = "ferrix-desktop"
+
+# `cargo`, if it is not on a non-interactive shell's PATH over there. The
+# script already puts ~/.cargo/bin, ~/.local/bin and /usr/local/bin on it.
+cargo = "cargo"
+
+# Anything the remote boot should have in its environment. FERRIX_QEMU names
+# a QEMU that is not the one on PATH -- a directory of binaries or one
+# binary -- which is how a machine whose distribution QEMU has no
+# virglrenderer still gets `--gl`.
+[remote.env]
+# FERRIX_QEMU = "/opt/qemu/bin"
+# FERRIX_WALLPAPERS = "/home/you/.local/share/ferrix/wallpapers"
+
+[boot]
+# `run-compositor` for the desktop; `run` for a program of your own, with
+# `--init <path>` among the args below.
+command = "run-compositor"
+arch = "x86_64"
+
+# Everything else `cargo xtask` takes, as it is written on a command line.
+# See `cargo xtask --help`, or README.md. A few worth knowing:
+#   "--release"            optimised loader and kernel; worth it for a desktop
+#   "--size", "1600x900"   the guest's screen
+#   "--layout", "de,us"    keyboard layouts a switch moves between
+#   "--gl"                 the 3D card, if that QEMU was built with one
+#   "--config", "/path/hyprland.conf"   a real config, on the remote machine
+#   "--no-net"             no network device
+args = []
+
+[screen]
+# The VNC display over there: display n is port 5900 + n. Two people on one
+# machine want two numbers.
+display = 0
+
+# The port the tunnel listens on here. `auto` takes 5900 + display when it is
+# free and the next one up when it is not, which matters on a machine that
+# runs a VNC server of its own.
+local_port = "auto"
+
+# `auto` finds RealVNC, TigerVNC, UltraVNC, Remmina or macOS Screen Sharing.
+# `none` opens the tunnel and nothing else. Otherwise a command line, best
+# written as a list so a Windows path needs no escaping; `{address}`,
+# `{host}` and `{port}` are filled in.
+viewer = "auto"
+# viewer = ["C:\\Program Files\\RealVNC\\VNC Viewer\\vncviewer.exe", "{address}"]
+
+# How long to wait for the screen. The first boot on a machine builds the
+# whole tree, which is most of this.
+wait = 1800
+
+[source]
+# `working-tree` boots what you are looking at, uncommitted changes and all,
+# without touching your index. `head` boots your last commit instead.
+send = "working-tree"
