@@ -711,7 +711,7 @@ pub(crate) fn dollar_quote(body: &[u8]) -> Vec<u8> {
 }
 
 /// Brace expansion: `x{a,b}y` and `{1..3}`, outermost first.
-pub(crate) fn brace_expand(sh: &Shell, w: &[u8]) -> Vec<Vec<u8>> {
+pub(crate) fn brace_expand(sh: &mut Shell, w: &[u8]) -> Vec<Vec<u8>> {
     let mut i = 0;
     while let Some(&c) = w.get(i) {
         match c {
@@ -766,7 +766,7 @@ pub(crate) fn brace_expand(sh: &Shell, w: &[u8]) -> Vec<Vec<u8>> {
     vec![w.to_vec()]
 }
 
-fn brace_parts(sh: &Shell, inner: &[u8]) -> Option<Vec<Vec<u8>>> {
+fn brace_parts(sh: &mut Shell, inner: &[u8]) -> Option<Vec<Vec<u8>>> {
     let mut parts = Vec::new();
     let mut depth = 0;
     let mut start = 0;
@@ -784,19 +784,38 @@ fn brace_parts(sh: &Shell, inner: &[u8]) -> Option<Vec<Vec<u8>>> {
         parts.push(inner.get(start..).unwrap_or(&[]).to_vec());
         return Some(parts);
     }
-    let plain: Vec<u8> = inner.iter().map(|&c| tok::detok(c)).collect();
-    let text = std::str::from_utf8(&plain).ok()?;
-    let mut it = text.split("..");
-    let (a, b, step) = (it.next()?, it.next()?, it.next());
-    if it.next().is_some() {
-        return None;
+    // A range: `{a..b}`, or `{a..b..step}`. The endpoints are still
+    // tokenized, so they are split apart before being read, and a parameter
+    // in one is expanded where it stands.
+    let mut ends: Vec<&[u8]> = Vec::new();
+    let mut from = 0;
+    let mut i = 0;
+    while let Some(&c) = inner.get(i) {
+        if c == META || c == BNULL {
+            i += 2;
+            continue;
+        }
+        if c == b'.' && inner.get(i + 1) == Some(&b'.') {
+            ends.push(inner.get(from..i).unwrap_or(&[]));
+            i += 2;
+            from = i;
+            continue;
+        }
+        i += 1;
     }
+    ends.push(inner.get(from..).unwrap_or(&[]));
+    let (a, b, step) = match ends.as_slice() {
+        [a, b] => (*a, *b, None),
+        [a, b, step] => (*a, *b, Some(*step)),
+        _ => return None,
+    };
     let a = brace_range_endpoint(sh, a)?;
     let b = brace_range_endpoint(sh, b)?;
     let step: i64 = step
         .map_or(Some(1i64), |s| brace_range_endpoint(sh, s)?.parse().ok())?
         .abs()
         .max(1);
+    let (a, b) = (a.as_str(), b.as_str());
     if let (Ok(x), Ok(y)) = (a.parse::<i64>(), b.parse::<i64>()) {
         let width = if a.starts_with('0') || b.starts_with('0') {
             a.len().max(b.len())
@@ -836,34 +855,35 @@ fn brace_parts(sh: &Shell, inner: &[u8]) -> Option<Vec<Vec<u8>>> {
     None
 }
 
-/// A brace range endpoint is normally literal.  zsh additionally recognises
-/// its compact `$#name` spelling here; compaudit uses `{1..$#_i_addfiles}` to
-/// walk an array without constructing a second list.
-fn brace_range_endpoint(sh: &Shell, endpoint: &str) -> Option<String> {
-    let Some(name) = endpoint.strip_prefix("$#") else {
-        return Some(endpoint.to_owned());
-    };
-    let name = name.as_bytes();
-    if !name.is_empty()
-        && (name
-            .first()
-            .is_none_or(|c| !c.is_ascii_alphabetic() && *c != b'_')
-            || name
-                .iter()
-                .any(|c| !c.is_ascii_alphanumeric() && *c != b'_'))
-    {
-        return None;
-    }
-    let n = if name.is_empty() {
-        sh.positional.len()
-    } else {
-        match sh.get(name).unwrap_or(Value::Scalar(Vec::new())) {
-            Value::Array(a) => a.len(),
-            Value::Assoc(a) => a.len(),
-            Value::Scalar(s) => String::from_utf8_lossy(&tok::unmetafy(&s)).chars().count(),
+/// A brace range endpoint, expanded if it names a parameter.
+///
+/// zsh expands parameters before it expands braces, which is the order the
+/// manual gives and the opposite of the other shells: `{1..${#msgs}}` counts
+/// an array, and `VCS_INFO_formats` walks its messages that way. compaudit
+/// writes the same thing as `{1..$#_i_addfiles}`.
+fn brace_range_endpoint(sh: &mut Shell, endpoint: &[u8]) -> Option<String> {
+    let has_param = {
+        let mut i = 0;
+        let mut found = false;
+        while let Some(&c) = endpoint.get(i) {
+            if c == META || c == BNULL {
+                i += 2;
+                continue;
+            }
+            if matches!(c, STRING | QSTRING | TICK) {
+                found = true;
+                break;
+            }
+            i += 1;
         }
+        found
     };
-    Some(n.to_string())
+    let text = if has_param {
+        tok::unmetafy(&expand_single(sh, endpoint).ok()?)
+    } else {
+        endpoint.iter().map(|&c| tok::detok(c)).collect()
+    };
+    String::from_utf8(text).ok()
 }
 
 /// Glob a tokenized pattern against the file system, sorted.
