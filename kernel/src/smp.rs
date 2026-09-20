@@ -653,20 +653,20 @@ pub(crate) fn flush_tlb_everywhere() {
 /// [`crate::sched::preempt_disable`] around freeing a stack is not a lock
 /// and passes; `sched::locks_held` counts locks only.
 fn shootdown_requested() {
-    if let Some(cpu) = this_cpu() {
-        let held = crate::sched::locks_held(cpu.logical);
-        // The outermost lock's site, not the last raise: with the count still
-        // up, the last raise may be a lock released since.
-        let site = crate::sched::lock_site(cpu.logical);
-        debug_assert!(
-            held == 0,
-            "a shootdown was requested on processor {} holding {held} lock(s) that disable \
-             preemption, the outermost taken at {}:{}",
-            cpu.logical,
-            site.map_or("?", |site| site.file()),
-            site.map_or(0, core::panic::Location::line),
-        );
-    }
+    // Which processor and its counts in one read, for the reason
+    // `sched::locks_here` gives; the site is the outermost lock's, not the
+    // last raise, since with the count still up the last raise may be a lock
+    // released since.
+    let Some((cpu, held, site)) = crate::sched::locks_here() else {
+        return;
+    };
+    debug_assert!(
+        held == 0,
+        "a shootdown was requested on processor {cpu} holding {held} lock(s) that disable \
+         preemption, the outermost taken at {}:{}",
+        site.map_or("?", |site| site.file()),
+        site.map_or(0, core::panic::Location::line),
+    );
 }
 
 /// The second rule, checked only where a shootdown is about to wait for

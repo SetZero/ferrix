@@ -1788,18 +1788,19 @@ fn named_elsewhere(map: &ferrix_vma::AddressSpace, id: u64, start: u64, end: u64
 /// that a read under a lock is named by the first boot that makes one, not by
 /// the first boot that reclaims a page in the middle of one.
 fn fault_requested() {
-    if let Some(cpu) = smp::this_cpu() {
-        let held = crate::sched::locks_held(cpu.logical);
-        let site = crate::sched::lock_site(cpu.logical);
-        debug_assert!(
-            held == 0,
-            "a user page fault was resolved on processor {} holding {held} lock(s) that disable \
-             preemption, the outermost taken at {}:{}",
-            cpu.logical,
-            site.map_or("?", |site| site.file()),
-            site.map_or(0, core::panic::Location::line),
-        );
-    }
+    // Which processor and its counts in one read: a fault is resolved with
+    // preemption on, so a check that read them apart could be moved between
+    // them and judge this fault by another processor's count.
+    let Some((cpu, held, site)) = crate::sched::locks_here() else {
+        return;
+    };
+    debug_assert!(
+        held == 0,
+        "a user page fault was resolved on processor {cpu} holding {held} lock(s) that disable \
+         preemption, the outermost taken at {}:{}",
+        site.map_or("?", |site| site.file()),
+        site.map_or(0, core::panic::Location::line),
+    );
 }
 
 /// Whether a region with `flags` permits `access`.

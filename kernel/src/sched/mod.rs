@@ -278,6 +278,28 @@ pub(crate) fn lock_site(cpu: usize) -> Option<&'static core::panic::Location<'st
     unsafe { pointer.cast_const().as_ref() }
 }
 
+/// This processor's number, how many preemption-disabling locks it holds and
+/// where the outermost was taken -- read together, so that the three are one
+/// processor's answer.
+///
+/// **Why together.** A caller that is not itself pinned reads which processor
+/// it is on, is preempted, and reads the counts of the processor it has left.
+/// Those counts belong to whoever runs there now, so the answer describes two
+/// tasks and neither of them faithfully. That is not a hypothetical: it failed
+/// a boot of `test-threads` from `sys_rt_sigprocmask`, naming a futex lock
+/// that no part of that call takes, and the panic came out of processor 3
+/// while the message named processor 0 -- the two reads, from the two
+/// processors the task ran on. Interrupts are masked for the read rather than
+/// preemption disabled, because raising the count would change the very thing
+/// being read.
+pub(crate) fn locks_here() -> Option<(usize, u32, Option<&'static core::panic::Location<'static>>)>
+{
+    let saved = <arch::Irq as IrqControl>::disable();
+    let answer = this_cpu().map(|cpu| (cpu, locks_held(cpu), lock_site(cpu)));
+    <arch::Irq as IrqControl>::restore(saved);
+    answer
+}
+
 /// How many locks that disable preemption `cpu`'s running context holds,
 /// not counting a [`preempt_disable`] made by hand: what a shootdown may not
 /// be asked for under. See [`LOCKS_HELD`].
