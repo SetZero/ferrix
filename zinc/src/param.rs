@@ -825,7 +825,10 @@ fn apply_op(
             let mut split = body.len();
             let mut k = 0;
             while let Some(&c) = body.get(k) {
-                if c == tok::BNULL {
+                // A quoted byte, and a backslash-escaped one, are both two
+                // bytes that cannot be the separator: `${r/refs\/heads\//x}`
+                // replaces one path prefix, it does not match `refs\`.
+                if c == tok::BNULL || c == b'\\' {
                     k += 2;
                     continue;
                 }
