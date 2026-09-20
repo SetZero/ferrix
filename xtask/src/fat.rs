@@ -36,7 +36,12 @@ const MIN_FAT32_CLUSTERS: u32 = 65_525;
 /// 57.5 MiB and, with busybox's initramfs of 6.7 MiB and the loader beside it,
 /// no longer fitted: `run --init` failed with this file's "image is full".
 /// Doubled rather than nudged, because the kernel grows with every landing.
-const IMAGE_BYTES: usize = 128 * 1024 * 1024;
+///
+/// 128 MiB held until 2026-09-20, when the image began carrying oh-my-zsh --
+/// 12 MiB of themes and plugins, since a shell's configuration is no use if
+/// only part of it is there -- and the same failure came back. Doubled again,
+/// for the same reason: this is a file on a disk, not memory the guest holds.
+const IMAGE_BYTES: usize = 256 * 1024 * 1024;
 
 /// A frozen timestamp — 2026-01-01 00:00:00 — so that two builds of the same
 /// inputs produce the same image.

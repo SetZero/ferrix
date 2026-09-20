@@ -210,6 +210,15 @@ target's own musl and linked by rust-lld, so Windows needs nothing else.
 `cargo xtask test-shell --arch x86_64 --init target/zinc/x86_64-unknown-linux-musl/release/zinc`
 runs stage 7's script with zinc as the first program instead of busybox.
 
+The shell starts configured. `cargo xtask omz --from <DIRECTORY-OR-URL>`
+installs a checkout of oh-my-zsh on the build machine -- from a directory, or
+from a repository to clone, which is the one place a build reaches the network
+-- and every image built afterwards carries it at `/usr/share/oh-my-zsh` with
+an `/etc/zshrc` that sources it. A boot then ends at oh-my-zsh's prompt, with
+its aliases and its completion, rather than at a bare shell somebody would
+have to install it into over a network the guest may not have. An image built
+on a machine without the checkout says so and boots without it.
+
 ### The display
 
 ```
