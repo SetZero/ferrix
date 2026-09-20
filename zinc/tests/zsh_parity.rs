@@ -358,3 +358,48 @@ fn a_pattern_can_remember_its_groups() {
     // Without the flag nothing is written down.
     assert_eq!(run(&format!("{e}[[ ab == (a)(b) ]] && echo ok")), "ok\n");
 }
+
+/// A brace range expands its endpoints first: zsh runs parameter expansion
+/// before brace expansion, the opposite of the other shells. `vcs_info`
+/// walks its messages with `{1..${#msgs}}`, and compaudit writes the same
+/// thing as `{1..$#_i_addfiles}`.
+#[test]
+fn a_brace_range_counts_a_parameter_in_its_endpoints() {
+    assert_eq!(
+        run("a=(x y z); echo {1..${#a}}"),
+        "1 2 3
+"
+    );
+    assert_eq!(
+        run("a=(x y z); echo {1..$#a}"),
+        "1 2 3
+"
+    );
+    assert_eq!(
+        run("n=4; echo {1..$n}"),
+        "1 2 3 4
+"
+    );
+    assert_eq!(
+        run("s=abcd; echo {1..$#s}"),
+        "1 2 3 4
+"
+    );
+    // A step is an endpoint too, and a literal range is what it always was.
+    assert_eq!(
+        run("n=3; echo {1..10..$n}"),
+        "1 4 7 10
+"
+    );
+    assert_eq!(
+        run("echo {a..c}"),
+        "a b c
+"
+    );
+    // Nothing to count is nothing to expand: the range stays as written.
+    assert_eq!(
+        run("a=(); echo {1..${#a}}"),
+        "1 0
+"
+    );
+}
