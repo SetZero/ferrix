@@ -763,7 +763,7 @@ pub(crate) fn assign(sh: &mut Shell, a: &Assign, local: bool) -> Result<(), Stri
     Ok(())
 }
 
-fn assign_element(
+pub(crate) fn assign_element(
     sh: &mut Shell,
     name: &[u8],
     sub: &[u8],
