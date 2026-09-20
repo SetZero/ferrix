@@ -553,6 +553,45 @@ fn subscript(
             Value::Assoc(p) => p.clone(),
             Value::Scalar(s) => vec![(b"1".to_vec(), s.clone())],
         };
+        // A hash reads these flags differently from an array, and zsh's own
+        // `colors` depends on it: `i`/`I` match the *keys* and give keys
+        // back, `r`/`R` match the values and give values, `k`/`K` look a key
+        // up. The capital of each pair answers with every match rather than
+        // the first, so `${color[(I)fg-*]}` is every colour name there is.
+        if let Value::Assoc(pairs) = &v {
+            let keys = flags.contains(&b'i') || flags.contains(&b'I');
+            let exact = flags.contains(&b'k');
+            let by_key = keys || exact || flags.contains(&b'K');
+            let every = flags.contains(&b'I') || flags.contains(&b'R') || flags.contains(&b'K');
+            let literal = if exact {
+                expand_single(sh, &pat_word)?
+            } else {
+                Vec::new()
+            };
+            let mut found: Vec<Vec<u8>> = Vec::new();
+            for (key, value) in pairs {
+                let subject = if by_key { key } else { value };
+                let hit = if exact {
+                    *subject == literal
+                } else {
+                    pat.matches(&tok::unmetafy(subject))
+                };
+                if hit {
+                    found.push(if keys { key.clone() } else { value.clone() });
+                    if !every {
+                        break;
+                    }
+                }
+            }
+            return Ok(if every {
+                (Some(Value::Array(found)), true)
+            } else {
+                (
+                    Some(Value::Scalar(found.into_iter().next().unwrap_or_default())),
+                    false,
+                )
+            });
+        }
         let reverse = flags.contains(&b'R') || flags.contains(&b'I');
         let want_index = flags.contains(&b'i') || flags.contains(&b'I');
         let by_key = flags.contains(&b'k') || flags.contains(&b'K');
