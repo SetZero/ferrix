@@ -221,59 +221,80 @@ Four rules that are the protocol's and not obvious:
    selection is read into memory whole and a guest that will allocate whatever
    the host names is a guest the host can exhaust.
 
-## 5. The kernel's port core
+## 5. No kernel at all, and why
 
-The one piece of new kernel. It is deliberately the smallest thing that can
-work, and it follows `docs/INPUT.md` §3 rather than `docs/BLOCK-RING.md`: like
-input events and unlike disk traffic, clipboard bytes are small and rare, so
-there is **no shared-memory ring**. One control channel per port carries fixed
-little-endian messages in `libs/displayctl`'s shape, in a new host-tested
-crate `libs/portctl`:
+Version 1 of this document specified a kernel port core: a control protocol
+in `libs/portctl`, a core owning the port, and `/dev/vport0p1` as a character
+device in devfs. **That is no longer the plan, and none of it will be built.**
 
-```
-HELLO    driver -> core    the port's name, its number, its maximum chunk
-OPEN     core   -> driver  the port is wanted; open it on the device
-DATA     either direction  a length and up to MAX_CHUNK bytes
-CLOSED   driver -> core    the host end went away
-STOP     core   -> driver  give the device back
-STOPPED  driver -> core    it is given back
-```
+The reason is a property of this kernel that the first draft did not know.
+Every process gets all three of a native handle table, a POSIX file
+descriptor table and a VFS namespace -- `Process::with_pid` in
+`kernel/src/syscall/process.rs` builds them for every process there is, not
+for Linux ones only. And the system call dispatcher takes the native ABI
+**by number range, before any Linux table is asked**
+(`kernel/src/syscall/mod.rs`, `dispatch`). So the two ABIs are not two kinds
+of process. They are two ranges of number, and one program may use both.
 
-The core publishes one character device per port it accepts,
-`/dev/vport0p1` — Linux's name for port 1 of virtio-serial device 0, so that a
-program written against Linux finds it where it expects. It is a character
-device in devfs beside `/dev/console` and `/dev/pts` (`kernel/src/fs/devfs.rs`
-today registers block nodes only; this adds the character half it has always
-been shaped for). It answers `open`, `read`, `write`, `poll` and `close`, and
-nothing else: no `ioctl`, since the one Linux has on these nodes is about the
-console size, which this device does not have.
+`ferrix-rt` has in fact been doing exactly this since it was written: a
+native program's `exit` is Linux's `exit_group`, called with a Linux number
+through the same instruction as every native call
+(`user/rt/src/arch/x86_64.rs`). The trick this design turns on is already in
+the tree, on every architecture, in the runtime every driver links.
 
-Reads and writes are bounded by a per-port buffer, and a write that would
-overflow it blocks or returns `EAGAIN` by the file's flags, as a pipe does.
-A read on a port whose host end is closed returns 0 at end of stream, which is
-what makes the agent's loop terminate without a special message.
+So a driver may hold a device through native handles *and* create a Unix
+socket through ordinary Linux calls. The port needs no kernel representation
+at all, and the two landings that were kernel work are gone.
 
-## 6. The agent, and where it lives
+What is given up, honestly: the port is reachable only through that socket
+and not as `/dev/vport0p1`, so a program written against Linux does not find
+it where it would on Linux, and a second virtio-serial port would need this
+design extended rather than a node appearing. If a reason appears to want the
+character device -- another port, or a program that expects the Linux name --
+§5 of version 1 is in the history and still correct.
 
-The agent is an `ext-data-control` client. That protocol is already in the
-compositor and complete for this (`compositor/protocol/src/generated/ext_data_control.rs`,
-served by `compositor/hyprix/src/clipboard.rs`): a manager can watch the
-selection change, read it through a pipe, and set it from a source of its own —
-which is exactly a clipboard manager, and exactly the two directions needed.
-So nothing in the compositor changes for this feature. That is the reason for
-choosing a separate program over teaching `hyprix` to open the port itself:
+## 6. The two programs
 
-* host → guest is `create_data_source`, `offer("text/plain;charset=utf-8")`,
-  `set_selection`, then answering the `send` event by writing what the host
-  gave into the pipe;
-* guest → host is the `selection` event naming an offer, `receive` on it with
-  a pipe, and the bytes that come back.
+**`user/vport`** is the driver, started by `devmgr` for PCI id `0x1043` like
+any other. It is a native program: it takes the device in START, maps the
+register blocks, negotiates the features of §3.1, sets up the four queues of
+§3.2 and walks the control conversation of §3.3 until the port named
+`com.redhat.spice.0` is open. Then it binds a Unix socket, and everything
+that arrives on the port is written to whoever is connected and everything
+written there goes out on the port. It understands nothing of vdagent: it is
+a pipe with a device on one end.
 
-§7(d) asks the owner to confirm the program's name and where it starts. The
-draft assumes `/bin/vdagent`, started by the session that starts the
-compositor, exiting quietly with status 0 when `/dev/vport0p1` does not exist
-so that a boot without the device is a boot without a clipboard and not a
-boot with an error.
+`devmgr` needs one change beyond its table, and it is not optional. A driver
+that does not publish to a kernel subsystem is currently **killed** and
+counted as failed (`user/devmgr/src/main.rs`, after `await_published`), and
+`test-boot` requires `failed 0`. `vport` publishes to no subsystem because it
+has none, so it needs a kind of its own that is started and not waited for.
+
+**`compositor/vdagent`** is the agent, an ordinary `std` program beside the
+compositor's other clients. It connects to `vport`'s socket on one side and
+to the Wayland socket on the other, and it is where `libs/vdagent` and
+`ext-data-control` meet: a host grab becomes a `create_data_source`,
+`offer`, `set_selection`; a guest `selection` event becomes a grab, and the
+host's request for the data is answered from a pipe. It reuses
+`compositor/wire` and the client half of `compositor/clip`, which is why the
+agent is `std` and the driver is not.
+
+## 6a. The terminal
+
+Copy and paste has to be reachable from a keyboard or it is not a feature a
+person has. `compositor/term` has **no clipboard code of any kind** today --
+no `wl_data_device`, no paste -- so `CTRL`+`SHIFT`+`V` in a Ferrix terminal
+would do nothing even with every part above built and working. That was
+found by reading `compositor/term/src/client.rs` after a person tried exactly
+that key and nothing happened.
+
+So the terminal binds `wl_data_device`: `CTRL`+`SHIFT`+`V` asks for the
+selection as `text/plain;charset=utf-8`, reads the pipe and writes what comes
+back to the pseudoterminal, as a paste is; and a mouse selection over the
+grid offers it. `/bin/clip copy` and `/bin/clip paste` already ship in the
+compositor's image and are what the existing clipboard gate drives, so the
+transport can be proven before the terminal is touched -- but it is not
+finished until the key works.
 
 ## 7. What the product owner decides
 
@@ -284,14 +305,21 @@ boot with an error.
 * **(b) Images.** `image/png` both ways is perhaps 150 lines more and no new
   concepts — the type number exists, the compositor carries any MIME type
   already. In or out of version 1?
-* **(c) More than one port.** The core is written for many ports and the
-  driver for one. Carrying *n* ports costs little now and cannot be added
-  later without changing the devfs naming. The draft carries *n*.
-* **(d) The agent's name and its start.** `/bin/vdagent`, started beside the
-  compositor?
+* **(c) More than one port.** ~~The core is written for many ports and the
+  driver for one.~~ **Settled by §5:** there is no core and no devfs naming
+  to paint into a corner, so the driver carries the one port it needs and a
+  second would be a change to one program. Nothing is owed here now.
+* **(d) The agent's name and its start.** **Settled by §5 and §6:**
+  `compositor/vdagent`, a `std` program beside the compositor's other
+  clients, started as an `exec-once` the way the terminal and the wallpaper
+  are. It exits quietly when the socket is not there, so a boot without
+  `--clipboard` is a boot without a clipboard and not a boot with an error.
 * **(e) Where it lands.** This is a stage 19 feature by subject and a stage 10
-  feature by machinery. The draft assumes stage 19, with the port core noted
-  as a stage 10 debt paid late.
+  feature by machinery. The draft assumes stage 19; with §5's core gone there
+  is no stage 10 debt in it any more, only user-space programs.
+
+The two that are still open are (a) and (b), and neither blocks the build:
+the maximum is a constant and images are a type number and a MIME string.
 
 ## 8. The order of the landings
 
@@ -303,16 +331,15 @@ nothing from the kernel and are pure host-tested logic.
 | 1 | this document | `docs/CLIPBOARD.md` | landed |
 | 2 | the vdagent protocol, encode and decode | `libs/vdagent` | landed |
 | 3 | the virtio-console device protocol | `libs/virtio/src/console.rs` | landed |
-| 4 | the port control protocol | `libs/portctl` | to do |
-| 5 | the kernel's port core and `/dev/vport0p1` | `kernel/src/port/`, `kernel/src/fs/devfs.rs` | to do |
-| 6 | the driver, and `devmgr`'s table | `user/vport`, `user/devmgr` | to do |
-| 7 | the agent | `user/vdagent` or `compositor/vdagent` | to do |
+| 4 | the console driver library | `libs/virtio-console` | to do |
+| 5 | the driver and its socket, and `devmgr`'s kind | `user/vport`, `user/devmgr` | to do |
+| 6 | the agent | `compositor/vdagent` | to do |
+| 7 | paste and copy in the terminal | `compositor/term` | to do |
 | 8a | `--clipboard`: the device on the bus | `xtask` | landed |
-| 8b | `test-clipboard` | `xtask` | to do |
+| 8b | starting the agent, and `test-clipboard` | `xtask` | to do |
 
-Landings 2, 3 and 8a are on `clipboard-vdagent`. The three that are not yet
-done are the ones that need a decision in §7 or a new piece of kernel, and
-8a is worth its place in the order after all: `test-boot --arch x86_64
+Landings 1 to 3 and 8a are on `main`. What is left needs no kernel, which is
+§5's whole point, and 8a is worth its place in the order after all: `test-boot --arch x86_64
 --clipboard` reaches `FERRIX-BOOT-OK` with 9 PCI functions and 4 virtio
 transports where a plain boot has 8 and 3, and `devmgr` starts the same two
 drivers and fails none. So the device is enumerated, a node is published for
