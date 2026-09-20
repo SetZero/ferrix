@@ -494,6 +494,30 @@ impl Shell {
                 aliases.sort_by(|left, right| left.0.cmp(&right.0));
                 return Some(Value::Assoc(aliases));
             }
+            // `$functions`: every function the shell knows, defined or only
+            // marked by `autoload`. `(( $+functions[VCS_INFO_detect_git] ))`
+            // is how vcs_info asks whether a backend is there, and it counts
+            // a marked autoload, whose body has not been read yet.
+            //
+            // zsh's value is the function's body, printed back from the tree
+            // it parsed; zinc has no such printer yet, so a defined function
+            // answers with the same `{ ... }` the `functions` builtin shows.
+            // A name marked but not yet read answers exactly as zsh does.
+            b"functions" => {
+                let mut fns: Vec<(Vec<u8>, Vec<u8>)> = self
+                    .functions
+                    .keys()
+                    .map(|name| (name.clone(), b"{ ... }".to_vec()))
+                    .chain(
+                        self.autoloads
+                            .iter()
+                            .filter(|name| !self.functions.contains_key(*name))
+                            .map(|name| (name.clone(), b"builtin autoload -XU".to_vec())),
+                    )
+                    .collect();
+                fns.sort_by(|left, right| left.0.cmp(&right.0));
+                return Some(Value::Assoc(fns));
+            }
             b"galiases" => {
                 let mut aliases: Vec<(Vec<u8>, Vec<u8>)> = self
                     .aliases
