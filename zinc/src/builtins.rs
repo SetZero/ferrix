@@ -330,7 +330,7 @@ fn escapes(s: &[u8]) -> (Vec<u8>, bool) {
             outb.push(u8::try_from(n & 0xff).unwrap_or(0));
             continue;
         } else {
-            tok::unmetafy(&crate::expand::dollar_quote(seq))
+            crate::expand::dollar_quote(seq)
         };
         let consumed = match s.get(i) {
             Some(b'x' | b'u' | b'U') => {
@@ -354,7 +354,7 @@ fn escapes(s: &[u8]) -> (Vec<u8>, bool) {
             outb.push(b'\\');
         } else {
             let full = s.get(start..i + consumed).unwrap_or(&[]);
-            outb.extend(tok::unmetafy(&crate::expand::dollar_quote(full)));
+            outb.extend(crate::expand::dollar_quote(full));
             let _ = decoded;
         }
         i += consumed;
