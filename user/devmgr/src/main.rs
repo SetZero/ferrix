@@ -55,6 +55,9 @@ const VIRTIO_GPU_IDS: [u16; 1] = [0x1050];
 /// tablet are three functions of it, so one driver process starts per
 /// device, as one blk driver starts per disk.
 const VIRTIO_INPUT_IDS: [u16; 1] = [0x1052];
+/// virtio-console, modern and transitional (`docs/CLIPBOARD.md` §3.1). The
+/// device is only on the bus when the machine was built with `--clipboard`.
+const VIRTIO_CONSOLE_IDS: [u16; 2] = [0x1043, 0x1003];
 
 /// Which kind of ring a driver serves its device over. The two rings are
 /// separate protocols with separate kernel ends, and the only thing devmgr
@@ -70,6 +73,19 @@ enum Kind {
     Display,
     /// `docs/INPUT.md`: an input device, numbered by the kernel.
     Input,
+    /// `docs/CLIPBOARD.md`: a virtio-serial port, over no ring at all. The
+    /// driver publishes to no kernel subsystem because §5 gave the port no
+    /// kernel representation, so it is started and not waited for.
+    Port,
+}
+
+impl Kind {
+    /// Whether the kernel says PUBLISHED for this kind's device, which is
+    /// what devmgr waits for before starting the next driver and what
+    /// decides whether a driver that did not say it is killed.
+    const fn publishes(self) -> bool {
+        !matches!(self, Kind::Port)
+    }
 }
 
 /// A driver about to be started: its kind, carrying what only that kind
@@ -87,15 +103,18 @@ enum Plan {
     Display,
     /// An input device, whose number the kernel chooses.
     Input,
+    /// A virtio-serial port, offered as a Unix socket by the driver itself.
+    Port,
 }
 
 /// The table: which driver, by name in the initramfs, drives which device,
 /// and over which ring.
-const DRIVERS: [(u16, &[u16], &[u8], Kind); 4] = [
+const DRIVERS: [(u16, &[u16], &[u8], Kind); 5] = [
     (VIRTIO_VENDOR, &VIRTIO_BLK_IDS, b"blk", Kind::Block),
     (VIRTIO_VENDOR, &VIRTIO_NET_IDS, b"net", Kind::Net),
     (VIRTIO_VENDOR, &VIRTIO_GPU_IDS, b"gpu", Kind::Display),
     (VIRTIO_VENDOR, &VIRTIO_INPUT_IDS, b"input", Kind::Input),
+    (VIRTIO_VENDOR, &VIRTIO_CONSOLE_IDS, b"vport", Kind::Port),
 ];
 
 /// Where devmgr gave up, as the exit status.
@@ -194,6 +213,7 @@ fn run(channel: &Channel<Kernel>) -> Result<(), Step> {
             Kind::Net => Plan::Net,
             Kind::Display => Plan::Display,
             Kind::Input => Plan::Input,
+            Kind::Port => Plan::Port,
         };
         let Some(slot) = started.get_mut(count as usize) else {
             failed += 1;
@@ -203,8 +223,12 @@ fn run(channel: &Channel<Kernel>) -> Result<(), Step> {
             Ok((job, process)) => {
                 // One at a time: the kernel's PUBLISHED for this disk before
                 // the next driver starts, so disks register in PCI order
-                // and two drivers never race to be vda.
-                let published = await_published(channel, &port, info.location, u64::from(count));
+                // and two drivers never race to be vda. A kind that
+                // publishes to no subsystem is counted as started the moment
+                // it is started, since waiting would wait for ever and
+                // killing it would take the clipboard with it.
+                let published = !kind.publishes()
+                    || await_published(channel, &port, info.location, u64::from(count));
                 *slot = Some(Started {
                     location: info.location,
                     device: keep,
@@ -447,7 +471,44 @@ fn start(
         Plan::Net => start_net(job, device, image, info, port, key),
         Plan::Display => start_display(job, device, image, info, port, key),
         Plan::Input => start_input(job, device, image, info, port, key),
+        Plan::Port => start_port(job, device, image, info, port, key),
     }
+}
+
+/// A virtio-console driver, over nothing: `docs/CLIPBOARD.md` §5 gives the
+/// port no kernel representation, so there is no control channel to make and
+/// START carries the device alone. The register blocks go in it the way the
+/// display's and the input's do, and the name is what the driver checks.
+fn start_port(
+    job: &Job<Kernel>,
+    device: Device<Kernel>,
+    image: &Vmo<Kernel>,
+    info: &DeviceInfo,
+    port: &Port<Kernel>,
+    key: u64,
+) -> Result<(Job<Kernel>, Process<Kernel>), ()> {
+    let block = |block: ferrix_native_abi::types::DeviceBlock| Block {
+        phys: block.phys,
+        offset: block.offset,
+        length: block.length,
+    };
+    let start = Start {
+        common: block(info.common),
+        notify: block(info.notify),
+        isr: block(info.isr),
+        device: block(info.device),
+        notify_off_multiplier: info.notify_off_multiplier,
+        msix_table_size: info.msix_table_size,
+        pci_device_id: info.device_id,
+        location: info.location,
+        name: [b'v', b'p', b'o', b'r', b't', 0, 0, 0],
+    };
+    let device = device
+        .into_owned()
+        .replace(Requested::Exactly(DEVICE_RIGHTS))
+        .map_err(|_| ())?;
+    let encoded = Ring::Start(start).encode();
+    launch(job, image, "vport", port, key, encoded.as_bytes(), [device])
 }
 
 /// A virtio-blk driver, over a block ring, for the disk to be `name`.
@@ -637,15 +698,17 @@ fn start_input(
 }
 
 /// The job, the process, the bootstrap channel and the watch every driver
-/// starts with: only START's bytes and handles differ between the rings.
-fn launch(
+/// starts with: only START's bytes and handles differ between the rings, and
+/// how many handles there are -- a driver over no ring gets the device
+/// alone.
+fn launch<const N: usize>(
     job: &Job<Kernel>,
     image: &Vmo<Kernel>,
     program: &str,
     port: &Port<Kernel>,
     key: u64,
     start: &[u8],
-    handles: [OwnedHandle<Kernel>; 2],
+    handles: [OwnedHandle<Kernel>; N],
 ) -> Result<(Job<Kernel>, Process<Kernel>), ()> {
     let child_job = job.create_child().map_err(|_| ())?;
     let process = pending::create_process(&child_job, image, program).map_err(|_| ())?;

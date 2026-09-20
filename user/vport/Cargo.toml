@@ -1,0 +1,26 @@
+[package]
+name = "ferrix-vport"
+description = "The virtio-console driver process: one virtio-serial port carried between a device and a Unix socket, on ferrix-rt"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "vport"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+ferrix-blkring.workspace = true
+ferrix-linux-abi.workspace = true
+ferrix-native-abi.workspace = true
+ferrix-rt.workspace = true
+ferrix-vdagent.workspace = true
+ferrix-virtio.workspace = true
+ferrix-virtio-console.workspace = true
+
+[lints]
+workspace = true

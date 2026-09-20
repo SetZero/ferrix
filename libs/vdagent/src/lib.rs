@@ -74,6 +74,18 @@ pub mod message;
 #[cfg(test)]
 mod tests;
 
+/// Where `user/vport` offers the port, and where `compositor/vdagent` looks
+/// for it.
+///
+/// The one thing the driver and the agent must agree on that is not the
+/// protocol, so it lives in the crate they both already depend on rather
+/// than in a third one holding a single string. It is an absolute path at
+/// the root because a Ferrix guest has no `XDG_RUNTIME_DIR` and no `/run`:
+/// the compositor's own Wayland socket is bound the same way
+/// (`compositor/socket`), and a driver that cannot make a directory should
+/// not need to.
+pub const SOCKET_PATH: &[u8] = b"/vport";
+
 /// Why a message or a chunk was refused.
 ///
 /// Every variant carries what was seen, because the one thing a person
