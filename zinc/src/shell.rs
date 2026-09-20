@@ -353,6 +353,14 @@ impl Shell {
                 );
             }
         }
+        // zsh sets USERNAME from the password database at startup, whatever
+        // the environment says; a theme reads it to decide whether the user
+        // is worth naming in the prompt, so a shell started with no
+        // environment still has one.
+        let name = crate::prompt::username();
+        if !name.is_empty() {
+            sh.set_scalar(b"USERNAME", name);
+        }
         if !sh.vars.contains_key(&b"PS1"[..]) {
             sh.set_scalar(b"PS1", b"%m%# ".to_vec());
         }
