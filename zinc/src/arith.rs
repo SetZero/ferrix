@@ -3,7 +3,8 @@
 //! where `**` binds tighter than the multiplicative operators and looser than
 //! unary minus is not the rule: unary operators bind tightest).
 
-use crate::shell::Shell;
+use crate::shell::{Shell, Value};
+use crate::tok;
 
 /// Evaluate `expr` (metafied, already substituted) in `sh`.
 pub(crate) fn eval(sh: &mut Shell, expr: &[u8]) -> Result<i64, String> {
@@ -31,6 +32,11 @@ pub(crate) fn eval(sh: &mut Shell, expr: &[u8]) -> Result<i64, String> {
 enum Operand {
     Num(i64),
     Var(Vec<u8>),
+    /// `name[subscript]`, the subscript kept as it was written. Which is
+    /// what it means depends on the parameter: an array reads it as another
+    /// arithmetic expression, an associative array as the key itself -- so
+    /// `h[k]` is the key `k`, not the value of `k`, exactly as zsh has it.
+    Elem(Vec<u8>, Vec<u8>),
 }
 
 struct Arith<'a> {
@@ -74,30 +80,120 @@ impl Arith<'_> {
             Operand::Num(n) => Ok(*n),
             Operand::Var(name) => {
                 let v = self.sh.get(name).map(|v| v.joined()).unwrap_or_default();
-                let trimmed: Vec<u8> = v
-                    .iter()
-                    .copied()
-                    .filter(|c| !c.is_ascii_whitespace())
-                    .collect();
-                if trimmed.is_empty() {
-                    return Ok(0);
-                }
-                if let Ok(n) = std::str::from_utf8(&trimmed).unwrap_or("x").parse::<i64>() {
-                    return Ok(n);
-                }
-                if self.depth > 64 {
-                    return Err("math recursion limit exceeded".to_owned());
-                }
-                let mut sub = Arith {
-                    sh: self.sh,
-                    s: &v,
-                    i: 0,
-                    skip: self.skip,
-                    depth: self.depth + 1,
-                };
-                sub.comma()
+                self.numeric(&v)
+            }
+            Operand::Elem(name, sub) => {
+                let text = self.element(name, sub)?;
+                self.numeric(&text)
             }
         }
+    }
+
+    /// The text of `name[sub]`, empty when there is nothing there.
+    fn element(&mut self, name: &[u8], sub: &[u8]) -> Result<Vec<u8>, String> {
+        match self.sh.get(name) {
+            Some(Value::Assoc(pairs)) => Ok(pairs
+                .into_iter()
+                .find(|(k, _)| k == sub)
+                .map(|(_, v)| v)
+                .unwrap_or_default()),
+            Some(Value::Array(a)) => {
+                let index = self.index(sub, i64::try_from(a.len()).unwrap_or(0))?;
+                Ok(usize::try_from(index - 1)
+                    .ok()
+                    .and_then(|k| a.get(k).cloned())
+                    .unwrap_or_default())
+            }
+            // A scalar's subscript is one character of it, which is how
+            // `s=59` makes `s[2]` nine.
+            Some(Value::Scalar(s)) => {
+                let index = self.index(sub, i64::try_from(s.len()).unwrap_or(0))?;
+                Ok(usize::try_from(index - 1)
+                    .ok()
+                    .and_then(|k| s.get(k).copied())
+                    .map(|c| vec![c])
+                    .unwrap_or_default())
+            }
+            None => Ok(Vec::new()),
+        }
+    }
+
+    /// A subscript as an index into `len` elements: arithmetic, counting
+    /// from the end when it is negative, as `a[-1]` is the last.
+    fn index(&mut self, sub: &[u8], len: i64) -> Result<i64, String> {
+        if self.depth > 64 {
+            return Err("math recursion limit exceeded".to_owned());
+        }
+        let mut inner = Arith {
+            sh: self.sh,
+            s: sub,
+            i: 0,
+            skip: self.skip,
+            depth: self.depth + 1,
+        };
+        let index = inner.comma()?;
+        Ok(if index < 0 { len + index + 1 } else { index })
+    }
+
+    /// What a parameter's text is worth: a number, or an expression to
+    /// evaluate again, which is what makes `x=y; y=3; $((x))` three.
+    fn numeric(&mut self, v: &[u8]) -> Result<i64, String> {
+        let trimmed: Vec<u8> = v
+            .iter()
+            .copied()
+            .filter(|c| !c.is_ascii_whitespace())
+            .collect();
+        if trimmed.is_empty() {
+            return Ok(0);
+        }
+        if let Ok(n) = std::str::from_utf8(&trimmed).unwrap_or("x").parse::<i64>() {
+            return Ok(n);
+        }
+        if self.depth > 64 {
+            return Err("math recursion limit exceeded".to_owned());
+        }
+        let owned = v.to_vec();
+        let mut sub = Arith {
+            sh: self.sh,
+            s: &owned,
+            i: 0,
+            skip: self.skip,
+            depth: self.depth + 1,
+        };
+        sub.comma()
+    }
+
+    /// An identifier just read, with the subscript after it if there is one.
+    fn named(&mut self, name: Vec<u8>) -> Operand {
+        let open = self.s.get(self.i).copied().map(tok::detok);
+        if open != Some(b'[') {
+            return Operand::Var(name);
+        }
+        let start = self.i + 1;
+        let mut depth = 1_u32;
+        let mut j = start;
+        while let Some(&c) = self.s.get(j) {
+            match tok::detok(c) {
+                b'[' => depth += 1,
+                b']' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        break;
+                    }
+                }
+                _ => {}
+            }
+            j += 1;
+        }
+        let sub: Vec<u8> = self
+            .s
+            .get(start..j)
+            .unwrap_or(&[])
+            .iter()
+            .map(|&c| tok::detok(c))
+            .collect();
+        self.i = if self.s.get(j).is_some() { j + 1 } else { j };
+        Operand::Elem(name, sub)
     }
 
     fn assign(&mut self, o: &Operand, v: i64) -> Result<i64, String> {
@@ -105,6 +201,18 @@ impl Arith<'_> {
             Operand::Var(name) => {
                 if self.skip == 0 {
                     self.sh.set_scalar(name, v.to_string().into_bytes());
+                }
+                Ok(v)
+            }
+            Operand::Elem(name, sub) => {
+                if self.skip == 0 {
+                    crate::exec::assign_element(
+                        self.sh,
+                        name,
+                        sub,
+                        v.to_string().into_bytes(),
+                        false,
+                    )?;
                 }
                 Ok(v)
             }
@@ -128,10 +236,12 @@ impl Arith<'_> {
                 b"**=", b"<<=", b">>=", b"&&=", b"||=", b"^^=", b"+=", b"-=", b"*=", b"/=", b"%=",
                 b"&=", b"|=", b"^=",
             ];
+            // The subscript belongs to the name, so it is taken before the
+            // operator is looked for: what follows `a[1]` is `+=`.
+            let o = self.named(name);
             for op in OPS {
                 if self.eat(op) {
                     let rhs = self.assignment()?;
-                    let o = Operand::Var(name);
                     let cur = self.value(&o)?;
                     let bin = op.get(..op.len() - 1).unwrap_or(&[]);
                     let v = self.binop(bin, cur, rhs)?;
@@ -140,7 +250,7 @@ impl Arith<'_> {
             }
             if self.eat_not(b"=", &[b"=="]) {
                 let rhs = self.assignment()?;
-                return self.assign(&Operand::Var(name), rhs);
+                return self.assign(&o, rhs);
             }
         }
         self.i = save;
@@ -282,7 +392,7 @@ impl Arith<'_> {
             let Some(name) = self.ident() else {
                 return Err("bad math expression: lvalue required".to_owned());
             };
-            let o = Operand::Var(name);
+            let o = self.named(name);
             let v = self.value(&o)? + if inc { 1 } else { -1 };
             return self.assign(&o, v);
         }
@@ -363,7 +473,7 @@ impl Arith<'_> {
             return Ok(Operand::Num(v.first().map_or(0, |&c| i64::from(c))));
         }
         if let Some(name) = self.ident() {
-            return Ok(Operand::Var(name));
+            return Ok(self.named(name));
         }
         let start = self.i;
         while self
