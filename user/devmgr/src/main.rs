@@ -56,6 +56,10 @@ const VIRTIO_GPU_IDS: [u16; 1] = [0x1050];
 /// device, as one blk driver starts per disk.
 const VIRTIO_INPUT_IDS: [u16; 1] = [0x1052];
 
+/// virtio-console's modern PCI device id and its transitional one, which is
+/// the pair `docs/CLIPBOARD.md` §3.1 names.
+const VIRTIO_CONSOLE_IDS: [u16; 2] = [0x1043, 0x1003];
+
 /// Which kind of ring a driver serves its device over. The two rings are
 /// separate protocols with separate kernel ends, and the only thing devmgr
 /// does differently between them is which one it asks the kernel to make and
@@ -70,6 +74,11 @@ enum Kind {
     Display,
     /// `docs/INPUT.md`: an input device, numbered by the kernel.
     Input,
+    /// `docs/CLIPBOARD.md` §5 and §6: a virtio-serial port, which has no
+    /// kernel subsystem at all. The driver is handed its device and a plain
+    /// channel to hear START on, and everything after that is a Unix socket
+    /// it binds itself.
+    Port,
 }
 
 /// A driver about to be started: its kind, carrying what only that kind
@@ -87,15 +96,18 @@ enum Plan {
     Display,
     /// An input device, whose number the kernel chooses.
     Input,
+    /// A virtio-serial port, which publishes nowhere.
+    Port,
 }
 
 /// The table: which driver, by name in the initramfs, drives which device,
 /// and over which ring.
-const DRIVERS: [(u16, &[u16], &[u8], Kind); 4] = [
+const DRIVERS: [(u16, &[u16], &[u8], Kind); 5] = [
     (VIRTIO_VENDOR, &VIRTIO_BLK_IDS, b"blk", Kind::Block),
     (VIRTIO_VENDOR, &VIRTIO_NET_IDS, b"net", Kind::Net),
     (VIRTIO_VENDOR, &VIRTIO_GPU_IDS, b"gpu", Kind::Display),
     (VIRTIO_VENDOR, &VIRTIO_INPUT_IDS, b"input", Kind::Input),
+    (VIRTIO_VENDOR, &VIRTIO_CONSOLE_IDS, b"vport", Kind::Port),
 ];
 
 /// Where devmgr gave up, as the exit status.
@@ -126,7 +138,9 @@ struct Started {
     job: Job<Kernel>,
     /// The driver.
     process: Process<Kernel>,
-    /// Whether the kernel has said its disk is published.
+    /// Whether this driver is up: that the kernel has said it published to
+    /// its subsystem, or -- for [`Kind::Port`], which has none -- simply that
+    /// it started, since there is no PUBLISHED it could ever send.
     published: bool,
     /// Whether it has ended.
     dead: bool,
@@ -194,6 +208,7 @@ fn run(channel: &Channel<Kernel>) -> Result<(), Step> {
             Kind::Net => Plan::Net,
             Kind::Display => Plan::Display,
             Kind::Input => Plan::Input,
+            Kind::Port => Plan::Port,
         };
         let Some(slot) = started.get_mut(count as usize) else {
             failed += 1;
@@ -204,7 +219,15 @@ fn run(channel: &Channel<Kernel>) -> Result<(), Step> {
                 // One at a time: the kernel's PUBLISHED for this disk before
                 // the next driver starts, so disks register in PCI order
                 // and two drivers never race to be vda.
-                let published = await_published(channel, &port, info.location, u64::from(count));
+                //
+                // A port driver publishes to no subsystem, so waiting for it
+                // would wait for ever and the kill below would count a
+                // working driver failed. It is started and taken at its word.
+                let published = if kind == Kind::Port {
+                    true
+                } else {
+                    await_published(channel, &port, info.location, u64::from(count))
+                };
                 *slot = Some(Started {
                     location: info.location,
                     device: keep,
@@ -447,6 +470,7 @@ fn start(
         Plan::Net => start_net(job, device, image, info, port, key),
         Plan::Display => start_display(job, device, image, info, port, key),
         Plan::Input => start_input(job, device, image, info, port, key),
+        Plan::Port => start_port(job, device, image, info, port, key),
     }
 }
 
@@ -636,16 +660,57 @@ fn start_input(
     )
 }
 
+/// A virtio-serial port driver, which serves no kernel subsystem.
+///
+/// Every other kind asks the device for a control channel of its subsystem's
+/// kind, and the kernel learns from that what the driver is for. This one has
+/// no subsystem to name (`docs/CLIPBOARD.md` §5), so it is given its device
+/// and nothing else: `launch` makes the bootstrap channel START travels on,
+/// as it does for all of them, and the driver's only other end is the Unix
+/// socket it binds for itself. Nothing here waits for it, because there is no
+/// PUBLISHED it could ever send.
+fn start_port(
+    job: &Job<Kernel>,
+    device: Device<Kernel>,
+    image: &Vmo<Kernel>,
+    info: &DeviceInfo,
+    port: &Port<Kernel>,
+    key: u64,
+) -> Result<(Job<Kernel>, Process<Kernel>), ()> {
+    let block = |block: ferrix_native_abi::types::DeviceBlock| Block {
+        phys: block.phys,
+        offset: block.offset,
+        length: block.length,
+    };
+    let start = Start {
+        common: block(info.common),
+        notify: block(info.notify),
+        isr: block(info.isr),
+        device: block(info.device),
+        notify_off_multiplier: info.notify_off_multiplier,
+        msix_table_size: info.msix_table_size,
+        pci_device_id: info.device_id,
+        location: info.location,
+        name: [b'v', b'p', b'o', b'r', b't', 0, 0, 0],
+    };
+    let device = device
+        .into_owned()
+        .replace(Requested::Exactly(DEVICE_RIGHTS))
+        .map_err(|_| ())?;
+    let encoded = Ring::Start(start).encode();
+    launch(job, image, "vport", port, key, encoded.as_bytes(), [device])
+}
+
 /// The job, the process, the bootstrap channel and the watch every driver
 /// starts with: only START's bytes and handles differ between the rings.
-fn launch(
+fn launch<const N: usize>(
     job: &Job<Kernel>,
     image: &Vmo<Kernel>,
     program: &str,
     port: &Port<Kernel>,
     key: u64,
     start: &[u8],
-    handles: [OwnedHandle<Kernel>; 2],
+    handles: [OwnedHandle<Kernel>; N],
 ) -> Result<(Job<Kernel>, Process<Kernel>), ()> {
     let child_job = job.create_child().map_err(|_| ())?;
     let process = pending::create_process(&child_job, image, program).map_err(|_| ())?;

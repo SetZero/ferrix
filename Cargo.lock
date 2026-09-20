@@ -418,6 +418,18 @@ name = "ferrix-vma"
 version = "0.1.0"
 
 [[package]]
+name = "ferrix-vport"
+version = "0.1.0"
+dependencies = [
+ "ferrix-blkring",
+ "ferrix-linux-abi",
+ "ferrix-native-abi",
+ "ferrix-rt",
+ "ferrix-virtio",
+ "ferrix-virtio-console",
+]
+
+[[package]]
 name = "foldhash"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -68,6 +68,7 @@ members = [
     "user/net",
     "user/gpu",
     "user/input",
+    "user/vport",
     "user/devmgr",
 
     # Host-side build and test driver (`cargo xtask ...`).
@@ -122,6 +123,7 @@ ferrix-virtio = { path = "libs/virtio" }
 ferrix-virtio-blk = { path = "libs/virtio-blk" }
 ferrix-virtio-gpu = { path = "libs/virtio-gpu" }
 ferrix-virtio-console = { path = "libs/virtio-console" }
+ferrix-vport = { path = "user/vport" }
 ferrix-virtio-input = { path = "libs/virtio-input" }
 ferrix-virtio-net = { path = "libs/virtio-net" }
 ferrix-vma = { path = "libs/vma" }

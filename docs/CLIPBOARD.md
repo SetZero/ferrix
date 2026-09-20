@@ -23,8 +23,8 @@ it on the host. This document specifies the whole path:
   SPICE guest agent has used since 2010;
 * **the protocol on it**, SPICE's vdagent, of which this implements the
   clipboard messages and nothing else;
-* **the kernel's port core**, which owns `/dev/vport0p1` and the channel to
-  the ring-3 driver;
+* **the driver**, `user/vport`, which owns the device and offers the port as
+  a Unix socket. There is no kernel in this path at all, and §5 is why;
 * **the agent**, a program that is a `ext-data-control` client on one side and
   the port's reader on the other;
 * **the test**, which needs no window and no person: QEMU's own host half of
@@ -259,7 +259,9 @@ character device -- another port, or a program that expects the Linux name --
 any other. It is a native program: it takes the device in START, maps the
 register blocks, negotiates the features of §3.1, sets up the four queues of
 §3.2 and walks the control conversation of §3.3 until the port named
-`com.redhat.spice.0` is open. Then it binds a Unix socket, and everything
+`com.redhat.spice.0` is open. Then it binds a Unix socket at **`/tmp/vport`**
+-- `/tmp` because it is in the initramfs and writable and `/run` is neither --
+and everything
 that arrives on the port is written to whoever is connected and everything
 written there goes out on the port. It understands nothing of vdagent: it is
 a pipe with a device on one end.
@@ -332,14 +334,15 @@ nothing from the kernel and are pure host-tested logic.
 | 2 | the vdagent protocol, encode and decode | `libs/vdagent` | landed |
 | 3 | the virtio-console device protocol | `libs/virtio/src/console.rs` | landed |
 | 4 | the console driver library | `libs/virtio-console` | landed |
-| 5 | the driver and its socket, and `devmgr`'s kind | `user/vport`, `user/devmgr` | to do |
+| 5 | the driver and its socket, and `devmgr`'s kind | `user/vport`, `user/devmgr` | landed |
 | 6 | the agent | `compositor/vdagent` | to do |
 | 7 | paste and copy in the terminal | `compositor/term` | to do |
 | 8a | `--clipboard`: the device on the bus | `xtask` | landed |
 | 8b | starting the agent, and `test-clipboard` | `xtask` | to do |
 
-Landings 1 to 4 and 8a are on `main`, so every part that can be driven from
-`cargo test` is built and only the programs are left. What is left needs no
+Landings 1 to 5 and 8a are on `main`: the guest now has a driver that opens
+the port and offers it at `/tmp/vport`, and what is left is the two programs
+that speak vdagent over it and the gate that drives them. What is left needs no
 kernel, which is
 §5's whole point, and 8a is worth its place in the order after all: `test-boot --arch x86_64
 --clipboard` reaches `FERRIX-BOOT-OK` with 9 PCI functions and 4 virtio
