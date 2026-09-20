@@ -107,15 +107,28 @@ fn spawn(sh: &mut Shell, child: impl FnOnce(&mut Shell) -> i32) -> i32 {
     pid
 }
 
-/// Start the job a pipeline is, unless one is being built already.
+/// Start the job a pipeline is, and give back the job that was being built,
+/// for [`end_job`] to put back.
 ///
-/// Returns whether this call started it, which is what says who finishes it.
-fn begin_job(sh: &mut Shell, foreground: bool) -> bool {
-    if sh.building.is_some() {
-        return false;
-    }
-    sh.building = Some(JobBuild::new(foreground));
-    true
+/// **A pipeline is a job of its own even when the shell reaches it while
+/// building one.** `if`, `while`, `{ }` and a function's body run in the
+/// shell rather than in a process of the enclosing job, so a command in one
+/// of them belongs to the pipeline it is written in and not to the pipeline
+/// the compound command is an element of. Adding it to the enclosing job
+/// instead would mean nobody waited for it until that job ended: `mkdir d &&
+/// cd d` inside a function would run `cd` while `mkdir` was still starting,
+/// and take its status from a process that had not run.
+///
+/// A forked child has no job being built at all, since [`enter_subshell`]
+/// clears it, so what this displaces is only ever a job of this shell's.
+fn begin_job(sh: &mut Shell, foreground: bool) -> Option<JobBuild> {
+    sh.building.replace(JobBuild::new(foreground))
+}
+
+/// Put back the job [`begin_job`] displaced, once this pipeline's own job has
+/// been finished.
+fn end_job(sh: &mut Shell, outer: Option<JobBuild>) {
+    sh.building = outer;
 }
 
 /// Put the job that has just been started in the table, and wait for it if
@@ -271,14 +284,14 @@ pub(crate) fn run_list(sh: &mut Shell, list: &List) {
                 // The whole sublist runs in one process, which is the job's
                 // group leader: `a && b &` is one job, and its own children
                 // inherit the group, so one signal reaches all of it.
-                let mine = begin_job(sh, false);
+                let outer = begin_job(sh, false);
                 let sublist = item.sublist.clone();
                 let pid = spawn(sh, move |sh| {
                     run_sublist(sh, &sublist);
                     sh.status
                 });
                 if pid < 0 {
-                    sh.building = None;
+                    end_job(sh, outer);
                     sh.error("fork failed");
                     sh.status = 1;
                     return;
@@ -288,9 +301,10 @@ pub(crate) fn run_list(sh: &mut Shell, list: &List) {
                     sh.building = None;
                     sh.last_bg = pid;
                     sh.status = 0;
-                } else if mine {
+                } else {
                     finish_job(sh, 1);
                 }
+                end_job(sh, outer);
             }
         }
     }
@@ -332,14 +346,13 @@ fn run_pipeline(sh: &mut Shell, p: &Pipeline) {
     if n == 0 {
         return;
     }
-    let mine = begin_job(sh, true);
+    let outer = begin_job(sh, true);
     if n == 1 {
         if let Some(cmd) = p.cmds.first() {
             run_command(sh, cmd, false);
         }
-        if mine {
-            finish_job(sh, 1);
-        }
+        finish_job(sh, 1);
+        end_job(sh, outer);
         return;
     }
     let mut prev: i32 = -1;
@@ -366,6 +379,7 @@ fn run_pipeline(sh: &mut Shell, p: &Pipeline) {
             sh.error("pipe failed");
             sh.status = 1;
             sh.building = None;
+            end_job(sh, outer);
             return;
         }
         let [r, w] = fds;
@@ -392,9 +406,8 @@ fn run_pipeline(sh: &mut Shell, p: &Pipeline) {
             break;
         }
     }
-    if mine {
-        finish_job(sh, n);
-    }
+    finish_job(sh, n);
+    end_job(sh, outer);
 }
 
 /// Duplicate `fd` above the user's range so it can be restored; -1 if closed.
