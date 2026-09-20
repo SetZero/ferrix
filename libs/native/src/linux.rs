@@ -27,6 +27,17 @@
 //! Linux than this should be a `std` program, which every program under
 //! `compositor/` already is.
 //!
+//! # The numbers are the runtime's, not this crate's
+//!
+//! `libs/*` is architecture-neutral, which is a rule the build enforces
+//! (`scripts/check-crate-layering.sh`), and Linux's call numbers are three
+//! different tables. So this crate holds the *shape* of each call -- the
+//! number's place, the argument order, which pointer names what -- and the
+//! numbers themselves arrive through [`Linux`], which `user/rt` implements
+//! from its own `src/arch/`, the one place under `user/` that selects on the
+//! architecture. That is the same facade the kernel's `crate::arch` is, and
+//! for the same reason.
+//!
 //! # Errors are `errno`, undecorated
 //!
 //! [`crate::Error`] names the native failures because `libs/native-abi` fixes
@@ -40,16 +51,42 @@ use ferrix_linux_abi::types::{AT_FDCWD, CLOCK_MONOTONIC};
 
 use crate::call::{Call, Syscall};
 
-/// The syscall numbers, which are the architecture's and not the kernel's.
-mod nr {
-    #[cfg(target_arch = "aarch64")]
-    pub(super) use ferrix_linux_abi::nr::aarch64::*;
-    #[cfg(target_arch = "arm")]
-    pub(super) use ferrix_linux_abi::nr::arm::*;
-    // The host, where the tests run against a fake `Syscall` that traps
-    // nothing, shares x86-64's table.
-    #[cfg(not(any(target_arch = "aarch64", target_arch = "arm")))]
-    pub(super) use ferrix_linux_abi::nr::x86_64::*;
+/// The Linux call numbers this module needs, as one architecture's table.
+///
+/// Every field is that call's number in `ferrix_linux_abi::nr::<arch>`, and
+/// naming them one by one rather than taking the whole module is deliberate:
+/// a table missing one of these fails to build here rather than at the call
+/// site.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Numbers {
+    /// `read(2)`.
+    pub read: usize,
+    /// `write(2)`.
+    pub write: usize,
+    /// `close(2)`.
+    pub close: usize,
+    /// `socket(2)`.
+    pub socket: usize,
+    /// `bind(2)`.
+    pub bind: usize,
+    /// `listen(2)`.
+    pub listen: usize,
+    /// `accept4(2)`.
+    pub accept4: usize,
+    /// `unlinkat(2)`.
+    pub unlinkat: usize,
+    /// `clock_gettime(2)`.
+    pub clock_gettime: usize,
+}
+
+/// A [`Syscall`] that also knows which Linux table its architecture uses.
+///
+/// Implemented by `user/rt` for the real kernel and by this crate's tests
+/// for the recorder. Nothing here chooses a table: see *The numbers are the
+/// runtime's* above.
+pub trait Linux: Syscall {
+    /// The architecture's numbers for the calls in this module.
+    const NUMBERS: Numbers;
 }
 
 /// Turn a result register into a value or an `errno`.
@@ -99,14 +136,14 @@ pub fn sockaddr_un(path: &[u8]) -> Result<([u8; SOCKADDR_UN_SIZE], usize), Errno
 
 /// An open descriptor, closed when it is dropped.
 #[derive(Debug)]
-pub struct Fd<S: Syscall> {
+pub struct Fd<S: Linux> {
     /// The descriptor itself, or a negative number once it has been taken.
     fd: i32,
     /// How to reach the kernel.
     sys: S,
 }
 
-impl<S: Syscall> Fd<S> {
+impl<S: Linux> Fd<S> {
     /// Adopt `fd`, which this will close.
     #[must_use]
     pub const fn from_raw(sys: S, fd: i32) -> Self {
@@ -128,7 +165,7 @@ impl<S: Syscall> Fd<S> {
     pub fn read(&self, bytes: &mut [u8]) -> Result<usize, Errno> {
         let len = bytes.len();
         decode(
-            Call::new(nr::READ)
+            Call::new(S::NUMBERS.read)
                 .value(self.fd.cast_unsigned() as usize)
                 .output(bytes)
                 .value(len)
@@ -144,7 +181,7 @@ impl<S: Syscall> Fd<S> {
     pub fn write(&self, bytes: &[u8]) -> Result<usize, Errno> {
         let len = bytes.len();
         decode(
-            Call::new(nr::WRITE)
+            Call::new(S::NUMBERS.write)
                 .value(self.fd.cast_unsigned() as usize)
                 .input(bytes)
                 .value(len)
@@ -159,7 +196,7 @@ impl<S: Syscall> Fd<S> {
     /// Whatever `listen` returns.
     pub fn listen(&self, backlog: i32) -> Result<(), Errno> {
         decode(
-            Call::new(nr::LISTEN)
+            Call::new(S::NUMBERS.listen)
                 .value(self.fd.cast_unsigned() as usize)
                 .value(backlog.cast_unsigned() as usize)
                 .make(self.sys),
@@ -177,7 +214,7 @@ impl<S: Syscall> Fd<S> {
         let (address, len) = sockaddr_un(path)?;
         let bytes = address.get(..len).unwrap_or(&address);
         decode(
-            Call::new(nr::BIND)
+            Call::new(S::NUMBERS.bind)
                 .value(self.fd.cast_unsigned() as usize)
                 .input(bytes)
                 .value(len)
@@ -193,7 +230,7 @@ impl<S: Syscall> Fd<S> {
     /// Whatever `accept4` returns, `EAGAIN` included when nothing is waiting.
     pub fn accept(&self, flags: u32) -> Result<Fd<S>, Errno> {
         let fd = decode_fd(
-            Call::new(nr::ACCEPT4)
+            Call::new(S::NUMBERS.accept4)
                 .value(self.fd.cast_unsigned() as usize)
                 .value(0)
                 .value(0)
@@ -204,10 +241,10 @@ impl<S: Syscall> Fd<S> {
     }
 }
 
-impl<S: Syscall> Drop for Fd<S> {
+impl<S: Linux> Drop for Fd<S> {
     fn drop(&mut self) {
         if self.fd >= 0 {
-            let _ = Call::new(nr::CLOSE)
+            let _ = Call::new(S::NUMBERS.close)
                 .value(self.fd.cast_unsigned() as usize)
                 .make(self.sys);
         }
@@ -220,9 +257,9 @@ impl<S: Syscall> Drop for Fd<S> {
 ///
 /// Whatever `socket` returns: `EAFNOSUPPORT` for a family this kernel does
 /// not have, which for anything but `AF_UNIX` it does not.
-pub fn socket<S: Syscall>(sys: S, domain: u16, kind: u32, protocol: u32) -> Result<Fd<S>, Errno> {
+pub fn socket<S: Linux>(sys: S, domain: u16, kind: u32, protocol: u32) -> Result<Fd<S>, Errno> {
     let fd = decode_fd(
-        Call::new(nr::SOCKET)
+        Call::new(S::NUMBERS.socket)
             .value(usize::from(domain))
             .value(kind as usize)
             .value(protocol as usize)
@@ -238,7 +275,7 @@ pub fn socket<S: Syscall>(sys: S, domain: u16, kind: u32, protocol: u32) -> Resu
 ///
 /// Whatever `unlinkat` returns; `ENOENT` is the ordinary case and not a
 /// failure a caller need mind.
-pub fn unlink<S: Syscall>(sys: S, path: &[u8]) -> Result<(), Errno> {
+pub fn unlink<S: Linux>(sys: S, path: &[u8]) -> Result<(), Errno> {
     let mut terminated = [0_u8; UNIX_PATH_MAX];
     if path.len() >= UNIX_PATH_MAX {
         return Err(Errno::ENAMETOOLONG);
@@ -248,7 +285,7 @@ pub fn unlink<S: Syscall>(sys: S, path: &[u8]) -> Result<(), Errno> {
     }
     let bytes = terminated.get(..path.len() + 1).unwrap_or(&terminated);
     decode(
-        Call::new(nr::UNLINKAT)
+        Call::new(S::NUMBERS.unlinkat)
             .value(AT_FDCWD.cast_unsigned() as usize)
             .input(bytes)
             .value(0)
@@ -265,11 +302,11 @@ pub fn unlink<S: Syscall>(sys: S, path: &[u8]) -> Result<(), Errno> {
 /// # Errors
 ///
 /// Whatever `clock_gettime` returns.
-pub fn monotonic_nanos<S: Syscall>(sys: S) -> Result<u64, Errno> {
+pub fn monotonic_nanos<S: Linux>(sys: S) -> Result<u64, Errno> {
     // `struct timespec`: two native-width words, seconds then nanoseconds.
     let mut timespec = [0_u8; 2 * size_of::<usize>()];
     let _ = decode(
-        Call::new(nr::CLOCK_GETTIME)
+        Call::new(S::NUMBERS.clock_gettime)
             .value(CLOCK_MONOTONIC as usize)
             .output(&mut timespec)
             .make(sys),

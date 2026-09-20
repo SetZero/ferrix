@@ -869,8 +869,25 @@ fn an_address_query_tells_a_short_buffer_from_a_complete_one() {
 // The Linux calls a native program makes
 // ---------------------------------------------------------------------------
 
-/// The host's table is x86-64's, which is what `linux::nr` picks here too.
+/// A table for the recorder to answer with. x86-64's, because a recorder is
+/// not any architecture and has to be told one: what these tests hold is
+/// that each wrapper says the number its table gave it, in the right
+/// register, with the right memory behind each pointer.
 use ferrix_linux_abi::nr::x86_64 as lnr;
+
+impl linux::Linux for &Recorder {
+    const NUMBERS: linux::Numbers = linux::Numbers {
+        read: lnr::READ,
+        write: lnr::WRITE,
+        close: lnr::CLOSE,
+        socket: lnr::SOCKET,
+        bind: lnr::BIND,
+        listen: lnr::LISTEN,
+        accept4: lnr::ACCEPT4,
+        unlinkat: lnr::UNLINKAT,
+        clock_gettime: lnr::CLOCK_GETTIME,
+    };
+}
 
 /// The bytes `bind` should be handed for `path`.
 fn sockaddr_bytes(path: &[u8]) -> Vec<u8> {

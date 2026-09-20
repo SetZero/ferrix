@@ -73,6 +73,17 @@ impl Syscall for Kernel {
     }
 }
 
+/// The Linux numbers a native program's few Linux calls use.
+///
+/// `libs/native` holds the shape of each call and this crate holds which
+/// table it is, because `libs/*` is architecture-neutral and `src/arch/` is
+/// the one place under `user/` that selects on the architecture. The trick
+/// itself is `docs/CLIPBOARD.md` §5: a native program's `exit` has been
+/// Linux's `exit_group` since this crate was written.
+impl ferrix_native::linux::Linux for Kernel {
+    const NUMBERS: ferrix_native::linux::Numbers = arch::LINUX_NUMBERS;
+}
+
 /// End the process with `status`.
 ///
 /// Linux's `exit_group`, because the native ABI has no exit of its own: a

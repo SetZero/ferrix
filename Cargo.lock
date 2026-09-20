@@ -587,4 +587,5 @@ dependencies = [
  "ferrix-cpio",
  "ferrix-elf",
  "ferrix-netwire",
+ "ferrix-vdagent",
 ]

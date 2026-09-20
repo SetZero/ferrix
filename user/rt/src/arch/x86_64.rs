@@ -8,8 +8,10 @@
 
 use core::arch::{asm, naked_asm};
 
+use ferrix_linux_abi::nr::x86_64 as nr;
 use ferrix_linux_abi::nr::x86_64::EXIT_GROUP;
 use ferrix_native::Raw;
+use ferrix_native::linux::Numbers;
 
 /// The process's first instruction.
 ///
@@ -71,3 +73,18 @@ pub(crate) fn exit(status: i32) -> ! {
         );
     }
 }
+
+/// This architecture's numbers for the Linux calls `ferrix_native::linux`
+/// makes, which that crate may not choose for itself: `libs/*` is
+/// architecture-neutral and this directory is the facade.
+pub(crate) const LINUX_NUMBERS: Numbers = Numbers {
+    read: nr::READ,
+    write: nr::WRITE,
+    close: nr::CLOSE,
+    socket: nr::SOCKET,
+    bind: nr::BIND,
+    listen: nr::LISTEN,
+    accept4: nr::ACCEPT4,
+    unlinkat: nr::UNLINKAT,
+    clock_gettime: nr::CLOCK_GETTIME,
+};

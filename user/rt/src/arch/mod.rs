@@ -21,8 +21,8 @@ mod armv7a;
 mod x86_64;
 
 #[cfg(target_arch = "aarch64")]
-pub(crate) use aarch64::{call, exit};
+pub(crate) use aarch64::{LINUX_NUMBERS, call, exit};
 #[cfg(target_arch = "arm")]
-pub(crate) use armv7a::{call, exit};
+pub(crate) use armv7a::{LINUX_NUMBERS, call, exit};
 #[cfg(target_arch = "x86_64")]
-pub(crate) use x86_64::{call, exit};
+pub(crate) use x86_64::{LINUX_NUMBERS, call, exit};
