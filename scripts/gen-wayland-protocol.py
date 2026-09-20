@@ -322,20 +322,40 @@ def formatted(text):
     generator's output, byte for byte, and `--check` can compare them
     directly.
     """
-    with tempfile.NamedTemporaryFile("w", suffix=".rs", encoding="utf-8") as handle:
-        handle.write(text)
-        handle.flush()
+    # Written and closed before rustfmt is handed its name, and closed again
+    # before it is deleted. Windows refuses to open a file a second time while
+    # the first handle is still there, so reading it back inside the `with`
+    # fails on that host with `PermissionError` and the generator cannot be
+    # run there at all -- which is where `cargo xtask check`'s wayland step
+    # was failing. `gen-xkb-tables.py` had the same bug and this is its fix.
+    #
+    # In `OUT`, not the system temporary directory, for a reason the failure
+    # would not have shown: rustfmt finds `rustfmt.toml` by walking up from
+    # the file it is given, and this tree's sets `newline_style = "Unix"`. A
+    # file formatted somewhere else would come back with this host's line
+    # endings, and the committed output would then differ by every line on
+    # Windows and by none on Linux.
+    handle = tempfile.NamedTemporaryFile(
+        "w", suffix=".rs", dir=OUT, delete=False, encoding="utf-8", newline="\n"
+    )
+    written = pathlib.Path(handle.name)
+    try:
+        with handle:
+            handle.write(text)
         result = subprocess.run(
-            ["rustfmt", "--edition", "2024", "--emit", "files", handle.name],
+            ["rustfmt", "--edition", "2024", "--emit", "files", str(written)],
             capture_output=True,
             text=True,
             check=False,
         )
         if result.returncode != 0:
-            raise SystemExit(
-                f"rustfmt refused the generated code:\n{result.stderr}"
-            )
-        return pathlib.Path(handle.name).read_text(encoding="utf-8")
+            raise SystemExit(f"rustfmt refused the generated code:\n{result.stderr}")
+        return written.read_text(encoding="utf-8")
+    finally:
+        # `OUT` is the generated directory itself, and a temporary file left
+        # there is a module the crate would try to compile.
+        written.unlink(missing_ok=True)
+        written.with_suffix(".rs.bk").unlink(missing_ok=True)
 
 
 def modules():
