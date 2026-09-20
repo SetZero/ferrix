@@ -393,6 +393,7 @@ fn echo(sh: &Shell, args: &[Vec<u8>]) -> i32 {
 
 fn print(sh: &mut Shell, args: &[Vec<u8>]) -> i32 {
     let (mut newline, mut raw, mut lines, mut fd, mut nul) = (true, false, false, 1, false);
+    let mut prompt = false;
     let mut k = 0;
     while let Some(a) = args.get(k) {
         if a == b"--" || a == b"-" {
@@ -420,8 +421,9 @@ fn print(sh: &mut Shell, args: &[Vec<u8>]) -> i32 {
                     let fmt_args = args.get(k + 1..).unwrap_or(&[]);
                     return printf(sh, fmt_args);
                 }
-                b'P' | b'c' | b'a' | b'D' | b'o' | b'O' | b'i' | b'm' | b'e' | b'E' | b'z'
-                | b's' | b'S' => {}
+                b'P' => prompt = true,
+                b'c' | b'a' | b'D' | b'o' | b'O' | b'i' | b'm' | b'e' | b'E' | b'z' | b's'
+                | b'S' => {}
                 _ => {
                     stop = true;
                 }
@@ -432,15 +434,19 @@ fn print(sh: &mut Shell, args: &[Vec<u8>]) -> i32 {
         }
         k += 1;
     }
-    let items: Vec<Vec<u8>> = args
-        .get(k..)
-        .unwrap_or(&[])
-        .iter()
-        .map(|a| {
-            let a = tok::unmetafy(a);
-            if raw { a } else { escapes(&a).0 }
-        })
-        .collect();
+    let mut items: Vec<Vec<u8>> = Vec::new();
+    for a in args.get(k..).unwrap_or(&[]) {
+        // `-P` reads the argument as a prompt, which happens while it is
+        // still metafied -- the escapes it produces are raw bytes that
+        // unmetafying leaves alone.
+        let a = if prompt {
+            crate::prompt::expand(sh, a)
+        } else {
+            a.clone()
+        };
+        let a = tok::unmetafy(&a);
+        items.push(if raw { a } else { escapes(&a).0 });
+    }
     let sep: &[u8] = if nul {
         b"\0"
     } else if lines {
