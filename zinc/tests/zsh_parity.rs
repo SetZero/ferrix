@@ -19,6 +19,22 @@ fn run(script: &str) -> String {
     }
 }
 
+/// `${=spec}` splits at `$IFS` whether or not it is quoted, and an IFS
+/// character that is not whitespace keeps the empty fields around it.
+#[test]
+fn a_forced_split_follows_the_ifs_rules() {
+    assert_eq!(run("v='a b c'; print -l ${=v}"), "a\nb\nc\n");
+    assert_eq!(run("v='a b c'; print -l \"${=v}\""), "a\nb\nc\n");
+    assert_eq!(run("IFS=.; v='a..b'; print -l ${=v}"), "a\n\nb\n");
+    assert_eq!(run("IFS=.; v='.a.'; a=(${=v}); echo ${#a}"), "3\n");
+    assert_eq!(run("IFS=' .'; v='a . b'; a=(${=v}); echo ${#a}"), "2\n");
+    assert_eq!(run("v=''; a=(${=v}); echo ${#a}"), "0\n");
+    assert_eq!(run("IFS=; v='a b'; a=(${=v}); echo ${#a}"), "1\n");
+    // The same rule for what a command substitution splits.
+    assert_eq!(run("IFS=.; a=($(echo 'a..b')); echo ${#a}"), "3\n");
+    assert_eq!(run("a=($(echo '  x  y ')); echo ${#a}"), "2\n");
+}
+
 /// Arithmetic reaches into arrays and hashes. `is-at-least`, which
 /// oh-my-zsh asks about every version it cares about, is written in it.
 #[test]

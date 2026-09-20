@@ -15,6 +15,9 @@ pub(crate) struct Expansion {
     /// RC_EXPAND_PARAM: every element takes a copy of the word around it,
     /// which a `^` before the name asks for and the option makes the rule.
     pub(crate) rc: bool,
+    /// `${=spec}` split these fields at `$IFS`, so an empty one among them
+    /// is a word of its own rather than an expansion that came to nothing.
+    pub(crate) split: bool,
 }
 
 /// `$name`.
@@ -24,6 +27,7 @@ pub(crate) fn expand_simple(sh: &mut Shell, name: &[u8], dq: bool) -> Result<Exp
         value,
         splat: !dq || name == b"@",
         rc: sh.opt("rcexpandparam"),
+        split: false,
     })
 }
 
@@ -46,6 +50,9 @@ struct Flags {
     unique: bool,
     /// `(M)` reverses `${array:#pattern}`: retain matching elements.
     matching: bool,
+    /// `${=spec}`: split the result into fields at `$IFS`, whether or not
+    /// the expansion is quoted and whatever `SH_WORD_SPLIT` says.
+    force_split: bool,
     quote: u8,
     unquote: bool,
     indirect: bool,
@@ -157,7 +164,11 @@ pub(crate) fn expand_brace(sh: &mut Shell, inner: &[u8], dq: bool) -> Result<Exp
                 f.rc = Some(!off);
                 i += if off { 2 } else { 1 };
             }
-            Some(b'=' | b'~') if next.is_some() => i += 1,
+            Some(b'=') if next.is_some() => {
+                f.force_split = true;
+                i += 1;
+            }
+            Some(b'~') if next.is_some() => i += 1,
             _ => break,
         }
     }
@@ -226,6 +237,7 @@ pub(crate) fn expand_brace(sh: &mut Shell, inner: &[u8], dq: bool) -> Result<Exp
                 value: Value::Scalar(b"0".to_vec()),
                 splat: false,
                 rc: false,
+                split: false,
             });
         }
     }
@@ -247,6 +259,7 @@ pub(crate) fn expand_brace(sh: &mut Shell, inner: &[u8], dq: bool) -> Result<Exp
             value: Value::Scalar(if value.is_some() { b"1" } else { b"0" }.to_vec()),
             splat: false,
             rc: false,
+            split: false,
         });
     }
     let is_set = value.is_some();
@@ -279,6 +292,7 @@ pub(crate) fn expand_brace(sh: &mut Shell, inner: &[u8], dq: bool) -> Result<Exp
             value: Value::Scalar(n.to_string().into_bytes()),
             splat: false,
             rc: false,
+            split: false,
         });
     }
     v = map_elems(v, |s| {
@@ -311,6 +325,18 @@ pub(crate) fn expand_brace(sh: &mut Shell, inner: &[u8], dq: bool) -> Result<Exp
                 .map(<[u8]>::to_vec)
                 .collect(),
         );
+    }
+    // `${=spec}`, after everything that decides what the words are: each of
+    // them is split at IFS, and the result is more than one word even inside
+    // quotes, which is the whole point of asking.
+    if f.force_split {
+        let ifs = crate::expand::ifs(sh);
+        let mut fields = Vec::new();
+        for word in to_vec(v) {
+            fields.extend(crate::expand::split_ifs(&word, &ifs));
+        }
+        v = Value::Array(fields);
+        splat = true;
     }
     if f.sort || f.rsort || f.unique {
         let mut a = to_vec(v);
@@ -345,6 +371,7 @@ pub(crate) fn expand_brace(sh: &mut Shell, inner: &[u8], dq: bool) -> Result<Exp
         value: v,
         splat,
         rc: f.rc.unwrap_or_else(|| sh.opt("rcexpandparam")),
+        split: f.force_split,
     })
 }
 
