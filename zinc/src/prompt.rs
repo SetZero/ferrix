@@ -9,16 +9,20 @@ use crate::shell::{Shell, Value};
 /// what zsh's `USERNAME` is -- a shell started with no environment at all
 /// still knows whose it is, and agnoster's context segment says so.
 pub(crate) fn username() -> Vec<u8> {
-    // SAFETY: geteuid has no preconditions; getpwuid returns a pointer to
-    // static storage, or null when there is no such entry.
-    let pw = unsafe { libc::getpwuid(libc::geteuid()) };
-    if !pw.is_null() {
-        // SAFETY: pw is non-null, and pw_name is a NUL-terminated string
-        // owned by the library.
-        let name = unsafe { std::ffi::CStr::from_ptr((*pw).pw_name) };
-        return name.to_bytes().to_vec();
+    // SAFETY: geteuid has no preconditions.
+    let uid = unsafe { libc::geteuid() };
+    // SAFETY: getpwuid takes a user id and returns a pointer to static
+    // storage, or null when there is no such entry.
+    let pw = unsafe { libc::getpwuid(uid) };
+    if pw.is_null() {
+        return Vec::new();
     }
-    Vec::new()
+    // SAFETY: pw is not null, so it points at an entry the library owns.
+    let name = unsafe { (*pw).pw_name };
+    // SAFETY: pw_name is a NUL-terminated string owned by the library, which
+    // lives until the next call into it.
+    let name = unsafe { std::ffi::CStr::from_ptr(name) };
+    name.to_bytes().to_vec()
 }
 
 fn hostname() -> Vec<u8> {
@@ -108,9 +112,11 @@ fn condition(sh: &Shell, cond: u8, arg: i64) -> bool {
             .unwrap_or(0)
     };
     match cond {
-        // SAFETY: geteuid and getegid have no preconditions.
+        // SAFETY: geteuid has no preconditions.
         b'!' => (unsafe { libc::geteuid() }) == 0,
+        // SAFETY: geteuid has no preconditions.
         b'#' => i64::from(unsafe { libc::geteuid() }) == arg,
+        // SAFETY: getegid has no preconditions.
         b'g' => i64::from(unsafe { libc::getegid() }) == arg,
         b'?' => i64::from(sh.status) == arg,
         b'j' => i64::try_from(sh.jobs.ids().len()).unwrap_or(0) >= arg,

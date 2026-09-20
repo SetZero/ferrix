@@ -179,7 +179,7 @@ fn delete(sh: &mut Shell, args: &[Vec<u8>]) {
     };
     let names = args.get(1..).unwrap_or(&[]);
     for style in &mut sh.styles {
-        if !names.is_empty() && !names.iter().any(|n| *n == style.name) {
+        if !names.is_empty() && !names.contains(&style.name) {
             continue;
         }
         style.pats.retain(|p| p.pat != *pat);
