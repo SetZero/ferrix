@@ -14,6 +14,13 @@
 //! a native call and `linux` a Linux one, and the kernel tells them apart by
 //! the number's range and by nothing else (`docs/CLIPBOARD.md` §5).
 //!
+//! It also owns the two things about a *Linux* call that are the
+//! architecture's rather than the caller's: the numbers, which are a
+//! different table per architecture, and the calls the tables disagree about
+//! spelling -- `unlink`, which the newer ones have only as `unlinkat`. A
+//! caller in `crate::linux` therefore names an operation and never an
+//! architecture.
+//!
 //! This is the facade: the one place under `user/` that selects on
 //! `target_arch`, for the reason `kernel/src/arch/mod.rs` is the kernel's.
 
@@ -25,8 +32,8 @@ mod armv7a;
 mod x86_64;
 
 #[cfg(target_arch = "aarch64")]
-pub(crate) use aarch64::{call, exit, linux};
+pub(crate) use aarch64::{call, exit, linux, nr, unlink};
 #[cfg(target_arch = "arm")]
-pub(crate) use armv7a::{call, exit, linux};
+pub(crate) use armv7a::{call, exit, linux, nr, unlink};
 #[cfg(target_arch = "x86_64")]
-pub(crate) use x86_64::{call, exit, linux};
+pub(crate) use x86_64::{call, exit, linux, nr, unlink};

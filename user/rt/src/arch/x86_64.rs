@@ -8,8 +8,18 @@
 
 use core::arch::{asm, naked_asm};
 
-use ferrix_linux_abi::nr::x86_64::EXIT_GROUP;
+use ferrix_linux_abi::nr::x86_64::{EXIT_GROUP, UNLINK};
 use ferrix_native::Raw;
+
+/// The numbers of the Linux calls `crate::linux` makes.
+///
+/// A number is this architecture's, so the table it comes from is named here
+/// and nowhere else; `crate::linux` spells every call the same on all three.
+pub(crate) mod nr {
+    pub(crate) use ferrix_linux_abi::nr::x86_64::{
+        ACCEPT4, BIND, CLOSE, FCNTL, LISTEN, READ, SOCKET, WRITE,
+    };
+}
 
 /// The process's first instruction.
 ///
@@ -52,6 +62,22 @@ pub(crate) fn call(raw: &Raw<'_>) -> usize {
 /// *owned* memory is memory this program may see changed under it.
 pub(crate) unsafe fn linux(number: usize, args: [usize; 6]) -> usize {
     trap(number, args)
+}
+
+/// Take the NUL-terminated path at `at` out of the filesystem.
+///
+/// x86-64's table still has `unlink` itself, where the architectures built on
+/// the newer one have only `unlinkat` and must be given a directory to start
+/// from. Which of the two spells it is the architecture's, so the choice is
+/// made here rather than in a caller.
+///
+/// # Safety
+///
+/// `at` is the address of a NUL-terminated path this program owns, valid for
+/// the whole of the call; the kernel only reads it.
+pub(crate) unsafe fn unlink(at: usize) -> usize {
+    // SAFETY: the caller's promise about `at`, forwarded unchanged.
+    unsafe { linux(UNLINK, [at, 0, 0, 0, 0, 0]) }
 }
 
 /// The trap itself: a number, six argument registers, and the result.

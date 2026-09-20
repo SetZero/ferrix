@@ -20,28 +20,7 @@
 
 use ferrix_linux_abi::errno::Errno;
 
-use crate::arch;
-
-/// The numbers, per architecture. `ferrix_linux_abi::nr` holds them all; this
-/// names the ones used here so that a reader sees one list.
-#[cfg(target_arch = "x86_64")]
-mod nr {
-    pub(super) use ferrix_linux_abi::nr::x86_64::{
-        ACCEPT4, BIND, CLOSE, FCNTL, LISTEN, READ, SOCKET, UNLINK, WRITE,
-    };
-}
-#[cfg(target_arch = "aarch64")]
-mod nr {
-    pub(super) use ferrix_linux_abi::nr::aarch64::{
-        ACCEPT4, BIND, CLOSE, FCNTL, LISTEN, READ, SOCKET, UNLINKAT, WRITE,
-    };
-}
-#[cfg(target_arch = "arm")]
-mod nr {
-    pub(super) use ferrix_linux_abi::nr::arm::{
-        ACCEPT4, BIND, CLOSE, FCNTL, LISTEN, READ, SOCKET, UNLINKAT, WRITE,
-    };
-}
+use crate::arch::{self, nr};
 
 /// `AF_UNIX`, the only family this module has a use for.
 pub const AF_UNIX: usize = 1;
@@ -53,10 +32,6 @@ pub const SOCK_NONBLOCK: usize = 0o4000;
 pub const F_SETFL: usize = 4;
 /// `O_NONBLOCK`.
 pub const O_NONBLOCK: usize = 0o4000;
-/// `AT_FDCWD`, for the architectures whose `unlink` is `unlinkat`.
-#[cfg(not(target_arch = "x86_64"))]
-const AT_FDCWD: usize = (-100_isize) as usize;
-
 /// Bytes of a `sockaddr_un`: the family, then the path.
 pub const SOCKADDR_UN_BYTES: usize = 110;
 
@@ -190,22 +165,16 @@ pub fn fcntl(fd: usize, command: usize, argument: usize) -> Result<usize, Errno>
 
 /// Take `path` out of the filesystem, so that binding it again succeeds.
 ///
-/// x86-64 has `unlink`; the others have only `unlinkat`, which is the same
-/// call with a directory in front of it.
+/// Which of `unlink` and `unlinkat` spells this is the architecture's, and is
+/// settled behind `crate::arch` so that nothing here has to ask.
 ///
 /// # Errors
 ///
 /// Whatever the kernel answers, `ENOENT` included, which a caller clearing
 /// the way for a `bind` should ignore.
 pub fn unlink(path: &[u8]) -> Result<usize, Errno> {
-    let at = path.as_ptr().addr();
-    #[cfg(target_arch = "x86_64")]
     // SAFETY: `path` is borrowed for the call and NUL-terminated by its
     // caller; the kernel only reads it.
-    let result = unsafe { arch::linux(nr::UNLINK, [at, 0, 0, 0, 0, 0]) };
-    #[cfg(not(target_arch = "x86_64"))]
-    // SAFETY: as above, with the current directory as the base, which an
-    // absolute path ignores.
-    let result = unsafe { arch::linux(nr::UNLINKAT, [AT_FDCWD, at, 0, 0, 0, 0]) };
+    let result = unsafe { arch::unlink(path.as_ptr().addr()) };
     decode(result)
 }
