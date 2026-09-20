@@ -327,3 +327,34 @@ fn the_except_operator_takes_matches_away() {
     assert_eq!(run(&format!("{e}[[ f~ == *~ ]] && echo yes")), "yes\n");
     assert_eq!(run(&format!("{e}echo a~b")), "a~b\n");
 }
+
+/// `(#b)` remembers where each group matched, in `$match` and the two arrays
+/// of offsets. vcs_info names its backends with it -- `${file:#(#b)…_(*)}` --
+/// and its git backend reads a ref apart the same way.
+#[test]
+fn a_pattern_can_remember_its_groups() {
+    let e = "setopt extendedglob; ";
+    assert_eq!(
+        run(&format!(
+            "{e}f=VCS_INFO_get_data_git; : ${{f:#(#b)VCS_INFO_get_data_(*)}}; echo $match $mbegin $mend"
+        )),
+        "git 19 21\n"
+    );
+    assert_eq!(
+        run(&format!("{e}[[ abcdef == (#b)a(b*)(e)f ]] && echo $match")),
+        "bcd e\n"
+    );
+    assert_eq!(
+        run(&format!(
+            "{e}[[ abcdef == (#b)a(b*)(e)f ]] && echo $mbegin $mend"
+        )),
+        "2 5 4 5\n"
+    );
+    // A group takes as much as it can, which is the path zsh reports.
+    assert_eq!(
+        run(&format!("{e}[[ aXbXc == (#b)(*)X* ]] && echo $match")),
+        "aXb\n"
+    );
+    // Without the flag nothing is written down.
+    assert_eq!(run(&format!("{e}[[ ab == (a)(b) ]] && echo ok")), "ok\n");
+}

@@ -118,6 +118,31 @@ fn char_len(s: &[u8]) -> usize {
     std::str::from_utf8(s).map_or(s.len(), |t| t.chars().count())
 }
 
+/// `(#b)`: write down where each group of `pat` matched `s`, in the three
+/// arrays zsh leaves behind -- `$match` with the text, `$mbegin` and `$mend`
+/// with the offsets, counted from one and both ends inclusive.
+///
+/// The offsets are in bytes. zsh counts characters, so a pattern reaching
+/// past a multibyte character reports a smaller number there; nothing in
+/// oh-my-zsh does arithmetic on them.
+pub(crate) fn set_backrefs(sh: &mut Shell, pat: &Pattern, value: &[u8]) {
+    let plain = tok::unmetafy(value);
+    let Some(caps) = pat.captures(&plain) else {
+        return;
+    };
+    let mut text = Vec::new();
+    let mut begin = Vec::new();
+    let mut end = Vec::new();
+    for (from, to) in caps {
+        text.push(tok::metafy(plain.get(from..to).unwrap_or(&[])));
+        begin.push((from + 1).to_string().into_bytes());
+        end.push(to.to_string().into_bytes());
+    }
+    sh.set_value(b"match", Value::Array(text));
+    sh.set_value(b"mbegin", Value::Array(begin));
+    sh.set_value(b"mend", Value::Array(end));
+}
+
 /// `${...}`, given the text between the braces.
 #[expect(
     clippy::too_many_lines,
@@ -714,6 +739,18 @@ fn apply_op(
             sh.opt("extendedglob"),
         );
         let hit = |s: &[u8]| pat.matches(&tok::unmetafy(s));
+        // `(#b)` remembers where the groups landed. vcs_info names its
+        // backends this way: `: ${file:#(#b)VCS_INFO_get_data_(*)}`, whose
+        // whole purpose is the `$match` it leaves behind.
+        if pat.has_backrefs()
+            && let Some(first) = match &v {
+                Value::Array(a) => a.iter().find(|s| hit(s)).cloned(),
+                Value::Assoc(a) => a.iter().map(|(_, x)| x).find(|s| hit(s)).cloned(),
+                Value::Scalar(s) => Some(s.clone()).filter(|s| hit(s)),
+            }
+        {
+            set_backrefs(sh, &pat, &first);
+        }
         return Ok(match v {
             Value::Array(a) => Value::Array(a.into_iter().filter(|s| hit(s) == matching).collect()),
             Value::Assoc(a) => Value::Assoc(
