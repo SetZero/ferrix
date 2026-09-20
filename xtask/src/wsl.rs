@@ -126,14 +126,20 @@ fn target_name(dir: &Path) -> String {
 }
 
 /// Refuse early, and say what to install, if the default distribution cannot
-/// build ferrousli: no WSL, or no `cargo` or `cc` in it.
-pub(crate) fn require_toolchain() -> Result<()> {
+/// build what `need` describes: no WSL, or no `cargo` or `cc` in it.
+///
+/// `need` is the half-sentence before "which on Windows needs WSL", because
+/// three gates want this and they want it for different reasons: ferrousli
+/// builds C programs a Linux kernel has to start, zinc drives a
+/// pseudoterminal, and the compositor opens render nodes and Unix sockets
+/// that Windows has no equivalent of. A person without a distribution should
+/// be told which of the three they are being stopped by.
+pub(crate) fn require_toolchain(need: &str) -> Result<()> {
     let Some(name) = default_distribution() else {
-        return Err(Error::new(
-            "ferrousli's tests run C programs built for Linux, which on Windows need WSL, \
-             and WSL has no default distribution here.\n  \
-             Install one: `wsl --install -d Ubuntu`, then inside it rustup and `build-essential`.",
-        ));
+        return Err(Error::new(format!(
+            "{need}, which on Windows needs WSL, and WSL has no default distribution here.\n  \
+             Install one: `wsl --install -d Ubuntu`, then inside it rustup and `build-essential`."
+        )));
     };
     let status = Command::new("wsl.exe")
         .args(["--exec", "bash", "-lc", "command -v cargo && command -v cc"])

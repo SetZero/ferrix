@@ -179,7 +179,9 @@ fn ferrousli(root: &std::path::Path) -> Result<()> {
         command
     };
     if cfg!(windows) {
-        step("ferrousli: WSL", crate::wsl::require_toolchain)?;
+        step("ferrousli: WSL", || {
+            crate::wsl::require_toolchain("ferrousli's tests run C programs built for Linux")
+        })?;
     }
 
     step("ferrousli: generated ABI", || {
@@ -251,7 +253,9 @@ fn zinc(root: &std::path::Path) -> Result<()> {
         )
     })?;
     if cfg!(windows) {
-        step("zinc: WSL", crate::wsl::require_toolchain)?;
+        step("zinc: WSL", || {
+            crate::wsl::require_toolchain("zinc's tests drive a pseudoterminal")
+        })?;
     }
     step("zinc: tests", || {
         let command = if cfg!(windows) {
@@ -296,17 +300,38 @@ fn zinc(root: &std::path::Path) -> Result<()> {
 /// The compositor's gates.
 ///
 /// `compositor/` is a workspace of its own, like ferrousli, so the steps
-/// above never reach it. Unlike ferrousli's, these are on by default: its
-/// crates so far are pure Rust that builds and tests on any host in seconds.
-/// When a crate needs a Linux host they move behind WSL the way ferrousli's
-/// did.
+/// above never reach it. They are on by default, because they are seconds
+/// rather than minutes.
+///
+/// They also go through WSL on Windows now, which the comment here used to
+/// say would happen "when a crate needs a Linux host". `compositor/virgl` is
+/// that crate: `device.rs` holds an `OwnedFd` for a render node and
+/// `vtest.rs` speaks virglrenderer's protocol over a `UnixStream`, neither of
+/// which `std` has on Windows, and `drm`, `render` and `hyprix` all build on
+/// it. So the host pass stopped compiling on Windows the day the GPU work
+/// landed, with rustc's "cannot find `unix` in `os`", and `cargo xtask check`
+/// could not finish on that host at all.
+///
+/// Running it in the distribution rather than excluding the crates keeps the
+/// two hosts checking the same code: an exclusion would have left the GPU
+/// path linted on Linux and nowhere else, which is the half of the tree most
+/// worth linting and the half a Windows developer is most likely to be
+/// changing.
 fn compositor(root: &std::path::Path) -> Result<()> {
     let dir = root.join("compositor");
     let in_compositor = |arguments: &[&str]| {
+        if cfg!(windows) {
+            return crate::wsl::cargo(&dir, arguments);
+        }
         let mut command = Command::new(cargo_binary());
         let _ = command.current_dir(&dir).args(arguments);
         command
     };
+    if cfg!(windows) {
+        step("compositor: WSL", || {
+            crate::wsl::require_toolchain("the compositor opens render nodes and Unix sockets")
+        })?;
+    }
     step("compositor: formatting", || {
         cargo::run(in_compositor(&["fmt", "--check"]), "cargo fmt (compositor)")
     })?;
