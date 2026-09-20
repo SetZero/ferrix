@@ -37,7 +37,7 @@ use core::sync::atomic::{Ordering, fence};
 use ferrix_blkring::control::{Block as StartBlock, Message as StartMessage, START_BYTES, Start};
 use ferrix_linux_abi::errno::Errno;
 use ferrix_native_abi::handle::Handle;
-use ferrix_native_abi::types::{IoMappingSpec, PACKET_INTERRUPT};
+use ferrix_native_abi::types::IoMappingSpec;
 use ferrix_rt::linux;
 use ferrix_rt::native::channel::Channel;
 use ferrix_rt::native::device::{Device, Interrupt, IoMapping};
@@ -569,19 +569,25 @@ fn pump(driver: &mut Console, listener: &mut Listener, waits: &Port<Kernel>) -> 
             .map_err(|_| Step::Events)?
             .saturating_add(TICK_NANOS);
         match waits.wait(Deadline::At(deadline)) {
-            Ok(packet) if packet.kind == PACKET_INTERRUPT && packet.key == KEY_INTERRUPT => {
-                if drain(driver)? {
-                    // The host end went away: whoever was connected is told
-                    // by the socket closing, which is the only way this
-                    // driver can say it.
-                    listener.drop_client();
-                    to_port = Staged::new();
-                    to_client = Staged::new();
-                }
-            }
             Ok(_) => {}
             Err(Error::TimedOut) => {}
             Err(_) => return Err(Step::Events),
+        }
+
+        // The device is drained every turn and not only when a packet named
+        // an interrupt. A virtio driver may not depend on an interrupt
+        // arriving: one raised between `init` and the first wait is one this
+        // loop would otherwise sit through for ever, and since `poll` is also
+        // what acknowledges the interrupt, a missed one latches and no
+        // further interrupt comes. The tick costs nothing that matters here
+        // and makes the bring-up depend on the conversation rather than on
+        // the timing of its first completion.
+        if drain(driver)? {
+            // The host end went away: whoever was connected is told by the
+            // socket closing, which is the only way this driver can say it.
+            listener.drop_client();
+            to_port = Staged::new();
+            to_client = Staged::new();
         }
 
         listener.accept();
