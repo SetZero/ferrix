@@ -193,6 +193,19 @@ fn the_user_is_named_by_the_password_database() {
     assert_eq!(run("echo $USERNAME"), format!("{who}\n"));
     // A bogus $USER does not change either of them.
     assert_eq!(run("USER=nobody; print -Pn -- '%n'"), who);
+    // LOGNAME comes from the same place, so a theme comparing the two --
+    // avit does -- sees no difference that is only a missing value.
+    assert_eq!(run("echo $LOGNAME"), format!("{who}\n"));
+    assert_eq!(run("[[ $LOGNAME == $USERNAME ]] && echo same"), "same\n");
+}
+
+/// An escape that means nothing expands to nothing, rather than to itself.
+/// The cloud theme's prompt holds a bare `%` with a space after it.
+#[test]
+fn an_unknown_prompt_escape_expands_to_nothing() {
+    assert_eq!(run("print -Pn -- 'a% b'"), "ab");
+    assert_eq!(run("print -Pn -- 'a%zb'"), "ab");
+    assert_eq!(run("print -Pn -- 'a%'"), "a");
 }
 
 /// A `${v/pat/repl}` whose pattern holds an escaped delimiter. agnoster
