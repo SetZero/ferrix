@@ -80,7 +80,7 @@ fn parse_flags(s: &[u8], f: &mut Flags) {
                 .iter()
                 .map(|&x| tok::detok(x))
                 .collect();
-            crate::expand::dollar_quote(&raw)
+            tok::metafy(&crate::expand::dollar_quote(&raw))
         };
         match c {
             b'@' => f.splat = true,
