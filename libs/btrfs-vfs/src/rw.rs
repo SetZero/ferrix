@@ -1,7 +1,6 @@
 //! btrfs mounted read-write, over `ferrix-btrfs-write`.
 //!
-//! The read-only mount beside this one ([`crate::Btrfs`]) reads a         self.shared.shape_changed();
-volume that
+//! The read-only mount beside this one ([`crate::Btrfs`]) reads a volume that
 //! cannot change, which is what lets it read with no lock held. A writable
 //! mount cannot: every read must see the transaction the writes are going
 //! into — a file created a moment ago is not on the disk yet — and two edits
@@ -88,7 +87,7 @@ struct Shared<D> {
     pending: SpinLock<u64>,
     /// Whether anything has changed the shape of the tree — a name made,
     /// moved or removed — since the last commit. A log carries one inode's
-    /// items and no names, so an `fsync` with this set must commit instead.
+    /// items and no names, so an `fsync` with this set commits instead.
     structural: SpinLock<bool>,
 }
 
@@ -582,6 +581,7 @@ impl<D: WriteHandle> Inode for Node<D> {
 
     fn create(&self, name: &[u8], node: NewNode<'_>, permissions: u32) -> Result<Arc<dyn Inode>> {
         self.require_dir()?;
+        self.shared.shape_changed();
         let dir = self.ino;
         let now = self.shared.now();
         let (kind, rdev, target) = match node {
@@ -615,6 +615,7 @@ impl<D: WriteHandle> Inode for Node<D> {
 
     fn link(&self, name: &[u8], target: &Arc<dyn Inode>) -> Result<()> {
         self.require_dir()?;
+        self.shared.shape_changed();
         let target = target
             .clone()
             .into_any()
@@ -623,7 +624,6 @@ impl<D: WriteHandle> Inode for Node<D> {
         if target.kind == FileType::Directory {
             return Err(Errno::EPERM);
         }
-        self.shared.shape_changed();
         let (dir, ino, now) = (self.ino, target.ino, self.shared.now());
         self.shared
             .with(|volume| volume.link(dir, name, ino, now))?;
@@ -648,12 +648,12 @@ impl<D: WriteHandle> Inode for Node<D> {
         replace: bool,
     ) -> Result<()> {
         self.require_dir()?;
+        self.shared.shape_changed();
         let parent = new_parent
             .clone()
             .into_any()
             .downcast::<Node<D>>()
             .map_err(|_| Errno::EXDEV)?;
-        self.shared.shape_changed();
         let (from, to, now) = (self.ino, parent.ino, self.shared.now());
         let moved = self.shared.with(|volume| {
             let (_, kind) = volume.lookup(from, old)?.ok_or(WriteError::NotFound)?;
@@ -729,20 +729,19 @@ impl<D: WriteHandle> Inode for Node<D> {
 
     /// Write this file back, and make where its bytes are durable.
     ///
-    /// The bytes themselves went to the disk as they were written back; what
-    /// `fsync` must add is a durable record of where. When nothing has
-    /// changed the shape of the tree since the last commit, that record is a
-    /// log entry for this inode and a superblock — much less than a commit.
-    /// Otherwise the shape has to be committed, because a log carries no
-    /// names; Linux falls back the same way.
+    /// The bytes themselves reached the disk as they were written back; what
+    /// `fsync` must add is a durable record of where they are. While nothing
+    /// has changed the shape of the tree since the last commit, that record
+    /// is one log entry for this inode and a superblock, which is far less
+    /// than a commit. Otherwise the shape must be committed, because a log
+    /// carries no names; Linux falls back the same way.
     fn fsync(&self, data_only: bool) -> Result<()> {
         let _ = data_only;
         let mut volume = self.shared.volume.lock();
         self.write_back(&mut volume)?;
-        let structural = self.shared.structural.lock();
-        if *structural {
-            drop(structural);
+        if *self.shared.structural.lock() {
             *self.shared.pending.lock() = 0;
+            *self.shared.structural.lock() = false;
             return volume.commit().map_err(errno);
         }
         volume.log_inode(self.ino).map_err(errno)?;

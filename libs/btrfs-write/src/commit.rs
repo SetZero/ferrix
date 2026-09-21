@@ -46,11 +46,7 @@ use crate::extent::{
 use crate::ranges::RangeSet;
 use crate::refs::Head;
 
-use crate::    pub fn commit(&mut self) -> Result<()> {
-        self.guarded(|volume| {
-            if !volume.is_dirty() && !volume.chunks_changed && !volume.has_log() {
-                return Ok(());
-            }::TreeId;
+use crate::volume::TreeId;
 use crate::{Error, Result, Unsupported, WriteDevice, WriteVolume};
 
 /// The free-space tree's id.
@@ -90,11 +86,11 @@ impl<D: WriteDevice> WriteVolume<D> {
     /// aborted; [`WriteVolume::abort`] rereads the committed state.
     pub fn commit(&mut self) -> Result<()> {
         self.guarded(|volume| {
-            if !volume.is_dirty() && !volume.chunks_changed {
+            if !volume.is_dirty() && !volume.chunks_changed && !volume.has_log() {
                 return Ok(());
             }
-            // A commit puts everything the log held into the trees, so the
-            // log goes; the superblock this writes names none.
+            // A commit puts everything a log held into the trees themselves,
+            // so the log goes with it and the superblock names none.
             volume.drop_log()?;
             // The root tree's root must be this transaction's: the superblock
             // records one generation for both.
@@ -493,7 +489,7 @@ fn check_main_key(key: &BtrfsKey, head: &Head, flags: u64) -> Result<()> {
     }
 }
 
-/// A superblock with its checksum over what it now holds: the last thing
+/// A superblock with its checksum over what it now holds: the last field
 /// written to any copy of it, and what makes the rest of it believed.
 pub(crate) fn sealed(mut block: Vec<u8>) -> Result<Vec<u8>> {
     let bad = Error::Inconsistent("superblock field out of range");
