@@ -4,13 +4,16 @@
 //! routes `pipe`, `pipe2` and `sendfile` to `crate::syscall::pipe`, so that
 //! stage 8's calls hang off `with_process` by one line.
 //!
-//! # Every filesystem is memory
+//! # Writing out
 //!
-//! There is no disk under anything yet, so there is nothing for `sync`,
+//! Every filesystem but btrfs is memory, and has nothing for `sync`,
 //! `syncfs`, `fsync` or `fdatasync` to write out: each is done the moment it
-//! is asked, which is a true answer rather than a pretence. What they still
-//! check is what Linux checks -- a descriptor that names nothing is `EBADF`,
-//! and an object with no storage to sync, a pipe or a terminal, is `EINVAL`.
+//! is asked, which is a true answer rather than a pretence. On btrfs each
+//! commits: `fsync` writes the file back and commits the transaction,
+//! `syncfs` the filesystem the descriptor is on, and `sync` every mount in
+//! the namespace. What they check is what Linux checks -- a descriptor that
+//! names nothing is `EBADF`, and an object with no storage to sync, a pipe
+//! or a terminal, is `EINVAL`.
 //!
 //! # Mounting what exists
 //!
@@ -27,10 +30,11 @@
 //! whose number names a disk a ring-3 driver registered. The source is
 //! resolved last, after the target and the flags, as Linux resolves it inside
 //! the filesystem's own mount; a source that is not a block node is
-//! `ENOTBLK`, and a number no disk answers to is `ENXIO`. Stage 11's btrfs
-//! reads and does not write, so a mount of it must ask for `MS_RDONLY` and
-//! is `EROFS` otherwise, the answer a program gets from a read-only medium
-//! rather than a lie it would find out about later.
+//! `ENOTBLK`, and a number no disk answers to is `ENXIO`. A mount that asks
+//! for `MS_RDONLY` gets stage 11's reader; one that does not gets stage
+//! 12's writer, which refuses with `EROFS` — the answer a program gets from
+//! a read-only medium — when the disk takes no writes or the volume is one
+//! it will not maintain, a snapshot or a quota-enabled volume among them.
 //!
 //! The types that do not exist yet -- `sysfs`, `devpts`, `cgroup2` and every
 //! other -- are `ENODEV`, Linux's answer for a type the kernel was built
@@ -104,9 +108,10 @@ pub(crate) fn dispatch(
         Syscall::Fstatfs => sys_fstatfs(process, fd, a[1]),
         Syscall::Statfs64 => sys_statfs64(process, a[0], a[1], a[2]),
         Syscall::Fstatfs64 => sys_fstatfs64(process, fd, a[1], a[2]),
-        Syscall::Sync => Ok(0),
+        Syscall::Sync => sys_sync(),
         Syscall::Syncfs => sys_syncfs(process, fd),
-        Syscall::Fsync | Syscall::Fdatasync => sys_fsync(process, fd),
+        Syscall::Fsync => sys_fsync(process, fd, false),
+        Syscall::Fdatasync => sys_fsync(process, fd, true),
         Syscall::Readahead => sys_readahead(process, fd, readahead_count(a)),
         Syscall::Truncate => sys_truncate(process, a[0], super::native_signed(a[1])),
         Syscall::Truncate64 => sys_truncate(process, a[0], super::wide(a, 1)),
@@ -226,18 +231,34 @@ fn usable(process: &Process, fd: i32) -> Result<Arc<ferrix_vfs::OpenFile>, Errno
     Ok(file)
 }
 
-/// `syncfs`: nothing to write out, once the descriptor is known to be open.
+/// `syncfs`: write out the filesystem the descriptor's file is on. On a
+/// filesystem that keeps nothing back — everything in memory — that is
+/// nothing; on btrfs it is a transaction commit.
 fn sys_syncfs(process: &Process, fd: i32) -> Result<usize, Errno> {
-    let _ = usable(process, fd)?;
+    let file = fd::file(process, fd)?;
+    file.location().mount.filesystem().sync()?;
     Ok(0)
 }
 
-/// `fsync` and `fdatasync`: nothing to write out for a file or a directory in
-/// memory, and `EINVAL` for an object with no storage to sync -- a pipe, a
-/// terminal -- as Linux answers for a file with no `fsync` operation.
-pub(crate) fn sys_fsync(process: &Process, fd: i32) -> Result<usize, Errno> {
-    match usable(process, fd)?.kind() {
-        FileType::Regular | FileType::Directory => Ok(0),
+/// `sync`: write out every filesystem in the namespace, and answer nothing,
+/// as Linux does — `sync(2)` has no error to give.
+fn sys_sync() -> Result<usize, Errno> {
+    for mount in fs::namespace().mounts() {
+        let _ = mount.filesystem().sync();
+    }
+    Ok(0)
+}
+
+/// `fsync` and `fdatasync`: write this file out and wait for it. `EINVAL` for
+/// an object with no storage to sync -- a pipe, a terminal -- as Linux
+/// answers for a file with no `fsync` operation.
+pub(crate) fn sys_fsync(process: &Process, fd: i32, data_only: bool) -> Result<usize, Errno> {
+    let file = usable(process, fd)?;
+    match file.kind() {
+        FileType::Regular | FileType::Directory => {
+            file.location().inode()?.fsync(data_only)?;
+            Ok(0)
+        }
         _ => Err(Errno::EINVAL),
     }
 }
@@ -379,10 +400,11 @@ fn filesystem_named(
             if meta.kind != FileType::BlockDevice {
                 return Err(Errno::ENOTBLK);
             }
-            if !read_only {
-                return Err(Errno::EROFS);
+            if read_only {
+                fs::btrfs::mount(meta.rdev)
+            } else {
+                fs::btrfs::mount_rw(meta.rdev)
             }
-            fs::btrfs::mount(meta.rdev)
         }
         _ => Err(Errno::ENODEV),
     }

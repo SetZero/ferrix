@@ -560,6 +560,31 @@ struct Watched {
     log: PathBuf,
 }
 
+/// Stage 12's exit, the boot half: boot as [`test_boot`] does, and say
+/// whether the guest wrote the writable btrfs disk and read it back. The
+/// caller then points host `btrfs check` at the same image.
+///
+/// # Errors
+///
+/// A boot that panicked, timed out or never reached the marker, exactly as
+/// [`test_boot`] judges one, and a boot whose output says nothing about the
+/// disk at all.
+pub(crate) fn test_btrfs_write(
+    arch: Arch,
+    image: &Path,
+    kernel: &Path,
+    args: &Args,
+) -> Result<bool> {
+    let watched = watch(arch, image, kernel, args, SUCCESS_MARKER)?;
+    if watched.verdict != Verdict::Reached {
+        return Err(Error::new(format!(
+            "{arch}: the boot did not reach the marker.\n  Serial output is in {}",
+            watched.log.display()
+        )));
+    }
+    crate::btrfs_check::guest_wrote(&watched.lines)
+}
+
 /// Boot headless, echo and save the serial port, and stop at the first line
 /// containing `until`, at a panic, or at the timeout.
 ///
@@ -1411,6 +1436,37 @@ fn attach_btrfs_disk(command: &mut Command, arch: Arch) -> Result<()> {
         "virtio-blk-pci,drive=btrfsdisk,disable-legacy=on"
     } else {
         "virtio-blk-pci,drive=btrfsdisk,disable-legacy=on,iommu_platform=on"
+    };
+    let _ = command.args(["-device", device]);
+    attach_btrfs_write_disk(command, arch)
+}
+
+/// Attach a fresh blank btrfs volume as a fourth virtio device, so it is
+/// `vdc`: the disk stage 12's check writes on and host `btrfs check` reads
+/// afterwards.
+///
+/// Writable, of course, and rewritten from the fixture for every boot, so no
+/// run ever starts from what the last one left. `cache=writeback` is QEMU's
+/// default and is what makes the guest's flush mean something: the guest's
+/// flush becomes a host `fsync`, which is the ordering the commit rests on.
+fn attach_btrfs_write_disk(command: &mut Command, arch: Arch) -> Result<()> {
+    let disk = btrfs_disk::ensure_blank()?;
+    println!(
+        "  {arch}: writable btrfs disk {} as virtio-blk-pci: {}",
+        display(&disk),
+        btrfs_disk::describe_blank()
+    );
+    let _ = command.args([
+        "-drive",
+        &format!(
+            "file={},if=none,format=raw,id=btrfswrite,cache=writeback",
+            display(&disk)
+        ),
+    ]);
+    let device = if arch == Arch::Armv7a {
+        "virtio-blk-pci,drive=btrfswrite,disable-legacy=on"
+    } else {
+        "virtio-blk-pci,drive=btrfswrite,disable-legacy=on,iommu_platform=on"
     };
     let _ = command.args(["-device", device]);
     Ok(())

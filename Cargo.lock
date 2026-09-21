@@ -90,6 +90,7 @@ name = "ferrix-btrfs-vfs"
 version = "0.1.0"
 dependencies = [
  "ferrix-btrfs",
+ "ferrix-btrfs-write",
  "ferrix-sync",
  "ferrix-vfs",
 ]
@@ -202,6 +203,7 @@ dependencies = [
  "ferrix-bootinfo",
  "ferrix-btrfs",
  "ferrix-btrfs-vfs",
+ "ferrix-btrfs-write",
  "ferrix-crng",
  "ferrix-devmgr-proto",
  "ferrix-displayctl",

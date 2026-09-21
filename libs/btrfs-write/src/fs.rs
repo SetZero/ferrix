@@ -56,6 +56,10 @@ const FILE_EXTENT_HEADER: usize = 21;
 /// Bytes of a regular file extent item.
 const FILE_EXTENT_SIZE: usize = 53;
 
+/// One entry a listing reports: its index, the inode it names, its entry
+/// type and its name.
+pub type DirRecord = (u64, u64, u8, Vec<u8>);
+
 /// A file extent as the fs tree records it, owned.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct FileExtentItem {
@@ -593,6 +597,48 @@ impl<D: WriteDevice> WriteVolume<D> {
         }
         let _ = self.delete_if_present(&BtrfsKey::new(ORPHAN_OBJECTID, ORPHAN_ITEM_KEY, ino))?;
         Ok(())
+    }
+
+    /// List directory `dir` from index `from`: each entry's index, inode
+    /// number, entry type and name, in the order `readdir` reports them.
+    ///
+    /// Entries naming another subvolume are left out, as the read path does,
+    /// since this writer does not cross into one.
+    pub fn read_dir(&mut self, dir: u64, from: u64) -> Result<Vec<DirRecord>> {
+        let start = BtrfsKey::new(dir, DIR_INDEX_KEY, from);
+        let end = BtrfsKey::new(dir, DIR_INDEX_KEY, u64::MAX);
+        let mut out = Vec::new();
+        for (key, data) in self.range(FS_TREE, &start, &end)? {
+            let entry = DirItemIter::new(&data, DIR_INDEX_KEY)
+                .next()
+                .transpose()?
+                .ok_or(Error::Inconsistent("empty DIR_INDEX item"))?;
+            if entry.location.item_type != INODE_ITEM_KEY {
+                continue;
+            }
+            out.push((
+                key.offset,
+                entry.location.objectid,
+                entry.kind,
+                entry.name.to_vec(),
+            ));
+        }
+        Ok(out)
+    }
+
+    /// Whether directory `ino` holds no entries. A directory's size is the
+    /// sum of its entries' names, twice over, so an empty one has size zero.
+    pub fn dir_is_empty(&mut self, ino: u64) -> Result<bool> {
+        let item = self.require_inode(ino)?;
+        if !item.is_dir() {
+            return Err(Error::NotDir);
+        }
+        Ok(item.size == 0)
+    }
+
+    /// The volume's size and what is allocated of it, for `statfs`.
+    pub fn capacity(&self) -> (u64, u64) {
+        (self.geometry.device_size, self.space.used())
     }
 
     /// The inode numbers orphan items name: files whose last name went while

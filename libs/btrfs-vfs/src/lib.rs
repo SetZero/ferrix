@@ -91,6 +91,7 @@ use ferrix_vfs::{
 };
 
 mod cache;
+pub mod rw;
 
 use cache::{Cached, NodeCache};
 
@@ -105,14 +106,14 @@ pub const MAX_CHUNKS: usize = 4096;
 const POOLED: usize = 4;
 
 /// The longest symlink target Linux will store: `PATH_MAX` less its NUL.
-const MAX_LINK: u64 = 4095;
+pub(crate) const MAX_LINK: u64 = 4095;
 
 /// `f_type` for btrfs, which programs compare against to learn what they are
 /// running on.
 pub const BTRFS_SUPER_MAGIC: u64 = 0x9123_683E;
 
 /// The longest name a btrfs directory entry may have.
-const NAME_MAX: u64 = 255;
+pub(crate) const NAME_MAX: u64 = 255;
 
 /// What a mount reads through: a [`Device`] handle that can be cloned for
 /// each operation and shared across threads.
@@ -647,7 +648,7 @@ impl<D: BlockHandle> Inode for Node<D> {
 // ---------------------------------------------------------------------------
 
 /// What `stat` reports for an `INODE_ITEM`.
-fn metadata(ino: u64, item: &InodeItem, block_size: u32) -> Result<Metadata> {
+pub(crate) fn metadata(ino: u64, item: &InodeItem, block_size: u32) -> Result<Metadata> {
     let kind = FileType::from_mode(item.mode).ok_or(Errno::EIO)?;
     Ok(Metadata {
         ino,
@@ -676,7 +677,7 @@ fn time(stamp: items::Timespec) -> Timespec {
 }
 
 /// The file type a directory entry records.
-fn entry_kind(kind: u8) -> Option<FileType> {
+pub(crate) fn entry_kind(kind: u8) -> Option<FileType> {
     match kind {
         items::FT_REG_FILE => Some(FileType::Regular),
         items::FT_DIR => Some(FileType::Directory),
@@ -700,7 +701,7 @@ const fn errno(error: BtrfsError) -> Errno {
 /// The error a mount reports: `EINVAL` for a device that is not a volume this
 /// reader accepts, as Linux's `mount` does, and `EIO` for one that is but
 /// cannot be read.
-const fn mount_errno(error: BtrfsError) -> Errno {
+pub(crate) const fn mount_errno(error: BtrfsError) -> Errno {
     match error {
         BtrfsError::BadMagic
         | BtrfsError::UnsupportedChecksum(_)

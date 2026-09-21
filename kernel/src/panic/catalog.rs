@@ -784,6 +784,32 @@ pub(crate) static STAGE11_MOUNT: Explanation = Explanation {
           xtask/src/btrfs_disk.rs; docs/ROADMAP.md stage 11",
 };
 
+/// For `check_btrfs_write` in `main.rs`, when `fs::btrfs_write_check::run`
+/// fails.
+pub(crate) static STAGE12_WRITE: Explanation = Explanation {
+    code: "FX-1201",
+    title: "a btrfs volume Ferrix wrote did not read back as it was written",
+    meaning: "Stage 12's exit, the guest's half: xtask attaches a fresh copy of the `blank` \
+              fixture, an empty volume made by real mkfs.btrfs, as the third virtio-blk disk; \
+              `fs::btrfs_write_check::run` mounts it writable at /mnt-rw, builds a tree on it — \
+              files of every size, a hole, a link, a symlink, an overwrite, a truncation, a \
+              rename and an unlink — syncs, unmounts, mounts again and reads everything back. \
+              After the unmount nothing is cached, so every byte compared came off the disk.",
+    causes: &[
+        "The mount failed: the disk takes no writes, or the volume is one libs/btrfs-write will \
+         not maintain (a subvolume, quotas, an unreplayed log), which is EROFS.",
+        "A file read back short or with the wrong CRC-32C: the write path put an extent, a \
+         checksum or an inode's size somewhere the read path does not look, or the block ring's \
+         write copied the wrong bytes.",
+        "The volume would not mount the second time: the commit wrote a superblock or a tree \
+         the reader refuses, which is the write path's own consistency, not the disk's.",
+        "Something removed is still there, or something renamed is not: the directory items, \
+         the back-references or the orphan bookkeeping disagree.",
+    ],
+    see: "kernel/src/fs/btrfs_write_check.rs; kernel/src/fs/btrfs.rs; libs/btrfs-vfs rw; \
+          libs/btrfs-write; xtask/src/btrfs_disk.rs; docs/ROADMAP.md stage 12",
+};
+
 /// For `check_net` in `main.rs`, when the net core's self-check fails.
 pub(crate) static NET_CORE: Explanation = Explanation {
     code: "FX-1150",
@@ -1599,6 +1625,7 @@ pub(crate) static ALL: &[&Explanation] = &[
     &NET_CORE,
     &NET_RING,
     &NETLINK,
+    &STAGE12_WRITE,
     &UNHANDLED_PAGE_FAULT,
     &SYSTEM_CALL_TRAP,
     &ILLEGAL_INSTRUCTION,

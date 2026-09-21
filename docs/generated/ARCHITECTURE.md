@@ -100,7 +100,7 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixAssurance` | `11-assurance.sysml` | docs/RELIABILITY.md and docs/ASSEMBLY.md: the quality gates, what each one verifies, and what the tests can actually reach. All of it runs in CI today except the two debts the roadmap states. |
 | `FerrixViews` | `12-views.sysml` | How to read the one model as two: what runs today, and what the roadmap still owes. The filters key on the lifecycle keywords every element carries. |
 
-13 files, 16 packages, 1504 elements, 166 relations. Model digest `bf45d5288e72fe01`.
+13 files, 16 packages, 1504 elements, 166 relations. Model digest `7f0922cafaf3c2c7`.
 
 | Maturity | Elements | Meaning |
 | --- | ---: | --- |
@@ -2453,7 +2453,7 @@ docs/ARCHITECTURE.md §9. libs/ is host-testable by design and is the only code 
 | `libs/objects` | `#implemented` | 9 | `forbid` | 24 | The handle table and the channel message queue, generic over what a handle names. |
 | `libs/btrfs` | `#writtenAhead` | 11 | `forbid` | 158 | The btrfs read path, allocating nothing: parsing, mount bootstrap, lookup, readdir and read, and zlib, LZO and zstd decoders. |
 | `libs/btrfs-write` | `#inProgress` | 12 | `forbid` | 21 | The btrfs write path: copy-on-write trees, delayed refs, extent and free-space-tree bookkeeping, chunk allocation, the commit with its flush before the superblock, and file operations. |
-| `libs/btrfs-vfs` | `#writtenAhead` | 11 | `forbid` | 15 | btrfs mounted into the VFS: FileSystem and Inode over the read path, read-only, holding no lock across I/O. |
+| `libs/btrfs-vfs` | `#writtenAhead` | 11 | `forbid` | 32 | btrfs mounted into the VFS: FileSystem and Inode over the read path, read-only and holding no lock across I/O, and a writable mount over libs/btrfs-write behind one sleeping lock, whose writes become extents at the commit. |
 | `libs/block` | `#writtenAhead` | 11 | `forbid` | 36 | The block core's request queue: merging, flush and FUA barriers no request crosses, deadline scheduling. |
 | `libs/seccomp` | `#planned` | 13 | `forbid` | — | The classic-BPF interpreter as a pure function over bytes. |
 | `boot` | `#implemented` | — | allowed | — |  |

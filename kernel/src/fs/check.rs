@@ -749,7 +749,7 @@ fn check_a_pipe_carries_bytes_and_then_ends(
         "a pipe could be sought",
     )?;
     refuses(
-        fsctl::sys_fsync(process, writer),
+        fsctl::sys_fsync(process, writer, false),
         Errno::EINVAL,
         "fsync on a pipe was not EINVAL",
     )?;
@@ -1072,7 +1072,7 @@ fn check_truncate_and_fallocate_grow(process: &Process, page: u64) -> Result<(),
         "truncate of a directory was not EISDIR",
     )?;
     answers(
-        fsctl::sys_fsync(process, made),
+        fsctl::sys_fsync(process, made, false),
         0,
         "fsync of a file was refused",
     )?;

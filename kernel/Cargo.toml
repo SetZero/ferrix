@@ -19,6 +19,7 @@ ferrix-block.workspace = true
 ferrix-bootinfo.workspace = true
 ferrix-btrfs.workspace = true
 ferrix-btrfs-vfs.workspace = true
+ferrix-btrfs-write.workspace = true
 ferrix-fdt.workspace = true
 ferrix-fbtext.workspace = true
 ferrix-frame.workspace = true

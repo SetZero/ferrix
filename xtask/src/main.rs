@@ -47,6 +47,7 @@
 )]
 
 mod args;
+mod btrfs_check;
 mod btrfs_disk;
 mod busybox;
 mod cargo;
@@ -135,6 +136,7 @@ COMMANDS:
     run-compositor  Boot compositor/hyprix as init with a virtio-gpu, on a screen this host can show
     remote-desktop  Send this tree to another machine, boot the desktop there and watch it here over VNC
     wallpapers    Convert pictures for run-compositor's desktop and keep them on this machine
+    test-btrfs    Boot, write a tree on the blank btrfs disk, and require host btrfs check to find nothing
     test-boot     Boot the image under QEMU and assert the kernel came up
     test-shell    Boot with a static busybox built in and require its script's output
     test-vfs      Boot with busybox in the initramfs and require stage 8's exit programs and applets
@@ -290,6 +292,7 @@ fn run() -> Result<()> {
             };
             qemu::run(arch, &image, &args)
         }
+        "test-btrfs" => btrfs_check::test_btrfs(&args, |arch| build_image(arch, &args)),
         "test-boot" => {
             for arch in args.arches()? {
                 let (image, kernel) = build_image(arch, &args)?;

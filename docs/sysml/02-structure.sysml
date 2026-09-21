@@ -1120,16 +1120,19 @@ package FerrixStructure {
             doc /* The btrfs write path: copy-on-write trees, delayed refs,
                  * extent and free-space-tree bookkeeping, chunk allocation,
                  * the commit with its flush before the superblock, and file
-                 * operations. Host btrfs check finds its output clean; not yet
-                 * mounted by the kernel. */
+                 * operations. Host btrfs check finds its output clean, both
+                 * from host tests and from what the kernel writes in the boot
+                 * check. The log tree and its replay are still to do. */
         }
         #writtenAhead part btrfsVfs : LibraryCrate {
             attribute :>> path = "libs/btrfs-vfs";
             attribute :>> forbidsUnsafe = true;
-            attribute :>> hostTests = 15;
+            attribute :>> hostTests = 32;
             @stage { number = 11; }
             doc /* btrfs mounted into the VFS: FileSystem and Inode over the
-                 * read path, read-only, holding no lock across I/O. */
+                 * read path, read-only and holding no lock across I/O, and a
+                 * writable mount over libs/btrfs-write behind one sleeping
+                 * lock, whose writes become extents at the commit. */
         }
         #writtenAhead part blockQueue : LibraryCrate {
             attribute :>> path = "libs/block";

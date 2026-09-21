@@ -30,6 +30,8 @@ use core::fmt;
 use ferrix_btrfs::BtrfsError;
 use ferrix_btrfs::volume::{Device, ReadKind};
 use ferrix_btrfs_vfs::Btrfs;
+use ferrix_btrfs_vfs::rw::RwBtrfs;
+use ferrix_btrfs_write::{Error as WriteError, WriteDevice};
 use ferrix_vfs::{Errno, FileSystem};
 
 use super::block::BlockDevice;
@@ -110,6 +112,43 @@ impl Device for Disk {
     }
 }
 
+impl WriteDevice for Disk {
+    /// Write `data` at `physical`.
+    ///
+    /// The write path writes whole nodes, whole sectors of data and whole
+    /// superblocks, so on a disk whose sectors are no larger than the
+    /// volume's this is always sector-aligned. One that is not is done as a
+    /// read, a patch and a write of the sectors it touches, which keeps the
+    /// trait's contract on any sector size; nothing in a commit takes that
+    /// path.
+    fn write_at(&mut self, physical: u64, data: &[u8]) -> Result<(), WriteError> {
+        let failed = WriteError::DeviceWrite { physical };
+        if data.is_empty() {
+            return Ok(());
+        }
+        let len = data.len() as u64;
+        let end = physical.checked_add(len).ok_or(failed)?;
+        let first = physical / self.sector;
+        if physical.is_multiple_of(self.sector) && len.is_multiple_of(self.sector) {
+            return self.device.write(first, data).map_err(|_| failed);
+        }
+        let sectors = end.div_ceil(self.sector).saturating_sub(first);
+        let bytes = usize::try_from(sectors.saturating_mul(self.sector)).map_err(|_| failed)?;
+        let mut bounce = vec![0u8; bytes];
+        self.device.read(first, &mut bounce).map_err(|_| failed)?;
+        let skip = usize::try_from(physical - first * self.sector).map_err(|_| failed)?;
+        let patch = bounce.get_mut(skip..skip + data.len()).ok_or(failed)?;
+        patch.copy_from_slice(data);
+        self.device.write(first, &bounce).map_err(|_| failed)
+    }
+
+    /// Everything written is durable when this returns: the driver's flush,
+    /// which the commit puts between its nodes and its superblock.
+    fn flush(&mut self) -> Result<(), WriteError> {
+        self.device.flush().map_err(|_| WriteError::Flush)
+    }
+}
+
 /// Mount the btrfs volume on the registered disk numbered `rdev`, read-only.
 ///
 /// The mount reports `rdev` as every inode's `st_dev`, as Linux reports the
@@ -126,5 +165,33 @@ pub(crate) fn mount(rdev: u64) -> Result<Arc<dyn FileSystem>, Errno> {
     let device = devfs::block_device(rdev).ok_or(Errno::ENXIO)?;
     let disk = Disk::new(device)?;
     let volume = Btrfs::mount(disk, rdev, Arc::new(VmoStorage))?;
+    Ok(volume as Arc<dyn FileSystem>)
+}
+
+/// Mount the btrfs volume on the registered disk numbered `rdev` for writing.
+///
+/// Stage 12's mount. The volume must be one `ferrix-btrfs-write` maintains —
+/// a single device, no subvolume but the top-level one, no quotas, no
+/// unreplayed log — and the disk must take writes; everything else is
+/// `EROFS`, and mounting read-only still works for all of them.
+///
+/// # Errors
+///
+/// `ENXIO` for a number no registered disk has, `EROFS` for a disk or a
+/// volume that cannot be written, `EINVAL` for a disk that holds no btrfs
+/// volume, and `EIO` for one that cannot be read.
+pub(crate) fn mount_rw(rdev: u64) -> Result<Arc<dyn FileSystem>, Errno> {
+    let device = devfs::block_device(rdev).ok_or(Errno::ENXIO)?;
+    if device.read_only() {
+        return Err(Errno::EROFS);
+    }
+    let disk = Disk::new(device)?;
+    let volume = RwBtrfs::mount(
+        disk,
+        rdev,
+        Arc::new(VmoStorage),
+        super::clock(),
+        &crate::sync::SchedParker,
+    )?;
     Ok(volume as Arc<dyn FileSystem>)
 }
