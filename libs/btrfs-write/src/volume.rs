@@ -1,0 +1,447 @@
+//! A volume open for writing: its trees, its nodes, and copy-on-write.
+//!
+//! [`WriteVolume`] owns the device and everything the running transaction
+//! holds in memory. Its methods are split by concern across the crate's
+//! modules — tree edits in `tree`, the commit in `commit`, the mount in
+//! `open` — and this module holds the state and the one operation all of
+//! them share: getting a node, and getting a node this transaction may edit.
+
+use alloc::collections::{BTreeMap, BTreeSet};
+use alloc::vec;
+use alloc::vec::Vec;
+
+use ferrix_btrfs::BtrfsError;
+use ferrix_btrfs::items::CHUNK_TREE_OBJECTID;
+use ferrix_btrfs::tree::{BtrfsKey, KeyPtr, Node};
+use ferrix_btrfs::volume::ReadKind;
+
+use crate::chunks::Chunks;
+use crate::extent::Backref;
+use crate::node::{Body, TreeNode};
+use crate::refs::DelayedRefs;
+use crate::space::{Kind, Space};
+use crate::{Error, Result, WriteDevice};
+
+/// A tree's id: its object id in the root tree, or 1 and 3 for the root and
+/// chunk trees, whose roots the superblock names.
+pub type TreeId = u64;
+
+/// Where a tree's root is, and what its top node must say about itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Root {
+    pub(crate) bytenr: u64,
+    pub(crate) level: u8,
+    pub(crate) generation: u64,
+}
+
+/// The volume's fixed geometry and identity.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Geometry {
+    pub(crate) nodesize: u32,
+    pub(crate) sectorsize: u32,
+    pub(crate) fsid: [u8; 16],
+    pub(crate) chunk_tree_uuid: [u8; 16],
+    pub(crate) devid: u64,
+    pub(crate) dev_uuid: [u8; 16],
+    pub(crate) device_size: u64,
+}
+
+/// How many clean nodes the cache keeps before it starts again. Clean nodes
+/// are only a cache of what is on disk, so dropping them costs reads, never
+/// correctness.
+const CLEAN_NODES: usize = 4096;
+
+/// Nodes of metadata kept free before every edit. One edit copies at most a
+/// root-to-leaf path and splits along it — sixteen nodes on the deepest tree
+/// btrfs allows — and the commit's own bookkeeping runs as many small edits,
+/// each topping the reserve up again.
+const EDIT_RESERVE: u64 = 64;
+
+/// A btrfs volume opened for writing.
+///
+/// Edits go into an open transaction held in memory; [`WriteVolume::commit`]
+/// makes them durable, and until then the volume on disk is exactly what the
+/// last commit left.
+#[derive(Debug)]
+pub struct WriteVolume<D> {
+    pub(crate) device: D,
+    pub(crate) geometry: Geometry,
+    pub(crate) chunks: Chunks,
+    /// The primary superblock as last committed.
+    pub(crate) superblock: Vec<u8>,
+    /// Generation of the last commit.
+    pub(crate) committed: u64,
+    /// The running transaction's id: one more than `committed`.
+    pub(crate) transid: u64,
+    /// Nodes this transaction wrote or copied, by logical address. Their
+    /// generation is `transid`, and they are edited in place.
+    pub(crate) dirty: BTreeMap<u64, TreeNode>,
+    /// Nodes read from disk and not changed.
+    pub(crate) clean: BTreeMap<u64, TreeNode>,
+    pub(crate) roots: BTreeMap<TreeId, Root>,
+    /// Trees whose root moved since their `ROOT_ITEM` was written.
+    pub(crate) stale_roots: BTreeSet<TreeId>,
+    pub(crate) refs: DelayedRefs,
+    pub(crate) space: Space,
+    /// Whether the chunk tree or the system chunk array changed.
+    pub(crate) chunks_changed: bool,
+    /// Set while a chunk is being recorded, so its edits do not try to make
+    /// another.
+    pub(crate) growing: bool,
+    /// Set by a failed edit; see [`crate::Error::Aborted`].
+    pub(crate) aborted: bool,
+    /// Edits that have succeeded, so an operation can tell whether it failed
+    /// before changing anything.
+    pub(crate) edits: u64,
+}
+
+impl<D: WriteDevice> WriteVolume<D> {
+    /// Size of every tree node.
+    #[must_use]
+    pub const fn nodesize(&self) -> u32 {
+        self.geometry.nodesize
+    }
+
+    /// Size of a data sector.
+    #[must_use]
+    pub const fn sectorsize(&self) -> u32 {
+        self.geometry.sectorsize
+    }
+
+    /// Generation of the last commit.
+    #[must_use]
+    pub const fn generation(&self) -> u64 {
+        self.committed
+    }
+
+    /// Id of the transaction edits are going into now.
+    #[must_use]
+    pub const fn transid(&self) -> u64 {
+        self.transid
+    }
+
+    /// Whether the transaction holds anything to commit.
+    #[must_use]
+    pub fn is_dirty(&self) -> bool {
+        !self.dirty.is_empty() || !self.refs.is_empty()
+    }
+
+    /// The device, for a caller that must reach it directly.
+    pub fn device_mut(&mut self) -> &mut D {
+        &mut self.device
+    }
+
+    /// Give the device back, dropping everything uncommitted.
+    pub fn into_device(self) -> D {
+        self.device
+    }
+
+    /// Refuse to go on after a failure that left the transaction half-done.
+    pub(crate) const fn check_open(&self) -> Result<()> {
+        if self.aborted {
+            Err(Error::Aborted)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Run an edit, marking the transaction aborted if it fails part-way.
+    ///
+    /// Every edit starts here, between complete edits, which is the one
+    /// place a chunk can safely be made; so this is where metadata space is
+    /// topped up.
+    pub(crate) fn guarded<T>(&mut self, edit: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
+        self.check_open()?;
+        let result = self.ensure_space(EDIT_RESERVE).and_then(|()| edit(self));
+        match result {
+            Ok(_) => self.edits = self.edits.wrapping_add(1),
+            // An answer about the key, given before anything changed: the
+            // path was copied, which keeps the tree whole, and nothing else.
+            Err(Error::Exists | Error::NotFound) => {}
+            Err(_) => self.aborted = true,
+        }
+        result
+    }
+
+    /// Run an operation made of several edits, marking the transaction
+    /// aborted if it fails after any of them succeeded: a half-made name, or
+    /// half-written file, is not something to commit.
+    pub(crate) fn operation<T>(&mut self, op: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
+        self.check_open()?;
+        let before = self.edits;
+        let result = op(self);
+        if result.is_err() && self.edits != before {
+            self.aborted = true;
+        }
+        result
+    }
+
+    /// Make sure metadata and system block groups have room for `nodes` new
+    /// nodes, making a chunk if not. Does nothing while a chunk is being
+    /// recorded, whose own edits the reserve was taken for.
+    pub(crate) fn ensure_space(&mut self, nodes: u64) -> Result<()> {
+        if self.growing {
+            return Ok(());
+        }
+        let want = nodes.saturating_mul(u64::from(self.geometry.nodesize));
+        for kind in [Kind::System, Kind::Metadata] {
+            if self.space.free_bytes(kind) < want {
+                self.growing = true;
+                let made = self.allocate_chunk(kind);
+                self.growing = false;
+                made?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Allocate a data extent of up to `want` bytes and at least `min`,
+    /// making a data chunk if no group has room. Returns `(start, len)`.
+    pub fn alloc_data(&mut self, want: u64, min: u64) -> Result<(u64, u64)> {
+        let sector = u64::from(self.geometry.sectorsize);
+        self.guarded(|volume| {
+            let extent = match volume.space.alloc_data(want, min, sector) {
+                Err(Error::NoSpace) => {
+                    volume.growing = true;
+                    let made = volume.allocate_chunk(Kind::Data);
+                    volume.growing = false;
+                    made?;
+                    volume.space.alloc_data(want, min, sector)?
+                }
+                other => other?,
+            };
+            volume.refs.touch(extent.0, extent.1, None)?;
+            Ok(extent)
+        })
+    }
+
+    pub(crate) fn root(&self, tree: TreeId) -> Result<Root> {
+        self.roots
+            .get(&tree)
+            .copied()
+            .ok_or(Error::Volume(BtrfsError::MissingRoot(tree)))
+    }
+
+    pub(crate) fn set_root(&mut self, tree: TreeId, root: Root) {
+        let _ = self.roots.insert(tree, root);
+        let _ = self.stale_roots.insert(tree);
+    }
+
+    /// Make sure the node at `logical` is in memory, checking what the
+    /// pointer that led to it promised: its level and its generation.
+    pub(crate) fn load(&mut self, logical: u64, level: u8, generation: u64) -> Result<()> {
+        let held = self
+            .dirty
+            .get(&logical)
+            .or_else(|| self.clean.get(&logical));
+        if let Some(node) = held {
+            return if node.level == level && node.generation == generation {
+                Ok(())
+            } else {
+                Err(Error::Volume(BtrfsError::BadTree { logical }))
+            };
+        }
+        let node = self.read_node(logical)?;
+        if node.level != level || node.generation != generation {
+            return Err(Error::Volume(BtrfsError::BadTree { logical }));
+        }
+        if self.clean.len() >= CLEAN_NODES {
+            self.clean.clear();
+        }
+        let _ = self.clean.insert(logical, node);
+        Ok(())
+    }
+
+    /// Read and check the node at `logical`, from its first copy that reads
+    /// back whole: a DUP node whose first copy is damaged is read from its
+    /// second.
+    pub(crate) fn read_node(&mut self, logical: u64) -> Result<TreeNode> {
+        let size = self.geometry.nodesize as usize;
+        let mut buf = vec![0u8; size];
+        let mut last = Error::Volume(BtrfsError::NotMapped(logical));
+        for physical in self
+            .chunks
+            .copies(logical, u64::from(self.geometry.nodesize))?
+        {
+            let checked = self
+                .device
+                .read_at(physical, &mut buf, ReadKind::Metadata)
+                .and_then(|()| Node::parse(&buf, logical));
+            match checked {
+                Ok(node) if node.header().fsid == self.geometry.fsid => {
+                    return TreeNode::from_node(&node);
+                }
+                Ok(_) => last = Error::Volume(BtrfsError::BadTree { logical }),
+                Err(error) => last = Error::Volume(error),
+            }
+        }
+        Err(last)
+    }
+
+    /// The node at `logical`, which must have been loaded.
+    pub(crate) fn node(&self, logical: u64) -> Result<&TreeNode> {
+        self.dirty
+            .get(&logical)
+            .or_else(|| self.clean.get(&logical))
+            .ok_or(Error::Inconsistent("node used before it was loaded"))
+    }
+
+    /// The node at `logical`, which this transaction must already own.
+    pub(crate) fn node_mut(&mut self, logical: u64) -> Result<&mut TreeNode> {
+        self.dirty.get_mut(&logical).ok_or(Error::Inconsistent(
+            "edited a node the transaction does not own",
+        ))
+    }
+
+    /// The child pointer at `slot` of the internal node at `logical`.
+    pub(crate) fn child(&self, logical: u64, slot: usize) -> Result<KeyPtr> {
+        match &self.node(logical)?.body {
+            Body::Internal(ptrs) => ptrs
+                .get(slot)
+                .copied()
+                .ok_or(Error::Inconsistent("child slot out of range")),
+            Body::Leaf(_) => Err(Error::Inconsistent("child of a leaf")),
+        }
+    }
+
+    /// The kind of block group a tree's blocks come from.
+    const fn kind_for(tree: TreeId) -> Kind {
+        if tree == CHUNK_TREE_OBJECTID {
+            Kind::System
+        } else {
+            Kind::Metadata
+        }
+    }
+
+    /// Allocate a block for a new node of `tree` at `level` and queue the
+    /// owner's reference to it.
+    ///
+    /// Never makes a chunk: this runs in the middle of an edit, with a path
+    /// held and perhaps an overfull node in memory, and recording a chunk is
+    /// itself a series of edits that could reach the same nodes. Space is
+    /// reserved before each edit instead, by [`Self::ensure_space`].
+    pub(crate) fn alloc_node(&mut self, tree: TreeId, level: u8) -> Result<u64> {
+        let nodesize = self.geometry.nodesize;
+        let at = self
+            .space
+            .alloc_tree_block(Self::kind_for(tree), nodesize)?;
+        self.refs.add(
+            at,
+            u64::from(nodesize),
+            Some(level),
+            Backref::Tree { root: tree },
+            1,
+        )?;
+        Ok(at)
+    }
+
+    /// A new node of `tree` holding `body`, owned by this transaction.
+    pub(crate) fn new_node(&mut self, tree: TreeId, level: u8, body: Body) -> Result<u64> {
+        let at = self.alloc_node(tree, level)?;
+        let node = TreeNode {
+            bytenr: at,
+            generation: self.transid,
+            owner: tree,
+            level,
+            body,
+        };
+        let _ = self.dirty.insert(at, node);
+        Ok(at)
+    }
+
+    /// Drop a node this transaction owns from `tree`: its reference goes, and
+    /// with it the block.
+    pub(crate) fn free_node(&mut self, tree: TreeId, logical: u64) -> Result<()> {
+        let node = self.dirty.remove(&logical).ok_or(Error::Inconsistent(
+            "freed a node the transaction does not own",
+        ))?;
+        self.refs.add(
+            logical,
+            u64::from(self.geometry.nodesize),
+            Some(node.level),
+            Backref::Tree { root: tree },
+            -1,
+        )
+    }
+
+    /// Copy the committed node at `logical` so this transaction can edit it,
+    /// returning the copy's address. A node the transaction already owns is
+    /// its own copy.
+    pub(crate) fn cow(
+        &mut self,
+        tree: TreeId,
+        logical: u64,
+        level: u8,
+        generation: u64,
+    ) -> Result<u64> {
+        if self.dirty.contains_key(&logical) {
+            return Ok(logical);
+        }
+        self.load(logical, level, generation)?;
+        let mut node = self
+            .clean
+            .remove(&logical)
+            .ok_or(Error::Inconsistent("copied a node that was not loaded"))?;
+        if node.owner != tree {
+            return Err(Error::Unsupported(crate::Unsupported::SharedBlock));
+        }
+        let at = self.alloc_node(tree, level)?;
+        self.refs.add(
+            logical,
+            u64::from(self.geometry.nodesize),
+            Some(level),
+            Backref::Tree { root: tree },
+            -1,
+        )?;
+        node.bytenr = at;
+        node.generation = self.transid;
+        let _ = self.dirty.insert(at, node);
+        Ok(at)
+    }
+
+    /// Make `tree`'s root node one this transaction owns.
+    pub(crate) fn cow_root(&mut self, tree: TreeId) -> Result<Root> {
+        let root = self.root(tree)?;
+        let at = self.cow(tree, root.bytenr, root.level, root.generation)?;
+        if at != root.bytenr {
+            let moved = Root {
+                bytenr: at,
+                level: root.level,
+                generation: self.transid,
+            };
+            self.set_root(tree, moved);
+            return Ok(moved);
+        }
+        Ok(root)
+    }
+
+    /// Make the child at `slot` of `parent` — a node the transaction owns —
+    /// one it owns too, and point the parent at the copy.
+    pub(crate) fn cow_child(
+        &mut self,
+        tree: TreeId,
+        parent: u64,
+        slot: usize,
+        level: u8,
+    ) -> Result<u64> {
+        let ptr = self.child(parent, slot)?;
+        let at = self.cow(tree, ptr.blockptr, level, ptr.generation)?;
+        if at != ptr.blockptr {
+            let transid = self.transid;
+            if let Body::Internal(ptrs) = &mut self.node_mut(parent)?.body
+                && let Some(entry) = ptrs.get_mut(slot)
+            {
+                entry.blockptr = at;
+                entry.generation = transid;
+            }
+        }
+        Ok(at)
+    }
+
+    /// The first key of the node at `logical`.
+    pub(crate) fn first_key(&self, logical: u64) -> Result<BtrfsKey> {
+        self.node(logical)?
+            .first_key()
+            .ok_or(Error::Inconsistent("empty node below the root"))
+    }
+}

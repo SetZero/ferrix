@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "digest": "729b628948a1989300cabf4a97323bc1f911cf1964c7d7268628a0534228ffdd",
+  "digest": "bf45d5288e72fe01d801c584a1a36f4a23ef02554a52fcc14ea84fd7de8e02dc",
   "files": [
     {
       "path": "docs/sysml/00-lifecycle.sysml",
@@ -57,12 +57,12 @@
   ],
   "summary": {
     "packages": 16,
-    "elements": 1500,
+    "elements": 1504,
     "maturity": {
       "implemented": 140,
-      "inProgress": 10,
+      "inProgress": 13,
       "writtenAhead": 15,
-      "planned": 97
+      "planned": 95
     },
     "deferred": 22,
     "relations": 166,
@@ -5020,13 +5020,13 @@
               ]
             },
             {
-              "name": "btrfsVfs",
-              "qualifiedName": "FerrixStructure::Workspace::btrfsVfs",
+              "name": "btrfsWrite",
+              "qualifiedName": "FerrixStructure::Workspace::btrfsWrite",
               "kind": "part",
               "type": "LibraryCrate",
-              "maturity": "writtenAhead",
-              "stage": 11,
-              "doc": "btrfs mounted into the VFS: FileSystem and Inode over the read path, read-only, holding no lock across I/O.",
+              "maturity": "inProgress",
+              "stage": 12,
+              "doc": "The btrfs write path: copy-on-write trees, delayed refs, extent and free-space-tree bookkeeping, chunk allocation, the commit with its flush before the superblock, and file operations. Host btrfs check finds its output clean; not yet mounted by the kernel.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
                 "line": 1115
@@ -5034,10 +5034,10 @@
               "children": [
                 {
                   "name": "",
-                  "qualifiedName": "FerrixStructure::Workspace::btrfsVfs",
+                  "qualifiedName": "FerrixStructure::Workspace::btrfsWrite",
                   "kind": "attribute",
                   "redefines": "path",
-                  "value": "\"libs/btrfs-vfs\"",
+                  "value": "\"libs/btrfs-write\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
                     "line": 1116
@@ -5045,7 +5045,7 @@
                 },
                 {
                   "name": "",
-                  "qualifiedName": "FerrixStructure::Workspace::btrfsVfs",
+                  "qualifiedName": "FerrixStructure::Workspace::btrfsWrite",
                   "kind": "attribute",
                   "redefines": "forbidsUnsafe",
                   "value": "true",
@@ -5056,13 +5056,61 @@
                 },
                 {
                   "name": "",
+                  "qualifiedName": "FerrixStructure::Workspace::btrfsWrite",
+                  "kind": "attribute",
+                  "redefines": "hostTests",
+                  "value": "21",
+                  "source": {
+                    "file": "docs/sysml/02-structure.sysml",
+                    "line": 1118
+                  }
+                }
+              ]
+            },
+            {
+              "name": "btrfsVfs",
+              "qualifiedName": "FerrixStructure::Workspace::btrfsVfs",
+              "kind": "part",
+              "type": "LibraryCrate",
+              "maturity": "writtenAhead",
+              "stage": 11,
+              "doc": "btrfs mounted into the VFS: FileSystem and Inode over the read path, read-only, holding no lock across I/O.",
+              "source": {
+                "file": "docs/sysml/02-structure.sysml",
+                "line": 1126
+              },
+              "children": [
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixStructure::Workspace::btrfsVfs",
+                  "kind": "attribute",
+                  "redefines": "path",
+                  "value": "\"libs/btrfs-vfs\"",
+                  "source": {
+                    "file": "docs/sysml/02-structure.sysml",
+                    "line": 1127
+                  }
+                },
+                {
+                  "name": "",
+                  "qualifiedName": "FerrixStructure::Workspace::btrfsVfs",
+                  "kind": "attribute",
+                  "redefines": "forbidsUnsafe",
+                  "value": "true",
+                  "source": {
+                    "file": "docs/sysml/02-structure.sysml",
+                    "line": 1128
+                  }
+                },
+                {
+                  "name": "",
                   "qualifiedName": "FerrixStructure::Workspace::btrfsVfs",
                   "kind": "attribute",
                   "redefines": "hostTests",
                   "value": "15",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 1118
+                    "line": 1129
                   }
                 }
               ]
@@ -5077,7 +5125,7 @@
               "doc": "The block core's request queue: merging, flush and FUA barriers no request crosses, deadline scheduling. Checked against a model by the block_queue fuzz target.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 1123
+                "line": 1134
               },
               "children": [
                 {
@@ -5088,7 +5136,7 @@
                   "value": "\"libs/block\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 1124
+                    "line": 1135
                   }
                 },
                 {
@@ -5099,7 +5147,7 @@
                   "value": "true",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 1125
+                    "line": 1136
                   }
                 },
                 {
@@ -5110,7 +5158,7 @@
                   "value": "36",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 1126
+                    "line": 1137
                   }
                 }
               ]
@@ -5125,7 +5173,7 @@
               "doc": "The classic-BPF interpreter as a pure function over bytes.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 1134
+                "line": 1145
               },
               "children": [
                 {
@@ -5136,7 +5184,7 @@
                   "value": "\"libs/seccomp\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 1135
+                    "line": 1146
                   }
                 },
                 {
@@ -5147,7 +5195,7 @@
                   "value": "true",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 1136
+                    "line": 1147
                   }
                 }
               ]
@@ -5160,7 +5208,7 @@
               "maturity": "implemented",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 1141
+                "line": 1152
               },
               "children": [
                 {
@@ -5171,7 +5219,7 @@
                   "value": "\"boot\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 1142
+                    "line": 1153
                   }
                 },
                 {
@@ -5182,7 +5230,7 @@
                   "value": "CrateKind::Loader",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 1143
+                    "line": 1154
                   }
                 },
                 {
@@ -5193,7 +5241,7 @@
                   "value": "false",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 1144
+                    "line": 1155
                   }
                 },
                 {
@@ -5204,7 +5252,7 @@
                   "value": "false",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 1145
+                    "line": 1156
                   }
                 }
               ]
@@ -5217,7 +5265,7 @@
               "maturity": "implemented",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 1147
+                "line": 1158
               },
               "children": [
                 {
@@ -5228,7 +5276,7 @@
                   "value": "\"kernel\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 1148
+                    "line": 1159
                   }
                 },
                 {
@@ -5239,7 +5287,7 @@
                   "value": "CrateKind::Kernel",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 1149
+                    "line": 1160
                   }
                 },
                 {
@@ -5250,7 +5298,7 @@
                   "value": "false",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 1150
+                    "line": 1161
                   }
                 },
                 {
@@ -5261,7 +5309,7 @@
                   "value": "false",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 1151
+                    "line": 1162
                   }
                 }
               ]
@@ -5275,7 +5323,7 @@
               "doc": "Cross-compiles both halves, writes the FAT32 image with its own writer, converts the ARMv7-A loader ELF to PE32, drives QEMU. Nothing from crates.io.",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 1153
+                "line": 1164
               },
               "children": [
                 {
@@ -5286,7 +5334,7 @@
                   "value": "\"xtask\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 1154
+                    "line": 1165
                   }
                 },
                 {
@@ -5297,7 +5345,7 @@
                   "value": "CrateKind::HostTool",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 1155
+                    "line": 1166
                   }
                 },
                 {
@@ -5308,7 +5356,7 @@
                   "value": "true",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 1156
+                    "line": 1167
                   }
                 },
                 {
@@ -5319,7 +5367,7 @@
                   "value": "true",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 1157
+                    "line": 1168
                   }
                 },
                 {
@@ -5330,7 +5378,7 @@
                   "value": "41",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 1158
+                    "line": 1169
                   }
                 },
                 {
@@ -5342,7 +5390,7 @@
                   "value": "(\"build\", \"run\", \"test-boot\", \"check\", \"flash\", \"watch-serial\", \"deploy\")",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 1162
+                    "line": 1173
                   }
                 }
               ]
@@ -5355,7 +5403,7 @@
               "maturity": "implemented",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 1164
+                "line": 1175
               },
               "children": [
                 {
@@ -5366,7 +5414,7 @@
                   "value": "\"fuzz\"",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 1165
+                    "line": 1176
                   }
                 },
                 {
@@ -5377,7 +5425,7 @@
                   "value": "CrateKind::FuzzTargets",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 1166
+                    "line": 1177
                   }
                 },
                 {
@@ -5388,7 +5436,7 @@
                   "value": "true",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 1167
+                    "line": 1178
                   }
                 },
                 {
@@ -5399,7 +5447,7 @@
                   "value": "false",
                   "source": {
                     "file": "docs/sysml/02-structure.sysml",
-                    "line": 1168
+                    "line": 1179
                   }
                 }
               ]
@@ -5413,7 +5461,7 @@
               "value": "(\"x86_64-unknown-none\", \"aarch64-unknown-none-softfloat\", \"armv7a-none-eabi\")",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 1178
+                "line": 1189
               }
             },
             {
@@ -5425,7 +5473,7 @@
               "value": "(\"x86_64-unknown-uefi\", \"aarch64-unknown-uefi\", \"armv7-unknown-linux-musleabi\")",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 1179
+                "line": 1190
               }
             },
             {
@@ -5436,7 +5484,7 @@
               "value": "\"1.97.1\"",
               "source": {
                 "file": "docs/sysml/02-structure.sysml",
-                "line": 1180
+                "line": 1191
               }
             }
           ]
@@ -14529,9 +14577,9 @@
           "qualifiedName": "FerrixStorage::BtrfsWrite",
           "kind": "part",
           "definition": true,
-          "maturity": "planned",
+          "maturity": "inProgress",
           "stage": 12,
-          "doc": "Stage B: copy-on-write allocation through the extent tree, delayed refs, transaction commit against both superblock copies with the right flush/FUA ordering, the free-space tree, the log tree and its replay.",
+          "doc": "Stage B: copy-on-write allocation through the extent tree, delayed refs, transaction commit against both superblock copies with the right flush/FUA ordering, the free-space tree, the log tree and its replay.\n\nallocateCow and commitTransaction are in libs/btrfs-write, host-tested and clean under host btrfs check; replayLog and the kernel mount are still to do.",
           "source": {
             "file": "docs/sysml/09-storage.sysml",
             "line": 152
@@ -14543,7 +14591,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/09-storage.sysml",
-                "line": 158
+                "line": 162
               }
             },
             {
@@ -14552,7 +14600,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/09-storage.sysml",
-                "line": 159
+                "line": 163
               }
             },
             {
@@ -14561,7 +14609,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/09-storage.sysml",
-                "line": 160
+                "line": 164
               }
             }
           ]
@@ -14575,7 +14623,7 @@
           "doc": "Stage C: subvolumes and snapshots, then the rest.",
           "source": {
             "file": "docs/sysml/09-storage.sysml",
-            "line": 163
+            "line": 167
           }
         },
         {
@@ -14586,7 +14634,7 @@
           "maturity": "planned",
           "source": {
             "file": "docs/sysml/09-storage.sysml",
-            "line": 167
+            "line": 171
           },
           "children": [
             {
@@ -14596,7 +14644,7 @@
               "type": "Tmpfs",
               "source": {
                 "file": "docs/sysml/09-storage.sysml",
-                "line": 168
+                "line": 172
               }
             },
             {
@@ -14606,7 +14654,7 @@
               "type": "Devfs",
               "source": {
                 "file": "docs/sysml/09-storage.sysml",
-                "line": 169
+                "line": 173
               }
             },
             {
@@ -14616,7 +14664,7 @@
               "type": "Procfs",
               "source": {
                 "file": "docs/sysml/09-storage.sysml",
-                "line": 170
+                "line": 174
               }
             },
             {
@@ -14626,7 +14674,7 @@
               "type": "Sysfs",
               "source": {
                 "file": "docs/sysml/09-storage.sysml",
-                "line": 171
+                "line": 175
               }
             },
             {
@@ -14636,7 +14684,7 @@
               "type": "Cgroupfs",
               "source": {
                 "file": "docs/sysml/09-storage.sysml",
-                "line": 172
+                "line": 176
               }
             },
             {
@@ -14646,7 +14694,7 @@
               "type": "Btrfs",
               "source": {
                 "file": "docs/sysml/09-storage.sysml",
-                "line": 173
+                "line": 177
               }
             },
             {
@@ -14656,7 +14704,7 @@
               "type": "InitramfsUnpack",
               "source": {
                 "file": "docs/sysml/09-storage.sysml",
-                "line": 174
+                "line": 178
               }
             }
           ]
@@ -15615,7 +15663,7 @@
           "kind": "requirement",
           "shortName": "S12",
           "type": "Stage",
-          "maturity": "planned",
+          "maturity": "inProgress",
           "doc": "btrfs stage B. Exit, strict: Ferrix writes a tree and host btrfs check finds nothing; then the power-fail test — kill QEMU at a random point inside a transaction, remount, replay, check again — over hundreds of seeds.",
           "source": {
             "file": "docs/sysml/10-roadmap.sysml",
@@ -15638,7 +15686,7 @@
               "qualifiedName": "FerrixRoadmap::stage12BtrfsWrite",
               "kind": "attribute",
               "redefines": "status",
-              "value": "StageStatus::Planned",
+              "value": "StageStatus::InProgress",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
                 "line": 372
@@ -17597,7 +17645,7 @@
       ],
       "origin": "FerrixStructure::Workspace",
       "file": "docs/sysml/02-structure.sysml",
-      "line": 1172
+      "line": 1183
     },
     {
       "kind": "dependency",
@@ -17609,7 +17657,7 @@
       ],
       "origin": "FerrixStructure::Workspace",
       "file": "docs/sysml/02-structure.sysml",
-      "line": 1173
+      "line": 1184
     },
     {
       "kind": "dependency",
@@ -17619,7 +17667,7 @@
       ],
       "origin": "FerrixStructure::Workspace",
       "file": "docs/sysml/02-structure.sysml",
-      "line": 1174
+      "line": 1185
     },
     {
       "kind": "dependency",
@@ -17630,7 +17678,7 @@
       ],
       "origin": "FerrixStructure::Workspace",
       "file": "docs/sysml/02-structure.sysml",
-      "line": 1175
+      "line": 1186
     },
     {
       "kind": "import",
@@ -19170,8 +19218,8 @@
           "id": "FerrixRoadmap::stage12BtrfsWrite",
           "label": "S12  Stage 12 btrfs write",
           "kind": "requirement",
-          "sublabel": "Planned",
-          "maturity": "planned"
+          "sublabel": "InProgress",
+          "maturity": "inProgress"
         },
         {
           "id": "FerrixRoadmap::stage13Isolation",
@@ -21115,6 +21163,14 @@
           "stage": 11
         },
         {
+          "id": "FerrixStructure::Workspace::btrfsWrite",
+          "label": "btrfsWrite",
+          "kind": "box",
+          "sublabel": "libs/btrfs-write",
+          "maturity": "inProgress",
+          "stage": 12
+        },
+        {
           "id": "FerrixStructure::Workspace::btrfsVfs",
           "label": "btrfsVfs",
           "kind": "box",
@@ -21376,8 +21432,8 @@
           "id": "FerrixRoadmap::stage12BtrfsWrite",
           "label": "S12  Stage 12 btrfs write",
           "kind": "requirement",
-          "sublabel": "Planned · longer",
-          "maturity": "planned"
+          "sublabel": "InProgress · longer",
+          "maturity": "inProgress"
         },
         {
           "id": "FerrixRoadmap::stage13Isolation",

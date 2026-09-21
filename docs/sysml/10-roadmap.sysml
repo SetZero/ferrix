@@ -367,9 +367,9 @@ package FerrixRoadmap {
              * loader in glibc's place, on all three architectures. */
     }
 
-    #planned requirement <'S12'> stage12BtrfsWrite : Stage {
+    #inProgress requirement <'S12'> stage12BtrfsWrite : Stage {
         attribute :>> number = 12;
-        attribute :>> status = StageStatus::Planned;
+        attribute :>> status = StageStatus::InProgress;
         attribute :>> size = "longer";
         doc /* btrfs stage B. Exit, strict: Ferrix writes a tree and host
              * btrfs check finds nothing; then the power-fail test — kill QEMU

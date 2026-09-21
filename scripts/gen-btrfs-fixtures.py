@@ -33,11 +33,17 @@ subvolume is not the top-level tree (`mkfs.btrfs -u default:sub`): the top
 level holds `top-level-only`, and the subvolume `sub` holds `marker` and
 `nested/file`. Its contents are fixed text, listed in the tests themselves.
 
+`blank.img.packed` is what the write path starts from: an empty volume made
+with `mkfs.btrfs`'s *default* profiles and features -- DUP metadata and system
+chunks, a single data chunk, the free-space tree, skinny metadata, no-holes --
+so the writer is tested against the volume a user gets, not a simplified one.
+Its nodes are 4 KiB so that a few hundred items already split leaves.
+
 Usage:
     python3 scripts/gen-btrfs-fixtures.py [--only NAME ...]
 
 `--only` rebuilds just the named images (`none`, `zlib`, `lzo`, `zstd`,
-`default-subvol`), leaving the others' committed bytes alone.
+`default-subvol`, `blank`), leaving the others' committed bytes alone.
 """
 
 from __future__ import annotations
@@ -53,6 +59,7 @@ import tempfile
 OUTPUT = pathlib.Path("libs/btrfs/testdata")
 VARIANTS = ("none", "zlib", "lzo", "zstd")
 DEFAULT_SUBVOL = "default-subvol"
+BLANK = "blank"
 IMAGE_SIZE = 128 * 1024 * 1024
 BLOCK = 4096
 FS_UUID = "0f3c3a5e-1111-4222-8333-444455556666"
@@ -166,6 +173,16 @@ def make_default_subvol_image(source: pathlib.Path, image: pathlib.Path) -> None
     ], check=True)
 
 
+def make_blank_image(image: pathlib.Path) -> None:
+    with open(image, "wb") as f:
+        f.truncate(IMAGE_SIZE)
+    # No profile or feature flags: the defaults are the point.
+    subprocess.run([
+        "mkfs.btrfs", "-q", "--nodesize", str(BLOCK),
+        "-U", FS_UUID, "--device-uuid", DEVICE_UUID, str(image),
+    ], check=True)
+
+
 def fs_tree_level(image: pathlib.Path) -> int:
     dump = subprocess.run(
         ["btrfs", "inspect-internal", "dump-tree", "-t", "fs", str(image)],
@@ -194,7 +211,7 @@ def main() -> int:
     if shutil.which("mkfs.btrfs") is None:
         print("mkfs.btrfs is not installed (btrfs-progs)", file=sys.stderr)
         return 1
-    names = VARIANTS + (DEFAULT_SUBVOL,)
+    names = VARIANTS + (DEFAULT_SUBVOL, BLANK)
     only = sys.argv[2:] if sys.argv[1:2] == ["--only"] else list(names)
     if len(sys.argv) > 1 and sys.argv[1] != "--only" or not only or set(only) - set(names):
         print(f"usage: {sys.argv[0]} [--only NAME ...], NAME in {', '.join(names)}",
@@ -240,6 +257,12 @@ def main() -> int:
                 return 1
             (OUTPUT / f"{DEFAULT_SUBVOL}.img.packed").write_bytes(packed)
             print(f"{DEFAULT_SUBVOL}: {len(packed) // (BLOCK + 8)} blocks, {len(packed)} bytes")
+        if BLANK in only:
+            image = pathlib.Path(scratch) / f"{BLANK}.img"
+            make_blank_image(image)
+            packed = pack(image)
+            (OUTPUT / f"{BLANK}.img.packed").write_bytes(packed)
+            print(f"{BLANK}: {len(packed) // (BLOCK + 8)} blocks, {len(packed)} bytes")
     return 0
 
 

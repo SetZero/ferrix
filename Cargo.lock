@@ -95,6 +95,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferrix-btrfs-write"
+version = "0.1.0"
+dependencies = [
+ "ferrix-btrfs",
+]
+
+[[package]]
 name = "ferrix-channel-echo"
 version = "0.1.0"
 dependencies = [

@@ -1,0 +1,14 @@
+[package]
+name = "ferrix-btrfs-write"
+description = "btrfs write path: copy-on-write trees, extent allocation and transaction commit"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+license.workspace = true
+publish = false
+
+[dependencies]
+ferrix-btrfs.workspace = true
+
+[lints]
+workspace = true

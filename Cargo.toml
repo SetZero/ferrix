@@ -22,6 +22,7 @@ members = [
     "libs/heap",
     "libs/btrfs",
     "libs/btrfs-vfs",
+    "libs/btrfs-write",
     "libs/cpio",
     "libs/crng",
     "libs/linux-abi",
@@ -103,6 +104,7 @@ ferrix-frame = { path = "libs/frame" }
 ferrix-heap = { path = "libs/heap" }
 ferrix-btrfs = { path = "libs/btrfs" }
 ferrix-btrfs-vfs = { path = "libs/btrfs-vfs" }
+ferrix-btrfs-write = { path = "libs/btrfs-write" }
 ferrix-cpio = { path = "libs/cpio" }
 ferrix-crng = { path = "libs/crng" }
 ferrix-linux-abi = { path = "libs/linux-abi" }

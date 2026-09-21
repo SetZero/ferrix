@@ -49,6 +49,10 @@ sectors through the block ring with VT-d on x86-64 and the `SMMUv3` on AArch64
 translating, and a deliberate out-of-domain write faulted on both; ARMv7-A runs
 it in degraded trusted mode, as decided. What the stage still owes — `devmgr`
 the program, trusting decoding-off BARs — is after the exit in its section.
+Stage 12 is under way: `libs/btrfs-write` writes a volume `mkfs.btrfs` made —
+copy-on-write trees, extent and free-space bookkeeping, chunk allocation, the
+commit with its flush before the superblock, and files — and host `btrfs
+check` finds its output clean; the mount and the boot are next.
 Networking is done: sockets, a net core and a ring-3 virtio-net driver, with
 `curl` fetching over HTTPS and `git` cloning inside the guest. Stages 17 and
 18 are met, and the compositor runs: `cargo xtask test-compositor` boots it
@@ -95,7 +99,7 @@ session sizes them.
 | ~~Stage 19: the GPU path, Path A (`docs/GPU.md` §3)~~ *done 2026-09-19* | ~~52~~ | landed 2026-09-19 |
 | Stage 19: XWayland, the pointer-driven options, the second-pass effects | 48 | 2026-09-19 to -20 |
 | Dynamic linking: the kernel half, ferrousli's loader, glibc's names | 39 *(4 done)* | 2026-09-20 to -21 |
-| Stage 12, btrfs write | *longer* ≈ 60 | 2026-09-21 to -22 |
+| Stage 12, btrfs write | ≈ 60 *(21 done: the write path, host-side)* | 2026-09-21 to -22 |
 | Stage 13, namespaces, cgroups, seccomp | *month* ≈ 60 | 2026-09-22 to -23 |
 | Stage 22, Steam: the parts with a first guess (glibc under the runtime 13, bubblewrap's rest 13, sound 30, Venus 8, XWayland counted above) | 64 | 2026-09-23 to -24 |
 | Stage 22, Steam: the 32-bit x86 ABI and what the runtime and Proton find missing | unsized, ≈ 100 as a guess | 2026-09-24 to -25 |
@@ -3443,7 +3447,7 @@ asks for, so the test binary is still one the repository does not carry.
 
 ---
 
-## Stage 12 — btrfs, write  ·  *longer*
+## Stage 12 — btrfs, write  ·  *≈ 60 points, 39 left*
 
 Copy-on-write allocation through the extent tree, delayed refs, transaction
 commit against both superblocks with correct flush/FUA ordering, the free-space
@@ -3452,6 +3456,70 @@ tree, and log-tree replay.
 **Exit, and it is a strict one:** Ferrix writes a tree, and host `btrfs check`
 finds nothing. Then the power-fail test — kill QEMU at a random point inside a
 transaction, remount, replay, `btrfs check` again — over hundreds of seeds.
+
+**Done — the write path, host-side (21 points, 2026-09-21).** `libs/btrfs-write`
+changes a volume `mkfs.btrfs` made, allocating but forbidding `unsafe`, and is
+checked by host `btrfs check`. What it writes:
+
+* **Copy-on-write trees.** An edit copies every node on its path that the
+  last commit can reach and edits the copies; a node held as a typed list of
+  items and written whole, never patched. One bottom-up fix-up after each edit
+  splits what overflowed into pieces of equal size, drops what emptied, gives
+  every parent pointer its child's first key (which Linux checks on every read)
+  and shrinks a root with one child.
+* **Allocation, recorded as btrfs records it.** Block groups with three range
+  sets each — free, *pinned* (freed this transaction, still used by the last
+  commit, so never handed out before it), and what the free-space tree says.
+  Reference changes queue as delayed refs and become extent items at commit:
+  skinny metadata items and data items with inline and keyed back-references
+  in the order Linux's tree-checker demands. The free-space tree is rewritten
+  by difference; a group kept as bitmaps becomes extents on its first change.
+  Chunks are allocated when a kind runs out — `CHUNK_ITEM`, `DEV_EXTENT`s, the
+  `DEV_ITEM` in both places, the block group and its free space, and the
+  system chunk array for a system chunk — and only between edits, never in the
+  middle of one.
+* **The commit.** Bookkeeping settles in a loop until a pass changes nothing;
+  then every new node is written to each copy (DUP metadata to both), the
+  device is flushed, and only then is the primary superblock written with FUA,
+  then the mirrors, with the next backup-root slot filled as Linux fills it.
+  Nothing the last commit reaches is overwritten, so a crash before the
+  superblock leaves the last commit, and a test replays exactly that.
+* **Files.** Create, link, unlink, rename, symlinks, device nodes; writes as
+  new extents with their checksums (inline for a whole file of at most
+  2 KiB), overwrites that cut extents into pieces sharing one reference,
+  truncation that zeroes the rest of the last sector, holes by omission
+  (`NO_HOLES`), orphans for files unlinked while open and their cleanup at the
+  next open, and compressed extents cut by overwrites. Every operation either
+  completes or aborts the transaction; nothing half-made is committed.
+
+What it refuses to write, with a reason naming it: more than one device, a
+profile other than `SINGLE` or `DUP`, no free-space tree, no skinny metadata or
+`NO_HOLES`, subvolumes and snapshots (their blocks are shared), quotas, and an
+unreplayed log.
+
+It is checked three ways. The stage 11 reader opens and reads back what was
+written. A consistency check in the tests recomputes, from the trees, every
+tree block's extent item and owner, every data extent's references, each block
+group's usage and free space, the superblock's total, each inode's links,
+directory size and `nbytes`, and checksum coverage both ways; three negative
+controls showed it fails where it should. And `scripts/btrfs-check-writer.sh`
+runs host `btrfs check --check-data-csum` over seven volumes the tests write —
+DUP and SINGLE, a tree of every object kind with a file big enough to allocate
+chunks, the same tree edited, an orphan, split compressed extents, and churn —
+all clean, and it too failed on a sabotaged free-space tree.
+
+**Still to do, in order.**
+
+1. **The mount, read-write** (13): `libs/btrfs-vfs` over the write path, reads
+   seeing the running transaction, the page cache written back as extents at
+   commit, `sync`, `fsync` and `umount` committing; the kernel's `mount` without
+   `MS_RDONLY`.
+2. **The exit's first half** (5): a boot that writes a tree on the second disk,
+   and `xtask` running host `btrfs check` over the disk after.
+3. **The log tree** (13): `fsync` writing a log instead of a whole commit, and
+   replay at mount.
+4. **The power-fail test** (8): QEMU killed at random points inside a
+   transaction over hundreds of seeds, `btrfs check` before and after replay.
 
 ---
 

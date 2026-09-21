@@ -1112,6 +1112,17 @@ package FerrixStructure {
                  * decoders. Tested against four real mkfs.btrfs images, and
                  * fuzzed from them by btrfs_read. */
         }
+        #inProgress part btrfsWrite : LibraryCrate {
+            attribute :>> path = "libs/btrfs-write";
+            attribute :>> forbidsUnsafe = true;
+            attribute :>> hostTests = 21;
+            @stage { number = 12; }
+            doc /* The btrfs write path: copy-on-write trees, delayed refs,
+                 * extent and free-space-tree bookkeeping, chunk allocation,
+                 * the commit with its flush before the superblock, and file
+                 * operations. Host btrfs check finds its output clean; not yet
+                 * mounted by the kernel. */
+        }
         #writtenAhead part btrfsVfs : LibraryCrate {
             attribute :>> path = "libs/btrfs-vfs";
             attribute :>> forbidsUnsafe = true;
