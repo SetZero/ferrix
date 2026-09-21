@@ -1301,13 +1301,19 @@ fn attach_network(command: &mut Command, arch: Arch, args: &Args) -> Result<Netw
         let _ = command.args(["-net", "none"]);
         return Ok(None);
     }
-    let gateway = crate::gateway::Gateway::start(args.resolver)?;
+    let gateway = crate::gateway::Gateway::start(args.resolver, &args.forwards)?;
     println!(
         "  {arch}: network through xtask's gateway: guest {}, gateway {}, DNS {}",
         crate::gateway::GUEST_IP,
         crate::gateway::GATEWAY_IP,
         crate::gateway::DNS_IP
     );
+    for forward in &args.forwards {
+        println!(
+            "  {arch}: 127.0.0.1:{} forwards to the guest's port {}",
+            forward.host, forward.guest
+        );
+    }
     let _ = command.args([
         "-netdev",
         &format!(

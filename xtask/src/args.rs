@@ -73,6 +73,12 @@ pub(crate) struct Args {
     /// so that the test says the same thing on a machine with no network.
     /// `None` is the host's own resolver.
     pub(crate) resolver: Option<std::net::SocketAddrV4>,
+    /// `--forward <HOST>:<GUEST>`, as many as given: the gateway listens on
+    /// the host's `127.0.0.1:<HOST>` and opens each connection it accepts to
+    /// the guest's `<GUEST>`, which is how `ssh -p 2222 root@127.0.0.1`
+    /// reaches a server in the guest. Turns `--net` on, since a forward with
+    /// no network behind it forwards nothing.
+    pub(crate) forwards: Vec<crate::gateway::Forward>,
     /// `--display`: a virtio-gpu device on the bus, and for `run` a window
     /// that shows it. `test-display` turns it on.
     pub(crate) display: bool,
@@ -222,6 +228,11 @@ impl Args {
                 "--reset" => args.reset = true,
                 "--net" => args.net = true,
                 "--no-net" => args.no_net = true,
+                "--forward" => {
+                    let raw = value(&mut items, "--forward")?;
+                    args.forwards.push(crate::gateway::Forward::parse(&raw)?);
+                    args.net = true;
+                }
                 "--display" => args.display = true,
                 // A 3D card is still a card: `--gl` on its own turns the
                 // display on, so nobody has to write both.
@@ -528,5 +539,34 @@ mod tests {
             parse(&["run", "--net"]).unwrap().net,
             "--net turns the device and the gateway on"
         );
+    }
+
+    #[test]
+    fn a_forward_is_two_ports_and_brings_the_network() {
+        let args = parse(&["run", "--forward", "2222:22", "--forward", "8080:80"]).unwrap();
+        assert!(
+            args.net,
+            "a forward with no network behind it forwards nothing"
+        );
+        assert_eq!(
+            args.forwards,
+            [
+                crate::gateway::Forward {
+                    host: 2222,
+                    guest: 22
+                },
+                crate::gateway::Forward {
+                    host: 8080,
+                    guest: 80
+                },
+            ],
+            "every --forward is kept, in order"
+        );
+        for bad in ["22", "2222:", ":22", "0:22", "2222:0", "ssh:22", "70000:22"] {
+            assert!(
+                parse(&["run", "--forward", bad]).is_err(),
+                "`{bad}` is not <host port>:<guest port>"
+            );
+        }
     }
 }

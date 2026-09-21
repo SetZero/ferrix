@@ -26,8 +26,9 @@ use crate::{Error, Result, cargo};
 
 /// The ports `cargo xtask ports` builds, in order, each a directory of
 /// `ferrousli/tools/ports/` holding a `build.sh`. `libcxx` is the C++ runtime
-/// btop links against, and installs nothing an image carries.
-const PORTS: &[&str] = &["curl", "libcxx", "btop", "zlib", "git"];
+/// btop links against, and installs nothing an image carries. `sshdt` is Rust
+/// rather than C, built the way uutils is, and needs cargo's crates.io.
+const PORTS: &[&str] = &["curl", "libcxx", "btop", "zlib", "git", "sshdt"];
 
 /// Whether an [`Installed`] entry is one path or everything beneath it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -117,6 +118,12 @@ pub(crate) const FILES: &[Installed] = &[
         mode: 0o755,
         kind: Kind::Tree,
         port: "git",
+    },
+    Installed {
+        path: "bin/sshdt",
+        mode: 0o755,
+        kind: Kind::File,
+        port: "sshdt",
     },
 ];
 

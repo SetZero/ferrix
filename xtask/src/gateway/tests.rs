@@ -19,7 +19,7 @@ use ferrix_netwire::ethernet::{self, Mac, ethertype};
 use ferrix_netwire::tcp::Flags;
 use ferrix_netwire::{arp, icmpv4, ipv4, tcp, udp};
 
-use super::{DNS_IP, GATEWAY_IP, GATEWAY_MAC, GUEST_IP, Gateway};
+use super::{DNS_IP, Forward, GATEWAY_IP, GATEWAY_MAC, GUEST_IP, Gateway};
 
 /// The MAC `xtask` gives the guest's virtio-net device.
 const GUEST_MAC: Mac = [0x52, 0x54, 0x00, 0x12, 0x34, 0x56];
@@ -41,14 +41,37 @@ struct Guest {
 impl Guest {
     /// Start a gateway and take QEMU's place on the other end of it.
     fn start() -> Guest {
+        Guest::start_with(&[]).unwrap()
+    }
+
+    /// The same, with `forwards` listened on.
+    fn start_with(forwards: &[Forward]) -> crate::Result<Guest> {
         // A resolver named, so no test asks the host for its own: on Windows
         // that is a PowerShell per gateway, and twenty of them at once starve
         // the other tests' sockets.
-        let gateway = Gateway::start(Some(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 53))).unwrap();
-        let socket = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)).unwrap();
-        socket.connect(gateway.address()).unwrap();
-        socket.set_read_timeout(Some(PATIENCE)).unwrap();
-        Guest { socket, gateway }
+        let gateway = Gateway::start(Some(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 53)), forwards)?;
+        let socket = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0))?;
+        socket.connect(gateway.address())?;
+        socket.set_read_timeout(Some(PATIENCE))?;
+        Ok(Guest { socket, gateway })
+    }
+
+    /// A gateway forwarding a free host port to the guest's `guest` port, and
+    /// that host port.
+    ///
+    /// Free when it was looked at: the port is bound and let go, and another
+    /// test can take it in between, so a gateway that cannot listen on it
+    /// simply tries the next one.
+    fn forwarding(guest: u16) -> (Guest, u16) {
+        for _ in 0..32 {
+            let probe = TcpListener::bind("127.0.0.1:0").unwrap();
+            let host = probe.local_addr().unwrap().port();
+            drop(probe);
+            if let Ok(started) = Guest::start_with(&[Forward { host, guest }]) {
+                return (started, host);
+            }
+        }
+        panic!("no port on the loopback stayed free long enough to forward");
     }
 
     /// Put one frame on the wire.
@@ -633,6 +656,147 @@ fn carries_a_tcp_connection_in_both_directions_and_closes_it() {
     assert!(
         report.contains("tcp 1 opened 0 refused"),
         "one connection opened and none refused: {report}"
+    );
+}
+
+/// Have the guest say something, so the gateway knows where it is: a forward
+/// is only opened to a guest that has been heard from.
+fn introduce(guest: &Guest) {
+    guest.send(ethertype::ARP, &arp_request(GATEWAY_IP));
+    let _ = guest.payload_of(ethertype::ARP);
+}
+
+/// Take the SYN a forwarded connection starts with, and check it is one.
+fn forwarded_syn(guest: &Guest, port: u16) -> tcp::Header {
+    let (ip, bytes) = guest.ipv4_of(ipv4::protocol::TCP);
+    assert_eq!(
+        (Ipv4Addr::from(ip.source), Ipv4Addr::from(ip.destination)),
+        (GATEWAY_IP, GUEST_IP),
+        "a forwarded connection comes from the gateway, to the guest"
+    );
+    let pseudo = Pseudo::V4 {
+        source: ip.source,
+        destination: ip.destination,
+    };
+    let header = tcp::Header::parse(&bytes, pseudo).unwrap().header;
+    assert!(
+        header.flags.contains(Flags::SYN) && !header.flags.contains(Flags::ACK),
+        "it opens with a SYN, as a client does"
+    );
+    assert_eq!(header.destination_port, port, "to the forwarded port");
+    assert!(
+        header.options.mss.is_some(),
+        "offering a maximum segment size"
+    );
+    header
+}
+
+#[test]
+fn forwards_a_host_connection_to_the_guest_and_closes_it() {
+    let (guest, host_port) = Guest::forwarding(22);
+    introduce(&guest);
+    let mut host = std::net::TcpStream::connect(("127.0.0.1", host_port)).unwrap();
+    host.set_read_timeout(Some(PATIENCE)).unwrap();
+
+    let syn = forwarded_syn(&guest, 22);
+    // The guest is the server now: it answers from the forwarded port, to the
+    // port the SYN came from.
+    let mut stream = Stream {
+        guest: &guest,
+        port: 22,
+        peer: SocketAddrV4::new(GATEWAY_IP, syn.source_port),
+        sequence: 0x5EED_0000,
+        expected: syn.sequence.wrapping_add(1),
+    };
+    stream.send(Flags::SYN.union(Flags::ACK), &[]);
+    stream.sequence = stream.sequence.wrapping_add(1);
+    let (ack, _) = stream.segment();
+    assert!(
+        ack.flags.contains(Flags::ACK) && !ack.flags.contains(Flags::SYN),
+        "the SYN-ACK is acknowledged, which opens the connection"
+    );
+    assert_eq!(ack.acknowledgment, stream.sequence);
+
+    // A server speaks first in SSH, so the guest does here.
+    stream.write(b"SSH-2.0-ferrix\r\n");
+    let mut banner = [0_u8; 16];
+    host.read_exact(&mut banner).unwrap();
+    assert_eq!(
+        &banner, b"SSH-2.0-ferrix\r\n",
+        "the guest's bytes reach the host"
+    );
+
+    host.write_all(b"SSH-2.0-host\r\n").unwrap();
+    host.shutdown(std::net::Shutdown::Write).unwrap();
+    assert_eq!(
+        stream.read_to_fin(),
+        b"SSH-2.0-host\r\n",
+        "the host's bytes reach the guest, and its close after them"
+    );
+    stream.finish();
+    let mut rest = Vec::new();
+    let _ = host.read_to_end(&mut rest).unwrap();
+    assert!(
+        rest.is_empty(),
+        "the guest's close reaches the host as its end"
+    );
+
+    let report = guest.gateway.counters().report();
+    assert!(
+        report.contains("0 refused 1 forwarded"),
+        "one connection forwarded and none refused: {report}"
+    );
+}
+
+#[test]
+fn closes_the_host_connection_when_the_guest_refuses_a_forward() {
+    let (guest, host_port) = Guest::forwarding(22);
+    introduce(&guest);
+    let mut host = std::net::TcpStream::connect(("127.0.0.1", host_port)).unwrap();
+    host.set_read_timeout(Some(PATIENCE)).unwrap();
+
+    let syn = forwarded_syn(&guest, 22);
+    let refusal = Stream {
+        guest: &guest,
+        port: 22,
+        peer: SocketAddrV4::new(GATEWAY_IP, syn.source_port),
+        sequence: 0,
+        expected: syn.sequence.wrapping_add(1),
+    };
+    refusal.send(Flags::RST.union(Flags::ACK), &[]);
+
+    let mut buffer = [0_u8; 16];
+    let read = host.read(&mut buffer);
+    assert!(
+        matches!(read, Ok(0))
+            || read.as_ref().is_err_and(|error| {
+                error.kind() != std::io::ErrorKind::WouldBlock
+                    && error.kind() != std::io::ErrorKind::TimedOut
+            }),
+        "nothing listening on the guest ends the host's connection, got {read:?}"
+    );
+}
+
+#[test]
+fn refuses_a_forward_before_the_guest_has_spoken() {
+    let (guest, host_port) = Guest::forwarding(22);
+    let mut host = std::net::TcpStream::connect(("127.0.0.1", host_port)).unwrap();
+    host.set_read_timeout(Some(PATIENCE)).unwrap();
+    let mut buffer = [0_u8; 16];
+    let read = host.read(&mut buffer);
+    assert!(
+        matches!(read, Ok(0))
+            || read.as_ref().is_err_and(|error| {
+                error.kind() != std::io::ErrorKind::WouldBlock
+                    && error.kind() != std::io::ErrorKind::TimedOut
+            }),
+        "a guest nobody has heard from cannot be dialled, got {read:?}"
+    );
+    guest.expect_silence("and nothing is sent to it");
+    let report = guest.gateway.counters().report();
+    assert!(
+        report.contains("1 refused 0 forwarded"),
+        "the connection is counted refused: {report}"
     );
 }
 

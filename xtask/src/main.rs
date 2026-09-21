@@ -175,6 +175,8 @@ OPTIONS:
                                          test-net turns it on whether or not it is given;
                                          run-compositor has one unless --no-net
     --no-net                             run-compositor: no network device and no gateway
+    --forward <HOST>:<GUEST>             the host's 127.0.0.1:HOST leads to the guest's port GUEST,
+                                         e.g. 2222:22 for sshdt; repeatable; turns --net on
     --display                            run, test-boot: a virtio-gpu device; run: and a window showing it
     --gl                                 that virtio-gpu is the 3D card, `virtio-gpu-gl-pci`, with the
                                          host's GPU behind it through virglrenderer; turns --display on.

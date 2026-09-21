@@ -134,6 +134,28 @@ privilege, and works the same on Linux and on Windows. With `--init`, the
 shell configures `eth0` by DHCP before its first prompt, with busybox's
 `udhcpc`, so `wget http://example.com` and `ping 10.0.2.2` work at once.
 
+`--forward <host>:<guest>` goes the other way: the gateway listens on the
+host's `127.0.0.1:<host>` and opens each connection to the guest's `<guest>`,
+as slirp's `hostfwd` does. It turns `--net` on. With it, you can reach the
+guest over SSH. Every x86-64 image with a busybox carries
+[sshdt](https://crates.io/crates/sshdt), an SSH server written in Rust, once
+`cargo xtask ports` has built it. Start it in the guest, then connect from the host:
+
+```
+cargo xtask run --arch x86_64 --init ferrousli --forward 2222:22
+
+ferrix# sshdt -b 0.0.0.0 -p 22 --pubkey 'ssh-ed25519 AAAA... you@host' &
+        # or --authorized-keys FILE, or --password SECRET
+
+ssh -p 2222 root@127.0.0.1
+```
+
+sshdt makes a host key at `/.sshdt/host_ed25519` the first time it starts.
+The initramfs is rebuilt every boot, so the key changes each time, and `ssh`
+will warn that the host key changed. Add `-o UserKnownHostsFile=/dev/null
+-o StrictHostKeyChecking=no` for a throwaway guest. Every session runs as the
+user who started sshdt, whatever name the client logs in with.
+
 You need QEMU 8.1 or later, for the AArch64 SMMUv3's stage 2, and UEFI
 firmware. Debian and Ubuntu: `qemu-system-x86`,
 `qemu-system-arm`, `ovmf`, `qemu-efi-aarch64` and `u-boot-qemu`. Windows:

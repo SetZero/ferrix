@@ -3303,6 +3303,28 @@ serial console, with `eth0`, `lo` and the running `sh`, `busybox` and
 `btop`, and redrew them every two seconds until `timeout` ended it. No gate
 runs it yet; `docs/BACKLOG.md` has the row.
 
+**Done — an SSH server, and a way in from the host.**
+`ferrousli/tools/ports/sshdt` builds sshdt 0.4.2, an SSH server written in Rust
+(russh, tokio, and aws-lc underneath). It is built the way uutils is: the musl
+target, ferrousli in the C library's place, and aws-lc compiled with
+`ferrousli-cc`. It linked on the first try, with nothing undefined. sshdt was
+chosen over narrowd, which sandboxes itself with seccomp and Landlock, and over
+russh and sunset, which are libraries with no daemon. `--forward <host>:<guest>`
+gives `xtask`'s gateway the client half of TCP it lacked: it accepts on the
+host's loopback, sends the guest a SYN from `10.0.2.2`, and relays the
+connection like any other once the guest's SYN-ACK arrives. Three gateway tests
+cover it: a forward carried both ways and closed, a guest that refuses one, and
+a forward before the guest has spoken. The negative control, not committed:
+with the SYN-ACK no longer opening the connection, the first of the three fails
+waiting for the guest's bytes.
+
+A KVM boot on nazuna with `--forward 22022:22` ran `sshdt -b 0.0.0.0 -p 22`
+with a public key, and the host's OpenSSH ran `uname -a` and `id` over it and
+opened a session on `/dev/pts/0`. The gateway counted `2 forwarded`. Two things
+showed up that are not SSH's: sshdt warns once that `mlock` is `ENOSYS`, and
+uutils' `tty` on a PTY prints its name without the newline, where busybox's
+`tty` prints both. No gate runs sshdt yet; `docs/BACKLOG.md` has the rows.
+
 **Exit, and it is met:** under `xtask`'s gateway — which is where this
 criterion's *"under QEMU's user-mode network"* now reads — busybox configures
 `eth0` with `ip`, and `route` and `netstat` report through `/proc/net`. `wget`

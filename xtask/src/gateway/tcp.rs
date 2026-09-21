@@ -39,6 +39,15 @@
 //! byte at once instead of after [`RETRANSMIT`]. Measured before either, a
 //! 256 KiB download spent 1.8 of its 2.3 seconds waiting for that timer.
 //!
+//! # Forwarded connections
+//!
+//! A `--forward` port turns that around for connections the host opens. The
+//! gateway accepts on the host's loopback and then does the half of TCP a
+//! client does, once: it sends the guest a SYN from `10.0.2.2`, and a SYN-ACK
+//! of it opens the connection. From there it is the same connection as any
+//! other — the same relay, the same timers, the same close — because once both
+//! ends are open TCP has no idea which of them spoke first.
+//!
 //! # Out-of-order data
 //!
 //! Segments that do not start at `rcv_nxt` are dropped rather than queued, and
@@ -48,14 +57,16 @@
 //! already specifies.
 
 use std::io::{Read, Write};
-use std::net::{Ipv4Addr, Shutdown, SocketAddr, SocketAddrV4, TcpStream};
+use std::net::{Ipv4Addr, Shutdown, SocketAddr, SocketAddrV4, TcpListener, TcpStream};
+use std::ops::Range;
 use std::time::{Duration, Instant};
 
 use ferrix_netwire::checksum::Pseudo;
 use ferrix_netwire::ipv4;
 use ferrix_netwire::tcp::{self as wire, Flags};
 
-use super::{Core, MTU, Result, bump};
+use super::{Core, Forward, GATEWAY_IP, GUEST_IP, MTU, Result, bump};
+use crate::Error;
 
 /// The most payload one segment carries: the MTU less the IPv4 and TCP headers,
 /// neither of which this endpoint ever puts options in after the handshake.
@@ -105,6 +116,39 @@ const READS_PER_TURN: usize = 16;
 /// The distance between one connection's initial sequence number and the next's.
 const ISS_STRIDE: u32 = 64_000;
 
+/// The ports on `10.0.2.2` a forwarded connection comes from, taken in turn.
+/// Linux's own ephemeral range, so the guest sees what a real peer would send.
+pub(super) const FORWARD_PORTS: Range<u16> = 32_768..61_000;
+
+/// A `--forward` port: the host's listener, and where on the guest what it
+/// accepts goes.
+#[derive(Debug)]
+pub(super) struct Listener {
+    /// Bound to the host's loopback, and non-blocking, so the serving thread
+    /// can ask it every turn.
+    socket: TcpListener,
+    /// The guest's port.
+    guest: u16,
+}
+
+impl Listener {
+    /// Listen on the host's side of `forward`.
+    pub(super) fn bind(forward: Forward) -> Result<Listener> {
+        let socket = TcpListener::bind(SocketAddrV4::new(Ipv4Addr::LOCALHOST, forward.host))
+            .map_err(|error| {
+                Error::new(format!(
+                    "--forward {}:{}: could not listen on 127.0.0.1:{}: {error}",
+                    forward.host, forward.guest, forward.host
+                ))
+            })?;
+        socket.set_nonblocking(true)?;
+        Ok(Listener {
+            socket,
+            guest: forward.guest,
+        })
+    }
+}
+
 /// What identifies a guest's TCP connection.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub(super) struct Key {
@@ -119,6 +163,9 @@ pub(super) struct Key {
 enum State {
     /// The guest's SYN has been seen and the host connection is being made.
     Connecting,
+    /// A forwarded connection: the host's is accepted, and the SYN to the
+    /// guest has gone without a SYN-ACK yet.
+    Dialing,
     /// The SYN-ACK has gone out; the guest has not acknowledged it yet.
     Handshaking,
     /// Both ends are open.
@@ -227,6 +274,50 @@ impl Connection {
         }
     }
 
+    /// A forwarded connection: the host's `stream` accepted, and the SYN that
+    /// opens the guest's half put in `out`.
+    fn dialing(stream: TcpStream, iss: u32, out: &mut Vec<Outgoing>) -> Connection {
+        let now = Instant::now();
+        let mut connection = Connection {
+            state: State::Dialing,
+            stream: Some(stream),
+            iss,
+            snd_una: iss,
+            snd_nxt: iss,
+            pending: Vec::new(),
+            snd_wnd: 0,
+            fin: None,
+            syn_pending: true,
+            host_eof: false,
+            aborted: false,
+            rcv_nxt: 0,
+            guest_fin: false,
+            host_shutdown: false,
+            inbound: Vec::new(),
+            mss: MIN_SEGMENT,
+            sent_at: now,
+            duplicate_acks: 0,
+            heard_at: now,
+        };
+        connection.send_syn(out);
+        connection
+    }
+
+    /// The SYN of a forwarded connection, first or again.
+    fn send_syn(&mut self, out: &mut Vec<Outgoing>) {
+        let mss = u16::try_from(MAX_SEGMENT).unwrap_or(u16::MAX);
+        out.push(Outgoing {
+            flags: Flags::SYN,
+            sequence: self.iss,
+            acknowledgment: 0,
+            window: self.window(),
+            mss: Some(mss),
+            payload: Vec::new(),
+        });
+        self.snd_nxt = self.iss.wrapping_add(1);
+        self.sent_at = Instant::now();
+    }
+
     /// What this end can still receive: the fixed window less what is still
     /// waiting to go to the host.
     fn window(&self) -> u16 {
@@ -309,6 +400,10 @@ impl Connection {
             self.close();
             return;
         }
+        if self.state == State::Dialing {
+            self.on_dial_answer(segment, out);
+            return;
+        }
         if header.flags.contains(Flags::SYN) && self.state == State::Connecting {
             // The SYN again, because the host connect has not finished. There
             // is nothing to answer with yet, and answering late is correct.
@@ -328,6 +423,32 @@ impl Connection {
             // send the missing piece again.
             out.push(self.ack());
         }
+    }
+
+    /// The guest's answer to a forwarded connection's SYN.
+    ///
+    /// A SYN-ACK of this end's SYN opens the connection, and is acknowledged.
+    /// Anything else is not an answer: the SYN goes again on its timer, and a
+    /// guest with nothing listening has already said so with a reset, which
+    /// [`Connection::on_segment`] handles before this.
+    fn on_dial_answer(&mut self, segment: &wire::Segment<'_>, out: &mut Vec<Outgoing>) {
+        let header = &segment.header;
+        let answers = header.flags.contains(Flags::SYN.union(Flags::ACK))
+            && header.acknowledgment == self.iss.wrapping_add(1);
+        if !answers {
+            return;
+        }
+        self.rcv_nxt = header.sequence.wrapping_add(1);
+        self.snd_wnd = header.window;
+        self.mss = header
+            .options
+            .mss
+            .map_or(MIN_SEGMENT, usize::from)
+            .clamp(MIN_SEGMENT, MAX_SEGMENT);
+        // Retires the SYN's sequence number, which is `syn_pending`'s job.
+        self.on_ack(header.acknowledgment, false);
+        self.state = State::Open;
+        out.push(self.ack());
     }
 
     /// Act on an acknowledgment: release what it covers and restart the timer.
@@ -393,10 +514,26 @@ impl Connection {
 
     /// One turn of work: move bytes each way, then send what that produced.
     fn service(&mut self, out: &mut Vec<Outgoing>) {
+        if self.state == State::Dialing {
+            self.redial(out);
+            return;
+        }
         self.write_to_host();
         self.read_from_host();
         self.expire_retransmit();
         self.transmit(out);
+    }
+
+    /// Send a forwarded connection's SYN again if it has gone unanswered for
+    /// [`RETRANSMIT`], and give up after [`CONNECT_TIMEOUT`]: a guest that is
+    /// still booting answers nothing at all, and closing the host's connection
+    /// is how its client finds that out.
+    fn redial(&mut self, out: &mut Vec<Outgoing>) {
+        if self.heard_at.elapsed() > CONNECT_TIMEOUT {
+            self.close();
+        } else if self.sent_at.elapsed() >= RETRANSMIT {
+            self.send_syn(out);
+        }
     }
 
     /// Give the host whatever the guest has sent, and close that direction when
@@ -617,6 +754,7 @@ impl Core {
 
     /// Answer the connects that have finished since the last turn.
     pub(super) fn poll_tcp(&mut self) {
+        self.accept_forwards();
         let mut finished = Vec::new();
         while let Ok(connected) = self.connected.1.try_recv() {
             finished.push(connected);
@@ -625,6 +763,70 @@ impl Core {
             self.settle_connect(key, stream);
         }
         self.service_tcp();
+    }
+
+    /// Take every connection waiting on a `--forward` port, and open each to
+    /// the guest.
+    fn accept_forwards(&mut self) {
+        let mut accepted = Vec::new();
+        for listener in &self.listeners {
+            while let Ok((stream, _)) = listener.socket.accept() {
+                accepted.push((stream, listener.guest));
+            }
+        }
+        for (stream, guest) in accepted {
+            self.dial(stream, guest);
+        }
+    }
+
+    /// Open a connection to the guest's `guest` port for one accepted on the
+    /// host, from the next free port of [`FORWARD_PORTS`].
+    ///
+    /// Refused -- the host's connection dropped, which closes it -- when the
+    /// guest has sent nothing yet: without its MAC there is nowhere to send a
+    /// SYN, and a guest that has not configured its network has no server
+    /// listening either.
+    fn dial(&mut self, stream: TcpStream, guest: u16) {
+        let ready = self.guest_mac.is_some()
+            && stream.set_nonblocking(true).is_ok()
+            && stream.set_nodelay(true).is_ok();
+        let mut free = None;
+        if ready {
+            for _ in FORWARD_PORTS {
+                let key = Key {
+                    guest: SocketAddrV4::new(GUEST_IP, guest),
+                    seen: SocketAddrV4::new(GATEWAY_IP, self.take_forward_port()),
+                };
+                if !self.tcp.contains_key(&key) {
+                    free = Some(key);
+                    break;
+                }
+            }
+        }
+        let Some(key) = free else {
+            bump(&self.counters.tcp_refused);
+            return;
+        };
+        let iss = self.next_iss;
+        self.next_iss = self.next_iss.wrapping_add(ISS_STRIDE);
+        let mut out = Vec::new();
+        let _ = self
+            .tcp
+            .insert(key, Connection::dialing(stream, iss, &mut out));
+        bump(&self.counters.tcp_forwarded);
+        for segment in &out {
+            let _ = self.send_outgoing(&key, segment);
+        }
+    }
+
+    /// The next port of [`FORWARD_PORTS`], in turn.
+    fn take_forward_port(&mut self) -> u16 {
+        let port = self.next_forward_port;
+        self.next_forward_port = match port.checked_add(1) {
+            Some(next) if FORWARD_PORTS.contains(&next) => next,
+            _ => FORWARD_PORTS.start,
+        };
+        port
     }
 
     /// Hand one finished connect to its connection, and count whether it opened.

@@ -70,6 +70,9 @@
 //!   names; see [`host_resolver`].
 //! * **TCP** — terminated here and re-opened as an ordinary host `TcpStream`,
 //!   with the payload relayed between the two; see [`tcp`].
+//! * **Forwards** — a `--forward` port on the host's loopback, each connection
+//!   to it opened to the guest from `10.0.2.2` and relayed the same way; see
+//!   [`Forward`].
 //! * **Fragments** — refused, in both directions. The MTU is 1500 and nothing
 //!   here fragments; an over-long relayed datagram is dropped and counted.
 //! * **IPv6** — not offered. The guest has no stack pointed at it yet, and a
@@ -125,6 +128,37 @@ pub(crate) fn host_of(seen: SocketAddrV4) -> SocketAddrV4 {
         SocketAddrV4::new(Ipv4Addr::LOCALHOST, seen.port())
     } else {
         seen
+    }
+}
+
+/// A port on the host that leads to a port on the guest: slirp's `hostfwd`,
+/// for TCP.
+///
+/// The gateway listens on `127.0.0.1:host`, and for each connection it accepts
+/// it opens one to `GUEST_IP:guest` from `GATEWAY_IP`, with the payload relayed
+/// between the two exactly as it is for a connection the guest opened. The
+/// loopback and not every interface, for the reason `--vnc` gives: what the
+/// guest serves is for this machine unless somebody tunnels it further.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct Forward {
+    /// The port listened on, on the host's loopback.
+    pub(crate) host: u16,
+    /// The port connected to, on the guest.
+    pub(crate) guest: u16,
+}
+
+impl Forward {
+    /// `<host>:<guest>`, both ports other than zero.
+    pub(crate) fn parse(raw: &str) -> Result<Forward> {
+        raw.split_once(':')
+            .and_then(|(host, guest)| host.parse().ok().zip(guest.parse().ok()))
+            .filter(|&(host, guest): &(u16, u16)| host > 0 && guest > 0)
+            .map(|(host, guest)| Forward { host, guest })
+            .ok_or_else(|| {
+                Error::new(format!(
+                    "--forward wants <host port>:<guest port>, got `{raw}`"
+                ))
+            })
     }
 }
 
@@ -185,6 +219,8 @@ pub(crate) struct Counters {
     tcp_opened: AtomicU64,
     /// TCP connections the host refused, and which the guest saw reset.
     tcp_refused: AtomicU64,
+    /// TCP connections accepted on a `--forward` port and opened to the guest.
+    tcp_forwarded: AtomicU64,
     /// Packets dropped because relaying them would have exceeded the MTU.
     oversize: AtomicU64,
     /// Packets of a protocol the gateway does not speak.
@@ -204,7 +240,7 @@ impl Counters {
         let get = |counter: &AtomicU64| counter.load(Ordering::Relaxed);
         format!(
             "frames {}/{} in/out, arp {}, icmp {} ({} forwarded), dhcp {}, udp {} flows {}/{} out/in, \
-             tcp {} opened {} refused, dropped {} oversize {} unsupported {} malformed",
+             tcp {} opened {} refused {} forwarded, dropped {} oversize {} unsupported {} malformed",
             get(&self.frames_in),
             get(&self.frames_out),
             get(&self.arp),
@@ -216,6 +252,7 @@ impl Counters {
             get(&self.udp_in),
             get(&self.tcp_opened),
             get(&self.tcp_refused),
+            get(&self.tcp_forwarded),
             get(&self.oversize),
             get(&self.unsupported),
             get(&self.malformed),
@@ -261,8 +298,12 @@ impl Gateway {
     /// `resolver` is where `10.0.2.3:53` forwards to, or the host's own when
     /// it is `None`. A test that must answer a name the same way on every
     /// machine, with or without a network, passes its own.
-    pub(crate) fn start(resolver: Option<SocketAddrV4>) -> Result<Gateway> {
-        let core = Core::bind(resolver)?;
+    ///
+    /// `forwards` are listened on before this returns, so a port something
+    /// else holds is an error the run stops on, rather than a forward that
+    /// silently leads nowhere.
+    pub(crate) fn start(resolver: Option<SocketAddrV4>, forwards: &[Forward]) -> Result<Gateway> {
+        let core = Core::bind(resolver, forwards)?;
         let address = match core.socket.local_addr()? {
             SocketAddr::V4(address) => address,
             SocketAddr::V6(_) => {
@@ -356,6 +397,10 @@ struct Core {
     udp: BTreeMap<udp::Key, udp::Flow>,
     /// Host connections standing in for the guest's TCP connections.
     tcp: BTreeMap<tcp::Key, tcp::Connection>,
+    /// The `--forward` ports, each listening on the host's loopback.
+    listeners: Vec<tcp::Listener>,
+    /// The gateway-side port the next forwarded connection comes from.
+    next_forward_port: u16,
     /// This socket's own address, from which only the wake-ups a helper thread
     /// sends arrive: they end the wait for a frame, and are not frames.
     own_address: Option<SocketAddr>,
@@ -380,7 +425,11 @@ struct Core {
 
 impl Core {
     /// Bind the host socket and prepare the tables.
-    fn bind(resolver: Option<SocketAddrV4>) -> Result<Core> {
+    fn bind(resolver: Option<SocketAddrV4>, forwards: &[Forward]) -> Result<Core> {
+        let listeners = forwards
+            .iter()
+            .map(|&forward| tcp::Listener::bind(forward))
+            .collect::<Result<Vec<_>>>()?;
         let resolver = match resolver {
             Some(named) => Resolver::Known(named),
             None => Resolver::find(),
@@ -397,6 +446,8 @@ impl Core {
             guest_mac: None,
             udp: BTreeMap::new(),
             tcp: BTreeMap::new(),
+            listeners,
+            next_forward_port: tcp::FORWARD_PORTS.start,
             connected: std::sync::mpsc::channel(),
             resolver,
             pings: icmp::Forwarder::new(waker),
