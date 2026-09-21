@@ -675,6 +675,28 @@ pub unsafe extern "C" fn ftello(stream: *mut File) -> i64 {
     unsafe { file::locked(stream, Inner::tell) }
 }
 
+/// glibc's large-file name for [`fseeko`]; `off_t` is already 64-bit here.
+///
+/// # Safety
+///
+/// As [`fseeko`].
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn fseeko64(stream: *mut File, offset: i64, whence: c_int) -> c_int {
+    // SAFETY: the caller's contract is `fseeko`'s.
+    unsafe { fseeko(stream, offset, whence) }
+}
+
+/// glibc's large-file name for [`ftello`].
+///
+/// # Safety
+///
+/// As [`ftello`].
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn ftello64(stream: *mut File) -> i64 {
+    // SAFETY: the caller's contract is `ftello`'s.
+    unsafe { ftello(stream) }
+}
+
 /// Moves to the start of the stream and clears its error indicator.
 ///
 /// # Safety

@@ -260,8 +260,10 @@ OPTIONS:
     --init <PATH|ferrousli>              The busybox; {arch} is replaced. build, run, flash, deploy: [or FERRIX_INIT]
                                          start `sh -i`, with the applets linked in /bin.
                                          `ferrousli`: the x86_64 busybox built against ferrousli, rebuilt when stale
-    --interpreter <PATH>                 test-shell: a dynamic linker, carried at --init's PT_INTERP path; {arch} is replaced
-    --library <PATH>                     test-shell: a shared library, carried in /lib; as many as needed; {arch} is replaced
+    --interpreter <PATH|ferrousli>       test-shell: a dynamic linker, carried at --init's PT_INTERP path; {arch} is replaced
+                                         `ferrousli`: ferrousli's ld-ferrousli, built from this tree
+    --library <PATH|ferrousli>           test-shell: a shared library, carried in /lib; as many as needed; {arch} is replaced
+                                         `ferrousli`: ferrousli linked as libc.so.6, built from this tree
     --boot <NAME>                        test-compositor: only the boots whose name holds this
     -h, --help                           This message
 ";
@@ -339,10 +341,7 @@ fn run() -> Result<()> {
                 let natives = native::build(arch, args.release)?;
                 // A dynamically linked shell's linker and libraries, in the
                 // initramfs where the kernel and the linker will look.
-                let expand = |path: &String| PathBuf::from(path.replace("{arch}", arch.name()));
-                let interpreter = args.interpreter.as_ref().map(expand);
-                let libraries: Vec<PathBuf> = args.libraries.iter().map(expand).collect();
-                let carried = shell::carried(&program, interpreter.as_deref(), &libraries)?;
+                let carried = shell::carried_for(arch, &program, &args)?;
                 let initramfs = initramfs::build(None, &natives, None, &carried)?;
                 let image = fat::write_image_with(arch, &loader, &kernel, &initramfs, None)?;
                 qemu::test_shell(arch, &image, &kernel, &args)?;

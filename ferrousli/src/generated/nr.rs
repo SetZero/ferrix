@@ -446,3 +446,27 @@ pub const GETRESGID: usize = 120;
 pub const SPLICE: usize = 275;
 /// `vmsplice`.
 pub const VMSPLICE: usize = 278;
+/// `setxattr`.
+pub const SETXATTR: usize = 188;
+/// `lsetxattr`.
+pub const LSETXATTR: usize = 189;
+/// `fsetxattr`.
+pub const FSETXATTR: usize = 190;
+/// `getxattr`.
+pub const GETXATTR: usize = 191;
+/// `lgetxattr`.
+pub const LGETXATTR: usize = 192;
+/// `fgetxattr`.
+pub const FGETXATTR: usize = 193;
+/// `listxattr`.
+pub const LISTXATTR: usize = 194;
+/// `llistxattr`.
+pub const LLISTXATTR: usize = 195;
+/// `flistxattr`.
+pub const FLISTXATTR: usize = 196;
+/// `removexattr`.
+pub const REMOVEXATTR: usize = 197;
+/// `lremovexattr`.
+pub const LREMOVEXATTR: usize = 198;
+/// `fremovexattr`.
+pub const FREMOVEXATTR: usize = 199;

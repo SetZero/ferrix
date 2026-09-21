@@ -144,6 +144,33 @@ btop linked once this library had what libc++ needs: `dl_iterate_phdr`,
 stop a stalled collector. On Ferrix it draws its CPU, memory, network and
 process panels in the serial console, refreshing them.
 
+## In glibc's place
+
+`ld/` is the dynamic loader, `ld-ferrousli`, and `tools/build-shared.sh`
+builds it together with this library linked as `libc.so.6`: every symbol at
+the version glibc gives it, from `tools/glibc-versions/x86_64.txt`, which
+`tools/gen-glibc-versions.py` reads out of a glibc installation. A program
+linked against glibc then runs on the two in glibc's place; Debian's own
+busybox does, on Ferrix, since 2026-09-21:
+
+```
+tools/build-shared.sh        # leaves libc.so.6 and ld.so in target/shared/x86_64
+```
+
+and from the repository root, `cargo xtask test-shell --interpreter ferrousli
+--library ferrousli` with a dynamic `--init`. The loader and the library
+share one interface, `__ferrousli_loader` (`ld/src/interface.rs` and
+`src/loader.rs`): the static TLS layout, and the program's initialisers,
+which the library asks the loader to run once it has started. A statically
+linked program sees none of this: the reference is weak, and null there.
+
+Two things changed for every program with it. `regex_t` and `regmatch_t`
+have glibc's layout, which a program built against glibc allocates; and
+`environ` is glibc's `__environ` with `environ` and `_environ` as weak
+aliases. The loader binds everything at load, so a program that imports a
+function this library lacks does not start at all, even if it never calls
+it: `ld-ferrousli: undefined symbol` names it.
+
 ## Headers
 
 `include/` holds musl 1.2.5's headers, unmodified. See
@@ -195,7 +222,7 @@ x86-64, static programs linked at a fixed address.
 | `glob.h` | `glob` and `globfree`, with musl's flags and glibc's `GLOB_TILDE`, `GLOB_TILDE_CHECK` and `64` names | |
 | `libgen.h` | `basename`, glibc's `__xpg_basename`, `dirname` | |
 | `search.h` | `hsearch` and glibc's `_r` forms over a growing table, `tsearch`, `tfind`, `tdelete`, `twalk` and glibc's `tdestroy` over a balanced tree, `lfind`, `lsearch`, `insque`, `remque` | |
-| `regex.h` | `regcomp`, `regexec`, `regerror`, `regfree`: basic and extended expressions with musl's grammar, `REG_ICASE`, `REG_NEWLINE`, `REG_NOSUB`, `REG_NOTBOL`, `REG_NOTEOL`, back-references, and POSIX's leftmost-longest match with its submatches, found by simulating the whole automaton at once rather than backtracking | multibyte characters and collating elements, which wait for a locale other than C |
+| `regex.h` | `regcomp`, `regexec`, `regerror`, `regfree`: basic and extended expressions with musl's grammar, `REG_ICASE`, `REG_NEWLINE`, `REG_NOSUB`, `REG_NOTBOL`, `REG_NOTEOL`, back-references, and POSIX's leftmost-longest match with its submatches, found by simulating the whole automaton at once rather than backtracking; glibc's `regex_t` and `regmatch_t` layouts and `REG_STARTEND`, and GNU's `re_compile_pattern`, `re_search` and `re_syntax_options` | multibyte characters and collating elements, which wait for a locale other than C |
 | `errno.h` | `__errno_location`, per thread | |
 | `sys/auxv.h` | `getauxval` | |
 | C++ runtime | `__cxa_atexit`, and `__cxa_finalize` for a static program; `dl_iterate_phdr` and `dladdr` over the program's own headers, which libunwind finds unwind tables by. LLVM's libc++, libc++abi and libunwind build against it (`tools/ports/libcxx`) | `__cxa_thread_atexit_impl`, which libc++abi does without |
@@ -206,5 +233,9 @@ x86-64, static programs linked at a fixed address.
 2. **libc-test**, musl's conformance suite, as the measure of progress, and a
    compiler wrapper that builds an unmodified program against the library.
 3. **`long double` math, and with it `complex.h`'s `long double` forms.**
-4. **AArch64 and ARMv7**, the other two architectures Ferrix runs.
-5. **Dynamic linking**: a loader, then glibc's symbol versions.
+4. **AArch64 and ARMv7**, the other two architectures Ferrix runs. Estimated
+   at ≈ 34 points on 2026-09-21, when the customer made it part of the
+   dynamic-linking stage (`docs/ROADMAP.md`).
+5. **Dynamic linking**: a loader, then glibc's symbol versions. Both run on
+   x86-64 (below); `dlfcn.h`, general-dynamic TLS and the other two
+   architectures are left.

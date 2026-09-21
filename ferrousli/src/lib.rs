@@ -66,6 +66,7 @@ pub mod key;
 pub mod libgen;
 pub mod link;
 pub mod linux;
+pub mod loader;
 pub mod locale;
 pub mod lock;
 pub mod malloc;
@@ -120,6 +121,7 @@ pub mod strtol;
 pub mod syscall;
 pub mod sysconf;
 pub mod syslog;
+pub mod sysmacros;
 pub mod temp;
 pub mod termios;
 pub mod thread;
@@ -137,6 +139,7 @@ pub mod wait;
 pub mod wchar;
 pub mod wcsto;
 pub mod wctype;
+pub mod xattr;
 
 /// A panic inside the library has nothing to unwind into, because every frame
 /// above it is C. Trapping stops the program at the fault, where a debugger or

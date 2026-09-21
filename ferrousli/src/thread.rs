@@ -283,6 +283,16 @@ static TLS_ALIGN: AtomicUsize = AtomicUsize::new(1);
 /// The program's TLS image, read from its headers through the auxiliary
 /// vector. A program without one gets an empty image.
 fn program_tls() -> Tls {
+    // Loaded by `ld-ferrousli`, the program's image is one of several, and
+    // the loader laid them all out; `build` asks it to copy them.
+    if let Some(loader) = crate::loader::interface() {
+        return Tls {
+            image: null(),
+            filesz: 0,
+            memsz: loader.tls_size,
+            align: loader.tls_align,
+        };
+    }
     let empty = Tls {
         image: null(),
         filesz: 0,
@@ -402,7 +412,11 @@ unsafe fn build(
     let block = base.wrapping_add(block_address - base.addr());
 
     let filesz = TLS_FILESZ.load(Ordering::Relaxed);
-    if filesz > 0 {
+    if let Some(loader) = crate::loader::interface() {
+        // SAFETY: `place` left `memsz` bytes, the loader's whole static TLS,
+        // below the thread pointer, in memory nothing else uses.
+        unsafe { (loader.init_tls)(tp.cast()) };
+    } else if filesz > 0 {
         let image = with_exposed_provenance::<c_void>(TLS_IMAGE.load(Ordering::Relaxed));
         // SAFETY: the image is `filesz` mapped bytes, and the block has room
         // for `memsz`, which is at least `filesz`, in memory nothing else uses.

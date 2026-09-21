@@ -123,7 +123,7 @@ unsafe fn replace_allocated(old: *mut c_char, new: *mut c_char) {
 /// `s` is a NUL-terminated string that stays valid while it is in the
 /// environment. `environ` is null or a null-terminated array of strings.
 unsafe fn insert(s: *mut c_char, len: usize, allocated: *mut c_char) -> c_int {
-    let env = environ.load(Ordering::Relaxed);
+    let env = environ().load(Ordering::Relaxed);
     let mut count = 0;
     if !env.is_null() {
         loop {
@@ -178,7 +178,7 @@ unsafe fn insert(s: *mut c_char, len: usize, allocated: *mut c_char) -> c_int {
     unsafe { array.wrapping_add(count).write(s) };
     // SAFETY: as above.
     unsafe { array.wrapping_add(count + 1).write(null_mut()) };
-    environ.store(array, Ordering::Relaxed);
+    environ().store(array, Ordering::Relaxed);
     OWNED_ARRAY.store(array, Ordering::Relaxed);
     if !allocated.is_null() {
         // SAFETY: `allocated` came from `malloc` and is now in the
@@ -262,7 +262,7 @@ pub unsafe extern "C" fn unsetenv(name: *const c_char) -> c_int {
         errno::set(errno::EINVAL);
         return -1;
     }
-    let env = environ.load(Ordering::Relaxed);
+    let env = environ().load(Ordering::Relaxed);
     if env.is_null() {
         return 0;
     }
@@ -326,7 +326,7 @@ pub unsafe extern "C" fn putenv(string: *mut c_char) -> c_int {
 /// `environ` must be null or a null-terminated array of strings.
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub unsafe extern "C" fn clearenv() -> c_int {
-    let env = environ.swap(null_mut(), Ordering::Relaxed);
+    let env = environ().swap(null_mut(), Ordering::Relaxed);
     if env.is_null() {
         return 0;
     }

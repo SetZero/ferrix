@@ -374,6 +374,32 @@ pub unsafe extern "C" fn remove(path: *const c_char) -> c_int {
     }
 }
 
+/// glibc's large-file name for [`fopen`]; every stream here is large-file.
+///
+/// # Safety
+///
+/// As [`fopen`].
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn fopen64(path: *const c_char, mode: *const c_char) -> *mut File {
+    // SAFETY: the caller's contract is `fopen`'s.
+    unsafe { fopen(path, mode) }
+}
+
+/// glibc's large-file name for [`freopen`].
+///
+/// # Safety
+///
+/// As [`freopen`].
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn freopen64(
+    path: *const c_char,
+    mode: *const c_char,
+    stream: *mut File,
+) -> *mut File {
+    // SAFETY: the caller's contract is `freopen`'s.
+    unsafe { freopen(path, mode, stream) }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

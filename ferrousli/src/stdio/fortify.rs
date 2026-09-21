@@ -10,9 +10,10 @@
 //! flag asks for level 2. That check needs to know where the format lives, and
 //! is not made: `%n` is accepted at every level.
 
-use core::ffi::{c_char, c_int};
+use core::ffi::{c_char, c_int, c_void};
 
 use super::file::File;
+use super::io::fread;
 use super::printf::{vasprintf, vdprintf, vfprintf, vprintf, vsnprintf};
 use crate::signal;
 use crate::syscall::{self, nr};
@@ -142,3 +143,25 @@ va::variadic!(__dprintf_chk, 3, __vdprintf_chk);
 va::variadic!(__asprintf_chk, 3, __vasprintf_chk);
 va::variadic!(__sprintf_chk, 4, __vsprintf_chk);
 va::variadic!(__snprintf_chk, 5, __vsnprintf_chk);
+
+/// `fread` into an object of `ptrlen` bytes, refusing a read that could pass
+/// its end or whose size overflows.
+///
+/// # Safety
+///
+/// As `fread`.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn __fread_chk(
+    ptr: *mut c_void,
+    ptrlen: usize,
+    size: usize,
+    count: usize,
+    stream: *mut File,
+) -> usize {
+    match size.checked_mul(count) {
+        Some(bytes) if bytes <= ptrlen => {}
+        _ => overflow(),
+    }
+    // SAFETY: the caller vouches for the stream, and the read fits.
+    unsafe { fread(ptr, size, count, stream) }
+}

@@ -355,6 +355,26 @@ pub unsafe extern "C" fn vsyslog(priority: c_int, message: *const c_char, ap: *m
 
 va::variadic!(syslog, 2, vsyslog);
 
+/// [`vsyslog`] as `_FORTIFY_SOURCE` rewrites it, with glibc's flag before the
+/// format. The flag asks glibc to refuse `%n` in a writable format; as with
+/// `printf`'s checked forms here, that check is not made.
+///
+/// # Safety
+///
+/// As [`vsyslog`].
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn __vsyslog_chk(
+    priority: c_int,
+    _flag: c_int,
+    message: *const c_char,
+    ap: *mut VaListTag,
+) {
+    // SAFETY: the caller's contract is `vsyslog`'s.
+    unsafe { vsyslog(priority, message, ap) }
+}
+
+va::variadic!(__syslog_chk, 3, __vsyslog_chk);
+
 #[cfg(test)]
 mod tests {
     use super::*;

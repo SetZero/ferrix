@@ -59,14 +59,14 @@ pub unsafe extern "C" fn __libc_start_main(
     main: Main,
     argc: c_int,
     argv: *mut *mut c_char,
-    _init: Hook,
-    _fini: Hook,
+    init: InitHook,
+    fini: Hook,
     rtld_fini: Hook,
     _stack_end: *mut c_void,
 ) -> ! {
     let count = usize::try_from(argc).unwrap_or(0);
     let envp = argv.wrapping_add(count + 1);
-    environ.store(envp, Ordering::Relaxed);
+    environ().store(envp, Ordering::Relaxed);
 
     let mut at = envp;
     // SAFETY: the environment ends in a null, and `at` has not passed it.
@@ -85,6 +85,32 @@ pub unsafe extern "C" fn __libc_start_main(
     if let Some(rtld_fini) = rtld_fini {
         let _ = crate::exit::atexit(Some(rtld_fini));
     }
+
+    // As `libferrousli.so`, the bounds below are this library's own arrays,
+    // not the program's; only the loader knows where the program's are.
+    if let Some(loader) = crate::loader::interface() {
+        // A `crt1.o` from before glibc 2.34 passes the program's own
+        // `__libc_csu_init` and `__libc_csu_fini`, which walk its arrays; a
+        // later one passes null and leaves it to the C library, which here
+        // leaves it to the loader, whose exit callback then finishes the
+        // program too.
+        if let Some(init) = init {
+            if let Some(fini) = fini {
+                let _ = crate::exit::atexit(Some(fini));
+            }
+            // SAFETY: the program's own initialiser, called with its
+            // arguments, now that the thread pointer is set.
+            unsafe { init(argc, argv, envp) };
+        } else {
+            // SAFETY: the loader runs the program's constructors, which may
+            // use this library, and it is started.
+            unsafe { (loader.run_program_init)(argc, argv, envp) };
+        }
+        // SAFETY: `main` is the program's, called with the kernel's arguments.
+        let status = unsafe { main(argc, argv, envp) };
+        exit(status)
+    }
+
     // Put the program's array after the loader callback. Handlers registered
     // by constructors and `main` are newer and therefore run first; this
     // walker then finishes the program before the loader finishes its

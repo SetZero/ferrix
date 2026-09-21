@@ -18,10 +18,59 @@ use crate::string::{strchr, strlen, strncmp};
 /// null.
 ///
 /// C declares it `char **environ` and may assign to it. `AtomicPtr` has the
-/// same layout as a pointer and makes it a safe `static`.
-#[cfg_attr(not(test), unsafe(no_mangle))]
-#[allow(non_upper_case_globals, reason = "C names it")]
-pub static environ: AtomicPtr<*mut c_char> = AtomicPtr::new(null_mut());
+/// same layout as a pointer, which is what lets it be read as one.
+///
+/// It has three names, as glibc gives it: `__environ`, and `environ` and
+/// `_environ` as weak aliases at the same address. A program linked against
+/// glibc may ask for any of them, and on x86-64 it asks for its own copy:
+/// the linker made room for `__environ` in the program and the loader copies
+/// the library's value there (`R_X86_64_COPY`), after which the program's
+/// copy is the variable. That works because this library reaches it only
+/// through its GOT, whose entry the loader points at the copy; rustc emits
+/// that for any exported variable it cannot assume is its own. One name
+/// could be a Rust `static`; three at one address are only possible in
+/// assembly, below.
+pub fn environ() -> &'static AtomicPtr<*mut c_char> {
+    #[allow(unused_unsafe, reason = "the variable is a Rust static in unit tests")]
+    // SAFETY: the variable lives as long as the process, and every access to
+    // it is atomic.
+    unsafe {
+        &ENVIRON
+    }
+}
+
+/// The variable, in unit tests: the test binary's own C library defines the
+/// C names.
+#[cfg(test)]
+static ENVIRON: AtomicPtr<*mut c_char> = AtomicPtr::new(null_mut());
+
+#[cfg(not(test))]
+unsafe extern "C" {
+    /// The variable, defined below.
+    #[link_name = "__environ"]
+    static ENVIRON: AtomicPtr<*mut c_char>;
+}
+
+// `__environ`, and its two weak aliases, in `.bss`.
+#[cfg(all(not(test), target_pointer_width = "64"))]
+core::arch::global_asm!(
+    ".pushsection .bss.__environ,\"aw\",@nobits",
+    ".p2align 3",
+    ".globl __environ",
+    ".type __environ, @object",
+    ".size __environ, 8",
+    ".weak environ",
+    ".type environ, @object",
+    ".size environ, 8",
+    ".weak _environ",
+    ".type _environ, @object",
+    ".size _environ, 8",
+    "__environ:",
+    "environ:",
+    "_environ:",
+    ".zero 8",
+    ".popsection",
+);
 
 /// The value of the environment variable `name`, or null.
 ///
@@ -37,7 +86,7 @@ pub unsafe extern "C" fn getenv(name: *const c_char) -> *mut c_char {
     if name.is_empty() || name.contains(&b'=') {
         return null_mut();
     }
-    let mut at = environ.load(Ordering::Relaxed);
+    let mut at = environ().load(Ordering::Relaxed);
     if at.is_null() {
         return null_mut();
     }
@@ -267,7 +316,7 @@ mod tests {
             c"PATH=/bin".as_ptr().cast_mut(),
             null_mut(),
         ];
-        environ.store(entries.as_mut_ptr(), Ordering::Relaxed);
+        environ().store(entries.as_mut_ptr(), Ordering::Relaxed);
 
         // SAFETY: the name is a C string literal and `environ` points at a
         // null-terminated array of them.
@@ -282,6 +331,6 @@ mod tests {
         // SAFETY: as above.
         assert!(unsafe { getenv(c"".as_ptr()) }.is_null());
 
-        environ.store(null_mut(), Ordering::Relaxed);
+        environ().store(null_mut(), Ordering::Relaxed);
     }
 }

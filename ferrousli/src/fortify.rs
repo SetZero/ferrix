@@ -13,8 +13,10 @@
 //! spike that linked uutils/coreutils against this library found
 //! `__memcpy_chk` coming out of a C dependency built with the host's headers.
 //!
-//! Only the three memory functions are here. The string and `printf` families
-//! (`__strcpy_chk`, `__sprintf_chk` and the rest) are not, and each will be
+//! The memory functions, `__mempcpy_chk`, and the two string functions a
+//! Debian busybox asks for are here; `printf`'s are in `stdio/fortify.rs`. The
+//! rest of the string family
+//! (`__stpcpy_chk`, `__strncpy_chk` and the rest) are not, and each will be
 //! added the same way when something needs it.
 //!
 //! # What a failed check does
@@ -23,10 +25,10 @@
 //! So does this, through [`crate::signal::abort`]. The check has found a
 //! buffer overrun that has not happened yet; there is nothing to return.
 
-use core::ffi::{c_int, c_void};
+use core::ffi::{c_char, c_int, c_void};
 
 use crate::signal::abort;
-use crate::string::{memcpy, memmove, memset};
+use crate::string::{memcpy, memmove, mempcpy, memset, strcat, strcpy, strlen};
 
 /// Stops the program: a fortified call was asked to write more than its
 /// destination holds.
@@ -94,4 +96,65 @@ pub unsafe extern "C" fn __memset_chk(
     }
     // SAFETY: the caller's contract is `memset`'s, and the fill fits.
     unsafe { memset(s, c, n) }
+}
+
+/// `mempcpy`, refusing a copy larger than the destination.
+///
+/// # Safety
+///
+/// As `mempcpy`: `dest` valid for writes of `n` bytes, `src` for reads of
+/// `n`, and the two not overlapping.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn __mempcpy_chk(
+    dest: *mut c_void,
+    src: *const c_void,
+    n: usize,
+    destlen: usize,
+) -> *mut c_void {
+    if n > destlen {
+        __chk_fail();
+    }
+    // SAFETY: the caller's contract is `mempcpy`'s, and the copy fits.
+    unsafe { mempcpy(dest, src, n) }
+}
+
+/// `strcpy`, refusing a string longer than the destination.
+///
+/// # Safety
+///
+/// As `strcpy`: `src` a NUL-terminated string and `dest` valid for writes of
+/// its length and the NUL.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn __strcpy_chk(
+    dest: *mut c_char,
+    src: *const c_char,
+    destlen: usize,
+) -> *mut c_char {
+    // SAFETY: the caller passes a NUL-terminated `src`.
+    if unsafe { strlen(src) } >= destlen {
+        __chk_fail();
+    }
+    // SAFETY: the caller's contract is `strcpy`'s, and the copy fits.
+    unsafe { strcpy(dest, src) }
+}
+
+/// `strcat`, refusing a result longer than the destination.
+///
+/// # Safety
+///
+/// As `strcat`: both NUL-terminated, and `dest` valid for writes of the
+/// joined string and its NUL.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn __strcat_chk(
+    dest: *mut c_char,
+    src: *const c_char,
+    destlen: usize,
+) -> *mut c_char {
+    // SAFETY: the caller passes two NUL-terminated strings.
+    let needed = unsafe { strlen(dest) }.saturating_add(unsafe { strlen(src) });
+    if needed >= destlen {
+        __chk_fail();
+    }
+    // SAFETY: the caller's contract is `strcat`'s, and the result fits.
+    unsafe { strcat(dest, src) }
 }

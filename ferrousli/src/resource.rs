@@ -106,6 +106,29 @@ pub unsafe extern "C" fn setrlimit(resource: c_int, limit: *const Rlimit) -> c_i
     unsafe { prlimit(0, resource, limit, core::ptr::null_mut()) }
 }
 
+/// glibc's large-file name for [`getrlimit`]; `struct rlimit` is already
+/// 64-bit here.
+///
+/// # Safety
+///
+/// As [`getrlimit`].
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn getrlimit64(resource: c_int, limit: *mut Rlimit) -> c_int {
+    // SAFETY: the caller's contract is `getrlimit`'s.
+    unsafe { getrlimit(resource, limit) }
+}
+
+/// glibc's large-file name for [`setrlimit`].
+///
+/// # Safety
+///
+/// As [`setrlimit`].
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn setrlimit64(resource: c_int, limit: *const Rlimit) -> c_int {
+    // SAFETY: the caller's contract is `setrlimit`'s.
+    unsafe { setrlimit(resource, limit) }
+}
+
 /// Reads the resource usage of `who` into `*usage`.
 ///
 /// # Safety

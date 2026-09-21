@@ -763,6 +763,15 @@ pub unsafe extern "C" fn malloc_usable_size(p: *mut c_void) -> usize {
     usable(block) - (addr - block - HEADER)
 }
 
+/// glibc's tuning knob: a trim threshold, a mapping threshold, an arena
+/// count. This allocator has none of them, so every request is accepted and
+/// changes nothing, and the answer is glibc's for success, 1. A program
+/// calls it to tune, never to change what its allocations mean.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub extern "C" fn mallopt(_param: c_int, _value: c_int) -> c_int {
+    1
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

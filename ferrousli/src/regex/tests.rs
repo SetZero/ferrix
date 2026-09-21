@@ -70,7 +70,12 @@ fn ours(cflags: c_int, pat: &str, s: &str, eflags: c_int) -> String {
     };
     // SAFETY: the pattern is compiled and not used again.
     unsafe { regfree(re.as_mut_ptr()) };
-    report(code, found.iter().map(|m| (m.rm_so, m.rm_eo)))
+    report(
+        code,
+        found
+            .iter()
+            .map(|m| (i64::from(m.rm_so), i64::from(m.rm_eo))),
+    )
 }
 
 /// How many groups `pat` has, as this library counts them, and 0 if it does
@@ -567,4 +572,116 @@ fn a_pattern_that_is_freed_can_be_compiled_again() {
         // SAFETY: as above.
         unsafe { regfree(re.as_mut_ptr()) };
     }
+}
+
+#[test]
+fn the_layouts_are_glibcs() {
+    // What a program compiled against glibc's `regex.h` reads and allocates.
+    assert_eq!(size_of::<Regex>(), 64);
+    assert_eq!(offset_of!(Regex, re_nsub), 48);
+    assert_eq!(size_of::<RegMatch>(), 8);
+}
+
+#[test]
+fn startend_matches_inside_a_span_and_reports_from_the_string() {
+    let mut re = MaybeUninit::<Regex>::zeroed();
+    let pat = CString::new("b+").unwrap();
+    // SAFETY: a `regex_t` to fill and a pattern to compile.
+    let code = unsafe { regcomp(re.as_mut_ptr(), pat.as_ptr(), REG_EXTENDED) };
+    assert_eq!(code, REG_OK);
+    // No NUL after the span, and a `b` just past it that must not count.
+    let text = b"xbbxbbb";
+    let mut found = [RegMatch { rm_so: 2, rm_eo: 5 }];
+    // SAFETY: the span is inside `text`, and `found` has one entry.
+    let code = unsafe {
+        regexec(
+            re.as_ptr(),
+            text.as_ptr().cast(),
+            1,
+            found.as_mut_ptr(),
+            REG_STARTEND,
+        )
+    };
+    assert_eq!(code, REG_OK);
+    assert_eq!((found[0].rm_so, found[0].rm_eo), (2, 3));
+    // SAFETY: the pattern is compiled and not used again.
+    unsafe { regfree(re.as_mut_ptr()) };
+}
+
+#[test]
+fn re_search_finds_forwards_backwards_and_fills_its_registers() {
+    const RE_SYNTAX_POSIX_EXTENDED_ISH: usize = RE_NO_BK_PARENS;
+    let old = re_set_syntax(RE_SYNTAX_POSIX_EXTENDED_ISH);
+    let mut re = MaybeUninit::<Regex>::zeroed();
+    let pattern = b"(b+)c";
+    // SAFETY: the pattern's bytes and a zeroed `regex_t`.
+    let error =
+        unsafe { re_compile_pattern(pattern.as_ptr().cast(), pattern.len(), re.as_mut_ptr()) };
+    assert!(error.is_null());
+    let _ = re_set_syntax(old);
+
+    let text = b"abbc abbbc";
+    let mut regs = Registers {
+        num_regs: 0,
+        start: null_mut(),
+        end: null_mut(),
+    };
+    // Forwards from 0: the first match starts at 1.
+    // SAFETY: the pattern is compiled, the text is `len` bytes, and the
+    // registers are unallocated, as a zeroed `regex_t` says.
+    let at = unsafe {
+        re_search(
+            re.as_mut_ptr(),
+            text.as_ptr().cast(),
+            10,
+            0,
+            10,
+            &raw mut regs,
+        )
+    };
+    assert_eq!(at, 1);
+    assert!(regs.num_regs >= 2, "at least the match and its group");
+    // The first `n` registers, as start and end pairs.
+    let spans = |regs: &Registers, n: usize| -> Vec<(c_int, c_int)> {
+        // SAFETY: `re_search` allocated `num_regs` entries, at least `n`.
+        let starts = unsafe { core::slice::from_raw_parts(regs.start, n) };
+        // SAFETY: as above.
+        let ends = unsafe { core::slice::from_raw_parts(regs.end, n) };
+        starts.iter().copied().zip(ends.iter().copied()).collect()
+    };
+    assert_eq!(spans(&regs, 2), [(1, 4), (1, 3)]);
+    // Forwards from 4 with a range that stops before the second match, at 6.
+    // SAFETY: as above; the registers are now this library's to grow.
+    let at = unsafe {
+        re_search(
+            re.as_mut_ptr(),
+            text.as_ptr().cast(),
+            10,
+            4,
+            1,
+            &raw mut regs,
+        )
+    };
+    assert_eq!(at, -1);
+    // Backwards from 9: a match must start where it is tried, and the
+    // first place going back where one does is 8, the `bc` inside `bbbc`.
+    // SAFETY: as above.
+    let at = unsafe {
+        re_search(
+            re.as_mut_ptr(),
+            text.as_ptr().cast(),
+            10,
+            9,
+            -9,
+            &raw mut regs,
+        )
+    };
+    assert_eq!(at, 8);
+    assert_eq!(spans(&regs, 1), [(8, 10)]);
+    // SAFETY: the array came from `malloc`.
+    unsafe { free(regs.start.cast()) };
+    // SAFETY: as above.
+    unsafe { free(regs.end.cast()) };
+    // SAFETY: the pattern is compiled and not used again.
+    unsafe { regfree(re.as_mut_ptr()) };
 }

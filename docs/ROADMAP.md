@@ -105,7 +105,7 @@ session sizes them.
 |---|---|---|
 | ~~Stage 19: the GPU path, Path A (`docs/GPU.md` §3)~~ *done 2026-09-19* | ~~52~~ | landed 2026-09-19 |
 | Stage 19: XWayland, the pointer-driven options, the second-pass effects | 48 | 2026-09-19 to -20 |
-| Dynamic linking: the kernel half, ferrousli's loader, glibc's names | 39 *(8 done)* | 2026-09-20 to -21 |
+| Dynamic linking: the kernel half, ferrousli's loader, glibc's names | 39 *(27 done; the exit met on x86-64)* | 2026-09-20 to -21 |
 | ~~Stage 12, btrfs write~~ *done 2026-09-21* | ~~≈ 60~~ | landed 2026-09-21 |
 | Stage 13, namespaces, cgroups, seccomp | *month* ≈ 60 | 2026-09-22 to -23 |
 | Stage 22, Steam: the parts with a first guess (glibc under the runtime 13, bubblewrap's rest 13, sound 30, Venus 8, XWayland counted above) | 64 | 2026-09-23 to -24 |
@@ -3369,7 +3369,7 @@ every architecture, and by `su`, which reaches `/etc/group` only because a
 
 ---
 
-## Dynamic linking — PIE, `PT_INTERP`, a loader  ·  *39 points, 31 left*
+## Dynamic linking — PIE, `PT_INTERP`, a loader  ·  *39 points, 12 left*
 
 Placed after *Networking* without a number of its own, for the same reason:
 nothing on the path to `rustc` needs it, since Rust's `std` targets static
@@ -3446,21 +3446,65 @@ Three parts, in the order they can be tested:
   x86-64 initial-exec TLS is live too: the loader lays out every `PT_TLS`
   image below `%fs`, copies both program and dependency images before their
   constructors, and applies `R_X86_64_TPOFF64`; the host fixture proves each
-  image's initial value and a dependency's persistent block. Still missing:
-  the general-dynamic TLS forms and `__tls_get_addr`, and `dlfcn.h`
-  (`dlopen`, `dlsym`, `dlclose`, `dlerror`, `dladdr`) — which
-  `docs/POSIX-2024.md` lists as ferrousli's dynamic-loading area and does not
-  price — plus a run inside Ferrix itself rather than on the host. Lazy
-  binding is not in it: everything is bound at load, as `LD_BIND_NOW` does, so
-  there is no resolver trampoline to write per architecture.
-* **glibc's names, 13 points.** The README's "then glibc's symbol versions":
-  `GLIBC_2.2.5` and its successors as `libferrousli.so`'s version
-  definitions, `libc.so.6`, `libm.so.6` and `libpthread.so.0` as its
-  `SONAME`s, and the startup contract glibc's `crt1.o` and `ld-linux` make
-  between them — `_dl_start_user`, `__libc_start_main` with `_dl_fini`,
-  `_rtld_global` where a binary reaches for it. A binary linked against
-  glibc then loads ferrousli in glibc's place, which is what the README
-  calls the destination.
+  image's initial value and a dependency's persistent block.
+
+  **12 of the 21 done, 2026-09-21: what a glibc program needs of it, on
+  x86-64, and run inside Ferrix.** Symbol versions: a reference naming
+  `printf@GLIBC_2.2.5` is answered only by a definition carrying that
+  version (or none), a hidden `name@VERSION` only by a reference naming it,
+  and the hash chain is walked past definitions that do not answer.
+  `COPY` relocations, which a glibc x86-64 program uses for `stdout`,
+  `optind`, `__environ` and the rest, found in the libraries and never in
+  the program's own room for them. The loader is in its own scope, last, so
+  a `DT_NEEDED` naming the interpreter (glibc's AArch64 and ARM programs name
+  `ld-linux` as a library too) is recognised rather than loaded twice, and so
+  that it can export `__ferrousli_loader`: the static TLS layout, a call that
+  fills a new thread's blocks, and a call that runs the program's own
+  initialisers. The loader no longer runs those itself — glibc's division:
+  the C library, started first, asks — which also ended a double run of a
+  program's constructors under a statically linked ferrousli. And a bug:
+  the page of `.bss` just past the file was left `PROT_NONE` whenever the
+  segment's offset in its page pushed the end over a boundary; a fixture at
+  eight sizes now proves every page writable, and failed on the old code.
+  `cargo xtask check --ferrousli` ran none of `ld/`'s tests before this —
+  `cargo test` at a workspace root that is also a package tests that package
+  alone — so it now passes `--workspace`.
+
+  Still missing, 9 points: the general-dynamic TLS forms and `__tls_get_addr`
+  (and AArch64's TLS descriptors); `dlfcn.h` (`dlopen`, `dlsym`, `dlclose`,
+  `dlerror`, `dladdr`), which `docs/POSIX-2024.md` lists as ferrousli's
+  dynamic-loading area and does not price; and the loader's entry, self-
+  relocation and thread pointer on AArch64 and ARMv7-A. Lazy binding is not
+  in it: everything is bound at load, as `LD_BIND_NOW` does, so there is no
+  resolver trampoline to write per architecture.
+* **glibc's names, 13 points — 10 done on x86-64, 2026-09-21.**
+  `ferrousli/tools/build-shared.sh` links `libferrousli.a` whole into a
+  `libc.so.6` whose every symbol carries the version glibc gives it by
+  default, from `tools/glibc-versions/x86_64.txt` (3,733 names, which
+  `tools/gen-glibc-versions.py` reads out of glibc's own libraries: names and
+  version strings, the interface, nothing of the code). glibc's other names
+  — `libm.so.6`, `libpthread.so.0`, `libresolv.so.2` and the rest, empty
+  since glibc 2.34 but for `libm` — are answered by that one object when no
+  file of their own is found. The startup contract is `__libc_start_main`
+  taking glibc's arguments, as it already did, now also as a shared object:
+  it asks the loader to run the program's initialisers (or runs a pre-2.34
+  `crt1.o`'s `init`), and takes the TLS layout from it. Debian's busybox
+  asked for 28 names the library lacked, all added: the large-file `64`
+  names, `__open_2`, `__strcpy_chk` and the fortified rest it calls,
+  `__syslog_chk`, the extended-attribute calls, `gnu_dev_major` and its
+  pair, `setresuid`, `mallopt`, `__cmsg_nxthdr`, and GNU's
+  `re_compile_pattern`, `re_search` and `re_syntax_options`. `regex_t` and
+  `regmatch_t` took glibc's layout, header and code together: a program
+  built against glibc allocates glibc's 8-byte `regmatch_t`, and musl's 16
+  would have overrun it. `environ` became `__environ` with weak `environ`
+  and `_environ`, as glibc names it, because the program copies
+  `__environ`; the library reaches every such variable through its GOT,
+  which rustc does unasked for an exported variable, so the copy is the one
+  it uses. `_dl_start_user` and `_rtld_global` turned out to be glibc's
+  business between its own `ld.so` and `libc.so.6`, which no program built
+  against it reaches, and are not needed. Left, 3 points: the AArch64 and
+  ARMv7-A tables and builds, which wait on the library itself running there
+  (below).
 
 `cargo xtask test-shell` gained `--interpreter` and `--library` on
 2026-09-21. The first puts a linker in the initramfs at the path `--init`'s own
@@ -3499,6 +3543,28 @@ the exit names, pinned by checksum.
    `libferrousli.so` at their paths, running the same script on all three
    architectures. This proves the other two parts, and is the README's fifth
    item in its entirety.
+
+   **Met on x86-64, 2026-09-21:** nothing of glibc on the image, ferrousli's
+   loader at `/lib64/ld-linux-x86-64.so.2` and ferrousli as `/lib/libc.so.6`
+   (`libresolv.so.2` answered by it), and the script prints its lines and
+   exits 7 —
+
+   ```
+   D=~/.local/share/ferrix/busybox/debian
+   cargo xtask test-shell --arch x86_64 --init "$D/{arch}/busybox" \
+       --interpreter ferrousli --library ferrousli
+   ```
+
+   Without `--library` it stops at `ld-ferrousli: library not found:
+   libc.so.6` and 127. AArch64 and ARMv7-A wait on ferrousli itself: it is
+   x86-64 only, and running there is `ferrousli/README.md`'s fourth item, a
+   port of the library that this section's points do not price. The
+   customer put that port inside this stage on 2026-09-21; it is estimated
+   at ≈ 34 points of its own — the system-call and errno tables per
+   architecture, the thread pointer, `clone`, signal contexts, `setjmp`,
+   `fenv` and `va_list` for each, AArch64's 128-bit `long double`,
+   ARMv7-A's 32-bit layouts with 64-bit `off_t` and `time_t`, `crt1.o`, and
+   a test harness that runs the C tests under `qemu-user`.
 
 ---
 

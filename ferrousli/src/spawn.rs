@@ -203,7 +203,7 @@ va::variadic!(execlp, 2, execlp_list);
 /// `command` must be a NUL-terminated string.
 unsafe fn run_shell(command: *const c_char) -> ! {
     let argv: [*const c_char; 4] = [c"sh".as_ptr(), c"-c".as_ptr(), command, null()];
-    let environment = environ.load(Ordering::Relaxed);
+    let environment = environ().load(Ordering::Relaxed);
     // SAFETY: `argv` is a null-terminated array of strings, and the environment
     // the program's.
     let _ = unsafe {

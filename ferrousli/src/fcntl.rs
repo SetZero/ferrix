@@ -263,6 +263,54 @@ pub unsafe extern "C" fn open64(path: *const c_char, flags: c_int, mode: c_uint)
     unsafe { open(path, flags, mode) }
 }
 
+/// `open` with no mode, as `_FORTIFY_SOURCE` rewrites a two-argument call.
+///
+/// A call that creates a file must say its mode, and with no third argument
+/// the mode would be whatever the register held. The compiler rewrites the
+/// two-argument calls it cannot prove safe to this, and glibc stops the
+/// program when the flags create a file, as this does.
+///
+/// # Safety
+///
+/// `path` must be a NUL-terminated string.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn __open_2(path: *const c_char, flags: c_int) -> c_int {
+    if flags & O_CREAT != 0 || flags & O_TMPFILE == O_TMPFILE {
+        crate::fortify::__chk_fail();
+    }
+    // SAFETY: the caller's contract is `open`'s; no mode is read.
+    unsafe { open(path, flags, 0) }
+}
+
+/// glibc's large-file name for [`__open_2`].
+///
+/// # Safety
+///
+/// As [`__open_2`].
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn __open64_2(path: *const c_char, flags: c_int) -> c_int {
+    // SAFETY: the caller's contract is `__open_2`'s.
+    unsafe { __open_2(path, flags) }
+}
+
+/// glibc's large-file name for [`fcntl`]. `struct flock` is already the
+/// large-file one on a 64-bit architecture.
+///
+/// # Safety
+///
+/// As [`fcntl`].
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn fcntl64(fd: c_int, cmd: c_int, arg: c_ulong) -> c_int {
+    // SAFETY: the caller's contract is `fcntl`'s.
+    unsafe { fcntl(fd, cmd, arg) }
+}
+
+/// glibc's large-file name for [`posix_fallocate`].
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub extern "C" fn posix_fallocate64(fd: c_int, offset: i64, len: i64) -> c_int {
+    posix_fallocate(fd, offset, len)
+}
+
 /// glibc's large-file name for [`openat`].
 ///
 /// # Safety

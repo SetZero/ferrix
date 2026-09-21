@@ -40,7 +40,8 @@ use std::path::{Path, PathBuf};
 
 use ferrix_elf::Elf;
 
-use crate::{Error, Result, ports};
+use crate::paths::{self, Arch};
+use crate::{Error, Result, cargo, ports};
 
 /// The script `sh -c` runs.
 pub(crate) const SCRIPT: &str = r#"echo "script: started"
@@ -138,6 +139,77 @@ pub(crate) fn carried(
         });
     }
     Ok(files)
+}
+
+/// [`carried`] for `test-shell`'s `--interpreter` and `--library` as given:
+/// `{arch}` replaced, and [`FERROUSLI`] naming ferrousli's own loader and
+/// `libc.so.6`, built from this tree once for both flags.
+///
+/// # Errors
+///
+/// As [`carried`] and [`ferrousli_shared`].
+pub(crate) fn carried_for(
+    arch: Arch,
+    program: &Path,
+    args: &crate::args::Args,
+) -> Result<Vec<ports::File>> {
+    let mut shared = None;
+    let mut expand = |path: &String, file: &str| -> Result<PathBuf> {
+        if path != FERROUSLI {
+            return Ok(PathBuf::from(path.replace("{arch}", arch.name())));
+        }
+        let dir = match &shared {
+            Some(dir) => PathBuf::clone(dir),
+            None => shared.insert(ferrousli_shared(arch)?).clone(),
+        };
+        Ok(dir.join(file))
+    };
+    let interpreter = match &args.interpreter {
+        Some(path) => Some(expand(path, "ld.so")?),
+        None => None,
+    };
+    let libraries = args
+        .libraries
+        .iter()
+        .map(|path| expand(path, "libc.so.6"))
+        .collect::<Result<Vec<_>>>()?;
+    carried(program, interpreter.as_deref(), &libraries)
+}
+
+/// The name `--interpreter` and `--library` take for ferrousli's own: its
+/// loader, and itself linked as `libc.so.6`.
+pub(crate) const FERROUSLI: &str = "ferrousli";
+
+/// Build ferrousli's loader and `libc.so.6` for `arch` with
+/// `ferrousli/tools/build-shared.sh`, and answer the directory holding them
+/// as `ld.so` and `libc.so.6`.
+///
+/// Built every time rather than when stale: cargo is incremental, and the
+/// link that follows it is seconds, where a stale pair in a gate would
+/// measure the wrong tree.
+///
+/// # Errors
+///
+/// An architecture ferrousli does not build for yet, a Windows host (the
+/// script links with the host's Linux `cc`), and a failed build.
+pub(crate) fn ferrousli_shared(arch: Arch) -> Result<PathBuf> {
+    if arch != Arch::X86_64 {
+        return Err(Error::new(format!(
+            "ferrousli's loader and libc.so.6 are built for x86_64 only, not for {arch}"
+        )));
+    }
+    if cfg!(windows) {
+        return Err(Error::new(
+            "ferrousli's libc.so.6 is linked with a Linux host's cc; run this on Linux",
+        ));
+    }
+    let out = paths::build_dir(arch).join("ferrousli-shared");
+    let ferrousli = paths::workspace_root().join("ferrousli");
+    let mut command = std::process::Command::new("bash");
+    let _ = command.arg("tools/build-shared.sh").arg(&out);
+    crate::ferrousli::in_ferrousli(&mut command, &ferrousli);
+    cargo::run(command, "ferrousli/tools/build-shared.sh")?;
+    Ok(out)
 }
 
 /// A file's bytes, or an error that names it.

@@ -469,6 +469,49 @@ pub extern "C" fn sockatmark(fd: c_int) -> c_int {
     if ret < 0 { -1 } else { mark }
 }
 
+/// The control message after `cmsg` in `mhdr`'s buffer, or null at the end:
+/// what glibc's `CMSG_NXTHDR` macro calls, and a program compiled against
+/// glibc's header imports.
+///
+/// Each length is read as its low 32 bits. glibc's structures have `size_t`
+/// lengths and this library's header `int` lengths with padding after, and
+/// on a little-endian target the low half is the same bytes in both.
+///
+/// # Safety
+///
+/// `mhdr` must be a `struct msghdr` and `cmsg` a control message inside its
+/// buffer.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn __cmsg_nxthdr(mhdr: *mut Msghdr, cmsg: *mut c_void) -> *mut c_void {
+    /// A length rounded up to the alignment of a `size_t`, as `CMSG_ALIGN`.
+    const fn align(len: usize) -> usize {
+        len.next_multiple_of(size_of::<usize>())
+    }
+    // SAFETY: the caller passes a message header.
+    let header = unsafe { &*mhdr };
+    let (control, controllen) = (
+        header.msg_control.cast::<u8>(),
+        header.msg_controllen as usize,
+    );
+    // SAFETY: the caller passes a control message, whose first field is its
+    // length.
+    let len = unsafe { cmsg.cast::<c_uint>().read() } as usize;
+    if len < CMSG_HEADER {
+        return null_mut();
+    }
+    let end = control.wrapping_add(controllen);
+    let next = cmsg.cast::<u8>().wrapping_add(align(len));
+    if next.wrapping_add(CMSG_HEADER) > end {
+        return null_mut();
+    }
+    // SAFETY: the next header lies inside the buffer, checked just above.
+    let next_len = u32::from_ne_bytes(unsafe { next.cast::<[u8; 4]>().read() }) as usize;
+    if next.wrapping_add(align(next_len)) > end {
+        return null_mut();
+    }
+    next.cast()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -72,6 +72,8 @@ shmget shmat shmctl shmdt semget semop semctl semtimedop msgget msgsnd msgrcv
 msgctl capget capset personality setns unshare sethostname setdomainname
 reboot syslog clock_adjtime settimeofday inotify_init1 inotify_add_watch
 inotify_rm_watch getresuid getresgid splice vmsplice
+setxattr lsetxattr fsetxattr getxattr lgetxattr fgetxattr listxattr llistxattr
+flistxattr removexattr lremovexattr fremovexattr
 """.split()
 
 DEFINE_SYSCALL = re.compile(r"^#define __NR_(\w+) (\d+)$", re.M)

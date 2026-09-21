@@ -122,7 +122,7 @@ pub unsafe extern "C" fn execve(
 /// As [`execve`], and `environ` must be a valid environment.
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub unsafe extern "C" fn execv(path: *const c_char, argv: *const *const c_char) -> c_int {
-    let envp = environ
+    let envp = environ()
         .load(Ordering::Relaxed)
         .cast_const()
         .cast::<*const c_char>();
@@ -175,7 +175,7 @@ fn join(dir: &[u8], file: &[u8], buf: &mut [u8]) -> bool {
 /// strings ending in a null pointer, and `environ` a valid environment.
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub unsafe extern "C" fn execvp(file: *const c_char, argv: *const *const c_char) -> c_int {
-    let envp = environ
+    let envp = environ()
         .load(Ordering::Relaxed)
         .cast_const()
         .cast::<*const c_char>();
@@ -333,6 +333,18 @@ pub extern "C" fn setreuid(ruid: c_uint, euid: c_uint) -> c_int {
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn setregid(rgid: c_uint, egid: c_uint) -> c_int {
     set_ids(nr::SETREGID, rgid as usize, egid as usize, 0)
+}
+
+/// Sets the real, effective and saved user ids; -1 leaves one unchanged.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub extern "C" fn setresuid(ruid: c_uint, euid: c_uint, suid: c_uint) -> c_int {
+    set_ids(nr::SETRESUID, ruid as usize, euid as usize, suid as usize)
+}
+
+/// Sets the real, effective and saved group ids; -1 leaves one unchanged.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub extern "C" fn setresgid(rgid: c_uint, egid: c_uint, sgid: c_uint) -> c_int {
+    set_ids(nr::SETRESGID, rgid as usize, egid as usize, sgid as usize)
 }
 
 /// Stores up to `size` supplementary group ids at `list`, and returns how
