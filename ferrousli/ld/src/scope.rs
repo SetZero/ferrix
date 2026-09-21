@@ -49,6 +49,10 @@ pub struct Scope {
     count: usize,
     /// `LD_LIBRARY_PATH`, as a colon-separated list, or null.
     library_path: *const c_char,
+    /// Bytes below the initial thread pointer occupied by static TLS.
+    tls_size: usize,
+    /// The greatest alignment any static TLS image requires.
+    tls_align: usize,
 }
 
 impl Scope {
@@ -60,6 +64,8 @@ impl Scope {
             names: [core::ptr::null(); MAX_OBJECTS],
             count: 0,
             library_path: core::ptr::null(),
+            tls_size: 0,
+            tls_align: 1,
         }
     }
 
@@ -78,10 +84,60 @@ impl Scope {
         self.count
     }
 
+    /// Bytes the initial thread's static TLS reservation needs below its
+    /// thread pointer. Valid after [`Self::layout_tls`].
+    #[must_use]
+    pub const fn tls_size(&self) -> usize {
+        self.tls_size
+    }
+
+    /// The greatest alignment requested by a static TLS image. Valid after
+    /// [`Self::layout_tls`].
+    #[must_use]
+    pub const fn tls_align(&self) -> usize {
+        self.tls_align
+    }
+
     /// The object at `index`, in search order.
     #[must_use]
     pub fn get(&self, index: usize) -> Option<&Object> {
         self.objects.get(index)
+    }
+
+    /// Give every `PT_TLS` image its position below the initial thread
+    /// pointer.
+    ///
+    /// x86-64's variant-II TLS packs images downwards from the thread pointer.
+    /// Rounding after each image, rather than merely at the end, preserves
+    /// every segment's required alignment.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::MalformedObject`] if the layout would not fit in an address
+    /// or a signed TLS offset.
+    pub fn layout_tls(&mut self) -> Result<(), Error> {
+        let mut size = 0_usize;
+        let mut greatest_align = 1_usize;
+        for object in self.objects.iter_mut().take(self.count) {
+            let Some(tls) = object.tls.as_mut() else {
+                continue;
+            };
+            let unaligned = size
+                .checked_add(tls.memsz)
+                .ok_or(Error::MalformedObject("TLS layout is too large"))?;
+            let rounded = unaligned
+                .checked_add(tls.align - 1)
+                .map(|value| value & !(tls.align - 1))
+                .ok_or(Error::MalformedObject("TLS layout is too large"))?;
+            let offset = isize::try_from(rounded)
+                .map_err(|_| Error::MalformedObject("TLS layout is too large"))?;
+            tls.offset = -offset;
+            size = rounded;
+            greatest_align = greatest_align.max(tls.align);
+        }
+        self.tls_size = size;
+        self.tls_align = greatest_align;
+        Ok(())
     }
 
     /// Add an object that is already mapped: the program, or the loader.
@@ -252,7 +308,8 @@ impl Scope {
         let hash = sym::hash(name);
         for index in 0..self.count {
             let object = self.objects.get(index)?;
-            if let Some(found) = sym::lookup(object, name, hash) {
+            if let Some(mut found) = sym::lookup(object, name, hash) {
+                found.tls_offset = object.tls.map(|tls| tls.offset);
                 return Some(found);
             }
         }

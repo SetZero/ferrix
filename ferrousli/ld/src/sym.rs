@@ -72,11 +72,19 @@ fn same_name(a: *const c_char, b: *const c_char) -> bool {
 pub struct Found {
     /// Its run-time address: the object's base plus the symbol's value.
     pub address: usize,
+    /// Its value as written in the symbol table.
+    ///
+    /// For ordinary symbols this is relative to the defining object's base.
+    /// For `STT_TLS` it is instead the offset inside that object's TLS image.
+    pub value: usize,
     /// Its `st_info`, which says whether it is a function resolved by calling
     /// it.
     pub info: u8,
     /// Its size.
     pub size: usize,
+    /// The defining object's TLS image offset from the thread pointer, when
+    /// it has one. [`crate::scope::Scope`] supplies this after lookup.
+    pub tls_offset: Option<isize>,
 }
 
 /// The word width of the Bloom filter: one machine word per element, as the
@@ -167,8 +175,10 @@ fn defines(object: &Object, symbol: &Sym, name: *const c_char) -> Option<Found> 
     }
     Some(Found {
         address: (symbol.st_value as usize).wrapping_add(object.base),
+        value: symbol.st_value as usize,
         info: symbol.st_info,
         size: symbol.st_size as usize,
+        tls_offset: None,
     })
 }
 

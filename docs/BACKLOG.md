@@ -164,7 +164,7 @@ alive.
 | os-a8 (was os-b7, os-50, os-7c, os-fb, ferrix-ce) | `ferrousli/`: first the wrappers for epoll, eventfd and `FIONBIO` with a C test (3), then `docs/POSIX-2024.md`'s list from the top of what is left (996 present, 247 missing, 80 points on 2026-09-16), each landing rebuilding the busybox and passing both ferrousli gates |
 | os-26 | The event loop's kernel rows are done (epoll, eventfd, `FIONBIO`, `FIOCLEX`/`FIONCLEX`); next the wake-on-event row (5) so `poll`/`epoll` waits stop rechecking every 5 ms, then the `AF_PACKET` gaps; Windows parity for `xtask` is held |
 | os-12 | Ports onto ferrousli: curl with HTTPS through mbedTLS and btop with libc++ landed for the release; the firmware clock, ChaCha20 `getrandom` (BootInfo v5), the hermetic HTTPS `test-net` program and git all landed and gated on 2026-09-17. What is left of `ports-autobuild`: building the ports when stale rather than every time (5) |
-| open | Stage 8's list (14), `AF_UNIX` 3b the in-flight cycle pass (3) and 3c credentials (2), stage 10's BAR trust (8, first piece landed), `timerfd` (3), dynamic linking (39, kernel half, `DT_RUNPATH` and `DT_FINI_ARRAY` done 2026-09-21), stage 12 |
+| open | Stage 8's list (14), `AF_UNIX` 3b the in-flight cycle pass (3) and 3c credentials (2), stage 10's BAR trust (8, first piece landed), `timerfd` (3), dynamic linking (39, kernel half, `DT_RUNPATH`, `DT_FINI_ARRAY` and x86-64 initial-exec TLS done 2026-09-21), stage 12 |
 
 The fleet restarted on the customer's Windows machine on the evening of
 2026-09-13. `cargo` builds there, but every boot, the KVM row, `test-shell`,

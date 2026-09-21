@@ -58,6 +58,11 @@ pub struct Tls {
     pub memsz: usize,
     /// Required alignment of the block.
     pub align: usize,
+    /// This image's negative offset from the initial thread pointer.
+    ///
+    /// [`crate::scope::Scope::layout_tls`] assigns it before relocations use
+    /// `R_*_TPOFF` references.
+    pub offset: isize,
 }
 
 impl Tls {
@@ -73,6 +78,7 @@ impl Tls {
             filesz,
             memsz,
             align,
+            offset: 0,
         })
     }
 }

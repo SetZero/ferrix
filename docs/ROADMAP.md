@@ -98,7 +98,7 @@ session sizes them.
 |---|---|---|
 | ~~Stage 19: the GPU path, Path A (`docs/GPU.md` §3)~~ *done 2026-09-19* | ~~52~~ | landed 2026-09-19 |
 | Stage 19: XWayland, the pointer-driven options, the second-pass effects | 48 | 2026-09-19 to -20 |
-| Dynamic linking: the kernel half, ferrousli's loader, glibc's names | 39 *(7 done)* | 2026-09-20 to -21 |
+| Dynamic linking: the kernel half, ferrousli's loader, glibc's names | 39 *(8 done)* | 2026-09-20 to -21 |
 | Stage 12, btrfs write | ≈ 60 *(21 done: the write path, host-side)* | 2026-09-21 to -22 |
 | Stage 13, namespaces, cgroups, seccomp | *month* ≈ 60 | 2026-09-22 to -23 |
 | Stage 22, Steam: the parts with a first guess (glibc under the runtime 13, bubblewrap's rest 13, sound 30, Venus 8, XWayland counted above) | 64 | 2026-09-23 to -24 |
@@ -3362,7 +3362,7 @@ every architecture, and by `su`, which reaches `/etc/group` only because a
 
 ---
 
-## Dynamic linking — PIE, `PT_INTERP`, a loader  ·  *39 points, 32 left*
+## Dynamic linking — PIE, `PT_INTERP`, a loader  ·  *39 points, 31 left*
 
 Placed after *Networking* without a number of its own, for the same reason:
 nothing on the path to `rustc` needs it, since Rust's `std` targets static
@@ -3435,7 +3435,11 @@ Three parts, in the order they can be tested:
   with `LD_LIBRARY_PATH` absent. So is `DT_FINI_ARRAY`: the loader preserves
   its completed scope, passes its `rtld_fini` callback through `rdx`, and
   Ferrousli's runtime runs a dependency's destructor after `main` returns.
-  Still missing: the TLS forms and `__tls_get_addr`, and `dlfcn.h`
+  x86-64 initial-exec TLS is live too: the loader lays out every `PT_TLS`
+  image below `%fs`, copies both program and dependency images before their
+  constructors, and applies `R_X86_64_TPOFF64`; the host fixture proves each
+  image's initial value and a dependency's persistent block. Still missing:
+  the general-dynamic TLS forms and `__tls_get_addr`, and `dlfcn.h`
   (`dlopen`, `dlsym`, `dlclose`, `dlerror`, `dladdr`) — which
   `docs/POSIX-2024.md` lists as ferrousli's dynamic-loading area and does not
   price — plus a run inside Ferrix itself rather than on the host. Lazy

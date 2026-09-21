@@ -47,6 +47,7 @@ mod report;
 mod scope;
 mod start;
 mod sym;
+mod tls;
 
 // The library's own system call module, used as it is rather than written
 // again. The loader cannot *call* the C library -- it is the half of it that
@@ -152,6 +153,7 @@ unsafe fn link(stack: &auxv::Stack) -> Result<usize, report::Error> {
     // defines wins over any library's.
     scope.push(c"".as_ptr(), program)?;
     scope.load_dependencies(page_size)?;
+    scope.layout_tls()?;
 
     // Relocated from the last object loaded to the first, so that a library
     // is relocated before whatever needed it. Nothing here requires that
@@ -173,7 +175,9 @@ unsafe fn link(stack: &auxv::Stack) -> Result<usize, report::Error> {
         object.protect_relro(page_size);
     }
 
-    // SAFETY: every object is relocated, so an initialiser may call anything.
+    tls::install(&scope)?;
+    // SAFETY: every object is relocated and its initial TLS blocks are in
+    // place, so an initialiser may call anything.
     unsafe { run_initialisers(&scope) };
     // SAFETY: all objects are mapped and relocated, and this is the sole path
     // that reaches the program's entry point.

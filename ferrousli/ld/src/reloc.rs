@@ -171,7 +171,22 @@ unsafe fn apply_one(object: &Object, scope: &Scope, entry: &Entry) -> Result<(),
                 address
             }
         }
-        arch::R_DTPMOD | arch::R_DTPOFF | arch::R_TPOFF => {
+        arch::R_TPOFF => {
+            let found = unsafe { resolve(object, scope, entry)? };
+            let Some(found) = found else {
+                // An undefined weak TLS reference is zero, like every other
+                // weak data reference.
+                unsafe { target.write(0) };
+                return Ok(());
+            };
+            let offset = found
+                .tls_offset
+                .ok_or(Error::MalformedObject("a TLS symbol has no PT_TLS"))?;
+            (offset as usize)
+                .wrapping_add(found.value)
+                .wrapping_add_signed(entry.addend)
+        }
+        arch::R_DTPMOD | arch::R_DTPOFF => {
             return Err(Error::UnknownRelocation(kind));
         }
         other => return Err(Error::UnknownRelocation(other)),

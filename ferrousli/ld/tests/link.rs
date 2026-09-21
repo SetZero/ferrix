@@ -202,6 +202,47 @@ fn a_program_finds_a_library_through_its_runpath() {
     );
 }
 
+/// `PT_TLS` images are copied before the program starts, and x86-64's
+/// initial-exec `R_X86_64_TPOFF64` points a library at its own block.
+///
+/// The two objects have distinct initial values. The library is called twice,
+/// so this catches both a missing image copy and an offset into the program's
+/// block rather than the library's.
+#[test]
+fn initial_exec_tls_works_in_a_program_and_its_library() {
+    let loader = loader();
+    let dir = scratch().join("ld-tls");
+    std::fs::create_dir_all(&dir).expect("make the scratch directory");
+
+    let library = dir.join("libtls.so");
+    compile(&[
+        "-shared",
+        "-ftls-model=initial-exec",
+        "-o",
+        library.to_str().expect("a path"),
+        manifest().join("tests/c/tls_greet.c").to_str().expect("a path"),
+    ]);
+
+    let program = dir.join("prog");
+    compile(&[
+        "-pie",
+        "-ftls-model=initial-exec",
+        "-o",
+        program.to_str().expect("a path"),
+        manifest().join("tests/c/tls_prog.c").to_str().expect("a path"),
+        library.to_str().expect("a path"),
+        &format!("-Wl,--dynamic-linker={}", loader.display()),
+        "-Wl,-e,_start",
+    ]);
+
+    let status = Command::new(&program).status().expect("run the program");
+    assert_eq!(
+        status.code(),
+        Some(EXPECTED),
+        "initial-exec TLS did not reach its program and library blocks"
+    );
+}
+
 /// The C runtime receives and registers the loader's `rtld_fini` callback.
 ///
 /// The shared library's destructor writes after `main` returns. That is only
