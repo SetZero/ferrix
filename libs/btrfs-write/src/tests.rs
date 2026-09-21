@@ -30,6 +30,7 @@ use crate::ranges::RangeSet;
 mod fsops;
 mod inodes;
 mod log;
+mod powerfail;
 
 const BLOCK: usize = 4096;
 /// Every fixture is 128 MiB.

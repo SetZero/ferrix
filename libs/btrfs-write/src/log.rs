@@ -230,7 +230,19 @@ impl<D: WriteDevice> WriteVolume<D> {
             generation,
         };
         let _ = self.roots.insert(TREE_LOG_OBJECTID, root);
+        // Everything the log holds is read now, blocks and items both, and
+        // nothing is read from it again. The edits below allocate from the
+        // committed free space, which includes the log's own blocks — it was
+        // never committed — so a block read later might be one a new node has
+        // taken.
+        let mut blocks = Vec::new();
+        self.collect_blocks(root, &mut blocks)?;
         let items = self.range(TREE_LOG_OBJECTID, &BtrfsKey::MIN, &BtrfsKey::MAX)?;
+        let _ = self.roots.remove(&TREE_LOG_OBJECTID);
+        for (block, _) in blocks {
+            let _ = self.dirty.remove(&block);
+            let _ = self.clean.remove(&block);
+        }
         // The stat data goes in last. Replaying an extent adjusts the
         // inode's `nbytes` as it drops what the range held before, and the
         // logged item already says what `nbytes` ends up being — it is the
@@ -254,15 +266,6 @@ impl<D: WriteDevice> WriteVolume<D> {
         for (key, data) in stat {
             self.put(FS_TREE, key, data)?;
         }
-        // The log's own blocks are not part of any tree now; they were never
-        // in the committed extent tree either, so they are simply free.
-        let mut blocks = Vec::new();
-        self.collect_blocks(root, &mut blocks)?;
-        let _ = self.roots.remove(&TREE_LOG_OBJECTID);
-        for (block, _) in blocks {
-            let _ = self.dirty.remove(&block);
-            let _ = self.clean.remove(&block);
-        }
         self.commit()
     }
 
@@ -283,9 +286,13 @@ impl<D: WriteDevice> WriteVolume<D> {
         if let ExtentDataBody::Regular(file) | ExtentDataBody::Prealloc(file) = extent.body
             && file.disk_bytenr != 0
         {
-            self.space
-                .reserve(file.disk_bytenr, file.disk_num_bytes, Kind::Data)?;
-            let _ = restored.insert(file.disk_bytenr, file.disk_num_bytes);
+            // One extent cut in two is named by two file extents; it is
+            // allocated once, and referred to twice.
+            if !restored.contains(file.disk_bytenr, file.disk_num_bytes) {
+                self.space
+                    .reserve(file.disk_bytenr, file.disk_num_bytes, Kind::Data)?;
+                let _ = restored.insert(file.disk_bytenr, file.disk_num_bytes);
+            }
             self.refs.add(
                 file.disk_bytenr,
                 file.disk_num_bytes,

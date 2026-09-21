@@ -169,6 +169,26 @@ fn logging_the_same_inode_twice_keeps_the_later_of_the_two() {
 }
 
 #[test]
+fn an_extent_cut_in_two_replays_as_one_extent_twice_referred_to() {
+    let whole = pattern(60_000, 15);
+    let (mut volume, ino) = with_a_file(&whole);
+    // An overwrite in the middle cuts the extent into three pieces, two of
+    // which name the original extent at different offsets into it.
+    let patch = pattern(8192, 16);
+    let mut expected = whole.clone();
+    expected
+        .get_mut(16_384..24_576)
+        .unwrap()
+        .copy_from_slice(&patch);
+    volume.write_file(ino, 16_384, &patch, expected.len() as u64).unwrap();
+    volume.log_inode(ino).unwrap();
+    volume.commit_log().unwrap();
+    let mut after = WriteVolume::open(volume.into_device()).unwrap();
+    assert_eq!(read_all(&mut after, ino), expected);
+    check(&after.device);
+}
+
+#[test]
 fn the_log_tree_is_a_tree_of_its_own() {
     let (mut volume, ino) = with_a_file(&pattern(6000, 14));
     volume.log_inode(ino).unwrap();
