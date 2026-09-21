@@ -15,7 +15,10 @@
 //!
 //! Attached read-only, after the pattern disk, so the pattern disk stays
 //! `vda` and this one is `vdb`, in the order devmgr and the boot check name
-//! them.
+//! them. Behind it comes a third: a fresh copy of the `blank` fixture, an
+//! empty volume, attached writable as `vdc` for stage 12's check to write on
+//! and for host `btrfs check` to read afterwards. That one is rewritten for
+//! every boot, because the boot before wrote on it.
 
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -26,6 +29,13 @@ use crate::{Error, Result};
 
 /// The packed fixture, as `libs/btrfs`'s tests read it.
 const PACKED: &[u8] = include_bytes!("../../libs/btrfs/testdata/none.img.packed");
+
+/// The blank fixture: an empty volume with `mkfs.btrfs`'s default profiles
+/// and features, which stage 12's check writes on.
+const BLANK: &[u8] = include_bytes!("../../libs/btrfs/testdata/blank.img.packed");
+
+/// The writable image's name under `build/`.
+const BLANK_FILE_NAME: &str = "btrfs-write.img";
 
 /// Bytes in a packed block, and in the image's blocks.
 const BLOCK: usize = 4096;
@@ -61,6 +71,45 @@ pub(crate) fn ensure() -> Result<PathBuf> {
     Ok(path)
 }
 
+/// A fresh copy of the blank fixture, for stage 12's check to write on.
+///
+/// Rewritten for every boot, never reused: the boot before wrote on it, and
+/// a check that starts from a volume another run left behind is checking
+/// something nobody chose. Its path is also what `btrfs check` is pointed at
+/// afterwards.
+///
+/// # Errors
+///
+/// The fixture being malformed, or the file not writable.
+pub(crate) fn ensure_blank() -> Result<PathBuf> {
+    let directory = paths::workspace_root().join("build");
+    let path = directory.join(BLANK_FILE_NAME);
+    std::fs::create_dir_all(&directory)?;
+    let partial = directory.join(format!("{BLANK_FILE_NAME}.{}.partial", std::process::id()));
+    write_packed(&partial, BLANK).map_err(|error| {
+        let _ = std::fs::remove_file(&partial);
+        Error::new(format!("writing {}: {error}", partial.display()))
+    })?;
+    std::fs::rename(&partial, &path)
+        .map_err(|error| Error::new(format!("renaming to {}: {error}", path.display())))?;
+    Ok(path)
+}
+
+/// Where the writable image is, without writing it.
+pub(crate) fn blank_path() -> PathBuf {
+    paths::workspace_root().join("build").join(BLANK_FILE_NAME)
+}
+
+/// The writable image, in one line, for a command that attaches it.
+pub(crate) fn describe_blank() -> String {
+    format!(
+        "a fresh empty volume from libs/btrfs/testdata/blank.img.packed, {} non-zero blocks of \
+         {BLOCK} bytes in a {} MiB image made by mkfs.btrfs with its default profiles",
+        BLANK.len() / RECORD,
+        IMAGE_SIZE / (1024 * 1024),
+    )
+}
+
 /// The layout, in one line, for the output of a command that attaches the
 /// disk.
 pub(crate) fn describe() -> String {
@@ -83,9 +132,16 @@ fn records() -> impl Iterator<Item = (u64, &'static [u8])> {
 
 /// Write the image: full size, each packed block at its offset.
 fn write(path: &Path) -> std::io::Result<()> {
+    write_packed(path, PACKED)
+}
+
+/// Write `packed`'s blocks into an image of the fixture's full size.
+fn write_packed(path: &Path, packed: &[u8]) -> std::io::Result<()> {
     let mut file = File::create(path)?;
     file.set_len(IMAGE_SIZE)?;
-    for (offset, block) in records() {
+    for record in packed.chunks_exact(RECORD) {
+        let (offset, block) = record.split_at(8);
+        let offset = u64::from_le_bytes(offset.try_into().unwrap_or([0; 8]));
         let _ = file.seek(SeekFrom::Start(offset))?;
         file.write_all(block)?;
     }

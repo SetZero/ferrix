@@ -285,6 +285,14 @@ pub trait FileSystem: Send + Sync + fmt::Debug {
     /// The device number `stat` reports for every inode in it.
     fn device(&self) -> u64;
 
+    /// Make everything written to this filesystem durable: `sync` and
+    /// `syncfs`, and what unmounting one does before it lets go.
+    ///
+    /// The default is `Ok`, for a filesystem that keeps nothing back.
+    fn sync(&self) -> Result<()> {
+        Ok(())
+    }
+
     /// What `statfs` reports.
     ///
     /// The default knows nothing: no magic number, no counts, and the name
@@ -382,6 +390,19 @@ pub trait Inode: Send + Sync + fmt::Debug {
     fn set_len(&self, len: u64) -> Result<()> {
         let _ = len;
         Err(Errno::EINVAL)
+    }
+
+    /// Make everything written to this file durable, and do not return until
+    /// it is: `fsync`, or with `data_only` `fdatasync`, which need not write
+    /// out metadata a reader does not need.
+    ///
+    /// The default is `Ok`, which is the truth for a filesystem that keeps
+    /// nothing back — tmpfs, procfs, a pipe — and is what Linux answers for a
+    /// file whose filesystem has no `fsync` operation. A filesystem that
+    /// commits, as btrfs does, writes here.
+    fn fsync(&self, data_only: bool) -> Result<()> {
+        let _ = data_only;
+        Ok(())
     }
 
     /// Lengthen a regular file to `len` if it is shorter, and leave it alone

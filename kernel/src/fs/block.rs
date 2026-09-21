@@ -1,4 +1,5 @@
-//! What the kernel needs from a disk: whole sectors, read on request.
+//! What the kernel needs from a disk: whole sectors, read and written on
+//! request, and a flush that says when they are durable.
 //!
 //! Stage 11 mounts a btrfs volume from a virtio-blk disk served by a ring-3
 //! driver, and `mount(2)` names that disk by a node in `/dev`. Opening a block
@@ -49,6 +50,30 @@ pub(crate) trait BlockDevice: Send + Sync + fmt::Debug {
     /// Whether the disk refuses writes. Fixed for the device's life, as
     /// [`BlockDevice::sectors`] says.
     fn read_only(&self) -> bool;
+
+    /// Write whole sectors from `buf`, whose length is a whole number of
+    /// sectors, at `sector`. Called with no spin lock held; may sleep.
+    ///
+    /// The bytes are on the device when this returns, but need not be
+    /// durable: only [`BlockDevice::flush`] promises that. A device that has
+    /// gone away answers `EIO`, as a read does.
+    ///
+    /// The default is `EROFS`, which is what a disk that cannot write should
+    /// answer; a caller must check [`BlockDevice::read_only`] first if it
+    /// wants a clearer refusal.
+    fn write(&self, sector: u64, buf: &[u8]) -> Result<(), Errno> {
+        let _ = (sector, buf);
+        Err(Errno::EROFS)
+    }
+
+    /// Make every write that has completed durable, and do not return until
+    /// it is. This is the ordering a filesystem's commit rests on.
+    ///
+    /// The default is `Ok`, which is honest for a device that takes no
+    /// writes: there is nothing of its caller's on it to lose.
+    fn flush(&self) -> Result<(), Errno> {
+        Ok(())
+    }
 }
 
 /// The disk's size in bytes, saturating rather than wrapping for a size no

@@ -24,6 +24,7 @@ fn heap() -> Arc<dyn Storage> {
 use ferrix_btrfs::volume::ReadKind;
 
 mod namespace;
+mod rw;
 
 const BLOCK: usize = 4096;
 const IMAGE_SIZE: u64 = 128 * 1024 * 1024;

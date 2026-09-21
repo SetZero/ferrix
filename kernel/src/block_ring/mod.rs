@@ -11,12 +11,12 @@
 //! 2. holds the ring and data VMOs, attaches [`KernelSide`] over the ring, and
 //!    publishes the disk as a block device before answering READY with its
 //!    completion port;
-//! 3. serves the disk's reads: it moves them from `libs/block`'s queue onto
+//! 3. serves the disk's requests: it moves them from `libs/block`'s queue onto
 //!    the ring, rings the driver when the driver asked to be rung, takes
-//!    completions off the ring, copies what was read out of the data VMO and
-//!    wakes the reader;
+//!    completions off the ring, copies a write's bytes in and a read's out of
+//!    the data VMO, and wakes the caller;
 //! 4. ends when the driver's control channel closes, the driver says STOPPED
-//!    or the ring is corrupt, failing every outstanding read with EIO.
+//!    or the ring is corrupt, failing every outstanding request with EIO.
 //!
 //! # The kernel never serves a disk
 //!
@@ -44,7 +44,7 @@ use ferrix_blkring::{
     Block, Completed, Device, DeviceFlags, DiskName, KernelSide, Location, Message, Refusal,
     RingMemory, Slot, Start as StartMessage, Status, Submission, SubmitError, Wait,
 };
-use ferrix_block::{Config, Limits, Queue, Request, Token};
+use ferrix_block::{Config, Limits, Op, Queue, Request, Token};
 use ferrix_bootinfo::PAGE_SIZE;
 use ferrix_native_abi::rights::Rights;
 use ferrix_native_abi::signals::Signals;
@@ -638,6 +638,24 @@ impl Pages {
         }
         true
     }
+
+    /// Copy `bytes` into the region at `offset`; `false`, with the region
+    /// partly written, if the range runs past the end.
+    fn copy_in(&self, offset: u64, bytes: &[u8]) -> bool {
+        for (at, &byte) in (offset..).zip(bytes.iter()) {
+            let Some(address) = self.address(at) else {
+                return false;
+            };
+            // SAFETY: `address` is inside a frame the ring's `Held` keeps for
+            // as long as this `Pages` is used, reached through the direct
+            // map. The driver may read the byte at any moment, so it is
+            // written volatilely; nothing else writes this region while a
+            // command is being built in it, because the region is one of the
+            // free ones this task owns until it submits.
+            unsafe { core::ptr::write_volatile(address, byte) };
+        }
+        true
+    }
 }
 
 impl RingMemory for Pages {
@@ -668,10 +686,14 @@ impl RingMemory for Pages {
     }
 }
 
-/// A read a caller is waiting on.
+/// A request a caller is waiting on.
 #[derive(Debug)]
 struct Pending {
-    /// What came of it, once it has.
+    /// A write's bytes, until the ring's task copies them into the data
+    /// region it dispatches the command through.
+    payload: Option<Vec<u8>>,
+    /// What came of it, once it has: a read's bytes, or nothing for a write
+    /// or a flush.
     result: Option<Result<Vec<u8>, Errno>>,
     /// Whether its caller stopped waiting; the answer is then thrown away.
     abandoned: bool,
@@ -729,6 +751,33 @@ impl RingDisk {
     /// Read `count` sectors from `sector` into `out`, which is exactly that
     /// long, as one request.
     fn read_request(&self, sector: u64, count: u32, out: &mut [u8]) -> Result<(), Errno> {
+        let bytes = self.request(Request::read(0, sector, count), None)?;
+        if bytes.len() != out.len() {
+            return Err(Errno::EIO);
+        }
+        out.copy_from_slice(&bytes);
+        Ok(())
+    }
+
+    /// Write `payload` — `count` whole sectors — at `sector`, as one request.
+    fn write_request(&self, sector: u64, count: u32, payload: Vec<u8>) -> Result<(), Errno> {
+        let _ = self.request(Request::write(0, sector, count).sync(), Some(payload))?;
+        Ok(())
+    }
+
+    /// Make everything written durable: one flush, which the queue treats as
+    /// a barrier no request crosses.
+    fn flush_request(&self) -> Result<(), Errno> {
+        let _ = self.request(Request::flush(0), None)?;
+        Ok(())
+    }
+
+    /// Submit one request, wait for it, and hand back what a read brought.
+    ///
+    /// `payload` is a write's bytes, which the ring's task copies into the
+    /// data region when it dispatches the command. The id in `request` is
+    /// replaced by the disk's next one.
+    fn request(&self, request: Request, payload: Option<Vec<u8>>) -> Result<Vec<u8>, Errno> {
         let id = {
             let mut state = self.state.lock();
             if state.ended {
@@ -736,13 +785,18 @@ impl RingDisk {
             }
             let id = state.next_id;
             state.next_id = id.wrapping_add(1);
+            let request = Request {
+                id: ferrix_block::RequestId(id),
+                ..request
+            };
             state
                 .queue
-                .submit(ticks(), Request::read(id, sector, count))
+                .submit(ticks(), request)
                 .map_err(|_| Errno::EIO)?;
             let _ = state.reads.insert(
                 id,
                 Pending {
+                    payload,
                     result: None,
                     abandoned: false,
                 },
@@ -770,19 +824,17 @@ impl RingDisk {
         let mut state = self.state.lock();
         match state.reads.remove(&id) {
             Some(Pending {
-                result: Some(Ok(bytes)),
+                result: Some(result),
                 ..
-            }) if bytes.len() == out.len() => {
-                out.copy_from_slice(&bytes);
-                Ok(())
-            }
-            Some(Pending {
-                result: Some(_), ..
-            }) => Err(Errno::EIO),
+            }) => result,
             Some(Pending { result: None, .. }) => {
+                // The wait gave up. Leave a marker so the answer, when it
+                // comes, is thrown away rather than kept for an id that will
+                // be used again.
                 let _ = state.reads.insert(
                     id,
                     Pending {
+                        payload: None,
                         result: None,
                         abandoned: true,
                     },
@@ -832,6 +884,36 @@ impl BlockDevice for RingDisk {
 
     fn read_only(&self) -> bool {
         self.device.flags().contains(DeviceFlags::READ_ONLY)
+    }
+
+    /// Write whole sectors, split like a read into what the device takes at
+    /// once. A disk the driver called read-only is refused here rather than
+    /// at the far end, so a mount learns why.
+    fn write(&self, sector: u64, buf: &[u8]) -> Result<(), Errno> {
+        if self.read_only() {
+            return Err(Errno::EROFS);
+        }
+        let size = usize::try_from(self.device.block_size()).map_err(|_| Errno::EIO)?;
+        if size == 0 || buf.is_empty() || !buf.len().is_multiple_of(size) {
+            return Err(Errno::EINVAL);
+        }
+        let most = usize::try_from(self.device.max_sectors())
+            .unwrap_or(usize::MAX)
+            .saturating_mul(size);
+        let mut at = sector;
+        for chunk in buf.chunks(most.max(size)) {
+            let count = u32::try_from(chunk.len() / size).map_err(|_| Errno::EIO)?;
+            self.write_request(at, count, chunk.to_vec())?;
+            at = at.checked_add(u64::from(count)).ok_or(Errno::EIO)?;
+        }
+        Ok(())
+    }
+
+    fn flush(&self) -> Result<(), Errno> {
+        if self.read_only() {
+            return Ok(());
+        }
+        self.flush_request()
     }
 }
 
@@ -939,22 +1021,59 @@ impl Serving<'_> {
         !self.free.is_empty() && self.disk.state.lock().queue.queued() > 0
     }
 
-    /// Move queued reads onto the ring while regions and ring slots last.
+    /// Put a write command's bytes into the region it is dispatched through,
+    /// before the driver is told about it.
+    ///
+    /// A merged command's parts tile its range, so each part's bytes go where
+    /// its own sectors are. `false` if a part's payload is missing or does
+    /// not fit, and the command is then failed rather than sent with
+    /// whatever the region held.
+    fn fill(
+        &self,
+        state: &DiskState,
+        parts: &[(u64, u64)],
+        sector: u64,
+        offset: u64,
+        block: u64,
+    ) -> bool {
+        parts.iter().all(|&(id, at)| {
+            let bytes = state
+                .reads
+                .get(&id)
+                .and_then(|pending| pending.payload.as_deref());
+            bytes.is_some_and(|bytes| self.data.copy_in(offset + (at - sector) * block, bytes))
+        })
+    }
+
+    /// Move queued requests onto the ring while regions and ring slots last.
     fn dispatch(&mut self) {
         let mut failed = Vec::new();
         {
             let mut state = self.disk.state.lock();
+            let block = u64::from(state.queue.limits().logical_block_size());
             while let Some(&region) = self.free.last() {
                 let Some(command) = state.queue.dispatch(ticks()) else {
                     break;
                 };
-                let token = command.token;
-                let submission = Submission::read(
-                    token.raw(),
-                    command.sector,
-                    command.count,
-                    u64::from(region) * self.region_bytes,
-                );
+                let (token, op, sector, count) =
+                    (command.token, command.op, command.sector, command.count);
+                // Copied out so the queue is no longer borrowed while the
+                // payloads, which live beside it, are read.
+                let parts: Vec<(u64, u64)> = command
+                    .parts
+                    .iter()
+                    .map(|part| (part.id.0, part.sector))
+                    .collect();
+                let offset = u64::from(region) * self.region_bytes;
+                let submission = match op {
+                    Op::Flush => Submission::flush(token.raw()),
+                    Op::Write if !self.fill(&state, &parts, sector, offset, block) => {
+                        failed.push(token);
+                        continue;
+                    }
+                    Op::Write => Submission::write(token.raw(), sector, count, offset),
+                    _ => Submission::read(token.raw(), sector, count, offset),
+                };
                 match self.side.submit(submission) {
                     Ok(()) => {
                         let _ = self.free.pop();
@@ -1081,6 +1200,10 @@ fn answer(
             continue;
         };
         let answer = result.and_then(|()| {
+            if completion.op != Op::Read {
+                // A write or a flush brings nothing back.
+                return Ok(Vec::new());
+            }
             let start = offset + (part.sector - completion.sector) * block;
             let len = usize::try_from(u64::from(part.count) * block).map_err(|_| Errno::EIO)?;
             let mut bytes = vec![0; len];

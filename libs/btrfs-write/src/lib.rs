@@ -173,6 +173,10 @@ pub enum Error {
     InvalidName,
     /// A name was to be added to something that is not a directory.
     NotDir,
+    /// A directory was named where a file belongs.
+    IsDir,
+    /// A directory with entries in it was to be removed or replaced.
+    NotEmpty,
     /// An inode has as many names as btrfs can record.
     TooManyLinks,
     /// An earlier operation failed half-way through this transaction, so what
@@ -202,6 +206,8 @@ impl fmt::Display for Error {
             Error::NameTooLong => f.write_str("name too long"),
             Error::InvalidName => f.write_str("not a valid name"),
             Error::NotDir => f.write_str("not a directory"),
+            Error::IsDir => f.write_str("is a directory"),
+            Error::NotEmpty => f.write_str("directory is not empty"),
             Error::TooManyLinks => f.write_str("too many links"),
             Error::Aborted => f.write_str("transaction aborted by an earlier failure"),
         }

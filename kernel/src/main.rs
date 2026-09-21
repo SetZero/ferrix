@@ -970,6 +970,7 @@ fn check_driver(started_by_devmgr: bool) {
         report.names, report.sectors, report.read,
     );
     check_btrfs_disk();
+    check_btrfs_write();
 }
 
 /// Stage 10: `devmgr`, started from the initramfs with every device and
@@ -1021,6 +1022,31 @@ fn check_btrfs_disk() {
         "  btrfs    vdb mounted read-only at /mnt: {} files ({} bytes), {} directories and {} \
          links read back as the host wrote them",
         report.files, report.bytes, report.directories, report.links,
+    );
+}
+
+/// Stage 12's exit, the guest's half: a blank btrfs volume on the third disk,
+/// mounted writable, written, unmounted and mounted again, and read back —
+/// so every byte compared comes off the disk rather than out of a cache.
+///
+/// Halts rather than returning, as every other stage's check does. A machine
+/// without a third disk passes and says so.
+fn check_btrfs_write() {
+    let report = match fs::btrfs_write_check::run() {
+        Ok(report) => report,
+        Err(problem) => fatal!(
+            catalog::STAGE12_WRITE,
+            "stage 12 self-check failed: {problem}"
+        ),
+    };
+    if let Some(why) = report.skipped {
+        println!("  btrfs-rw not checked: {why}");
+        return;
+    }
+    println!(
+        "  btrfs-rw vdc written and remounted: {} files ({} bytes) and {} directories read back \
+         as they were written",
+        report.files, report.bytes, report.directories,
     );
 }
 

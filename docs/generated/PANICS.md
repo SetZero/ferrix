@@ -69,6 +69,7 @@ Causes are listed most likely first.
 | [FX-1150](#fx-1150) | the net core did not carry a packet round its own loopback |
 | [FX-1151](#fx-1151) | the net ring did not carry a frame between the kernel and a driver |
 | [FX-1152](#fx-1152) | AF_NETLINK did not answer the requests `ip` makes |
+| [FX-1201](#fx-1201) | a btrfs volume Ferrix wrote did not read back as it was written |
 | [FX-9001](#fx-9001) | a page fault the kernel cannot resolve |
 | [FX-9002](#fx-9002) | a system call the trap path cannot carry out |
 | [FX-9003](#fx-9003) | the processor refused to execute an instruction |
@@ -1442,6 +1443,32 @@ before it believes any of it.
 
 See: kernel/src/net/netlink/check.rs; kernel/src/net/netlink/route.rs;
 libs/netlink; docs/ROADMAP.md.
+
+<a id="fx-1201"></a>
+
+## FX-1201 — a btrfs volume Ferrix wrote did not read back as it was written
+
+Stage 12's exit, the guest's half: xtask attaches a fresh copy of the `blank`
+fixture, an empty volume made by real mkfs.btrfs, as the third virtio-blk disk;
+`fs::btrfs_write_check::run` mounts it writable at /mnt-rw, builds a tree on it
+— files of every size, a hole, a link, a symlink, an overwrite, a truncation, a
+rename and an unlink — syncs, unmounts, mounts again and reads everything back.
+After the unmount nothing is cached, so every byte compared came off the disk.
+
+1. The mount failed: the disk takes no writes, or the volume is one
+   libs/btrfs-write will not maintain (a subvolume, quotas, an unreplayed log),
+   which is EROFS.
+2. A file read back short or with the wrong CRC-32C: the write path put an
+   extent, a checksum or an inode's size somewhere the read path does not look,
+   or the block ring's write copied the wrong bytes.
+3. The volume would not mount the second time: the commit wrote a superblock or
+   a tree the reader refuses, which is the write path's own consistency, not the
+   disk's.
+4. Something removed is still there, or something renamed is not: the directory
+   items, the back-references or the orphan bookkeeping disagree.
+
+See: kernel/src/fs/btrfs_write_check.rs; kernel/src/fs/btrfs.rs; libs/btrfs-vfs
+rw; libs/btrfs-write; xtask/src/btrfs_disk.rs; docs/ROADMAP.md stage 12.
 
 <a id="fx-9001"></a>
 

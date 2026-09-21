@@ -52,6 +52,7 @@
 )]
 
 mod args;
+mod btrfs_check;
 mod btrfs_disk;
 mod busybox;
 mod cargo;
@@ -140,6 +141,7 @@ COMMANDS:
     run-compositor  Boot compositor/hyprix as init with a virtio-gpu, on a screen this host can show
     remote-desktop  Send this tree to another machine, boot the desktop there and watch it here over VNC
     wallpapers    Convert pictures for run-compositor's desktop and keep them on this machine
+    test-btrfs    Boot, write a tree on the blank btrfs disk, and require host btrfs check to find nothing
     test-boot     Boot the image under QEMU and assert the kernel came up
     test-shell    Boot with a static busybox built in and require its script's output
     test-vfs      Boot with busybox in the initramfs and require stage 8's exit programs and applets
@@ -307,13 +309,8 @@ fn run() -> Result<()> {
             };
             qemu::run(arch, &image, &args)
         }
-        "test-boot" => {
-            for arch in args.arches()? {
-                let (image, kernel) = build_image(arch, &args)?;
-                qemu::test_boot(arch, &image, &kernel, &args)?;
-            }
-            Ok(())
-        }
+        "test-btrfs" => btrfs_check::test_btrfs(&args, |arch| build_image(arch, &args)),
+        "test-boot" => test_boot(&args),
         "test-shell" => {
             for arch in args.arches()? {
                 // The shell the kernel starts. zinc, the shell this tree has,
@@ -395,6 +392,15 @@ fn run() -> Result<()> {
 /// the kernel: loading it from a file is part of what stage 8 is for. Every
 /// architecture is run even after one fails, because which of the three a
 /// missing call breaks is the report.
+/// `test-boot`: boot each architecture asked for and require the marker.
+fn test_boot(args: &Args) -> Result<()> {
+    for arch in args.arches()? {
+        let (image, kernel) = build_image(arch, args)?;
+        qemu::test_boot(arch, &image, &kernel, args)?;
+    }
+    Ok(())
+}
+
 fn test_vfs(args: &Args) -> Result<()> {
     let init = args.init.as_deref().ok_or_else(|| {
         Error::new(

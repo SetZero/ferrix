@@ -9,6 +9,7 @@ publish = false
 
 [dependencies]
 ferrix-btrfs.workspace = true
+ferrix-btrfs-write.workspace = true
 ferrix-sync.workspace = true
 ferrix-vfs.workspace = true
 

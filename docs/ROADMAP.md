@@ -49,10 +49,13 @@ sectors through the block ring with VT-d on x86-64 and the `SMMUv3` on AArch64
 translating, and a deliberate out-of-domain write faulted on both; ARMv7-A runs
 it in degraded trusted mode, as decided. What the stage still owes — `devmgr`
 the program, trusting decoding-off BARs — is after the exit in its section.
-Stage 12 is under way: `libs/btrfs-write` writes a volume `mkfs.btrfs` made —
-copy-on-write trees, extent and free-space bookkeeping, chunk allocation, the
-commit with its flush before the superblock, and files — and host `btrfs
-check` finds its output clean; the mount and the boot are next.
+Stage 12 is under way, and its exit is half met: Ferrix writes btrfs. Every
+boot mounts a blank volume writable on a third disk, builds a tree on it,
+unmounts, mounts it again and reads it all back, and `cargo xtask test-btrfs`
+then has host `btrfs check --check-data-csum` judge that same image, clean on
+all three architectures. What the stage still owes is the log tree, so that
+`fsync` need not be a whole commit, and the power-fail test over hundreds of
+seeds.
 Networking is done: sockets, a net core and a ring-3 virtio-net driver, with
 `curl` fetching over HTTPS and `git` cloning inside the guest. Stages 17 and
 18 are met, and the compositor runs: `cargo xtask test-compositor` boots it
@@ -99,7 +102,7 @@ session sizes them.
 | ~~Stage 19: the GPU path, Path A (`docs/GPU.md` §3)~~ *done 2026-09-19* | ~~52~~ | landed 2026-09-19 |
 | Stage 19: XWayland, the pointer-driven options, the second-pass effects | 48 | 2026-09-19 to -20 |
 | Dynamic linking: the kernel half, ferrousli's loader, glibc's names | 39 *(8 done)* | 2026-09-20 to -21 |
-| Stage 12, btrfs write | ≈ 60 *(21 done: the write path, host-side)* | 2026-09-21 to -22 |
+| Stage 12, btrfs write | ≈ 60 *(39 done: the write path, the mount, the boot)* | 2026-09-21 to -22 |
 | Stage 13, namespaces, cgroups, seccomp | *month* ≈ 60 | 2026-09-22 to -23 |
 | Stage 22, Steam: the parts with a first guess (glibc under the runtime 13, bubblewrap's rest 13, sound 30, Venus 8, XWayland counted above) | 64 | 2026-09-23 to -24 |
 | Stage 22, Steam: the 32-bit x86 ABI and what the runtime and Proton find missing | unsized, ≈ 100 as a guess | 2026-09-24 to -25 |
@@ -3472,7 +3475,7 @@ asks for, so the test binary is still one the repository does not carry.
 
 ---
 
-## Stage 12 — btrfs, write  ·  *≈ 60 points, 39 left*
+## Stage 12 — btrfs, write  ·  *≈ 60 points, 21 left*
 
 Copy-on-write allocation through the extent tree, delayed refs, transaction
 commit against both superblocks with correct flush/FUA ordering, the free-space
@@ -3533,18 +3536,52 @@ DUP and SINGLE, a tree of every object kind with a file big enough to allocate
 chunks, the same tree edited, an orphan, split compressed extents, and churn —
 all clean, and it too failed on a sabotaged free-space tree.
 
+**Done — the mount and the exit's first half (18 points, 2026-09-21).** The
+write path is under the VFS and in the boot test, on all three architectures.
+
+* **Writes reach the disk.** `BlockDevice` gained `write` and `flush`, and the
+  block ring's kernel side dispatches them: a write's bytes are copied into
+  the region it is sent through before the driver is told, and a flush is the
+  barrier `libs/block`'s queue already knew how to keep. The ring protocol and
+  the ring-3 driver needed no change — they had both since stage 10.
+* **`libs/btrfs-vfs`'s writable mount.** The whole volume behind one sleeping
+  lock, because every read must see the running transaction; writes into the
+  page cache, remembered as dirty pages and turned into extents a mebibyte at
+  a time when something commits; `fsync` writing one file back and committing;
+  orphan inodes deleted when the last reference to them goes. Its rule is that
+  nothing calls into the page cache while holding the volume lock except to
+  read a page that is certainly there, which is what keeps a fill from waiting
+  on itself.
+* **The calls.** `mount -t btrfs /dev/vdc /mnt` without `MS_RDONLY` now gets
+  the writer, and `EROFS` names what it will not maintain. `fsync`,
+  `fdatasync`, `syncfs` and `sync` commit rather than answering nothing;
+  `Inode::fsync` and `FileSystem::sync` are the VFS's new hooks, and every
+  filesystem that keeps nothing back inherits the old answer.
+* **The exit's first half.** Every boot now carries a third disk, a fresh
+  blank volume, and writes a tree on it: files of every size — including one
+  larger than the data chunk `mkfs.btrfs` made, so a chunk is allocated —
+  a hole, a symlink, a hard link, an overwrite in the middle of a file, a
+  truncation, a rename and an unlink. Then it syncs, **unmounts, mounts
+  again**, and reads it all back, so nothing compared came from a cache:
+  `btrfs-rw vdc written and remounted: 8 files (10997256 bytes) and 2
+  directories read back as they were written`. `cargo xtask test-btrfs` adds
+  the other half, host `btrfs check --check-data-csum` over that image: clean
+  on x86-64, `AArch64` and ARMv7-A, and it fails, as it must, when the write
+  path is sabotaged.
+
 **Still to do, in order.**
 
-1. **The mount, read-write** (13): `libs/btrfs-vfs` over the write path, reads
-   seeing the running transaction, the page cache written back as extents at
-   commit, `sync`, `fsync` and `umount` committing; the kernel's `mount` without
-   `MS_RDONLY`.
-2. **The exit's first half** (5): a boot that writes a tree on the second disk,
-   and `xtask` running host `btrfs check` over the disk after.
-3. **The log tree** (13): `fsync` writing a log instead of a whole commit, and
-   replay at mount.
-4. **The power-fail test** (8): QEMU killed at random points inside a
+1. **The log tree** (13): `fsync` writing a log instead of a whole commit, and
+   replay at mount. Until then `fsync` is a commit, which is correct and slow.
+2. **The power-fail test** (8): QEMU killed at random points inside a
    transaction over hundreds of seeds, `btrfs check` before and after replay.
+   The commit's ordering is already tested host-side, by replaying a commit's
+   writes without its superblock.
+
+Owed beside them, and not in the stage's points: writeback of pages written
+through `MAP_SHARED`, which needs a dirty bit the page cache does not keep
+yet; until it lands a mapped write reaches the disk only if something writes
+the same bytes through `write`.
 
 ---
 
