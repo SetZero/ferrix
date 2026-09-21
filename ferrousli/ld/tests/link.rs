@@ -113,7 +113,10 @@ fn runtime(dir: &Path) -> (PathBuf, PathBuf) {
         .status()
         .expect("build crt1.o");
     assert!(status.success(), "rustc could not build crt1.o");
-    (crt, root.join("target").join(profile).join("libferrousli.a"))
+    (
+        crt,
+        root.join("target").join(profile).join("libferrousli.a"),
+    )
 }
 
 #[test]
@@ -220,7 +223,10 @@ fn initial_exec_tls_works_in_a_program_and_its_library() {
         "-ftls-model=initial-exec",
         "-o",
         library.to_str().expect("a path"),
-        manifest().join("tests/c/tls_greet.c").to_str().expect("a path"),
+        manifest()
+            .join("tests/c/tls_greet.c")
+            .to_str()
+            .expect("a path"),
     ]);
 
     let program = dir.join("prog");
@@ -229,7 +235,10 @@ fn initial_exec_tls_works_in_a_program_and_its_library() {
         "-ftls-model=initial-exec",
         "-o",
         program.to_str().expect("a path"),
-        manifest().join("tests/c/tls_prog.c").to_str().expect("a path"),
+        manifest()
+            .join("tests/c/tls_prog.c")
+            .to_str()
+            .expect("a path"),
         library.to_str().expect("a path"),
         &format!("-Wl,--dynamic-linker={}", loader.display()),
         "-Wl,-e,_start",

@@ -105,7 +105,9 @@ fn install_x86_64(scope: &Scope) -> Result<(), Error> {
     // SAFETY: `tp` names the live, aligned control block just built above.
     let result = unsafe { sys::syscall2(nr::ARCH_PRCTL, ARCH_SET_FS, tp_address) };
     if result < 0 {
-        return Err(Error::MalformedObject("could not set the initial thread pointer"));
+        return Err(Error::MalformedObject(
+            "could not set the initial thread pointer",
+        ));
     }
     Ok(())
 }
