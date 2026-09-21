@@ -73,6 +73,7 @@ mod csum;
 pub mod extent;
 pub mod fs;
 mod grow;
+pub mod log;
 pub mod node;
 mod open;
 pub mod ranges;

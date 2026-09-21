@@ -130,6 +130,13 @@ impl<D: WriteDevice> WriteVolume<D> {
         volume.load_chunks()?;
         volume.load_roots()?;
         volume.load_block_groups()?;
+        // A log the last mount left behind holds items that are not in the
+        // trees, and names extents the committed trees think are free. It is
+        // replayed here, before anything can allocate over them.
+        let log = sb.log_root();
+        if log != 0 {
+            volume.replay_log(log, sb.log_root_level(), sb.log_root_transid())?;
+        }
         Ok(volume)
     }
 
@@ -362,9 +369,6 @@ fn check_writable(sb: &Superblock<'_>) -> Result<()> {
     let other = compat_ro & !(fst | VERITY);
     if other != 0 {
         return Err(Error::Unsupported(Unsupported::CompatRo(other)));
-    }
-    if sb.log_root() != 0 {
-        return Err(Error::Unsupported(Unsupported::Log));
     }
     Ok(())
 }

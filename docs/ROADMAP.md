@@ -53,9 +53,10 @@ Stage 12 is under way, and its exit is half met: Ferrix writes btrfs. Every
 boot mounts a blank volume writable on a third disk, builds a tree on it,
 unmounts, mounts it again and reads it all back, and `cargo xtask test-btrfs`
 then has host `btrfs check --check-data-csum` judge that same image, clean on
-all three architectures. What the stage still owes is the log tree, so that
-`fsync` need not be a whole commit, and the power-fail test over hundreds of
-seeds.
+all three architectures. `fsync` no longer commits everything either: it
+writes a log tree the next mount replays, and falls back to a commit only when
+a name has moved. What the stage still owes is the power-fail test over
+hundreds of seeds.
 Networking is done: sockets, a net core and a ring-3 virtio-net driver, with
 `curl` fetching over HTTPS and `git` cloning inside the guest. Stages 17 and
 18 are met, and the compositor runs: `cargo xtask test-compositor` boots it
@@ -102,7 +103,7 @@ session sizes them.
 | ~~Stage 19: the GPU path, Path A (`docs/GPU.md` §3)~~ *done 2026-09-19* | ~~52~~ | landed 2026-09-19 |
 | Stage 19: XWayland, the pointer-driven options, the second-pass effects | 48 | 2026-09-19 to -20 |
 | Dynamic linking: the kernel half, ferrousli's loader, glibc's names | 39 *(8 done)* | 2026-09-20 to -21 |
-| Stage 12, btrfs write | ≈ 60 *(39 done: the write path, the mount, the boot)* | 2026-09-21 to -22 |
+| Stage 12, btrfs write | ≈ 60 *(52 done: everything but the power-fail test)* | 2026-09-21 to -22 |
 | Stage 13, namespaces, cgroups, seccomp | *month* ≈ 60 | 2026-09-22 to -23 |
 | Stage 22, Steam: the parts with a first guess (glibc under the runtime 13, bubblewrap's rest 13, sound 30, Venus 8, XWayland counted above) | 64 | 2026-09-23 to -24 |
 | Stage 22, Steam: the 32-bit x86 ABI and what the runtime and Proton find missing | unsized, ≈ 100 as a guess | 2026-09-24 to -25 |
@@ -3476,7 +3477,7 @@ asks for, so the test binary is still one the repository does not carry.
 
 ---
 
-## Stage 12 — btrfs, write  ·  *≈ 60 points, 21 left*
+## Stage 12 — btrfs, write  ·  *≈ 60 points, 8 left*
 
 Copy-on-write allocation through the extent tree, delayed refs, transaction
 commit against both superblocks with correct flush/FUA ordering, the free-space
@@ -3570,16 +3571,38 @@ write path is under the VFS and in the boot test, on all three architectures.
   on x86-64, `AArch64` and ARMv7-A, and it fails, as it must, when the write
   path is sabotaged.
 
-**Still to do, in order.**
+**Done — the log tree (13 points, 2026-09-21).** `fsync` no longer commits
+everything. `libs/btrfs-write/src/log.rs` keeps a tree outside the root tree
+whose address the superblock names in `log_root`: a log commit writes the
+log's blocks, flushes, and writes a superblock that is the last committed one
+*plus* that address, so it still names the old, whole trees. Nothing else
+moves, and a log commit writes strictly less than a commit — a test compares
+the two.
 
-1. **The log tree** (13): `fsync` writing a log instead of a whole commit, and
-   replay at mount. Until then `fsync` is a commit, which is correct and slow.
-2. **The power-fail test** (8): QEMU killed at random points inside a
+A log carries one inode's stat data, its file extents and their checksums.
+Not names: a log that carried half a rename would have to carry the whole of
+it and the directories either side, which is where Linux's tree-log gets its
+size. An `fsync` after anything changed the shape of the tree commits
+instead, as Linux does with `BTRFS_LOG_FORCE_COMMIT`.
+
+The mount finds `log_root` set and replays before it hands the volume to
+anyone, which it must: the data a log names was written by a transaction that
+never committed, so the committed free-space tree calls that space free.
+Replay allocates each logged extent at exactly its address, as Linux's
+`btrfs_alloc_logged_file_extent` does, puts the logged items into the fs
+tree, commits, and clears the log. Its tests are crashes: a volume thrown
+away after a log commit and opened again must hold what the log promised, one
+thrown away *before* the superblock must hold the last commit whole, and both
+must pass the consistency check.
+
+**Still to do.**
+
+1. **The power-fail test** (8): QEMU killed at random points inside a
    transaction over hundreds of seeds, `btrfs check` before and after replay.
-   The commit's ordering is already tested host-side, by replaying a commit's
-   writes without its superblock.
+   Both orderings are already tested host-side, by replaying a commit's or a
+   log's writes without its superblock.
 
-Owed beside them, and not in the stage's points: writeback of pages written
+Owed beside it, and not in the stage's points: writeback of pages written
 through `MAP_SHARED`, which needs a dirty bit the page cache does not keep
 yet; until it lands a mapped write reaches the disk only if something writes
 the same bytes through `write`.
