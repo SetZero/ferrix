@@ -1,6 +1,7 @@
 //! btrfs mounted read-write, over `ferrix-btrfs-write`.
 //!
-//! The read-only mount beside this one ([`crate::Btrfs`]) reads a volume that
+//! The read-only mount beside this one ([`crate::Btrfs`]) reads a         self.shared.shape_changed();
+volume that
 //! cannot change, which is what lets it read with no lock held. A writable
 //! mount cannot: every read must see the transaction the writes are going
 //! into — a file created a moment ago is not on the disk yet — and two edits
@@ -85,6 +86,10 @@ struct Shared<D> {
     evictable: SpinLock<Vec<u64>>,
     /// Bytes written into the page cache since the last commit.
     pending: SpinLock<u64>,
+    /// Whether anything has changed the shape of the tree — a name made,
+    /// moved or removed — since the last commit. A log carries one inode's
+    /// items and no names, so an `fsync` with this set must commit instead.
+    structural: SpinLock<bool>,
 }
 
 impl<D> fmt::Debug for Shared<D> {
@@ -132,6 +137,7 @@ impl<D: WriteHandle> RwBtrfs<D> {
             nodes: SpinLock::new(BTreeMap::new()),
             evictable: SpinLock::new(Vec::new()),
             pending: SpinLock::new(0),
+            structural: SpinLock::new(false),
         });
         // The open may have evicted orphans left by a crash; commit that
         // before anything else changes, so a second crash has less to redo.
@@ -192,7 +198,13 @@ impl<D: WriteHandle> Shared<D> {
             node.write_back(&mut volume)?;
         }
         *self.pending.lock() = 0;
+        *self.structural.lock() = false;
         volume.commit().map_err(errno)
+    }
+
+    /// Note that the shape of the tree changed; see `structural`.
+    fn shape_changed(&self) {
+        *self.structural.lock() = true;
     }
 }
 
@@ -611,6 +623,7 @@ impl<D: WriteHandle> Inode for Node<D> {
         if target.kind == FileType::Directory {
             return Err(Errno::EPERM);
         }
+        self.shared.shape_changed();
         let (dir, ino, now) = (self.ino, target.ino, self.shared.now());
         self.shared
             .with(|volume| volume.link(dir, name, ino, now))?;
@@ -640,6 +653,7 @@ impl<D: WriteHandle> Inode for Node<D> {
             .into_any()
             .downcast::<Node<D>>()
             .map_err(|_| Errno::EXDEV)?;
+        self.shared.shape_changed();
         let (from, to, now) = (self.ino, parent.ino, self.shared.now());
         let moved = self.shared.with(|volume| {
             let (_, kind) = volume.lookup(from, old)?.ok_or(WriteError::NotFound)?;
@@ -713,14 +727,26 @@ impl<D: WriteHandle> Inode for Node<D> {
         }
     }
 
-    /// Write this file back and commit: `fsync` promises the bytes are on the
-    /// disk, and on btrfs that is a transaction.
+    /// Write this file back, and make where its bytes are durable.
+    ///
+    /// The bytes themselves went to the disk as they were written back; what
+    /// `fsync` must add is a durable record of where. When nothing has
+    /// changed the shape of the tree since the last commit, that record is a
+    /// log entry for this inode and a superblock — much less than a commit.
+    /// Otherwise the shape has to be committed, because a log carries no
+    /// names; Linux falls back the same way.
     fn fsync(&self, data_only: bool) -> Result<()> {
         let _ = data_only;
         let mut volume = self.shared.volume.lock();
         self.write_back(&mut volume)?;
-        *self.shared.pending.lock() = 0;
-        volume.commit().map_err(errno)
+        let structural = self.shared.structural.lock();
+        if *structural {
+            drop(structural);
+            *self.shared.pending.lock() = 0;
+            return volume.commit().map_err(errno);
+        }
+        volume.log_inode(self.ino).map_err(errno)?;
+        volume.commit_log().map_err(errno)
     }
 
     fn mapping(&self) -> Option<Arc<dyn Any + Send + Sync>> {
@@ -732,6 +758,7 @@ impl<D: WriteHandle> Node<D> {
     /// `unlink` and `rmdir`, which differ only in what they accept.
     fn remove(&self, name: &[u8], directory: bool) -> Result<()> {
         self.require_dir()?;
+        self.shared.shape_changed();
         let (dir, now) = (self.ino, self.shared.now());
         let gone = self.shared.with(|volume| {
             let (ino, kind) = volume.lookup(dir, name)?.ok_or(WriteError::NotFound)?;

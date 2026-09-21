@@ -235,6 +235,16 @@ impl Space {
         self.allocated.contains(at, len)
     }
 
+    /// Take exactly `[at, at + len)`, which must be free and in a group of
+    /// `kind`: what a log replay does for the extents the log names, since
+    /// the committed trees never learned they were used.
+    pub fn reserve(&mut self, at: u64, len: u64, kind: Kind) -> Result<()> {
+        if self.group_of(at).and_then(BlockGroup::kind) != Some(kind) {
+            return Err(Error::Inconsistent("logged extent is not in a group of its kind"));
+        }
+        self.take(kind, at, len)
+    }
+
     /// Give back an extent nothing refers to any more: at once if this
     /// transaction allocated it, after the commit if the last commit uses it.
     pub fn release(&mut self, at: u64, len: u64) -> Result<()> {

@@ -46,7 +46,11 @@ use crate::extent::{
 use crate::ranges::RangeSet;
 use crate::refs::Head;
 
-use crate::volume::TreeId;
+use crate::    pub fn commit(&mut self) -> Result<()> {
+        self.guarded(|volume| {
+            if !volume.is_dirty() && !volume.chunks_changed && !volume.has_log() {
+                return Ok(());
+            }::TreeId;
 use crate::{Error, Result, Unsupported, WriteDevice, WriteVolume};
 
 /// The free-space tree's id.
@@ -89,6 +93,9 @@ impl<D: WriteDevice> WriteVolume<D> {
             if !volume.is_dirty() && !volume.chunks_changed {
                 return Ok(());
             }
+            // A commit puts everything the log held into the trees, so the
+            // log goes; the superblock this writes names none.
+            volume.drop_log()?;
             // The root tree's root must be this transaction's: the superblock
             // records one generation for both.
             let _ = volume.cow_root(ROOT_TREE_OBJECTID)?;
@@ -331,7 +338,7 @@ impl<D: WriteDevice> WriteVolume<D> {
     }
 
     /// Serialise every node the transaction owns and write each copy.
-    fn write_nodes(&mut self) -> Result<()> {
+    pub(crate) fn write_nodes(&mut self) -> Result<()> {
         let size = self.nodesize() as usize;
         let mut buf = vec![0u8; size];
         let addresses: Vec<u64> = self.dirty.keys().copied().collect();
@@ -379,10 +386,7 @@ impl<D: WriteDevice> WriteVolume<D> {
             crate::bytes::put(area, 0, &array).ok_or(bad)?;
         }
         self.write_backup_root(&mut out)?;
-        let sum = ferrix_btrfs::crc32c(out.get(ferrix_btrfs::CSUM_SIZE..).ok_or(bad)?);
-        out.get_mut(..ferrix_btrfs::CSUM_SIZE).ok_or(bad)?.fill(0);
-        put_u32(&mut out, 0, sum).ok_or(bad)?;
-        Ok(out)
+        sealed(out)
     }
 
     /// Record this commit's roots in the next of the superblock's four backup
@@ -487,6 +491,16 @@ fn check_main_key(key: &BtrfsKey, head: &Head, flags: u64) -> Result<()> {
     } else {
         Err(Error::Inconsistent("extent item of the wrong kind"))
     }
+}
+
+/// A superblock with its checksum over what it now holds: the last thing
+/// written to any copy of it, and what makes the rest of it believed.
+pub(crate) fn sealed(mut block: Vec<u8>) -> Result<Vec<u8>> {
+    let bad = Error::Inconsistent("superblock field out of range");
+    let sum = ferrix_btrfs::crc32c(block.get(ferrix_btrfs::CSUM_SIZE..).ok_or(bad)?);
+    block.get_mut(..ferrix_btrfs::CSUM_SIZE).ok_or(bad)?.fill(0);
+    put_u32(&mut block, 0, sum).ok_or(bad)?;
+    Ok(block)
 }
 
 /// The runs of `a` that are not runs of `b`, both in canonical form.
