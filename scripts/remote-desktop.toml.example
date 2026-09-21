@@ -88,3 +88,14 @@ wait = 1800
 # `working-tree` boots what you are looking at, uncommitted changes and all,
 # without touching your index. `head` boots your last commit instead.
 send = "working-tree"
+
+[ssh]
+# `run-compositor` starts sshdt in the guest, and the tunnel carries it here:
+# `ssh -p <local port> root@127.0.0.1` once the desktop is up. The keys that
+# may log in to the remote machine may log in to the guest. The port over
+# there; 0 turns SSH off.
+port = 22022
+
+# The port here. `auto` takes the same number when it is free and the next
+# one up when it is not.
+local_port = "auto"

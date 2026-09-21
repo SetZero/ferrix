@@ -1895,11 +1895,12 @@ pub(crate) fn run_compositor(args: &Args) -> Result<()> {
     // enumerated.
     let args = &Args {
         net: !args.no_net,
-        ..args.clone()
+        ..crate::ssh::checked(args)
     };
     let config = with_network(with_layout(config, args), args);
     let programs = Programs::build(arch)?;
     let mut carried = Carried::wanted(arch, args)?;
+    let config = crate::ssh::with_server(config, args, &mut carried.ports)?;
     // A wallpaper, from this machine's own and from nowhere else:
     // `crate::wallpaper` says where they come from and why a run never goes
     // looking. It is started before anything the configuration starts, so

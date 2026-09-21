@@ -79,6 +79,10 @@ pub(crate) struct Args {
     /// reaches a server in the guest. Turns `--net` on, since a forward with
     /// no network behind it forwards nothing.
     pub(crate) forwards: Vec<crate::gateway::Forward>,
+    /// `--ssh <PORT>`: `run-compositor` starts `sshdt` in the guest and
+    /// forwards the host's `127.0.0.1:<PORT>` to it; `crate::ssh` says who
+    /// may log in. The forward is one of `forwards`, added with it.
+    pub(crate) ssh: Option<u16>,
     /// `--display`: a virtio-gpu device on the bus, and for `run` a window
     /// that shows it. `test-display` turns it on.
     pub(crate) display: bool,
@@ -231,6 +235,18 @@ impl Args {
                 "--forward" => {
                     let raw = value(&mut items, "--forward")?;
                     args.forwards.push(crate::gateway::Forward::parse(&raw)?);
+                    args.net = true;
+                }
+                "--ssh" => {
+                    let port: u16 = number(&mut items, "--ssh")?;
+                    if port == 0 {
+                        return Err(Error::new("--ssh wants a port other than 0"));
+                    }
+                    args.ssh = Some(port);
+                    args.forwards.push(crate::gateway::Forward {
+                        host: port,
+                        guest: crate::ssh::GUEST_PORT,
+                    });
                     args.net = true;
                 }
                 "--display" => args.display = true,
@@ -562,6 +578,17 @@ mod tests {
             ],
             "every --forward is kept, in order"
         );
+        let ssh = parse(&["run-compositor", "--ssh", "2222"]).unwrap();
+        assert_eq!(ssh.ssh, Some(2222));
+        assert_eq!(
+            ssh.forwards,
+            [crate::gateway::Forward {
+                host: 2222,
+                guest: 22
+            }],
+            "--ssh is a forward to the guest's port 22 as well"
+        );
+        assert!(parse(&["run-compositor", "--ssh", "0"]).is_err());
         for bad in ["22", "2222:", ":22", "0:22", "2222:0", "ssh:22", "70000:22"] {
             assert!(
                 parse(&["run", "--forward", bad]).is_err(),

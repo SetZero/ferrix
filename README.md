@@ -484,6 +484,16 @@ cargo xtask remote-desktop -- --wallpaper none --smp 8
 The serial console comes back on this terminal throughout, which is where a
 boot that never reaches a screen says why.
 
+The guest can be logged into as well. `remote-desktop` asks `run-compositor`
+for `--ssh 22022`, which starts sshdt in the guest from the compositor's
+`exec-once`. The same `ssh` connection carries a second tunnel, and the run
+prints the command, usually `ssh -p 22022 root@127.0.0.1`. The keys that may
+log in to the remote machine may log in to the guest: its `authorized_keys`
+and the public keys beside it. The guest's host key is kept over there, in
+`~/.local/share/ferrix/ssh`, so it is the same every boot. `[ssh] port = 0`
+turns it off. `cargo xtask run-compositor --ssh <port>` does the same on this
+machine, with this machine's keys.
+
 None of this is needed to *test* a desktop on a remote machine.
 `test-compositor`, `test-display`, `test-video`, `test-input`, `test-seat`
 and `test-pty` read the screen with a QMP screendump and open no window and

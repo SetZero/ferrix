@@ -107,6 +107,11 @@ struct Config {
     wait: u64,
     /// Which commit is sent.
     send: Send,
+    /// The port over there that `--ssh` forwards to the guest's sshdt, or 0
+    /// for no SSH at all.
+    ssh_port: u16,
+    /// The port the tunnel carries it to here; `None` is "find a free one".
+    ssh_local_port: Option<u16>,
 }
 
 impl Default for Config {
@@ -124,6 +129,8 @@ impl Default for Config {
             viewer: Viewer::Auto,
             wait: 1800,
             send: Send::WorkingTree,
+            ssh_port: 22022,
+            ssh_local_port: None,
         }
     }
 }
@@ -153,6 +160,7 @@ pub(crate) fn remote_desktop(args: &Args) -> Result<()> {
 
     let root = paths::workspace_root();
     let port = pick_port(config.local_port, config.display)?;
+    let ssh = pick_ssh_port(&config, port)?;
 
     if args.print_command {
         if args.stop {
@@ -172,6 +180,12 @@ pub(crate) fn remote_desktop(args: &Args) -> Result<()> {
             5900_u32.saturating_add(config.display),
             config.host
         );
+        if let Some(local) = ssh {
+            println!(
+                "         -L {local}:127.0.0.1:{}, then: ssh -p {local} root@127.0.0.1",
+                config.ssh_port
+            );
+        }
         println!("boot:    {script}");
         match viewer_argv(&config.viewer, port)? {
             Some(argv) => println!("viewer:  {}", argv.join(" ")),
@@ -196,9 +210,12 @@ pub(crate) fn remote_desktop(args: &Args) -> Result<()> {
         "screen:  VNC {} over there, 127.0.0.1:{port} here",
         5900_u32.saturating_add(config.display)
     );
+    if let Some(local) = ssh {
+        println!("ssh:     sshdt in the guest, once it is up: ssh -p {local} root@127.0.0.1");
+    }
     println!("         the first boot on a machine builds everything; that is the wait.\n");
 
-    let mut boot = spawn_boot(&config, port, &script)?;
+    let mut boot = spawn_boot(&config, port, ssh, &script)?;
     let outcome = watch(&config, &mut boot, port, viewer.as_deref());
 
     // Whatever happened, nothing of ours should still be running over there.
@@ -333,7 +350,25 @@ fn parse_config(text: &str, where_from: &str) -> Result<Config> {
                     }
                 };
             }
-            ("remote" | "boot" | "screen" | "source", _) => {
+            ("ssh", "port") => {
+                config.ssh_port = u16::try_from(value.count().map_err(bad)?)
+                    .map_err(|_| Error::new(format!("{where_from}: [ssh] port is not a port")))?;
+            }
+            ("ssh", "local_port") => {
+                config.ssh_local_port = match value {
+                    Value::Str(ref word) if word == "auto" => None,
+                    Value::Int(_) => Some(
+                        u16::try_from(value.count().map_err(bad)?)
+                            .ok()
+                            .filter(|port| *port > 0)
+                            .ok_or_else(|| {
+                                Error::new(format!("{where_from}: [ssh] local_port is not a port"))
+                            })?,
+                    ),
+                    _ => return Err(bad("a number, or `auto`".to_owned())),
+                };
+            }
+            ("remote" | "boot" | "screen" | "source" | "ssh", _) => {
                 return Err(Error::new(format!(
                     "{where_from}: [{section}] has no `{key}`. It has: {}",
                     known(&section)
@@ -342,7 +377,7 @@ fn parse_config(text: &str, where_from: &str) -> Result<Config> {
             _ => {
                 return Err(Error::new(format!(
                     "{where_from}: no section named [{section}]. There are: \
-                     [remote], [remote.env], [boot], [screen], [source]"
+                     [remote], [remote.env], [boot], [screen], [source], [ssh]"
                 )));
             }
         }
@@ -361,6 +396,7 @@ fn known(section: &str) -> &'static str {
         "remote" => "host, dir, cargo",
         "boot" => "command, arch, args",
         "screen" => "display, local_port, viewer, wait",
+        "ssh" => "port, local_port",
         _ => "send",
     }
 }
@@ -848,6 +884,11 @@ fn boot_script(config: &Config, directory: &str, sha: &str, extra: &[String]) ->
         "--vnc".to_owned(),
         format!(":{}", config.display),
     ];
+    // `run-compositor` is the command that starts sshdt; `run`'s shell is a
+    // serial console with nothing to start it from.
+    if config.ssh_port != 0 && config.command == "run-compositor" {
+        argv.extend(["--ssh".to_owned(), config.ssh_port.to_string()]);
+    }
     argv.extend(config.boot_args.iter().cloned());
     argv.extend(extra.iter().cloned());
     let line = argv
@@ -928,6 +969,31 @@ fn pick_port(asked: Option<u16>, display: u32) -> Result<u16> {
     Err(Error::new(
         "no free local port near 5900; set [screen] local_port or --local-port",
     ))
+}
+
+/// Which local port the tunnel carries the guest's SSH to, or `None` when
+/// this boot has none: `[ssh] port = 0`, or a command other than
+/// `run-compositor`, which is the one that starts sshdt.
+///
+/// `auto` starts at the remote's own port, so the usual answer is the same
+/// number on both machines, and moves up past anything already listening
+/// here -- including the VNC tunnel's own port.
+fn pick_ssh_port(config: &Config, vnc: u16) -> Result<Option<u16>> {
+    if config.ssh_port == 0 || config.command != "run-compositor" {
+        return Ok(None);
+    }
+    if let Some(port) = config.ssh_local_port {
+        return Ok(Some(port));
+    }
+    let first = config.ssh_port;
+    for candidate in first..=first.saturating_add(63) {
+        if candidate != vnc && std::net::TcpListener::bind(("127.0.0.1", candidate)).is_ok() {
+            return Ok(Some(candidate));
+        }
+    }
+    Err(Error::new(format!(
+        "no free local port near {first} for SSH; set [ssh] local_port, or [ssh] port = 0"
+    )))
 }
 
 /// Whether a VNC server is on the other end of the tunnel yet.
@@ -1015,7 +1081,10 @@ fn found_viewer(address: &str) -> Option<Vec<String>> {
 
 /// One `ssh` carrying both the forward and the boot, so the tunnel lives
 /// exactly as long as the machine does and neither can outlive the other.
-fn spawn_boot(config: &Config, port: u16, script: &str) -> Result<Child> {
+///
+/// `ssh` is the local port the guest's SSH comes to, from [`pick_ssh_port`],
+/// carried by the same connection for the same reason.
+fn spawn_boot(config: &Config, port: u16, ssh: Option<u16>, script: &str) -> Result<Child> {
     let mut command = Command::new("ssh");
     let _ = command
         .args(["-o", "BatchMode=no", "-o", "ServerAliveInterval=30"])
@@ -1026,7 +1095,11 @@ fn spawn_boot(config: &Config, port: u16, script: &str) -> Result<Child> {
                 "{port}:127.0.0.1:{}",
                 5900_u32.saturating_add(config.display)
             ),
-        ])
+        ]);
+    if let Some(local) = ssh {
+        let _ = command.args(["-L", &format!("{local}:127.0.0.1:{}", config.ssh_port)]);
+    }
+    let _ = command
         .arg(&config.host)
         .arg(script)
         // The guest's console reads this connection's stdin; nothing here
@@ -1263,6 +1336,48 @@ send = "head"
             remote_dir("~").is_err(),
             "the home itself is not a checkout"
         );
+    }
+
+    #[test]
+    fn a_desktop_boot_starts_sshdt_unless_told_not_to() {
+        let config = parse_config("[remote]\nhost = \"nowhere\"\n", "test.toml").unwrap();
+        assert_eq!(config.ssh_port, 22022, "SSH is on by default, on 22022");
+        let script = boot_script(&config, "desktop", "abc123", &[]);
+        assert!(
+            script.contains("'--ssh' '22022'"),
+            "run-compositor is asked for sshdt: {script}"
+        );
+
+        let off = parse_config(
+            "[remote]\nhost = \"nowhere\"\n[ssh]\nport = 0\n",
+            "test.toml",
+        )
+        .unwrap();
+        assert!(!boot_script(&off, "desktop", "abc123", &[]).contains("--ssh"));
+        assert_eq!(
+            pick_ssh_port(&off, 5900).unwrap(),
+            None,
+            "and no tunnel for it"
+        );
+
+        let run = parse_config(
+            "[remote]\nhost = \"nowhere\"\n[boot]\ncommand = \"run\"\n",
+            "test.toml",
+        )
+        .unwrap();
+        assert!(
+            !boot_script(&run, "desktop", "abc123", &[]).contains("--ssh"),
+            "`run` has nothing to start sshdt from"
+        );
+
+        let fixed = parse_config(
+            "[remote]\nhost = \"nowhere\"\n[ssh]\nport = 2300\nlocal_port = 4022\n",
+            "test.toml",
+        )
+        .unwrap();
+        assert_eq!(pick_ssh_port(&fixed, 5900).unwrap(), Some(4022));
+        assert!(parse_config("[remote]\nhost = \"x\"\n[ssh]\nlocal_port = 0\n", "t").is_err());
+        assert!(parse_config("[remote]\nhost = \"x\"\n[ssh]\nport = 70000\n", "t").is_err());
     }
 
     #[test]
