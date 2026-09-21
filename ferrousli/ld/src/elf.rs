@@ -127,6 +127,8 @@ pub struct Sym {
 pub const PT_LOAD: u32 = 1;
 /// The dynamic table.
 pub const PT_DYNAMIC: u32 = 2;
+/// The path of the interpreter the program asked for: this loader's name.
+pub const PT_INTERP: u32 = 3;
 /// The segment holding the program headers.
 pub const PT_PHDR: u32 = 6;
 /// Thread-local storage: the initial image of every thread's block.
@@ -193,6 +195,87 @@ pub const DT_FLAGS: usize = 30;
 pub const DT_GNU_HASH: usize = 0x6fff_fef5;
 /// More flags; `DF_1_*`.
 pub const DT_FLAGS_1: usize = 0x6fff_fffb;
+/// The symbol version table: one half-word per dynamic symbol.
+pub const DT_VERSYM: usize = 0x6fff_fff0;
+/// The versions this object defines.
+pub const DT_VERDEF: usize = 0x6fff_fffc;
+/// How many entries `DT_VERDEF` has.
+pub const DT_VERDEFNUM: usize = 0x6fff_fffd;
+/// The versions this object needs from others.
+pub const DT_VERNEED: usize = 0x6fff_fffe;
+/// How many entries `DT_VERNEED` has.
+pub const DT_VERNEEDNUM: usize = 0x6fff_ffff;
+
+/// `DT_VERSYM`: a symbol local to its object.
+pub const VER_NDX_LOCAL: u16 = 0;
+/// `DT_VERSYM`: a symbol with no version, visible to everyone.
+pub const VER_NDX_GLOBAL: u16 = 1;
+/// `DT_VERSYM`: the bit that hides a definition from references that do not
+/// name its version -- `name@VERSION` rather than `name@@VERSION`.
+pub const VERSYM_HIDDEN: u16 = 0x8000;
+
+/// One version an object defines. The same in both classes: every field is
+/// a fixed width, and the offsets are relative to the record.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct Verdef {
+    /// The structure's revision, 1.
+    pub vd_version: u16,
+    /// `VER_FLG_*`.
+    pub vd_flags: u16,
+    /// The index `DT_VERSYM` uses for this version.
+    pub vd_ndx: u16,
+    /// How many [`Verdaux`] records follow.
+    pub vd_cnt: u16,
+    /// The ELF hash of its name.
+    pub vd_hash: u32,
+    /// Where its first `Verdaux`, the one holding its name, is.
+    pub vd_aux: u32,
+    /// Where the next definition is, or zero.
+    pub vd_next: u32,
+}
+
+/// A name belonging to a [`Verdef`]; the first is the version's own.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct Verdaux {
+    /// The name, as an offset into the string table.
+    pub vda_name: u32,
+    /// Where the next is, relative to this one, or zero.
+    pub vda_next: u32,
+}
+
+/// One file an object needs versions from.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct Verneed {
+    /// The structure's revision, 1.
+    pub vn_version: u16,
+    /// How many [`Vernaux`] records follow.
+    pub vn_cnt: u16,
+    /// The file's name, as an offset into the string table.
+    pub vn_file: u32,
+    /// Where its first [`Vernaux`] is.
+    pub vn_aux: u32,
+    /// Where the next file is, or zero.
+    pub vn_next: u32,
+}
+
+/// One version needed from a [`Verneed`]'s file.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct Vernaux {
+    /// The ELF hash of its name.
+    pub vna_hash: u32,
+    /// `VER_FLG_*`.
+    pub vna_flags: u16,
+    /// The index `DT_VERSYM` uses for it in the needing object.
+    pub vna_other: u16,
+    /// The name, as an offset into the string table.
+    pub vna_name: u32,
+    /// Where the next is, relative to this one, or zero.
+    pub vna_next: u32,
+}
 
 /// `DT_FLAGS`: resolve everything at load.
 pub const DF_BIND_NOW: usize = 0x08;

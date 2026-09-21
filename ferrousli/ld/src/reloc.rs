@@ -186,6 +186,30 @@ unsafe fn apply_one(object: &Object, scope: &Scope, entry: &Entry) -> Result<(),
                 .wrapping_add(found.value)
                 .wrapping_add_signed(entry.addend)
         }
+        arch::R_COPY => {
+            // SAFETY: the scope's objects are mapped.
+            let Some(found) = (unsafe { resolve(object, scope, entry)? }) else {
+                return Ok(());
+            };
+            // The program's symbol says how much room it made; the library's
+            // says how much there is. They agree unless the library changed
+            // size since the program was linked, and then copying the smaller
+            // is what keeps the copy inside both.
+            // SAFETY: the relocation's symbol indexes this object's table.
+            let symbol = unsafe { object.symtab.add(r_sym(entry.info)).read() };
+            let len = (symbol.st_size as usize).min(found.size);
+            // SAFETY: the source is the defining object's datum, `len` bytes
+            // of it, and the target the program's room for it, both mapped;
+            // they are in different objects and cannot overlap.
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    found.address as *const u8,
+                    target.cast::<u8>(),
+                    len,
+                );
+            }
+            return Ok(());
+        }
         arch::R_DTPMOD | arch::R_DTPOFF => {
             return Err(Error::UnknownRelocation(kind));
         }
@@ -221,8 +245,12 @@ unsafe fn resolve(
     let name = object.name(symbol.st_name).ok_or(Error::MalformedObject(
         "a symbol name outside the string table",
     ))?;
+    let version = object.requested_version(index);
+    // A `COPY` is the one relocation that must not find the program's own
+    // symbol, which names the room the copy goes in.
+    let first = usize::from(r_type(entry.info) == arch::R_COPY);
     // SAFETY: the scope's objects are mapped.
-    if let Some(found) = unsafe { scope.lookup(name) } {
+    if let Some(found) = unsafe { scope.lookup(name, version, first) } {
         return Ok(Some(found));
     }
     if crate::elf::st_bind(symbol.st_info) == crate::elf::STB_WEAK {

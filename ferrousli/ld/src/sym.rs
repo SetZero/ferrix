@@ -28,7 +28,7 @@
 use core::ffi::c_char;
 
 use crate::elf::{SHN_UNDEF, STB_GLOBAL, STB_WEAK, Sym, st_bind};
-use crate::object::Object;
+use crate::object::{Defined, Object};
 
 /// The GNU hash of a symbol name: djb2 with a multiplier of 33.
 #[must_use]
@@ -85,6 +85,9 @@ pub struct Found {
     /// The defining object's TLS image offset from the thread pointer, when
     /// it has one. [`crate::scope::Scope`] supplies this after lookup.
     pub tls_offset: Option<isize>,
+    /// The defining object's index in the scope, which is its TLS module
+    /// number less one. [`crate::scope::Scope`] supplies this too.
+    pub module: usize,
 }
 
 /// The word width of the Bloom filter: one machine word per element, as the
@@ -100,8 +103,21 @@ const BLOOM_BITS: u32 = usize::BITS;
 ///
 /// Only global and weak symbols are visible to other objects; a local one is
 /// the object's private business and never appears in the hash table anyway.
+///
+/// `version` is the version the reference names, if it names one. A
+/// definition answers it only if it carries that version or none at all; a
+/// reference naming none is answered by any definition not hidden. So an
+/// object may define one name several times, as glibc defines `memcpy` at
+/// `GLIBC_2.2.5` and `GLIBC_2.14`, and each binary gets the one it was
+/// linked against. The chain holds every definition of the name, so the walk
+/// goes on past the first one that does not answer.
 #[must_use]
-pub fn lookup(object: &Object, name: *const c_char, hash: u32) -> Option<Found> {
+pub fn lookup(
+    object: &Object,
+    name: *const c_char,
+    hash: u32,
+    version: Option<*const c_char>,
+) -> Option<Found> {
     if object.gnu_hash.is_null() || object.symtab.is_null() {
         return None;
     }
@@ -149,7 +165,9 @@ pub fn lookup(object: &Object, name: *const c_char, hash: u32) -> Option<Found> 
         if word | 1 == hash | 1 {
             // SAFETY: `index` is a symbol table index the chain gave.
             let symbol = unsafe { object.symtab.add(index as usize).read() };
-            if let Some(found) = defines(object, &symbol, name) {
+            if let Some(found) = defines(object, &symbol, name)
+                && answers(object, index as usize, version)
+            {
                 return Some(found);
             }
         }
@@ -157,6 +175,18 @@ pub fn lookup(object: &Object, name: *const c_char, hash: u32) -> Option<Found> 
             return None;
         }
         index += 1;
+    }
+}
+
+/// Whether the definition at `index` answers a reference naming `version`.
+fn answers(object: &Object, index: usize, version: Option<*const c_char>) -> bool {
+    match object.defined_version(index) {
+        Defined::Local => false,
+        Defined::Unversioned => true,
+        Defined::Named { name, hidden } => match version {
+            Some(wanted) => same_name(name, wanted),
+            None => !hidden,
+        },
     }
 }
 
@@ -179,6 +209,7 @@ fn defines(object: &Object, symbol: &Sym, name: *const c_char) -> Option<Found> 
         info: symbol.st_info,
         size: symbol.st_size as usize,
         tls_offset: None,
+        module: 0,
     })
 }
 

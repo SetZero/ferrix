@@ -61,8 +61,7 @@ fn loader() -> PathBuf {
         .status()
         .expect("run cargo");
     assert!(status.success(), "cargo could not build the loader");
-    manifest()
-        .join("../target")
+    target_dir()
         .join(TARGET)
         .join("debug")
         .join("ld-ferrousli")
@@ -113,10 +112,16 @@ fn runtime(dir: &Path) -> (PathBuf, PathBuf) {
         .status()
         .expect("build crt1.o");
     assert!(status.success(), "rustc could not build crt1.o");
-    (
-        crt,
-        root.join("target").join(profile).join("libferrousli.a"),
-    )
+    (crt, target_dir().join(profile).join("libferrousli.a"))
+}
+
+/// Where cargo puts what it builds: `CARGO_TARGET_DIR` when the caller set
+/// one, which `cargo xtask check` does, and the workspace's own `target`
+/// otherwise.
+fn target_dir() -> PathBuf {
+    std::env::var_os("CARGO_TARGET_DIR")
+        .filter(|dir| !dir.is_empty())
+        .map_or_else(|| manifest().join("../target"), PathBuf::from)
 }
 
 #[test]
@@ -155,6 +160,51 @@ fn a_dynamically_linked_program_runs_under_the_loader() {
          data, 93 a pointer into the library's data, and a signal is the \
          loader or the program faulting"
     );
+}
+
+/// Every page of a library's `.bss` is mapped writable.
+///
+/// The part of a writable segment past the file is anonymous memory, mapped
+/// from the page after the file's last byte. The loader once counted the
+/// segment's offset within its first page twice there, and when that crossed
+/// a page boundary it left a page of `.bss` inaccessible. Where the file's
+/// part ends depends on how much initialised data precedes the `.bss`, so the
+/// library is built at sizes that put it all round a page.
+#[test]
+fn every_page_of_a_librarys_bss_is_writable() {
+    let loader = loader();
+    let dir = scratch().join("ld-bss");
+    std::fs::create_dir_all(&dir).expect("make the scratch directory");
+    for pad in [1, 512, 1024, 1536, 2048, 2560, 3072, 3584] {
+        let library = dir.join(format!("libbss{pad}.so"));
+        compile(&[
+            "-shared",
+            &format!("-DPAD={pad}"),
+            "-o",
+            library.to_str().expect("a path"),
+            manifest().join("tests/c/bss.c").to_str().expect("a path"),
+        ]);
+        let program = dir.join(format!("prog{pad}"));
+        compile(&[
+            "-pie",
+            "-o",
+            program.to_str().expect("a path"),
+            manifest()
+                .join("tests/c/bss_prog.c")
+                .to_str()
+                .expect("a path"),
+            library.to_str().expect("a path"),
+            &format!("-Wl,--dynamic-linker={}", loader.display()),
+            "-Wl,-e,_start",
+        ]);
+        let status = Command::new(&program).status().expect("run the program");
+        assert_eq!(
+            status.code(),
+            Some(EXPECTED),
+            "with {pad} bytes of data before it, the library's .bss was not all \
+             writable (a signal is a fault in it)"
+        );
+    }
 }
 
 /// `DT_RUNPATH` finds a directly needed library before the system defaults.

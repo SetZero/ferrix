@@ -16,7 +16,8 @@ use crate::elf::{
     DT_FINI, DT_FINI_ARRAY, DT_FINI_ARRAYSZ, DT_FLAGS, DT_FLAGS_1, DT_GNU_HASH, DT_INIT,
     DT_INIT_ARRAY, DT_INIT_ARRAYSZ, DT_JMPREL, DT_NEEDED, DT_NULL, DT_PLTREL, DT_PLTRELSZ, DT_REL,
     DT_RELA, DT_RELAENT, DT_RELASZ, DT_RELENT, DT_RELSZ, DT_RUNPATH, DT_SONAME, DT_STRSZ,
-    DT_STRTAB, DT_SYMENT, DT_SYMTAB, Dyn, Sym,
+    DT_STRTAB, DT_SYMENT, DT_SYMTAB, DT_VERDEF, DT_VERDEFNUM, DT_VERNEED, DT_VERNEEDNUM, DT_VERSYM,
+    Dyn, Sym, VER_NDX_GLOBAL, VER_NDX_LOCAL, VERSYM_HIDDEN, Verdaux, Verdef, Vernaux, Verneed,
 };
 
 /// How many objects one process may load: the program, the loader, and the
@@ -153,6 +154,34 @@ pub struct Object {
     /// Not read from the dynamic table -- it is a segment, not a tag -- so
     /// whoever mapped the object fills it in.
     pub relro: (usize, usize),
+    /// `DT_VERSYM`: one version index per dynamic symbol, or null.
+    pub versym: *const u16,
+    /// `DT_VERDEF` as a run-time address, and how many records it has.
+    pub verdef: (usize, usize),
+    /// `DT_VERNEED` as a run-time address, and how many records it has.
+    pub verneed: (usize, usize),
+    /// Whether this is the loader itself: relocated already by its own
+    /// start, and in the scope only so that its names are recognised and its
+    /// symbols found.
+    pub is_loader: bool,
+}
+
+/// The version a definition carries, from `DT_VERSYM` and `DT_VERDEF`.
+#[derive(Debug, Clone, Copy)]
+pub enum Defined {
+    /// Local to its object: never an answer to another object's reference.
+    Local,
+    /// No version at all, which satisfies any reference.
+    Unversioned,
+    /// A named version. `hidden` is `name@VERSION` rather than
+    /// `name@@VERSION`: an old definition kept for binaries linked against it,
+    /// which only a reference naming that version may reach.
+    Named {
+        /// The version's name.
+        name: *const c_char,
+        /// Whether only a reference naming it may reach it.
+        hidden: bool,
+    },
 }
 
 impl Object {
@@ -180,6 +209,10 @@ impl Object {
         needed_count: 0,
         bind_now: false,
         relro: (0, 0),
+        versym: core::ptr::null(),
+        verdef: (0, 0),
+        verneed: (0, 0),
+        is_loader: false,
     };
 
     /// Read `dynamic`'s entries into an object placed at `base`.
@@ -255,6 +288,11 @@ impl Object {
                 DT_RUNPATH => object.runpath = value as u32,
                 DT_FLAGS => object.bind_now |= value & crate::elf::DF_BIND_NOW != 0,
                 DT_FLAGS_1 => object.bind_now |= value & crate::elf::DF_1_NOW != 0,
+                DT_VERSYM => object.versym = value.wrapping_add(base) as *const u16,
+                DT_VERDEF => object.verdef.0 = value.wrapping_add(base),
+                DT_VERDEFNUM => object.verdef.1 = value,
+                DT_VERNEED => object.verneed.0 = value.wrapping_add(base),
+                DT_VERNEEDNUM => object.verneed.1 = value,
                 _ => {}
             }
             // SAFETY: the entry read was not the terminator, so another
@@ -325,5 +363,94 @@ impl Object {
             return None;
         }
         self.name(self.soname)
+    }
+
+    /// The version index `DT_VERSYM` gives symbol `index`, or `None` when
+    /// this object carries no version table.
+    fn version_index(&self, index: usize) -> Option<u16> {
+        if self.versym.is_null() {
+            return None;
+        }
+        // SAFETY: `DT_VERSYM` has one entry per dynamic symbol, and `index`
+        // is one this object's own hash table or relocation gave.
+        Some(unsafe { self.versym.add(index).read() })
+    }
+
+    /// The version this object's reference to symbol `index` asks for:
+    /// `printf@GLIBC_2.2.5`'s `GLIBC_2.2.5`. `None` for a reference that
+    /// names no version, which any definition that is not hidden answers.
+    #[must_use]
+    pub fn requested_version(&self, index: usize) -> Option<*const c_char> {
+        let wanted = self.version_index(index)? & !VERSYM_HIDDEN;
+        if wanted == VER_NDX_LOCAL || wanted == VER_NDX_GLOBAL {
+            return None;
+        }
+        let (mut at, mut left) = self.verneed;
+        while at != 0 && left > 0 {
+            // SAFETY: `DT_VERNEED` is a chain of `Verneed` records, each
+            // followed by its `Vernaux` records, linked by offsets, and this
+            // stops after the count `DT_VERNEEDNUM` gave.
+            let need = unsafe { (at as *const Verneed).read_unaligned() };
+            let mut aux_at = at.wrapping_add(need.vn_aux as usize);
+            for _ in 0..need.vn_cnt {
+                // SAFETY: as above, for the `Vernaux` records of one file.
+                let aux = unsafe { (aux_at as *const Vernaux).read_unaligned() };
+                if aux.vna_other == wanted {
+                    return self.name(aux.vna_name);
+                }
+                if aux.vna_next == 0 {
+                    break;
+                }
+                aux_at = aux_at.wrapping_add(aux.vna_next as usize);
+            }
+            if need.vn_next == 0 {
+                break;
+            }
+            at = at.wrapping_add(need.vn_next as usize);
+            left -= 1;
+        }
+        None
+    }
+
+    /// The version this object's definition of symbol `index` carries.
+    #[must_use]
+    pub fn defined_version(&self, index: usize) -> Defined {
+        let Some(raw) = self.version_index(index) else {
+            return Defined::Unversioned;
+        };
+        let hidden = raw & VERSYM_HIDDEN != 0;
+        let number = raw & !VERSYM_HIDDEN;
+        if number == VER_NDX_LOCAL {
+            return Defined::Local;
+        }
+        if number == VER_NDX_GLOBAL {
+            return Defined::Unversioned;
+        }
+        let (mut at, mut left) = self.verdef;
+        while at != 0 && left > 0 {
+            // SAFETY: `DT_VERDEF` is a chain of `Verdef` records, each with
+            // its `Verdaux` names, linked by offsets, and this stops after
+            // the count `DT_VERDEFNUM` gave.
+            let def = unsafe { (at as *const Verdef).read_unaligned() };
+            if def.vd_ndx == number {
+                // SAFETY: the first `Verdaux` of a definition is its name.
+                let aux = unsafe {
+                    (at.wrapping_add(def.vd_aux as usize) as *const Verdaux).read_unaligned()
+                };
+                return match self.name(aux.vda_name) {
+                    Some(name) => Defined::Named { name, hidden },
+                    None => Defined::Local,
+                };
+            }
+            if def.vd_next == 0 {
+                break;
+            }
+            at = at.wrapping_add(def.vd_next as usize);
+            left -= 1;
+        }
+        // A version index with no definition behind it is a malformed
+        // object; treating the symbol as local keeps it from answering
+        // anything, which is the safe way to be wrong.
+        Defined::Local
     }
 }

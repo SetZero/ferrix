@@ -53,6 +53,9 @@ pub struct Scope {
     tls_size: usize,
     /// The greatest alignment any static TLS image requires.
     tls_align: usize,
+    /// The program's `PT_INTERP`: the name this loader was loaded as, or
+    /// null.
+    interpreter: *const c_char,
 }
 
 impl Scope {
@@ -66,6 +69,7 @@ impl Scope {
             library_path: core::ptr::null(),
             tls_size: 0,
             tls_align: 1,
+            interpreter: core::ptr::null(),
         }
     }
 
@@ -163,6 +167,11 @@ impl Scope {
     /// Whether an object with this `DT_SONAME` or load name is already here.
     #[must_use]
     fn already_loaded(&self, name: *const c_char) -> bool {
+        // The loader is in the process before anything is loaded, under the
+        // name the program gave it; a `DT_NEEDED` names it by file name.
+        if !self.interpreter.is_null() && same(file_name(self.interpreter), file_name(name)) {
+            return true;
+        }
         for index in 0..self.count {
             let Some(loaded) = self.names.get(index) else {
                 continue;
@@ -247,6 +256,12 @@ impl Scope {
             // tried, and the error reported if none works is the honest one,
             // that the library is nowhere on the path.
         }
+        if PART_OF_LIBC.iter().any(|part| same(part.as_ptr(), name)) {
+            if self.already_loaded(LIBC.as_ptr()) {
+                return Ok(());
+            }
+            return self.load_one(LIBC.as_ptr(), runpath, page_size);
+        }
         Err(Error::LibraryNotFound(name))
     }
 
@@ -298,22 +313,103 @@ impl Scope {
         self.push(name, object)
     }
 
-    /// Find `name` in the first object that defines it.
+    /// Find `name` in the first object from `first` on whose definition
+    /// answers `version`.
+    ///
+    /// `first` is zero for every relocation but `COPY`, which must find the
+    /// library's definition and not the room the program made for it -- the
+    /// program's own symbol has the same name and would otherwise be found
+    /// first, and copied onto itself.
     ///
     /// # Safety
     ///
     /// Every object in the scope must be mapped.
     #[must_use]
-    pub unsafe fn lookup(&self, name: *const c_char) -> Option<Found> {
+    pub unsafe fn lookup(
+        &self,
+        name: *const c_char,
+        version: Option<*const c_char>,
+        first: usize,
+    ) -> Option<Found> {
         let hash = sym::hash(name);
-        for index in 0..self.count {
+        for index in first..self.count {
             let object = self.objects.get(index)?;
-            if let Some(mut found) = sym::lookup(object, name, hash) {
+            if let Some(mut found) = sym::lookup(object, name, hash, version) {
                 found.tls_offset = object.tls.map(|tls| tls.offset);
+                found.module = index;
                 return Some(found);
             }
         }
         None
+    }
+
+    /// Record the path the program named as its interpreter: this loader's
+    /// own name, which a `DT_NEEDED` may ask for too.
+    ///
+    /// glibc's programs on AArch64 and ARM name `ld-linux-aarch64.so.1` or
+    /// `ld-linux-armhf.so.3` as a library as well as an interpreter, because
+    /// glibc's `libc.so.6` reaches into its loader. Here the loader is already
+    /// in the process, and loading a second copy of it from the same file
+    /// would map a program nothing calls.
+    pub fn set_interpreter(&mut self, path: *const c_char) {
+        self.interpreter = path;
+    }
+
+    /// Add the loader itself, last, so that its symbols can be found and its
+    /// name recognised. Its relocations were applied by its own start, and it
+    /// has no initialisers, so the loops that walk the scope skip it by
+    /// [`Object::is_loader`].
+    ///
+    /// # Errors
+    ///
+    /// [`Error::TooManyObjects`].
+    pub fn push_loader(&mut self, mut object: Object) -> Result<(), Error> {
+        object.is_loader = true;
+        let name = if self.interpreter.is_null() {
+            c"ld-ferrousli".as_ptr()
+        } else {
+            self.interpreter
+        };
+        self.push(name, object)
+    }
+}
+
+/// The names glibc gives the libraries it splits its C library into.
+///
+/// Since glibc 2.34 all but `libm.so.6` are empty but for compatibility
+/// symbols, their contents moved into `libc.so.6`; ferrousli is one library,
+/// maths included. So one of these names that is nowhere on the search path
+/// is satisfied by the object that answers to `libc.so.6` -- and only when it
+/// is nowhere, so that glibc's own files, where they are installed, are used.
+const PART_OF_LIBC: [&core::ffi::CStr; 7] = [
+    c"libm.so.6",
+    c"libpthread.so.0",
+    c"libdl.so.2",
+    c"libresolv.so.2",
+    c"librt.so.1",
+    c"libutil.so.1",
+    c"libanl.so.1",
+];
+
+/// The name every [`PART_OF_LIBC`] falls back to.
+const LIBC: &core::ffi::CStr = c"libc.so.6";
+
+/// The last component of a path: `ld-linux-x86-64.so.2` of
+/// `/lib64/ld-linux-x86-64.so.2`, and a name with no slash itself.
+fn file_name(path: *const c_char) -> *const c_char {
+    let mut at = path;
+    let mut last = path;
+    loop {
+        // SAFETY: the path is NUL-terminated, and this stops at the NUL.
+        let byte = unsafe { at.read() } as u8;
+        if byte == 0 {
+            return last;
+        }
+        // SAFETY: the byte read was not the terminator.
+        at = unsafe { at.add(1) };
+        if byte == b'/' {
+            last = at;
+        }
     }
 }
 

@@ -39,6 +39,7 @@
 mod arch;
 mod auxv;
 mod elf;
+mod interface;
 mod map;
 mod mem;
 mod object;
@@ -135,9 +136,12 @@ unsafe fn link(stack: &auxv::Stack) -> Result<usize, report::Error> {
 
     // SAFETY: `AT_PHDR` and `AT_PHNUM` describe the program's own headers,
     // which the kernel mapped with it.
-    let program = unsafe { program_object(stack)? };
+    let (program, interpreter) = unsafe { program_object(stack)? };
 
     let mut scope = scope::Scope::new();
+    if let Some(path) = interpreter {
+        scope.set_interpreter(path);
+    }
     // `LD_LIBRARY_PATH`, unless the program runs with privileges it was not
     // started with. `AT_SECURE` is the kernel saying so, and a set-user-id
     // program that honoured the variable would load a library of the
@@ -153,6 +157,9 @@ unsafe fn link(stack: &auxv::Stack) -> Result<usize, report::Error> {
     // defines wins over any library's.
     scope.push(c"".as_ptr(), program)?;
     scope.load_dependencies(page_size)?;
+    // Last, so that a program and its libraries are searched before it: what
+    // the loader defines is the C library's to use, not to override it.
+    scope.push_loader(start::own_object().ok_or(report::Error::TooManyObjects)?)?;
     scope.layout_tls()?;
 
     // Relocated from the last object loaded to the first, so that a library
@@ -166,6 +173,9 @@ unsafe fn link(stack: &auxv::Stack) -> Result<usize, report::Error> {
         let object = scope
             .get(index)
             .ok_or(report::Error::MalformedObject("an object left the scope"))?;
+        if object.is_loader {
+            continue;
+        }
         // SAFETY: every object in the scope is mapped.
         unsafe { reloc::apply(object, &scope)? };
         // Its relocations are written, so what they wrote can be made
@@ -176,12 +186,14 @@ unsafe fn link(stack: &auxv::Stack) -> Result<usize, report::Error> {
     }
 
     tls::install(&scope)?;
+    // SAFETY: the only thread, before the program runs.
+    unsafe { interface::publish(scope.tls_size(), scope.tls_align()) };
     // SAFETY: every object is relocated and its initial TLS blocks are in
     // place, so an initialiser may call anything.
-    unsafe { run_initialisers(&scope) };
+    unsafe { run_initialisers(&scope, stack) };
     // SAFETY: all objects are mapped and relocated, and this is the sole path
     // that reaches the program's entry point.
-    unsafe { start::save_fini_scope(scope) };
+    unsafe { start::save_scope(scope) };
     Ok(entry)
 }
 
@@ -195,7 +207,9 @@ unsafe fn link(stack: &auxv::Stack) -> Result<usize, report::Error> {
 /// # Safety
 ///
 /// `stack` must carry `AT_PHDR` and `AT_PHNUM` for a mapped program.
-unsafe fn program_object(stack: &auxv::Stack) -> Result<object::Object, report::Error> {
+unsafe fn program_object(
+    stack: &auxv::Stack,
+) -> Result<(object::Object, Option<*const c_char>), report::Error> {
     let at = stack
         .get(auxv::AT_PHDR)
         .ok_or(report::Error::MalformedObject("no AT_PHDR on the stack"))?;
@@ -208,11 +222,13 @@ unsafe fn program_object(stack: &auxv::Stack) -> Result<object::Object, report::
     let mut dynamic = 0_usize;
     let mut relro = (0_usize, 0_usize);
     let mut tls = None;
+    let mut interpreter = 0_usize;
     for index in 0..count {
         // SAFETY: `AT_PHNUM` headers are mapped at `AT_PHDR`.
         let header = unsafe { headers.add(index).read() };
         match header.p_type {
             elf::PT_PHDR => bias = at.wrapping_sub(header.p_vaddr as usize),
+            elf::PT_INTERP => interpreter = header.p_vaddr as usize,
             elf::PT_DYNAMIC => dynamic = header.p_vaddr as usize,
             elf::PT_TLS => tls = Some(header),
             elf::PT_GNU_RELRO => relro = (header.p_vaddr as usize, header.p_memsz as usize),
@@ -241,46 +257,84 @@ unsafe fn program_object(stack: &auxv::Stack) -> Result<object::Object, report::
         .ok_or(report::Error::MalformedObject("an invalid PT_TLS segment"))?;
         object.tls = Some(tls);
     }
-    Ok(object)
+    // The kernel read the same bytes to find this loader, so they are a
+    // NUL-terminated path in a mapped segment.
+    let interpreter = (interpreter != 0).then(|| interpreter.wrapping_add(bias) as *const c_char);
+    Ok((object, interpreter))
 }
 
-/// Run every object's initialisers, dependencies first.
+/// Run every library's initialisers, dependencies first.
 ///
 /// The order is the reverse of the order they were loaded, which is what puts
 /// a library's initialiser before that of whatever needed it. A constructor
 /// that calls into a library it depends on is the reason this order is not
 /// arbitrary.
 ///
+/// The program's own are not run here but by its C library, which is not
+/// started yet and which they may use: see [`interface`].
+///
 /// # Safety
 ///
 /// Every object in `scope` must be mapped and fully relocated.
-unsafe fn run_initialisers(scope: &scope::Scope) {
-    type Init = unsafe extern "C" fn();
+unsafe fn run_initialisers(scope: &scope::Scope, stack: &auxv::Stack) {
     let mut index = scope.len();
-    while index > 0 {
+    while index > 1 {
         index -= 1;
         let Some(object) = scope.get(index) else {
             continue;
         };
-        if object.init != 0 {
-            // SAFETY: `DT_INIT` is a function in the object, taking nothing.
-            unsafe { core::mem::transmute::<usize, Init>(object.init)() };
-        }
-        if !object.init_array.is_present() {
+        if object.is_loader {
             continue;
         }
-        let mut at = object.init_array.at;
-        let end = at.wrapping_add(object.init_array.size);
-        while at < end {
-            // SAFETY: `DT_INIT_ARRAY` is an array of function pointers, each
-            // relocated already because the whole object was.
-            let entry = unsafe { (at as *const usize).read() };
-            if entry != 0 && entry != usize::MAX {
-                // SAFETY: each entry is a function taking nothing.
-                unsafe { core::mem::transmute::<usize, Init>(entry)() };
-            }
-            at = at.wrapping_add(size_of::<usize>());
+        // SAFETY: the object is mapped and relocated, and the arguments are
+        // the process's own.
+        unsafe {
+            run_object_init(
+                object,
+                stack.argc as c_int,
+                stack.argv.cast_mut().cast(),
+                stack.envp.cast_mut().cast(),
+            );
         }
+    }
+}
+
+/// Run one object's `DT_INIT` and then its `DT_INIT_ARRAY`.
+///
+/// Each is called with `argc`, `argv` and the environment, as glibc calls
+/// them and as a constructor compiled for Linux may read; one that takes
+/// nothing is called the same way, since the extra arguments sit in
+/// registers it does not read.
+///
+/// # Safety
+///
+/// `object` must be mapped and fully relocated, and the arguments the
+/// process's own.
+pub(crate) unsafe fn run_object_init(
+    object: &object::Object,
+    argc: c_int,
+    argv: *mut *mut c_char,
+    envp: *mut *mut c_char,
+) {
+    type Init = unsafe extern "C" fn(c_int, *mut *mut c_char, *mut *mut c_char);
+    if object.init != 0 {
+        // SAFETY: `DT_INIT` is a function in the object.
+        unsafe { core::mem::transmute::<usize, Init>(object.init)(argc, argv, envp) };
+    }
+    if !object.init_array.is_present() {
+        return;
+    }
+    let mut at = object.init_array.at;
+    let end = at.wrapping_add(object.init_array.size);
+    while at < end {
+        // SAFETY: `DT_INIT_ARRAY` is an array of function pointers, each
+        // relocated already because the whole object was.
+        let entry = unsafe { (at as *const usize).read() };
+        if entry != 0 && entry != usize::MAX {
+            // SAFETY: each entry is a constructor.
+            unsafe { core::mem::transmute::<usize, Init>(entry)(argc, argv, envp) };
+        }
+        at = at.wrapping_add(size_of::<usize>());
     }
 }
 

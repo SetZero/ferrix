@@ -76,21 +76,9 @@ fn install_x86_64(scope: &Scope) -> Result<(), Error> {
         .ok_or(Error::MalformedObject("TLS layout is too large"))?;
     let tp = tp_address as *mut Thread;
 
-    for index in 0..scope.len() {
-        let Some(object) = scope.get(index) else {
-            continue;
-        };
-        let Some(tls) = object.tls else {
-            continue;
-        };
-        let destination = tp.cast::<u8>().wrapping_offset(tls.offset);
-        // SAFETY: `layout_tls` gave every image a non-overlapping range in
-        // this fresh, zeroed mapping; the source is its mapped `PT_TLS`
-        // bytes, and `filesz <= memsz` was validated when it was read.
-        unsafe {
-            core::ptr::copy_nonoverlapping(tls.image as *const u8, destination, tls.filesz);
-        }
-    }
+    // SAFETY: the mapping is fresh and zeroed, with `tls_size` bytes below
+    // `tp`.
+    unsafe { copy_images(scope, tp.cast()) };
     // SAFETY: `tp_address` is aligned and has room for this small control
     // block in the mapping; no code can observe it before `%fs` changes.
     unsafe {
@@ -110,6 +98,33 @@ fn install_x86_64(scope: &Scope) -> Result<(), Error> {
         ));
     }
     Ok(())
+}
+
+/// Copy every object's initial TLS image to its place relative to `tp`.
+///
+/// For the initial thread here, and for every later one through
+/// [`crate::interface`], whose C library reserves the same layout.
+///
+/// # Safety
+///
+/// The [`Scope::tls_size`] bytes below `tp` must be writable, zeroed and
+/// otherwise unused, and every object in `scope` mapped.
+pub unsafe fn copy_images(scope: &Scope, tp: *mut u8) {
+    for index in 0..scope.len() {
+        let Some(object) = scope.get(index) else {
+            continue;
+        };
+        let Some(tls) = object.tls else {
+            continue;
+        };
+        let destination = tp.wrapping_offset(tls.offset);
+        // SAFETY: `layout_tls` gave every image a non-overlapping range below
+        // the thread pointer; the source is its mapped `PT_TLS` bytes, and
+        // `filesz <= memsz` was validated when it was read.
+        unsafe {
+            core::ptr::copy_nonoverlapping(tls.image as *const u8, destination, tls.filesz);
+        }
+    }
 }
 
 #[cfg(not(target_arch = "x86_64"))]

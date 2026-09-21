@@ -236,7 +236,12 @@ fn place(header: &Phdr, bias: usize, fd: c_int, page_size: usize) -> Result<(), 
         // Whole pages past the file's last are anonymous, which is both
         // faster than writing them and how a large `.bss` costs nothing until
         // it is touched.
-        let mapped_to = (vaddr + filesz + slop + mask) & !mask;
+        // The file mapping ends at the page after its last byte. `vaddr`
+        // already counts `slop`; adding it again skipped a page of `.bss`
+        // whenever the two together crossed a boundary, leaving it the
+        // reservation's `PROT_NONE` -- which glibc's busybox found on
+        // 2026-09-21, as a fault in `malloc`'s first lock.
+        let mapped_to = (vaddr + filesz + mask) & !mask;
         let needed_to = (vaddr + memsz + mask) & !mask;
         if needed_to > mapped_to {
             // SAFETY: still inside this object's reservation.

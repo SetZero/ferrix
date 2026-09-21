@@ -28,12 +28,29 @@
 use crate::elf::{DT_NULL, DT_RELA, DT_RELAENT, DT_RELASZ, Dyn, Rela};
 use crate::scope::Scope;
 
-/// The objects whose destructors still have to run when the program exits.
+/// The completed scope, kept for the calls the program makes back into the
+/// loader after it starts.
 ///
-/// The loader normally disappears from the call stack before the program
-/// starts, but it remains mapped.  Keeping the completed scope here gives the
-/// `rtld_fini` callback a stable record of the libraries it must finish.
-static mut FINI_SCOPE: Scope = Scope::new();
+/// The loader disappears from the call stack before the program starts, but
+/// it remains mapped. The `rtld_fini` callback finds the libraries it must
+/// finish here, and [`crate::interface`] the TLS images a new thread needs.
+static mut SCOPE: Scope = Scope::new();
+
+/// The completed scope. Empty until [`save_scope`] runs, which is before the
+/// program can call anything that reads it.
+pub(crate) fn scope() -> &'static Scope {
+    // SAFETY: written once by `save_scope` before the program starts, and
+    // only read afterwards.
+    unsafe { &*(&raw const SCOPE) }
+}
+
+/// The loader as an object in its own scope: its dynamic table, at the bias
+/// it was loaded with.
+pub(crate) fn own_object() -> Option<crate::object::Object> {
+    // SAFETY: `dynamic_here` is this object's own `_DYNAMIC`, at its run-time
+    // address, and `load_bias` how far it moved.
+    unsafe { crate::object::Object::read(load_bias(), dynamic_here()) }
+}
 
 /// The run-time address of this object's `_DYNAMIC`, from one PC-relative
 /// instruction and nothing else.
@@ -225,27 +242,30 @@ pub unsafe fn enter(entry: usize, stack: &crate::auxv::Stack) -> ! {
 ///
 /// Called once, after every object in `scope` has been mapped and relocated,
 /// and before [`enter`] makes the program reachable.
-pub(crate) unsafe fn save_fini_scope(scope: Scope) {
+pub(crate) unsafe fn save_scope(scope: Scope) {
     // SAFETY: this loader has one initial thread and calls this once before it
-    // transfers control to the program. `dl_fini` only reads the scope later,
-    // while `exit` is ending the process.
-    unsafe { (&raw mut FINI_SCOPE).write(scope) };
+    // transfers control to the program. Everything else only reads it later.
+    unsafe { (&raw mut SCOPE).write(scope) };
 }
 
-/// Run the `DT_FINI_ARRAY` and `DT_FINI` entries of every loaded dependency.
+/// Run the `DT_FINI_ARRAY` and `DT_FINI` entries of every loaded object.
 ///
-/// The program's own array belongs to its C runtime, which calls it after
-/// this callback. Dependencies were initialised from the end of the scope to
-/// the beginning, so walking them from the beginning to the end reverses that
-/// order. Within one array, ELF requires last entry first.
+/// The program's own are this callback's only when the loader initialised
+/// the program too, at `libferrousli.so`'s request (see
+/// [`crate::interface`]); a C library linked into the program runs them
+/// itself. The program was initialised last, and dependencies from the end of
+/// the scope to the beginning, so walking from the beginning to the end
+/// reverses that order. Within one array, ELF requires last entry first.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn dl_fini() {
-    // SAFETY: `save_fini_scope` published this once before the program began;
-    // the callback only reads it while the process exits.
-    let scope = unsafe { &*(&raw const FINI_SCOPE) };
-    let mut index = 1;
+    let scope = scope();
+    let mut index = if crate::interface::program_initialised() {
+        0
+    } else {
+        1
+    };
     while index < scope.len() {
-        let Some(object) = scope.get(index) else {
+        let Some(object) = scope.get(index).filter(|object| !object.is_loader) else {
             index += 1;
             continue;
         };

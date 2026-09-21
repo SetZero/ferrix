@@ -6,12 +6,14 @@
 //! The loader's own code names only the aliases below, so adding a fourth
 //! architecture is this file and nothing else.
 //!
-//! The eight kinds every architecture has, under one set of names:
+//! The nine kinds every architecture has, under one set of names:
 //!
 //! * `RELATIVE` — add the load bias to what is there. No symbol.
 //! * `GLOB_DAT` and `JUMP_SLOT` — a symbol's address, for data and for a
 //!   call. This loader resolves both at load, so they differ only in which
 //!   table they arrive in.
+//! * `COPY` — copy a data object from the library that defines it into the
+//!   program, which was linked with room for it. Only the program has these.
 //! * `ABSOLUTE` — a symbol's address plus an addend, written whole.
 //! * `IRELATIVE` — call the function at bias plus addend, and write what it
 //!   returns. How a program picks an implementation by what the processor
@@ -35,6 +37,8 @@ mod x86_64 {
     pub const R_NONE: u32 = 0;
     /// `R_X86_64_64`.
     pub const R_ABSOLUTE: u32 = 1;
+    /// `R_X86_64_COPY`.
+    pub const R_COPY: u32 = 5;
     /// `R_X86_64_GLOB_DAT`.
     pub const R_GLOB_DAT: u32 = 6;
     /// `R_X86_64_JUMP_SLOT`.
@@ -61,6 +65,8 @@ mod aarch64 {
     pub const R_NONE: u32 = 0;
     /// `R_AARCH64_ABS64`.
     pub const R_ABSOLUTE: u32 = 257;
+    /// `R_AARCH64_COPY`.
+    pub const R_COPY: u32 = 1024;
     /// `R_AARCH64_GLOB_DAT`.
     pub const R_GLOB_DAT: u32 = 1025;
     /// `R_AARCH64_JUMP_SLOT`.
@@ -93,6 +99,8 @@ mod arm {
     pub const R_DTPOFF: u32 = 18;
     /// `R_ARM_TLS_TPOFF32`.
     pub const R_TPOFF: u32 = 19;
+    /// `R_ARM_COPY`.
+    pub const R_COPY: u32 = 20;
     /// `R_ARM_GLOB_DAT`.
     pub const R_GLOB_DAT: u32 = 21;
     /// `R_ARM_JUMP_SLOT`.

@@ -190,18 +190,31 @@ fn ferrousli(root: &std::path::Path) -> Result<()> {
     step("ferrousli: formatting", || {
         cargo::run(in_ferrousli(&["fmt", "--check"]), "cargo fmt (ferrousli)")
     })?;
+    // `--workspace`, because ferrousli's root is a package as well as a
+    // workspace, and cargo run there without it covers that package alone:
+    // the loader in `ld/` went ungated until 2026-09-21 for that reason.
     step("ferrousli: clippy", || {
         cargo::run(
-            in_ferrousli(&["clippy", "--all-targets", "--", "-D", "warnings"]),
+            in_ferrousli(&[
+                "clippy",
+                "--workspace",
+                "--all-targets",
+                "--",
+                "-D",
+                "warnings",
+            ]),
             "cargo clippy (ferrousli)",
         )
     })?;
     step("ferrousli: tests", || {
-        cargo::run(in_ferrousli(&["test"]), "cargo test (ferrousli)")
+        cargo::run(
+            in_ferrousli(&["test", "--workspace"]),
+            "cargo test (ferrousli)",
+        )
     })?;
     step("ferrousli: tests (release)", || {
         cargo::run(
-            in_ferrousli(&["test", "--release"]),
+            in_ferrousli(&["test", "--workspace", "--release"]),
             "cargo test --release (ferrousli)",
         )
     })
