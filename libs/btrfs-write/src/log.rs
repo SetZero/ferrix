@@ -236,10 +236,17 @@ impl<D: WriteDevice> WriteVolume<D> {
         // logged item already says what `nbytes` ends up being — it is the
         // one the logging transaction wrote.
         let mut stat = Vec::new();
+        // The extents the replay restored. A log may hold checksums for
+        // extents an later logging of the same inode replaced — nothing
+        // deletes them, because they are filed under the checksum tree's
+        // object id and not the inode's — and a checksum for data nothing
+        // points at is something `btrfs check` refuses. So only the sums
+        // inside these ranges are kept.
+        let mut restored = crate::ranges::RangeSet::new();
         for (key, data) in items {
             match key.item_type {
-                EXTENT_CSUM_KEY => self.replay_sums(&key, data)?,
-                EXTENT_DATA_KEY => self.replay_extent(&key, data)?,
+                EXTENT_CSUM_KEY => self.replay_sums(&key, &data, &restored)?,
+                EXTENT_DATA_KEY => self.replay_extent(&key, data, &mut restored)?,
                 INODE_ITEM_KEY => stat.push((key, data)),
                 _ => self.put(FS_TREE, key, data)?,
             }
@@ -259,8 +266,14 @@ impl<D: WriteDevice> WriteVolume<D> {
         self.commit()
     }
 
-    /// Replay one file extent: allocate what it names, then record it.
-    fn replay_extent(&mut self, key: &BtrfsKey, data: Vec<u8>) -> Result<()> {
+    /// Replay one file extent: allocate what it names, then record it, and
+    /// remember the disk range so its checksums are kept.
+    fn replay_extent(
+        &mut self,
+        key: &BtrfsKey,
+        data: Vec<u8>,
+        restored: &mut crate::ranges::RangeSet,
+    ) -> Result<()> {
         let sector = self.sectorsize();
         let extent = ExtentData::parse_item(key, &data, sector)?;
         let end = extent
@@ -272,6 +285,7 @@ impl<D: WriteDevice> WriteVolume<D> {
         {
             self.space
                 .reserve(file.disk_bytenr, file.disk_num_bytes, Kind::Data)?;
+            let _ = restored.insert(file.disk_bytenr, file.disk_num_bytes);
             self.refs.add(
                 file.disk_bytenr,
                 file.disk_num_bytes,
@@ -287,11 +301,41 @@ impl<D: WriteDevice> WriteVolume<D> {
         self.put(FS_TREE, *key, data)
     }
 
-    /// Replay a run of checksums, leaving whatever the tree already holds.
-    fn replay_sums(&mut self, key: &BtrfsKey, data: Vec<u8>) -> Result<()> {
-        let covered = (data.len() as u64) / 4 * u64::from(self.sectorsize());
-        crate::csum::delete_range(self, key.offset, covered)?;
-        self.put(CSUM_TREE_OBJECTID, *key, data)
+    /// Replay the part of a run of checksums that covers data the replay
+    /// restored, a sector at a time, joining what is next to what.
+    fn replay_sums(
+        &mut self,
+        key: &BtrfsKey,
+        data: &[u8],
+        restored: &crate::ranges::RangeSet,
+    ) -> Result<()> {
+        let sector = u64::from(self.sectorsize());
+        let mut run: Vec<u8> = Vec::new();
+        let mut start = key.offset;
+        for (index, sum) in data.chunks_exact(4).enumerate() {
+            let at = key.offset.saturating_add((index as u64).saturating_mul(sector));
+            if restored.contains(at, sector) {
+                if run.is_empty() {
+                    start = at;
+                }
+                run.extend_from_slice(sum);
+                continue;
+            }
+            self.put_sums(start, core::mem::take(&mut run))?;
+        }
+        self.put_sums(start, run)
+    }
+
+    /// Put one run of checksums into the checksum tree, over whatever the
+    /// tree holds for that range.
+    fn put_sums(&mut self, at: u64, sums: Vec<u8>) -> Result<()> {
+        if sums.is_empty() {
+            return Ok(());
+        }
+        let covered = (sums.len() as u64) / 4 * u64::from(self.sectorsize());
+        crate::csum::delete_range(self, at, covered)?;
+        let key = BtrfsKey::new(EXTENT_CSUM_OBJECTID, EXTENT_CSUM_KEY, at);
+        self.put(CSUM_TREE_OBJECTID, key, sums)
     }
 }
 
