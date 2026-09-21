@@ -910,6 +910,13 @@ fn boot_script(config: &Config, directory: &str, sha: &str, extra: &[String]) ->
             .map(|(name, value)| format!("export {name}={}", quoted(value))),
     );
     steps.push(format!("cd {}", quoted(directory)));
+    // A boot still running from an earlier run -- one whose connection did
+    // not take it along -- holds the VNC port. Left alone, this boot's QEMU
+    // fails to bind it, the viewer is shown the old screen instead, and the
+    // pid file below loses the only record of the old boot, so `--stop`
+    // cannot find it again. So it goes first, before the checkout changes the
+    // files under it.
+    steps.push(stop_recorded(PID_FILE));
     steps.push(format!("git checkout --quiet --detach {}", quoted(sha)));
     steps.push("echo \"remote: booting $(git rev-parse --short HEAD) in $PWD\"".to_owned());
     // For a teardown that has to reach past a connection which did not take
@@ -921,22 +928,36 @@ fn boot_script(config: &Config, directory: &str, sha: &str, extra: &[String]) ->
     steps.join("; ")
 }
 
+/// A shell step stopping the boot the pid file at `pid_path` names, if there
+/// is one: its process group, then the process itself, then a wait of up to
+/// ten seconds for both to be gone, so a boot started next finds the VNC port
+/// free. Safe under `set -e`, and it never ends the script it is part of.
+fn stop_recorded(pid_path: &str) -> String {
+    let path = quoted(pid_path);
+    [
+        format!("if test -f {path}; then pid=$(sed -n 1p {path})"),
+        format!("pgid=$(sed -n 2p {path})"),
+        "if test -n \"$pgid\"; then kill -TERM -\"$pgid\" 2>/dev/null || true; fi".to_owned(),
+        "if test -n \"$pid\"; then kill -TERM \"$pid\" 2>/dev/null || true; fi".to_owned(),
+        // An empty id is not waited for: `kill -0 0` would ask about this
+        // shell's own group, which is always there.
+        "for _ in 1 2 3 4 5 6 7 8 9 10; do \
+         if test -n \"$pgid\" && kill -0 -\"$pgid\" 2>/dev/null; then :; \
+         elif test -n \"$pid\" && kill -0 \"$pid\" 2>/dev/null; then :; \
+         else break; fi; sleep 1; done"
+            .to_owned(),
+        format!("rm -f {path}; fi"),
+    ]
+    .join("; ")
+}
+
 /// Best effort: make sure nothing of ours is still running over there.
 ///
 /// Closing the connection sends the boot a `SIGHUP` and that is usually the
 /// end of it. Usually is not always, and a QEMU nobody is watching holds a
 /// machine's memory and its VNC port against the next run, so this asks.
 fn teardown(host: &str, directory: &str) {
-    let pid_path = format!("{directory}/{PID_FILE}");
-    let script = [
-        format!("test -f {} || exit 0", quoted(&pid_path)),
-        format!("read pid < {}", quoted(&pid_path)),
-        format!("pgid=$(sed -n 2p {})", quoted(&pid_path)),
-        "test -n \"$pgid\" && kill -TERM -\"$pgid\" 2>/dev/null || true".to_owned(),
-        "kill -TERM \"$pid\" 2>/dev/null || true".to_owned(),
-        format!("rm -f {}", quoted(&pid_path)),
-    ]
-    .join("; ");
+    let script = stop_recorded(&format!("{directory}/{PID_FILE}"));
     let mut command = ssh(host);
     let _ = command
         .arg(script)
@@ -1397,6 +1418,15 @@ send = "head"
             "the display the tunnel forwards is the display served: {script}"
         );
         assert!(script.contains("'--smp' '8'"), "extras come last: {script}");
+        let (stop, checkout, record) = (
+            script.find("kill -TERM").unwrap(),
+            script.find("git checkout").unwrap(),
+            script.find(&format!("> {PID_FILE}")).unwrap(),
+        );
+        assert!(
+            stop < checkout && checkout < record,
+            "an earlier boot is stopped before its record is overwritten: {script}"
+        );
         assert!(
             script.ends_with("'8'"),
             "the boot is exec'd last, so the connection is the machine"
