@@ -484,3 +484,34 @@ fn a_keymaps_own_text_names_its_layouts() {
     assert!(super::groups_of("\tlevel_name[1]= \"Any\";\n").is_empty());
     assert!(super::groups_of("").is_empty());
 }
+
+/// What a held key does to the modifiers is the layout's: right Alt is
+/// `AltGr` (`Mod5`) on a German keyboard and `Alt` (`Mod1`) on an American
+/// one. The keyboard once read every key from the default keymap, told
+/// clients `Alt` while a German keyboard held `AltGr`, and `AltGr` and `+`
+/// typed `+`.
+#[test]
+fn right_alt_is_the_modifier_the_layout_in_force_makes_it() {
+    const KEY_RIGHTALT: u16 = 100;
+    const KEY_PLUS: u16 = 27;
+    const MOD1: u32 = 0x8;
+
+    let (german, _) = layout("de", "");
+    let (american, _) = layout("us", "");
+    let mut keyboard = super::Keyboard::new();
+    keyboard.set_layouts(vec![german, american]);
+    assert!(keyboard.is_modifier(KEY_RIGHTALT));
+
+    assert!(keyboard.key(KEY_RIGHTALT, true));
+    let held = keyboard.modifiers().depressed;
+    assert_eq!(held, generated::MOD5, "AltGr on de");
+    // Which is the level `~` is on, as the terminal will look it up.
+    let made = german.key(KEY_PLUS).and_then(|key| key.keysym(held));
+    assert_eq!(made, Some("asciitilde"));
+
+    // The second group is `us`, where the same key is Alt.
+    assert!(keyboard.next_group());
+    assert_eq!(keyboard.modifiers().depressed, MOD1, "Alt on us");
+    assert!(keyboard.key(KEY_RIGHTALT, false));
+    assert_eq!(keyboard.modifiers().depressed, 0);
+}

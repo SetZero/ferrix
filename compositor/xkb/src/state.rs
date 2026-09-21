@@ -1,5 +1,6 @@
 //! What is held, what is locked, and what that makes `wl_keyboard.modifiers`.
 
+use crate::generated::Layout;
 use crate::{Key, key};
 
 /// The four masks `wl_keyboard.modifiers` carries.
@@ -39,6 +40,14 @@ pub struct Keyboard {
     groups: u32,
     /// Which of them is in force, always below `groups`.
     group: u32,
+    /// The keymap's layouts, in group order, which say what each key does to
+    /// the modifiers; empty until [`Keyboard::set_layouts`], and then the
+    /// default keymap answers. A key is a different modifier on different
+    /// layouts -- right Alt is `Alt_R` (`Mod1`) on `us` and `AltGr`
+    /// (`ISO_Level3_Shift`, `Mod5`) on `de` -- so reading the default for
+    /// every keyboard told clients `Alt` when a German keyboard held `AltGr`,
+    /// and `AltGr` and `+` typed a `+` rather than a `~`.
+    layouts: Vec<&'static Layout>,
 }
 
 impl Default for Keyboard {
@@ -56,7 +65,36 @@ impl Keyboard {
             locked: 0,
             groups: 1,
             group: 0,
+            layouts: Vec::new(),
         }
+    }
+
+    /// Say which layouts the keymap has, in group order, and so how many:
+    /// [`Keyboard::set_groups`] with their count, and what each key does to
+    /// the modifiers read from the layout of the group in force.
+    pub fn set_layouts(&mut self, layouts: Vec<&'static Layout>) {
+        self.set_groups(u32::try_from(layouts.len()).unwrap_or(1));
+        self.layouts = layouts;
+    }
+
+    /// The key with this evdev code, as the layout in force has it.
+    #[must_use]
+    pub fn key_of(&self, code: u16) -> Option<&'static Key> {
+        let in_force = usize::try_from(self.group)
+            .ok()
+            .and_then(|group| self.layouts.get(group))
+            .or_else(|| self.layouts.first());
+        match in_force {
+            Some(layout) => layout.key(code),
+            None => key(code),
+        }
+    }
+
+    /// Whether the key with this evdev code changes the modifier state.
+    #[must_use]
+    pub fn is_modifier(&self, code: u16) -> bool {
+        self.key_of(code)
+            .is_some_and(|key| key.held != 0 || key.locked != 0)
     }
 
     /// Say how many layouts the keymap has, keeping the group inside it.
@@ -122,7 +160,7 @@ impl Keyboard {
                 // machine has it: the probe measured `Caps Lock` leaving its
                 // bit locked after a press and a release, and the release is
                 // where it would be undone if it toggled twice.
-                if let Some(locked) = key(code).map(|key| key.locked)
+                if let Some(locked) = self.key_of(code).map(|key| key.locked)
                     && locked != 0
                 {
                     self.locked ^= locked;
@@ -157,7 +195,7 @@ impl Keyboard {
             depressed: self
                 .held
                 .iter()
-                .filter_map(|code| key(*code))
+                .filter_map(|code| self.key_of(*code))
                 .map(|key: &Key| key.held)
                 .fold(0, |mask, held| mask | held),
             latched: 0,

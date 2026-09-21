@@ -280,7 +280,7 @@ impl Seat {
         // from the same two options the keymap itself is built from, so the
         // group the clients are told about is always a group their keymap
         // has.
-        seat.keyboard.set_groups(group_count(config));
+        seat.keyboard.set_layouts(layouts_of(config));
         seat
     }
 
@@ -291,7 +291,7 @@ impl Seat {
         // A reload may have changed the keymap, and every bind is resolved
         // against it.
         self.layout = chosen(config).0;
-        self.keyboard.set_groups(group_count(config));
+        self.keyboard.set_layouts(layouts_of(config));
         // A reload takes away the map that was in force, as it takes away
         // the binds: a submap the new configuration does not have is one
         // nothing could leave.
@@ -506,7 +506,7 @@ impl Seat {
     fn key(&mut self, code: u16, pressed: bool, repeat: bool) -> Vec<Action> {
         let changed = self.keyboard.key(code, pressed);
         let mut actions = Vec::new();
-        if changed && is_modifier(code) {
+        if changed && self.keyboard.is_modifier(code) {
             actions.push(Action::Modifiers(self.keyboard.modifiers()));
         }
         let fired = self.fired(Trigger::Key(code), pressed, repeat);
@@ -654,6 +654,21 @@ pub fn chosen_layouts(config: &Config) -> Vec<(&'static Layout, bool)> {
     )
 }
 
+/// The layouts `config` asks for, in group order: what the keyboard reads
+/// each key's effect on the modifiers from, so that right Alt is `AltGr` on a
+/// German keyboard and `Alt` on an American one.
+fn layouts_of(config: &Config) -> Vec<&'static Layout> {
+    let layouts: Vec<&'static Layout> = chosen_layouts(config)
+        .into_iter()
+        .map(|(layout, _)| layout)
+        .collect();
+    if layouts.is_empty() {
+        vec![chosen(config).0]
+    } else {
+        layouts
+    }
+}
+
 /// How many layout groups the keymap `config` asks for has.
 ///
 /// At least one: an unset or unreadable `input:kb_layout` is the fallback
@@ -702,11 +717,6 @@ fn trigger_of(layout: &'static Layout, key: &Key) -> Option<Trigger> {
             Trigger::Wheel { axis, positive }
         }
     })
-}
-
-/// Whether this key is one that changes the modifier state.
-fn is_modifier(code: u16) -> bool {
-    compositor_xkb::key(code).is_some_and(|key| key.held != 0 || key.locked != 0)
 }
 
 /// What Hyprland's modifier names mean here, so that a `Mods` from the
