@@ -21,6 +21,12 @@ use std::process::Command;
 use crate::ports::{Content, File};
 use crate::{Error, Result};
 
+/// Where zsh's function tree goes in the image: the directory zinc's default
+/// `fpath` is made of. oh-my-zsh calls `compinit`, `is-at-least`,
+/// `add-zsh-hook`, `colors` and the rest as zsh gives them, autoloaded from
+/// this tree; without it every one of those is `command not found`.
+pub(crate) const FUNCTIONS: &str = "usr/share/zsh/functions";
+
 /// Where the checkout goes in the image. Shared rather than in a home
 /// directory, because root and `ferrix` start the same shell and the tree is
 /// megabytes of the guest's memory, which it should be once.
@@ -39,7 +45,14 @@ pub(crate) const ZSHRC: &[u8] = b"\
 # A user's own ~/.zshrc is sourced after this one and can undo any of it.
 export ZSH=/usr/share/oh-my-zsh
 export HOME=${HOME:-/}
-ZSH_THEME=${ZSH_THEME:-robbyrussell}
+# agnoster, as the build machine's own shell has it, where the terminal can
+# draw its Powerline separators; robbyrussell on the console (TERM=dumb),
+# whose font and whose serial line's other end may have no such glyphs.
+if [[ $TERM == dumb ]]; then
+  ZSH_THEME=${ZSH_THEME:-robbyrussell}
+else
+  ZSH_THEME=${ZSH_THEME:-agnoster}
+fi
 plugins=(git)
 # Where oh-my-zsh writes: its cache and its completion dump. /tmp, because it
 # is the one directory every boot has and can write in.
@@ -54,18 +67,40 @@ mkdir -p $ZSH_CACHE_DIR/completions
 /// a run of it on the build host left behind.
 const SKIPPED: &[&str] = &[".git", ".github", ".devcontainer", "cache"];
 
+/// Whether a name in a tree is left out of the image: [`SKIPPED`], and the
+/// `.zwc` files zsh compiles its functions into, which are zsh's own binary
+/// format rather than anything zinc reads -- it finds the plain file beside
+/// each one.
+fn skipped(name: &str) -> bool {
+    SKIPPED.contains(&name) || name.ends_with(".zwc")
+}
+
 /// Where the checkout is installed on this machine.
 fn root() -> Result<PathBuf> {
-    if let Some(dir) = std::env::var_os("FERRIX_OMZ") {
+    installed_under("FERRIX_OMZ", "oh-my-zsh")
+}
+
+/// Where zsh's function tree is installed on this machine.
+fn functions_root() -> Result<PathBuf> {
+    installed_under("FERRIX_ZSH_FUNCTIONS", "zsh-functions")
+}
+
+/// `$variable` when it is set, `~/.local/share/ferrix/<name>` otherwise.
+fn installed_under(variable: &str, name: &str) -> Result<PathBuf> {
+    if let Some(dir) = std::env::var_os(variable) {
         return Ok(PathBuf::from(dir));
     }
     std::env::home_dir()
         .map(|home| {
-            [".local", "share", "ferrix", "oh-my-zsh"]
+            [".local", "share", "ferrix", name]
                 .iter()
                 .fold(home, |dir, name| dir.join(name))
         })
-        .ok_or_else(|| Error::new("no home directory to find oh-my-zsh under; set FERRIX_OMZ"))
+        .ok_or_else(|| {
+            Error::new(format!(
+                "no home directory to find {name} under; set {variable}"
+            ))
+        })
 }
 
 /// The permissions a file in the checkout is given: executable when it starts
@@ -80,7 +115,7 @@ fn mode_of(bytes: &[u8]) -> u32 {
 }
 
 /// Read the tree at `path` into `out` as the archive path `name`, in name
-/// order, leaving out [`SKIPPED`].
+/// order, leaving out what is [`skipped`].
 fn read_tree(path: &Path, name: &str, out: &mut Vec<File>) -> Result<()> {
     let meta = std::fs::symlink_metadata(path)
         .map_err(|error| Error::new(format!("reading {}: {error}", path.display())))?;
@@ -104,7 +139,7 @@ fn read_tree(path: &Path, name: &str, out: &mut Vec<File>) -> Result<()> {
             .collect::<std::io::Result<_>>()?;
         children.sort();
         for child in children {
-            if SKIPPED.contains(&child.as_str()) {
+            if skipped(&child) {
                 continue;
             }
             read_tree(&path.join(&child), &format!("{name}/{child}"), out)?;
@@ -148,6 +183,15 @@ fn installed() -> Result<Vec<File>> {
         content: Content::Bytes(ZSHRC.to_vec()),
     }];
     read_tree(&root, DIRECTORY, &mut files)?;
+    let functions = functions_root()?;
+    if functions.join("Misc").join("is-at-least").is_file() {
+        read_tree(&functions, FUNCTIONS, &mut files)?;
+    } else {
+        println!(
+            "  zsh's functions are not installed under {}, so oh-my-zsh will              find no compinit (cargo xtask zsh-functions --from <DIRECTORY>              installs them)",
+            functions.display()
+        );
+    }
     Ok(files)
 }
 
@@ -187,7 +231,52 @@ pub(crate) fn install(from: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-/// Copy the tree at `from` to `to`, [`SKIPPED`] names apart.
+/// `cargo xtask zsh-functions --from <DIRECTORY>`: install zsh's function
+/// tree, which every image carrying oh-my-zsh carries beside it at
+/// [`FUNCTIONS`]. The directory is either an installed tree, such as a Linux
+/// machine's `/usr/share/zsh/functions`, or a zsh source checkout, of which
+/// only `Completion` and `Functions` are taken. A directory rather than a
+/// download, because any machine with zsh already has one.
+pub(crate) fn install_functions(from: Option<&str>) -> Result<()> {
+    let from = from.ok_or_else(|| {
+        Error::new(
+            "say where zsh's functions come from: --from <DIRECTORY>, such as              /usr/share/zsh/functions or a zsh source checkout",
+        )
+    })?;
+    let source = Path::new(from);
+    let installed = source.join("Misc").join("is-at-least").is_file();
+    let checkout = source
+        .join("Functions")
+        .join("Misc")
+        .join("is-at-least")
+        .is_file()
+        && source.join("Completion").is_dir();
+    if !installed && !checkout {
+        return Err(Error::new(format!(
+            "{from} is neither zsh's function tree nor a zsh source checkout:              it has no Misc/is-at-least"
+        )));
+    }
+    let root = functions_root()?;
+    if root.exists() {
+        std::fs::remove_dir_all(&root)
+            .map_err(|error| Error::new(format!("removing {}: {error}", root.display())))?;
+    }
+    if installed {
+        copy_tree(source, &root)?;
+    } else {
+        for part in ["Completion", "Functions"] {
+            copy_tree(&source.join(part), &root.join(part))?;
+        }
+    }
+    println!(
+        "
+installed zsh's functions under {}",
+        root.display()
+    );
+    Ok(())
+}
+
+/// Copy the tree at `from` to `to`, [`skipped`] names apart.
 fn copy_tree(from: &Path, to: &Path) -> Result<()> {
     std::fs::create_dir_all(to)
         .map_err(|error| Error::new(format!("making {}: {error}", to.display())))?;
@@ -196,7 +285,7 @@ fn copy_tree(from: &Path, to: &Path) -> Result<()> {
     for entry in entries {
         let entry = entry.map_err(|error| Error::new(format!("reading a directory: {error}")))?;
         let name = entry.file_name().to_string_lossy().into_owned();
-        if SKIPPED.contains(&name.as_str()) {
+        if skipped(&name) {
             continue;
         }
         let (source, target) = (entry.path(), to.join(&name));

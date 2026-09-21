@@ -19,7 +19,8 @@
 //! for every name each of them owns: `sh` is zinc's, the hundred names in
 //! [`UTILITIES`] are uutils', and busybox gets the rest of [`APPLETS`].
 //! Beside zinc it carries oh-my-zsh, at [`omz::DIRECTORY`] with the
-//! `/etc/zshrc` that sources it, so the shell comes up configured.
+//! `/etc/zshrc` that sources it and zsh's function tree at
+//! [`omz::FUNCTIONS`], so the shell comes up configured.
 //! Without a program it is the same bytes it was before programs could be
 //! added.
 

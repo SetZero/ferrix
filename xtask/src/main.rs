@@ -14,6 +14,7 @@
 //! cargo xtask busybox   [--arch x86_64]
 //! cargo xtask ports     [--arch x86_64]
 //! cargo xtask omz       --from DIRECTORY-OR-URL
+//! cargo xtask zsh-functions --from DIRECTORY
 //! cargo xtask flash     [--arch armv7a] [--to MOUNT]
 //! cargo xtask watch-serial            [--port DEVICE] [--timeout SECONDS]
 //! cargo xtask deploy    [--arch armv7a] [--to MOUNT] [--port DEVICE]
@@ -32,6 +33,9 @@
 //! `omz` installs the oh-my-zsh checkout every image carries, from a directory
 //! on this machine or a git repository to clone. Without it an image boots to a
 //! shell with no configuration; with it, to the one oh-my-zsh gives.
+//! `zsh-functions` installs zsh's own function tree -- `compinit`,
+//! `is-at-least`, `add-zsh-hook` -- which oh-my-zsh calls and the image
+//! carries beside it.
 //!
 //! `busybox` builds busybox against ferrousli, on Linux or natively on Windows,
 //! and installs it for `--init ferrousli`, which names that binary instead of a
@@ -350,6 +354,7 @@ fn run() -> Result<()> {
         "uutils" => uutils::build(args.single_arch()?).map(|_| ()),
         "ports" => ports::build(args.single_arch()?),
         "omz" => omz::install(args.from.as_deref()),
+        "zsh-functions" => omz::install_functions(args.from.as_deref()),
         "flash" => {
             let arch = args.single_arch()?;
             let (loader, kernel, initramfs) = build_board_files(arch, &args)?;

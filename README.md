@@ -241,6 +241,15 @@ its aliases and its completion, rather than at a bare shell somebody would
 have to install it into over a network the guest may not have. An image built
 on a machine without the checkout says so and boots without it.
 
+oh-my-zsh calls zsh's own functions -- `compinit`, `is-at-least`,
+`add-zsh-hook`, `colors` -- which zsh autoloads from its function tree rather
+than building in. `cargo xtask zsh-functions --from <DIRECTORY>` installs that
+tree from a Linux machine's `/usr/share/zsh/functions` (on Windows, WSL's, as
+`\\wsl.localhost\<distribution>\usr\share\zsh\functions`) or from a zsh
+source checkout, and every image carries it at `/usr/share/zsh/functions`,
+where zinc's `fpath` looks. Without it oh-my-zsh starts with a
+`command not found` for each of them.
+
 ### The display
 
 ```
