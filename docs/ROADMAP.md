@@ -3329,6 +3329,22 @@ showed up that are not SSH's: sshdt warns once that `mlock` is `ENOSYS`, and
 uutils' `tty` on a PTY prints its name without the newline, where busybox's
 `tty` prints both. No gate runs sshdt yet; `docs/BACKLOG.md` has the rows.
 
+Who may log in was that host user's `~/.ssh` and nothing else, and on
+2026-09-21 that was reported as a server refusing non-interactive sessions.
+It refuses no such thing: from a client with a key, `uname -a`, an exit
+status of 3, a piped stdin, stderr on its own stream, `ssh -T`, `sftp` and
+`scp` all work over this guest. What the report had met was a client with no
+private key at all -- a sandbox whose `~/.ssh` was empty -- being told
+`Permission denied (publickey)` before any session was opened. So a machine
+now has a key of its own for its guests: `ssh-keygen` makes
+`~/.local/share/ferrix/ssh/id_ed25519` beside the host key the first time,
+every `--ssh` boot authorizes it, and the boot prints the `ssh -i` line that
+uses it. `--ssh-key <FILE|KEY>` authorizes a key that is in neither place, a
+file read whole or a key written out. Password authentication stays off,
+because `sshdt` given no key and no password accepts anyone. Proven from a
+client with an empty `~/.ssh`, with both controls firing: no key and a key
+that was not named are each refused.
+
 **Exit, and it is met:** under `xtask`'s gateway — which is where this
 criterion's *"under QEMU's user-mode network"* now reads — busybox configures
 `eth0` with `ip`, and `route` and `netstat` report through `/proc/net`. `wget`
