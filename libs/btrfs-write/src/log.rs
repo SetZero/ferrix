@@ -231,12 +231,21 @@ impl<D: WriteDevice> WriteVolume<D> {
         };
         let _ = self.roots.insert(TREE_LOG_OBJECTID, root);
         let items = self.range(TREE_LOG_OBJECTID, &BtrfsKey::MIN, &BtrfsKey::MAX)?;
+        // The stat data goes in last. Replaying an extent adjusts the
+        // inode's `nbytes` as it drops what the range held before, and the
+        // logged item already says what `nbytes` ends up being — it is the
+        // one the logging transaction wrote.
+        let mut stat = Vec::new();
         for (key, data) in items {
             match key.item_type {
                 EXTENT_CSUM_KEY => self.replay_sums(&key, data)?,
                 EXTENT_DATA_KEY => self.replay_extent(&key, data)?,
+                INODE_ITEM_KEY => stat.push((key, data)),
                 _ => self.put(FS_TREE, key, data)?,
             }
+        }
+        for (key, data) in stat {
+            self.put(FS_TREE, key, data)?;
         }
         // The log's own blocks are not part of any tree now; they were never
         // in the committed extent tree either, so they are simply free.
