@@ -180,7 +180,7 @@ impl<D: WriteDevice> WriteVolume<D> {
         let mut blocks = Vec::new();
         self.collect_blocks(root, &mut blocks)?;
         for (bytenr, level) in blocks {
-            self.dirty.remove(&bytenr);
+            let _ = self.dirty.remove(&bytenr);
             let _ = self.clean.remove(&bytenr);
             self.refs.add(
                 bytenr,
