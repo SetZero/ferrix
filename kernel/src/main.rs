@@ -438,7 +438,8 @@ fn check_filesystems(view: &BootView<'_>) {
     };
     println!(
         "  mmap     {} bytes written through a shared file mapping and read back from the \
-         file, and the other way; refusals, msync and /proc maps answered; a truncation \
+         file, and the other way; a loader-style fixed RX/RW mapping and RELRO protection \
+         worked; refusals, msync and /proc maps answered; a truncation \
          took {} pages away from the mapping; {} pages copied into a private mapping and \
          kept from the file, a fork and a user-mode write included; {} frames leaked",
         mapped.bytes, mapped.cut, mapped.copied, mapped.leaked,

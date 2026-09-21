@@ -34,8 +34,8 @@ use ferrix_bootinfo::PAGE_SIZE;
 use ferrix_elf::Class;
 use ferrix_linux_abi::nr::Syscall;
 use ferrix_linux_abi::types::{
-    AT_FDCWD, MAP_ANONYMOUS, MAP_PRIVATE, MAP_SHARED, MS_ASYNC, MS_SYNC, O_CREAT, O_RDONLY, O_RDWR,
-    O_TRUNC, PROT_READ, PROT_WRITE, SEEK_SET,
+    AT_FDCWD, MAP_ANONYMOUS, MAP_FIXED, MAP_PRIVATE, MAP_SHARED, MS_ASYNC, MS_SYNC, O_CREAT,
+    O_RDONLY, O_RDWR, O_TRUNC, PROT_EXEC, PROT_READ, PROT_WRITE, SEEK_SET,
 };
 use ferrix_vfs::{Errno, OpenFile, OpenFlags};
 use ferrix_vma::VmaFlags;
@@ -89,6 +89,11 @@ const COPIED_AT: u64 = 600;
 const CHILD_WRITES: &[u8] = b"a fork child's write";
 /// Where it writes it: page 1, which the parent copied before the fork.
 const CHILD_AT: u64 = PAGE_SIZE + 3000;
+
+/// Where the loader-shaped mapping goes. It is well clear of the scratch
+/// mappings this check asks the kernel to place, and is a page boundary on all
+/// architectures.
+const LOADER_BASE: u64 = 0x7100_0000;
 
 /// Where the reverse map check's program touches memory: page 0 under test,
 /// page 1 its control page. Written into each architecture's program.
@@ -164,6 +169,19 @@ fn request(descriptor: i32, len: u64, prot: u32, flags: u32) -> MmapRequest {
         flags,
         fd: i64::from(descriptor),
         offset: 0,
+        unit: OffsetUnit::Bytes,
+    }
+}
+
+/// A page of a file at the address a loader chose for it.
+fn fixed_request(descriptor: i32, addr: u64, offset: u64, prot: u32) -> MmapRequest {
+    MmapRequest {
+        addr,
+        len: PAGE_SIZE,
+        prot,
+        flags: MAP_PRIVATE | MAP_FIXED,
+        fd: i64::from(descriptor),
+        offset,
         unit: OffsetUnit::Bytes,
     }
 }
@@ -279,6 +297,7 @@ fn check_a_shared_file_mapping(
         .ok_or("a mapped tmpfs file has no object")?;
     let outcome = check_the_mapping_is_the_file(process, &file, at, &data)
         .and_then(|bytes| check_msync_and_maps(process, at).map(|()| bytes))
+        .and_then(|bytes| check_the_loader_mapping_pattern(process, rw, &file).map(|()| bytes))
         .and_then(|bytes| {
             check_a_private_mapping_copies(process, &file, rw, at, private)
                 .map(|copied| (bytes, copied))
@@ -295,6 +314,90 @@ fn check_a_shared_file_mapping(
     }
     if outcome.is_ok() && object.committed() != committed {
         return Err("unmapping a private file mapping took pages out of the file");
+    }
+    outcome
+}
+
+/// The two file mappings a dynamic loader needs before it enters a program.
+///
+/// Its text is fixed, file-backed and executable. Its writable segment holds
+/// the GOT and the `PT_GNU_RELRO` span while relocations run; then `mprotect`
+/// takes write access away. This makes all three flags matter together: a
+/// test of an anonymous fixed mapping, or of `mprotect` after no file mapping,
+/// would leave the loader's actual path unexercised.
+fn check_the_loader_mapping_pattern(
+    process: &Process,
+    descriptor: i32,
+    file: &OpenFile,
+) -> Result<(), &'static str> {
+    let text = address(
+        memory::sys_mmap(
+            process,
+            &fixed_request(descriptor, LOADER_BASE, 0, PROT_READ | PROT_EXEC),
+        ),
+        "a loader's fixed executable file mapping was refused",
+    )?;
+    if text != LOADER_BASE {
+        return Err("a loader's executable mapping did not land at its fixed address");
+    }
+    let relro = match address(
+        memory::sys_mmap(
+            process,
+            &fixed_request(
+                descriptor,
+                LOADER_BASE + PAGE_SIZE,
+                PAGE_SIZE,
+                PROT_READ | PROT_WRITE,
+            ),
+        ),
+        "a loader's fixed writable file mapping was refused",
+    ) {
+        Ok(relro) => relro,
+        Err(problem) => {
+            let _ = memory::sys_munmap(process, text, PAGE_SIZE);
+            return Err(problem);
+        }
+    };
+
+    let outcome = (|| {
+        if relro != LOADER_BASE + PAGE_SIZE {
+            return Err("a loader's writable mapping did not land at its fixed address");
+        }
+        let mut expected = vec![0_u8; PAGE_SIZE as usize];
+        if file.read_at(0, &mut expected) != Ok(expected.len()) {
+            return Err("the loader mapping fixture's first page could not be read");
+        }
+        let mut read = vec![0_u8; expected.len()];
+        uaccess::copy_from_user(process.space(), text, &mut read)
+            .map_err(|_| "a loader's executable mapping could not be read")?;
+        if read != expected {
+            return Err("a loader's executable mapping does not show its file's bytes");
+        }
+        if uaccess::copy_to_user(process.space(), text, b"x").is_ok() {
+            return Err("a loader's executable mapping was writable");
+        }
+
+        const RELOCATED: &[u8] = b"relocated relro";
+        uaccess::copy_to_user(process.space(), relro + 32, RELOCATED)
+            .map_err(|_| "a loader could not write its RELRO span before mprotect")?;
+        if memory::sys_mprotect(process, relro, PAGE_SIZE, PROT_READ) != Ok(0) {
+            return Err("mprotect of a loader's RELRO span was refused");
+        }
+        let mut kept = [0_u8; RELOCATED.len()];
+        uaccess::copy_from_user(process.space(), relro + 32, &mut kept)
+            .map_err(|_| "a loader's RELRO span could not be read after mprotect")?;
+        if kept != *RELOCATED {
+            return Err("mprotect of a loader's RELRO span changed its relocations");
+        }
+        if uaccess::copy_to_user(process.space(), relro + 32, b"x").is_ok() {
+            return Err("a loader's RELRO span stayed writable after mprotect");
+        }
+        Ok(())
+    })();
+    let relro_unmapped = memory::sys_munmap(process, relro, PAGE_SIZE);
+    let text_unmapped = memory::sys_munmap(process, text, PAGE_SIZE);
+    if outcome.is_ok() && (relro_unmapped != Ok(0) || text_unmapped != Ok(0)) {
+        return Err("a loader-shaped file mapping would not unmap");
     }
     outcome
 }

@@ -168,12 +168,6 @@ pub fn run_handlers() {
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn exit(status: c_int) -> ! {
     run_handlers();
-    // SAFETY: this is `exit`, which runs the destructors once, after the
-    // handlers.
-    #[cfg(not(test))]
-    unsafe {
-        crate::start::run_fini();
-    }
     crate::stdio::exit_flush();
     _Exit(status)
 }

@@ -80,6 +80,42 @@ fn compile(args: &[&str]) {
     assert!(status.success(), "cc could not build a fixture: {args:?}");
 }
 
+/// Build the C runtime pieces that make `crt1.o` pass the loader's exit
+/// callback to `__libc_start_main`.
+fn runtime(dir: &Path) -> (PathBuf, PathBuf) {
+    let root = manifest().parent().expect("the loader has a parent");
+    let profile = if cfg!(debug_assertions) {
+        "debug"
+    } else {
+        "release"
+    };
+    let mut build = Command::new(env!("CARGO"));
+    let _ = build.args(["build", "--lib", "--manifest-path"]);
+    let _ = build.arg(root.join("Cargo.toml"));
+    if profile == "release" {
+        let _ = build.arg("--release");
+    }
+    let status = build.status().expect("build the C runtime");
+    assert!(status.success(), "cargo could not build libferrousli.a");
+
+    let crt = dir.join("crt1.o");
+    let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+    let status = Command::new(rustc)
+        .current_dir(root)
+        .args([
+            "--edition=2024",
+            "--crate-type=lib",
+            "--crate-name=crt1",
+            "-Cpanic=abort",
+        ])
+        .arg(format!("--emit=obj={}", crt.display()))
+        .arg("crt/crt1.rs")
+        .status()
+        .expect("build crt1.o");
+    assert!(status.success(), "rustc could not build crt1.o");
+    (crt, root.join("target").join(profile).join("libferrousli.a"))
+}
+
 #[test]
 fn a_dynamically_linked_program_runs_under_the_loader() {
     let loader = loader();
@@ -95,8 +131,7 @@ fn a_dynamically_linked_program_runs_under_the_loader() {
     ]);
 
     // The library is named by an absolute path, so the loader uses it as it
-    // is rather than searching for it. What the search path does is a
-    // question for the guest, where there is a `/lib` to search.
+    // is rather than searching for it. The test below covers the search path.
     let program = dir.join("prog");
     compile(&[
         "-pie",
@@ -117,6 +152,94 @@ fn a_dynamically_linked_program_runs_under_the_loader() {
          data, 93 a pointer into the library's data, and a signal is the \
          loader or the program faulting"
     );
+}
+
+/// `DT_RUNPATH` finds a directly needed library before the system defaults.
+///
+/// The library lives in a new temporary directory, not beside the program and
+/// not in `/lib`, and `LD_LIBRARY_PATH` is removed. The program can therefore
+/// reach its expected status only when the loader reads its own `DT_RUNPATH`,
+/// splits it into directories and maps the `DT_NEEDED` name it finds there.
+#[test]
+fn a_program_finds_a_library_through_its_runpath() {
+    let loader = loader();
+    let dir = scratch().join("ld-runpath");
+    let libraries = dir.join("libraries");
+    std::fs::create_dir_all(&libraries).expect("make the library directory");
+
+    let library = libraries.join("libgreet.so");
+    compile(&[
+        "-shared",
+        "-Wl,-soname,libgreet.so",
+        "-o",
+        library.to_str().expect("a path"),
+        manifest().join("tests/c/greet.c").to_str().expect("a path"),
+    ]);
+
+    let program = dir.join("prog");
+    compile(&[
+        "-pie",
+        "-o",
+        program.to_str().expect("a path"),
+        manifest().join("tests/c/prog.c").to_str().expect("a path"),
+        "-L",
+        libraries.to_str().expect("a path"),
+        "-lgreet",
+        &format!("-Wl,-rpath,{}", libraries.display()),
+        "-Wl,--enable-new-dtags",
+        &format!("-Wl,--dynamic-linker={}", loader.display()),
+        "-Wl,-e,_start",
+    ]);
+
+    let status = Command::new(&program)
+        .env_remove("LD_LIBRARY_PATH")
+        .status()
+        .expect("run the program");
+    assert_eq!(
+        status.code(),
+        Some(EXPECTED),
+        "a program did not find its DT_NEEDED library through DT_RUNPATH"
+    );
+}
+
+/// The C runtime receives and registers the loader's `rtld_fini` callback.
+///
+/// The shared library's destructor writes after `main` returns. That is only
+/// observable if `crt1.o` passes `rdx` to `__libc_start_main`, the runtime
+/// registers it with `atexit`, and the loader reads and calls its
+/// `DT_FINI_ARRAY` entry.
+#[test]
+fn a_runtime_runs_a_dependency_fini_array_at_exit() {
+    let loader = loader();
+    let dir = scratch().join("ld-fini");
+    std::fs::create_dir_all(&dir).expect("make the scratch directory");
+    let (crt, runtime) = runtime(&dir);
+
+    let library = dir.join("libfini.so");
+    compile(&[
+        "-shared",
+        "-o",
+        library.to_str().expect("a path"),
+        manifest().join("tests/c/fini.c").to_str().expect("a path"),
+    ]);
+
+    let program = dir.join("prog");
+    let status = Command::new("cc")
+        .args(["-nostdlib", "-fPIC", "-O1", "-pie", "-o"])
+        .arg(&program)
+        .arg(&crt)
+        .arg(manifest().join("tests/c/fini_prog.c"))
+        .arg(&runtime)
+        .arg(&library)
+        .arg(format!("-Wl,--dynamic-linker={}", loader.display()))
+        .arg("-Wl,-e,_start")
+        .status()
+        .expect("build the dynamically linked C program");
+    assert!(status.success(), "cc could not build the C runtime fixture");
+
+    let output = Command::new(&program).output().expect("run the program");
+    assert_eq!(output.status.code(), Some(EXPECTED));
+    assert_eq!(output.stdout, b"main\nfini\n");
 }
 
 #[test]

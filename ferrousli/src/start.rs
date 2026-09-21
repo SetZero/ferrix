@@ -61,7 +61,7 @@ pub unsafe extern "C" fn __libc_start_main(
     argv: *mut *mut c_char,
     _init: Hook,
     _fini: Hook,
-    _rtld_fini: Hook,
+    rtld_fini: Hook,
     _stack_end: *mut c_void,
 ) -> ! {
     let count = usize::try_from(argc).unwrap_or(0);
@@ -78,6 +78,18 @@ pub unsafe extern "C" fn __libc_start_main(
     unsafe { auxv::init(at.wrapping_add(1).cast::<usize>().cast_const()) };
     // SAFETY: nothing has read the thread pointer, and this runs once.
     unsafe { thread::init_main() };
+
+    // The dynamic loader supplied this through `rdx`, and `crt1.o` passed it
+    // here. Register it before constructors and `main` can add their own
+    // handlers, so they run first and the loaded libraries finish afterwards.
+    if let Some(rtld_fini) = rtld_fini {
+        let _ = crate::exit::atexit(Some(rtld_fini));
+    }
+    // Put the program's array after the loader callback. Handlers registered
+    // by constructors and `main` are newer and therefore run first; this
+    // walker then finishes the program before the loader finishes its
+    // dependencies, the reverse of their initialisation order.
+    let _ = crate::exit::atexit(Some(run_fini));
 
     // SAFETY: in a static program the linker puts function pointers between
     // each pair of bounds, and the thread pointer they may use is set.
@@ -138,8 +150,8 @@ unsafe fn run(
 ///
 /// # Safety
 ///
-/// Called once, by `exit`.
-pub unsafe fn run_fini() {
+/// Registered by [`__libc_start_main`] and called once by `exit`.
+pub unsafe extern "C" fn run_fini() {
     let start = &raw const __fini_array_start;
     let mut at = &raw const __fini_array_end;
     while at > start {

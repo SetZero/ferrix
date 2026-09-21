@@ -175,6 +175,9 @@ unsafe fn link(stack: &auxv::Stack) -> Result<usize, report::Error> {
 
     // SAFETY: every object is relocated, so an initialiser may call anything.
     unsafe { run_initialisers(&scope) };
+    // SAFETY: all objects are mapped and relocated, and this is the sole path
+    // that reaches the program's entry point.
+    unsafe { start::save_fini_scope(scope) };
     Ok(entry)
 }
 

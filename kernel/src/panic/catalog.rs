@@ -1386,7 +1386,9 @@ pub(crate) static STAGE8_FILE_MAPPINGS: Explanation = Explanation {
               shared. The mapping must show the file's bytes and zeros for the rest of its \
               last page; a write through the mapping must be what the file reads back, and a \
               write to the file what the mapping shows, because both are the file's own VMO \
-              pages. mmap must refuse a descriptor that names nothing with EBADF, a directory \
+              pages. A loader's fixed file-backed RX and RW mappings must land exactly where \
+              asked; it writes the latter as its RELRO span, then mprotect makes it read-only. \
+              mmap must refuse a descriptor that names nothing with EBADF, a directory \
               with ENODEV, a writable shared mapping of a file opened read-only with EACCES, \
               while a writable private mapping of one maps. msync must answer a whole mapping and \
               refuse bad flags and an unmapped range as Linux does, and /proc/<pid>/maps must \

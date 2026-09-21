@@ -26,6 +26,14 @@
 //! and it needs nothing but this object.
 
 use crate::elf::{DT_NULL, DT_RELA, DT_RELAENT, DT_RELASZ, Dyn, Rela};
+use crate::scope::Scope;
+
+/// The objects whose destructors still have to run when the program exits.
+///
+/// The loader normally disappears from the call stack before the program
+/// starts, but it remains mapped.  Keeping the completed scope here gives the
+/// `rtld_fini` callback a stable record of the libraries it must finish.
+static mut FINI_SCOPE: Scope = Scope::new();
 
 /// The run-time address of this object's `_DYNAMIC`, from one PC-relative
 /// instruction and nothing else.
@@ -185,10 +193,10 @@ core::arch::global_asm!(
 /// above it. The loader has been using that stack, so it is restored rather
 /// than continued from, and nothing of the loader's frames survives.
 ///
-/// `rdx` is cleared. The ABI says it holds a function for the program to
-/// register with `atexit` — glibc's `crt1.o` reads it and passes it on — and
-/// a loader with nothing to run at exit must leave zero there rather than
-/// whatever happened to be in the register.
+/// `rdx` holds [`dl_fini`]. The ABI says it is a function for the program to
+/// register with `atexit` — glibc's `crt1.o` reads it and passes it on — so
+/// dependency destructors run after the program's handlers and before its
+/// own `.fini_array`.
 ///
 /// # Safety
 ///
@@ -202,11 +210,60 @@ pub unsafe fn enter(entry: usize, stack: &crate::auxv::Stack) -> ! {
     unsafe {
         core::arch::asm!(
             "mov rsp, {stack}",
-            "xor edx, edx",
+            "lea rdx, [rip + dl_fini]",
             "jmp {entry}",
             stack = in(reg) stack.sp,
             entry = in(reg) entry,
             options(noreturn, nostack),
         )
+    }
+}
+
+/// Save the completed scope for the callback the program registers at exit.
+///
+/// # Safety
+///
+/// Called once, after every object in `scope` has been mapped and relocated,
+/// and before [`enter`] makes the program reachable.
+pub(crate) unsafe fn save_fini_scope(scope: Scope) {
+    // SAFETY: this loader has one initial thread and calls this once before it
+    // transfers control to the program. `dl_fini` only reads the scope later,
+    // while `exit` is ending the process.
+    unsafe { (&raw mut FINI_SCOPE).write(scope) };
+}
+
+/// Run the `DT_FINI_ARRAY` entries of every loaded dependency.
+///
+/// The program's own array belongs to its C runtime, which calls it after
+/// this callback. Dependencies were initialised from the end of the scope to
+/// the beginning, so walking them from the beginning to the end reverses that
+/// order. Within one array, ELF requires last entry first.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn dl_fini() {
+    // SAFETY: `save_fini_scope` published this once before the program began;
+    // the callback only reads it while the process exits.
+    let scope = unsafe { &*(&raw const FINI_SCOPE) };
+    let mut index = 1;
+    while index < scope.len() {
+        let Some(object) = scope.get(index) else {
+            index += 1;
+            continue;
+        };
+        let table = object.fini_array;
+        if table.is_present() {
+            let mut at = table.at.wrapping_add(table.size);
+            while at > table.at {
+                at = at.wrapping_sub(size_of::<usize>());
+                // SAFETY: the dynamic table describes pointer-aligned entries
+                // in this mapped object's `DT_FINI_ARRAY`.
+                let entry = unsafe { (at as *const usize).read() };
+                if entry != 0 && entry != usize::MAX {
+                    // SAFETY: the loader relocated every entry before the
+                    // program could start, and this is its destructor call.
+                    unsafe { core::mem::transmute::<usize, unsafe extern "C" fn()>(entry)() };
+                }
+            }
+        }
+        index += 1;
     }
 }

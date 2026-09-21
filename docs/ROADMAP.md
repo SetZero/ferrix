@@ -98,7 +98,7 @@ session sizes them.
 |---|---|---|
 | ~~Stage 19: the GPU path, Path A (`docs/GPU.md` §3)~~ *done 2026-09-19* | ~~52~~ | landed 2026-09-19 |
 | Stage 19: XWayland, the pointer-driven options, the second-pass effects | 48 | 2026-09-19 to -20 |
-| Dynamic linking: the kernel half, ferrousli's loader, glibc's names | 39 *(4 done)* | 2026-09-20 to -21 |
+| Dynamic linking: the kernel half, ferrousli's loader, glibc's names | 39 *(7 done)* | 2026-09-20 to -21 |
 | Stage 12, btrfs write | ≈ 60 *(21 done: the write path, host-side)* | 2026-09-21 to -22 |
 | Stage 13, namespaces, cgroups, seccomp | *month* ≈ 60 | 2026-09-22 to -23 |
 | Stage 22, Steam: the parts with a first guess (glibc under the runtime 13, bubblewrap's rest 13, sound 30, Venus 8, XWayland counted above) | 64 | 2026-09-23 to -24 |
@@ -1690,7 +1690,7 @@ own, shared and private side by side, twice. It also has a program in user
 mode write a page of a private mapping it has only read:
 
 ```
-  mmap     12339 bytes written through a shared file mapping and read back from the file, and the other way; refusals, msync and /proc maps answered; a truncation took 3 pages away from the mapping; 2 pages copied into a private mapping and kept from the file, a fork and a user-mode write included; 0 frames leaked
+  mmap     12339 bytes written through a shared file mapping and read back from the file, and the other way; a loader-style fixed RX/RW mapping and RELRO protection worked; refusals, msync and /proc maps answered; a truncation took 3 pages away from the mapping; 2 pages copied into a private mapping and kept from the file, a fork and a user-mode write included; 0 frames leaked
 ```
 
 **Done — an anonymous file, and its seals.** `memfd_create` makes a regular
@@ -3346,7 +3346,7 @@ every architecture, and by `su`, which reaches `/etc/group` only because a
 
 ---
 
-## Dynamic linking — PIE, `PT_INTERP`, a loader  ·  *39 points, 35 left*
+## Dynamic linking — PIE, `PT_INTERP`, a loader  ·  *39 points, 32 left*
 
 Placed after *Networking* without a number of its own, for the same reason:
 nothing on the path to `rustc` needs it, since Rust's `std` targets static
@@ -3377,8 +3377,8 @@ Three parts, in the order they can be tested:
   `AT_RANDOM`, `AT_EXECFN` and `AT_PLATFORM`, whose keys `libs/linux-abi`
   carries. The interpreter then maps libraries itself, through stage 8's
   file-backed `mmap` with `MAP_FIXED` and `PROT_EXEC`, and `mprotect`s its
-  `PT_GNU_RELRO` — calls that exist and gain a test that uses them as
-  `ld.so` does. `AT_SYSINFO_EHDR` stays absent: there is no vDSO, and glibc
+  `PT_GNU_RELRO` — now covered in the same pattern a real `ld.so` uses.
+  `AT_SYSINFO_EHDR` stays absent: there is no vDSO, and glibc
   and musl both fall back to the real call.
 
   **What landed on 2026-09-20.** Both images are placed — the program at
@@ -3399,11 +3399,12 @@ Three parts, in the order they can be tested:
   architectures do, and `None` on AArch64, which defines no `ELF_PLATFORM`
   string at all.
 
-  **What is left of the kernel half, 1 point.** The test that drives
-  file-backed `mmap` with `MAP_FIXED` and `PROT_EXEC` and `mprotect` over a
-  `PT_GNU_RELRO` the way a real `ld.so` does — the calls exist and nothing yet
-  uses them in that pattern. Not in the way of the loader: a linker can be
-  written and run against what is there now.
+  **The kernel half is complete, 5 points — completed 2026-09-21.** Its
+  file-mapping self-check now maps a loader-shaped fixed file-backed RX text
+  page and RW data page, writes the latter as its `PT_GNU_RELRO` span, and
+  `mprotect`s it read-only before proving a later write is refused. That is
+  the exact `MAP_FIXED`, `PROT_EXEC` and RELRO pattern a real `ld.so` uses,
+  rather than three calls that only happen to exist separately.
 * **ferrousli's loader, 21 points — a first version done, 2026-09-20.** The
   fifth item of `ferrousli/README.md`: a dynamic loader in Rust, shipped as
   ferrousli's `ld.so` with `libferrousli.so` beside `libferrousli.a`.
@@ -3413,8 +3414,12 @@ Three parts, in the order they can be tested:
   `IRELATIVE` relocations, then runs `DT_INIT_ARRAY` in dependency order and
   enters the program. `tests/link.rs` proves it end to end against a fixture
   built by the host's own `cc`, checking a data symbol, a function pointer and
-  a pointer into a library's own data all resolved. Still missing: the TLS
-  forms and `__tls_get_addr`, `DT_FINI_ARRAY`, `DT_RUNPATH`, and `dlfcn.h`
+  a pointer into a library's own data all resolved. `DT_RUNPATH` is now
+  covered too: a program finds a `DT_NEEDED` library in a private directory
+  with `LD_LIBRARY_PATH` absent. So is `DT_FINI_ARRAY`: the loader preserves
+  its completed scope, passes its `rtld_fini` callback through `rdx`, and
+  Ferrousli's runtime runs a dependency's destructor after `main` returns.
+  Still missing: the TLS forms and `__tls_get_addr`, and `dlfcn.h`
   (`dlopen`, `dlsym`, `dlclose`, `dlerror`, `dladdr`) — which
   `docs/POSIX-2024.md` lists as ferrousli's dynamic-loading area and does not
   price — plus a run inside Ferrix itself rather than on the host. Lazy
