@@ -785,7 +785,7 @@ pub(crate) static STAGE11_MOUNT: Explanation = Explanation {
 };
 
 /// For `check_btrfs_write` in `main.rs`, when `fs::btrfs_write_check::run`
-/// fails.
+/// fails, or `fs::btrfs_powerfail`'s churn or replay under `ferrix.btrfs=`.
 pub(crate) static STAGE12_WRITE: Explanation = Explanation {
     code: "FX-1201",
     title: "a btrfs volume Ferrix wrote did not read back as it was written",
@@ -794,10 +794,15 @@ pub(crate) static STAGE12_WRITE: Explanation = Explanation {
               `fs::btrfs_write_check::run` mounts it writable at /mnt-rw, builds a tree on it — \
               files of every size, a hole, a link, a symlink, an overwrite, a truncation, a \
               rename and an unlink — syncs, unmounts, mounts again and reads everything back. \
-              After the unmount nothing is cached, so every byte compared came off the disk.",
+              After the unmount nothing is cached, so every byte compared came off the disk. \
+              Under `ferrix.btrfs=churn` or `=replay`, which only `cargo xtask test-powerfail` \
+              sets, the same disk is instead rewritten until QEMU is killed, and then mounted \
+              again — replaying any log the kill left — and every file whose trailer says its \
+              body was made durable is checked against that trailer.",
     causes: &[
         "The mount failed: the disk takes no writes, or the volume is one libs/btrfs-write will \
-         not maintain (a subvolume, quotas, an unreplayed log), which is EROFS.",
+         not maintain (a subvolume, quotas), which is EROFS, or a log left by a crash would not \
+         replay.",
         "A file read back short or with the wrong CRC-32C: the write path put an extent, a \
          checksum or an inode's size somewhere the read path does not look, or the block ring's \
          write copied the wrong bytes.",
@@ -805,9 +810,13 @@ pub(crate) static STAGE12_WRITE: Explanation = Explanation {
          the reader refuses, which is the write path's own consistency, not the disk's.",
         "Something removed is still there, or something renamed is not: the directory items, \
          the back-references or the orphan bookkeeping disagree.",
+        "After a power failure, a file's bytes are not the ones its trailer promised: a log \
+         or a commit that completed was rolled back, or replay put older extents under newer \
+         stat data. libs/btrfs-write's powerfail tests reproduce this on the host, faster.",
     ],
-    see: "kernel/src/fs/btrfs_write_check.rs; kernel/src/fs/btrfs.rs; libs/btrfs-vfs rw; \
-          libs/btrfs-write; xtask/src/btrfs_disk.rs; docs/ROADMAP.md stage 12",
+    see: "kernel/src/fs/btrfs_write_check.rs; kernel/src/fs/btrfs_powerfail.rs; \
+          kernel/src/fs/btrfs.rs; libs/btrfs-vfs rw; libs/btrfs-write; xtask/src/btrfs_disk.rs; \
+          xtask/src/powerfail.rs; docs/ROADMAP.md stage 12",
 };
 
 /// For `check_net` in `main.rs`, when the net core's self-check fails.

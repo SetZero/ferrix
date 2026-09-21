@@ -49,14 +49,16 @@ sectors through the block ring with VT-d on x86-64 and the `SMMUv3` on AArch64
 translating, and a deliberate out-of-domain write faulted on both; ARMv7-A runs
 it in degraded trusted mode, as decided. What the stage still owes — `devmgr`
 the program, trusting decoding-off BARs — is after the exit in its section.
-Stage 12 is under way, and its exit is half met: Ferrix writes btrfs. Every
-boot mounts a blank volume writable on a third disk, builds a tree on it,
-unmounts, mounts it again and reads it all back, and `cargo xtask test-btrfs`
-then has host `btrfs check --check-data-csum` judge that same image, clean on
-all three architectures. `fsync` no longer commits everything either: it
-writes a log tree the next mount replays, and falls back to a commit only when
-a name has moved. What the stage still owes is the power-fail test over
-hundreds of seeds.
+Stage 12's exit is met: Ferrix writes btrfs. Every boot mounts a blank
+volume writable on a third disk, builds a tree on it, unmounts, mounts it
+again and reads it all back, and `cargo xtask test-btrfs` then has host
+`btrfs check --check-data-csum` judge that same image, clean on all three
+architectures. `fsync` writes a log tree the next mount replays, and
+`cargo xtask test-powerfail` kills QEMU in the middle of writing, replays at
+the next boot and has `btrfs check` judge the volume before and after: 208
+seeds across the three architectures, 191 of them leaving a log to replay,
+every one clean. What the stage still owes, outside its points, is writeback
+of pages written through `MAP_SHARED`.
 Networking is done: sockets, a net core and a ring-3 virtio-net driver, with
 `curl` fetching over HTTPS and `git` cloning inside the guest. Stages 17 and
 18 are met, and the compositor runs: `cargo xtask test-compositor` boots it
@@ -103,7 +105,7 @@ session sizes them.
 | ~~Stage 19: the GPU path, Path A (`docs/GPU.md` §3)~~ *done 2026-09-19* | ~~52~~ | landed 2026-09-19 |
 | Stage 19: XWayland, the pointer-driven options, the second-pass effects | 48 | 2026-09-19 to -20 |
 | Dynamic linking: the kernel half, ferrousli's loader, glibc's names | 39 *(8 done)* | 2026-09-20 to -21 |
-| Stage 12, btrfs write | ≈ 60 *(52 done: everything but the power-fail test)* | 2026-09-21 to -22 |
+| ~~Stage 12, btrfs write~~ *done 2026-09-21* | ~~≈ 60~~ | landed 2026-09-21 |
 | Stage 13, namespaces, cgroups, seccomp | *month* ≈ 60 | 2026-09-22 to -23 |
 | Stage 22, Steam: the parts with a first guess (glibc under the runtime 13, bubblewrap's rest 13, sound 30, Venus 8, XWayland counted above) | 64 | 2026-09-23 to -24 |
 | Stage 22, Steam: the 32-bit x86 ABI and what the runtime and Proton find missing | unsized, ≈ 100 as a guess | 2026-09-24 to -25 |
@@ -3499,7 +3501,7 @@ the exit names, pinned by checksum.
 
 ---
 
-## Stage 12 — btrfs, write  ·  *≈ 60 points, 8 left*
+## Stage 12 — btrfs, write ✅  ·  *≈ 60 points, spent*
 
 Copy-on-write allocation through the extent tree, delayed refs, transaction
 commit against both superblocks with correct flush/FUA ordering, the free-space
@@ -3617,14 +3619,52 @@ away after a log commit and opened again must hold what the log promised, one
 thrown away *before* the superblock must hold the last commit whole, and both
 must pass the consistency check.
 
-**Still to do.**
+Replay took two more fixes, both found by the power-fail test's host half
+below before any QEMU was killed. A log holds the whole of an inode, so
+replay drops every extent of the committed tree the log does not name — a
+file that shrank otherwise kept its old tail, and `nbytes` fell short of it
+— and takes an extent at its address only when the extent tree does not
+already name it, since the two ends of an overwritten extent name one a
+transaction did commit. And a log commit now puts its own blocks out of
+reach, as a commit does its trees: the next edit copies them instead of
+writing over them, because the superblock on the disk names them. Without
+that, a second `fsync` wrote its items into the blocks the first had
+promised, and a crash between the two replayed the wrong file.
 
-1. **The power-fail test** (8): QEMU killed at random points inside a
-   transaction over hundreds of seeds, `btrfs check` before and after replay.
-   Both orderings are already tested host-side, by replaying a commit's or a
-   log's writes without its superblock.
+**Done — the power-fail test (8 points, 2026-09-21). The exit is met.**
+`cargo xtask test-powerfail --seeds N` boots with `ferrix.btrfs=churn`: the
+guest (`kernel/src/fs/btrfs_powerfail.rs`) rewrites four files on a blank
+volume and makes each durable — the body with `fsync`, then a 32-byte
+trailer naming the body's length and CRC-32C with a second `fsync`, and a
+whole `sync` every eighth pass — until xtask kills QEMU at a moment the seed
+picks. Host `btrfs check` reads what is left; a second boot with
+`ferrix.btrfs=replay` mounts the same disk, which replays any log the kill
+left, checks every file that ends in a trailer against it, and unmounts; and
+`btrfs check` reads the volume again. A trailer is written only after its
+body was promised, so a body that does not match it is a completed promise
+rolled back. The replay boot reads `log_root` before it mounts and says
+whether there was a log, and a run of four or more seeds in which no cut left
+one fails, since it would have tested the commit and never the replay.
 
-Owed beside it, and not in the stage's points: writeback of pages written
+The run for the exit: 200 seeds on x86-64 under KVM, 184 of them leaving a
+log that the next mount replayed, and `btrfs check` clean before and after
+every one. Under TCG, where a boot costs several times as much, the gate row
+runs 4 seeds on each architecture — `AArch64` and ARMv7-A at `--smp 2` both
+clean, 4 and 3 of them replaying a log — and longer runs of 25 on each are
+under way. The negative control: with replay no longer
+dropping the committed extents past a log's last one, the third seed fails
+with `btrfs check`'s `root 5 inode 257 errors 400, nbytes wrong`.
+
+A QEMU kill is gentler than a power failure, because QEMU has already handed
+what the guest wrote to the host's page cache. The adversarial half is
+host-side, in `libs/btrfs-write/src/tests/powerfail.rs`: the device records
+every write and flush, and a crash is rebuilt as everything before the last
+flush plus a random subset of what came after; two hundred scenarios cut at
+twenty-five points each are opened, replayed, checked for consistency and
+for any completed promise rolled back. `scripts/btrfs-check-writer.sh` runs
+it at that size, and `cargo test` a small one.
+
+Owed beside the stage, and not in its points: writeback of pages written
 through `MAP_SHARED`, which needs a dirty bit the page cache does not keep
 yet; until it lands a mapped write reaches the disk only if something writes
 the same bytes through `write`.

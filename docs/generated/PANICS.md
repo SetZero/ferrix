@@ -1454,10 +1454,14 @@ fixture, an empty volume made by real mkfs.btrfs, as the third virtio-blk disk;
 — files of every size, a hole, a link, a symlink, an overwrite, a truncation, a
 rename and an unlink — syncs, unmounts, mounts again and reads everything back.
 After the unmount nothing is cached, so every byte compared came off the disk.
+Under `ferrix.btrfs=churn` or `=replay`, which only `cargo xtask test-powerfail`
+sets, the same disk is instead rewritten until QEMU is killed, and then mounted
+again — replaying any log the kill left — and every file whose trailer says its
+body was made durable is checked against that trailer.
 
 1. The mount failed: the disk takes no writes, or the volume is one
-   libs/btrfs-write will not maintain (a subvolume, quotas, an unreplayed log),
-   which is EROFS.
+   libs/btrfs-write will not maintain (a subvolume, quotas), which is EROFS, or
+   a log left by a crash would not replay.
 2. A file read back short or with the wrong CRC-32C: the write path put an
    extent, a checksum or an inode's size somewhere the read path does not look,
    or the block ring's write copied the wrong bytes.
@@ -1466,9 +1470,14 @@ After the unmount nothing is cached, so every byte compared came off the disk.
    disk's.
 4. Something removed is still there, or something renamed is not: the directory
    items, the back-references or the orphan bookkeeping disagree.
+5. After a power failure, a file's bytes are not the ones its trailer promised:
+   a log or a commit that completed was rolled back, or replay put older extents
+   under newer stat data. libs/btrfs-write's powerfail tests reproduce this on
+   the host, faster.
 
-See: kernel/src/fs/btrfs_write_check.rs; kernel/src/fs/btrfs.rs; libs/btrfs-vfs
-rw; libs/btrfs-write; xtask/src/btrfs_disk.rs; docs/ROADMAP.md stage 12.
+See: kernel/src/fs/btrfs_write_check.rs; kernel/src/fs/btrfs_powerfail.rs;
+kernel/src/fs/btrfs.rs; libs/btrfs-vfs rw; libs/btrfs-write;
+xtask/src/btrfs_disk.rs; xtask/src/powerfail.rs; docs/ROADMAP.md stage 12.
 
 <a id="fx-9001"></a>
 

@@ -54,6 +54,8 @@ pub(crate) struct Args {
     pub(crate) memory: u32,
     /// `--timeout`, seconds `test-boot` waits for the kernel to report.
     pub(crate) timeout: u64,
+    /// `--seeds`, how many power failures `test-powerfail` makes.
+    pub(crate) seeds: u64,
     /// `--accel`, which QEMU accelerator to boot under. `None` means `tcg`,
     /// except to `run`, which asks for `auto` unless it is given `--gdb`.
     pub(crate) accel: Option<String>,
@@ -239,6 +241,7 @@ impl Args {
             smp: 4,
             memory: 512,
             timeout: 120,
+            seeds: 8,
             screens: 1,
             ..Args::default()
         };
@@ -291,6 +294,7 @@ impl Args {
                 }
                 "--memory" => args.memory = number(&mut items, "--memory")?,
                 "--timeout" => args.timeout = number(&mut items, "--timeout")?,
+                "--seeds" => args.seeds = number(&mut items, "--seeds")?,
                 "--accel" => args.accel = Some(value(&mut items, "--accel")?),
                 "--to" => args.to = Some(value(&mut items, "--to")?),
                 "--port" => args.port = Some(value(&mut items, "--port")?),

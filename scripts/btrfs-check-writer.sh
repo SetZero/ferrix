@@ -10,6 +10,9 @@
 #
 # Needs btrfs-progs on PATH; refuses to run, rather than passing, without it.
 #
+# Also runs the power-fail test's host half at full size, which is too slow
+# for every `cargo test`.
+#
 # Usage: scripts/btrfs-check-writer.sh
 
 set -euo pipefail
@@ -44,4 +47,17 @@ for image in "${images[@]}"; do
         failed=1
     fi
 done
+
+# The power-fail test's host half at full size: two hundred seeds, each cut
+# at twenty-five points, every write after the last flush kept or dropped at
+# random (`libs/btrfs-write/src/tests/powerfail.rs`). Release, because it
+# is five thousand volumes opened, replayed and checked.
+if cargo test -q --release -p ferrix-btrfs-write -- \
+    --ignored --exact tests::powerfail::hundreds_of_cuts > "$out/cuts.log" 2>&1; then
+    echo "power-fail: 5000 cuts replayed and checked clean"
+else
+    echo "power-fail: FAILED" >&2
+    cat "$out/cuts.log" >&2
+    failed=1
+fi
 exit "$failed"

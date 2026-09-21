@@ -367,14 +367,16 @@ package FerrixRoadmap {
              * loader in glibc's place, on all three architectures. */
     }
 
-    #inProgress requirement <'S12'> stage12BtrfsWrite : Stage {
+    #implemented requirement <'S12'> stage12BtrfsWrite : Stage {
         attribute :>> number = 12;
-        attribute :>> status = StageStatus::InProgress;
+        attribute :>> status = StageStatus::Done;
         attribute :>> size = "longer";
         doc /* btrfs stage B. Exit, strict: Ferrix writes a tree and host
              * btrfs check finds nothing; then the power-fail test — kill QEMU
              * at a random point inside a transaction, remount, replay, check
-             * again — over hundreds of seeds. */
+             * again — over hundreds of seeds. Met: cargo xtask test-btrfs and
+             * cargo xtask test-powerfail. Owed beside it: writeback of
+             * MAP_SHARED pages. */
     }
 
     #planned requirement <'S13'> stage13Isolation : Stage {

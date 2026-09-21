@@ -149,16 +149,16 @@ package FerrixStorage {
              * needs a block device. Data checksums are not verified yet. */
     }
 
-    #inProgress part def BtrfsWrite {
+    #implemented part def BtrfsWrite {
         @stage { number = 12; }
         doc /* Stage B: copy-on-write allocation through the extent tree,
              * delayed refs, transaction commit against both superblock copies
              * with the right flush/FUA ordering, the free-space tree, the log
              * tree and its replay.
              *
-             * allocateCow and commitTransaction are in libs/btrfs-write,
-             * host-tested and clean under host btrfs check; replayLog and the
-             * kernel mount are still to do. */
+             * All three are in libs/btrfs-write, mounted writable by the
+             * kernel through libs/btrfs-vfs, and clean under host btrfs check,
+             * replayLog after QEMU is killed inside a transaction. */
         action allocateCow;
         action commitTransaction;
         action replayLog;

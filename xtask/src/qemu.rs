@@ -637,6 +637,9 @@ pub(crate) struct Watching<'a> {
     /// QEMU's standard input, which `-serial stdio` gives to the guest's
     /// console: what a person at the terminal would type goes here.
     keyboard: Option<&'a mut std::process::ChildStdin>,
+    /// Whether the hook asked for QEMU to be killed at once when it returns,
+    /// rather than given the moment to power off that a finished boot gets.
+    cut: bool,
 }
 
 impl std::fmt::Debug for Watching<'_> {
@@ -653,6 +656,12 @@ impl Watching<'_> {
     /// Every line up to and including the one the boot waited for.
     pub(crate) fn lines(&self) -> &[String] {
         self.lines
+    }
+
+    /// Kill QEMU the moment the hook returns, with no chance for the guest to
+    /// finish anything: the power failure `test-powerfail` needs.
+    pub(crate) fn cut_power(&mut self) {
+        self.cut = true;
     }
 
     /// The lines read since, by [`Watching::read_more`].
@@ -840,7 +849,7 @@ fn watch_hooked(
     }
     // While QEMU still runs, so the hook can ask it things; a hook that fails
     // still lets QEMU be stopped and the log be kept.
-    let hooked = run_hook(
+    let (hooked, cut) = run_hook(
         at_marker,
         verdict,
         &mut lines,
@@ -849,7 +858,7 @@ fn watch_hooked(
         started,
         keyboard.as_mut(),
     );
-    let status = finish(&mut child, verdict != Verdict::Silent)?;
+    let status = finish(&mut child, verdict != Verdict::Silent && !cut)?;
     drop(receiver);
     let _ = reader.join();
     // Before the error below says QEMU's own is "above": joining the sieve's
@@ -884,7 +893,8 @@ fn watch_hooked(
 }
 
 /// Run the marker hook, if there is one and the marker was reached, and
-/// keep whatever lines it read in the transcript.
+/// keep whatever lines it read in the transcript. Answers what the hook
+/// answered, and whether it asked for the power to be cut.
 fn run_hook(
     at_marker: Option<AtMarker<'_>>,
     verdict: Verdict,
@@ -893,10 +903,12 @@ fn run_hook(
     log: &mut std::fs::File,
     started: Instant,
     keyboard: Option<&mut std::process::ChildStdin>,
-) -> Result<()> {
-    let Some(hook) = at_marker else { return Ok(()) };
+) -> (Result<()>, bool) {
+    let Some(hook) = at_marker else {
+        return (Ok(()), false);
+    };
     if verdict != Verdict::Reached {
-        return Ok(());
+        return (Ok(()), false);
     }
     let mut watching = Watching {
         lines,
@@ -905,11 +917,13 @@ fn run_hook(
         started,
         after: Vec::new(),
         keyboard,
+        cut: false,
     };
     let answered = hook(&mut watching);
+    let cut = watching.cut;
     let after = watching.after;
     lines.extend(after);
-    answered
+    (answered, cut)
 }
 
 /// The error for a boot that panicked.

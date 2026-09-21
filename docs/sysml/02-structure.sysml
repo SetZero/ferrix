@@ -1112,17 +1112,19 @@ package FerrixStructure {
                  * decoders. Tested against four real mkfs.btrfs images, and
                  * fuzzed from them by btrfs_read. */
         }
-        #inProgress part btrfsWrite : LibraryCrate {
+        #implemented part btrfsWrite : LibraryCrate {
             attribute :>> path = "libs/btrfs-write";
             attribute :>> forbidsUnsafe = true;
-            attribute :>> hostTests = 21;
+            attribute :>> hostTests = 32;
             @stage { number = 12; }
             doc /* The btrfs write path: copy-on-write trees, delayed refs,
                  * extent and free-space-tree bookkeeping, chunk allocation,
-                 * the commit with its flush before the superblock, and file
-                 * operations. Host btrfs check finds its output clean, both
+                 * the commit with its flush before the superblock, file
+                 * operations, and the log tree fsync writes and the mount
+                 * replays. Host btrfs check finds its output clean, both
                  * from host tests and from what the kernel writes in the boot
-                 * check. The log tree and its replay are still to do. */
+                 * check, and after power failures cut at thousands of points
+                 * on the host and hundreds of QEMU kills. */
         }
         #writtenAhead part btrfsVfs : LibraryCrate {
             attribute :>> path = "libs/btrfs-vfs";

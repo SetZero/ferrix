@@ -28,6 +28,7 @@ pub(crate) mod anon;
 pub(crate) mod block;
 pub(crate) mod btrfs;
 pub(crate) mod btrfs_check;
+pub(crate) mod btrfs_powerfail;
 pub(crate) mod btrfs_write_check;
 pub(crate) mod check;
 pub(crate) mod console;

@@ -208,19 +208,21 @@ package FerrixAssurance {
     // Verification the later stages owe, as the architecture states it
     // -----------------------------------------------------------------------
 
-    #planned verification def BtrfsCheck {
+    #implemented verification def BtrfsCheck {
         @stage { number = 12; }
-        doc /* Every CI run builds an image with real mkfs.btrfs, mounts it
-             * under Ferrix in QEMU, runs a workload, and hands the result to
-             * host btrfs check. A filesystem only our own reader can read is
-             * not a filesystem. */
+        doc /* Every boot writes a tree on a blank volume real mkfs.btrfs
+             * made, and cargo xtask test-btrfs hands the result to host btrfs
+             * check. A filesystem only our own reader can read is not a
+             * filesystem. */
         subject os : Ferrix;
     }
-    #planned verification def PowerFailInjection {
+    #implemented verification def PowerFailInjection {
         @stage { number = 12; }
         doc /* Kill QEMU at a random point inside a transaction, remount,
-             * replay, btrfs check again, over hundreds of seeds. The test a
-             * CoW filesystem actually has to pass. */
+             * replay, btrfs check again, over hundreds of seeds: cargo xtask
+             * test-powerfail. Its adversarial half, every unflushed write
+             * kept or dropped at random, is libs/btrfs-write's powerfail
+             * tests. The test a CoW filesystem actually has to pass. */
         subject os : Ferrix;
         attribute seeds : Natural;
     }

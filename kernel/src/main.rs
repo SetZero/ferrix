@@ -1032,6 +1032,34 @@ fn check_btrfs_disk() {
 /// Halts rather than returning, as every other stage's check does. A machine
 /// without a third disk passes and says so.
 fn check_btrfs_write() {
+    use fs::btrfs_powerfail::{self as powerfail, Mode};
+    let (result, verb) = match powerfail::mode() {
+        Mode::Check => (None, ""),
+        Mode::Churn => (Some(powerfail::churn(powerfail::seed())), "churned"),
+        Mode::Replay => (Some(powerfail::replay()), "replayed"),
+    };
+    if let Some(result) = result {
+        match result {
+            Ok(report) if report.skipped.is_some() => {
+                println!("  btrfs-pf not run: {}", report.skipped.unwrap_or_default());
+            }
+            Ok(report) => println!(
+                "  btrfs-pf vdc {verb}: {} files, {} with a trailer whose promise held; {}",
+                report.files,
+                report.checked,
+                if report.logged {
+                    "the crash left a log, and the mount replayed it"
+                } else {
+                    "the crash left no log"
+                },
+            ),
+            Err(problem) => fatal!(
+                catalog::STAGE12_WRITE,
+                "stage 12 power-fail check failed: {problem}"
+            ),
+        }
+        return;
+    }
     let report = match fs::btrfs_write_check::run() {
         Ok(report) => report,
         Err(problem) => fatal!(
@@ -1660,6 +1688,7 @@ fn report_clock_and_random(info: &BootInfo) {
 fn report_clocks_and_power(view: &BootView<'_>, clocks: &irq::Report) {
     report_clocks(clocks);
     power::init(view);
+    fs::btrfs_powerfail::init(view);
 }
 
 /// Print what interrupt and time bring-up found.

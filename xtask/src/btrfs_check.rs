@@ -39,12 +39,7 @@ pub(crate) fn test_btrfs(
     args: &Args,
     build: impl Fn(Arch) -> Result<(std::path::PathBuf, std::path::PathBuf)>,
 ) -> Result<()> {
-    let checker = Checker::find().ok_or_else(|| {
-        Error::new(
-            "btrfs check is not on this host: install btrfs-progs (on Windows, in WSL), \
-             because the exit criterion is what it says about the volume Ferrix wrote",
-        )
-    })?;
+    let checker = Checker::required()?;
     for arch in args.arches()? {
         let (image, kernel) = build(arch)?;
         let written = qemu::test_btrfs_write(arch, &image, &kernel, args)?;
@@ -60,12 +55,26 @@ pub(crate) fn test_btrfs(
 }
 
 /// Where `btrfs` is: on the path, or inside WSL.
-enum Checker {
+pub(crate) enum Checker {
     Host,
     Wsl,
 }
 
 impl Checker {
+    /// The checker, or the error that says to install one.
+    ///
+    /// # Errors
+    ///
+    /// No btrfs-progs on the host, nor in WSL.
+    pub(crate) fn required() -> Result<Checker> {
+        Checker::find().ok_or_else(|| {
+            Error::new(
+                "btrfs check is not on this host: install btrfs-progs (on Windows, in WSL), \
+                 because the exit criterion is what it says about the volume Ferrix wrote",
+            )
+        })
+    }
+
     fn find() -> Option<Checker> {
         if runs(Command::new("btrfs").arg("--version")) {
             return Some(Checker::Host);
@@ -77,7 +86,7 @@ impl Checker {
     }
 
     /// Run `btrfs check` over `image`, failing with what it said.
-    fn run(&self, image: &Path, arch: Arch) -> Result<()> {
+    pub(crate) fn run(&self, image: &Path, arch: Arch) -> Result<()> {
         println!(
             "  {arch}: btrfs check --check-data-csum {}",
             image.display()

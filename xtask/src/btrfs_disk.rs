@@ -23,6 +23,7 @@
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::paths;
 use crate::{Error, Result};
@@ -76,7 +77,8 @@ pub(crate) fn ensure() -> Result<PathBuf> {
 /// Rewritten for every boot, never reused: the boot before wrote on it, and
 /// a check that starts from a volume another run left behind is checking
 /// something nobody chose. Its path is also what `btrfs check` is pointed at
-/// afterwards.
+/// afterwards. The one exception is [`keep_blank`]: `test-powerfail`'s
+/// second boot must see what the first one's crash left.
 ///
 /// # Errors
 ///
@@ -84,6 +86,9 @@ pub(crate) fn ensure() -> Result<PathBuf> {
 pub(crate) fn ensure_blank() -> Result<PathBuf> {
     let directory = paths::workspace_root().join("build");
     let path = directory.join(BLANK_FILE_NAME);
+    if KEEP_BLANK.load(Ordering::Relaxed) && path.is_file() {
+        return Ok(path);
+    }
     std::fs::create_dir_all(&directory)?;
     let partial = directory.join(format!("{BLANK_FILE_NAME}.{}.partial", std::process::id()));
     write_packed(&partial, BLANK).map_err(|error| {
@@ -93,6 +98,15 @@ pub(crate) fn ensure_blank() -> Result<PathBuf> {
     std::fs::rename(&partial, &path)
         .map_err(|error| Error::new(format!("renaming to {}: {error}", path.display())))?;
     Ok(path)
+}
+
+/// Whether the next boots attach the writable image as the last one left it.
+static KEEP_BLANK: AtomicBool = AtomicBool::new(false);
+
+/// Attach the writable image as the last boot left it (`true`), or fresh
+/// from the fixture (`false`, the default), from now on.
+pub(crate) fn keep_blank(keep: bool) {
+    KEEP_BLANK.store(keep, Ordering::Relaxed);
 }
 
 /// Where the writable image is, without writing it.

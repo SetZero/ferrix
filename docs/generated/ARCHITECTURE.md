@@ -100,14 +100,14 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixAssurance` | `11-assurance.sysml` | docs/RELIABILITY.md and docs/ASSEMBLY.md: the quality gates, what each one verifies, and what the tests can actually reach. All of it runs in CI today except the two debts the roadmap states. |
 | `FerrixViews` | `12-views.sysml` | How to read the one model as two: what runs today, and what the roadmap still owes. The filters key on the lifecycle keywords every element carries. |
 
-13 files, 16 packages, 1504 elements, 166 relations. Model digest `7f0922cafaf3c2c7`.
+13 files, 16 packages, 1504 elements, 166 relations. Model digest `305f7a96408695b1`.
 
 | Maturity | Elements | Meaning |
 | --- | ---: | --- |
-| `#implemented` | 140 | The code exists and the QEMU boot test exercises it on every architecture it applies to. |
-| `#inProgress` | 13 | The owning stage has started; part of the element runs. |
+| `#implemented` | 145 | The code exists and the QEMU boot test exercises it on every architecture it applies to. |
+| `#inProgress` | 10 | The owning stage has started; part of the element runs. |
 | `#writtenAhead` | 15 | A libs/ crate exists and passes its host tests, but nothing in kernel/ calls it yet. |
-| `#planned` | 95 | Only the design exists, in docs/ARCHITECTURE.md. Nothing stands in for it. |
+| `#planned` | 93 | Only the design exists, in docs/ARCHITECTURE.md. Nothing stands in for it. |
 | `@deferred` | 22 | Work a finished stage explicitly left behind, carrying the reason that stage gave. |
 
 An element carries its own keyword or none; a keyword is never inherited from a parent, so a `#planned` field inside an `#implemented` part still reads as planned.
@@ -144,7 +144,7 @@ flowchart LR
   n10_FerrixRoadmap_stage6UserMode["S6  Stage 6 user mode<br>Done"]
   n11_FerrixRoadmap_stage7LinuxAbi["S7  Stage 7 Linux ABI<br>Done"]
   n12_FerrixRoadmap_stage8Vfs["S8  Stage 8 VFS<br>Done"]
-  n13_FerrixRoadmap_stage12BtrfsWrite["S12  Stage 12 btrfs write<br>InProgress"]
+  n13_FerrixRoadmap_stage12BtrfsWrite["S12  Stage 12 btrfs write<br>Done"]
   n14_FerrixRoadmap_stage13Isolation["S13  Stage 13 isolation<br>Planned"]
   n0_FerrixRequirements_hostsRustc -- "part of" --> n1_FerrixRequirements_hostsRustc_kernelThre
   n0_FerrixRequirements_hostsRustc -- "part of" --> n2_FerrixRequirements_hostsRustc_addressSpa
@@ -163,10 +163,8 @@ flowchart LR
   n13_FerrixRoadmap_stage12BtrfsWrite -. "depends on" .-> n7_FerrixRequirements_hostsRustc_durableFil
   n14_FerrixRoadmap_stage13Isolation -. "depends on" .-> n8_FerrixRequirements_hostsRustc_memoryPres
   classDef implemented fill:#dceae2,stroke:#2c6e4e,color:#16191d
-  classDef inProgress fill:#dae5f0,stroke:#2a5f8f,color:#16191d
   classDef planned fill:#e4e7ea,stroke:#6a737e,color:#16191d
-  class n9_FerrixRoadmap_stage5Scheduler,n10_FerrixRoadmap_stage6UserMode,n11_FerrixRoadmap_stage7LinuxAbi,n12_FerrixRoadmap_stage8Vfs implemented
-  class n13_FerrixRoadmap_stage12BtrfsWrite inProgress
+  class n9_FerrixRoadmap_stage5Scheduler,n10_FerrixRoadmap_stage6UserMode,n11_FerrixRoadmap_stage7LinuxAbi,n12_FerrixRoadmap_stage8Vfs,n13_FerrixRoadmap_stage12BtrfsWrite implemented
   class n14_FerrixRoadmap_stage13Isolation planned
 ```
 
@@ -2382,11 +2380,11 @@ Written ahead in libs/btrfs and libs/btrfs-vfs, host-tested against four real im
 
 #### BtrfsWrite
 
-`#inProgress`  ·  stage 12
+`#implemented`  ·  stage 12
 
 Stage B: copy-on-write allocation through the extent tree, delayed refs, transaction commit against both superblock copies with the right flush/FUA ordering, the free-space tree, the log tree and its replay.
 
-allocateCow and commitTransaction are in libs/btrfs-write, host-tested and clean under host btrfs check; replayLog and the kernel mount are still to do.
+All three are in libs/btrfs-write, mounted writable by the kernel through libs/btrfs-vfs, and clean under host btrfs check, replayLog after QEMU is killed inside a transaction.
 
 | Feature | Kind | Type | Maturity | Note |
 | --- | --- | --- | --- | --- |
@@ -2452,7 +2450,7 @@ docs/ARCHITECTURE.md §9. libs/ is host-testable by design and is the only code 
 | `libs/native-abi` | `#implemented` | 9 | `forbid` | 13 | The native ABI's numbers, handle values, rights, signals, errno names and repr(C) layouts. |
 | `libs/objects` | `#implemented` | 9 | `forbid` | 24 | The handle table and the channel message queue, generic over what a handle names. |
 | `libs/btrfs` | `#writtenAhead` | 11 | `forbid` | 158 | The btrfs read path, allocating nothing: parsing, mount bootstrap, lookup, readdir and read, and zlib, LZO and zstd decoders. |
-| `libs/btrfs-write` | `#inProgress` | 12 | `forbid` | 21 | The btrfs write path: copy-on-write trees, delayed refs, extent and free-space-tree bookkeeping, chunk allocation, the commit with its flush before the superblock, and file operations. |
+| `libs/btrfs-write` | `#implemented` | 12 | `forbid` | 32 | The btrfs write path: copy-on-write trees, delayed refs, extent and free-space-tree bookkeeping, chunk allocation, the commit with its flush before the superblock, file operations, and the log tree fsync writes and the mount replays. |
 | `libs/btrfs-vfs` | `#writtenAhead` | 11 | `forbid` | 32 | btrfs mounted into the VFS: FileSystem and Inode over the read path, read-only and holding no lock across I/O, and a writable mount over libs/btrfs-write behind one sleeping lock, whose writes become extents at the commit. |
 | `libs/block` | `#writtenAhead` | 11 | `forbid` | 36 | The block core's request queue: merging, flush and FUA barriers no request crosses, deadline scheduling. |
 | `libs/seccomp` | `#planned` | 13 | `forbid` | — | The classic-BPF interpreter as a pure function over bytes. |
@@ -2522,11 +2520,9 @@ flowchart LR
   n39_FerrixStructure_Workspace_fuzz -. "depends on" .-> n2_FerrixStructure_Workspace_frameCrate
   classDef implemented fill:#dceae2,stroke:#2c6e4e,color:#16191d
   classDef writtenAhead fill:#e5dff0,stroke:#6b4fa0,color:#16191d
-  classDef inProgress fill:#dae5f0,stroke:#2a5f8f,color:#16191d
   classDef planned fill:#e4e7ea,stroke:#6a737e,color:#16191d
-  class n0_FerrixStructure_Workspace_bootinfo,n1_FerrixStructure_Workspace_elf,n2_FerrixStructure_Workspace_frameCrate,n3_FerrixStructure_Workspace_heap,n4_FerrixStructure_Workspace_paging,n5_FerrixStructure_Workspace_acpi,n6_FerrixStructure_Workspace_fdt,n7_FerrixStructure_Workspace_sync,n8_FerrixStructure_Workspace_crng,n9_FerrixStructure_Workspace_sched,n10_FerrixStructure_Workspace_vma,n15_FerrixStructure_Workspace_procfs,n16_FerrixStructure_Workspace_virtio,n17_FerrixStructure_Workspace_netwire,n18_FerrixStructure_Workspace_nettcp,n19_FerrixStructure_Workspace_netCore,n20_FerrixStructure_Workspace_netServe,n21_FerrixStructure_Workspace_netRing,n22_FerrixStructure_Workspace_netlink,n23_FerrixStructure_Workspace_virtioNet,n29_FerrixStructure_Workspace_nativeAbi,n30_FerrixStructure_Workspace_objects,n36_FerrixStructure_Workspace_bootCrate,n37_FerrixStructure_Workspace_kernelCrate,n38_FerrixStructure_Workspace_xtask,n39_FerrixStructure_Workspace_fuzz implemented
+  class n0_FerrixStructure_Workspace_bootinfo,n1_FerrixStructure_Workspace_elf,n2_FerrixStructure_Workspace_frameCrate,n3_FerrixStructure_Workspace_heap,n4_FerrixStructure_Workspace_paging,n5_FerrixStructure_Workspace_acpi,n6_FerrixStructure_Workspace_fdt,n7_FerrixStructure_Workspace_sync,n8_FerrixStructure_Workspace_crng,n9_FerrixStructure_Workspace_sched,n10_FerrixStructure_Workspace_vma,n15_FerrixStructure_Workspace_procfs,n16_FerrixStructure_Workspace_virtio,n17_FerrixStructure_Workspace_netwire,n18_FerrixStructure_Workspace_nettcp,n19_FerrixStructure_Workspace_netCore,n20_FerrixStructure_Workspace_netServe,n21_FerrixStructure_Workspace_netRing,n22_FerrixStructure_Workspace_netlink,n23_FerrixStructure_Workspace_virtioNet,n29_FerrixStructure_Workspace_nativeAbi,n30_FerrixStructure_Workspace_objects,n32_FerrixStructure_Workspace_btrfsWrite,n36_FerrixStructure_Workspace_bootCrate,n37_FerrixStructure_Workspace_kernelCrate,n38_FerrixStructure_Workspace_xtask,n39_FerrixStructure_Workspace_fuzz implemented
   class n11_FerrixStructure_Workspace_linuxAbi,n12_FerrixStructure_Workspace_ustack,n13_FerrixStructure_Workspace_cpio,n14_FerrixStructure_Workspace_vfs,n24_FerrixStructure_Workspace_virtioGpu,n25_FerrixStructure_Workspace_virtioInput,n26_FerrixStructure_Workspace_displayctl,n27_FerrixStructure_Workspace_inputctl,n28_FerrixStructure_Workspace_pci,n31_FerrixStructure_Workspace_btrfs,n33_FerrixStructure_Workspace_btrfsVfs,n34_FerrixStructure_Workspace_blockQueue writtenAhead
-  class n32_FerrixStructure_Workspace_btrfsWrite inProgress
   class n35_FerrixStructure_Workspace_seccompBpf planned
 ```
 
@@ -2564,7 +2560,7 @@ flowchart TB
   n12_FerrixRoadmap_stage11BtrfsRead["S11  Stage 11 btrfs read<br>Done · month"]
   n13_FerrixRoadmap_stageNetworking["SN  Stage networking<br>Done · month"]
   n14_FerrixRoadmap_stageDynamicLinking["SD  Stage dynamic linking<br>Planned · 39 points"]
-  n15_FerrixRoadmap_stage12BtrfsWrite["S12  Stage 12 btrfs write<br>InProgress · longer"]
+  n15_FerrixRoadmap_stage12BtrfsWrite["S12  Stage 12 btrfs write<br>Done · longer"]
   n16_FerrixRoadmap_stage13Isolation["S13  Stage 13 isolation<br>Planned · month"]
   n17_FerrixRoadmap_stage14RealTime["S14  Stage 14 real time<br>Planned · month"]
   n18_FerrixRoadmap_stage15Userland["S15  Stage 15 userland<br>InProgress · week, about 20 points, of which job control is spent"]
@@ -2612,9 +2608,9 @@ flowchart TB
   classDef implemented fill:#dceae2,stroke:#2c6e4e,color:#16191d
   classDef planned fill:#e4e7ea,stroke:#6a737e,color:#16191d
   classDef inProgress fill:#dae5f0,stroke:#2a5f8f,color:#16191d
-  class n0_FerrixRoadmap_stage0Foundation,n1_FerrixRoadmap_stage1Boot,n2_FerrixRoadmap_stage2Memory,n3_FerrixRoadmap_stage3TrapsInterruptsTime,n4_FerrixRoadmap_stage4Smp,n5_FerrixRoadmap_armv7aPort,n6_FerrixRoadmap_stage5Scheduler,n7_FerrixRoadmap_stage6UserMode,n8_FerrixRoadmap_stage7LinuxAbi,n9_FerrixRoadmap_stage8Vfs,n10_FerrixRoadmap_stage9NativeAbi,n11_FerrixRoadmap_stage10UserspaceDrivers,n12_FerrixRoadmap_stage11BtrfsRead,n13_FerrixRoadmap_stageNetworking,n20_FerrixRoadmap_stage17DisplayAndInput,n21_FerrixRoadmap_stage18Compositor implemented
+  class n0_FerrixRoadmap_stage0Foundation,n1_FerrixRoadmap_stage1Boot,n2_FerrixRoadmap_stage2Memory,n3_FerrixRoadmap_stage3TrapsInterruptsTime,n4_FerrixRoadmap_stage4Smp,n5_FerrixRoadmap_armv7aPort,n6_FerrixRoadmap_stage5Scheduler,n7_FerrixRoadmap_stage6UserMode,n8_FerrixRoadmap_stage7LinuxAbi,n9_FerrixRoadmap_stage8Vfs,n10_FerrixRoadmap_stage9NativeAbi,n11_FerrixRoadmap_stage10UserspaceDrivers,n12_FerrixRoadmap_stage11BtrfsRead,n13_FerrixRoadmap_stageNetworking,n15_FerrixRoadmap_stage12BtrfsWrite,n20_FerrixRoadmap_stage17DisplayAndInput,n21_FerrixRoadmap_stage18Compositor implemented
   class n14_FerrixRoadmap_stageDynamicLinking,n16_FerrixRoadmap_stage13Isolation,n17_FerrixRoadmap_stage14RealTime,n19_FerrixRoadmap_stage16Rustc,n23_FerrixRoadmap_stage21BareMetalGpu,n24_FerrixRoadmap_stage22Steam,n25_FerrixRoadmap_stage20SelfHosting planned
-  class n15_FerrixRoadmap_stage12BtrfsWrite,n18_FerrixRoadmap_stage15Userland,n22_FerrixRoadmap_stage19HyprlandFidelity inProgress
+  class n18_FerrixRoadmap_stage15Userland,n22_FerrixRoadmap_stage19HyprlandFidelity inProgress
 ```
 
 **Figure 16 — The roadmap, stage by stage.** An arrow points from a stage to the stage it unblocks. The two stages with a second arrow into them are the ones that need more than their predecessor. [SVG](diagrams/roadmap-stages.svg) Source: `10-roadmap.sysml`.
@@ -2636,7 +2632,7 @@ flowchart TB
 | `S11` | 11 | Stage 11 btrfs read | Done | month | `#implemented` |
 | `SN` | 11 | Stage networking | Done | month | `#implemented` |
 | `SD` | 11 | Stage dynamic linking | Planned | 39 points | `#planned` |
-| `S12` | 12 | Stage 12 btrfs write | InProgress | longer | `#inProgress` |
+| `S12` | 12 | Stage 12 btrfs write | Done | longer | `#implemented` |
 | `S13` | 13 | Stage 13 isolation | Planned | month | `#planned` |
 | `S14` | 14 | Stage 14 real time | Planned | month | `#planned` |
 | `S15` | 15 | Stage 15 userland | InProgress | week, about 20 points, of which job control is spent | `#inProgress` |
@@ -2812,9 +2808,9 @@ Placed after Networking without a number of its own: nothing on rustc's path nee
 
 ### S12 — Stage 12 btrfs write
 
-**InProgress**  ·  size longer  ·  `#inProgress`
+**Done**  ·  size longer  ·  `#implemented`
 
-btrfs stage B. Exit, strict: Ferrix writes a tree and host btrfs check finds nothing; then the power-fail test — kill QEMU at a random point inside a transaction, remount, replay, check again — over hundreds of seeds.
+btrfs stage B. Exit, strict: Ferrix writes a tree and host btrfs check finds nothing; then the power-fail test — kill QEMU at a random point inside a transaction, remount, replay, check again — over hundreds of seeds. Met: cargo xtask test-btrfs and cargo xtask test-powerfail. Owed beside it: writeback of MAP_SHARED pages.
 
 ### S13 — Stage 13 isolation
 
@@ -3029,8 +3025,6 @@ Total cap `800` lines; ratio backstop `0.06`, target `0.001`.
 
 ### Verification later stages owe
 
-- **`BtrfsCheck`  (stage 12)** — Every CI run builds an image with real mkfs.btrfs, mounts it under Ferrix in QEMU, runs a workload, and hands the result to host btrfs check. A filesystem only our own reader can read is not a filesystem.
-- **`PowerFailInjection`  (stage 12)** — Kill QEMU at a random point inside a transaction, remount, replay, btrfs check again, over hundreds of seeds. The test a CoW filesystem actually has to pass.
 - **`CyclicTest`  (stage 14)** — Wake-up latency on a HardRt domain while a Throughput domain on other cores is saturated; the maximum must be inside the stated bound.
 
 ### The boot tests
@@ -3305,7 +3299,7 @@ flowchart LR
 | `S11` | `stage11BtrfsRead` | `allocate` and `dependency` | — | `#implemented` |
 | `SN` | `stageNetworking` | `allocate` and `dependency` | — | `#implemented` |
 | `SD` | `stageDynamicLinking` | `allocate` and `dependency` | — | `#planned` |
-| `S12` | `stage12BtrfsWrite` | `dependency` | — | `#inProgress` |
+| `S12` | `stage12BtrfsWrite` | `dependency` | — | `#implemented` |
 | `S13` | `stage13Isolation` | `allocate` and `dependency` | — | `#planned` |
 | `S14` | `stage14RealTime` | `allocate` and `dependency` | — | `#planned` |
 | `S15` | `stage15Userland` | `allocate` and `dependency` | yes | `#inProgress` |
@@ -3478,10 +3472,10 @@ Every element carrying @stage, which names the roadmap stage that owns it. An el
 | 11 | `FerrixStorage::BtrfsParsing` | part | `#writtenAhead` |
 | 11 | `FerrixStorage::Btrfs` | part | `#planned` |
 | 11 | `FerrixStorage::BtrfsRead` | part | `#writtenAhead` |
-| 12 | `FerrixStructure::Workspace::btrfsWrite` | part | `#inProgress` |
-| 12 | `FerrixStorage::BtrfsWrite` | part | `#inProgress` |
-| 12 | `FerrixAssurance::BtrfsCheck` | verification | `#planned` |
-| 12 | `FerrixAssurance::PowerFailInjection` | verification | `#planned` |
+| 12 | `FerrixStructure::Workspace::btrfsWrite` | part | `#implemented` |
+| 12 | `FerrixStorage::BtrfsWrite` | part | `#implemented` |
+| 12 | `FerrixAssurance::BtrfsCheck` | verification | `#implemented` |
+| 12 | `FerrixAssurance::PowerFailInjection` | verification | `#implemented` |
 | 13 | `FerrixStructure::Workspace::seccompBpf` | part | `#planned` |
 | 13 | `FerrixMemory::Reclaim` | part | `#planned` |
 | 13 | `FerrixObjects::LinuxSyscallLayer::seccompCheck` | action | — |

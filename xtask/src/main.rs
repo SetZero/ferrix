@@ -74,6 +74,7 @@ mod omz;
 mod paths;
 mod pe;
 mod ports;
+mod powerfail;
 mod pty;
 mod qemu;
 mod remote;
@@ -142,6 +143,7 @@ COMMANDS:
     remote-desktop  Send this tree to another machine, boot the desktop there and watch it here over VNC
     wallpapers    Convert pictures for run-compositor's desktop and keep them on this machine
     test-btrfs    Boot, write a tree on the blank btrfs disk, and require host btrfs check to find nothing
+    test-powerfail  Kill QEMU while it writes btrfs, replay at the next boot, and require btrfs check to pass, --seeds times
     test-boot     Boot the image under QEMU and assert the kernel came up
     test-shell    Boot with a static busybox built in and require its script's output
     test-vfs      Boot with busybox in the initramfs and require stage 8's exit programs and applets
@@ -174,6 +176,7 @@ OPTIONS:
     --smp <N>                            Virtual CPUs          [default: 4; 1 under whpx]
     --memory <MiB>                       Guest memory          [default: 512]
     --timeout <SECONDS>                  test-boot patience    [default: 120]
+    --seeds <N>                          test-powerfail cuts   [default: 8]
     --accel <auto|tcg|whpx|kvm|hvf>      QEMU accelerator      [default: auto for run
                                          without --gdb, tcg otherwise]
     --gdb                                Wait for a debugger on :1234
@@ -312,6 +315,7 @@ fn run() -> Result<()> {
             qemu::run(arch, &image, &args)
         }
         "test-btrfs" => btrfs_check::test_btrfs(&args, |arch| build_image(arch, &args)),
+        "test-powerfail" => powerfail::test_powerfail(&args, |arch| build_parts(arch, &args)),
         "test-boot" => test_boot(&args),
         "test-shell" => {
             for arch in args.arches()? {
@@ -362,12 +366,10 @@ fn run() -> Result<()> {
         "host-test" => check::host_test(),
         "host-doctest" => check::host_doctest(),
         "host-doc" => check::host_doc(),
-        "native-clippy" => {
-            for arch in args.arches()? {
-                check::native_clippy(arch)?;
-            }
-            Ok(())
-        }
+        "native-clippy" => args
+            .arches()?
+            .into_iter()
+            .try_for_each(check::native_clippy),
         "model-doc" => check::model_doc(),
         "busybox" => busybox::build(args.single_arch()?).map(|_| ()),
         "uutils" => uutils::build(args.single_arch()?).map(|_| ()),
@@ -621,6 +623,20 @@ pub(crate) fn optional_program(arch: Arch, args: &Args) -> Result<Option<PathBuf
 /// A board has its own filesystem already, put there by the vendor's firmware,
 /// so what it wants is the two files rather than something to write over the
 /// card with.
+/// What [`build_image`] assembles for a boot without a program, before it
+/// is assembled: `test-powerfail` writes one image per boot from them, each
+/// with its own command line.
+fn build_parts(arch: Arch, args: &Args) -> Result<powerfail::Built> {
+    let natives = native::build(arch, args.release)?;
+    let (loader, kernel) = build_halves(arch, args)?;
+    let initramfs = initramfs::build(None, &natives, None, &[])?;
+    Ok(powerfail::Built {
+        loader,
+        kernel,
+        initramfs,
+    })
+}
+
 fn build_halves(arch: Arch, args: &Args) -> Result<(PathBuf, PathBuf)> {
     let loader = cargo::build_loader(arch, args.release)?;
     let kernel = cargo::build_kernel(arch, args.release)?;
