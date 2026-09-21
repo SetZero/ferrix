@@ -9,17 +9,32 @@
 //!
 //! # Who may log in
 //!
-//! The keys that may already log in to the machine running QEMU: its user's
-//! `~/.ssh/authorized_keys`, and the public halves beside it in `~/.ssh`. The
-//! forward only listens on that machine's loopback, so anybody who reaches it
-//! is on that machine already; the keys make them prove they are its user.
-//! It is also what lets `remote-desktop` work without a key of its own: the
-//! key this PC logs in to the remote with is in the remote's
-//! `authorized_keys`, and so in the guest's.
+//! Three sources, and the first is always there:
 //!
-//! With no key found, `sshdt` is not started at all. Given no key and no
-//! password it accepts anyone, and a server that lets anyone in is not the
-//! quiet failure a missing key should be.
+//! 1. **This machine's guest key**, made once at
+//!    `~/.local/share/ferrix/ssh/id_ed25519` and authorized by every boot.
+//!    It is what a client with no key of its own logs in with, and the boot
+//!    prints the `ssh -i` line that uses it.
+//! 2. The keys that may already log in to the machine running QEMU: its
+//!    user's `~/.ssh/authorized_keys`, and the public halves beside it in
+//!    `~/.ssh`. This is what lets `remote-desktop` work without a key of its
+//!    own: the key this PC logs in to the remote with is in the remote's
+//!    `authorized_keys`, and so in the guest's.
+//! 3. `--ssh-key <FILE|"ssh-… AAAA…">`, as many as given: a public key named
+//!    on the command line, for a client whose key is in neither of those --
+//!    another user on the machine, a sandbox, a CI step.
+//!
+//! The forward only listens on the QEMU host's loopback, so anybody who
+//! reaches it is on that machine already; the keys make them prove which of
+//! its users they are. Password authentication is never turned on: `sshdt`
+//! given no key and no password accepts anyone, which is why source 1 exists
+//! rather than a boot that starts no server.
+//!
+//! The guest key is generated, not borrowed, because a client that has no
+//! private key cannot be helped by any number of public ones. Before it
+//! existed, `ssh -p <port> root@127.0.0.1 <command>` from such a client
+//! failed with `Permission denied (publickey)` -- which reads like a broken
+//! session and is an empty `~/.ssh`.
 //!
 //! # The host key
 //!
@@ -87,8 +102,8 @@ pub(crate) fn checked(args: &Args) -> Args {
 ///
 /// # Errors
 ///
-/// A key file that exists and cannot be read, or a host key that could not
-/// be made.
+/// A key file that exists and cannot be read, a `--ssh-key` that is neither a
+/// readable file nor a key, or a key `ssh-keygen` could not make.
 pub(crate) fn with_server(config: String, args: &Args, carried: &mut Vec<File>) -> Result<String> {
     let Some(port) = args.ssh else {
         return Ok(config);
@@ -100,15 +115,11 @@ pub(crate) fn with_server(config: String, args: &Args, carried: &mut Vec<File>) 
     }
     let home = std::env::home_dir()
         .ok_or_else(|| Error::new("--ssh: no home directory to find the keys in"))?;
-    let (keys, count) = authorized_keys(&home.join(".ssh"))?;
-    if count == 0 {
-        println!(
-            "  ssh: no public keys in {}, so sshdt is not started: it would let anyone in",
-            home.join(".ssh").display()
-        );
-        return Ok(config);
-    }
-    let host_key = host_key(&home)?;
+    let dir = guest_dir(&home);
+    let (client_key, client_line) = client_key(&dir)?;
+    let named = named_keys(&args.ssh_keys)?;
+    let (keys, count) = authorized_keys(&home.join(".ssh"), &client_line, &named)?;
+    let host_key = host_key(&dir)?;
     carried.push(File {
         path: KEYS_PATH.to_owned(),
         mode: 0o644,
@@ -129,18 +140,37 @@ pub(crate) fn with_server(config: String, args: &Args, carried: &mut Vec<File>) 
          --authorized-keys /{KEYS_PATH}\n"
     ));
     println!(
-        "  ssh: sshdt on the guest's port {GUEST_PORT}, reached at 127.0.0.1:{port}; {count} keys from {}",
-        home.join(".ssh").display()
+        "  ssh: sshdt on the guest's port {GUEST_PORT}, reached at 127.0.0.1:{port}; \
+         {count} keys may log in"
+    );
+    // The line to paste, with this machine's guest key named outright. A
+    // client whose own `~/.ssh` is empty -- another user here, a sandbox, a
+    // CI step -- has no key to offer and is refused with
+    // `Permission denied (publickey)`, which reads like a server refusing the
+    // session rather than one that never saw a key.
+    println!(
+        "    ssh -i {} -p {port} root@127.0.0.1",
+        client_key.display()
     );
     Ok(config)
 }
 
-/// Every public key in `authorized_keys` and in the `*.pub` files beside it,
-/// once each, as one `authorized_keys` file, and how many there are.
+/// Where this machine keeps the guest's keys: the host key the guest proves
+/// itself with, and the key a client may log in to it with.
+fn guest_dir(home: &Path) -> PathBuf {
+    [".local", "share", "ferrix", "ssh"]
+        .iter()
+        .fold(home.to_path_buf(), |dir, name| dir.join(name))
+}
+
+/// Every public key allowed to log in, once each, as one `authorized_keys`
+/// file, and how many there are: this machine's guest key first, then the
+/// keys in `dir`'s `authorized_keys` and the `*.pub` files beside it, then
+/// the ones `--ssh-key` named.
 ///
 /// A line is a key when it is not blank and not a comment; one with options
 /// in front of it is kept whole, as `sshd` would read it.
-fn authorized_keys(dir: &Path) -> Result<(Vec<u8>, usize)> {
+fn authorized_keys(dir: &Path, client: &str, named: &[String]) -> Result<(Vec<u8>, usize)> {
     let mut sources = vec![dir.join("authorized_keys")];
     if let Ok(entries) = std::fs::read_dir(dir) {
         let mut public: Vec<PathBuf> = entries
@@ -150,15 +180,21 @@ fn authorized_keys(dir: &Path) -> Result<(Vec<u8>, usize)> {
         public.sort();
         sources.extend(public);
     }
-    let mut lines: Vec<String> = Vec::new();
+    let mut texts = vec![client.to_owned()];
     for source in sources {
-        let text = match std::fs::read_to_string(&source) {
-            Ok(text) => text,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+        match std::fs::read_to_string(&source) {
+            Ok(text) => texts.push(text),
+            // A source that is not there authorizes nobody and is no error:
+            // most machines have no `authorized_keys` of their own.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => {
                 return Err(Error::new(format!("reading {}: {error}", source.display())));
             }
-        };
+        }
+    }
+    texts.extend(named.iter().cloned());
+    let mut lines: Vec<String> = Vec::new();
+    for text in texts {
         for line in text.lines().map(str::trim) {
             if !line.is_empty() && !line.starts_with('#') && !lines.iter().any(|kept| kept == line)
             {
@@ -172,29 +208,88 @@ fn authorized_keys(dir: &Path) -> Result<(Vec<u8>, usize)> {
     Ok((file.into_bytes(), count))
 }
 
-/// The guest's host key, made with `ssh-keygen` the first time.
-fn host_key(home: &Path) -> Result<Vec<u8>> {
-    let dir = [".local", "share", "ferrix", "ssh"]
-        .iter()
-        .fold(home.to_path_buf(), |dir, name| dir.join(name));
-    let path = dir.join("ssh_host_ed25519_key");
-    if !path.is_file() {
-        std::fs::create_dir_all(&dir)
-            .map_err(|error| Error::new(format!("creating {}: {error}", dir.display())))?;
-        let status = Command::new("ssh-keygen")
-            .args(["-q", "-t", "ed25519", "-N", "", "-C", "ferrix-guest", "-f"])
-            .arg(&path)
-            .status()
-            .map_err(|error| Error::new(format!("--ssh: `ssh-keygen` would not start: {error}")))?;
-        if !status.success() {
+/// What each `--ssh-key` names: the contents of a file, or the key itself
+/// when it was written out on the command line.
+///
+/// A file is read whole, so `--ssh-key <somebody>/authorized_keys` carries
+/// every key in it. Anything else is taken for a key, and a word that is
+/// neither -- a path misspelt -- is refused rather than carried into a file
+/// where `sshdt` would ignore it and nobody would know why they cannot log
+/// in.
+///
+/// # Errors
+///
+/// A file that cannot be read, or a word that is neither a file nor a key.
+fn named_keys(named: &[String]) -> Result<Vec<String>> {
+    let mut texts = Vec::new();
+    for key in named {
+        let path = Path::new(key);
+        if path.is_file() {
+            texts.push(
+                std::fs::read_to_string(path)
+                    .map_err(|error| Error::new(format!("--ssh-key {key}: {error}")))?,
+            );
+        } else if key.starts_with("ssh-") || key.starts_with("ecdsa-") || key.starts_with("sk-") {
+            texts.push(key.clone());
+        } else {
             return Err(Error::new(format!(
-                "--ssh: `ssh-keygen` could not make {} ({status})",
-                path.display()
+                "--ssh-key {key}: not a file, and not a public key either"
             )));
         }
-        println!("  ssh: made the guest's host key, {}", path.display());
     }
+    Ok(texts)
+}
+
+/// The guest's host key, made with `ssh-keygen` the first time.
+fn host_key(dir: &Path) -> Result<Vec<u8>> {
+    let path = dir.join("ssh_host_ed25519_key");
+    keygen(&path, "ferrix-guest", "the guest's host key")?;
     std::fs::read(&path).map_err(|error| Error::new(format!("reading {}: {error}", path.display())))
+}
+
+/// The key a client on this machine may log in with, made with `ssh-keygen`
+/// the first time: the private half's path, to name in an `ssh -i`, and the
+/// public half's line, to authorize in the guest.
+///
+/// It is kept with the host key rather than in `~/.ssh`, because it belongs
+/// to the guest and not to this machine's own logins: nothing but a Ferrix
+/// boot is ever reached with it.
+fn client_key(dir: &Path) -> Result<(PathBuf, String)> {
+    let path = dir.join("id_ed25519");
+    keygen(&path, "ferrix-client", "a key to log in to the guest with")?;
+    let public = path.with_extension("pub");
+    let line = std::fs::read_to_string(&public)
+        .map_err(|error| Error::new(format!("reading {}: {error}", public.display())))?;
+    if line.trim().is_empty() {
+        return Err(Error::new(format!("{} holds no key", public.display())));
+    }
+    Ok((path, line))
+}
+
+/// An ed25519 key pair at `path`, made with `ssh-keygen` unless it is
+/// already there.
+fn keygen(path: &Path, comment: &str, what: &str) -> Result<()> {
+    if path.is_file() {
+        return Ok(());
+    }
+    let dir = path
+        .parent()
+        .ok_or_else(|| Error::new(format!("--ssh: {} has no directory", path.display())))?;
+    std::fs::create_dir_all(dir)
+        .map_err(|error| Error::new(format!("creating {}: {error}", dir.display())))?;
+    let status = Command::new("ssh-keygen")
+        .args(["-q", "-t", "ed25519", "-N", "", "-C", comment, "-f"])
+        .arg(path)
+        .status()
+        .map_err(|error| Error::new(format!("--ssh: `ssh-keygen` would not start: {error}")))?;
+    if !status.success() {
+        return Err(Error::new(format!(
+            "--ssh: `ssh-keygen` could not make {} ({status})",
+            path.display()
+        )));
+    }
+    println!("  ssh: made {what}, {}", path.display());
+    Ok(())
 }
 
 #[cfg(test)]
@@ -220,20 +315,52 @@ mod tests {
         std::fs::write(dir.join("id_ed25519.pub"), "ssh-ed25519 BBBB two@b\n").unwrap();
         std::fs::write(dir.join("id_other.pub"), "ssh-ed25519 CCCC three@c\n").unwrap();
         std::fs::write(dir.join("id_ed25519"), "PRIVATE, never read\n").unwrap();
-        let (file, count) = authorized_keys(&dir).unwrap();
-        assert_eq!(count, 3, "one line per key, the repeated one once");
+        let (file, count) = authorized_keys(&dir, "ssh-ed25519 GGGG ferrix-client\n", &[]).unwrap();
+        assert_eq!(count, 4, "one line per key, the repeated one once");
         assert_eq!(
             String::from_utf8(file).unwrap(),
-            "ssh-rsa AAAA one@a\nssh-ed25519 BBBB two@b\nssh-ed25519 CCCC three@c\n"
+            "ssh-ed25519 GGGG ferrix-client\nssh-rsa AAAA one@a\nssh-ed25519 BBBB two@b\n\
+             ssh-ed25519 CCCC three@c\n",
+            "this machine's guest key first, then ~/.ssh's own"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn no_keys_is_a_count_of_none() {
+    fn an_empty_ssh_directory_still_authorizes_the_guest_key() {
         let dir = scratch("none");
-        let (_, count) = authorized_keys(&dir).unwrap();
-        assert_eq!(count, 0, "an empty ~/.ssh authorizes nobody");
+        let (file, count) = authorized_keys(&dir, "ssh-ed25519 GGGG ferrix-client\n", &[]).unwrap();
+        assert_eq!(count, 1, "an empty ~/.ssh is no longer nobody");
+        assert_eq!(
+            String::from_utf8(file).unwrap(),
+            "ssh-ed25519 GGGG ferrix-client\n",
+            "which is what a client with no key of its own logs in with"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_named_key_is_a_file_or_the_key_itself() {
+        let dir = scratch("named");
+        let file = dir.join("theirs.pub");
+        std::fs::write(&file, "ssh-ed25519 DDDD four@d\n").unwrap();
+        let named =
+            named_keys(&[file.display().to_string(), "ssh-rsa EEEE five@e".to_owned()]).unwrap();
+        assert_eq!(named, ["ssh-ed25519 DDDD four@d\n", "ssh-rsa EEEE five@e"]);
+        let (carried, count) =
+            authorized_keys(&dir, "ssh-ed25519 GGGG ferrix-client\n", &named).unwrap();
+        assert_eq!(count, 3, "the guest key, and the two named");
+        assert!(
+            String::from_utf8(carried)
+                .unwrap()
+                .ends_with("ssh-ed25519 DDDD four@d\nssh-rsa EEEE five@e\n"),
+            "a named key is authorized, from a file or from the command line"
+        );
+        let missing = named_keys(&["~/.ssh/id_typo.pub".to_owned()]);
+        assert!(
+            missing.is_err(),
+            "a path that is not there is a mistake, not a key nothing would match"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -265,6 +392,59 @@ mod tests {
         );
         drop(holder);
         assert_eq!(checked(&args).ssh, Some(port), "a free port is kept");
+    }
+
+    #[test]
+    fn keys_named_on_the_command_line_are_kept_in_order() {
+        let args = Args::parse(
+            [
+                "run-compositor",
+                "--ssh",
+                "2222",
+                "--ssh-key",
+                "ssh-ed25519 AAAA one@a",
+                "--ssh-key",
+                "/home/somebody/.ssh/authorized_keys",
+            ]
+            .into_iter()
+            .map(str::to_owned),
+        )
+        .unwrap();
+        assert_eq!(
+            args.ssh_keys,
+            [
+                "ssh-ed25519 AAAA one@a",
+                "/home/somebody/.ssh/authorized_keys"
+            ],
+            "--ssh-key is repeatable"
+        );
+    }
+
+    #[test]
+    fn a_key_pair_is_made_once_and_read_back() {
+        let dir = scratch("keygen").join("ssh");
+        let (path, line) = match client_key(&dir) {
+            Ok(made) => made,
+            // A machine without `ssh-keygen` cannot be asked to make a key;
+            // the rest of the test is about the one it would have made.
+            Err(_) if Command::new("ssh-keygen").arg("-?").status().is_err() => return,
+            Err(error) => panic!("{error}"),
+        };
+        assert!(
+            path.is_file(),
+            "the private half is where `ssh -i` names it"
+        );
+        assert!(
+            line.starts_with("ssh-ed25519 "),
+            "and the public half is a key: {line}"
+        );
+        let again = client_key(&dir).unwrap();
+        assert_eq!(
+            (again.0, again.1),
+            (path, line),
+            "a second boot authorizes the same key, or every boot would need a new -i"
+        );
+        let _ = std::fs::remove_dir_all(dir.parent().unwrap());
     }
 
     #[test]

@@ -83,6 +83,12 @@ pub(crate) struct Args {
     /// forwards the host's `127.0.0.1:<PORT>` to it; `crate::ssh` says who
     /// may log in. The forward is one of `forwards`, added with it.
     pub(crate) ssh: Option<u16>,
+    /// `--ssh-key <FILE|KEY>`, as many as given: another public key that may
+    /// log in, beside this machine's guest key and its user's own. A file is
+    /// read whole; a key written out on the command line is taken as it
+    /// stands. For a client whose key is in neither place -- another user on
+    /// this machine, a sandbox, a CI step.
+    pub(crate) ssh_keys: Vec<String>,
     /// `--display`: a virtio-gpu device on the bus, and for `run` a window
     /// that shows it. `test-display` turns it on.
     pub(crate) display: bool,
@@ -259,6 +265,7 @@ impl Args {
                     });
                     args.net = true;
                 }
+                "--ssh-key" => args.ssh_keys.push(value(&mut items, "--ssh-key")?),
                 "--display" => args.display = true,
                 // A 3D card is still a card: `--gl` on its own turns the
                 // display on, so nobody has to write both.

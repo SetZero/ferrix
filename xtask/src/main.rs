@@ -184,7 +184,10 @@ OPTIONS:
     --forward <HOST>:<GUEST>             the host's 127.0.0.1:HOST leads to the guest's port GUEST,
                                          e.g. 2222:22 for sshdt; repeatable; turns --net on
     --ssh <PORT>                         run-compositor: start sshdt in the guest, reached at
-                                         127.0.0.1:PORT; the keys in ~/.ssh may log in
+                                         127.0.0.1:PORT; the keys in ~/.ssh may log in, and so may
+                                         ~/.local/share/ferrix/ssh/id_ed25519, which the boot prints
+    --ssh-key <FILE|KEY>                 another public key that may log in, as a file or written
+                                         out; repeatable; for a client whose key is in neither place
     --display                            run, test-boot: a virtio-gpu device; run: and a window showing it
     --gl                                 that virtio-gpu is the 3D card, `virtio-gpu-gl-pci`, with the
                                          host's GPU behind it through virglrenderer; turns --display on.
