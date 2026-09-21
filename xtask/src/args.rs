@@ -68,6 +68,14 @@ pub(crate) struct Args {
     /// is replaced by each architecture's name, so one path serves `--arch all`.
     /// `ferrousli` names the busybox built against ferrousli, in `busybox.rs`.
     pub(crate) init: Option<String>,
+    /// `--interpreter`, a dynamic linker `test-shell` carries in the initramfs
+    /// at the path `--init`'s `PT_INTERP` names. `{arch}` is replaced as it is
+    /// in `--init`.
+    pub(crate) interpreter: Option<String>,
+    /// `--library`, as many as given: shared libraries `test-shell` carries in
+    /// the initramfs's `/lib`, which glibc's linker and ferrousli's both search
+    /// when nothing else says where. `{arch}` is replaced as in `--init`.
+    pub(crate) libraries: Vec<String>,
     /// Where the gateway's `10.0.2.3:53` forwards to. No flag sets it: it is
     /// how `test-net` points the guest's DNS at the answers it serves itself,
     /// so that the test says the same thing on a machine with no network.
@@ -287,6 +295,10 @@ impl Args {
                 "--to" => args.to = Some(value(&mut items, "--to")?),
                 "--port" => args.port = Some(value(&mut items, "--port")?),
                 "--init" => args.init = Some(value(&mut items, "--init")?),
+                "--interpreter" => {
+                    args.interpreter = Some(value(&mut items, "--interpreter")?);
+                }
+                "--library" => args.libraries.push(value(&mut items, "--library")?),
                 "--boot" => args.boot = Some(value(&mut items, "--boot")?),
                 "--host" => args.host = Some(value(&mut items, "--host")?),
                 "--local-port" => args.local_port = Some(number(&mut items, "--local-port")?),

@@ -563,6 +563,11 @@ fn build_with_shell(
     // none. `bin` and `etc` are made above; any other directory a file is in
     // is made the first time one needs it.
     let mut made = vec!["bin".to_owned(), "etc".to_owned()];
+    // The native programs' directories are made above too, and a library
+    // `test-shell` carries goes in `lib` beside the drivers.
+    if !natives.is_empty() {
+        made.extend([native::DIRECTORY, "lib", native::DRIVERS].map(str::to_owned));
+    }
     for file in ports.iter().chain(&configuration) {
         let mut directory = String::new();
         let parents = file.path.split('/').collect::<Vec<_>>();

@@ -3459,9 +3459,15 @@ Three parts, in the order they can be tested:
   glibc then loads ferrousli in glibc's place, which is what the README
   calls the destination.
 
-`cargo xtask test-shell` gains `--interpreter` and `--library`, which put
-the named files onto the initramfs beside `--init` at the paths the binary
-asks for, so the test binary is still one the repository does not carry.
+`cargo xtask test-shell` gained `--interpreter` and `--library` on
+2026-09-21. The first puts a linker in the initramfs at the path `--init`'s own
+`PT_INTERP` names, read from the program so the test cannot pass by putting it
+somewhere the program would not look; the second puts each library in `/lib`,
+which glibc's linker and ferrousli's both search with no configuration. The
+built-in shell now reads the linker it names through the VFS, as a command
+from the initramfs already did, so the test binary is still one the
+repository does not carry. `scripts/fetch-debian-busybox.sh` fetches the one
+the exit names, pinned by checksum.
 
 **Exit,** in two halves, each a test of its own for the reason stage 7's is:
 
@@ -3470,6 +3476,22 @@ asks for, so the test binary is still one the repository does not carry.
    7's `test-shell` script on x86-64 and AArch64, and the `armhf` pair does
    the same on ARMv7-A, printing the same lines and exiting 7. This proves
    the kernel half against a loader nobody here wrote.
+
+   **Met on 2026-09-21,** on all three architectures and at the first
+   attempt: Debian 13's busybox 1.37.0-6+b9 with glibc 2.41-12+deb13u4's
+   linker, `libc.so.6` and `libresolv.so.2`, as `scripts/fetch-debian-busybox.sh`
+   lays them out —
+
+   ```
+   D=~/.local/share/ferrix/busybox/debian
+   cargo xtask test-shell --arch all --init "$D/{arch}/busybox" \
+       --interpreter "$D/{arch}/ld.so" \
+       --library "$D/{arch}/libc.so.6" --library "$D/{arch}/libresolv.so.2"
+   ```
+
+   The same x86-64 run without `--interpreter` stops at `the shell could not
+   be started: its linker: errno 2`, which is the control that shows the
+   linker was the one loaded.
 2. The same binary with glibc's files removed and ferrousli's `ld.so` and
    `libferrousli.so` at their paths, running the same script on all three
    architectures. This proves the other two parts, and is the README's fifth

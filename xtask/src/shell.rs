@@ -36,6 +36,12 @@
 //! took over, which is the whole of what `docs/UUTILS.md` S4 had to prove
 //! about the script.
 
+use std::path::{Path, PathBuf};
+
+use ferrix_elf::Elf;
+
+use crate::{Error, Result, ports};
+
 /// The script `sh -c` runs.
 pub(crate) const SCRIPT: &str = r#"echo "script: started"
 n=0
@@ -71,3 +77,129 @@ pub(crate) const EXITED: &str = "init     the shell exited with";
 
 /// The kernel's line when the first program could not be started at all.
 pub(crate) const NOT_STARTED: &str = "init     the shell could not be started";
+
+/// The files a dynamically linked `--init` needs beside it: `--interpreter`
+/// at the path the program's `PT_INTERP` names, and each `--library` in
+/// `/lib` under its own file name.
+///
+/// The interpreter's path is read from the program rather than given, so the
+/// test cannot pass by putting a linker somewhere the program would not have
+/// looked. `/lib` for the libraries because both linkers this has to serve
+/// search it with no configuration: glibc's has it in its built-in list after
+/// the multiarch directories, and ferrousli's has it first.
+///
+/// # Errors
+///
+/// A program that names no interpreter when one was given, and any file that
+/// cannot be read.
+pub(crate) fn carried(
+    program: &Path,
+    interpreter: Option<&Path>,
+    libraries: &[PathBuf],
+) -> Result<Vec<ports::File>> {
+    let mut files = Vec::new();
+    if let Some(interpreter) = interpreter {
+        let image = read(program)?;
+        let elf = Elf::parse(&image)
+            .map_err(|error| Error::new(format!("{}: {error:?}", program.display())))?;
+        let path = match elf.interpreter() {
+            Some(Ok(path)) => String::from_utf8_lossy(path).into_owned(),
+            Some(Err(error)) => {
+                return Err(Error::new(format!("{}: {error:?}", program.display())));
+            }
+            None => {
+                return Err(Error::new(format!(
+                    "{} names no interpreter, so --interpreter has nowhere to go",
+                    program.display()
+                )));
+            }
+        };
+        let Some(path) = path.strip_prefix('/') else {
+            return Err(Error::new(format!(
+                "{} names the interpreter {path}, which is not absolute",
+                program.display()
+            )));
+        };
+        files.push(ports::File {
+            path: path.to_owned(),
+            mode: 0o755,
+            content: ports::Content::Bytes(read(interpreter)?),
+        });
+    }
+    for library in libraries {
+        let name = library
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| Error::new(format!("{} has no file name", library.display())))?;
+        files.push(ports::File {
+            path: format!("lib/{name}"),
+            mode: 0o755,
+            content: ports::Content::Bytes(read(library)?),
+        });
+    }
+    Ok(files)
+}
+
+/// A file's bytes, or an error that names it.
+fn read(path: &Path) -> Result<Vec<u8>> {
+    std::fs::read(path).map_err(|error| Error::new(format!("reading {}: {error}", path.display())))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An ELF64 header with one `PT_INTERP` segment holding `interp`.
+    fn with_interpreter(interp: &[u8]) -> Vec<u8> {
+        let mut image = vec![0_u8; 64 + 56];
+        image[0..4].copy_from_slice(b"\x7fELF");
+        image[4] = 2; // ELFCLASS64
+        image[5] = 1; // ELFDATA2LSB
+        image[6] = 1; // EV_CURRENT
+        image[16..18].copy_from_slice(&3_u16.to_le_bytes()); // ET_DYN
+        image[18..20].copy_from_slice(&62_u16.to_le_bytes()); // EM_X86_64
+        image[20..24].copy_from_slice(&1_u32.to_le_bytes());
+        image[32..40].copy_from_slice(&64_u64.to_le_bytes()); // e_phoff
+        image[52..54].copy_from_slice(&64_u16.to_le_bytes()); // e_ehsize
+        image[54..56].copy_from_slice(&56_u16.to_le_bytes()); // e_phentsize
+        image[56..58].copy_from_slice(&1_u16.to_le_bytes()); // e_phnum
+        let at = image.len() as u64;
+        let header = &mut image[64..120];
+        header[0..4].copy_from_slice(&3_u32.to_le_bytes()); // PT_INTERP
+        header[4..8].copy_from_slice(&4_u32.to_le_bytes()); // PF_R
+        header[8..16].copy_from_slice(&at.to_le_bytes());
+        header[32..40].copy_from_slice(&(interp.len() as u64).to_le_bytes());
+        header[40..48].copy_from_slice(&(interp.len() as u64).to_le_bytes());
+        header[48..56].copy_from_slice(&1_u64.to_le_bytes());
+        image.extend_from_slice(interp);
+        image
+    }
+
+    fn scratch(name: &str, bytes: &[u8]) -> PathBuf {
+        let directory = std::env::temp_dir().join(format!("xtask-shell-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join(name);
+        std::fs::write(&path, bytes).unwrap();
+        path
+    }
+
+    #[test]
+    fn the_interpreter_goes_where_the_program_asks_and_libraries_in_lib() {
+        let program = scratch("prog", &with_interpreter(b"/lib64/ld-linux-x86-64.so.2\0"));
+        let linker = scratch("ld.so", b"the linker");
+        let libc = scratch("libc.so.6", b"the library");
+        let files = carried(&program, Some(&linker), &[libc]).unwrap();
+        let placed: Vec<_> = files.iter().map(|file| file.path.as_str()).collect();
+        assert_eq!(placed, ["lib64/ld-linux-x86-64.so.2", "lib/libc.so.6"]);
+        assert!(matches!(&files[0].content, ports::Content::Bytes(b) if b == b"the linker"));
+    }
+
+    #[test]
+    fn a_static_program_has_nowhere_to_put_an_interpreter() {
+        let mut image = with_interpreter(b"x\0");
+        image[56..58].copy_from_slice(&0_u16.to_le_bytes()); // no segments
+        let program = scratch("static", &image);
+        let linker = scratch("ld2.so", b"");
+        assert!(carried(&program, Some(&linker), &[]).is_err());
+    }
+}

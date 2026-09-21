@@ -104,13 +104,26 @@ pub(crate) fn run() {
     );
 
     let name = args.first().copied().unwrap_or(b"");
+    // A built-in program may be dynamically linked too, as a distribution's
+    // shell is: its linker and libraries are not built in but read from the
+    // initramfs, where `cargo xtask test-shell --interpreter` put them.
+    let context = fs::namespace().context();
+    let linker = match exec::linker_for(&context, IMAGE) {
+        Ok(linker) => linker,
+        Err(errno) => {
+            println!(
+                "  init     the shell could not be started: its linker: errno {}",
+                errno.0
+            );
+            return;
+        }
+    };
     let program = exec::Executable {
         image: IMAGE,
         exe: BUILT_IN_EXE,
         exec_fn: name,
         set_ids: fs::SetIds::NONE,
-        // A built-in program is linked static by the build that embedded it.
-        interpreter: None,
+        interpreter: linker.as_deref(),
     };
     let status = exec::run_init(
         program,
