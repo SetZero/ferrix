@@ -490,6 +490,18 @@ whether or not this end knows the option:
 cargo xtask remote-desktop -- --wallpaper none --smp 8
 ```
 
+`--layout de` is the guest's keyboard layout, and `--viewer` picks the
+viewer, over `[screen] viewer`. The two named ones send the keyboard
+differently. `tigervnc` sends keys, which the guest's layout reads as a
+real keyboard's, dead keys and `AltGr` included. `realvnc` sends
+characters, which QEMU turns back into keys through a keymap, so the boot
+is given `--keymap` with the first layout as well:
+
+```
+cargo xtask remote-desktop --layout de                     # TigerVNC, keys
+cargo xtask remote-desktop --layout de --viewer realvnc    # RealVNC, -k de
+```
+
 The serial console comes back on this terminal throughout, which is where a
 boot that never reaches a screen says why.
 

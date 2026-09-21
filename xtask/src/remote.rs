@@ -78,6 +78,70 @@ enum Viewer {
     None,
     /// This command line, with `{address}`, `{host}` and `{port}` filled in.
     Line(Vec<String>),
+    /// One of the viewers this knows by name, which it knows how to start
+    /// and how it sends the keyboard.
+    Known(Known),
+}
+
+/// A viewer known by name, because the two do the keyboard differently.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Known {
+    /// Sends keys (QEMU's extended key events): the guest's `kb_layout`
+    /// makes them characters, as a real keyboard's, and QEMU must be given
+    /// no keymap.
+    TigerVnc,
+    /// Sends characters, which QEMU turns back into keys through a keymap:
+    /// the boot is given `--keymap` with the first `--layout`.
+    RealVnc,
+}
+
+impl Known {
+    fn from_word(word: &str) -> Option<Self> {
+        match word.to_ascii_lowercase().as_str() {
+            "tigervnc" | "tiger" => Some(Known::TigerVnc),
+            "realvnc" | "real" => Some(Known::RealVnc),
+            _ => None,
+        }
+    }
+
+    const fn name(self) -> &'static str {
+        match self {
+            Known::TigerVnc => "TigerVNC",
+            Known::RealVnc => "RealVNC",
+        }
+    }
+
+    /// Where it is installed, on Windows, and what it is called on a `PATH`
+    /// elsewhere.
+    const fn places(self) -> (&'static str, &'static str) {
+        match self {
+            Known::TigerVnc => (r"C:\Program Files\TigerVNC\vncviewer.exe", "vncviewer"),
+            Known::RealVnc => (
+                r"C:\Program Files\RealVNC\VNC Viewer\vncviewer.exe",
+                "realvnc-vnc-viewer",
+            ),
+        }
+    }
+
+    /// The address it is given: `TigerVNC` reads `host:N` as display N, so a
+    /// port is `host::port` there.
+    fn address(self, port: u16) -> String {
+        match self {
+            Known::TigerVnc => format!("127.0.0.1::{port}"),
+            Known::RealVnc => format!("127.0.0.1:{port}"),
+        }
+    }
+
+    /// Its command line on this machine, if it is installed.
+    fn argv(self, port: u16) -> Option<Vec<String>> {
+        let (windows, elsewhere) = self.places();
+        let program = if cfg!(windows) {
+            Path::new(windows).is_file().then(|| windows.to_owned())
+        } else {
+            paths::which(elsewhere).map(|found| found.display().to_string())
+        }?;
+        Some(vec![program, self.address(port)])
+    }
 }
 
 /// The answers, after the file and the command line have both had their say.
@@ -171,7 +235,7 @@ pub(crate) fn remote_desktop(args: &Args) -> Result<()> {
             Send::Head => git(&root, &["rev-parse", "HEAD"], &[])?,
             Send::WorkingTree => "<working-tree-snapshot>".to_owned(),
         };
-        let script = boot_script(&config, &directory, &sha, &args.passthrough);
+        let script = boot_script(&config, &directory, &sha, &forwarded(args, &config.viewer));
         let remote = format!("{}:{directory}", config.host);
         println!("config:  {from}");
         println!("push:    git push {remote} {sha}:{REMOTE_REF}");
@@ -198,7 +262,7 @@ pub(crate) fn remote_desktop(args: &Args) -> Result<()> {
     // a twenty-minute build on the other machine.
     let viewer = viewer_argv(&config.viewer, port)?;
     let (sha, described) = snapshot(config.send, &root)?;
-    let script = boot_script(&config, &directory, &sha, &args.passthrough);
+    let script = boot_script(&config, &directory, &sha, &forwarded(args, &config.viewer));
 
     println!("config:  {from}");
     println!("sending: {described}");
@@ -406,11 +470,14 @@ fn viewer_of(value: &Value) -> std::result::Result<Viewer, String> {
     match value {
         Value::Str(word) if word == "auto" => Ok(Viewer::Auto),
         Value::Str(word) if word == "none" => Ok(Viewer::None),
+        Value::Str(word) if Known::from_word(word).is_some() => {
+            Ok(Known::from_word(word).map_or(Viewer::Auto, Viewer::Known))
+        }
         // A command line written as one string, for somebody who would
         // rather write it that way. A list needs no quoting and is better.
         Value::Str(line) => Ok(Viewer::Line(split_line(line))),
         Value::List(parts) => Ok(Viewer::Line(parts.clone())),
-        Value::Int(_) => Err("`auto`, `none`, or a command line".to_owned()),
+        Value::Int(_) => Err("`auto`, `none`, `tigervnc`, `realvnc`, or a command line".to_owned()),
     }
 }
 
@@ -437,6 +504,17 @@ fn apply(config: &mut Config, args: &Args) -> Result<()> {
                     "--send is `working-tree` or `head`, not `{other}`"
                 )));
             }
+        };
+    }
+    if let Some(word) = args.viewer.as_deref() {
+        config.viewer = match word {
+            "auto" => Viewer::Auto,
+            "none" => Viewer::None,
+            other => Viewer::Known(Known::from_word(other).ok_or_else(|| {
+                Error::new(format!(
+                    "--viewer is `tigervnc`, `realvnc`, `auto` or `none`, not `{other}`"
+                ))
+            })?),
         };
     }
     if args.no_viewer {
@@ -869,11 +947,44 @@ fn push(root: &Path, host: &str, directory: &str, sha: &str) -> Result<()> {
     Ok(())
 }
 
+/// The flags on this command line that are the boot's rather than this
+/// command's -- the keyboard's layout and variant -- then everything after
+/// `--`. They are parsed with the rest, since there is one parser, and a flag
+/// this command reads but does not pass on is one that silently does
+/// nothing: `--layout de` once booted a guest typing in `us`.
+///
+/// `--keymap` too, and for `RealVNC` one follows from `--layout` when none was
+/// given: it sends characters, and QEMU turns a German `~` back into `AltGr`
+/// and `+` only through the German keymap.
+fn forwarded(args: &Args, viewer: &Viewer) -> Vec<String> {
+    let keymap = args.keymap.clone().or_else(|| {
+        (*viewer == Viewer::Known(Known::RealVnc))
+            .then(|| args.layout.clone())
+            .flatten()
+    });
+    let mut extra = Vec::new();
+    for (flag, value) in [
+        ("--layout", &args.layout),
+        ("--variant", &args.variant),
+        ("--keymap", &keymap),
+    ] {
+        if let Some(value) = value {
+            extra.push(flag.to_owned());
+            extra.push(value.clone());
+        }
+    }
+    extra.extend(args.passthrough.iter().cloned());
+    extra
+}
+
 /// The one command the boot `ssh` runs over there.
 ///
 /// It is one string and not a script on stdin, deliberately: QEMU's serial
 /// console reads that connection's stdin, and a script fed that way is eaten
 /// by the guest a line at a time. The caller closes stdin as well.
+///
+/// `extra` is [`forwarded`]: the flags meant for the boot, and then whatever
+/// came after `--`.
 fn boot_script(config: &Config, directory: &str, sha: &str, extra: &[String]) -> String {
     let mut argv = vec![
         config.cargo.clone(),
@@ -1050,6 +1161,14 @@ fn viewer_argv(viewer: &Viewer, port: u16) -> Result<Option<Vec<String>>> {
                 .map(|part| fill(part, &address, port))
                 .collect(),
         )),
+        Viewer::Known(known) => known.argv(port).map(Some).ok_or_else(|| {
+            let (windows, elsewhere) = known.places();
+            let place = if cfg!(windows) { windows } else { elsewhere };
+            Error::new(format!(
+                "{} is not installed here ({place}); install it, or pick another with --viewer",
+                known.name()
+            ))
+        }),
         Viewer::Auto => found_viewer(&address).map(Some).ok_or_else(|| {
             Error::new(format!(
                 "no VNC viewer found. Install one (RealVNC, TigerVNC, Remmina), or set\n  \
@@ -1071,8 +1190,10 @@ fn fill(part: &str, address: &str, port: u16) -> String {
 fn found_viewer(address: &str) -> Option<Vec<String>> {
     if cfg!(windows) {
         for candidate in [
-            r"C:\Program Files\RealVNC\VNC Viewer\vncviewer.exe",
+            // TigerVNC first: it sends keys, which the guest's layout reads
+            // as a real keyboard's, where RealVNC sends characters.
             r"C:\Program Files\TigerVNC\vncviewer.exe",
+            r"C:\Program Files\RealVNC\VNC Viewer\vncviewer.exe",
             r"C:\Program Files\uvnc bvba\UltraVNC\vncviewer.exe",
         ] {
             if Path::new(candidate).is_file() {
@@ -1357,6 +1478,54 @@ send = "head"
             remote_dir("~").is_err(),
             "the home itself is not a checkout"
         );
+    }
+
+    #[test]
+    fn the_keyboard_flags_reach_the_boot() {
+        let args = Args::parse(
+            ["remote-desktop", "--layout", "de", "--", "--smp", "2"]
+                .into_iter()
+                .map(str::to_owned),
+        )
+        .unwrap();
+        assert_eq!(
+            forwarded(&args, &Viewer::Known(Known::TigerVnc)),
+            ["--layout", "de", "--smp", "2"],
+            "a viewer that sends keys gets no keymap"
+        );
+        assert_eq!(
+            forwarded(&args, &Viewer::Known(Known::RealVnc)),
+            ["--layout", "de", "--keymap", "de", "--smp", "2"],
+            "a viewer that sends characters gets the layout's keymap"
+        );
+    }
+
+    #[test]
+    fn a_viewer_is_chosen_by_name_and_the_flag_wins() {
+        let words = |word: &str| viewer_of(&Value::Str(word.to_owned())).unwrap();
+        assert_eq!(words("tigervnc"), Viewer::Known(Known::TigerVnc));
+        assert_eq!(words("RealVNC"), Viewer::Known(Known::RealVnc));
+        assert_eq!(Known::TigerVnc.address(5901), "127.0.0.1::5901");
+        assert_eq!(Known::RealVnc.address(5901), "127.0.0.1:5901");
+
+        let mut config = example();
+        config.viewer = Viewer::Known(Known::TigerVnc);
+        let args = Args::parse(
+            ["remote-desktop", "--viewer", "realvnc"]
+                .into_iter()
+                .map(str::to_owned),
+        )
+        .unwrap();
+        apply(&mut config, &args).unwrap();
+        assert_eq!(config.viewer, Viewer::Known(Known::RealVnc));
+
+        let args = Args::parse(
+            ["remote-desktop", "--viewer", "ultra"]
+                .into_iter()
+                .map(str::to_owned),
+        )
+        .unwrap();
+        assert!(apply(&mut config, &args).is_err());
     }
 
     #[test]

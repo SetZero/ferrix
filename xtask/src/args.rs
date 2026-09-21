@@ -188,6 +188,16 @@ pub(crate) struct Args {
     /// `--no-viewer`: `remote-desktop` opens the tunnel and nothing else, for
     /// somebody who would rather point their own viewer at it.
     pub(crate) no_viewer: bool,
+    /// `--viewer <tigervnc|realvnc|auto|none>`: which viewer `remote-desktop`
+    /// opens, over what the config file said. The two named ones are told
+    /// apart because they send the keyboard differently: `TigerVNC` sends keys,
+    /// `RealVNC` characters, which QEMU needs `--keymap` to turn back into keys.
+    pub(crate) viewer: Option<String>,
+    /// `--keymap <NAME>`: the keymap QEMU turns a VNC viewer's characters
+    /// back into keys through (`-k`), for a viewer that sends characters
+    /// rather than keys. An XKB layout (`de`, `us`) or QEMU's own name for one
+    /// (`en-us`). A viewer that sends keys must not be given one.
+    pub(crate) keymap: Option<String>,
     /// `--print-command`: say what `remote-desktop` would send, run and open,
     /// and do none of it. The first thing to run when something is not where
     /// it was expected.
@@ -275,6 +285,8 @@ impl Args {
                 "--local-port" => args.local_port = Some(number(&mut items, "--local-port")?),
                 "--send" => args.send = Some(value(&mut items, "--send")?),
                 "--no-viewer" => args.no_viewer = true,
+                "--viewer" => args.viewer = Some(value(&mut items, "--viewer")?),
+                "--keymap" => args.keymap = Some(value(&mut items, "--keymap")?),
                 "--print-command" => args.print_command = true,
                 "--stop" => args.stop = true,
                 // Everything after `--` belongs to the `cargo xtask` at the

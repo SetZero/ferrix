@@ -43,6 +43,19 @@
 //! `--vnc <display>` asks for VNC even where a window could have opened, and
 //! is the one way to put the screen on an address that is not the loopback.
 //! Nothing here binds a wider one on its own.
+//!
+//! # Keys want a viewer that sends keys
+//!
+//! Plain VNC sends keysyms -- the character typed, not the key -- and QEMU
+//! turns each back into a key through a keymap, `en-us` unless `-k` names
+//! another, adding no modifier the viewer did not send: a German `~` through
+//! `en-us` is the grave key without its Shift, and comes out `` ` ``. A
+//! viewer with QEMU's extended key events (`TigerVNC`'s) sends the keys
+//! themselves, and the guest's own `input:kb_layout` makes them characters, as
+//! a real keyboard's are. So `-k` is passed only when `--keymap` asks for it,
+//! for a viewer that sends characters: it would make QEMU translate even a
+//! key-sending viewer's keys through its keymap, which is the one thing that
+//! must not happen to them.
 
 use std::path::Path;
 use std::process::Command;
@@ -174,6 +187,54 @@ impl Window {
 /// Without one QEMU opens the first render node it can, which is right on a
 /// machine with one GPU and a guess on a machine with several -- and the
 /// guess is made by device number, not by which card is any good at this.
+/// QEMU's name for the keymap `--keymap` asks for, if QEMU ships one: an XKB
+/// layout name where QEMU's differs (`us` is `en-us`), QEMU's own name as it
+/// stands, and the first of a comma-separated list, which is the layout a
+/// guest starts typing in.
+pub(crate) fn vnc_keymap(asked: &str) -> Option<&'static str> {
+    const QEMU: &[&str] = &[
+        "ar", "bepo", "cz", "da", "de", "de-ch", "en-gb", "en-us", "es", "et", "fi", "fo", "fr",
+        "fr-be", "fr-ca", "fr-ch", "hr", "hu", "is", "it", "ja", "lt", "lv", "mk", "nl", "no",
+        "pl", "pt", "pt-br", "ru", "sl", "sv", "th", "tr",
+    ];
+    let first = asked.split(',').next()?.trim();
+    let named = match first {
+        "us" => "en-us",
+        "gb" => "en-gb",
+        "ch" => "de-ch",
+        "be" => "fr-be",
+        "br" => "pt-br",
+        "dk" => "da",
+        "ee" => "et",
+        "jp" => "ja",
+        "se" => "sv",
+        "si" => "sl",
+        "ara" => "ar",
+        other => other,
+    };
+    QEMU.iter().copied().find(|name| *name == named)
+}
+
+/// `-k <keymap>` for a VNC boot given `--keymap`, and nothing for any other.
+///
+/// # Errors
+///
+/// A keymap QEMU does not ship, said before a boot rather than by a QEMU that
+/// refuses to start.
+pub(crate) fn keymap_arguments(window: &Window, args: &Args) -> Result<Vec<String>> {
+    let Some(asked) = args.keymap.as_deref() else {
+        return Ok(Vec::new());
+    };
+    if !matches!(window, Window::Vnc(_)) {
+        println!("  keyboard: --keymap is for a VNC screen; a window sends keys as they are");
+        return Ok(Vec::new());
+    }
+    let keymap = vnc_keymap(asked)
+        .ok_or_else(|| Error::new(format!("QEMU ships no keymap for `{asked}`")))?;
+    println!("  keyboard: VNC characters turned into keys through QEMU's {keymap} keymap");
+    Ok(vec!["-k".to_owned(), keymap.to_owned()])
+}
+
 fn headless(rendernode: Option<&str>) -> String {
     match rendernode {
         Some(node) => format!("egl-headless,rendernode={node}"),
@@ -630,6 +691,20 @@ Some display backends support suboptions, which can be set with
             "qemu-system-x86_64: -vnc: VNC support is disabled"
         ));
         assert!(!takes_vnc(""));
+    }
+
+    #[test]
+    fn a_keymap_is_the_name_qemu_gives_it() {
+        assert_eq!(vnc_keymap("de"), Some("de"));
+        assert_eq!(
+            vnc_keymap("de,us"),
+            Some("de"),
+            "the first layout is typed in"
+        );
+        assert_eq!(vnc_keymap("us"), Some("en-us"));
+        assert_eq!(vnc_keymap("en-us"), Some("en-us"));
+        assert_eq!(vnc_keymap("ch"), Some("de-ch"));
+        assert_eq!(vnc_keymap("xx"), None);
     }
 
     #[test]

@@ -985,6 +985,7 @@ fn qemu_command(
     // gets the same answer.
     let (_, gl) = crate::window::card(&binary, args.gl && card.is_some());
     let _ = command.args(window.arguments_with(card.as_deref(), gl, args.rendernode.as_deref()));
+    let _ = command.args(crate::window::keymap_arguments(&window, args)?);
     window.announce(card.as_deref());
     // The serial port, which is this machine's whole console.
     let _ = command.args(console.arguments()?);

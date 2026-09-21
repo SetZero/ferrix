@@ -10,7 +10,8 @@
 //! cargo xtask test-threads --arch all [--timeout SECONDS]
 //! cargo xtask check     [--fast] [--ferrousli] [--zinc] [--miri]
 //! cargo xtask remote-desktop [--host DEST] [--config PATH] [--vnc :N] [--send head]
-//!                       [--no-viewer] [--print-command] [--stop] [-- ARGS...]
+//!                       [--viewer tigervnc|realvnc] [--layout de] [--no-viewer]
+//!                       [--print-command] [--stop] [-- ARGS...]
 //! cargo xtask busybox   [--arch x86_64]
 //! cargo xtask ports     [--arch x86_64]
 //! cargo xtask omz       --from DIRECTORY-OR-URL
@@ -214,6 +215,15 @@ OPTIONS:
                                          uncommitted changes and all, or your last commit
                                          [default: working-tree]
     --no-viewer                          remote-desktop: open the tunnel and nothing else
+    --viewer <tigervnc|realvnc|auto|none>
+                                         remote-desktop: the viewer to open, over the config
+                                         file's. TigerVNC sends keys and the guest's layout reads
+                                         them; RealVNC sends characters, so the boot is given
+                                         --keymap <the first --layout> as well
+    --keymap <NAME>                      run --display, run-compositor over VNC: QEMU's keymap for
+                                         a viewer that sends characters rather than keys (`de`,
+                                         `us`, `en-gb`). Not for one that sends keys: QEMU would
+                                         translate those through it too
     --print-command                      remote-desktop: say what would be sent, run and opened,
                                          and do none of it
     --stop                               remote-desktop: end a boot left running over there, and
