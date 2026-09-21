@@ -42,6 +42,41 @@ pub struct Table {
     pub stride: usize,
 }
 
+/// One object's initial TLS image, already at its run-time address.
+///
+/// `filesz` bytes at `image` are copied into each thread's block and the
+/// remaining bytes through `memsz` start zeroed. `align` is never zero and is
+/// a power of two, so a layout builder can use it without repeating ELF's
+/// validation for every thread it creates.
+#[derive(Debug, Clone, Copy)]
+pub struct Tls {
+    /// The mapped bytes that initialise each thread's block.
+    pub image: usize,
+    /// Bytes of `image` to copy.
+    pub filesz: usize,
+    /// Total bytes in every thread's block.
+    pub memsz: usize,
+    /// Required alignment of the block.
+    pub align: usize,
+}
+
+impl Tls {
+    /// Build a TLS description from one `PT_TLS` segment.
+    #[must_use]
+    pub const fn new(image: usize, filesz: usize, memsz: usize, align: usize) -> Option<Tls> {
+        let align = if align == 0 { 1 } else { align };
+        if filesz > memsz || !align.is_power_of_two() {
+            return None;
+        }
+        Some(Tls {
+            image,
+            filesz,
+            memsz,
+            align,
+        })
+    }
+}
+
 impl Table {
     /// An absent table.
     pub const NONE: Table = Table {
@@ -91,6 +126,8 @@ pub struct Object {
     pub init_array: Table,
     /// `DT_FINI_ARRAY`.
     pub fini_array: Table,
+    /// `PT_TLS`, if this object supplies an initial TLS image.
+    pub tls: Option<Tls>,
     /// Its `DT_SONAME`, as a string table offset, or zero.
     pub soname: u32,
     /// Its `DT_RUNPATH`, as a string table offset, or zero.
@@ -127,6 +164,7 @@ impl Object {
         init: 0,
         init_array: Table::NONE,
         fini_array: Table::NONE,
+        tls: None,
         soname: 0,
         runpath: 0,
         needed: [0; MAX_NEEDED],

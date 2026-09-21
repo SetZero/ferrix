@@ -238,6 +238,7 @@ impl Scope {
         let mut object =
             unsafe { Object::read(mapped.base, mapped.dynamic) }.ok_or(Error::TooManyObjects)?;
         object.relro = mapped.relro;
+        object.tls = mapped.tls;
         self.push(name, object)
     }
 

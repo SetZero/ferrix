@@ -26,6 +26,7 @@
 use core::ffi::{c_char, c_int};
 
 use crate::elf::{PF_R, PF_W, PF_X, PT_DYNAMIC, PT_LOAD, PT_TLS, Phdr};
+use crate::object::Tls;
 use crate::report::Error;
 use crate::sys::{self, nr};
 
@@ -68,9 +69,8 @@ pub struct Mapped {
     pub base: usize,
     /// Its `PT_DYNAMIC`, at its run-time address.
     pub dynamic: *const crate::elf::Dyn,
-    /// Its `PT_TLS`, if it has one, at its run-time address, with the
-    /// segment's own sizes.
-    pub tls: Option<Phdr>,
+    /// Its `PT_TLS`, if it has one, at its run-time address.
+    pub tls: Option<Tls>,
     /// Its `PT_GNU_RELRO`, as a run-time address and a length, or `(0, 0)`.
     pub relro: (usize, usize),
 }
@@ -130,7 +130,17 @@ fn map_opened(path: *const c_char, fd: c_int, page_size: usize) -> Result<Mapped
             PT_DYNAMIC => {
                 dynamic = (header.p_vaddr as usize).wrapping_add(bias) as *const crate::elf::Dyn;
             }
-            PT_TLS => tls = Some(*header),
+            PT_TLS => {
+                tls = Tls::new(
+                    (header.p_vaddr as usize).wrapping_add(bias),
+                    header.p_filesz as usize,
+                    header.p_memsz as usize,
+                    header.p_align as usize,
+                );
+                if tls.is_none() {
+                    return Err(Error::NotAnObject(path));
+                }
+            }
             crate::elf::PT_GNU_RELRO => {
                 relro = (
                     (header.p_vaddr as usize).wrapping_add(bias),

@@ -203,12 +203,14 @@ unsafe fn program_object(stack: &auxv::Stack) -> Result<object::Object, report::
     let mut bias = 0_usize;
     let mut dynamic = 0_usize;
     let mut relro = (0_usize, 0_usize);
+    let mut tls = None;
     for index in 0..count {
         // SAFETY: `AT_PHNUM` headers are mapped at `AT_PHDR`.
         let header = unsafe { headers.add(index).read() };
         match header.p_type {
             elf::PT_PHDR => bias = at.wrapping_sub(header.p_vaddr as usize),
             elf::PT_DYNAMIC => dynamic = header.p_vaddr as usize,
+            elf::PT_TLS => tls = Some(header),
             elf::PT_GNU_RELRO => relro = (header.p_vaddr as usize, header.p_memsz as usize),
             _ => {}
         }
@@ -224,6 +226,16 @@ unsafe fn program_object(stack: &auxv::Stack) -> Result<object::Object, report::
             .ok_or(report::Error::TooManyObjects)?;
     if relro.1 != 0 {
         object.relro = (relro.0.wrapping_add(bias), relro.1);
+    }
+    if let Some(header) = tls {
+        let tls = object::Tls::new(
+            (header.p_vaddr as usize).wrapping_add(bias),
+            header.p_filesz as usize,
+            header.p_memsz as usize,
+            header.p_align as usize,
+        )
+        .ok_or(report::Error::MalformedObject("an invalid PT_TLS segment"))?;
+        object.tls = Some(tls);
     }
     Ok(object)
 }
