@@ -29,6 +29,7 @@ mod qual;
 mod regex;
 mod shell;
 mod tok;
+mod wcwidth;
 mod zle;
 mod zstyle;
 

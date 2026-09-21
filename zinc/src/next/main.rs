@@ -26,6 +26,8 @@ mod parse;
 mod parsectl;
 #[path = "../tok.rs"]
 mod tok;
+#[path = "../wcwidth.rs"]
+mod wcwidth;
 
 mod builtin;
 mod builtin_dirs;

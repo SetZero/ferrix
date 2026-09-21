@@ -12,6 +12,7 @@
 use crate::exec::write_fd;
 use crate::shell::Shell;
 use crate::tok;
+use crate::wcwidth::wcwidth;
 
 /// The terminal settings the editor changes, restored when it returns.
 struct RawMode {
@@ -372,7 +373,9 @@ fn columns() -> usize {
 }
 
 /// How many columns `s` takes: escape sequences take none, and a UTF-8
-/// character one.
+/// character what `wcwidth` says, so the cursor lands right after a wide
+/// one such as a prompt's `⚡`. A byte that starts no valid character takes
+/// one.
 pub(crate) fn display_width(s: &[u8]) -> usize {
     let mut w = 0;
     let mut i = 0;
@@ -388,7 +391,23 @@ pub(crate) fn display_width(s: &[u8]) -> usize {
             i += 1;
             continue;
         }
-        if c >= 0x20 && (c & 0xc0) != 0x80 && c != 0x7f {
+        if c >= 0x80 && (c & 0xc0) != 0x80 {
+            let len = match c {
+                0xc0..=0xdf => 2,
+                0xe0..=0xef => 3,
+                _ => 4,
+            };
+            let ch = s
+                .get(i..i + len)
+                .and_then(|b| std::str::from_utf8(b).ok())
+                .and_then(|t| t.chars().next());
+            if let Some(ch) = ch {
+                w += usize::try_from(wcwidth(u32::from(ch))).unwrap_or(0);
+                i += len;
+                continue;
+            }
+            w += 1;
+        } else if (0x20..0x7f).contains(&c) {
             w += 1;
         }
         i += 1;
@@ -1276,5 +1295,15 @@ mod tests {
     #[test]
     fn escape_sequences_take_no_columns() {
         assert_eq!(display_width(b"\x1b[1;32mok\x1b[0m> "), 4);
+    }
+
+    #[test]
+    fn wide_characters_take_two_columns() {
+        // agnoster's status segment: a narrow ✗, a wide ⚡ and a narrow
+        // powerline arrow.
+        assert_eq!(display_width("✗ ⚡ root\u{e0b0} ".as_bytes()), 11);
+        assert_eq!(display_width("日本".as_bytes()), 4);
+        assert_eq!(display_width("e\u{301}".as_bytes()), 1);
+        assert_eq!(display_width(b"a\xffb"), 3);
     }
 }
