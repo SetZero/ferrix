@@ -341,3 +341,113 @@ fn the_grid_is_drawn_cell_by_cell() {
     let (cx, cy) = (2, 3 * paint::CELL.1 + 8);
     assert_eq!(at(cx, cy), as_pixel(cursor), "the cursor is not a block");
 }
+
+/// Text is UTF-8: a character of several bytes is one cell, and a sequence
+/// that is not UTF-8 is one U+FFFD where it goes wrong, not a cell a byte.
+#[test]
+fn utf8_is_a_character_a_cell_and_a_bad_sequence_is_one_replacement() {
+    let mut grid = Grid::new(12, 1);
+    // robbyrussell's arrow and agnoster's separator, between ASCII.
+    grid.write("a➜b\u{E0B0}ü".as_bytes());
+    assert_eq!(grid.line(0), "a➜b\u{E0B0}ü");
+    assert_eq!(grid.cursor(), (5, 0));
+
+    // A character split across two writes, as a read of a pipe may split it.
+    let mut grid = Grid::new(12, 1);
+    let arrow = "➜".as_bytes();
+    grid.write(&arrow[..1]);
+    grid.write(&arrow[1..]);
+    assert_eq!(grid.line(0), "➜");
+
+    // Cut short by ASCII, a lone continuation byte, an overlong encoding
+    // and a byte no UTF-8 starts with: each one U+FFFD, and what follows is
+    // itself.
+    let mut grid = Grid::new(12, 1);
+    grid.write(b"\xE2\x9Cx\x80\xC0\xAF\xFFy");
+    assert_eq!(grid.line(0), "\u{FFFD}x\u{FFFD}\u{FFFD}\u{FFFD}\u{FFFD}y");
+
+    // An escape sequence in the middle ends the character and is still one.
+    let mut grid = Grid::new(12, 1);
+    grid.write(b"\xE2\x1b[31mz");
+    assert_eq!(grid.line(0), "\u{FFFD}z");
+    assert_eq!(grid.cell(1, 0).map(|cell| cell.colour), Some(1));
+}
+
+/// agnoster's segments are backgrounds, and a 256-colour sequence is one
+/// colour, not three codes.
+#[test]
+fn a_background_is_kept_and_an_extended_colour_is_one_colour() {
+    let mut grid = Grid::new(12, 1);
+    grid.write(b"\x1b[44;30ma\x1b[49mb\x1b[104mc\x1b[0md");
+    let background = |column: usize| grid.cell(column, 0).and_then(|cell| cell.background);
+    assert_eq!(background(0), Some(4));
+    assert_eq!(grid.cell(0, 0).map(|cell| cell.colour), Some(0));
+    assert_eq!(background(1), None);
+    assert_eq!(background(2), Some(12), "bright blue");
+    assert_eq!(background(3), None, "the reset takes the background too");
+
+    // `38;5;31` is colour 31 of 256 (a dark cyan-blue), not a `31` for red.
+    let mut grid = Grid::new(12, 1);
+    grid.write(b"\x1b[38;5;31ma\x1b[38;5;9mb\x1b[48;2;255;255;0mc");
+    let cell = |column: usize| grid.cell(column, 0).copied().expect("a cell");
+    assert_ne!(cell(0).colour, 1);
+    assert_eq!((cell(1).colour, cell(1).bold), (1, true), "9 is bright red");
+    assert_eq!(cell(2).background, Some(3 | 8), "bright yellow");
+}
+
+/// The prompts' characters are drawn from the font, not as the box every
+/// character it lacks is drawn as.
+#[test]
+fn a_prompts_characters_have_glyphs_of_their_own() {
+    let frame = |text: &str| {
+        let mut grid = Grid::new(1, 1);
+        grid.write(text.as_bytes());
+        // Cursor off, so the cell is the glyph alone.
+        grid.write(b"\x1b[?25l");
+        let (width, height) = paint::CELL;
+        let mut pixels = vec![0u8; width * height * 4];
+        paint::draw(
+            &mut pixels,
+            (width, height),
+            width * 4,
+            &grid,
+            &paint::Colours::default(),
+            1,
+        );
+        pixels
+    };
+    // A character no face here has: CJK.
+    let missing = frame("\u{4E2D}");
+    // agnoster's status markers are the stand-ins the generator draws them as.
+    for present in ["➜", "\u{E0B0}", "\u{E0A0}", "±", "─", "…", "✘", "⚡", "⚙"] {
+        assert_ne!(frame(present), missing, "{present:?} is drawn as the box");
+    }
+}
+
+/// agnoster's prompt as zinc renders it, byte for byte: a black segment, a
+/// blue one, each ended by a separator drawn in the colour it ends.
+#[test]
+fn agnosters_prompt_is_two_segments_and_their_separators() {
+    let mut grid = Grid::new(32, 1);
+    grid.write(
+        "\x1b[39m\x1b[0m\x1b[49m\x1b[40m\x1b[39m root@ferrix \x1b[44m\x1b[30m\u{E0B0}\
+         \x1b[30m / \x1b[49m\x1b[34m\u{E0B0}\x1b[39m "
+            .as_bytes(),
+    );
+    assert_eq!(grid.line(0), " root@ferrix \u{E0B0} / \u{E0B0}");
+    let cell = |column: usize| grid.cell(column, 0).copied().expect("a cell");
+    // The context segment: default text on black.
+    assert_eq!(
+        (cell(1).ch, cell(1).background, cell(1).colour),
+        ('r', Some(0), 7)
+    );
+    // Its separator: black on the blue of the segment after it.
+    assert_eq!((cell(13).background, cell(13).colour), (Some(4), 0));
+    // The directory: black on blue.
+    assert_eq!(
+        (cell(15).ch, cell(15).background, cell(15).colour),
+        ('/', Some(4), 0)
+    );
+    // The last separator: blue on the terminal's own background.
+    assert_eq!((cell(17).background, cell(17).colour), (None, 4));
+}

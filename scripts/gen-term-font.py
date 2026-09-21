@@ -65,6 +65,35 @@ LAST = 0x7E
 # font's own style rather than a box this script invents.
 REPLACEMENT = 0x25A1
 
+# Beyond ASCII: what prompts and the programs a shell starts draw, as far as
+# the face has it. Latin-1 for names and words, punctuation such as the
+# ellipsis and the bullet, arrows (robbyrussell's `➜`), box drawing, blocks
+# and shapes for anything drawn in cells, the dingbats, and the Powerline
+# glyphs Hack carries in the private use area (agnoster's separators and
+# branch). A code point in these ranges the face has no glyph for is left out
+# and drawn as [`REPLACEMENT`], as any other character is.
+EXTRA_RANGES = [
+    (0x00A0, 0x00FF),
+    (0x2010, 0x2027),
+    (0x2030, 0x203A),
+    (0x2190, 0x21FF),
+    (0x2500, 0x25FF),
+    (0x2700, 0x27BF),
+    (0xE0A0, 0xE0B3),
+]
+
+# Characters prompts draw that Hack has no glyph for, drawn with the outline of
+# one it has that reads the same at a glance: agnoster's status markers, which
+# say a command failed (✘), the shell is root's (⚡) and jobs are running (⚙).
+# Better a mark close to the right one than the box that says nothing, and a
+# face that gains the real glyph wins, since its own is taken first.
+STAND_INS = {
+    0x2717: 0x00D7,  # ✗ BALLOT X, as × MULTIPLICATION SIGN
+    0x2718: 0x00D7,  # ✘ HEAVY BALLOT X, as ×
+    0x26A1: 0x21AF,  # ⚡ HIGH VOLTAGE SIGN, as ↯ DOWNWARDS ZIGZAG ARROW
+    0x2699: 0x2756,  # ⚙ GEAR, as ❖ BLACK DIAMOND MINUS WHITE X
+}
+
 # Line segments a quadratic curve is flattened into. At 20 pixels per em the
 # longest curve in the face is a few pixels across, so eight segments put every
 # joint well inside a sixteenth of a pixel.
@@ -367,6 +396,11 @@ def describe(code: int) -> str:
     if code == REPLACEMENT:
         return "U+25A1 WHITE SQUARE"
     character = chr(code)
+    if code > 0x7E:
+        # A private-use or invisible character says nothing in a comment.
+        if 0xE000 <= code <= 0xF8FF or code in (0xA0, 0xAD):
+            return f"U+{code:04X}"
+        return f"U+{code:04X} '{character}'"
     shown = {"'": "\\'", "\\": "\\\\"}.get(character, character)
     return f"0x{code:02X} '{shown}'"
 
@@ -430,9 +464,22 @@ def render(sources: dict[str, bytes]) -> str:
     for name in FONTS:
         face = faces[name]
         scale = PIXELS_PER_EM / face.units_per_em
+        own = {
+            code
+            for first, last in EXTRA_RANGES
+            for code in range(first, last + 1)
+            if code in face.cmap
+        }
+        drawn_as = {code: code for code in own}
+        for code, stand_in in STAND_INS.items():
+            if code not in face.cmap:
+                drawn_as[code] = stand_in
+        extra = sorted(drawn_as)
         glyphs = {
-            code: coverage([polygon(contour, scale) for contour in face.outline(code)])
-            for code in [*wanted, REPLACEMENT]
+            code: coverage(
+                [polygon(contour, scale) for contour in face.outline(drawn_as.get(code, code))]
+            )
+            for code in [*wanted, *extra, REPLACEMENT]
         }
         style = name.capitalize()
         out += [
@@ -450,7 +497,25 @@ def render(sources: dict[str, bytes]) -> str:
         out += [
             "];",
             "",
-            f"/// {style}, for every character outside [`{name}`]: {describe(REPLACEMENT)}.",
+            f"/// {style}: the characters beyond ASCII the face has, of the ranges a",
+            "/// prompt draws from, in code point order for a binary search.",
+            "#[rustfmt::skip]",
+            f"pub(crate) static {name}_EXTRA: [(u32, Cell); {len(extra)}] = [",
+        ]
+        for code in extra:
+            if drawn_as[code] == code:
+                out.append(f"    // {describe(code)}")
+            else:
+                out.append(f"    // {describe(code)}, drawn as {describe(drawn_as[code])}")
+            block = cell_block(glyphs[code], "    ")
+            block[0] = f"    (0x{code:04X}, ["
+            block[-1] = "    ]),"
+            out += block
+        out += [
+            "];",
+            "",
+            f"/// {style}, for every character outside [`{name}`] and"
+            f" [`{name}_EXTRA`]: {describe(REPLACEMENT)}.",
             "#[rustfmt::skip]",
             f"pub(crate) static {name}_REPLACEMENT: Cell = ",
         ]

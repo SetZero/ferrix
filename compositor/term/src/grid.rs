@@ -19,7 +19,13 @@
 //!   all of it (2).
 //! * `CSI n K` -- the same for the line.
 //! * `CSI n m` -- the graphic rendition, of which the bold and the eight
-//!   foreground colours are kept and the rest ignored.
+//!   colours of the foreground and the background (with their bright forms)
+//!   are kept, a 256-colour or direct colour as the nearest of those, and the
+//!   rest ignored.
+//!
+//! Text is UTF-8, as everything a shell on Ferrix writes is: a character is
+//! the bytes that encode it, and a sequence that is not UTF-8 is drawn as
+//! U+FFFD, once for each place it goes wrong.
 //! * `CSI ? n h|l` -- the private modes, of which only the cursor's own
 //!   visibility (25) is kept.
 //!
@@ -37,6 +43,9 @@ pub struct Cell {
     pub colour: u8,
     /// Whether it is drawn bright.
     pub bold: bool,
+    /// What is behind it: one of the eight colours, or eight to fifteen for
+    /// their bright forms, or the terminal's own background when `None`.
+    pub background: Option<u8>,
 }
 
 impl Default for Cell {
@@ -46,6 +55,7 @@ impl Default for Cell {
             // Seven is white, which is what a terminal starts in.
             colour: 7,
             bold: false,
+            background: None,
         }
     }
 }
@@ -59,6 +69,11 @@ enum Parsing {
     Escape,
     /// A `CSI` has arrived, and these are its parameter bytes.
     Csi(Vec<u8>),
+    /// The first bytes of a UTF-8 character have arrived: the bits so far,
+    /// how many continuation bytes are still to come, and the least code
+    /// point a sequence of this length may encode, below which it is an
+    /// overlong encoding and not a character.
+    Utf8 { code: u32, needed: u8, least: u32 },
 }
 
 /// A grid of characters, with a cursor.
@@ -200,6 +215,33 @@ impl Grid {
                     self.csi(&parameters, byte);
                 }
             }
+            Parsing::Utf8 {
+                code,
+                needed,
+                least,
+            } => {
+                if byte & 0xC0 != 0x80 {
+                    // Cut short: what arrived is one bad character, and this
+                    // byte starts whatever comes next.
+                    self.put(char::REPLACEMENT_CHARACTER);
+                    self.text(byte);
+                    return;
+                }
+                let code = code << 6 | u32::from(byte & 0x3F);
+                if needed > 1 {
+                    self.parsing = Parsing::Utf8 {
+                        code,
+                        needed: needed - 1,
+                        least,
+                    };
+                } else if code < least {
+                    self.put(char::REPLACEMENT_CHARACTER);
+                } else {
+                    // `from_u32` refuses the surrogates and anything past
+                    // U+10FFFF, which UTF-8 cannot carry either.
+                    self.put(char::from_u32(code).unwrap_or(char::REPLACEMENT_CHARACTER));
+                }
+            }
         }
     }
 
@@ -217,8 +259,25 @@ impl Grid {
             }
             // The bell, and every other control character: nothing to do.
             byte if byte < 0x20 || byte == 0x7F => {}
-            byte => self.put(char::from(byte)),
+            byte if byte < 0x80 => self.put(char::from(byte)),
+            // The first byte of a UTF-8 character, which says how many more
+            // there are. A continuation byte with nothing before it, and the
+            // bytes no UTF-8 starts with, are a character each that is not
+            // one.
+            0xC2..=0xDF => self.utf8(byte & 0x1F, 1, 0x80),
+            0xE0..=0xEF => self.utf8(byte & 0x0F, 2, 0x800),
+            0xF0..=0xF4 => self.utf8(byte & 0x07, 3, 0x1_0000),
+            _ => self.put(char::REPLACEMENT_CHARACTER),
         }
+    }
+
+    /// Start a UTF-8 character: its lead byte's bits, and what is to come.
+    fn utf8(&mut self, bits: u8, needed: u8, least: u32) {
+        self.parsing = Parsing::Utf8 {
+            code: u32::from(bits),
+            needed,
+            least,
+        };
     }
 
     /// Put a character where the cursor is, and move on.
@@ -323,9 +382,10 @@ impl Grid {
         }
     }
 
-    /// `CSI n m`: the pen's colour and weight.
+    /// `CSI n m`: the pen's colour, weight and background.
     fn rendition(&mut self, numbers: &[usize]) {
-        for number in numbers {
+        let mut numbers = numbers.iter().copied();
+        while let Some(number) = numbers.next() {
             match number {
                 0 => self.pen = Cell::default(),
                 1 => self.pen.bold = true,
@@ -337,9 +397,57 @@ impl Grid {
                     self.pen.colour = u8::try_from(number - 90).unwrap_or(7);
                     self.pen.bold = true;
                 }
-                // Backgrounds and everything else: not kept.
+                40..=47 => self.pen.background = u8::try_from(number - 40).ok(),
+                49 => self.pen.background = None,
+                100..=107 => self.pen.background = u8::try_from(number - 100 + 8).ok(),
+                // `38;5;n`, `38;2;r;g;b` and the same after 48: one colour
+                // in several numbers, which must be taken together or the
+                // `5` and the `n` would be read as codes of their own.
+                38 | 48 => {
+                    let Some(index) = extended(&mut numbers) else {
+                        continue;
+                    };
+                    if number == 38 {
+                        self.pen.colour = index & 7;
+                        self.pen.bold = index >= 8;
+                    } else {
+                        self.pen.background = Some(index);
+                    }
+                }
+                // Everything else: not kept.
                 _ => {}
             }
         }
     }
+}
+
+/// The rest of an extended colour, `5;n` or `2;r;g;b`, as the nearest of the
+/// sixteen this terminal has: which of red, green and blue are on, and
+/// whether it is bright.
+fn extended(numbers: &mut impl Iterator<Item = usize>) -> Option<u8> {
+    let (r, g, b) = match numbers.next()? {
+        5 => {
+            let index = numbers.next()?;
+            if index < 16 {
+                return u8::try_from(index).ok();
+            }
+            if index < 232 {
+                // The six-level cube: 16 + 36r + 6g + b, each 0 to 5.
+                let cube = index - 16;
+                let level = |value: usize| value * 51;
+                (level(cube / 36), level(cube / 6 % 6), level(cube % 6))
+            } else {
+                // The grey ramp, from 8 to 238.
+                let grey = 8 + (index.min(255) - 232) * 10;
+                (grey, grey, grey)
+            }
+        }
+        2 => (numbers.next()?, numbers.next()?, numbers.next()?),
+        _ => return None,
+    };
+    let on = |value: usize| value >= 0x80;
+    let hue = u8::from(on(r)) | u8::from(on(g)) << 1 | u8::from(on(b)) << 2;
+    // Bright when the strongest channel is near full; a dark grey is black.
+    let bright = r.max(g).max(b) >= 0xE0 || (hue == 0 && r.max(g).max(b) >= 0x60);
+    Some(hue | u8::from(bright) << 3)
 }

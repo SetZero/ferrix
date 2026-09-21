@@ -109,6 +109,13 @@ pub fn draw(
             let (fg, bg) = if on_cursor {
                 surface.fill_rect(x, y, CELL.0 * scale, CELL.1 * scale, colours.cursor);
                 (colours.background, colours.cursor)
+            } else if let Some(index) = cell.background {
+                // A cell of its own colour: a prompt's segments, a
+                // highlighted line. Painted before the glyph, which is
+                // blended over it.
+                let bg = colour(index & 7, index >= 8, colours);
+                surface.fill_rect(x, y, CELL.0 * scale, CELL.1 * scale, bg);
+                (colour(cell.colour, cell.bold, colours), bg)
             } else {
                 (colour(cell.colour, cell.bold, colours), colours.background)
             };
@@ -162,19 +169,31 @@ fn glyph(
 
 /// The coverage cell for `ch` in the face the cell asks for.
 ///
-/// Printable ASCII has its own glyph; every other character, control
-/// characters included, is drawn as a hollow box, as the panic screen's font
-/// draws one.
+/// Printable ASCII has its own glyph, and so does each character of the
+/// extra table: Latin-1, arrows, box drawing, the Powerline glyphs and the
+/// rest a prompt draws. Every other character, control characters included,
+/// is drawn as a hollow box, as the panic screen's font draws one.
 fn cell(ch: char, bold: bool) -> &'static font::Cell {
-    let (glyphs, replacement) = if bold {
-        (&font::BOLD, &font::BOLD_REPLACEMENT)
+    let (glyphs, extra, replacement) = if bold {
+        (&font::BOLD, &font::BOLD_EXTRA, &font::BOLD_REPLACEMENT)
     } else {
-        (&font::REGULAR, &font::REGULAR_REPLACEMENT)
+        (
+            &font::REGULAR,
+            &font::REGULAR_EXTRA,
+            &font::REGULAR_REPLACEMENT,
+        )
     };
-    u32::from(ch)
-        .checked_sub(font::FIRST)
+    let code = u32::from(ch);
+    code.checked_sub(font::FIRST)
         .and_then(|index| usize::try_from(index).ok())
         .and_then(|index| glyphs.get(index))
+        .or_else(|| {
+            extra
+                .binary_search_by_key(&code, |&(at, _)| at)
+                .ok()
+                .and_then(|index| extra.get(index))
+                .map(|(_, cell)| cell)
+        })
         .unwrap_or(replacement)
 }
 
