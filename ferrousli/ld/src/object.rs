@@ -13,7 +13,8 @@
 use core::ffi::c_char;
 
 use crate::elf::{
-    DT_FINI_ARRAY, DT_FINI_ARRAYSZ, DT_FLAGS, DT_FLAGS_1, DT_GNU_HASH, DT_INIT, DT_INIT_ARRAY,
+    DT_FINI, DT_FINI_ARRAY, DT_FINI_ARRAYSZ, DT_FLAGS, DT_FLAGS_1, DT_GNU_HASH, DT_INIT,
+    DT_INIT_ARRAY,
     DT_INIT_ARRAYSZ, DT_JMPREL, DT_NEEDED, DT_NULL, DT_PLTREL, DT_PLTRELSZ, DT_REL, DT_RELA,
     DT_RELAENT, DT_RELASZ, DT_RELENT, DT_RELSZ, DT_RUNPATH, DT_SONAME, DT_STRSZ, DT_STRTAB,
     DT_SYMENT, DT_SYMTAB, Dyn, Sym,
@@ -130,6 +131,8 @@ pub struct Object {
     pub init: usize,
     /// `DT_INIT_ARRAY`.
     pub init_array: Table,
+    /// `DT_FINI`, run after this object's finaliser array.
+    pub fini: usize,
     /// `DT_FINI_ARRAY`.
     pub fini_array: Table,
     /// `PT_TLS`, if this object supplies an initial TLS image.
@@ -169,6 +172,7 @@ impl Object {
         pltrel: 0,
         init: 0,
         init_array: Table::NONE,
+        fini: 0,
         fini_array: Table::NONE,
         tls: None,
         soname: 0,
@@ -245,6 +249,7 @@ impl Object {
                 DT_INIT => object.init = value.wrapping_add(base),
                 DT_INIT_ARRAY => object.init_array.at = value.wrapping_add(base),
                 DT_INIT_ARRAYSZ => object.init_array.size = value,
+                DT_FINI => object.fini = value.wrapping_add(base),
                 DT_FINI_ARRAY => object.fini_array.at = value.wrapping_add(base),
                 DT_FINI_ARRAYSZ => object.fini_array.size = value,
                 DT_SONAME => object.soname = value as u32,

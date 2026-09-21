@@ -1,8 +1,8 @@
-/* A shared object whose destructor gives the loader's exit callback an
-   observable job.  There is no C library here: write is the Linux syscall. */
+/* A shared object's finaliser-array entry. It writes without libc, so its
+   position relative to the legacy DT_FINI hook is observable. */
 
 __attribute__((destructor)) static void finished(void) {
-	static const char message[] = "fini\n";
+	static const char message[] = "array\n";
 	__asm__ volatile("syscall"
 			 :
 			 : "a"(1L), "D"(1L), "S"(message), "d"(sizeof message - 1)

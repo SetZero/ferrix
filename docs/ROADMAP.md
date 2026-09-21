@@ -3435,9 +3435,10 @@ Three parts, in the order they can be tested:
   built by the host's own `cc`, checking a data symbol, a function pointer and
   a pointer into a library's own data all resolved. `DT_RUNPATH` is now
   covered too: a program finds a `DT_NEEDED` library in a private directory
-  with `LD_LIBRARY_PATH` absent. So is `DT_FINI_ARRAY`: the loader preserves
-  its completed scope, passes its `rtld_fini` callback through `rdx`, and
-  Ferrousli's runtime runs a dependency's destructor after `main` returns.
+  with `LD_LIBRARY_PATH` absent. So are `DT_FINI_ARRAY` and `DT_FINI`: the
+  loader preserves its completed scope, passes its `rtld_fini` callback
+  through `rdx`, and Ferrousli's runtime runs a dependency's finalisers after
+  `main` returns, array entries in reverse order before the legacy function.
   x86-64 initial-exec TLS is live too: the loader lays out every `PT_TLS`
   image below `%fs`, copies both program and dependency images before their
   constructors, and applies `R_X86_64_TPOFF64`; the host fixture proves each

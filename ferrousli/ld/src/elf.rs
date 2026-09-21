@@ -163,6 +163,8 @@ pub const DT_STRSZ: usize = 10;
 pub const DT_SYMENT: usize = 11;
 /// The initialiser to run first.
 pub const DT_INIT: usize = 12;
+/// The legacy finaliser, run after the finaliser array.
+pub const DT_FINI: usize = 13;
 /// This object's own name.
 pub const DT_SONAME: usize = 14;
 /// The `REL` relocations.

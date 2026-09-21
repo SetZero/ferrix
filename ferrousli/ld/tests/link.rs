@@ -248,9 +248,9 @@ fn initial_exec_tls_works_in_a_program_and_its_library() {
 /// The shared library's destructor writes after `main` returns. That is only
 /// observable if `crt1.o` passes `rdx` to `__libc_start_main`, the runtime
 /// registers it with `atexit`, and the loader reads and calls its
-/// `DT_FINI_ARRAY` entry.
+/// `DT_FINI_ARRAY` and then `DT_FINI` entry.
 #[test]
-fn a_runtime_runs_a_dependency_fini_array_at_exit() {
+fn a_runtime_runs_a_dependency_finalisers_at_exit() {
     let loader = loader();
     let dir = scratch().join("ld-fini");
     std::fs::create_dir_all(&dir).expect("make the scratch directory");
@@ -259,9 +259,14 @@ fn a_runtime_runs_a_dependency_fini_array_at_exit() {
     let library = dir.join("libfini.so");
     compile(&[
         "-shared",
+        "-Wl,-fini,loader_fini",
         "-o",
         library.to_str().expect("a path"),
         manifest().join("tests/c/fini.c").to_str().expect("a path"),
+        manifest()
+            .join("tests/c/fini_func.c")
+            .to_str()
+            .expect("a path"),
     ]);
 
     let program = dir.join("prog");
@@ -280,7 +285,7 @@ fn a_runtime_runs_a_dependency_fini_array_at_exit() {
 
     let output = Command::new(&program).output().expect("run the program");
     assert_eq!(output.status.code(), Some(EXPECTED));
-    assert_eq!(output.stdout, b"main\nfini\n");
+    assert_eq!(output.stdout, b"main\narray\nfini\n");
 }
 
 #[test]

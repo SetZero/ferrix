@@ -232,7 +232,7 @@ pub(crate) unsafe fn save_fini_scope(scope: Scope) {
     unsafe { (&raw mut FINI_SCOPE).write(scope) };
 }
 
-/// Run the `DT_FINI_ARRAY` entries of every loaded dependency.
+/// Run the `DT_FINI_ARRAY` and `DT_FINI` entries of every loaded dependency.
 ///
 /// The program's own array belongs to its C runtime, which calls it after
 /// this callback. Dependencies were initialised from the end of the scope to
@@ -263,6 +263,11 @@ unsafe extern "C" fn dl_fini() {
                     unsafe { core::mem::transmute::<usize, unsafe extern "C" fn()>(entry)() };
                 }
             }
+        }
+        if object.fini != 0 {
+            // SAFETY: `DT_FINI` is a relocated function in this object. ELF
+            // calls it after the same object's finaliser array.
+            unsafe { core::mem::transmute::<usize, unsafe extern "C" fn()>(object.fini)() };
         }
         index += 1;
     }
