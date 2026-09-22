@@ -156,6 +156,27 @@ generator refuses to write a document while any exist. If that fires, the
 message names the file and line. `--lenient` generates anyway, for when you
 want to see how far it gets.
 
+## The graphical tool
+
+`tools/sysml-studio` is a submodule holding **SysML Studio**, a viewer and
+editor for these files with a window around them: a browser over the model, the
+five kinds of diagram drawn from what the model already says, and — once its
+editing half lands — changes written back as minimal patches over the text, so
+comments, doc blocks and formatting survive an edit.
+
+```
+git submodule update --init tools/sysml-studio
+dotnet run --project tools/sysml-studio/src/SysmlStudio.App -- docs/sysml
+```
+
+It is .NET 10 and Avalonia, so it runs on Linux and on Windows, and it is not
+part of this tree's toolchain: no gate here builds it, and `cargo xtask check`
+never enters it. Its own gates live in its repository.
+
+The model stays the source of truth in the direction that matters: the tool
+reads these files and will write these files. Nothing it stores — diagram
+positions included — goes into them.
+
 ## Other SysML v2 tooling
 
 The files are plain SysML v2 textual notation and load together as one model in

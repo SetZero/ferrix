@@ -1,0 +1,3 @@
+[submodule "tools/sysml-studio"]
+	path = tools/sysml-studio
+	url = git@github.com:SetZero/sysml-studio.git
