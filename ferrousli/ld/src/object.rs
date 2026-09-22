@@ -167,6 +167,13 @@ pub struct Object {
     /// Where it is in the scope: its TLS module number less one. Set when it
     /// is added.
     pub index: usize,
+    /// Its program headers, at their run-time address, and how many: what
+    /// `dl_iterate_phdr` hands an unwinder and `dladdr` finds an address's
+    /// object by. Not a dynamic tag, so whoever mapped it fills them in; zero
+    /// when nobody could.
+    pub phdr: usize,
+    /// How many headers are at [`Self::phdr`].
+    pub phnum: usize,
 }
 
 /// The version a definition carries, from `DT_VERSYM` and `DT_VERDEF`.
@@ -217,6 +224,8 @@ impl Object {
         verneed: (0, 0),
         is_loader: false,
         index: 0,
+        phdr: 0,
+        phnum: 0,
     };
 
     /// Read `dynamic`'s entries into an object placed at `base`.

@@ -107,7 +107,7 @@ sizes them.
 |---|---|---|
 | ~~Stage 19: the GPU path, Path A (`docs/GPU.md` §3)~~ *done 2026-09-19* | ~~52~~ | done |
 | Stage 19: XWayland, `dwindle:precise_mouse_move`, the second-pass effects, Mesa and `zwp_linux_dmabuf` | 48 | in progress |
-| Dynamic linking: the kernel half, ferrousli's loader, glibc's names | 39 *(30 done; the exit met on x86-64)* | in progress |
+| Dynamic linking: the kernel half, ferrousli's loader, glibc's names | 39 *(33 done; the exit met on x86-64)* | in progress |
 | ~~Stage 12, btrfs write~~ *done 2026-09-21* | ~~≈ 60~~ | done |
 | Stage 13, namespaces, cgroups, seccomp | *month* ≈ 60 | not started |
 | Stage 22, Steam: the parts with a first guess (glibc under the runtime 13, bubblewrap's rest 13, sound 30, Venus 8, XWayland counted above) | 64 | not started |
@@ -3371,7 +3371,7 @@ every architecture, and by `su`, which reaches `/etc/group` only because a
 
 ---
 
-## Dynamic linking — PIE, `PT_INTERP`, a loader  ·  *39 points, 9 left*
+## Dynamic linking — PIE, `PT_INTERP`, a loader  ·  *39 points, 6 left*
 
 Placed after *Networking* without a number of its own, for the same reason:
 nothing on the path to `rustc` needs it, since Rust's `std` targets static
@@ -3482,12 +3482,36 @@ Three parts, in the order they can be tested:
   initial-exec access finds; zeroing the table fails the `gnu` build and
   skewing a descriptor fails `gnu2`.
 
-  Still missing, 6 points: AArch64's TLS descriptors; `dlfcn.h` (`dlopen`, `dlsym`, `dlclose`,
-  `dlerror`, `dladdr`), which `docs/POSIX-2024.md` lists as ferrousli's
-  dynamic-loading area and does not price; and the loader's entry, self-
-  relocation and thread pointer on AArch64 and ARMv7-A. Lazy binding is not
-  in it: everything is bound at load, as `LD_BIND_NOW` does, so there is no
-  resolver trampoline to write per architecture.
+  **`dlfcn.h`, 3 more, 2026-09-22:** `dlopen`, `dlsym`, `dlclose`,
+  `dlerror`, `dladdr` and `dl_iterate_phdr` in the loader (`ld/src/dl.rs`),
+  which `libc.so.6`'s functions of those names forward to (interface
+  revision 2) and a static program still answers alone. A handle is the
+  object's slot in the loader's fixed scope array, checked on every use; one
+  lock guards the scope and is never held across a constructor, a callback
+  or an ifunc resolver, so any of them may call back in. The scope is saved
+  before start-up's constructors now, which may already `dlsym`, and
+  `dl_fini` finishes objects in the reverse of the order they were
+  initialised, a `dlopen`ed library first. `dl_iterate_phdr` lists every
+  object with its headers, which an unwinder needs for an exception thrown
+  in a library. Not glibc's: nothing is unloaded (as musl), every object is
+  global (`RTLD_LOCAL` is `RTLD_GLOBAL`), `RTLD_NEXT` is refused, and a
+  library with its own `PT_TLS` cannot be opened yet -- its block would need
+  a dynamic thread vector -- and is refused with a message and forgotten.
+  `tests/link.rs` calls all six from a program with no C library, through a
+  stub whose `SONAME` is the loader's own name; refusing no TLS library
+  fails it with 98 and a `dlsym` that finds nothing with 92. A glibc-built
+  program on nazuna, pointed at ferrousli's `ld.so` and `libc.so.6`,
+  `dlopen`s a library, calls into it, and gets `dladdr`'s and `dlerror`'s
+  answers through `libc.so.6`.
+
+  Still missing, 3 points: AArch64's TLS descriptors, and the loader's
+  entry, self-relocation and thread pointer on AArch64 and ARMv7-A, both of
+  which wait on ferrousli's port there. Lazy binding is not in it:
+  everything is bound at load, as `LD_BIND_NOW` does, so there is no
+  resolver trampoline to write per architecture. And one gap in the gate:
+  clippy never sees the loader, whose binary needs the `loader` feature and
+  the musl target and so is skipped by `--all-targets`; built that way it
+  has about 140 warnings, mostly unreachable `pub` items.
 * **glibc's names, 13 points — 10 done on x86-64, 2026-09-21.**
   `ferrousli/tools/build-shared.sh` links `libferrousli.a` whole into a
   `libc.so.6` whose every symbol carries the version glibc gives it by

@@ -61,6 +61,23 @@ pub unsafe fn publish_offsets(scope: &Scope) {
     }
 }
 
+/// The calling thread's thread pointer: `%fs:0`, which holds itself.
+#[cfg(target_arch = "x86_64")]
+#[must_use]
+pub fn thread_pointer() -> usize {
+    let tp: usize;
+    // SAFETY: reads `%fs:0`, which the loader or the C library set to the
+    // thread pointer before any code that could call this ran.
+    unsafe {
+        core::arch::asm!(
+            "mov {}, qword ptr fs:[0]",
+            out(reg) tp,
+            options(nostack, readonly, preserves_flags),
+        );
+    }
+    tp
+}
+
 unsafe extern "C" {
     /// The function every TLS descriptor points at: defined below.
     fn __ferrousli_tlsdesc_static();

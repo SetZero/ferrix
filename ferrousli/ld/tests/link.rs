@@ -349,6 +349,78 @@ fn general_dynamic_tls_agrees_with_initial_exec_in_both_dialects() {
     }
 }
 
+/// `dlfcn.h` against the loader alone: a library opened at run time, its
+/// function and datum found by handle and globally, an address named, every
+/// object listed, a failure reported once, and a TLS library refused.
+///
+/// The program links against a stub whose `SONAME` is the loader's file
+/// name, so its `DT_NEEDED` names the loader, which the loader takes for
+/// itself; the calls then bind to the loader's own exports.
+#[test]
+fn dlopen_dlsym_dladdr_and_dl_iterate_phdr_work_through_the_loader() {
+    let loader = loader();
+    let dir = scratch().join("ld-dl");
+    std::fs::create_dir_all(&dir).expect("make the scratch directory");
+
+    let library = dir.join("libgreet.so");
+    compile(&[
+        "-shared",
+        "-o",
+        library.to_str().expect("a path"),
+        manifest().join("tests/c/greet.c").to_str().expect("a path"),
+    ]);
+    let tls_library = dir.join("libtls.so");
+    compile(&[
+        "-shared",
+        "-o",
+        tls_library.to_str().expect("a path"),
+        manifest()
+            .join("tests/c/tls_gd.c")
+            .to_str()
+            .expect("a path"),
+    ]);
+    let loader_name = loader
+        .file_name()
+        .and_then(|name| name.to_str())
+        .expect("the loader has a file name");
+    let stub = dir.join("libdlstub.so");
+    compile(&[
+        "-shared",
+        &format!("-Wl,-soname,{loader_name}"),
+        "-o",
+        stub.to_str().expect("a path"),
+        manifest()
+            .join("tests/c/dlstub.c")
+            .to_str()
+            .expect("a path"),
+    ]);
+
+    let program = dir.join("prog");
+    compile(&[
+        "-pie",
+        &format!("-DLIBRARY=\"{}\"", library.display()),
+        &format!("-DTLS_LIBRARY=\"{}\"", tls_library.display()),
+        "-o",
+        program.to_str().expect("a path"),
+        manifest()
+            .join("tests/c/dl_prog.c")
+            .to_str()
+            .expect("a path"),
+        stub.to_str().expect("a path"),
+        &format!("-Wl,--dynamic-linker={}", loader.display()),
+        "-Wl,-e,_start",
+    ]);
+
+    let status = Command::new(&program).status().expect("run the program");
+    assert_eq!(
+        status.code(),
+        Some(EXPECTED),
+        "dlfcn.h through the loader: 91 dlopen, 92 dlsym of a function, 93 of \
+         a datum, 94 dladdr, 95 dlerror, 96 dl_iterate_phdr, 97 a second \
+         dlopen, 98 the TLS refusal, 99 dlclose, and a signal a fault"
+    );
+}
+
 /// The C runtime receives and registers the loader's `rtld_fini` callback.
 ///
 /// The shared library's destructor writes after `main` returns. That is only

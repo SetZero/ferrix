@@ -38,6 +38,7 @@
 
 mod arch;
 mod auxv;
+mod dl;
 mod elf;
 mod interface;
 mod map;
@@ -165,38 +166,29 @@ unsafe fn link(stack: &auxv::Stack) -> Result<usize, report::Error> {
     // SAFETY: the only thread, before the program runs, after the layout.
     unsafe { tls::publish_offsets(&scope) };
 
-    // Relocated from the last object loaded to the first, so that a library
-    // is relocated before whatever needed it. Nothing here requires that
-    // order -- everything is bound at load, so no object calls another before
-    // all of them are done -- but an initialiser does, and this is the order
-    // the initialisers run in reverse of.
-    let mut index = scope.len();
-    while index > 0 {
-        index -= 1;
-        let object = scope
-            .get(index)
-            .ok_or(report::Error::MalformedObject("an object left the scope"))?;
-        if object.is_loader {
-            continue;
-        }
-        // SAFETY: every object in the scope is mapped.
-        unsafe { reloc::apply(object, &scope)? };
-        // Its relocations are written, so what they wrote can be made
-        // read-only. Done per object as each finishes rather than in a sweep
-        // at the end, so that nothing is ever both relocated and writable for
-        // longer than it has to be.
-        object.protect_relro(page_size);
-    }
+    // SAFETY: every object in the scope is mapped.
+    unsafe { relocate(&scope, 0, page_size)? };
 
     tls::install(&scope)?;
     // SAFETY: the only thread, before the program runs.
     unsafe { interface::publish(scope.tls_size(), scope.tls_align()) };
-    // SAFETY: every object is relocated and its initial TLS blocks are in
-    // place, so an initialiser may call anything.
-    unsafe { run_initialisers(&scope, stack) };
+    // `dlopen` runs its libraries' initialisers with these too.
+    let args = (
+        stack.argc as c_int,
+        stack.argv.cast_mut().cast::<*mut c_char>(),
+        stack.envp.cast_mut().cast::<*mut c_char>(),
+    );
+    // SAFETY: the only thread, before the program runs.
+    unsafe { dl::set_arguments(args, page_size) };
+    // Saved before any initialiser runs, since one may call `dlsym` or
+    // `dlopen`, which find the scope there.
     // SAFETY: all objects are mapped and relocated, and this is the sole path
     // that reaches the program's entry point.
     unsafe { start::save_scope(scope) };
+    // SAFETY: every object is relocated and its initial TLS blocks are in
+    // place, so an initialiser may call anything. The program's own are its
+    // C library's to ask for (`interface`), so they start at 1.
+    unsafe { run_initialisers(1, args) };
     Ok(entry)
 }
 
@@ -250,6 +242,8 @@ unsafe fn program_object(
     if relro.1 != 0 {
         object.relro = (relro.0.wrapping_add(bias), relro.1);
     }
+    object.phdr = at;
+    object.phnum = count;
     if let Some(header) = tls {
         let tls = object::Tls::new(
             (header.p_vaddr as usize).wrapping_add(bias),
@@ -266,6 +260,49 @@ unsafe fn program_object(
     Ok((object, interpreter))
 }
 
+/// Relocate every object from `first` on, from the last loaded to the first.
+///
+/// A library is relocated before whatever needed it. Nothing here requires
+/// that order -- everything is bound at load, so no object calls another
+/// before all of them are done -- but an initialiser does, and this is the
+/// order the initialisers run in reverse of.
+///
+/// # Errors
+///
+/// As [`reloc::apply`].
+///
+/// # Safety
+///
+/// Every object in `scope` must be mapped, and those from `first` on not yet
+/// relocated.
+pub(crate) unsafe fn relocate(
+    scope: &scope::Scope,
+    first: usize,
+    page_size: usize,
+) -> Result<(), report::Error> {
+    let mut index = scope.len();
+    while index > first {
+        index -= 1;
+        let object = scope
+            .get(index)
+            .ok_or(report::Error::MalformedObject("an object left the scope"))?;
+        if object.is_loader {
+            continue;
+        }
+        // SAFETY: the caller's promise.
+        unsafe { reloc::apply(object, scope)? };
+        // Its relocations are written, so what they wrote can be made
+        // read-only. Done per object as each finishes rather than in a sweep
+        // at the end, so that nothing is ever both relocated and writable for
+        // longer than it has to be.
+        object.protect_relro(page_size);
+    }
+    Ok(())
+}
+
+/// A process's `argc`, `argv` and environment, as initialisers are given them.
+pub(crate) type Arguments = (c_int, *mut *mut c_char, *mut *mut c_char);
+
 /// Run every library's initialisers, dependencies first.
 ///
 /// The order is the reverse of the order they were loaded, which is what puts
@@ -274,31 +311,36 @@ unsafe fn program_object(
 /// arbitrary.
 ///
 /// The program's own are not run here but by its C library, which is not
-/// started yet and which they may use: see [`interface`].
+/// started yet and which they may use: see [`interface`]. So `first` is 1
+/// at start-up.
 ///
 /// # Safety
 ///
-/// Every object in `scope` must be mapped and fully relocated.
-unsafe fn run_initialisers(scope: &scope::Scope, stack: &auxv::Stack) {
-    let mut index = scope.len();
-    while index > 1 {
+/// Every object in the saved scope must be mapped and fully relocated.
+pub(crate) unsafe fn run_initialisers(first: usize, args: Arguments) {
+    let count = dl::with_scope(scope::Scope::len);
+    // SAFETY: the caller's promise.
+    unsafe { run_range(first, count, args) };
+}
+
+/// Run the initialisers of the objects in `first..end`, last first. Each is
+/// copied out of the scope under [`dl`]'s lock and run without it, so that a
+/// constructor may call `dlopen` or `dlsym`.
+///
+/// # Safety
+///
+/// As [`run_initialisers`].
+pub(crate) unsafe fn run_range(first: usize, end: usize, args: Arguments) {
+    let mut index = end;
+    while index > first {
         index -= 1;
-        let Some(object) = scope.get(index) else {
+        let object = dl::with_scope(|scope| scope.get(index).copied());
+        let Some(object) = object.filter(|object| !object.is_loader) else {
             continue;
         };
-        if object.is_loader {
-            continue;
-        }
         // SAFETY: the object is mapped and relocated, and the arguments are
         // the process's own.
-        unsafe {
-            run_object_init(
-                object,
-                stack.argc as c_int,
-                stack.argv.cast_mut().cast(),
-                stack.envp.cast_mut().cast(),
-            );
-        }
+        unsafe { run_object_init(&object, args.0, args.1, args.2) };
     }
 }
 
@@ -320,6 +362,9 @@ pub(crate) unsafe fn run_object_init(
     envp: *mut *mut c_char,
 ) {
     type Init = unsafe extern "C" fn(c_int, *mut *mut c_char, *mut *mut c_char);
+    // Before its constructors run, so that `dl_fini` finishes it even if one
+    // of them exits the process.
+    dl::record_initialised(object.index);
     if object.init != 0 {
         // SAFETY: `DT_INIT` is a function in the object.
         unsafe { core::mem::transmute::<usize, Init>(object.init)(argc, argv, envp) };

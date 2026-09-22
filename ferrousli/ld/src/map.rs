@@ -73,6 +73,11 @@ pub struct Mapped {
     pub tls: Option<Tls>,
     /// Its `PT_GNU_RELRO`, as a run-time address and a length, or `(0, 0)`.
     pub relro: (usize, usize),
+    /// Its program headers at their run-time address, found inside the
+    /// loadable segment whose file bytes hold them; zero if none does.
+    pub phdr: usize,
+    /// How many there are.
+    pub phnum: usize,
 }
 
 /// Open `path` and map every loadable segment of it.
@@ -104,11 +109,11 @@ fn map_opened(path: *const c_char, fd: c_int, page_size: usize) -> Result<Mapped
         return Err(Error::CannotMap(path, read));
     }
 
-    let header = ElfHead::parse(&head).ok_or(Error::NotAnObject(path))?;
-    if header.phnum > MAX_PHNUM {
+    let elf_head = ElfHead::parse(&head).ok_or(Error::NotAnObject(path))?;
+    if elf_head.phnum > MAX_PHNUM {
         return Err(Error::NotAnObject(path));
     }
-    let headers = header
+    let headers = elf_head
         .program_headers(&head)
         .ok_or(Error::NotAnObject(path))?;
 
@@ -122,10 +127,23 @@ fn map_opened(path: *const c_char, fd: c_int, page_size: usize) -> Result<Mapped
     let mut dynamic: *const crate::elf::Dyn = core::ptr::null();
     let mut tls = None;
     let mut relro = (0, 0);
+    let mut phdr = 0;
     for header in headers {
         match header.p_type {
             PT_LOAD => {
                 place(header, bias, fd, page_size).map_err(|e| Error::CannotMap(path, e))?;
+                // The headers are where the segment holding their file bytes
+                // put them, which is where `dl_iterate_phdr` must say they
+                // are.
+                let offset = header.p_offset as usize;
+                if phdr == 0
+                    && let Some(into) = elf_head.phoff.checked_sub(offset)
+                    && into < header.p_filesz as usize
+                {
+                    phdr = (header.p_vaddr as usize)
+                        .wrapping_add(into)
+                        .wrapping_add(bias);
+                }
             }
             PT_DYNAMIC => {
                 dynamic = (header.p_vaddr as usize).wrapping_add(bias) as *const crate::elf::Dyn;
@@ -158,6 +176,8 @@ fn map_opened(path: *const c_char, fd: c_int, page_size: usize) -> Result<Mapped
         dynamic,
         tls,
         relro,
+        phdr,
+        phnum: if phdr == 0 { 0 } else { elf_head.phnum },
     })
 }
 

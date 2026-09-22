@@ -213,6 +213,76 @@ fn defines(object: &Object, symbol: &Sym, name: *const c_char) -> Option<Found> 
     })
 }
 
+/// How many dynamic symbols `object` has.
+///
+/// No dynamic tag says. The GNU hash table knows where the last hashed
+/// symbol is: the end of the chain the highest bucket starts, marked by the
+/// low bit. Every symbol not in the table -- the local and the undefined --
+/// sits below `symoffset`.
+#[must_use]
+pub fn count(object: &Object) -> usize {
+    let table = object.gnu_hash;
+    if table.is_null() {
+        return 0;
+    }
+    // SAFETY: the four header words are the first of the table.
+    let nbuckets = unsafe { table.read() };
+    // SAFETY: as above.
+    let symoffset = unsafe { table.wrapping_add(1).read() };
+    // SAFETY: as above.
+    let bloom_size = unsafe { table.wrapping_add(2).read() };
+    // The buckets follow the header and the Bloom filter.
+    let buckets = table
+        .wrapping_add(4)
+        .cast::<usize>()
+        .wrapping_add(bloom_size as usize)
+        .cast::<u32>();
+    let mut last = 0;
+    for bucket in 0..nbuckets as usize {
+        // SAFETY: `bucket` is below the table's bucket count.
+        last = last.max(unsafe { buckets.wrapping_add(bucket).read() });
+    }
+    if last < symoffset {
+        return symoffset as usize;
+    }
+    let chain = buckets.wrapping_add(nbuckets as usize);
+    loop {
+        let at = chain.wrapping_add((last - symoffset) as usize);
+        // SAFETY: the chain has a word per symbol from `symoffset`, and ends
+        // at the word whose low bit is set.
+        let word = unsafe { at.read() };
+        if word & 1 != 0 {
+            return last as usize + 1;
+        }
+        last += 1;
+    }
+}
+
+/// The defined symbol of `object` nearest at or below `address`: its name
+/// and address. What `dladdr` names an address by.
+#[must_use]
+pub fn nearest(object: &Object, address: usize) -> Option<(*const c_char, usize)> {
+    let mut best: Option<(*const c_char, usize)> = None;
+    for index in 1..count(object) {
+        let at = object.symtab.wrapping_add(index);
+        // SAFETY: `index` is below the symbol count the hash table gives.
+        let symbol = unsafe { at.read() };
+        // Undefined symbols name nothing here, and a TLS symbol's value is
+        // not an address.
+        if symbol.st_shndx == SHN_UNDEF || crate::elf::st_type(symbol.st_info) == 6 {
+            continue;
+        }
+        let at = (symbol.st_value as usize).wrapping_add(object.base);
+        if at > address || best.is_some_and(|(_, best)| best >= at) {
+            continue;
+        }
+        if let Some(name) = object.name(symbol.st_name) {
+            best = Some((name, at));
+        }
+    }
+    best
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

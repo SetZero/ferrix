@@ -12,7 +12,16 @@ fn main() {
     // `__tls_get_addr` is the loader's in glibc too (`ld-linux`'s, at
     // `GLIBC_2.3`), and a library built with `-fPIC` that reads a TLS variable
     // imports it.
-    for symbol in ["__ferrousli_loader", "__tls_get_addr"] {
+    for symbol in [
+        "__ferrousli_loader",
+        "__tls_get_addr",
+        "dlopen",
+        "dlsym",
+        "dlclose",
+        "dlerror",
+        "dladdr",
+        "dl_iterate_phdr",
+    ] {
         println!("cargo::rustc-link-arg-bins=-Wl,--export-dynamic-symbol={symbol}");
     }
     // The loader finds symbols through `DT_GNU_HASH` alone (`src/sym.rs`), so

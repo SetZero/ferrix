@@ -44,12 +44,32 @@ pub(crate) fn scope() -> &'static Scope {
     unsafe { &*(&raw const SCOPE) }
 }
 
+/// The completed scope, to write: `dlopen`'s, with [`crate::dl`]'s lock held.
+pub(crate) fn scope_mut() -> *mut Scope {
+    &raw mut SCOPE
+}
+
 /// The loader as an object in its own scope: its dynamic table, at the bias
 /// it was loaded with.
 pub(crate) fn own_object() -> Option<crate::object::Object> {
+    let base = load_bias();
     // SAFETY: `dynamic_here` is this object's own `_DYNAMIC`, at its run-time
-    // address, and `load_bias` how far it moved.
-    unsafe { crate::object::Object::read(load_bias(), dynamic_here()) }
+    // address, and `base` how far it moved.
+    let mut object = unsafe { crate::object::Object::read(base, dynamic_here()) }?;
+    // The loader is linked at zero with its ELF header at the start of its
+    // first segment, so the header is at the bias, and the program headers
+    // at `e_phoff` past it: where `dl_iterate_phdr` reports them.
+    #[cfg(target_pointer_width = "64")]
+    let (phoff_at, phnum_at) = (32, 56);
+    #[cfg(target_pointer_width = "32")]
+    let (phoff_at, phnum_at) = (28, 44);
+    // SAFETY: the ELF header is mapped, readable, at the bias.
+    let phoff = unsafe { (base.wrapping_add(phoff_at) as *const usize).read_unaligned() };
+    // SAFETY: as above.
+    let phnum = unsafe { (base.wrapping_add(phnum_at) as *const u16).read_unaligned() };
+    object.phdr = base.wrapping_add(phoff);
+    object.phnum = usize::from(phnum);
+    Some(object)
 }
 
 /// The run-time address of this object's `_DYNAMIC`, from one PC-relative
@@ -248,25 +268,23 @@ pub(crate) unsafe fn save_scope(scope: Scope) {
     unsafe { (&raw mut SCOPE).write(scope) };
 }
 
-/// Run the `DT_FINI_ARRAY` and `DT_FINI` entries of every loaded object.
+/// Run the `DT_FINI_ARRAY` and `DT_FINI` entries of every initialised
+/// object, in the reverse of the order they were initialised
+/// ([`crate::dl::initialised`]).
 ///
-/// The program's own are this callback's only when the loader initialised
-/// the program too, at `libferrousli.so`'s request (see
-/// [`crate::interface`]); a C library linked into the program runs them
-/// itself. The program was initialised last, and dependencies from the end of
-/// the scope to the beginning, so walking from the beginning to the end
-/// reverses that order. Within one array, ELF requires last entry first.
+/// That puts a `dlopen`ed library, initialised last, first; then the program,
+/// when the loader initialised it at `libferrousli.so`'s request (see
+/// [`crate::interface`]) -- a C library linked into the program runs its
+/// own; then the libraries loaded at start-up, which were initialised
+/// dependencies first. Within one array, ELF requires last entry first.
+///
+/// Each object is copied out under [`crate::dl`]'s lock and finished without
+/// it, since a destructor may call `dlsym` as readily as a constructor.
 #[unsafe(no_mangle)]
 unsafe extern "C" fn dl_fini() {
-    let scope = scope();
-    let mut index = if crate::interface::program_initialised() {
-        0
-    } else {
-        1
-    };
-    while index < scope.len() {
-        let Some(object) = scope.get(index).filter(|object| !object.is_loader) else {
-            index += 1;
+    for index in crate::dl::initialised().rev() {
+        let object = crate::dl::with_scope(|scope| scope.get(index).copied());
+        let Some(object) = object.filter(|object| !object.is_loader) else {
             continue;
         };
         let table = object.fini_array;
@@ -289,6 +307,5 @@ unsafe extern "C" fn dl_fini() {
             // calls it after the same object's finaliser array.
             unsafe { core::mem::transmute::<usize, unsafe extern "C" fn()>(object.fini)() };
         }
-        index += 1;
     }
 }

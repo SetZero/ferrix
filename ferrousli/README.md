@@ -225,7 +225,7 @@ x86-64, static programs linked at a fixed address.
 | `regex.h` | `regcomp`, `regexec`, `regerror`, `regfree`: basic and extended expressions with musl's grammar, `REG_ICASE`, `REG_NEWLINE`, `REG_NOSUB`, `REG_NOTBOL`, `REG_NOTEOL`, back-references, and POSIX's leftmost-longest match with its submatches, found by simulating the whole automaton at once rather than backtracking; glibc's `regex_t` and `regmatch_t` layouts and `REG_STARTEND`, and GNU's `re_compile_pattern`, `re_search` and `re_syntax_options` | multibyte characters and collating elements, which wait for a locale other than C |
 | `errno.h` | `__errno_location`, per thread | |
 | `sys/auxv.h` | `getauxval` | |
-| C++ runtime | `__cxa_atexit`, and `__cxa_finalize` for a static program; `dl_iterate_phdr` and `dladdr` over the program's own headers, which libunwind finds unwind tables by. LLVM's libc++, libc++abi and libunwind build against it (`tools/ports/libcxx`) | `__cxa_thread_atexit_impl`, which libc++abi does without |
+| C++ runtime | `__cxa_atexit`, and `__cxa_finalize` for a static program; `dl_iterate_phdr` and `dladdr` over the program's own headers, which libunwind finds unwind tables by, and over every loaded object when `ld-ferrousli` loaded the library, with `dlopen`, `dlsym`, `dlclose` and `dlerror` too. LLVM's libc++, libc++abi and libunwind build against it (`tools/ports/libcxx`) | `__cxa_thread_atexit_impl`, which libc++abi does without |
 
 ## Next
 
@@ -237,5 +237,5 @@ x86-64, static programs linked at a fixed address.
    at ≈ 34 points on 2026-09-21, when the customer made it part of the
    dynamic-linking stage (`docs/ROADMAP.md`).
 5. **Dynamic linking**: a loader, then glibc's symbol versions. Both run on
-   x86-64 (below); `dlfcn.h`, general-dynamic TLS and the other two
+   x86-64 (below), with general-dynamic TLS and `dlfcn.h`; the other two
    architectures are left.

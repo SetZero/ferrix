@@ -15,7 +15,7 @@
 //! assembly per architecture, reading the address from the GOT the loader
 //! filled in.
 
-use core::ffi::{c_char, c_int};
+use core::ffi::{c_char, c_int, c_void};
 
 /// The revision of the interface this library reads. A loader reporting an
 /// older one is treated as absent rather than read past its end.
@@ -36,6 +36,28 @@ pub struct Interface {
     /// Runs the program's own `DT_INIT` and `DT_INIT_ARRAY` with its
     /// arguments, and makes the loader's exit callback finish it too.
     pub run_program_init: unsafe extern "C" fn(c_int, *mut *mut c_char, *mut *mut c_char),
+    /// Revision 2: `dlopen`.
+    pub dlopen: unsafe extern "C" fn(*const c_char, c_int) -> *mut c_void,
+    /// Revision 2: `dlsym`.
+    pub dlsym: unsafe extern "C" fn(*mut c_void, *const c_char) -> *mut c_void,
+    /// Revision 2: `dlclose`.
+    pub dlclose: extern "C" fn(*mut c_void) -> c_int,
+    /// Revision 2: `dlerror`.
+    pub dlerror: extern "C" fn() -> *mut c_char,
+    /// Revision 2: `dladdr`, with `Dl_info` as `link.rs` declares it.
+    pub dladdr: unsafe extern "C" fn(*const c_void, *mut crate::link::DlInfo) -> c_int,
+    /// Revision 2: `dl_iterate_phdr`.
+    pub dl_iterate_phdr: unsafe extern "C" fn(Option<crate::link::Callback>, *mut c_void) -> c_int,
+}
+
+/// The revision that added the `dlfcn.h` calls.
+const DLFCN: usize = 2;
+
+/// The loader's interface if it has the `dlfcn.h` calls: `None` in a static
+/// program, and with a loader older than revision 2.
+#[must_use]
+pub fn dlfcn() -> Option<&'static Interface> {
+    interface().filter(|interface| interface.version >= DLFCN)
 }
 
 /// The loader's interface, or `None` in a statically linked program.

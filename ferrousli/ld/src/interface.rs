@@ -24,13 +24,20 @@
 //! from the linker's bounds; `libferrousli.so` asks here, through
 //! [`Interface::run_program_init`], and from then on [`crate::start`]'s
 //! `dl_fini` finishes the program as well as its libraries.
+//!
+//! # And `dlfcn.h`
+//!
+//! Revision 2 carries `dlopen` and the rest ([`crate::dl`]): as
+//! `libc.so.6`, the C library's own functions of those names forward here.
 
-use core::ffi::{c_char, c_int};
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::ffi::{c_char, c_int, c_void};
+
+use crate::dl;
 
 /// The revision of [`Interface`] this loader fills in. A library built
-/// against a later one reads `version` before anything past it.
-const VERSION: usize = 1;
+/// against a later one reads `version` before anything past it. Revision 2
+/// added the `dlfcn.h` calls.
+const VERSION: usize = 2;
 
 /// What the loader exports to the C library.
 #[repr(C)]
@@ -49,6 +56,21 @@ pub struct Interface {
     /// Run the program's own `DT_INIT` and `DT_INIT_ARRAY`, with its
     /// arguments, and have the exit callback finish it too.
     pub run_program_init: unsafe extern "C" fn(c_int, *mut *mut c_char, *mut *mut c_char),
+    /// `dlopen`.
+    pub dlopen: unsafe extern "C" fn(*const c_char, c_int) -> *mut c_void,
+    /// `dlsym`.
+    pub dlsym: unsafe extern "C" fn(*mut c_void, *const c_char) -> *mut c_void,
+    /// `dlclose`.
+    pub dlclose: extern "C" fn(*mut c_void) -> c_int,
+    /// `dlerror`.
+    pub dlerror: extern "C" fn() -> *mut c_char,
+    /// `dladdr`.
+    pub dladdr: unsafe extern "C" fn(*const c_void, *mut dl::DlInfo) -> c_int,
+    /// `dl_iterate_phdr`.
+    pub dl_iterate_phdr: unsafe extern "C" fn(
+        Option<unsafe extern "C" fn(*mut dl::DlPhdrInfo, usize, *mut c_void) -> c_int>,
+        *mut c_void,
+    ) -> c_int,
 }
 
 /// The interface, filled in once the scope is complete.
@@ -63,16 +85,13 @@ pub static mut __ferrousli_loader: Interface = Interface {
     tls_align: 1,
     init_tls,
     run_program_init,
+    dlopen: dl::dlopen,
+    dlsym: dl::dlsym,
+    dlclose: dl::dlclose,
+    dlerror: dl::dlerror,
+    dladdr: dl::dladdr,
+    dl_iterate_phdr: dl::dl_iterate_phdr,
 };
-
-/// Whether the library asked for the program's initialisers, and so whether
-/// the loader finishes the program at exit.
-static PROGRAM_INITIALISED: AtomicBool = AtomicBool::new(false);
-
-/// Whether `dl_fini` should run the program's own finalisers.
-pub fn program_initialised() -> bool {
-    PROGRAM_INITIALISED.load(Ordering::Relaxed)
-}
 
 /// Publish the static TLS layout the scope settled on.
 ///
@@ -80,28 +99,28 @@ pub fn program_initialised() -> bool {
 ///
 /// Called once, before the program runs, by the only thread.
 pub unsafe fn publish(tls_size: usize, tls_align: usize) {
+    let interface = &raw mut __ferrousli_loader;
     // SAFETY: the caller promises nothing else is reading it yet.
-    unsafe {
-        let interface = &raw mut __ferrousli_loader;
-        (*interface).tls_size = tls_size;
-        (*interface).tls_align = tls_align;
-    }
+    unsafe { (*interface).tls_size = tls_size };
+    // SAFETY: as above.
+    unsafe { (*interface).tls_align = tls_align };
 }
 
 /// [`Interface::init_tls`].
 unsafe extern "C" fn init_tls(tp: *mut u8) {
     // SAFETY: the caller hands over a fresh thread pointer with the reserved
-    // space below it, and the scope is complete before the program runs.
-    unsafe { crate::tls::copy_images(crate::start::scope(), tp) };
+    // space below it, and the lock keeps `dlopen` from writing the scope
+    // while it is read.
+    dl::with_scope(|scope| unsafe { crate::tls::copy_images(scope, tp) });
 }
 
 /// [`Interface::run_program_init`].
 unsafe extern "C" fn run_program_init(argc: c_int, argv: *mut *mut c_char, envp: *mut *mut c_char) {
-    PROGRAM_INITIALISED.store(true, Ordering::Relaxed);
-    let Some(program) = crate::start::scope().get(0) else {
+    let Some(program) = dl::with_scope(|scope| scope.get(0).copied()) else {
         return;
     };
     // SAFETY: the program is mapped and relocated, and its C library has
-    // started, which is what its constructors may rely on.
-    unsafe { crate::run_object_init(program, argc, argv, envp) };
+    // started, which is what its constructors may rely on. `dl_fini` finishes
+    // it from here on, since this records it as initialised.
+    unsafe { crate::run_object_init(&program, argc, argv, envp) };
 }

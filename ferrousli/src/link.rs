@@ -1,4 +1,5 @@
-//! `link.h`'s `dl_iterate_phdr` and the whole of `dlfcn.h`, for a static
+//! `link.h`'s `dl_iterate_phdr` and the whole of `dlfcn.h`: the loader's, when
+//! `ld-ferrousli` loaded this library as `libc.so.6` (`loader.rs`), and for a static
 //! program, which is the only object loaded.
 //!
 //! An unwinder finds the unwind tables for an address by walking the loaded
@@ -126,6 +127,10 @@ pub type Callback = unsafe extern "C" fn(*mut DlPhdrInfo, usize, *mut c_void) ->
 /// `callback` must be safe to call with a `DlPhdrInfo` it may read and `data`.
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub unsafe extern "C" fn dl_iterate_phdr(callback: Option<Callback>, data: *mut c_void) -> c_int {
+    if let Some(loader) = crate::loader::dlfcn() {
+        // SAFETY: the caller's contract is the loader's.
+        return unsafe { (loader.dl_iterate_phdr)(callback, data) };
+    }
     let (Some(callback), Some((phdr, phnum, bias))) = (callback, program_headers()) else {
         return 0;
     };
@@ -154,6 +159,10 @@ pub unsafe extern "C" fn dl_iterate_phdr(callback: Option<Callback>, data: *mut 
 /// `info` must be valid to write a `Dl_info` to.
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub unsafe extern "C" fn dladdr(address: *const c_void, info: *mut DlInfo) -> c_int {
+    if let Some(loader) = crate::loader::dlfcn() {
+        // SAFETY: the caller's contract is the loader's.
+        return unsafe { (loader.dladdr)(address, info) };
+    }
     let Some((phdr, phnum, bias)) = program_headers() else {
         return 0;
     };
@@ -190,7 +199,11 @@ pub unsafe extern "C" fn dladdr(address: *const c_void, info: *mut DlInfo) -> c_
 ///
 /// `path` must be null or a NUL-terminated string.
 #[cfg_attr(not(test), unsafe(no_mangle))]
-pub unsafe extern "C" fn dlopen(_path: *const c_char, _flags: c_int) -> *mut c_void {
+pub unsafe extern "C" fn dlopen(path: *const c_char, flags: c_int) -> *mut c_void {
+    if let Some(loader) = crate::loader::dlfcn() {
+        // SAFETY: the caller's contract is the loader's.
+        return unsafe { (loader.dlopen)(path, flags) };
+    }
     fail();
     null_mut()
 }
@@ -205,22 +218,34 @@ pub unsafe extern "C" fn dlopen(_path: *const c_char, _flags: c_int) -> *mut c_v
 ///
 /// `name` must be a NUL-terminated string.
 #[cfg_attr(not(test), unsafe(no_mangle))]
-pub unsafe extern "C" fn dlsym(_handle: *mut c_void, _name: *const c_char) -> *mut c_void {
+pub unsafe extern "C" fn dlsym(handle: *mut c_void, name: *const c_char) -> *mut c_void {
+    if let Some(loader) = crate::loader::dlfcn() {
+        // SAFETY: the caller's contract is the loader's.
+        return unsafe { (loader.dlsym)(handle, name) };
+    }
     fail();
     null_mut()
 }
 
-/// Closes a handle from [`dlopen`], which never gave one out. Returns -1.
+/// Closes a handle from [`dlopen`], which in a static program never gave one
+/// out, and returns -1. Loaded by `ld-ferrousli`, the loader's.
 #[cfg_attr(not(test), unsafe(no_mangle))]
-pub extern "C" fn dlclose(_handle: *mut c_void) -> c_int {
+pub extern "C" fn dlclose(handle: *mut c_void) -> c_int {
+    if let Some(loader) = crate::loader::dlfcn() {
+        return (loader.dlclose)(handle);
+    }
     fail();
     -1
 }
 
 /// The message for the last `dlfcn.h` call that failed, or null if none has
-/// since this was last called. Every call here fails the same way.
+/// since this was last called. In a static program every call fails the same
+/// way; loaded by `ld-ferrousli`, the loader keeps the message.
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn dlerror() -> *mut c_char {
+    if let Some(loader) = crate::loader::dlfcn() {
+        return (loader.dlerror)();
+    }
     if FAILED.swap(false, Ordering::Relaxed) {
         MESSAGE.as_ptr().cast_mut()
     } else {
