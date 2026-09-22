@@ -55,10 +55,11 @@ again and reads it all back, and `cargo xtask test-btrfs` then has host
 `btrfs check --check-data-csum` judge that same image, clean on all three
 architectures. `fsync` writes a log tree the next mount replays, and
 `cargo xtask test-powerfail` kills QEMU in the middle of writing, replays at
-the next boot and has `btrfs check` judge the volume before and after: 208
-seeds across the three architectures, 191 of them leaving a log to replay,
-every one clean. What the stage still owes, outside its points, is writeback
-of pages written through `MAP_SHARED`.
+the next boot and has `btrfs check` judge the volume before and after: 249
+seeds across the three architectures, 226 of them leaving a log to replay,
+every one clean. `cargo xtask run` now carries a persistent btrfs disk,
+mounted at `/data`. What the stage still owes, outside its points, is
+writeback of pages written through `MAP_SHARED`.
 Networking is done: sockets, a net core and a ring-3 virtio-net driver, with
 `curl` fetching over HTTPS and `git` cloning inside the guest. Stages 17 and
 18 are met, and the compositor runs: `cargo xtask test-compositor` boots it
@@ -3648,10 +3649,13 @@ one fails, since it would have tested the commit and never the replay.
 
 The run for the exit: 200 seeds on x86-64 under KVM, 184 of them leaving a
 log that the next mount replayed, and `btrfs check` clean before and after
-every one. Under TCG, where a boot costs several times as much, the gate row
-runs 4 seeds on each architecture — `AArch64` and ARMv7-A at `--smp 2` both
-clean, 4 and 3 of them replaying a log — and longer runs of 25 on each are
-under way. The negative control: with replay no longer
+every one. Under TCG, where a boot costs several times as much: 25 seeds on
+ARMv7-A at `--smp 2`, 22 of them replaying a log, and 24 on `AArch64`, 20 of
+them replaying one — all clean. The 25th `AArch64` seed's cut and first check
+were clean too, and its replay boot then stopped in stage 7's self-check,
+FX-0701, before stage 12 ran; `test-powerfail` now retries either boot of a
+seed once when it dies before stage 12 touches the disk. The gate row runs 4
+seeds on each architecture. The negative control: with replay no longer
 dropping the committed extents past a log's last one, the third seed fails
 with `btrfs check`'s `root 5 inode 257 errors 400, nbytes wrong`.
 
@@ -3663,6 +3667,15 @@ flush plus a random subset of what came after; two hundred scenarios cut at
 twenty-five points each are opened, replayed, checked for consistency and
 for any completed promise rolled back. `scripts/btrfs-check-writer.sh` runs
 it at that size, and `cargo test` a small one.
+
+**Since the exit — a disk that persists.** `cargo xtask run` and
+`run-compositor` attach `build/data.img` as a fourth disk, made from the blank
+fixture the first time and kept after that, and the kernel
+(`kernel/src/fs/data_disk.rs`) mounts it writable at `/data` and commits it
+every 30 seconds, as Linux's btrfs does by default, and once more when it
+powers the machine off itself. `--reset-data` starts it over. The test boots
+never attach it. The root filesystem is still the initramfs; putting `/` on
+a disk is an init's work, which stage 15 owes.
 
 Owed beside the stage, and not in its points: writeback of pages written
 through `MAP_SHARED`, which needs a dirty bit the page cache does not keep

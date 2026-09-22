@@ -252,6 +252,7 @@ OPTIONS:
     --ferrousli                          check: also ferrousli's fmt, clippy and tests, debug and release
     --zinc                               check: also zinc's fmt, clippy, tests and pty completion test
     --miri                               check: add CI's Miri steps (needs nightly and miri)
+    --reset-data                         run, run-compositor: start the persistent disk at /data over, empty
     --reset                              test-boot: ferrix.onexit=reset in CMDLINE.TXT, and require a reset;
                                          build, run: put that CMDLINE.TXT in the image
     --to <MOUNT>                         flash: the card's mounted boot partition

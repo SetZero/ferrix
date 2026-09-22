@@ -36,6 +36,10 @@ use crate::{Error, Result, btrfs_disk, qemu};
 /// What the churn prints once it is writing.
 const CHURNING: &str = "btrfs-pf churning on vdc";
 
+/// What the replay prints just before it mounts: the disk is untouched
+/// until this line, so a boot that died before it may be tried again.
+const REPLAYING: &str = "btrfs-pf replaying vdc";
+
 /// What the replay prints once it has mounted, judged and unmounted.
 const REPLAYED: &str = "btrfs-pf vdc replayed";
 
@@ -78,22 +82,18 @@ pub(crate) fn test_powerfail(args: &Args, build: impl Fn(Arch) -> Result<Built>)
             println!("  {arch}: power failure {seed} of {}", args.seeds);
             // Every seed starts from a fresh volume.
             btrfs_disk::keep_blank(false);
-            let mut churned = churn(arch, &built, args, seed);
-            if churned.is_err() && !churn_started(arch) {
-                // The boot failed before the churn began: in a check of
-                // another stage, which says nothing about this one. Said,
-                // kept, and tried once more; a second time is a failure.
-                let kept = keep_log(arch, seed)?;
-                println!(
-                    "  {arch}: seed {seed}: the boot failed before the churn started, in a check \
-                     that is not stage 12's; its log is kept at {}, and the seed runs once more",
-                    kept.display()
-                );
-                churned = churn(arch, &built, args, seed);
-            }
-            let recovered = churned.and_then(|()| recover(arch, &built, args, &checker));
+            let replayed = retried(arch, seed, "churn", CHURNING, || {
+                churn(arch, &built, args, seed)
+            })
+            .and_then(|()| checker.run(&btrfs_disk::blank_path(), arch))
+            .and_then(|()| {
+                btrfs_disk::keep_blank(true);
+                retried(arch, seed, "replay", REPLAYING, || {
+                    replay(arch, &built, args, &checker)
+                })
+            });
             btrfs_disk::keep_blank(false);
-            if recovered? {
+            if replayed? {
                 logged += 1;
             }
         }
@@ -143,13 +143,10 @@ fn churn(arch: Arch, built: &Built, args: &Args, seed: u64) -> Result<()> {
     Ok(())
 }
 
-/// The rest of a seed: check what the cut left, boot again to replay it,
-/// and check again. Answers whether the cut left a log for the replay.
-fn recover(arch: Arch, built: &Built, args: &Args, checker: &Checker) -> Result<bool> {
+/// The second boot of a seed, on the disk the cut left: replay, then check
+/// again. Answers whether the cut left a log for the replay.
+fn replay(arch: Arch, built: &Built, args: &Args, checker: &Checker) -> Result<bool> {
     let disk = btrfs_disk::blank_path();
-    checker.run(&disk, arch)?;
-
-    btrfs_disk::keep_blank(true);
     let image = boot_image(arch, built, "ferrix.btrfs=replay")?;
     let lines = qemu::watch_then(arch, &image, &built.kernel, args, REPLAYED, |_| Ok(()))?;
     if lines.iter().any(|line| line.contains(SKIPPED)) {
@@ -161,10 +158,30 @@ fn recover(arch: Arch, built: &Built, args: &Args, checker: &Checker) -> Result<
     Ok(lines.iter().any(|line| line.contains(REPLAYED_LOG)))
 }
 
-/// Whether the last boot's serial log shows the churn started. Asked only
-/// straight after the churn's boot, whose log it still is.
-fn churn_started(arch: Arch) -> bool {
-    std::fs::read_to_string(serial_log(arch)).is_ok_and(|log| log.contains(CHURNING))
+/// Run one boot of a seed, and run it once more if it failed before it
+/// printed `reached` — in a check of another stage, before this one touched
+/// the disk, which says nothing about stage 12. Said, and the log kept; a
+/// second failure is a failure. FX-0701 is why.
+fn retried<T>(
+    arch: Arch,
+    seed: u64,
+    what: &str,
+    reached: &str,
+    mut boot: impl FnMut() -> Result<T>,
+) -> Result<T> {
+    let first = boot();
+    // Read straight after the boot, whose log it still is.
+    let started = std::fs::read_to_string(serial_log(arch)).is_ok_and(|log| log.contains(reached));
+    if first.is_ok() || started {
+        return first;
+    }
+    let kept = keep_log(arch, seed, what)?;
+    println!(
+        "  {arch}: seed {seed}: the {what} boot failed before stage 12 began, in a check \
+         that is not stage 12's; its log is kept at {}, and it runs once more",
+        kept.display()
+    );
+    boot()
 }
 
 /// The serial log every watched boot writes.
@@ -173,8 +190,8 @@ fn serial_log(arch: Arch) -> PathBuf {
 }
 
 /// Copy the last boot's serial log where the next boot will not overwrite it.
-fn keep_log(arch: Arch, seed: u64) -> Result<PathBuf> {
-    let kept = crate::paths::build_dir(arch).join(format!("powerfail-seed{seed}-first.log"));
+fn keep_log(arch: Arch, seed: u64, what: &str) -> Result<PathBuf> {
+    let kept = crate::paths::build_dir(arch).join(format!("powerfail-seed{seed}-{what}.log"));
     let _ = std::fs::copy(serial_log(arch), &kept)?;
     Ok(kept)
 }

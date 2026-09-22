@@ -109,6 +109,7 @@ grow with the system, so the percentage rises as the OS is written.
 cargo xtask build     --arch all --release    # bootable images in build/
 cargo xtask run       --arch x86_64           # boot it, serial on your terminal
 cargo xtask run       --arch x86_64 --net     # ...with a network, 10.0.2.15 behind a NAT
+cargo xtask run       --arch x86_64 --reset-data  # ...with /data emptied first
 cargo xtask test-boot --arch all              # boot it and assert it came up
 cargo xtask test-boot --accel auto            # ...on the real MMU, where it can
 cargo xtask check                             # every gate CI runs
@@ -125,6 +126,19 @@ Under `whpx` the guest gets one processor unless `--smp` says otherwise:
 QEMU 11.1's WHPX emulation of device registers faults ring-3 drivers with
 more than one, and `/sbin/blk` dies at boot. `--smp N` still works there,
 with a warning.
+
+`run` and `run-compositor` carry a persistent disk: `build/data.img`, a
+128 MiB btrfs volume made empty from `mkfs.btrfs`'s blank fixture the first
+time and kept after that, which the kernel mounts writable at `/data`. What a
+program writes there is on the image once it calls `sync` or `fsync`, and
+everything else within 30 seconds, when the kernel commits it the way Linux's
+btrfs does by default; closing the window can lose that last half-minute, and
+nothing more, because a commit is all or nothing (stage 12's power-fail test
+is the evidence). The host can read the image too — `btrfs check
+build/data.img`, or a loop mount on Linux. `--reset-data` throws it away and
+starts over from the blank volume. The test boots never attach it, so what
+is on it cannot change what a test sees. The root filesystem itself is still
+the initramfs, in memory.
 
 `--net` gives the guest a virtio-net card whose other end is `xtask`'s own
 gateway on a loopback UDP socket: the guest is `10.0.2.15`, `10.0.2.2` is the

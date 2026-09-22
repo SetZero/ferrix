@@ -1076,6 +1076,9 @@ fn check_btrfs_write() {
          as they were written",
         report.files, report.bytes, report.directories,
     );
+    // After the check, which has vdc to itself: the persistent disk, if an
+    // interactive boot brought one.
+    fs::data_disk::mount();
 }
 
 /// Stage 10: find every PCI function, size its BARs and walk its

@@ -100,6 +100,34 @@ pub(crate) fn ensure_blank() -> Result<PathBuf> {
     Ok(path)
 }
 
+/// The persistent image's name under `build/`: `/data` in an interactive
+/// boot.
+const DATA_FILE_NAME: &str = "data.img";
+
+/// The persistent disk: `build/data.img`, made from the blank fixture if it
+/// is not there or `reset` asks, and otherwise left exactly as the last boot
+/// left it. Answers its path and whether it was made new.
+///
+/// # Errors
+///
+/// The file not writable.
+pub(crate) fn ensure_data(reset: bool) -> Result<(PathBuf, bool)> {
+    let directory = paths::workspace_root().join("build");
+    let path = directory.join(DATA_FILE_NAME);
+    if !reset && path.is_file() {
+        return Ok((path, false));
+    }
+    std::fs::create_dir_all(&directory)?;
+    let partial = directory.join(format!("{DATA_FILE_NAME}.{}.partial", std::process::id()));
+    write_packed(&partial, BLANK).map_err(|error| {
+        let _ = std::fs::remove_file(&partial);
+        Error::new(format!("writing {}: {error}", partial.display()))
+    })?;
+    std::fs::rename(&partial, &path)
+        .map_err(|error| Error::new(format!("renaming to {}: {error}", path.display())))?;
+    Ok((path, true))
+}
+
 /// Whether the next boots attach the writable image as the last one left it.
 static KEEP_BLANK: AtomicBool = AtomicBool::new(false);
 

@@ -1122,6 +1122,7 @@ fn qemu_command(
     attach_clipboard(&mut command, arch, args);
     attach_test_disk(&mut command, arch)?;
     attach_btrfs_disk(&mut command, arch)?;
+    attach_data_disk(&mut command, arch, args)?;
     let network = attach_network(&mut command, arch, args)?;
 
     match &firmware {
@@ -1454,6 +1455,40 @@ fn attach_btrfs_disk(command: &mut Command, arch: Arch) -> Result<()> {
     };
     let _ = command.args(["-device", device]);
     attach_btrfs_write_disk(command, arch)
+}
+
+/// Attach the persistent disk as the fifth virtio device, so it is `vdd`
+/// and the kernel mounts it at `/data` — for the commands someone sits at,
+/// `run` and `run-compositor`, and never for a test, whose boot must not
+/// depend on what an earlier one left.
+fn attach_data_disk(command: &mut Command, arch: Arch, args: &Args) -> Result<()> {
+    if !matches!(args.command.as_deref(), Some("run" | "run-compositor")) {
+        return Ok(());
+    }
+    let (disk, made) = btrfs_disk::ensure_data(args.reset_data)?;
+    println!(
+        "  {arch}: persistent btrfs disk {} at /data, {}",
+        display(&disk),
+        if made {
+            "made empty from the blank fixture"
+        } else {
+            "as the last boot left it (--reset-data starts it over)"
+        }
+    );
+    let _ = command.args([
+        "-drive",
+        &format!(
+            "file={},if=none,format=raw,id=btrfsdata,cache=writeback",
+            display(&disk)
+        ),
+    ]);
+    let device = if arch == Arch::Armv7a {
+        "virtio-blk-pci,drive=btrfsdata,disable-legacy=on"
+    } else {
+        "virtio-blk-pci,drive=btrfsdata,disable-legacy=on,iommu_platform=on"
+    };
+    let _ = command.args(["-device", device]);
+    Ok(())
 }
 
 /// Attach a fresh blank btrfs volume as a fourth virtio device, so it is

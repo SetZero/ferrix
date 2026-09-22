@@ -327,6 +327,9 @@ pub(crate) fn replay() -> Result<Report, &'static str> {
         report.skipped = Some("no third disk is served");
         return Ok(report);
     }
+    // The disk is untouched until here, which the host reads as: a boot that
+    // died before this line may be tried again.
+    println!("  btrfs-pf replaying vdc");
     report.logged = log_root()? != 0;
     mount()?;
     let ns = fs::namespace();

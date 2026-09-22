@@ -32,6 +32,7 @@ pub(crate) mod btrfs_powerfail;
 pub(crate) mod btrfs_write_check;
 pub(crate) mod check;
 pub(crate) mod console;
+pub(crate) mod data_disk;
 pub(crate) mod devfs;
 pub(crate) mod epoll;
 pub(crate) mod epoll_check;

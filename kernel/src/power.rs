@@ -56,6 +56,11 @@ pub(crate) fn init(view: &BootView<'_>) {
 
 /// End boot the way [`init`] was told to.
 pub(crate) fn finish() -> ! {
+    // The persistent disk's last half-minute, which its committer has not
+    // reached yet. A failure is said and does not stop the power-off.
+    if crate::fs::data_disk::sync().is_err() {
+        println!("  power    /data could not be committed before the power-off");
+    }
     if RESET_ON_EXIT.load(Ordering::Relaxed) {
         println!("  power    resetting, as {OPTION}={RESET} asks");
         arch::reset()
