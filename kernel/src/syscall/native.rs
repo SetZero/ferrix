@@ -1393,7 +1393,8 @@ fn space_status(why: SpaceError) -> Errno {
         | SpaceError::BadRange
         | SpaceError::NotMapped(_)
         | SpaceError::Backing(_)
-        | SpaceError::PastEnd(_) => status::INVALID_ARGS,
+        | SpaceError::PastEnd(_)
+        | SpaceError::Unreadable(_) => status::INVALID_ARGS,
     }
 }
 

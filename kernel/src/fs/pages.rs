@@ -14,6 +14,13 @@
 //! the pages still absent kept, and a fill that fails or claims more than it
 //! was asked for keeping nothing.
 //!
+//! A fault through a mapping of the file fills the same way. It reaches the
+//! VMO rather than this store, so the VMO carries the source too, as its
+//! `Filler`, and the address space asks it for the page before it takes its
+//! own lock; a page it did not fill would be committed as zeros. Until that
+//! was so, a program run from btrfs mapped its libraries' unread pages as
+//! zeros, and glibc's linker failed on the first one it read.
+//!
 //! # Sized for the largest file, paid for by the page
 //!
 //! Each file's VMO is created at [`MAX_FILE_SIZE`], which costs nothing: the
@@ -43,7 +50,7 @@ use ferrix_vfs::{Errno, Result};
 
 use crate::mm;
 use crate::sync::SpinLock;
-use crate::user::vmo::{Vmo, VmoError};
+use crate::user::vmo::{Filler, Vmo, VmoError};
 
 /// The largest a tmpfs file may grow: one tebibyte.
 ///
@@ -98,8 +105,16 @@ impl Storage for VmoStorage {
 pub(crate) struct VmoPages {
     vmo: Arc<Vmo>,
     /// Where a page the VMO does not hold comes from; `None` for tmpfs, whose
-    /// missing pages are zeros.
-    source: Option<Arc<dyn PageSource>>,
+    /// missing pages are zeros. The VMO holds it too, as its [`Filler`], so
+    /// that a fault through a mapping fills a page the way a read does.
+    fill: Option<Arc<Fill>>,
+}
+
+/// How a file on a disk fills its object: shared by the store, for reads and
+/// partial writes, and by the object, for faults.
+#[derive(Debug)]
+struct Fill {
+    source: Arc<dyn PageSource>,
     /// Bytes from here on are not the source's: a source knows the file as it
     /// was, not as it has been cut. Starts past every offset;
     /// [`Pages::discard_from`] lowers it and nothing raises it, so a file cut
@@ -146,34 +161,71 @@ fn release_all(frames: impl IntoIterator<Item = Frame>) {
 
 impl VmoPages {
     fn new(source: Option<Arc<dyn PageSource>>) -> VmoPages {
+        let fill = source.map(|source| {
+            Arc::new(Fill {
+                source,
+                sourced_below: SpinLock::new(u64::MAX),
+            })
+        });
+        let filler = fill.clone().map(|fill| fill as Arc<dyn Filler>);
         VmoPages {
-            vmo: Vmo::new_anonymous(MAX_FILE_SIZE / PAGE_SIZE),
-            source,
-            sourced_below: SpinLock::new(u64::MAX),
+            vmo: Vmo::new_filled(MAX_FILE_SIZE / PAGE_SIZE, filler),
+            fill,
         }
-    }
-
-    /// Whether page `index`, if the VMO does not hold it, is the source's to
-    /// fill.
-    fn sourced(&self, index: u64) -> bool {
-        self.source.is_some()
-            && index
-                .checked_mul(PAGE_SIZE)
-                .is_some_and(|start| start < *self.sourced_below.lock())
     }
 
     /// Page `index` is absent and its source's to fill.
     fn wants_fill(&self, index: u64) -> bool {
-        self.vmo.page(index).is_none() && self.sourced(index)
+        self.fill
+            .as_ref()
+            .is_some_and(|fill| fill.wants_fill(&self.vmo, index))
+    }
+
+    /// Fill the run of absent pages from `index`, no further than `last`.
+    ///
+    /// # Errors
+    ///
+    /// As [`Fill::fill_run`]; `EIO` when there is no source.
+    fn fill_from(&self, index: u64, last: u64) -> Result<()> {
+        let fill = self.fill.as_deref().ok_or(Errno::EIO)?;
+        fill.fill_run(&self.vmo, index, fill.run(&self.vmo, index, last))
+    }
+}
+
+impl Filler for Fill {
+    /// Read ahead as far as a read asks at most, [`MAX_FILL_RUN`] pages: a
+    /// program's libraries are faulted in a page at a time, and a disk read
+    /// per page is what would make that slow.
+    fn fill(&self, vmo: &Vmo, index: u64) -> Result<()> {
+        if !self.wants_fill(vmo, index) {
+            return Ok(());
+        }
+        let last = index.saturating_add(MAX_FILL_RUN as u64 - 1);
+        self.fill_run(vmo, index, self.run(vmo, index, last))
+    }
+}
+
+impl Fill {
+    /// Whether page `index`, if the VMO does not hold it, is the source's to
+    /// fill.
+    fn sourced(&self, index: u64) -> bool {
+        index
+            .checked_mul(PAGE_SIZE)
+            .is_some_and(|start| start < *self.sourced_below.lock())
+    }
+
+    /// Page `index` is absent from `vmo` and the source's to fill.
+    fn wants_fill(&self, vmo: &Vmo, index: u64) -> bool {
+        vmo.page(index).is_none() && self.sourced(index)
     }
 
     /// How many pages to ask for from `first`, which wants filling: the run of
     /// such pages no further than `last`, at most [`MAX_FILL_RUN`].
-    fn run(&self, first: u64, last: u64) -> usize {
+    fn run(&self, vmo: &Vmo, first: u64, last: u64) -> usize {
         let mut count = 1;
         while count < MAX_FILL_RUN {
             match first.checked_add(count as u64) {
-                Some(index) if index <= last && self.wants_fill(index) => count += 1,
+                Some(index) if index <= last && self.wants_fill(vmo, index) => count += 1,
                 _ => break,
             }
         }
@@ -191,8 +243,8 @@ impl VmoPages {
     ///
     /// `ENOMEM` for frames, `EIO` for a source that lied, and the source's own
     /// error, which for a page that does not verify is `EIO`.
-    fn fill(&self, first: u64, count: usize) -> Result<()> {
-        let source = self.source.as_deref().ok_or(Errno::EIO)?;
+    fn fill_run(&self, vmo: &Vmo, first: u64, count: usize) -> Result<()> {
+        let source = self.source.as_ref();
         let mut frames: Vec<Frame> = Vec::new();
         frames.try_reserve_exact(count).map_err(|_| Errno::ENOMEM)?;
         for _ in 0..count {
@@ -249,7 +301,7 @@ impl VmoPages {
                     core::ptr::write_bytes(byte_of(frame, valid) as *mut u8, 0, PAGE_BYTES - valid);
                 }
             }
-            if !(keep && self.vmo.insert_absent(index, frame)) {
+            if !(keep && vmo.insert_absent(index, frame)) {
                 let _ = mm::release_frame(frame);
             }
         }
@@ -265,7 +317,7 @@ impl Pages for VmoPages {
             let (index, within, take) = piece(offset, done, len)?;
             if self.wants_fill(index) {
                 let (last, _, _) = piece(offset, len - 1, len)?;
-                self.fill(index, self.run(index, last))?;
+                self.fill_from(index, last)?;
             }
             // Under the object's lock: a page a truncation took away since
             // the fill reads as the zeros the file now has there.
@@ -286,7 +338,7 @@ impl Pages for VmoPages {
             // A page this write covers only partly keeps the file's other
             // bytes, so it comes from the source first.
             if take < PAGE_BYTES && self.wants_fill(index) {
-                self.fill(index, 1)?;
+                self.fill_from(index, index)?;
             }
             let bytes = data.get(done..done + take).ok_or(Errno::EIO)?;
             let frame = self.vmo.commit(index).map_err(refused)?;
@@ -312,8 +364,8 @@ impl Pages for VmoPages {
         // The bound first, under the lock a fill is kept under, then the
         // pages: a fill that kept a page past the cut before this is taken
         // away below, and one after it keeps nothing past the cut.
-        {
-            let mut bound = self.sourced_below.lock();
+        if let Some(fill) = &self.fill {
+            let mut bound = fill.sourced_below.lock();
             *bound = (*bound).min(offset);
         }
         let _ = self.vmo.decommit_from(offset.div_ceil(PAGE_SIZE));

@@ -61,6 +61,12 @@ pub(crate) struct TrapFrame {
 }
 
 impl TrapFrame {
+    /// Where the trapping instruction is, for a report: the saved `pc`,
+    /// which for an abort is already the faulting instruction's.
+    pub(crate) const fn instruction_pointer(&self) -> u64 {
+        self.pc as u64
+    }
+
     /// True if the exception came from user mode.
     pub(crate) const fn came_from_user(&self) -> bool {
         self.cpsr & 0x1F == MODE_USR

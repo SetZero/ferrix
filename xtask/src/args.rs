@@ -58,8 +58,18 @@ pub(crate) struct Args {
     pub(crate) smp_given: bool,
     /// `--memory`, guest RAM in MiB.
     pub(crate) memory: u32,
+    /// Whether `--memory` was given: `test-rustc` needs more than the
+    /// default, and a size asked for is kept.
+    pub(crate) memory_given: bool,
     /// `--timeout`, seconds `test-boot` waits for the kernel to report.
     pub(crate) timeout: u64,
+    /// Whether `--timeout` was given, for the same reason as `memory_given`.
+    pub(crate) timeout_given: bool,
+    /// A btrfs image attached as the fourth disk, `vdd`, which the kernel
+    /// mounts at `/data`, under QEMU's `snapshot=on` so a run never changes
+    /// it. No flag sets it: it is how `test-rustc` gives the guest its
+    /// compiler.
+    pub(crate) data_image: Option<std::path::PathBuf>,
     /// `--seeds`, how many power failures `test-powerfail` makes.
     pub(crate) seeds: u64,
     /// `--accel`, which QEMU accelerator to boot under. `None` means `tcg`,
@@ -296,12 +306,7 @@ impl Args {
                 "--input" => args.input = true,
                 "--screens" => args.screens = number(&mut items, "--screens")?,
                 "--arch" => args.arch = Some(value(&mut items, "--arch")?),
-                "--smp" => {
-                    args.smp = number(&mut items, "--smp")?;
-                    args.smp_given = true;
-                }
-                "--memory" => args.memory = number(&mut items, "--memory")?,
-                "--timeout" => args.timeout = number(&mut items, "--timeout")?,
+                "--smp" | "--memory" | "--timeout" => args.machine(&item, &mut items)?,
                 "--seeds" => args.seeds = number(&mut items, "--seeds")?,
                 "--accel" => args.accel = Some(value(&mut items, "--accel")?),
                 "--to" => args.to = Some(value(&mut items, "--to")?),
@@ -350,6 +355,18 @@ impl Args {
         }
 
         Ok(args)
+    }
+
+    /// `--smp`, `--memory` and `--timeout`: the machine's size, each
+    /// remembered as asked for, so a command with defaults of its own keeps a
+    /// size somebody gave.
+    fn machine(&mut self, key: &str, items: &mut impl Iterator<Item = String>) -> Result<()> {
+        match key {
+            "--smp" => (self.smp, self.smp_given) = (number(items, key)?, true),
+            "--memory" => (self.memory, self.memory_given) = (number(items, key)?, true),
+            _ => (self.timeout, self.timeout_given) = (number(items, key)?, true),
+        }
+        Ok(())
     }
 
     /// The architectures this invocation applies to.

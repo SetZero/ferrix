@@ -186,7 +186,10 @@ fn user_fault_as(frame: &arch::TrapFrame, trap: &Trap, (signal, code, address): 
         ),
         Some(Posted::Fatal) => {
             let pid = crate::syscall::process::current().map_or(0, |process| process.pid());
-            println!("  signal   pid {pid} ended by signal {signal} at {address:#x}: {trap:?}");
+            println!(
+                "  signal   pid {pid} ended by signal {signal} at {address:#x}, pc {:#x}: {trap:?}",
+                frame.instruction_pointer()
+            );
         }
         Some(Posted::Discarded | Posted::Pending) => {}
     }
@@ -275,7 +278,10 @@ fn handle_page_fault(frame: &mut arch::TrapFrame, fault: PageFault) {
         const BUS_ADRERR: i32 = 2;
         let trap = Trap::PageFault(fault);
         match resolved {
-            Err(Some(crate::user::space::SpaceError::PastEnd(address))) => user_fault_as(
+            Err(Some(
+                crate::user::space::SpaceError::PastEnd(address)
+                | crate::user::space::SpaceError::Unreadable(address),
+            )) => user_fault_as(
                 frame,
                 &trap,
                 (ferrix_linux_abi::types::SIGBUS, BUS_ADRERR, address),

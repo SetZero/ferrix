@@ -405,6 +405,64 @@ jobs:
           if-no-files-found: ignore
 
   # ----------------------------------------------------------------
+  # Stage 16's exit: `rustc hello.rs && ./hello` on Ferrix. The compiler is
+  # the rust-lang.org release on Debian's glibc, from a btrfs volume
+  # scripts/fetch-rustc-sysroot.sh makes out of pinned downloads; the
+  # downloads are cached by the script's hash, which pins them. Under KVM,
+  # which the hosted runners have once /dev/kvm is opened to the user: LLVM
+  # emulated instruction by instruction takes minutes where this takes
+  # seconds.
+  # ----------------------------------------------------------------
+  rustc:
+    name: rustc on Ferrix (x86_64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.97.1
+        with:
+          targets: x86_64-unknown-none, x86_64-unknown-uefi, x86_64-unknown-linux-musl
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: build-x86_64
+
+      - name: Install QEMU, firmware and btrfs-progs
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            qemu-system-x86 ovmf btrfs-progs
+
+      - name: Open /dev/kvm
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Cache the sysroot's downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/ferrix/rustc/pool
+          key: rustc-sysroot-${{ hashFiles('scripts/fetch-rustc-sysroot.sh') }}
+
+      - name: Make the rustc volume
+        run: scripts/fetch-rustc-sysroot.sh
+
+      - name: Compile and run hello.rs on Ferrix
+        run: cargo xtask test-rustc --release --accel kvm --timeout 900
+
+      - name: Keep the serial log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: serial-rustc
+          path: build/x86_64/serial.log
+          if-no-files-found: ignore
+
+  # ----------------------------------------------------------------
   # Dependency hygiene. The budget here is near zero on purpose: this is
   # code that runs in ring 0 with nothing above it to contain a mistake.
   # ----------------------------------------------------------------

@@ -1123,6 +1123,7 @@ fn qemu_command(
     attach_test_disk(&mut command, arch)?;
     attach_btrfs_disk(&mut command, arch)?;
     attach_root_disk(&mut command, arch, args)?;
+    attach_data_image(&mut command, arch, args);
     let network = attach_network(&mut command, arch, args)?;
 
     match &firmware {
@@ -1455,6 +1456,33 @@ fn attach_btrfs_disk(command: &mut Command, arch: Arch) -> Result<()> {
     };
     let _ = command.args(["-device", device]);
     attach_btrfs_write_disk(command, arch)
+}
+
+/// Attach a test's own btrfs volume, `test-rustc`'s compiler. It carries no
+/// root label, so the kernel mounts it at `/data`. Under `snapshot=on`: what
+/// the guest writes goes to a file QEMU throws away, so the next run reads
+/// what this one did.
+fn attach_data_image(command: &mut Command, arch: Arch, args: &Args) {
+    let Some(volume) = &args.data_image else {
+        return;
+    };
+    println!(
+        "  {arch}: btrfs volume {} at /data, snapshot",
+        display(volume)
+    );
+    let _ = command.args([
+        "-drive",
+        &format!(
+            "file={},if=none,format=raw,id=btrfsdata,snapshot=on",
+            display(volume)
+        ),
+    ]);
+    let device = if arch == Arch::Armv7a {
+        "virtio-blk-pci,drive=btrfsdata,disable-legacy=on"
+    } else {
+        "virtio-blk-pci,drive=btrfsdata,disable-legacy=on,iommu_platform=on"
+    };
+    let _ = command.args(["-device", device]);
 }
 
 /// Attach the root disk as the fifth virtio device, so it is `vdd` and the

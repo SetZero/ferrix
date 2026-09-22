@@ -412,7 +412,7 @@ fn check_filesystems(view: &BootView<'_>) {
     }
     println!(
         "  tmpfs    {} pages written through a VMO and read back, {} filled from a page \
-         source in runs and cut, {} frames leaked",
+         source in runs, by reads and by faults, and cut, {} frames leaked",
         report.pages, report.filled, report.leaked,
     );
 

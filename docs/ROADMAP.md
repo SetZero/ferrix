@@ -60,6 +60,9 @@ seeds across the three architectures, 226 of them leaving a log to replay,
 every one clean. `cargo xtask run` now boots with `/` on a persistent btrfs
 volume. What the stage still owes, outside its points, is writeback of pages
 written through `MAP_SHARED`.
+Stage 16's exit, the goal, is met: `cargo xtask test-rustc` compiles
+`hello.rs` on Ferrix with the rust-lang.org `rustc`, linked through `cc`
+and `rust-lld`, from a btrfs volume, and runs what it made.
 Networking is done: sockets, a net core and a ring-3 virtio-net driver, with
 `curl` fetching over HTTPS and `git` cloning inside the guest. Stages 17 and
 18 are met, and the compositor runs: `cargo xtask test-compositor` boots it
@@ -112,7 +115,7 @@ session sizes them.
 | Stage 22, Steam: the 32-bit x86 ABI and what the runtime and Proton find missing | unsized, ≈ 100 as a guess | 2026-09-24 to -25 |
 | Stage 14, real-time domains | *month* ≈ 40 | 2026-09-25 to -26 |
 | Stage 15, a real userland | *week* ≈ 20, of which job control is spent; most of the rest landed as zinc and uutils, and what is left is an init | 2026-09-26 |
-| Stage 16, `rustc` | *the goal* ≈ 40 | 2026-09-26 to -27 |
+| ~~Stage 16, `rustc`~~ *exit met 2026-09-22* | ~~*the goal* ≈ 40~~ 8 spent | landed 2026-09-22 |
 | Stage 20, self-hosting | *longer*, unsized | after 16 |
 | Stage 21, bare metal and a GPU of Ferrix's own | over 100, unsized | when the customer wants bare metal |
 
@@ -3749,11 +3752,12 @@ which stage 15 owes: `pivot_root` itself, so the kernel's tmpfs can be
 unmounted from under the switched root. The root disk is found by its btrfs
 label, `ferrix-root`, as Linux's `root=LABEL=` finds one, and any other btrfs
 disk from `vdd` on is mounted at `/data` inside whichever `/` processes have:
-`test-rustc` gives the guest its compiler that way. One gap is not this
-stage's: until the page cache fills a mapped btrfs file's pages from the
-disk, a page nothing has read shows zeros, so a dynamically linked program
-does not yet run from a btrfs root. The static busybox runs from it: the
-boots that tried this ran `cat`, `ls` and `awk` from `/bin` on the volume.
+`test-rustc` gives the guest its compiler that way. A page of a mapped
+btrfs file that nothing had read used to show zeros, which kept dynamically
+linked programs from running off a btrfs volume. Stage 16 fixed that: a
+fault now fills the page from the disk, as a read does. The static busybox
+ran from the root before the fix, too: the boots that tried this ran `cat`,
+`ls` and `awk` from `/bin` on the volume.
 
 Owed beside the stage, and not in its points: writeback of pages written
 through `MAP_SHARED`, which needs a dirty bit the page cache does not keep
@@ -3842,12 +3846,80 @@ for x86-64 alone (`docs/UUTILS.md` D3).
 
 ---
 
-## Stage 16 — `rustc`  ·  *the goal*
+## Stage 16 — `rustc`  ·  *the goal*  ·  *≈ 40 guessed, 8 spent*
 
 The remaining syscall surface, the memory scale, the process spawn path for
 `rust-lld`, and a sysroot on btrfs. Then run it.
 
 **Exit:** `rustc hello.rs && ./hello` on Ferrix, in CI.
+
+**Met on 2026-09-22,** on nazuna under KVM, with `cargo xtask test-rustc`;
+the CI job `rustc` runs the same command on every push, and its first run on
+GitHub was still to come when this was written. The compiler is not one
+built here. It is the rust-lang.org release of 1.97.1: a glibc
+position-independent executable whose LLVM is a 190 MiB shared library of
+its own, run by Debian 13's `ld-linux`. It links as it does on any Linux
+machine, through `cc` (Debian's gcc 14 driver), which runs `collect2`, which
+runs the `ld.lld` rustc points it at, which runs `rust-lld`. So one compile
+is five programs nobody here wrote, four `execve`s deep, over some 350 MiB of
+shared libraries mapped from btrfs, and the program they make is a sixth.
+From the shell's first line to `hello` is under two seconds:
+
+```
+rustc 1.97.1 (8bab26f4f 2026-07-14)
+...
+rustc-gate: hello from rustc on Ferrix
+  init     the shell exited with 16
+```
+
+Most of what the stage names had already arrived under other names. The
+system calls and the threads came with stages 7, 17 and 18. The spawn path
+came with stage 8 and dynamic linking, and the glibc loader was proven on
+Debian's busybox. The sysroot on btrfs is stage 12's write path and the
+`/data` mount. Three things were new:
+
+* **A sysroot.** `scripts/fetch-rustc-sysroot.sh` downloads the compiler and
+  `rust-std` from rust-lang.org, and `libc6`, `libc6-dev`, `libgcc-s1`,
+  `libgcc-14-dev`, gcc 14's driver and `zlib1g` from Debian. Every download
+  is pinned by the SHA-256 its own index gave. The script lays them out as
+  a Debian tree with the toolchain under `rust/` and writes a 1.7 GiB btrfs
+  image of it with `mkfs.btrfs --rootdir`. It takes no `cc1` and no
+  binutils, since nothing is compiled from C and the linker is rust-lld.
+  The same tree, in an otherwise empty bwrap sandbox on the host, compiles
+  and runs the same program, which is what separates a broken sysroot from
+  a broken kernel.
+* **The gate.** `cargo xtask test-rustc` attaches the image under QEMU's
+  `snapshot=on`, so a run never changes it. The image has no `ferrix-root`
+  label, so the kernel mounts it at `/data`. The initramfs carries five
+  links for the absolute paths glibc and gcc name:
+  `/lib64`, `/lib/x86_64-linux-gnu`, `/usr/lib/x86_64-linux-gnu`,
+  `/usr/lib/gcc` and `/usr/libexec`. zinc runs `rustc -vV`, then
+  `rustc hello.rs`, then `./hello`, each step with an exit status of its
+  own, so a failure says which one it was. The guest gets 4 GiB unless
+  `--memory` says otherwise, and the gate is x86-64 only, because the volume
+  holds x86-64 binaries.
+* **Faults that fill from the disk.** The first boot died in glibc's linker:
+  `cc`, `rust-lld` and `rustc` all stopped at the same instruction, a read of
+  `l_info[DT_STRTAB]` that was null. The page holding `libc.so.6`'s dynamic
+  section had been mapped as zeros. A btrfs file's pages are a page cache
+  over a source, filled when a `read` reaches them. A fault through a
+  mapping reaches the VMO directly and committed any absent page as zeros,
+  which is right for tmpfs and wrong for every file on a disk. It was
+  latent since stage 12 began offering btrfs files for mapping, and
+  `libs/vfs` had written the rule down: no store over a source may be
+  mapped until a fault can fill it. The VMO of such a file now carries its
+  source as a `Filler`. The address space asks it for the page, with a
+  32-page read-ahead run, before taking its own lock, because the fill waits
+  for the disk. A page the disk cannot give is `SIGBUS`, as on Linux. The
+  boot check `check_a_mapping_faults_in_its_source` maps a store over a
+  source shared and privately, reads a page nothing had read, and writes
+  another privately. Its negative control, the fill taken out, stops the
+  boot with *a shared mapping of a store over a page source read something
+  other than the source's byte*.
+
+`AArch64` is the same script with arm64 packages and is not needed for the
+exit. Neither is compiling anything larger than `hello.rs`: Cargo, a crate
+graph and a build of Ferrix itself are stage 20's.
 
 ---
 

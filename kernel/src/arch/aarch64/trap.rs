@@ -53,6 +53,11 @@ pub(crate) struct TrapFrame {
 }
 
 impl TrapFrame {
+    /// Where the trapping instruction is, for a report.
+    pub(crate) const fn instruction_pointer(&self) -> u64 {
+        self.elr
+    }
+
     /// True if the exception came from EL0.
     ///
     /// Read from the vector entry rather than from `SPSR`: the four "lower EL"

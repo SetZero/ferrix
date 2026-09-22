@@ -18,6 +18,7 @@
 use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
+use core::any::Any;
 use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 use ferrix_bootinfo::PAGE_SIZE;
@@ -31,6 +32,7 @@ use ferrix_linux_abi::types::{
 use ferrix_vfs::pipe::PIPEFS_MAGIC;
 use ferrix_vfs::tmpfs::{PageSource, Pages, Storage, TMPFS_MAGIC};
 use ferrix_vfs::{Errno, FileType, Namespace, NewNode, OpenFlags, RenameMode};
+use ferrix_vma::VmaFlags;
 
 use crate::fs::pages::VmoStorage;
 use crate::fs::{self, Report as Built};
@@ -39,6 +41,8 @@ use crate::syscall::check as syscall_check;
 use crate::syscall::memory::{self, MmapRequest, OffsetUnit};
 use crate::syscall::process::{self, Process};
 use crate::syscall::{fd, file, fsctl, pipe, uaccess};
+use crate::user::space::{Access, AddressSpace, FileMapping, FilePlace};
+use crate::user::vmo::Vmo;
 
 /// The marker `xtask/src/initramfs.rs` writes, byte for byte.
 const MARKER: &[u8] = b"unpacked by the kernel from a cpio archive the loader handed it\n";
@@ -266,7 +270,128 @@ fn check_tmpfs_stores_pages() -> Result<u64, &'static str> {
 fn check_page_stores() -> Result<(u64, u64), &'static str> {
     let pages = check_tmpfs_stores_pages()?;
     let filled = check_a_store_fills_from_its_source()?;
-    Ok((pages, filled))
+    let faulted = check_a_mapping_faults_in_its_source()?;
+    Ok((pages, filled + faulted))
+}
+
+/// The byte at `address` in `space`, faulted in for reading as a program's
+/// load would be.
+fn byte_through(space: &AddressSpace, address: u64) -> Result<u8, &'static str> {
+    space
+        .with_page(address, Access::READ, |at| {
+            // SAFETY: `with_page` passes the direct-map address of `address`,
+            // translated under the space's lock, which it holds while this
+            // runs, so the frame stays mapped there for the read.
+            unsafe { core::ptr::read(at as *const u8) }
+        })
+        .map_err(|_| "a fault through a mapping of a store over a page source failed")
+}
+
+/// A mapping of a store over a page source faults its pages in from the
+/// source, as a read would, and never as zeros: the store's object is what
+/// the mapping maps, and a page no read has reached is absent from it.
+///
+/// A shared mapping's read shows the source's byte and fills a run of 32
+/// pages at once, as a read does. A private mapping's first write to a page
+/// nothing has read copies the source's page, not zeros, and leaves the
+/// store's page as the source has it. That is what a program run from btrfs
+/// does to its libraries: glibc's linker reads their dynamic sections through
+/// a private mapping, and before the fault filled pages it read zeros there.
+/// Returns the pages the faults filled.
+fn check_a_mapping_faults_in_its_source() -> Result<u64, &'static str> {
+    const PAGES: u64 = 64;
+    let source = Arc::new(CheckSource {
+        calls: AtomicUsize::new(0),
+        most: AtomicUsize::new(0),
+        fail_at: AtomicU64::new(u64::MAX),
+        lie: AtomicBool::new(false),
+    });
+    let store = VmoStorage
+        .allocate_with(Arc::clone(&source) as Arc<dyn PageSource>)
+        .map_err(|_| "a store over a page source was refused")?;
+    store.resize(PAGES * PAGE_SIZE);
+    let object = store
+        .object()
+        .and_then(|object| object.downcast::<Vmo>().ok())
+        .ok_or("a store over a page source has no object to map")?;
+    let space = AddressSpace::new().map_err(|_| "no address space for the mapping check")?;
+    let mapping = || FileMapping {
+        file: Arc::new(()) as Arc<dyn Any + Send + Sync>,
+        may_write: false,
+    };
+    let len = PAGES * PAGE_SIZE;
+    let shared = space
+        .map_file(
+            FilePlace::Anywhere(None),
+            len,
+            VmaFlags {
+                shared: true,
+                ..VmaFlags::READ
+            },
+            Arc::clone(&object),
+            0,
+            mapping(),
+        )
+        .map_err(|_| "could not map a store over a page source shared")?;
+    let private = space
+        .map_file(
+            FilePlace::Anywhere(None),
+            len,
+            VmaFlags::READ_WRITE,
+            Arc::clone(&object),
+            0,
+            mapping(),
+        )
+        .map_err(|_| "could not map a store over a page source privately")?;
+    let outcome = fault_in_from_source(&space, shared, private, &object, &source);
+    let _ = space.unmap(shared, len);
+    let _ = space.unmap(private, len);
+    let filled = object.committed() as u64;
+    outcome.map(|()| filled)
+}
+
+/// The body of [`check_a_mapping_faults_in_its_source`], with its two
+/// mappings of `object` at `shared` and `private`.
+fn fault_in_from_source(
+    space: &AddressSpace,
+    shared: u64,
+    private: u64,
+    object: &Vmo,
+    source: &CheckSource,
+) -> Result<(), &'static str> {
+    let calls = || source.calls.load(Ordering::Relaxed);
+    if byte_through(space, shared + 5 * PAGE_SIZE + 7)? != source_byte(5, 7) {
+        return Err(
+            "a shared mapping of a store over a page source read something other than the source's byte",
+        );
+    }
+    if calls() != 1 || object.committed() != 32 {
+        return Err("a fault through a mapping did not fill a run of 32 pages from the source");
+    }
+
+    // Page 50: no read and no fault has reached it. The private write copies
+    // it, so it has to be there to copy.
+    let at = private + 50 * PAGE_SIZE + 9;
+    space
+        .with_page(at, Access::WRITE, |byte| {
+            // SAFETY: as in `byte_through`; the write fault made the page this
+            // mapping's own copy, which the direct map may write.
+            unsafe { core::ptr::write(byte as *mut u8, 0xA5) }
+        })
+        .map_err(|_| "a write fault through a private mapping of a store failed")?;
+    if byte_through(space, at)? != 0xA5 || byte_through(space, at + 1)? != source_byte(50, 10) {
+        return Err(
+            "a private write to a page nothing had read copied zeros, not the source's page",
+        );
+    }
+    let mut kept = [0_u8; 2];
+    object
+        .read_page(50, 9, &mut kept)
+        .map_err(|_| "the store's own page was not there to read")?;
+    if kept != [source_byte(50, 9), source_byte(50, 10)] {
+        return Err("a private write reached the store's page");
+    }
+    Ok(())
 }
 
 /// A byte of what [`CheckSource`] fills page `index` with, at `at` within it.

@@ -80,6 +80,11 @@ pub(crate) struct TrapFrame {
 }
 
 impl TrapFrame {
+    /// Where the trapping instruction is, for a report.
+    pub(crate) const fn instruction_pointer(&self) -> u64 {
+        self.rip
+    }
+
     /// True if the trap came from user mode, judged by the saved code segment's
     /// requested privilege level.
     pub(crate) const fn came_from_user(&self) -> bool {

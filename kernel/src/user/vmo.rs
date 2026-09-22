@@ -111,6 +111,25 @@ pub(crate) struct HeldPage {
     pub(crate) index: u64,
 }
 
+/// Where a file's pages come from before anything has read them: the page
+/// cache of a filesystem on a disk.
+///
+/// A `read` asks the filesystem's store, which fills the object from the
+/// file; a fault through a mapping reaches the object directly and would find
+/// the page absent and commit zeros in its place. So an object made over a
+/// source carries this, and a fault asks it first -- with no lock held, since
+/// a fill may wait for the disk.
+pub(crate) trait Filler: Send + Sync + fmt::Debug {
+    /// Fill page `index` of `vmo`, and perhaps a run after it, if the file
+    /// has them and `vmo` lacks them. A page present already is left alone.
+    ///
+    /// # Errors
+    ///
+    /// The filesystem's: `EIO` for a page it could not read, `ENOMEM` for
+    /// frames.
+    fn fill(&self, vmo: &Vmo, index: u64) -> Result<(), ferrix_vfs::Errno>;
+}
+
 /// A pageable memory object.
 ///
 /// Reference-counted, because the whole point is that more than one mapping
@@ -140,6 +159,9 @@ pub(crate) struct Vmo {
     /// under a space's lock before a mapping's id enters its tables, lowered
     /// under it when the id leaves.
     shared_may_write: AtomicU64,
+    /// What fills an absent page of a file on a disk before a fault commits
+    /// it; `None` for every other object, whose absent pages are zeros.
+    filler: Option<Arc<dyn Filler>>,
 }
 
 /// How an address space maps an object.
@@ -236,13 +258,33 @@ pub(crate) struct Own<'a> {
 impl Vmo {
     /// An anonymous object of `pages` pages, with nothing committed.
     pub(crate) fn new_anonymous(pages: u64) -> Arc<Vmo> {
+        Vmo::new_filled(pages, None)
+    }
+
+    /// An object of `pages` pages holding a file's contents, whose absent
+    /// pages `filler` fills before a fault commits them.
+    pub(crate) fn new_filled(pages: u64, filler: Option<Arc<dyn Filler>>) -> Arc<Vmo> {
         Arc::new(Vmo {
             pages: SpinLock::new(Pages::default()),
             len: AtomicU64::new(pages),
             bound: AtomicU64::new(u64::MAX),
             mappers: SpinLock::new(Vec::new()),
             shared_may_write: AtomicU64::new(0),
+            filler,
         })
+    }
+
+    /// Fill page `index` from the file before a fault commits it, if this
+    /// object is a file's on a disk. Must be called with no lock held.
+    ///
+    /// # Errors
+    ///
+    /// As [`Filler::fill`].
+    pub(crate) fn fill_for_fault(&self, index: u64) -> Result<(), ferrix_vfs::Errno> {
+        match &self.filler {
+            Some(filler) => filler.fill(self, index),
+            None => Ok(()),
+        }
     }
 
     /// The object's size in pages.
@@ -390,6 +432,8 @@ impl Vmo {
             bound: AtomicU64::new(self.bound.load(Ordering::SeqCst)),
             mappers: SpinLock::new(Vec::new()),
             shared_may_write: AtomicU64::new(0),
+            // A page neither side has is still the file's.
+            filler: self.filler.clone(),
         }))
     }
 

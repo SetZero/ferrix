@@ -127,6 +127,10 @@ pub(crate) enum SpaceError {
     /// The address is in a file mapping, on a page wholly past the end of the
     /// file: the process gets a `SIGBUS`, as on Linux.
     PastEnd(u64),
+    /// The address is in a mapping of a file on a disk, and the page could
+    /// not be read from it: a `SIGBUS` too, as Linux gives for a mapped page
+    /// whose read fails.
+    Unreadable(u64),
 }
 
 impl fmt::Display for SpaceError {
@@ -139,6 +143,9 @@ impl fmt::Display for SpaceError {
             SpaceError::Refused(at) => write!(f, "the access at {at:#x} is not permitted"),
             SpaceError::Backing(why) => write!(f, "the backing object refused: {why}"),
             SpaceError::PastEnd(at) => write!(f, "{at:#x} is past the end of the mapped file"),
+            SpaceError::Unreadable(at) => {
+                write!(f, "the mapped file's page at {at:#x} is unreadable")
+            }
         }
     }
 }
@@ -607,6 +614,13 @@ impl AddressSpace {
     /// permit the access, which is the other one.
     pub(crate) fn fault(&self, address: u64, access: Access) -> Result<(), SpaceError> {
         fault_requested();
+        self.fill_file_page(address)?;
+        self.resolve(address, access)
+    }
+
+    /// [`AddressSpace::fault`] once a file's page is in its object: find the
+    /// region, ask its object for the page, install it.
+    fn resolve(&self, address: u64, access: Access) -> Result<(), SpaceError> {
         let inner = self.inner.lock();
 
         let region = *inner
@@ -774,6 +788,45 @@ impl AddressSpace {
         Ok(())
     }
 
+    /// Before a fault on a file mapping: have the file's object hold the
+    /// page, if the file is on a disk and nothing has read the page yet.
+    ///
+    /// Everything below commits an absent page of a file's object as zeros,
+    /// which is right for tmpfs, whose object is the file, and wrong for a
+    /// page cache, whose absent page is on the disk -- a shared mapping would
+    /// show zeros, and a private one's first write would copy them over the
+    /// file's data. The fill waits for the disk, so it runs here, between
+    /// this space's lock and the one the fault takes: the region is looked up
+    /// under the lock and the page filled after it is let go. A region
+    /// unmapped in between costs a fill nobody maps, which the page cache
+    /// keeps; a truncation in between is the fault's to refuse, as ever.
+    ///
+    /// # Errors
+    ///
+    /// [`SpaceError::Unreadable`] for a page the filesystem could not read,
+    /// and [`SpaceError::OutOfMemory`] for frames to read it into.
+    fn fill_file_page(&self, address: u64) -> Result<(), SpaceError> {
+        let (vmo, index) = {
+            let inner = self.inner.lock();
+            let Some(region) = inner.map.find(address) else {
+                return Ok(());
+            };
+            let Backing::File { id, offset } = region.backing else {
+                return Ok(());
+            };
+            let into_region = (address & !(PAGE_SIZE - 1)).saturating_sub(region.range.start());
+            let Some(vmo) = inner.objects.get(&id).map(Arc::clone) else {
+                return Ok(());
+            };
+            (vmo, offset.saturating_add(into_region) / PAGE_SIZE)
+        };
+        match vmo.fill_for_fault(index) {
+            Ok(()) => Ok(()),
+            Err(ferrix_vfs::Errno::ENOMEM) => Err(SpaceError::OutOfMemory),
+            Err(_) => Err(SpaceError::Unreadable(address)),
+        }
+    }
+
     /// [`AddressSpace::fault`] for a private file mapping.
     ///
     /// The region names two objects by one id: the file's own, attached
@@ -794,10 +847,9 @@ impl AddressSpace {
     ///   file's, read-only however writable the region is, so that the first
     ///   write faults here.
     ///
-    /// No mappable object has a page source yet: tmpfs's pages have none. A
-    /// filesystem whose inode offers an object filled from a source has to
-    /// give this path a way to fill an absent page before it is copied, or the
-    /// copy would put zeros over the file's data.
+    /// A file on a disk has had the page filled into its object already, by
+    /// [`AddressSpace::fill_file_page`] before this was called, so the copy
+    /// below copies the file's data rather than zeros.
     fn fault_private_file(&self, address: u64, access: Access) -> Result<(), SpaceError> {
         let inner = self.inner.lock();
         let region = *inner

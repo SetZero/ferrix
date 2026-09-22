@@ -8,6 +8,7 @@
 //! cargo xtask test-shell --arch all --init PATH/{arch}/busybox [--timeout SECONDS]
 //! cargo xtask test-vfs  --arch all --init PATH/{arch}/busybox [--timeout SECONDS]
 //! cargo xtask test-threads --arch all [--timeout SECONDS]
+//! cargo xtask test-rustc [--accel kvm] [--memory M] [--timeout SECONDS]
 //! cargo xtask check     [--fast] [--ferrousli] [--zinc] [--miri]
 //! cargo xtask remote-desktop [--host DEST] [--config PATH] [--vnc :N] [--send head]
 //!                       [--viewer tigervnc|realvnc] [--layout de] [--no-viewer]
@@ -78,6 +79,7 @@ mod powerfail;
 mod pty;
 mod qemu;
 mod remote;
+mod rustc;
 mod seat;
 mod serial;
 mod shell;
@@ -156,6 +158,7 @@ COMMANDS:
     test-pty      Boot compositor/term as init, run a program on a pseudoterminal, and require its output back
     test-jobs     Boot an interactive shell on the console, type a session with jobs at it, and require the answers
     test-threads  Boot threads-test as init and require std::thread, Mutex, mpsc and /proc's thread count
+    test-rustc    Attach the rustc volume scripts/fetch-rustc-sysroot.sh makes, run `rustc hello.rs && ./hello`
     check         Run every quality gate (fmt, clippy, layering, audits, tests, docs)
     host-clippy   check's host clippy step alone, as CI runs it
     host-test     check's host test step alone, as CI runs it
@@ -362,6 +365,7 @@ fn run() -> Result<()> {
         "test-pty" => pty::test_pty(&args),
         "test-jobs" => jobs::test_jobs(&args),
         "test-threads" => threads::test_threads(&args),
+        "test-rustc" => rustc::test_rustc(&args),
         "check" => check::run(&args),
         "host-clippy" => check::host_clippy(),
         "host-test" => check::host_test(),
