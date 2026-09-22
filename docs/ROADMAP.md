@@ -57,9 +57,9 @@ architectures. `fsync` writes a log tree the next mount replays, and
 `cargo xtask test-powerfail` kills QEMU in the middle of writing, replays at
 the next boot and has `btrfs check` judge the volume before and after: 249
 seeds across the three architectures, 226 of them leaving a log to replay,
-every one clean. `cargo xtask run` now carries a persistent btrfs disk,
-mounted at `/data`. What the stage still owes, outside its points, is
-writeback of pages written through `MAP_SHARED`.
+every one clean. `cargo xtask run` now boots with `/` on a persistent btrfs
+volume. What the stage still owes, outside its points, is writeback of pages
+written through `MAP_SHARED`.
 Networking is done: sockets, a net core and a ring-3 virtio-net driver, with
 `curl` fetching over HTTPS and `git` cloning inside the guest. Stages 17 and
 18 are met, and the compositor runs: `cargo xtask test-compositor` boots it
@@ -3734,14 +3734,19 @@ twenty-five points each are opened, replayed, checked for consistency and
 for any completed promise rolled back. `scripts/btrfs-check-writer.sh` runs
 it at that size, and `cargo test` a small one.
 
-**Since the exit — a disk that persists.** `cargo xtask run` and
-`run-compositor` attach `build/data.img` as a fourth disk, made from the blank
-fixture the first time and kept after that, and the kernel
-(`kernel/src/fs/data_disk.rs`) mounts it writable at `/data` and commits it
-every 30 seconds, as Linux's btrfs does by default, and once more when it
-powers the machine off itself. `--reset-data` starts it over. The test boots
-never attach it. The root filesystem is still the initramfs; putting `/` on
-a disk is an init's work, which stage 15 owes.
+**Since the exit — `/` on btrfs.** `cargo xtask run` and `run-compositor`
+attach `build/root.img`, a 1 GiB volume made from the `root` fixture the
+first time and kept after that. The kernel (`kernel/src/fs/root_disk.rs`)
+starts on the initramfs, and once its disk driver is serving the volume it
+does what Linux's `switch_root` does: mounts it, installs the initramfs onto
+it when the archive differs from the one it last got, mounts `/dev`, `/proc`
+and `/tmp` inside it, and starts init and every process after it with the
+volume as `/`. It commits every 30 seconds, as Linux's btrfs does by default,
+and once more when it powers the machine off itself. `--reset-root` starts
+the volume over, and `--tmpfs-root` or `ferrix.root=tmpfs` keeps `/` in
+memory. The test boots keep the tmpfs root. What is still an init's work,
+which stage 15 owes: `pivot_root` itself, so the kernel's tmpfs can be
+unmounted from under the switched root.
 
 Owed beside the stage, and not in its points: writeback of pages written
 through `MAP_SHARED`, which needs a dirty bit the page cache does not keep

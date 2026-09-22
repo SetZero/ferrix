@@ -30,9 +30,12 @@ pub(crate) struct Args {
     /// `--reset`: the image carries `ferrix.onexit=reset` in `CMDLINE.TXT`, and
     /// `test-boot` requires QEMU to see the machine reset rather than power off.
     pub(crate) reset: bool,
-    /// `--reset-data`: start the persistent disk `run` and `run-compositor`
-    /// carry over from the blank fixture, throwing away what is on it.
-    pub(crate) reset_data: bool,
+    /// `--reset-root`: start the btrfs root `run` and `run-compositor` boot
+    /// with over from the fixture, throwing away what is on it.
+    pub(crate) reset_root: bool,
+    /// `--tmpfs-root`: boot `run` and `run-compositor` with `/` in memory,
+    /// as the test boots are, and leave the btrfs root off the bus.
+    pub(crate) tmpfs_root: bool,
     /// `--net`: give the guest a virtio-net device, with `xtask`'s own gateway
     /// behind it. Off by default for a boot that is judged, because every boot
     /// that does not need a network is a boot with one fewer device on the bus
@@ -260,7 +263,8 @@ impl Args {
                 "--zinc" => args.zinc = true,
                 "--miri" => args.miri = true,
                 "--reset" => args.reset = true,
-                "--reset-data" => args.reset_data = true,
+                "--reset-root" => args.reset_root = true,
+                "--tmpfs-root" => args.tmpfs_root = true,
                 "--net" => args.net = true,
                 "--no-net" => args.no_net = true,
                 "--forward" => {

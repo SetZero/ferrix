@@ -39,11 +39,16 @@ chunks, a single data chunk, the free-space tree, skinny metadata, no-holes --
 so the writer is tested against the volume a user gets, not a simplified one.
 Its nodes are 4 KiB so that a few hundred items already split leaves.
 
+`root.img.packed` is the same empty volume at 1 GiB: what `cargo xtask run`
+boots with as `/`. The system alone is tens of megabytes, which 128 MiB of
+DUP metadata and single data cannot hold with room to work.
+
 Usage:
     python3 scripts/gen-btrfs-fixtures.py [--only NAME ...]
 
 `--only` rebuilds just the named images (`none`, `zlib`, `lzo`, `zstd`,
-`default-subvol`, `blank`), leaving the others' committed bytes alone.
+`default-subvol`, `blank`, `root`), leaving the others' committed bytes
+alone.
 """
 
 from __future__ import annotations
@@ -60,7 +65,9 @@ OUTPUT = pathlib.Path("libs/btrfs/testdata")
 VARIANTS = ("none", "zlib", "lzo", "zstd")
 DEFAULT_SUBVOL = "default-subvol"
 BLANK = "blank"
+ROOT = "root"
 IMAGE_SIZE = 128 * 1024 * 1024
+ROOT_SIZE = 1024 * 1024 * 1024
 BLOCK = 4096
 FS_UUID = "0f3c3a5e-1111-4222-8333-444455556666"
 DEVICE_UUID = "0f3c3a5e-aaaa-4bbb-8ccc-ddddeeeeffff"
@@ -173,9 +180,9 @@ def make_default_subvol_image(source: pathlib.Path, image: pathlib.Path) -> None
     ], check=True)
 
 
-def make_blank_image(image: pathlib.Path) -> None:
+def make_blank_image(image: pathlib.Path, size: int = IMAGE_SIZE) -> None:
     with open(image, "wb") as f:
-        f.truncate(IMAGE_SIZE)
+        f.truncate(size)
     # No profile or feature flags: the defaults are the point.
     subprocess.run([
         "mkfs.btrfs", "-q", "--nodesize", str(BLOCK),
@@ -211,7 +218,7 @@ def main() -> int:
     if shutil.which("mkfs.btrfs") is None:
         print("mkfs.btrfs is not installed (btrfs-progs)", file=sys.stderr)
         return 1
-    names = VARIANTS + (DEFAULT_SUBVOL, BLANK)
+    names = VARIANTS + (DEFAULT_SUBVOL, BLANK, ROOT)
     only = sys.argv[2:] if sys.argv[1:2] == ["--only"] else list(names)
     if len(sys.argv) > 1 and sys.argv[1] != "--only" or not only or set(only) - set(names):
         print(f"usage: {sys.argv[0]} [--only NAME ...], NAME in {', '.join(names)}",
@@ -263,6 +270,16 @@ def main() -> int:
             packed = pack(image)
             (OUTPUT / f"{BLANK}.img.packed").write_bytes(packed)
             print(f"{BLANK}: {len(packed) // (BLOCK + 8)} blocks, {len(packed)} bytes")
+        if ROOT in only:
+            image = pathlib.Path(scratch) / f"{ROOT}.img"
+            make_blank_image(image, ROOT_SIZE)
+            packed = pack(image)
+            if len(packed) > BUDGET:
+                print(f"{ROOT}: packed image is {len(packed)} bytes, over {BUDGET}",
+                      file=sys.stderr)
+                return 1
+            (OUTPUT / f"{ROOT}.img.packed").write_bytes(packed)
+            print(f"{ROOT}: {len(packed) // (BLOCK + 8)} blocks, {len(packed)} bytes")
     return 0
 
 

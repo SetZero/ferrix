@@ -107,7 +107,7 @@ pub(crate) fn run() {
     // A built-in program may be dynamically linked too, as a distribution's
     // shell is: its linker and libraries are not built in but read from the
     // initramfs, where `cargo xtask test-shell --interpreter` put them.
-    let context = fs::namespace().context();
+    let context = fs::root_disk::process_context();
     let linker = match exec::linker_for(&context, IMAGE) {
         Ok(linker) => linker,
         Err(errno) => {
@@ -149,7 +149,7 @@ pub(crate) fn run() {
 /// [`PROGRAM_DIR`].
 fn run_commands(list: &[u8]) {
     let commands = parse(list);
-    let ctx = fs::namespace().context();
+    let ctx = fs::root_disk::process_context();
     println!("  init     running {} commands", commands.len());
     // The programs the commands have needed so far, so that twenty commands
     // over three programs read three files. Worth keeping rather than reading
@@ -217,7 +217,7 @@ fn start(program: &[u8], exe: &[u8], path: &[u8], argv: &[&[u8]]) -> Result<i32,
     // dynamically linked like any other program, and the linker it names is
     // read from the same initramfs. There is no process to fail back to here,
     // which is why this is the one caller that reports the failure itself.
-    let context = fs::namespace().context();
+    let context = fs::root_disk::process_context();
     let linker = exec::linker_for(&context, program).map_err(exec::ExecError::Linker)?;
     let executable = exec::Executable {
         image: program,

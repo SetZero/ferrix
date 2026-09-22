@@ -35,6 +35,13 @@ const PACKED: &[u8] = include_bytes!("../../libs/btrfs/testdata/none.img.packed"
 /// and features, which stage 12's check writes on.
 const BLANK: &[u8] = include_bytes!("../../libs/btrfs/testdata/blank.img.packed");
 
+/// The same empty volume at [`ROOT_SIZE`]: the root disk starts from it.
+const ROOT: &[u8] = include_bytes!("../../libs/btrfs/testdata/root.img.packed");
+
+/// How big the root disk is: the system is tens of megabytes, and btrfs
+/// keeps two copies of its metadata.
+const ROOT_SIZE: u64 = 1024 * 1024 * 1024;
+
 /// The writable image's name under `build/`.
 const BLANK_FILE_NAME: &str = "btrfs-write.img";
 
@@ -100,26 +107,26 @@ pub(crate) fn ensure_blank() -> Result<PathBuf> {
     Ok(path)
 }
 
-/// The persistent image's name under `build/`: `/data` in an interactive
-/// boot.
-const DATA_FILE_NAME: &str = "data.img";
+/// The root image's name under `build/`: `/` in an interactive boot.
+const ROOT_FILE_NAME: &str = "root.img";
 
-/// The persistent disk: `build/data.img`, made from the blank fixture if it
-/// is not there or `reset` asks, and otherwise left exactly as the last boot
-/// left it. Answers its path and whether it was made new.
+/// The root disk: `build/root.img`, made from the `root` fixture if it is not
+/// there or `reset` asks, and otherwise left exactly as the last boot left
+/// it. The kernel installs the system on it at the first boot. Answers its
+/// path and whether it was made new.
 ///
 /// # Errors
 ///
 /// The file not writable.
-pub(crate) fn ensure_data(reset: bool) -> Result<(PathBuf, bool)> {
+pub(crate) fn ensure_root(reset: bool) -> Result<(PathBuf, bool)> {
     let directory = paths::workspace_root().join("build");
-    let path = directory.join(DATA_FILE_NAME);
+    let path = directory.join(ROOT_FILE_NAME);
     if !reset && path.is_file() {
         return Ok((path, false));
     }
     std::fs::create_dir_all(&directory)?;
-    let partial = directory.join(format!("{DATA_FILE_NAME}.{}.partial", std::process::id()));
-    write_packed(&partial, BLANK).map_err(|error| {
+    let partial = directory.join(format!("{ROOT_FILE_NAME}.{}.partial", std::process::id()));
+    write_packed_sized(&partial, ROOT, ROOT_SIZE).map_err(|error| {
         let _ = std::fs::remove_file(&partial);
         Error::new(format!("writing {}: {error}", partial.display()))
     })?;
@@ -179,8 +186,13 @@ fn write(path: &Path) -> std::io::Result<()> {
 
 /// Write `packed`'s blocks into an image of the fixture's full size.
 fn write_packed(path: &Path, packed: &[u8]) -> std::io::Result<()> {
+    write_packed_sized(path, packed, IMAGE_SIZE)
+}
+
+/// [`write_packed`], into an image of `size` bytes.
+fn write_packed_sized(path: &Path, packed: &[u8], size: u64) -> std::io::Result<()> {
     let mut file = File::create(path)?;
-    file.set_len(IMAGE_SIZE)?;
+    file.set_len(size)?;
     for record in packed.chunks_exact(RECORD) {
         let (offset, block) = record.split_at(8);
         let offset = u64::from_le_bytes(offset.try_into().unwrap_or([0; 8]));

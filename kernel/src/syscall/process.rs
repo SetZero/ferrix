@@ -263,7 +263,7 @@ impl Process {
             identity: SpinLock::new(Identity::default()),
             handles: SpinLock::new(HandleTable::new(object::HANDLE_LIMIT)),
             files: Arc::new(SpinLock::new(fd::standard_streams())),
-            fs: Arc::new(SpinLock::new(fs::namespace().context())),
+            fs: Arc::new(SpinLock::new(fs::root_disk::process_context())),
             state: SpinLock::new(State::default()),
             heap_lock: SleepLock::new((), &crate::sync::SchedParker),
             startup: SpinLock::new(None),

@@ -32,7 +32,6 @@ pub(crate) mod btrfs_powerfail;
 pub(crate) mod btrfs_write_check;
 pub(crate) mod check;
 pub(crate) mod console;
-pub(crate) mod data_disk;
 pub(crate) mod devfs;
 pub(crate) mod epoll;
 pub(crate) mod epoll_check;
@@ -44,6 +43,7 @@ mod pages;
 pub(crate) mod pipe;
 pub(crate) mod procfs;
 pub(crate) mod pty;
+pub(crate) mod root_disk;
 pub(crate) mod socket;
 pub(crate) mod sockname;
 pub(crate) mod terminal;
@@ -81,6 +81,15 @@ const NANOS: u64 = 1_000_000_000;
 /// The namespace, built empty on first use if [`init`] has not run yet.
 pub(crate) fn namespace() -> &'static Namespace {
     NAMESPACE.call_once(|| Namespace::new(new_tmpfs(), Arc::new(crate::sync::SchedParker)))
+}
+
+/// The initramfs as the loader handed it over, kept for the root disk to
+/// install from.
+static ARCHIVE: Once<&'static [u8]> = Once::new();
+
+/// The initramfs archive, if the boot had one and [`init`] has run.
+pub(crate) fn initramfs_archive() -> Option<&'static [u8]> {
+    ARCHIVE.get().copied()
 }
 
 /// A device number no other filesystem has: `st_dev` for an in-memory one.
@@ -307,6 +316,7 @@ pub(crate) fn init(view: &BootView<'_>) -> Result<Report, InitError> {
     };
     if let Some((phys, len)) = view.initrd() {
         let archive = initrd(view, phys, len)?;
+        let _ = ARCHIVE.call_once(|| archive);
         report.initramfs_bytes = Some(len);
         report.unpacked = Some(initramfs::unpack(ns, &ctx, archive).map_err(InitError::Unpack)?);
     }

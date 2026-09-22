@@ -1076,9 +1076,9 @@ fn check_btrfs_write() {
          as they were written",
         report.files, report.bytes, report.directories,
     );
-    // After the check, which has vdc to itself: the persistent disk, if an
+    // After the check, which has vdc to itself: `/` onto the root disk, if an
     // interactive boot brought one.
-    fs::data_disk::mount();
+    fs::root_disk::switch();
 }
 
 /// Stage 10: find every PCI function, size its BARs and walk its
@@ -1692,6 +1692,7 @@ fn report_clocks_and_power(view: &BootView<'_>, clocks: &irq::Report) {
     report_clocks(clocks);
     power::init(view);
     fs::btrfs_powerfail::init(view);
+    fs::root_disk::init(view);
 }
 
 /// Print what interrupt and time bring-up found.
