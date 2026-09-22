@@ -51,9 +51,9 @@ are worth naming because each was built for something else and pays here.
 ### 2.1 Dynamic linking
 
 Chrome is a position-independent executable linked against glibc, and it
-`dlopen`s more at run time. `kernel/src/syscall/load.rs` reads `PT_INTERP` and
-refuses it by name (`LoadError::NeedsInterpreter`), and ferrousli's `dlopen`
-returns null by design. A fully static Chromium against a musl-shaped library
+`dlopen`s more at run time. The kernel loads `PT_INTERP` now, and since
+2026-09-21 a glibc program runs on ferrousli's loader and `libc.so.6` in
+glibc's place (§4); but ferrousli's `dlopen` still returns null. A fully static Chromium against a musl-shaped library
 is not a configuration anybody ships: Alpine, which is the only distribution
 that builds Chromium against musl at all, builds it dynamically and carries a
 patch set to do it.
@@ -145,6 +145,16 @@ remain**, and what remains is the part this paragraph already said was the
 expensive one -- there is still no loader anywhere. What follows is how it
 stood on 2026-09-18.
 
+**Overtaken again on 2026-09-21: 27 of the 39 are done, 12 left.**
+`ferrousli/ld` is a working loader -- symbol versions, `COPY`, initial-exec
+TLS, `DT_FINI` -- and `ferrousli/tools/build-shared.sh` links ferrousli as a
+versioned `libc.so.6`. Debian's own dynamic busybox runs on Ferrix with
+glibc's loader on all three architectures, and with ferrousli's in glibc's
+place on x86-64. What Chrome still needs of it is most of the 12:
+`dlopen` and the rest of `dlfcn.h`, and general-dynamic TLS, which a
+`dlopen`ed library uses. `docs/ROADMAP.md`'s dynamic-linking section is the
+current account.
+
 What was not done is `PT_INTERP`, and the hook for it is one place --
 `load.rs`'s refusal. `libs/elf` already parses the relative relocations a
 static PIE carries and reads symbol tables; ferrousli has the load-bias
@@ -153,6 +163,9 @@ C++ unwinding work. What does not exist anywhere, on any ref, is a loader: a
 search of every commit in the repository for `PT_INTERP`, `DT_NEEDED`,
 `JUMP_SLOT` and GNU-hash code finds only musl's vendored
 `ferrousli/include/elf.h`. **34 points remain**, not 39.
+
+*(btrfs write is overtaken too: stage 12 landed on 2026-09-21, and the
+roadmap has how it stands. What follows is 2026-09-18.)*
 
 **btrfs write: no code, on any ref.** Searches across every commit for
 `delayed_ref`, a transaction commit and the free-space tree return nothing.
@@ -185,8 +198,8 @@ separately for that reason.
 
 | what | points |
 |---|---|
-| **Already planned:** dynamic linking, the rest of it | 34 |
-| **Already planned:** stage 12, btrfs write | ≈ 60 |
+| **Already planned:** dynamic linking, the rest of it (34 when this was written; 12 on 2026-09-21) | 12 |
+| ~~**Already planned:** stage 12, btrfs write~~ *landed 2026-09-21* | ~~≈ 60~~ |
 | **Already planned, only if the sandbox is wanted:** stage 13 | ≈ 60 |
 | Demand-paged file-backed `execve`, and binaries past 64 MiB | 13 |
 | `madvise`, a vDSO, `/dev/shm`, `timerfd` and `signalfd` | ≈ 15 |
