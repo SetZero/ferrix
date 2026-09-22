@@ -128,6 +128,67 @@ fn the_cursor_can_be_hidden_and_shown() {
     assert!(grid.cursor_visible());
 }
 
+/// A normal prompt update damages the changed character and the two cursor
+/// positions, rather than the entire terminal window.
+#[test]
+fn a_small_write_has_small_cell_damage() {
+    let before = Grid::new(80, 24);
+    let mut after = before.clone();
+    after.write(b"x");
+    assert_eq!(
+        after.damage_since(&before),
+        Some(crate::grid::CellDamage {
+            left: 0,
+            top: 0,
+            width: 2,
+            height: 1,
+        })
+    );
+}
+
+/// The common idle pass leaves the grid and its cursor alone, so it owes no
+/// Wayland buffer commit at all.
+#[test]
+fn an_unchanged_grid_has_no_damage() {
+    let grid = Grid::new(80, 24);
+    assert_eq!(grid.damage_since(&grid), None);
+}
+
+/// Incremental rasterisation produces the same bytes as painting the updated
+/// terminal from scratch. This holds the client-side fast path to its full
+/// redraw reference picture.
+#[test]
+fn cell_damage_paints_the_same_picture_as_a_full_redraw() {
+    let mut before = Grid::new(8, 2);
+    before.write(b"hello");
+    let mut after = before.clone();
+    after.write(b"!");
+    let damage = after.damage_since(&before).expect("a changed grid");
+    let colours = paint::Colours::default();
+    let (width, height) = (8 * paint::CELL.0, 2 * paint::CELL.1);
+    let mut incremental = vec![0u8; width * height * 4];
+    paint::draw(
+        &mut incremental,
+        (width, height),
+        width * 4,
+        &before,
+        &colours,
+        1,
+    );
+    paint::draw_damage(
+        &mut incremental,
+        (width, height),
+        width * 4,
+        &after,
+        &colours,
+        1,
+        damage,
+    );
+    let mut full = vec![0u8; width * height * 4];
+    paint::draw(&mut full, (width, height), width * 4, &after, &colours, 1);
+    assert_eq!(incremental, full);
+}
+
 #[test]
 fn resizing_keeps_what_is_still_on_the_grid() {
     let mut grid = Grid::new(6, 2);

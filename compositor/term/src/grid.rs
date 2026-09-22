@@ -60,6 +60,57 @@ impl Default for Cell {
     }
 }
 
+/// A rectangular group of cells whose pixels need drawing again.
+///
+/// This is in cell coordinates, rather than pixels: the terminal learns its
+/// output scale only when it makes its Wayland buffer. Keeping the small
+/// logical rectangle here lets the client redraw and report the same precise
+/// buffer damage after that conversion.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CellDamage {
+    /// First column in the region.
+    pub left: usize,
+    /// First row in the region.
+    pub top: usize,
+    /// Number of columns in the region.
+    pub width: usize,
+    /// Number of rows in the region.
+    pub height: usize,
+}
+
+impl CellDamage {
+    /// Every cell in a `columns` by `rows` grid.
+    #[must_use]
+    pub const fn full(columns: usize, rows: usize) -> Self {
+        Self {
+            left: 0,
+            top: 0,
+            width: columns,
+            height: rows,
+        }
+    }
+
+    /// The smallest region covering this and `other`.
+    #[must_use]
+    pub fn joined(self, other: Self) -> Self {
+        let (left, top) = (self.left.min(other.left), self.top.min(other.top));
+        let right = self
+            .left
+            .saturating_add(self.width)
+            .max(other.left.saturating_add(other.width));
+        let bottom = self
+            .top
+            .saturating_add(self.height)
+            .max(other.top.saturating_add(other.height));
+        Self {
+            left,
+            top,
+            width: right.saturating_sub(left),
+            height: bottom.saturating_sub(top),
+        }
+    }
+}
+
 /// Where the parser is between bytes of an escape sequence.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Parsing {
@@ -130,6 +181,53 @@ impl Grid {
     #[must_use]
     pub const fn cursor_visible(&self) -> bool {
         self.visible
+    }
+
+    /// The smallest visual region that differs from `before`.
+    ///
+    /// A terminal normally changes one cell and moves its block cursor one
+    /// cell. Repainting the whole shared-memory buffer for that common case
+    /// turns one typed byte into a full-window copy and compositor frame. The
+    /// comparison is at the grid level, so scrolling, erasing and every escape
+    /// sequence retain their existing implementation and damage exactly what
+    /// changed.
+    #[must_use]
+    pub fn damage_since(&self, before: &Self) -> Option<CellDamage> {
+        if self.size() != before.size() {
+            return Some(CellDamage::full(self.columns, self.rows));
+        }
+
+        let mut damage: Option<CellDamage> = None;
+        for (at, (was, now)) in before.cells.iter().zip(&self.cells).enumerate() {
+            if was != now {
+                let one = CellDamage {
+                    left: at % self.columns,
+                    top: at / self.columns,
+                    width: 1,
+                    height: 1,
+                };
+                damage = Some(damage.map_or(one, |held| held.joined(one)));
+            }
+        }
+
+        // The cursor is painted by the terminal rather than held in a cell,
+        // so both its old and new positions are damaged separately -- but
+        // only if one of them changed. An idle terminal must not manufacture
+        // a cursor-sized frame on every pass through its event loop.
+        if before.cursor != self.cursor || before.visible != self.visible {
+            for (grid, cursor) in [(before, before.cursor), (self, self.cursor)] {
+                if grid.visible && cursor.0 < grid.columns && cursor.1 < grid.rows {
+                    let one = CellDamage {
+                        left: cursor.0,
+                        top: cursor.1,
+                        width: 1,
+                        height: 1,
+                    };
+                    damage = Some(damage.map_or(one, |held| held.joined(one)));
+                }
+            }
+        }
+        damage
     }
 
     /// How many times the grid has scrolled.

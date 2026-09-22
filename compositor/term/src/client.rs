@@ -19,7 +19,7 @@ use compositor_protocol::xdg_shell::{self, xdg_surface, xdg_toplevel, xdg_wm_bas
 use compositor_shm::Shared;
 use compositor_wire::{Arg, ArgType, Fd, Interface, ObjectId, Reader, Writer};
 
-use crate::grid::Grid;
+use crate::grid::{CellDamage, Grid};
 use crate::paint::{self, Colours};
 use crate::pty::Pty;
 
@@ -76,8 +76,9 @@ struct Terminal {
     drawn: u32,
     shared: Option<Shared>,
     buffer_size: (i32, i32),
-    /// Whether the grid has changed since the last frame.
-    dirty: bool,
+    /// What changed since the last frame. Small terminal writes stay small
+    /// through rasterisation, Wayland damage and compositor composition.
+    dirty: Option<Dirty>,
     /// Whether the seat has been asked for its keyboard.
     seat: bool,
     /// The modifiers in force, as `wl_keyboard.modifiers` reports them:
@@ -130,6 +131,25 @@ struct Repeating {
     bytes: Vec<u8>,
     /// When this key next retypes itself.
     next: Instant,
+}
+
+/// What the next Wayland buffer update has to redraw.
+#[derive(Clone, Copy, Debug)]
+enum Dirty {
+    /// A new buffer or a resize: nothing in it is a prior frame.
+    Full,
+    /// The cells whose previous pixels can be kept outside this rectangle.
+    Cells(CellDamage),
+}
+
+impl Dirty {
+    /// Combine independent updates before sending the next frame.
+    fn joined(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Full, _) | (_, Self::Full) => Self::Full,
+            (Self::Cells(left), Self::Cells(right)) => Self::Cells(left.joined(right)),
+        }
+    }
 }
 
 /// Run a terminal on `socket`, with `program` on the pseudoterminal.
@@ -185,7 +205,7 @@ pub fn run(
         drawn: 0,
         shared: None,
         buffer_size: (0, 0),
-        dirty: true,
+        dirty: Some(Dirty::Full),
         seat: false,
         modifiers: 0,
         group: 0,
@@ -212,7 +232,7 @@ pub fn run(
         // frame either changed.
         state.pump()?;
         state.autorepeat();
-        if state.dirty {
+        if state.dirty.is_some() {
             state.draw(&mut out)?;
         }
         flush(&mut connection, &mut out)?;
@@ -242,6 +262,12 @@ impl Terminal {
     /// Take whatever the program wrote.
     fn pump(&mut self) -> Result<(), String> {
         let mut buffer = [0u8; 4096];
+        // The grid is small (a typical 640×384 terminal is 53×16 cells),
+        // and comparing it after draining a PTY batch is much cheaper than
+        // repainting its whole shared-memory buffer. Take that snapshot only
+        // when there is output: the usual idle pass must allocate nothing at
+        // all.
+        let mut before = None;
         loop {
             let read = self
                 .pty
@@ -250,8 +276,17 @@ impl Terminal {
             if read == 0 {
                 break;
             }
+            if before.is_none() {
+                before = Some(self.grid.clone());
+            }
             self.grid.write(buffer.get(..read).unwrap_or(&[]));
-            self.dirty = true;
+        }
+        if let Some(before) = before
+            && let Some(damage) = self.grid.damage_since(&before)
+        {
+            self.dirty = Some(self.dirty.map_or(Dirty::Cells(damage), |held| {
+                held.joined(Dirty::Cells(damage))
+            }));
         }
         if self.finished.is_none() && self.pty.done() {
             self.finished = Some(Instant::now());
@@ -337,7 +372,7 @@ impl Terminal {
                     &[Arg::Uint(serial)],
                 );
                 self.acked = true;
-                self.dirty = true;
+                self.dirty = Some(Dirty::Full);
             }
             id::TOPLEVEL if opcode == xdg_toplevel::event::CLOSE => {
                 return Err("the compositor asked this window to close".to_owned());
@@ -637,15 +672,16 @@ impl Terminal {
             usize::try_from(self.height.max(0)).unwrap_or(0) * scale,
         );
         let (columns, rows) = paint::fits(width, height, scale);
-        if self.grid.size() == (columns, rows) {
-            return;
+        if self.grid.size() != (columns, rows) {
+            self.grid.resize(columns, rows);
+            self.pty.resize((
+                u16::try_from(columns).unwrap_or(u16::MAX),
+                u16::try_from(rows).unwrap_or(u16::MAX),
+            ));
         }
-        self.grid.resize(columns, rows);
-        self.pty.resize((
-            u16::try_from(columns).unwrap_or(u16::MAX),
-            u16::try_from(rows).unwrap_or(u16::MAX),
-        ));
-        self.dirty = true;
+        // An output-scale change can leave the cell count unchanged while
+        // replacing the shared-memory buffer, which still needs every pixel.
+        self.dirty = Some(Dirty::Full);
     }
 
     /// Draw the grid into a buffer and give it to the compositor.
@@ -662,7 +698,8 @@ impl Terminal {
         let len = usize::try_from(stride.saturating_mul(height))
             .map_err(|_| "a window too large to draw".to_owned())?;
 
-        if self.shared.is_none() || self.buffer_size != (width, height) {
+        let recreated = self.shared.is_none() || self.buffer_size != (width, height);
+        if recreated {
             if self.shared.is_some() {
                 request(out, id::BUFFER, core::wl_buffer::request::DESTROY, &[], &[]);
                 request(out, id::POOL, wl_shm_pool::request::DESTROY, &[], &[]);
@@ -707,19 +744,35 @@ impl Terminal {
             self.buffer_size = (width, height);
         }
 
+        let dirty = if recreated {
+            Dirty::Full
+        } else {
+            self.dirty.unwrap_or(Dirty::Full)
+        };
         if let Some(shared) = self.shared.as_mut() {
             let (wide, tall) = (
                 usize::try_from(width).unwrap_or(0),
                 usize::try_from(height).unwrap_or(0),
             );
-            paint::draw(
-                shared.bytes_mut(),
-                (wide, tall),
-                usize::try_from(stride).unwrap_or(0),
-                &self.grid,
-                &self.colours,
-                usize::try_from(scale).unwrap_or(1),
-            );
+            match dirty {
+                Dirty::Full => paint::draw(
+                    shared.bytes_mut(),
+                    (wide, tall),
+                    usize::try_from(stride).unwrap_or(0),
+                    &self.grid,
+                    &self.colours,
+                    usize::try_from(scale).unwrap_or(1),
+                ),
+                Dirty::Cells(damage) => paint::draw_damage(
+                    shared.bytes_mut(),
+                    (wide, tall),
+                    usize::try_from(stride).unwrap_or(0),
+                    &self.grid,
+                    &self.colours,
+                    usize::try_from(scale).unwrap_or(1),
+                    damage,
+                ),
+            }
         }
         request(
             out,
@@ -739,16 +792,46 @@ impl Terminal {
             ],
             &[Arg::Object(id::BUFFER), Arg::Int(0), Arg::Int(0)],
         );
+        let (damage_x, damage_y, damage_width, damage_height) = match dirty {
+            Dirty::Full => (0, 0, width, height),
+            Dirty::Cells(damage) => {
+                let cell_width = i32::try_from(paint::CELL.0)
+                    .unwrap_or(0)
+                    .saturating_mul(scale);
+                let cell_height = i32::try_from(paint::CELL.1)
+                    .unwrap_or(0)
+                    .saturating_mul(scale);
+                (
+                    i32::try_from(damage.left)
+                        .unwrap_or(0)
+                        .saturating_mul(cell_width),
+                    i32::try_from(damage.top)
+                        .unwrap_or(0)
+                        .saturating_mul(cell_height),
+                    i32::try_from(damage.width)
+                        .unwrap_or(0)
+                        .saturating_mul(cell_width),
+                    i32::try_from(damage.height)
+                        .unwrap_or(0)
+                        .saturating_mul(cell_height),
+                )
+            }
+        };
         request(
             out,
             id::SURFACE,
             wl_surface::request::DAMAGE_BUFFER,
             &[ArgType::Int, ArgType::Int, ArgType::Int, ArgType::Int],
-            &[Arg::Int(0), Arg::Int(0), Arg::Int(width), Arg::Int(height)],
+            &[
+                Arg::Int(damage_x),
+                Arg::Int(damage_y),
+                Arg::Int(damage_width),
+                Arg::Int(damage_height),
+            ],
         );
         request(out, id::SURFACE, wl_surface::request::COMMIT, &[], &[]);
         self.drawn = self.drawn.saturating_add(1);
-        self.dirty = false;
+        self.dirty = None;
         if self.drawn == 1 {
             // The window is up with the program's first output in it, which
             // is what a watcher waits for.

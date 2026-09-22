@@ -6,84 +6,70 @@ acceptance test is that it compiles Rust.
 Not "has a shell", not "draws a window": it hosts `rustc`. That is the hardest
 thing a general-purpose OS is routinely asked to do, and the only goal that
 forces every subsystem to be real — threads and futexes, demand paging over
-gigabytes, `fork`/`execve`, a hundred and fifty syscalls, and a filesystem that
-survives a crash.
+gigabytes, `fork`/`execve`, the Linux system-call ABI, dynamic linking, and a
+filesystem that survives a crash.
+
+And it does. Since 2026-09-22, `cargo xtask test-rustc` boots Ferrix with a
+btrfs volume holding the rust-lang.org release of `rustc` and Debian's glibc,
+compiles `hello.rs` through `cc`, `collect2` and `rust-lld` — five programs
+nobody here wrote, four `execve`s deep, over some 350 MiB of shared libraries
+mapped from disk — and runs what it made:
 
 ```
-$ cargo xtask test-boot --arch all
-  x86_64: booting under QEMU (timeout 120s)
-    | Ferrix 0.1.0 on x86_64
-    |   memory   507 MiB total, 499 MiB usable, 132 regions
-    |   kernel   0x1df5a000 -> 0xffffffff80000000, 264 KiB
-    |   physmap  0xffff800000000000 covering 512 MiB from 0x0
-    |   tables   root 0x1dd5a000
-    |   display  1280x800, stride 1280
-    |   acpi     rsdp at 0x1fb7e014
-    |   stage 1  loader hand-off verified
-    |   traps    vectors installed
-    |   frames   497 MiB managed, 497 MiB free, 127299 entries at 0x1780000 (2048 KiB)
-    |   stage 2  frame allocator, heap and vmap arena verified
-    |   clock    HPET at 100.000 MHz
-    |   irqs     APIC, local APIC timer at 62.967 MHz
-    |   stage 3  2 breakpoints, 4 page faults, 1001 ticks at 912 Hz
-    |   cpus     4 described by firmware, 4 online, booted on APIC ID 0x0
-    |   smp      100 rounds of work on every processor, 300 IPIs taken
-    |   tlb      20 remaps seen by every processor, 21 shootdowns
-    |   grace    100 grace periods against 411 reads, none of them stale
-    |   counter  100000 of 100000, 4 of 4 shares overlapping, 35 updates lost without the lock
-    |   stage 4  4 processors online, a contended counter came to 100000 of 100000
-    |   w^x      354 mappings swept, 30 executable, none writable
-    |   reclaim  4 MiB from the loader and ACPI, 501 free; arena 9 live, 180 KiB
-    | FERRIX-BOOT-OK stages 1-5
-  x86_64: boot ok
-  aarch64: boot ok
-  armv7a: boot ok
+rustc 1.97.1 (8bab26f4f 2026-07-14)
+...
+rustc-gate: hello from rustc on Ferrix
 ```
 
 ## What exists today
 
-Stages 1 to 5 of `docs/ROADMAP.md`, on all three architectures. Each boots from
-firmware to a Rust kernel which verifies the hand-off, brings up a buddy
-allocator over every usable frame, starts a kernel heap — so `Box`, `Vec` and
-`BTreeMap` work — installs its own trap vectors, services a page fault by
-mapping the faulting address and letting the instruction retry, brings up an
-interrupt controller, runs a clock, brings every other processor online, and
-schedules a thousand kernel threads across them under an EEVDF fair class.
+[The roadmap](docs/ROADMAP.md) is the authority; its *Where it stands* is
+kept current with every landing. In short:
 
-ARMv7-A is the Cortex-A7 of the STM32MP157, run on QEMU's `virt` machine under
-U-Boot. It joined after stage 3 without a second loader, a second facade or a
-line of bootstrap assembly; `docs/arm32.md` is the plan it followed, and the
-decisions it had to argue — a PE32 loader converted from ELF because rustc has
-no 32-bit UEFI target, a 32-bit address space, and a machine described by a
-device tree instead of ACPI.
+* **The kernel.** Stages 0–11 are in the boot test on all three
+  architectures, which ends in `FERRIX-BOOT-OK stages 1-11`: UEFI hand-off,
+  a buddy allocator and kernel heap, higher-half virtual memory with no
+  mapping both writable and executable, traps, interrupts and timers, SMP
+  with TLB shootdown and grace periods, preemptive tasks under an EEVDF fair
+  class, and user mode.
+* **Linux programs, unchanged.** The Linux system-call ABI, with threads,
+  futexes, signals, `fork`/`execve`/`wait4`, `epoll`, pseudo-terminals and
+  job control; a VFS with an initramfs root, tmpfs, `/proc` and `/dev`; and
+  dynamic linking — `PT_INTERP`, position-independent executables, and
+  glibc's own `ld-linux`, which is how `rustc` runs.
+* **A native ABI and drivers in ring 3.** Handles, channels, ports, VMOs and
+  jobs (stage 9), and userspace drivers behind an IOMMU (stage 10): VT-d on
+  x86-64, the SMMUv3 on AArch64. virtio-blk, virtio-net, virtio-gpu,
+  virtio-input and virtio-console are all ring-3 programs started by
+  `devmgr`.
+* **btrfs, read and write.** Mounted from a ring-3 disk driver, written with
+  a log tree `fsync` replays, and judged by the host's `btrfs check` —
+  including after QEMU is killed mid-write, 249 seeds of it. `run` boots with
+  `/` on a persistent btrfs volume.
+* **Networking.** Sockets, a net core and a ring-3 virtio-net driver: `curl`
+  fetches over HTTPS and `git` clones inside the guest, and `sshdt` serves
+  SSH from it.
+* **A userland of its own.** [ferrousli](ferrousli/README.md), a C library
+  written in Rust; [zinc](zinc/README.md), a zsh-compatible shell that runs
+  oh-my-zsh and is `/bin/sh`; the uutils family for the utilities
+  ([what is left of busybox](docs/UUTILS.md) is fourteen names).
+* **A desktop.** [hyprix](compositor/README.md), a Hyprland-shaped Wayland
+  compositor written from scratch, reads a real `hyprland.conf`, tiles
+  windows, and composites on the host GPU through virgl
+  ([docs/GPU.md](docs/GPU.md)); a terminal running zinc opens at boot.
+* **A board.** ARMv7-A is the Cortex-A7 of the STM32MP157, and Ferrix boots
+  an STM32MP157D-DK1 from its SD card ([the board guide](docs/stm32mp157-dk.md)).
 
-Virtual memory is finished rather than sketched: a `vmap` arena hands out
-guard-paged ranges and kernel stacks over them, the loader's identity map is
-dropped — which is what turns "higher-half" from a linker script's claim into a
-demonstrated fact — the loader's own memory and the ACPI-reclaim regions go back
-to the buddy allocator, empty slab pages are returned to it rather than hoarded,
-and a sweep of the live page tables asserts that no mapping is both writable and
-executable.
+Still to come, in the roadmap's order: the rest of stage 19 (XWayland and the
+second-pass effects), namespaces, cgroups and seccomp (13), real-time domains
+(14), a real init (the rest of 15), self-hosting (20), bare metal with a GPU
+of Ferrix's own (21), and Steam (22).
 
-Time works and interrupts arrive. The local APIC and the GICv2 are programmed,
-the local APIC timer is calibrated against the HPET, the two Arm architectures
-use the architected virtual timer, and all of them are reached through one
-facade — `irq::register`, `timer::after`, `trap::Frame`. What stage 3 still
-owes is hardware Ferrix cannot currently be booted on to test: GICv3, and the
-local APIC's TSC-deadline mode.
-
-And there is more than one processor. Every vCPU QEMU is given comes online,
-with a record of its own, IPIs, TLB shootdown where the hardware does not
-broadcast invalidation itself, and grace periods; the proof is four processors
-incrementing one counter under one ticket lock and required to reach exactly
-100,000 with their shares overlapping in time. The scheduler, the syscall layer
-and everything above them are ahead.
-
-The kernel proves it on every boot rather than asserting it: the memory map is
-checked to be sorted and to describe the loader's own allocations, the direct
-map is checked to alias physical memory by reading the kernel's first bytes
-through both mappings, and the allocators are hammered with four thousand
-blocks and required to give every frame back.
+Every boot proves its own claims rather than asserting them: the memory map
+is checked against the loader's allocations, the direct map is checked to
+alias physical memory, the allocators are hammered and required to give every
+frame back, four processors increment one counter and must reach exactly
+100,000, and the checks carry negative controls that must be seen to fail.
 
 ## No assembly at boot
 
@@ -92,13 +78,14 @@ ARMv7-A — so firmware calls a Rust `efi_main` with a stack set up and the MMU
 on. There is no bootstrap assembly on any of them, which is unusual and is a
 direct consequence of choosing UEFI over Multiboot or a bare kernel boot.
 
-The assembly that does exist — 280 lines, **99.10% Rust** — is confined to
-constructs the machine defines before a Rust function could run: installing a
-translation regime and jumping to an address that did not exist a moment
-earlier, and the CPU primitives with no Rust spelling. `docs/ASSEMBLY.md` is the
-argument for each one; `scripts/check-asm-budget.py` fails the build on any site
-that is not on the list, on a file over its budget, and on an entry that has
-gone stale.
+The assembly that does exist — 437 lines against some 211,000 of Rust,
+**99.79% Rust** — is confined to constructs the machine defines before a Rust
+function could run: installing a translation regime and jumping to an address
+that did not exist a moment earlier, trap and system-call entry, the context
+switch, and the CPU primitives with no Rust spelling. `docs/ASSEMBLY.md` is
+the argument for each one; `scripts/check-asm-budget.py` fails the build on
+any site that is not on the list, on a file over its budget, and on an entry
+that has gone stale.
 
 That number is a trend, not a gate. Assembly here is a fixed cost that does not
 grow with the system, so the percentage rises as the OS is written.
@@ -199,7 +186,10 @@ says so if they are missing.
 Given a static busybox with `--init`, `build` and `run` put it in the kernel,
 which starts `sh -i` on the console, and in the initramfs at `/bin/busybox`
 with every applet linked beside it, so `ls /proc`, `cat /proc/self/maps` and
-`top` work where you type them.
+`top` work where you type them. Where zinc is built (below), `sh` is zinc's
+rather than busybox's, and on x86-64 the uutils family owns the names it
+provides; busybox keeps the rest, which [docs/UUTILS.md](docs/UUTILS.md) §8
+counts down.
 
 The busybox Ferrix is measured with is built against
 [ferrousli](ferrousli/README.md), this repository's C library, and
@@ -248,8 +238,8 @@ and glibc builds they check alongside.
 
 `build` and `run` with a program also put [zinc](zinc/README.md) in the
 initramfs, at `/bin/zinc` with `/bin/zsh` beside it: a zsh-compatible shell
-written in Rust, whose goal is to run oh-my-zsh. Type `zsh` at the busybox
-prompt. It is built for x86-64 and AArch64 by `cargo` alone, against the
+written in Rust, whose goal is to run oh-my-zsh. It is `/bin/sh` as well, so
+the shell the kernel starts is zinc. It is built for x86-64 and AArch64 by `cargo` alone, against the
 target's own musl and linked by rust-lld, so Windows needs nothing else.
 
 `cargo xtask test-shell --arch x86_64 --init target/zinc/x86_64-unknown-linux-musl/release/zinc`
@@ -610,10 +600,12 @@ anyway; `run` is the one command that wants it said.
 **What `--clipboard` does today.** It puts a `virtio-serial` device on the
 bus with the port SPICE's agent protocol uses, and QEMU's own half of that
 protocol behind it, so the wire between the guest and the clipboard of
-whoever is watching is there and QEMU is talking on it. **Nothing in the
-guest answers yet** -- there is no driver for the device, no
-`/dev/vport0p1` and no agent, so copy and paste between Ferrix and the host
-does not work, and pressing `CTRL`+`V` will do nothing across that boundary.
+whoever is watching is there and QEMU is talking on it. In the guest, the
+ring-3 driver `user/vport` opens the port and offers it at `/tmp/vport`, but
+**nothing speaks the agent protocol over it yet** -- the vdagent program and
+the terminal's paste are still to come, so copy and paste between Ferrix and
+the host does not work, and pressing `CTRL`+`V` will do nothing across that
+boundary.
 Copy and paste *between two Ferrix programs* is a different path and does
 work. [The clipboard design](docs/CLIPBOARD.md) is the whole plan and §8
 says which parts of it are built.
@@ -698,12 +690,17 @@ itself instead.
 
 | | |
 |---|---|
-| `libs/` | Architecture-neutral logic: the hand-off ABI, the ELF reader, page table construction, the buddy allocator, the kernel heap. Host-testable **by design** — it is the only code `cargo test`, Miri and the fuzzers can reach. |
+| `libs/` | Architecture-neutral logic, some forty crates: the hand-off ABI, the ELF reader, paging, the allocators, the scheduler's queues, the VFS, btrfs read and write, the net stack, the virtio device protocols, the native ABI. Host-testable **by design** — it is the only code `cargo test`, Miri and the fuzzers can reach. |
 | `boot/` | The UEFI loader. Reads the kernel, builds the address space, leaves firmware. |
 | `kernel/` | The kernel. |
-| `xtask/` | Host build driver: cross-compiles both halves, converts the 32-bit loader from ELF to PE, writes the FAT32 image, drives QEMU. |
-| `scripts/` | The quality gates. |
-| `docs/` | [Architecture](docs/ARCHITECTURE.md) · [Roadmap](docs/ROADMAP.md) · [Assembly](docs/ASSEMBLY.md) · [Reliability](docs/RELIABILITY.md) · [Boot log](docs/BOOT-LOG.md) · [Conventions](docs/CONVENTIONS.md) · [SysML v2 model](docs/sysml/README.md) |
+| `user/` | Native ring-3 programs: `devmgr`, the block, net, GPU, input and console drivers, and the runtime they share. |
+| `ferrousli/` | [A C library written in Rust](ferrousli/README.md), with its own dynamic linker. Its own workspace. |
+| `zinc/` | [A zsh-compatible shell](zinc/README.md). Its own workspace. |
+| `compositor/` | [hyprix, the terminal and the Wayland pieces](compositor/README.md). Its own workspace. |
+| `xtask/` | Host build driver: cross-compiles every half, converts the 32-bit loader from ELF to PE, writes the FAT32 image and initramfs, drives QEMU and every `test-*` gate. |
+| `fuzz/` | The fuzz targets over `libs/`. |
+| `scripts/` | The quality gates, generators and sysroot fetchers. |
+| `docs/` | [Architecture](docs/ARCHITECTURE.md) · [Roadmap](docs/ROADMAP.md) · [Backlog](docs/BACKLOG.md) · [Assembly](docs/ASSEMBLY.md) · [Reliability](docs/RELIABILITY.md) · [Boot log](docs/BOOT-LOG.md) · [Display](docs/DISPLAY.md) · [GPU](docs/GPU.md) · [Conventions](docs/CONVENTIONS.md) · [SysML v2 model](docs/sysml/README.md) |
 
 ## Quality gates
 

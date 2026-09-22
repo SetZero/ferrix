@@ -20,10 +20,10 @@ bring-up, 9–14 are the parts this design chose to do properly, 15–16 are the
 goal, and 17–19 are the goal after it: a Hyprland-shaped Wayland compositor,
 written in Rust, running on Ferrix (decided 2026-09-13). From that date
 sizes for new work are story points, measured into time only after the fact
--- and since 2026-09-18, at the customer's word, measured *forward* as well:
-the forecast after *Where it stands* turns the pointed remainder into
-roundabout dates at the velocity that was counted, and is redone at each
-count. The dates are what the arithmetic says, not promises.
+-- and since 2026-09-18, at the customer's word, measured *forward* as well.
+The status table after *Where it stands* records the pointed remainder and
+its current state. A dated forecast is made only from a fresh velocity count;
+estimates are arithmetic, not promises.
 
 **Where it stands:** stages 0–11 are done and in the boot test on all three
 architectures, and the boot marker reads `FERRIX-BOOT-OK stages 1-11`.
@@ -57,9 +57,9 @@ architectures. `fsync` writes a log tree the next mount replays, and
 `cargo xtask test-powerfail` kills QEMU in the middle of writing, replays at
 the next boot and has `btrfs check` judge the volume before and after: 249
 seeds across the three architectures, 226 of them leaving a log to replay,
-every one clean. `cargo xtask run` now boots with `/` on a persistent btrfs
-volume. What the stage still owes, outside its points, is writeback of pages
-written through `MAP_SHARED`.
+every one clean. `cargo xtask run` now carries a persistent btrfs disk,
+mounted at `/data`. What the stage still owes, outside its points, is
+writeback of pages written through `MAP_SHARED`.
 Stage 16's exit, the goal, is met: `cargo xtask test-rustc` compiles
 `hello.rs` on Ferrix with the rust-lang.org `rustc`, linked through `cc`
 and `rust-lld`, from a btrfs volume, and runs what it made.
@@ -73,7 +73,7 @@ through `/dev/dri/renderD128`, and the screen is shown the very texture the
 compositor drew into, which takes a 1920x1080 frame of a video wallpaper
 behind a blurred translucent terminal from 39 ms in software to 12
 (`docs/GPU.md` §3.7 and §3.8; 60 fps is 16.7). What stage 19 still owes is
-XWayland, the pointer-driven options and the second-pass effects. Stage 21
+XWayland, `dwindle:precise_mouse_move` and the second-pass effects. Stage 21
 is bare metal with a card of Ferrix's own, and stage 22 is Steam. Stage 17's display iteration is done:
 `/dev/dri/card0` served by a ring-3 virtio-gpu driver, with `cargo xtask
 test-display` requiring a compositor's colour pixel for pixel on x86-64 and
@@ -90,44 +90,43 @@ QEMU's far end.
 Each stage's section below says what exists. The marker will not move until a
 stage meets its exit criterion.
 
-**Velocity, and a forecast (counted 2026-09-18).** Over the four days of the
+**Status and estimates (reviewed 2026-09-21).** Over the four days of the
 points era that the fleet ran, 2026-09-14 to -17, about 445 points landed:
 131, 34, 66 and 214, which is ≈ 111 a calendar day and ≈ 150 a day the fleet
 was running, with 8–10 sessions, 15–20 points a session-day, and 21 points a
 queue-hour on both days that were measured finely. Every estimate under 8
 held, and stages 17 and 18 came in at the sizes they were given
-(`docs/BACKLOG.md`, *Velocity*). The forecast below assumes a fleet of that
-size running every day from 2026-09-19, at between 100 and 150 points a day,
-and the order the decisions of 2026-09-18 set: the rest of stage 19 with the
-GPU first, then what Steam stands on. Stages 12 to 16 were sized in words
-before points existed; the points beside them here are first guesses made
-for this forecast and not an owner's estimate, and are replaced the day a
-session sizes them.
+(`docs/BACKLOG.md`, *Velocity*). That is historical velocity, not a current
+schedule: the dates projected from it have elapsed while stage 19, dynamic
+linking and stage 12 remain under way. The table records the state now.
+Stages 12 to 16 were sized in words before points existed; their points are
+first guesses rather than an owner's estimate and are replaced when a session
+sizes them.
 
-| what | points | lands, roundabout |
+| what | points | current state |
 |---|---|---|
-| ~~Stage 19: the GPU path, Path A (`docs/GPU.md` §3)~~ *done 2026-09-19* | ~~52~~ | landed 2026-09-19 |
-| Stage 19: XWayland, the pointer-driven options, the second-pass effects | 48 | 2026-09-19 to -20 |
-| Dynamic linking: the kernel half, ferrousli's loader, glibc's names | 39 *(27 done; the exit met on x86-64)* | 2026-09-20 to -21 |
-| ~~Stage 12, btrfs write~~ *done 2026-09-21* | ~~≈ 60~~ | landed 2026-09-21 |
-| Stage 13, namespaces, cgroups, seccomp | *month* ≈ 60 | 2026-09-22 to -23 |
-| Stage 22, Steam: the parts with a first guess (glibc under the runtime 13, bubblewrap's rest 13, sound 30, Venus 8, XWayland counted above) | 64 | 2026-09-23 to -24 |
-| Stage 22, Steam: the 32-bit x86 ABI and what the runtime and Proton find missing | unsized, ≈ 100 as a guess | 2026-09-24 to -25 |
-| Stage 14, real-time domains | *month* ≈ 40 | 2026-09-25 to -26 |
-| Stage 15, a real userland | *week* ≈ 20, of which job control is spent; most of the rest landed as zinc and uutils, and what is left is an init | 2026-09-26 |
-| ~~Stage 16, `rustc`~~ *exit met 2026-09-22* | ~~*the goal* ≈ 40~~ 8 spent | landed 2026-09-22 |
-| Stage 20, self-hosting | *longer*, unsized | after 16 |
-| Stage 21, bare metal and a GPU of Ferrix's own | over 100, unsized | when the customer wants bare metal |
+| ~~Stage 19: the GPU path, Path A (`docs/GPU.md` §3)~~ *done 2026-09-19* | ~~52~~ | done |
+| Stage 19: XWayland, `dwindle:precise_mouse_move`, the second-pass effects, Mesa and `zwp_linux_dmabuf` | 48 | in progress |
+| Dynamic linking: the kernel half, ferrousli's loader, glibc's names | 39 *(27 done; the exit met on x86-64)* | in progress |
+| ~~Stage 12, btrfs write~~ *done 2026-09-21* | ~~≈ 60~~ | done |
+| Stage 13, namespaces, cgroups, seccomp | *month* ≈ 60 | not started |
+| Stage 22, Steam: the parts with a first guess (glibc under the runtime 13, bubblewrap's rest 13, sound 30, Venus 8, XWayland counted above) | 64 | not started |
+| Stage 22, Steam: the 32-bit x86 ABI and what the runtime and Proton find missing | unsized, ≈ 100 as a guess | not started |
+| Stage 14, real-time domains | *month* ≈ 40 | not started |
+| Stage 15, a real userland | *week* ≈ 20, of which job control is spent; most of the rest landed as zinc and uutils, and what is left is an init | partially complete: init and gettys remain |
+| ~~Stage 16, `rustc`~~ *exit met 2026-09-22* | ~~*the goal* ≈ 40~~ 8 spent | done |
+| Stage 20, self-hosting | *longer*, unsized | after stage 16 |
+| Stage 21, bare metal and a GPU of Ferrix's own | over 100, unsized | planned when bare-metal work is requested |
 
-Three things bend these dates, and each is named where it happens:
+Three things qualify these estimates:
 
 * **The kind of work.** The velocity was measured on tables, system calls
   and a renderer, where every estimate held. The GPU path is unknowns in
   every step and XWayland is a server; either may take the time the table
-  gives it twice over, and the first days of the forecast are the ones that
-  would show it.
+  gives it twice over. A new forecast needs a new count once that work has
+  enough history.
 * **The fleet.** The number is a fleet's. One session alone does 15–20 a
-  day, and the same table then reads in weeks rather than days.
+  day, and the same estimate then reads in weeks rather than days.
 * **Unsized stages.** A word like *month* was written for one person before
   points existed; the guess beside it is only so that a date can be put
   down at all. Stage 21 and the rest of 22 have no date because they have
@@ -3372,7 +3371,7 @@ every architecture, and by `su`, which reaches `/etc/group` only because a
 
 ---
 
-## Dynamic linking — PIE, `PT_INTERP`, a loader  ·  *39 points, 12 left*
+## Dynamic linking — PIE, `PT_INTERP`, a loader  ·  *39 priced points, 13 left; further loader work unpriced*
 
 Placed after *Networking* without a number of its own, for the same reason:
 nothing on the path to `rustc` needs it, since Rust's `std` targets static
@@ -3737,27 +3736,14 @@ twenty-five points each are opened, replayed, checked for consistency and
 for any completed promise rolled back. `scripts/btrfs-check-writer.sh` runs
 it at that size, and `cargo test` a small one.
 
-**Since the exit — `/` on btrfs.** `cargo xtask run` and `run-compositor`
-attach `build/root.img`, a 1 GiB volume made from the `root` fixture the
-first time and kept after that. The kernel (`kernel/src/fs/root_disk.rs`)
-starts on the initramfs, and once its disk driver is serving the volume it
-does what Linux's `switch_root` does: mounts it, installs the initramfs onto
-it when the archive differs from the one it last got, mounts `/dev`, `/proc`
-and `/tmp` inside it, and starts init and every process after it with the
-volume as `/`. It commits every 30 seconds, as Linux's btrfs does by default,
-and once more when it powers the machine off itself. `--reset-root` starts
-the volume over, and `--tmpfs-root` or `ferrix.root=tmpfs` keeps `/` in
-memory. The test boots keep the tmpfs root. What is still an init's work,
-which stage 15 owes: `pivot_root` itself, so the kernel's tmpfs can be
-unmounted from under the switched root. The root disk is found by its btrfs
-label, `ferrix-root`, as Linux's `root=LABEL=` finds one, and any other btrfs
-disk from `vdd` on is mounted at `/data` inside whichever `/` processes have:
-`test-rustc` gives the guest its compiler that way. A page of a mapped
-btrfs file that nothing had read used to show zeros, which kept dynamically
-linked programs from running off a btrfs volume. Stage 16 fixed that: a
-fault now fills the page from the disk, as a read does. The static busybox
-ran from the root before the fix, too: the boots that tried this ran `cat`,
-`ls` and `awk` from `/bin` on the volume.
+**Since the exit — a disk that persists.** `cargo xtask run` and
+`run-compositor` attach `build/data.img` as a fourth disk, made from the blank
+fixture the first time and kept after that, and the kernel
+(`kernel/src/fs/data_disk.rs`) mounts it writable at `/data` and commits it
+every 30 seconds, as Linux's btrfs does by default, and once more when it
+powers the machine off itself. `--reset-data` starts it over. The test boots
+never attach it. The root filesystem is still the initramfs; putting `/` on
+a disk is an init's work, which stage 15 owes.
 
 Owed beside the stage, and not in its points: writeback of pages written
 through `MAP_SHARED`, which needs a dirty bit the page cache does not keep
@@ -3888,10 +3874,9 @@ Debian's busybox. The sysroot on btrfs is stage 12's write path and the
   The same tree, in an otherwise empty bwrap sandbox on the host, compiles
   and runs the same program, which is what separates a broken sysroot from
   a broken kernel.
-* **The gate.** `cargo xtask test-rustc` attaches the image under QEMU's
-  `snapshot=on`, so a run never changes it. The image has no `ferrix-root`
-  label, so the kernel mounts it at `/data`. The initramfs carries five
-  links for the absolute paths glibc and gcc name:
+* **The gate.** `cargo xtask test-rustc` attaches the image in `/data`'s
+  slot under QEMU's `snapshot=on`, so a run never changes it. It carries
+  five links in the initramfs for the absolute paths glibc and gcc name:
   `/lib64`, `/lib/x86_64-linux-gnu`, `/usr/lib/x86_64-linux-gnu`,
   `/usr/lib/gcc` and `/usr/libexec`. zinc runs `rustc -vV`, then
   `rustc hello.rs`, then `./hello`, each step with an exit status of its
@@ -4061,10 +4046,10 @@ session holds.
 Nested `epoll`, `FIONBIO` and the plane objects were not counted before
 `docs/INPUT.md` §2 read Smithay's event loop.
 
-**Still to do:** input L5–L7; `timerfd` (wanted,
-not required, deferred); atomic commit; per-open windows onto the card VMO;
-and the rest of the exit below. E1–E3 (os-26) and E4 are done, so iteration
-2's prerequisites are all in. E1–E3's paragraphs below record
+**Follow-up surface, not part of stage 17's met exit:** `timerfd` (wanted,
+not required, deferred), atomic commit and per-open windows onto the card
+VMO. E1–E3 (os-26) and E4 are done, so iteration 2's prerequisites are all
+in. E1–E3's paragraphs below record
 what they do not yet do as Linux does: `EPOLLRDHUP` and `EPOLLPRI` are never
 reported, `poll` and epoll waits recheck every 5 ms instead of waking on the
 event (a P2 row in `docs/BACKLOG.md`), and a zero-length write to an eventfd
@@ -4750,7 +4735,7 @@ console can run the terminal client in it.
 
 ---
 
-## Stage 19 — Hyprland fidelity, and the GPU  ·  *144 points, about 100 left*
+## Stage 19 — Hyprland fidelity, and the GPU  ·  *144 points, about 48 left*
 
 What makes it Hyprland rather than a tiling compositor: animations with its
 bezier curves, rounded corners, blur and shadows, dimming and opacity rules,
@@ -6005,8 +5990,11 @@ the GPU path and inside the stated bound under the fallback; two monitors on
 QEMU with independent workspaces; a plugin-shaped extension loaded from the
 configuration.
 
-**Where the exit stands (2026-09-17).** Every part of it but the GPU path is
-met, and by `cargo xtask test-compositor` on x86-64 and on AArch64:
+**Where the exit stands (reviewed 2026-09-21).** The existing exit criterion
+is met: `cargo xtask test-compositor` covers the non-GPU path on x86-64 and
+AArch64, and `cargo xtask test-compositor --gl` covers Path A from inside the
+guest. The stage remains under way for the scope named above. The non-GPU
+evidence is:
 
 * the sliding window with its decorations on, as a sequence of screendumps,
   with the guest's own frame times reported and the renderer's software
@@ -6016,7 +6004,7 @@ met, and by `cargo xtask test-compositor` on x86-64 and on AArch64:
 * a plugin loaded from `plugin = /bin/plug`, adding a dispatcher a keybind
   presses.
 
-**Where the points stand (2026-09-19).** Of the stage's 144, about 48 are
+**Where the points stand (reviewed 2026-09-21).** Of the stage's 144, about 48 are
 left. The GPU path's 52 are spent -- Path A landed on 2026-09-19, and what
 is left of that road is `zwp_linux_dmabuf` and a Mesa on ferrousli, for
 clients that render for themselves. What remains of the stage is XWayland,

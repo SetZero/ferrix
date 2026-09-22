@@ -1028,7 +1028,13 @@ fn boot_script(config: &Config, directory: &str, sha: &str, extra: &[String]) ->
     // cannot find it again. So it goes first, before the checkout changes the
     // files under it.
     steps.push(stop_recorded(PID_FILE));
-    steps.push(format!("git checkout --quiet --detach {}", quoted(sha)));
+    // This checkout is the cache owned by remote-desktop. A previous boot or
+    // an interrupted/manual edit may have left tracked files dirty; those
+    // files must not prevent the next requested snapshot from starting.
+    steps.push(format!(
+        "git checkout --quiet --force --detach {}",
+        quoted(sha)
+    ));
     steps.push("echo \"remote: booting $(git rev-parse --short HEAD) in $PWD\"".to_owned());
     // For a teardown that has to reach past a connection which did not take
     // the boot with it when it closed.
@@ -1580,7 +1586,7 @@ send = "head"
             &["--smp".to_owned(), "8".to_owned()],
         );
         assert!(script.contains("cd 'desktop'"));
-        assert!(script.contains("git checkout --quiet --detach 'abc123'"));
+        assert!(script.contains("git checkout --quiet --force --detach 'abc123'"));
         assert!(script.contains("export FERRIX_QEMU='/usr/bin'"));
         assert!(
             script.contains("'--vnc' ':2'"),

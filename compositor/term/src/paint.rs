@@ -21,7 +21,7 @@
 use ferrix_fbtext::{PixelOrder, Rgb, Surface};
 
 use crate::font;
-use crate::grid::Grid;
+use crate::grid::{CellDamage, Grid};
 
 /// The font's cell, in pixels: Hack at 20 pixels per em is 12 by 24.
 pub const CELL: (usize, usize) = (font::WIDTH, font::HEIGHT);
@@ -85,6 +85,41 @@ pub fn draw(
     colours: &Colours,
     scale: usize,
 ) {
+    // A terminal window is not necessarily an exact multiple of the cell
+    // size. The initial/full path must paint those trailing pixels too;
+    // incremental damage is always cell-aligned and can keep them.
+    {
+        let Some(mut surface) = Surface::new(pixels, width, height, stride / 4, PixelOrder::Bgrx)
+        else {
+            return;
+        };
+        surface.fill(colours.background);
+    }
+    let (columns, rows) = grid.size();
+    draw_damage(
+        pixels,
+        (width, height),
+        stride,
+        grid,
+        colours,
+        scale,
+        CellDamage::full(columns, rows),
+    );
+}
+
+/// Draw only `damage`'s cells into a buffer that already holds the preceding
+/// frame. [`draw`] is the initial/full-buffer form; the Wayland client uses
+/// this after a small terminal update so its rendering and surface damage have
+/// the same boundary.
+pub fn draw_damage(
+    pixels: &mut [u8],
+    (width, height): (usize, usize),
+    stride: usize,
+    grid: &Grid,
+    colours: &Colours,
+    scale: usize,
+    damage: CellDamage,
+) {
     let scale = scale.max(1);
     // `wl_shm`'s `XRGB8888` is little-endian, which is blue, green, red and
     // a byte nothing reads: `fbtext`'s `Bgrx`.
@@ -92,14 +127,26 @@ pub fn draw(
     else {
         return;
     };
-    surface.fill(colours.background);
     let (columns, rows) = grid.size();
-    for row in 0..rows {
-        for column in 0..columns {
+    let left = damage.left.min(columns);
+    let top = damage.top.min(rows);
+    let right = damage.left.saturating_add(damage.width).min(columns);
+    let bottom = damage.top.saturating_add(damage.height).min(rows);
+    let cell_width = CELL.0 * scale;
+    let cell_height = CELL.1 * scale;
+    surface.fill_rect(
+        left * cell_width,
+        top * cell_height,
+        right.saturating_sub(left) * cell_width,
+        bottom.saturating_sub(top) * cell_height,
+        colours.background,
+    );
+    for row in top..bottom {
+        for column in left..right {
             let Some(cell) = grid.cell(column, row) else {
                 continue;
             };
-            let (x, y) = (column * CELL.0 * scale, row * CELL.1 * scale);
+            let (x, y) = (column * cell_width, row * cell_height);
             if y >= height {
                 break;
             }
