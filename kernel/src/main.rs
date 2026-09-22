@@ -22,6 +22,7 @@ mod acpi;
 mod arch;
 mod backtrace;
 mod block_ring;
+mod claim;
 mod console;
 mod device;
 mod devmgr;

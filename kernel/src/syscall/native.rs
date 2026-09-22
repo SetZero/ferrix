@@ -1223,17 +1223,21 @@ fn info_bytes(info: &DeviceInfo) -> [u8; DEVICE_INFO_BYTES] {
 /// the driver is gone but its ring has not ended within the patience.
 fn device_quiesce(process: &Process, device: Handle) -> Result<usize, Errno> {
     let node = device_in(process, device, Rights::MANAGE)?;
-    // A dead driver's ring may not have noticed the death yet: wait for it,
-    // as long as the driver's end of its channel is closed.
-    block_ring::wait_until_unserved(&node, &|| process.is_terminated()).map_err(|why| {
-        match why {
-            // A driver still holds its end: refused for good.
-            block_ring::StillServed::ByADriver => status::BAD_STATE,
-            // The driver is gone but the ring has not let go in time: worth
-            // asking again, and devmgr does.
-            block_ring::StillServed::Waiting => status::TIMED_OUT,
-        }
-    })?;
+    // A dead driver's ring, card or renderer may not have noticed the death
+    // yet: wait for each, as long as the driver's end of its channel is
+    // closed. A driver started again is refused its channel until they let
+    // go (`crate::claim`).
+    let cancelled = || process.is_terminated();
+    let served = |why| match why {
+        // A driver still holds its end: refused for good.
+        block_ring::StillServed::ByADriver => status::BAD_STATE,
+        // The driver is gone but the core has not let go in time: worth
+        // asking again, and devmgr does.
+        block_ring::StillServed::Waiting => status::TIMED_OUT,
+    };
+    block_ring::wait_until_unserved(&node, &cancelled).map_err(served)?;
+    crate::display::wait_until_unserved(&node, &cancelled).map_err(served)?;
+    crate::render::wait_until_unserved(&node, &cancelled).map_err(served)?;
     node.disable_dma().map_err(|_| status::BAD_STATE)?;
     block_ring::release_claim(&node);
     Ok(0)

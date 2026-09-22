@@ -26,7 +26,7 @@ use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::convert::Infallible;
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use ferrix_blkring::identity::Location;
 use ferrix_bootinfo::PAGE_SIZE;
@@ -39,6 +39,8 @@ use ferrix_native_abi::rights::Rights;
 use ferrix_native_abi::signals::Signals;
 use ferrix_native_abi::types::CHANNEL_MAX_HANDLES;
 
+use crate::block_ring::StillServed;
+use crate::claim::{Claims, Numbers};
 use crate::device::DeviceNode;
 use crate::object::channel::{ChannelMessage, Endpoint, ReadError};
 use crate::object::port::Port;
@@ -118,10 +120,12 @@ struct Start {
 }
 
 static STARTING: SpinLock<Vec<Start>> = SpinLock::new(Vec::new());
-static CLAIMED: SpinLock<Vec<Arc<DeviceNode>>> = SpinLock::new(Vec::new());
+static CLAIMS: Claims = Claims::new();
 static CARDS: SpinLock<Vec<Arc<Card>>> = SpinLock::new(Vec::new());
 static NEXT_ID: AtomicUsize = AtomicUsize::new(1);
-static NEXT_CARD: AtomicU32 = AtomicU32::new(0);
+/// `card<N>`: a driver started again after its card went publishes as the
+/// number the card had, so `/dev/dri/card0` is found again (`crate::claim`).
+static NUMBERS: Numbers = Numbers::new(0);
 
 /// A published card.
 pub(crate) struct Card {
@@ -606,12 +610,8 @@ pub(crate) fn card(index: u32) -> Option<Arc<Card>> {
 /// driver's end.
 pub(crate) fn create(node: &Arc<DeviceNode>) -> Result<Arc<Endpoint>, CreateError> {
     let (kernel_end, driver_end) = Endpoint::pair().ok_or(CreateError::NoMemory)?;
-    {
-        let mut claimed = CLAIMED.lock();
-        if claimed.iter().any(|held| Arc::ptr_eq(held, node)) {
-            return Err(CreateError::InUse);
-        }
-        claimed.push(Arc::clone(node));
+    if !CLAIMS.claim(node, &kernel_end) {
+        return Err(CreateError::InUse);
     }
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
     STARTING.lock().push(Start {
@@ -622,20 +622,29 @@ pub(crate) fn create(node: &Arc<DeviceNode>) -> Result<Arc<Endpoint>, CreateErro
     });
     if sched::spawn("display", run, id, ferrix_sched::NICE_0_WEIGHT).is_err() {
         let _ = take_start(id);
-        unclaim(node);
+        CLAIMS.release(node);
         return Err(CreateError::NoMemory);
     }
     Ok(driver_end)
+}
+
+/// Wait until no display driver's channel claims `node`, for a quiesce
+/// (`crate::claim`).
+///
+/// # Errors
+///
+/// [`StillServed`].
+pub(crate) fn wait_until_unserved(
+    node: &Arc<DeviceNode>,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<(), StillServed> {
+    CLAIMS.wait_until_released(node, cancelled)
 }
 
 fn take_start(id: usize) -> Option<Start> {
     let mut starting = STARTING.lock();
     let at = starting.iter().position(|start| start.id == id)?;
     Some(starting.remove(at))
-}
-
-fn unclaim(node: &Arc<DeviceNode>) {
-    CLAIMED.lock().retain(|held| !Arc::ptr_eq(held, node));
 }
 
 /// One card's task.
@@ -646,9 +655,10 @@ fn run(id: usize) {
     if let Some(card) = take_up(&start) {
         serve(&card);
         CARDS.lock().retain(|held| !Arc::ptr_eq(held, &card));
+        NUMBERS.give_back(card.index);
         crate::console::println!("  display  card{} is gone", card.index);
     }
-    unclaim(&start.device);
+    CLAIMS.release(&start.device);
 }
 
 /// The next message on the control channel, waiting up to `deadline`.
@@ -711,7 +721,7 @@ fn accept(start: &Start, message: &ChannelMessage) -> Result<Arc<Card>, Refusal>
 
     let vmo = Vmo::new_anonymous(CARD_BYTES / PAGE_SIZE);
     let core_port = Port::new();
-    let index = NEXT_CARD.fetch_add(1, Ordering::Relaxed);
+    let index = NUMBERS.take();
     let card = Arc::new(Card {
         index,
         vmo: Arc::clone(&vmo),
@@ -752,10 +762,14 @@ fn accept(start: &Start, message: &ChannelMessage) -> Result<Arc<Card>, Refusal>
         (Object::Vmo(vmo), CARD_VMO_RIGHTS),
         (Object::Port(core_port), Rights::WRITE),
     ];
-    start
+    if start
         .control
         .write(ready, 2, || Ok::<Vec<Transfer>, Infallible>(handed))
-        .map_err(|_| Refusal::Malformed)?;
+        .is_err()
+    {
+        NUMBERS.give_back(index);
+        return Err(Refusal::Malformed);
+    }
 
     CARDS.lock().push(Arc::clone(&card));
     // What the card is, before what it shows: a line a person reading a

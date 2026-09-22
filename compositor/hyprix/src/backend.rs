@@ -70,6 +70,35 @@ pub trait Backend: core::fmt::Debug {
         1
     }
 
+    /// Whether the screen went away under the compositor: its card's driver
+    /// died, and every call to it answers `ENODEV` until one is started
+    /// again (`docs/DEVMGR.md` §4). A lost screen shows nothing and is not
+    /// drawn for; the compositor and its clients carry on.
+    fn lost(&self) -> bool {
+        false
+    }
+
+    /// Try to have a lost screen back: open its card again and set the mode
+    /// it had. Whether it is back, which a screen that was never lost always
+    /// is. Cheap to call every frame: a backend tries only now and then.
+    fn recover(&mut self) -> bool {
+        true
+    }
+
+    /// A descriptor that becomes readable when the screen may have gone,
+    /// for the compositor's wait: `None` for a screen that cannot go, and
+    /// for one that already has.
+    fn raw_fd(&self) -> Option<std::os::fd::RawFd> {
+        None
+    }
+
+    /// Look, after [`Backend::raw_fd`] was readable, whether the screen has
+    /// gone: `true` when it went just now. Without this a screen nothing is
+    /// redrawn on would not find out until its next frame.
+    fn check(&mut self) -> bool {
+        false
+    }
+
     /// What to say about this backend in the compositor's log line.
     fn describe(&self) -> String;
 
@@ -194,6 +223,19 @@ pub struct Drm {
     width: u32,
     height: u32,
     frames: u32,
+    /// When the card went away, or when it was last looked for since: `None`
+    /// while the screen is there.
+    lost: Option<std::time::Instant>,
+}
+
+/// How often a lost screen's card is looked for.
+#[cfg(target_os = "linux")]
+const RETRY: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// Whether `error` is the card saying its driver has gone.
+#[cfg(target_os = "linux")]
+fn gone(error: &io::Error) -> bool {
+    error.raw_os_error() == Some(libc::ENODEV)
 }
 
 #[cfg(target_os = "linux")]
@@ -292,7 +334,41 @@ impl Drm {
             width,
             height,
             frames: 0,
+            lost: None,
         })
+    }
+
+    /// The screen again, on a card opened afresh: the same connector, at the
+    /// same size, so nothing laid out on it moves. `None` while the card is
+    /// not there yet, or is there with no such connector or mode.
+    fn reopened(&self) -> Option<Self> {
+        let index = self.card.name().strip_prefix("card")?.parse().ok()?;
+        let card = std::rc::Rc::new(compositor_drm::Card::open_index(index).ok()?);
+        let mut plans = compositor_drm::plans(&card).ok()?;
+        let at = plans
+            .iter()
+            .position(|plan| plan.connector == self.plan.connector)
+            .unwrap_or(0);
+        let mut plan = (at < plans.len()).then(|| plans.swap_remove(at))?;
+        let _ = plan.take((self.width, self.height), None);
+        if plan.size() != (self.width, self.height) {
+            return None;
+        }
+        // Named as it was: `rename` numbered it among every card's.
+        plan.name.clone_from(&self.plan.name);
+        let mut screen = Self::on(card, plan).ok()?;
+        screen.frames = self.frames;
+        Some(screen)
+    }
+
+    /// Note that the card went away, for [`Backend::recover`] to look for it
+    /// from the next frame on.
+    fn lose(&mut self) {
+        self.lost = Some(
+            std::time::Instant::now()
+                .checked_sub(RETRY)
+                .unwrap_or_else(std::time::Instant::now),
+        );
     }
 
     /// How many frames have been shown.
@@ -352,6 +428,9 @@ impl Backend for Drm {
     }
 
     fn present(&mut self, drawn: &compositor_render::Damage) -> io::Result<()> {
+        if self.lost.is_some() {
+            return Ok(());
+        }
         // What the GPU drew is one texture, shown where it lies: there is no
         // second buffer to flip to and nothing to copy into it, so every
         // frame is a dirty rectangle -- which on this card costs the host
@@ -364,7 +443,8 @@ impl Backend for Drm {
             },
         };
         let buffer = shown;
-        if self.copied || self.adopted.is_some() {
+        let flipped = !(self.copied || self.adopted.is_some());
+        let result = if !flipped {
             let edge = |value: i64| u32::try_from(value.max(0)).unwrap_or(u32::MAX);
             let clips: Vec<(u32, u32, u32, u32)> = drawn
                 .rects()
@@ -381,14 +461,65 @@ impl Backend for Drm {
             // A frame that drew nothing has nothing to send, and an empty
             // list would say "all of it".
             if !clips.is_empty() {
-                self.card.dirty(buffer, &clips)?;
+                self.card.dirty(buffer, &clips)
+            } else {
+                Ok(())
             }
         } else {
-            self.card.page_flip(&self.plan, buffer)?;
-            self.back = 1 - self.back;
+            self.card.page_flip(&self.plan, buffer)
+        };
+        match result {
+            Ok(()) => {
+                if flipped {
+                    self.back = 1 - self.back;
+                }
+                self.frames = self.frames.saturating_add(1);
+                Ok(())
+            }
+            // The driver died. The compositor, its clients and the frame just
+            // drawn are all still good; only the card is not, until one is
+            // started again.
+            Err(error) if gone(&error) => {
+                self.lose();
+                Ok(())
+            }
+            Err(error) => Err(error),
         }
-        self.frames = self.frames.saturating_add(1);
-        Ok(())
+    }
+
+    fn lost(&self) -> bool {
+        self.lost.is_some()
+    }
+
+    fn raw_fd(&self) -> Option<std::os::fd::RawFd> {
+        // A lost card's descriptor is readable for good, and a wait on it
+        // would never sleep: while lost, the frame loop looks for it instead.
+        self.lost.is_none().then(|| self.card.raw_fd())
+    }
+
+    fn check(&mut self) -> bool {
+        if self.lost.is_some() || !self.card.gone() {
+            return false;
+        }
+        self.lose();
+        true
+    }
+
+    fn recover(&mut self) -> bool {
+        let Some(tried) = self.lost else {
+            return true;
+        };
+        if tried.elapsed() < RETRY {
+            return false;
+        }
+        self.lost = Some(std::time::Instant::now());
+        match self.reopened() {
+            Some(screen) => {
+                *self = screen;
+                true
+            }
+            None => false,
+        }
     }
 
     fn age(&self) -> u32 {

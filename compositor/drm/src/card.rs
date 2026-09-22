@@ -87,6 +87,43 @@ impl Card {
         &self.name
     }
 
+    /// The card's descriptor, for a loop to wait on: it is readable with a
+    /// page-flip event to read, and for good once the card's driver has gone.
+    #[must_use]
+    pub fn raw_fd(&self) -> std::os::fd::RawFd {
+        self.fd
+    }
+
+    /// Whether the card's driver has gone, which a read of the descriptor
+    /// says by returning 0, as Linux's does for an unplugged card. Any
+    /// page-flip events waiting are read and dropped on the way: nothing here
+    /// waits on them (see [`Card::page_flip`]). Never blocks.
+    #[must_use]
+    pub fn gone(&self) -> bool {
+        let mut events = [0u8; 4096];
+        loop {
+            let mut poll = libc::pollfd {
+                fd: self.fd,
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            // SAFETY: one live `pollfd`, and a zero timeout.
+            let ready = unsafe { libc::poll(&raw mut poll, 1, 0) };
+            if ready <= 0 || poll.revents & libc::POLLIN == 0 {
+                return false;
+            }
+            // SAFETY: `events` is a live buffer of the length passed.
+            let read = unsafe { libc::read(self.fd, events.as_mut_ptr().cast(), events.len()) };
+            match read {
+                0 => return true,
+                read if read < 0 => {
+                    return io::Error::last_os_error().raw_os_error() == Some(libc::ENODEV);
+                }
+                _ => {}
+            }
+        }
+    }
+
     /// Run `request` with `value` as its argument, and read the kernel's
     /// answer back into it.
     fn ioctl<L: Layout>(&self, request: u32, value: &mut L) -> io::Result<()> {

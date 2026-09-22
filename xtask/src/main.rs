@@ -79,6 +79,7 @@ mod powerfail;
 mod pty;
 mod qemu;
 mod remote;
+mod restart;
 mod rustc;
 mod seat;
 mod serial;
@@ -157,6 +158,7 @@ COMMANDS:
     test-seat     Boot the compositor with a client, type into it over QMP, and require the key and the keybind to land
     test-pty      Boot compositor/term as init, run a program on a pseudoterminal, and require its output back
     test-jobs     Boot an interactive shell on the console, type a session with jobs at it, and require the answers
+    test-restart  Boot a shell beside a virtio-gpu, kill -9 the gpu driver twice, and require it started again each time
     test-threads  Boot threads-test as init and require std::thread, Mutex, mpsc and /proc's thread count
     test-rustc    Attach the rustc volume scripts/fetch-rustc-sysroot.sh makes, run `rustc hello.rs && ./hello`
     check         Run every quality gate (fmt, clippy, layering, audits, tests, docs)
@@ -364,6 +366,7 @@ fn run() -> Result<()> {
         "test-seat" => seat::test_seat(&args),
         "test-pty" => pty::test_pty(&args),
         "test-jobs" => jobs::test_jobs(&args),
+        "test-restart" => restart::test_restart(&args),
         "test-threads" => threads::test_threads(&args),
         "test-rustc" => rustc::test_rustc(&args),
         "check" => check::run(&args),

@@ -56,11 +56,12 @@ handles: [job (first only), device 0, device 0 again, ..., image 0 ...
   given no job otherwise, and `process_create` needs one.
 
 * **The devices** are every node `device::devices()` publishes, in that order,
-  each as two handles with `DEVICE_RIGHTS` (`TRANSFER | MANAGE`). One is the
-  handle the driver will be given in START, unchanged; the other stays with
-  `devmgr` for the quiesce in §4, because `DEVICE_RIGHTS` carries no
-  `DUPLICATE` and a handle given away is gone. `device_info` (0x1049) on
-  either says what the device is.
+  each as two handles. The first has `DEVICE_RIGHTS` (`TRANSFER | MANAGE`) and
+  is the handle the driver will be given in START, unchanged. The second stays
+  with `devmgr` for the quiesce in §4, because a handle given away is gone. It
+  has `DEVICE_RIGHTS | DUPLICATE`, so a driver started again after a death
+  gets a duplicate of it and `devmgr` still has one for the next quiesce.
+  `device_info` (0x1049) on either says what the device is.
 * **The drivers** are every program in one fixed initramfs directory,
   `/lib/drivers/`, in the order of `/lib/drivers/MANIFEST`, one name per
   line, which `xtask` writes when it builds the image: the kernel has no
@@ -92,7 +93,7 @@ The kernel waits for REPORT with a deadline, prints one line for the boot log
 with a disk, with `started` at least 1 and `failed` 0, so a `devmgr` that
 starts nothing fails the boot rather than leaving `/dev/vda` quietly absent.
 The kernel keeps its end open: a later message from `devmgr` is a report of
-a driver's death (§4), printed the same way.
+a driver's death or of its restart (§4), printed the same way.
 
 ## 3. What devmgr does with them
 
@@ -156,11 +157,13 @@ refuses a new ring for it (`ALREADY_BOUND`). `devmgr`:
    when the driver's handles close, which queues `PEER_CLOSED` for the ring's
    task but does not wait for it, so the quiesce may arrive before the ring
    has ended: the kernel then waits, bounded, for the ring to let the device
-   go, since the driver's end of the channel is provably closed. Only a
-   driver still holding its end gets `BAD_STATE`, which `devmgr` never
-   retries; a ring that has not let go within the kernel's patience answers
-   `TIMED_OUT`, which `devmgr` retries until it succeeds, since the device
-   must not stay on;
+   go, since the driver's end of the channel is provably closed. The display
+   and render cores are waited for the same way (`kernel/src/claim.rs`), so a
+   quiesced device has no claim left on it and a driver started again gets its
+   channel. Only a driver still holding its end gets `BAD_STATE`, which
+   `devmgr` never retries; a core that has not let go within the kernel's
+   patience answers `TIMED_OUT`, which `devmgr` retries until it succeeds,
+   since the device must not stay on;
 2. writes on the bootstrap channel a DIED message, which the kernel prints:
 
 ```
@@ -171,11 +174,42 @@ DIED     devmgr -> kernel, 16 bytes
 12  4  status     the driver's exit status; 137 if killed
 ```
 
-3. does not restart it, and reports the status as 137 whether the driver
-   was killed or exited, since a `TERMINATED` packet carries no status.
-   Version 1 has no restart policy: a dead disk driver
-   is a dead disk, said on the console, and the device stays quiesced. A
-   restart is a decision for the day a driver's death is not a bug.
+   It reports the status as 137 whether the driver was killed or exited,
+   since a `TERMINATED` packet carries no status;
+3. starts a **display** driver again, once the quiesce succeeded: in a new
+   job, on a duplicate of its kept device handle, with the START it was
+   first given, and waits for PUBLISHED as at boot. The kernel numbers
+   cards and render nodes lowest-free, so the card comes back as the
+   `card<N>` it was, and a compositor that waits for it (hyprix does) opens
+   it again. A driver that publishes gets RESTARTED, which the kernel
+   prints:
+
+```
+RESTARTED devmgr -> kernel, 16 bytes
+0   4  type = 5
+4   4  length = 16
+8   4  location
+12  4  restarts   how many times this device's driver was started again
+```
+
+   A native program has no clock, so the budget is a count, not a rate:
+   eight restarts per device, after which the device stays quiesced, as does
+   one whose restarted driver dies before it publishes.
+
+Every other kind is not started again. A dead disk driver is a dead disk,
+said on the console, and the device stays quiesced: what a mounted
+filesystem should do with a disk that went and came back is its own
+decision. The net, input and serial cores do not yet wait for a dead
+driver's claim in the quiesce, so a driver started again would be refused
+its channel; each can be added to `restarted` in `user/devmgr` once its core
+does.
+
+It began as a bug. With no restart, `kill -9` of the `gpu` driver under the
+desktop took the card away for good, the compositor ended on `ENODEV`, and
+the compositor was init, so the machine powered off.
+`cargo xtask test-restart` (a shell kills it twice) and
+`cargo xtask test-compositor --boot restart` (a script kills it twice under
+hyprix) are the gates.
 
 `device_quiesce` needs `MANAGE`, and `devmgr` gave one device handle away in
 START; the quiesce goes through the second handle §2 gave it for exactly

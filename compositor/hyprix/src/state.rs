@@ -496,6 +496,21 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
             break;
         }
 
+        // A card whose driver died: the screen is lost until the card is
+        // back, and the frames that look for it are owed from now on.
+        for screen in &mut screens {
+            let Some(fd) = screen.backend.raw_fd() else {
+                continue;
+            };
+            if ready.as_ref().is_some_and(|fds| fds.contains(&fd)) && screen.backend.check() {
+                report(&format!(
+                    "hyprix: {}: the card went away; waiting for it to come back",
+                    screen.name
+                ));
+                owed = true;
+            }
+        }
+
         // New connections.
         let first_new = slots.len();
         if ready
@@ -1152,6 +1167,9 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
             // damage tracking is worth is how little a frame that changes
             // little costs, and the line the loop prints says so.
             let mut redrew = 0i64;
+            // Whether a screen is lost and not yet back: the next frame is
+            // owed so that it is looked for again.
+            let mut waiting = false;
             // A frame a monitor: each screen draws the workspace it shows,
             // with the windows' rectangles moved into its own pixels.
             for (which, screen) in screens.iter_mut().enumerate() {
@@ -1161,6 +1179,23 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                 else {
                     continue;
                 };
+                // A screen whose card went away is looked for again every
+                // frame and drawn for only once it is back: then as a whole
+                // frame, since the card it is on now has seen none of the
+                // last one's, and in software, since the GPU went with it.
+                let lost = screen.backend.lost();
+                if lost && !screen.backend.recover() {
+                    waiting = true;
+                    continue;
+                }
+                if lost {
+                    report(&format!(
+                        "hyprix: {}: the card is back; drawing on it again",
+                        screen.name
+                    ));
+                    screen.gpu = None;
+                    screen.watch = crate::damage::Watch::default();
+                }
                 // Where each window *is*, rather than where the tiling put
                 // it.
                 let output = &animations.follow(output, millis);
@@ -1313,6 +1348,13 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                     crate::frame::draw(&mut target, output, &slots, &sources, &over, &frame.canvas)
                 };
                 match drew {
+                    Ok(()) if screen.backend.lost() => {
+                        report(&format!(
+                            "hyprix: {}: the card went away; waiting for it to come back",
+                            screen.name
+                        ));
+                        waiting = true;
+                    }
                     Ok(()) => {}
                     // A GPU that has gone is not a screen that has. The
                     // software canvas has drawn nothing while the GPU was
@@ -1333,6 +1375,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                     Err(why) => return Err(why),
                 }
             }
+            owed |= waiting;
             // The frame has been drawn from them, so the next one starts
             // from what happens next.
             commits.taken();
@@ -1455,6 +1498,9 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
             fds.push(socket.raw_fd());
         }
         fds.extend(plugins.raw_fds());
+        // A card's descriptor: readable when its driver dies, so a screen
+        // nothing is redrawn on still finds out.
+        fds.extend(screens.iter().filter_map(|screen| screen.backend.raw_fd()));
         ready = Some(
             crate::wait::wait(&fds, timeout)
                 .map_err(|error| format!("hyprix: event wait: {error}"))?,

@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "digest": "168427f39a5d78be1c3e3e8cf9f5644cf027e82caa04f9e48e212c7c7ed86da3",
+  "digest": "3f1ffc9b75256e8d2e17d439e3ca45624a2b08ff3a3893fba9650253c232e39c",
   "files": [
     {
       "path": "docs/sysml/00-lifecycle.sysml",
@@ -57,9 +57,9 @@
   ],
   "summary": {
     "packages": 16,
-    "elements": 1505,
+    "elements": 1507,
     "maturity": {
-      "implemented": 147,
+      "implemented": 148,
       "inProgress": 11,
       "writtenAhead": 15,
       "planned": 90
@@ -13862,6 +13862,27 @@
                 "file": "docs/sysml/08-drivers.sysml",
                 "line": 158
               }
+            },
+            {
+              "name": "quiesceOnDeath",
+              "qualifiedName": "FerrixDrivers::DevMgr::quiesceOnDeath",
+              "kind": "action",
+              "doc": "device_quiesce after a driver's TERMINATED: the kernel waits for the block, display and render cores to let the device go (kernel/src/claim.rs), then DIED.",
+              "source": {
+                "file": "docs/sysml/08-drivers.sysml",
+                "line": 159
+              }
+            },
+            {
+              "name": "restartDriver",
+              "qualifiedName": "FerrixDrivers::DevMgr::restartDriver",
+              "kind": "action",
+              "maturity": "implemented",
+              "doc": "A display driver that died is started again on a duplicate of devmgr's kept device handle, at most eight times a device; its card returns as the number it had. RESTARTED tells the kernel. docs/DEVMGR.md section 4.",
+              "source": {
+                "file": "docs/sysml/08-drivers.sysml",
+                "line": 164
+              }
             }
           ]
         },
@@ -13876,7 +13897,7 @@
           "doc": "The first driver: virtio-blk as a user process. Exit test: a sector read through ring 3 with the IOMMU on, and a deliberate out-of-domain DMA attempt faulting.",
           "source": {
             "file": "docs/sysml/08-drivers.sysml",
-            "line": 161
+            "line": 172
           }
         },
         {
@@ -13888,7 +13909,7 @@
           "maturity": "planned",
           "source": {
             "file": "docs/sysml/08-drivers.sysml",
-            "line": 168
+            "line": 179
           }
         },
         {
@@ -13948,7 +13969,7 @@
           ],
           "source": {
             "file": "docs/sysml/08-drivers.sysml",
-            "line": 170
+            "line": 181
           },
           "children": [
             {
@@ -13960,7 +13981,7 @@
               ],
               "source": {
                 "file": "docs/sysml/08-drivers.sysml",
-                "line": 177
+                "line": 188
               }
             },
             {
@@ -13972,7 +13993,7 @@
               ],
               "source": {
                 "file": "docs/sysml/08-drivers.sysml",
-                "line": 178
+                "line": 189
               }
             },
             {
@@ -13984,7 +14005,7 @@
               ],
               "source": {
                 "file": "docs/sysml/08-drivers.sysml",
-                "line": 179
+                "line": 190
               }
             },
             {
@@ -13996,7 +14017,7 @@
               ],
               "source": {
                 "file": "docs/sysml/08-drivers.sysml",
-                "line": 180
+                "line": 191
               }
             },
             {
@@ -14008,7 +14029,7 @@
               ],
               "source": {
                 "file": "docs/sysml/08-drivers.sysml",
-                "line": 181
+                "line": 192
               }
             },
             {
@@ -14020,7 +14041,7 @@
               ],
               "source": {
                 "file": "docs/sysml/08-drivers.sysml",
-                "line": 182
+                "line": 193
               }
             }
           ]

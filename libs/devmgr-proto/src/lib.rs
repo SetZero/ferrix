@@ -21,6 +21,8 @@
 //!   8 location u32   12 reserved
 //! DIED       devmgr -> kernel, 16 bytes
 //!   8 location u32   12 status i32
+//! RESTARTED  devmgr -> kernel, 16 bytes
+//!   8 location u32   12 restarts u32 (this is the device's how-manieth)
 //! ```
 //!
 //! A channel message carries at most 64 handles and a device takes two, so
@@ -40,6 +42,8 @@ pub const REPORT: u32 = 2;
 pub const PUBLISHED: u32 = 3;
 /// DIED's message type.
 pub const DIED: u32 = 4;
+/// RESTARTED's message type.
+pub const RESTARTED: u32 = 5;
 
 /// Bytes of the type and length every message starts with.
 pub const HEADER_BYTES: usize = 8;
@@ -47,7 +51,7 @@ pub const HEADER_BYTES: usize = 8;
 pub const DEVICES_HEADER_BYTES: usize = 24;
 /// Bytes of a driver's name in DEVICES: `PROCESS_NAME_MAX`, NUL-padded.
 pub const NAME_BYTES: usize = 32;
-/// Bytes of REPORT, PUBLISHED and DIED.
+/// Bytes of REPORT, PUBLISHED, DIED and RESTARTED.
 pub const SHORT_BYTES: usize = 16;
 /// The most drivers one DEVICES message names, and so the most a machine's
 /// driver directory may hold.
@@ -226,6 +230,15 @@ pub enum Message {
         /// The driver's exit status; 137 if killed.
         status: i32,
     },
+    /// `devmgr` to kernel: the driver of the device at `location`, which
+    /// died, was started again and has published.
+    Restarted {
+        /// The device's PCI address word.
+        location: u32,
+        /// How many times this device's driver has been started again,
+        /// counting this one.
+        restarts: u32,
+    },
 }
 
 impl Message {
@@ -237,6 +250,7 @@ impl Message {
             Message::Report { started, failed } => (REPORT, started, failed),
             Message::Published { location } => (PUBLISHED, location, 0),
             Message::Died { location, status } => (DIED, location, status as u32),
+            Message::Restarted { location, restarts } => (RESTARTED, location, restarts),
         };
         put(&mut bytes, 0, &kind.to_le_bytes());
         put(&mut bytes, 4, &(SHORT_BYTES as u32).to_le_bytes());
@@ -253,7 +267,7 @@ impl Message {
     /// since it is decoded by [`DevicesView::decode`].
     pub fn decode(bytes: &[u8]) -> Result<Message, Malformed> {
         let (kind, declared) = header(bytes)?;
-        if !matches!(kind, REPORT | PUBLISHED | DIED) {
+        if !matches!(kind, REPORT | PUBLISHED | DIED | RESTARTED) {
             return Err(Malformed::UnknownType(kind));
         }
         if declared != SHORT_BYTES || bytes.len() != SHORT_BYTES {
@@ -267,6 +281,10 @@ impl Message {
                 failed: b,
             },
             PUBLISHED => Message::Published { location: a },
+            RESTARTED => Message::Restarted {
+                location: a,
+                restarts: b,
+            },
             _ => Message::Died {
                 location: a,
                 status: b as i32,

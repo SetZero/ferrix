@@ -47,6 +47,12 @@ const NAME: &[u8] = b"devmgr";
 /// HELLO; generous under TCG.
 const REPORT_PATIENCE_NANOS: u64 = 20_000_000_000;
 
+/// The rights of the device handle `devmgr` keeps, the second of each pair:
+/// a driver's, and `DUPLICATE`, so a driver that died can be started again
+/// with a handle of its own while `devmgr` keeps this one for the next
+/// quiesce (`docs/DEVMGR.md` §4).
+const KEPT_DEVICE_RIGHTS: Rights = Rights(DEVICE_RIGHTS.0 | Rights::DUPLICATE.0);
+
 /// The kernel's end of `devmgr`'s bootstrap channel, once it is started.
 static CHANNEL: SpinLock<Option<Arc<Endpoint>>> = SpinLock::new(None);
 
@@ -113,7 +119,7 @@ pub(crate) fn start() -> Result<Option<Report>, &'static str> {
         }
         for node in nodes.iter().skip(index).take(take) {
             transfers.push((Object::Device(Arc::clone(node)), DEVICE_RIGHTS));
-            transfers.push((Object::Device(Arc::clone(node)), DEVICE_RIGHTS));
+            transfers.push((Object::Device(Arc::clone(node)), KEPT_DEVICE_RIGHTS));
         }
         if let Some(images) = images.take() {
             for vmo in images {
@@ -281,7 +287,8 @@ fn report(channel: &Endpoint) -> Result<(u32, u32), &'static str> {
     }
 }
 
-/// The kernel's task on `devmgr`'s channel after REPORT: prints each DIED.
+/// The kernel's task on `devmgr`'s channel after REPORT: prints each DIED
+/// and RESTARTED.
 fn listen(_: usize) {
     let Some(channel) = CHANNEL.lock().clone() else {
         return;
@@ -290,10 +297,14 @@ fn listen(_: usize) {
         match channel.read(SHORT_BYTES, CHANNEL_MAX_HANDLES, false) {
             Ok(message) => {
                 crate::object::dispose(message.handles.into_iter().map(|(object, _)| object));
-                if let Ok(Message::Died { location, status }) = Message::decode(&message.bytes) {
-                    crate::console::println!(
-                        "  devmgr   the driver of {location:#010x} ended with status {status}; the device is quiesced and stays without one"
-                    );
+                match Message::decode(&message.bytes) {
+                    Ok(Message::Died { location, status }) => crate::console::println!(
+                        "  devmgr   the driver of {location:#010x} ended with status {status}; the device is quiesced"
+                    ),
+                    Ok(Message::Restarted { location, restarts }) => crate::console::println!(
+                        "  devmgr   the driver of {location:#010x} was started again and published (restart {restarts})"
+                    ),
+                    _ => {}
                 }
             }
             Err(ReadError::Empty) => {

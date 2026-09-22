@@ -2782,6 +2782,24 @@ the disks `devmgr` started.
     functions inside the windows, as Linux does unless `linux,pci-probe-only`
     is set, rather than depend on firmware's choice.
 
+**Landed after the exit (2026-09-22): a display driver that dies is started
+again** (`docs/DEVMGR.md` §4). It began as a bug: `kill -9` of `gpu` under
+the desktop took card0 away for good, hyprix ended on `ENODEV`, and it was
+init, so the machine powered off. The kernel had not crashed. Now
+`device_quiesce` also waits for the display and render cores to let a dead
+driver's device go (`kernel/src/claim.rs`). Cards and render nodes are
+numbered lowest-free, so the card returns as `card0`. devmgr keeps its device
+handle with `DUPLICATE`, starts the driver again on a duplicate (eight times
+a device at most), and tells the kernel RESTARTED. hyprix treats `ENODEV`, or
+its card's descriptor reading 0, as a lost screen and draws on the card again
+when it is back. Gates: `cargo xtask test-restart` (a shell kills the driver
+twice) and `cargo xtask test-compositor --boot restart` (a script kills it
+twice under hyprix, and the screen must then be the tiled picture, every
+pixel). **Still to do:** the net, input and serial cores' claims, so their
+drivers can be restarted too; a GPU renderer that comes back, since hyprix
+draws in software after a restart; and a card with two connectors, whose
+screens would each try to reopen it.
+
 ---
 
 ## Stage 11 — Block core and btrfs, read ✅

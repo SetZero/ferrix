@@ -2,7 +2,7 @@
 
 use super::{
     DEVICES, DEVICES_HEADER_BYTES, DEVICES_MAX_BYTES, DIED, Devices, DevicesView, FLAG_FIRST,
-    MAX_DRIVERS, Malformed, Message, NAME_BYTES, PUBLISHED, REPORT, SHORT_BYTES,
+    MAX_DRIVERS, Malformed, Message, NAME_BYTES, PUBLISHED, REPORT, RESTARTED, SHORT_BYTES,
 };
 
 fn name(text: &str) -> [u8; NAME_BYTES] {
@@ -120,6 +120,10 @@ fn the_short_messages_round_trip_and_are_sixteen_bytes() {
             location: 0x0001_0318,
             status: -1,
         },
+        Message::Restarted {
+            location: 0x0001_0318,
+            restarts: 2,
+        },
     ] {
         let bytes = message.encode();
         assert_eq!(
@@ -148,6 +152,13 @@ fn the_short_messages_round_trip_and_are_sixteen_bytes() {
         Message::Published { location: 0 }.encode()[0..4],
         PUBLISHED.to_le_bytes()
     );
+    let restarted = Message::Restarted {
+        location: 7,
+        restarts: 3,
+    }
+    .encode();
+    assert_eq!(restarted[0..4], RESTARTED.to_le_bytes());
+    assert_eq!(restarted[12..16], 3_u32.to_le_bytes(), "restarts");
 }
 
 #[test]

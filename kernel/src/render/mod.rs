@@ -46,6 +46,8 @@ use ferrix_renderctl::message::{
 };
 use ferrix_renderctl::session::{Event, RequestError, Session};
 
+use crate::block_ring::StillServed;
+use crate::claim::{Claims, Numbers};
 use crate::device::DeviceNode;
 use crate::object::channel::{ChannelMessage, Endpoint, ReadError};
 use crate::object::port::Port;
@@ -311,21 +313,19 @@ pub(crate) struct Renderer {
 }
 
 static NEXT_ID: AtomicUsize = AtomicUsize::new(1);
-static NEXT_RENDERER: AtomicUsize = AtomicUsize::new(128);
+/// `renderD<N>`, from 128 as Linux numbers them, and the number a renderer
+/// had is the one its driver gets when started again (`crate::claim`).
+static NUMBERS: Numbers = Numbers::new(128);
 static STARTING: SpinLock<Vec<Start>> = SpinLock::new(Vec::new());
-static CLAIMED: SpinLock<Vec<Arc<DeviceNode>>> = SpinLock::new(Vec::new());
+static CLAIMS: Claims = Claims::new();
 static RENDERERS: SpinLock<Vec<Arc<Renderer>>> = SpinLock::new(Vec::new());
 
 /// Make the control channel for `node` and start its task; answer the
 /// driver's end.
 pub(crate) fn create(node: &Arc<DeviceNode>) -> Result<Arc<Endpoint>, CreateError> {
     let (kernel_end, driver_end) = Endpoint::pair().ok_or(CreateError::NoMemory)?;
-    {
-        let mut claimed = CLAIMED.lock();
-        if claimed.iter().any(|held| Arc::ptr_eq(held, node)) {
-            return Err(CreateError::InUse);
-        }
-        claimed.push(Arc::clone(node));
+    if !CLAIMS.claim(node, &kernel_end) {
+        return Err(CreateError::InUse);
     }
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
     STARTING.lock().push(Start {
@@ -336,20 +336,29 @@ pub(crate) fn create(node: &Arc<DeviceNode>) -> Result<Arc<Endpoint>, CreateErro
     });
     if sched::spawn("render", run, id, ferrix_sched::NICE_0_WEIGHT).is_err() {
         let _ = take_start(id);
-        unclaim(node);
+        CLAIMS.release(node);
         return Err(CreateError::NoMemory);
     }
     Ok(driver_end)
+}
+
+/// Wait until no render driver's channel claims `node`, for a quiesce
+/// (`crate::claim`).
+///
+/// # Errors
+///
+/// [`StillServed`].
+pub(crate) fn wait_until_unserved(
+    node: &Arc<DeviceNode>,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<(), StillServed> {
+    CLAIMS.wait_until_released(node, cancelled)
 }
 
 fn take_start(id: usize) -> Option<Start> {
     let mut starting = STARTING.lock();
     let at = starting.iter().position(|start| start.id == id)?;
     Some(starting.remove(at))
-}
-
-fn unclaim(node: &Arc<DeviceNode>) {
-    CLAIMED.lock().retain(|held| !Arc::ptr_eq(held, node));
 }
 
 /// The numbers of every published renderer, lowest first.
@@ -388,9 +397,10 @@ fn run(id: usize) {
         RENDERERS
             .lock()
             .retain(|held| !Arc::ptr_eq(held, &renderer));
+        NUMBERS.give_back(renderer.index);
         crate::console::println!("  render   renderD{} is gone", renderer.index);
     }
-    unclaim(&start.device);
+    CLAIMS.release(&start.device);
 }
 
 /// The next message on the control channel, waiting up to `deadline`.
@@ -459,8 +469,7 @@ fn accept(start: &Start, message: &ChannelMessage) -> Result<Arc<Renderer>, Refu
     if start.location.map(Location::raw) != Some(hello.location) {
         return Err(Refusal::WrongLocation);
     }
-    let index = NEXT_RENDERER.fetch_add(1, Ordering::Relaxed);
-    let index = u32::try_from(index).unwrap_or(128);
+    let index = NUMBERS.take();
     // READY carries the two handles `Ready::HANDLE_RIGHTS` fixes: the work
     // VMO, which is where an object's description and a command buffer live
     // on their way to the device, and the core's port, which is how a driver
@@ -500,10 +509,14 @@ fn accept(start: &Start, message: &ChannelMessage) -> Result<Arc<Renderer>, Refu
         (Object::Vmo(work), WORK_VMO_RIGHTS),
         (Object::Port(core_port), Rights::WRITE),
     ];
-    start
+    if start
         .control
         .write(ready, 2, || Ok::<Vec<Transfer>, Infallible>(handed))
-        .map_err(|_| Refusal::Malformed)?;
+        .is_err()
+    {
+        NUMBERS.give_back(index);
+        return Err(Refusal::Malformed);
+    }
     let state = renderer.state.lock();
     crate::console::println!(
         "  render   renderD{index} is `{}`, version {VERSION}, capset {}, objects to {} MiB",

@@ -100,11 +100,11 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixAssurance` | `11-assurance.sysml` | docs/RELIABILITY.md and docs/ASSEMBLY.md: the quality gates, what each one verifies, and what the tests can actually reach. All of it runs in CI today except the two debts the roadmap states. |
 | `FerrixViews` | `12-views.sysml` | How to read the one model as two: what runs today, and what the roadmap still owes. The filters key on the lifecycle keywords every element carries. |
 
-13 files, 16 packages, 1505 elements, 167 relations. Model digest `168427f39a5d78be`.
+13 files, 16 packages, 1507 elements, 167 relations. Model digest `3f1ffc9b75256e8d`.
 
 | Maturity | Elements | Meaning |
 | --- | ---: | --- |
-| `#implemented` | 147 | The code exists and the QEMU boot test exercises it on every architecture it applies to. |
+| `#implemented` | 148 | The code exists and the QEMU boot test exercises it on every architecture it applies to. |
 | `#inProgress` | 11 | The owning stage has started; part of the element runs. |
 | `#writtenAhead` | 15 | A libs/ crate exists and passes its host tests, but nothing in kernel/ calls it yet. |
 | `#planned` | 90 | Only the design exists, in docs/ARCHITECTURE.md. Nothing stands in for it. |
@@ -2173,6 +2173,8 @@ A normal musl binary that also speaks the native ABI. Receives a handle per devi
 | --- | --- | --- | --- | --- |
 | `match` | action |  |  |  |
 | `spawnDriver` | action |  |  |  |
+| `quiesceOnDeath` | action |  |  | device_quiesce after a driver's TERMINATED: the kernel waits for the block, display and render cores to let the device go (kernel/src/claim.rs), then DIED. |
+| `restartDriver` | action |  | `#implemented` | A display driver that died is started again on a duplicate of devmgr's kept device handle, at most eight times a device; its card returns as the number it had. |
 
 #### VirtioBlkDriver
 

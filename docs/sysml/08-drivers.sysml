@@ -156,6 +156,17 @@ package FerrixDrivers {
              * Job with the four resources above. */
         action match;
         action spawnDriver;
+        action quiesceOnDeath {
+            doc /* device_quiesce after a driver's TERMINATED: the kernel waits
+                 * for the block, display and render cores to let the device go
+                 * (kernel/src/claim.rs), then DIED. */
+        }
+        #implemented action restartDriver {
+            doc /* A display driver that died is started again on a duplicate
+                 * of devmgr's kept device handle, at most eight times a device;
+                 * its card returns as the number it had. RESTARTED tells the
+                 * kernel. docs/DEVMGR.md section 4. */
+        }
     }
 
     #planned part def VirtioBlkDriver :> DriverProcess {

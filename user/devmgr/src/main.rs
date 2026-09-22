@@ -128,10 +128,35 @@ enum Step {
     Wait = 6,
 }
 
+/// How many times one device's driver is started again after it dies.
+///
+/// A native program has no clock, so the budget is a count rather than a
+/// rate: a driver that dies on every start stops being started after this
+/// many, and its device stays quiesced as a device with no restart does.
+const MAX_RESTARTS: u32 = 8;
+
+/// Whether a driver of `kind` is started again when it dies
+/// (`docs/DEVMGR.md` §4).
+///
+/// A display driver only. A disk's death under a mounted filesystem is
+/// still a dead disk: what a filesystem does with a device that went and
+/// came back is its own decision. The net, input and serial cores do not yet
+/// wait for a dead driver's claim to go (`kernel/src/claim.rs`), so a driver
+/// started again would be refused its channel.
+const fn restarted(kind: Kind) -> bool {
+    matches!(kind, Kind::Display)
+}
+
 /// A driver devmgr started, and what it keeps of it.
 struct Started {
     /// The device's PCI address word, as START and HELLO carry it.
     location: u32,
+    /// What the device is, as `device_info` said, and which driver it takes:
+    /// what starting it again needs.
+    info: DeviceInfo,
+    kind: Kind,
+    /// How many times its driver has been started again.
+    restarts: u32,
     /// The device, for the quiesce when the driver dies.
     device: Device<Kernel>,
     /// The driver's job, killed if it never publishes.
@@ -230,6 +255,9 @@ fn run(channel: &Channel<Kernel>) -> Result<(), Step> {
                 };
                 *slot = Some(Started {
                     location: info.location,
+                    info,
+                    kind,
+                    restarts: 0,
                     device: keep,
                     job,
                     process,
@@ -261,7 +289,21 @@ fn run(channel: &Channel<Kernel>) -> Result<(), Step> {
             .encode(),
         )
         .map_err(|_| Step::Report)?;
-    serve_deaths(channel, &port, &mut started)
+    let drivers = Drivers {
+        job: &job,
+        names: &given.names,
+        count: given.drivers,
+        images: &given.images,
+    };
+    serve_deaths(channel, &port, &mut started, &drivers)
+}
+
+/// What starting a driver again needs of what the kernel handed over.
+struct Drivers<'a> {
+    job: &'a Job<Kernel>,
+    names: &'a [[u8; NAME_BYTES]; MAX_DRIVERS],
+    count: usize,
+    images: &'a [Option<Vmo<Kernel>>; MAX_DRIVERS],
 }
 
 /// Read every DEVICES message the kernel wrote: the first with the job and
@@ -386,33 +428,43 @@ fn await_published(
     for died in deaths.into_iter().flatten() {
         let _ = port.queue(died, [0, 0]);
     }
+    // A driver that published and then died is dead all the same: its death
+    // was taken here, so it is queued again for `serve_deaths`, or nothing
+    // would ever quiesce the device or start the driver again.
+    if published && exited {
+        let _ = port.queue(key, [0, 0]);
+    }
     published
 }
 
-/// Deaths, for the life of the machine: quiesce the device, tell the kernel.
+/// Deaths, for the life of the machine: quiesce the device, tell the kernel,
+/// and start a driver of a kind that is [`restarted`] again.
 fn serve_deaths(
     channel: &Channel<Kernel>,
     port: &Port<Kernel>,
     started: &mut [Option<Started>; MAX_DEVICES],
+    drivers: &Drivers<'_>,
 ) -> Result<(), Step> {
     loop {
         let packet = port.wait(Deadline::Never).map_err(|_| Step::Wait)?;
-        let Some(entry) = started
-            .get_mut(packet.key as usize)
-            .and_then(Option::as_mut)
-        else {
+        let key = packet.key;
+        let Some(entry) = started.get_mut(key as usize).and_then(Option::as_mut) else {
             continue;
         };
         if entry.dead {
             continue;
         }
         entry.dead = true;
-        // A ring that has not let go yet answers TIMED_OUT and is asked
+        // A core that has not let go yet answers TIMED_OUT and is asked
         // again; a live driver's BAD_STATE cannot happen for a dead one.
+        let mut quiesced = false;
         for _ in 0..8 {
             match entry.device.quiesce() {
                 Err(Error::TimedOut) => {}
-                _ => break,
+                result => {
+                    quiesced = result.is_ok();
+                    break;
+                }
             }
         }
         let _ = channel.write(
@@ -422,8 +474,71 @@ fn serve_deaths(
             }
             .encode(),
         );
-        let _ = &entry.process;
+        // Only a device that was quiesced is handed on: until then the dead
+        // driver's core may still hold it, and the new one would be refused.
+        if quiesced
+            && restarted(entry.kind)
+            && entry.restarts < MAX_RESTARTS
+            && restart(channel, port, key, entry, drivers)
+        {
+            let _ = channel.write(
+                &Message::Restarted {
+                    location: entry.location,
+                    restarts: entry.restarts,
+                }
+                .encode(),
+            );
+        }
     }
+}
+
+/// Start `entry`'s driver again, in a job of its own, on a duplicate of the
+/// device handle devmgr keeps, and wait for it to publish as at boot.
+/// `false`, with the device left quiesced, when it could not be started or
+/// did not publish.
+fn restart(
+    channel: &Channel<Kernel>,
+    port: &Port<Kernel>,
+    key: u64,
+    entry: &mut Started,
+    drivers: &Drivers<'_>,
+) -> bool {
+    entry.restarts += 1;
+    // The dead driver's job, and anything it left running in it, goes first.
+    let _ = entry.job.kill();
+    let Some((image, _)) = driver_for(&entry.info, drivers.names, drivers.count, drivers.images)
+    else {
+        return false;
+    };
+    let Ok(device) = entry.device.duplicate(Requested::Exactly(DEVICE_RIGHTS)) else {
+        return false;
+    };
+    let plan = match entry.kind {
+        Kind::Display => Plan::Display,
+        // Nothing else is restarted.
+        _ => return false,
+    };
+    let Ok((job, process)) = start(drivers.job, device, image, &entry.info, plan, port, key) else {
+        return false;
+    };
+    entry.job = job;
+    entry.process = process;
+    entry.dead = false;
+    if await_published(channel, port, entry.location, key) {
+        entry.published = true;
+        return true;
+    }
+    // It died before publishing, or never would: its death packet, if any,
+    // was taken by the wait above, so it is ended and quiesced here.
+    let _ = entry.job.kill();
+    entry.dead = true;
+    for _ in 0..8 {
+        match entry.device.quiesce() {
+            Err(Error::TimedOut) => {}
+            _ => break,
+        }
+    }
+    false
 }
 
 /// The image of the driver for `info`, by the table, if the initramfs
