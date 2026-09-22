@@ -12,8 +12,11 @@
 //! * `IRELATIVE` — the resolver at bias plus addend is *called*, and what it
 //!   returns is written. It picks an implementation by what the processor
 //!   turned out to have.
-//! * `DTPMOD`, `DTPOFF`, `TPOFF` — thread-local storage, which
-//!   [`crate::tls`] resolves.
+//! * `TPOFF` — an initial-exec TLS variable's offset from the thread pointer.
+//!   `DTPMOD` and `DTPOFF` — a general-dynamic one's module and offset, for
+//!   `__tls_get_addr`; `TLSDESC` — a descriptor, for the same answer without
+//!   a call through the PLT. [`crate::tls`] says why all of them are answered
+//!   from static TLS.
 //!
 //! # `REL` and `RELA`
 //!
@@ -172,19 +175,57 @@ unsafe fn apply_one(object: &Object, scope: &Scope, entry: &Entry) -> Result<(),
             }
         }
         arch::R_TPOFF => {
-            let found = unsafe { resolve(object, scope, entry)? };
-            let Some(found) = found else {
+            // SAFETY: the scope's objects are mapped.
+            let place = unsafe { tls_place(object, scope, entry)? };
+            let Some((offset, value)) = place else {
                 // An undefined weak TLS reference is zero, like every other
                 // weak data reference.
+                // SAFETY: the target is the object's own word.
                 unsafe { target.write(0) };
                 return Ok(());
             };
-            let offset = found
-                .tls_offset
-                .ok_or(Error::MalformedObject("a TLS symbol has no PT_TLS"))?;
             (offset as usize)
-                .wrapping_add(found.value)
+                .wrapping_add(value)
                 .wrapping_add_signed(entry.addend)
+        }
+        // General-dynamic TLS: which module, and where in its block. With no
+        // symbol the module is the object's own -- the local-dynamic model,
+        // which asks once for its block and adds its own offsets.
+        arch::R_DTPMOD => {
+            if r_sym(entry.info) == 0 {
+                object.index + 1
+            } else {
+                // SAFETY: the scope's objects are mapped.
+                match unsafe { resolve(object, scope, entry)? } {
+                    Some(found) => found.module + 1,
+                    None => 0,
+                }
+            }
+        }
+        arch::R_DTPOFF => {
+            let value = if r_sym(entry.info) == 0 {
+                0
+            } else {
+                // SAFETY: the scope's objects are mapped.
+                unsafe { resolve(object, scope, entry)? }.map_or(0, |found| found.value)
+            };
+            value.wrapping_add_signed(entry.addend)
+        }
+        // A TLS descriptor: two words, a function and its argument. Every
+        // module is in static TLS here, so the function is one that returns
+        // the argument, the variable's offset from the thread pointer.
+        #[cfg(target_arch = "x86_64")]
+        arch::R_TLSDESC => {
+            // SAFETY: the scope's objects are mapped.
+            let place = unsafe { tls_place(object, scope, entry)? };
+            let offset = place.map_or(0, |(offset, value)| {
+                (offset as usize)
+                    .wrapping_add(value)
+                    .wrapping_add_signed(entry.addend)
+            });
+            // SAFETY: a descriptor is two words in the object's own data.
+            unsafe { target.wrapping_add(1).write(offset) };
+            crate::tls::descriptor_function()
         }
         arch::R_COPY => {
             // SAFETY: the scope's objects are mapped.
@@ -210,9 +251,6 @@ unsafe fn apply_one(object: &Object, scope: &Scope, entry: &Entry) -> Result<(),
             }
             return Ok(());
         }
-        arch::R_DTPMOD | arch::R_DTPOFF => {
-            return Err(Error::UnknownRelocation(kind));
-        }
         other => return Err(Error::UnknownRelocation(other)),
     };
 
@@ -220,6 +258,30 @@ unsafe fn apply_one(object: &Object, scope: &Scope, entry: &Entry) -> Result<(),
     // to, which the linker placed in a writable segment.
     unsafe { target.write(value) };
     Ok(())
+}
+
+/// Where a TLS relocation's variable is: its module's offset from the thread
+/// pointer, and its offset inside that module's block. With no symbol it is
+/// the relocating object's own block; `None` is a weak undefined symbol.
+///
+/// # Safety
+///
+/// As [`apply`].
+unsafe fn tls_place(
+    object: &Object,
+    scope: &Scope,
+    entry: &Entry,
+) -> Result<Option<(isize, usize)>, Error> {
+    const NO_TLS: Error = Error::MalformedObject("a TLS symbol has no PT_TLS");
+    if r_sym(entry.info) == 0 {
+        let own = object.tls.ok_or(NO_TLS)?;
+        return Ok(Some((own.offset, 0)));
+    }
+    // SAFETY: the caller's promise.
+    let Some(found) = (unsafe { resolve(object, scope, entry)? }) else {
+        return Ok(None);
+    };
+    Ok(Some((found.tls_offset.ok_or(NO_TLS)?, found.value)))
 }
 
 /// Find the symbol a relocation names.

@@ -53,6 +53,8 @@ mod x86_64 {
     pub const R_TPOFF: u32 = 18;
     /// `R_X86_64_IRELATIVE`.
     pub const R_IRELATIVE: u32 = 37;
+    /// `R_X86_64_TLSDESC`: a descriptor, two words.
+    pub const R_TLSDESC: u32 = 36;
 }
 
 #[cfg(target_arch = "aarch64")]
@@ -81,6 +83,8 @@ mod aarch64 {
     pub const R_TPOFF: u32 = 1030;
     /// `R_AARCH64_IRELATIVE`.
     pub const R_IRELATIVE: u32 = 1032;
+    /// `R_AARCH64_TLSDESC`: a descriptor, two words.
+    pub const R_TLSDESC: u32 = 1031;
 }
 
 #[cfg(target_arch = "arm")]

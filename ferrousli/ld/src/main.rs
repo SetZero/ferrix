@@ -161,6 +161,9 @@ unsafe fn link(stack: &auxv::Stack) -> Result<usize, report::Error> {
     // the loader defines is the C library's to use, not to override it.
     scope.push_loader(start::own_object().ok_or(report::Error::TooManyObjects)?)?;
     scope.layout_tls()?;
+    // Before any constructor, which may already ask for a TLS variable.
+    // SAFETY: the only thread, before the program runs, after the layout.
+    unsafe { tls::publish_offsets(&scope) };
 
     // Relocated from the last object loaded to the first, so that a library
     // is relocated before whatever needed it. Nothing here requires that

@@ -164,6 +164,9 @@ pub struct Object {
     /// start, and in the scope only so that its names are recognised and its
     /// symbols found.
     pub is_loader: bool,
+    /// Where it is in the scope: its TLS module number less one. Set when it
+    /// is added.
+    pub index: usize,
 }
 
 /// The version a definition carries, from `DT_VERSYM` and `DT_VERDEF`.
@@ -213,6 +216,7 @@ impl Object {
         verdef: (0, 0),
         verneed: (0, 0),
         is_loader: false,
+        index: 0,
     };
 
     /// Read `dynamic`'s entries into an object placed at `base`.

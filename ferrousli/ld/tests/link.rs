@@ -302,6 +302,53 @@ fn initial_exec_tls_works_in_a_program_and_its_library() {
     );
 }
 
+/// A library's TLS read by the general-dynamic and local-dynamic models, in
+/// both of x86-64's dialects: `__tls_get_addr`, and TLS descriptors.
+///
+/// The program reads the library's variable by initial-exec as well, and the
+/// two addresses must be one: that is what shows `DTPMOD`, `DTPOFF` and
+/// `TLSDESC` were answered from the same layout `TPOFF` was.
+#[test]
+fn general_dynamic_tls_agrees_with_initial_exec_in_both_dialects() {
+    let loader = loader();
+    let dir = scratch().join("ld-tls-gd");
+    std::fs::create_dir_all(&dir).expect("make the scratch directory");
+    for dialect in ["gnu", "gnu2"] {
+        let library = dir.join(format!("libtlsgd-{dialect}.so"));
+        compile(&[
+            "-shared",
+            &format!("-mtls-dialect={dialect}"),
+            "-o",
+            library.to_str().expect("a path"),
+            manifest()
+                .join("tests/c/tls_gd.c")
+                .to_str()
+                .expect("a path"),
+        ]);
+        let program = dir.join(format!("prog-{dialect}"));
+        compile(&[
+            "-pie",
+            "-o",
+            program.to_str().expect("a path"),
+            manifest()
+                .join("tests/c/tls_gd_prog.c")
+                .to_str()
+                .expect("a path"),
+            library.to_str().expect("a path"),
+            &format!("-Wl,--dynamic-linker={}", loader.display()),
+            "-Wl,-e,_start",
+        ]);
+        let status = Command::new(&program).status().expect("run the program");
+        assert_eq!(
+            status.code(),
+            Some(EXPECTED),
+            "general-dynamic TLS failed in the {dialect} dialect: 91 is the \
+             value, 92 the address disagreeing with initial-exec's, 93 the \
+             local-dynamic block, and a signal a fault"
+        );
+    }
+}
+
 /// The C runtime receives and registers the loader's `rtld_fini` callback.
 ///
 /// The shared library's destructor writes after `main` returns. That is only

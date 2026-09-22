@@ -9,7 +9,12 @@
 
 fn main() {
     println!("cargo::rerun-if-changed=build.rs");
-    println!("cargo::rustc-link-arg-bins=-Wl,--export-dynamic-symbol=__ferrousli_loader");
+    // `__tls_get_addr` is the loader's in glibc too (`ld-linux`'s, at
+    // `GLIBC_2.3`), and a library built with `-fPIC` that reads a TLS variable
+    // imports it.
+    for symbol in ["__ferrousli_loader", "__tls_get_addr"] {
+        println!("cargo::rustc-link-arg-bins=-Wl,--export-dynamic-symbol={symbol}");
+    }
     // The loader finds symbols through `DT_GNU_HASH` alone (`src/sym.rs`), so
     // its own table has to be one.
     println!("cargo::rustc-link-arg-bins=-Wl,--hash-style=gnu");

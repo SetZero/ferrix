@@ -107,7 +107,7 @@ sizes them.
 |---|---|---|
 | ~~Stage 19: the GPU path, Path A (`docs/GPU.md` §3)~~ *done 2026-09-19* | ~~52~~ | done |
 | Stage 19: XWayland, `dwindle:precise_mouse_move`, the second-pass effects, Mesa and `zwp_linux_dmabuf` | 48 | in progress |
-| Dynamic linking: the kernel half, ferrousli's loader, glibc's names | 39 *(27 done; the exit met on x86-64)* | in progress |
+| Dynamic linking: the kernel half, ferrousli's loader, glibc's names | 39 *(30 done; the exit met on x86-64)* | in progress |
 | ~~Stage 12, btrfs write~~ *done 2026-09-21* | ~~≈ 60~~ | done |
 | Stage 13, namespaces, cgroups, seccomp | *month* ≈ 60 | not started |
 | Stage 22, Steam: the parts with a first guess (glibc under the runtime 13, bubblewrap's rest 13, sound 30, Venus 8, XWayland counted above) | 64 | not started |
@@ -3371,7 +3371,7 @@ every architecture, and by `su`, which reaches `/etc/group` only because a
 
 ---
 
-## Dynamic linking — PIE, `PT_INTERP`, a loader  ·  *39 points, 12 left*
+## Dynamic linking — PIE, `PT_INTERP`, a loader  ·  *39 points, 9 left*
 
 Placed after *Networking* without a number of its own, for the same reason:
 nothing on the path to `rustc` needs it, since Rust's `std` targets static
@@ -3472,8 +3472,17 @@ Three parts, in the order they can be tested:
   `cargo test` at a workspace root that is also a package tests that package
   alone — so it now passes `--workspace`.
 
-  Still missing, 9 points: the general-dynamic TLS forms and `__tls_get_addr`
-  (and AArch64's TLS descriptors); `dlfcn.h` (`dlopen`, `dlsym`, `dlclose`,
+  **The general-dynamic TLS forms, 3 more, 2026-09-22, on x86-64:**
+  `DTPMOD`, `DTPOFF`, the symbol-less local-dynamic forms and `TLSDESC`, and
+  the loader exports `__tls_get_addr`. Every module is loaded before the
+  program starts, so every block is in static TLS and both calls answer from
+  a table of module offsets, with no dynamic thread vector; `dlopen` will
+  need one. `tests/link.rs` builds a library in both of x86-64's dialects
+  and requires its general-dynamic answer to be the address the program's
+  initial-exec access finds; zeroing the table fails the `gnu` build and
+  skewing a descriptor fails `gnu2`.
+
+  Still missing, 6 points: AArch64's TLS descriptors; `dlfcn.h` (`dlopen`, `dlsym`, `dlclose`,
   `dlerror`, `dladdr`), which `docs/POSIX-2024.md` lists as ferrousli's
   dynamic-loading area and does not price; and the loader's entry, self-
   relocation and thread pointer on AArch64 and ARMv7-A. Lazy binding is not

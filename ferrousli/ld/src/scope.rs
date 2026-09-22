@@ -150,6 +150,10 @@ impl Scope {
     ///
     /// [`Error::TooManyObjects`].
     pub fn push(&mut self, name: *const c_char, object: Object) -> Result<(), Error> {
+        let object = Object {
+            index: self.count,
+            ..object
+        };
         let slot = self
             .objects
             .get_mut(self.count)
