@@ -61,6 +61,9 @@ pub(crate) fn finish() -> ! {
     if crate::fs::root_disk::sync().is_err() {
         println!("  power    / could not be committed before the power-off");
     }
+    if crate::fs::data_disk::sync().is_err() {
+        println!("  power    /data could not be committed before the power-off");
+    }
     if RESET_ON_EXIT.load(Ordering::Relaxed) {
         println!("  power    resetting, as {OPTION}={RESET} asks");
         arch::reset()

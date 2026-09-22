@@ -25,6 +25,7 @@
 
 use alloc::sync::Arc;
 use alloc::vec;
+use alloc::vec::Vec;
 use core::fmt;
 
 use ferrix_btrfs::BtrfsError;
@@ -166,6 +167,27 @@ pub(crate) fn mount(rdev: u64) -> Result<Arc<dyn FileSystem>, Errno> {
     let disk = Disk::new(device)?;
     let volume = Btrfs::mount(disk, rdev, Arc::new(VmoStorage))?;
     Ok(volume as Arc<dyn FileSystem>)
+}
+
+/// The label of the btrfs volume on the disk numbered `rdev`, or `None` for
+/// a disk that is not one, cannot be read, or has none: the primary
+/// superblock's name field, read off the disk without mounting it, which is
+/// what `root=LABEL=` looks at on Linux.
+pub(crate) fn label(rdev: u64) -> Option<Vec<u8>> {
+    /// The primary superblock, and its magic and label within it.
+    const SUPERBLOCK_SECTOR: u64 = 0x1_0000 / 512;
+    const MAGIC: core::ops::Range<usize> = 0x40..0x48;
+    const LABEL: core::ops::Range<usize> = 0x12b..0x22b;
+    let device = devfs::block_device(rdev)?;
+    let mut block = alloc::vec![0u8; 4096];
+    device.read(SUPERBLOCK_SECTOR, &mut block).ok()?;
+    if block.get(MAGIC)? != b"_BHRfS_M" {
+        return None;
+    }
+    let field = block.get(LABEL)?;
+    let len = field.iter().position(|&b| b == 0).unwrap_or(field.len());
+    let name = field.get(..len)?;
+    (!name.is_empty()).then(|| name.to_vec())
 }
 
 /// Mount the btrfs volume on the registered disk numbered `rdev` for writing.

@@ -39,9 +39,10 @@ chunks, a single data chunk, the free-space tree, skinny metadata, no-holes --
 so the writer is tested against the volume a user gets, not a simplified one.
 Its nodes are 4 KiB so that a few hundred items already split leaves.
 
-`root.img.packed` is the same empty volume at 1 GiB: what `cargo xtask run`
-boots with as `/`. The system alone is tens of megabytes, which 128 MiB of
-DUP metadata and single data cannot hold with room to work.
+`root.img.packed` is the same empty volume at 1 GiB, labelled `ferrix-root`:
+what `cargo xtask run` boots with as `/`, and the label is how the kernel
+tells it from any other btrfs disk. The system alone is tens of megabytes,
+which 128 MiB of DUP metadata and single data cannot hold with room to work.
 
 Usage:
     python3 scripts/gen-btrfs-fixtures.py [--only NAME ...]
@@ -68,6 +69,7 @@ BLANK = "blank"
 ROOT = "root"
 IMAGE_SIZE = 128 * 1024 * 1024
 ROOT_SIZE = 1024 * 1024 * 1024
+ROOT_LABEL = "ferrix-root"
 BLOCK = 4096
 FS_UUID = "0f3c3a5e-1111-4222-8333-444455556666"
 DEVICE_UUID = "0f3c3a5e-aaaa-4bbb-8ccc-ddddeeeeffff"
@@ -180,13 +182,14 @@ def make_default_subvol_image(source: pathlib.Path, image: pathlib.Path) -> None
     ], check=True)
 
 
-def make_blank_image(image: pathlib.Path, size: int = IMAGE_SIZE) -> None:
+def make_blank_image(image: pathlib.Path, size: int = IMAGE_SIZE, label: str = "") -> None:
     with open(image, "wb") as f:
         f.truncate(size)
     # No profile or feature flags: the defaults are the point.
     subprocess.run([
         "mkfs.btrfs", "-q", "--nodesize", str(BLOCK),
-        "-U", FS_UUID, "--device-uuid", DEVICE_UUID, str(image),
+        "-U", FS_UUID, "--device-uuid", DEVICE_UUID,
+        *(["-L", label] if label else []), str(image),
     ], check=True)
 
 
@@ -272,7 +275,7 @@ def main() -> int:
             print(f"{BLANK}: {len(packed) // (BLOCK + 8)} blocks, {len(packed)} bytes")
         if ROOT in only:
             image = pathlib.Path(scratch) / f"{ROOT}.img"
-            make_blank_image(image, ROOT_SIZE)
+            make_blank_image(image, ROOT_SIZE, ROOT_LABEL)
             packed = pack(image)
             if len(packed) > BUDGET:
                 print(f"{ROOT}: packed image is {len(packed)} bytes, over {BUDGET}",

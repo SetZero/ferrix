@@ -3746,7 +3746,14 @@ and once more when it powers the machine off itself. `--reset-root` starts
 the volume over, and `--tmpfs-root` or `ferrix.root=tmpfs` keeps `/` in
 memory. The test boots keep the tmpfs root. What is still an init's work,
 which stage 15 owes: `pivot_root` itself, so the kernel's tmpfs can be
-unmounted from under the switched root.
+unmounted from under the switched root. The root disk is found by its btrfs
+label, `ferrix-root`, as Linux's `root=LABEL=` finds one, and any other btrfs
+disk from `vdd` on is mounted at `/data` inside whichever `/` processes have:
+`test-rustc` gives the guest its compiler that way. One gap is not this
+stage's: until the page cache fills a mapped btrfs file's pages from the
+disk, a page nothing has read shows zeros, so a dynamically linked program
+does not yet run from a btrfs root. The static busybox runs from it: the
+boots that tried this ran `cat`, `ls` and `awk` from `/bin` on the volume.
 
 Owed beside the stage, and not in its points: writeback of pages written
 through `MAP_SHARED`, which needs a dirty bit the page cache does not keep

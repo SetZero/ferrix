@@ -12,11 +12,14 @@
 //!
 //! # Which disk, and when
 //!
-//! The root disk is the fourth virtio-blk function, `vdd`. `cargo xtask run`
-//! and `run-compositor` attach `build/root.img` there, a 1 GiB volume made
-//! from the `root` fixture the first time and kept after that; the test
-//! boots do not attach it, and without it — or with `ferrix.root=tmpfs` on
-//! the command line — the root stays the tmpfs, as it always was.
+//! The root disk is the btrfs disk labelled [`LABEL`], from the fourth
+//! virtio-blk function, `vdd`, on: by label rather than by position, as
+//! Linux's `root=LABEL=`, so another disk beside it (`/data`,
+//! [`super::data_disk`]) is never mistaken for it. `cargo xtask run` and
+//! `run-compositor` attach `build/root.img`, a 1 GiB volume made from the
+//! `root` fixture the first time and kept after that; the test boots do not
+//! attach it, and without it — or with `ferrix.root=tmpfs` on the command
+//! line — the root stays the tmpfs, as it always was.
 //!
 //! # The system on it
 //!
@@ -53,8 +56,12 @@ use crate::console::println;
 use crate::fs::{devfs, procfs};
 use crate::{fs, sched};
 
-/// The root disk: the fourth virtio-blk function, `vdd`.
-const DISK_INDEX: u32 = 3;
+/// The label the root volume carries: `mkfs.btrfs -L ferrix-root`.
+const LABEL: &[u8] = b"ferrix-root";
+
+/// The first disk looked at, `vdd`, and one past the last, `vdh`.
+const FIRST: u32 = 3;
+const END: u32 = 8;
 
 /// Where the volume is mounted in the kernel's own tree.
 const SYSROOT: &[u8] = b"/sysroot";
@@ -74,6 +81,19 @@ static TMPFS: AtomicBool = AtomicBool::new(false);
 
 /// The volume, and where it is: set once [`switch`] has finished.
 static ROOT: Once<(Arc<dyn FileSystem>, Location)> = Once::new();
+
+/// The disk [`switch`] put `/` on.
+static ROOT_RDEV: Once<u64> = Once::new();
+
+/// The disk `/` is on, once [`switch`] has put it there.
+pub(crate) fn root_rdev() -> Option<u64> {
+    ROOT_RDEV.get().copied()
+}
+
+/// Whether the disk numbered `rdev` holds the root volume, by its label.
+pub(crate) fn is_root(rdev: u64) -> bool {
+    fs::btrfs::label(rdev).as_deref() == Some(LABEL)
+}
 
 /// Read `ferrix.root`, once, early.
 pub(crate) fn init(view: &BootView<'_>) {
@@ -100,10 +120,13 @@ pub(crate) fn process_context() -> Context {
 /// Put `/` on the root disk, if this machine has one and nothing asked for
 /// the tmpfs. Says what it did either way.
 pub(crate) fn switch() {
-    let rdev = makedev(VIRTIO_BLK_MAJOR, DISK_INDEX * 16);
-    if devfs::block_device(rdev).is_none() {
+    let Some(rdev) = (FIRST..END)
+        .map(|index| makedev(VIRTIO_BLK_MAJOR, index * 16))
+        .filter(|&rdev| devfs::block_device(rdev).is_some())
+        .find(|&rdev| is_root(rdev))
+    else {
         return;
-    }
+    };
     if TMPFS.load(Ordering::Relaxed) {
         println!("  root     vdd is not used: {OPTION}=tmpfs keeps / in memory");
         return;
@@ -169,6 +192,7 @@ fn switch_to(rdev: u64) -> Result<Installed, &'static str> {
     mount_kernel_filesystems(&inside)?;
     volume.sync().map_err(|_| "could not commit the system")?;
     let _ = ROOT.call_once(|| (volume, root));
+    let _ = ROOT_RDEV.call_once(|| rdev);
     if sched::spawn(
         "root commit",
         commit_forever,
@@ -264,6 +288,9 @@ fn commit_forever(_: usize) {
         sched::sleep_for(COMMIT_INTERVAL);
         if sync().is_err() {
             println!("  root     the periodic commit of / failed");
+        }
+        if fs::data_disk::sync().is_err() {
+            println!("  data     the periodic commit of /data failed");
         }
     }
 }

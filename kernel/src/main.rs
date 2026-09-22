@@ -1077,8 +1077,9 @@ fn check_btrfs_write() {
         report.files, report.bytes, report.directories,
     );
     // After the check, which has vdc to itself: `/` onto the root disk, if an
-    // interactive boot brought one.
+    // interactive boot brought one, and then a data disk into that `/`.
     fs::root_disk::switch();
+    fs::data_disk::mount();
 }
 
 /// Stage 10: find every PCI function, size its BARs and walk its
