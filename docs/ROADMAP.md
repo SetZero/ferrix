@@ -60,8 +60,9 @@ architectures. `fsync` writes a log tree the next mount replays, and
 the next boot and has `btrfs check` judge the volume before and after: 249
 seeds across the three architectures, 226 of them leaving a log to replay,
 every one clean. `cargo xtask run` now boots with `/` on a persistent btrfs
-volume. What the stage still owes, outside its points, is writeback of pages
-written through `MAP_SHARED`.
+volume. Pages written through `MAP_SHARED` are written back too
+(2026-09-23): a linker's output, which `lld` writes through a mapping, lost
+its pages when the file left the cache.
 Stage 16's exit, the goal, is met: `cargo xtask test-rustc` compiles
 `hello.rs` on Ferrix with the rust-lang.org `rustc`, linked through `cc`
 and `rust-lld`, from a btrfs volume, and runs what it made, on x86-64 and in
@@ -1727,8 +1728,11 @@ committed. The filesystem tells the store the file's length, after an extend
 and before a cut, and a fault reads that bound under the VMO's lock. A touch
 past the end is `SIGBUS` from user mode and `EFAULT` from a system call.
 `msync` checks what Linux checks and writes nothing back, because the pages
-are the file's. On tmpfs that is all there is; on btrfs, writable since
-stage 12, writeback of pages written through `MAP_SHARED` is owed.
+are the file's. On tmpfs that is all there is. On btrfs, writable since
+stage 12, the mount holds a file handed out for mapping while anything maps
+it, and once a mapping that may write has been made, the next writeback
+writes every page the file holds, since such writes mark none; `msync`
+does not bring that commit forward.
 
 **Done — a file mapped privately.** A private mapping of a file shows the
 file's pages until it writes one, and that write copies the page into a shadow
@@ -4011,10 +4015,13 @@ fault now fills the page from the disk, as a read does. The static busybox
 ran from the root before the fix, too: the boots that tried this ran `cat`,
 `ls` and `awk` from `/bin` on the volume.
 
-Owed beside the stage, and not in its points: writeback of pages written
-through `MAP_SHARED`, which needs a dirty bit the page cache does not keep
-yet; until it lands a mapped write reaches the disk only if something writes
-the same bytes through `write`.
+Beside the stage, and not in its points: writeback of pages written
+through `MAP_SHARED` (2026-09-23). The page cache keeps no dirty bit, so the
+file's VMO says when a mapping that may write has been made, and the next
+writeback writes every page the file holds; the mount keeps the file while
+anything else holds the VMO. Stage 20 found it: `lld` writes its output
+through a mapping, and a proc-macro it linked read back as invalid metadata
+once the file had left the cache.
 
 ---
 

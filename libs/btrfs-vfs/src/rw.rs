@@ -26,10 +26,10 @@
 //! it is why a program that does not `fsync` can lose its last writes, as on
 //! any filesystem.
 //!
-//! A mapping written through `mmap` is not seen: the pages carry no dirty
-//! bit the mount can read. `MAP_SHARED` writeback is owed, and until it
-//! lands a mapped write reaches the disk only if something writes the same
-//! bytes through `write`.
+//! A write through a shared mapping marks no page: the program writes the
+//! page directly. So the store says which pages such a mapping may have
+//! written (`Pages::mapped_writes`) -- every page it holds, once a mapping
+//! that may write has been made -- and a writeback writes those as well.
 //!
 //! # What is written stays
 //!
@@ -39,7 +39,10 @@
 //! the mount holds every object with dirty pages itself, from the write that
 //! dirtied the first until the writeback, as Linux's list of dirty inodes
 //! does. Without that, a build that closes an object file and opens it
-//! again to archive it read back whatever the last commit had written.
+//! again to archive it read back whatever the last commit had written. A
+//! file handed out for mapping is held too, since the mapping may write
+//! without a word to the mount, until a writeback finds no mapping left that
+//! may: a linker writes its output through one.
 //!
 //! # Deleting what is still open
 //!
@@ -297,6 +300,17 @@ impl<D: WriteHandle> Node<D> {
         }
     }
 
+    /// Have the mount hold this object until its next writeback. Called under
+    /// this object's `dirty` lock, as the writeback that lets go takes it.
+    fn hold(&self) {
+        if let Some(me) = self.me.upgrade() {
+            // Whatever this replaces is this object, and not its last
+            // reference; dropped after the map's lock is let go.
+            let replaced = self.shared.held.lock().insert(self.ino, me);
+            drop(replaced);
+        }
+    }
+
     /// Refresh what `stat` answers from the volume.
     ///
     /// What the volume holds is behind what this object does while pages
@@ -322,11 +336,23 @@ impl<D: WriteHandle> Node<D> {
     /// so only pages that are certainly present are read — which every dirty
     /// page is, because something wrote it.
     fn write_back(&self, volume: &mut WriteVolume<D>) -> Result<()> {
+        let store = self.pages.lock().clone();
         let (dirty, held) = {
             let mut dirty = self.dirty.lock();
-            // Written back from here on, so the mount lets go; a write after
-            // this marks its pages under the same lock and holds it again.
-            let held = self.shared.held.lock().remove(&self.ino);
+            // What a shared mapping may have written, which marked nothing:
+            // pages the store holds, so reading them takes no fill.
+            let (written, mapped) = store
+                .as_ref()
+                .map_or((Vec::new(), false), |pages| pages.mapped_writes());
+            dirty.extend(written);
+            // Written back from here on, so the mount lets go, unless the
+            // file is mapped or about to be; a write after this marks its
+            // pages under the same lock and holds it again.
+            let held = if mapped {
+                None
+            } else {
+                self.shared.held.lock().remove(&self.ino)
+            };
             (core::mem::take(&mut *dirty), held)
         };
         // Never the last reference: whoever called this holds one.
@@ -568,13 +594,8 @@ impl<D: WriteHandle> Inode for Node<D> {
             let first = at / PAGE_SIZE;
             let last = end.saturating_sub(1) / PAGE_SIZE;
             let mut dirty = self.dirty.lock();
-            if dirty.is_empty()
-                && let Some(me) = self.me.upgrade()
-            {
-                // Whatever this replaces is this object, and not its last
-                // reference; dropped after the map's lock is let go.
-                let replaced = self.shared.held.lock().insert(self.ino, me);
-                drop(replaced);
+            if dirty.is_empty() {
+                self.hold();
             }
             for page in first..=last {
                 let _ = dirty.insert(page);
@@ -785,8 +806,17 @@ impl<D: WriteHandle> Inode for Node<D> {
         volume.commit_log().map_err(errno)
     }
 
+    /// Held from here, since a mapping may write without a word to the mount;
+    /// the writeback that finds the object mapped by no one lets go. The
+    /// object is taken before the hold, so a writeback that comes between
+    /// sees it out and keeps the file.
     fn mapping(&self) -> Option<Arc<dyn Any + Send + Sync>> {
-        self.pages().ok().and_then(|pages| pages.object())
+        let object = self.pages().ok().and_then(|pages| pages.object());
+        if object.is_some() {
+            let _dirty = self.dirty.lock();
+            self.hold();
+        }
+        object
     }
 }
 

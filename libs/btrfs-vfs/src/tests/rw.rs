@@ -19,6 +19,7 @@ use ferrix_vfs::tmpfs::HeapStorage;
 use ferrix_vfs::tmpfs::Storage;
 use ferrix_vfs::{Clock, Errno, FileSystem, FileType, Inode, Metadata, NewNode, Timespec};
 
+use alloc::boxed::Box;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use ferrix_btrfs::BtrfsError;
@@ -241,6 +242,136 @@ fn writes_land_where_they_are_asked_to() {
     let fs = mount(&disk);
     let file = fs.root().lookup(b"file").unwrap();
     assert_eq!(read_all(&file), expected, "after a commit and a remount");
+}
+
+/// A store whose "mapping" is the store itself, written as a program writes
+/// a shared mapping: directly, with no word to the mount. It says what was
+/// written as the kernel's object does, every page it holds.
+#[derive(Debug)]
+struct MappedStorage(HeapStorage);
+
+#[derive(Debug)]
+struct Mapped {
+    pages: Box<dyn ferrix_vfs::tmpfs::Pages>,
+    /// Pages written through the "mapping", and whether one was made.
+    written: Mutex<(BTreeMap<u64, ()>, bool)>,
+}
+
+impl Mapped {
+    /// Write through the mapping.
+    fn write(&self, offset: u64, data: &[u8]) {
+        self.pages.write(offset, data).unwrap();
+        let mut written = self.written.lock().unwrap();
+        let first = offset / 4096;
+        let last = (offset + data.len() as u64 - 1) / 4096;
+        for page in first..=last {
+            let _ = written.0.insert(page, ());
+        }
+        written.1 = true;
+    }
+}
+
+/// The store the mount holds: the object is shared with the "mapping".
+#[derive(Debug)]
+struct MappedPages(Arc<Mapped>);
+
+impl ferrix_vfs::tmpfs::Pages for MappedPages {
+    fn read(&self, offset: u64, buf: &mut [u8]) -> ferrix_vfs::Result<()> {
+        self.0.pages.read(offset, buf)
+    }
+    fn write(&self, offset: u64, data: &[u8]) -> ferrix_vfs::Result<()> {
+        self.0.pages.write(offset, data)
+    }
+    fn discard_from(&self, offset: u64) {
+        self.0.pages.discard_from(offset);
+    }
+    fn committed_bytes(&self) -> u64 {
+        self.0.pages.committed_bytes()
+    }
+    fn resize(&self, len: u64) {
+        self.0.pages.resize(len);
+    }
+    fn object(&self) -> Option<Arc<dyn core::any::Any + Send + Sync>> {
+        Some(Arc::clone(&self.0) as Arc<dyn core::any::Any + Send + Sync>)
+    }
+    fn mapped_writes(&self) -> (Vec<u64>, bool) {
+        let mut written = self.0.written.lock().unwrap();
+        let pages = if core::mem::take(&mut written.1) {
+            written.0.keys().copied().collect()
+        } else {
+            Vec::new()
+        };
+        (pages, Arc::strong_count(&self.0) > 1)
+    }
+}
+
+impl Storage for MappedStorage {
+    fn allocate(&self) -> ferrix_vfs::Result<Box<dyn ferrix_vfs::tmpfs::Pages>> {
+        self.wrap(self.0.allocate()?)
+    }
+    fn allocate_with(
+        &self,
+        source: Arc<dyn ferrix_vfs::tmpfs::PageSource>,
+    ) -> ferrix_vfs::Result<Box<dyn ferrix_vfs::tmpfs::Pages>> {
+        self.wrap(self.0.allocate_with(source)?)
+    }
+    fn max_file_size(&self) -> u64 {
+        self.0.max_file_size()
+    }
+}
+
+impl MappedStorage {
+    #[expect(clippy::unnecessary_wraps, reason = "the shape `Storage` wants")]
+    fn wrap(
+        &self,
+        pages: Box<dyn ferrix_vfs::tmpfs::Pages>,
+    ) -> ferrix_vfs::Result<Box<dyn ferrix_vfs::tmpfs::Pages>> {
+        Ok(Box::new(MappedPages(Arc::new(Mapped {
+            pages,
+            written: Mutex::new((BTreeMap::new(), false)),
+        }))))
+    }
+}
+
+#[test]
+fn what_a_shared_mapping_writes_is_kept_and_written_back() {
+    // A linker writes its output through a shared mapping: the file is made,
+    // cut to its length, mapped, written and let go, and nothing tells the
+    // mount which pages changed. They must outlive the file's last reference
+    // and reach the disk at the next commit.
+    let disk = Disk::new(BLANK);
+    let fs = RwBtrfs::mount(
+        disk.clone(),
+        0x0800_0010,
+        Arc::new(MappedStorage(HeapStorage::new(1 << 30))),
+        Arc::new(Fixed),
+        &SpinParker,
+    )
+    .unwrap();
+    let file = make_file(&fs.root(), b"linked", b"");
+    file.set_len(3 * 4096).unwrap();
+    let object = file.mapping().expect("the store is mapped");
+    let mapped = object.downcast::<Mapped>().unwrap();
+    // A commit between handing the object out and the first write: the
+    // kernel counts a mapping in only after `mapping` answers.
+    fs.sync().unwrap();
+    mapped.write(0, b"\x7fELF");
+    mapped.write(2 * 4096 + 10, b"tail");
+    drop(mapped);
+    drop(file);
+    let mut expected = vec![0u8; 3 * 4096];
+    expected[..4].copy_from_slice(b"\x7fELF");
+    expected[2 * 4096 + 10..2 * 4096 + 14].copy_from_slice(b"tail");
+    let file = fs.root().lookup(b"linked").unwrap();
+    assert_eq!(read_all(&file), expected, "while the file is closed");
+    drop(file);
+    fs.sync().unwrap();
+    let fs = mount(&disk);
+    assert_eq!(
+        read_all(&fs.root().lookup(b"linked").unwrap()),
+        expected,
+        "after a commit and a remount"
+    );
 }
 
 #[test]

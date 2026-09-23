@@ -402,4 +402,12 @@ impl Pages for VmoPages {
     fn object(&self) -> Option<Arc<dyn Any + Send + Sync>> {
         Some(Arc::clone(&self.vmo) as Arc<dyn Any + Send + Sync>)
     }
+
+    /// What the VMO says shared mappings may have written, and whether any
+    /// other reference to it is out: a mapping's, or the one `mmap` holds
+    /// between asking for the object and counting its mapping in.
+    fn mapped_writes(&self) -> (Vec<u64>, bool) {
+        let written = self.vmo.take_mapped_writes();
+        (written, Arc::strong_count(&self.vmo) > 1)
+    }
 }

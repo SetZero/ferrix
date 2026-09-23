@@ -280,8 +280,9 @@ fn map_file(
 ///
 /// Nothing is written back, because nothing needs to be: a shared file
 /// mapping's pages are the file's own pages, so a `read` already sees every
-/// write, and neither tmpfs nor a read-only btrfs has a disk to flush them
-/// to. What is left is what Linux checks, in its order: unknown flags,
+/// write. tmpfs and a read-only btrfs have no disk to flush them to, and a
+/// writable btrfs writes a mapped file's pages at its next commit, which this
+/// does not bring forward. What is left is what Linux checks, in its order: unknown flags,
 /// `MS_ASYNC` with `MS_SYNC`, and an address off a page boundary are
 /// `EINVAL`; a range that wraps, or is not wholly mapped, is `ENOMEM`.
 pub(crate) fn sys_msync(

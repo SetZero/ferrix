@@ -159,6 +159,10 @@ pub(crate) struct Vmo {
     /// under a space's lock before a mapping's id enters its tables, lowered
     /// under it when the id leaves.
     shared_may_write: AtomicU64,
+    /// Whether a shared mapping that may write has been made since the file's
+    /// owner last asked ([`Vmo::take_mapped_writes`]): its writes mark no page
+    /// dirty, so the owner writes back every page it holds instead.
+    mapped_written: AtomicBool,
     /// What fills an absent page of a file on a disk before a fault commits
     /// it; `None` for every other object, whose absent pages are zeros.
     filler: Option<Arc<dyn Filler>>,
@@ -274,6 +278,7 @@ impl Vmo {
             bound: AtomicU64::new(u64::MAX),
             mappers: SpinLock::new(Vec::new()),
             shared_may_write: AtomicU64::new(0),
+            mapped_written: AtomicBool::new(false),
             filler,
             coherent: AtomicBool::new(false),
         })
@@ -459,6 +464,7 @@ impl Vmo {
             bound: AtomicU64::new(self.bound.load(Ordering::SeqCst)),
             mappers: SpinLock::new(Vec::new()),
             shared_may_write: AtomicU64::new(0),
+            mapped_written: AtomicBool::new(false),
             // A page neither side has is still the file's.
             filler: self.filler.clone(),
             // Forked for a private mapping, which a coherent object never
@@ -544,6 +550,19 @@ impl Vmo {
     /// and one stored after it sees this.
     pub(crate) fn raise_shared_may_write(&self) {
         let _ = self.shared_may_write.fetch_add(1, Ordering::SeqCst);
+        self.mapped_written.store(true, Ordering::SeqCst);
+    }
+
+    /// The pages a shared mapping may have written since the last call:
+    /// every page this object holds, since such writes mark none, or none if
+    /// no mapping that may write has been made. The mark stays while such a
+    /// mapping does.
+    pub(crate) fn take_mapped_writes(&self) -> Vec<u64> {
+        let still = self.writably_mapped();
+        if !self.mapped_written.swap(still, Ordering::SeqCst) && !still {
+            return Vec::new();
+        }
+        self.pages.lock().frames.keys().copied().collect()
     }
 
     /// One fewer, as such a mapping's id leaves a space's tables.
