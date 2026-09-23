@@ -64,20 +64,20 @@ const MAX_PHNUM: usize = 64;
 /// A mapped object: where it went, and the two segments the loader needs to
 /// find again.
 #[derive(Debug, Clone, Copy)]
-pub struct Mapped {
+pub(crate) struct Mapped {
     /// Its load bias.
-    pub base: usize,
+    pub(crate) base: usize,
     /// Its `PT_DYNAMIC`, at its run-time address.
-    pub dynamic: *const crate::elf::Dyn,
+    pub(crate) dynamic: *const crate::elf::Dyn,
     /// Its `PT_TLS`, if it has one, at its run-time address.
-    pub tls: Option<Tls>,
+    pub(crate) tls: Option<Tls>,
     /// Its `PT_GNU_RELRO`, as a run-time address and a length, or `(0, 0)`.
-    pub relro: (usize, usize),
+    pub(crate) relro: (usize, usize),
     /// Its program headers at their run-time address, found inside the
     /// loadable segment whose file bytes hold them; zero if none does.
-    pub phdr: usize,
+    pub(crate) phdr: usize,
     /// How many there are.
-    pub phnum: usize,
+    pub(crate) phnum: usize,
 }
 
 /// Open `path` and map every loadable segment of it.
@@ -85,7 +85,7 @@ pub struct Mapped {
 /// # Errors
 ///
 /// [`Error`], naming `path`.
-pub fn object(path: *const c_char, page_size: usize) -> Result<Mapped, Error> {
+pub(crate) fn object(path: *const c_char, page_size: usize) -> Result<Mapped, Error> {
     let fd = open(path)?;
     let mapped = map_opened(path, fd, page_size);
     // SAFETY: `fd` is the descriptor just opened, and nothing else holds it.
@@ -93,11 +93,14 @@ pub fn object(path: *const c_char, page_size: usize) -> Result<Mapped, Error> {
     mapped
 }
 
-/// `open(path, O_RDONLY | O_CLOEXEC)`.
+/// `open(path, O_RDONLY | O_CLOEXEC)`, as `openat` from the working
+/// directory: AArch64 has no `open`.
 fn open(path: *const c_char) -> Result<c_int, Error> {
+    /// `AT_FDCWD`.
+    const AT_FDCWD: usize = -100_isize as usize;
     // SAFETY: `path` is a NUL-terminated path, and the flags open no file for
     // writing.
-    let fd = unsafe { sys::syscall3(nr::OPEN, path as usize, O_RDONLY | O_CLOEXEC, 0) };
+    let fd = unsafe { sys::syscall4(nr::OPENAT, AT_FDCWD, path as usize, O_RDONLY | O_CLOEXEC, 0) };
     c_int::try_from(fd).map_err(|_| Error::CannotOpen(path, fd))
 }
 
@@ -184,7 +187,23 @@ fn map_opened(path: *const c_char, fd: c_int, page_size: usize) -> Result<Mapped
 /// `pread`, which is used rather than `read` so that the file offset is never
 /// state two calls have to agree about.
 fn pread(fd: c_int, into: &mut [u8], at: usize) -> isize {
+    // ARMv7-A passes the 64-bit offset in an even register pair, r4 and r5,
+    // after a word of padding.
+    #[cfg(target_arch = "arm")]
     // SAFETY: `into` is a live slice and its length is its length.
+    return unsafe {
+        sys::syscall6(
+            nr::PREAD64,
+            fd as usize,
+            into.as_mut_ptr() as usize,
+            into.len(),
+            0,
+            at,
+            0,
+        )
+    };
+    #[cfg(not(target_arch = "arm"))]
+    // SAFETY: as above.
     unsafe {
         sys::syscall4(
             nr::PREAD64,
@@ -201,8 +220,7 @@ fn reserve(size: usize) -> Result<usize, isize> {
     // SAFETY: a mapping with no fixed address and no access takes address
     // space and nothing else.
     let at = unsafe {
-        sys::syscall6(
-            nr::MMAP,
+        sys::mmap(
             0,
             size,
             PROT_NONE,
@@ -235,15 +253,14 @@ fn place(header: &Phdr, bias: usize, fd: c_int, page_size: usize) -> Result<(), 
         // SAFETY: the range is inside the reservation made for this object,
         // and `MAP_FIXED` over one's own reservation replaces it.
         let at = unsafe {
-            sys::syscall6(
-                nr::MMAP,
+            sys::mmap(
                 start,
                 file_len,
                 // Writable while the `.bss` tail is zeroed, then narrowed.
                 prot | PROT_WRITE,
                 MAP_PRIVATE | MAP_FIXED,
                 fd as usize,
-                file_at,
+                file_at as i64,
             )
         };
         if usize::try_from(at) != Ok(start) {
@@ -266,8 +283,7 @@ fn place(header: &Phdr, bias: usize, fd: c_int, page_size: usize) -> Result<(), 
         if needed_to > mapped_to {
             // SAFETY: still inside this object's reservation.
             let at = unsafe {
-                sys::syscall6(
-                    nr::MMAP,
+                sys::mmap(
                     mapped_to.wrapping_add(bias),
                     needed_to - mapped_to,
                     prot | PROT_WRITE,
@@ -305,7 +321,7 @@ fn zero_the_tail(vaddr: usize, filesz: usize, bias: usize, page_size: usize) {
     while written < tail {
         // SAFETY: the bytes from the end of the file's contents to the end of
         // that page are inside the mapping just made, and writable.
-        unsafe { at.add(written).write(0) };
+        unsafe { at.wrapping_add(written).write(0) };
         written += 1;
     }
 }

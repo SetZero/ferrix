@@ -32,7 +32,7 @@ use crate::object::{Defined, Object};
 
 /// The GNU hash of a symbol name: djb2 with a multiplier of 33.
 #[must_use]
-pub fn hash(name: *const c_char) -> u32 {
+pub(crate) fn hash(name: *const c_char) -> u32 {
     let mut value: u32 = 5381;
     let mut at = name;
     loop {
@@ -43,8 +43,8 @@ pub fn hash(name: *const c_char) -> u32 {
             return value;
         }
         value = value.wrapping_mul(33).wrapping_add(u32::from(byte));
-        // SAFETY: the byte read was not the terminator.
-        at = unsafe { at.add(1) };
+        // The byte read was not the terminator.
+        at = at.wrapping_add(1);
     }
 }
 
@@ -55,39 +55,41 @@ fn same_name(a: *const c_char, b: *const c_char) -> bool {
     let mut b = b;
     loop {
         // SAFETY: both are NUL-terminated, and this stops at the first NUL.
-        let (x, y) = unsafe { (a.read(), b.read()) };
+        let x = unsafe { a.read() };
+        // SAFETY: as above.
+        let y = unsafe { b.read() };
         if x != y {
             return false;
         }
         if x == 0 {
             return true;
         }
-        // SAFETY: neither byte was the terminator.
-        (a, b) = unsafe { (a.add(1), b.add(1)) };
+        // Neither byte was the terminator.
+        (a, b) = (a.wrapping_add(1), b.wrapping_add(1));
     }
 }
 
 /// A symbol this object defines.
 #[derive(Debug, Clone, Copy)]
-pub struct Found {
+pub(crate) struct Found {
     /// Its run-time address: the object's base plus the symbol's value.
-    pub address: usize,
+    pub(crate) address: usize,
     /// Its value as written in the symbol table.
     ///
     /// For ordinary symbols this is relative to the defining object's base.
     /// For `STT_TLS` it is instead the offset inside that object's TLS image.
-    pub value: usize,
+    pub(crate) value: usize,
     /// Its `st_info`, which says whether it is a function resolved by calling
     /// it.
-    pub info: u8,
+    pub(crate) info: u8,
     /// Its size.
-    pub size: usize,
+    pub(crate) size: usize,
     /// The defining object's TLS image offset from the thread pointer, when
     /// it has one. [`crate::scope::Scope`] supplies this after lookup.
-    pub tls_offset: Option<isize>,
+    pub(crate) tls_offset: Option<isize>,
     /// The defining object's index in the scope, which is its TLS module
     /// number less one. [`crate::scope::Scope`] supplies this too.
-    pub module: usize,
+    pub(crate) module: usize,
 }
 
 /// The word width of the Bloom filter: one machine word per element, as the
@@ -112,7 +114,7 @@ const BLOOM_BITS: u32 = usize::BITS;
 /// linked against. The chain holds every definition of the name, so the walk
 /// goes on past the first one that does not answer.
 #[must_use]
-pub fn lookup(
+pub(crate) fn lookup(
     object: &Object,
     name: *const c_char,
     hash: u32,
@@ -123,48 +125,55 @@ pub fn lookup(
     }
     let table = object.gnu_hash;
     // SAFETY: the four header words are the first of the table.
-    let (nbuckets, symoffset, bloom_size, bloom_shift) = unsafe {
-        (
-            table.read(),
-            table.add(1).read(),
-            table.add(2).read(),
-            table.add(3).read(),
-        )
-    };
+    let nbuckets = unsafe { table.read() };
+    // SAFETY: as above.
+    let symoffset = unsafe { table.wrapping_add(1).read() };
+    // SAFETY: as above.
+    let bloom_size = unsafe { table.wrapping_add(2).read() };
+    // SAFETY: as above.
+    let bloom_shift = unsafe { table.wrapping_add(3).read() };
     if nbuckets == 0 || bloom_size == 0 {
         return None;
     }
 
     // The Bloom filter: two bits derived from the hash. If either is clear
     // the object certainly does not define the name.
-    // SAFETY: the filter follows the four header words.
-    let bloom = unsafe { table.add(4) }.cast::<usize>();
+    // The filter follows the four header words.
+    #[cfg_attr(
+        target_pointer_width = "64",
+        expect(
+            clippy::cast_ptr_alignment,
+            reason = "`DT_GNU_HASH` is aligned to the object's word, and its \
+                      Bloom filter starts on one, after four 32-bit words"
+        )
+    )]
+    let bloom = table.wrapping_add(4).cast::<usize>();
     let word_index = (hash / BLOOM_BITS) & (bloom_size - 1);
     // SAFETY: masked to the filter's length, which is a power of two.
-    let word = unsafe { bloom.add(word_index as usize).read() };
+    let word = unsafe { bloom.wrapping_add(word_index as usize).read() };
     let first = 1_usize.wrapping_shl(hash % BLOOM_BITS);
     let second = 1_usize.wrapping_shl(hash.wrapping_shr(bloom_shift) % BLOOM_BITS);
     if word & first == 0 || word & second == 0 {
         return None;
     }
 
-    // SAFETY: the buckets follow the filter, which is `bloom_size` words.
-    let buckets = unsafe { bloom.add(bloom_size as usize) }.cast::<u32>();
+    // The buckets follow the filter, which is `bloom_size` words.
+    let buckets = bloom.wrapping_add(bloom_size as usize).cast::<u32>();
     // SAFETY: the bucket index is taken modulo the bucket count.
-    let mut index = unsafe { buckets.add((hash % nbuckets) as usize).read() };
+    let mut index = unsafe { buckets.wrapping_add((hash % nbuckets) as usize).read() };
     if index < symoffset {
         return None;
     }
-    // SAFETY: the chain array follows the buckets.
-    let chain = unsafe { buckets.add(nbuckets as usize) };
+    // The chain array follows the buckets.
+    let chain = buckets.wrapping_add(nbuckets as usize);
 
     loop {
         // SAFETY: the chain has one word per symbol from `symoffset` up, and
         // the walk stops at the word whose bit 0 is set.
-        let word = unsafe { chain.add((index - symoffset) as usize).read() };
+        let word = unsafe { chain.wrapping_add((index - symoffset) as usize).read() };
         if word | 1 == hash | 1 {
             // SAFETY: `index` is a symbol table index the chain gave.
-            let symbol = unsafe { object.symtab.add(index as usize).read() };
+            let symbol = unsafe { object.symtab.wrapping_add(index as usize).read() };
             if let Some(found) = defines(object, &symbol, name)
                 && answers(object, index as usize, version)
             {
@@ -220,7 +229,7 @@ fn defines(object: &Object, symbol: &Sym, name: *const c_char) -> Option<Found> 
 /// low bit. Every symbol not in the table -- the local and the undefined --
 /// sits below `symoffset`.
 #[must_use]
-pub fn count(object: &Object) -> usize {
+pub(crate) fn count(object: &Object) -> usize {
     let table = object.gnu_hash;
     if table.is_null() {
         return 0;
@@ -232,6 +241,14 @@ pub fn count(object: &Object) -> usize {
     // SAFETY: as above.
     let bloom_size = unsafe { table.wrapping_add(2).read() };
     // The buckets follow the header and the Bloom filter.
+    #[cfg_attr(
+        target_pointer_width = "64",
+        expect(
+            clippy::cast_ptr_alignment,
+            reason = "`DT_GNU_HASH` is aligned to the object's word, and its \
+                      Bloom filter starts on one, after four 32-bit words"
+        )
+    )]
     let buckets = table
         .wrapping_add(4)
         .cast::<usize>()
@@ -261,7 +278,7 @@ pub fn count(object: &Object) -> usize {
 /// The defined symbol of `object` nearest at or below `address`: its name
 /// and address. What `dladdr` names an address by.
 #[must_use]
-pub fn nearest(object: &Object, address: usize) -> Option<(*const c_char, usize)> {
+pub(crate) fn nearest(object: &Object, address: usize) -> Option<(*const c_char, usize)> {
     let mut best: Option<(*const c_char, usize)> = None;
     for index in 1..count(object) {
         let at = object.symtab.wrapping_add(index);

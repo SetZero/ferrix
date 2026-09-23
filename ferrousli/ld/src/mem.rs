@@ -20,13 +20,19 @@ use core::ffi::{c_int, c_void};
 ///
 /// `dest` and `src` must each be valid for `n` bytes, and must not overlap.
 #[cfg_attr(not(test), unsafe(no_mangle))]
-pub unsafe extern "C" fn memcpy(dest: *mut c_void, src: *const c_void, n: usize) -> *mut c_void {
+pub(crate) unsafe extern "C" fn memcpy(
+    dest: *mut c_void,
+    src: *const c_void,
+    n: usize,
+) -> *mut c_void {
     let to = dest.cast::<u8>();
     let from = src.cast::<u8>();
     let mut at = 0;
     while at < n {
         // SAFETY: the caller promises both are valid for `n` bytes.
-        unsafe { to.add(at).write(from.add(at).read()) };
+        let byte = unsafe { from.wrapping_add(at).read() };
+        // SAFETY: as above.
+        unsafe { to.wrapping_add(at).write(byte) };
         at += 1;
     }
     dest
@@ -38,7 +44,11 @@ pub unsafe extern "C" fn memcpy(dest: *mut c_void, src: *const c_void, n: usize)
 ///
 /// `dest` and `src` must each be valid for `n` bytes.
 #[cfg_attr(not(test), unsafe(no_mangle))]
-pub unsafe extern "C" fn memmove(dest: *mut c_void, src: *const c_void, n: usize) -> *mut c_void {
+pub(crate) unsafe extern "C" fn memmove(
+    dest: *mut c_void,
+    src: *const c_void,
+    n: usize,
+) -> *mut c_void {
     let to = dest.cast::<u8>();
     let from = src.cast::<u8>();
     // Copying backwards when the destination is above the source is what
@@ -48,7 +58,9 @@ pub unsafe extern "C" fn memmove(dest: *mut c_void, src: *const c_void, n: usize
         let mut at = 0;
         while at < n {
             // SAFETY: the caller promises both are valid for `n` bytes.
-            unsafe { to.add(at).write(from.add(at).read()) };
+            let byte = unsafe { from.wrapping_add(at).read() };
+            // SAFETY: as above.
+            unsafe { to.wrapping_add(at).write(byte) };
             at += 1;
         }
     } else {
@@ -56,7 +68,9 @@ pub unsafe extern "C" fn memmove(dest: *mut c_void, src: *const c_void, n: usize
         while at > 0 {
             at -= 1;
             // SAFETY: as above.
-            unsafe { to.add(at).write(from.add(at).read()) };
+            let byte = unsafe { from.wrapping_add(at).read() };
+            // SAFETY: as above.
+            unsafe { to.wrapping_add(at).write(byte) };
         }
     }
     dest
@@ -68,13 +82,13 @@ pub unsafe extern "C" fn memmove(dest: *mut c_void, src: *const c_void, n: usize
 ///
 /// `dest` must be valid for `n` bytes.
 #[cfg_attr(not(test), unsafe(no_mangle))]
-pub unsafe extern "C" fn memset(dest: *mut c_void, byte: c_int, n: usize) -> *mut c_void {
+pub(crate) unsafe extern "C" fn memset(dest: *mut c_void, byte: c_int, n: usize) -> *mut c_void {
     let to = dest.cast::<u8>();
     let value = byte as u8;
     let mut at = 0;
     while at < n {
         // SAFETY: the caller promises `dest` is valid for `n` bytes.
-        unsafe { to.add(at).write(value) };
+        unsafe { to.wrapping_add(at).write(value) };
         at += 1;
     }
     dest
@@ -86,13 +100,15 @@ pub unsafe extern "C" fn memset(dest: *mut c_void, byte: c_int, n: usize) -> *mu
 ///
 /// `a` and `b` must each be valid for `n` bytes.
 #[cfg_attr(not(test), unsafe(no_mangle))]
-pub unsafe extern "C" fn memcmp(a: *const c_void, b: *const c_void, n: usize) -> c_int {
+pub(crate) unsafe extern "C" fn memcmp(a: *const c_void, b: *const c_void, n: usize) -> c_int {
     let left = a.cast::<u8>();
     let right = b.cast::<u8>();
     let mut at = 0;
     while at < n {
         // SAFETY: the caller promises both are valid for `n` bytes.
-        let (x, y) = unsafe { (left.add(at).read(), right.add(at).read()) };
+        let x = unsafe { left.wrapping_add(at).read() };
+        // SAFETY: as above.
+        let y = unsafe { right.wrapping_add(at).read() };
         if x != y {
             return c_int::from(x) - c_int::from(y);
         }
@@ -107,7 +123,7 @@ pub unsafe extern "C" fn memcmp(a: *const c_void, b: *const c_void, n: usize) ->
 ///
 /// As [`memcmp`].
 #[cfg_attr(not(test), unsafe(no_mangle))]
-pub unsafe extern "C" fn bcmp(a: *const c_void, b: *const c_void, n: usize) -> c_int {
+pub(crate) unsafe extern "C" fn bcmp(a: *const c_void, b: *const c_void, n: usize) -> c_int {
     // SAFETY: the caller's promise is `memcmp`'s.
     unsafe { memcmp(a, b, n) }
 }
@@ -119,4 +135,4 @@ pub unsafe extern "C" fn bcmp(a: *const c_void, b: *const c_void, n: usize) -> c
 /// is never called, and if it somehow were, returning is the only thing it
 /// could do that is not worse.
 #[cfg_attr(not(test), unsafe(no_mangle))]
-pub extern "C" fn rust_eh_personality() {}
+pub(crate) extern "C" fn rust_eh_personality() {}

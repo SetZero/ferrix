@@ -15,7 +15,7 @@ use core::ffi::c_char;
 
 /// Why the loader stopped.
 #[derive(Debug, Clone, Copy)]
-pub enum Error {
+pub(crate) enum Error {
     /// A file could not be opened; carries the kernel's negated errno.
     CannotOpen(*const c_char, isize),
     /// A file could not be read or mapped.
@@ -38,7 +38,7 @@ pub enum Error {
 impl Error {
     /// The fixed part of the message.
     #[must_use]
-    pub const fn text(&self) -> &'static str {
+    pub(crate) const fn text(&self) -> &'static str {
         match self {
             Error::CannotOpen(..) => "cannot open",
             Error::CannotMap(..) => "cannot map",
@@ -53,7 +53,7 @@ impl Error {
 
     /// The name the message should carry, when there is one.
     #[must_use]
-    pub const fn subject(&self) -> Option<*const c_char> {
+    pub(crate) const fn subject(&self) -> Option<*const c_char> {
         match self {
             Error::CannotOpen(name, _)
             | Error::CannotMap(name, _)
@@ -66,7 +66,7 @@ impl Error {
 
     /// The number the message should carry, when there is one.
     #[must_use]
-    pub const fn number(&self) -> Option<isize> {
+    pub(crate) const fn number(&self) -> Option<isize> {
         match self {
             Error::CannotOpen(_, errno) | Error::CannotMap(_, errno) => Some(*errno),
             Error::UnknownRelocation(kind) => Some(*kind as isize),

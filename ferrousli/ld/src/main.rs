@@ -35,6 +35,16 @@
 
 #![no_std]
 #![no_main]
+// ELF's fields are 64 bits wide in a 64-bit object and 32 in a 32-bit one,
+// and C's `long` with them, so a cast or `from` between one of them and
+// `usize` or a fixed-width type is needed on some targets and the identity on
+// the others, where these two lints would reject it. The library allows them
+// for the same reason.
+#![allow(
+    clippy::unnecessary_cast,
+    clippy::useless_conversion,
+    reason = "ELF's and C's field widths differ between the targets"
+)]
 
 mod arch;
 mod auxv;
@@ -102,7 +112,10 @@ unsafe extern "C" fn main(sp: *const usize) -> ! {
     // answers it the same way: run directly, it is a tool rather than an
     // interpreter, and it loads the program named on its command line.
     match stack.get(auxv::AT_BASE) {
+        // SAFETY: `stack` is this process's entry stack, read once, and the
+        // loader is relocated.
         Some(0) | None => unsafe { run_as_a_command(&stack) },
+        // SAFETY: as above.
         Some(_) => unsafe { interpret(&stack) },
     }
 }
@@ -220,7 +233,7 @@ unsafe fn program_object(
     let mut interpreter = 0_usize;
     for index in 0..count {
         // SAFETY: `AT_PHNUM` headers are mapped at `AT_PHDR`.
-        let header = unsafe { headers.add(index).read() };
+        let header = unsafe { headers.wrapping_add(index).read() };
         match header.p_type {
             elf::PT_PHDR => bias = at.wrapping_sub(header.p_vaddr as usize),
             elf::PT_INTERP => interpreter = header.p_vaddr as usize,
@@ -367,7 +380,9 @@ pub(crate) unsafe fn run_object_init(
     dl::record_initialised(object.index);
     if object.init != 0 {
         // SAFETY: `DT_INIT` is a function in the object.
-        unsafe { core::mem::transmute::<usize, Init>(object.init)(argc, argv, envp) };
+        let init = unsafe { core::mem::transmute::<usize, Init>(object.init) };
+        // SAFETY: called once, with the program's arguments, as ELF says.
+        unsafe { init(argc, argv, envp) };
     }
     if !object.init_array.is_present() {
         return;
@@ -380,7 +395,9 @@ pub(crate) unsafe fn run_object_init(
         let entry = unsafe { (at as *const usize).read() };
         if entry != 0 && entry != usize::MAX {
             // SAFETY: each entry is a constructor.
-            unsafe { core::mem::transmute::<usize, Init>(entry)(argc, argv, envp) };
+            let constructor = unsafe { core::mem::transmute::<usize, Init>(entry) };
+            // SAFETY: as `DT_INIT` is.
+            unsafe { constructor(argc, argv, envp) };
         }
         at = at.wrapping_add(size_of::<usize>());
     }
@@ -408,21 +425,21 @@ unsafe fn environment(stack: &auxv::Stack, name: &[u8]) -> Option<*const c_char>
                 // The name ran out: this is the variable if what follows is
                 // the `=`, and a longer name that starts the same if not.
                 // SAFETY: `entry` is NUL-terminated and `index` is inside it.
-                break unsafe { entry.add(index).read() } as u8 == b'=';
+                break unsafe { entry.wrapping_add(index).read() } as u8 == b'=';
             };
             // SAFETY: as above.
-            let byte = unsafe { entry.add(index).read() } as u8;
+            let byte = unsafe { entry.wrapping_add(index).read() } as u8;
             if byte != *wanted {
                 break false;
             }
             index += 1;
         };
         if matched {
-            // SAFETY: the `=` is at `index`, so the value follows it.
-            return Some(unsafe { entry.add(index + 1) });
+            // The `=` is at `index`, so the value follows it.
+            return Some(entry.wrapping_add(index + 1));
         }
-        // SAFETY: the entry read was not the terminator.
-        at = unsafe { at.add(1) };
+        // The entry read was not the terminator.
+        at = at.wrapping_add(1);
     }
 }
 
@@ -452,8 +469,8 @@ fn write_cstr(fd: c_int, name: *const c_char) {
             return;
         }
         write_all(fd, &[byte]);
-        // SAFETY: the byte read was not the terminator.
-        at = unsafe { at.add(1) };
+        // The byte read was not the terminator.
+        at = at.wrapping_add(1);
     }
 }
 

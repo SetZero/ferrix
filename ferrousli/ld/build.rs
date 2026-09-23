@@ -9,6 +9,10 @@
 
 fn main() {
     println!("cargo::rerun-if-changed=build.rs");
+    // x86-64's loader links through `cc`, which takes linker flags after
+    // `-Wl,`; the Arm ones through rust-lld itself (`../.cargo/config.toml`).
+    let arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
+    let prefix = if arch == "x86_64" { "-Wl," } else { "" };
     // `__tls_get_addr` is the loader's in glibc too (`ld-linux`'s, at
     // `GLIBC_2.3`), and a library built with `-fPIC` that reads a TLS variable
     // imports it.
@@ -22,9 +26,9 @@ fn main() {
         "dladdr",
         "dl_iterate_phdr",
     ] {
-        println!("cargo::rustc-link-arg-bins=-Wl,--export-dynamic-symbol={symbol}");
+        println!("cargo::rustc-link-arg-bins={prefix}--export-dynamic-symbol={symbol}");
     }
     // The loader finds symbols through `DT_GNU_HASH` alone (`src/sym.rs`), so
     // its own table has to be one.
-    println!("cargo::rustc-link-arg-bins=-Wl,--hash-style=gnu");
+    println!("cargo::rustc-link-arg-bins={prefix}--hash-style=gnu");
 }

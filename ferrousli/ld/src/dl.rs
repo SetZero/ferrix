@@ -249,7 +249,7 @@ fn fail_with(error: Error) {
 ///
 /// `path` must be null or a NUL-terminated string.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn dlopen(path: *const c_char, flags: c_int) -> *mut c_void {
+pub(crate) unsafe extern "C" fn dlopen(path: *const c_char, flags: c_int) -> *mut c_void {
     if path.is_null() {
         // The program, whose `dlsym` searches everything: glibc's answer.
         return with_scope(|scope| scope.handle(0));
@@ -323,7 +323,7 @@ fn refuse_tls(scope: &Scope, before: usize) -> Result<(), Error> {
 ///
 /// `name` must be a NUL-terminated string.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn dlsym(handle: *mut c_void, name: *const c_char) -> *mut c_void {
+pub(crate) unsafe extern "C" fn dlsym(handle: *mut c_void, name: *const c_char) -> *mut c_void {
     if handle.addr() == RTLD_NEXT {
         fail("RTLD_NEXT is not supported", None);
         return core::ptr::null_mut();
@@ -357,11 +357,15 @@ pub unsafe extern "C" fn dlsym(handle: *mut c_void, name: *const c_char) -> *mut
                 .wrapping_add_signed(offset)
                 .wrapping_add(found.value)
         }),
-        // SAFETY: an `STT_GNU_IFUNC` symbol's address is a resolver taking
-        // nothing, which picks the implementation; the lock is released.
-        STT_GNU_IFUNC => unsafe {
-            core::mem::transmute::<usize, unsafe extern "C" fn() -> usize>(found.address)()
-        },
+        STT_GNU_IFUNC => {
+            // SAFETY: an `STT_GNU_IFUNC` symbol's address is a resolver
+            // taking nothing, which picks the implementation.
+            let resolver = unsafe {
+                core::mem::transmute::<usize, unsafe extern "C" fn() -> usize>(found.address)
+            };
+            // SAFETY: calling it is how it answers; the lock is released.
+            unsafe { resolver() }
+        }
         _ => found.address,
     };
     address as *mut c_void
@@ -369,7 +373,7 @@ pub unsafe extern "C" fn dlsym(handle: *mut c_void, name: *const c_char) -> *mut
 
 /// `dlclose(handle)`: 0 for a handle `dlopen` gave, which stays loaded.
 #[unsafe(no_mangle)]
-pub extern "C" fn dlclose(handle: *mut c_void) -> c_int {
+pub(crate) extern "C" fn dlclose(handle: *mut c_void) -> c_int {
     if with_scope(|scope| scope.index_of_handle(handle)).is_some() {
         return 0;
     }
@@ -383,20 +387,22 @@ static REPORTED: Message = Message(UnsafeCell::new([0; 512]));
 
 /// `dlerror()`: the last failure's message, once, then null until the next.
 #[unsafe(no_mangle)]
-pub extern "C" fn dlerror() -> *mut c_char {
+pub(crate) extern "C" fn dlerror() -> *mut c_char {
     let _guard = lock();
     if !PENDING.swap(false, Ordering::AcqRel) {
         return core::ptr::null_mut();
     }
     // SAFETY: both buffers are only touched under the lock, which is held.
-    unsafe { REPORTED.0.get().write(MESSAGE.0.get().read()) };
+    let message = unsafe { MESSAGE.0.get().read() };
+    // SAFETY: as above.
+    unsafe { REPORTED.0.get().write(message) };
     REPORTED.0.get().cast()
 }
 
 /// `Dl_info`.
 #[repr(C)]
 #[derive(Debug)]
-pub struct DlInfo {
+pub(crate) struct DlInfo {
     /// The object's name.
     dli_fname: *const c_char,
     /// Where it is loaded.
@@ -432,7 +438,7 @@ fn headers(object: &Object) -> impl Iterator<Item = Phdr> + '_ {
 ///
 /// `info` must be valid for writing a `Dl_info`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn dladdr(address: *const c_void, info: *mut DlInfo) -> c_int {
+pub(crate) unsafe extern "C" fn dladdr(address: *const c_void, info: *mut DlInfo) -> c_int {
     let wanted = address.addr();
     let answer = with_scope(|scope| {
         let index = (0..scope.len()).find(|&index| {
@@ -465,7 +471,7 @@ pub unsafe extern "C" fn dladdr(address: *const c_void, info: *mut DlInfo) -> c_
 /// `struct dl_phdr_info`, glibc's.
 #[repr(C)]
 #[derive(Debug)]
-pub struct DlPhdrInfo {
+pub(crate) struct DlPhdrInfo {
     /// The object's load bias.
     dlpi_addr: usize,
     /// Its name.
@@ -495,7 +501,10 @@ type Callback = unsafe extern "C" fn(*mut DlPhdrInfo, usize, *mut c_void) -> c_i
 /// `callback` must be sound to call with each object's description and
 /// `data`.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn dl_iterate_phdr(callback: Option<Callback>, data: *mut c_void) -> c_int {
+pub(crate) unsafe extern "C" fn dl_iterate_phdr(
+    callback: Option<Callback>,
+    data: *mut c_void,
+) -> c_int {
     let Some(callback) = callback else {
         return 0;
     };

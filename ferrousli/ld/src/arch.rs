@@ -28,89 +28,89 @@
 )]
 
 #[cfg(target_arch = "x86_64")]
-pub use x86_64::*;
+pub(crate) use x86_64::*;
 
 /// x86-64's numbers.
 #[cfg(target_arch = "x86_64")]
 mod x86_64 {
     /// Nothing to do.
-    pub const R_NONE: u32 = 0;
+    pub(crate) const R_NONE: u32 = 0;
     /// `R_X86_64_64`.
-    pub const R_ABSOLUTE: u32 = 1;
+    pub(crate) const R_ABSOLUTE: u32 = 1;
     /// `R_X86_64_COPY`.
-    pub const R_COPY: u32 = 5;
+    pub(crate) const R_COPY: u32 = 5;
     /// `R_X86_64_GLOB_DAT`.
-    pub const R_GLOB_DAT: u32 = 6;
+    pub(crate) const R_GLOB_DAT: u32 = 6;
     /// `R_X86_64_JUMP_SLOT`.
-    pub const R_JUMP_SLOT: u32 = 7;
+    pub(crate) const R_JUMP_SLOT: u32 = 7;
     /// `R_X86_64_RELATIVE`.
-    pub const R_RELATIVE: u32 = 8;
+    pub(crate) const R_RELATIVE: u32 = 8;
     /// `R_X86_64_DTPMOD64`.
-    pub const R_DTPMOD: u32 = 16;
+    pub(crate) const R_DTPMOD: u32 = 16;
     /// `R_X86_64_DTPOFF64`.
-    pub const R_DTPOFF: u32 = 17;
+    pub(crate) const R_DTPOFF: u32 = 17;
     /// `R_X86_64_TPOFF64`.
-    pub const R_TPOFF: u32 = 18;
+    pub(crate) const R_TPOFF: u32 = 18;
     /// `R_X86_64_IRELATIVE`.
-    pub const R_IRELATIVE: u32 = 37;
+    pub(crate) const R_IRELATIVE: u32 = 37;
     /// `R_X86_64_TLSDESC`: a descriptor, two words.
-    pub const R_TLSDESC: u32 = 36;
+    pub(crate) const R_TLSDESC: u32 = 36;
 }
 
 #[cfg(target_arch = "aarch64")]
-pub use aarch64::*;
+pub(crate) use aarch64::*;
 
 /// AArch64's numbers.
 #[cfg(target_arch = "aarch64")]
 mod aarch64 {
     /// Nothing to do.
-    pub const R_NONE: u32 = 0;
+    pub(crate) const R_NONE: u32 = 0;
     /// `R_AARCH64_ABS64`.
-    pub const R_ABSOLUTE: u32 = 257;
+    pub(crate) const R_ABSOLUTE: u32 = 257;
     /// `R_AARCH64_COPY`.
-    pub const R_COPY: u32 = 1024;
+    pub(crate) const R_COPY: u32 = 1024;
     /// `R_AARCH64_GLOB_DAT`.
-    pub const R_GLOB_DAT: u32 = 1025;
+    pub(crate) const R_GLOB_DAT: u32 = 1025;
     /// `R_AARCH64_JUMP_SLOT`.
-    pub const R_JUMP_SLOT: u32 = 1026;
+    pub(crate) const R_JUMP_SLOT: u32 = 1026;
     /// `R_AARCH64_RELATIVE`.
-    pub const R_RELATIVE: u32 = 1027;
+    pub(crate) const R_RELATIVE: u32 = 1027;
     /// `R_AARCH64_TLS_DTPMOD`.
-    pub const R_DTPMOD: u32 = 1028;
+    pub(crate) const R_DTPMOD: u32 = 1028;
     /// `R_AARCH64_TLS_DTPREL`.
-    pub const R_DTPOFF: u32 = 1029;
+    pub(crate) const R_DTPOFF: u32 = 1029;
     /// `R_AARCH64_TLS_TPREL`.
-    pub const R_TPOFF: u32 = 1030;
+    pub(crate) const R_TPOFF: u32 = 1030;
     /// `R_AARCH64_IRELATIVE`.
-    pub const R_IRELATIVE: u32 = 1032;
+    pub(crate) const R_IRELATIVE: u32 = 1032;
     /// `R_AARCH64_TLSDESC`: a descriptor, two words.
-    pub const R_TLSDESC: u32 = 1031;
+    pub(crate) const R_TLSDESC: u32 = 1031;
 }
 
 #[cfg(target_arch = "arm")]
-pub use arm::*;
+pub(crate) use arm::*;
 
 /// ARM's numbers.
 #[cfg(target_arch = "arm")]
 mod arm {
     /// Nothing to do.
-    pub const R_NONE: u32 = 0;
+    pub(crate) const R_NONE: u32 = 0;
     /// `R_ARM_ABS32`.
-    pub const R_ABSOLUTE: u32 = 2;
+    pub(crate) const R_ABSOLUTE: u32 = 2;
     /// `R_ARM_TLS_DTPMOD32`.
-    pub const R_DTPMOD: u32 = 17;
+    pub(crate) const R_DTPMOD: u32 = 17;
     /// `R_ARM_TLS_DTPOFF32`.
-    pub const R_DTPOFF: u32 = 18;
+    pub(crate) const R_DTPOFF: u32 = 18;
     /// `R_ARM_TLS_TPOFF32`.
-    pub const R_TPOFF: u32 = 19;
+    pub(crate) const R_TPOFF: u32 = 19;
     /// `R_ARM_COPY`.
-    pub const R_COPY: u32 = 20;
+    pub(crate) const R_COPY: u32 = 20;
     /// `R_ARM_GLOB_DAT`.
-    pub const R_GLOB_DAT: u32 = 21;
+    pub(crate) const R_GLOB_DAT: u32 = 21;
     /// `R_ARM_JUMP_SLOT`.
-    pub const R_JUMP_SLOT: u32 = 22;
+    pub(crate) const R_JUMP_SLOT: u32 = 22;
     /// `R_ARM_RELATIVE`.
-    pub const R_RELATIVE: u32 = 23;
+    pub(crate) const R_RELATIVE: u32 = 23;
     /// `R_ARM_IRELATIVE`.
-    pub const R_IRELATIVE: u32 = 160;
+    pub(crate) const R_IRELATIVE: u32 = 160;
 }

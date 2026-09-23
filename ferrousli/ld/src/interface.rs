@@ -42,32 +42,33 @@ const VERSION: usize = 2;
 /// What the loader exports to the C library.
 #[repr(C)]
 #[derive(Debug)]
-pub struct Interface {
+pub(crate) struct Interface {
     /// [`VERSION`].
-    pub version: usize,
-    /// Bytes of static TLS below every thread pointer, rounded to
-    /// `tls_align`.
-    pub tls_size: usize,
+    pub(crate) version: usize,
+    /// Bytes of static TLS below every thread pointer on x86-64, rounded to
+    /// `tls_align`; on AArch64 and ARMv7-A, the bytes past the control block
+    /// above it.
+    pub(crate) tls_size: usize,
     /// The greatest alignment any `PT_TLS` asks for.
-    pub tls_align: usize,
+    pub(crate) tls_align: usize,
     /// Copy every object's initial TLS image into a new thread's blocks,
-    /// below the thread pointer given.
-    pub init_tls: unsafe extern "C" fn(tp: *mut u8),
+    /// beside the thread pointer given.
+    pub(crate) init_tls: unsafe extern "C" fn(tp: *mut u8),
     /// Run the program's own `DT_INIT` and `DT_INIT_ARRAY`, with its
     /// arguments, and have the exit callback finish it too.
-    pub run_program_init: unsafe extern "C" fn(c_int, *mut *mut c_char, *mut *mut c_char),
+    pub(crate) run_program_init: unsafe extern "C" fn(c_int, *mut *mut c_char, *mut *mut c_char),
     /// `dlopen`.
-    pub dlopen: unsafe extern "C" fn(*const c_char, c_int) -> *mut c_void,
+    pub(crate) dlopen: unsafe extern "C" fn(*const c_char, c_int) -> *mut c_void,
     /// `dlsym`.
-    pub dlsym: unsafe extern "C" fn(*mut c_void, *const c_char) -> *mut c_void,
+    pub(crate) dlsym: unsafe extern "C" fn(*mut c_void, *const c_char) -> *mut c_void,
     /// `dlclose`.
-    pub dlclose: extern "C" fn(*mut c_void) -> c_int,
+    pub(crate) dlclose: extern "C" fn(*mut c_void) -> c_int,
     /// `dlerror`.
-    pub dlerror: extern "C" fn() -> *mut c_char,
+    pub(crate) dlerror: extern "C" fn() -> *mut c_char,
     /// `dladdr`.
-    pub dladdr: unsafe extern "C" fn(*const c_void, *mut dl::DlInfo) -> c_int,
+    pub(crate) dladdr: unsafe extern "C" fn(*const c_void, *mut dl::DlInfo) -> c_int,
     /// `dl_iterate_phdr`.
-    pub dl_iterate_phdr: unsafe extern "C" fn(
+    pub(crate) dl_iterate_phdr: unsafe extern "C" fn(
         Option<unsafe extern "C" fn(*mut dl::DlPhdrInfo, usize, *mut c_void) -> c_int>,
         *mut c_void,
     ) -> c_int,
@@ -79,7 +80,7 @@ pub struct Interface {
 /// GOT; it is written once, by the only thread, before the program runs.
 #[unsafe(no_mangle)]
 #[allow(non_upper_case_globals, reason = "a C symbol, named as one")]
-pub static mut __ferrousli_loader: Interface = Interface {
+pub(crate) static mut __ferrousli_loader: Interface = Interface {
     version: VERSION,
     tls_size: 0,
     tls_align: 1,
@@ -98,7 +99,7 @@ pub static mut __ferrousli_loader: Interface = Interface {
 /// # Safety
 ///
 /// Called once, before the program runs, by the only thread.
-pub unsafe fn publish(tls_size: usize, tls_align: usize) {
+pub(crate) unsafe fn publish(tls_size: usize, tls_align: usize) {
     let interface = &raw mut __ferrousli_loader;
     // SAFETY: the caller promises nothing else is reading it yet.
     unsafe { (*interface).tls_size = tls_size };

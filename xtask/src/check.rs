@@ -206,6 +206,48 @@ fn ferrousli(root: &std::path::Path) -> Result<()> {
             "cargo clippy (ferrousli)",
         )
     })?;
+    // The library on AArch64 and ARMv7-A, whose code the host's build never
+    // compiles. Clippy needs only their rustup targets; the tests there need
+    // a cross compiler and QEMU's user mode, which `ferrousli/README.md` says
+    // how to run.
+    for target in ["aarch64-unknown-linux-gnu", "armv7-unknown-linux-gnueabihf"] {
+        step(&format!("ferrousli: clippy ({target})"), || {
+            cargo::run(
+                in_ferrousli(&[
+                    "clippy", "--lib", "--target", target, "--", "-D", "warnings",
+                ]),
+                "cargo clippy (ferrousli)",
+            )
+        })?;
+    }
+    // The loader, which `--all-targets` skips: its binary is built only with
+    // the `loader` feature and for a musl target (`ld/Cargo.toml`), and it
+    // went unlinted until 2026-09-23 for that reason.
+    for target in [
+        "x86_64-unknown-linux-musl",
+        "aarch64-unknown-linux-musl",
+        "armv7-unknown-linux-musleabihf",
+    ] {
+        step(&format!("ferrousli: clippy (loader, {target})"), || {
+            cargo::run(
+                in_ferrousli(&[
+                    "clippy",
+                    "-p",
+                    "ferrousli-ld",
+                    "--bin",
+                    "ld-ferrousli",
+                    "--features",
+                    "loader",
+                    "--target",
+                    target,
+                    "--",
+                    "-D",
+                    "warnings",
+                ]),
+                "cargo clippy (ferrousli's loader)",
+            )
+        })?;
+    }
     step("ferrousli: tests", || {
         cargo::run(
             in_ferrousli(&["test", "--workspace"]),

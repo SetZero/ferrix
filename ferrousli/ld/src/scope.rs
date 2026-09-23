@@ -42,7 +42,7 @@ const DEFAULT_PATHS: [&str; 4] = ["/lib", "/usr/lib", "/lib64", "/usr/lib64"];
 
 /// Every object this process has loaded.
 #[derive(Debug)]
-pub struct Scope {
+pub(crate) struct Scope {
     /// The objects, in the order they were loaded, which is the order they
     /// are searched.
     objects: [Object; MAX_OBJECTS],
@@ -64,7 +64,7 @@ pub struct Scope {
 impl Scope {
     /// An empty scope.
     #[must_use]
-    pub const fn new() -> Scope {
+    pub(crate) const fn new() -> Scope {
         Scope {
             objects: [Object::EMPTY; MAX_OBJECTS],
             names: [core::ptr::null(); MAX_OBJECTS],
@@ -81,48 +81,64 @@ impl Scope {
     /// Searched before the defaults and after an object's own `DT_RUNPATH`,
     /// which is the order every loader uses and the order a program that ships
     /// its own libraries beside itself depends on.
-    pub fn set_library_path(&mut self, path: *const c_char) {
+    pub(crate) fn set_library_path(&mut self, path: *const c_char) {
         self.library_path = path;
     }
 
     /// How many objects are loaded.
     #[must_use]
-    pub const fn len(&self) -> usize {
+    pub(crate) const fn len(&self) -> usize {
         self.count
     }
 
     /// Bytes the initial thread's static TLS reservation needs below its
-    /// thread pointer. Valid after [`Self::layout_tls`].
+    /// thread pointer on x86-64, or past the thread control block above it
+    /// on AArch64 and ARMv7-A. Valid after [`Self::layout_tls`].
     #[must_use]
-    pub const fn tls_size(&self) -> usize {
+    pub(crate) const fn tls_size(&self) -> usize {
         self.tls_size
     }
 
     /// The greatest alignment requested by a static TLS image. Valid after
     /// [`Self::layout_tls`].
     #[must_use]
-    pub const fn tls_align(&self) -> usize {
+    pub(crate) const fn tls_align(&self) -> usize {
         self.tls_align
     }
 
     /// The object at `index`, in search order.
     #[must_use]
-    pub fn get(&self, index: usize) -> Option<&Object> {
+    pub(crate) fn get(&self, index: usize) -> Option<&Object> {
         self.objects.get(index)
     }
 
-    /// Give every `PT_TLS` image its position below the initial thread
+    /// Give every `PT_TLS` image its position relative to the thread
     /// pointer.
     ///
     /// x86-64's variant-II TLS packs images downwards from the thread pointer.
     /// Rounding after each image, rather than merely at the end, preserves
     /// every segment's required alignment.
     ///
+    /// AArch64's and ARMv7-A's variant I packs them upwards, after the
+    /// [`crate::tls::TCB_SIZE`] bytes of control block at the thread pointer:
+    /// the first at that size rounded up to its own alignment, which is
+    /// where the static linker put the program's local-exec variables, and
+    /// each next one at the end of the last, rounded up to its own.
+    ///
     /// # Errors
     ///
     /// [`Error::MalformedObject`] if the layout would not fit in an address
     /// or a signed TLS offset.
-    pub fn layout_tls(&mut self) -> Result<(), Error> {
+    pub(crate) fn layout_tls(&mut self) -> Result<(), Error> {
+        #[cfg(not(target_arch = "x86_64"))]
+        return self.layout_tls_upwards();
+        #[cfg(target_arch = "x86_64")]
+        self.layout_tls_downwards()
+    }
+
+    /// [`Self::layout_tls`] for variant II.
+    #[cfg(target_arch = "x86_64")]
+    fn layout_tls_downwards(&mut self) -> Result<(), Error> {
         let mut size = 0_usize;
         let mut greatest_align = 1_usize;
         for object in self.objects.iter_mut().take(self.count) {
@@ -147,12 +163,39 @@ impl Scope {
         Ok(())
     }
 
+    /// [`Self::layout_tls`] for variant I.
+    #[cfg(not(target_arch = "x86_64"))]
+    fn layout_tls_upwards(&mut self) -> Result<(), Error> {
+        const TOO_LARGE: Error = Error::MalformedObject("TLS layout is too large");
+        let mut end = crate::tls::TCB_SIZE;
+        let mut greatest_align = 1_usize;
+        for object in self.objects.iter_mut().take(self.count) {
+            let Some(tls) = object.tls.as_mut() else {
+                continue;
+            };
+            let start = end
+                .checked_add(tls.align - 1)
+                .map(|value| value & !(tls.align - 1))
+                .ok_or(TOO_LARGE)?;
+            tls.offset = isize::try_from(start).map_err(|_| TOO_LARGE)?;
+            end = start.checked_add(tls.memsz).ok_or(TOO_LARGE)?;
+            greatest_align = greatest_align.max(tls.align);
+        }
+        // What the blocks take past the control block. A C library that
+        // reserves this much after the control block rounded up to
+        // `tls_align` covers them all, since every block starts at or after
+        // the end of the control block.
+        self.tls_size = end - crate::tls::TCB_SIZE;
+        self.tls_align = greatest_align;
+        Ok(())
+    }
+
     /// Add an object that is already mapped: the program, or the loader.
     ///
     /// # Errors
     ///
     /// [`Error::TooManyObjects`].
-    pub fn push(&mut self, name: *const c_char, object: Object) -> Result<(), Error> {
+    pub(crate) fn push(&mut self, name: *const c_char, object: Object) -> Result<(), Error> {
         let object = Object {
             index: self.count,
             ..object
@@ -185,7 +228,7 @@ impl Scope {
     /// The index of the object loaded as `name`, or whose `DT_SONAME` it is;
     /// the loader's for the name the program gave its interpreter.
     #[must_use]
-    pub fn find(&self, name: *const c_char) -> Option<usize> {
+    pub(crate) fn find(&self, name: *const c_char) -> Option<usize> {
         for index in 0..self.count {
             let object = self.objects.get(index)?;
             if object.is_loader
@@ -212,7 +255,7 @@ impl Scope {
 
     /// The name object `index` was loaded as.
     #[must_use]
-    pub fn name_at(&self, index: usize) -> *const c_char {
+    pub(crate) fn name_at(&self, index: usize) -> *const c_char {
         self.names.get(index).copied().unwrap_or(core::ptr::null())
     }
 
@@ -225,7 +268,7 @@ impl Scope {
     /// # Errors
     ///
     /// [`Error`], naming what could not be loaded.
-    pub fn open(&mut self, name: *const c_char, page_size: usize) -> Result<usize, Error> {
+    pub(crate) fn open(&mut self, name: *const c_char, page_size: usize) -> Result<usize, Error> {
         if let Some(index) = self.find(name) {
             return Ok(index);
         }
@@ -242,14 +285,14 @@ impl Scope {
 
     /// Forget every object from `count` on: a `dlopen` that failed part of
     /// the way. Their mappings stay, unused; nothing refers to them.
-    pub fn truncate(&mut self, count: usize) {
+    pub(crate) fn truncate(&mut self, count: usize) {
         self.count = self.count.min(count);
     }
 
     /// The handle `dlopen` gives for object `index`: the address of its slot,
     /// which never moves, since the scope is a fixed array in a `static`.
     #[must_use]
-    pub fn handle(&self, index: usize) -> *mut core::ffi::c_void {
+    pub(crate) fn handle(&self, index: usize) -> *mut core::ffi::c_void {
         self.objects
             .get(index)
             .map_or(core::ptr::null_mut(), |object| {
@@ -260,7 +303,7 @@ impl Scope {
     /// The index a handle from [`Self::handle`] stands for, and `None` for
     /// anything else.
     #[must_use]
-    pub fn index_of_handle(&self, handle: *const core::ffi::c_void) -> Option<usize> {
+    pub(crate) fn index_of_handle(&self, handle: *const core::ffi::c_void) -> Option<usize> {
         let first = self.objects.as_ptr().addr();
         let offset = handle.addr().checked_sub(first)?;
         let size = size_of::<Object>();
@@ -275,7 +318,7 @@ impl Scope {
     ///
     /// Every object in the scope must be mapped.
     #[must_use]
-    pub unsafe fn lookup_from(&self, root: usize, name: *const c_char) -> Option<Found> {
+    pub(crate) unsafe fn lookup_from(&self, root: usize, name: *const c_char) -> Option<Found> {
         let hash = sym::hash(name);
         // `MAX_OBJECTS` is 64, so one word marks every object queued.
         let mut queued: u64 = 1 << root;
@@ -316,7 +359,7 @@ impl Scope {
     /// # Errors
     ///
     /// [`Error`], naming the library that could not be loaded.
-    pub fn load_dependencies(&mut self, page_size: usize) -> Result<(), Error> {
+    pub(crate) fn load_dependencies(&mut self, page_size: usize) -> Result<(), Error> {
         // Walked by index rather than iterated: the list grows as it is
         // walked, which is what makes this breadth-first without a queue of
         // its own.
@@ -446,7 +489,7 @@ impl Scope {
     ///
     /// Every object in the scope must be mapped.
     #[must_use]
-    pub unsafe fn lookup(
+    pub(crate) unsafe fn lookup(
         &self,
         name: *const c_char,
         version: Option<*const c_char>,
@@ -472,7 +515,7 @@ impl Scope {
     /// glibc's `libc.so.6` reaches into its loader. Here the loader is already
     /// in the process, and loading a second copy of it from the same file
     /// would map a program nothing calls.
-    pub fn set_interpreter(&mut self, path: *const c_char) {
+    pub(crate) fn set_interpreter(&mut self, path: *const c_char) {
         self.interpreter = path;
     }
 
@@ -484,7 +527,7 @@ impl Scope {
     /// # Errors
     ///
     /// [`Error::TooManyObjects`].
-    pub fn push_loader(&mut self, mut object: Object) -> Result<(), Error> {
+    pub(crate) fn push_loader(&mut self, mut object: Object) -> Result<(), Error> {
         object.is_loader = true;
         let name = if self.interpreter.is_null() {
             c"ld-ferrousli".as_ptr()
@@ -526,8 +569,8 @@ fn file_name(path: *const c_char) -> *const c_char {
         if byte == 0 {
             return last;
         }
-        // SAFETY: the byte read was not the terminator.
-        at = unsafe { at.add(1) };
+        // The byte read was not the terminator.
+        at = at.wrapping_add(1);
         if byte == b'/' {
             last = at;
         }
@@ -543,15 +586,17 @@ fn same(a: *const c_char, b: *const c_char) -> bool {
     let mut b = b;
     loop {
         // SAFETY: both are NUL-terminated, and this stops at the first NUL.
-        let (x, y) = unsafe { (a.read(), b.read()) };
+        let x = unsafe { a.read() };
+        // SAFETY: as above.
+        let y = unsafe { b.read() };
         if x != y {
             return false;
         }
         if x == 0 {
             return true;
         }
-        // SAFETY: neither byte was the terminator.
-        (a, b) = unsafe { (a.add(1), b.add(1)) };
+        // Neither byte was the terminator.
+        (a, b) = (a.wrapping_add(1), b.wrapping_add(1));
     }
 }
 
@@ -568,8 +613,8 @@ fn contains_slash(name: *const c_char) -> bool {
         if byte == b'/' {
             return true;
         }
-        // SAFETY: the byte read was not the terminator.
-        at = unsafe { at.add(1) };
+        // The byte read was not the terminator.
+        at = at.wrapping_add(1);
     }
 }
 
@@ -598,8 +643,8 @@ fn join(
             return Some(buffer.as_ptr().cast::<c_char>());
         }
         at += 1;
-        // SAFETY: the byte read was not the terminator.
-        from = unsafe { from.add(1) };
+        // The byte read was not the terminator.
+        from = from.wrapping_add(1);
     }
 }
 
@@ -623,12 +668,12 @@ fn next_directory(
             return Some((len, None));
         }
         if byte == b':' {
-            // SAFETY: the byte read was not the terminator.
-            return Some((len, Some(unsafe { at.add(1) })));
+            // The byte read was not the terminator.
+            return Some((len, Some(at.wrapping_add(1))));
         }
         *into.get_mut(len)? = byte;
         len += 1;
-        // SAFETY: as above.
-        at = unsafe { at.add(1) };
+        // As above.
+        at = at.wrapping_add(1);
     }
 }

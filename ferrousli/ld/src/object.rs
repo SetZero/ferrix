@@ -27,20 +27,20 @@ use crate::elf::{
 /// enough that the table is a few kilobytes of `.bss`. A desktop program
 /// links against a few dozen libraries; the largest measured here is far
 /// under this.
-pub const MAX_OBJECTS: usize = 64;
+pub(crate) const MAX_OBJECTS: usize = 64;
 
 /// How many `DT_NEEDED` entries one object may carry.
-pub const MAX_NEEDED: usize = 48;
+pub(crate) const MAX_NEEDED: usize = 48;
 
 /// A table the loader reads out of an object's dynamic section.
 #[derive(Debug, Clone, Copy)]
-pub struct Table {
+pub(crate) struct Table {
     /// Where it starts, as a run-time address; zero when the object has none.
-    pub at: usize,
+    pub(crate) at: usize,
     /// Its size in bytes.
-    pub size: usize,
+    pub(crate) size: usize,
     /// The size of one entry, when the table says so.
-    pub stride: usize,
+    pub(crate) stride: usize,
 }
 
 /// One object's initial TLS image, already at its run-time address.
@@ -50,26 +50,32 @@ pub struct Table {
 /// a power of two, so a layout builder can use it without repeating ELF's
 /// validation for every thread it creates.
 #[derive(Debug, Clone, Copy)]
-pub struct Tls {
+pub(crate) struct Tls {
     /// The mapped bytes that initialise each thread's block.
-    pub image: usize,
+    pub(crate) image: usize,
     /// Bytes of `image` to copy.
-    pub filesz: usize,
+    pub(crate) filesz: usize,
     /// Total bytes in every thread's block.
-    pub memsz: usize,
+    pub(crate) memsz: usize,
     /// Required alignment of the block.
-    pub align: usize,
-    /// This image's negative offset from the initial thread pointer.
+    pub(crate) align: usize,
+    /// This image's offset from the thread pointer: negative on x86-64,
+    /// positive past the control block on AArch64 and ARMv7-A.
     ///
     /// [`crate::scope::Scope::layout_tls`] assigns it before relocations use
     /// `R_*_TPOFF` references.
-    pub offset: isize,
+    pub(crate) offset: isize,
 }
 
 impl Tls {
     /// Build a TLS description from one `PT_TLS` segment.
     #[must_use]
-    pub const fn new(image: usize, filesz: usize, memsz: usize, align: usize) -> Option<Tls> {
+    pub(crate) const fn new(
+        image: usize,
+        filesz: usize,
+        memsz: usize,
+        align: usize,
+    ) -> Option<Tls> {
         let align = if align == 0 { 1 } else { align };
         if filesz > memsz || !align.is_power_of_two() {
             return None;
@@ -86,7 +92,7 @@ impl Tls {
 
 impl Table {
     /// An absent table.
-    pub const NONE: Table = Table {
+    pub(crate) const NONE: Table = Table {
         at: 0,
         size: 0,
         stride: 0,
@@ -94,91 +100,89 @@ impl Table {
 
     /// Whether the object carries it.
     #[must_use]
-    pub const fn is_present(&self) -> bool {
+    pub(crate) const fn is_present(&self) -> bool {
         self.at != 0 && self.size != 0
     }
 }
 
 /// A loaded object.
 #[derive(Debug, Clone, Copy)]
-pub struct Object {
+pub(crate) struct Object {
     /// How far it was moved from where it was linked.
-    pub base: usize,
-    /// Its `PT_DYNAMIC`, as a run-time address.
-    pub dynamic: *const Dyn,
+    pub(crate) base: usize,
     /// Its string table.
-    pub strtab: *const c_char,
+    pub(crate) strtab: *const c_char,
     /// The string table's size, which bounds every name read from it.
-    pub strsz: usize,
+    pub(crate) strsz: usize,
     /// Its symbol table.
-    pub symtab: *const Sym,
+    pub(crate) symtab: *const Sym,
     /// The size of one symbol, which is the class's and is checked.
-    pub syment: usize,
+    pub(crate) syment: usize,
     /// Its GNU hash table, or null. An object without one exports nothing
     /// this loader can find: the old `DT_HASH` is not read, because no linker
     /// has emitted it alone this century.
-    pub gnu_hash: *const u32,
+    pub(crate) gnu_hash: *const u32,
     /// Its ordinary relocations, `RELA` form.
-    pub rela: Table,
+    pub(crate) rela: Table,
     /// Its ordinary relocations, `REL` form.
-    pub rel: Table,
+    pub(crate) rel: Table,
     /// Its procedure linkage table's relocations, in whichever form
     /// `DT_PLTREL` names.
-    pub jmprel: Table,
+    pub(crate) jmprel: Table,
     /// Which form that is: `DT_REL` or `DT_RELA`.
-    pub pltrel: usize,
+    pub(crate) pltrel: usize,
     /// `DT_INIT`, the initialiser to run before the array.
-    pub init: usize,
+    pub(crate) init: usize,
     /// `DT_INIT_ARRAY`.
-    pub init_array: Table,
+    pub(crate) init_array: Table,
     /// `DT_FINI`, run after this object's finaliser array.
-    pub fini: usize,
+    pub(crate) fini: usize,
     /// `DT_FINI_ARRAY`.
-    pub fini_array: Table,
+    pub(crate) fini_array: Table,
     /// `PT_TLS`, if this object supplies an initial TLS image.
-    pub tls: Option<Tls>,
+    pub(crate) tls: Option<Tls>,
     /// Its `DT_SONAME`, as a string table offset, or zero.
-    pub soname: u32,
+    pub(crate) soname: u32,
     /// Its `DT_RUNPATH`, as a string table offset, or zero.
-    pub runpath: u32,
+    pub(crate) runpath: u32,
     /// Its `DT_NEEDED` entries, as string table offsets.
-    pub needed: [u32; MAX_NEEDED],
+    pub(crate) needed: [u32; MAX_NEEDED],
     /// How many of them there are.
-    pub needed_count: usize,
+    pub(crate) needed_count: usize,
     /// Whether it asked for everything to be resolved at load. This loader
     /// does that whatever the flag says, so the flag is read only to be
     /// reported.
-    pub bind_now: bool,
+    pub(crate) bind_now: bool,
     /// Its `PT_GNU_RELRO`, as a run-time address and a length, or `(0, 0)`.
     ///
     /// Not read from the dynamic table -- it is a segment, not a tag -- so
     /// whoever mapped the object fills it in.
-    pub relro: (usize, usize),
+    pub(crate) relro: (usize, usize),
     /// `DT_VERSYM`: one version index per dynamic symbol, or null.
-    pub versym: *const u16,
+    pub(crate) versym: *const u16,
     /// `DT_VERDEF` as a run-time address, and how many records it has.
-    pub verdef: (usize, usize),
+    pub(crate) verdef: (usize, usize),
     /// `DT_VERNEED` as a run-time address, and how many records it has.
-    pub verneed: (usize, usize),
+    pub(crate) verneed: (usize, usize),
     /// Whether this is the loader itself: relocated already by its own
     /// start, and in the scope only so that its names are recognised and its
     /// symbols found.
-    pub is_loader: bool,
+    pub(crate) is_loader: bool,
     /// Where it is in the scope: its TLS module number less one. Set when it
     /// is added.
-    pub index: usize,
+    pub(crate) index: usize,
     /// Its program headers, at their run-time address, and how many: what
     /// `dl_iterate_phdr` hands an unwinder and `dladdr` finds an address's
     /// object by. Not a dynamic tag, so whoever mapped it fills them in; zero
     /// when nobody could.
-    pub phdr: usize,
+    pub(crate) phdr: usize,
     /// How many headers are at [`Self::phdr`].
-    pub phnum: usize,
+    pub(crate) phnum: usize,
 }
 
 /// The version a definition carries, from `DT_VERSYM` and `DT_VERDEF`.
 #[derive(Debug, Clone, Copy)]
-pub enum Defined {
+pub(crate) enum Defined {
     /// Local to its object: never an answer to another object's reference.
     Local,
     /// No version at all, which satisfies any reference.
@@ -196,9 +200,8 @@ pub enum Defined {
 
 impl Object {
     /// An object with nothing in it.
-    pub const EMPTY: Object = Object {
+    pub(crate) const EMPTY: Object = Object {
         base: 0,
-        dynamic: core::ptr::null(),
         strtab: core::ptr::null(),
         strsz: 0,
         symtab: core::ptr::null(),
@@ -242,7 +245,7 @@ impl Object {
     /// `dynamic` must be an object's `PT_DYNAMIC`, at its run-time address,
     /// and `base` the bias it was loaded with.
     #[must_use]
-    pub unsafe fn read(base: usize, dynamic: *const Dyn) -> Option<Object> {
+    pub(crate) unsafe fn read(base: usize, dynamic: *const Dyn) -> Option<Object> {
         // The entry sizes default to this class's, because the tags that give
         // them are not always there to be read. An object whose only
         // relocations are its `JMPREL` table carries no `DT_RELA` and so no
@@ -253,7 +256,6 @@ impl Object {
         // looks like from the outside, and it is hard to read backwards.
         let mut object = Object {
             base,
-            dynamic,
             rela: Table {
                 stride: size_of::<crate::elf::Rela>(),
                 ..Table::NONE
@@ -308,9 +310,9 @@ impl Object {
                 DT_VERNEEDNUM => object.verneed.1 = value,
                 _ => {}
             }
-            // SAFETY: the entry read was not the terminator, so another
+            // The entry read was not the terminator, so another
             // follows.
-            at = unsafe { at.add(1) };
+            at = at.wrapping_add(1);
         }
         // The `JMPREL` table's entries are the size the form it is says, and
         // `DT_PLTREL` is the only place that says which form that is.
@@ -327,12 +329,12 @@ impl Object {
     /// `None` for an offset past the end, which is a malformed object rather
     /// than a name the loader should go looking for.
     #[must_use]
-    pub fn name(&self, offset: u32) -> Option<*const c_char> {
+    pub(crate) fn name(&self, offset: u32) -> Option<*const c_char> {
         if self.strtab.is_null() || offset as usize >= self.strsz {
             return None;
         }
-        // SAFETY: the offset is inside the table, whose size the object gave.
-        Some(unsafe { self.strtab.add(offset as usize) })
+        // The offset is inside the table, whose size the object gave.
+        Some(self.strtab.wrapping_add(offset as usize))
     }
 
     /// Make this object's `PT_GNU_RELRO` span read-only.
@@ -349,7 +351,7 @@ impl Object {
     /// object works either way, and refusing to start a program because it
     /// could not be made *more* strict would trade a working program for a
     /// hardening measure.
-    pub fn protect_relro(&self, page_size: usize) {
+    pub(crate) fn protect_relro(&self, page_size: usize) {
         let (at, len) = self.relro;
         if at == 0 || len == 0 {
             return;
@@ -371,7 +373,7 @@ impl Object {
 
     /// This object's `DT_SONAME`, the name other objects ask for it by.
     #[must_use]
-    pub fn soname(&self) -> Option<*const c_char> {
+    pub(crate) fn soname(&self) -> Option<*const c_char> {
         if self.soname == 0 {
             return None;
         }
@@ -386,14 +388,14 @@ impl Object {
         }
         // SAFETY: `DT_VERSYM` has one entry per dynamic symbol, and `index`
         // is one this object's own hash table or relocation gave.
-        Some(unsafe { self.versym.add(index).read() })
+        Some(unsafe { self.versym.wrapping_add(index).read() })
     }
 
     /// The version this object's reference to symbol `index` asks for:
     /// `printf@GLIBC_2.2.5`'s `GLIBC_2.2.5`. `None` for a reference that
     /// names no version, which any definition that is not hidden answers.
     #[must_use]
-    pub fn requested_version(&self, index: usize) -> Option<*const c_char> {
+    pub(crate) fn requested_version(&self, index: usize) -> Option<*const c_char> {
         let wanted = self.version_index(index)? & !VERSYM_HIDDEN;
         if wanted == VER_NDX_LOCAL || wanted == VER_NDX_GLOBAL {
             return None;
@@ -427,7 +429,7 @@ impl Object {
 
     /// The version this object's definition of symbol `index` carries.
     #[must_use]
-    pub fn defined_version(&self, index: usize) -> Defined {
+    pub(crate) fn defined_version(&self, index: usize) -> Defined {
         let Some(raw) = self.version_index(index) else {
             return Defined::Unversioned;
         };

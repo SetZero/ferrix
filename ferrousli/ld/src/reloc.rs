@@ -63,14 +63,14 @@ type Resolver = unsafe extern "C" fn() -> usize;
 ///
 /// `object` must be mapped at its base with its writable segments writable,
 /// and every object in `scope` must be mapped.
-pub unsafe fn apply(object: &Object, scope: &Scope) -> Result<(), Error> {
+pub(crate) unsafe fn apply(object: &Object, scope: &Scope) -> Result<(), Error> {
     // SAFETY: the caller promises the object is mapped.
-    unsafe {
-        apply_table(object, scope, &object.rela, true)?;
-        apply_table(object, scope, &object.rel, false)?;
-        let addend_in_entry = object.pltrel == crate::elf::DT_RELA;
-        apply_table(object, scope, &object.jmprel, addend_in_entry)
-    }
+    unsafe { apply_table(object, scope, &object.rela, true) }?;
+    // SAFETY: as above.
+    unsafe { apply_table(object, scope, &object.rel, false) }?;
+    let addend_in_entry = object.pltrel == crate::elf::DT_RELA;
+    // SAFETY: as above.
+    unsafe { apply_table(object, scope, &object.jmprel, addend_in_entry) }
 }
 
 /// Apply one table of relocations.
@@ -147,8 +147,10 @@ unsafe fn apply_one(object: &Object, scope: &Scope, entry: &Entry) -> Result<(),
             let at = object.base.wrapping_add_signed(entry.addend);
             // SAFETY: an `IRELATIVE` addend is the address of a resolver in
             // this object, which takes nothing and returns the address to
-            // use. Calling it is the whole point of the relocation.
-            unsafe { core::mem::transmute::<usize, Resolver>(at)() }
+            // use.
+            let resolver = unsafe { core::mem::transmute::<usize, Resolver>(at) };
+            // SAFETY: calling it is the whole point of the relocation.
+            unsafe { resolver() }
         }
         arch::R_GLOB_DAT | arch::R_JUMP_SLOT | arch::R_ABSOLUTE => {
             // SAFETY: the scope's objects are mapped.
@@ -156,6 +158,7 @@ unsafe fn apply_one(object: &Object, scope: &Scope, entry: &Entry) -> Result<(),
             let Some(found) = found else {
                 // A weak undefined symbol resolves to zero, which is what the
                 // program tests for when it asks whether something is there.
+                // SAFETY: the target is a word of the object's own data.
                 unsafe { target.write(0) };
                 return Ok(());
             };
@@ -164,7 +167,9 @@ unsafe fn apply_one(object: &Object, scope: &Scope, entry: &Entry) -> Result<(),
             let address = if st_type(found.info) == STT_GNU_IFUNC {
                 // SAFETY: an `STT_GNU_IFUNC` symbol's address is a resolver
                 // of the same shape.
-                unsafe { core::mem::transmute::<usize, Resolver>(found.address)() }
+                let resolver = unsafe { core::mem::transmute::<usize, Resolver>(found.address) };
+                // SAFETY: as for `IRELATIVE`.
+                unsafe { resolver() }
             } else {
                 found.address
             };
@@ -214,7 +219,7 @@ unsafe fn apply_one(object: &Object, scope: &Scope, entry: &Entry) -> Result<(),
         // A TLS descriptor: two words, a function and its argument. Every
         // module is in static TLS here, so the function is one that returns
         // the argument, the variable's offset from the thread pointer.
-        #[cfg(target_arch = "x86_64")]
+        #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
         arch::R_TLSDESC => {
             // SAFETY: the scope's objects are mapped.
             let place = unsafe { tls_place(object, scope, entry)? };
@@ -237,7 +242,7 @@ unsafe fn apply_one(object: &Object, scope: &Scope, entry: &Entry) -> Result<(),
             // size since the program was linked, and then copying the smaller
             // is what keeps the copy inside both.
             // SAFETY: the relocation's symbol indexes this object's table.
-            let symbol = unsafe { object.symtab.add(r_sym(entry.info)).read() };
+            let symbol = unsafe { object.symtab.wrapping_add(r_sym(entry.info)).read() };
             let len = (symbol.st_size as usize).min(found.size);
             // SAFETY: the source is the defining object's datum, `len` bytes
             // of it, and the target the program's room for it, both mapped;
@@ -303,7 +308,7 @@ unsafe fn resolve(
     }
     // SAFETY: the index came from a relocation of this object, whose symbol
     // table it indexes.
-    let symbol = unsafe { object.symtab.add(index).read() };
+    let symbol = unsafe { object.symtab.wrapping_add(index).read() };
     let name = object.name(symbol.st_name).ok_or(Error::MalformedObject(
         "a symbol name outside the string table",
     ))?;

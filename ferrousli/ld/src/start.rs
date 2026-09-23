@@ -14,7 +14,10 @@
 //! code on this path is kept short enough to read in one go. And the offsets
 //! it needs are computed, not stored: [`dynamic_here`] asks the assembler for
 //! the run-time address of `_DYNAMIC` with one PC-relative instruction, which
-//! is the one address obtainable before there is any other.
+//! is the one address obtainable before there is any other. On AArch64 and
+//! ARMv7-A the one address asked for is the ELF header's, `__ehdr_start`,
+//! and `_DYNAMIC`'s is read from the program headers behind it: that needs
+//! nothing of the linker's GOT conventions, which differ between the three.
 //!
 //! # Why the load bias is not the aux vector's `AT_BASE`
 //!
@@ -25,7 +28,9 @@
 //! run-time and link-time addresses of `_DYNAMIC` is the bias in both cases,
 //! and it needs nothing but this object.
 
-use crate::elf::{DT_NULL, DT_RELA, DT_RELAENT, DT_RELASZ, Dyn, Rela};
+use crate::elf::{
+    DT_NULL, DT_REL, DT_RELA, DT_RELAENT, DT_RELASZ, DT_RELENT, DT_RELSZ, Dyn, Rel, Rela,
+};
 use crate::scope::Scope;
 
 /// The completed scope, kept for the calls the program makes back into the
@@ -39,9 +44,10 @@ static mut SCOPE: Scope = Scope::new();
 /// The completed scope. Empty until [`save_scope`] runs, which is before the
 /// program can call anything that reads it.
 pub(crate) fn scope() -> &'static Scope {
+    let scope = &raw const SCOPE;
     // SAFETY: written once by `save_scope` before the program starts, and
     // only read afterwards.
-    unsafe { &*(&raw const SCOPE) }
+    unsafe { &*scope }
 }
 
 /// The completed scope, to write: `dlopen`'s, with [`crate::dl`]'s lock held.
@@ -59,17 +65,26 @@ pub(crate) fn own_object() -> Option<crate::object::Object> {
     // The loader is linked at zero with its ELF header at the start of its
     // first segment, so the header is at the bias, and the program headers
     // at `e_phoff` past it: where `dl_iterate_phdr` reports them.
+    let (phoff, phnum) = header_table(base);
+    object.phdr = base.wrapping_add(phoff);
+    object.phnum = phnum;
+    Some(object)
+}
+
+/// Where the program headers are, as an offset from the ELF header at
+/// `ehdr`, and how many there are.
+#[inline(always)]
+fn header_table(ehdr: usize) -> (usize, usize) {
     #[cfg(target_pointer_width = "64")]
     let (phoff_at, phnum_at) = (32, 56);
     #[cfg(target_pointer_width = "32")]
     let (phoff_at, phnum_at) = (28, 44);
-    // SAFETY: the ELF header is mapped, readable, at the bias.
-    let phoff = unsafe { (base.wrapping_add(phoff_at) as *const usize).read_unaligned() };
+    // SAFETY: the ELF header is mapped, readable, at `ehdr`: this object's
+    // first segment holds it.
+    let phoff = unsafe { (ehdr.wrapping_add(phoff_at) as *const usize).read_unaligned() };
     // SAFETY: as above.
-    let phnum = unsafe { (base.wrapping_add(phnum_at) as *const u16).read_unaligned() };
-    object.phdr = base.wrapping_add(phoff);
-    object.phnum = usize::from(phnum);
-    Some(object)
+    let phnum = unsafe { (ehdr.wrapping_add(phnum_at) as *const u16).read_unaligned() };
+    (phoff, usize::from(phnum))
 }
 
 /// The run-time address of this object's `_DYNAMIC`, from one PC-relative
@@ -120,11 +135,105 @@ fn dynamic_linked_at() -> usize {
 
 /// How far this object was moved from where it was linked.
 #[inline(always)]
+#[cfg(target_arch = "x86_64")]
 fn load_bias() -> usize {
     (dynamic_here() as usize).wrapping_sub(dynamic_linked_at())
 }
 
+/// The run-time address of this object's ELF header, `__ehdr_start`, from
+/// one PC-relative computation and nothing else.
+#[inline(always)]
+#[cfg(target_arch = "aarch64")]
+fn ehdr_here() -> usize {
+    let at: usize;
+    // SAFETY: `adrp` and `add` compute an address and touch no memory. The
+    // linker defines `__ehdr_start` in every object whose first segment
+    // holds the ELF header, which the loader's does.
+    unsafe {
+        core::arch::asm!(
+            "adrp {0}, __ehdr_start",
+            "add {0}, {0}, :lo12:__ehdr_start",
+            out(reg) at,
+            options(pure, nomem, nostack, preserves_flags),
+        );
+    }
+    at
+}
+
+/// The run-time address of this object's ELF header, `__ehdr_start`: its
+/// distance from the `add` below, which the assembler stores beside it, plus
+/// the `pc` that `add` reads, eight bytes past itself in ARM state.
+#[inline(always)]
+#[cfg(target_arch = "arm")]
+fn ehdr_here() -> usize {
+    let at: usize;
+    // SAFETY: reads one word of this function's own code and computes an
+    // address from it. `__ehdr_start` is defined as on AArch64.
+    unsafe {
+        core::arch::asm!(
+            "ldr {0}, 1f",
+            "2:",
+            "add {0}, pc, {0}",
+            "b 3f",
+            "1:",
+            ".word __ehdr_start - (2b + 8)",
+            "3:",
+            out(reg) at,
+            options(pure, readonly, nostack, preserves_flags),
+        );
+    }
+    at
+}
+
+/// The first program header of `kind` in the object whose ELF header is at
+/// `ehdr`, if it has one.
+#[inline(always)]
+#[cfg(not(target_arch = "x86_64"))]
+fn header_of(ehdr: usize, kind: u32) -> Option<crate::elf::Phdr> {
+    let (phoff, phnum) = header_table(ehdr);
+    let mut index = 0;
+    while index < phnum {
+        let at = ehdr
+            .wrapping_add(phoff)
+            .wrapping_add(index * size_of::<crate::elf::Phdr>());
+        // SAFETY: the program headers are mapped with the ELF header, and
+        // `index` is below their count.
+        let header = unsafe { (at as *const crate::elf::Phdr).read_unaligned() };
+        if header.p_type == kind {
+            return Some(header);
+        }
+        index += 1;
+    }
+    None
+}
+
+/// How far this object was moved from where it was linked: where its ELF
+/// header is, less where the segment holding it was linked.
+#[inline(always)]
+#[cfg(not(target_arch = "x86_64"))]
+fn load_bias() -> usize {
+    let ehdr = ehdr_here();
+    // The segment that holds the header is the one mapped from offset zero,
+    // the first `PT_LOAD`; with none, the object was linked at zero.
+    let linked_at = header_of(ehdr, crate::elf::PT_LOAD)
+        .filter(|header| header.p_offset == 0)
+        .map_or(0, |header| header.p_vaddr as usize);
+    ehdr.wrapping_sub(linked_at)
+}
+
+/// The run-time address of this object's `_DYNAMIC`: its `PT_DYNAMIC`'s
+/// link-time address, moved by the bias.
+#[inline(always)]
+#[cfg(not(target_arch = "x86_64"))]
+fn dynamic_here() -> *const Dyn {
+    let ehdr = ehdr_here();
+    let at = header_of(ehdr, crate::elf::PT_DYNAMIC).map_or(0, |header| header.p_vaddr as usize);
+    load_bias().wrapping_add(at) as *const Dyn
+}
+
 /// Apply this object's own `RELATIVE` relocations, and return its load bias.
+/// x86-64 and AArch64 link them as `RELA`, with the addend in the entry, and
+/// ARMv7-A as `REL`, with it in the word relocated.
 ///
 /// Only `RELATIVE`: a loader is linked with no undefined symbols, so every
 /// relocation it carries is one that adds the bias to a stored address. One
@@ -143,45 +252,74 @@ unsafe fn relocate_self() -> usize {
     let bias = load_bias();
     let mut entry = dynamic_here();
     let mut rela: usize = 0;
-    let mut size: usize = 0;
-    let mut stride: usize = size_of::<Rela>();
+    let mut rela_size: usize = 0;
+    let mut rela_stride: usize = size_of::<Rela>();
+    let mut rel: usize = 0;
+    let mut rel_size: usize = 0;
+    let mut rel_stride: usize = size_of::<Rel>();
 
     // The dynamic table's addresses are link-time ones, so each is biased as
     // it is read. Walked with `read()` rather than as a slice: its length is
-    // its terminator, which a slice cannot express.
+    // its terminator, which a slice cannot express. An `if` chain rather
+    // than a `match`, which the compiler may turn into a jump table in
+    // `.data.rel.ro` -- a table nothing has relocated yet.
     loop {
         // SAFETY: the table runs to a `DT_NULL` entry, and this stops there.
         let this = unsafe { entry.read() };
-        match this.d_tag {
-            DT_NULL => break,
-            DT_RELA => rela = this.d_val.wrapping_add(bias),
-            DT_RELASZ => size = this.d_val,
-            DT_RELAENT => stride = this.d_val,
-            _ => {}
+        let (tag, value) = (this.d_tag, this.d_val);
+        if tag == DT_NULL {
+            break;
+        } else if tag == DT_RELA {
+            rela = value.wrapping_add(bias);
+        } else if tag == DT_RELASZ {
+            rela_size = value;
+        } else if tag == DT_RELAENT {
+            rela_stride = value;
+        } else if tag == DT_REL {
+            rel = value.wrapping_add(bias);
+        } else if tag == DT_RELSZ {
+            rel_size = value;
+        } else if tag == DT_RELENT {
+            rel_stride = value;
         }
-        // SAFETY: the entry just read was not the terminator, so another
+        // The entry just read was not the terminator, so another
         // follows it.
-        entry = unsafe { entry.add(1) };
+        entry = entry.wrapping_add(1);
     }
 
-    if rela == 0 || stride == 0 {
-        return bias;
-    }
-    let mut at = rela;
-    let end = rela.wrapping_add(size);
-    while at < end {
-        // SAFETY: `at` walks the table the dynamic entries described, in
-        // steps of the size they gave, and stops at its end.
-        let relocation = unsafe { (at as *const Rela).read() };
-        if crate::arch::R_RELATIVE == crate::elf::r_type(relocation.r_info) {
-            let target = relocation.r_offset.wrapping_add(bias);
-            let value = bias.wrapping_add_signed(relocation.r_addend);
-            // SAFETY: the target is inside this object's own writable
-            // segments, which the linker guarantees of every relocation it
-            // emits against it.
-            unsafe { (target as *mut usize).write(value) };
+    if rela != 0 && rela_stride != 0 {
+        let mut at = rela;
+        let end = rela.wrapping_add(rela_size);
+        while at < end {
+            // SAFETY: `at` walks the table the dynamic entries described, in
+            // steps of the size they gave, and stops at its end.
+            let relocation = unsafe { (at as *const Rela).read() };
+            if crate::arch::R_RELATIVE == crate::elf::r_type(relocation.r_info) {
+                let target = relocation.r_offset.wrapping_add(bias);
+                let value = bias.wrapping_add_signed(relocation.r_addend);
+                // SAFETY: the target is inside this object's own writable
+                // segments, which the linker guarantees of every relocation
+                // it emits against it.
+                unsafe { (target as *mut usize).write(value) };
+            }
+            at = at.wrapping_add(rela_stride);
         }
-        at = at.wrapping_add(stride);
+    }
+    if rel != 0 && rel_stride != 0 {
+        let mut at = rel;
+        let end = rel.wrapping_add(rel_size);
+        while at < end {
+            // SAFETY: as above, for the `REL` table.
+            let relocation = unsafe { (at as *const Rel).read() };
+            if crate::arch::R_RELATIVE == crate::elf::r_type(relocation.r_info) {
+                let target = relocation.r_offset.wrapping_add(bias) as *mut usize;
+                // SAFETY: as above; the addend is the word being relocated.
+                let addend = unsafe { target.read() };
+                // SAFETY: as above.
+                unsafe { target.write(addend.wrapping_add(bias)) };
+            }
+            at = at.wrapping_add(rel_stride);
+        }
     }
     bias
 }
@@ -223,6 +361,44 @@ core::arch::global_asm!(
     "    ud2",
 );
 
+#[cfg(target_arch = "aarch64")]
+core::arch::global_asm!(
+    ".text",
+    ".globl _start",
+    ".type _start, %function",
+    "_start:",
+    // The outermost frame: a zero frame pointer and link register end every
+    // backtrace here.
+    "    mov x29, #0",
+    "    mov x30, #0",
+    // The stack pointer is the argument, and it is where argc is. The kernel
+    // leaves it 16-byte aligned, which AArch64 requires of every access
+    // through it.
+    "    mov x0, sp",
+    // A direct branch, which is PC-relative and so needs no relocation.
+    "    bl dlstart",
+    "    udf #0",
+);
+
+#[cfg(target_arch = "arm")]
+core::arch::global_asm!(
+    ".text",
+    ".arm",
+    ".globl _start",
+    ".type _start, %function",
+    "_start:",
+    // The outermost frame, as above.
+    "    mov fp, #0",
+    "    mov lr, #0",
+    // The stack pointer is the argument. AAPCS wants it 8-byte aligned at a
+    // call, and it is aligned to 16 here as on the others.
+    "    mov r0, sp",
+    "    bic r1, r0, #15",
+    "    mov sp, r1",
+    "    bl dlstart",
+    "    udf #0",
+);
+
 /// Hand the process over to the program.
 ///
 /// The program's `_start` expects exactly what the kernel left: the stack
@@ -241,7 +417,7 @@ core::arch::global_asm!(
 /// mapped and relocated, and `stack` the pointer the process was entered
 /// with.
 #[cfg(target_arch = "x86_64")]
-pub unsafe fn enter(entry: usize, stack: &crate::auxv::Stack) -> ! {
+pub(crate) unsafe fn enter(entry: usize, stack: &crate::auxv::Stack) -> ! {
     // SAFETY: this never returns, and what it jumps to is a program entry
     // point with the stack the kernel built beneath it.
     unsafe {
@@ -256,6 +432,51 @@ pub unsafe fn enter(entry: usize, stack: &crate::auxv::Stack) -> ! {
     }
 }
 
+/// [`enter`] on AArch64: the exit callback goes in `x0`, as the ABI says.
+///
+/// # Safety
+///
+/// As on x86-64.
+#[cfg(target_arch = "aarch64")]
+pub(crate) unsafe fn enter(entry: usize, stack: &crate::auxv::Stack) -> ! {
+    let fini = dl_fini as unsafe extern "C" fn() as usize;
+    // SAFETY: as on x86-64.
+    unsafe {
+        core::arch::asm!(
+            "mov sp, {stack}",
+            "mov x29, #0",
+            "mov x30, #0",
+            "br {entry}",
+            stack = in(reg) stack.sp,
+            entry = in(reg) entry,
+            in("x0") fini,
+            options(noreturn, nostack),
+        )
+    }
+}
+
+/// [`enter`] on ARMv7-A: the exit callback goes in `r0`, as the ABI says.
+///
+/// # Safety
+///
+/// As on x86-64.
+#[cfg(target_arch = "arm")]
+pub(crate) unsafe fn enter(entry: usize, stack: &crate::auxv::Stack) -> ! {
+    let fini = dl_fini as unsafe extern "C" fn() as usize;
+    // SAFETY: as on x86-64.
+    unsafe {
+        core::arch::asm!(
+            "mov sp, {stack}",
+            "mov lr, #0",
+            "bx {entry}",
+            stack = in(reg) stack.sp,
+            entry = in(reg) entry,
+            in("r0") fini,
+            options(noreturn, nostack),
+        )
+    }
+}
+
 /// Save the completed scope for the callback the program registers at exit.
 ///
 /// # Safety
@@ -263,9 +484,10 @@ pub unsafe fn enter(entry: usize, stack: &crate::auxv::Stack) -> ! {
 /// Called once, after every object in `scope` has been mapped and relocated,
 /// and before [`enter`] makes the program reachable.
 pub(crate) unsafe fn save_scope(scope: Scope) {
+    let at = &raw mut SCOPE;
     // SAFETY: this loader has one initial thread and calls this once before it
     // transfers control to the program. Everything else only reads it later.
-    unsafe { (&raw mut SCOPE).write(scope) };
+    unsafe { at.write(scope) };
 }
 
 /// Run the `DT_FINI_ARRAY` and `DT_FINI` entries of every initialised
@@ -297,15 +519,20 @@ unsafe extern "C" fn dl_fini() {
                 let entry = unsafe { (at as *const usize).read() };
                 if entry != 0 && entry != usize::MAX {
                     // SAFETY: the loader relocated every entry before the
-                    // program could start, and this is its destructor call.
-                    unsafe { core::mem::transmute::<usize, unsafe extern "C" fn()>(entry)() };
+                    // program could start, so each is a destructor.
+                    let destructor =
+                        unsafe { core::mem::transmute::<usize, unsafe extern "C" fn()>(entry) };
+                    // SAFETY: calling it is what `DT_FINI_ARRAY` is for.
+                    unsafe { destructor() };
                 }
             }
         }
         if object.fini != 0 {
-            // SAFETY: `DT_FINI` is a relocated function in this object. ELF
-            // calls it after the same object's finaliser array.
-            unsafe { core::mem::transmute::<usize, unsafe extern "C" fn()>(object.fini)() };
+            // SAFETY: `DT_FINI` is a relocated function in this object.
+            let fini =
+                unsafe { core::mem::transmute::<usize, unsafe extern "C" fn()>(object.fini) };
+            // SAFETY: ELF calls it after the same object's finaliser array.
+            unsafe { fini() };
         }
     }
 }

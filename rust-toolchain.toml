@@ -36,4 +36,7 @@ targets = [
     # targets and run under qemu-user, as its C tests do.
     "aarch64-unknown-linux-gnu",
     "armv7-unknown-linux-gnueabihf",
+    # And its loader on ARMv7-A: a static PIE with no C library, which this
+    # musl target links (AArch64's is the musl target above).
+    "armv7-unknown-linux-musleabihf",
 ]

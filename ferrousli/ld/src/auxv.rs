@@ -19,36 +19,36 @@
 use core::ffi::c_char;
 
 /// The end of the vector.
-pub const AT_NULL: usize = 0;
+pub(crate) const AT_NULL: usize = 0;
 /// The program's program headers.
-pub const AT_PHDR: usize = 3;
+pub(crate) const AT_PHDR: usize = 3;
 /// How many there are.
-pub const AT_PHNUM: usize = 5;
+pub(crate) const AT_PHNUM: usize = 5;
 /// The page size.
-pub const AT_PAGESZ: usize = 6;
+pub(crate) const AT_PAGESZ: usize = 6;
 /// Where the dynamic loader was placed, and zero when there is none — which
 /// is how the loader knows it was run as a program rather than as somebody's
 /// interpreter.
-pub const AT_BASE: usize = 7;
+pub(crate) const AT_BASE: usize = 7;
 /// The program's entry point.
-pub const AT_ENTRY: usize = 9;
+pub(crate) const AT_ENTRY: usize = 9;
 /// Whether the program runs with privileges it did not have.
-pub const AT_SECURE: usize = 23;
+pub(crate) const AT_SECURE: usize = 23;
 
 /// The stack as the process was entered, read once.
 #[derive(Debug, Clone, Copy)]
-pub struct Stack {
+pub(crate) struct Stack {
     /// The stack pointer the process was entered with, which is the one the
     /// program's own `_start` has to be given.
-    pub sp: *const usize,
+    pub(crate) sp: *const usize,
     /// `argc`.
-    pub argc: usize,
+    pub(crate) argc: usize,
     /// `argv`, with its terminating null.
-    pub argv: *const *const c_char,
+    pub(crate) argv: *const *const c_char,
     /// The environment, with its terminating null.
-    pub envp: *const *const c_char,
+    pub(crate) envp: *const *const c_char,
     /// The auxiliary vector, with its terminating `AT_NULL`.
-    pub auxv: *const usize,
+    pub(crate) auxv: *const usize,
 }
 
 impl Stack {
@@ -59,23 +59,23 @@ impl Stack {
     /// `sp` must be the stack pointer the kernel entered the process with,
     /// whose layout is the one in this module's documentation.
     #[must_use]
-    pub unsafe fn read(sp: *const usize) -> Stack {
+    pub(crate) unsafe fn read(sp: *const usize) -> Stack {
         // SAFETY: the first word of the entry stack is `argc`.
         let argc = unsafe { sp.read() };
-        // SAFETY: `argv` follows it.
-        let argv = unsafe { sp.add(1) }.cast::<*const c_char>();
-        // SAFETY: `argc` pointers and a null terminator follow, so the
+        // `argv` follows it.
+        let argv = sp.wrapping_add(1).cast::<*const c_char>();
+        // `argc` pointers and a null terminator follow, so the
         // environment starts one past the null.
-        let envp = unsafe { argv.add(argc + 1) };
+        let envp = argv.wrapping_add(argc + 1);
 
         let mut end = envp;
         // SAFETY: the environment is null-terminated, and this stops there.
         while !unsafe { end.read() }.is_null() {
-            // SAFETY: the entry just read was not the terminator.
-            end = unsafe { end.add(1) };
+            // The entry just read was not the terminator.
+            end = end.wrapping_add(1);
         }
-        // SAFETY: the vector begins one past the environment's null.
-        let auxv = unsafe { end.add(1) }.cast::<usize>();
+        // The vector begins one past the environment's null.
+        let auxv = end.wrapping_add(1).cast::<usize>();
 
         Stack {
             sp,
@@ -93,7 +93,7 @@ impl Stack {
     /// would be a `static` — which is the one thing the code that runs before
     /// relocation may not have.
     #[must_use]
-    pub fn get(&self, key: usize) -> Option<usize> {
+    pub(crate) fn get(&self, key: usize) -> Option<usize> {
         let mut at = self.auxv;
         loop {
             // SAFETY: the vector runs to an `AT_NULL` entry, and this stops
@@ -104,12 +104,12 @@ impl Stack {
             }
             // SAFETY: a tag that is not the terminator is followed by its
             // value.
-            let value = unsafe { at.add(1).read() };
+            let value = unsafe { at.wrapping_add(1).read() };
             if tag == key {
                 return Some(value);
             }
-            // SAFETY: and by the next pair.
-            at = unsafe { at.add(2) };
+            // And by the next pair.
+            at = at.wrapping_add(2);
         }
     }
 }
