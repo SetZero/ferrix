@@ -4,8 +4,8 @@ Version 1, a draft. Written on 2026-09-23. It is the cgroup half of stage 13,
 which the customer put first that day, and builds on the customer's decision
 of the same day that **every cgroup is backed by a `Job`** (`docs/INIT.md` §0,
 C8; `docs/BACKLOG.md`, Decisions). `docs/INIT.md` §0.1 is what the first user
-needs from this; `docs/ARCHITECTURE.md` §3 and §6 are the architecture. G1 (§7)
-is built. §9 lists what is still the customer's to decide.
+needs from this; `docs/ARCHITECTURE.md` §3 and §6 are the architecture. G1 and
+G2 (§7) are built. §9 lists what is still the customer's to decide.
 
 ## 1. What this is, and what it is not
 
@@ -95,8 +95,10 @@ directory in a filesystem is held by the filesystem, not by who made it. An
 **anonymous** child is made by native `job_create`. It is held as now, by its
 handles and its members, appears in cgroupfs as `job-<id>`, and goes away
 when the last handle closes and it is empty. That is how a native job has
-always behaved, and cgroupfs only shows it. `rmdir` works on both kinds and
-refuses a job with members or children (`EBUSY`), as Linux does.
+always behaved, and cgroupfs only shows it. `rmdir` removes a named job, and
+refuses one with members or children (`EBUSY`), as Linux does. An anonymous
+job answers `rmdir` with `EBUSY` too (settled in G2): its handles hold it,
+and it goes when they do.
 
 A process path in `/proc/<pid>/cgroup` (`0::/system.slice/sshd.service`) is
 built by walking `parent` and joining names. It is computed when read, never
@@ -147,12 +149,12 @@ The files in every cgroup:
 |---|---|---|
 | `cgroup.procs` | the pids of the members' thread-group leaders | a pid: move that process (§3.1) |
 | `cgroup.threads` | the tids | refused, `EOPNOTSUPP` (no threaded mode) |
-| `cgroup.type` | `domain` | only `domain` |
+| `cgroup.type` | `domain` | `threaded` is `EOPNOTSUPP`, anything else `EINVAL`: Linux takes `threaded` alone, not even `domain` |
 | `cgroup.events` | `populated 0/1`, `frozen 0/1`; pollable with `POLLPRI` (§4) | refused |
 | `cgroup.kill` | refused | `1`: §2.4 |
 | `cgroup.freeze` | `0/1` | `0/1`, from landing F1; until then `frozen` reads 0 and a write is `EOPNOTSUPP` |
 | `cgroup.controllers` | what the parent's `subtree_control` enables here | refused |
-| `cgroup.subtree_control` | what this cgroup enables for its children | `+name -name …` |
+| `cgroup.subtree_control` | what this cgroup enables for its children | `+name -name …`, split on single spaces; a later token for a controller overrides an earlier one, and a name not built is `EINVAL` |
 | `cgroup.max.depth`, `cgroup.max.descendants` | `max` or a count | a limit on `mkdir` beneath |
 | `cgroup.stat` | `nr_descendants`, `nr_dying_descendants 0` | refused |
 
@@ -254,7 +256,7 @@ check runs in `test-shell` with zinc and uutils. The G landings are what
 | | Landing | Gives | Gate | Points |
 |---|---|---|---|---|
 | G1 | Every process in one job: root job, `membership`, fork inherits, `live`/`busy_children` counts, names and ids, the `cgroup.kill` kill beside `job_kill`, `drivers.slice` | C2's inheritance, C5's mechanism | boot checks: a fork's child in its parent's job; populated flips at the last exit, not the reap; a killed forking loop ends | 8 |
-| G2 | `libs/cgroupfs` and cgroupfs: mount, `mkdir`/`rmdir`, `cgroup.procs` read and move, `cgroup.kill`, `cgroup.events` (without `POLLPRI`), `subtree_control` with no controllers yet, `/proc/<pid>/cgroup` | C1, C2, C5 | host tests and fuzz; `test-shell`: a subtree made, a shell moved in, its child's `/proc/self/cgroup`, a kill | 8 |
+| G2 | `libs/cgroupfs` and cgroupfs: mount, `mkdir`/`rmdir`, `cgroup.procs` read and move, `cgroup.kill`, `cgroup.events` (without `POLLPRI`), `subtree_control` with no controllers yet, `/proc/<pid>/cgroup` | C1, C2, C5 | host tests, Miri and the `cgroupfs_write` fuzzer; the `cgroups` boot check, which drives cgroupfs through the VFS as a program's calls would (mount, `mkdir`, a move by pid, `/proc/<pid>/cgroup`, `cgroup.events`, `cgroup.kill`, the limits, nine refusals), and its negative control, a `cgroup.kill` that does not kill. The user-level run moved to G4, whose delegation needs a user anyway | 8 |
 | G3 | `POLLPRI` through `Readiness`, `poll`, `select`, `epoll`; `cgroup.events` pollable | C4 | boot check: an `epoll` on `cgroup.events` wakes at the last exit and not before | 3 |
 | G4 | `CLONE_INTO_CGROUP`; delegation by ownership; the no-internal-process rule | C3, C7 | `test-shell` as a non-root user in a chowned subtree; a refused move outside it | 5 |
 | G5 | `EMPTY`; `job_for_cgroup`; native jobs as `job-<id>`; `devmgr`'s jobs under `drivers.slice` | C8 | boot check: a native wait for `EMPTY` fires with the populated flip; `test-restart` still passes | 3 |

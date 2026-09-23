@@ -424,7 +424,9 @@ package FerrixRoadmap {
              * the design: landings G1-G5 (27 points) for init, then the
              * controllers (58), 85 for the cgroup half. G1 done on
              * 2026-09-23: every process in exactly one job, fork inheriting
-             * it, populated counted exactly, the two kills apart. */
+             * it, populated counted exactly, the two kills apart. G2
+             * done the same day: cgroupfs mounts as cgroup2, over
+             * libs/cgroupfs. */
     }
 
     #planned requirement <'S14'> stage14RealTime : Stage {

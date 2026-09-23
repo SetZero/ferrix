@@ -70,6 +70,7 @@ Causes are listed most likely first.
 | [FX-1151](#fx-1151) | the net ring did not carry a frame between the kernel and a driver |
 | [FX-1152](#fx-1152) | AF_NETLINK did not answer the requests `ip` makes |
 | [FX-1201](#fx-1201) | a btrfs volume Ferrix wrote did not read back as it was written |
+| [FX-1301](#fx-1301) | cgroupfs did not show the job tree as cgroup v2 |
 | [FX-9001](#fx-9001) | a page fault the kernel cannot resolve |
 | [FX-9002](#fx-9002) | a system call the trap path cannot carry out |
 | [FX-9003](#fx-9003) | the processor refused to execute an instruction |
@@ -1478,6 +1479,35 @@ body was made durable is checked against that trailer.
 See: kernel/src/fs/btrfs_write_check.rs; kernel/src/fs/btrfs_powerfail.rs;
 kernel/src/fs/btrfs.rs; libs/btrfs-vfs rw; libs/btrfs-write;
 xtask/src/btrfs_disk.rs; xtask/src/powerfail.rs; docs/ROADMAP.md stage 12.
+
+<a id="fx-1301"></a>
+
+## FX-1301 — cgroupfs did not show the job tree as cgroup v2
+
+Stage 13's landing G2 (docs/CGROUPS.md): `fs::cgroupfs::check` mounts cgroup2 at
+/tmp/cgroup-check. The root must list a new process in cgroup.procs and have no
+cgroup.kill. mkdir must make a job whose cgroup.events says `populated 0`, and
+mkdir over it or over an interface file must be EEXIST. A pid written to
+cgroup.procs must move that process: the cgroup lists it, /proc/<pid>/cgroup
+says `0::/check-a`, cgroup.events says `populated 1`, and rmdir is EBUSY.
+cgroup.kill must refuse 0 with ERANGE and, given 1, end the process and leave
+the cgroup empty and removable. cgroup.max.descendants 1 must allow one child
+and refuse a second with EAGAIN, and cgroup.stat must count it. A controller not
+built, a negative depth, `threaded` and a negative pid are refused as Linux
+refuses them.
+
+1. `Job::new_named_child`, `remove_named_child` or `children` in
+   kernel/src/object/job.rs lost a named child, or `room_for_a_child` reads the
+   limits wrongly.
+2. `Process::move_to` did not move the process, or its job's counts, so
+   cgroup.procs or cgroup.events disagree with where the process is.
+3. `Job::kill_members` did not find the member through the registry, or sealed
+   the job.
+4. A write's text is parsed differently from Linux's: libs/cgroupfs, whose host
+   tests pin each parse.
+
+See: kernel/src/fs/cgroupfs.rs; kernel/src/object/job.rs; libs/cgroupfs;
+docs/CGROUPS.md.
 
 <a id="fx-9001"></a>
 

@@ -1,0 +1,215 @@
+//! The formats and parses, pinned against Linux's.
+
+use alloc::vec::Vec;
+
+use crate::Refusal;
+use crate::controllers::{self, Change, Controller, Set};
+use crate::files::{self, Kind};
+use crate::name;
+use crate::render;
+use crate::write::{self, Limit, Target};
+
+fn text(fill: impl FnOnce(&mut Vec<u8>)) -> Vec<u8> {
+    let mut out = Vec::new();
+    fill(&mut out);
+    out
+}
+
+#[test]
+fn names_follow_mkdir() {
+    assert_eq!(name::check(b"system.slice"), Ok(()));
+    assert_eq!(name::check(b"getty@ttyS0.service"), Ok(()));
+    assert_eq!(name::check(b""), Err(Refusal::Invalid));
+    assert_eq!(name::check(b"."), Err(Refusal::Invalid));
+    assert_eq!(name::check(b".."), Err(Refusal::Invalid));
+    assert_eq!(name::check(b"a/b"), Err(Refusal::Invalid));
+    assert_eq!(name::check(b"a\nb"), Err(Refusal::Invalid));
+    assert_eq!(name::check(&[b'x'; 255]), Ok(()));
+    assert_eq!(name::check(&[b'x'; 256]), Err(Refusal::TooLong));
+}
+
+#[test]
+fn the_root_lacks_what_linux_keeps_off_it() {
+    let root: Vec<&str> = files::of(true).map(|file| file.name).collect();
+    assert_eq!(
+        root,
+        [
+            "cgroup.procs",
+            "cgroup.threads",
+            "cgroup.controllers",
+            "cgroup.subtree_control",
+            "cgroup.max.descendants",
+            "cgroup.max.depth",
+            "cgroup.stat",
+        ]
+    );
+    assert_eq!(files::of(false).count(), files::FILES.len());
+    assert!(files::named(b"cgroup.kill", true).is_none());
+    assert_eq!(
+        files::named(b"cgroup.kill", false).map(|file| (file.kind, file.mode())),
+        Some((Kind::Kill, 0o200))
+    );
+    assert_eq!(
+        files::named(b"cgroup.events", false).map(files::File::mode),
+        Some(0o444)
+    );
+    assert_eq!(
+        files::named(b"cgroup.procs", true).map(files::File::mode),
+        Some(0o644)
+    );
+}
+
+#[test]
+fn controllers_print_in_linux_order() {
+    let all = controllers::ALL
+        .iter()
+        .fold(Set::EMPTY, |set, c| set.with(*c));
+    assert_eq!(
+        text(|out| controllers::render(out, all)),
+        b"cpu io memory pids\n"
+    );
+    let two = Set::EMPTY.with(Controller::Pids).with(Controller::Memory);
+    assert_eq!(text(|out| controllers::render(out, two)), b"memory pids\n");
+    assert_eq!(text(|out| controllers::render(out, Set::EMPTY)), b"\n");
+}
+
+#[test]
+fn subtree_control_writes_parse_as_linux_parses_them() {
+    let known = Set::EMPTY.with(Controller::Memory).with(Controller::Pids);
+    let memory = Set::EMPTY.with(Controller::Memory);
+    let pids = Set::EMPTY.with(Controller::Pids);
+    assert_eq!(
+        controllers::parse_change(b"+memory -pids\n", known),
+        Ok(Change {
+            enable: memory,
+            disable: pids,
+        })
+    );
+    // Empty tokens between repeated spaces are skipped.
+    assert_eq!(
+        controllers::parse_change(b"  +memory   +pids ", known),
+        Ok(Change {
+            enable: memory.with(Controller::Pids),
+            disable: Set::EMPTY,
+        })
+    );
+    // The later token wins.
+    assert_eq!(
+        controllers::parse_change(b"+memory -memory", known),
+        Ok(Change {
+            enable: Set::EMPTY,
+            disable: memory,
+        })
+    );
+    assert_eq!(controllers::parse_change(b"", known), Ok(Change::default()));
+    // A controller the kernel has not built is not a name it knows.
+    assert_eq!(
+        controllers::parse_change(b"+cpu", known),
+        Err(Refusal::Invalid)
+    );
+    assert_eq!(
+        controllers::parse_change(b"memory", known),
+        Err(Refusal::Invalid)
+    );
+    assert_eq!(
+        controllers::parse_change(b"+bogus", known),
+        Err(Refusal::Invalid)
+    );
+    // Split on spaces only: a tab is part of the token.
+    assert_eq!(
+        controllers::parse_change(b"+memory\t+pids", known),
+        Err(Refusal::Invalid)
+    );
+}
+
+#[test]
+fn kstrtoint_takes_base_zero() {
+    assert_eq!(write::kstrtoint(b"42"), Ok(42));
+    assert_eq!(write::kstrtoint(b"+42"), Ok(42));
+    assert_eq!(write::kstrtoint(b"-42"), Ok(-42));
+    assert_eq!(write::kstrtoint(b"0"), Ok(0));
+    assert_eq!(write::kstrtoint(b"0x1F"), Ok(31));
+    assert_eq!(write::kstrtoint(b"017"), Ok(15));
+    assert_eq!(write::kstrtoint(b"2147483647"), Ok(i32::MAX));
+    assert_eq!(write::kstrtoint(b"-2147483648"), Ok(i32::MIN));
+    assert_eq!(write::kstrtoint(b"2147483648"), Err(Refusal::Range));
+    assert_eq!(
+        write::kstrtoint(b"99999999999999999999999"),
+        Err(Refusal::Range)
+    );
+    assert_eq!(write::kstrtoint(b""), Err(Refusal::Invalid));
+    assert_eq!(write::kstrtoint(b"08"), Err(Refusal::Invalid));
+    assert_eq!(write::kstrtoint(b"0x"), Err(Refusal::Invalid));
+    assert_eq!(write::kstrtoint(b"1 2"), Err(Refusal::Invalid));
+    assert_eq!(write::kstrtoint(b"+-1"), Err(Refusal::Invalid));
+}
+
+#[test]
+fn procs_writes_name_one_process() {
+    assert_eq!(write::parse_procs(b"1234\n"), Ok(Target::Pid(1234)));
+    assert_eq!(write::parse_procs(b"  7  "), Ok(Target::Pid(7)));
+    assert_eq!(write::parse_procs(b"0"), Ok(Target::Writer));
+    assert_eq!(write::parse_procs(b"-1"), Err(Refusal::Invalid));
+    // Out of range is EINVAL here, not ERANGE: cgroup_procs_write_start
+    // answers every kstrtoint failure the same.
+    assert_eq!(write::parse_procs(b"4294967296"), Err(Refusal::Invalid));
+    assert_eq!(write::parse_procs(b"1 2"), Err(Refusal::Invalid));
+    assert_eq!(write::parse_procs(b""), Err(Refusal::Invalid));
+}
+
+#[test]
+fn kill_takes_one_and_nothing_else() {
+    assert_eq!(write::parse_kill(b"1\n"), Ok(()));
+    assert_eq!(write::parse_kill(b"0"), Err(Refusal::Range));
+    assert_eq!(write::parse_kill(b"2"), Err(Refusal::Range));
+    assert_eq!(write::parse_kill(b"yes"), Err(Refusal::Invalid));
+}
+
+#[test]
+fn limits_take_max_or_a_count() {
+    assert_eq!(write::parse_limit(b"max\n"), Ok(Limit::Max));
+    assert_eq!(write::parse_limit(b"3"), Ok(Limit::At(3)));
+    assert_eq!(write::parse_limit(b"2147483647"), Ok(Limit::Max));
+    assert_eq!(write::parse_limit(b"-1"), Err(Refusal::Range));
+    assert_eq!(write::parse_limit(b"MAX"), Err(Refusal::Invalid));
+    assert_eq!(text(|out| render::limit(out, Limit::Max)), b"max\n");
+    assert_eq!(text(|out| render::limit(out, Limit::At(3))), b"3\n");
+    assert!(Limit::At(3).allows(3));
+    assert!(!Limit::At(3).allows(4));
+    assert!(Limit::Max.allows(u32::MAX));
+}
+
+#[test]
+fn type_takes_only_threaded_and_ferrix_has_none() {
+    assert_eq!(write::parse_type(b"threaded\n"), Err(Refusal::NotSupported));
+    assert_eq!(write::parse_type(b"domain"), Err(Refusal::Invalid));
+    assert_eq!(write::parse_freeze(b"1"), Ok(true));
+    assert_eq!(write::parse_freeze(b"0\n"), Ok(false));
+    assert_eq!(write::parse_freeze(b"2"), Err(Refusal::Range));
+}
+
+#[test]
+fn reads_print_as_linux_prints_them() {
+    assert_eq!(text(|out| render::ids(out, &[1, 42, 300])), b"1\n42\n300\n");
+    assert_eq!(text(|out| render::ids(out, &[])), b"");
+    assert_eq!(
+        text(|out| render::events(out, true, false)),
+        b"populated 1\nfrozen 0\n"
+    );
+    assert_eq!(
+        text(|out| render::stat(out, 5)),
+        b"nr_descendants 5\nnr_dying_descendants 0\n"
+    );
+    assert_eq!(text(|out| render::proc_cgroup(out, [])), b"0::/\n");
+    assert_eq!(
+        text(|out| render::proc_cgroup(out, [&b"system.slice"[..], b"sshd.service"])),
+        b"0::/system.slice/sshd.service\n"
+    );
+}
+
+#[test]
+fn strip_is_the_kernels_strstrip() {
+    assert_eq!(write::strip(b" \t\n\x0b\x0c\rx y\r\n"), b"x y");
+    assert_eq!(write::strip(b"   "), b"");
+    assert_eq!(write::strip(b""), b"");
+}

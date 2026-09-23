@@ -39,18 +39,25 @@
 //!
 //! # Lock order
 //!
-//! A process's membership lock, then [`TREE`], then one job's `state`, and
-//! never two jobs' `state` at once. The kills take one `state` at a time and
-//! let go of it before ending anything, because `process::kill` wakes tasks
-//! and takes the scheduler's locks. Nothing is woken under any of these.
+//! A process's membership lock, then [`TREE`], then one job's `state`. Two
+//! jobs' `state` are held at once in one place only,
+//! [`Job::remove_named_child`], parent then child; nothing takes a child's
+//! and then its parent's, since the count walk takes one at a time going up.
+//! The kills take one `state` at a time and let go of it before ending
+//! anything, because `process::kill` wakes tasks and takes the scheduler's
+//! locks. Nothing is woken under any of these.
 
 use alloc::boxed::Box;
+use alloc::format;
+use alloc::string::String;
 use alloc::sync::{Arc, Weak};
 use alloc::vec;
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 use crate::sync::SpinLock;
 
+use ferrix_cgroupfs::write::Limit;
 use ferrix_native_abi::signals::Signals;
 use ferrix_sync::Once;
 
@@ -72,6 +79,13 @@ pub(crate) enum JobError {
     Killed,
     /// A child of that name already exists.
     Exists,
+    /// No child has that name.
+    Missing,
+    /// It still has members or children, so it cannot be removed.
+    Busy,
+    /// A limit above it (`cgroup.max.depth`, `cgroup.max.descendants`)
+    /// allows no further job there.
+    Limited,
 }
 
 /// Serialises every change to a job's counts, across the whole tree.
@@ -80,6 +94,9 @@ pub(crate) enum JobError {
 /// upward: two processes leaving two sibling jobs at once must each find the
 /// parent's count as the other left it.
 static TREE: SpinLock<()> = SpinLock::new(());
+
+/// The next job's number.
+static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
 /// The root of the tree every process is in.
 static ROOT: Once<Arc<Job>> = Once::new();
@@ -99,6 +116,9 @@ pub(crate) struct Job {
     /// a kill of the parent can still reach them, and a count can propagate
     /// to it.
     parent: Option<Arc<Job>>,
+    /// Its number, unique for the life of the kernel: what cgroupfs names an
+    /// anonymous job by (`job-<id>`) and numbers its inodes from.
+    id: u64,
     /// Its name among its parent's children, or `None` for one native
     /// `job_create` made.
     name: Option<Box<str>>,
@@ -111,7 +131,7 @@ pub(crate) struct Job {
 }
 
 /// What a job holds.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct Members {
     /// Set once, by the first [`Job::kill`] reaching this job, and never
     /// cleared.
@@ -129,6 +149,26 @@ struct Members {
     busy: usize,
     /// Port registrations waiting for it to be killed.
     observers: Vec<Observer>,
+    /// `cgroup.max.depth`: how many levels of jobs may be made beneath it.
+    max_depth: Limit,
+    /// `cgroup.max.descendants`: how many jobs may be beneath it at once.
+    max_descendants: Limit,
+}
+
+impl Default for Members {
+    fn default() -> Members {
+        Members {
+            killed: false,
+            killing: 0,
+            children: Vec::new(),
+            named: Vec::new(),
+            live: 0,
+            busy: 0,
+            observers: Vec::new(),
+            max_depth: Limit::Max,
+            max_descendants: Limit::Max,
+        }
+    }
 }
 
 impl Members {
@@ -159,6 +199,7 @@ impl Job {
     fn bare(parent: Option<Arc<Job>>, name: Option<Box<str>>) -> Job {
         Job {
             parent,
+            id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
             name,
             state: SpinLock::new(Members::default()),
             waiters: WaitQueue::new(),
@@ -189,9 +230,11 @@ impl Job {
     ///
     /// # Errors
     ///
-    /// [`JobError::Killed`], or [`JobError::Exists`] if a named child already
-    /// has that name.
+    /// [`JobError::Killed`], [`JobError::Exists`] if a named child already
+    /// has that name, or [`JobError::Limited`] if a limit at or above it
+    /// allows no further job.
     pub(crate) fn new_named_child(self: &Arc<Job>, name: &str) -> Result<Arc<Job>, JobError> {
+        self.room_for_a_child()?;
         let mut members = self.state.lock();
         if members.killed {
             return Err(JobError::Killed);
@@ -207,6 +250,126 @@ impl Job {
     /// Its name, if it has one.
     pub(crate) fn name(&self) -> Option<&str> {
         self.name.as_deref()
+    }
+
+    /// Its number.
+    pub(crate) fn id(&self) -> u64 {
+        self.id
+    }
+
+    /// Whether it is a root: the tree's, or one a boot check made alone.
+    pub(crate) fn is_root(&self) -> bool {
+        self.parent.is_none()
+    }
+
+    /// The jobs directly inside it that still exist, named ones first in the
+    /// order they were made, then anonymous ones in theirs.
+    pub(crate) fn children(&self) -> Vec<Arc<Job>> {
+        let members = self.state.lock();
+        members
+            .named
+            .iter()
+            .cloned()
+            .chain(members.children.iter().filter_map(Weak::upgrade))
+            .collect()
+    }
+
+    /// Take the named child `name` out of it, as `rmdir` does: only when
+    /// nothing is in the child, neither a member nor a job.
+    ///
+    /// The child's lock is taken while this one's is held. That is the one
+    /// place two job locks are held at once, and it is safe because nothing
+    /// takes a child's lock and then its parent's: the count walk takes one at
+    /// a time going up.
+    ///
+    /// # Errors
+    ///
+    /// [`JobError::Missing`] when it has no such named child, and
+    /// [`JobError::Busy`] when that child is populated or has children.
+    pub(crate) fn remove_named_child(&self, name: &str) -> Result<Arc<Job>, JobError> {
+        let mut members = self.state.lock();
+        let at = members
+            .named
+            .iter()
+            .position(|child| child.name() == Some(name))
+            .ok_or(JobError::Missing)?;
+        let child = members.named.get(at).cloned().ok_or(JobError::Missing)?;
+        let busy = {
+            let inner = child.state.lock();
+            inner.populated()
+                || !inner.named.is_empty()
+                || inner.children.iter().any(|child| child.strong_count() > 0)
+        };
+        if busy {
+            return Err(JobError::Busy);
+        }
+        let _ = members.named.remove(at);
+        Ok(child)
+    }
+
+    /// How many jobs are beneath it.
+    pub(crate) fn descendants(self: &Arc<Job>) -> u32 {
+        let count = self.walk(|_| {}).len().saturating_sub(1);
+        u32::try_from(count).unwrap_or(u32::MAX)
+    }
+
+    /// Its `cgroup.max.depth` and `cgroup.max.descendants`.
+    pub(crate) fn limits(&self) -> (Limit, Limit) {
+        let members = self.state.lock();
+        (members.max_depth, members.max_descendants)
+    }
+
+    /// Set its `cgroup.max.depth`.
+    pub(crate) fn set_max_depth(&self, limit: Limit) {
+        self.state.lock().max_depth = limit;
+    }
+
+    /// Set its `cgroup.max.descendants`.
+    pub(crate) fn set_max_descendants(&self, limit: Limit) {
+        self.state.lock().max_descendants = limit;
+    }
+
+    /// Whether a new child may be made in it, as Linux's
+    /// `cgroup_check_hierarchy_limits` decides: no job at or above it may
+    /// already hold as many descendants as its `cgroup.max.descendants`
+    /// allows, nor be more levels above the new child than its
+    /// `cgroup.max.depth` allows.
+    fn room_for_a_child(self: &Arc<Job>) -> Result<(), JobError> {
+        let mut level: u32 = 1;
+        let mut at = Some(Arc::clone(self));
+        while let Some(job) = at {
+            let (depth, descendants) = job.limits();
+            if !descendants.allows(job.descendants().saturating_add(1)) || !depth.allows(level) {
+                return Err(JobError::Limited);
+            }
+            level = level.saturating_add(1);
+            at = job.parent.clone();
+        }
+        Ok(())
+    }
+
+    /// The names from the root's child down to it, an anonymous job named
+    /// `job-<id>`: what cgroupfs and `/proc/<pid>/cgroup` build its path
+    /// from. Empty for a root.
+    pub(crate) fn path_names(&self) -> Vec<String> {
+        let mut names = Vec::new();
+        let mut at = Some(self);
+        while let Some(job) = at {
+            if job.parent.is_some() {
+                names.push(job.display_name());
+            }
+            at = job.parent.as_deref();
+        }
+        names.reverse();
+        names
+    }
+
+    /// The name cgroupfs shows it by in its parent's directory.
+    pub(crate) fn display_name(&self) -> String {
+        match &self.name {
+            Some(name) => String::from(&**name),
+            None => format!("job-{}", self.id),
+        }
     }
 
     /// Whether it, or a job beneath it, has a member that has not been

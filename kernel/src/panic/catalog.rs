@@ -784,6 +784,33 @@ pub(crate) static STAGE11_MOUNT: Explanation = Explanation {
           xtask/src/btrfs_disk.rs; docs/ROADMAP.md stage 11",
 };
 
+/// For `check_cgroupfs` in `main.rs`, when `fs::cgroupfs::check` fails.
+pub(crate) static STAGE13_CGROUPFS: Explanation = Explanation {
+    code: "FX-1301",
+    title: "cgroupfs did not show the job tree as cgroup v2",
+    meaning: "Stage 13's landing G2 (docs/CGROUPS.md): `fs::cgroupfs::check` mounts cgroup2 at \
+              /tmp/cgroup-check. The root must list a new process in cgroup.procs and have no \
+              cgroup.kill. mkdir must make a job whose cgroup.events says `populated 0`, and \
+              mkdir over it or over an interface file must be EEXIST. A pid written to \
+              cgroup.procs must move that process: the cgroup lists it, /proc/<pid>/cgroup says \
+              `0::/check-a`, cgroup.events says `populated 1`, and rmdir is EBUSY. cgroup.kill \
+              must refuse 0 with ERANGE and, given 1, end the process and leave the cgroup empty \
+              and removable. cgroup.max.descendants 1 must allow one child and refuse a second \
+              with EAGAIN, and cgroup.stat must count it. A controller not built, a negative \
+              depth, `threaded` and a negative pid are refused as Linux refuses them.",
+    causes: &[
+        "`Job::new_named_child`, `remove_named_child` or `children` in kernel/src/object/job.rs \
+         lost a named child, or `room_for_a_child` reads the limits wrongly.",
+        "`Process::move_to` did not move the process, or its job's counts, so cgroup.procs or \
+         cgroup.events disagree with where the process is.",
+        "`Job::kill_members` did not find the member through the registry, or sealed the job.",
+        "A write's text is parsed differently from Linux's: libs/cgroupfs, whose host tests \
+         pin each parse.",
+    ],
+    see: "kernel/src/fs/cgroupfs.rs; kernel/src/object/job.rs; libs/cgroupfs; \
+          docs/CGROUPS.md",
+};
+
 /// For `check_btrfs_write` in `main.rs`, when `fs::btrfs_write_check::run`
 /// fails, or `fs::btrfs_powerfail`'s churn or replay under `ferrix.btrfs=`.
 pub(crate) static STAGE12_WRITE: Explanation = Explanation {
@@ -1637,6 +1664,7 @@ pub(crate) static ALL: &[&Explanation] = &[
     &NET_RING,
     &NETLINK,
     &STAGE12_WRITE,
+    &STAGE13_CGROUPFS,
     &UNHANDLED_PAGE_FAULT,
     &SYSTEM_CALL_TRAP,
     &ILLEGAL_INSTRUCTION,

@@ -30,6 +30,7 @@ pub(crate) mod btrfs;
 pub(crate) mod btrfs_check;
 pub(crate) mod btrfs_powerfail;
 pub(crate) mod btrfs_write_check;
+pub(crate) mod cgroupfs;
 pub(crate) mod check;
 pub(crate) mod console;
 pub(crate) mod data_disk;

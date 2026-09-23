@@ -377,9 +377,11 @@ pub(crate) fn sys_chroot(process: &Process, at: u64) -> Result<usize, Errno> {
 /// filesystems, on the disk `source` names for btrfs.
 ///
 /// The names are the ones Linux registers, and the ones `/proc/filesystems`
-/// lists. `sysfs`, `devpts` and `cgroup2` join this match when they exist;
-/// until then they fall to `ENODEV` with every name Linux would not know
-/// either.
+/// lists. `sysfs` and `devpts` join this match when they exist; until then
+/// they fall to `ENODEV` with every name Linux would not know either.
+/// `cgroup2` mounts read-only as well as writable, as on Linux, where a
+/// read-only mount is how a container is shown the tree it may not change;
+/// here the flag is not yet enforced on it.
 fn filesystem_named(
     process: &Process,
     name: &[u8],
@@ -391,6 +393,7 @@ fn filesystem_named(
         b"tmpfs" => Ok(fs::new_tmpfs()),
         b"proc" => Ok(Arc::new(Procfs::new())),
         b"devtmpfs" => Ok(Arc::new(Devfs::new())),
+        b"cgroup2" => Ok(Arc::new(fs::cgroupfs::Cgroupfs::new())),
         b"btrfs" => {
             if source == 0 {
                 return Err(Errno::EINVAL);

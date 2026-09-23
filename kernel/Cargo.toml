@@ -39,6 +39,7 @@ ferrix-objects.workspace = true
 ferrix-paging.workspace = true
 ferrix-pci.workspace = true
 ferrix-procfs.workspace = true
+ferrix-cgroupfs.workspace = true
 ferrix-qr.workspace = true
 ferrix-crng.workspace = true
 ferrix-sched.workspace = true

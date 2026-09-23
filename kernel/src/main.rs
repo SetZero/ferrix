@@ -378,6 +378,23 @@ fn check_eventfd() {
     );
 }
 
+/// Stage 13's cgroupfs, landing G2: the job tree mounted as cgroup2, driven
+/// through the VFS as a program would drive it.
+fn check_cgroupfs() {
+    let checked = match fs::cgroupfs::check() {
+        Ok(checked) => checked,
+        Err(problem) => fatal!(
+            catalog::STAGE13_CGROUPFS,
+            "stage 13 cgroupfs self-check failed: {problem}"
+        ),
+    };
+    println!(
+        "  cgroups  {} cgroups made and removed through cgroup2, a process moved in by its pid \
+         and ended by cgroup.kill, {} writes and names refused as Linux refuses them",
+        checked.made, checked.refusals,
+    );
+}
+
 /// Stage 8: build the root from the initramfs, and require it to be what the
 /// build wrote and to store what it is given.
 ///
@@ -449,6 +466,7 @@ fn check_filesystems(view: &BootView<'_>) {
     check_memfd();
     check_epoll();
     check_eventfd();
+    check_cgroupfs();
 
     let pseudo = match fs::procfs::check::run() {
         Ok(pseudo) => pseudo,

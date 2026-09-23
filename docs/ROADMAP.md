@@ -129,7 +129,7 @@ sizes them.
 | ~~Dynamic linking: the kernel half, ferrousli's loader, glibc's names~~ *done 2026-09-23* | ~~39~~ | done |
 | ~~Dynamic linking: ferrousli's AArch64 and ARMv7-A port, which the customer put inside the stage on 2026-09-21~~ *done 2026-09-23* | ~~≈ 34~~ | done |
 | ~~Stage 12, btrfs write~~ *done 2026-09-21* | ~~≈ 60~~ | done |
-| Stage 13, namespaces, cgroups, seccomp | cgroups 85 (`docs/CGROUPS.md` §7: 27 for what init needs, 58 for the controllers); namespaces and seccomp unsized, the old guess for the whole stage was *month* ≈ 60 | under way: G1 done (8 of 85); its cgroups come first, as init's prerequisite (`docs/INIT.md` §0) |
+| Stage 13, namespaces, cgroups, seccomp | cgroups 85 (`docs/CGROUPS.md` §7: 27 for what init needs, 58 for the controllers); namespaces and seccomp unsized, the old guess for the whole stage was *month* ≈ 60 | under way: G1 and G2 done (16 of 85); its cgroups come first, as init's prerequisite (`docs/INIT.md` §0) |
 | Stage 22, Steam: the parts with a first guess (bubblewrap's rest 13, sound 30, Venus 8; glibc's names are dynamic linking's 13 and XWayland stage 19's, both counted above) | 51 | not started |
 | Stage 22, Steam: the 32-bit x86 ABI and what the runtime and Proton find missing | unsized, ≈ 100 as a guess | not started |
 | Stage 14, real-time domains | *month* ≈ 40 | not started |
@@ -4072,7 +4072,18 @@ it usable. A fork into a job either kill is working on is ended before it
 runs. `devmgr`'s job is `drivers.slice` under the root. Two boot checks
 cover this under the `jobs` line.
 
-**Still to do** for init: G2 (cgroupfs), G3 (`POLLPRI`), G4
+**Done -- G2, cgroupfs (2026-09-23, 8 points).** `mount -t cgroup2`
+shows the job tree: a directory per job, named by `mkdir` or `job-<id>` for
+one native `job_create` made, and Linux's eleven `cgroup.*` files, the four
+Linux keeps off the root kept off it. `cgroup.procs` lists and moves,
+`cgroup.kill` ends a subtree and leaves it usable, `cgroup.events` reads
+`populated` exactly, `cgroup.max.depth`, `cgroup.max.descendants` and
+`cgroup.stat` hold, and `/proc/<pid>/cgroup` says `0::/path`. Every text and
+every write's parse is `libs/cgroupfs`, pinned against Linux's by host tests,
+Miri and a fuzzer (`cgroupfs_write`). The boot check drives it through the VFS
+under the `cgroups` line.
+
+**Still to do** for init: G3 (`POLLPRI`), G4
 (`CLONE_INTO_CGROUP`, delegation), G5 (`EMPTY`, `job_for_cgroup`); then
 the controllers.
 

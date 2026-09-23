@@ -114,6 +114,7 @@ pub(super) fn filesystems(_: &Kernel) -> Result<Vec<u8>> {
     for (name, nodev) in [
         (&b"tmpfs"[..], true),
         (b"proc", true),
+        (b"cgroup2", true),
         (b"devtmpfs", true),
         (b"btrfs", false),
     ] {
@@ -468,6 +469,13 @@ pub(super) fn cmdline(process: &Process) -> Result<Vec<u8>> {
         out.push(0);
     }
     Ok(out)
+}
+
+/// `/proc/<pid>/comm`.
+/// `/proc/<pid>/cgroup`: the one line of the unified hierarchy, `0::/path`,
+/// naming the cgroup -- the job -- the process is in.
+pub(super) fn cgroup(process: &Process) -> Result<Vec<u8>> {
+    Ok(fs::cgroupfs::proc_cgroup(&process.job()))
 }
 
 /// `/proc/<pid>/comm`.

@@ -306,7 +306,7 @@ static SYS_KERNEL: [Entry<Kernel>; 6] = [
 ];
 
 /// `/proc/<pid>`.
-pub(crate) static PER_PROCESS: [Entry<Process>; 11] = [
+pub(crate) static PER_PROCESS: [Entry<Process>; 12] = [
     Entry {
         name: b"fd",
         permissions: 0o500,
@@ -323,6 +323,7 @@ pub(crate) static PER_PROCESS: [Entry<Process>; 11] = [
     file(b"stat", render::stat),
     file(b"maps", render::maps),
     file(b"mounts", render::process_mounts),
+    file(b"cgroup", render::cgroup),
     Entry {
         name: b"cwd",
         permissions: 0o777,
@@ -715,7 +716,7 @@ fn alive(pid: u32) -> Result<Arc<Process>> {
 /// The ids of a process's threads that have not begun to end, in order; its
 /// own pid alone for a process the kernel made without listing a thread, as
 /// `render::thread_count` counts it.
-fn thread_ids(process: &Process) -> Vec<u32> {
+pub(crate) fn thread_ids(process: &Process) -> Vec<u32> {
     let mut ids: Vec<u32> = process
         .threads()
         .iter()
@@ -1070,7 +1071,25 @@ fn decimal(value: u64, digits: &mut [u8; 20]) -> &[u8] {
 }
 
 /// A write into a file rendered at open.
-type Writer = Box<dyn Fn(&[u8]) -> Result<usize> + Send + Sync>;
+pub(crate) type Writer = Box<dyn Fn(&[u8]) -> Result<usize> + Send + Sync>;
+
+/// A generated file's contents as they are now, answering reads from them
+/// and writes through `write`, or with `refusal` when there is none: how a
+/// pseudo-filesystem other than this one -- cgroupfs -- answers
+/// [`Inode::open`] the way procfs does.
+pub(crate) fn snapshot(
+    metadata: Metadata,
+    bytes: Vec<u8>,
+    write: Option<Writer>,
+    refusal: Errno,
+) -> Arc<dyn Inode> {
+    Arc::new(Snapshot {
+        metadata,
+        bytes,
+        write,
+        refusal,
+    })
+}
 
 /// One open of a generated file: its contents as they were at open.
 struct Snapshot {
