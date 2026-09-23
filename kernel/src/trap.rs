@@ -200,6 +200,17 @@ fn user_fault_as(frame: &arch::TrapFrame, trap: &Trap, (signal, code, address): 
                 )
             });
             println!("  signal   probe code {read:?} {code:02x?} frame {frame:?}");
+            if let Some(process) = crate::syscall::process::current() {
+                let near = |at: u64| at.abs_diff(address) < (8 << 20);
+                for region in process.space().regions() {
+                    if near(region.start) || near(region.end) || (region.start..region.end).contains(&address) {
+                        println!(
+                            "  signal   probe region {:#x}..{:#x} {:?} {:?}",
+                            region.start, region.end, region.flags, region.file
+                        );
+                    }
+                }
+            }
         }
         Some(Posted::Discarded | Posted::Pending) => {}
     }
