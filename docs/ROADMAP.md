@@ -57,9 +57,9 @@ architectures. `fsync` writes a log tree the next mount replays, and
 `cargo xtask test-powerfail` kills QEMU in the middle of writing, replays at
 the next boot and has `btrfs check` judge the volume before and after: 249
 seeds across the three architectures, 226 of them leaving a log to replay,
-every one clean. `cargo xtask run` now carries a persistent btrfs disk,
-mounted at `/data`. What the stage still owes, outside its points, is
-writeback of pages written through `MAP_SHARED`.
+every one clean. `cargo xtask run` now boots with `/` on a persistent btrfs
+volume. What the stage still owes, outside its points, is writeback of pages
+written through `MAP_SHARED`.
 Stage 16's exit, the goal, is met: `cargo xtask test-rustc` compiles
 `hello.rs` on Ferrix with the rust-lang.org `rustc`, linked through `cc`
 and `rust-lld`, from a btrfs volume, and runs what it made.
@@ -3371,7 +3371,7 @@ every architecture, and by `su`, which reaches `/etc/group` only because a
 
 ---
 
-## Dynamic linking — PIE, `PT_INTERP`, a loader  ·  *39 priced points, 13 left; further loader work unpriced*
+## Dynamic linking — PIE, `PT_INTERP`, a loader  ·  *39 points, 12 left*
 
 Placed after *Networking* without a number of its own, for the same reason:
 nothing on the path to `rustc` needs it, since Rust's `std` targets static
@@ -3736,14 +3736,27 @@ twenty-five points each are opened, replayed, checked for consistency and
 for any completed promise rolled back. `scripts/btrfs-check-writer.sh` runs
 it at that size, and `cargo test` a small one.
 
-**Since the exit — a disk that persists.** `cargo xtask run` and
-`run-compositor` attach `build/data.img` as a fourth disk, made from the blank
-fixture the first time and kept after that, and the kernel
-(`kernel/src/fs/data_disk.rs`) mounts it writable at `/data` and commits it
-every 30 seconds, as Linux's btrfs does by default, and once more when it
-powers the machine off itself. `--reset-data` starts it over. The test boots
-never attach it. The root filesystem is still the initramfs; putting `/` on
-a disk is an init's work, which stage 15 owes.
+**Since the exit — `/` on btrfs.** `cargo xtask run` and `run-compositor`
+attach `build/root.img`, a 1 GiB volume made from the `root` fixture the
+first time and kept after that. The kernel (`kernel/src/fs/root_disk.rs`)
+starts on the initramfs, and once its disk driver is serving the volume it
+does what Linux's `switch_root` does: mounts it, installs the initramfs onto
+it when the archive differs from the one it last got, mounts `/dev`, `/proc`
+and `/tmp` inside it, and starts init and every process after it with the
+volume as `/`. It commits every 30 seconds, as Linux's btrfs does by default,
+and once more when it powers the machine off itself. `--reset-root` starts
+the volume over, and `--tmpfs-root` or `ferrix.root=tmpfs` keeps `/` in
+memory. The test boots keep the tmpfs root. What is still an init's work,
+which stage 15 owes: `pivot_root` itself, so the kernel's tmpfs can be
+unmounted from under the switched root. The root disk is found by its btrfs
+label, `ferrix-root`, as Linux's `root=LABEL=` finds one, and any other btrfs
+disk from `vdd` on is mounted at `/data` inside whichever `/` processes have:
+`test-rustc` gives the guest its compiler that way. A page of a mapped
+btrfs file that nothing had read used to show zeros, which kept dynamically
+linked programs from running off a btrfs volume. Stage 16 fixed that: a
+fault now fills the page from the disk, as a read does. The static busybox
+ran from the root before the fix, too: the boots that tried this ran `cat`,
+`ls` and `awk` from `/bin` on the volume.
 
 Owed beside the stage, and not in its points: writeback of pages written
 through `MAP_SHARED`, which needs a dirty bit the page cache does not keep
@@ -3874,9 +3887,10 @@ Debian's busybox. The sysroot on btrfs is stage 12's write path and the
   The same tree, in an otherwise empty bwrap sandbox on the host, compiles
   and runs the same program, which is what separates a broken sysroot from
   a broken kernel.
-* **The gate.** `cargo xtask test-rustc` attaches the image in `/data`'s
-  slot under QEMU's `snapshot=on`, so a run never changes it. It carries
-  five links in the initramfs for the absolute paths glibc and gcc name:
+* **The gate.** `cargo xtask test-rustc` attaches the image under QEMU's
+  `snapshot=on`, so a run never changes it. The image has no `ferrix-root`
+  label, so the kernel mounts it at `/data`. The initramfs carries five
+  links for the absolute paths glibc and gcc name:
   `/lib64`, `/lib/x86_64-linux-gnu`, `/usr/lib/x86_64-linux-gnu`,
   `/usr/lib/gcc` and `/usr/libexec`. zinc runs `rustc -vV`, then
   `rustc hello.rs`, then `./hello`, each step with an exit status of its
