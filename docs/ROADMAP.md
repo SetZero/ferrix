@@ -4085,7 +4085,8 @@ under the `cgroups` line.
 
 **Still to do** for init: G3 (`POLLPRI`), G4
 (`CLONE_INTO_CGROUP`, delegation), G5 (`EMPTY`, `job_for_cgroup`); then
-the controllers.
+the controllers. `docs/CGROUPS.md` §7.1 says where each starts in the code,
+how landings are gated now, and what cost a gate on 2026-09-23.
 
 ---
 

@@ -279,6 +279,71 @@ Order: G1, G2, G3, G4 (init's C1 to C5), then G5 and P1, then M1 and M2 (the
 stage exit's memory limit), then F1, S1, S2 and B1. Namespaces and seccomp
 follow, as `docs/BACKLOG.md` decided.
 
+### 7.1 Where it stands (2026-09-23, end of day)
+
+| | State | On `main` as |
+|---|---|---|
+| G1 | done | 2a56325b |
+| G2 | done | ae76c099, and 491aeb1f for the two lock files it left out |
+| G3 to G5, P1, M1, M2, F1, S1, S2, B1 | not started | |
+
+69 of the cgroup half's 85 points are left. Only 8 of them stand before
+`docs/INIT.md`'s first boot: G3 (3) and G4 (5) meet C4, C3 and C7. The
+init's own L1 and L2 need nothing from the kernel and could start today.
+Nothing is on a branch: the next landing starts from `main`.
+
+**What the next session does first, and where each starts.**
+
+* **G3, `POLLPRI`** (3 points). Add `priority` to `Readiness`
+  (`libs/vfs/src/node.rs`), map it in `poll`'s `scan` and `scan_sets`
+  (`kernel/src/syscall/poll.rs`) and in epoll's `bits`
+  (`kernel/src/fs/epoll.rs`). Then `cgroup.events` must stop answering
+  `open` with a procfs snapshot, which cannot poll
+  (`libs/vfs/src/file.rs` asks the replacement inode). It needs an inode of
+  its own that answers `poll_queues` with the job's `events()` queue and
+  `poll_changes` with its `wakes()`, and reports `priority` while the count
+  has moved since the open last rendered (§4). The job already wakes that
+  queue on every populated flip (G1). The gate: `check`, `test-boot` on
+  x86-64, and a boot check where an `epoll` on `cgroup.events` wakes at a
+  member's release and not before, with its negative control.
+* **G4, `CLONE_INTO_CGROUP` and delegation** (5 points). In
+  `kernel/src/syscall/family.rs`, `clone3` parses the `cgroup` field and
+  refuses the flag with `ENOSYS`. Resolve that descriptor to a cgroupfs
+  `Directory` (downcast through `into_any`), and join the child to its job
+  instead of the parent's, before `publish_forked`. Delegation (§3.1)
+  needs `Directory::set_attributes` for `chown` and an owner on the job,
+  plus the common-ancestor write check on moves. It also needs the
+  no-internal-process rule. G2's `test-shell` run was moved here, since a
+  delegated subtree needs a non-root user anyway.
+* **G5, `EMPTY` and `job_for_cgroup`** (3 points). `Signals` in
+  `libs/native-abi/src/signals.rs` gains bit 4. The job's count walk (G1)
+  is where it flips, beside `events`. The call number is 0x102A.
+
+**How a landing was gated today, and what to keep.** The customer's rule
+since 2026-09-23: `cargo xtask check` plus only the rows the change
+touches, about five minutes, then land. The userland rows use ferrousli's
+busybox on all three architectures (`--init
+~/.local/share/ferrix/busybox/ferrousli/{arch}/bin/busybox.static`), and no
+musl. Every boot check gets a negative control that prints a marker line
+and fails by the check's own message. Five things cost a gate each today:
+* `fs::read_file` sizes its read from `stat`, and a generated file says 0,
+  so a boot check reads a cgroupfs or procfs file to the end itself.
+* The kernel denies `unused_results` and `clippy::too_many_lines` (100).
+* A new panic-catalog entry needs `docs/generated/PANICS.md`, regenerated
+  on Linux.
+* A new crate goes into `Cargo.lock` and `fuzz/Cargo.lock`: check with
+  `cargo metadata --locked --offline` in both.
+* On nazuna, `pgrep -f` with a pattern that also appears in the calling
+  command line matches its own shell.
+
+**Open, and not this stage's.** Two failures of ferrousli's busybox on the
+Arm architectures reproduce on `main` without the cgroup work (a
+`Permission denied` message on both, and `poll` refused on ARMv7-A). They
+have a row in `docs/BACKLOG.md`. The stage 7 stop checks (FX-0701) and the
+block ring's quiesce check (FX-1004) still flake under load; their rows
+carry today's sightings. The init's open decisions are `docs/INIT.md` §14,
+2 to 8.
+
 ## 8. Risks
 
 * **The membership lock on the fork path.** Every fork now takes the
