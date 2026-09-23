@@ -86,6 +86,9 @@ pub enum Want {
 /// How long to wait for the compositor to say what it has.
 const PATIENCE: Duration = Duration::from_secs(20);
 
+/// How long to keep reading after a request with no answer to wait for.
+const ASKED: Duration = Duration::from_secs(2);
+
 /// Connect, take the list, and do `want` with it.
 ///
 /// Gives the lines to print: one a window, and for a request one more
@@ -113,6 +116,22 @@ pub fn run(socket: &std::path::Path, want: &Want) -> Result<Vec<String>, String>
         Want::List => return Ok(lines),
     };
     session.ask(handle, opcode)?;
+    match want {
+        // A close is carried out by the window's own client, not by the
+        // compositor: it asks the client, the client destroys the window, and
+        // only then is `closed` sent here. That is three programs' turns, and
+        // on ARMv7-A under TCG at two processors, with the compositor spending
+        // a second and more on each frame, it took longer than the fixed two
+        // seconds this used to read for, so the list printed afterwards still
+        // named the window. The close is waited for instead, with the patience
+        // a listing gets.
+        Want::Close(_) => {
+            session.until(|session| !session.windows.contains_key(&handle), PATIENCE)?;
+        }
+        // An activation has no event of its own to wait for when the window
+        // was already the active one.
+        Want::Activate(_) | Want::List => session.until(|_| false, ASKED)?,
+    }
     lines.push(format!("lswt: {did} \"{title}\""));
     // And what is left afterwards, which is what a taskbar redraws and what
     // says the request reached the window it named rather than another.
@@ -200,7 +219,7 @@ impl Session {
             .copied()
     }
 
-    /// Send one request to a handle, and let the compositor read it.
+    /// Send one request to a handle.
     fn ask(&mut self, handle: ObjectId, opcode: u16) -> Result<(), String> {
         if opcode == handle::request::ACTIVATE {
             let seat = self
@@ -216,14 +235,18 @@ impl Session {
         } else {
             request(&mut self.out, handle, opcode, &[], &[]);
         }
-        self.flush()?;
-        // The compositor has to read it before this program leaves, and a
-        // socket closed with bytes still in flight is a request nobody ran.
-        // Long enough for the compositor to have read it, carried it out,
-        // and said `closed` for the handle that went: what is left is
-        // printed from what has arrived by the end of this.
+        self.flush()
+    }
+
+    /// Read what the compositor sends until `done` says what a request was
+    /// waiting for has arrived, or `patience` has passed.
+    ///
+    /// The compositor has to read a request before this program leaves, and
+    /// a socket closed with bytes still in flight is a request nobody ran.
+    /// What is left is printed from what has arrived by the end of this.
+    fn until(&mut self, done: impl Fn(&Self) -> bool, patience: Duration) -> Result<(), String> {
         let sent = Instant::now();
-        while sent.elapsed() < Duration::from_secs(2) {
+        while sent.elapsed() < patience {
             match self.connection.receive() {
                 Ok(_) | Err(RecvError::WouldBlock) => {}
                 Err(_) => break,
@@ -231,6 +254,9 @@ impl Session {
             let (consumed, claimed) = self.read()?;
             if consumed > 0 {
                 self.connection.consume(consumed, claimed);
+            }
+            if done(self) {
+                break;
             }
             std::thread::sleep(Duration::from_millis(5));
         }
