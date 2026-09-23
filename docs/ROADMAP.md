@@ -6352,7 +6352,7 @@ at three in the morning against a machine that reboots on a mistake.
 | `libs/fdt` | Reached at 1 on ARMv7-A — the console, the GIC, the timer's interrupt and the PSCI conduit come from it there, and nothing else describes that machine. Reached at 10 for PCI host bridges `virtio,mmio` devices and `GICv2m` frames; stage 10 is still the rest of it. Has its fuzz target. | 87 |
 | `libs/sync` | Reached at 4 — `SpinLock` and `IrqSpinLock` guard every shared kernel structure and carry the contended counter; `RwSpinLock` is still waiting. Fair by construction, because an unfair lock on a starved core is a stage-14 latency bug nobody will find. | 27 |
 | `libs/vma` | 6 — backs the vmap arena, and since stage 6 every process's address space. The VMA interval tree and the three calls that reshape it (`mmap MAP_FIXED`, `munmap`, `mprotect`). | 66 |
-| `libs/linux-abi` | 7 — syscall numbers, `errno`, `repr(C)` layouts, and which identification register fields grant each Arm `AT_HWCAP` bit. Constants and pure functions of them. Three number tables, one of them 32-bit. The socket numbers and address layouts `AF_UNIX`, IPv4, IPv6 and netlink use, and the fixed headers of the routing messages, from a probe compiled against the UAPI headers. Reached early for stage 17: the DRM/KMS ioctls, capabilities and structure layouts `/dev/dri/card0` answers, checked line by line against `probe/drm.c`'s output at both widths; and the evdev ioctls, codes and layouts `/dev/input/eventN` answers, against `probe/input.c`'s; and, for stage 19, the `virtgpu` ioctls, against `probe/virtgpu.c`'s. | 126 |
+| `libs/linux-abi` | 7 — syscall numbers, `errno`, `repr(C)` layouts, and which identification register fields grant each Arm `AT_HWCAP` bit. Constants and pure functions of them. Three number tables, one of them 32-bit. The socket numbers and address layouts `AF_UNIX`, IPv4, IPv6 and netlink use, and the fixed headers of the routing messages, from a probe compiled against the UAPI headers. Has its fuzz target since 2026-09-23. Reached early for stage 17: the DRM/KMS ioctls, capabilities and structure layouts `/dev/dri/card0` answers, checked line by line against `probe/drm.c`'s output at both widths; and the evdev ioctls, codes and layouts `/dev/input/eventN` answers, against `probe/input.c`'s; and, for stage 19, the `virtgpu` ioctls, against `probe/virtgpu.c`'s. | 126 |
 | `libs/ustack` | 7 — the initial process stack `execve` hands a program: argv, envp and the auxiliary vector, at both pointer widths. Has its fuzz target and its Miri step already. | 22 |
 | `libs/cpio` | 8 — the "newc" reader an initramfs is unpacked from. Borrows, copies nothing, allocates nothing. Has its fuzz target. | 45 |
 | `libs/vfs` | 8 — dentries, mounts, the path walk, open file descriptions, descriptor tables, tmpfs over a page store, initramfs unpacking. Written at the start of its stage rather than ahead of it. Has its fuzz target and its Miri step already. | 101 |
@@ -6381,18 +6381,31 @@ it was first counted, plus the doc-tests and the 41 of `xtask` itself. On
 
 **The gap this opens, stated rather than hidden.** The continuous rule below
 asks for a fuzz target *and* a Miri run per crate, and `fuzz/` has
-twenty-seven: `elf_parse`, `frame_alloc`, `ustack_build`, `handle_table`,
+twenty-eight: `elf_parse`, `frame_alloc`, `ustack_build`, `handle_table`,
 `vfs_ops`, `pci_walk`, `btrfs_read`, `block_queue`, `blkring`, `virtio_blk`,
 `virtio_net`, `cpio_parse`, `fdt_parse`, `acpi_tables`, `netwire_parse`,
 `nettcp_state`, `net_input`, `netlink_walk`, `hyprconf_parse`, `virtio_gpu`,
 `virtio_input`, `displayctl`, `renderctl`, `inputctl`,
-`virtio_gpu_pipeline`, `virtio_input_driver` and `wayland_wire`. Every crate
+`virtio_gpu_pipeline`, `virtio_input_driver`, `wayland_wire` and
+`linux_abi`. Every crate
 in the table above parses bytes that came from outside the system — a disk,
 a firmware table, an archive a stranger built — which is precisely the
 population the rule was written for. `virtio` was owed a target and has
-several now, since the gpu, input, blk and net targets all drive it. The one
-still owed is `linux-abi`'s, and it is overdue: the rule asks for it
-*before* the consuming stage starts, and stage 7 is long done.
+several now, since the gpu, input, blk and net targets all drive it.
+`linux-abi`'s came last, on 2026-09-23, long after stage 7 had consumed the
+crate; none is owed now.
+
+`linux_abi` reads a stranger's bytes as every structure a system call
+takes by pointer, at both widths: each socket address that parses must
+encode to exactly its stated length and parse back to itself, and a buffer
+a byte short must be refused; `msghdr`, `cmsghdr`, `ucred`, `linger`, the
+netlink headers, `drm_version`, `input_event` and every `layout!` structure
+of the DRM, evdev and virtgpu ioctls must read back from what they write,
+and a buffer as long as the structure must always read, so a field placed
+past the size the probe printed fails here; the control-message walk must
+end within one message per header's worth of bytes, keep every message's
+data inside the buffer and stop at its first refusal; and an evdev request
+number must decode to the direction, number and size that built it.
 
 `cpio_parse` asserts more than the absence of a panic: that every name and
 data slice lies inside the archive exactly where the format puts it, that the

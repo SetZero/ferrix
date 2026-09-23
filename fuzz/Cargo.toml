@@ -143,6 +143,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "linux_abi"
+path = "fuzz_targets/linux_abi.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "netwire_parse"
 path = "fuzz_targets/netwire_parse.rs"
 test = false
