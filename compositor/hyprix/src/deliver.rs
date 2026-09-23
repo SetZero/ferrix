@@ -38,6 +38,24 @@ struct Placement {
     rect: (i64, i64, i64, i64),
 }
 
+impl Placement {
+    /// Whether the point `(x, y)` is on the window.
+    fn contains(&self, x: f64, y: f64) -> bool {
+        let (left, top, width, height) = self.rect;
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "a window's edge is at most a screen's width; the loss is beyond any pixel"
+        )]
+        let (left, top, right, bottom) = (
+            left as f64,
+            top as f64,
+            (left + width) as f64,
+            (top + height) as f64,
+        );
+        x >= left && x < right && y >= top && y < bottom
+    }
+}
+
 /// What has the keyboard and what has the pointer.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Focus {
@@ -356,12 +374,14 @@ pub fn deliver(
                     slot.client_mut().pointer_frame();
                 }
                 // Moving onto a window focuses it, which is what
-                // `follow_mouse` turns off.
+                // `follow_mouse` turns off. The window under the pointer,
+                // whether or not its client took the pointer: a terminal
+                // that binds no `wl_pointer` is still focused by moving
+                // onto it, as in Hyprland.
                 if follow_mouse
-                    && let Some((client, surface)) = focus.pointer
                     && let Some(window) = placements
                         .iter()
-                        .find(|placed| placed.client == client && placed.surface == surface)
+                        .find(|placed| placed.contains(*x, *y))
                         .map(|placed| placed.window)
                     && state.focused_window() != Some(window)
                 {
