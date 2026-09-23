@@ -423,6 +423,8 @@ impl Process {
         make: impl FnOnce(Arc<AddressSpace>) -> R,
     ) -> Result<R, SpaceError> {
         let _heap = self.heap_lock.lock();
+        // Not between the two halves of another thread's `MAP_FIXED`.
+        let _layout = self.space.layout();
         let space = self.space.fork()?;
         Ok(make(space))
     }
@@ -501,6 +503,9 @@ impl Process {
     /// `brk(0)` is the query every libc opens with.
     pub(crate) fn set_break(&self, want: u64) -> u64 {
         let _heap = self.heap_lock.lock();
+        // The heap grows into whatever no mapping holds, which another
+        // thread's `mmap` may be choosing at the same moment.
+        let _layout = self.space.layout();
         let mut state = self.state.lock();
 
         let heap = match state.heap {
