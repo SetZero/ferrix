@@ -1948,6 +1948,9 @@ pub(crate) fn run_compositor(args: &Args) -> Result<()> {
         None => config,
     };
     let (image, _) = build_image(arch, &programs, &config, carried, args)?;
+    // The host's GPU behind the card where it can be had: `window::watched_gl`
+    // says when, and why it is the default for a desktop somebody watches.
+    let args = crate::window::watched_gl(arch, args)?;
     let args = Args {
         // The card, the keyboard and the tablet: `--display` is what puts a
         // virtio-gpu on the bus, and without one the compositor has no
@@ -1958,7 +1961,7 @@ pub(crate) fn run_compositor(args: &Args) -> Result<()> {
             .accel
             .clone()
             .or_else(|| (!args.gdb).then(|| "auto".to_owned())),
-        ..args.clone()
+        ..args
     };
     println!("  {arch}: the compositor is init; its log is this terminal");
     crate::qemu::run(arch, &image, &args)

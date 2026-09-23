@@ -499,6 +499,142 @@ pub(crate) fn card(binary: &Path, want_gl: bool) -> (&'static str, bool) {
 /// The 3D card's `-device` name.
 pub(crate) const GL_CARD: &str = "virtio-gpu-gl-pci";
 
+/// The QEMU for `program` a boot runs: when it wants the 3D card, the first
+/// one [`crate::paths::which_all`] finds that has it, and otherwise -- or
+/// when none has -- the first one at all.
+///
+/// Said out loud when it is not the first on `PATH`, because a boot running
+/// a different QEMU from the one `which` names is a thing a person reading
+/// the log should not have to guess at.
+pub(crate) fn qemu_for(program: &str, want_gl: bool) -> Option<std::path::PathBuf> {
+    let (chosen, passed) = find_qemu(program, want_gl)?;
+    if let Some(first) = passed {
+        println!(
+            "  qemu: {} for its 3D card; {} has none",
+            chosen.display(),
+            first.display()
+        );
+    }
+    Some(chosen)
+}
+
+/// [`qemu_for`]'s answer without the saying: the QEMU, and the first on
+/// `PATH` when that is not it.
+fn find_qemu(
+    program: &str,
+    want_gl: bool,
+) -> Option<(std::path::PathBuf, Option<std::path::PathBuf>)> {
+    let mut all = crate::paths::which_all(program).into_iter();
+    let first = all.next()?;
+    if !want_gl || devices(&first).iter().any(|name| name == GL_CARD) {
+        return Some((first, None));
+    }
+    match all.find(|binary| devices(binary).iter().any(|name| name == GL_CARD)) {
+        Some(found) => Some((found, Some(first))),
+        None => Some((first, None)),
+    }
+}
+
+/// Whether a watched desktop draws on the host's GPU, and on which of its
+/// render nodes: `args` with `gl` and `rendernode` decided.
+///
+/// `--gl` and `--no-gl` say so. Otherwise the answer is yes wherever it has
+/// been proven and the host has what it takes, because the difference is
+/// not a detail: the customer's own desktop, a video wallpaper behind a
+/// translucent terminal at 1920x1080, draws 38 frames a second in software
+/// with the slowest at 60-95 ms and every processor busy, and 61 a second on
+/// the GPU with the slowest at 7-17 ms (`docs/GPU.md` §3.9).
+///
+/// *Proven* is a served screen: `egl-headless` behind VNC, which is how a
+/// desktop is watched from another machine. A window's GL on this host is
+/// another backend that has not been, and keeps the 2D card unless asked.
+/// *What it takes* is a QEMU with the card and a render node for
+/// `egl-headless` to draw on -- which also answers for hosts with no
+/// `/dev/dri` at all, since none of them can.
+///
+/// # Errors
+///
+/// `--gl` beside `--no-gl`; and whatever [`choose`] refuses, which the boot
+/// itself would refuse a moment later.
+pub(crate) fn watched_gl(arch: crate::paths::Arch, args: &Args) -> Result<Args> {
+    if args.gl && args.no_gl {
+        return Err(Error::new("--gl and --no-gl ask for opposite things"));
+    }
+    if args.gl || args.no_gl {
+        return Ok(args.clone());
+    }
+    let software = |why: &str| {
+        println!("  gpu: {why}; the compositor draws in software (--gl asks for the 3D card)");
+        Ok(args.clone())
+    };
+    let Some((binary, _)) = find_qemu(arch.qemu_binary(), true) else {
+        return Ok(args.clone());
+    };
+    if !devices(&binary).iter().any(|name| name == GL_CARD) {
+        return software(&format!("no QEMU here has `{GL_CARD}`"));
+    }
+    // Asked as the boot will ask it, with the card it would have: a
+    // `--rendernode` given alone is this boot's GPU, not a mistake.
+    let asked = Args {
+        gl: true,
+        ..args.clone()
+    };
+    if !matches!(choose(&binary, &asked)?, Window::Vnc(_)) {
+        return software("a window on this host is not a proven GL display");
+    }
+    let node = match args.rendernode.clone() {
+        Some(node) => node,
+        None => match render_node(&render_nodes()) {
+            Some(node) => node,
+            None => return software("this host has no render node for egl-headless"),
+        },
+    };
+    println!("  gpu: the 3D card, drawn on {node} (--no-gl draws in software)");
+    Ok(Args {
+        gl: true,
+        rendernode: Some(node),
+        ..args.clone()
+    })
+}
+
+/// This host's render nodes, each with the kernel driver behind it, in
+/// device order.
+fn render_nodes() -> Vec<(String, String)> {
+    let mut nodes: Vec<(String, String)> = std::fs::read_dir("/dev/dri")
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            name.starts_with("renderD").then(|| {
+                let driver = std::fs::read_link(format!("/sys/class/drm/{name}/device/driver"))
+                    .ok()
+                    .and_then(|link| link.file_name().map(|n| n.to_string_lossy().into_owned()))
+                    .unwrap_or_default();
+                (format!("/dev/dri/{name}"), driver)
+            })
+        })
+        .collect();
+    nodes.sort();
+    nodes
+}
+
+/// Which of `nodes` `egl-headless` should draw on: the first whose driver
+/// is not NVIDIA's proprietary one, and that one only when it is all there
+/// is.
+///
+/// virglrenderer is written and tested against Mesa's drivers. On a
+/// machine with an NVIDIA card beside another, QEMU's own choice is
+/// whichever node it opens first, and "it started" proves nothing: both
+/// initialise, and only one of them is the driver virglrenderer expects.
+fn render_node(nodes: &[(String, String)]) -> Option<String> {
+    nodes
+        .iter()
+        .find(|(_, driver)| driver != "nvidia")
+        .or_else(|| nodes.first())
+        .map(|(node, _)| node.clone())
+}
+
 /// The device names this QEMU was built with, as `-device help` lists them.
 ///
 /// Each line is `name "the-name", bus ...`; only the quoted name matters,
@@ -603,6 +739,27 @@ dbus
 Some display backends support suboptions, which can be set with
    -display backend,option=value,option=value...
 ";
+
+    /// A Mesa driver's node is taken over NVIDIA's proprietary one whatever
+    /// the order, NVIDIA's when it is all there is, and nothing when there
+    /// are no nodes -- which is every host with no `/dev/dri`.
+    #[test]
+    fn egl_headless_draws_on_a_mesa_node_first() {
+        let node = |name: &str, driver: &str| (format!("/dev/dri/{name}"), driver.to_owned());
+        assert_eq!(
+            render_node(&[node("renderD128", "nvidia"), node("renderD129", "amdgpu")]),
+            Some("/dev/dri/renderD129".to_owned())
+        );
+        assert_eq!(
+            render_node(&[node("renderD128", "i915"), node("renderD129", "nvidia")]),
+            Some("/dev/dri/renderD128".to_owned())
+        );
+        assert_eq!(
+            render_node(&[node("renderD128", "nvidia")]),
+            Some("/dev/dri/renderD128".to_owned())
+        );
+        assert_eq!(render_node(&[]), None);
+    }
 
     #[test]
     fn the_backends_qemu_lists_are_read_off_its_help() {

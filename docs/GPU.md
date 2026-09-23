@@ -668,6 +668,57 @@ identical, as structures carrying no pointer are. The render node answers
 next surface of their size and lets the rest go, so a session of windows
 resized by hand no longer ends in a renderer with no objects left.
 
+### 3.9 What a person watching the desktop gets, and the default (2026-09-23)
+
+The customer called the desktop's performance abysmal. The desktop they
+watch is `cargo xtask remote-desktop` with `run-compositor --clipboard`: a
+served screen, and no `--gl` -- so every frame above was the software
+renderer's, on a GPU that was there all along. Measured as they see it,
+with `compositor/hyprix/probe/vncbench.py`: a viewer that keeps one update
+request outstanding, as TigerVNC does, while it moves the pointer in a
+circle sixty times a second, and reports what arrived. KVM, four
+processors, 1920x1080, the configuration `run-compositor` writes (a
+translucent terminal), twenty seconds a run, on the gate host:
+
+| scene | the guest's frames | slowest, per second | viewer's updates | pointer lag, median / p95 |
+|---|---|---|---|---|
+| still wallpaper, software | 61 a second, 1-2 ms | 1.5-2.7 ms | 33 a second | 10 / 17 ms |
+| video wallpaper, software | 38 a second, 600-700 ms of drawing a second | 60-95 ms | 21-23 a second | 20 / 46 ms |
+| video wallpaper, GPU | 61 a second, 340-500 ms of drawing a second | 7-17 ms | 24-33 a second | 14-21 / 25-53 ms |
+
+The pointer lag is on the loopback, before any network; the viewer's
+update rate stops at 33 because QEMU's VNC server looks for changes every
+30 ms. In software the four processors were 78-91% busy each through the
+video run -- the decoder and the blur between them -- where on the GPU the
+blur is the host's.
+
+**So a served screen gets the 3D card without being asked**
+(`xtask/src/window.rs`, `watched_gl`). Where it can be had: a QEMU on
+`PATH` with `virtio-gpu-gl-pci` -- the first that has it, which on the gate
+host is the distribution's `/usr/bin` behind a source build without it --
+and a render node for `egl-headless`, the first whose driver is not
+NVIDIA's proprietary one. A window on the host keeps the 2D card unless
+`--gl` asks, because GL in a local window is a backend nobody has proven
+here. `--no-gl` is the software renderer.
+
+What is left, in the order a person feels it:
+
+* **The pointer is part of the frame.** Every movement is a frame drawn, a
+  flush waited for, and an update the viewer can have only when VNC next
+  looks. virtio-gpu has a queue for exactly this -- `UPDATE_CURSOR` and
+  `MOVE_CURSOR`, a cursor plane -- and QEMU hands such a cursor to a VNC
+  viewer as a shape the viewer draws where its own mouse is.
+* **One command at a time, each waited for.** An upload, a submission and
+  a flush are each a round trip through the render or display core, the
+  driver, the device and back. seL4's device driver framework (sDDF) and
+  Genode's GPU session are the reference for the other way: descriptors in
+  shared rings, a whole queue drained into the virtqueue behind one
+  doorbell, completions taken in batches, and a client that says "run the
+  buffer at this offset" rather than handing the bytes over.
+* **Client pixels are copied in the guest** into a texture's backing before
+  the device moves them -- the 13.6 MB a frame of §3.8's table. sDDF's GPU
+  class makes the client's own memory the resource's backing instead.
+
 ### 3a, which was not chosen for the compositor
 
 Mesa's virgl driver built on ferrousli would give *every client* OpenGL ES

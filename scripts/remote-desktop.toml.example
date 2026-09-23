@@ -33,8 +33,8 @@ cargo = "cargo"
 
 # Anything the remote boot should have in its environment. FERRIX_QEMU names
 # a QEMU that is not the one on PATH -- a directory of binaries or one
-# binary -- which is how a machine whose distribution QEMU has no
-# virglrenderer still gets `--gl`.
+# binary. A served desktop already takes the first QEMU on PATH that has
+# virglrenderer, so this is for a machine where none on PATH has.
 [remote.env]
 # FERRIX_QEMU = "/opt/qemu/bin" # Uncomment if this machine's QEMU lacks virgl.
 # FERRIX_WALLPAPERS = "/home/you/.local/share/ferrix/wallpapers"

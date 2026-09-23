@@ -127,6 +127,9 @@ pub(crate) struct Args {
     /// boots want. A QEMU that has not got it says so and the 2D device is
     /// used instead.
     pub(crate) gl: bool,
+    /// `--no-gl`: a watched desktop draws in software even where the host
+    /// could have given it the 3D card (`window::watched_gl`).
+    pub(crate) no_gl: bool,
     /// `--clipboard`: a `virtio-serial` device carrying the port named
     /// `com.redhat.spice.0`, with QEMU's own half of the SPICE agent
     /// protocol behind it, for a clipboard shared with whoever is watching
@@ -302,6 +305,7 @@ impl Args {
                     args.gl = true;
                     args.display = true;
                 }
+                "--no-gl" => args.no_gl = true,
                 "--clipboard" => args.clipboard = true,
                 "--input" => args.input = true,
                 "--screens" => args.screens = number(&mut items, "--screens")?,

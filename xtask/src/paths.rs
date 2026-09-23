@@ -341,34 +341,46 @@ fn named_qemu(named: &Path, program: &str) -> Option<PathBuf> {
 /// one the machine already has, which needs root and replaces something a
 /// person may be relying on.
 pub(crate) fn which(program: &str) -> Option<PathBuf> {
+    which_all(program).into_iter().next()
+}
+
+/// Every `program` [`which`] could have answered, in the order it tries
+/// them, each once.
+///
+/// A machine can have two QEMUs and only one of them with the 3D card -- a
+/// hand-built one first on `PATH` and the distribution's behind it is the
+/// usual way -- and a boot that wants the card is better served by the
+/// second than by falling back to the 2D one. `FERRIX_QEMU` is still the
+/// last word: what it names is the only answer.
+pub(crate) fn which_all(program: &str) -> Vec<PathBuf> {
     if let Some(named) = std::env::var_os("FERRIX_QEMU").filter(|value| !value.is_empty())
         && let Some(found) = named_qemu(Path::new(&named), program)
     {
-        return Some(found);
+        return vec![found];
     }
-    let path = std::env::var_os("PATH")?;
     let suffixes: &[&str] = if cfg!(windows) { &[".exe", ""] } else { &[""] };
-
-    for dir in std::env::split_paths(&path) {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    // The Windows installer does not put QEMU on PATH.
+    let installed = ["C:/Program Files/qemu", "C:/Program Files (x86)/qemu"].map(PathBuf::from);
+    let mut found: Vec<PathBuf> = Vec::new();
+    for dir in std::env::split_paths(&path).chain(installed) {
         for suffix in suffixes {
             let candidate = dir.join(format!("{program}{suffix}"));
-            if candidate.is_file() {
-                return Some(candidate);
+            if candidate.is_file() && !found.iter().any(|seen| same_file(seen, &candidate)) {
+                found.push(candidate);
             }
         }
     }
+    found
+}
 
-    // The Windows installer does not put QEMU on PATH.
-    for dir in ["C:/Program Files/qemu", "C:/Program Files (x86)/qemu"] {
-        for suffix in suffixes {
-            let candidate = PathBuf::from(dir).join(format!("{program}{suffix}"));
-            if candidate.is_file() {
-                return Some(candidate);
-            }
-        }
+/// Whether two paths are one file: `PATH` often names a directory twice,
+/// or once through a link (`/bin` is `/usr/bin` on most distributions).
+fn same_file(one: &Path, other: &Path) -> bool {
+    match (one.canonicalize(), other.canonicalize()) {
+        (Ok(one), Ok(other)) => one == other,
+        _ => one == other,
     }
-
-    None
 }
 
 #[cfg(test)]

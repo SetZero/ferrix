@@ -986,7 +986,10 @@ fn qemu_command(
     args: &Args,
     console: &Console,
 ) -> Result<(Command, Network)> {
-    let binary = paths::which(arch.qemu_binary()).ok_or_else(|| {
+    // A boot that wants the 3D card runs a QEMU that has it, where this
+    // machine has one; `window::qemu_for` says so when that is not the
+    // first on `PATH`.
+    let binary = crate::window::qemu_for(arch.qemu_binary(), args.gl).ok_or_else(|| {
         Error::new(format!(
             "{} is not on PATH.\n  Install QEMU (Debian/Ubuntu: `qemu-system-x86` and \
              `qemu-system-arm`; Windows: `winget install SoftwareFreedomConservancy.QEMU`).",

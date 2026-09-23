@@ -203,7 +203,11 @@ OPTIONS:
                                          host's GPU behind it through virglrenderer; turns --display on.
                                          A QEMU built without it says so and the 2D card is used
                                          [FERRIX_QEMU names a QEMU that is not the one on PATH: a
-                                         directory of its binaries, or one binary]
+                                         directory of its binaries, or one binary; without it, the
+                                         first QEMU on PATH that has the 3D card]
+    --no-gl                              run-compositor: the 2D card and the software renderer.
+                                         Without either flag a VNC screen gets the 3D card when a
+                                         QEMU here has it and the host has a render node
     --clipboard                          run, run-compositor: a virtio-serial port carrying SPICE's
                                          agent protocol, with QEMU's own host half behind it, for a
                                          clipboard shared with whoever is watching. The device only:
@@ -212,9 +216,10 @@ OPTIONS:
     --vnc <DISPLAY>                      run --display, run-compositor: serve the screen over VNC
                                          at e.g. `:0` (127.0.0.1) rather than in a window of this host's
     --rendernode <PATH>                  --gl on a served or headless screen: which GPU egl-headless
-                                         draws on, e.g. /dev/dri/renderD128. QEMU takes the first
-                                         render node otherwise, which on a machine with two GPUs is a
-                                         guess. A window's GL goes to the host display's GPU regardless
+                                         draws on, e.g. /dev/dri/renderD128. run-compositor takes the
+                                         first whose driver is not NVIDIA's proprietary one otherwise;
+                                         other boots leave it to QEMU, which on a machine with two GPUs
+                                         is a guess. A window's GL goes to the host display's GPU regardless
     --config <PATH>                      run-compositor: the hyprland.conf the guest is given;
                                          remote-desktop: the file of answers to read instead of
                                          the ones searched [or $FERRIX_REMOTE]

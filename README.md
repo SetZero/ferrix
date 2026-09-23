@@ -293,6 +293,7 @@ exactly that pixel.
 cargo xtask run-compositor --arch x86_64             # a desktop in a window, with a shell in it
 cargo xtask run-compositor --arch x86_64 --vnc :0    # the same, served over VNC rather than shown
 cargo xtask run-compositor --arch x86_64 --gl        # the same, on the 3D card
+cargo xtask run-compositor --arch x86_64 --no-gl     # the same, drawn in software
 ```
 
 `run-compositor` boots [`compositor/hyprix`](compositor/README.md) as init on
@@ -327,7 +328,11 @@ e.g. `:0` rather than opening a window, which is what a machine reached over
 `ssh` wants. `--gl` asks QEMU for `virtio-gpu-gl-pci`, the 3D card, with this
 host's GPU behind it through virglrenderer; [the GPU decision](docs/GPU.md)
 says what that gives and what it does not, and `FERRIX_QEMU` names a QEMU
-that is not the one on `PATH`.
+that is not the one on `PATH`. A screen served over VNC gets the 3D card
+without being asked, where a QEMU on `PATH` has it and the host has a render
+node to draw on, because a video wallpaper is 38 frames a second in software
+and 61 on the GPU ([§3.9](docs/GPU.md)); `--no-gl` keeps it in software, and a
+window on this host keeps the 2D card unless `--gl` asks.
 
 The wallpaper comes from this machine's pictures and from nowhere else.
 `cargo xtask wallpapers --from <directory>`, or `--from host:directory` for a
@@ -420,8 +425,8 @@ worth knowing before you go looking for a fault that is not there:
 
 | | |
 |---|---|
-| `--gl` | wants a QEMU built `--enable-opengl --enable-virglrenderer`. A build without one has no `virtio-gpu-gl-pci`, a line says so, and the boot goes on with the 2D card -- it does not fail. With the 3D card present the screen is drawn off screen through `egl-headless` and copied out to the VNC server, so `--gl --vnc` is a real combination and not a fallback. Worth checking both QEMUs on a machine that has two: a source build is often the one *without* it, and the distribution's package the one with |
-| `--rendernode <PATH>` | which GPU draws, as `/dev/dri/renderD128`. QEMU takes the first render node when nothing says, which on a machine with one GPU is that GPU and on a machine with several is a guess by device number -- and the wrong guess is a proprietary driver that does not do what virglrenderer asks, or an idle card while the fast one watches. `ls -l /dev/dri/by-path/` says which node is which card, and the driver behind one is `basename $(readlink -f /sys/class/drm/renderD128/device/driver)`. Only `egl-headless` takes it, which is the served screen and the headless `test-*` boots; a window's GL goes to the host display's GPU and QEMU gives nobody a say in that |
+| `--gl` | wants a QEMU built `--enable-opengl --enable-virglrenderer`, and is what a served screen gets without it being said, where it can be had. A build without one has no `virtio-gpu-gl-pci`, a line says so, and the boot goes on with the 2D card -- it does not fail. With the 3D card present the screen is drawn off screen through `egl-headless` and copied out to the VNC server, so `--gl --vnc` is a real combination and not a fallback. On a machine with two QEMUs the first on `PATH` that has the card is used and a line says which: a source build is often the one *without* it, and the distribution's package the one with |
+| `--rendernode <PATH>` | which GPU draws, as `/dev/dri/renderD128`. `run-compositor` takes the first node whose driver is not NVIDIA's proprietary one when nothing says; other boots leave it to QEMU, which takes the first render node it opens, which on a machine with one GPU is that GPU and on a machine with several is a guess by device number -- and the wrong guess is a proprietary driver that does not do what virglrenderer asks, or an idle card while the fast one watches. `ls -l /dev/dri/by-path/` says which node is which card, and the driver behind one is `basename $(readlink -f /sys/class/drm/renderD128/device/driver)`. Only `egl-headless` takes it, which is the served screen and the headless `test-*` boots; a window's GL goes to the host display's GPU and QEMU gives nobody a say in that |
 | `--screens 2` | puts two cards on the bus and the compositor tiles across both, but a VNC server serves one console, and that console is the first card. The second monitor is there and being drawn; you are watching one of them. `test-compositor`'s monitor boot is what judges both |
 | `SUPER` | every binding in the keyboard table above is on it, and whether a viewer passes it to the guest or eats it for its own menu is the viewer's business, not Ferrix's. Most have a setting for it, or a menu that sends one key |
 | speed | a desktop over a tunnel is a desktop over a tunnel. VNC sends what changed, and the compositor already damages only the rows that did, so a shell prompt is fine and a video wallpaper on a machine that has to emulate is the frame a second it already was |
@@ -558,10 +563,10 @@ cargo xtask remote-desktop
 The profile supplies release builds, 3D, clipboard, 1920x1080, both keyboard
 layouts, a wallpaper, four CPUs and 1 GiB of memory. `remote-desktop` supplies
 `--vnc :0` itself, so the remote QEMU serves the desktop through the tunnel
-instead of opening a window on the build machine. Set `[remote.env]
-FERRIX_QEMU` when that machine needs a QEMU with virglrenderer. Add
-`--rendernode /dev/dri/renderD128` to the profile when it has more than one
-GPU.
+instead of opening a window on the build machine, and a served screen gets
+the 3D card and a render node by itself. Set `[remote.env] FERRIX_QEMU` only
+when no QEMU on that machine's `PATH` has virglrenderer, and `--rendernode`
+only to overrule the node it picks.
 
 That is the desktop on the 3D card, in a window of this host's, at
 1920x1080, with two keyboard layouts a switch moves between and no dead keys
@@ -573,8 +578,8 @@ the last three being the ones not in the line:
 | | |
 |---|---|
 | `FERRIX_QEMU` | a QEMU that is not the one on `PATH`, a directory of its binaries or one binary. Distributions often build QEMU without a local display backend, and then there is no window to open -- xtask asks whichever QEMU it is what it has, falls back to VNC when it has none, and says which it chose. `--gl` wants virglrenderer as well |
-| `--gl` | the 3D card, with this host's GPU behind it. Turns `--display` on by itself. Without it the card is the 2D one and the compositor composites on the CPU |
-| `--rendernode` | which GPU, on a machine with more than one, as `/dev/dri/renderD128`. Only `egl-headless` takes it -- a served screen and the headless `test-*` boots -- and QEMU picks the lowest-numbered node when nothing says, which is a guess by device number rather than by which card can do the work |
+| `--gl` | the 3D card, with this host's GPU behind it. Turns `--display` on by itself. A served screen has it without the flag where it can be had; `--no-gl` is the 2D card, on which the compositor composites on the CPU |
+| `--rendernode` | which GPU, on a machine with more than one, as `/dev/dri/renderD128`. Only `egl-headless` takes it -- a served screen and the headless `test-*` boots. `run-compositor` takes the first node not driven by NVIDIA's proprietary driver when nothing says; other boots leave it to QEMU, whose pick is a guess by device number rather than by which card can do the work |
 | `--smp`, `--memory` | 4 and 512 MiB by default. A desktop with a video wallpaper is the one workload here that notices more of either |
 | `--release` | builds the loader and kernel with optimisations. Worth it for a desktop somebody is going to use rather than watch boot |
 | `--wallpaper` | matches part of the name of one kept by `cargo xtask wallpapers`. Leave it out and a run picks one of them, a different one each time; `--wallpaper none` for a plain background. A **video** in that directory becomes a wallpaper that moves, which is the most expensive thing this desktop does -- about a frame a second on a machine that has to emulate |

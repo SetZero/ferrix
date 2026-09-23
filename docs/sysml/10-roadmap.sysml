@@ -487,7 +487,7 @@ package FerrixRoadmap {
     #inProgress requirement <'S19'> stage19HyprlandFidelity : Stage {
         attribute :>> number = 19;
         attribute :>> status = StageStatus::InProgress;
-        attribute :>> size = "144 points, about 48 left";
+        attribute :>> size = "178 points, about 82 left";
         doc /* What makes a Hyprland rather than a tiling compositor:
              * animations with bezier curves, rounded corners, blur, shadows,
              * opacity rules, special workspaces, groups, multiple monitors,
@@ -507,9 +507,12 @@ package FerrixRoadmap {
              * renderer still under it. The desktop composites on the GPU:
              * a 1920x1080 frame of a video wallpaper behind a blurred
              * translucent terminal went from 39 ms to 12, where 60 fps is
-             * 16.7. A card of Ferrix's own is stage 21.
+             * 16.7. A card of Ferrix's own is stage 21. Since 2026-09-23 a
+             * served desktop takes the 3D card by default (docs/GPU.md 3.9).
              *
-             * Of the 144, about 48 are left: XWayland's 40, and the
+             * Of the 178, about 82 are left: the desktop's speed as it is
+             * watched (a cursor plane, an sDDF-shaped device queue, client
+             * pages as texture backing: 34), XWayland's 40, and the
              * pointer-driven options and second-pass effects
              * (no_screen_share, blur_popups, precise_mouse_move). The rest
              * of the GPU road -- zwp_linux_dmabuf and a Mesa on ferrousli --

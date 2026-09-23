@@ -100,7 +100,7 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixAssurance` | `11-assurance.sysml` | docs/RELIABILITY.md and docs/ASSEMBLY.md: the quality gates, what each one verifies, and what the tests can actually reach. All of it runs in CI today except the two debts the roadmap states. |
 | `FerrixViews` | `12-views.sysml` | How to read the one model as two: what runs today, and what the roadmap still owes. The filters key on the lifecycle keywords every element carries. |
 
-13 files, 16 packages, 1507 elements, 167 relations. Model digest `32c596ce7d45fb7e`.
+13 files, 16 packages, 1507 elements, 167 relations. Model digest `8e165af99c947e07`.
 
 | Maturity | Elements | Meaning |
 | --- | ---: | --- |
@@ -2569,7 +2569,7 @@ flowchart TB
   n19_FerrixRoadmap_stage16Rustc["S16  Stage 16 rustc<br>Done · the goal; about 40 guessed, 8 spent"]
   n20_FerrixRoadmap_stage17DisplayAndInput["S17  Stage 17 display and input<br>Done · 74 points, spent"]
   n21_FerrixRoadmap_stage18Compositor["S18  Stage 18 compositor<br>Done · 96 points, spent"]
-  n22_FerrixRoadmap_stage19HyprlandFidelity["S19  Stage 19 hyprland fidelity<br>InProgress · 144 points, about 48 left"]
+  n22_FerrixRoadmap_stage19HyprlandFidelity["S19  Stage 19 hyprland fidelity<br>InProgress · 178 points, about 82 left"]
   n23_FerrixRoadmap_stage21BareMetalGpu["S21  Stage 21 bare metal gpu<br>Planned · unsized, over 100 points"]
   n24_FerrixRoadmap_stage22Steam["S22  Stage 22 steam<br>Planned · unsized, over 300 points"]
   n25_FerrixRoadmap_stage20SelfHosting["S20  Stage 20 self hosting<br>Planned · longer"]
@@ -2641,7 +2641,7 @@ flowchart TB
 | `S16` | 16 | Stage 16 rustc | Done | the goal; about 40 guessed, 8 spent | `#implemented` |
 | `S17` | 17 | Stage 17 display and input | Done | 74 points, spent | `#implemented` |
 | `S18` | 18 | Stage 18 compositor | Done | 96 points, spent | `#implemented` |
-| `S19` | 19 | Stage 19 hyprland fidelity | InProgress | 144 points, about 48 left | `#inProgress` |
+| `S19` | 19 | Stage 19 hyprland fidelity | InProgress | 178 points, about 82 left | `#inProgress` |
 | `S21` | 21 | Stage 21 bare metal gpu | Planned | unsized, over 100 points | `#planned` |
 | `S22` | 22 | Stage 22 steam | Planned | unsized, over 300 points | `#planned` |
 | `S20` | 20 | Stage 20 self hosting | Planned | longer | `#planned` |
@@ -2876,15 +2876,15 @@ The compositor itself: the Wayland wire protocol and its server, xdg-shell, wl_s
 
 ### S19 — Stage 19 hyprland fidelity
 
-**InProgress**  ·  size 144 points, about 48 left  ·  `#inProgress`
+**InProgress**  ·  size 178 points, about 82 left  ·  `#inProgress`
 
 What makes a Hyprland rather than a tiling compositor: animations with bezier curves, rounded corners, blur, shadows, opacity rules, special workspaces, groups, multiple monitors, plugins -- and the GPU behind them.
 
 Well under way: every one of Hyprland's globals, dispatchers and hyprctl commands is answered, and a person's own hyprland.conf -- 377 lines, a bar, a dock and a wallpaper daemon -- runs with no diagnostic.
 
-The GPU path, decided on 2026-09-18 and built on 2026-09-19 (docs/GPU.md 3.7 and 3.8), is Path A: the host's driver through virtio-gpu 3D. All four of its pieces are in -- the ring-3 driver's 3D commands, a render node with the virtgpu ioctls and 3D scanout, the host half in xtask, and a Rust virgl encoder behind a renderer trait with the software renderer still under it. The desktop composites on the GPU: a 1920x1080 frame of a video wallpaper behind a blurred translucent terminal went from 39 ms to 12, where 60 fps is 16.7. A card of Ferrix's own is stage 21.
+The GPU path, decided on 2026-09-18 and built on 2026-09-19 (docs/GPU.md 3.7 and 3.8), is Path A: the host's driver through virtio-gpu 3D. All four of its pieces are in -- the ring-3 driver's 3D commands, a render node with the virtgpu ioctls and 3D scanout, the host half in xtask, and a Rust virgl encoder behind a renderer trait with the software renderer still under it. The desktop composites on the GPU: a 1920x1080 frame of a video wallpaper behind a blurred translucent terminal went from 39 ms to 12, where 60 fps is 16.7. A card of Ferrix's own is stage 21. Since 2026-09-23 a served desktop takes the 3D card by default (docs/GPU.md 3.9).
 
-Of the 144, about 48 are left: XWayland's 40, and the pointer-driven options and second-pass effects (no_screen_share, blur_popups, precise_mouse_move). The rest of the GPU road -- zwp_linux_dmabuf and a Mesa on ferrousli -- is for clients that render for themselves, not for the compositor.
+Of the 178, about 82 are left: the desktop's speed as it is watched (a cursor plane, an sDDF-shaped device queue, client pages as texture backing: 34), XWayland's 40, and the pointer-driven options and second-pass effects (no_screen_share, blur_popups, precise_mouse_move). The rest of the GPU road -- zwp_linux_dmabuf and a Mesa on ferrousli -- is for clients that render for themselves, not for the compositor.
 
 ### S21 — Stage 21 bare metal gpu
 
