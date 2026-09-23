@@ -6247,6 +6247,13 @@ viewer no updates but the pointer's shape, which it draws where its own mouse
 is. `test-compositor --boot cursor` judges it through a VNC viewer, since a
 screendump cannot see a plane (`docs/GPU.md` §3.10). 13 points.
 
+**Done -- an idle desktop idles (2026-09-23).** Two loops kept a processor
+each busy on a desktop nobody was touching: the kernel answered `poll` on a
+listening Unix socket as hung up, so the compositor's loop never slept, and
+the clipboard's driver never read what the host sent it, so its loop never
+left. Left alone, the served desktop cost its host 2.75 processors and costs
+0.95 (`docs/COMPOSITOR-DAMAGE-HANDOFF.md` §2.8).
+
 The protocols and keywords this paragraph used to list as left --
 `layerrule`, `zwp_virtual_keyboard`, `zwp_pointer_constraints` and
 `relative-pointer` (a game that grabs the pointer), `presentation-time`,

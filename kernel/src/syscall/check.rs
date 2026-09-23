@@ -7873,6 +7873,33 @@ fn check_a_name_carries_a_connection(process: &Process, page: u64) -> Result<(),
     outcome
 }
 
+/// `poll`'s answer for `socket`, asked about input with no waiting: its
+/// `revents`, which for a listener is `POLLIN` while a connection waits and
+/// nothing otherwise -- no hang-up.
+fn listener_poll(process: &Process, page: u64, socket: i32) -> Result<u16, &'static str> {
+    use crate::syscall::poll::{self, POLLIN};
+
+    let at = page + POLLFD;
+    let mut entry = [0_u8; 8];
+    for (slot, byte) in entry
+        .iter_mut()
+        .zip(socket.to_le_bytes().into_iter().chain(POLLIN.to_le_bytes()))
+    {
+        *slot = byte;
+    }
+    uaccess::copy_to_user(process.space(), at, &entry).map_err(|_| "could not stage a pollfd")?;
+    // The count says the same as `revents` does, which is what is judged.
+    let _ready =
+        poll::sys_poll(process, at, 1, 0).map_err(|_| "poll refused a listening socket")?;
+    uaccess::copy_from_user(process.space(), at, &mut entry)
+        .map_err(|_| "could not read revents back")?;
+    Ok(u16::from_le_bytes([entry[6], entry[7]]))
+}
+
+/// Where a check stages a `pollfd`, as an offset in its page: past the
+/// name's slots.
+const POLLFD: u64 = 0x500;
+
 /// [`check_a_name_carries_a_connection`]'s questions.
 fn a_name_carries_a_connection(
     process: &Process,
@@ -7886,6 +7913,11 @@ fn a_name_carries_a_connection(
     }
     if socket_call(process, Call::Listen, &[as_arg(server), 4, 0, 0, 0, 0]) != Ok(0) {
         return Err("a bound Unix socket would not listen");
+    }
+    // A listener with nothing waiting is neither readable nor hung up, which
+    // is what lets a program sleep in `poll` on it.
+    if listener_poll(process, page, server)? != 0 {
+        return Err("poll reported a listening socket with nothing waiting as ready");
     }
     // What it is bound to, read back: the same bytes, the leading NUL and all.
     let mut back = [0_u8; 2 + 108];
@@ -7921,6 +7953,10 @@ fn a_name_carries_a_connection(
     }
     if socket_call(process, Call::Connect, &[as_arg(client), at, len, 0, 0, 0]) != Ok(0) {
         return Err("a Unix socket would not connect to an abstract name");
+    }
+    // And with a connection waiting it is readable, and still not hung up.
+    if listener_poll(process, page, server)? != crate::syscall::poll::POLLIN {
+        return Err("poll did not report a waiting connection as readable, and only that");
     }
     let taken = socket_call(process, Call::Accept, &[as_arg(server), 0, 0, 0, 0, 0])
         .map_err(|_| "a queued connection was not there to accept")?;

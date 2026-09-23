@@ -353,6 +353,50 @@ reference.
 The "first frames of a boot take a second" note in §2.4 has the same cause
 and is paid once now rather than partly again every frame.
 
+### 2.8 An idle desktop spun a processor, and it was the kernel (2026-09-23)
+
+§2.5 says the 2026-09-19 loop sleeps in `poll` until something is ready.
+It did not, in the guest. An idle desktop -- no frame drawn, nothing typed,
+the pointer still -- kept 37-40% of four processors busy by `/proc/stat`,
+where the same image booted with a shell as init and no compositor is 6%,
+and 10% with the card, the tablet and the network driven. Counting why the
+loop turned (a temporary line, not kept): about 1,400 times a second, never
+by a timeout, and every time woken by the same three descriptors -- the
+Wayland display socket and hyprctl's two, which are the compositor's three
+*listening* sockets.
+
+Ferrix answered `poll` on a listening Unix socket as hung up: a stream
+socket with no peer is `POLLHUP`, and a listener never has one. Linux's
+`unix_poll` answers a listener as readable while a connection waits and
+nothing else, which is what the kernel answers now
+(`kernel/src/fs/socket.rs`, `readiness`), with the boot check holding a
+listener to both halves. The compositor was right; every turn of its loop
+paid for the kernel's answer, and so did anything else sleeping in `poll`
+on a listener, sshdt among them.
+
+That was one processor of two. The other was found by sampling which task
+each processor runs every 10 ms (a temporary kernel task, not kept): the
+clipboard's driver, `vport`, 500 samples of 500 on one processor. Its loop
+asked the device for events until there were none, and bytes waiting on the
+port are an event until they are read -- so the first bytes the host sent
+on the clipboard's port held it there for good (`docs/CLIPBOARD.md` §6). A
+desktop started with `--clipboard`, which is the customer's, had that
+processor busy from its first seconds.
+
+What the guest cost its host while left alone -- no viewer, no input,
+twenty seconds of an idle desktop on the 3D card with `--clipboard`, by
+QEMU's threads' own CPU time:
+
+| | host processors |
+|---|---|
+| before | 2.75 |
+| listening sockets answered as Linux answers them | 1.85 |
+| and `vport` reading what it is sent | **0.95** |
+| the same image with a shell as init and no desktop | 0.40 |
+
+The rest is wakeups by the clock -- `vport`'s 10 ms tick is the largest, at a
+few percent of one processor -- and not worth a pass of its own yet.
+
 ---
 
 ## 3. How to measure, exactly

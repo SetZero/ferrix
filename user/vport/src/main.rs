@@ -630,11 +630,19 @@ fn step_of(failure: ConsoleError) -> Step {
 }
 
 /// Answer everything the device has said, and report whether the port closed.
+///
+/// Up to the port's bytes and no further: `poll` says [`Event::Data`] for as
+/// long as bytes are waiting, because reading them is the caller's -- and
+/// they are read further down the loop, once there is somewhere to put them.
+/// Asking again until `poll` said nothing never ended once the host had sent
+/// a byte, which pinned a processor from then on and passed nothing to the
+/// client (`docs/CLIPBOARD.md` §6).
 fn drain(driver: &mut Console) -> Result<bool, Step> {
     let mut closed = false;
     while let Some(event) = driver.poll().map_err(step_of)? {
         match event {
-            Event::Found { .. } | Event::Data => {}
+            Event::Found { .. } => {}
+            Event::Data => break,
             Event::Open { open } => {
                 if !open {
                     closed = true;

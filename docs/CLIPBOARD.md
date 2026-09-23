@@ -266,6 +266,14 @@ that arrives on the port is written to whoever is connected and everything
 written there goes out on the port. It understands nothing of vdagent: it is
 a pipe with a device on one end.
 
+Its loop answers the device's events and stops at the port's bytes, which
+are read when there is somewhere to write them. Until 2026-09-23 it asked the
+device for events until there were none, and bytes waiting on the port are an
+event until they are read -- so the first bytes the host sent held the loop
+there for good: a processor pinned from then on, and nothing reaching the
+client. A desktop booted with `--clipboard` had one of its processors busy
+from its first seconds (`docs/COMPOSITOR-DAMAGE-HANDOFF.md` §2.8).
+
 `devmgr` needs one change beyond its table, and it is not optional. A driver
 that does not publish to a kernel subsystem is currently **killed** and
 counted as failed (`user/devmgr/src/main.rs`, after `await_published`), and

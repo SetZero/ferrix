@@ -1086,7 +1086,24 @@ impl Socket {
     /// What `poll` reports: readable with data or end of file waiting,
     /// writable with room or a write that would fail at once, and hung up
     /// once nothing can come in and nothing can go out.
+    ///
+    /// A listening socket is none of those. It is readable while a
+    /// connection waits to be accepted and is never hung up: it has no peer
+    /// because it never has one, not because one went away. That is what
+    /// Linux's `unix_poll` answers for one. Answering it hung up, as a socket
+    /// with no peer, made every `poll` on it return at once -- and a
+    /// compositor polls its display socket and its two control sockets on
+    /// every turn of its loop, which spun about a processor of an idle
+    /// desktop (`docs/COMPOSITOR-DAMAGE-HANDOFF.md` §2.8).
     fn readiness(&self) -> Readiness {
+        if let Some(backlog) = self.listener.lock().as_ref() {
+            return Readiness {
+                readable: !backlog.waiting.is_empty(),
+                writable: false,
+                hangup: false,
+                error: false,
+            };
+        }
         let (readable, ended) = {
             let buffer = self.receive.buffer.lock();
             (buffer.can_read(), buffer.writer_closed())
