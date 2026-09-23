@@ -25,8 +25,11 @@ The status table after *Where it stands* records the pointed remainder and
 its current state. A dated forecast is made only from a fresh velocity count;
 estimates are arithmetic, not promises.
 
-**Where it stands:** stages 0–11 are done and in the boot test on all three
-architectures, and the boot marker reads `FERRIX-BOOT-OK stages 1-11`.
+**Where it stands (reviewed 2026-09-23):** stages 0–12 and 16 are done, and
+so are networking, 17 and 18. Stages 0–11 are in the boot test on all three
+architectures, and the boot marker reads `FERRIX-BOOT-OK stages 1-11`; stage
+12's write check runs before the marker in every boot as well, but the
+marker was not moved when that stage was called done.
 ARMv7-A joined after stage 3 — see *ARMv7-A* after stage 4 — and has run on
 hardware: an STM32MP157D-DK1 at two cores reached `FERRIX-BOOT-OK stages
 1-9` and ran stage 7's script at `fd4442e`. Stage 7's exit is
@@ -44,11 +47,12 @@ two programs in user mode exchange messages and a handle over a channel, and a
 job kill takes down a process tree, with ports, interrupts delivered to them
 and device memory a driver can map built on the same objects.
 Stage 10's exit runs in the boot test itself: a virtio-blk driver in ring 3,
-started from the boot check with the START it will get from `devmgr`, reads
+started by `devmgr`, reads
 sectors through the block ring with VT-d on x86-64 and the `SMMUv3` on AArch64
 translating, and a deliberate out-of-domain write faulted on both; ARMv7-A runs
-it in degraded trusted mode, as decided. What the stage still owes — `devmgr`
-the program, trusting decoding-off BARs — is after the exit in its section.
+it in degraded trusted mode, as decided. What the stage still owes — trusting
+decoding-off BARs, AMD-Vi, and one unexplained flake — is after the exit in
+its section.
 Stage 12's exit is met: Ferrix writes btrfs. Every boot mounts a blank
 volume writable on a third disk, builds a tree on it, unmounts, mounts it
 again and reads it all back, and `cargo xtask test-btrfs` then has host
@@ -62,7 +66,12 @@ volume. What the stage still owes, outside its points, is writeback of pages
 written through `MAP_SHARED`.
 Stage 16's exit, the goal, is met: `cargo xtask test-rustc` compiles
 `hello.rs` on Ferrix with the rust-lang.org `rustc`, linked through `cc`
-and `rust-lld`, from a btrfs volume, and runs what it made.
+and `rust-lld`, from a btrfs volume, and runs what it made, on x86-64 and in
+CI since 2026-09-22. Stage 20, self-hosting, is what it unblocks.
+Dynamic linking's exit is met on x86-64: Debian's glibc busybox runs on
+its own `ld-linux` on all three architectures, and on ferrousli's loader and
+`libc.so.6` in glibc's place on x86-64. Its Arm half waits on ferrousli's
+port to AArch64 and ARMv7-A. Stage 15 has job control and lacks a real init.
 Networking is done: sockets, a net core and a ring-3 virtio-net driver, with
 `curl` fetching over HTTPS and `git` cloning inside the guest. Stages 17 and
 18 are met, and the compositor runs: `cargo xtask test-compositor` boots it
@@ -73,7 +82,9 @@ through `/dev/dri/renderD128`, and the screen is shown the very texture the
 compositor drew into, which takes a 1920x1080 frame of a video wallpaper
 behind a blurred translucent terminal from 39 ms in software to 12
 (`docs/GPU.md` §3.7 and §3.8; 60 fps is 16.7). What stage 19 still owes is
-XWayland, `dwindle:precise_mouse_move` and the second-pass effects. Stage 21
+XWayland, `dwindle:precise_mouse_move` and the second-pass effects; Mesa and
+`zwp_linux_dmabuf`, for clients that draw on the GPU themselves, are priced
+beside it. Stage 21
 is bare metal with a card of Ferrix's own, and stage 22 is Steam. Stage 17's display iteration is done:
 `/dev/dri/card0` served by a ring-3 virtio-gpu driver, with `cargo xtask
 test-display` requiring a compositor's colour pixel for pixel on x86-64 and
@@ -90,15 +101,15 @@ QEMU's far end.
 Each stage's section below says what exists. The marker will not move until a
 stage meets its exit criterion.
 
-**Status and estimates (reviewed 2026-09-21).** Over the four days of the
+**Status and estimates (reviewed 2026-09-23).** Over the four days of the
 points era that the fleet ran, 2026-09-14 to -17, about 445 points landed:
 131, 34, 66 and 214, which is ≈ 111 a calendar day and ≈ 150 a day the fleet
 was running, with 8–10 sessions, 15–20 points a session-day, and 21 points a
 queue-hour on both days that were measured finely. Every estimate under 8
 held, and stages 17 and 18 came in at the sizes they were given
 (`docs/BACKLOG.md`, *Velocity*). That is historical velocity, not a current
-schedule: the dates projected from it have elapsed while stage 19, dynamic
-linking and stage 12 remain under way. The table records the state now.
+schedule: the dates projected from it have elapsed, and stage 19 and
+dynamic linking remain under way. The table records the state now.
 Stages 12 to 16 were sized in words before points existed; their points are
 first guesses rather than an owner's estimate and are replaced when a session
 sizes them.
@@ -106,16 +117,18 @@ sizes them.
 | what | points | current state |
 |---|---|---|
 | ~~Stage 19: the GPU path, Path A (`docs/GPU.md` §3)~~ *done 2026-09-19* | ~~52~~ | done |
-| Stage 19: XWayland, `dwindle:precise_mouse_move`, the second-pass effects, Mesa and `zwp_linux_dmabuf` | 48 | in progress |
-| Dynamic linking: the kernel half, ferrousli's loader, glibc's names | 39 *(33 done; the exit met on x86-64)* | in progress |
+| Stage 19: XWayland 40, and `dwindle:precise_mouse_move`, the second-pass effects and the window rule `xray` about 8 | 48 | in progress |
+| After stage 19's 144: `zwp_linux_dmabuf` with a GBM-shaped allocator, and Mesa's virgl on ferrousli, for clients that draw on the GPU themselves (`docs/BACKLOG.md`) | 8, and 40 or more | not started |
+| Dynamic linking: the kernel half, ferrousli's loader, glibc's names | 39 *(33 done; the exit met on x86-64)* | in progress: 6 left |
+| Dynamic linking: ferrousli's AArch64 and ARMv7-A port, which the customer put inside the stage on 2026-09-21 and on which the exit's other two architectures wait | ≈ 34 | not started |
 | ~~Stage 12, btrfs write~~ *done 2026-09-21* | ~~≈ 60~~ | done |
 | Stage 13, namespaces, cgroups, seccomp | *month* ≈ 60 | not started |
-| Stage 22, Steam: the parts with a first guess (glibc under the runtime 13, bubblewrap's rest 13, sound 30, Venus 8, XWayland counted above) | 64 | not started |
+| Stage 22, Steam: the parts with a first guess (bubblewrap's rest 13, sound 30, Venus 8; glibc's names are dynamic linking's 13 and XWayland stage 19's, both counted above) | 51 | not started |
 | Stage 22, Steam: the 32-bit x86 ABI and what the runtime and Proton find missing | unsized, ≈ 100 as a guess | not started |
 | Stage 14, real-time domains | *month* ≈ 40 | not started |
 | Stage 15, a real userland | *week* ≈ 20, of which job control is spent; most of the rest landed as zinc and uutils, and what is left is an init | partially complete: init and gettys remain |
 | ~~Stage 16, `rustc`~~ *exit met 2026-09-22* | ~~*the goal* ≈ 40~~ 8 spent | done |
-| Stage 20, self-hosting | *longer*, unsized | after stage 16 |
+| Stage 20, self-hosting | *longer*, unsized | not started; stage 16's exit, which it waited on, is met |
 | Stage 21, bare metal and a GPU of Ferrix's own | over 100, unsized | planned when bare-metal work is requested |
 
 Three things qualify these estimates:
@@ -280,7 +293,7 @@ x86-64: GDT, TSS, IST stacks, IDT, exception handlers, LAPIC, IOAPIC, HPET/TSC
 deadline. AArch64: `VBAR_EL1` vector table, synchronous/IRQ/FIQ/SError
 handlers, GICv2 and GICv3, the architected generic timer.
 
-Both behind one facade: `irq::register`, `timer::after`, `trap::Frame`.
+Both behind one facade: `irq::register`, `timer::after`, `arch::TrapFrame`.
 
 **Done — the trap half.** Vectors are installed on both architectures as the
 first thing after the stage 1 self-check, before anything can deliberately
@@ -361,7 +374,11 @@ between a program and an operating system.
   minutes, so it is not handed out as the counter: the TSC is calibrated
   against it, subtracting in 32 bits, and used instead. QEMU's HPET is
   64-bit, so the boot test does not reach that path; `libs/acpi`'s `hpet`
-  module holds its arithmetic and its tests. Every I/O APIC firmware described is
+  module holds its arithmetic and its tests. Since 2026-09-19 an invariant
+  TSC (`CPUID.80000007H:EDX[8]`) is the counter whenever the processor has
+  one, measured against the HPET, because every HPET read is a device access
+  and costs an exit under a hypervisor; QEMU's `qemu64` model has none, so
+  the boot test still counts on the HPET. Every I/O APIC firmware described is
   mapped and every input masked — not configured, because nothing is wired to
   a device line until stage 10, but quiesced, because a line firmware left
   enabled would arrive at a vector chosen by whoever wrote the firmware.
@@ -527,7 +544,7 @@ waits for its turn must answer for the processor it is on. The wait first read
 its per-CPU record once, on entry, and so flushed one processor and recorded
 the flush for the one it had left; put back, x86-64 fails on exactly that.
 
-The boot marker reads `FERRIX-BOOT-OK stages 1-5`.
+The boot marker read `FERRIX-BOOT-OK stages 1-5` when this landed.
 
 **Deferred, none of it on stage 5's path:**
 
@@ -596,7 +613,10 @@ sweep then found 341 mappings, and the reclaim 4 MiB.
 which the board has and QEMU cannot place; using RAM beyond the direct map
 (a machine with it boots, since 2026-09-13, and reports the excess unused); the
 board's own UART; Thumb-2; VFP. The UART has since landed and carried the run
-below.
+below, and so has RAM above the 2 GiB split (`9ae0180f`), which the board's
+DDR at 3 GiB needs. Thumb-2 and VFP are deferred for the kernel's own code
+only: a program whose entry is Thumb is entered in Thumb state, and every
+task's VFP registers are saved and restored with it, both since stage 7.
 
 **On the board, stages 1–9.** On 2026-09-13, at `fd4442e`, an STM32MP157D-DK1
 — two Cortex-A7s and 512 MiB, under mainline TF-A, OP-TEE and U-Boot — booted
@@ -616,9 +636,10 @@ the kernel `cargo xtask test-shell` builds, copied to the card through U-Boot's
 
 The exit line is lost because the STM32 USART driver returns as soon as the
 transmit register has room, and the PSCI `SYSTEM_OFF` after the last line
-powers the board off while that line is still being sent. The drain is a
-backlog row; the rerun that follows it, with the initramfs on the card, expects
-the line byte for byte. The serial log is kept outside the repository, at
+powers the board off while that line is still being sent. The console now
+drains before power-off (`571316a9`), and a rerun on the board the same day
+received the exit line whole (`docs/stm32mp157-dk.md`). The first run's serial
+log is kept outside the repository, at
 `~/.local/share/ferrix/board-boot-fd4442e-2026-09-13.log`.
 
 ---
@@ -647,8 +668,8 @@ abstraction is not retrofitted.
   interrupt is done. Switching inside the handler would leave an interrupt in
   service for as long as the next task ran, and a controller still servicing
   one delivers nothing further.
-* **The context switch** is the fourth and last entry on the assembly
-  allow-list's "both architectures" half: a function that returns onto a
+* **The context switch** is one of the two sites in `docs/ASSEMBLY.md`'s
+  *Every architecture* table: a function that returns onto a
   different stack from the one it was called on, which Rust cannot express.
 
 **Exit criterion met, and in the boot test on all three architectures.** A
@@ -710,8 +731,9 @@ the boot test that fails without it.
   created — the processor it prefers if that one is idle, any idle processor
   otherwise, the least loaded if none is.
 * **Affinity.** `pinned: bool` became a `CpuSet` per task, which is the field
-  `sched_setaffinity` will want in stage 7 and is cheaper now than retrofitted.
-  Stealing and balancing both honour it.
+  `sched_setaffinity` wants and is cheaper now than retrofitted. Stealing and
+  balancing both honour it. Stage 7's `sched_setaffinity` validates a mask
+  and accepts it, but does not yet write it into the task's `CpuSet`.
 * **Periodic balancing**, for the case stealing structurally cannot reach:
   every processor busy, one of them much busier.
 * **Slice scaling.** The slice is a share of a target latency rather than a
@@ -811,8 +833,10 @@ not the checker, and a per-pick trace found them:
 * *"a task's stack was never given back"* — the idle loop reaped the whole
   zombie list at once and could be switched out mid-batch when the checker
   was woken onto its processor; the checker then yielded forever waiting for
-  stacks the idle task held. The idle task now frees one stack at a time and
-  is not switched out while holding one.
+  stacks the idle task held. The idle task then freed one stack at a time and
+  was not switched out while holding one; since 2026-09-19 it frees a batch
+  of up to sixteen under one shootdown, still unswitchable while it holds
+  them.
 * *The thousand-task check taking 20–50 s* — the wait queue's lock was a
   plain ticket lock taken with interrupts on. A worker preempted inside the
   few instructions it is held started a convoy: every finishing worker spun
@@ -1039,12 +1063,13 @@ object to name. One lock per address space, never a global one.
 
 **Left for later, none of it on stage 6's path:**
 
-* No check types at the console. Every architecture receives now — the Arm UART
-  drivers were write-only, so a program reading fd 0 there waited forever, until
-  the PL011 and the STM32 USART gained receive, by interrupt into a ring, as
-  x86-64's 16550 now does too — but
-  `test-shell` types nothing, so input is exercised only by hand. The ring
-  itself is checked at boot.
+* A check that types at the console on the Arm architectures. Every
+  architecture receives now — the Arm UART drivers were write-only, so a
+  program reading fd 0 there waited forever, until the PL011 and the STM32
+  USART gained receive, by interrupt into a ring, as x86-64's 16550 now does
+  too. Since stage 15, `cargo xtask test-jobs` types a session at the console
+  on x86-64; on AArch64 and ARMv7-A input is still exercised only by hand.
+  The ring itself is checked at boot.
 
 **What the boot test could not see, now seen from user mode.** A
 copy-on-write fault replaces a live read-only translation with a writable one,
@@ -1191,10 +1216,10 @@ program would have:
   and AArch64's ran only because EDK2 happened to leave `CPACR_EL1.FPEN` open.
 * busybox's `printf` asks `fcntl(1, F_GETFL)` before writing and prints nothing
   when it fails — confirmed by injecting `ENOSYS` into exactly that call on the
-  host. `fcntl` belongs to stage 8's descriptor table, so `printf` is not in the
-  test script yet.
+  host. `fcntl` belongs to stage 8's descriptor table, so `printf` joined the
+  test script only with stage 8, after the transcript above.
 
-**Signals are recorded, not delivered.** The dispositions, the blocked mask and
+**Signals were recorded, not delivered, at the exit.** The dispositions, the blocked mask and
 the alternate stack answer consistently — the old action a program reads back is
 the one it set, at its own architecture's layout, which is three native words
 and an 8-byte mask. Nothing in a clean run raises a signal. Delivery is the
@@ -1237,7 +1262,9 @@ entered by `arch::resume_user`) in a copy-on-write copy of its memory.
 the process's own address space and loads into it, so the process keeps its
 identity; a failure after that ends it with `SIGSEGV`'s status, as on Linux.
 `vfork` copies rather than lends memory, and the parent still sleeps until the
-child execs or ends. A new thread is still `ENOSYS`.
+child execs or ends. A new thread was `ENOSYS` at the exit; threads came
+later (*Threads*, below), and only memory shared between processes without
+`CLONE_VFORK` is still `ENOSYS`.
 
 Every general register is cleared on entry to user mode, with one exception a
 native process needs: `Startup.argument` arrives in the first argument
@@ -1299,7 +1326,8 @@ when its parent reaps it: otherwise a pipe's write end outlives the program
 that wrote, and `ls | wc -l` waits for an end of file that only reaping brings.
 
 **The calls busybox makes around the edges.** Measured across both busyboxes'
-applets and answered as a single-user system without networking answers them:
+applets and answered as a system without networking answered them then (the
+socket families other than `AF_UNIX` came with *Networking*):
 `prctl` (name, death signal, dumpable, no-new-privileges, subreaper, bounding
 set), the robust-list head, resource limits (`RLIMIT_NOFILE` is the descriptor
 table's own), priorities and I/O priorities, `personality`, the scheduler's
@@ -1348,7 +1376,7 @@ description locks, which end with the description; ranges split and merge,
 deadlock detection. Every path that ends a descriptor goes through
 `fd::closed`, which is how a close releases them, and busybox's `adduser` and
 `passwd` lock `/etc/passwd` rather than warning. `readahead` checks what
-Linux checks and answers 0, having no page cache to fill.
+Linux checks and answers 0 without filling the page cache ahead.
 
 **`mremap`, `execveat`, and what `/proc/self/exe` says.** `mremap` shrinks in
 place, grows in place when the pages after are free, and otherwise moves --
@@ -1473,14 +1501,17 @@ that took what it looked at, a record read that found the last record's tail:
   an `ET_DYN` image without an interpreter at two thirds of the user half,
   with its entry and `AT_PHDR` moved, and the program relocates itself; a
   boot check loads such an image on all three architectures. A dynamically
-  linked program, which names an interpreter, is still refused.
-* **Three stand-ins, each written down where it lives.** The console is the one
-  terminal, its line discipline fed by a thread that looks every twenty
-  milliseconds rather than waiting on the receive interrupt, until stage 15
-  brings ttys; the real-time clocks
-  start at 1970 until something reads a clock chip, though `clock_settime`
-  moves them; `getrandom` is xorshift seeded
-  from a counter and says so.
+  linked program, which names an interpreter, was refused here; since
+  2026-09-20 the kernel loads the linker it names and enters it (*Dynamic
+  linking*).
+* **Three stand-ins, each written down where it lives, and one left.** The
+  console's line discipline is fed by a thread that looks every twenty
+  milliseconds rather than waiting on the receive interrupt, and still is.
+  The other two are gone since 2026-09-16: the real-time clocks start at
+  the time firmware's clock gave the loader rather than at 1970, and
+  `getrandom` is `libs/crng`'s ChaCha20, seeded from firmware's
+  `EFI_RNG_PROTOCOL`, the processor's generator and jitter. And the console
+  is no longer the one terminal: pseudo-terminals came with stage 18.
 
 ---
 
@@ -1534,7 +1565,7 @@ the code that should meet a fuzzer before it meets ring 0.
   and device nodes included, and **the `getdents64` packer**, whose names start
   at byte 19 rather than at the structure's size of 24.
 
-59 host tests, the `vfs_ops` fuzz target — which asserts that every name a
+59 host tests at the time (101 now), the `vfs_ops` fuzz target — which asserts that every name a
 listing reports resolves to the inode the listing gave, the property a stale
 cache entry breaks — and a Miri step.
 
@@ -1600,7 +1631,8 @@ refusing them made Ubuntu's static busybox decide it had no terminal, so its
 `stty -a`, `tty`, `login` and `less` failed where Alpine's worked.
 
 **Done — `/dev` and `/proc`.** devfs holds `null`, `zero`, `full`, `random`,
-`urandom`, `tty` and `console`, numbered as Linux numbers them. It calls itself
+`urandom`, `tty` and `console`, numbered as Linux numbers them, and since
+stages 17 and 18 `ptmx` and the `dri`, `input` and `pts` directories. It calls itself
 `devtmpfs` in `/proc/mounts` and `/proc/filesystems`, the name init scripts and
 service managers look for; Linux has had no `devfs` since 2.6.18. A device node
 made anywhere else — by `mknod` on tmpfs, or unpacked from the initramfs —
@@ -1622,8 +1654,10 @@ every file at open, so a program reading `maps` in small pieces sees one
 snapshot, and its directories opt out of the dentry cache, so a pid looked up
 before its process existed is not remembered as missing. `/proc/self` links to
 the caller's pid; each `/proc/<pid>` has `fd`, `status`, `comm`, `cmdline`,
-`stat`, `maps`, `exe`, `cwd` and `root`; and `/proc` has `cpuinfo`, `meminfo`,
-`mounts`, `stat`, `partitions`, `filesystems`, `uptime`, `version` and `sys`. The text is `libs/procfs`, pinned
+`stat`, `maps`, `exe`, `cwd` and `root`, and later `task` and `mounts`; and
+`/proc` has `cpuinfo`, `meminfo`, `mounts`, `stat`, `partitions`,
+`filesystems`, `uptime`, `version` and `sys`, and later `sysrq-trigger` and
+`net`. The text is `libs/procfs`, pinned
 byte for byte against lines taken from a real Linux `/proc`. `/proc/stat`'s
 processor lines are each run queue's busy and idle time, read without charging
 anything, so a line never goes backwards between reads; all busy time is
@@ -1634,7 +1668,8 @@ already keeps — `kernel.ostype`, `osrelease`, `version`, `hostname`,
 `domainname` and `pid_max`, `fs.file-max` and `fs.nr_open` — in which the
 host and domain names write through to what `uname` reports, and every other
 value is refused at open with `EACCES`, as Linux refuses it. `/proc/partitions`
-is empty, as Linux prints it with no block devices. With them, `pwdx`,
+lists every registered disk, and is empty, as Linux prints it, when there is
+none. With them, `pwdx`,
 `sysctl` and `fdisk -l` run. Behind it, every
 process now has a pid from a registry that finds a live process by it.
 
@@ -1654,7 +1689,7 @@ node stands for, from a table keyed by device and inode number that `openat`
 consults for a FIFO node. `statfs` and `fstatfs` answer in the word size's
 layout, and ARMv7-A's packed `statfs64` takes musl's 88 as well as the kernel's
 84. Then `sync`, `syncfs`, `fsync` and `fdatasync`; `truncate`, `truncate64`
-and `fallocate`; `chroot`; `mount` of `tmpfs`, `proc` and `devtmpfs` — each a fresh instance, stacked over whatever the target showed — and `umount2`; the
+and `fallocate`; `chroot`; `mount` of `tmpfs`, `proc` and `devtmpfs` — each a fresh instance, stacked over whatever the target showed, and `btrfs` from a block node since stages 11 and 12 — and `umount2`; the
 extended-attribute calls, which report none; and `sendfile`, which busybox's
 `cat` tries before it falls back to `read`. The boot check drives the handlers
 from a process of its own, twice:
@@ -1678,7 +1713,8 @@ committed. The filesystem tells the store the file's length, after an extend
 and before a cut, and a fault reads that bound under the VMO's lock. A touch
 past the end is `SIGBUS` from user mode and `EFAULT` from a system call.
 `msync` checks what Linux checks and writes nothing back, because the pages
-are the file's and nothing here has a disk to flush.
+are the file's. On tmpfs that is all there is; on btrfs, writable since
+stage 12, writeback of pages written through `MAP_SHARED` is owed.
 
 **Done — a file mapped privately.** A private mapping of a file shows the
 file's pages until it writes one, and that write copies the page into a shadow
@@ -1692,9 +1728,9 @@ Every fault checks the file's end first, so a copied page past a cut is
 `SIGBUS` too. A truncation takes the copies past the cut, so a file grown back
 shows zeros through the mapping, as on Linux. `munmap` gives back the shadow's
 pages and never the file's. A writable private mapping of a file opened
-read-only maps, as Linux allows. No mappable object is filled from a page
-source yet, and one that is must give the fault a way to fill a page before
-it is copied. The boot check maps a file under `/tmp` from a process of its
+read-only maps, as Linux allows. A btrfs file's VMO fills a faulted page
+from its source before anything copies it, since stage 16 (`fs/pages.rs`,
+`check_a_mapping_faults_in_its_source`). The boot check maps a file under `/tmp` from a process of its
 own, shared and private side by side, twice. It also has a program in user
 mode write a page of a private mapping it has only read:
 
@@ -1782,8 +1818,8 @@ difference when it fails.
 **Left for later stages.**
 
 * `/proc/loadavg`, which `top`'s load average line reads, and
-  `/proc/diskstats`, which `iostat` needs past its processor report and which
-  has nothing to count before stage 11's block core.
+  `/proc/diskstats`, which `iostat` needs past its processor report; stage
+  11's block core now has the disks it would count.
 
 **Exit:** `busybox ls -R /proc`, `cat /proc/self/maps` and a shell script that
 manipulates files under tmpfs, all under the boot test.
@@ -2528,8 +2564,8 @@ every outstanding request fails at once, and the data VMO stays held until
 `devmgr` confirms the device was reset (BLOCK-RING.md §6.3); no path in the
 crate reports it releasable before that. It is pure logic, tested on the host,
 under Miri, and by a fuzz target that plays one side of the ring against an
-honest other. **No kernel crate or process uses it yet:** the ring's kernel side
-and the driver process are still to do, below.
+honest other. The ring's kernel side and the driver process that use it
+came next, below.
 
 **Done — the probe's answer is the unit's record, never the completion.** Once
 in a few AArch64 boots the probe halted the machine with FX-1001, "the device
@@ -2564,7 +2600,8 @@ waits for HELLO, checks it in §6.2's order — the crate's checks, then that
 the ring up: it holds the ring and data VMOs, attaches the crate's
 `KernelSide` over the ring's pages, publishes the disk through stage 8's devfs
 registry under HELLO's name with the virtio-blk major and `index × 16`, and
-answers READY with its completion port. From then on it serves reads:
+answers READY with its completion port. From then on it serves reads (and,
+since stage 12, writes and flushes):
 `libs/block`'s queue in front of the ring, one submission per dispatch into a
 region of the data VMO the kernel allocates, the driver rung when it asked to
 be, completions taken off the ring and copied out once, readers woken. A read
@@ -2607,8 +2644,7 @@ memory back only after the device's reset has finished. Device addresses reach
 it only through `DevicePages`: the addresses the pin query (0x1026) returned,
 page by page of the pinned range, with no relation to physical addresses
 assumed. It is tested on the host, under Miri, and by the `virtio_blk` fuzz
-target. **No kernel crate or process uses it yet:** the driver process on
-`ferrix-rt` is still to do, below.
+target. The driver process on `ferrix-rt` that uses it came next, below.
 
 **Done — the kernel's half of `devmgr`: what a driver is started with, and
 what ends it.** `docs/ARCHITECTURE.md` §7 has `devmgr` hand a driver its device
@@ -2642,15 +2678,14 @@ kernel's own START for the node, every virtio block required to lie inside one
 of the node's apertures; a quiesce refused without `MANAGE`, refused under a
 serving driver, and, after a driver dies, freeing the device for a new ring.
 The P1 row for reset on driver death closes here: §6.3 is the design and this
-its kernel side. `devmgr` itself, the program, waits on the native runtime and
-comes next.
+its kernel side. `devmgr` itself, the program, came after the exit, below.
 
 The run recorded when it landed: 19 calls and HELLOs refused as specified, 2
 disks published and unpublished, 0 frames leaked, on x86-64, AArch64 and
 ARMv7-A at four processors and at two.
 
 **Done — the exit: a sector read through a driver in ring 3, with the IOMMU
-on.** `/sbin/blk`, stage 11's virtio-blk driver on the native runtime
+on.** `/sbin/blk` (at `/lib/drivers/blk` since `devmgr` landed), stage 11's virtio-blk driver on the native runtime
 (`user/blk`, over `libs/virtio-blk` and `libs/blkserve`), is started from the
 boot check by a kernel-driven parent with the START `devmgr` will send
 (`docs/BLOCK-RING.md` §6.4, from `block_ring::start_for`): the device with
@@ -2690,15 +2725,27 @@ kernel sends DEVICES in as many messages as the handles need, each saying how
 many devices are still to come. The boot check's own starter now runs only
 when the image carries no `devmgr`; with it, the driver check reads through
 the disks `devmgr`'s drivers serve. `libs/devmgr-proto` is the protocol's
-crate, host-tested. What the stage still owes is one row: trusting
-decoding-off BARs.
+crate, host-tested. The table has since grown to five kinds — virtio-blk,
+virtio-net, virtio-gpu, virtio-input and the virtio-serial port driver
+`vport` — each handed its own subsystem's channel, and every driver but the
+port driver, which publishes to no subsystem, is waited for with PUBLISHED.
+What the stage still owes is below.
 
 The run recorded when it landed: `devmgr   8 devices, 1 drivers, 2 started,
 0 failed` on x86-64, 4 devices on AArch64, 36 on ARMv7-A at four processors
 and at two, each followed by the driver check's sectors read back through
 the disks `devmgr` started.
 
-**Still to do, after the exit.** One row, beside the path to the goal.
+**Still to do, after the exit.** None of it was on the path to `rustc`.
+
+* **FX-1004, a flake in the block ring's self-check.** Once in eleven x86-64
+  boots on nazuna, on 2026-09-16, quiescing a device the instant its driver
+  died failed (`kernel/src/block_ring/check.rs`); it has not been explained
+  and is a P1 row in `docs/BACKLOG.md`. The wake change of that day,
+  c2129a68, is the first suspect.
+* **AMD-Vi**, which the stage's scope names beside VT-d and the SMMUv3: nothing
+  reads an IVRS table or drives an AMD IOMMU yet, so on such a machine DMA
+  would not be translated.
 
 * **Trusting a BAR firmware placed but did not enable**, so a device no
   firmware driver used — as virtio-rng on AArch64 was until its legacy
@@ -2767,8 +2814,9 @@ logic `cargo test`, Miri and a fuzzer can reach.
 * **Real images.** `scripts/gen-btrfs-fixtures.py` builds four images with real
   `mkfs.btrfs` — uncompressed, zlib, LZO and zstd, with 4 KiB nodes so the fs
   tree is deeper than a leaf — packed to their non-zero blocks, beside a
-  manifest of every path's size and CRC-32C. All four read back exactly. A
-  fifth, small image is made with `mkfs.btrfs -u default:sub`, so its default
+  manifest of every path's size and CRC-32C. All four read back exactly.
+  (Stage 12 added two more, `blank` and `root`, which the write path starts
+  from.) A fifth, small image is made with `mkfs.btrfs -u default:sub`, so its default
   subvolume is not the top-level tree; it mounts the subvolume, and its
   top-level file is not visible. Each decoder is also checked against an
   independent implementation: `miniz_oxide`, `lzokay-native` and `ruzstd`.
@@ -2796,7 +2844,8 @@ logic `cargo test`, Miri and a fuzzer can reach.
   from the device, and a cache of two entries still reads every file back.
 * `libs/btrfs-vfs` — the mount: stage 8's `FileSystem` and `Inode` over the
   read path, read-only, holding no lock across I/O. Tested through the trait,
-  and through `Namespace` at `/mnt` on a tmpfs root.
+  and through `Namespace` at `/mnt` on a tmpfs root. Since stage 12 it holds
+  the read-write mount as well, `rw::RwBtrfs`, over `libs/btrfs-write`.
 * `libs/block` — the block core's queue: merging, flush and FUA barriers that
   no request crosses, and deadline scheduling, checked against a model by the
   tests and the `block_queue` fuzz target.
@@ -2828,8 +2877,8 @@ logic `cargo test`, Miri and a fuzzer can reach.
   the kernel takes its number to devfs's registry, wraps the `BlockDevice` it
   finds as the volume's `Device` (whole sectors on one side, byte offsets on
   the other, a bounce buffer only for a read that is not sector-aligned), and
-  mounts read-only: a mount without `MS_RDONLY` is `EROFS`, so nothing is told
-  it has a writable btrfs before stage 12. The mount keeps one inode object per
+  mounted read-only: a mount without `MS_RDONLY` was `EROFS` until stage 12,
+  whose writer it gets now (see stage 12). The mount keeps one inode object per
   inode, found by number, so two names for a file share one page cache; a
   regular file's data lives in the pages the kernel's VMO storage lends it,
   filled from the volume in runs by a `PageSource` that reads with no lock
@@ -2859,13 +2908,16 @@ manifest's; a byte wrong anywhere in the stack is a CRC that differs.
 
 **Still to do, after the exit.**
 
-* A mapping of a file on the mount seeing the pages `read` fills, once file
-  `mmap` lands: the shared-page claim is about btrfs files, and the check
-  joins this stage's when the mapping does.
+* A mapping of a file on the read-only mount. File `mmap` landed on
+  2026-09-13, and a file on stage 12's writable mount maps and faults its
+  pages in from the disk, but the read-only mount's inodes offer no mapping,
+  so `mmap` of a file there is `ENODEV`. What is owed is `Inode::mapping` on
+  it and the check that a mapping sees the pages `read` fills.
 * Device numbers are passed through as btrfs stores them, not yet checked
   against how Linux reports them.
-* A file's hole is tested only by construction: `mkfs.btrfs --rootdir` writes a
-  sparse file's gap out as data.
+* A hole written by btrfs itself: `mkfs.btrfs --rootdir` writes a sparse
+  file's gap out as data, so no fixture has one. Stage 12's writer makes
+  real holes, and its host tests read them back through this reader.
 * Entering subvolumes, and the `subvol=`/`subvolid=` mount options: btrfs stage
   C.
 
@@ -2878,7 +2930,8 @@ after stage 4. The net core was named in `docs/ARCHITECTURE.md` and left
 unstaged, because nothing on the path to `rustc` needs it. Then a sweep of
 busybox's applets over stage 8's root showed how much of a real userland does:
 `ifconfig`, `route`, `netstat`, `ip`, `wget`, and everything that talks over a
-local socket, fail today, because stage 7 refuses every socket call.
+local socket, failed then, because stage 7 refused every socket call. All of
+them run under `cargo xtask test-net` now.
 
 The net core sits beside the block core. It provides sockets in the Linux
 ABI: `AF_UNIX` stream and datagram with descriptor passing (pulled forward to
@@ -2888,15 +2941,17 @@ carrying descriptors, and needing no net core), `AF_INET` and
 interfaces through. Those run over interfaces, routes and a loopback device.
 virtio-net is the first driver. It runs in user mode on stage 10's device
 objects and speaks to the core over a channel, with its buffers in VMOs, as
-virtio-blk speaks to the block core. `/proc/net` (`dev`, `route`, `tcp`, `udp`,
-`unix`) comes with it, rendered in `libs/procfs` like the rest of `/proc`.
+virtio-blk speaks to the block core. `/proc/net` (`arp`, `dev`, `route`,
+`tcp`, `tcp6`, `udp`, `udp6`) comes with it, rendered in `libs/procfs` like
+the rest of `/proc`; `unix` is not there yet.
 
 The byte-level halves are `libs/` code, host-tested and fuzzed before the
 kernel calls them, for the reason the continuous rule gives: a packet is bytes
 someone else chose. They are header parsing, the TCP state machine with its
 retransmission and congestion arithmetic, and netlink message encoding.
 
-**Written ahead so far.** `libs/netwire` has the headers — Ethernet, ARP,
+**Written ahead, before the net core landed on 2026-09-16** (the counts are
+of that day). `libs/netwire` has the headers — Ethernet, ARP,
 IPv4 and IPv6 with its extension headers, ICMPv4, ICMPv6 and Neighbor
 Discovery, UDP and TCP — with 54 host tests and the `netwire_parse` fuzz
 target; see *Written ahead of their stage*. `libs/linux-abi` has the numbers
@@ -2910,14 +2965,11 @@ the socket table — with 45 host tests and the `net_input` fuzz target; see
 *Written ahead of their stage*. `libs/netlink` has the byte-level half of
 netlink over those headers — walking a buffer of messages and the attributes
 after each one, and building replies into a caller's buffer — with 48 host
-tests and the `netlink_walk` fuzz target. virtio-net's device protocol is the
-one that is still to be written.
-*Written ahead of their stage*. virtio-net is written too, in the two halves
+tests and the `netlink_walk` fuzz target. virtio-net is written too, in the two halves
 virtio-blk is split into: `libs/virtio`'s `net` module for the device protocol
 — the configuration block, the feature bits and the header — and
 `libs/virtio-net` for the driver logic over two queues, with 22 host tests and
-the `virtio_net` fuzz target. Netlink message encoding is still to be written,
-and nothing in the kernel calls any of it yet.
+the `virtio_net` fuzz target. The kernel calls all of it now, below.
 
 **Done — the net core, and `AF_INET` and `AF_INET6` sockets.** `kernel/src/net`
 is `libs/net` behind one lock and a task that drives it. Nothing sleeps inside
@@ -2938,7 +2990,7 @@ that spelling. `SOCK_RAW` was `EPERM` for everyone until raw sockets landed
 (below); it still is for a process without `CAP_NET_RAW`.
 
 The boot check uses the loopback and nothing else, so it passes on a machine
-with no network device -- which every machine is until the driver lands. It
+with no network device -- which every machine was until the driver landed. It
 requires a datagram to arrive with its sender's address, a datagram to an empty
 port to earn `ECONNREFUSED` from the unreachable this host sends itself, a
 connection to be made, accepted, to carry bytes both ways and to end as a clean
@@ -2962,8 +3014,8 @@ address's once bound, and only its device's once pinned; `IPPROTO_RAW` takes
 nothing; `ICMP_FILTER` holds back the ICMP types it names. A send builds the
 header, or with `IP_HDRINCL` — always set for `IPPROTO_RAW` — completes the
 program's: the length, the checksum, and an identification and source left at
-zero. `AF_INET6` raw sockets are not in yet, and `AF_PACKET`, which `udhcpc`
-needs, is next. The boot check pings the loopback through a raw socket and
+zero. `AF_INET6` raw sockets and `AF_PACKET`, which `udhcpc` needs, came
+next, below. The boot check pings the loopback through a raw socket and
 requires the request and the reply, each with its header; a second socket
 filtering replies must read the request and not the reply; an `IPPROTO_RAW`
 packet with zeroed fields must reach a UDP socket; and uid 1000 must be
@@ -3080,8 +3132,8 @@ so that every habit and every piece of QEMU documentation carries over. It
 answers ARP and ICMP echo for its own addresses, offers the guest its address
 over DHCP, relays UDP through one ephemeral host socket per flow with
 `10.0.2.3:53` forwarded to the host's resolver, and terminates TCP, re-opening
-each connection as an ordinary host `TcpStream`. Twelve host tests speak to it
-over the socket pair QEMU would use, so the half of the path that is ours is
+each connection as an ordinary host `TcpStream`. Eighteen host tests speak to it
+over the socket QEMU would use, so the half of the path that is ours is
 covered by `cargo test` with no QEMU and no network at all.
 
 **Why it is written rather than QEMU's own.** `-netdev user` is slirp, and
@@ -3092,15 +3144,19 @@ should not ask for. `-netdev tap` needs `CAP_NET_ADMIN` or a setuid helper, and
 the usual escape — a `tap` inside an unprivileged user namespace — is refused
 outright on a host whose `AppArmor` policy blocks those namespaces, as Ubuntu's
 now does. What is always available is QEMU's `dgram` backend, which hands every
-Ethernet frame to a UNIX datagram socket; the other end of that pair is a
-network backend anyone can write, and this is it. No raw socket, no tun device,
-no capability, and the same behaviour on every developer's machine.
+Ethernet frame to a datagram socket; the other end is a network backend anyone
+can write, and this is it. It was a UNIX datagram socket at first, and since
+2026-09-16 it is UDP on the loopback, because Windows has no datagram
+`AF_UNIX`. No raw socket, no tun device, no capability, and the same behaviour
+on every developer's machine.
 
-Two things it does not do, both for the same reason. ICMP echo is answered only
-for `10.0.2.2` and `10.0.2.3`, never forwarded: originating ICMP needs a raw
-socket or a permitted ping group, neither of which a build tool can rely on. And
-there is no IPv6, because a half-answered IPv6 is worse than none — a guest that
-receives a router advertisement will prefer the address in it.
+ICMP echo to the outside was not forwarded at first, because originating ICMP
+needs a raw socket or a permitted ping group. Since 2026-09-16 it is
+(`xtask/src/gateway/icmp.rs`): through `IcmpSendEcho` on Windows, an
+unprivileged ICMP socket where the ping group admits the user, or the host's
+own `ping` where neither does. What it does not do is IPv6, because a
+half-answered IPv6 is worse than none — a guest that receives a router
+advertisement will prefer the address in it.
 
 **Done — the ring the driver will speak over.** `libs/netring` and
 `docs/NET-RING.md` are the memory the kernel shares with a ring-3 network
@@ -3147,7 +3203,8 @@ an IPv6 row overflows.
 virtio-net function an interface. It holds handles and nothing else:
 `libs/virtio-net` drives the device, `libs/netring` speaks the ring,
 `libs/netserve` joins the two, and all three are tested on the host, so the
-program is the eight steps of `docs/NET-RING.md` §7 with a `Step` per failure.
+program is the protocol of `docs/NET-RING.md` §7, with a `Step` exit code for
+each of its eight ways to fail.
 `devmgr` starts it from a second row in its table, and the net ring's `take_up`
 sends PUBLISHED for the device's PCI location before READY goes out, because a
 driver that has not published by the time `devmgr` reports is killed.
@@ -3289,10 +3346,11 @@ now copies as trees. The servers and the scripts that need an interpreter are
 left out.
 
 `test-net` gains a git program with no network outside the guest. It makes a
-repository and a commit, publishes a bare clone for the dumb HTTP protocol with
-busybox's `httpd` on the loopback, and clones it back through
-`git-remote-http` and libcurl. The file and the commit's subject must come
-back.
+repository and a commit, bare-clones it and clones that back over git's
+local transport, then clones a repository `xtask` serves over the dumb HTTP
+protocol at `10.0.2.2`, through `git-remote-http` and libcurl: neither
+busybox on the image has `httpd`. The file and the commit's subject must
+come back both times.
 
 **Done — btop, and the C++ runtime under it.** `ferrousli/tools/ports/libcxx`
 builds LLVM 23.1.1's libc++, libc++abi and libunwind against ferrousli with
@@ -3371,7 +3429,7 @@ every architecture, and by `su`, which reaches `/etc/group` only because a
 
 ---
 
-## Dynamic linking — PIE, `PT_INTERP`, a loader  ·  *39 points, 6 left*
+## Dynamic linking — PIE, `PT_INTERP`, a loader  ·  *39 points, 6 left, and ferrousli's port at ≈ 34*
 
 Placed after *Networking* without a number of its own, for the same reason:
 nothing on the path to `rustc` needs it, since Rust's `std` targets static
@@ -3381,8 +3439,9 @@ static, fixed-address executable. Nearly every binary a distribution ships is a 
 that asks for glibc's `ld-linux`. `kernel/src/syscall/load.rs` used to refuse
 `PT_INTERP` by name; since 2026-09-20 it loads the linker the program asks for
 and enters it, which is the first bullet below. Since the same day there is a
-linker to name — `ferrousli/ld`, proven against a host-built fixture but not
-yet run inside Ferrix itself — which is the second bullet's first version.
+linker to name — `ferrousli/ld`, the second bullet — and since 2026-09-21 it
+runs Debian's glibc busybox inside Ferrix on x86-64, which is the exit's
+second half there.
 The question of 2026-09-16 that put this here was
 whether Steam could run; the answer began with this section, before the
 32-bit ABI, networking and the display stages it also waits on. The 32-bit
@@ -3391,7 +3450,7 @@ of that answer is.
 
 Three parts, in the order they can be tested:
 
-* **The kernel half, 5 points — 4 of them done, 2026-09-20.** `execve` loads
+* **The kernel half, 5 points — done, 2026-09-21.** `execve` loads
   an `ET_DYN` executable at a
   base of its own — Linux's `ELF_ET_DYN_BASE`, unrandomised until stage 13 —
   and applies its relative relocations, which `libs/elf` already reads
@@ -3424,13 +3483,14 @@ Three parts, in the order they can be tested:
   architectures do, and `None` on AArch64, which defines no `ELF_PLATFORM`
   string at all.
 
-  **The kernel half is complete, 5 points — completed 2026-09-21.** Its
+  **The fifth point, 2026-09-21.** Its
   file-mapping self-check now maps a loader-shaped fixed file-backed RX text
   page and RW data page, writes the latter as its `PT_GNU_RELRO` span, and
   `mprotect`s it read-only before proving a later write is refused. That is
   the exact `MAP_FIXED`, `PROT_EXEC` and RELRO pattern a real `ld.so` uses,
   rather than three calls that only happen to exist separately.
-* **ferrousli's loader, 21 points — a first version done, 2026-09-20.** The
+* **ferrousli's loader, 21 points — 18 done: a first version on 2026-09-20,
+  the rest by 2026-09-22.** The
   fifth item of `ferrousli/README.md`: a dynamic loader in Rust, shipped as
   ferrousli's `ld.so` with `libferrousli.so` beside `libferrousli.a`.
   `ferrousli/ld` reads `PT_DYNAMIC`, resolves `DT_NEEDED` libraries (through
@@ -3886,8 +3946,8 @@ The remaining syscall surface, the memory scale, the process spawn path for
 **Exit:** `rustc hello.rs && ./hello` on Ferrix, in CI.
 
 **Met on 2026-09-22,** on nazuna under KVM, with `cargo xtask test-rustc`;
-the CI job `rustc` runs the same command on every push, and its first run on
-GitHub was still to come when this was written. The compiler is not one
+the CI job `rustc` runs the same command on every push, and has passed on
+GitHub since its first run there on 2026-09-22. The compiler is not one
 built here. It is the rust-lang.org release of 1.97.1: a glibc
 position-independent executable whose LLVM is a 190 MiB shared library of
 its own, run by Debian 13's `ld-linux`. It links as it does on any Linux
@@ -3971,9 +4031,10 @@ through the Linux ABI so that Rust's existing compositor crates run unchanged.
   ABI is `/dev/dri/card0` with the DRM/KMS subset a software-rendered
   compositor uses: `GET_RESOURCES`, connectors and modes, dumb buffers
   (`MODE_CREATE_DUMB`, `MODE_MAP_DUMB` served by file-backed `mmap`),
-  `MODE_ADDFB2`, the atomic commit with page flip, and the vblank event read
-  from the descriptor. No GEM import, no PRIME, no render node yet: rendering
-  is on the CPU into a dumb buffer.
+  `MODE_ADDFB2`, the legacy page flip (atomic commit stays refused), and the
+  vblank event read from the descriptor. No GEM import, no PRIME, no render
+  node at this stage: rendering is on the CPU into a dumb buffer. PRIME and
+  the render node came with stage 19's GPU path (`docs/GPU.md` §3).
 * **An input core and a virtio-input driver in ring 3,** exposed as evdev:
   `/dev/input/event*` with `EVIOCGBIT`, `EVIOCGNAME`, `EVIOCGABS` and the
   `input_event` stream, keyboard, mouse and tablet as QEMU offers them.
@@ -4082,14 +4143,14 @@ and a button through QMP's `input-send-event`, and requires each one back out
 of the right node as a finished report; its negative control reports every
 key as `KEY_RESERVED` and must fail the same check. `--display` now brings
 the keyboard and the tablet too, so the compositor `run --display` starts has
-a seat to read when it grows one.
+a seat to read, which it has since grown.
 
 **Estimate, re-baselined by os-f6 on 2026-09-16:** 74 points, from 55. The
 display's iteration 1 took 37, the input iteration is 23 (`docs/INPUT.md`
 §5), and the prerequisites of iteration 2 are 14: nested `epoll` (E1),
 `eventfd2` (E2) and `FIONBIO` (E3), which os-26 landed on 2026-09-16, and
-`card0`'s planes and properties (E4, `docs/DISPLAY.md` §2.3), which the GUI
-session holds.
+`card0`'s planes and properties (E4, `docs/DISPLAY.md` §2.3), which landed
+the same day.
 Nested `epoll`, `FIONBIO` and the plane objects were not counted before
 `docs/INPUT.md` §2 read Smithay's event loop.
 
@@ -4098,9 +4159,9 @@ not required, deferred), atomic commit and per-open windows onto the card
 VMO. E1–E3 (os-26) and E4 are done, so iteration 2's prerequisites are all
 in. E1–E3's paragraphs below record
 what they do not yet do as Linux does: `EPOLLRDHUP` and `EPOLLPRI` are never
-reported, `poll` and epoll waits recheck every 5 ms instead of waking on the
-event (a P2 row in `docs/BACKLOG.md`), and a zero-length write to an eventfd
-returns 0 rather than `EINVAL`.
+reported, and a zero-length write to an eventfd returns 0 rather than
+`EINVAL`. The third, that `poll` and epoll waits rechecked every 5 ms instead
+of waking on the event, was fixed on 2026-09-16 (c2129a68).
 
 **Exit:** in the boot test on x86-64 and AArch64 (ARMv7-A's QEMU machine has
 no virtio-gpu; the DK1's LTDC is a hardware row, P3), a user program opens
@@ -4129,8 +4190,8 @@ added to itself is `EINVAL`, one that would contain itself `ELOOP`, and a chain
 of sets deeper than `EP_MAX_NESTS` `ELOOP`. A regular file or a directory is
 `EPERM`, and `EPOLLEXCLUSIVE` is refused where Linux refuses it. Not yet:
 `EPOLLRDHUP` and `EPOLLPRI` are never reported, because a file's readiness
-does not say either. A wait wakes within 5 ms of its file becoming ready, not
-at once. The boot check makes sets by number and watches pipes. Level,
+does not say either. A wait woke within 5 ms of its file becoming ready, not
+at once, until c2129a68 made it wake on the event. The boot check makes sets by number and watches pipes. Level,
 edge-after-drain, one-shot re-armed by `EPOLL_CTL_MOD`, reporting by turns
 with room for one event, a registration outliving its number through a `dup`,
 a set inside a set and a chain of six are each required. Twenty-two refusals
@@ -4158,9 +4219,10 @@ check covers the initial value, adding up, the semaphore, the ceiling and
 5 ms recheck, as the queue's count of wake-ended waits shows. An
 edge-triggered registration must be reported after a second write although
 the counter stayed readable, and eight refusals are checked. The run is done
-twice with no frame kept. The line reads `eventfd  7 values read back, a
+twice with no frame kept. The line read `eventfd  7 values read back, a
 waiting reader woken by a write, 8 calls refused as Linux refuses them; 0
-frames leaked`. With the write's wake removed, the boot panics with "a waiting
+frames leaked` when this landed; it has since grown the waits the wake work
+checks. With the write's wake removed, the boot panics with "a waiting
 eventfd reader was ended by its recheck, not by the write's wake".
 
 **Done — waits that wake on the event.** `poll`, `ppoll`, `select`,
@@ -4213,12 +4275,15 @@ accepts `DRM_CLIENT_CAP_UNIVERSAL_PLANES`, without which Linux's
 `drm_mode_getplane_res` lists only overlay planes; it implies nothing atomic,
 and atomic stays refused. It lists one primary plane, id 4, whose `GETPLANE`
 gives `XRGB8888`, `possible_crtcs` 1 and the CRTC and framebuffer last shown.
-`OBJ_GETPROPERTIES` gives the plane its immutable `type` enum, property 5, at
+`OBJ_GETPROPERTIES` gives the plane its immutable `type` enum, property 5 when this landed, at
 `Primary`, and the CRTC and the connector no properties; `GETPROPERTY` names
 the values `Overlay`, `Primary` and `Cursor`. Each follows Linux's
 `drm_plane.c`, `drm_mode_object.c` and `drm_property.c`, read before the code
-(`docs/DISPLAY.md` §2.3). Framebuffer ids now start at 32, so no id names two
-objects. The numbers come from the extended `probe/drm.c`. `compositor/blank`
+(`docs/DISPLAY.md` §2.3). Framebuffer ids started at 32, so no id named two
+objects. Since the second screen (2026-09-17) the card has a block of four
+ids per scanout, for up to sixteen — connector, encoder, CRTC and primary
+plane — so the `type` property is 65 and framebuffer ids start at 128; the
+first head's plane is still id 4. The numbers come from the extended `probe/drm.c`. `compositor/blank`
 reads the planes after its modeset as Smithay does, and `cargo xtask
 test-display` requires its marker line to end in `plane <id> Primary` on
 x86-64 and AArch64. With the plane's `type` value set to `Overlay`, the line
@@ -4237,9 +4302,9 @@ the IPC are all written new, in Rust, to Hyprland's shape; the only C library
 allowed is `xkbcommon`.
 
 * **Protocols:** `wl_compositor`, `wl_subcompositor`, `wl_shm`, `wl_seat`
-  with keyboard and pointer (keymaps through `xkbcommon`, the one C library
-  allowed at this stage, built on ferrousli; a Rust keymap compiler is a
-  later row), `xdg_shell` with toplevels and popups, `xdg_decoration`,
+  with keyboard and pointer (the keymap a client compiles with its own
+  `xkbcommon`; as built, the compositor links no C at all, and ships keymaps
+  libxkbcommon printed on a host, in `compositor/xkb`), `xdg_shell` with toplevels and popups, `xdg_decoration`,
   `wlr_layer_shell` for bars; `zwp_linux_dmabuf` withheld until stage 19.
 * **Rendering** on the CPU into stage 17's dumb buffers: damage tracking,
   a pixman-shaped Rust rasteriser (`tiny-skia`), one page flip per frame,
@@ -4248,8 +4313,10 @@ allowed is `xkbcommon`.
   header, every argument type, descriptor passing over `AF_UNIX`, and the
   object map, written from `/usr/share/wayland/wayland.xml` and fuzzed
   (8 points).
-* **XKB data in the image:** a pinned subset of xkeyboard-config, the files
-  xkbcommon's keymap compiler reads (2 points).
+* **XKB data in the image:** planned as a pinned subset of xkeyboard-config,
+  the files xkbcommon's keymap compiler reads (2 points). Built instead as
+  keymaps compiled on a host and committed — `us`, `de`, `de-nodeadkeys`,
+  `fr` and `gb` — so the image carries no XKB data.
 * **Hyprland's shape:** the dwindle and master layouts, workspaces, the
   keybind and dispatcher model (`movefocus`, `movewindow`, `workspace`,
   `killactive`, `togglefloating`, `fullscreen`), gaps and borders, window
@@ -4284,9 +4351,9 @@ search for floating windows, wrap-around), `movewindow` (dwindle's take-out
 and put-back at the focal point, across monitors too), `workspace` and
 `movetoworkspace`(`silent`) with `N`, `+N` and `e+N`, `killactive`,
 `togglefloating` and `fullscreen`, run from a `Bind`. Every call returns the
-changes it caused. Host-tested; where it departs from Hyprland (no cursor, so
-`force_split` 0 takes the second half; pseudotiling; floating `movewindow`)
-its crate docs say so.
+changes it caused. Host-tested; where it departs from Hyprland (no cursor
+then, so `force_split` 0 took the second half, until 2026-09-18 gave it the
+pointer's position; pseudotiling; floating `movewindow`) its crate docs say so.
 
 **Done — the renderer, the last of the pure crates.** `compositor/render`
 draws a frame into the `XRGB8888` dumb buffer stage 17 gives it, on the CPU,
@@ -4301,7 +4368,7 @@ redraw. The everyday gate is pixel comparison on the host: the two pattern
 clients stage 18's tests will run are drawn in code, and a run-length expected
 image of them tiled dwindle-style at 1024x768 is committed and compared byte
 for byte, with a negative control that alters one pixel and requires the check
-to name exactly it. Twenty tests. It holds no Wayland object and no
+to name exactly it. Twenty tests then, 86 now. It holds no Wayland object and no
 descriptor, so it carries over whichever way the compositor-server decision
 goes; its crate docs say how a Smithay `Renderer`/`Frame`/`ImportMem` or a
 server written from scratch wraps it.
@@ -4340,7 +4407,7 @@ be stricter in another: the padding after a string or an array is never
 looked at, because `serialize_closure` steps over it and `wl_closure_queue`,
 the path a queued request takes, allocates its buffer with `malloc` -- so a
 real client's padding is uninitialised heap, and a server requiring it to be
-zero would drop clients at random. Thirty tests; the `wayland_wire` fuzz
+zero would drop clients at random. Thirty tests (31 now); the `wayland_wire` fuzz
 target reads a stranger's bytes against a signature it picks and requires a
 failed read to consume nothing, every string it accepts to be UTF-8 without a
 NUL, no descriptor to be invented, and everything the writer builds to read
@@ -4352,8 +4419,9 @@ of the message it is about to read: every interface's requests and events by
 opcode, their argument types, their `since` versions, which of them are
 destructors, and every enumeration value. It is generated by
 `scripts/gen-wayland-protocol.py` from XML vendored under
-`compositor/protocol/protocols/` -- `wayland.xml`, `xdg-shell.xml`,
-`xdg-decoration-unstable-v1.xml` and `wlr-layer-shell-unstable-v1.xml`, each
+`compositor/protocol/protocols/` -- at first `wayland.xml`, `xdg-shell.xml`,
+`xdg-decoration-unstable-v1.xml` and `wlr-layer-shell-unstable-v1.xml`, and
+56 files by stage 19, each
 carrying its own permissive licence, copied into the generated file. The XML
 is vendored rather than read from the machine because a table built from
 whatever `wayland-protocols` the builder happened to have installed would
@@ -4367,8 +4435,10 @@ are checked against an implementation the way `compositor/wire` is:
 `wayland-scanner`'s output from the same vendored XML for the rest -- and
 prints every interface's version and every message's opcode, name and
 signature. `probe/interfaces.txt` is that output committed, and the tests
-require the generated tables to agree: 31 interfaces and 194 messages, with
-the count asserted so a table quietly dropping messages fails. The one place
+require the generated tables to agree: 31 interfaces and 194 messages when
+this landed, with the count asserted so a table quietly dropping messages
+fails; the count is now checked per interface, over more than a hundred of
+them. The one place
 the two spellings differ is `wl_registry.bind`'s unnamed `new_id`, which
 libwayland expands into the three things it is on the wire and this tree
 keeps as the protocol's single argument; the test folds them back and says
@@ -4405,7 +4475,7 @@ encode and would have seen the socket close with nothing said. The error now
 names `wl_display` where it has no object to name, which is where libwayland
 posts one it cannot attribute.
 
-Twenty-four tests, and the last of them is a real client:
+Twenty-four tests then (the crate has 94 now), and the last of them is a real client:
 `probe/roundtrip.sh` runs `examples/transcript.rs` to get the server's answer
 to the conversation every toolkit opens with, replays it to a real libwayland
 client through `probe/roundtrip.c`, and records what the client made of it.
@@ -4533,8 +4603,10 @@ nothing about this one, and running it found four gaps in an afternoon that
 the pattern client could never have found:
 
 * `wl_data_device_manager` was not offered at all, and the toolkit refused to
-  start without it. The objects are made now and no selection is ever sent,
-  which is exactly what a client sees when nobody has copied anything. A
+  start without it. The objects were made then and no selection was ever
+  sent, which is exactly what a client sees when nobody has copied anything;
+  selections landed later the same day (3ae8af90), the host's clipboard
+  since (`docs/CLIPBOARD.md`), and a drag between clients after that. A
   compositor that advertises it and then does not answer `get_data_device` is
   worse than one that does not advertise it, because the client only finds
   out at its first copy.
@@ -4589,7 +4661,9 @@ mode-setting calls and nothing a compositor does not need. `blank` drives the
 screen through it still -- `cargo xtask test-display` passes unchanged,
 negative control and all -- and `hyprix` drives it too, with two dumb buffers
 drawn into in turn and shown with a page flip. One buffer would tear: the
-card scans out of the same memory the compositor is writing.
+card scans out of the same memory the compositor is writing. That is still
+the software path; since stage 19 the GPU path shows the card the texture
+the GPU drew into instead.
 
 `cargo xtask test-compositor` boots the compositor as init on Ferrix with a
 virtio-gpu and requires the screen. It opened `/dev/dri/card0` through the
@@ -4824,13 +4898,16 @@ workspace, with all seven of Hyprland's group words read as
 `applyDynamicRules` reads them; and `no_close_for` holds a window open,
 with `killactive` saying why rather than doing nothing.
 
-What is left is `no_screen_share`, which does need a second pass --
-drawing the frame again without one surface in it -- the five that belong
-to a GPU this compositor has not got (`immediate`, `no_vrr`,
-`no_auto_hdr`, `tonemap`, `force_rgbx`), `persistent_size`, which is done
-(2026-09-18), and the input ones. `xray` was on this list and is done (2026-09-18): it
-asks for the blur of what is behind the windows, which is the picture the
-renderer's `Backdrop` already keeps, so it needed no second pass at all.
+What is left, of the 55, is read and kept but not acted on:
+`no_screen_share`, which does need a second pass -- drawing the frame again
+without one surface in it; the five that ask a display for what virtio-gpu
+does not offer -- tearing, variable refresh or HDR (`immediate`, `no_vrr`,
+`no_auto_hdr`, `tonemap`, `force_rgbx`); `xray`, `content`, `animation`,
+`idle_inhibit`, `no_anim`, `sync_fullscreen` and `render_unfocused`; and the
+input ones. `persistent_size` is done (2026-09-18). `xray` is half done: the
+layer rule landed on 2026-09-18, since it asks for the blur of what is
+behind a bar, which is the picture the renderer's `Backdrop` already keeps,
+but the window rule of the same name is still only recorded.
 
 **Done — all four tiling layouts, and the options that shape them
 (2026-09-17).** Hyprland 0.56 has four: `dwindle`, `master`, `monocle` and
@@ -5214,19 +5291,22 @@ a rule matches on, as a regular expression.
 Three are drawn. `blur` blurs what is behind a translucent bar, which is what
 makes one look like Hyprland's, and is a rule rather than the default because
 blurring behind an opaque bar costs a pyramid of passes and changes not one
-pixel. `abovelock` draws the surface *over* the session lock -- the whole
+pixel. `above_lock` draws the surface *over* the session lock -- the whole
 reason an on-screen keyboard can be used on a lock screen, and until now the
 compositor drew nothing over a lock at all. `order` decides where a surface
 goes among its own layer's, a higher number nearer the top, with the sort
 stable so that surfaces with the same order keep the sequence their clients
 made them in.
 
-The rest are read, kept and not acted on, and the module says why each:
-`noanim` has nothing to turn off, and `dimaround`, `xray`, `blurpopups` and
-`noscreenshare` each need a second render pass -- they read what is *behind*
-the frame being drawn, or need the frame drawn again without one surface in
-it, and this renderer draws one pass over one canvas. They are parsed rather
-than refused so a person's configuration is not a wall of diagnostics.
+The rest were read, kept and not acted on when this landed, and the module
+says why each. Since then `dim_around` and `xray` are drawn too, from the
+renderer's `Backdrop`. Still only kept: `no_anim`, which has nothing to turn
+off; `blur_popups` and `no_screen_share`, which need a second render pass --
+they read what is *behind* the frame being drawn, or need the frame drawn
+again without one surface in it; and `ignore_alpha` and `animation`. They are
+parsed rather than refused so a person's configuration is not a wall of
+diagnostics. The names are Hyprland 0.56's, in snake case (`above_lock`,
+`dim_around`, `no_anim`); the older run-together spellings are refused.
 
 **Done — drag and drop (2026-09-17).** The most intricate conversation in
 core Wayland, and the one every file manager, browser and editor uses.
@@ -5267,9 +5347,10 @@ person -- and it is drawn.
 `tearing-control-v1`, `fifo-v1` and `commit-timing-v1` are a client saying
 how it would like its frames scheduled. Each is read and recorded and acted
 on by nothing, and the module says why: acting on any of them means choosing
-*when* to put a frame on the screen, and this compositor draws when
-something changed and presents at once, which is what a software renderer
-with no vertical blank can do.
+*when* to put a frame on the screen. When this landed the compositor drew
+when something changed and presented at once; since 2026-09-18 it paces its
+frames to the screen's refresh by its own clock (`hyprix::pace`), which
+still takes no account of what a client asks about timing.
 
 `wp_security_context_manager_v1` is a sandbox handing over a socket of its
 own; the descriptors are taken and closed and the sandbox is named in the
@@ -5284,10 +5365,12 @@ it one after another. That is what a recorder actually needs, and it is what
 a `grim` or an `xdg-desktop-portal` written this year binds. It is answered
 out of the same pixels `zwlr_screencopy_v1` is.
 
-**What is left, and why.** Six of Hyprland's globals are not offered.
-`wl_drm`, `wp_linux_drm_syncobj_manager_v1`, `wp_color_manager_v1` and
-`xwayland_shell_v1` are the GPU path and XWayland, neither of which exists
-on Ferrix yet. `hyprland-input-capture-v1`'s whole conversation is a `libei`
+**What is left, and why.** Six of Hyprland's globals are not offered, and
+`zwp_linux_dmabuf_v1` besides. `wl_drm`, `wp_linux_drm_syncobj_manager_v1`
+and `wp_color_manager_v1` wait on clients that draw on the GPU themselves --
+Mesa on ferrousli and `zwp_linux_dmabuf_v1` -- since the compositor's own
+GPU path (2026-09-19) needs none of them; `xwayland_shell_v1` waits on
+XWayland. `hyprland-input-capture-v1`'s whole conversation is a `libei`
 socket, and there is no `libei`. `hyprland-ctm-control-v1`'s XML has a
 `<description>` with no `summary`, which this `wayland-scanner` refuses, so
 its table could not be checked against libwayland's -- and an unchecked
@@ -5320,7 +5403,7 @@ back through the master, and tells the program when the window is resized.
 grid, printed a row at a time.
 
 `cargo xtask test-compositor` boots a ninth time with `exec-once = /bin/term
-/bin/hyprctl` and requires the picture the terminal makes, pixel for pixel,
+/bin/hyprctl version` and requires the picture the terminal makes, pixel for pixel,
 on x86-64 and on AArch64.
 
 **Done — the eight protocols a real toolkit asked for (2026-09-17).** Not
@@ -5500,10 +5583,12 @@ bind is not firing. `devices` puts each `/dev/input/eventN` in the group its
 capabilities put it in, which is libinput's rule and the one the seat
 already uses. `layers` groups by monitor and then by
 `zwlr_layer_shell_v1`'s four levels, which is how a bar finds its own
-surface. The last two have nothing to list -- there is no `workspacerule`
-keyword yet and no global-shortcuts protocol -- and are answered with an
-empty list rather than `unknown request`, because a bar asking for them
-should get an empty answer and carry on.
+surface. The last two had nothing to list when this landed -- there was no
+`workspace =` keyword and no global-shortcuts protocol -- and were answered
+with an empty list rather than `unknown request`, because a bar asking for
+them should get an empty answer and carry on. Both have lists now:
+`workspacerules` prints every `workspace =` line in Hyprland's shape, since
+the keyword was carried out later the same day.
 
 **And the rest of them (2026-09-17).** `getoption` answers in Hyprland's own
 shape -- the value under the key its *type* names, with a `set` flag saying
@@ -5533,16 +5618,18 @@ readable form and under its own key in JSON, which is Hyprland's shape --
 and a property nothing set is answered with the compositor's own, since that
 is what a person asking "what is this window drawn with" wants to know.
 
-Four say plainly that they act on something this compositor does not have,
-rather than pretending or refusing: `switchxkblayout` (this keymap has one
-layout), `output` (the screens are the card's), `setcursor` (the cursor is
-drawn in code and there is no theme) and `kill` (click-to-kill needs a
-pointer grab).
+Three say plainly that they act on something this compositor does not have,
+rather than pretending or refusing: `output` (the screens are the card's),
+`setcursor` (the cursor is drawn in code and there is no theme) and `kill`
+(click-to-kill needs a pointer grab). `switchxkblayout` was a fourth until
+the keymaps gained layouts to switch between (2026-09-17); it switches them
+now.
 
-That leaves **two** of Hyprland's thirty-eight unanswered: `eval` and
-`repl`, which are its plugin console. They need a scripting runtime, and
-this compositor's plugins are programs it starts and talks to over the
-control socket.
+That left **two** of Hyprland's thirty-eight unanswered, `eval` and `repl`,
+and they are answered now too. They run a line of Lua in the configuration's
+own interpreter, which Hyprland has only with a Lua configuration; against
+the file format this compositor reads, Hyprland answers *eval is only
+supported with the lua config manager*, and so does this.
 
 The second boot of `cargo xtask test-compositor` has the bar, so it is the
 one that asks: a keybind runs `hyprctl --batch binds ; devices ; layers ;
@@ -5706,8 +5793,9 @@ server-side object, as it must be: the compositor makes it, names it in
 `selection`, which is the order libwayland's own clients rely on. A client
 that copies while another holds the selection is given it and the previous
 owner is sent `cancelled`; a client that goes away while holding it clears
-it. Drag-and-drop is the other half of the same four interfaces and is not
-done: nothing here is dragged.
+it. Drag-and-drop is the other half of the same four interfaces; it was not
+done when this landed, and a drag between two clients was carried later the
+same day (`compositor/hyprix/src/dragging.rs`).
 
 `compositor/clip` is `wl-copy` and `wl-paste`, neither of which is on Ferrix:
 `clip copy <text>` offers the text as `text/plain;charset=utf-8` and stays
@@ -5736,10 +5824,10 @@ against the compositor in one process.
 **Begun — plugins (2026-09-17).** A plugin is a program the compositor
 starts and talks to, not a shared object it loads into itself. Hyprland's
 plugins are C++ objects `dlopen`ed into the compositor, which hook its own
-functions; Ferrix's programs are statically linked and there is no dynamic
-loader to `dlopen` with, so a plugin that is a shared object is a plugin that
-cannot be loaded on the operating system this compositor is for. The other
-half of the reason is that a `dlopen`ed plugin takes the compositor down with
+functions. When this was decided Ferrix had no dynamic loader to `dlopen`
+with; ferrousli's loader has had `dlopen` since 2026-09-22, but the
+compositor is still a static binary, which loads nothing. The reason that
+remains is the other half: a `dlopen`ed plugin takes the compositor down with
 it when it dereferences a bad pointer, and one at the end of a socket cannot.
 
 The keyword is Hyprland's: `plugin = /bin/plug` starts the program, after the
@@ -5919,8 +6007,9 @@ to sit between the two. The two passes do *not* use the same offsets --
 `blur1`'s `halfpixel` is four times `blur2`'s -- and using one for both turns
 a bright block into a dark hole with a bright halo, which is what this looked
 like before the shaders were read again. The colour grading (`noise`,
-`contrast`, `brightness`, `vibrancy`) is not done: it changes the blur's
-colour and not its shape.
+`contrast`, `brightness`, `vibrancy`) was not done at first, since it changes
+the blur's colour and not its shape; it followed later the same day, with
+Hyprland's defaults and `vibrancy_darkness` (`compositor/render/src/blur.rs`).
 
 The compositor now reports its slowest frame in microseconds, which is the
 stated bound this stage asks each software effect to have: a number measured
@@ -6026,9 +6115,12 @@ xtask test-compositor` that does it on Ferrix.
 which stage 22 is what finally needs), the second-pass effects
 (`no_screen_share`, which means drawing the frame again without one surface
 in it, and `blur_popups`, which reads what is behind the frame being drawn),
-and `dwindle:precise_mouse_move`, which waits on dropping a dragged window
-back into the tiling. `docs/COMPOSITOR-DAMAGE-HANDOFF.md` §5 keeps that list
-and why each one is where it is.
+`dwindle:precise_mouse_move`, which waits on dropping a dragged window
+back into the tiling, and the window rule `xray`. Mesa on ferrousli and
+`zwp_linux_dmabuf`, for clients that draw on the GPU themselves, come after
+and are priced outside the stage (`docs/BACKLOG.md`, 8 points and 40 or
+more). `docs/COMPOSITOR-DAMAGE-HANDOFF.md` §5 says why each is where it is,
+though its GPU item was written before Path A.
 
 **Exit:** the stage 18 test with animations on, requiring a sequence of
 screendumps to show a window moving along the configured curve with rounded
@@ -6051,8 +6143,9 @@ evidence is:
 * a plugin loaded from `plugin = /bin/plug`, adding a dispatcher a keybind
   presses.
 
-**Where the points stand (reviewed 2026-09-21).** Of the stage's 144, about 48 are
-left. The GPU path's 52 are spent -- Path A landed on 2026-09-19, and what
+**Where the points stand (reviewed 2026-09-23).** Of the stage's 144, about 48 are
+left: XWayland's 40, and about 8 for the small remainder, whose items have
+changed since it was counted, as below. The GPU path's 52 are spent -- Path A landed on 2026-09-19, and what
 is left of that road is `zwp_linux_dmabuf` and a Mesa on ferrousli, for
 clients that render for themselves. What remains of the stage is XWayland,
 40 as a first guess -- `xwayland_shell_v1` on the
@@ -6066,8 +6159,11 @@ drag the border grab had just built. Dwindle's cursor-placed splits followed:
 the layout is given the pointer, and `use_active_for_splits`,
 `force_split = 0` and `smart_split` read it. What is left of it is
 `precise_mouse_move`, which waits on dropping a dragged window back into
-the tiling; `no_screen_share`, which needs a second pass -- `xray` turned out not to,
-since the blur optimisation's backdrop is the picture it asks for; `persistent_size`
+the tiling; `no_screen_share` and `blur_popups`, which need a second pass,
+and the window rule `xray` -- the layer rule turned out not to need one,
+since the blur optimisation's backdrop is the picture it asks for.
+`precise_mouse_move` and `blur_popups` were not in the 8 as it was counted,
+and are of the same size as what landed out of it. `persistent_size`
 followed once that close path existed, and the close path was a bug of its
 own: only a whole connection going took a window out of the layout, so a
 client that closed one of two left the layout tiling a window that was not
@@ -6101,8 +6197,8 @@ ring-3 driver process behind an OS interface layer written for Ferrix, the
 GSP firmware they load, and a userspace that today means glibc-built closed
 libraries -- or Mesa's NVK and Linux's Rust driver Nova, weighed when the
 stage opens. What stage 19's Path A leaves ready for it: the render node,
-the renderer trait and the GPU renderer's shaders, `zwp_linux_dmabuf`, and
-gates that judge a GPU's picture. It depends on the dynamic linking stage,
+the renderer trait and the GPU renderer's shaders, and gates that judge a
+GPU's picture; `zwp_linux_dmabuf` too, once it lands after Path A. It depends on the dynamic linking stage,
 whichever userspace is taken.
 
 **Exit:** the stage 19 exit on real hardware, drawn by the card.
@@ -6141,18 +6237,24 @@ staged until now.
   by name, `dlopen` from the client and from every Steam runtime library,
   `GLIBC_2.x` versions back to the ones a 2012 runtime binary asks for, and
   the `/etc/ld.so.cache`, `LD_PRELOAD` and `LD_LIBRARY_PATH` behaviour the
-  runtime's launcher scripts lean on. 13 points are priced there; Steam adds
+  runtime's launcher scripts lean on. 13 points are priced there, and 10 of
+  them are done on x86-64 (2026-09-21 and 22): `ld-linux` and `libc.so.6` by
+  name with glibc's versions, `dlopen`, and `LD_LIBRARY_PATH`. `LD_PRELOAD`
+  is not there, and `/etc/ld.so.cache` is deliberately not read. Steam adds
   whatever those scripts find missing, unsized.
 * **The container the games run in.** Steam's `pressure-vessel` runs each
   game inside bubblewrap: user, mount and pid namespaces, `pivot_root`,
   `seccomp` filters, and the Chromium helper's own sandbox on top. That is
   stage 13 entire, plus what stage 13 does not name and Steam will:
-  `inotify`, `pidfd_open` and `pidfd_send_signal`, `SO_PEERCRED`,
-  `/proc/<pid>/` fields the runtime reads, and `prctl` beyond what stage 7
+  `inotify`, `pidfd_open` and `pidfd_send_signal` (`SO_PEERCRED` has been
+  answered since 2026-09-13), `/proc/<pid>/` fields the runtime reads, and
+  `prctl` beyond what stage 7
   answers. Stage 13's month, plus 13 points of the rest.
 * **Somewhere to put it.** A Steam library is tens of gigabytes on a
   filesystem that survives a reboot: stage 12, btrfs write, and a root on
-  it rather than an initramfs. Stage 12's "longer".
+  it rather than an initramfs. Both are done (2026-09-21 and 22); what is
+  left is a root volume larger than the 1 GiB `build/root.img` that `cargo
+  xtask run` makes.
 * **XWayland.** The client is an X11 program; stage 19 lists XWayland as
   its largest single gap and this is what finally needs it. An X server on
   the compositor's protocol: Xwayland built on ferrousli with its dynamic
@@ -6197,11 +6299,17 @@ true rather than a plan.
 The rule at the bottom of this file — anything expressible as a pure function of
 bytes goes to `libs/` *before* it is called from the kernel — has a consequence
 worth stating plainly, because otherwise the tree looks further along than it is:
-several crates for stages that have not started are already written and tested.
+several crates for stages that had not started were already written and tested.
 
-They are parsers and data structures, not subsystems. None of them counts
-towards the stage that will consume it, and most are still unreachable from
-the kernel. Four are the exception, which is what the rule was for:
+**Where it stands (2026-09-23).** Every stage the table names has come, and
+every crate in it is used — most by the kernel, `cpio` through `libs/vfs`,
+and `virtio-gpu`, `virtio-net` and `netserve` by their ring-3 drivers — so
+the table is now a record of what was written early. Its test counts are
+brought up to date; the prose is as it was written.
+
+They are parsers and data structures, not subsystems. None of them counted
+towards the stage that would consume it, and when this was written most were
+still unreachable from the kernel. Four were the exception, which is what the rule was for:
 `libs/acpi` as of stage 3 — the MADT walk the interrupt controller needed was
 already written, tested and fuzz-shaped before a line of controller code
 existed — `libs/fdt`, which the ARMv7-A port reached from stage 1 because that
@@ -6217,50 +6325,53 @@ What they buy is that the stage in question begins with its byte-handling
 already fuzz-shaped, host-testable and argued about, rather than being written
 at three in the morning against a machine that reboots on a mistake.
 
-| Crate | Waiting for | Tests |
+| Crate | Written for | Tests |
 |---|---|---|
-| `libs/acpi` | 3, 10 — RSDP, XSDT/RSDT, MADT, FADT fixed fields, GTDT, HPET, MCFG, GIC MSI frames, DMAR, IORT, and the HPET block's capability register with the arithmetic a 32-bit counter needs. No AML, and there will be none. Has its fuzz target. | 77 |
-| `libs/fdt` | Reached at 1 on ARMv7-A — the console, the GIC, the timer's interrupt and the PSCI conduit come from it there, and nothing else describes that machine. Reached at 10 for PCI host bridges `virtio,mmio` devices and `GICv2m` frames; stage 10 is still the rest of it. Has its fuzz target. | 70 |
-| `libs/sync` | Reached at 4 — `SpinLock` and `IrqSpinLock` guard every shared kernel structure and carry the contended counter; `RwSpinLock` is still waiting. Fair by construction, because an unfair lock on a starved core is a stage-14 latency bug nobody will find. | 19 |
-| `libs/vma` | 6 — already backs the vmap arena. The VMA interval tree and the three calls that reshape it (`mmap MAP_FIXED`, `munmap`, `mprotect`). | 60 |
-| `libs/linux-abi` | 7 — syscall numbers, `errno`, `repr(C)` layouts, and which identification register fields grant each Arm `AT_HWCAP` bit. Constants and pure functions of them. Three number tables, one of them 32-bit. The socket numbers and address layouts `AF_UNIX`, IPv4, IPv6 and netlink use, and the fixed headers of the routing messages, from a probe compiled against the UAPI headers. Reached early for stage 17: the DRM/KMS ioctls, capabilities and structure layouts `/dev/dri/card0` answers, checked line by line against `probe/drm.c`'s output at both widths; and the evdev ioctls, codes and layouts `/dev/input/eventN` will answer, against `probe/input.c`'s. | 119 |
+| `libs/acpi` | 3, 10 — RSDP, XSDT/RSDT, MADT, FADT fixed fields, GTDT, HPET, MCFG, GIC MSI frames, DMAR, IORT, and the HPET block's capability register with the arithmetic a 32-bit counter needs. No AML, and there will be none. Has its fuzz target. | 81 |
+| `libs/fdt` | Reached at 1 on ARMv7-A — the console, the GIC, the timer's interrupt and the PSCI conduit come from it there, and nothing else describes that machine. Reached at 10 for PCI host bridges `virtio,mmio` devices and `GICv2m` frames; stage 10 is still the rest of it. Has its fuzz target. | 87 |
+| `libs/sync` | Reached at 4 — `SpinLock` and `IrqSpinLock` guard every shared kernel structure and carry the contended counter; `RwSpinLock` is still waiting. Fair by construction, because an unfair lock on a starved core is a stage-14 latency bug nobody will find. | 27 |
+| `libs/vma` | 6 — backs the vmap arena, and since stage 6 every process's address space. The VMA interval tree and the three calls that reshape it (`mmap MAP_FIXED`, `munmap`, `mprotect`). | 66 |
+| `libs/linux-abi` | 7 — syscall numbers, `errno`, `repr(C)` layouts, and which identification register fields grant each Arm `AT_HWCAP` bit. Constants and pure functions of them. Three number tables, one of them 32-bit. The socket numbers and address layouts `AF_UNIX`, IPv4, IPv6 and netlink use, and the fixed headers of the routing messages, from a probe compiled against the UAPI headers. Reached early for stage 17: the DRM/KMS ioctls, capabilities and structure layouts `/dev/dri/card0` answers, checked line by line against `probe/drm.c`'s output at both widths; and the evdev ioctls, codes and layouts `/dev/input/eventN` answers, against `probe/input.c`'s; and, for stage 19, the `virtgpu` ioctls, against `probe/virtgpu.c`'s. | 126 |
 | `libs/ustack` | 7 — the initial process stack `execve` hands a program: argv, envp and the auxiliary vector, at both pointer widths. Has its fuzz target and its Miri step already. | 22 |
 | `libs/cpio` | 8 — the "newc" reader an initramfs is unpacked from. Borrows, copies nothing, allocates nothing. Has its fuzz target. | 45 |
-| `libs/vfs` | 8 — dentries, mounts, the path walk, open file descriptions, descriptor tables, tmpfs over a page store, initramfs unpacking. Written at the start of its stage rather than ahead of it. Has its fuzz target and its Miri step already. | 59 |
-| `libs/procfs` | Reached at 8 — the text of `/proc`: the `maps` line padded to its name column at both pointer widths, `meminfo`, `status`, `stat` and `mounts`, pinned byte for byte against lines a real Linux printed, and the `maps` parser the kernel's boot check reads its own output back with. No fuzz target: it arranges the kernel's own numbers rather than parsing a stranger's bytes. | 14 |
-| `libs/virtio` | 10 — the split virtqueue as logic over an abstract shared memory, the PCI transport's status protocol, feature negotiation and queue activation, and each device class's own protocol: virtio-blk's in `blk`, virtio-net's in `net`, and, reached early for stage 17, virtio-gpu's 2D control commands and responses in `gpu`, checked against QEMU 9.2.4's header, and virtio-input's configuration queries and events in `input`, checked against Linux 6.8's header with QEMU 9.2.4's still to compare; both fuzzed. Reached at 10 by the boot check's virtio-rng driver. | 135 |
-| `libs/pci` | 10 — configuration space: ECAM geometry, headers, BAR decoding and sizing, both capability lists, MSI-X, the bus walk, virtio's PCI transport, MSI-X messages and the pages of a BAR a driver must not be given. Has its fuzz target and its Miri step already. | 52 |
-| `libs/native-abi` | Reached at 9 — native syscall numbers, handles, rights, signals, `errno` names, `repr(C)` layouts. Constants only, like `libs/linux-abi`, and tested against it. | 13 |
+| `libs/vfs` | 8 — dentries, mounts, the path walk, open file descriptions, descriptor tables, tmpfs over a page store, initramfs unpacking. Written at the start of its stage rather than ahead of it. Has its fuzz target and its Miri step already. | 101 |
+| `libs/procfs` | Reached at 8 — the text of `/proc`: the `maps` line padded to its name column at both pointer widths, `meminfo`, `status`, `stat` and `mounts`, pinned byte for byte against lines a real Linux printed, and the `maps` parser the kernel's boot check reads its own output back with. No fuzz target: it arranges the kernel's own numbers rather than parsing a stranger's bytes. | 33 |
+| `libs/virtio` | 10 — the split virtqueue as logic over an abstract shared memory, the PCI transport's status protocol, feature negotiation and queue activation, and each device class's own protocol: virtio-blk's in `blk`, virtio-net's in `net`, and, reached early for stage 17, virtio-gpu's 2D control commands and responses in `gpu`, checked against QEMU 9.2.4's header, and virtio-input's configuration queries and events in `input`, checked against Linux 6.8's header and QEMU 9.2.4's devices; both fuzzed. Reached at 10 by the boot check's virtio-rng driver. | 164 |
+| `libs/pci` | 10 — configuration space: ECAM geometry, headers, BAR decoding and sizing, both capability lists, MSI-X, the bus walk, virtio's PCI transport, MSI-X messages and the pages of a BAR a driver must not be given. Has its fuzz target and its Miri step already. | 47 |
+| `libs/native-abi` | Reached at 9 — native syscall numbers, handles, rights, signals, `errno` names, `repr(C)` layouts. Constants only, like `libs/linux-abi`, and tested against it. | 14 |
 | `libs/objects` | Reached at 9 — the handle table and the channel message queue, generic over what a handle names; every process's table and every channel is one; and the reachability walk a send makes before it queues an endpoint. Has its fuzz target and its Miri step. | 24 |
-| `libs/btrfs` | 11, 12 — superblock, chunk tree, B-tree nodes, item payloads. Parsing only: no device, no cache, no transactions. | 38 |
+| `libs/btrfs` | 11, 12 — written ahead as superblock, chunk tree, B-tree nodes and item payloads, parsing only; since stage 11 the whole read path, to directories and file contents through a `volume::Device` the caller implements, with its zlib, LZO and zstd decoders. Stage 12's write side is `libs/btrfs-write`, and the VFS half `libs/btrfs-vfs`, both written in their stage. | 167 |
 | `libs/netwire` | Networking — the headers: Ethernet with one 802.1Q tag, ARP, IPv4 with its options, IPv6 with the extension-header walk, ICMPv4, ICMPv6 and Neighbor Discovery, UDP, and TCP with the options a connection negotiates. Parsed without allocation and emitted into the caller's buffer, with each format's checksum verified where it carries one. Has its fuzz target, which requires every header that parses to emit and parse back unchanged. | 54 |
-| `libs/nettcp` | Networking — the TCP state machine over `libs/netwire`'s headers: the eleven states of RFC 9293 in the standard's order, including simultaneous open and simultaneous close; reassembly of what arrives out of order; window scaling and the maximum segment size; selective acknowledgment blocks for what is missing; Nagle, delayed acknowledgments, silly-window avoidance and the zero-window probe; retransmission timing by RFC 6298 with Karn's algorithm and Linux's bounds; and NewReno slow start, congestion avoidance, fast retransmit and fast recovery. It holds no clock, no socket and no address, so its tests drive two connections against each other across a wire the test loses and delays segments on, at a clock it advances by hand. Has its fuzz target. | 30 |
-| `libs/displayctl` | 17 — the control protocol between the kernel's display core and a ring-3 display driver (`docs/DISPLAY.md` §2.2): twelve fixed little-endian messages decoded strictly, reserved bytes included, and the core's side of the conversation as a state machine of fixed capacity that accepts only the reply it is waiting for — an ATTACHED it asked for, the oldest FLIPPED, a DETACHED it asked for — and stays broken once a driver lies. No ring: frames do not move, the card VMO's ranges are the device's backing. Has its fuzz target. | 10 |
-| `libs/inputctl` | 17 — the control protocol between the kernel's input core and a ring-3 input driver (`docs/INPUT.md` §3.2), and evdev's per-open queues (§3.1): six fixed little-endian messages decoded strictly, a HELLO checked field by field in the order it is read, and the core's side of the conversation, which publishes only the event types the input iteration supports, refuses a whole EVENTS holding one event the driver did not declare or a report over 256 events, keeps the key, LED, switch, axis and repeat state as Linux's `input_get_disposition` does, and hands each whole report to the grabbing open or to every open. The queue is Linux evdev's ring as `drivers/input/evdev.c` has it: `SYN_DROPPED` and the newest event when it fills, nothing readable past the last `SYN_REPORT`, the flush a state read makes and the drop a clock change makes, and `read`'s errors in evdev's order, writing `input_event` at either width in the open's clock. Has its fuzz target. | 23 |
-| `libs/virtio-gpu` | 17 — the virtio-gpu 2D driver logic over the same shape of traits `libs/virtio-blk` uses, so it holds no handle: bring-up with only the control queue, one command at a time with its request at the start of a command area and its response at the end, every response checked; and the pipeline from the display core's ATTACH, SCANOUT, FLUSH and DETACH to the device commands each takes, undoing a failed step as far as is safe and never unpinning pages the device may still hold. Its tests drive a frame through to a fake device's screen; its fuzz target checks one reply per request and no unpin without a pin. | 14 |
+| `libs/nettcp` | Networking — the TCP state machine over `libs/netwire`'s headers: the eleven states of RFC 9293 in the standard's order, including simultaneous open and simultaneous close; reassembly of what arrives out of order; window scaling and the maximum segment size; selective acknowledgment blocks for what is missing; Nagle, delayed acknowledgments, silly-window avoidance and the zero-window probe; retransmission timing by RFC 6298 with Karn's algorithm and Linux's bounds; and NewReno slow start, congestion avoidance, fast retransmit and fast recovery. It holds no clock, no socket and no address, so its tests drive two connections against each other across a wire the test loses and delays segments on, at a clock it advances by hand. Has its fuzz target. | 31 |
+| `libs/displayctl` | 17 — the control protocol between the kernel's display core and a ring-3 display driver (`docs/DISPLAY.md` §2.2): twelve fixed little-endian messages, thirteen since stage 19's `ATTACH_OBJECT`, decoded strictly, reserved bytes included, and the core's side of the conversation as a state machine of fixed capacity that accepts only the reply it is waiting for — an ATTACHED it asked for, the oldest FLIPPED, a DETACHED it asked for — and stays broken once a driver lies. No ring: frames do not move, the card VMO's ranges are the device's backing, or since stage 19 a GPU object `ATTACH_OBJECT` names. Has its fuzz target. | 12 |
+| `libs/inputctl` | 17 — the control protocol between the kernel's input core and a ring-3 input driver (`docs/INPUT.md` §3.2), and evdev's per-open queues (§3.1): six fixed little-endian messages decoded strictly, a HELLO checked field by field in the order it is read, and the core's side of the conversation, which publishes only the event types the input iteration supports, refuses a whole EVENTS holding one event the driver did not declare or a report over 256 events, keeps the key, LED, switch, axis and repeat state as Linux's `input_get_disposition` does, and hands each whole report to the grabbing open or to every open. The queue is Linux evdev's ring as `drivers/input/evdev.c` has it: `SYN_DROPPED` and the newest event when it fills, nothing readable past the last `SYN_REPORT`, the flush a state read makes and the drop a clock change makes, and `read`'s errors in evdev's order, writing `input_event` at either width in the open's clock. Has its fuzz target. | 25 |
+| `libs/virtio-gpu` | 17 — the virtio-gpu 2D driver logic over the same shape of traits `libs/virtio-blk` uses, so it holds no handle: bring-up with only the control queue, one command at a time with its request at the start of a command area and its response at the end, every response checked; and the pipeline from the display core's ATTACH, SCANOUT, FLUSH and DETACH to the device commands each takes, undoing a failed step as far as is safe and never unpinning pages the device may still hold. Its tests drive a frame through to a fake device's screen; its fuzz target checks one reply per request and no unpin without a pin. | 16 |
 | `libs/virtio-net` | 10, networking — the virtio-net driver logic over the same traits `libs/virtio-blk` uses, so it holds no handle and does no I/O of its own: bring-up in the order the status protocol fixes, both queues sized and activated before `DRIVER_OK`, a receive queue filled at bring-up and refilled as frames are taken — an empty one drops every frame in silence — a transmit queue whose buffers stay the caller's until the device says it has read them, and a drain that acknowledges the interrupt first so a completion landing during it raises another rather than being lost. It negotiates no checksum, segmentation or merge-buffer feature, which is what makes a received frame one buffer and every header the twelve bytes `VIRTIO_F_VERSION_1` makes it. Has its fuzz target. | 22 |
-| `libs/net` | Networking — the net core over the two above: interfaces and their addresses, one routing table for both families with longest-prefix and metric order, a neighbour cache that answers ARP's question and Neighbor Discovery's the same way and holds the packets waiting for either, IPv4 fragmentation and reassembly bounded so a stranger cannot fill this host's memory, ICMP echo both ways including the unprivileged socket `ping` uses and the unreachable a closed port earns, UDP with Linux's socket-matching order, and TCP connections and listeners. A packet routed to the loopback goes back into the input path instead of out of a driver, so a host talks to itself with no device at all. Has its fuzz target. | 45 |
+| `libs/net` | Networking — the net core over the two above: interfaces and their addresses, one routing table for both families with longest-prefix and metric order, a neighbour cache that answers ARP's question and Neighbor Discovery's the same way and holds the packets waiting for either, IPv4 fragmentation and reassembly bounded so a stranger cannot fill this host's memory, ICMP echo both ways including the unprivileged socket `ping` uses and the unreachable a closed port earns, UDP with Linux's socket-matching order, and TCP connections and listeners. A packet routed to the loopback goes back into the input path instead of out of a driver, so a host talks to itself with no device at all. Has its fuzz target. | 69 |
 | `libs/netring` | Networking — the net ring, `docs/NET-RING.md` in code: the memory the kernel shares with a ring-3 network driver. The block ring's discipline with its allocator removed, because a frame is bounded by the MTU: the data VMO is `entries` slots of a fixed size and a submission names its slot, which takes away the class of bug where a region is reused before its completion — on an untranslated domain, a device writing into somebody else's packet. Private indices, checked reads of the peer's, the want-bell handshake, and every entry checked when it is read; corruption is terminal for the side that sees it. | 32 |
 | `libs/netlink` | Networking — reached already, by the `AF_NETLINK` sockets above: walking a buffer of netlink messages and the attributes after each fixed header, and building replies into a caller's buffer with every length and pad computed rather than taken. The walks refuse a length below the header they introduce, one past the end, and the zero that walks the same message for ever, and every step forward is at least a header wide, so a walk over any bytes ends. Its `netlink_walk` fuzz target requires that, requires what a walk borrows to lie inside the input, and requires anything the builder writes to walk back to what was built. | 48 |
-| `libs/netserve` | Networking — a ring-3 network driver's serve loop, between the net ring and a virtio-net device. The two directions are not symmetrical and that is the design: sending is a copy and a submission, while a frame arrives into a buffer the *device* chose and takes the oldest receive slot the kernel posted, or is dropped if none is waiting. A submission is never taken that cannot be answered, a device buffer goes back the moment its bytes are copied, and frames the device refuses wait in the order the kernel asked for them — a queue and not a single frame, because the ring's head advances for a whole batch and keeping one would drop the rest. | 10 |
+| `libs/netserve` | Networking — a ring-3 network driver's serve loop, between the net ring and a virtio-net device. The two directions are not symmetrical and that is the design: sending is a copy and a submission, while a frame arrives into a buffer the *device* chose and takes the oldest receive slot the kernel posted, or is dropped if none is waiting. A submission is never taken that cannot be answered, a device buffer goes back the moment its bytes are copied, and frames the device refuses wait in the order the kernel asked for them — a queue and not a single frame, because the ring's head advances for a whole batch and keeping one would drop the rest. | 12 |
 
 With the five crates the boot path was built on — `bootinfo`, `elf` (the
-loader's), `frame`, `heap`, `paging` — that is **1101 host unit tests, all
-passing**, plus the doc-tests and the 41 of `xtask` itself.
+loader's), `frame`, `heap`, `paging` — that was **1101 host unit tests** when
+it was first counted, plus the doc-tests and the 41 of `xtask` itself. On
+2026-09-23 the same crates have 1512, every crate under `libs/` together has
+1950, and `xtask` 242.
 
 **The gap this opens, stated rather than hidden.** The continuous rule below
-asks for a fuzz target *and* a Miri run per crate, and `fuzz/` has seventeen:
-`elf_parse`, `frame_alloc`, `ustack_build`, `handle_table`, `vfs_ops`,
-`pci_walk`, `btrfs_read`, `block_queue`, `cpio_parse`, `fdt_parse`,
-`acpi_tables`, `blkring`, `virtio_blk`, `netwire_parse`, `nettcp_state`,
-`net_input` and `netlink_walk`. Every crate in the table above parses bytes
-that came from outside the system — a disk, a firmware table, an archive a stranger built —
-`acpi_tables`, `blkring`, `virtio_blk`, `virtio_net`, `netwire_parse`,
-`nettcp_state` and `net_input`. Every crate in the table above parses bytes that came from
-outside the system — a disk, a firmware table, an archive a stranger built —
-which is precisely the population the rule was written for. The fuzz targets
-still owed — `virtio` and `linux-abi` — are owed *before* the consuming stage
-starts, not when it ships.
+asks for a fuzz target *and* a Miri run per crate, and `fuzz/` has
+twenty-seven: `elf_parse`, `frame_alloc`, `ustack_build`, `handle_table`,
+`vfs_ops`, `pci_walk`, `btrfs_read`, `block_queue`, `blkring`, `virtio_blk`,
+`virtio_net`, `cpio_parse`, `fdt_parse`, `acpi_tables`, `netwire_parse`,
+`nettcp_state`, `net_input`, `netlink_walk`, `hyprconf_parse`, `virtio_gpu`,
+`virtio_input`, `displayctl`, `renderctl`, `inputctl`,
+`virtio_gpu_pipeline`, `virtio_input_driver` and `wayland_wire`. Every crate
+in the table above parses bytes that came from outside the system — a disk,
+a firmware table, an archive a stranger built — which is precisely the
+population the rule was written for. `virtio` was owed a target and has
+several now, since the gpu, input, blk and net targets all drive it. The one
+still owed is `linux-abi`'s, and it is overdue: the rule asks for it
+*before* the consuming stage starts, and stage 7 is long done.
 
 `cpio_parse` asserts more than the absence of a panic: that every name and
 data slice lies inside the archive exactly where the format puts it, that the
@@ -6350,7 +6461,8 @@ arguments.
 Miri was further behind than fuzzing, and the crates the CI file's own comment
 names as the reason the job exists had no step. They have one now: CI
 interprets `libs/elf`, `libs/bootinfo`, `libs/ustack`, `libs/objects`,
-`libs/vfs`, `libs/pci`, `libs/block`, and the three the kernel runs on every
+`libs/vfs`, `libs/pci`, `libs/block`, `libs/blkring`, `libs/native`,
+`libs/virtio-blk`, and the three the kernel runs on every
 allocation and every mapping, `libs/frame`, `libs/heap` and `libs/paging`. None
 of the three had undefined behaviour to report. Their local run times were 541
 seconds for `frame`, 102 for `heap` and 142 for `paging`; the frame
@@ -6379,7 +6491,13 @@ and its distance from POSIX.1-2024, interface by interface, in
 
 ## Continuously, from stage 1
 
-* Every stage's exit criterion joins the CI boot test and stays there.
+* Every stage's exit criterion joins the CI boot test and stays there. As
+  it stands on 2026-09-23, CI runs `test-boot` on all three architectures and
+  `test-rustc`; the exits that need a binary the repository does not carry,
+  a disk judged on the host or a screendump — `test-shell`, `test-vfs`,
+  `test-btrfs`, `test-powerfail`, `test-display`, `test-input`, `test-seat`
+  and `test-compositor` — run in the landing gates of `docs/BACKLOG.md`, not
+  in CI.
 * The assembly allow-list is not added to without an argument in the diff.
 * Anything expressible as a pure function of bytes goes to `libs/` and gets a
   fuzz target and a Miri run — before it is called from the kernel, not after.

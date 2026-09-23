@@ -3,8 +3,9 @@
  *
  * docs/ROADMAP.md as requirements: one per stage, each with its exit
  * criterion, its status, the boot test that verifies it, and the part of
- * the system that satisfies or will satisfy it. Stages 0 to 5 and the
- * ARMv7-A port are done; stage 6 is in progress.
+ * the system that satisfies or will satisfy it. Each stage's status
+ * keyword says whether it is done; docs/ROADMAP.md's "Where it stands" is
+ * the prose this follows.
  */
 package FerrixRoadmap {
     private import ScalarValues::*;
@@ -36,7 +37,7 @@ package FerrixRoadmap {
              * invalidation is reachable. */
         subject os : Ferrix;
         attribute arch : IsaFamily;
-        attribute marker : String = "FERRIX-BOOT-OK stages 1-9";
+        attribute marker : String = "FERRIX-BOOT-OK stages 1-11";
     }
 
     // -----------------------------------------------------------------------
@@ -349,10 +350,10 @@ package FerrixRoadmap {
              * has no -U and cannot open a local socket at all. */
     }
 
-    #planned requirement <'SD'> stageDynamicLinking : Stage {
+    #inProgress requirement <'SD'> stageDynamicLinking : Stage {
         attribute :>> number = 11;
-        attribute :>> status = StageStatus::Planned;
-        attribute :>> size = "39 points";
+        attribute :>> status = StageStatus::InProgress;
+        attribute :>> size = "39 points, 33 spent; ferrousli's port about 34 more";
         doc /* Placed after Networking without a number of its own: nothing
              * on rustc's path needs it, since std targets static musl. The
              * kernel half loads ET_DYN at a base with relative relocations
@@ -364,13 +365,20 @@ package FerrixRoadmap {
              * ferrousli in glibc's place (13). No vDSO, no 32-bit ABI. Exit:
              * a distribution's dynamic glibc busybox runs stage 7's
              * test-shell script with its own ld-linux, then with ferrousli's
-             * loader in glibc's place, on all three architectures. */
+             * loader in glibc's place, on all three architectures.
+             *
+             * The first half is met on all three architectures and the
+             * second on x86-64 (2026-09-21): the kernel half, the loader
+             * with symbol versions, COPY relocations, every TLS form and
+             * dlfcn.h, and a libc.so.6 carrying glibc's versions. Left: 6
+             * points on AArch64 and ARMv7-A, and ferrousli's own port to
+             * them, which the customer put inside this stage. */
     }
 
     #implemented requirement <'S12'> stage12BtrfsWrite : Stage {
         attribute :>> number = 12;
         attribute :>> status = StageStatus::Done;
-        attribute :>> size = "longer";
+        attribute :>> size = "about 60 points, spent";
         doc /* btrfs stage B. Exit, strict: Ferrix writes a tree and host
              * btrfs check finds nothing; then the power-fail test — kill QEMU
              * at a random point inside a transaction, remount, replay, check
@@ -430,13 +438,19 @@ package FerrixRoadmap {
              * machine down. That is also what a second tty would need. */
     }
 
-    #planned requirement <'S16'> stage16Rustc : Stage {
+    #implemented requirement <'S16'> stage16Rustc : Stage {
         attribute :>> number = 16;
-        attribute :>> status = StageStatus::Planned;
-        attribute :>> size = "the goal";
+        attribute :>> status = StageStatus::Done;
+        attribute :>> size = "the goal; about 40 guessed, 8 spent";
         doc /* The remaining syscall surface, the memory scale, the spawn path
              * for rust-lld, a sysroot on btrfs. Exit: rustc hello.rs &&
-             * ./hello on Ferrix, in CI. */
+             * ./hello on Ferrix, in CI.
+             *
+             * Met on 2026-09-22 on x86-64, verified by rustcTest: the
+             * rust-lang.org rustc 1.97.1, run by Debian's ld-linux and
+             * linking through cc and rust-lld, from a btrfs volume mounted
+             * at /data. What was new: the sysroot, the gate, and faults on
+             * a disk file's mapping that fill from the disk. */
     }
 
     #implemented requirement <'S17'> stage17DisplayAndInput : Stage {
@@ -685,10 +699,18 @@ package FerrixRoadmap {
 
     verification jobsSession : JobsSession;
 
-    #planned verification def RustcTest {
-        doc /* The acceptance test itself: rustc hello.rs && ./hello inside
-             * the boot test. */
+    #implemented verification def RustcTest {
+        doc /* The acceptance test itself: cargo xtask test-rustc, and the CI
+             * job rustc. It attaches the sysroot scripts/fetch-rustc-sysroot.sh
+             * makes -- a btrfs volume the kernel mounts at /data -- under
+             * snapshot=on, and zinc runs rustc -vV, rustc hello.rs and
+             * ./hello, each with an exit status of its own. x86-64 only. */
         subject os : Ferrix;
-        objective { verify hostsRustc; }
+        objective {
+            verify hostsRustc;
+            verify stage16Rustc;
+        }
     }
+
+    verification rustcTest : RustcTest;
 }
