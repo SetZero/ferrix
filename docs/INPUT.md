@@ -837,13 +837,14 @@ frame, with the DK1's bus behind it as U-Boot's `usb tree` showed it.
   Keyboard Consumer Control"). The bus is `BUS_USB`.
 * **LEDs:** a keyboard declares the LEDs its output reports hold. `STATUS`
   from the core becomes `SET_REPORT` of each output report holding an LED,
-  sent when the LEDs change.
+  sent when the LEDs change. hyprix writes Caps Lock and Num Lock from the
+  keymap's locked modifiers to every keyboard that declares LEDs, as
+  libinput's compositors do, so the lights follow the keys on the desktop.
 
 ### 7.5 Not done
 
 Absolute axes (tablets, touch screens), multi-touch and force feedback;
-vendor pages (the G502's HID++ report); a compositor that writes the LEDs as
-its lock state changes (hyprix does not yet); bulk and isochronous
+vendor pages (the G502's HID++ report); bulk and isochronous
 transfers, and a full- or low-speed device on a root port, which
 EHCI hands to its companion OHCI controller -- not reachable on a DK board,
 whose root port has the hub. A process writing the 115200-baud console flat
