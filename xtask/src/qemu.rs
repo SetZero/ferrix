@@ -1803,7 +1803,7 @@ mod tests {
         assert!(devmgr_problem(&failed).is_some(), "one failed");
         let absent = lines(&["  devmgr   not started: the image carries no /sbin/devmgr"]);
         assert_eq!(devmgr_problem(&absent), None, "an image without devmgr");
-        let silent = lines(&["FERRIX-BOOT-OK stages 1-11"]);
+        let silent = lines(&["FERRIX-BOOT-OK stages 1-12"]);
         assert!(devmgr_problem(&silent).is_some(), "no line at all");
     }
 
@@ -1814,7 +1814,7 @@ mod tests {
                 &format!(
                     "  pci      2 functions, 1 virtio transports, {count} entropy bytes read by DMA, 1 completions by MSI-X"
                 ),
-                "FERRIX-BOOT-OK stages 1-11",
+                "FERRIX-BOOT-OK stages 1-12",
             ]);
             assert_eq!(entropy_problem(&boot), None, "{count} bytes");
         }
@@ -1824,7 +1824,7 @@ mod tests {
     fn a_boot_that_read_none_or_never_said_fails() {
         let none = lines(&["  pci      1 virtio transports, 0 entropy bytes read by DMA"]);
         assert!(entropy_problem(&none).is_some(), "zero bytes");
-        let silent = lines(&["FERRIX-BOOT-OK stages 1-11"]);
+        let silent = lines(&["FERRIX-BOOT-OK stages 1-12"]);
         assert!(entropy_problem(&silent).is_some(), "no line at all");
     }
 
@@ -1858,7 +1858,7 @@ mod tests {
             "  iommu    0 VT-d units, 1 SMMUv3s; 1 PCI functions behind one, 0 bypassing, 1 unresolved",
         ]);
         assert!(iommu_problem(&unresolved).is_some(), "one unresolved");
-        let silent = lines(&["FERRIX-BOOT-OK stages 1-11"]);
+        let silent = lines(&["FERRIX-BOOT-OK stages 1-12"]);
         assert!(iommu_problem(&silent).is_some(), "no line at all");
     }
 
@@ -1875,7 +1875,7 @@ mod tests {
             fault_problem(Arch::AArch64, &none).is_some(),
             "nothing faulted"
         );
-        let silent = lines(&["FERRIX-BOOT-OK stages 1-11"]);
+        let silent = lines(&["FERRIX-BOOT-OK stages 1-12"]);
         assert!(
             fault_problem(Arch::X86_64, &silent).is_some(),
             "no line at all"

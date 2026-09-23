@@ -11,7 +11,7 @@ fn every_command() -> impl Iterator<Item = &'static Command> {
 
 /// The log a kernel that passes every command would write.
 fn passing_log() -> Vec<String> {
-    let mut log = owned(&["FERRIX-BOOT-OK stages 1-11"]);
+    let mut log = owned(&["FERRIX-BOOT-OK stages 1-12"]);
     for (index, command) in every_command().enumerate() {
         log.push(format!("  init     command {index}: {}", command.argv[0]));
         match command.expect {
@@ -247,7 +247,7 @@ const APPLETS_ON_X86_64: &[(usize, &[&str])] = &[
 /// A log of the applets alone, numbered after the criterion's commands, each
 /// printing `output` and exiting with its expected status.
 fn applets_log(outputs: &[(usize, &[&str])]) -> Vec<String> {
-    let mut log = owned(&["FERRIX-BOOT-OK stages 1-11"]);
+    let mut log = owned(&["FERRIX-BOOT-OK stages 1-12"]);
     for (index, output) in outputs {
         let command = &APPLETS[index - COMMANDS.len()];
         log.push(format!("  init     command {index}: {}", command.argv[0]));
@@ -331,7 +331,7 @@ fn kernel_lines_about_commands_are_read() {
 #[test]
 fn a_log_splits_into_each_commands_output_and_unanswered_calls() {
     let log = owned(&[
-        "FERRIX-BOOT-OK stages 1-11",
+        "FERRIX-BOOT-OK stages 1-12",
         "  init     /bin/busybox is 857 KiB, running 2 commands",
         "  init     command 0: ls -R /proc",
         "  syscall  Getdents64 (number 217) answered ENOSYS",

@@ -26,8 +26,8 @@ rustc-gate: hello from rustc on Ferrix
 [The roadmap](docs/ROADMAP.md) is the authority; its *Where it stands* is
 kept current with every landing. In short:
 
-* **The kernel.** Stages 0–11 are in the boot test on all three
-  architectures, which ends in `FERRIX-BOOT-OK stages 1-11`: UEFI hand-off,
+* **The kernel.** Stages 0–12 are in the boot test on all three
+  architectures, which ends in `FERRIX-BOOT-OK stages 1-12`: UEFI hand-off,
   a buddy allocator and kernel heap, higher-half virtual memory with no
   mapping both writable and executable, traps, interrupts and timers, SMP
   with TLB shootdown and grace periods, preemptive tasks under an EEVDF fair

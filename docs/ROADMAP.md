@@ -26,10 +26,8 @@ its current state. A dated forecast is made only from a fresh velocity count;
 estimates are arithmetic, not promises.
 
 **Where it stands (reviewed 2026-09-23):** stages 0–12 and 16 are done, and
-so are networking, 17 and 18. Stages 0–11 are in the boot test on all three
-architectures, and the boot marker reads `FERRIX-BOOT-OK stages 1-11`; stage
-12's write check runs before the marker in every boot as well, but the
-marker was not moved when that stage was called done.
+so are networking, 17 and 18. Stages 0–12 are in the boot test on all three
+architectures, and the boot marker reads `FERRIX-BOOT-OK stages 1-12`.
 ARMv7-A joined after stage 3 — see *ARMv7-A* after stage 4 — and has run on
 hardware: an STM32MP157D-DK1 at two cores reached `FERRIX-BOOT-OK stages
 1-9` and ran stage 7's script at `fd4442e`. Stage 7's exit is
@@ -3846,6 +3844,11 @@ flush plus a random subset of what came after; two hundred scenarios cut at
 twenty-five points each are opened, replayed, checked for consistency and
 for any completed promise rolled back. `scripts/btrfs-check-writer.sh` runs
 it at that size, and `cargo test` a small one.
+
+**Since the exit — the marker.** The boot marker moved to `FERRIX-BOOT-OK
+stages 1-12` on 2026-09-23. Stage 12's write check had run before it in
+every boot since the exit; the marker was simply left behind when the stage
+was called done.
 
 **Since the exit — `/` on btrfs.** `cargo xtask run` and `run-compositor`
 attach `build/root.img`, a 1 GiB volume made from the `root` fixture the

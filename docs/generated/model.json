@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "digest": "3f1ffc9b75256e8d2e17d439e3ca45624a2b08ff3a3893fba9650253c232e39c",
+  "digest": "32c596ce7d45fb7ed31df84fcc8fda9fe340d86b5d83c7cd8d78563f6ed7d9f6",
   "files": [
     {
       "path": "docs/sysml/00-lifecycle.sysml",
@@ -14840,7 +14840,7 @@
               "qualifiedName": "FerrixRoadmap::BootTest::marker",
               "kind": "attribute",
               "type": "String",
-              "value": "\"FERRIX-BOOT-OK stages 1-11\"",
+              "value": "\"FERRIX-BOOT-OK stages 1-12\"",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
                 "line": 40

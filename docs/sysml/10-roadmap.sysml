@@ -37,7 +37,7 @@ package FerrixRoadmap {
              * invalidation is reachable. */
         subject os : Ferrix;
         attribute arch : IsaFamily;
-        attribute marker : String = "FERRIX-BOOT-OK stages 1-11";
+        attribute marker : String = "FERRIX-BOOT-OK stages 1-12";
     }
 
     // -----------------------------------------------------------------------
