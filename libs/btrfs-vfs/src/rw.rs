@@ -31,6 +31,16 @@
 //! lands a mapped write reaches the disk only if something writes the same
 //! bytes through `write`.
 //!
+//! # What is written stays
+//!
+//! The dirty pages and the length a write gave are in the inode object, and
+//! nothing else keeps that object: the VFS holds a bounded number of names,
+//! and a file closed and not looked up again loses its last reference. So
+//! the mount holds every object with dirty pages itself, from the write that
+//! dirtied the first until the writeback, as Linux's list of dirty inodes
+//! does. Without that, a build that closes an object file and opens it
+//! again to archive it read back whatever the last commit had written.
+//!
 //! # Deleting what is still open
 //!
 //! Unlinking a file that something still holds leaves the inode with an
@@ -81,6 +91,10 @@ struct Shared<D> {
     clock: Arc<dyn Clock>,
     /// Every live inode object, by inode number.
     nodes: SpinLock<BTreeMap<u64, Weak<Node<D>>>>,
+    /// Every inode object with pages not yet written back, held so that
+    /// they outlive every other reference: see "What is written stays". An
+    /// object's entry is made and taken away under its own `dirty` lock.
+    held: SpinLock<BTreeMap<u64, Arc<Node<D>>>>,
     /// Inodes with no names left whose last reference has gone.
     evictable: SpinLock<Vec<u64>>,
     /// Bytes written into the page cache since the last commit.
@@ -134,6 +148,7 @@ impl<D: WriteHandle> RwBtrfs<D> {
             storage,
             clock,
             nodes: SpinLock::new(BTreeMap::new()),
+            held: SpinLock::new(BTreeMap::new()),
             evictable: SpinLock::new(Vec::new()),
             pending: SpinLock::new(0),
             structural: SpinLock::new(false),
@@ -210,6 +225,8 @@ impl<D: WriteHandle> Shared<D> {
 /// One file, directory or link of a writable mount.
 struct Node<D> {
     shared: Arc<Shared<D>>,
+    /// This object, for the mount to hold while it has dirty pages.
+    me: Weak<Node<D>>,
     ino: u64,
     kind: FileType,
     /// What `stat` answers, kept in step with every change made through this
@@ -240,8 +257,9 @@ impl<D: WriteHandle> Node<D> {
         let item = shared.with(|volume| volume.inode(ino))?.ok_or(Errno::EIO)?;
         let sector = shared.with(|volume| Ok(volume.sectorsize()))?;
         let meta = crate::metadata(ino, &item, sector)?;
-        let built = Arc::new(Node {
+        let built = Arc::new_cyclic(|me| Node {
             shared: Arc::clone(shared),
+            me: Weak::clone(me),
             ino,
             kind: meta.kind,
             meta: SpinLock::new(meta),
@@ -304,7 +322,15 @@ impl<D: WriteHandle> Node<D> {
     /// so only pages that are certainly present are read — which every dirty
     /// page is, because something wrote it.
     fn write_back(&self, volume: &mut WriteVolume<D>) -> Result<()> {
-        let dirty = core::mem::take(&mut *self.dirty.lock());
+        let (dirty, held) = {
+            let mut dirty = self.dirty.lock();
+            // Written back from here on, so the mount lets go; a write after
+            // this marks its pages under the same lock and holds it again.
+            let held = self.shared.held.lock().remove(&self.ino);
+            (core::mem::take(&mut *dirty), held)
+        };
+        // Never the last reference: whoever called this holds one.
+        drop(held);
         if dirty.is_empty() {
             return Ok(());
         }
@@ -542,6 +568,14 @@ impl<D: WriteHandle> Inode for Node<D> {
             let first = at / PAGE_SIZE;
             let last = end.saturating_sub(1) / PAGE_SIZE;
             let mut dirty = self.dirty.lock();
+            if dirty.is_empty()
+                && let Some(me) = self.me.upgrade()
+            {
+                // Whatever this replaces is this object, and not its last
+                // reference; dropped after the map's lock is let go.
+                let replaced = self.shared.held.lock().insert(self.ino, me);
+                drop(replaced);
+            }
             for page in first..=last {
                 let _ = dirty.insert(page);
             }
