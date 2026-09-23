@@ -10,3 +10,20 @@ rustflags = ["-C", "link-self-contained=yes", "-C", "target-feature=+crt-static"
 [target.aarch64-unknown-linux-musl]
 linker = "rust-lld"
 rustflags = ["-C", "link-self-contained=yes", "-C", "target-feature=+crt-static", "-C", "relocation-model=static"]
+
+# ARMv7-A takes the same flags. Hard float rather than the soft-float target
+# the ARM loader and zinc are built for: the root config gives that one the
+# loader's linker script, which cargo would merge into these flags, and a
+# compositor does its blending in floating point.
+[target.armv7-unknown-linux-musleabihf]
+linker = "rust-lld"
+rustflags = ["-C", "link-self-contained=yes", "-C", "target-feature=+crt-static", "-C", "relocation-model=static"]
+
+# rav1d, the AV1 decoder `pattern` plays video with, asks for a feature gate on
+# 32-bit ARM only: `stdarch_arm_feature_detection`, for the CPU probe its
+# `cpu.rs` runs whether or not its assembly is built (it is not, here). The
+# probe is `std::arch::is_arm_feature_detected!`, which reads the auxiliary
+# vector's HWCAP words. Naming the crate lets that one crate use it on a
+# stable compiler and no other; on x86-64 and AArch64 it asks for nothing.
+[env]
+RUSTC_BOOTSTRAP = "rav1d"

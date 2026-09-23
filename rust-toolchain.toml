@@ -30,4 +30,8 @@ targets = [
     # initramfs, linked by rust-lld against the target's own musl.
     "x86_64-unknown-linux-musl",
     "aarch64-unknown-linux-musl",
+    # The compositor's programs on ARMv7-A (`compositor/.cargo/config.toml`):
+    # hard float, since a compositor blends pixels in floating point and soft
+    # float would make every one of those operations a library call.
+    "armv7-unknown-linux-musleabihf",
 ]

@@ -1037,7 +1037,7 @@ fn qemu_command(
     let window = crate::window::choose(&binary, args)?;
     // Which console the person means: the card, on a machine that has one and
     // a boot that asked for it. `attach_display` puts it there.
-    let card = (args.display && arch != Arch::Armv7a).then(|| crate::display::device_id(0));
+    let card = args.display.then(|| crate::display::device_id(0));
     // Whether the card on the bus will be the 3D one, which the backend has
     // to know: `attach_display` asks the same question of the same QEMU and
     // gets the same answer.
@@ -1232,10 +1232,16 @@ fn attach_clipboard(command: &mut Command, arch: Arch, args: &Args) {
 /// The display of iteration 1 (`docs/DISPLAY.md` §3), when `--display` or
 /// `test-display` asks for it: a virtio-gpu device beside the firmware's own
 /// head, so the panic screen keeps the head it has, through the IOMMU like
-/// every other PCI virtio device; and QMP, when a port was picked for it.
-/// ARMv7-A's machine has no virtio-gpu.
+/// every other PCI virtio device except on ARMv7-A, where U-Boot resets when
+/// a device offers `VIRTIO_F_ACCESS_PLATFORM` (see [`attach_rng`]); and QMP,
+/// when a port was picked for it.
 fn attach_display(command: &mut Command, arch: Arch, args: &Args, binary: &Path) {
-    if args.display && arch != Arch::Armv7a {
+    let flags = if arch == Arch::Armv7a {
+        "disable-legacy=on"
+    } else {
+        "disable-legacy=on,iommu_platform=on"
+    };
+    if args.display {
         // One device a screen. QEMU gives each its own console, which is
         // what a screendump names and what makes the guest's second card a
         // second monitor; a second *output* of one device stays disabled
@@ -1259,7 +1265,7 @@ fn attach_display(command: &mut Command, arch: Arch, args: &Args, binary: &Path)
                 // 1024x768 is what every judged boot's pictures are of;
                 // `run-compositor` says another.
                 &format!(
-                    "{card},id={id}{slot},disable-legacy=on,iommu_platform=on,xres={wide},yres={tall}",
+                    "{card},id={id}{slot},{flags},xres={wide},yres={tall}",
                     card = gl_card,
                     id = crate::display::device_id(index),
                     wide = args.size.map_or(1024, |size| size.0),
@@ -1275,12 +1281,9 @@ fn attach_display(command: &mut Command, arch: Arch, args: &Args, binary: &Path)
     // `--display` brings them too: a screen with no keyboard and no pointer
     // is not a machine anybody drives, and the compositor `run --display`
     // starts wants a seat.
-    if (args.input || args.display) && arch != Arch::Armv7a {
+    if args.input || args.display {
         for kind in ["virtio-keyboard-pci", "virtio-tablet-pci"] {
-            let _ = command.args([
-                "-device",
-                &format!("{kind},disable-legacy=on,iommu_platform=on"),
-            ]);
+            let _ = command.args(["-device", &format!("{kind},{flags}")]);
         }
     }
     // The head firmware draws on, created after the cards so that QEMU's

@@ -75,7 +75,7 @@ pub(crate) fn target(arch: Arch) -> Option<&'static str> {
     match arch {
         Arch::X86_64 => Some("x86_64-unknown-linux-musl"),
         Arch::AArch64 => Some("aarch64-unknown-linux-musl"),
-        Arch::Armv7a => None,
+        Arch::Armv7a => Some("armv7-unknown-linux-musleabihf"),
     }
 }
 
