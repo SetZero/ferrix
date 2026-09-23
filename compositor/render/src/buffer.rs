@@ -239,6 +239,11 @@ impl<'a> Target<'a> {
         self.data
     }
 
+    /// The bytes, to write into.
+    pub(crate) fn data_mut(&mut self) -> &mut [u8] {
+        self.data
+    }
+
     /// The `len` bytes of row `y` from column `x`.
     pub(crate) fn span_mut(&mut self, x: u32, y: u32, len: usize) -> Option<&mut [u8]> {
         let start = u64::from(y) * u64::from(self.stride) + u64::from(x) * 4;

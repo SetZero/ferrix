@@ -17,7 +17,9 @@
 //!   [`Damage`] it is given and each recording what it wrote.
 //! * [`Canvas::present`] copies the damaged part of the frame into a
 //!   [`Target`], the mapping of a dumb buffer: width, height and the stride
-//!   `MODE_CREATE_DUMB` returned.
+//!   `MODE_CREATE_DUMB` returned. [`Canvas::present_transformed`] does the
+//!   same for a monitor that is turned (`monitor = ..., transform, N`),
+//!   putting each pixel where the [`transform`] sends it.
 //! * A [`Surface`] is a client's pixels as `wl_shm` hands them over,
 //!   [`Format::Argb8888`] (premultiplied, drawn with source-over) or
 //!   [`Format::Xrgb8888`] (opaque, copied).
@@ -101,6 +103,7 @@ mod gradient;
 mod paint;
 mod patterns;
 mod scratch;
+pub mod transform;
 
 // Public, and not only for this crate's own tests: `compositor/term` draws
 // its expected image with its own font and its own grid, and the images live
@@ -125,6 +128,7 @@ pub use frame::{
 pub use gradient::Gradient;
 pub use paint::Painter;
 pub use patterns::Pattern;
+pub use transform::Transform;
 
 /// What the renderer could not do.
 #[derive(Debug, Clone, PartialEq, Eq)]
