@@ -230,6 +230,11 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
     let mut devices = if options.headless.is_some() {
         Devices::default()
     } else {
+        // A USB host enumerates its hub and devices after the compositor
+        // has started as init, and nothing here notices a device that comes
+        // later. So the list is looked at until it has held still for a
+        // second, or five have passed: a machine with no USB waits one.
+        settle_input_nodes();
         match Devices::open() {
             Ok((devices, refused)) => {
                 for reason in refused {
@@ -5694,4 +5699,22 @@ pub(crate) fn start(
         .spawn()
         .map(|child| child.id())
         .map_err(|error| error.to_string())
+}
+
+/// Wait until the `/dev/input/event*` nodes have stopped changing for a
+/// second, or five seconds have passed.
+fn settle_input_nodes() {
+    use std::time::{Duration, Instant};
+    let count = || compositor_evecho::event_nodes().map_or(0, |nodes| nodes.len());
+    let start = Instant::now();
+    let mut seen = count();
+    let mut since = Instant::now();
+    while since.elapsed() < Duration::from_secs(1) && start.elapsed() < Duration::from_secs(5) {
+        std::thread::sleep(Duration::from_millis(100));
+        let now = count();
+        if now != seen {
+            seen = now;
+            since = Instant::now();
+        }
+    }
 }
