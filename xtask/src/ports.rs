@@ -23,10 +23,9 @@
 //! `build.sh` for busybox does. There is no Windows build of them yet.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use crate::paths::Arch;
-use crate::{Error, Result, cargo};
+use crate::{Error, Result};
 
 /// The ports `cargo xtask ports` builds, in order, each a directory of
 /// `ferrousli/tools/ports/` holding a `build.sh`. `libcxx` is the C++ runtime
@@ -288,25 +287,29 @@ pub(crate) fn build(arch: Arch) -> Result<()> {
     let root = root()?;
     let ferrousli = crate::paths::workspace_root().join("ferrousli");
     let ports = ports_for(arch);
-    for port in ports {
-        let mut command = Command::new("bash");
-        let _ = command
-            .current_dir(&ferrousli)
-            .arg(format!("tools/ports/{port}/build.sh"))
-            .args(["--arch", arch.name()])
-            .env("FERRIX_PORTS", &root);
-        // ferrousli gets a directory of its own inside the caller's target
-        // directory, as it does for busybox.
-        match std::env::var_os("CARGO_TARGET_DIR").filter(|dir| !dir.is_empty()) {
-            Some(dir) => {
-                let _ = command.env("CARGO_TARGET_DIR", Path::new(&dir).join("ferrousli"));
-            }
-            None => {
-                let _ = command.env_remove("CARGO_TARGET_DIR");
-            }
-        }
-        cargo::run(command, &format!("ferrousli/tools/ports/{port}/build.sh"))?;
+    // One build of them all, in order, since each later port reads what an
+    // earlier one installed: a build `FERRIX_BUILDS` may record or replay,
+    // reading the sources the scripts would otherwise download from
+    // `root/src`, and making the tree images carry, `root/<arch>`.
+    let script = format!(
+        "set -e\nfor port in {}; do bash \"tools/ports/$port/build.sh\" --arch {}; done",
+        ports.join(" "),
+        arch.name()
+    );
+    let mut build = crate::builds::Build::bash(
+        format!("ferrousli/tools/ports ({}) for {arch}", ports.join(", ")),
+        &ferrousli,
+    )
+    .args(["-c", &script])
+    .env("FERRIX_PORTS", &root)
+    .reads_dir(root.join("src"))
+    .output(root.join(arch.name()));
+    // ferrousli gets a directory of its own inside the caller's target
+    // directory, as it does for busybox.
+    if let Some(dir) = std::env::var_os("CARGO_TARGET_DIR").filter(|dir| !dir.is_empty()) {
+        build = build.env("CARGO_TARGET_DIR", Path::new(&dir).join("ferrousli"));
     }
+    build.run()?;
     println!(
         "\nbuilt {} for {arch} under {}",
         ports.join(", "),

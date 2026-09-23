@@ -154,7 +154,9 @@ impl Build {
         self
     }
 
-    /// A file the build makes that the caller will read.
+    /// A file the build makes that the caller will read, or a directory,
+    /// which is kept, compared and put back whole: its links as links, its
+    /// files with their modes.
     #[must_use]
     pub(crate) fn output(mut self, file: impl Into<PathBuf>) -> Build {
         self.outputs.push(file.into());
@@ -336,6 +338,97 @@ fn key(build: &Build, places: &Places) -> Result<String> {
         ));
     }
     Ok(sha256::hex(description.as_bytes()))
+}
+
+/// The SHA-256 of what an output is: a file's bytes, or for a directory the
+/// name, kind, mode and digest of everything in it, in name order.
+fn digest_of_output(path: &Path) -> Result<String> {
+    let meta = std::fs::symlink_metadata(path)
+        .map_err(|error| Error::new(format!("reading {}: {error}", path.display())))?;
+    if meta.file_type().is_symlink() {
+        let target = std::fs::read_link(path)?;
+        return Ok(sha256::hex(format!("link {}", text(target.as_os_str())).as_bytes()));
+    }
+    if !meta.is_dir() {
+        return digest_of(path);
+    }
+    let mut entries: Vec<PathBuf> = std::fs::read_dir(path)?
+        .map(|entry| entry.map(|entry| entry.path()))
+        .collect::<std::io::Result<_>>()?;
+    entries.sort();
+    let mut listing = String::new();
+    for entry in entries {
+        let name = entry
+            .file_name()
+            .map(|name| text(name))
+            .unwrap_or_default();
+        listing.push_str(&format!(
+            "{name} {:o} {}\n",
+            mode_of(&entry),
+            digest_of_output(&entry)?
+        ));
+    }
+    Ok(sha256::hex(listing.as_bytes()))
+}
+
+/// A file's permission bits, or zero where there are none to read.
+fn mode_of(path: &Path) -> u32 {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::symlink_metadata(path).map_or(0, |meta| meta.permissions().mode() & 0o7777)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        0
+    }
+}
+
+/// Copy `from`, a file, a link or a directory, to `to`, replacing whatever is
+/// there.
+fn copy_output(from: &Path, to: &Path) -> Result<()> {
+    let failed = |error: std::io::Error| {
+        Error::new(format!("copying {} to {}: {error}", from.display(), to.display()))
+    };
+    if let Ok(meta) = std::fs::symlink_metadata(to) {
+        if meta.is_dir() {
+            std::fs::remove_dir_all(to).map_err(failed)?;
+        } else {
+            std::fs::remove_file(to).map_err(failed)?;
+        }
+    }
+    if let Some(parent) = to.parent() {
+        std::fs::create_dir_all(parent).map_err(failed)?;
+    }
+    let meta = std::fs::symlink_metadata(from).map_err(failed)?;
+    if meta.file_type().is_symlink() {
+        let target = std::fs::read_link(from).map_err(failed)?;
+        return link(&target, to).map_err(failed);
+    }
+    if meta.is_dir() {
+        std::fs::create_dir_all(to).map_err(failed)?;
+        for entry in std::fs::read_dir(from).map_err(failed)? {
+            let entry = entry.map_err(failed)?;
+            copy_output(&entry.path(), &to.join(entry.file_name()))?;
+        }
+        return Ok(());
+    }
+    let _ = std::fs::copy(from, to).map_err(failed)?;
+    Ok(())
+}
+
+/// A symbolic link at `to` reading `target`.
+#[cfg(unix)]
+fn link(target: &Path, to: &Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(target, to)
+}
+
+/// A symbolic link, which only a Unix host makes: recording and replaying are
+/// for the Linux host that makes and boots the images.
+#[cfg(not(unix))]
+fn link(_target: &Path, _to: &Path) -> std::io::Result<()> {
+    Err(std::io::Error::other("a symbolic link cannot be made on this host"))
 }
 
 /// The SHA-256 of a file's bytes.
@@ -540,7 +633,7 @@ fn record(directory: &Path, build: &Build) -> Result<()> {
     for output in &build.outputs {
         outputs.push((
             places.portable(&text(output.as_os_str())),
-            digest_of(output)?,
+            digest_of_output(output)?,
         ));
     }
     let entry = Planned {
@@ -584,17 +677,7 @@ fn replay(store: &Path, build: &Build) -> Result<()> {
         )));
     }
     for (index, output) in build.outputs.iter().enumerate() {
-        if let Some(parent) = output.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let from = stored.join(index.to_string());
-        let _ = std::fs::copy(&from, output).map_err(|error| {
-            Error::new(format!(
-                "copying {} to {}: {error}",
-                from.display(),
-                output.display()
-            ))
-        })?;
+        copy_output(&stored.join(index.to_string()), output)?;
     }
     println!("  {}: Ferrix's build {}", build.what, short(&key));
     Ok(())
@@ -713,8 +796,7 @@ fn execute_one(
     let mut stored = Vec::new();
     for (index, (output, (_, digest))) in build.outputs.iter().zip(&planned.outputs).enumerate() {
         let to = kept.join(index.to_string());
-        let _ = std::fs::copy(output, &to)
-            .map_err(|error| Error::new(format!("keeping {}: {error}", output.display())))?;
+        copy_output(output, &to)?;
         stored.push((digest.clone(), to));
     }
     Ok(stored)
@@ -851,6 +933,29 @@ mod tests {
             .output("/data/target/x/k");
         assert_eq!(a, key(&moved, &there).unwrap());
         std::fs::remove_dir_all(&directory).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_directory_output_is_kept_whole() {
+        let root = std::env::temp_dir().join(format!("ferrix-tree-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let tree = root.join("tree");
+        std::fs::create_dir_all(tree.join("sub")).unwrap();
+        std::fs::write(tree.join("sub/file"), b"bytes").unwrap();
+        std::os::unix::fs::symlink("sub/file", tree.join("link")).unwrap();
+        let before = digest_of_output(&tree).unwrap();
+        let copy = root.join("copy");
+        copy_output(&tree, &copy).unwrap();
+        assert_eq!(digest_of_output(&copy).unwrap(), before);
+        assert_eq!(std::fs::read_link(copy.join("link")).unwrap(), Path::new("sub/file"));
+        // Copied over again, whatever was there goes.
+        std::fs::write(copy.join("stale"), b"old").unwrap();
+        copy_output(&tree, &copy).unwrap();
+        assert!(!copy.join("stale").exists());
+        std::fs::write(tree.join("sub/file"), b"other").unwrap();
+        assert_ne!(digest_of_output(&tree).unwrap(), before);
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

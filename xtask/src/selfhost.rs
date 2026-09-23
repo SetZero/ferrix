@@ -403,27 +403,30 @@ fn vendor(into: &Path, every: bool) -> Result<String> {
     let mut command = Command::new(cargo::cargo());
     let _ = command
         .current_dir(&root)
-        .args(["vendor", "--locked", "--offline", "--quiet"]);
+        .args(["vendor", "--locked", "--offline"]);
     if every {
         let mut manifests: Vec<PathBuf> = WORKSPACES
             .iter()
             .map(|workspace| root.join(workspace).join("Cargo.toml"))
             .collect();
-        manifests.extend(uutils_manifests());
+        manifests.extend(script_manifests());
         for manifest in manifests {
             let _ = command.arg("--sync").arg(manifest);
         }
     }
+    // Not `--quiet`, which keeps the configuration from being printed too;
+    // what it says as it goes is shown only when it fails.
     let output = command
         .arg(into)
-        .stderr(Stdio::inherit())
         .output()
         .map_err(|error| Error::new(format!("could not run cargo vendor: {error}")))?;
     if !output.status.success() {
-        return Err(Error::new(
+        return Err(Error::new(format!(
             "cargo vendor --offline failed: the crates are taken from Cargo's cache, which \
-             `cargo fetch` fills once, with the network",
-        ));
+             `cargo fetch --locked --manifest-path <each manifest>` fills once, with the \
+             network. It said:\n{}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
     }
     // What `cargo vendor` prints is the configuration that uses what it
     // vendored, git sources included, with this machine's path in it.
@@ -432,21 +435,22 @@ fn vendor(into: &Path, every: bool) -> Result<String> {
     Ok(printed + OFFLINE)
 }
 
-/// The manifest of every uutils project unpacked under the data directory,
-/// whose lockfiles name the crates its build compiles.
-fn uutils_manifests() -> Vec<PathBuf> {
+/// The manifest of every Rust project a script build compiles -- each uutils
+/// project and the sshdt port, as their scripts last unpacked them under the
+/// data directory -- whose lockfiles name the crates it needs.
+fn script_manifests() -> Vec<PathBuf> {
     let Some(home) = std::env::home_dir() else {
         return Vec::new();
     };
-    let built = home.join(".local/share/ferrix/uutils/ferrousli/build");
-    let Ok(entries) = std::fs::read_dir(&built) else {
-        return Vec::new();
-    };
-    let mut manifests: Vec<PathBuf> = entries
+    let data = home.join(".local/share/ferrix");
+    let mut manifests: Vec<PathBuf> = std::fs::read_dir(data.join("uutils/ferrousli/build"))
+        .into_iter()
+        .flatten()
         .flatten()
         .map(|entry| entry.path().join("Cargo.toml"))
-        .filter(|manifest| manifest.is_file())
         .collect();
+    manifests.push(data.join("ports/ferrousli/sshdt/build/Cargo.toml"));
+    manifests.retain(|manifest| manifest.is_file());
     manifests.sort();
     manifests
 }
