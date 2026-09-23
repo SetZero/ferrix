@@ -62,6 +62,10 @@ name = "ferrix-btrfs"
 version = "0.1.0"
 
 [[package]]
+name = "ferrix-cgroupfs"
+version = "0.1.0"
+
+[[package]]
 name = "ferrix-cpio"
 version = "0.1.0"
 
@@ -95,6 +99,7 @@ dependencies = [
  "ferrix-blkring",
  "ferrix-block",
  "ferrix-btrfs",
+ "ferrix-cgroupfs",
  "ferrix-cpio",
  "ferrix-displayctl",
  "ferrix-elf",
