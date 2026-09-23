@@ -406,11 +406,22 @@ pub(crate) fn started() -> bool {
 
 /// Whether the running context may block: a task, on a processor taking
 /// interrupts, with nothing holding preemption off.
+///
+/// Which processor this is and that processor's count are read with
+/// interrupts closed, as [`current`] reads its queue. A task preempted
+/// between the two reads may be moved, and then reads another processor's
+/// count, which any spin lock a task there holds has raised: a debug kernel
+/// then stopped at a sleeping lock taken in a system call, as if the caller
+/// held a spin lock. Stage 20's many-threaded builds, every `mmap` of which
+/// takes the space's layout lock, met it about one boot in six.
 pub(crate) fn may_block() -> bool {
-    started()
-        && arch::interrupts_enabled()
-        && this_cpu().is_some_and(|cpu| preempt_count(cpu) == 0)
-        && current().is_some()
+    if !started() || !arch::interrupts_enabled() {
+        return false;
+    }
+    let saved = <arch::Irq as IrqControl>::disable();
+    let own = this_cpu().is_some_and(|cpu| preempt_count(cpu) == 0);
+    <arch::Irq as IrqControl>::restore(saved);
+    own && current().is_some()
 }
 
 /// The next identifier to give a task.
