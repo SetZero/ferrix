@@ -10,7 +10,8 @@
 //! * the toolchain tree `scripts/fetch-rustc-sysroot.sh` keeps beside its own
 //!   image: rustc and Cargo, the standard libraries for the host,
 //!   `x86_64-unknown-none` and `x86_64-unknown-uefi`, and Debian's glibc and
-//!   gcc driver. Hard-linked into the staging directory rather than copied;
+//!   gcc driver, copied into the staging directory (extents shared where the
+//!   host can);
 //! * `src/`, every file git tracks in this checkout, as it is in the work
 //!   tree, so an uncommitted change is built there as it would be here;
 //! * `vendor/`, the workspace's crates.io dependencies from `cargo vendor
@@ -214,22 +215,16 @@ fn stage(tree: &Path, work: &Path) -> Result<PathBuf> {
     }
     std::fs::create_dir_all(&stage)?;
     println!("  staging the volume in {}", stage.display());
-    // Hard links, since the tree is 1.9 GiB and mkfs copies it anyway; a
-    // copy where the two are on different filesystems.
-    let linked = Command::new("cp")
-        .arg("-al")
+    // A copy, sharing extents where the host's filesystem can. Not hard
+    // links: mkfs.btrfs before 6.17 gives each file the link count it has
+    // on the host, two, where the image holds one name, and `btrfs check`
+    // then refuses the volume for files the guest never touched.
+    let mut command = Command::new("cp");
+    let _ = command
+        .args(["-a", "--reflink=auto"])
         .arg(tree.join("."))
-        .arg(&stage)
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success());
-    if !linked {
-        std::fs::remove_dir_all(&stage)?;
-        std::fs::create_dir_all(&stage)?;
-        let mut command = Command::new("cp");
-        let _ = command.arg("-a").arg(tree.join(".")).arg(&stage);
-        cargo::run(command, "copying the toolchain tree")?;
-    }
+        .arg(&stage);
+    cargo::run(command, "copying the toolchain tree")?;
     let copied = copy_sources(&stage.join("src"))?;
     println!("  {copied} tracked files in src/");
     vendor(&stage.join("vendor"))?;
