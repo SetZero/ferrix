@@ -360,7 +360,7 @@ fn digest_of_output(path: &Path) -> Result<String> {
     entries.sort();
     let mut listing = String::new();
     for entry in entries {
-        let name = entry.file_name().map(|name| text(name)).unwrap_or_default();
+        let name = entry.file_name().map(text).unwrap_or_default();
         listing.push_str(&format!(
             "{name} {:o} {}\n",
             mode_of(&entry),
@@ -913,6 +913,11 @@ mod tests {
                     Source::File("f9".to_owned()),
                 ),
             ],
+            reads: vec!["${DATA}/busybox/ferrousli/src".to_owned()],
+            read_files: vec![(
+                "${DATA}/busybox/ferrousli/src/busybox 1.37.0.tar.bz2".to_owned(),
+                "f7".to_owned(),
+            )],
             outputs: vec![("${TARGET}/k".to_owned(), "d2".to_owned())],
         };
         let text = one.write() + &two.write();
