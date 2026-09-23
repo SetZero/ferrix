@@ -146,3 +146,31 @@ fn what_the_seat_has_no_use_for_is_dropped() {
     assert_eq!(of(&mut axes, EV_MSC, MSC_SCAN, 30), None);
     assert_eq!(of(&mut axes, 0x05, 0, 1), None);
 }
+
+/// The LEDs follow the locked mask, are written once per change, and start
+/// by clearing what a keyboard was left showing.
+#[test]
+fn the_lights_follow_the_locked_mask_once_per_change() {
+    use compositor_xkb::generated::{LOCK, MOD2};
+    use ferrix_linux_abi::input::{LED_CAPSL, LED_NUML};
+
+    let mut lights = super::Lights::default();
+    assert_eq!(
+        lights.change(0),
+        Some([(LED_CAPSL, false), (LED_NUML, false)])
+    );
+    assert_eq!(lights.change(0), None);
+    assert_eq!(
+        lights.change(LOCK),
+        Some([(LED_CAPSL, true), (LED_NUML, false)])
+    );
+    assert_eq!(lights.change(LOCK), None);
+    assert_eq!(
+        lights.change(LOCK | MOD2),
+        Some([(LED_CAPSL, true), (LED_NUML, true)])
+    );
+    assert_eq!(
+        lights.change(MOD2),
+        Some([(LED_CAPSL, false), (LED_NUML, true)])
+    );
+}
