@@ -4415,8 +4415,19 @@ other: the kernel clocks and muxes them and publishes a device-tree node,
 contiguous memory and cleans the caches for the LTDC, which does not snoop
 them. On the board `compositor/blank` put a colour on a monitor through
 `/dev/dri/card0`, and `hyprix` ran as init at 1280x720 on `HDMI-A-1` with a
-terminal window. `docs/DISPLAY.md` §6 has the design; USB HID, the row's
-other half, is not done.
+terminal window. `docs/DISPLAY.md` §6 has the design.
+
+**Done — the hardware row's other half: the DK1's USB keyboard and mouse
+(2026-09-23).** The kernel clocks, powers and releases the STM32MP157's USB
+host and starts its PHY, and publishes a device-tree node; `vmo_pin`'s
+`PIN_COHERENT` gives a driver memory a device that does not snoop sees as the
+CPU does, mapped past the caches; the input core lets a USB host's node hold
+a control channel per keyboard or mouse. `user/usbhid`, over `libs/usb-host`
+and tested against a model of EHCI and the board's bus, drives the
+controller, the USB2514B hub and HID boot-protocol devices through the hub's
+transaction translator. On the board a G502 mouse became `event0` and a
+keyboard `event1`, and keys, buttons, motion and the wheel read back from
+them. `docs/INPUT.md` §7 has the design.
 
 **Done — epoll, iteration 2's first kernel row.** `epoll_create1`,
 `epoll_create`, `epoll_ctl`, `epoll_wait`, `epoll_pwait` and `epoll_pwait2`
