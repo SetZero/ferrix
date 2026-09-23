@@ -406,7 +406,7 @@ fn parse(plan: &str) -> Result<Vec<Planned>> {
                 .inputs
                 .push((unescape(key)?, Source::File((*digest).to_owned()))),
             (["output", file, digest], Some(build)) => {
-                build.outputs.push((unescape(file)?, (*digest).to_owned()))
+                build.outputs.push((unescape(file)?, (*digest).to_owned()));
             }
             (["end"], Some(_)) => builds.extend(current.take()),
             _ => return Err(bad(line)),
