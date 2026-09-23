@@ -5958,8 +5958,9 @@ and on AArch64.
 position, scale` is read: the name (empty for every monitor no other rule
 names), `disable`, the resolution as `preferred` or `WxH[@R]`, the position
 as `auto` or `XxY`, and the scale as `auto` or a number. What is not done --
-`transform`, `mirror`, `auto-left` and the rest -- says so rather than being
-read as if it were not there.
+`mirror`, `auto-left` and the rest -- says so rather than being read as if
+it were not there. (`transform` was on that list until 2026-09-23; see
+turned monitors below.)
 
 A scaled monitor is laid out in logical pixels and drawn in the screen's
 own: a 1024x768 screen at `scale = 2` tiles its windows in 512x384 and draws
@@ -5977,6 +5978,46 @@ scaled monitor does. `hyprctl monitors` prints the scale it is at.
 `cargo xtask test-compositor` boots a sixth time with `monitor = ,
 preferred, auto, 2` and requires the picture `compositor/render`'s own tests
 bless for a scaled monitor, pixel for pixel, on x86-64 and on AArch64.
+
+**Begun — turned monitors (2026-09-23).** `monitor = name, res, pos, scale,
+transform, N` is read with Hyprland's values, `wl_output.transform`'s 0 to
+7, and so is the short form `monitor = name, transform, N`, which turns the
+monitor an earlier line named. A monitor turned a quarter is laid out with
+its mode's width and height exchanged and then divided by the scale -- a
+1920x1080 connector stood on its edge is a monitor 1080 wide and 1920 tall
+-- which is Hyprland's `m_transformedSize` and `m_size`, and is what the
+workspaces, the tiling, the layer surfaces and `zxdg_output_v1` see.
+`wl_output.mode` stays the connector's own and `wl_output.geometry` carries
+the transform, as Hyprland sends them; `hyprctl monitors` prints the mode
+unturned with `transform: N` under it, plain and JSON. The pointer lives in
+the laid-out space, as Hyprland's does, so a mouse moves the way the person
+reading the monitor expects.
+
+Where the picture is turned is the one place this differs from Hyprland.
+Hyprland folds the transform into its projection matrix and draws every box
+turned on the GPU; the software renderer here draws the frame upright on a
+canvas the monitor's laid-out size, exactly as for an upright monitor, and
+turns it once, as it is copied into the connector's buffer
+(`compositor_render::transform`), with the frame's damage turned alongside
+for the card and the night-light. Each pixel lands where Hyprland's matrix
+puts it -- transform 1 is the picture turned counter-clockwise into the
+buffer, for a monitor turned clockwise onto its right-hand edge -- and an
+upright monitor never takes that path, so its frames are the bytes and the
+cost they were. A frame drawn on the GPU is drawn upright the same way and
+fetched and turned on its way to the card rather than scanned out where it
+was drawn. What is not done: changing a transform while the compositor runs
+(a `wlr-output-management` client asking for one is refused), a client's own
+`wl_surface.set_buffer_transform`, and so `preferred_buffer_transform`,
+which Hyprland sends and a client would answer with a buffer this renderer
+cannot yet turn; and `input:touchdevice:transform` and
+`input:tablet:transform`, Hyprland's own answer for a touchscreen on a
+turned monitor.
+
+`cargo xtask test-compositor --boot transform` boots twice, with `transform,
+1` and `transform, 3`, and requires QEMU's screendump -- the connector's
+buffer -- to be the turned picture `compositor/render` blesses, pixel for
+pixel, and `hyprctl monitors` in the guest to say `transform: N` beside the
+1024x768 mode.
 
 **Begun — more than one monitor (2026-09-17).** A screen a connected
 connector, across every card: the compositor opens every `/dev/dri/cardN`,
