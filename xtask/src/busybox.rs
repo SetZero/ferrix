@@ -105,7 +105,7 @@ pub(crate) fn program(arch: Arch) -> Result<PathBuf> {
     let root = root()?;
     let program = installed(&root, arch);
     let ferrousli = crate::paths::workspace_root().join("ferrousli");
-    if ferrousli::stale(&program, &ferrousli, INPUTS).is_none() {
+    if !crate::builds::active() && ferrousli::stale(&program, &ferrousli, INPUTS).is_none() {
         return Ok(program);
     }
     // Another checkout may be building into the same directory: wait for
@@ -138,6 +138,9 @@ fn build_locked(arch: Arch, root: &Path) -> Result<PathBuf> {
     let program = installed(&root, arch);
     let ferrousli = crate::paths::workspace_root().join("ferrousli");
 
+    if !cfg!(windows) {
+        return build_here(arch, &root);
+    }
     let (script, mut command) = if cfg!(windows) {
         let mut command = Command::new(ferrousli::git_bash()?);
         // One spelling of the directory for both the script and its caller,
@@ -175,6 +178,39 @@ fn build_locked(arch: Arch, root: &Path) -> Result<PathBuf> {
     if !program.is_file() {
         return Err(Error::new(format!(
             "{script} reported success but {} does not exist",
+            program.display()
+        )));
+    }
+    println!("\nbuilt {}", program.display());
+    Ok(program)
+}
+
+/// The Linux build, through [`crate::builds::Build`]: a build `FERRIX_BUILDS`
+/// may record or replay, reading the sources `build.sh` would otherwise
+/// download from `root/src`.
+fn build_here(arch: Arch, root: &Path) -> Result<PathBuf> {
+    let program = installed(root, arch);
+    let ferrousli = crate::paths::workspace_root().join("ferrousli");
+    let mut build = crate::builds::Build::bash("ferrousli/tools/busybox/build.sh", &ferrousli)
+        .args(["-c", SCRIPT, "bash", "build.sh"])
+        .args([root])
+        .reads_dir(root.join("src"))
+        .output(&program);
+    if let Some(dir) = ferrousli::target_dir(std::env::var_os("CARGO_TARGET_DIR")) {
+        build = build.env("CARGO_TARGET_DIR", dir);
+    }
+    if let Err(error) = build.run() {
+        let list = root.join(ferrousli::UNDEFINED);
+        return Err(match std::fs::read_to_string(&list) {
+            Ok(symbols) if !symbols.trim().is_empty() => {
+                ferrousli::not_linked("busybox", &symbols, &list)
+            }
+            _ => error,
+        });
+    }
+    if !program.is_file() {
+        return Err(Error::new(format!(
+            "build.sh reported success but {} does not exist",
             program.display()
         )));
     }

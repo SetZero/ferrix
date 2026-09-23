@@ -71,18 +71,25 @@ const CARGO_HOME: &str = "/data/cargo-home";
 const TARGET: &str = "/data/target";
 const SOURCE: &str = "/data/src";
 
-/// The Cargo configuration the guest builds with: crates.io is the vendored
-/// directory, and Cargo is told it has no network, so a crate missing from
-/// the directory fails the build by name rather than as a DNS error.
-const CARGO_CONFIG: &str = r#"[source.crates-io]
-replace-with = "vendored-sources"
+/// Where the vendored crates are, on the volume.
+const VENDOR: &str = "/data/vendor";
 
-[source.vendored-sources]
-directory = "/data/vendor"
+/// What the guest's Cargo configuration adds to the sources `cargo vendor`
+/// says to use: Cargo is told it has no network, so a crate missing from the
+/// directory fails the build by name rather than as a DNS error.
+const OFFLINE: &str = "\n[net]\noffline = true\n";
 
-[net]
-offline = true
-"#;
+/// What a plan's image links beside [`rustc::LINKS`], for the script builds:
+/// a POSIX `sh` and `bash` where scripts and make look for them, `env` for
+/// `#!/usr/bin/env`, the kernel's UAPI headers under `/usr/include`, and the
+/// magic database `file` reads.
+const PLAN_LINKS: &[(&str, &str)] = &[
+    ("bin/sh", "/data/usr/bin/dash"),
+    ("bin/bash", "/data/usr/bin/bash"),
+    ("usr/bin/env", "/data/usr/bin/env"),
+    ("usr/include", "/data/usr/include"),
+    ("usr/share/misc", "/data/usr/share/misc"),
+];
 
 /// Space on the volume beyond what the staging directory holds. A debug
 /// build's target directory is about 1 GiB and the image 256 MiB; btrfs
@@ -177,7 +184,15 @@ pub(crate) fn test_selfhost(args: &Args) -> Result<()> {
     let natives = native::build(arch, args.release)?;
     let bytes = std::fs::read(&shell)
         .map_err(|error| Error::new(format!("reading {}: {error}", shell.display())))?;
-    let archive = initramfs::build(None, &natives, Some(&bytes), &rustc::files(rustc::LINKS))?;
+    // With a plan, zinc is only the kernel's own init: in `/bin` it would be
+    // `sh`, and the script builds want a POSIX one.
+    let archive = if plan.is_some() {
+        let mut links = rustc::LINKS.to_vec();
+        links.extend_from_slice(PLAN_LINKS);
+        initramfs::build(None, &natives, None, &rustc::files(&links))?
+    } else {
+        initramfs::build(None, &natives, Some(&bytes), &rustc::files(rustc::LINKS))?
+    };
     let image = fat::write_image_with(arch, &loader, &kernel, &archive, None)?;
 
     println!(
@@ -295,9 +310,9 @@ fn stage(tree: &Path, work: &Path, plan: Option<&Path>) -> Result<PathBuf> {
     cargo::run(command, "copying the toolchain tree")?;
     let copied = copy_sources(&stage.join("src"))?;
     println!("  {copied} tracked files in src/");
-    vendor(&stage.join("vendor"), plan.is_some())?;
+    let config = vendor(&stage.join("vendor"), plan.is_some())?;
     std::fs::create_dir_all(stage.join("cargo-home"))?;
-    std::fs::write(stage.join("cargo-home/config.toml"), CARGO_CONFIG)?;
+    std::fs::write(stage.join("cargo-home/config.toml"), config)?;
     std::fs::create_dir_all(stage.join("home"))?;
     if let Some(plan) = plan {
         carry_plan(plan, &stage.join("plan"))?;
@@ -379,33 +394,61 @@ fn link(_target: &Path, to: &Path) -> Result<()> {
 }
 
 /// `cargo vendor` the workspace's crates.io dependencies into `into`, from
-/// Cargo's own cache: no network here either. With `every`, the crates of
-/// the [`WORKSPACES`] beside it too, which a plan's builds compile.
-fn vendor(into: &Path, every: bool) -> Result<()> {
+/// Cargo's own cache: no network here either, and return the Cargo
+/// configuration the guest uses them with. With `every`, the crates of the
+/// [`WORKSPACES`] beside it too, and of the uutils projects a plan's builds
+/// compile, which are the ones `cargo xtask uutils` unpacked last.
+fn vendor(into: &Path, every: bool) -> Result<String> {
     let root = paths::workspace_root();
     let mut command = Command::new(cargo::cargo());
     let _ = command
         .current_dir(&root)
         .args(["vendor", "--locked", "--offline", "--quiet"]);
     if every {
-        for workspace in WORKSPACES {
-            let _ = command
-                .arg("--sync")
-                .arg(root.join(workspace).join("Cargo.toml"));
+        let mut manifests: Vec<PathBuf> = WORKSPACES
+            .iter()
+            .map(|workspace| root.join(workspace).join("Cargo.toml"))
+            .collect();
+        manifests.extend(uutils_manifests());
+        for manifest in manifests {
+            let _ = command.arg("--sync").arg(manifest);
         }
     }
-    let status = command
+    let output = command
         .arg(into)
-        .stdout(Stdio::null())
-        .status()
+        .stderr(Stdio::inherit())
+        .output()
         .map_err(|error| Error::new(format!("could not run cargo vendor: {error}")))?;
-    if !status.success() {
+    if !output.status.success() {
         return Err(Error::new(
             "cargo vendor --offline failed: the crates are taken from Cargo's cache, which \
              `cargo fetch` fills once, with the network",
         ));
     }
-    Ok(())
+    // What `cargo vendor` prints is the configuration that uses what it
+    // vendored, git sources included, with this machine's path in it.
+    let printed = String::from_utf8_lossy(&output.stdout)
+        .replace(&into.display().to_string(), VENDOR);
+    Ok(printed + OFFLINE)
+}
+
+/// The manifest of every uutils project unpacked under the data directory,
+/// whose lockfiles name the crates its build compiles.
+fn uutils_manifests() -> Vec<PathBuf> {
+    let Some(home) = std::env::home_dir() else {
+        return Vec::new();
+    };
+    let built = home.join(".local/share/ferrix/uutils/ferrousli/build");
+    let Ok(entries) = std::fs::read_dir(&built) else {
+        return Vec::new();
+    };
+    let mut manifests: Vec<PathBuf> = entries
+        .flatten()
+        .map(|entry| entry.path().join("Cargo.toml"))
+        .filter(|manifest| manifest.is_file())
+        .collect();
+    manifests.sort();
+    manifests
 }
 
 /// The bytes `du` says `path` holds, each hard-linked file once.

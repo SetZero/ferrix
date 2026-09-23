@@ -10,8 +10,9 @@
 //!    also writes each build down in `<DIR>/plan`: its command, its
 //!    environment, the files it reads, and the digests of what it made. A file
 //!    it reads that an earlier build made is written down as that build's
-//!    output; any other is copied into `<DIR>/files`. Paths inside the tree
-//!    and the target directory are written as `${ROOT}` and `${TARGET}`.
+//!    output; any other is copied into `<DIR>/files`. Paths inside the tree,
+//!    the target directory and `~/.local/share/ferrix` are written as
+//!    `${ROOT}`, `${TARGET}` and `${DATA}`.
 //! 2. **Carry out.** `cargo xtask builds-execute --plan <DIR>` makes every
 //!    build in the plan, in order, with this machine's compiler -- on Ferrix,
 //!    under `test-selfhost --plan` -- and keeps each one's outputs in
@@ -23,9 +24,15 @@
 //!    Ferrix compiled.
 //!
 //! A build's key is the SHA-256 of what it is -- the command, the
-//! environment, the paths with the two placeholders in them -- and of the
-//! bytes of every file it reads. Step 2 and step 3 compute it from the same
+//! environment, the paths with the placeholders in them -- and of the bytes
+//! of every file it reads. Step 2 and step 3 compute it from the same
 //! things: in both, an input made by an earlier build is Ferrix's.
+//!
+//! A script build also reads files at places of its own rather than through
+//! a variable -- the source archives it would otherwise download -- and names
+//! the directory with [`Build::reads_dir`]. Its files are listed and hashed
+//! when the build is recorded and when it is replayed, and put in place
+//! before it is carried out.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
@@ -84,6 +91,8 @@ pub(crate) struct Build {
     env: Vec<(String, String)>,
     /// Environment variables that name a file the build reads, and the file.
     inputs: Vec<(String, PathBuf)>,
+    /// Directories whose files the build reads where they are.
+    reads: Vec<PathBuf>,
     /// The files the caller reads once the build is made.
     outputs: Vec<PathBuf>,
 }
@@ -107,6 +116,7 @@ impl Build {
             args: Vec::new(),
             env: Vec::new(),
             inputs: Vec::new(),
+            reads: Vec::new(),
             outputs: Vec::new(),
         }
     }
@@ -134,6 +144,13 @@ impl Build {
     #[must_use]
     pub(crate) fn input(mut self, key: &str, file: impl Into<PathBuf>) -> Build {
         self.inputs.push((key.to_owned(), file.into()));
+        self
+    }
+
+    /// A directory whose files the build reads where they are.
+    #[must_use]
+    pub(crate) fn reads_dir(mut self, directory: impl Into<PathBuf>) -> Build {
+        self.reads.push(directory.into());
         self
     }
 
@@ -175,6 +192,35 @@ impl Build {
     }
 }
 
+/// Whether builds are being recorded or replayed, so that a caller that
+/// would skip a build it thinks current makes it anyway: a build that does
+/// not run is neither written down nor answered from the store.
+pub(crate) fn active() -> bool {
+    matches!(
+        Mode::from_environment(),
+        Ok(Mode::Record(_) | Mode::Replay(_))
+    )
+}
+
+/// Every file in the directories `build` reads, sorted, with its digest.
+fn files_read(build: &Build) -> Result<Vec<(PathBuf, String)>> {
+    let mut files = Vec::new();
+    for directory in &build.reads {
+        let Ok(entries) = std::fs::read_dir(directory) else {
+            continue;
+        };
+        for entry in entries {
+            let path = entry?.path();
+            if path.is_file() {
+                let digest = digest_of(&path)?;
+                files.push((path, digest));
+            }
+        }
+    }
+    files.sort();
+    Ok(files)
+}
+
 /// A path or argument as text: every one xtask writes is UTF-8.
 fn text(value: &OsStr) -> String {
     value.to_string_lossy().into_owned()
@@ -211,33 +257,41 @@ impl Mode {
     }
 }
 
-/// Where paths of this machine's tree and target directory are, for
-/// [`portable`] and [`local`].
+/// Where this machine's tree, target directory and data directory are, for
+/// [`Places::portable`] and [`Places::local`].
 struct Places {
     root: String,
     target: String,
+    data: String,
 }
 
 impl Places {
     fn here() -> Places {
+        let data = std::env::home_dir()
+            .map(|home| text(home.join(".local/share/ferrix").as_os_str()))
+            .unwrap_or_default();
         Places {
             root: text(paths::workspace_root().as_os_str()),
             target: text(paths::target_dir().as_os_str()),
+            data,
         }
     }
 
     /// `value` with this machine's places written as placeholders. The target
-    /// directory first: it is often inside the tree.
+    /// directory first, since it is often inside one of the other two.
     fn portable(&self, value: &str) -> String {
-        value
-            .replace(&self.target, "${TARGET}")
-            .replace(&self.root, "${ROOT}")
+        let mut value = value.replace(&self.target, "${TARGET}");
+        if !self.data.is_empty() {
+            value = value.replace(&self.data, "${DATA}");
+        }
+        value.replace(&self.root, "${ROOT}")
     }
 
     /// The other way.
     fn local(&self, value: &str) -> String {
         value
             .replace("${TARGET}", &self.target)
+            .replace("${DATA}", &self.data)
             .replace("${ROOT}", &self.root)
     }
 }
@@ -268,6 +322,12 @@ fn key(build: &Build, places: &Places) -> Result<String> {
         .collect();
     for (key, file) in inputs {
         description.push_str(&format!("input {key}={}\n", digest_of(file)?));
+    }
+    for (file, digest) in files_read(build)? {
+        description.push_str(&format!(
+            "read {}={digest}\n",
+            places.portable(&text(file.as_os_str()))
+        ));
     }
     for output in &build.outputs {
         description.push_str(&format!(
@@ -337,6 +397,10 @@ struct Planned {
     args: Vec<String>,
     env: Vec<(String, String)>,
     inputs: Vec<(String, Source)>,
+    /// Each directory read, portable.
+    reads: Vec<String>,
+    /// Each file read in them, portable, by the digest it is carried under.
+    read_files: Vec<(String, String)>,
     /// Each output, portable, with the digest it had where recorded.
     outputs: Vec<(String, String)>,
 }
@@ -361,6 +425,12 @@ impl Planned {
                 Source::File(digest) => ("file", digest),
             };
             out.push_str(&format!("input {} {kind} {digest}\n", escape(key)));
+        }
+        for directory in &self.reads {
+            out.push_str(&format!("reads {}\n", escape(directory)));
+        }
+        for (file, digest) in &self.read_files {
+            out.push_str(&format!("read {} {digest}\n", escape(file)));
         }
         for (file, digest) in &self.outputs {
             out.push_str(&format!("output {} {digest}\n", escape(file)));
@@ -387,6 +457,8 @@ fn parse(plan: &str) -> Result<Vec<Planned>> {
                     args: Vec::new(),
                     env: Vec::new(),
                     inputs: Vec::new(),
+                    reads: Vec::new(),
+                    read_files: Vec::new(),
                     outputs: Vec::new(),
                 });
             }
@@ -405,6 +477,10 @@ fn parse(plan: &str) -> Result<Vec<Planned>> {
             (["input", key, "file", digest], Some(build)) => build
                 .inputs
                 .push((unescape(key)?, Source::File((*digest).to_owned()))),
+            (["reads", directory], Some(build)) => build.reads.push(unescape(directory)?),
+            (["read", file, digest], Some(build)) => build
+                .read_files
+                .push((unescape(file)?, (*digest).to_owned())),
             (["output", file, digest], Some(build)) => {
                 build.outputs.push((unescape(file)?, (*digest).to_owned()));
             }
@@ -450,6 +526,16 @@ fn record(directory: &Path, build: &Build) -> Result<()> {
             inputs.push((name.clone(), Source::File(digest)));
         }
     }
+    let mut read_files = Vec::new();
+    for (file, digest) in files_read(build)? {
+        let carried = files.join(&digest);
+        if !carried.is_file() {
+            let _ = std::fs::copy(&file, &carried).map_err(|error| {
+                Error::new(format!("copying {} into the plan: {error}", file.display()))
+            })?;
+        }
+        read_files.push((places.portable(&text(file.as_os_str())), digest));
+    }
     let mut outputs = Vec::new();
     for output in &build.outputs {
         outputs.push((
@@ -469,6 +555,12 @@ fn record(directory: &Path, build: &Build) -> Result<()> {
             .map(|(name, value)| (name.clone(), places.portable(value)))
             .collect(),
         inputs,
+        reads: build
+            .reads
+            .iter()
+            .map(|directory| places.portable(&text(directory.as_os_str())))
+            .collect(),
+        read_files,
         outputs,
     };
     let mut file = std::fs::OpenOptions::new()
@@ -593,6 +685,22 @@ fn execute_one(
         };
         build.inputs.push((name.clone(), file));
     }
+    build.reads = planned
+        .reads
+        .iter()
+        .map(|directory| PathBuf::from(places.local(directory)))
+        .collect();
+    for (file, digest) in &planned.read_files {
+        let file = PathBuf::from(places.local(file));
+        if !file.is_file() || digest_of(&file)? != *digest {
+            if let Some(parent) = file.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            let _ = std::fs::copy(directory.join("files").join(digest), &file).map_err(
+                |error| Error::new(format!("putting {} in place: {error}", file.display())),
+            )?;
+        }
+    }
     build.outputs = planned
         .outputs
         .iter()
@@ -620,6 +728,7 @@ mod tests {
         Places {
             root: "/home/me/ferrix".to_owned(),
             target: "/home/me/ferrix/target".to_owned(),
+            data: "/home/me/.local/share/ferrix".to_owned(),
         }
     }
 
@@ -645,9 +754,14 @@ mod tests {
             "${TARGET}/zinc"
         );
         assert_eq!(places.portable("/home/me/ferrix/zinc"), "${ROOT}/zinc");
+        assert_eq!(
+            places.portable("/home/me/.local/share/ferrix/busybox"),
+            "${DATA}/busybox"
+        );
         let there = Places {
             root: "/data/src".to_owned(),
             target: "/data/target".to_owned(),
+            data: "/data/home/.local/share/ferrix".to_owned(),
         };
         assert_eq!(there.local("${TARGET}/zinc"), "/data/target/zinc");
         assert_eq!(there.local("${ROOT}/zinc"), "/data/src/zinc");
@@ -675,6 +789,8 @@ mod tests {
             args: vec!["build".to_owned(), "--release".to_owned()],
             env: vec![("RUSTFLAGS".to_owned(), "-C a -C b".to_owned())],
             inputs: vec![],
+            reads: vec![],
+            read_files: vec![],
             outputs: vec![("${TARGET}/zinc/zinc".to_owned(), "d1".to_owned())],
         };
         let two = Planned {
@@ -726,6 +842,7 @@ mod tests {
         let there = Places {
             root: "/data/src".to_owned(),
             target: "/data/target".to_owned(),
+            data: "/data/home/.local/share/ferrix".to_owned(),
         };
         let moved = Build::cargo("k", "/data/src")
             .args(["build"])
@@ -746,6 +863,7 @@ mod tests {
         let places = Places {
             root: text(root.as_os_str()),
             target: text(root.join("target").as_os_str()),
+            data: text(root.join("data").as_os_str()),
         };
         let first_out = root.join("target/one");
         let second_out = root.join("target/two");
@@ -760,6 +878,8 @@ mod tests {
             ],
             env: vec![],
             inputs: vec![],
+            reads: vec![],
+            read_files: vec![],
             outputs: vec![("${TARGET}/one".to_owned(), "host-one".to_owned())],
         };
         let two = Planned {
@@ -773,6 +893,8 @@ mod tests {
             ],
             env: vec![],
             inputs: vec![("IN".to_owned(), Source::Output("host-one".to_owned()))],
+            reads: vec![],
+            read_files: vec![],
             outputs: vec![("${TARGET}/two".to_owned(), "host-two".to_owned())],
         };
         let store = root.join("store");
