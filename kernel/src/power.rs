@@ -36,6 +36,10 @@ static RESET_ON_EXIT: AtomicBool = AtomicBool::new(false);
 /// for.
 pub(crate) fn init(view: &BootView<'_>) {
     let tree = crate::fdt::open(view).ok();
+    // Where a board keeps the boot mode `reboot(2)`'s word sets.
+    if let Some(tree) = &tree {
+        crate::stm32mp1::note_boot_context(tree);
+    }
     let value = view.option(OPTION).or_else(|| {
         tree.as_ref()
             .and_then(|tree| option_in(tree.bootargs()?, OPTION))

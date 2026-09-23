@@ -461,11 +461,20 @@ pub(crate) fn sys_reboot(
             arch::reset()
         }
         command::RESTART2 => {
-            // The command string is read, so a bad pointer is still EFAULT,
-            // and then has nothing to be given to.
-            let mut byte = [0_u8; 1];
-            uaccess::copy_from_user(process.space(), arg, &mut byte).map_err(|_| Errno::EFAULT)?;
-            println!("reboot: Restarting system with command");
+            // Linux copies at most 255 bytes into a 256-byte buffer and cuts
+            // a longer word off there; a word with no NUL in that reach is
+            // EFAULT here instead, which no caller that means it will meet.
+            let mut word = Vec::new();
+            uaccess::copy_cstr_from_user(process.space(), arg, 255, &mut word)
+                .map_err(|_| Errno::EFAULT)?;
+            let word = core::str::from_utf8(&word).unwrap_or("");
+            println!("reboot: Restarting system with command '{word}'");
+            // Where the firmware reads a word, on the one machine that has
+            // one: a DK board's U-Boot (`crate::stm32mp1`).
+            match crate::stm32mp1::request_boot_mode(word) {
+                Ok(what) => println!("reboot: {what}"),
+                Err(why) => println!("reboot: '{word}' changes nothing: {why}"),
+            }
             arch::reset()
         }
         _ => Err(Errno::EINVAL),
