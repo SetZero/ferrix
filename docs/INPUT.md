@@ -307,6 +307,7 @@ blk driver per disk.
 | `REFUSED` | core → driver | reason | — |
 | `EVENTS` | driver → core | count; up to `MAX_EVENTS` events of 8 bytes each, virtio-input's own layout (type `u16`, code `u16`, value `i32`) | — |
 | `STOP` / `STOPPED` | as blk | | |
+| `STATUS` | core → driver | laid out as `EVENTS`: the `EV_LED` events a program wrote to the node that changed the device's state, for the driver to light (§7.4) | — |
 
 `HELLO` holds virtio-input's answers as the device gave them. Its bitmaps are
 as long as the probe's `*_CNT` for each type, so the message is fixed-size and
@@ -414,8 +415,12 @@ events, and `test-input` passes there with its negative control.
 reports only. It returns `EINVAL` if `count` is smaller than one event,
 blocks while the queue is empty, answers `EAGAIN` under `O_NONBLOCK`, and
 `ENODEV` once the device is gone and the queue is drained. **`write`**
-answers `EINVAL` in this iteration: on Linux it injects events, used for
-LEDs, which come later (§6, and a `docs/BACKLOG.md` row). **`poll`** reports
+takes whole events as `evdev_write` does, `EINVAL` for fewer bytes than one:
+`EV_LED` events change the device's LED state (`EVIOCGLED`) and those that
+changed go to its driver as `STATUS`; `SYN_REPORT` does nothing; any other
+type is `EINVAL`, where Linux injects it as though the device had sent it --
+a written deviation, with a `docs/BACKLOG.md` row. The LED events are not
+passed on to the node's readers, as Linux passes them. **`poll`** reports
 `POLLIN | POLLRDNORM` when a whole report is queued and `POLLHUP | POLLERR`
 when the device is gone.
 
@@ -682,9 +687,10 @@ Linux does.
 2. **No kernel key autorepeat** (§3.1), a written deviation from Linux: the
    core makes no value-2 events. Compositors repeat keys themselves
    (`wl_keyboard.repeat_info`), and libinput ignores `EV_REP` events.
-3. **`write` is refused for now**, so the caps-lock LED does not light. LEDs
-   are a `docs/BACKLOG.md` row: they come with the status queue, as an
-   additive `inputctl` message (`STATUS`, core → driver).
+3. **`write` was refused at first**, so the caps-lock LED did not light. LEDs
+   came with an additive `inputctl` message (`STATUS`, core → driver) on
+   2026-09-23 (§3.3, §7.4): a USB keyboard lights them; virtio-input takes
+   STATUS but does not drive its status queue yet (`docs/BACKLOG.md`).
 4. **Multi-touch, force feedback and sound are left out** of what the core
    publishes, even when a device declares them, each with a backlog row.
    QEMU's keyboard and tablet declare none of them.
@@ -736,3 +742,111 @@ Linux does.
   xkbcommon's keymap compiler, or the compositor builds its keymap from a
   string it carries. It is a stage 18 item: a pinned subset of
   xkeyboard-config in the image (2 points).
+
+## 7. The DK board's USB host
+
+The STM32MP157 DK boards have no input device QEMU's virtio could stand in
+for: their four USB-A sockets hang off a Microchip USB2514B hub on port 1 of
+the chip's EHCI controller. `user/usbhid`, over `libs/usb-host`, drives that
+controller, the hub, and every keyboard and mouse behind it, and serves each
+to the input core as §3.2's protocol says. It ran on an STM32MP157D-DK1 on
+2026-09-23 with a Logitech G502 at full speed and a keyboard at low speed.
+
+### 7.1 What the kernel does, and what it gives
+
+As for the LTDC (`docs/DISPLAY.md` §6), the kernel does what is shared with
+the rest of the chip and nothing more (`kernel/src/stm32mp1_usb.rs`): it
+turns on the USBH and USBPHY clocks, releases both resets, brings up the PWR
+block's 1.8 V and 1.1 V regulators, and starts the USB PHY's PLL from the
+HSE. Each value is what U-Boot's `usb start` writes on this board, read back
+with `md`. It then publishes a device-tree node, binding `TREE_STM32_USBH`,
+with the EHCI page and its interrupt, and says so:
+
+```
+  usb      EHCI at 0x5800d000, PHY PLL 0xd400003c from 24 MHz
+```
+
+The PHY's analogue tuning (`st,tune-*`) is left at its reset value.
+
+### 7.2 Memory the controller and the program see alike
+
+EHCI polls descriptors in memory, and the STM32MP1's does not snoop the
+caches. A program's mappings were write-back cached, and ARMv7 gives ring 3
+no cache maintenance, so `vmo_pin` takes `PIN_COHERENT`: on a device whose
+DMA is not coherent, the pin must cover a VMO nothing maps yet, the VMO is
+marked coherent, every frame is cleaned and invalidated to the point of
+coherency, and every mapping of it after is Normal non-cacheable (MAIR
+attribute 2, `MapFlags::uncached`). `vmo_read` and `vmo_write`, which copy
+through the kernel's cached view, refuse such a VMO. On a device that snoops,
+which is every device on x86-64 and QEMU, the option changes nothing. The
+driver still orders its writes with `dsb sy` before the controller may look.
+
+### 7.3 One host, several input devices
+
+A USB host is not one input device but as many as are plugged in, and only
+its driver knows how many. So devmgr starts it as a *bus host* (`Kind::Host`):
+with its device and START, like the virtio-serial port's driver, and without
+waiting for a PUBLISHED. The driver makes an input control channel for each
+keyboard or mouse it finds with `device.input_control()`, which a USB host's
+node allows eight times at once (`USB_INPUT_FUNCTIONS`) where every other
+node allows one. A tree node's HELLO carries `DEVICE_NOT_PCI` for its
+location, as the display core's does, and sends devmgr no PUBLISHED, since
+every tree node shares that word. A device unplugged has its channel closed,
+which the core hears as the device going (`event<N> is gone`). This is the
+hotplug decision 5 of §6 left out, for this driver: devices come and go; how
+a compositor learns of one that came later is still that backlog row's.
+
+### 7.4 The bus
+
+`libs/usb-host` is written against registers, DMA memory and a clock, and
+tested against a model of the controller walking the real schedules frame by
+frame, with the DK1's bus behind it as U-Boot's `usb tree` showed it.
+
+* **Control transfers** run on an asynchronous schedule holding one queue
+  head, switched on for the transfer and off after, so the head can be
+  rewritten for any device without the doorbell handshake.
+* **Interrupt IN pipes** hang after one inactive anchor every frame-list
+  entry points at, each a queue head with two qTDs pointing at each other:
+  the controller runs one while the driver reads and re-arms the other. Every
+  pipe is polled every frame.
+* **Split transactions:** a full- or low-speed device behind a high-speed hub
+  is reached through the hub's transaction translator, each pipe starting
+  in a microframe of its own among the first four, with complete-splits two
+  to four microframes after. All four starts in microframe 0 overran the
+  translator on the board: the last pipe linked, the mouse's, halted until
+  it was stopped. The model fails a test for a wrong hub, port, speed or
+  mask, or for two starts in one microframe behind one hub, and a pipe
+  stopped after repeated halts says so on the console.
+* **Hotplug by polling:** every 250 ms the driver reads the root ports and
+  asks each hub for each port's status. A device that cannot be set up is
+  left alone until it is unplugged.
+* **HID, by the device's report descriptor:** every HID interface with an
+  interrupt IN endpoint has its report descriptor read (`libs/usb-host`'s
+  `report`: main, global and local items, report IDs, push and pop), and one
+  whose fields map to anything is a function, in the report protocol.
+  Usages become codes by Linux's `hid-input.c`: the keyboard page by
+  `hid_keyboard`, buttons from `BTN_MOUSE` in a mouse (sixteen) and
+  `BTN_MISC` elsewhere, the relative desktop axes, `AC Pan` as `REL_HWHEEL`,
+  the system controls, and the consumer page's media and application keys.
+  Events come in Linux's order (modifiers, keys let go, keys pressed,
+  `SYN_REPORT`). A boot interface whose descriptor cannot be read falls back
+  to the boot protocol, whose fixed layouts are two built-in descriptors
+  read the same way. A function is named as Linux names an input per
+  application: the manufacturer's and product's strings, and the
+  application's suffix unless the name already ends with it ("SEM USB
+  Keyboard Consumer Control"). The bus is `BUS_USB`.
+* **LEDs:** a keyboard declares the LEDs its output reports hold. `STATUS`
+  from the core becomes `SET_REPORT` of each output report holding an LED,
+  sent when the LEDs change. hyprix writes Caps Lock and Num Lock from the
+  keymap's locked modifiers to every keyboard that declares LEDs, as
+  libinput's compositors do, so the lights follow the keys on the desktop.
+
+### 7.5 Not done
+
+Absolute axes (tablets, touch screens), multi-touch and force feedback;
+vendor pages (the G502's HID++ report); bulk and isochronous
+transfers, and a full- or low-speed device on a root port, which
+EHCI hands to its companion OHCI controller -- not reachable on a DK board,
+whose root port has the hub. A process writing the 115200-baud console flat
+out starves the driver: hexdumping both event nodes to it lost the clicks
+made meanwhile, where recording them to tmpfs lost nothing (`docs/BACKLOG.md`).

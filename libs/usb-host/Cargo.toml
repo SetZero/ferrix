@@ -1,0 +1,18 @@
+[package]
+name = "ferrix-usb-host"
+description = "A USB host as logic over registers and DMA memory: EHCI, hubs, and HID boot keyboards and mice"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97"
+license.workspace = true
+publish = false
+
+[dependencies]
+ferrix-inputctl = { workspace = true }
+ferrix-linux-abi = { workspace = true }
+
+[dev-dependencies]
+ferrix-native-abi = { workspace = true }
+
+[lints]
+workspace = true

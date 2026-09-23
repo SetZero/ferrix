@@ -121,6 +121,7 @@ impl Encoding for ArmStage2 {
             user: false,
             global: false,
             device: entry & MEMATTR == MEMATTR_DEVICE,
+            uncached: false,
         }
     }
 }

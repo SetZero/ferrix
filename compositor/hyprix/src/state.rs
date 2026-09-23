@@ -656,6 +656,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
             last_input = Instant::now();
             forced = None;
             let actions = seat.input(input);
+            devices.show_locks(seat.modifiers().locked);
             // Where the pointer is, for the layout: Hyprland's dwindle tree
             // asks the input manager for it at the moment a window opens,
             // and `dwindle:use_active_for_splits`, `force_split = 0` and

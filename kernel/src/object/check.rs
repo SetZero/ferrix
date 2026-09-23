@@ -1991,6 +1991,7 @@ fn check_a_pin_gives_a_device_exactly_its_pages(counter: &mut Counter) -> Result
     )?;
 
     check_pin_refusals(&side, handle, vmo, counter)?;
+    check_a_coherent_pin_of_a_snooping_device_changes_nothing(&side, handle)?;
 
     side.put(PAYLOAD, SECRET)?;
     side.put_offset(PAGE_SIZE)?;
@@ -2096,7 +2097,8 @@ fn check_pin_refusals(
             [0, 3 * PAGE_SIZE, 0],
             "a pin past the end of its VMO was taken",
         ),
-        ([0, PAGE_SIZE, 2], "a pin with an unknown option was taken"),
+        // 1 is PIN_READ_ONLY and 2 PIN_COHERENT: 4 is the first bit unknown.
+        ([0, PAGE_SIZE, 4], "a pin with an unknown option was taken"),
         ([0, 0, 0], "an empty pin was taken"),
     ] {
         let [offset, length, options] = args;
@@ -2121,6 +2123,38 @@ fn check_pin_refusals(
         "a writable pin was taken through a read-only VMO handle",
         counter,
     )?;
+    Ok(())
+}
+
+/// `PIN_COHERENT` on a device that snoops the caches -- every PCI function
+/// QEMU gives -- changes nothing: a pin of part of a VMO is taken, where one
+/// for a device that does not snoop must cover it all, and the VMO is still
+/// one the kernel copies into, since its mappings stay cached.
+fn check_a_coherent_pin_of_a_snooping_device_changes_nothing(
+    side: &Side,
+    handle: Handle,
+) -> Result<(), &'static str> {
+    let vmo = side.handle(
+        nr::VMO_CREATE,
+        &[2 * PAGE_SIZE],
+        "vmo_create for a coherent pin failed",
+    )?;
+    let coherent = ferrix_native_abi::types::PIN_COHERENT;
+    let pin = side.handle(
+        nr::VMO_PIN,
+        &[reg(handle), reg(vmo), 0, PAGE_SIZE, coherent],
+        "a coherent pin of part of a VMO for a device that snoops was refused",
+    )?;
+    side.put(PAYLOAD, SECRET)?;
+    side.put_offset(0)?;
+    let _ = side
+        .call(nr::VMO_WRITE, &[reg(vmo), PAYLOAD, len(SECRET), OFFSET])
+        .map_err(|_| "a coherent pin for a device that snoops stopped vmo_write")?;
+    for held in [pin, vmo] {
+        let _ = side
+            .call(nr::HANDLE_CLOSE, &[reg(held)])
+            .map_err(|_| "closing a coherent pin's handles failed")?;
+    }
     Ok(())
 }
 

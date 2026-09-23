@@ -715,6 +715,11 @@ fn vmo_copy(
         Direction::Write => Rights::WRITE,
     };
     let vmo = process.with_handles(|table| vmo_in(table, vmo, needed))?;
+    // The copy goes through the kernel's cached view of the frames, which an
+    // object shared with a device past the caches must never have lines in.
+    if vmo.is_coherent() {
+        return Err(status::BAD_STATE);
+    }
     let offset = read_u64(process, offset)?;
     let end = offset
         .checked_add(buffer.count)
@@ -1249,6 +1254,15 @@ fn device_quiesce(process: &Process, device: Handle) -> Result<usize, Errno> {
 /// handle needs `MANAGE`, as minting its interrupts and mappings does. The VMO
 /// needs `READ`, and `WRITE` unless the pin is read-only, since a device
 /// writing a page is a write through the VMO.
+///
+/// `PIN_COHERENT` asks for memory the program and the device see alike, as
+/// descriptors a controller polls need. For a device that snoops the caches
+/// that is every pin, and the option changes nothing. For one that does not,
+/// the pin must cover the whole object, which no mapping may name yet: the
+/// object is marked coherent, so every mapping of it bypasses the caches, and
+/// each of its frames is cleaned and dropped from them before the pin is
+/// answered, so no line the kernel left -- zeroing the frame, or a copy in
+/// before the pin -- is written back later over what the device wrote.
 fn vmo_pin(
     process: &Process,
     device: Handle,
@@ -1257,16 +1271,16 @@ fn vmo_pin(
     length: u64,
     options: u64,
 ) -> Result<usize, Errno> {
+    use ferrix_native_abi::types::{PIN_COHERENT, PIN_READ_ONLY};
     let page = PAGE_SIZE;
-    let known = ferrix_native_abi::types::PIN_READ_ONLY;
-    if options & !known != 0
+    if options & !(PIN_READ_ONLY | PIN_COHERENT) != 0
         || length == 0
         || !offset.is_multiple_of(page)
         || !length.is_multiple_of(page)
     {
         return Err(status::INVALID_ARGS);
     }
-    let read_only = options & known != 0;
+    let read_only = options & PIN_READ_ONLY != 0;
     let node = device_in(process, device, Rights::MANAGE)?;
     // The first pin is what gives the device DMA, so it is where bus
     // mastering goes on; a device whose switch cannot be reached gets no pin.
@@ -1277,7 +1291,19 @@ fn vmo_pin(
         }
         vmo_in(table, vmo, Rights::READ)
     })?;
+    let past_caches = options & PIN_COHERENT != 0 && !node.dma_shape().coherent;
+    if past_caches && (offset != 0 || length != vmo.len_bytes()) {
+        return Err(status::INVALID_ARGS);
+    }
     let held = vmo.hold(offset / page, length / page).map_err(vmo_error)?;
+    if past_caches {
+        if !vmo.make_coherent() {
+            return Err(status::BAD_STATE);
+        }
+        for frame in held.frames() {
+            crate::arch::flush_for_device(crate::mm::direct_map(*frame * page), page);
+        }
+    }
     let flags = if read_only {
         ferrix_paging::MapFlags::DMA_READ_ONLY
     } else {

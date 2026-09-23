@@ -1,6 +1,6 @@
 //! The instructions a native program cannot say in Rust, per architecture.
 //!
-//! Three things, each allow-listed in `scripts/asm-allowlist.json`:
+//! Four things, each allow-listed in `scripts/asm-allowlist.json`:
 //!
 //! * `_start`, because a process is *entered*, not called: the kernel drops to
 //!   user mode at the entry point with a stack pointer and registers it chose,
@@ -9,6 +9,8 @@
 //! * The trap instruction and its register assignment, which is the kernel's
 //!   system call entry read from the other side.
 //! * `exit_group`, the same trap with nothing to return to.
+//! * `dsb sy` on the Arm pair, the barrier a driver sharing memory with a
+//!   device that does not snoop needs before the device may look.
 //!
 //! The trap is one block per architecture and serves both ABIs: `call` makes
 //! a native call and `linux` a Linux one, and the kernel tells them apart by
@@ -34,8 +36,8 @@ mod armv7a;
 mod x86_64;
 
 #[cfg(target_arch = "aarch64")]
-pub(crate) use aarch64::{call, exit, linux, monotonic_nanos, nr, unlink};
+pub(crate) use aarch64::{call, device_barrier, exit, linux, monotonic_nanos, nr, unlink};
 #[cfg(target_arch = "arm")]
-pub(crate) use armv7a::{call, exit, linux, monotonic_nanos, nr, unlink};
+pub(crate) use armv7a::{call, device_barrier, exit, linux, monotonic_nanos, nr, unlink};
 #[cfg(target_arch = "x86_64")]
-pub(crate) use x86_64::{call, exit, linux, monotonic_nanos, nr, unlink};
+pub(crate) use x86_64::{call, device_barrier, exit, linux, monotonic_nanos, nr, unlink};

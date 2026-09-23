@@ -27,8 +27,8 @@ use std::path::Path;
 
 use compositor_evecho::{Device, event_nodes};
 use ferrix_linux_abi::input::{
-    ABS_X, ABS_Y, BTN_MISC, EV_ABS, EV_KEY, EV_REL, EV_SYN, Event, KEY_MAX, REL_HWHEEL, REL_WHEEL,
-    REL_X, REL_Y, SYN_REPORT,
+    ABS_X, ABS_Y, BTN_MISC, EV_ABS, EV_KEY, EV_LED, EV_REL, EV_SYN, Event, KEY_MAX, LED_CAPSL,
+    LED_NUML, REL_HWHEEL, REL_WHEEL, REL_X, REL_Y, SYN_REPORT,
 };
 
 use crate::seat::Input;
@@ -66,6 +66,32 @@ struct Open {
 pub struct Devices {
     open: Vec<Open>,
     events: Vec<Event>,
+    lights: Lights,
+}
+
+/// What the keyboards' LEDs were last told: Caps Lock and Num Lock, from the
+/// keymap's *locked* modifiers, as libxkbcommon's LED indicators follow
+/// them -- a Caps Lock held down lights nothing.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Lights {
+    shown: Option<(bool, bool)>,
+}
+
+impl Lights {
+    /// The LEDs to write for `locked`, the keymap's locked modifier mask:
+    /// `None` when they already show it. The first call always writes, which
+    /// clears whatever a keyboard was left showing.
+    pub fn change(&mut self, locked: u32) -> Option<[(u16, bool); 2]> {
+        let now = (
+            locked & compositor_xkb::generated::LOCK != 0,
+            locked & compositor_xkb::generated::MOD2 != 0,
+        );
+        if self.shown == Some(now) {
+            return None;
+        }
+        self.shown = Some(now);
+        Some([(LED_CAPSL, now.0), (LED_NUML, now.1)])
+    }
 }
 
 impl Devices {
@@ -115,6 +141,17 @@ impl Devices {
             node,
             axes: Axes { range, at: (0, 0) },
         })
+    }
+
+    /// Show the keymap's locks on every keyboard that has LEDs, when they
+    /// changed. A keyboard that will not take the write keeps what it shows.
+    pub fn show_locks(&mut self, locked: u32) {
+        let Some(leds) = self.lights.change(locked) else {
+            return;
+        };
+        for open in self.open.iter().filter(|open| open.device.reports(EV_LED)) {
+            let _ = open.device.write_leds(&leds);
+        }
     }
 
     /// What each device is, for the compositor's log line.

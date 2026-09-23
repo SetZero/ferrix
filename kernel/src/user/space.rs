@@ -738,12 +738,8 @@ impl AddressSpace {
                 frame * PAGE_SIZE,
                 PAGE_SIZE,
                 MapFlags {
-                    read: true,
-                    write: true,
                     execute: region.flags.execute,
-                    user: true,
-                    global: false,
-                    device: false,
+                    ..MapFlags::USER_DATA
                 },
             );
 
@@ -801,6 +797,8 @@ impl AddressSpace {
             user: true,
             global: false,
             device: false,
+            // Past the caches if a device shares it (`Vmo::make_coherent`).
+            uncached: vmo.is_coherent(),
         };
 
         mm::map_in(
@@ -1507,6 +1505,7 @@ fn user_page(write: bool, execute: bool) -> MapFlags {
         user: true,
         global: false,
         device: false,
+        uncached: false,
     }
 }
 
@@ -2035,6 +2034,7 @@ impl AddressSpace {
                 user: true,
                 global: false,
                 device: true,
+                uncached: false,
             },
         )
         .map_err(|_| SpaceError::OutOfMemory)

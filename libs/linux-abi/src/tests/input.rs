@@ -147,6 +147,7 @@ fn codes() -> Vec<(&'static str, u16)> {
         ("REP_CNT", input::REP_CNT),
         ("FF_MAX", input::FF_MAX),
         ("FF_CNT", input::FF_CNT),
+        ("BUS_USB", input::BUS_USB),
         ("BUS_VIRTUAL", input::BUS_VIRTUAL),
     ]
 }

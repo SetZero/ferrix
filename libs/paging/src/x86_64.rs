@@ -110,6 +110,7 @@ impl Encoding for X86_64 {
             user: entry & USER != 0,
             global: entry & GLOBAL != 0,
             device: entry & CACHE_DISABLE != 0,
+            uncached: false,
         }
     }
 }

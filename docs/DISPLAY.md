@@ -675,8 +675,8 @@ monitor [card0 HDMI-A-1 1280x720 1280x720]`, started a terminal running
 zinc, and the customer saw the tiled window. A frame takes about 100 ms in
 software on the 650 MHz Cortex-A7 once warm.
 
-**Not done.** Input: the board has no keyboard or pointer Ferrix drives (its
-USB host is stage 17's other P3 half, USB HID). Other modes: they need EDID's
+**Not done.** Input is done beside it: USB keyboards and mice on the board's
+USB host, 2026-09-23 (`docs/INPUT.md` §7). Other modes: they need EDID's
 preferred timing and a PLL4 reprogramming that does not disturb what else it
 clocks. Hotplug. The LTDC's second layer as a cursor plane. The panic screen:
 the firmware left no framebuffer on this board, so a panic is serial only,

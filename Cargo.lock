@@ -373,6 +373,26 @@ name = "ferrix-sync"
 version = "0.1.0"
 
 [[package]]
+name = "ferrix-usb-host"
+version = "0.1.0"
+dependencies = [
+ "ferrix-inputctl",
+ "ferrix-linux-abi",
+ "ferrix-native-abi",
+]
+
+[[package]]
+name = "ferrix-usbhid"
+version = "0.1.0"
+dependencies = [
+ "ferrix-blkring",
+ "ferrix-inputctl",
+ "ferrix-native-abi",
+ "ferrix-rt",
+ "ferrix-usb-host",
+]
+
+[[package]]
 name = "ferrix-ustack"
 version = "0.1.0"
 dependencies = [

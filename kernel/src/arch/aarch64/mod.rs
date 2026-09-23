@@ -9,6 +9,9 @@ mod switch;
 mod timer;
 mod trap;
 
+/// Clean and drop a buffer's lines, for memory about to be shared with such a
+/// device through a mapping that bypasses the caches.
+pub(crate) use cpu::clean_invalidate_to_poc as flush_for_device;
 /// Clean a buffer out of the data cache for a device that reads memory past
 /// it (see [`crate::arch::clean_for_device`]).
 pub(crate) use cpu::clean_to_poc as clean_for_device;

@@ -78,6 +78,11 @@ pub(crate) const PROGRAMS: &[Program] = &[
         directory: DRIVERS,
     },
     Program {
+        package: "ferrix-usbhid",
+        binary: "usbhid",
+        directory: DRIVERS,
+    },
+    Program {
         package: "ferrix-vport",
         binary: "vport",
         directory: DRIVERS,

@@ -135,6 +135,12 @@ fn trap(number: usize, args: [usize; 6]) -> usize {
     result
 }
 
+/// Complete every access before this before any after it: x86-64's devices
+/// snoop, so a fence is all a device needs.
+pub(crate) fn device_barrier() {
+    core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+}
+
 /// `exit_group(status)`.
 pub(crate) fn exit(status: i32) -> ! {
     // SAFETY: `exit_group` takes no pointer and does not return: the process

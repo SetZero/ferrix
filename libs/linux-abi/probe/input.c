@@ -209,6 +209,7 @@ int main(void)
 	VALUE(ID_VENDOR);
 	VALUE(ID_PRODUCT);
 	VALUE(ID_VERSION);
+	VALUE(BUS_USB);
 	VALUE(BUS_VIRTUAL);
 
 	/* The clocks `EVIOCSCLOCKID` accepts. */

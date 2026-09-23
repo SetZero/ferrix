@@ -154,8 +154,10 @@ pub enum NativeCall {
     /// `(device, vmo, offset, length, options)` → handle. Pin a range of a VMO
     /// into the device's IOMMU domain, so the device may reach it, and hold
     /// its pages until the handle is closed. The range is whole pages, and
-    /// `options` is [`crate::types::PIN_READ_ONLY`] or zero. Needs `MANAGE` on
-    /// the device, `READ` on the VMO, and `WRITE` unless read-only.
+    /// `options` is [`crate::types::PIN_READ_ONLY`],
+    /// [`crate::types::PIN_COHERENT`] or zero. Needs `MANAGE` on the device,
+    /// `READ` on the VMO, and `WRITE` unless read-only. `VmoRead` and
+    /// `VmoWrite` refuse a VMO a coherent pin has marked, with `BAD_STATE`.
     VmoPin,
     /// `(pin, addresses: *u64, capacity)` → pages. Write each pinned page's
     /// device address, in page order, up to `capacity`; the answer is how many

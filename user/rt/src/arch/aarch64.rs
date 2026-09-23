@@ -137,6 +137,14 @@ fn trap(number: usize, args: [usize; 6]) -> usize {
     result
 }
 
+/// `dsb sy`: complete every access before this, to memory of any type and
+/// to device registers, before any after it, as every observer sees them --
+/// a device's DMA included, which `dmb ish` does not reach.
+pub(crate) fn device_barrier() {
+    // SAFETY: a barrier: no memory or register changes.
+    unsafe { asm!("dsb sy", options(nostack, preserves_flags)) }
+}
+
 /// `exit_group(status)`.
 pub(crate) fn exit(status: i32) -> ! {
     // SAFETY: `exit_group` takes no pointer and does not return: the process

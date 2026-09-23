@@ -289,6 +289,38 @@ pub(crate) fn clean_to_poc(start: u64, len: u64) {
     }
 }
 
+/// Write the data cache lines covering `start..start + len` back to the
+/// point of coherency and drop them.
+///
+/// For memory about to be shared with a device that does not snoop, through
+/// a mapping that bypasses the caches: a dirty line left behind could be
+/// evicted later, over whatever the device wrote since.
+pub(crate) fn clean_invalidate_to_poc(start: u64, len: u64) {
+    let cache_type: u64;
+    // SAFETY: reading `CTR_EL0` has no side effects.
+    unsafe {
+        asm!("mrs {}, ctr_el0", out(reg) cache_type, options(nomem, nostack, preserves_flags));
+    }
+    let line = 4u64 << ((cache_type >> 16) & 0xF);
+
+    let mut at = start - start % line;
+    let end = start.saturating_add(len);
+    while at < end {
+        // SAFETY: `dc civac` writes one line back and invalidates it by
+        // virtual address; its data reaches memory first. The caller's range
+        // is mapped.
+        unsafe {
+            asm!("dc civac, {}", in(reg) at, options(nostack, preserves_flags));
+        }
+        at += line;
+    }
+    // SAFETY: a barrier, completing the maintenance before the memory is
+    // handed over.
+    unsafe {
+        asm!("dsb sy", options(nostack, preserves_flags));
+    }
+}
+
 /// A PSCI call through the hypervisor conduit.
 ///
 /// # Safety

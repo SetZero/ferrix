@@ -196,6 +196,12 @@ pub struct MapFlags {
     /// Device memory: uncached, and on AArch64 also non-gathering and
     /// non-reordering, which is what an `MMIO` register requires.
     pub device: bool,
+    /// Normal memory the caches do not hold: memory shared with a device that
+    /// does not snoop them, such as an STM32MP1's USB host reading its
+    /// descriptors. Weakly ordered, unlike [`MapFlags::device`], so a writer
+    /// still needs a barrier before the device may look. Ignored where
+    /// `device` is set, and on x86-64, whose devices all snoop.
+    pub uncached: bool,
 }
 
 impl MapFlags {
@@ -207,6 +213,7 @@ impl MapFlags {
         user: false,
         global: true,
         device: false,
+        uncached: false,
     };
 
     /// A page a device may read and write through an IOMMU: a DMA buffer.
@@ -220,6 +227,7 @@ impl MapFlags {
         user: false,
         global: false,
         device: false,
+        uncached: false,
     };
 
     /// A page a device may read but not write through an IOMMU.
@@ -230,6 +238,7 @@ impl MapFlags {
         user: false,
         global: false,
         device: false,
+        uncached: false,
     };
 
     /// Kernel constants: read only, never executable.
@@ -240,6 +249,7 @@ impl MapFlags {
         user: false,
         global: true,
         device: false,
+        uncached: false,
     };
 
     /// Kernel data, stacks and the direct map: read and write, never
@@ -252,6 +262,7 @@ impl MapFlags {
         user: false,
         global: true,
         device: false,
+        uncached: false,
     };
 
     /// A device register window.
@@ -262,6 +273,7 @@ impl MapFlags {
         user: false,
         global: true,
         device: true,
+        uncached: false,
     };
 
     /// User text.
@@ -272,6 +284,7 @@ impl MapFlags {
         user: true,
         global: false,
         device: false,
+        uncached: false,
     };
 
     /// User data and stack.
@@ -282,6 +295,7 @@ impl MapFlags {
         user: true,
         global: false,
         device: false,
+        uncached: false,
     };
 
     /// The same flags with execute permission removed.
