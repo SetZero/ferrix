@@ -132,7 +132,11 @@ pub(crate) fn test_selfhost(args: &Args) -> Result<()> {
         zinc::built(arch)?.ok_or_else(|| Error::new("zinc could not be built for x86-64"))?;
     println!("  {arch}: building an image whose shell builds Ferrix");
     let loader = cargo::build_loader(arch, args.release)?;
-    let kernel = cargo::build_kernel_with_init(arch, args.release, &shell, &script(args.release))?;
+    let script = match std::env::var_os("FERRIX_SELFHOST_SCRIPT") {
+        Some(path) => std::fs::read_to_string(path)?,
+        None => script(args.release),
+    };
+    let kernel = cargo::build_kernel_with_init(arch, args.release, &shell, &script)?;
     let natives = native::build(arch, args.release)?;
     let bytes = std::fs::read(&shell)
         .map_err(|error| Error::new(format!("reading {}: {error}", shell.display())))?;
