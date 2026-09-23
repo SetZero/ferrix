@@ -23,6 +23,19 @@
 //! its start and the response at its end; [`Driver::submit`] refuses a second
 //! command until [`Driver::on_interrupt`] has taken the first's response.
 //!
+//! # The cursor queue is the other way round
+//!
+//! A pointer moves a hundred times a second and nobody waits on a move, so
+//! the cursor queue is run the way seL4's device driver framework runs its
+//! queues: commands go into slots of a page of their own
+//! ([`CURSOR_SLOTS`]), everything owed is posted behind one doorbell, and
+//! the device's completions raise no interrupt at all -- a slot is taken
+//! back when the next command is posted, or when the control queue
+//! interrupts anyway. When every slot is taken, what is owed waits, newest
+//! first: a scanout owes at most one command, the latest place and, if the
+//! image changed since, the image ([`Driver::update_cursor`],
+//! [`Driver::move_cursor`]).
+//!
 //! # DMA memory is freed only after a reset
 //!
 //! As in `ferrix-virtio-blk`: the rings and the command area are held in
@@ -91,6 +104,14 @@ pub const CAPSET_ROOM: u32 = (RESPONSE_BYTES - gpu::HEADER_LEN) as u32;
 /// request pages and one response buffer, and only one is in flight.
 pub const QUEUE_SIZE: u16 = 64;
 
+/// Cursor commands the cursor queue may hold at once: its size, and the
+/// slots of the cursor area.
+pub const CURSOR_SLOTS: usize = 16;
+
+/// Bytes of one slot of the cursor area: a command, rounded up so that no
+/// slot crosses a page.
+const CURSOR_SLOT_BYTES: usize = 64;
+
 /// The device's registers, as the process that drives it reaches them. The
 /// same shape as `ferrix-virtio-blk`'s.
 pub trait Transport: CommonConfig + DeviceConfig {
@@ -134,6 +155,10 @@ pub struct Parts<T, R, A> {
     pub rings: R,
     /// Requests and responses: at least one page.
     pub area: A,
+    /// The cursor queue's rings: pages holding a queue of [`CURSOR_SLOTS`].
+    pub cursor_rings: R,
+    /// Where cursor commands wait for the device: a page.
+    pub cursor_area: A,
 }
 
 /// How [`Driver::init`] goes about it.
@@ -205,6 +230,8 @@ pub enum SubmitError {
     Command(GpuError),
     /// The device broke the queue while the command was published.
     Device(DeviceError),
+    /// A cursor for a scanout the device does not have.
+    NoSuchScanout,
 }
 
 /// How the device broke the protocol. The driver has set `FAILED`.
@@ -261,6 +288,10 @@ pub struct Released<T, R, A> {
     pub rings: Rings<R>,
     /// The command area.
     pub area: A,
+    /// The cursor queue's rings, inside the queue if one was built.
+    pub cursor_rings: Rings<R>,
+    /// The cursor area.
+    pub cursor_area: A,
 }
 
 /// The rings' memory as it comes back.
@@ -346,6 +377,16 @@ pub struct Driver<T, R, A> {
     reset_polls: u32,
     fault: Option<DeviceError>,
     in_flight: Option<InFlight>,
+    cursor_queue: ManuallyDrop<SplitQueue<R>>,
+    cursor_area: ManuallyDrop<A>,
+    cursor_notify_off: u16,
+    /// The chain each slot of the cursor area is in, while the device has it.
+    cursor_slots: [Option<u16>; CURSOR_SLOTS],
+    /// Each scanout's cursor as the device will next be told it.
+    cursors: [gpu::Cursor; gpu::MAX_SCANOUTS],
+    /// What each scanout's cursor is owed and has not been sent for want of
+    /// a slot: `Some(true)` its image, `Some(false)` only its place.
+    cursor_owed: [Option<bool>; gpu::MAX_SCANOUTS],
 }
 
 impl<T, R, A> fmt::Debug for Driver<T, R, A> {
@@ -396,10 +437,88 @@ fn ring_addresses(layout: &Layout, pages: &[u64]) -> Option<QueueAddresses> {
     })
 }
 
+/// Where queue `index` goes in `pages`: its layout, at most `wanted` long,
+/// and the three parts' device addresses. `room` is whether the areas the
+/// commands live in are large enough, which fails the plan the same way.
+fn plan_queue<T: CommonConfig>(
+    transport: &mut T,
+    index: u16,
+    wanted: u16,
+    pages: &[u64],
+    room: bool,
+) -> Result<(Layout, QueueAddresses), InitError> {
+    let max = pci::queue_max_size(transport, index).map_err(InitError::Transport)?;
+    let layout = Layout::for_size(wanted.min(max)).map_err(|_| InitError::NoRoom)?;
+    let addresses = ring_addresses(&layout, pages).ok_or(InitError::NoRoom)?;
+    if room {
+        Ok((layout, addresses))
+    } else {
+        Err(InitError::NoRoom)
+    }
+}
+
+/// Enable the control queue on the vector the transport names and the
+/// cursor queue on none, then `DRIVER_OK`.
+fn start_queues<T: Transport>(
+    transport: &mut T,
+    control: (Layout, QueueAddresses),
+    cursor: (Layout, QueueAddresses),
+) -> Result<(pci::ActiveQueue, pci::ActiveQueue), InitError> {
+    let asked = transport.queue_vector();
+    let active = pci::activate_queue(
+        transport,
+        gpu::CONTROL_QUEUE,
+        control.0.queue_size,
+        control.1,
+        asked,
+    )
+    .map_err(InitError::Transport)?;
+    if active.vector != asked {
+        return Err(InitError::VectorRefused {
+            asked,
+            kept: active.vector,
+        });
+    }
+    let cursor = pci::activate_queue(
+        transport,
+        gpu::CURSOR_QUEUE,
+        cursor.0.queue_size,
+        cursor.1,
+        pci::NO_VECTOR,
+    )
+    .map_err(InitError::Transport)?;
+    pci::driver_ok(transport).map_err(InitError::Transport)?;
+    Ok((active, cursor))
+}
+
+/// A bring-up that failed at `error`: the device marked `FAILED` and reset,
+/// and its parts handed back.
+fn failed<T: CommonConfig, R, A>(
+    mut transport: T,
+    rings: Rings<R>,
+    area: A,
+    cursor: CursorParts<R, A>,
+    error: InitError,
+    polls: u32,
+) -> InitFailure<T, R, A> {
+    set_failed(&mut transport);
+    InitFailure {
+        error,
+        teardown: teardown(transport, rings, area, cursor, polls),
+    }
+}
+
+/// The cursor queue's half of [`Released`].
+struct CursorParts<R, A> {
+    rings: Rings<R>,
+    area: A,
+}
+
 fn teardown<T: CommonConfig, R, A>(
     mut transport: T,
     rings: Rings<R>,
     area: A,
+    cursor: CursorParts<R, A>,
     polls: u32,
 ) -> Teardown<T, R, A> {
     let reset = pci::reset(&mut transport, polls);
@@ -407,6 +526,8 @@ fn teardown<T: CommonConfig, R, A>(
         transport,
         rings,
         area,
+        cursor_rings: cursor.rings,
+        cursor_area: cursor.area,
     };
     match reset {
         Ok(()) => Teardown::Released(released),
@@ -426,94 +547,92 @@ where
     A: CommandArea,
 {
     /// Bring the device up: reset, features, `FEATURES_OK`, the configuration
-    /// read, the control queue built and enabled, `DRIVER_OK`. The cursor
-    /// queue is left disabled; iteration 1 draws no hardware cursor.
+    /// read, the control queue and the cursor queue built and enabled,
+    /// `DRIVER_OK`.
+    ///
+    /// The cursor queue interrupts through no vector and asks for no
+    /// interrupt: see the module's note on why nobody waits for it.
+    #[cfg_attr(
+        target_pointer_width = "64",
+        expect(
+            clippy::result_large_err,
+            reason = "the parts are DMA memory handed back once, and there is no allocator to box                       them into; two queues of them pass the lint's size only where a word is                       eight bytes"
+        )
+    )]
     pub fn init(parts: Parts<T, R, A>, options: Options) -> Result<Self, InitFailure<T, R, A>> {
         let Parts {
             mut transport,
             rings,
             area,
+            cursor_rings,
+            cursor_area,
         } = parts;
-        let fail = |mut transport: T, rings, area, error| {
-            set_failed(&mut transport);
-            Err(InitFailure {
-                error,
-                teardown: teardown(transport, rings, area, options.reset_polls),
-            })
-        };
-
+        let polls = options.reset_polls;
         let wanted = if options.want_3d {
             gpu::DRIVER_FEATURES_3D
         } else {
             gpu::DRIVER_FEATURES
         };
-        let features = match pci::negotiate(
-            &mut transport,
-            wanted,
-            gpu::REQUIRED_FEATURES,
-            options.reset_polls,
-        ) {
-            Ok(features) => features,
-            Err(error) => {
-                return fail(
-                    transport,
-                    Rings::Unused(rings),
-                    area,
-                    InitError::Transport(error),
-                );
-            }
-        };
-        let config = match Config::read(&transport) {
-            Ok(config) => config,
-            Err(error) => {
-                return fail(
-                    transport,
-                    Rings::Unused(rings),
-                    area,
-                    InitError::Config(error),
-                );
-            }
-        };
-        let room = area.device_pages().len() * PAGE_SIZE as usize > RESPONSE_BYTES;
-        let plan = pci::queue_max_size(&mut transport, gpu::CONTROL_QUEUE)
+        let agreed = pci::negotiate(&mut transport, wanted, gpu::REQUIRED_FEATURES, polls)
             .map_err(InitError::Transport)
-            .and_then(|max| {
-                let size = QUEUE_SIZE.min(max);
-                let layout = Layout::for_size(size).map_err(|_| InitError::NoRoom)?;
-                let addresses =
-                    ring_addresses(&layout, rings.device_pages()).ok_or(InitError::NoRoom)?;
-                if room {
-                    Ok((layout, addresses))
-                } else {
-                    Err(InitError::NoRoom)
-                }
+            .and_then(|features| {
+                let config = Config::read(&transport).map_err(InitError::Config)?;
+                let room = area.device_pages().len() * PAGE_SIZE as usize > RESPONSE_BYTES
+                    && cursor_area.device_pages().len() * PAGE_SIZE as usize
+                        >= CURSOR_SLOTS * CURSOR_SLOT_BYTES;
+                let control = plan_queue(
+                    &mut transport,
+                    gpu::CONTROL_QUEUE,
+                    QUEUE_SIZE,
+                    rings.device_pages(),
+                    room,
+                )?;
+                let cursor = plan_queue(
+                    &mut transport,
+                    gpu::CURSOR_QUEUE,
+                    CURSOR_SLOTS as u16,
+                    cursor_rings.device_pages(),
+                    room,
+                )?;
+                Ok((features, config, control, cursor))
             });
-        let (layout, addresses) = match plan {
-            Ok(plan) => plan,
-            Err(error) => return fail(transport, Rings::Unused(rings), area, error),
+        let (features, config, control, cursor) = match agreed {
+            Ok(agreed) => agreed,
+            Err(error) => {
+                let cursor = CursorParts {
+                    rings: Rings::Unused(cursor_rings),
+                    area: cursor_area,
+                };
+                return Err(failed(
+                    transport,
+                    Rings::Unused(rings),
+                    area,
+                    cursor,
+                    error,
+                    polls,
+                ));
+            }
         };
 
-        let queue = SplitQueue::new(layout, rings);
-        let asked = transport.queue_vector();
-        let started = match pci::activate_queue(
-            &mut transport,
-            gpu::CONTROL_QUEUE,
-            layout.queue_size,
-            addresses,
-            asked,
-        ) {
-            Ok(active) if active.vector != asked => Err(InitError::VectorRefused {
-                asked,
-                kept: active.vector,
-            }),
-            Ok(active) => pci::driver_ok(&mut transport)
-                .map(|()| active)
-                .map_err(InitError::Transport),
-            Err(error) => Err(InitError::Transport(error)),
-        };
-        let active = match started {
-            Ok(active) => active,
-            Err(error) => return fail(transport, Rings::Queue(queue), area, error),
+        let queue = SplitQueue::new(control.0, rings);
+        let mut cursor_queue = SplitQueue::new(cursor.0, cursor_rings);
+        cursor_queue.set_interrupts_suppressed(true);
+        let (active, cursor_active) = match start_queues(&mut transport, control, cursor) {
+            Ok(started) => started,
+            Err(error) => {
+                let cursor = CursorParts {
+                    rings: Rings::Queue(cursor_queue),
+                    area: cursor_area,
+                };
+                return Err(failed(
+                    transport,
+                    Rings::Queue(queue),
+                    area,
+                    cursor,
+                    error,
+                    polls,
+                ));
+            }
         };
 
         Ok(Self {
@@ -526,9 +645,18 @@ where
                 vector: active.vector,
             },
             notify_off: active.notify_off,
-            reset_polls: options.reset_polls,
+            reset_polls: polls,
             fault: None,
             in_flight: None,
+            cursor_queue: ManuallyDrop::new(cursor_queue),
+            cursor_area: ManuallyDrop::new(cursor_area),
+            cursor_notify_off: cursor_active.notify_off,
+            cursor_slots: [None; CURSOR_SLOTS],
+            cursors: core::array::from_fn(|scanout| gpu::Cursor {
+                scanout_id: scanout as u32,
+                ..gpu::Cursor::default()
+            }),
+            cursor_owed: [None; gpu::MAX_SCANOUTS],
         })
     }
 
@@ -679,6 +807,12 @@ where
             self.break_down(DeviceError::NeedsReset);
             return Err(DeviceError::NeedsReset);
         }
+        // The cursor queue raises no interrupt of its own, so whatever woke
+        // the driver is when its slots come back and what waited for one
+        // goes out.
+        if let Err(SubmitError::Device(error)) = self.pump_cursor() {
+            return Err(error);
+        }
         let used = match self.queue.take_used() {
             Ok(Some(used)) => used,
             Ok(None) => return Ok((None, isr)),
@@ -736,6 +870,150 @@ where
         }
     }
 
+    /// Show `resource_id` -- a resource [`gpu::CURSOR_SIZE`] pixels square,
+    /// its pixels already on the device -- as `scanout`'s cursor with its
+    /// hotspot at (`hot_x`, `hot_y`), where the cursor last was: an
+    /// `UPDATE_CURSOR`. Resource 0 is Linux's way of saying none, and QEMU's
+    /// of keeping the last image and hiding it from a window.
+    ///
+    /// # Errors
+    ///
+    /// A scanout the device does not have, or the device's.
+    pub fn update_cursor(
+        &mut self,
+        scanout: u32,
+        resource_id: u32,
+        hot_x: u32,
+        hot_y: u32,
+    ) -> Result<(), SubmitError> {
+        let cursor = self.cursor(scanout)?;
+        cursor.resource_id = resource_id;
+        cursor.hot_x = hot_x;
+        cursor.hot_y = hot_y;
+        self.owe_cursor(scanout, true)
+    }
+
+    /// Put `scanout`'s cursor's top-left corner at (`x`, `y`): a
+    /// `MOVE_CURSOR`, or nothing while it shows no image, whose next
+    /// [`Driver::update_cursor`] carries the place.
+    ///
+    /// # Errors
+    ///
+    /// A scanout the device does not have, or the device's.
+    pub fn move_cursor(&mut self, scanout: u32, x: i32, y: i32) -> Result<(), SubmitError> {
+        let cursor = self.cursor(scanout)?;
+        cursor.x = x;
+        cursor.y = y;
+        if cursor.resource_id == 0 {
+            return Ok(());
+        }
+        self.owe_cursor(scanout, false)
+    }
+
+    /// Where `scanout`'s cursor is, without telling the device: the place
+    /// the next update or move carries.
+    ///
+    /// # Errors
+    ///
+    /// A scanout the device does not have.
+    pub fn place_cursor(&mut self, scanout: u32, x: i32, y: i32) -> Result<(), SubmitError> {
+        let cursor = self.cursor(scanout)?;
+        cursor.x = x;
+        cursor.y = y;
+        Ok(())
+    }
+
+    fn cursor(&mut self, scanout: u32) -> Result<&mut gpu::Cursor, SubmitError> {
+        if scanout >= self.info.config.num_scanouts {
+            return Err(SubmitError::NoSuchScanout);
+        }
+        self.cursors
+            .get_mut(scanout as usize)
+            .ok_or(SubmitError::NoSuchScanout)
+    }
+
+    fn owe_cursor(&mut self, scanout: u32, update: bool) -> Result<(), SubmitError> {
+        if let Some(owed) = self.cursor_owed.get_mut(scanout as usize) {
+            *owed = Some(owed.unwrap_or(false) || update);
+        }
+        self.pump_cursor()
+    }
+
+    /// Take back the cursor area's slots the device has finished with, post
+    /// what each scanout's cursor is owed into as many as are free, and ring
+    /// the doorbell once for all of them.
+    ///
+    /// # Errors
+    ///
+    /// [`SubmitError::Broken`] for a failed device, and the device's when it
+    /// broke the queue.
+    pub fn pump_cursor(&mut self) -> Result<(), SubmitError> {
+        if self.fault.is_some() {
+            return Err(SubmitError::Broken);
+        }
+        loop {
+            let used = match self.cursor_queue.take_used() {
+                Ok(Some(used)) => used,
+                Ok(None) => break,
+                Err(error) => {
+                    self.break_down(DeviceError::Queue(error));
+                    return Err(SubmitError::Device(DeviceError::Queue(error)));
+                }
+            };
+            let Some(slot) = self
+                .cursor_slots
+                .iter_mut()
+                .find(|slot| **slot == Some(used.head))
+            else {
+                let error = DeviceError::UnknownChain(used.head);
+                self.break_down(error);
+                return Err(SubmitError::Device(error));
+            };
+            *slot = None;
+        }
+        let mut posted = false;
+        for scanout in 0..gpu::MAX_SCANOUTS {
+            let Some(Some(update)) = self.cursor_owed.get(scanout).copied() else {
+                continue;
+            };
+            let Some(slot) = self.cursor_slots.iter().position(Option::is_none) else {
+                break;
+            };
+            let Some(cursor) = self.cursors.get(scanout).copied() else {
+                continue;
+            };
+            let at = slot * CURSOR_SLOT_BYTES;
+            let address = contiguous(self.cursor_area.device_pages(), at, gpu::CURSOR_LEN)
+                .ok_or(SubmitError::TooLarge)?;
+            for (index, &byte) in cursor.encode(update).iter().enumerate() {
+                self.cursor_area.write_u8(at + index, byte);
+            }
+            let head = match self
+                .cursor_queue
+                .add_chain(&[Buffer::readable(address, gpu::CURSOR_LEN as u32)])
+            {
+                Ok(head) => head,
+                Err(QueueError::ChainTooLong | QueueError::OutOfDescriptors) => break,
+                Err(error) => {
+                    self.break_down(DeviceError::Queue(error));
+                    return Err(SubmitError::Device(DeviceError::Queue(error)));
+                }
+            };
+            if let Some(held) = self.cursor_slots.get_mut(slot) {
+                *held = Some(head);
+            }
+            if let Some(owed) = self.cursor_owed.get_mut(scanout) {
+                *owed = None;
+            }
+            posted = true;
+        }
+        if posted && self.cursor_queue.device_wants_notification() {
+            self.transport
+                .notify(gpu::CURSOR_QUEUE, self.cursor_notify_off);
+        }
+        Ok(())
+    }
+
     /// Read the configuration's pending events and acknowledge them.
     pub fn take_events(&mut self) -> u32 {
         let events = self.transport.config_read32(gpu::CONFIG_EVENTS_READ);
@@ -754,12 +1032,18 @@ where
             queue,
             area,
             reset_polls,
+            cursor_queue,
+            cursor_area,
             ..
         } = self;
         teardown(
             transport,
             Rings::Queue(ManuallyDrop::into_inner(queue)),
             ManuallyDrop::into_inner(area),
+            CursorParts {
+                rings: Rings::Queue(ManuallyDrop::into_inner(cursor_queue)),
+                area: ManuallyDrop::into_inner(cursor_area),
+            },
             reset_polls,
         )
     }

@@ -196,6 +196,11 @@ struct State {
     /// A closed open's scanout-off that found the channel full, sent as soon
     /// as there is room, unless a later SCANOUT supersedes it.
     scanout_off: bool,
+    /// Each scanout's cursor place that found the channel full: only the
+    /// newest, sent as soon as there is room. A pointer's places in between
+    /// are not worth a wait, and a MOVE is the one request that must never
+    /// make its caller wait.
+    moves: [Option<(i32, i32)>; MAX_SCANOUTS],
 }
 
 impl State {
@@ -305,7 +310,8 @@ impl State {
     }
 
     /// Send what waited for the session or for room in the channel: a
-    /// closed open's scanout-off, then the orphans' detaches.
+    /// closed open's scanout-off, the cursors' newest places, then the
+    /// orphans' detaches.
     fn retry(&mut self, control: &Endpoint) {
         if self.scanout_off
             && control.peer_has_room()
@@ -316,9 +322,30 @@ impl State {
                 return;
             }
         }
+        if self.send_moves(control).is_err() {
+            return;
+        }
         for buffer in core::mem::take(&mut self.orphans) {
             self.let_go(control, buffer);
         }
+    }
+
+    /// Send every scanout's waiting cursor place the channel has room for.
+    fn send_moves(&mut self, control: &Endpoint) -> Result<(), CardError> {
+        for scanout in 0..MAX_SCANOUTS {
+            if !control.peer_has_room() {
+                break;
+            }
+            let Some(at) = self.moves.get_mut(scanout).and_then(Option::take) else {
+                continue;
+            };
+            // The session refuses only a scanout the driver has not got and
+            // a conversation that is over; either way the place is dropped.
+            if let Ok(message) = self.session.move_cursor(scanout as u32, at) {
+                write(control, self, &message)?;
+            }
+        }
+        Ok(())
     }
 
     fn forget(&mut self, reply: Unwanted) -> bool {
@@ -664,6 +691,67 @@ impl Card {
         self.state.lock().give_back(offset, bytes);
     }
 
+    /// CURSOR: show `buffer` -- [`ferrix_displayctl::message::CURSOR_SIZE`]
+    /// square, or 0 for none -- as
+    /// `scanout`'s cursor with its hotspot at `hot` and its top-left corner
+    /// at `at`, and wait for FLIPPED, which says the image is on the device.
+    pub(crate) fn cursor(
+        &self,
+        scanout: u32,
+        buffer: u32,
+        hot: (u32, u32),
+        at: (i32, i32),
+    ) -> Result<Status, CardError> {
+        // The image is read by the device, as a flushed frame is.
+        if buffer != 0 {
+            self.clean_rows(buffer, 0, u32::MAX);
+        }
+        let sequence = self.send(|state| {
+            let message = state
+                .session
+                .cursor(scanout, buffer, hot, at)
+                .map_err(CardError::Request)?;
+            let Message::Cursor { sequence, .. } = message else {
+                return Err(CardError::Gone);
+            };
+            // A place still waiting for room is older than this one.
+            if let Some(waiting) = state.moves.get_mut(scanout as usize) {
+                *waiting = None;
+            }
+            Ok((message, sequence))
+        })?;
+        let event = self.collect(
+            |event| matches!(event, Event::Flipped { sequence: s, .. } if *s == sequence),
+            |state| state.unwanted.push(Unwanted::Flipped(sequence)),
+        )?;
+        match event {
+            Event::Flipped { status, .. } => Ok(status),
+            _ => Err(CardError::Gone),
+        }
+    }
+
+    /// Whether the card has a cursor plane, as its driver's HELLO said.
+    pub(crate) fn has_cursor(&self) -> bool {
+        self.state.lock().session.has_cursor()
+    }
+
+    /// MOVE `scanout`'s cursor's top-left corner to `at`, without waiting
+    /// for anything: now if the channel has room, and otherwise as soon as
+    /// it does, unless a later place comes first.
+    pub(crate) fn move_cursor(&self, scanout: u32, at: (i32, i32)) -> Result<(), CardError> {
+        let mut state = self.state.lock();
+        if state.gone || self.control.peer_closed() {
+            return Err(CardError::Gone);
+        }
+        if scanout as usize >= self.scanouts {
+            return Err(CardError::Request(RequestError::NoSuchScanout));
+        }
+        if let Some(waiting) = state.moves.get_mut(scanout as usize) {
+            *waiting = Some(at);
+        }
+        state.send_moves(&self.control)
+    }
+
     /// Let go of `buffers` without waiting: detached now, or as soon as the
     /// session allows. Their ranges come back once the device gives them up.
     pub(crate) fn let_go(&self, buffers: &[u32]) {
@@ -887,6 +975,7 @@ fn accept(start: &Start, message: &ChannelMessage) -> Result<Arc<Card>, Refusal>
             orphans: Vec::new(),
             unwanted: Vec::new(),
             scanout_off: false,
+            moves: [None; MAX_SCANOUTS],
         }),
         changed: Arc::new(WaitQueue::new()),
         opened: AtomicBool::new(false),

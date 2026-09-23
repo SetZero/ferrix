@@ -979,6 +979,22 @@ fn finish(child: &mut std::process::Child, decided: bool) -> Result<std::process
     Ok(child.wait()?)
 }
 
+/// A VNC server on the loopback for a judged boot that needs a viewer's view
+/// of the card -- its cursor plane, which a screendump cannot see -- beside
+/// the boot's headless display; nothing for every other boot.
+fn judged_vnc(args: &Args, card: Option<&str>) -> Vec<String> {
+    match (args.judge_vnc, card) {
+        (Some(port), Some(card)) => vec![
+            "-vnc".to_owned(),
+            format!(
+                "127.0.0.1:{},display={card},head=0",
+                port.saturating_sub(5900)
+            ),
+        ],
+        _ => Vec::new(),
+    }
+}
+
 /// Assemble the QEMU command line for `arch`.
 fn qemu_command(
     arch: Arch,
@@ -1027,6 +1043,7 @@ fn qemu_command(
     // gets the same answer.
     let (_, gl) = crate::window::card(&binary, args.gl && card.is_some());
     let _ = command.args(window.arguments_with(card.as_deref(), gl, args.rendernode.as_deref()));
+    let _ = command.args(judged_vnc(args, card.as_deref()));
     let _ = command.args(crate::window::keymap_arguments(&window, args)?);
     window.announce(card.as_deref());
     // The serial port, which is this machine's whole console.

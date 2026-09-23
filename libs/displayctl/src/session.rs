@@ -2,7 +2,8 @@
 //!
 //! A [`Session`] starts from an accepted HELLO. The core asks it for each
 //! message it wants to send — [`Session::attach`], [`Session::scanout`],
-//! [`Session::flush`], [`Session::detach`], [`Session::stop`] — and the
+//! [`Session::flush`], [`Session::cursor`], [`Session::move_cursor`],
+//! [`Session::detach`], [`Session::stop`] — and the
 //! session refuses a request that would put the conversation in a state the
 //! protocol does not have, such as showing a buffer the device has not
 //! attached, or detaching one a scanout still shows. Every message from the
@@ -18,7 +19,8 @@
 
 use crate::message::AttachObject;
 use crate::message::{
-    Attach, AttachError, Hello, MAX_SCANOUTS, Message, Rect, Refusal, ScanoutMode, Status,
+    Attach, AttachError, CURSOR_SIZE, Hello, MAX_SCANOUTS, Message, Rect, Refusal, ScanoutMode,
+    Status,
 };
 use ferrix_native_abi::rights::Rights;
 
@@ -49,6 +51,9 @@ pub enum RequestError {
     NoSuchScanout,
     /// The rectangle is empty or runs past the buffer.
     Rect,
+    /// A cursor's buffer is not [`CURSOR_SIZE`] square, or its hotspot is
+    /// outside it, or the card said it has no cursor plane.
+    Cursor,
 }
 
 /// What a driver's message meant, once accepted.
@@ -133,6 +138,7 @@ pub struct Session {
     modes: [ScanoutMode; MAX_SCANOUTS],
     scanouts: usize,
     card_bytes: u64,
+    cursor: bool,
     slots: [Slot; MAX_BUFFERS],
     shown: [u32; MAX_SCANOUTS],
     flushes: [InFlight; MAX_IN_FLIGHT],
@@ -156,6 +162,7 @@ impl Session {
             modes: hello.modes,
             scanouts: usize::from(hello.scanouts),
             card_bytes,
+            cursor: hello.cursor,
             slots: [Slot::Free; MAX_BUFFERS],
             shown: [0; MAX_SCANOUTS],
             flushes: [InFlight {
@@ -174,6 +181,12 @@ impl Session {
     #[must_use]
     pub fn modes(&self) -> &[ScanoutMode] {
         self.modes.get(..self.scanouts).unwrap_or(&[])
+    }
+
+    /// Whether the card has a cursor plane, as its HELLO said.
+    #[must_use]
+    pub const fn has_cursor(&self) -> bool {
+        self.cursor
     }
 
     /// Whether the driver broke the protocol.
@@ -302,6 +315,16 @@ impl Session {
         if !rect.inside(attach.width, attach.height) {
             return Err(RequestError::Rect);
         }
+        let sequence = self.queue_flush(buffer)?;
+        Ok(Message::Flush {
+            buffer,
+            sequence,
+            rect,
+        })
+    }
+
+    /// Put a flush of `buffer` in line and answer its sequence number.
+    fn queue_flush(&mut self, buffer: u32) -> Result<u64, RequestError> {
         if self.flush_count >= MAX_IN_FLIGHT {
             return Err(RequestError::TooManyFlushes);
         }
@@ -314,10 +337,62 @@ impl Session {
         *entry = InFlight { sequence, buffer };
         self.flush_count += 1;
         self.next_sequence = sequence.wrapping_add(1).max(1);
-        Ok(Message::Flush {
+        Ok(sequence)
+    }
+
+    /// CURSOR: show `buffer` -- [`CURSOR_SIZE`] square, or 0 for none -- as
+    /// `scanout`'s cursor with its hotspot at `hot` and its top-left corner
+    /// at `at`. It waits in the flushes' line, since its image is moved to
+    /// the device as a flush's pixels are, and FLIPPED answers it.
+    pub fn cursor(
+        &mut self,
+        scanout: u32,
+        buffer: u32,
+        hot: (u32, u32),
+        at: (i32, i32),
+    ) -> Result<Message, RequestError> {
+        self.open()?;
+        if !self.cursor {
+            return Err(RequestError::Cursor);
+        }
+        if scanout as usize >= self.scanouts {
+            return Err(RequestError::NoSuchScanout);
+        }
+        if buffer != 0 {
+            let attach = self.attached(buffer)?;
+            if (attach.width, attach.height) != (CURSOR_SIZE, CURSOR_SIZE) {
+                return Err(RequestError::Cursor);
+            }
+        }
+        if hot.0 >= CURSOR_SIZE || hot.1 >= CURSOR_SIZE {
+            return Err(RequestError::Cursor);
+        }
+        let sequence = self.queue_flush(buffer)?;
+        Ok(Message::Cursor {
+            scanout,
             buffer,
             sequence,
-            rect,
+            hot_x: hot.0,
+            hot_y: hot.1,
+            x: at.0,
+            y: at.1,
+        })
+    }
+
+    /// MOVE `scanout`'s cursor's top-left corner to `at`. Nothing answers
+    /// it, and nothing about the session changes.
+    pub fn move_cursor(&mut self, scanout: u32, at: (i32, i32)) -> Result<Message, RequestError> {
+        self.open()?;
+        if !self.cursor {
+            return Err(RequestError::Cursor);
+        }
+        if scanout as usize >= self.scanouts {
+            return Err(RequestError::NoSuchScanout);
+        }
+        Ok(Message::Move {
+            scanout,
+            x: at.0,
+            y: at.1,
         })
     }
 

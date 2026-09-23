@@ -124,7 +124,7 @@ others.
 
 | Type | Direction | Body | Handles |
 |---|---|---|---|
-| `HELLO` | driver → core | version; scanout count (1 in iteration 1); for each scanout the preferred mode `width, height` from `GET_DISPLAY_INFO` and whether it is enabled | driver port (`WRITE \| TRANSFER`) |
+| `HELLO` | driver → core | version; scanout count (1 in iteration 1); for each scanout the preferred mode `width, height` from `GET_DISPLAY_INFO` and whether it is enabled; what the card said about 3D; whether it has a cursor plane | driver port (`WRITE \| TRANSFER`) |
 | `READY` | core → driver | card id | card VMO (`READ \| TRANSFER`), core port (`WRITE`) |
 | `REFUSED` | core → driver | reason | — |
 | `ATTACH` | core → driver | buffer id, offset, length, width, height, stride, format (`XRGB8888` only) | — |
@@ -135,6 +135,8 @@ others.
 | `DETACH` | core → driver | buffer id | — |
 | `DETACHED` | driver → core | buffer id | — |
 | `STOP` / `STOPPED` | as blk | | |
+| `CURSOR` | core → driver | scanout, buffer id (64 × 64; 0 for none), sequence, hotspot, place; only to a card whose `HELLO` said it has a cursor plane | — |
+| `MOVE` | core → driver | scanout, place; nothing answers it; the same | — |
 
 **Each message maps to device commands:**
 
@@ -149,6 +151,15 @@ others.
   flush and `FLIPPED` says so.
 * `DETACH`: `RESOURCE_DETACH_BACKING`, `RESOURCE_UNREF`, then the pin's
   handle is closed.
+* `CURSOR` (protocol version 4, 2026-09-23): `TRANSFER_TO_HOST_2D` of the
+  whole 64 × 64 image, then `UPDATE_CURSOR` on the cursor queue. It takes a
+  sequence from the flushes' count and `FLIPPED` answers it in their line,
+  so the image's buffer cannot be detached while its pixels are on their
+  way. Its place is given to the driver the moment the message is read.
+* `MOVE`: `MOVE_CURSOR` on the cursor queue, posted when the message is
+  read, never behind the control queue. A move carries the cursor's
+  resource, since QEMU's `update_cursor` hides a cursor whose move names
+  none.
 
 **Pages the device may still hold are never unpinned.** If the device
 refuses `RESOURCE_DETACH_BACKING`, the driver does not unreference the
@@ -160,12 +171,18 @@ belongs to someone else (os-f6's decision, 2026-09-16; `libs/virtio-gpu`'s
 
 The driver runs commands one at a time on the control queue: a frame is two
 commands, and at 60 frames a second a queue per frame is not worth its
-complexity.
+complexity. The cursor queue is run the other way round (`libs/virtio-gpu`,
+"The cursor queue is the other way round"): sixteen slots on a page of their
+own, everything owed posted behind one doorbell, and no interrupt at all --
+the queue is given no MSI-X vector and asks for none, and a slot comes back
+when the next command is posted or the control queue interrupts anyway. A
+pointer moving a hundred times a second is a hundred posts and no wakeup.
 
 **Doorbells.** A message on the channel is the doorbell both ways, and each
 side waits on its port for `PACKET_SIGNAL` on the channel. This is blk's STOP
 path, which already works. The ports in `HELLO` and `READY` are for later
-(cursor queue, display-change events) and cost nothing now.
+(display-change events) and cost nothing now; the cursor queue turned out to
+need none, since nobody waits for it.
 
 **What the core never trusts:** a buffer id it did not send, a sequence out
 of order, a `HELLO` with more scanouts than it can publish, or a mode above
@@ -185,7 +202,7 @@ source is committed this time.
 | ioctl | Iteration 1 |
 |---|---|
 | `DRM_IOCTL_VERSION` | name `virtio_gpu`, so drm-rs and Smithay identify the card |
-| `DRM_IOCTL_GET_CAP` | `DRM_CAP_DUMB_BUFFER` = 1, `DUMB_PREFERRED_DEPTH` = 24, `DUMB_PREFER_SHADOW` = 0, `TIMESTAMP_MONOTONIC` = 1, `CRTC_IN_VBLANK_EVENT` = 1; others `EINVAL` |
+| `DRM_IOCTL_GET_CAP` | `DRM_CAP_DUMB_BUFFER` = 1, `DUMB_PREFERRED_DEPTH` = 24, `DUMB_PREFER_SHADOW` = 0, `TIMESTAMP_MONOTONIC` = 1, `CRTC_IN_VBLANK_EVENT` = 1, and on a card with a cursor plane `CURSOR_WIDTH` and `CURSOR_HEIGHT` = 64; others `EINVAL` |
 | `DRM_IOCTL_SET_CLIENT_CAP` | `UNIVERSAL_PLANES` takes 0 or 1 (E4) and changes only what `GETPLANERESOURCES` lists; `ATOMIC` refused with `EOPNOTSUPP`, so clients fall back to legacy; the rest `EINVAL` |
 | `DRM_IOCTL_SET_MASTER`, `DROP_MASTER` | succeed; the exclusive open (below) is the master |
 | `MODE_GETRESOURCES` | a CRTC, an encoder and a connector per scanout the driver reported, and the framebuffer ids |
@@ -196,6 +213,7 @@ source is committed this time.
 | `MODE_SETCRTC` | `SCANOUT` then `FLUSH` of the whole buffer |
 | `MODE_PAGE_FLIP` | `SCANOUT` if the buffer changed, then `FLUSH`; `DRM_MODE_PAGE_FLIP_EVENT` queues a `drm_event_vblank` when `FLIPPED` arrives |
 | `MODE_DIRTYFB` | `FLUSH` of the clip rectangles |
+| `MODE_CURSOR`, `MODE_CURSOR2` | the head's cursor plane, as Linux's `drm_mode_cursor_universal` sets it: `MOVE` is a `MOVE` to the image's top-left corner and waits for nothing; `BO` is a `CURSOR` of a 64 × 64 dumb buffer, or none for handle 0, with `CURSOR2`'s hotspot (`CURSOR` has none), and returns at `FLIPPED`; both flags set the place first. Another size `EINVAL`, a handle this open has not got `ENOENT`, a card with no cursor plane -- the DK1's LTDC -- `ENXIO`, as Linux answers for a CRTC with none |
 | `read()` | `drm_event_vblank` records; blocks while none are queued, `EAGAIN` under `O_NONBLOCK` |
 | `MODE_GETPLANERESOURCES` | E4: one primary plane a head to an open that set `UNIVERSAL_PLANES`; no plane to one that did not |
 | `MODE_GETPLANE` | E4: format `XRGB8888`, `possible_crtcs` the bit of its head's CRTC, and the CRTC and framebuffer `SETCRTC` or `PAGE_FLIP` last showed on that head, 0 and 0 while nothing is; the formats are copied only into an array with room for all of them; another id `ENOENT` |

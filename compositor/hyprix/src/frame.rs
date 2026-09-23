@@ -639,7 +639,7 @@ pub(crate) fn cursor_rect(
 }
 
 /// The pixels a surface is showing, if it is showing any.
-fn pixels(slot: &Slot, surface: ObjectId) -> Option<Surface<'_>> {
+pub(crate) fn pixels(slot: &Slot, surface: ObjectId) -> Option<Surface<'_>> {
     let (client, pools) = (slot.client(), slot.pools());
     // What the surface is called from frame to frame: the connection, which
     // a slot's place is not, and the `wl_surface` on it. A renderer that

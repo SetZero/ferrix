@@ -1239,6 +1239,8 @@ fn hello(driver: &mut Gpu, port: &Port<Kernel>, location: u32) -> Result<Hello, 
         capsets: if capset == 0 { 0 } else { capsets },
         capset,
         capset_bytes,
+        // Every virtio-gpu has its cursor queue, and this driver runs it.
+        cursor: true,
     })
 }
 
@@ -1331,6 +1333,10 @@ fn run(boot: &Channel<Kernel>) -> Result<(), Step> {
     };
     let rings = Pinned::new(&device, QUEUE_PAGES)?;
     let area = Pinned::new(&device, AREA_PAGES)?;
+    // The cursor queue's: a page of rings and a page of commands, which is
+    // sixteen of each and more than a pointer ever has waiting.
+    let cursor_rings = Pinned::new(&device, 1)?;
+    let cursor_area = Pinned::new(&device, 1)?;
     let port = port::create(Kernel).map_err(|_| Step::Events)?;
     registers
         .interrupt
@@ -1341,6 +1347,8 @@ fn run(boot: &Channel<Kernel>) -> Result<(), Step> {
             transport: registers,
             rings,
             area,
+            cursor_rings,
+            cursor_area,
         },
         Options {
             // Ask the card whether there is a GPU behind it. A 2D card says
@@ -1516,10 +1524,7 @@ impl Serving {
                     match Message::decode(bytes.get(..received.bytes).unwrap_or_default()) {
                         Ok(Message::Stop) => return Ok(Some(true)),
                         Ok(Message::Refused(_)) => return Err(Step::Control),
-                        Ok(message) => {
-                            let request = Request::from_message(&message).ok_or(Step::Control)?;
-                            self.pipeline.push(request).map_err(|_| Step::Control)?;
-                        }
+                        Ok(message) => self.take(&message)?,
                         Err(_) => return Err(Step::Control),
                     }
                 }
@@ -1528,6 +1533,31 @@ impl Serving {
                 Err(_) => return Err(Step::Control),
             }
         }
+    }
+
+    /// Act on one request from the core.
+    ///
+    /// A pointer moving waits for nothing on the control queue, so it goes to
+    /// the cursor queue as it is read, and so does where a new cursor is: an
+    /// image shown later is shown where the pointer is then. Everything else
+    /// goes down the pipeline in order.
+    fn take(&mut self, message: &Message) -> Result<(), Step> {
+        match *message {
+            Message::Move { scanout, x, y } => {
+                return self
+                    .driver
+                    .move_cursor(scanout, x, y)
+                    .map_err(|_| Step::Faulted);
+            }
+            Message::Cursor { scanout, x, y, .. } => {
+                self.driver
+                    .place_cursor(scanout, x, y)
+                    .map_err(|_| Step::Faulted)?;
+            }
+            _ => {}
+        }
+        let request = Request::from_message(message).ok_or(Step::Control)?;
+        self.pipeline.push(request).map_err(|_| Step::Control)
     }
 
     /// Do what the pipeline says until it waits on the device or has nothing.
@@ -1549,6 +1579,16 @@ impl Serving {
                     return Ok(());
                 }
                 Next::Unpin { buffer } => self.unpin(buffer),
+                Next::Cursor {
+                    scanout,
+                    resource,
+                    hot_x,
+                    hot_y,
+                } => {
+                    self.driver
+                        .update_cursor(scanout, resource, hot_x, hot_y)
+                        .map_err(|_| Step::Faulted)?;
+                }
                 Next::Reply(message) => {
                     self.control
                         .write(message.encode().as_bytes())

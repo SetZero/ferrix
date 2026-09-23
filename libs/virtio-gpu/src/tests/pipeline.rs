@@ -473,3 +473,147 @@ fn an_object_buffers_commands_name_its_object_and_send_no_pixels() {
         Step::Submit(Command::TransferToHost2d { resource_id: 7, .. })
     ));
 }
+
+fn cursor_attach(buffer: u32) -> Attach {
+    Attach {
+        buffer,
+        format: FORMAT,
+        offset: 8 * PAGE_SIZE,
+        length: 4 * PAGE_SIZE,
+        width: 64,
+        height: 64,
+        stride: 256,
+    }
+}
+
+fn cursor(buffer: u32, sequence: u64) -> Request {
+    Request::Cursor {
+        scanout: 0,
+        buffer,
+        sequence,
+        hot_x: 2,
+        hot_y: 3,
+    }
+}
+
+#[test]
+fn a_cursor_moves_its_image_then_shows_it_then_answers() {
+    let mut pipeline = Pipeline::new();
+    pipeline
+        .push(Request::Attach(cursor_attach(5)))
+        .expect("room");
+    assert!(matches!(pipeline.next(&ENTRIES), Step::Pin { .. }));
+    pipeline.pinned(Ok(2)).expect("waiting");
+    for _ in 0..2 {
+        assert!(matches!(pipeline.next(&ENTRIES), Step::Submit(_)));
+        pipeline.done(OK).expect("waiting");
+    }
+    assert!(matches!(pipeline.next(&ENTRIES), Step::Reply(_)));
+
+    pipeline.push(cursor(5, 9)).expect("room");
+    assert_eq!(
+        pipeline.next(&ENTRIES),
+        Step::Submit(Command::TransferToHost2d {
+            rect: Rect::sized(64, 64),
+            offset: 0,
+            resource_id: 5,
+        })
+    );
+    assert_eq!(pipeline.next(&ENTRIES), Step::Wait);
+    pipeline.done(OK).expect("waiting");
+    assert_eq!(
+        pipeline.next(&ENTRIES),
+        Step::Cursor {
+            scanout: 0,
+            resource: 5,
+            hot_x: 2,
+            hot_y: 3,
+        }
+    );
+    assert_eq!(
+        pipeline.next(&ENTRIES),
+        Step::Reply(Message::Flipped {
+            sequence: 9,
+            status: Status::Ok
+        })
+    );
+    assert_eq!(pipeline.next(&ENTRIES), Step::Idle);
+
+    // A refused transfer is a refused CURSOR, and nothing is shown.
+    pipeline.push(cursor(5, 10)).expect("room");
+    assert!(matches!(pipeline.next(&ENTRIES), Step::Submit(_)));
+    pipeline.done(REFUSED).expect("waiting");
+    assert_eq!(
+        pipeline.next(&ENTRIES),
+        Step::Reply(Message::Flipped {
+            sequence: 10,
+            status: Status::DeviceRefused
+        })
+    );
+}
+
+#[test]
+fn no_cursor_and_an_objects_cursor_move_no_pixels() {
+    let mut pipeline = Pipeline::new();
+    pipeline.push(cursor(0, 4)).expect("room");
+    assert_eq!(
+        pipeline.next(&ENTRIES),
+        Step::Cursor {
+            scanout: 0,
+            resource: 0,
+            hot_x: 2,
+            hot_y: 3,
+        }
+    );
+    assert!(matches!(pipeline.next(&ENTRIES), Step::Reply(_)));
+
+    // An object's pixels are the device's already.
+    pipeline
+        .push(Request::AttachObject(AttachObject {
+            width: 64,
+            height: 64,
+            ..attach_object(6, 1 << 30)
+        }))
+        .expect("room");
+    assert!(matches!(pipeline.next(&ENTRIES), Step::Reply(_)));
+    pipeline.push(cursor(6, 5)).expect("room");
+    assert_eq!(
+        pipeline.next(&ENTRIES),
+        Step::Cursor {
+            scanout: 0,
+            resource: 1 << 30,
+            hot_x: 2,
+            hot_y: 3,
+        }
+    );
+}
+
+#[test]
+fn a_cursor_message_is_a_request_and_a_move_is_not() {
+    assert_eq!(
+        Request::from_message(&Message::Cursor {
+            scanout: 1,
+            buffer: 5,
+            sequence: 3,
+            hot_x: 4,
+            hot_y: 6,
+            x: -1,
+            y: -2,
+        }),
+        Some(Request::Cursor {
+            scanout: 1,
+            buffer: 5,
+            sequence: 3,
+            hot_x: 4,
+            hot_y: 6,
+        })
+    );
+    assert_eq!(
+        Request::from_message(&Message::Move {
+            scanout: 0,
+            x: 1,
+            y: 2
+        }),
+        None
+    );
+}

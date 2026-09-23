@@ -305,6 +305,9 @@ pub(crate) struct Plan {
     pub(crate) cursor: Option<(Cursor, Rect)>,
     /// The surface a drag is carrying, the same way.
     pub(crate) drag_icon: Option<(Placed, Rect)>,
+    /// The client's surface the screen's cursor plane shows, which no frame
+    /// draws: what it paints goes to the plane and damages nothing.
+    pub(crate) plane: Option<(usize, ObjectId)>,
     /// The surfaces this frame draws a blur behind. Worked out where the
     /// clients' buffers are, because whether a surface can be seen through
     /// is half of the renderer's condition for blurring behind it.
@@ -362,6 +365,12 @@ impl Plan {
             .filter(|(icon, _)| named(icon.client, icon.surface))
         {
             return Landed::In(at);
+        }
+        if self
+            .plane
+            .is_some_and(|(client, surface)| named(client, surface))
+        {
+            return Landed::Nowhere;
         }
         if let Some((_, at)) = self.cursor.filter(|(cursor, _)| {
             cursor

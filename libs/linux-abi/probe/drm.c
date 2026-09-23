@@ -41,6 +41,9 @@ int main(void)
 	VALUE(DRM_IOCTL_MODE_RMFB);
 	VALUE(DRM_IOCTL_MODE_PAGE_FLIP);
 	VALUE(DRM_IOCTL_MODE_DIRTYFB);
+	/* The cursor plane, as the legacy calls set it: an image and a place. */
+	VALUE(DRM_IOCTL_MODE_CURSOR);
+	VALUE(DRM_IOCTL_MODE_CURSOR2);
 	VALUE(DRM_IOCTL_MODE_CREATE_DUMB);
 	VALUE(DRM_IOCTL_MODE_MAP_DUMB);
 	VALUE(DRM_IOCTL_MODE_DESTROY_DUMB);
@@ -112,6 +115,9 @@ int main(void)
 	VALUE(DRM_MODE_PAGE_FLIP_TARGET_ABSOLUTE);
 	VALUE(DRM_MODE_PAGE_FLIP_TARGET_RELATIVE);
 	VALUE(DRM_MODE_FB_DIRTY_MAX_CLIPS);
+	VALUE(DRM_MODE_CURSOR_BO);
+	VALUE(DRM_MODE_CURSOR_MOVE);
+	VALUE(DRM_MODE_CURSOR_FLAGS);
 	VALUE(DRM_FORMAT_XRGB8888);
 	VALUE(DRM_FORMAT_ARGB8888);
 	VALUE(DRM_FORMAT_XBGR8888);
@@ -260,6 +266,26 @@ int main(void)
 	FIELD(drm_mode_fb_dirty_cmd, color);
 	FIELD(drm_mode_fb_dirty_cmd, num_clips);
 	FIELD(drm_mode_fb_dirty_cmd, clips_ptr);
+
+	SIZE(drm_mode_cursor);
+	FIELD(drm_mode_cursor, flags);
+	FIELD(drm_mode_cursor, crtc_id);
+	FIELD(drm_mode_cursor, x);
+	FIELD(drm_mode_cursor, y);
+	FIELD(drm_mode_cursor, width);
+	FIELD(drm_mode_cursor, height);
+	FIELD(drm_mode_cursor, handle);
+
+	SIZE(drm_mode_cursor2);
+	FIELD(drm_mode_cursor2, flags);
+	FIELD(drm_mode_cursor2, crtc_id);
+	FIELD(drm_mode_cursor2, x);
+	FIELD(drm_mode_cursor2, y);
+	FIELD(drm_mode_cursor2, width);
+	FIELD(drm_mode_cursor2, height);
+	FIELD(drm_mode_cursor2, handle);
+	FIELD(drm_mode_cursor2, hot_x);
+	FIELD(drm_mode_cursor2, hot_y);
 
 	SIZE(drm_clip_rect);
 	FIELD(drm_clip_rect, x1);

@@ -33,6 +33,7 @@ pub mod frame;
 pub mod keymap;
 pub mod options;
 pub(crate) mod pace;
+pub mod plane;
 pub mod plugins;
 pub mod pool;
 pub mod rules;

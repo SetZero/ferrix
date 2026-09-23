@@ -22,6 +22,13 @@
 //! `SETCRTC` and `PAGE_FLIP` wait for the driver's reply, returning once the
 //! device has the frame, and a page flip's event is queued then. Letting go
 //! of a buffer does not wait.
+//!
+//! Each head has a cursor plane, set with the legacy `MODE_CURSOR` and
+//! `MODE_CURSOR2`: a 64 × 64 dumb buffer as the image, which waits for its
+//! pixels to reach the device as a flush does, and a place, which waits for
+//! nothing. A pointer moving is then not a frame, and a host that shows the
+//! screen to a viewer can hand the viewer the image to draw where its own
+//! mouse is (`docs/GPU.md` §3.9).
 
 use alloc::collections::{BTreeMap, VecDeque};
 use alloc::sync::Arc;
@@ -31,12 +38,12 @@ use core::any::Any;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use ferrix_bootinfo::PAGE_SIZE;
-use ferrix_displayctl::message::{MAX_DIMENSION, MAX_SCANOUTS, Rect, Status};
+use ferrix_displayctl::message::{CURSOR_SIZE, MAX_DIMENSION, MAX_SCANOUTS, Rect, Status};
 use ferrix_linux_abi::drm::{
     self, CardRes, ClipRect, CreateDumb, Crtc, CrtcPageFlip, DestroyDumb, Event, EventVblank,
     FbCmd, FbCmd2, FbDirtyCmd, Field, GetCap, GetConnector, GetEncoder, GetPlane, GetPlaneRes,
-    GetProperty, Layout, MapDumb, ModeInfo, ObjGetProperties, PrimeHandle, PropertyEnum,
-    SetClientCap, Version,
+    GetProperty, Layout, MapDumb, ModeCursor, ModeCursor2, ModeInfo, ObjGetProperties, PrimeHandle,
+    PropertyEnum, SetClientCap, Version,
 };
 use ferrix_linux_abi::errno::Errno;
 use ferrix_linux_abi::socket::Width;
@@ -169,6 +176,9 @@ struct OpenState {
     shown: BTreeMap<usize, (u32, ModeInfo)>,
     events: VecDeque<[u8; 32]>,
     sequence: u32,
+    /// Where each head's cursor was last put, which a call that sets only
+    /// the image shows it at.
+    cursors: BTreeMap<usize, (i32, i32)>,
 }
 
 /// One open of a card.
@@ -474,7 +484,7 @@ pub(crate) fn ioctl(
     match request {
         drm::IOCTL_SET_MASTER | drm::IOCTL_DROP_MASTER => Ok(0),
         request if request == drm::ioctl_version(NATIVE) => version(process, arg),
-        drm::IOCTL_GET_CAP => get_cap(process, arg),
+        drm::IOCTL_GET_CAP => get_cap(process, &file.card, arg),
         drm::IOCTL_SET_CLIENT_CAP => set_client_cap(process, file, arg),
         drm::IOCTL_MODE_GETRESOURCES => get_resources(process, file, arg),
         drm::IOCTL_MODE_GETCONNECTOR => connector(process, &file.card, arg),
@@ -504,6 +514,24 @@ pub(crate) fn ioctl(
             page_flip(process, file, arg)
         }
         drm::IOCTL_MODE_DIRTYFB => dirty_fb(process, file, arg),
+        drm::IOCTL_MODE_CURSOR => {
+            let legacy: ModeCursor = read_arg(process, arg)?;
+            cursor(
+                file,
+                &ModeCursor2 {
+                    flags: legacy.flags,
+                    crtc_id: legacy.crtc_id,
+                    x: legacy.x,
+                    y: legacy.y,
+                    width: legacy.width,
+                    height: legacy.height,
+                    handle: legacy.handle,
+                    hot_x: 0,
+                    hot_y: 0,
+                },
+            )
+        }
+        drm::IOCTL_MODE_CURSOR2 => cursor(file, &read_arg(process, arg)?),
         drm::IOCTL_MODE_GETPLANERESOURCES => get_plane_resources(process, file, arg),
         drm::IOCTL_MODE_GETPLANE => get_plane(process, file, arg),
         drm::IOCTL_MODE_OBJ_GETPROPERTIES => obj_get_properties(process, file, arg),
@@ -708,9 +736,14 @@ fn get_property(process: &Process, arg: u64) -> Result<usize, Errno> {
     write_arg(process, arg, &property)
 }
 
-fn get_cap(process: &Process, arg: u64) -> Result<usize, Errno> {
+fn get_cap(process: &Process, card: &Card, arg: u64) -> Result<usize, Errno> {
     let mut cap: GetCap = read_arg(process, arg)?;
     cap.value = match cap.capability {
+        // Only a card whose driver said it has a cursor plane has a size
+        // for one: a program that is told none draws its pointer itself.
+        drm::CAP_CURSOR_WIDTH | drm::CAP_CURSOR_HEIGHT if card.has_cursor() => {
+            u64::from(CURSOR_SIZE)
+        }
         drm::CAP_DUMB_BUFFER | drm::CAP_TIMESTAMP_MONOTONIC | drm::CAP_CRTC_IN_VBLANK_EVENT => 1,
         drm::CAP_DUMB_PREFERRED_DEPTH => 24,
         drm::CAP_DUMB_PREFER_SHADOW => 0,
@@ -939,6 +972,68 @@ fn dirty_fb(process: &Process, file: &CardFile, arg: u64) -> Result<usize, Errno
     let rect = dirty_rect(process, &dirty, &framebuffer)?;
     file.card
         .flush(framebuffer.buffer, rect)
+        .map_err(card_error)
+        .and_then(status_error)
+        .map(|()| 0)
+}
+
+/// `MODE_CURSOR2`, and `MODE_CURSOR` made one with no hotspot, as Linux's
+/// `drm_mode_cursor_ioctl` makes it: the head's cursor plane.
+///
+/// `MOVE` puts the image's top-left corner at (`x`, `y`) and waits for
+/// nothing. `BO` shows the dumb buffer `handle` names -- 64 × 64, which is
+/// the one size the host shows, or none for handle 0 -- with its hotspot,
+/// and returns once its pixels are on the device, so that the program may
+/// draw the next image into the same buffer. A call with both sets the place
+/// first and shows the image there, as `drm_mode_cursor_universal` does.
+fn cursor(file: &CardFile, request: &ModeCursor2) -> Result<usize, Errno> {
+    if request.flags == 0 || request.flags & !drm::MODE_CURSOR_FLAGS != 0 {
+        return Err(Errno::EINVAL);
+    }
+    // What Linux answers for a CRTC with no cursor.
+    if !file.card.has_cursor() {
+        return Err(Errno::ENXIO);
+    }
+    let head = head_of(&file.card, request.crtc_id, CRTC).ok_or(Errno::ENOENT)?;
+    let scanout = u32::try_from(head).map_err(|_| Errno::EINVAL)?;
+    let at = {
+        let mut state = file.state.lock();
+        if request.flags & drm::MODE_CURSOR_MOVE != 0 {
+            let _ = state.cursors.insert(head, (request.x, request.y));
+        }
+        state.cursors.get(&head).copied().unwrap_or_default()
+    };
+    if request.flags & drm::MODE_CURSOR_BO == 0 {
+        return file
+            .card
+            .move_cursor(scanout, at)
+            .map_err(card_error)
+            .map(|()| 0);
+    }
+    let buffer = match request.handle {
+        0 => 0,
+        handle => {
+            let dumb = file
+                .state
+                .lock()
+                .dumbs
+                .iter()
+                .find(|dumb| dumb.handle == handle && !dumb.destroyed)
+                .copied()
+                .ok_or(Errno::ENOENT)?;
+            let size = (CURSOR_SIZE, CURSOR_SIZE);
+            if (dumb.width, dumb.height) != size || (request.width, request.height) != size {
+                return Err(Errno::EINVAL);
+            }
+            dumb.buffer
+        }
+    };
+    let hot = (
+        u32::try_from(request.hot_x).map_err(|_| Errno::EINVAL)?,
+        u32::try_from(request.hot_y).map_err(|_| Errno::EINVAL)?,
+    );
+    file.card
+        .cursor(scanout, buffer, hot, at)
         .map_err(card_error)
         .and_then(status_error)
         .map(|()| 0)

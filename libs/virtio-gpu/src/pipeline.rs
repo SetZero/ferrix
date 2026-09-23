@@ -8,7 +8,14 @@
 //! | ATTACH | pin the range, `RESOURCE_CREATE_2D`, `RESOURCE_ATTACH_BACKING` | ATTACHED |
 //! | SCANOUT | `SET_SCANOUT` | none |
 //! | FLUSH | `TRANSFER_TO_HOST_2D`, `RESOURCE_FLUSH` | FLIPPED |
+//! | CURSOR | `TRANSFER_TO_HOST_2D`, then `UPDATE_CURSOR` on the cursor queue | FLIPPED |
 //! | DETACH | `RESOURCE_DETACH_BACKING`, `RESOURCE_UNREF`, unpin | DETACHED |
+//!
+//! MOVE is not a request here: it waits for nothing on the control queue,
+//! so the glue hands it to the driver's cursor queue the moment it is read,
+//! and a CURSOR's place is taken the same way. What the pipeline keeps in
+//! order is the image, which must be on the device before the cursor queue
+//! is told to show it.
 //!
 //! A step that fails is undone as far as it safely can be: a resource created
 //! and then refused its backing is unreferenced and its range unpinned. One
@@ -62,6 +69,20 @@ pub enum Request {
         /// The buffer.
         buffer: u32,
     },
+    /// CURSOR, less its place, which the glue gave the driver when the
+    /// message was read.
+    Cursor {
+        /// The scanout.
+        scanout: u32,
+        /// The buffer, or 0 for none.
+        buffer: u32,
+        /// Its number in the flushes' line.
+        sequence: u64,
+        /// The hotspot's column.
+        hot_x: u32,
+        /// The hotspot's row.
+        hot_y: u32,
+    },
 }
 
 impl Request {
@@ -90,6 +111,20 @@ impl Request {
                 rect,
             },
             Message::Detach { buffer } => Self::Detach { buffer },
+            Message::Cursor {
+                scanout,
+                buffer,
+                sequence,
+                hot_x,
+                hot_y,
+                ..
+            } => Self::Cursor {
+                scanout,
+                buffer,
+                sequence,
+                hot_x,
+                hot_y,
+            },
             _ => return None,
         })
     }
@@ -98,9 +133,10 @@ impl Request {
         match *self {
             Self::Attach(attach) => attach.buffer,
             Self::AttachObject(attach) => attach.buffer,
-            Self::Scanout { buffer, .. } | Self::Flush { buffer, .. } | Self::Detach { buffer } => {
-                buffer
-            }
+            Self::Scanout { buffer, .. }
+            | Self::Flush { buffer, .. }
+            | Self::Detach { buffer }
+            | Self::Cursor { buffer, .. } => buffer,
         }
     }
 }
@@ -125,6 +161,19 @@ pub enum Step<'e> {
     Unpin {
         /// The buffer.
         buffer: u32,
+    },
+    /// Show `resource` -- 0 for none -- as `scanout`'s cursor with its
+    /// hotspot at (`hot_x`, `hot_y`), on the cursor queue, then ask again.
+    /// Nothing is waited for: the image is on the device already.
+    Cursor {
+        /// The scanout.
+        scanout: u32,
+        /// The resource.
+        resource: u32,
+        /// The hotspot's column.
+        hot_x: u32,
+        /// The hotspot's row.
+        hot_y: u32,
     },
     /// Send this to the display core, then ask again.
     Reply(Message),
@@ -155,6 +204,8 @@ enum Stage {
     SetScanout,
     Transfer,
     FlushResource,
+    CursorTransfer,
+    ShowCursor,
     ReplyFlipped(Status),
     DetachBacking,
     UnrefDetach,
@@ -334,6 +385,10 @@ impl Pipeline {
             Request::Flush { .. } => Stage::FlushResource,
             Request::Detach { buffer } if self.own(buffer) => Stage::DetachBacking,
             Request::Detach { .. } => Stage::ReplyDetached(Status::Ok),
+            Request::Cursor { buffer, .. } if buffer != 0 && self.own(buffer) => {
+                Stage::CursorTransfer
+            }
+            Request::Cursor { .. } => Stage::ShowCursor,
         }
     }
 
@@ -404,10 +459,14 @@ impl Pipeline {
                 }
                 return Step::Reply(Message::Attached { buffer, status });
             }
-            (Request::Flush { sequence, .. }, Stage::ReplyFlipped(status)) => {
+            (
+                Request::Flush { sequence, .. } | Request::Cursor { sequence, .. },
+                Stage::ReplyFlipped(status),
+            ) => {
                 self.current = None;
                 return Step::Reply(Message::Flipped { sequence, status });
             }
+            (Request::Cursor { .. }, Stage::ShowCursor) => return self.show_cursor(op),
             (_, Stage::ReplyDetached(status)) => {
                 self.current = None;
                 self.forget(buffer);
@@ -426,6 +485,33 @@ impl Pipeline {
         op.waiting = true;
         self.current = Some(op);
         step
+    }
+
+    /// A cursor whose image is on the device: show it, and answer next.
+    fn show_cursor<'e>(&mut self, mut op: Op) -> Step<'e> {
+        let Request::Cursor {
+            scanout,
+            buffer,
+            hot_x,
+            hot_y,
+            ..
+        } = op.request
+        else {
+            self.current = None;
+            return Step::Idle;
+        };
+        op.stage = Stage::ReplyFlipped(Status::Ok);
+        self.current = Some(op);
+        Step::Cursor {
+            scanout,
+            resource: if buffer == 0 {
+                0
+            } else {
+                self.resource(buffer)
+            },
+            hot_x,
+            hot_y,
+        }
     }
 
     /// The device command `op`'s stage submits, if it submits one.
@@ -480,6 +566,16 @@ impl Pipeline {
                 rect: rect(area),
                 resource_id,
             },
+            // The whole image: a cursor is small, and a partial one is a
+            // cursor with somebody else's pixels in it.
+            (Request::Cursor { .. }, Stage::CursorTransfer) => {
+                let geometry = self.geometry(op.request.buffer())?;
+                Command::TransferToHost2d {
+                    rect: Rect::sized(geometry.width, geometry.height),
+                    offset: 0,
+                    resource_id,
+                }
+            }
             (Request::Detach { .. }, Stage::DetachBacking) => {
                 Command::ResourceDetachBacking { resource_id }
             }
@@ -531,6 +627,10 @@ impl Pipeline {
             }
             Stage::Transfer if ok => Stage::FlushResource,
             Stage::Transfer | Stage::FlushResource => Stage::ReplyFlipped(status),
+            // A cursor whose pixels did not arrive is not shown: the reply
+            // carries the refusal and the cursor queue hears nothing.
+            Stage::CursorTransfer if ok => Stage::ShowCursor,
+            Stage::CursorTransfer => Stage::ReplyFlipped(status),
             // Refused: the device may still hold the pages, so they stay
             // pinned and the reply says so.
             Stage::DetachBacking if ok => Stage::UnrefDetach,

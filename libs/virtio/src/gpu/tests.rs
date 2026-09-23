@@ -872,3 +872,41 @@ fn a_submitted_stream_is_carried_whole() {
         Err(GpuError::StreamSize(0))
     );
 }
+
+/// `struct virtio_gpu_update_cursor`: the header, then
+/// `struct virtio_gpu_cursor_pos { scanout_id, x, y, padding }` at 24,
+/// `resource_id` at 40, `hot_x` at 44, `hot_y` at 48 and padding to 56.
+#[test]
+fn a_cursor_is_one_structure_for_an_update_and_a_move() {
+    let cursor = Cursor {
+        scanout_id: 1,
+        x: -3,
+        y: 700,
+        resource_id: 9,
+        hot_x: 4,
+        hot_y: 5,
+    };
+    let update = cursor.encode(true);
+    assert_eq!(update.len(), 56);
+    assert_eq!(u32_at(&update, 0), 0x0300);
+    assert_eq!(
+        [
+            u32_at(&update, 24),
+            u32_at(&update, 28),
+            u32_at(&update, 32),
+            u32_at(&update, 40),
+            u32_at(&update, 44),
+            u32_at(&update, 48),
+        ],
+        [1, (-3i32) as u32, 700, 9, 4, 5]
+    );
+    // Flags, fence, context, ring and every padding field are zero.
+    for at in [4, 8, 12, 16, 20, 36, 52] {
+        assert_eq!(u32_at(&update, at), 0, "the word at {at}");
+    }
+    // A move is the same structure under the other type, resource and all:
+    // QEMU shows a moved cursor only if the move names its resource.
+    let moved = cursor.encode(false);
+    assert_eq!(u32_at(&moved, 0), 0x0301);
+    assert_eq!(moved[4..], update[4..]);
+}

@@ -180,19 +180,26 @@ def main():
     width, height = handshake(sock, reader, encodings)
 
     # The whole screen once, which is not measured: a viewer's first update
-    # is every pixel, and it says nothing about a desktop in use.
+    # is every pixel, and it says nothing about a desktop in use. A server
+    # with a cursor plane sends the cursor's shape first, as an update of
+    # its own, and that is counted: it is what a viewer draws the pointer
+    # with from then on.
     request(sock, width, height, 0)
+    shapes = 0
     while True:
         kind = reader.need(1)[0]
-        if kind == 0:
-            _, _, _, width, height = read_update(reader, width, height)
+        if kind != 0:
+            skip_other(reader, kind)
+            continue
+        rects, _, cursor, width, height = read_update(reader, width, height)
+        shapes += cursor
+        if rects:
             break
-        skip_other(reader, kind)
 
     centre = (width // 2, height // 2)
     period = 1.0 / args.rate
     pending = []  # (sent_at, point) pointer events not yet seen drawn
-    lags, updates, carried, shapes = [], 0, 0, 0
+    lags, updates, carried = [], 0, 0
     begun = time.monotonic()
     next_move, step = begun, 0
     request(sock, width, height, 1)

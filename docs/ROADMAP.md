@@ -117,7 +117,8 @@ sizes them.
 | what | points | current state |
 |---|---|---|
 | ~~Stage 19: the GPU path, Path A (`docs/GPU.md` §3)~~ *done 2026-09-19* | ~~52~~ | done |
-| Stage 19: the desktop's speed as it is watched (`docs/GPU.md` §3.9): a cursor plane 13, an sDDF-shaped device queue 13, client pages as texture backing 8 | 34 | in progress |
+| ~~Stage 19: the cursor plane (`docs/GPU.md` §3.10)~~ *done 2026-09-23* | ~~13~~ | done |
+| Stage 19: the desktop's speed as it is watched (`docs/GPU.md` §3.9): an sDDF-shaped device queue 13, client pages as texture backing 8 | 21 | in progress |
 | Stage 19: XWayland 40, and `dwindle:precise_mouse_move`, the second-pass effects and the window rule `xray` about 8 | 48 | in progress |
 | After stage 19's 178: `zwp_linux_dmabuf` with a GBM-shaped allocator, and Mesa's virgl on ferrousli, for clients that draw on the GPU themselves (`docs/BACKLOG.md`) | 8, and 40 or more | not started |
 | Dynamic linking: the kernel half, ferrousli's loader, glibc's names | 39 *(33 done; the exit met on x86-64)* | in progress: 6 left |
@@ -4954,7 +4955,7 @@ console can run the terminal client in it.
 
 ---
 
-## Stage 19 — Hyprland fidelity, and the GPU  ·  *178 points, about 82 left*
+## Stage 19 — Hyprland fidelity, and the GPU  ·  *178 points, about 69 left*
 
 What makes it Hyprland rather than a tiling compositor: animations with its
 bezier curves, rounded corners, blur and shadows, dimming and opacity rules,
@@ -6206,6 +6207,16 @@ of `--gl`: a video wallpaper was 38 frames a second with the slowest at
 takes the 3D card wherever a QEMU on `PATH` has it and the host has a render
 node (`docs/GPU.md` §3.9, which also has the viewer-side measurements).
 
+**Done -- the pointer on virtio-gpu's cursor plane (2026-09-23).**
+`MODE_CURSOR` and `MODE_CURSOR2` on the card, `CURSOR` and `MOVE` in the
+display protocol, the cursor queue in the ring-3 driver run with no
+interrupt and one doorbell a batch, and a compositor that puts the pointer
+there wherever a screen has a plane. Sweeping the pointer over the served
+desktop for 25 seconds drew 4 frames where it drew 61 a second, and sent the
+viewer no updates but the pointer's shape, which it draws where its own mouse
+is. `test-compositor --boot cursor` judges it through a VNC viewer, since a
+screendump cannot see a plane (`docs/GPU.md` §3.10). 13 points.
+
 The protocols and keywords this paragraph used to list as left --
 `layerrule`, `zwp_virtual_keyboard`, `zwp_pointer_constraints` and
 `relative-pointer` (a game that grabs the pointer), `presentation-time`,
@@ -6216,12 +6227,11 @@ a host test against the image the renderer blesses, and a boot of `cargo
 xtask test-compositor` that does it on Ferrix.
 
 **What this stage still owes** is the desktop's speed as a person watching
-it feels it (`docs/GPU.md` §3.9) -- a cursor plane on virtio-gpu's cursor
-queue, so a pointer movement is not a frame (13 points); several device
-commands in flight behind one doorbell, and uploads and submissions that are
-not each waited for, in the shape of seL4's sDDF queues (13); and a client's
-own pages as its texture's backing, so its pixels are not copied in the guest
-(8) -- then XWayland (40 as a first guess:
+it feels it (`docs/GPU.md` §3.9) -- several device commands in flight behind
+one doorbell on the control queue, and uploads and submissions that are not
+each waited for, in the shape of seL4's sDDF queues (13); and a client's own
+pages as its texture's backing, so its pixels are not copied in the guest (8)
+-- then XWayland (40 as a first guess:
 `xwayland_shell_v1` on the compositor's side and an X server on Ferrix,
 which stage 22 is what finally needs), the second-pass effects
 (`no_screen_share`, which means drawing the frame again without one surface
@@ -6254,10 +6264,11 @@ evidence is:
 * a plugin loaded from `plugin = /bin/plug`, adding a dispatcher a keybind
   presses.
 
-**Where the points stand (reviewed 2026-09-23).** Of the stage's 178, about 82 are
-left: the 34 added on 2026-09-23 for the desktop's speed as it is watched --
-the cursor plane (13), the sDDF-shaped device queue (13) and client pages as
-texture backing (8), `docs/GPU.md` §3.9 -- XWayland's 40, and about 8 for the
+**Where the points stand (reviewed 2026-09-23).** Of the stage's 178, about 69 are
+left: 21 of the 34 added on 2026-09-23 for the desktop's speed as it is
+watched -- the sDDF-shaped device queue (13) and client pages as texture
+backing (8), the cursor plane's 13 being spent (`docs/GPU.md` §3.9 and
+§3.10) -- XWayland's 40, and about 8 for the
 small remainder, whose items have changed since it was counted, as below. The GPU path's 52 are spent -- Path A landed on 2026-09-19, and what
 is left of that road is `zwp_linux_dmabuf` and a Mesa on ferrousli, for
 clients that render for themselves. What remains of the stage besides is XWayland,

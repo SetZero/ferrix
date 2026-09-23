@@ -6,8 +6,8 @@ use std::os::fd::{AsRawFd, BorrowedFd};
 
 use ferrix_linux_abi::drm::{
     self, CardRes, ClipRect, CreateDumb, Crtc, CrtcPageFlip, FbCmd2, FbDirtyCmd, Field, GetBlob,
-    GetConnector, GetEncoder, GetPlane, GetPlaneRes, GetProperty, Layout, MapDumb, ModeInfo,
-    ObjGetProperties, PrimeHandle, PropertyEnum, SetClientCap, Version,
+    GetCap, GetConnector, GetEncoder, GetPlane, GetPlaneRes, GetProperty, Layout, MapDumb,
+    ModeCursor2, ModeInfo, ObjGetProperties, PrimeHandle, PropertyEnum, SetClientCap, Version,
 };
 use ferrix_linux_abi::socket::Width;
 
@@ -903,6 +903,80 @@ impl Card {
             ..FbDirtyCmd::ZERO
         };
         self.ioctl(drm::IOCTL_MODE_DIRTYFB, &mut command)
+    }
+
+    /// The size of the image this card's cursor plane shows, if it has one:
+    /// `DRM_CAP_CURSOR_WIDTH` by `DRM_CAP_CURSOR_HEIGHT`.
+    #[must_use]
+    pub fn cursor_size(&self) -> Option<(u32, u32)> {
+        let cap = |capability| {
+            let mut request = GetCap {
+                capability,
+                ..GetCap::ZERO
+            };
+            self.ioctl(drm::IOCTL_GET_CAP, &mut request)
+                .ok()
+                .and_then(|()| u32::try_from(request.value).ok())
+                .filter(|&size| size > 0)
+        };
+        Some((cap(drm::CAP_CURSOR_WIDTH)?, cap(drm::CAP_CURSOR_HEIGHT)?))
+    }
+
+    /// Show `image` -- a dumb buffer [`Card::cursor_size`] big, or none --
+    /// as `plan`'s cursor, with its hotspot at `hot` and its top-left corner
+    /// at `at`.
+    ///
+    /// `DRM_IOCTL_MODE_CURSOR2`, the image and the place together. It
+    /// returns once the image is on the card, so the buffer may be drawn
+    /// into again at once.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the card said.
+    pub fn set_cursor(
+        &self,
+        plan: &Plan,
+        image: Option<&Dumb>,
+        hot: (i32, i32),
+        at: (i32, i32),
+    ) -> io::Result<()> {
+        let (width, height) = match image {
+            Some(_) => self
+                .cursor_size()
+                .ok_or_else(|| io::Error::other("a card with no cursor plane"))?,
+            None => (0, 0),
+        };
+        let mut request = ModeCursor2 {
+            flags: drm::MODE_CURSOR_BO | drm::MODE_CURSOR_MOVE,
+            crtc_id: plan.crtc,
+            x: at.0,
+            y: at.1,
+            width,
+            height,
+            handle: image.map_or(0, Dumb::handle),
+            hot_x: hot.0,
+            hot_y: hot.1,
+        };
+        self.ioctl(drm::IOCTL_MODE_CURSOR2, &mut request)
+    }
+
+    /// Put `plan`'s cursor's top-left corner at `at`.
+    ///
+    /// `DRM_IOCTL_MODE_CURSOR2` with the place alone, which waits for
+    /// nothing: a pointer moving costs the card no frame.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the card said.
+    pub fn move_cursor(&self, plan: &Plan, at: (i32, i32)) -> io::Result<()> {
+        let mut request = ModeCursor2 {
+            flags: drm::MODE_CURSOR_MOVE,
+            crtc_id: plan.crtc,
+            x: at.0,
+            y: at.1,
+            ..ModeCursor2::ZERO
+        };
+        self.ioctl(drm::IOCTL_MODE_CURSOR2, &mut request)
     }
 
     /// Map `size` bytes of the card at `offset`.

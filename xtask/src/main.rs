@@ -90,6 +90,7 @@ mod test_disk;
 mod threads;
 mod uutils;
 mod vfs;
+mod vnc;
 mod wallpaper;
 mod window;
 mod workspace;

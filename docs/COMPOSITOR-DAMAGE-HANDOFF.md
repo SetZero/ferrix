@@ -444,10 +444,14 @@ Not part of this handoff, but the next person will ask.
 - **XWayland.** No X11 window can be shown. `xwayland_shell_v1` is not
   offered and there is no `Xwayland` binary on Ferrix. The largest single
   gap left.
-- **The GPU path.** Everything is CPU. With it would come
-  `wp_linux_drm_syncobj_manager_v1`, `wl_drm`, `wp_color_manager_v1`, and
-  the five `windowrule` effects that only mean something with a GPU
-  (`immediate`, `no_vrr`, `no_auto_hdr`, `tonemap`, `force_rgbx`).
+- **What the GPU path did not bring.** It landed on 2026-09-19
+  (`docs/GPU.md` §3.7 and §3.8), a served desktop takes it by default and
+  the pointer has a plane of its own since 2026-09-23 (§3.9, §3.10).
+  Written before any of that, this item said everything was CPU; what is
+  still true of it is that `wp_linux_drm_syncobj_manager_v1`, `wl_drm`,
+  `wp_color_manager_v1` and the five `windowrule` effects that only mean
+  something with a GPU (`immediate`, `no_vrr`, `no_auto_hdr`, `tonemap`,
+  `force_rgbx`) are not answered.
 - **`dwindle:precise_mouse_move`**, which decides where a *dragged* window
   lands when it is dropped back into the tiling. Nothing drops one back in
   -- a drag floats a tiled window and leaves it floating, where Hyprland

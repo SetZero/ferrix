@@ -7,8 +7,9 @@
 //! and tell the device which rectangle changed. Each of those is a command
 //! here, encoded into bytes, and each response is parsed back. What drives a
 //! device — the queue, the order of commands, what to do when it misbehaves —
-//! is `ferrix-virtio-gpu`'s. 3D, blob resources, capability sets, EDID and the
-//! cursor queue are later.
+//! is `ferrix-virtio-gpu`'s. The 3D commands and capability sets came with
+//! `docs/GPU.md`'s Path A and the cursor queue's two commands ([`Cursor`])
+//! with its §3.10; blob resources and EDID are later.
 //!
 //! # A command is two buffers
 //!
@@ -990,6 +991,80 @@ pub struct CapsetInfo {
     pub max_version: u32,
     /// How many bytes [`Command::GetCapset`] needs room for.
     pub max_size: u32,
+}
+
+// ---------------------------------------------------------------------------
+// The cursor queue, virtio 1.2 §5.7.6.10.
+// ---------------------------------------------------------------------------
+
+/// `VIRTIO_GPU_CMD_UPDATE_CURSOR`: a new image, read out of a resource.
+pub const CMD_UPDATE_CURSOR: u32 = 0x0300;
+/// `VIRTIO_GPU_CMD_MOVE_CURSOR`: the same image, somewhere else.
+pub const CMD_MOVE_CURSOR: u32 = 0x0301;
+/// Bytes of `struct virtio_gpu_update_cursor`, which both commands are.
+pub const CURSOR_LEN: usize = 56;
+/// The width and height of the one cursor image QEMU shows, and so of the
+/// resource an `UPDATE_CURSOR` names (`cursor_alloc(64, 64)` in
+/// `hw/display/virtio-gpu.c`).
+pub const CURSOR_SIZE: u32 = 64;
+
+/// A scanout's cursor as the cursor queue carries it: where it is, and which
+/// resource's pixels it shows with which hotspot.
+///
+/// `x` and `y` are the image's top-left corner on the scanout, as Linux's
+/// cursor plane sends them, and may be negative when the hotspot is near an
+/// edge; they travel as the `u32` bits virtio gives them.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct Cursor {
+    /// The scanout.
+    pub scanout_id: u32,
+    /// The image's left edge.
+    pub x: i32,
+    /// The image's top edge.
+    pub y: i32,
+    /// The resource holding the image, [`CURSOR_SIZE`] square; 0 for none.
+    pub resource_id: u32,
+    /// The hotspot, from the image's left edge.
+    pub hot_x: u32,
+    /// The hotspot, from the image's top edge.
+    pub hot_y: u32,
+}
+
+impl Cursor {
+    /// This cursor as an `UPDATE_CURSOR` (`update`, which reads the
+    /// resource's pixels again) or a `MOVE_CURSOR`.
+    ///
+    /// A move carries the resource as well. QEMU's `update_cursor` shows the
+    /// cursor after a move only if the move names one -- it passes
+    /// `resource_id` as the visibility -- which is why Linux's driver sends
+    /// its last update's structure again with only the type and the place
+    /// changed, and why this has one encoding for both.
+    #[must_use]
+    pub fn encode(&self, update: bool) -> [u8; CURSOR_LEN] {
+        let mut bytes = [0u8; CURSOR_LEN];
+        let mut put = |at: usize, value: u32| {
+            if let Some(slot) = bytes.get_mut(at..at + 4) {
+                slot.copy_from_slice(&value.to_le_bytes());
+            }
+        };
+        put(
+            0,
+            if update {
+                CMD_UPDATE_CURSOR
+            } else {
+                CMD_MOVE_CURSOR
+            },
+        );
+        // The rest of the header -- flags, fence, context, ring -- is zero:
+        // the cursor queue fences nothing and belongs to no context.
+        put(HEADER_LEN, self.scanout_id);
+        put(HEADER_LEN + 4, self.x as u32);
+        put(HEADER_LEN + 8, self.y as u32);
+        put(HEADER_LEN + 16, self.resource_id);
+        put(HEADER_LEN + 20, self.hot_x);
+        put(HEADER_LEN + 24, self.hot_y);
+        bytes
+    }
 }
 
 /// One scanout's entry in `GET_DISPLAY_INFO`'s response.

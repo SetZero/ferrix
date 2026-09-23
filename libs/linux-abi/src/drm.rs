@@ -68,6 +68,11 @@ pub const IOCTL_MODE_RMFB: u32 = 0xC004_64AF;
 pub const IOCTL_MODE_PAGE_FLIP: u32 = 0xC018_64B0;
 /// `DRM_IOCTL_MODE_DIRTYFB`.
 pub const IOCTL_MODE_DIRTYFB: u32 = 0xC018_64B1;
+/// `DRM_IOCTL_MODE_CURSOR`: the cursor plane's image, or its place.
+pub const IOCTL_MODE_CURSOR: u32 = 0xC01C_64A3;
+/// `DRM_IOCTL_MODE_CURSOR2`: the same with a hotspot, which a virtual
+/// card's host needs to draw the cursor where the pointer is.
+pub const IOCTL_MODE_CURSOR2: u32 = 0xC024_64BB;
 /// `DRM_IOCTL_MODE_CREATE_DUMB`.
 pub const IOCTL_MODE_CREATE_DUMB: u32 = 0xC020_64B2;
 /// `DRM_IOCTL_MODE_MAP_DUMB`.
@@ -230,6 +235,12 @@ pub const PAGE_FLIP_TARGET_ABSOLUTE: u32 = 0x4;
 pub const PAGE_FLIP_TARGET_RELATIVE: u32 = 0x8;
 /// `DRM_MODE_FB_DIRTY_MAX_CLIPS`.
 pub const FB_DIRTY_MAX_CLIPS: u32 = 256;
+/// `DRM_MODE_CURSOR_BO`: a cursor call that sets the image.
+pub const MODE_CURSOR_BO: u32 = 1;
+/// `DRM_MODE_CURSOR_MOVE`: a cursor call that sets the place.
+pub const MODE_CURSOR_MOVE: u32 = 2;
+/// `DRM_MODE_CURSOR_FLAGS`: every flag a cursor call may carry.
+pub const MODE_CURSOR_FLAGS: u32 = 3;
 
 /// The fourcc code of `a`, `b`, `c`, `d`: `fourcc_code` in `drm_fourcc.h`.
 #[must_use]
@@ -578,6 +589,51 @@ layout! {
         num_clips: u32 = 12 / "num_clips",
         /// User address of the `struct drm_clip_rect` array.
         clips_ptr: u64 = 16 / "clips_ptr",
+    }
+}
+
+layout! {
+    /// `struct drm_mode_cursor`: `DRM_IOCTL_MODE_CURSOR`.
+    ModeCursor = "drm_mode_cursor", 28 {
+        /// `DRM_MODE_CURSOR_*`: what the call sets.
+        flags: u32 = 0 / "flags",
+        /// The CRTC whose cursor it is.
+        crtc_id: u32 = 4 / "crtc_id",
+        /// The image's left edge, for `MOVE`.
+        x: i32 = 8 / "x",
+        /// The image's top edge, for `MOVE`.
+        y: i32 = 12 / "y",
+        /// The image's width, for `BO`.
+        width: u32 = 16 / "width",
+        /// The image's height, for `BO`.
+        height: u32 = 20 / "height",
+        /// The dumb buffer holding the image, for `BO`; 0 for none.
+        handle: u32 = 24 / "handle",
+    }
+}
+
+layout! {
+    /// `struct drm_mode_cursor2`: `DRM_IOCTL_MODE_CURSOR2`, which is
+    /// `drm_mode_cursor` and a hotspot.
+    ModeCursor2 = "drm_mode_cursor2", 36 {
+        /// `DRM_MODE_CURSOR_*`: what the call sets.
+        flags: u32 = 0 / "flags",
+        /// The CRTC whose cursor it is.
+        crtc_id: u32 = 4 / "crtc_id",
+        /// The image's left edge, for `MOVE`.
+        x: i32 = 8 / "x",
+        /// The image's top edge, for `MOVE`.
+        y: i32 = 12 / "y",
+        /// The image's width, for `BO`.
+        width: u32 = 16 / "width",
+        /// The image's height, for `BO`.
+        height: u32 = 20 / "height",
+        /// The dumb buffer holding the image, for `BO`; 0 for none.
+        handle: u32 = 24 / "handle",
+        /// The hotspot, from the image's left edge.
+        hot_x: i32 = 28 / "hot_x",
+        /// The hotspot, from the image's top edge.
+        hot_y: i32 = 32 / "hot_y",
     }
 }
 

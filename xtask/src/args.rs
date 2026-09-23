@@ -158,6 +158,10 @@ pub(crate) struct Args {
     /// Where QEMU serves QMP. No flag sets it: `test-display` picks a port to
     /// ask QEMU for its screendump over.
     pub(crate) qmp_port: Option<u16>,
+    /// Where QEMU serves the card over VNC for a judged boot, on the
+    /// loopback. No flag sets it: the cursor boot asks QEMU for the
+    /// pointer's shape there, which is the one place a cursor plane shows.
+    pub(crate) judge_vnc: Option<u16>,
     /// `--vnc <display>`: serve the screen over VNC at this address rather
     /// than in a window of this host's, which is what a machine reached over
     /// `ssh` has. `window` says why the default is the loopback.

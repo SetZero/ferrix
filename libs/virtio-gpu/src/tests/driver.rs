@@ -17,19 +17,22 @@ use super::fake::{Bus, Device, Handle, PAGE, Region};
 use crate::pipeline::{Pipeline, Request, Step};
 use crate::{DeviceError, Done, Driver, Options, Parts, SubmitError, Teardown};
 
-type TestDriver = Driver<Handle, Region, Region>;
+pub(super) type TestDriver = Driver<Handle, Region, Region>;
 
-fn build(mode: (u32, u32)) -> (Rc<Bus>, Rc<RefCell<Device>>, TestDriver) {
+pub(super) fn build(mode: (u32, u32)) -> (Rc<Bus>, Rc<RefCell<Device>>, TestDriver) {
     let bus = Bus::new();
     let device = Rc::new(RefCell::new(Device::new(Rc::clone(&bus), mode)));
     let handle = Handle {
         device: Rc::clone(&device),
         doorbells: Rc::new(RefCell::new(0)),
+        cursor_doorbells: Rc::new(RefCell::new(0)),
     };
     let parts = Parts {
         transport: handle,
         rings: bus.pin(2, false),
         area: bus.pin(2, true),
+        cursor_rings: bus.pin(1, false),
+        cursor_area: bus.pin(1, false),
     };
     let driver = Driver::init(
         parts,
@@ -43,7 +46,11 @@ fn build(mode: (u32, u32)) -> (Rc<Bus>, Rc<RefCell<Device>>, TestDriver) {
 }
 
 /// Submit, let the device serve, take the outcome.
-fn run(driver: &mut TestDriver, device: &Rc<RefCell<Device>>, command: &Command<'_>) -> Done {
+pub(super) fn run(
+    driver: &mut TestDriver,
+    device: &Rc<RefCell<Device>>,
+    command: &Command<'_>,
+) -> Done {
     driver.submit(command).expect("submitted");
     device.borrow_mut().serve();
     let (done, _) = driver.on_interrupt().expect("a sound response");
@@ -152,6 +159,17 @@ fn pump(
                 pipeline.done(done.result).expect("waiting");
             }
             Step::Unpin { .. } => pins -= 1,
+            Step::Cursor {
+                scanout,
+                resource,
+                hot_x,
+                hot_y,
+            } => {
+                driver
+                    .update_cursor(scanout, resource, hot_x, hot_y)
+                    .expect("posted");
+                device.borrow_mut().serve_cursor();
+            }
             Step::Reply(message) => replies.push(message),
             Step::Wait => panic!("nothing is outstanding here"),
             Step::Idle => break,

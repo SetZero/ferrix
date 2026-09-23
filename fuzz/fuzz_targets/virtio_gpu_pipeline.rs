@@ -55,7 +55,7 @@ fuzz_target!(|bytes: &[u8]| {
         let buffer = u32::from(byte >> 4) + 1;
         // Queue a request now and then.
         if byte & 0x7 == 0 {
-            let (request, reply) = match byte >> 3 & 0x3 {
+            let (request, reply) = match byte >> 3 & 0x7 {
                 0 => (
                     Request::Attach(Attach {
                         buffer,
@@ -84,16 +84,34 @@ fuzz_target!(|bytes: &[u8]| {
                     },
                     Some(8),
                 ),
+                // A cursor of a buffer, or none at all: answered by FLIPPED.
+                3 | 4 => (
+                    Request::Cursor {
+                        scanout: 0,
+                        buffer: if byte >> 3 & 0x7 == 3 { buffer } else { 0 },
+                        sequence: u64::from(byte),
+                        hot_x: 0,
+                        hot_y: 0,
+                    },
+                    Some(8),
+                ),
                 _ => (Request::Detach { buffer }, Some(10)),
             };
             let allowed = match request {
                 Request::Attach(_) => !attached.contains(&buffer) && !pending.contains(&buffer),
                 Request::Detach { .. } => attached.contains(&buffer) && !pending.contains(&buffer),
+                Request::Cursor { buffer: 0, .. } => true,
                 _ => attached.contains(&buffer) && !pending.contains(&buffer),
             };
             if allowed && pipeline.push(request).is_ok() {
                 if let Some(kind) = reply {
-                    expected.push_back((kind, buffer));
+                    // A cursor of none is answered for buffer 0.
+                    let named = if let Request::Cursor { buffer: shown, .. } = request {
+                        shown
+                    } else {
+                        buffer
+                    };
+                    expected.push_back((kind, named));
                 }
                 if matches!(request, Request::Attach(_) | Request::Detach { .. }) {
                     let _ = pending.insert(buffer);
@@ -129,6 +147,11 @@ fuzz_target!(|bytes: &[u8]| {
                 };
                 pipeline.done(result).expect("waiting for a command");
                 continue;
+            }
+            // A cursor is shown only once its image is on the device, which
+            // is its own buffer's resource or none.
+            Step::Cursor { resource, .. } => {
+                assert!(resource == 0 || attached.contains(&resource));
             }
             // 2 and 3.
             Step::Unpin { buffer } => {

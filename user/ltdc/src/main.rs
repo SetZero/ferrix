@@ -281,6 +281,9 @@ fn introduce(
         capsets: 0,
         capset: 0,
         capset_bytes: 0,
+        // The LTDC's second layer could be one, and is not yet: the core
+        // sends no CURSOR or MOVE to a card that says it has none.
+        cursor: false,
     };
     let share = port
         .as_owned()

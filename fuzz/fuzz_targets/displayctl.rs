@@ -64,6 +64,7 @@ fuzz_target!(|bytes: &[u8]| {
         capsets: 0,
         capset: 0,
         capset_bytes: 0,
+        cursor: true,
     };
     let mut session =
         Session::accept(&hello, &Hello::HANDLE_RIGHTS, CARD).expect("a good HELLO is accepted");
@@ -80,7 +81,7 @@ fuzz_target!(|bytes: &[u8]| {
         let (op, a, b) = (step[0], step[1], step[2]);
         let id = u32::from(a % 6);
         let was_broken = session.is_broken();
-        match op % 9 {
+        match op % 11 {
             0 => {
                 if session.attach(attach(id, b)).is_ok() {
                     let _ = asked_attach.insert(id);
@@ -122,6 +123,20 @@ fuzz_target!(|bytes: &[u8]| {
             }
             7 => {
                 let _ = session.stop();
+            }
+            // A cursor takes a sequence from the flushes' line, so the
+            // order FLIPPED is accepted in above holds of it too.
+            8 => {
+                let buffer = if a % 7 == 6 { 0 } else { id };
+                let _ = session.cursor(
+                    u32::from(b % 2),
+                    buffer,
+                    (u32::from(b % 70), u32::from(a % 70)),
+                    (i32::from(a) - 128, -i32::from(b)),
+                );
+            }
+            9 => {
+                let _ = session.move_cursor(u32::from(b % 2), (i32::from(a) - 128, i32::from(b)));
             }
             _ => {
                 let _ = session.receive(&Message::Stopped);

@@ -707,7 +707,7 @@ What is left, in the order a person feels it:
   flush waited for, and an update the viewer can have only when VNC next
   looks. virtio-gpu has a queue for exactly this -- `UPDATE_CURSOR` and
   `MOVE_CURSOR`, a cursor plane -- and QEMU hands such a cursor to a VNC
-  viewer as a shape the viewer draws where its own mouse is.
+  viewer as a shape the viewer draws where its own mouse is. *Done, §3.10.*
 * **One command at a time, each waited for.** An upload, a submission and
   a flush are each a round trip through the render or display core, the
   driver, the device and back. seL4's device driver framework (sDDF) and
@@ -718,6 +718,57 @@ What is left, in the order a person feels it:
 * **Client pixels are copied in the guest** into a texture's backing before
   the device moves them -- the 13.6 MB a frame of §3.8's table. sDDF's GPU
   class makes the client's own memory the resource's backing instead.
+
+### 3.10 The pointer on a plane of its own (2026-09-23)
+
+The first item §3.9 left. A screen whose card has a cursor plane shows the
+pointer on it, and its frames neither draw the pointer nor count its moves as
+damage (`compositor/hyprix/src/plane.rs`). Top to bottom:
+
+* **`DRM_IOCTL_MODE_CURSOR` and `CURSOR2`** on `card<N>`, as Linux's
+  `drm_mode_cursor_universal` answers them, and `DRM_CAP_CURSOR_WIDTH` and
+  `HEIGHT` of 64, which is the one size QEMU's host shows. The image is an
+  ordinary dumb buffer, as it is on Linux's `virtio_gpu`, and the numbers
+  come from `libs/linux-abi`'s probe like every other.
+* **`CURSOR` and `MOVE`** in `libs/displayctl`, version 4 (`docs/DISPLAY.md`
+  §2.2). An image waits for its pixels to reach the host, in the flushes'
+  line; a move waits for nothing, and a core whose channel is full keeps
+  only a scanout's newest place for when there is room. A driver says in
+  its HELLO whether its card has a plane: the DK1's LTDC says no, is sent
+  neither, and its card answers the cursor calls with `ENXIO` and has no
+  cursor size, so a compositor there draws the pointer itself.
+* **The cursor queue** in `libs/virtio-gpu`, run as seL4's device driver
+  framework runs its queues -- commands in slots of a page of their own,
+  what is owed posted behind one doorbell, completions taken back when the
+  next command is posted, no interrupt at all -- and the newest place of a
+  scanout, never a stale one, when every slot is taken. It is the one part
+  of the driver that runs that way; the control queue is still one command
+  at a time, which is §3.9's second item.
+
+Measured the way §3.9 measures, on the 3D card under KVM at 1920x1080, the
+viewer circling the pointer sixty times a second for 25 seconds: the
+compositor drew **4 frames** where it drew 61 a second, the viewer was sent
+**no framebuffer updates at all** where it was sent 33 a second, and it was
+sent the pointer's shape -- after which the pointer a person sees is drawn by
+their own viewer, where their own mouse is, with no lag but the one between
+the mouse and the viewer. In the guest, every process sat at 0% of a
+processor through the sweep.
+
+`cargo xtask test-compositor --boot cursor` holds it to that: the frame is
+the two windows and nothing else before and after the pointer is swept
+through four hundred places, the sweep costs at most ten frames (it cost 0),
+and a VNC viewer -- `xtask/src/vnc.rs`, which speaks as much of RFB as asking
+for `RichCursor` takes -- is handed exactly the arrow the pointer boot's
+picture has drawn into it, pixel for pixel, mask and hotspot. Both halves
+were shown to fire: with every pointer move owing a frame the boot fails on
+"sweeping the pointer cost 63 frames", and with the plane's image moved one
+pixel it fails on "the viewer's pointer shows nothing at (0, 0)". The pointer
+boot keeps judging the arrow drawn into the frame, with Hyprland's
+`cursor:no_hardware_cursors = 1`, which is also how a person asks for it.
+
+A client's own cursor larger than the plane, a screen with no plane, and the
+headless backend draw the pointer into the frame as before, and a drag's icon
+is still drawn: it follows the pointer, so a drag owes frames.
 
 ### 3a, which was not chosen for the compositor
 

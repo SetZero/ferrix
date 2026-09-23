@@ -63,6 +63,8 @@ fn ioctls(width: Width) -> Vec<(&'static str, u64)> {
         ("DRM_IOCTL_MODE_RMFB", drm::IOCTL_MODE_RMFB.into()),
         ("DRM_IOCTL_MODE_PAGE_FLIP", drm::IOCTL_MODE_PAGE_FLIP.into()),
         ("DRM_IOCTL_MODE_DIRTYFB", drm::IOCTL_MODE_DIRTYFB.into()),
+        ("DRM_IOCTL_MODE_CURSOR", drm::IOCTL_MODE_CURSOR.into()),
+        ("DRM_IOCTL_MODE_CURSOR2", drm::IOCTL_MODE_CURSOR2.into()),
         (
             "DRM_IOCTL_MODE_CREATE_DUMB",
             drm::IOCTL_MODE_CREATE_DUMB.into(),
@@ -174,6 +176,9 @@ fn values() -> Vec<(&'static str, u64)> {
             "DRM_MODE_FB_DIRTY_MAX_CLIPS",
             drm::FB_DIRTY_MAX_CLIPS.into(),
         ),
+        ("DRM_MODE_CURSOR_BO", drm::MODE_CURSOR_BO.into()),
+        ("DRM_MODE_CURSOR_MOVE", drm::MODE_CURSOR_MOVE.into()),
+        ("DRM_MODE_CURSOR_FLAGS", drm::MODE_CURSOR_FLAGS.into()),
         ("DRM_FORMAT_XRGB8888", drm::FORMAT_XRGB8888.into()),
         ("DRM_FORMAT_ARGB8888", drm::FORMAT_ARGB8888.into()),
         ("DRM_FORMAT_XBGR8888", drm::FORMAT_XBGR8888.into()),
@@ -255,6 +260,8 @@ fn expected(width: Width) -> BTreeMap<String, u64> {
     lines.extend(layouts::<drm::FbCmd2>());
     lines.extend(layouts::<drm::CrtcPageFlip>());
     lines.extend(layouts::<drm::FbDirtyCmd>());
+    lines.extend(layouts::<drm::ModeCursor>());
+    lines.extend(layouts::<drm::ModeCursor2>());
     lines.extend(layouts::<drm::ClipRect>());
     lines.extend(layouts::<drm::CreateDumb>());
     lines.extend(layouts::<drm::MapDumb>());
@@ -369,6 +376,8 @@ fn every_structure_reads_and_writes_back() {
     round_trip::<drm::FbCmd2>();
     round_trip::<drm::CrtcPageFlip>();
     round_trip::<drm::FbDirtyCmd>();
+    round_trip::<drm::ModeCursor>();
+    round_trip::<drm::ModeCursor2>();
     round_trip::<drm::ClipRect>();
     round_trip::<drm::CreateDumb>();
     round_trip::<drm::MapDumb>();

@@ -1,5 +1,6 @@
-//! A virtio-gpu device on the host: its registers, its control queue, and the
-//! 2D commands, served against memory reached only by device address.
+//! A virtio-gpu device on the host: its registers, its control and cursor
+//! queues, and the 2D commands, served against memory reached only by device
+//! address.
 //!
 //! The device keeps a host copy of every resource, as QEMU does, fills it
 //! from the guest backing on `TRANSFER_TO_HOST_2D`, and keeps the scanout's
@@ -13,10 +14,11 @@ use std::vec;
 use std::vec::Vec;
 
 use ferrix_virtio::gpu::{
-    CMD_GET_DISPLAY_INFO, CMD_RESOURCE_ATTACH_BACKING, CMD_RESOURCE_CREATE_2D,
+    CMD_GET_DISPLAY_INFO, CMD_MOVE_CURSOR, CMD_RESOURCE_ATTACH_BACKING, CMD_RESOURCE_CREATE_2D,
     CMD_RESOURCE_DETACH_BACKING, CMD_RESOURCE_FLUSH, CMD_RESOURCE_UNREF, CMD_SET_SCANOUT,
-    CMD_TRANSFER_TO_HOST_2D, DeviceConfig, MAX_SCANOUTS, PAGE_SIZE, RESP_ERR_INVALID_PARAMETER,
-    RESP_ERR_INVALID_RESOURCE_ID, RESP_OK_DISPLAY_INFO, RESP_OK_NODATA,
+    CMD_TRANSFER_TO_HOST_2D, CMD_UPDATE_CURSOR, CURSOR_LEN, CURSOR_SIZE, DeviceConfig,
+    MAX_SCANOUTS, PAGE_SIZE, RESP_ERR_INVALID_PARAMETER, RESP_ERR_INVALID_RESOURCE_ID,
+    RESP_OK_DISPLAY_INFO, RESP_OK_NODATA,
 };
 use ferrix_virtio::pci::{
     CommonConfig, DEVICE_FEATURE, DEVICE_FEATURE_SELECT, DEVICE_STATUS, DRIVER_FEATURE,
@@ -186,6 +188,53 @@ pub(super) struct Misbehave {
     pub(super) needs_reset: bool,
 }
 
+/// One queue's registers, as the driver set them.
+#[derive(Debug)]
+struct Queue {
+    size: u16,
+    vector: u16,
+    addresses: [u64; 3],
+    ring: Option<SplitQueueDevice<RingView>>,
+}
+
+impl Queue {
+    const fn new() -> Self {
+        Self {
+            size: 64,
+            vector: NO_VECTOR,
+            addresses: [0; 3],
+            ring: None,
+        }
+    }
+
+    /// A write to one half of one of the three parts' addresses.
+    fn set_address(&mut self, offset: u32, value: u32) {
+        for (index, base) in [QUEUE_DESC, QUEUE_DRIVER, QUEUE_DEVICE]
+            .into_iter()
+            .enumerate()
+        {
+            let address = &mut self.addresses[index];
+            if offset == base {
+                *address = (*address & !0xFFFF_FFFF) | u64::from(value);
+            } else if offset == base + 4 {
+                *address = (*address & 0xFFFF_FFFF) | u64::from(value) << 32;
+            }
+        }
+    }
+}
+
+/// A cursor command as the device read it off the cursor queue.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct CursorSeen {
+    /// `UPDATE_CURSOR` or `MOVE_CURSOR`.
+    pub(super) code: u32,
+    pub(super) scanout: u32,
+    pub(super) x: i32,
+    pub(super) y: i32,
+    pub(super) resource: u32,
+    pub(super) hot: (u32, u32),
+}
+
 /// A resource: its size, its backing, and the host copy.
 #[derive(Debug, Default)]
 pub(super) struct Resource {
@@ -205,10 +254,7 @@ pub(super) struct Device {
     driver_select: u32,
     status: u8,
     queue_select: u16,
-    queue_size: u16,
-    queue_vector: u16,
-    addresses: [u64; 3],
-    ring: Option<SplitQueueDevice<RingView>>,
+    queues: [Queue; 2],
     config: Vec<u8>,
     pub(super) mode: (u32, u32),
     pub(super) resources: BTreeMap<u32, Resource>,
@@ -216,6 +262,11 @@ pub(super) struct Device {
     /// The scanout's pixels as last flushed.
     pub(super) screen: Vec<u8>,
     pub(super) commands: Vec<u32>,
+    /// Every cursor command served, in order.
+    pub(super) cursor_log: Vec<CursorSeen>,
+    /// The cursor's image as the last `UPDATE_CURSOR` read it, as QEMU keeps
+    /// a copy: the resource's host copy at the time.
+    pub(super) cursor_image: Vec<u8>,
     pub(super) misbehave: Misbehave,
     pub(super) protocol_errors: Vec<&'static str>,
 }
@@ -232,19 +283,37 @@ impl Device {
             driver_select: 0,
             status: 0,
             queue_select: 0,
-            queue_size: 64,
-            queue_vector: NO_VECTOR,
-            addresses: [0; 3],
-            ring: None,
+            queues: [Queue::new(), Queue::new()],
             config,
             mode,
             resources: BTreeMap::new(),
             scanout: None,
             screen: Vec::new(),
             commands: Vec::new(),
+            cursor_log: Vec::new(),
+            cursor_image: Vec::new(),
             misbehave: Misbehave::default(),
             protocol_errors: Vec::new(),
         }
+    }
+
+    /// The queue `QUEUE_SELECT` names, if the device has it.
+    fn selected(&self) -> Option<&Queue> {
+        self.queues.get(usize::from(self.queue_select))
+    }
+
+    /// The MSI-X vector the cursor queue was given.
+    pub(super) fn cursor_vector(&self) -> u16 {
+        self.queues[1].vector
+    }
+
+    /// Whether the driver asks to be interrupted when a cursor command is
+    /// done.
+    pub(super) fn cursor_interrupts_wanted(&self) -> bool {
+        self.queues[1]
+            .ring
+            .as_ref()
+            .is_some_and(SplitQueueDevice::driver_wants_interrupt)
     }
 
     /// The configuration block, for a test to raise an event in.
@@ -253,7 +322,7 @@ impl Device {
     }
 
     fn register(&self, offset: u32) -> u32 {
-        let selected = self.queue_select == 0;
+        let queue = self.selected();
         match offset {
             DEVICE_FEATURE => match self.device_select {
                 0 => self.offered as u32,
@@ -270,10 +339,10 @@ impl Device {
                     }
             }
             QUEUE_SELECT => u32::from(self.queue_select),
-            QUEUE_SIZE => u32::from(self.queue_size),
-            QUEUE_MSIX_VECTOR if selected => u32::from(self.queue_vector),
-            QUEUE_ENABLE if selected => u32::from(self.ring.is_some()),
-            QUEUE_NOTIFY_OFF => 5,
+            QUEUE_SIZE => queue.map_or(0, |queue| u32::from(queue.size)),
+            QUEUE_MSIX_VECTOR => queue.map_or(0, |queue| u32::from(queue.vector)),
+            QUEUE_ENABLE => queue.map_or(0, |queue| u32::from(queue.ring.is_some())),
+            QUEUE_NOTIFY_OFF => 5 + u32::from(self.queue_select),
             _ => 0,
         }
     }
@@ -289,50 +358,44 @@ impl Device {
             DEVICE_STATUS => {
                 if value == 0 {
                     self.status = 0;
-                    self.ring = None;
+                    for queue in &mut self.queues {
+                        queue.ring = None;
+                    }
                     self.resources.clear();
                     self.scanout = None;
                 } else {
-                    if value as u8 & STATUS_DRIVER_OK != 0 && self.ring.is_none() {
-                        self.protocol_errors
-                            .push("DRIVER_OK before the control queue");
+                    if value as u8 & STATUS_DRIVER_OK != 0
+                        && self.queues.iter().any(|queue| queue.ring.is_none())
+                    {
+                        self.protocol_errors.push("DRIVER_OK before both queues");
                     }
                     self.status = value as u8;
                 }
             }
             QUEUE_SELECT => self.queue_select = value as u16,
-            QUEUE_SIZE if self.queue_select == 0 => self.queue_size = value as u16,
-            QUEUE_MSIX_VECTOR if self.queue_select == 0 => self.queue_vector = value as u16,
-            QUEUE_ENABLE => {
-                if self.queue_select != 0 {
-                    self.protocol_errors
-                        .push("a queue other than control enabled");
-                    return;
-                }
-                let layout = Layout::for_size(self.queue_size).expect("a valid size");
-                self.ring = Some(SplitQueueDevice::new(
-                    layout,
-                    RingView {
-                        bus: Rc::clone(&self.bus),
-                        layout,
-                        descriptors: self.addresses[0],
-                        driver: self.addresses[1],
-                        device: self.addresses[2],
-                    },
-                ));
-            }
             _ => {
-                for (index, base) in [QUEUE_DESC, QUEUE_DRIVER, QUEUE_DEVICE]
-                    .into_iter()
-                    .enumerate()
-                {
-                    if offset == base {
-                        self.addresses[index] =
-                            (self.addresses[index] & !0xFFFF_FFFF) | u64::from(value);
-                    } else if offset == base + 4 {
-                        self.addresses[index] =
-                            (self.addresses[index] & 0xFFFF_FFFF) | u64::from(value) << 32;
+                let bus = Rc::clone(&self.bus);
+                let Some(queue) = self.queues.get_mut(usize::from(self.queue_select)) else {
+                    self.protocol_errors.push("a queue the device has not got");
+                    return;
+                };
+                match offset {
+                    QUEUE_SIZE => queue.size = value as u16,
+                    QUEUE_MSIX_VECTOR => queue.vector = value as u16,
+                    QUEUE_ENABLE => {
+                        let layout = Layout::for_size(queue.size).expect("a valid size");
+                        queue.ring = Some(SplitQueueDevice::new(
+                            layout,
+                            RingView {
+                                bus,
+                                layout,
+                                descriptors: queue.addresses[0],
+                                driver: queue.addresses[1],
+                                device: queue.addresses[2],
+                            },
+                        ));
                     }
+                    _ => queue.set_address(offset, value),
                 }
             }
         }
@@ -344,10 +407,70 @@ impl Device {
             .collect()
     }
 
+    /// Serve every cursor command the driver has published, as QEMU's
+    /// `virtio_gpu_handle_cursor` does: read it, act on it, give the chain
+    /// back with nothing written.
+    pub(super) fn serve_cursor(&mut self) {
+        loop {
+            let Some(ring) = self.queues[1].ring.as_mut() else {
+                return;
+            };
+            let Ok(Some(head)) = ring.next_chain() else {
+                return;
+            };
+            let mut descriptors = [Descriptor {
+                address: 0,
+                len: 0,
+                flags: 0,
+                next: 0,
+            }; 4];
+            let count = ring
+                .read_chain(head, &mut descriptors)
+                .expect("a readable chain");
+            let [descriptor] = descriptors[..count] else {
+                self.protocol_errors
+                    .push("a cursor command that is not one buffer");
+                return;
+            };
+            if descriptor.flags & 2 != 0 || descriptor.len as usize != CURSOR_LEN {
+                self.protocol_errors
+                    .push("a cursor command of the wrong shape");
+                return;
+            }
+            let bytes = self.copy_out(descriptor.address, CURSOR_LEN);
+            let field = |at: usize| u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
+            let seen = CursorSeen {
+                code: field(0),
+                scanout: field(24),
+                x: field(28) as i32,
+                y: field(32) as i32,
+                resource: field(40),
+                hot: (field(44), field(48)),
+            };
+            if seen.code != CMD_UPDATE_CURSOR && seen.code != CMD_MOVE_CURSOR {
+                self.protocol_errors
+                    .push("a cursor command of no known type");
+            }
+            if seen.code == CMD_UPDATE_CURSOR && seen.resource != 0 {
+                match self.resources.get(&seen.resource) {
+                    Some(image) if (image.width, image.height) == (CURSOR_SIZE, CURSOR_SIZE) => {
+                        self.cursor_image = image.host.clone();
+                    }
+                    _ => self
+                        .protocol_errors
+                        .push("a cursor image that is not a 64x64 resource"),
+                }
+            }
+            self.cursor_log.push(seen);
+            let ring = self.queues[1].ring.as_mut().expect("still there");
+            ring.complete(head, 0).expect("completes");
+        }
+    }
+
     /// Serve every chain the driver has published.
     pub(super) fn serve(&mut self) {
         loop {
-            let Some(ring) = self.ring.as_mut() else {
+            let Some(ring) = self.queues[0].ring.as_mut() else {
                 return;
             };
             let Ok(Some(head)) = ring.next_chain() else {
@@ -386,7 +509,7 @@ impl Device {
             }
             self.commands.push(code);
             let written = self.misbehave.written.unwrap_or(answer.len() as u32);
-            let ring = self.ring.as_mut().expect("still there");
+            let ring = self.queues[0].ring.as_mut().expect("still there");
             ring.complete(head, written).expect("completes");
         }
     }
@@ -514,6 +637,8 @@ impl Device {
 pub(super) struct Handle {
     pub(super) device: Rc<RefCell<Device>>,
     pub(super) doorbells: Rc<RefCell<usize>>,
+    /// Doorbells rung for the cursor queue, apart.
+    pub(super) cursor_doorbells: Rc<RefCell<usize>>,
 }
 
 impl CommonConfig for Handle {
@@ -558,12 +683,14 @@ impl DeviceConfig for Handle {
 
 impl Transport for Handle {
     fn notify(&mut self, queue: u16, notify_off: u16) {
-        *self.doorbells.borrow_mut() += 1;
-        if queue != 0 || notify_off != 5 {
-            self.device
+        match (queue, notify_off) {
+            (0, 5) => *self.doorbells.borrow_mut() += 1,
+            (1, 6) => *self.cursor_doorbells.borrow_mut() += 1,
+            _ => self
+                .device
                 .borrow_mut()
                 .protocol_errors
-                .push("a doorbell for the wrong queue");
+                .push("a doorbell for the wrong queue"),
         }
     }
     fn queue_vector(&self) -> u16 {

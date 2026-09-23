@@ -304,6 +304,9 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
         i32::try_from(config.int("input:repeat_delay").unwrap_or(600)).unwrap_or(600),
     );
     let follow_mouse = config.int("input:follow_mouse").unwrap_or(1) != 0;
+    // The pointer on a cursor plane where a screen has one: Hyprland's
+    // `cursor:no_hardware_cursors`, read once as `follow_mouse` is.
+    let planes = crate::plane::wanted(config.int("cursor:no_hardware_cursors").unwrap_or(2));
     // Off in Hyprland: a program asking for another's window makes it
     // urgent rather than taking the focus away from what is being used.
     let focus_on_activate = config.int("misc:focus_on_activate").unwrap_or(0) != 0;
@@ -674,13 +677,16 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
             if actions.is_empty() {
                 continue;
             }
-            // The pointer is drawn into the frame, so moving it is a change
-            // to the screen even when nothing else moved: without this the
-            // arrow would stay where the last redraw left it and catch up
-            // only when a window did something.
+            // A pointer drawn into the frame makes moving it a change to the
+            // screen even when nothing else moved: without this the arrow
+            // would stay where the last redraw left it and catch up only
+            // when a window did something. A pointer on every screen's
+            // cursor plane is moved there and owes no frame -- unless a drag
+            // carries a surface along with it, which is drawn.
             if actions
                 .iter()
                 .any(|action| matches!(action, crate::seat::Action::Pointer { .. }))
+                && (carried.is_some() || screens.iter().any(|screen| !screen.plane.on))
             {
                 changed = true;
             }
@@ -1142,6 +1148,25 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
         // in `commits`, everything else in the plan the next frame is
         // compared with -- and the frame that shows it is the next one the
         // screen's refresh allows.
+        // The pointer on the screens with a cursor plane, as it is now: a
+        // move there waits for no frame. A screen whose pointer went from
+        // its frames to its plane, or back, owes a frame that draws it or
+        // takes it away.
+        let pointer = (lock.is_none() && devices.has_pointer() && seat.pointer_used()).then(|| {
+            crate::frame::Cursor {
+                at: (0, 0),
+                surface: cursor_surface(&slots, &focus),
+                shown: cursor_shown(&slots, &focus),
+            }
+        });
+        changed |= sync_planes(
+            &mut screens,
+            &slots,
+            pointer.map(|cursor| (cursor, seat.pointer())),
+            &|name| dpms.get(name).copied().unwrap_or(false),
+            planes,
+            report,
+        );
         owed |= changed;
         if (owed || drawn == 0 || animating || settling)
             && pace.due(Instant::now(), refresh_ns(&screens))
@@ -1195,6 +1220,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                     ));
                     screen.gpu = None;
                     screen.watch = crate::damage::Watch::default();
+                    screen.plane.forget();
                 }
                 // Where each window *is*, rather than where the tiling put
                 // it.
@@ -1254,14 +1280,17 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                 // The pointer, unless the session is locked: a lock screen
                 // draws its own and the compositor's arrow over it would be
                 // two pointers.
-                let cursor =
-                    (!dark && lock.is_none() && devices.has_pointer() && seat.pointer_used()).then(
-                        || crate::frame::Cursor {
-                            at: cursor_at,
-                            surface: cursor_surface(&slots, &focus),
-                            shown: cursor_shown(&slots, &focus),
-                        },
-                    );
+                // And not where the screen's cursor plane shows it.
+                let cursor = (!dark
+                    && !screen.plane.on
+                    && lock.is_none()
+                    && devices.has_pointer()
+                    && seat.pointer_used())
+                .then(|| crate::frame::Cursor {
+                    at: cursor_at,
+                    surface: cursor_surface(&slots, &focus),
+                    shown: cursor_shown(&slots, &focus),
+                });
                 // The ramps a night-light set on this screen, applied to
                 // the pixels on their way out.
                 let gamma = gammas.get(&which).copied();
@@ -1310,6 +1339,12 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                     drag_icon: drag_icon.and_then(|icon| {
                         Some((icon, crate::frame::drag_rect(&slots, &icon, origin, scale)?))
                     }),
+                    plane: screen
+                        .plane
+                        .on
+                        .then(|| cursor_surface(&slots, &focus))
+                        .flatten()
+                        .map(|(client, surface, _)| (client, surface)),
                 };
                 // And the clients' own pixels: where on this screen each
                 // commit since the last frame landed.
@@ -2672,6 +2707,8 @@ struct Screen {
     /// What it last drew, which is what the next frame's damage is worked
     /// out against.
     watch: crate::damage::Watch,
+    /// Its cursor plane, as it was last told: `crate::plane`.
+    plane: crate::plane::Plane,
 }
 
 impl Screen {
@@ -2767,6 +2804,7 @@ impl Screen {
                 // Nothing drawn yet, which is what makes a screen's first
                 // frame a whole one.
                 watch: crate::damage::Watch::default(),
+                plane: crate::plane::Plane::default(),
             });
         }
         if screens.is_empty() {
@@ -3884,6 +3922,124 @@ fn cursor_surface(slots: &[Slot], focus: &Focus) -> Option<(usize, ObjectId, (i3
     let slot = slots.get(client)?;
     let (surface, hotspot) = slot.client().cursor()?;
     Some((client, surface, hotspot))
+}
+
+/// Put the pointer on each screen's cursor plane, where it has one and the
+/// image fits: `pointer` is the pointer -- which surface, and whether it is
+/// shown at all -- and where it is, in the logical pixels screens are laid
+/// out in. `true` when a screen's pointer went from its frames to its plane
+/// or back, which owes that screen a frame.
+///
+/// The image is made again on every pass -- a pointer's worth of pixels --
+/// and set only when it or its hotspot changed; otherwise the plane is only
+/// moved, which waits for nothing.
+fn sync_planes(
+    screens: &mut [Screen],
+    slots: &[Slot],
+    pointer: Option<(crate::frame::Cursor, (f64, f64))>,
+    dark: &dyn Fn(&str) -> bool,
+    wanted: bool,
+    report: &mut dyn FnMut(&str),
+) -> bool {
+    let mut switched = false;
+    for screen in screens.iter_mut() {
+        let size = if wanted {
+            screen.backend.cursor_plane()
+        } else {
+            None
+        };
+        let Some(size) = size else {
+            switched |= std::mem::replace(&mut screen.plane.on, false);
+            continue;
+        };
+        // What this screen shows: the pointer where it is on this screen,
+        // or nothing.
+        let rect = screen.rect;
+        let here = pointer.filter(|(cursor, (x, y))| {
+            #[expect(
+                clippy::cast_precision_loss,
+                reason = "a screen's corner and size are far inside f64"
+            )]
+            let inside = *x >= rect.x as f64
+                && *y >= rect.y as f64
+                && *x < (rect.x + rect.width) as f64
+                && *y < (rect.y + rect.height) as f64;
+            cursor.shown && inside && !dark(&screen.name)
+        });
+        let arrow = compositor_render::cursor::arrow();
+        let (surface, hot) = match here {
+            None => (None, (0, 0)),
+            Some((cursor, _)) => {
+                // A client's own cursor, or the arrow when it has none or
+                // its surface has no pixels yet -- which is what the frame
+                // would have drawn.
+                let own = cursor.surface.and_then(|(client, surface, hot)| {
+                    Some((crate::frame::pixels(slots.get(client)?, surface)?, hot))
+                });
+                match own {
+                    Some((surface, hot)) => (Some(surface), hot),
+                    None => (
+                        compositor_render::cursor::surface(&arrow).ok(),
+                        compositor_render::cursor::HOTSPOT,
+                    ),
+                }
+            }
+        };
+        let (image, on) = match crate::plane::image(surface.as_ref(), size) {
+            Some(image) => (image, true),
+            // Larger than the plane: the frame draws it, and the plane shows
+            // nothing.
+            None => (crate::plane::image(None, size).unwrap_or_default(), false),
+        };
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "the pointer is held inside the screens, far inside i32"
+        )]
+        let at = here.map_or((0, 0), |(_, (x, y))| {
+            let local = |value: f64, corner: i64| {
+                #[expect(
+                    clippy::cast_precision_loss,
+                    reason = "a screen's corner is far inside f64"
+                )]
+                let corner = corner as f64;
+                ((value - corner) * screen.scale).round() as i32
+            };
+            (
+                local(x, rect.x).saturating_sub(hot.0),
+                local(y, rect.y).saturating_sub(hot.1),
+            )
+        });
+        let told = match screen.plane.tell(image, hot, at) {
+            crate::plane::Tell::Nothing => Ok(()),
+            crate::plane::Tell::Move(at) => screen.backend.move_cursor(at),
+            crate::plane::Tell::Set { image, hot, at } => {
+                screen.backend.set_cursor(&image, hot, at)
+            }
+        };
+        let on = on && told.is_ok();
+        if let Err(error) = told {
+            // A plane that will not be told is one this screen does without:
+            // the frame draws the pointer from now until it is told again.
+            report(&format!(
+                "hyprix: {}: the cursor plane refused: {error}",
+                screen.name
+            ));
+            screen.plane.forget();
+        }
+        if std::mem::replace(&mut screen.plane.on, on) != on {
+            switched = true;
+            report(&format!(
+                "hyprix: {}: {}",
+                screen.name,
+                if on {
+                    "the pointer is on the card's cursor plane"
+                } else {
+                    "the pointer is drawn into the frame"
+                }
+            ));
+        }
+    }
+    switched
 }
 
 /// Whether the pointer is drawn at all.

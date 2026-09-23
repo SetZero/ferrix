@@ -6,9 +6,11 @@
 //! [`Ready::HANDLE_RIGHTS`] say what they must be.
 //!
 //! ```text
-//! HELLO     driver -> core, 208 bytes, handles [driver port]
+//! HELLO     driver -> core, 224 bytes, handles [driver port]
 //!   8 version u16   10 scanouts u16   12 location u32
 //!   16 scanout 0: width u32, height u32, enabled u32   ... 16 of them, 12 bytes each
+//!   208 virgl u16   210 capsets u16   212 capset u32   216 capset_bytes u32
+//!   220 cursor u32: 1 for a card with a cursor plane, which CURSOR and MOVE need
 //! READY     core -> driver, 24 bytes, handles [card VMO, core port]
 //!   8 card u32   12 reserved   16 card_bytes u64
 //! REFUSED   core -> driver, 12 bytes: 8 reason u32
@@ -27,7 +29,19 @@
 //! DETACH    core -> driver, 16 bytes: 8 buffer u32   12 reserved
 //! DETACHED  driver -> core, 16 bytes: 8 buffer u32   12 status u32
 //! STOP, STOPPED               8 bytes
+//! CURSOR    core -> driver, 40 bytes, answered by FLIPPED
+//!   8 scanout u32   12 buffer u32 (0: none)   16 sequence u64
+//!   24 hot_x u32   28 hot_y u32   32 x i32   36 y i32
+//! MOVE      core -> driver, 24 bytes, not answered
+//!   8 scanout u32   12 reserved   16 x i32   20 y i32
 //! ```
+//!
+//! CURSOR shows a [`CURSOR_SIZE`]-square buffer as a scanout's cursor, and
+//! is a flush of that buffer in all but name: it takes the next sequence
+//! number, waits in the same line, and FLIPPED answers it once the image is
+//! on the device. MOVE puts the cursor's top-left corner somewhere else and
+//! nobody waits for it, which is the point of a cursor plane: a pointer
+//! moving is not a frame.
 //!
 //! Reserved bytes are written as zero and a message with any of them set is
 //! malformed, so they can be given a meaning later without an old reader
@@ -39,7 +53,7 @@ use ferrix_linux_abi::drm::FORMAT_XRGB8888;
 use ferrix_native_abi::rights::Rights;
 
 /// The protocol version this crate speaks.
-pub const VERSION: u16 = 3;
+pub const VERSION: u16 = 4;
 
 /// HELLO's type.
 pub const HELLO: u32 = 1;
@@ -67,6 +81,14 @@ pub const STOP: u32 = 11;
 pub const STOPPED: u32 = 12;
 /// `ATTACH_OBJ`'s type.
 pub const ATTACH_OBJECT: u32 = 13;
+/// CURSOR's type.
+pub const CURSOR: u32 = 14;
+/// MOVE's type.
+pub const MOVE: u32 = 15;
+
+/// The width and height of a buffer CURSOR shows: the one cursor size
+/// virtio-gpu's host shows.
+pub const CURSOR_SIZE: u32 = 64;
 
 /// Bytes of the type and length, and all of STOP and STOPPED.
 pub const HEADER_BYTES: usize = 8;
@@ -75,7 +97,7 @@ pub const MAX_SCANOUTS: usize = 16;
 /// Bytes of one scanout in HELLO.
 pub const SCANOUT_BYTES: usize = 12;
 /// Bytes of HELLO.
-pub const HELLO_BYTES: usize = 16 + MAX_SCANOUTS * SCANOUT_BYTES + 12;
+pub const HELLO_BYTES: usize = 16 + MAX_SCANOUTS * SCANOUT_BYTES + 16;
 /// Bytes of the longest message.
 pub const MAX_BYTES: usize = HELLO_BYTES;
 
@@ -172,6 +194,10 @@ pub struct Hello {
     /// what says `GET_CAPSET` ran and not merely `GET_CAPSET_INFO`. Zero
     /// when there was none to fetch, or when it would not fit.
     pub capset_bytes: u32,
+    /// Whether the card has a cursor plane, which CURSOR and MOVE need: a
+    /// virtio-gpu has its cursor queue, and a card with no such thing says
+    /// so rather than be sent what it cannot show.
+    pub cursor: bool,
 }
 
 /// Why the core refuses a driver.
@@ -516,6 +542,34 @@ pub enum Message {
     Stop,
     /// Driver to core.
     Stopped,
+    /// Core to driver: `buffer` is `scanout`'s cursor, with its top-left
+    /// corner at (`x`, `y`). FLIPPED answers it, by `sequence`.
+    Cursor {
+        /// The scanout.
+        scanout: u32,
+        /// A [`CURSOR_SIZE`]-square buffer, or 0 for none.
+        buffer: u32,
+        /// Its number, from the flushes' count.
+        sequence: u64,
+        /// The hotspot, from the image's left edge; below [`CURSOR_SIZE`].
+        hot_x: u32,
+        /// The hotspot, from the image's top edge; below [`CURSOR_SIZE`].
+        hot_y: u32,
+        /// The image's left edge on the scanout.
+        x: i32,
+        /// The image's top edge on the scanout.
+        y: i32,
+    },
+    /// Core to driver: `scanout`'s cursor's top-left corner is at (`x`,
+    /// `y`) now. Not answered.
+    Move {
+        /// The scanout.
+        scanout: u32,
+        /// The image's left edge on the scanout.
+        x: i32,
+        /// The image's top edge on the scanout.
+        y: i32,
+    },
 }
 
 /// Why bytes are not a message.
@@ -564,6 +618,8 @@ impl Message {
             Self::Detached { .. } => DETACHED,
             Self::Stop => STOP,
             Self::Stopped => STOPPED,
+            Self::Cursor { .. } => CURSOR,
+            Self::Move { .. } => MOVE,
         }
     }
 
@@ -578,8 +634,8 @@ impl Message {
             ATTACH_OBJECT => 32,
             ATTACHED | DETACH | DETACHED => 16,
             SCANOUT => 32,
-            FLUSH => 40,
-            FLIPPED => 24,
+            FLUSH | CURSOR => 40,
+            FLIPPED | MOVE => 24,
             STOP | STOPPED => HEADER_BYTES,
             _ => return None,
         })
@@ -598,24 +654,7 @@ impl Message {
         put32(bytes, 0, kind);
         put32(bytes, 4, u32::try_from(len).unwrap_or(0));
         match *self {
-            Self::Hello(hello) => {
-                put16(bytes, 8, hello.version);
-                put16(bytes, 10, hello.scanouts);
-                put32(bytes, 12, hello.location);
-                for (index, mode) in hello.modes.iter().enumerate() {
-                    let at = 16 + index * SCANOUT_BYTES;
-                    put32(bytes, at, mode.width);
-                    put32(bytes, at + 4, mode.height);
-                    put32(bytes, at + 8, u32::from(mode.enabled));
-                }
-                // After the modes, so that every offset above is where it
-                // has always been and only the length grew.
-                let at = 16 + MAX_SCANOUTS * SCANOUT_BYTES;
-                put16(bytes, at, u16::from(hello.virgl));
-                put16(bytes, at + 2, hello.capsets);
-                put32(bytes, at + 4, hello.capset);
-                put32(bytes, at + 8, hello.capset_bytes);
-            }
+            Self::Hello(hello) => put_hello(bytes, &hello),
             Self::Ready(ready) => {
                 put32(bytes, 8, ready.card);
                 put64(bytes, 16, ready.card_bytes);
@@ -666,6 +705,28 @@ impl Message {
             }
             Self::Detach { buffer } => put32(bytes, 8, buffer),
             Self::Stop | Self::Stopped => {}
+            Self::Cursor {
+                scanout,
+                buffer,
+                sequence,
+                hot_x,
+                hot_y,
+                x,
+                y,
+            } => {
+                put32(bytes, 8, scanout);
+                put32(bytes, 12, buffer);
+                put64(bytes, 16, sequence);
+                put32(bytes, 24, hot_x);
+                put32(bytes, 28, hot_y);
+                put32(bytes, 32, x as u32);
+                put32(bytes, 36, y as u32);
+            }
+            Self::Move { scanout, x, y } => {
+                put32(bytes, 8, scanout);
+                put32(bytes, 16, x as u32);
+                put32(bytes, 20, y as u32);
+            }
         }
         out
     }
@@ -686,36 +747,7 @@ fn decode_body(kind: u32, bytes: &[u8]) -> Option<Message> {
     let zero32 = |at: usize| get32(bytes, at).filter(|&value| value == 0).map(drop);
     let status = |at: usize| get32(bytes, at).and_then(Status::from_raw);
     Some(match kind {
-        HELLO => {
-            let mut modes = [ScanoutMode::default(); MAX_SCANOUTS];
-            for (index, mode) in modes.iter_mut().enumerate() {
-                let at = 16 + index * SCANOUT_BYTES;
-                *mode = ScanoutMode {
-                    width: get32(bytes, at)?,
-                    height: get32(bytes, at + 4)?,
-                    enabled: match get32(bytes, at + 8)? {
-                        0 => false,
-                        1 => true,
-                        _ => return None,
-                    },
-                };
-            }
-            let at = 16 + MAX_SCANOUTS * SCANOUT_BYTES;
-            Message::Hello(Hello {
-                version: get16(bytes, 8)?,
-                scanouts: get16(bytes, 10)?,
-                location: get32(bytes, 12)?,
-                modes,
-                virgl: match get16(bytes, at)? {
-                    0 => false,
-                    1 => true,
-                    _ => return None,
-                },
-                capsets: get16(bytes, at + 2)?,
-                capset: get32(bytes, at + 4)?,
-                capset_bytes: get32(bytes, at + 8)?,
-            })
-        }
+        HELLO => decode_hello(bytes)?,
         READY => {
             zero32(12)?;
             Message::Ready(Ready {
@@ -780,8 +812,95 @@ fn decode_body(kind: u32, bytes: &[u8]) -> Option<Message> {
         }
         STOP => Message::Stop,
         STOPPED => Message::Stopped,
+        CURSOR | MOVE => return decode_cursor(kind, bytes),
         _ => return None,
     })
+}
+
+/// [`decode_body`] for the cursor's two messages.
+fn decode_cursor(kind: u32, bytes: &[u8]) -> Option<Message> {
+    let signed = |at: usize| get32(bytes, at).map(|value| value as i32);
+    Some(match kind {
+        CURSOR => {
+            let hot = |at: usize| get32(bytes, at).filter(|&hot| hot < CURSOR_SIZE);
+            Message::Cursor {
+                scanout: get32(bytes, 8)?,
+                buffer: get32(bytes, 12)?,
+                sequence: get64(bytes, 16)?,
+                hot_x: hot(24)?,
+                hot_y: hot(28)?,
+                x: signed(32)?,
+                y: signed(36)?,
+            }
+        }
+        MOVE => {
+            let _reserved = get32(bytes, 12).filter(|&reserved| reserved == 0)?;
+            Message::Move {
+                scanout: get32(bytes, 8)?,
+                x: signed(16)?,
+                y: signed(20)?,
+            }
+        }
+        _ => return None,
+    })
+}
+
+/// HELLO's fields, into `bytes`.
+fn put_hello(bytes: &mut [u8], hello: &Hello) {
+    put16(bytes, 8, hello.version);
+    put16(bytes, 10, hello.scanouts);
+    put32(bytes, 12, hello.location);
+    for (index, mode) in hello.modes.iter().enumerate() {
+        let at = 16 + index * SCANOUT_BYTES;
+        put32(bytes, at, mode.width);
+        put32(bytes, at + 4, mode.height);
+        put32(bytes, at + 8, u32::from(mode.enabled));
+    }
+    // After the modes, so that every offset above is where it
+    // has always been and only the length grew.
+    let at = 16 + MAX_SCANOUTS * SCANOUT_BYTES;
+    put16(bytes, at, u16::from(hello.virgl));
+    put16(bytes, at + 2, hello.capsets);
+    put32(bytes, at + 4, hello.capset);
+    put32(bytes, at + 8, hello.capset_bytes);
+    put32(bytes, at + 12, u32::from(hello.cursor));
+}
+
+/// HELLO, from `bytes`: `None` for a field outside its range.
+fn decode_hello(bytes: &[u8]) -> Option<Message> {
+    let mut modes = [ScanoutMode::default(); MAX_SCANOUTS];
+    for (index, mode) in modes.iter_mut().enumerate() {
+        let at = 16 + index * SCANOUT_BYTES;
+        *mode = ScanoutMode {
+            width: get32(bytes, at)?,
+            height: get32(bytes, at + 4)?,
+            enabled: match get32(bytes, at + 8)? {
+                0 => false,
+                1 => true,
+                _ => return None,
+            },
+        };
+    }
+    let at = 16 + MAX_SCANOUTS * SCANOUT_BYTES;
+    Some(Message::Hello(Hello {
+        version: get16(bytes, 8)?,
+        scanouts: get16(bytes, 10)?,
+        location: get32(bytes, 12)?,
+        modes,
+        virgl: match get16(bytes, at)? {
+            0 => false,
+            1 => true,
+            _ => return None,
+        },
+        capsets: get16(bytes, at + 2)?,
+        capset: get32(bytes, at + 4)?,
+        capset_bytes: get32(bytes, at + 8)?,
+        cursor: match get32(bytes, at + 12)? {
+            0 => false,
+            1 => true,
+            _ => return None,
+        },
+    }))
 }
 
 fn get16(bytes: &[u8], at: usize) -> Option<u16> {

@@ -34,6 +34,7 @@ fn hello() -> Hello {
         capsets: 0,
         capset: 0,
         capset_bytes: 0,
+        cursor: true,
     }
 }
 
@@ -106,6 +107,20 @@ fn every_message() -> Vec<Message> {
         },
         Message::Stop,
         Message::Stopped,
+        Message::Cursor {
+            scanout: 1,
+            buffer: 7,
+            sequence: 1 << 41,
+            hot_x: 63,
+            hot_y: 2,
+            x: -5,
+            y: 1079,
+        },
+        Message::Move {
+            scanout: 1,
+            x: -5,
+            y: i32::MAX,
+        },
     ]
 }
 
@@ -127,10 +142,10 @@ fn every_message_round_trips_at_its_fixed_length() {
 fn fields_lie_where_the_specification_puts_them() {
     let plain = Message::Hello(hello()).encode();
     let bytes = plain.as_bytes();
-    // 16 of header and fields, 16 scanouts of 12, and 12 for what the card
-    // said about 3D.
-    assert_eq!(bytes.len(), 220);
-    assert_eq!(u16::from_le_bytes([bytes[8], bytes[9]]), 3, "VERSION");
+    // 16 of header and fields, 16 scanouts of 12, 12 for what the card said
+    // about 3D, and 4 for whether it has a cursor plane.
+    assert_eq!(bytes.len(), 224);
+    assert_eq!(u16::from_le_bytes([bytes[8], bytes[9]]), 4, "VERSION");
     assert_eq!(u16::from_le_bytes([bytes[10], bytes[11]]), 1);
     assert_eq!(u32_at(bytes, 12), 0x800);
     assert_eq!(
@@ -142,8 +157,10 @@ fn fields_lie_where_the_specification_puts_them() {
     assert_eq!(u16::from_le_bytes([bytes[210], bytes[211]]), 0, "capsets");
     assert_eq!(u32_at(bytes, 212), 0, "the first capset");
     assert_eq!(u32_at(bytes, 216), 0, "and how much of it was fetched");
+    // And after that, whether the card has a cursor plane: this one has.
+    assert_eq!(u32_at(bytes, 220), 1, "cursor");
 
-    assert!(bytes[28..].iter().all(|&byte| byte == 0));
+    assert!(bytes[28..220].iter().all(|&byte| byte == 0));
     // And a 3D card's, which is what a `virtio-gpu-gl` answers.
     let mut card = hello();
     card.virgl = true;
@@ -702,4 +719,192 @@ fn an_object_buffer_is_shown_and_flushed_like_any_other() {
         .expect("flipped");
     let _ = core.scanout(0, 0, full()).expect("the screen off");
     let _ = core.detach(9).expect("let go of");
+}
+
+// -- The cursor -------------------------------------------------------------------
+
+/// A 64 × 64 buffer, which is the one size a cursor can be.
+fn cursor_buffer(id: u32, offset: u64) -> Attach {
+    Attach {
+        buffer: id,
+        format: FORMAT,
+        offset,
+        length: 16384,
+        width: CURSOR_SIZE,
+        height: CURSOR_SIZE,
+        stride: CURSOR_SIZE * 4,
+    }
+}
+
+#[test]
+fn a_cursor_and_a_move_lie_where_the_protocol_puts_them() {
+    let cursor = Message::Cursor {
+        scanout: 1,
+        buffer: 7,
+        sequence: 1 << 33,
+        hot_x: 3,
+        hot_y: 4,
+        x: -2,
+        y: 600,
+    }
+    .encode();
+    let bytes = cursor.as_bytes();
+    assert_eq!((u32_at(bytes, 0), bytes.len()), (14, 40));
+    assert_eq!(
+        [u32_at(bytes, 8), u32_at(bytes, 12)],
+        [1, 7],
+        "scanout and buffer"
+    );
+    assert_eq!(u64_at(bytes, 16), 1 << 33);
+    assert_eq!(
+        [
+            u32_at(bytes, 24),
+            u32_at(bytes, 28),
+            u32_at(bytes, 32),
+            u32_at(bytes, 36)
+        ],
+        [3, 4, (-2i32) as u32, 600]
+    );
+    let moved = Message::Move {
+        scanout: 1,
+        x: 9,
+        y: -9,
+    }
+    .encode();
+    let bytes = moved.as_bytes();
+    assert_eq!((u32_at(bytes, 0), bytes.len()), (15, 24));
+    assert_eq!(
+        [
+            u32_at(bytes, 8),
+            u32_at(bytes, 12),
+            u32_at(bytes, 16),
+            u32_at(bytes, 20)
+        ],
+        [1, 0, 9, (-9i32) as u32]
+    );
+
+    // A hotspot outside the image, and a MOVE with its reserved word set,
+    // are not messages.
+    let mut outside = cursor.as_bytes().to_vec();
+    outside[24] = 64;
+    assert_eq!(Message::decode(&outside), Err(MessageError::Field));
+    let mut reserved = moved.as_bytes().to_vec();
+    reserved[12] = 1;
+    assert_eq!(Message::decode(&reserved), Err(MessageError::Field));
+}
+
+#[test]
+fn a_cursor_waits_in_the_flushes_line_and_a_move_in_none() {
+    let mut session = session();
+    for attach in [cursor_buffer(3, 0), buffer(7, 16384)] {
+        assert!(session.attach(attach).is_ok());
+        assert!(
+            session
+                .receive(&Message::Attached {
+                    buffer: attach.buffer,
+                    status: Status::Ok
+                })
+                .is_ok()
+        );
+    }
+
+    // A frame's flush, then the cursor, then another flush: one line, and
+    // FLIPPED answers them in it.
+    let Ok(Message::Flush {
+        sequence: first, ..
+    }) = session.flush(7, full())
+    else {
+        panic!("a flush");
+    };
+    let Ok(Message::Cursor { sequence, .. }) = session.cursor(0, 3, (1, 2), (10, 20)) else {
+        panic!("a cursor");
+    };
+    assert_eq!(sequence, first + 1);
+    assert_eq!(
+        session.move_cursor(0, (11, 21)),
+        Ok(Message::Move {
+            scanout: 0,
+            x: 11,
+            y: 21
+        })
+    );
+    // The cursor's buffer is on its way to the device, as a flushed one is,
+    // and cannot be let go of before FLIPPED.
+    assert_eq!(session.detach(3), Err(RequestError::Busy));
+    for done in [first, sequence] {
+        assert!(matches!(
+            session.receive(&Message::Flipped {
+                sequence: done,
+                status: Status::Ok
+            }),
+            Ok(Event::Flipped { .. })
+        ));
+    }
+    assert!(session.detach(3).is_ok());
+    // No cursor at all is buffer 0, and it too is answered in line.
+    assert!(matches!(
+        session.cursor(0, 0, (0, 0), (0, 0)),
+        Ok(Message::Cursor { buffer: 0, .. })
+    ));
+}
+
+#[test]
+fn a_cursor_the_device_cannot_show_is_refused() {
+    let mut session = session();
+    assert!(session.attach(buffer(7, 0)).is_ok());
+    assert!(
+        session
+            .receive(&Message::Attached {
+                buffer: 7,
+                status: Status::Ok
+            })
+            .is_ok()
+    );
+    // Not 64 square; not attached; a hotspot outside it; no such scanout.
+    assert_eq!(
+        session.cursor(0, 7, (0, 0), (0, 0)),
+        Err(RequestError::Cursor)
+    );
+    assert_eq!(
+        session.cursor(0, 8, (0, 0), (0, 0)),
+        Err(RequestError::NotAttached)
+    );
+    assert_eq!(
+        session.cursor(0, 0, (CURSOR_SIZE, 0), (0, 0)),
+        Err(RequestError::Cursor)
+    );
+    assert_eq!(
+        session.cursor(1, 0, (0, 0), (0, 0)),
+        Err(RequestError::NoSuchScanout)
+    );
+    assert_eq!(
+        session.move_cursor(1, (0, 0)),
+        Err(RequestError::NoSuchScanout)
+    );
+    // A card that said it has no cursor plane is sent neither.
+    let mut plain = Session::accept(
+        &Hello {
+            cursor: false,
+            ..hello()
+        },
+        &Hello::HANDLE_RIGHTS,
+        CARD,
+    )
+    .expect("a good HELLO");
+    assert!(!plain.has_cursor());
+    assert_eq!(
+        plain.cursor(0, 0, (0, 0), (0, 0)),
+        Err(RequestError::Cursor)
+    );
+    assert_eq!(plain.move_cursor(0, (0, 0)), Err(RequestError::Cursor));
+    // And a driver never answers a MOVE: a FLIPPED with nothing in line
+    // breaks the session.
+    assert!(session.move_cursor(0, (5, 5)).is_ok());
+    assert_eq!(
+        session.receive(&Message::Flipped {
+            sequence: 1,
+            status: Status::Ok
+        }),
+        Err(Refusal::Protocol)
+    );
 }

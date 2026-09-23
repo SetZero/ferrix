@@ -55,6 +55,37 @@ pub trait Backend: core::fmt::Debug {
         Err(io::Error::other("this screen shows only its own buffer"))
     }
 
+    /// The size of image this screen's cursor plane shows, if it has one: a
+    /// pointer on a plane moves without a frame being drawn
+    /// (`crate::plane`).
+    fn cursor_plane(&self) -> Option<(u32, u32)> {
+        None
+    }
+
+    /// Show `image` -- premultiplied `ARGB8888`, rows packed, the plane's
+    /// size -- on the cursor plane with its hotspot at `hot` and its
+    /// top-left corner at `at`, in the screen's own pixels. Returns once the
+    /// image is on the screen.
+    ///
+    /// # Errors
+    ///
+    /// A screen with no plane, and whatever the screen said.
+    fn set_cursor(&mut self, image: &[u8], hot: (i32, i32), at: (i32, i32)) -> io::Result<()> {
+        let _ = (image, hot, at);
+        Err(io::Error::other("this screen has no cursor plane"))
+    }
+
+    /// Put the cursor plane's image's top-left corner at `at`, waiting for
+    /// nothing.
+    ///
+    /// # Errors
+    ///
+    /// A screen with no plane, and whatever the screen said.
+    fn move_cursor(&mut self, at: (i32, i32)) -> io::Result<()> {
+        let _ = at;
+        Err(io::Error::other("this screen has no cursor plane"))
+    }
+
     /// Whether [`Backend::adopt`] took: a frame that is shown from the
     /// device needs no fetching.
     fn adopted(&self) -> bool {
@@ -226,6 +257,10 @@ pub struct Drm {
     /// When the card went away, or when it was last looked for since: `None`
     /// while the screen is there.
     lost: Option<std::time::Instant>,
+    /// The size of image the card's cursor plane shows, if it has one.
+    cursor_size: Option<(u32, u32)>,
+    /// The cursor plane's image, made the first time one is shown.
+    cursor: Option<compositor_drm::Dumb>,
 }
 
 /// How often a lost screen's card is looked for.
@@ -324,6 +359,7 @@ impl Drm {
         // A card that will not say what it is is drawn on the way that is
         // right for every card.
         let copied = card.driver().is_ok_and(|driver| driver == "virtio_gpu");
+        let cursor_size = card.cursor_size();
         Ok(Self {
             card,
             plan,
@@ -335,6 +371,8 @@ impl Drm {
             height,
             frames: 0,
             lost: None,
+            cursor_size,
+            cursor: None,
         })
     }
 
@@ -359,6 +397,15 @@ impl Drm {
         let mut screen = Self::on(card, plan).ok()?;
         screen.frames = self.frames;
         Some(screen)
+    }
+
+    /// A cursor call's result, with a refusal taken to mean the card has no
+    /// plane after all: asked again every pass, it would refuse every pass.
+    fn refused(&mut self, result: io::Result<()>) -> io::Result<()> {
+        if result.is_err() {
+            self.cursor_size = None;
+        }
+        result
     }
 
     /// Note that the card went away, for [`Backend::recover`] to look for it
@@ -425,6 +472,56 @@ impl Backend for Drm {
 
     fn adopted(&self) -> bool {
         self.adopted.is_some()
+    }
+
+    fn cursor_plane(&self) -> Option<(u32, u32)> {
+        self.cursor_size.filter(|_| self.lost.is_none())
+    }
+
+    fn set_cursor(&mut self, image: &[u8], hot: (i32, i32), at: (i32, i32)) -> io::Result<()> {
+        if self.lost.is_some() {
+            return Ok(());
+        }
+        let (width, height) = self
+            .cursor_size
+            .ok_or_else(|| io::Error::other("this card has no cursor plane"))?;
+        if self.cursor.is_none() {
+            self.cursor = Some(compositor_drm::Dumb::new(&self.card, width, height)?);
+        }
+        let Some(buffer) = self.cursor.as_mut() else {
+            return Ok(());
+        };
+        let pitch = buffer.pitch as usize;
+        let row = width as usize * 4;
+        let pixels = buffer.pixels();
+        for (y, from) in image.chunks(row).take(height as usize).enumerate() {
+            if let Some(to) = pixels.get_mut(y * pitch..y * pitch + from.len()) {
+                to.copy_from_slice(from);
+            }
+        }
+        match self
+            .card
+            .set_cursor(&self.plan, self.cursor.as_ref(), hot, at)
+        {
+            Err(error) if gone(&error) => {
+                self.lose();
+                Ok(())
+            }
+            result => self.refused(result),
+        }
+    }
+
+    fn move_cursor(&mut self, at: (i32, i32)) -> io::Result<()> {
+        if self.lost.is_some() {
+            return Ok(());
+        }
+        match self.card.move_cursor(&self.plan, at) {
+            Err(error) if gone(&error) => {
+                self.lose();
+                Ok(())
+            }
+            result => self.refused(result),
+        }
     }
 
     fn present(&mut self, drawn: &compositor_render::Damage) -> io::Result<()> {
