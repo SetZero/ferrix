@@ -69,7 +69,9 @@ CI since 2026-09-22. Stage 20, self-hosting, is what it unblocks.
 Dynamic linking's exit is met on x86-64: Debian's glibc busybox runs on
 its own `ld-linux` on all three architectures, and on ferrousli's loader and
 `libc.so.6` in glibc's place on x86-64. Its Arm half waits on ferrousli's
-port to AArch64 and ARMv7-A. Stage 15 has job control and lacks a real init.
+port to AArch64 and ARMv7-A. Stage 15 has job control and lacks a real init;
+one is designed in `docs/INIT.md`, and it waits on stage 13's cgroups, which
+the customer put first on 2026-09-23.
 Networking is done: sockets, a net core and a ring-3 virtio-net driver, with
 `curl` fetching over HTTPS and `git` cloning inside the guest. Stages 17 and
 18 are met, and the compositor runs: `cargo xtask test-compositor` boots it
@@ -121,11 +123,11 @@ sizes them.
 | Dynamic linking: the kernel half, ferrousli's loader, glibc's names | 39 *(33 done; the exit met on x86-64)* | in progress: 6 left |
 | Dynamic linking: ferrousli's AArch64 and ARMv7-A port, which the customer put inside the stage on 2026-09-21 and on which the exit's other two architectures wait | ≈ 34 | not started |
 | ~~Stage 12, btrfs write~~ *done 2026-09-21* | ~~≈ 60~~ | done |
-| Stage 13, namespaces, cgroups, seccomp | *month* ≈ 60 | not started |
+| Stage 13, namespaces, cgroups, seccomp | *month* ≈ 60 | not started; its cgroups come first, as init's prerequisite (`docs/INIT.md` §0) |
 | Stage 22, Steam: the parts with a first guess (bubblewrap's rest 13, sound 30, Venus 8; glibc's names are dynamic linking's 13 and XWayland stage 19's, both counted above) | 51 | not started |
 | Stage 22, Steam: the 32-bit x86 ABI and what the runtime and Proton find missing | unsized, ≈ 100 as a guess | not started |
 | Stage 14, real-time domains | *month* ≈ 40 | not started |
-| Stage 15, a real userland | *week* ≈ 20, of which job control is spent; most of the rest landed as zinc and uutils, and what is left is an init | partially complete: init and gettys remain |
+| Stage 15, a real userland | *week* ≈ 20, of which job control is spent; most of the rest landed as zinc and uutils, and what is left is an init, sized at 67 points in `docs/INIT.md` §13, and 18 later | partially complete: init and gettys remain, designed, waiting on stage 13's cgroups |
 | ~~Stage 16, `rustc`~~ *exit met 2026-09-22* | ~~*the goal* ≈ 40~~ 8 spent | done |
 | Stage 20, self-hosting | *longer*, unsized | not started; stage 16's exit, which it waited on, is met |
 | Stage 21, bare metal and a GPU of Ferrix's own | over 100, unsized | planned when bare-metal work is requested |
@@ -3889,6 +3891,27 @@ cgroupfs, and classic-BPF seccomp with the interpreter in `libs/`.
 it, under a memory limit that triggers scoped reclaim and a scoped OOM kill,
 with a seccomp filter that blocks a syscall.
 
+**Cgroups first (customer, 2026-09-23).** Stage 15's init is designed as if
+cgroups exist (`docs/INIT.md`), so the stage's cgroup half is built before its
+namespaces and seccomp. `docs/INIT.md` §0.1 lists what init needs from it, all
+in Linux's own interface:
+* cgroup2 mountable at `/sys/fs/cgroup`;
+* `cgroup.procs`, with a forked child staying in its parent's cgroup;
+* `clone3`'s `CLONE_INTO_CGROUP`;
+* `cgroup.events` waking `poll` with `POLLPRI`;
+* `cgroup.kill`;
+* the four controllers' files;
+* delegation by directory ownership.
+
+Init's first boot needs only C1 to C5, the first five items; the controllers
+can land one at a time, `memory` and `pids` first.
+
+One requirement there is Ferrix's rather than Linux's, and the customer
+accepted it on 2026-09-23: C8, **every cgroup backed by a `Job`**. It makes
+`ARCHITECTURE.md` §3's "where resource limits and kill authority live" one
+object seen through two ABIs. `devmgr`'s driver jobs then appear in cgroupfs,
+and a microkernel keeps the jobs if it drops cgroupfs.
+
 ---
 
 ## Stage 14 — Real-time domains  ·  *month*
@@ -3955,6 +3978,21 @@ reaps what a session orphans, gives a shell a session and a controlling
 terminal of its own, respawns one that dies, or brings the machine down. That
 is the rest of "a working init", and the other half of the word *ttys*: one
 console is one terminal, and a getty per terminal is what makes more of them.
+
+**Designed (2026-09-23): `docs/INIT.md`.** `/sbin/init` is pid 1 and a
+service manager in one program. Its units are in systemd's syntax, with
+slices, scopes, templates, generators and socket activation, and each service
+runs in a cgroup of its own. Its manager is a pure state machine in
+`libs/svc`, and every effect goes through a backend that a microkernel could
+serve instead. Init hands each service a bootstrap channel and routes named
+native services between them.
+
+Init waits on stage 13's cgroups, which the customer put first. Its landings
+come to 67 points up to hyprix no longer being pid 1: six kernel items of 11
+points besides stage 13, and `cargo xtask test-init` growing a stage per
+landing. Its first two landings, the unit parser and the dependency engine,
+are host-only and can be built while stage 13 is.
+
 `test-jobs` is x86-64 only, because `sleep` is uutils' and uutils is built
 for x86-64 alone (`docs/UUTILS.md` D3).
 

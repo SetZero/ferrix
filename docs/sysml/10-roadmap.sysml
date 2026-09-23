@@ -412,7 +412,13 @@ package FerrixRoadmap {
              * memory, io and pids, cgroupfs, classic-BPF seccomp with the
              * interpreter in libs/. Exit: an unprivileged user namespace runs
              * pid 1 under a memory limit that triggers scoped reclaim and a
-             * scoped OOM kill, with a seccomp filter blocking a syscall. */
+             * scoped OOM kill, with a seccomp filter blocking a syscall.
+             *
+             * Cgroups first (customer, 2026-09-23): stage 15's init is
+             * planned as if they exist, so the cgroup half is built before
+             * namespaces and seccomp. docs/INIT.md section 0.1 lists what
+             * init needs, C1-C5 before its first boot. C8, accepted the
+             * same day: every cgroup is backed by a Job. */
     }
 
     #planned requirement <'S14'> stage14RealTime : Stage {
@@ -452,7 +458,12 @@ package FerrixRoadmap {
              * 1, so nothing in user space mounts the pseudo-filesystems,
              * reaps what a session orphans, gives a shell a session and a
              * controlling terminal of its own, respawns it, or brings the
-             * machine down. That is also what a second tty would need. */
+             * machine down. That is also what a second tty would need.
+             *
+             * Designed on 2026-09-23 in docs/INIT.md: pid 1 and a service
+             * manager, systemd-shaped units, a cgroup per service, a pure
+             * manager in libs/svc behind backends a microkernel could
+             * serve. 67 points to L10; waits on stage 13's cgroups. */
     }
 
     #implemented requirement <'S16'> stage16Rustc : Stage {
