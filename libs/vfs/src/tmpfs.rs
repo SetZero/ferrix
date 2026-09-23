@@ -137,6 +137,15 @@ pub trait Pages: Send + Sync + fmt::Debug {
     fn object(&self) -> Option<Arc<dyn Any + Send + Sync>> {
         None
     }
+
+    /// The pages a shared mapping that may write has had since this was last
+    /// asked -- every page the store holds, because such a mapping's writes
+    /// mark none -- and whether one still has them; `None` when there has
+    /// been none. A store over a disk writes them back as it does what
+    /// `write` stored. The default, for a store nothing maps, is `None`.
+    fn mapped_writes(&self) -> Option<(Vec<u64>, bool)> {
+        None
+    }
 }
 
 /// Where a file's pages come from when the cache does not have them.

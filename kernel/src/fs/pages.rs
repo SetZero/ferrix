@@ -402,4 +402,9 @@ impl Pages for VmoPages {
     fn object(&self) -> Option<Arc<dyn Any + Send + Sync>> {
         Some(Arc::clone(&self.vmo) as Arc<dyn Any + Send + Sync>)
     }
+
+    /// What the VMO says shared mappings may have written.
+    fn mapped_writes(&self) -> Option<(Vec<u64>, bool)> {
+        self.vmo.take_mapped_writes()
+    }
 }
