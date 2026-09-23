@@ -1354,3 +1354,8 @@ pub(crate) use syscall::{UserRegs, resume_user};
 pub(crate) fn clean_for_device(start: u64, len: u64) {
     let _ = (start, len);
 }
+
+/// Nothing to flush, for the same reason as [`clean_for_device`].
+pub(crate) fn flush_for_device(start: u64, len: u64) {
+    let _ = (start, len);
+}

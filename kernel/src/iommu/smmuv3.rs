@@ -135,6 +135,7 @@ const PATIENCE_NANOS: u64 = 100_000_000;
 /// What a device's MSI doorbell is mapped with.
 const DOORBELL: MapFlags = MapFlags {
     device: true,
+    uncached: false,
     ..MapFlags::DMA
 };
 

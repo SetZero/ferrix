@@ -665,6 +665,39 @@ pub(crate) fn clean_to_poc(start: u64, len: u64) {
     }
 }
 
+/// Write the data cache lines covering `start..start + len` back to the point
+/// of coherency and drop them.
+///
+/// For memory about to be shared with a device that does not snoop, through
+/// a mapping that bypasses the caches: a dirty line left behind could be
+/// evicted later, over whatever the device wrote since, and a clean one
+/// would be read in place of it by the next cached access.
+pub(crate) fn clean_invalidate_to_poc(start: u64, len: u64) {
+    let cache_type: u32;
+    // SAFETY: reading `CTR` has no side effects.
+    unsafe {
+        asm!("mrc p15, 0, {}, c0, c0, 1", out(reg) cache_type, options(nomem, nostack, preserves_flags));
+    }
+    let line = 4u64 << ((cache_type >> 16) & 0xF);
+
+    let mut at = start - start % line;
+    let end = start.saturating_add(len);
+    while at < end {
+        // SAFETY: `DCCIMVAC` writes one line back and invalidates it by
+        // virtual address; the data it holds reaches memory first, so nothing
+        // is lost. The caller's range is mapped, and below 4 GiB.
+        unsafe {
+            asm!("mcr p15, 0, {}, c7, c14, 1", in(reg) at as u32, options(nostack, preserves_flags));
+        }
+        at += line;
+    }
+    // SAFETY: a barrier, completing the maintenance before the memory is
+    // handed over.
+    unsafe {
+        asm!("dsb", options(nostack, preserves_flags));
+    }
+}
+
 /// Order every store before this against the next write to device memory.
 ///
 /// For sending a software-generated interrupt, as on AArch64: the core that

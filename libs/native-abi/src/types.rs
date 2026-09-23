@@ -63,6 +63,13 @@ pub struct ReadActual {
 /// them.
 pub const PIN_READ_ONLY: u64 = 1;
 
+/// `vmo_pin`'s option: the program and the device must see the pages alike,
+/// as descriptors a controller polls need. Changes nothing for a device that
+/// snoops the caches. For one that does not, such as an STM32MP1's USB host,
+/// the pin covers the whole VMO, which nothing may have mapped yet, and every
+/// mapping of the VMO from then on bypasses the caches.
+pub const PIN_COHERENT: u64 = 2;
+
 /// Where one of a device's virtio register blocks lies, as `device_info`
 /// reports it and a driver's START carries it: the page-aligned physical
 /// start of the pages holding it, inside one of the device's apertures, the
@@ -134,6 +141,15 @@ pub const DEVICE_TREE_BLOCKS: u16 = 2;
 /// LTDC's registers in `common`, the HDMI bridge's I2C controller's in
 /// `device`, and the LTDC's interrupt as vector 0.
 pub const TREE_STM32_HDMI: u16 = 1;
+/// [`DeviceInfo::device_id`] of an STM32MP15 board's USB host: the EHCI
+/// controller's registers in `common`, nothing in `device`, and the EHCI
+/// controller's interrupt as vector 0. Its memory is not snooped, so the
+/// driver pins what it shares with `PIN_COHERENT`, and it may make an input
+/// control channel for each keyboard or mouse it finds, up to
+/// [`USB_INPUT_FUNCTIONS`].
+pub const TREE_STM32_USBH: u16 = 2;
+/// How many input control channels one USB host's node may hold at once.
+pub const USB_INPUT_FUNCTIONS: usize = 8;
 
 /// The aperture an `io_mapping_create` claims.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

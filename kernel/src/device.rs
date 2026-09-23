@@ -62,6 +62,7 @@ use ferrix_bootinfo::{BootView, MemKind, PAGE_SIZE};
 use ferrix_fdt::{Trigger as TreeTrigger, VIRTIO_MMIO_COMPATIBLE};
 use ferrix_native_abi::types::{
     DEVICE_NOT_PCI, DEVICE_TREE_BLOCKS, DEVICE_VIRTIO_PCI, DeviceBlock, DeviceInfo, TREE_STM32_HDMI,
+    TREE_STM32_USBH, USB_INPUT_FUNCTIONS,
 };
 use ferrix_pci::Address;
 use ferrix_pci::bar::{Bar, Region};
@@ -75,7 +76,7 @@ use ferrix_pci::virtio::{Location as VirtioLocation, Transport};
 use ferrix_sync::{IrqSpinLock, Once};
 
 use crate::mmio::Mmio;
-use crate::{acpi, arch, fdt, iommu, irq, stm32mp1, vmap};
+use crate::{acpi, arch, fdt, iommu, irq, stm32mp1, stm32mp1_usb, vmap};
 
 /// GIC interrupt identifiers below this are software-generated or private to
 /// one core, and neither is a device's line.
@@ -700,6 +701,16 @@ impl DeviceNode {
         self.location
     }
 
+    /// How many input control channels the device may hold at once: one
+    /// for an input device, and one per keyboard or mouse for a USB host,
+    /// whose driver learns what is on its bus only as it enumerates it.
+    pub(crate) const fn input_functions(&self) -> usize {
+        match self.location {
+            Location::Tree(_) if self.binding == TREE_STM32_USBH => USB_INPUT_FUNCTIONS,
+            _ => 1,
+        }
+    }
+
     /// How the device reaches memory.
     pub(crate) const fn dma_shape(&self) -> DmaShape {
         self.dma
@@ -960,7 +971,62 @@ fn tree_nodes(view: &BootView<'_>, reserved: &Reserved) -> Vec<DeviceNode> {
     if let Some(node) = display_node(&tree, reserved, &mut held) {
         nodes.push(node);
     }
+    if let Some(node) = usb_node(&tree, reserved, &mut held) {
+        nodes.push(node);
+    }
     nodes
+}
+
+/// The STM32MP15 board's USB host, when there is one: the EHCI controller's
+/// registers and interrupt, once [`stm32mp1_usb::prepare`] has clocked it,
+/// released it from reset and started its PHY.
+fn usb_node(
+    tree: &ferrix_fdt::Fdt<'_>,
+    reserved: &Reserved,
+    held: &mut BTreeSet<u32>,
+) -> Option<DeviceNode> {
+    let prepared = match stm32mp1_usb::prepare(tree) {
+        Ok(found) => found?,
+        Err(why) => {
+            crate::console::println!("  usb      the board's USB host is left alone: {why}");
+            return None;
+        }
+    };
+    let mut node = DeviceNode::empty(Location::Tree(prepared.ehci.0));
+    node.binding = TREE_STM32_USBH;
+    // EHCI walks lists of descriptors a page at a time, and does not snoop.
+    node.dma = DmaShape {
+        contiguous: false,
+        coherent: false,
+    };
+    node.mint(prepared.ehci.0, prepared.ehci.1, false, reserved);
+    if node.apertures.len() != 1 {
+        crate::console::println!(
+            "  usb      the board's USB host is left alone: its registers overlap memory the kernel uses"
+        );
+        return None;
+    }
+    let interrupt = prepared.interrupt;
+    let usable = interrupt.id >= FIRST_SHARED_INTERRUPT
+        && !irq::is_registered(interrupt.id)
+        && held.insert(interrupt.id);
+    if !usable {
+        crate::console::println!(
+            "  usb      the board's USB host is left alone: interrupt {} is taken",
+            interrupt.id
+        );
+        return None;
+    }
+    node.vectors.push(Vector {
+        number: interrupt.id,
+        trigger: interrupt.trigger.map(|trigger| match trigger {
+            TreeTrigger::EdgeRising | TreeTrigger::EdgeFalling => Trigger::Edge,
+            TreeTrigger::LevelHigh | TreeTrigger::LevelLow => Trigger::Level,
+        }),
+        masking: Masking::Controller,
+    });
+    crate::console::println!("  usb      {prepared}");
+    Some(node)
 }
 
 /// The STM32MP15 DK board's HDMI output, when there is one: the LTDC's and

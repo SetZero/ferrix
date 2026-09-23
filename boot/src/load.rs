@@ -452,6 +452,7 @@ fn map_identity(
         user: false,
         global: false,
         device: false,
+        uncached: false,
     };
     let mapper = match plan.tree {
         IdentityTree::Separate => identity,
@@ -489,6 +490,7 @@ fn map_segment(
         user: false,
         global: true,
         device: false,
+        uncached: false,
     };
 
     // The linker page-aligns segments, so rounding the base down and the length

@@ -64,7 +64,7 @@ use alloc::collections::BTreeMap;
 use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
 use core::fmt;
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use crate::sync::SpinLock;
 use ferrix_bootinfo::PAGE_SIZE;
@@ -162,6 +162,10 @@ pub(crate) struct Vmo {
     /// What fills an absent page of a file on a disk before a fault commits
     /// it; `None` for every other object, whose absent pages are zeros.
     filler: Option<Arc<dyn Filler>>,
+    /// Shared with a device that does not snoop the caches: every mapping
+    /// bypasses them, and the kernel copies nothing in or out through its own
+    /// cached view. Set once, by [`Vmo::make_coherent`], and never cleared.
+    coherent: AtomicBool,
 }
 
 /// How an address space maps an object.
@@ -271,6 +275,7 @@ impl Vmo {
             mappers: SpinLock::new(Vec::new()),
             shared_may_write: AtomicU64::new(0),
             filler,
+            coherent: AtomicBool::new(false),
         })
     }
 
@@ -285,6 +290,28 @@ impl Vmo {
             Some(filler) => filler.fill(self, index),
             None => Ok(()),
         }
+    }
+
+    /// Whether the object's mappings bypass the caches.
+    pub(crate) fn is_coherent(&self) -> bool {
+        self.coherent.load(Ordering::Acquire)
+    }
+
+    /// Make every mapping of this object from now on bypass the caches, for
+    /// a device that does not snoop them (`vmo_pin`'s `PIN_COHERENT`).
+    ///
+    /// Refused, answering `false`, while any address space maps it: its
+    /// translations are cached ones, and a page reached both ways is a page
+    /// whose dirty lines may land on what the device wrote. Taken under the
+    /// mappers' lock, so a mapping attached after this sees the flag, since
+    /// every mapping attaches before a fault can reach it.
+    pub(crate) fn make_coherent(&self) -> bool {
+        let mappers = self.mappers.lock();
+        if !mappers.is_empty() {
+            return false;
+        }
+        self.coherent.store(true, Ordering::Release);
+        true
     }
 
     /// The object's size in pages.
@@ -434,6 +461,9 @@ impl Vmo {
             shared_may_write: AtomicU64::new(0),
             // A page neither side has is still the file's.
             filler: self.filler.clone(),
+            // Forked for a private mapping, which a coherent object never
+            // has: `vmo_map` maps it shared. The copy is the process's own.
+            coherent: AtomicBool::new(false),
         }))
     }
 

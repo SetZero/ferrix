@@ -1207,6 +1207,27 @@ mod aarch64_bits {
         assert_eq!(attr(MAIR_DEVICE), 0x00, "device-nGnRnE");
         assert_eq!(attr(MAIR_NORMAL_NC), 0x44, "normal non-cacheable");
     }
+
+    /// Memory a device that does not snoop shares with a program: normal,
+    /// so unaligned access and gathering stay legal, but past the caches.
+    #[test]
+    fn uncached_memory_is_normal_non_cacheable_and_reads_back() {
+        let flags = MapFlags {
+            uncached: true,
+            ..MapFlags::USER_DATA
+        };
+        let entry = AArch64::leaf_descriptor(PhysAddr(0x1000), Level::PAGE, flags);
+        assert_eq!(attr_index(entry), MAIR_NORMAL_NC);
+        assert_eq!(entry & SH_INNER, SH_INNER);
+        assert_eq!(AArch64::leaf_flags(entry), flags);
+
+        let device = MapFlags {
+            uncached: true,
+            ..MapFlags::KERNEL_DEVICE
+        };
+        let entry = AArch64::leaf_descriptor(PhysAddr(0x1000), Level::PAGE, device);
+        assert_eq!(attr_index(entry), MAIR_DEVICE, "device wins over uncached");
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1363,6 +1384,22 @@ mod armv7a_bits {
             0x00,
             "strongly ordered — ARMv7's name for device-nGnRnE"
         );
+        assert_eq!(attr(MAIR_NORMAL_NC), 0x44, "normal non-cacheable");
+    }
+
+    /// The STM32MP1's USB host does not snoop, so the descriptors its driver
+    /// shares with it are mapped past the caches, and the walk says so.
+    #[test]
+    fn uncached_memory_is_normal_non_cacheable_and_reads_back() {
+        let flags = MapFlags {
+            uncached: true,
+            ..MapFlags::USER_DATA
+        };
+        let entry = Armv7a::leaf_descriptor(PhysAddr(0x1000), Level::PAGE, flags);
+        assert_eq!((entry >> 2) & 0b111, MAIR_NORMAL_NC);
+        assert_eq!(Armv7a::leaf_flags(entry), flags);
+        let cached = Armv7a::leaf_descriptor(PhysAddr(0x1000), Level::PAGE, MapFlags::USER_DATA);
+        assert_eq!((cached >> 2) & 0b111, MAIR_NORMAL);
     }
 }
 
@@ -1415,6 +1452,7 @@ fn a_physical_address_wider_than_a_descriptor_is_refused() {
 /// may write.
 const DOORBELL: MapFlags = MapFlags {
     device: true,
+    uncached: false,
     ..MapFlags::DMA
 };
 
