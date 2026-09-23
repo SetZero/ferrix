@@ -23,19 +23,25 @@ package FerrixViews {
     view def TreeView;
 
     view currentDesign : TreeView {
-        doc /* Stages 0 to 4 on three architectures. */
+        doc /* What runs: stages 0 to 12, networking and stages 16 to 18 are
+             * done, and parts of dynamic linking and stages 15 and 19 run.
+             * Stages 0 to 12 are in the boot test on all three
+             * architectures. */
         expose FerrixStructure::**;
         expose FerrixBoot::**;
         expose FerrixMemory::**;
         expose FerrixScheduling::**;
+        expose FerrixObjects::**;
+        expose FerrixIsolation::**;
         expose FerrixDrivers::**;
+        expose FerrixStorage::**;
         expose FerrixAssurance::**;
         filter @implemented;
     }
 
     view writtenAhead : TreeView {
-        doc /* Crates that exist and are host-tested but that the kernel does
-             * not call yet. */
+        doc /* Crates and types that exist and are host-tested but that
+             * nothing running calls yet. */
         expose FerrixStructure::Workspace::**;
         expose FerrixStorage::**;
         expose FerrixScheduling::**;
@@ -43,7 +49,9 @@ package FerrixViews {
     }
 
     view futureDesign : TreeView {
-        doc /* Stages 5 to 17. */
+        doc /* What the roadmap still owes: stage 13's isolation, stage 14's
+             * real-time domains, stage 15's init, and the pieces finished
+             * stages name as not yet built. */
         expose FerrixStructure::**;
         expose FerrixMemory::**;
         expose FerrixScheduling::**;
@@ -51,6 +59,7 @@ package FerrixViews {
         expose FerrixIsolation::**;
         expose FerrixDrivers::**;
         expose FerrixStorage::**;
+        expose FerrixAssurance::**;
         filter @planned;
     }
 

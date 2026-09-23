@@ -2,8 +2,9 @@
  * Ferrix — SysML v2 model, part 4: memory.
  *
  * docs/ARCHITECTURE.md §4. The physical allocator, the heap, the page-table
- * arithmetic and the kernel arena run today; VMOs, process address spaces,
- * copy-on-write and reclaim are stage 6 and after.
+ * arithmetic and the kernel arena since stage 2; VMOs, process address
+ * spaces, demand paging and copy-on-write since stage 6, file mappings since
+ * stage 8. Reclaim is stage 13's and not built.
  */
 package FerrixMemory {
     private import ScalarValues::*;
@@ -298,11 +299,15 @@ package FerrixMemory {
              * DMA buffers are all VMOs. The load-bearing unification: a block
              * driver filling a page-cache page fills the VMO the cache already
              * holds, with no copy, which is what makes userspace drivers
-             * affordable for a compiler workload. Only the anonymous kind
-             * exists today; file VMOs want the page cache (stage 8) and DMA
-             * VMOs an IOMMU domain (stage 10), and the shape is the one they
-             * extend rather than unpick. Frames go back through the per-frame
-             * refcount. */
+             * affordable for a compiler workload. All three kinds exist: a
+             * file's VMO is its page cache since stage 8 (FerrixStorage's
+             * PageCache), filled from a disk by a Filler before a fault
+             * commits the page, and a VMO's pages are pinned into a device's
+             * IOMMU domain for DMA since stage 10, held where they are by
+             * Vmo::hold. The shape was the one they extended rather than
+             * unpicked. An object knows which spaces map it (Vmo::attach),
+             * so it can take a page away from under them. Frames go back
+             * through the per-frame refcount. */
         attribute pages : Natural[0..*] ordered {
             doc /* Sparse: a map from page index to frame, absence meaning
                  * uncommitted, with commit on demand. A reservation costs
@@ -321,7 +326,13 @@ package FerrixMemory {
                  * a shared object is not one unmapper's to take away, and the
                  * address space, not the VMO, decides. */
         }
-        #planned action fileFill { @stage { number = 8; } }
+        #implemented action fileFill {
+            @stage { number = 8; }
+            doc /* The Filler a disk filesystem's file VMO carries: an absent
+                 * page is filled from the file before a fault commits it,
+                 * and not committed as zeros. Until it was, glibc's linker
+                 * read its libraries' unread pages off btrfs as zeros. */
+        }
     }
 
     #implemented part def ProcessAddressSpace {
@@ -393,9 +404,21 @@ package FerrixMemory {
                  * no protect_in -- and costs the parent one extra fault per
                  * page. */
         }
-        #planned action mmap { @stage { number = 7; } }
-        #planned action mprotect { @stage { number = 7; } }
-        #planned action brk { @stage { number = 7; } }
+        #implemented action mmap {
+            @stage { number = 7; }
+            doc /* kernel/src/syscall/memory.rs decodes the arguments -- mmap2
+                 * counting its offset in pages on ARMv7-A -- and the space
+                 * does the rest: anonymous memory, a file mapped shared onto
+                 * its own VMO pages or privately through a shadow object,
+                 * MAP_FIXED clearing its range only once every check has
+                 * passed. mremap and msync beside it. */
+        }
+        #implemented action mprotect {
+            @stage { number = 7; }
+            doc /* libs/vma's protect, with splitting and merging; PROT_NONE
+                 * is kept as no access rather than widened to readable. */
+        }
+        #implemented action brk { @stage { number = 7; } }
 
         assert constraint spaceLock {
             doc /* One lock per address space, never a global one. The kernel's
@@ -422,7 +445,9 @@ package FerrixMemory {
              * region included; commit the page in its VMO and install it; copy
              * on a write to a copy-on-write region whose page has another
              * holder. A fault from user mode arrives with the running
-             * process's address space. */
+             * process's address space. Since stage 8 a file mapping faults
+             * in the file's own pages, and since stage 7 a fault that cannot
+             * be resolved is a signal to the program. */
         in fault : FerrixBoot::PageFault;
         doc /* The guard below is the region's cow mark and *not* whether the
              * page is present, which is the obvious guess and is wrong in both
@@ -435,7 +460,14 @@ package FerrixMemory {
              * in. */
         action findVma;
         action anonymousZeroPage;
-        #planned action pageCacheFill { @stage { number = 8; } }
+        #implemented action pageCacheFill {
+            @stage { number = 8; }
+            doc /* A shared file mapping reaches the file's VMO, so the page
+                 * a read fills is the page the mapping shows; a private one
+                 * shows those pages until it writes, and the write copies
+                 * into its shadow object. A page wholly past the file's end
+                 * is never committed: a touch there is SIGBUS. */
+        }
         action copyOnWrite {
             @stage { number = 6; }
             doc /* Copy the page, replace it in this space's own object, and
@@ -454,7 +486,13 @@ package FerrixMemory {
                  * instruction back to fault forever. The boot check fails when
                  * the order is wrong rather than trusting the comment. */
         }
-        #planned action deliverSigsegv { @stage { number = 7; } }
+        #implemented action deliverSigsegv {
+            @stage { number = 7; }
+            doc /* kernel/src/trap.rs: a user-mode fault the space cannot
+                 * resolve becomes SIGSEGV, or SIGBUS with BUS_ADRERR for an
+                 * address with nothing behind it, raised with interrupts open
+                 * and delivered on the way back to user mode. */
+        }
         first start;
         then findVma;
         then decide;
@@ -495,7 +533,12 @@ package FerrixMemory {
              * as anonymous memory and its bytes copied in through the user copy
              * layer, with permissions computed per page so two segments sharing
              * a page get their union, and a union that is writable and
-             * executable refused. Static ET_EXEC only. Not yet a file VMO:
-             * that waits for the page cache, stage 8. */
+             * executable refused. ET_EXEC; a static PIE, ET_DYN with no
+             * interpreter, placed at two thirds of the user half to relocate
+             * itself; and since dynamic linking a program whose PT_INTERP
+             * names a linker, loaded beside it at INTERP_BASE, which is
+             * entered with AT_BASE. Segments are still copied in rather than
+             * mapped from the file's VMO, though stage 8's page cache now
+             * exists. */
     }
 }

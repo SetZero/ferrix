@@ -3,7 +3,9 @@
  *
  * docs/ARCHITECTURE.md §6: namespaces, cgroups v2, seccomp, credentials.
  * Stage 13, designed in from the start so that no global table has to be
- * found later.
+ * found later. Only the credentials exist, since stage 7; namespaces,
+ * cgroups and seccomp are not built, and unshare and setns answer as a
+ * Linux built without namespaces does.
  */
 package FerrixIsolation {
     private import ScalarValues::*;
@@ -72,14 +74,30 @@ package FerrixIsolation {
         doc /* libs/seccomp, owed before stage 13 starts. */
     }
 
-    attribute def Credentials {
+    #implemented attribute def Credentials {
+        @stage { number = 7; }
         doc /* Unix: uid, gid, supplementary groups, POSIX capability sets,
              * no-new-privs. They sit on top of the handle system rather than
-             * beside it. */
+             * beside it.
+             *
+             * kernel/src/syscall/credentials.rs: Linux's four user ids and
+             * four group ids and the supplementary groups on every Process,
+             * copied by fork, kept by execve with the saved and filesystem
+             * ids made the effective ones, and changed by the set*id calls
+             * under kernel/sys.c's rules. They are enforced: the VFS checks
+             * file permissions against the filesystem ids, and the calls
+             * only root may make, and those that reach another user's
+             * processes, refuse anyone else. A set-user-id program runs as
+             * its file's owner unless PR_SET_NO_NEW_PRIVS forbade it. */
         attribute uid : Natural;
         attribute gid : Natural;
         attribute groups : Natural[0..*];
-        attribute capabilities : String;
+        #planned attribute capabilities : String {
+            doc /* No capability sets are kept: an effective uid of 0 stands
+                 * for every capability, capget reports every set empty for
+                 * any other, and capset refuses a process whose real or
+                 * saved uid is 0 and whose effective uid is not. */
+        }
         attribute noNewPrivs : Boolean;
     }
 }

@@ -19,15 +19,15 @@ tooling that can check a model for consistency where it cannot check prose.
 | `00-lifecycle.sysml` | `FerrixLifecycle` | The keywords every other element carries: `#implemented`, `#inProgress`, `#writtenAhead`, `#planned`, `@deferred { reason = "..."; }`, and `@stage { number = n; }`. |
 | `01-requirements.sysml` | `FerrixRequirements` | The goal read as a specification (`G`, `G.1`–`G.8`), the design rules (`P.1`–`P.17`, including the commit conventions), and the promises deliberately not made (`N.1`–`N.3`). |
 | `02-structure.sysml` | `FerrixStructure` | The machine context, the loader, the kernel and its parts, the userland, the architecture facade with its three variants, and the workspace crates with their dependency edges. |
-| `03-boot.sysml` | `FerrixBoot` | The hand-off structure, both address layouts, the loader's sequence, the kernel's bring-up through stage 4 with every self-check, and the trap path. |
-| `04-memory.sysml` | `FerrixMemory` | Frames, heap, paging, the vmap arena and the VMA map (today); VMOs, process address spaces, copy-on-write and reclaim (ahead). |
-| `05-scheduling.sysml` | `FerrixScheduling` | Locks, interrupts, time and SMP (today); tasks, the class stack, scheduling domains and the mode-switch state machine (ahead). |
+| `03-boot.sysml` | `FerrixBoot` | The hand-off structure, both address layouts, the loader's sequence, the kernel's bring-up with every stage's self-check through stage 12, and the trap path. |
+| `04-memory.sysml` | `FerrixMemory` | Frames, heap, paging, the vmap arena, the VMA map, VMOs, process address spaces, demand paging, copy-on-write and file mappings (today); reclaim (ahead). |
+| `05-scheduling.sysml` | `FerrixScheduling` | Locks, interrupts, time, SMP, tasks, the fair class, placement and balancing, one Throughput scheduling domain, and futex (today); the real-time classes and the mode-switch state machine (ahead). |
 | `06-objects.sysml` | `FerrixObjects` | The nine kernel objects, clone's sharing set, the Linux ABI layer and the native ABI. |
-| `07-isolation.sysml` | `FerrixIsolation` | Namespaces, cgroups v2, seccomp, credentials. |
-| `08-drivers.sysml` | `FerrixDrivers` | Table access and MMIO (today); device nodes, IOMMU domains, `devmgr`, driver processes, the shared ring and the bootstrap sequence (ahead). |
-| `09-storage.sysml` | `FerrixStorage` | Block core, VFS, page cache, the small filesystems, btrfs in three stages. |
-| `10-roadmap.sysml` | `FerrixRoadmap` | Stages 0–17 and the ARMv7-A port as requirements with status and exit criteria, their ordering, what satisfies each, and the boot tests that verify the done ones. |
-| `11-assurance.sysml` | `FerrixAssurance` | Every gate `cargo xtask check` and CI run, the commit-authorship check, the assembly budget, what each layer's tests can reach, and the verification later stages owe. |
+| `07-isolation.sysml` | `FerrixIsolation` | Credentials (today); namespaces, cgroups v2 and seccomp (ahead). |
+| `08-drivers.sysml` | `FerrixDrivers` | Table access and MMIO, device nodes, IOMMU domains, `devmgr`, the driver processes, the shared rings and the bootstrap sequence. |
+| `09-storage.sysml` | `FerrixStorage` | Block core, VFS, page cache, the small filesystems, btrfs in three stages (the third, subvolumes, ahead), and the net core. |
+| `10-roadmap.sysml` | `FerrixRoadmap` | Stages 0–22, the ARMv7-A port, networking and dynamic linking as requirements with status and exit criteria, their ordering, what satisfies each, and the boot tests that verify the done ones. |
+| `11-assurance.sysml` | `FerrixAssurance` | Every gate `cargo xtask check` and CI run, the xtask boot gates, the commit-authorship check, the assembly budget, what each layer's tests can reach, and the verification later stages owe. |
 | `12-views.sysml` | `FerrixViews` | Views filtering the one model into current, written-ahead, future and deferred. |
 
 ## Reading it

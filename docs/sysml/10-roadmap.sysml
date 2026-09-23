@@ -126,7 +126,13 @@ package FerrixRoadmap {
              * tree only, traps without mode stacks. Exit, met: the same
              * self-checks and the same marker under U-Boot on QEMU virt. */
         requirement ramAbove2GiB { @deferred { reason = "The board has it; QEMU cannot place it."; } }
-        requirement boardUart { @deferred { reason = "The STM32 USART driver and the flash/watch-serial/deploy path exist; nothing has run on hardware yet."; } }
+        #implemented requirement boardUart {
+            doc /* The STM32 USART driver and the flash/watch-serial/deploy
+                 * path, run on hardware on 2026-09-13 at fd4442e: an
+                 * STM32MP157D-DK1 at two cores reached FERRIX-BOOT-OK stages
+                 * 1-9 and ran stage 7's script, its exit line whole once the
+                 * console drained before power-off. */
+        }
         requirement ed1Ev1Boards { @deferred { reason = "1 GiB boards put RAM's identity range on the direct map; plan_identity_map refuses, so they need a trampoline page."; } }
         requirement hardwareBootTest { @deferred { reason = "Automated hardware boot testing beyond watch-serial."; } }
     }
@@ -150,7 +156,13 @@ package FerrixRoadmap {
              * bugs it found: an idle processor never told of work, vmap::free
              * releasing the address before unmapping, and banked private
              * interrupt enables leaving every other core's timer off. */
-        requirement loadBalancing { @deferred { reason = "Nothing beyond work stealing on an idle processor."; } }
+        #implemented requirement loadBalancing {
+            doc /* Stage 5 finished with nothing beyond work stealing on an
+                 * idle processor. Added after it, each with a boot check that
+                 * fails without it: load tracking, placement, affinity,
+                 * periodic balancing that pushes as well as pulls, and slice
+                 * scaling. */
+        }
     }
 
     #implemented requirement <'S6'> stage6UserMode : Stage {

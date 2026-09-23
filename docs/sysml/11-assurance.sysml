@@ -2,8 +2,11 @@
  * Ferrix — SysML v2 model, part 11: assurance.
  *
  * docs/RELIABILITY.md and docs/ASSEMBLY.md: the quality gates, what each one
- * verifies, and what the tests can actually reach. All of it runs in CI
- * today except the two debts the roadmap states.
+ * verifies, and what the tests can actually reach. The gates cargo xtask
+ * check runs are in CI. Of the xtask boot gates, CI runs test-boot and
+ * test-rustc; the ones that need a binary the repository does not carry, a
+ * disk judged on the host or a screendump run in the landing gates of
+ * docs/BACKLOG.md instead (docs/ROADMAP.md, Continuously).
  */
 package FerrixAssurance {
     private import ScalarValues::*;
@@ -53,6 +56,13 @@ package FerrixAssurance {
              * share on every run. */
         objective { verify assemblyOnlyWhereTheMachineDefinesIt; }
     }
+    #implemented verification deviceAccessAllowList : Gate {
+        attribute :>> command = "python3 scripts/check-device-access.py";
+        doc /* The seam docs/ARCHITECTURE.md §7 is built on: the kernel
+             * enumerates devices and drives none, so a register access in
+             * the wrong file fails the build rather than waiting for a
+             * review. */
+    }
     #implemented verification unsafeAudit : Gate {
         attribute :>> command = "python3 scripts/check-unsafe-audit.py";
         doc /* Every unsafe block has a SAFETY comment and one operation;
@@ -67,6 +77,36 @@ package FerrixAssurance {
              * refactored into safety loses its exemption. */
         objective { verify noReachablePanic; }
     }
+    #implemented verification architectureDocument : Gate {
+        attribute :>> command = "python3 scripts/sysml/tests.py && python3 scripts/gen-arch-doc.py --check";
+        doc /* docs/generated is generated from this model and committed; a
+             * model edited without regenerating fails here. */
+    }
+    #implemented verification waylandProtocolTables : Gate {
+        attribute :>> command = "python3 scripts/gen-wayland-protocol.py --check";
+        doc /* The compositor's interface tables against the protocol XML
+             * vendored beside them. */
+    }
+    #implemented verification xkbTables : Gate {
+        attribute :>> command = "python3 scripts/gen-xkb-tables.py --check";
+        doc /* The keymap every client is handed, and its modifier bits,
+             * against libxkbcommon's own output through a committed probe. */
+    }
+    #implemented verification panicFont : Gate {
+        attribute :>> command = "python3 scripts/gen-font.py --check";
+        doc /* The panic screen's font against the BDF committed beside it. */
+    }
+    #implemented verification terminalFont : Gate {
+        attribute :>> command = "python3 scripts/gen-term-font.py --check";
+        doc /* The terminal's font, rasterised from the TrueType faces
+             * committed beside it by a rasteriser in the repository, so the
+             * result is byte-identical on every checkout. */
+    }
+    #implemented verification panicCatalog : Gate {
+        attribute :>> command = "python3 scripts/gen-panic-catalog.py --check";
+        doc /* The explanations a panic prints, rendered into a document that
+             * goes stale the moment an entry changes without it. */
+    }
     #implemented verification crateLayering : Gate {
         attribute :>> command = "scripts/check-crate-layering.sh";
         doc /* libs/ depend on nothing above them; generic kernel code names
@@ -75,17 +115,19 @@ package FerrixAssurance {
     }
     #implemented verification clippy : Gate {
         attribute :>> command = "cargo clippy -- -D warnings";
-        doc /* Seven runs: the host (libraries and xtask), and the kernel and
-             * the loader for each of the three targets, because
-             * cfg(target_arch) code is invisible to a lint pass for another
-             * machine. The lint table denies unwrap, expect, panic,
-             * unreachable, indexing and string slicing in production code. */
-        attribute runs : Natural = 7;
+        doc /* Ten runs: the host (libraries and xtask), and the kernel, the
+             * loader, and the native runtime with its programs for each of
+             * the three targets, because cfg(target_arch) code is invisible
+             * to a lint pass for another machine. The lint table denies
+             * unwrap, expect, panic, unreachable, indexing and string slicing
+             * in production code. */
+        attribute runs : Natural = 10;
     }
     #implemented verification hostTests : Gate {
         attribute :>> command = "cargo test --workspace --exclude ferrix-kernel --exclude ferrix-boot";
-        doc /* Around 520 unit tests across libs/ (490 before libs/sched), plus
-             * doc tests and xtask's 41. */
+        doc /* 1950 unit tests across libs/ on 2026-09-23 (about 520 when
+             * this gate was first written down), plus doc tests and xtask's
+             * 242. */
     }
     #implemented verification cargoDeny : Gate {
         attribute :>> command = "cargo deny check";
@@ -140,14 +182,17 @@ package FerrixAssurance {
              * ratio is a backstop and the target is the direction of travel:
              * reached by writing the operating system, not by shrinking the
              * vector table. 303 lines and about 99.2% Rust when this was
-             * written, across fifteen sites. */
+             * written, across fifteen sites; scripts/asm-allowlist.json now
+             * names nineteen, the x86-64 SYSCALL entry and the native
+             * runtime's three (docs/ASSEMBLY.md, A native program) having
+             * joined them. */
         attribute maxTotalLines : Natural = 800;
         attribute maxRatio : Real = 0.06;
         attribute targetRatio : Real = 0.001;
-        attribute sites : AssemblySite[15] = (
+        attribute sites : AssemblySite[19] = (
             AssemblySite(file = "boot/src/arch/x86_64.rs", maxLines = 30),
             AssemblySite(file = "boot/src/arch/aarch64.rs", maxLines = 60),
-            AssemblySite(file = "boot/src/arch/armv7a.rs", maxLines = 60),
+            AssemblySite(file = "boot/src/arch/armv7a.rs", maxLines = 61),
             AssemblySite(file = "kernel/src/arch/x86_64/cpu.rs", maxLines = 100),
             AssemblySite(file = "kernel/src/arch/aarch64/cpu.rs", maxLines = 100),
             AssemblySite(file = "kernel/src/arch/armv7a/cpu.rs", maxLines = 100),
@@ -159,12 +204,19 @@ package FerrixAssurance {
             AssemblySite(file = "kernel/src/arch/armv7a/smp.rs", maxLines = 40),
             AssemblySite(file = "kernel/src/arch/x86_64/switch.rs", maxLines = 30),
             AssemblySite(file = "kernel/src/arch/aarch64/switch.rs", maxLines = 30),
-            AssemblySite(file = "kernel/src/arch/armv7a/switch.rs", maxLines = 30)
+            AssemblySite(file = "kernel/src/arch/armv7a/switch.rs", maxLines = 30),
+            AssemblySite(file = "kernel/src/arch/x86_64/syscall.rs", maxLines = 90),
+            AssemblySite(file = "user/rt/src/arch/x86_64.rs", maxLines = 20),
+            AssemblySite(file = "user/rt/src/arch/aarch64.rs", maxLines = 20),
+            AssemblySite(file = "user/rt/src/arch/armv7a.rs", maxLines = 20)
         );
-        #planned attribute syscallEntrySites : AssemblySite[3] {
-            @stage { number = 7; }
-            doc /* The SYSCALL / SVC trampolines: the last entries the list is
-                 * meant to gain. */
+        #implemented attribute syscallEntrySites : AssemblySite[1] {
+            @stage { number = 6; }
+            doc /* The SYSCALL / SVC trampolines: the last entries the list was
+                 * meant to gain. Only x86-64 needed one,
+                 * kernel/src/arch/x86_64/syscall.rs, in the list above: on the
+                 * Arm pair svc arrives through the vector table already
+                 * there. */
         }
     }
 
@@ -225,6 +277,98 @@ package FerrixAssurance {
              * tests. The test a CoW filesystem actually has to pass. */
         subject os : Ferrix;
         attribute seeds : Natural;
+    }
+
+    // The other xtask boot gates, each an exit criterion that needs something
+    // the boot test cannot carry. test-jobs and test-rustc are JobsSession
+    // and RustcTest in FerrixRoadmap.
+    #implemented verification def ShellTest {
+        @stage { number = 7; }
+        doc /* cargo xtask test-shell: a static busybox named with --init runs
+             * a builtins-only script given to sh -c, and its lines and its
+             * exit status of 7 are required after the boot marker; without
+             * --init it runs zinc. All three architectures. */
+        subject os : Ferrix;
+    }
+    #implemented verification def ThreadsTest {
+        @stage { number = 7; }
+        doc /* cargo xtask test-threads: threads-test/, a static musl Rust
+             * program of five threads using std::thread, Mutex and mpsc,
+             * booted as init on all three architectures, counting its
+             * threads through /proc/self; a build that expects one thread
+             * too many must fail on that count. */
+        subject os : Ferrix;
+    }
+    #implemented verification def VfsTest {
+        @stage { number = 8; }
+        doc /* cargo xtask test-vfs: ls -R /proc, cat /proc/self/maps and a
+             * shell script whose applets are forked programs, on all three
+             * architectures; then su becomes the image's ferrix user, and
+             * every refusal the kernel owes a user who is not root is
+             * required of it. */
+        subject os : Ferrix;
+    }
+    #implemented verification def NetTest {
+        doc /* cargo xtask test-net, Networking's exit, under xtask's own NAT
+             * gateway: eth0 configured with ip, route and netstat reporting
+             * through /proc/net, a name resolved, a file fetched byte for
+             * byte, and a stream over the loopback, on all three
+             * architectures. */
+        subject os : Ferrix;
+    }
+    #implemented verification def RestartTest {
+        @stage { number = 10; }
+        doc /* cargo xtask test-restart, x86-64: a shell kills the gpu driver
+             * twice, and devmgr's DIED, the driver started again and card0
+             * published again are required each time, with the shell still
+             * answering. test-compositor --boot restart does the same under
+             * the compositor. */
+        subject os : Ferrix;
+    }
+    #implemented verification def DisplayTest {
+        @stage { number = 17; }
+        doc /* cargo xtask test-display: a compositor's colour on card0,
+             * served by the ring-3 virtio-gpu driver, required pixel for
+             * pixel from QEMU's screendump, on x86-64 and AArch64; with --gl
+             * the render node as well. */
+        subject os : Ferrix;
+    }
+    #implemented verification def InputTest {
+        @stage { number = 17; }
+        doc /* cargo xtask test-input: a key and a touch sent in at QEMU's far
+             * end over QMP and required back out of /dev/input/eventN, on
+             * x86-64 and AArch64, with a negative control that must fail. */
+        subject os : Ferrix;
+    }
+    #implemented verification def SeatTest {
+        @stage { number = 17; }
+        doc /* cargo xtask test-seat: keys typed at QEMU's far end reach a
+             * window on Ferrix and change the screen, and a keybind closes
+             * the window it is bound to close, on x86-64 and AArch64. */
+        subject os : Ferrix;
+    }
+    #implemented verification def CompositorTest {
+        @stage { number = 18; }
+        doc /* cargo xtask test-compositor: the compositor booted as init,
+             * and two Wayland clients tiled on the card, pixel for pixel as
+             * the renderer draws them, on x86-64 and AArch64; a later boot
+             * requires the picture the terminal makes. */
+        subject os : Ferrix;
+    }
+    #implemented verification def PtyTest {
+        @stage { number = 18; }
+        doc /* cargo xtask test-pty: compositor/term --headless runs a program
+             * on a pseudoterminal pair, and what it wrote comes back through
+             * the master and the terminal's grid. */
+        subject os : Ferrix;
+    }
+    #implemented verification def VideoTest {
+        @stage { number = 19; }
+        doc /* cargo xtask test-video: a four-frame AV1 test pattern checked
+             * into the repository plays as a wallpaper, and the screen must
+             * show its frames in turn, where QEMU's machine has a
+             * virtio-gpu. */
+        subject os : Ferrix;
     }
     #planned verification def CyclicTest {
         @stage { number = 14; }

@@ -2,8 +2,8 @@
  * Ferrix — SysML v2 model, part 3: boot.
  *
  * The hand-off ABI, the two address layouts, the loader's sequence, the
- * kernel's bring-up through stage 4, and the trap path. All of this runs
- * today on all three architectures.
+ * kernel's bring-up with every stage's self-check to stage 12, and the trap
+ * path. All of this runs today on all three architectures.
  */
 package FerrixBoot {
     private import ScalarValues::*;
@@ -108,7 +108,11 @@ package FerrixBoot {
                  * flag_in) whether the loader filled this in or the kernel
                  * read /chosen/bootargs from the device tree, which is where
                  * the Arm boards carry it. Options today: console=pl011|stm32,
-                 * nosmp (describe_cpus returns the boot CPU only), noactlr. */
+                 * nosmp (describe_cpus returns the boot CPU only), noactlr,
+                 * ferrix.onexit=reset (a board resets rather than powering
+                 * off), ferrix.root=tmpfs (/ stays in memory), and
+                 * ferrix.btrfs with ferrix.btrfs.seed for the power-fail
+                 * test. */
         }
     }
 
@@ -187,7 +191,9 @@ package FerrixBoot {
             doc /* Read /FERRIX/KERNEL.ELF from the volume the loader came from,
                  * parse it with libs/elf, copy the segments to their link
                  * address. Malformed segments are refused here rather than
-                 * discovered by the MMU. */
+                 * discovered by the MMU. /FERRIX/INITRD.IMG, when the volume
+                 * has one, is read into memory of its own kind, Initrd, which
+                 * nothing reclaims; absent is not an error. */
         }
         then action allocateBootAreas {
             doc /* Boot stack (64 KiB), boot info (64 KiB, around 2700 regions
@@ -244,7 +250,10 @@ package FerrixBoot {
         doc /* kmain. Every stage's exit criterion runs here on every boot, and
              * each failure panics with its own message so the boot test
              * fails with a reason rather than a timeout. The marker at the end
-             * reads FERRIX-BOOT-OK stages 1-9. */
+             * reads FERRIX-BOOT-OK stages 1-12. Stages 1 to 5 are broken down
+             * into their checks below; from stage 6 on each step names the
+             * check function in kernel/src/main.rs, in the order kmain calls
+             * them, which is not the stages' order. */
         in info : BootInfo;
 
         first start;
@@ -284,13 +293,103 @@ package FerrixBoot {
         }
         then action stage6MemoryObjects {
             @stage { number = 6; }
-            doc /* Stage 6 so far: a reservation costs nothing until it is
-                 * touched, and every frame an object was given comes back
-                 * when it is dropped — the leak that would otherwise kill the
-                 * machine an hour into a rustc build. */
+            doc /* check_user_memory: the memory objects a process is built
+                 * from, and a processor translating through one of them. A
+                 * reservation costs nothing until it is touched, and every
+                 * frame an object was given comes back when it is dropped —
+                 * the leak that would otherwise kill the machine an hour into
+                 * a rustc build. Before finishMemory, whose reclaim would
+                 * move the frame count under it. */
+        }
+        then action stage8RootFilesystem {
+            @stage { number = 8; }
+            doc /* check_filesystems: the root built from the initramfs and
+                 * required to be what the build wrote, then tmpfs over VMO
+                 * pages and a page source, pipes, a shared file mapping,
+                 * devfs, procfs and /proc/stat. Before stage 7's checks,
+                 * which open files. */
+        }
+        then action stage7Syscalls {
+            @stage { number = 7; }
+            doc /* check_syscalls: every number through dispatch, getpid
+                 * answering this architecture's own number, the user copy
+                 * layer, and then programs in user mode -- turns on one
+                 * processor, a kill, fork, execve, futex, signals, threads --
+                 * with a forking program's frames required back once it is
+                 * reaped. */
+        }
+        then action stage6ReverseMap {
+            @stage { number = 6; }
+            doc /* check_reverse_map: a shared object's page decommitted,
+                 * replaced and held under two processes on two processors,
+                 * which must never reach a frame the object gave back. After
+                 * stage 7's check, because it needs programs that run. */
+        }
+        then action entryPaths {
+            doc /* check_entry_paths: a trap flag a program set, which
+                 * SYSCALL must mask, then the exceptions nothing masks, which
+                 * must find the kernel's GS wherever they land. The Arm pair
+                 * take every exception on a stack a program cannot set, and
+                 * say so. */
+        }
+        then action stage8PathCalls {
+            @stage { number = 8; }
+            doc /* check_path_calls: the calls that take a path, by number,
+                 * against the real namespace under /tmp. */
+        }
+        then action stage9NativeObjects {
+            @stage { number = 9; }
+            doc /* check_native_objects: the native ABI's objects driven
+                 * through their handlers by two processes the check builds,
+                 * before any program can make a native call. */
+        }
+        then action stage10Devices {
+            @stage { number = 10; }
+            doc /* iommu::bring_up programs the units firmware describes;
+                 * check_pci finds every PCI function, sizes its BARs and
+                 * walks its capabilities; check_devices publishes the device
+                 * nodes, requiring each to hand out exactly the apertures and
+                 * vectors it has; check_iommu reports which unit each
+                 * function's DMA arrives at. */
+        }
+        then action stage9DeviceObjects {
+            @stage { number = 9; }
+            doc /* check_device_objects: I/O mappings and interrupts minted
+                 * from the nodes just published. */
+        }
+        then action stage10Drivers {
+            @stage { number = 10; }
+            doc /* check_block_ring: the block ring's control plane driven
+                 * from a process, then devmgr started with every device and
+                 * driver image, and sectors read through the disks its
+                 * drivers serve. */
+        }
+        then action stage11BtrfsRead {
+            @stage { number = 11; }
+            doc /* check_btrfs_disk: the mkfs.btrfs fixture on the second disk
+                 * mounted at /mnt and read back against its manifest, file by
+                 * file. */
+        }
+        then action stage12BtrfsWrite {
+            @stage { number = 12; }
+            doc /* check_btrfs_write: a blank volume on the third disk mounted
+                 * writable, written, unmounted, mounted again and read back.
+                 * Then / moves onto a root disk, on a boot that has one, and
+                 * a data disk is mounted at /data. */
+        }
+        then action networkingCheck {
+            doc /* check_net: the net core over the loopback in both
+                 * families, then the net ring played from both ends and
+                 * netlink's dumps and changes. */
         }
         then action finishMemory : FinishMemory;
         then action reportSuccess;
+        then action startInit {
+            doc /* init::run (kernel/src/init.rs), after the marker on
+                 * purpose: cargo xtask test-boot stops QEMU at the marker, so
+                 * the boot test is the same whether or not a program is built
+                 * in. */
+        }
         then action shutdown;
         then done;
     }
@@ -505,7 +604,9 @@ package FerrixBoot {
         }
         action systemCall {
             @stage { number = 7; }
-            doc /* Reserved: stage 7 gives this a body. */
+            doc /* The Arm pair's way in: arch::system_call reads the number
+                 * and arguments from the saved registers. x86-64's SYSCALL has
+                 * an entry of its own and never arrives here. */
         }
         action report {
             doc /* Anything else is a kernel bug at this stage: print the
@@ -524,7 +625,11 @@ package FerrixBoot {
         doc /* Resolving a fault by mapping a page and retrying is demand
              * paging. It arrived at stage 3 because it is the only honest way
              * to show the fault path recovers; stage 6 inherits it rather than
-             * writing it, replacing the fixed window with the VMA lookup. */
+             * writing it, replacing the fixed window with the VMA lookup. The
+             * kernel's own window is still here; a user-mode fault goes to
+             * its address space (DemandFault in FerrixMemory), and one that
+             * cannot be resolved becomes SIGSEGV or SIGBUS for the program
+             * that took it. Anything else reaches reportFault. */
         in fault : PageFault;
         action mapDemandPage {
             doc /* Allocate a zeroed frame, map it at the faulting page,

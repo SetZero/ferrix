@@ -725,7 +725,7 @@ package FerrixStructure {
             @deferred { reason = "The ED1 and EV1 have 1 GiB, whose identity range lands on the direct map; Layout::plan_identity_map refuses rather than guesses, so they need a trampoline page not yet written."; }
         }
         part highRam : RamAbove2GiB {
-            @deferred { reason = "The board has RAM above 2 GiB physical and beyond the 1.25 GiB direct map; QEMU cannot place it."; }
+            @deferred { reason = "RAM beyond the 1.25 GiB direct map: a machine with it boots and reports the excess unused. RAM above the 2 GiB split, which the board's DDR at 3 GiB needs, works since 9ae0180f."; }
         }
         part thumb2 : Thumb2 {
             @deferred { reason = "ARM code generation only, as docs/arm32.md argues."; }
