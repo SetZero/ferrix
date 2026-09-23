@@ -231,6 +231,17 @@ mount>`, then Ctrl-C at the U-Boot console to end mass-storage mode. On the
 DK1 the card appears as a USB disk the size of the card, with the USB-C cable
 to the host.
 
+> **`ums` turns the USB host's power off.** Ending mass-storage mode switches
+> the PMIC's `vdd_usb` (LDO4) off, and it feeds the USB PHY; the kernel does
+> not drive the PMIC, so a boot straight after it finds no hub, no keyboard
+> and no mouse -- `usbhid: EHCI running` and nothing after (2026-09-23). Turn
+> it back on before booting, or reset the board, which leaves it on:
+>
+> ```
+> STM32MP> regulator dev vdd_usb
+> STM32MP> regulator enable
+> ```
+
 ### From a Windows host
 
 `flash`, `watch-serial` and `deploy` run on Windows as they do on Linux. Only
@@ -300,6 +311,9 @@ To make it the default once it boots:
 STM32MP> setenv bootcmd 'load mmc 0:4 0xc2000000 EFI/BOOT/BOOTARM.EFI; bootefi 0xc2000000 ${fdtcontroladdr}'
 STM32MP> saveenv
 ```
+
+After `ums`, turn `vdd_usb` back on first, as the section on flashing with
+the card in the board says, or the USB keyboard and mouse are not found.
 
 ### Resetting the board from the host
 
