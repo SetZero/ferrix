@@ -1170,6 +1170,23 @@ fn build_image(
     carried_too: Carried,
     args: &Args,
 ) -> Result<(PathBuf, PathBuf)> {
+    let (loader, kernel, initramfs) = build_parts(arch, programs, config, carried_too, args)?;
+    // The kernel as well as the image: the watcher symbolises a panic's
+    // addresses out of it.
+    let image = crate::fat::write_image_with(arch, &loader, &kernel, &initramfs, None)?;
+    Ok((image, kernel))
+}
+
+/// What [`build_image`] puts in an image, which is also what `flash` copies
+/// onto a card: the loader, the kernel with the compositor as init, and the
+/// initramfs.
+fn build_parts(
+    arch: Arch,
+    programs: &Programs,
+    config: &str,
+    carried_too: Carried,
+    args: &Args,
+) -> Result<(PathBuf, PathBuf, Vec<u8>)> {
     let loader = crate::cargo::build_loader(arch, args.release)?;
     // One argument a line: a script has no quoting, and `Options::unshell`
     // says so. `--instance` is what puts the control socket where `hyprctl`
@@ -1208,10 +1225,7 @@ fn build_image(
         carried_too.zinc.as_deref(),
         &carried,
     )?;
-    // The kernel as well as the image: the watcher symbolises a panic's
-    // addresses out of it.
-    let image = crate::fat::write_image_with(arch, &loader, &kernel, &initramfs, None)?;
-    Ok((image, kernel))
+    Ok((loader, kernel, initramfs))
 }
 
 /// Print the line the compositor said when its screen came up.
@@ -1949,8 +1963,89 @@ pub(crate) fn run_compositor(args: &Args) -> Result<()> {
         net: !args.no_net,
         ..crate::ssh::checked(&args)
     };
-    let config = with_network(with_layout(config, args), args);
     let programs = Programs::build(arch)?;
+    let size = args.size.unwrap_or(crate::wallpaper::SCREEN);
+    let (config, carried) = desktop(arch, config, size, args)?;
+    let (image, _) = build_image(arch, &programs, &config, carried, args)?;
+    // The host's GPU behind the card where it can be had: `window::watched_gl`
+    // says when, and why it is the default for a desktop somebody watches.
+    let args = crate::window::watched_gl(arch, args)?;
+    let args = Args {
+        // The card, the keyboard and the tablet: `--display` is what puts a
+        // virtio-gpu on the bus, and without one the compositor has no
+        // `/dev/dri` to open. `test-compositor` sets it the same way.
+        display: true,
+        size: Some(size),
+        accel: args
+            .accel
+            .clone()
+            .or_else(|| (!args.gdb).then(|| "auto".to_owned())),
+        ..args
+    };
+    println!("  {arch}: the compositor is init; its log is this terminal");
+    crate::qemu::run(arch, &image, &args)
+}
+
+/// The screen a board's HDMI output runs: the DK1's LTDC scans out 720p60
+/// and nothing else (`docs/DISPLAY.md` §6).
+const BOARD_SCREEN: (u32, u32) = (1280, 720);
+
+/// What `flash --compositor` puts on a card: the desktop `run-compositor`
+/// boots -- the compositor as init, its clients, `hyprctl`, a shell -- as the
+/// loader, the kernel and the initramfs `flash` copies.
+///
+/// No network, since the board has none Ferrix drives, and no wallpaper
+/// unless one is named: a picture scaled every frame, let alone a video
+/// decoded, is a large share of what a 650 MHz Cortex-A7 has to give.
+pub(crate) fn board_files(arch: Arch, args: &Args) -> Result<(PathBuf, PathBuf, Vec<u8>)> {
+    if crate::display::target(arch).is_none() {
+        return Err(Error::new(format!(
+            "the compositor is not built for {arch}"
+        )));
+    }
+    let config = match &args.config {
+        Some(path) => std::fs::read_to_string(path)
+            .map_err(|error| Error::new(format!("reading {path}: {error}")))?,
+        None => RUN_CONFIG.to_owned(),
+    };
+    // A shell with no `ls` or `mkdir` is what the board's first desktop had:
+    // the only busybox `Carried::wanted` finds unasked is ferrousli's, which
+    // has no ARM port. So the static one the gates boot is carried, when it
+    // is where they keep it and nothing else was named.
+    let init = args
+        .init
+        .clone()
+        .or_else(|| std::env::var("FERRIX_INIT").ok())
+        .or_else(|| gates_busybox(arch));
+    let args = &Args {
+        net: false,
+        wallpaper: args.wallpaper.clone().or_else(|| Some("none".to_owned())),
+        init,
+        ..args.clone()
+    };
+    let programs = Programs::build(arch)?;
+    let size = args.size.unwrap_or(BOARD_SCREEN);
+    let (config, carried) = desktop(arch, config, size, args)?;
+    build_parts(arch, &programs, &config, carried, args)
+}
+
+/// The static busybox the gates boot as `--init`, at
+/// `~/.local/share/ferrix/busybox/<arch>/bin/busybox.static` (Alpine's
+/// `busybox-static`), if this machine has one.
+fn gates_busybox(arch: Arch) -> Option<String> {
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
+    let path = Path::new(&home)
+        .join(".local/share/ferrix/busybox")
+        .join(arch.name())
+        .join("bin/busybox.static");
+    path.is_file().then(|| path.to_string_lossy().into_owned())
+}
+
+/// A desktop a person uses, from `config`: the layout and network lines,
+/// the ssh server when asked for, the screen's size as a `monitor =` line,
+/// and a wallpaper; with the busybox, zinc and ports that ride along.
+fn desktop(arch: Arch, config: String, size: (u32, u32), args: &Args) -> Result<(String, Carried)> {
+    let config = with_network(with_layout(config, args), args);
     let mut carried = Carried::wanted(arch, args)?;
     carried.ports.extend(crate::rustc::default_links(args));
     let config = crate::ssh::with_server(config, args, &mut carried.ports)?;
@@ -1968,7 +2063,6 @@ pub(crate) fn run_compositor(args: &Args) -> Result<()> {
     // told, and the kernel lists the standard sizes beside that one so that
     // such a line can pick. A configuration's own line for the monitor
     // comes later and wins.
-    let size = args.size.unwrap_or(crate::wallpaper::SCREEN);
     let config = format!("monitor = , {}x{}@60, auto, 1\n{config}", size.0, size.1);
     // A wallpaper that moves is started the way a still one is, and the way
     // `mpvpaper ALL <file>` is started from a Linux desktop's `exec-once`:
@@ -2000,24 +2094,7 @@ pub(crate) fn run_compositor(args: &Args) -> Result<()> {
         }
         None => config,
     };
-    let (image, _) = build_image(arch, &programs, &config, carried, args)?;
-    // The host's GPU behind the card where it can be had: `window::watched_gl`
-    // says when, and why it is the default for a desktop somebody watches.
-    let args = crate::window::watched_gl(arch, args)?;
-    let args = Args {
-        // The card, the keyboard and the tablet: `--display` is what puts a
-        // virtio-gpu on the bus, and without one the compositor has no
-        // `/dev/dri` to open. `test-compositor` sets it the same way.
-        display: true,
-        size: Some(size),
-        accel: args
-            .accel
-            .clone()
-            .or_else(|| (!args.gdb).then(|| "auto".to_owned())),
-        ..args
-    };
-    println!("  {arch}: the compositor is init; its log is this terminal");
-    crate::qemu::run(arch, &image, &args)
+    Ok((config, carried))
 }
 
 /// A fifth boot: two monitors, which on QEMU are two virtio-gpu devices and

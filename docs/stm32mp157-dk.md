@@ -356,7 +356,65 @@ the image with `--reset`, which puts exactly that line in it.
 `cargo xtask test-boot --reset` boots such an image and requires QEMU to see the
 machine reset rather than power off, on every architecture.
 
-## 4. What a good boot looks like
+## 4. The desktop, over HDMI
+
+The board's HDMI socket is a card like QEMU's virtio-gpu (`docs/DISPLAY.md`
+§6): `/dev/dri/card0`, one connector named `HDMI-A-1`, one mode, 1280x720 at
+60 Hz. To boot the Wayland compositor on it instead of the self-checks'
+shell, flash the image `run-compositor` boots:
+
+```sh
+cargo xtask flash --arch armv7a --compositor --to E:\
+```
+
+then boot as in step 3. The image carries a busybox, which is what the
+terminal's shell runs `ls` and `mkdir` from: `--init` or `FERRIX_INIT` names
+one, and without either it is Alpine's static one where the gates keep it,
+`~/.local/share/ferrix/busybox/armv7a/bin/busybox.static` (step 2). Without
+any the terminal has only zinc's builtins -- which is how the board's first
+desktop, on 2026-09-23, answered `command not found: mkdir`, since the
+busybox `run-compositor` picks up unasked is ferrousli's, which has no ARM
+port yet. There is no `git` or uutils on ARMv7-A either way; they are built
+for x86-64 only. `--config <hyprland.conf>` carries a configuration
+of your own, as it does for `run-compositor`; `--wallpaper <name>` a picture
+from `cargo xtask wallpapers` (none is the board's default: scaling one is
+real work for a 650 MHz Cortex-A7). The boot says:
+
+```
+  display  LTDC at 0x5a001000, HDMI bridge at 0x39 on I2C 0x40012000, pixel clock 74.250 MHz, 30 pins muxed
+  display  card0 scanout 0: 1280x720
+FERRIX-BOOT-OK stages 1-12
+hyprix: 1 monitor [card0 HDMI-A-1 1280x720 1280x720]
+hyprix: started /bin/term /bin/zinc as 190
+```
+
+A monitor standing in portrait takes Hyprland's own line, in the
+configuration given with `--config`:
+
+```
+monitor = HDMI-A-1, 1280x720@60, 0x0, 1, transform, 3
+```
+
+`transform, 1` is for a monitor turned clockwise (standing on its right-hand
+edge) and `3` for one turned the other way; the desktop is then laid out
+720x1280. On 2026-09-23 the customer's monitor wanted `3`: `1` showed the
+desktop upside down, `3` upright.
+
+Plug the monitor in before the boot: the card says it is connected whatever
+the socket holds, and there is no hotplug. The monitor must take 1280x720 at
+60 Hz, which every HDMI sink does; the pixel clock is the one the board's
+firmware leaves on PLL4, and no other mode is offered. **There is no input
+yet**: Ferrix drives no USB, so the desktop is to look at, not to type into.
+A frame takes about 100 ms in software once warm.
+
+If the display line says `left alone:` instead, it names what the kernel
+could not check -- a pixel clock other than 74.25 MHz, which means firmware
+other than the mainline chain of step 1, is the likely one. If `devmgr`
+reports the driver failed, the bridge most likely did not answer on I2C: its
+supplies are the PMIC's `ldo2` and `ldo6`, which Ferrix does not touch and
+which were on in every boot so far.
+
+## 5. What a good boot looks like
 
 Abridged. The stage 5 lines are the board's own, from its 2026-09-12 run; the
 lines after stage 5 have so far only been seen under QEMU.
@@ -500,6 +558,7 @@ tasks onto one queue reads many times slower there than on the board.
 | The RCC is the normal world's to write | OP-TEE's boot line `RCC tzen:0` |
 | HDMI out at 1280x720 from a Linux program | `compositor/blank` as init drew `0x1e1e2e` over `/dev/dri/card0`, seen on a monitor, 2026-09-23 (`docs/DISPLAY.md` §6) |
 | The Wayland compositor on the board | `hyprix` as init: `1 monitor [card0 HDMI-A-1 1280x720 1280x720]`, a terminal window tiled, seen on the monitor, about 100 ms a frame |
+| A monitor in portrait | `monitor = HDMI-A-1, 1280x720@60, 0x0, 1, transform, 3`: `hyprix: 1 monitor [card0 HDMI-A-1 1280x720 1280x720 transform 3]`, a terminal of 678x1238 pixels over a second window, upright on the customer's monitor, 2026-09-23 |
 | Both boot switches ON boots the SD card; the prompt is `STM32MP>` | on the board |
 | U-Boot's IWDG heuristic starts a 32 s watchdog on `VERR = 0x30` | on the board; gone with `WDT_STM32MP` off, and survives an OP-TEE without IWDG |
 | The above-2-GiB identity-map placement | host unit tests in `libs/bootinfo` |

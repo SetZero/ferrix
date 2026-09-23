@@ -30,6 +30,10 @@ pub(crate) struct Args {
     /// `--reset`: the image carries `ferrix.onexit=reset` in `CMDLINE.TXT`, and
     /// `test-boot` requires QEMU to see the machine reset rather than power off.
     pub(crate) reset: bool,
+    /// `--compositor`: `flash` and `deploy` put the desktop on the card --
+    /// the compositor as init with its clients and a shell, the image
+    /// `run-compositor` boots -- rather than the self-checks or a busybox.
+    pub(crate) compositor: bool,
     /// `--reset-root`: start the btrfs root `run` and `run-compositor` boot
     /// with over from the fixture, throwing away what is on it.
     pub(crate) reset_root: bool,
@@ -283,6 +287,7 @@ impl Args {
                 "--zinc" => args.zinc = true,
                 "--miri" => args.miri = true,
                 "--reset" => args.reset = true,
+                "--compositor" => args.compositor = true,
                 "--reset-root" => args.reset_root = true,
                 "--tmpfs-root" => args.tmpfs_root = true,
                 "--net" => args.net = true,

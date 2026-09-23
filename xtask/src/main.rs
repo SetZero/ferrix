@@ -18,7 +18,7 @@
 //! cargo xtask ports     [--arch x86_64]
 //! cargo xtask omz       --from DIRECTORY-OR-URL
 //! cargo xtask zsh-functions --from DIRECTORY
-//! cargo xtask flash     [--arch armv7a] [--to MOUNT]
+//! cargo xtask flash     [--arch armv7a] [--to MOUNT] [--compositor [--config PATH]]
 //! cargo xtask watch-serial            [--port DEVICE] [--timeout SECONDS]
 //! cargo xtask deploy    [--arch armv7a] [--to MOUNT] [--port DEVICE]
 //! ```
@@ -271,6 +271,7 @@ OPTIONS:
     --reset                              test-boot: ferrix.onexit=reset in CMDLINE.TXT, and require a reset;
                                          build, run: put that CMDLINE.TXT in the image
     --to <MOUNT>                         flash: the card's mounted boot partition
+    --compositor                         flash, deploy: the desktop run-compositor boots, not the self-checks
     --port <DEVICE>                      watch-serial: e.g. /dev/ttyACM0
     --init <PATH|ferrousli>              The busybox; {arch} is replaced. build, run, flash, deploy: [or FERRIX_INIT]
                                          start `sh -i`, with the applets linked in /bin.
@@ -592,6 +593,10 @@ fn build_image(arch: Arch, args: &Args) -> Result<(PathBuf, PathBuf)> {
 /// an image does. Without one the files are the ones they always were. Either
 /// way the archive carries the tree's native programs, as an image's does.
 fn build_board_files(arch: Arch, args: &Args) -> Result<(PathBuf, PathBuf, Vec<u8>)> {
+    // `--compositor`: the desktop instead, which `compositor` knows how to make.
+    if args.compositor {
+        return compositor::board_files(arch, args);
+    }
     let natives = native::build(arch, args.release)?;
     let Some(program) = optional_program(arch, args)? else {
         let (loader, kernel) = build_halves(arch, args)?;
