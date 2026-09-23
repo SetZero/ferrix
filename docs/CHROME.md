@@ -13,6 +13,12 @@ written. Each is marked where it stands. One of the two turned out not to cost
 what this document said it did, which is recorded rather than quietly
 corrected: see §3.
 
+**Re-checked on 2026-09-23**, when the customer asked for this work to start.
+Two of §2's four walls have fallen since: dynamic linking is done on all
+three architectures, `dlopen` included (§2.1, §4), and btrfs is writable
+(§2.3). §2.2, the rest of §2.3 and §3 stand as written; §5's first row is
+now zero.
+
 `docs/ROADMAP.md` stage 22 already names a browser once -- Steam's client
 starts one as a helper -- but a browser of Ferrix's own is on no stage, and
 nothing on the roadmap arrives at one on the way to something else.
@@ -58,9 +64,13 @@ are worth naming because each was built for something else and pays here.
 ### 2.1 Dynamic linking
 
 Chrome is a position-independent executable linked against glibc, and it
-`dlopen`s more at run time. The kernel loads `PT_INTERP` now, and since
-2026-09-21 a glibc program runs on ferrousli's loader and `libc.so.6` in
-glibc's place (§4); but ferrousli's `dlopen` still returns null. A fully static Chromium against a musl-shaped library
+`dlopen`s more at run time. **Done, 2026-09-23:** a program linked against
+glibc runs on ferrousli's loader and `libc.so.6` in glibc's place on all
+three architectures, with `dlopen`, `dlsym` and the rest of `dlfcn.h` and
+every TLS model (§4). One limit is Chrome's to meet: a library `dlopen`ed
+after start-up may not have a `PT_TLS` of its own yet, since that needs a
+dynamic thread vector, and ANGLE's and Mesa's libraries are the kind a
+browser opens late. A fully static Chromium against a musl-shaped library
 is not a configuration anybody ships: Alpine, which is the only distribution
 that builds Chromium against musl at all, builds it dynamically and carries a
 patch set to do it.
@@ -82,8 +92,9 @@ of one heap block, and this needs the pages to arrive on fault from the file.
 
 ### 2.3 Nowhere to put it, and not enough memory
 
-The root filesystem is the initramfs, which is RAM; btrfs is read-only until
-stage 12; the guest is 512 MiB by default. Chrome wants something like 2 GiB to
+The root filesystem is the initramfs, which is RAM; btrfs was read-only
+until stage 12, which landed on 2026-09-21, so there is now somewhere to put
+a browser that is not memory; the guest is 512 MiB by default. Chrome wants something like 2 GiB to
 open one page. And `madvise` decodes but has no handler, so PartitionAlloc and
 V8 could never give memory back -- on a guest this size that is the difference
 between slow and dead.
@@ -151,6 +162,12 @@ that a program which asks for isolation now finds out it cannot have it.
 ---
 
 ## 4. Where dynamic linking and btrfs write actually stand
+
+**Both are done.** Dynamic linking met its exit on all three architectures
+on 2026-09-23: Debian's glibc busybox runs on ferrousli's loader and
+`libc.so.6` with nothing of glibc on the image, after ferrousli itself was
+ported to AArch64 and ARMv7-A. btrfs write, stage 12, landed on 2026-09-21.
+`docs/ROADMAP.md` has both. What follows is the history of this section.
 
 Checked on 2026-09-18, because both are prerequisites above and both were
 believed to be further along than they are.
@@ -223,7 +240,7 @@ separately for that reason.
 
 | what | points |
 |---|---|
-| **Already planned:** dynamic linking, the rest of it (34 when this was written; 12 on 2026-09-21) | 12 |
+| ~~**Already planned:** dynamic linking, the rest of it (34 when this was written; 12 on 2026-09-21)~~ *done 2026-09-23* | ~~12~~ |
 | ~~**Already planned:** stage 12, btrfs write~~ *landed 2026-09-21* | ~~≈ 60~~ |
 | **Already planned, only if the sandbox is wanted:** stage 13 | ≈ 60 |
 | Demand-paged file-backed `execve`, and binaries past 64 MiB | 13 |
