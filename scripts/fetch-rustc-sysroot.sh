@@ -10,9 +10,10 @@
 # `collect2`, which runs the `ld.lld` rustc points it at, which runs
 # `rust-lld`. Every one of those is somebody else's glibc binary, and the
 # glibc is Debian 13's, the same one scripts/fetch-debian-busybox.sh pins.
-# Beside the host's standard library are the two Ferrix's x86-64 image is
-# built against: `x86_64-unknown-none` for the kernel and its native
-# programs, `x86_64-unknown-uefi` for the loader.
+# Beside the host's standard library are the ones Ferrix's own images are
+# built against: the kernels' and native programs' freestanding targets, the
+# loaders' UEFI targets (and the ARMv7-A loader's musl one, used for its
+# position-independent `core`), and the two musl targets zinc is built for.
 #
 # The volume holds a Debian-shaped tree at its root -- `usr/bin`,
 # `usr/lib/x86_64-linux-gnu`, `usr/lib64`, `usr/lib/gcc`, `usr/libexec` --
@@ -54,6 +55,12 @@ components=(
     "dist/2026-07-16/rust-std-1.97.1-x86_64-unknown-linux-gnu.tar.xz 1c1e704ae80126b7de34f72ea2825f7fd01736dec20732faed47374b95282fba"
     "dist/2026-07-16/rust-std-1.97.1-x86_64-unknown-none.tar.xz 24e213f586ecb1811a11bd40dbb53690fbae469cce89dc60f7cf20eaeaaeab29"
     "dist/2026-07-16/rust-std-1.97.1-x86_64-unknown-uefi.tar.xz 35f18a13185697e26540ef139de4408689fa77fb6427b355e0a9954d632f20fc"
+    "dist/2026-07-16/rust-std-1.97.1-aarch64-unknown-none-softfloat.tar.xz 02eb0d235d8f3af63ce896178a96fcf0e78e05b5241e5ddc92d6a07e28bf5e0e"
+    "dist/2026-07-16/rust-std-1.97.1-aarch64-unknown-uefi.tar.xz 90fd767018a4800c764bf06212eb96dfd17f0f7da1c2a070ee30d66c0057ac79"
+    "dist/2026-07-16/rust-std-1.97.1-armv7a-none-eabi.tar.xz d9afee2a85c5a38a07ba5277ab3b1fe8560a6bfd06301256bdc57b79442f270d"
+    "dist/2026-07-16/rust-std-1.97.1-armv7-unknown-linux-musleabi.tar.xz ad50b2c455548ca7a7660251a6b8ea09156182583204053da9ea000b50723ab6"
+    "dist/2026-07-16/rust-std-1.97.1-x86_64-unknown-linux-musl.tar.xz 51d83178680556f73a5fa8ad865b76a1ff541867445c00fc65dc67246bc2de66"
+    "dist/2026-07-16/rust-std-1.97.1-aarch64-unknown-linux-musl.tar.xz 49ff0879d94e2e8e86d5e85eb15a9215943e8c78b51363d6553443598cab5d31"
     "dist/2026-07-16/cargo-1.97.1-x86_64-unknown-linux-gnu.tar.xz e1be5f5ff7f7f80ca506fb65770b759edbdc6d303781ed71c5de8ec8a8394779"
 )
 
@@ -95,7 +102,7 @@ done
 mkdir -p "$tree/rust"
 for component in "$unpacked"/*/*/; do
     case "$component" in
-        */rustc/ | */cargo/ | */rust-std-x86_64-unknown-*/) cp -a "$component". "$tree/rust/" ;;
+        */rustc/ | */cargo/ | */rust-std-*/) cp -a "$component". "$tree/rust/" ;;
     esac
 done
 
@@ -111,7 +118,7 @@ test -x "$tree/rust/bin/rustc" || { echo "fetch-rustc-sysroot: no rustc in the t
 test -x "$tree/rust/bin/cargo" || { echo "fetch-rustc-sysroot: no cargo in the tree" >&2; exit 1; }
 test -x "$tree/rust/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld" \
     || { echo "fetch-rustc-sysroot: no rust-lld in the tree" >&2; exit 1; }
-for target in x86_64-unknown-none x86_64-unknown-uefi; do
+for target in x86_64-unknown-none x86_64-unknown-uefi aarch64-unknown-none-softfloat     aarch64-unknown-uefi armv7a-none-eabi armv7-unknown-linux-musleabi     x86_64-unknown-linux-musl aarch64-unknown-linux-musl; do
     test -d "$tree/rust/lib/rustlib/$target/lib" \
         || { echo "fetch-rustc-sysroot: no standard library for $target in the tree" >&2; exit 1; }
 done
