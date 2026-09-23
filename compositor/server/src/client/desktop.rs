@@ -161,8 +161,16 @@ impl Client {
             return;
         };
         // The logical size is the screen's own divided by its scale, which
-        // is what every window's rectangle is in.
+        // is what every window's rectangle is in -- and turned, for a
+        // monitor stood on its edge: its mode is wide and what is laid out
+        // on it is tall.
         let scale = screen.scale.max(1);
+        let turned = screen.transform & 1 == 1;
+        let (wide, high) = if turned {
+            (screen.height, screen.width)
+        } else {
+            (screen.width, screen.height)
+        };
         let _ = self.out.write(
             id,
             zxdg_output_v1::event::LOGICAL_POSITION,
@@ -173,10 +181,7 @@ impl Client {
             id,
             zxdg_output_v1::event::LOGICAL_SIZE,
             &[ArgType::Int, ArgType::Int],
-            &[
-                Arg::Int(screen.width / scale),
-                Arg::Int(screen.height / scale),
-            ],
+            &[Arg::Int(wide / scale), Arg::Int(high / scale)],
         );
         let _ = self.out.write(
             id,

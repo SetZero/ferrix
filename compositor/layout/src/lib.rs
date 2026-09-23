@@ -148,6 +148,12 @@ pub struct Monitor {
     /// pixels they work in -- but it is part of what a monitor is, and
     /// `hyprctl monitors` prints it.
     pub scale: f64,
+    /// How it is turned: `monitor = name, res, pos, scale, transform, 1`.
+    ///
+    /// Nothing in the layouts reads this either: `rect` is the monitor as
+    /// it is read, turned already, so a monitor stood on its edge is simply
+    /// a tall one. It is here for `hyprctl monitors`, which prints it.
+    pub transform: compositor_config::Transform,
     /// What the monitor says it is: its make, model and serial with spaces
     /// between them, out of its `EDID`.
     ///

@@ -6,8 +6,8 @@ use compositor_layout::{Monitor, MonitorId, MonitorLayout, Placed, Settings, Sta
 use crate::golden::{self, Mismatch};
 use crate::{
     Backdrop, Blur, Canvas, Color, Damage, Error, Format, Gradient, LayerFrame, Pattern, Rect,
-    Rounding, Style, Styles, Surface, Target, cursor, damage_between, outer, reads_backdrop,
-    render, render_onto, render_with_layers,
+    Rounding, Style, Styles, Surface, Target, Transform, cursor, damage_between, outer,
+    reads_backdrop, render, render_onto, render_with_layers,
 };
 
 const BG: u32 = 0x0020_4060;
@@ -82,6 +82,7 @@ pub(crate) fn two_clients_on(size: (u32, u32), settings: Settings) -> (State, Mo
     let _ = state
         .add_monitor(Monitor {
             scale: 1.0,
+            transform: Default::default(),
             name: "Virtual-1".to_owned(),
             id: MonitorId(1),
             rect: Rect::new(0, 0, i64::from(size.0), i64::from(size.1)),
@@ -194,6 +195,7 @@ fn scaled_frame() -> (Vec<u8>, Placed) {
     let _ = state
         .add_monitor(Monitor {
             scale: 1.0,
+            transform: Default::default(),
             name: "Virtual-1".to_owned(),
             id: MonitorId(1),
             // The logical size: what the screen is, divided by the scale.
@@ -288,6 +290,7 @@ fn two_monitor_frames() -> (Vec<u8>, Vec<u8>) {
         let _ = state
             .add_monitor(Monitor {
                 scale: 1.0,
+                transform: Default::default(),
                 name: format!("Virtual-{index}"),
                 id: MonitorId(index),
                 rect: Rect::new(x, 0, i64::from(WIDTH), i64::from(HEIGHT)),
@@ -595,6 +598,7 @@ fn bar_and_two_clients_frame() -> Vec<u8> {
     let _ = state
         .add_monitor(Monitor {
             scale: 1.0,
+            transform: Default::default(),
             name: "Virtual-1".to_owned(),
             id: MonitorId(1),
             rect: monitor,
@@ -1712,6 +1716,7 @@ fn a_layout_on_a_monitor_away_from_the_origin_is_drawn_in_its_coordinates() {
     let _ = state
         .add_monitor(Monitor {
             scale: 1.0,
+            transform: Default::default(),
             name: "Virtual-1".to_owned(),
             id: MonitorId(7),
             rect: Rect::new(1920, 100, 200, 100),
@@ -3057,6 +3062,110 @@ fn two_pattern_clients_on_a_1920x1080_screen_match_the_expected_image() {
     let size = (1920, 1080);
     let frame = frame_on(size, &plain_style(), Settings::default());
     golden::check("dwindle-two-clients-1920x1080", size.0, size.1, &frame);
+}
+
+/// The two clients on a 1024x768 connector whose monitor is turned by
+/// `transform`, as the connector's buffer holds them: tiled on the monitor
+/// as it is read -- 768 wide and 1024 tall for a quarter turn -- and turned
+/// into the buffer on the way out, as `hyprix` does.
+fn turned_frame(transform: Transform) -> Vec<u8> {
+    let (width, height) = transform.size((WIDTH, HEIGHT));
+    let (_, layout) = two_clients_on((width, height), Settings::default());
+    let buffers = client_buffers(&layout);
+    let mut canvas = Canvas::new(width, height).unwrap();
+    let full = Damage::full(width, height);
+    let produced = render(
+        &mut canvas,
+        &layout,
+        (0, 0),
+        &plain_style(),
+        &surfaces(&buffers),
+        &full,
+    );
+    assert_eq!(produced, full);
+    let mut bytes = vec![0; WIDTH as usize * HEIGHT as usize * 4];
+    let mut target = Target::new(&mut bytes, WIDTH, HEIGHT, WIDTH * 4).unwrap();
+    let written = canvas
+        .present_transformed(&mut target, &full, transform)
+        .unwrap();
+    assert_eq!(
+        written,
+        Damage::full(WIDTH, HEIGHT),
+        "a whole frame is the whole buffer"
+    );
+    bytes
+}
+
+/// `monitor = , preferred, auto, 1, transform, 1` and `transform, 3`: the
+/// pictures `cargo xtask test-compositor --boot transform` requires from
+/// QEMU's screendump, which reads the connector's buffer as it is.
+///
+/// The monitor is laid out tall, so dwindle stacks the two windows rather
+/// than putting them side by side, and the buffer holds that picture turned
+/// counter-clockwise for 1 -- the first window, the checkerboard, along the
+/// buffer's left -- and clockwise for 3, along its right.
+#[test]
+fn two_pattern_clients_on_a_monitor_turned_once_match_the_expected_image() {
+    let one = turned_frame(Transform::Rotated90);
+    golden::check("dwindle-two-clients-transform-1", WIDTH, HEIGHT, &one);
+}
+
+/// The same for `transform, 3`: a test of its own, since blessing writes
+/// one image a test.
+#[test]
+fn two_pattern_clients_on_a_monitor_turned_thrice_match_the_expected_image() {
+    let three = turned_frame(Transform::Rotated270);
+    golden::check("dwindle-two-clients-transform-3", WIDTH, HEIGHT, &three);
+}
+
+/// What the two turned pictures are to each other and to the upright ones,
+/// which is what makes them the right pictures rather than merely the ones
+/// that were blessed.
+#[test]
+fn the_turned_pictures_are_the_upright_one_turned() {
+    let one = turned_frame(Transform::Rotated90);
+    let three = turned_frame(Transform::Rotated270);
+
+    // Each pixel of the upright tall frame is where transform 1 sends it:
+    // the whole of the turn, on a real frame rather than six pixels.
+    let (tall_width, tall_height) = (HEIGHT, WIDTH);
+    let upright = frame_on(
+        (tall_width, tall_height),
+        &plain_style(),
+        Settings::default(),
+    );
+    let value = |bytes: &[u8], at: usize| -> [u8; 4] {
+        [bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]
+    };
+    for y in 0..i64::from(tall_height) {
+        for x in 0..i64::from(tall_width) {
+            let (bx, by) = crate::transform::point(
+                Transform::Rotated90,
+                (i64::from(tall_width), i64::from(tall_height)),
+                (x, y),
+            );
+            // Hyprland's `(y, W - 1 - x)`, spelled out once more.
+            assert_eq!((bx, by), (y, i64::from(tall_width) - 1 - x));
+            let from = ((y * i64::from(tall_width) + x) * 4) as usize;
+            let to = ((by * i64::from(WIDTH) + bx) * 4) as usize;
+            assert_eq!(value(&one, to), value(&upright, from), "({x}, {y})");
+        }
+    }
+
+    // 3 is 1 upside down, and neither is the upright monitor's picture,
+    // which is what a compositor that ignored the line would show.
+    let pixels = WIDTH as usize * HEIGHT as usize;
+    for at in 0..pixels {
+        assert_eq!(
+            value(&three, at * 4),
+            value(&one, (pixels - 1 - at) * 4),
+            "pixel {at}"
+        );
+    }
+    let flat = two_client_frame();
+    assert_ne!(one, flat, "transform 1 drew the upright picture");
+    assert_ne!(three, flat, "transform 3 drew the upright picture");
+    assert_ne!(one, three);
 }
 
 /// `layerrule = xray`: a bar's blur is of the wallpaper rather than of

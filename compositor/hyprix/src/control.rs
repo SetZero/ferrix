@@ -532,11 +532,18 @@ pub fn describe_all(
     // `hyprctl monitors` prints and the order `focusmonitor +1` walks.
     for monitor in state.monitors() {
         let active = state.active_workspace(monitor.id);
+        // Hyprland prints `m_pixelSize`, the connector's mode, which a
+        // turned monitor's layout rectangle has the other way round: a
+        // 1920x1080 monitor stood on its edge is laid out 1080 wide and
+        // printed 1920x1080 with `transform: 1` under it.
+        let (width, height) = monitor
+            .transform
+            .size((monitor.rect.width, monitor.rect.height));
         snapshot.monitors.push(Monitor {
             id: monitor_id(monitor.id),
             name: monitor.name.clone(),
-            width: i32::try_from(monitor.rect.width).unwrap_or(0),
-            height: i32::try_from(monitor.rect.height).unwrap_or(0),
+            width: i32::try_from(width).unwrap_or(0),
+            height: i32::try_from(height).unwrap_or(0),
             refresh: 60.0,
             at: (
                 i32::try_from(monitor.rect.x).unwrap_or(0),
@@ -550,6 +557,7 @@ pub fn describe_all(
                 .special_on(monitor.id)
                 .map(|id| (i32::try_from(id.0).unwrap_or(0), state.workspace_name(id))),
             scale: monitor.scale,
+            transform: monitor.transform,
             focused: Some(monitor.id) == state.focused_monitor(),
             description: monitor.description.clone(),
             make: monitor.made.0.clone(),

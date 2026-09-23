@@ -22,6 +22,7 @@ fn config(text: &str) -> Config {
 fn monitor(id: MonitorId, x: i64, y: i64, width: i64, height: i64) -> Monitor {
     Monitor {
         scale: 1.0,
+        transform: Default::default(),
         // What a virtio-gpu connector is called, which is what Ferrix's
         // monitors are named after.
         name: format!("Virtual-{}", id.0),
@@ -444,6 +445,7 @@ fn reserved_strips_are_outside_the_tiled_area() {
     let _changes = state
         .add_monitor(Monitor {
             scale: 1.0,
+            transform: Default::default(),
             name: String::new(),
             id: M1,
             rect: r(0, 0, 1920, 1080),
@@ -1051,6 +1053,7 @@ fn the_neighbour_search_reaches_across_gaps_and_reserved_strips() {
     let _changes = state
         .add_monitor(Monitor {
             scale: 1.0,
+            transform: Default::default(),
             name: String::new(),
             id: M2,
             rect: r(1920, 0, 1280, 1024),
@@ -1622,6 +1625,7 @@ fn extreme_geometry_does_not_panic() {
     let _changes = state
         .add_monitor(Monitor {
             scale: 1.0,
+            transform: Default::default(),
             name: String::new(),
             id: M1,
             rect: r(i64::MAX, i64::MIN, i64::MAX, 0),

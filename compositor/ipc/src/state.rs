@@ -114,6 +114,9 @@ pub struct Monitor {
     pub special_workspace: Option<(i32, String)>,
     /// Buffer pixels per logical pixel.
     pub scale: f64,
+    /// How it is turned: `monitor = ..., transform, N`, printed as the
+    /// `wl_output.transform` number, as Hyprland prints `m_transform`.
+    pub transform: compositor_config::Transform,
     /// Whether it holds the focus.
     pub focused: bool,
     /// What the monitor says it is: the make, the model and the serial with

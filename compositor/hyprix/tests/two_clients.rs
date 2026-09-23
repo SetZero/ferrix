@@ -93,16 +93,33 @@ fn run_drawn_by(
     patterns: &[(Pattern, &str, Shape)],
     renderer: Renderer,
 ) -> Result<(Vec<u8>, String), String> {
+    run_configured(name, patterns, renderer, "")
+}
+
+/// The same, with `lines` added to the configuration after the dither is
+/// turned off.
+fn run_configured(
+    name: &str,
+    patterns: &[(Pattern, &str, Shape)],
+    renderer: Renderer,
+    lines: &str,
+) -> Result<(Vec<u8>, String), String> {
     let work = workspace(name);
     let socket = work.join("wayland");
     let frames = work.join("frames");
+    let config = undithered(&work);
+    if !lines.is_empty() {
+        let mut text = std::fs::read_to_string(&config).expect("the configuration");
+        text.push_str(lines);
+        std::fs::write(&config, text).expect("the configuration");
+    }
 
     let options = Options {
         display: socket.to_string_lossy().into_owned(),
         headless: Some((WIDTH, HEIGHT)),
         dump: Some(frames.clone()),
         deadline: Some(8000),
-        config: Some(undithered(&work)),
+        config: Some(config),
         renderer,
         ..Options::default()
     };
@@ -347,6 +364,56 @@ fn the_comparison_would_notice_a_different_frame() {
         differing > 0,
         "one window drew the same picture as two, which cannot be right"
     );
+}
+
+/// A monitor stood on its edge: `monitor = , preferred, auto, 1, transform,
+/// N` on the 1024x768 screen.
+///
+/// The clients are tiled on a monitor 768 wide and 1024 tall -- which is
+/// what they are configured to and draw at -- and the screen's buffer holds
+/// that picture turned, pixel for pixel the image `compositor/render`
+/// blesses for the same transform. Both quarter turns, since a compositor
+/// that turned the wrong way would pass either one alone by being the other.
+#[test]
+fn a_turned_monitor_is_tiled_tall_and_drawn_turned() {
+    let shaped = [
+        (Pattern::Checkerboard, "one", Shape::Window),
+        (Pattern::Gradient, "two", Shape::Window),
+    ];
+    for (transform, image_name) in [
+        (1, "dwindle-two-clients-transform-1.xrle"),
+        (3, "dwindle-two-clients-transform-3.xrle"),
+    ] {
+        let (frame, report) = run_configured(
+            &format!("turned-{transform}"),
+            &shaped,
+            Renderer::Software,
+            &format!("monitor = , preferred, auto, 1, transform, {transform}\n"),
+        )
+        .expect("the compositor ran");
+        assert!(
+            report.contains("most 2") && !report.contains("failed"),
+            "the compositor should have had two windows: {report}"
+        );
+        let want = image(
+            &Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../render/tests/data")
+                .join(image_name),
+        );
+        let (differing, first) = compare(&frame, &want);
+        assert_eq!(
+            differing, 0,
+            "transform {transform}: the screen is not the turned picture; first difference \
+             {first:?}"
+        );
+        // And not the upright one, which a compositor that ignored the
+        // line would have drawn.
+        let (upright, _) = compare(&frame, &expected());
+        assert!(
+            upright > 0,
+            "transform {transform} drew the upright picture"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

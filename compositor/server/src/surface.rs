@@ -324,6 +324,11 @@ pub struct Output {
     pub refresh: i32,
     /// Buffer pixels per logical pixel.
     pub scale: i32,
+    /// How the monitor is turned, as a `wl_output.transform`: what
+    /// `wl_output.geometry` tells a client. `width` and `height` are the
+    /// mode's all the same, which is what `wl_output.mode` carries; the
+    /// logical size `zxdg_output_v1` gives is the one turned.
+    pub transform: i32,
     /// The name a person sees, as `hyprctl monitors` prints it, and as the
     /// connector is called: `DP-1`, `Virtual-1`.
     pub name: String,
@@ -346,6 +351,7 @@ impl Default for Output {
             height: 1080,
             refresh: 60_000,
             scale: 1,
+            transform: 0,
             name: "HEADLESS-1".to_owned(),
             description: "Headless output 1 (HEADLESS-1)".to_owned(),
         }

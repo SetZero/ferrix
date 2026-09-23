@@ -380,7 +380,7 @@ impl Client {
             head,
             zwlr_output_head_v1::event::TRANSFORM,
             &[ArgType::Int],
-            &[Arg::Int(0)],
+            &[Arg::Int(output.transform)],
         );
         let _ = self.out.write(
             head,

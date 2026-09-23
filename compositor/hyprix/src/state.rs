@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use compositor_config::{Config, MonitorRule, NoSources, Position};
+use compositor_config::{Config, MonitorRule, NoSources, Position, Transform};
 use compositor_layout::{Monitor, MonitorId, Rect, Settings, State, WindowId};
 use compositor_protocol::{core, xdg_shell};
 use compositor_render::{Canvas, Style};
@@ -173,12 +173,10 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
     // A line that cannot be read is said and the rest apply, as everywhere
     // else in the configuration. Read before the screens are opened, because
     // the mode is set when one is.
-    let mut rules = Vec::new();
-    for raw in &config.monitors {
-        match MonitorRule::parse(&raw.value) {
-            Ok(rule) => rules.push(rule),
-            Err(why) => report(&format!("hyprix: monitor = {}: {why}", raw.value)),
-        }
+    let (rules, refused) =
+        MonitorRule::read_all(config.monitors.iter().map(|raw| raw.value.as_str()));
+    for (value, why) in refused {
+        report(&format!("hyprix: monitor = {value}: {why}"));
     }
     let backends: Vec<Box<dyn Backend>> = match options.headless {
         Some((width, height)) => vec![Box::new(Headless::new(width, height))],
@@ -332,6 +330,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                 rect: screen.rect,
                 reserved: compositor_layout::Gaps::default(),
                 scale: screen.scale,
+                transform: screen.transform,
                 description: screen.description.clone(),
                 made: screen.made.clone(),
             })
@@ -1360,6 +1359,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                     style: &style,
                     styles: &drawn_with,
                     scale,
+                    transform: screen.transform,
                     drag_icon,
                     gamma,
                     cursor,
@@ -2704,6 +2704,12 @@ struct Screen {
     made: (String, String, String),
     /// How many buffer pixels one logical pixel is: `monitor = ..., 2`.
     scale: f64,
+    /// How it is turned: `monitor = ..., transform, 1`. The canvas, the
+    /// backdrop, the GPU's canvas and everything laid out are the monitor
+    /// as it is read -- a quarter turn exchanges their width and height --
+    /// and the frame is turned only when it is put in the backend's buffer
+    /// (`compositor_render::transform`).
+    transform: Transform,
     /// What it last drew, which is what the next frame's damage is worked
     /// out against.
     watch: crate::damage::Watch,
@@ -2767,7 +2773,12 @@ impl Screen {
                 continue;
             }
             let scale = rule.map_or(1.0, MonitorRule::scale_factor);
-            let (width, height) = backend.size();
+            let transform = rule.map_or(Transform::Normal, |rule| rule.transform);
+            // The monitor as it is read: a 1024x768 connector turned a
+            // quarter is 768 wide and 1024 tall, which is Hyprland's
+            // `m_transformedSize`. Everything is drawn at this size and
+            // turned into the connector's own on the way out.
+            let (width, height) = transform.size(backend.size());
             let canvas =
                 Canvas::new(width, height).map_err(|error| format!("a canvas: {error:?}"))?;
             let backdrop = compositor_render::Backdrop::new(width, height)
@@ -2776,8 +2787,21 @@ impl Screen {
             // And if this screen can be pointed at what that renderer draws
             // into, point it: the frame is then shown where it was made,
             // and nothing of it crosses between the device and the guest.
+            //
+            // Not a turned one: the GPU draws the monitor upright, and a
+            // card pointed at that would show it upright on a monitor that
+            // is not. Its frame is fetched and turned on the way to the
+            // card instead, as the software canvas's is.
             if let Some(held) = gpu.as_mut() {
-                adopt(held, backend.as_mut(), (width, height), &name, report);
+                if transform == Transform::Normal {
+                    adopt(held, backend.as_mut(), (width, height), &name, report);
+                } else {
+                    report(&format!(
+                        "hyprix: {name}: the monitor is turned (transform {}), so the GPU's frame \
+                         is fetched and turned rather than shown where it was drawn",
+                        transform.value()
+                    ));
+                }
             }
             // The monitor is laid out in logical pixels: a 1024x768 screen
             // at `scale = 2` tiles its windows in 512x384, as Hyprland's
@@ -2801,6 +2825,7 @@ impl Screen {
                 monitor: MonitorId(id),
                 rect: Rect::new(at_x, at_y, logical_width, logical_height),
                 scale,
+                transform,
                 // Nothing drawn yet, which is what makes a screen's first
                 // frame a whole one.
                 watch: crate::damage::Watch::default(),
@@ -2832,14 +2857,19 @@ impl Screen {
         )
     }
 
-    /// The screen's size in pixels.
+    /// The screen's size in pixels, as it is read: the canvas's, which for a
+    /// monitor turned a quarter is the connector's mode with its width and
+    /// height exchanged.
     fn size(&self) -> (u32, u32) {
-        self.backend.size()
+        self.transform.size(self.backend.size())
     }
 
     /// What to say about it in the compositor's log line.
     fn describe(&self) -> String {
-        self.backend.describe()
+        match self.transform {
+            Transform::Normal => self.backend.describe(),
+            turned => format!("{} transform {}", self.backend.describe(), turned.value()),
+        }
     }
 
     /// What `wl_output` tells a client this screen is.
@@ -2849,8 +2879,12 @@ impl Screen {
     /// the protocol's integer one, rounded up from a fractional scale: a
     /// client drawing at 2 on a screen at 1.5 is scaled down to fit, which
     /// is what a compositor without `wp_fractional_scale_v1` can offer.
+    ///
+    /// The mode is the connector's own, never turned: `wl_output.mode` is
+    /// the hardware's, and the transform beside it is what says how it
+    /// stands.
     fn output(&self) -> compositor_server::Output {
-        let (width, height) = self.size();
+        let (width, height) = self.backend.size();
         #[expect(
             clippy::cast_possible_truncation,
             reason = "a monitor's scale is a small positive number"
@@ -2862,6 +2896,7 @@ impl Screen {
             width: i32::try_from(width).unwrap_or(0),
             height: i32::try_from(height).unwrap_or(0),
             scale,
+            transform: self.transform.value().cast_signed(),
             name: self.name.clone(),
             // Aquamarine's, which is what a client reads: the description,
             // and the connector in brackets after it.
@@ -3746,11 +3781,28 @@ fn take_shot(shot: &Shot, screens: &mut [Screen], slots: &mut [Slot]) {
 
 /// How large the screenshot is: the screen, or the part of it asked for,
 /// clipped to the screen.
+///
+/// Turned, for a turned monitor: a screenshot is the screen's buffer as the
+/// connector scans it out, which is what Hyprland copies (its screencopy
+/// frame is `m_pixelSize`, and a region's size is exchanged for a quarter
+/// turn) and what `grim` expects, since it turns each output's picture by
+/// the `wl_output.transform` it was told.
 fn shot_size(screens: &[Screen], output: usize, region: Option<ServerRect>) -> Option<(u32, u32)> {
     let screen = screens.get(output)?;
+    let area = shot_area(screen, region)?;
+    let (width, height) = (
+        u32::try_from(area.width).ok()?,
+        u32::try_from(area.height).ok()?,
+    );
+    Some(screen.transform.size((width, height)))
+}
+
+/// The part of the screen a screenshot is of, in the canvas's pixels --
+/// the monitor as it is read -- or `None` for a part that is not on it.
+fn shot_area(screen: &Screen, region: Option<ServerRect>) -> Option<Rect> {
     let (width, height) = (screen.canvas.width(), screen.canvas.height());
     let Some(region) = region else {
-        return Some((width, height));
+        return Some(Rect::new(0, 0, i64::from(width), i64::from(height)));
     };
     let (x, y) = (region.x.max(0), region.y.max(0));
     let wanted = |start: i32, size: i32, limit: u32| -> u32 {
@@ -3762,7 +3814,7 @@ fn shot_size(screens: &[Screen], output: usize, region: Option<ServerRect>) -> O
         wanted(x, region.width, width),
         wanted(y, region.height, height),
     );
-    (w > 0 && h > 0).then_some((w, h))
+    (w > 0 && h > 0).then(|| Rect::new(i64::from(x), i64::from(y), i64::from(w), i64::from(h)))
 }
 
 /// Write the screen into the client's buffer, row by row.
@@ -3785,15 +3837,34 @@ fn copy_screen(
     let Some(screen) = screens.get(output) else {
         return false;
     };
-    // The software canvas is the frame; a GPU's frame is not there, and
-    // what was fetched of it for the screen is the screen's own buffer.
-    let (from, stride) = match screen.gpu {
-        Some(_) => (screen.backend.drawn(), screen.backend.stride() as usize),
-        None => (screen.canvas.data(), screen.canvas.width() as usize * 4),
+    let Some(area) = shot_area(screen, region) else {
+        return false;
     };
-    let (left, top) = region.map_or((0, 0), |rect| {
-        (rect.x.max(0) as usize * 4, rect.y.max(0) as usize)
-    });
+    let logical = (
+        i64::from(screen.canvas.width()),
+        i64::from(screen.canvas.height()),
+    );
+    // Where the part asked for is in the screen's buffer, which for a
+    // turned monitor is not where it is on the canvas.
+    let placed = compositor_render::transform::rect(screen.transform, logical, area);
+    // The software canvas is the frame; a GPU's frame is not there, and
+    // what was fetched of it for the screen is the screen's own buffer,
+    // turned already.
+    let (from, stride, (left, top)) = match screen.gpu {
+        Some(_) => (
+            screen.backend.drawn(),
+            screen.backend.stride() as usize,
+            (placed.x.max(0) as usize * 4, placed.y.max(0) as usize),
+        ),
+        None => (
+            screen.canvas.data(),
+            screen.canvas.width() as usize * 4,
+            (area.x.max(0) as usize * 4, area.y.max(0) as usize),
+        ),
+    };
+    // A turned canvas is turned into the client's buffer on the way, as it
+    // is into the screen's.
+    let turned = screen.gpu.is_none() && screen.transform != Transform::Normal;
     let Some(slot) = slots.get_mut(client) else {
         return false;
     };
@@ -3816,6 +3887,30 @@ fn copy_screen(
     let (offset, to_stride) = (shape.offset.max(0) as usize, shape.stride.max(0) as usize);
     if to_stride < row {
         return false;
+    }
+    if turned {
+        let Some(bytes) = into.get_mut(offset..) else {
+            return false;
+        };
+        let Ok(mut target) = compositor_render::Target::new(
+            bytes,
+            width,
+            height,
+            u32::try_from(to_stride).unwrap_or(0),
+        ) else {
+            return false;
+        };
+        compositor_render::transform::copy(
+            screen.transform,
+            logical,
+            from,
+            stride,
+            (0, 0),
+            area,
+            &mut target,
+            (placed.x, placed.y),
+        );
+        return true;
     }
     for y in 0..height as usize {
         let at = (top + y) * stride + left;
@@ -4155,10 +4250,25 @@ fn arrange(
             report("hyprix: a program asked for a screen to be turned off, which `dpms` does");
             return false;
         }
-        if let Some((width, height)) = wanted.size
-            && (i64::from(width), i64::from(height)) != (screen.rect.width, screen.rect.height)
+        // The mode published is the connector's, never turned or scaled,
+        // so that is what a program naming it names.
+        let (width, height) = screen.backend.size();
+        if let Some(size) = wanted.size
+            && (i64::from(size.0), i64::from(size.1)) != (i64::from(width), i64::from(height))
         {
             report("hyprix: a program asked for a mode this screen does not have");
+            return false;
+        }
+        // A monitor is turned by its `monitor =` line, once, when its
+        // canvas is made at the turned size; turning it while it runs would
+        // mean making them again, which this does not do.
+        if let Some(transform) = wanted.transform
+            && transform != screen.transform.value().cast_signed()
+        {
+            report(
+                "hyprix: a program asked for a screen to be turned, which its `monitor =` line's \
+                 `transform` does",
+            );
             return false;
         }
     }
@@ -4815,9 +4925,11 @@ fn lock_changed(
             continue;
         }
         let _ = held.surfaces.insert(*output, (*lock_surface, *surface));
-        // The size it must draw at, which is the screen's own.
+        // The size it must draw at, which is the screen's own as it is
+        // read: a turned monitor's lock is drawn upright, like everything
+        // else on it.
         if let (Some(screen), Some(slot)) = (screens.get(*output), slots.get_mut(index)) {
-            let (width, height) = screen.backend.size();
+            let (width, height) = screen.size();
             slot.client_mut()
                 .configure_lock_surface(*lock_surface, (width, height));
         }

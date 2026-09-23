@@ -5,7 +5,8 @@ use std::collections::BTreeMap;
 use compositor_layout::Rect;
 use compositor_layout::{MonitorLayout, WindowId};
 use compositor_render::{
-    Backdrop, Canvas, Damage, Format, LayerFrame, Painter, Style, Surface, Target, render_onto,
+    Backdrop, Canvas, Damage, Format, LayerFrame, Painter, Style, Surface, Target, Transform,
+    render_onto,
 };
 use compositor_wire::ObjectId;
 
@@ -39,6 +40,13 @@ pub struct Output<'a> {
     /// Everything above the renderer works in logical pixels, and this is
     /// where they become the screen's own.
     pub scale: f64,
+    /// How the monitor is turned: `monitor = ..., transform, 1`.
+    ///
+    /// The frame is composed upright on a canvas the size of the monitor as
+    /// it is read, and turned only here, as [`shown`] puts it in the
+    /// screen's buffer; `present` is in the canvas's pixels and becomes the
+    /// buffer's there too.
+    pub transform: Transform,
     /// Where the pointer is and what it looks like, or `None` for a screen
     /// with no pointer on it.
     pub cursor: Option<Cursor>,
@@ -454,6 +462,12 @@ fn composed<P: Painter>(painter: &mut P, backdrop: &mut P::Backdrop, scene: &Sce
 /// same rectangles, read back and written where the software canvas would
 /// have written them, so everything after this -- the night-light's ramps,
 /// the flip, a screenshot -- sees the frame it always saw.
+///
+/// A turned monitor's frame is turned here and nowhere else: each pixel of
+/// `present` goes where the transform sends it in the screen's buffer, and
+/// the ramps and the card are given the damage in the buffer's pixels. An
+/// upright one takes the first branch of each `match` below, which is the
+/// whole of what it did before monitors could be turned.
 fn shown(target: &mut Output<'_>) -> Result<(), String> {
     let Output {
         canvas,
@@ -461,10 +475,16 @@ fn shown(target: &mut Output<'_>) -> Result<(), String> {
         gpu,
         gamma,
         present,
+        transform,
         ..
     } = target;
+    let transform = *transform;
     let (width, height) = backend.size();
     let stride = backend.stride();
+    // The frame's own size, which a quarter turn makes the buffer's
+    // exchanged.
+    let (across, down) = transform.size((width, height));
+    let logical = (i64::from(across), i64::from(down));
     match gpu.as_deref_mut() {
         Some(gpu) => {
             gpu.canvas
@@ -476,31 +496,81 @@ fn shown(target: &mut Output<'_>) -> Result<(), String> {
             // to pixels on their way out, and the only pixels this
             // compositor can reach are the ones it fetches.
             if !backend.adopted() || gamma.is_some() {
-                let bounds = Rect::new(0, 0, i64::from(width), i64::from(height));
+                let bounds = Rect::new(0, 0, logical.0, logical.1);
                 for &rect in present.clipped(bounds).rects() {
                     let pixels = gpu
                         .canvas
                         .read(rect)
                         .map_err(|error| format!("{GPU_FAILED}{error}"))?;
-                    fetched(backend.buffer(), stride, rect, &pixels);
+                    match transform {
+                        Transform::Normal => fetched(backend.buffer(), stride, rect, &pixels),
+                        turned => fetched_turned(
+                            Target::new(backend.buffer(), width, height, stride),
+                            turned,
+                            logical,
+                            rect,
+                            &pixels,
+                        )?,
+                    }
                 }
             }
         }
         None => {
             let mut screen = Target::new(backend.buffer(), width, height, stride)
                 .map_err(|error| format!("the screen's buffer is not one: {error:?}"))?;
-            canvas
-                .present(&mut screen, present)
-                .map_err(|error| format!("the frame does not fit the screen: {error:?}"))?;
+            match transform {
+                Transform::Normal => canvas.present(&mut screen, present),
+                turned => canvas
+                    .present_transformed(&mut screen, present, turned)
+                    .map(|_| ()),
+            }
+            .map_err(|error| format!("the frame does not fit the screen: {error:?}"))?;
         }
     }
+    // What the buffer was given, in its own pixels: the frame's damage for
+    // an upright monitor, and that damage turned for one that is not.
+    let turned_damage;
+    let written: &Damage = match transform {
+        Transform::Normal => present,
+        turned => {
+            let inside = present.clipped(Rect::new(0, 0, logical.0, logical.1));
+            turned_damage = compositor_render::transform::damage(turned, logical, &inside);
+            &turned_damage
+        }
+    };
     // The night-light's ramps, over what was drawn: on hardware the
     // connector does this, and here the compositor does -- the same picture
     // by a slower road.
     if let Some(gamma) = gamma {
-        gamma.apply(backend.buffer(), stride, present);
+        gamma.apply(backend.buffer(), stride, written);
     }
-    backend.present(present).map_err(|error| error.to_string())
+    backend.present(written).map_err(|error| error.to_string())
+}
+
+/// Write `pixels`, the rows of `rect` of a turned monitor's frame as the GPU
+/// gave them back, into the screen's buffer, each where `transform` sends
+/// it. `logical` is the whole frame's size, which the turn is about.
+fn fetched_turned(
+    screen: Result<Target<'_>, compositor_render::Error>,
+    transform: Transform,
+    logical: (i64, i64),
+    rect: Rect,
+    pixels: &[u8],
+) -> Result<(), String> {
+    let mut screen =
+        screen.map_err(|error| format!("the screen's buffer is not one: {error:?}"))?;
+    let row = usize::try_from(rect.width).unwrap_or(0).saturating_mul(4);
+    compositor_render::transform::copy(
+        transform,
+        logical,
+        pixels,
+        row,
+        (rect.x, rect.y),
+        rect,
+        &mut screen,
+        (0, 0),
+    );
+    Ok(())
 }
 
 /// Write `pixels`, `rect`'s rows packed, into a screen's buffer at `rect`.
