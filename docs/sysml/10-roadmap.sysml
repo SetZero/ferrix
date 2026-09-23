@@ -367,10 +367,10 @@ package FerrixRoadmap {
              * has no -U and cannot open a local socket at all. */
     }
 
-    #inProgress requirement <'SD'> stageDynamicLinking : Stage {
+    #implemented requirement <'SD'> stageDynamicLinking : Stage {
         attribute :>> number = 11;
-        attribute :>> status = StageStatus::InProgress;
-        attribute :>> size = "39 points, 33 spent; ferrousli's port about 34, spent";
+        attribute :>> status = StageStatus::Done;
+        attribute :>> size = "39 points, spent; ferrousli's port about 34, spent";
         doc /* Placed after Networking without a number of its own: nothing
              * on rustc's path needs it, since std targets static musl. The
              * kernel half loads ET_DYN at a base with relative relocations
@@ -389,9 +389,9 @@ package FerrixRoadmap {
              * with symbol versions, COPY relocations, every TLS form and
              * dlfcn.h, and a libc.so.6 carrying glibc's versions.
              * ferrousli's own port to AArch64 and ARMv7-A, which the
-             * customer put inside this stage, is done (2026-09-23): its whole
-             * suite passes on both under qemu-user. Left: 6 points, the
-             * loader and the version tables on AArch64 and ARMv7-A. */
+             * customer put inside this stage, and then the loader and the
+             * version tables there, completed the exit on all three
+             * architectures (2026-09-23). */
     }
 
     #implemented requirement <'S12'> stage12BtrfsWrite : Stage {

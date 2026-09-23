@@ -190,23 +190,21 @@ pub(crate) const FERROUSLI: &str = "ferrousli";
 ///
 /// # Errors
 ///
-/// An architecture ferrousli does not build for yet, a Windows host (the
-/// script links with the host's Linux `cc`), and a failed build.
+/// A Windows host (the script is bash with binutils' `nm`, and links x86-64's
+/// with the host's Linux `cc`), and a failed build.
 pub(crate) fn ferrousli_shared(arch: Arch) -> Result<PathBuf> {
-    if arch != Arch::X86_64 {
-        return Err(Error::new(format!(
-            "ferrousli's loader and libc.so.6 are built for x86_64 only, not for {arch}"
-        )));
-    }
     if cfg!(windows) {
         return Err(Error::new(
-            "ferrousli's libc.so.6 is linked with a Linux host's cc; run this on Linux",
+            "ferrousli's libc.so.6 is built by a bash script with a Linux host's tools; run this on Linux",
         ));
     }
     let out = paths::build_dir(arch).join("ferrousli-shared");
     let ferrousli = paths::workspace_root().join("ferrousli");
     let mut command = std::process::Command::new("bash");
-    let _ = command.arg("tools/build-shared.sh").arg(&out);
+    let _ = command
+        .arg("tools/build-shared.sh")
+        .args(["--arch", arch.name()])
+        .arg(&out);
     crate::ferrousli::in_ferrousli(&mut command, &ferrousli);
     cargo::run(command, "ferrousli/tools/build-shared.sh")?;
     Ok(out)

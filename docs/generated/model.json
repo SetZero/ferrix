@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "digest": "efad9f4b63491f2df51c2cc5b5c2f3fe9ee4c2b3c92481378d44a329e66d8bb9",
+  "digest": "4ec781dacd9d388ca18a9fbf910bb4762d6fe3eb5933c5e10a8020d30b0941aa",
   "files": [
     {
       "path": "docs/sysml/00-lifecycle.sysml",
@@ -59,8 +59,8 @@
     "packages": 16,
     "elements": 1629,
     "maturity": {
-      "implemented": 258,
-      "inProgress": 8,
+      "implemented": 259,
+      "inProgress": 7,
       "writtenAhead": 3,
       "planned": 41
     },
@@ -16747,8 +16747,8 @@
           "kind": "requirement",
           "shortName": "SD",
           "type": "Stage",
-          "maturity": "inProgress",
-          "doc": "Placed after Networking without a number of its own: nothing on rustc's path needs it, since std targets static musl. The kernel half loads ET_DYN at a base with relative relocations and honours PT_INTERP with AT_BASE in the auxiliary vector (5 points); ferrousli's loader, ld.so with libferrousli.so, binds every relocation type of the three architectures at load, with dynamic TLS and dlfcn.h (21); then glibc's symbol versions and SONAMEs, so a glibc-linked binary loads ferrousli in glibc's place (13). No vDSO, no 32-bit ABI. Exit: a distribution's dynamic glibc busybox runs stage 7's test-shell script with its own ld-linux, then with ferrousli's loader in glibc's place, on all three architectures.\n\nThe first half is met on all three architectures and the second on x86-64 (2026-09-21): the kernel half, the loader with symbol versions, COPY relocations, every TLS form and dlfcn.h, and a libc.so.6 carrying glibc's versions. ferrousli's own port to AArch64 and ARMv7-A, which the customer put inside this stage, is done (2026-09-23): its whole suite passes on both under qemu-user. Left: 6 points, the loader and the version tables on AArch64 and ARMv7-A.",
+          "maturity": "implemented",
+          "doc": "Placed after Networking without a number of its own: nothing on rustc's path needs it, since std targets static musl. The kernel half loads ET_DYN at a base with relative relocations and honours PT_INTERP with AT_BASE in the auxiliary vector (5 points); ferrousli's loader, ld.so with libferrousli.so, binds every relocation type of the three architectures at load, with dynamic TLS and dlfcn.h (21); then glibc's symbol versions and SONAMEs, so a glibc-linked binary loads ferrousli in glibc's place (13). No vDSO, no 32-bit ABI. Exit: a distribution's dynamic glibc busybox runs stage 7's test-shell script with its own ld-linux, then with ferrousli's loader in glibc's place, on all three architectures.\n\nThe first half is met on all three architectures and the second on x86-64 (2026-09-21): the kernel half, the loader with symbol versions, COPY relocations, every TLS form and dlfcn.h, and a libc.so.6 carrying glibc's versions. ferrousli's own port to AArch64 and ARMv7-A, which the customer put inside this stage, and then the loader and the version tables there, completed the exit on all three architectures (2026-09-23).",
           "source": {
             "file": "docs/sysml/10-roadmap.sysml",
             "line": 370
@@ -16770,7 +16770,7 @@
               "qualifiedName": "FerrixRoadmap::stageDynamicLinking",
               "kind": "attribute",
               "redefines": "status",
-              "value": "StageStatus::InProgress",
+              "value": "StageStatus::Done",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
                 "line": 372
@@ -16781,7 +16781,7 @@
               "qualifiedName": "FerrixRoadmap::stageDynamicLinking",
               "kind": "attribute",
               "redefines": "size",
-              "value": "\"39 points, 33 spent; ferrousli's port about 34, spent\"",
+              "value": "\"39 points, spent; ferrousli's port about 34, spent\"",
               "source": {
                 "file": "docs/sysml/10-roadmap.sysml",
                 "line": 373
@@ -24228,8 +24228,8 @@
           "id": "FerrixRoadmap::stageDynamicLinking",
           "label": "SD  Stage dynamic linking",
           "kind": "requirement",
-          "sublabel": "InProgress · 39 points, 33 spent; ferrousli's port about 34, spent",
-          "maturity": "inProgress"
+          "sublabel": "Done · 39 points, spent; ferrousli's port about 34, spent",
+          "maturity": "implemented"
         },
         {
           "id": "FerrixRoadmap::stage12BtrfsWrite",
@@ -24905,7 +24905,7 @@
           "id": "FerrixRoadmap::stageDynamicLinking",
           "label": "SD  Stage dynamic linking",
           "kind": "requirement",
-          "maturity": "inProgress"
+          "maturity": "implemented"
         },
         {
           "id": "FerrixStructure::Ferrix::userland",

@@ -65,6 +65,8 @@ pub mod fnmatch;
 pub mod fortify;
 pub mod futex;
 pub mod getopt;
+#[cfg(target_arch = "arm")]
+pub mod glibc_time64;
 pub mod glob;
 pub mod growable;
 pub mod grp;

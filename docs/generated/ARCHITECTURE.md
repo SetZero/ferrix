@@ -100,12 +100,12 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixAssurance` | `11-assurance.sysml` | docs/RELIABILITY.md and docs/ASSEMBLY.md: the quality gates, what each one verifies, and what the tests can actually reach. The gates cargo xtask check runs are in CI. Of the xtask boot gates, CI runs test-boot and test-rustc; the ones that need a binary the repository does not carry, a disk judged on the host or a screendump run in the landing gates of docs/BACKLOG.md instead (docs/ROADMAP.md, Continuously). |
 | `FerrixViews` | `12-views.sysml` | How to read the one model as two: what runs today, and what the roadmap still owes. The filters key on the lifecycle keywords every element carries. |
 
-13 files, 16 packages, 1629 elements, 194 relations. Model digest `efad9f4b63491f2d`.
+13 files, 16 packages, 1629 elements, 194 relations. Model digest `4ec781dacd9d388c`.
 
 | Maturity | Elements | Meaning |
 | --- | ---: | --- |
-| `#implemented` | 258 | The code exists and the QEMU boot test exercises it on every architecture it applies to. |
-| `#inProgress` | 8 | The owning stage has started; part of the element runs. |
+| `#implemented` | 259 | The code exists and the QEMU boot test exercises it on every architecture it applies to. |
+| `#inProgress` | 7 | The owning stage has started; part of the element runs. |
 | `#writtenAhead` | 3 | A libs/ crate exists and passes its host tests, but nothing in kernel/ calls it yet. |
 | `#planned` | 41 | Only the design exists, in docs/ARCHITECTURE.md. Nothing stands in for it. |
 | `@deferred` | 20 | Work a finished stage explicitly left behind, carrying the reason that stage gave. |
@@ -2814,7 +2814,7 @@ flowchart TB
   n11_FerrixRoadmap_stage10UserspaceDrivers["S10  Stage 10 userspace drivers<br>Done · month"]
   n12_FerrixRoadmap_stage11BtrfsRead["S11  Stage 11 btrfs read<br>Done · month"]
   n13_FerrixRoadmap_stageNetworking["SN  Stage networking<br>Done · month"]
-  n14_FerrixRoadmap_stageDynamicLinking["SD  Stage dynamic linking<br>InProgress · 39 points, 33 spent; ferrousli's port about 34, spent"]
+  n14_FerrixRoadmap_stageDynamicLinking["SD  Stage dynamic linking<br>Done · 39 points, spent; ferrousli's port about 34, spent"]
   n15_FerrixRoadmap_stage12BtrfsWrite["S12  Stage 12 btrfs write<br>Done · about 60 points, spent"]
   n16_FerrixRoadmap_stage13Isolation["S13  Stage 13 isolation<br>InProgress · month"]
   n17_FerrixRoadmap_stage14RealTime["S14  Stage 14 real time<br>Planned · month"]
@@ -2863,8 +2863,8 @@ flowchart TB
   classDef implemented fill:#dceae2,stroke:#2c6e4e,color:#16191d
   classDef inProgress fill:#dae5f0,stroke:#2a5f8f,color:#16191d
   classDef planned fill:#e4e7ea,stroke:#6a737e,color:#16191d
-  class n0_FerrixRoadmap_stage0Foundation,n1_FerrixRoadmap_stage1Boot,n2_FerrixRoadmap_stage2Memory,n3_FerrixRoadmap_stage3TrapsInterruptsTime,n4_FerrixRoadmap_stage4Smp,n5_FerrixRoadmap_armv7aPort,n6_FerrixRoadmap_stage5Scheduler,n7_FerrixRoadmap_stage6UserMode,n8_FerrixRoadmap_stage7LinuxAbi,n9_FerrixRoadmap_stage8Vfs,n10_FerrixRoadmap_stage9NativeAbi,n11_FerrixRoadmap_stage10UserspaceDrivers,n12_FerrixRoadmap_stage11BtrfsRead,n13_FerrixRoadmap_stageNetworking,n15_FerrixRoadmap_stage12BtrfsWrite,n19_FerrixRoadmap_stage16Rustc,n20_FerrixRoadmap_stage17DisplayAndInput,n21_FerrixRoadmap_stage18Compositor implemented
-  class n14_FerrixRoadmap_stageDynamicLinking,n16_FerrixRoadmap_stage13Isolation,n18_FerrixRoadmap_stage15Userland,n22_FerrixRoadmap_stage19HyprlandFidelity,n25_FerrixRoadmap_stage20SelfHosting inProgress
+  class n0_FerrixRoadmap_stage0Foundation,n1_FerrixRoadmap_stage1Boot,n2_FerrixRoadmap_stage2Memory,n3_FerrixRoadmap_stage3TrapsInterruptsTime,n4_FerrixRoadmap_stage4Smp,n5_FerrixRoadmap_armv7aPort,n6_FerrixRoadmap_stage5Scheduler,n7_FerrixRoadmap_stage6UserMode,n8_FerrixRoadmap_stage7LinuxAbi,n9_FerrixRoadmap_stage8Vfs,n10_FerrixRoadmap_stage9NativeAbi,n11_FerrixRoadmap_stage10UserspaceDrivers,n12_FerrixRoadmap_stage11BtrfsRead,n13_FerrixRoadmap_stageNetworking,n14_FerrixRoadmap_stageDynamicLinking,n15_FerrixRoadmap_stage12BtrfsWrite,n19_FerrixRoadmap_stage16Rustc,n20_FerrixRoadmap_stage17DisplayAndInput,n21_FerrixRoadmap_stage18Compositor implemented
+  class n16_FerrixRoadmap_stage13Isolation,n18_FerrixRoadmap_stage15Userland,n22_FerrixRoadmap_stage19HyprlandFidelity,n25_FerrixRoadmap_stage20SelfHosting inProgress
   class n17_FerrixRoadmap_stage14RealTime,n23_FerrixRoadmap_stage21BareMetalGpu,n24_FerrixRoadmap_stage22Steam planned
 ```
 
@@ -2886,7 +2886,7 @@ flowchart TB
 | `S10` | 10 | Stage 10 userspace drivers | Done | month | `#implemented` |
 | `S11` | 11 | Stage 11 btrfs read | Done | month | `#implemented` |
 | `SN` | 11 | Stage networking | Done | month | `#implemented` |
-| `SD` | 11 | Stage dynamic linking | InProgress | 39 points, 33 spent; ferrousli's port about 34, spent | `#inProgress` |
+| `SD` | 11 | Stage dynamic linking | Done | 39 points, spent; ferrousli's port about 34, spent | `#implemented` |
 | `S12` | 12 | Stage 12 btrfs write | Done | about 60 points, spent | `#implemented` |
 | `S13` | 13 | Stage 13 isolation | InProgress | month | `#inProgress` |
 | `S14` | 14 | Stage 14 real time | Planned | month | `#planned` |
@@ -3051,11 +3051,11 @@ Placed after stage 11 without a number of its own, as the ARMv7-A port sits afte
 
 ### SD — Stage dynamic linking
 
-**InProgress**  ·  size 39 points, 33 spent; ferrousli's port about 34, spent  ·  `#inProgress`
+**Done**  ·  size 39 points, spent; ferrousli's port about 34, spent  ·  `#implemented`
 
 Placed after Networking without a number of its own: nothing on rustc's path needs it, since std targets static musl. The kernel half loads ET_DYN at a base with relative relocations and honours PT_INTERP with AT_BASE in the auxiliary vector (5 points); ferrousli's loader, ld.so with libferrousli.so, binds every relocation type of the three architectures at load, with dynamic TLS and dlfcn.h (21); then glibc's symbol versions and SONAMEs, so a glibc-linked binary loads ferrousli in glibc's place (13). No vDSO, no 32-bit ABI. Exit: a distribution's dynamic glibc busybox runs stage 7's test-shell script with its own ld-linux, then with ferrousli's loader in glibc's place, on all three architectures.
 
-The first half is met on all three architectures and the second on x86-64 (2026-09-21): the kernel half, the loader with symbol versions, COPY relocations, every TLS form and dlfcn.h, and a libc.so.6 carrying glibc's versions. ferrousli's own port to AArch64 and ARMv7-A, which the customer put inside this stage, is done (2026-09-23): its whole suite passes on both under qemu-user. Left: 6 points, the loader and the version tables on AArch64 and ARMv7-A.
+The first half is met on all three architectures and the second on x86-64 (2026-09-21): the kernel half, the loader with symbol versions, COPY relocations, every TLS form and dlfcn.h, and a libc.so.6 carrying glibc's versions. ferrousli's own port to AArch64 and ARMv7-A, which the customer put inside this stage, and then the loader and the version tables there, completed the exit on all three architectures (2026-09-23).
 
 **Allocated to: **`ferrix.kernel.syscalls` and `ferrix.userland`
 
@@ -3391,8 +3391,8 @@ flowchart LR
   classDef implemented fill:#dceae2,stroke:#2c6e4e,color:#16191d
   classDef inProgress fill:#dae5f0,stroke:#2a5f8f,color:#16191d
   classDef planned fill:#e4e7ea,stroke:#6a737e,color:#16191d
-  class n0_FerrixRoadmap_stage1Boot,n2_FerrixRoadmap_stage2Memory,n3_FerrixStructure_Kernel_mm,n4_FerrixStructure_Kernel_vmap,n5_FerrixRoadmap_stage3TrapsInterruptsTime,n6_FerrixStructure_Kernel_trap,n7_FerrixStructure_Kernel_irq,n8_FerrixStructure_Kernel_timer,n9_FerrixRoadmap_stage4Smp,n10_FerrixStructure_Kernel_smp,n11_FerrixRoadmap_armv7aPort,n13_FerrixRoadmap_stage5Scheduler,n14_FerrixStructure_Kernel_sched,n15_FerrixStructure_Kernel_tasks,n16_FerrixRoadmap_stage6UserMode,n17_FerrixStructure_Kernel_vm,n18_FerrixRoadmap_stage7LinuxAbi,n19_FerrixStructure_Kernel_syscalls,n20_FerrixStructure_Kernel_signals,n21_FerrixStructure_Kernel_futex,n22_FerrixRoadmap_stage8Vfs,n23_FerrixStructure_Kernel_vfs,n24_FerrixStructure_Kernel_filesystems,n25_FerrixRoadmap_stage9NativeAbi,n26_FerrixStructure_Kernel_native,n27_FerrixRoadmap_stage10UserspaceDrivers,n30_FerrixRoadmap_stage11BtrfsRead,n31_FerrixStructure_Kernel_blockCore,n32_FerrixRoadmap_stageNetworking,n33_FerrixStructure_Kernel_netCore,n42_FerrixRoadmap_stage16Rustc,n43_FerrixStructure_Userland_rustc implemented
-  class n34_FerrixRoadmap_stageDynamicLinking,n35_FerrixStructure_Ferrix_userland,n36_FerrixRoadmap_stage13Isolation,n41_FerrixRoadmap_stage15Userland inProgress
+  class n0_FerrixRoadmap_stage1Boot,n2_FerrixRoadmap_stage2Memory,n3_FerrixStructure_Kernel_mm,n4_FerrixStructure_Kernel_vmap,n5_FerrixRoadmap_stage3TrapsInterruptsTime,n6_FerrixStructure_Kernel_trap,n7_FerrixStructure_Kernel_irq,n8_FerrixStructure_Kernel_timer,n9_FerrixRoadmap_stage4Smp,n10_FerrixStructure_Kernel_smp,n11_FerrixRoadmap_armv7aPort,n13_FerrixRoadmap_stage5Scheduler,n14_FerrixStructure_Kernel_sched,n15_FerrixStructure_Kernel_tasks,n16_FerrixRoadmap_stage6UserMode,n17_FerrixStructure_Kernel_vm,n18_FerrixRoadmap_stage7LinuxAbi,n19_FerrixStructure_Kernel_syscalls,n20_FerrixStructure_Kernel_signals,n21_FerrixStructure_Kernel_futex,n22_FerrixRoadmap_stage8Vfs,n23_FerrixStructure_Kernel_vfs,n24_FerrixStructure_Kernel_filesystems,n25_FerrixRoadmap_stage9NativeAbi,n26_FerrixStructure_Kernel_native,n27_FerrixRoadmap_stage10UserspaceDrivers,n30_FerrixRoadmap_stage11BtrfsRead,n31_FerrixStructure_Kernel_blockCore,n32_FerrixRoadmap_stageNetworking,n33_FerrixStructure_Kernel_netCore,n34_FerrixRoadmap_stageDynamicLinking,n42_FerrixRoadmap_stage16Rustc,n43_FerrixStructure_Userland_rustc implemented
+  class n35_FerrixStructure_Ferrix_userland,n36_FerrixRoadmap_stage13Isolation,n41_FerrixRoadmap_stage15Userland inProgress
   class n37_FerrixStructure_Kernel_namespaces,n38_FerrixStructure_Kernel_cgroups,n39_FerrixStructure_Kernel_seccomp,n40_FerrixRoadmap_stage14RealTime planned
 ```
 
@@ -3571,7 +3571,7 @@ flowchart LR
 | `S10` | `stage10UserspaceDrivers` | `allocate` and `dependency` | — | `#implemented` |
 | `S11` | `stage11BtrfsRead` | `allocate` and `dependency` | — | `#implemented` |
 | `SN` | `stageNetworking` | `allocate` and `dependency` | — | `#implemented` |
-| `SD` | `stageDynamicLinking` | `allocate` and `dependency` | — | `#inProgress` |
+| `SD` | `stageDynamicLinking` | `allocate` and `dependency` | — | `#implemented` |
 | `S12` | `stage12BtrfsWrite` | `dependency` | — | `#implemented` |
 | `S13` | `stage13Isolation` | `allocate` and `dependency` | — | `#inProgress` |
 | `S14` | `stage14RealTime` | `allocate` and `dependency` | — | `#planned` |

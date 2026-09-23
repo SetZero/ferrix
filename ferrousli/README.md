@@ -217,8 +217,8 @@ it: `ld-ferrousli: undefined symbol` names it.
 
 ## Where it stands
 
-Static programs linked at a fixed address, on x86-64, AArch64 and ARMv7-A.
-Dynamic linking, below, is x86-64 only so far.
+Static programs linked at a fixed address, and as glibc's stand-in under
+its own loader, on x86-64, AArch64 and ARMv7-A.
 
 What differs between the architectures is kept to a module each, beside the
 code that needs it: system calls and their numbers (`syscall/`, generated
@@ -294,7 +294,6 @@ because ARMv7-A's kernel builds it an old-style frame.
    compiler wrapper that builds an unmodified program against the library.
 3. **`long double` math, and with it `complex.h`'s `long double` forms.**
 4. **Dynamic linking**: a loader, then glibc's symbol versions. Both run on
-   x86-64 (below), with general-dynamic TLS and `dlfcn.h`. On AArch64 and
-   ARMv7-A the library is ported (above) and the loader and the version
-   tables are left: the loader's entry, relocations and TLS, AArch64's TLS
-   descriptors, and glibc's time64 names for ARMv7-A.
+   all three architectures (below), with general-dynamic TLS and
+   `dlfcn.h`; on ARMv7-A `libc.so.6` answers glibc's time64 names, and
+   leaves out the ones glibc keeps for a 32-bit `time_t`.

@@ -709,8 +709,25 @@ pub fn refresh_tid() {
     unsafe { self::tid(current()) }.store(tid, Ordering::Relaxed);
 }
 
+/// Where `errno` is before the process has a thread control block, on
+/// AArch64 and ARMv7-A.
+///
+/// Loaded as `libc.so.6`, this library's constructors run before the
+/// program calls `__libc_start_main`, which is what builds the first
+/// control block. `compiler_builtins` brings one to AArch64 that asks
+/// `getauxval` for the processor's features, and `getauxval` sets `errno`
+/// when it finds nothing -- which, through a thread pointer still zero,
+/// wrote below address zero. On these two the thread register reads zero
+/// until a control block is installed, so that is cheap to tell.
+#[cfg(not(target_arch = "x86_64"))]
+static EARLY_ERRNO: AtomicI32 = AtomicI32::new(0);
+
 /// The calling thread's `errno`.
 pub fn errno_location() -> *mut c_int {
+    #[cfg(not(target_arch = "x86_64"))]
+    if arch::thread_pointer() == 0 {
+        return EARLY_ERRNO.as_ptr();
+    }
     current()
         .wrapping_byte_add(offset_of!(Thread, errno))
         .cast::<c_int>()

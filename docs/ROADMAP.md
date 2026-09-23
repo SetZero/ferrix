@@ -70,10 +70,10 @@ builds its own x86-64 image. `cargo xtask test-selfhost` runs the same
 `cargo xtask build` a person runs on a Linux host inside Ferrix, with Cargo,
 from the tree and its vendored crates on a btrfs volume, and the image it
 made passes the boot test.
-Dynamic linking's exit is met on x86-64: Debian's glibc busybox runs on
-its own `ld-linux` on all three architectures, and on ferrousli's loader and
-`libc.so.6` in glibc's place on x86-64. Its Arm half waits on ferrousli's
-port to AArch64 and ARMv7-A. Stage 15 has job control and lacks a real init;
+Dynamic linking is done: Debian's glibc busybox runs on its own `ld-linux`,
+and on ferrousli's loader and `libc.so.6` in glibc's place, on all three
+architectures, since ferrousli itself was ported to AArch64 and ARMv7-A on
+2026-09-23. Stage 15 has job control and lacks a real init;
 one is designed in `docs/INIT.md`, and it waits on stage 13's cgroups, which
 the customer put first on 2026-09-23.
 Networking is done: sockets, a net core and a ring-3 virtio-net driver, with
@@ -125,7 +125,7 @@ sizes them.
 | Stage 19: the desktop's speed as it is watched (`docs/GPU.md` §3.9): an sDDF-shaped device queue 13, client pages as texture backing 8 | 21 | in progress |
 | Stage 19: XWayland 40, and `dwindle:precise_mouse_move`, the second-pass effects and the window rule `xray` about 8 | 48 | in progress |
 | After stage 19's 178: `zwp_linux_dmabuf` with a GBM-shaped allocator, and Mesa's virgl on ferrousli, for clients that draw on the GPU themselves (`docs/BACKLOG.md`) | 8, and 40 or more | not started |
-| Dynamic linking: the kernel half, ferrousli's loader, glibc's names | 39 *(33 done; the exit met on x86-64)* | in progress: 6 left |
+| ~~Dynamic linking: the kernel half, ferrousli's loader, glibc's names~~ *done 2026-09-23* | ~~39~~ | done |
 | ~~Dynamic linking: ferrousli's AArch64 and ARMv7-A port, which the customer put inside the stage on 2026-09-21~~ *done 2026-09-23* | ~~≈ 34~~ | done |
 | ~~Stage 12, btrfs write~~ *done 2026-09-21* | ~~≈ 60~~ | done |
 | Stage 13, namespaces, cgroups, seccomp | cgroups 85 (`docs/CGROUPS.md` §7: 27 for what init needs, 58 for the controllers); namespaces and seccomp unsized, the old guess for the whole stage was *month* ≈ 60 | under way: G1 done (8 of 85); its cgroups come first, as init's prerequisite (`docs/INIT.md` §0) |
@@ -3460,7 +3460,7 @@ every architecture, and by `su`, which reaches `/etc/group` only because a
 
 ---
 
-## Dynamic linking — PIE, `PT_INTERP`, a loader  ·  *39 points, 6 left; ferrousli's port, ≈ 34, done*
+## Dynamic linking — PIE, `PT_INTERP`, a loader  ·  *done 2026-09-23: 39 points, and ferrousli's port at ≈ 34*
 
 Placed after *Networking* without a number of its own, for the same reason:
 nothing on the path to `rustc` needs it, since Rust's `std` targets static
@@ -3595,15 +3595,38 @@ Three parts, in the order they can be tested:
   `dlopen`s a library, calls into it, and gets `dladdr`'s and `dlerror`'s
   answers through `libc.so.6`.
 
-  Still missing, 3 points: AArch64's TLS descriptors, and the loader's
-  entry, self-relocation and thread pointer on AArch64 and ARMv7-A, which
-  ferrousli's port (below, done 2026-09-23) no longer holds up. Lazy
-  binding is not in it:
-  everything is bound at load, as `LD_BIND_NOW` does, so there is no
-  resolver trampoline to write per architecture. And one gap in the gate:
-  clippy never sees the loader, whose binary needs the `loader` feature and
-  the musl target and so is skipped by `--all-targets`; built that way it
-  has about 140 warnings, mostly unreachable `pub` items.
+  **AArch64 and ARMv7-A, the last 3, 2026-09-23.** Each has its `_start`,
+  its hand-over to the program with `dl_fini` in `x0` or `r0`, and its
+  thread pointer, `tpidr_el0` or the kernel's `set_tls`. The load bias comes
+  from `__ehdr_start`, the one address a PC-relative instruction gives, and
+  the program headers behind it, so nothing depends on how each linker lays
+  out its GOT; self-relocation reads ARMv7-A's `REL` table as well as
+  `RELA`, and walks the dynamic table with an `if` chain, since a `match`
+  may become a jump table nothing has relocated yet. TLS is variant I there:
+  the blocks go upwards from the thread pointer, the program's first, at
+  the control block's size rounded to its alignment, which is where the
+  static linker put its local-exec variables; `__tls_get_addr` is assembly
+  on both, and AArch64's descriptors answer from static TLS as x86-64's
+  do. The Arm loaders are linked by rust-lld as plain static PIEs, needing
+  no C toolchain for either; AArch64's is built without outline atomics,
+  whose helpers bring a constructor that calls `getauxval`, which a loader
+  cannot import. The first boot found the same constructor in `libc.so.6`,
+  run by the loader before the C library has a thread: `getauxval` set
+  `errno` through a thread pointer of zero. `errno` now lives in a static
+  until the first control block exists, and the loader's Arm TLS mapping
+  keeps a zeroed page below the thread pointer, where ferrousli's control
+  block goes. Lazy binding is not in it: everything is bound at load, as
+  `LD_BIND_NOW` does, so there is no resolver trampoline to write per
+  architecture. ARMv7-A's TLS descriptors are not either, since GCC's ARM
+  code asks `__tls_get_addr` unless told otherwise.
+
+  The gate gap is closed too: `cargo xtask check --ferrousli` now runs
+  clippy on the loader for all three targets -- its binary needs the
+  `loader` feature and a musl target, so `--all-targets` never built it --
+  and on the library for the two Arm targets. The loader's ~200 findings
+  were mostly `pub` items a binary never exports and unsafe blocks holding
+  several operations, and the one real one was a field written and never
+  read.
 * **glibc's names, 13 points — 10 done on x86-64, 2026-09-21.**
   `ferrousli/tools/build-shared.sh` links `libferrousli.a` whole into a
   `libc.so.6` whose every symbol carries the version glibc gives it by
@@ -3629,12 +3652,28 @@ Three parts, in the order they can be tested:
   which rustc does unasked for an exported variable, so the copy is the one
   it uses. `_dl_start_user` and `_rtld_global` turned out to be glibc's
   business between its own `ld.so` and `libc.so.6`, which no program built
-  against it reaches, and are not needed. Left, 3 points: the AArch64 and
-  ARMv7-A tables and builds. On ARMv7-A they are more than a copy of
-  x86-64's: glibc's 32-bit programs call time64 names of their own
-  (`__clock_gettime64`, `__fstat64_time64`, `__semctl64` and the like), some
-  with glibc's layouts rather than musl's, and its old 32-bit names are left
-  out of the table rather than answered wrongly.
+  against it reaches, and are not needed.
+
+  **AArch64 and ARMv7-A, the last 3, 2026-09-23.** `build-shared.sh --arch`
+  builds either, linking `libc.so.6` with the toolchain's rust-lld, and
+  `tools/glibc-versions/{aarch64,armv7a}.txt` are read from Debian 13's
+  glibc 2.41, the one the exit's busybox came with. AArch64's is a copy of
+  x86-64's in kind. ARMv7-A's is not: a program built there with
+  `_TIME_BITS=64`, as Debian's are since its time64 transition, calls
+  glibc's own time64 names, `__clock_gettime64` for `clock_gettime` and
+  `__stat64_time64` for `stat`. `src/glibc_time64.rs` answers them: most
+  are the library's function under another name, and nine pass glibc's
+  structures, whose layouts were read from glibc's armhf headers with a
+  probe and differ from musl's -- the four `stat` calls, 112 bytes against
+  152; `semctl`, `shmctl` and `msgctl`, whose `*_ds` keep one 64-bit field
+  per time where musl keeps the kernel's halves; and `adjtimex`, whose
+  `struct timex` is the kernel's own. The names glibc keeps only for a
+  32-bit `time_t` or `off_t` -- `time`, `stat`, `lseek` and 156 more -- are
+  marked `-` in the table and left out of `libc.so.6`, so a program built
+  without 64-bit time fails to load, naming the function, instead of
+  calling one with the wrong structure. So are the time64 names whose
+  structure is handed to a callback (`glob`, `ftw`, `fts`), and
+  `__clock_adjtime64`, which musl uses for its own `struct timex`.
 
 `cargo xtask test-shell` gained `--interpreter` and `--library` on
 2026-09-21. The first puts a linker in the initramfs at the path `--init`'s own
@@ -3686,8 +3725,25 @@ the exit names, pinned by checksum.
    ```
 
    Without `--library` it stops at `ld-ferrousli: library not found:
-   libc.so.6` and 127. On AArch64 and ARMv7-A it waits on the loader's and
-   the version tables' Arm halves, 6 points, above.
+   libc.so.6` and 127.
+
+   **Met on AArch64 and ARMv7-A, 2026-09-23,** and with it the whole exit:
+   the same busybox for each, with ferrousli's loader at the path its
+   `PT_INTERP` names and ferrousli as `/lib/libc.so.6`, prints the
+   script's lines and exits 7 --
+
+   ```
+   cargo xtask test-shell --arch aarch64 --init "$D/{arch}/busybox" \
+       --interpreter ferrousli --library ferrousli
+   cargo xtask test-shell --arch armv7a --init "$D/{arch}/busybox" \
+       --interpreter ferrousli --library ferrousli
+   ```
+
+   and ARMv7-A's without `--library` stops at `ld-ferrousli: library not
+   found: libc.so.6` and 127, as x86-64's does. Before this landing the
+   check was static as well: every symbol either busybox imports is
+   defined by ferrousli's `libc.so.6` at the version it asks for, but for
+   three weak ones glibc does not define either.
 
 **Done — ferrousli on AArch64 and ARMv7-A, 2026-09-23.** The customer put
 the library's port inside this stage on 2026-09-21, at ≈ 34 points of its
@@ -3706,7 +3762,7 @@ synchronisation objects had assumed 64 bits and were the wrong size for
 C's on ARMv7-A — `pthread_cond_t`, the read-write lock and `sem_t` — and a
 timed condition wait hung on stack garbage until they were fixed.
 
-Not yet: the Arm programs built against ferrousli on Ferrix itself.
+Not yet: the Arm programs built against ferrousli statically, on Ferrix itself.
 `cargo xtask busybox` and `--init ferrousli` are x86-64 only, and CI runs
 only x86-64's suite, because the cross compilers and QEMU's user mode the
 Arm suites need are not on its runners. `docs/BACKLOG.md` has both rows.
