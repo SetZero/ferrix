@@ -366,21 +366,23 @@ mod tests {
 
     #[test]
     fn a_taken_port_costs_the_ssh_and_not_the_boot() {
+        let args_for = |port: u16| {
+            Args::parse(
+                [
+                    "run-compositor",
+                    "--ssh",
+                    &port.to_string(),
+                    "--forward",
+                    "8080:80",
+                ]
+                .into_iter()
+                .map(str::to_owned),
+            )
+            .unwrap()
+        };
         let holder = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = holder.local_addr().unwrap().port();
-        let args = Args::parse(
-            [
-                "run-compositor",
-                "--ssh",
-                &port.to_string(),
-                "--forward",
-                "8080:80",
-            ]
-            .into_iter()
-            .map(str::to_owned),
-        )
-        .unwrap();
-        let kept = checked(&args);
+        let kept = checked(&args_for(port));
         assert_eq!(kept.ssh, None, "no SSH on a port somebody else holds");
         assert_eq!(
             kept.forwards,
@@ -391,7 +393,22 @@ mod tests {
             "and no forward for it, while the others stay"
         );
         drop(holder);
-        assert_eq!(checked(&args).ssh, Some(port), "a free port is kept");
+
+        // A port let go of is free for anyone: the tests beside this one bind
+        // ports of their own, and so do other runs on the same machine, and
+        // one of them can take it before `checked` looks -- when "taken" is
+        // the right answer. So a port freed a moment ago is asked about until
+        // one is kept. A `checked` that never keeps a free port still fails
+        // every time.
+        let kept = (0..8).any(|_| {
+            let port = std::net::TcpListener::bind("127.0.0.1:0")
+                .unwrap()
+                .local_addr()
+                .unwrap()
+                .port();
+            checked(&args_for(port)).ssh == Some(port)
+        });
+        assert!(kept, "a free port is kept");
     }
 
     #[test]
