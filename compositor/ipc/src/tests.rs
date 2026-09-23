@@ -264,6 +264,7 @@ fn snapshot() -> Snapshot {
             active_workspace_name: "1".to_owned(),
             special_workspace: None,
             scale: 1.0,
+            transform: compositor_config::Transform::Normal,
             focused: true,
             description: "Headless output 1".to_owned(),
             make: "Ferrix".to_owned(),

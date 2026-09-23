@@ -1115,9 +1115,9 @@ fn monitors(flags: Flags, monitors: &[Monitor]) -> String {
             let (left, top, right, bottom) = monitor.reserved;
             out.bare("reserved", &format!("[{left}, {top}, {right}, {bottom}]"));
             out.field_scale(monitor.scale);
-            // No monitor here is turned; `wl_output.transform` is always
-            // `normal` and this is the number for it.
-            out.number("transform", 0);
+            // The `wl_output.transform` number, which is what Hyprland
+            // writes: `(int)m_transform`.
+            out.number("transform", i64::from(monitor.transform.value()));
             out.boolean("focused", monitor.focused);
             out.boolean("dpmsStatus", monitor.dpms);
             // Nothing here does variable refresh, tearing or direct
@@ -1144,7 +1144,7 @@ fn monitors(flags: Flags, monitors: &[Monitor]) -> String {
     for monitor in monitors {
         let _ = writeln!(
             text,
-            "Monitor {} (ID {}):\n\t{}x{}@{:.5} at {}x{}\n\tdescription: {}\n\tmake: {}\n\tmodel: {}\n\tserial: {}\n\tactive workspace: {} ({})\n\tspecial workspace: {} ({})\n\treserved: {} {} {} {}\n\tscale: {:.2}\n\ttransform: 0\n\tfocused: {}\n\tdpmsStatus: {}\n\tvrr: false\n\tactivelyTearing: false\n\tdisabled: false\n\tcurrentFormat: XRGB8888\n\tmirrorOf: none\n",
+            "Monitor {} (ID {}):\n\t{}x{}@{:.5} at {}x{}\n\tdescription: {}\n\tmake: {}\n\tmodel: {}\n\tserial: {}\n\tactive workspace: {} ({})\n\tspecial workspace: {} ({})\n\treserved: {} {} {} {}\n\tscale: {:.2}\n\ttransform: {}\n\tfocused: {}\n\tdpmsStatus: {}\n\tvrr: false\n\tactivelyTearing: false\n\tdisabled: false\n\tcurrentFormat: XRGB8888\n\tmirrorOf: none\n",
             monitor.name,
             monitor.id,
             monitor.width,
@@ -1168,6 +1168,7 @@ fn monitors(flags: Flags, monitors: &[Monitor]) -> String {
             monitor.reserved.2,
             monitor.reserved.3,
             monitor.scale,
+            monitor.transform.value(),
             if monitor.focused { "yes" } else { "no" },
             monitor.dpms,
         );

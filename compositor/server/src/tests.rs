@@ -2812,6 +2812,7 @@ fn desktop_client() -> Client {
         height: 1440,
         refresh: 60_000,
         scale: 2,
+        transform: 0,
         name: "DP-3".to_owned(),
         description: "Dell Inc. DELL P2418D MY3ND91J09CT (DP-3)".to_owned(),
     }]);
@@ -2869,6 +2870,64 @@ fn xdg_output_says_the_logical_size_and_the_name() {
         ],
         "position, size, name, description, done"
     );
+}
+
+/// A monitor stood on its edge, `monitor = ..., transform, 1`: the mode is
+/// still the connector's wide one, `wl_output.geometry` says how it is
+/// turned, and the logical size a bar lays itself out in is the tall one.
+///
+/// That is what Hyprland tells a client: `wl_output.mode` is `m_pixelSize`,
+/// the geometry's transform is `m_transform`, and `zxdg_output_v1` gives
+/// `m_size`, which is the transformed size divided by the scale.
+#[test]
+fn a_turned_output_says_so_and_is_laid_out_tall() {
+    let mut client = desktop_client();
+    client.set_outputs(vec![crate::Output {
+        x: 100,
+        y: 0,
+        width: 2560,
+        height: 1440,
+        refresh: 60_000,
+        scale: 2,
+        transform: core::wl_output::transform::N90.cast_signed(),
+        name: "DP-3".to_owned(),
+        description: "Dell Inc. DELL P2418D MY3ND91J09CT (DP-3)".to_owned(),
+    }]);
+    // A second `wl_output`, bound now, so that what it is told is the
+    // turned monitor's.
+    let mut bytes = bind(2, 5, "wl_output", 4, 21);
+    bytes.extend(request(
+        6,
+        compositor_protocol::xdg_output::zxdg_output_manager_v1::request::GET_XDG_OUTPUT,
+        &[ArgType::NewId, ArgType::Object { nullable: false }],
+        &[Arg::NewId(ObjectId(20)), Arg::Object(ObjectId(21))],
+    ));
+    assert_eq!(client.read(&bytes, &[]), bytes.len());
+    assert_eq!(client.fatal(), None);
+
+    let events = sent(&mut client);
+    let output: Vec<&Sent> = events
+        .iter()
+        .filter(|event| event.sender == ObjectId(21))
+        .collect();
+    assert_eq!(output[0].opcode, core::wl_output::event::GEOMETRY);
+    assert_eq!(output[0].args[7], "Int(1)", "the transform, 90");
+    assert_eq!(output[1].opcode, core::wl_output::event::MODE);
+    assert_eq!(
+        (output[1].args[1].as_str(), output[1].args[2].as_str()),
+        ("Int(2560)", "Int(1440)"),
+        "the mode is the connector's, not turned"
+    );
+    let size = events
+        .iter()
+        .find(|event| {
+            event.sender == ObjectId(20)
+                && event.opcode
+                    == compositor_protocol::xdg_output::zxdg_output_v1::event::LOGICAL_SIZE
+        })
+        .expect("a logical size");
+    // 2560x1440 turned is 1440x2560, and at scale 2 that is 720x1280.
+    assert_eq!(size.args, ["Int(720)", "Int(1280)"]);
 }
 
 /// `wp_presentation` answers a feedback when the frame is presented, and
@@ -3457,6 +3516,7 @@ fn watching_client() -> Client {
         height: 1080,
         refresh: 60_000,
         scale: 1,
+        transform: 0,
         name: "DP-1".to_owned(),
         description: "Dell Inc. DELL U2415 XKV0P9BE2GLU (DP-1)".to_owned(),
     }]);

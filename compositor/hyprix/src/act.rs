@@ -757,6 +757,7 @@ mod tests {
         let _changes = state
             .add_monitor(Monitor {
                 scale: 1.0,
+                transform: Default::default(),
                 name: "Virtual-1".to_owned(),
                 id: MonitorId(1),
                 rect: Rect::new(0, 0, 1024, 768),

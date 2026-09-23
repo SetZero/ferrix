@@ -4421,7 +4421,10 @@ impl Client {
                 Arg::Int(wl_output::subpixel::UNKNOWN.cast_signed()),
                 Arg::Str(Some("Ferrix")),
                 Arg::Str(Some("hyprix")),
-                Arg::Int(wl_output::transform::NORMAL.cast_signed()),
+                // How the monitor is turned, which Hyprland sends as its
+                // `m_transform`: the transform that makes the buffer the
+                // picture a person reads.
+                Arg::Int(mode.transform),
             ],
         );
         let _ = self.out.write(

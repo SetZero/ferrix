@@ -115,7 +115,12 @@ names the part of Hyprland or hyprlang it follows.
 * **`render`** draws the frame: a `Canvas` over a `tiny-skia` pixmap with
   `clear`, `fill`, `border` and `composite` (`ARGB8888` source-over,
   `XRGB8888` copied and made opaque), each drawn only inside a `Damage` of
-  disjoint rectangles; `present` into an `XRGB8888` target of any stride;
+  disjoint rectangles; `present` into an `XRGB8888` target of any stride,
+  and `present_transformed` for a monitor turned by `monitor = ...,
+  transform, N`, which puts each pixel where Hyprland's projection matrix
+  would and turns the damage with it (`transform` says why the turn is made
+  once on the way out rather than folded into every draw, as Hyprland's GPU
+  does);
   `render` of one monitor from `layout`'s output with `config`'s border
   colours; and `damage_between` two layouts. The two pattern clients the
   stage 18 tests run are drawn here too, so the tests and the clients draw
