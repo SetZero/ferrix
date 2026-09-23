@@ -5,10 +5,11 @@
  * fpclassify calls __fpclassify, __fpclassifyf and __fpclassifyl. For long
  * double, isinf, isnan, isnormal, isfinite, isunordered and isless to
  * isgreaterequal call __fpclassifyl too, and signbit calls __signbitl; those
- * two take their argument on the stack. The x87 encodings with a nonzero
- * exponent and the integer bit clear are NaNs, as in musl, and a
- * pseudo-denormal is normal. Some cases are adapted from libc-test's
- * fpclassify.c (MIT).
+ * two take their argument on the stack on x86-64 and in q0 on AArch64. The
+ * x87 encodings with a nonzero exponent and the integer bit clear are NaNs,
+ * as in musl, and a pseudo-denormal is normal; binary128 has no such
+ * encodings. On ARMv7-A a long double is a double. Some cases are adapted
+ * from libc-test's fpclassify.c (MIT).
  */
 
 #include <float.h>
@@ -16,6 +17,7 @@
 #include <string.h>
 #include "check.h"
 
+#if LDBL_MANT_DIG == 64
 /* The long double with this significand and sign-and-exponent word. */
 static long double x87(unsigned long long mantissa, unsigned sign_exponent)
 {
@@ -54,6 +56,71 @@ static const struct {
 	{0x8000000000000001ull, 0xffff, FP_NAN},
 };
 
+#define N_LONG (sizeof long_doubles / sizeof *long_doubles)
+static long double long_at(size_t i)
+{
+	return x87(long_doubles[i].mantissa, long_doubles[i].sign_exponent);
+}
+static int long_class(size_t i) { return long_doubles[i].class; }
+static int long_negative(size_t i) { return !!(long_doubles[i].sign_exponent & 0x8000); }
+#elif LDBL_MANT_DIG == 113
+/* The binary128 long double with these high and low 64 bits. */
+static long double quad(unsigned long long high, unsigned long long low)
+{
+	unsigned char bytes[16];
+	long double x;
+	memcpy(bytes, &low, 8);
+	memcpy(bytes + 8, &high, 8);
+	memcpy(&x, bytes, sizeof x);
+	return x;
+}
+
+static const struct {
+	unsigned long long high, low;
+	int class;
+} long_doubles[] = {
+	{0, 0, FP_ZERO},
+	{0x8000000000000000ull, 0, FP_ZERO},
+	/* The smallest and largest subnormals. */
+	{0, 1, FP_SUBNORMAL},
+	{0x8000ffffffffffffull, 0xffffffffffffffffull, FP_SUBNORMAL},
+	/* LDBL_MIN, -1 and LDBL_MAX. */
+	{0x0001000000000000ull, 0, FP_NORMAL},
+	{0xbfff000000000000ull, 0, FP_NORMAL},
+	{0x7ffeffffffffffffull, 0xffffffffffffffffull, FP_NORMAL},
+	{0x7fff000000000000ull, 0, FP_INFINITE},
+	{0xffff000000000000ull, 0, FP_INFINITE},
+	/* A quiet NaN and a signalling one. */
+	{0x7fff800000000000ull, 0, FP_NAN},
+	{0xffff000000000000ull, 1, FP_NAN},
+};
+
+#define N_LONG (sizeof long_doubles / sizeof *long_doubles)
+static long double long_at(size_t i)
+{
+	return quad(long_doubles[i].high, long_doubles[i].low);
+}
+static int long_class(size_t i) { return long_doubles[i].class; }
+static int long_negative(size_t i) { return !!(long_doubles[i].high >> 63); }
+#else
+static const struct {
+	double x;
+	int class;
+} long_doubles[] = {
+	{0.0, FP_ZERO},
+	{-0.0, FP_ZERO},
+	{-DBL_TRUE_MIN, FP_SUBNORMAL},
+	{DBL_MAX, FP_NORMAL},
+	{-INFINITY, FP_INFINITE},
+	{NAN, FP_NAN},
+};
+
+#define N_LONG (sizeof long_doubles / sizeof *long_doubles)
+static long double long_at(size_t i) { return long_doubles[i].x; }
+static int long_class(size_t i) { return long_doubles[i].class; }
+static int long_negative(size_t i) { return !!signbit(long_doubles[i].x); }
+#endif
+
 static const struct {
 	double x;
 	int class;
@@ -90,29 +157,32 @@ static const struct {
 
 int main(void)
 {
-	CHECK(LDBL_MANT_DIG == 64);
-
-	for (size_t i = 0; i < sizeof long_doubles / sizeof *long_doubles; i++) {
-		volatile long double x = x87(long_doubles[i].mantissa, long_doubles[i].sign_exponent);
-		int class = long_doubles[i].class;
+	for (size_t i = 0; i < N_LONG; i++) {
+		volatile long double x = long_at(i);
+		int class = long_class(i);
 		CHECK(fpclassify(x) == class);
 		CHECK(!!isnan(x) == (class == FP_NAN));
 		CHECK(!!isinf(x) == (class == FP_INFINITE));
 		CHECK(!!isnormal(x) == (class == FP_NORMAL));
 		CHECK(!!isfinite(x) == (class != FP_NAN && class != FP_INFINITE));
-		CHECK(!!signbit(x) == !!(long_doubles[i].sign_exponent & 0x8000));
+		CHECK((signbit(x) != 0) == long_negative(i));
 		CHECK(!!isunordered(x, 0.0L) == (class == FP_NAN));
 		CHECK(!!isunordered(1.0L, x) == (class == FP_NAN));
 	}
 
 	volatile long double one = 1, two = 2, nan = NAN, big = LDBL_MAX;
 	volatile long double minus_zero = -0.0L;
+#if LDBL_MANT_DIG == 64
+	/* An unnormal compares as a NaN. */
 	volatile long double unnormal = x87(0x7fffffffffffffffull, 0x3fff);
+	CHECK(!isless(unnormal, big));
+	CHECK(!isgreater(big, unnormal));
+	CHECK(isunordered(one, unnormal));
+#endif
 	CHECK(isless(one, two));
 	CHECK(!isless(two, one));
 	CHECK(!isless(nan, one));
 	CHECK(!isless(one, nan));
-	CHECK(!isless(unnormal, big));
 	CHECK(islessequal(one, one));
 	CHECK(islessequal(minus_zero, 0.0L));
 	CHECK(!islessequal(nan, nan));
@@ -122,11 +192,9 @@ int main(void)
 	CHECK(isgreater(big, one));
 	CHECK(!isgreater(one, big));
 	CHECK(!isgreater(nan, one));
-	CHECK(!isgreater(big, unnormal));
 	CHECK(isgreaterequal(minus_zero, 0.0L));
 	CHECK(!isgreaterequal(one, nan));
 	CHECK(isunordered(nan, one));
-	CHECK(isunordered(one, unnormal));
 	CHECK(!isunordered(one, big));
 	CHECK(signbit(minus_zero));
 	CHECK(signbit(-nan));

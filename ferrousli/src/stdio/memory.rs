@@ -481,7 +481,10 @@ pub struct CookieIoFunctions {
     pub close: Option<CookieClose>,
 }
 
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(size_of::<CookieIoFunctions>() == 32);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(size_of::<CookieIoFunctions>() == 16);
 
 /// The state of a stream from `fopencookie`.
 #[derive(Debug)]

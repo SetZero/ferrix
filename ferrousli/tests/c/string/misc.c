@@ -5,6 +5,7 @@
  */
 
 #define _GNU_SOURCE
+#include <limits.h>
 #include <string.h>
 #include <strings.h>
 #include <unistd.h>
@@ -130,7 +131,7 @@ int main(void)
 	CHECK(ffs(0x80) == 8);
 	CHECK(ffs((int)0x80000000u) == 32);
 	CHECK(ffsl(0) == 0);
-	CHECK(ffsl((long)(1UL << 63)) == 64);
+	CHECK(ffsl(LONG_MIN) == (int)(sizeof(long) * 8));
 	CHECK(ffsll(3LL << 40) == 41);
 
 	return t_status;

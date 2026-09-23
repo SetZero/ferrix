@@ -43,7 +43,7 @@
 //!
 //! `%m` prints `strerror` of `errno` as it was when the call began.
 
-use core::ffi::{c_char, c_int};
+use core::ffi::{c_char, c_int, c_long, c_ulong};
 use core::ptr::{null_mut, with_exposed_provenance_mut};
 use core::slice;
 use core::sync::atomic::Ordering;
@@ -51,7 +51,7 @@ use core::sync::atomic::Ordering;
 use super::file::{self, File, Inner};
 use super::float::{self, Float};
 use super::sys;
-use crate::va::{self, LongDouble, VaList, VaListTag};
+use crate::va::{self, LongDouble, VaList, VaListArg};
 use crate::{errno, malloc, strerror, string};
 
 /// `INT_MAX`, the most a `printf` may count.
@@ -313,8 +313,12 @@ impl Arg {
 enum Class {
     /// No argument.
     Unused,
-    /// In an integer register or stack word.
+    /// In an integer register or stack word: an `int`, a `long` or a
+    /// pointer.
     Word,
+    /// A 64-bit integer: the same as [`Class::Word`] on a 64-bit target, and
+    /// two registers or an aligned pair of stack words on ARMv7-A.
+    Wide,
     /// In a vector register or stack word.
     Double,
     /// On the stack, in 16 bytes.
@@ -330,9 +334,10 @@ enum Length {
     Short,
     /// None.
     Int,
-    /// `l`.
+    /// `l`, `z` and `t`: a `long`, a `size_t` and a `ptrdiff_t`, which are
+    /// the same width on every target here.
     Long,
-    /// `ll`, `j`, `z`, `t` and `q`, all 64 bits here.
+    /// `ll`, `j` and `q`: 64 bits on every target.
     Wide,
     /// `L`.
     LongDouble,
@@ -538,7 +543,8 @@ unsafe fn parse(start: *const u8) -> Result<Directive, c_int> {
         b'h' => (Length::Short, 1),
         b'l' if second() == b'l' => (Length::Wide, 2),
         b'l' => (Length::Long, 1),
-        b'j' | b'z' | b't' | b'q' => (Length::Wide, 1),
+        b'z' | b't' => (Length::Long, 1),
+        b'j' | b'q' => (Length::Wide, 1),
         b'L' => (Length::LongDouble, 1),
         _ => (Length::Int, 0),
     };
@@ -569,6 +575,11 @@ fn class_of(directive: &Directive) -> Class {
             } else {
                 Class::Double
             }
+        }
+        b'd' | b'i' | b'o' | b'u' | b'x' | b'X'
+            if matches!(directive.length, Length::Wide | Length::LongDouble) =>
+        {
+            Class::Wide
         }
         _ => Class::Word,
     }
@@ -673,6 +684,8 @@ unsafe fn read_arg(list: &mut VaList<'_>, class: Class) -> Arg {
     match class {
         // SAFETY: the caller vouches for the class.
         Class::Unused | Class::Word => Arg::Word(unsafe { list.next_word() }),
+        // SAFETY: as above.
+        Class::Wide => Arg::Word(unsafe { list.next_wide() }),
         // SAFETY: as above.
         Class::Double => Arg::Double(unsafe { list.next_double() }),
         // SAFETY: as above.
@@ -917,7 +930,9 @@ fn signed(word: u64, length: Length) -> i64 {
         Length::Char => i64::from(word as i8),
         Length::Short => i64::from(word as i16),
         Length::Int => i64::from(word as i32),
-        Length::Long | Length::Wide | Length::LongDouble => word as i64,
+        // Sign-extended from a `long`'s width, 32 bits on ARMv7-A.
+        Length::Long => word as c_long as i64,
+        Length::Wide | Length::LongDouble => word as i64,
     }
 }
 
@@ -927,7 +942,8 @@ fn unsigned(word: u64, length: Length) -> u64 {
         Length::Char => u64::from(word as u8),
         Length::Short => u64::from(word as u16),
         Length::Int => u64::from(word as u32),
-        Length::Long | Length::Wide | Length::LongDouble => word,
+        Length::Long => word as c_ulong as u64,
+        Length::Wide | Length::LongDouble => word,
     }
 }
 
@@ -1225,7 +1241,14 @@ unsafe fn convert(
                         with_exposed_provenance_mut::<i32>(address).write_unaligned(count as i32)
                     };
                 }
-                (_, Length::Long | Length::Wide | Length::LongDouble) => {
+                (_, Length::Long) => {
+                    // SAFETY: as above.
+                    unsafe {
+                        with_exposed_provenance_mut::<c_long>(address)
+                            .write_unaligned(count as c_long)
+                    };
+                }
+                (_, Length::Wide | Length::LongDouble) => {
                     // SAFETY: as above.
                     unsafe {
                         with_exposed_provenance_mut::<i64>(address).write_unaligned(count as i64)
@@ -1281,7 +1304,7 @@ unsafe fn format_positional(
 pub unsafe fn format(
     sink: &mut dyn Sink,
     fmt: *const c_char,
-    ap: *mut VaListTag,
+    ap: VaListArg,
 ) -> Result<usize, c_int> {
     // SAFETY: the pointer is this thread's `errno`.
     let saved_errno = unsafe { errno::__errno_location().read() };
@@ -1317,7 +1340,7 @@ fn finish(result: Result<usize, c_int>) -> c_int {
 /// # Safety
 ///
 /// As `vfprintf`.
-pub unsafe fn vfprintf_locked(inner: &mut Inner, fmt: *const c_char, ap: *mut VaListTag) -> c_int {
+pub unsafe fn vfprintf_locked(inner: &mut Inner, fmt: *const c_char, ap: VaListArg) -> c_int {
     let old_error = inner.error;
     inner.error = false;
     let result = {
@@ -1342,11 +1365,7 @@ pub unsafe fn vfprintf_locked(inner: &mut Inner, fmt: *const c_char, ap: *mut Va
 /// `stream` must be a live stream, `fmt` a NUL-terminated string, and `ap` a
 /// `va_list` whose arguments match it.
 #[cfg_attr(not(test), unsafe(no_mangle))]
-pub unsafe extern "C" fn vfprintf(
-    stream: *mut File,
-    fmt: *const c_char,
-    ap: *mut VaListTag,
-) -> c_int {
+pub unsafe extern "C" fn vfprintf(stream: *mut File, fmt: *const c_char, ap: VaListArg) -> c_int {
     let op = |inner: &mut Inner| {
         // SAFETY: the caller passes a live stream, a format and its arguments.
         unsafe { vfprintf_locked(inner, fmt, ap) }
@@ -1362,7 +1381,7 @@ pub unsafe extern "C" fn vfprintf(
 /// `fmt` must be a NUL-terminated string, and `ap` a `va_list` whose arguments
 /// match it.
 #[cfg_attr(not(test), unsafe(no_mangle))]
-pub unsafe extern "C" fn vprintf(fmt: *const c_char, ap: *mut VaListTag) -> c_int {
+pub unsafe extern "C" fn vprintf(fmt: *const c_char, ap: VaListArg) -> c_int {
     // SAFETY: standard output is a static stream, and the caller vouches for
     // the rest.
     unsafe { vfprintf(file::stdout.load(Ordering::Relaxed), fmt, ap) }
@@ -1380,7 +1399,7 @@ pub unsafe extern "C" fn vsnprintf(
     s: *mut c_char,
     n: usize,
     fmt: *const c_char,
-    ap: *mut VaListTag,
+    ap: VaListArg,
 ) -> c_int {
     // SAFETY: the caller vouches for `n` bytes, of which `n - 1` are for text.
     let mut sink = unsafe { StringSink::new(s.cast(), n.saturating_sub(1)) };
@@ -1400,7 +1419,7 @@ pub unsafe extern "C" fn vsnprintf(
 /// `s` must have room for the output and its NUL, `fmt` must be a
 /// NUL-terminated string, and `ap` a `va_list` whose arguments match it.
 #[cfg_attr(not(test), unsafe(no_mangle))]
-pub unsafe extern "C" fn vsprintf(s: *mut c_char, fmt: *const c_char, ap: *mut VaListTag) -> c_int {
+pub unsafe extern "C" fn vsprintf(s: *mut c_char, fmt: *const c_char, ap: VaListArg) -> c_int {
     // SAFETY: the caller vouches for room.
     unsafe { vsnprintf(s, usize::MAX, fmt, ap) }
 }
@@ -1412,7 +1431,7 @@ pub unsafe extern "C" fn vsprintf(s: *mut c_char, fmt: *const c_char, ap: *mut V
 /// `fmt` must be a NUL-terminated string, and `ap` a `va_list` whose arguments
 /// match it.
 #[cfg_attr(not(test), unsafe(no_mangle))]
-pub unsafe extern "C" fn vdprintf(fd: c_int, fmt: *const c_char, ap: *mut VaListTag) -> c_int {
+pub unsafe extern "C" fn vdprintf(fd: c_int, fmt: *const c_char, ap: VaListArg) -> c_int {
     let mut sink = FdSink {
         fd,
         chunk: [0; CHUNK],
@@ -1439,15 +1458,15 @@ pub unsafe extern "C" fn vdprintf(fd: c_int, fmt: *const c_char, ap: *mut VaList
 pub unsafe extern "C" fn vasprintf(
     strp: *mut *mut c_char,
     fmt: *const c_char,
-    ap: *mut VaListTag,
+    ap: VaListArg,
 ) -> c_int {
     // SAFETY: the caller passes a live list; this is `va_copy`.
-    let mut copy = unsafe { ap.read() };
+    let mut copy = unsafe { va::copy(ap) };
     // SAFETY: a sink with no room writes nothing.
     let mut counter = unsafe { StringSink::new(null_mut(), 0) };
     // SAFETY: the caller vouches for the format, and the copy holds the
     // arguments.
-    let len = match unsafe { format(&mut counter, fmt, &raw mut copy) } {
+    let len = match unsafe { format(&mut counter, fmt, va::as_arg(&mut copy)) } {
         Ok(len) => len,
         Err(error) => return finish(Err(error)),
     };

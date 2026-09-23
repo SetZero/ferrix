@@ -229,13 +229,13 @@ pub extern "C" fn roundf(x: f32) -> f32 {
 /// `LONG_MIN` and invalid is raised.
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn lround(x: f64) -> c_long {
-    arch::trunc_to_i64(round(x))
+    arch::trunc_to_long(round(x))
 }
 
 /// [`lround`] for `float`.
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn lroundf(x: f32) -> c_long {
-    arch::trunc_to_i64f(roundf(x))
+    arch::trunc_to_longf(roundf(x))
 }
 
 /// [`round`], converted to a `long long`, as [`lround`].
@@ -296,13 +296,13 @@ pub extern "C" fn rintf(x: f32) -> f32 {
 /// is raised.
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn lrint(x: f64) -> c_long {
-    arch::round_to_i64(x)
+    arch::round_to_long(x)
 }
 
 /// [`lrint`] for `float`.
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn lrintf(x: f32) -> c_long {
-    arch::round_to_i64f(x)
+    arch::round_to_longf(x)
 }
 
 /// [`rint`], converted to a `long long`, as [`lrint`].
@@ -395,18 +395,24 @@ mod tests {
     fn integer_conversions_match_libc_test() {
         let rint_rules = Rules::INTEGER.unless_invalid();
         let files = ["sanity/lrint.h", "special/lrint.h"];
-        mtest::d_i("lrint", &files, |x| lrint(x), rint_rules, &[]);
+        mtest::d_i("lrint", &files, |x| i64::from(lrint(x)), rint_rules, &[]);
         let files = ["sanity/lrintf.h", "special/lrintf.h"];
-        mtest::d_i("lrintf", &files, |x| lrintf(x), rint_rules, &[]);
+        mtest::d_i("lrintf", &files, |x| i64::from(lrintf(x)), rint_rules, &[]);
         let files = ["sanity/llrint.h", "special/llrint.h"];
         mtest::d_i("llrint", &files, |x| llrint(x), rint_rules, &[]);
         let files = ["sanity/llrintf.h", "special/llrintf.h"];
         mtest::d_i("llrintf", &files, |x| llrintf(x), rint_rules, &[]);
         let round_rules = rint_rules.inexact_optional();
         let files = ["sanity/lround.h", "special/lround.h"];
-        mtest::d_i("lround", &files, |x| lround(x), round_rules, &[]);
+        mtest::d_i("lround", &files, |x| i64::from(lround(x)), round_rules, &[]);
         let files = ["sanity/lroundf.h", "special/lroundf.h"];
-        mtest::d_i("lroundf", &files, |x| lroundf(x), round_rules, &[]);
+        mtest::d_i(
+            "lroundf",
+            &files,
+            |x| i64::from(lroundf(x)),
+            round_rules,
+            &[],
+        );
         let files = ["sanity/llround.h", "special/llround.h"];
         mtest::d_i("llround", &files, |x| llround(x), round_rules, &[]);
         let files = ["sanity/llroundf.h", "special/llroundf.h"];

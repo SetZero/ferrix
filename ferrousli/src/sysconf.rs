@@ -65,13 +65,32 @@ struct Sysinfo {
     totalhigh: c_ulong,
     freehigh: c_ulong,
     mem_unit: u32,
+    /// The kernel's `_f`: `20 - 2 * sizeof(long) - sizeof(int)` bytes, none
+    /// on a 64-bit target.
+    #[cfg(target_pointer_width = "32")]
+    _f: [u8; 8],
 }
 
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(Sysinfo, totalram) == 32);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(Sysinfo, procs) == 80);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(Sysinfo, totalhigh) == 88);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(Sysinfo, mem_unit) == 104);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(size_of::<Sysinfo>() == 112);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(offset_of!(Sysinfo, totalram) == 16);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(offset_of!(Sysinfo, procs) == 40);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(offset_of!(Sysinfo, totalhigh) == 44);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(offset_of!(Sysinfo, mem_unit) == 52);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(size_of::<Sysinfo>() == 64);
 
 /// The page size, from the auxiliary vector.
 pub fn page_size() -> usize {

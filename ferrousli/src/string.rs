@@ -178,9 +178,9 @@ pub unsafe extern "C" fn strncmp(a: *const c_char, b: *const c_char, n: usize) -
     while i < n {
         // SAFETY: neither string has ended before `i`, or the loop would have
         // returned.
-        let x = unsafe { a.wrapping_add(i).read() }.cast_unsigned();
+        let x = unsafe { a.wrapping_add(i).read() } as u8;
         // SAFETY: as above.
-        let y = unsafe { b.wrapping_add(i).read() }.cast_unsigned();
+        let y = unsafe { b.wrapping_add(i).read() } as u8;
         if x != y || x == 0 {
             return c_int::from(x) - c_int::from(y);
         }
@@ -711,7 +711,7 @@ pub unsafe extern "C" fn strchr(s: *const c_char, c: c_int) -> *mut c_char {
     // SAFETY: the same contract as `strchrnul`.
     let p = unsafe { strchrnul(s, c) };
     // SAFETY: `strchrnul` returns an address within the string.
-    if unsafe { p.read() }.cast_unsigned() == c as u8 {
+    if unsafe { p.read() } as u8 == c as u8 {
         p
     } else {
         null_mut()

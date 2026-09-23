@@ -13,7 +13,9 @@ use crate::syscall::{self, nr};
 ///
 /// The kernel's `struct statfs` in `asm-generic/statfs.h`, whose
 /// `__statfs_word` is a `long` on a 64-bit architecture, has the same layout,
-/// and so has glibc's.
+/// and so has glibc's. On ARMv7-A it is the kernel's `struct statfs64`, whose
+/// fields are the same but for 4-byte packing, which ends it at byte 84, where
+/// this one has 4 bytes of padding to its 8-byte alignment.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Statfs {
@@ -43,10 +45,27 @@ pub struct Statfs {
     pub f_spare: [c_ulong; 4],
 }
 
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(Statfs, f_fsid) == 56);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(Statfs, f_namelen) == 64);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(Statfs, f_spare) == 88);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(size_of::<Statfs>() == 120);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(offset_of!(Statfs, f_fsid) == 48);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(offset_of!(Statfs, f_namelen) == 56);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(offset_of!(Statfs, f_spare) == 68);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(size_of::<Statfs>() == 88);
+
+/// The bytes of `struct statfs64` the ARMv7-A kernel writes: all but the
+/// padding.
+#[cfg(target_arch = "arm")]
+const KERNEL_STATFS64: usize = 84;
 
 /// C's `struct statvfs`, from musl's `sys/statvfs.h`.
 ///
@@ -74,6 +93,9 @@ pub struct Statvfs {
     pub f_favail: u64,
     /// The file system's id.
     pub f_fsid: c_ulong,
+    /// Padding to two `int`s, musl's unnamed bit-field.
+    #[cfg(target_pointer_width = "32")]
+    pub __fsid_padding: c_uint,
     /// The `ST_*` mount flags.
     pub f_flag: c_ulong,
     /// The longest name a directory entry may have.
@@ -84,11 +106,24 @@ pub struct Statvfs {
     pub __reserved: [c_int; 5],
 }
 
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(Statvfs, f_fsid) == 64);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(Statvfs, f_flag) == 72);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(Statvfs, f_type) == 88);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(Statvfs, __reserved) == 92);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(size_of::<Statvfs>() == 112);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(offset_of!(Statvfs, f_fsid) == 56);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(offset_of!(Statvfs, f_flag) == 64);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(offset_of!(Statvfs, f_type) == 72);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(size_of::<Statvfs>() == 96);
 
 /// Describes the file system holding `path` into `*buf`.
 ///
@@ -103,7 +138,11 @@ pub unsafe extern "C" fn statfs(path: *const c_char, buf: *mut Statfs) -> c_int 
     // SAFETY: the caller vouches for `buf`.
     unsafe { buf.write(Statfs::default()) };
     // SAFETY: the kernel reads `path` and writes `buf`, as the caller vouches.
+    #[cfg(not(target_arch = "arm"))]
     let ret = unsafe { syscall::syscall2(nr::STATFS, path.addr(), buf.addr()) };
+    // SAFETY: as above, with the size of the kernel's structure.
+    #[cfg(target_arch = "arm")]
+    let ret = unsafe { syscall::syscall3(nr::STATFS64, path.addr(), KERNEL_STATFS64, buf.addr()) };
     errno::from_syscall(ret) as c_int
 }
 
@@ -117,7 +156,11 @@ pub unsafe extern "C" fn fstatfs(fd: c_int, buf: *mut Statfs) -> c_int {
     // SAFETY: the caller vouches for `buf`.
     unsafe { buf.write(Statfs::default()) };
     // SAFETY: the kernel writes `buf`, as the caller vouches.
+    #[cfg(not(target_arch = "arm"))]
     let ret = unsafe { syscall::syscall2(nr::FSTATFS, fd as usize, buf.addr()) };
+    // SAFETY: as above, with the size of the kernel's structure.
+    #[cfg(target_arch = "arm")]
+    let ret = unsafe { syscall::syscall3(nr::FSTATFS64, fd as usize, KERNEL_STATFS64, buf.addr()) };
     errno::from_syscall(ret) as c_int
 }
 
@@ -140,6 +183,8 @@ fn to_statvfs(info: &Statfs) -> Statvfs {
         f_ffree: info.f_ffree,
         f_favail: info.f_ffree,
         f_fsid: info.f_fsid[0] as c_ulong,
+        #[cfg(target_pointer_width = "32")]
+        __fsid_padding: 0,
         f_flag: info.f_flags,
         f_namemax: info.f_namelen,
         f_type: info.f_type as c_uint,

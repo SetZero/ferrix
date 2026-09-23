@@ -14,6 +14,15 @@
 //! loops and assignments into calls to `memcpy` and `memset` that the source
 //! never made. The stack protector is on, as a distribution's compiler leaves
 //! it.
+//!
+//! # Another architecture
+//!
+//! The harness runs on the host, and can build the programs for another
+//! architecture and run them under an emulator. Three variables say how:
+//! `FERROUSLI_TEST_TARGET` is the Rust target the library and `crt1.o` are
+//! built for, such as `aarch64-unknown-linux-gnu`; `CC` is a C compiler for
+//! it; and `FERROUSLI_TEST_RUNNER` is the command each program runs under,
+//! such as `qemu-aarch64`, its words split on spaces.
 
 #![allow(
     dead_code,
@@ -94,6 +103,65 @@ fn scratch() -> &'static Path {
     Path::new(env!("CARGO_TARGET_TMPDIR"))
 }
 
+/// The Rust target the programs are built for, when it is not the host's.
+fn target() -> Option<String> {
+    std::env::var("FERROUSLI_TEST_TARGET")
+        .ok()
+        .filter(|target| !target.is_empty())
+}
+
+/// The command a program runs under, when it does not run natively. Its
+/// first word is looked up in the harness's `PATH` here, since the program's
+/// environment, which has none, is the one `Command` would search.
+fn runner() -> Option<Vec<PathBuf>> {
+    let words = std::env::var("FERROUSLI_TEST_RUNNER").ok()?;
+    let mut words: Vec<PathBuf> = words.split_whitespace().map(PathBuf::from).collect();
+    let first = words.first_mut()?;
+    if first.components().count() == 1 {
+        let path = std::env::var_os("PATH").unwrap_or_default();
+        if let Some(found) = std::env::split_paths(&path)
+            .map(|dir| dir.join(&*first))
+            .find(|candidate| candidate.is_file())
+        {
+            *first = found;
+        }
+    }
+    Some(words)
+}
+
+/// `crt1.o` for the programs' target: the build script's for the host, and
+/// otherwise one this compiles once, as the build script does.
+fn crt1() -> &'static Path {
+    static CRT1: OnceLock<PathBuf> = OnceLock::new();
+    CRT1.get_or_init(|| {
+        let Some(target) = target() else {
+            return PathBuf::from(env!("FERROUSLI_CRT1"));
+        };
+        let out = scratch().join(format!("crt1-{target}.o"));
+        std::fs::create_dir_all(scratch()).expect("create the scratch directory");
+        let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+        let status = Command::new(rustc)
+            .args([
+                "--edition=2024",
+                "--crate-type=lib",
+                "--crate-name=crt1",
+                "-Cpanic=abort",
+                "--target",
+                &target,
+            ])
+            .arg(format!("--emit=obj={}", out.display()))
+            .arg(manifest().join("crt/crt1.rs"))
+            .current_dir(manifest())
+            .status()
+            .expect("run rustc");
+        assert!(
+            status.success(),
+            "rustc could not build crt/crt1.rs for {target}"
+        );
+        out
+    })
+}
+
 /// `libferrousli.a`, built once for every test in the crate.
 ///
 /// `cargo test` does not produce it: it builds the library as a unit test
@@ -114,7 +182,8 @@ fn library() -> &'static Path {
             .and_then(|name| name.to_str())
             .expect("a profile directory name");
         let profile_name = if name == "debug" { "dev" } else { name };
-        let status = Command::new(env!("CARGO"))
+        let mut cargo = Command::new(env!("CARGO"));
+        let _ = cargo
             .args([
                 "build",
                 "--lib",
@@ -122,11 +191,28 @@ fn library() -> &'static Path {
                 profile_name,
                 "--manifest-path",
             ])
-            .arg(manifest().join("Cargo.toml"))
+            .arg(manifest().join("Cargo.toml"));
+        let Some(target) = target() else {
+            let status = cargo.status().expect("run cargo");
+            assert!(status.success(), "cargo could not build libferrousli.a");
+            return profile.join("libferrousli.a");
+        };
+        let status = cargo
+            .args(["--target", &target])
             .status()
             .expect("run cargo");
-        assert!(status.success(), "cargo could not build libferrousli.a");
-        profile.join("libferrousli.a")
+        assert!(
+            status.success(),
+            "cargo could not build libferrousli.a for {target}"
+        );
+        // A build for a target lands in a directory named for it, beside the
+        // host's profile directories.
+        profile
+            .parent()
+            .expect("the target directory")
+            .join(target)
+            .join(name)
+            .join("libferrousli.a")
     })
 }
 
@@ -197,11 +283,12 @@ pub(crate) fn build(case: &Case, opt: &str, dir: &Scratch) -> PathBuf {
         .arg("-I")
         .arg(manifest().join("tests/c"))
         .arg("-fstack-protector-strong")
+        .args(runner().map(|_| "-DFERROUSLI_TEST_EMULATED"))
         .arg(opt)
         .args(case.cflags)
         .arg("-o")
         .arg(&out)
-        .arg(env!("FERROUSLI_CRT1"))
+        .arg(crt1())
         .arg(&source)
         .arg(library())
         .output()
@@ -229,7 +316,17 @@ struct Finished {
 /// that leaves a child holding them open keeps the test waiting until that
 /// child exits.
 fn run(program: &Path, case: &Case, dir: &Path, label: &str) -> Finished {
-    let mut child = Command::new(program)
+    let mut command = match runner() {
+        Some(words) => {
+            let mut command = Command::new(words.first().expect("a runner"));
+            let _ = command
+                .args(words.get(1..).unwrap_or_default())
+                .arg(program);
+            command
+        }
+        None => Command::new(program),
+    };
+    let mut child = command
         .args(case.args)
         .env_clear()
         .envs(case.env.iter().copied())
@@ -260,7 +357,13 @@ fn run(program: &Path, case: &Case, dir: &Path, label: &str) -> Finished {
         bytes
     });
 
-    let deadline = Instant::now() + TIME_LIMIT;
+    // An emulator runs a program some ten times slower.
+    let limit = if runner().is_some() {
+        TIME_LIMIT * 10
+    } else {
+        TIME_LIMIT
+    };
+    let deadline = Instant::now() + limit;
     let status = loop {
         if let Some(status) = child.try_wait().expect("poll the program") {
             break status;
@@ -268,17 +371,32 @@ fn run(program: &Path, case: &Case, dir: &Path, label: &str) -> Finished {
         if Instant::now() > deadline {
             let _ = child.kill();
             let _ = child.wait();
-            panic!("{label}: still running after {TIME_LIMIT:?}");
+            panic!("{label}: still running after {limit:?}");
         }
         thread::sleep(Duration::from_millis(5));
     };
 
     let _ = writer.join();
+    let mut stderr = err_reader.join().unwrap_or_default();
+    // qemu-user reports a program killed by a signal on standard error, as
+    // the program's own last line, after dying of the signal itself.
+    if runner().is_some()
+        && let Some(at) = find(&stderr, b"qemu: uncaught target signal ")
+    {
+        stderr.truncate(at);
+    }
     Finished {
         status,
         stdout: out_reader.join().unwrap_or_default(),
-        stderr: err_reader.join().unwrap_or_default(),
+        stderr,
     }
+}
+
+/// Where `needle` first starts in `haystack`.
+fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
 }
 
 /// Builds `case` at `-O0` and `-O2`, runs each, and checks what it did. The

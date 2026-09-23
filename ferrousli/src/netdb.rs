@@ -148,10 +148,16 @@ pub struct Addrinfo {
     pub ai_next: *mut Addrinfo,
 }
 
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(size_of::<Addrinfo>() == 48);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(size_of::<Addrinfo>() == 32);
 const _: () = assert!(offset_of!(Addrinfo, ai_addrlen) == 16);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(Addrinfo, ai_addr) == 24);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(Addrinfo, ai_canonname) == 32);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(Addrinfo, ai_next) == 40);
 
 /// C's `struct hostent`, from `include/netdb.h`. glibc's is the same.
@@ -170,9 +176,15 @@ pub struct Hostent {
     pub h_addr_list: *mut *mut c_char,
 }
 
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(size_of::<Hostent>() == 32);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(size_of::<Hostent>() == 20);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(Hostent, h_addrtype) == 16);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(Hostent, h_length) == 20);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(Hostent, h_addr_list) == 24);
 
 /// C's `struct servent`, from `include/netdb.h`. glibc's is the same.
@@ -189,8 +201,13 @@ pub struct Servent {
     pub s_proto: *mut c_char,
 }
 
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(size_of::<Servent>() == 32);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(size_of::<Servent>() == 16);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(Servent, s_port) == 16);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(Servent, s_proto) == 24);
 
 /// C's `struct sockaddr_in`, from `include/netinet/in.h`. It is here for its

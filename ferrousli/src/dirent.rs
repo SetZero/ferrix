@@ -349,11 +349,10 @@ unsafe fn seek(dir: *mut Dir, offset: i64) {
     // SAFETY: the caller passes a valid stream.
     let d = unsafe { &mut *dir };
     let _guard = d.lock.lock();
-    // SAFETY: `lseek` reads no memory.
-    let ret = unsafe { syscall::syscall3(nr::LSEEK, d.fd as usize, offset as usize, SEEK_SET) };
-    d.tell = match errno::decode(ret) {
-        Ok(at) => at as i64,
-        Err(_) => -1,
+    let at = syscall::lseek(d.fd as usize, offset, SEEK_SET);
+    d.tell = match at {
+        -4095..0 => -1,
+        at => at,
     };
     d.pos = 0;
     d.end = 0;
@@ -378,7 +377,7 @@ pub unsafe extern "C" fn rewinddir(dir: *mut Dir) {
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub unsafe extern "C" fn seekdir(dir: *mut Dir, offset: c_long) {
     // SAFETY: the caller passes a valid stream.
-    unsafe { seek(dir, offset) };
+    unsafe { seek(dir, i64::from(offset)) };
 }
 
 /// The stream's position, for [`seekdir`].
@@ -391,7 +390,9 @@ pub unsafe extern "C" fn telldir(dir: *mut Dir) -> c_long {
     // SAFETY: the caller passes a valid stream.
     let d = unsafe { &*dir };
     let _guard = d.lock.lock();
-    d.tell
+    // A `long`, as C has it; on ARMv7-A the kernel's cookie can be wider, and
+    // is cut to 32 bits as musl's is.
+    d.tell as c_long
 }
 
 /// The stream's descriptor.
@@ -609,7 +610,7 @@ mod tests {
         for (i, &(reclen, name)) in records.iter().enumerate() {
             let name_at = at + offset_of!(Dirent, d_name);
             bytes[at..at + 8].copy_from_slice(&1_u64.to_le_bytes());
-            bytes[at + 8..at + 16].copy_from_slice(&(i + 1).to_le_bytes());
+            bytes[at + 8..at + 16].copy_from_slice(&(i as u64 + 1).to_le_bytes());
             bytes[at + 16..at + 18].copy_from_slice(&reclen.to_le_bytes());
             bytes[name_at..name_at + name.len()].copy_from_slice(name);
             at += usize::from(reclen).max(MIN_RECORD);

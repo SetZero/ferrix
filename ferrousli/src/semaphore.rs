@@ -31,7 +31,8 @@ const NSEMS_MAX: usize = 256;
 /// `SEM_FAILED`.
 const FAILED: *mut Sem = null_mut();
 
-/// `sem_t`: eight `int`s, of which the first three are used.
+/// `sem_t`: four `long`s' worth of `int`s, eight or four, of which the first
+/// three are used.
 #[repr(C)]
 #[derive(Debug)]
 pub struct Sem {
@@ -42,10 +43,16 @@ pub struct Sem {
     /// 128 for a private semaphore, 0 for a shared one.
     private: AtomicI32,
     /// Unused.
-    rest: [AtomicI32; 5],
+    rest: [AtomicI32; REST],
 }
 
+/// The unused `int`s.
+const REST: usize = 4 * size_of::<core::ffi::c_long>() / size_of::<c_int>() - 3;
+
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(size_of::<Sem>() == 32);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(size_of::<Sem>() == 16);
 
 impl Sem {
     /// A semaphore holding `value`.
@@ -54,7 +61,7 @@ impl Sem {
             value: AtomicI32::new(value),
             waiters: AtomicI32::new(0),
             private: AtomicI32::new(if shared { 0 } else { 128 }),
-            rest: [const { AtomicI32::new(0) }; 5],
+            rest: [const { AtomicI32::new(0) }; REST],
         }
     }
 
@@ -269,7 +276,7 @@ fn reserved() -> *mut Sem {
 }
 
 /// `O_RDWR | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK`, from `asm-generic/fcntl.h`.
-const OPEN_FLAGS: c_int = 0o2 | 0o400_000 | 0o2_000_000 | 0o4_000;
+const OPEN_FLAGS: c_int = 0o2 | crate::fcntl::O_NOFOLLOW | 0o2_000_000 | 0o4_000;
 /// `O_CREAT`.
 const O_CREAT: c_int = 0o100;
 /// `O_EXCL`.
@@ -373,24 +380,14 @@ fn unlink(path: *const u8) -> Result<(), c_int> {
 fn map_file(fd: usize) -> Result<(u64, *mut Sem), c_int> {
     let mut st = MaybeUninit::<Stat>::uninit();
     // SAFETY: the kernel writes a `struct stat` to the live local.
-    let ret = unsafe { syscall::syscall2(nr::FSTAT, fd, st.as_mut_ptr().addr()) };
+    let ret = unsafe { crate::stat::kernel_fstat(fd as c_int, st.as_mut_ptr()) };
     let _: usize = errno::decode(ret)?;
     // SAFETY: `fstat` succeeded, so it wrote the structure.
     let ino = unsafe { st.assume_init_ref() }.st_ino;
     // SAFETY: a new shared mapping of the file aliases nothing in this
     // process but other mappings of the same semaphore, whose every access
     // is atomic.
-    let ret = unsafe {
-        syscall::syscall6(
-            nr::MMAP,
-            0,
-            size_of::<Sem>(),
-            PROT_READ_WRITE,
-            MAP_SHARED,
-            fd,
-            0,
-        )
-    };
+    let ret = unsafe { syscall::mmap(0, size_of::<Sem>(), PROT_READ_WRITE, MAP_SHARED, fd, 0) };
     let map = errno::decode(ret)?;
     Ok((ino, with_exposed_provenance_mut(map)))
 }
@@ -454,7 +451,7 @@ fn open_or_create(
             )
         };
         let mut tmp = [0_u8; 40];
-        temporary_name(now.tv_nsec, &mut tmp);
+        temporary_name(i64::from(now.tv_nsec), &mut tmp);
         let fd = match open(tmp.as_ptr(), O_CREAT | O_EXCL | OPEN_FLAGS, mode & 0o666) {
             Ok(fd) => fd,
             Err(errno::EEXIST) => continue,

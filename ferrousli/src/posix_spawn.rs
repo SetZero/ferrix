@@ -97,9 +97,12 @@ pub struct SpawnAttr {
     /// `__fn`, which musl reserves and nothing here uses.
     reserved: *mut c_void,
     /// `__pad`.
-    pad: [u8; 56],
+    pad: [u8; 64 - size_of::<usize>()],
 }
 
+#[cfg(target_pointer_width = "64")]
+const _: () = assert!(size_of::<SpawnAttr>() == 336);
+#[cfg(target_pointer_width = "32")]
 const _: () = assert!(size_of::<SpawnAttr>() == 336);
 const _: () = assert!(offset_of!(SpawnAttr, pgrp) == 4);
 const _: () = assert!(offset_of!(SpawnAttr, def) == 8);
@@ -120,7 +123,10 @@ pub struct FileActions {
     pad: [c_int; 16],
 }
 
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(size_of::<FileActions>() == 80);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(size_of::<FileActions>() == 76);
 const _: () = assert!(offset_of!(FileActions, actions) == 8);
 
 /// What one entry of a file-action list does.

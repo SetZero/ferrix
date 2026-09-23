@@ -15,23 +15,8 @@ use core::mem::{offset_of, size_of};
 use core::ptr::{null, null_mut, with_exposed_provenance};
 use core::sync::atomic::{AtomicBool, Ordering};
 
+use crate::thread::Phdr;
 use crate::{auxv, thread};
-
-/// `Elf64_Phdr`.
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-struct Phdr {
-    p_type: u32,
-    p_flags: u32,
-    p_offset: u64,
-    p_vaddr: u64,
-    p_paddr: u64,
-    p_filesz: u64,
-    p_memsz: u64,
-    p_align: u64,
-}
-
-const _: () = assert!(size_of::<Phdr>() == 56);
 
 /// A loadable segment.
 const PT_LOAD: u32 = 1;
@@ -43,8 +28,8 @@ const PT_PHDR: u32 = 6;
 #[repr(C)]
 #[derive(Debug)]
 pub struct DlPhdrInfo {
-    /// The object's load bias.
-    pub dlpi_addr: u64,
+    /// The object's load bias, C's `ElfW(Addr)`.
+    pub dlpi_addr: usize,
     /// Its name; the empty string for the program itself.
     pub dlpi_name: *const c_char,
     /// Its program headers.
@@ -61,9 +46,19 @@ pub struct DlPhdrInfo {
     pub dlpi_tls_data: *mut c_void,
 }
 
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(size_of::<DlPhdrInfo>() == 64);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(size_of::<DlPhdrInfo>() == 40);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(offset_of!(DlPhdrInfo, dlpi_phnum) == 12);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(offset_of!(DlPhdrInfo, dlpi_adds) == 16);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(DlPhdrInfo, dlpi_phnum) == 24);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(DlPhdrInfo, dlpi_adds) == 32);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(DlPhdrInfo, dlpi_tls_data) == 56);
 
 /// `Dl_info`, as `include/dlfcn.h` declares it.
@@ -80,7 +75,10 @@ pub struct DlInfo {
     pub dli_saddr: *mut c_void,
 }
 
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(size_of::<DlInfo>() == 32);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(size_of::<DlInfo>() == 16);
 
 /// The program's headers, from the auxiliary vector: where they are, how
 /// many, and the load bias.
@@ -136,7 +134,7 @@ pub unsafe extern "C" fn dl_iterate_phdr(callback: Option<Callback>, data: *mut 
     };
     let tls = thread::tls_block();
     let mut info = DlPhdrInfo {
-        dlpi_addr: bias as u64,
+        dlpi_addr: bias,
         dlpi_name: c"".as_ptr(),
         dlpi_phdr: phdr.cast(),
         dlpi_phnum: u16::try_from(phnum).unwrap_or(u16::MAX),

@@ -31,9 +31,9 @@
 //! as POSIX requires, and only if the wait did not also consume a signal.
 
 use core::ffi::{c_int, c_uint, c_void};
-use core::mem::size_of;
+use core::mem::{align_of, size_of};
 use core::ptr::null_mut;
-use core::sync::atomic::{AtomicI32, AtomicPtr, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicI32, AtomicPtr, Ordering};
 
 use crate::mutex::{self, Mutex};
 use crate::syscall::{self, nr};
@@ -45,10 +45,13 @@ use crate::{cancel, errno, futex, thread};
 #[repr(C)]
 #[derive(Debug)]
 pub struct Cond {
-    words: [AtomicUsize; 6],
+    words: [AtomicI32; 12],
+    /// A pointer's alignment, which C's union has.
+    _align: [usize; 0],
 }
 
 const _: () = assert!(size_of::<Cond>() == 48);
+const _: () = assert!(align_of::<Cond>() == align_of::<usize>());
 
 /// A waiter's node, on its stack.
 #[repr(C)]
@@ -443,7 +446,8 @@ pub unsafe extern "C" fn pthread_cond_init(c: *mut Cond, attr: *const CondAttr) 
     // SAFETY: the caller vouches for `c`.
     unsafe {
         c.write(Cond {
-            words: [const { AtomicUsize::new(0) }; 6],
+            words: [const { AtomicI32::new(0) }; 12],
+            _align: [],
         });
     }
     // SAFETY: the caller passes null or an initialised attribute object.

@@ -61,14 +61,13 @@ pub unsafe extern "C" fn mmap(
     // SAFETY: the caller vouches for replacing a fixed address; otherwise the
     // kernel picks memory nothing uses.
     let ret = unsafe {
-        syscall::syscall6(
-            nr::MMAP,
+        syscall::mmap(
             addr.addr(),
             len,
             prot as usize,
             flags as usize,
             fd as usize,
-            offset as usize,
+            offset,
         )
     };
     if ret == -(errno::EPERM as isize)
@@ -157,6 +156,11 @@ pub unsafe extern "C" fn madvise(addr: *mut c_void, len: usize, advice: c_int) -
 pub extern "C" fn posix_madvise(addr: *mut c_void, len: usize, advice: c_int) -> c_int {
     if advice == POSIX_MADV_DONTNEED {
         return 0;
+    }
+    // POSIX defines five values, 0 to 4, and refuses any other; the kernel
+    // would take Linux's own advice, and an emulator takes anything.
+    if !(0..POSIX_MADV_DONTNEED).contains(&advice) {
+        return errno::EINVAL;
     }
     // SAFETY: the remaining POSIX advice values are hints that change no
     // contents.

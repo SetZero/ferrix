@@ -23,7 +23,7 @@
 //! A stream is read a byte at a time under its lock, with one byte given back
 //! when a field ends, so the next read sees it.
 
-use core::ffi::{c_char, c_int, c_void};
+use core::ffi::{c_char, c_int, c_long, c_void};
 use core::mem::{MaybeUninit, size_of};
 use core::ptr::null_mut;
 use core::sync::atomic::Ordering;
@@ -31,13 +31,13 @@ use core::sync::atomic::Ordering;
 use super::EOF;
 use super::file::{self, File, Inner, stdin};
 use crate::errno;
-use crate::float::{BINARY32, BINARY64, X87_EXTENDED};
+use crate::float::{BINARY32, BINARY64};
 use crate::malloc::{free, malloc, realloc};
 use crate::multibyte::{MbState, WChar, WInt, mbrtowc, mbsinit, wcrtomb};
 use crate::scan::{CText, Input, digit, is_space};
 use crate::strtod;
 use crate::strtol;
-use crate::va::{self, VaList, VaListTag};
+use crate::va::{self, VaList, VaListArg, VaListTag};
 use crate::wctype::iswspace;
 
 /// The longest number field read.
@@ -209,7 +209,8 @@ unsafe fn store_int(dest: *mut c_void, size: Size, value: u64) {
         Size::Char => 1,
         Size::Short => 2,
         Size::Int => 4,
-        Size::Long | Size::LongLong => 8,
+        Size::Long => size_of::<c_long>(),
+        Size::LongLong => 8,
         Size::LongDouble => return,
     };
     // The integer is its low bytes, least significant first.
@@ -414,7 +415,7 @@ unsafe fn floating<S: Source>(
     let text = token.get(..len).unwrap_or_default();
     let format = match size {
         Size::Long => &BINARY64,
-        Size::LongDouble => &X87_EXTENDED,
+        Size::LongDouble => LONG_DOUBLE,
         _ => &BINARY32,
     };
     let parsed = strtod::parse(text, format);
@@ -439,9 +440,16 @@ unsafe fn floating<S: Source>(
                 .write_unaligned(f64::from_bits(parsed.bits as u64))
         },
         Size::LongDouble => {
-            // An x87 `long double` is its ten low bytes; the rest is padding.
-            for (offset, byte) in parsed.bits.to_le_bytes().into_iter().take(10).enumerate() {
-                // SAFETY: the caller vouches for a `long double`'s 16 bytes.
+            // An x87 `long double` is its ten low bytes, the rest padding; a
+            // binary128 one all sixteen; ARMv7-A's a `double`'s eight.
+            for (offset, byte) in parsed
+                .bits
+                .to_le_bytes()
+                .into_iter()
+                .take(LONG_DOUBLE_BYTES)
+                .enumerate()
+            {
+                // SAFETY: the caller vouches for a `long double`.
                 unsafe { dest.cast::<u8>().wrapping_add(offset).write(byte) };
             }
         }
@@ -449,6 +457,25 @@ unsafe fn floating<S: Source>(
     }
     Ok(())
 }
+
+/// The format of a `long double`, and the bytes of it a conversion stores.
+#[cfg(target_arch = "x86_64")]
+const LONG_DOUBLE: &crate::float::Format = &crate::float::X87_EXTENDED;
+/// The format of a `long double`, and the bytes of it a conversion stores.
+#[cfg(target_arch = "x86_64")]
+const LONG_DOUBLE_BYTES: usize = 10;
+/// The format of a `long double`, and the bytes of it a conversion stores.
+#[cfg(target_arch = "aarch64")]
+const LONG_DOUBLE: &crate::float::Format = &crate::float::BINARY128;
+/// The format of a `long double`, and the bytes of it a conversion stores.
+#[cfg(target_arch = "aarch64")]
+const LONG_DOUBLE_BYTES: usize = 16;
+/// The format of a `long double`, and the bytes of it a conversion stores.
+#[cfg(target_arch = "arm")]
+const LONG_DOUBLE: &crate::float::Format = &BINARY64;
+/// The format of a `long double`, and the bytes of it a conversion stores.
+#[cfg(target_arch = "arm")]
+const LONG_DOUBLE_BYTES: usize = 8;
 
 /// Whether the wide character `wc` belongs in a `%s`, `%c` or `%[` field read
 /// from a wide source: not white space for `%s`, anything for `%c`, and for
@@ -768,7 +795,7 @@ pub(super) unsafe fn scan<S: Source>(
     src: &mut S,
     format: *const c_char,
     wide_format: *const WChar,
-    ap: *mut VaListTag,
+    ap: VaListArg,
 ) -> c_int {
     // SAFETY: the caller passes a NUL-terminated format.
     let fmt = unsafe { CText::new(format) };
@@ -951,11 +978,7 @@ pub(super) unsafe fn scan<S: Source>(
 /// `stream` must be a live stream, `format` a NUL-terminated string, and `ap`
 /// a `va_list` holding a pointer of the right type for each conversion.
 #[cfg_attr(not(test), unsafe(no_mangle))]
-pub unsafe extern "C" fn vfscanf(
-    stream: *mut File,
-    format: *const c_char,
-    ap: *mut VaListTag,
-) -> c_int {
+pub unsafe extern "C" fn vfscanf(stream: *mut File, format: *const c_char, ap: VaListArg) -> c_int {
     let op = |inner: &mut Inner| {
         let mut source = Stream { inner };
         // SAFETY: the caller passes a format and its arguments.
@@ -972,11 +995,7 @@ pub unsafe extern "C" fn vfscanf(
 /// `s` and `format` must be NUL-terminated strings, and `ap` a `va_list`
 /// holding a pointer of the right type for each conversion.
 #[cfg_attr(not(test), unsafe(no_mangle))]
-pub unsafe extern "C" fn vsscanf(
-    s: *const c_char,
-    format: *const c_char,
-    ap: *mut VaListTag,
-) -> c_int {
+pub unsafe extern "C" fn vsscanf(s: *const c_char, format: *const c_char, ap: VaListArg) -> c_int {
     let mut source = Text { start: s, pos: 0 };
     // SAFETY: the caller passes a string, a format and its arguments.
     unsafe { scan(&mut source, format, core::ptr::null(), ap) }
@@ -988,7 +1007,7 @@ pub unsafe extern "C" fn vsscanf(
 ///
 /// As `vfscanf`, without the stream.
 #[cfg_attr(not(test), unsafe(no_mangle))]
-pub unsafe extern "C" fn vscanf(format: *const c_char, ap: *mut VaListTag) -> c_int {
+pub unsafe extern "C" fn vscanf(format: *const c_char, ap: VaListArg) -> c_int {
     // SAFETY: `stdin` is a live stream, and the caller passes the rest.
     unsafe { vfscanf(stdin.load(Ordering::Relaxed), format, ap) }
 }
@@ -1002,7 +1021,7 @@ pub unsafe extern "C" fn vscanf(format: *const c_char, ap: *mut VaListTag) -> c_
 pub unsafe extern "C" fn __isoc99_vfscanf(
     stream: *mut File,
     format: *const c_char,
-    ap: *mut VaListTag,
+    ap: VaListArg,
 ) -> c_int {
     // SAFETY: the caller's promises are `vfscanf`'s.
     unsafe { vfscanf(stream, format, ap) }
@@ -1017,7 +1036,7 @@ pub unsafe extern "C" fn __isoc99_vfscanf(
 pub unsafe extern "C" fn __isoc99_vsscanf(
     s: *const c_char,
     format: *const c_char,
-    ap: *mut VaListTag,
+    ap: VaListArg,
 ) -> c_int {
     // SAFETY: the caller's promises are `vsscanf`'s.
     unsafe { vsscanf(s, format, ap) }
@@ -1029,7 +1048,7 @@ pub unsafe extern "C" fn __isoc99_vsscanf(
 ///
 /// As `vscanf`.
 #[cfg_attr(not(test), unsafe(no_mangle))]
-pub unsafe extern "C" fn __isoc99_vscanf(format: *const c_char, ap: *mut VaListTag) -> c_int {
+pub unsafe extern "C" fn __isoc99_vscanf(format: *const c_char, ap: VaListArg) -> c_int {
     // SAFETY: the caller's promises are `vscanf`'s.
     unsafe { vscanf(format, ap) }
 }
@@ -1043,7 +1062,7 @@ pub unsafe extern "C" fn __isoc99_vscanf(format: *const c_char, ap: *mut VaListT
 pub unsafe extern "C" fn __isoc23_vfscanf(
     stream: *mut File,
     format: *const c_char,
-    ap: *mut VaListTag,
+    ap: VaListArg,
 ) -> c_int {
     // SAFETY: the caller's promises are `vfscanf`'s.
     unsafe { vfscanf(stream, format, ap) }
@@ -1058,7 +1077,7 @@ pub unsafe extern "C" fn __isoc23_vfscanf(
 pub unsafe extern "C" fn __isoc23_vsscanf(
     s: *const c_char,
     format: *const c_char,
-    ap: *mut VaListTag,
+    ap: VaListArg,
 ) -> c_int {
     // SAFETY: the caller's promises are `vsscanf`'s.
     unsafe { vsscanf(s, format, ap) }
@@ -1070,7 +1089,7 @@ pub unsafe extern "C" fn __isoc23_vsscanf(
 ///
 /// As `vscanf`.
 #[cfg_attr(not(test), unsafe(no_mangle))]
-pub unsafe extern "C" fn __isoc23_vscanf(format: *const c_char, ap: *mut VaListTag) -> c_int {
+pub unsafe extern "C" fn __isoc23_vscanf(format: *const c_char, ap: VaListArg) -> c_int {
     // SAFETY: the caller's promises are `vscanf`'s.
     unsafe { vscanf(format, ap) }
 }

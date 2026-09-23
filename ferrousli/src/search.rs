@@ -64,7 +64,9 @@ pub struct HsearchData {
     unused2: c_uint,
 }
 
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(size_of::<Entry>() == 16);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(size_of::<HsearchData>() == 16);
 
 /// `FIND`, the `ACTION` that only looks.
@@ -99,7 +101,7 @@ unsafe fn key_hash(key: *const c_char) -> usize {
     let mut p = key;
     loop {
         // SAFETY: the string is NUL-terminated and the loop stops at its end.
-        let byte = unsafe { p.read() }.cast_unsigned();
+        let byte = unsafe { p.read() } as u8;
         if byte == 0 {
             return h;
         }

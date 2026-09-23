@@ -32,11 +32,15 @@ pub unsafe extern "C" fn wait4(
             pid as usize,
             status.addr(),
             options as usize,
-            usage.addr(),
+            crate::resource::kernel_usage(usage),
             0,
             0,
         )
     };
+    if ret > 0 {
+        // SAFETY: the kernel wrote the usage of the child it reports.
+        unsafe { crate::resource::widen(usage) };
+    }
     errno::from_syscall(ret) as c_int
 }
 

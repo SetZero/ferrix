@@ -61,9 +61,14 @@ pub struct Tm {
     pub tm_zone: *const c_char,
 }
 
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(size_of::<Tm>() == 56);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(size_of::<Tm>() == 44);
 const _: () = assert!(offset_of!(Tm, tm_isdst) == 32);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(Tm, tm_gmtoff) == 40);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(Tm, tm_zone) == 48);
 
 impl Tm {
@@ -229,7 +234,8 @@ pub fn local(t: i64) -> Option<Tm> {
     let zone = tz::at(t, false);
     let mut tm = secs_to_tm(t.checked_add(zone.utoff)?)?;
     tm.tm_isdst = zone.isdst;
-    tm.tm_gmtoff = zone.utoff;
+    // A day's worth of seconds at most: it fits a `long`.
+    tm.tm_gmtoff = zone.utoff as c_long;
     tm.tm_zone = zone.name;
     Some(tm)
 }

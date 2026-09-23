@@ -73,7 +73,8 @@ impl Input for CText {
             self.known.set(next + 1);
         }
         // SAFETY: `i` is below `known`, so it is inside the string.
-        unsafe { self.start.wrapping_add(i).read() }.cast_unsigned()
+        let c = unsafe { self.start.wrapping_add(i).read() };
+        c as u8
     }
 }
 

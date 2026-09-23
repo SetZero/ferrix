@@ -73,7 +73,11 @@ int main(void)
 	errno = 0;
 	CHECK(atoi("  -123abc") == -123);
 	CHECK(atoi("0x10") == 0);
+#if LONG_MAX == 0x7fffffff
+	CHECK(atol("+2147483647") == LONG_MAX);
+#else
 	CHECK(atol("+9223372036854775807") == LONG_MAX);
+#endif
 	CHECK(atoll("-9223372036854775808") == LLONG_MIN);
 	CHECK(atoi("") == 0);
 	CHECK(errno == 0);

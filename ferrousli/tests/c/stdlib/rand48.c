@@ -33,7 +33,7 @@ int main(void)
 		CHECK(drand48() == (double)step() / (double)(1ULL << 48));
 	}
 	/* srand48 uses only the low 32 bits of its argument. */
-	srand48(0x100000001L);
+	srand48((long)0x100000001LL);
 	X = 0x330E | 1ULL << 16;
 	CHECK(lrand48() == (long)(step() >> 17));
 

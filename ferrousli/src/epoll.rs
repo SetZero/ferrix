@@ -18,8 +18,10 @@ use crate::errno;
 use crate::syscall::{self, nr};
 use crate::time::{KERNEL_SIGSET_SIZE, Timespec};
 
-/// C's `struct epoll_event`.
-#[repr(C, packed)]
+/// C's `struct epoll_event`: packed on x86-64, as the kernel's is there and
+/// nowhere else.
+#[cfg_attr(target_arch = "x86_64", repr(C, packed))]
+#[cfg_attr(not(target_arch = "x86_64"), repr(C))]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct EpollEvent {
     /// The events asked for, or those that happened.
@@ -28,8 +30,14 @@ pub struct EpollEvent {
     pub data: u64,
 }
 
+#[cfg(target_arch = "x86_64")]
 const _: () = assert!(size_of::<EpollEvent>() == 12);
+#[cfg(target_arch = "x86_64")]
 const _: () = assert!(offset_of!(EpollEvent, data) == 4);
+#[cfg(not(target_arch = "x86_64"))]
+const _: () = assert!(size_of::<EpollEvent>() == 16);
+#[cfg(not(target_arch = "x86_64"))]
+const _: () = assert!(offset_of!(EpollEvent, data) == 8);
 
 /// Creates a set, returning its descriptor. `flags` may hold
 /// `EPOLL_CLOEXEC`.
@@ -130,6 +138,10 @@ pub unsafe extern "C" fn epoll_wait(
 
 /// [`epoll_pwait`] with a `struct timespec` timeout, or none if it is null.
 ///
+/// Linux has the call since 5.11. On a kernel without it, and under qemu-user,
+/// which lacks it too, the wait is made with `epoll_pwait` and the timeout
+/// rounded up to whole milliseconds, so that it is never cut short.
+///
 /// # Safety
 ///
 /// As [`epoll_pwait`], and `timeout` must be null or valid for a read of a
@@ -155,5 +167,24 @@ pub unsafe extern "C" fn epoll_pwait2(
             KERNEL_SIGSET_SIZE,
         )
     };
-    errno::from_syscall(ret) as c_int
+    if ret != -(errno::ENOSYS as isize) {
+        return errno::from_syscall(ret) as c_int;
+    }
+    let millis = if timeout.is_null() {
+        -1
+    } else {
+        // SAFETY: the caller vouches for a non-null timeout.
+        let timeout = unsafe { timeout.read() };
+        if timeout.tv_sec < 0 || !(0..1_000_000_000).contains(&i64::from(timeout.tv_nsec)) {
+            errno::set(errno::EINVAL);
+            return -1;
+        }
+        let millis = timeout
+            .tv_sec
+            .saturating_mul(1000)
+            .saturating_add((i64::from(timeout.tv_nsec) + 999_999) / 1_000_000);
+        c_int::try_from(millis).unwrap_or(c_int::MAX)
+    };
+    // SAFETY: as above.
+    unsafe { epoll_pwait(epfd, events, count, millis, mask) }
 }

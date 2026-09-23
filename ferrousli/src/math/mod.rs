@@ -159,6 +159,12 @@
 
 pub mod acos;
 pub mod acosh;
+#[cfg(target_arch = "aarch64")]
+#[path = "aarch64.rs"]
+pub(crate) mod arch;
+#[cfg(target_arch = "arm")]
+#[path = "arm.rs"]
+pub(crate) mod arch;
 #[cfg(target_arch = "x86_64")]
 #[path = "x86_64.rs"]
 pub(crate) mod arch;
@@ -181,6 +187,8 @@ pub mod j0f;
 pub mod j1;
 pub mod j1f;
 pub mod jn;
+#[cfg(target_arch = "aarch64")]
+pub mod ld128;
 #[cfg(target_arch = "x86_64")]
 pub mod ld80;
 pub mod lgamma;

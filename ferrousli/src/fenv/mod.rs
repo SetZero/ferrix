@@ -18,9 +18,20 @@
 //! * clearing clears both, and raising sets MXCSR's;
 //! * the rounding mode is set in both, and read from MXCSR;
 //! * `fenv_t` holds the whole x87 environment followed by MXCSR.
+//!
+//! # AArch64 and ARMv7-A
+//!
+//! One unit, whose flags and rounding mode sit at the same bit positions on
+//! both: FPSR and FPCR on AArch64, FPSCR on ARMv7-A.
 
 use core::ffi::c_int;
 
+#[cfg(target_arch = "aarch64")]
+#[path = "aarch64.rs"]
+mod arch;
+#[cfg(target_arch = "arm")]
+#[path = "arm.rs"]
+mod arch;
 #[cfg(target_arch = "x86_64")]
 #[path = "x86_64.rs"]
 mod arch;
@@ -54,7 +65,9 @@ pub unsafe extern "C" fn fegetexceptflag(flagp: *mut fexcept_t, excepts: c_int) 
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub unsafe extern "C" fn fesetexceptflag(flagp: *const fexcept_t, excepts: c_int) -> c_int {
     // SAFETY: the caller vouches for `flagp`.
-    let flags = c_int::from(unsafe { flagp.read() });
+    let flags = u32::from(unsafe { flagp.read() });
+    // The flags all fit in the low six bits.
+    let flags = (flags & FE_ALL_EXCEPT.cast_unsigned()).cast_signed();
     let _ = feclearexcept(!flags & excepts);
     let _ = feraiseexcept(flags & excepts);
     0
@@ -173,7 +186,7 @@ mod tests {
     }
 
     #[test]
-    fn the_rounding_mode_reaches_sse_and_the_x87() {
+    fn the_rounding_mode_reaches_the_arithmetic() {
         let _default = DefaultEnv::new();
         for (mode, third) in [
             (FE_TONEAREST, 0x3fd5_5555_5555_5555),
@@ -184,6 +197,7 @@ mod tests {
             assert_eq!(fesetround(mode), 0);
             assert_eq!(fegetround(), mode);
             assert_eq!((black_box(1.0f64) / 3.0).to_bits(), third);
+            #[cfg(target_arch = "x86_64")]
             assert_eq!(c_int::from(arch::x87_control()) & 0xc00, mode);
             let _ = fesetround(FE_TONEAREST);
         }
@@ -206,6 +220,7 @@ mod tests {
         assert_eq!(__flt_rounds(), 3);
     }
 
+    #[cfg(target_arch = "x86_64")]
     #[test]
     fn x87_flags_are_tested_cleared_and_kept_apart_from_the_mask() {
         let _default = DefaultEnv::new();
@@ -246,19 +261,31 @@ mod tests {
         let mut env = arch::zeroed_env();
         // SAFETY: `env` is a local `fenv_t`.
         assert_eq!(unsafe { fegetenv(&raw mut env) }, 0);
-        assert_eq!(env.__mxcsr & 0x3f, 0x10);
-        assert_eq!(env.__control_word & 0xc00, 0x800);
+        #[cfg(target_arch = "x86_64")]
+        {
+            assert_eq!(env.__mxcsr & 0x3f, 0x10);
+            assert_eq!(env.__control_word & 0xc00, 0x800);
+        }
+        #[cfg(target_arch = "aarch64")]
+        {
+            assert_eq!(env.__fpsr & 0x1f, 0x8);
+            assert_eq!(env.__fpcr & 0xc0_0000, 0x40_0000);
+        }
+        #[cfg(target_arch = "arm")]
+        assert_eq!(env.__cw & 0xc0_001f, 0x40_0008);
 
         // SAFETY: the default environment's name.
         assert_eq!(unsafe { fesetenv(FE_DFL_ENV) }, 0);
         assert_eq!(fegetround(), FE_TONEAREST);
         assert_eq!(fetestexcept(FE_ALL_EXCEPT), 0);
+        #[cfg(target_arch = "x86_64")]
         assert_eq!(arch::x87_control(), 0x37f);
 
         // SAFETY: `env` was filled in by `fegetenv`.
         assert_eq!(unsafe { fesetenv(&raw const env) }, 0);
         assert_eq!(fegetround(), FE_UPWARD);
         assert_eq!(fetestexcept(FE_ALL_EXCEPT), FE_UNDERFLOW);
+        #[cfg(target_arch = "x86_64")]
         assert_eq!(arch::x87_control() & 0xc00, 0x800);
 
         let mut held = arch::zeroed_env();

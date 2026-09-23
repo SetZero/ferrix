@@ -24,10 +24,11 @@ use core::ffi::{c_char, c_int, c_long, c_longlong, c_ulong, c_ulonglong};
 use crate::errno;
 use crate::scan::{CText, Input, digit, set_end, skip_space};
 
-/// `intmax_t`: `long` on x86-64, as `bits/alltypes.h` defines it.
-type IntMax = c_long;
+/// `intmax_t`: 64 bits on every target, a `long` on the 64-bit ones and a
+/// `long long` on ARMv7-A, as `bits/alltypes.h` defines it.
+type IntMax = i64;
 /// `uintmax_t`.
-type UintMax = c_ulong;
+type UintMax = u64;
 
 /// The digits of a subject sequence, before they are fitted to a type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -376,8 +377,11 @@ mod tests {
 
     #[test]
     fn signed_limits_saturate_with_erange() {
+        #[cfg(target_pointer_width = "64")]
         assert_eq!(run(strtol, c"9223372036854775807", 10), (i64::MAX, 19, 0));
+        #[cfg(target_pointer_width = "64")]
         assert_eq!(run(strtol, c"-9223372036854775808", 10), (i64::MIN, 20, 0));
+        #[cfg(target_pointer_width = "64")]
         assert_eq!(
             run(strtol, c"9223372036854775808", 10),
             (i64::MAX, 19, errno::ERANGE)
@@ -390,15 +394,39 @@ mod tests {
             run(strtoimax, c"-99999999999999999999999999z", 10),
             (i64::MIN, 27, errno::ERANGE)
         );
+        #[cfg(target_pointer_width = "64")]
         assert_eq!(
             run(strtol, c"0x8000000000000000", 0),
             (i64::MAX, 18, errno::ERANGE)
         );
     }
 
+    #[cfg(target_pointer_width = "32")]
+    #[test]
+    fn a_32_bit_long_saturates_at_its_own_limits() {
+        assert_eq!(run(strtol, c"2147483647", 10), (i32::MAX, 10, 0));
+        assert_eq!(
+            run(strtol, c"2147483648", 10),
+            (i32::MAX, 10, errno::ERANGE)
+        );
+        assert_eq!(
+            run(strtol, c"-2147483649", 10),
+            (i32::MIN, 11, errno::ERANGE)
+        );
+        assert_eq!(run(strtoul, c"-1", 10), (u32::MAX, 2, 0));
+        assert_eq!(
+            run(strtoul, c"4294967296", 10),
+            (u32::MAX, 10, errno::ERANGE)
+        );
+        // SAFETY: a NUL-terminated string.
+        assert_eq!(unsafe { atol(c"-2147483648".as_ptr()) }, i32::MIN);
+    }
+
     #[test]
     fn unsigned_negation_wraps_but_overflow_saturates() {
+        #[cfg(target_pointer_width = "64")]
         assert_eq!(run(strtoul, c"-1", 10), (u64::MAX, 2, 0));
+        #[cfg(target_pointer_width = "64")]
         assert_eq!(run(strtoul, c"-18446744073709551615", 10), (1, 21, 0));
         assert_eq!(
             run(strtoull, c"-18446744073709551616", 10),
@@ -408,6 +436,7 @@ mod tests {
             run(strtoumax, c"18446744073709551616", 0),
             (u64::MAX, 20, errno::ERANGE)
         );
+        #[cfg(target_pointer_width = "64")]
         assert_eq!(run(strtoul, c"ffffffffffffffff", 16), (u64::MAX, 16, 0));
     }
 
@@ -448,6 +477,7 @@ mod tests {
         // SAFETY: as above.
         assert_eq!(unsafe { atoi(c"4294967297".as_ptr()) }, 1);
         // SAFETY: as above.
+        #[cfg(target_pointer_width = "64")]
         assert_eq!(unsafe { atol(c"-9223372036854775808".as_ptr()) }, i64::MIN);
         // SAFETY: as above.
         assert_eq!(unsafe { atoll(c"x1".as_ptr()) }, 0);

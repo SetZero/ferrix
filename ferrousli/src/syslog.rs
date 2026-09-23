@@ -30,7 +30,7 @@ use crate::syscall::{self, nr};
 use crate::time::time;
 use crate::tm::{Tm, gmtime_r};
 use crate::unistd::close;
-use crate::va::{self, VaListTag};
+use crate::va::{self, VaListArg};
 
 /// `LOG_PID`, from `include/syslog.h`.
 const LOG_PID: c_int = 0x01;
@@ -246,7 +246,7 @@ fn send_entry(fd: c_int, entry: &[u8]) -> bool {
 /// # Safety
 ///
 /// `message` must be a format string and `ap` its arguments.
-unsafe fn log(state: &mut State, priority: c_int, message: *const c_char, ap: *mut VaListTag) {
+unsafe fn log(state: &mut State, priority: c_int, message: *const c_char, ap: VaListArg) {
     // Cancellation waits until this is finished, as in musl.
     let _cancel = crate::cancel::disable();
     let saved_errno = last_errno();
@@ -340,7 +340,7 @@ unsafe fn log(state: &mut State, priority: c_int, message: *const c_char, ap: *m
 ///
 /// `message` must be a format string and `ap` a `va_list` of its arguments.
 #[cfg_attr(not(test), unsafe(no_mangle))]
-pub unsafe extern "C" fn vsyslog(priority: c_int, message: *const c_char, ap: *mut VaListTag) {
+pub unsafe extern "C" fn vsyslog(priority: c_int, message: *const c_char, ap: VaListArg) {
     if priority & !0x3ff != 0 {
         return;
     }
@@ -367,7 +367,7 @@ pub unsafe extern "C" fn __vsyslog_chk(
     priority: c_int,
     _flag: c_int,
     message: *const c_char,
-    ap: *mut VaListTag,
+    ap: VaListArg,
 ) {
     // SAFETY: the caller's contract is `vsyslog`'s.
     unsafe { vsyslog(priority, message, ap) }

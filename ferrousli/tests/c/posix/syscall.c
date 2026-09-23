@@ -31,8 +31,14 @@ int main(void)
 	CHECK(syscall(SYS_getpid) == getpid());
 	errno = 0;
 	CHECK(syscall(SYS_close, -1) == -1 && errno == EBADF);
+#ifdef SYS_mmap2
+	/* 32-bit Arm has no mmap, only mmap2, whose offset is in pages. */
+	p = (void *)syscall(SYS_mmap2, 0, 4096, PROT_READ | PROT_WRITE,
+			    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+#else
 	p = (void *)syscall(SYS_mmap, 0, 4096, PROT_READ | PROT_WRITE,
 			    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+#endif
 	CHECK(p != MAP_FAILED);
 	CHECK(syscall(SYS_munmap, p, 4096) == 0);
 	CHECK(close(fd) == 0);

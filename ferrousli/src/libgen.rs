@@ -33,7 +33,8 @@ fn static_string(s: &'static [c_char; 2]) -> *mut c_char {
 /// `s` must be readable at `i`.
 unsafe fn at(s: *const c_char, i: usize) -> u8 {
     // SAFETY: the caller vouches for the byte.
-    unsafe { s.wrapping_add(i).read() }.cast_unsigned()
+    let c = unsafe { s.wrapping_add(i).read() };
+    c as u8
 }
 
 /// The last component of `path`, with trailing slashes removed by writing

@@ -11,10 +11,11 @@
 //! first dropped digit and whether anything nonzero follows it, and ties go to
 //! the even digit, as glibc and musl do in the default rounding mode.
 //!
-//! The largest integer is an x87 `long double` near 2^16384, about 4933
-//! digits, and the longest fraction the smallest subnormal `long double`,
-//! `m * 5^16445` for a 64-bit `m`, 11514 digits. Both fit [`LIMBS`] limbs, a
-//! little over 5 KiB on the stack. Digits beyond a value's own are zeros, so
+//! The largest integer is a `long double` near 2^16384, about 4933 digits,
+//! and the longest fraction the smallest subnormal `long double`: on AArch64,
+//! whose `long double` is IEEE binary128, `m * 5^16494` for a 113-bit `m`,
+//! 11563 digits; on x86-64, whose is the x87's, `m * 5^16445` for a 64-bit
+//! `m`, 11514. Both fit [`LIMBS`] limbs, a little over 5 KiB on the stack. Digits beyond a value's own are zeros, so
 //! `%f` of a huge value and precisions far above 1000 cost only the output.
 //!
 //! This is the same exact method as musl's `fmt_fp` (MIT) in
@@ -29,6 +30,8 @@
 //! into the leading digit without renormalising, so `%.0a` of 1.5 is `0x2p+0`.
 //! An x87 `long double` is printed with its top four significand bits as the
 //! leading digit, `0x8p-3` for 1, and a carry out of that digit renormalises.
+//! A binary128 one is printed as a `double` is, with 28 fraction digits. On
+//! ARMv7-A a `long double` is a `double`.
 //!
 //! Infinities are `inf` and NaNs `nan`, in capitals for the capital
 //! conversions, with the sign of the value: `-nan` is printed for a NaN whose
@@ -45,7 +48,8 @@ use crate::va::LongDouble;
 pub enum Float {
     /// A `double`.
     Double(f64),
-    /// An x87 `long double`.
+    /// A `long double`: the x87's on x86-64, binary128 on AArch64, and a
+    /// `double` on ARMv7-A.
     Long(LongDouble),
 }
 
@@ -59,7 +63,7 @@ enum Kind {
     /// `mantissa * 2^exponent`.
     Finite {
         /// The significand as an integer.
-        mantissa: u64,
+        mantissa: u128,
         /// The power of two.
         exponent: i32,
     },
@@ -76,19 +80,41 @@ fn decode(value: Float) -> (bool, Kind) {
                 0x7ff if fraction == 0 => Kind::Infinite,
                 0x7ff => Kind::Nan,
                 0 => Kind::Finite {
-                    mantissa: fraction,
+                    mantissa: u128::from(fraction),
                     exponent: -1074,
                 },
                 _ => Kind::Finite {
-                    mantissa: fraction | (1 << 52),
+                    mantissa: u128::from(fraction | (1 << 52)),
                     exponent: biased - 1075,
                 },
             };
             (bits >> 63 != 0, kind)
         }
+        #[cfg(target_arch = "aarch64")]
+        Float::Long(value) => {
+            let bits = value.bits;
+            let biased = ((bits >> 112) & 0x7fff) as i32;
+            let fraction = bits & ((1 << 112) - 1);
+            let kind = match biased {
+                0x7fff if fraction == 0 => Kind::Infinite,
+                0x7fff => Kind::Nan,
+                0 => Kind::Finite {
+                    mantissa: fraction,
+                    exponent: -16494,
+                },
+                _ => Kind::Finite {
+                    mantissa: fraction | (1 << 112),
+                    exponent: biased - 16495,
+                },
+            };
+            (bits >> 127 != 0, kind)
+        }
+        #[cfg(target_arch = "arm")]
+        Float::Long(value) => decode(Float::Double(value.0)),
+        #[cfg(target_arch = "x86_64")]
         Float::Long(value) => {
             let biased = i32::from(value.sign_exponent & 0x7fff);
-            let mantissa = value.mantissa;
+            let mantissa = u128::from(value.mantissa);
             let kind = if biased == 0x7fff {
                 if mantissa == 1 << 63 {
                     Kind::Infinite
@@ -115,8 +141,8 @@ fn decode(value: Float) -> (bool, Kind) {
 
 /// A limb's base.
 const BASE: u32 = 1_000_000_000;
-/// Limbs in a [`Decimal`]: room for 11529 digits.
-const LIMBS: usize = 1281;
+/// Limbs in a [`Decimal`]: room for 11610 digits.
+const LIMBS: usize = 1290;
 /// The powers of ten that fit a limb.
 const POW10: [u32; 10] = [
     1,
@@ -150,7 +176,7 @@ struct Decimal {
 
 impl Decimal {
     /// The digits of `mantissa * 2^exponent`.
-    fn new(mantissa: u64, exponent: i32) -> Self {
+    fn new(mantissa: u128, exponent: i32) -> Self {
         let mut decimal = Self {
             limbs: [0; LIMBS],
             len: 0,
@@ -159,10 +185,10 @@ impl Decimal {
         let mut m = mantissa;
         while m != 0 {
             if let Some(limb) = decimal.limbs.get_mut(decimal.len) {
-                *limb = (m % u64::from(BASE)) as u32;
+                *limb = (m % u128::from(BASE)) as u32;
             }
             decimal.len += 1;
-            m /= u64::from(BASE);
+            m /= u128::from(BASE);
         }
         if mantissa == 0 {
             return decimal;
@@ -393,7 +419,7 @@ fn decimal(
     spec: &Spec,
     conversion: u8,
     sign: &[u8],
-    mantissa: u64,
+    mantissa: u128,
     exponent: i32,
     count: usize,
 ) -> Result<usize, c_int> {
@@ -501,16 +527,33 @@ fn hexadecimal(
             let bits = value.to_bits();
             let biased = ((bits >> 52) & 0x7ff) as i32;
             let fraction = bits & ((1 << 52) - 1);
+            let fraction = u128::from(fraction);
             if biased == 0 {
                 let exp = if fraction == 0 { 0 } else { -1022 };
-                (0_u64, fraction, 13_usize, exp, false)
+                (0_u128, fraction, 13_usize, exp, false)
             } else {
                 (1, fraction, 13, biased - 1023, false)
             }
         }
+        #[cfg(target_arch = "aarch64")]
+        Float::Long(value) => {
+            let biased = ((value.bits >> 112) & 0x7fff) as i32;
+            let fraction = value.bits & ((1 << 112) - 1);
+            if biased == 0 {
+                let exp = if fraction == 0 { 0 } else { -16382 };
+                (0, fraction, 28, exp, false)
+            } else {
+                (1, fraction, 28, biased - 16383, false)
+            }
+        }
+        #[cfg(target_arch = "arm")]
+        Float::Long(value) => {
+            return hexadecimal(sink, spec, upper, sign, Float::Double(value.0), count);
+        }
+        #[cfg(target_arch = "x86_64")]
         Float::Long(value) => {
             let biased = i32::from(value.sign_exponent & 0x7fff);
-            let m = value.mantissa;
+            let m = u128::from(value.mantissa);
             if biased == 0 && m == 0 {
                 (0, 0, 15, 0, true)
             } else {
@@ -527,9 +570,9 @@ fn hexadecimal(
     match spec.precision {
         Some(p) if p < nibbles => {
             let shift = 4 * (nibbles - p) as u32;
-            let rest = fraction & ((1_u64 << shift) - 1);
+            let rest = fraction & ((1_u128 << shift) - 1);
             fraction >>= shift;
-            let half = 1_u64 << (shift - 1);
+            let half = 1_u128 << (shift - 1);
             let odd = if p == 0 { lead & 1 } else { fraction & 1 } == 1;
             if rest > half || (rest == half && odd) {
                 fraction += 1;
@@ -570,7 +613,7 @@ fn hexadecimal(
     } else {
         b"0123456789abcdef"
     };
-    let nibble = |n: u64| hex.get((n & 15) as usize).copied().unwrap_or(b'0');
+    let nibble = |n: u128| hex.get((n & 15) as usize).copied().unwrap_or(b'0');
     sink.write(sign);
     sink.write(if upper { b"0X" } else { b"0x" });
     sink.pad(b'0', zeros);
@@ -578,7 +621,7 @@ fn hexadecimal(
     if dot {
         sink.write(b".");
     }
-    let mut text = [0_u8; 16];
+    let mut text = [0_u8; 28];
     for (i, slot) in text.iter_mut().take(nibbles).enumerate() {
         *slot = nibble(fraction >> (4 * (nibbles - 1 - i)));
     }
@@ -598,10 +641,14 @@ mod tests {
 
     #[test]
     fn the_longest_fraction_and_integer_fit_the_limbs() {
-        let tiny = Decimal::new(u64::MAX, -16445);
+        let tiny = Decimal::new(u128::from(u64::MAX), -16445);
         assert!(tiny.count() >= 11514 && tiny.len < LIMBS);
-        let huge = Decimal::new(u64::MAX, 16320);
+        let huge = Decimal::new(u128::from(u64::MAX), 16320);
         assert_eq!(huge.count(), 4933);
+        let tiniest = Decimal::new((1 << 113) - 1, -16494);
+        assert!(tiniest.count() >= 11563 && tiniest.len < LIMBS);
+        let largest = Decimal::new((1 << 113) - 1, 16271);
+        assert_eq!(largest.count(), 4933);
     }
 
     #[test]

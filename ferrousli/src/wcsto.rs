@@ -28,10 +28,11 @@ use crate::strtod::parse;
 use crate::strtol::{scan, to_signed, to_unsigned};
 use crate::wctype::iswspace;
 
-/// `intmax_t`: `long` on x86-64, as `bits/alltypes.h` defines it.
-type IntMax = c_long;
+/// `intmax_t`: 64 bits on every target, a `long` on the 64-bit ones and a
+/// `long long` on ARMv7-A, as `bits/alltypes.h` defines it.
+type IntMax = i64;
 /// `uintmax_t`.
-type UintMax = c_ulong;
+type UintMax = u64;
 
 /// A NUL-terminated wide string read as the narrow parsers need it: each
 /// character as its byte when it is ASCII, as `@` when it is not, and NUL at
@@ -321,6 +322,38 @@ pub unsafe extern "C" fn wcstold(s: *const WChar, endptr: *mut *mut WChar) {
         "ret",
         convert = sym wcstold_x87,
     )
+}
+
+/// The bits of a binary128 `long double` parsed from a wide string:
+/// [`wcstold`]'s work on AArch64.
+///
+/// # Safety
+///
+/// As [`wcstod`].
+#[cfg(target_arch = "aarch64")]
+unsafe extern "C" fn wcstold_binary128(s: *const WChar, endptr: *mut *mut WChar) -> u128 {
+    // SAFETY: the caller's contract is `convert_float`'s.
+    unsafe { convert_float(s, endptr, &crate::float::BINARY128) }
+}
+
+#[cfg(target_arch = "aarch64")]
+crate::math::ld128::returns_long_double!(
+    /// Parses a `long double` from a wide string: on AArch64, IEEE binary128,
+    /// returned in q0.
+    fn wcstold(s: *const WChar, endptr: *mut *mut WChar) via wcstold_binary128
+);
+
+/// Parses a `long double`, which on ARMv7-A is a `double`, from a wide
+/// string.
+///
+/// # Safety
+///
+/// As [`wcstod`].
+#[cfg(target_arch = "arm")]
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn wcstold(s: *const WChar, endptr: *mut *mut WChar) -> f64 {
+    // SAFETY: the caller's contract is `wcstod`'s.
+    unsafe { wcstod(s, endptr) }
 }
 
 #[cfg(test)]

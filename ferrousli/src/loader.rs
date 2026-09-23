@@ -96,3 +96,43 @@ core::arch::global_asm!(
     ".size __ferrousli_loader_address, . - __ferrousli_loader_address",
     ".popsection",
 );
+
+#[cfg(all(not(test), target_arch = "aarch64"))]
+core::arch::global_asm!(
+    ".weak __ferrousli_loader",
+    ".pushsection .text.__ferrousli_loader_address,\"ax\",%progbits",
+    ".p2align 2",
+    ".globl __ferrousli_loader_address",
+    ".hidden __ferrousli_loader_address",
+    ".type __ferrousli_loader_address, %function",
+    "__ferrousli_loader_address:",
+    "    adrp x0, :got:__ferrousli_loader",
+    "    ldr x0, [x0, :got_lo12:__ferrousli_loader]",
+    "    ret",
+    ".size __ferrousli_loader_address, . - __ferrousli_loader_address",
+    ".popsection",
+);
+
+// ARMv7-A has no PC-relative load of a GOT entry in one instruction: the GOT
+// is found from the program counter, which reads 8 ahead in ARM state, and
+// the entry at its offset in it.
+#[cfg(all(not(test), target_arch = "arm"))]
+core::arch::global_asm!(
+    ".weak __ferrousli_loader",
+    ".pushsection .text.__ferrousli_loader_address,\"ax\",%progbits",
+    ".p2align 2",
+    ".arm",
+    ".globl __ferrousli_loader_address",
+    ".hidden __ferrousli_loader_address",
+    ".type __ferrousli_loader_address, %function",
+    "__ferrousli_loader_address:",
+    "    ldr r0, 2f",
+    "1:  add r0, pc, r0",
+    "    ldr r1, 3f",
+    "    ldr r0, [r0, r1]",
+    "    bx lr",
+    "2:  .word _GLOBAL_OFFSET_TABLE_ - (1b + 8)",
+    "3:  .word __ferrousli_loader(GOT)",
+    ".size __ferrousli_loader_address, . - __ferrousli_loader_address",
+    ".popsection",
+);

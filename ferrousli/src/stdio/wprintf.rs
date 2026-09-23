@@ -22,7 +22,7 @@ use core::sync::atomic::Ordering;
 use super::file::{self, File, Inner};
 use super::printf::{FileSink, Sink, format};
 use crate::multibyte::{MbState, WChar, wcrtomb};
-use crate::va::{self, VaListTag};
+use crate::va::{self, VaListArg};
 use crate::wchar::wcslen;
 use crate::{errno, malloc};
 
@@ -92,7 +92,7 @@ impl Sink for WideOut<'_> {
 unsafe fn format_wide(
     target: &mut dyn WideTarget,
     fmt: *const WChar,
-    ap: *mut VaListTag,
+    ap: VaListArg,
 ) -> Result<usize, c_int> {
     // SAFETY: the caller passes a NUL-terminated wide string.
     let len = unsafe { wcslen(fmt) };
@@ -172,7 +172,7 @@ pub unsafe extern "C" fn vswprintf(
     s: *mut WChar,
     n: usize,
     fmt: *const WChar,
-    ap: *mut VaListTag,
+    ap: VaListArg,
 ) -> c_int {
     let Some(room) = n.checked_sub(1) else {
         return -1;
@@ -225,7 +225,7 @@ impl WideTarget for WideFile<'_> {
 /// # Safety
 ///
 /// As [`vfwprintf`].
-unsafe fn vfwprintf_locked(inner: &mut Inner, fmt: *const WChar, ap: *mut VaListTag) -> c_int {
+unsafe fn vfwprintf_locked(inner: &mut Inner, fmt: *const WChar, ap: VaListArg) -> c_int {
     if inner.orientation == 0 {
         inner.orientation = 1;
     }
@@ -259,11 +259,7 @@ unsafe fn vfwprintf_locked(inner: &mut Inner, fmt: *const WChar, ap: *mut VaList
 /// `stream` must be a live stream, `fmt` a NUL-terminated wide string, and
 /// `ap` a `va_list` whose arguments match it.
 #[cfg_attr(not(test), unsafe(no_mangle))]
-pub unsafe extern "C" fn vfwprintf(
-    stream: *mut File,
-    fmt: *const WChar,
-    ap: *mut VaListTag,
-) -> c_int {
+pub unsafe extern "C" fn vfwprintf(stream: *mut File, fmt: *const WChar, ap: VaListArg) -> c_int {
     let op = |inner: &mut Inner| {
         // SAFETY: the caller passes a live stream, a format and its arguments.
         unsafe { vfwprintf_locked(inner, fmt, ap) }
@@ -279,7 +275,7 @@ pub unsafe extern "C" fn vfwprintf(
 /// `fmt` must be a NUL-terminated wide string, and `ap` a `va_list` whose
 /// arguments match it.
 #[cfg_attr(not(test), unsafe(no_mangle))]
-pub unsafe extern "C" fn vwprintf(fmt: *const WChar, ap: *mut VaListTag) -> c_int {
+pub unsafe extern "C" fn vwprintf(fmt: *const WChar, ap: VaListArg) -> c_int {
     // SAFETY: standard output is a static stream, and the caller vouches for
     // the rest.
     unsafe { vfwprintf(file::stdout.load(Ordering::Relaxed), fmt, ap) }

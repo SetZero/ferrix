@@ -313,7 +313,7 @@ pub extern "C" fn random() -> c_long {
         let next = word.wrapping_mul(1_103_515_245).wrapping_add(12345) & 0x7fff_ffff;
         // SAFETY: as above.
         unsafe { state.set_word(0, next) };
-        return c_long::from(next);
+        return next as c_long;
     }
     let (i, j) = (isize::from(state.i), isize::from(state.j));
     // SAFETY: `i` and `j` are below `n`, and the buffer holds `n` words.
@@ -331,7 +331,7 @@ pub extern "C" fn random() -> c_long {
         state.j + 1
     };
     state.store();
-    c_long::from(sum >> 1)
+    (sum >> 1) as c_long
 }
 
 // ---------------------------------------------------------------------------
@@ -578,7 +578,7 @@ mod tests {
         let previous = unsafe { initstate(5, buffer.as_mut_ptr().cast(), buffer.len()) };
         assert_eq!(
             random(),
-            (5_u32.wrapping_mul(1_103_515_245).wrapping_add(12345) & 0x7fff_ffff).into()
+            (5_u32.wrapping_mul(1_103_515_245).wrapping_add(12345) & 0x7fff_ffff) as c_long
         );
         // SAFETY: `previous` is the state before.
         let _ = unsafe { setstate(previous) };

@@ -79,8 +79,17 @@ pub struct Netent {
     pub n_net: u32,
 }
 
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(size_of::<Netent>() == 24);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(offset_of!(Netent, n_addrtype) == 8);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(offset_of!(Netent, n_net) == 12);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(size_of::<Netent>() == 16);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(Netent, n_addrtype) == 16);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(Netent, n_net) == 20);
 
 /// C's `struct protoent`, from `include/netdb.h`. glibc's is the same.
@@ -95,7 +104,13 @@ pub struct Protoent {
     pub p_proto: c_int,
 }
 
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(size_of::<Protoent>() == 24);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(offset_of!(Protoent, p_proto) == 8);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(size_of::<Protoent>() == 12);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(Protoent, p_proto) == 16);
 
 /// The pointer array at `buf`, which the caller has aligned to hold one.
@@ -1660,7 +1675,7 @@ mod tests {
                 AF_INET,
                 &raw mut entry,
                 buf.as_mut_ptr(),
-                48,
+                6 * size_of::<usize>(),
                 &raw mut found,
                 &raw mut err,
             )

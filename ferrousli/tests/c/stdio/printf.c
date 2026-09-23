@@ -57,12 +57,18 @@ static void integers(void)
 	T("-32768", "%hd", 32768);
 	T("-2147483648", "%d", INT_MIN);
 	T("4294967295", "%u", UINT_MAX);
+#if LONG_MAX > 0x7fffffff
 	T("-9223372036854775808", "%ld", LONG_MIN);
+	T("18446744073709551615", "%zu", SIZE_MAX);
+	T("ffffffffffffffff", "%tx", (ptrdiff_t)-1);
+#else
+	T("-2147483648", "%ld", LONG_MIN);
+	T("4294967295", "%zu", SIZE_MAX);
+	T("ffffffff", "%tx", (ptrdiff_t)-1);
+#endif
 	T("18446744073709551615", "%llu", -1LL);
 	T("-9223372036854775808", "%jd", INTMAX_MIN);
 	T("-1", "%zd", (ssize_t)-1);
-	T("18446744073709551615", "%zu", SIZE_MAX);
-	T("ffffffffffffffff", "%tx", (ptrdiff_t)-1);
 	T("1777777777777777777777", "%llo", -1LL);
 	T("1234567890123", "%Ld", 1234567890123LL);
 	T("5", "%qd", 5LL);
@@ -225,6 +231,8 @@ static void long_doubles(void)
 	char b[8000];
 	int n;
 
+#if LDBL_MANT_DIG == 64
+	/* x86-64: the x87 80-bit format. */
 	T("0x8p-3", "%La", 1.0L);
 	T("0xf.fffffffffffffffp+16380", "%La", LDBL_MAX);
 	T("0x0.000000000000001p-16385", "%La", LDBL_TRUE_MIN);
@@ -242,11 +250,54 @@ static void long_doubles(void)
 	T("1.18973e+4932", "%Lg", LDBL_MAX);
 	T("0.1", "%.1Lf", 0.05L);
 	T("0.0", "%.1Lf", 0.0499999999999999999L);
+#elif LDBL_MANT_DIG == 113
+	/* AArch64: IEEE binary128, as glibc prints it. */
+	T("0x1p+0", "%La", 1.0L);
+	T("0x1.ffffffffffffffffffffffffffffp+16383", "%La", LDBL_MAX);
+	T("0x0.0000000000000000000000000001p-16382", "%La", LDBL_TRUE_MIN);
+	T("0x1p-16382", "%La", 0x1p-16382L);
+	T("0x2p+3", "%.0La", 0xf.8p0L);
+	T("0x2.0p+3", "%.1La", 0xf.fp0L);
+	T("0x1p+3", "%.0La", 0x8.8p0L);
+	T("0x1.23456789abcdefp+0", "%La", 0x1.23456789abcdefp0L);
+	T("-0x0.0000000000000006p-16382", "%La", -0x3p-16445L);
+	T("0x0p+0", "%La", 0.0L);
+	T("+inf", "%+Lf", (long double)INFINITY);
+	T("-nan", "%Lg", (long double)-NAN);
+	T("3.14159265358979324", "%.18Lg", 3.14159265358979323846264338327950288L);
+	T("6.4752e-4966", "%.4Le", LDBL_TRUE_MIN);
+	T("1.18973e+4932", "%Lg", LDBL_MAX);
+	T("0.1", "%.1Lf", 0.05L);
+	T("0.0", "%.1Lf", 0.0499999999999999999L);
+#else
+	/* ARMv7-A: a long double is a double, as glibc prints it. */
+	T("0x1p+0", "%La", 1.0L);
+	T("0x1.fffffffffffffp+1023", "%La", LDBL_MAX);
+	T("0x0.0000000000001p-1022", "%La", LDBL_TRUE_MIN);
+	T("0x2p+3", "%.0La", 0xf.8p0L);
+	T("0x2.0p+3", "%.1La", 0xf.fp0L);
+	T("0x1p+3", "%.0La", 0x8.8p0L);
+	T("0x1.23456789abcdfp+0", "%La", 0x1.23456789abcdefp0L);
+	T("0x0p+0", "%La", 0.0L);
+	T("+inf", "%+Lf", (long double)INFINITY);
+	T("-nan", "%Lg", (long double)-NAN);
+	T("3.14159265358979312", "%.18Lg", 3.14159265358979323846264338327950288L);
+	T("4.9407e-324", "%.4Le", LDBL_TRUE_MIN);
+	T("1.79769e+308", "%Lg", LDBL_MAX);
+	T("0.1", "%.1Lf", 0.05L);
+	T("0.1", "%.1Lf", 0.0499999999999999999L);
+#endif
 
 	n = snprintf(b, sizeof b, "%.0Lf", LDBL_MAX);
+#if LDBL_MANT_DIG == 53
+	CHECK(n == 309 && strncmp(b, "17976931348623157081", 20) == 0);
+#else
 	CHECK(n == 4933 && strncmp(b, "11897314953572317650", 20) == 0);
-	n = snprintf(NULL, 0, "%.16445Lf", LDBL_TRUE_MIN);
-	CHECK(n == 16447);
+#endif
+	/* The smallest subnormal's exact digits: 16445 after the point on x86-64,
+	   16494 on AArch64 and 1074 on ARMv7-A. */
+	n = snprintf(NULL, 0, "%.*Lf", LDBL_MANT_DIG - LDBL_MIN_EXP, LDBL_TRUE_MIN);
+	CHECK(n == LDBL_MANT_DIG - LDBL_MIN_EXP + 2);
 }
 
 static void destinations(void)

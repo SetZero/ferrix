@@ -22,18 +22,28 @@ const MAX_READERS: c_int = 0x7fff_fffe;
 const SHARED: c_int = 128;
 
 /// `pthread_rwlock_t`, in musl's layout: the lock word, the sleepers, and
-/// whether it is process-shared, in 56 bytes.
+/// whether it is process-shared, in 56 bytes, or 32 on a 32-bit target.
 #[repr(C)]
 #[derive(Debug)]
 pub struct Rwlock {
     lock: AtomicI32,
     waiters: AtomicI32,
     shared: AtomicI32,
-    rest: [AtomicI32; 11],
+    rest: [AtomicI32; REST],
     align: [usize; 0],
 }
 
+/// The `int`s after the three used: C's 14 or 8, less those.
+const REST: usize = if cfg!(target_pointer_width = "64") {
+    11
+} else {
+    5
+};
+
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(size_of::<Rwlock>() == 56);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(size_of::<Rwlock>() == 32);
 
 impl Rwlock {
     /// An unlocked, process-private lock: `PTHREAD_RWLOCK_INITIALIZER`.
@@ -42,7 +52,7 @@ impl Rwlock {
             lock: AtomicI32::new(0),
             waiters: AtomicI32::new(0),
             shared: AtomicI32::new(0),
-            rest: [const { AtomicI32::new(0) }; 11],
+            rest: [const { AtomicI32::new(0) }; REST],
             align: [],
         }
     }

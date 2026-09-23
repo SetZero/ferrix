@@ -1,10 +1,15 @@
 //! `sys/ipc.h`, `sys/shm.h`, `sys/sem.h` and `sys/msg.h`: System V shared
 //! memory, semaphores and message queues.
 //!
-//! Each function is its system call, as in musl on x86-64. There `IPC_64` is
-//! 0 and C's structures are the kernel's, so commands and structures pass
-//! through unchanged. musl's conversions for a 64-bit `time_t` on 32-bit
-//! targets and for big-endian permission modes do not apply.
+//! Each function is its system call, as in musl. On x86-64 and AArch64 C's
+//! structures are the kernel's, so commands and structures pass through
+//! unchanged. On ARMv7-A the kernel wants `IPC_64` in every command, or it
+//! uses its oldest structures, and its structures split each time into two
+//! 32-bit halves. C's structures there are the kernel's with a 64-bit
+//! `time_t` for each time after them, and the headers mark the commands that
+//! write one, such as `IPC_STAT`, with [`IPC_TIME64`]; after such a command
+//! the halves are joined into the `time_t`s, as musl does. musl's conversion
+//! for big-endian permission modes does not apply.
 //!
 //! `semctl` is variadic in C. Its fourth argument, a `union semun` of an `int`
 //! and two pointers, travels in the register a fixed `unsigned long` would, so
@@ -34,6 +39,63 @@ const SEM_STAT: c_int = 18;
 const SEM_INFO: c_int = 19;
 /// `SEM_STAT_ANY`, from `include/sys/sem.h`.
 const SEM_STAT_ANY: c_int = 20;
+
+/// The flag that asks the kernel for its current structures, which only
+/// ARMv7-A's kernel needs; the others ignore it or have no other kind.
+const IPC_64: c_int = if cfg!(target_arch = "arm") { 0x100 } else { 0 };
+
+/// The flag ARMv7-A's headers set in `IPC_STAT` and each `*_STAT` command,
+/// which write a structure with 64-bit times after the kernel's, and the
+/// kernel never sees: `IPC_STAT & 0x100` in `include/bits/ipcstat.h`.
+const IPC_TIME64: c_int = if cfg!(target_arch = "arm") { 0x100 } else { 0 };
+
+/// The command the kernel is given for C's `cmd`.
+fn kernel_command(cmd: c_int) -> usize {
+    ((cmd & !IPC_TIME64) | IPC_64) as usize
+}
+
+/// After a command marked with [`IPC_TIME64`] succeeded, joins each time's
+/// halves, the 32-bit words at the first offset of a pair, into the `time_t`
+/// at the second, in the structure at `buf`.
+///
+/// # Safety
+///
+/// `buf` must be the structure the command wrote, which holds every offset.
+#[cfg_attr(
+    not(target_arch = "arm"),
+    expect(unused_variables, reason = "only ARMv7-A splits the times")
+)]
+unsafe fn join_times(cmd: c_int, ret: isize, buf: *mut c_void, times: &[(usize, usize)]) {
+    #[cfg(target_arch = "arm")]
+    if ret >= 0 && cmd & IPC_TIME64 != 0 && !buf.is_null() {
+        let base = buf.cast::<u8>();
+        for &(halves, time) in times {
+            // SAFETY: the caller vouches that the offsets lie inside the
+            // structure, where the kernel just wrote the halves.
+            let halves = unsafe {
+                base.wrapping_add(halves)
+                    .cast::<[u32; 2]>()
+                    .read_unaligned()
+            };
+            let [low, high] = halves.map(u64::from);
+            // SAFETY: as above, for the `time_t`.
+            unsafe {
+                base.wrapping_add(time)
+                    .cast::<i64>()
+                    .write_unaligned((high << 32 | low).cast_signed());
+            }
+        }
+    }
+}
+
+/// Where the halves of `shm_atime`, `shm_dtime` and `shm_ctime` are in C's
+/// `struct shmid_ds` on ARMv7-A, and where each `time_t` is.
+const SHM_TIMES: [(usize, usize); 3] = [(40, 88), (48, 96), (56, 104)];
+/// The same for `sem_otime` and `sem_ctime` in `struct semid_ds`.
+const SEM_TIMES: [(usize, usize); 2] = [(36, 64), (44, 72)];
+/// The same for `msg_stime`, `msg_rtime` and `msg_ctime` in `struct
+/// msqid_ds`.
+const MSG_TIMES: [(usize, usize); 3] = [(36, 88), (44, 96), (52, 104)];
 
 /// Makes the IPC system call `number` with up to five arguments.
 fn call(number: usize, args: [usize; 5]) -> isize {
@@ -104,7 +166,13 @@ pub unsafe extern "C" fn shmdt(addr: *const c_void) -> c_int {
 /// `struct shminfo` or `struct shm_info`, or nothing.
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub unsafe extern "C" fn shmctl(id: c_int, cmd: c_int, buf: *mut c_void) -> c_int {
-    call(nr::SHMCTL, [id as usize, cmd as usize, buf.addr(), 0, 0]) as c_int
+    let ret = call(
+        nr::SHMCTL,
+        [id as usize, kernel_command(cmd), buf.addr(), 0, 0],
+    );
+    // SAFETY: a command that writes times wrote a `struct shmid_ds`.
+    unsafe { join_times(cmd, ret, buf, &SHM_TIMES) };
+    ret as c_int
 }
 
 /// Returns the id of the semaphore set with `key`, creating one of `count`
@@ -162,15 +230,26 @@ pub unsafe extern "C" fn semtimedop(
 /// command reads or writes.
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub unsafe extern "C" fn semctl(id: c_int, num: c_int, cmd: c_int, arg: c_ulong) -> c_int {
-    let arg = match cmd {
+    let arg = match cmd & !IPC_TIME64 {
         SETVAL | GETALL | SETALL | IPC_SET | IPC_INFO | SEM_INFO | IPC_STAT | SEM_STAT
         | SEM_STAT_ANY => arg as usize,
         _ => 0,
     };
-    call(
+    let ret = call(
         nr::SEMCTL,
-        [id as usize, num as usize, cmd as usize, arg, 0],
-    ) as c_int
+        [id as usize, num as usize, kernel_command(cmd), arg, 0],
+    );
+    // SAFETY: a command that writes times wrote a `struct semid_ds` at the
+    // pointer in `arg`.
+    unsafe {
+        join_times(
+            cmd,
+            ret,
+            core::ptr::with_exposed_provenance_mut(arg),
+            &SEM_TIMES,
+        )
+    };
+    ret as c_int
 }
 
 /// Returns the id of the message queue with `key`, creating it if `flag` says
@@ -229,7 +308,13 @@ pub unsafe extern "C" fn msgrcv(
 /// `struct msginfo`, or nothing.
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub unsafe extern "C" fn msgctl(id: c_int, cmd: c_int, buf: *mut c_void) -> c_int {
-    call(nr::MSGCTL, [id as usize, cmd as usize, buf.addr(), 0, 0]) as c_int
+    let ret = call(
+        nr::MSGCTL,
+        [id as usize, kernel_command(cmd), buf.addr(), 0, 0],
+    );
+    // SAFETY: a command that writes times wrote a `struct msqid_ds`.
+    unsafe { join_times(cmd, ret, buf, &MSG_TIMES) };
+    ret as c_int
 }
 
 #[cfg(test)]

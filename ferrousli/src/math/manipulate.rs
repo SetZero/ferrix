@@ -720,9 +720,13 @@ mod tests {
         let files = ["sanity/scalbnf.h", "special/scalbnf.h"];
         mtest::di_d("scalbnf", &files, |x, n| scalbnf(x, int(n)), exact, &[]);
         let files = ["sanity/scalbln.h", "special/scalbln.h"];
-        mtest::di_d("scalbln", &files, |x, n| scalbln(x, n), exact, &[]);
+        // A 32-bit `long` holds every exponent that matters; past it the
+        // result is the same overflow or underflow.
+        let long =
+            |n: i64| c_long::try_from(n).unwrap_or(if n < 0 { c_long::MIN } else { c_long::MAX });
+        mtest::di_d("scalbln", &files, |x, n| scalbln(x, long(n)), exact, &[]);
         let files = ["sanity/scalblnf.h", "special/scalblnf.h"];
-        mtest::di_d("scalblnf", &files, |x, n| scalblnf(x, n), exact, &[]);
+        mtest::di_d("scalblnf", &files, |x, n| scalblnf(x, long(n)), exact, &[]);
         let files = ["sanity/scalb.h", "special/scalb.h"];
         mtest::dd_d("scalb", &files, |x, y| scalb(x, y), exact, &[]);
         let files = ["sanity/scalbf.h", "special/scalbf.h"];

@@ -65,8 +65,13 @@ pub struct Glob {
     dummy2: [*mut c_void; 5],
 }
 
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(size_of::<Glob>() == 72);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(size_of::<Glob>() == 36);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(Glob, gl_pathv) == 8);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(Glob, gl_offs) == 16);
 
 /// `GLOB_ERR`: stop at a directory that cannot be read.

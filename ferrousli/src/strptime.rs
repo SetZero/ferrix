@@ -16,7 +16,7 @@
 //! As in musl, fields are stored as they are read, so a failed parse may have
 //! changed some of them.
 
-use core::ffi::{CStr, c_char, c_int};
+use core::ffi::{CStr, c_char, c_int, c_long};
 
 use crate::tm::{self, Tm};
 
@@ -221,7 +221,8 @@ impl Parse<'_> {
             return None;
         }
         let secs = hours * 3600 + minutes * 60;
-        tm.tm_gmtoff = if negative { -secs } else { secs };
+        // At most a day and an hour: it fits a `long`.
+        tm.tm_gmtoff = (if negative { -secs } else { secs }) as c_long;
         Some(())
     }
 

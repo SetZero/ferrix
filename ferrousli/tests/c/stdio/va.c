@@ -9,6 +9,7 @@
  */
 
 #define _GNU_SOURCE
+#include <float.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -63,7 +64,11 @@ int main(void)
 		11.0, 12, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0, 19.0, 'x', 20.0, 1.0L, 21);
 	check("snprintf of mixed arguments", buf, n,
 		"1 2 3.500000 4.250000 0x10 5 -6 7.125000 8.500000 nine 10 11 12 "
+#if LDBL_MANT_DIG == 64
 		"13 14 15 16 17 18 19 x 2.000000e+01 0x8p-3 21");
+#else
+		"13 14 15 16 17 18 19 x 2.000000e+01 0x1p+0 21");
+#endif
 
 	n = snprintf(buf, sizeof buf, "%2$Lg %1$d %4$g %3$s %6$g %5$d %8$g %7$d %9$g %10$g %11$g %12$g %13$g",
 		1, 2.5L, "three", 4.0, 5, 6.0, 7, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0);

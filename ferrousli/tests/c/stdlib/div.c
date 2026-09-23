@@ -21,7 +21,7 @@ static imaxdiv_t (*volatile imaxdiv_p)(intmax_t, intmax_t) = imaxdiv;
 int main(void)
 {
 	CHECK(sizeof(div_t) == 8);
-	CHECK(sizeof(ldiv_t) == 16);
+	CHECK(sizeof(ldiv_t) == 2 * sizeof(long));
 	CHECK(sizeof(lldiv_t) == 16);
 	CHECK(sizeof(imaxdiv_t) == 16);
 
@@ -38,8 +38,10 @@ int main(void)
 	d = div_p(INT_MIN, 3);
 	CHECK(d.quot == INT_MIN / 3 && d.rem == INT_MIN % 3);
 
-	ldiv_t ld = ldiv_p(LONG_MAX, 1L << 40);
-	CHECK(ld.quot == LONG_MAX >> 40 && ld.rem == (LONG_MAX & ((1L << 40) - 1)));
+	/* A divisor of 2^20 on a 32-bit target, where a long is 32 bits. */
+	enum { SHIFT = sizeof(long) == 8 ? 40 : 20 };
+	ldiv_t ld = ldiv_p(LONG_MAX, 1L << SHIFT);
+	CHECK(ld.quot == LONG_MAX >> SHIFT && ld.rem == (LONG_MAX & ((1L << SHIFT) - 1)));
 	ld = ldiv_p(-9, 4);
 	CHECK(ld.quot == -2 && ld.rem == -1);
 

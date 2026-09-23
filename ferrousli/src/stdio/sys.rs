@@ -6,6 +6,7 @@ use core::ffi::{c_char, c_int};
 use core::mem::size_of;
 
 use crate::errno;
+use crate::fcntl::O_DIRECTORY;
 use crate::syscall::{self, nr};
 
 /// `O_RDONLY`, from `asm-generic/fcntl.h`.
@@ -24,8 +25,6 @@ pub(crate) const O_EXCL: c_int = 0o200;
 pub(crate) const O_TRUNC: c_int = 0o1000;
 /// `O_APPEND`, from `asm-generic/fcntl.h`.
 pub(crate) const O_APPEND: c_int = 0o2000;
-/// `O_DIRECTORY`, from `asm-generic/fcntl.h`.
-const O_DIRECTORY: c_int = 0o200000;
 /// `O_CLOEXEC`, from `asm-generic/fcntl.h`.
 pub(crate) const O_CLOEXEC: c_int = 0o2000000;
 /// `O_TMPFILE`: `__O_TMPFILE | O_DIRECTORY`, from `asm-generic/fcntl.h`.
@@ -121,10 +120,11 @@ pub(crate) unsafe fn write(fd: c_int, buf: *const u8, len: usize) -> Result<usiz
 
 /// Moves `fd`'s offset, and returns the new one.
 pub(crate) fn lseek(fd: c_int, offset: i64, whence: c_int) -> Result<i64, c_int> {
-    // SAFETY: `lseek` reads no memory.
-    let ret =
-        unsafe { syscall::syscall3(nr::LSEEK, fd as usize, offset as usize, whence as usize) };
-    result(ret).map(|offset| offset as i64)
+    match syscall::lseek(fd as usize, offset, whence as usize) {
+        // The range is an error number, which fits a `c_int`.
+        error @ -4095..0 => Err(-error as c_int),
+        offset => Ok(offset),
+    }
 }
 
 /// `fcntl` with an integer argument.

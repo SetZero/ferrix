@@ -11,62 +11,18 @@
 //! defines: `printf` calls `vprintf`, `execl` would call a function taking the
 //! list.
 //!
-//! # The x86-64 `va_list`
-//!
-//! The System V AMD64 psABI, section 3.5.7, defines `va_list` as an array of
-//! one structure:
-//!
-//! ```text
-//! typedef struct {
-//!     unsigned int gp_offset;       // next integer register slot, 0..=48
-//!     unsigned int fp_offset;       // next vector register slot, 48..=176
-//!     void *overflow_arg_area;      // next argument passed on the stack
-//!     void *reg_save_area;          // the registers, saved at entry
-//! } va_list[1];
-//! ```
-//!
-//! The register save area holds rdi, rsi, rdx, rcx, r8 and r9 at offsets 0 to
-//! 40, then xmm0 to xmm7, 16 bytes each, at offsets 48 to 160. An argument is
-//! read from the next register slot of its class while one is left, and from
-//! the stack after that. Once a class runs out of registers, every later
-//! argument of that class is on the stack, in order, mixed with the others
-//! that overflowed.
-//!
-//! Because the type is an array, a `va_list` parameter decays to a pointer to
-//! the structure. `vprintf(fmt, ap)` receives a [`VaListTag`] pointer, and
-//! reading through it advances the caller's structure in place, as C's
-//! `va_arg` does. `va_copy` copies the structure, so both copies share the
-//! save area and the stack, which neither writes.
-//!
-//! # The thunk
-//!
-//! For a function with `n` named arguments, all of them integers or pointers,
-//! the thunk:
-//!
-//! 1. reserves 200 bytes: the 176-byte register save area and the 24-byte
-//!    structure. The call left the stack 8 bytes past a multiple of 16, and 200
-//!    is 8 past one too, so the stack is aligned for the call below;
-//! 2. saves the six integer registers, and the eight vector registers when
-//!    `%al` is non-zero. The caller of a variadic function puts an upper bound
-//!    on the number of vector registers used in `%al`, and may leave the upper
-//!    registers unset when it is zero;
-//! 3. fills the structure as gcc's `va_start` would: `gp_offset` is `8 * n`,
-//!    `fp_offset` is 48, the overflow area starts just above the return
-//!    address, and the save area is the one just filled;
-//! 4. calls the Rust function with the named arguments still in their
-//!    registers and the structure's address as argument `n + 1`, and returns
-//!    what it returns.
-//!
-//! The named arguments are not consumed from the save area: `gp_offset` starts
-//! past them. A thunk supports up to five named arguments, so that the
-//! structure's address still fits in a register.
+//! Each architecture's calling convention defines `va_list` differently, and
+//! its module says how: [`x86_64`](self) and AArch64 save the argument
+//! registers and keep offsets into them, while ARMv7-A saves r0 to r3 beside
+//! the stack and walks both with one pointer. What is the same everywhere is
+//! [`VaList`], the reader, whose methods take the next argument of a type.
 //!
 //! # Reusing it
 //!
 //! To export a variadic C function `int f(A a, B b, ...)` whose named
 //! arguments are integers or pointers:
 //!
-//! 1. write `unsafe extern "C" fn vf(a: A, b: B, ap: *mut VaListTag) -> c_int`,
+//! 1. write `unsafe extern "C" fn vf(a: A, b: B, ap: VaListArg) -> c_int`,
 //!    exported under its own C name if C has one;
 //! 2. inside it, make a reader with [`VaList::from_raw`] and take each
 //!    argument with the method for its type;
@@ -76,115 +32,139 @@
 //! does not take the host C library's name, and a test can still call it
 //! through an `extern "C"` declaration with `...`.
 
-use core::ffi::c_void;
-use core::mem::{offset_of, size_of};
-
-/// One element of C's `va_list` on x86-64: where the next argument of each
-/// class is. A `va_list` parameter arrives as a pointer to this.
+#[cfg(target_arch = "aarch64")]
+mod aarch64;
+#[cfg(target_arch = "arm")]
+mod arm;
 #[cfg(target_arch = "x86_64")]
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct VaListTag {
-    /// The offset in the save area of the next integer register, up to 48.
-    gp_offset: u32,
-    /// The offset in the save area of the next vector register, 48 to 176.
-    fp_offset: u32,
-    /// The next argument passed on the stack.
-    overflow_arg_area: *mut c_void,
-    /// Where the thunk or `va_start` saved the argument registers.
-    reg_save_area: *mut c_void,
+mod x86_64;
+
+#[cfg(target_arch = "aarch64")]
+pub(crate) use aarch64::variadic;
+#[cfg(target_arch = "aarch64")]
+pub use aarch64::{LongDouble, VaListArg, VaListTag};
+#[cfg(target_arch = "arm")]
+pub(crate) use arm::variadic;
+#[cfg(target_arch = "arm")]
+pub use arm::{LongDouble, VaListArg, VaListTag};
+#[cfg(target_arch = "x86_64")]
+pub(crate) use x86_64::variadic;
+#[cfg(target_arch = "x86_64")]
+pub use x86_64::{LongDouble, VaListArg, VaListTag};
+
+/// A copy of the list `ap`, as C's `va_copy` makes one.
+///
+/// # Safety
+///
+/// `ap` must be a live `va_list` parameter.
+#[cfg(not(target_arch = "arm"))]
+pub unsafe fn copy(ap: VaListArg) -> VaListTag {
+    // SAFETY: the caller vouches for the list.
+    unsafe { ap.read() }
 }
 
-#[cfg(target_arch = "x86_64")]
-const _: () = assert!(size_of::<VaListTag>() == 24);
-#[cfg(target_arch = "x86_64")]
-const _: () = assert!(offset_of!(VaListTag, overflow_arg_area) == 8);
-#[cfg(target_arch = "x86_64")]
-const _: () = assert!(offset_of!(VaListTag, reg_save_area) == 16);
-
-/// Where the integer registers end in the save area.
-#[cfg(target_arch = "x86_64")]
-const GP_END: u32 = 48;
-/// Where the vector registers end in the save area.
-#[cfg(target_arch = "x86_64")]
-const FP_END: u32 = 176;
-
-/// An x87 extended precision `long double`, as it is stored: a 64-bit
-/// significand with an explicit integer bit, then the sign and a 15-bit
-/// exponent biased by 16383. The other six bytes of its 16 are padding.
-#[cfg(target_arch = "x86_64")]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct LongDouble {
-    /// The significand. Bit 63 is the integer bit.
-    pub mantissa: u64,
-    /// Bit 15 is the sign, and the rest the biased exponent.
-    pub sign_exponent: u16,
+/// A copy of the list `ap`, as C's `va_copy` makes one: on ARMv7-A the
+/// parameter is the list itself.
+///
+/// # Safety
+///
+/// `ap` must be a live `va_list` parameter.
+#[cfg(target_arch = "arm")]
+pub unsafe fn copy(ap: VaListArg) -> VaListTag {
+    ap
 }
 
-/// A reader of a `va_list`'s arguments, advancing the structure it was made
-/// from.
+/// `tag`, as a `va_list` parameter passes it: a pointer to it, or on ARMv7-A
+/// the list itself.
+#[cfg(not(target_arch = "arm"))]
+pub fn as_arg(tag: &mut VaListTag) -> VaListArg {
+    tag
+}
+
+/// `tag`, as a `va_list` parameter passes it: a pointer to it, or on ARMv7-A
+/// the list itself.
+#[cfg(target_arch = "arm")]
+pub fn as_arg(tag: &mut VaListTag) -> VaListArg {
+    *tag
+}
+
+/// Where a reader's list lives.
+#[derive(Debug)]
+enum Tag<'a> {
+    /// In the caller's structure, which reading advances.
+    Borrowed(&'a mut VaListTag),
+    /// In the reader: a `va_list` passed by value, as on ARMv7-A.
+    #[cfg(target_arch = "arm")]
+    Owned(VaListTag),
+}
+
+/// A reader of a `va_list`'s arguments. The methods that take an argument are
+/// each architecture's.
 #[derive(Debug)]
 pub struct VaList<'a> {
-    tag: &'a mut VaListTag,
+    tag: Tag<'a>,
 }
 
 impl<'a> VaList<'a> {
-    /// A reader of the list `tag` points at.
+    /// A reader of the list `ap`, as a `va_list` parameter arrives.
     ///
     /// # Safety
     ///
-    /// `tag` must point at a `va_list` structure that `va_start`, `va_copy` or
-    /// a [`variadic!`] thunk filled, whose arguments are still live, and that
-    /// nothing else uses while the reader does.
-    pub unsafe fn from_raw(tag: *mut VaListTag) -> Self {
+    /// `ap` must be a `va_list` that `va_start`, `va_copy` or a [`variadic!`]
+    /// thunk filled, whose arguments are still live, and that nothing else
+    /// uses while the reader does.
+    #[cfg(not(target_arch = "arm"))]
+    pub unsafe fn from_raw(ap: VaListArg) -> Self {
         // SAFETY: the caller vouches for the structure and its exclusive use.
-        let tag = unsafe { &mut *tag };
-        Self { tag }
+        let tag = unsafe { &mut *ap };
+        Self {
+            tag: Tag::Borrowed(tag),
+        }
+    }
+
+    /// A reader of the list `ap`, as a `va_list` parameter arrives.
+    ///
+    /// # Safety
+    ///
+    /// `ap` must be a `va_list` that `va_start`, `va_copy` or a [`variadic!`]
+    /// thunk filled, whose arguments are still live.
+    #[cfg(target_arch = "arm")]
+    pub unsafe fn from_raw(ap: VaListArg) -> Self {
+        Self {
+            tag: Tag::Owned(ap),
+        }
     }
 
     /// A reader of `tag`, a copy the caller keeps.
     pub fn from_tag(tag: &'a mut VaListTag) -> Self {
-        Self { tag }
+        Self {
+            tag: Tag::Borrowed(tag),
+        }
     }
 
     /// A copy of the list as it stands, as `va_copy` makes.
     pub fn copy(&self) -> VaListTag {
-        *self.tag
+        match &self.tag {
+            Tag::Borrowed(tag) => **tag,
+            #[cfg(target_arch = "arm")]
+            Tag::Owned(tag) => *tag,
+        }
     }
 
-    /// The next argument passed as an integer: an `int`, a `long`, a pointer,
-    /// or any narrower integer promoted to `int`. All of them take a whole
-    /// 8-byte slot. The high bits of a slot holding an `int` are unspecified,
-    /// so the caller truncates to the argument's type.
-    ///
-    /// # Safety
-    ///
-    /// The next argument must be of one of those types.
-    #[cfg(target_arch = "x86_64")]
-    pub unsafe fn next_word(&mut self) -> u64 {
-        if self.tag.gp_offset < GP_END {
-            let at = self
-                .tag
-                .reg_save_area
-                .wrapping_add(self.tag.gp_offset as usize)
-                .cast::<u64>();
-            self.tag.gp_offset += 8;
-            // SAFETY: the offset is inside the save area, where the thunk or
-            // `va_start` saved the integer registers.
-            return unsafe { at.read_unaligned() };
+    /// The list, to advance.
+    fn tag(&mut self) -> &mut VaListTag {
+        match &mut self.tag {
+            Tag::Borrowed(tag) => tag,
+            #[cfg(target_arch = "arm")]
+            Tag::Owned(tag) => tag,
         }
-        let at = self.tag.overflow_arg_area.cast::<u64>();
-        self.tag.overflow_arg_area = self.tag.overflow_arg_area.wrapping_add(8);
-        // SAFETY: the caller vouches that another argument was passed, and
-        // with the registers used up it is on the stack here.
-        unsafe { at.read_unaligned() }
     }
 
     /// The next argument, which is an `int` or narrower.
     ///
     /// # Safety
     ///
-    /// As [`Self::next_word`].
+    /// The next argument must be an `int`, or narrower and promoted to one.
     pub unsafe fn next_int(&mut self) -> i32 {
         // SAFETY: the caller vouches for the argument's type.
         let word = unsafe { self.next_word() };
@@ -195,137 +175,23 @@ impl<'a> VaList<'a> {
     ///
     /// # Safety
     ///
-    /// As [`Self::next_word`].
+    /// The next argument must be a pointer.
     pub unsafe fn next_ptr<T>(&mut self) -> *mut T {
         // SAFETY: the caller vouches for the argument's type.
         let word = unsafe { self.next_word() };
         core::ptr::with_exposed_provenance_mut(word as usize)
     }
-
-    /// The next argument, which is a `double`, or a `float` promoted to one.
-    ///
-    /// # Safety
-    ///
-    /// The next argument must be a `double`.
-    #[cfg(target_arch = "x86_64")]
-    pub unsafe fn next_double(&mut self) -> f64 {
-        if self.tag.fp_offset < FP_END {
-            let at = self
-                .tag
-                .reg_save_area
-                .wrapping_add(self.tag.fp_offset as usize)
-                .cast::<f64>();
-            self.tag.fp_offset += 16;
-            // SAFETY: the offset is inside the save area, where the vector
-            // registers were saved. The caller set `%al`, so they were.
-            return unsafe { at.read_unaligned() };
-        }
-        let at = self.tag.overflow_arg_area.cast::<f64>();
-        self.tag.overflow_arg_area = self.tag.overflow_arg_area.wrapping_add(8);
-        // SAFETY: as in `next_word`, on the stack.
-        unsafe { at.read_unaligned() }
-    }
-
-    /// The next argument, which is a `long double`. It is always on the stack,
-    /// at a 16-byte boundary, in 16 bytes.
-    ///
-    /// # Safety
-    ///
-    /// The next argument must be a `long double`.
-    #[cfg(target_arch = "x86_64")]
-    pub unsafe fn next_long_double(&mut self) -> LongDouble {
-        let area = self.tag.overflow_arg_area;
-        let aligned = area.wrapping_add(area.addr().wrapping_neg() & 15);
-        self.tag.overflow_arg_area = aligned.wrapping_add(16);
-        // SAFETY: the caller vouches that a `long double` was passed, and it
-        // is in the stack's next 16-byte slot.
-        let mantissa = unsafe { aligned.cast::<u64>().read_unaligned() };
-        // SAFETY: as above; the sign and exponent follow the significand.
-        let sign_exponent = unsafe { aligned.wrapping_add(8).cast::<u16>().read_unaligned() };
-        LongDouble {
-            mantissa,
-            sign_exponent,
-        }
-    }
 }
-
-/// Exports a variadic C function as an entry thunk that builds a `va_list`
-/// and calls a Rust function taking it. See the module documentation.
-///
-/// `variadic!(name, named, target)`: `name` is the C name, `named` the number
-/// of named arguments (0 to 5, all integers or pointers), and `target` a
-/// function `unsafe extern "C" fn(named..., *mut VaListTag) -> R`.
-#[cfg(target_arch = "x86_64")]
-macro_rules! variadic {
-    ($name:ident, $named:tt, $target:path) => {
-        #[cfg(not(test))]
-        $crate::va::variadic!(@thunk stringify!($name), $named, $target);
-        #[cfg(test)]
-        $crate::va::variadic!(@thunk concat!("ferrousli_test_", stringify!($name)), $named, $target);
-    };
-    (@register 0) => { "%rdi" };
-    (@register 1) => { "%rsi" };
-    (@register 2) => { "%rdx" };
-    (@register 3) => { "%rcx" };
-    (@register 4) => { "%r8" };
-    (@register 5) => { "%r9" };
-    (@thunk $label:expr, $named:tt, $target:path) => {
-        core::arch::global_asm!(
-            concat!(".pushsection .text.ferrousli_va.", $label, ",\"ax\",@progbits"),
-            ".p2align 4",
-            concat!(".globl ", $label),
-            concat!(".type ", $label, ",@function"),
-            concat!($label, ":"),
-            // The save area at 0(%rsp), the structure at 176(%rsp), the
-            // return address at 200(%rsp), and the stack arguments above.
-            "sub $200, %rsp",
-            "mov %rdi, 0(%rsp)",
-            "mov %rsi, 8(%rsp)",
-            "mov %rdx, 16(%rsp)",
-            "mov %rcx, 24(%rsp)",
-            "mov %r8, 32(%rsp)",
-            "mov %r9, 40(%rsp)",
-            "test %al, %al",
-            concat!("je .Lva_", $label, "_saved"),
-            "movaps %xmm0, 48(%rsp)",
-            "movaps %xmm1, 64(%rsp)",
-            "movaps %xmm2, 80(%rsp)",
-            "movaps %xmm3, 96(%rsp)",
-            "movaps %xmm4, 112(%rsp)",
-            "movaps %xmm5, 128(%rsp)",
-            "movaps %xmm6, 144(%rsp)",
-            "movaps %xmm7, 160(%rsp)",
-            concat!(".Lva_", $label, "_saved:"),
-            "movl ${gp}, 176(%rsp)",
-            "movl $48, 180(%rsp)",
-            "lea 208(%rsp), %rax",
-            "mov %rax, 184(%rsp)",
-            "mov %rsp, 192(%rsp)",
-            "lea 176(%rsp), %rax",
-            concat!("mov %rax, ", $crate::va::variadic!(@register $named)),
-            "call {target}",
-            "add $200, %rsp",
-            "ret",
-            concat!(".size ", $label, ",.-", $label),
-            ".popsection",
-            gp = const 8 * $named,
-            target = sym $target,
-            options(att_syntax),
-        );
-    };
-}
-
-#[cfg(target_arch = "x86_64")]
-pub(crate) use variadic;
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use core::ffi::{c_char, c_int};
 
-    /// Reads one argument per byte of `kinds` (`i` an `int`, `l` a `long`,
-    /// `d` a `double`, `p` a pointer) into `out`, as 64-bit words.
-    unsafe extern "C" fn probe(kinds: *const c_char, out: *mut u64, ap: *mut VaListTag) -> c_int {
+    /// Reads one argument per byte of `kinds` (`i` an `int`, `w` a
+    /// `long long`, `d` a `double`, `p` a pointer) into `out`, as 64-bit
+    /// words.
+    unsafe extern "C" fn probe(kinds: *const c_char, out: *mut u64, ap: VaListArg) -> c_int {
         // SAFETY: the thunk passes the list it built.
         let mut list = unsafe { VaList::from_raw(ap) };
         let mut i = 0;
@@ -336,7 +202,9 @@ mod tests {
                 // SAFETY: the kind names the next argument's type.
                 b'i' => i64::from(unsafe { list.next_int() }) as u64,
                 // SAFETY: as above.
-                b'l' | b'p' => unsafe { list.next_word() },
+                b'w' => unsafe { list.next_wide() },
+                // SAFETY: as above.
+                b'p' => unsafe { list.next_ptr::<u8>() }.addr() as u64,
                 // SAFETY: as above.
                 b'd' => unsafe { list.next_double() }.to_bits(),
                 _ => return i as c_int,
@@ -357,11 +225,11 @@ mod tests {
     #[test]
     fn arguments_of_every_class_come_back_in_order_past_the_registers() {
         let mut out = [0_u64; 25];
-        let marker = 0x1234_5678_9abc_def0_usize;
+        let marker = 0x9abc_def0_usize;
         // SAFETY: each argument matches its kind, and `out` has room.
         let count = unsafe {
             va_probe(
-                c"iidldidldidldiddddddpdlii".as_ptr(),
+                c"iidwdidwdidwdiddddddpdwii".as_ptr(),
                 out.as_mut_ptr(),
                 -1_i32,
                 2_i32,

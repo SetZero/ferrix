@@ -67,7 +67,7 @@ int main(void)
 	CHECK(calloc_p(2, SIZE_MAX / 2 + 1) == NULL);
 	CHECK(errno == ENOMEM);
 	errno = 0;
-	CHECK(calloc_p((size_t)1 << 32, (size_t)1 << 32) == NULL);
+	CHECK(calloc_p((size_t)1 << (sizeof(size_t) * 4), (size_t)1 << (sizeof(size_t) * 4)) == NULL);
 	CHECK(errno == ENOMEM);
 	/* No overflow, but too much. */
 	errno = 0;
@@ -81,7 +81,7 @@ int main(void)
 	CHECK(errno == ENOMEM);
 	CHECK(memcmp(p, "ferrousli", 10) == 0);
 	errno = 0;
-	CHECK(reallocarray_p(NULL, (size_t)1 << 40, (size_t)1 << 40) == NULL);
+	CHECK(reallocarray_p(NULL, SIZE_MAX / 2, 4) == NULL);
 	CHECK(errno == ENOMEM);
 	free(p);
 	return t_status;

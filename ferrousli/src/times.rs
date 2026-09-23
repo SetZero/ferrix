@@ -30,7 +30,10 @@ pub struct Tms {
     pub tms_cstime: c_long,
 }
 
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(size_of::<Tms>() == 32);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(size_of::<Tms>() == 16);
 
 /// Fills `*buf` with the CPU time of the process and its children, in clock
 /// ticks, and returns the ticks since an arbitrary point in the past. Returns
@@ -64,8 +67,11 @@ pub extern "C" fn clock() -> c_long {
         return -1;
     }
     ts.tv_sec
-        .checked_mul(CLOCKS_PER_SEC)
-        .and_then(|micros| micros.checked_add(ts.tv_nsec / 1000))
+        .checked_mul(i64::from(CLOCKS_PER_SEC))
+        .and_then(|micros| micros.checked_add(i64::from(ts.tv_nsec / 1000)))
+        // A `clock_t` is a 32-bit `long` on ARMv7-A, which a process
+        // outgrows after 35 minutes of CPU time, as POSIX allows.
+        .and_then(|micros| c_long::try_from(micros).ok())
         .unwrap_or(-1)
 }
 

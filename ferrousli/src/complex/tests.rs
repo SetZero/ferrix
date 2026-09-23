@@ -8,6 +8,12 @@
 //! rounding downward. The `float` functions get the arguments converted to
 //! `float` first. The exceptions include denormal, which x86-64 raises for a
 //! subnormal operand.
+//!
+//! On AArch64 and ARMv7-A the table is read through [`native`], which renames
+//! x86-64's exception bits and drops denormal, which Arm does not have, and
+//! [`same`], which lets a NaN differ from the recorded one in its sign alone:
+//! the NaN an invalid operation makes has its sign set on x86-64 and clear on
+//! Arm, and the table cannot say which of its NaNs were made that way.
 
 use super::catan::{catan, catanf, catanh, catanhf};
 use super::cexp::{cexp, cexpf};
@@ -22,6 +28,8 @@ use crate::fenv::{
     FE_ALL_EXCEPT, FE_DIVBYZERO, FE_DOWNWARD, FE_INEXACT, FE_INVALID, FE_TONEAREST, feclearexcept,
     fesetround, fetestexcept,
 };
+#[cfg(not(target_arch = "x86_64"))]
+use crate::fenv::{FE_OVERFLOW, FE_UNDERFLOW};
 use crate::math::support::{hexf32, hexf64};
 use core::ffi::c_int;
 
@@ -34,6 +42,50 @@ pub(crate) fn bits(z: Complex) -> (u64, u64) {
 pub(crate) fn bitsf(z: ComplexF) -> (u32, u32) {
     (z.re.to_bits(), z.im.to_bits())
 }
+
+/// The exceptions `x86` names in x86-64's bits, as this architecture's.
+fn native(x86: c_int) -> c_int {
+    #[cfg(target_arch = "x86_64")]
+    return x86;
+    #[cfg(not(target_arch = "x86_64"))]
+    [
+        (0x01, FE_INVALID),
+        (0x04, FE_DIVBYZERO),
+        (0x08, FE_OVERFLOW),
+        (0x10, FE_UNDERFLOW),
+        (0x20, FE_INEXACT),
+    ]
+    .iter()
+    .filter(|&&(bit, _)| x86 & bit != 0)
+    .fold(0, |all, &(_, flag)| all | flag)
+}
+
+/// Whether `got` is the recorded result `want`, bit for bit, or on Arm a NaN
+/// differing from it in its sign alone, `double` or `float`.
+fn same(got: u64, want: u64) -> bool {
+    if got == want {
+        return true;
+    }
+    if cfg!(target_arch = "x86_64") {
+        return false;
+    }
+    let nan64 = |b: u64| b & !(1 << 63) > 0x7ff0_0000_0000_0000;
+    let nan32 = |b: u64| b <= u64::from(u32::MAX) && b & !(1 << 31) > 0x7f80_0000;
+    (nan64(got) && got ^ want == 1 << 63) || (nan32(got) && got ^ want == 1 << 31)
+}
+
+/// The NaN an invalid `double` operation makes here.
+#[cfg(target_arch = "x86_64")]
+const DEFAULT_NAN: u64 = 0xfff8_0000_0000_0000;
+/// The NaN an invalid `double` operation makes here.
+#[cfg(not(target_arch = "x86_64"))]
+const DEFAULT_NAN: u64 = 0x7ff8_0000_0000_0000;
+/// The NaN an invalid `float` operation makes here.
+#[cfg(target_arch = "x86_64")]
+const DEFAULT_NANF: u32 = 0xffc0_0000;
+/// The NaN an invalid `float` operation makes here.
+#[cfg(not(target_arch = "x86_64"))]
+const DEFAULT_NANF: u32 = 0x7fc0_0000;
 
 /// Calls `call` in rounding mode `mode` with every flag clear, denormal
 /// included, and returns its result with the exceptions it raised.
@@ -157,11 +209,15 @@ fn every_function_gives_musls_bits_and_exceptions() {
         };
         match call(name, z, c, mode) {
             None => failures.push(format!("{name}: no such function")),
-            Some((got, raised)) if got != (re, im) || raised != except => failures.push(format!(
-                "{name}(#{index}) mode {mode:#x}: got {:#x} {:#x} raising {raised:#x}, \
+            Some((got, raised))
+                if !same(got.0, re) || !same(got.1, im) || raised != native(except) =>
+            {
+                failures.push(format!(
+                    "{name}(#{index}) mode {mode:#x}: got {:#x} {:#x} raising {raised:#x}, \
                  musl {re:#x} {im:#x} raising {except:#x}",
-                got.0, got.1
-            )),
+                    got.0, got.1
+                ));
+            }
             Some(_) => {}
         }
     }
@@ -232,13 +288,13 @@ fn a_power_recovers_the_infinities_its_product_made_nans_of() {
     let (z, raised) = under(FE_TONEAREST, || {
         cpow(Complex::new(2.0, 0.0), Complex::new(inf, inf))
     });
-    assert_eq!(bits(z), (inf.to_bits(), 0xfff8_0000_0000_0000));
+    assert_eq!(bits(z), (inf.to_bits(), DEFAULT_NAN));
     assert_eq!(raised, FE_INVALID | FE_INEXACT);
     let inf = f32::INFINITY;
     let (z, raised) = under(FE_TONEAREST, || {
         cpowf(ComplexF::new(2.0, 0.0), ComplexF::new(inf, inf))
     });
-    assert_eq!(bitsf(z), (inf.to_bits(), 0xffc0_0000));
+    assert_eq!(bitsf(z), (inf.to_bits(), DEFAULT_NANF));
     assert_eq!(raised, FE_INVALID | FE_INEXACT);
 
     // 0^2: log 0 = -∞ + i0 raises divide-by-zero, the product -∞ + iNaN

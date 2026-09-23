@@ -50,7 +50,7 @@
 //! musl.
 
 use core::cell::UnsafeCell;
-use core::ffi::{CStr, c_char, c_int, c_long};
+use core::ffi::{CStr, c_char, c_int};
 use core::ptr::null_mut;
 use core::slice;
 use core::sync::atomic::{AtomicI32, AtomicI64, AtomicPtr, Ordering};
@@ -115,11 +115,11 @@ pub struct Local {
     /// 1 in daylight saving time, 0 otherwise.
     pub isdst: c_int,
     /// Seconds east of UTC.
-    pub utoff: c_long,
+    pub utoff: i64,
     /// Seconds east of UTC of the opposite kind of time: standard time's
     /// during daylight saving time and the other way round. `mktime` applies
     /// it when `tm_isdst` asks for the other kind.
-    pub opp: c_long,
+    pub opp: i64,
     /// The abbreviation, which lives as long as the process.
     pub name: *const c_char,
 }

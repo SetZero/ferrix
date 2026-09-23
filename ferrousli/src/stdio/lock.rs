@@ -43,6 +43,13 @@ fn thread_id() -> usize {
     id
 }
 
+/// The calling thread's identity: its thread pointer, read from the register
+/// that holds it.
+#[cfg(not(target_arch = "x86_64"))]
+fn thread_id() -> usize {
+    crate::arch::thread_pointer()
+}
+
 impl RecursiveLock {
     /// An unowned lock.
     pub const fn new() -> Self {

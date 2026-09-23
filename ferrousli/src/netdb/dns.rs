@@ -371,12 +371,27 @@ pub struct NsMsg {
     pub _msg_ptr: *const u8,
 }
 
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(size_of::<NsMsg>() == 80);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(size_of::<NsMsg>() == 48);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(offset_of!(NsMsg, _counts) == 12);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(offset_of!(NsMsg, _sections) == 20);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(offset_of!(NsMsg, _msg_ptr) == 44);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(NsMsg, _id) == 16);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(NsMsg, _counts) == 20);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(NsMsg, _sections) == 32);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(NsMsg, _sect) == 64);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(NsMsg, _rrnum) == 68);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(NsMsg, _msg_ptr) == 72);
 
 /// C's `ns_rr`, from `include/arpa/nameser.h`: one parsed record. glibc's is
@@ -398,7 +413,10 @@ pub struct NsRr {
     pub rdata: *const u8,
 }
 
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(size_of::<NsRr>() == 1048);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(size_of::<NsRr>() == 1044);
 const _: () = assert!(offset_of!(NsRr, r#type) == 1026);
 const _: () = assert!(offset_of!(NsRr, rr_class) == 1028);
 const _: () = assert!(offset_of!(NsRr, ttl) == 1032);

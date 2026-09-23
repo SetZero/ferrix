@@ -126,7 +126,7 @@ sizes them.
 | Stage 19: XWayland 40, and `dwindle:precise_mouse_move`, the second-pass effects and the window rule `xray` about 8 | 48 | in progress |
 | After stage 19's 178: `zwp_linux_dmabuf` with a GBM-shaped allocator, and Mesa's virgl on ferrousli, for clients that draw on the GPU themselves (`docs/BACKLOG.md`) | 8, and 40 or more | not started |
 | Dynamic linking: the kernel half, ferrousli's loader, glibc's names | 39 *(33 done; the exit met on x86-64)* | in progress: 6 left |
-| Dynamic linking: ferrousli's AArch64 and ARMv7-A port, which the customer put inside the stage on 2026-09-21 and on which the exit's other two architectures wait | ≈ 34 | not started |
+| ~~Dynamic linking: ferrousli's AArch64 and ARMv7-A port, which the customer put inside the stage on 2026-09-21~~ *done 2026-09-23* | ~~≈ 34~~ | done |
 | ~~Stage 12, btrfs write~~ *done 2026-09-21* | ~~≈ 60~~ | done |
 | Stage 13, namespaces, cgroups, seccomp | cgroups 85 (`docs/CGROUPS.md` §7: 27 for what init needs, 58 for the controllers); namespaces and seccomp unsized, the old guess for the whole stage was *month* ≈ 60 | under way: G1 done (8 of 85); its cgroups come first, as init's prerequisite (`docs/INIT.md` §0) |
 | Stage 22, Steam: the parts with a first guess (bubblewrap's rest 13, sound 30, Venus 8; glibc's names are dynamic linking's 13 and XWayland stage 19's, both counted above) | 51 | not started |
@@ -3460,7 +3460,7 @@ every architecture, and by `su`, which reaches `/etc/group` only because a
 
 ---
 
-## Dynamic linking — PIE, `PT_INTERP`, a loader  ·  *39 points, 6 left, and ferrousli's port at ≈ 34*
+## Dynamic linking — PIE, `PT_INTERP`, a loader  ·  *39 points, 6 left; ferrousli's port, ≈ 34, done*
 
 Placed after *Networking* without a number of its own, for the same reason:
 nothing on the path to `rustc` needs it, since Rust's `std` targets static
@@ -3596,8 +3596,9 @@ Three parts, in the order they can be tested:
   answers through `libc.so.6`.
 
   Still missing, 3 points: AArch64's TLS descriptors, and the loader's
-  entry, self-relocation and thread pointer on AArch64 and ARMv7-A, both of
-  which wait on ferrousli's port there. Lazy binding is not in it:
+  entry, self-relocation and thread pointer on AArch64 and ARMv7-A, which
+  ferrousli's port (below, done 2026-09-23) no longer holds up. Lazy
+  binding is not in it:
   everything is bound at load, as `LD_BIND_NOW` does, so there is no
   resolver trampoline to write per architecture. And one gap in the gate:
   clippy never sees the loader, whose binary needs the `loader` feature and
@@ -3629,8 +3630,11 @@ Three parts, in the order they can be tested:
   it uses. `_dl_start_user` and `_rtld_global` turned out to be glibc's
   business between its own `ld.so` and `libc.so.6`, which no program built
   against it reaches, and are not needed. Left, 3 points: the AArch64 and
-  ARMv7-A tables and builds, which wait on the library itself running there
-  (below).
+  ARMv7-A tables and builds. On ARMv7-A they are more than a copy of
+  x86-64's: glibc's 32-bit programs call time64 names of their own
+  (`__clock_gettime64`, `__fstat64_time64`, `__semctl64` and the like), some
+  with glibc's layouts rather than musl's, and its old 32-bit names are left
+  out of the table rather than answered wrongly.
 
 `cargo xtask test-shell` gained `--interpreter` and `--library` on
 2026-09-21. The first puts a linker in the initramfs at the path `--init`'s own
@@ -3682,15 +3686,30 @@ the exit names, pinned by checksum.
    ```
 
    Without `--library` it stops at `ld-ferrousli: library not found:
-   libc.so.6` and 127. AArch64 and ARMv7-A wait on ferrousli itself: it is
-   x86-64 only, and running there is `ferrousli/README.md`'s fourth item, a
-   port of the library that this section's points do not price. The
-   customer put that port inside this stage on 2026-09-21; it is estimated
-   at ≈ 34 points of its own — the system-call and errno tables per
-   architecture, the thread pointer, `clone`, signal contexts, `setjmp`,
-   `fenv` and `va_list` for each, AArch64's 128-bit `long double`,
-   ARMv7-A's 32-bit layouts with 64-bit `off_t` and `time_t`, `crt1.o`, and
-   a test harness that runs the C tests under `qemu-user`.
+   libc.so.6` and 127. On AArch64 and ARMv7-A it waits on the loader's and
+   the version tables' Arm halves, 6 points, above.
+
+**Done — ferrousli on AArch64 and ARMv7-A, 2026-09-23.** The customer put
+the library's port inside this stage on 2026-09-21, at ≈ 34 points of its
+own. ferrousli now builds for both, and its whole suite passes on each under
+QEMU 9.2.4's user mode — every unit test, and every C program at `-O0` and
+`-O2` — with x86-64's unchanged. `ferrousli/README.md` says how to run it.
+What it took: a system-call table per architecture, generated from the
+kernel's headers; the thread pointer, `clone` and TLS variant I, with the
+canary in `__stack_chk_guard`; `setjmp`, `va_list`, `fenv`, signal
+restorers, cancellation's system call and `crt1.o` for each; AArch64's
+`long double` as IEEE binary128 in software; and on ARMv7-A the 32-bit
+layouts with a 64-bit `time_t` and `off_t`, the kernel's time64 calls, and
+conversions where it has none (`itimerval`, `rusage`, SysV IPC's `*_ds`,
+`stat64`, `statfs64`, `timex`, the socket timeouts). Three
+synchronisation objects had assumed 64 bits and were the wrong size for
+C's on ARMv7-A — `pthread_cond_t`, the read-write lock and `sem_t` — and a
+timed condition wait hung on stack garbage until they were fixed.
+
+Not yet: the Arm programs built against ferrousli on Ferrix itself.
+`cargo xtask busybox` and `--init ferrousli` are x86-64 only, and CI runs
+only x86-64's suite, because the cross compilers and QEMU's user mode the
+Arm suites need are not on its runners. `docs/BACKLOG.md` has both rows.
 
 ---
 

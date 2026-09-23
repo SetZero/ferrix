@@ -52,8 +52,17 @@ pub struct Passwd {
     pub pw_shell: *mut c_char,
 }
 
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(size_of::<Passwd>() == 48);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(offset_of!(Passwd, pw_uid) == 8);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(offset_of!(Passwd, pw_gecos) == 16);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(size_of::<Passwd>() == 28);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(Passwd, pw_uid) == 16);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(Passwd, pw_gecos) == 24);
 
 impl Passwd {

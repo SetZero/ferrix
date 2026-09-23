@@ -27,7 +27,7 @@ use crate::unistd::close;
 
 /// `O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC`, from
 /// `asm-generic/fcntl.h`.
-const TCB_FLAGS: c_int = 0o400_000 | 0o4000 | 0o2_000_000;
+const TCB_FLAGS: c_int = crate::fcntl::O_NOFOLLOW | 0o4000 | 0o2_000_000;
 /// `S_IFMT`, from `include/sys/stat.h`.
 const S_IFMT: c_uint = 0o170_000;
 /// `S_IFREG`, from `include/sys/stat.h`.
@@ -59,7 +59,10 @@ pub struct Spwd {
     pub sp_flag: c_ulong,
 }
 
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(size_of::<Spwd>() == 72);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(size_of::<Spwd>() == 36);
 
 /// Reads a number at `at` as musl's `xatol` does: -1 for an empty field, else
 /// the decimal digits there. Returns it and where the digits end.

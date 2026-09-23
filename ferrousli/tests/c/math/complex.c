@@ -42,13 +42,41 @@ static float (*volatile cabsf_p)(float complex) = cabsf;
 static float (*volatile cimagf_p)(float complex) = (cimagf);
 
 /* Whether the parts of z have these bits. */
+/*
+ * Whether `got` is `want`, bit for bit; or, off x86-64, a NaN differing from
+ * it in its sign alone. The expected bits were printed on x86-64, where the
+ * NaN an invalid operation makes has its sign set, and on Arm it does not.
+ */
+static int nan_bits(uint64_t got, uint64_t want)
+{
+	if (got == want)
+		return 1;
+#if defined(__x86_64__)
+	return 0;
+#else
+	return (got & ~(1ULL << 63)) > 0x7ff0000000000000ULL && (got ^ want) == 1ULL << 63;
+#endif
+}
+
+/* nan_bits for float. */
+static int nan_bitsf(uint32_t got, uint32_t want)
+{
+	if (got == want)
+		return 1;
+#if defined(__x86_64__)
+	return 0;
+#else
+	return (got & ~(1U << 31)) > 0x7f800000U && (got ^ want) == 1U << 31;
+#endif
+}
+
 static int same(double complex z, uint64_t re, uint64_t im)
 {
 	double p[2];
 	uint64_t b[2];
 	memcpy(p, &z, sizeof p);
 	memcpy(b, p, sizeof b);
-	return b[0] == re && b[1] == im;
+	return nan_bits(b[0], re) && nan_bits(b[1], im);
 }
 
 static int samef(float complex z, uint32_t re, uint32_t im)
@@ -57,7 +85,7 @@ static int samef(float complex z, uint32_t re, uint32_t im)
 	uint32_t b[2];
 	memcpy(p, &z, sizeof p);
 	memcpy(b, p, sizeof b);
-	return b[0] == re && b[1] == im;
+	return nan_bitsf(b[0], re) && nan_bitsf(b[1], im);
 }
 
 static int bits(double x, uint64_t want)

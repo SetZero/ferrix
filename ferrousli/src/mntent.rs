@@ -54,9 +54,18 @@ pub struct Mntent {
     pub mnt_passno: c_int,
 }
 
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(Mntent, mnt_freq) == 32);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(Mntent, mnt_passno) == 36);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(size_of::<Mntent>() == 40);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(offset_of!(Mntent, mnt_freq) == 16);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(offset_of!(Mntent, mnt_passno) == 20);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(size_of::<Mntent>() == 24);
 
 /// The entry `getmntent` returns.
 #[derive(Debug)]

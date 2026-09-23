@@ -18,6 +18,8 @@
 use core::ffi::{c_int, c_uint};
 use core::mem::{offset_of, size_of};
 use core::ptr::null_mut;
+#[cfg(target_pointer_width = "32")]
+use core::sync::atomic::AtomicUsize;
 use core::sync::atomic::{AtomicI32, AtomicPtr, Ordering};
 
 use crate::{errno, futex};
@@ -37,17 +39,64 @@ pub struct Barrier {
     /// process-shared barrier.
     limit: AtomicI32,
     /// `_b_count`: arrivals of a process-shared barrier.
+    #[cfg(target_pointer_width = "64")]
     count: AtomicI32,
+    /// `_b_count` or `_b_inst`, which musl's 20-byte 32-bit layout keeps in
+    /// the same word: a process-shared barrier counts arrivals there, and a
+    /// private one points at its current round. See [`Barrier::count`].
+    #[cfg(target_pointer_width = "32")]
+    slot: AtomicUsize,
     /// `_b_waiters2`: threads sleeping on the count.
     waiters2: AtomicI32,
     /// Unused by this layout.
+    #[cfg(target_pointer_width = "64")]
     spare: AtomicI32,
     /// `_b_inst`: the current round of a private barrier.
+    #[cfg(target_pointer_width = "64")]
     inst: AtomicPtr<Instance>,
 }
 
+impl Barrier {
+    /// `_b_count`: arrivals of a process-shared barrier.
+    #[cfg(target_pointer_width = "64")]
+    fn count(&self) -> &AtomicI32 {
+        &self.count
+    }
+
+    /// `_b_inst`: the current round of a private barrier.
+    #[cfg(target_pointer_width = "64")]
+    fn inst(&self) -> &AtomicPtr<Instance> {
+        &self.inst
+    }
+
+    /// `_b_count`: arrivals of a process-shared barrier, in the slot it shares
+    /// with `_b_inst`.
+    #[cfg(target_pointer_width = "32")]
+    fn count(&self) -> &AtomicI32 {
+        // SAFETY: on a 32-bit target an `AtomicI32` has the size and alignment
+        // of the `AtomicUsize` slot, and a barrier only ever uses the slot as
+        // the one or the other, by its kind.
+        unsafe { &*(&raw const self.slot).cast::<AtomicI32>() }
+    }
+
+    /// `_b_inst`: the current round of a private barrier, in the slot it
+    /// shares with `_b_count`.
+    #[cfg(target_pointer_width = "32")]
+    fn inst(&self) -> &AtomicPtr<Instance> {
+        // SAFETY: as in `count`: an `AtomicPtr` has the slot's size and
+        // alignment too.
+        unsafe { &*(&raw const self.slot).cast::<AtomicPtr<Instance>>() }
+    }
+}
+
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(size_of::<Barrier>() == 32);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(size_of::<Barrier>() == 20);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(Barrier, inst) == 24);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(offset_of!(Barrier, slot) == 12);
 
 /// One round of a private barrier, on its owner's stack.
 #[derive(Debug)]
@@ -78,13 +127,13 @@ fn shared_wait(b: &Barrier) -> c_int {
 
     let mut ret = 0;
     // Under the lock: count this thread in.
-    let arrived = b.count.load(Ordering::SeqCst) + 1;
-    b.count.store(arrived, Ordering::SeqCst);
+    let arrived = b.count().load(Ordering::SeqCst) + 1;
+    b.count().store(arrived, Ordering::SeqCst);
     if arrived == limit {
-        b.count.store(0, Ordering::SeqCst);
+        b.count().store(0, Ordering::SeqCst);
         ret = SERIAL_THREAD;
         if b.waiters2.load(Ordering::SeqCst) != 0 {
-            futex::wake(&raw const b.count, -1, false);
+            futex::wake(core::ptr::from_ref(b.count()), -1, false);
         }
     } else {
         b.lock.store(0, Ordering::SeqCst);
@@ -92,27 +141,27 @@ fn shared_wait(b: &Barrier) -> c_int {
             futex::wake(&raw const b.lock, 1, false);
         }
         loop {
-            let count = b.count.load(Ordering::SeqCst);
+            let count = b.count().load(Ordering::SeqCst);
             if count <= 0 {
                 break;
             }
-            futex::wait_counted(&b.count, Some(&b.waiters2), count, false);
+            futex::wait_counted(b.count(), Some(&b.waiters2), count, false);
         }
     }
 
     // Every thread of the round counts itself out before any leaves.
-    if b.count.fetch_sub(1, Ordering::SeqCst) == 1 - limit {
-        b.count.store(0, Ordering::SeqCst);
+    if b.count().fetch_sub(1, Ordering::SeqCst) == 1 - limit {
+        b.count().store(0, Ordering::SeqCst);
         if b.waiters2.load(Ordering::SeqCst) != 0 {
-            futex::wake(&raw const b.count, -1, false);
+            futex::wake(core::ptr::from_ref(b.count()), -1, false);
         }
     } else {
         loop {
-            let count = b.count.load(Ordering::SeqCst);
+            let count = b.count().load(Ordering::SeqCst);
             if count == 0 {
                 break;
             }
-            futex::wait_counted(&b.count, Some(&b.waiters2), count, false);
+            futex::wait_counted(b.count(), Some(&b.waiters2), count, false);
         }
     }
 
@@ -137,7 +186,7 @@ fn private_wait(b: &Barrier, limit: c_int) -> c_int {
     while b.lock.swap(1, Ordering::SeqCst) != 0 {
         futex::wait_counted(&b.lock, Some(&b.waiters), 1, true);
     }
-    let inst = b.inst.load(Ordering::SeqCst);
+    let inst = b.inst().load(Ordering::SeqCst);
 
     if inst.is_null() {
         // The first to arrive owns the round.
@@ -147,7 +196,7 @@ fn private_wait(b: &Barrier, limit: c_int) -> c_int {
             waiters: AtomicI32::new(0),
             finished: AtomicI32::new(0),
         };
-        b.inst
+        b.inst()
             .store((&raw const owned).cast_mut(), Ordering::SeqCst);
         b.lock.store(0, Ordering::SeqCst);
         if b.waiters.load(Ordering::SeqCst) != 0 {
@@ -170,7 +219,7 @@ fn private_wait(b: &Barrier, limit: c_int) -> c_int {
     let inst = unsafe { &*inst };
     if inst.count.fetch_add(1, Ordering::SeqCst) + 1 == limit {
         // The last arrival: start a new round, and release this one.
-        b.inst.store(null_mut(), Ordering::SeqCst);
+        b.inst().store(null_mut(), Ordering::SeqCst);
         b.lock.store(0, Ordering::SeqCst);
         if b.waiters.load(Ordering::SeqCst) != 0 {
             futex::wake(&raw const b.lock, 1, true);
@@ -228,9 +277,14 @@ pub unsafe extern "C" fn pthread_barrier_init(
             lock: AtomicI32::new(0),
             waiters: AtomicI32::new(0),
             limit: AtomicI32::new(limit),
+            #[cfg(target_pointer_width = "64")]
             count: AtomicI32::new(0),
+            #[cfg(target_pointer_width = "32")]
+            slot: AtomicUsize::new(0),
             waiters2: AtomicI32::new(0),
+            #[cfg(target_pointer_width = "64")]
             spare: AtomicI32::new(0),
+            #[cfg(target_pointer_width = "64")]
             inst: AtomicPtr::new(null_mut()),
         });
     }

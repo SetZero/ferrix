@@ -24,12 +24,24 @@
 // off for a whole crate. It does not stop rustc copying large values with
 // `memcpy`; `string`'s module documentation covers that half.
 #![no_builtins]
+// C's types are not the same Rust types on every target: `char` is `i8` on
+// x86-64 and `u8` on Arm, and `long` is 64 bits on the 64-bit targets and 32
+// on ARMv7-A. A cast or `from` between one of them and a fixed-width type is
+// needed on some targets and the identity on the others, where these two
+// lints would reject it.
+#![allow(
+    clippy::unnecessary_cast,
+    clippy::useless_conversion,
+    reason = "C's char and long differ between the targets"
+)]
 
-#[cfg(not(target_arch = "x86_64"))]
-compile_error!("ferrousli supports only x86-64 so far");
+#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64", target_arch = "arm")))]
+compile_error!("ferrousli supports x86-64, AArch64 and ARMv7-A");
 
 pub mod arch;
 pub mod arith;
+#[cfg(target_arch = "arm")]
+mod arm_names;
 pub mod assert;
 pub mod auxv;
 pub mod barrier;
@@ -175,5 +187,42 @@ core::arch::global_asm!(
     "rust_eh_personality:",
     "ud2",
     ".size rust_eh_personality, . - rust_eh_personality",
+    ".popsection",
+);
+
+// The same on AArch64 and ARMv7-A, where `syscall::trap` emits `udf`.
+#[cfg(all(not(test), any(target_arch = "aarch64", target_arch = "arm")))]
+core::arch::global_asm!(
+    ".pushsection .text.rust_eh_personality,\"ax\",%progbits",
+    ".p2align 2",
+    ".weak rust_eh_personality",
+    ".type rust_eh_personality, %function",
+    "rust_eh_personality:",
+    "udf #0",
+    ".size rust_eh_personality, . - rust_eh_personality",
+    ".popsection",
+);
+
+// ARMv7-A's unwind tables, `.ARM.exidx`, name the EHABI personality routines
+// instead: every function this target's `core` was compiled with refers to
+// `__aeabi_unwind_cpp_pr0` or `pr1`, and a C program linked without libgcc's
+// unwinder has none. They are weak for the same reason, and trap for the same
+// reason: nothing here unwinds, and a program that does brings its own.
+#[cfg(all(not(test), target_arch = "arm"))]
+core::arch::global_asm!(
+    ".pushsection .text.__aeabi_unwind_cpp_pr,\"ax\",%progbits",
+    ".p2align 2",
+    ".arm",
+    ".weak __aeabi_unwind_cpp_pr0",
+    ".type __aeabi_unwind_cpp_pr0, %function",
+    ".weak __aeabi_unwind_cpp_pr1",
+    ".type __aeabi_unwind_cpp_pr1, %function",
+    ".weak __aeabi_unwind_cpp_pr2",
+    ".type __aeabi_unwind_cpp_pr2, %function",
+    "__aeabi_unwind_cpp_pr0:",
+    "__aeabi_unwind_cpp_pr1:",
+    "__aeabi_unwind_cpp_pr2:",
+    "udf #0",
+    ".size __aeabi_unwind_cpp_pr0, . - __aeabi_unwind_cpp_pr0",
     ".popsection",
 );

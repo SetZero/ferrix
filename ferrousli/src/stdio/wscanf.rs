@@ -21,7 +21,7 @@ use super::file::{self, File, Inner, stdin};
 use super::scanf::{Source, scan};
 use super::wide::get_wide;
 use crate::multibyte::{MbState, WChar, WEOF, WInt, wcrtomb};
-use crate::va::{self, VaListTag};
+use crate::va::{self, VaListArg};
 use crate::wchar::wcslen;
 use crate::wctype::iswspace;
 use crate::{errno, malloc};
@@ -142,11 +142,7 @@ unsafe fn with_narrow_format(fmt: *const WChar, op: impl FnOnce(*const c_char) -
 /// `ws` and `fmt` must be NUL-terminated wide strings, and `ap` a `va_list`
 /// holding a pointer of the right type for each conversion.
 #[cfg_attr(not(test), unsafe(no_mangle))]
-pub unsafe extern "C" fn vswscanf(
-    ws: *const WChar,
-    fmt: *const WChar,
-    ap: *mut VaListTag,
-) -> c_int {
+pub unsafe extern "C" fn vswscanf(ws: *const WChar, fmt: *const WChar, ap: VaListArg) -> c_int {
     let op = |narrow| {
         let mut source = WideText { start: ws, pos: 0 };
         // SAFETY: the caller passes a string, a format and its arguments, and
@@ -165,11 +161,7 @@ pub unsafe extern "C" fn vswscanf(
 /// `stream` must be a live stream, `fmt` a NUL-terminated wide string, and `ap`
 /// a `va_list` holding a pointer of the right type for each conversion.
 #[cfg_attr(not(test), unsafe(no_mangle))]
-pub unsafe extern "C" fn vfwscanf(
-    stream: *mut File,
-    fmt: *const WChar,
-    ap: *mut VaListTag,
-) -> c_int {
+pub unsafe extern "C" fn vfwscanf(stream: *mut File, fmt: *const WChar, ap: VaListArg) -> c_int {
     let op = |narrow| {
         let read = |inner: &mut Inner| {
             let mut source = WideStream { inner, last: 0 };
@@ -189,7 +181,7 @@ pub unsafe extern "C" fn vfwscanf(
 ///
 /// As [`vfwscanf`], without the stream.
 #[cfg_attr(not(test), unsafe(no_mangle))]
-pub unsafe extern "C" fn vwscanf(fmt: *const WChar, ap: *mut VaListTag) -> c_int {
+pub unsafe extern "C" fn vwscanf(fmt: *const WChar, ap: VaListArg) -> c_int {
     // SAFETY: `stdin` is a live stream, and the caller passes the rest.
     unsafe { vfwscanf(stdin.load(Ordering::Relaxed), fmt, ap) }
 }
@@ -210,12 +202,12 @@ macro_rules! alias {
     };
 }
 
-alias!(__isoc99_vswscanf = vswscanf(ws: *const WChar, fmt: *const WChar, ap: *mut VaListTag));
-alias!(__isoc99_vfwscanf = vfwscanf(stream: *mut File, fmt: *const WChar, ap: *mut VaListTag));
-alias!(__isoc99_vwscanf = vwscanf(fmt: *const WChar, ap: *mut VaListTag));
-alias!(__isoc23_vswscanf = vswscanf(ws: *const WChar, fmt: *const WChar, ap: *mut VaListTag));
-alias!(__isoc23_vfwscanf = vfwscanf(stream: *mut File, fmt: *const WChar, ap: *mut VaListTag));
-alias!(__isoc23_vwscanf = vwscanf(fmt: *const WChar, ap: *mut VaListTag));
+alias!(__isoc99_vswscanf = vswscanf(ws: *const WChar, fmt: *const WChar, ap: VaListArg));
+alias!(__isoc99_vfwscanf = vfwscanf(stream: *mut File, fmt: *const WChar, ap: VaListArg));
+alias!(__isoc99_vwscanf = vwscanf(fmt: *const WChar, ap: VaListArg));
+alias!(__isoc23_vswscanf = vswscanf(ws: *const WChar, fmt: *const WChar, ap: VaListArg));
+alias!(__isoc23_vfwscanf = vfwscanf(stream: *mut File, fmt: *const WChar, ap: VaListArg));
+alias!(__isoc23_vwscanf = vwscanf(fmt: *const WChar, ap: VaListArg));
 
 va::variadic!(swscanf, 2, vswscanf);
 va::variadic!(fwscanf, 2, vfwscanf);

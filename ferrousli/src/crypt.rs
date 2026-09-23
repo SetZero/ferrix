@@ -264,7 +264,7 @@ unsafe fn pack_bits(bits: *const c_char) -> u64 {
     let mut value = 0_u64;
     for index in 0..64 {
         // SAFETY: the caller promises 64 readable bytes.
-        let bit = unsafe { bits.wrapping_add(index).read() }.cast_unsigned() & 1;
+        let bit = unsafe { bits.wrapping_add(index).read() } as u8 & 1;
         value = (value << 1) | u64::from(bit);
     }
     value

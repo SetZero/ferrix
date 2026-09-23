@@ -13,6 +13,7 @@
 //! they do with musl. Here the sum is exact, computed in integers; see
 //! [`fmaf`].
 
+use crate::math::arch;
 use crate::math::manipulate::scalbn;
 use crate::math::support::{force_eval, hexf64};
 
@@ -164,7 +165,7 @@ pub extern "C" fn fma(x: f64, y: f64, z: f64) -> f64 {
         i = -i;
     }
     // The conversion rounds in the current mode: |r| is in [2^62, 2^63].
-    let mut r = i as f64;
+    let mut r = arch::i64_to_f64(i);
 
     if e < -1022 - 62 {
         // The result is subnormal before rounding.
@@ -188,7 +189,7 @@ pub extern "C" fn fma(x: f64, y: f64, z: f64) -> f64 {
                 if negative {
                     i = -i;
                 }
-                r = i as f64;
+                r = arch::i64_to_f64(i);
                 // Remove the top bit.
                 r = 2.0 * r - c;
                 // Raise underflow in a way the optimiser cannot remove.
@@ -202,7 +203,7 @@ pub extern "C" fn fma(x: f64, y: f64, z: f64) -> f64 {
             if negative {
                 i = -i;
             }
-            r = i as f64;
+            r = arch::i64_to_f64(i);
         }
     }
     scalbn(r, e)
@@ -312,6 +313,7 @@ mod tests {
     use crate::math::support::hexf32;
 
     unsafe extern "C" {
+        #[cfg(not(target_arch = "arm"))]
         #[link_name = "fma"]
         safe fn host_fma(x: f64, y: f64, z: f64) -> f64;
         #[link_name = "fmaf"]
@@ -363,6 +365,12 @@ mod tests {
         (x, y, z)
     }
 
+    // Not on ARMv7-A, where the host's answer, glibc's under qemu-arm, is
+    // wrong in the directed modes: rounding downward, fma(-0x1.ec23199d2fe35p+145,
+    // -0x1.a627bb6194ac7p-82, -0x1.95c71ee59f5c1p+64) is -91936.59166205149, which exact
+    // rational arithmetic confirms, and the host says -91936.59166205148.
+    // libc-test's exact table checks every mode there instead.
+    #[cfg(not(target_arch = "arm"))]
     #[test]
     fn fma_agrees_exactly_with_glibc_in_every_mode() {
         let mut random = Random::new("fma");

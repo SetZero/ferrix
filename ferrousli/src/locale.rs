@@ -517,8 +517,13 @@ pub struct Lconv {
     int_n_sign_posn: c_char,
 }
 
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(size_of::<Lconv>() == 96);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(size_of::<Lconv>() == 56);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(core::mem::offset_of!(Lconv, int_frac_digits) == 80);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(core::mem::offset_of!(Lconv, int_n_sign_posn) == 93);
 
 // SAFETY: the one `Lconv` is static, its strings are static, and neither is
@@ -986,6 +991,7 @@ mod tests {
         let conv = unsafe { &*conv };
         assert_eq!(text(conv.decimal_point), ".");
         assert_eq!(text(conv.grouping), "");
-        assert_eq!(conv.int_n_sign_posn, 127);
+        // CHAR_MAX: 127 where `char` is signed, 255 on Arm.
+        assert_eq!(conv.int_n_sign_posn, c_char::MAX);
     }
 }

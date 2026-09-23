@@ -34,7 +34,10 @@ int main(void)
 	CHECK(fcntl(q[0], F_GETFD) == 0 && fcntl(q[1], F_GETFD) == 0);
 	CHECK(fcntl(q[0], F_SETFD, FD_CLOEXEC) == 0 && fcntl(q[0], F_GETFD) == FD_CLOEXEC);
 	errno = 0;
+#ifndef FERROUSLI_TEST_EMULATED
+	/* qemu-user drops flags it does not know rather than refusing them. */
 	CHECK(pipe2(q, 0x40000000) == -1 && errno == EINVAL);
+#endif
 	errno = 0;
 	CHECK(fcntl(-1, F_GETFD) == -1 && errno == EBADF);
 

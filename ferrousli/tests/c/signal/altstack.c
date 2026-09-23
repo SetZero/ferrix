@@ -71,10 +71,13 @@ int main(void)
 	CHECK(on_alt == 0);
 	CHECK(flags_inside == 0);
 
+#ifndef FERROUSLI_TEST_EMULATED
+	/* qemu-user checks against its own, smaller, minimum. */
 	errno = 0;
 	ss.ss_size = MINSIGSTKSZ - 1;
 	CHECK(sigaltstack(&ss, 0) == -1);
 	CHECK(errno == ENOMEM);
+#endif
 	errno = 0;
 	ss.ss_flags = -1;
 	ss.ss_size = MINSIGSTKSZ;

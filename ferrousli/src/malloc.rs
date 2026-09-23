@@ -97,11 +97,12 @@ use crate::lock::SpinLock;
 use crate::syscall::{self, nr};
 use crate::{errno, signal, string};
 
-/// The machine's page, for the mapping arithmetic. x86-64 has 4 KiB pages. A
-/// kernel with larger ones rounds every mapping length up the same way on
-/// `mmap`, `munmap` and `mremap`, so only `valloc` and `pvalloc` would see the
-/// difference.
-#[cfg(target_arch = "x86_64")]
+/// The granule of the mapping arithmetic: 4 KiB, the smallest page of all
+/// three architectures. A kernel with larger pages -- AArch64's 16 or 64 KiB --
+/// rounds every mapping length up the same way on `mmap`, `munmap` and
+/// `mremap`, and every mapping here is made whole and released whole, so only
+/// `valloc` and `pvalloc` see the difference, and they ask the auxiliary
+/// vector for the real page.
 const PAGE_SIZE: usize = 4096;
 
 /// `PROT_READ | PROT_WRITE`, from `asm-generic/mman-common.h`.
@@ -130,8 +131,9 @@ const REGION: usize = 1 << 20;
 /// rounding below without overflow, and no mapping that size can succeed.
 const MAX_REQUEST: usize = isize::MAX.cast_unsigned() - 4 * REGION;
 
-/// Mixed into every tag. Its low four bits are zero, where the kind goes.
-const KEY: usize = 0x5f3c_9a1e_7d24_b860;
+/// Mixed into every tag. Its low four bits are zero, where the kind goes. A
+/// 32-bit target keeps the low half.
+const KEY: usize = 0x5f3c_9a1e_7d24_b860_u64 as usize;
 /// A block in use from a size class.
 const SMALL: usize = 1;
 /// A small block on its class's free list.
@@ -141,6 +143,7 @@ const LARGE: usize = 3;
 /// A stub below an aligned pointer, pointing back at its block.
 const ALIGNED: usize = 4;
 
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(size_of::<Header>() == HEADER);
 const _: () = assert!(KEY.is_multiple_of(ALIGN));
 const _: () = assert!(class_size(CLASSES - 1) == MAX_SMALL_BLOCK);
@@ -292,8 +295,7 @@ fn map(len: usize) -> usize {
     // SAFETY: a new anonymous private mapping aliases nothing. The file
     // descriptor is -1 as `mmap` requires for anonymous memory.
     let ret = unsafe {
-        syscall::syscall6(
-            nr::MMAP,
+        syscall::mmap(
             0,
             len,
             PROT_READ_WRITE,
@@ -732,7 +734,7 @@ pub unsafe extern "C" fn posix_memalign(
 /// Allocates `size` bytes at a page boundary.
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn valloc(size: usize) -> *mut c_void {
-    pointer(allocate_aligned(PAGE_SIZE, size))
+    pointer(allocate_aligned(crate::sysconf::page_size(), size))
 }
 
 /// Allocates `size` bytes rounded up to whole pages, at a page boundary, and at
@@ -742,9 +744,10 @@ pub extern "C" fn pvalloc(size: usize) -> *mut c_void {
     if size > MAX_REQUEST {
         return pointer(out_of_memory().0);
     }
-    let pages = round_up(size, PAGE_SIZE);
-    let pages = if pages == 0 { PAGE_SIZE } else { pages };
-    pointer(allocate_aligned(PAGE_SIZE, pages))
+    let page = crate::sysconf::page_size();
+    let pages = round_up(size, page);
+    let pages = if pages == 0 { page } else { pages };
+    pointer(allocate_aligned(page, pages))
 }
 
 /// How many bytes the allocation at `p` can hold, which is at least what was
@@ -823,7 +826,7 @@ mod tests {
 
     #[test]
     fn a_tag_names_its_own_address_and_kind() {
-        let block = 0x7f00_1234_5670;
+        let block = 0x7f00_1234_5670_u64 as usize;
         for kind in [SMALL, FREE, LARGE, ALIGNED] {
             assert_eq!(kind_of(block, tag(block, kind)), kind);
             assert!(!matches!(
@@ -922,8 +925,11 @@ mod tests {
             unsafe { free(p) };
         }
         let mut out = null_mut();
+        // A power of two below a pointer's size.
+        let small = size_of::<usize>() / 2;
         // SAFETY: `out` is a local.
-        assert_eq!(unsafe { posix_memalign(&raw mut out, 4, 1) }, errno::EINVAL);
+        let below_a_pointer = unsafe { posix_memalign(&raw mut out, small, 1) };
+        assert_eq!(below_a_pointer, errno::EINVAL);
         // SAFETY: as above.
         let not_a_power = unsafe { posix_memalign(&raw mut out, 24, 1) };
         assert_eq!(not_a_power, errno::EINVAL);

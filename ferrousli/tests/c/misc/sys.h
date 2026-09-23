@@ -12,6 +12,7 @@
 
 long t_syscall(long n, long a, long b, long c, long d);
 
+#if defined(__x86_64__)
 /* x86-64: the number in rax, the arguments in rdi, rsi, rdx and r10. */
 __asm__(
 	".text\n"
@@ -26,6 +27,41 @@ __asm__(
 	"	syscall\n"
 	"	ret\n"
 );
+#elif defined(__aarch64__)
+/* AArch64: the number in x8, the arguments in x0 to x3. */
+__asm__(
+	".text\n"
+	".globl t_syscall\n"
+	".type t_syscall, %function\n"
+	"t_syscall:\n"
+	"	mov x8, x0\n"
+	"	mov x0, x1\n"
+	"	mov x1, x2\n"
+	"	mov x2, x3\n"
+	"	mov x3, x4\n"
+	"	svc #0\n"
+	"	ret\n"
+);
+#elif defined(__arm__)
+/* ARMv7-A: the number in r7, which is the caller's, the arguments in r0 to
+   r3; the fourth arrives on the stack. */
+__asm__(
+	".text\n"
+	".arm\n"
+	".globl t_syscall\n"
+	".type t_syscall, %function\n"
+	"t_syscall:\n"
+	"	push {r7}\n"
+	"	mov r7, r0\n"
+	"	mov r0, r1\n"
+	"	mov r1, r2\n"
+	"	mov r2, r3\n"
+	"	ldr r3, [sp, #4]\n"
+	"	svc #0\n"
+	"	pop {r7}\n"
+	"	bx lr\n"
+);
+#endif
 
 __attribute__((unused))
 static int t_mkfile(const char *name)

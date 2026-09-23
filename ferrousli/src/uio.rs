@@ -16,7 +16,13 @@ pub struct Iovec {
     pub iov_len: usize,
 }
 
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(size_of::<Iovec>() == 16);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(offset_of!(Iovec, iov_len) == 4);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(size_of::<Iovec>() == 8);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(Iovec, iov_len) == 8);
 
 /// Reads from `fd` into the `count` buffers at `iov`, in order.

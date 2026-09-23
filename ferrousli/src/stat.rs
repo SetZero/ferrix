@@ -24,6 +24,7 @@ const S_IFIFO: c_uint = 0o010_000;
 /// and its padding with user-space types of the same size. The assertions
 /// below check it field by field against the kernel's offsets. glibc's
 /// x86-64 `struct stat` is the same.
+#[cfg(target_arch = "x86_64")]
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Stat {
@@ -61,21 +62,236 @@ pub struct Stat {
 
 // The kernel's `struct stat` on x86-64, from `asm/stat.h`: three unsigned
 // longs, four unsigned ints, then eleven longs and three reserved ones.
+#[cfg(target_arch = "x86_64")]
 const _: () = assert!(size_of::<Stat>() == 144);
+#[cfg(target_arch = "x86_64")]
 const _: () = assert!(offset_of!(Stat, st_ino) == 8);
+#[cfg(target_arch = "x86_64")]
 const _: () = assert!(offset_of!(Stat, st_nlink) == 16);
+#[cfg(target_arch = "x86_64")]
 const _: () = assert!(offset_of!(Stat, st_mode) == 24);
+#[cfg(target_arch = "x86_64")]
 const _: () = assert!(offset_of!(Stat, st_uid) == 28);
+#[cfg(target_arch = "x86_64")]
 const _: () = assert!(offset_of!(Stat, st_gid) == 32);
+#[cfg(target_arch = "x86_64")]
 const _: () = assert!(offset_of!(Stat, st_rdev) == 40);
+#[cfg(target_arch = "x86_64")]
 const _: () = assert!(offset_of!(Stat, st_size) == 48);
+#[cfg(target_arch = "x86_64")]
 const _: () = assert!(offset_of!(Stat, st_blksize) == 56);
+#[cfg(target_arch = "x86_64")]
 const _: () = assert!(offset_of!(Stat, st_blocks) == 64);
 // `st_atime`, `st_atime_nsec`, and so on, in pairs.
+#[cfg(target_arch = "x86_64")]
 const _: () = assert!(offset_of!(Stat, st_atim) == 72);
+#[cfg(target_arch = "x86_64")]
 const _: () = assert!(offset_of!(Stat, st_mtim) == 88);
+#[cfg(target_arch = "x86_64")]
 const _: () = assert!(offset_of!(Stat, st_ctim) == 104);
+#[cfg(target_arch = "x86_64")]
 const _: () = assert!(offset_of!(Stat, __unused) == 120);
+
+/// C's `struct stat` on AArch64: the kernel's generic one from
+/// `asm-generic/stat.h`, with its second and nanosecond fields as
+/// `struct timespec`, as musl's and glibc's `bits/stat.h` both declare it.
+/// Its link count and block size are 32 bits, and padding follows the device
+/// and the block size.
+#[cfg(target_arch = "aarch64")]
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Stat {
+    /// The device holding the file, C's `dev_t`.
+    pub st_dev: u64,
+    /// The inode number, C's `ino_t`.
+    pub st_ino: u64,
+    /// The type and permissions, C's `mode_t`.
+    pub st_mode: c_uint,
+    /// The link count, C's `nlink_t`.
+    pub st_nlink: c_uint,
+    /// The owner.
+    pub st_uid: c_uint,
+    /// The group.
+    pub st_gid: c_uint,
+    /// The device a special file stands for.
+    pub st_rdev: u64,
+    /// Padding, the kernel's `__pad1`.
+    pub __pad1: u64,
+    /// The size in bytes, C's `off_t`.
+    pub st_size: i64,
+    /// The preferred block size for I/O.
+    pub st_blksize: c_int,
+    /// Padding, the kernel's `__pad2`.
+    pub __pad2: c_int,
+    /// The 512-byte blocks allocated.
+    pub st_blocks: i64,
+    /// The last access.
+    pub st_atim: Timespec,
+    /// The last modification.
+    pub st_mtim: Timespec,
+    /// The last status change.
+    pub st_ctim: Timespec,
+    /// Reserved, the kernel's `__unused4` and `__unused5`.
+    pub __unused: [c_uint; 2],
+}
+
+#[cfg(target_arch = "aarch64")]
+const _: () = assert!(size_of::<Stat>() == 128);
+#[cfg(target_arch = "aarch64")]
+const _: () = assert!(offset_of!(Stat, st_mode) == 16);
+#[cfg(target_arch = "aarch64")]
+const _: () = assert!(offset_of!(Stat, st_rdev) == 32);
+#[cfg(target_arch = "aarch64")]
+const _: () = assert!(offset_of!(Stat, st_size) == 48);
+#[cfg(target_arch = "aarch64")]
+const _: () = assert!(offset_of!(Stat, st_blksize) == 56);
+#[cfg(target_arch = "aarch64")]
+const _: () = assert!(offset_of!(Stat, st_blocks) == 64);
+#[cfg(target_arch = "aarch64")]
+const _: () = assert!(offset_of!(Stat, st_atim) == 72);
+#[cfg(target_arch = "aarch64")]
+const _: () = assert!(offset_of!(Stat, st_ctim) == 104);
+
+/// C's `struct stat` on ARMv7-A, as musl's `bits/stat.h` declares it for a
+/// 64-bit `time_t`: its first 104 bytes are the kernel's `struct stat64`
+/// from `asm/stat.h`, which `fstatat64` writes, and the 64-bit inode and
+/// times follow. The kernel's times are 32-bit and unsigned; [`widen`] copies
+/// them into the `struct timespec`s after the call.
+#[cfg(target_arch = "arm")]
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Stat {
+    /// The device holding the file, C's `dev_t`.
+    pub st_dev: u64,
+    /// Padding, the kernel's `__pad0`.
+    pub __st_dev_padding: c_int,
+    /// The inode number's low 32 bits, the kernel's `__st_ino`.
+    pub __st_ino_truncated: c_long,
+    /// The type and permissions, C's `mode_t`.
+    pub st_mode: c_uint,
+    /// The link count, C's `nlink_t`.
+    pub st_nlink: c_uint,
+    /// The owner.
+    pub st_uid: c_uint,
+    /// The group.
+    pub st_gid: c_uint,
+    /// The device a special file stands for.
+    pub st_rdev: u64,
+    /// Padding, the kernel's `__pad3`.
+    pub __st_rdev_padding: c_int,
+    /// The size in bytes, C's `off_t`.
+    pub st_size: i64,
+    /// The preferred block size for I/O.
+    pub st_blksize: c_long,
+    /// The 512-byte blocks allocated.
+    pub st_blocks: i64,
+    /// The kernel's 32-bit access time: seconds and nanoseconds.
+    pub __st_atim32: [c_uint; 2],
+    /// The kernel's 32-bit modification time.
+    pub __st_mtim32: [c_uint; 2],
+    /// The kernel's 32-bit status change time.
+    pub __st_ctim32: [c_uint; 2],
+    /// The inode number, C's `ino_t`.
+    pub st_ino: u64,
+    /// The last access.
+    pub st_atim: Timespec,
+    /// The last modification.
+    pub st_mtim: Timespec,
+    /// The last status change.
+    pub st_ctim: Timespec,
+}
+
+#[cfg(target_arch = "arm")]
+const _: () = assert!(size_of::<Stat>() == 152);
+#[cfg(target_arch = "arm")]
+const _: () = assert!(offset_of!(Stat, st_mode) == 16);
+#[cfg(target_arch = "arm")]
+const _: () = assert!(offset_of!(Stat, st_rdev) == 32);
+#[cfg(target_arch = "arm")]
+const _: () = assert!(offset_of!(Stat, st_size) == 48);
+#[cfg(target_arch = "arm")]
+const _: () = assert!(offset_of!(Stat, st_blocks) == 64);
+#[cfg(target_arch = "arm")]
+const _: () = assert!(offset_of!(Stat, __st_atim32) == 72);
+#[cfg(target_arch = "arm")]
+const _: () = assert!(offset_of!(Stat, st_ino) == 96);
+#[cfg(target_arch = "arm")]
+const _: () = assert!(offset_of!(Stat, st_atim) == 104);
+#[cfg(target_arch = "arm")]
+const _: () = assert!(offset_of!(Stat, st_ctim) == 136);
+
+/// Fills the `struct timespec`s of a `struct stat` the kernel's `stat64`
+/// wrote the first 104 bytes of. The kernel's seconds are unsigned, which
+/// takes them to 2106.
+///
+/// # Safety
+///
+/// `buf` must be a `struct stat` whose first 104 bytes the kernel wrote.
+#[cfg(target_arch = "arm")]
+unsafe fn widen(buf: *mut Stat) {
+    // SAFETY: the caller vouches for the structure, which nothing else uses.
+    let st = unsafe { &mut *buf };
+    let time = |[seconds, nanoseconds]: [c_uint; 2]| Timespec {
+        tv_sec: i64::from(seconds),
+        tv_nsec: nanoseconds as c_long,
+    };
+    st.st_atim = time(st.__st_atim32);
+    st.st_mtim = time(st.__st_mtim32);
+    st.st_ctim = time(st.__st_ctim32);
+}
+
+/// `fstatat`'s system call: the kernel's value, and `*buf` filled on success.
+///
+/// # Safety
+///
+/// As [`fstatat`].
+pub(crate) unsafe fn kernel_fstatat(
+    dirfd: c_int,
+    path: *const c_char,
+    buf: *mut Stat,
+    flags: c_int,
+) -> isize {
+    #[cfg(target_arch = "arm")]
+    let number = nr::FSTATAT64;
+    #[cfg(not(target_arch = "arm"))]
+    let number = nr::NEWFSTATAT;
+    // SAFETY: the kernel reads `path` and writes `buf`, as the caller vouches.
+    let ret = unsafe {
+        syscall::syscall4(
+            number,
+            dirfd as usize,
+            path.addr(),
+            buf.addr(),
+            flags as usize,
+        )
+    };
+    #[cfg(target_arch = "arm")]
+    if ret == 0 {
+        // SAFETY: the kernel wrote the structure.
+        unsafe { widen(buf) };
+    }
+    ret
+}
+
+/// `fstat`'s system call: the kernel's value, and `*buf` filled on success.
+///
+/// # Safety
+///
+/// `buf` must be valid for a write of a `struct stat`.
+pub(crate) unsafe fn kernel_fstat(fd: c_int, buf: *mut Stat) -> isize {
+    #[cfg(target_arch = "arm")]
+    let number = nr::FSTAT64;
+    #[cfg(not(target_arch = "arm"))]
+    let number = nr::FSTAT;
+    // SAFETY: the kernel writes `buf`, as the caller vouches.
+    let ret = unsafe { syscall::syscall2(number, fd as usize, buf.addr()) };
+    #[cfg(target_arch = "arm")]
+    if ret == 0 {
+        // SAFETY: the kernel wrote the structure.
+        unsafe { widen(buf) };
+    }
+    ret
+}
 
 /// The status of `path`, relative to `dirfd`, into `*buf`.
 ///
@@ -90,16 +306,8 @@ pub unsafe extern "C" fn fstatat(
     buf: *mut Stat,
     flags: c_int,
 ) -> c_int {
-    // SAFETY: the kernel reads `path` and writes `buf`, as the caller vouches.
-    let ret = unsafe {
-        syscall::syscall4(
-            nr::NEWFSTATAT,
-            dirfd as usize,
-            path.addr(),
-            buf.addr(),
-            flags as usize,
-        )
-    };
+    // SAFETY: the caller's contract is `kernel_fstatat`'s.
+    let ret = unsafe { kernel_fstatat(dirfd, path, buf, flags) };
     errno::from_syscall(ret) as c_int
 }
 
@@ -132,8 +340,8 @@ pub unsafe extern "C" fn lstat(path: *const c_char, buf: *mut Stat) -> c_int {
 /// `buf` must be valid for a write of a `struct stat`.
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub unsafe extern "C" fn fstat(fd: c_int, buf: *mut Stat) -> c_int {
-    // SAFETY: the kernel writes `buf`, as the caller vouches.
-    let ret = unsafe { syscall::syscall2(nr::FSTAT, fd as usize, buf.addr()) };
+    // SAFETY: the caller's contract is `kernel_fstat`'s.
+    let ret = unsafe { kernel_fstat(fd, buf) };
     errno::from_syscall(ret) as c_int
 }
 
@@ -482,7 +690,8 @@ unsafe fn utimes_at(path: *const c_char, times: *const Timeval, flags: c_int) ->
         }
         *spec = Timespec {
             tv_sec: tv.tv_sec,
-            tv_nsec: tv.tv_usec * 1000,
+            // Below a second, checked above: it fits a `long`.
+            tv_nsec: (tv.tv_usec * 1000) as c_long,
         };
     }
     // SAFETY: the caller passes a NUL-terminated string, and `specs` is a live

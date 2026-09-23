@@ -41,7 +41,13 @@ int main(void)
 	CHECK(uname(&u) == 0);
 	/* Linux on the host; Ferrix reports its own name. */
 	CHECK(strcmp(u.sysname, "Linux") == 0 || strcmp(u.sysname, "Ferrix") == 0);
+#if defined(__x86_64__)
 	CHECK(strcmp(u.machine, "x86_64") == 0);
+#elif defined(__aarch64__)
+	CHECK(strcmp(u.machine, "aarch64") == 0);
+#elif defined(__arm__)
+	CHECK(strncmp(u.machine, "armv7", 5) == 0);
+#endif
 	CHECK(u.release[0] != 0);
 	CHECK(gethostname(host, sizeof host) == 0 && strcmp(host, u.nodename) == 0);
 	n = strlen(u.nodename);

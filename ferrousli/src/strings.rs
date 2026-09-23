@@ -192,7 +192,7 @@ mod tests {
         assert_eq!(ffs(c_int::MIN), 32);
         assert_eq!(ffs(-1), 1);
         assert_eq!(ffsl(0), 0);
-        assert_eq!(ffsl(c_long::MIN), 64);
+        assert_eq!(ffsl(c_long::MIN), c_long::BITS as c_int);
         assert_eq!(ffsll(1 << 40), 41);
     }
 

@@ -69,11 +69,28 @@ pub struct Attr {
     /// `_a_prio`.
     pub priority: c_int,
     /// The rest of the 56 bytes.
-    reserved: [c_int; 4],
+    reserved: [c_int; ATTR_RESERVED],
 }
 
+/// The ints after the used fields: musl's attribute is 14 ints on a 64-bit
+/// target and 9 on a 32-bit one.
+const ATTR_RESERVED: usize = if cfg!(target_pointer_width = "64") {
+    4
+} else {
+    2
+};
+
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(size_of::<Attr>() == 56);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(offset_of!(Attr, detach) == 12);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(offset_of!(Attr, priority) == 24);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(size_of::<Attr>() == 36);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(Attr, detach) == 24);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(Attr, priority) == 36);
 
 impl Attr {
@@ -86,7 +103,7 @@ impl Attr {
         inherit: 0,
         policy: 0,
         priority: 0,
-        reserved: [0; 4],
+        reserved: [0; ATTR_RESERVED],
     };
 }
 

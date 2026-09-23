@@ -37,7 +37,7 @@
 //! that a handler on the same thread cannot deadlock on it, and the new thread
 //! starts with them blocked, until it has installed the mask its creator had.
 
-use core::ffi::{c_char, c_int, c_uint, c_ulong, c_void};
+use core::ffi::{c_char, c_int, c_uint, c_void};
 use core::mem::{offset_of, size_of};
 use core::ptr::{null, null_mut, with_exposed_provenance_mut, without_provenance_mut};
 use core::sync::atomic::{AtomicBool, AtomicI32, AtomicU8, AtomicUsize, Ordering};
@@ -66,11 +66,11 @@ pub const SIGSYNCCALL: c_int = 34;
 
 /// Every signal but the library's reserved ones, as a kernel set: musl's
 /// application mask.
-const APP_SIGNALS: c_ulong = 0xffff_fffc_7fff_ffff;
+const APP_SIGNALS: u64 = 0xffff_fffc_7fff_ffff;
 /// Every signal.
-const ALL_SIGNALS: c_ulong = !0;
+const ALL_SIGNALS: u64 = !0;
 /// `SIGCANCEL` and `SIGSYNCCALL`.
-const INTERNAL_SIGNALS: c_ulong = (1 << (SIGCANCEL - 1)) | (1 << (SIGSYNCCALL - 1));
+const INTERNAL_SIGNALS: u64 = (1 << (SIGCANCEL - 1)) | (1 << (SIGSYNCCALL - 1));
 
 /// `clone`'s flags for a thread, from `linux/sched.h`: share the address
 /// space, file system information, descriptors and signal handlers; be a
@@ -136,8 +136,8 @@ pub static __libc_single_threaded: AtomicU8 = AtomicU8::new(1);
 /// Changes the calling thread's signal mask with `how` and `set`, and returns
 /// the old mask. The kernel's call is made directly, since the mask may hold
 /// the reserved signals.
-fn sigprocmask(how: c_int, set: c_ulong) -> c_ulong {
-    let mut old: c_ulong = 0;
+fn sigprocmask(how: c_int, set: u64) -> u64 {
+    let mut old: u64 = 0;
     // SAFETY: the kernel reads one word of `set` and writes one of `old`, both
     // live locals.
     let _ = unsafe {
@@ -154,17 +154,17 @@ fn sigprocmask(how: c_int, set: c_ulong) -> c_ulong {
 
 /// Blocks every signal but the library's reserved ones, and returns the old
 /// mask.
-pub fn block_app_signals() -> c_ulong {
+pub fn block_app_signals() -> u64 {
     sigprocmask(SIG_BLOCK, APP_SIGNALS)
 }
 
 /// Blocks every signal, and returns the old mask.
-pub fn block_all_signals() -> c_ulong {
+pub fn block_all_signals() -> u64 {
     sigprocmask(SIG_BLOCK, ALL_SIGNALS)
 }
 
 /// Restores a mask one of the blocking functions returned.
-pub fn restore_signals(mask: c_ulong) {
+pub fn restore_signals(mask: u64) {
     let _ = sigprocmask(SIG_SETMASK, mask);
 }
 
@@ -247,7 +247,7 @@ struct StartArgs {
     /// waits, 2 while it waits, then 0 to run or 3 to exit at once.
     control: AtomicI32,
     /// The signal mask to run with.
-    mask: c_ulong,
+    mask: u64,
 }
 
 /// The kernel's `struct sched_param`, from `linux/sched/types.h`.
@@ -266,7 +266,7 @@ fn map_thread(size: usize, guard: usize) -> Result<usize, c_int> {
         PROT_READ_WRITE
     };
     // SAFETY: a new anonymous private mapping aliases nothing.
-    let ret = unsafe { syscall::syscall6(nr::MMAP, 0, size, prot, MAP_THREAD, usize::MAX, 0) };
+    let ret = unsafe { syscall::mmap(0, size, prot, MAP_THREAD, usize::MAX, 0) };
     let map = errno::decode(ret).map_err(|_| errno::EAGAIN)?;
     if guard > 0 {
         // SAFETY: the range is inside the mapping just made.
@@ -388,7 +388,7 @@ pub unsafe fn create(
             CLONE_FLAGS,
             args.cast(),
             parent_tid,
-            arch::clone_tls(new.expose_provenance()),
+            arch::clone_tls(thread::pointer_of(new)),
             THREAD_LIST_LOCK.as_ptr(),
         )
     };

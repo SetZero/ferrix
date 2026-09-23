@@ -85,8 +85,11 @@ struct Aibuf {
 }
 
 const _: () = assert!(offset_of!(Aibuf, ai) == 0);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(Aibuf, sa) == 48);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(Aibuf, slot) == 80);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(size_of::<Aibuf>() == 88);
 
 /// Stores `value` at `index`, if it is inside `buf`.

@@ -100,7 +100,7 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixAssurance` | `11-assurance.sysml` | docs/RELIABILITY.md and docs/ASSEMBLY.md: the quality gates, what each one verifies, and what the tests can actually reach. The gates cargo xtask check runs are in CI. Of the xtask boot gates, CI runs test-boot and test-rustc; the ones that need a binary the repository does not carry, a disk judged on the host or a screendump run in the landing gates of docs/BACKLOG.md instead (docs/ROADMAP.md, Continuously). |
 | `FerrixViews` | `12-views.sysml` | How to read the one model as two: what runs today, and what the roadmap still owes. The filters key on the lifecycle keywords every element carries. |
 
-13 files, 16 packages, 1629 elements, 194 relations. Model digest `5e610490a101cd81`.
+13 files, 16 packages, 1629 elements, 194 relations. Model digest `efad9f4b63491f2d`.
 
 | Maturity | Elements | Meaning |
 | --- | ---: | --- |
@@ -2814,7 +2814,7 @@ flowchart TB
   n11_FerrixRoadmap_stage10UserspaceDrivers["S10  Stage 10 userspace drivers<br>Done · month"]
   n12_FerrixRoadmap_stage11BtrfsRead["S11  Stage 11 btrfs read<br>Done · month"]
   n13_FerrixRoadmap_stageNetworking["SN  Stage networking<br>Done · month"]
-  n14_FerrixRoadmap_stageDynamicLinking["SD  Stage dynamic linking<br>InProgress · 39 points, 33 spent; ferrousli's port about 34 more"]
+  n14_FerrixRoadmap_stageDynamicLinking["SD  Stage dynamic linking<br>InProgress · 39 points, 33 spent; ferrousli's port about 34, spent"]
   n15_FerrixRoadmap_stage12BtrfsWrite["S12  Stage 12 btrfs write<br>Done · about 60 points, spent"]
   n16_FerrixRoadmap_stage13Isolation["S13  Stage 13 isolation<br>InProgress · month"]
   n17_FerrixRoadmap_stage14RealTime["S14  Stage 14 real time<br>Planned · month"]
@@ -2886,7 +2886,7 @@ flowchart TB
 | `S10` | 10 | Stage 10 userspace drivers | Done | month | `#implemented` |
 | `S11` | 11 | Stage 11 btrfs read | Done | month | `#implemented` |
 | `SN` | 11 | Stage networking | Done | month | `#implemented` |
-| `SD` | 11 | Stage dynamic linking | InProgress | 39 points, 33 spent; ferrousli's port about 34 more | `#inProgress` |
+| `SD` | 11 | Stage dynamic linking | InProgress | 39 points, 33 spent; ferrousli's port about 34, spent | `#inProgress` |
 | `S12` | 12 | Stage 12 btrfs write | Done | about 60 points, spent | `#implemented` |
 | `S13` | 13 | Stage 13 isolation | InProgress | month | `#inProgress` |
 | `S14` | 14 | Stage 14 real time | Planned | month | `#planned` |
@@ -3051,11 +3051,11 @@ Placed after stage 11 without a number of its own, as the ARMv7-A port sits afte
 
 ### SD — Stage dynamic linking
 
-**InProgress**  ·  size 39 points, 33 spent; ferrousli's port about 34 more  ·  `#inProgress`
+**InProgress**  ·  size 39 points, 33 spent; ferrousli's port about 34, spent  ·  `#inProgress`
 
 Placed after Networking without a number of its own: nothing on rustc's path needs it, since std targets static musl. The kernel half loads ET_DYN at a base with relative relocations and honours PT_INTERP with AT_BASE in the auxiliary vector (5 points); ferrousli's loader, ld.so with libferrousli.so, binds every relocation type of the three architectures at load, with dynamic TLS and dlfcn.h (21); then glibc's symbol versions and SONAMEs, so a glibc-linked binary loads ferrousli in glibc's place (13). No vDSO, no 32-bit ABI. Exit: a distribution's dynamic glibc busybox runs stage 7's test-shell script with its own ld-linux, then with ferrousli's loader in glibc's place, on all three architectures.
 
-The first half is met on all three architectures and the second on x86-64 (2026-09-21): the kernel half, the loader with symbol versions, COPY relocations, every TLS form and dlfcn.h, and a libc.so.6 carrying glibc's versions. Left: 6 points on AArch64 and ARMv7-A, and ferrousli's own port to them, which the customer put inside this stage.
+The first half is met on all three architectures and the second on x86-64 (2026-09-21): the kernel half, the loader with symbol versions, COPY relocations, every TLS form and dlfcn.h, and a libc.so.6 carrying glibc's versions. ferrousli's own port to AArch64 and ARMv7-A, which the customer put inside this stage, is done (2026-09-23): its whole suite passes on both under qemu-user. Left: 6 points, the loader and the version tables on AArch64 and ARMv7-A.
 
 **Allocated to: **`ferrix.kernel.syscalls` and `ferrix.userland`
 

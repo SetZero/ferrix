@@ -9,7 +9,7 @@
 //! The waits here follow musl's `__wait`, `__wake` and `__timedwait` (MIT).
 //! Every constant is from `linux/futex.h`.
 
-use core::ffi::c_int;
+use core::ffi::{c_int, c_long};
 use core::sync::atomic::{AtomicI32, Ordering};
 
 use crate::errno;
@@ -120,7 +120,7 @@ const NANOS: i64 = 1_000_000_000;
 unsafe fn relative(clock: c_int, at: *const Timespec) -> Result<Timespec, c_int> {
     // SAFETY: the caller vouches for `at`.
     let at = unsafe { at.read() };
-    if !(0..NANOS).contains(&at.tv_nsec) {
+    if !(0..NANOS).contains(&i64::from(at.tv_nsec)) {
         return Err(errno::EINVAL);
     }
     let mut now = Timespec::default();
@@ -132,7 +132,7 @@ unsafe fn relative(clock: c_int, at: *const Timespec) -> Result<Timespec, c_int>
         return Err(errno::EINVAL);
     }
     let mut sec = at.tv_sec.saturating_sub(now.tv_sec);
-    let mut nsec = at.tv_nsec - now.tv_nsec;
+    let mut nsec = i64::from(at.tv_nsec) - i64::from(now.tv_nsec);
     if nsec < 0 {
         sec = sec.saturating_sub(1);
         nsec += NANOS;
@@ -142,7 +142,8 @@ unsafe fn relative(clock: c_int, at: *const Timespec) -> Result<Timespec, c_int>
     }
     Ok(Timespec {
         tv_sec: sec,
-        tv_nsec: nsec,
+        // Below a second: it fits a `long`.
+        tv_nsec: nsec as c_long,
     })
 }
 

@@ -200,7 +200,7 @@ fn mtime() -> u64 {
     }
     (ts.tv_sec as u64)
         .wrapping_mul(1000)
-        .wrapping_add(ts.tv_nsec.unsigned_abs() / 1_000_000)
+        .wrapping_add(u64::from(ts.tv_nsec.unsigned_abs()) / 1_000_000)
 }
 
 /// The two-byte length TCP puts before a message.
@@ -233,9 +233,11 @@ fn header(iov: &mut [Iovec; 2], first: usize, name: *mut c_void, namelen: c_uint
         msg_namelen: namelen,
         msg_iov: iov.as_mut_ptr().wrapping_add(first).cast(),
         msg_iovlen: (2 - first.min(2)) as c_int,
+        #[cfg(target_pointer_width = "64")]
         __pad1: 0,
         msg_control: core::ptr::null_mut(),
         msg_controllen: 0,
+        #[cfg(target_pointer_width = "64")]
         __pad2: 0,
         msg_flags: 0,
     }

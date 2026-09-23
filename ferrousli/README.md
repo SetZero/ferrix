@@ -11,8 +11,9 @@ the thread control block keeps glibc's layout.
 
 It lives in the Ferrix tree but stands alone. It is its own cargo workspace,
 depends on no Ferrix crate, and reaches the kernel only through Linux system
-calls. It therefore builds and tests on any x86-64 Linux host, and runs on
-Ferrix the way any other static program does.
+calls. It therefore builds and tests on any Linux host, and runs on Ferrix
+the way any other static program does. It supports x86-64, AArch64 and ARMv7-A
+(hard float), the three architectures Ferrix runs.
 
 ## Building and testing
 
@@ -35,6 +36,44 @@ tables and functions, `wctype.h` over every code point against
 `src/wctype/glibc-differences.txt`, and `printf`'s output. Their data was
 recorded on the glibc named in `src/host_glibc.rs`. On any other they return
 early after one note on standard error, and every other test still runs.
+
+### On AArch64 and ARMv7-A
+
+The same tests run for the Arm targets on an x86-64 host, under QEMU's user
+mode, when three variables name the target, a C compiler for it and the
+emulator:
+
+```
+cargo test --lib --target aarch64-unknown-linux-gnu
+FERROUSLI_TEST_TARGET=aarch64-unknown-linux-gnu CC=aarch64-linux-gnu-gcc \
+  FERROUSLI_TEST_RUNNER='qemu-aarch64 -L /usr/aarch64-linux-gnu' cargo test --tests
+
+cargo test --lib --target armv7-unknown-linux-gnueabihf
+FERROUSLI_TEST_TARGET=armv7-unknown-linux-gnueabihf CC=arm-linux-gnueabihf-gcc \
+  FERROUSLI_TEST_RUNNER=qemu-arm cargo test --tests
+```
+
+The unit tests need cargo's linker and runner for the target set as usual
+(`CARGO_TARGET_<TRIPLE>_LINKER` and `_RUNNER`); the C tests build their
+programs with `CC` against this library alone, and run them with the runner.
+Under a runner the harness defines `FERROUSLI_TEST_EMULATED` for the C
+programs, and gives each ten times as long. A program checks under that name
+only what user-mode QEMU cannot give it: `execve` of itself, which QEMU without
+`binfmt_misc` hands to the host; flags and socket types QEMU drops or passes
+on instead of refusing; a 32-bit program's directory positions on a 64-bit
+host's ext4; and `getsockopt`'s new socket timeouts on a 32-bit target.
+
+All three pass in full, every unit test and every C program, on 2026-09-23
+under QEMU 9.2.4 for the Arm targets. The checks that differ between targets
+are the ones whose answer does: a 32-bit `long`, a
+`long double` that is IEEE binary128 on AArch64 and a `double` on ARMv7-A, and
+the host glibc comparisons, which a cross build has no host glibc for.
+
+`tools/abi-compare/` prints the size and field offsets of every structure the
+library shares with C, compiled against these headers, for comparing a
+target's layouts with musl's or glibc's.
+
+### The gate
 
 From the repository root, `cargo xtask check --ferrousli` runs Ferrix's local
 gate with ferrousli's added: the generated-ABI check, formatting, clippy, and
@@ -178,7 +217,28 @@ it: `ld-ferrousli: undefined symbol` names it.
 
 ## Where it stands
 
-x86-64, static programs linked at a fixed address.
+Static programs linked at a fixed address, on x86-64, AArch64 and ARMv7-A.
+Dynamic linking, below, is x86-64 only so far.
+
+What differs between the architectures is kept to a module each, beside the
+code that needs it: system calls and their numbers (`syscall/`, generated
+tables in `src/generated/`), the thread pointer, `clone` and the TLS layout
+(`arch/`; AArch64 and ARMv7-A put the thread control block below the thread
+pointer, x86-64 above it), `setjmp`, `va_list`, the floating-point environment,
+the few math instructions (`math/`), `complex.h`'s exception-exact arithmetic
+and cancellation's system call. On AArch64 `long double` is IEEE binary128,
+done in software (`math/ld128.rs`); on ARMv7-A it is `double`.
+
+ARMv7-A is a 32-bit target with a 64-bit `time_t`, as musl 1.2 has it. Every
+call that carries a time uses the kernel's 64-bit form (`clock_gettime64`,
+`futex_time64` and the rest), and where the kernel has no such form, the
+library converts: `itimerval`, `rusage`, the SysV IPC `*_ds` structures,
+`stat64` and `statfs64`, `SO_RCVTIMEO` and `SO_SNDTIMEO` with the old
+option's fallback, and `timex`. musl's headers rename those functions on a
+32-bit target (`stat` to `__stat_time64`, say); `src/arm_names.rs` answers to
+the new names, and to the `l` math functions, which are the `double` ones
+there. A signal handler without `SA_SIGINFO` returns through `sigreturn`,
+because ARMv7-A's kernel builds it an old-style frame.
 
 | Area | There | Not yet |
 |---|---|---|
@@ -233,9 +293,8 @@ x86-64, static programs linked at a fixed address.
 2. **libc-test**, musl's conformance suite, as the measure of progress, and a
    compiler wrapper that builds an unmodified program against the library.
 3. **`long double` math, and with it `complex.h`'s `long double` forms.**
-4. **AArch64 and ARMv7**, the other two architectures Ferrix runs. Estimated
-   at ≈ 34 points on 2026-09-21, when the customer made it part of the
-   dynamic-linking stage (`docs/ROADMAP.md`).
-5. **Dynamic linking**: a loader, then glibc's symbol versions. Both run on
-   x86-64 (below), with general-dynamic TLS and `dlfcn.h`; the other two
-   architectures are left.
+4. **Dynamic linking**: a loader, then glibc's symbol versions. Both run on
+   x86-64 (below), with general-dynamic TLS and `dlfcn.h`. On AArch64 and
+   ARMv7-A the library is ported (above) and the loader and the version
+   tables are left: the loader's entry, relocations and TLS, AArch64's TLS
+   descriptors, and glibc's time64 names for ARMv7-A.

@@ -79,6 +79,7 @@ pub extern "C" fn __signbitf(x: f32) -> c_int {
 
 /// The class of the x87 `long double` with this significand, whose bit 63 is
 /// the integer bit, and this sign and biased exponent.
+#[cfg(target_arch = "x86_64")]
 pub(crate) const fn classify_x87(mantissa: u64, sign_exponent: u16) -> c_int {
     let exponent = sign_exponent & 0x7fff;
     let integer_bit = mantissa >> 63 != 0;
@@ -223,6 +224,7 @@ mod tests {
     ];
 
     /// x87 `long double`s as significand, sign and exponent, and class.
+    #[cfg(target_arch = "x86_64")]
     const LONG_DOUBLES: &[(u64, u16, c_int)] = &[
         (0, 0, FP_ZERO),
         (0, 0x8000, FP_ZERO),
@@ -246,6 +248,7 @@ mod tests {
     ];
 
     /// The 16 bytes of an x87 `long double`.
+    #[cfg(target_arch = "x86_64")]
     fn x87(mantissa: u64, sign_exponent: u16) -> [u8; 16] {
         let [m0, m1, m2, m3, m4, m5, m6, m7] = mantissa.to_le_bytes();
         let [s0, s1] = sign_exponent.to_le_bytes();
@@ -259,6 +262,7 @@ mod tests {
     ///
     /// `function` must take one `long double` and return an `int`, and
     /// `bytes` must be valid to read.
+    #[cfg(target_arch = "x86_64")]
     #[unsafe(naked)]
     unsafe extern "C" fn call_long_double(
         function: unsafe extern "C" fn() -> c_int,
@@ -294,6 +298,7 @@ mod tests {
         }
     }
 
+    #[cfg(target_arch = "x86_64")]
     #[test]
     fn every_class_and_encoding_of_long_double() {
         for &(mantissa, sign_exponent, class) in LONG_DOUBLES {

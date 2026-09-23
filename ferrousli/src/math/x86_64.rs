@@ -105,3 +105,15 @@ pub(crate) fn trunc_to_i64f(x: f32) -> i64 {
     }
     result
 }
+
+// A `long` is 64 bits here.
+pub(crate) use round_to_i64 as round_to_long;
+pub(crate) use round_to_i64f as round_to_longf;
+pub(crate) use trunc_to_i64 as trunc_to_long;
+pub(crate) use trunc_to_i64f as trunc_to_longf;
+
+/// `i` as a `double`, rounded in the current mode: `cvtsi2sd` follows MXCSR.
+#[inline]
+pub(crate) fn i64_to_f64(i: i64) -> f64 {
+    i as f64
+}

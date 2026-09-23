@@ -8,12 +8,17 @@
 //!   instead. No such retry is made here.
 //! * Where `time_t` outgrew the kernel's old socket options, musl rewrites
 //!   `SO_RCVTIMEO`, `SO_SNDTIMEO`, the timestamp options and their control
-//!   messages. On x86-64 the old and new numbers are the same, so
-//!   `getsockopt`, `setsockopt` and `recvmsg` pass everything through.
-//! * C's `struct msghdr` and `struct cmsghdr` have `int`-sized lengths
-//!   followed by padding, where the kernel has `size_t` lengths. `sendmsg` and
-//!   `recvmsg` give the kernel a copy with the padding zeroed, as musl does, so
-//!   a program's stray bytes are never read as the high half of a length.
+//!   messages. On a 64-bit target the old and new numbers are the same, so
+//!   `getsockopt`, `setsockopt` and `recvmsg` pass everything through. On
+//!   ARMv7-A the headers give the new timeout numbers, and a kernel without
+//!   them is asked again with the old ones and a 32-bit `timeval`, as musl
+//!   does; the timestamp options and messages are passed through, so a
+//!   kernel without the new timestamps refuses them.
+//! * On a 64-bit target C's `struct msghdr` and `struct cmsghdr` have
+//!   `int`-sized lengths followed by padding, where the kernel has `size_t`
+//!   lengths. `sendmsg` and `recvmsg` give the kernel a copy with the padding
+//!   zeroed, as musl does, so a program's stray bytes are never read as the
+//!   high half of a length. A 32-bit target's lengths are the kernel's.
 //!
 //! `send` and `recv` are `sendto` and `recvfrom` without an address. None of
 //! these is a cancellation point yet.
@@ -40,34 +45,56 @@ pub struct Msghdr {
     /// How many buffers there are.
     pub msg_iovlen: c_int,
     /// Padding, which the kernel reads as the high half of `msg_iovlen`.
+    #[cfg(target_pointer_width = "64")]
     pub __pad1: c_int,
     /// The control messages, or null.
     pub msg_control: *mut c_void,
     /// The size of `msg_control`.
     pub msg_controllen: c_uint,
     /// Padding, which the kernel reads as the high half of `msg_controllen`.
+    #[cfg(target_pointer_width = "64")]
     pub __pad2: c_int,
     /// The flags `recvmsg` reports.
     pub msg_flags: c_int,
 }
 
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(size_of::<Msghdr>() == 56);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(size_of::<Msghdr>() == 28);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(offset_of!(Msghdr, msg_iov) == 8);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(offset_of!(Msghdr, msg_control) == 16);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(offset_of!(Msghdr, msg_flags) == 24);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(Msghdr, msg_iov) == 16);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(Msghdr, __pad1) == 28);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(Msghdr, msg_control) == 32);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(Msghdr, __pad2) == 44);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(Msghdr, msg_flags) == 48);
 
-/// The size of C's `struct cmsghdr`: `cmsg_len`, its padding, `cmsg_level`
-/// and `cmsg_type`, four bytes each.
-const CMSG_HEADER: usize = 16;
+/// The size of C's `struct cmsghdr`: `cmsg_len`, its padding on a 64-bit
+/// target, `cmsg_level` and `cmsg_type`, four bytes each.
+const CMSG_HEADER: usize = if cfg!(target_pointer_width = "64") {
+    16
+} else {
+    12
+};
 
 /// The most control data `sendmsg` copies: musl's buffer of 66 headers' worth
 /// of bytes, room for an `SCM_RIGHTS` message carrying 255 descriptors.
+#[cfg(target_pointer_width = "64")]
 const CONTROL_MAX: usize = 66 * CMSG_HEADER;
 
 /// Zeroes the padding after each control message's `cmsg_len` in `control`,
 /// visiting the messages as `CMSG_FIRSTHDR` and `CMSG_NXTHDR` do.
+#[cfg(target_pointer_width = "64")]
 fn zero_control_padding(control: &mut [u8]) {
     let end = control.len();
     let mut at = 0;
@@ -252,6 +279,56 @@ pub unsafe extern "C" fn getsockopt(
     value: *mut c_void,
     len: *mut c_uint,
 ) -> c_int {
+    #[cfg(target_arch = "arm")]
+    if let Some(old) = old_timeout(level, name) {
+        // SAFETY: the caller vouches for `len`.
+        if !len.is_null() && unsafe { len.read() } as usize >= size_of::<crate::time::Timeval>() {
+            let mut narrow: [core::ffi::c_long; 2] = [0; 2];
+            let mut narrow_len = size_of_val(&narrow) as c_uint;
+            // SAFETY: the kernel writes the caller's buffers, which it vouches for.
+            let ret = unsafe {
+                syscall::syscall6(
+                    nr::GETSOCKOPT,
+                    fd as usize,
+                    level as usize,
+                    name as usize,
+                    value.addr(),
+                    len.addr(),
+                    0,
+                )
+            };
+            if ret != -(errno::ENOPROTOOPT as isize) {
+                return errno::from_syscall(ret) as c_int;
+            }
+            let ret = call(
+                nr::GETSOCKOPT,
+                [
+                    fd as usize,
+                    level as usize,
+                    old as usize,
+                    (&raw mut narrow).addr(),
+                    (&raw mut narrow_len).addr(),
+                    0,
+                ],
+            );
+            if ret == 0 {
+                let [sec, usec] = narrow;
+                // SAFETY: the caller's buffer holds a `struct timeval`, which
+                // `len` said.
+                unsafe {
+                    value
+                        .cast::<crate::time::Timeval>()
+                        .write_unaligned(crate::time::Timeval {
+                            tv_sec: i64::from(sec),
+                            tv_usec: i64::from(usec),
+                        });
+                }
+                // SAFETY: as above, for `len`.
+                unsafe { len.write(size_of::<crate::time::Timeval>() as c_uint) };
+            }
+            return ret as c_int;
+        }
+    }
     call(
         nr::GETSOCKOPT,
         [
@@ -263,6 +340,21 @@ pub unsafe extern "C" fn getsockopt(
             0,
         ],
     ) as c_int
+}
+
+/// The old number of `SO_RCVTIMEO` or `SO_SNDTIMEO` at `SOL_SOCKET`, which
+/// takes a `struct timeval` of two 32-bit `long`s, for the new one ARMv7-A's
+/// headers give, which takes C's 64-bit one; `None` for any other option.
+#[cfg(target_arch = "arm")]
+fn old_timeout(level: c_int, name: c_int) -> Option<c_int> {
+    /// `SOL_SOCKET`.
+    const SOL_SOCKET: c_int = 1;
+    match (level, name) {
+        // `SO_RCVTIMEO_NEW` and `SO_SNDTIMEO_NEW`, to `_OLD`.
+        (SOL_SOCKET, 66) => Some(20),
+        (SOL_SOCKET, 67) => Some(21),
+        _ => None,
+    }
 }
 
 /// Sets socket option `name` at `level` to the `len` bytes at `value`.
@@ -278,6 +370,48 @@ pub unsafe extern "C" fn setsockopt(
     value: *const c_void,
     len: c_uint,
 ) -> c_int {
+    #[cfg(target_arch = "arm")]
+    if let Some(old) = old_timeout(level, name)
+        && len as usize >= size_of::<crate::time::Timeval>()
+    {
+        // SAFETY: the kernel reads the caller's buffer, which it vouches for.
+        let ret = unsafe {
+            syscall::syscall6(
+                nr::SETSOCKOPT,
+                fd as usize,
+                level as usize,
+                name as usize,
+                value.addr(),
+                len as usize,
+                0,
+            )
+        };
+        if ret != -(errno::ENOPROTOOPT as isize) {
+            return errno::from_syscall(ret) as c_int;
+        }
+        // SAFETY: the caller's buffer holds a `struct timeval`, which `len`
+        // says.
+        let wide = unsafe { value.cast::<crate::time::Timeval>().read_unaligned() };
+        let (Ok(sec), Ok(usec)) = (
+            core::ffi::c_long::try_from(wide.tv_sec),
+            core::ffi::c_long::try_from(wide.tv_usec),
+        ) else {
+            errno::set(errno::ENOTSUP);
+            return -1;
+        };
+        let narrow: [core::ffi::c_long; 2] = [sec, usec];
+        return call(
+            nr::SETSOCKOPT,
+            [
+                fd as usize,
+                level as usize,
+                old as usize,
+                (&raw const narrow).addr(),
+                size_of_val(&narrow),
+                0,
+            ],
+        ) as c_int;
+    }
     call(
         nr::SETSOCKOPT,
         [
@@ -392,13 +526,22 @@ pub unsafe extern "C" fn sendmsg(fd: c_int, msg: *const Msghdr, flags: c_int) ->
     if msg.is_null() {
         return call_cp(nr::SENDMSG, [fd as usize, 0, flags as usize, 0, 0, 0]);
     }
+    #[cfg_attr(
+        target_pointer_width = "32",
+        expect(unused_mut, reason = "only a 64-bit header is rewritten")
+    )]
     // SAFETY: the caller passes a valid header.
     let mut header = unsafe { msg.read() };
-    header.__pad1 = 0;
-    header.__pad2 = 0;
+    #[cfg(target_pointer_width = "64")]
+    {
+        header.__pad1 = 0;
+        header.__pad2 = 0;
+    }
+    #[cfg(target_pointer_width = "64")]
     let mut control = [0u8; CONTROL_MAX];
-    let len = header.msg_controllen as usize;
-    if len != 0 {
+    #[cfg(target_pointer_width = "64")]
+    if header.msg_controllen != 0 {
+        let len = header.msg_controllen as usize;
         let Some(copy) = control.get_mut(..len) else {
             errno::set(errno::ENOMEM);
             return -1;
@@ -437,8 +580,11 @@ pub unsafe extern "C" fn recvmsg(fd: c_int, msg: *mut Msghdr, flags: c_int) -> i
     }
     // SAFETY: the caller passes a valid header.
     let mut header = unsafe { msg.read() };
-    header.__pad1 = 0;
-    header.__pad2 = 0;
+    #[cfg(target_pointer_width = "64")]
+    {
+        header.__pad1 = 0;
+        header.__pad2 = 0;
+    }
     let ret = call_cp(
         nr::RECVMSG,
         [
@@ -543,6 +689,7 @@ mod tests {
         assert_eq!(error, errno::EBADF);
     }
 
+    #[cfg(target_pointer_width = "64")]
     fn message(len: u32, level: u32, r#type: u32) -> [u8; 16] {
         let mut header = [0xffu8; 16];
         for (slot, byte) in header.iter_mut().zip(
@@ -557,6 +704,7 @@ mod tests {
         header
     }
 
+    #[cfg(target_pointer_width = "64")]
     #[test]
     fn padding_is_zeroed_in_each_control_message_and_nothing_else() {
         // Two messages of 20 bytes each, aligned to 24, in 48 bytes.

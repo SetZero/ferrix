@@ -4,9 +4,11 @@
 //! Many `double`s, random bit patterns and boundary values, are formatted
 //! with `%e`, `%f`, `%g` and `%a` at many precisions, flags and widths, by
 //! this library's `snprintf` thunk and by glibc's, and the text must be the
-//! same. Integers and pointers get the same treatment. x87 `long double`s
-//! cannot be passed from Rust, so a small assembly shim puts one on the stack
-//! and calls either `snprintf`.
+//! same. Integers and pointers get the same treatment. A `long double` cannot
+//! be passed from Rust, so a small assembly shim puts one where the calling
+//! convention wants it -- on the stack for an x87 one, in q0 for AArch64's
+//! binary128 -- and calls either `snprintf`. On ARMv7-A a `long double` is a
+//! `double`, which the `double` tests cover.
 
 #![allow(
     clippy::unwrap_used,
@@ -24,6 +26,7 @@ unsafe extern "C" {
     fn host_snprintf(buf: *mut c_char, n: usize, fmt: *const c_char, ...) -> c_int;
     #[link_name = "ferrousli_test_snprintf"]
     fn our_snprintf(buf: *mut c_char, n: usize, fmt: *const c_char, ...) -> c_int;
+    #[cfg(not(target_arch = "arm"))]
     fn ferrousli_test_call_long_double(
         function: *const (),
         buf: *mut c_char,
@@ -37,6 +40,7 @@ unsafe extern "C" {
 // function(buf, n, fmt, long double) with the 16 bytes at `value` as the
 // long double, in the stack slot the psABI puts it in, and no vector
 // registers.
+#[cfg(target_arch = "x86_64")]
 core::arch::global_asm!(
     ".pushsection .text.ferrousli_test_call_long_double,\"ax\",@progbits",
     ".globl ferrousli_test_call_long_double",
@@ -58,6 +62,22 @@ core::arch::global_asm!(
     "ret",
     ".popsection",
     options(att_syntax),
+);
+
+// The same on AArch64: the long double goes in q0, the first vector register,
+// and the call is a tail call, so the function returns to the test.
+#[cfg(target_arch = "aarch64")]
+core::arch::global_asm!(
+    ".pushsection .text.ferrousli_test_call_long_double,\"ax\",@progbits",
+    ".globl ferrousli_test_call_long_double",
+    "ferrousli_test_call_long_double:",
+    "ldr q0, [x4]",
+    "mov x9, x0",
+    "mov x0, x1",
+    "mov x1, x2",
+    "mov x2, x3",
+    "br x9",
+    ".popsection",
 );
 
 /// A buffer large enough for every format these tests use.
@@ -93,7 +113,8 @@ fn both_word(fmt: &str, value: u64) -> ((String, c_int), (String, c_int)) {
     (text(&ours, n), text(&host, m))
 }
 
-/// Formats one x87 `long double`, given as its 16 bytes, both ways.
+/// Formats one `long double`, given as its 16 bytes, both ways.
+#[cfg(not(target_arch = "arm"))]
 fn both_long(fmt: &str, value: [u8; 16]) -> ((String, c_int), (String, c_int)) {
     let fmt = CString::new(fmt).unwrap();
     let mut ours = vec![0_u8; BUF];
@@ -310,6 +331,7 @@ fn integers_and_pointers_match_glibc() {
 }
 
 /// The 16 bytes of an x87 `long double`.
+#[cfg(target_arch = "x86_64")]
 fn long_double(mantissa: u64, sign_exponent: u16) -> [u8; 16] {
     let mut bytes = [0_u8; 16];
     bytes[..8].copy_from_slice(&mantissa.to_le_bytes());
@@ -317,6 +339,7 @@ fn long_double(mantissa: u64, sign_exponent: u16) -> [u8; 16] {
     bytes
 }
 
+#[cfg(target_arch = "x86_64")]
 #[test]
 fn long_doubles_match_glibc() {
     if !crate::host_glibc::is_recorded() {
@@ -373,6 +396,74 @@ fn long_doubles_match_glibc() {
     }
     for value in [long_double(1, 0), long_double(u64::MAX, 0x7ffe)] {
         for fmt in ["%.5000Le", "%.0Lf", "%.4990Lg"] {
+            let (ours, host) = both_long(fmt, value);
+            compare(fmt, ours, host, "an extreme long double");
+        }
+    }
+}
+
+/// The 16 bytes of a binary128 `long double`: sign, 15-bit biased exponent,
+/// and the 112-bit fraction.
+#[cfg(target_arch = "aarch64")]
+fn quad(negative: bool, exponent: u16, fraction: u128) -> [u8; 16] {
+    let bits = u128::from(negative) << 127
+        | u128::from(exponent & 0x7fff) << 112
+        | (fraction & ((1 << 112) - 1));
+    bits.to_le_bytes()
+}
+
+#[cfg(target_arch = "aarch64")]
+#[test]
+fn quad_long_doubles_match_glibc() {
+    if !crate::host_glibc::is_recorded() {
+        return;
+    }
+    let mut random = Random(0x6a09_e667_f3bc_c908);
+    let mut values = vec![
+        quad(false, 0, 0),
+        quad(true, 0, 0),
+        quad(false, 0, 1),
+        quad(false, 0, (1 << 112) - 1),
+        quad(false, 1, 0),
+        quad(false, 0x7ffe, (1 << 112) - 1),
+        quad(false, 0x7fff, 0),
+        quad(true, 0x7fff, 0),
+        quad(false, 0x7fff, 1 << 111),
+        quad(true, 0x7fff, 1),
+        quad(false, 16383, 0),
+        quad(false, 16383, 1 << 111),
+        quad(false, 16384, 1 << 110),
+        quad(true, 16386, 0xf << 108),
+    ];
+    for _ in 0..3000 {
+        let negative = random.below(2) == 1;
+        let fraction = (u128::from(random.next()) << 64 | u128::from(random.next())) >> 16;
+        let exponent = match random.below(8) {
+            0 => 0,
+            1..=3 => 16383 - 60 + random.below(120) as u16,
+            _ => 1 + random.below(0x7ffe) as u16,
+        };
+        values.push(quad(negative, exponent, fraction));
+    }
+    for value in values {
+        let what = format!("{:#034x}", u128::from_le_bytes(value));
+        for conversion in ['e', 'f', 'g', 'a', 'G', 'A'] {
+            let precision = match conversion {
+                'f' => random.below(25),
+                'a' | 'A' => random.below(32),
+                _ => random.below(40),
+            };
+            let flags = FLAGS[random.below(FLAGS.len() as u64) as usize];
+            let fmt = format!("%{flags}.{precision}L{conversion}");
+            let (ours, host) = both_long(&fmt, value);
+            compare(&fmt, ours, host, &what);
+            let fmt = format!("%{flags}L{conversion}");
+            let (ours, host) = both_long(&fmt, value);
+            compare(&fmt, ours, host, &what);
+        }
+    }
+    for value in [quad(false, 0, 1), quad(false, 0x7ffe, (1 << 112) - 1)] {
+        for fmt in ["%.12000Le", "%.0Lf", "%.11990Lg"] {
             let (ours, host) = both_long(fmt, value);
             compare(fmt, ours, host, "an extreme long double");
         }

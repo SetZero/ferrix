@@ -30,4 +30,10 @@ targets = [
     # initramfs, linked by rust-lld against the target's own musl.
     "x86_64-unknown-linux-musl",
     "aarch64-unknown-linux-musl",
+    # ferrousli on AArch64 and ARMv7-A, hard-float as Debian's armhf is, whose
+    # programs it must one day load in glibc's place. Its unit tests link
+    # `std`, which needs a C library under it, so they build for the gnu
+    # targets and run under qemu-user, as its C tests do.
+    "aarch64-unknown-linux-gnu",
+    "armv7-unknown-linux-gnueabihf",
 ]

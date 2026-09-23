@@ -209,11 +209,19 @@ pub struct Ifaddrs {
     pub ifa_data: *mut c_void,
 }
 
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(size_of::<Ifaddrs>() == 56);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(size_of::<Ifaddrs>() == 28);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(Ifaddrs, ifa_flags) == 16);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(Ifaddrs, ifa_addr) == 24);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(Ifaddrs, ifa_netmask) == 32);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(Ifaddrs, ifa_ifu) == 40);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(Ifaddrs, ifa_data) == 48);
 
 /// One entry of the list, with the storage its pointers point into. The
@@ -677,11 +685,11 @@ fn take_ifreq(ctx: &mut Ctx, fd: c_int, request: &[u8]) -> Result<(), c_int> {
         *slot = byte;
     }
     // SAFETY: the kernel reads and writes `query`, a `struct ifreq`.
-    if unsafe { ioctl(fd, SIOCGIFFLAGS, query.as_mut_ptr().addr() as u64) } == 0 {
+    if unsafe { ioctl(fd, SIOCGIFFLAGS, query.as_mut_ptr().addr() as c_ulong) } == 0 {
         found.ifa.ifa_flags = u32::from(get16(&query, IFNAMSIZ));
     }
     // SAFETY: as above.
-    if unsafe { ioctl(fd, SIOCGIFNETMASK, query.as_mut_ptr().addr() as u64) } == 0 {
+    if unsafe { ioctl(fd, SIOCGIFNETMASK, query.as_mut_ptr().addr() as c_ulong) } == 0 {
         let mask = query
             .get(IFNAMSIZ + 4..IFNAMSIZ + 8)
             .unwrap_or_default()
@@ -758,7 +766,11 @@ pub struct IfNameindex {
     pub if_name: *mut c_char,
 }
 
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(size_of::<IfNameindex>() == 16);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(size_of::<IfNameindex>() == 8);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(IfNameindex, if_name) == 8);
 
 /// One interface's index and name, while the list is being gathered.

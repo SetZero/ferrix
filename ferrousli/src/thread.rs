@@ -24,6 +24,16 @@
 //! `round_up(p_memsz, p_align)` below it. The block holds the `PT_TLS`
 //! segment's first `p_filesz` bytes, and zeros after them.
 //!
+//! AArch64 and ARMv7-A use variant I: the thread pointer points at glibc's
+//! `tcbhead_t`, a `dtv` pointer and a word the ABI reserves, 16 bytes on
+//! AArch64 and 8 on ARMv7-A ([`arch::TCB_SIZE`]), and the TLS block starts
+//! after it, at the thread pointer plus that size rounded up to the block's
+//! alignment. Compiled code reads nothing else at a fixed offset there: the
+//! stack protector's canary is the global [`__stack_chk_guard`] instead. So
+//! [`Thread`] sits just below the thread pointer, and [`pointer_of`] and
+//! [`current`] convert between the two. Its first 0x80 bytes keep x86-64's
+//! layout, unused, so the offsets are one set everywhere.
+//!
 //! Every thread gets the same layout. [`init_main`] records the program's TLS
 //! image for [`new_control_block`], which `pthread_create` calls on memory it
 //! mapped for the new thread.
@@ -136,17 +146,27 @@ pub struct State {
     pub robust_pending: AtomicPtr<c_void>,
 }
 
+#[cfg(target_arch = "x86_64")]
 const _: () = assert!(offset_of!(Thread, stack_guard) == 0x28);
+#[cfg(target_arch = "x86_64")]
 const _: () = assert!(offset_of!(Thread, pointer_guard) == 0x30);
+#[cfg(target_arch = "x86_64")]
 const _: () = assert!(offset_of!(Thread, split_stack_limit) == 0x70);
+#[cfg(target_arch = "x86_64")]
 const _: () = assert!(offset_of!(Thread, errno) == 0x80);
+#[cfg(target_arch = "x86_64")]
 const _: () = assert!(offset_of!(Thread, tid) == 0x84);
+#[cfg(target_arch = "x86_64")]
 const _: () = assert!(offset_of!(Thread, locale) == 0x88);
+#[cfg(target_arch = "x86_64")]
 const _: () = assert!(offset_of!(Thread, h_errno) == 0x90);
+#[cfg(target_arch = "x86_64")]
 const _: () = assert!(offset_of!(Thread, state) == 0x98);
 // `struct robust_list_head` is three words: the list, the offset and the
 // pending entry, at 0, 8 and 16.
+#[cfg(target_arch = "x86_64")]
 const _: () = assert!(offset_of!(State, robust_off) - offset_of!(State, robust_head) == 8);
+#[cfg(target_arch = "x86_64")]
 const _: () = assert!(offset_of!(State, robust_pending) - offset_of!(State, robust_head) == 16);
 
 impl State {
@@ -191,13 +211,20 @@ const PROT_READ_WRITE: usize = 0x1 | 0x2;
 /// `MAP_PRIVATE | MAP_ANONYMOUS`.
 const MAP_PRIVATE_ANONYMOUS: usize = 0x02 | 0x20;
 
-/// The start of a TLS block, below the thread pointer.
+/// The distance from the thread pointer to the start of a TLS block: below
+/// it in variant II, above it in variant I.
 fn tls_offset(memsz: usize, align: usize) -> Option<usize> {
     let align = align.max(1);
     if !align.is_power_of_two() {
         return None;
     }
-    memsz.checked_next_multiple_of(align)
+    #[cfg(target_arch = "x86_64")]
+    return memsz.checked_next_multiple_of(align);
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        let _ = memsz;
+        arch::TCB_SIZE.checked_next_multiple_of(align)
+    }
 }
 
 /// How far a thread pointer must be aligned.
@@ -207,16 +234,22 @@ fn tp_align(align: usize) -> usize {
 
 /// Bytes to reserve for a thread whose TLS segment has this size and
 /// alignment. That is the TLS block, up to one thread pointer alignment of
-/// padding, and the control block.
+/// padding, and the control block; in variant I also the header between the
+/// thread pointer and the block.
 pub fn reservation(memsz: usize, align: usize) -> Option<usize> {
-    tls_offset(memsz, align)?
+    let room = tls_offset(memsz, align)?
         .checked_add(tp_align(align))?
-        .checked_add(size_of::<Thread>())
+        .checked_add(size_of::<Thread>())?;
+    #[cfg(target_arch = "x86_64")]
+    return Some(room);
+    #[cfg(not(target_arch = "x86_64"))]
+    room.checked_add(memsz)
 }
 
 /// Where the thread pointer and the start of the TLS block go, inside `len`
 /// bytes at `base`. `None` if they do not fit or the alignment is not a power
 /// of two.
+#[cfg(target_arch = "x86_64")]
 pub fn place(base: usize, len: usize, memsz: usize, align: usize) -> Option<(usize, usize)> {
     let offset = tls_offset(memsz, align)?;
     let tp = base
@@ -227,6 +260,49 @@ pub fn place(base: usize, len: usize, memsz: usize, align: usize) -> Option<(usi
     }
     Some((tp, tp - offset))
 }
+
+/// Where the thread pointer and the start of the TLS block go, inside `len`
+/// bytes at `base`: the control block first, the thread pointer just after
+/// it, and the block after the header. `None` if they do not fit or the
+/// alignment is not a power of two.
+#[cfg(not(target_arch = "x86_64"))]
+pub fn place(base: usize, len: usize, memsz: usize, align: usize) -> Option<(usize, usize)> {
+    let offset = tls_offset(memsz, align)?;
+    let tp = base
+        .checked_add(size_of::<Thread>())?
+        .checked_next_multiple_of(tp_align(align))?;
+    let block = tp.checked_add(offset)?;
+    if block.checked_add(memsz)? > base.checked_add(len)? {
+        return None;
+    }
+    Some((tp, block))
+}
+
+/// The thread pointer of the thread whose control block is at `t`: the same
+/// address in variant II, and the address just past the block in variant I.
+pub fn pointer_of(t: *mut Thread) -> usize {
+    #[cfg(target_arch = "x86_64")]
+    return t.expose_provenance();
+    #[cfg(not(target_arch = "x86_64"))]
+    t.expose_provenance().wrapping_add(size_of::<Thread>())
+}
+
+/// The control block of the thread whose thread pointer is `tp`: the inverse
+/// of [`pointer_of`].
+fn thread_at(tp: usize) -> *mut Thread {
+    #[cfg(target_arch = "x86_64")]
+    return with_exposed_provenance_mut(tp);
+    #[cfg(not(target_arch = "x86_64"))]
+    with_exposed_provenance_mut(tp.wrapping_sub(size_of::<Thread>()))
+}
+
+/// The stack protector's canary on AArch64 and ARMv7-A, where GCC's code reads
+/// it from this global rather than from the thread pointer, as glibc exports
+/// it. [`init_main`] sets it once, before `main`.
+#[cfg(not(target_arch = "x86_64"))]
+#[cfg_attr(not(test), unsafe(no_mangle))]
+#[allow(non_upper_case_globals, reason = "C names it")]
+pub static __stack_chk_guard: AtomicUsize = AtomicUsize::new(0);
 
 /// The main thread's memory, when the program's TLS is small enough to share
 /// it.
@@ -243,17 +319,33 @@ unsafe impl Sync for Builtin {}
 static BUILTIN: Builtin = Builtin(UnsafeCell::new([0; BUILTIN_LEN]));
 
 /// A program header, as `Elf64_Phdr`.
+#[cfg(target_pointer_width = "64")]
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-struct Phdr {
-    p_type: u32,
-    p_flags: u32,
-    p_offset: u64,
-    p_vaddr: u64,
-    p_paddr: u64,
-    p_filesz: u64,
-    p_memsz: u64,
-    p_align: u64,
+pub(crate) struct Phdr {
+    pub(crate) p_type: u32,
+    pub(crate) p_flags: u32,
+    pub(crate) p_offset: u64,
+    pub(crate) p_vaddr: u64,
+    pub(crate) p_paddr: u64,
+    pub(crate) p_filesz: u64,
+    pub(crate) p_memsz: u64,
+    pub(crate) p_align: u64,
+}
+
+/// A program header, as `Elf32_Phdr`, whose flags come later.
+#[cfg(target_pointer_width = "32")]
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Phdr {
+    pub(crate) p_type: u32,
+    pub(crate) p_offset: u32,
+    pub(crate) p_vaddr: u32,
+    pub(crate) p_paddr: u32,
+    pub(crate) p_filesz: u32,
+    pub(crate) p_memsz: u32,
+    pub(crate) p_flags: u32,
+    pub(crate) p_align: u32,
 }
 
 /// The header that describes the program headers themselves.
@@ -340,20 +432,28 @@ fn program_tls() -> Tls {
     }
 }
 
+/// The canary without random bytes: a terminator canary, with a zero, a
+/// newline and 0xff, as glibc's fallback is.
+#[cfg(target_pointer_width = "64")]
+const FIXED_CANARY: usize = 0x00ff_0a0d_0000_0000;
+/// The canary without random bytes, on a 32-bit target.
+#[cfg(target_pointer_width = "32")]
+const FIXED_CANARY: usize = 0xff0a_0000;
+
 /// The canary and the pointer guard, from the kernel's random bytes. The
 /// canary's low byte is zero, so a string function that runs off the end of a
 /// buffer stops before reading it, and cannot write it back unchanged.
 fn guards() -> (usize, usize) {
     let Some(address) = auxv::get(auxv::AT_RANDOM) else {
-        return (0x00ff_0a0d_0000_0000, 0);
+        return (FIXED_CANARY, 0);
     };
     // SAFETY: `AT_RANDOM` names sixteen bytes on the initial stack.
     let bytes = unsafe { with_exposed_provenance::<[u8; 16]>(address).read_unaligned() };
     let canary = bytes
-        .first_chunk::<8>()
+        .first_chunk::<{ size_of::<usize>() }>()
         .map_or(0, |chunk| usize::from_ne_bytes(*chunk));
     let pointer_guard = bytes
-        .last_chunk::<8>()
+        .last_chunk::<{ size_of::<usize>() }>()
         .map_or(0, |chunk| usize::from_ne_bytes(*chunk));
     (canary & !0xff, pointer_guard)
 }
@@ -363,8 +463,7 @@ fn map(len: usize) -> *mut u8 {
     // SAFETY: a new anonymous private mapping aliases nothing. The file
     // descriptor is -1 as `mmap` requires for anonymous memory.
     let ret = unsafe {
-        syscall::syscall6(
-            nr::MMAP,
+        syscall::mmap(
             0,
             len,
             PROT_READ_WRITE,
@@ -404,18 +503,23 @@ unsafe fn build(
     let memsz = TLS_MEMSZ.load(Ordering::Relaxed);
     let align = TLS_ALIGN.load(Ordering::Relaxed);
     let (tp_address, block_address) = place(base.addr(), len, memsz, align)?;
+    let thread_address = thread_at(tp_address).addr();
     #[expect(
         clippy::cast_ptr_alignment,
-        reason = "`place` aligned the thread pointer to at least 64 bytes"
+        reason = "`place` aligned the thread pointer to at least 64 bytes, and \
+                  the control block is either there or a multiple of its own \
+                  alignment below it"
     )]
-    let tp = base.wrapping_add(tp_address - base.addr()).cast::<Thread>();
+    let tp = base
+        .wrapping_add(thread_address - base.addr())
+        .cast::<Thread>();
     let block = base.wrapping_add(block_address - base.addr());
 
     let filesz = TLS_FILESZ.load(Ordering::Relaxed);
     if let Some(loader) = crate::loader::interface() {
         // SAFETY: `place` left `memsz` bytes, the loader's whole static TLS,
-        // below the thread pointer, in memory nothing else uses.
-        unsafe { (loader.init_tls)(tp.cast()) };
+        // beside the thread pointer, in memory nothing else uses.
+        unsafe { (loader.init_tls)(base.wrapping_add(tp_address - base.addr()).cast()) };
     } else if filesz > 0 {
         let image = with_exposed_provenance::<c_void>(TLS_IMAGE.load(Ordering::Relaxed));
         // SAFETY: the image is `filesz` mapped bytes, and the block has room
@@ -501,6 +605,8 @@ pub unsafe fn init_main() {
         map(len)
     };
     let (stack_guard, pointer_guard) = guards();
+    #[cfg(not(target_arch = "x86_64"))]
+    __stack_chk_guard.store(stack_guard, Ordering::Relaxed);
     // SAFETY: the builtin memory and a fresh mapping are zeroed and unused,
     // and the image was recorded above.
     let Some(tp) = (unsafe { build(base, len, stack_guard, pointer_guard) }) else {
@@ -522,29 +628,32 @@ pub unsafe fn init_main() {
 
     // SAFETY: the new thread pointer is a control block that lives for the
     // rest of the process.
-    if unsafe { arch::set_thread_pointer(tp.expose_provenance()) } != 0 {
+    if unsafe { arch::set_thread_pointer(pointer_of(tp)) } != 0 {
         syscall::trap();
     }
 }
 
 /// The calling thread's copy of the program's TLS block, or `None` when the
-/// program has no `PT_TLS` segment. It ends at the thread pointer.
+/// program has no `PT_TLS` segment. It ends at the thread pointer in variant
+/// II, and starts just past the header in variant I.
 pub fn tls_block() -> Option<*mut c_void> {
     let memsz = TLS_MEMSZ.load(Ordering::Relaxed);
     if memsz == 0 {
         return None;
     }
     let offset = tls_offset(memsz, TLS_ALIGN.load(Ordering::Relaxed))?;
-    Some(with_exposed_provenance_mut(
-        arch::thread_pointer().checked_sub(offset)?,
-    ))
+    #[cfg(target_arch = "x86_64")]
+    let block = arch::thread_pointer().checked_sub(offset)?;
+    #[cfg(not(target_arch = "x86_64"))]
+    let block = arch::thread_pointer().checked_add(offset)?;
+    Some(with_exposed_provenance_mut(block))
 }
 
 /// The calling thread's control block.
 ///
 /// Before [`init_main`] the thread pointer is zero, and this faults.
 pub fn current() -> *mut Thread {
-    with_exposed_provenance_mut(arch::thread_pointer())
+    thread_at(arch::thread_pointer())
 }
 
 /// The shared state of the thread whose control block is at `t`.
@@ -625,6 +734,7 @@ pub fn locale_location() -> *mut *mut Locale {
 mod tests {
     use super::*;
 
+    #[cfg(target_arch = "x86_64")]
     #[test]
     fn the_tls_block_ends_where_the_aligned_thread_pointer_begins() {
         assert_eq!(reservation(5, 1), Some(5 + 64 + size_of::<Thread>()));
@@ -637,6 +747,31 @@ mod tests {
         assert_eq!(place(0x1000, 1024, 100, 128), Some((0x1080, 0x1000)));
         // A zero alignment means none.
         assert_eq!(place(0x1000, 1024, 5, 0), Some((0x1040, 0x103b)));
+    }
+
+    #[cfg(not(target_arch = "x86_64"))]
+    #[test]
+    fn the_tls_block_starts_past_the_header_above_the_aligned_thread_pointer() {
+        let control = size_of::<Thread>();
+        let header = arch::TCB_SIZE;
+        assert_eq!(reservation(5, 1), Some(header + 64 + control + 5));
+        // The control block first, then the thread pointer on a 64-byte
+        // boundary, then the header, then five unaligned bytes.
+        let tp = (0x1000 + control).next_multiple_of(64);
+        assert_eq!(place(0x1000, 1024, 5, 1), Some((tp, tp + header)));
+        // A block aligned to 16 starts 16 above the thread pointer, past the
+        // header of 8 or 16.
+        assert_eq!(place(0x1000, 1024, 20, 16), Some((tp, tp + 16)));
+        // An alignment above 64 aligns the thread pointer too, and the block
+        // starts a whole alignment above it.
+        let tp128 = (0x1000 + control).next_multiple_of(128);
+        assert_eq!(place(0x1000, 1024, 100, 128), Some((tp128, tp128 + 128)));
+        // A zero alignment means none.
+        assert_eq!(place(0x1000, 1024, 5, 0), Some((tp, tp + header)));
+        // The thread pointer and the control block convert both ways.
+        let t = with_exposed_provenance_mut::<Thread>(tp - control);
+        assert_eq!(pointer_of(t), tp);
+        assert_eq!(thread_at(tp), t);
     }
 
     #[test]

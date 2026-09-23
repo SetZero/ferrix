@@ -225,7 +225,7 @@ pub unsafe extern "C" fn strerror_r(error: c_int, buf: *mut c_char, len: usize) 
             break;
         };
         // SAFETY: `i < len - 1`, and the caller vouches for `len` bytes.
-        unsafe { buf.wrapping_add(i).write(byte.cast_signed()) };
+        unsafe { buf.wrapping_add(i).write(byte as c_char) };
         i += 1;
     }
     // SAFETY: `i <= len - 1`.
@@ -407,7 +407,7 @@ mod tests {
 
     #[test]
     fn strerror_r_copies_whole_messages_and_reports_short_buffers() {
-        let mut buf = [b'x'.cast_signed(); 32];
+        let mut buf = [b'x' as c_char; 32];
         let p = buf.as_mut_ptr();
         // SAFETY: `buf` holds 32 bytes.
         assert_eq!(unsafe { strerror_r(e::EDOM, p, 32) }, 0);
@@ -425,11 +425,11 @@ mod tests {
         assert_eq!(unsafe { __xpg_strerror_r(e::EDOM, p, 1) }, e::ERANGE);
         assert_eq!(text(p), "");
 
-        buf = [b'x'.cast_signed(); 32];
+        buf = [b'x' as c_char; 32];
         // Nothing is written through a zero length, not even a NUL.
         // SAFETY: a zero length writes nothing.
         assert_eq!(unsafe { strerror_r(e::EDOM, p, 0) }, e::ERANGE);
-        assert_eq!(buf[0], b'x'.cast_signed());
+        assert_eq!(buf[0], b'x' as c_char);
     }
 
     #[test]

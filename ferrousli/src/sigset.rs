@@ -58,27 +58,34 @@ pub const SIGRTMIN: c_int = RESERVED_LAST + 1;
 pub const SIGRTMAX: c_int = NSIG - 1;
 
 /// The reserved signals, as bits of the kernel's set.
-const RESERVED_BITS: c_ulong = bit_of(32) | bit_of(33) | bit_of(34);
+const RESERVED_BITS: u64 = bit_of(32) | bit_of(33) | bit_of(34);
 /// Every signal a program may use, as bits of the kernel's set.
-const FILLED: c_ulong = !RESERVED_BITS;
+const FILLED: u64 = !RESERVED_BITS;
 
 const _: () = assert!(RESERVED_FIRST == 32 && RESERVED_LAST == 34);
 // musl's `sigfillset` writes this constant; the two must agree.
 const _: () = assert!(FILLED == 0xffff_fffc_7fff_ffff);
 
 /// Signal `sig`'s bit in the kernel's set, for a `sig` known to be in range.
-const fn bit_of(sig: c_int) -> c_ulong {
+const fn bit_of(sig: c_int) -> u64 {
     1 << (sig - 1)
 }
 
-/// C's `sigset_t`: sixteen words, of which the kernel uses the first.
+/// The `unsigned long`s the kernel's 64 signals take: one, or two on a
+/// 32-bit target, low half first.
+const KERNEL_WORDS: usize = 8 / size_of::<c_ulong>();
+/// The `unsigned long`s of C's 1024-bit `sigset_t`.
+const WORDS: usize = 128 / size_of::<c_ulong>();
+
+/// C's `sigset_t`: 1024 bits in `unsigned long`s, of which the kernel uses
+/// the first 64.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SigSet {
     /// The kernel's set. Bit `n - 1` is signal `n`.
-    word: c_ulong,
+    word: [c_ulong; KERNEL_WORDS],
     /// Room C reserves for more signals than Linux has.
-    upper: [c_ulong; 15],
+    upper: [c_ulong; WORDS - KERNEL_WORDS],
 }
 
 const _: () = assert!(size_of::<SigSet>() == 128);
@@ -89,21 +96,68 @@ impl SigSet {
     pub const EMPTY: Self = Self::from_word(0);
 
     /// The set whose kernel word is `word`.
-    pub const fn from_word(word: c_ulong) -> Self {
+    #[cfg(target_pointer_width = "64")]
+    pub const fn from_word(word: u64) -> Self {
         Self {
-            word,
-            upper: [0; 15],
+            word: [word],
+            upper: [0; WORDS - KERNEL_WORDS],
+        }
+    }
+
+    /// The set whose kernel word is `word`, low half first.
+    #[cfg(target_pointer_width = "32")]
+    pub const fn from_word(word: u64) -> Self {
+        Self {
+            word: [word as c_ulong, (word >> 32) as c_ulong],
+            upper: [0; WORDS - KERNEL_WORDS],
         }
     }
 
     /// The kernel's word of the set.
-    pub const fn word(&self) -> c_ulong {
-        self.word
+    #[cfg(target_pointer_width = "64")]
+    pub const fn word(&self) -> u64 {
+        let [word] = self.word;
+        word
+    }
+
+    /// The kernel's word of the set, from its two halves.
+    #[cfg(target_pointer_width = "32")]
+    pub const fn word(&self) -> u64 {
+        let [low, high] = self.word;
+        low as u64 | (high as u64) << 32
+    }
+
+    /// Replaces the kernel's word of the set, leaving the rest alone.
+    fn set_word(&mut self, word: u64) {
+        self.word = Self::from_word(word).word;
+    }
+}
+
+/// The kernel's 64-bit signal set as it sits inside one of the kernel's own
+/// structures, such as its `struct sigaction`: one `unsigned long`, or two on
+/// a 32-bit target, where the kernel aligns it to 4 bytes, not 8.
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KernelMask([c_ulong; KERNEL_WORDS]);
+
+impl KernelMask {
+    /// The set whose bits are `word`'s.
+    pub const fn new(word: u64) -> Self {
+        Self(SigSet::from_word(word).word)
+    }
+
+    /// The set's bits.
+    pub const fn get(self) -> u64 {
+        SigSet {
+            word: self.0,
+            upper: [0; WORDS - KERNEL_WORDS],
+        }
+        .word()
     }
 }
 
 /// Signal `sig`'s bit, or `None` if there is no such signal.
-pub fn bit(sig: c_int) -> Option<c_ulong> {
+pub fn bit(sig: c_int) -> Option<u64> {
     (1..NSIG).contains(&sig).then(|| bit_of(sig))
 }
 
@@ -114,7 +168,7 @@ pub fn is_reserved(sig: c_int) -> bool {
 
 /// Signal `sig`'s bit, or `None` if a program may not name it: there is no
 /// such signal, or the library reserves it.
-pub fn usable_bit(sig: c_int) -> Option<c_ulong> {
+pub fn usable_bit(sig: c_int) -> Option<u64> {
     if is_reserved(sig) { None } else { bit(sig) }
 }
 
@@ -158,7 +212,7 @@ pub unsafe extern "C" fn sigaddset(set: *mut SigSet, sig: c_int) -> c_int {
     // SAFETY: the caller vouches for the set, and nothing else refers to it
     // while this runs.
     let set = unsafe { &mut *set };
-    set.word |= bit;
+    set.set_word(set.word() | bit);
     0
 }
 
@@ -176,7 +230,7 @@ pub unsafe extern "C" fn sigdelset(set: *mut SigSet, sig: c_int) -> c_int {
     };
     // SAFETY: as in `sigaddset`.
     let set = unsafe { &mut *set };
-    set.word &= !bit;
+    set.set_word(set.word() & !bit);
     0
 }
 
@@ -196,7 +250,7 @@ pub unsafe extern "C" fn sigismember(set: *const SigSet, sig: c_int) -> c_int {
         return -1;
     };
     // SAFETY: the caller vouches for the set.
-    let word = unsafe { (*set).word };
+    let word = unsafe { (*set).word() };
     c_int::from(word & bit != 0)
 }
 
@@ -208,7 +262,7 @@ pub unsafe extern "C" fn sigismember(set: *const SigSet, sig: c_int) -> c_int {
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub unsafe extern "C" fn sigisemptyset(set: *const SigSet) -> c_int {
     // SAFETY: the caller vouches for the set.
-    let word = unsafe { (*set).word };
+    let word = unsafe { (*set).word() };
     c_int::from(word == 0)
 }
 
@@ -225,9 +279,9 @@ pub unsafe extern "C" fn sigorset(
     right: *const SigSet,
 ) -> c_int {
     // SAFETY: the caller vouches for the set.
-    let left = unsafe { (*left).word };
+    let left = unsafe { (*left).word() };
     // SAFETY: as above.
-    let right = unsafe { (*right).word };
+    let right = unsafe { (*right).word() };
     // SAFETY: as above; nothing refers to `left` or `right` any more.
     unsafe { dest.write(SigSet::from_word(left | right)) };
     0
@@ -245,9 +299,9 @@ pub unsafe extern "C" fn sigandset(
     right: *const SigSet,
 ) -> c_int {
     // SAFETY: the caller vouches for the set.
-    let left = unsafe { (*left).word };
+    let left = unsafe { (*left).word() };
     // SAFETY: as above.
-    let right = unsafe { (*right).word };
+    let right = unsafe { (*right).word() };
     // SAFETY: as above; nothing refers to `left` or `right` any more.
     unsafe { dest.write(SigSet::from_word(left & right)) };
     0
@@ -294,7 +348,7 @@ pub unsafe extern "C" fn pthread_sigmask(
     if !old.is_null() {
         // SAFETY: the caller vouches for `old`, and the kernel just wrote its
         // first word.
-        let previous = unsafe { (*old).word };
+        let previous = unsafe { (*old).word() };
         // SAFETY: as above. The kernel has finished reading `set`.
         unsafe { old.write(SigSet::from_word(previous & !RESERVED_BITS)) };
     }
@@ -333,7 +387,7 @@ pub unsafe extern "C" fn sigpending(set: *mut SigSet) -> c_int {
         return -1;
     }
     // SAFETY: the kernel just wrote the first word.
-    let pending = unsafe { (*set).word };
+    let pending = unsafe { (*set).word() };
     // SAFETY: the caller vouches for the whole set.
     unsafe { set.write(SigSet::from_word(pending)) };
     0
@@ -417,13 +471,13 @@ mod tests {
     #[test]
     fn filling_leaves_out_the_reserved_signals_and_emptying_clears_every_word() {
         let mut set = SigSet {
-            word: 0,
-            upper: [7; 15],
+            word: [0; KERNEL_WORDS],
+            upper: [7; WORDS - KERNEL_WORDS],
         };
         // SAFETY: `set` is a live local.
         assert_eq!(unsafe { sigfillset(&raw mut set) }, 0);
-        assert_eq!(set.word, 0xffff_fffc_7fff_ffff);
-        assert_eq!(set.upper, [0; 15]);
+        assert_eq!(set.word(), 0xffff_fffc_7fff_ffff);
+        assert_eq!(set.upper, [0; WORDS - KERNEL_WORDS]);
         for sig in 1..NSIG {
             // SAFETY: as above.
             let member = unsafe { sigismember(&raw const set, sig) };
@@ -448,10 +502,10 @@ mod tests {
         assert_eq!(unsafe { sigaddset(&raw mut set, 64) }, 0);
         // SAFETY: as above.
         assert_eq!(unsafe { sigaddset(&raw mut set, 35) }, 0);
-        assert_eq!(set.word, 1 | 1 << 63 | 1 << 34);
+        assert_eq!(set.word(), 1 | 1 << 63 | 1 << 34);
         // SAFETY: as above.
         assert_eq!(unsafe { sigdelset(&raw mut set, 64) }, 0);
-        assert_eq!(set.word, 1 | 1 << 34);
+        assert_eq!(set.word(), 1 | 1 << 34);
     }
 
     #[test]
@@ -486,8 +540,8 @@ mod tests {
         let left = SigSet::from_word(0b1100);
         let right = SigSet::from_word(0b1010);
         let mut dest = SigSet {
-            word: 0,
-            upper: [9; 15],
+            word: [0; KERNEL_WORDS],
+            upper: [9; WORDS - KERNEL_WORDS],
         };
         // SAFETY: all three are live locals.
         let ret = unsafe { sigorset(&raw mut dest, &raw const left, &raw const right) };

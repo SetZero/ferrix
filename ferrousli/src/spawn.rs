@@ -32,7 +32,7 @@ use crate::stdio::open::{fclose, fdopen};
 use crate::stdlib::environ;
 use crate::string::strlen;
 use crate::unistd::{_exit, chdir, close, dup2, pipe2};
-use crate::va::{self, VaList, VaListTag};
+use crate::va::{self, VaList, VaListArg};
 use crate::wait::waitpid;
 
 /// `SIGINT`, from `asm/signal.h`.
@@ -123,7 +123,7 @@ unsafe fn collect(argv0: *const c_char, args: &mut VaList<'_>) -> *mut *const c_
 pub unsafe extern "C" fn execl_list(
     path: *const c_char,
     argv0: *const c_char,
-    ap: *mut VaListTag,
+    ap: VaListArg,
 ) -> c_int {
     // SAFETY: the thunk passes its own list.
     let mut args = unsafe { VaList::from_raw(ap) };
@@ -149,7 +149,7 @@ pub unsafe extern "C" fn execl_list(
 pub unsafe extern "C" fn execle_list(
     path: *const c_char,
     argv0: *const c_char,
-    ap: *mut VaListTag,
+    ap: VaListArg,
 ) -> c_int {
     // SAFETY: the thunk passes its own list.
     let mut args = unsafe { VaList::from_raw(ap) };
@@ -175,7 +175,7 @@ pub unsafe extern "C" fn execle_list(
 pub unsafe extern "C" fn execlp_list(
     file: *const c_char,
     argv0: *const c_char,
-    ap: *mut VaListTag,
+    ap: VaListArg,
 ) -> c_int {
     // SAFETY: the thunk passes its own list.
     let mut args = unsafe { VaList::from_raw(ap) };

@@ -10,17 +10,20 @@ use core::mem::size_of;
 
 use crate::errno;
 use crate::syscall::nr;
-use crate::time::{self, KERNEL_SIGSET_SIZE, Timespec, Timeval};
+use crate::time::{self, KERNEL_SIGSET_SIZE, Suseconds, Timespec, Timeval};
 
 /// C's `fd_set`: `FD_SETSIZE`, 1024, bits in unsigned longs. The kernel
 /// reads as many bits as the first argument says.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct FdSet {
-    /// The bits, lowest descriptor first.
-    pub fds_bits: [c_ulong; 16],
+    /// The bits, lowest descriptor first: `FD_SETSIZE`, 1024, of them.
+    pub fds_bits: [c_ulong; 1024 / c_ulong::BITS as usize],
 }
 
+#[cfg(target_pointer_width = "64")]
+const _: () = assert!(size_of::<FdSet>() == 128);
+#[cfg(target_pointer_width = "32")]
 const _: () = assert!(size_of::<FdSet>() == 128);
 
 /// The signal mask argument the kernel's `pselect6` takes: a pointer to the
@@ -32,10 +35,13 @@ struct SigsetArgument {
     size: usize,
 }
 
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(size_of::<SigsetArgument>() == 16);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(size_of::<SigsetArgument>() == 8);
 
 /// Microseconds in a second.
-const MICROS: c_long = 1_000_000;
+const MICROS: Suseconds = 1_000_000;
 
 /// A `struct timeval` timeout as a `struct timespec`, with microseconds of a
 /// second or more carried into seconds, saturating at the largest time.
@@ -50,7 +56,8 @@ fn timespec_of(tv: Timeval) -> Option<Timespec> {
     Some(match tv.tv_sec.checked_add(carry) {
         Some(tv_sec) => Timespec {
             tv_sec,
-            tv_nsec: (tv.tv_usec % MICROS) * 1000,
+            // Below a second: it fits a `long`.
+            tv_nsec: ((tv.tv_usec % MICROS) * 1000) as c_long,
         },
         None => Timespec {
             tv_sec: i64::MAX,
@@ -123,7 +130,7 @@ pub unsafe extern "C" fn select(
     if let Some(left) = copy {
         let tv = Timeval {
             tv_sec: left.tv_sec,
-            tv_usec: left.tv_nsec / 1000,
+            tv_usec: Suseconds::from(left.tv_nsec / 1000),
         };
         // SAFETY: `copy` is only `Some` when `timeout` was not null.
         unsafe { timeout.write(tv) };

@@ -45,7 +45,12 @@ int main(void)
 	struct epoll_event ev = { .events = EPOLLIN, .data.u64 = 7 };
 	CHECK(epoll_ctl(ep, EPOLL_CTL_ADD, ep, &ev) == -1 && errno == EINVAL);
 	CHECK(epoll_ctl(ep, EPOLL_CTL_DEL, 12345, 0) == -1 && errno == EBADF);
+#if defined(__x86_64__)
+	/* Packed on x86-64 only, as the kernel's is. */
 	CHECK(sizeof(struct epoll_event) == 12);
+#else
+	CHECK(sizeof(struct epoll_event) == 16);
+#endif
 
 	/* An eventfd wakes a blocked wait from another thread. */
 	wake_fd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);

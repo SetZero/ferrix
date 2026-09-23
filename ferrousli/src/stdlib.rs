@@ -72,6 +72,27 @@ core::arch::global_asm!(
     ".popsection",
 );
 
+// The same for a 32-bit pointer.
+#[cfg(all(not(test), target_pointer_width = "32"))]
+core::arch::global_asm!(
+    ".pushsection .bss.__environ,\"aw\",%nobits",
+    ".p2align 2",
+    ".globl __environ",
+    ".type __environ, %object",
+    ".size __environ, 4",
+    ".weak environ",
+    ".type environ, %object",
+    ".size environ, 4",
+    ".weak _environ",
+    ".type _environ, %object",
+    ".size _environ, 4",
+    "__environ:",
+    "environ:",
+    "_environ:",
+    ".zero 4",
+    ".popsection",
+);
+
 /// The value of the environment variable `name`, or null.
 ///
 /// # Safety

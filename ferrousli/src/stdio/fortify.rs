@@ -17,7 +17,7 @@ use super::io::fread;
 use super::printf::{vasprintf, vdprintf, vfprintf, vprintf, vsnprintf};
 use crate::signal;
 use crate::syscall::{self, nr};
-use crate::va::{self, VaListTag};
+use crate::va::{self, VaListArg};
 
 /// Reports a buffer overflow and aborts, as glibc's `__chk_fail` does.
 fn overflow() -> ! {
@@ -33,11 +33,7 @@ fn overflow() -> ! {
 ///
 /// As `vprintf`.
 #[cfg_attr(not(test), unsafe(no_mangle))]
-pub unsafe extern "C" fn __vprintf_chk(
-    _flag: c_int,
-    fmt: *const c_char,
-    ap: *mut VaListTag,
-) -> c_int {
+pub unsafe extern "C" fn __vprintf_chk(_flag: c_int, fmt: *const c_char, ap: VaListArg) -> c_int {
     // SAFETY: the caller vouches for the format and arguments.
     unsafe { vprintf(fmt, ap) }
 }
@@ -52,7 +48,7 @@ pub unsafe extern "C" fn __vfprintf_chk(
     stream: *mut File,
     _flag: c_int,
     fmt: *const c_char,
-    ap: *mut VaListTag,
+    ap: VaListArg,
 ) -> c_int {
     // SAFETY: the caller vouches for the stream, format and arguments.
     unsafe { vfprintf(stream, fmt, ap) }
@@ -68,7 +64,7 @@ pub unsafe extern "C" fn __vdprintf_chk(
     fd: c_int,
     _flag: c_int,
     fmt: *const c_char,
-    ap: *mut VaListTag,
+    ap: VaListArg,
 ) -> c_int {
     // SAFETY: the caller vouches for the format and arguments.
     unsafe { vdprintf(fd, fmt, ap) }
@@ -84,7 +80,7 @@ pub unsafe extern "C" fn __vasprintf_chk(
     strp: *mut *mut c_char,
     _flag: c_int,
     fmt: *const c_char,
-    ap: *mut VaListTag,
+    ap: VaListArg,
 ) -> c_int {
     // SAFETY: the caller vouches for the pointer, format and arguments.
     unsafe { vasprintf(strp, fmt, ap) }
@@ -102,7 +98,7 @@ pub unsafe extern "C" fn __vsprintf_chk(
     _flag: c_int,
     size: usize,
     fmt: *const c_char,
-    ap: *mut VaListTag,
+    ap: VaListArg,
 ) -> c_int {
     if size == 0 {
         overflow();
@@ -128,7 +124,7 @@ pub unsafe extern "C" fn __vsnprintf_chk(
     _flag: c_int,
     size: usize,
     fmt: *const c_char,
-    ap: *mut VaListTag,
+    ap: VaListArg,
 ) -> c_int {
     if maxlen > size {
         overflow();

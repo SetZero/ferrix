@@ -135,7 +135,21 @@ pub extern "C" fn syncfs(fd: c_int) -> c_int {
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn readahead(fd: c_int, offset: i64, count: usize) -> isize {
     // SAFETY: `readahead` reads no memory.
+    #[cfg(not(target_arch = "arm"))]
     let ret = unsafe { syscall::syscall3(nr::READAHEAD, fd as usize, offset as usize, count) };
+    // SAFETY: as above; the offset's pair starts at r2, leaving r1 unused.
+    #[cfg(target_arch = "arm")]
+    let ret = unsafe {
+        syscall::syscall6(
+            nr::READAHEAD,
+            fd as usize,
+            0,
+            syscall::low(offset),
+            syscall::high(offset),
+            count,
+            0,
+        )
+    };
     errno::from_syscall(ret)
 }
 

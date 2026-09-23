@@ -10,6 +10,7 @@
 
 use super::*;
 use crate::float::{BINARY128, X87_EXTENDED};
+#[cfg(target_arch = "x86_64")]
 use std::ffi::CString;
 
 /// Checks every row of a table: `input`, bit pattern, and whether `ERANGE`.
@@ -333,6 +334,7 @@ fn formats_bound_their_digits_and_limbs() {
     assert!(BINARY32.max_digits() >= 113);
 }
 
+#[cfg(target_arch = "x86_64")]
 #[test]
 fn strtold_writes_ten_bytes_of_extended_precision() {
     let check = |input: &str, want: u128, consumed: usize| {

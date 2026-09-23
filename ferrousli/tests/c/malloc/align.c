@@ -89,7 +89,7 @@ int main(void)
 	free(p);
 
 	/* EINVAL from posix_memalign leaves errno and the pointer alone. */
-	static const size_t bad_posix[] = { 0, 1, 2, 3, 4, 6, 12, 24, 100, 4097,
+	static const size_t bad_posix[] = { 0, 1, 2, 3, sizeof(void *) / 2, 6, 12, 24, 100, 4097,
 					    SIZE_MAX };
 	for (size_t i = 0; i < sizeof bad_posix / sizeof bad_posix[0]; i++) {
 		void *out = &p;
@@ -116,13 +116,13 @@ int main(void)
 		CHECK(errno == EINVAL);
 	}
 
-	/* Too large for any alignment. */
+	/* Too large for any alignment, and an alignment too large for any size. */
 	void *out = NULL;
 	errno = 0;
 	CHECK(posix_memalign(&out, 4096, SIZE_MAX - 100) == ENOMEM);
 	CHECK(out == NULL);
 	errno = 0;
-	CHECK(aligned_alloc_p((size_t)1 << 62, 1) == NULL);
+	CHECK(aligned_alloc_p((size_t)1 << (sizeof(size_t) * 8 - 1), 1) == NULL);
 	CHECK(errno == ENOMEM);
 	errno = 0;
 	CHECK(pvalloc_p(SIZE_MAX - 10) == NULL);

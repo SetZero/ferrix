@@ -50,7 +50,10 @@ int main(void)
 	CHECK(sigprocmask(SIG_SETMASK, 0, &s) == 0);
 	CHECK(sigismember(&s, 31) == 1);
 	CHECK(sigismember(&s, 35) == 1);
+#ifndef FERROUSLI_TEST_EMULATED
+	/* qemu-user keeps the last real-time signal for itself. */
 	CHECK(sigismember(&s, 64) == 1);
+#endif
 	for (i = 32; i <= 34; i++)
 		CHECK(sigismember(&s, i) == 0);
 	/* The kernel never blocks SIGKILL or SIGSTOP. */
@@ -60,8 +63,8 @@ int main(void)
 	CHECK(pthread_sigmask(SIG_BLOCK, 0, &s) == 0);
 	CHECK(sigismember(&s, 33) == 0);
 	CHECK(sigismember(&s, SIGUSR1) == 1);
-	/* Only the kernel's word of the old mask holds anything. */
-	CHECK(s.__bits[1] == 0 && s.__bits[15] == 0);
+	/* Only the kernel's 64 bits of the old mask hold anything. */
+	CHECK(s.__bits[8 / sizeof(long)] == 0 && s.__bits[128 / sizeof(long) - 1] == 0);
 	sigemptyset(&s);
 	CHECK(sigprocmask(SIG_SETMASK, &s, 0) == 0);
 

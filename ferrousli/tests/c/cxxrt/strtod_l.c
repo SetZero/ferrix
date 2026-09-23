@@ -3,6 +3,7 @@
  * Every locale here has '.' as its radix, so each parses as its plain form.
  */
 #define _GNU_SOURCE
+#include <float.h>
 #include <locale.h>
 #include <stdlib.h>
 
@@ -20,7 +21,10 @@ int main(void)
 	end = 0;
 	long double ld = strtold_l("0.1", &end, c);
 	CHECK(ld == 0.1L && *end == 0);
+#if LDBL_MANT_DIG > DBL_MANT_DIG
+	/* Wider than a double, where it is one: ARMv7-A. */
 	CHECK(ld != 0.1);
+#endif
 	freelocale(c);
 	return t_status;
 }

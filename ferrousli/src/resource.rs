@@ -43,8 +43,12 @@ pub struct Rusage {
 
 const _: () = assert!(offset_of!(Rusage, counters) == 32);
 // Where the kernel's structure ends.
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(Rusage, __reserved) == 144);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(size_of::<Rusage>() == 272);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(size_of::<Rusage>() == 152);
 
 /// `RLIM_INFINITY`: no limit.
 pub const RLIM_INFINITY: u64 = u64::MAX;
@@ -129,6 +133,51 @@ pub unsafe extern "C" fn setrlimit64(resource: c_int, limit: *const Rlimit) -> c
     unsafe { setrlimit(resource, limit) }
 }
 
+/// Where the kernel is to write a `struct rusage` meant for `usage`.
+///
+/// ARMv7-A's kernel writes its times as 32-bit `timeval`s, 16 bytes where
+/// C's are 32, before the counters. So it is pointed 16 bytes in, where its
+/// counters land on C's, and [`widen`] then moves the times, as musl does.
+pub(crate) fn kernel_usage(usage: *mut Rusage) -> usize {
+    #[cfg(target_arch = "arm")]
+    if !usage.is_null() {
+        return usage.addr() + 16;
+    }
+    usage.addr()
+}
+
+/// Turns the 32-bit times the kernel wrote at [`kernel_usage`]'s address into
+/// C's `struct timeval`s, on ARMv7-A; nothing elsewhere.
+///
+/// # Safety
+///
+/// `usage` must be null or a `struct rusage` the kernel just wrote through
+/// [`kernel_usage`].
+pub(crate) unsafe fn widen(usage: *mut Rusage) {
+    #[cfg(target_arch = "arm")]
+    if !usage.is_null() {
+        // SAFETY: the kernel wrote four `long`s at 16, inside the structure.
+        let times = unsafe {
+            usage
+                .wrapping_byte_add(16)
+                .cast::<[c_long; 4]>()
+                .read_unaligned()
+        };
+        let [us, uu, ss, su] = times.map(i64::from);
+        // SAFETY: the caller vouches for the structure.
+        let usage = unsafe { &mut *usage };
+        usage.ru_utime = Timeval {
+            tv_sec: us,
+            tv_usec: uu,
+        };
+        usage.ru_stime = Timeval {
+            tv_sec: ss,
+            tv_usec: su,
+        };
+    }
+    let _ = usage;
+}
+
 /// Reads the resource usage of `who` into `*usage`.
 ///
 /// # Safety
@@ -137,7 +186,11 @@ pub unsafe extern "C" fn setrlimit64(resource: c_int, limit: *const Rlimit) -> c
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub unsafe extern "C" fn getrusage(who: c_int, usage: *mut Rusage) -> c_int {
     // SAFETY: the kernel writes its prefix of `usage`, as the caller vouches.
-    let ret = unsafe { syscall::syscall2(nr::GETRUSAGE, who as usize, usage.addr()) };
+    let ret = unsafe { syscall::syscall2(nr::GETRUSAGE, who as usize, kernel_usage(usage)) };
+    if ret == 0 {
+        // SAFETY: the kernel just wrote it.
+        unsafe { widen(usage) };
+    }
     errno::from_syscall(ret) as c_int
 }
 

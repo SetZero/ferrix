@@ -31,6 +31,7 @@ static int reap(pid_t pid)
 	return status;
 }
 
+__attribute__((unused))
 static size_t copy(char *to, const char *from)
 {
 	size_t n = strlen(from);
@@ -40,13 +41,15 @@ static size_t copy(char *to, const char *from)
 
 int main(int argc, char **argv)
 {
-	char *args[4], *env[3], path[4200], name[300];
-	const char *base;
+	char *args[4], *env[3], name[300];
+	/* Unused under an emulator, which cannot run this program again. */
+	__attribute__((unused)) char path[4200];
+	__attribute__((unused)) const char *base;
 	pid_t parent = getpid(), pid;
 	struct rusage ru;
 	siginfo_t si;
 	int status, pfd[2], fd;
-	size_t n;
+	__attribute__((unused)) size_t n;
 
 	if (argc == 3 && strcmp(argv[1], "exec") == 0) {
 		const char *value = getenv("FERROUSLI_EXEC");
@@ -60,9 +63,12 @@ int main(int argc, char **argv)
 	if (pid == 0) {
 		if (getppid() != parent || getpid() == parent)
 			_exit(1);
-		/* The child's control block holds its own thread id, at 0x84. */
+#if defined(__x86_64__)
+		/* The child's control block holds its own thread id, at 0x84 from
+		   the thread pointer, where x86-64's layout puts the block. */
 		if (((int *)__builtin_thread_pointer())[0x84 / sizeof(int)] != syscall(SYS_gettid))
 			_exit(2);
+#endif
 		_exit(7);
 	}
 	CHECK(pid > 0 && pid != parent);
@@ -140,6 +146,9 @@ int main(int argc, char **argv)
 	status = reap(pid);
 	CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 8);
 
+#ifndef FERROUSLI_TEST_EMULATED
+	/* This program running itself: qemu-user without binfmt_misc hands an
+	   execve to the host kernel, which cannot run a foreign program. */
 	/* execve of this program, with an environment of its own. */
 	pid = fork();
 	if (pid == 0) {
@@ -154,11 +163,13 @@ int main(int argc, char **argv)
 	}
 	status = reap(pid);
 	CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 42);
+#endif
 	args[0] = "missing";
 	args[1] = 0;
 	errno = 0;
 	CHECK(execve("missing", args, args + 1) == -1 && errno == ENOENT);
 
+#ifndef FERROUSLI_TEST_EMULATED
 	/* execv passes environ. */
 	pid = fork();
 	if (pid == 0) {
@@ -219,6 +230,7 @@ int main(int argc, char **argv)
 	}
 	status = reap(pid);
 	CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 45);
+#endif
 
 	/* execvp's failures, with environ swapped in the parent and back. */
 	{

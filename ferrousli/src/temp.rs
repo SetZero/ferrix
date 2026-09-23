@@ -285,8 +285,9 @@ pub unsafe extern "C" fn tmpnam(buffer: *mut c_char) -> *mut c_char {
         // SAFETY: `name` is NUL-terminated, and `probe` has room for the one
         // byte the call may write.
         let ret = unsafe {
-            syscall::syscall3(
-                nr::READLINK,
+            syscall::syscall4(
+                nr::READLINKAT,
+                crate::fcntl::AT_FDCWD as usize,
                 name.as_ptr().addr(),
                 probe.as_mut_ptr().addr(),
                 1,

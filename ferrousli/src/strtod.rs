@@ -410,6 +410,36 @@ pub unsafe extern "C" fn strtold(s: *const c_char, endptr: *mut *mut c_char) {
     )
 }
 
+/// The bits of a binary128 `long double` parsed from `s`: [`strtold`]'s work
+/// on AArch64.
+///
+/// # Safety
+///
+/// As [`strtod`].
+#[cfg(target_arch = "aarch64")]
+unsafe extern "C" fn strtold_binary128(s: *const c_char, endptr: *mut *mut c_char) -> u128 {
+    // SAFETY: the caller's contract is `convert`'s.
+    unsafe { convert(s, endptr, &float::BINARY128) }
+}
+
+#[cfg(target_arch = "aarch64")]
+crate::math::ld128::returns_long_double!(
+    /// Parses a `long double`: on AArch64, IEEE binary128, returned in q0.
+    fn strtold(s: *const c_char, endptr: *mut *mut c_char) via strtold_binary128
+);
+
+/// Parses a `long double`, which on ARMv7-A is a `double`.
+///
+/// # Safety
+///
+/// As [`strtod`].
+#[cfg(target_arch = "arm")]
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn strtold(s: *const c_char, endptr: *mut *mut c_char) -> c_double {
+    // SAFETY: the caller's contract is `strtod`'s.
+    unsafe { strtod(s, endptr) }
+}
+
 /// [`strtod`] in `locale`. Every locale this library has uses `.` as its
 /// radix character, as musl's do, so the locale changes nothing.
 ///
@@ -459,6 +489,41 @@ pub unsafe extern "C" fn strtold_l(
     locale: *mut Locale,
 ) {
     core::arch::naked_asm!("jmp {strtold}", strtold = sym strtold)
+}
+
+/// [`strtold`] in `locale`, which changes nothing, as for [`strtod_l`]: a
+/// branch, so that the `long double` [`strtold`] leaves in q0 is this
+/// function's result.
+///
+/// # Safety
+///
+/// As [`strtod`].
+#[cfg(target_arch = "aarch64")]
+#[unsafe(naked)]
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn strtold_l(
+    s: *const c_char,
+    endptr: *mut *mut c_char,
+    locale: *mut Locale,
+) {
+    core::arch::naked_asm!("b {strtold}", strtold = sym strtold)
+}
+
+/// [`strtold`] in `locale`, which changes nothing, as for [`strtod_l`].
+///
+/// # Safety
+///
+/// As [`strtod`].
+#[cfg(target_arch = "arm")]
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn strtold_l(
+    s: *const c_char,
+    endptr: *mut *mut c_char,
+    locale: *mut Locale,
+) -> c_double {
+    let _ = locale;
+    // SAFETY: the caller's contract is `strtod`'s.
+    unsafe { strtod(s, endptr) }
 }
 
 #[cfg(test)]

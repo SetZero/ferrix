@@ -73,7 +73,8 @@ const PRIO_INHERIT_PROTOCOL: c_int = 1;
 /// `PTHREAD_PRIO_PROTECT`.
 const PRIO_PROTECT: c_int = 2;
 
-/// `pthread_mutex_t`, in musl's layout, 40 bytes.
+/// `pthread_mutex_t`, in musl's layout: 40 bytes, or 24 on a 32-bit target,
+/// where musl puts the two list pointers before the count.
 #[repr(C)]
 #[derive(Debug)]
 pub struct Mutex {
@@ -84,20 +85,32 @@ pub struct Mutex {
     /// `_m_waiters`: threads sleeping, or about to.
     pub waiters: AtomicI32,
     /// Unused by this layout.
+    #[cfg(target_pointer_width = "64")]
     spare: [AtomicI32; 2],
     /// `_m_count`: extra holds of a recursive mutex; -1 briefly after the
     /// kernel handed over a priority-inheriting one.
+    #[cfg(target_pointer_width = "64")]
     pub count: AtomicI32,
     /// `_m_prev`: the previous entry's `next` field, or the list head.
     pub prev: AtomicPtr<c_void>,
     /// `_m_next`: the next entry's `next` field, or the list head. This is
     /// the kernel's `struct robust_list`.
     pub next: AtomicPtr<c_void>,
+    /// `_m_count`, after the pointers on a 32-bit target.
+    #[cfg(target_pointer_width = "32")]
+    pub count: AtomicI32,
 }
 
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(size_of::<Mutex>() == 40);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(size_of::<Mutex>() == 24);
 const _: () = assert!(offset_of!(Mutex, count) == 20);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(Mutex, prev) == 24);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(offset_of!(Mutex, prev) == 12);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(Mutex, next) == 32);
 
 /// The distance from a mutex's `next` field to its lock word, which the
@@ -111,6 +124,7 @@ impl Mutex {
             kind: AtomicI32::new(kind),
             lock: AtomicI32::new(0),
             waiters: AtomicI32::new(0),
+            #[cfg(target_pointer_width = "64")]
             spare: [const { AtomicI32::new(0) }; 2],
             count: AtomicI32::new(0),
             prev: AtomicPtr::new(null_mut()),
@@ -832,6 +846,9 @@ mod tests {
         // SAFETY: as above.
         let ret = unsafe { pthread_mutexattr_setprotocol(&raw mut attr, PRIO_PROTECT) };
         assert_eq!(ret, errno::ENOTSUP);
+        #[cfg(target_pointer_width = "64")]
         assert_eq!(ROBUST_OFFSET, -28);
+        #[cfg(target_pointer_width = "32")]
+        assert_eq!(ROBUST_OFFSET, -12);
     }
 }

@@ -149,9 +149,14 @@ pub struct Regex {
     bits: c_uint,
 }
 
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(size_of::<Regex>() == 64);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(size_of::<Regex>() == 32);
 const _: () = assert!(offset_of!(Regex, opaque) == 0);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(Regex, re_nsub) == 48);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(Regex, bits) == 56);
 
 /// `regmatch_t`, in glibc's layout: `regoff_t` is an `int`.
@@ -520,6 +525,40 @@ core::arch::global_asm!(
     ".popsection",
 );
 
+// The same on AArch64 and ARMv7-A: the variable is a word of the target's,
+// and each name is a branch.
+#[cfg(all(not(test), any(target_arch = "aarch64", target_arch = "arm")))]
+core::arch::global_asm!(
+    ".pushsection .bss.re_syntax_options,\"aw\",%nobits",
+    ".p2align {align}",
+    ".weak re_syntax_options",
+    ".type re_syntax_options, %object",
+    ".size re_syntax_options, {size}",
+    "re_syntax_options:",
+    ".zero {size}",
+    ".popsection",
+    ".pushsection .text.ferrousli_gnu_regex,\"ax\",%progbits",
+    ".hidden __ferrousli_re_set_syntax",
+    ".hidden __ferrousli_re_compile_pattern",
+    ".hidden __ferrousli_re_search",
+    ".p2align 2",
+    ".weak re_set_syntax",
+    ".type re_set_syntax, %function",
+    "re_set_syntax:",
+    "b __ferrousli_re_set_syntax",
+    ".weak re_compile_pattern",
+    ".type re_compile_pattern, %function",
+    "re_compile_pattern:",
+    "b __ferrousli_re_compile_pattern",
+    ".weak re_search",
+    ".type re_search, %function",
+    "re_search:",
+    "b __ferrousli_re_search",
+    ".popsection",
+    size = const size_of::<usize>(),
+    align = const size_of::<usize>().trailing_zeros(),
+);
+
 /// `RE_NO_BK_PARENS`: `(` groups without a backslash, which is what makes an
 /// expression extended in every GNU syntax that has it.
 const RE_NO_BK_PARENS: usize = 1 << 13;
@@ -826,7 +865,7 @@ pub unsafe extern "C" fn regerror(
         let n = text.len().min(room);
         for (i, &b) in text.iter().take(n).enumerate() {
             // SAFETY: `i` is below `size`, which the caller gives room for.
-            unsafe { buf.wrapping_add(i).write(b.cast_signed()) };
+            unsafe { buf.wrapping_add(i).write(b as c_char) };
         }
         // SAFETY: `n` is below `size`.
         unsafe { buf.wrapping_add(n).write(0) };

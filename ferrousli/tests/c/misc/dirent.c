@@ -6,6 +6,7 @@
 #define _GNU_SOURCE
 #include <dirent.h>
 #include <errno.h>
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 #include "check.h"
@@ -111,7 +112,11 @@ int main(void)
 	rewinddir(d);
 	CHECK(read_all(d) == FILES + 2);
 
-	/* telldir and seekdir return to an entry, across a buffer refill. */
+	/* telldir and seekdir return to an entry, across a buffer refill. A
+	 * 32-bit program under user-mode QEMU is not told it is one, so ext4
+	 * gives it 64-bit positions that a long cannot hold; glibc fails the
+	 * same way there. */
+#if !defined(FERROUSLI_TEST_EMULATED) || LONG_MAX > 0x7fffffff
 	rewinddir(d);
 	for (int i = 0; i < 500; i++)
 		CHECK(readdir(d) != 0);
@@ -126,6 +131,7 @@ int main(void)
 	CHECK(telldir(d) == pos);
 	de = readdir(d);
 	CHECK(de && strcmp(de->d_name, expected) == 0);
+#endif
 
 	/* readdir_r copies the entry, and reports the end with a null result. */
 	rewinddir(d);

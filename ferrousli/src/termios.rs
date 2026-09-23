@@ -446,9 +446,15 @@ mod tests {
     #[test]
     fn a_file_that_is_not_a_terminal_is_refused() {
         // SAFETY: the path is NUL-terminated. O_RDONLY | O_CLOEXEC.
-        let fd =
-            unsafe { syscall::syscall3(nr::OPEN, c"/dev/null".as_ptr().addr(), 0o2_000_000, 0) }
-                as c_int;
+        let fd = unsafe {
+            syscall::syscall4(
+                nr::OPENAT,
+                crate::fcntl::AT_FDCWD as usize,
+                c"/dev/null".as_ptr().addr(),
+                0o2_000_000,
+                0,
+            )
+        } as c_int;
         assert!(fd >= 0);
         let mut name = [0 as c_char; 64];
         // SAFETY: the buffer is a live local of the size given.

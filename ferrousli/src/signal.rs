@@ -37,7 +37,10 @@ pub union Sigval {
     pub ptr: *mut c_void,
 }
 
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(size_of::<Sigval>() == 8);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(size_of::<Sigval>() == 4);
 
 impl core::fmt::Debug for Sigval {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -50,7 +53,8 @@ impl core::fmt::Debug for Sigval {
 
 /// `siginfo_t`, as far as the library fills it in. `signal.h` and the kernel's
 /// `asm-generic/siginfo.h` agree on its layout: three `int`s, then a union at
-/// offset 16, 128 bytes in all.
+/// offset 16, or 12 on a 32-bit target, where nothing in it needs 8-byte
+/// alignment; 128 bytes in all.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct Siginfo {
@@ -60,7 +64,8 @@ pub struct Siginfo {
     pub errno: c_int,
     /// `si_code`.
     pub code: c_int,
-    /// Padding before the union.
+    /// Padding before the union, which is 8-aligned on a 64-bit target.
+    #[cfg(target_pointer_width = "64")]
     pad: c_int,
     /// `si_pid`.
     pub pid: c_int,
@@ -69,12 +74,25 @@ pub struct Siginfo {
     /// `si_value`.
     pub value: Sigval,
     /// The rest of the union.
-    rest: [u64; 12],
+    rest: [u32; SIGINFO_REST],
 }
 
+/// The 32-bit words of `siginfo_t` after `si_value`, which ends at byte 32.
+#[cfg(target_pointer_width = "64")]
+const SIGINFO_REST: usize = 24;
+/// The 32-bit words of `siginfo_t` after `si_value`, which ends at byte 24.
+#[cfg(target_pointer_width = "32")]
+const SIGINFO_REST: usize = 26;
+
 const _: () = assert!(size_of::<Siginfo>() == 128);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(Siginfo, pid) == 16);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(Siginfo, value) == 24);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(offset_of!(Siginfo, pid) == 12);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(offset_of!(Siginfo, value) == 20);
 
 /// `stack_t`, the same in `signal.h` and the kernel's `asm/signal.h`.
 #[repr(C)]
@@ -88,8 +106,13 @@ pub struct Stack {
     pub size: usize,
 }
 
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(size_of::<Stack>() == 24);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(size_of::<Stack>() == 12);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(Stack, flags) == 8);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(Stack, size) == 16);
 
 /// `struct timespec`. musl's 64-bit layout matches the kernel's
@@ -161,12 +184,13 @@ pub extern "C" fn sigqueue(pid: c_int, sig: c_int, value: Sigval) -> c_int {
         signo: sig,
         errno: 0,
         code: SI_QUEUE,
+        #[cfg(target_pointer_width = "64")]
         pad: 0,
         // Both calls return values that fit: ids are 32 bits.
         pid: own_pid as c_int,
         uid: uid as u32,
         value,
-        rest: [0; 12],
+        rest: [0; SIGINFO_REST],
     };
     // SAFETY: the kernel reads `info`, a live local. The casts sign-extend,
     // and the kernel reads the low 32 bits back.

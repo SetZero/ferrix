@@ -89,7 +89,7 @@ int main(void)
 
 	/* A thread that has ended can be joined with tryjoin once it is gone. */
 	CHECK(pthread_create(&t[0], 0, twice, (void *)21) == 0);
-	CHECK(pthread_timedjoin_np(t[0], &result, &(struct timespec){ .tv_sec = 1L << 40 }) == 0);
+	CHECK(pthread_timedjoin_np(t[0], &result, &(struct timespec){ .tv_sec = (time_t)1 << 40 }) == 0);
 	CHECK(result == (void *)42);
 
 	/* Detaching twice, and joining a detached thread, are refused. */

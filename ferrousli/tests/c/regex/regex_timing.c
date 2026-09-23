@@ -32,6 +32,14 @@ static void no_match(int cflags, const char *pat, const char *s)
 	regfree(&re);
 }
 
+/* Seconds a match may take: long enough for any linear-time engine, and far
+   too short for a backtracking one. An emulator is some ten times slower. */
+#ifdef FERROUSLI_TEST_EMULATED
+#define LIMIT 100.0
+#else
+#define LIMIT 10.0
+#endif
+
 int main(void)
 {
 	enum { LEN = 100000 };
@@ -47,7 +55,7 @@ int main(void)
 	no_match(REG_EXTENDED, "(a|aa)+c", many);
 	no_match(REG_EXTENDED, "(a*)(a*)(a*)d", many);
 	no_match(0, "\\(a*\\)*b", many);
-	CHECK(now() - started < 10.0);
+	CHECK(now() - started < LIMIT);
 
 	/* The same patterns when they do match, with the groups reported. */
 	many[LEN] = 'b';
@@ -60,7 +68,7 @@ int main(void)
 	CHECK(m[0].rm_so == 0 && m[0].rm_eo == LEN + 1);
 	CHECK(m[1].rm_so == 0 && m[1].rm_eo == LEN);
 	regfree(&re);
-	CHECK(now() - started < 10.0);
+	CHECK(now() - started < LIMIT);
 
 	/* A long run of alternating pairs, where each iteration of the group
 	   has to be split off in turn. */
@@ -81,7 +89,7 @@ int main(void)
 	CHECK(m[0].rm_so == 0 && m[0].rm_eo == LEN);
 	CHECK(m[1].rm_so == LEN - 2 && m[1].rm_eo == LEN);
 	regfree(&re);
-	CHECK(now() - started < 10.0);
+	CHECK(now() - started < LIMIT);
 
 	free(pairs);
 	free(many);

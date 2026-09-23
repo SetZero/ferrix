@@ -9,8 +9,9 @@ use core::ffi::{c_int, c_long, c_longlong};
 
 use crate::syscall;
 
-/// `intmax_t`: `long` on x86-64, as `bits/alltypes.h` defines it.
-type IntMax = c_long;
+/// `intmax_t`: 64 bits on every target, a `long` on the 64-bit ones and a
+/// `long long` on ARMv7-A, as `bits/alltypes.h` defines it.
+type IntMax = i64;
 
 /// `div_t`, `{ int quot, rem; }`. Eight bytes, which the SysV ABI returns in
 /// `rax`.
@@ -54,8 +55,10 @@ pub struct ImaxdivT {
 }
 
 const _: () = assert!(size_of::<DivT>() == 8 && align_of::<DivT>() == 4);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(size_of::<LdivT>() == 16 && core::mem::offset_of!(LdivT, rem) == 8);
 const _: () = assert!(size_of::<LldivT>() == 16 && core::mem::offset_of!(LldivT, rem) == 8);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(size_of::<ImaxdivT>() == 16 && core::mem::offset_of!(ImaxdivT, rem) == 8);
 
 /// Defines an absolute value function.

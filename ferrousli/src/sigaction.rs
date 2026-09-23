@@ -30,7 +30,7 @@ use core::mem::{offset_of, size_of};
 use core::ptr::{null, null_mut};
 
 use crate::errno;
-use crate::sigset::{self, KERNEL_SIGSET_SIZE, SIG_BLOCK, SIG_UNBLOCK, SigSet};
+use crate::sigset::{self, KERNEL_SIGSET_SIZE, KernelMask, SIG_BLOCK, SIG_UNBLOCK, SigSet};
 use crate::syscall::{self, nr};
 
 /// A signal handler's address, or one of the values below that stand for a
@@ -74,9 +74,15 @@ pub struct Sigaction {
     pub restorer: usize,
 }
 
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(size_of::<Sigaction>() == 152);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(size_of::<Sigaction>() == 140);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(Sigaction, mask) == 8);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(Sigaction, flags) == 136);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(Sigaction, restorer) == 144);
 
 impl Sigaction {
@@ -89,7 +95,8 @@ impl Sigaction {
     };
 }
 
-/// The kernel's `struct sigaction` on x86-64, from `asm/signal.h`.
+/// The kernel's `struct sigaction`, from `asm/signal.h`: the same four fields
+/// on all three architectures, with the 8-byte mask 4-aligned on ARMv7-A.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct KernelSigaction {
@@ -100,13 +107,21 @@ pub struct KernelSigaction {
     /// `sa_restorer`.
     pub restorer: usize,
     /// `sa_mask`, the kernel's 8-byte set.
-    pub mask: c_ulong,
+    pub mask: KernelMask,
 }
 
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(size_of::<KernelSigaction>() == 32);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(KernelSigaction, flags) == 8);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(KernelSigaction, restorer) == 16);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(KernelSigaction, mask) == 24);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(size_of::<KernelSigaction>() == 20);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(offset_of!(KernelSigaction, mask) == 12);
 
 impl KernelSigaction {
     /// The default action with nothing else set.
@@ -114,7 +129,7 @@ impl KernelSigaction {
         handler: SIG_DFL,
         flags: 0,
         restorer: 0,
-        mask: 0,
+        mask: KernelMask::new(0),
     };
 
     /// The kernel's form of `action`, returning through `restorer`.
@@ -128,7 +143,7 @@ impl KernelSigaction {
             handler: action.handler,
             flags: c_ulong::from(action.flags.cast_unsigned()) | SA_RESTORER as c_ulong,
             restorer,
-            mask: action.mask.word(),
+            mask: KernelMask::new(action.mask.word()),
         }
     }
 
@@ -137,7 +152,7 @@ impl KernelSigaction {
     pub fn to_c(self) -> Sigaction {
         Sigaction {
             handler: self.handler,
-            mask: SigSet::from_word(self.mask),
+            mask: SigSet::from_word(self.mask.get()),
             // The kernel defines no flag above bit 31.
             flags: (self.flags as u32).cast_signed(),
             restorer: self.restorer,
@@ -200,7 +215,8 @@ pub unsafe extern "C" fn sigaction(
         return -1;
     }
     // SAFETY: the caller passes null or a readable action.
-    let new = unsafe { act.as_ref() }.map(|act| KernelSigaction::from_c(act, restorer()));
+    let new =
+        unsafe { act.as_ref() }.map(|act| KernelSigaction::from_c(act, restorer_for(act.flags)));
     let mut previous = KernelSigaction::DEFAULT;
     let wanted = (!old.is_null()).then_some(&mut previous);
     // SAFETY: the caller vouches for the handler, and `restorer` is this
@@ -335,6 +351,18 @@ pub fn restorer() -> usize {
     (__restore_rt as unsafe extern "C" fn() as *const ()).addr()
 }
 
+/// The restorer an action with `flags` returns through. On ARMv7-A the kernel
+/// builds an old-style frame, which only `sigreturn` unwinds, for a handler
+/// without `SA_SIGINFO`; on the others every frame is `rt_sigreturn`'s.
+pub fn restorer_for(flags: c_int) -> usize {
+    #[cfg(target_arch = "arm")]
+    if flags & SA_SIGINFO == 0 {
+        return (__restore as unsafe extern "C" fn() as *const ()).addr();
+    }
+    let _ = flags;
+    restorer()
+}
+
 // The x86-64 restorer.
 //
 // Debuggers and unwinders have no unwind information for a signal frame. They
@@ -373,18 +401,77 @@ core::arch::global_asm!(
 #[cfg(target_arch = "x86_64")]
 const _: () = assert!(nr::RT_SIGRETURN == 15);
 
-#[cfg(target_arch = "x86_64")]
+// The AArch64 restorer: `mov x8, #139; svc #0`, `d2801168 d4000001`, the
+// sequence gdb and libgcc's AArch64 unwinder match, after a `nop` for the same
+// reason as on x86-64.
+#[cfg(target_arch = "aarch64")]
+core::arch::global_asm!(
+    ".pushsection .text.__restore_rt,\"ax\",@progbits",
+    "nop",
+    ".globl __restore_rt",
+    ".hidden __restore_rt",
+    ".type __restore_rt,@function",
+    "__restore_rt:",
+    "mov x8, #{rt_sigreturn}",
+    "svc #0",
+    ".size __restore_rt,.-__restore_rt",
+    ".popsection",
+    rt_sigreturn = const nr::RT_SIGRETURN,
+);
+
+#[cfg(target_arch = "aarch64")]
+const _: () = assert!(nr::RT_SIGRETURN == 139);
+
+// The ARMv7-A restorers, in ARM state: `mov r7, #173; svc #0`, `e3a070ad
+// ef000000`, for a frame `SA_SIGINFO` asked for, and `mov r7, #119; svc #0`,
+// `e3a07077 ef000000`, for the old-style frame the kernel builds otherwise.
+// gdb and libgcc's ARM unwinder match both, as musl's `__restore_rt` and
+// `__restore` are.
+#[cfg(target_arch = "arm")]
+core::arch::global_asm!(
+    ".pushsection .text.__restore_rt,\"ax\",%progbits",
+    ".p2align 2",
+    ".arm",
+    "nop",
+    ".globl __restore_rt",
+    ".hidden __restore_rt",
+    ".type __restore_rt,%function",
+    "__restore_rt:",
+    "mov r7, #{rt_sigreturn}",
+    "svc #0",
+    ".size __restore_rt,.-__restore_rt",
+    "nop",
+    ".globl __restore",
+    ".hidden __restore",
+    ".type __restore,%function",
+    "__restore:",
+    "mov r7, #{sigreturn}",
+    "svc #0",
+    ".size __restore,.-__restore",
+    ".popsection",
+    rt_sigreturn = const nr::RT_SIGRETURN,
+    sigreturn = const nr::SIGRETURN,
+);
+
+#[cfg(target_arch = "arm")]
+const _: () = assert!(nr::RT_SIGRETURN == 173 && nr::SIGRETURN == 119);
+
 unsafe extern "C" {
     /// Returns from a signal handler by calling `rt_sigreturn`. Only its
     /// address is used; calling it from anywhere but a signal frame is
     /// undefined.
     fn __restore_rt();
+    /// Returns from a handler's old-style frame by calling `sigreturn`, on
+    /// ARMv7-A. As [`__restore_rt`], only its address is used.
+    #[cfg(target_arch = "arm")]
+    fn __restore();
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    #[cfg(target_arch = "x86_64")]
     #[test]
     fn the_restorer_is_the_sequence_unwinders_recognise() {
         let code = core::ptr::with_exposed_provenance::<[u8; 9]>(restorer());
@@ -395,6 +482,22 @@ mod tests {
         let before = core::ptr::with_exposed_provenance::<u8>(restorer() - 1);
         // SAFETY: the byte before it is the `nop` in the same section.
         assert_eq!(unsafe { before.read() }, 0x90);
+    }
+
+    #[cfg(not(target_arch = "x86_64"))]
+    #[test]
+    fn the_restorer_is_the_sequence_unwinders_recognise() {
+        let code = core::ptr::with_exposed_provenance::<[u32; 2]>(restorer());
+        // SAFETY: the restorer is two instructions of code in this binary's
+        // text, which is readable.
+        let words = unsafe { code.read() };
+        let before = core::ptr::with_exposed_provenance::<u32>(restorer() - 4);
+        // SAFETY: the word before it is the `nop` in the same section.
+        let nop = unsafe { before.read() };
+        #[cfg(target_arch = "aarch64")]
+        assert_eq!((words, nop), ([0xd280_1168, 0xd400_0001], 0xd503_201f));
+        #[cfg(target_arch = "arm")]
+        assert_eq!((words, nop), ([0xe3a0_70ad, 0xef00_0000], 0xe320_f000));
     }
 
     #[test]
@@ -412,7 +515,7 @@ mod tests {
                 handler: 0x1234,
                 flags: 0x8c00_0004,
                 restorer: 0x5678,
-                mask: 1 << 9 | 1 << 63,
+                mask: KernelMask::new(1 << 9 | 1 << 63),
             }
         );
         let back = kernel.to_c();

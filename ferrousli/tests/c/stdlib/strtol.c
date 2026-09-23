@@ -4,6 +4,7 @@
  */
 
 #include <errno.h>
+#include <limits.h>
 #include <stdlib.h>
 #include "check.h"
 
@@ -24,6 +25,32 @@ int main(void)
 	TEST(l, strtol("2147483647", 0, 0), 2147483647L);
 	TEST(ul, strtoul("4294967295", 0, 0), 4294967295UL);
 
+#if LONG_MAX == 0x7fffffff
+	TEST(l, strtol(s="2147483648", &c, 0), 2147483647L);
+	TEST2(i, c-s, 10);
+	TEST2(i, errno, ERANGE);
+	TEST(l, strtol(s="-2147483649", &c, 0), -2147483647L-1);
+	TEST2(i, c-s, 11);
+	TEST2(i, errno, ERANGE);
+	TEST(ul, strtoul(s="4294967296", &c, 0), 4294967295UL);
+	TEST2(i, c-s, 10);
+	TEST2(i, errno, ERANGE);
+	TEST(ul, strtoul(s="-1", &c, 0), -1UL);
+	TEST2(i, c-s, 2);
+	TEST2(i, errno, 0);
+	TEST(ul, strtoul(s="-2", &c, 0), -2UL);
+	TEST2(i, c-s, 2);
+	TEST2(i, errno, 0);
+	TEST(ul, strtoul(s="-2147483648", &c, 0), -2147483648UL);
+	TEST2(i, c-s, 11);
+	TEST2(i, errno, 0);
+	TEST(ul, strtoul(s="-2147483649", &c, 0), -2147483649UL);
+	TEST2(i, c-s, 11);
+	TEST2(i, errno, 0);
+	TEST(ul, strtoul(s="-4294967296", &c, 0), 4294967295UL);
+	TEST2(i, c-s, 11);
+	TEST2(i, errno, ERANGE);
+#else
 	CHECK(sizeof(long) == 8);
 	TEST(l, strtol(s="9223372036854775808", &c, 0), 9223372036854775807L);
 	TEST2(i, c-s, 19);
@@ -49,6 +76,7 @@ int main(void)
 	TEST(ul, strtoul(s="-18446744073709551616", &c, 0), 18446744073709551615UL);
 	TEST2(i, c-s, 21);
 	TEST2(i, errno, ERANGE);
+#endif
 
 	CHECK(sizeof(long long) == 8);
 	TEST(ll, strtoll(s="9223372036854775808", &c, 0), 9223372036854775807LL);

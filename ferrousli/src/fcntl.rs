@@ -34,7 +34,18 @@ pub const O_CREAT: c_int = 0o100;
 /// `O_TRUNC`, from `asm-generic/fcntl.h`.
 pub const O_TRUNC: c_int = 0o1000;
 /// `O_DIRECTORY`, from `asm-generic/fcntl.h`.
+#[cfg(target_arch = "x86_64")]
 pub const O_DIRECTORY: c_int = 0o200_000;
+/// `O_DIRECTORY`, from the architecture's `asm/fcntl.h`: AArch64 and ARM move
+/// it, `O_NOFOLLOW`, `O_DIRECT` and `O_LARGEFILE` from the generic values.
+#[cfg(not(target_arch = "x86_64"))]
+pub const O_DIRECTORY: c_int = 0o40_000;
+/// `O_NOFOLLOW`, from `asm-generic/fcntl.h`.
+#[cfg(target_arch = "x86_64")]
+pub const O_NOFOLLOW: c_int = 0o400_000;
+/// `O_NOFOLLOW`, from the architecture's `asm/fcntl.h`.
+#[cfg(not(target_arch = "x86_64"))]
+pub const O_NOFOLLOW: c_int = 0o100_000;
 /// `O_TMPFILE`, from `asm-generic/fcntl.h`: `__O_TMPFILE | O_DIRECTORY`.
 pub const O_TMPFILE: c_int = 0o20_000_000 | O_DIRECTORY;
 
@@ -206,6 +217,7 @@ const F_SETLKW: c_int = 7;
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn sync_file_range(fd: c_int, offset: i64, len: i64, flags: c_uint) -> c_int {
     // SAFETY: `sync_file_range` reads no memory.
+    #[cfg(not(target_arch = "arm"))]
     let ret = unsafe {
         syscall::syscall4(
             nr::SYNC_FILE_RANGE,
@@ -213,6 +225,20 @@ pub extern "C" fn sync_file_range(fd: c_int, offset: i64, len: i64, flags: c_uin
             offset as usize,
             len as usize,
             flags as usize,
+        )
+    };
+    // SAFETY: as above. ARMv7-A's form takes the flags second, so that the
+    // two 64-bit arguments start at even registers.
+    #[cfg(target_arch = "arm")]
+    let ret = unsafe {
+        syscall::syscall6(
+            nr::ARM_SYNC_FILE_RANGE,
+            fd as usize,
+            flags as usize,
+            syscall::low(offset),
+            syscall::high(offset),
+            syscall::low(len),
+            syscall::high(len),
         )
     };
     errno::from_syscall(ret) as c_int
@@ -224,6 +250,7 @@ pub extern "C" fn sync_file_range(fd: c_int, offset: i64, len: i64, flags: c_uin
 pub extern "C" fn posix_fadvise(fd: c_int, offset: i64, len: i64, advice: c_int) -> c_int {
     // SAFETY: `fadvise64` reads no memory. On x86-64 its arguments are
     // (fd, offset, len, advice); AArch64's `fadvise64_64` takes the same.
+    #[cfg(not(target_arch = "arm"))]
     let ret = unsafe {
         syscall::syscall4(
             nr::FADVISE64,
@@ -231,6 +258,20 @@ pub extern "C" fn posix_fadvise(fd: c_int, offset: i64, len: i64, advice: c_int)
             offset as usize,
             len as usize,
             advice as usize,
+        )
+    };
+    // SAFETY: as above. ARMv7-A's form takes the advice second, so that the
+    // two 64-bit arguments start at even registers.
+    #[cfg(target_arch = "arm")]
+    let ret = unsafe {
+        syscall::syscall6(
+            nr::ARM_FADVISE64_64,
+            fd as usize,
+            advice as usize,
+            syscall::low(offset),
+            syscall::high(offset),
+            syscall::low(len),
+            syscall::high(len),
         )
     };
     match errno::decode(ret) {
@@ -244,8 +285,22 @@ pub extern "C" fn posix_fadvise(fd: c_int, offset: i64, len: i64, advice: c_int)
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn posix_fallocate(fd: c_int, offset: i64, len: i64) -> c_int {
     // SAFETY: `fallocate` reads no memory. Mode zero allocates.
+    #[cfg(not(target_arch = "arm"))]
     let ret =
         unsafe { syscall::syscall4(nr::FALLOCATE, fd as usize, 0, offset as usize, len as usize) };
+    // SAFETY: as above, the offset and length in pairs of registers.
+    #[cfg(target_arch = "arm")]
+    let ret = unsafe {
+        syscall::syscall6(
+            nr::FALLOCATE,
+            fd as usize,
+            0,
+            syscall::low(offset),
+            syscall::high(offset),
+            syscall::low(len),
+            syscall::high(len),
+        )
+    };
     match errno::decode(ret) {
         Ok(_) => 0,
         Err(error) => error,

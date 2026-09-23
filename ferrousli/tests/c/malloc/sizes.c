@@ -11,6 +11,10 @@
 #include <stdlib.h>
 #include "check.h"
 
+/* More than malloc gives: 2^46 bytes, or 2^31 on a 32-bit target, which is
+ * over PTRDIFF_MAX there. */
+#define TOO_MUCH ((size_t)1 << (sizeof(size_t) == 8 ? 46 : 31))
+
 #define COUNT 400
 
 static void *ptrs[COUNT];
@@ -88,7 +92,7 @@ int main(void)
 	CHECK(malloc_p(PTRDIFF_MAX) == NULL);
 	CHECK(errno == ENOMEM);
 	errno = 0;
-	CHECK(malloc_p((size_t)1 << 46) == NULL);
+	CHECK(malloc_p(TOO_MUCH) == NULL);
 	CHECK(errno == ENOMEM);
 	return t_status;
 }

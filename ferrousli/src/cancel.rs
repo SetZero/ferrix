@@ -66,7 +66,13 @@ pub struct Cleanup {
     pub next: *mut Cleanup,
 }
 
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(size_of::<Cleanup>() == 24);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(offset_of!(Cleanup, next) == 8);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(size_of::<Cleanup>() == 12);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(Cleanup, next) == 16);
 
 /// Sets the calling thread's cancel state to `new`, one of [`ENABLE`],
@@ -225,8 +231,10 @@ extern "C" fn cancel_now() -> isize {
 
 // The system call at a cancellation point: musl's `__syscall_cp_asm`.
 //
-// `rdi` is the thread's cancel flag, `rsi` the call's number, and the call's
-// six arguments follow in `rdx`, `rcx`, `r8`, `r9` and the two stack slots.
+// The first argument is the thread's cancel flag, the second the call's
+// number, and the call's six arguments follow: on x86-64 in `rdx`, `rcx`,
+// `r8`, `r9` and two stack slots, on AArch64 in x2 to x7, and on ARMv7-A in r2,
+// r3 and four stack slots.
 // Between `__ferrousli_cp_begin` and `__ferrousli_cp_end` the flag has been
 // read and found clear, and the call has not yet returned. A `SIGCANCEL` that
 // lands there, blocked in the call or about to make it, finds its program
@@ -287,11 +295,103 @@ core::arch::global_asm!(
     cancel = sym cancel_now,
 );
 
+#[cfg(target_arch = "aarch64")]
+core::arch::global_asm!(
+    ".pushsection .text.__ferrousli_syscall_cp_asm,\"ax\",@progbits",
+    ".p2align 2",
+    ".hidden __ferrousli_syscall_cp_asm",
+    ".hidden __ferrousli_cp_begin",
+    ".hidden __ferrousli_cp_end",
+    ".hidden __ferrousli_cp_cancel",
+    ".globl __ferrousli_syscall_cp_asm",
+    ".globl __ferrousli_cp_begin",
+    ".globl __ferrousli_cp_end",
+    ".globl __ferrousli_cp_cancel",
+    ".type __ferrousli_syscall_cp_asm, @function",
+    "__ferrousli_syscall_cp_asm:",
+    "__ferrousli_cp_begin:",
+    "ldr w0, [x0]",
+    "cbnz w0, __ferrousli_cp_cancel",
+    "mov x8, x1",
+    "mov x0, x2",
+    "mov x1, x3",
+    "mov x2, x4",
+    "mov x3, x5",
+    "mov x4, x6",
+    "mov x5, x7",
+    "svc #0",
+    "__ferrousli_cp_end:",
+    "ret",
+    "__ferrousli_cp_cancel:",
+    "b {cancel}",
+    ".size __ferrousli_syscall_cp_asm, . - __ferrousli_syscall_cp_asm",
+    ".popsection",
+    cancel = sym cancel_now,
+);
+
+// On ARMv7-A the call's number goes in r7 and its last four arguments in r2
+// to r5, all of them the caller's to keep, so they are saved first.
+#[cfg(target_arch = "arm")]
+core::arch::global_asm!(
+    ".pushsection .text.__ferrousli_syscall_cp_asm,\"ax\",%progbits",
+    ".p2align 2",
+    ".arm",
+    ".hidden __ferrousli_syscall_cp_asm",
+    ".hidden __ferrousli_cp_begin",
+    ".hidden __ferrousli_cp_end",
+    ".hidden __ferrousli_cp_cancel",
+    ".globl __ferrousli_syscall_cp_asm",
+    ".globl __ferrousli_cp_begin",
+    ".globl __ferrousli_cp_end",
+    ".globl __ferrousli_cp_cancel",
+    ".type __ferrousli_syscall_cp_asm, %function",
+    "__ferrousli_syscall_cp_asm:",
+    "mov ip, sp",
+    "push {{r4, r5, r6, r7}}",
+    "__ferrousli_cp_begin:",
+    "ldr r0, [r0]",
+    "cmp r0, #0",
+    "bne __ferrousli_cp_cancel",
+    "mov r7, r1",
+    "mov r0, r2",
+    "mov r1, r3",
+    "ldm ip, {{r2, r3, r4, r5}}",
+    "svc #0",
+    "__ferrousli_cp_end:",
+    "pop {{r4, r5, r6, r7}}",
+    "bx lr",
+    "__ferrousli_cp_cancel:",
+    "pop {{r4, r5, r6, r7}}",
+    "b {cancel}",
+    ".size __ferrousli_syscall_cp_asm, . - __ferrousli_syscall_cp_asm",
+    ".popsection",
+    cancel = sym cancel_now,
+);
+
 /// The offset of the saved program counter, `uc_mcontext.gregs[REG_RIP]`, in
 /// the kernel's `struct ucontext` on x86-64.
-const UC_RIP: usize = 168;
+#[cfg(target_arch = "x86_64")]
+const UC_PC: usize = 168;
 /// The offset of `uc_sigmask` in the kernel's `struct ucontext` on x86-64.
+#[cfg(target_arch = "x86_64")]
 const UC_SIGMASK: usize = 296;
+/// The offset of `uc_mcontext.pc` on AArch64: the mask at 40 is followed by
+/// the rest of a 128-byte reserve, and the 16-aligned `sigcontext` at 176
+/// holds `fault_address`, x0 to x30 and `sp` before it.
+#[cfg(target_arch = "aarch64")]
+const UC_PC: usize = 440;
+/// The offset of `uc_sigmask` on AArch64, after `uc_flags`, `uc_link` and the
+/// 24-byte `uc_stack`.
+#[cfg(target_arch = "aarch64")]
+const UC_SIGMASK: usize = 40;
+/// The offset of `uc_mcontext.arm_pc` on ARMv7-A: the `sigcontext` at 20,
+/// after `uc_flags`, `uc_link` and the 12-byte `uc_stack`, holds `trap_no`,
+/// `error_code`, `oldmask` and r0 to r14 before it.
+#[cfg(target_arch = "arm")]
+const UC_PC: usize = 92;
+/// The offset of `uc_sigmask` on ARMv7-A, after the 84-byte `sigcontext`.
+#[cfg(target_arch = "arm")]
+const UC_SIGMASK: usize = 104;
 
 /// `rt_sigprocmask`'s `SIG_SETMASK`.
 const SIG_SETMASK: usize = 2;
@@ -331,15 +431,17 @@ unsafe extern "C" fn cancel_handler(_sig: c_int, _info: *mut c_void, context: *m
         };
         let _ = cancel_now();
     }
-    let rip_at = context.wrapping_add(UC_RIP).cast::<[u8; 8]>();
+    let pc_at = context
+        .wrapping_add(UC_PC)
+        .cast::<[u8; size_of::<usize>()]>();
     // SAFETY: as above.
-    let pc = usize::from_ne_bytes(unsafe { rip_at.read() });
+    let pc = usize::from_ne_bytes(unsafe { pc_at.read() });
     let begin = (&raw const __ferrousli_cp_begin).addr();
     let end = (&raw const __ferrousli_cp_end).addr();
     if (begin..end).contains(&pc) {
         // SAFETY: as above; the frame resumes at the window's exit, which
         // takes no state from the call it skips.
-        unsafe { rip_at.write((&raw const __ferrousli_cp_cancel).addr().to_ne_bytes()) };
+        unsafe { pc_at.write((&raw const __ferrousli_cp_cancel).addr().to_ne_bytes()) };
         return;
     }
     // SAFETY: `tkill` reads no memory.
@@ -364,7 +466,7 @@ fn install_handler() {
             .addr(),
         flags: (SA_SIGINFO | SA_RESTART | SA_ONSTACK | SA_RESTORER) as c_ulong,
         restorer: sigaction::restorer(),
-        mask: !0,
+        mask: crate::sigset::KernelMask::new(!0),
     };
     // SAFETY: the handler takes `SIGCANCEL` on any thread, and the restorer
     // calls `rt_sigreturn`.

@@ -634,7 +634,7 @@ pub unsafe extern "C" fn fflush_unlocked(stream: *mut File) -> c_int {
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub unsafe extern "C" fn fseek(stream: *mut File, offset: c_long, whence: c_int) -> c_int {
     // SAFETY: the caller passes a live stream.
-    unsafe { fseeko(stream, offset, whence) }
+    unsafe { fseeko(stream, i64::from(offset), whence) }
 }
 
 /// Moves the stream's position to `offset` from the start, the current
@@ -659,7 +659,12 @@ pub unsafe extern "C" fn fseeko(stream: *mut File, offset: i64, whence: c_int) -
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub unsafe extern "C" fn ftell(stream: *mut File) -> c_long {
     // SAFETY: the caller passes a live stream.
-    unsafe { ftello(stream) }
+    let position = unsafe { ftello(stream) };
+    // A position past a 32-bit `long`, on ARMv7-A, is `EOVERFLOW`.
+    c_long::try_from(position).unwrap_or_else(|_| {
+        errno::set(errno::EOVERFLOW);
+        -1
+    })
 }
 
 /// The stream's position, counting buffered input and output, or -1 with

@@ -76,14 +76,19 @@ pub unsafe extern "C" fn write(fd: c_int, buf: *const c_void, count: usize) -> i
 pub unsafe extern "C" fn pread(fd: c_int, buf: *mut c_void, count: usize, offset: i64) -> isize {
     // SAFETY: as in `read`.
     let ret = unsafe {
+        #[cfg(not(target_arch = "arm"))]
+        let offset = (offset as usize, 0, 0);
+        // The offset's pair starts at r4, leaving r3 unused.
+        #[cfg(target_arch = "arm")]
+        let offset = (0, syscall::low(offset), syscall::high(offset));
         crate::cancel::syscall_cp(
             nr::PREAD64,
             fd as usize,
             buf.addr(),
             count,
-            offset as usize,
-            0,
-            0,
+            offset.0,
+            offset.1,
+            offset.2,
         )
     };
     errno::from_syscall(ret)
@@ -99,14 +104,19 @@ pub unsafe extern "C" fn pread(fd: c_int, buf: *mut c_void, count: usize, offset
 pub unsafe extern "C" fn pwrite(fd: c_int, buf: *const c_void, count: usize, offset: i64) -> isize {
     // SAFETY: as in `write`.
     let ret = unsafe {
+        #[cfg(not(target_arch = "arm"))]
+        let offset = (offset as usize, 0, 0);
+        // The offset's pair starts at r4, leaving r3 unused.
+        #[cfg(target_arch = "arm")]
+        let offset = (0, syscall::low(offset), syscall::high(offset));
         crate::cancel::syscall_cp(
             nr::PWRITE64,
             fd as usize,
             buf.addr(),
             count,
-            offset as usize,
-            0,
-            0,
+            offset.0,
+            offset.1,
+            offset.2,
         )
     };
     errno::from_syscall(ret)
@@ -139,10 +149,14 @@ pub extern "C" fn close(fd: c_int) -> c_int {
 /// Moves `fd`'s offset to `offset` from `whence`, and returns the new one.
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn lseek(fd: c_int, offset: i64, whence: c_int) -> i64 {
-    // SAFETY: `lseek` reads no memory.
-    let ret =
-        unsafe { syscall::syscall3(nr::LSEEK, fd as usize, offset as usize, whence as usize) };
-    errno::from_syscall(ret) as i64
+    match syscall::lseek(fd as usize, offset, whence as usize) {
+        error @ -4095..0 => {
+            // The range is an error number, which fits a `c_int`.
+            errno::set(-error as c_int);
+            -1
+        }
+        offset => offset,
+    }
 }
 
 /// Copies `fd` to the lowest free descriptor.
@@ -324,7 +338,19 @@ pub extern "C" fn fdatasync(fd: c_int) -> c_int {
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn ftruncate(fd: c_int, len: i64) -> c_int {
     // SAFETY: `ftruncate` reads no memory.
+    #[cfg(not(target_arch = "arm"))]
     let ret = unsafe { syscall::syscall2(nr::FTRUNCATE, fd as usize, len as usize) };
+    // SAFETY: as above; the length's pair starts at r2, leaving r1 unused.
+    #[cfg(target_arch = "arm")]
+    let ret = unsafe {
+        syscall::syscall4(
+            nr::FTRUNCATE64,
+            fd as usize,
+            0,
+            syscall::low(len),
+            syscall::high(len),
+        )
+    };
     errno::from_syscall(ret) as c_int
 }
 
@@ -336,7 +362,19 @@ pub extern "C" fn ftruncate(fd: c_int, len: i64) -> c_int {
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub unsafe extern "C" fn truncate(path: *const c_char, len: i64) -> c_int {
     // SAFETY: the kernel only reads `path`.
+    #[cfg(not(target_arch = "arm"))]
     let ret = unsafe { syscall::syscall2(nr::TRUNCATE, path.addr(), len as usize) };
+    // SAFETY: as above; the length's pair starts at r2, leaving r1 unused.
+    #[cfg(target_arch = "arm")]
+    let ret = unsafe {
+        syscall::syscall4(
+            nr::TRUNCATE64,
+            path.addr(),
+            0,
+            syscall::low(len),
+            syscall::high(len),
+        )
+    };
     errno::from_syscall(ret) as c_int
 }
 

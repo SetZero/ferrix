@@ -108,7 +108,10 @@ pub struct LongOption {
     pub val: c_int,
 }
 
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(size_of::<LongOption>() == 32);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(size_of::<LongOption>() == 16);
 
 /// A message for standard error, collected and written in one piece where it
 /// fits.
@@ -240,7 +243,7 @@ impl Scan {
         let mut p = self.optstring;
         loop {
             // SAFETY: the loop stops at the NUL.
-            let byte = unsafe { p.read() }.cast_unsigned();
+            let byte = unsafe { p.read() } as u8;
             if byte == 0 {
                 return None;
             }
@@ -299,7 +302,7 @@ unsafe fn initialize(optstring: *const c_char) -> *const c_char {
     NEXT_CHAR.store(null_mut(), Ordering::Relaxed);
     INITIALIZED.store(true, Ordering::Relaxed);
     // SAFETY: the string has at least its NUL.
-    let first = unsafe { optstring.read() }.cast_unsigned();
+    let first = unsafe { optstring.read() } as u8;
     let (mode, rest) = match first {
         b'-' => (RETURN_IN_ORDER, optstring.wrapping_add(1)),
         b'+' => (REQUIRE_ORDER, optstring.wrapping_add(1)),
@@ -483,7 +486,7 @@ unsafe fn advance(
 
     if !longopts.is_null() {
         // SAFETY: the argument starts with `-` and another byte.
-        let second = unsafe { arg.wrapping_add(1).read() }.cast_unsigned();
+        let second = unsafe { arg.wrapping_add(1).read() } as u8;
         if second == b'-' {
             NEXT_CHAR.store(arg.wrapping_add(2), Ordering::Relaxed);
             // SAFETY: as above.
@@ -515,7 +518,7 @@ unsafe fn advance(
 unsafe fn short_option(scan: &Scan, longopts: *const LongOption, longind: *mut c_int) -> c_int {
     let next = NEXT_CHAR.load(Ordering::Relaxed);
     // SAFETY: `NEXT_CHAR` is at a byte of an argument that is not its NUL.
-    let c = unsafe { next.read() }.cast_unsigned();
+    let c = unsafe { next.read() } as u8;
     let next = next.wrapping_add(1);
     NEXT_CHAR.store(next, Ordering::Relaxed);
     // SAFETY: `next` is at most the argument's NUL.
@@ -540,7 +543,7 @@ unsafe fn short_option(scan: &Scan, longopts: *const LongOption, longind: *mut c
         return c_int::from(b'?');
     };
     // SAFETY: `spec` is at a byte of the option string that is not its NUL.
-    let spec1 = unsafe { spec.wrapping_add(1).read() }.cast_unsigned();
+    let spec1 = unsafe { spec.wrapping_add(1).read() } as u8;
 
     if c == b'W' && spec1 == b';' && !longopts.is_null() {
         let word = if !at_end {

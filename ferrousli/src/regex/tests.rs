@@ -478,7 +478,7 @@ fn nosub_and_short_match_arrays_are_honoured() {
 
 #[test]
 fn regerror_gives_musls_messages_and_the_room_they_need() {
-    let mut buf = [0i8; 64];
+    let mut buf = [0 as c_char; 64];
     // SAFETY: the buffer holds 64 bytes.
     let n = unsafe { regerror(REG_BADBR, core::ptr::null(), buf.as_mut_ptr(), buf.len()) };
     // SAFETY: `regerror` NUL-terminated it.
@@ -487,7 +487,7 @@ fn regerror_gives_musls_messages_and_the_room_they_need() {
     assert_eq!(n, text.to_bytes().len() + 1);
 
     // A short buffer is cut, and the whole size is still returned.
-    let mut small = [0i8; 5];
+    let mut small = [0 as c_char; 5];
     // SAFETY: the buffer holds five bytes.
     let n = unsafe { regerror(REG_NOMATCH, core::ptr::null(), small.as_mut_ptr(), 5) };
     // SAFETY: `regerror` NUL-terminated it.
@@ -511,7 +511,7 @@ fn regerror_gives_musls_messages_and_the_room_they_need() {
         (999, "Unknown error"),
         (-1, "Unknown error"),
     ] {
-        let mut buf = [0i8; 64];
+        let mut buf = [0 as c_char; 64];
         // SAFETY: the buffer holds 64 bytes.
         let _ = unsafe { regerror(code, core::ptr::null(), buf.as_mut_ptr(), buf.len()) };
         // SAFETY: `regerror` NUL-terminated it.
@@ -577,8 +577,16 @@ fn a_pattern_that_is_freed_can_be_compiled_again() {
 #[test]
 fn the_layouts_are_glibcs() {
     // What a program compiled against glibc's `regex.h` reads and allocates.
-    assert_eq!(size_of::<Regex>(), 64);
-    assert_eq!(offset_of!(Regex, re_nsub), 48);
+    #[cfg(target_pointer_width = "64")]
+    {
+        assert_eq!(size_of::<Regex>(), 64);
+        assert_eq!(offset_of!(Regex, re_nsub), 48);
+    }
+    #[cfg(target_pointer_width = "32")]
+    {
+        assert_eq!(size_of::<Regex>(), 32);
+        assert_eq!(offset_of!(Regex, re_nsub), 24);
+    }
     assert_eq!(size_of::<RegMatch>(), 8);
 }
 

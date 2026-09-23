@@ -9,9 +9,11 @@
  * here as a wrong answer or a fault, and nowhere in the Rust unit tests,
  * which call the Rust bodies directly.
  *
- * Every value below is exact: each function either moves bits about or is one
- * x87 instruction that rounds correctly, so the answers are what the standard
- * says and not a library's choice. Calls go through volatile pointers, so the
+ * Every value below is exact: each function either moves bits about or
+ * rounds correctly, so the answers are what the standard says and not a
+ * library's choice. The type is the x87's on x86-64, binary128 on AArch64,
+ * where the shims move values between vector and general registers, and a
+ * double on ARMv7-A; the constants that differ come from <float.h>. Calls go through volatile pointers, so the
  * compiler can neither fold them nor use its own code.
  */
 
@@ -54,10 +56,11 @@ static double (*volatile nexttoward_p)(double, long double) = nexttoward;
 static float (*volatile nexttowardf_p)(float, long double) = nexttowardf;
 static long double (*volatile nanl_p)(const char *) = nanl;
 
-/* The same ten bytes, which tells -0 from 0 and one NaN from another. */
+/* The same bytes -- the x87 format's ten, or all of them -- which tells -0
+   from 0 and one NaN from another. */
 static int same(long double a, long double b)
 {
-	return memcmp(&a, &b, 10) == 0;
+	return memcmp(&a, &b, LDBL_MANT_DIG == 64 ? 10 : sizeof a) == 0;
 }
 
 int main(void)
@@ -65,10 +68,8 @@ int main(void)
 	int e;
 	long double integral;
 
-	/* The type this is written for: anything else and the constants
-	 * below are not the values they are named as. */
-	CHECK(LDBL_MANT_DIG == 64);
-	CHECK(LDBL_MAX_EXP == 16384);
+	/* The types this is written for: the x87's, binary128 and double. */
+	CHECK(LDBL_MANT_DIG == 64 || LDBL_MANT_DIG == 113 || LDBL_MANT_DIG == 53);
 
 	/* Signs, taken and given. */
 	CHECK(same(fabsl_p(-2.5L), 2.5L));
@@ -88,7 +89,7 @@ int main(void)
 	CHECK(same(fdiml_p(2.0L, 5.0L), 0.0L));
 	CHECK(isnan(fdiml_p(NAN, 1.0L)));
 
-	/* One x87 instruction each, correctly rounded. */
+	/* Correctly rounded, and exact here. */
 	CHECK(same(sqrtl_p(0x1p+8L), 16.0L));
 	CHECK(same(sqrtl_p(-0.0L), -0.0L));
 	CHECK(isnan(sqrtl_p(-1.0L)));
@@ -168,14 +169,14 @@ int main(void)
 	CHECK(same(frexpl_p(-0.0L, &e), -0.0L));
 	CHECK(e == 0);
 	/* The smallest subnormal, which frexpl reaches by scaling. */
-	CHECK(same(frexpl_p(0x1p-16445L, &e), 0.5L));
-	CHECK(e == -16444);
+	CHECK(same(frexpl_p(LDBL_TRUE_MIN, &e), 0.5L));
+	CHECK(e == LDBL_MIN_EXP - LDBL_MANT_DIG + 1);
 	CHECK(isnan(frexpl_p(NAN, &e)));
 
 	CHECK(ilogbl_p(3.0L) == 1);
 	CHECK(ilogbl_p(1.0L) == 0);
 	CHECK(ilogbl_p(0.5L) == -1);
-	CHECK(ilogbl_p(0x1p-16445L) == -16445);
+	CHECK(ilogbl_p(LDBL_TRUE_MIN) == LDBL_MIN_EXP - LDBL_MANT_DIG);
 	CHECK(ilogbl_p(0.0L) == FP_ILOGB0);
 	CHECK(ilogbl_p(INFINITY) == INT_MAX);
 	CHECK(same(logbl_p(3.0L), 1.0L));
@@ -195,7 +196,7 @@ int main(void)
 	/* One step to the next value the type can hold. */
 	CHECK(same(nextafterl_p(1.0L, 2.0L), 1.0L + LDBL_EPSILON));
 	CHECK(same(nextafterl_p(nextafterl_p(1.0L, 2.0L), 0.0L), 1.0L));
-	CHECK(same(nextafterl_p(0.0L, -1.0L), -0x1p-16445L));
+	CHECK(same(nextafterl_p(0.0L, -1.0L), -LDBL_TRUE_MIN));
 	CHECK(same(nextafterl_p(1.0L, 1.0L), 1.0L));
 	CHECK(same(nexttowardl_p(1.0L, 2.0L), 1.0L + LDBL_EPSILON));
 	CHECK(isnan(nextafterl_p(NAN, 1.0L)));

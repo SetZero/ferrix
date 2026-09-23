@@ -10,6 +10,7 @@
 
 #define _GNU_SOURCE
 #include <errno.h>
+#include <limits.h>
 #include <fcntl.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -57,10 +58,15 @@ int main(void)
 	tv.tv_sec = 2;
 	tv.tv_usec = 500000;
 	CHECK(setsockopt(pair[0], SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv) == 0);
+#if !defined(FERROUSLI_TEST_EMULATED) || LONG_MAX > 0x7fffffff
+	/* User-mode QEMU refuses to set a 32-bit target's SO_RCVTIMEO_NEW, so
+	 * the old option is set in its place, but "reads" the new one as a
+	 * zero int. */
 	memset(&tv, 0, sizeof tv);
 	len = sizeof tv;
 	CHECK(getsockopt(pair[0], SOL_SOCKET, SO_RCVTIMEO, &tv, &len) == 0);
 	CHECK(tv.tv_sec == 2 && tv.tv_usec == 500000);
+#endif
 
 	/* Shutting down writing: the other end reads the end of the stream. */
 	CHECK(shutdown(pair[0], SHUT_WR) == 0);
@@ -74,7 +80,10 @@ int main(void)
 
 	/* Errors come back through errno. */
 	errno = 0;
+#ifndef FERROUSLI_TEST_EMULATED
+	/* qemu-user passes an unknown type on in a form the kernel accepts. */
 	CHECK(socket(AF_UNIX, 12345, 0) == -1 && errno == EINVAL);
+#endif
 	errno = 0;
 	CHECK(listen(-1, 1) == -1 && errno == EBADF);
 	return t_status;

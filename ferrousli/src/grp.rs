@@ -41,7 +41,13 @@ pub struct Group {
     pub gr_mem: *mut *mut c_char,
 }
 
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(size_of::<Group>() == 32);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(offset_of!(Group, gr_mem) == 12);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(size_of::<Group>() == 16);
+#[cfg(target_pointer_width = "64")]
 const _: () = assert!(offset_of!(Group, gr_mem) == 24);
 
 impl Group {

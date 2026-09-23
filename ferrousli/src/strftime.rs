@@ -161,7 +161,7 @@ fn conversion<'a>(conv: u8, tm: &Tm, pad: u8, buf: &'a mut [u8; PIECE]) -> Optio
         b'R' => return composite(b"%H:%M", tm, buf),
         b's' => {
             width = 1;
-            tm::tm_to_secs(tm).wrapping_sub(tm.tm_gmtoff)
+            tm::tm_to_secs(tm).wrapping_sub(i64::from(tm.tm_gmtoff))
         }
         b'S' => i64::from(tm.tm_sec),
         b't' => return Some(b"\t"),
@@ -210,7 +210,8 @@ fn conversion<'a>(conv: u8, tm: &Tm, pad: u8, buf: &'a mut [u8; PIECE]) -> Optio
             if tm.tm_isdst < 0 {
                 return Some(b"");
             }
-            let hhmm = tm.tm_gmtoff / 3600 * 100 + tm.tm_gmtoff % 3600 / 60;
+            let offset = i64::from(tm.tm_gmtoff);
+            let hhmm = offset / 3600 * 100 + offset % 3600 / 60;
             let len = {
                 let mut text = Cursor::new(buf);
                 text.number(

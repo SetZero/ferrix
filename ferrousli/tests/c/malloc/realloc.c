@@ -10,6 +10,10 @@
 #include <stdlib.h>
 #include "check.h"
 
+/* More than malloc gives: 2^46 bytes, or 2^31 on a 32-bit target, which is
+ * over PTRDIFF_MAX there. */
+#define TOO_MUCH ((size_t)1 << (sizeof(size_t) == 8 ? 46 : 31))
+
 static unsigned char pattern(size_t at)
 {
 	return (unsigned char)(at * 7 + (at >> 8) * 13 + 1);
@@ -102,7 +106,7 @@ int main(void)
 	p = realloc_p(p, 1 << 20);
 	CHECK(p != NULL);
 	errno = 0;
-	CHECK(realloc_p(p, (size_t)1 << 46) == NULL);
+	CHECK(realloc_p(p, TOO_MUCH) == NULL);
 	CHECK(errno == ENOMEM);
 	CHECK(damage(p, 50) == 0);
 	free(p);

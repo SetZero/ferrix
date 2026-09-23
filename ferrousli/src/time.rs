@@ -37,8 +37,17 @@ pub struct Timeval {
     /// Whole seconds, C's `time_t`.
     pub tv_sec: i64,
     /// Microseconds, C's `suseconds_t`.
-    pub tv_usec: c_long,
+    pub tv_usec: Suseconds,
 }
+
+/// C's `suseconds_t`: a `long`, but 64 bits on ARMv7-A, where `time_t` is
+/// too, as musl and glibc's 64-bit-time ABI both make it.
+#[cfg(not(target_arch = "arm"))]
+pub type Suseconds = c_long;
+/// C's `suseconds_t`: a `long`, but 64 bits on ARMv7-A, where `time_t` is
+/// too, as musl and glibc's 64-bit-time ABI both make it.
+#[cfg(target_arch = "arm")]
+pub type Suseconds = i64;
 
 const _: () = assert!(size_of::<Timeval>() == 16);
 const _: () = assert!(offset_of!(Timeval, tv_usec) == 8);
@@ -129,7 +138,8 @@ pub unsafe extern "C" fn time(t: *mut i64) -> i64 {
 const fn timeval_of(ts: Timespec) -> Timeval {
     Timeval {
         tv_sec: ts.tv_sec,
-        tv_usec: ts.tv_nsec / 1000,
+        // Widening: `suseconds_t` is at least as wide as `long`.
+        tv_usec: (ts.tv_nsec / 1000) as Suseconds,
     }
 }
 
@@ -236,7 +246,8 @@ pub extern "C" fn sleep(seconds: c_uint) -> c_uint {
 pub extern "C" fn usleep(useconds: c_uint) -> c_int {
     let ts = Timespec {
         tv_sec: i64::from(useconds / 1_000_000),
-        tv_nsec: c_long::from(useconds % 1_000_000) * 1000,
+        // Below a second: it fits a `long`.
+        tv_nsec: (useconds % 1_000_000 * 1000) as c_long,
     };
     // SAFETY: `ts` is a live local, and no remainder is asked for.
     unsafe { nanosleep(&raw const ts, core::ptr::null_mut()) }
@@ -279,16 +290,84 @@ pub extern "C" fn alarm(seconds: c_uint) -> c_uint {
         },
     };
     let mut old = Itimerval::default();
-    // SAFETY: the kernel reads `new` and writes `old`, both live locals.
-    let _ = unsafe {
-        syscall::syscall3(
-            nr::SETITIMER,
-            ITIMER_REAL,
-            (&raw const new).addr(),
-            (&raw mut old).addr(),
-        )
-    };
+    // SAFETY: `new` and `old` are live locals.
+    let _ = unsafe { kernel_setitimer(ITIMER_REAL as c_int, &raw const new, &raw mut old) };
     alarm_seconds(old.value)
+}
+
+/// The kernel's `struct __kernel_old_itimerval` on ARMv7-A: four 32-bit
+/// `long`s, where C's `struct itimerval` has 64-bit seconds.
+#[cfg(target_arch = "arm")]
+type KernelItimerval = [c_long; 4];
+
+/// `setitimer`'s system call, with C's structures: the kernel's value. On
+/// ARMv7-A the kernel's structure is converted both ways, and a time whose
+/// seconds do not fit 32 bits is `ENOTSUP`, as musl has it.
+///
+/// # Safety
+///
+/// `new` must be valid for a read of a `struct itimerval`, and `old` null or
+/// valid for a write of one.
+pub(crate) unsafe fn kernel_setitimer(
+    which: c_int,
+    new: *const Itimerval,
+    old: *mut Itimerval,
+) -> isize {
+    #[cfg(target_arch = "arm")]
+    {
+        // SAFETY: the caller vouches for `new`.
+        let value = unsafe { new.read() };
+        let (Ok(is), Ok(vs)) = (
+            c_long::try_from(value.interval.tv_sec),
+            c_long::try_from(value.value.tv_sec),
+        ) else {
+            return -(errno::ENOTSUP as isize);
+        };
+        // Microseconds below a second fit a `long`.
+        let narrow: KernelItimerval = [
+            is,
+            value.interval.tv_usec as c_long,
+            vs,
+            value.value.tv_usec as c_long,
+        ];
+        let mut before: KernelItimerval = [0; 4];
+        // SAFETY: the kernel reads `narrow` and writes `before`, live locals.
+        let ret = unsafe {
+            syscall::syscall3(
+                nr::SETITIMER,
+                which as usize,
+                (&raw const narrow).addr(),
+                (&raw mut before).addr(),
+            )
+        };
+        if ret == 0 && !old.is_null() {
+            // SAFETY: the caller vouches for a non-null `old`.
+            unsafe { old.write(itimerval_of(before)) };
+        }
+        ret
+    }
+    #[cfg(not(target_arch = "arm"))]
+    // SAFETY: the kernel reads `new` and writes `old`, which the caller
+    // vouches for.
+    unsafe {
+        syscall::syscall3(nr::SETITIMER, which as usize, new.addr(), old.addr())
+    }
+}
+
+/// C's form of the kernel's 32-bit `itimerval`.
+#[cfg(target_arch = "arm")]
+fn itimerval_of(k: KernelItimerval) -> Itimerval {
+    let [is, iu, vs, vu] = k.map(i64::from);
+    Itimerval {
+        interval: Timeval {
+            tv_sec: is,
+            tv_usec: iu,
+        },
+        value: Timeval {
+            tv_sec: vs,
+            tv_usec: vu,
+        },
+    }
 }
 
 /// A timeout as the kernel's `ppoll` and `pselect6` take it, which they may
@@ -320,7 +399,8 @@ pub fn timeout_address(copy: &mut Option<Timespec>) -> usize {
 pub const fn split(value: i64, per_second: i64, scale: c_long) -> Timespec {
     Timespec {
         tv_sec: value / per_second,
-        tv_nsec: (value % per_second) * scale,
+        // Below a second: it fits a `long`.
+        tv_nsec: ((value % per_second) * scale as i64) as c_long,
     }
 }
 
@@ -342,9 +422,8 @@ pub unsafe extern "C" fn setitimer(
     new: *const Itimerval,
     old: *mut Itimerval,
 ) -> c_int {
-    // SAFETY: the kernel reads `new` and writes `old`, which the caller vouches
-    // for.
-    let ret = unsafe { syscall::syscall3(nr::SETITIMER, which as usize, new.addr(), old.addr()) };
+    // SAFETY: the caller's contract is `kernel_setitimer`'s.
+    let ret = unsafe { kernel_setitimer(which, new, old) };
     errno::from_syscall(ret) as c_int
 }
 
@@ -356,7 +435,20 @@ pub unsafe extern "C" fn setitimer(
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub unsafe extern "C" fn getitimer(which: c_int, value: *mut Itimerval) -> c_int {
     // SAFETY: the kernel writes `value`, which the caller vouches for.
+    #[cfg(not(target_arch = "arm"))]
     let ret = unsafe { syscall::syscall2(nr::GETITIMER, which as usize, value.addr()) };
+    #[cfg(target_arch = "arm")]
+    let ret = {
+        let mut narrow: KernelItimerval = [0; 4];
+        // SAFETY: the kernel writes `narrow`, a live local.
+        let ret =
+            unsafe { syscall::syscall2(nr::GETITIMER, which as usize, (&raw mut narrow).addr()) };
+        if ret == 0 {
+            // SAFETY: the caller vouches for `value`.
+            unsafe { value.write(itimerval_of(narrow)) };
+        }
+        ret
+    };
     errno::from_syscall(ret) as c_int
 }
 
@@ -380,7 +472,8 @@ pub unsafe extern "C" fn settimeofday(tv: *const Timeval, _tz: *const c_void) ->
     }
     let ts = Timespec {
         tv_sec: tv.tv_sec,
-        tv_nsec: tv.tv_usec * 1000,
+        // Below a second, checked above: it fits a `long`.
+        tv_nsec: (tv.tv_usec * 1000) as c_long,
     };
     // SAFETY: `ts` is a live local.
     unsafe { clock_settime(CLOCK_REALTIME, &raw const ts) }
@@ -393,11 +486,155 @@ pub unsafe extern "C" fn settimeofday(tv: *const Timeval, _tz: *const c_void) ->
 ///
 /// `tx` must be valid for a read and a write of a `struct timex`, whose layout
 /// on x86-64 is the kernel's.
+#[cfg(not(target_arch = "arm"))]
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub unsafe extern "C" fn clock_adjtime(clock: c_int, tx: *mut c_void) -> c_int {
     // SAFETY: the kernel reads and writes `*tx`, which the caller vouches for.
     let ret = unsafe { syscall::syscall2(nr::CLOCK_ADJTIME, clock as usize, tx.addr()) };
     errno::from_syscall(ret) as c_int
+}
+
+/// C's `struct timex` on ARMv7-A, as musl's `sys/timex.h` declares it: `long`s
+/// of 32 bits and a `struct timeval` of a 64-bit `time_t`.
+#[cfg(target_arch = "arm")]
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+struct Timex {
+    modes: c_uint,
+    offset: c_long,
+    freq: c_long,
+    maxerror: c_long,
+    esterror: c_long,
+    status: c_int,
+    constant: c_long,
+    precision: c_long,
+    tolerance: c_long,
+    time: Timeval,
+    tick: c_long,
+    ppsfreq: c_long,
+    jitter: c_long,
+    shift: c_int,
+    stabil: c_long,
+    jitcnt: c_long,
+    calcnt: c_long,
+    errcnt: c_long,
+    stbcnt: c_long,
+    tai: c_int,
+    padding: [c_int; 11],
+}
+
+/// The kernel's `struct __kernel_timex`, which `clock_adjtime64` takes on
+/// ARMv7-A: every field 64 bits, with padding after each `int`.
+#[cfg(target_arch = "arm")]
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+struct KernelTimex {
+    modes: u32,
+    pad0: u32,
+    offset: i64,
+    freq: i64,
+    maxerror: i64,
+    esterror: i64,
+    status: i32,
+    pad1: u32,
+    constant: i64,
+    precision: i64,
+    tolerance: i64,
+    time_sec: i64,
+    time_usec: i64,
+    tick: i64,
+    ppsfreq: i64,
+    jitter: i64,
+    shift: i32,
+    pad2: u32,
+    stabil: i64,
+    jitcnt: i64,
+    calcnt: i64,
+    errcnt: i64,
+    stbcnt: i64,
+    tai: i32,
+    pad3: [u32; 11],
+}
+
+#[cfg(target_arch = "arm")]
+const _: () = assert!(size_of::<Timex>() == 144);
+#[cfg(target_arch = "arm")]
+const _: () = assert!(size_of::<KernelTimex>() == 208);
+
+/// Reads clock `clock`'s discipline into `*tx`, adjusting it first as the
+/// modes in `*tx` ask, and returns the clock's state. On ARMv7-A the kernel's
+/// structure is wider than C's, and every field is copied across and back,
+/// as musl does.
+///
+/// # Safety
+///
+/// `tx` must be valid for a read and a write of a `struct timex`.
+#[cfg(target_arch = "arm")]
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn clock_adjtime(clock: c_int, tx: *mut c_void) -> c_int {
+    let tx = tx.cast::<Timex>();
+    // SAFETY: the caller vouches for `*tx`.
+    let c = unsafe { tx.read() };
+    let mut k = KernelTimex {
+        modes: c.modes,
+        offset: i64::from(c.offset),
+        freq: i64::from(c.freq),
+        maxerror: i64::from(c.maxerror),
+        esterror: i64::from(c.esterror),
+        status: c.status,
+        constant: i64::from(c.constant),
+        precision: i64::from(c.precision),
+        tolerance: i64::from(c.tolerance),
+        time_sec: c.time.tv_sec,
+        time_usec: c.time.tv_usec,
+        tick: i64::from(c.tick),
+        ppsfreq: i64::from(c.ppsfreq),
+        jitter: i64::from(c.jitter),
+        shift: c.shift,
+        stabil: i64::from(c.stabil),
+        jitcnt: i64::from(c.jitcnt),
+        calcnt: i64::from(c.calcnt),
+        errcnt: i64::from(c.errcnt),
+        stbcnt: i64::from(c.stbcnt),
+        tai: c.tai,
+        ..KernelTimex::default()
+    };
+    // SAFETY: the kernel reads and writes `k`, a live local.
+    let ret =
+        unsafe { syscall::syscall2(nr::CLOCK_ADJTIME64, clock as usize, (&raw mut k).addr()) };
+    if ret < 0 {
+        return errno::from_syscall(ret) as c_int;
+    }
+    // The kernel's values are its own clock's, which fit C's `long`s.
+    let back = Timex {
+        modes: k.modes,
+        offset: k.offset as c_long,
+        freq: k.freq as c_long,
+        maxerror: k.maxerror as c_long,
+        esterror: k.esterror as c_long,
+        status: k.status,
+        constant: k.constant as c_long,
+        precision: k.precision as c_long,
+        tolerance: k.tolerance as c_long,
+        time: Timeval {
+            tv_sec: k.time_sec,
+            tv_usec: k.time_usec,
+        },
+        tick: k.tick as c_long,
+        ppsfreq: k.ppsfreq as c_long,
+        jitter: k.jitter as c_long,
+        shift: k.shift,
+        stabil: k.stabil as c_long,
+        jitcnt: k.jitcnt as c_long,
+        calcnt: k.calcnt as c_long,
+        errcnt: k.errcnt as c_long,
+        stbcnt: k.stbcnt as c_long,
+        tai: k.tai,
+        padding: c.padding,
+    };
+    // SAFETY: as above.
+    unsafe { tx.write(back) };
+    ret as c_int
 }
 
 /// `clock_adjtime` on the real-time clock.
