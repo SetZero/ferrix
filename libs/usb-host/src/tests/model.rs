@@ -49,6 +49,14 @@ pub(super) struct Device {
     control_in: Vec<u8>,
     /// Refuse `SET_PROTOCOL` with a stall.
     pub(super) stall_protocol: bool,
+    /// Each interface's report descriptor.
+    pub(super) report_descriptors: Vec<Vec<u8>>,
+    /// Refuse `GET_DESCRIPTOR` of a report descriptor with a stall.
+    pub(super) stall_report_descriptor: bool,
+    /// The interface a `SET_REPORT` just announced, until its data comes.
+    expect_output: Option<(u8, u16)>,
+    /// Every output report received: the interface, `wValue`, the bytes.
+    pub(super) outputs: Vec<(u8, u16, Vec<u8>)>,
     /// Every SETUP it received, for the tests.
     pub(super) setups: Vec<[u8; 8]>,
 }
@@ -393,6 +401,9 @@ impl Model {
             (0, 0) => {
                 if total == 0 {
                     self.status_done(device);
+                } else if let Some((interface, value)) = self.devices[device].expect_output.take() {
+                    let bytes = (0..total as u32).map(|i| self.read8(buffer + i)).collect();
+                    self.devices[device].outputs.push((interface, value, bytes));
                 }
                 Ok(total)
             }
@@ -585,6 +596,19 @@ impl Model {
                 Vec::new()
             }
             (0x21, 0x0A) => Vec::new(),
+            (0x21, 0x09) => {
+                dev.expect_output = Some((index as u8, value));
+                Vec::new()
+            }
+            (0x81, 6) if value == 0x2200 => {
+                if dev.stall_report_descriptor {
+                    return Err(());
+                }
+                dev.report_descriptors
+                    .get(usize::from(index))
+                    .ok_or(())?
+                    .clone()
+            }
             (0xA0, 6) if value >> 8 == 0x29 => {
                 let ports = dev.hub.as_ref().ok_or(())?.len() as u8;
                 vec![9, 0x29, ports, 0xE9, 0, 50, 100, 0, 0xFF]
@@ -805,11 +829,12 @@ fn device_descriptor(
 
 /// A configuration of HID interfaces: `(protocol, subclass, endpoint,
 /// packet)` each.
-fn hid_configuration(interfaces: &[(u8, u8, u8, u16)]) -> Vec<u8> {
+fn hid_configuration(interfaces: &[(u8, u8, u8, u16, &[u8])]) -> Vec<u8> {
     let mut bytes = vec![9, 2, 0, 0, interfaces.len() as u8, 1, 0, 0xA0, 49];
-    for (number, &(protocol, subclass, endpoint, packet)) in interfaces.iter().enumerate() {
+    for (number, &(protocol, subclass, endpoint, packet, report)) in interfaces.iter().enumerate() {
         bytes.extend_from_slice(&[9, 4, number as u8, 0, 1, 3, subclass, protocol, 0]);
-        bytes.extend_from_slice(&[9, 0x21, 0x11, 0x01, 0, 1, 0x22, 63, 0]);
+        let length = (report.len() as u16).to_le_bytes();
+        bytes.extend_from_slice(&[9, 0x21, 0x11, 0x01, 0, 1, 0x22, length[0], length[1]]);
         let size = packet.to_le_bytes();
         bytes.extend_from_slice(&[7, 5, 0x80 | endpoint, 3, size[0], size[1], 1]);
     }
@@ -840,6 +865,10 @@ fn device(
         reports: Vec::new(),
         control_in: Vec::new(),
         stall_protocol: false,
+        report_descriptors: Vec::new(),
+        stall_report_descriptor: false,
+        expect_output: None,
+        outputs: Vec::new(),
         setups: Vec::new(),
     }
 }
@@ -862,23 +891,63 @@ pub(super) fn usb2514b() -> Device {
 /// The Logitech G502, at full speed: a boot mouse and a second HID
 /// interface.
 pub(super) fn g502() -> Device {
-    device(
+    let mut mouse = device(
         Speed::Full,
         device_descriptor(0, 64, 0x046D, 0xC08B, 0x7400),
-        hid_configuration(&[(2, 1, 1, 8), (0, 0, 2, 20)]),
+        hid_configuration(&[(2, 1, 1, 8, &G502_MOUSE), (0, 0, 2, 20, &G502_KEYS)]),
         &[(1, "Logitech"), (2, "G502 HERO Gaming Mouse")],
-    )
+    );
+    mouse.report_descriptors = vec![G502_MOUSE.to_vec(), G502_KEYS.to_vec()];
+    mouse
 }
+
+/// A gaming mouse's first interface in the report protocol: sixteen
+/// buttons, sixteen-bit X and Y, the wheel, and `AC Pan`: eight bytes, no
+/// report IDs.
+pub(super) const G502_MOUSE: [u8; 67] = [
+    0x05, 0x01, 0x09, 0x02, 0xA1, 0x01, 0x09, 0x01, 0xA1, 0x00, //
+    0x05, 0x09, 0x19, 0x01, 0x29, 0x10, 0x15, 0x00, 0x25, 0x01, 0x95, 0x10, 0x75, 0x01, 0x81,
+    0x02, //
+    0x05, 0x01, 0x16, 0x01, 0x80, 0x26, 0xFF, 0x7F, 0x75, 0x10, 0x95, 0x02, 0x09, 0x30, 0x09, 0x31,
+    0x81, 0x06, //
+    0x15, 0x81, 0x25, 0x7F, 0x75, 0x08, 0x95, 0x01, 0x09, 0x38, 0x81, 0x06, //
+    0x05, 0x0C, 0x0A, 0x38, 0x02, 0x95, 0x01, 0x81, 0x06, //
+    0xC0, 0xC0,
+];
+
+/// Its second: macro keys as a keyboard (report 1), media keys (report 3)
+/// and a vendor report (0x10) nothing maps.
+pub(super) const G502_KEYS: [u8; 89] = [
+    0x05, 0x01, 0x09, 0x06, 0xA1, 0x01, 0x85, 0x01, 0x05, 0x07, 0x19, 0xE0, 0x29, 0xE7, 0x15, 0x00,
+    0x25, 0x01, 0x75, 0x01, 0x95, 0x08, 0x81, 0x02, 0x95, 0x06, 0x75, 0x08, 0x15, 0x00, 0x26, 0xFF,
+    0x00, 0x19, 0x00, 0x2A, 0xFF, 0x00, 0x81, 0x00, 0xC0, //
+    0x05, 0x0C, 0x09, 0x01, 0xA1, 0x01, 0x85, 0x03, 0x15, 0x00, 0x26, 0xFF, 0x03, 0x19, 0x00, 0x2A,
+    0xFF, 0x03, 0x75, 0x10, 0x95, 0x01, 0x81, 0x00, 0xC0, //
+    0x06, 0x00, 0xFF, 0x09, 0x01, 0xA1, 0x01, 0x85, 0x10, 0x75, 0x08, 0x95, 0x06, 0x15, 0x00, 0x26,
+    0xFF, 0x00, 0x09, 0x01, 0x81, 0x00, 0xC0,
+];
+
+/// A keyboard's second interface: media keys (report 1) and power, sleep
+/// and wake (report 2).
+pub(super) const MEDIA_KEYS: [u8; 52] = [
+    0x05, 0x0C, 0x09, 0x01, 0xA1, 0x01, 0x85, 0x01, 0x15, 0x00, 0x26, 0xFF, 0x03, 0x19, 0x00, 0x2A,
+    0xFF, 0x03, 0x75, 0x10, 0x95, 0x01, 0x81, 0x00, 0xC0, //
+    0x05, 0x01, 0x09, 0x80, 0xA1, 0x01, 0x85, 0x02, 0x19, 0x81, 0x29, 0x83, 0x15, 0x00, 0x25, 0x01,
+    0x75, 0x01, 0x95, 0x03, 0x81, 0x02, 0x95, 0x05, 0x81, 0x01, 0xC0,
+];
 
 /// The SEM keyboard, at low speed: a boot keyboard and a second HID
 /// interface.
 pub(super) fn sem_keyboard() -> Device {
-    device(
+    let boot = crate::hid::BOOT_KEYBOARD;
+    let mut keyboard = device(
         Speed::Low,
         device_descriptor(0, 8, 0x1A2C, 0x2124, 0x0116),
-        hid_configuration(&[(1, 1, 1, 8), (0, 0, 2, 8)]),
+        hid_configuration(&[(1, 1, 1, 8, &boot), (0, 0, 2, 8, &MEDIA_KEYS)]),
         &[(1, "SEM"), (2, "USB Keyboard  ")],
-    )
+    );
+    keyboard.report_descriptors = vec![boot.to_vec(), MEDIA_KEYS.to_vec()];
+    keyboard
 }
 
 /// The board: the hub on root port 0, the mouse on its port 1 and the

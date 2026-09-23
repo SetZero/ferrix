@@ -1,13 +1,14 @@
 //! The bus against the model of a DK board: the hub, a full-speed mouse and
-//! a low-speed keyboard behind it.
+//! a low-speed keyboard behind it, each with a second HID interface.
 
 use std::vec;
 use std::vec::Vec;
 
-use ferrix_inputctl::message::{Events, Message, PORT_RIGHTS, RawEvent};
+use ferrix_inputctl::message::{Events, Hello, Message, PORT_RIGHTS, RawEvent, bit};
 use ferrix_inputctl::session::Session;
 use ferrix_linux_abi::input::{
-    BTN_LEFT, BTN_RIGHT, BUS_USB, EV_KEY, EV_REL, EV_SYN, REL_WHEEL, REL_X, REL_Y, SYN_REPORT,
+    BTN_LEFT, BTN_RIGHT, BUS_USB, EV_KEY, EV_LED, EV_REL, EV_SYN, LED_CAPSL, LED_NUML, REL_HWHEEL,
+    REL_WHEEL, REL_X, REL_Y, SYN_REPORT,
 };
 use ferrix_native_abi::types::DEVICE_NOT_PCI;
 
@@ -21,8 +22,27 @@ type TestBus = Bus<Regs, Memory, Time>;
 
 const KEY_A: u16 = 30;
 const KEY_B: u16 = 48;
+const KEY_F1: u16 = 59;
 const KEY_LEFTSHIFT: u16 = 42;
 const KEY_LEFTCTRL: u16 = 29;
+const KEY_VOLUMEUP: u16 = 115;
+const KEY_SLEEP: u16 = 142;
+/// The sixth mouse button, `BTN_FORWARD`, and the sixteenth.
+const BTN_FORWARD: u16 = 0x115;
+const BTN_SIXTEENTH: u16 = 0x11F;
+
+const KEYBOARD: &[u8] = b"SEM USB Keyboard";
+const MEDIA: &[u8] = b"SEM USB Keyboard Consumer Control";
+const MOUSE: &[u8] = b"Logitech G502 HERO Gaming Mouse";
+const MACROS: &[u8] = b"Logitech G502 HERO Gaming Mouse Keyboard";
+
+/// What the bus handed on, with an [`Output::Events`]'s events.
+#[derive(Clone, PartialEq, Eq, Debug)]
+enum Got {
+    Attached(usize),
+    Events(usize, Vec<RawEvent>),
+    Detached(usize),
+}
 
 fn parts(model: &Shared) -> Parts<Regs, Memory, Time> {
     Parts {
@@ -38,15 +58,33 @@ fn started(model: &Shared) -> TestBus {
         .expect("the controller starts")
 }
 
-fn outputs(bus: &mut TestBus) -> Vec<Output> {
-    std::iter::from_fn(|| bus.next_output()).collect()
+fn outputs(bus: &mut TestBus) -> Vec<Got> {
+    let mut got = Vec::new();
+    while let Some(output) = bus.next_output() {
+        got.push(match output {
+            Output::Attached(function) => Got::Attached(function),
+            Output::Events(function) => Got::Events(function, bus.events().to_vec()),
+            Output::Detached(function) => Got::Detached(function),
+        });
+    }
+    got
 }
 
-fn attached(outputs: &[Output]) -> Vec<usize> {
+fn attached(outputs: &[Got]) -> Vec<usize> {
     outputs
         .iter()
         .filter_map(|output| match output {
-            Output::Attached(function) => Some(*function),
+            Got::Attached(function) => Some(*function),
+            _ => None,
+        })
+        .collect()
+}
+
+fn events(outputs: &[Got], wanted: usize) -> Vec<Vec<RawEvent>> {
+    outputs
+        .iter()
+        .filter_map(|output| match output {
+            Got::Events(function, events) if *function == wanted => Some(events.clone()),
             _ => None,
         })
         .collect()
@@ -60,83 +98,133 @@ fn frames(model: &Shared, bus: &mut TestBus, ms: u64) {
     bus.on_interrupt().expect("the controller runs");
 }
 
-fn events(outputs: &[Output], wanted: usize) -> Vec<Vec<RawEvent>> {
-    outputs
-        .iter()
-        .filter_map(|output| match output {
-            Output::Events { function, events } if *function == wanted => {
-                Some(events.as_slice().to_vec())
-            }
-            _ => None,
-        })
-        .collect()
-}
-
 fn key(code: u16, down: bool) -> RawEvent {
     RawEvent::new(EV_KEY, code, i32::from(down))
+}
+
+fn rel(code: u16, value: i32) -> RawEvent {
+    RawEvent::new(EV_REL, code, value)
 }
 
 fn syn() -> RawEvent {
     RawEvent::new(EV_SYN, SYN_REPORT, 0)
 }
 
-/// The board, started and polled once: the bus, and the keyboard's and the
-/// mouse's functions.
-fn board() -> (Shared, TestBus, usize, usize, usize, usize) {
+fn hello(bus: &TestBus, function: usize) -> Hello {
+    bus.hello(function, DEVICE_NOT_PCI).expect("a HELLO")
+}
+
+/// The function whose HELLO carries `name`, among `found`.
+fn named(bus: &TestBus, found: &[usize], name: &[u8]) -> usize {
+    *found
+        .iter()
+        .find(|&&function| hello(bus, function).name.as_bytes() == name)
+        .unwrap_or_else(|| panic!("no function {}", std::string::String::from_utf8_lossy(name)))
+}
+
+/// Feed `batches` to a core session made from `function`'s HELLO, which
+/// must take every one.
+fn judge(bus: &TestBus, function: usize, batches: &[Vec<RawEvent>]) {
+    let mut session = Session::accept(&hello(bus, function), &[PORT_RIGHTS]).expect("the HELLO");
+    for batch in batches {
+        let message = Message::Events(Events::new(batch).expect("few enough"));
+        let _ = session
+            .receive(&message, 0, |_| {})
+            .expect("the core takes the report");
+    }
+}
+
+/// The board, started and polled once.
+struct Board {
+    model: Shared,
+    bus: TestBus,
+    /// The model's devices.
+    keyboard: usize,
+    mouse: usize,
+    /// The functions, by name.
+    keys: usize,
+    media: usize,
+    pointer: usize,
+    macros: usize,
+}
+
+fn board() -> Board {
     let (model, _, mouse, keyboard) = dk_board();
     let mut bus = started(&model);
     bus.poll();
     let found = attached(&outputs(&mut bus));
-    let of = |kind| {
-        *found
-            .iter()
-            .find(|&&function| bus.kind(function) == Some(kind))
-            .expect("the function")
-    };
-    let (keys, pointer) = (of(Kind::Keyboard), of(Kind::Mouse));
-    (model, bus, keyboard, mouse, keys, pointer)
+    assert_eq!(found.len(), 4, "two functions each");
+    Board {
+        keys: named(&bus, &found, KEYBOARD),
+        media: named(&bus, &found, MEDIA),
+        pointer: named(&bus, &found, MOUSE),
+        macros: named(&bus, &found, MACROS),
+        model,
+        bus,
+        keyboard,
+        mouse,
+    }
+}
+
+impl Board {
+    /// Queue `report` on `device`'s `endpoint` and let two frames take it.
+    fn send(&mut self, device: usize, endpoint: u8, report: &[u8]) {
+        self.model.borrow_mut().report(device, endpoint, report);
+        frames(&self.model, &mut self.bus, 2);
+    }
+
+    fn no_violations(&self) {
+        let model = self.model.borrow();
+        assert!(model.violations.is_empty(), "{:?}", model.violations);
+    }
 }
 
 #[test]
-fn the_dk_boards_bus_gives_a_keyboard_and_a_mouse() {
-    let (model, mut bus, keyboard, mouse, keys, pointer) = board();
-    let m = model.borrow();
-    assert!(m.violations.is_empty(), "{:?}", m.violations);
-    // Addresses in order found: the hub, then its ports in order.
-    assert_eq!(m.devices[0].address, 1);
-    assert_eq!(m.devices[mouse].address, 2);
-    assert_eq!(m.devices[keyboard].address, 3);
-    for device in [0, mouse, keyboard] {
-        assert_eq!(
-            m.devices[device].configured, 1,
-            "device {device} configured"
-        );
+fn the_dk_boards_bus_gives_each_device_two_functions() {
+    let mut b = board();
+    b.no_violations();
+    {
+        let m = b.model.borrow();
+        assert_eq!(m.devices[0].address, 1);
+        assert_eq!(m.devices[b.mouse].address, 2);
+        assert_eq!(m.devices[b.keyboard].address, 3);
+        for device in [0, b.mouse, b.keyboard] {
+            assert_eq!(
+                m.devices[device].configured, 1,
+                "device {device} configured"
+            );
+        }
+        // Both boot interfaces were put in the report protocol.
+        for device in [b.mouse, b.keyboard] {
+            assert!(
+                m.devices[device]
+                    .setups
+                    .contains(&[0x21, 0x0B, 1, 0, 0, 0, 0, 0]),
+                "device {device}"
+            );
+            assert!(!m.devices[device].boot_protocol[0]);
+        }
     }
-    assert!(m.devices[mouse].boot_protocol[0]);
-    assert!(m.devices[keyboard].boot_protocol[0]);
-    // The second, non-boot HID interface of each is left alone.
-    assert!(!m.devices[mouse].boot_protocol[1]);
-    drop(m);
 
-    let hello = bus.hello(keys, DEVICE_NOT_PCI).expect("a HELLO");
-    assert_eq!(hello.name.as_bytes(), b"SEM USB Keyboard");
+    let keys = hello(&b.bus, b.keys);
     assert_eq!(
         (
-            hello.id.bustype,
-            hello.id.vendor,
-            hello.id.product,
-            hello.id.version
+            keys.id.bustype,
+            keys.id.vendor,
+            keys.id.product,
+            keys.id.version
         ),
         (BUS_USB, 0x1A2C, 0x2124, 0x0116)
     );
-    assert_eq!(hello.location, DEVICE_NOT_PCI);
-    let _ = Session::accept(&hello, &[PORT_RIGHTS]).expect("the core takes the keyboard");
+    assert_eq!(keys.location, DEVICE_NOT_PCI);
+    assert!(keys.bits.has_type(EV_LED) && bit(&keys.bits.leds, LED_CAPSL));
+    for function in [b.keys, b.media, b.pointer, b.macros] {
+        let _ = Session::accept(&hello(&b.bus, function), &[PORT_RIGHTS]).expect("taken");
+    }
+    assert_eq!(b.bus.kind(b.media), Some(Kind::Consumer));
+    assert_eq!(b.bus.kind(b.macros), Some(Kind::Keyboard));
 
-    let hello = bus.hello(pointer, DEVICE_NOT_PCI).expect("a HELLO");
-    assert_eq!(hello.name.as_bytes(), b"Logitech G502 HERO Gaming Mouse");
-    let _ = Session::accept(&hello, &[PORT_RIGHTS]).expect("the core takes the mouse");
-
-    let notes: Vec<Note> = std::iter::from_fn(|| bus.next_note()).collect();
+    let notes: Vec<Note> = std::iter::from_fn(|| b.bus.next_note()).collect();
     assert!(notes.contains(&Note::Device {
         address: 1,
         speed: Speed::High,
@@ -151,35 +239,26 @@ fn the_dk_boards_bus_gives_a_keyboard_and_a_mouse() {
         vendor: 0x1A2C,
         product: 0x2124,
         hub_ports: None,
-        functions: 1,
+        functions: 2,
     }));
 }
 
 #[test]
 fn a_second_poll_finds_nothing_new() {
-    let (model, mut bus, ..) = board();
-    let transfers = model.borrow().async_runs;
-    bus.poll();
-    assert!(outputs(&mut bus).is_empty());
+    let mut b = board();
+    let transfers = b.model.borrow().async_runs;
+    b.bus.poll();
+    assert!(outputs(&mut b.bus).is_empty());
     // Four GET_STATUS, one per hub port, and nothing else.
-    assert_eq!(model.borrow().async_runs - transfers, 4);
+    assert_eq!(b.model.borrow().async_runs - transfers, 4);
 }
 
 #[test]
 fn a_key_is_pressed_and_let_go() {
-    let (model, mut bus, keyboard, _, keys, _) = board();
-    let mut session =
-        Session::accept(&bus.hello(keys, DEVICE_NOT_PCI).unwrap(), &[PORT_RIGHTS]).unwrap();
-
-    model
-        .borrow_mut()
-        .report(keyboard, 1, &[0, 0, 0x04, 0, 0, 0, 0, 0]);
-    frames(&model, &mut bus, 2);
-    model
-        .borrow_mut()
-        .report(keyboard, 1, &[0, 0, 0, 0, 0, 0, 0, 0]);
-    frames(&model, &mut bus, 2);
-    let got = events(&outputs(&mut bus), keys);
+    let mut b = board();
+    b.send(b.keyboard, 1, &[0, 0, 0x04, 0, 0, 0, 0, 0]);
+    b.send(b.keyboard, 1, &[0; 8]);
+    let got = events(&outputs(&mut b.bus), b.keys);
     assert_eq!(
         got,
         [
@@ -187,34 +266,22 @@ fn a_key_is_pressed_and_let_go() {
             vec![key(KEY_A, false), syn()]
         ]
     );
-
-    for batch in got {
-        let message = Message::Events(Events::new(&batch).unwrap());
-        let _ = session
-            .receive(&message, 0, |_| {})
-            .expect("the core takes the report");
-    }
-    assert!(
-        model.borrow().violations.is_empty(),
-        "{:?}",
-        model.borrow().violations
-    );
+    judge(&b.bus, b.keys, &got);
+    b.no_violations();
 }
 
 #[test]
 fn modifiers_come_first_and_a_roll_over_changes_nothing() {
-    let (model, mut bus, keyboard, _, keys, _) = board();
-    let reports: [[u8; 8]; 4] = [
+    let mut b = board();
+    for report in [
         [0x02, 0, 0x04, 0, 0, 0, 0, 0],
         [0x02, 0, 0x04, 0x05, 0, 0, 0, 0],
         [0x02, 0, 1, 1, 1, 1, 1, 1],
         [0x01, 0, 0x05, 0, 0, 0, 0, 0],
-    ];
-    for report in reports {
-        model.borrow_mut().report(keyboard, 1, &report);
-        frames(&model, &mut bus, 2);
+    ] {
+        b.send(b.keyboard, 1, &report);
     }
-    let got = events(&outputs(&mut bus), keys);
+    let got = events(&outputs(&mut b.bus), b.keys);
     assert_eq!(
         got,
         [
@@ -232,15 +299,15 @@ fn modifiers_come_first_and_a_roll_over_changes_nothing() {
 
 #[test]
 fn the_mouse_moves_clicks_and_scrolls() {
-    let (model, mut bus, _, mouse, _, pointer) = board();
-    let mut session =
-        Session::accept(&bus.hello(pointer, DEVICE_NOT_PCI).unwrap(), &[PORT_RIGHTS]).unwrap();
-    for report in [[0x01_u8, 5, 0xFD, 0], [0x03, 0, 0, 0x01], [0x00, 0, 0, 0]] {
-        model.borrow_mut().report(mouse, 1, &report);
-        frames(&model, &mut bus, 2);
+    let mut b = board();
+    for report in [
+        [0x01, 0, 5, 0, 0xFD, 0xFF, 0, 0],
+        [0x03, 0, 0, 0, 0, 0, 1, 0],
+        [0; 8],
+    ] {
+        b.send(b.mouse, 1, &report);
     }
-    let got = events(&outputs(&mut bus), pointer);
-    let rel = |code, value| RawEvent::new(EV_REL, code, value);
+    let got = events(&outputs(&mut b.bus), b.pointer);
     assert_eq!(
         got,
         [
@@ -249,28 +316,153 @@ fn the_mouse_moves_clicks_and_scrolls() {
             vec![key(BTN_LEFT, false), key(BTN_RIGHT, false), syn()],
         ]
     );
-    for batch in got {
-        let message = Message::Events(Events::new(&batch).unwrap());
-        let _ = session
-            .receive(&message, 0, |_| {})
-            .expect("the core takes the report");
-    }
+    judge(&b.bus, b.pointer, &got);
+}
+
+/// The buttons past the boot protocol's three, and the wheel's tilt: what
+/// reading the mouse's own report descriptor is for.
+#[test]
+fn the_mouses_side_buttons_and_tilt_arrive() {
+    let mut b = board();
+    // Button 6 (byte 0 bit 5) and button 16 (byte 1 bit 7); tilt left, and a
+    // sixteen-bit move.
+    b.send(b.mouse, 1, &[0x20, 0x80, 0x2C, 0x01, 0, 0, 0, 0xFF]);
+    b.send(b.mouse, 1, &[0; 8]);
+    let got = events(&outputs(&mut b.bus), b.pointer);
+    assert_eq!(
+        got,
+        [
+            vec![
+                key(BTN_FORWARD, true),
+                key(BTN_SIXTEENTH, true),
+                rel(REL_X, 300),
+                rel(REL_HWHEEL, -1),
+                syn()
+            ],
+            vec![key(BTN_FORWARD, false), key(BTN_SIXTEENTH, false), syn()],
+        ]
+    );
+    judge(&b.bus, b.pointer, &got);
+}
+
+#[test]
+fn media_and_sleep_keys_arrive_from_the_keyboards_second_interface() {
+    let mut b = board();
+    b.send(b.keyboard, 2, &[1, 0xE9, 0x00]);
+    b.send(b.keyboard, 2, &[1, 0, 0]);
+    b.send(b.keyboard, 2, &[2, 0x02]);
+    b.send(b.keyboard, 2, &[2, 0x00]);
+    let got = events(&outputs(&mut b.bus), b.media);
+    assert_eq!(
+        got,
+        [
+            vec![key(KEY_VOLUMEUP, true), syn()],
+            vec![key(KEY_VOLUMEUP, false), syn()],
+            vec![key(KEY_SLEEP, true), syn()],
+            vec![key(KEY_SLEEP, false), syn()],
+        ]
+    );
+    judge(&b.bus, b.media, &got);
+    b.no_violations();
+}
+
+#[test]
+fn the_mouses_macro_keys_are_a_keyboard_and_its_vendor_report_is_nothing() {
+    let mut b = board();
+    b.send(b.mouse, 2, &[1, 0, 0x3A, 0, 0, 0, 0, 0]);
+    b.send(b.mouse, 2, &[0x10, 1, 2, 3, 4, 5, 6]);
+    b.send(b.mouse, 2, &[1, 0, 0, 0, 0, 0, 0, 0]);
+    let got = events(&outputs(&mut b.bus), b.macros);
+    assert_eq!(
+        got,
+        [
+            vec![key(KEY_F1, true), syn()],
+            vec![key(KEY_F1, false), syn()]
+        ]
+    );
+}
+
+#[test]
+fn caps_lock_lights_the_keyboard() {
+    let mut b = board();
+    let caps = [RawEvent::new(EV_LED, LED_CAPSL, 1)];
+    assert_eq!(b.bus.set_leds(b.keys, &caps), Ok(true));
+    // The same state again sends nothing.
+    assert_eq!(b.bus.set_leds(b.keys, &caps), Ok(false));
+    let num = [RawEvent::new(EV_LED, LED_NUML, 1)];
+    assert_eq!(b.bus.set_leds(b.keys, &num), Ok(true));
+    let off = [RawEvent::new(EV_LED, LED_CAPSL, 0)];
+    assert_eq!(b.bus.set_leds(b.keys, &off), Ok(true));
+    // A function with no LEDs sends nothing.
+    assert_eq!(b.bus.set_leds(b.pointer, &caps), Ok(false));
+    let outputs = b.model.borrow().devices[b.keyboard].outputs.clone();
+    assert_eq!(
+        outputs,
+        [
+            (0, 0x0200, vec![0x02]),
+            (0, 0x0200, vec![0x03]),
+            (0, 0x0200, vec![0x01]),
+        ]
+    );
+    assert!(b.model.borrow().devices[b.mouse].outputs.is_empty());
+    b.no_violations();
+}
+
+#[test]
+fn a_keyboard_whose_report_descriptor_cannot_be_read_uses_the_boot_protocol() {
+    let (model, _, _, keyboard) = dk_board();
+    model.borrow_mut().devices[keyboard].stall_report_descriptor = true;
+    let mut bus = started(&model);
+    bus.poll();
+    let found = attached(&outputs(&mut bus));
+    // The mouse's two, and the keyboard's boot interface alone: its second
+    // interface has no layout without its descriptor.
+    assert_eq!(found.len(), 3);
+    let keys = named(&bus, &found, KEYBOARD);
+    assert!(model.borrow().devices[keyboard].boot_protocol[0]);
+
+    model
+        .borrow_mut()
+        .report(keyboard, 1, &[0, 0, 0x04, 0, 0, 0, 0, 0]);
+    frames(&model, &mut bus, 2);
+    assert_eq!(
+        events(&outputs(&mut bus), keys),
+        [vec![key(KEY_A, true), syn()]]
+    );
+
+    let caps = [RawEvent::new(EV_LED, LED_CAPSL, 1)];
+    assert_eq!(bus.set_leds(keys, &caps), Ok(true));
+    assert_eq!(
+        model.borrow().devices[keyboard].outputs,
+        [(0, 0x0200, vec![0x02])]
+    );
+}
+
+#[test]
+fn a_keyboard_that_refuses_both_gives_no_function() {
+    let (model, _, _, keyboard) = dk_board();
+    model.borrow_mut().devices[keyboard].stall_report_descriptor = true;
+    model.borrow_mut().devices[keyboard].stall_protocol = true;
+    let mut bus = started(&model);
+    bus.poll();
+    let found = attached(&outputs(&mut bus));
+    assert_eq!(found.len(), 2, "only the mouse's");
 }
 
 #[test]
 fn many_reports_between_interrupts_keep_their_order() {
-    let (model, mut bus, keyboard, _, keys, _) = board();
+    let mut b = board();
     for usage in 0x04..0x0A_u8 {
-        model
+        b.model
             .borrow_mut()
-            .report(keyboard, 1, &[0, 0, usage, 0, 0, 0, 0, 0]);
+            .report(b.keyboard, 1, &[0, 0, usage, 0, 0, 0, 0, 0]);
     }
     // Two qTDs per pipe: one interrupt, at most two reports taken; the
     // rest wait in the device, as they would on the wire.
     for _ in 0..8 {
-        frames(&model, &mut bus, 1);
+        frames(&b.model, &mut b.bus, 1);
     }
-    let got = events(&outputs(&mut bus), keys);
+    let got = events(&outputs(&mut b.bus), b.keys);
     let pressed: Vec<u16> = got
         .iter()
         .flatten()
@@ -281,59 +473,49 @@ fn many_reports_between_interrupts_keep_their_order() {
 }
 
 #[test]
-fn unplugging_the_keyboard_detaches_it_and_plugging_it_back_attaches_it() {
-    let (model, mut bus, keyboard, _, keys, pointer) = board();
-    model.borrow_mut().unplug(0, 2);
-    bus.poll();
-    assert_eq!(outputs(&mut bus), [Output::Detached(keys)]);
-    assert!(std::iter::from_fn(|| bus.next_note()).any(|note| note == Note::Gone { address: 3 }));
+fn unplugging_the_keyboard_detaches_both_its_functions_and_plugging_it_back_attaches_them() {
+    let mut b = board();
+    b.model.borrow_mut().unplug(0, 2);
+    b.bus.poll();
+    let mut gone = outputs(&mut b.bus);
+    gone.sort_by_key(|got| match got {
+        Got::Detached(function) => *function,
+        _ => usize::MAX,
+    });
+    let mut expected = vec![Got::Detached(b.keys), Got::Detached(b.media)];
+    expected.sort_by_key(|got| match got {
+        Got::Detached(function) => *function,
+        _ => usize::MAX,
+    });
+    assert_eq!(gone, expected);
+    assert!(std::iter::from_fn(|| b.bus.next_note()).any(|note| note == Note::Gone { address: 3 }));
 
-    model.borrow_mut().plug(0, 2, keyboard);
-    bus.poll();
-    let again = attached(&outputs(&mut bus));
-    assert_eq!(again.len(), 1);
-    assert_ne!(again[0], pointer);
-    assert_eq!(bus.kind(again[0]), Some(Kind::Keyboard));
+    b.model.borrow_mut().plug(0, 2, b.keyboard);
+    b.bus.poll();
+    let again = attached(&outputs(&mut b.bus));
+    assert_eq!(again.len(), 2);
+    let keys = named(&b.bus, &again, KEYBOARD);
     // Its old address was free again.
-    assert_eq!(model.borrow().devices[keyboard].address, 3);
+    assert_eq!(b.model.borrow().devices[b.keyboard].address, 3);
 
-    model
-        .borrow_mut()
-        .report(keyboard, 1, &[0, 0, 0x04, 0, 0, 0, 0, 0]);
-    frames(&model, &mut bus, 2);
+    b.send(b.keyboard, 1, &[0, 0, 0x04, 0, 0, 0, 0, 0]);
     assert_eq!(
-        events(&outputs(&mut bus), again[0]),
+        events(&outputs(&mut b.bus), keys),
         [vec![key(KEY_A, true), syn()]]
     );
-    assert!(
-        model.borrow().violations.is_empty(),
-        "{:?}",
-        model.borrow().violations
-    );
+    b.no_violations();
 }
 
 #[test]
 fn the_mouse_still_reports_while_the_keyboard_comes_and_goes() {
-    let (model, mut bus, keyboard, mouse, _, pointer) = board();
-    model.borrow_mut().unplug(0, 2);
-    bus.poll();
-    model.borrow_mut().plug(0, 2, keyboard);
-    bus.poll();
-    let _ = outputs(&mut bus);
-    model.borrow_mut().report(mouse, 1, &[0, 1, 1, 0]);
-    frames(&model, &mut bus, 2);
-    assert_eq!(events(&outputs(&mut bus), pointer).len(), 1);
-}
-
-#[test]
-fn a_device_that_refuses_the_boot_protocol_gives_no_function() {
-    let (model, _, _, keyboard) = dk_board();
-    model.borrow_mut().devices[keyboard].stall_protocol = true;
-    let mut bus = started(&model);
-    bus.poll();
-    let found = attached(&outputs(&mut bus));
-    assert_eq!(found.len(), 1, "only the mouse");
-    assert_eq!(bus.kind(found[0]), Some(Kind::Mouse));
+    let mut b = board();
+    b.model.borrow_mut().unplug(0, 2);
+    b.bus.poll();
+    b.model.borrow_mut().plug(0, 2, b.keyboard);
+    b.bus.poll();
+    let _ = outputs(&mut b.bus);
+    b.send(b.mouse, 1, &[0, 0, 1, 0, 1, 0, 0, 0]);
+    assert_eq!(events(&outputs(&mut b.bus), b.pointer).len(), 1);
 }
 
 #[test]
@@ -365,23 +547,23 @@ fn a_device_that_cannot_be_set_up_is_left_until_it_is_unplugged() {
     bus.poll();
     assert_eq!(
         attached(&outputs(&mut bus)).len(),
-        2,
-        "the mouse, then the keyboard at last"
+        4,
+        "the mouse's two, then the keyboard's at last"
     );
 }
 
 #[test]
 fn the_controller_stops_and_gives_its_memory_back() {
-    let (model, bus, ..) = board();
-    assert!(bus.shutdown().is_ok());
-    assert_ne!(model.borrow().read_status() & (1 << 12), 0, "halted");
+    let b = board();
+    assert!(b.bus.shutdown().is_ok());
+    assert_ne!(b.model.borrow().read_status() & (1 << 12), 0, "halted");
 }
 
 #[test]
 fn a_controller_that_will_not_halt_keeps_its_memory() {
-    let (model, bus, ..) = board();
-    model.borrow_mut().wedged = true;
-    assert!(bus.shutdown().is_err());
+    let b = board();
+    b.model.borrow_mut().wedged = true;
+    assert!(b.bus.shutdown().is_err());
 }
 
 #[test]

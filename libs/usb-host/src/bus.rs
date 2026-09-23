@@ -23,18 +23,19 @@
 //! function's index is the driver's to key its input channel by; it is not
 //! reused until its [`Output::Detached`] has been read.
 
-use ferrix_inputctl::message::{Hello, Text};
+use ferrix_inputctl::message::{Hello, RawEvent, Text};
 
-use crate::ehci::{self, Controller, Data, PIPE_BYTES, RootReset, Target};
-use crate::hid::{EventBuf, Identity, Kind, State};
+use crate::ehci::{self, CONTROL_BYTES, Controller, Data, PIPE_BYTES, RootReset, Target};
+use crate::hid::{BOOT_KEYBOARD, BOOT_MOUSE, EventBuf, Identity, Interpreter, Kind};
 use crate::hub::{
     self, CHANGE_CONNECTION, CHANGE_RESET, HubDescriptor, PORT_POWER, PORT_RESET, PortStatus,
     STATUS_ENABLE,
 };
+use crate::report::Descriptor;
 use crate::usb::{
-    CLASS_HID, CLASS_HUB, CONFIGURATION, Configuration, DEVICE, DeviceDescriptor, LANGUAGE_US,
-    PROTOCOL_KEYBOARD, PROTOCOL_MOUSE, STRING, SUBCLASS_BOOT, Setup, Speed, first_language,
-    is_control_packet, string_ascii,
+    CLASS_HID, CLASS_HUB, CONFIGURATION, Configuration, DEVICE, DeviceDescriptor, Interface,
+    LANGUAGE_US, PROTOCOL_KEYBOARD, PROTOCOL_MOUSE, STRING, SUBCLASS_BOOT, Setup, Speed,
+    first_language, is_control_packet, string_ascii,
 };
 use crate::{Clock, Dma, MILLISECOND, Parts, Registers};
 
@@ -146,14 +147,10 @@ pub enum Note {
 pub enum Output {
     /// A keyboard or mouse appeared: introduce it with [`Bus::hello`].
     Attached(usize),
-    /// A function's report, as the events it made: never more than one
-    /// EVENTS message holds.
-    Events {
-        /// The function.
-        function: usize,
-        /// Its events, ending in `SYN_REPORT`.
-        events: EventBuf,
-    },
+    /// A function's report made events, which [`Bus::events`] holds until
+    /// the next output is read: never more than one EVENTS message holds,
+    /// ending in `SYN_REPORT`.
+    Events(usize),
     /// A function went: its index is free again.
     Detached(usize),
 }
@@ -163,7 +160,7 @@ enum Pending {
     Attached(usize),
     Report {
         function: usize,
-        bytes: [u8; 8],
+        bytes: [u8; PIPE_BYTES],
         len: usize,
     },
     Detached(usize),
@@ -187,9 +184,11 @@ struct Hub {
 struct Function {
     device: usize,
     pipe: usize,
+    /// The interface, for `SET_REPORT`.
+    interface: u8,
     kind: Kind,
     identity: Identity,
-    state: State,
+    reader: Interpreter,
     /// Unplugged, with its [`Output::Detached`] still to be read.
     gone: bool,
 }
@@ -250,6 +249,8 @@ pub struct Bus<R, D, C> {
     devices: [Option<Device>; MAX_DEVICES],
     functions: [Option<Function>; MAX_FUNCTIONS],
     pending: Ring<Pending, PENDING>,
+    /// The events of the last [`Output::Events`].
+    events: EventBuf,
     notes: Ring<Note, NOTES>,
     /// Root ports whose device failed or was handed on, bit by port.
     root_failed: u32,
@@ -270,6 +271,7 @@ impl<R: Registers, D: Dma, C: Clock> Bus<R, D, C> {
             devices: [None; MAX_DEVICES],
             functions: [None; MAX_FUNCTIONS],
             pending: Ring::new(),
+            events: EventBuf::default(),
             notes: Ring::new(),
             root_failed: 0,
             next_poll: 0,
@@ -324,14 +326,10 @@ impl<R: Registers, D: Dma, C: Clock> Bus<R, D, C> {
                 .iter()
                 .position(|function| function.is_some_and(|f| f.pipe == packet.pipe && !f.gone));
             if let Some(function) = owner {
-                let mut bytes = [0_u8; 8];
-                for (slot, &byte) in bytes.iter_mut().zip(packet.bytes.iter()) {
-                    *slot = byte;
-                }
                 let _ = pending.push(Pending::Report {
                     function,
-                    bytes,
-                    len: packet.len.min(8),
+                    bytes: packet.bytes,
+                    len: packet.len,
                 });
             }
         })
@@ -356,9 +354,11 @@ impl<R: Registers, D: Dma, C: Clock> Bus<R, D, C> {
                     let Some(Some(state)) = self.functions.get_mut(function) else {
                         continue;
                     };
-                    let events = state.state.report(bytes.get(..len).unwrap_or(&[]));
-                    if !events.as_slice().is_empty() {
-                        return Some(Output::Events { function, events });
+                    state
+                        .reader
+                        .report(bytes.get(..len).unwrap_or(&[]), &mut self.events);
+                    if !self.events.as_slice().is_empty() {
+                        return Some(Output::Events(function));
                     }
                 }
             }
@@ -370,15 +370,63 @@ impl<R: Registers, D: Dma, C: Clock> Bus<R, D, C> {
         self.notes.pop()
     }
 
+    /// The events of the last [`Output::Events`].
+    #[must_use]
+    pub fn events(&self) -> &[RawEvent] {
+        self.events.as_slice()
+    }
+
     /// The HELLO introducing `function`, at `location`.
     #[must_use]
     pub fn hello(&self, function: usize, location: u32) -> Option<Hello> {
-        let function = self.functions.get(function).copied().flatten()?;
+        let function = self.functions.get(function)?.as_ref()?;
         Some(crate::hid::hello(
-            function.kind,
+            &function.reader,
             &function.identity,
             location,
         ))
+    }
+
+    /// Light `function`'s LEDs as the core's LED events say, with an output
+    /// report for each report holding an LED: whether any was sent. Events
+    /// for other types, codes the function has no LED for, and a function
+    /// gone, change nothing.
+    ///
+    /// # Errors
+    ///
+    /// The first `SET_REPORT` that failed; the rest are still sent.
+    pub fn set_leds(&mut self, function: usize, events: &[RawEvent]) -> Result<bool, Error> {
+        let Some(Some(entry)) = self.functions.get_mut(function) else {
+            return Ok(false);
+        };
+        if entry.gone || !entry.reader.set_leds(events) {
+            return Ok(false);
+        }
+        let interface = entry.interface;
+        let reader = entry.reader;
+        let Some(target) = self
+            .devices
+            .get(entry.device)
+            .copied()
+            .flatten()
+            .map(|device| device.target)
+        else {
+            return Ok(false);
+        };
+        let mut first_error = None;
+        let mut sent = false;
+        let hc = &mut self.hc;
+        reader.led_reports(|id, bytes| {
+            let length = u16::try_from(bytes.len()).unwrap_or(0);
+            let setup = Setup::set_output_report(interface, id, length);
+            match hc.control(&target, &setup, Data::Out(bytes)) {
+                Ok(_) => sent = true,
+                Err(error) => {
+                    let _ = first_error.get_or_insert(Error::Transfer(error));
+                }
+            }
+        });
+        first_error.map_or(Ok(sent), Err)
     }
 
     /// What `function` is.
@@ -680,8 +728,8 @@ impl<R: Registers, D: Dma, C: Clock> Bus<R, D, C> {
         Ok(descriptor.ports)
     }
 
-    /// Turn every keyboard and mouse boot interface of the device in `slot`
-    /// into a function: how many.
+    /// Turn every HID interface of the device in `slot` whose reports map
+    /// to a key, a button or an axis into a function: how many.
     fn set_up_functions(
         &mut self,
         slot: usize,
@@ -692,30 +740,19 @@ impl<R: Registers, D: Dma, C: Clock> Bus<R, D, C> {
         let mut made = 0;
         let mut identity: Option<(Text, Text)> = None;
         for interface in configuration.interfaces() {
-            let kind = match (interface.class, interface.subclass, interface.protocol) {
-                (CLASS_HID, SUBCLASS_BOOT, PROTOCOL_KEYBOARD) => Kind::Keyboard,
-                (CLASS_HID, SUBCLASS_BOOT, PROTOCOL_MOUSE) => Kind::Mouse,
-                _ => continue,
-            };
+            if interface.class != CLASS_HID {
+                continue;
+            }
             let Some((endpoint, packet)) = interface.interrupt_in else {
                 continue;
             };
             let Some(function) = self.functions.iter().position(Option::is_none) else {
                 break;
             };
-            // A device that will not take the boot protocol sends reports
-            // this driver cannot read.
-            if self
-                .hc
-                .control(
-                    target,
-                    &Setup::set_boot_protocol(interface.number),
-                    Data::None,
-                )
-                .is_err()
-            {
+            let Some(reader) = self.reader(target, interface) else {
                 continue;
-            }
+            };
+            let kind = reader.kind();
             if kind == Kind::Keyboard {
                 let _ = self.hc.control(
                     target,
@@ -728,15 +765,12 @@ impl<R: Registers, D: Dma, C: Clock> Bus<R, D, C> {
                 break;
             };
             let names = *identity.get_or_insert_with(|| self.names(target, descriptor));
-            let fallback: &[u8] = match kind {
-                Kind::Keyboard => b"USB keyboard",
-                Kind::Mouse => b"USB mouse",
-            };
-            let name = crate::hid::name(names.0.as_bytes(), names.1.as_bytes(), fallback);
+            let name = crate::hid::name(names.0.as_bytes(), names.1.as_bytes(), b"USB", kind);
             if let Some(entry) = self.functions.get_mut(function) {
                 *entry = Some(Function {
                     device: slot,
                     pipe,
+                    interface: interface.number,
                     kind,
                     identity: Identity {
                         vendor: descriptor.vendor,
@@ -744,7 +778,7 @@ impl<R: Registers, D: Dma, C: Clock> Bus<R, D, C> {
                         release: descriptor.release,
                         name,
                     },
-                    state: State::new(kind),
+                    reader,
                     gone: false,
                 });
                 let _ = self.pending.push(Pending::Attached(function));
@@ -752,6 +786,56 @@ impl<R: Registers, D: Dma, C: Clock> Bus<R, D, C> {
             }
         }
         made
+    }
+
+    /// How `interface`'s reports are read, and the interface put in the
+    /// protocol that makes them so: its own report descriptor in the report
+    /// protocol, if it has one that maps anything; otherwise, for a boot
+    /// keyboard or mouse that takes the boot protocol, the boot layout.
+    /// `None` for an interface that is neither.
+    fn reader(&mut self, target: &Target, interface: &Interface) -> Option<Interpreter> {
+        let boot = match (interface.subclass, interface.protocol) {
+            (SUBCLASS_BOOT, PROTOCOL_KEYBOARD) => Some(&BOOT_KEYBOARD[..]),
+            (SUBCLASS_BOOT, PROTOCOL_MOUSE) => Some(&BOOT_MOUSE[..]),
+            _ => None,
+        };
+        if let Some(reader) = self.own_reader(target, interface) {
+            // Devices start in the report protocol, but a boot interface
+            // firmware used may have been left in the other.
+            if boot.is_some() {
+                let _ = self.hc.control(
+                    target,
+                    &Setup::set_report_protocol(interface.number),
+                    Data::None,
+                );
+            }
+            return Some(reader);
+        }
+        let layout = boot?;
+        let _ = self
+            .hc
+            .control(
+                target,
+                &Setup::set_boot_protocol(interface.number),
+                Data::None,
+            )
+            .ok()?;
+        Descriptor::parse(layout).ok().map(Interpreter::new)
+    }
+
+    /// The interface's report descriptor, read, if it maps anything.
+    fn own_reader(&mut self, target: &Target, interface: &Interface) -> Option<Interpreter> {
+        let length = usize::from(interface.report_length);
+        if length == 0 || length > CONTROL_BYTES {
+            return None;
+        }
+        let mut bytes = [0_u8; CONTROL_BYTES];
+        let buffer = bytes.get_mut(..length)?;
+        let setup = Setup::get_report_descriptor(interface.number, interface.report_length);
+        let got = self.hc.control(target, &setup, Data::In(buffer)).ok()?;
+        let descriptor = Descriptor::parse(bytes.get(..got)?).ok()?;
+        let reader = Interpreter::new(descriptor);
+        reader.maps_anything().then_some(reader)
     }
 
     /// The manufacturer's and product's strings, empty where the device has

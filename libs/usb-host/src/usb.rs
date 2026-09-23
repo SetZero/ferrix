@@ -64,6 +64,8 @@ pub const SET_CONFIGURATION: u8 = 9;
 pub const SET_IDLE: u8 = 0x0A;
 /// HID's `SET_PROTOCOL`.
 pub const SET_PROTOCOL: u8 = 0x0B;
+/// HID's `SET_REPORT`.
+pub const SET_REPORT: u8 = 0x09;
 
 /// The device descriptor's type.
 pub const DEVICE: u8 = 1;
@@ -77,6 +79,12 @@ pub const INTERFACE: u8 = 4;
 pub const ENDPOINT: u8 = 5;
 /// The hub class's descriptor's.
 pub const HUB: u8 = 0x29;
+/// The HID class descriptor's, which follows a HID interface's.
+pub const HID: u8 = 0x21;
+/// A HID report descriptor's.
+pub const REPORT: u8 = 0x22;
+/// `SET_REPORT`'s report type for an output report.
+pub const REPORT_OUTPUT: u8 = 2;
 
 /// The hub class.
 pub const CLASS_HUB: u8 = 9;
@@ -166,6 +174,43 @@ impl Setup {
         }
     }
 
+    /// HID's `SET_PROTOCOL` of the report protocol, protocol 1: reports as
+    /// the report descriptor lays them out.
+    #[must_use]
+    pub const fn set_report_protocol(interface: u8) -> Setup {
+        Setup {
+            request_type: TYPE_CLASS | RECIPIENT_INTERFACE,
+            request: SET_PROTOCOL,
+            value: 1,
+            index: interface as u16,
+            length: 0,
+        }
+    }
+
+    /// `GET_DESCRIPTOR` of an interface's report descriptor.
+    #[must_use]
+    pub const fn get_report_descriptor(interface: u8, length: u16) -> Setup {
+        Setup {
+            request_type: DIRECTION_IN | RECIPIENT_INTERFACE,
+            request: GET_DESCRIPTOR,
+            value: (REPORT as u16) << 8,
+            index: interface as u16,
+            length,
+        }
+    }
+
+    /// HID's `SET_REPORT` of output report `report`, `length` bytes.
+    #[must_use]
+    pub const fn set_output_report(interface: u8, report: u8, length: u16) -> Setup {
+        Setup {
+            request_type: TYPE_CLASS | RECIPIENT_INTERFACE,
+            request: SET_REPORT,
+            value: ((REPORT_OUTPUT as u16) << 8) | report as u16,
+            index: interface as u16,
+            length,
+        }
+    }
+
     /// HID's `SET_IDLE` with a duration of zero: report only on a change.
     #[must_use]
     pub const fn set_idle_forever(interface: u8) -> Setup {
@@ -238,6 +283,9 @@ pub struct Interface {
     /// Its first interrupt IN endpoint: the address, without the direction
     /// bit, and the largest packet.
     pub interrupt_in: Option<(u8, u16)>,
+    /// For a HID interface, how long its report descriptor is, as its HID
+    /// class descriptor says; 0 when it says nothing.
+    pub report_length: u16,
 }
 
 /// The most interfaces a configuration is read for.
@@ -292,6 +340,11 @@ impl Configuration {
                         note_endpoint(slot, descriptor);
                     }
                 }
+                Some(HID) => {
+                    if let Some(slot) = current.and_then(|index| config.interfaces.get_mut(index)) {
+                        note_report_length(slot, descriptor);
+                    }
+                }
                 _ => {}
             }
             at += length;
@@ -312,6 +365,7 @@ impl Configuration {
             subclass: *descriptor.get(6)?,
             protocol: *descriptor.get(7)?,
             interrupt_in: None,
+            report_length: 0,
         };
         self.count += 1;
         Some(self.count - 1)
@@ -340,6 +394,17 @@ fn note_endpoint(interface: &mut Interface, descriptor: &[u8]) {
     if interrupt && inward && interface.interrupt_in.is_none() {
         let size = u16::from_le_bytes([low, high]) & 0x7FF;
         interface.interrupt_in = Some((address & 0x0F, size));
+    }
+}
+
+/// Keep a HID class descriptor's report descriptor length: the first of its
+/// class descriptors (`bDescriptorType` at 6, `wDescriptorLength` at 7) of
+/// the report type.
+fn note_report_length(interface: &mut Interface, descriptor: &[u8]) {
+    if let (Some(&REPORT), Some(&low), Some(&high)) =
+        (descriptor.get(6), descriptor.get(7), descriptor.get(8))
+    {
+        interface.report_length = u16::from_le_bytes([low, high]);
     }
 }
 
