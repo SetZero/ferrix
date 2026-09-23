@@ -73,6 +73,7 @@ members = [
     "user/gpu",
     "user/ltdc",
     "user/input",
+    "user/usbhid",
     "user/vport",
     "user/devmgr",
 

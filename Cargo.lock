@@ -387,6 +387,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferrix-usbhid"
+version = "0.1.0"
+dependencies = [
+ "ferrix-blkring",
+ "ferrix-inputctl",
+ "ferrix-native-abi",
+ "ferrix-rt",
+ "ferrix-usb-host",
+]
+
+[[package]]
 name = "ferrix-ustack"
 version = "0.1.0"
 dependencies = [
