@@ -34,10 +34,11 @@ tooling that can check a model for consistency where it cannot check prose.
 
 Every definition and usage carries a maturity keyword:
 
-* `#implemented` — the code exists and the QEMU boot test exercises it.
+* `#implemented` — the code exists and a QEMU boot exercises it: the boot
+  test itself, or a named `cargo xtask test-*` gate.
 * `#inProgress` — the owning stage has started; part of the element runs.
-* `#writtenAhead` — a `libs/` crate exists and passes host tests, but the
-  kernel does not call it yet.
+* `#writtenAhead` — a `libs/` crate exists and passes host tests, but no
+  gate exercises it yet through the kernel or a program in the image.
 * `#planned` — the design exists in `docs/ARCHITECTURE.md` and nothing else.
 * `@deferred { reason = "..."; }` — a finished stage explicitly left it behind; the attribute
   carries the stage's reason.

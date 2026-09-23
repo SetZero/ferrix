@@ -125,7 +125,12 @@ package FerrixRoadmap {
              * argued rather than shrunk, LPAE as a paging geometry, device
              * tree only, traps without mode stacks. Exit, met: the same
              * self-checks and the same marker under U-Boot on QEMU virt. */
-        requirement ramAbove2GiB { @deferred { reason = "The board has it; QEMU cannot place it."; } }
+        #implemented requirement ramAbove2GiB {
+            doc /* RAM above the 2 GiB split, where the board's DDR starts
+                 * at 3 GiB: the loader maps itself where the kernel can
+                 * reach it, since 9ae0180f. QEMU's virt machine cannot place
+                 * RAM there, so the board run is what exercises it. */
+        }
         #implemented requirement boardUart {
             doc /* The STM32 USART driver and the flash/watch-serial/deploy
                  * path, run on hardware on 2026-09-13 at fd4442e: an

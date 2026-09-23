@@ -11,11 +11,13 @@ package FerrixLifecycle {
 
     doc /* Four maturities and the stage that owns an element.
          *
-         * #implemented   the code exists and the QEMU boot test exercises it
-         *                on every architecture it applies to.
+         * #implemented   the code exists and a QEMU boot exercises it on
+         *                every architecture it applies to: the boot test
+         *                itself, or a named `cargo xtask test-*` gate.
          * #inProgress    the owning stage has started; part of the element runs.
          * #writtenAhead  a `libs/` crate exists and passes its host tests, but
-         *                nothing in `kernel/` calls it yet.
+         *                no gate exercises it yet through the kernel or a
+         *                program in the image.
          * #planned       only the design exists, in docs/ARCHITECTURE.md.
          *
          * `@stage { number = n; }` names the docs/ROADMAP.md stage that owns
@@ -27,7 +29,7 @@ package FerrixLifecycle {
     metadata def planned;
 
     metadata def stage {
-        doc /* The roadmap stage, 0 to 17, that owns the element. */
+        doc /* The roadmap stage, 0 to 22, that owns the element. */
         attribute number : Natural;
     }
 
