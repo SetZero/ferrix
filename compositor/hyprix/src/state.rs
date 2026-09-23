@@ -4038,7 +4038,10 @@ fn sync_planes(
 ) -> bool {
     let mut switched = false;
     for screen in screens.iter_mut() {
-        let size = if wanted {
+        // Not on a turned monitor: the plane takes its image and its place
+        // in the buffer's orientation, and neither is turned here, so the
+        // pointer is drawn into the frame there and turns with it.
+        let size = if wanted && screen.transform == Transform::Normal {
             screen.backend.cursor_plane()
         } else {
             None
