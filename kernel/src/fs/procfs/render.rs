@@ -422,6 +422,26 @@ pub(super) fn pid_max(_: &Kernel) -> Result<Vec<u8>> {
     Ok(number(u64::from(PID_MAX)))
 }
 
+/// `vm/overcommit_memory`: 1, Linux's `OVERCOMMIT_ALWAYS`.
+///
+/// No mapping is refused for want of memory here: an object is a promise of
+/// pages that the first touch of each pays for (`Vmo::committed`), and a
+/// touch that finds no frame fails then, never the `mmap`. That is mode 1,
+/// not Linux's default heuristic 0, which refuses a request plainly too
+/// large up front.
+///
+/// Programs read it to choose how to give memory back. jemalloc, which
+/// `rustc` links, does at start: on a system it believes does not
+/// overcommit it decommits by mapping `PROT_NONE` over what it frees and
+/// maps it back when it needs it, a `MAP_FIXED` pair each time, and with no
+/// file to read that is what it believes.
+pub(super) fn overcommit_memory(_: &Kernel) -> Result<Vec<u8>> {
+    Ok(number(OVERCOMMIT_ALWAYS))
+}
+
+/// Linux's `OVERCOMMIT_ALWAYS`, from `include/uapi/linux/mman.h`.
+pub(super) const OVERCOMMIT_ALWAYS: u64 = 1;
+
 /// `fs/nr_open`: the most `RLIMIT_NOFILE` may be raised to.
 pub(super) fn nr_open(_: &Kernel) -> Result<Vec<u8>> {
     Ok(number(u64::from(MAX_LIMIT)))

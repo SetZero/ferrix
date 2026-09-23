@@ -612,15 +612,19 @@ fn check_sysctl_values(ns: &Namespace, ctx: &Context) -> Result<u32, &'static st
     }
 
     let line = |text: &dyn core::fmt::Display| alloc::format!("{text}\n").into_bytes();
-    let sourced: [(&[u8], Vec<u8>); 4] = [
+    let sourced: [(&[u8], Vec<u8>); 5] = [
         (b"/proc/sys/kernel/ostype", line(&SYSNAME)),
         (b"/proc/sys/kernel/osrelease", line(&RELEASE)),
         (b"/proc/sys/kernel/version", line(&VERSION)),
         (b"/proc/sys/kernel/pid_max", line(&registry::PID_MAX)),
+        (
+            b"/proc/sys/vm/overcommit_memory",
+            line(&super::render::OVERCOMMIT_ALWAYS),
+        ),
     ];
     for (path, want) in sourced {
         if read_all(ns, ctx, path, 64)? != want {
-            return Err("a /proc/sys value is not what uname or the pid registry says");
+            return Err("a /proc/sys value is not what uname, the pid registry or the memory policy says");
         }
     }
     Ok(values)
