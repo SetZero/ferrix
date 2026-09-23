@@ -37,7 +37,7 @@ use ferrix_inputctl::queue::{Clock, Clocks, Queue, Stamped};
 use ferrix_inputctl::session::{OpenId, Received, Session};
 use ferrix_native_abi::rights::Rights;
 use ferrix_native_abi::signals::Signals;
-use ferrix_native_abi::types::CHANNEL_MAX_HANDLES;
+use ferrix_native_abi::types::{CHANNEL_MAX_HANDLES, DEVICE_NOT_PCI};
 
 use crate::device::DeviceNode;
 use crate::object::channel::{ChannelMessage, Endpoint, ReadError};
@@ -62,10 +62,14 @@ const HELLO_PATIENCE_NANOS: u64 = 10_000_000_000;
 /// How long the task sleeps before looking at the channel of its own accord.
 const RECHECK_NANOS: u64 = 50_000_000;
 
+/// The word a device tree node's HELLO carries for its location, which is
+/// what `device_info` says for it, as the display core's `TREE_LOCATION`.
+const TREE_LOCATION: Location = Location(DEVICE_NOT_PCI);
+
 /// Why a control channel could not be made.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum CreateError {
-    /// The device already has one.
+    /// The device already has as many as it has input functions.
     InUse,
     /// No memory for the channel, or no stack for the task.
     NoMemory,
@@ -78,6 +82,11 @@ struct Start {
     control: Arc<Endpoint>,
     device: Arc<DeviceNode>,
     location: Option<Location>,
+    /// Whether devmgr waits for this device's PUBLISHED. Not for a tree
+    /// node's: every tree node shares [`TREE_LOCATION`], so one's PUBLISHED
+    /// could end devmgr's wait for another, and a bus host's devices come
+    /// and go long after devmgr stopped waiting for anything.
+    announce: bool,
 }
 
 static STARTING: SpinLock<Vec<Start>> = SpinLock::new(Vec::new());
@@ -186,23 +195,34 @@ pub(crate) fn device_indices() -> Vec<u32> {
 ///
 /// # Errors
 ///
-/// [`CreateError::InUse`] when the device already has one, and
-/// [`CreateError::NoMemory`] when the channel or the task could not be made.
+/// [`CreateError::InUse`] when the device already has as many as it has
+/// input functions -- one, but for a USB host, whose driver asks for one per
+/// keyboard or mouse it finds -- and [`CreateError::NoMemory`] when the
+/// channel or the task could not be made.
 pub(crate) fn create(node: &Arc<DeviceNode>) -> Result<Arc<Endpoint>, CreateError> {
     let (kernel_end, driver_end) = Endpoint::pair().ok_or(CreateError::NoMemory)?;
     {
         let mut claimed = CLAIMED.lock();
-        if claimed.iter().any(|held| Arc::ptr_eq(held, node)) {
+        let held = claimed
+            .iter()
+            .filter(|held| Arc::ptr_eq(held, node))
+            .count();
+        if held >= node.input_functions() {
             return Err(CreateError::InUse);
         }
         claimed.push(Arc::clone(node));
     }
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+    let (location, announce) = match node.location() {
+        crate::device::Location::Tree(_) => (Some(TREE_LOCATION), false),
+        _ => (crate::block_ring::location_of(node), true),
+    };
     STARTING.lock().push(Start {
         id,
         control: kernel_end,
         device: Arc::clone(node),
-        location: crate::block_ring::location_of(node),
+        location,
+        announce,
     });
     if sched::spawn("input", run, id, ferrix_sched::NICE_0_WEIGHT).is_err() {
         let _ = take_start(id);
@@ -218,8 +238,13 @@ fn take_start(id: usize) -> Option<Start> {
     Some(starting.remove(at))
 }
 
+/// Give back one of the node's claims: a USB host holds one per device, and
+/// one device going leaves the others theirs.
 fn unclaim(node: &Arc<DeviceNode>) {
-    CLAIMED.lock().retain(|held| !Arc::ptr_eq(held, node));
+    let mut claimed = CLAIMED.lock();
+    if let Some(at) = claimed.iter().position(|held| Arc::ptr_eq(held, node)) {
+        let _ = claimed.remove(at);
+    }
 }
 
 /// One device's task.
@@ -304,7 +329,9 @@ fn accept(start: &Start, message: &ChannelMessage) -> Result<Arc<InputDevice>, R
     // Published before READY goes out, as the display does: devmgr kills a
     // driver that has not published by the time it reports.
     DEVICES.lock().push(Arc::clone(&device));
-    if let Some(location) = start.location {
+    if start.announce
+        && let Some(location) = start.location
+    {
         crate::devmgr::published(location);
     }
     send_ready(&start.control, index)?;

@@ -7,7 +7,7 @@
 //! not contiguous to the device, so there is one address per page.
 
 use ferrix_native_abi::nr;
-use ferrix_native_abi::types::PIN_READ_ONLY;
+use ferrix_native_abi::types::{PIN_COHERENT, PIN_READ_ONLY};
 
 use crate::call::{Call, Syscall};
 use crate::device::Device;
@@ -30,6 +30,11 @@ pub enum PinAccess {
     ReadWrite,
     /// Read only: `PIN_READ_ONLY`. Needs `READ` on the VMO.
     ReadOnly,
+    /// Read and write, and seen alike by the program and the device:
+    /// `PIN_COHERENT`, for descriptors a controller polls. Covers the whole
+    /// VMO, which must not be mapped until the pin is made; on a device that
+    /// does not snoop the caches, its mappings then bypass them.
+    Coherent,
 }
 
 impl PinAccess {
@@ -39,6 +44,7 @@ impl PinAccess {
         match self {
             PinAccess::ReadWrite => 0,
             PinAccess::ReadOnly => PIN_READ_ONLY as usize,
+            PinAccess::Coherent => PIN_COHERENT as usize,
         }
     }
 }

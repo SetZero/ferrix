@@ -29,7 +29,7 @@
 //! 2. The two agree when `TTBR1` holds the root's address plus sixteen bytes,
 //! which is what the loader writes and why a test pins it.
 
-use crate::aarch64::{MAIR_DEVICE, MAIR_EL1, MAIR_NORMAL};
+use crate::aarch64::{MAIR_DEVICE, MAIR_EL1, MAIR_NORMAL, MAIR_NORMAL_NC};
 use crate::{Encoding, Level, MapFlags, PhysAddr, VirtAddr};
 
 /// Descriptor is valid.
@@ -125,6 +125,8 @@ impl Encoding for Armv7a {
 
         if flags.device {
             entry |= attr_index(MAIR_DEVICE);
+        } else if flags.uncached {
+            entry |= attr_index(MAIR_NORMAL_NC) | SH_INNER;
         } else {
             entry |= attr_index(MAIR_NORMAL) | SH_INNER;
         }
@@ -184,6 +186,7 @@ impl Encoding for Armv7a {
             user,
             global: entry & NOT_GLOBAL == 0,
             device: (entry >> 2) & 0b111 == MAIR_DEVICE,
+            uncached: (entry >> 2) & 0b111 == MAIR_NORMAL_NC,
         }
     }
 }

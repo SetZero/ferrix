@@ -131,3 +131,14 @@ pub(crate) use aarch64::clean_for_device;
 pub(crate) use armv7a::clean_for_device;
 #[cfg(target_arch = "x86_64")]
 pub(crate) use x86_64::clean_for_device;
+
+// The same, and the lines dropped too: for memory a program will share with
+// such a device through a mapping past the caches (`vmo_pin`'s
+// `PIN_COHERENT`), where a line left in the cache could be written back over
+// what the device wrote.
+#[cfg(target_arch = "aarch64")]
+pub(crate) use aarch64::flush_for_device;
+#[cfg(target_arch = "arm")]
+pub(crate) use armv7a::flush_for_device;
+#[cfg(target_arch = "x86_64")]
+pub(crate) use x86_64::flush_for_device;
