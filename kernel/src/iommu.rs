@@ -289,7 +289,7 @@ pub(crate) fn discover(
         .iter()
         .filter_map(|node| match node.location() {
             Location::Pci(address) => Some(address),
-            Location::VirtioMmio(_) => None,
+            Location::VirtioMmio(_) | Location::Tree(_) => None,
         })
         .collect();
 

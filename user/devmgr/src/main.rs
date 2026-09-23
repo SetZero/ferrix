@@ -21,7 +21,9 @@ use ferrix_devmgr_proto::{DEVICES_MAX_BYTES, DevicesView, Message, NAME_BYTES, S
 use ferrix_native_abi::handle::Handle;
 use ferrix_native_abi::rights::Requested;
 use ferrix_native_abi::signals::Signals;
-use ferrix_native_abi::types::{CHANNEL_MAX_HANDLES, DEVICE_VIRTIO_PCI, DeviceInfo};
+use ferrix_native_abi::types::{
+    CHANNEL_MAX_HANDLES, DEVICE_TREE_BLOCKS, DEVICE_VIRTIO_PCI, DeviceInfo, TREE_STM32_HDMI,
+};
 use ferrix_netring::control::{
     CONTROL_RIGHTS as NET_CONTROL_RIGHTS, DEVICE_RIGHTS as NET_DEVICE_RIGHTS, MAX_MESSAGE,
     Message as NetRing, Start as NetStart,
@@ -109,6 +111,11 @@ const DRIVERS: [(u16, &[u16], &[u8], Kind); 5] = [
     (VIRTIO_VENDOR, &VIRTIO_INPUT_IDS, b"input", Kind::Input),
     (VIRTIO_VENDOR, &VIRTIO_CONSOLE_IDS, b"vport", Kind::Port),
 ];
+
+/// The device tree bindings the kernel publishes nodes for, by the number
+/// `device_info` gives each (`DEVICE_TREE_BLOCKS`): an STM32MP15 DK board's
+/// HDMI output is a card, driven by `ltdc` (`docs/DISPLAY.md` §6).
+const TREE_DRIVERS: [(u16, &[u8], Kind); 1] = [(TREE_STM32_HDMI, b"ltdc", Kind::Display)];
 
 /// Where devmgr gave up, as the exit status.
 #[repr(i32)]
@@ -549,12 +556,17 @@ fn driver_for<'a>(
     drivers: usize,
     images: &'a [Option<Vmo<Kernel>>; MAX_DRIVERS],
 ) -> Option<(&'a Vmo<Kernel>, Kind)> {
-    if info.virtio != DEVICE_VIRTIO_PCI {
-        return None;
-    }
-    let (_, _, wanted, kind) = DRIVERS
-        .iter()
-        .find(|(vendor, ids, _, _)| *vendor == info.vendor_id && ids.contains(&info.device_id))?;
+    let (wanted, kind) = match info.virtio {
+        DEVICE_VIRTIO_PCI => DRIVERS
+            .iter()
+            .find(|(vendor, ids, _, _)| *vendor == info.vendor_id && ids.contains(&info.device_id))
+            .map(|(_, _, wanted, kind)| (wanted, kind))?,
+        DEVICE_TREE_BLOCKS => TREE_DRIVERS
+            .iter()
+            .find(|(binding, _, _)| *binding == info.device_id)
+            .map(|(_, wanted, kind)| (wanted, kind))?,
+        _ => return None,
+    };
     let image = (0..drivers)
         .find(|&j| {
             names.get(j).is_some_and(|name| {
@@ -680,6 +692,10 @@ fn start_net(
 /// (`docs/DISPLAY.md` §2.2). START is the block driver's: where the device's
 /// virtio register blocks are, which a virtio-gpu driver needs the same way;
 /// its name field is unused, since the kernel numbers the card.
+///
+/// A board's HDMI output (`docs/DISPLAY.md` §6) takes the same START with
+/// its two register windows where the virtio blocks would be: the LTDC's in
+/// `common`, the bridge's I2C controller's in `device`.
 fn start_display(
     job: &Job<Kernel>,
     device: Device<Kernel>,
@@ -688,6 +704,11 @@ fn start_display(
     port: &Port<Kernel>,
     key: u64,
 ) -> Result<(Job<Kernel>, Process<Kernel>), ()> {
+    let (program, program_name) = if info.virtio == DEVICE_TREE_BLOCKS {
+        ("ltdc", &[b'l', b't', b'd', b'c', 0, 0, 0, 0])
+    } else {
+        ("gpu", &[b'g', b'p', b'u', 0, 0, 0, 0, 0])
+    };
     let control = device.display_control().map_err(|_| ())?;
     let block = |block: ferrix_native_abi::types::DeviceBlock| Block {
         phys: block.phys,
@@ -703,7 +724,7 @@ fn start_display(
         msix_table_size: info.msix_table_size,
         pci_device_id: info.device_id,
         location: info.location,
-        name: [b'g', b'p', b'u', 0, 0, 0, 0, 0],
+        name: *program_name,
     };
     let device = device
         .into_owned()
@@ -717,7 +738,7 @@ fn start_display(
     launch(
         job,
         image,
-        "gpu",
+        program,
         port,
         key,
         encoded.as_bytes(),

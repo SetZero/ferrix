@@ -29,6 +29,72 @@ const KERNEL_PATH: &str = "FERRIX/KERNEL.ELF";
 /// Where the initramfs goes, beside the kernel.
 const INITRD_PATH: &str = "FERRIX/INITRD.IMG";
 
+/// The kernel as the card gets it: without its debug information, which the
+/// loader never reads and the kernel never looks at -- a panic prints
+/// addresses, and they are resolved on the host against the ELF `build`
+/// leaves beside the image, which keeps all of it.
+///
+/// It matters for room, not speed. A debug kernel is some 70 MB, the board's
+/// `bootfs` is 128 MiB, and with the compositor's initramfs beside it the two
+/// no longer fit; stripped, the kernel is a tenth of that. The rust
+/// toolchain's own `llvm-objcopy` (the `llvm-tools` component
+/// `rust-toolchain.toml` asks for) does it; without one the whole kernel is
+/// copied and a line says so.
+fn card_kernel(kernel: &Path) -> PathBuf {
+    let stripped = kernel.with_extension("stripped.elf");
+    let Some(objcopy) = llvm_objcopy() else {
+        println!("    llvm-objcopy not found; copying the kernel with its debug information");
+        return kernel.to_path_buf();
+    };
+    let status = std::process::Command::new(&objcopy)
+        .arg("--strip-debug")
+        .arg(kernel)
+        .arg(&stripped)
+        .status();
+    match status {
+        Ok(status) if status.success() => stripped,
+        _ => {
+            println!(
+                "    {} could not strip the kernel; copying it whole",
+                objcopy.display()
+            );
+            kernel.to_path_buf()
+        }
+    }
+}
+
+/// The toolchain's `llvm-objcopy`: in `lib/rustlib/<host>/bin` of the
+/// sysroot `rustc` reports, as rustup installs `llvm-tools`.
+fn llvm_objcopy() -> Option<PathBuf> {
+    let rustc = |arg: &str| {
+        std::process::Command::new("rustc")
+            .arg(arg)
+            .current_dir(paths::workspace_root())
+            .output()
+            .ok()
+            .filter(|output| output.status.success())
+            .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
+    };
+    let sysroot = rustc("--print=sysroot")?;
+    let version = rustc("-vV")?;
+    let host = version
+        .lines()
+        .find_map(|line| line.strip_prefix("host: "))?
+        .trim()
+        .to_owned();
+    let name = if cfg!(windows) {
+        "llvm-objcopy.exe"
+    } else {
+        "llvm-objcopy"
+    };
+    let path = Path::new(sysroot.trim())
+        .join("lib/rustlib")
+        .join(host)
+        .join("bin")
+        .join(name);
+    path.is_file().then_some(path)
+}
+
 /// Copy a freshly built loader, kernel and initramfs onto the card.
 pub(crate) fn run(
     arch: Arch,
@@ -56,7 +122,7 @@ pub(crate) fn run(
     }
 
     copy(loader, &loader_target)?;
-    copy(kernel, &kernel_target)?;
+    copy(&card_kernel(kernel), &kernel_target)?;
     // The same archive an image carries, so a board unpacks what QEMU does.
     let initramfs_target = target.join(INITRD_PATH);
     std::fs::write(&initramfs_target, initramfs)

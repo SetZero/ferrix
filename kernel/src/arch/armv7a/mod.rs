@@ -14,6 +14,10 @@ mod signal;
 mod smp;
 mod switch;
 mod timer;
+
+/// Clean a buffer out of the data cache for a device that reads memory past
+/// it (see [`crate::arch::clean_for_device`]).
+pub(crate) use cpu::clean_to_poc as clean_for_device;
 mod trap;
 
 pub(crate) use signal::{SIGNAL_RED_ZONE, UserContext, restore_signal_frame, setup_signal_frame};

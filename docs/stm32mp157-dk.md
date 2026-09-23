@@ -20,7 +20,10 @@ and answered a command typed at busybox's prompt. That evening, flashed from a
 Windows host, the board ran the `stage-9.1-console-and-iommu` tag with receive
 by interrupt and took pasted lines of up to 1000 characters whole; reset itself
 back to U-Boot under `ferrix.onexit=reset`; and booted the loader with its
-switch in a copyable block. What *has* been checked is listed under
+switch in a copyable block. On 2026-09-23 the board ran main again at two
+processors, and drove a monitor over HDMI: first one colour from a Linux
+program through `/dev/dri/card0`, then the `hyprix` Wayland compositor with a
+terminal window (`docs/DISPLAY.md` §6). What *has* been checked is listed under
 [What is actually verified](#what-is-actually-verified).
 
 ## TL;DR
@@ -207,7 +210,10 @@ FERRIX/KERNEL.ELF       the kernel, where the loader looks
 FERRIX/INITRD.IMG       the initramfs, beside the kernel; busybox, given --init
 ```
 
-Nothing else on the card is touched.
+Nothing else on the card is touched. The kernel goes on without its debug
+information (`llvm-objcopy --strip-debug`, from the toolchain's `llvm-tools`):
+a debug kernel is some 70 MB and `bootfs` 128 MiB, and a panic's addresses
+are resolved on the host against the full ELF `build` keeps beside the image.
 
 ### Flashing with the card still in the board
 
@@ -489,6 +495,11 @@ tasks onto one queue reads many times slower there than on the board.
 | The console drains before power-off | the same run: after `exit 7`, `init     the shell exited with 7` arrived whole with nothing after it, where the earlier run stopped mid-word |
 | Both processors come up and share work | the same boot: `2 online`, `1000 threads ... on 2 processors (0b11)` |
 | `${fdtcontroladdr}` is the tree to pass; `${fdt_addr_r}` fails | on the board |
+| Main still boots the board, 2026-09-23 | `f03e210e` plus the HDMI stack, busybox as init: `FERRIX-BOOT-OK stages 1-11` at two processors, the shell answered `uname -a`, and `exit` reset the board to `STM32MP>` under `CMDLINE.TXT`'s `ferrix.onexit=reset` |
+| PLL4's Q output is 74.25 MHz on this firmware | read from U-Boot: `PLL4CR 0x73`, `PLL4CFGR1 0x00030062`, `PLL4CFGR2 0x00070705`, no fraction, `RCK4SELR` the HSE: 24 MHz / 4 x 99 / 8. The kernel reads the same registers and prints `pixel clock 74.250 MHz` |
+| The RCC is the normal world's to write | OP-TEE's boot line `RCC tzen:0` |
+| HDMI out at 1280x720 from a Linux program | `compositor/blank` as init drew `0x1e1e2e` over `/dev/dri/card0`, seen on a monitor, 2026-09-23 (`docs/DISPLAY.md` §6) |
+| The Wayland compositor on the board | `hyprix` as init: `1 monitor [card0 HDMI-A-1 1280x720 1280x720]`, a terminal window tiled, seen on the monitor, about 100 ms a frame |
 | Both boot switches ON boots the SD card; the prompt is `STM32MP>` | on the board |
 | U-Boot's IWDG heuristic starts a 32 s watchdog on `VERR = 0x30` | on the board; gone with `WDT_STM32MP` off, and survives an OP-TEE without IWDG |
 | The above-2-GiB identity-map placement | host unit tests in `libs/bootinfo` |

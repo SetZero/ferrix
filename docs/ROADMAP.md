@@ -4246,6 +4246,16 @@ as `input_event`s on `/dev/input/event0` and are echoed on the console. Two
 processes exchange a sealed memfd over an `AF_UNIX` socket and both see the
 other's writes through `MAP_SHARED`.
 
+**Done — the hardware row: the DK1's HDMI output (2026-09-23).** The
+STM32MP157D-DK1's LTDC and its SiI9022 HDMI bridge are a card like any
+other: the kernel clocks and muxes them and publishes a device-tree node,
+`user/ltdc` drives both, and the core fills the card's buffers with
+contiguous memory and cleans the caches for the LTDC, which does not snoop
+them. On the board `compositor/blank` put a colour on a monitor through
+`/dev/dri/card0`, and `hyprix` ran as init at 1280x720 on `HDMI-A-1` with a
+terminal window. `docs/DISPLAY.md` §6 has the design; USB HID, the row's
+other half, is not done.
+
 **Done — epoll, iteration 2's first kernel row.** `epoll_create1`,
 `epoll_create`, `epoll_ctl`, `epoll_wait`, `epoll_pwait` and `epoll_pwait2`
 answer on all three architectures, with `struct epoll_event` packed to 12

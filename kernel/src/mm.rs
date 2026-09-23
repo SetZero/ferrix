@@ -325,6 +325,14 @@ pub(crate) fn claim_frame(frame: Frame) -> Option<Frame> {
     with_frames(|frames| frames.claim(frame))?
 }
 
+/// Turn a block taken with [`allocate_frames`] into `2^order` single frames,
+/// each given back on its own with [`release_frame`]: memory that must be
+/// contiguous when it is taken and is owned page by page after. Whether it
+/// was split.
+pub(crate) fn split_frames(frame: Frame, order: u8) -> bool {
+    with_frames(|frames| frames.split(frame, order).is_ok()).unwrap_or(false)
+}
+
 /// Give back frames taken with [`allocate_frames`].
 pub(crate) fn deallocate_frames(frame: Frame, order: u8) {
     count(Route::Freed, 1 << order);

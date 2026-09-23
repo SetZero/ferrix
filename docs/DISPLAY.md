@@ -355,7 +355,7 @@ from `BootInfo`. What changes is what a person sees:
   readers: the panic screen draws only when it is 0, and the display core
   refuses to publish `card0` over a framebuffer where it is 1. Nothing is
   reserved to protect a picture nobody would see.
-* **Real hardware with one display controller** (the DK1's LTDC, P3): the
+* **Real hardware with one display controller** (the DK1's LTDC, §6): the
   firmware's framebuffer is the one that controller scans out, so once a
   driver takes it over **a panic's picture is lost and serial is not**; where
   that framebuffer is reclaimable RAM, the flag is 1 and the panic goes to
@@ -569,3 +569,91 @@ server), then input.
 **Still open, for the kernel reader of L5 and L6:** whether the ioctl branch
 is acceptable or `Inode::ioctl` should come first; and who reserves the
 firmware framebuffer's frames, mm or the reader, if §2.4's check ever fires.
+
+## 6. A board's HDMI output: the DK1's LTDC and its SiI9022
+
+Written by os-d1, 2026-09-23, at the customer's request to run the Wayland
+stack on the STM32MP157D-DK1 over HDMI. What was the P3 hardware row of
+stage 17 is now a second kind of card beside virtio-gpu, served by the same
+core and the same control protocol: nothing above `/dev/dri/card0` knows the
+difference, and `hyprix` names the connector `HDMI-A-1`.
+
+**The hardware.** The DK boards scan out from the SoC's LTDC, a display
+controller with two layers and no scatter-gather, through a 24-bit parallel
+RGB bus into a Silicon Image SiI9022 HDMI transmitter on I2C1 at 0x39
+(`stm32mp15xx-dkx.dtsi`). The LTDC's pixel clock is PLL4's Q output, which
+the board's firmware (TF-A) leaves at exactly 74.25 MHz — 24 MHz from the
+HSE, divided by 4, times 99, divided by 8, read back from the RCC on the
+board — and that is CEA-861's 1280x720 at 60 Hz. The card runs that one
+mode; no clock is reprogrammed, because PLL4 clocks other things too.
+
+**Who does what.**
+
+* **The kernel, once, at boot** (`kernel/src/stm32mp1.rs`): the parts every
+  peripheral on the chip shares, which no driver may hold. It checks PLL4's Q
+  output is 74.25 MHz within half a percent and the HSI is running undivided;
+  turns on the LTDC's clock and I2C1's, and puts I2C1's kernel clock on the
+  64 MHz HSI; muxes the LTDC's and I2C1's pins from their `pinctrl-0`
+  groups; pulses the bridge's `reset-gpios`. Then it publishes one device
+  node, `Location::Tree`, with two apertures (the LTDC's page and I2C1's,
+  each the whole page RM0436 gives the peripheral) and the LTDC's interrupt,
+  and says so: `display  LTDC at 0x5a001000, HDMI bridge at 0x39 on I2C
+  0x40012000, pixel clock 74.250 MHz, 30 pins muxed`. Anything it cannot
+  check leaves the display alone with a line saying why.
+* **devmgr** matches the node by `device_info`'s new `DEVICE_TREE_BLOCKS`
+  kind and the binding number `TREE_STM32_HDMI`, and starts `/lib/drivers/ltdc`
+  with blk's START shape, the two register windows where virtio's blocks
+  would be.
+* **The driver** (`user/ltdc`, logic in `libs/stm32-display`, host-tested
+  against models of the LTDC, the I2C controller, the bridge and an EDID
+  EEPROM): finds the bridge in TPI mode and checks its chip id, reads the
+  monitor's EDID through the bridge's DDC pass-through to choose HDMI (with
+  an AVI infoframe, VIC 4) or DVI, starts the LTDC at 720p60 with its layer
+  off, tells the bridge the mode and turns TMDS on. HELLO offers one scanout,
+  1280x720.
+
+**Buffers are one run of memory.** The LTDC has one address register per
+layer and nothing to translate through, so a buffer it shows must be
+physically contiguous. The core fills such a card's ranges at ATTACH with
+one block from the frame allocator — 720p's 3.6 MB fits the largest block,
+4 MiB — which `libs/frame`'s new `split` turns into single frames, so the
+card VMO owns, maps, decommits and gives back each page exactly as it does
+any other. The driver pins the range and refuses one that is not a single
+run below 4 GiB.
+
+**The LTDC does not snoop the caches.** The compositor draws through a
+normal cacheable mapping, as on every other card, and the core writes the
+buffer's lines back to the point of coherency (`arch::clean_for_device`,
+`DCCMVAC` on ARMv7-A) before it tells the driver: the whole buffer before
+SCANOUT, the damaged rows before FLUSH. Nothing about the mapping changes,
+so the compositor's reads of its own buffers stay fast. On x86-64 the clean
+is a no-op; virtio cards are coherent and skip it.
+
+**Flips are paced by the screen.** SCANOUT points the layer at the buffer,
+FLUSH asks for a shadow reload at the next vertical blanking, and FLIPPED goes
+out on the reload's interrupt: a compositor's page flips come at 60 Hz at
+most, never mid-screen. DETACH of a buffer on screen takes the layer off and
+waits for that reload before it unpins.
+
+**The DRM surface.** The connector is `DRM_MODE_CONNECTOR_HDMIA` and lists
+the one mode; a `monitor =` line asking for another size is left alone by
+`compositor_drm::Plan::take`, as for any size a connector does not list.
+It reports connected whatever the bridge's hotplug line says: there is no
+hotplug path to tell a compositor later, and a card that said disconnected
+at boot would stay dark until the next one.
+
+**What ran on the board (2026-09-23).** At `FERRIX-BOOT-OK stages 1-12` the
+node was published, `devmgr   1 devices, 6 drivers, 1 started, 0 failed`,
+`display  card0 scanout 0: 1280x720`. `compositor/blank` as init printed
+`compositor: scanout 1280x720 1280x720 colour 0x1e1e2e plane 4 Primary` and
+the customer saw that colour on the monitor. `hyprix` as init reported `1
+monitor [card0 HDMI-A-1 1280x720 1280x720]`, started a terminal running
+zinc, and the customer saw the tiled window. A frame takes about 100 ms in
+software on the 650 MHz Cortex-A7 once warm.
+
+**Not done.** Input: the board has no keyboard or pointer Ferrix drives (its
+USB host is stage 17's other P3 half, USB HID). Other modes: they need EDID's
+preferred timing and a PLL4 reprogramming that does not disturb what else it
+clocks. Hotplug. The LTDC's second layer as a cursor plane. The panic screen:
+the firmware left no framebuffer on this board, so a panic is serial only,
+as §2.4 says.

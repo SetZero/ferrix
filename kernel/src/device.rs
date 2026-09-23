@@ -60,7 +60,9 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 use ferrix_bootinfo::{BootView, MemKind, PAGE_SIZE};
 use ferrix_fdt::{Trigger as TreeTrigger, VIRTIO_MMIO_COMPATIBLE};
-use ferrix_native_abi::types::{DEVICE_NOT_PCI, DEVICE_VIRTIO_PCI, DeviceBlock, DeviceInfo};
+use ferrix_native_abi::types::{
+    DEVICE_NOT_PCI, DEVICE_TREE_BLOCKS, DEVICE_VIRTIO_PCI, DeviceBlock, DeviceInfo, TREE_STM32_HDMI,
+};
 use ferrix_pci::Address;
 use ferrix_pci::bar::{Bar, Region};
 use ferrix_pci::capability::{Capability, MSIX_ENTRY_SIZE, MsiX};
@@ -73,7 +75,7 @@ use ferrix_pci::virtio::{Location as VirtioLocation, Transport};
 use ferrix_sync::{IrqSpinLock, Once};
 
 use crate::mmio::Mmio;
-use crate::{acpi, arch, fdt, iommu, irq, vmap};
+use crate::{acpi, arch, fdt, iommu, irq, stm32mp1, vmap};
 
 /// GIC interrupt identifiers below this are software-generated or private to
 /// one core, and neither is a device's line.
@@ -225,6 +227,9 @@ pub(crate) enum Location {
     Pci(Address),
     /// A `virtio,mmio` device tree node, by the address of its registers.
     VirtioMmio(u64),
+    /// A device tree node of a binding the kernel knows, by the address of
+    /// its first registers.
+    Tree(u64),
 }
 
 impl fmt::Display for Location {
@@ -232,6 +237,7 @@ impl fmt::Display for Location {
         match self {
             Location::Pci(address) => write!(f, "pci {address}"),
             Location::VirtioMmio(base) => write!(f, "virtio,mmio@{base:#x}"),
+            Location::Tree(base) => write!(f, "tree@{base:#x}"),
         }
     }
 }
@@ -515,6 +521,28 @@ pub(crate) struct PciFunction {
     pub(crate) msix_table_size: u16,
 }
 
+/// How a device reaches memory, where it is not how a virtio device does.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct DmaShape {
+    /// Whether a buffer the device reads must be one run of physical
+    /// addresses: a scanout engine with one address register and nothing to
+    /// translate through.
+    pub(crate) contiguous: bool,
+    /// Whether the device sees what the processors' caches hold. A device
+    /// that does not reads memory, so whatever a program wrote for it has to
+    /// be cleaned out of the caches first.
+    pub(crate) coherent: bool,
+}
+
+impl DmaShape {
+    /// Scatter-gather and coherent: every virtio device, and every PCI
+    /// device on the machines Ferrix runs on.
+    pub(crate) const ORDINARY: DmaShape = DmaShape {
+        contiguous: false,
+        coherent: true,
+    };
+}
+
 /// A device a driver can be given, with exactly the apertures and vectors it
 /// has.
 #[derive(Debug)]
@@ -550,6 +578,11 @@ pub(crate) struct DeviceNode {
     undecoded: bool,
     /// Firmware's interrupts not minted as vectors.
     withheld_vectors: usize,
+    /// For [`Location::Tree`], the binding `device_info` reports (see
+    /// `DEVICE_TREE_BLOCKS`).
+    binding: u16,
+    /// How it reaches memory.
+    dma: DmaShape,
 }
 
 impl DeviceNode {
@@ -568,6 +601,8 @@ impl DeviceNode {
             interrupt_tables: Vec::new(),
             undecoded: false,
             withheld_vectors: 0,
+            binding: 0,
+            dma: DmaShape::ORDINARY,
         }
     }
 
@@ -665,6 +700,11 @@ impl DeviceNode {
         self.location
     }
 
+    /// How the device reaches memory.
+    pub(crate) const fn dma_shape(&self) -> DmaShape {
+        self.dma
+    }
+
     /// What configuration space said, for a PCI function.
     pub(crate) const fn pci_function(&self) -> Option<&PciFunction> {
         self.pci.as_ref()
@@ -691,6 +731,19 @@ impl DeviceNode {
             vectors: u32::try_from(self.vector_count()).unwrap_or(u32::MAX),
             ..DeviceInfo::default()
         };
+        if let Location::Tree(_) = self.location {
+            info.device_id = self.binding;
+            info.virtio = DEVICE_TREE_BLOCKS;
+            let window = |aperture: Option<&Aperture>| {
+                aperture.map_or_else(DeviceBlock::default, |aperture| DeviceBlock {
+                    phys: aperture.phys,
+                    offset: 0,
+                    length: u32::try_from(aperture.len).unwrap_or(u32::MAX),
+                })
+            };
+            info.common = window(self.apertures.first());
+            info.device = window(self.apertures.get(1));
+        }
         if let Some(function) = &self.pci {
             info.vendor_id = function.vendor;
             info.device_id = function.device;
@@ -777,7 +830,7 @@ impl DeviceNode {
         Arc::clone(self.domain.call_once(|| {
             Arc::new(match self.location {
                 Location::Pci(address) => iommu::domain_for(address),
-                Location::VirtioMmio(_) => iommu::Domain::untranslated(),
+                Location::VirtioMmio(_) | Location::Tree(_) => iommu::Domain::untranslated(),
             })
         }))
     }
@@ -904,7 +957,67 @@ fn tree_nodes(view: &BootView<'_>, reserved: &Reserved) -> Vec<DeviceNode> {
         }
         nodes.push(node);
     }
+    if let Some(node) = display_node(&tree, reserved, &mut held) {
+        nodes.push(node);
+    }
     nodes
+}
+
+/// The STM32MP15 DK board's HDMI output, when there is one: the LTDC's and
+/// the bridge's I2C controller's registers, and the LTDC's interrupt, once
+/// [`stm32mp1::prepare`] has clocked and muxed them.
+///
+/// Its registers are minted a page each, which is how RM0436's memory map
+/// places every peripheral on the chip, though the tree's `reg` says 0x400:
+/// nothing else lives in either page.
+fn display_node(
+    tree: &ferrix_fdt::Fdt<'_>,
+    reserved: &Reserved,
+    held: &mut BTreeSet<u32>,
+) -> Option<DeviceNode> {
+    let prepared = match stm32mp1::prepare(tree) {
+        Ok(found) => found?,
+        Err(why) => {
+            crate::console::println!("  display  the board's HDMI output is left alone: {why}");
+            return None;
+        }
+    };
+    let mut node = DeviceNode::empty(Location::Tree(prepared.ltdc.0));
+    node.binding = TREE_STM32_HDMI;
+    // The LTDC scans out one run of addresses and does not snoop the caches.
+    node.dma = DmaShape {
+        contiguous: true,
+        coherent: false,
+    };
+    node.mint(prepared.ltdc.0, prepared.ltdc.1, false, reserved);
+    node.mint(prepared.i2c.0, prepared.i2c.1, false, reserved);
+    if node.apertures.len() != 2 {
+        crate::console::println!(
+            "  display  the board's HDMI output is left alone: its registers overlap memory the kernel uses"
+        );
+        return None;
+    }
+    let interrupt = prepared.interrupt;
+    let usable = interrupt.id >= FIRST_SHARED_INTERRUPT
+        && !irq::is_registered(interrupt.id)
+        && held.insert(interrupt.id);
+    if !usable {
+        crate::console::println!(
+            "  display  the board's HDMI output is left alone: interrupt {} is taken",
+            interrupt.id
+        );
+        return None;
+    }
+    node.vectors.push(Vector {
+        number: interrupt.id,
+        trigger: interrupt.trigger.map(|trigger| match trigger {
+            TreeTrigger::EdgeRising | TreeTrigger::EdgeFalling => Trigger::Edge,
+            TreeTrigger::LevelHigh | TreeTrigger::LevelLow => Trigger::Level,
+        }),
+        masking: Masking::Controller,
+    });
+    crate::console::println!("  display  {prepared}");
+    Some(node)
 }
 
 /// Every device node, once boot has published them.
@@ -1092,7 +1205,7 @@ fn check_exclusive(nodes: &[DeviceNode]) -> Result<(), Failure> {
     let mut numbers = BTreeSet::new();
     for node in nodes {
         for vector in &node.vectors {
-            if matches!(node.location, Location::VirtioMmio(_))
+            if matches!(node.location, Location::VirtioMmio(_) | Location::Tree(_))
                 && vector.number < FIRST_SHARED_INTERRUPT
             {
                 return Err(Failure {

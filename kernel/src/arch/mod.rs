@@ -117,3 +117,14 @@ pub(crate) use aarch64::check_exception_entry;
 pub(crate) use armv7a::check_exception_entry;
 #[cfg(target_arch = "x86_64")]
 pub(crate) use x86_64::check_exception_entry;
+
+// Cache maintenance for a device that does not snoop the caches: the
+// DK board's display controller reads a framebuffer straight from memory, so
+// whatever a program drew has to be written back from the caches to the point
+// of coherency before the controller is told to read it.
+#[cfg(target_arch = "aarch64")]
+pub(crate) use aarch64::clean_for_device;
+#[cfg(target_arch = "arm")]
+pub(crate) use armv7a::clean_for_device;
+#[cfg(target_arch = "x86_64")]
+pub(crate) use x86_64::clean_for_device;

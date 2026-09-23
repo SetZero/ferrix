@@ -35,6 +35,7 @@ members = [
     "libs/native-abi",
     "libs/native",
     "libs/objects",
+    "libs/stm32-display",
     "libs/sync",
     "libs/ustack",
     "libs/vdagent",
@@ -68,6 +69,7 @@ members = [
     "user/blk",
     "user/net",
     "user/gpu",
+    "user/ltdc",
     "user/input",
     "user/vport",
     "user/devmgr",
@@ -110,6 +112,7 @@ ferrix-crng = { path = "libs/crng" }
 ferrix-linux-abi = { path = "libs/linux-abi" }
 ferrix-native-abi = { path = "libs/native-abi" }
 ferrix-native = { path = "libs/native" }
+ferrix-stm32-display = { path = "libs/stm32-display" }
 ferrix-netwire = { path = "libs/netwire" }
 ferrix-nettcp = { path = "libs/nettcp" }
 ferrix-net = { path = "libs/net" }

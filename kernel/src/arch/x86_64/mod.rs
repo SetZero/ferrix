@@ -1320,3 +1320,9 @@ pub(crate) use switch::{
     UserState, prepare_stack, reset_user_state, restore_user_state, save_user_state, switch_to,
 };
 pub(crate) use syscall::{UserRegs, resume_user};
+
+/// Nothing to clean: every device a PC's kernel drives snoops the caches, so
+/// what a processor wrote is what the device reads.
+pub(crate) fn clean_for_device(start: u64, len: u64) {
+    let _ = (start, len);
+}

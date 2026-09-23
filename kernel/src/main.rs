@@ -46,6 +46,7 @@ mod random;
 mod render;
 mod sched;
 mod smp;
+mod stm32mp1;
 mod sync;
 mod syscall;
 mod timer;

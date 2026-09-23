@@ -102,7 +102,12 @@ a driver's death or of its restart (§4), printed the same way.
    `0x1001` is virtio-blk, driven by `blk`; stage 17 adds virtio-gpu
    (`0x1050`) and virtio-input (`0x1052`) to the same table, and their
    drivers to the same directory, with no change to the kernel. A device
-   nobody drives is left alone, and its handle closed.
+   nobody drives is left alone, and its handle closed. A device tree node
+   the kernel publishes for a binding it knows reports
+   `DEVICE_TREE_BLOCKS` and the binding's number in place of a PCI identity,
+   its register windows in the blocks; a second, smaller table matches those:
+   `TREE_STM32_HDMI`, the DK board's HDMI output, is a card driven by `ltdc`
+   (`docs/DISPLAY.md` §6).
 2. Devices of one kind are named in PCI order — `vda`, `vdb`, … for disks, as
    `docs/BLOCK-RING.md` §6.1 decides — so names are stable on a given machine.
 3. For each match, in that order:

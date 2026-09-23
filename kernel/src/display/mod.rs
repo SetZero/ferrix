@@ -39,9 +39,11 @@ use ferrix_native_abi::rights::Rights;
 use ferrix_native_abi::signals::Signals;
 use ferrix_native_abi::types::CHANNEL_MAX_HANDLES;
 
+use ferrix_native_abi::types::DEVICE_NOT_PCI;
+
 use crate::block_ring::StillServed;
 use crate::claim::{Claims, Numbers};
-use crate::device::DeviceNode;
+use crate::device::{self, DeviceNode, DmaShape};
 use crate::object::channel::{ChannelMessage, Endpoint, ReadError};
 use crate::object::port::Port;
 use crate::object::{Object, Transfer};
@@ -119,6 +121,11 @@ struct Start {
     location: Option<Location>,
 }
 
+/// The word a device tree node's HELLO and PUBLISHED carry for its location,
+/// which is what `device_info` says for it: there is one display of the
+/// kind on a board, so the word names it well enough.
+const TREE_LOCATION: Location = Location(DEVICE_NOT_PCI);
+
 static STARTING: SpinLock<Vec<Start>> = SpinLock::new(Vec::new());
 static CLAIMS: Claims = Claims::new();
 static CARDS: SpinLock<Vec<Arc<Card>>> = SpinLock::new(Vec::new());
@@ -140,6 +147,13 @@ pub(crate) struct Card {
     changed: Arc<WaitQueue>,
     /// Whether an open holds the card: one at a time.
     pub(crate) opened: AtomicBool,
+    /// How the device reads the buffers: one run each, and whether the
+    /// caches have to be cleaned for it.
+    dma: DmaShape,
+    /// Whether the card is a board's HDMI output, which runs the one mode
+    /// its pixel clock was set for, rather than a virtual one that shows any
+    /// size it is handed.
+    pub(crate) hdmi: bool,
 }
 
 /// The range of the card VMO a buffer id was given.
@@ -148,6 +162,8 @@ struct Range {
     buffer: u32,
     offset: u64,
     bytes: u64,
+    /// Bytes a row, for cleaning the rows a flush names.
+    stride: u32,
 }
 
 /// A reply whose request stopped waiting for it, which the card's task drops.
@@ -435,10 +451,27 @@ impl Card {
             .checked_next_multiple_of(PAGE_SIZE)
             .filter(|&bytes| bytes > 0 && bytes <= MAX_BUFFER_PAGES * PAGE_SIZE)
             .ok_or(CardError::NoRoom)?;
-        let (buffer, offset) = self.send(|state| {
+        // A device that reads one run of addresses gets its range filled
+        // with one block of frames before the driver hears of it, outside
+        // the state lock: zeroing megabytes is not something to do with
+        // preemption off.
+        let reserved = if self.dma.contiguous {
+            let offset = self.state.lock().allocate(bytes).ok_or(CardError::NoRoom)?;
+            if !commit_contiguous(&self.vmo, offset, bytes) {
+                self.forget_range(offset, bytes);
+                return Err(CardError::NoRoom);
+            }
+            Some(offset)
+        } else {
+            None
+        };
+        let sent = self.send(|state| {
             let buffer = state.next_buffer;
             let next = buffer.checked_add(1).ok_or(CardError::NoRoom)?;
-            let offset = state.allocate(bytes).ok_or(CardError::NoRoom)?;
+            let offset = match reserved {
+                Some(offset) => offset,
+                None => state.allocate(bytes).ok_or(CardError::NoRoom)?,
+            };
             let attach = Attach {
                 buffer,
                 format: FORMAT,
@@ -455,16 +488,33 @@ impl Card {
                         buffer,
                         offset,
                         bytes,
+                        stride,
                     });
                     Ok((message, (buffer, offset)))
                 }
                 Err(error) => {
                     // Never sent, so never pinned, and nothing wrote to it.
-                    state.give_back(offset, bytes);
+                    // A reserved range holds frames, and goes back below.
+                    if reserved.is_none() {
+                        state.give_back(offset, bytes);
+                    }
                     Err(CardError::Request(error))
                 }
             }
-        })?;
+        });
+        let (buffer, offset) = match (sent, reserved) {
+            (Ok(sent), _) => sent,
+            (Err(error), Some(offset)) => {
+                // Unless a buffer was made of it after all, which only a
+                // write to a driver that has just gone can leave behind.
+                let taken = self.state.lock().ranges.iter().any(|r| r.offset == offset);
+                if !taken {
+                    self.forget_range(offset, bytes);
+                }
+                return Err(error);
+            }
+            (Err(error), None) => return Err(error),
+        };
         let event = self.collect(
             |event| matches!(event, Event::Attached { buffer: b, .. } if *b == buffer),
             |state| state.orphans.push(buffer),
@@ -526,6 +576,11 @@ impl Card {
 
     /// Show `rect` of `buffer` on `scanout`, or turn it off with buffer 0.
     pub(crate) fn scanout(&self, scanout: u32, buffer: u32, rect: Rect) -> Result<(), CardError> {
+        // A device that does not snoop starts reading the whole buffer at
+        // the next frame, before any flush of it.
+        if buffer != 0 {
+            self.clean_rows(buffer, 0, u32::MAX);
+        }
         self.send(|state| {
             state.scanout_off = false;
             let message = state
@@ -538,6 +593,7 @@ impl Card {
 
     /// FLUSH `rect` of `buffer` and wait for FLIPPED.
     pub(crate) fn flush(&self, buffer: u32, rect: Rect) -> Result<Status, CardError> {
+        self.clean_rows(buffer, rect.y, rect.height);
         let sequence = self.send(|state| {
             let message = state
                 .session
@@ -556,6 +612,56 @@ impl Card {
             Event::Flipped { status, .. } => Ok(status),
             _ => Err(CardError::Gone),
         }
+    }
+
+    /// Write `rows` rows of `buffer` from row `first` back from the caches
+    /// to memory, for a device that reads memory rather than the caches.
+    /// Nothing to do for a coherent one, or for a buffer that is not a range
+    /// of the card VMO.
+    ///
+    /// Runs without the state lock: the range's pages are pinned by the
+    /// driver for as long as the buffer is attached, and a clean of a page
+    /// that is being let go of at the same moment writes back nothing that
+    /// matters.
+    fn clean_rows(&self, buffer: u32, first: u32, rows: u32) {
+        if self.dma.coherent {
+            return;
+        }
+        let Some(range) = self
+            .state
+            .lock()
+            .ranges
+            .iter()
+            .find(|range| range.buffer == buffer)
+            .copied()
+        else {
+            return;
+        };
+        let stride = u64::from(range.stride);
+        let start = (u64::from(first) * stride).min(range.bytes);
+        let end = u64::from(first)
+            .saturating_add(u64::from(rows))
+            .saturating_mul(stride)
+            .min(range.bytes);
+        let mut at = range.offset + start;
+        let stop = range.offset + end;
+        while at < stop {
+            let page_end = (at / PAGE_SIZE + 1) * PAGE_SIZE;
+            let len = page_end.min(stop) - at;
+            if let Some(frame) = self.vmo.page(at / PAGE_SIZE) {
+                let virt = crate::mm::direct_map(frame * PAGE_SIZE) + at % PAGE_SIZE;
+                crate::arch::clean_for_device(virt, len);
+            }
+            at += len;
+        }
+    }
+
+    /// Give back a range no buffer was made of, frames and all.
+    fn forget_range(&self, offset: u64, bytes: u64) {
+        let _ = self
+            .vmo
+            .decommit_range(offset / PAGE_SIZE, bytes / PAGE_SIZE);
+        self.state.lock().give_back(offset, bytes);
     }
 
     /// Let go of `buffers` without waiting: detached now, or as soon as the
@@ -590,6 +696,44 @@ impl Card {
     }
 }
 
+/// Fill `bytes` of `vmo` from `offset`, a range holding nothing, with zeroed
+/// frames that are one run of physical memory: one block from the allocator,
+/// split so the VMO owns and gives back each page as it would any other, the
+/// block's pages past the range given back at once. Whether it was done; a
+/// range the allocator has no block for, or one somebody filled meanwhile,
+/// is left as it was.
+fn commit_contiguous(vmo: &Vmo, offset: u64, bytes: u64) -> bool {
+    let pages = bytes / PAGE_SIZE;
+    let Some(order) = (0..=ferrix_frame::MAX_ORDER).find(|&order| 1u64 << order >= pages) else {
+        return false;
+    };
+    let Some(block) = crate::mm::allocate_frames(order) else {
+        return false;
+    };
+    if !crate::mm::split_frames(block, order) {
+        crate::mm::deallocate_frames(block, order);
+        return false;
+    }
+    let first = offset / PAGE_SIZE;
+    let mut inserted = 0;
+    for page in 0..1u64 << order {
+        let frame = block + page;
+        if page < pages {
+            crate::mm::zero_frame(frame);
+            if vmo.insert_absent(first + page, frame) {
+                inserted += 1;
+                continue;
+            }
+        }
+        let _ = crate::mm::release_frame(frame);
+    }
+    if inserted == pages {
+        return true;
+    }
+    let _ = vmo.decommit_range(first, pages);
+    false
+}
+
 /// The numbers of every published card, lowest first.
 pub(crate) fn card_indices() -> Vec<u32> {
     let mut indices: Vec<u32> = CARDS.lock().iter().map(|card| card.index).collect();
@@ -614,11 +758,15 @@ pub(crate) fn create(node: &Arc<DeviceNode>) -> Result<Arc<Endpoint>, CreateErro
         return Err(CreateError::InUse);
     }
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+    let location = match node.location() {
+        device::Location::Tree(_) => Some(TREE_LOCATION),
+        _ => crate::block_ring::location_of(node),
+    };
     STARTING.lock().push(Start {
         id,
         control: kernel_end,
         device: Arc::clone(node),
-        location: crate::block_ring::location_of(node),
+        location,
     });
     if sched::spawn("display", run, id, ferrix_sched::NICE_0_WEIGHT).is_err() {
         let _ = take_start(id);
@@ -742,6 +890,8 @@ fn accept(start: &Start, message: &ChannelMessage) -> Result<Arc<Card>, Refusal>
         }),
         changed: Arc::new(WaitQueue::new()),
         opened: AtomicBool::new(false),
+        dma: start.device.dma_shape(),
+        hdmi: matches!(start.device.location(), device::Location::Tree(_)),
     });
 
     // Published before READY goes out, as the rings do: devmgr kills a driver

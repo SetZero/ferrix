@@ -204,6 +204,9 @@ pub const SUBPIXEL_UNKNOWN: u32 = 0;
 pub const CONNECTOR_UNKNOWN: u32 = 0;
 /// `DRM_MODE_CONNECTOR_VIRTUAL`: what virtio-gpu reports.
 pub const CONNECTOR_VIRTUAL: u32 = 15;
+/// `DRM_MODE_CONNECTOR_HDMIA`: an HDMI type A socket, which a program names
+/// `HDMI-A-1`.
+pub const CONNECTOR_HDMIA: u32 = 11;
 /// `DRM_MODE_ENCODER_NONE`.
 pub const ENCODER_NONE: u32 = 0;
 /// `DRM_MODE_ENCODER_VIRTUAL`.

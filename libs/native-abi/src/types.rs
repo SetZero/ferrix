@@ -107,12 +107,14 @@ pub struct DeviceInfo {
     pub notify_off_multiplier: u32,
     /// The PCI vendor identifier; zero for a device tree node.
     pub vendor_id: u16,
-    /// The PCI device identifier; zero for a device tree node.
+    /// The PCI device identifier; for a device tree node, the binding
+    /// [`DEVICE_TREE_BLOCKS`] names, or zero.
     pub device_id: u16,
     /// MSI-X table entries; zero for a device with a line only.
     pub msix_table_size: u16,
     /// [`DEVICE_VIRTIO_PCI`] when the blocks above describe a virtio PCI
-    /// transport, else zero and the blocks are zero.
+    /// transport, [`DEVICE_TREE_BLOCKS`] when they are a device tree node's
+    /// registers, else zero and the blocks are zero.
     pub virtio: u16,
 }
 
@@ -122,6 +124,16 @@ pub const DEVICE_INFO_BYTES: usize = 96;
 pub const DEVICE_NOT_PCI: u32 = u32::MAX;
 /// [`DeviceInfo::virtio`] of a virtio PCI transport.
 pub const DEVICE_VIRTIO_PCI: u16 = 1;
+/// [`DeviceInfo::virtio`] of a device tree node the kernel publishes for a
+/// binding it knows: [`DeviceInfo::device_id`] names the binding, the
+/// vendor is zero, and the blocks are the node's register windows in the
+/// order the binding gives, [`DeviceInfo::common`] first and
+/// [`DeviceInfo::device`] second.
+pub const DEVICE_TREE_BLOCKS: u16 = 2;
+/// [`DeviceInfo::device_id`] of an STM32MP15 DK board's HDMI output: the
+/// LTDC's registers in `common`, the HDMI bridge's I2C controller's in
+/// `device`, and the LTDC's interrupt as vector 0.
+pub const TREE_STM32_HDMI: u16 = 1;
 
 /// The aperture an `io_mapping_create` claims.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

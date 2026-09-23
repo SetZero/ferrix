@@ -971,8 +971,16 @@ fn connector(process: &Process, card: &Card, arg: u64) -> Result<usize, Errno> {
     let mut connector: GetConnector = read_arg(process, arg)?;
     let head = head_of(card, connector.connector_id, CONNECTOR).ok_or(Errno::ENOENT)?;
     let preferred = card.modes().get(head).copied().filter(|mode| mode.enabled);
+    // A board's HDMI output runs the one mode its pixel clock was set for; a
+    // virtual card shows any size.
     let modes: Vec<ModeInfo> = preferred
-        .map(|mode| listed_modes(mode.width, mode.height))
+        .map(|mode| {
+            if card.hdmi {
+                vec![mode_for(mode.width, mode.height)]
+            } else {
+                listed_modes(mode.width, mode.height)
+            }
+        })
         .unwrap_or_default();
     if connector.modes_ptr != 0 && connector.count_modes as usize >= modes.len() {
         let mut bytes = vec![0u8; modes.len() * ModeInfo::SIZE];
@@ -995,7 +1003,11 @@ fn connector(process: &Process, card: &Card, arg: u64) -> Result<usize, Errno> {
     connector.count_props = 0;
     connector.count_encoders = 1;
     connector.encoder_id = object_id(head, ENCODER);
-    connector.connector_type = drm::CONNECTOR_VIRTUAL;
+    connector.connector_type = if card.hdmi {
+        drm::CONNECTOR_HDMIA
+    } else {
+        drm::CONNECTOR_VIRTUAL
+    };
     // Linux numbers connectors of one type from one upwards, and a program
     // prints the name as `Virtual-1`, `Virtual-2`.
     connector.connector_type_id = u32::try_from(head).unwrap_or(0).saturating_add(1);
