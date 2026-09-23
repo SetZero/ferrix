@@ -38,7 +38,7 @@ use std::path::{Path, PathBuf};
 
 pub use bind::{Bind, BindFlags, Key, Mods};
 pub use layer::{LayerEffect, LayerRule, Layered};
-pub use monitor::{Mode, MonitorRule, Position, Scale};
+pub use monitor::{Mode, MonitorRule, Position, Scale, Transform};
 pub use options::{OptionValue, default_of};
 pub use parse::parse;
 pub use rule::{Decoration, Effect, GroupRules, Length, Matcher, Window, WindowRule, is_prop};

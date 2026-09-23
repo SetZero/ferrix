@@ -7,9 +7,9 @@
 //!
 //! What is read here: the name, `disable`, the resolution as `preferred` or
 //! `WIDTHxHEIGHT` with an optional `@REFRESH`, the position as `auto` or
-//! `XxY`, and the scale as `auto` or a number. `transform`, `mirror`,
-//! `bitdepth`, `vrr` and the rest are not done, and a line that carries one
-//! says so rather than being read as if it were not there.
+//! `XxY`, the scale as `auto` or a number, and the `transform, N` pair after
+//! them. `mirror`, `bitdepth`, `vrr` and the rest are not done, and a line
+//! that carries one says so rather than being read as if it were not there.
 
 /// What a `monitor =` line asks for.
 #[derive(Debug, Clone, PartialEq)]
@@ -25,6 +25,103 @@ pub struct MonitorRule {
     pub position: Position,
     /// How many buffer pixels a logical one is.
     pub scale: Scale,
+    /// `transform, N`: how the monitor is turned, [`Transform::Normal`]
+    /// for a line that does not say.
+    pub transform: Transform,
+}
+
+/// How a monitor is turned: `monitor = ..., transform, N`, whose `N` is a
+/// `wl_output.transform` value, 0 to 7.
+///
+/// The protocol's word for `1` is "90 degrees counter-clockwise", and it is
+/// what Hyprland does to the picture it lays out to make the buffer the
+/// connector scans out: the desktop's top left goes to the buffer's bottom
+/// left. A person reads that upright on a monitor turned clockwise, onto
+/// its right-hand edge; `3` is the other way round, for a monitor turned
+/// onto its left-hand edge.
+///
+/// The flipped four mirror the picture left to right first and then turn
+/// it as the first four do, which is the protocol's own statement of them.
+/// `compositor_render::transform` is where a pixel is actually moved, and
+/// derives each place from Hyprland's matrix.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Transform {
+    /// 0: as it comes.
+    #[default]
+    Normal,
+    /// 1: turned 90 degrees.
+    Rotated90,
+    /// 2: upside down.
+    Rotated180,
+    /// 3: turned 270 degrees, which is 90 the other way.
+    Rotated270,
+    /// 4: mirrored left to right.
+    Flipped,
+    /// 5: mirrored, then turned 90 degrees.
+    Flipped90,
+    /// 6: mirrored, then upside down, which is mirrored top to bottom.
+    Flipped180,
+    /// 7: mirrored, then turned 270 degrees.
+    Flipped270,
+}
+
+impl Transform {
+    /// Every transform, in the protocol's order, so that `ALL[n]` is `n`'s.
+    pub const ALL: [Self; 8] = [
+        Self::Normal,
+        Self::Rotated90,
+        Self::Rotated180,
+        Self::Rotated270,
+        Self::Flipped,
+        Self::Flipped90,
+        Self::Flipped180,
+        Self::Flipped270,
+    ];
+
+    /// The transform whose `wl_output.transform` value is `value`, if there
+    /// is one.
+    #[must_use]
+    pub fn from_value(value: u32) -> Option<Self> {
+        Self::ALL.get(usize::try_from(value).ok()?).copied()
+    }
+
+    /// Its `wl_output.transform` value: what `hyprctl monitors` prints and
+    /// `wl_output.geometry` carries.
+    #[must_use]
+    pub const fn value(self) -> u32 {
+        match self {
+            Self::Normal => 0,
+            Self::Rotated90 => 1,
+            Self::Rotated180 => 2,
+            Self::Rotated270 => 3,
+            Self::Flipped => 4,
+            Self::Flipped90 => 5,
+            Self::Flipped180 => 6,
+            Self::Flipped270 => 7,
+        }
+    }
+
+    /// Whether it turns a quarter, so that a monitor's width is the height
+    /// of what is laid out on it: 1, 3, 5 and 7.
+    #[must_use]
+    pub const fn swaps(self) -> bool {
+        matches!(
+            self,
+            Self::Rotated90 | Self::Rotated270 | Self::Flipped90 | Self::Flipped270
+        )
+    }
+
+    /// A mode's `(width, height)` as it is laid out: the two exchanged for a
+    /// quarter turn, and as they are otherwise. Hyprland's
+    /// `m_transformedSize`.
+    #[must_use]
+    pub const fn size<T: Copy>(self, (width, height): (T, T)) -> (T, T) {
+        if self.swaps() {
+            (height, width)
+        } else {
+            (width, height)
+        }
+    }
 }
 
 /// The resolution field.
@@ -62,7 +159,64 @@ pub enum Scale {
     Fixed(f64),
 }
 
+/// The keywords Hyprland reads after the scale that this compositor does
+/// not do yet, which a line is refused for naming rather than read as if it
+/// did not.
+const NOT_DONE: [&str; 7] = [
+    "mirror",
+    "bitdepth",
+    "cm",
+    "sdrsaturation",
+    "sdrbrightness",
+    "vrr",
+    "icc",
+];
+
 impl MonitorRule {
+    /// Read every `monitor =` line's value, in the order the file has them:
+    /// the rules, and each line that could not be read with why.
+    ///
+    /// One form is not a rule of its own. `monitor = NAME, transform, N`
+    /// turns the monitor an earlier line named `NAME` -- exactly, as
+    /// Hyprland compares it -- by adding that rule again with the new
+    /// transform, which wins because a later rule does. A name no earlier
+    /// line gave does nothing and is no error. Both are
+    /// `CConfigManager::handleMonitor`'s.
+    #[must_use]
+    pub fn read_all<'a>(
+        values: impl IntoIterator<Item = &'a str>,
+    ) -> (Vec<Self>, Vec<(&'a str, String)>) {
+        let mut rules: Vec<Self> = Vec::new();
+        let mut refused = Vec::new();
+        for value in values {
+            let fields: Vec<&str> = value.split(',').map(str::trim).collect();
+            let read = match fields.as_slice() {
+                [name, "transform", rest @ ..] => Self::turned_again(&rules, name, rest),
+                _ => Self::parse(value).map(Some),
+            };
+            match read {
+                Ok(Some(rule)) => rules.push(rule),
+                Ok(None) => {}
+                Err(why) => refused.push((value, why)),
+            }
+        }
+        (rules, refused)
+    }
+
+    /// `NAME, transform, N`: the last rule named `NAME` with the transform
+    /// changed, or `None` when no rule is.
+    fn turned_again(rules: &[Self], name: &str, rest: &[&str]) -> Result<Option<Self>, String> {
+        let transform = parse_transform(rest.first().copied().unwrap_or(""))?;
+        Ok(rules
+            .iter()
+            .rev()
+            .find(|rule| rule.name == name)
+            .map(|rule| Self {
+                transform,
+                ..rule.clone()
+            }))
+    }
+
     /// Read a `monitor =` line's value.
     ///
     /// # Errors
@@ -73,6 +227,12 @@ impl MonitorRule {
         let mut fields = value.split(',').map(str::trim);
         let name = fields.next().unwrap_or("").to_owned();
         let resolution = fields.next().unwrap_or("preferred");
+        if resolution == "transform" {
+            return Err(format!(
+                "monitor: `{name}, transform, N` turns an earlier rule's monitor and is read with \
+                 the other lines"
+            ));
+        }
         if resolution.eq_ignore_ascii_case("disable") || resolution.eq_ignore_ascii_case("disabled")
         {
             return Ok(Self {
@@ -81,17 +241,33 @@ impl MonitorRule {
                 mode: Mode::Preferred,
                 position: Position::Auto,
                 scale: Scale::Auto,
+                transform: Transform::Normal,
             });
         }
         let mode = parse_mode(resolution)?;
         let position = parse_position(fields.next().unwrap_or("auto"))?;
         let scale = parse_scale(fields.next().unwrap_or("auto"))?;
+        // After the four come keyword pairs in any order, which is how
+        // `handleMonitor` reads them: a keyword, then its value, and a
+        // later pair of the same keyword over an earlier one.
+        let mut transform = Transform::Normal;
         let rest: Vec<&str> = fields.filter(|field| !field.is_empty()).collect();
-        if !rest.is_empty() {
-            return Err(format!(
-                "monitor: {} is not done yet; the name, resolution, position and scale are",
-                rest.join(", ")
-            ));
+        for pair in rest.chunks(2) {
+            match pair {
+                ["transform", value] => transform = parse_transform(value)?,
+                ["transform"] => return Err("invalid transform".to_owned()),
+                [keyword, ..] if NOT_DONE.contains(keyword) => {
+                    return Err(format!(
+                        "monitor: {} is not done yet; the name, resolution, position, scale \
+                         and transform are",
+                        pair.join(", ")
+                    ));
+                }
+                // Hyprland's own words for a field that is no keyword of
+                // its.
+                [other, ..] => return Err(format!("invalid syntax at \"{other}\"")),
+                [] => {}
+            }
         }
         Ok(Self {
             name,
@@ -99,6 +275,7 @@ impl MonitorRule {
             mode,
             position,
             scale,
+            transform,
         })
     }
 
@@ -202,6 +379,20 @@ fn parse_position(text: &str) -> Result<Position, String> {
         .parse()
         .map_err(|_| format!("Invalid position {text}"))?;
     Ok(Position::At(x, y))
+}
+
+/// The value after `transform`: a whole number from 0 to 7, which is
+/// Hyprland's `CMonitorRuleParser::parseTransform` and its words for one that
+/// is not.
+fn parse_transform(text: &str) -> Result<Transform, String> {
+    let value: i64 = text
+        .trim()
+        .parse()
+        .map_err(|_| format!("invalid transform {text}"))?;
+    u32::try_from(value)
+        .ok()
+        .and_then(Transform::from_value)
+        .ok_or_else(|| format!("invalid transform {text}"))
 }
 
 /// The scale field.

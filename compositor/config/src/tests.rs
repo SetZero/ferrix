@@ -849,7 +849,7 @@ fn the_example_configuration() {
 // monitor no other rule names.
 // ---------------------------------------------------------------------------
 
-use crate::{Mode, MonitorRule, Position, Scale};
+use crate::{Mode, MonitorRule, Position, Scale, Transform};
 
 #[test]
 fn a_monitor_line_is_a_name_a_mode_a_place_and_a_scale() {
@@ -937,12 +937,22 @@ fn a_monitor_can_be_disabled_and_a_bad_field_is_refused() {
     }
 
     // What is not done says so rather than being ignored.
-    let transform = MonitorRule::parse("Virtual-1, preferred, auto, 1, transform, 1");
+    let mirror = MonitorRule::parse("Virtual-1, preferred, auto, 1, mirror, DP-1");
     assert!(
-        transform
+        mirror
             .as_ref()
             .is_err_and(|why| why.contains("not done yet")),
-        "{transform:?}"
+        "{mirror:?}"
+    );
+    let vrr = MonitorRule::parse("Virtual-1, preferred, auto, 1, transform, 1, vrr, 1");
+    assert!(
+        vrr.as_ref().is_err_and(|why| why.contains("not done yet")),
+        "{vrr:?}"
+    );
+    // And a field that is no keyword at all is Hyprland's syntax error.
+    assert_eq!(
+        MonitorRule::parse("Virtual-1, preferred, auto, 1, 1"),
+        Err("invalid syntax at \"1\"".to_owned())
     );
     let auto_left = MonitorRule::parse("Virtual-1, preferred, auto-left, 1");
     assert!(
@@ -951,6 +961,95 @@ fn a_monitor_can_be_disabled_and_a_bad_field_is_refused() {
             .is_err_and(|why| why.contains("not done yet")),
         "{auto_left:?}"
     );
+}
+
+/// `transform, N` after the scale: Hyprland's `wl_output.transform` number,
+/// 0 to 7, as `CMonitorRuleParser::parseTransform` reads it.
+#[test]
+fn a_monitor_can_be_turned() {
+    let turned = MonitorRule::parse("HDMI-A-1, 1920x1080@60, 0x0, 1, transform, 1").unwrap();
+    assert_eq!(turned.transform, Transform::Rotated90);
+    assert_eq!(
+        turned.mode,
+        Mode::Fixed {
+            width: 1920,
+            height: 1080,
+            refresh: Some(60.0)
+        },
+        "the mode is the connector's, not turned"
+    );
+    // A line that does not say is upright.
+    assert_eq!(
+        MonitorRule::parse(", preferred, auto, 1")
+            .unwrap()
+            .transform,
+        Transform::Normal
+    );
+    // Every number the protocol has.
+    for value in 0..8u32 {
+        let rule =
+            MonitorRule::parse(&format!("DP-1, preferred, auto, 1, transform, {value}")).unwrap();
+        assert_eq!(rule.transform.value(), value);
+    }
+    // Hyprland reads it as a whole number and nothing else.
+    for bad in ["8", "-1", "1.0", "ninety", ""] {
+        let line = format!("DP-1, preferred, auto, 1, transform, {bad}");
+        assert!(
+            MonitorRule::parse(&line).is_err_and(|why| why.starts_with("invalid transform")),
+            "{line} was read"
+        );
+    }
+    // A pair with no value is not one.
+    assert!(MonitorRule::parse("DP-1, preferred, auto, 1, transform").is_err());
+    // A later pair of the same keyword wins, as Hyprland's loop has it.
+    assert_eq!(
+        MonitorRule::parse("DP-1, preferred, auto, 1, transform, 1, transform, 3")
+            .unwrap()
+            .transform,
+        Transform::Rotated270
+    );
+    // Scale and transform together: the transform does not change the
+    // scale it is read beside.
+    let both = MonitorRule::parse("DP-1, preferred, auto, 2, transform, 3").unwrap();
+    assert!((both.scale_factor() - 2.0).abs() < f64::EPSILON);
+    assert_eq!(both.transform, Transform::Rotated270);
+}
+
+/// `monitor = NAME, transform, N` on its own line turns the monitor an
+/// earlier line named, and names no monitor of its own.
+#[test]
+fn a_transform_line_turns_an_earlier_rule() {
+    let (rules, refused) = MonitorRule::read_all([
+        "DP-1, 2560x1440, 0x0, 1",
+        "HDMI-A-1, preferred, auto, 1",
+        "DP-1, transform, 3",
+        // No earlier rule is called this: nothing happens, and it is no
+        // error.
+        "DP-9, transform, 1",
+        "HDMI-A-1, transform, 9",
+    ]);
+    assert_eq!(refused.len(), 1, "{refused:?}");
+    assert_eq!(refused[0].0, "HDMI-A-1, transform, 9");
+    assert_eq!(rules.len(), 3, "{rules:?}");
+    // The last rule for DP-1 is the turned copy, and it is the one that
+    // applies, since a later rule wins.
+    let last = rules
+        .iter()
+        .rev()
+        .find(|rule| rule.matches("DP-1", ""))
+        .unwrap();
+    assert_eq!(last.transform, Transform::Rotated270);
+    assert_eq!(last.position, Position::At(0, 0));
+    assert!(matches!(
+        last.mode,
+        Mode::Fixed {
+            width: 2560,
+            height: 1440,
+            ..
+        }
+    ));
+    // Read as a rule of its own, the short form says what it is.
+    assert!(MonitorRule::parse("DP-1, transform, 3").is_err());
 }
 
 // ---------------------------------------------------------------------------
