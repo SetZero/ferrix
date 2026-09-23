@@ -136,6 +136,21 @@ command line, `ferrix.root=tmpfs` does the same. The test boots never attach
 the volume, so their `/` is the tmpfs and what is on it cannot change what a
 test sees.
 
+On x86-64, `run` and `run-compositor` also attach the stage 16 rustc sysroot
+when `scripts/fetch-rustc-sysroot.sh` has made
+`~/.local/share/ferrix/rustc/rustc.img` (or `$FERRIX_RUSTC_SYSROOT/rustc.img`).
+The kernel mounts that btrfs disk at `/data`; QEMU's snapshot mode keeps
+guest writes from changing the source disk. The default system installs links
+for glibc and gcc, plus `/bin/rustc`, `/bin/cargo` and `/bin/cc`, so
+the Rust toolchain is on the PATH in an interactive shell or desktop terminal.
+Run `scripts/fetch-rustc-sysroot.sh` again to add Cargo and the standard
+libraries Ferrix's own image is built against to a sysroot made before
+them. Boots with the toolchain use 4 GiB RAM unless `--memory` overrides
+it. Without the fetched disk, those boots still start and say why rustc is
+absent. The FAT boot image and 1 GiB `root.img` do not contain the 1.7 GiB
+toolchain; the sysroot is a companion disk, so copying the FAT image alone
+will not carry rustc to another host.
+
 `--net` gives the guest a virtio-net card whose other end is `xtask`'s own
 gateway on a loopback UDP socket: the guest is `10.0.2.15`, `10.0.2.2` is the
 host, `10.0.2.3` forwards DNS to the host's resolver, and TCP and UDP to

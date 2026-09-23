@@ -1,4 +1,5 @@
-//! `test-rustc`: stage 16's exit, `rustc hello.rs && ./hello` on Ferrix.
+//! `test-rustc`: stage 16's exit, `rustc hello.rs && ./hello` on Ferrix,
+//! with a smoke check that the matching Cargo starts too.
 //!
 //! The compiler is the rust-lang.org release and not one built here: a
 //! position-independent glibc program whose LLVM is a 190 MiB shared library
@@ -33,11 +34,12 @@ use crate::args::Args;
 use crate::paths::Arch;
 use crate::{Error, Result, cargo, fat, initramfs, native, ports, qemu, zinc};
 
-/// The script the shell runs. `rustc -vV` first, so that a failure says
-/// whether the compiler ran at all or only its link failed.
+/// The script the shell runs. Version checks first, so a failure says whether
+/// the toolchain ran at all or only its link failed.
 const SCRIPT: &str = r#"export PATH=/data/rust/bin:/data/usr/bin:/bin
 cd /tmp
 rustc -vV || exit 3
+cargo -V || exit 6
 echo 'fn main() { println!("rustc-gate: hello from rustc on Ferrix"); }' > hello.rs
 rustc hello.rs || exit 4
 ./hello || exit 5
@@ -50,6 +52,9 @@ const HELLO: &str = "rustc-gate: hello from rustc on Ferrix";
 /// What `rustc -vV` prints first, which says the compiler ran.
 const VERSION: &str = "rustc 1.97.1";
 
+/// The matching Cargo release must start on the same glibc sysroot.
+const CARGO_VERSION: &str = "cargo 1.97.1";
+
 /// The status the script exits with when every step succeeded.
 const STATUS: i32 = 16;
 
@@ -60,6 +65,21 @@ const LINKS: &[(&str, &str)] = &[
     ("usr/lib/x86_64-linux-gnu", "/data/usr/lib/x86_64-linux-gnu"),
     ("usr/lib/gcc", "/data/usr/lib/gcc"),
     ("usr/libexec", "/data/usr/libexec"),
+];
+
+/// Normal boots also carry ports under `/usr/libexec`, so only gcc's child
+/// directory can be linked there. Put the compiler and its C driver on the
+/// shell's `/bin` PATH; the gate sets its own PATH instead.
+const DEFAULT_LINKS: &[(&str, &str)] = &[
+    ("lib64", "/data/usr/lib64"),
+    ("lib/x86_64-linux-gnu", "/data/usr/lib/x86_64-linux-gnu"),
+    ("usr/lib/x86_64-linux-gnu", "/data/usr/lib/x86_64-linux-gnu"),
+    ("usr/lib/gcc", "/data/usr/lib/gcc"),
+    ("usr/libexec/gcc", "/data/usr/libexec/gcc"),
+    ("bin/rustc", "/data/rust/bin/rustc"),
+    ("bin/cargo", "/data/rust/bin/cargo"),
+    ("bin/cc", "/data/usr/bin/cc"),
+    ("bin/gcc", "/data/usr/bin/gcc"),
 ];
 
 /// Guest memory unless `--memory` says otherwise: the compiler's libraries
@@ -92,6 +112,49 @@ fn volume() -> Result<std::path::PathBuf> {
     Ok(image)
 }
 
+/// Attach the installed toolchain to a person-facing x86-64 boot. A machine
+/// without the optional download still boots, but an explicitly named
+/// `FERRIX_RUSTC_SYSROOT` must be valid rather than silently ignored.
+pub(crate) fn prepare_default(arch: Arch, args: &mut Args) -> Result<()> {
+    if arch != Arch::X86_64 {
+        return Ok(());
+    }
+    let image = match volume() {
+        Ok(image) => image,
+        Err(error) if std::env::var_os("FERRIX_RUSTC_SYSROOT").is_some() => return Err(error),
+        Err(error) => {
+            println!("  rustc not in this boot: {error}");
+            return Ok(());
+        }
+    };
+    println!("  rustc from {} in the default system", image.display());
+    args.data_image = Some(image);
+    if !args.memory_given {
+        args.memory = MEMORY;
+    }
+    Ok(())
+}
+
+/// Links in the initramfs (and persistent root) for the attached compiler.
+pub(crate) fn default_links(args: &Args) -> Vec<ports::File> {
+    if args.data_image.is_some() {
+        files(DEFAULT_LINKS)
+    } else {
+        Vec::new()
+    }
+}
+
+fn files(links: &[(&str, &str)]) -> Vec<ports::File> {
+    links
+        .iter()
+        .map(|(path, target)| ports::File {
+            path: (*path).to_owned(),
+            mode: 0o777,
+            content: ports::Content::Link((*target).to_owned()),
+        })
+        .collect()
+}
+
 /// Boot a shell whose script compiles a program with rustc and runs it.
 ///
 /// # Errors
@@ -122,14 +185,7 @@ pub(crate) fn test_rustc(args: &Args) -> Result<()> {
     let natives = native::build(arch, args.release)?;
     let bytes = std::fs::read(&shell)
         .map_err(|error| Error::new(format!("reading {}: {error}", shell.display())))?;
-    let links: Vec<ports::File> = LINKS
-        .iter()
-        .map(|(path, target)| ports::File {
-            path: (*path).to_owned(),
-            mode: 0o777,
-            content: ports::Content::Link((*target).to_owned()),
-        })
-        .collect();
+    let links = files(LINKS);
     // zinc alone: the script is builtins, and every program it runs is on
     // the volume.
     let archive = initramfs::build(None, &natives, Some(&bytes), &links)?;
@@ -145,8 +201,8 @@ pub(crate) fn test_rustc(args: &Args) -> Result<()> {
     judge(arch, &lines)
 }
 
-/// Whether the transcript is a compiler that ran, a program it made that
-/// printed its line, and a script that got to its end.
+/// Whether the transcript is a compiler and Cargo that ran, a program rustc
+/// made that printed its line, and a script that got to its end.
 fn judge(arch: Arch, lines: &[String]) -> Result<()> {
     let after_boot = lines
         .iter()
@@ -158,13 +214,17 @@ fn judge(arch: Arch, lines: &[String]) -> Result<()> {
         .find_map(|line| line.trim().strip_prefix(crate::shell::EXITED))
         .map(str::trim);
     let ran = after_boot.iter().any(|line| line.starts_with(VERSION));
+    let cargo_ran = after_boot
+        .iter()
+        .any(|line| line.starts_with(CARGO_VERSION));
     let said = after_boot.iter().any(|line| line.trim_end() == HELLO);
     match exited {
-        Some(status) if status == STATUS.to_string() && ran && said => {
-            println!("  {arch}: rustc compiled hello.rs on Ferrix, and it ran");
+        Some(status) if status == STATUS.to_string() && ran && cargo_ran && said => {
+            println!("  {arch}: rustc compiled hello.rs on Ferrix, Cargo started, and it ran");
             Ok(())
         }
         Some("3") => Err(Error::new(format!("{arch}: `rustc -vV` failed"))),
+        Some("6") => Err(Error::new(format!("{arch}: `cargo -V` failed"))),
         Some("4") => Err(Error::new(format!(
             "{arch}: rustc ran but did not compile and link hello.rs"
         ))),
@@ -172,7 +232,7 @@ fn judge(arch: Arch, lines: &[String]) -> Result<()> {
             "{arch}: rustc made a program, and it did not run"
         ))),
         Some(status) => Err(Error::new(format!(
-            "{arch}: the script exited with {status}; version line {ran}, hello line {said}"
+            "{arch}: the script exited with {status}; rustc version {ran}, cargo version {cargo_ran}, hello line {said}"
         ))),
         None => Err(Error::new(format!("{arch}: the shell never exited"))),
     }
@@ -181,6 +241,57 @@ fn judge(arch: Arch, lines: &[String]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_links_keep_ports_libexec_and_expose_rustc_on_path() {
+        let args = Args {
+            data_image: Some("rustc.img".into()),
+            ..Args::default()
+        };
+        let links = default_links(&args);
+        assert!(links.iter().any(|file| file.path == "bin/rustc"));
+        assert!(links.iter().any(|file| file.path == "bin/cargo"));
+        assert!(links.iter().any(|file| file.path == "bin/cc"));
+        assert!(links.iter().any(|file| file.path == "usr/libexec/gcc"));
+        assert!(!links.iter().any(|file| file.path == "usr/libexec"));
+        assert!(default_links(&Args::default()).is_empty());
+    }
+
+    #[test]
+    fn default_toolchain_links_coexist_with_libexec_ports() {
+        let args = Args {
+            data_image: Some("rustc.img".into()),
+            ..Args::default()
+        };
+        let mut carried = vec![ports::File {
+            path: "usr/libexec/git-core/git".to_owned(),
+            mode: 0o755,
+            content: ports::Content::Bytes(b"git".to_vec()),
+        }];
+        carried.extend(default_links(&args));
+        let bytes = initramfs::build(None, &[], None, &carried).unwrap();
+        let archive = ferrix_cpio::Archive::new(&bytes);
+        assert_eq!(
+            archive
+                .find("usr/libexec/git-core/git")
+                .unwrap()
+                .unwrap()
+                .data,
+            b"git"
+        );
+        assert_eq!(
+            archive.find("usr/libexec/gcc").unwrap().unwrap().data,
+            b"/data/usr/libexec/gcc"
+        );
+        assert_eq!(
+            archive.find("bin/rustc").unwrap().unwrap().data,
+            b"/data/rust/bin/rustc"
+        );
+        assert_eq!(
+            archive.find("bin/cargo").unwrap().unwrap().data,
+            b"/data/rust/bin/cargo"
+        );
+    }
 
     fn transcript(text: &[&str]) -> Vec<String> {
         text.iter().map(|line| (*line).to_owned()).collect()
@@ -191,6 +302,7 @@ mod tests {
         let lines = transcript(&[
             qemu::SUCCESS_MARKER,
             "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+            "cargo 1.97.1 (test build)",
             HELLO,
             "  init     the shell exited with 16",
         ]);
@@ -203,6 +315,7 @@ mod tests {
             HELLO,
             qemu::SUCCESS_MARKER,
             "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+            "cargo 1.97.1 (test build)",
             "  init     the shell exited with 16",
         ]);
         assert!(judge(Arch::X86_64, &lines).is_err());
@@ -210,7 +323,12 @@ mod tests {
 
     #[test]
     fn each_failing_step_is_named() {
-        for (status, words) in [("3", "-vV"), ("4", "link"), ("5", "did not run")] {
+        for (status, words) in [
+            ("3", "-vV"),
+            ("4", "link"),
+            ("5", "did not run"),
+            ("6", "cargo -V"),
+        ] {
             let exit = format!("  init     the shell exited with {status}");
             let lines = transcript(&[qemu::SUCCESS_MARKER, &exit]);
             let error = judge(Arch::X86_64, &lines).unwrap_err().to_string();

@@ -311,24 +311,7 @@ fn run() -> Result<()> {
             }
             Ok(())
         }
-        "run" => {
-            let arch = args.single_arch()?;
-            let (image, _) = build_image(arch, &args)?;
-            // Someone at the console wants the machine in front of them, so
-            // `run` takes whatever hypervisor it has: WHPX on Windows, KVM on
-            // Linux, HVF on macOS, emulation where there is none. The tests
-            // keep `tcg`, for the reason `qemu::accelerator` gives, and so
-            // does a debugging session, whose breakpoints and single steps
-            // `tcg` honours on every host and the hypervisors do not.
-            let args = Args {
-                accel: args
-                    .accel
-                    .clone()
-                    .or_else(|| (!args.gdb).then(|| "auto".to_owned())),
-                ..args
-            };
-            qemu::run(arch, &image, &args)
-        }
+        "run" => run_machine(args),
         "test-btrfs" => btrfs_check::test_btrfs(&args, |arch| build_image(arch, &args)),
         "test-powerfail" => powerfail::test_powerfail(&args, |arch| build_parts(arch, &args)),
         "test-boot" => test_boot(&args),
@@ -418,6 +401,28 @@ fn run() -> Result<()> {
 /// architecture is run even after one fails, because which of the three a
 /// missing call breaks is the report.
 /// `test-boot`: boot each architecture asked for and require the marker.
+/// `run`: the image, with the rustc volume where it has been fetched, on the
+/// terminal.
+fn run_machine(mut args: Args) -> Result<()> {
+    let arch = args.single_arch()?;
+    rustc::prepare_default(arch, &mut args)?;
+    let (image, _) = build_image(arch, &args)?;
+    // Someone at the console wants the machine in front of them, so `run`
+    // takes whatever hypervisor it has: WHPX on Windows, KVM on Linux, HVF on
+    // macOS, emulation where there is none. The tests keep `tcg`, for the
+    // reason `qemu::accelerator` gives, and so does a debugging session, whose
+    // breakpoints and single steps `tcg` honours on every host and the
+    // hypervisors do not.
+    let args = Args {
+        accel: args
+            .accel
+            .clone()
+            .or_else(|| (!args.gdb).then(|| "auto".to_owned())),
+        ..args
+    };
+    qemu::run(arch, &image, &args)
+}
+
 fn test_boot(args: &Args) -> Result<()> {
     for arch in args.arches()? {
         let (image, kernel) = build_image(arch, args)?;
@@ -549,19 +554,27 @@ fn build_image(arch: Arch, args: &Args) -> Result<(PathBuf, PathBuf)> {
     let natives = native::build(arch, args.release)?;
     let Some(program) = optional_program(arch, args)? else {
         let (loader, kernel) = build_halves(arch, args)?;
-        let image = fat::write_image(arch, &loader, &kernel, &natives, image_cmdline(args))?;
+        let links = rustc::default_links(args);
+        let image = if links.is_empty() {
+            fat::write_image(arch, &loader, &kernel, &natives, image_cmdline(args))?
+        } else {
+            let archive = initramfs::build(None, &natives, None, &links)?;
+            fat::write_image_with(arch, &loader, &kernel, &archive, image_cmdline(args))?
+        };
         return Ok((image, kernel));
     };
     let loader = cargo::build_loader(arch, args.release)?;
     let kernel = cargo::build_kernel_with_init(arch, args.release, &program, "")?;
     let shell = zinc::build(arch)?;
     let utilities = uutils::carried(arch)?;
+    let mut ports = ports::installed(arch)?;
+    ports.extend(rustc::default_links(args));
     let initramfs = initramfs::build_with_utilities(
         Some(&program),
         &natives,
         shell.as_deref(),
         &utilities,
-        &ports::installed(arch)?,
+        &ports,
     )?;
     let image = fat::write_image_with(arch, &loader, &kernel, &initramfs, image_cmdline(args))?;
     Ok((image, kernel))
