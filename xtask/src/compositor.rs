@@ -106,6 +106,9 @@ const LSWT_PATH: &str = "bin/lswt";
 const SHOT_PATH: &str = "bin/shot";
 const LOCK_PATH: &str = "bin/lock";
 const VKBD_PATH: &str = "bin/vkbd";
+/// `reboot`, with the word for the firmware busybox's cannot pass; it takes
+/// the name, which busybox then does not link.
+const REBOOT_PATH: &str = "bin/reboot";
 const CONFIG_PATH: &str = "etc/hyprland.conf";
 
 /// Where `run-compositor` puts the wallpaper it carries.
@@ -872,6 +875,8 @@ struct Programs {
     lock: PathBuf,
     /// `vkbd`, which types as `wtype` does.
     vkbd: PathBuf,
+    /// `reboot`, which asks the firmware to come back up somewhere.
+    reboot: PathBuf,
 }
 
 impl Programs {
@@ -888,11 +893,12 @@ impl Programs {
             shot: build(arch, "compositor-shot", "shot")?,
             lock: build(arch, "compositor-lock", "lock")?,
             vkbd: build(arch, "compositor-vkbd", "vkbd")?,
+            reboot: build(arch, "compositor-reboot", "reboot")?,
         })
     }
 
     /// The ones the initramfs carries, each with the path it goes at.
-    fn carried(&self) -> [(&'static str, &Path); 9] {
+    fn carried(&self) -> [(&'static str, &Path); 10] {
         [
             (CLIENT_PATH, self.client.as_path()),
             (CTL_PATH, self.ctl.as_path()),
@@ -903,6 +909,7 @@ impl Programs {
             (SHOT_PATH, self.shot.as_path()),
             (LOCK_PATH, self.lock.as_path()),
             (VKBD_PATH, self.vkbd.as_path()),
+            (REBOOT_PATH, self.reboot.as_path()),
         ]
     }
 }
@@ -1986,6 +1993,10 @@ pub(crate) fn run_compositor(args: &Args) -> Result<()> {
     crate::qemu::run(arch, &image, &args)
 }
 
+/// The serial port's shell on a board's desktop: busybox's, in a session of
+/// its own with the console as its terminal.
+const SERIAL_SHELL: &str = "/bin/busybox setsid -c /bin/busybox sh -i";
+
 /// The screen a board's HDMI output runs: the DK1's LTDC scans out 720p60
 /// and nothing else (`docs/DISPLAY.md` §6).
 const BOARD_SCREEN: (u32, u32) = (1280, 720);
@@ -2026,6 +2037,17 @@ pub(crate) fn board_files(arch: Arch, args: &Args) -> Result<(PathBuf, PathBuf, 
     let programs = Programs::build(arch)?;
     let size = args.size.unwrap_or(BOARD_SCREEN);
     let (config, carried) = desktop(arch, config, size, args)?;
+    // A shell on the serial port beside the desktop, which is how a board
+    // with nobody at its screen is reached -- and where `reboot
+    // --firmware-setup` takes it back to U-Boot's prompt. It inherits the
+    // compositor's console, and `setsid -c` makes that its terminal, so
+    // Ctrl-C reaches what it runs. busybox's `sh`, since the shell a
+    // terminal window opens is the desktop's own.
+    let config = if carried.busybox.is_some() {
+        format!("exec-once = {SERIAL_SHELL}\n{config}")
+    } else {
+        config
+    };
     build_parts(arch, &programs, &config, carried, args)
 }
 

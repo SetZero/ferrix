@@ -1,0 +1,20 @@
+[package]
+name = "compositor-reboot"
+description = "reboot, with systemd's --firmware-setup and reboot(2)'s command string: how a desktop's shell asks for the firmware's prompt"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "reboot"
+path = "src/main.rs"
+
+[dependencies]
+# Declarations only, as in `blank`: `reboot` and `sync` are the C library std
+# already links.
+libc = "0.2.189"
+
+[lints]
+workspace = true

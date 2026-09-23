@@ -404,7 +404,8 @@ Plug the monitor in before the boot: the card says it is connected whatever
 the socket holds, and there is no hotplug. The monitor must take 1280x720 at
 60 Hz, which every HDMI sink does; the pixel clock is the one the board's
 firmware leaves on PLL4, and no other mode is offered. **There is no input
-yet**: Ferrix drives no USB, so the desktop is to look at, not to type into.
+yet** on `main` as this is written (a USB keyboard and mouse driver is on its
+way), so the desktop is to look at, not to type into.
 A frame takes about 100 ms in software once warm.
 
 If the display line says `left alone:` instead, it names what the kernel
@@ -413,6 +414,52 @@ other than the mainline chain of step 1, is the likely one. If `devmgr`
 reports the driver failed, the bridge most likely did not answer on I2C: its
 supplies are the PMIC's `ldo2` and `ldo6`, which Ferrix does not touch and
 which were on in every boot so far.
+
+### The desktop on every reset, and the way back to U-Boot
+
+Two variables in U-Boot's environment make a RESET press start the desktop
+with nobody at the serial port, and leave a way back to U-Boot's prompt from
+it. Set them once, one line at a time, and save them:
+
+```
+STM32MP> setenv bootcmd 'regulator dev vdd_usb; regulator enable; load mmc 0:4 0xc2000000 EFI/BOOT/BOOTARM.EFI; bootefi 0xc2000000 ${fdtcontroladdr}'
+STM32MP> setenv altbootcmd 'echo Ferrix asked for the U-Boot prompt, type boot to start it again; setenv bootdelay -1'
+STM32MP> saveenv
+```
+
+`bootcmd` is step 3's two lines, after turning the PMIC's `vdd_usb` back on:
+U-Boot's `ums` turns that rail off when it ends, and it powers the USB PHY
+the keyboard and mouse are on. With it saved, a reset autoboots whatever
+image the card holds -- the desktop, once `flash --compositor` put it there.
+
+The desktop's image has a shell on the serial port beside the screen
+(busybox's `sh`, started by the compositor), and a `reboot` that reads its
+arguments as systemd's does:
+
+```
+ferrix# reboot --firmware-setup   # back at STM32MP>, no autoboot
+ferrix# reboot ums                # the card on USB, ready for flash
+ferrix# reboot                    # the desktop again
+```
+
+The word goes where Linux sends it, `reboot(2)`'s `RESTART2` command, and the
+kernel writes the matching forced boot mode into the TAMP backup register
+U-Boot reads at its next start and clears (`TAMP_BOOT_CONTEXT`, `0x5c00a150`,
+its low byte): `firmware` and `recovery` are 2, which runs `altbootcmd`
+before the autoboot -- and the `altbootcmd` above turns the autoboot off for
+that one start -- `ums` is 0x10, `fastboot` 1. The boot log says which:
+
+```
+reboot: Restarting system with command 'firmware'
+reboot: U-Boot runs altbootcmd, which stops at its prompt
+...
+Ferrix asked for the U-Boot prompt, type boot to start it again
+STM32MP>
+```
+
+At that prompt `boot` starts the desktop again. `bootdelay -1` lives only in
+the running U-Boot; a `saveenv` typed there would keep it, and the next reset
+would then wait at the prompt too, until `setenv bootdelay 2; saveenv`.
 
 ## 5. What a good boot looks like
 
@@ -559,6 +606,8 @@ tasks onto one queue reads many times slower there than on the board.
 | HDMI out at 1280x720 from a Linux program | `compositor/blank` as init drew `0x1e1e2e` over `/dev/dri/card0`, seen on a monitor, 2026-09-23 (`docs/DISPLAY.md` §6) |
 | The Wayland compositor on the board | `hyprix` as init: `1 monitor [card0 HDMI-A-1 1280x720 1280x720]`, a terminal window tiled, seen on the monitor, about 100 ms a frame |
 | A monitor in portrait | `monitor = HDMI-A-1, 1280x720@60, 0x0, 1, transform, 3`: `hyprix: 1 monitor [card0 HDMI-A-1 1280x720 1280x720 transform 3]`, a terminal of 678x1238 pixels over a second window, upright on the customer's monitor, 2026-09-23 |
+| A reset starts the desktop; `reboot --firmware-setup` comes back to U-Boot | 2026-09-23 23:16, the environment above saved: `reset` autobooted to `hyprix: 1 monitor [... transform 3]` with the serial shell's `ferrix#` beside it; `reboot --firmware-setup` there printed `reboot: U-Boot runs altbootcmd, which stops at its prompt`, and after TF-A U-Boot said `Ferrix asked for the U-Boot prompt, type boot to start it again` at `STM32MP>`; `boot` brought the desktop back |
+| The TAMP boot context is the normal world's to write | U-Boot's `mw.l 0x5c00a150 0x00011102` read back, took effect at the next start and was cleared to `00011100`; `PWR_CR1` reads `0x100`, the backup domain writable |
 | Both boot switches ON boots the SD card; the prompt is `STM32MP>` | on the board |
 | U-Boot's IWDG heuristic starts a 32 s watchdog on `VERR = 0x30` | on the board; gone with `WDT_STM32MP` off, and survives an OP-TEE without IWDG |
 | The above-2-GiB identity-map placement | host unit tests in `libs/bootinfo` |

@@ -431,6 +431,23 @@ pub(crate) fn build_with_utilities(
     build_with_shell(program.as_deref(), natives, zinc, uutils, ports)
 }
 
+/// Whether busybox gets the name `applet` in `/bin`. A name there can only be
+/// one program: zinc owns `sh` when it is carried, uutils owns every name it
+/// implements, and a carried program owns its own -- the desktop's `reboot`,
+/// which can say where the machine comes back up. busybox gets the rest,
+/// which is still most of the list.
+fn busybox_owns(
+    applet: &str,
+    zinc: bool,
+    uutils: &[(&str, Vec<u8>)],
+    ports: &[ports::File],
+) -> bool {
+    let path = format!("bin/{applet}");
+    !(zinc && ZINC_NAMES.contains(&applet)
+        || owned_by_family(uutils, applet)
+        || ports.iter().any(|file| file.path == path))
+}
+
 /// [`build`], with the program's bytes rather than its path and no zinc.
 #[cfg(test)]
 fn build_with(program: Option<&[u8]>, natives: &[native::Built]) -> Result<Vec<u8>> {
@@ -511,16 +528,9 @@ fn build_with_shell(
         archive.directory_owned("home/ferrix", 0o755, USER)?;
         archive.file(PROGRAM_PATH, 0o755, program)?;
         for applet in APPLETS {
-            // A name in `/bin` can only be one program. zinc owns `sh`, and
-            // uutils owns every name it implements; busybox gets the rest,
-            // which is still most of the list.
-            if zinc.is_some() && ZINC_NAMES.contains(applet) {
-                continue;
+            if busybox_owns(applet, zinc.is_some(), uutils, ports) {
+                archive.symlink(&format!("bin/{applet}"), "busybox")?;
             }
-            if owned_by_family(uutils, applet) {
-                continue;
-            }
-            archive.symlink(&format!("bin/{applet}"), "busybox")?;
         }
         // uutils/coreutils, beside a program for the same reason zinc is: the
         // boot check carries none and its archive stays the bytes it was. The
@@ -598,6 +608,25 @@ fn build_with_shell(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_carried_program_keeps_its_name_from_busybox() {
+        let reboot = [ports::File {
+            path: "bin/reboot".to_owned(),
+            mode: 0o755,
+            content: ports::Content::Bytes(b"\x7fELF".to_vec()),
+        }];
+        assert!(
+            !busybox_owns("reboot", false, &[], &reboot),
+            "the carried reboot"
+        );
+        assert!(
+            busybox_owns("reboot", false, &[], &[]),
+            "busybox's otherwise"
+        );
+        assert!(busybox_owns("ls", false, &[], &reboot), "every other name");
+        assert!(!busybox_owns("sh", true, &[], &[]), "zinc's sh");
+    }
 
     #[test]
     fn a_file_asked_for_is_carried_without_a_shell_beside_it() {
