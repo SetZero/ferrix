@@ -38,5 +38,8 @@ targets = [
     "armv7-unknown-linux-gnueabihf",
     # And its loader on ARMv7-A: a static PIE with no C library, which this
     # musl target links (AArch64's is the musl target above).
+    # And the compositor's programs on ARMv7-A (`compositor/.cargo/config.toml`):
+    # hard float, since a compositor blends pixels in floating point and soft
+    # float would make every one of those operations a library call.
     "armv7-unknown-linux-musleabihf",
 ]
