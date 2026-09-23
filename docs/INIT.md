@@ -36,10 +36,10 @@ unlearn.
 
 ### 0.1 What init needs from stage 13
 
-These are init's requirements on stage 13, not stage 13's design. Stage 13
-decides how to meet each one, and its roadmap entry decides their order. Each
-is Linux's own interface, so a program written for Linux cgroups works
-unchanged:
+These are init's requirements on stage 13, not stage 13's design, which is
+`docs/CGROUPS.md`; its landings G1 to G4 meet C1 to C5 and C7, and G5 meets
+C8. Each is Linux's own interface, so a program written for Linux cgroups
+works unchanged:
 
 | | Interface | What init uses it for |
 |---|---|---|
@@ -60,8 +60,9 @@ for both. C7 is needed for `Delegate=`, and C8 for `Type=native` services.
 **C8 is the one requirement that is not Linux's, and the customer accepted it
 for stage 13 on 2026-09-23.** `docs/ARCHITECTURE.md` §3 already calls the job
 "where resource limits and kill authority live", and §4 scopes the OOM kill
-"by Job and cgroup". If a cgroup is a job with a filesystem view, there is one container
-concept in the kernel rather than two, and three things follow:
+"by Job and cgroup". If a cgroup is a job with a filesystem view, there is
+one container concept in the kernel rather than two, and three things
+follow:
 
 * `devmgr`'s per-driver jobs show up in cgroupfs, where a driver's memory can
   be read and limited;

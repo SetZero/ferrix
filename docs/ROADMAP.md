@@ -123,7 +123,7 @@ sizes them.
 | Dynamic linking: the kernel half, ferrousli's loader, glibc's names | 39 *(33 done; the exit met on x86-64)* | in progress: 6 left |
 | Dynamic linking: ferrousli's AArch64 and ARMv7-A port, which the customer put inside the stage on 2026-09-21 and on which the exit's other two architectures wait | ≈ 34 | not started |
 | ~~Stage 12, btrfs write~~ *done 2026-09-21* | ~~≈ 60~~ | done |
-| Stage 13, namespaces, cgroups, seccomp | *month* ≈ 60 | not started; its cgroups come first, as init's prerequisite (`docs/INIT.md` §0) |
+| Stage 13, namespaces, cgroups, seccomp | cgroups 85 (`docs/CGROUPS.md` §7: 27 for what init needs, 58 for the controllers); namespaces and seccomp unsized, the old guess for the whole stage was *month* ≈ 60 | not started; its cgroups come first, as init's prerequisite (`docs/INIT.md` §0) |
 | Stage 22, Steam: the parts with a first guess (bubblewrap's rest 13, sound 30, Venus 8; glibc's names are dynamic linking's 13 and XWayland stage 19's, both counted above) | 51 | not started |
 | Stage 22, Steam: the 32-bit x86 ABI and what the runtime and Proton find missing | unsized, ≈ 100 as a guess | not started |
 | Stage 14, real-time domains | *month* ≈ 40 | not started |
@@ -3911,6 +3911,20 @@ accepted it on 2026-09-23: C8, **every cgroup backed by a `Job`**. It makes
 `ARCHITECTURE.md` §3's "where resource limits and kill authority live" one
 object seen through two ABIs. `devmgr`'s driver jobs then appear in cgroupfs,
 and a microkernel keeps the jobs if it drops cgroupfs.
+
+**Designed (2026-09-23): `docs/CGROUPS.md`.** Every process is in exactly
+one job, and a fork inherits it. A job counts its live members, so
+"populated" flips at the last exit, not the reap. cgroupfs is an in-kernel
+view of the job tree, with its text formats in a pure `libs/cgroupfs`.
+`POLLPRI` is new to `poll`, `select` and `epoll` for `cgroup.events`. A job
+asserts a native `EMPTY` signal, and memory is charged per page to a job,
+with an OOM kill scoped to it.
+
+Five landings, G1 to G5 (27 points), give init what it needs. The
+controllers are 58 more: `pids` and `memory` first (with reclaim, which the
+stage carries anyway), then freezing, `cpu` and `io`. That is 85 for the
+cgroup half alone, against the whole stage's pre-points guess of a month
+and 60.
 
 ---
 

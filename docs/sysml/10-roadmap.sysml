@@ -418,7 +418,9 @@ package FerrixRoadmap {
              * planned as if they exist, so the cgroup half is built before
              * namespaces and seccomp. docs/INIT.md section 0.1 lists what
              * init needs, C1-C5 before its first boot. C8, accepted the
-             * same day: every cgroup is backed by a Job. */
+             * same day: every cgroup is backed by a Job. docs/CGROUPS.md is
+             * the design: landings G1-G5 (27 points) for init, then the
+             * controllers (58), 85 for the cgroup half. */
     }
 
     #planned requirement <'S14'> stage14RealTime : Stage {
