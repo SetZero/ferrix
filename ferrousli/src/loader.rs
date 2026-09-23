@@ -48,10 +48,28 @@ pub struct Interface {
     pub dladdr: unsafe extern "C" fn(*const c_void, *mut crate::link::DlInfo) -> c_int,
     /// Revision 2: `dl_iterate_phdr`.
     pub dl_iterate_phdr: unsafe extern "C" fn(Option<crate::link::Callback>, *mut c_void) -> c_int,
+    /// Revision 3: the auxiliary vector on the entry stack, ending in
+    /// `AT_NULL`, for [`crate::auxv`] to answer from before
+    /// `__libc_start_main` has recorded it.
+    pub auxv: *const usize,
 }
 
 /// The revision that added the `dlfcn.h` calls.
 const DLFCN: usize = 2;
+
+/// The revision that added the auxiliary vector.
+const AUXV: usize = 3;
+
+/// The loader's copy of the auxiliary vector: `None` in a static program,
+/// with a loader older than revision 3, and before the loader has published
+/// it.
+#[must_use]
+pub fn auxv() -> Option<*const usize> {
+    interface()
+        .filter(|interface| interface.version >= AUXV)
+        .map(|interface| interface.auxv)
+        .filter(|auxv| !auxv.is_null())
+}
 
 /// The loader's interface if it has the `dlfcn.h` calls: `None` in a static
 /// program, and with a loader older than revision 2.

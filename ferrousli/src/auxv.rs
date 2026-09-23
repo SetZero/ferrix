@@ -37,10 +37,16 @@ pub unsafe fn init(auxv: *const usize) {
 }
 
 /// The value for `key`, if the kernel gave one.
+///
+/// Before [`init`], the loader's copy: a shared library's constructors run
+/// before the program's `__libc_start_main`, and some ask -- among them
+/// compiler-builtins' choice of AArch64's LSE atomics, which without this
+/// found no `AT_HWCAP` and kept the load-exclusive loops for every
+/// dynamically linked program.
 pub fn get(key: usize) -> Option<usize> {
     let mut at = AUXV.load(Ordering::Relaxed).cast_const();
     if at.is_null() {
-        return None;
+        at = crate::loader::auxv()?;
     }
     loop {
         // SAFETY: `init`'s caller vouched for pairs ending in `AT_NULL`, and

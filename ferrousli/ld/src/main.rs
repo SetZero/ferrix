@@ -184,7 +184,7 @@ unsafe fn link(stack: &auxv::Stack) -> Result<usize, report::Error> {
 
     tls::install(&scope)?;
     // SAFETY: the only thread, before the program runs.
-    unsafe { interface::publish(scope.tls_size(), scope.tls_align()) };
+    unsafe { interface::publish(scope.tls_size(), scope.tls_align(), stack.auxv) };
     // `dlopen` runs its libraries' initialisers with these too.
     let args = (
         stack.argc as c_int,

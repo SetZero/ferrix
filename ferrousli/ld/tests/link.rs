@@ -99,6 +99,11 @@ fn runtime(dir: &Path) -> (PathBuf, PathBuf) {
 
     let crt = dir.join("crt1.o");
     let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+    // `--out-dir` as well as the object's path: rustc writes its intermediate
+    // files to the output directory, which is otherwise the current one, and
+    // two tests building `crt1` at once in the same directory trip over each
+    // other's. The current directory stays the crate's, where rustup finds
+    // the toolchain the repository pins.
     let status = Command::new(rustc)
         .current_dir(root)
         .args([
@@ -107,6 +112,8 @@ fn runtime(dir: &Path) -> (PathBuf, PathBuf) {
             "--crate-name=crt1",
             "-Cpanic=abort",
         ])
+        .arg("--out-dir")
+        .arg(dir)
         .arg(format!("--emit=obj={}", crt.display()))
         .arg("crt/crt1.rs")
         .status()
@@ -464,6 +471,54 @@ fn a_runtime_runs_a_dependency_finalisers_at_exit() {
     let output = Command::new(&program).output().expect("run the program");
     assert_eq!(output.status.code(), Some(EXPECTED));
     assert_eq!(output.stdout, b"main\narray\nfini\n");
+}
+
+/// A library's constructor asks for the auxiliary vector before the
+/// program's `__libc_start_main` has recorded it, as compiler-builtins' choice
+/// of AArch64's LSE atomics does when ferrousli is `libc.so.6`.
+///
+/// `getauxval` must answer it from the loader's copy (interface revision 3):
+/// the library's page size is required to be the one `main` reads. The
+/// program exports its C library so that the library's `getauxval` is that
+/// one. Exit 1 is no answer even in `main`; 2 is the constructor's wrong one.
+#[test]
+fn a_library_constructor_reads_the_auxiliary_vector_before_the_program_starts() {
+    let loader = loader();
+    let dir = scratch().join("ld-early");
+    std::fs::create_dir_all(&dir).expect("make the scratch directory");
+    let (crt, runtime) = runtime(&dir);
+
+    let library = dir.join("libearly.so");
+    compile(&[
+        "-shared",
+        "-o",
+        library.to_str().expect("a path"),
+        manifest().join("tests/c/early.c").to_str().expect("a path"),
+    ]);
+
+    let program = dir.join("prog");
+    let status = Command::new("cc")
+        .args([
+            "-nostdlib",
+            "-fPIC",
+            "-O1",
+            "-pie",
+            "-Wl,--export-dynamic",
+            "-o",
+        ])
+        .arg(&program)
+        .arg(&crt)
+        .arg(manifest().join("tests/c/early_prog.c"))
+        .arg(&runtime)
+        .arg(&library)
+        .arg(format!("-Wl,--dynamic-linker={}", loader.display()))
+        .arg("-Wl,-e,_start")
+        .status()
+        .expect("build the dynamically linked C program");
+    assert!(status.success(), "cc could not build the early fixture");
+
+    let output = Command::new(&program).output().expect("run the program");
+    assert_eq!(output.status.code(), Some(EXPECTED));
 }
 
 #[test]

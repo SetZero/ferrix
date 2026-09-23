@@ -29,6 +29,14 @@
 //!
 //! Revision 2 carries `dlopen` and the rest ([`crate::dl`]): as
 //! `libc.so.6`, the C library's own functions of those names forward here.
+//!
+//! # And the auxiliary vector
+//!
+//! Revision 3 carries the vector the kernel gave the process. A library's
+//! constructors run before the program's `__libc_start_main` has recorded it,
+//! and some ask: compiler-builtins' choice of AArch64's LSE atomics reads
+//! `AT_HWCAP` from one. `getauxval` answers them from here until the C
+//! library has its own copy.
 
 use core::ffi::{c_char, c_int, c_void};
 
@@ -36,8 +44,8 @@ use crate::dl;
 
 /// The revision of [`Interface`] this loader fills in. A library built
 /// against a later one reads `version` before anything past it. Revision 2
-/// added the `dlfcn.h` calls.
-const VERSION: usize = 2;
+/// added the `dlfcn.h` calls, revision 3 the auxiliary vector.
+const VERSION: usize = 3;
 
 /// What the loader exports to the C library.
 #[repr(C)]
@@ -72,6 +80,9 @@ pub(crate) struct Interface {
         Option<unsafe extern "C" fn(*mut dl::DlPhdrInfo, usize, *mut c_void) -> c_int>,
         *mut c_void,
     ) -> c_int,
+    /// Revision 3: the auxiliary vector on the entry stack, ending in
+    /// `AT_NULL`, or null before [`publish`].
+    pub(crate) auxv: *const usize,
 }
 
 /// The interface, filled in once the scope is complete.
@@ -92,19 +103,25 @@ pub(crate) static mut __ferrousli_loader: Interface = Interface {
     dlerror: dl::dlerror,
     dladdr: dl::dladdr,
     dl_iterate_phdr: dl::dl_iterate_phdr,
+    auxv: core::ptr::null(),
 };
 
-/// Publish the static TLS layout the scope settled on.
+/// Publish the static TLS layout the scope settled on, and the auxiliary
+/// vector, before any library's initialiser runs.
 ///
 /// # Safety
 ///
-/// Called once, before the program runs, by the only thread.
-pub(crate) unsafe fn publish(tls_size: usize, tls_align: usize) {
+/// Called once, before the program runs, by the only thread. `auxv` must be
+/// the entry stack's vector, which stays in place for the life of the
+/// process.
+pub(crate) unsafe fn publish(tls_size: usize, tls_align: usize, auxv: *const usize) {
     let interface = &raw mut __ferrousli_loader;
     // SAFETY: the caller promises nothing else is reading it yet.
     unsafe { (*interface).tls_size = tls_size };
     // SAFETY: as above.
     unsafe { (*interface).tls_align = tls_align };
+    // SAFETY: as above.
+    unsafe { (*interface).auxv = auxv };
 }
 
 /// [`Interface::init_tls`].
