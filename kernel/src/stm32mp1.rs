@@ -465,3 +465,87 @@ impl Drop for Window {
         let _ = vmap::unmap_device(self.at);
     }
 }
+
+/// The TAMP's `compatible`, whose backup registers keep their contents
+/// through a reset.
+const TAMP_COMPATIBLE: &str = "st,stm32-tamp";
+
+/// `TAMP_BOOT_CONTEXT`, backup register 20: the ROM leaves the boot device in
+/// it, and its low byte is the forced boot mode U-Boot reads, acts on and
+/// clears at its next start (U-Boot's `arch/arm/mach-stm32mp`, `stm32.h` and
+/// `setup_boot_mode`).
+const TAMP_BOOT_CONTEXT: u64 = 0x100 + 4 * 20;
+/// The forced boot mode's bits.
+const FORCED_MASK: u32 = 0xFF;
+
+/// The words `reboot(2)`'s RESTART2 can carry on a DK board, what U-Boot's
+/// forced boot mode for each is, and what it does with it: ST's names for
+/// its `reboot-mode` node where it has one, and `firmware` for systemd's
+/// `reboot --firmware-setup`.
+///
+/// Recovery runs U-Boot's `altbootcmd` before the autoboot, and the board's
+/// environment makes that stop at the prompt (`docs/stm32mp157-dk.md`), which
+/// is what `firmware` means.
+const BOOT_MODES: [(&str, u32, &str); 5] = [
+    (
+        "firmware",
+        0x02,
+        "U-Boot runs altbootcmd, which stops at its prompt",
+    ),
+    (
+        "recovery",
+        0x02,
+        "U-Boot runs altbootcmd, which stops at its prompt",
+    ),
+    ("fastboot", 0x01, "U-Boot starts fastboot"),
+    ("ums", 0x10, "U-Boot puts the SD card on USB"),
+    ("ums_mmc0", 0x10, "U-Boot puts the SD card on USB"),
+];
+
+/// Physical address of `TAMP_BOOT_CONTEXT`, when the tree has a TAMP; zero
+/// otherwise.
+static BOOT_CONTEXT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// Note where the forced boot mode is kept, once at boot: at a reboot the
+/// tree may be out of reach.
+pub(crate) fn note_boot_context(tree: &Fdt<'_>) {
+    let Some(region) = tree
+        .compatible_nodes(TAMP_COMPATIBLE)
+        .find(Node::is_enabled)
+        .and_then(|tamp| tamp.reg().next())
+    else {
+        return;
+    };
+    if region.size >= TAMP_BOOT_CONTEXT + 4 {
+        BOOT_CONTEXT.store(
+            region.address + TAMP_BOOT_CONTEXT,
+            core::sync::atomic::Ordering::Relaxed,
+        );
+    }
+}
+
+/// Ask the firmware to come back up as `word` says, at the next reset: set
+/// U-Boot's forced boot mode and read it back. What U-Boot will do, or why
+/// nothing will change: a machine with no TAMP, or a word U-Boot has no mode
+/// for, restarts as it would have without it, as Linux restarts with a word
+/// no reboot-mode driver knows.
+pub(crate) fn request_boot_mode(word: &str) -> Result<&'static str, &'static str> {
+    let at = BOOT_CONTEXT.load(core::sync::atomic::Ordering::Relaxed);
+    if at == 0 {
+        return Err("this machine keeps no boot mode");
+    }
+    let (_, mode, what) = BOOT_MODES
+        .iter()
+        .find(|(name, _, _)| *name == word)
+        .copied()
+        .ok_or("U-Boot has no boot mode of that name")?;
+    let page = at - at % PAGE_SIZE;
+    let window = Window::map(page, PAGE_SIZE)?;
+    let offset = at - page;
+    let context = window.mmio.read32(offset);
+    window.mmio.write32(offset, (context & !FORCED_MASK) | mode);
+    if window.mmio.read32(offset) & FORCED_MASK != mode {
+        return Err("the TAMP did not take the boot mode");
+    }
+    Ok(what)
+}
