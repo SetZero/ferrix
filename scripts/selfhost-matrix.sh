@@ -27,6 +27,16 @@ case $mode in
 esac
 cd "$(dirname "$0")/.." || exit 2
 
+# A build's key names what it runs and reads, not the tree it compiles, so a
+# plan and its store belong to the commit they were recorded on.
+tree="$(git rev-parse HEAD) $(git status --porcelain --untracked-files=no | sha256sum | cut -c1-16)"
+if [ "$mode" = record ]; then
+    echo "$tree" > "$dir/tree"
+elif [ "$(cat "$dir/tree" 2>/dev/null)" != "$tree" ]; then
+    echo "selfhost-matrix: $dir was recorded on $(cat "$dir/tree" 2>/dev/null), this is $tree" >&2
+    exit 2
+fi
+
 real=$HOME/.local/share/ferrix
 home=$dir/home
 data=$home/.local/share/ferrix
