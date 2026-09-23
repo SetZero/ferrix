@@ -90,6 +90,7 @@ use ferrix_bootinfo::{PAGE_SIZE, USER_VIRT_END, is_user_address};
 use ferrix_frame::Frame;
 use ferrix_paging::MapFlags;
 use ferrix_sched::CpuSet;
+use ferrix_sync::{SleepLock, SleepLockGuard};
 use ferrix_vma::{Backing, PageRange, Unmapping, Vma, VmaFlags};
 
 use crate::arch;
@@ -228,6 +229,10 @@ pub(crate) struct AddressSpace {
     cpus: CpuMask,
     /// Shootdowns of this space counted under its lock and not yet returned.
     flushes_pending: AtomicU64,
+    /// Held by each system call that changes which ranges are mapped, from
+    /// its first look at the map to its last change: see
+    /// [`AddressSpace::layout`].
+    layout: SleepLock<()>,
     inner: SpinLock<Inner>,
 }
 
@@ -258,6 +263,7 @@ impl AddressSpace {
             me: me.clone(),
             cpus: CpuMask::new(),
             flushes_pending: AtomicU64::new(0),
+            layout: SleepLock::new((), &crate::sync::SchedParker),
             inner: SpinLock::new(Inner {
                 map,
                 objects: BTreeMap::new(),
@@ -579,6 +585,7 @@ impl AddressSpace {
             me: me.clone(),
             cpus: CpuMask::new(),
             flushes_pending: AtomicU64::new(0),
+            layout: SleepLock::new((), &crate::sync::SchedParker),
             inner: SpinLock::new(Inner {
                 map,
                 objects,
@@ -1135,6 +1142,30 @@ impl AddressSpace {
         let answer = touch(mm::direct_map(physical));
         drop(inner);
         Ok(Some(answer))
+    }
+
+    /// Hold the layout: what `mmap`, `munmap`, `mprotect`, `mremap` and `brk`
+    /// take first, as Linux's take `mmap_lock` for writing.
+    ///
+    /// Each of this type's methods is whole under the space's own lock, but a
+    /// system call can be two of them: plain `MAP_FIXED` is an [`unmap`] and
+    /// then a map, and the unmap has to let the lock go for its shootdown.
+    /// Between the two another thread's `mmap` could be given the range just
+    /// emptied, and the fixed mapping then failed or took the other's place;
+    /// when that thread unmapped, memory the first had been handed went with
+    /// it. jemalloc re-maps its reserved memory `MAP_FIXED` whenever it
+    /// commits or decommits, so a many-threaded `rustc` met this within
+    /// minutes (`cargo xtask test-selfhost`). A page fault does not take it:
+    /// faults are whole under the space's lock, and a program touching a
+    /// range that another of its threads is replacing gets what Linux would
+    /// give it after either step.
+    ///
+    /// A lock that sleeps, since [`unmap`] asks for a shootdown under it;
+    /// taken before any spin lock, and after `Process`'s heap lock.
+    ///
+    /// [`unmap`]: AddressSpace::unmap
+    pub(crate) fn layout(&self) -> SleepLockGuard<'_, ()> {
+        self.layout.lock()
     }
 
     /// Unmap `len` bytes at `at`, giving back the pages and the tables.

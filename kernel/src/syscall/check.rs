@@ -6854,6 +6854,9 @@ enum HeapCall {
     Shrink,
     /// Copy the space as `fork` does.
     Fork,
+    /// Map a page anywhere by `mmap`, while the space's layout is held
+    /// rather than the heap lock.
+    Map,
 }
 
 /// How long the heap task is given to go past the lock, once started, before
@@ -6863,6 +6866,10 @@ const HEAP_HELD_NANOS: u64 = 50_000_000;
 
 /// How long the check waits for its heap task to start or to finish.
 const HEAP_PATIENCE_NANOS: u64 = 30_000_000_000;
+
+/// The failure an `mmap` that does not wait for the space's layout produces.
+const MMAP_IGNORED_LAYOUT: &str =
+    "an mmap changed the address space while another call held its layout";
 
 /// The failure a `brk` that does not wait for the heap lock produces.
 const BRK_IGNORED_HEAP_LOCK: &str = "a brk shrank the heap while a fork held the heap lock";
@@ -6881,7 +6888,9 @@ static HEAP_STARTED: core::sync::atomic::AtomicBool = core::sync::atomic::Atomic
 /// count.
 static HEAP_ANSWER: crate::sync::SpinLock<Option<u64>> = crate::sync::SpinLock::new(None);
 
-/// A `brk` waits for a `fork` holding the heap lock, and a `fork` for a `brk`.
+/// A `brk` waits for a `fork` holding the heap lock, and a `fork` for a `brk`;
+/// and an `mmap` waits for a call holding the space's layout, which is what
+/// makes plain `MAP_FIXED`'s unmap and map one step to every other thread.
 fn check_brk_and_fork_wait_for_the_heap_lock() -> Result<(), &'static str> {
     let process =
         process::new_for_check().map_err(|_| "could not make a process for the heap lock check")?;
@@ -6899,12 +6908,15 @@ fn check_brk_and_fork_wait_for_the_heap_lock() -> Result<(), &'static str> {
         return Err("a brk that waited for the heap lock did not shrink the heap");
     }
     let _ = call_past_the_heap_lock(&process, HeapCall::Fork, 0)?;
+    if call_past_the_heap_lock(&process, HeapCall::Map, 0)? == 0 {
+        return Err("an mmap that waited for the layout was refused");
+    }
     Ok(())
 }
 
-/// Hold `process`'s heap lock, have a task make `call`, require it not to
-/// finish while the lock is held and to finish once it goes. Answers what the
-/// call answered.
+/// Hold `process`'s heap lock, or for [`HeapCall::Map`] its space's layout,
+/// have a task make `call`, require it not to finish while the lock is held
+/// and to finish once it goes. Answers what the call answered.
 fn call_past_the_heap_lock(
     process: &Arc<Process>,
     call: HeapCall,
@@ -6913,7 +6925,10 @@ fn call_past_the_heap_lock(
     HEAP_STARTED.store(false, Ordering::SeqCst);
     *HEAP_ANSWER.lock() = None;
     *HEAP_SUBJECT.lock() = Some((Arc::clone(process), call, want));
-    let held = process.hold_heap_for_check();
+    let held = match call {
+        HeapCall::Map => process.space().layout(),
+        HeapCall::Shrink | HeapCall::Fork => process.hold_heap_for_check(),
+    };
     let task = crate::sched::spawn("heap-lock", heap_caller, 0, ferrix_sched::NICE_0_WEIGHT)?;
 
     let deadline = crate::timer::now_nanos().saturating_add(HEAP_PATIENCE_NANOS);
@@ -6938,6 +6953,7 @@ fn call_past_the_heap_lock(
         return Err(match call {
             HeapCall::Shrink => BRK_IGNORED_HEAP_LOCK,
             HeapCall::Fork => FORK_IGNORED_HEAP_LOCK,
+            HeapCall::Map => MMAP_IGNORED_LAYOUT,
         });
     }
     HEAP_ANSWER
@@ -6946,7 +6962,8 @@ fn call_past_the_heap_lock(
         .ok_or("the heap lock check's task finished without answering")
 }
 
-/// The heap task: one `brk` or one space copy on what [`HEAP_SUBJECT`] names.
+/// The heap task: one `brk`, one space copy or one `mmap` on what
+/// [`HEAP_SUBJECT`] names.
 fn heap_caller(_argument: usize) {
     let Some((process, call, want)) = HEAP_SUBJECT.lock().take() else {
         return;
@@ -6957,6 +6974,7 @@ fn heap_caller(_argument: usize) {
         HeapCall::Fork => process
             .fork_memory(|space| space.region_count() as u64)
             .ok(),
+        HeapCall::Map => map_rw(&process, PAGE_SIZE).ok(),
     };
     *HEAP_ANSWER.lock() = answer;
 }

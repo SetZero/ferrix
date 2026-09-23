@@ -156,6 +156,8 @@ pub(crate) fn sys_mmap(process: &Process, request: &MmapRequest) -> Result<usize
         return Err(Errno::EOVERFLOW);
     }
 
+    // From here the call looks at the map and changes it, perhaps twice.
+    let _layout = process.space().layout();
     if flags & MAP_ANONYMOUS == 0 {
         let offset = (page_offset as u64)
             .checked_mul(PAGE_SIZE)
@@ -327,6 +329,7 @@ pub(crate) fn sys_munmap(process: &Process, addr: u64, len: u64) -> Result<usize
         return Err(Errno::EINVAL);
     }
     let len = pages_for(len)?;
+    let _layout = process.space().layout();
     process.space().unmap(addr, len).map_err(refused)?;
     Ok(0)
 }
@@ -364,6 +367,7 @@ pub(crate) fn sys_mprotect(
     if prot & GROWS != 0 {
         return Err(Errno::EINVAL);
     }
+    let _layout = process.space().layout();
     process
         .space()
         .protect(addr, len, vma)
@@ -424,6 +428,7 @@ pub(crate) fn sys_mremap(
     let old_len = pages_for(old_size).map_err(|_| Errno::EINVAL)?;
     let new_len = pages_for(new_size).map_err(|_| Errno::EINVAL)?;
 
+    let _layout = process.space().layout();
     let destination = if flags & MREMAP_FIXED != 0 {
         if !new_addr.is_multiple_of(PAGE_SIZE) {
             return Err(Errno::EINVAL);
