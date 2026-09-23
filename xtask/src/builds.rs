@@ -347,7 +347,9 @@ fn digest_of_output(path: &Path) -> Result<String> {
         .map_err(|error| Error::new(format!("reading {}: {error}", path.display())))?;
     if meta.file_type().is_symlink() {
         let target = std::fs::read_link(path)?;
-        return Ok(sha256::hex(format!("link {}", text(target.as_os_str())).as_bytes()));
+        return Ok(sha256::hex(
+            format!("link {}", text(target.as_os_str())).as_bytes(),
+        ));
     }
     if !meta.is_dir() {
         return digest_of(path);
@@ -358,10 +360,7 @@ fn digest_of_output(path: &Path) -> Result<String> {
     entries.sort();
     let mut listing = String::new();
     for entry in entries {
-        let name = entry
-            .file_name()
-            .map(|name| text(name))
-            .unwrap_or_default();
+        let name = entry.file_name().map(|name| text(name)).unwrap_or_default();
         listing.push_str(&format!(
             "{name} {:o} {}\n",
             mode_of(&entry),
@@ -389,7 +388,11 @@ fn mode_of(path: &Path) -> u32 {
 /// there.
 fn copy_output(from: &Path, to: &Path) -> Result<()> {
     let failed = |error: std::io::Error| {
-        Error::new(format!("copying {} to {}: {error}", from.display(), to.display()))
+        Error::new(format!(
+            "copying {} to {}: {error}",
+            from.display(),
+            to.display()
+        ))
     };
     if let Ok(meta) = std::fs::symlink_metadata(to) {
         if meta.is_dir() {
@@ -428,7 +431,9 @@ fn link(target: &Path, to: &Path) -> std::io::Result<()> {
 /// for the Linux host that makes and boots the images.
 #[cfg(not(unix))]
 fn link(_target: &Path, _to: &Path) -> std::io::Result<()> {
-    Err(std::io::Error::other("a symbolic link cannot be made on this host"))
+    Err(std::io::Error::other(
+        "a symbolic link cannot be made on this host",
+    ))
 }
 
 /// The SHA-256 of a file's bytes.
@@ -779,9 +784,10 @@ fn execute_one(
             if let Some(parent) = file.parent() {
                 std::fs::create_dir_all(parent)?;
             }
-            let _ = std::fs::copy(directory.join("files").join(digest), &file).map_err(
-                |error| Error::new(format!("putting {} in place: {error}", file.display())),
-            )?;
+            let _ =
+                std::fs::copy(directory.join("files").join(digest), &file).map_err(|error| {
+                    Error::new(format!("putting {} in place: {error}", file.display()))
+                })?;
         }
     }
     build.outputs = planned
@@ -948,7 +954,10 @@ mod tests {
         let copy = root.join("copy");
         copy_output(&tree, &copy).unwrap();
         assert_eq!(digest_of_output(&copy).unwrap(), before);
-        assert_eq!(std::fs::read_link(copy.join("link")).unwrap(), Path::new("sub/file"));
+        assert_eq!(
+            std::fs::read_link(copy.join("link")).unwrap(),
+            Path::new("sub/file")
+        );
         // Copied over again, whatever was there goes.
         std::fs::write(copy.join("stale"), b"old").unwrap();
         copy_output(&tree, &copy).unwrap();

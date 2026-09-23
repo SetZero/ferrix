@@ -135,23 +135,18 @@ fn build_locked(arch: Arch, root: &Path) -> Result<PathBuf> {
     let program = first(&root, arch);
     let dir = crate::paths::workspace_root().join("ferrousli");
 
+    // Linux builds through `crate::builds`; this is the Windows build.
     if !cfg!(windows) {
         return build_here(arch, &root);
     }
-    let (script, mut command) = if cfg!(windows) {
-        let mut command = Command::new(ferrousli::git_bash()?);
-        // One spelling of the directory for both the script and its caller,
-        // with the separators bash expects.
-        let root = root.to_string_lossy().replace('\\', "/");
-        let _ = command
-            .env(VAR, &root)
-            .args(["-c", SCRIPT, "bash", "build-windows.sh", &root]);
-        ("build-windows.sh", command)
-    } else {
-        let mut command = Command::new("bash");
-        let _ = command.args(["-c", SCRIPT, "bash", "build.sh"]).arg(&root);
-        ("build.sh", command)
-    };
+    let script = "build-windows.sh";
+    let mut command = Command::new(ferrousli::git_bash()?);
+    // One spelling of the directory for both the script and its caller,
+    // with the separators bash expects.
+    let spelled = root.to_string_lossy().replace('\\', "/");
+    let _ = command
+        .env(VAR, &spelled)
+        .args(["-c", SCRIPT, "bash", "build-windows.sh", &spelled]);
     ferrousli::in_ferrousli(&mut command, &dir);
 
     let description = format!("ferrousli/tools/uutils/{script}");

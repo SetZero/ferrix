@@ -430,8 +430,8 @@ fn vendor(into: &Path, every: bool) -> Result<String> {
     }
     // What `cargo vendor` prints is the configuration that uses what it
     // vendored, git sources included, with this machine's path in it.
-    let printed = String::from_utf8_lossy(&output.stdout)
-        .replace(&into.display().to_string(), VENDOR);
+    let printed =
+        String::from_utf8_lossy(&output.stdout).replace(&into.display().to_string(), VENDOR);
     Ok(printed + OFFLINE)
 }
 
