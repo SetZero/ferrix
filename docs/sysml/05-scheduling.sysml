@@ -48,8 +48,11 @@ package FerrixScheduling {
              * copies the handler out and runs it after release, so two CPUs
              * taking interrupts contend for a load, not for each other's
              * handlers. The acknowledge protocol stays in arch; what arrives
-             * here is the number. Unregistering waits for stage 10 and for a
-             * grace period: a running handler is a read-side section. */
+             * here is the number. Nothing is ever unregistered: stage 10's
+             * Interrupt objects register one kernel handler per line for
+             * good and find the line's holder in a table of their own
+             * (kernel/src/object/interrupt.rs), so the grace period a
+             * removal would need is never paid. */
         attribute slots : Natural = 1024;
         attribute delivered : Natural;
         attribute unclaimed : Natural;
@@ -126,8 +129,9 @@ package FerrixScheduling {
         action synchronize {
             doc /* The grace period: interrupt every other processor and wait
                  * for each to take it, which none can inside a section. What
-                 * stage 14's mode switch and stage 10's handler removal wait
-                 * on. */
+                 * stage 14's mode switch will wait on. Stage 10 removes no
+                 * interrupt handler after all, so only stage 4's boot check
+                 * calls it today. */
         }
         attribute shootdowns : Natural;
         attribute gracePeriods : Natural;
@@ -489,18 +493,27 @@ package FerrixScheduling {
         part domains : SchedulingDomain[1..*];
         part fair : EevdfClass;
         part idle : IdleClass;
-        part loadBalancing : LoadBalancing {
-            @deferred { reason = "Nothing beyond work stealing by an idle processor; stage 5 left the rest."; }
+        #implemented part loadBalancing : LoadBalancing {
+            doc /* Stage 5 left nothing beyond work stealing by an idle
+                 * processor; Placement and Balancing above were added after
+                 * it: kernel/src/sched/mod.rs's balance(), at most every 16
+                 * milliseconds per processor, pulling and pushing over
+                 * libs/sched's arithmetic. */
         }
         #planned part fifoRr : FifoRrClass { @stage { number = 14; } }
         #planned part edf : EdfClass { @stage { number = 14; } }
         action pickNext;
         action tick;
-        #planned action setScheduler {
+        #inProgress action setScheduler {
             @stage { number = 7; }
             doc /* Linux sched_setscheduler: SCHED_FIFO/RR to the soft-RT
                  * classes, SCHED_DEADLINE to EDF, SCHED_OTHER/BATCH/IDLE to
-                 * fair. */
+                 * fair. kernel/src/syscall/limits.rs answers it today with
+                 * the one policy there is a class for: SCHED_OTHER at
+                 * priority zero is accepted and every other policy is EINVAL,
+                 * refused rather than accepted and ignored, until stage 14
+                 * brings the classes. The nice value is the fair class's
+                 * weight already. */
         }
         #planned action switchDomainMode { @stage { number = 14; } }
     }
@@ -524,10 +537,18 @@ package FerrixScheduling {
         action admit;
     }
 
-    #planned part def Futex {
+    #implemented part def Futex {
         @stage { number = 7; }
-        doc /* The futex family over a hash of wait queues keyed by physical
-             * page and offset, so a shared mapping's futex is one futex.
-             * Robust lists and PI futexes with it. */
+        doc /* kernel/src/syscall/futex.rs: wait, wake and requeue, plain and
+             * with a bitset, with the word read and the waiter listed under
+             * one table lock so no wake is lost, and the read under it
+             * never faulting. One table, keyed by address space and user
+             * address, where the design keys by physical page and offset:
+             * a shared futex is keyed as a private one, so a word two
+             * processes map shared is two futexes. A thread that ends
+             * clears its clear_child_tid word and wakes whoever waits on
+             * it. The robust list's head is recorded and never walked, and
+             * the priority-inheritance operations and FUTEX_WAKE_OP are
+             * ENOSYS. */
     }
 }

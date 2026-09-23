@@ -3,8 +3,9 @@
  *
  * docs/ARCHITECTURE.md §7. The kernel enumerates buses because that needs
  * ACPI or a device tree and privileged access; it does not drive devices.
- * Enumeration's parsers and the kernel's access to the tables run today;
- * everything from the device node outward is stage 10.
+ * Everything from the device node outward is stage 10, which is done: the
+ * drivers are processes devmgr starts. What it still owes is named on the
+ * part that owes it.
  */
 package FerrixDrivers {
     private import ScalarValues::*;
@@ -22,7 +23,8 @@ package FerrixDrivers {
              * wrote becomes a reference the parser reads, through the direct
              * map, refusing addresses or lengths outside it. libs/acpi never
              * dereferences a pointer: RSDP, XSDT/RSDT, MADT, FADT fixed
-             * fields, GTDT, HPET. No AML. */
+             * fields, GTDT, HPET, and for stage 10 the MCFG, GICv2m frames,
+             * the DMAR and the IORT. No AML. */
         action open;
         action madt;
         action fadt;
@@ -59,7 +61,7 @@ package FerrixDrivers {
     // Stage 10
     // -----------------------------------------------------------------------
 
-    #inProgress part def DeviceNode {
+    #implemented part def DeviceNode {
         @stage { number = 10; }
         doc /* What the kernel creates per device found, and hands devmgr a
              * handle to. kernel/src/device.rs: one per PCI function and per
@@ -70,13 +72,15 @@ package FerrixDrivers {
              * have. The pages of a PCI function's MSI-X table and pending-bit
              * array are withheld from its apertures. A PCI function's vectors
              * are its MSI-X entries, minted on first ask and masked at the
-             * entry's own bit. */
+             * entry's own bit. device_info writes what a driver needs to
+             * find its registers, and each node has the IOMMU domain its
+             * DMA goes through. */
         attribute compatible : String;
         attribute mmioWindows : Natural[0..*];
         attribute interrupts : Natural[0..*];
     }
 
-    #inProgress part def DeviceEnumeration {
+    #implemented part def DeviceEnumeration {
         @stage { number = 10; }
         doc /* ACPI on x86-64 and AArch64 under EDK2, device tree on ARMv7-A
              * and where AArch64 firmware offers one; PCIe bus walk from
@@ -84,16 +88,24 @@ package FerrixDrivers {
              * pci-host-ecam-generic (libs/fdt), ECAM mapped a bus at a time,
              * the libs/pci walk with every BAR sized and every capability
              * list walked, in the boot test on all three architectures.
-             * Device nodes are built from what it finds: see DeviceNode. */
+             * Device nodes are built from what it finds: see DeviceNode.
+             * Owed after the exit: trusting a BAR firmware placed but left
+             * decoding off, of which only the device tree's host-bridge
+             * windows are read so far. */
         part nodes : DeviceNode[0..*];
         action enumerate;
     }
 
-    #planned part def IommuDomain {
+    #implemented part def IommuDomain {
         @stage { number = 10; }
         doc /* Scoped to one device: the device addresses a DMA VMO gets come
              * from here, so a driver cannot DMA over the kernel or over
-             * another driver. */
+             * another driver. kernel/src/iommu.rs's Domain, one per device
+             * node, made the first time it is asked for: a pin gives each
+             * page a device address and an unpin takes them back. A
+             * translated domain maps each pinned page at its own physical
+             * address and nothing else; an untranslated one, where no unit
+             * translates, hands out physical addresses. */
         ref part device : DeviceNode;
         action mapForDevice;
         action unmapForDevice;
@@ -104,21 +116,30 @@ package FerrixDrivers {
         DegradedTrusted;  // no IOMMU: announced loudly at boot
     }
 
-    #planned part def IommuDomains {
+    #implemented part def IommuDomains {
         @stage { number = 10; }
-        doc /* Where the hardware is is read today: libs/acpi's dmar module
-             * (VT-d units and their device scopes) and iort module (root
-             * complex to SMMUv3 stream IDs), tested against QEMU's own table
-             * builders. The domains themselves are not built yet. */
+        doc /* Where the hardware is: libs/acpi's dmar module (VT-d units
+             * and their device scopes) and iort module (root complex to
+             * SMMUv3 stream IDs), tested against QEMU's own table builders,
+             * and the device tree's arm,smmu-v3 nodes and iommu-map.
+             * kernel/src/iommu.rs places every PCI function behind a unit
+             * before any is programmed, counting what it cannot follow as
+             * unresolved rather than bypassing. VT-d on x86-64 and the
+             * SMMUv3 under ACPI on AArch64 translate from before PCI
+             * enumeration, and a deliberate out-of-domain write faults on
+             * both in every boot test. ARMv7-A stays in degraded trusted
+             * mode, announced at boot. AMD-Vi is not driven. */
         attribute mode : IommuMode;
         part domains : IommuDomain[0..*];
     }
 
-    #planned part def DriverProcess {
+    #implemented part def DriverProcess {
         @stage { number = 10; }
         doc /* An ordinary user process in its own Job, holding exactly the
              * capabilities devmgr gave it. A driver fault is a process fault;
-             * a wedged driver is a Job kill. */
+             * a wedged driver is a Job kill. Five exist, native programs on
+             * user/rt under /lib/drivers: blk, net, gpu, input and vport,
+             * each a thin layer of handles over its libs/ crates. */
         ref part job : Job;
         part ioMappings : IoMapping[0..*] {
             doc /* One per BAR or MMIO window, and nothing outside it. */
@@ -136,27 +157,40 @@ package FerrixDrivers {
         part ring : SharedRing;
     }
 
-    #planned part def SharedRing {
+    #implemented part def SharedRing {
         @stage { number = 10; }
         doc /* The data path is not per-request IPC: driver and kernel share
              * a descriptor ring in a VMO and ring a doorbell; requests batch.
              * The same shape virtio and NVMe already use. libs/virtio's split
              * virtqueue (driver and device halves, over abstract shared
-             * memory) is the first of these. */
+             * memory) is the first of these. Between kernel and driver:
+             * libs/blkring (docs/BLOCK-RING.md) and libs/netring
+             * (docs/NET-RING.md), with kernel/src/block_ring and
+             * kernel/src/net_ring as the kernel's ends and doorbells as port
+             * packets. The display and input drivers need none: frames do
+             * not move, and their control channels carry the rest. */
         ref part memory : Vmo;
         action addChain;
         action takeUsed;
         action doorbell;
     }
 
-    #planned part def DevMgr {
+    #implemented part def DevMgr {
         @stage { number = 10; }
-        doc /* A normal musl binary that also speaks the native ABI. Receives a
-             * handle per device node, matches a driver, spawns it in its own
-             * Job with the four resources above. */
+        doc /* A native program on user/rt, not a musl binary: user/devmgr,
+             * /sbin/devmgr. Receives a handle per device node, matches a
+             * driver, spawns it in its own Job with the four resources
+             * above. The kernel starts it from stage 10's boot check with
+             * DEVICES messages holding a job, every device node twice and
+             * every driver image /lib/drivers/MANIFEST lists
+             * (kernel/src/devmgr.rs, libs/devmgr-proto); it matches
+             * virtio-blk, virtio-net, virtio-gpu, virtio-input and the
+             * virtio-serial port by a table of its own, starts each driver
+             * with START, waits for every one but the port driver to be
+             * PUBLISHED before the next, and REPORTs. docs/DEVMGR.md. */
         action match;
         action spawnDriver;
-        action quiesceOnDeath {
+        #implemented action quiesceOnDeath {
             doc /* device_quiesce after a driver's TERMINATED: the kernel waits
                  * for the block, display and render cores to let the device go
                  * (kernel/src/claim.rs), then DIED. */
@@ -169,28 +203,57 @@ package FerrixDrivers {
         }
     }
 
-    #planned part def VirtioBlkDriver :> DriverProcess {
+    #implemented part def VirtioBlkDriver :> DriverProcess {
         @stage { number = 10; }
         doc /* The first driver: virtio-blk as a user process. Exit test: a
              * sector read through ring 3 with the IOMMU on, and a deliberate
-             * out-of-domain DMA attempt faulting. */
+             * out-of-domain DMA attempt faulting. user/blk over
+             * libs/virtio-blk and libs/blkserve; the exit is met in the boot
+             * test, with VT-d translating on x86-64 and the SMMUv3 on
+             * AArch64, and ARMv7-A in degraded trusted mode. */
     }
 
-    #planned part def VirtioNetDriver :> DriverProcess;
+    #implemented part def VirtioNetDriver :> DriverProcess {
+        doc /* user/net over libs/virtio-net and libs/netserve, speaking the
+             * net ring; cargo xtask test-net is its gate. */
+    }
 
-    #planned action def DriverBootstrap {
+    #implemented part def VirtioGpuDriver :> DriverProcess {
+        @stage { number = 17; }
+        doc /* user/gpu over libs/virtio-gpu: the display core's card0 over
+             * displayctl, and since stage 19 the render core's renderD128
+             * over renderctl, turning its messages into virtio-gpu's 3D
+             * commands. cargo xtask test-display is its gate. The one driver
+             * devmgr starts again after it dies (restartDriver). */
+    }
+
+    #implemented part def VirtioInputDriver :> DriverProcess {
+        @stage { number = 17; }
+        doc /* user/input over libs/virtio-input, feeding the input core's
+             * /dev/input/eventN over inputctl; cargo xtask test-input is its
+             * gate. */
+    }
+
+    #implemented action def DriverBootstrap {
         @stage { number = 10; }
         doc /* The loader places an initramfs in RAM holding devmgr, the
-             * virtio-blk driver and init. The kernel mounts it as root,
-             * starts init, drivers come up, and the system pivots onto btrfs.
-             * Linux's answer, for the same reason. */
+             * drivers and init. The kernel unpacks it into a tmpfs root and
+             * starts devmgr from stage 10's boot check, and devmgr starts the
+             * drivers; on a boot with a btrfs root disk the kernel then
+             * mounts it and moves every process after onto it, as Linux's
+             * switch_root does (kernel/src/fs/root_disk.rs), and starts init
+             * last, after the boot marker. Linux's answer, for the same
+             * reason. The test boots keep the tmpfs root, so only cargo
+             * xtask run mounts a root disk and moves onto it. pivot_root
+             * itself, so the tmpfs can be unmounted from under the new root,
+             * is an init's work, which stage 15 owes. */
         first start;
         then action mountInitramfsAsRoot;
-        then action startInit;
         then action startDevMgr;
         then action spawnBlockDriver;
         then action mountBtrfs;
         then action pivotRoot;
+        then action startInit;
         then done;
     }
 }

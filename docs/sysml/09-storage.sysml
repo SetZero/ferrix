@@ -13,13 +13,19 @@ package FerrixStorage {
     // Block core, stage 11
     // -----------------------------------------------------------------------
 
-    #planned part def BlockCore {
+    #implemented part def BlockCore {
         @stage { number = 11; }
         doc /* Request queues, merging, an I/O scheduler with per-cgroup
              * bandwidth, and the ring protocol to userspace block drivers. A
              * read into a page-cache page fills the VMO the cache already
              * holds. The queue itself (merging, flush and FUA barriers,
-             * deadline scheduling) is written ahead in libs/block. */
+             * deadline scheduling) is libs/block, in front of every block
+             * ring (kernel/src/block_ring, libs/blkring): one kernel task
+             * per ring moves requests onto it and copies payloads through
+             * the ring's data VMO, and publishes the disk in devfs's
+             * registry as a BlockDevice (kernel/src/fs/block.rs) that
+             * reads, writes and flushes whole sectors. No per-cgroup
+             * bandwidth: cgroups are stage 13's. */
         part queues : RequestQueue[0..*];
         part ioScheduler : IoScheduler;
         action submit;
@@ -45,15 +51,18 @@ package FerrixStorage {
     // VFS, stage 8
     // -----------------------------------------------------------------------
 
-    #planned part def Inode {
+    #implemented part def Inode {
         @stage { number = 8; }
+        doc /* libs/vfs's Inode trait, which tmpfs, devfs, procfs, pipes,
+             * sockets and btrfs implement; Inode::mapping offers what mmap
+             * maps. */
         ref part pages : Vmo {
             doc /* The page cache is the inode's VMO; a mapped file and a read
                  * file are the same pages. */
         }
     }
 
-    #planned part def Dentry {
+    #implemented part def Dentry {
         @stage { number = 8; }
         attribute name : String;
         ref part inode : Inode[0..1] {
@@ -62,18 +71,26 @@ package FerrixStorage {
         }
     }
 
-    #planned part def Mount {
+    #implemented part def Mount {
         @stage { number = 8; }
         ref part root : Dentry;
         ref part filesystem : Filesystem;
     }
 
-    #planned part def Vfs {
+    #implemented part def Vfs {
         @stage { number = 8; }
         doc /* rustc opens tens of thousands of files during a build; this is a
              * performance requirement. Inode cache, dentry cache with negative
              * entries, mount table per mount namespace, fd tables with their
-             * sharing rules. */
+             * sharing rules.
+             *
+             * libs/vfs, host-tested and fuzzed by vfs_ops: dentries with
+             * negative entries kept alive by a bounded queue of recent ones,
+             * mounts and one path walk for every call that takes a path,
+             * open file descriptions apart from descriptor tables, and the
+             * permission checks where Linux makes them. kernel/src/fs builds
+             * the one namespace every process resolves paths in; mount
+             * namespaces are stage 13's. */
         part inodes : Inode[0..*];
         part dentries : Dentry[0..*];
         part mounts : Mount[0..*];
@@ -84,10 +101,15 @@ package FerrixStorage {
         action pread64;
     }
 
-    #planned part def PageCache {
+    #implemented part def PageCache {
         @stage { number = 8; }
         doc /* Unified with VMOs: not a separate cache but the set of file
-             * VMOs, subject to reclaim's LRU. */
+             * VMOs, subject to reclaim's LRU. kernel/src/fs/pages.rs: each
+             * file's VMO, filled from a disk filesystem's PageSource in runs
+             * of at most 32 missing pages with no lock held, and by a fault
+             * through a mapping as by a read. Reclaim is stage 13's and not
+             * built, and no page is marked dirty, so a page written through
+             * MAP_SHARED reaches a btrfs disk only if write writes it too. */
         ref part vmos : Vmo[0..*];
     }
 
@@ -95,30 +117,54 @@ package FerrixStorage {
     // Filesystems
     // -----------------------------------------------------------------------
 
-    abstract #planned part def Filesystem {
+    abstract #implemented part def Filesystem {
+        doc /* libs/vfs's FileSystem trait. */
         action mount;
         action lookup;
         action read;
         action write;
     }
 
-    #planned part def Tmpfs :> Filesystem { @stage { number = 8; } }
-    #planned part def Devfs :> Filesystem { @stage { number = 8; } }
-    #planned part def Procfs :> Filesystem {
+    #implemented part def Tmpfs :> Filesystem {
+        @stage { number = 8; }
+        doc /* libs/vfs/src/tmpfs.rs, whose file contents are a page store
+             * the kernel supplies as a VMO, so a shared mmap of a tmpfs file
+             * maps the file's own pages. The root and /tmp are tmpfs, and
+             * mount -t tmpfs makes a fresh one. */
+    }
+    #implemented part def Devfs :> Filesystem {
+        @stage { number = 8; }
+        doc /* kernel/src/fs/devfs.rs: null, zero, full, random, urandom,
+             * tty and console, numbered as Linux numbers them, ptmx and the
+             * dri, input and pts directories since stages 17 and 18, and
+             * the disks a driver's kernel side registers. It calls itself
+             * devtmpfs, the name init scripts look for. */
+    }
+    #implemented part def Procfs :> Filesystem {
         @stage { number = 8; }
         doc /* self/maps, self/exe, self/fd backed by the real VM and fd
-             * table; cpuinfo, meminfo. */
+             * table; cpuinfo, meminfo. kernel/src/fs/procfs.rs over
+             * libs/procfs's text, rendered at open: each /proc/<pid> with
+             * its fd, status, comm, cmdline, stat, maps, exe, cwd, root,
+             * task and mounts, and /proc's mounts, stat, partitions,
+             * filesystems, uptime, version, sys, sysrq-trigger and net
+             * beside them. */
     }
-    #planned part def Sysfs :> Filesystem;
+    #planned part def Sysfs :> Filesystem {
+        doc /* Not built: mount -t sysfs is ENODEV, and the boot check
+             * requires it to be. */
+    }
     #planned part def Cgroupfs :> Filesystem { @stage { number = 13; } }
 
-    #planned part def InitramfsUnpack {
+    #implemented part def InitramfsUnpack {
         @stage { number = 8; }
         doc /* libs/cpio: the "newc" reader. Borrows, copies nothing,
-             * allocates nothing, rejects unsafe paths. Unpacked into tmpfs. */
+             * allocates nothing, rejects unsafe paths. Unpacked into tmpfs
+             * by libs/vfs's initramfs module through the same calls a
+             * program makes, hard links and device nodes included. */
     }
 
-    #writtenAhead part def BtrfsParsing {
+    #implemented part def BtrfsParsing {
         @stage { number = 11; }
         doc /* libs/btrfs: superblock, sys chunk array and chunk map
              * (logical to physical), B-tree nodes and leaves, item payloads
@@ -127,26 +173,36 @@ package FerrixStorage {
              * from images mkfs.btrfs produced. */
     }
 
-    #planned part def Btrfs :> Filesystem {
+    #implemented part def Btrfs :> Filesystem {
         @stage { number = 11; }
         doc /* The real filesystem, read and write, single device, no RAID
-             * 5/6. The largest single piece of work in the project. */
+             * 5/6. The largest single piece of work in the project.
+             * kernel/src/fs/btrfs.rs mounts it from a block node, read-only
+             * over libs/btrfs-vfs or writable over libs/btrfs-write, one
+             * inode object per inode so two names share one page cache. `/`
+             * is a btrfs volume under cargo xtask run, and test-rustc's
+             * sysroot is one at /data. */
         part parsing : BtrfsParsing;
         part read : BtrfsRead;
         part write : BtrfsWrite;
-        part subvolumes : BtrfsSubvolumes;
+        #planned part subvolumes : BtrfsSubvolumes;
     }
 
-    #writtenAhead part def BtrfsRead {
+    #implemented part def BtrfsRead {
         @stage { number = 11; }
         doc /* Stage A: superblock, chunk tree, root tree, fs trees, extent
              * data inline and regular, directory and inode items, crc32c
              * verification, zstd/zlib/lzo. Enough to mount what mkfs.btrfs
              * produced and read a sysroot out of it.
              *
-             * Written ahead in libs/btrfs and libs/btrfs-vfs, host-tested
-             * against four real images; not yet mounted by the kernel, which
-             * needs a block device. Data checksums are not verified yet. */
+             * libs/btrfs and libs/btrfs-vfs, host-tested against real
+             * images, with every data sector checked against the checksum
+             * tree before its bytes are used and a bounded cache of
+             * metadata reads. Exit met on all three architectures: a
+             * mkfs.btrfs fixture on a second virtio-blk disk, served by the
+             * ring-3 driver, mounted at /mnt and read back against its
+             * manifest. A file on the read-only mount cannot be mapped yet
+             * (ENODEV); one on the writable mount can. */
     }
 
     #implemented part def BtrfsWrite {
@@ -157,23 +213,29 @@ package FerrixStorage {
              * tree and its replay.
              *
              * All three are in libs/btrfs-write, mounted writable by the
-             * kernel through libs/btrfs-vfs, and clean under host btrfs check,
-             * replayLog after QEMU is killed inside a transaction. */
+             * kernel through libs/btrfs-vfs, and clean under host btrfs
+             * check: over what every boot writes (cargo xtask test-btrfs),
+             * and before and after the log is replayed when QEMU is killed
+             * inside a transaction (cargo xtask test-powerfail). Owed beside
+             * the stage: writeback of pages written through MAP_SHARED. */
         action allocateCow;
         action commitTransaction;
         action replayLog;
     }
 
     #planned part def BtrfsSubvolumes {
-        doc /* Stage C: subvolumes and snapshots, then the rest. */
+        doc /* Stage C: subvolumes and snapshots, then the rest. The reader
+             * mounts the default subvolume; entering others, subvol= and
+             * subvolid= are owed, and the writer refuses subvolumes and
+             * snapshots. */
     }
 
-    #planned part def Filesystems {
+    #implemented part def Filesystems {
         part tmpfs : Tmpfs;
         part devfs : Devfs;
         part procfs : Procfs;
-        part sysfs : Sysfs;
-        part cgroupfs : Cgroupfs;
+        #planned part sysfs : Sysfs;
+        #planned part cgroupfs : Cgroupfs;
         part btrfs : Btrfs;
         part initramfs : InitramfsUnpack;
     }
