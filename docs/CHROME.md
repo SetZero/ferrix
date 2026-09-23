@@ -3,8 +3,39 @@
 Asked by the customer on 2026-09-18, and answered by reading the tree rather
 than by guessing. This is an assessment, not a decision and not a stage: what
 a browser needs, what Ferrix has, what is missing, and what the missing part
-would cost. Whether any of it is worth doing is the product owner's, and
-`docs/BACKLOG.md` carries no row for it until they write one.
+would cost. Whether any of it is worth doing was the product owner's to say,
+and on 2026-09-23 the customer asked for the work to start.
+
+## Where it stands, 2026-09-23
+
+**Chrome is not on the image, and does not run on Ferrix.** No part of
+Chromium has been built, ported or tried yet. What exists is the ground it
+would stand on:
+
+| | state |
+|---|---|
+| Dynamic linking: a glibc program on ferrousli's loader and `libc.so.6`, `dlopen` and every TLS model | **done** 2026-09-23, on all three architectures (§2.1, §4) |
+| Somewhere to put it: btrfs written from Ferrix | **done** 2026-09-21, stage 12 (§2.3) |
+| `/dev/shm`, and `clone` refusing the namespaces it cannot give | **done** 2026-09-19, on `main` 2026-09-23 (§2.4, §3) |
+| The compositor a window would appear in, drawing on the GPU | **done**, stage 19's GPU path (§1, §5) |
+| `execve` of a binary past 64 MiB, mapped from the file on demand | not started (§2.2), 13 points |
+| `madvise`, a vDSO, `timerfd` and `signalfd` | not started (§3), ≈ 13 points |
+| libwayland-client, libxkbcommon, fontconfig with freetype and expat, a font | not started (§3), 13 points; sources pinned |
+| Chromium built against ferrousli, with Alpine's musl patches rebased | not started (§5), 40+ points |
+| What running it finds missing | unsized, ≥ 40 (§5) |
+| A guest with the ~2 GiB a page wants | the default is 512 MiB (§2.3) |
+
+**Next: a foreign toolkit client inside the guest** (§6). `foot`, a real
+Wayland terminal nobody here wrote, running on Ferrix's compositor, proves
+the client libraries end to end at a fraction of a browser's cost. It needs,
+built against ferrousli: libffi 3.5.2, wayland 1.24.0 (the client library),
+libxkbcommon 1.11.0, pixman 0.46.4, freetype 2.14.1, expat 2.7.3, fontconfig
+2.17.1, tllist 1.1.0, fcft 3.3.2 and foot 1.24.0, whose tarballs were
+downloaded and their sha256s taken on 2026-09-23. **Then** `chrome
+--headless --screenshot`, which needs no compositor, GPU, input or fonts but
+exercises everything hard -- processes over Mojo, hundreds of threads,
+PartitionAlloc and V8 -- and needs the two kernel rows above first. **Then**
+a window.
 
 **Re-checked on 2026-09-19**, against a tree 37 commits further on. Everything
 in §2, §3 and §4 still holds but the two loose fixes in §6, which are now
@@ -24,7 +55,9 @@ starts one as a helper -- but a browser of Ferrix's own is on no stage, and
 nothing on the roadmap arrives at one on the way to something else.
 
 **The short answer:** on the order of 120 to 170 points of new work, on top of
-roughly 95 points already planned for other reasons. That is Steam's shape and
+roughly 95 points that were already planned for other reasons when this was
+written -- of which dynamic linking and btrfs write have since landed,
+leaving stage 13's ≈ 60, and those only if the sandbox is wanted. That is Steam's shape and
 Steam's size, and like Steam most of the total is discovered by running the
 thing rather than by planning it.
 
