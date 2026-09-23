@@ -438,3 +438,120 @@ fn a_path_escape_counts_components_of_the_contracted_path() {
     // The root has one component whatever is asked for.
     assert_eq!(run("cd /; print -P -- %1c"), "/\n");
 }
+
+/// Every function call parses its own options: OPTIND starts at 1 in it and
+/// the caller's is back afterwards. oh-my-zsh's `compdef _git gco=git-checkout`
+/// and `add-zsh-hook` both `shift $(( OPTIND - 1 ))`, and once an earlier
+/// function had taken an option they shifted their first argument away.
+#[test]
+fn each_function_call_has_its_own_optind() {
+    const F: &str = "f() { while getopts ab o; do :; done; echo in $OPTIND; }; ";
+    assert_eq!(
+        run("f() { while getopts ab o; do :; done; }; \
+             g() { while getopts ab o; do echo got $o; done; \
+                   shift $(( OPTIND - 1 )); echo $1; }; \
+             f -a -b; g _git x=y"),
+        "_git\n"
+    );
+    assert_eq!(
+        run(&format!(
+            "{F}while getopts ab o -a x; do :; done; echo top $OPTIND; f -a -b y; echo top $OPTIND"
+        )),
+        "top 2\nin 3\ntop 2\n"
+    );
+    // POSIX_BUILTINS shares one OPTIND between the caller and the call.
+    assert_eq!(
+        run("setopt posixbuiltins; f() { while getopts ab o; do :; done; }; f -a y; echo $OPTIND"),
+        "2\n"
+    );
+}
+
+/// Flags open with a plain `(` inside double quotes, where the lexer leaves
+/// it untokenized. compinit reads each `#compdef -k` header's keys out of
+/// `"${(@)_i_line[2,-1]}"`, and oh-my-zsh quotes flags throughout.
+#[test]
+fn flags_apply_inside_double_quotes() {
+    const A: &str = "a=(one two three); f() { echo \"$#:$*\"; }; ";
+    assert_eq!(
+        run(&format!("{A}echo \"[${{(j:,:)a}}]\"")),
+        "[one,two,three]\n"
+    );
+    assert_eq!(
+        run(&format!("{A}echo \"[${{(U)a}}]\"")),
+        "[ONE TWO THREE]\n"
+    );
+    assert_eq!(run(&format!("{A}f \"${{(@)a}}\"")), "3:one two three\n");
+    assert_eq!(run(&format!("{A}f \"${{(@)a[2,-1]}}\"")), "2:two three\n");
+    assert_eq!(run(&format!("{A}e=(); f \"${{(@)e}}\"")), "0:\n");
+    assert_eq!(run(&format!("{A}f \"${{(@M)a:#t*}}\"")), "2:two three\n");
+    assert_eq!(
+        run(&format!("{A}x=\"${{(j:-:)a}}\"; echo $x")),
+        "one-two-three\n"
+    );
+}
+
+/// `autoload` marks a name and the first call reads its file; `+X` reads it
+/// at once and fails when there is none. compinit marks every completion
+/// function there is, so reading each one when it is marked made every
+/// start-up parse some 1200 files.
+#[test]
+fn autoload_reads_at_the_first_call_or_at_plus_x() {
+    let dir = "/tmp/zinc-autoload-parity";
+    let setup = format!(
+        "rm -rf {dir}; mkdir -p {dir}; \
+         print -r -- 'echo \"hi from lazy $1\"' > {dir}/lazy; \
+         print -r -- 'echo \"hi from eager\"' > {dir}/eager; \
+         fpath=({dir} $fpath); "
+    );
+    assert_eq!(
+        run(&format!(
+            "{setup}autoload -Uz lazy; echo marked ${{+functions[lazy]}}; lazy one"
+        )),
+        "marked 1\nhi from lazy one\n"
+    );
+    assert_eq!(
+        run(&format!(
+            "{setup}autoload -Uz +X eager && echo \"+X ok ${{+functions[eager]}}\"; \
+             autoload -Uz +X nosuch 2>/dev/null || echo '+X missing fails'"
+        )),
+        "+X ok 1\n+X missing fails\n"
+    );
+}
+
+/// A `case` inside a quoted command substitution: its `(pattern)` items
+/// close their own parentheses, and `esac)` ends the substitution. zsh's
+/// `_ant` builds its targets that way, and compinit loads it.
+#[test]
+fn a_case_in_a_quoted_command_substitution_closes() {
+    assert_eq!(run("x=\"$(case a in (a) echo A ;; esac)\"; echo $x"), "A\n");
+    assert_eq!(
+        run("x=\"${$(case a in a) echo B ;; esac)}\"; echo $x"),
+        "B\n"
+    );
+    assert_eq!(
+        run("x=\"$(case a in (a) (echo C) ;; esac)\"; echo $x"),
+        "C\n"
+    );
+    assert_eq!(
+        run("x=\"$(case a in (b) echo no ;; (*) echo D ;; esac; echo E)\"; echo $x"),
+        "D\nE\n"
+    );
+}
+
+/// `$(< file)` is the file's contents. oh-my-zsh reads its completion dump
+/// that way to see whether the dump is still its own, and threw it away at
+/// every start while this answered nothing.
+#[test]
+fn a_lone_input_redirection_substitutes_the_file() {
+    const F: &str = "f=/tmp/zinc-parity-read-file; printf 'a\nb\n' > $f; ";
+    assert_eq!(run(&format!("{F}echo \"[$(<$f)]\"")), "[a\nb]\n");
+    assert_eq!(run(&format!("{F}echo \"[$( < $f )]\"")), "[a\nb]\n");
+    assert_eq!(
+        run(&format!("{F}a=(\"${{(@f)$(<\"$f\")}}\"); echo ${{#a}}")),
+        "2\n"
+    );
+    assert_eq!(
+        run("x=$(< /tmp/zinc-parity-no-such-file); echo \"st=$? [$x]\""),
+        "st=1 []\n"
+    );
+}

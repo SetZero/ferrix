@@ -221,6 +221,9 @@ pub(crate) fn run_string(sh: &mut Shell, text: &[u8]) {
 
 /// Run a command substitution and return its output.
 pub(crate) fn capture(sh: &mut Shell, cmd: &[u8]) -> Vec<u8> {
+    if let Some(target) = simple_redir_name(sh, cmd) {
+        return read_whole_file(sh, &target);
+    }
     let mut fds = [0i32; 2];
     // SAFETY: fds is a two-element array.
     if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
@@ -257,6 +260,82 @@ pub(crate) fn capture(sh: &mut Shell, cmd: &[u8]) -> Vec<u8> {
         sh.status = status;
         sh.subst_status = Some(status);
     }
+    out
+}
+
+/// `$(< word)`: a substitution that is one input redirection and nothing
+/// else, which zsh's `getoutput` answers with the file's contents rather
+/// than by running anything. Answers the redirection's word.
+fn simple_redir_name(sh: &Shell, cmd: &[u8]) -> Option<Vec<u8>> {
+    // Most substitutions are not this, and parsing them twice would cost.
+    if cmd.iter().find(|c| !c.is_ascii_whitespace()) != Some(&b'<') {
+        return None;
+    }
+    let mut lx = Lexer::new(cmd.to_vec(), sh.lex_opts());
+    let list = Parser::new(&mut lx, sh).parse_all().ok()?;
+    let [item] = list.items.as_slice() else {
+        return None;
+    };
+    let first = &item.sublist.first;
+    if item.mode != ListMode::Sync || !item.sublist.rest.is_empty() || first.not || first.coproc {
+        return None;
+    }
+    let [command] = first.pipeline.as_ref()?.cmds.as_slice() else {
+        return None;
+    };
+    let CmdKind::Simple { assigns, words } = &command.kind else {
+        return None;
+    };
+    let [redir] = command.redirs.as_slice() else {
+        return None;
+    };
+    (assigns.is_empty()
+        && words.is_empty()
+        && redir.kind == RedirKind::Read
+        && redir.fd == 0
+        && redir.varid.is_none())
+    .then(|| redir.target.clone())
+}
+
+/// The contents of the file `$(< word)` names. oh-my-zsh reads its
+/// completion dump that way to decide whether it may keep it; an empty
+/// answer made it throw the dump away and build it again at every start.
+fn read_whole_file(sh: &mut Shell, target: &[u8]) -> Vec<u8> {
+    let read = expand_single(sh, target).and_then(|name| {
+        let fd = open_file(&name, libc::O_RDONLY)?;
+        let mut out = Vec::new();
+        let mut buf = [0u8; 4096];
+        loop {
+            // SAFETY: buf is writable for its length.
+            let n = unsafe { libc::read(fd, buf.as_mut_ptr().cast(), buf.len()) };
+            if n < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR) {
+                continue;
+            }
+            if n < 0 {
+                let error = std::io::Error::last_os_error().to_string().to_lowercase();
+                close(fd);
+                return Err(format!(
+                    "error when reading {}: {error}",
+                    String::from_utf8_lossy(&tok::unmetafy(&name))
+                ));
+            }
+            if n == 0 {
+                break;
+            }
+            out.extend_from_slice(buf.get(..usize::try_from(n).unwrap_or(0)).unwrap_or(&[]));
+        }
+        close(fd);
+        Ok(out)
+    });
+    let (status, out) = match read {
+        Ok(out) => (0, out),
+        Err(error) => {
+            sh.error(&error);
+            (1, Vec::new())
+        }
+    };
+    sh.status = status;
+    sh.subst_status = Some(status);
     out
 }
 
@@ -1215,9 +1294,25 @@ pub(crate) fn call_function(sh: &mut Shell, name: &[u8], args: Vec<Vec<u8>>) -> 
     // definition, the way zsh reports one.
     let saved_script = std::mem::replace(&mut sh.script, name.to_vec());
     let saved_base = std::mem::replace(&mut sh.line_base, f.line);
+    // Each call parses its own options, as zsh's `doshfunc` has it: `getopts`
+    // starts at the first argument and the caller's place is back afterwards,
+    // unless POSIX_BUILTINS asks for one shared OPTIND. Without this the
+    // first function to take an option left OPTIND past it for every later
+    // one, and `compdef _git gco=git-checkout` shifted `_git` away.
+    let saved_optind = (!sh.opt("posixbuiltins")).then(|| {
+        let optind = sh.get(b"OPTIND").map(|v| v.joined());
+        sh.set_scalar(b"OPTIND", b"1".to_vec());
+        (optind, std::mem::replace(&mut sh.optpos, 1))
+    });
     sh.push_scope();
     run_list(sh, &f.body);
     sh.pop_scope();
+    if let Some((optind, optpos)) = saved_optind {
+        if let Some(optind) = optind {
+            sh.set_scalar(b"OPTIND", optind);
+        }
+        sh.optpos = optpos;
+    }
     sh.line_base = saved_base;
     sh.script = saved_script;
     sh.loop_depth = saved_loops;

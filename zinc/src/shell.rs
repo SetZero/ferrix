@@ -82,6 +82,9 @@ pub(crate) struct Shell {
     /// function is first called, not when it is marked, so a later `fpath`
     /// still counts.
     pub(crate) autoloads: std::collections::HashSet<Vec<u8>>,
+    /// The file each marked name was found in when `autoload` ran, read at
+    /// the first call.
+    pub(crate) autoload_files: HashMap<Vec<u8>, Vec<u8>>,
     pub(crate) aliases: HashMap<Vec<u8>, AliasDef>,
     pub(crate) suffix_aliases: HashMap<Vec<u8>, AliasDef>,
     pub(crate) positional: Vec<Vec<u8>>,
@@ -287,6 +290,7 @@ impl Shell {
             locals: Vec::new(),
             functions: HashMap::new(),
             autoloads: std::collections::HashSet::new(),
+            autoload_files: HashMap::new(),
             aliases: HashMap::new(),
             suffix_aliases: HashMap::new(),
             positional: Vec::new(),

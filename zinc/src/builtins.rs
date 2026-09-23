@@ -1629,20 +1629,34 @@ fn umask_symbolic_mask(mut mask: u32, spec: &[u8]) -> Result<u32, BadMode> {
     }
 }
 
-/// Mark names to be loaded from `fpath` the first time they are called. zsh
-/// searches then, not now, so a directory added to `fpath` afterwards counts.
+/// Mark names to be loaded from `fpath` the first time they are called, or
+/// now with `+X`. A name whose file is not there yet is searched for again at
+/// the call, so a directory added to `fpath` afterwards counts.
 fn autoload(sh: &mut Shell, args: &[Vec<u8>]) -> i32 {
-    for name in args
+    let (flags, names): (Vec<&Vec<u8>>, Vec<&Vec<u8>>) = args
         .iter()
-        .filter(|a| a.first() != Some(&b'-') && a.first() != Some(&b'+'))
-    {
+        .partition(|a| a.first() == Some(&b'-') || a.first() == Some(&b'+'));
+    // `+X` loads now, and says whether it could: oh-my-zsh's vcs_info gives
+    // up on a function it cannot load that way.
+    let now = flags
+        .iter()
+        .any(|a| a.first() == Some(&b'+') && a.contains(&b'X'));
+    let mut status = 0;
+    for name in names {
         let _new = sh.autoloads.insert(name.clone());
+        // The file is found now, so a function stays loadable even if `fpath`
+        // later loses the directory it came from, but read at the first call:
+        // compinit marks every completion function there is, some 1200, and
+        // reading them all here made each start-up parse every one. A name
+        // not found now is still marked, and the call looks again.
+        match find_in_fpath(sh, name) {
+            Some(file) if now => status |= define_from_file(sh, name, &file),
+            Some(file) => drop(sh.autoload_files.insert(name.clone(), file)),
+            None if now => status = 1,
+            None => {}
+        }
     }
-    // Load what `fpath` already holds, so a function stays defined even if
-    // `fpath` later loses the directory it came from; a name not found now is
-    // still marked, and the call looks again.
-    let _tried = load_from_fpath(sh, args);
-    0
+    status
 }
 
 /// Read a marked function from `fpath` and define it. Answers whether it is
@@ -1651,10 +1665,18 @@ pub(crate) fn load_autoload(sh: &mut Shell, name: &[u8]) -> bool {
     if !sh.autoloads.remove(name) {
         return false;
     }
-    load_from_fpath(sh, &[name.to_vec()]) == 0 && sh.functions.contains_key(name)
+    let Some(file) = sh
+        .autoload_files
+        .remove(name)
+        .or_else(|| find_in_fpath(sh, name))
+    else {
+        return false;
+    };
+    define_from_file(sh, name, &file) == 0 && sh.functions.contains_key(name)
 }
 
-fn load_from_fpath(sh: &mut Shell, args: &[Vec<u8>]) -> i32 {
+/// The first file named `name` in a directory of `fpath`.
+fn find_in_fpath(sh: &Shell, name: &[u8]) -> Option<Vec<u8>> {
     let fpath: Vec<Vec<u8>> = match sh.get(b"fpath") {
         Some(Value::Array(a)) => a,
         Some(v) => v
@@ -1672,44 +1694,38 @@ fn load_from_fpath(sh: &mut Shell, args: &[Vec<u8>]) -> i32 {
             })
             .unwrap_or_default(),
     };
-    let mut status = 0;
-    for name in args
+    fpath
         .iter()
-        .filter(|a| a.first() != Some(&b'-') && a.first() != Some(&b'+'))
-    {
-        let file = fpath
-            .iter()
-            .map(|d| [d.as_slice(), b"/", name.as_slice()].concat())
-            .find(|p| std::path::Path::new(&lossy(p)).is_file());
-        let Some(file) = file else {
-            status = 1;
-            continue;
-        };
-        let Ok(text) = std::fs::read(lossy(&file)) else {
-            continue;
-        };
-        let mut lx = crate::lex::Lexer::new(tok::metafy(&text), sh.lex_opts());
-        let parsed = {
-            let mut p = crate::parse::Parser::new(&mut lx, &*sh);
-            p.parse_all()
-        };
-        match parsed {
-            Ok(body) => {
-                let _old = sh.functions.insert(
-                    name.clone(),
-                    crate::shell::Function {
-                        body: std::rc::Rc::new(body),
-                        line: 0,
-                    },
-                );
-            }
-            Err(e) => {
-                sh.error(&format!("{}: {}", lossy(&file), e.msg));
-                status = 1;
-            }
+        .map(|d| [d.as_slice(), b"/", name].concat())
+        .find(|p| std::path::Path::new(&lossy(p)).is_file())
+}
+
+/// Define `name` with the text of `file` as its body.
+fn define_from_file(sh: &mut Shell, name: &[u8], file: &[u8]) -> i32 {
+    let Ok(text) = std::fs::read(lossy(file)) else {
+        return 1;
+    };
+    let mut lx = crate::lex::Lexer::new(tok::metafy(&text), sh.lex_opts());
+    let parsed = {
+        let mut p = crate::parse::Parser::new(&mut lx, &*sh);
+        p.parse_all()
+    };
+    match parsed {
+        Ok(body) => {
+            let _old = sh.functions.insert(
+                name.to_vec(),
+                crate::shell::Function {
+                    body: std::rc::Rc::new(body),
+                    line: 0,
+                },
+            );
+            0
+        }
+        Err(e) => {
+            sh.error(&format!("{}: {}", lossy(file), e.msg));
+            1
         }
     }
-    status
 }
 
 fn getopts(sh: &mut Shell, args: &[Vec<u8>]) -> i32 {

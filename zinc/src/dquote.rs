@@ -209,19 +209,35 @@ impl Lexer {
         let saved_infor = self.infor;
         self.infor = 0;
         let mut depth = 1u32;
-        let mut cases = 0u32;
+        // The depth each open `case` began at. A `)` there ends a pattern;
+        // deeper, it closes a `(pattern)`'s or a subshell's parenthesis.
+        let mut cases: Vec<u32> = Vec::new();
         // At the start of a word, for comments and keywords.
         let mut word_start = true;
         let mut word: Vec<u8> = Vec::new();
+        // Whether `word` began where a keyword can.
+        let mut keyword = false;
         let ended = loop {
             let Some(c) = self.input.get() else {
                 break true;
             };
             let was_start = word_start;
             word_start = false;
+            if !(c.is_ascii_alphanumeric() || c == b'_') {
+                // The word ends before this character is looked at, so that
+                // `esac)` has closed the case by the time its `)` counts.
+                if keyword {
+                    match word.as_slice() {
+                        b"case" => cases.push(depth),
+                        b"esac" => drop(cases.pop()),
+                        _ => {}
+                    }
+                }
+                word.clear();
+            }
             match c {
                 b'(' => depth += 1,
-                b')' if cases > 0 => {}
+                b')' if cases.last() == Some(&depth) => {}
                 b')' => {
                     depth -= 1;
                     if depth == 0 {
@@ -279,14 +295,11 @@ impl Lexer {
             }
             buf.push(c);
             if c.is_ascii_alphanumeric() || c == b'_' {
+                if word.is_empty() {
+                    keyword = was_start;
+                }
                 word.push(c);
             } else {
-                match word.as_slice() {
-                    b"case" => cases += 1,
-                    b"esac" => cases = cases.saturating_sub(1),
-                    _ => {}
-                }
-                word.clear();
                 word_start = matches!(c, b' ' | b'\t' | b'\n' | b';' | b'&' | b'|' | b'(');
             }
         };

@@ -151,10 +151,12 @@ pub(crate) fn set_backrefs(sh: &mut Shell, pat: &Pattern, value: &[u8]) {
 pub(crate) fn expand_brace(sh: &mut Shell, inner: &[u8], dq: bool) -> Result<Expansion, String> {
     let mut f = Flags::default();
     let mut i = 0;
-    if inner.first() == Some(&INPAR) {
+    // Inside double quotes the lexer leaves `(` and `)` as they are, so the
+    // flags open with either, as they do in zsh's `paramsubst`.
+    if inner.first().is_some_and(|&c| tok::detok(c) == b'(') {
         let end = inner
             .iter()
-            .position(|&c| c == OUTPAR)
+            .position(|&c| tok::detok(c) == b')')
             .unwrap_or(inner.len());
         parse_flags(inner.get(1..end).unwrap_or(&[]), &mut f);
         i = end + 1;
