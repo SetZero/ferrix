@@ -1458,7 +1458,7 @@ fn attach_btrfs_disk(command: &mut Command, arch: Arch) -> Result<()> {
     attach_btrfs_write_disk(command, arch)
 }
 
-/// Attach a test's own btrfs volume, `test-rustc`'s compiler. It carries no
+/// Attach the btrfs compiler volume for `test-rustc` or a default boot. It carries no
 /// root label, so the kernel mounts it at `/data`. Under `snapshot=on`: what
 /// the guest writes goes to a file QEMU throws away, so the next run reads
 /// what this one did.

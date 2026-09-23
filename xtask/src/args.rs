@@ -65,10 +65,9 @@ pub(crate) struct Args {
     pub(crate) timeout: u64,
     /// Whether `--timeout` was given, for the same reason as `memory_given`.
     pub(crate) timeout_given: bool,
-    /// A btrfs image attached as the fourth disk, `vdd`, which the kernel
-    /// mounts at `/data`, under QEMU's `snapshot=on` so a run never changes
-    /// it. No flag sets it: it is how `test-rustc` gives the guest its
-    /// compiler.
+    /// A btrfs image mounted at `/data`, under QEMU's `snapshot=on` so a
+    /// boot never changes it. `test-rustc` requires it; x86-64 `run` and
+    /// `run-compositor` attach it when the toolchain has been fetched.
     pub(crate) data_image: Option<std::path::PathBuf>,
     /// `--seeds`, how many power failures `test-powerfail` makes.
     pub(crate) seeds: u64,

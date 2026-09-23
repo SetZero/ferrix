@@ -305,6 +305,8 @@ fn run() -> Result<()> {
         }
         "run" => {
             let arch = args.single_arch()?;
+            let mut args = args;
+            rustc::prepare_default(arch, &mut args)?;
             let (image, _) = build_image(arch, &args)?;
             // Someone at the console wants the machine in front of them, so
             // `run` takes whatever hypervisor it has: WHPX on Windows, KVM on
@@ -540,19 +542,27 @@ fn build_image(arch: Arch, args: &Args) -> Result<(PathBuf, PathBuf)> {
     let natives = native::build(arch, args.release)?;
     let Some(program) = optional_program(arch, args)? else {
         let (loader, kernel) = build_halves(arch, args)?;
-        let image = fat::write_image(arch, &loader, &kernel, &natives, image_cmdline(args))?;
+        let links = rustc::default_links(args);
+        let image = if links.is_empty() {
+            fat::write_image(arch, &loader, &kernel, &natives, image_cmdline(args))?
+        } else {
+            let archive = initramfs::build(None, &natives, None, &links)?;
+            fat::write_image_with(arch, &loader, &kernel, &archive, image_cmdline(args))?
+        };
         return Ok((image, kernel));
     };
     let loader = cargo::build_loader(arch, args.release)?;
     let kernel = cargo::build_kernel_with_init(arch, args.release, &program, "")?;
     let shell = zinc::build(arch)?;
     let utilities = uutils::carried(arch)?;
+    let mut ports = ports::installed(arch)?;
+    ports.extend(rustc::default_links(args));
     let initramfs = initramfs::build_with_utilities(
         Some(&program),
         &natives,
         shell.as_deref(),
         &utilities,
-        &ports::installed(arch)?,
+        &ports,
     )?;
     let image = fat::write_image_with(arch, &loader, &kernel, &initramfs, image_cmdline(args))?;
     Ok((image, kernel))

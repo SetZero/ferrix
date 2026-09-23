@@ -1,22 +1,27 @@
 #!/usr/bin/env bash
-# Fetch the upstream Rust compiler and the Debian userland it needs, and put
-# them on a btrfs volume: the disk stage 16's exit compiles on
-# (docs/ROADMAP.md, `cargo xtask test-rustc`).
+# Fetch the upstream Rust compiler, Cargo and the Debian userland they need,
+# and put them on a btrfs volume: the disk stage 16's exit compiles on
+# (docs/ROADMAP.md, `cargo xtask test-rustc`), and the toolchain stage 20's
+# `cargo xtask test-selfhost` builds Ferrix with.
 #
-# Nothing here is built. rustc is the rust-lang.org release, dynamically
-# linked against glibc, with its LLVM in a shared library of its own; it
-# links through `cc`, which is Debian's gcc 14 driver, and gcc runs
+# Nothing here is built. rustc and Cargo are the rust-lang.org releases, both
+# dynamically linked against glibc; rustc's LLVM is a shared library of its
+# own. rustc links through `cc`, which is Debian's gcc 14 driver, and gcc runs
 # `collect2`, which runs the `ld.lld` rustc points it at, which runs
 # `rust-lld`. Every one of those is somebody else's glibc binary, and the
 # glibc is Debian 13's, the same one scripts/fetch-debian-busybox.sh pins.
+# Beside the host's standard library are the two Ferrix's x86-64 image is
+# built against: `x86_64-unknown-none` for the kernel and its native
+# programs, `x86_64-unknown-uefi` for the loader.
 #
 # The volume holds a Debian-shaped tree at its root -- `usr/bin`,
 # `usr/lib/x86_64-linux-gnu`, `usr/lib64`, `usr/lib/gcc`, `usr/libexec` --
-# and the toolchain under `rust/`. Ferrix mounts it at `/data`, and the test
-# links the directories glibc's and gcc's own paths name into it.
+# and the toolchain under `rust/`. Ferrix mounts it at `/data`, and its images
+# link the directories glibc's and gcc's own paths name into it.
 #
-# Every download is pinned by the SHA-256 its own index gave on 2026-09-22:
-# Debian's Packages file, and the channel manifest channel-rust-1.97.1.toml.
+# Every download is pinned by the SHA-256 its own index gave: Debian's
+# Packages file on 2026-09-22, and the channel manifest
+# channel-rust-1.97.1.toml (the `xz_hash` of each component).
 # Only what running the compiler and linking a program needs is taken: no
 # `cc1`, since nothing is compiled from C, and no binutils, since the linker
 # is rust-lld.
@@ -47,6 +52,9 @@ debs=(
 components=(
     "dist/2026-07-16/rustc-1.97.1-x86_64-unknown-linux-gnu.tar.xz 9819d0a32d56bd339585319c80260e332779f5541fd66838ab7e016d6c814819"
     "dist/2026-07-16/rust-std-1.97.1-x86_64-unknown-linux-gnu.tar.xz 1c1e704ae80126b7de34f72ea2825f7fd01736dec20732faed47374b95282fba"
+    "dist/2026-07-16/rust-std-1.97.1-x86_64-unknown-none.tar.xz 24e213f586ecb1811a11bd40dbb53690fbae469cce89dc60f7cf20eaeaaeab29"
+    "dist/2026-07-16/rust-std-1.97.1-x86_64-unknown-uefi.tar.xz 35f18a13185697e26540ef139de4408689fa77fb6427b355e0a9954d632f20fc"
+    "dist/2026-07-16/cargo-1.97.1-x86_64-unknown-linux-gnu.tar.xz e1be5f5ff7f7f80ca506fb65770b759edbdc6d303781ed71c5de8ec8a8394779"
 )
 
 for tool in curl sha256sum dpkg-deb tar mkfs.btrfs; do
@@ -82,12 +90,12 @@ unpacked=$(mktemp -d)
 trap 'rm -rf "$unpacked"' EXIT
 for entry in "${components[@]}"; do
     read -r path sum <<< "$entry"
-    tar -xJf "$(fetch "$path" "$rust" "$sum")" -C "$unpacked"
+    tar -xf "$(fetch "$path" "$rust" "$sum")" -C "$unpacked"
 done
 mkdir -p "$tree/rust"
 for component in "$unpacked"/*/*/; do
     case "$component" in
-        */rustc/ | */rust-std-x86_64-unknown-linux-gnu/) cp -a "$component". "$tree/rust/" ;;
+        */rustc/ | */cargo/ | */rust-std-x86_64-unknown-*/) cp -a "$component". "$tree/rust/" ;;
     esac
 done
 
@@ -100,8 +108,13 @@ ln -sf x86_64-linux-gnu-gcc-14 "$tree/usr/bin/gcc"
 rm -rf "$tree/usr/share/doc" "$tree/usr/share/man" "$tree/usr/share/lintian" "$tree/rust/share"
 
 test -x "$tree/rust/bin/rustc" || { echo "fetch-rustc-sysroot: no rustc in the tree" >&2; exit 1; }
+test -x "$tree/rust/bin/cargo" || { echo "fetch-rustc-sysroot: no cargo in the tree" >&2; exit 1; }
 test -x "$tree/rust/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld" \
     || { echo "fetch-rustc-sysroot: no rust-lld in the tree" >&2; exit 1; }
+for target in x86_64-unknown-none x86_64-unknown-uefi; do
+    test -d "$tree/rust/lib/rustlib/$target/lib" \
+        || { echo "fetch-rustc-sysroot: no standard library for $target in the tree" >&2; exit 1; }
+done
 test -e "$tree/usr/lib64/ld-linux-x86-64.so.2" \
     || { echo "fetch-rustc-sysroot: no linker at usr/lib64" >&2; exit 1; }
 

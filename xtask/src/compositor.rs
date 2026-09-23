@@ -1882,6 +1882,8 @@ pub(crate) fn run_compositor(args: &Args) -> Result<()> {
             "{arch} has no virtio-gpu in QEMU's machine; the compositor runs on x86_64 and aarch64"
         )));
     }
+    let mut args = args.clone();
+    crate::rustc::prepare_default(arch, &mut args)?;
     let config = match &args.config {
         Some(path) => std::fs::read_to_string(path)
             .map_err(|error| Error::new(format!("reading {path}: {error}")))?,
@@ -1895,11 +1897,12 @@ pub(crate) fn run_compositor(args: &Args) -> Result<()> {
     // enumerated.
     let args = &Args {
         net: !args.no_net,
-        ..crate::ssh::checked(args)
+        ..crate::ssh::checked(&args)
     };
     let config = with_network(with_layout(config, args), args);
     let programs = Programs::build(arch)?;
     let mut carried = Carried::wanted(arch, args)?;
+    carried.ports.extend(crate::rustc::default_links(args));
     let config = crate::ssh::with_server(config, args, &mut carried.ports)?;
     // A wallpaper, from this machine's own and from nowhere else:
     // `crate::wallpaper` says where they come from and why a run never goes
