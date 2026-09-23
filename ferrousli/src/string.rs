@@ -52,24 +52,37 @@ use core::sync::atomic::{AtomicPtr, Ordering};
 use crate::locale::Locale;
 use crate::strings::strncasecmp;
 
+#[cfg(target_arch = "aarch64")]
+mod aarch64;
+
+// AArch64 answers these seven with sixteen-byte vector loops; every other
+// architecture with the word and byte loops below, under the same names.
+#[cfg(target_arch = "aarch64")]
+use aarch64::{compare, copy_backward, copy_forward, fill, find_byte, find_byte_or_nul, find_nul};
+
 /// A machine word's size, the step of the word-at-a-time loops.
+#[cfg(any(test, not(target_arch = "aarch64")))]
 const WORD: usize = size_of::<usize>();
 
 /// A word with every byte 0x01.
+#[cfg(any(test, not(target_arch = "aarch64")))]
 const ONES: usize = usize::MAX / 0xff;
 
 /// A word with every byte 0x80.
+#[cfg(any(test, not(target_arch = "aarch64")))]
 const HIGHS: usize = ONES * 0x80;
 
 /// Whether any byte of `word` is zero.
 ///
 /// Subtracting 1 from each byte sets its high bit only where the byte was 0 or
 /// above 0x80, and `!word` rules out the second.
+#[cfg(any(test, not(target_arch = "aarch64")))]
 const fn has_zero_byte(word: usize) -> bool {
     word.wrapping_sub(ONES) & !word & HIGHS != 0
 }
 
 /// Whether `p` is aligned to a word.
+#[cfg(not(target_arch = "aarch64"))]
 fn word_aligned(p: *const u8) -> bool {
     p.addr().is_multiple_of(WORD)
 }
@@ -84,6 +97,7 @@ fn word_aligned(p: *const u8) -> bool {
     clippy::cast_ptr_alignment,
     reason = "the caller aligns the pointer first"
 )]
+#[cfg(not(target_arch = "aarch64"))]
 unsafe fn read_word(p: *const u8) -> usize {
     // SAFETY: the caller vouches that `p` is aligned and its page is mapped.
     unsafe { p.cast::<usize>().read() }
@@ -104,6 +118,7 @@ unsafe fn byte_at(p: *const u8, i: usize) -> u8 {
 /// # Safety
 ///
 /// `s` must be a NUL-terminated string.
+#[cfg(not(target_arch = "aarch64"))]
 unsafe fn find_nul(s: *const u8) -> *const u8 {
     let mut p = s;
     while !word_aligned(p) {
@@ -262,8 +277,19 @@ pub unsafe extern "C" fn strxfrm_l(
 /// Both must be valid for `n` bytes, and the ranges must not overlap.
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub unsafe extern "C" fn memcpy(dest: *mut c_void, src: *const c_void, n: usize) -> *mut c_void {
-    let to = dest.cast::<u8>();
-    let from = src.cast::<u8>();
+    // SAFETY: the same contract.
+    unsafe { copy_forward(dest.cast(), src.cast(), n) };
+    dest
+}
+
+/// Copies `n` bytes from `from` to `to`, lowest first, a byte at a time.
+///
+/// # Safety
+///
+/// Both must be valid for `n` bytes, and if they overlap, `to` must not be
+/// above `from`.
+#[cfg(not(target_arch = "aarch64"))]
+unsafe fn copy_forward(to: *mut u8, from: *const u8, n: usize) {
     let mut i = 0;
     while i < n {
         // SAFETY: `i < n`, and the caller vouches for `n` readable bytes.
@@ -272,7 +298,23 @@ pub unsafe extern "C" fn memcpy(dest: *mut c_void, src: *const c_void, n: usize)
         unsafe { to.wrapping_add(i).write(byte) };
         i += 1;
     }
-    dest
+}
+
+/// Copies `n` bytes from `from` to `to`, highest first, a byte at a time.
+///
+/// # Safety
+///
+/// Both must be valid for `n` bytes.
+#[cfg(not(target_arch = "aarch64"))]
+unsafe fn copy_backward(to: *mut u8, from: *const u8, n: usize) {
+    let mut i = n;
+    while i > 0 {
+        i -= 1;
+        // SAFETY: `i < n`, and the caller vouches for `n` bytes.
+        let byte = unsafe { from.wrapping_add(i).read() };
+        // SAFETY: as above.
+        unsafe { to.wrapping_add(i).write(byte) };
+    }
 }
 
 /// [`memcpy`], returning the address just past the last byte written.
@@ -332,23 +374,11 @@ pub unsafe extern "C" fn memmove(dest: *mut c_void, src: *const c_void, n: usize
     // overwritten: forwards when the destination is below the source,
     // backwards when it is above.
     if to.cast_const() <= from {
-        let mut i = 0;
-        while i < n {
-            // SAFETY: `i < n`, and the caller vouches for `n` bytes.
-            let byte = unsafe { from.wrapping_add(i).read() };
-            // SAFETY: as above.
-            unsafe { to.wrapping_add(i).write(byte) };
-            i += 1;
-        }
+        // SAFETY: the caller vouches for `n` bytes, and `to` is not above.
+        unsafe { copy_forward(to, from, n) };
     } else {
-        let mut i = n;
-        while i > 0 {
-            i -= 1;
-            // SAFETY: `i < n`, and the caller vouches for `n` bytes.
-            let byte = unsafe { from.wrapping_add(i).read() };
-            // SAFETY: as above.
-            unsafe { to.wrapping_add(i).write(byte) };
-        }
+        // SAFETY: the caller vouches for `n` bytes.
+        unsafe { copy_backward(to, from, n) };
     }
     dest
 }
@@ -361,15 +391,24 @@ pub unsafe extern "C" fn memmove(dest: *mut c_void, src: *const c_void, n: usize
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub unsafe extern "C" fn memset(s: *mut c_void, c: c_int, n: usize) -> *mut c_void {
     // C passes the byte as an `int` and uses only its low eight bits.
-    let byte = c as u8;
-    let to = s.cast::<u8>();
+    // SAFETY: the same contract.
+    unsafe { fill(s.cast(), c as u8, n) };
+    s
+}
+
+/// Sets the `n` bytes at `to` to `byte`, a byte at a time.
+///
+/// # Safety
+///
+/// `to` must be valid for writing `n` bytes.
+#[cfg(not(target_arch = "aarch64"))]
+unsafe fn fill(to: *mut u8, byte: u8, n: usize) {
     let mut i = 0;
     while i < n {
         // SAFETY: `i < n`, and the caller vouches for `n` writable bytes.
         unsafe { to.wrapping_add(i).write(byte) };
         i += 1;
     }
-    s
 }
 
 /// Sets `n` bytes at `s` to zero, in a way the compiler does not remove when
@@ -396,8 +435,18 @@ pub unsafe extern "C" fn explicit_bzero(s: *mut c_void, n: usize) {
 /// Both must be valid for `n` bytes.
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub unsafe extern "C" fn memcmp(a: *const c_void, b: *const c_void, n: usize) -> c_int {
-    let a = a.cast::<u8>();
-    let b = b.cast::<u8>();
+    // SAFETY: the same contract.
+    unsafe { compare(a.cast(), b.cast(), n) }
+}
+
+/// The difference of the first bytes of `a` and `b` that differ, as unsigned
+/// values, or zero, a byte at a time.
+///
+/// # Safety
+///
+/// Both must be valid for `n` bytes.
+#[cfg(not(target_arch = "aarch64"))]
+unsafe fn compare(a: *const u8, b: *const u8, n: usize) -> c_int {
     let mut i = 0;
     while i < n {
         // SAFETY: `i < n`, and the caller vouches for `n` readable bytes.
@@ -433,13 +482,24 @@ pub unsafe extern "C" fn bcmp(a: *const c_void, b: *const c_void, n: usize) -> c
 /// documentation.
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub unsafe extern "C" fn memchr(s: *const c_void, c: c_int, n: usize) -> *mut c_void {
-    let wanted = c as u8;
-    let mut p = s.cast::<u8>();
+    // SAFETY: the same contract.
+    unsafe { find_byte(s.cast(), c as u8, n) }.cast_mut().cast()
+}
+
+/// The first of the `n` bytes at `s` equal to `wanted`, or null, a word at a
+/// time.
+///
+/// # Safety
+///
+/// As [`memchr`].
+#[cfg(not(target_arch = "aarch64"))]
+unsafe fn find_byte(s: *const u8, wanted: u8, n: usize) -> *const u8 {
+    let mut p = s;
     let mut left = n;
     while left > 0 && !word_aligned(p) {
         // SAFETY: `left > 0`, so `p` is one of the caller's bytes.
         if unsafe { p.read() } == wanted {
-            return p.cast_mut().cast();
+            return p;
         }
         p = p.wrapping_add(1);
         left -= 1;
@@ -458,12 +518,12 @@ pub unsafe extern "C" fn memchr(s: *const c_void, c: c_int, n: usize) -> *mut c_
     while left > 0 {
         // SAFETY: `left > 0`, so `p` is one of the caller's bytes.
         if unsafe { p.read() } == wanted {
-            return p.cast_mut().cast();
+            return p;
         }
         p = p.wrapping_add(1);
         left -= 1;
     }
-    null_mut()
+    core::ptr::null()
 }
 
 /// The last of the `n` bytes at `s` equal to the low byte of `c`, or null.
@@ -667,16 +727,29 @@ pub unsafe extern "C" fn strlcat(dest: *mut c_char, src: *const c_char, n: usize
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub unsafe extern "C" fn strchrnul(s: *const c_char, c: c_int) -> *mut c_char {
     let wanted = c as u8;
-    let mut p = s.cast::<u8>();
+    let p = s.cast::<u8>();
     if wanted == 0 {
         // SAFETY: the caller passes a NUL-terminated string.
         return unsafe { find_nul(p) }.cast_mut().cast();
     }
+    // SAFETY: as above.
+    unsafe { find_byte_or_nul(p, wanted) }.cast_mut().cast()
+}
+
+/// The address of the first byte of the string at `s` equal to `wanted`,
+/// which is not NUL, or of its NUL, a word at a time.
+///
+/// # Safety
+///
+/// `s` must be a NUL-terminated string.
+#[cfg(not(target_arch = "aarch64"))]
+unsafe fn find_byte_or_nul(s: *const u8, wanted: u8) -> *const u8 {
+    let mut p = s;
     while !word_aligned(p) {
         // SAFETY: no NUL came before `p`.
         let byte = unsafe { p.read() };
         if byte == 0 || byte == wanted {
-            return p.cast_mut().cast();
+            return p;
         }
         p = p.wrapping_add(1);
     }
@@ -694,7 +767,7 @@ pub unsafe extern "C" fn strchrnul(s: *const c_char, c: c_int) -> *mut c_char {
         // the first.
         let byte = unsafe { p.read() };
         if byte == 0 || byte == wanted {
-            return p.cast_mut().cast();
+            return p;
         }
         p = p.wrapping_add(1);
     }

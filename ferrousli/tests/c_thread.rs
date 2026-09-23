@@ -52,6 +52,11 @@ fn each_mutex_type_guards_a_counter_and_reports_its_errors() {
 }
 
 #[test]
+fn atomics_take_the_path_at_hwcap_names_and_still_add_up() {
+    check(&Case::named("thread/lse"));
+}
+
+#[test]
 fn condition_variables_queue_time_out_broadcast_and_signal() {
     check(&Case::named("thread/cond"));
 }

@@ -3711,6 +3711,25 @@ Not yet: the Arm programs built against ferrousli on Ferrix itself.
 only x86-64's suite, because the cross compilers and QEMU's user mode the
 Arm suites need are not on its runners. `docs/BACKLOG.md` has both rows.
 
+**Done — AArch64's string routines, for the Pixel 7, 2026-09-23.** The
+customer means to run ferrousli on a rooted Pixel 7 that boots Ferrix
+itself, whose Tensor G2 is Cortex-X1, A78 and A55 cores. On AArch64
+`memcpy`, `memmove`, `memset`, `memcmp`, `memchr`, `strlen` and
+`strchrnul` work sixteen bytes at a time in Advanced SIMD registers
+(`ferrousli/src/string/aarch64.rs`), which every AArch64 core has, so
+nothing is chosen at run time; copies and fills of 64 bytes and more are
+one loop of `ldp`/`stp` register pairs. Counted with QEMU's instruction
+plugin on a Cortex-A55, at 4 KiB they take 1.8 to 5.3 times fewer
+instructions than the generic code as LLVM compiles it -- which already
+vectorises the byte-copying loops by itself, so a first version with
+separate sixteen-byte loads was slower than it and was rewritten. The
+atomics needed nothing: the outline helpers every atomic calls take LSE
+instructions once a constructor reads `HWCAP_ATOMICS`, and a test holds
+that to `AT_HWCAP`. The string and thread suites pass under QEMU at
+`-cpu` `cortex-a55` and `cortex-a76` (the phone's cores), `cortex-a72`
+(Ferrix's QEMU machine), `cortex-a53` (no LSE) and `max`. Outside the
+stage's points.
+
 ---
 
 ## Stage 12 — btrfs, write ✅  ·  *≈ 60 points, spent*

@@ -32,6 +32,11 @@ fn the_rest_of_string_h_and_strings_h() {
 }
 
 #[test]
+fn block_copies_fills_and_comparisons_at_every_alignment_and_beside_guard_pages() {
+    check(&string("string/blocks"));
+}
+
+#[test]
 fn memmem_finds_short_long_and_periodic_needles() {
     check(&string("string/memmem"));
 }
