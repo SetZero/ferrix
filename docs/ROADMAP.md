@@ -3444,6 +3444,32 @@ because `sshdt` given no key and no password accepts anyone. Proven from a
 client with an empty `~/.ssh`, with both controls firing: no key and a key
 that was not named are each refused.
 
+**Done — curl and git on AArch64 and ARMv7-A.** The ports were x86-64 only;
+the DK1's terminal answered `command not found: git`. With ferrousli ported to
+both Arm targets, `tools/ports/common.sh` takes `--arch aarch64|armv7a`, as
+busybox's build does: gcc for the target and its binutils, Alpine's pinned
+`linux-headers` for the UAPI, and a build directory per architecture beside
+the one install directory each has. zlib, curl with Mbed TLS, and git build
+unchanged apart from their cross switches, with nothing undefined, and
+`cargo xtask ports --arch <arch>` builds those three there. btop, libc++ and
+sshdt stay x86-64 only: the first two need the target's g++, which the build
+machine lacks, and sshdt's build names its Rust target. Every Arm image with a
+busybox now carries the three, so `test-net --arch all` runs curl over HTTP
+and HTTPS and git's clones on all three architectures.
+
+ARMv7-A's first run failed every curl with *"A libcurl function was given a
+bad argument"*, and git's HTTP clone could not connect, while the same
+binaries worked under qemu-user. The kernel read the 64-bit `tv_nsec` of a
+`__kernel_timespec` whole on a 32-bit build. Linux's `get_timespec64` keeps
+only its low half there, because the upper half is padding a 32-bit program's
+libc need not write, and ferrousli's `struct timespec` leaves it unwritten.
+So every `ppoll` with a timeout failed with `EINVAL`. `time::read_pair` already
+had Linux's rule; `ppoll`, `pselect6`, `rt_sigtimedwait` and `futex` each had
+a reader of their own and now use it, and `utimensat` keeps the low half
+too. The stage 7 check stages such a timeout with `0xDEADBEEF` above
+`tv_nsec`. Its negative control, not committed: with `read_pair` taking the
+field whole again, the ARMv7-A boot failed that check.
+
 **Exit, and it is met:** under `xtask`'s gateway — which is where this
 criterion's *"under QEMU's user-mode network"* now reads — busybox configures
 `eth0` with `ip`, and `route` and `netstat` report through `/proc/net`. `wget`

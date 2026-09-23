@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
-# Builds git 2.55.0 as static x86-64 programs against ferrousli, with zlib
-# from tools/ports/zlib and libcurl and Mbed TLS from tools/ports/curl, which
-# must be built first.
+# Builds git 2.55.0 as static programs against ferrousli, with zlib from
+# tools/ports/zlib and libcurl and Mbed TLS from tools/ports/curl, which must
+# be built first, for the same architecture.
 #
-#     tools/ports/git/build.sh            # from ferrousli/
+#     tools/ports/git/build.sh [--arch <arch>]    # from ferrousli/
 #
 # Installs, under $FERRIX_PORTS (see ../common.sh):
-#   x86_64/usr/bin/git, and x86_64/bin/git linking to it
-#   x86_64/usr/libexec/git-core/        the helpers git runs that are not
+#   <arch>/usr/bin/git, and <arch>/bin/git linking to it
+#   <arch>/usr/libexec/git-core/        the helpers git runs that are not
 #                                       built in: git-remote-http and its
 #                                       https and ftp links, the shell scripts,
 #                                       and git-upload-pack and its two fellow
 #                                       transport helpers, linked to git
-#   x86_64/usr/share/git-core/templates/
+#   <arch>/usr/share/git-core/templates/
 #
 # Pinned, and refused if its checksum differs: kernel.org's git-2.55.0.tar.xz,
 # by the sha256 kernel.org publishes in sha256sums.asc.
@@ -42,10 +42,10 @@ GIT_TARBALL=git-$GIT_VERSION.tar.xz
 GIT_URL=https://www.kernel.org/pub/software/scm/git/$GIT_TARBALL
 GIT_SHA256=457fdb04dc8728e007d4688695e6912e6f680727920f2a40bf11eacc17505357
 
-work=$ports/git
+work=$builds/git
 src=$ports/src
-curl_build=$ports/curl/build
-tls=$ports/curl/mbedtls-install
+curl_build=$builds/curl/build
+tls=$builds/curl/mbedtls-install
 
 step "sources"
 mkdir -p "$src" "$work"
@@ -66,7 +66,7 @@ tar -xJf "$src/$GIT_TARBALL" -C "$build" --strip-components=1
 # One set of make variables for the build and the install, so the paths git
 # compiles in are the ones it is installed at on the guest.
 options=(
-    CC="$CC" AR=ar CFLAGS=-O2 LDFLAGS=-static
+    CC="$CC" AR="$AR" CFLAGS=-O2 LDFLAGS=-static
     prefix=/usr gitexecdir=/usr/libexec/git-core
     template_dir=/usr/share/git-core/templates sysconfdir=/etc
     NO_PERL=YesPlease NO_PYTHON=YesPlease NO_TCLTK=YesPlease
@@ -100,7 +100,7 @@ rm -rf "$prefix/usr/libexec/git-core" "$prefix/usr/share/git-core" "$prefix/bin/
 mkdir -p "$prefix/bin" "$prefix/usr/bin" "$prefix/usr/libexec" "$prefix/usr/share"
 # At /usr/bin/git, where the links in git-core point (../../bin/git), and
 # linked from /bin, which is the shell's PATH.
-install -m 755 -s "$root/usr/bin/git" "$prefix/usr/bin/git"
+install -m 755 -s --strip-program="$STRIP" "$root/usr/bin/git" "$prefix/usr/bin/git"
 ln -s ../usr/bin/git "$prefix/bin/git"
 cp -a "$root/usr/libexec/git-core" "$prefix/usr/libexec/git-core"
 cp -a "$root/usr/share/git-core" "$prefix/usr/share/git-core"
@@ -114,7 +114,7 @@ for f in git-daemon git-http-backend git-http-fetch git-imap-send git-shell     
 done
 # Every program in git-core is stripped; the scripts are left alone.
 find "$prefix/usr/libexec/git-core" -type f -perm -u+x -exec sh -c \
-    'file "$1" | grep -q ELF && strip "$1"' sh {} \;
+    'file "$1" | grep -q ELF && "$2" "$1"' sh {} "$STRIP" \;
 # The transport helpers, which SKIP_DASHED_BUILT_INS leaves out of git-core:
 # git runs `git-upload-pack` and `git-receive-pack` by name, through a shell,
 # for a clone or a push over the local and ssh transports, and
@@ -124,5 +124,5 @@ for f in git-upload-pack git-receive-pack git-upload-archive; do
     ln -sf ../../bin/git "$prefix/usr/libexec/git-core/$f"
 done
 file "$prefix/bin/git"
-"$prefix/usr/bin/git" --version
+run_built "$prefix/usr/bin/git" --version
 du -sh "$prefix/usr/libexec/git-core"

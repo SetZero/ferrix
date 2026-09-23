@@ -29,6 +29,8 @@ set -euo pipefail
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source=../common.sh
 . "$here/../common.sh"
+# x86-64 only so far: its Rust target and cc-rs variables name x86-64 below.
+[ "$arch" = x86_64 ] || fail "sshdt is built for x86_64 only so far, not for $arch"
 
 SSHDT_VERSION=0.4.2
 SSHDT_TARBALL=sshdt-$SSHDT_VERSION.crate
@@ -40,7 +42,7 @@ SSHDT_SHA256=ae571e2d5a269920dc99503dc084c61d3917471654041db5a20f241be6e63d78
 # find out about itself through the C library rather than through /proc.
 TARGET=x86_64-unknown-linux-musl
 
-work=$ports/sshdt
+work=$builds/sshdt
 src=$ports/src
 
 # The toolchain Ferrix pins, named outright: the crate is built outside the
@@ -126,5 +128,5 @@ fi
 
 step "install"
 mkdir -p "$prefix/bin"
-install -m 755 -s "$work/target/$TARGET/release/sshdt" "$prefix/bin/sshdt"
+install -m 755 -s --strip-program="$STRIP" "$work/target/$TARGET/release/sshdt" "$prefix/bin/sshdt"
 ls -l "$prefix/bin/sshdt"

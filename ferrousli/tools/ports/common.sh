@@ -2,24 +2,93 @@
 # pinned downloads, ferrousli's release library, and the compilers that build
 # a program against it and nothing else.
 #
-# A port builds a static x86-64 program with the host's gcc, against musl's
-# headers in include/, crt1.o and libferrousli.a, the way
-# tools/busybox/build.sh builds busybox. It downloads and builds under
-# $FERRIX_PORTS, by default ~/.local/share/ferrix/ports/ferrousli, never inside
-# the repository, and installs into $FERRIX_PORTS/x86_64 only once it links.
-# When a link fails, the symbols ferrousli does not have yet are written to
-# $FERRIX_PORTS/<port>/undefined-symbols.txt and the build exits 1.
+#     tools/ports/<port>/build.sh                  # from ferrousli/: x86-64
+#     tools/ports/<port>/build.sh --arch armv7a    # or aarch64
+#
+# A port builds a static program against musl's headers in include/, crt1.o
+# and libferrousli.a, the way tools/busybox/build.sh builds busybox. x86-64 is
+# built with the host's gcc against the host's kernel UAPI headers. AArch64
+# and ARMv7-A are cross-compiled with gcc for the target, found as
+# $CC_aarch64_unknown_linux_gnu or $CC_armv7_unknown_linux_gnueabihf when set
+# (cc-rs's names) and as aarch64-linux-gnu-gcc or arm-linux-gnueabihf-gcc on
+# PATH otherwise, with its binutils beside it, against Alpine's linux-headers
+# package for the architecture, pinned below as busybox's build pins it. A
+# port whose programs are C++ needs the target's g++ as well.
+#
+# It downloads and builds under $FERRIX_PORTS, by default
+# ~/.local/share/ferrix/ports/ferrousli, never inside the repository: x86-64's
+# builds in <port>/ there and the others' in build-<arch>/<port>/, and each
+# installs into $FERRIX_PORTS/<arch> only once it links. When a link fails,
+# the symbols ferrousli does not have yet are written to
+# undefined-symbols.txt in the port's build directory and the build exits 1.
 
 here_ports=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 ferrousli=$(cd "$here_ports/../.." && pwd)
 ports=${FERRIX_PORTS:-$HOME/.local/share/ferrix/ports/ferrousli}
-prefix=$ports/x86_64
 jobs=${JOBS:-$(nproc)}
 
 step() { printf '\n== %s\n' "$*"; }
 fail() {
     echo "${0##*/}: $*" >&2
     exit 1
+}
+
+# The architecture: `--arch <name>` first on the port's command line, which
+# sourcing this file shifts away.
+arch=x86_64
+if [ "${1:-}" = --arch ]; then
+    arch=${2:-}
+    shift 2 || fail "--arch needs aarch64, armv7a or x86_64"
+fi
+# Alpine v3.22's linux-headers, as tools/busybox/build.sh pins it.
+HEADERS=linux-headers-6.14.2-r0.apk
+case $arch in
+    x86_64)
+        target= triple= qemu=
+        builds=$ports
+        ;;
+    aarch64)
+        target=aarch64-unknown-linux-gnu triple=aarch64-linux-gnu qemu=qemu-aarch64
+        alpine=aarch64
+        headers_sha256=08bc7264055d4ceca249e21f47875ccd7ae2dc7eaf49e235a83b1059e06d9089
+        builds=$ports/build-$arch
+        ;;
+    armv7a)
+        target=armv7-unknown-linux-gnueabihf triple=arm-linux-gnueabihf qemu=qemu-arm
+        alpine=armv7
+        headers_sha256=4bc6864f71361fb15a1ca2d96d217343c0e84f2e5dce6518ed84b3f694c0e9df
+        builds=$ports/build-$arch
+        ;;
+    *) fail "no architecture $arch: aarch64, armv7a or x86_64" ;;
+esac
+prefix=$ports/$arch
+
+# The compilers and binutils: the host's for x86-64, the target's otherwise.
+# $cxx is empty where the target has no g++.
+if [ -z "$target" ]; then
+    cc=gcc cxx=g++ cross=
+else
+    cc_var=CC_${target//-/_}
+    cc=${!cc_var:-$triple-gcc}
+    cxx=$triple-g++
+    command -v "$cxx" > /dev/null || cxx=
+    cross=$triple-
+    command -v "$cc" > /dev/null \
+        || fail "no $cc: install gcc for $triple (Debian and Ubuntu: gcc-$triple), or name one in \$$cc_var"
+fi
+AR=${cross}ar
+STRIP=${cross}strip
+
+# Run a program built for $arch: directly on x86-64, under qemu-user for the
+# others, and not at all, saying so, where qemu-user is not installed.
+run_built() {
+    if [ -z "$qemu" ]; then
+        "$@"
+    elif command -v "$qemu" > /dev/null; then
+        "$qemu" "$@"
+    else
+        echo "not run: no $qemu to run $1 with"
+    fi
 }
 
 fetch() { # url file checksum-command checksum
@@ -41,10 +110,16 @@ fetch() { # url file checksum-command checksum
 # Build ferrousli in the release profile and set $lib and $crt1.
 build_ferrousli() {
     step "ferrousli, release"
-    local target=${CARGO_TARGET_DIR:-$ferrousli/target}
-    cargo build --release --lib --manifest-path "$ferrousli/Cargo.toml"
-    lib=$target/release/libferrousli.a
-    crt1=$(ls -t "$target"/release/build/ferrousli-*/out/crt1.o | head -1)
+    local target_dir=${CARGO_TARGET_DIR:-$ferrousli/target} release
+    if [ -n "$target" ]; then
+        cargo build --release --lib --target "$target" --manifest-path "$ferrousli/Cargo.toml"
+        release=$target_dir/$target/release
+    else
+        cargo build --release --lib --manifest-path "$ferrousli/Cargo.toml"
+        release=$target_dir/release
+    fi
+    lib=$release/libferrousli.a
+    crt1=$(ls -t "$release"/build/ferrousli-*/out/crt1.o | head -1)
     [ -f "$lib" ] && [ -f "$crt1" ] || fail "cargo built no libferrousli.a and crt1.o"
     echo "$lib"
     echo "$crt1"
@@ -77,33 +152,55 @@ build_ferrousli() {
 #
 # Empty libm, libpthread and the rest stand in for the libraries a configure
 # script asks for by name: ferrousli is one library, as musl is.
+#
+# On AArch64 and ARMv7-A the UAPI headers are Alpine's, unpacked from the
+# pinned package, and the C++ compilers are written only where the target
+# has a g++; $CXX and $CXX_BARE are empty otherwise.
 make_compilers() {
     step "compilers"
-    local bin=$ports/bin uapi=$ports/uapi stubs=$ports/stub-libs
+    local bin=$builds/bin uapi=$builds/uapi stubs=$builds/stub-libs
     mkdir -p "$bin" "$stubs"
     rm -rf "$uapi"
     mkdir -p "$uapi"
-    local d
-    for d in linux asm-generic mtd scsi sound video drm rdma misc; do
-        [ -d "/usr/include/$d" ] && ln -s "/usr/include/$d" "$uapi/$d"
-    done
-    ln -s /usr/include/x86_64-linux-gnu/asm "$uapi/asm"
+    if [ -z "$target" ]; then
+        local d
+        for d in linux asm-generic mtd scsi sound video drm rdma misc; do
+            [ -d "/usr/include/$d" ] && ln -s "/usr/include/$d" "$uapi/$d"
+        done
+        ln -s /usr/include/x86_64-linux-gnu/asm "$uapi/asm"
+    else
+        local apk=$ports/src/${HEADERS%.apk}-$alpine.apk headers=$builds/linux-headers
+        mkdir -p "$ports/src"
+        fetch "https://dl-cdn.alpinelinux.org/alpine/v3.22/main/$alpine/$HEADERS" \
+            "$apk" sha256sum "$headers_sha256"
+        rm -rf "$headers"
+        mkdir -p "$headers"
+        tar --warning=no-unknown-keyword -xzf "$apk" -C "$headers" usr/include
+        rmdir "$uapi"
+        ln -s "$headers/usr/include" "$uapi"
+        [ -f "$uapi/asm/unistd.h" ] || fail "Alpine's $HEADERS for $alpine has no asm/unistd.h"
+    fi
     local l
     for l in m crypt resolv rt pthread dl util; do
-        [ -f "$stubs/lib$l.a" ] || ar rc "$stubs/lib$l.a"
+        [ -f "$stubs/lib$l.a" ] || "$AR" rc "$stubs/lib$l.a"
     done
     local compiler_include crtbegin crtend
-    compiler_include=$(gcc -print-file-name=include)
-    crtbegin=$(gcc -print-file-name=crtbeginT.o)
-    crtend=$(gcc -print-file-name=crtend.o)
+    compiler_include=$("$cc" -print-file-name=include)
+    crtbegin=$("$cc" -print-file-name=crtbeginT.o)
+    crtend=$("$cc" -print-file-name=crtend.o)
 
+    CXX= CXX_BARE=
     local name driver kind
     for name in ferrousli-cc ferrousli-c++ ferrousli-c++-bare; do
         case $name in
-            ferrousli-cc) driver=gcc kind=c ;;
-            ferrousli-c++) driver=g++ kind=c++ ;;
-            ferrousli-c++-bare) driver=g++ kind=bare ;;
+            ferrousli-cc) driver=$cc kind=c ;;
+            ferrousli-c++) driver=$cxx kind=c++ ;;
+            ferrousli-c++-bare) driver=$cxx kind=bare ;;
         esac
+        if [ -z "$driver" ]; then
+            rm -f "$bin/$name"
+            continue
+        fi
         cat > "$bin/$name" <<EOF
 #!/usr/bin/env bash
 # Generated by ferrousli/tools/ports/common.sh.
@@ -141,11 +238,19 @@ EOF
     done
     export PATH=$bin:$PATH
     CC=$bin/ferrousli-cc
-    CXX=$bin/ferrousli-c++
-    CXX_BARE=$bin/ferrousli-c++-bare
+    if [ -n "$cxx" ]; then
+        CXX=$bin/ferrousli-c++
+        CXX_BARE=$bin/ferrousli-c++-bare
+    fi
     echo "$CC"
-    echo "$CXX"
-    echo "$CXX_BARE"
+    echo "${CXX:-no C++ compiler for $arch}"
+    echo "${CXX_BARE:-}"
+}
+
+# Fail unless make_compilers wrote the C++ compilers, for a port that needs
+# them.
+need_cxx() {
+    [ -n "${CXX:-}" ] || fail "no g++ for $triple, which this port needs (Debian and Ubuntu: g++-$triple)"
 }
 
 # Write the symbols a failed link left undefined, from the logs given, to

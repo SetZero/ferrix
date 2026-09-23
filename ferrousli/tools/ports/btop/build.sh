@@ -19,13 +19,15 @@ set -euo pipefail
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source=../common.sh
 . "$here/../common.sh"
+# x86-64 only so far: another architecture needs libcxx built for it first.
+[ "$arch" = x86_64 ] || fail "btop is built for x86_64 only so far, not for $arch"
 
 BTOP_VERSION=1.4.7
 BTOP_TARBALL=btop-$BTOP_VERSION.tar.gz
 BTOP_URL=https://github.com/aristocratos/btop/archive/refs/tags/v$BTOP_VERSION.tar.gz
 BTOP_SHA256=933de2e4d1b2211a638be463eb6e8616891bfba73aef5d38060bd8319baeefc6
 
-work=$ports/btop
+work=$builds/btop
 src=$ports/src
 
 step "sources"
@@ -57,6 +59,6 @@ fi
 step "install"
 mkdir -p "$prefix/bin"
 # Stripped: the image carries it, and nothing on the guest reads its symbols.
-install -m 755 -s "$build/bin/btop" "$prefix/bin/btop"
+install -m 755 -s --strip-program="$STRIP" "$build/bin/btop" "$prefix/bin/btop"
 file "$prefix/bin/btop"
 "$prefix/bin/btop" --version

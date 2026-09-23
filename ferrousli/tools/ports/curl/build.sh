@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# Builds curl 8.22.0 with mbedTLS 3.6.7 as a static x86-64 program against
+# Builds curl 8.22.0 with mbedTLS 3.6.7 as a static program against
 # ferrousli, and fetches the CA certificates it verifies servers with.
 #
-#     tools/ports/curl/build.sh            # from ferrousli/
+#     tools/ports/curl/build.sh [--arch <arch>]    # from ferrousli/
 #
 # Installs, under $FERRIX_PORTS (see ../common.sh):
-#   x86_64/bin/curl
-#   x86_64/etc/ssl/certs/ca-certificates.crt
-#   x86_64/usr/libexec/ferrix/ssl_server2, Mbed TLS's test server, with its
-#   test certificate, key and CA in x86_64/usr/share/ferrix/tls-test/
+#   <arch>/bin/curl
+#   <arch>/etc/ssl/certs/ca-certificates.crt
+#   <arch>/usr/libexec/ferrix/ssl_server2, Mbed TLS's test server, with its
+#   test certificate, key and CA in <arch>/usr/share/ferrix/tls-test/
 #
 # Pinned, and refused if their checksums differ:
 #   * curl.se's curl-8.22.0.tar.gz, by the sha256 curl.se/info publishes;
@@ -44,7 +44,7 @@ CACERT_SHA256=f66dff1bdf8f96060b8177976f8b7d9254bc89bc4db933d769f7384d28480bc9
 # Where curl looks for the bundle on the guest, and where xtask puts it.
 CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
 
-work=$ports/curl
+work=$builds/curl
 src=$ports/src
 
 step "sources"
@@ -63,7 +63,7 @@ tls=$work/mbedtls-install
 rm -rf "$mbedtls" "$tls"
 mkdir -p "$mbedtls" "$tls/lib"
 tar -xjf "$src/$MBEDTLS_TARBALL" -C "$mbedtls" --strip-components=1
-if ! make -C "$mbedtls/library" -j"$jobs" CC="$CC" AR=ar CFLAGS=-O2 static \
+if ! make -C "$mbedtls/library" -j"$jobs" CC="$CC" AR="$AR" CFLAGS=-O2 static \
     > "$work/mbedtls.log" 2>&1; then
     tail -30 "$work/mbedtls.log" >&2
     fail "mbedtls did not build; the log is $work/mbedtls.log"
@@ -77,7 +77,7 @@ step "mbedtls: the test server"
 # CA signed, both valid from 2023 and 2019, so a guest whose clock still
 # reads 1970 refuses the connection and one that took firmware's time
 # accepts it.
-if ! make -C "$mbedtls/programs" -j"$jobs" CC="$CC" AR=ar CFLAGS=-O2 ssl/ssl_server2 > "$work/mbedtls-programs.log" 2>&1; then
+if ! make -C "$mbedtls/programs" -j"$jobs" CC="$CC" AR="$AR" CFLAGS=-O2 ssl/ssl_server2 > "$work/mbedtls-programs.log" 2>&1; then
     tail -30 "$work/mbedtls-programs.log" >&2
     fail "mbedtls's ssl_server2 did not build; the log is $work/mbedtls-programs.log"
 fi
@@ -87,11 +87,15 @@ build=$work/build
 rm -rf "$build"
 mkdir -p "$build"
 tar -xzf "$src/$CURL_TARBALL" -C "$build" --strip-components=1
-# Configured natively rather than as a cross build: the programs configure
-# links are static x86-64 programs against ferrousli, which run on this host,
-# so its run-time checks ask the library curl will actually use.
-if ! (cd "$build" && ./configure \
-    CC="$CC" CFLAGS=-O2 \
+# On x86-64, configured natively rather than as a cross build: the programs
+# configure links are static x86-64 programs against ferrousli, which run on
+# this host, so its run-time checks ask the library curl will actually use.
+# For another architecture it is a cross build, and configure takes its
+# answers for the run-time checks from what it can compile and link.
+host=()
+[ -n "$triple" ] && host=(--host="$triple")
+if ! (cd "$build" && ./configure "${host[@]}" \
+    CC="$CC" AR="$AR" CFLAGS=-O2 \
     CPPFLAGS="-I$tls/include" LDFLAGS="-L$tls/lib" \
     --disable-shared --enable-static \
     --with-mbedtls="$tls" \
@@ -122,12 +126,12 @@ fi
 step "install"
 mkdir -p "$prefix/bin" "$prefix/etc/ssl/certs"
 # Stripped: the image carries it, and nothing on the guest reads its symbols.
-install -m 755 -s "$build/src/curl" "$prefix/bin/curl"
+install -m 755 -s --strip-program="$STRIP" "$build/src/curl" "$prefix/bin/curl"
 install -m 644 "$src/$CACERT" "$prefix$CA_BUNDLE"
 mkdir -p "$prefix/usr/libexec/ferrix" "$prefix/usr/share/ferrix/tls-test"
-install -m 755 -s "$mbedtls/programs/ssl/ssl_server2" "$prefix/usr/libexec/ferrix/ssl_server2"
+install -m 755 -s --strip-program="$STRIP" "$mbedtls/programs/ssl/ssl_server2" "$prefix/usr/libexec/ferrix/ssl_server2"
 for f in server5.crt server5.key test-ca2.crt; do
     install -m 644 "$mbedtls/framework/data_files/$f" "$prefix/usr/share/ferrix/tls-test/$f"
 done
 file "$prefix/bin/curl"
-"$prefix/bin/curl" --version
+run_built "$prefix/bin/curl" --version

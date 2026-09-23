@@ -15,7 +15,7 @@
 //!                       [--viewer tigervnc|realvnc] [--layout de] [--no-viewer]
 //!                       [--print-command] [--stop] [-- ARGS...]
 //! cargo xtask busybox   [--arch x86_64]
-//! cargo xtask ports     [--arch x86_64]
+//! cargo xtask ports     [--arch x86_64|aarch64|armv7a]
 //! cargo xtask omz       --from DIRECTORY-OR-URL
 //! cargo xtask zsh-functions --from DIRECTORY
 //! cargo xtask flash     [--arch armv7a] [--to MOUNT] [--compositor [--config PATH]]
@@ -174,7 +174,7 @@ COMMANDS:
     model-doc     Regenerate docs/generated/ from the SysML model
     busybox       Build busybox against ferrousli (x86_64) for --init ferrousli
     uutils        Build uutils/coreutils against ferrousli (x86_64), the utilities replacing busybox's
-    ports         Build the programs ported onto ferrousli (x86_64: curl, btop), which images carry beside busybox
+    ports         Build the programs ported onto ferrousli (x86_64: curl, btop, git, sshdt; Arm: curl, git), which images carry
     flash         Copy the loader and kernel onto a board's boot partition
     watch-serial  Watch a real serial port for the kernel's boot report
     deploy        flash, then watch-serial: one command for a board

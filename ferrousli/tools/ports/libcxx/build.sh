@@ -26,13 +26,16 @@ set -euo pipefail
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source=../common.sh
 . "$here/../common.sh"
+# x86-64 only so far: another architecture needs the target's g++, and its
+# CMake cross settings are untried.
+[ "$arch" = x86_64 ] || fail "libcxx is built for x86_64 only so far, not for $arch"
 
 LLVM_VERSION=23.1.1
 LLVM_TARBALL=llvm-project-$LLVM_VERSION.src.tar.xz
 LLVM_URL=https://github.com/llvm/llvm-project/releases/download/llvmorg-$LLVM_VERSION/$LLVM_TARBALL
 LLVM_SHA256=ebe9be46fe8756d58c5b198ffad0fa2a766257add81a4dc52179bfacc7888ee6
 
-work=$ports/libcxx
+work=$builds/libcxx
 src=$ports/src
 
 step "sources"

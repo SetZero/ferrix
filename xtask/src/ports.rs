@@ -2,11 +2,15 @@
 //! `ferrousli/tools/ports/`, installed under `~/.local/share/ferrix/ports/ferrousli`
 //! (or `$FERRIX_PORTS`), and carried by every image that carries a busybox.
 //!
-//! Each port installs into `x86_64/` there with the layout it has on the guest,
-//! so `x86_64/bin/curl` is `/bin/curl` and `x86_64/etc/ssl/certs/…` is
+//! Each port installs into `<arch>/` there with the layout it has on the
+//! guest, so `x86_64/bin/curl` is `/bin/curl` and `x86_64/etc/ssl/certs/…` is
 //! `/etc/ssl/certs/…`. An image takes whichever of [`FILES`] are installed and
 //! says which are not: a port is a download and a C build of minutes, which
 //! `build` and `run` do not start on their own. `cargo xtask ports` does.
+//!
+//! x86-64 builds every port. AArch64 and ARMv7-A build the C ones git needs,
+//! [`ARM_PORTS`], cross-compiled with the target's gcc: btop and its C++
+//! runtime need the target's g++, and sshdt's build names its Rust target.
 //!
 //! An entry is a file or a whole tree. A tree, such as git's
 //! `usr/libexec/git-core`, is walked in name order so the archive is the same
@@ -29,6 +33,18 @@ use crate::{Error, Result, cargo};
 /// btop links against, and installs nothing an image carries. `sshdt` is Rust
 /// rather than C, built the way uutils is, and needs cargo's crates.io.
 const PORTS: &[&str] = &["curl", "libcxx", "btop", "zlib", "git", "sshdt"];
+
+/// The ports AArch64 and ARMv7-A build, in order: git and what it links.
+const ARM_PORTS: &[&str] = &["curl", "zlib", "git"];
+
+/// The ports `arch` builds and carries.
+fn ports_for(arch: Arch) -> &'static [&'static str] {
+    if arch == Arch::X86_64 {
+        PORTS
+    } else {
+        ARM_PORTS
+    }
+}
 
 /// Whether an [`Installed`] entry is one path or everything beneath it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -228,16 +244,15 @@ fn installed_path(root: &Path, arch: Arch, file: &Installed) -> PathBuf {
 }
 
 /// The installed files for `arch`, for an image to carry, and a line naming
-/// the ports that are not there. Ports are built for `x86_64` only, as
-/// ferrousli's busybox is, so every other architecture carries none.
+/// the ports that are not there, of those `arch` builds.
 pub(crate) fn installed(arch: Arch) -> Result<Vec<File>> {
-    if arch != Arch::X86_64 {
-        return Ok(Vec::new());
-    }
     let root = root()?;
     let mut files = Vec::new();
     let mut missing: Vec<&str> = Vec::new();
-    for file in FILES {
+    for file in FILES
+        .iter()
+        .filter(|file| ports_for(arch).contains(&file.port))
+    {
         let path = installed_path(&root, arch, file);
         if std::fs::symlink_metadata(&path).is_err() {
             if !missing.contains(&file.port) {
@@ -262,14 +277,9 @@ pub(crate) fn installed(arch: Arch) -> Result<Vec<File>> {
     Ok(files)
 }
 
-/// `cargo xtask ports`: run every port's `build.sh`, in order, stopping at the
-/// first that fails.
+/// `cargo xtask ports`: run the `build.sh` of every port `arch` builds, in
+/// order, stopping at the first that fails.
 pub(crate) fn build(arch: Arch) -> Result<()> {
-    if arch != Arch::X86_64 {
-        return Err(Error::new(format!(
-            "the ports are built for x86_64 only, not for {arch}"
-        )));
-    }
     if cfg!(windows) {
         return Err(Error::new(
             "the ports' build scripts need a Linux host with gcc and the kernel's UAPI headers",
@@ -277,11 +287,13 @@ pub(crate) fn build(arch: Arch) -> Result<()> {
     }
     let root = root()?;
     let ferrousli = crate::paths::workspace_root().join("ferrousli");
-    for port in PORTS {
+    let ports = ports_for(arch);
+    for port in ports {
         let mut command = Command::new("bash");
         let _ = command
             .current_dir(&ferrousli)
             .arg(format!("tools/ports/{port}/build.sh"))
+            .args(["--arch", arch.name()])
             .env("FERRIX_PORTS", &root);
         // ferrousli gets a directory of its own inside the caller's target
         // directory, as it does for busybox.
@@ -295,7 +307,11 @@ pub(crate) fn build(arch: Arch) -> Result<()> {
         }
         cargo::run(command, &format!("ferrousli/tools/ports/{port}/build.sh"))?;
     }
-    println!("\nbuilt {} under {}", PORTS.join(", "), root.display());
+    println!(
+        "\nbuilt {} for {arch} under {}",
+        ports.join(", "),
+        root.display()
+    );
     Ok(())
 }
 
@@ -350,10 +366,18 @@ mod tests {
     }
 
     #[test]
-    fn only_x86_64_carries_ports() {
+    fn arm_builds_git_and_what_it_links_and_nothing_else() {
         for arch in [Arch::AArch64, Arch::Armv7a] {
-            assert!(installed(arch).unwrap().is_empty(), "{arch}");
-            assert!(build(arch).is_err(), "{arch}");
+            let ports = ports_for(arch);
+            assert!(ports.contains(&"git"), "{arch}");
+            // git links zlib and libcurl, which must be built first.
+            let at = |port| ports.iter().position(|p| *p == port).unwrap();
+            assert!(at("zlib") < at("git") && at("curl") < at("git"), "{arch}");
+            for port in ["btop", "libcxx", "sshdt"] {
+                assert!(!ports.contains(&port), "{arch} {port}");
+            }
+            assert!(ports.iter().all(|port| PORTS.contains(port)), "{arch}");
         }
+        assert_eq!(ports_for(Arch::X86_64), PORTS);
     }
 }
