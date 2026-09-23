@@ -280,10 +280,14 @@ pub(crate) static TOP: [Entry<Kernel>; 12] = [
 
 /// `/proc/sys`: the sysctls this kernel has a source for, and no others. A
 /// value is added here when something in the kernel holds it, not before.
-static SYS: [Entry<Kernel>; 2] = [
+static SYS: [Entry<Kernel>; 3] = [
     sysctl_directory(b"fs", &SYS_FS),
     sysctl_directory(b"kernel", &SYS_KERNEL),
+    sysctl_directory(b"vm", &SYS_VM),
 ];
+
+/// `/proc/sys/vm`: the memory policy a program can ask about.
+static SYS_VM: [Entry<Kernel>; 1] = [file(b"overcommit_memory", render::overcommit_memory)];
 
 /// `/proc/sys/fs`.
 static SYS_FS: [Entry<Kernel>; 2] = [
