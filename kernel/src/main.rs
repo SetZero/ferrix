@@ -683,8 +683,9 @@ fn check_syscalls() {
         );
     }
     println!(
-        "  futex    a changed word got EAGAIN and a timed wait ETIMEDOUT; a wake and a requeue \
-         roused {} waiters, and a wake that roused nobody was caught",
+        "  futex    a changed word got EAGAIN and a timed wait ETIMEDOUT; a wake, a requeue and a \
+         wake from a fork child on a MAP_SHARED word roused {} waiters, and a wake that roused \
+         nobody and one keyed by the waker's own space were caught",
         report.futex_woken,
     );
     println!("  heap     a brk waited for a fork holding the heap lock, and a fork for a brk");

@@ -2154,3 +2154,15 @@ fn run_program(_argument: usize) {
 pub(crate) fn new_for_check() -> Result<Arc<Process>, SpaceError> {
     Ok(registry::register(Process::new(AddressSpace::new()?)))
 }
+
+/// Make a process whose space is a `fork` of `parent`'s, as `fork` makes one
+/// but with no task, for the self-checks that need two processes sharing
+/// memory.
+///
+/// # Errors
+///
+/// As [`AddressSpace::fork`].
+pub(crate) fn fork_for_check(parent: &Arc<Process>) -> Result<Arc<Process>, SpaceError> {
+    let child = parent.fork_memory(|space| Process::forked(parent, space, false, false))?;
+    Ok(registry::register(child))
+}

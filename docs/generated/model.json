@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "digest": "a182f4da9196b64ed6b457343069a29351c5a09927684da36800a544cfbc9229",
+  "digest": "bbc79f7413d2cfd1dbe1bb07e38a94abfd3752045e96e13ccd1d1b90f582f916",
   "files": [
     {
       "path": "docs/sysml/00-lifecycle.sysml",
@@ -12758,7 +12758,7 @@
           "definition": true,
           "maturity": "implemented",
           "stage": 7,
-          "doc": "kernel/src/syscall/futex.rs: wait, wake and requeue, plain and with a bitset, with the word read and the waiter listed under one table lock so no wake is lost, and the read under it never faulting. One table, keyed by address space and user address, where the design keys by physical page and offset: a shared futex is keyed as a private one, so a word two processes map shared is two futexes. A thread that ends clears its clear_child_tid word and wakes whoever waits on it. The robust list's head is recorded and never walked, and the priority-inheritance operations and FUTEX_WAKE_OP are ENOSYS.",
+          "doc": "kernel/src/syscall/futex.rs: wait, wake and requeue, plain and with a bitset, with the word read and the waiter listed under one table lock so no wake is lost, and the read under it never faulting. One table. A private futex is keyed by address space and user address; one without FUTEX_PRIVATE_FLAG on a word in a shared region, by the VMO behind it and the word's offset there, so a word two processes map shared is one futex, as on Linux. A thread that ends clears its clear_child_tid word and wakes whoever waits on it. The robust list's head is recorded and never walked, and the priority-inheritance operations and FUTEX_WAKE_OP are ENOSYS.",
           "source": {
             "file": "docs/sysml/05-scheduling.sysml",
             "line": 540

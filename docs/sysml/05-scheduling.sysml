@@ -542,12 +542,13 @@ package FerrixScheduling {
         doc /* kernel/src/syscall/futex.rs: wait, wake and requeue, plain and
              * with a bitset, with the word read and the waiter listed under
              * one table lock so no wake is lost, and the read under it
-             * never faulting. One table, keyed by address space and user
-             * address, where the design keys by physical page and offset:
-             * a shared futex is keyed as a private one, so a word two
-             * processes map shared is two futexes. A thread that ends
-             * clears its clear_child_tid word and wakes whoever waits on
-             * it. The robust list's head is recorded and never walked, and
+             * never faulting. One table. A private futex is keyed by
+             * address space and user address; one without
+             * FUTEX_PRIVATE_FLAG on a word in a shared region, by the VMO
+             * behind it and the word's offset there, so a word two
+             * processes map shared is one futex, as on Linux. A thread
+             * that ends clears its clear_child_tid word and wakes whoever
+             * waits on it. The robust list's head is recorded and never walked, and
              * the priority-inheritance operations and FUTEX_WAKE_OP are
              * ENOSYS. */
     }

@@ -391,6 +391,27 @@ impl AddressSpace {
         self.inner.lock().objects.get(&id).map(Arc::clone)
     }
 
+    /// The object a shared region maps at `address`, and the byte offset of
+    /// `address` in it: what names the same byte in every space that maps the
+    /// object, as a shared futex's key must. `None` for an address no region
+    /// covers, a private region -- whose pages are this space's alone, even
+    /// while a `fork` shares them copy-on-write -- and a device region, which
+    /// has no object.
+    pub(crate) fn shared_object_at(&self, address: u64) -> Option<(Arc<Vmo>, u64)> {
+        let inner = self.inner.lock();
+        let region = inner.map.find(address)?;
+        if !region.flags.shared {
+            return None;
+        }
+        let (id, offset) = match region.backing {
+            Backing::Anonymous { id, offset } | Backing::File { id, offset } => (id, offset),
+            Backing::Device { .. } => return None,
+        };
+        let into_region = address.checked_sub(region.range.start())?;
+        let object = Arc::clone(inner.objects.get(&id)?);
+        Some((object, offset.saturating_add(into_region)))
+    }
+
     /// Map `len` bytes of fresh anonymous memory at `at`, and return the id of
     /// the object created for it.
     ///

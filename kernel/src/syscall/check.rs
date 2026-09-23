@@ -114,7 +114,8 @@ pub(crate) struct Report {
     /// Whether an unmap on one processor was seen to wait for a copy holding
     /// its page on another; `false` with one processor, where it cannot run.
     pub(crate) unmap_waited: bool,
-    /// Futex waiters a wake or a requeue roused: 2 when right.
+    /// Futex waiters a wake, a requeue and a wake across a `fork` roused: 3
+    /// when right.
     pub(crate) futex_woken: usize,
     /// Guest milliseconds each group of checks took, in order: the dispatch
     /// table, the handler checks with their leak window, and then each of the
@@ -2348,6 +2349,25 @@ fn terminal_job_control_answers(process: &Process, page: u64) -> Result<(), &'st
         0,
         "TIOCNOTTY was refused to the session holding the terminal",
     )
+}
+
+/// Map `len` bytes of read/write shared anonymous memory, wherever it fits:
+/// memory a `fork` of `process` sees as the same pages.
+fn map_shared_rw(process: &Process, len: u64) -> Result<u64, &'static str> {
+    let at = memory::sys_mmap(
+        process,
+        &MmapRequest {
+            addr: 0,
+            len,
+            prot: PROT_READ | PROT_WRITE,
+            flags: MAP_ANONYMOUS | MAP_SHARED,
+            fd: -1,
+            offset: 0,
+            unit: OffsetUnit::Bytes,
+        },
+    )
+    .map_err(|_| "a shared mapping was refused")?;
+    u64::try_from(at).map_err(|_| "mmap returned an impossible address")
 }
 
 /// Map `len` bytes of read/write anonymous memory, wherever it fits.
@@ -6501,9 +6521,16 @@ const FUTEX_PATIENCE_NANOS: u64 = 30_000_000_000;
 /// negative control requires by name.
 const SLEPT_THROUGH_WAKE: &str = "a futex waiter the wake counted slept on to its timeout";
 
-/// What the waiting task waits on -- the process, the word, the timeout --
-/// taken by the task when it starts.
-static FUTEX_SUBJECT: crate::sync::SpinLock<Option<(Arc<Process>, u64, u64)>> =
+/// The failure a wake that did not find its waiter produces, which the shared
+/// check's negative control requires by name.
+const WAKE_MISSED_ITS_WAITER: &str = "a futex wake did not report the one waiter it had";
+
+/// What the waiting task waits on: the process, the word, the timeout, and
+/// the operation with its flags.
+type FutexSubject = (Arc<Process>, u64, u64, u32);
+
+/// The [`FutexSubject`] the waiting task takes when it starts.
+static FUTEX_SUBJECT: crate::sync::SpinLock<Option<FutexSubject>> =
     crate::sync::SpinLock::new(None);
 
 /// What the waiting task's `FUTEX_WAIT` answered.
@@ -6637,6 +6664,74 @@ fn check_futexes() -> Result<usize, &'static str> {
     a_forgotten_waiter_is_caught(&process, word, timeout)?;
 
     let _ = memory::sys_munmap(&process, page, PAGE_SIZE).map_err(|_| "munmap was refused")?;
+    woken += a_shared_futex_crosses_a_fork()?;
+    Ok(woken)
+}
+
+/// A futex in `MAP_SHARED` memory is one futex on both sides of a `fork`: a
+/// waiter in the parent that left out `FUTEX_PRIVATE_FLAG` is roused by the
+/// child waking the same word, which it names through its own mapping.
+///
+/// The negative control comes first, on the same word and by the same path:
+/// the child's wake with `FUTEX_PRIVATE_FLAG`, keyed by the child's own space
+/// -- which is how every futex was keyed before shared keys existed -- must
+/// find nobody, and the check must say so by name. Answers one.
+fn a_shared_futex_crosses_a_fork() -> Result<usize, &'static str> {
+    let parent = process::new_for_check()
+        .map_err(|_| "could not make a process for the shared futex check")?;
+    let page = map_shared_rw(&parent, PAGE_SIZE)?;
+    let (word, timeout) = (page, page + 16);
+    uaccess::copy_to_user(parent.space(), word, &FUTEX_WORD.to_le_bytes())
+        .map_err(|_| "could not stage the shared futex word")?;
+    let child = process::fork_for_check(&parent)
+        .map_err(|_| "could not fork a process for the shared futex check")?;
+    let shared_wait = FUTEX_WAIT;
+
+    match wait_then_wake_from(
+        (&parent, &child),
+        word,
+        timeout,
+        (0, FUTEX_FORGOTTEN_NANOS),
+        shared_wait,
+        |waking, word| {
+            futex_call(
+                waking,
+                [word, u64::from(FUTEX_WAKE | FUTEX_PRIVATE_FLAG), 1, 0, 0, 0],
+            )
+        },
+    ) {
+        Err(problem) if problem == WAKE_MISSED_ITS_WAITER => {}
+        Err(_) => {
+            return Err(
+                "the shared futex check failed a wake keyed by the waker's own space, for another reason",
+            );
+        }
+        Ok(_) => {
+            return Err(
+                "a futex wake keyed by the waker's own space roused a waiter in its parent",
+            );
+        }
+    }
+
+    let woken = wait_then_wake_from(
+        (&parent, &child),
+        word,
+        timeout,
+        (FUTEX_LONG_SECONDS, 0),
+        shared_wait,
+        |waking, word| futex_call(waking, [word, u64::from(FUTEX_WAKE), 1, 0, 0, 0]),
+    )
+    .map_err(|problem| {
+        if problem == WAKE_MISSED_ITS_WAITER {
+            "a futex wake in a fork child did not find its parent's waiter on a MAP_SHARED word"
+        } else {
+            problem
+        }
+    })?;
+
+    for process in [&child, &parent] {
+        let _ = memory::sys_munmap(process, page, PAGE_SIZE).map_err(|_| "munmap was refused")?;
+    }
     Ok(woken)
 }
 
@@ -6661,9 +6756,10 @@ fn a_forgotten_waiter_is_caught(
     }
 }
 
-/// Start a task sleeping in `FUTEX_WAIT` on `word` for `sleep` (seconds,
-/// nanoseconds), wait until it is on the table, `wake` it, and require it
-/// back with zero and the wake to have counted it. Answers one.
+/// Start a task sleeping in `FUTEX_WAIT` with `FUTEX_PRIVATE_FLAG` on `word`
+/// for `sleep` (seconds, nanoseconds), wait until it is on the table, `wake`
+/// it from the same process, and require it back with zero and the wake to
+/// have counted it. Answers one.
 fn wait_then_wake(
     process: &Arc<Process>,
     word: u64,
@@ -6671,9 +6767,31 @@ fn wait_then_wake(
     sleep: (u64, u64),
     wake: FutexWake,
 ) -> Result<usize, &'static str> {
+    wait_then_wake_from(
+        (process, process),
+        word,
+        timeout,
+        sleep,
+        FUTEX_WAIT | FUTEX_PRIVATE_FLAG,
+        wake,
+    )
+}
+
+/// [`wait_then_wake`] with the waiter in `waiting` sleeping by `wait` -- the
+/// operation and its flags -- and the wake made from `waking`, which may be
+/// another process mapping the same word.
+fn wait_then_wake_from(
+    (waiting, waking): (&Arc<Process>, &Arc<Process>),
+    word: u64,
+    timeout: u64,
+    sleep: (u64, u64),
+    wait: u32,
+    wake: FutexWake,
+) -> Result<usize, &'static str> {
+    let process = waiting;
     write_timespec(process, timeout, sleep.0, sleep.1)?;
     *FUTEX_ANSWER.lock() = None;
-    *FUTEX_SUBJECT.lock() = Some((Arc::clone(process), word, timeout));
+    *FUTEX_SUBJECT.lock() = Some((Arc::clone(process), word, timeout, wait));
     let waiter = crate::sched::spawn("futex-waiter", futex_waiter, 0, ferrix_sched::NICE_0_WEIGHT)?;
 
     let deadline = crate::timer::now_nanos().saturating_add(FUTEX_PATIENCE_NANOS);
@@ -6686,7 +6804,7 @@ fn wait_then_wake(
         }
         crate::sched::sleep_for(1_000_000);
     }
-    let count = wake(process, word);
+    let count = wake(waking, word);
 
     let deadline = crate::timer::now_nanos().saturating_add(FUTEX_PATIENCE_NANOS);
     let _ = FUTEX_ANSWERED.wait_until_deadline(|| FUTEX_ANSWER.lock().is_some(), deadline);
@@ -6697,7 +6815,7 @@ fn wait_then_wake(
         (Ok(1), Some(Ok(0))) => Ok(1),
         (Ok(1), Some(Err(error))) if error == Errno::ETIMEDOUT => Err(SLEPT_THROUGH_WAKE),
         (Ok(1), Some(_)) => Err("a woken futex waiter did not answer zero"),
-        (_, Some(_)) => Err("a futex wake did not report the one waiter it had"),
+        (_, Some(_)) => Err(WAKE_MISSED_ITS_WAITER),
     }
 }
 
@@ -6705,16 +6823,9 @@ fn wait_then_wake(
 fn futex_waiter(_argument: usize) {
     let subject = FUTEX_SUBJECT.lock().take();
     let answer = match subject {
-        Some((process, word, timeout)) => futex_call(
+        Some((process, word, timeout, wait)) => futex_call(
             &process,
-            [
-                word,
-                u64::from(FUTEX_WAIT | FUTEX_PRIVATE_FLAG),
-                u64::from(FUTEX_WORD),
-                timeout,
-                0,
-                0,
-            ],
+            [word, u64::from(wait), u64::from(FUTEX_WORD), timeout, 0, 0],
         ),
         None => Err(Errno::ESRCH),
     };

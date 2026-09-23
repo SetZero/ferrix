@@ -8,15 +8,23 @@
 //!
 //! # What a wait is keyed by
 //!
-//! The address space and the user address, as a pair. Two processes' words
-//! at the same address are different words, and nothing here shares memory
-//! between address spaces yet, so a "shared" futex (one without
-//! `FUTEX_PRIVATE_FLAG`) is keyed the same way as a private one. That is the
-//! whole difference Linux draws between them -- a shared key names the page's
-//! backing object -- and it becomes a difference here when `MAP_SHARED`
-//! memory can be seen by two spaces at once. The space is safe to name by
-//! address: every waiter holds its process, and so the space, for as long as
-//! it is on the table.
+//! Two ways, as Linux keys them. A private key is the address space and the
+//! user address: two processes' words at the same address are different
+//! words. The space is safe to name by address: every waiter holds its
+//! process, and so the space, for as long as it is on the table.
+//!
+//! A shared key is the object behind a shared mapping and the byte offset of
+//! the word in it: the same word however many spaces map it, and at whatever
+//! address each maps it. A futex in `MAP_SHARED` memory between the two sides
+//! of a `fork` -- a `PTHREAD_PROCESS_SHARED` mutex, condition variable or
+//! barrier -- is only one futex because of it; keyed by space, a waker in one
+//! process never found a waiter in the other. A call gets a shared key when
+//! it does not say `FUTEX_PRIVATE_FLAG` and a shared region holds its word,
+//! and a private key otherwise, which is also Linux's answer for a private
+//! mapping. The key holds its object, so the object's identity cannot be
+//! reused by another while anyone waits on it -- and so a key is never
+//! dropped with [`TABLE`] held, since the last reference to an object may
+//! free its pages.
 //!
 //! # The lost wake-up, again
 //!
@@ -70,6 +78,7 @@ use crate::syscall::process::Process;
 use crate::syscall::time::TimeWidth;
 use crate::syscall::uaccess;
 use crate::user::space::AddressSpace;
+use crate::user::vmo::Vmo;
 
 /// A bitset that matches every waiter: what the plain `WAIT` and `WAKE` use.
 const FUTEX_BITSET_MATCH_ANY: u32 = 0xFFFF_FFFF;
@@ -77,19 +86,58 @@ const FUTEX_BITSET_MATCH_ANY: u32 = 0xFFFF_FFFF;
 /// Nanoseconds in a second.
 const NANOS_PER_SECOND: u64 = 1_000_000_000;
 
-/// Which word a waiter sleeps on.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Key {
-    /// The address space, by address. See the module documentation.
-    space: usize,
-    /// The word's user address.
-    address: u64,
+/// Which word a waiter sleeps on. See the module documentation.
+#[derive(Debug, Clone)]
+enum Key {
+    /// A word only one address space can name.
+    Private {
+        /// The address space, by address.
+        space: usize,
+        /// The word's user address.
+        address: u64,
+    },
+    /// A word in an object that shared regions map.
+    Shared {
+        /// The object, held so that its address names it alone.
+        object: Arc<Vmo>,
+        /// The word's byte offset in the object.
+        offset: u64,
+    },
 }
 
+impl PartialEq for Key {
+    fn eq(&self, other: &Key) -> bool {
+        match (self, other) {
+            (
+                Key::Private { space, address },
+                Key::Private {
+                    space: other_space,
+                    address: other_address,
+                },
+            ) => space == other_space && address == other_address,
+            (
+                Key::Shared { object, offset },
+                Key::Shared {
+                    object: other_object,
+                    offset: other_offset,
+                },
+            ) => Arc::ptr_eq(object, other_object) && offset == other_offset,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for Key {}
+
 impl Key {
-    /// The key for `address` in `space`.
-    fn new(space: &Arc<AddressSpace>, address: u64) -> Key {
-        Key {
+    /// The key for `address` in `space`: shared if `shared` asks for one and
+    /// a shared region holds the word, private otherwise. Takes the space's
+    /// lock, so never with [`TABLE`] held.
+    fn new(space: &Arc<AddressSpace>, address: u64, shared: bool) -> Key {
+        if shared && let Some((object, offset)) = space.shared_object_at(address) {
+            return Key::Shared { object, offset };
+        }
+        Key::Private {
             space: Arc::as_ptr(space).addr(),
             address,
         }
@@ -156,6 +204,7 @@ pub(crate) fn sys_futex(process: &Process, a: &[u64; 6], width: TimeWidth) -> Re
     let value = value as u32;
     let value3 = value3 as u32;
     let command = op & !(FUTEX_PRIVATE_FLAG | FUTEX_CLOCK_REALTIME);
+    let shared = op & FUTEX_PRIVATE_FLAG == 0;
     if op & FUTEX_CLOCK_REALTIME != 0 && !matches!(command, FUTEX_WAIT | FUTEX_WAIT_BITSET) {
         return Err(Errno::ENOSYS);
     }
@@ -167,7 +216,14 @@ pub(crate) fn sys_futex(process: &Process, a: &[u64; 6], width: TimeWidth) -> Re
                 let relative = read_timespec(process, timeout, width)?;
                 Some(crate::timer::now_nanos().saturating_add(relative))
             };
-            wait(process, address, value, FUTEX_BITSET_MATCH_ANY, deadline)
+            wait(
+                process,
+                address,
+                shared,
+                value,
+                FUTEX_BITSET_MATCH_ANY,
+                deadline,
+            )
         }
         FUTEX_WAIT_BITSET => {
             if value3 == 0 {
@@ -181,29 +237,35 @@ pub(crate) fn sys_futex(process: &Process, a: &[u64; 6], width: TimeWidth) -> Re
             } else {
                 Some(read_timespec(process, timeout, width)?)
             };
-            wait(process, address, value, value3, deadline)
+            wait(process, address, shared, value, value3, deadline)
         }
-        FUTEX_WAKE => wake(process, address, value as i32, FUTEX_BITSET_MATCH_ANY),
+        FUTEX_WAKE => wake(
+            process,
+            address,
+            shared,
+            value as i32,
+            FUTEX_BITSET_MATCH_ANY,
+        ),
         FUTEX_WAKE_BITSET => {
             if value3 == 0 {
                 return Err(Errno::EINVAL);
             }
-            wake(process, address, value as i32, value3)
+            wake(process, address, shared, value as i32, value3)
         }
         // The fourth argument is a count, not a pointer, for these two: Linux
         // reads it as `val2`, the register narrowed to an `int`.
         FUTEX_REQUEUE => requeue(
             process,
-            address,
-            address2,
+            (address, address2),
+            shared,
             value as i32,
             timeout as i32,
             None,
         ),
         FUTEX_CMP_REQUEUE => requeue(
             process,
-            address,
-            address2,
+            (address, address2),
+            shared,
             value as i32,
             timeout as i32,
             Some(value3),
@@ -212,12 +274,13 @@ pub(crate) fn sys_futex(process: &Process, a: &[u64; 6], width: TimeWidth) -> Re
     }
 }
 
-/// The key for a futex word, which must be aligned as a 32-bit word is.
-fn key(process: &Process, address: u64) -> Result<Key, Errno> {
+/// The key for a futex word, which must be aligned as a 32-bit word is:
+/// shared if `shared` and a shared region holds it.
+fn key(process: &Process, address: u64, shared: bool) -> Result<Key, Errno> {
     if !address.is_multiple_of(4) {
         return Err(Errno::EINVAL);
     }
-    Ok(Key::new(process.space(), address))
+    Ok(Key::new(process.space(), address, shared))
 }
 
 /// Read the futex word at `address`, faulting its page in. Never with
@@ -243,14 +306,16 @@ fn read_present_word(process: &Process, address: u64) -> Result<Option<u32>, Err
 
 /// Sleep on `address` if it holds `expected`, until a wake whose bitset
 /// shares a bit with `bitset`, the caller is ended, or `deadline` passes.
+/// `shared` is whether the call left out `FUTEX_PRIVATE_FLAG`.
 fn wait(
     process: &Process,
     address: u64,
+    shared: bool,
     expected: u32,
     bitset: u32,
     deadline: Option<u64>,
 ) -> Result<usize, Errno> {
-    let key = key(process, address)?;
+    let key = key(process, address, shared)?;
     let sleeper = Arc::new(Sleeper {
         task: sched::current(),
         woken: AtomicBool::new(false),
@@ -281,10 +346,15 @@ fn wait(
     );
 
     // Off the table however it left, and under the lock, so that a waker which
-    // found it has finished rousing it before this returns.
+    // found it has finished rousing it before this returns. The entry goes
+    // after the lock, with the key it holds.
     let mut table = TABLE.lock();
-    table.retain(|entry| !Arc::ptr_eq(&entry.sleeper, &sleeper));
+    let mine = table
+        .iter()
+        .position(|entry| Arc::ptr_eq(&entry.sleeper, &sleeper))
+        .map(|index| table.remove(index));
     drop(table);
+    drop(mine);
     // Woken wins over the other two: a wake that took this waiter off the
     // table counted it, and reporting a timeout would lose that wake for
     // whoever the waker meant it for.
@@ -302,27 +372,42 @@ fn wait(
 
 /// Rouse up to `count` waiters on `address` whose bitset shares a bit with
 /// `bitset`, oldest first, and report how many.
-fn wake(process: &Process, address: u64, count: i32, bitset: u32) -> Result<usize, Errno> {
-    let key = key(process, address)?;
-    Ok(rouse(key, count, bitset, Sleeper::rouse))
+fn wake(
+    process: &Process,
+    address: u64,
+    shared: bool,
+    count: i32,
+    bitset: u32,
+) -> Result<usize, Errno> {
+    let key = key(process, address, shared)?;
+    Ok(rouse(&[key], count, bitset, Sleeper::rouse))
 }
 
-/// Take up to `count` matching waiters off the table, calling `with` on each.
+/// Take up to `count` waiters on any of `keys` whose bitset shares a bit with
+/// `bitset` off the table, oldest first, calling `with` on each.
 ///
 /// A `count` of zero or less still takes one, as Linux's `futex_wake` does:
-/// it counts a waiter before comparing against the limit.
-fn rouse(key: Key, count: i32, bitset: u32, with: fn(&Sleeper)) -> usize {
+/// it counts a waiter before comparing against the limit. What is taken is
+/// dropped after the lock, since a key may hold the last reference to its
+/// object.
+fn rouse(keys: &[Key], count: i32, bitset: u32, with: fn(&Sleeper)) -> usize {
     let limit = usize::try_from(count.max(1)).unwrap_or(1);
-    let mut roused = 0;
-    TABLE.lock().retain(|entry| {
-        if roused >= limit || entry.key != key || entry.bitset & bitset == 0 {
-            return true;
+    let mut taken = Vec::new();
+    let mut table = TABLE.lock();
+    let mut index = 0;
+    while taken.len() < limit
+        && let Some(entry) = table.get(index)
+    {
+        if !keys.contains(&entry.key) || entry.bitset & bitset == 0 {
+            index += 1;
+            continue;
         }
+        let entry = table.remove(index);
         with(&entry.sleeper);
-        roused += 1;
-        false
-    });
-    roused
+        taken.push(entry);
+    }
+    drop(table);
+    taken.len()
 }
 
 /// `FUTEX_REQUEUE` and, with `expected`, `FUTEX_CMP_REQUEUE`: rouse up to
@@ -330,8 +415,8 @@ fn rouse(key: Key, count: i32, bitset: u32, with: fn(&Sleeper)) -> usize {
 /// Answers how many were roused or moved.
 fn requeue(
     process: &Process,
-    from: u64,
-    to: u64,
+    (from, to): (u64, u64),
+    shared: bool,
     wake_count: i32,
     move_count: i32,
     expected: Option<u32>,
@@ -341,8 +426,8 @@ fn requeue(
     else {
         return Err(Errno::EINVAL);
     };
-    let source = key(process, from)?;
-    let target = key(process, to)?;
+    let source = key(process, from, shared)?;
+    let target = key(process, to, shared)?;
     // As `wait` reads its word: faulted in outside the lock, then read under
     // it without a fault, round again if the page went in between.
     let mut table = loop {
@@ -359,6 +444,8 @@ fn requeue(
     };
     let mut taken = 0_usize;
     let mut moved = Vec::new();
+    // The keys that leave the table, dropped after the lock.
+    let mut gone = Vec::new();
     let mut index = 0;
     while let Some(entry) = table.get(index) {
         if entry.key != source || taken >= wake_count.saturating_add(move_count) {
@@ -366,49 +453,71 @@ fn requeue(
             continue;
         }
         taken += 1;
-        let entry = table.remove(index);
+        let mut entry = table.remove(index);
         if taken <= wake_count {
             entry.sleeper.rouse();
+            gone.push(entry.key);
         } else {
-            moved.push(Entry {
-                key: target,
-                ..entry
-            });
+            gone.push(core::mem::replace(&mut entry.key, target.clone()));
+            moved.push(entry);
         }
     }
     // Onto the end of the queue, behind anything already waiting on `to`.
     table.extend(moved);
+    drop(table);
+    drop(gone);
     Ok(taken)
 }
 
 /// Rouse up to `count` waiters on `address` in `space`: what a process's end
 /// does for the address `CLONE_CHILD_CLEARTID` or `set_tid_address` gave it.
+/// Keyed as a shared wake, as Linux wakes it, so a waiter that left out
+/// `FUTEX_PRIVATE_FLAG` on a word in shared memory is found too. Takes the
+/// space's lock.
 pub(crate) fn wake_address(space: &Arc<AddressSpace>, address: u64, count: i32) -> usize {
     rouse(
-        Key::new(space, address),
+        &[Key::new(space, address, true)],
         count,
         FUTEX_BITSET_MATCH_ANY,
         Sleeper::rouse,
     )
 }
 
-/// How many waiters are on `address` in `process`'s space right now.
+/// Both keys a waiter on `address` in `space` can have, whether or not it
+/// said `FUTEX_PRIVATE_FLAG`: for the self-checks, which watch programs whose
+/// flags are theirs to choose.
+fn either_key(space: &Arc<AddressSpace>, address: u64) -> [Key; 2] {
+    [
+        Key::new(space, address, false),
+        Key::new(space, address, true),
+    ]
+}
+
+/// How many waiters are on `address` in `process`'s space right now, keyed
+/// either way.
 ///
 /// For the self-check, which has to know its waiter is asleep before it can
 /// tell a wake that works from one that arrived first.
 pub(crate) fn waiters_on(process: &Process, address: u64) -> usize {
-    let key = Key::new(process.space(), address);
-    TABLE.lock().iter().filter(|entry| entry.key == key).count()
+    let keys = either_key(process.space(), address);
+    let table = TABLE.lock();
+    let count = table
+        .iter()
+        .filter(|entry| keys.contains(&entry.key))
+        .count();
+    drop(table);
+    count
 }
 
-/// Take up to `count` waiters off `address` and report them woken without
-/// rousing them: a wake with the one bug a count cannot see.
+/// Take up to `count` waiters off `address`, keyed either way, and report
+/// them woken without rousing them: a wake with the one bug a count cannot
+/// see.
 ///
 /// Exists for the self-check's negative control, which must show that the
 /// check fails a wake like this one rather than trusting the count it returns.
 pub(crate) fn forget_waiters(process: &Process, address: u64, count: i32) -> usize {
     rouse(
-        Key::new(process.space(), address),
+        &either_key(process.space(), address),
         count,
         FUTEX_BITSET_MATCH_ANY,
         |_| {},

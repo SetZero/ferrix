@@ -1307,14 +1307,21 @@ and to pass them on once it has ended itself, and, as its control, the same
 orphan to be left with no parent when there is no init.
 
 **`futex` and `clone3`.** `futex` waits, wakes and requeues, plain and with a
-bitset, keyed by address space and user address, with the word compared under
-the table's lock so no wake is lost; the priority-inheritance operations and
+bitset, with the word compared under the table's lock so no wake is lost. It
+was keyed by address space and user address, so a futex in `MAP_SHARED`
+memory was two futexes to the two sides of a `fork`; since 2026-09-23 a call
+without `FUTEX_PRIVATE_FLAG` on a word in a shared region is keyed by the
+object behind it and the word's offset there, as Linux keys it. The
+priority-inheritance operations and
 `FUTEX_WAKE_OP` are `ENOSYS`. `clone3` reads its argument structure by size and
 takes the same path as `clone`, which is what glibc tries first and falls back
 from only on `ENOSYS`. A process that ends clears its `clear_child_tid` word and
-wakes whoever waits on it. The boot test catches a wake that rouses nobody:
+wakes whoever waits on it. The boot test catches a wake that rouses nobody,
+and a waiter in a parent is roused by its fork child waking the same
+`MAP_SHARED` word -- after a wake keyed by the child's own space, which is
+how every wake was keyed before, has been shown to find nobody:
 
-      futex    a changed word got EAGAIN and a timed wait ETIMEDOUT; a wake and a requeue roused 2 waiters, and a wake that roused nobody was caught
+      futex    a changed word got EAGAIN and a timed wait ETIMEDOUT; a wake, a requeue and a wake from a fork child on a MAP_SHARED word roused 3 waiters, and a wake that roused nobody and one keyed by the waker's own space were caught
 
 **What the checks cost.** Stage 7 prints a `cost` line, guest milliseconds
 per group of checks, as stage 5 does. It found the boot's single most
