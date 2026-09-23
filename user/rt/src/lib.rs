@@ -83,6 +83,14 @@ pub fn exit(status: i32) -> ! {
     arch::exit(status)
 }
 
+/// Complete every memory and register access before this before any after
+/// it, as a device sees them: what a driver sharing memory with a device
+/// that does not snoop -- mapped past the caches by a coherent pin --
+/// needs between writing a descriptor and letting the device read it.
+pub fn device_barrier() {
+    arch::device_barrier();
+}
+
 /// Run a program: adopt the bootstrap handle, call `main`, exit with what it
 /// returns. [`entry!`] calls this; nothing else should.
 pub fn start(bootstrap: usize, main: fn(Bootstrap) -> i32) -> ! {
