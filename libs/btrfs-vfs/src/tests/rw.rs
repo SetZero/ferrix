@@ -244,6 +244,46 @@ fn writes_land_where_they_are_asked_to() {
 }
 
 #[test]
+fn what_is_written_outlives_the_last_reference_to_its_file() {
+    // A build closes each object file and opens it again to archive it, and
+    // nothing need hold the inode in between: the VFS keeps a bounded number
+    // of names. The writes must wait for their writeback rather than go with
+    // the inode object, and a commit between two writes must not leave the
+    // file as long as it was then. Found by reading, while looking for why
+    // `cargo xtask test-selfhost`'s rustc read its object files back short.
+    let disk = Disk::new(BLANK);
+    let fs = mount(&disk);
+    let head = vec![1u8; 10_000];
+    let tail = vec![2u8; 30_000];
+    let file = make_file(&fs.root(), b"object", &head);
+    fs.sync().unwrap();
+    let _ = file.write_at(head.len() as u64, &tail, false).unwrap();
+    let _ = file.write_at(0, &[3u8; 64], false).unwrap();
+    drop(file);
+    let mut expected = head;
+    expected.extend_from_slice(&tail);
+    expected[..64].fill(3);
+    let file = fs.root().lookup(b"object").unwrap();
+    assert_eq!(file.metadata().size, expected.len() as u64);
+    assert_eq!(read_all(&file), expected);
+    // One never committed at all, made and let go.
+    drop(make_file(&fs.root(), b"fresh", b"not yet on the disk"));
+    assert_eq!(
+        read_all(&fs.root().lookup(b"fresh").unwrap()),
+        b"not yet on the disk"
+    );
+    // And the writeback they were kept for reaches the disk.
+    drop(file);
+    fs.sync().unwrap();
+    let fs = mount(&disk);
+    assert_eq!(read_all(&fs.root().lookup(b"object").unwrap()), expected);
+    assert_eq!(
+        read_all(&fs.root().lookup(b"fresh").unwrap()),
+        b"not yet on the disk"
+    );
+}
+
+#[test]
 fn truncation_cuts_and_extends() {
     let disk = Disk::new(BLANK);
     let fs = mount(&disk);
