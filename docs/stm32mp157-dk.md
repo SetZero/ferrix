@@ -23,7 +23,9 @@ back to U-Boot under `ferrix.onexit=reset`; and booted the loader with its
 switch in a copyable block. On 2026-09-23 the board ran main again at two
 processors, and drove a monitor over HDMI: first one colour from a Linux
 program through `/dev/dri/card0`, then the `hyprix` Wayland compositor with a
-terminal window (`docs/DISPLAY.md` §6). What *has* been checked is listed under
+terminal window (`docs/DISPLAY.md` §6). The same evening the board's USB host
+found its hub, a mouse and a keyboard, and their keys, buttons and motion
+read back from `/dev/input/event0` and `event1` (`docs/INPUT.md` §7). What *has* been checked is listed under
 [What is actually verified](#what-is-actually-verified).
 
 ## TL;DR

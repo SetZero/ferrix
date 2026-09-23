@@ -736,3 +736,93 @@ Linux does.
   xkbcommon's keymap compiler, or the compositor builds its keymap from a
   string it carries. It is a stage 18 item: a pinned subset of
   xkeyboard-config in the image (2 points).
+
+## 7. The DK board's USB host
+
+The STM32MP157 DK boards have no input device QEMU's virtio could stand in
+for: their four USB-A sockets hang off a Microchip USB2514B hub on port 1 of
+the chip's EHCI controller. `user/usbhid`, over `libs/usb-host`, drives that
+controller, the hub, and every keyboard and mouse behind it, and serves each
+to the input core as §3.2's protocol says. It ran on an STM32MP157D-DK1 on
+2026-09-23 with a Logitech G502 at full speed and a keyboard at low speed.
+
+### 7.1 What the kernel does, and what it gives
+
+As for the LTDC (`docs/DISPLAY.md` §6), the kernel does what is shared with
+the rest of the chip and nothing more (`kernel/src/stm32mp1_usb.rs`): it
+turns on the USBH and USBPHY clocks, releases both resets, brings up the PWR
+block's 1.8 V and 1.1 V regulators, and starts the USB PHY's PLL from the
+HSE. Each value is what U-Boot's `usb start` writes on this board, read back
+with `md`. It then publishes a device-tree node, binding `TREE_STM32_USBH`,
+with the EHCI page and its interrupt, and says so:
+
+```
+  usb      EHCI at 0x5800d000, PHY PLL 0xd400003c from 24 MHz
+```
+
+The PHY's analogue tuning (`st,tune-*`) is left at its reset value.
+
+### 7.2 Memory the controller and the program see alike
+
+EHCI polls descriptors in memory, and the STM32MP1's does not snoop the
+caches. A program's mappings were write-back cached, and ARMv7 gives ring 3
+no cache maintenance, so `vmo_pin` takes `PIN_COHERENT`: on a device whose
+DMA is not coherent, the pin must cover a VMO nothing maps yet, the VMO is
+marked coherent, every frame is cleaned and invalidated to the point of
+coherency, and every mapping of it after is Normal non-cacheable (MAIR
+attribute 2, `MapFlags::uncached`). `vmo_read` and `vmo_write`, which copy
+through the kernel's cached view, refuse such a VMO. On a device that snoops,
+which is every device on x86-64 and QEMU, the option changes nothing. The
+driver still orders its writes with `dsb sy` before the controller may look.
+
+### 7.3 One host, several input devices
+
+A USB host is not one input device but as many as are plugged in, and only
+its driver knows how many. So devmgr starts it as a *bus host* (`Kind::Host`):
+with its device and START, like the virtio-serial port's driver, and without
+waiting for a PUBLISHED. The driver makes an input control channel for each
+keyboard or mouse it finds with `device.input_control()`, which a USB host's
+node allows eight times at once (`USB_INPUT_FUNCTIONS`) where every other
+node allows one. A tree node's HELLO carries `DEVICE_NOT_PCI` for its
+location, as the display core's does, and sends devmgr no PUBLISHED, since
+every tree node shares that word. A device unplugged has its channel closed,
+which the core hears as the device going (`event<N> is gone`). This is the
+hotplug decision 5 of §6 left out, for this driver: devices come and go; how
+a compositor learns of one that came later is still that backlog row's.
+
+### 7.4 The bus
+
+`libs/usb-host` is written against registers, DMA memory and a clock, and
+tested against a model of the controller walking the real schedules frame by
+frame, with the DK1's bus behind it as U-Boot's `usb tree` showed it.
+
+* **Control transfers** run on an asynchronous schedule holding one queue
+  head, switched on for the transfer and off after, so the head can be
+  rewritten for any device without the doorbell handshake.
+* **Interrupt IN pipes** hang after one inactive anchor every frame-list
+  entry points at, each a queue head with two qTDs pointing at each other:
+  the controller runs one while the driver reads and re-arms the other. Every
+  pipe is polled every frame.
+* **Split transactions:** a full- or low-speed device behind a high-speed hub
+  is reached through the hub's transaction translator, a start-split in
+  microframe 0 and complete-splits in 2 to 4. Both of the board's devices
+  need it; the model fails a test for a wrong hub, port, speed or mask.
+* **Hotplug by polling:** every 250 ms the driver reads the root ports and
+  asks each hub for each port's status. A device that cannot be set up is
+  left alone until it is unplugged.
+* **HID, the boot protocol only:** each boot keyboard or mouse interface is
+  put in the boot protocol, whose report layout is fixed, so no report
+  descriptor is parsed. Keys go through Linux's own `hid_keyboard` table, in
+  Linux's order (modifiers, keys let go, keys pressed, `SYN_REPORT`); a mouse
+  gives five buttons, X, Y and the wheel. The name is the manufacturer's and
+  product's strings joined as Linux joins them, and the bus is `BUS_USB`.
+
+### 7.5 Not done
+
+Keyboard LEDs (with §6's LED row), a device's other interfaces (the G502's
+second HID interface, media keys) and report-protocol devices, bulk and
+isochronous transfers, and a full- or low-speed device on a root port, which
+EHCI hands to its companion OHCI controller -- not reachable on a DK board,
+whose root port has the hub. A process writing the 115200-baud console flat
+out starves the driver: hexdumping both event nodes to it lost the clicks
+made meanwhile, where recording them to tmpfs lost nothing (`docs/BACKLOG.md`).

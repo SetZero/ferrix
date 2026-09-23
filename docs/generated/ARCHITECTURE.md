@@ -100,11 +100,11 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixAssurance` | `11-assurance.sysml` | docs/RELIABILITY.md and docs/ASSEMBLY.md: the quality gates, what each one verifies, and what the tests can actually reach. The gates cargo xtask check runs are in CI. Of the xtask boot gates, CI runs test-boot and test-rustc; the ones that need a binary the repository does not carry, a disk judged on the host or a screendump run in the landing gates of docs/BACKLOG.md instead (docs/ROADMAP.md, Continuously). |
 | `FerrixViews` | `12-views.sysml` | How to read the one model as two: what runs today, and what the roadmap still owes. The filters key on the lifecycle keywords every element carries. |
 
-13 files, 16 packages, 1629 elements, 194 relations. Model digest `4ec781dacd9d388c`.
+13 files, 16 packages, 1630 elements, 194 relations. Model digest `d8b6a6ff59c7cad6`.
 
 | Maturity | Elements | Meaning |
 | --- | ---: | --- |
-| `#implemented` | 259 | The code exists and the QEMU boot test exercises it on every architecture it applies to. |
+| `#implemented` | 260 | The code exists and the QEMU boot test exercises it on every architecture it applies to. |
 | `#inProgress` | 7 | The owning stage has started; part of the element runs. |
 | `#writtenAhead` | 3 | A libs/ crate exists and passes its host tests, but nothing in kernel/ calls it yet. |
 | `#planned` | 41 | Only the design exists, in docs/ARCHITECTURE.md. Nothing stands in for it. |
@@ -2105,15 +2105,17 @@ flowchart TB
   n2_FerrixDrivers_VirtioNetDriver["VirtioNetDriver"]
   n3_FerrixDrivers_VirtioGpuDriver["VirtioGpuDriver<br>stage 17"]
   n4_FerrixDrivers_VirtioInputDriver["VirtioInputDriver<br>stage 17"]
+  n5_FerrixDrivers_UsbHidDriver["UsbHidDriver<br>stage 17"]
   n1_FerrixDrivers_VirtioBlkDriver -- "specializes" --> n0_FerrixDrivers_DriverProcess
   n2_FerrixDrivers_VirtioNetDriver -- "specializes" --> n0_FerrixDrivers_DriverProcess
   n3_FerrixDrivers_VirtioGpuDriver -- "specializes" --> n0_FerrixDrivers_DriverProcess
   n4_FerrixDrivers_VirtioInputDriver -- "specializes" --> n0_FerrixDrivers_DriverProcess
+  n5_FerrixDrivers_UsbHidDriver -- "specializes" --> n0_FerrixDrivers_DriverProcess
   classDef implemented fill:#dceae2,stroke:#2c6e4e,color:#16191d
-  class n0_FerrixDrivers_DriverProcess,n1_FerrixDrivers_VirtioBlkDriver,n2_FerrixDrivers_VirtioNetDriver,n3_FerrixDrivers_VirtioGpuDriver,n4_FerrixDrivers_VirtioInputDriver implemented
+  class n0_FerrixDrivers_DriverProcess,n1_FerrixDrivers_VirtioBlkDriver,n2_FerrixDrivers_VirtioNetDriver,n3_FerrixDrivers_VirtioGpuDriver,n4_FerrixDrivers_VirtioInputDriver,n5_FerrixDrivers_UsbHidDriver implemented
 ```
 
-**Figure 13 — Driver process and its subtypes.** 4 definitions specialize `DriverProcess`; the hollow arrow points at what they have in common. [SVG](diagrams/ferrix-drivers-driver-process.svg) Source: `08-drivers.sysml`.
+**Figure 13 — Driver process and its subtypes.** 5 definitions specialize `DriverProcess`; the hollow arrow points at what they have in common. [SVG](diagrams/ferrix-drivers-driver-process.svg) Source: `08-drivers.sysml`.
 
 ```mermaid
 flowchart TB
@@ -2228,7 +2230,7 @@ Where the hardware is: libs/acpi's dmar module (VT-d units and their device scop
 
 `#implemented`  ·  stage 10
 
-An ordinary user process in its own Job, holding exactly the capabilities devmgr gave it. A driver fault is a process fault; a wedged driver is a Job kill. Five exist, native programs on user/rt under /lib/drivers: blk, net, gpu, input and vport, each a thin layer of handles over its libs/ crates.
+An ordinary user process in its own Job, holding exactly the capabilities devmgr gave it. A driver fault is a process fault; a wedged driver is a Job kill. Seven exist, native programs on user/rt under /lib/drivers: blk, net, gpu, ltdc, input, usbhid and vport, each a thin layer of handles over its libs/ crates.
 
 | Feature | Kind | Type | Maturity | Note |
 | --- | --- | --- | --- | --- |
@@ -2289,6 +2291,12 @@ user/gpu over libs/virtio-gpu: the display core's card0 over displayctl, and sin
 `#implemented`  ·  stage 17  ·  specialises `DriverProcess`
 
 user/input over libs/virtio-input, feeding the input core's /dev/input/eventN over inputctl; cargo xtask test-input is its gate.
+
+#### UsbHidDriver
+
+`#implemented`  ·  stage 17  ·  specialises `DriverProcess`
+
+user/usbhid over libs/usb-host: the STM32MP157's EHCI controller, its hubs, and HID boot keyboards and mice, each served to the input core over a control channel of its own. devmgr starts it as a bus host and does not wait for it; its memory is pinned PIN_COHERENT. No QEMU machine has the device, so no boot test exercises it: its gates are libs/usb-host's tests against a model of EHCI and the board's bus, and it ran on the DK1 on 2026-09-23 (docs/INPUT.md §7).
 
 #### DriverBootstrap
 
@@ -3793,6 +3801,7 @@ Every element carrying @stage, which names the roadmap stage that owns it. An el
 | 17 | `FerrixStructure::Workspace::inputctl` | part | `#implemented` |
 | 17 | `FerrixDrivers::VirtioGpuDriver` | part | `#implemented` |
 | 17 | `FerrixDrivers::VirtioInputDriver` | part | `#implemented` |
+| 17 | `FerrixDrivers::UsbHidDriver` | part | `#implemented` |
 | 17 | `FerrixAssurance::DisplayTest` | verification | `#implemented` |
 | 17 | `FerrixAssurance::InputTest` | verification | `#implemented` |
 | 17 | `FerrixAssurance::SeatTest` | verification | `#implemented` |
@@ -3801,7 +3810,7 @@ Every element carrying @stage, which names the roadmap stage that owns it. An el
 | 19 | `FerrixStructure::Workspace::renderctl` | part | `#implemented` |
 | 19 | `FerrixAssurance::VideoTest` | verification | `#implemented` |
 
-177 elements across 18 stages.
+178 elements across 18 stages.
 
 ## Figures
 
@@ -3821,7 +3830,7 @@ Every diagram in this document, drawn from the model by scripts/sysml/diagrams.p
 | 10 | Demand fault | 5 nodes, 4 edges | `04-memory.sysml` | [ferrix-memory-demand-fault.svg](diagrams/ferrix-memory-demand-fault.svg) |
 | 11 | Domain lifecycle | 5 nodes, 5 edges | `05-scheduling.sysml` | [ferrix-scheduling-domain-lifecycle.svg](diagrams/ferrix-scheduling-domain-lifecycle.svg) |
 | 12 | Kernel object and its subtypes | 10 nodes, 9 edges | `06-objects.sysml` | [ferrix-objects-kernel-object.svg](diagrams/ferrix-objects-kernel-object.svg) |
-| 13 | Driver process and its subtypes | 5 nodes, 4 edges | `08-drivers.sysml` | [ferrix-drivers-driver-process.svg](diagrams/ferrix-drivers-driver-process.svg) |
+| 13 | Driver process and its subtypes | 6 nodes, 5 edges | `08-drivers.sysml` | [ferrix-drivers-driver-process.svg](diagrams/ferrix-drivers-driver-process.svg) |
 | 14 | Driver bootstrap | 8 nodes, 7 edges | `08-drivers.sysml` | [ferrix-drivers-driver-bootstrap.svg](diagrams/ferrix-drivers-driver-bootstrap.svg) |
 | 15 | Filesystem and its subtypes | 7 nodes, 6 edges | `09-storage.sysml` | [ferrix-storage-filesystem.svg](diagrams/ferrix-storage-filesystem.svg) |
 | 16 | The crate graph | 50 nodes, 107 edges | `02-structure.sysml` | [crate-dependencies.svg](diagrams/crate-dependencies.svg) |

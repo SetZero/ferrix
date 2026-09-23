@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "digest": "4ec781dacd9d388ca18a9fbf910bb4762d6fe3eb5933c5e10a8020d30b0941aa",
+  "digest": "d8b6a6ff59c7cad67295a99356d9885c8fc32689858b8054ec518c6dc03b281a",
   "files": [
     {
       "path": "docs/sysml/00-lifecycle.sysml",
@@ -57,9 +57,9 @@
   ],
   "summary": {
     "packages": 16,
-    "elements": 1629,
+    "elements": 1630,
     "maturity": {
-      "implemented": 259,
+      "implemented": 260,
       "inProgress": 7,
       "writtenAhead": 3,
       "planned": 41
@@ -14756,7 +14756,7 @@
           "definition": true,
           "maturity": "implemented",
           "stage": 10,
-          "doc": "An ordinary user process in its own Job, holding exactly the capabilities devmgr gave it. A driver fault is a process fault; a wedged driver is a Job kill. Five exist, native programs on user/rt under /lib/drivers: blk, net, gpu, input and vport, each a thin layer of handles over its libs/ crates.",
+          "doc": "An ordinary user process in its own Job, holding exactly the capabilities devmgr gave it. A driver fault is a process fault; a wedged driver is a Job kill. Seven exist, native programs on user/rt under /lib/drivers: blk, net, gpu, ltdc, input, usbhid and vport, each a thin layer of handles over its libs/ crates.",
           "source": {
             "file": "docs/sysml/08-drivers.sysml",
             "line": 136
@@ -14772,7 +14772,7 @@
               "type": "Job",
               "source": {
                 "file": "docs/sysml/08-drivers.sysml",
-                "line": 143
+                "line": 144
               }
             },
             {
@@ -14784,7 +14784,7 @@
               "doc": "One per BAR or MMIO window, and nothing outside it.",
               "source": {
                 "file": "docs/sysml/08-drivers.sysml",
-                "line": 144
+                "line": 145
               }
             },
             {
@@ -14796,7 +14796,7 @@
               "doc": "One per vector, bound to a Port.",
               "source": {
                 "file": "docs/sysml/08-drivers.sysml",
-                "line": 147
+                "line": 148
               }
             },
             {
@@ -14806,7 +14806,7 @@
               "type": "Port",
               "source": {
                 "file": "docs/sysml/08-drivers.sysml",
-                "line": 150
+                "line": 151
               }
             },
             {
@@ -14821,7 +14821,7 @@
               "doc": "Device addresses from the device's IOMMU domain.",
               "source": {
                 "file": "docs/sysml/08-drivers.sysml",
-                "line": 151
+                "line": 152
               }
             },
             {
@@ -14832,7 +14832,7 @@
               "doc": "To the kernel subsystem it serves: block, display, net, input.",
               "source": {
                 "file": "docs/sysml/08-drivers.sysml",
-                "line": 154
+                "line": 155
               }
             },
             {
@@ -14842,7 +14842,7 @@
               "type": "SharedRing",
               "source": {
                 "file": "docs/sysml/08-drivers.sysml",
-                "line": 157
+                "line": 158
               }
             }
           ]
@@ -14857,7 +14857,7 @@
           "doc": "The data path is not per-request IPC: driver and kernel share a descriptor ring in a VMO and ring a doorbell; requests batch. The same shape virtio and NVMe already use. libs/virtio's split virtqueue (driver and device halves, over abstract shared memory) is the first of these. Between kernel and driver: libs/blkring (docs/BLOCK-RING.md) and libs/netring (docs/NET-RING.md), with kernel/src/block_ring and kernel/src/net_ring as the kernel's ends and doorbells as port packets. The display and input drivers need none: frames do not move, and their control channels carry the rest.",
           "source": {
             "file": "docs/sysml/08-drivers.sysml",
-            "line": 160
+            "line": 161
           },
           "children": [
             {
@@ -14870,7 +14870,7 @@
               "type": "Vmo",
               "source": {
                 "file": "docs/sysml/08-drivers.sysml",
-                "line": 172
+                "line": 173
               }
             },
             {
@@ -14879,7 +14879,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/08-drivers.sysml",
-                "line": 173
+                "line": 174
               }
             },
             {
@@ -14888,7 +14888,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/08-drivers.sysml",
-                "line": 174
+                "line": 175
               }
             },
             {
@@ -14897,7 +14897,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/08-drivers.sysml",
-                "line": 175
+                "line": 176
               }
             }
           ]
@@ -14912,7 +14912,7 @@
           "doc": "A native program on user/rt, not a musl binary: user/devmgr, /sbin/devmgr. Receives a handle per device node, matches a driver, spawns it in its own Job with the four resources above. The kernel starts it from stage 10's boot check with DEVICES messages holding a job, every device node twice and every driver image /lib/drivers/MANIFEST lists (kernel/src/devmgr.rs, libs/devmgr-proto); it matches virtio-blk, virtio-net, virtio-gpu, virtio-input and the virtio-serial port by a table of its own, starts each driver with START, waits for every one but the port driver to be PUBLISHED before the next, and REPORTs. docs/DEVMGR.md.",
           "source": {
             "file": "docs/sysml/08-drivers.sysml",
-            "line": 178
+            "line": 179
           },
           "children": [
             {
@@ -14921,7 +14921,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/08-drivers.sysml",
-                "line": 191
+                "line": 192
               }
             },
             {
@@ -14930,7 +14930,7 @@
               "kind": "action",
               "source": {
                 "file": "docs/sysml/08-drivers.sysml",
-                "line": 192
+                "line": 193
               }
             },
             {
@@ -14941,7 +14941,7 @@
               "doc": "device_quiesce after a driver's TERMINATED: the kernel waits for the block, display and render cores to let the device go (kernel/src/claim.rs), then DIED.",
               "source": {
                 "file": "docs/sysml/08-drivers.sysml",
-                "line": 193
+                "line": 194
               }
             },
             {
@@ -14952,7 +14952,7 @@
               "doc": "A display driver that died is started again on a duplicate of devmgr's kept device handle, at most eight times a device; its card returns as the number it had. RESTARTED tells the kernel. docs/DEVMGR.md section 4.",
               "source": {
                 "file": "docs/sysml/08-drivers.sysml",
-                "line": 198
+                "line": 199
               }
             }
           ]
@@ -14968,7 +14968,7 @@
           "doc": "The first driver: virtio-blk as a user process. Exit test: a sector read through ring 3 with the IOMMU on, and a deliberate out-of-domain DMA attempt faulting. user/blk over libs/virtio-blk and libs/blkserve; the exit is met in the boot test, with VT-d translating on x86-64 and the SMMUv3 on AArch64, and ARMv7-A in degraded trusted mode.",
           "source": {
             "file": "docs/sysml/08-drivers.sysml",
-            "line": 206
+            "line": 207
           }
         },
         {
@@ -14981,7 +14981,7 @@
           "doc": "user/net over libs/virtio-net and libs/netserve, speaking the net ring; cargo xtask test-net is its gate.",
           "source": {
             "file": "docs/sysml/08-drivers.sysml",
-            "line": 216
+            "line": 217
           }
         },
         {
@@ -14995,7 +14995,7 @@
           "doc": "user/gpu over libs/virtio-gpu: the display core's card0 over displayctl, and since stage 19 the render core's renderD128 over renderctl, turning its messages into virtio-gpu's 3D commands. cargo xtask test-display is its gate. The one driver devmgr starts again after it dies (restartDriver).",
           "source": {
             "file": "docs/sysml/08-drivers.sysml",
-            "line": 221
+            "line": 222
           }
         },
         {
@@ -15009,7 +15009,21 @@
           "doc": "user/input over libs/virtio-input, feeding the input core's /dev/input/eventN over inputctl; cargo xtask test-input is its gate.",
           "source": {
             "file": "docs/sysml/08-drivers.sysml",
-            "line": 230
+            "line": 231
+          }
+        },
+        {
+          "name": "UsbHidDriver",
+          "qualifiedName": "FerrixDrivers::UsbHidDriver",
+          "kind": "part",
+          "definition": true,
+          "specializes": "DriverProcess",
+          "maturity": "implemented",
+          "stage": 17,
+          "doc": "user/usbhid over libs/usb-host: the STM32MP157's EHCI controller, its hubs, and HID boot keyboards and mice, each served to the input core over a control channel of its own. devmgr starts it as a bus host and does not wait for it; its memory is pinned PIN_COHERENT. No QEMU machine has the device, so no boot test exercises it: its gates are libs/usb-host's tests against a model of EHCI and the board's bus, and it ran on the DK1 on 2026-09-23 (docs/INPUT.md §7).",
+          "source": {
+            "file": "docs/sysml/08-drivers.sysml",
+            "line": 238
           }
         },
         {
@@ -15069,7 +15083,7 @@
           ],
           "source": {
             "file": "docs/sysml/08-drivers.sysml",
-            "line": 237
+            "line": 250
           },
           "children": [
             {
@@ -15081,7 +15095,7 @@
               ],
               "source": {
                 "file": "docs/sysml/08-drivers.sysml",
-                "line": 251
+                "line": 264
               }
             },
             {
@@ -15093,7 +15107,7 @@
               ],
               "source": {
                 "file": "docs/sysml/08-drivers.sysml",
-                "line": 252
+                "line": 265
               }
             },
             {
@@ -15105,7 +15119,7 @@
               ],
               "source": {
                 "file": "docs/sysml/08-drivers.sysml",
-                "line": 253
+                "line": 266
               }
             },
             {
@@ -15117,7 +15131,7 @@
               ],
               "source": {
                 "file": "docs/sysml/08-drivers.sysml",
-                "line": 254
+                "line": 267
               }
             },
             {
@@ -15129,7 +15143,7 @@
               ],
               "source": {
                 "file": "docs/sysml/08-drivers.sysml",
-                "line": 255
+                "line": 268
               }
             },
             {
@@ -15141,7 +15155,7 @@
               ],
               "source": {
                 "file": "docs/sysml/08-drivers.sysml",
-                "line": 256
+                "line": 269
               }
             }
           ]
@@ -22831,7 +22845,7 @@
       "title": "Driver process and its subtypes",
       "kind": "block",
       "direction": "TB",
-      "caption": "4 definitions specialize `DriverProcess`; the hollow arrow points at what they have in common.",
+      "caption": "5 definitions specialize `DriverProcess`; the hollow arrow points at what they have in common.",
       "nodes": [
         {
           "id": "FerrixDrivers::DriverProcess",
@@ -22870,6 +22884,14 @@
           "sublabel": "stage 17",
           "maturity": "implemented",
           "stage": 17
+        },
+        {
+          "id": "FerrixDrivers::UsbHidDriver",
+          "label": "UsbHidDriver",
+          "kind": "box",
+          "sublabel": "stage 17",
+          "maturity": "implemented",
+          "stage": 17
         }
       ],
       "edges": [
@@ -22893,6 +22915,12 @@
         },
         {
           "from": "FerrixDrivers::VirtioInputDriver",
+          "to": "FerrixDrivers::DriverProcess",
+          "kind": "specialization",
+          "label": ""
+        },
+        {
+          "from": "FerrixDrivers::UsbHidDriver",
           "to": "FerrixDrivers::DriverProcess",
           "kind": "specialization",
           "label": ""

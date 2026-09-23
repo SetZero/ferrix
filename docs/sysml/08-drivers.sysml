@@ -137,9 +137,10 @@ package FerrixDrivers {
         @stage { number = 10; }
         doc /* An ordinary user process in its own Job, holding exactly the
              * capabilities devmgr gave it. A driver fault is a process fault;
-             * a wedged driver is a Job kill. Five exist, native programs on
-             * user/rt under /lib/drivers: blk, net, gpu, input and vport,
-             * each a thin layer of handles over its libs/ crates. */
+             * a wedged driver is a Job kill. Seven exist, native programs on
+             * user/rt under /lib/drivers: blk, net, gpu, ltdc, input, usbhid
+             * and vport, each a thin layer of handles over its libs/
+             * crates. */
         ref part job : Job;
         part ioMappings : IoMapping[0..*] {
             doc /* One per BAR or MMIO window, and nothing outside it. */
@@ -232,6 +233,18 @@ package FerrixDrivers {
         doc /* user/input over libs/virtio-input, feeding the input core's
              * /dev/input/eventN over inputctl; cargo xtask test-input is its
              * gate. */
+    }
+
+    #implemented part def UsbHidDriver :> DriverProcess {
+        @stage { number = 17; }
+        doc /* user/usbhid over libs/usb-host: the STM32MP157's EHCI
+             * controller, its hubs, and HID boot keyboards and mice, each
+             * served to the input core over a control channel of its own.
+             * devmgr starts it as a bus host and does not wait for it; its
+             * memory is pinned PIN_COHERENT. No QEMU machine has the
+             * device, so no boot test exercises it: its gates are
+             * libs/usb-host's tests against a model of EHCI and the board's
+             * bus, and it ran on the DK1 on 2026-09-23 (docs/INPUT.md §7). */
     }
 
     #implemented action def DriverBootstrap {
