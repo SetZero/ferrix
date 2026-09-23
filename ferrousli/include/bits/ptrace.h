@@ -1,13 +1,10 @@
-#define PTRACE_GET_THREAD_AREA		25
-#define PTRACE_SET_THREAD_AREA		26
-#define PTRACE_ARCH_PRCTL		30
-#define PTRACE_SYSEMU			31
-#define PTRACE_SYSEMU_SINGLESTEP	32
-#define PTRACE_SINGLEBLOCK		33
-
-#define PT_GET_THREAD_AREA PTRACE_GET_THREAD_AREA
-#define PT_SET_THREAD_AREA PTRACE_SET_THREAD_AREA
-#define PT_ARCH_PRCTL PTRACE_ARCH_PRCTL
-#define PT_SYSEMU PTRACE_SYSEMU
-#define PT_SYSEMU_SINGLESTEP PTRACE_SYSEMU_SINGLESTEP
-#define PT_STEPBLOCK PTRACE_SINGLEBLOCK
+/* Ferrousli: the architecture's own copy of musl 1.2.5's bits/ptrace.h. */
+#if defined(__x86_64__)
+#include "x86_64/ptrace.h"
+#elif defined(__aarch64__)
+#include "aarch64/ptrace.h"
+#elif defined(__arm__)
+#include "arm/ptrace.h"
+#else
+#error "ferrousli supports x86-64, AArch64 and ARMv7-A"
+#endif

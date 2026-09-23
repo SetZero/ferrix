@@ -1,11 +1,10 @@
-struct semid_ds {
-	struct ipc_perm sem_perm;
-	time_t sem_otime;
-	long __unused1;
-	time_t sem_ctime;
-	long __unused2;
-	unsigned short sem_nsems;
-	char __sem_nsems_pad[sizeof(long)-sizeof(short)];
-	long __unused3;
-	long __unused4;
-};
+/* Ferrousli: the architecture's own copy of musl 1.2.5's bits/sem.h. */
+#if defined(__x86_64__)
+#include "x86_64/sem.h"
+#elif defined(__aarch64__)
+#include "aarch64/sem.h"
+#elif defined(__arm__)
+#include "arm/sem.h"
+#else
+#error "ferrousli supports x86-64, AArch64 and ARMv7-A"
+#endif
