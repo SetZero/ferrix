@@ -65,7 +65,11 @@ written through `MAP_SHARED`.
 Stage 16's exit, the goal, is met: `cargo xtask test-rustc` compiles
 `hello.rs` on Ferrix with the rust-lang.org `rustc`, linked through `cc`
 and `rust-lld`, from a btrfs volume, and runs what it made, on x86-64 and in
-CI since 2026-09-22. Stage 20, self-hosting, is what it unblocks.
+CI since 2026-09-22. Stage 20, self-hosting, has its first step: Ferrix
+builds its own x86-64 image. `cargo xtask test-selfhost` runs the same
+`cargo xtask build` a person runs on a Linux host inside Ferrix, with Cargo,
+from the tree and its vendored crates on a btrfs volume, and the image it
+made passes the boot test.
 Dynamic linking's exit is met on x86-64: Debian's glibc busybox runs on
 its own `ld-linux` on all three architectures, and on ferrousli's loader and
 `libc.so.6` in glibc's place on x86-64. Its Arm half waits on ferrousli's
@@ -130,7 +134,7 @@ sizes them.
 | Stage 14, real-time domains | *month* ≈ 40 | not started |
 | Stage 15, a real userland | *week* ≈ 20, of which job control is spent; most of the rest landed as zinc and uutils, and what is left is an init, sized at 67 points in `docs/INIT.md` §13, and 18 later | partially complete: init and gettys remain, designed, waiting on stage 13's cgroups |
 | ~~Stage 16, `rustc`~~ *exit met 2026-09-22* | ~~*the goal* ≈ 40~~ 8 spent | done |
-| Stage 20, self-hosting | *longer*, unsized | not started; stage 16's exit, which it waited on, is met |
+| Stage 20, self-hosting | *longer*, unsized | in progress: the x86-64 image builds on Ferrix and boots (2026-09-23) |
 | Stage 21, bare metal and a GPU of Ferrix's own | over 100, unsized | planned when bare-metal work is requested |
 
 Three things qualify these estimates:
@@ -6316,6 +6320,73 @@ and passes every test above. Moved from 17 on 2026-09-13, when the compositor
 became the goal after `rustc`; it is not on the compositor's path, and the
 compositor is cross-compiled until it is.
 
+**Exit:** the image the Ferrix-hosted compiler produces boots and passes every
+test above.
+
+**The first step is met (2026-09-23): Ferrix builds its own x86-64 image.**
+`cargo xtask test-selfhost` gives the guest one btrfs volume, mounted at
+`/data`: the stage 16 toolchain -- now with Cargo and the standard libraries
+for `x86_64-unknown-none` and `x86_64-unknown-uefi` --, every file git tracks
+in the checkout, and the workspace's crates.io dependencies from `cargo vendor`
+with a Cargo home pointing at them. zinc runs `cargo xtask build --arch
+x86_64` there, the command a person runs on a Linux host: Cargo compiles xtask
+for the guest, a glibc program like `rustc`, and xtask has Cargo compile the
+loader, the kernel and the native programs and writes the FAT image, with no
+network. The kernel commits the volume on its way to the power-off. The host
+then has `btrfs check --check-data-csum` judge what Ferrix wrote, takes the
+image and the kernel ELF out with `btrfs restore`, and boots that image with
+`test-boot`'s judgement. On nazuna under KVM, with four processors and 8 GiB,
+the build takes about 90 seconds of the guest's time:
+
+```
+   93.49 |   image /data/src/build/x86_64/ferrix.img (63 KiB loader, 75510 KiB kernel, 10666 KiB initramfs)
+   93.54 |   init     the shell exited with 20
+  x86_64: btrfs check found nothing wrong
+  x86_64: booting the image Ferrix built
+  x86_64: boot ok
+  x86_64: Ferrix built its own image, and it booted
+```
+
+The toolchain was never the problem: the same tree builds the same image in a
+`bwrap` sandbox on the host with nothing else of the host's. Four things in
+the kernel were, and the gate found three of them:
+
+* **Every file written on a writable btrfs was at most a page long.** The
+  writable mount answered a write with the offset it started at rather than
+  the one past it, so the kernel, which copies a `write` in 4 KiB at a time,
+  put every piece over the first. Stage 12 had written only through offsets
+  it named. rustc read back object files of exactly 4096 bytes.
+* **A btrfs file's writes could go with its inode.** The dirty pages and the
+  new length lived in the inode object, and only the VFS's bounded cache of
+  names kept that alive; a file closed and pushed out came back as the last
+  commit had it. Found by reading, on the way to the first; the mount now
+  holds every inode with dirty pages until its writeback.
+* **`MAP_FIXED` was two steps.** An unmap, which lets the space's lock go for
+  its shootdown, and then a map; another thread's `mmap` could take the range
+  between them. jemalloc re-maps its memory that way, and rustc died with
+  `SIGSEGV` within minutes, once reading memory it had just been given from a
+  three-page hole between two of its regions. A per-space layout lock now
+  makes each call that changes the map one step, as `mmap_lock` does on Linux.
+* **jemalloc did not know memory overcommits.** With no
+  `/proc/sys/vm/overcommit_memory` it assumed it must give memory back, and
+  did so with a `MAP_FIXED` pair and a shootdown each time: xtask alone took
+  minutes to compile and the address space broke into thousands of regions.
+  The file now says 1, Linux's `OVERCOMMIT_ALWAYS`, which is what the kernel
+  does.
+
+What the exit needs beyond the first step:
+
+* **The other two architectures.** Their kernels and loaders are built for
+  `aarch64-unknown-none-softfloat`, `aarch64-unknown-uefi`, `armv7a-none-eabi`
+  and `armv7-unknown-linux-musleabi`: four more standard libraries in the
+  sysroot, and three images for the host to boot.
+* **The programs the other tests boot.** zinc needs the musl targets'
+  standard libraries; uutils, busybox and the ports are built against
+  ferrousli, which is C, and the sysroot carries no C compiler (`cc1`); the
+  compositor is a workspace of its own, with its own crates to vendor.
+* **Every test, not the boot test.** The guest's image passes `test-boot`;
+  the exit is the whole matrix on the guest's images.
+
 ---
 
 ## Stage 21 — Bare metal, and a GPU of Ferrix's own  ·  *unsized, over 100 points*
@@ -6636,8 +6707,8 @@ and its distance from POSIX.1-2024, interface by interface, in
 ## Continuously, from stage 1
 
 * Every stage's exit criterion joins the CI boot test and stays there. As
-  it stands on 2026-09-23, CI runs `test-boot` on all three architectures and
-  `test-rustc`; the exits that need a binary the repository does not carry,
+  it stands on 2026-09-23, CI runs `test-boot` on all three architectures,
+  `test-rustc` and `test-selfhost`; the exits that need a binary the repository does not carry,
   a disk judged on the host or a screendump — `test-shell`, `test-vfs`,
   `test-btrfs`, `test-powerfail`, `test-display`, `test-input`, `test-seat`
   and `test-compositor` — run in the landing gates of `docs/BACKLOG.md`, not

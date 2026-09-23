@@ -618,6 +618,55 @@ pub(crate) fn watch_then(
     }
 }
 
+/// [`watch_then`], and after `until` wait for the guest to power itself off,
+/// however long that takes inside the timeout.
+///
+/// For a test that reads back a disk the guest wrote. The kernel commits
+/// `/data` on its way to the power-off (`power::finish`), and the few
+/// seconds [`watch_then`] gives a guest before killing QEMU are not enough
+/// to commit a build. A QEMU killed rather than exited is an error, since
+/// its last commit may be half written.
+///
+/// # Errors
+///
+/// As [`watch_then`], and when QEMU did not exit by itself with the status a
+/// clean power-off gives.
+pub(crate) fn watch_to_power_off(
+    arch: Arch,
+    image: &Path,
+    kernel: &Path,
+    args: &Args,
+    until: &str,
+) -> Result<Vec<String>> {
+    let deadline = Instant::now() + Duration::from_secs(args.timeout);
+    // Nothing to wait for but the end: `read_more` returns when the serial
+    // port closes, which is QEMU exiting.
+    let mut wait =
+        |watching: &mut Watching<'_>| watching.read_more(deadline, |_| false).map(|_| ());
+    let watched = watch_hooked(arch, image, kernel, args, until, Some(&mut wait))?;
+    match watched.verdict {
+        Verdict::Reached => {}
+        Verdict::Panicked => return Err(panicked(arch, &watched.log)),
+        Verdict::Silent => {
+            return Err(Error::new(format!(
+                "{arch}: `{until}` was not printed within {}s.\n  Serial output is in {}",
+                args.timeout,
+                watched.log.display()
+            )));
+        }
+    }
+    let code = watched.status.code();
+    if code != Some(0) && code != Some(DEBUG_EXIT_SUCCESS) {
+        return Err(Error::new(format!(
+            "{arch}: the guest did not power itself off ({}), so what it wrote to /data may \
+             not be committed.\n  Serial output is in {}",
+            watched.status,
+            watched.log.display()
+        )));
+    }
+    Ok(watched.lines)
+}
+
 /// The hook [`watch_then`] runs at the marker.
 type AtMarker<'a> = &'a mut dyn FnMut(&mut Watching<'_>) -> Result<()>;
 
@@ -1478,22 +1527,28 @@ fn attach_btrfs_disk(command: &mut Command, arch: Arch) -> Result<()> {
     attach_btrfs_write_disk(command, arch)
 }
 
-/// Attach the btrfs compiler volume for `test-rustc` or a default boot. It carries no
-/// root label, so the kernel mounts it at `/data`. Under `snapshot=on`: what
-/// the guest writes goes to a file QEMU throws away, so the next run reads
-/// what this one did.
+/// Attach the btrfs compiler volume for `test-rustc`, `test-selfhost` or a
+/// default boot. It carries no root label, so the kernel mounts it at
+/// `/data`. Under `snapshot=on` unless [`Args::data_image_kept`]: what the
+/// guest writes goes to a file QEMU throws away, so the next run reads the
+/// volume as this one did.
 fn attach_data_image(command: &mut Command, arch: Arch, args: &Args) {
     let Some(volume) = &args.data_image else {
         return;
     };
+    let (snapshot, said) = if args.data_image_kept {
+        ("", "kept")
+    } else {
+        (",snapshot=on", "snapshot")
+    };
     println!(
-        "  {arch}: btrfs volume {} at /data, snapshot",
+        "  {arch}: btrfs volume {} at /data, {said}",
         display(volume)
     );
     let _ = command.args([
         "-drive",
         &format!(
-            "file={},if=none,format=raw,id=btrfsdata,snapshot=on",
+            "file={},if=none,format=raw,id=btrfsdata{snapshot}",
             display(volume)
         ),
     ]);

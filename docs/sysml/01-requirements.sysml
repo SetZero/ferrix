@@ -73,7 +73,7 @@ package FerrixRequirements {
     }
 
     requirement <'G+'> selfHosting : GoalRequirement {
-        doc /* Stage 17: build Ferrix on Ferrix. The image the Ferrix-hosted
+        doc /* Stage 20: build Ferrix on Ferrix. The image the Ferrix-hosted
              * compiler produces boots and passes every boot test. */
     }
     dependency from selfHosting to hostsRustc;

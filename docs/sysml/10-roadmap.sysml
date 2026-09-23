@@ -587,12 +587,22 @@ package FerrixRoadmap {
              * Proton. */
     }
 
-    #planned requirement <'S20'> stage20SelfHosting : Stage {
+    #inProgress requirement <'S20'> stage20SelfHosting : Stage {
         attribute :>> number = 20;
-        attribute :>> status = StageStatus::Planned;
+        attribute :>> status = StageStatus::InProgress;
         attribute :>> size = "longer";
         doc /* Build Ferrix on Ferrix; the image the hosted compiler produces
-             * boots and passes every test above. */
+             * boots and passes every test above. First step met 2026-09-23:
+             * `cargo xtask test-selfhost` runs `cargo xtask build --arch
+             * x86_64` on Ferrix, from the toolchain, the tree and its
+             * vendored crates on a btrfs volume, and the image it made
+             * passes the boot test on the host. It fixed the writable
+             * btrfs's write offset and dirty-inode lifetime, made MAP_FIXED
+             * one step under a per-space layout lock, and added
+             * /proc/sys/vm/overcommit_memory. Owed: the other two
+             * architectures, the programs the other tests boot (musl std,
+             * a C compiler for ferrousli, the compositor's crates), and the
+             * whole matrix on the guest's images. */
     }
 
     // -----------------------------------------------------------------------

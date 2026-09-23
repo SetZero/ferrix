@@ -411,10 +411,11 @@ jobs:
   # downloads are cached by the script's hash, which pins them. Under KVM,
   # which the hosted runners have once /dev/kvm is opened to the user: LLVM
   # emulated instruction by instruction takes minutes where this takes
-  # seconds.
+  # seconds. Then stage 20's first step on the same volume's tree: Ferrix
+  # runs `cargo xtask build` on itself, and the image it made must boot.
   # ----------------------------------------------------------------
   rustc:
-    name: rustc on Ferrix (x86_64)
+    name: rustc on Ferrix, and Ferrix built on Ferrix (x86_64)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -454,12 +455,29 @@ jobs:
       - name: Compile and run hello.rs on Ferrix
         run: cargo xtask test-rustc --release --accel kvm --timeout 900
 
-      - name: Keep the serial log
+      # Before the next boot writes the serial log again.
+      - name: Keep hello.rs's serial log aside
+        if: always()
+        run: cp build/x86_64/serial.log build/x86_64/rustc-serial.log || true
+
+      # Stage 20's first step: `cargo xtask build` run inside Ferrix, and the
+      # image it made booted. Its crates are vendored from Cargo's cache, so
+      # every one the lock names is fetched first.
+      - name: Fetch every crate the workspace locks
+        run: cargo fetch --locked
+
+      - name: Build Ferrix on Ferrix, and boot what it built
+        run: cargo xtask test-selfhost --accel kvm --timeout 1800
+
+      - name: Keep the serial logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: serial-rustc
-          path: build/x86_64/serial.log
+          path: |
+            build/x86_64/rustc-serial.log
+            build/x86_64/selfhost/build-serial.log
+            build/x86_64/serial.log
           if-no-files-found: ignore
 
   # ----------------------------------------------------------------

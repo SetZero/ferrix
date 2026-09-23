@@ -21,6 +21,17 @@ rustc 1.97.1 (8bab26f4f 2026-07-14)
 rustc-gate: hello from rustc on Ferrix
 ```
 
+And since 2026-09-23 it builds itself. `cargo xtask test-selfhost` gives
+Ferrix that toolchain with Cargo added, this tree and its vendored crates on
+one btrfs volume, runs `cargo xtask build --arch x86_64` inside it -- the
+command you run on a Linux host -- then takes the image Ferrix made off the
+volume and boots it:
+
+```
+   93.49 |   image /data/src/build/x86_64/ferrix.img (63 KiB loader, 75510 KiB kernel, 10666 KiB initramfs)
+  x86_64: Ferrix built its own image, and it booted
+```
+
 ## What exists today
 
 [The roadmap](docs/ROADMAP.md) is the authority; its *Where it stands* is
@@ -150,6 +161,16 @@ it. Without the fetched disk, those boots still start and say why rustc is
 absent. The FAT boot image and 1 GiB `root.img` do not contain the 1.7 GiB
 toolchain; the sysroot is a companion disk, so copying the FAT image alone
 will not carry rustc to another host.
+
+`cargo xtask test-selfhost --accel kvm` is stage 20's gate, on a Linux host
+with `btrfs-progs`. It stages the sysroot's tree, every file git tracks here
+as the work tree has it, and `cargo vendor --offline` of the workspace's
+crates (run `cargo fetch` once if Cargo's cache lacks one) into
+`build/x86_64/selfhost/`, makes a writable btrfs volume of them, and boots
+Ferrix with 8 GiB to run `cargo xtask build --arch x86_64` on it. After the
+guest powers off, `btrfs check` judges the volume, `btrfs restore` takes the
+image out, and the boot test boots it. The build boot's serial log is kept in
+`build/x86_64/selfhost/build-serial.log`.
 
 `--net` gives the guest a virtio-net card whose other end is `xtask`'s own
 gateway on a loopback UDP socket: the guest is `10.0.2.15`, `10.0.2.2` is the
