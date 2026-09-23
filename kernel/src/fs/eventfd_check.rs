@@ -46,6 +46,8 @@ const AT_EVENTS: u64 = 64;
 const PATIENCE_NANOS: u64 = 2_000_000_000;
 /// How long a reader must still be waiting before the write, in nanoseconds.
 const STILL_WAITING_NANOS: u64 = 20_000_000;
+/// How often the check looks for a waiter on the queue, in nanoseconds.
+const LISTED_LOOK_NANOS: u64 = 1_000_000;
 
 /// How long the quiet poll waits.
 const QUIET_POLL_MILLIS: i32 = 300;
@@ -291,6 +293,7 @@ fn check_a_blocked_read_is_woken(counts: &mut Counts) -> Result<(), &'static str
         0,
         ferrix_sched::NICE_0_WEIGHT,
     )?;
+    until_listed(&inner, || READER_ANSWER.lock().is_some());
     crate::sched::sleep_for(STILL_WAITING_NANOS);
     if READER_ANSWER.lock().is_some() {
         return Err("a read of an empty blocking eventfd did not wait");
@@ -318,6 +321,23 @@ fn check_a_blocked_read_is_woken(counts: &mut Counts) -> Result<(), &'static str
     }
     counts.reads += 1;
     Ok(())
+}
+
+/// Wait until a task is listed on `counter`'s readable queue, `answered` says
+/// the task came back without one, or the patience runs out -- whichever is
+/// first. The check that follows says which it was.
+///
+/// The write that is to end the wait must find the waiter on the queue, and a
+/// fixed sleep only assumes it got there. Under TCG on a host running other
+/// gates, where the scheduler's own check ran fifteen times slower than on a
+/// quiet one, a spawned task can wait longer than 20 ms for its first turn;
+/// the write would then find nobody to wake and the task would read the value
+/// without waiting, which the check would blame on the wake.
+fn until_listed(counter: &eventfd::EventFd, answered: impl Fn() -> bool) {
+    let deadline = crate::timer::now_nanos().saturating_add(PATIENCE_NANOS);
+    while counter.readers_listed() == 0 && !answered() && crate::timer::now_nanos() < deadline {
+        crate::sched::sleep_for(LISTED_LOOK_NANOS);
+    }
 }
 
 /// The waiting task: one blocking read of [`READER_FILE`].
@@ -436,6 +456,7 @@ fn check_waits_are_woken(
         let ended_before = inner.waits_ended_by_a_wake();
         let waiter =
             crate::sched::spawn("poll-waiter", poll_waiter, 0, ferrix_sched::NICE_0_WEIGHT)?;
+        until_listed(&inner, || WAITER_ANSWER.lock().is_some());
         crate::sched::sleep_for(STILL_WAITING_NANOS);
         if WAITER_ANSWER.lock().is_some() {
             return Err("a poll or epoll_wait on an empty eventfd did not wait");

@@ -269,6 +269,13 @@ impl WaitQueue {
         self.woken.load(Ordering::Relaxed)
     }
 
+    /// How many tasks are listed on the queue now, for the checks: one that
+    /// means to show a waiter was ended by a wake has to know the waiter got
+    /// onto the queue before the wake, not guess it from how long it gave it.
+    pub(crate) fn listed(&self) -> usize {
+        self.waiters.lock().len()
+    }
+
     /// How many times the queue has been woken: see the field.
     pub(crate) fn wakes(&self) -> u64 {
         self.wakes.load(Ordering::Relaxed)

@@ -35,6 +35,20 @@ pub(crate) const VALUE_BYTES: usize = 8;
 /// The deadline an eventfd's wait passes: none, as a pipe's.
 const FOREVER: u64 = u64::MAX;
 
+/// How long a blocked read or write sleeps between its own looks: the long
+/// one `poll` gives files it trusts, because every change to the counter
+/// wakes the queue its waiters are on -- a write the readable one, a read the
+/// writable one -- and a signal wakes the task itself.
+///
+/// A queue's own 5 ms slices took the waiter off the queue and put it back
+/// two hundred times a second, and a write that landed in between found
+/// nobody to wake: the reader saw the value by looking, which is correct but
+/// is not the wake the self-check asks about. The check's 20 ms is four of
+/// those slices, so the write and a slice's end can fall on the same tick, and
+/// on a loaded host the check failed that way (FX-0882, twice on ARMv7-A in
+/// test-compositor).
+const RECHECK: u64 = fs::wake::TRUSTED_RECHECK_NANOS;
+
 /// An eventfd.
 pub(crate) struct EventFd {
     /// The counter.
@@ -110,6 +124,12 @@ impl EventFd {
             .wrapping_add(self.writable.waits_ended_by_a_wake())
     }
 
+    /// How many tasks wait on the counter becoming readable now, for the
+    /// checks: a blocked read, and a `poll` or `epoll_wait` watching for it.
+    pub(crate) fn readers_listed(&self) -> usize {
+        self.readable.listed()
+    }
+
     /// The counter now, for the checks.
     pub(crate) fn count(&self) -> u64 {
         *self.count.lock()
@@ -167,9 +187,11 @@ impl Inode for EventFd {
             if nonblock {
                 return Err(Errno::EAGAIN);
             }
-            let _ = self.readable.wait_until_deadline(
+            let _ = WaitQueue::wait_on_any(
+                &[&self.readable],
                 || *self.count.lock() > 0 || interrupted(caller.as_ref()),
                 FOREVER,
+                RECHECK,
             );
             if interrupted(caller.as_ref()) {
                 // A restart code: an eventfd read restarts under `SA_RESTART`,
@@ -195,9 +217,11 @@ impl Inode for EventFd {
             if nonblock {
                 return Err(Errno::EAGAIN);
             }
-            let _ = self.writable.wait_until_deadline(
+            let _ = WaitQueue::wait_on_any(
+                &[&self.writable],
                 || fits(*self.count.lock(), value) || interrupted(caller.as_ref()),
                 FOREVER,
+                RECHECK,
             );
             if interrupted(caller.as_ref()) {
                 return Err(Errno::ERESTARTSYS);
