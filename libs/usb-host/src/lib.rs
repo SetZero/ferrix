@@ -41,6 +41,7 @@ pub mod bus;
 pub mod ehci;
 pub mod hid;
 pub mod hub;
+pub mod report;
 pub mod usb;
 
 #[cfg(test)]

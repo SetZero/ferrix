@@ -1,27 +1,31 @@
-//! The HID boot protocol: a keyboard's eight-byte report and a mouse's three
-//! or four, turned into the events Linux's HID driver makes of them, and the
-//! HELLO that declares those events.
+//! HID input and output: a device's reports turned into the events Linux's
+//! HID driver makes of them, the HELLO declaring those events, and the LED
+//! output report a keyboard is sent.
 //!
-//! A boot report's layout is fixed by the HID specification's appendix B,
-//! which is what lets a driver read one without the device's report
-//! descriptor. The keyboard's usages become key codes by Linux's own table,
-//! `hid_keyboard` in `drivers/hid/hid-input.c`, so a key reads the same here
-//! as it does there; its events come in Linux's order too: the modifiers,
-//! then keys let go, then keys pressed, then `SYN_REPORT`.
+//! Every function is read through a report descriptor ([`crate::report`]):
+//! the device's own, in the report protocol, or for a boot interface whose
+//! descriptor could not be read, the layout the HID specification's appendix
+//! B fixes for the boot protocol, written out as a descriptor here
+//! ([`BOOT_KEYBOARD`], [`BOOT_MOUSE`]). One interpreter reads both.
+//!
+//! Usages become codes by the tables of Linux's `drivers/hid/hid-input.c`,
+//! as far as keyboards, mice and their media keys need them: the keyboard
+//! page by `hid_keyboard`, buttons from `BTN_MOUSE` in a mouse and
+//! `BTN_MISC` elsewhere, the relative desktop axes, the system controls, and
+//! the consumer page's media and application keys. Events come in the
+//! report's field order, an array's keys let go before the ones pressed, and
+//! a report ends in `SYN_REPORT`, as there.
 
-use ferrix_inputctl::message::{Bitmaps, DeviceId, Hello, RawEvent, Text, VERSION};
+use ferrix_inputctl::message::{Bitmaps, DeviceId, Hello, MAX_EVENTS, RawEvent, Text, VERSION};
 use ferrix_linux_abi::input::{
-    BTN_LEFT, BUS_USB, EV_KEY, EV_REL, EV_SYN, REL_WHEEL, REL_X, REL_Y, SYN_REPORT,
+    BTN_MISC, BTN_MOUSE, BUS_USB, EV_KEY, EV_LED, EV_REL, EV_SYN, KEY_CNT, REL_HWHEEL, REL_WHEEL,
+    REL_X, REL_Y, SYN_REPORT,
 };
 
-/// What a boot interface is.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Kind {
-    /// A keyboard.
-    Keyboard,
-    /// A mouse.
-    Mouse,
-}
+use crate::report::{
+    self, Descriptor, Direction, Field, PAGE_BUTTON, PAGE_CONSUMER, PAGE_DESKTOP, PAGE_KEYBOARD,
+    PAGE_LED, Usage, split,
+};
 
 /// `hid_keyboard`: each keyboard usage's key code, zero for none.
 pub const KEYBOARD_CODES: [u8; 256] = [
@@ -43,35 +47,180 @@ pub const KEYBOARD_CODES: [u8; 256] = [
     150, 158, 159, 128, 136, 177, 178, 176, 142, 152, 173, 140, 0, 0, 0, 0, //
 ];
 
-/// The usage of the first modifier, left control: bit 0 of the report's
-/// first byte, and bit `n` is usage `0xE0 + n`.
-const FIRST_MODIFIER: usize = 0xE0;
+/// The consumer page's usages `hid-input.c` maps to keys, and their codes.
+pub const CONSUMER_CODES: [(u16, u16); 32] = [
+    (0x030, 116), // KEY_POWER
+    (0x032, 142), // KEY_SLEEP
+    (0x040, 139), // KEY_MENU
+    (0x06F, 225), // KEY_BRIGHTNESSUP
+    (0x070, 224), // KEY_BRIGHTNESSDOWN
+    (0x0B0, 207), // KEY_PLAY
+    (0x0B1, 119), // KEY_PAUSE
+    (0x0B2, 167), // KEY_RECORD
+    (0x0B3, 208), // KEY_FASTFORWARD
+    (0x0B4, 168), // KEY_REWIND
+    (0x0B5, 163), // KEY_NEXTSONG
+    (0x0B6, 165), // KEY_PREVIOUSSONG
+    (0x0B7, 166), // KEY_STOPCD
+    (0x0B8, 161), // KEY_EJECTCD
+    (0x0CD, 164), // KEY_PLAYPAUSE
+    (0x0E2, 113), // KEY_MUTE
+    (0x0E9, 115), // KEY_VOLUMEUP
+    (0x0EA, 114), // KEY_VOLUMEDOWN
+    (0x183, 171), // KEY_CONFIG
+    (0x18A, 155), // KEY_MAIL
+    (0x192, 140), // KEY_CALC
+    (0x194, 144), // KEY_FILE
+    (0x196, 150), // KEY_WWW
+    (0x19E, 152), // KEY_COFFEE
+    (0x1A6, 138), // KEY_HELP
+    (0x221, 217), // KEY_SEARCH
+    (0x223, 172), // KEY_HOMEPAGE
+    (0x224, 158), // KEY_BACK
+    (0x225, 159), // KEY_FORWARD
+    (0x226, 128), // KEY_STOP
+    (0x227, 173), // KEY_REFRESH
+    (0x22A, 156), // KEY_BOOKMARKS
+];
 
-/// A report's key slots: bytes 2 to 7.
-const KEY_SLOTS: usize = 6;
+/// Generic Desktop's system controls: power down, sleep, wake up.
+const SYSTEM_CODES: [(u16, u16); 3] = [(0x81, 116), (0x82, 142), (0x83, 143)];
 
-/// `ErrorRollOver`: every slot says it when more keys are down than fit.
-const ROLL_OVER: u8 = 0x01;
+/// The consumer page's horizontal wheel, `AC Pan`.
+const AC_PAN: u16 = 0x238;
 
-/// The mouse buttons a boot report's first byte may carry, bit by bit:
-/// left, right, middle, side, extra.
-const MOUSE_BUTTONS: u16 = 5;
+/// The keyboard page's `ErrorRollOver`: an array reporting it says more keys
+/// are down than fit, and the report is ignored.
+const ROLL_OVER: Usage = 0x0007_0001;
 
-/// The most events one report makes: eight modifiers, six keys let go and
-/// six pressed, and `SYN_REPORT`.
-pub const MAX_REPORT_EVENTS: usize = 8 + KEY_SLOTS * 2 + 1;
+/// The applications, as their collections' usages.
+const APPLICATION_POINTER: Usage = 0x0001_0001;
+const APPLICATION_MOUSE: Usage = 0x0001_0002;
+const APPLICATION_KEYBOARD: Usage = 0x0001_0006;
+const APPLICATION_SYSTEM: Usage = 0x0001_0080;
+const APPLICATION_CONSUMER: Usage = 0x000C_0001;
+
+/// The most buttons mapped: sixteen, `BTN_MOUSE` to `BTN_MOUSE + 15`.
+const MAX_BUTTONS: u16 = 16;
+
+/// The boot keyboard's report descriptor, HID 1.11 appendix B.1: eight
+/// modifier bits, a reserved byte, five LED bits out, six key slots.
+pub const BOOT_KEYBOARD: [u8; 63] = [
+    0x05, 0x01, 0x09, 0x06, 0xA1, 0x01, 0x05, 0x07, 0x19, 0xE0, 0x29, 0xE7, 0x15, 0x00, 0x25, 0x01,
+    0x75, 0x01, 0x95, 0x08, 0x81, 0x02, 0x95, 0x01, 0x75, 0x08, 0x81, 0x01, 0x95, 0x05, 0x75, 0x01,
+    0x05, 0x08, 0x19, 0x01, 0x29, 0x05, 0x91, 0x02, 0x95, 0x01, 0x75, 0x03, 0x91, 0x01, 0x95, 0x06,
+    0x75, 0x08, 0x15, 0x00, 0x25, 0x65, 0x05, 0x07, 0x19, 0x00, 0x29, 0x65, 0x81, 0x00, 0xC0,
+];
+
+/// The boot mouse's: appendix B.2's three bytes, with the two side buttons
+/// and the wheel byte many boot mice send too (a report without them reads
+/// as their being still).
+pub const BOOT_MOUSE: [u8; 52] = [
+    0x05, 0x01, 0x09, 0x02, 0xA1, 0x01, 0x09, 0x01, 0xA1, 0x00, 0x05, 0x09, 0x19, 0x01, 0x29, 0x05,
+    0x15, 0x00, 0x25, 0x01, 0x95, 0x05, 0x75, 0x01, 0x81, 0x02, 0x95, 0x01, 0x75, 0x03, 0x81, 0x01,
+    0x05, 0x01, 0x09, 0x30, 0x09, 0x31, 0x09, 0x38, 0x15, 0x81, 0x25, 0x7F, 0x75, 0x08, 0x95, 0x03,
+    0x81, 0x06, 0xC0, 0xC0,
+];
+
+/// The event a usage in `application` makes: a key or button, or with
+/// `relative` an axis. `None` for what is not mapped.
+#[must_use]
+pub fn map(usage: Usage, application: Usage, relative: bool) -> Option<(u16, u16)> {
+    let (page, id) = split(usage);
+    let key = |code: u16| (code != 0).then_some((EV_KEY, code));
+    match page {
+        PAGE_KEYBOARD if !relative => key(u16::from(*KEYBOARD_CODES.get(usize::from(id))?)),
+        PAGE_BUTTON if !relative && (1..=MAX_BUTTONS).contains(&id) => {
+            let base = match application {
+                APPLICATION_MOUSE | APPLICATION_POINTER => BTN_MOUSE,
+                _ => BTN_MISC,
+            };
+            key(base + id - 1)
+        }
+        PAGE_DESKTOP if relative => match id {
+            0x30 => Some((EV_REL, REL_X)),
+            0x31 => Some((EV_REL, REL_Y)),
+            0x38 => Some((EV_REL, REL_WHEEL)),
+            _ => None,
+        },
+        PAGE_DESKTOP => SYSTEM_CODES
+            .iter()
+            .find(|(usage, _)| *usage == id)
+            .and_then(|&(_, code)| key(code)),
+        PAGE_CONSUMER if relative => (id == AC_PAN).then_some((EV_REL, REL_HWHEEL)),
+        PAGE_CONSUMER => CONSUMER_CODES
+            .iter()
+            .find(|(usage, _)| *usage == id)
+            .and_then(|&(_, code)| key(code)),
+        _ => None,
+    }
+}
+
+/// The LED an LED-page usage names: Num Lock, Caps Lock, Scroll Lock,
+/// Compose and Kana are `LED_NUML` to `LED_KANA`, 0 to 4.
+#[must_use]
+pub fn led(usage: Usage) -> Option<u16> {
+    let (page, id) = split(usage);
+    (page == PAGE_LED && (1..=5).contains(&id)).then(|| id - 1)
+}
+
+/// What a function mostly is, by its first application that maps anything:
+/// for its name and the driver's console lines.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Kind {
+    /// A keyboard.
+    Keyboard,
+    /// A mouse or other pointer.
+    Mouse,
+    /// Media and application keys.
+    Consumer,
+    /// Power, sleep and wake.
+    System,
+    /// Anything else that maps a key.
+    Other,
+}
+
+impl Kind {
+    /// The suffix Linux's HID core names an input by its application with.
+    #[must_use]
+    pub const fn suffix(self) -> Option<&'static str> {
+        match self {
+            Kind::Keyboard => Some("Keyboard"),
+            Kind::Mouse => Some("Mouse"),
+            Kind::Consumer => Some("Consumer Control"),
+            Kind::System => Some("System Control"),
+            Kind::Other => None,
+        }
+    }
+
+    /// A word for the console.
+    #[must_use]
+    pub const fn word(self) -> &'static str {
+        match self {
+            Kind::Keyboard => "keyboard",
+            Kind::Mouse => "mouse",
+            Kind::Consumer => "media keys",
+            Kind::System => "system keys",
+            Kind::Other => "input",
+        }
+    }
+}
+
+/// The most events one report makes, leaving room for `SYN_REPORT` in one
+/// EVENTS message; a report that makes more is cut there.
+pub const MAX_REPORT_EVENTS: usize = MAX_EVENTS - 1;
 
 /// The events one report made.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct EventBuf {
-    events: [RawEvent; MAX_REPORT_EVENTS],
+    events: [RawEvent; MAX_EVENTS],
     len: usize,
 }
 
 impl Default for EventBuf {
     fn default() -> Self {
         EventBuf {
-            events: [RawEvent::default(); MAX_REPORT_EVENTS],
+            events: [RawEvent::default(); MAX_EVENTS],
             len: 0,
         }
     }
@@ -79,7 +228,9 @@ impl Default for EventBuf {
 
 impl EventBuf {
     fn push(&mut self, kind: u16, code: u16, value: i32) {
-        if let Some(slot) = self.events.get_mut(self.len) {
+        if self.len < MAX_REPORT_EVENTS
+            && let Some(slot) = self.events.get_mut(self.len)
+        {
             *slot = RawEvent::new(kind, code, value);
             self.len += 1;
         }
@@ -87,9 +238,15 @@ impl EventBuf {
 
     /// Close the report with `SYN_REPORT`, if it holds anything.
     fn finish(&mut self) {
-        if self.len > 0 {
-            self.push(EV_SYN, SYN_REPORT, 0);
+        if let (true, Some(slot)) = (self.len > 0, self.events.get_mut(self.len)) {
+            *slot = RawEvent::new(EV_SYN, SYN_REPORT, 0);
+            self.len += 1;
         }
+    }
+
+    /// Empty it.
+    pub fn clear(&mut self) {
+        self.len = 0;
     }
 
     /// The events, empty for a report that changed nothing.
@@ -99,124 +256,286 @@ impl EventBuf {
     }
 }
 
-/// What a keyboard last reported.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
-pub struct KeyboardState {
-    modifiers: u8,
-    keys: [u8; KEY_SLOTS],
-}
+/// Keys and buttons down, a bit per code.
+const KEY_BYTES: usize = (KEY_CNT as usize).div_ceil(8);
 
-/// What a mouse last reported.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
-pub struct MouseState {
-    buttons: u8,
-}
+/// Array values kept between reports, over every array field.
+const MAX_HELD: usize = 64;
 
-/// A boot interface's state between reports.
+/// One function's reader: its descriptor, and what its last reports said.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum State {
-    /// A keyboard's.
-    Keyboard(KeyboardState),
-    /// A mouse's.
-    Mouse(MouseState),
+pub struct Interpreter {
+    descriptor: Descriptor,
+    /// Keys and buttons down.
+    down: [u8; KEY_BYTES],
+    /// Each array field's values in the last report, from `held_at`.
+    held: [Usage; MAX_HELD],
+    held_at: [u8; report::MAX_FIELDS],
+    /// LEDs lit, a bit per LED code.
+    leds: u16,
 }
 
-impl State {
-    /// A fresh state for `kind`: nothing pressed.
+impl Interpreter {
+    /// A reader of reports `descriptor` describes, nothing pressed.
     #[must_use]
-    pub const fn new(kind: Kind) -> State {
-        match kind {
-            Kind::Keyboard => State::Keyboard(KeyboardState {
-                modifiers: 0,
-                keys: [0; KEY_SLOTS],
-            }),
-            Kind::Mouse => State::Mouse(MouseState { buttons: 0 }),
+    pub fn new(descriptor: Descriptor) -> Interpreter {
+        let mut held_at = [u8::MAX; report::MAX_FIELDS];
+        let mut next = 0_usize;
+        for (slot, field) in held_at.iter_mut().zip(descriptor.fields()) {
+            let count = usize::from(field.count);
+            if field.direction == Direction::Input && !field.variable && next + count <= MAX_HELD {
+                *slot = next as u8;
+                next += count;
+            }
+        }
+        Interpreter {
+            descriptor,
+            down: [0; KEY_BYTES],
+            held: [0; MAX_HELD],
+            held_at,
+            leds: 0,
         }
     }
 
-    /// The events `report` makes, given what came before it.
-    pub fn report(&mut self, report: &[u8]) -> EventBuf {
-        match self {
-            State::Keyboard(state) => keyboard_report(state, report),
-            State::Mouse(state) => mouse_report(state, report),
+    /// The descriptor.
+    #[must_use]
+    pub const fn descriptor(&self) -> &Descriptor {
+        &self.descriptor
+    }
+
+    /// What the function mostly is.
+    #[must_use]
+    pub fn kind(&self) -> Kind {
+        for field in self.descriptor.fields() {
+            let maps = field.direction == Direction::Input
+                && !field.constant
+                && self
+                    .descriptor
+                    .all_usages(field)
+                    .any(|usage| map(usage, field.application, field.relative).is_some());
+            if !maps {
+                continue;
+            }
+            return match field.application {
+                APPLICATION_KEYBOARD => Kind::Keyboard,
+                APPLICATION_MOUSE | APPLICATION_POINTER => Kind::Mouse,
+                APPLICATION_CONSUMER => Kind::Consumer,
+                APPLICATION_SYSTEM => Kind::System,
+                _ => Kind::Other,
+            };
+        }
+        Kind::Other
+    }
+
+    /// What the function declares: every code an input field can report,
+    /// and the LEDs its output fields light.
+    #[must_use]
+    pub fn bits(&self) -> Bitmaps {
+        let mut bits = Bitmaps::EMPTY;
+        for field in self
+            .descriptor
+            .fields()
+            .iter()
+            .filter(|field| !field.constant)
+        {
+            for usage in self.descriptor.all_usages(field) {
+                let mapped = match field.direction {
+                    Direction::Input => map(usage, field.application, field.relative),
+                    Direction::Output => led(usage).map(|code| (EV_LED, code)),
+                };
+                let Some((kind, code)) = mapped else {
+                    continue;
+                };
+                set(&mut bits.types, kind);
+                if let Some(codes) = bits.codes_mut(kind) {
+                    set(codes, code);
+                }
+            }
+        }
+        if bits.types.iter().any(|&byte| byte != 0) {
+            set(&mut bits.types, EV_SYN);
+        }
+        bits
+    }
+
+    /// Whether anything is declared at all.
+    #[must_use]
+    pub fn maps_anything(&self) -> bool {
+        let bits = self.bits();
+        bits.has_type(EV_KEY) || bits.has_type(EV_REL)
+    }
+
+    /// The events `report` makes, given what came before it. `report` is
+    /// the whole report, its ID byte first when the descriptor numbers them.
+    pub fn report(&mut self, report: &[u8], out: &mut EventBuf) {
+        out.clear();
+        let (id, body) = match (self.descriptor.numbered, report.split_first()) {
+            (true, Some((&id, body))) => (id, body),
+            (true, None) => return,
+            (false, _) => (0, report),
+        };
+        for index in 0..self.descriptor.fields().len() {
+            let Some(field) = self.descriptor.fields().get(index).copied() else {
+                continue;
+            };
+            if field.direction != Direction::Input || field.report != id || field.constant {
+                continue;
+            }
+            if field.variable {
+                self.variable(&field, body, out);
+            } else {
+                self.array(index, &field, body, out);
+            }
+        }
+        out.finish();
+    }
+
+    fn variable(&mut self, field: &Field, body: &[u8], out: &mut EventBuf) {
+        for index in 0..u32::from(field.count) {
+            let (Some(usage), Some(value)) = (
+                self.descriptor.usage(field, index),
+                report::value(field, body, index),
+            ) else {
+                continue;
+            };
+            match map(usage, field.application, field.relative) {
+                Some((EV_REL, code)) if value != 0 => out.push(EV_REL, code, value),
+                Some((EV_KEY, code)) if !field.relative => self.key(code, value != 0, out),
+                _ => {}
+            }
+        }
+    }
+
+    fn array(&mut self, index: usize, field: &Field, body: &[u8], out: &mut EventBuf) {
+        let count = usize::from(field.count);
+        let Some(start) = self
+            .held_at
+            .get(index)
+            .copied()
+            .filter(|&start| start != u8::MAX)
+            .map(usize::from)
+        else {
+            return;
+        };
+        let mut now = [0_u32; report::MAX_COUNT];
+        for (slot, position) in now.iter_mut().zip(0..count as u32) {
+            let usage = report::value(field, body, position)
+                .filter(|value| (field.minimum..=field.maximum).contains(value))
+                .and_then(|value| u32::try_from(value - field.minimum).ok())
+                .and_then(|offset| self.descriptor.usage(field, offset));
+            *slot = usage.unwrap_or(0);
+        }
+        let now = now.get(..count).unwrap_or(&[]);
+        if now.contains(&ROLL_OVER) {
+            return;
+        }
+        let mut before = [0_u32; report::MAX_COUNT];
+        if let (Some(dest), Some(held)) =
+            (before.get_mut(..count), self.held.get(start..start + count))
+        {
+            dest.copy_from_slice(held);
+        }
+        let before = before.get(..count).unwrap_or(&[]);
+        for &usage in before
+            .iter()
+            .filter(|usage| **usage != 0 && !now.contains(usage))
+        {
+            if let Some((EV_KEY, code)) = map(usage, field.application, false) {
+                self.key(code, false, out);
+            }
+        }
+        for &usage in now
+            .iter()
+            .filter(|usage| **usage != 0 && !before.contains(usage))
+        {
+            if let Some((EV_KEY, code)) = map(usage, field.application, false) {
+                self.key(code, true, out);
+            }
+        }
+        if let Some(held) = self.held.get_mut(start..start + count) {
+            held.copy_from_slice(now);
+        }
+    }
+
+    /// A key event if `code` changes.
+    fn key(&mut self, code: u16, down: bool, out: &mut EventBuf) {
+        let Some(byte) = self.down.get_mut(usize::from(code / 8)) else {
+            return;
+        };
+        let bit = 1 << (code % 8);
+        if (*byte & bit != 0) != down {
+            *byte ^= bit;
+            out.push(EV_KEY, code, i32::from(down));
+        }
+    }
+
+    /// Take the LED events the core sent: whether any LED changed.
+    pub fn set_leds(&mut self, events: &[RawEvent]) -> bool {
+        let before = self.leds;
+        for event in events
+            .iter()
+            .filter(|event| event.kind == EV_LED && event.code < 16)
+        {
+            if event.value != 0 {
+                self.leds |= 1 << event.code;
+            } else {
+                self.leds &= !(1 << event.code);
+            }
+        }
+        self.leds != before
+    }
+
+    /// Each output report holding an LED, with the LEDs as they are: the
+    /// report's ID (0 when reports are not numbered) and its bytes, the ID
+    /// first when they are, handed to `send` one report at a time.
+    pub fn led_reports(&self, mut send: impl FnMut(u8, &[u8])) {
+        let mut sent = [false; 256];
+        for field in self.descriptor.fields() {
+            let is_led = field.direction == Direction::Output
+                && self
+                    .descriptor
+                    .all_usages(field)
+                    .any(|usage| led(usage).is_some());
+            let Some(done) = sent.get_mut(usize::from(field.report)) else {
+                continue;
+            };
+            if !is_led || *done {
+                continue;
+            }
+            *done = true;
+            let id = field.report;
+            let mut bytes = [0_u8; 16];
+            let skip = usize::from(self.descriptor.numbered);
+            let length = skip + self.descriptor.output_bytes(id);
+            let Some(report) = bytes.get_mut(..length) else {
+                continue;
+            };
+            if let Some(first) = report.first_mut().filter(|_| skip == 1) {
+                *first = id;
+            }
+            self.fill_leds(id, report.get_mut(skip..).unwrap_or(&mut []));
+            send(id, report);
         }
     }
 }
 
-/// A keyboard's report: the modifiers that changed, the keys no longer in
-/// the report, the keys new to it. A report short of eight bytes, or one
-/// saying `ErrorRollOver`, changes nothing, as Linux ignores it.
-fn keyboard_report(state: &mut KeyboardState, report: &[u8]) -> EventBuf {
-    let mut out = EventBuf::default();
-    let (Some(&modifiers), Some(keys)) = (report.first(), report.get(2..2 + KEY_SLOTS)) else {
-        return out;
-    };
-    if keys.iter().all(|&key| key == ROLL_OVER) {
-        return out;
-    }
-    let mut now = [0_u8; KEY_SLOTS];
-    now.copy_from_slice(keys);
-
-    let changed = modifiers ^ state.modifiers;
-    for bit in 0..8_usize {
-        if changed & (1 << bit) != 0 {
-            let down = modifiers & (1 << bit) != 0;
-            push_key(&mut out, FIRST_MODIFIER + bit, down);
+impl Interpreter {
+    /// Set every LED bit of output report `id`'s body as the LEDs are.
+    fn fill_leds(&self, id: u8, body: &mut [u8]) {
+        let fields = self.descriptor.fields().iter().filter(|field| {
+            field.direction == Direction::Output && field.report == id && field.variable
+        });
+        for field in fields {
+            for index in 0..u32::from(field.count) {
+                let lit = self
+                    .descriptor
+                    .usage(field, index)
+                    .and_then(led)
+                    .is_some_and(|code| self.leds & (1 << code) != 0);
+                report::set_value(field, body, index, u32::from(lit));
+            }
         }
     }
-    for &key in &state.keys {
-        if key > ROLL_OVER && !now.contains(&key) {
-            push_key(&mut out, usize::from(key), false);
-        }
-    }
-    for &key in &now {
-        if key > ROLL_OVER && !state.keys.contains(&key) {
-            push_key(&mut out, usize::from(key), true);
-        }
-    }
-    state.modifiers = modifiers;
-    state.keys = now;
-    out.finish();
-    out
-}
-
-/// A key event for `usage`, if the usage has a code.
-fn push_key(out: &mut EventBuf, usage: usize, down: bool) {
-    match KEYBOARD_CODES.get(usage) {
-        Some(&code) if code != 0 => out.push(EV_KEY, u16::from(code), i32::from(down)),
-        _ => {}
-    }
-}
-
-/// A mouse's report: the buttons that changed, then the motion, then the
-/// wheel, which a boot report may carry as a fourth byte.
-fn mouse_report(state: &mut MouseState, report: &[u8]) -> EventBuf {
-    let mut out = EventBuf::default();
-    let (Some(&buttons), Some(&x), Some(&y)) = (report.first(), report.get(1), report.get(2))
-    else {
-        return out;
-    };
-    let changed = buttons ^ state.buttons;
-    for bit in 0..MOUSE_BUTTONS {
-        if changed & (1 << bit) != 0 {
-            out.push(EV_KEY, BTN_LEFT + bit, i32::from(buttons & (1 << bit) != 0));
-        }
-    }
-    state.buttons = buttons;
-    let signed = |byte: u8| i32::from(byte.cast_signed());
-    if x != 0 {
-        out.push(EV_REL, REL_X, signed(x));
-    }
-    if y != 0 {
-        out.push(EV_REL, REL_Y, signed(y));
-    }
-    if let Some(&wheel) = report.get(3)
-        && wheel != 0
-    {
-        out.push(EV_REL, REL_WHEEL, signed(wheel));
-    }
-    out.finish();
-    out
 }
 
 /// Who a device says it is, for its HELLO.
@@ -229,14 +548,15 @@ pub struct Identity {
     /// `bcdDevice`.
     pub release: u16,
     /// Its name: the manufacturer's and product's strings, as Linux joins
-    /// them.
+    /// them, and the application's suffix.
     pub name: Text,
 }
 
-/// The HELLO for a boot interface of `kind`, at `location` -- which for a
-/// device tree node is `DEVICE_NOT_PCI`, what START said.
+/// The HELLO for a function reading reports as `interpreter` does, at
+/// `location` -- which for a device tree node is `DEVICE_NOT_PCI`, what START
+/// said.
 #[must_use]
-pub fn hello(kind: Kind, identity: &Identity, location: u32) -> Hello {
+pub fn hello(interpreter: &Interpreter, identity: &Identity, location: u32) -> Hello {
     let mut hello = Hello::EMPTY;
     hello.version = VERSION;
     hello.location = location;
@@ -247,33 +567,8 @@ pub fn hello(kind: Kind, identity: &Identity, location: u32) -> Hello {
         version: identity.release,
     };
     hello.name = identity.name;
-    hello.bits = bits(kind);
+    hello.bits = interpreter.bits();
     hello
-}
-
-/// What a boot interface of `kind` declares.
-#[must_use]
-pub fn bits(kind: Kind) -> Bitmaps {
-    let mut bits = Bitmaps::EMPTY;
-    set(&mut bits.types, EV_SYN);
-    set(&mut bits.types, EV_KEY);
-    match kind {
-        Kind::Keyboard => {
-            for &code in KEYBOARD_CODES.iter().filter(|&&code| code != 0) {
-                set(&mut bits.keys, u16::from(code));
-            }
-        }
-        Kind::Mouse => {
-            set(&mut bits.types, EV_REL);
-            for bit in 0..MOUSE_BUTTONS {
-                set(&mut bits.keys, BTN_LEFT + bit);
-            }
-            for code in [REL_X, REL_Y, REL_WHEEL] {
-                set(&mut bits.rels, code);
-            }
-        }
-    }
-    bits
 }
 
 fn set(bits: &mut [u8], code: u16) {
@@ -285,29 +580,51 @@ fn set(bits: &mut [u8], code: u16) {
 /// A device's name from its manufacturer's and product's strings, as Linux's
 /// HID core joins them: the product alone if it already starts with the
 /// manufacturer, either alone if the other is missing, and `fallback` if
-/// both are.
+/// both are; then the application's suffix, unless the name already ends
+/// with it, as `hidinput_allocate` names an input per application.
 #[must_use]
-pub fn name(manufacturer: &[u8], product: &[u8], fallback: &[u8]) -> Text {
-    let mut joined = [0_u8; 128];
-    let mut len = 0_usize;
-    let mut append = |part: &[u8]| {
-        for &byte in part {
-            if let Some(slot) = joined.get_mut(len) {
-                *slot = byte;
-                len += 1;
-            }
-        }
+pub fn name(manufacturer: &[u8], product: &[u8], fallback: &[u8], kind: Kind) -> Text {
+    let mut joined = Joined {
+        bytes: [0; 128],
+        len: 0,
     };
     match (manufacturer.is_empty(), product.is_empty()) {
-        (true, true) => append(fallback),
-        (true, false) => append(product),
-        (false, true) => append(manufacturer),
-        (false, false) if product.starts_with(manufacturer) => append(product),
+        (true, true) => joined.add(fallback),
+        (true, false) => joined.add(product),
+        (false, true) => joined.add(manufacturer),
+        (false, false) if product.starts_with(manufacturer) => joined.add(product),
         (false, false) => {
-            append(manufacturer);
-            append(b" ");
-            append(product);
+            joined.add(manufacturer);
+            joined.add(b" ");
+            joined.add(product);
         }
     }
-    Text::new(joined.get(..len).unwrap_or(&[])).unwrap_or(Text::NONE)
+    if let Some(suffix) = kind.suffix()
+        && !joined.as_bytes().ends_with(suffix.as_bytes())
+    {
+        joined.add(b" ");
+        joined.add(suffix.as_bytes());
+    }
+    Text::new(joined.as_bytes()).unwrap_or(Text::NONE)
+}
+
+/// A name being put together.
+struct Joined {
+    bytes: [u8; 128],
+    len: usize,
+}
+
+impl Joined {
+    fn add(&mut self, part: &[u8]) {
+        for &byte in part {
+            if let Some(slot) = self.bytes.get_mut(self.len) {
+                *slot = byte;
+                self.len += 1;
+            }
+        }
+    }
+
+    fn as_bytes(&self) -> &[u8] {
+        self.bytes.get(..self.len).unwrap_or(&[])
+    }
 }
