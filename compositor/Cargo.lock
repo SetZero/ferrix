@@ -200,6 +200,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "compositor-reboot"
+version = "0.1.0"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "compositor-regex"
 version = "0.1.0"
 
