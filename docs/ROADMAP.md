@@ -4427,7 +4427,11 @@ and tested against a model of EHCI and the board's bus, drives the
 controller, the USB2514B hub and HID boot-protocol devices through the hub's
 transaction translator. On the board a G502 mouse became `event0` and a
 keyboard `event1`, and keys, buttons, motion and the wheel read back from
-them. `docs/INPUT.md` §7 has the design.
+them. The same evening devices were read through their own report
+descriptors -- the mouse's side buttons and wheel tilt, the keyboard's media
+keys -- and `write` of `EV_LED` to an event node reached the keyboard's
+LEDs through a new core-to-driver message, `STATUS`. `docs/INPUT.md` §7 has
+the design.
 
 **Done — epoll, iteration 2's first kernel row.** `epoll_create1`,
 `epoll_create`, `epoll_ctl`, `epoll_wait`, `epoll_pwait` and `epoll_pwait2`

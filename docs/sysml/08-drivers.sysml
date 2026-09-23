@@ -238,8 +238,10 @@ package FerrixDrivers {
     #implemented part def UsbHidDriver :> DriverProcess {
         @stage { number = 17; }
         doc /* user/usbhid over libs/usb-host: the STM32MP157's EHCI
-             * controller, its hubs, and HID boot keyboards and mice, each
-             * served to the input core over a control channel of its own.
+             * controller, its hubs, and HID keyboards, mice and media keys
+             * read by their report descriptors, each served to the input
+             * core over a control channel of its own, keyboards' LEDs lit
+             * by the core's STATUS.
              * devmgr starts it as a bus host and does not wait for it; its
              * memory is pinned PIN_COHERENT. No QEMU machine has the
              * device, so no boot test exercises it: its gates are
