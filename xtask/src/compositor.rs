@@ -135,6 +135,43 @@ exec-once = /bin/pattern checkerboard one
 exec-once = /bin/pattern gradient two
 ";
 
+/// The pictures the transform boot requires, one a boot: the two windows on
+/// a monitor stood on its edge, as the connector's buffer holds them --
+/// which is what QEMU's screendump reads, since QEMU's window is the
+/// connector and knows nothing of how the monitor stands.
+const TRANSFORM_EXPECTED: [(u32, (&str, &str)); 2] = [
+    (
+        1,
+        (
+            "tiled on a monitor turned clockwise onto its edge, the picture turned \
+             counter-clockwise into the buffer",
+            "compositor/render/tests/data/dwindle-two-clients-transform-1.xrle",
+        ),
+    ),
+    (
+        3,
+        (
+            "tiled on a monitor turned counter-clockwise onto its edge, the picture turned \
+             clockwise into the buffer",
+            "compositor/render/tests/data/dwindle-two-clients-transform-3.xrle",
+        ),
+    ),
+];
+
+/// The configuration the transform boot is given for `transform`: the
+/// monitor turned, `hyprctl monitors` asked once so the transcript says what
+/// it reports, and the two windows.
+fn transform_config(transform: u32) -> String {
+    format!(
+        "# Carried into the initramfs by `cargo xtask test-compositor --boot transform`.
+monitor = , preferred, auto, 1, transform, {transform}
+exec-once = /bin/hyprctl monitors
+exec-once = /bin/pattern checkerboard one
+exec-once = /bin/pattern gradient two
+"
+    )
+}
+
 /// The picture a bar and two windows make, which the second boot requires.
 const BAR_EXPECTED: (&str, &str) = (
     "a bar across the top with the windows under it",
@@ -2063,7 +2100,7 @@ fn said_on_its_own(line: &str) -> &str {
 /// each takes minutes under emulation and there are twenty of them, so a
 /// change to one is otherwise an hour a try.
 type Boot = fn(Arch, &Programs, &Args) -> Result<()>;
-const BOOTS: [(&str, Boot); 22] = [
+const BOOTS: [(&str, Boot); 23] = [
     ("restart", test_driver_restart),
     ("dispatchers", test_dispatchers),
     ("bar", test_bar),
@@ -2085,6 +2122,7 @@ const BOOTS: [(&str, Boot); 22] = [
     ("pointer", test_pointer),
     ("cursor", test_cursor),
     ("mode", test_mode),
+    ("transform", test_transform),
     ("typing", test_typing),
 ];
 
@@ -2831,6 +2869,56 @@ fn test_mode(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
         screen.height,
         screen.width * screen.height
     );
+    Ok(())
+}
+
+/// A boot for `monitor = , preferred, auto, 1, transform, N`: a monitor
+/// stood on its edge, twice -- turned one way, then the other.
+///
+/// The card's mode stays 1024x768, and QEMU's screendump reads the card: so
+/// what is required is the buffer Hyprland would scan out for the same line,
+/// the windows tiled on a monitor 768 wide and 1024 tall and the picture
+/// turned into the buffer, pixel for pixel as `compositor/render` blesses
+/// it. Both quarter turns, because each is the other upside down and a
+/// compositor that turned the wrong way would pass one of them by drawing
+/// the other; and `hyprctl monitors` from inside the guest has to say
+/// `transform: N` beside the connector's own, unturned, mode, which is what
+/// Hyprland prints.
+fn test_transform(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
+    for (transform, wanted) in TRANSFORM_EXPECTED {
+        let said_transform = format!("transform: {transform}");
+        let (screens, said) = boot_and_dump(
+            arch,
+            programs,
+            &transform_config(transform),
+            &Wanted {
+                states: &[wanted],
+                others: &[],
+                moving: None,
+                pointer: None,
+                awaiting: &[said_transform.as_str()],
+            },
+            &[],
+            args,
+        )?;
+        let Some(screen) = screens.first() else {
+            return Err(Error::new(format!(
+                "{arch}: the transform {transform} boot took no picture"
+            )));
+        };
+        let told = |wanted: &str| said.iter().any(|line| said_on_its_own(line) == wanted);
+        if !told(&said_transform) || !said.iter().any(|line| line.contains("1024x768@")) {
+            return Err(Error::new(format!(
+                "{arch}: `hyprctl monitors` did not say `{said_transform}` beside the 1024x768 \
+                 mode"
+            )));
+        }
+        println!(
+            "  {arch}: transform {transform}: `hyprctl monitors` said `{said_transform}` and the \
+             screen is the turned picture, every one of {} pixels",
+            screen.width * screen.height
+        );
+    }
     Ok(())
 }
 
