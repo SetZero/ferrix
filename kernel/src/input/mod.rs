@@ -32,7 +32,9 @@ use core::convert::Infallible;
 use core::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 
 use ferrix_blkring::identity::Location;
-use ferrix_inputctl::message::{Hello, MAX_BYTES, Message, Ready, Refusal};
+use ferrix_inputctl::message::{
+    Events, Hello, MAX_BYTES, MAX_EVENTS, Message, RawEvent, Ready, Refusal,
+};
 use ferrix_inputctl::queue::{Clock, Clocks, Queue, Stamped};
 use ferrix_inputctl::session::{OpenId, Received, Session};
 use ferrix_native_abi::rights::Rights;
@@ -166,6 +168,29 @@ impl InputDevice {
         });
         self.opens.lock().push(Arc::clone(&open));
         Some(open)
+    }
+
+    /// A program's LED events for the device (`evdev`'s `write`): each that
+    /// changes the device's state goes to its driver, in STATUS messages,
+    /// for it to light the LED. The rest change nothing.
+    #[inline(never)]
+    pub(crate) fn write_leds(&self, events: &[RawEvent]) {
+        let changed: Vec<RawEvent> = {
+            let mut session = self.session.lock();
+            events
+                .iter()
+                .filter_map(|event| session.write_led(*event))
+                .collect()
+        };
+        for batch in changed.chunks(MAX_EVENTS) {
+            let Some(status) = Events::new(batch) else {
+                continue;
+            };
+            let bytes = Message::Status(status).encode().as_bytes().to_vec();
+            let _ = self
+                .control
+                .write(bytes, 0, || Ok::<Vec<Transfer>, Infallible>(Vec::new()));
+        }
     }
 
     /// Drop an open, releasing its grab if it held one.

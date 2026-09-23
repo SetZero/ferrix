@@ -128,6 +128,7 @@ fn every_message() -> Vec<Message> {
         events(&[]),
         Message::Stop,
         Message::Stopped,
+        Message::Status(Events::new(&[ev(EV_LED, LED_CAPSL, 1)]).unwrap()),
     ]
 }
 
@@ -201,8 +202,8 @@ fn decoding_is_strict() {
         Err(MessageError::Short)
     );
     let mut unknown = stop.as_bytes().to_vec();
-    unknown[0] = 7;
-    assert_eq!(Message::decode(&unknown), Err(MessageError::Type(7)));
+    unknown[0] = 8;
+    assert_eq!(Message::decode(&unknown), Err(MessageError::Type(8)));
     let mut lying = stop.as_bytes().to_vec();
     lying[4] = 9;
     assert_eq!(Message::decode(&lying), Err(MessageError::Length));
@@ -1106,4 +1107,25 @@ fn decoding_into_a_place_overwrites_all_of_it() {
 
     assert_eq!(Hello::decode_into(&whole, &mut place), Ok(()));
     assert_eq!(place, hello());
+}
+
+/// A program's LED write changes the state once, is handed back for the
+/// driver while it changes something, and takes nothing but a declared LED.
+#[test]
+fn a_written_led_changes_the_state_once_and_only_a_declared_one() {
+    let mut session = session();
+    let caps = ev(EV_LED, LED_CAPSL, 1);
+    assert_eq!(session.write_led(caps), Some(caps));
+    assert!(bit(&session.state().leds, LED_CAPSL));
+    assert_eq!(session.write_led(caps), None, "already lit");
+    assert_eq!(
+        session.write_led(ev(EV_LED, 0, 1)),
+        None,
+        "NUML is not declared"
+    );
+    assert_eq!(session.write_led(ev(EV_KEY, KEY_A, 1)), None, "not an LED");
+    assert!(!bit(&session.state().keys, KEY_A));
+    let off = ev(EV_LED, LED_CAPSL, 0);
+    assert_eq!(session.write_led(off), Some(off));
+    assert!(!bit(&session.state().leds, LED_CAPSL));
 }

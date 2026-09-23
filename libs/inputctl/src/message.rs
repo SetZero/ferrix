@@ -23,6 +23,8 @@
 //!   8 count u32   12 reserved
 //!   16 event 0: type u16, code u16, value i32   ... MAX_EVENTS (64), 8 bytes each
 //! STOP, STOPPED               8 bytes
+//! STATUS   core -> driver, 528 bytes, laid out as EVENTS: what a program
+//!          wrote to the device's node for the device itself, its LEDs
 //! ```
 //!
 //! Each bitmap is as long as `input-event-codes.h`'s `*_CNT` for its kind,
@@ -63,6 +65,8 @@ pub const EVENTS: u32 = 4;
 pub const STOP: u32 = 5;
 /// STOPPED's type.
 pub const STOPPED: u32 = 6;
+/// STATUS's type.
+pub const STATUS: u32 = 7;
 
 /// Bytes of the type and length, and all of STOP and STOPPED.
 pub const HEADER_BYTES: usize = 8;
@@ -616,6 +620,10 @@ pub enum Message {
     Stop,
     /// Driver to core.
     Stopped,
+    /// Core to driver: events a program wrote for the device, `EV_LED`
+    /// ones, which the driver carries to it as virtio-input's status queue
+    /// or a USB keyboard's output report does.
+    Status(Events),
 }
 
 /// Why bytes are not a message.
@@ -657,6 +665,7 @@ impl Message {
             Self::Events(_) => EVENTS,
             Self::Stop => STOP,
             Self::Stopped => STOPPED,
+            Self::Status(_) => STATUS,
         }
     }
 
@@ -667,7 +676,7 @@ impl Message {
             HELLO => HELLO_BYTES,
             READY => READY_BYTES,
             REFUSED => REFUSED_BYTES,
-            EVENTS => EVENTS_BYTES,
+            EVENTS | STATUS => EVENTS_BYTES,
             STOP | STOPPED => HEADER_BYTES,
             _ => return None,
         })
@@ -689,7 +698,7 @@ impl Message {
             Self::Hello(hello) => encode_hello(bytes, hello),
             Self::Ready(ready) => put32(bytes, 8, ready.node),
             Self::Refused(reason) => put32(bytes, 8, *reason as u32),
-            Self::Events(events) => {
+            Self::Events(events) | Self::Status(events) => {
                 put32(bytes, 8, u32::try_from(events.count).unwrap_or(0));
                 for (index, event) in events.events.iter().enumerate() {
                     let at = 16 + index * EVENT_BYTES;
@@ -774,7 +783,7 @@ fn decode_body(kind: u32, bytes: &[u8]) -> Option<Message> {
             })
         }
         REFUSED => Message::Refused(Refusal::from_raw(get32(bytes, 8)?)?),
-        EVENTS => {
+        EVENTS | STATUS => {
             let count = get32(bytes, 8)? as usize;
             zero32(12)?;
             if count > MAX_EVENTS {
@@ -792,7 +801,12 @@ fn decode_body(kind: u32, bytes: &[u8]) -> Option<Message> {
                     return None;
                 }
             }
-            Message::Events(Events { count, events })
+            let events = Events { count, events };
+            if kind == STATUS {
+                Message::Status(events)
+            } else {
+                Message::Events(events)
+            }
         }
         STOP => Message::Stop,
         STOPPED => Message::Stopped,

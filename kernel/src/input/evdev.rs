@@ -19,11 +19,12 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::any::Any;
 
+use ferrix_inputctl::message::RawEvent;
 use ferrix_inputctl::queue::{Clock, ReadError, ReadFlags};
 use ferrix_inputctl::session::GrabError;
 use ferrix_linux_abi::input::{
-    self, EV_ABS, EV_CNT, EV_REP, EV_VERSION, EVIOCGID, EVIOCGRAB, EVIOCGREP, EVIOCGVERSION,
-    EVIOCREVOKE, EVIOCSCLOCKID, EVIOCSREP,
+    self, EV_ABS, EV_CNT, EV_LED, EV_REP, EV_SYN, EV_VERSION, EVIOCGID, EVIOCGRAB, EVIOCGREP,
+    EVIOCGVERSION, EVIOCREVOKE, EVIOCSCLOCKID, EVIOCSREP, Event,
 };
 use ferrix_linux_abi::layout::{Field, Layout};
 use ferrix_linux_abi::socket::Width;
@@ -124,6 +125,36 @@ impl Inode for EventFile {
 
     fn poll_changes(&self) -> Option<u64> {
         Some(self.device.changed.wakes())
+    }
+
+    /// A program's events for the device, as `evdev_write` takes them: whole
+    /// `input_event`s, a buffer too small for one being `EINVAL`, and what is
+    /// left past the last whole one not written. The device's LEDs change
+    /// in its state (`EVIOCGLED`) and those that changed go to its driver,
+    /// which lights them; `SYN_REPORT` is taken and does nothing. Any other
+    /// type is `EINVAL`, where Linux injects it as though the device sent
+    /// it: `docs/INPUT.md` §3.3.
+    fn write_stream(&self, data: &[u8], _nonblock: bool) -> VfsResult<usize> {
+        if self.finished() {
+            return Err(Errno::ENODEV);
+        }
+        let width = caller_width();
+        let size = Event::size(width);
+        if data.len() < size {
+            return Err(Errno::EINVAL);
+        }
+        let whole = data.len() - data.len() % size;
+        let mut leds = Vec::new();
+        for chunk in data.get(..whole).unwrap_or(&[]).chunks_exact(size) {
+            let event = Event::read(width, chunk).ok_or(Errno::EINVAL)?;
+            match event.r#type {
+                EV_LED => leds.push(RawEvent::new(EV_LED, event.code, event.value)),
+                EV_SYN => {}
+                _ => return Err(Errno::EINVAL),
+            }
+        }
+        self.device.write_leds(&leds);
+        Ok(whole)
     }
 
     /// Whole `input_event`s, never half a report.

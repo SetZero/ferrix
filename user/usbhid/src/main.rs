@@ -421,9 +421,9 @@ impl Driver {
         while let Some(output) = self.bus.next_output() {
             match output {
                 Output::Attached(function) => self.introduce(function),
-                Output::Events { function, events } => {
+                Output::Events(function) => {
                     let channel = self.channels.get(function).and_then(Option::as_ref);
-                    if let (Some(channel), Some(events)) = (channel, Events::new(events.as_slice()))
+                    if let (Some(channel), Some(events)) = (channel, Events::new(self.bus.events()))
                     {
                         let _ = channel.write(Message::Events(events).encode().as_bytes());
                     }
@@ -446,10 +446,7 @@ impl Driver {
         let Some(hello) = self.bus.hello(function, self.location) else {
             return;
         };
-        let kind = match self.bus.kind(function) {
-            Some(Kind::Keyboard) => "keyboard",
-            _ => "mouse",
-        };
+        let kind = self.bus.kind(function).map_or("input", Kind::word);
         let name = core::str::from_utf8(hello.name.as_bytes()).unwrap_or("?");
         let Ok(control) = self.device.input_control() else {
             say(format_args!(
@@ -486,8 +483,9 @@ impl Driver {
         }
     }
 
-    /// Read what the core said on `function`'s channel: STOP is answered and
-    /// the channel closed, the core going away closes it too.
+    /// Read what the core said on `function`'s channel: STATUS lights the
+    /// device's LEDs, STOP is answered and the channel closed, and the core
+    /// going away closes it too.
     fn take_control(&mut self, function: usize) {
         let Some(Some(channel)) = self.channels.get(function) else {
             return;
@@ -503,6 +501,14 @@ impl Driver {
                     Ok(Message::Stop) => {
                         let _ = channel.write(Message::Stopped.encode().as_bytes());
                         false
+                    }
+                    Ok(Message::Status(leds)) => {
+                        if let Err(error) = self.bus.set_leds(function, leds.as_slice()) {
+                            say(format_args!(
+                                "usbhid: function {function}'s LEDs were not set: {error:?}"
+                            ));
+                        }
+                        true
                     }
                     _ => true,
                 }
