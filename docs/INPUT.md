@@ -405,8 +405,10 @@ macro as glibc sets it, both 16 bytes on ARMv7-A, and 64-bit `time_t` with the
 macro undefined, which is 24 bytes there. ferrousli's `bits/alltypes.h`
 defines `__USE_TIME_BITS64`, as musl's does, so its programs should see the
 kernel's 16 bytes; that is read from the header, not shown by a program
-built against ferrousli. ARMv7-A takes no part in the gates (no PCI virtio in
-its QEMU configuration here).
+built against ferrousli. ARMv7-A has taken part in the gates since
+2026-09-23: `compositor/evecho`, a Rust program on the target's own musl
+built for `armv7-unknown-linux-musleabihf`, reads the kernel's 16-byte
+events, and `test-input` passes there with its negative control.
 
 **`read`** returns as many whole events as fit in `count`, from whole
 reports only. It returns `EINVAL` if `count` is smaller than one event,
@@ -436,7 +438,9 @@ would learn of it without udev (an `inotify` watch on `/dev/input`), is §6.
 * **Devices.** `-device virtio-keyboard-pci,id=kbd0,disable-legacy=on,iommu_platform=on`
   and `-device virtio-tablet-pci,id=tablet0,disable-legacy=on,iommu_platform=on`,
   on x86-64 and AArch64, only under `test-input` and `run --display`, so no
-  existing gate changes. A tablet rather than a mouse because its absolute
+  existing gate changes. On ARMv7-A the same two devices, since 2026-09-23,
+  without `iommu_platform=on`: U-Boot 2025.10 resets when a PCI virtio
+  device offers `VIRTIO_F_ACCESS_PLATFORM`. A tablet rather than a mouse because its absolute
   position is what a screendump test of a cursor will want later, and
   because `input-send-event`'s `abs` events are what reach it.
 * **Routing.** QEMU gives an event to the first handler in its list that

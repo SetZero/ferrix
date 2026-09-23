@@ -386,8 +386,14 @@ from `BootInfo`. What changes is what a person sees:
   on x86-64 and AArch64, only under `--display` and `test-display`, so no
   existing gate changes. The size differs from the firmware's usual 1280×800,
   so the kernel's `display` boot line says which device the firmware drew
-  on. ARMv7-A's machine has no PCI virtio-gpu in this tree's configuration
-  and doesn't take part (the roadmap says so already).
+  on. ARMv7-A takes part too, since 2026-09-23: its `virt` machine has the
+  same generic PCI host the kernel enumerates for its disks, so the card is
+  the same `virtio-gpu-pci`, with only `disable-legacy=on`. It leaves off
+  `iommu_platform=on` for the reason every PCI virtio device on that machine
+  does: U-Boot 2025.10's virtio-pci driver resets when a device offers
+  `VIRTIO_F_ACCESS_PLATFORM`, so the driver runs in degraded trusted mode
+  there, as the disk drivers do. The compositor's programs are built for
+  `armv7-unknown-linux-musleabihf`, hard float.
 * **`test-display`.** Builds `compositor/blank` as init and boots it with the
   device, waits for a line starting `compositor: `, then asks QEMU over QMP
   (TCP on localhost on every host) for `screendump device=gpu0 head=0` in

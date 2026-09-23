@@ -80,7 +80,8 @@ Networking is done: sockets, a net core and a ring-3 virtio-net driver, with
 `curl` fetching over HTTPS and `git` cloning inside the guest. Stages 17 and
 18 are met, and the compositor runs: `cargo xtask test-compositor` boots it
 as init on Ferrix, and two Wayland clients tile on the card, pixel for pixel
-as the renderer draws them, on x86-64 and AArch64. Stage 19 is under way, and the
+as the renderer draws them, on x86-64, AArch64 and, since 2026-09-23,
+ARMv7-A. Stage 19 is under way, and the
 GPU path chosen on 2026-09-18 is built: the desktop composites on the GPU
 through `/dev/dri/renderD128`, and the screen is shown the very texture the
 compositor drew into, which takes a 1920x1080 frame of a video wallpaper
@@ -91,11 +92,11 @@ XWayland, `dwindle:precise_mouse_move` and the second-pass effects; Mesa and
 beside it. Stage 21
 is bare metal with a card of Ferrix's own, and stage 22 is Steam. Stage 17's display iteration is done:
 `/dev/dri/card0` served by a ring-3 virtio-gpu driver, with `cargo xtask
-test-display` requiring a compositor's colour pixel for pixel on x86-64 and
-AArch64. Its input iteration is done too, to the same standard:
+test-display` requiring a compositor's colour pixel for pixel on all three
+architectures. Its input iteration is done too, to the same standard:
 `/dev/input/eventN` served by a ring-3 virtio-input driver and a kernel input
 core, with `cargo xtask test-input` sending a key and a touch in at QEMU's
-far end over QMP and requiring them back out of the nodes on both
+far end over QMP and requiring them back out of the nodes on all three
 architectures, and a negative control that must fail. `epoll`, `eventfd` and
 `ioctl(FIONBIO)` are in the boot test, so the kernel side of iteration 2's
 prerequisites is done, and `card0` has the primary plane and `type` property
@@ -4360,8 +4361,8 @@ reported, and a zero-length write to an eventfd returns 0 rather than
 `EINVAL`. The third, that `poll` and epoll waits rechecked every 5 ms instead
 of waking on the event, was fixed on 2026-09-16 (c2129a68).
 
-**Exit:** in the boot test on x86-64 and AArch64 (ARMv7-A's QEMU machine has
-no virtio-gpu; the DK1's LTDC is a hardware row, P3), a user program opens
+**Exit:** in the boot test on x86-64 and AArch64 (and on ARMv7-A since
+2026-09-23; the DK1's LTDC is a hardware row, P3), a user program opens
 `/dev/dri/card0`, sets the mode, draws a known pattern into a dumb buffer and
 page-flips it; `cargo xtask` reads QEMU's screendump and requires the pattern
 pixel for pixel. A key and a pointer motion sent through QEMU's monitor arrive
@@ -5047,6 +5048,26 @@ terminal emulator, which is `compositor/term`: stage 19's own entry has the
 whole of it, since that is where the work landed. `cargo xtask test-pty`
 proves the pair without a window and `cargo xtask test-compositor` boots a
 terminal in the compositor and requires the picture it makes.
+
+**Done — ARMv7-A (2026-09-23).** The compositor runs on the 32-bit
+architecture too, the one the DK1 board is. ARMv7-A's `virt` machine had
+been left without a card on the belief that it has no virtio-gpu, but it has
+the same generic PCI host as AArch64's, which the kernel already enumerated
+for its disks: the card, the keyboard and the tablet are three more devices
+on it, without `iommu_platform=on` for U-Boot's sake like the others, so
+their drivers run in degraded trusted mode. The compositor's programs are
+built for `armv7-unknown-linux-musleabihf`, hard float; rav1d needs one
+feature gate for its CPU probe on 32-bit ARM, which the compositor's cargo
+config lets that crate alone have. Nothing in the compositor, the DRM and
+evdev layouts or the kernel needed a 32-bit fix: `libs/linux-abi` had
+carried both pointer widths from the start. `test-display`, `test-input`,
+`test-seat`, `test-pty`, `test-video` and every boot of `test-compositor`
+pass on ARMv7-A, at four processors and at two. Under TCG on a loaded
+nazuna a full 1024x768 frame took 1.3 to 2 s there, about twice AArch64's
+0.6 to 0.8 s in the same runs, and the slowest 5.25 s, which is why
+`test-compositor` allows ARMv7-A 10 s a frame under emulation where the
+64-bit machines get 5: fine for a pixel test and nowhere near interactive.
+The board's own numbers wait on its display driver.
 
 This stage's exit criterion is met in full, and its 96 points are spent.
 The visible iterations the customer ordered on 2026-09-16 -- a blank screen
