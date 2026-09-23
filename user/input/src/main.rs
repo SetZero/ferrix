@@ -422,7 +422,7 @@ fn ready(driver: &mut Input, control: &Channel<Kernel>) -> Result<u32, Step> {
     // device delivers nothing until the core has judged it.
     match driver.on_control(&decoded) {
         Ok(Control::Started { node }) => Ok(node),
-        Ok(Control::Refused(_) | Control::Stop) => Err(Step::Control),
+        Ok(Control::Refused(_) | Control::Stop | Control::Status) => Err(Step::Control),
         Err(_) => Err(Step::Faulted),
     }
 }
@@ -569,7 +569,7 @@ fn take_control(driver: &mut Input, control: &Channel<Kernel>) -> Result<Option<
     match driver.on_control(&decoded) {
         Ok(Control::Stop) => Ok(Some(true)),
         Ok(Control::Refused(_)) => Ok(Some(false)),
-        Ok(Control::Started { .. }) => Ok(None),
+        Ok(Control::Started { .. } | Control::Status) => Ok(None),
         Err(_) => Err(Step::Faulted),
     }
 }

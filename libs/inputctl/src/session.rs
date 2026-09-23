@@ -543,6 +543,18 @@ impl Session {
         }
     }
 
+    /// A program's `EV_LED` event, written to the device's node: the LED's
+    /// state changes as `input_inject_event` changes it, and the event comes
+    /// back if it changed something, for the driver to light the LED by
+    /// (STATUS). `None` for an LED the device does not declare, one already
+    /// so, or an event of another type, which a write does not carry.
+    pub fn write_led(&mut self, event: RawEvent) -> Option<RawEvent> {
+        if event.kind != EV_LED {
+            return None;
+        }
+        self.dispose(event)
+    }
+
     /// `input_get_disposition`: the event as it passes, or `None` when it is
     /// ignored.
     fn dispose(&mut self, event: RawEvent) -> Option<RawEvent> {

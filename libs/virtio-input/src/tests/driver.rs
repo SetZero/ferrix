@@ -10,8 +10,8 @@ use std::vec::Vec;
 use ferrix_inputctl::message::{Hello, MAX_EVENTS, Message, RawEvent, Ready, Refusal};
 use ferrix_inputctl::session::{MAX_REPORT, Received, Session};
 use ferrix_linux_abi::input::{
-    ABS_X, ABS_Y, BTN_LEFT, EV_ABS, EV_KEY, EV_REL, EV_SND, EV_SYN, KEY_A, REL_X, SYN_MT_REPORT,
-    SYN_REPORT,
+    ABS_X, ABS_Y, BTN_LEFT, EV_ABS, EV_KEY, EV_LED, EV_REL, EV_SND, EV_SYN, KEY_A, LED_CAPSL,
+    REL_X, SYN_MT_REPORT, SYN_REPORT,
 };
 use ferrix_virtio::QueueError;
 use ferrix_virtio::input::{Event, InputError};
@@ -433,6 +433,13 @@ fn messages_from_the_core_are_followed_in_turn() {
     rig.device.borrow_mut().send(event(EV_KEY, KEY_A, 1));
     rig.device.borrow_mut().send(syn());
     let _ = rig.driver.on_interrupt().expect("sound");
+    // A program's LED write, taken while running.
+    let leds =
+        ferrix_inputctl::message::Events::new(&[RawEvent::new(EV_LED, LED_CAPSL, 1)]).expect("one");
+    assert_eq!(
+        rig.driver.on_control(&Message::Status(leds)),
+        Ok(Control::Status)
+    );
     assert_eq!(rig.driver.on_control(&Message::Stop), Ok(Control::Stop));
     assert_eq!(rig.driver.phase(), Phase::Stopping);
     assert!(rig.driver.pop_events().is_none(), "stopping discards");

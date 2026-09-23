@@ -260,6 +260,11 @@ pub enum Control {
     Refused(Refusal),
     /// STOP: send STOPPED, then shut the driver down.
     Stop,
+    /// STATUS: LED events a program wrote. Taken while running, and not yet
+    /// carried to the device: virtio-input's status queue is not driven
+    /// (`docs/BACKLOG.md`), so the core's state says the LED is lit and
+    /// QEMU's keyboard does not.
+    Status,
 }
 
 /// Why a message from the core was not followed.
@@ -708,6 +713,7 @@ where
                 self.batch.clear();
                 Ok(Control::Stop)
             }
+            Message::Status(_) if self.phase == Phase::Running => Ok(Control::Status),
             _ => Err(ControlError::Unexpected(message.kind())),
         }
     }
