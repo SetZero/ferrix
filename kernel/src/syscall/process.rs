@@ -47,6 +47,7 @@ use ferrix_vfs::{Context, OpenFile};
 use ferrix_vma::VmaFlags;
 
 use crate::fs;
+use crate::object::job::{self, Job, JobError};
 use crate::object::port::{self, Observer, PortError};
 use crate::object::{self, HandleTable};
 use crate::sched::{self, Task, WaitQueue};
@@ -189,6 +190,14 @@ pub(crate) struct Process {
     /// `getuid` has no business waiting on a `brk`, and a `set*id` call must
     /// see and change every id it names at once.
     credentials: SpinLock<Credentials>,
+    /// The job it is in, which is its cgroup (`object::job`). Every process is
+    /// in exactly one: the root job, its parent's for a fork, or wherever it
+    /// was moved. Its lock comes before any job's (see `object::job`, "Lock
+    /// order").
+    membership: SpinLock<Arc<Job>>,
+    /// Whether it is counted among its job's live members: from when it is
+    /// made until it is released. Changed only under `membership`.
+    counted: AtomicBool,
 }
 
 /// Where a program starts: the two numbers `exec::load` computes and the task
@@ -239,8 +248,14 @@ struct Heap {
 
 impl Process {
     /// A process over an address space, with no heap yet.
+    ///
+    /// It is in the root job, and counted there from now on.
     pub(crate) fn new(space: Arc<AddressSpace>) -> Process {
-        Process::with_pid(space, registry::allocate().unwrap_or(0))
+        Process::with_pid(
+            space,
+            registry::allocate().unwrap_or(0),
+            Arc::clone(job::root()),
+        )
     }
 
     /// [`Process::new`], for the process init starts: pid 1 when no other
@@ -249,12 +264,15 @@ impl Process {
         let pid = registry::allocate_init()
             .or_else(registry::allocate)
             .unwrap_or(0);
-        Process::with_pid(space, pid)
+        Process::with_pid(space, pid, Arc::clone(job::root()))
     }
 
     /// A process over an address space, numbered `pid`, which the caller has
-    /// reserved in the registry.
-    fn with_pid(space: Arc<AddressSpace>, pid: u32) -> Process {
+    /// reserved in the registry, and counted in `job`.
+    fn with_pid(space: Arc<AddressSpace>, pid: u32, job: Arc<Job>) -> Process {
+        let mut flipped = job::Flipped::new();
+        job.count_in(&mut flipped);
+        job::notify(flipped);
         Process {
             space,
             pid,
@@ -297,6 +315,8 @@ impl Process {
             // A process the kernel starts is root's. A fork child takes its
             // parent's instead, below.
             credentials: SpinLock::new(Credentials::root()),
+            membership: SpinLock::new(job),
+            counted: AtomicBool::new(true),
         }
     }
 
@@ -307,16 +327,22 @@ impl Process {
     /// working directory and root (or the same ones, shared, when `clone` asks
     /// for `CLONE_FILES` or `CLONE_FS`), the heap and the signal dispositions,
     /// the process group and session, the umask, the user and group ids and
-    /// supplementary groups, and the program's start. What is not is
-    /// what belongs to the parent alone: its pid, its children, its threads,
-    /// and its handles, which the native ABI passes on only explicitly.
+    /// supplementary groups, the program's start, and its job, which is its
+    /// cgroup. What is not is what belongs to the parent alone: its pid, its
+    /// children, its threads, and its handles, which the native ABI passes on
+    /// only explicitly.
+    ///
+    /// The job is the one the parent is in as this reads it. A move of the
+    /// parent after that leaves the child where it started, which the fork's
+    /// caller settles: `clone_with` ends a child whose job is being killed
+    /// once the child is findable.
     pub(crate) fn forked(
         parent: &Arc<Process>,
         space: Arc<AddressSpace>,
         share_files: bool,
         share_fs: bool,
     ) -> Process {
-        let mut child = Process::new(space);
+        let mut child = Process::with_pid(space, registry::allocate().unwrap_or(0), parent.job());
         child.files = if share_files {
             Arc::clone(&parent.files)
         } else {
@@ -342,6 +368,52 @@ impl Process {
     /// What it can see.
     pub(crate) fn space(&self) -> &Arc<AddressSpace> {
         &self.space
+    }
+
+    /// The job it is in: its cgroup.
+    pub(crate) fn job(&self) -> Arc<Job> {
+        Arc::clone(&self.membership.lock())
+    }
+
+    /// Move it into `to`, counting it there and not where it was, if it is
+    /// still counted. Its threads go with it: a job holds processes.
+    ///
+    /// # Errors
+    ///
+    /// [`JobError::Killed`] if `to`, or a job above it, has been killed.
+    pub(crate) fn move_to(&self, to: &Arc<Job>) -> Result<(), JobError> {
+        let mut flipped = job::Flipped::new();
+        let left = {
+            let mut membership = self.membership.lock();
+            if to.refuses() {
+                return Err(JobError::Killed);
+            }
+            if Arc::ptr_eq(&membership, to) {
+                return Ok(());
+            }
+            if self.counted.load(Ordering::Acquire) {
+                to.count_in(&mut flipped);
+                membership.count_out(&mut flipped);
+            }
+            core::mem::replace(&mut *membership, Arc::clone(to))
+        };
+        // Outside the lock: it may be the last reference to that job.
+        drop(left);
+        job::notify(flipped);
+        Ok(())
+    }
+
+    /// Stop counting it among its job's live members, once. What makes its
+    /// job empty when it was the last.
+    fn leave_job(&self) {
+        let mut flipped = job::Flipped::new();
+        {
+            let membership = self.membership.lock();
+            if self.counted.swap(false, Ordering::AcqRel) {
+                membership.count_out(&mut flipped);
+            }
+        }
+        job::notify(flipped);
     }
 
     /// Its process id; zero if it was made with every pid in use.
@@ -890,6 +962,10 @@ impl Process {
             drop(closed);
             let _ = fs::socket::collect_cycles();
         }
+        // Nothing of it can run any more, so it leaves its job's count: a job
+        // is empty once its last member gets here, not once that member is
+        // reaped, which is what `cgroup.events` says on Linux too.
+        self.leave_job();
         // Whoever watches it through a port hears now, once its handles and
         // descriptors are closed: a driver's pins are given back or kept
         // before `devmgr` learns that the driver has gone. Taken before the
@@ -1672,7 +1748,7 @@ impl Drop for Control {
                 crate::arch::interrupts_enabled(),
                 "an unstarted process's last handle was dropped with interrupts off"
             );
-            kill(&process, object::job::KILLED_STATUS);
+            kill(&process, job::KILLED_STATUS);
         }
     }
 }
@@ -1680,7 +1756,14 @@ impl Drop for Control {
 impl Drop for Process {
     /// Give the pid back. The number is not used again until allocation comes
     /// round to it; see [`registry`].
+    ///
+    /// A process dropped without being released -- one built and never
+    /// shared, as a failed `execve` of a new program leaves -- leaves its
+    /// job's count here instead. A released one already has, and this does
+    /// nothing, so the reaper, which drops released processes only, never
+    /// wakes anything from here.
     fn drop(&mut self) {
+        self.leave_job();
         if self.pid != 0 {
             registry::release(self.pid);
         }

@@ -404,9 +404,9 @@ package FerrixRoadmap {
              * MAP_SHARED pages. */
     }
 
-    #planned requirement <'S13'> stage13Isolation : Stage {
+    #inProgress requirement <'S13'> stage13Isolation : Stage {
         attribute :>> number = 13;
-        attribute :>> status = StageStatus::Planned;
+        attribute :>> status = StageStatus::InProgress;
         attribute :>> size = "month";
         doc /* All eight namespaces, the unified cgroup hierarchy with cpu,
              * memory, io and pids, cgroupfs, classic-BPF seccomp with the
@@ -420,7 +420,9 @@ package FerrixRoadmap {
              * init needs, C1-C5 before its first boot. C8, accepted the
              * same day: every cgroup is backed by a Job. docs/CGROUPS.md is
              * the design: landings G1-G5 (27 points) for init, then the
-             * controllers (58), 85 for the cgroup half. */
+             * controllers (58), 85 for the cgroup half. G1 done on
+             * 2026-09-23: every process in exactly one job, fork inheriting
+             * it, populated counted exactly, the two kills apart. */
     }
 
     #planned requirement <'S14'> stage14RealTime : Stage {

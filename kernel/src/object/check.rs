@@ -37,7 +37,7 @@ use crate::device::{self, DeviceNode};
 use crate::mm;
 use crate::object::channel::Endpoint;
 use crate::object::interrupt;
-use crate::object::job::{Job, KILLED_STATUS};
+use crate::object::job::{self, Job, KILLED_STATUS};
 use crate::object::{self, Object};
 use crate::sched::Task;
 use crate::syscall::check::spinner;
@@ -194,6 +194,8 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     check_a_wait_is_woken_by_what_it_waits_for(&mut after)?;
     check_a_job_kill_takes_down_a_process_tree(&mut after)?;
     check_a_long_chain_of_jobs_is_freed_without_recursion()?;
+    check_a_job_counts_its_members()?;
+    check_the_two_kills()?;
     check_a_port_wait_is_woken_by_a_message(&mut after)?;
     check_two_programs_talk_over_a_channel(&mut after)?;
     check_a_program_ended_by_its_fault_is_heard_and_freed(&mut after)?;
@@ -1850,7 +1852,7 @@ fn check_a_job_kill_takes_down_a_process_tree(counter: &mut Counter) -> Result<(
 
     let deadline = crate::timer::now_nanos().saturating_add(PATIENCE_NANOS);
     if bystander.wait_for_exit(deadline) != Some(44) {
-        return Err("a process in no job did not finish with its own status");
+        return Err("a process outside the killed jobs did not finish with its own status");
     }
     side.close_everything();
     Ok(())
@@ -2470,6 +2472,110 @@ fn check_a_long_chain_of_jobs_is_freed_without_recursion() -> Result<(), &'stati
     }
     drop(root);
     drop(deepest);
+    Ok(())
+}
+
+/// A new process for the job checks: in the root job, findable, never
+/// started, so a kill releases it at once.
+fn job_member() -> Result<Arc<Process>, &'static str> {
+    process::new_for_check().map_err(|_| "no address space for the job checks")
+}
+
+/// Every process is in a job, a fork's child is in its parent's, and a job is
+/// populated exactly while one of its members, or of a job beneath it, has
+/// not been released: it empties at the last release, not the last reap, and
+/// its event queue hears it.
+///
+/// This is what `cgroup.events` reports and what a service manager waits for
+/// (`docs/CGROUPS.md` §2.2), so the count is checked where it changes. The
+/// processes are never started, so a kill releases each at once, and every
+/// reference to them is still held when the job is read: reaped they are not.
+fn check_a_job_counts_its_members() -> Result<(), &'static str> {
+    let tree = Job::new_root();
+    let leaf = tree.new_child().map_err(|_| "a live job refused a child")?;
+    let parent = job_member()?;
+    if !Arc::ptr_eq(&parent.job(), job::root()) {
+        return Err("a new process is not in the root job");
+    }
+    leaf.adopt(&parent)
+        .map_err(|_| "a live job refused a process")?;
+    if !Arc::ptr_eq(&parent.job(), &leaf) || leaf.live() != 1 {
+        return Err("a process moved into a job is not counted there");
+    }
+    if !leaf.is_populated() || !tree.is_populated() || tree.live() != 0 {
+        return Err("a job with a member, or the job above it, is not populated");
+    }
+
+    let space = crate::user::space::AddressSpace::new()
+        .map_err(|_| "no address space for the job checks")?;
+    let child = linux::registry::register(Process::forked(&parent, space, false, false));
+    if !Arc::ptr_eq(&child.job(), &leaf) || leaf.live() != 2 {
+        return Err("a fork's child is not in its parent's job");
+    }
+
+    let wakes = leaf.events().wakes();
+    let tree_wakes = tree.events().wakes();
+    process::kill(&child, KILLED_STATUS);
+    if leaf.live() != 1 || !leaf.is_populated() {
+        return Err("a released member was not counted out, or was counted out twice");
+    }
+    if leaf.events().wakes() != wakes {
+        return Err("a job that stayed populated woke its event queue");
+    }
+    process::kill(&parent, KILLED_STATUS);
+    if leaf.is_populated() || tree.is_populated() {
+        return Err("a job whose members have all been released is still populated");
+    }
+    if leaf.events().wakes() == wakes || tree.events().wakes() == tree_wakes {
+        return Err("a job and the one above it became empty and woke nothing");
+    }
+    drop((parent, child));
+    Ok(())
+}
+
+/// `cgroup.kill` ends a job's members and leaves the job usable; `job_kill`
+/// ends them and seals it and everything beneath it. A move a sealed job
+/// refuses leaves the process where it was.
+fn check_the_two_kills() -> Result<(), &'static str> {
+    let tree = Job::new_root();
+    let leaf = tree.new_child().map_err(|_| "a live job refused a child")?;
+    let member = job_member()?;
+    leaf.adopt(&member)
+        .map_err(|_| "a live job refused a process")?;
+    if leaf.kill_members() != 1 || !member.is_terminated() {
+        return Err("killing a job's members did not end its member");
+    }
+    if leaf.is_populated() || leaf.is_killed() || leaf.is_dying() {
+        return Err("killing a job's members left it populated, sealed or dying");
+    }
+    let next = job_member()?;
+    leaf.adopt(&next)
+        .map_err(|_| "a job whose members were killed refused a new one")?;
+
+    if tree.kill(KILLED_STATUS) != 1 || !next.is_terminated() {
+        return Err("a job kill did not end the member of a job beneath it");
+    }
+    let late = job_member()?;
+    if leaf.adopt(&late).is_ok() {
+        return Err("a job beneath a killed one took a new process");
+    }
+    if !Arc::ptr_eq(&late.job(), job::root()) {
+        return Err("a refused move moved the process anyway");
+    }
+    process::kill(&late, KILLED_STATUS);
+    if leaf.is_populated() || tree.is_populated() {
+        return Err("a killed job is still populated");
+    }
+
+    // A name is held once among a job's children.
+    let names = Job::new_root();
+    let named = names
+        .new_named_child("a.slice")
+        .map_err(|_| "a live job refused a named child")?;
+    if named.name() != Some("a.slice") || names.new_named_child("a.slice").is_ok() {
+        return Err("a job took a second child with a name it already had");
+    }
+    drop((member, next, late));
     Ok(())
 }
 

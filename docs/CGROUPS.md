@@ -4,8 +4,8 @@ Version 1, a draft. Written on 2026-09-23. It is the cgroup half of stage 13,
 which the customer put first that day, and builds on the customer's decision
 of the same day that **every cgroup is backed by a `Job`** (`docs/INIT.md` §0,
 C8; `docs/BACKLOG.md`, Decisions). `docs/INIT.md` §0.1 is what the first user
-needs from this; `docs/ARCHITECTURE.md` §3 and §6 are the architecture. Nothing
-here is built. §9 lists what is still the customer's to decide.
+needs from this; `docs/ARCHITECTURE.md` §3 and §6 are the architecture. G1 (§7)
+is built. §9 lists what is still the customer's to decide.
 
 ## 1. What this is, and what it is not
 
@@ -74,10 +74,18 @@ time and child before parent, and stops at the first job whose own populated
 state does not change. At every job whose state flipped, the kernel wakes
 the job's event queue (§4) and fires its `EMPTY` observers (§5).
 
-The member list itself stays a list of weak references, pruned on join as
-now. It is where `cgroup.procs` and a kill *find* members, and the counts are
-what *decide* populated. Keeping those separate is what lets a weak list be
-lazy and still leave populated exact.
+A job keeps no member list at all (changed in G1 from this document's first
+draft). A process's `membership` is the one truth, and `cgroup.procs` and
+both kills find members by walking the process registry for the processes
+whose job the job contains. A list would have had to be filled where each
+process is first shared, which is several places, while the pointer is set
+where every process is built, which is one. The counts are what *decide*
+populated, and the registry is where members are *found*.
+
+A fork's child is findable before it can run. A kill that began before the
+child was published finds it in the registry. A kill that began after, the
+fork sees at once: `clone_with` asks the child's job whether it is dying,
+and ends the child before it starts.
 
 ### 2.3 Names, and who holds whom
 

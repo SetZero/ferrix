@@ -33,6 +33,7 @@ use ferrix_linux_abi::nr::Syscall;
 use ferrix_linux_abi::types::SIGCHLD;
 
 use crate::arch;
+use crate::object::job;
 use crate::syscall::process::{self, Process};
 use crate::syscall::thread::{self, Thread};
 use crate::syscall::{registry, uaccess};
@@ -370,6 +371,15 @@ fn clone_with(
         let _ = thread.set_clear_child_tid(child_tid);
     }
     registry::publish_forked(&child, &thread);
+    // Findable now, so a kill of its job that began before this line finds it,
+    // and one that began after is seen here: a loop of forks cannot outrun
+    // `cgroup.kill` or `job_kill` (`object::job`, "Two kills"). Ended before
+    // it runs, as Linux ends a child forked into a cgroup being killed; the
+    // parent, which is in the same job, is being ended too.
+    if child.job().is_dying() {
+        process::kill(&child, job::KILLED_STATUS);
+        return Err(Errno::EAGAIN);
+    }
 
     // A failure to write either id is ignored, as Linux ignores it: the child
     // exists by now, and the addresses were the program's to get right.

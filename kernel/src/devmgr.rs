@@ -27,7 +27,7 @@ use ferrix_native_abi::signals::Signals;
 use ferrix_native_abi::types::{CHANNEL_MAX_BYTES, CHANNEL_MAX_HANDLES};
 
 use crate::object::channel::{Endpoint, ReadError};
-use crate::object::job::Job;
+use crate::object::job::{self, Job};
 use crate::object::{Object, Transfer};
 use crate::sync::SpinLock;
 use crate::syscall::{exec, process};
@@ -115,7 +115,7 @@ pub(crate) fn start() -> Result<Option<Report>, &'static str> {
             .ok_or("more drivers than one DEVICES message names")?;
         let mut transfers: Vec<Transfer> = Vec::with_capacity(message.handles());
         if first {
-            transfers.push((Object::Job(Job::new_root()), Rights::JOB));
+            transfers.push((Object::Job(drivers_job()), Rights::JOB));
         }
         for node in nodes.iter().skip(index).take(take) {
             transfers.push((Object::Device(Arc::clone(node)), DEVICE_RIGHTS));
@@ -218,6 +218,22 @@ pub(crate) fn published(location: Location) {
     .encode()
     .to_vec();
     let _ = channel.write(bytes, 0, || Ok::<Vec<Transfer>, Infallible>(Vec::new()));
+}
+
+/// The name of the job `devmgr` is given, beneath the root job:
+/// `docs/CGROUPS.md` §2.1, and the slice `docs/INIT.md` §5.1 shows drivers in.
+const DRIVERS_JOB: &str = "drivers.slice";
+
+/// The job `devmgr` makes each driver's job under, named [`DRIVERS_JOB`] in
+/// the root job so that cgroupfs shows the drivers there.
+///
+/// A second start, which a boot never makes, finds the name taken and gets an
+/// anonymous job in its place rather than none.
+fn drivers_job() -> Arc<Job> {
+    let root = job::root();
+    root.new_named_child(DRIVERS_JOB)
+        .or_else(|_| root.new_child())
+        .unwrap_or_else(|_| Job::new_root())
 }
 
 /// The manifest's names, each NUL-padded to a driver name; an image without
