@@ -795,9 +795,24 @@ fn execute_one(
         .iter()
         .map(|(file, _)| PathBuf::from(places.local(file)))
         .collect();
-    build.make()?;
+    // Its key is known before it is made: what a build is and what it reads.
+    // A store carried in from an earlier run that has it already answers it,
+    // so that a plan whose run stopped at a failure picks up where it did.
     let key = key(&build, places)?;
     let kept = store.join(&key);
+    let done = (0..build.outputs.len()).all(|index| kept.join(index.to_string()).exists());
+    if done && !build.outputs.is_empty() {
+        let mut stored = Vec::new();
+        for (index, (output, (_, digest))) in build.outputs.iter().zip(&planned.outputs).enumerate()
+        {
+            let from = kept.join(index.to_string());
+            copy_output(&from, output)?;
+            stored.push((digest.clone(), from));
+        }
+        println!("builds: {} was made here already", planned.what);
+        return Ok(stored);
+    }
+    build.make()?;
     std::fs::create_dir_all(&kept)?;
     let mut stored = Vec::new();
     for (index, (output, (_, digest))) in build.outputs.iter().zip(&planned.outputs).enumerate() {

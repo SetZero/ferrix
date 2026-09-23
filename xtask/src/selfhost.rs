@@ -469,8 +469,8 @@ fn used(path: &Path) -> Result<u64> {
         .ok_or_else(|| Error::new(format!("du could not size {}", path.display())))
 }
 
-/// Copy the plan in `plan` -- the list and the files it carries, not a
-/// store an earlier run left -- to `into`.
+/// Copy the plan in `plan` -- the list, the files it carries, and the store
+/// an earlier run left, whose builds are not made again -- to `into`.
 fn carry_plan(plan: &Path, into: &Path) -> Result<()> {
     std::fs::create_dir_all(into.join("files"))?;
     let _ = std::fs::copy(plan.join("plan"), into.join("plan")).map_err(|error| {
@@ -486,6 +486,12 @@ fn carry_plan(plan: &Path, into: &Path) -> Result<()> {
             let entry = entry?;
             let _ = std::fs::copy(entry.path(), into.join("files").join(entry.file_name()))?;
         }
+    }
+    let store = plan.join("store");
+    if store.is_dir() {
+        let mut command = Command::new("cp");
+        let _ = command.args(["-a", "--reflink=auto"]).arg(&store).arg(into);
+        cargo::run(command, "copying the store of an earlier run")?;
     }
     Ok(())
 }
