@@ -159,10 +159,11 @@ want to see how far it gets.
 ## The graphical tool
 
 `tools/sysml-studio` is a submodule holding **SysML Studio**, a viewer and
-editor for these files with a window around them: a browser over the model, the
-five kinds of diagram drawn from what the model already says, and — once its
-editing half lands — changes written back as minimal patches over the text, so
-comments, doc blocks and formatting survive an edit.
+editor for these files with a window around them: a tree over the model, the
+five kinds of diagram drawn from what the model already says, and edits —
+from the tree, the diagrams or the text — written back as minimal patches over
+the text, so comments, doc blocks and formatting survive an edit. It also
+exports the whole model as SysML v2 JSON or XMI.
 
 ```
 git submodule update --init tools/sysml-studio
