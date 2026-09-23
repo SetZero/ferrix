@@ -214,6 +214,43 @@ impl Device {
         input::AbsInfo::read(&bytes).ok_or_else(|| io::Error::other("a short input_absinfo"))
     }
 
+    /// Light or darken the device's LEDs: one `EV_LED` event per `(code,
+    /// lit)` and a `SYN_REPORT`, in one write, as libinput's
+    /// `libinput_device_led_update` writes them. The kernel passes the ones
+    /// that change to the device's driver.
+    ///
+    /// # Errors
+    ///
+    /// Whatever `write` said; `EBADF` on a device opened read-only.
+    pub fn write_leds(&self, leds: &[(u16, bool)]) -> io::Result<()> {
+        let size = Event::size(WIDTH);
+        let events = leds
+            .iter()
+            .map(|&(code, lit)| (input::EV_LED, code, i32::from(lit)))
+            .chain([(input::EV_SYN, input::SYN_REPORT, 0)]);
+        let mut bytes = Vec::new();
+        for (kind, code, value) in events {
+            let event = Event {
+                sec: 0,
+                usec: 0,
+                r#type: kind,
+                code,
+                value,
+            };
+            let at = bytes.len();
+            bytes.resize(at + size, 0);
+            event
+                .write(WIDTH, bytes.get_mut(at..).unwrap_or_default())
+                .ok_or_else(|| io::Error::other("an event that does not fit its width"))?;
+        }
+        // SAFETY: `bytes` is a live buffer of the length passed.
+        let wrote = unsafe { libc::write(self.fd.as_raw_fd(), bytes.as_ptr().cast(), bytes.len()) };
+        if wrote < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
     /// Whether the device reports `kind`.
     #[must_use]
     pub fn reports(&self, kind: u16) -> bool {
