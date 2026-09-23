@@ -49,6 +49,8 @@ pub(super) struct Device {
     control_in: Vec<u8>,
     /// Refuse `SET_PROTOCOL` with a stall.
     pub(super) stall_protocol: bool,
+    /// Stall every interrupt IN packet.
+    pub(super) stall_interrupts: bool,
     /// Each interface's report descriptor.
     pub(super) report_descriptors: Vec<Vec<u8>>,
     /// Refuse `GET_DESCRIPTOR` of a report descriptor with a stall.
@@ -103,6 +105,8 @@ pub(super) struct Model {
     pub(super) async_runs: u32,
     /// Refuse to halt, for the wedged case.
     pub(super) wedged: bool,
+    /// Every split interrupt pipe's queue head, hub and start mask seen.
+    split_starts: Vec<(u32, u8, u32)>,
 }
 
 pub(super) type Shared = Rc<RefCell<Model>>;
@@ -124,6 +128,7 @@ impl Model {
             violations: Vec::new(),
             async_runs: 0,
             wedged: false,
+            split_starts: Vec::new(),
         }))
     }
 
@@ -374,6 +379,10 @@ impl Model {
             return true;
         };
         self.check_route(device, characteristics, capabilities, periodic);
+        if periodic && self.devices[device].speed != Speed::High {
+            let hub = ((capabilities >> 16) & 0x7F) as u8;
+            self.check_split_budget(qh, device, hub, capabilities);
+        }
         let _ = eps;
 
         let outcome = match (pid, endpoint) {
@@ -407,6 +416,7 @@ impl Model {
                 }
                 Ok(total)
             }
+            (1, _) if self.devices[device].stall_interrupts => Err(()),
             (1, number) => {
                 let report = self.devices[device]
                     .reports
@@ -538,12 +548,41 @@ impl Model {
                 "device {device}: a split interrupt pipe with no complete mask"
             ));
         }
+
         let control_flag = characteristics & (1 << 27) != 0;
         if !periodic && !control_flag {
             self.violations.push(format!(
                 "device {device}: a split control endpoint without C"
             ));
         }
+    }
+
+    /// A split interrupt pipe's completes must come two to four microframes
+    /// after its start, inside the frame, and no two pipes behind one hub's
+    /// translator may start in the same microframe: the budget the DK board
+    /// showed four such starts in microframe 0 overrun.
+    fn check_split_budget(&mut self, qh: u32, device: usize, hub: u8, capabilities: u32) {
+        let start = capabilities & 0xFF;
+        let complete = (capabilities >> 8) & 0xFF;
+        let first = start.trailing_zeros();
+        if start.count_ones() != 1 || first > 3 || complete != 0x1C << first {
+            self.violations.push(format!(
+                "device {device}: split masks start {start:#04x} complete {complete:#04x}"
+            ));
+        }
+        // A queue head's own earlier entry is replaced: a pipe reopened in
+        // the same slot is the same pipe.
+        self.split_starts.retain(|&(other, _, _)| other != qh);
+        if self
+            .split_starts
+            .iter()
+            .any(|&(_, other_hub, other_start)| other_hub == hub && other_start == start)
+        {
+            self.violations.push(format!(
+                "device {device}: a second split start in microframe {first} behind hub {hub}"
+            ));
+        }
+        self.split_starts.push((qh, hub, start));
     }
 
     // -----------------------------------------------------------------------
@@ -865,6 +904,7 @@ fn device(
         reports: Vec::new(),
         control_in: Vec::new(),
         stall_protocol: false,
+        stall_interrupts: false,
         report_descriptors: Vec::new(),
         stall_report_descriptor: false,
         expect_output: None,

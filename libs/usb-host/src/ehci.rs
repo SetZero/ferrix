@@ -758,7 +758,7 @@ impl<R: Registers, D: Dma, C: Clock> Controller<R, D, C> {
         for which in 0..2 {
             self.arm(pipe, which, length)?;
         }
-        let (characteristics, capabilities) = endpoint_for_pipe(target, endpoint, max_packet);
+        let (characteristics, capabilities) = endpoint_for_pipe(target, endpoint, max_packet, pipe);
         self.memory
             .write32(qh + QH_CHARACTERISTICS, characteristics);
         self.memory.write32(qh + QH_CAPABILITIES, capabilities);
@@ -1036,14 +1036,20 @@ fn endpoint(target: &Target, number: u8, max_packet: u16, control: bool) -> (u32
 }
 
 /// An interrupt pipe's characteristics and capabilities, with the masks
-/// that schedule it every frame: a start in microframe 0, and for a split
-/// transaction completes in microframes 2 to 4.
-fn endpoint_for_pipe(target: &Target, number: u8, max_packet: u16) -> (u32, u32) {
+/// that schedule it every frame. Pipe `slot` starts in its own microframe
+/// -- the first four for a split transaction, whose completes follow two to
+/// four microframes later and must stay inside the frame -- so the pipes
+/// behind one transaction translator do not all ask it for bus time in the
+/// same microframe: a low-speed packet takes eight times a full-speed one's,
+/// and four split starts in microframe 0 left the last pipe's completes
+/// missing their window on the DK board, for good.
+fn endpoint_for_pipe(target: &Target, number: u8, max_packet: u16, slot: usize) -> (u32, u32) {
     let (characteristics, mut capabilities) = endpoint(target, number, max_packet, false);
     if target.speed == Speed::High {
-        capabilities |= HIGH_SPEED_START;
+        capabilities |= HIGH_SPEED_START << (slot % 8);
     } else {
-        capabilities |= SPLIT_START | (SPLIT_COMPLETE << 8);
+        let start = (slot % 4) as u32;
+        capabilities |= (SPLIT_START << start) | (SPLIT_COMPLETE << (8 + start));
     }
     (characteristics, capabilities)
 }

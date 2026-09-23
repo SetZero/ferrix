@@ -134,6 +134,12 @@ pub enum Note {
         /// Why.
         error: Error,
     },
+    /// A function's pipe halted too often in a row and was left stopped: its
+    /// device sends nothing more until it is plugged in again.
+    Stopped {
+        /// The function.
+        function: usize,
+    },
     /// A full- or low-speed device on a root port went to the companion
     /// controller, which nothing drives.
     Handed {
@@ -191,6 +197,8 @@ struct Function {
     reader: Interpreter,
     /// Unplugged, with its [`Output::Detached`] still to be read.
     gone: bool,
+    /// Its pipe stopped, and a note said so.
+    stopped: bool,
 }
 
 /// A fixed ring of `N` items.
@@ -321,7 +329,7 @@ impl<R: Registers, D: Dma, C: Clock> Bus<R, D, C> {
             pending,
             ..
         } = self;
-        hc.service(|packet| {
+        let serviced = hc.service(|packet| {
             let owner = functions
                 .iter()
                 .position(|function| function.is_some_and(|f| f.pipe == packet.pipe && !f.gone));
@@ -332,7 +340,18 @@ impl<R: Registers, D: Dma, C: Clock> Bus<R, D, C> {
                     len: packet.len,
                 });
             }
-        })
+        });
+        for (index, slot) in self.functions.iter_mut().enumerate() {
+            if let Some(function) = slot
+                && !function.stopped
+                && !function.gone
+                && self.hc.pipe_stopped(function.pipe)
+            {
+                function.stopped = true;
+                self.notes.push_over(Note::Stopped { function: index });
+            }
+        }
+        serviced
     }
 
     /// The next thing to hand on, if any.
@@ -780,6 +799,7 @@ impl<R: Registers, D: Dma, C: Clock> Bus<R, D, C> {
                     },
                     reader,
                     gone: false,
+                    stopped: false,
                 });
                 let _ = self.pending.push(Pending::Attached(function));
                 made += 1;
