@@ -190,6 +190,16 @@ fn user_fault_as(frame: &arch::TrapFrame, trap: &Trap, (signal, code, address): 
                 "  signal   pid {pid} ended by signal {signal} at {address:#x}, pc {:#x}: {trap:?}",
                 frame.instruction_pointer()
             );
+            // PROBE: the code the program was running, as its space has it.
+            let mut code = [0u8; 16];
+            let read = crate::syscall::process::current().map(|process| {
+                crate::syscall::uaccess::copy_from_user_present(
+                    process.space(),
+                    frame.instruction_pointer(),
+                    &mut code,
+                )
+            });
+            println!("  signal   probe code {read:?} {code:02x?} frame {frame:?}");
         }
         Some(Posted::Discarded | Posted::Pending) => {}
     }
