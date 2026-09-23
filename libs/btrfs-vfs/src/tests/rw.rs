@@ -19,6 +19,7 @@ use ferrix_vfs::tmpfs::HeapStorage;
 use ferrix_vfs::tmpfs::Storage;
 use ferrix_vfs::{Clock, Errno, FileSystem, FileType, Inode, Metadata, NewNode, Timespec};
 
+use alloc::boxed::Box;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use ferrix_btrfs::BtrfsError;
