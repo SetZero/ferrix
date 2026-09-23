@@ -61,8 +61,8 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use ferrix_bootinfo::{BootView, MemKind, PAGE_SIZE};
 use ferrix_fdt::{Trigger as TreeTrigger, VIRTIO_MMIO_COMPATIBLE};
 use ferrix_native_abi::types::{
-    DEVICE_NOT_PCI, DEVICE_TREE_BLOCKS, DEVICE_VIRTIO_PCI, DeviceBlock, DeviceInfo, TREE_STM32_HDMI,
-    TREE_STM32_USBH, USB_INPUT_FUNCTIONS,
+    DEVICE_NOT_PCI, DEVICE_TREE_BLOCKS, DEVICE_VIRTIO_PCI, DeviceBlock, DeviceInfo,
+    TREE_STM32_HDMI, TREE_STM32_USBH, USB_INPUT_FUNCTIONS,
 };
 use ferrix_pci::Address;
 use ferrix_pci::bar::{Bar, Region};

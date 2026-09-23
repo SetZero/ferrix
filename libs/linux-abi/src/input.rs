@@ -429,6 +429,8 @@ pub const ID_VENDOR: usize = 1;
 pub const ID_PRODUCT: usize = 2;
 /// `ID_VERSION`.
 pub const ID_VERSION: usize = 3;
+/// `BUS_USB`: what a USB keyboard or mouse reports.
+pub const BUS_USB: u16 = 0x03;
 /// `BUS_VIRTUAL`: what QEMU's virtio-input devices report.
 pub const BUS_VIRTUAL: u16 = 0x06;
 

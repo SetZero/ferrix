@@ -233,8 +233,16 @@ fn pll_value(reference_hz: u64) -> Option<u32> {
 fn regulators_on() -> Result<(), &'static str> {
     let pwr = Window::map(PWR_BASE, PAGE_SIZE)?;
     for (enable, ready, name) in [
-        (REG18_ENABLE, REG18_READY, "the 1.8 V USB regulator did not come up"),
-        (REG11_ENABLE, REG11_READY, "the 1.1 V USB regulator did not come up"),
+        (
+            REG18_ENABLE,
+            REG18_READY,
+            "the 1.8 V USB regulator did not come up",
+        ),
+        (
+            REG11_ENABLE,
+            REG11_READY,
+            "the 1.1 V USB regulator did not come up",
+        ),
     ] {
         let value = pwr.mmio.read32(PWR_CR3);
         pwr.mmio.write32(PWR_CR3, value | enable);
@@ -287,4 +295,3 @@ impl Drop for Window {
         let _ = vmap::unmap_device(self.at);
     }
 }
-

@@ -23,6 +23,7 @@ use ferrix_native_abi::rights::Requested;
 use ferrix_native_abi::signals::Signals;
 use ferrix_native_abi::types::{
     CHANNEL_MAX_HANDLES, DEVICE_TREE_BLOCKS, DEVICE_VIRTIO_PCI, DeviceInfo, TREE_STM32_HDMI,
+    TREE_STM32_USBH,
 };
 use ferrix_netring::control::{
     CONTROL_RIGHTS as NET_CONTROL_RIGHTS, DEVICE_RIGHTS as NET_DEVICE_RIGHTS, MAX_MESSAGE,
@@ -81,6 +82,12 @@ enum Kind {
     /// channel to hear START on, and everything after that is a Unix socket
     /// it binds itself.
     Port,
+    /// `docs/INPUT.md` §7: a bus host, whose devices are found only as its
+    /// driver enumerates the bus -- perhaps none, perhaps long after boot.
+    /// Handed its device and START as a port's driver is, it asks the input
+    /// core for a channel of its own per keyboard or mouse, so there is no
+    /// PUBLISHED for devmgr to wait for.
+    Host,
 }
 
 /// A driver about to be started: its kind, carrying what only that kind
@@ -100,6 +107,8 @@ enum Plan {
     Input,
     /// A virtio-serial port, which publishes nowhere.
     Port,
+    /// A bus host, which publishes nothing itself.
+    Host,
 }
 
 /// The table: which driver, by name in the initramfs, drives which device,
@@ -115,7 +124,12 @@ const DRIVERS: [(u16, &[u16], &[u8], Kind); 5] = [
 /// The device tree bindings the kernel publishes nodes for, by the number
 /// `device_info` gives each (`DEVICE_TREE_BLOCKS`): an STM32MP15 DK board's
 /// HDMI output is a card, driven by `ltdc` (`docs/DISPLAY.md` §6).
-const TREE_DRIVERS: [(u16, &[u8], Kind); 1] = [(TREE_STM32_HDMI, b"ltdc", Kind::Display)];
+///
+/// Its USB host is a bus host, driven by `usbhid` (`docs/INPUT.md` §7).
+const TREE_DRIVERS: [(u16, &[u8], Kind); 2] = [
+    (TREE_STM32_HDMI, b"ltdc", Kind::Display),
+    (TREE_STM32_USBH, b"usbhid", Kind::Host),
+];
 
 /// Where devmgr gave up, as the exit status.
 #[repr(i32)]
@@ -241,6 +255,7 @@ fn run(channel: &Channel<Kernel>) -> Result<(), Step> {
             Kind::Display => Plan::Display,
             Kind::Input => Plan::Input,
             Kind::Port => Plan::Port,
+            Kind::Host => Plan::Host,
         };
         let Some(slot) = started.get_mut(count as usize) else {
             failed += 1;
@@ -252,10 +267,11 @@ fn run(channel: &Channel<Kernel>) -> Result<(), Step> {
                 // the next driver starts, so disks register in PCI order
                 // and two drivers never race to be vda.
                 //
-                // A port driver publishes to no subsystem, so waiting for it
+                // A port driver publishes to no subsystem, and a bus host's
+                // devices publish when they are found, so waiting for either
                 // would wait for ever and the kill below would count a
                 // working driver failed. It is started and taken at its word.
-                let published = if kind == Kind::Port {
+                let published = if matches!(kind, Kind::Port | Kind::Host) {
                     true
                 } else {
                     await_published(channel, &port, info.location, u64::from(count))
@@ -597,7 +613,8 @@ fn start(
         Plan::Net => start_net(job, device, image, info, port, key),
         Plan::Display => start_display(job, device, image, info, port, key),
         Plan::Input => start_input(job, device, image, info, port, key),
-        Plan::Port => start_port(job, device, image, info, port, key),
+        Plan::Port => start_plain(job, device, image, info, port, key, "vport"),
+        Plan::Host => start_plain(job, device, image, info, port, key, "usbhid"),
     }
 }
 
@@ -796,22 +813,26 @@ fn start_input(
     )
 }
 
-/// A virtio-serial port driver, which serves no kernel subsystem.
+/// A driver given its device and nothing else, as `program`: a virtio-serial
+/// port's, which serves no kernel subsystem, or a bus host's, which asks for
+/// its channels itself.
 ///
 /// Every other kind asks the device for a control channel of its subsystem's
-/// kind, and the kernel learns from that what the driver is for. This one has
-/// no subsystem to name (`docs/CLIPBOARD.md` §5), so it is given its device
-/// and nothing else: `launch` makes the bootstrap channel START travels on,
-/// as it does for all of them, and the driver's only other end is the Unix
-/// socket it binds for itself. Nothing here waits for it, because there is no
-/// PUBLISHED it could ever send.
-fn start_port(
+/// kind, and the kernel learns from that what the driver is for. A port has
+/// no subsystem to name (`docs/CLIPBOARD.md` §5), and a USB host has one
+/// input device per keyboard or mouse it finds, which only it can count
+/// (`docs/INPUT.md` §7), so `launch` makes the bootstrap channel START
+/// travels on, as it does for all of them, and the driver makes the rest.
+/// Nothing here waits for it: a port has no PUBLISHED it could ever send, and
+/// a host's devices publish whenever they are plugged in.
+fn start_plain(
     job: &Job<Kernel>,
     device: Device<Kernel>,
     image: &Vmo<Kernel>,
     info: &DeviceInfo,
     port: &Port<Kernel>,
     key: u64,
+    program: &str,
 ) -> Result<(Job<Kernel>, Process<Kernel>), ()> {
     let block = |block: ferrix_native_abi::types::DeviceBlock| Block {
         phys: block.phys,
@@ -827,14 +848,23 @@ fn start_port(
         msix_table_size: info.msix_table_size,
         pci_device_id: info.device_id,
         location: info.location,
-        name: [b'v', b'p', b'o', b'r', b't', 0, 0, 0],
+        name: start_name(program),
     };
     let device = device
         .into_owned()
         .replace(Requested::Exactly(DEVICE_RIGHTS))
         .map_err(|_| ())?;
     let encoded = Ring::Start(start).encode();
-    launch(job, image, "vport", port, key, encoded.as_bytes(), [device])
+    launch(job, image, program, port, key, encoded.as_bytes(), [device])
+}
+
+/// START's name for `program`: its first eight bytes, NUL-padded.
+fn start_name(program: &str) -> [u8; 8] {
+    let mut name = [0_u8; 8];
+    for (slot, byte) in name.iter_mut().zip(program.bytes()) {
+        *slot = byte;
+    }
+    name
 }
 
 /// The job, the process, the bootstrap channel and the watch every driver
