@@ -810,9 +810,13 @@ frame, with the DK1's bus behind it as U-Boot's `usb tree` showed it.
   the controller runs one while the driver reads and re-arms the other. Every
   pipe is polled every frame.
 * **Split transactions:** a full- or low-speed device behind a high-speed hub
-  is reached through the hub's transaction translator, a start-split in
-  microframe 0 and complete-splits in 2 to 4. Both of the board's devices
-  need it; the model fails a test for a wrong hub, port, speed or mask.
+  is reached through the hub's transaction translator, each pipe starting
+  in a microframe of its own among the first four, with complete-splits two
+  to four microframes after. All four starts in microframe 0 overran the
+  translator on the board: the last pipe linked, the mouse's, halted until
+  it was stopped. The model fails a test for a wrong hub, port, speed or
+  mask, or for two starts in one microframe behind one hub, and a pipe
+  stopped after repeated halts says so on the console.
 * **Hotplug by polling:** every 250 ms the driver reads the root ports and
   asks each hub for each port's status. A device that cannot be set up is
   left alone until it is unplugged.

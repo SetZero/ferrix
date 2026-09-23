@@ -563,10 +563,13 @@ fn tell(note: Note) {
                 "usbhid: device {address} {vendor:04x}:{product:04x} {speed:?} speed, a hub of {ports} ports"
             )),
             None => say(format_args!(
-                "usbhid: device {address} {vendor:04x}:{product:04x} {speed:?} speed, {functions} boot interfaces"
+                "usbhid: device {address} {vendor:04x}:{product:04x} {speed:?} speed, {functions} input functions"
             )),
         },
         Note::Gone { address } => say(format_args!("usbhid: device {address} gone")),
+        Note::Stopped { function } => say(format_args!(
+            "usbhid: function {function}'s pipe kept failing and is stopped until it is plugged in again"
+        )),
         Note::Failed { parent, error } => {
             say(format_args!(
                 "usbhid: a device at {parent:?} could not be set up: {error:?}"

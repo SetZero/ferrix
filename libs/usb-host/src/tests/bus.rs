@@ -449,6 +449,34 @@ fn a_keyboard_that_refuses_both_gives_no_function() {
     assert_eq!(found.len(), 2, "only the mouse's");
 }
 
+/// A pipe that halts packet after packet is started again four times, then
+/// left stopped, and a note says so once; the other pipes carry on.
+#[test]
+fn a_pipe_that_keeps_halting_is_stopped_and_said_so() {
+    let mut b = board();
+    let _ = std::iter::from_fn(|| b.bus.next_note()).count();
+    b.model.borrow_mut().devices[b.keyboard].stall_interrupts = true;
+    for _ in 0..20 {
+        frames(&b.model, &mut b.bus, 1);
+    }
+    let notes: Vec<Note> = std::iter::from_fn(|| b.bus.next_note()).collect();
+    let stopped: Vec<&Note> = notes
+        .iter()
+        .filter(|note| matches!(note, Note::Stopped { .. }))
+        .collect();
+    assert!(
+        stopped.contains(&&Note::Stopped { function: b.keys }),
+        "{notes:?}"
+    );
+    assert!(
+        stopped.contains(&&Note::Stopped { function: b.media }),
+        "{notes:?}"
+    );
+    assert_eq!(stopped.len(), 2, "once each");
+    b.send(b.mouse, 1, &[0, 0, 1, 0, 1, 0, 0, 0]);
+    assert_eq!(events(&outputs(&mut b.bus), b.pointer).len(), 1);
+}
+
 #[test]
 fn many_reports_between_interrupts_keep_their_order() {
     let mut b = board();
