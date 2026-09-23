@@ -9,6 +9,7 @@
 //! cargo xtask test-vfs  --arch all --init PATH/{arch}/busybox [--timeout SECONDS]
 //! cargo xtask test-threads --arch all [--timeout SECONDS]
 //! cargo xtask test-rustc [--accel kvm] [--memory M] [--timeout SECONDS]
+//! cargo xtask test-selfhost [--accel kvm] [--release] [--smp N] [--memory M] [--timeout SECONDS]
 //! cargo xtask check     [--fast] [--ferrousli] [--zinc] [--miri]
 //! cargo xtask remote-desktop [--host DEST] [--config PATH] [--vnc :N] [--send head]
 //!                       [--viewer tigervnc|realvnc] [--layout de] [--no-viewer]
@@ -81,6 +82,7 @@ mod qemu;
 mod remote;
 mod rustc;
 mod seat;
+mod selfhost;
 mod serial;
 mod shell;
 mod ssh;
@@ -159,6 +161,7 @@ COMMANDS:
     test-jobs     Boot an interactive shell on the console, type a session with jobs at it, and require the answers
     test-threads  Boot threads-test as init and require std::thread, Mutex, mpsc and /proc's thread count
     test-rustc    Attach the rustc volume scripts/fetch-rustc-sysroot.sh makes, run `rustc hello.rs && ./hello`
+    test-selfhost  Run `cargo xtask build` on Ferrix from that toolchain and this checkout, and boot the image it made
     check         Run every quality gate (fmt, clippy, layering, audits, tests, docs)
     host-clippy   check's host clippy step alone, as CI runs it
     host-test     check's host test step alone, as CI runs it
@@ -368,6 +371,7 @@ fn run() -> Result<()> {
         "test-jobs" => jobs::test_jobs(&args),
         "test-threads" => threads::test_threads(&args),
         "test-rustc" => rustc::test_rustc(&args),
+        "test-selfhost" => selfhost::test_selfhost(&args),
         "check" => check::run(&args),
         "host-clippy" => check::host_clippy(),
         "host-test" => check::host_test(),

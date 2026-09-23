@@ -59,7 +59,7 @@ const CARGO_VERSION: &str = "cargo 1.97.1";
 const STATUS: i32 = 16;
 
 /// Each path glibc or gcc names absolutely, and where on the volume it is.
-const LINKS: &[(&str, &str)] = &[
+pub(crate) const LINKS: &[(&str, &str)] = &[
     ("lib64", "/data/usr/lib64"),
     ("lib/x86_64-linux-gnu", "/data/usr/lib/x86_64-linux-gnu"),
     ("usr/lib/x86_64-linux-gnu", "/data/usr/lib/x86_64-linux-gnu"),
@@ -90,19 +90,23 @@ const MEMORY: u32 = 4096;
 /// where LLVM runs emulated.
 const TIMEOUT: u64 = 1800;
 
-/// Where the volume is, unless `FERRIX_RUSTC_SYSROOT` names another
-/// directory: where `scripts/fetch-rustc-sysroot.sh` writes it.
-fn volume() -> Result<std::path::PathBuf> {
-    let directory = match std::env::var_os("FERRIX_RUSTC_SYSROOT") {
-        Some(directory) => std::path::PathBuf::from(directory),
+/// Where `scripts/fetch-rustc-sysroot.sh` writes, unless
+/// `FERRIX_RUSTC_SYSROOT` names another directory.
+fn directory() -> Result<std::path::PathBuf> {
+    match std::env::var_os("FERRIX_RUSTC_SYSROOT") {
+        Some(directory) => Ok(std::path::PathBuf::from(directory)),
         None => {
             let home = std::env::var_os("HOME")
                 .or_else(|| std::env::var_os("USERPROFILE"))
                 .ok_or_else(|| Error::new("neither HOME nor USERPROFILE is set"))?;
-            std::path::PathBuf::from(home).join(".local/share/ferrix/rustc")
+            Ok(std::path::PathBuf::from(home).join(".local/share/ferrix/rustc"))
         }
-    };
-    let image = directory.join("rustc.img");
+    }
+}
+
+/// The volume, in [`directory`].
+fn volume() -> Result<std::path::PathBuf> {
+    let image = directory()?.join("rustc.img");
     if !image.is_file() {
         return Err(Error::new(format!(
             "{} is not there: scripts/fetch-rustc-sysroot.sh makes it",
@@ -110,6 +114,29 @@ fn volume() -> Result<std::path::PathBuf> {
         )));
     }
     Ok(image)
+}
+
+/// The tree the volume was made from, which the script keeps beside it:
+/// what `test-selfhost` puts on a volume of its own, with the source.
+///
+/// # Errors
+///
+/// When it is not there, or is from before the script fetched Cargo and the
+/// standard libraries Ferrix's x86-64 image is built against.
+pub(crate) fn tree() -> Result<std::path::PathBuf> {
+    let tree = directory()?.join("tree");
+    let needed = [
+        "rust/bin/cargo",
+        "rust/lib/rustlib/x86_64-unknown-none/lib",
+        "rust/lib/rustlib/x86_64-unknown-uefi/lib",
+    ];
+    if let Some(missing) = needed.iter().find(|path| !tree.join(path).exists()) {
+        return Err(Error::new(format!(
+            "{} has no {missing}: run scripts/fetch-rustc-sysroot.sh again",
+            tree.display()
+        )));
+    }
+    Ok(tree)
 }
 
 /// Attach the installed toolchain to a person-facing x86-64 boot. A machine
@@ -144,7 +171,8 @@ pub(crate) fn default_links(args: &Args) -> Vec<ports::File> {
     }
 }
 
-fn files(links: &[(&str, &str)]) -> Vec<ports::File> {
+/// `links`, as the symbolic links an initramfs carries.
+pub(crate) fn files(links: &[(&str, &str)]) -> Vec<ports::File> {
     links
         .iter()
         .map(|(path, target)| ports::File {

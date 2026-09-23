@@ -69,6 +69,10 @@ pub(crate) struct Args {
     /// boot never changes it. `test-rustc` requires it; x86-64 `run` and
     /// `run-compositor` attach it when the toolchain has been fetched.
     pub(crate) data_image: Option<std::path::PathBuf>,
+    /// Whether what the guest writes to `data_image` reaches the file:
+    /// `test-selfhost`'s volume, made afresh for each run, which the host
+    /// reads the built image back out of.
+    pub(crate) data_image_kept: bool,
     /// `--seeds`, how many power failures `test-powerfail` makes.
     pub(crate) seeds: u64,
     /// `--accel`, which QEMU accelerator to boot under. `None` means `tcg`,
