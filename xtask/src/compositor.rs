@@ -308,7 +308,18 @@ const ANIMATED_MOVING: Moving<'static> = Moving {
 /// the guest reports are around 1.5 seconds a frame, and what this catches
 /// is a compositor that stopped drawing or a frame that became minutes
 /// rather than seconds.
-const FRAME_BOUND: u128 = 5_000_000;
+///
+/// Twice that on ARMv7-A, whose frames under `tcg` take about twice
+/// AArch64's in the same runs (1.3 to 2 s against 0.6 to 0.8 s on a loaded
+/// nazuna, 2026-09-23), and whose slowest reached 5.25 s there with the
+/// host's load average near 11: a bound the 64-bit machines keep a margin
+/// under would fail it on load alone.
+fn frame_bound(arch: Arch) -> u128 {
+    match arch {
+        Arch::Armv7a => 10_000_000,
+        Arch::X86_64 | Arch::AArch64 => 5_000_000,
+    }
+}
 
 /// The configuration the eighth boot is given: the decorations of the third,
 /// with the animations on and a keybind that sends a window to the other
@@ -3524,9 +3535,10 @@ fn frames_were_inside_the_bound(arch: Arch, said: &[String]) -> Result<()> {
             "{arch}: the compositor never said how long its frames took"
         )));
     }
-    if slowest > FRAME_BOUND {
+    let bound = frame_bound(arch);
+    if slowest > bound {
         return Err(Error::new(format!(
-            "{arch}: the slowest frame took {slowest} us, past the {FRAME_BOUND} us a frame under \
+            "{arch}: the slowest frame took {slowest} us, past the {bound} us a frame under \
              emulation is allowed"
         )));
     }
