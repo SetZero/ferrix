@@ -60,6 +60,10 @@ const AREA_PAGES: usize = AREA_BYTES / PAGE;
 const KEY_INTERRUPT: u64 = 1;
 const KEY_FIRST_CONTROL: u64 = 16;
 
+/// What the bootstrap channel is told once the first enumeration settled:
+/// devmgr reads only that something came.
+const SETTLED: &[u8] = b"settled";
+
 /// How long the core has to answer a HELLO.
 const READY_PATIENCE: u64 = 2_000_000_000;
 
@@ -361,7 +365,7 @@ fn run(boot: &Channel<Kernel>) -> Result<(), Step> {
         location: start.location,
         channels: [const { None }; MAX_FUNCTIONS],
     };
-    let ended = driver.serve();
+    let ended = driver.serve(boot);
     let Driver { bus, .. } = driver;
     match bus.shutdown() {
         Ok(parts) => {
@@ -388,8 +392,15 @@ struct Driver {
 
 impl Driver {
     /// Poll, forward, and wait, for as long as the controller runs.
-    fn serve(&mut self) -> Result<(), Step> {
+    ///
+    /// Once what was plugged in at boot is found and introduced, the
+    /// bootstrap channel is told: devmgr waits for that before its REPORT,
+    /// which the kernel starts init at, so a compositor that reads
+    /// `/dev/input` once finds the keyboard (`docs/INPUT.md` §7.3).
+    fn serve(&mut self, boot: &Channel<Kernel>) -> Result<(), Step> {
         self.bus.poll();
+        self.forward();
+        let _ = boot.write(SETTLED);
         loop {
             self.forward();
             let deadline = Deadline::At(self.bus.next_poll());

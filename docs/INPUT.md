@@ -792,7 +792,12 @@ node allows eight times at once (`USB_INPUT_FUNCTIONS`) where every other
 node allows one. A tree node's HELLO carries `DEVICE_NOT_PCI` for its
 location, as the display core's does, and sends devmgr no PUBLISHED, since
 every tree node shares that word. A device unplugged has its channel closed,
-which the core hears as the device going (`event<N> is gone`). This is the
+which the core hears as the device going (`event<N> is gone`). devmgr does wait, a
+bounded five seconds, for the driver to say on its bootstrap channel that
+its first enumeration has settled -- what was plugged in at boot found and
+published -- before it sends REPORT, which the kernel starts init at: a
+compositor that reads `/dev/input` once at start found none of the board's
+devices without it (hyprix as init, 2026-09-23). This is the
 hotplug decision 5 of §6 left out, for this driver: devices come and go; how
 a compositor learns of one that came later is still that backlog row's.
 

@@ -262,7 +262,14 @@ fn run(channel: &Channel<Kernel>) -> Result<(), Step> {
             continue;
         };
         match start(&job, device, image, &info, plan, &port, u64::from(count)) {
-            Ok((job, process)) => {
+            Ok((job, process, bootstrap)) => {
+                // A bus host says when the devices plugged in at boot are
+                // published, and init -- which the kernel starts at REPORT --
+                // should find them: a compositor reads /dev/input once.
+                if kind == Kind::Host {
+                    await_settled(&bootstrap);
+                }
+                drop(bootstrap);
                 // One at a time: the kernel's PUBLISHED for this disk before
                 // the next driver starts, so disks register in PCI order
                 // and two drivers never race to be vda.
@@ -541,7 +548,9 @@ fn restart(
         // Nothing else is restarted.
         _ => return false,
     };
-    let Ok((job, process)) = start(drivers.job, device, image, &entry.info, plan, port, key) else {
+    let Ok((job, process, _bootstrap)) =
+        start(drivers.job, device, image, &entry.info, plan, port, key)
+    else {
         return false;
     };
     entry.job = job;
@@ -607,7 +616,7 @@ fn start(
     plan: Plan,
     port: &Port<Kernel>,
     key: u64,
-) -> Result<(Job<Kernel>, Process<Kernel>), ()> {
+) -> Result<Launched, ()> {
     match plan {
         Plan::Block(name) => start_block(job, device, image, info, name, port, key),
         Plan::Net => start_net(job, device, image, info, port, key),
@@ -627,7 +636,7 @@ fn start_block(
     name: DiskName,
     port: &Port<Kernel>,
     key: u64,
-) -> Result<(Job<Kernel>, Process<Kernel>), ()> {
+) -> Result<Launched, ()> {
     let control = device.block_ring().map_err(|_| ())?;
     let block = |block: ferrix_native_abi::types::DeviceBlock| Block {
         phys: block.phys,
@@ -678,7 +687,7 @@ fn start_net(
     info: &DeviceInfo,
     port: &Port<Kernel>,
     key: u64,
-) -> Result<(Job<Kernel>, Process<Kernel>), ()> {
+) -> Result<Launched, ()> {
     let control = device.net_ring().map_err(|_| ())?;
     let start = NetStart {
         index: 0,
@@ -720,7 +729,7 @@ fn start_display(
     info: &DeviceInfo,
     port: &Port<Kernel>,
     key: u64,
-) -> Result<(Job<Kernel>, Process<Kernel>), ()> {
+) -> Result<Launched, ()> {
     let (program, program_name) = if info.virtio == DEVICE_TREE_BLOCKS {
         ("ltdc", &[b'l', b't', b'd', b'c', 0, 0, 0, 0])
     } else {
@@ -775,7 +784,7 @@ fn start_input(
     info: &DeviceInfo,
     port: &Port<Kernel>,
     key: u64,
-) -> Result<(Job<Kernel>, Process<Kernel>), ()> {
+) -> Result<Launched, ()> {
     let control = device.input_control().map_err(|_| ())?;
     let block = |block: ferrix_native_abi::types::DeviceBlock| Block {
         phys: block.phys,
@@ -833,7 +842,7 @@ fn start_plain(
     port: &Port<Kernel>,
     key: u64,
     program: &str,
-) -> Result<(Job<Kernel>, Process<Kernel>), ()> {
+) -> Result<Launched, ()> {
     let block = |block: ferrix_native_abi::types::DeviceBlock| Block {
         phys: block.phys,
         offset: block.offset,
@@ -867,6 +876,25 @@ fn start_name(program: &str) -> [u8; 8] {
     name
 }
 
+/// How long a bus host may take to settle its first enumeration before
+/// devmgr reports without it: the DK board's hub, mouse and keyboard take a
+/// second (`docs/INPUT.md` §7.3).
+const SETTLE_NANOS: u64 = 5_000_000_000;
+
+/// Wait for a bus host's driver to say its first enumeration has settled --
+/// any message on its bootstrap channel -- or to die, or for
+/// [`SETTLE_NANOS`]: whichever comes first. What it says is not read; a
+/// driver that says nothing costs the boot the wait and no more.
+fn await_settled(bootstrap: &Channel<Kernel>) {
+    let Ok(now) = ferrix_rt::linux::monotonic_nanos() else {
+        return;
+    };
+    let _ = bootstrap.wait_one(
+        Signals::READABLE | Signals::PEER_CLOSED,
+        Deadline::At(now.saturating_add(SETTLE_NANOS)),
+    );
+}
+
 /// The job, the process, the bootstrap channel and the watch every driver
 /// starts with: only START's bytes and handles differ between the rings.
 fn launch<const N: usize>(
@@ -877,13 +905,16 @@ fn launch<const N: usize>(
     key: u64,
     start: &[u8],
     handles: [OwnedHandle<Kernel>; N],
-) -> Result<(Job<Kernel>, Process<Kernel>), ()> {
+) -> Result<Launched, ()> {
     let child_job = job.create_child().map_err(|_| ())?;
     let process = pending::create_process(&child_job, image, program).map_err(|_| ())?;
     let (near, far) = channel::create(Kernel).map_err(|_| ())?;
     near.write_with(start, handles).map_err(|_| ())?;
     process.notify_on_exit(port, key).map_err(|_| ())?;
     process.start(far.into_owned()).map_err(|_| ())?;
-    drop(near);
-    Ok((child_job, process))
+    Ok((child_job, process, near))
 }
+
+/// A driver as `launch` leaves it: its job, the process, and devmgr's end of
+/// the channel START went down, which only a bus host's driver answers on.
+type Launched = (Job<Kernel>, Process<Kernel>, Channel<Kernel>);
