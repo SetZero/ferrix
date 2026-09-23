@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "digest": "d8b6a6ff59c7cad67295a99356d9885c8fc32689858b8054ec518c6dc03b281a",
+  "digest": "4f2b54ccf525498b31de84028715c70c99daae8c6ec32ab3f6f56463818cab1e",
   "files": [
     {
       "path": "docs/sysml/00-lifecycle.sysml",
@@ -15020,7 +15020,7 @@
           "specializes": "DriverProcess",
           "maturity": "implemented",
           "stage": 17,
-          "doc": "user/usbhid over libs/usb-host: the STM32MP157's EHCI controller, its hubs, and HID boot keyboards and mice, each served to the input core over a control channel of its own. devmgr starts it as a bus host and does not wait for it; its memory is pinned PIN_COHERENT. No QEMU machine has the device, so no boot test exercises it: its gates are libs/usb-host's tests against a model of EHCI and the board's bus, and it ran on the DK1 on 2026-09-23 (docs/INPUT.md §7).",
+          "doc": "user/usbhid over libs/usb-host: the STM32MP157's EHCI controller, its hubs, and HID keyboards, mice and media keys read by their report descriptors, each served to the input core over a control channel of its own, keyboards' LEDs lit by the core's STATUS. devmgr starts it as a bus host and does not wait for it; its memory is pinned PIN_COHERENT. No QEMU machine has the device, so no boot test exercises it: its gates are libs/usb-host's tests against a model of EHCI and the board's bus, and it ran on the DK1 on 2026-09-23 (docs/INPUT.md §7).",
           "source": {
             "file": "docs/sysml/08-drivers.sysml",
             "line": 238
@@ -15083,7 +15083,7 @@
           ],
           "source": {
             "file": "docs/sysml/08-drivers.sysml",
-            "line": 250
+            "line": 252
           },
           "children": [
             {
@@ -15095,7 +15095,7 @@
               ],
               "source": {
                 "file": "docs/sysml/08-drivers.sysml",
-                "line": 264
+                "line": 266
               }
             },
             {
@@ -15107,7 +15107,7 @@
               ],
               "source": {
                 "file": "docs/sysml/08-drivers.sysml",
-                "line": 265
+                "line": 267
               }
             },
             {
@@ -15119,7 +15119,7 @@
               ],
               "source": {
                 "file": "docs/sysml/08-drivers.sysml",
-                "line": 266
+                "line": 268
               }
             },
             {
@@ -15131,7 +15131,7 @@
               ],
               "source": {
                 "file": "docs/sysml/08-drivers.sysml",
-                "line": 267
+                "line": 269
               }
             },
             {
@@ -15143,7 +15143,7 @@
               ],
               "source": {
                 "file": "docs/sysml/08-drivers.sysml",
-                "line": 268
+                "line": 270
               }
             },
             {
@@ -15155,7 +15155,7 @@
               ],
               "source": {
                 "file": "docs/sysml/08-drivers.sysml",
-                "line": 269
+                "line": 271
               }
             }
           ]

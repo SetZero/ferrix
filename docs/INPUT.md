@@ -307,6 +307,7 @@ blk driver per disk.
 | `REFUSED` | core → driver | reason | — |
 | `EVENTS` | driver → core | count; up to `MAX_EVENTS` events of 8 bytes each, virtio-input's own layout (type `u16`, code `u16`, value `i32`) | — |
 | `STOP` / `STOPPED` | as blk | | |
+| `STATUS` | core → driver | laid out as `EVENTS`: the `EV_LED` events a program wrote to the node that changed the device's state, for the driver to light (§7.4) | — |
 
 `HELLO` holds virtio-input's answers as the device gave them. Its bitmaps are
 as long as the probe's `*_CNT` for each type, so the message is fixed-size and
@@ -414,8 +415,12 @@ events, and `test-input` passes there with its negative control.
 reports only. It returns `EINVAL` if `count` is smaller than one event,
 blocks while the queue is empty, answers `EAGAIN` under `O_NONBLOCK`, and
 `ENODEV` once the device is gone and the queue is drained. **`write`**
-answers `EINVAL` in this iteration: on Linux it injects events, used for
-LEDs, which come later (§6, and a `docs/BACKLOG.md` row). **`poll`** reports
+takes whole events as `evdev_write` does, `EINVAL` for fewer bytes than one:
+`EV_LED` events change the device's LED state (`EVIOCGLED`) and those that
+changed go to its driver as `STATUS`; `SYN_REPORT` does nothing; any other
+type is `EINVAL`, where Linux injects it as though the device had sent it --
+a written deviation, with a `docs/BACKLOG.md` row. The LED events are not
+passed on to the node's readers, as Linux passes them. **`poll`** reports
 `POLLIN | POLLRDNORM` when a whole report is queued and `POLLHUP | POLLERR`
 when the device is gone.
 
@@ -682,9 +687,10 @@ Linux does.
 2. **No kernel key autorepeat** (§3.1), a written deviation from Linux: the
    core makes no value-2 events. Compositors repeat keys themselves
    (`wl_keyboard.repeat_info`), and libinput ignores `EV_REP` events.
-3. **`write` is refused for now**, so the caps-lock LED does not light. LEDs
-   are a `docs/BACKLOG.md` row: they come with the status queue, as an
-   additive `inputctl` message (`STATUS`, core → driver).
+3. **`write` was refused at first**, so the caps-lock LED did not light. LEDs
+   came with an additive `inputctl` message (`STATUS`, core → driver) on
+   2026-09-23 (§3.3, §7.4): a USB keyboard lights them; virtio-input takes
+   STATUS but does not drive its status queue yet (`docs/BACKLOG.md`).
 4. **Multi-touch, force feedback and sound are left out** of what the core
    publishes, even when a device declares them, each with a backlog row.
    QEMU's keyboard and tablet declare none of them.
@@ -810,18 +816,31 @@ frame, with the DK1's bus behind it as U-Boot's `usb tree` showed it.
 * **Hotplug by polling:** every 250 ms the driver reads the root ports and
   asks each hub for each port's status. A device that cannot be set up is
   left alone until it is unplugged.
-* **HID, the boot protocol only:** each boot keyboard or mouse interface is
-  put in the boot protocol, whose report layout is fixed, so no report
-  descriptor is parsed. Keys go through Linux's own `hid_keyboard` table, in
-  Linux's order (modifiers, keys let go, keys pressed, `SYN_REPORT`); a mouse
-  gives five buttons, X, Y and the wheel. The name is the manufacturer's and
-  product's strings joined as Linux joins them, and the bus is `BUS_USB`.
+* **HID, by the device's report descriptor:** every HID interface with an
+  interrupt IN endpoint has its report descriptor read (`libs/usb-host`'s
+  `report`: main, global and local items, report IDs, push and pop), and one
+  whose fields map to anything is a function, in the report protocol.
+  Usages become codes by Linux's `hid-input.c`: the keyboard page by
+  `hid_keyboard`, buttons from `BTN_MOUSE` in a mouse (sixteen) and
+  `BTN_MISC` elsewhere, the relative desktop axes, `AC Pan` as `REL_HWHEEL`,
+  the system controls, and the consumer page's media and application keys.
+  Events come in Linux's order (modifiers, keys let go, keys pressed,
+  `SYN_REPORT`). A boot interface whose descriptor cannot be read falls back
+  to the boot protocol, whose fixed layouts are two built-in descriptors
+  read the same way. A function is named as Linux names an input per
+  application: the manufacturer's and product's strings, and the
+  application's suffix unless the name already ends with it ("SEM USB
+  Keyboard Consumer Control"). The bus is `BUS_USB`.
+* **LEDs:** a keyboard declares the LEDs its output reports hold. `STATUS`
+  from the core becomes `SET_REPORT` of each output report holding an LED,
+  sent when the LEDs change.
 
 ### 7.5 Not done
 
-Keyboard LEDs (with §6's LED row), a device's other interfaces (the G502's
-second HID interface, media keys) and report-protocol devices, bulk and
-isochronous transfers, and a full- or low-speed device on a root port, which
+Absolute axes (tablets, touch screens), multi-touch and force feedback;
+vendor pages (the G502's HID++ report); a compositor that writes the LEDs as
+its lock state changes (hyprix does not yet); bulk and isochronous
+transfers, and a full- or low-speed device on a root port, which
 EHCI hands to its companion OHCI controller -- not reachable on a DK board,
 whose root port has the hub. A process writing the 115200-baud console flat
 out starves the driver: hexdumping both event nodes to it lost the clicks

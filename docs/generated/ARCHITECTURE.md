@@ -100,7 +100,7 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixAssurance` | `11-assurance.sysml` | docs/RELIABILITY.md and docs/ASSEMBLY.md: the quality gates, what each one verifies, and what the tests can actually reach. The gates cargo xtask check runs are in CI. Of the xtask boot gates, CI runs test-boot and test-rustc; the ones that need a binary the repository does not carry, a disk judged on the host or a screendump run in the landing gates of docs/BACKLOG.md instead (docs/ROADMAP.md, Continuously). |
 | `FerrixViews` | `12-views.sysml` | How to read the one model as two: what runs today, and what the roadmap still owes. The filters key on the lifecycle keywords every element carries. |
 
-13 files, 16 packages, 1630 elements, 194 relations. Model digest `d8b6a6ff59c7cad6`.
+13 files, 16 packages, 1630 elements, 194 relations. Model digest `4f2b54ccf525498b`.
 
 | Maturity | Elements | Meaning |
 | --- | ---: | --- |
@@ -2296,7 +2296,7 @@ user/input over libs/virtio-input, feeding the input core's /dev/input/eventN ov
 
 `#implemented`  ·  stage 17  ·  specialises `DriverProcess`
 
-user/usbhid over libs/usb-host: the STM32MP157's EHCI controller, its hubs, and HID boot keyboards and mice, each served to the input core over a control channel of its own. devmgr starts it as a bus host and does not wait for it; its memory is pinned PIN_COHERENT. No QEMU machine has the device, so no boot test exercises it: its gates are libs/usb-host's tests against a model of EHCI and the board's bus, and it ran on the DK1 on 2026-09-23 (docs/INPUT.md §7).
+user/usbhid over libs/usb-host: the STM32MP157's EHCI controller, its hubs, and HID keyboards, mice and media keys read by their report descriptors, each served to the input core over a control channel of its own, keyboards' LEDs lit by the core's STATUS. devmgr starts it as a bus host and does not wait for it; its memory is pinned PIN_COHERENT. No QEMU machine has the device, so no boot test exercises it: its gates are libs/usb-host's tests against a model of EHCI and the board's bus, and it ran on the DK1 on 2026-09-23 (docs/INPUT.md §7).
 
 #### DriverBootstrap
 
