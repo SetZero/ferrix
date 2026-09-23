@@ -3762,10 +3762,13 @@ synchronisation objects had assumed 64 bits and were the wrong size for
 C's on ARMv7-A — `pthread_cond_t`, the read-write lock and `sem_t` — and a
 timed condition wait hung on stack garbage until they were fixed.
 
-Not yet: the Arm programs built against ferrousli statically, on Ferrix itself.
-`cargo xtask busybox` and `--init ferrousli` are x86-64 only, and CI runs
-only x86-64's suite, because the cross compilers and QEMU's user mode the
-Arm suites need are not on its runners. `docs/BACKLOG.md` has both rows.
+busybox built against ferrousli runs on all three since the same evening:
+`tools/busybox/build.sh --arch` cross-compiles it with gcc for AArch64 or
+ARMv7-A against Alpine's pinned UAPI headers for each, it linked on both at
+the first attempt, and `cargo xtask test-shell --arch aarch64|armv7a --init
+ferrousli` builds it and runs stage 7's script to 7 on each. Not yet: CI
+runs only x86-64's suite, because the cross compilers and QEMU's user mode
+the Arm suites need are not on its runners; `docs/BACKLOG.md` has the row.
 
 **Done — AArch64's string routines, for the Pixel 7, 2026-09-23.** The
 customer means to run ferrousli on a rooted Pixel 7 that boots Ferrix

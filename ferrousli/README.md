@@ -122,8 +122,12 @@ the two projects of the family that do not build for this target.
 ## busybox
 
 `tools/busybox/build.sh` builds busybox 1.37.0 against this library, as a
-static x86-64 program: musl's headers, `crt1.o` and `libferrousli.a`, with the
-host's kernel UAPI headers and nothing from its C library. On Windows,
+static program: musl's headers, `crt1.o` and `libferrousli.a`, and nothing
+from any other C library. x86-64's is built with the host's `cc` and kernel
+UAPI headers; `--arch aarch64` and `--arch armv7a` cross-compile with gcc
+for the target (`aarch64-linux-gnu-gcc`, `arm-linux-gnueabihf-gcc`, or
+whichever `$CC_<target>` names, as cc-rs spells it) against Alpine's
+`linux-headers` for that architecture, pinned by checksum. On Windows,
 `tools/busybox/build-windows.sh` builds the same program without WSL: this
 library for `x86_64-unknown-linux-gnu`, busybox with clang and lld against
 Alpine's pinned `linux-headers`, and busybox's host programs with mingw gcc and
@@ -133,7 +137,7 @@ pins the busybox.net tarball and Alpine's config for its `busybox-static`
 that config.
 
 It downloads and builds under `~/.local/share/ferrix/busybox/ferrousli`, and
-installs `x86_64/busybox` there once the program links. Until then it exits 1
+installs `<arch>/busybox` there once the program links. Until then it exits 1
 and writes `undefined-symbols.txt` beside it: the functions busybox calls that
 this library does not have yet. Ferrix's `cargo xtask test-shell --init` and
 `test-vfs` are to run the installed binary, beside Alpine's musl build and the

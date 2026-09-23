@@ -1,11 +1,13 @@
 //! ferrousli's busybox: built by `ferrousli/tools/busybox/build.sh`, or on
 //! Windows by `build-windows.sh` beside it, and installed as
-//! `x86_64/bin/busybox.static` under `~/.local/share/ferrix/busybox/ferrousli`
+//! `<arch>/bin/busybox.static` under `~/.local/share/ferrix/busybox/ferrousli`
 //! (or `$FERRIX_BUSYBOX`), where `--init ferrousli` finds it.
 //!
-//! `build.sh` compiles busybox with the host's `cc` against the host's kernel
-//! UAPI headers. Windows has neither, so `build-windows.sh` cross-compiles with
-//! clang against Alpine's pinned UAPI headers, in Git for Windows' bash. Both
+//! `build.sh` compiles x86-64's with the host's `cc` against the host's kernel
+//! UAPI headers, and AArch64's and ARMv7-A's with gcc for the target against
+//! Alpine's pinned UAPI headers for it. Windows has no `cc`, so
+//! `build-windows.sh` cross-compiles x86-64's with clang against Alpine's
+//! pinned headers, in Git for Windows' bash; it builds no other. All of them
 //! build the same pinned sources with the same config.
 
 use std::path::{Path, PathBuf};
@@ -28,23 +30,25 @@ fn root() -> Result<PathBuf> {
 }
 
 /// Run by `bash -c` in `ferrousli/`, with `$1` the build script in
-/// `tools/busybox/` and `$2` the directory to install into.
+/// `tools/busybox/`, `$2` the directory to install into and `$3` the
+/// architecture.
 ///
 /// `$out` is the scripts' own: `$FERRIX_BUSYBOX`, with their default. Normally
 /// it is the install directory itself, and the copy is skipped. Both lists are
 /// removed first, so a list read after a failure is this run's.
 const SCRIPT: &str = r#"set -uo pipefail
 root=$2
+arch=$3
 out=${FERRIX_BUSYBOX:-$HOME/.local/share/ferrix/busybox/ferrousli}
-mkdir -p "$root/x86_64/bin" || exit 1
+mkdir -p "$root/$arch/bin" || exit 1
 rm -f "$out/undefined-symbols.txt" "$root/undefined-symbols.txt"
-if ! bash "tools/busybox/$1"; then
+if ! bash "tools/busybox/$1" --arch "$arch"; then
     if [ -f "$out/undefined-symbols.txt" ] && ! [ "$out" -ef "$root" ]; then
         cp "$out/undefined-symbols.txt" "$root/"
     fi
     exit 1
 fi
-install -m 755 "$out/x86_64/busybox" "$root/x86_64/bin/busybox.static"
+install -m 755 "$out/$arch/busybox" "$root/$arch/bin/busybox.static"
 "#;
 
 /// The installed binary for `arch`, beneath `root`.
@@ -52,13 +56,15 @@ fn installed(root: &Path, arch: Arch) -> PathBuf {
     root.join(arch.name()).join("bin").join("busybox.static")
 }
 
-/// Refuse every architecture the build scripts do not build for.
-fn refuse_other_than_x86_64(arch: Arch) -> Result<()> {
-    if arch == Arch::X86_64 {
+/// Refuse an architecture this host's build script does not build for:
+/// `build-windows.sh` builds x86-64's alone.
+fn refuse_unbuildable(arch: Arch) -> Result<()> {
+    if arch == Arch::X86_64 || !cfg!(windows) {
         Ok(())
     } else {
         Err(Error::new(format!(
-            "ferrousli's busybox is built for x86_64 only, not for {arch}"
+            "ferrousli's busybox for {arch} is cross-compiled with gcc for it, which \
+             build-windows.sh does not do; build it on Linux"
         )))
     }
 }
@@ -95,7 +101,7 @@ pub(crate) fn installed_program(arch: Arch) -> Option<PathBuf> {
 ///
 /// Never another busybox in its place: a build that fails is the error.
 pub(crate) fn program(arch: Arch) -> Result<PathBuf> {
-    refuse_other_than_x86_64(arch)?;
+    refuse_unbuildable(arch)?;
     let root = root()?;
     let program = installed(&root, arch);
     let ferrousli = crate::paths::workspace_root().join("ferrousli");
@@ -120,7 +126,7 @@ pub(crate) fn program(arch: Arch) -> Result<PathBuf> {
 /// While ferrousli still lacks functions busybox calls, the link fails and
 /// this refuses, naming them.
 pub(crate) fn build(arch: Arch) -> Result<PathBuf> {
-    refuse_other_than_x86_64(arch)?;
+    refuse_unbuildable(arch)?;
     let root = root()?;
     let _lock = ferrousli::lock_builds(&root, "busybox")?;
     build_locked(arch, &root)
@@ -137,13 +143,21 @@ fn build_locked(arch: Arch, root: &Path) -> Result<PathBuf> {
         // One spelling of the directory for both the script and its caller,
         // with the separators bash expects.
         let root = root.to_string_lossy().replace('\\', "/");
-        let _ = command
-            .env(VAR, &root)
-            .args(["-c", SCRIPT, "bash", "build-windows.sh", &root]);
+        let _ = command.env(VAR, &root).args([
+            "-c",
+            SCRIPT,
+            "bash",
+            "build-windows.sh",
+            &root,
+            arch.name(),
+        ]);
         ("build-windows.sh", command)
     } else {
         let mut command = Command::new("bash");
-        let _ = command.args(["-c", SCRIPT, "bash", "build.sh"]).arg(&root);
+        let _ = command
+            .args(["-c", SCRIPT, "bash", "build.sh"])
+            .arg(&root)
+            .arg(arch.name());
         ("build.sh", command)
     };
     ferrousli::in_ferrousli(&mut command, &ferrousli);
@@ -173,10 +187,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_x86_64_has_a_ferrousli_busybox() {
+    fn windows_builds_only_x86_64s_busybox() {
+        assert!(refuse_unbuildable(Arch::X86_64).is_ok());
         for arch in [Arch::AArch64, Arch::Armv7a] {
-            assert!(program(arch).is_err(), "{arch}");
-            assert!(build(arch).is_err(), "{arch}");
+            assert_eq!(refuse_unbuildable(arch).is_err(), cfg!(windows), "{arch}");
         }
     }
 
