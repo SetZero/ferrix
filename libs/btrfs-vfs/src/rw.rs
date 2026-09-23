@@ -581,7 +581,10 @@ impl<D: WriteHandle> Inode for Node<D> {
             }
         }
         self.maybe_commit(data.len())?;
-        Ok((data.len(), at))
+        // The offset just past the write, which a `write` moves the file's
+        // position to: the kernel copies a large write in pieces, and a start
+        // offset here wrote every piece over the first.
+        Ok((data.len(), end))
     }
 
     fn set_len(&self, len: u64) -> Result<()> {

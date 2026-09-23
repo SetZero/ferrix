@@ -244,6 +244,25 @@ fn writes_land_where_they_are_asked_to() {
 }
 
 #[test]
+fn a_write_answers_the_offset_just_past_it() {
+    // What `write` moves the file's position to, as the trait says. The
+    // kernel copies a write in 4 KiB pieces, so an answer of the start put
+    // every piece over the first, and every file a program wrote on the
+    // volume with `write` was one page long.
+    let disk = Disk::new(BLANK);
+    let fs = mount(&disk);
+    let file = make_file(&fs.root(), b"file", b"");
+    assert_eq!(file.write_at(0, &[1u8; 4096], false).unwrap(), (4096, 4096));
+    assert_eq!(
+        file.write_at(4096, &[2u8; 100], false).unwrap(),
+        (100, 4196)
+    );
+    assert_eq!(file.write_at(0, &[3u8; 10], true).unwrap(), (10, 4206));
+    assert_eq!(file.write_at(8, &[4u8; 2], false).unwrap(), (2, 10));
+    assert_eq!(file.metadata().size, 4206);
+}
+
+#[test]
 fn what_is_written_outlives_the_last_reference_to_its_file() {
     // A build closes each object file and opens it again to archive it, and
     // nothing need hold the inode in between: the VFS keeps a bounded number
