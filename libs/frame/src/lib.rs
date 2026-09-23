@@ -472,6 +472,40 @@ impl<'a> Frames<'a> {
         }
     }
 
+    /// Turn an allocated block of `2^order` frames into as many single
+    /// frames, each allocated on its own with one reference.
+    ///
+    /// For memory that has to be physically contiguous when it is taken and
+    /// is owned page by page afterwards: a display controller that scans out
+    /// one run of addresses reads a buffer whose pages a VMO holds, maps and
+    /// gives back one at a time. Each frame is then exactly what
+    /// [`Frames::allocate_frame`] returns, so [`Frames::release`] frees it and
+    /// the block re-forms as its frames come back. Nothing is freed or taken
+    /// here; the free count does not change.
+    ///
+    /// # Errors
+    ///
+    /// The refusals of [`Frames::deallocate`] for a frame that is not the head
+    /// of an allocated block of exactly `order`, and
+    /// [`FrameError::StillShared`] for a block somebody else holds too.
+    pub fn split(&mut self, frame: Frame, order: u8) -> Result<(), FrameError> {
+        if order > MAX_ORDER {
+            return Err(FrameError::OrderTooLarge(order));
+        }
+        self.allocated_head(frame, order)?;
+        if self.entry(frame).is_some_and(|entry| entry.refcount > 1) {
+            return Err(FrameError::StillShared(frame));
+        }
+        for single in frame..frame + (1u64 << order) {
+            if let Some(entry) = self.entry_mut(single) {
+                entry.state = State::Allocated;
+                entry.order = 0;
+                entry.refcount = 1;
+            }
+        }
+        Ok(())
+    }
+
     /// Take a single frame.
     pub fn allocate_frame(&mut self) -> Option<Frame> {
         self.allocate(0)

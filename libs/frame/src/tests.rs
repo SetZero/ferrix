@@ -157,6 +157,76 @@ fn a_misaligned_region_is_split_into_aligned_blocks() {
 }
 
 #[test]
+fn a_split_block_is_single_frames_that_merge_back_as_they_are_released() {
+    let (mut entries, base, count) = arena(0, 64);
+    let mut frames = frames!(entries, base, count);
+    let before = frames.free_blocks();
+
+    let block = frames.allocate(3).unwrap();
+    assert_eq!(
+        frames.release(block + 1),
+        Err(FrameError::InsideBlock(block + 1))
+    );
+    frames.split(block, 3).unwrap();
+    assert_eq!(
+        frames.free_frames(),
+        56,
+        "splitting takes and frees nothing"
+    );
+    for frame in block..block + 8 {
+        assert_eq!(frames.state(frame), Some(State::Allocated));
+        assert_eq!(frames.entry(frame).unwrap().refcount(), 1);
+    }
+
+    // Released out of order, as a VMO gives pages back.
+    for frame in [
+        block + 5,
+        block,
+        block + 7,
+        block + 2,
+        block + 1,
+        block + 6,
+        block + 3,
+    ] {
+        assert_eq!(frames.release(frame), Ok(Released::Freed));
+    }
+    assert_ne!(frames.free_blocks(), before, "one frame still out");
+    assert_eq!(frames.release(block + 4), Ok(Released::Freed));
+    assert_eq!(frames.free_frames(), 64);
+    assert_eq!(frames.free_blocks(), before, "the block re-formed");
+}
+
+#[test]
+fn only_the_head_of_an_unshared_block_of_that_order_is_split() {
+    let (mut entries, base, count) = arena(0, 64);
+    let mut frames = frames!(entries, base, count);
+
+    let block = frames.allocate(2).unwrap();
+    assert_eq!(
+        frames.split(block + 1, 2),
+        Err(FrameError::InsideBlock(block + 1))
+    );
+    assert_eq!(frames.split(block, 3), Err(FrameError::WrongOrder(block)));
+    assert_eq!(
+        frames.split(block, MAX_ORDER + 1),
+        Err(FrameError::OrderTooLarge(MAX_ORDER + 1))
+    );
+    let single = frames.allocate_frame().unwrap();
+    assert_eq!(frames.share(single), Ok(2));
+    assert_eq!(
+        frames.split(single, 0),
+        Err(FrameError::StillShared(single))
+    );
+    let free = frames.free_frames();
+    frames.deallocate(block, 2).unwrap();
+    assert_eq!(
+        frames.free_frames(),
+        free + 4,
+        "a refused split left the block whole"
+    );
+}
+
+#[test]
 fn freeing_both_halves_merges_them() {
     let (mut entries, base, count) = arena(0, 1024);
     let mut frames = frames!(entries, base, count);
