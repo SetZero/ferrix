@@ -681,34 +681,7 @@ fn read_sigset(process: &Process, at: u64) -> Result<u64, Errno> {
     Ok(u64::from_le_bytes(bytes))
 }
 
-/// Read a `struct timespec` of `width` as nanoseconds.
+/// Read a `struct timespec` of `width` as nanoseconds, by `ppoll`'s rules.
 fn read_timespec(process: &Process, at: u64, width: TimeWidth) -> Result<u64, Errno> {
-    let field = if width == TimeWidth::Wide {
-        8
-    } else {
-        size_of::<usize>()
-    };
-    let mut bytes = [0_u8; 16];
-    let wanted = bytes.get_mut(..field * 2).ok_or(Errno::EINVAL)?;
-    uaccess::copy_from_user(process.space(), at, wanted).map_err(|_| Errno::EFAULT)?;
-    let value = |index: usize| -> Result<i64, Errno> {
-        let raw = wanted
-            .get(index * field..(index + 1) * field)
-            .ok_or(Errno::EINVAL)?;
-        let mut word = [0_u8; 8];
-        word.get_mut(..field)
-            .ok_or(Errno::EINVAL)?
-            .copy_from_slice(raw);
-        Ok(if field == 8 {
-            i64::from_le_bytes(word)
-        } else {
-            i64::from(u64::from_le_bytes(word) as u32 as i32)
-        })
-    };
-    let seconds = u64::try_from(value(0)?).map_err(|_| Errno::EINVAL)?;
-    let nanos = u64::try_from(value(1)?).map_err(|_| Errno::EINVAL)?;
-    if nanos >= 1_000_000_000 {
-        return Err(Errno::EINVAL);
-    }
-    Ok(seconds.saturating_mul(1_000_000_000).saturating_add(nanos))
+    crate::syscall::poll::read_timespec(process, at, width)
 }

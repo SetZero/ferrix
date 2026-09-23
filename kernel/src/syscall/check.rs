@@ -1784,9 +1784,32 @@ fn check_poll_reports_ready_invalid_and_skipped(process: &Process) -> Result<(),
     if poll::sys_ppoll(&thread, at, 1, 0, at, 16, time::TimeWidth::Native) != Err(Errno::EINVAL) {
         return Err("ppoll accepted a signal set of the wrong size");
     }
+    // On a 32-bit build a 64-bit `tv_nsec` is its low half, as Linux's
+    // `get_timespec64` has it: the upper half is padding a libc need not
+    // write, and ferrousli does not, so curl's every poll on ARMv7-A failed.
+    if size_of::<usize>() == 4 {
+        let mut timeout = [0_u8; 16];
+        let fields = 0_u64
+            .to_le_bytes()
+            .into_iter()
+            .chain(1_000_000_u32.to_le_bytes())
+            .chain(0xDEAD_BEEF_u32.to_le_bytes());
+        for (slot, byte) in timeout.iter_mut().zip(fields) {
+            *slot = byte;
+        }
+        let tmo = at + POLL_TIMEOUT;
+        uaccess::copy_to_user(process.space(), tmo, &timeout)
+            .map_err(|_| "could not stage a timespec")?;
+        if poll::sys_ppoll(&thread, at, 1, tmo, 0, 8, time::TimeWidth::Wide) != Ok(0) {
+            return Err("ppoll refused a 64-bit timeout for the padding above its tv_nsec");
+        }
+    }
     let _ = memory::sys_munmap(process, at, PAGE_SIZE).map_err(|_| "munmap was refused")?;
     Ok(())
 }
+
+/// Where on its page the `poll` check stages a `ppoll` timeout.
+const POLL_TIMEOUT: u64 = 256;
 
 /// Where on its page the `select` check stages each argument.
 const SELECT_WRITE: u64 = 256;

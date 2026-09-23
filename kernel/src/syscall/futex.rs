@@ -83,9 +83,6 @@ use crate::user::vmo::Vmo;
 /// A bitset that matches every waiter: what the plain `WAIT` and `WAKE` use.
 const FUTEX_BITSET_MATCH_ANY: u32 = 0xFFFF_FFFF;
 
-/// Nanoseconds in a second.
-const NANOS_PER_SECOND: u64 = 1_000_000_000;
-
 /// Which word a waiter sleeps on. See the module documentation.
 #[derive(Debug, Clone)]
 enum Key {
@@ -524,29 +521,7 @@ pub(crate) fn forget_waiters(process: &Process, address: u64, count: i32) -> usi
     )
 }
 
-/// Read a `struct timespec` of `width` as nanoseconds.
+/// Read a `struct timespec` of `width` as nanoseconds, by `ppoll`'s rules.
 fn read_timespec(process: &Process, at: u64, width: TimeWidth) -> Result<u64, Errno> {
-    let wide = width == TimeWidth::Wide || size_of::<usize>() == 8;
-    let field = if wide { 8 } else { 4 };
-    let mut bytes = [0_u8; 16];
-    let used = bytes.get_mut(..field * 2).ok_or(Errno::EINVAL)?;
-    uaccess::copy_from_user(process.space(), at, used).map_err(|_| Errno::EFAULT)?;
-    let signed = |from: usize| -> Result<i64, Errno> {
-        let slice = bytes.get(from..from + field).ok_or(Errno::EINVAL)?;
-        Ok(if wide {
-            i64::from_le_bytes(slice.try_into().map_err(|_| Errno::EINVAL)?)
-        } else {
-            i64::from(i32::from_le_bytes(
-                slice.try_into().map_err(|_| Errno::EINVAL)?,
-            ))
-        })
-    };
-    let seconds = u64::try_from(signed(0)?).map_err(|_| Errno::EINVAL)?;
-    let nanos = u64::try_from(signed(field)?).map_err(|_| Errno::EINVAL)?;
-    if nanos >= NANOS_PER_SECOND {
-        return Err(Errno::EINVAL);
-    }
-    Ok(seconds
-        .saturating_mul(NANOS_PER_SECOND)
-        .saturating_add(nanos))
+    crate::syscall::poll::read_timespec(process, at, width)
 }

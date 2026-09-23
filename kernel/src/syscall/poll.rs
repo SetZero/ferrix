@@ -262,29 +262,12 @@ fn is_wide(width: TimeWidth) -> bool {
     width == TimeWidth::Wide || WORD_BYTES == 8
 }
 
-/// Read two signed fields of `width`: a `timespec` or a `timeval`.
+/// Read two signed fields of `width`: a `timespec` or a `timeval`. The
+/// kernel's one reader of them, so a 64-bit `tv_nsec` on ARMv7-A keeps only
+/// its low half, as `get_timespec64` does: ferrousli leaves the padding above
+/// it unwritten, and curl's every `poll` failed with `EINVAL` on it.
 fn read_pair(process: &Process, at: u64, width: TimeWidth) -> Result<(i64, i64), Errno> {
-    if is_wide(width) {
-        let mut bytes = [0_u8; 16];
-        uaccess::copy_from_user(process.space(), at, &mut bytes).map_err(|_| Errno::EFAULT)?;
-        let (seconds, rest) = bytes.split_at(8);
-        Ok((
-            i64::from_le_bytes(seconds.try_into().map_err(|_| Errno::EINVAL)?),
-            i64::from_le_bytes(rest.try_into().map_err(|_| Errno::EINVAL)?),
-        ))
-    } else {
-        let mut bytes = [0_u8; 8];
-        uaccess::copy_from_user(process.space(), at, &mut bytes).map_err(|_| Errno::EFAULT)?;
-        let (seconds, rest) = bytes.split_at(4);
-        Ok((
-            i64::from(i32::from_le_bytes(
-                seconds.try_into().map_err(|_| Errno::EINVAL)?,
-            )),
-            i64::from(i32::from_le_bytes(
-                rest.try_into().map_err(|_| Errno::EINVAL)?,
-            )),
-        ))
-    }
+    crate::syscall::time::read_pair(process, at, width)
 }
 
 /// Write two fields of `width` at `at`, ignoring a fault.

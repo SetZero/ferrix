@@ -681,6 +681,13 @@ fn read_times(
     for (index, slot) in times.iter_mut().enumerate() {
         let tv_sec = signed_field(raw, index * 2 * field, field)?;
         let tv_nsec = signed_field(raw, (index * 2 + 1) * field, field)?;
+        // A 64-bit `tv_nsec` on a 32-bit build keeps its low half, as
+        // `get_timespec64` does: the rest is padding a libc need not write.
+        let tv_nsec = if field > size_of::<usize>() {
+            i64::from(tv_nsec as i32)
+        } else {
+            tv_nsec
+        };
         *slot = match tv_nsec {
             UTIME_NOW => Some(now),
             UTIME_OMIT => None,
