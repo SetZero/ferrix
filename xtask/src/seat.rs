@@ -95,13 +95,16 @@ fn build(arch: Arch, package: &str, binary: &str) -> Result<PathBuf> {
     })?;
     let target_dir = paths::target_dir().join("compositor").join("seat");
     println!("  building compositor/{binary} for {target}");
-    let mut command = std::process::Command::new(crate::cargo::cargo());
-    let _ = command
-        .current_dir(paths::workspace_root().join("compositor"))
-        .args(["build", "--release", "-p", package, "--target", target])
-        .env("CARGO_TARGET_DIR", &target_dir);
-    crate::cargo::run(command, &format!("cargo build (compositor/{binary})"))?;
-    Ok(target_dir.join(target).join("release").join(binary))
+    let program = target_dir.join(target).join("release").join(binary);
+    crate::builds::Build::cargo(
+        format!("cargo build (compositor/{binary}) --target {target}"),
+        paths::workspace_root().join("compositor"),
+    )
+    .args(["build", "--release", "-p", package, "--target", target])
+    .env("CARGO_TARGET_DIR", &target_dir)
+    .output(&program)
+    .run()?;
+    Ok(program)
 }
 
 /// What one boot of the compositor saw.

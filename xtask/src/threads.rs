@@ -12,7 +12,6 @@
 //! that could not fail would pass that build too.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use crate::args::Args;
 use crate::paths::{self, Arch};
@@ -48,20 +47,23 @@ fn build(arch: Arch, negative: bool) -> Result<PathBuf> {
     let flavour = if negative { "negative" } else { "plain" };
     let target_dir = paths::target_dir().join("threads-test").join(flavour);
     println!("  building threads-test ({flavour}) for {target}");
-    let mut command = Command::new(cargo::cargo());
-    let _ = command
-        .current_dir(paths::workspace_root().join("threads-test"))
-        .args(["build", "--release", "--target", target])
-        .env("CARGO_TARGET_DIR", &target_dir);
+    let program = target_dir.join(target).join("release").join("threads-test");
+    let mut build = crate::builds::Build::cargo(
+        format!("cargo build (threads-test, {flavour}) --target {target}"),
+        paths::workspace_root().join("threads-test"),
+    )
+    .args(["build", "--release", "--target", target])
+    .env("CARGO_TARGET_DIR", &target_dir)
+    .output(&program);
     if negative {
-        let _ = command.args(["--features", "negative-control"]);
+        build = build.args(["--features", "negative-control"]);
     }
     // Ferrix's own `.cargo/config.toml` uses this triple for the ARMv7-A
     // loader, with its linker script, and cargo merges a parent directory's
     // flags for a target into `threads-test/`'s. The variable replaces every
     // configured flag, so the program is linked as the other two are.
     if arch == Arch::Armv7a {
-        let _ = command
+        build = build
             .env(
                 "CARGO_TARGET_ARMV7_UNKNOWN_LINUX_MUSLEABI_LINKER",
                 "rust-lld",
@@ -72,8 +74,8 @@ fn build(arch: Arch, negative: bool) -> Result<PathBuf> {
                  -C target-feature=+crt-static",
             );
     }
-    cargo::run(command, "cargo build (threads-test)")?;
-    Ok(target_dir.join(target).join("release").join("threads-test"))
+    build.run()?;
+    Ok(program)
 }
 
 /// Boot `program` as init on `arch` and return every line after the boot

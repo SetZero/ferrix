@@ -41,6 +41,16 @@
 //! compiled into it -- `/data/src`, and the vendored crates' -- differ, and
 //! so would the bytes.
 //!
+//! # Every build, with `--plan`
+//!
+//! Given `--plan <DIR>` -- a plan `FERRIX_BUILDS=record:<DIR>` wrote while
+//! the test matrix ran (`crate::builds`) -- the volume carries the plan too,
+//! and the crates of every workspace a build in it may compile, and zinc runs
+//! `cargo xtask builds-execute --plan /data/plan` in place of `build`: Ferrix
+//! makes every build the matrix made. The host then takes `/data/plan/store`
+//! off the volume into `<DIR>/store`, where `FERRIX_BUILDS=replay:<DIR>/store`
+//! finds it, so that the matrix boots what Ferrix compiled.
+//!
 //! # Where it runs
 //!
 //! On a Linux host: the volume is made with `mkfs.btrfs --rootdir` and read
@@ -79,6 +89,23 @@ offline = true
 /// keeps its metadata twice.
 const ROOM: u64 = 8 << 30;
 
+/// [`ROOM`] for a plan: a target directory per workspace, one per flavour of
+/// the compositor's programs, and every build's outputs kept in the store.
+/// Sparse on the host, which pays only for what the guest writes.
+const PLAN_ROOM: u64 = 64 << 30;
+
+/// [`MEMORY`] for a plan: every page the builds write stays in memory.
+const PLAN_MEMORY: u32 = 24 * 1024;
+
+/// [`TIMEOUT`] for a plan.
+const PLAN_TIMEOUT: u64 = 6 * 3600;
+
+/// Where the plan is on the volume.
+const PLAN: &str = "/data/plan";
+
+/// The workspaces beside the root one whose crates a build may compile.
+const WORKSPACES: &[&str] = &["compositor", "zinc", "threads-test", "ferrousli"];
+
 /// Guest memory unless `--memory` says otherwise. btrfs file pages stay in
 /// memory once read or written, and the build reads the toolchain's 350 MiB
 /// of libraries and writes about 1.3 GiB.
@@ -89,6 +116,9 @@ const TIMEOUT: u64 = 3600;
 
 /// The status the script exits with when the build succeeded.
 const STATUS: i32 = 20;
+
+/// What the guest's xtask prints when every build of a plan was made.
+const EXECUTED: &str = "builds: all ";
 
 /// What the guest's xtask prints when it has written the image.
 const BUILT: &str = "built /data/src/build/x86_64/ferrix.img";
@@ -116,24 +146,34 @@ pub(crate) fn test_selfhost(args: &Args) -> Result<()> {
     }
     let checker = btrfs_check::Checker::required()?;
     let tree = rustc::tree()?;
+    let plan = args.plan.as_deref().map(Path::new);
     let work = paths::build_dir(arch).join("selfhost");
-    let volume = stage(&tree, &work)?;
+    let volume = stage(&tree, &work, plan)?;
 
     let mut build = args.clone();
     build.data_image = Some(volume.clone());
     build.data_image_kept = true;
     if !build.memory_given {
-        build.memory = MEMORY;
+        build.memory = if plan.is_some() { PLAN_MEMORY } else { MEMORY };
     }
     if !build.timeout_given {
-        build.timeout = TIMEOUT;
+        build.timeout = if plan.is_some() {
+            PLAN_TIMEOUT
+        } else {
+            TIMEOUT
+        };
     }
 
     let shell =
         zinc::built(arch)?.ok_or_else(|| Error::new("zinc could not be built for x86-64"))?;
     println!("  {arch}: building an image whose shell builds Ferrix");
     let loader = cargo::build_loader(arch, args.release)?;
-    let kernel = cargo::build_kernel_with_init(arch, args.release, &shell, &script(args.release))?;
+    let kernel = cargo::build_kernel_with_init(
+        arch,
+        args.release,
+        &shell,
+        &script(args.release, plan.is_some()),
+    )?;
     let natives = native::build(arch, args.release)?;
     let bytes = std::fs::read(&shell)
         .map_err(|error| Error::new(format!("reading {}: {error}", shell.display())))?;
@@ -149,13 +189,21 @@ pub(crate) fn test_selfhost(args: &Args) -> Result<()> {
     let log = paths::build_dir(arch).join("serial.log");
     let kept = work.join("build-serial.log");
     let _ = std::fs::copy(&log, &kept);
-    judge(arch, &lines?)?;
+    judge(arch, &lines?, plan.is_some())?;
     println!(
         "  {arch}: the build boot's serial output is in {}",
         kept.display()
     );
 
     checker.run(&volume, arch)?;
+    if let Some(plan) = plan {
+        let store = restore_store(&volume, plan)?;
+        println!(
+            "  {arch}: Ferrix made every build in the plan; FERRIX_BUILDS=replay:{} answers them",
+            store.display()
+        );
+        return Ok(());
+    }
     let (built, built_kernel) = restore(&volume, &work, args.release)?;
     println!("  {arch}: booting the image Ferrix built");
     qemu::test_boot(arch, &built, &built_kernel, args)?;
@@ -164,22 +212,28 @@ pub(crate) fn test_selfhost(args: &Args) -> Result<()> {
 }
 
 /// The script zinc runs: Cargo's version first, so a failure says whether
-/// the toolchain started at all.
-fn script(release: bool) -> String {
+/// the toolchain started at all; then the image, or with a plan every build
+/// in it.
+fn script(release: bool, plan: bool) -> String {
     let profile = if release { " --release" } else { "" };
+    let work = if plan {
+        format!("cargo xtask builds-execute --plan {PLAN}")
+    } else {
+        format!("cargo xtask build --arch x86_64{profile}")
+    };
     format!(
         "export PATH=/data/rust/bin:/data/usr/bin:/bin\n\
          export HOME=/data/home CARGO_HOME={CARGO_HOME} CARGO_TARGET_DIR={TARGET}\n\
          cd {SOURCE}\n\
          cargo -V || exit 3\n\
-         cargo xtask build --arch x86_64{profile} || exit 4\n\
+         {work} || exit 4\n\
          exit {STATUS}\n"
     )
 }
 
 /// Whether the transcript is a build that wrote its image and a script that
 /// got to its end.
-fn judge(arch: Arch, lines: &[String]) -> Result<()> {
+fn judge(arch: Arch, lines: &[String], plan: bool) -> Result<()> {
     let after_boot = lines
         .iter()
         .position(|line| line.contains(qemu::SUCCESS_MARKER))
@@ -189,13 +243,27 @@ fn judge(arch: Arch, lines: &[String]) -> Result<()> {
         .iter()
         .find_map(|line| line.trim().strip_prefix(crate::shell::EXITED))
         .map(str::trim);
-    let built = after_boot.iter().any(|line| line.trim_end() == BUILT);
+    let built = after_boot.iter().any(|line| {
+        if plan {
+            line.trim().starts_with(EXECUTED)
+        } else {
+            line.trim_end() == BUILT
+        }
+    });
     match exited {
         Some(status) if status == STATUS.to_string() && built => {
-            println!("  {arch}: cargo xtask build finished on Ferrix");
+            if plan {
+                println!("  {arch}: every build in the plan was made on Ferrix");
+            } else {
+                println!("  {arch}: cargo xtask build finished on Ferrix");
+            }
             Ok(())
         }
         Some("3") => Err(Error::new(format!("{arch}: `cargo -V` failed"))),
+        Some("4") if plan => Err(Error::new(format!(
+            "{arch}: Cargo ran, and a build in the plan failed: the build boot's serial output \
+             names it, on a `builds: ... failed` line"
+        ))),
         Some("4") => Err(Error::new(format!(
             "{arch}: Cargo ran, and `cargo xtask build` failed"
         ))),
@@ -206,9 +274,9 @@ fn judge(arch: Arch, lines: &[String]) -> Result<()> {
     }
 }
 
-/// Make the volume in `work` from `tree`, this checkout and its vendored
-/// crates, and return its path.
-fn stage(tree: &Path, work: &Path) -> Result<PathBuf> {
+/// Make the volume in `work` from `tree`, this checkout, its vendored crates
+/// and `plan`, and return its path.
+fn stage(tree: &Path, work: &Path, plan: Option<&Path>) -> Result<PathBuf> {
     let stage = work.join("stage");
     if stage.exists() {
         std::fs::remove_dir_all(&stage)?;
@@ -227,14 +295,18 @@ fn stage(tree: &Path, work: &Path) -> Result<PathBuf> {
     cargo::run(command, "copying the toolchain tree")?;
     let copied = copy_sources(&stage.join("src"))?;
     println!("  {copied} tracked files in src/");
-    vendor(&stage.join("vendor"))?;
+    vendor(&stage.join("vendor"), plan.is_some())?;
     std::fs::create_dir_all(stage.join("cargo-home"))?;
     std::fs::write(stage.join("cargo-home/config.toml"), CARGO_CONFIG)?;
     std::fs::create_dir_all(stage.join("home"))?;
+    if let Some(plan) = plan {
+        carry_plan(plan, &stage.join("plan"))?;
+    }
 
     let volume = work.join("volume.img");
     let _ = std::fs::remove_file(&volume);
-    let size = used(&stage)?.saturating_add(ROOM);
+    let room = if plan.is_some() { PLAN_ROOM } else { ROOM };
+    let size = used(&stage)?.saturating_add(room);
     std::fs::File::create(&volume)?.set_len(size)?;
     let mut command = Command::new("mkfs.btrfs");
     let _ = command.arg("-q").arg("--rootdir").arg(&stage).arg(&volume);
@@ -307,11 +379,22 @@ fn link(_target: &Path, to: &Path) -> Result<()> {
 }
 
 /// `cargo vendor` the workspace's crates.io dependencies into `into`, from
-/// Cargo's own cache: no network here either.
-fn vendor(into: &Path) -> Result<()> {
-    let status = Command::new(cargo::cargo())
-        .current_dir(paths::workspace_root())
-        .args(["vendor", "--locked", "--offline", "--quiet"])
+/// Cargo's own cache: no network here either. With `every`, the crates of
+/// the [`WORKSPACES`] beside it too, which a plan's builds compile.
+fn vendor(into: &Path, every: bool) -> Result<()> {
+    let root = paths::workspace_root();
+    let mut command = Command::new(cargo::cargo());
+    let _ = command
+        .current_dir(&root)
+        .args(["vendor", "--locked", "--offline", "--quiet"]);
+    if every {
+        for workspace in WORKSPACES {
+            let _ = command
+                .arg("--sync")
+                .arg(root.join(workspace).join("Cargo.toml"));
+        }
+    }
+    let status = command
         .arg(into)
         .stdout(Stdio::null())
         .status()
@@ -337,6 +420,61 @@ fn used(path: &Path) -> Result<u64> {
         .next()
         .and_then(|bytes| bytes.parse().ok())
         .ok_or_else(|| Error::new(format!("du could not size {}", path.display())))
+}
+
+/// Copy the plan in `plan` -- the list and the files it carries, not a
+/// store an earlier run left -- to `into`.
+fn carry_plan(plan: &Path, into: &Path) -> Result<()> {
+    std::fs::create_dir_all(into.join("files"))?;
+    let _ = std::fs::copy(plan.join("plan"), into.join("plan")).map_err(|error| {
+        Error::new(format!(
+            "reading the plan in {}: {error}; FERRIX_BUILDS=record:{} writes one",
+            plan.display(),
+            plan.display()
+        ))
+    })?;
+    let files = plan.join("files");
+    if files.is_dir() {
+        for entry in std::fs::read_dir(&files)? {
+            let entry = entry?;
+            let _ = std::fs::copy(entry.path(), into.join("files").join(entry.file_name()))?;
+        }
+    }
+    Ok(())
+}
+
+/// Take the store the guest made out of `volume` into `plan/store`, and
+/// return where it is.
+fn restore_store(volume: &Path, plan: &Path) -> Result<PathBuf> {
+    let restored = plan.join("restored");
+    if restored.exists() {
+        std::fs::remove_dir_all(&restored)?;
+    }
+    std::fs::create_dir_all(&restored)?;
+    let mut command = Command::new("btrfs");
+    let _ = command
+        .args(["restore", "--path-regex", "^/(|plan(|/store(|/.*)))$"])
+        .arg(volume)
+        .arg(&restored)
+        .stdout(Stdio::null());
+    cargo::run(command, "btrfs restore")?;
+    let store = plan.join("store");
+    if store.exists() {
+        std::fs::remove_dir_all(&store)?;
+    }
+    std::fs::rename(restored.join("plan/store"), &store).map_err(|error| {
+        Error::new(format!(
+            "btrfs restore did not give the store ({error}): the guest said it made every \
+             build, and the volume does not have them"
+        ))
+    })?;
+    std::fs::remove_dir_all(&restored)?;
+    let builds = std::fs::read_dir(&store)?.count();
+    println!(
+        "  took {builds} builds' outputs out of the volume into {}",
+        store.display()
+    );
+    Ok(store)
 }
 
 /// Take the image and the kernel ELF the guest built out of `volume`, into
@@ -397,7 +535,21 @@ mod tests {
             BUILT,
             "  init     the shell exited with 20",
         ]);
-        assert!(judge(Arch::X86_64, &lines).is_ok());
+        assert!(judge(Arch::X86_64, &lines, false).is_ok());
+    }
+
+    #[test]
+    fn a_plan_is_judged_by_its_own_line() {
+        let lines = transcript(&[
+            qemu::SUCCESS_MARKER,
+            "builds: all 57 made",
+            "  init     the shell exited with 20",
+        ]);
+        assert!(judge(Arch::X86_64, &lines, true).is_ok());
+        assert!(judge(Arch::X86_64, &lines, false).is_err());
+        let failed = transcript(&[qemu::SUCCESS_MARKER, "  init     the shell exited with 4"]);
+        let error = judge(Arch::X86_64, &failed, true).unwrap_err().to_string();
+        assert!(error.contains("builds: ... failed"), "{error}");
     }
 
     #[test]
@@ -407,7 +559,7 @@ mod tests {
             qemu::SUCCESS_MARKER,
             "  init     the shell exited with 20",
         ]);
-        assert!(judge(Arch::X86_64, &lines).is_err());
+        assert!(judge(Arch::X86_64, &lines, false).is_err());
     }
 
     #[test]
@@ -415,16 +567,17 @@ mod tests {
         for (status, words) in [("3", "cargo -V"), ("4", "cargo xtask build")] {
             let exit = format!("  init     the shell exited with {status}");
             let lines = transcript(&[qemu::SUCCESS_MARKER, &exit]);
-            let error = judge(Arch::X86_64, &lines).unwrap_err().to_string();
+            let error = judge(Arch::X86_64, &lines, false).unwrap_err().to_string();
             assert!(error.contains(words), "{error}");
         }
     }
 
     #[test]
     fn the_script_builds_the_profile_asked_for() {
-        assert!(script(false).contains("cargo xtask build --arch x86_64 ||"));
-        assert!(script(true).contains("cargo xtask build --arch x86_64 --release ||"));
-        assert!(script(false).contains(&format!("exit {STATUS}")));
+        assert!(script(false, false).contains("cargo xtask build --arch x86_64 ||"));
+        assert!(script(true, false).contains("cargo xtask build --arch x86_64 --release ||"));
+        assert!(script(false, false).contains(&format!("exit {STATUS}")));
+        assert!(script(false, true).contains("cargo xtask builds-execute --plan /data/plan ||"));
     }
 
     #[test]

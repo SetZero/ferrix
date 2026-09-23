@@ -15,7 +15,6 @@
 //! write on: what is being tested is the pseudoterminal, not the program.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::{Duration, Instant};
 
 use crate::args::Args;
@@ -46,13 +45,16 @@ fn build(arch: Arch, package: &str, binary: &str) -> Result<PathBuf> {
     })?;
     let target_dir = paths::target_dir().join("compositor").join("term");
     println!("  building compositor/{binary} for {target}");
-    let mut command = Command::new(crate::cargo::cargo());
-    let _ = command
-        .current_dir(paths::workspace_root().join("compositor"))
-        .args(["build", "--release", "-p", package, "--target", target])
-        .env("CARGO_TARGET_DIR", &target_dir);
-    crate::cargo::run(command, &format!("cargo build (compositor/{binary})"))?;
-    Ok(target_dir.join(target).join("release").join(binary))
+    let program = target_dir.join(target).join("release").join(binary);
+    crate::builds::Build::cargo(
+        format!("cargo build (compositor/{binary}) --target {target}"),
+        paths::workspace_root().join("compositor"),
+    )
+    .args(["build", "--release", "-p", package, "--target", target])
+    .env("CARGO_TARGET_DIR", &target_dir)
+    .output(&program)
+    .run()?;
+    Ok(program)
 }
 
 /// Boot the terminal as init, with the program it runs in the initramfs.
