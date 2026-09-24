@@ -3,6 +3,8 @@
 //! One of the two device drivers inside the kernel — see `crate::console` for
 //! why it is here at all rather than in userspace.
 
+use core::sync::atomic::{AtomicBool, Ordering};
+
 use super::cpu;
 
 /// COM1. Fixed by convention since the IBM PC and still where firmware puts the
@@ -54,6 +56,10 @@ pub(crate) fn init() {
     write_register(LINE_CONTROL, EIGHT_N_ONE);
     write_register(FIFO_CONTROL, FIFO_ENABLE);
     write_register(MODEM_CONTROL, MODEM_READY);
+    HAS_FIFOS.store(
+        read_register(INTERRUPT_ID) & FIFOS_ENABLED == FIFOS_ENABLED,
+        Ordering::Relaxed,
+    );
 }
 
 /// The ISA interrupt COM1 raises.
@@ -61,14 +67,92 @@ pub(crate) const ISA_IRQ: u8 = 4;
 
 /// Interrupt enable register: raise the port's line while received data waits.
 const RECEIVE_DATA_AVAILABLE: u8 = 1;
+/// Interrupt enable register: raise the port's line while the transmit holding
+/// register — the whole transmit FIFO, with the FIFO on — is empty.
+const TRANSMIT_HOLDING_EMPTY: u8 = 1 << 1;
+
+/// Interrupt identification, read at [`FIFO_CONTROL`]'s address.
+const INTERRUPT_ID: u16 = COM1 + 2;
+/// `INTERRUPT_ID`: set when the port has no reason to interrupt.
+const NO_INTERRUPT_PENDING: u8 = 1;
+/// `INTERRUPT_ID`: both bits set when the FIFOs are on — a 16550A. An 8250 or
+/// a 16450 has none, and ignores the write that asks for them.
+const FIFOS_ENABLED: u8 = 0xC0;
+
+/// How many bytes the transmit FIFO holds.
+const FIFO_DEPTH: usize = 16;
+
+/// Whether [`init`] found the FIFOs on. Asked once, there: reading
+/// [`INTERRUPT_ID`] also acknowledges a transmit interrupt, which a question
+/// asked on every write must not do.
+static HAS_FIFOS: AtomicBool = AtomicBool::new(false);
 
 /// Let the port raise its interrupt when a byte arrives.
 ///
 /// Reading the byte clears it, which [`read_byte`] does. `MODEM_CONTROL`
 /// already sets `OUT2`, the bit that on a PC connects the 16550's interrupt
-/// output to the interrupt controller at all.
+/// output to the interrupt controller at all. The transmit half is left as it
+/// is: `console::output` turns it on and off as it has something to send.
 pub(crate) fn enable_receive_interrupt() {
-    write_register(INTERRUPT_ENABLE, RECEIVE_DATA_AVAILABLE);
+    write_register(
+        INTERRUPT_ENABLE,
+        read_register(INTERRUPT_ENABLE) | RECEIVE_DATA_AVAILABLE,
+    );
+}
+
+/// How many bytes the port can take now without anyone waiting: a FIFO's
+/// worth once the holding register says it is empty, nothing until then. A
+/// port without FIFOs takes one.
+pub(crate) fn transmit_room() -> usize {
+    if read_register(LINE_STATUS) & TRANSMIT_EMPTY == 0 {
+        return 0;
+    }
+    if HAS_FIFOS.load(Ordering::Relaxed) {
+        FIFO_DEPTH
+    } else {
+        1
+    }
+}
+
+/// Hand the port one byte, for a caller [`transmit_room`] said it had room
+/// for.
+pub(crate) fn put(byte: u8) {
+    write_register(DATA, byte);
+}
+
+/// Let the port interrupt when its transmit FIFO has emptied, or stop it.
+///
+/// Turned on with the holding register already empty, a 16550 interrupts at
+/// once, which is how a queue that starts on an idle port gets going.
+pub(crate) fn transmit_interrupt(on: bool) {
+    let enabled = read_register(INTERRUPT_ENABLE);
+    let wanted = if on {
+        enabled | TRANSMIT_HOLDING_EMPTY
+    } else {
+        enabled & !TRANSMIT_HOLDING_EMPTY
+    };
+    write_register(INTERRUPT_ENABLE, wanted);
+}
+
+/// Whether the port still has a reason to interrupt, which its handler asks
+/// before it returns: see `console::input`'s handler for why a 16550 on an
+/// edge-triggered line has to be asked.
+///
+/// Reading the identification register is what acknowledges a transmit
+/// interrupt, and the handler wants exactly that: an empty FIFO it has
+/// nothing more for should stop asking.
+pub(crate) fn interrupt_pending() -> bool {
+    read_register(INTERRUPT_ID) & NO_INTERRUPT_PENDING == 0
+}
+
+/// What the port sends from, for the boot line that says how the console
+/// sends.
+pub(crate) fn transmit_buffer() -> &'static str {
+    if HAS_FIFOS.load(Ordering::Relaxed) {
+        "a 16550's FIFO"
+    } else {
+        "a 16450's one register"
+    }
 }
 
 /// Write one of COM1's registers.
@@ -84,9 +168,10 @@ fn write_register(port: u16, value: u8) {
 
 /// Read one of COM1's registers.
 fn read_register(port: u16) -> u8 {
-    // SAFETY: as `write_register`. The only register read is `LINE_STATUS`,
-    // which has no side effects — unlike `DATA`, which would consume a
-    // received character.
+    // SAFETY: as `write_register`. Reading `LINE_STATUS` and
+    // `INTERRUPT_ENABLE` has no side effects; reading `INTERRUPT_ID`
+    // acknowledges a transmit interrupt, and `DATA` consumes a received
+    // character, which is what their callers read them for.
     unsafe { cpu::inb(port) }
 }
 

@@ -1060,7 +1060,7 @@ pub(crate) fn frame_pointer() -> u64 {
 
 /// Stop the machine, once the console has sent its last line.
 pub(crate) fn shutdown() -> ! {
-    console::drain();
+    crate::console::drain();
     cpu::psci_system_off();
     halt()
 }
@@ -1071,7 +1071,7 @@ pub(crate) fn shutdown() -> ! {
 /// off instead: one that stops when asked to come back is noticed, one that
 /// carries on as though it had reset is not.
 pub(crate) fn reset() -> ! {
-    console::drain();
+    crate::console::drain();
     cpu::psci_system_reset();
     crate::console::println!("  power    firmware did not reset the machine; powering off");
     shutdown()

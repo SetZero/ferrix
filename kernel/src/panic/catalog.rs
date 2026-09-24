@@ -405,6 +405,30 @@ pub(crate) static CONSOLE_INPUT: Explanation = Explanation {
     see: "kernel/src/console/input.rs check; kernel/src/irq.rs register",
 };
 
+/// For `kmain` in `main.rs`, when `console::output::check` fails.
+pub(crate) static CONSOLE_OUTPUT: Explanation = Explanation {
+    code: "FX-0504",
+    title: "console output did not go out by interrupt",
+    meaning: "Once the scheduler runs, `console::output::check` writes one line to the console \
+              from a task, as a program's `write(2)` does, and requires the writer to have left \
+              the port's transmit interrupt everything past the first burst it put into the \
+              port itself, the ring to have emptied within two seconds, and no writer to have \
+              found the port stalled and polled the ring out. A failure means program output \
+              is again being polled out of the port with interrupts masked, or is waiting on \
+              an interrupt that does not come.",
+    causes: &[
+        "The transmit interrupt is never raised or never reaches the handler: the port's \
+         enable bit in `arch::console::transmit_interrupt` is wrong for the port (on an \
+         STM32 USART it depends on whether firmware enabled the FIFO), or the interrupt the \
+         receive side installed is not the one the port raises.",
+        "`console::emit` stopped choosing `output::write_waiting` for a task that may sleep, \
+         so a task's write is polled out under the port's lock again.",
+        "The check ran from a context that cannot sleep, which `sched::may_block` reports; \
+         `kmain` calls it straight after the scheduler is started.",
+    ],
+    see: "kernel/src/console/output.rs check; kernel/src/console.rs emit",
+};
+
 /// For `kmain` in `main.rs`, when `random::check` fails.
 pub(crate) static RANDOM_GENERATOR: Explanation = Explanation {
     code: "FX-0306",
@@ -1864,6 +1888,7 @@ pub(crate) static ALL: &[&Explanation] = &[
     &SCHEDULER_BRING_UP,
     &STAGE5_SCHEDULER,
     &SCHEDULE_WITH_PREEMPTION_HELD,
+    &CONSOLE_OUTPUT,
     &STAGE6_USER_MEMORY,
     &STAGE6_REVERSE_MAP,
     &STAGE7_SYSCALLS,

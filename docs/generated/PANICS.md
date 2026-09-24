@@ -44,6 +44,7 @@ Causes are listed most likely first.
 | [FX-0501](#fx-0501) | the scheduler could not be started |
 | [FX-0502](#fx-0502) | the scheduler failed its self-check |
 | [FX-0503](#fx-0503) | a task tried to block while holding a lock that disables preemption |
+| [FX-0504](#fx-0504) | console output did not go out by interrupt |
 | [FX-0601](#fx-0601) | the memory a process is built from failed its self-check |
 | [FX-0602](#fx-0602) | a page taken from a mapped object stayed reachable, or was not taken as it should be |
 | [FX-0701](#fx-0701) | the system call dispatch path failed its self-check |
@@ -696,6 +697,29 @@ machine instead, and the message says how many such locks were held.
 
 See: kernel/src/sync.rs; kernel/src/sched/mod.rs PREEMPT_OFF;
 libs/sync/src/lib.rs PreemptSpinLock.
+
+<a id="fx-0504"></a>
+
+## FX-0504 — console output did not go out by interrupt
+
+Once the scheduler runs, `console::output::check` writes one line to the console
+from a task, as a program's `write(2)` does, and requires the writer to have
+left the port's transmit interrupt everything past the first burst it put into
+the port itself, the ring to have emptied within two seconds, and no writer to
+have found the port stalled and polled the ring out. A failure means program
+output is again being polled out of the port with interrupts masked, or is
+waiting on an interrupt that does not come.
+
+1. The transmit interrupt is never raised or never reaches the handler: the
+   port's enable bit in `arch::console::transmit_interrupt` is wrong for the
+   port (on an STM32 USART it depends on whether firmware enabled the FIFO), or
+   the interrupt the receive side installed is not the one the port raises.
+2. `console::emit` stopped choosing `output::write_waiting` for a task that may
+   sleep, so a task's write is polled out under the port's lock again.
+3. The check ran from a context that cannot sleep, which `sched::may_block`
+   reports; `kmain` calls it straight after the scheduler is started.
+
+See: kernel/src/console/output.rs check; kernel/src/console.rs emit.
 
 <a id="fx-0601"></a>
 

@@ -1138,7 +1138,7 @@ pub(crate) fn frame_pointer() -> u64 {
 
 /// Stop the machine, and QEMU with it, once the console has sent its last line.
 pub(crate) fn shutdown() -> ! {
-    console::drain();
+    crate::console::drain();
     cpu::debug_exit();
     halt()
 }
@@ -1164,7 +1164,7 @@ const KBC_PULSE_RESET: u8 = 0xFE;
 /// of the first two gets time to act, and one that returns is a machine that
 /// did not reset, so the next is tried. A triple fault cannot return.
 pub(crate) fn reset() -> ! {
-    console::drain();
+    crate::console::drain();
     cpu::disable_interrupts();
 
     let port = ACPI_RESET_PORT.load(core::sync::atomic::Ordering::Relaxed);

@@ -199,3 +199,56 @@ pub(crate) fn read_byte() -> Option<u8> {
         None => None,
     }
 }
+
+/// How many bytes whichever port the machine turned out to have can take now
+/// without anyone waiting.
+pub(crate) fn transmit_room() -> usize {
+    match port() {
+        Some(Port::Pl011) => pl011::transmit_room(),
+        Some(Port::Stm32) => stm32_usart::transmit_room(),
+        None => 0,
+    }
+}
+
+/// Hand whichever port the machine turned out to have one byte, for a caller
+/// [`transmit_room`] said it had room for.
+pub(crate) fn put(byte: u8) {
+    match port() {
+        Some(Port::Pl011) => pl011::put(byte),
+        Some(Port::Stm32) => stm32_usart::put(byte),
+        None => {}
+    }
+}
+
+/// Let whichever port the machine turned out to have interrupt when it can
+/// take more to send, or stop it.
+pub(crate) fn transmit_interrupt(on: bool) {
+    match port() {
+        Some(Port::Pl011) => pl011::transmit_interrupt(on),
+        Some(Port::Stm32) => stm32_usart::transmit_interrupt(on),
+        None => {}
+    }
+}
+
+/// What the port sends from, for the boot line that says how the console
+/// sends: on an STM32 it is firmware's choice whether the FIFO is on.
+pub(crate) fn transmit_buffer() -> &'static str {
+    match port() {
+        Some(Port::Pl011) => "a PL011's FIFO",
+        Some(Port::Stm32) if stm32_usart::has_fifo() => "an STM32 USART's FIFO",
+        Some(Port::Stm32) => "an STM32 USART's one register, its FIFO off",
+        None => "no port",
+    }
+}
+
+/// Whether the port still has a reason to interrupt: never worth asking, since
+/// both ports' lines are level-triggered and raise the interrupt again by
+/// themselves. See `console::input`'s handler for the port that has to be
+/// asked.
+#[expect(
+    clippy::missing_const_for_fn,
+    reason = "another architecture's version of this reads the port"
+)]
+pub(crate) fn interrupt_pending() -> bool {
+    false
+}

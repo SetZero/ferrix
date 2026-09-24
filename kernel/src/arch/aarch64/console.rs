@@ -52,6 +52,8 @@ const IMSC_RX: u32 = 1 << 4;
 /// `IMSC`: bytes have sat in the receive FIFO, below the trigger level, for
 /// longer than a few characters' time — the interrupt a single keystroke raises.
 const IMSC_RT: u32 = 1 << 6;
+/// `IMSC`: the transmit FIFO has drained to its trigger level.
+const IMSC_TX: u32 = 1 << 5;
 
 /// The mapped base address, once [`init`] has run.
 struct Base(UnsafeCell<u64>);
@@ -169,4 +171,62 @@ pub(crate) fn enable_receive_interrupt() {
         return;
     }
     write(IMSC, read(IMSC) | IMSC_RX | IMSC_RT);
+}
+
+/// How many bytes the port can take now without anyone waiting: one while the
+/// transmit FIFO is not full, which the caller asks again after each.
+pub(crate) fn transmit_room() -> usize {
+    // SAFETY: single-threaded, as documented on the `Sync` impl above.
+    if unsafe { *BASE.0.get() } == 0 {
+        return 0;
+    }
+    usize::from(read(FR) & FR_TXFF == 0)
+}
+
+/// Hand the port one byte, for a caller [`transmit_room`] said it had room
+/// for.
+pub(crate) fn put(byte: u8) {
+    // SAFETY: single-threaded, as documented on the `Sync` impl above.
+    if unsafe { *BASE.0.get() } == 0 {
+        return;
+    }
+    write(DR, u32::from(byte));
+}
+
+/// Let the port interrupt when its transmit FIFO has drained to the trigger
+/// level, or stop it.
+///
+/// The interrupt is raised as the FIFO drains *through* the level, and a real
+/// PL011 turned on with its FIFO already below it says nothing: Linux's driver
+/// fills the FIFO before it turns the interrupt on, and so does
+/// `console::output`, which leaves it on only while it has more than the FIFO
+/// took. QEMU's port sends at once and raises it on every write.
+pub(crate) fn transmit_interrupt(on: bool) {
+    // SAFETY: single-threaded, as documented on the `Sync` impl above.
+    if unsafe { *BASE.0.get() } == 0 {
+        return;
+    }
+    let mask = read(IMSC);
+    write(IMSC, if on { mask | IMSC_TX } else { mask & !IMSC_TX });
+}
+
+/// Whether the port still has a reason to interrupt: never worth asking, since
+/// its line is level-triggered and raises the interrupt again by itself. See
+/// `console::input`'s handler for the port that has to be asked.
+#[expect(
+    clippy::missing_const_for_fn,
+    reason = "another architecture's version of this reads the port"
+)]
+pub(crate) fn interrupt_pending() -> bool {
+    false
+}
+
+/// What the port sends from, for the boot line that says how the console
+/// sends.
+#[expect(
+    clippy::missing_const_for_fn,
+    reason = "another architecture's version of this reads the port"
+)]
+pub(crate) fn transmit_buffer() -> &'static str {
+    "a PL011's FIFO"
 }

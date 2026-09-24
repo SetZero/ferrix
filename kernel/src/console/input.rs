@@ -13,6 +13,10 @@
 //!
 //! A port whose receive interrupt the kernel has not installed never touches
 //! the ring: [`read_byte`] polls it, as every port was polled before.
+//!
+//! The port raises one interrupt for both directions, so the handler installed
+//! here also serves the transmit side, `console::output`, whose ring is this
+//! module's [`Ring`] run the other way.
 
 use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
@@ -23,8 +27,9 @@ use crate::arch;
 use crate::sched::WaitQueue;
 
 /// Bytes held for the reader, as many as Linux's line discipline holds. One
-/// more is dropped and counted in [`overruns`].
-const CAPACITY: usize = 4096;
+/// more is dropped and counted in [`overruns`]. The transmit ring is the same
+/// size, which is Linux's too: a serial port's transmit buffer is a page.
+pub(super) const CAPACITY: usize = 4096;
 
 /// The most bytes one call to [`receive`] takes from the port.
 ///
@@ -33,8 +38,9 @@ const CAPACITY: usize = 4096;
 /// port that never reports itself empty still lets the handler return.
 const RECEIVE_LIMIT: usize = CAPACITY * 2;
 
-/// A fixed ring of received bytes.
-struct Ring {
+/// A fixed ring of bytes: received ones here, and the ones waiting to be sent
+/// in `console::output`.
+pub(super) struct Ring {
     /// The storage, used from `head` round to `head + len`.
     bytes: [u8; CAPACITY],
     /// Where the oldest byte is.
@@ -45,7 +51,7 @@ struct Ring {
 
 impl Ring {
     /// An empty ring.
-    const fn new() -> Ring {
+    pub(super) const fn new() -> Ring {
         Ring {
             bytes: [0; CAPACITY],
             head: 0,
@@ -53,8 +59,13 @@ impl Ring {
         }
     }
 
+    /// How many bytes are held.
+    pub(super) const fn len(&self) -> usize {
+        self.len
+    }
+
     /// Append `byte`, or refuse it when the ring is full.
-    fn push(&mut self, byte: u8) -> bool {
+    pub(super) fn push(&mut self, byte: u8) -> bool {
         if self.len >= CAPACITY {
             return false;
         }
@@ -71,7 +82,7 @@ impl Ring {
     }
 
     /// Take the oldest byte.
-    fn pop(&mut self) -> Option<u8> {
+    pub(super) fn pop(&mut self) -> Option<u8> {
         if self.len == 0 {
             return None;
         }
@@ -130,15 +141,37 @@ pub(crate) fn init(view: &BootView<'_>) -> Result<Option<u32>, &'static str> {
         .map_err(|_| "the console port's receive interrupt is already taken")?;
     // Before the port may raise it: from here the reader looks in the ring,
     // and a byte the port already holds arrives there the moment the line is
-    // enabled.
+    // enabled. The transmit side starts with it: the handler serves both, and
+    // from here a writer with interrupts on queues rather than polls.
     INTERRUPT_DRIVEN.store(true, Ordering::Relaxed);
+    super::output::start();
     arch::enable_console_receive(irq);
     Ok(Some(irq))
 }
 
-/// The receive interrupt: empty the port into the ring, and wake the reader.
+/// The port's interrupt: empty the port into the ring and wake the reader,
+/// then give the port what it has room for of what is waiting to be sent.
+///
+/// Again while the port still says it wants attention, which only a 16550
+/// ever does. Its line reaches the I/O APIC edge-triggered, and it stays high
+/// while *any* reason to interrupt is pending: a byte received after the
+/// receive half looked, while the transmit half was still filling the FIFO,
+/// would find the line already high, raise no edge, and never be taken. Linux's
+/// 8250 driver loops on its identification register for the same reason. The
+/// Arm ports' lines are level-triggered, and they say no at once.
 fn on_interrupt(_irq: u32) {
-    receive(arch::take_console_byte);
+    /// More passes than emptying a full transmit ring takes, a burst at a
+    /// time, so that a port that never stops asking still lets the handler
+    /// return.
+    const PASSES: usize = CAPACITY / super::output::BURST + 4;
+
+    for _ in 0..PASSES {
+        receive(arch::take_console_byte);
+        super::output::on_interrupt();
+        if !arch::console::interrupt_pending() {
+            break;
+        }
+    }
 }
 
 /// Take what `take` yields into the ring, then wake whoever waits for input.
