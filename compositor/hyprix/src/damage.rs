@@ -490,10 +490,23 @@ impl Plan {
     /// rule now draws differently.
     fn windows_since(&self, old: &Self, region: &mut Damage) {
         let margin = self.margin();
-        let between = compositor_render::damage_between(&old.layout, &self.layout, self.origin);
+        // What the plan draws each window with, so that a window whose focus
+        // is all that changed is owed its border and not all of it.
+        let styles = compositor_render::Styles {
+            base: &self.style,
+            windows: &self.styles,
+        };
+        let (between, rings) = compositor_render::damage_between_parts(
+            &old.layout,
+            &self.layout,
+            self.origin,
+            &styles,
+        );
         for rect in between.rects() {
             region.add(grown(*rect, margin));
         }
+        // A focus change's rings as they are: the shadows did not move.
+        region.extend(&rings);
         // A rule changed between the two frames -- `hyprctl keyword
         // windowrule`, or a window that has just been renamed into a rule's
         // reach -- so what the window is drawn with is not what it was,

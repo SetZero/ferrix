@@ -1,12 +1,13 @@
 //! A monitor's frame, drawn from the layout's answer and the clients'
 //! buffers.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use compositor_config::Config;
 use compositor_layout::{MonitorLayout, Placed, WindowId};
 
 use crate::damage::intersect;
+use crate::timing::{Phase, Timer, timed};
 use crate::{
     Backdrop, Blur, Canvas, Color, Damage, Format, Gradient, Painter, Rect, Rounding, Shadow,
     Surface,
@@ -948,4 +949,208 @@ pub fn damage_between(old: &MonitorLayout, new: &MonitorLayout, origin: (i64, i6
         }
     }
     damage
+}
+
+/// [`damage_between`], knowing how each window is drawn: a window whose
+/// focus is all that changed is owed only its border, and the part of its
+/// box its corners cut, rather than all of it.
+///
+/// Focus decides three things about a window's pixels: its border's colour,
+/// how much of it shows (`active_opacity` and `inactive_opacity`), and
+/// whether it is dimmed (`dim_inactive`). Where the second and third come
+/// out the same either way -- which they do unless a configuration sets
+/// them -- moving the focus between two windows changes their borders and
+/// nothing inside them. Redrawing all of both was most of what a focus
+/// change cost on a slow machine: two windows' worth of pixels drawn and
+/// copied to the screen, turned for a monitor standing on its edge, for a
+/// frame whose only change was two coloured rings.
+///
+/// The ring is the border's box less the window's rectangle drawn in by its
+/// rounding's radius: under a rounded corner the border's fill shows, so
+/// that corner is part of what changed colour.
+///
+/// A window that takes the focus is also raised, which [`damage_between`]
+/// answers with every window whole, since which of two is drawn over the
+/// other is a change wherever they overlap. Here it is answered with that:
+/// where they overlap, their shadows' reach included -- which for tiled
+/// windows is nowhere, and on the DK1 was the whole of each focus change
+/// the ring had been meant to save.
+#[must_use]
+pub fn damage_between_styled(
+    old: &MonitorLayout,
+    new: &MonitorLayout,
+    origin: (i64, i64),
+    styles: &Styles<'_>,
+) -> Damage {
+    let (mut damage, rings) = damage_between_parts(old, new, origin, styles);
+    damage.extend(&rings);
+    damage
+}
+
+/// [`damage_between_styled`] in its two parts: what moved, came, went or
+/// was restacked, and the rings of windows whose focus alone changed.
+///
+/// Apart because a compositor grows the first by how far a window's shadow
+/// reaches, which a window that moved has moved too, and a ring needs no
+/// such growing: its shadow is where it was. Grown, two thin rings were
+/// ten times their own pixels, most of them the shadow's fading rim.
+#[must_use]
+pub fn damage_between_parts(
+    old: &MonitorLayout,
+    new: &MonitorLayout,
+    origin: (i64, i64),
+    styles: &Styles<'_>,
+) -> (Damage, Damage) {
+    let local = |rect: Rect| rect.translate(origin.0.saturating_neg(), origin.1.saturating_neg());
+    let find = |layout: &MonitorLayout, window: WindowId| {
+        layout
+            .windows
+            .iter()
+            .position(|placed| placed.window == window)
+            .and_then(|at| Some((at, *layout.windows.get(at)?)))
+    };
+    let mut damage = Damage::new();
+    let mut rings = Damage::new();
+
+    // Each window by what it is, wherever it is in either list: one that
+    // came or went, moved or changed its border is owed all of its box
+    // where it was and where it is; one whose focus is all that changed,
+    // where focus changes nothing inside it, only its ring.
+    let ids = old
+        .windows
+        .iter()
+        .chain(&new.windows)
+        .map(|placed| placed.window)
+        .collect::<BTreeSet<_>>();
+    for &window in &ids {
+        let (was, now) = (find(old, window), find(new, window));
+        match (was, now) {
+            (Some((_, was)), Some((_, now))) if was == now => {}
+            (Some((_, was)), Some((_, now)))
+                if Placed {
+                    focused: now.focused,
+                    ..was
+                } == now
+                    && focus_is_border_only(styles, &now) =>
+            {
+                for part in ring(&now, styles) {
+                    rings.add(local(part));
+                }
+            }
+            _ => {
+                for placed in [was, now].into_iter().flatten() {
+                    damage.add(local(outer(&placed.1)));
+                }
+            }
+        }
+    }
+
+    // And the stacking order: which of two windows is drawn over the other
+    // shows only where they overlap, shadows included. A focused window is
+    // raised, so a focus change restacks; tiled windows do not overlap, and
+    // for them the order changes no pixel at all.
+    let reach = styles.base.shadow.map_or(0, |shadow| {
+        shadow
+            .range
+            .saturating_add(shadow.offset.0.abs().max(shadow.offset.1.abs()))
+            .max(0)
+    });
+    let reached = |placed: &Placed| {
+        let box_ = outer(placed);
+        Rect::new(
+            box_.x.saturating_sub(reach),
+            box_.y.saturating_sub(reach),
+            box_.width.saturating_add(reach.saturating_mul(2)),
+            box_.height.saturating_add(reach.saturating_mul(2)),
+        )
+    };
+    let ids: Vec<WindowId> = ids.into_iter().collect();
+    for (at, &one) in ids.iter().enumerate() {
+        for &other in ids.iter().skip(at.saturating_add(1)) {
+            let (
+                Some((one_was, a)),
+                Some((other_was, b)),
+                Some((one_now, c)),
+                Some((other_now, d)),
+            ) = (
+                find(old, one),
+                find(old, other),
+                find(new, one),
+                find(new, other),
+            )
+            else {
+                continue;
+            };
+            if (one_was < other_was) == (one_now < other_now) {
+                continue;
+            }
+            for (first, second) in [(a, b), (c, d)] {
+                if let Some(overlap) = intersect(reached(&first), reached(&second)) {
+                    damage.add(local(overlap));
+                }
+            }
+        }
+    }
+    (damage, rings)
+}
+
+/// Whether focusing or unfocusing `placed` changes nothing of it but its
+/// border: it shows as much of itself and is dimmed alike either way.
+fn focus_is_border_only(styles: &Styles<'_>, placed: &Placed) -> bool {
+    let style = styles.base;
+    let own = styles.of(placed.window);
+    let opacity = |focused: bool| {
+        own.opacity
+            .unwrap_or_else(|| style.opacity(focused, placed.fullscreen))
+    };
+    let dimmed = style.dim > 0.0 && own.dim;
+    opacity(true).to_bits() == opacity(false).to_bits() && !dimmed
+}
+
+/// The part of `placed`'s box a change of its border's colour repaints:
+/// the border, and the corners its rounding cuts out of the window.
+fn ring(placed: &Placed, styles: &Styles<'_>) -> [Rect; 4] {
+    let own = styles.of(placed.window);
+    let border = if own.decorate {
+        own.border.unwrap_or(placed.border).max(0)
+    } else {
+        0
+    };
+    let rect = placed.rect;
+    let radius = own
+        .rounding
+        .unwrap_or(styles.base.rounding.radius)
+        .max(0)
+        .min(rect.width / 2)
+        .min(rect.height / 2);
+    let outer = Rect::new(
+        rect.x.saturating_sub(border),
+        rect.y.saturating_sub(border),
+        rect.width.saturating_add(border.saturating_mul(2)),
+        rect.height.saturating_add(border.saturating_mul(2)),
+    );
+    let inner = Rect::new(
+        rect.x.saturating_add(radius),
+        rect.y.saturating_add(radius),
+        rect.width.saturating_sub(radius.saturating_mul(2)),
+        rect.height.saturating_sub(radius.saturating_mul(2)),
+    );
+    let above = inner.y.saturating_sub(outer.y);
+    let below = outer.bottom().saturating_sub(inner.bottom());
+    [
+        Rect::new(outer.x, outer.y, outer.width, above),
+        Rect::new(outer.x, inner.bottom(), outer.width, below),
+        Rect::new(
+            outer.x,
+            inner.y,
+            inner.x.saturating_sub(outer.x),
+            inner.height,
+        ),
+        Rect::new(
+            inner.right(),
+            inner.y,
+            outer.right().saturating_sub(inner.right()),
+            inner.height,
+        ),
+    ]
 }
