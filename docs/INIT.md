@@ -4,7 +4,7 @@ Version 2, a draft. Written on 2026-09-23 at the customer's asking: *a real
 init, fitting to our kernel, usable if Ferrix later becomes a microkernel,
 and somewhat extensible like systemd*. Version 2 follows the customer's
 second order of the same day: *build stage 13's cgroups first, and plan the
-init as if they exist*. Nothing here is built. §14 lists the decisions that
+init as if they exist*. §14 lists the decisions that
 are the customer's and not this document's; until they are answered, the
 draft answers are what the rest of the text assumes. The first, C8, was
 answered the same day. §16 says what has been built since.
@@ -875,10 +875,66 @@ the system people will actually use.
 | | State | On `main` as |
 |---|---|---|
 | L3 | done, 2026-09-24 | "Start pid 1 from the file ferrix.init= names, and commit the disks in reboot(2)" |
-| L1, L2 | being built on `init/svc` | |
+| L1 | done, 2026-09-24 | "Read unit files in systemd's syntax" |
+| L2 | being built on `init/svc` | |
 | L4 to L13 | not started | |
 
-64 of L1 to L10's 67 points are left.
+59 of L1 to L10's 67 points are left.
+
+**L1, as built (5 points).** `libs/svc` is on `main`: `no_std` with
+`alloc`, `forbid(unsafe_code)`, 52 host tests, a Miri step in CI and in
+`cargo xtask check --miri`, and the `svc_unit` fuzz target with a seed
+corpus. What it does, module by module:
+
+* `ini`: §4.1's syntax, read as systemd's `conf-parser.c` reads it,
+  including the corners: a comment line in the middle of a continued line is
+  dropped, an escaped backslash does not continue, a continuation at the end
+  of the file is kept, CRLF and a byte-order mark are read, and a section
+  header without its bracket refuses the file. Every other fault is a
+  warning in systemd's words.
+* `source`: the three directories as a `Source` the backend fills with
+  `add(layer, path, Entry)`, where an entry is a file's bytes, `Masked` (a
+  link to `/dev/null`) or `Alias(name)`. `Source::load(name)` does the rest:
+  the highest file under the name, then under its template; aliases,
+  instantiated through templates; drop-ins of the unit, its aliases and its
+  template, a higher layer's file hiding a lower one of the same name,
+  applied in file-name order; `.wants/` and `.requires/` links; specifiers.
+* `name`, `specifier`, `value`, `exec`: names with templates and slice
+  parents, path escaping for mounts, `%i %I %n %N %p %P %j %J %f %t %S %C %L
+  %E %%`, booleans, time spans, base-1024 sizes, percentages, signals,
+  quoted and C-escaped words, and `Exec…=` lines with their `-@:+!` prefixes
+  and `;` separators.
+* `unit` and `kind`: `[Unit]` (the nine dependency keys, seventeen
+  conditions and assertions with `!` and `|`, start limits) and `[Install]`,
+  then the `Kind` trait with the six kinds of version 1 and `.socket`, and
+  every key of §4.4.
+
+**What building L1 changed.**
+
+* `Kind::parse` takes the unit's name as well as its section, because a
+  mount's `Where=` must match its name. The trait gained `section()` and
+  `needs_file()`; `implied` and `advance` come with L2.
+* Slices, scopes and builtins load with no file. A builtin's name is its
+  contract (§7.2), and the manager makes every slice a `Slice=` path names.
+* An empty unit file masks, as it does in systemd.
+* Specifiers are expanded in every value when the unit loads, except in the
+  six resource keys, whose `%` is a percentage. systemd expands none there
+  either. `%H`, `%m`, `%u` and the other specifiers that need the machine are
+  refused by name, and the assignment carrying one is dropped with a
+  warning.
+* A link to a unit file under the link's own name is the backend's to
+  follow: it hands in the file's bytes. Only a link to another name, an
+  alias, or to `/dev/null` reaches the crate as a link.
+* `StandardOutput=journal`, `kmsg` and their `+console` forms read as
+  `log`, since the log reaches the console (§10). `console` is Ferrix's own
+  value.
+* `NotifyFd=` is a service key: the descriptor §5.3's readiness line is
+  written to.
+* The sandboxing keys of L13 warn by name. Type-wide drop-in directories
+  (`service.d/`) are not read.
+* Conditions are parsed into `Condition` values, and `conditions_hold`
+  combines results. The tests themselves look at the machine, so they are
+  the backend's to run.
 
 **L3, as built (3 points).** K0: `ferrix.init=<path>` on the kernel command
 line (`CMDLINE.TXT`, or U-Boot's `bootargs` on a board) starts pid 1 from
@@ -910,7 +966,11 @@ did not survive poweroff -f -n"), and no `ferrix.onexit=panic` ("did not
 panic with FX-1501"). Under zinc only the first boot runs, because zinc
 cannot make the call.
 
-**What the next session does first.** L4, once L2 and C1 to C5 are in
+**What the next session does first.** L2 is being built on `init/svc`, in
+the same crate: `Kind::implied`, the graph, transactions, the slice tree,
+the restart policy, `Manager::step` and `deadline`, and the names the init
+program maps (`UnitId`, `GroupPath`, `Token`, `ClientId`). Then L4, once
+L2 and C1 to C5 are in
 (`docs/CGROUPS.md` §7.1 has G4 for C3). `cargo xtask test-init` builds an
 image with no program in the kernel and `/sbin/init` in the initramfs, and
 puts `qemu::init_option("/sbin/init")` into `CMDLINE.TXT`, as

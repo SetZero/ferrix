@@ -142,7 +142,7 @@ sizes them.
 | Stage 22, Steam: the parts with a first guess (bubblewrap's rest 13, sound 30, Venus 8; glibc's names are dynamic linking's 13 and XWayland stage 19's, both counted above) | 51 | not started |
 | Stage 22, Steam: the 32-bit x86 ABI and what the runtime and Proton find missing | unsized, ≈ 100 as a guess | not started |
 | Stage 14, real-time domains | *month* ≈ 40 | not started |
-| Stage 15, a real userland | *week* ≈ 20, of which job control is spent; most of the rest landed as zinc and uutils, and what is left is an init, sized at 67 points in `docs/INIT.md` §13, of which L3's 3 are spent, and 18 later | partially complete: init and gettys remain, designed; the kernel's `ferrix.init=` and a committing `reboot(2)` landed 2026-09-24 (L3); the rest waits on stage 13's cgroups |
+| Stage 15, a real userland | *week* ≈ 20, of which job control is spent; most of the rest landed as zinc and uutils, and what is left is an init, sized at 67 points in `docs/INIT.md` §13, of which L3's 3 and L1's 5 are spent, and 18 later | partially complete: init and gettys remain, designed; the kernel's `ferrix.init=` and a committing `reboot(2)` landed 2026-09-24 (L3), and so did the unit files in `libs/svc` (L1); the rest waits on stage 13's cgroups |
 | ~~Stage 16, `rustc`~~ *exit met 2026-09-22* | ~~*the goal* ≈ 40~~ 8 spent | done |
 | Stage 20, self-hosting | *longer*, unsized | in progress: the x86-64 image builds on Ferrix and boots (2026-09-23) |
 | Stage 21, bare metal and a GPU of Ferrix's own | over 100, unsized | planned when bare-metal work is requested |
@@ -4245,6 +4245,18 @@ and `ferrix.onexit=panic` gives Linux's answer to init exiting (`FX-1501`).
 off with `poweroff -f -n` and reads the file back on a second boot of the
 same volume. `docs/INIT.md` §16 has the details and the negative controls.
 
+**Done -- L1, the unit files (2026-09-24, 5 points).** `libs/svc` is the
+manager's pure core, `no_std` so that `devmgr` can share its restart
+policy later. Its first landing reads units as systemd does: the INI
+subset with `conf-parser.c`'s corners, the three layered directories as a
+source the backend fills, drop-ins in name order with a higher directory
+hiding a lower one's file of the same name, masking by `/dev/null` or an
+empty file, aliases, templates and their specifiers, `.wants/` links, and
+the keys of every version-1 kind with systemd's value syntaxes. A key init
+does not know is a warning, so a systemd unit file loads. 52 host tests,
+Miri, and the `svc_unit` fuzz target. `docs/INIT.md` §16 records what
+the building changed in the design.
+
 **Still to do:** a real init. The kernel starts the shell itself as pid 1
 (`kernel/src/init.rs`) in every image but one that names another, so nothing
 in user space mounts `/proc` and `/dev`, reaps what a session orphans, gives a
@@ -4262,10 +4274,15 @@ serve instead. Init hands each service a bootstrap channel and routes named
 native services between them.
 
 Init waits on stage 13's cgroups, which the customer put first. Its landings
-come to 67 points up to hyprix no longer being pid 1, 3 of them spent on L3:
-six kernel items of 11 points besides stage 13, two of them (K0, K7) built,
-and `cargo xtask test-init` growing a stage per landing. Its first two landings, the unit parser and the dependency engine,
-are host-only and can be built while stage 13 is.
+come to 67 points up to hyprix no longer being pid 1, 8 of them spent on L3
+and L1: six kernel items of 11 points besides stage 13, two of them (K0, K7)
+built, and `cargo xtask test-init` growing a stage per landing. Its first
+two landings, the unit parser and the dependency engine, are host-only and
+can be built while stage 13 is.
+
+**Where it stands.** The next landing is L2, the dependency engine and
+`Manager::step`, host-only like L1 and being built on `init/svc`. The
+first boot, L4, needs L2 and stage 13's `CLONE_INTO_CGROUP` (G4).
 
 `test-jobs` is x86-64 only, because `sleep` is uutils' and uutils is built
 for x86-64 alone (`docs/UUTILS.md` D3).
@@ -6989,22 +7006,23 @@ at three in the morning against a machine that reboots on a mistake.
 | `libs/netring` | Networking — the net ring, `docs/NET-RING.md` in code: the memory the kernel shares with a ring-3 network driver. The block ring's discipline with its allocator removed, because a frame is bounded by the MTU: the data VMO is `entries` slots of a fixed size and a submission names its slot, which takes away the class of bug where a region is reused before its completion — on an untranslated domain, a device writing into somebody else's packet. Private indices, checked reads of the peer's, the want-bell handshake, and every entry checked when it is read; corruption is terminal for the side that sees it. | 32 |
 | `libs/netlink` | Networking — reached already, by the `AF_NETLINK` sockets above: walking a buffer of netlink messages and the attributes after each fixed header, and building replies into a caller's buffer with every length and pad computed rather than taken. The walks refuse a length below the header they introduce, one past the end, and the zero that walks the same message for ever, and every step forward is at least a header wide, so a walk over any bytes ends. Its `netlink_walk` fuzz target requires that, requires what a walk borrows to lie inside the input, and requires anything the builder writes to walk back to what was built. | 48 |
 | `libs/netserve` | Networking — a ring-3 network driver's serve loop, between the net ring and a virtio-net device. The two directions are not symmetrical and that is the design: sending is a copy and a submission, while a frame arrives into a buffer the *device* chose and takes the oldest receive slot the kernel posted, or is dropped if none is waiting. A submission is never taken that cannot be answered, a device buffer goes back the moment its bytes are copied, and frames the device refuses wait in the order the kernel asked for them — a queue and not a single frame, because the ring's head advances for a whole batch and keeping one would drop the rest. | 12 |
+| `libs/svc` | 15 — the service manager's pure core (`docs/INIT.md` §3): unit files in systemd's syntax, read as `conf-parser.c` reads them, the three layered unit directories as a source the backend fills, drop-ins, masking, aliases, templates and specifiers, and every version-1 kind's keys. `no_std`, so that `devmgr` can share its restart policy; it names no system call and holds no handle. Has its fuzz target (`svc_unit`) and its Miri step. | 52 |
 
 With the five crates the boot path was built on — `bootinfo`, `elf` (the
 loader's), `frame`, `heap`, `paging` — that was **1101 host unit tests** when
 it was first counted, plus the doc-tests and the 41 of `xtask` itself. On
-2026-09-23 the same crates have 1512, every crate under `libs/` together has
-1950, and `xtask` 242.
+2026-09-23 the same crates have 1512, and `xtask` 242. On 2026-09-24 every
+crate under `libs/` together has 2135, 52 of them `libs/svc`'s.
 
 **The gap this opens, stated rather than hidden.** The continuous rule below
 asks for a fuzz target *and* a Miri run per crate, and `fuzz/` has
-twenty-eight: `elf_parse`, `frame_alloc`, `ustack_build`, `handle_table`,
+thirty-one: `elf_parse`, `frame_alloc`, `ustack_build`, `handle_table`,
 `vfs_ops`, `pci_walk`, `btrfs_read`, `block_queue`, `blkring`, `virtio_blk`,
 `virtio_net`, `cpio_parse`, `fdt_parse`, `acpi_tables`, `netwire_parse`,
 `nettcp_state`, `net_input`, `netlink_walk`, `hyprconf_parse`, `virtio_gpu`,
 `virtio_input`, `displayctl`, `renderctl`, `inputctl`,
-`virtio_gpu_pipeline`, `virtio_input_driver`, `wayland_wire` and
-`linux_abi`. Every crate
+`virtio_gpu_pipeline`, `virtio_input_driver`, `wayland_wire`,
+`linux_abi`, `cgroupfs_write`, `sysfs_names` and `svc_unit`. Every crate
 in the table above parses bytes that came from outside the system — a disk,
 a firmware table, an archive a stranger built — which is precisely the
 population the rule was written for. `virtio` was owed a target and has

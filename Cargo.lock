@@ -375,6 +375,10 @@ name = "ferrix-stm32-display"
 version = "0.1.0"
 
 [[package]]
+name = "ferrix-svc"
+version = "0.1.0"
+
+[[package]]
 name = "ferrix-sync"
 version = "0.1.0"
 

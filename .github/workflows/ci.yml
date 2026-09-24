@@ -608,6 +608,12 @@ jobs:
       - name: Miri (page tables)
         run: cargo +nightly miri test -p ferrix-paging --lib
 
+      # The service manager's pure core. It forbids unsafe, so what Miri
+      # adds is the parser's slicing of bytes a unit file chose, and the
+      # borrows the loader and the manager take into the unit set.
+      - name: Miri (service manager)
+        run: cargo +nightly miri test -p ferrix-svc --lib
+
   # ----------------------------------------------------------------
   # Fuzz the surfaces that parse bytes somebody else chose.
   #

@@ -1,0 +1,10 @@
+[Unit]
+Description=Multi-User
+Requires=basic.target
+ConditionPathExists=|!/etc/x
+# c
+; c
+After=a.service \
+  b.service
+[Service]
+ExecStart=/a "q\"x" \x41

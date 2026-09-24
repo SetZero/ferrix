@@ -1,0 +1,5 @@
+[Mount]
+What=tmpfs
+Where=/fuzz
+Type=tmpfs
+TimeoutSec=1min 30s

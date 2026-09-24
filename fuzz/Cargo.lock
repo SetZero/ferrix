@@ -115,7 +115,9 @@ dependencies = [
  "ferrix-objects",
  "ferrix-pci",
  "ferrix-renderctl",
+ "ferrix-svc",
  "ferrix-sync",
+ "ferrix-sysfs",
  "ferrix-ustack",
  "ferrix-vfs",
  "ferrix-virtio",
@@ -190,7 +192,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferrix-svc"
+version = "0.1.0"
+
+[[package]]
 name = "ferrix-sync"
+version = "0.1.0"
+
+[[package]]
+name = "ferrix-sysfs"
 version = "0.1.0"
 
 [[package]]
