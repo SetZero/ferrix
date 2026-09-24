@@ -182,41 +182,176 @@ pub fn copy(
     );
     let (width, height) = (i64::from(target.width()), i64::from(target.height()));
     let pitch = i64::from(target.stride());
-    let offset = |(x, y): (i64, i64)| -> Option<usize> {
-        if !(0..width).contains(&x) || !(0..height).contains(&y) {
-            return None;
+
+    // Which of the clip's columns and rows are written: those whose pixels
+    // are inside what `from` holds and land inside the target. Each step
+    // moves along one axis of the buffer only, so where a column lands
+    // across the buffer depends on the column alone and where a row lands
+    // on the row alone: the part of the clip that is written is a rectangle
+    // of it, found here once rather than asked of every pixel.
+    let along = |step: (i64, i64)| {
+        if step.0 == 0 {
+            (step.1, corner.1, height)
+        } else {
+            (step.0, corner.0, width)
         }
+    };
+    let first = (
+        clip.x.saturating_sub(origin.0),
+        clip.y.saturating_sub(origin.1),
+    );
+    let held = (
+        i64::try_from(stride / 4).unwrap_or(0),
+        i64::try_from(from.len() / stride.max(1)).unwrap_or(0),
+    );
+    let columns = within(along(right))
+        .and_then(|span| cut(span, (0, clip.width)))
+        .and_then(|span| {
+            cut(
+                span,
+                (first.0.saturating_neg(), held.0.saturating_sub(first.0)),
+            )
+        });
+    let rows = within(along(below))
+        .and_then(|span| cut(span, (0, clip.height)))
+        .and_then(|span| {
+            cut(
+                span,
+                (first.1.saturating_neg(), held.1.saturating_sub(first.1)),
+            )
+        });
+    let (Some(columns), Some(rows)) = (columns, rows) else {
+        return;
+    };
+
+    // In bytes from here: where the clip's pixel at `(column, row)` is read
+    // from, and where it goes in the buffer.
+    let source = |column: i64, row: i64| -> Option<usize> {
+        let line = usize::try_from(first.1.saturating_add(row)).ok()?;
+        let at = usize::try_from(first.0.saturating_add(column)).ok()?;
+        Some(
+            line.saturating_mul(stride)
+                .saturating_add(at.saturating_mul(4)),
+        )
+    };
+    let place = |column: i64, row: i64| -> Option<usize> {
+        let x = corner
+            .0
+            .saturating_add(right.0.saturating_mul(column))
+            .saturating_add(below.0.saturating_mul(row));
+        let y = corner
+            .1
+            .saturating_add(right.1.saturating_mul(column))
+            .saturating_add(below.1.saturating_mul(row));
         usize::try_from(y.saturating_mul(pitch).saturating_add(x.saturating_mul(4))).ok()
     };
-    let columns = usize::try_from(clip.width).unwrap_or(0);
+    let length = |span: (i64, i64)| usize::try_from(span.1.saturating_sub(span.0)).unwrap_or(0);
     let data = target.data_mut();
-    for row in 0..clip.height {
-        let y = clip.y.saturating_add(row);
-        let (Ok(line), Ok(column)) = (
-            usize::try_from(y.saturating_sub(origin.1)),
-            usize::try_from(clip.x.saturating_sub(origin.0)),
-        ) else {
-            continue;
-        };
-        let start = line
-            .saturating_mul(stride)
-            .saturating_add(column.saturating_mul(4));
-        let Some(pixels) = from.get(start..start.saturating_add(columns.saturating_mul(4))) else {
-            continue;
-        };
-        let mut at = (
-            corner.0.saturating_add(below.0.saturating_mul(row)),
-            corner.1.saturating_add(below.1.saturating_mul(row)),
-        );
-        for pixel in pixels.chunks_exact(4) {
-            if let Some(into) =
-                offset(at).and_then(|into| data.get_mut(into..into.saturating_add(4)))
-            {
-                into.copy_from_slice(pixel);
+
+    if right.1 == 0 {
+        // A row of the frame is a run along one of the buffer's rows:
+        // upright, turned half way, or mirrored. Copied a run at a time,
+        // forwards or backwards.
+        let run = length(columns).saturating_mul(4);
+        let last = columns.1.saturating_sub(1);
+        for row in rows.0..rows.1 {
+            let (Some(read), Some(start), Some(end)) = (
+                source(columns.0, row),
+                place(columns.0, row),
+                place(last, row),
+            ) else {
+                continue;
+            };
+            let (Some(pixels), Some(into)) = (
+                from.get(read..read.saturating_add(run)),
+                data.get_mut(start.min(end)..start.max(end).saturating_add(4)),
+            ) else {
+                continue;
+            };
+            if right.0 > 0 {
+                into.copy_from_slice(pixels);
+            } else {
+                for (into, pixel) in into.chunks_exact_mut(4).rev().zip(pixels.chunks_exact(4)) {
+                    into.copy_from_slice(pixel);
+                }
             }
-            at = (at.0.saturating_add(right.0), at.1.saturating_add(right.1));
         }
+        return;
     }
+
+    // A quarter turn: a *column* of the frame is a run along one of the
+    // buffer's rows. Walking the frame's rows wrote each pixel a whole
+    // buffer row away from the last -- a cache line fetched from memory for
+    // four bytes -- which on a Cortex-A7 was most of a turned monitor's
+    // frame. So the frame is turned a band of rows at a time: the band's
+    // lines stay in the cache while each of its columns is written as one
+    // run along a buffer row.
+    let mut band = rows.0;
+    while band < rows.1 {
+        let rows = (band, band.saturating_add(TILE).min(rows.1));
+        let reach = length(rows)
+            .saturating_sub(1)
+            .saturating_mul(stride)
+            .saturating_add(4);
+        let last = rows.1.saturating_sub(1);
+        for column in columns.0..columns.1 {
+            let (Some(read), Some(start), Some(end)) = (
+                source(column, rows.0),
+                place(column, rows.0),
+                place(column, last),
+            ) else {
+                continue;
+            };
+            let (Some(pixels), Some(into)) = (
+                from.get(read..read.saturating_add(reach)),
+                data.get_mut(start.min(end)..start.max(end).saturating_add(4)),
+            ) else {
+                continue;
+            };
+            let read = pixels
+                .chunks(stride.max(1))
+                .filter_map(|line| line.get(..4));
+            if start <= end {
+                for (into, pixel) in into.chunks_exact_mut(4).zip(read) {
+                    into.copy_from_slice(pixel);
+                }
+            } else {
+                for (into, pixel) in into.chunks_exact_mut(4).rev().zip(read) {
+                    into.copy_from_slice(pixel);
+                }
+            }
+        }
+        band = rows.1;
+    }
+}
+
+/// How many of a frame's rows a quarter turn moves at a time.
+///
+/// Thirty-two lines of the frame are what a band reads, a few kilobytes
+/// held in a first-level cache of thirty-two while every column of the
+/// band is written; and each column's run along a buffer row is then two
+/// whole cache lines.
+const TILE: i64 = 32;
+
+/// The `k` for which `start + step * k` lies in `0..limit`, as a half-open
+/// range, for a step of one either way: `(step, start, limit)`. `None` if
+/// there are none.
+fn within((step, start, limit): (i64, i64, i64)) -> Option<(i64, i64)> {
+    let (low, high) = if step > 0 {
+        (start.saturating_neg(), limit.saturating_sub(start))
+    } else {
+        (
+            start.saturating_sub(limit).saturating_add(1),
+            start.saturating_add(1),
+        )
+    };
+    (low < high).then_some((low, high))
+}
+
+/// The part of the half-open range `span` inside `bounds`, or `None`.
+fn cut(span: (i64, i64), bounds: (i64, i64)) -> Option<(i64, i64)> {
+    let (low, high) = (span.0.max(bounds.0), span.1.min(bounds.1));
+    (low < high).then_some((low, high))
 }
 
 impl Canvas {
