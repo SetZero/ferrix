@@ -30,7 +30,15 @@
 //!    and FLIPPED goes out when the reload's interrupt comes, so a
 //!    compositor's page flips are paced by the screen. DETACH waits for a
 //!    buffer on screen to leave it before it unpins.
-//! 4. STOP, or the core closing its end, turns the controller off -- nothing
+//! 4. HELLO says the card has a cursor plane: the LTDC's second layer. A
+//!    CURSOR points the layer at an attached 64x64 buffer, premultiplied
+//!    ARGB8888 blended over the frame, and is answered at the reload like a
+//!    flush; a MOVE rewrites the layer's window, clipped at the screen's
+//!    edges, and is answered by nobody. Either lands at the next vertical
+//!    blanking together with whatever flip waits for it, so the pointer
+//!    moves at the screen's rate however long the compositor's frames take.
+//!    A mode switch puts the pointer back where it was.
+//! 5. STOP, or the core closing its end, turns the controller off -- nothing
 //!    is read from memory after -- and TMDS with it.
 //!
 //! The exit status names the step that failed ([`Step`]), 0 a clean STOP.
@@ -43,8 +51,8 @@ use core::ptr;
 
 use ferrix_blkring::control::{Block as StartBlock, Message as StartMessage, START_BYTES, Start};
 use ferrix_displayctl::message::{
-    Attach, Hello, MAX_BUFFER_PAGES as MAX_PAGES, MAX_BYTES, MAX_SCANOUTS, MAX_TIMINGS, Message,
-    PORT_RIGHTS, Rect, ScanoutMode, Status, Timing, Timings, VERSION,
+    Attach, CURSOR_SIZE, Hello, MAX_BUFFER_PAGES as MAX_PAGES, MAX_BYTES, MAX_SCANOUTS,
+    MAX_TIMINGS, Message, PORT_RIGHTS, Rect, ScanoutMode, Status, Timing, Timings, VERSION,
 };
 use ferrix_native_abi::handle::Handle;
 use ferrix_native_abi::rights::Requested;
@@ -64,7 +72,7 @@ use ferrix_rt::{Bootstrap, Kernel};
 use ferrix_stm32_display::choice::{self, Candidate, How, Runnable, Verdict};
 use ferrix_stm32_display::edid::{Offer, Source, Unusable};
 use ferrix_stm32_display::i2c::{I2c, TIMING_100KHZ_AT_64MHZ};
-use ferrix_stm32_display::ltdc::{Frame, Ltdc};
+use ferrix_stm32_display::ltdc::{CursorImage, Frame, Ltdc};
 use ferrix_stm32_display::mode::Mode;
 use ferrix_stm32_display::sii9022::{self, Bridge};
 use ferrix_stm32_display::{Budget, Registers, edid};
@@ -80,8 +88,9 @@ const MAX_BUFFER_PAGES: usize = MAX_PAGES as usize;
 /// Buffers pinned at once: a compositor double- or triple-buffers.
 const MAX_BUFFERS: usize = 8;
 
-/// Flushes waiting for their reload at once. The core waits for each
-/// FLIPPED before it sends the next FLUSH, so one is all there ever is.
+/// Flushes and CURSORs waiting for their reload at once. The core waits for
+/// each FLIPPED before its caller goes on, so a compositor's frame and its
+/// pointer's image are two at most.
 const MAX_PENDING: usize = 8;
 
 /// Port keys.
@@ -387,6 +396,7 @@ fn introduce(
     location: u32,
     mode: &Mode,
     runnable: Option<&Runnable>,
+    cursor: bool,
 ) -> Result<Vmo<Kernel>, Step> {
     let mut modes = [ScanoutMode::default(); MAX_SCANOUTS];
     if let Some(first) = modes.first_mut() {
@@ -420,9 +430,9 @@ fn introduce(
         capsets: 0,
         capset: 0,
         capset_bytes: 0,
-        // The LTDC's second layer could be one, and is not yet: the core
-        // sends no CURSOR or MOVE to a card that says it has none.
-        cursor: false,
+        // The LTDC's second layer is one: the pointer moves without a
+        // frame (`Serving::cursor`).
+        cursor,
         timings,
     };
     let share = port
@@ -482,7 +492,20 @@ fn run(boot: &Channel<Kernel>) -> Result<(), Step> {
     ltdc.start(&mode).map_err(|_| Step::Controller)?;
     bridge.enable().map_err(|_| Step::BridgeBus)?;
 
-    let card = match introduce(&control, &port, start.location, &mode, runnable.as_ref()) {
+    let cursor = ltdc.has_cursor_layer();
+    if cursor {
+        say(format_args!(
+            "ltdc: a {CURSOR_SIZE}x{CURSOR_SIZE} cursor plane on the second layer"
+        ));
+    }
+    let card = match introduce(
+        &control,
+        &port,
+        start.location,
+        &mode,
+        runnable.as_ref(),
+        cursor,
+    ) {
         Ok(card) => card,
         Err(step) => {
             ltdc.stop();
@@ -507,6 +530,7 @@ fn run(boot: &Channel<Kernel>) -> Result<(), Step> {
         scratch: Scratch::new()?,
         buffers: [const { None }; MAX_BUFFERS],
         shown: None,
+        pointer: Pointer::default(),
         pending: [0; MAX_PENDING],
         waiting: 0,
     };
@@ -534,6 +558,17 @@ struct Buffer {
     height: u32,
 }
 
+/// The pointer on the LTDC's second layer, as CURSOR and MOVE last left
+/// it: kept here, since a mode switch turns the layer off and the pointer
+/// has to come back on the new mode's screen where it was.
+#[derive(Clone, Copy, Default)]
+struct Pointer {
+    /// The buffer holding its image, or `None` for no pointer.
+    buffer: Option<u32>,
+    /// Where the image's top-left corner is, in the screen's pixels.
+    at: (i32, i32),
+}
+
 /// The serve loop's state.
 struct Serving {
     ltdc: Ltdc<Window>,
@@ -552,7 +587,10 @@ struct Serving {
     buffers: [Option<Buffer>; MAX_BUFFERS],
     /// The buffer on screen, or `None` with the layer off.
     shown: Option<u32>,
-    /// Flush sequences waiting for the next reload, oldest first.
+    /// The pointer on the second layer.
+    pointer: Pointer,
+    /// Flush and CURSOR sequences waiting for the next reload, oldest
+    /// first.
     pending: [u64; MAX_PENDING],
     waiting: usize,
 }
@@ -647,6 +685,20 @@ impl Serving {
             Message::Flush {
                 buffer, sequence, ..
             } => self.flush(buffer, sequence),
+            // The one scanout is the only one the core lets through; the
+            // hotspot is the core's business, the place already the image's
+            // corner.
+            Message::Cursor {
+                buffer,
+                sequence,
+                x,
+                y,
+                ..
+            } => self.cursor(buffer, sequence, (x, y)),
+            Message::Move { x, y, .. } => {
+                self.move_pointer((x, y));
+                Ok(())
+            }
             Message::Detach { buffer } => {
                 let status = self.detach(buffer);
                 self.reply(Message::Detached { buffer, status })
@@ -758,8 +810,8 @@ impl Serving {
     }
 
     /// Run another mode: TMDS off, the LTDC stopped, the kernel asked for
-    /// the mode's clock, and both started again with the layer off, as at
-    /// the start. Flushes waiting for a reload are answered first, since the
+    /// the mode's clock, and both started again with the frame's layer off,
+    /// as at the start, and the pointer back on its own. Flushes waiting for a reload are answered first, since the
     /// stop is the end of the frame they waited for. A clock the kernel will
     /// not set leaves the mode that ran, and the layer off.
     fn switch(&mut self, wanted: &Candidate) -> Result<(), Step> {
@@ -785,6 +837,9 @@ impl Serving {
             .set_mode(&mode, self.hdmi)
             .map_err(|_| Step::BridgeMode)?;
         self.ltdc.start(&mode).map_err(|_| Step::Controller)?;
+        // The stop took the pointer off with the frame; it comes back at
+        // the same place, clipped to the new screen.
+        self.place_pointer();
         self.bridge.enable().map_err(|_| Step::BridgeBus)?;
         say(format_args!("ltdc: now running {}", Described(&mode)));
         Ok(())
@@ -793,6 +848,7 @@ impl Serving {
     /// Ask for a reload at the next vertical blanking and answer when it
     /// comes; a buffer not on screen has nothing to wait for.
     fn flush(&mut self, buffer: u32, sequence: u64) -> Result<(), Step> {
+        self.settle()?;
         if self.shown != Some(buffer) {
             return self.reply(Message::Flipped {
                 sequence,
@@ -808,11 +864,83 @@ impl Serving {
         Ok(())
     }
 
+    /// Answer the requests waiting for a reload that has happened already,
+    /// whose interrupt the port has yet to deliver: a request made now has
+    /// to wait for the next reload, and would otherwise be answered by that
+    /// one, a frame early. A pointer being moved keeps the loop reading
+    /// MOVEs, so a FLUSH or a CURSOR read in the same batch as the reload is
+    /// not rare. The interrupt still comes, and finds nothing to say.
+    fn settle(&mut self) -> Result<(), Step> {
+        if self.ltdc.take_events().reloaded {
+            self.flipped()?;
+        }
+        Ok(())
+    }
+
+    /// CURSOR: show `id`'s image on the second layer with its top-left
+    /// corner at `at`, or no pointer for 0, and answer at the reload that
+    /// makes it so -- after which the image the layer showed before is no
+    /// longer read, and the compositor may draw into it.
+    ///
+    /// The layer reads the buffer itself: it is one run of memory like any
+    /// buffer attached here, and the core cleaned it from the caches before
+    /// it sent CURSOR. Nothing is copied, and a compositor that draws each
+    /// new image into the buffer the layer is not showing never shows one
+    /// half drawn.
+    fn cursor(&mut self, id: u32, sequence: u64, at: (i32, i32)) -> Result<(), Step> {
+        self.settle()?;
+        self.pointer = Pointer {
+            buffer: (id != 0).then_some(id),
+            at,
+        };
+        self.place_pointer();
+        let Some(slot) = self.pending.get_mut(self.waiting) else {
+            return Err(Step::Control);
+        };
+        *slot = sequence;
+        self.waiting += 1;
+        self.ltdc.request_reload();
+        Ok(())
+    }
+
+    /// MOVE: the pointer's image's top-left corner to `at`, from the next
+    /// vertical blanking. Nothing waits for it and it waits for nothing: a
+    /// flip asked for this frame lands at the same blanking.
+    fn move_pointer(&mut self, at: (i32, i32)) {
+        self.pointer.at = at;
+        if self.pointer.buffer.is_some() {
+            self.place_pointer();
+        }
+    }
+
+    /// Program the second layer from [`Serving::pointer`]: its image where
+    /// it is, clipped to the screen, or the layer off.
+    fn place_pointer(&mut self) {
+        let image = self
+            .pointer
+            .buffer
+            .and_then(|id| self.buffer(id))
+            .map(|buffer| CursorImage {
+                address: buffer.address,
+                pitch: buffer.stride,
+                width: buffer.width.min(CURSOR_SIZE),
+                height: buffer.height.min(CURSOR_SIZE),
+            });
+        match image {
+            Some(image) if self.ltdc.show_cursor(&image, self.pointer.at).is_ok() => {}
+            _ => self.ltdc.hide_cursor(),
+        }
+    }
+
     /// Unpin a buffer, once the LTDC has stopped reading it.
     fn detach(&mut self, id: u32) -> Status {
         if self.shown == Some(id) {
             self.ltdc.hide();
             self.shown = None;
+        }
+        if self.pointer.buffer == Some(id) {
+            self.ltdc.hide_cursor();
+            self.pointer.buffer = None;
         }
         // A buffer taken off the screen is read until the reload happens.
         if !LEAVE_BUDGET.wait(|| !self.ltdc.reload_pending()) {
