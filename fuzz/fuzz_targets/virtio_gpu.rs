@@ -22,9 +22,9 @@
 #![no_main]
 
 use ferrix_virtio::gpu::{
-    Box3d, CAPSET_VIRGL2, CONTEXT_NAME_LEN, Command, Context, DISPLAY_INFO_LEN, Format, GpuError,
-    HEADER_LEN, MAX_CAPSET_SIZE, MAX_DIMENSION, MemEntry, PAGE_SIZE, Rect, Response,
-    backing_entries,
+    BLOB_MEM_HOST3D, Box3d, CAPSET_VIRGL2, CMD_RESOURCE_MAP_BLOB, CONTEXT_NAME_LEN, Command,
+    Context, DISPLAY_INFO_LEN, Format, GpuError, HEADER_LEN, MAP_INFO_LEN, MAX_CAPSET_SIZE,
+    MAX_DIMENSION, MemEntry, PAGE_SIZE, Rect, Response, backing_entries,
 };
 use libfuzzer_sys::fuzz_target;
 
@@ -34,7 +34,7 @@ fn u32_at(bytes: &[u8], at: usize) -> u32 {
         .map_or(0, |field| u32::from_le_bytes(field.try_into().expect("four bytes")))
 }
 
-fn commands(bytes: &[u8]) -> [Command<'static>; 10] {
+fn commands(bytes: &[u8]) -> [Command<'static>; 13] {
     let rect = Rect {
         x: u32_at(bytes, 0),
         y: u32_at(bytes, 4),
@@ -102,6 +102,23 @@ fn commands(bytes: &[u8]) -> [Command<'static>; 10] {
             stride: u32_at(bytes, 108),
             layer_stride: u32_at(bytes, 112),
         },
+        // Whole pages and a host blob with no entries, so that it encodes: a
+        // blob that is not is refused, which the module's own tests cover.
+        Command::ResourceCreateBlob {
+            resource_id: u32_at(bytes, 116),
+            blob_mem: BLOB_MEM_HOST3D,
+            blob_flags: u32_at(bytes, 120),
+            blob_id: u64::from(u32_at(bytes, 124)),
+            size: (u64::from(u32_at(bytes, 128) % 1024) + 1) * 4096,
+            entries: &[],
+        },
+        Command::ResourceMapBlob {
+            resource_id: u32_at(bytes, 132),
+            offset: u64::from(u32_at(bytes, 136)) << 12,
+        },
+        Command::ResourceUnmapBlob {
+            resource_id: u32_at(bytes, 140),
+        },
     ]
 }
 
@@ -129,6 +146,12 @@ fuzz_target!(|bytes: &[u8]| {
                     // device that sent none did not succeed.
                     assert!(len > 0);
                     assert_eq!(len, written - HEADER_LEN);
+                }
+                if let Response::MapInfo { .. } = response {
+                    // Only a map is answered with where a blob went, and the
+                    // answer has its body.
+                    assert_eq!(command.code(), CMD_RESOURCE_MAP_BLOB);
+                    assert!(written >= MAP_INFO_LEN);
                 }
                 if let Response::DisplayInfo(scanouts) = response {
                     assert!(written >= DISPLAY_INFO_LEN);
