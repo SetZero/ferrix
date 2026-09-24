@@ -195,7 +195,11 @@ pub(crate) fn run(arch: Arch, files: &BoardFiles, args: &Args) -> Result<()> {
 
     println!(
         "  {} {}",
-        if staged.is_some() { "staging in" } else { "flashing to" },
+        if staged.is_some() {
+            "staging in"
+        } else {
+            "flashing to"
+        },
         target.display()
     );
 

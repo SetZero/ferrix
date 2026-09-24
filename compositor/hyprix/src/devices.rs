@@ -67,6 +67,9 @@ pub struct Devices {
     open: Vec<Open>,
     events: Vec<Event>,
     lights: Lights,
+    /// Nodes that could not be opened, so that a rescan says why once and
+    /// not every time it looks.
+    refused: Vec<String>,
 }
 
 /// What the keyboards' LEDs were last told: Caps Lock and Num Lock, from the
@@ -111,10 +114,50 @@ impl Devices {
         for path in event_nodes()? {
             match Self::take(&path) {
                 Ok(open) => devices.open.push(open),
-                Err(error) => refused.push(format!("{}: {error}", path.display())),
+                Err(error) => {
+                    devices.refused.push(node_name(&path));
+                    refused.push(format!("{}: {error}", path.display()));
+                }
             }
         }
         Ok((devices, refused))
+    }
+
+    /// Open every device that has appeared since the last look, and let go
+    /// of every one whose node has gone: what each new one is, and why any
+    /// could not be opened.
+    ///
+    /// A USB keyboard behind a hub is found a second or so after the host
+    /// controller starts, and on a board whose boot is quick that is after
+    /// the compositor opened `/dev/input` (`docs/INPUT.md` §7.3); one
+    /// plugged in later is found later still. So the compositor looks again
+    /// every so often rather than only once, as a compositor that has udev
+    /// is told.
+    pub fn rescan(&mut self) -> (Vec<String>, Vec<String>) {
+        let Ok(nodes) = event_nodes() else {
+            return (Vec::new(), Vec::new());
+        };
+        let names: Vec<String> = nodes.iter().map(|path| node_name(path)).collect();
+        self.open.retain(|open| names.contains(&open.node));
+        self.refused.retain(|node| names.contains(node));
+        let mut added = Vec::new();
+        let mut refused = Vec::new();
+        for (path, name) in nodes.iter().zip(names) {
+            if self.open.iter().any(|open| open.node == name) || self.refused.contains(&name) {
+                continue;
+            }
+            match Self::take(path) {
+                Ok(open) => {
+                    added.push(format!("{} {}", open.node, open.device.description().name));
+                    self.open.push(open);
+                }
+                Err(error) => {
+                    refused.push(format!("{}: {error}", path.display()));
+                    self.refused.push(name);
+                }
+            }
+        }
+        (added, refused)
     }
 
     fn take(path: &Path) -> io::Result<Open> {
@@ -132,10 +175,7 @@ impl Devices {
         } else {
             None
         };
-        let node = path.file_name().map_or_else(
-            || path.display().to_string(),
-            |name| name.to_string_lossy().into_owned(),
-        );
+        let node = node_name(path);
         Ok(Open {
             device,
             node,
@@ -268,6 +308,15 @@ impl Devices {
         }
         inputs
     }
+}
+
+/// What a device node is called in the log and in `hyprctl devices`: its
+/// file name, `event0`.
+fn node_name(path: &Path) -> String {
+    path.file_name().map_or_else(
+        || path.display().to_string(),
+        |name| name.to_string_lossy().into_owned(),
+    )
 }
 
 /// One evdev event as an [`Input`], or nothing for one the seat has no use
