@@ -93,6 +93,8 @@ pub const RENDER_CONTROL_CREATE: usize = 0x104E;
 pub const DEVICE_INFO: usize = 0x1049;
 /// [`NativeCall::DeviceQuiesce`].
 pub const DEVICE_QUIESCE: usize = 0x104A;
+/// [`NativeCall::DeviceClock`].
+pub const DEVICE_CLOCK: usize = 0x104F;
 /// The largest name [`NativeCall::ProcessCreate`] takes, in bytes.
 pub const PROCESS_NAME_MAX: usize = 32;
 
@@ -239,6 +241,15 @@ pub enum NativeCall {
     /// ring, so the next driver can have it. Needs `MANAGE`; `BAD_STATE`
     /// while a driver still serves it.
     DeviceQuiesce,
+    /// `(device, hz, options)` → hz. The rate nearest `hz` the kernel will
+    /// run the device's pixel clock at, and with `CLOCK_SET`, that rate set.
+    /// The clock is the one thing about a display the kernel keeps and its
+    /// driver needs changed per mode: on an STM32MP15 DK board the divider
+    /// of PLL4's Q output, which the kernel changes only while nothing else
+    /// runs from it (`docs/DISPLAY.md` §6). Needs `MANAGE`; `WRONG_TYPE` for
+    /// a device with no such clock, `BAD_STATE` when the clock cannot be set
+    /// now.
+    DeviceClock,
 }
 
 /// Every native call, in number order.
@@ -278,6 +289,7 @@ pub const ALL: [NativeCall; 35] = [
     NativeCall::DisplayControlCreate,
     NativeCall::InputControlCreate,
     NativeCall::RenderControlCreate,
+    NativeCall::DeviceClock,
 ];
 
 /// Whether `number` is in the native range at all.
@@ -328,6 +340,7 @@ pub const fn decode(number: usize) -> Option<NativeCall> {
         RENDER_CONTROL_CREATE => NativeCall::RenderControlCreate,
         DEVICE_INFO => NativeCall::DeviceInfo,
         DEVICE_QUIESCE => NativeCall::DeviceQuiesce,
+        DEVICE_CLOCK => NativeCall::DeviceClock,
         _ => return None,
     };
     Some(call)
@@ -372,5 +385,6 @@ pub const fn number(call: NativeCall) -> usize {
         NativeCall::RenderControlCreate => RENDER_CONTROL_CREATE,
         NativeCall::DeviceInfo => DEVICE_INFO,
         NativeCall::DeviceQuiesce => DEVICE_QUIESCE,
+        NativeCall::DeviceClock => DEVICE_CLOCK,
     }
 }

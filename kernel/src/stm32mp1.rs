@@ -14,19 +14,51 @@
 //!   that controller's kernel clock on the 64 MHz HSI so the driver has one
 //!   timing to program;
 //! * checks that the LTDC's pixel clock -- PLL4's Q output, which firmware
-//!   set up and which clocks other things too -- is the 74.25 MHz that
-//!   CEA-861's 720p60 needs, and leaves the display alone if it is not;
+//!   set up -- is the 74.25 MHz that CEA-861's 720p60 needs, and leaves the
+//!   display alone if it is not;
 //! * muxes both controllers' pins as their `pinctrl-0` says;
 //! * pulses the bridge's reset line.
 //!
 //! What the driver then gets is a node with two apertures, the LTDC's
 //! registers and the I2C controller's, and the LTDC's interrupt.
+//!
+//! # The pixel clock, on request
+//!
+//! A monitor's larger modes want other pixel clocks, and the driver asks
+//! for them with `device_clock` ([`pixel_clock`]). What the kernel changes
+//! is exactly one field: `PLL4CFGR2.DIVQ`, the divider of PLL4's Q output,
+//! with that output gated (`PLL4CR.DIVQEN` clear) while it changes, as
+//! Linux's clock tree has the `pll4_q` gate and divider. PLL4's VCO and its
+//! P and R outputs are left as firmware set them: on a DK board TF-A runs
+//! the VCO at 594 MHz with P at 99 MHz for the SD card's SDMMC1 and R at
+//! 74.25 MHz (`fdts/stm32mp15xx-dkx.dtsi`, `pll4_cfg1`), and moving the VCO
+//! would move those. So the rates on offer are 594 MHz divided by an
+//! integer, the nearest to what was asked.
+//!
+//! Q is the LTDC's pixel clock, and DSI's, and one choice of thirteen kernel
+//! clock muxes (the SAIs, SPI4 to SPI6, USART1 to UART8, LPTIM2 and 3,
+//! FDCAN: Linux's `clk-stm32mp1.c` parent lists). The kernel changes Q only
+//! while none of those consumers is both clocked and on it, which it reads
+//! from the RCC each time, so a board whose firmware or secure world uses Q
+//! for something else keeps its rate. A reset makes TF-A program the RCC
+//! afresh, so nothing set here outlives the boot.
+//!
+//! The rate has a ceiling. The STM32MP157A/D datasheet (DS12504 Rev 4, table
+//! 94) gives the LTDC's output clock 90 MHz at 2.7 to 3.6 V with its pins at
+//! high or very high speed, and Linux's LTDC driver refuses modes above
+//! 90 MHz. The DK boards' device tree sets those pins to medium speed
+//! (`ltdc_pins_a`, `slew-rate = <1>`), for which the table gives no rate,
+//! and the board is seen to run 74.25 MHz there; so when the pins the tree
+//! asks for are slower than high speed, the ceiling is the rate firmware
+//! left, which the boot check has just found to be 74.25 MHz.
 
 use alloc::vec::Vec;
 use core::fmt;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use ferrix_bootinfo::PAGE_SIZE;
 use ferrix_fdt::{Fdt, GicInterrupt, Node};
+use ferrix_sync::Once;
 
 use crate::mmio::Mmio;
 use crate::{timer, vmap};
@@ -84,6 +116,154 @@ const PIXEL_TOLERANCE_HZ: u64 = PIXEL_HZ / 200;
 /// their `APB1ENSETR` bit.
 const I2C12: [(u64, u32); 2] = [(0x4001_2000, 1 << 21), (0x4001_3000, 1 << 22)];
 
+// More of the RCC, for the pixel clock.
+const RCC_SPI6CKSELR: u64 = 0xC4;
+const RCC_UART1CKSELR: u64 = 0xC8;
+const RCC_APB5ENSETR: u64 = 0x208;
+const RCC_SAI1CKSELR: u64 = 0x8C8;
+const RCC_SAI2CKSELR: u64 = 0x8CC;
+const RCC_SAI3CKSELR: u64 = 0x8D0;
+const RCC_SAI4CKSELR: u64 = 0x8D4;
+const RCC_SPI2S45CKSELR: u64 = 0x8E0;
+const RCC_UART6CKSELR: u64 = 0x8E4;
+const RCC_UART24CKSELR: u64 = 0x8E8;
+const RCC_UART35CKSELR: u64 = 0x8EC;
+const RCC_UART78CKSELR: u64 = 0x8F0;
+const RCC_FDCANCKSELR: u64 = 0x90C;
+const RCC_LPTIM23CKSELR: u64 = 0x930;
+const RCC_APB2ENSETR: u64 = 0xA08;
+const RCC_APB3ENSETR: u64 = 0xA10;
+/// `APB4ENSETR`: DSI, whose pixel clock is PLL4's Q output as the LTDC's is.
+const DSI_ENABLE: u32 = 1 << 4;
+/// `PLL4CFGR2`'s DIVQ field: Q's divider, less one.
+const DIVQ_SHIFT: u32 = 8;
+const DIVQ_MASK: u32 = 0x7F << DIVQ_SHIFT;
+/// The largest divider DIVQ holds.
+const DIVQ_MAX: u64 = 128;
+
+/// The LTDC's fastest pixel clock with its pins at high speed or faster:
+/// DS12504 Rev 4, table 94.
+const LTDC_MAX_HZ: u64 = 90_000_000;
+/// `OSPEEDR`'s high speed, the slowest the datasheet gives the 90 MHz for.
+const HIGH_SPEED: u32 = 2;
+
+/// Every kernel clock that can run from PLL4's Q output, as Linux's
+/// `clk-stm32mp1.c` has them: the mux register, its field's mask, the value
+/// that picks `pll4_q`, and the `ENSETR` register and bits of the
+/// peripherals behind the mux. Q is only changed while none of these is both
+/// on and on Q.
+#[rustfmt::skip]
+const Q_CONSUMERS: [(&str, u64, u32, u32, u64, u32); 13] = [
+    ("SPI4 or SPI5 runs from PLL4's Q output", RCC_SPI2S45CKSELR, 0x7, 1, RCC_APB2ENSETR, (1 << 9) | (1 << 10)),
+    ("SPI6 runs from PLL4's Q output", RCC_SPI6CKSELR, 0x7, 1, RCC_APB5ENSETR, 1 << 0),
+    ("LPTIM2 or LPTIM3 runs from PLL4's Q output", RCC_LPTIM23CKSELR, 0x7, 1, RCC_APB3ENSETR, (1 << 0) | (1 << 1)),
+    ("USART1 runs from PLL4's Q output", RCC_UART1CKSELR, 0x7, 4, RCC_APB5ENSETR, 1 << 4),
+    ("USART2 or UART4 runs from PLL4's Q output", RCC_UART24CKSELR, 0x7, 1, RCC_APB1ENSETR, (1 << 14) | (1 << 16)),
+    ("USART3 or UART5 runs from PLL4's Q output", RCC_UART35CKSELR, 0x7, 1, RCC_APB1ENSETR, (1 << 15) | (1 << 17)),
+    ("USART6 runs from PLL4's Q output", RCC_UART6CKSELR, 0x7, 1, RCC_APB2ENSETR, 1 << 13),
+    ("UART7 or UART8 runs from PLL4's Q output", RCC_UART78CKSELR, 0x7, 1, RCC_APB1ENSETR, (1 << 18) | (1 << 19)),
+    ("FDCAN runs from PLL4's Q output", RCC_FDCANCKSELR, 0x3, 2, RCC_APB2ENSETR, 1 << 24),
+    ("SAI1 or DFSDM runs from PLL4's Q output", RCC_SAI1CKSELR, 0x7, 0, RCC_APB2ENSETR, (1 << 16) | (1 << 21)),
+    ("SAI2 runs from PLL4's Q output", RCC_SAI2CKSELR, 0x7, 0, RCC_APB2ENSETR, 1 << 17),
+    ("SAI3 runs from PLL4's Q output", RCC_SAI3CKSELR, 0x7, 0, RCC_APB2ENSETR, 1 << 18),
+    ("SAI4 runs from PLL4's Q output", RCC_SAI4CKSELR, 0x7, 0, RCC_APB3ENSETR, 1 << 8),
+];
+
+/// What the kernel found of the pixel clock at boot, for [`pixel_clock`].
+#[derive(Clone, Copy, Debug)]
+struct PixelClock {
+    /// The RCC's registers.
+    rcc: u64,
+    /// PLL4's reference and VCO, as found.
+    reference_hz: u64,
+    vco_hz: u64,
+    /// The fastest rate the LTDC's pins are held to.
+    ceiling_hz: u64,
+}
+
+/// Set once, by a [`prepare`] that handed the display over.
+static PIXEL: Once<PixelClock> = Once::new();
+/// Held while a rate is being set: one driver sets it, but nothing stops a
+/// second thread of it asking at once.
+static SETTING: AtomicBool = AtomicBool::new(false);
+
+impl PixelClock {
+    /// Q's divider for the rate nearest `hz` at or under the ceiling.
+    fn divider(&self, hz: u64) -> u64 {
+        let slowest = self.vco_hz.div_ceil(self.ceiling_hz).clamp(1, DIVQ_MAX);
+        let near = (self.vco_hz / hz.max(1)).clamp(slowest, DIVQ_MAX);
+        [near, (near + 1).min(DIVQ_MAX)]
+            .into_iter()
+            .min_by_key(|&q| (self.vco_hz / q).abs_diff(hz))
+            .unwrap_or(near)
+    }
+}
+
+/// The rate of the LTDC's pixel clock nearest `hz` that the kernel will
+/// make, and with `set`, that rate made: PLL4's Q divider changed with the
+/// output gated, and read back. `Err` names why it would not be.
+pub(crate) fn pixel_clock(hz: u64, set: bool) -> Result<u64, &'static str> {
+    let clock = PIXEL
+        .get()
+        .ok_or("this machine has no pixel clock the kernel sets")?;
+    let q = clock.divider(hz);
+    let rate = clock.vco_hz / q;
+    if !set {
+        return Ok(rate);
+    }
+    if SETTING.swap(true, Ordering::Acquire) {
+        return Err("another pixel clock change is under way");
+    }
+    let done = set_divider(clock, q);
+    SETTING.store(false, Ordering::Release);
+    // A line either way: the board's serial log is where a mode that shows
+    // nothing is looked into.
+    match done {
+        Ok(()) => crate::console::println!(
+            "  display  pixel clock {} MHz: PLL4's VCO over {q}",
+            Mhz(rate)
+        ),
+        Err(why) => crate::console::println!("  display  pixel clock left alone: {why}"),
+    }
+    done.map(|()| rate)
+}
+
+/// Set PLL4's Q divider to `q`, if PLL4 is still what boot found and
+/// nothing but the LTDC runs from Q.
+fn set_divider(clock: &PixelClock, q: u64) -> Result<(), &'static str> {
+    let rcc = Window::map(clock.rcc, PAGE_SIZE)?;
+    let r = rcc.mmio;
+    let control = r.read32(RCC_PLL4CR);
+    if control & (PLL_ON | PLL_READY | PLL_Q_ENABLE) != PLL_ON | PLL_READY | PLL_Q_ENABLE {
+        return Err("PLL4's Q output is off");
+    }
+    if vco(r, clock.reference_hz) != clock.vco_hz {
+        return Err("PLL4's VCO is not the one boot found");
+    }
+    if r.read32(RCC_APB4ENSETR) & DSI_ENABLE != 0 {
+        return Err("DSI is clocked, and its pixel clock is PLL4's Q too");
+    }
+    for (why, select, mask, pll4_q, enable, bits) in Q_CONSUMERS {
+        if r.read32(select) & mask == pll4_q && r.read32(enable) & bits != 0 {
+            return Err(why);
+        }
+    }
+    let field = u32::try_from(q - 1).map_err(|_| "no such divider")? << DIVQ_SHIFT;
+    let config = r.read32(RCC_PLL4CFGR2);
+    if config & DIVQ_MASK == field {
+        return Ok(());
+    }
+    // Gated while the divider changes, so the LTDC never sees a clock
+    // pulse cut short; P and R run on untouched.
+    r.write32(RCC_PLL4CR, control & !PLL_Q_ENABLE);
+    r.write32(RCC_PLL4CFGR2, (config & !DIVQ_MASK) | field);
+    r.write32(RCC_PLL4CR, control);
+    if r.read32(RCC_PLL4CFGR2) & DIVQ_MASK != field {
+        return Err("the RCC did not take PLL4's Q divider");
+    }
+    Ok(())
+}
+
 /// What the kernel prepared, for the device node.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Prepared {
@@ -97,6 +277,8 @@ pub(crate) struct Prepared {
     pub(crate) bridge: u32,
     /// The pixel clock found.
     pub(crate) pixel_hz: u64,
+    /// The fastest the driver may set it to.
+    pub(crate) ceiling_hz: u64,
     /// Pins muxed.
     pub(crate) pins: usize,
 }
@@ -105,14 +287,23 @@ impl fmt::Display for Prepared {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "LTDC at {:#x}, HDMI bridge at {:#x} on I2C {:#x}, pixel clock {}.{:03} MHz, {} pins muxed",
+            "LTDC at {:#x}, HDMI bridge at {:#x} on I2C {:#x}, pixel clock {} MHz (at most {}), {} pins muxed",
             self.ltdc.0,
             self.bridge,
             self.i2c.0,
-            self.pixel_hz / 1_000_000,
-            (self.pixel_hz / 1000) % 1000,
+            Mhz(self.pixel_hz),
+            Mhz(self.ceiling_hz),
             self.pins
         )
+    }
+}
+
+/// A rate in Hz, printed in MHz to the kHz.
+pub(crate) struct Mhz(pub(crate) u64);
+
+impl fmt::Display for Mhz {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}.{:03}", self.0 / 1_000_000, (self.0 / 1000) % 1000)
     }
 }
 
@@ -163,7 +354,7 @@ pub(crate) fn prepare(tree: &Fdt<'_>) -> Result<Option<Prepared>, &'static str> 
     let rcc_reg = rcc_node.reg().next().ok_or("the RCC has no registers")?;
     let rcc = Window::map(rcc_reg.address, PAGE_SIZE)?;
 
-    let pixel_hz = pll4_q(tree, rcc.mmio)?;
+    let (reference_hz, vco_hz, pixel_hz) = pll4_q(tree, rcc.mmio)?;
     if pixel_hz.abs_diff(PIXEL_HZ) > PIXEL_TOLERANCE_HZ {
         return Err("PLL4's Q output is not the 74.25 MHz 720p60 needs");
     }
@@ -181,6 +372,7 @@ pub(crate) fn prepare(tree: &Fdt<'_>) -> Result<Option<Prepared>, &'static str> 
 
     let mut pins = Vec::new();
     collect_pins(tree, &ltdc, &mut pins)?;
+    let ltdc_speed = pins.iter().map(|pin| pin.speed).min().unwrap_or(0);
     collect_pins(tree, &i2c, &mut pins)?;
     let reset = reset_line(tree, &bridge)?;
     let mut banks = pins.iter().fold(0_u32, |mask, pin| mask | (1 << pin.bank));
@@ -197,12 +389,26 @@ pub(crate) fn prepare(tree: &Fdt<'_>) -> Result<Option<Prepared>, &'static str> 
         pulse_reset(bank, line, active_low)?;
     }
 
+    // Only now is the display handed over, so only now may its clock move.
+    let ceiling_hz = if ltdc_speed >= HIGH_SPEED {
+        LTDC_MAX_HZ
+    } else {
+        pixel_hz.min(LTDC_MAX_HZ)
+    };
+    let _ = PIXEL.call_once(|| PixelClock {
+        rcc: rcc_reg.address,
+        reference_hz,
+        vco_hz,
+        ceiling_hz,
+    });
+
     Ok(Some(Prepared {
         ltdc: (ltdc_reg.address, PAGE_SIZE),
         i2c: (i2c_reg.address, PAGE_SIZE),
         interrupt,
         bridge: bridge_address,
         pixel_hz,
+        ceiling_hz,
         pins: pins.len(),
     }))
 }
@@ -222,10 +428,10 @@ fn bridge_and_bus<'a>(tree: &Fdt<'a>) -> Option<(Node<'a>, Node<'a>)> {
     None
 }
 
-/// The rate of PLL4's Q output, from the RCC's registers and the device
-/// tree's HSE frequency: `ref / (M + 1) * (N + 1 + frac / 8192) / (Q + 1)`,
-/// Linux's `pll_recalc_rate`.
-fn pll4_q(tree: &Fdt<'_>, rcc: Mmio) -> Result<u64, &'static str> {
+/// PLL4's reference, its VCO, and the rate of its Q output, from the RCC's
+/// registers and the device tree's HSE frequency: `ref / (M + 1) * (N + 1 +
+/// frac / 8192) / (Q + 1)`, Linux's `pll_recalc_rate`.
+fn pll4_q(tree: &Fdt<'_>, rcc: Mmio) -> Result<(u64, u64, u64), &'static str> {
     let control = rcc.read32(RCC_PLL4CR);
     if control & (PLL_ON | PLL_READY | PLL_Q_ENABLE) != PLL_ON | PLL_READY | PLL_Q_ENABLE {
         return Err("PLL4's Q output is off");
@@ -236,6 +442,13 @@ fn pll4_q(tree: &Fdt<'_>, rcc: Mmio) -> Result<u64, &'static str> {
         2 => CSI_HZ,
         _ => return Err("PLL4's reference is not a clock"),
     };
+    let vco = vco(rcc, reference);
+    let q = u64::from((rcc.read32(RCC_PLL4CFGR2) & DIVQ_MASK) >> DIVQ_SHIFT) + 1;
+    Ok((reference, vco, vco / q))
+}
+
+/// PLL4's VCO rate from `reference`, as its M, N and fraction say now.
+fn vco(rcc: Mmio, reference: u64) -> u64 {
     let config = rcc.read32(RCC_PLL4CFGR1);
     let m = u64::from((config >> 16) & 0x3F) + 1;
     let n = u64::from(config & 0x1FF) + 1;
@@ -245,9 +458,7 @@ fn pll4_q(tree: &Fdt<'_>, rcc: Mmio) -> Result<u64, &'static str> {
     } else {
         0
     };
-    let q = u64::from((rcc.read32(RCC_PLL4CFGR2) >> 8) & 0x7F) + 1;
-    let vco = reference * n / m + reference * frac / (m * 8192);
-    Ok(vco / q)
+    reference * n / m + reference * frac / (m * 8192)
 }
 
 /// The HSE's rate: the `clock-frequency` of the fixed clock named `clk-hse`.
@@ -517,10 +728,7 @@ pub(crate) fn note_boot_context(tree: &Fdt<'_>) {
         return;
     };
     if region.size >= TAMP_BOOT_CONTEXT + 4 {
-        BOOT_CONTEXT.store(
-            region.address + TAMP_BOOT_CONTEXT,
-            core::sync::atomic::Ordering::Relaxed,
-        );
+        BOOT_CONTEXT.store(region.address + TAMP_BOOT_CONTEXT, Ordering::Relaxed);
     }
 }
 
@@ -530,7 +738,7 @@ pub(crate) fn note_boot_context(tree: &Fdt<'_>) {
 /// for, restarts as it would have without it, as Linux restarts with a word
 /// no reboot-mode driver knows.
 pub(crate) fn request_boot_mode(word: &str) -> Result<&'static str, &'static str> {
-    let at = BOOT_CONTEXT.load(core::sync::atomic::Ordering::Relaxed);
+    let at = BOOT_CONTEXT.load(Ordering::Relaxed);
     if at == 0 {
         return Err("this machine keeps no boot mode");
     }

@@ -70,6 +70,10 @@ pub const PIN_READ_ONLY: u64 = 1;
 /// mapping of the VMO from then on bypasses the caches.
 pub const PIN_COHERENT: u64 = 2;
 
+/// `device_clock`'s option: set the rate, rather than only say what it
+/// would be.
+pub const CLOCK_SET: u64 = 1;
+
 /// Where one of a device's virtio register blocks lies, as `device_info`
 /// reports it and a driver's START carries it: the page-aligned physical
 /// start of the pages holding it, inside one of the device's apertures, the
