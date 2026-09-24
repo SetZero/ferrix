@@ -19,7 +19,17 @@ specific, measured, and mostly documents rather than code.
 * [FINDINGS.md](FINDINGS.md) — the audit register, 31 open findings and 3 closed
 * [SECURITY-TARGET.md](SECURITY-TARGET.md) — EAL5+ claim, SFRs, and where it would fail evaluation
 * [SOUP.md](SOUP.md) — generated; the item contains none
+* [VERIFICATION.md](VERIFICATION.md) — what exercises the item, and the traceability gap
+* [TOOLS.md](TOOLS.md) — tool classification under EN 50716 §6.7 and DO-330
 * `coverage-x86_64.json` — statement coverage evidence, per file
+
+**Not written, and why.** A *hazard analysis* and a *risk management file*
+(F-20) need an application: hazards belong to a device or a train, not to a
+kernel, and a generic list would be a document rather than evidence. A *safety
+case* (F-22) needs the same. The *DO-178C planning set* — PSAC, SDP, SVP, SCMP,
+SQAP — needs an organisation to describe (F-28). Writing any of them from here
+would produce paperwork that an assessor would reject and that would make this
+directory look more finished than it is.
 
 ---
 
