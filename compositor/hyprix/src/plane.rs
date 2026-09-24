@@ -16,7 +16,16 @@
 //! not fit -- a client's cursor larger than the plane -- is drawn into the
 //! frame as before, and so is everything on a screen with no plane.
 //! Hyprland's `cursor:no_hardware_cursors = 1` asks for that everywhere.
+//!
+//! A turned monitor (`monitor = ..., transform, N`) has its frame drawn
+//! upright and turned on the way into the buffer the card scans out
+//! (`compositor_render::transform`); the card knows nothing of the turn.
+//! So the plane is told in the buffer's terms, as the frame is: the image
+//! turned the same way, its hotspot with it, and its place where the
+//! transform sends the pointer ([`turned`]). The DK1's monitor stands on
+//! its edge, and its frames are the slowest there are.
 
+use compositor_render::transform::{self, Transform};
 use compositor_render::{Format, Surface};
 
 /// Whether `cursor:no_hardware_cursors` leaves the pointer to a plane:
@@ -61,6 +70,74 @@ pub fn image(surface: Option<&Surface<'_>>, size: (u32, u32)) -> Option<Vec<u8>>
         }
     }
     Some(image)
+}
+
+/// An image for the plane, its hotspot, and where its top-left corner goes.
+pub type Placed = (Vec<u8>, (i32, i32), (i32, i32));
+
+/// An image for a plane `size` big, drawn upright with its hotspot at
+/// `hot` and its top-left corner at `at` on a turned monitor whose frame is
+/// `frame` pixels as it is read -- as the card is to be told it: the image
+/// turned by `transform` as every pixel of the frame is, the hotspot the
+/// same pixel of the turned image, and the place the turned image's
+/// top-left corner goes in the buffer.
+///
+/// The transform is a fixed map of the frame's pixels onto the buffer's
+/// that moves a step in the frame by a step in the buffer, so a pixel
+/// `(x, y)` of the image, which is the frame's pixel `at + (x, y)`, goes to
+/// the buffer's `point(at) + (point(x, y) - point(0, 0))` -- the second
+/// point taken on the image's own size. That is the turned image, its
+/// top-left corner at `point(at) - point(0, 0)`: the pointer lands where the
+/// frame would have drawn it, pixel for pixel, including a pointer across an
+/// edge whose place the turn makes negative.
+///
+/// `None` for a quarter turn of a plane that is not square, whose image
+/// turned would not be the plane's size; cursor planes are square.
+#[must_use]
+pub fn turned(
+    transform: Transform,
+    frame: (u32, u32),
+    image: Vec<u8>,
+    size: (u32, u32),
+    hot: (i32, i32),
+    at: (i32, i32),
+) -> Option<Placed> {
+    if transform == Transform::Normal {
+        return Some((image, hot, at));
+    }
+    if transform.size(size) != size {
+        return None;
+    }
+    let side = (i64::from(size.0), i64::from(size.1));
+    let width = usize::try_from(size.0).ok()?;
+    let mut out = vec![0u8; image.len()];
+    for (index, pixel) in image.chunks_exact(4).enumerate() {
+        let (x, y) = (
+            i64::try_from(index % width).ok()?,
+            i64::try_from(index / width).ok()?,
+        );
+        let (x, y) = transform::point(transform, side, (x, y));
+        let to = usize::try_from(y)
+            .ok()?
+            .checked_mul(width)?
+            .checked_add(usize::try_from(x).ok()?)?
+            .checked_mul(4)?;
+        out.get_mut(to..to.checked_add(4)?)?.copy_from_slice(pixel);
+    }
+    let wide = |(x, y): (i32, i32)| (i64::from(x), i64::from(y));
+    let narrow = |(x, y): (i64, i64)| Some((i32::try_from(x).ok()?, i32::try_from(y).ok()?));
+    let hot = transform::point(transform, side, wide(hot));
+    let corner = transform::point(
+        transform,
+        (i64::from(frame.0), i64::from(frame.1)),
+        wide(at),
+    );
+    let origin = transform::point(transform, side, (0, 0));
+    let at = (
+        corner.0.checked_sub(origin.0)?,
+        corner.1.checked_sub(origin.1)?,
+    );
+    Some((out, narrow(hot)?, narrow(at)?))
 }
 
 /// What a screen's plane is to be told.
@@ -177,6 +254,113 @@ mod tests {
                 .all(|&byte| byte == 0)
         );
         assert_eq!(super::image(Some(&surface), (2, 2)), None);
+    }
+
+    /// A `side`-square image with a pixel of its own at each place, so that
+    /// where one went says where it came from.
+    fn numbered(side: u32) -> Vec<u8> {
+        (0..side * side)
+            .flat_map(|n| {
+                let [a, b, ..] = n.to_le_bytes();
+                [a, b, 0x5A, 0xFF]
+            })
+            .collect()
+    }
+
+    /// The pixel of the turned image at `(x, y)`.
+    fn pixel(image: &[u8], side: u32, (x, y): (i64, i64)) -> Option<&[u8]> {
+        let at = usize::try_from(y * i64::from(side) + x).ok()? * 4;
+        image.get(at..at + 4)
+    }
+
+    #[test]
+    fn a_turned_image_lands_where_the_frame_would_have_drawn_it() {
+        // The DK1's monitor, 1280x720 turned onto its edge, and every other
+        // transform on it; the pointer in the middle and across each edge.
+        let side = 64;
+        let image = numbered(side);
+        for transform in Transform::ALL {
+            // The frame as it is read: the mode's size, exchanged for a
+            // quarter turn.
+            let frame = transform.size((1280, 720));
+            let size = (i64::from(frame.0), i64::from(frame.1));
+            for at in [(300, 500), (-20, -9), (700, 1270), (-63, 1279)] {
+                let hot = (5, 11);
+                let (shown, shown_hot, place) =
+                    turned(transform, frame, image.clone(), (side, side), hot, at)
+                        .expect("a square plane turns");
+                // Every pixel of the image is where the transform sends the
+                // frame's pixel it covers.
+                for (x, y) in [(0, 0), (63, 0), (0, 63), (63, 63), (5, 11), (40, 7)] {
+                    let on_frame = (i64::from(at.0 + x), i64::from(at.1 + y));
+                    let in_buffer = transform::point(transform, size, on_frame);
+                    let in_image = (
+                        in_buffer.0 - i64::from(place.0),
+                        in_buffer.1 - i64::from(place.1),
+                    );
+                    assert_eq!(
+                        pixel(&shown, side, in_image),
+                        pixel(&image, side, (i64::from(x), i64::from(y))),
+                        "{transform:?} at {at:?}: the image's ({x}, {y})"
+                    );
+                }
+                // And the hotspot is the pixel the hotspot was.
+                assert_eq!(
+                    pixel(&shown, side, (shown_hot.0.into(), shown_hot.1.into())),
+                    pixel(&image, side, (5, 11)),
+                    "{transform:?}: the hotspot"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_dk1s_turned_pointer_is_turned_clockwise_into_the_buffer() {
+        // `transform, 3`: the frame's top left is the buffer's top right, so
+        // the arrow's tip at the image's top left is at the turned image's
+        // top right, and a pointer at the frame's top-left corner is at the
+        // buffer's top-right one.
+        let mut image = vec![0u8; 64 * 64 * 4];
+        image[..4].copy_from_slice(&[1, 2, 3, 0xFF]);
+        let (shown, hot, at) = turned(
+            Transform::Rotated270,
+            (720, 1280),
+            image,
+            (64, 64),
+            (0, 0),
+            (0, 0),
+        )
+        .expect("square");
+        assert_eq!(hot, (63, 0), "the tip, turned");
+        assert_eq!(pixel(&shown, 64, (63, 0)), Some(&[1, 2, 3, 0xFF][..]));
+        assert_eq!(
+            (at.0 + hot.0, at.1 + hot.1),
+            (1279, 0),
+            "the buffer's top-right pixel"
+        );
+        // Upright is left alone, and a plane that is not square is not
+        // turned a quarter.
+        let upright = turned(
+            Transform::Normal,
+            (1280, 720),
+            vec![7; 16],
+            (2, 2),
+            (1, 1),
+            (4, 5),
+        );
+        assert_eq!(upright, Some((vec![7; 16], (1, 1), (4, 5))));
+        let oblong = vec![0; 4 * 2 * 4];
+        assert_eq!(
+            turned(
+                Transform::Rotated90,
+                (720, 1280),
+                oblong,
+                (4, 2),
+                (0, 0),
+                (0, 0)
+            ),
+            None
+        );
     }
 
     #[test]

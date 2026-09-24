@@ -4185,7 +4185,9 @@ fn cursor_surface(slots: &[Slot], focus: &Focus) -> Option<(usize, ObjectId, (i3
 ///
 /// The image is made again on every pass -- a pointer's worth of pixels --
 /// and set only when it or its hotspot changed; otherwise the plane is only
-/// moved, which waits for nothing.
+/// moved, which waits for nothing. On a turned monitor it is turned with
+/// the frame (`crate::plane::turned`), a 64 x 64 image's worth of work on
+/// the passes the pointer moves.
 fn sync_planes(
     screens: &mut [Screen],
     slots: &[Slot],
@@ -4196,11 +4198,14 @@ fn sync_planes(
 ) -> bool {
     let mut switched = false;
     for screen in screens.iter_mut() {
-        // Not on a turned monitor: the plane takes its image and its place
-        // in the buffer's orientation, and neither is turned here, so the
-        // pointer is drawn into the frame there and turns with it.
-        let size = if wanted && screen.transform == Transform::Normal {
-            screen.backend.cursor_plane()
+        // The plane takes its image and its place in the buffer's
+        // orientation, so on a turned monitor both are turned below -- which
+        // a quarter turn can do only to a square image.
+        let size = if wanted {
+            screen
+                .backend
+                .cursor_plane()
+                .filter(|&size| screen.transform.size(size) == size)
         } else {
             None
         };
@@ -4265,6 +4270,14 @@ fn sync_planes(
                 local(y, rect.y).saturating_sub(hot.1),
             )
         });
+        // In the buffer's pixels, as the frame is.
+        let frame = (screen.canvas.width(), screen.canvas.height());
+        let Some((image, hot, at)) =
+            crate::plane::turned(screen.transform, frame, image, size, hot, at)
+        else {
+            switched |= std::mem::replace(&mut screen.plane.on, false);
+            continue;
+        };
         let told = match screen.plane.tell(image, hot, at) {
             crate::plane::Tell::Nothing => Ok(()),
             crate::plane::Tell::Move(at) => screen.backend.move_cursor(at),
