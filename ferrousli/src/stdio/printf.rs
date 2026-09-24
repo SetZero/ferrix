@@ -1496,3 +1496,146 @@ va::variadic!(dprintf, 2, vdprintf);
 va::variadic!(sprintf, 2, vsprintf);
 va::variadic!(snprintf, 3, vsnprintf);
 va::variadic!(asprintf, 2, vasprintf);
+
+/// `<printf.h>`'s argument types, as `parse_printf_format` reports them.
+mod pa {
+    use core::ffi::c_int;
+
+    /// An `int`, or with a flag a `short`, `long` or `long long`.
+    pub(super) const INT: c_int = 0;
+    /// A `char`, promoted to `int`.
+    pub(super) const CHAR: c_int = 1;
+    /// A `char *`.
+    pub(super) const STRING: c_int = 3;
+    /// A `void *`.
+    pub(super) const POINTER: c_int = 5;
+    /// A `double`, or with the flag a `long double`.
+    pub(super) const DOUBLE: c_int = 7;
+    /// `long long`, or `long double` with `DOUBLE`.
+    pub(super) const FLAG_LONG_LONG: c_int = 1 << 8;
+    /// `long`.
+    pub(super) const FLAG_LONG: c_int = 1 << 9;
+    /// `short`.
+    pub(super) const FLAG_SHORT: c_int = 1 << 10;
+    /// A pointer to the type, for `%n`.
+    pub(super) const FLAG_PTR: c_int = 1 << 11;
+}
+
+/// The type `parse_printf_format` reports for `directive`'s own argument,
+/// or `None` for a directive that takes none.
+///
+/// # Safety
+///
+/// `directive` must come from [`parse`], whose conversion byte is still
+/// readable before its end.
+unsafe fn argument_type(directive: &Directive) -> Option<c_int> {
+    // The length's last byte, which tells `ll` and `j` from `q`, all of which
+    // the parser folds into one length.
+    // SAFETY: the length byte, if any, is before the conversion byte.
+    let last = unsafe { byte_at(directive.end.wrapping_sub(2)) };
+    // What glibc 2.43 answers. Where `long long` is a `long`, `ll` and `j`
+    // are `long`'s, and `q` and `L`, its old spellings of `ll`, carry no
+    // flag at all; where it is wider, all four are `long long`'s.
+    let wide = if cfg!(target_pointer_width = "64") {
+        if last == b'q' {
+            pa::INT
+        } else {
+            pa::INT | pa::FLAG_LONG
+        }
+    } else {
+        pa::INT | pa::FLAG_LONG_LONG
+    };
+    let integer = match directive.length {
+        Length::Char => pa::CHAR,
+        Length::Short => pa::INT | pa::FLAG_SHORT,
+        Length::Int => pa::INT,
+        Length::Long => pa::INT | pa::FLAG_LONG,
+        Length::Wide => wide,
+        Length::LongDouble if cfg!(target_pointer_width = "64") => pa::INT,
+        Length::LongDouble => pa::INT | pa::FLAG_LONG_LONG,
+    };
+    // glibc reports `%lc` and `%ls` as `char` and `char *`, and only `%C`
+    // and `%S`, which this `printf` does not take, as the wide types.
+    Some(match directive.conversion {
+        b'%' | b'm' => return None,
+        b'd' | b'i' | b'o' | b'u' | b'x' | b'X' => integer,
+        b'n' => integer | pa::FLAG_PTR,
+        b'e' | b'E' | b'f' | b'F' | b'g' | b'G' | b'a' | b'A' => {
+            if directive.length == Length::LongDouble {
+                pa::DOUBLE | pa::FLAG_LONG_LONG
+            } else {
+                pa::DOUBLE
+            }
+        }
+        b'c' => pa::CHAR,
+        b's' => pa::STRING,
+        _ => pa::POINTER,
+    })
+}
+
+/// Reads the `printf` format `fmt` and stores the types of the arguments it
+/// takes, as `<printf.h>`'s `PA_*` values, in the first `n` of `argtypes`.
+/// Returns how many arguments it takes, which may be more than `n`: GNU's
+/// `parse_printf_format`, which systemd's logging checks its formats with.
+///
+/// A `*` width or precision takes an `int`. With positions, `%2$s`, each
+/// argument goes in its place and the count is the highest position. A
+/// directive this library's `printf` does not know takes nothing.
+///
+/// # Safety
+///
+/// `fmt` must be a NUL-terminated string, and `argtypes` valid for writes
+/// of `n` `int`s.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn parse_printf_format(
+    fmt: *const c_char,
+    n: usize,
+    argtypes: *mut c_int,
+) -> usize {
+    let mut next = 0;
+    let mut count = 0;
+    let mut record = |index: usize, kind: c_int| {
+        if index < n {
+            // SAFETY: the caller vouches for `n` places.
+            unsafe { argtypes.wrapping_add(index).write(kind) };
+        }
+        count = count.max(index + 1);
+    };
+    let mut p = fmt.cast::<u8>();
+    loop {
+        // SAFETY: `p` is inside the format.
+        p = unsafe { next_directive(p) };
+        // SAFETY: as above.
+        if unsafe { byte_at(p) } == 0 {
+            break;
+        }
+        p = p.wrapping_add(1);
+        // SAFETY: `p` is the byte after a `%`, inside the format.
+        let Ok(directive) = (unsafe { parse(p) }) else {
+            continue;
+        };
+        for amount in [directive.width, directive.precision] {
+            match amount {
+                Count::Next => {
+                    record(next, pa::INT);
+                    next += 1;
+                }
+                Count::Position(m) => record(m - 1, pa::INT),
+                Count::Absent | Count::Fixed(_) => {}
+            }
+        }
+        // SAFETY: `directive` is `parse`'s.
+        if let Some(kind) = unsafe { argument_type(&directive) } {
+            let index = directive.position.map_or_else(
+                || {
+                    next += 1;
+                    next - 1
+                },
+                |m| m - 1,
+            );
+            record(index, kind);
+        }
+        p = directive.end;
+    }
+    count
+}

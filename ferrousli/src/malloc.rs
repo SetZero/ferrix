@@ -775,6 +775,89 @@ pub extern "C" fn mallopt(_param: c_int, _value: c_int) -> c_int {
     1
 }
 
+/// Releases free memory at the top of the heap to the kernel, keeping
+/// `pad` bytes, and returns 1 if any went back. glibc's. A large block goes
+/// back when it is freed, and small blocks' regions are kept for the next
+/// allocation of their class, so there is never anything to trim: 0.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub extern "C" fn malloc_trim(_pad: usize) -> c_int {
+    0
+}
+
+/// glibc's `struct mallinfo2`: the allocator's statistics, in bytes and
+/// counts.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Mallinfo2 {
+    /// Bytes of the main arena.
+    pub arena: usize,
+    /// Free chunks.
+    pub ordblks: usize,
+    /// Free fastbin blocks.
+    pub smblks: usize,
+    /// Mapped regions.
+    pub hblks: usize,
+    /// Bytes in mapped regions.
+    pub hblkhd: usize,
+    /// Unused: always 0 in glibc.
+    pub usmblks: usize,
+    /// Bytes in free fastbin blocks.
+    pub fsmblks: usize,
+    /// Bytes allocated.
+    pub uordblks: usize,
+    /// Bytes free.
+    pub fordblks: usize,
+    /// Bytes trimmable from the top.
+    pub keepcost: usize,
+}
+
+/// glibc's `struct mallinfo`, the same with `int` fields.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Mallinfo {
+    /// See [`Mallinfo2`], field by field.
+    pub fields: [c_int; 10],
+}
+
+/// The allocator's statistics, glibc's `mallinfo2`. This allocator keeps
+/// none, so every field is 0, as glibc's are for the fields its own
+/// allocator does not use. systemd logs them; nothing decides by them.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub extern "C" fn mallinfo2() -> Mallinfo2 {
+    Mallinfo2::default()
+}
+
+/// [`mallinfo2`] with `int` fields, which glibc deprecated for wrapping.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub extern "C" fn mallinfo() -> Mallinfo {
+    Mallinfo::default()
+}
+
+/// Frees `p`, which C23 lets a caller say it allocated with `size` bytes.
+/// glibc 2.43's, which GLib calls: the size is a hint this allocator does
+/// not need, since every block records its own.
+///
+/// # Safety
+///
+/// As [`free`].
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn free_sized(p: *mut c_void, _size: usize) {
+    // SAFETY: the caller's contract is `free`'s.
+    unsafe { free(p) }
+}
+
+/// Frees `p`, allocated with `alignment` and `size`: C23's, as
+/// [`free_sized`].
+///
+/// # Safety
+///
+/// As [`free`].
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn free_aligned_sized(p: *mut c_void, _alignment: usize, _size: usize) {
+    // SAFETY: the caller's contract is `free`'s.
+    unsafe { free(p) }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

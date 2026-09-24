@@ -103,6 +103,7 @@ pub mod pwd;
 pub mod qsort;
 pub mod rand;
 pub mod random;
+pub mod random_r;
 pub mod realpath;
 pub mod regex;
 pub mod rename;

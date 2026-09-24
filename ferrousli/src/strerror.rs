@@ -198,6 +198,175 @@ pub extern "C" fn strerror_l(error: c_int, locale: *mut Locale) -> *mut c_char {
     strerror(error)
 }
 
+/// Each error number's name, as `errno.h` spells it. `EWOULDBLOCK`,
+/// `EDEADLOCK` and `ENOTSUP` are other names for `EAGAIN`, `EDEADLK` and
+/// `EOPNOTSUPP`, and are not here: glibc answers those numbers with the
+/// first names too.
+macro_rules! error_names {
+    ($($name:ident),* $(,)?) => {
+        [$((e::$name, concat!(stringify!($name), "\0").as_bytes())),*]
+    };
+}
+
+/// See [`error_names`]: each number, and its name with a NUL after it.
+static ERROR_NAMES: [(c_int, &[u8]); 131] = error_names![
+    EPERM,
+    ENOENT,
+    ESRCH,
+    EINTR,
+    EIO,
+    ENXIO,
+    E2BIG,
+    ENOEXEC,
+    EBADF,
+    ECHILD,
+    EAGAIN,
+    ENOMEM,
+    EACCES,
+    EFAULT,
+    ENOTBLK,
+    EBUSY,
+    EEXIST,
+    EXDEV,
+    ENODEV,
+    ENOTDIR,
+    EISDIR,
+    EINVAL,
+    ENFILE,
+    EMFILE,
+    ENOTTY,
+    ETXTBSY,
+    EFBIG,
+    ENOSPC,
+    ESPIPE,
+    EROFS,
+    EMLINK,
+    EPIPE,
+    EDOM,
+    ERANGE,
+    EDEADLK,
+    ENAMETOOLONG,
+    ENOLCK,
+    ENOSYS,
+    ENOTEMPTY,
+    ELOOP,
+    ENOMSG,
+    EIDRM,
+    ECHRNG,
+    EL2NSYNC,
+    EL3HLT,
+    EL3RST,
+    ELNRNG,
+    EUNATCH,
+    ENOCSI,
+    EL2HLT,
+    EBADE,
+    EBADR,
+    EXFULL,
+    ENOANO,
+    EBADRQC,
+    EBADSLT,
+    EBFONT,
+    ENOSTR,
+    ENODATA,
+    ETIME,
+    ENOSR,
+    ENONET,
+    ENOPKG,
+    EREMOTE,
+    ENOLINK,
+    EADV,
+    ESRMNT,
+    ECOMM,
+    EPROTO,
+    EMULTIHOP,
+    EDOTDOT,
+    EBADMSG,
+    EOVERFLOW,
+    ENOTUNIQ,
+    EBADFD,
+    EREMCHG,
+    ELIBACC,
+    ELIBBAD,
+    ELIBSCN,
+    ELIBMAX,
+    ELIBEXEC,
+    EILSEQ,
+    ERESTART,
+    ESTRPIPE,
+    EUSERS,
+    ENOTSOCK,
+    EDESTADDRREQ,
+    EMSGSIZE,
+    EPROTOTYPE,
+    ENOPROTOOPT,
+    EPROTONOSUPPORT,
+    ESOCKTNOSUPPORT,
+    EOPNOTSUPP,
+    EPFNOSUPPORT,
+    EAFNOSUPPORT,
+    EADDRINUSE,
+    EADDRNOTAVAIL,
+    ENETDOWN,
+    ENETUNREACH,
+    ENETRESET,
+    ECONNABORTED,
+    ECONNRESET,
+    ENOBUFS,
+    EISCONN,
+    ENOTCONN,
+    ESHUTDOWN,
+    ETOOMANYREFS,
+    ETIMEDOUT,
+    ECONNREFUSED,
+    EHOSTDOWN,
+    EHOSTUNREACH,
+    EALREADY,
+    EINPROGRESS,
+    ESTALE,
+    EUCLEAN,
+    ENOTNAM,
+    ENAVAIL,
+    EISNAM,
+    EREMOTEIO,
+    EDQUOT,
+    ENOMEDIUM,
+    EMEDIUMTYPE,
+    ECANCELED,
+    ENOKEY,
+    EKEYEXPIRED,
+    EKEYREVOKED,
+    EKEYREJECTED,
+    EOWNERDEAD,
+    ENOTRECOVERABLE,
+    ERFKILL,
+    EHWPOISON,
+];
+
+/// The name of error number `error`, such as `"EINVAL"`, or null for a
+/// number that has none: GNU's `strerrorname_np`, which systemd prints.
+/// As glibc's, 0 is named `"0"`.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub extern "C" fn strerrorname_np(error: c_int) -> *const c_char {
+    if error == 0 {
+        return c"0".as_ptr();
+    }
+    ERROR_NAMES
+        .iter()
+        .find(|(number, _)| *number == error)
+        .map_or(core::ptr::null(), |(_, name)| name.as_ptr().cast())
+}
+
+/// The message for error number `error`, or null for a number that has
+/// none: GNU's `strerrordesc_np`, [`strerror`] without its fallback.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub extern "C" fn strerrordesc_np(error: c_int) -> *const c_char {
+    if strerrorname_np(error).is_null() {
+        return core::ptr::null();
+    }
+    error_message(error).as_ptr()
+}
+
 /// Copies the message for `error` into `buf`, which holds `len` bytes: the
 /// XSI `strerror_r`, which returns an `int`.
 ///
@@ -455,6 +624,30 @@ mod tests {
         assert_eq!(text(strsignal(64)), "RT64");
         for signal in [0, -1, 65, 128, c_int::MIN, c_int::MAX] {
             assert_eq!(text(strsignal(signal)), "Unknown signal", "{signal}");
+        }
+    }
+
+    #[test]
+    fn strerrorname_np_names_what_the_host_glibc_names() {
+        unsafe extern "C" {
+            #[link_name = "strerrorname_np"]
+            safe fn host_strerrorname_np(error: c_int) -> *const c_char;
+        }
+        for error in -2..200 {
+            let host = host_strerrorname_np(error);
+            let ours = strerrorname_np(error);
+            if host.is_null() {
+                assert!(ours.is_null(), "{error}");
+                assert!(strerrordesc_np(error).is_null(), "{error}");
+            } else {
+                assert!(!ours.is_null(), "{error}");
+                // SAFETY: glibc's names are static C strings.
+                let host = unsafe { CStr::from_ptr(host) };
+                // SAFETY: as are this library's.
+                let ours = unsafe { CStr::from_ptr(ours) };
+                assert_eq!(ours, host, "{error}");
+                assert!(!strerrordesc_np(error).is_null(), "{error}");
+            }
         }
     }
 }
