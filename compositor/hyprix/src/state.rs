@@ -5709,7 +5709,18 @@ fn globals(outputs: usize) -> Globals {
     globals
 }
 
-/// Read the configuration, or take Hyprland's defaults.
+/// The configuration's `env =` pairs, which every program the compositor
+/// starts is given.
+///
+/// Hyprland sets them in its own environment as it reads the file, so that
+/// everything it starts inherits them. This keeps them beside the process
+/// instead and hands them to each child: changing a running program's
+/// environment is not safe once it has threads, and this one has a
+/// renderer's.
+static CHILD_ENV: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex::new(Vec::new());
+
+/// Read the configuration, or take Hyprland's defaults, and remember its
+/// `env =` pairs for [`start`].
 fn read_config(options: &Options) -> Result<Config, String> {
     let Some(path) = options.config.as_ref() else {
         return Ok(Config::default());
@@ -5717,7 +5728,11 @@ fn read_config(options: &Options) -> Result<Config, String> {
     let text = std::fs::read_to_string(path)
         .map_err(|error| format!("reading {}: {error}", path.display()))?;
     let name = path.to_string_lossy().into_owned();
-    Ok(compositor_config::parse(&name, &text, &mut NoSources).config)
+    let config = compositor_config::parse(&name, &text, &mut NoSources).config;
+    if let Ok(mut env) = CHILD_ENV.lock() {
+        env.clone_from(&config.env);
+    }
+    Ok(config)
 }
 
 /// Start a program with `WAYLAND_DISPLAY` pointing at this compositor.
@@ -5753,6 +5768,11 @@ pub(crate) fn start(
     }
     if std::env::var_os("XDG_SESSION_TYPE").is_none() {
         let _ = child.env("XDG_SESSION_TYPE", "wayland");
+    }
+    // The configuration's own, last, so that an `env =` line can set any of
+    // the above too, as it can in Hyprland.
+    if let Ok(env) = CHILD_ENV.lock() {
+        let _ = child.envs(env.iter().map(|(name, value)| (name, value)));
     }
     child
         .spawn()
