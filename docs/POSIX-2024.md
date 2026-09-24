@@ -18,13 +18,13 @@ variables it specifies beside them.
 
 | Status | Interfaces | Meaning |
 |---|---|---|
-| present | 1049 | defined by `libferrousli.a`, or a macro the standard specifies as one and `include/` defines |
+| present | 1067 | defined by `libferrousli.a`, or a macro the standard specifies as one and `include/` defines |
 | macro only | 3 | a function the standard requires, which the header defines only as a macro: a call works, taking its address or `#undef` does not |
 | broken | 1 | present, but it fails to link or gives a wrong answer |
 | stubbed | 0 | a stand-in that ends the program; the last left `src/stubs.rs` on 2026-09-16, and the file is gone |
-| absent | 190 | not there |
+| absent | 172 | not there |
 
-194 interfaces are missing in one of the last four ways. None of them is
+176 interfaces are missing in one of the last four ways. None of them is
 written on a branch any more: the three unlanded branches of 2026-09-13,
 `ferrousli-math`, `ferrousli-threads` and `ferrousli-misc`, were built,
 fixed and landed on 2026-09-16.
@@ -43,7 +43,7 @@ new subsystem. Every area's missing names are in the index at the end.
 | Standard I/O | 70 | 0 | 0 | 0 | landed: `tmpnam` |
 | Math and the floating-point environment | 201 | 28 | 0 | 5 | the 28 `long double` forms the x87 has no single instruction for -- the transcendentals, `powl` among them as a `double` stand-in, `cbrtl`, `hypotl`, `fmal` and the gamma and error functions -- each a port of musl's, 5. Landed: every `double` and `float` function: the error and gamma functions with `signgam` and `lgamma_r`, the Bessel functions; the hyperbolic functions and `hypot` for `double` and `float`; `tan`, `asin`, `acos`, `atan` for `double`, and all of them with `sin`, `cos` and `atan2` for `float`; `exp2`, `expm1`, `log2`, `log10`, `log1p` for `double` and `float`, with `expf`, `logf` and `powf`; `fenv.h`; rounding, manipulation, remainders and `fma` for `double` and `float`; `sin`, `cos`, `exp`, `log`, `pow` and `atan2` for `double`, bit for bit musl's in every rounding mode; and the classifiers for all three types; the 31 `long double` forms the x87 computes directly, through naked shims for the calling convention no Rust signature can say: `fabsl`, `copysignl`, `sqrtl`, the rounding family, the remainder family and the manipulation family |
 | Complex arithmetic | 69 | 22 | 0 | 2 | the `long double complex` forms, after the rest of `long double` math 2. Landed: every `double complex` and `float complex` function, `creal` and `cimag` among them as functions, bit for bit musl's |
-| Locales, messages and conversion | 32 | 21 | 0 | 13 | the `gettext` family with `.mo` catalogues 5; `iconv` 5; `strfmon`, `strfmon_l` 2; `getlocalename_l` 1. Landed: `catopen`, `catgets`, `catclose` |
+| Locales, messages and conversion | 32 | 3 | 0 | 8 | reading `.mo` catalogues for the `gettext` family 3; `iconv`'s other character sets and glibc's transliteration 2; `strfmon`, `strfmon_l` 2; `getlocalename_l` 1. Landed: the `gettext` family with the answers glibc gives without a catalogue, and `iconv` between UTF-8, UTF-16, UTF-32, UCS-2, UCS-4, ASCII, ISO-8859-1 and CP1252, for GLib (`docs/CHROME.md`); `catopen`, `catgets`, `catclose` |
 | Files, directories and I/O multiplexing | 46 | 1 | 0 | 1 | `posix_getdents` |
 | Processes, identity and the system | 103 | 6 | 0 | 5 | `confstr` 1; `setresuid`, `setresgid` 1; `nice`, `lockf` 1; `posix_close` 1; `fmtmsg` 1. Landed: `pathconf`, `fpathconf`; `encrypt` and `setkey`, DES through the bit-array interface, checked against FIPS 46-3's own vector |
 | Spawning | 25 | 25 | 0 | 7 | the `posix_spawn` family on `clone(CLONE_VM\|CLONE_VFORK)`, which lets `system` and `popen` stop forking, 5; `_Fork` 1; `fexecve` 1 |
@@ -58,7 +58,7 @@ new subsystem. Every area's missing names are in the index at the end.
 | Users, groups and databases | 29 | 9 | 0 | 3 | `<ndbm.h>` and the `dbm_*` functions |
 | Dynamic loading | 5 | 4 | 0 | 2 | `dlopen`, `dlsym`, `dlclose` and `dlerror` for a static program, failing cleanly; a loader is the README's fifth item and is not priced here. Landed: `dladdr`, over the program's own headers |
 | Across areas | | | | 3 | POSIX.1-2024's declarations in `include/` 3 |
-| **All** | **1243** | **194** | **0** | **70** | |
+| **All** | **1243** | **176** | **0** | **65** | |
 
 ## Present but broken
 
@@ -254,9 +254,9 @@ interface.
 
 | Header | Status | Interfaces |
 |---|---|---|
-| `<iconv.h>` | absent (3) | `iconv`, `iconv_close`, `iconv_open` |
+| `<iconv.h>` | present (3) | `iconv`, `iconv_close`, `iconv_open` |
 | `<langinfo.h>` | present (2) | `nl_langinfo`, `nl_langinfo_l` |
-| `<libintl.h>` | absent (15) | `bind_textdomain_codeset`, `bindtextdomain`, `dcgettext`, `dcgettext_l`, `dcngettext`, `dcngettext_l`, `dgettext`, `dgettext_l`, `dngettext`, `dngettext_l`, `gettext`, `gettext_l`, `ngettext`, `ngettext_l`, `textdomain` |
+| `<libintl.h>` | present (15) | `bind_textdomain_codeset`, `bindtextdomain`, `dcgettext`, `dcgettext_l`, `dcngettext`, `dcngettext_l`, `dgettext`, `dgettext_l`, `dngettext`, `dngettext_l`, `gettext`, `gettext_l`, `ngettext`, `ngettext_l`, `textdomain` |
 | `<locale.h>` | present (6) | `duplocale`, `freelocale`, `localeconv`, `newlocale`, `setlocale`, `uselocale` |
 | `<locale.h>` | absent (1) | `getlocalename_l` |
 | `<monetary.h>` | absent (2) | `strfmon`, `strfmon_l` |

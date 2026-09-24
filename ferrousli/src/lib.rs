@@ -76,8 +76,10 @@ pub mod growable;
 pub mod grp;
 #[cfg(test)]
 mod host_glibc;
+pub mod iconv;
 pub mod ifaddrs;
 pub mod inet;
+pub mod intl;
 pub mod ioctl;
 pub mod ipc;
 pub mod key;

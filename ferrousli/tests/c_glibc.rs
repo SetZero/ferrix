@@ -81,6 +81,11 @@ fn trees_are_walked_with_nftw_and_fts_and_read_with_scandirat() {
 }
 
 #[test]
+fn gettext_answers_the_message_and_iconv_converts_as_glibc_does() {
+    check(&Case::named("glibc/intl"));
+}
+
+#[test]
 fn gnus_math_additions_answer_through_cs_calling_convention() {
     check(&Case::named("glibc/math"));
 }
