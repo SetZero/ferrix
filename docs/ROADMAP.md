@@ -4447,6 +4447,23 @@ keys -- and `write` of `EV_LED` to an event node reached the keyboard's
 LEDs through a new core-to-driver message, `STATUS`. `docs/INPUT.md` §7 has
 the design.
 
+**Done — the board's desktop without the boot test in front of it
+(2026-09-24).** The DK1 took some 20 s from reset to a usable desktop, 6.5 s
+of it the kernel's self-checks and 2.5 s the loader reading 47 MB off the
+card. `ferrix.checks=skip` brings every stage up and checks none
+(`kernel/src/checks.rs`), ending in `FERRIX-BOOT-UNCHECKED`, which no boot
+test accepts; `flash --compositor` and `run-compositor` put it in the image's
+own `FERRIX/DEFAULTS.TXT`, beside and below the card owner's `CMDLINE.TXT`,
+and `test-compositor --boot desktop` gates it. Under QEMU at two processors
+the kernel's banner to its marker is 0.34 s against 4.94 s. `flash` strips
+the card's programs and kernel, and oh-my-zsh loses its documentation and
+pictures: the desktop's card is 26 MB where it was 47 MB. **Still to do:**
+the board's own numbers; hyprix opening input devices that arrive after it
+starts, since usbhid says its bus has settled after a first poll that finds
+nothing on the board, and the desktop has the keyboard only because the
+compositor takes longer to start than the hub takes to enumerate
+(`docs/INPUT.md` §7.3).
+
 **Done — epoll, iteration 2's first kernel row.** `epoll_create1`,
 `epoll_create`, `epoll_ctl`, `epoll_wait`, `epoll_pwait` and `epoll_pwait2`
 answer on all three architectures, with `struct epoll_event` packed to 12

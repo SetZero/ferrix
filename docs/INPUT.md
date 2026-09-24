@@ -801,6 +801,19 @@ devices without it (hyprix as init, 2026-09-23). This is the
 hotplug decision 5 of §6 left out, for this driver: devices come and go; how
 a compositor learns of one that came later is still that backlog row's.
 
+**The wait does not hold on the board as it boots today (2026-09-24).**
+usbhid says it has settled after its first poll, and on the DK1 that poll
+comes as the controller starts and finds nothing: init was running 60 ms
+after `usbhid: EHCI running`, the hub was published half a second after it
+and the keyboard behind the hub after 0.9 s. hyprix still found all four
+devices because it opens `/dev/input` after its screens and its socket, at
+least 0.7 s after its first line. That is a race the compositor
+wins by being slow, and a faster start-up will lose it. Making the settle
+honest -- ports powered and debounced, hubs walked -- would hold init back by
+the whole enumeration, about a second on every boot; the fix that costs
+nothing is the row above: hyprix rescanning `/dev/input` and telling bound
+seats their new capabilities, which also serves a keyboard plugged in later.
+
 ### 7.4 The bus
 
 `libs/usb-host` is written against registers, DMA memory and a clock, and
