@@ -1049,6 +1049,29 @@ impl Client {
         self.capabilities = capabilities;
     }
 
+    /// Say what the seat has now, to a client that may have bound it
+    /// already: a keyboard plugged in after the client started, or found
+    /// only after the compositor did.
+    ///
+    /// Every `wl_seat` the client bound is sent `capabilities` again, as
+    /// libwayland's compositors send it on a hotplug, and a toolkit that
+    /// sees a new capability asks for the device. Nothing is sent when
+    /// nothing changed.
+    pub fn change_seat_capabilities(&mut self, capabilities: u32) {
+        if self.capabilities == capabilities {
+            return;
+        }
+        self.capabilities = capabilities;
+        for seat in self.objects_with(Role::Seat) {
+            let _ = self.out.write(
+                seat,
+                wl_seat::event::CAPABILITIES,
+                &[ArgType::Uint],
+                &[Arg::Uint(capabilities)],
+            );
+        }
+    }
+
     /// The keymap every `wl_keyboard` is given: a descriptor and its length.
     ///
     /// The same descriptor goes to every keyboard, which is what libwayland's

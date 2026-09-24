@@ -4874,3 +4874,45 @@ fn a_child_declared_older_than_its_manager_is_made_at_its_own_version() {
         Some(2)
     );
 }
+
+/// A keyboard found after a client bound the seat: the client is told the
+/// seat has one now, and may then ask for it. A seat that says the same
+/// thing again says nothing.
+#[test]
+fn a_seat_that_gains_a_keyboard_says_so_to_a_bound_client() {
+    let mut globals = Globals::new();
+    assert!(globals.add(&core::WL_SEAT, 7, Role::Seat).is_some());
+    let mut client = Client::new(globals);
+    client.set_seat_capabilities(core::wl_seat::capability::POINTER);
+    let mut bytes = get_registry(2);
+    bytes.extend(bind(2, 1, "wl_seat", 7, 7));
+    assert_eq!(client.read(&bytes, &[]), bytes.len());
+    assert_eq!(client.fatal(), None);
+    let _ = sent(&mut client);
+
+    let both = core::wl_seat::capability::POINTER | core::wl_seat::capability::KEYBOARD;
+    client.change_seat_capabilities(both);
+    let events = sent(&mut client);
+    assert_eq!(events.len(), 1, "one seat, one event: {events:?}");
+    assert_eq!(events[0].opcode, core::wl_seat::event::CAPABILITIES);
+    assert_eq!(events[0].args, [format!("Uint({both})")]);
+
+    client.change_seat_capabilities(both);
+    assert!(
+        sent(&mut client).is_empty(),
+        "nothing changed, nothing said"
+    );
+
+    let asked = request(
+        7,
+        core::wl_seat::request::GET_KEYBOARD,
+        &[ArgType::NewId],
+        &[Arg::NewId(ObjectId(11))],
+    );
+    assert_eq!(client.read(&asked, &[]), asked.len());
+    assert_eq!(
+        client.fatal(),
+        None,
+        "the keyboard it was told of is its to ask for"
+    );
+}

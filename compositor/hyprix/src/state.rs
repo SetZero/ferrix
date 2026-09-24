@@ -248,14 +248,14 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
             }
         }
     };
-    let (has_keyboard, has_pointer) = devices.capabilities();
-    let mut capabilities = 0;
-    if has_keyboard {
-        capabilities |= core::wl_seat::capability::KEYBOARD;
-    }
-    if has_pointer {
-        capabilities |= core::wl_seat::capability::POINTER;
-    }
+    let mut capabilities = seat_capabilities(&devices);
+    // When `/dev/input` is looked at again: devices found after the first
+    // look are opened then, and the seat grows the capabilities they bring.
+    // Never for a headless compositor, whose devices are none on purpose.
+    let mut rescan = options
+        .headless
+        .is_none()
+        .then(|| Instant::now() + RESCAN_EARLY);
     // The keymap is made whether or not there is a keyboard: a client that
     // binds one on a seat that announced none is already refused, and a
     // machine whose keyboard arrives later should not need a new file.
@@ -654,6 +654,25 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
         // `ext-session-lock-v1`'s other half -- a lock that showed a picture
         // and still let a key reach the browser under it would not be one.
         seat.set_locked(lock.is_some());
+        if let Some(due) = rescan
+            && Instant::now() >= due
+        {
+            rescan = Some(Instant::now() + rescan_period(started.elapsed()));
+            let (added, refused) = devices.rescan();
+            for reason in refused {
+                report(&format!("hyprix: {reason}"));
+            }
+            if !added.is_empty() {
+                report(&format!("hyprix: seat found [{}]", added.join(", ")));
+            }
+            let now_has = seat_capabilities(&devices);
+            if now_has != capabilities {
+                capabilities = now_has;
+                for slot in &mut slots {
+                    slot.client_mut().change_seat_capabilities(capabilities);
+                }
+            }
+        }
         let inputs = match ready.as_deref() {
             Some(fds) => devices.read_ready(fds),
             None => devices.read(),
@@ -1608,10 +1627,17 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
         // The counter's next 200 ms, so that its numbers move over a
         // desktop where nothing else does.
         let overlay_wait = overlay_was.then(|| overlay.wait(Instant::now()));
-        let timeout = [frame_wait, idle_wait, deadline_wait, overlay_wait]
-            .into_iter()
-            .flatten()
-            .min();
+        let rescan_wait = rescan.map(|due| due.saturating_duration_since(Instant::now()));
+        let timeout = [
+            frame_wait,
+            idle_wait,
+            deadline_wait,
+            overlay_wait,
+            rescan_wait,
+        ]
+        .into_iter()
+        .flatten()
+        .min();
 
         let mut fds = Vec::with_capacity(
             1 + slots.len()
@@ -2736,6 +2762,41 @@ fn resolve_display(display: &str) -> String {
 /// compositor that drew ten frames in a second should say so, and one
 /// showing a still screen has nothing to report.
 const FRAME_REPORT: Duration = Duration::from_secs(1);
+
+/// How often `/dev/input` is looked at again while the machine may still be
+/// finding what is plugged in: a USB keyboard behind a hub on the DK1
+/// arrives about a second after the host controller starts.
+const RESCAN_EARLY: Duration = Duration::from_secs(1);
+
+/// For how long after the compositor starts [`RESCAN_EARLY`] applies.
+const RESCAN_SETTLING: Duration = Duration::from_secs(15);
+
+/// How often it is looked at after that, for a device plugged in later: a
+/// few directory reads every so often, and a keyboard that works within
+/// seconds of being plugged in.
+const RESCAN_LATER: Duration = Duration::from_secs(5);
+
+/// The wait before the next look at `/dev/input`, `running` after start.
+fn rescan_period(running: Duration) -> Duration {
+    if running < RESCAN_SETTLING {
+        RESCAN_EARLY
+    } else {
+        RESCAN_LATER
+    }
+}
+
+/// The `wl_seat.capability` bits the open devices give the seat.
+fn seat_capabilities(devices: &Devices) -> u32 {
+    let (keyboard, pointer) = devices.capabilities();
+    let mut capabilities = 0;
+    if keyboard {
+        capabilities |= core::wl_seat::capability::KEYBOARD;
+    }
+    if pointer {
+        capabilities |= core::wl_seat::capability::POINTER;
+    }
+    capabilities
+}
 
 /// Every screen in one line, for the compositor's marker and its log line.
 ///
