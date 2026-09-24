@@ -19,7 +19,8 @@
 use std::collections::BTreeSet;
 
 use ferrix_displayctl::message::{
-    Attach, FORMAT, Hello, MAX_SCANOUTS, Message, PAGE_SIZE, Rect, ScanoutMode, Status, VERSION,
+    Attach, FORMAT, Hello, MAX_SCANOUTS, Message, PAGE_SIZE, Rect, ScanoutMode, Status, Timings,
+    VERSION,
 };
 use ferrix_displayctl::session::{Event, Session};
 use libfuzzer_sys::fuzz_target;
@@ -65,6 +66,7 @@ fuzz_target!(|bytes: &[u8]| {
         capset: 0,
         capset_bytes: 0,
         cursor: true,
+        timings: Timings::NONE,
     };
     let mut session =
         Session::accept(&hello, &Hello::HANDLE_RIGHTS, CARD).expect("a good HELLO is accepted");

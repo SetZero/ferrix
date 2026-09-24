@@ -32,7 +32,7 @@ use core::ptr;
 use ferrix_blkring::control::{Block as StartBlock, Message as StartMessage, START_BYTES, Start};
 use ferrix_displayctl::message::{
     Attach, Hello, MAX_BUFFER_PAGES as MAX_PAGES, MAX_BYTES, MAX_SCANOUTS, Message, PORT_RIGHTS,
-    Rect, ScanoutMode, Status, VERSION,
+    Rect, ScanoutMode, Status, Timings, VERSION,
 };
 use ferrix_native_abi::handle::Handle;
 use ferrix_native_abi::rights::Requested;
@@ -284,6 +284,8 @@ fn introduce(
         // The LTDC's second layer could be one, and is not yet: the core
         // sends no CURSOR or MOVE to a card that says it has none.
         cursor: false,
+        // The one mode its pixel clock was set for: nothing to list.
+        timings: Timings::NONE,
     };
     let share = port
         .as_owned()

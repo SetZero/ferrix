@@ -143,6 +143,11 @@ impl Request {
 
 /// What the glue does next.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "a Reply carries a display protocol message, which HELLO's timings make 600 \
+              bytes; a step lives on the driver's stack until it is acted on"
+)]
 pub enum Step<'e> {
     /// Pin `length` bytes of the card VMO from `offset`, read-only, turn the
     /// pages' device addresses into backing entries, and report with
