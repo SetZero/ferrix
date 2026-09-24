@@ -491,9 +491,15 @@ pub(super) fn thread_comm(of: &ThreadOf) -> Result<Vec<u8>> {
     comm(&of.process)
 }
 
-/// `/proc/<pid>/exe`: the path it was started from, or `ENOENT` for a process
-/// nothing was started in.
+/// `/proc/<pid>/exe`: the path of the file it was started from, from its own
+/// root, with ` (deleted)` after a file since removed, as Linux reads it; the
+/// path it was recorded as for a program from no file; or `ENOENT` for a
+/// process nothing was started in.
 pub(super) fn exe(process: &Process) -> Result<Vec<u8>> {
+    if let Some(at) = process.exe_location() {
+        let root = process.fs_context().lock().root.clone();
+        return Ok(located(&at, &root));
+    }
     let exe = process.exe();
     if exe.is_empty() {
         return Err(Errno::ENOENT);
@@ -549,12 +555,16 @@ fn located(at: &Location, root: &Location) -> Vec<u8> {
 ///
 /// A file mapping is named by its file's path, with the offset, device and
 /// inode Linux prints for one, and ` (deleted)` after a file since removed.
-/// Everything else is anonymous memory, the program's own image included:
-/// the loader copies an ELF into fresh pages rather than mapping the file, so
-/// a file's offset, device and inode there would describe a mapping that does
-/// not exist. The anonymous names are the two the process knows — `[heap]`
-/// for the regions `brk` made, `[stack]` for the one holding the stack
-/// pointer it was started with.
+/// That includes the program's own image and its linker's, whose pages the
+/// loader maps from their files. What the loader copied instead -- the
+/// partial pages at a segment's ends, `.bss`, an image from no file -- is
+/// anonymous, as is everything else, since a file's offset, device and inode
+/// there would describe a mapping that does not exist. So a segment shows as
+/// its file's pages with an anonymous page or two either side, where Linux,
+/// which maps the partial pages from the file too, shows one run. The
+/// anonymous names are the two the process knows — `[heap]` for the regions
+/// `brk` made, `[stack]` for the one holding the stack pointer it was started
+/// with.
 pub(super) fn maps(process: &Process) -> Result<Vec<u8>> {
     let heap = process.heap_range();
     let stack = start_stack(process);

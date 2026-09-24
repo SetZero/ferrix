@@ -172,6 +172,56 @@ pub(crate) fn build_with(class: Class, machine: u16, shape: Shape, code: &[u8]) 
     file
 }
 
+/// A third loadable segment, for [`build_with_segment`].
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Extra {
+    /// `PF_*`.
+    pub(crate) flags: u32,
+    /// Where its contents are in the file.
+    pub(crate) offset: u64,
+    /// Where it is linked.
+    pub(crate) vaddr: u64,
+    /// Bytes of it in the file.
+    pub(crate) filesz: u64,
+    /// Bytes of it in memory.
+    pub(crate) memsz: u64,
+}
+
+/// A [`Shape::Good`] image carrying `code`, with a third loadable segment
+/// `extra` whose contents are not in the bytes returned.
+///
+/// The headers of a file larger than anything worth building in memory: the
+/// check that loads it supplies the rest of the file from elsewhere. The
+/// third program header sits where the text segment already covers it, after
+/// the two a good image has and before its entry point.
+pub(crate) fn build_with_segment(
+    class: Class,
+    machine: u16,
+    code: &[u8],
+    extra: &Extra,
+) -> Vec<u8> {
+    let mut file = build_with(class, machine, Shape::Good, code);
+    let phnum_at = match class {
+        Class::Elf32 => 44,
+        Class::Elf64 => 56,
+    };
+    put(&mut file, phnum_at, &3_u16.to_le_bytes());
+    write_phdr(
+        &mut file,
+        class,
+        class.header_size() + class.phdr_size() * 2,
+        &Phdr {
+            kind: PT_LOAD,
+            flags: extra.flags,
+            offset: extra.offset,
+            vaddr: extra.vaddr,
+            filesz: extra.filesz,
+            memsz: extra.memsz,
+        },
+    );
+    file
+}
+
 /// One program header, before it is written out.
 struct Phdr {
     kind: u32,

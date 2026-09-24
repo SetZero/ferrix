@@ -364,7 +364,7 @@ fn run_with_window_breakpoints(cpu: usize) -> Result<i32, &'static str> {
         super::USER_TEST_PROGRAM,
     );
     let program = Executable {
-        image: &file,
+        image: crate::syscall::load::Source::Bytes(&file),
         exe: b"/window",
         exec_fn: b"/window",
         set_ids: crate::fs::SetIds::NONE,

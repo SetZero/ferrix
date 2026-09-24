@@ -392,7 +392,11 @@ fn lay_out(process: &Process) -> Result<Layout, &'static str> {
         stack: top - 64,
         argument: 0,
     });
-    process.record_exec(b"/sbin/procfs-check", &[b"procfs-check", b"--self-test"]);
+    process.record_exec(
+        b"/sbin/procfs-check",
+        None,
+        &[b"procfs-check", b"--self-test"],
+    );
     Ok(Layout {
         heap,
         stack: (stack, top),

@@ -1510,6 +1510,38 @@ pub(crate) static STAGE8_FILE_MAPPINGS: Explanation = Explanation {
           kernel/src/user/space.rs map_file, fault; kernel/src/fs/pages.rs; docs/ROADMAP.md stage 8",
 };
 
+/// For `check_program_files` in `main.rs`, when the check of programs mapped
+/// from their files fails.
+pub(crate) static STAGE8_PROGRAM_FILES: Explanation = Explanation {
+    code: "FX-0871",
+    title: "a program mapped from its file failed its self-check",
+    meaning: "`fs::exec_check::run` loads a 72 MiB program -- past the 64 MiB `fs::read_file` \
+              reads -- from a file whose pages a counting page source fills, as btrfs fills \
+              its page cache. Loading it must read at most four of its pages, and the large \
+              segment's whole pages must be one private mapping of the file. A read 40 MiB in \
+              must be the file's byte and fill one run of pages; a write 50 MiB in must read \
+              back and leave the file's page as it was; the bytes past the segment's file \
+              contents must be zero although the file's are not. The program must then run to \
+              its status. Second, the same program as a sparse 72 MiB file under /tmp is opened \
+              as execve opens one, and a fork of its process, with the file's name removed, \
+              must execve /proc/self/exe, which leads to the program's file, and run it to its \
+              status; /proc/<pid>/exe must read as the path with (deleted) after it.",
+    causes: &[
+        "`load::place` copies a segment rather than mapping it, or `ProgramFile::open` reads \
+         more than the headers, so loading reads the whole file.",
+        "`load::map_runs` maps a writable segment shared, or `writable_in_place` lets a write \
+         through the file's page, so a write reaches the file.",
+        "The page a segment's file contents end on is mapped from the file rather than \
+         copied, so `.bss` shows the file's bytes.",
+        "`Process::forked` does not copy the parent's identity, so a fork child's \
+         /proc/self/exe is ENOENT; or procfs's `link_location` is not answered, so the link \
+         is followed as text to a name that is gone.",
+    ],
+    see: "kernel/src/fs/exec_check.rs; kernel/src/syscall/load.rs; kernel/src/syscall/program.rs; \
+          kernel/src/syscall/exec.rs; kernel/src/fs/procfs.rs; libs/vfs/src/walk.rs; \
+          docs/CHROME.md",
+};
+
 /// For `handle_page_fault` in `trap.rs`, the `unhandled page fault` report.
 pub(crate) static UNHANDLED_PAGE_FAULT: Explanation = Explanation {
     code: "FX-9001",
@@ -1688,6 +1720,7 @@ pub(crate) static ALL: &[&Explanation] = &[
     &SYSRQ_CRASH,
     &STAGE8_PIPES_AND_FILESYSTEM_CALLS,
     &STAGE8_FILE_MAPPINGS,
+    &STAGE8_PROGRAM_FILES,
     &STAGE8_MEMFD,
     &STAGE8_EPOLL,
     &STAGE8_EVENTFD,

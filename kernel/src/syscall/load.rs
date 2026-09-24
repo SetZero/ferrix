@@ -6,6 +6,27 @@
 //! entry point, and the three numbers the auxiliary vector needs to tell the
 //! program where its own program headers are.
 //!
+//! # Mapped from the file where a page is the file's, copied where it is not
+//!
+//! A program read from a file whose pages are an object -- tmpfs, and btrfs
+//! through its page cache -- is not copied. Every page wholly inside one
+//! segment's file contents, and in no other segment, is mapped from the
+//! file's object, privately: read, and executed, where it is in the file,
+//! read from the disk only when the program first touches it, and copied into
+//! the mapping's own object the first time the program writes it, so a
+//! writable segment's writes never reach the file. That is what lets a
+//! program of any size start at the cost of its headers, which Chrome, at
+//! 198 MB, needs, and what lets two processes running one program share its
+//! text.
+//!
+//! The rest of the image is anonymous memory, and the loader copies into it:
+//! the partial pages at a segment's two ends, which hold bytes of no segment
+//! or of `.bss`; a page two segments share; every page of a segment whose
+//! file offset and address disagree within a page, which no mapping can
+//! express; and all of an image that came from no file, or from a file with no
+//! object to map, which is copied through a small buffer. So a program from
+//! anywhere loads, and only the one kind is paged in on demand.
+//!
 //! # Map first, copy second
 //!
 //! The pages arrive on fault, so a region has to exist before anything can be
@@ -21,10 +42,11 @@
 //! which the region map refuses, correctly — or silently give the shared page
 //! one segment's permissions and not the other's.
 //!
-//! So the span is mapped once, writable, everything is copied in, and then the
-//! permissions are applied over runs of pages that agree. A page covered by
-//! two segments gets the union of their permissions, which is the only answer
-//! that lets both segments work.
+//! So the anonymous part is mapped writable, everything is copied in, and then
+//! the permissions are applied over runs of pages that agree. A page covered
+//! by two segments gets the union of their permissions, which is the only
+//! answer that lets both segments work. A page mapped from the file belongs
+//! to one segment and takes its permissions as it is mapped.
 //!
 //! # Two images, when the program names a linker
 //!
@@ -60,16 +82,54 @@
 //! page, the entry, `AT_PHDR` and the heap's start with it, and `AT_BASE`, the
 //! interpreter's base, stays zero because there is none.
 
+use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
+use core::any::Any;
 
 use ferrix_bootinfo::{PAGE_SIZE, USER_VIRT_END, is_user_address};
 use ferrix_elf::{Elf, ElfError, PF_R, PF_W, PF_X, PT_INTERP, Segment};
+use ferrix_linux_abi::errno::Errno;
 use ferrix_vma::VmaFlags;
 
 use crate::arch;
+use crate::syscall::program::{self, ProgramFile};
 use crate::syscall::uaccess::{self, UserError};
-use crate::user::space::{AddressSpace, SpaceError};
+use crate::user::space::{AddressSpace, FileMapping, FilePlace, SpaceError};
+
+/// Where an image's bytes are.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Source<'a> {
+    /// All of them, in kernel memory: a program built into the kernel, or one
+    /// a check assembled. Copied in.
+    Bytes(&'a [u8]),
+    /// A file, of which only the headers have been read. Mapped where it can
+    /// be, and copied a piece at a time where it cannot.
+    File(&'a ProgramFile),
+}
+
+impl<'a> Source<'a> {
+    /// The image's first bytes, which hold its file header and program
+    /// headers: all of it, for bytes in memory.
+    pub(crate) fn head(self) -> &'a [u8] {
+        match self {
+            Source::Bytes(bytes) => bytes,
+            Source::File(file) => file.head(),
+        }
+    }
+
+    /// The length of the whole image.
+    fn len(self) -> u64 {
+        match self {
+            Source::Bytes(bytes) => bytes.len() as u64,
+            Source::File(file) => file.len(),
+        }
+    }
+}
+
+/// The longest `PT_INTERP` read from a file when the headers did not hold it:
+/// Linux's `PATH_MAX`.
+const INTERPRETER_MOST: u64 = 4096;
 
 /// Where a static PIE's lowest page is placed: two thirds of the way up the
 /// user half, page-aligned, as Linux's `ELF_ET_DYN_BASE` puts an `ET_DYN` image
@@ -150,6 +210,9 @@ pub(crate) enum LoadError {
     Space(SpaceError),
     /// A segment's contents could not be written into the space.
     Copy(UserError),
+    /// A segment's contents, or the interpreter's name, could not be read
+    /// from the file.
+    Read(Errno),
 }
 
 impl From<SpaceError> for LoadError {
@@ -173,16 +236,19 @@ impl From<UserError> for LoadError {
 /// would be writable and executable, a mapping the space refuses -- is found
 /// after the point of no return, and kills the process as it does on Linux.
 ///
+/// Everything checked here is read from the headers alone: for a program in a
+/// file, nothing past them has been read yet.
+///
 /// # Errors
 ///
 /// The [`LoadError`] [`load`] would return for the same image.
-pub(crate) fn check(image: &[u8], interpreter: Option<&[u8]>) -> Result<(), LoadError> {
+pub(crate) fn check(image: Source<'_>, interpreter: Option<Source<'_>>) -> Result<(), LoadError> {
     let elf = parse(image)?;
     let (low, _) = elf.load_span(PAGE_SIZE).ok_or(LoadError::Empty)?;
     let bias = bias_of(&elf, low, interpreter.is_some())?;
     let _ = entry_point(&elf, bias)?;
-    if let Some(bytes) = interpreter {
-        let linker = parse(bytes)?;
+    if let Some(source) = interpreter {
+        let linker = parse(source)?;
         check_is_a_linker(&linker)?;
         let (low, _) = linker.load_span(PAGE_SIZE).ok_or(LoadError::Empty)?;
         let _ = entry_point(&linker, INTERP_BASE.wrapping_sub(low))?;
@@ -190,12 +256,15 @@ pub(crate) fn check(image: &[u8], interpreter: Option<&[u8]>) -> Result<(), Load
     Ok(())
 }
 
-/// Parse and refuse what is wrong with the bytes alone.
-fn parse(image: &[u8]) -> Result<Elf<'_>, LoadError> {
-    let elf = Elf::parse(image).map_err(LoadError::Malformed)?;
+/// Parse the image's headers and refuse what is wrong with them: every
+/// segment's contents have to be inside the image, which for a file is
+/// inside the file rather than inside the bytes read of it.
+fn parse(image: Source<'_>) -> Result<Elf<'_>, LoadError> {
+    let elf = Elf::parse(image.head()).map_err(LoadError::Malformed)?;
     elf.check_machine(arch::ARCH.elf_machine())
         .map_err(|_| LoadError::WrongMachine(elf.machine()))?;
-    elf.validate_segments().map_err(LoadError::Malformed)?;
+    elf.validate_segments_within(image.len())
+        .map_err(LoadError::Malformed)?;
     Ok(elf)
 }
 
@@ -212,20 +281,34 @@ fn check_is_a_linker(linker: &Elf<'_>) -> Result<(), LoadError> {
 
 /// The path of the linker `image` asks for, if it asks for one.
 ///
-/// For `execve`, which has to open that file and read it before it can load
-/// anything; the loader is handed the bytes, not the name.
+/// For `execve`, which has to open that file before it can load anything;
+/// the loader is handed the file, not the name.
+///
+/// The name is almost always in the first page, which the headers were read
+/// with; a file whose `PT_INTERP` is further in has it read from there.
 ///
 /// # Errors
 ///
 /// [`LoadError::BadInterpreter`] for an image that asks for a linker and does
-/// not say which, and whatever `libs/elf` refuses about the image.
-pub(crate) fn interpreter_of(image: &[u8]) -> Result<Option<&[u8]>, LoadError> {
-    let elf = Elf::parse(image).map_err(LoadError::Malformed)?;
-    match elf.interpreter() {
-        None => Ok(None),
-        Some(Ok(path)) => Ok(Some(path)),
-        Some(Err(_)) => Err(LoadError::BadInterpreter),
-    }
+/// not say which, [`LoadError::Read`] for a name that could not be read, and
+/// whatever `libs/elf` refuses about the image.
+pub(crate) fn interpreter_of(image: Source<'_>) -> Result<Option<Vec<u8>>, LoadError> {
+    let elf = Elf::parse(image.head()).map_err(LoadError::Malformed)?;
+    let Some(segment) = elf.segments().find(|segment| segment.kind == PT_INTERP) else {
+        return Ok(None);
+    };
+    let data = match (segment.data(image.head()), image) {
+        (Ok(data), _) => data.to_vec(),
+        (Err(_), Source::File(file)) if segment.filesz <= INTERPRETER_MOST => {
+            let mut bytes = vec![0_u8; usize::try_from(segment.filesz).unwrap_or(0)];
+            file.read_exact_at(segment.offset, &mut bytes)
+                .map_err(LoadError::Read)?;
+            bytes
+        }
+        (Err(_), _) => return Err(LoadError::BadInterpreter),
+    };
+    let path = ferrix_elf::interpreter_name(&data).map_err(|_| LoadError::BadInterpreter)?;
+    Ok(Some(path.to_vec()))
 }
 
 /// How far the image is moved from where it is linked: zero for a
@@ -282,8 +365,8 @@ fn entry_point(elf: &Elf<'_>, bias: u64) -> Result<u64, LoadError> {
 /// [`LoadError`]. On failure the space may hold part of the image.
 pub(crate) fn load(
     space: &AddressSpace,
-    image: &[u8],
-    interpreter: Option<&[u8]>,
+    image: Source<'_>,
+    interpreter: Option<Source<'_>>,
 ) -> Result<Loaded, LoadError> {
     let elf = parse(image)?;
     let (linked_low, _) = elf.load_span(PAGE_SIZE).ok_or(LoadError::Empty)?;
@@ -291,6 +374,7 @@ pub(crate) fn load(
         space,
         &elf,
         bias_of(&elf, linked_low, interpreter.is_some())?,
+        image,
     )?;
 
     // The auxiliary vector always describes the *program*: its headers, its
@@ -306,11 +390,11 @@ pub(crate) fn load(
         base: 0,
     };
 
-    if let Some(bytes) = interpreter {
-        let linker = parse(bytes)?;
+    if let Some(source) = interpreter {
+        let linker = parse(source)?;
         check_is_a_linker(&linker)?;
         let (low, _) = linker.load_span(PAGE_SIZE).ok_or(LoadError::Empty)?;
-        let placed = place(space, &linker, INTERP_BASE.wrapping_sub(low))?;
+        let placed = place(space, &linker, INTERP_BASE.wrapping_sub(low), source)?;
         // Only where execution begins changes. `entry` stays the program's,
         // because that is what the linker is told to jump to.
         loaded.start = placed.entry;
@@ -333,30 +417,105 @@ struct Placed {
     phdr: u64,
 }
 
-/// Map `elf`'s loadable segments into `space`, moved by `bias`, and copy their
-/// contents in.
-fn place(space: &AddressSpace, elf: &Elf<'_>, bias: u64) -> Result<Placed, LoadError> {
-    let image = elf.image();
+/// A loadable segment, moved by its image's bias.
+#[derive(Debug, Clone, Copy)]
+struct Moved {
+    /// Where it starts.
+    at: u64,
+    /// Where its file contents are in the file.
+    offset: u64,
+    /// How many bytes of it come from the file.
+    filesz: u64,
+    /// How many bytes it occupies.
+    memsz: u64,
+    /// `PF_*`.
+    flags: u32,
+}
+
+impl Moved {
+    fn of(segment: &Segment, bias: u64) -> Moved {
+        Moved {
+            at: segment.vaddr.wrapping_add(bias),
+            offset: segment.offset,
+            filesz: segment.filesz,
+            memsz: segment.memsz,
+            flags: segment.flags,
+        }
+    }
+
+    /// The pages it touches, `[first, end)`: every page any byte of it is on.
+    fn pages(&self) -> (u64, u64) {
+        (
+            page_down(self.at),
+            page_up(self.at.wrapping_add(self.memsz)),
+        )
+    }
+
+    /// Where its file contents end in memory.
+    fn file_end(&self) -> u64 {
+        self.at.wrapping_add(self.filesz)
+    }
+}
+
+/// Pages mapped from the file: `[start, end)`, from byte `offset` of the
+/// file's object, with the permissions of the one segment they belong to.
+#[derive(Debug, Clone, Copy)]
+struct FileRun {
+    start: u64,
+    end: u64,
+    offset: u64,
+    flags: u32,
+}
+
+/// Map `elf`'s loadable segments into `space`, moved by `bias`: from the file
+/// where `source` has an object to map, and copied in where it has not.
+fn place(
+    space: &AddressSpace,
+    elf: &Elf<'_>,
+    bias: u64,
+    source: Source<'_>,
+) -> Result<Placed, LoadError> {
     let (linked_low, linked_high) = elf.load_span(PAGE_SIZE).ok_or(LoadError::Empty)?;
     let entry = entry_point(elf, bias)?;
 
     let low = linked_low.wrapping_add(bias);
     let high = linked_high.wrapping_add(bias);
-    let span = high.checked_sub(low).ok_or(LoadError::Empty)?;
+    let _ = high.checked_sub(low).ok_or(LoadError::Empty)?;
 
-    // One writable region over the whole image, so that the copies below have
-    // somewhere to land whatever the final permissions turn out to be.
-    let _ = space.map_anonymous(low, span, VmaFlags::READ_WRITE)?;
+    let segments: Vec<Moved> = elf
+        .loadable()
+        .map(|segment| Moved::of(&segment, bias))
+        .collect();
+    let runs = match source {
+        Source::File(file) => file
+            .object()
+            .map(|(_, base)| file_runs(&segments, base))
+            .unwrap_or_default(),
+        Source::Bytes(_) => Vec::new(),
+    };
 
-    for segment in elf.loadable() {
-        let data = segment.data(image).map_err(LoadError::Malformed)?;
-        if !data.is_empty() {
-            uaccess::copy_to_user(space, segment.vaddr.wrapping_add(bias), data)?;
-        }
-        // The rest of `p_memsz` is `.bss` and is already zero.
+    // Everything the file does not supply is anonymous, and writable for
+    // now, so that the copies below have somewhere to land whatever the
+    // final permissions turn out to be.
+    let anonymous = outside(low, high, &runs);
+    for &(start, end) in &anonymous {
+        let _ = space.map_anonymous(start, end - start, VmaFlags::READ_WRITE)?;
+    }
+    if let Source::File(file) = source {
+        map_runs(space, file, &runs)?;
     }
 
-    apply_permissions(space, elf, bias, low, high)?;
+    // Each segment's file contents, less what the file's own pages show. The
+    // rest of `p_memsz` is `.bss`, and is already zero.
+    let mut buffer = Vec::new();
+    for segment in &segments {
+        for (start, end) in outside(segment.at, segment.file_end(), &runs) {
+            let from = segment.offset.wrapping_add(start - segment.at);
+            copy_in(space, source, from, start, end - start, &mut buffer)?;
+        }
+    }
+
+    apply_permissions(space, &segments, &anonymous)?;
 
     Ok(Placed {
         entry,
@@ -366,58 +525,219 @@ fn place(space: &AddressSpace, elf: &Elf<'_>, bias: u64) -> Result<Placed, LoadE
     })
 }
 
-/// Give every page the permissions the segments covering it ask for.
-fn apply_permissions(
-    space: &AddressSpace,
-    elf: &Elf<'_>,
-    bias: u64,
-    low: u64,
-    high: u64,
-) -> Result<(), LoadError> {
-    let pages = usize::try_from((high - low) / PAGE_SIZE).map_err(|_| LoadError::Empty)?;
-    let mut wanted: Vec<u32> = vec![0; pages];
-
-    for segment in elf.loadable() {
-        for index in pages_of(&segment, bias, low, pages) {
-            if let Some(slot) = wanted.get_mut(index) {
-                *slot |= segment.flags;
+/// The pages of `segments` that can be mapped from a file whose object holds
+/// its first byte at `base`, lowest first.
+///
+/// A page qualifies when it is wholly inside one segment's file contents, in
+/// no other segment's pages, and that segment's file offset and address agree
+/// within a page -- which `ld` and `lld` both guarantee, and without which no
+/// mapping can show the file's bytes at the addresses the headers ask for.
+fn file_runs(segments: &[Moved], base: u64) -> Vec<FileRun> {
+    let mut runs = Vec::new();
+    for (index, segment) in segments.iter().enumerate() {
+        if segment.filesz == 0
+            || !segment
+                .at
+                .wrapping_sub(segment.offset)
+                .is_multiple_of(PAGE_SIZE)
+        {
+            continue;
+        }
+        let mut pieces = vec![(page_up(segment.at), page_down(segment.file_end()))];
+        for (_, other) in segments.iter().enumerate().filter(|(at, _)| *at != index) {
+            let (first, end) = other.pages();
+            pieces = without(&pieces, first, end);
+        }
+        for (start, end) in pieces.into_iter().filter(|(start, end)| start < end) {
+            let offset = segment
+                .offset
+                .checked_add(start - segment.at)
+                .and_then(|offset| offset.checked_add(base));
+            if let Some(offset) = offset {
+                runs.push(FileRun {
+                    start,
+                    end,
+                    offset,
+                    flags: segment.flags,
+                });
             }
         }
     }
+    runs.sort_by_key(|run| run.start);
+    runs
+}
 
-    // Runs of pages that agree become one `protect` call each, which is also
-    // what keeps the region map from growing a region per page.
-    let mut start = 0_usize;
-    while start < pages {
-        let flags = *wanted.get(start).unwrap_or(&0);
-        let mut end = start;
-        while end < pages && wanted.get(end) == Some(&flags) {
-            end += 1;
+/// Map each of `runs` from `file`'s object, privately: a write copies the
+/// page into the mapping's own object and never reaches the file.
+fn map_runs(space: &AddressSpace, file: &ProgramFile, runs: &[FileRun]) -> Result<(), LoadError> {
+    let Some((vmo, _)) = file.object() else {
+        return Ok(());
+    };
+    for run in runs {
+        if run.flags & PF_W != 0 && run.flags & PF_X != 0 {
+            return Err(LoadError::WriteExecute(run.start));
         }
-        let at = low + (start as u64) * PAGE_SIZE;
-        if flags & PF_W != 0 && flags & PF_X != 0 {
-            return Err(LoadError::WriteExecute(at));
-        }
-        let len = ((end - start) as u64) * PAGE_SIZE;
-        space.protect(at, len, permissions(flags))?;
-        start = end;
+        let mapping = FileMapping {
+            file: Arc::clone(file.file()) as Arc<dyn Any + Send + Sync>,
+            may_write: false,
+        };
+        let _ = space.map_file(
+            FilePlace::Fixed(run.start),
+            run.end - run.start,
+            permissions(run.flags),
+            Arc::clone(vmo),
+            run.offset,
+            mapping,
+        )?;
     }
     Ok(())
 }
 
-/// The page indices, relative to `low`, that a segment occupies.
-fn pages_of(segment: &Segment, bias: u64, low: u64, pages: usize) -> core::ops::Range<usize> {
-    let Some(end) = segment.vaddr_end() else {
-        return 0..0;
+/// Copy `len` bytes from byte `from` of the image into `space` at `to`.
+///
+/// Bytes in memory are copied as they are; a file is read through `buffer`
+/// a piece at a time, so that a file of any size is copied without being held
+/// whole.
+fn copy_in(
+    space: &AddressSpace,
+    source: Source<'_>,
+    from: u64,
+    to: u64,
+    len: u64,
+    buffer: &mut Vec<u8>,
+) -> Result<(), LoadError> {
+    let file = match source {
+        Source::Bytes(bytes) => {
+            let data = usize::try_from(from)
+                .ok()
+                .zip(usize::try_from(len).ok())
+                .and_then(|(from, len)| bytes.get(from..from.checked_add(len)?))
+                .ok_or(LoadError::Malformed(ElfError::SegmentOutOfBounds))?;
+            uaccess::copy_to_user(space, to, data)?;
+            return Ok(());
+        }
+        Source::File(file) => file,
     };
-    let first = segment.vaddr.wrapping_add(bias).saturating_sub(low) / PAGE_SIZE;
-    let last = end
-        .wrapping_add(bias)
-        .saturating_sub(low)
-        .div_ceil(PAGE_SIZE);
-    let first = usize::try_from(first).unwrap_or(pages);
-    let last = usize::try_from(last).unwrap_or(pages);
-    first.min(pages)..last.min(pages)
+    if buffer.is_empty() {
+        *buffer = program::copy_buffer().map_err(LoadError::Read)?;
+    }
+    let mut done = 0;
+    while done < len {
+        let take = usize::try_from(len - done)
+            .unwrap_or(usize::MAX)
+            .min(buffer.len());
+        let chunk = buffer
+            .get_mut(..take)
+            .ok_or(LoadError::Read(Errno::ENOMEM))?;
+        file.read_exact_at(from + done, chunk)
+            .map_err(LoadError::Read)?;
+        uaccess::copy_to_user(space, to + done, chunk)?;
+        done += take as u64;
+    }
+    Ok(())
+}
+
+/// Give every anonymous page the permissions the segments covering it ask
+/// for; a page mapped from the file has its segment's already.
+fn apply_permissions(
+    space: &AddressSpace,
+    segments: &[Moved],
+    anonymous: &[(u64, u64)],
+) -> Result<(), LoadError> {
+    for &(start, end) in anonymous {
+        // Where the answer can change: a segment's first or last page.
+        let mut cuts = vec![start, end];
+        for segment in segments {
+            let (first, last) = segment.pages();
+            cuts.extend(
+                [first, last]
+                    .into_iter()
+                    .filter(|&at| start < at && at < end),
+            );
+        }
+        cuts.sort_unstable();
+        cuts.dedup();
+
+        // Runs of pages that agree become one `protect` call each, which is
+        // also what keeps the region map from growing a region per page.
+        let mut run: Option<(u64, u32)> = None;
+        for pair in cuts.windows(2) {
+            let &[from, to] = pair else {
+                continue;
+            };
+            let flags = segments
+                .iter()
+                .filter(|segment| {
+                    let (first, last) = segment.pages();
+                    first < to && from < last
+                })
+                .fold(0, |flags, segment| flags | segment.flags);
+            match run {
+                Some((_, same)) if same == flags => {}
+                Some((at, previous)) => {
+                    protect(space, at, from, previous)?;
+                    run = Some((from, flags));
+                }
+                None => run = Some((from, flags)),
+            }
+        }
+        if let Some((at, flags)) = run {
+            protect(space, at, end, flags)?;
+        }
+    }
+    Ok(())
+}
+
+/// Give `[start, end)` the permissions `flags` asks for, refusing a page that
+/// would be writable and executable.
+fn protect(space: &AddressSpace, start: u64, end: u64, flags: u32) -> Result<(), LoadError> {
+    if flags & PF_W != 0 && flags & PF_X != 0 {
+        return Err(LoadError::WriteExecute(start));
+    }
+    space.protect(start, end - start, permissions(flags))?;
+    Ok(())
+}
+
+/// `[start, end)` less every one of `runs`, which are sorted: the pieces left.
+fn outside(start: u64, end: u64, runs: &[FileRun]) -> Vec<(u64, u64)> {
+    runs.iter()
+        .fold(vec![(start, end)], |pieces, run| {
+            without(&pieces, run.start, run.end)
+        })
+        .into_iter()
+        .filter(|(start, end)| start < end)
+        .collect()
+}
+
+/// `pieces` less `[cut, cut_end)`.
+fn without(pieces: &[(u64, u64)], cut: u64, cut_end: u64) -> Vec<(u64, u64)> {
+    let mut left = Vec::with_capacity(pieces.len() + 1);
+    for &(start, end) in pieces {
+        if cut_end <= start || end <= cut {
+            left.push((start, end));
+            continue;
+        }
+        if start < cut {
+            left.push((start, cut));
+        }
+        if cut_end < end {
+            left.push((cut_end, end));
+        }
+    }
+    left
+}
+
+/// `address`, rounded down to its page.
+const fn page_down(address: u64) -> u64 {
+    address & !(PAGE_SIZE - 1)
+}
+
+/// `address`, rounded up to a page; the last page for one that would wrap.
+const fn page_up(address: u64) -> u64 {
+    match address.checked_add(PAGE_SIZE - 1) {
+        Some(up) => page_down(up),
+        None => page_down(u64::MAX),
+    }
 }
 
 /// `PF_*` as region flags.

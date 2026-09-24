@@ -37,6 +37,8 @@ use core::fmt;
 
 use crate::console::println;
 use crate::fs;
+use crate::syscall::load::Source;
+use crate::syscall::program::ProgramFile;
 use crate::syscall::{self, exec};
 
 /// The embedded program, or nothing. See `kernel/build.rs`.
@@ -108,7 +110,7 @@ pub(crate) fn run() {
     // shell is: its linker and libraries are not built in but read from the
     // initramfs, where `cargo xtask test-shell --interpreter` put them.
     let context = fs::root_disk::process_context();
-    let linker = match exec::linker_for(&context, IMAGE) {
+    let linker = match exec::linker_for(&context, Source::Bytes(IMAGE)) {
         Ok(linker) => linker,
         Err(errno) => {
             println!(
@@ -119,11 +121,11 @@ pub(crate) fn run() {
         }
     };
     let program = exec::Executable {
-        image: IMAGE,
+        image: Source::Bytes(IMAGE),
         exe: BUILT_IN_EXE,
         exec_fn: name,
         set_ids: fs::SetIds::NONE,
-        interpreter: linker.as_deref(),
+        interpreter: linker.as_ref().map(Source::File),
     };
     let status = exec::run_init(
         program,
@@ -151,14 +153,13 @@ fn run_commands(list: &[u8]) {
     let commands = parse(list);
     let ctx = fs::root_disk::process_context();
     println!("  init     running {} commands", commands.len());
-    // The programs the commands have needed so far, so that twenty commands
-    // over three programs read three files. Worth keeping rather than reading
-    // each time: uutils/coreutils is one binary of some 14 MiB answering to a
-    // hundred names, and reading it once per command would be most of the
-    // boot.
-    // The image type is the one `read_program` returns; only the path and
-    // the resolved name are named here.
-    let mut loaded: Vec<(Vec<u8>, _, Vec<u8>)> = Vec::new();
+    // The programs the commands have needed so far, each with the path it was
+    // asked for by and the name it resolved to, so that twenty commands over
+    // three programs open three files: uutils/coreutils is one binary
+    // answering to a hundred names. Since 2026-09-24 an open program is its
+    // headers and its file, which the loader maps, so keeping one costs
+    // nothing; before, each was the whole file read into memory.
+    let mut loaded: Vec<(Vec<u8>, ProgramFile, Vec<u8>)> = Vec::new();
     for (index, argv) in commands.iter().enumerate() {
         println!("  init     command {index}: {}", Argv(argv));
         syscall::report_unanswered(UNANSWERED_LINES);
@@ -172,7 +173,7 @@ fn run_commands(list: &[u8]) {
         let known = loaded.iter().position(|(seen, ..)| seen == &path);
         let at = match known {
             Some(at) => at,
-            None => match fs::read_program(&ctx, None, &path) {
+            None => match fs::open_program(&ctx, None, &path) {
                 Ok((image, exe, _set_ids)) => {
                     loaded.push((path.clone(), image, exe));
                     loaded.len().saturating_sub(1)
@@ -212,19 +213,25 @@ fn run_commands(list: &[u8]) {
 /// `path` is the name before it was resolved, which is what `AT_EXECFN` says:
 /// a multicall binary reads it, or `argv[0]`, to know which of its programs
 /// it has been asked for.
-fn start(program: &[u8], exe: &[u8], path: &[u8], argv: &[&[u8]]) -> Result<i32, exec::ExecError> {
+fn start(
+    program: &ProgramFile,
+    exe: &[u8],
+    path: &[u8],
+    argv: &[&[u8]],
+) -> Result<i32, exec::ExecError> {
     // init comes out of the initramfs like any other program, so it may be
     // dynamically linked like any other program, and the linker it names is
     // read from the same initramfs. There is no process to fail back to here,
     // which is why this is the one caller that reports the failure itself.
     let context = fs::root_disk::process_context();
-    let linker = exec::linker_for(&context, program).map_err(exec::ExecError::Linker)?;
+    let linker =
+        exec::linker_for(&context, Source::File(program)).map_err(exec::ExecError::Linker)?;
     let executable = exec::Executable {
-        image: program,
+        image: Source::File(program),
         exe,
         exec_fn: path,
         set_ids: fs::SetIds::NONE,
-        interpreter: linker.as_deref(),
+        interpreter: linker.as_ref().map(Source::File),
     };
     exec::run_init(executable, argv, ENVIRONMENT, random_bytes())
 }

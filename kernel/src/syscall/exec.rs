@@ -33,12 +33,12 @@ use ferrix_vma::VmaFlags;
 
 use crate::arch;
 use crate::syscall::fd;
-use crate::syscall::load::{self, LoadError};
+use crate::syscall::load::{self, LoadError, Source};
 use crate::syscall::process::{self, Process, Startup};
+use crate::syscall::program::ProgramFile;
 use crate::syscall::registry;
 use crate::syscall::uaccess;
 use crate::user::space::{AddressSpace, MMAP_MIN_ADDR, SpaceError};
-use crate::vmap;
 
 /// How much address space a program's stack gets.
 ///
@@ -123,18 +123,18 @@ fn width() -> Width {
 /// first is the interpreter and the second the script.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Executable<'a> {
-    /// The ELF image.
-    pub(crate) image: &'a [u8],
+    /// The ELF image: bytes in memory, or a file whose headers have been read.
+    pub(crate) image: Source<'a>,
     /// The absolute path of the file the image was read from.
     pub(crate) exe: &'a [u8],
     /// The filename it was asked for by.
     pub(crate) exec_fn: &'a [u8],
     /// The ids the file's set-user-id and set-group-id bits give it.
     pub(crate) set_ids: SetIds,
-    /// The dynamic linker's image, when the program named one. Read from the
-    /// path its `PT_INTERP` holds, before anything is unmapped, because after
-    /// the point of no return there is no program left to fail back to.
-    pub(crate) interpreter: Option<&'a [u8]>,
+    /// The dynamic linker's image, when the program named one. Opened from
+    /// the path its `PT_INTERP` holds, before anything is unmapped, because
+    /// after the point of no return there is no program left to fail back to.
+    pub(crate) interpreter: Option<Source<'a>>,
 }
 
 /// Load `image`, which came from no file, into a new process, ready to run
@@ -154,7 +154,7 @@ pub(crate) fn load(
 ) -> Result<Arc<Process>, ExecError> {
     let name = args.first().copied().unwrap_or(b"");
     let program = Executable {
-        image,
+        image: Source::Bytes(image),
         exe: name,
         exec_fn: name,
         set_ids: SetIds::NONE,
@@ -178,8 +178,8 @@ pub(crate) fn load(
 pub(crate) fn load_native(image: &[u8], name: &[u8]) -> Result<Arc<Process>, ExecError> {
     let space = AddressSpace::new().map_err(ExecError::Space)?;
     let process = Process::new(Arc::clone(&space));
-    let loaded = load_into(&space, image, None)?;
-    process.record_exec(name, &[name]);
+    let loaded = load_into(&space, Source::Bytes(image), None)?;
+    process.record_exec(name, None, &[name]);
     process.set_startup(Startup {
         entry: loaded.loaded.start,
         stack: loaded.stack_top,
@@ -218,30 +218,33 @@ fn load_as(
     Ok(registry::register(process))
 }
 
-/// Read the dynamic linker `image` asks for, if it asks for one.
+/// Open the dynamic linker `image` asks for, if it asks for one.
 ///
 /// The program's `PT_INTERP` holds a path, and this is the one place that
-/// turns it into bytes. It is done before anything is unmapped, because there
-/// is no way back from the point of no return: a linker that cannot be read
+/// turns it into a file. It is done before anything is unmapped, because there
+/// is no way back from the point of no return: a linker that cannot be opened
 /// has to be an `execve` that fails and leaves the caller running, not a
 /// process killed halfway into being replaced.
 ///
-/// Read with [`crate::fs::read_program`], not [`crate::fs::read_file`], so the
-/// linker needs execute permission exactly as the program does -- Linux opens
-/// it with `open_exec` for the same reason. Its set-user-id bits are read and
-/// dropped: what a program runs as is its own file's business, and a set-id
-/// linker would hand every dynamic program its owner's identity.
+/// Opened with [`crate::fs::open_program`], so the linker needs execute
+/// permission exactly as the program does -- Linux opens it with `open_exec`
+/// for the same reason. Its set-user-id bits are read and dropped: what a
+/// program runs as is its own file's business, and a set-id linker would hand
+/// every dynamic program its owner's identity.
 ///
 /// # Errors
 ///
 /// `ENOEXEC` for an image that asks for a linker without saying which, and
-/// whatever resolving or reading the path refuses.
-pub(crate) fn linker_for(ctx: &Context, image: &[u8]) -> Result<Option<vmap::Buffer>, Errno> {
-    let Some(path) = load::interpreter_of(image).map_err(|_| Errno::ENOEXEC)? else {
-        return Ok(None);
+/// whatever resolving, opening or reading the path refuses.
+pub(crate) fn linker_for(ctx: &Context, image: Source<'_>) -> Result<Option<ProgramFile>, Errno> {
+    let path = match load::interpreter_of(image) {
+        Ok(Some(path)) => path,
+        Ok(None) => return Ok(None),
+        Err(LoadError::Read(errno)) => return Err(errno),
+        Err(_) => return Err(Errno::ENOEXEC),
     };
-    let (bytes, _exe, _set_ids) = crate::fs::read_program(ctx, None, path)?;
-    Ok(Some(bytes))
+    let (file, _exe, _set_ids) = crate::fs::open_program(ctx, None, &path)?;
+    Ok(Some(file))
 }
 
 /// An ELF image loaded into an empty address space, with its stack region
@@ -268,8 +271,8 @@ pub(crate) struct Image {
 /// [`ExecError`].
 pub(crate) fn load_into(
     space: &AddressSpace,
-    image: &[u8],
-    interpreter: Option<&[u8]>,
+    image: Source<'_>,
+    interpreter: Option<Source<'_>>,
 ) -> Result<Image, ExecError> {
     let loaded = load::load(space, image, interpreter).map_err(ExecError::Load)?;
 
@@ -365,7 +368,13 @@ fn populate(
     let startup = ferrix_ustack::build(&spec, top, &mut scratch).map_err(|_| ExecError::Startup)?;
     uaccess::copy_to_user(space, base, &scratch).map_err(|_| ExecError::Startup)?;
 
-    process.record_exec(program.exe, args);
+    // The file, where there is one, is what `/proc/<pid>/exe` leads to: for a
+    // script, the interpreter's, as on Linux.
+    let exe_at = match program.image {
+        Source::File(file) => Some(file.file().location().clone()),
+        Source::Bytes(_) => None,
+    };
+    process.record_exec(program.exe, exe_at, args);
     Ok(Startup {
         entry: loaded.start,
         stack: startup.sp,
@@ -390,7 +399,7 @@ pub(crate) fn run(
 ) -> Result<i32, ExecError> {
     let name = args.first().copied().unwrap_or(b"");
     let program = Executable {
-        image,
+        image: Source::Bytes(image),
         exe: name,
         exec_fn: name,
         set_ids: SetIds::NONE,
@@ -399,7 +408,7 @@ pub(crate) fn run(
     run_executable(program, args, env, random)
 }
 
-/// [`run`], for a program that names a dynamic linker, with the linker's bytes
+/// [`run`], for a program that names a dynamic linker, with the linker
 /// supplied.
 ///
 /// For the boot check, which has both images in hand and wants the whole path
@@ -410,14 +419,14 @@ pub(crate) fn run(
 /// [`ExecError`].
 pub(crate) fn run_with_linker(
     image: &[u8],
-    linker: &[u8],
+    linker: Source<'_>,
     args: &[&[u8]],
     env: &[&[u8]],
     random: [u8; ferrix_ustack::RANDOM_BYTES],
 ) -> Result<i32, ExecError> {
     let name = args.first().copied().unwrap_or(b"");
     let program = Executable {
-        image,
+        image: Source::Bytes(image),
         exe: name,
         exec_fn: name,
         set_ids: SetIds::NONE,
@@ -581,7 +590,7 @@ fn execve_at(
     let context = crate::syscall::path::context(process);
     let (mut image, mut exe, mut set_ids) = if path_bytes.is_empty() {
         let file = fd::file(process, dirfd)?;
-        let image = read_descriptor(&file, &context.who)?;
+        let image = open_descriptor(&file, &context.who)?;
         let set_ids = crate::fs::set_ids_of(&file.inode().metadata());
         let exe = crate::fs::namespace().path_of(file.location(), &context.root);
         path_bytes = descriptor_path(dirfd, &[]);
@@ -595,7 +604,7 @@ fn execve_at(
                 return Err(Errno::ELOOP.into());
             }
         }
-        let (image, exe, set_ids) = crate::fs::read_program(&context, start.as_ref(), &path_bytes)?;
+        let (image, exe, set_ids) = crate::fs::open_program(&context, start.as_ref(), &path_bytes)?;
         // What a script's interpreter is handed as the script's name, and
         // what `AT_EXECFN` names: the path itself when it means the same
         // thing from anywhere, and a name through the directory descriptor
@@ -613,8 +622,8 @@ fn execve_at(
     // script's path in place of its own first argument -- what Linux's
     // `binfmt_script` does. One level: an interpreter that is itself a script
     // is refused rather than followed.
-    if image.starts_with(b"#!") {
-        let (interpreter, argument) = interpreter_line(&image)?;
+    if image.head().starts_with(b"#!") {
+        let (interpreter, argument) = interpreter_line(image.head())?;
         let mut replaced = Vec::with_capacity(args.len().saturating_add(2));
         replaced.push(interpreter.clone());
         if let Some(argument) = argument {
@@ -626,16 +635,16 @@ fn execve_at(
         // The interpreter is the file actually loaded, so it is the exe -- and
         // its set-id bits are the ones that count, which is why a set-user-id
         // script gives nothing away here, as it gives nothing away on Linux.
-        (image, exe, set_ids) = crate::fs::read_program(&context, None, &interpreter)?;
-        if image.starts_with(b"#!") {
+        (image, exe, set_ids) = crate::fs::open_program(&context, None, &interpreter)?;
+        if image.head().starts_with(b"#!") {
             return Err(Errno::ENOEXEC.into());
         }
     }
-    // Before the point of no return: the linker is read here so that a program
+    // Before the point of no return: the linker is opened here so that a program
     // naming one that is missing or unreadable is an `execve` that fails, with
     // the caller still running the program it had.
-    let linker = linker_for(&context, &image)?;
-    load::check(&image, linker.as_deref()).map_err(|_| Errno::ENOEXEC)?;
+    let linker = linker_for(&context, Source::File(&image))?;
+    load::check(Source::File(&image), linker.as_ref().map(Source::File)).map_err(refused)?;
 
     let arg_slices: Vec<&[u8]> = args.iter().map(Vec::as_slice).collect();
     let env_slices: Vec<&[u8]> = env.iter().map(Vec::as_slice).collect();
@@ -670,11 +679,11 @@ fn execve_at(
         set_ids = SetIds::NONE;
     }
     let program = Executable {
-        image: &image,
+        image: Source::File(&image),
         exe: &exe,
         exec_fn: &exec_fn,
         set_ids,
-        interpreter: linker.as_deref(),
+        interpreter: linker.as_ref().map(Source::File),
     };
     let startup = populate(
         space,
@@ -707,16 +716,22 @@ fn execve_at(
     Ok((startup.entry, startup.stack))
 }
 
+/// What `execve` answers for an image the loader refuses before the point of
+/// no return: the error reading the file met, and `ENOEXEC` for anything
+/// about the image itself.
+fn refused(error: LoadError) -> Errno {
+    match error {
+        LoadError::Read(errno) => errno,
+        _ => Errno::ENOEXEC,
+    }
+}
+
 /// What a failed `execve` past its point of no return ends the process with.
 pub(crate) const fn lost_status() -> i32 {
     LOST_STATUS
 }
 
-/// The largest file `execveat` reads whole through a descriptor: the limit
-/// `crate::fs::read_file` sets for reading one through a path.
-const DESCRIPTOR_READ_LIMIT: u64 = 64 * 1024 * 1024;
-
-/// The whole of the regular file `file` names, for `execveat` with
+/// The regular file `file` names, opened as a program, for `execveat` with
 /// `AT_EMPTY_PATH`.
 ///
 /// Read through the description itself when it was opened for reading, at
@@ -729,9 +744,8 @@ const DESCRIPTOR_READ_LIMIT: u64 = 64 * 1024 * 1024;
 /// # Errors
 ///
 /// `EACCES` for anything but a regular file, as Linux answers, and for one
-/// `who` may not execute; `EFBIG` past [`DESCRIPTOR_READ_LIMIT`]; `ENOMEM` if
-/// memory cannot hold it; and whatever reopening or reading refuses.
-fn read_descriptor(file: &Arc<OpenFile>, who: &Access) -> Result<vmap::Buffer, Errno> {
+/// `who` may not execute; and whatever reopening or reading refuses.
+fn open_descriptor(file: &Arc<OpenFile>, who: &Access) -> Result<ProgramFile, Errno> {
     if file.kind() != FileType::Regular {
         return Err(Errno::EACCES);
     }
@@ -745,23 +759,7 @@ fn read_descriptor(file: &Arc<OpenFile>, who: &Access) -> Result<vmap::Buffer, E
         };
         OpenFile::new(file.location().clone(), &flags)?
     };
-    let size = reader.inode().metadata().size;
-    if size > DESCRIPTOR_READ_LIMIT {
-        return Err(Errno::EFBIG);
-    }
-    let len = usize::try_from(size).map_err(|_| Errno::EFBIG)?;
-    let mut contents = vmap::Buffer::zeroed(len).map_err(|_| Errno::ENOMEM)?;
-    let mut done = 0;
-    while done < len {
-        let slot = contents.get_mut(done..).ok_or(Errno::EIO)?;
-        let count = reader.read_at(done as u64, slot)?;
-        if count == 0 {
-            break;
-        }
-        done += count;
-    }
-    contents.truncate(done);
-    Ok(contents)
+    ProgramFile::open(reader)
 }
 
 /// The name a script run through `execveat` is handed to its interpreter

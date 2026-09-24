@@ -64,6 +64,7 @@ pub(crate) mod path;
 pub(crate) mod pipe;
 pub(crate) mod poll;
 pub(crate) mod process;
+pub(crate) mod program;
 pub(crate) mod registry;
 pub(crate) mod signal;
 pub(crate) mod sockets;

@@ -42,6 +42,7 @@ use crate::mm;
 use ferrix_elf::Class;
 
 use crate::console::println;
+use crate::syscall::load::Source::Bytes;
 use crate::syscall::memory::{self, MmapRequest, OffsetUnit};
 use crate::syscall::process::{self, Process};
 use crate::syscall::{Outcome, SyscallArgs, dispatch, uaccess};
@@ -2427,7 +2428,7 @@ fn check_an_image_loads_where_its_headers_say(process: &Process) -> Result<(), &
     let file = image::build(class, arch::ARCH.elf_machine(), image::Shape::Good);
 
     let loaded =
-        load::load(process.space(), &file, None).map_err(|_| "a good image was refused")?;
+        load::load(process.space(), Bytes(&file), None).map_err(|_| "a good image was refused")?;
 
     if loaded.entry != image::ENTRY {
         return Err("the loader reported the wrong entry point");
@@ -2512,12 +2513,13 @@ fn check_a_static_pie_loads_at_its_base() -> Result<(), &'static str> {
         arch::ARCH.elf_machine(),
         image::Shape::PositionIndependent,
     );
-    if load::check(&file, None).is_err() {
+    if load::check(Bytes(&file), None).is_err() {
         return Err("execve's image check refused a static PIE");
     }
     let scratch = process::new_for_check().map_err(|_| "could not make a process")?;
     let space = scratch.space();
-    let loaded = load::load(space, &file, None).map_err(|_| "the loader refused a static PIE")?;
+    let loaded =
+        load::load(space, Bytes(&file), None).map_err(|_| "the loader refused a static PIE")?;
     let moved = |linked: u64| linked - image::BASE + load::PIE_BASE;
 
     if loaded.entry != moved(image::ENTRY) {
@@ -2615,16 +2617,16 @@ fn write_and_run(
 
     // Read back through the same path the kernel will use, which is what
     // `execve` does and what proves the `PT_INTERP` names something findable.
-    let found = exec::linker_for(ctx, program)
+    let found = exec::linker_for(ctx, Bytes(program))
         .map_err(|_| "the linker named by PT_INTERP could not be read")?
         .ok_or("a program naming a linker was read as naming none")?;
-    if found.len() != linker.len() {
+    if found.len() != linker.len() as u64 {
         return Err("the linker read back from its path is not the one written");
     }
 
     let status = exec::run_with_linker(
         program,
-        &found,
+        load::Source::File(&found),
         &[b"/dynamic"],
         &[],
         [0x5a; ferrix_ustack::RANDOM_BYTES],
@@ -2662,12 +2664,12 @@ fn check_a_dynamic_program_is_loaded_with_its_linker() -> Result<(), &'static st
     let program = image::build(class, machine, image::Shape::Dynamic);
     let linker = image::build(class, machine, image::Shape::PositionIndependent);
 
-    if load::check(&program, Some(&linker)).is_err() {
+    if load::check(Bytes(&program), Some(Bytes(&linker))).is_err() {
         return Err("execve's image check refused a program with its linker");
     }
     let scratch = process::new_for_check().map_err(|_| "could not make a process")?;
     let space = scratch.space();
-    let loaded = load::load(space, &program, Some(&linker))
+    let loaded = load::load(space, Bytes(&program), Some(Bytes(&linker)))
         .map_err(|_| "the loader refused a program with its linker")?;
 
     let in_program = |linked: u64| linked - image::BASE + load::PIE_BASE;
@@ -2717,7 +2719,7 @@ fn check_the_loader_refuses_a_linker_it_cannot_use() -> Result<(), &'static str>
     // any of this existed.
     let scratch = process::new_for_check().map_err(|_| "could not make a process")?;
     if !matches!(
-        load::load(scratch.space(), &program, None),
+        load::load(scratch.space(), Bytes(&program), None),
         Err(load::LoadError::NeedsInterpreter)
     ) {
         return Err("the loader entered a dynamic program with no linker");
@@ -2727,7 +2729,7 @@ fn check_the_loader_refuses_a_linker_it_cannot_use() -> Result<(), &'static str>
     let fixed = image::build(class, machine, image::Shape::Good);
     let scratch = process::new_for_check().map_err(|_| "could not make a process")?;
     if !matches!(
-        load::load(scratch.space(), &program, Some(&fixed)),
+        load::load(scratch.space(), Bytes(&program), Some(Bytes(&fixed))),
         Err(load::LoadError::InterpreterNotPie)
     ) {
         return Err("the loader accepted a linker that is not position-independent");
@@ -2737,7 +2739,7 @@ fn check_the_loader_refuses_a_linker_it_cannot_use() -> Result<(), &'static str>
     // following the chain, because a chain has no end it can prove.
     let scratch = process::new_for_check().map_err(|_| "could not make a process")?;
     if !matches!(
-        load::load(scratch.space(), &program, Some(&program)),
+        load::load(scratch.space(), Bytes(&program), Some(Bytes(&program))),
         Err(load::LoadError::InterpreterChain)
     ) {
         return Err("the loader followed a linker that names a linker of its own");
@@ -2750,7 +2752,12 @@ fn check_the_loader_refuses_a_linker_it_cannot_use() -> Result<(), &'static str>
         (Some(&fixed), "a linker that is not position-independent"),
         (Some(&program), "a linker that names one of its own"),
     ] {
-        if load::check(&program, linker.map(Vec::as_slice)).is_ok() {
+        if load::check(
+            Bytes(&program),
+            linker.map(|linker| Bytes(linker.as_slice())),
+        )
+        .is_ok()
+        {
             let _ = what;
             return Err("execve's image check accepted a linker the loader refuses");
         }
@@ -2779,14 +2786,14 @@ fn check_the_loader_refuses_what_it_cannot_run(process: &Process) -> Result<(), 
         // part of the image, and that is exactly why `execve` will load into a
         // fresh space and swap it in only on success.
         let scratch = process::new_for_check().map_err(|_| "could not make a process")?;
-        if load::load(scratch.space(), &file, None).is_ok() {
+        if load::load(scratch.space(), Bytes(&file), None).is_ok() {
             return Err("the loader accepted an image it cannot run");
         }
     }
 
     // And bytes that are not an ELF at all.
     let scratch = process::new_for_check().map_err(|_| "could not make a process")?;
-    if load::load(scratch.space(), b"not an ELF image", None).is_ok() {
+    if load::load(scratch.space(), Bytes(b"not an ELF image"), None).is_ok() {
         return Err("the loader accepted something that is not an ELF image");
     }
 
@@ -2796,13 +2803,13 @@ fn check_the_loader_refuses_what_it_cannot_run(process: &Process) -> Result<(), 
     let file = image::build(class, machine, image::Shape::EntryOutsideUser);
     let scratch = process::new_for_check().map_err(|_| "could not make a process")?;
     if !matches!(
-        load::load(scratch.space(), &file, None),
+        load::load(scratch.space(), Bytes(&file), None),
         Err(load::LoadError::EntryNotUser(_))
     ) {
         return Err("the loader accepted an entry point outside the user half");
     }
     if !matches!(
-        load::check(&file, None),
+        load::check(Bytes(&file), None),
         Err(load::LoadError::EntryNotUser(_))
     ) {
         return Err("execve's image check accepted an entry point outside the user half");

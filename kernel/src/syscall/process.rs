@@ -43,7 +43,7 @@ use ferrix_linux_abi::errno::Errno;
 use ferrix_native_abi::signals::Signals as ObjectSignals;
 use ferrix_sync::{SleepLock, SleepLockGuard};
 use ferrix_vfs::fd::FdTable;
-use ferrix_vfs::{Context, OpenFile};
+use ferrix_vfs::{Context, Location, OpenFile};
 use ferrix_vma::VmaFlags;
 
 use crate::fs;
@@ -227,10 +227,18 @@ struct State {
 ///
 /// A lock of its own, like the handle table: `/proc/<pid>/cmdline` read from
 /// another process has no business waiting on this one's `brk`.
-#[derive(Debug, Default)]
+///
+/// A `fork` child is what its parent was started as until it runs a program
+/// of its own, as on Linux, where the child shares the parent's `exe_file`
+/// and argument area. Chrome starts every child process by forking and
+/// running `/proc/self/exe`, which a child with no identity cannot do.
+#[derive(Debug, Default, Clone)]
 struct Identity {
-    /// The path it was started from: `/proc/<pid>/exe`.
+    /// The path it was started from: `/proc/<pid>/exe`'s text.
     exe: Vec<u8>,
+    /// The file it was started from, when there was one: where
+    /// `/proc/<pid>/exe` leads, as a magic link, whatever became of the path.
+    exe_at: Option<Location>,
     /// Its argument vector: `/proc/<pid>/cmdline`.
     args: Vec<Vec<u8>>,
 }
@@ -327,7 +335,8 @@ impl Process {
     /// working directory and root (or the same ones, shared, when `clone` asks
     /// for `CLONE_FILES` or `CLONE_FS`), the heap and the signal dispositions,
     /// the process group and session, the umask, the user and group ids and
-    /// supplementary groups, the program's start, and its job, which is its
+    /// supplementary groups, the program's start and what it was started as
+    /// -- `/proc/<pid>/exe` and `cmdline` -- and its job, which is its
     /// cgroup. What is not is what belongs to the parent alone: its pid, its
     /// children, its threads, and its handles, which the native ABI passes on
     /// only explicitly.
@@ -362,6 +371,7 @@ impl Process {
         child.sid = AtomicU32::new(parent.sid());
         child.umask = AtomicU32::new(parent.umask());
         child.credentials = SpinLock::new(parent.credentials.lock().clone());
+        child.identity = SpinLock::new(parent.identity.lock().clone());
         child
     }
 
@@ -442,18 +452,29 @@ impl Process {
         self.started
     }
 
-    /// Record what it was started as: the path and the arguments.
-    pub(crate) fn record_exec(&self, exe: &[u8], args: &[&[u8]]) {
+    /// Record what it was started as: the path, the file when there was one,
+    /// and the arguments.
+    pub(crate) fn record_exec(&self, exe: &[u8], exe_at: Option<Location>, args: &[&[u8]]) {
         let exe = exe.to_vec();
         let args = args.iter().map(|arg| arg.to_vec()).collect();
         let mut identity = self.identity.lock();
         identity.exe = exe;
         identity.args = args;
+        // The old file goes after the lock: its dentry's last reference may be
+        // this one.
+        let old = core::mem::replace(&mut identity.exe_at, exe_at);
+        drop(identity);
+        drop(old);
     }
 
     /// The path it was started from, empty if nothing was.
     pub(crate) fn exe(&self) -> Vec<u8> {
         self.identity.lock().exe.clone()
+    }
+
+    /// The file it was started from, if it was started from one.
+    pub(crate) fn exe_location(&self) -> Option<Location> {
+        self.identity.lock().exe_at.clone()
     }
 
     /// Its argument vector.
@@ -2103,8 +2124,9 @@ fn end_thread(status: Option<i32>, group: bool) -> ! {
 /// Where a program's task begins: enter user mode where `exec::load` said.
 ///
 /// Returning ends the task, which is what happens if the process was killed
-/// before it ever ran.
-fn run_program(_argument: usize) {
+/// before it ever ran. A check that makes a system call in the process first
+/// -- `execve`, in `fs::exec_check` -- enters the program through here after.
+pub(crate) fn run_program(_argument: usize) {
     let Some(process) = current() else {
         return;
     };

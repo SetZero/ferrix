@@ -397,6 +397,34 @@ fn check_timerfd() {
     );
 }
 
+/// Stage 8's check of programs mapped from their files: one past 64 MiB
+/// loaded at the cost of its headers and paged in on demand, its writes kept
+/// from the file, and a fork of it running `/proc/self/exe`.
+fn check_program_files() {
+    let checked = match fs::exec_check::run() {
+        Ok(Some(checked)) => checked,
+        Ok(None) => {
+            println!("  exec     no user-mode program on {} yet", arch::NAME);
+            return;
+        }
+        Err(problem) => fatal!(
+            catalog::STAGE8_PROGRAM_FILES,
+            "stage 8 program file self-check failed: {problem}"
+        ),
+    };
+    println!(
+        "  exec     a {} MiB program was loaded reading {} of its {} pages, {} by the time it had \
+         been touched and had run; a write kept from the file; it exited with {}, and a fork of \
+         it ran /proc/self/exe with the file's name gone and exited with {}",
+        checked.bytes >> 20,
+        checked.loaded,
+        checked.pages,
+        checked.read,
+        checked.status,
+        checked.self_status,
+    );
+}
+
 /// Stage 13's cgroupfs, landing G2: the job tree mounted as cgroup2, driven
 /// through the VFS as a program would drive it.
 fn check_cgroupfs() {
@@ -486,6 +514,7 @@ fn check_filesystems(view: &BootView<'_>) {
     check_epoll();
     check_eventfd();
     check_timerfd();
+    check_program_files();
     check_cgroupfs();
 
     let pseudo = match fs::procfs::check::run() {

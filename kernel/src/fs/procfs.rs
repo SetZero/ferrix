@@ -68,8 +68,8 @@ use core::any::Any;
 use core::fmt;
 
 use ferrix_vfs::{
-    DirEntry, Errno, FIRST_CURSOR, FileSystem, FileType, Inode, Metadata, OpenFile, Result, StatFs,
-    Timespec,
+    DirEntry, Errno, FIRST_CURSOR, FileSystem, FileType, Inode, Location, Metadata, OpenFile,
+    Result, StatFs, Timespec,
 };
 
 use crate::fs;
@@ -909,6 +909,24 @@ impl Inode for Node {
             },
             Place::Descriptor(pid, fd) => render::descriptor(&*alive(pid)?, fd),
             _ => Err(Errno::EINVAL),
+        }
+    }
+
+    /// `/proc/<pid>/exe` is a magic link: followed, it is the file the
+    /// process's program was loaded from, not whatever its text names now.
+    /// A process whose program came from no file -- the kernel's own checks,
+    /// a built-in init -- has no file to lead to, and its link is followed as
+    /// the text it reads as.
+    fn link_location(&self) -> Option<Result<Location>> {
+        let Place::Entry(pid, index) = self.place else {
+            return None;
+        };
+        if PER_PROCESS.get(index)?.name != b"exe" {
+            return None;
+        }
+        match alive(pid) {
+            Ok(process) => process.exe_location().map(Ok),
+            Err(errno) => Some(Err(errno)),
         }
     }
 }

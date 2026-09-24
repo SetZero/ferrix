@@ -39,6 +39,7 @@ pub(crate) mod epoll;
 pub(crate) mod epoll_check;
 pub(crate) mod eventfd;
 pub(crate) mod eventfd_check;
+pub(crate) mod exec_check;
 pub(crate) mod memfd_check;
 pub(crate) mod mmap_check;
 mod pages;
@@ -69,6 +70,7 @@ use ferrix_vfs::{
 };
 
 use crate::mm;
+use crate::syscall::program::ProgramFile;
 use crate::syscall::time;
 use crate::vmap;
 
@@ -121,20 +123,21 @@ pub(crate) fn new_tmpfs() -> Arc<Tmpfs> {
     )
 }
 
-/// The most [`read_file`] and [`read_program`] will read: 64 MiB.
+/// The most [`read_file`] will read: 64 MiB.
 ///
-/// The whole file is built in kernel memory, which is what loading a program
-/// needs today, and a program naming a file large enough to exhaust it in one
-/// call should get `EFBIG` rather than take the kernel's memory with it. A
-/// static busybox is two megabytes; a static `rustc` is well under this.
+/// The whole file is built in kernel memory, and a caller naming a file large
+/// enough to exhaust it in one call should get `EFBIG` rather than take the
+/// kernel's memory with it. Programs are not read through here: `execve`
+/// maps them from their files ([`open_program`]), whatever their size.
 const READ_FILE_LIMIT: u64 = 64 * 1024 * 1024;
 
 /// Read a whole regular file, resolving `path` from `start` -- or from the
 /// context's working directory -- and following symbolic links.
 ///
-/// What loading a program from a path needs: `execve`, and init starting its
-/// first program. One function rather than a loop in each, so the two cannot
-/// disagree about what a path names or which files may be read whole.
+/// What the kernel reads whole from a path: a native program `devmgr`
+/// starts, a manifest, and the files the boot checks compare. One function
+/// rather than a loop in each, so they cannot disagree about what a path
+/// names or which files may be read whole.
 ///
 /// A file that shrinks while it is read comes back as the bytes that were
 /// there; one that grows comes back at the size it had when it was opened.
@@ -159,35 +162,44 @@ pub(crate) fn read_file(
     Ok(contents)
 }
 
-/// [`read_file`] for a program: its contents, and the absolute path of the
-/// file they were read from, symbolic links resolved.
+/// Open a program: the file, with its headers read and nothing else, and the
+/// absolute path of the file, symbolic links resolved.
 ///
-/// The contents are a [`vmap::Buffer`] rather than a heap vector, so a program
-/// larger than the heap's largest contiguous allocation can still be read.
+/// Not [`read_file`]: a program is mapped from its file rather than read
+/// whole (`syscall/load.rs`), so it may be any size, and costs its headers to
+/// start.
 ///
 /// The path is what `/proc/<pid>/exe` reports, and glibc's static startup
 /// reads it back and asserts it is absolute. Taken from the location that was
-/// read rather than by resolving the string again, so the two cannot name
+/// opened rather than by resolving the string again, so the two cannot name
 /// different files if the tree changes in between.
 ///
 /// # Errors
 ///
-/// As [`read_file`], and `EACCES` for a regular file the context may not
-/// execute.
-pub(crate) fn read_program(
+/// What the path walk refuses; `EISDIR` for a directory and `EACCES` for any
+/// other file that is not a regular one, and for a regular file the context
+/// may not execute; and whatever opening it or reading its headers refuses.
+pub(crate) fn open_program(
     ctx: &Context,
     start: Option<&Location>,
     path: &[u8],
-) -> Result<(vmap::Buffer, Vec<u8>, SetIds), Errno> {
+) -> Result<(ProgramFile, Vec<u8>, SetIds), Errno> {
     let ns = namespace();
     let at = ns.resolve(ctx, start, path, true)?;
     let metadata = ns.stat(&at)?.metadata;
-    if metadata.kind == FileType::Regular {
-        ctx.who.require(&metadata, MAY_EXEC)?;
+    match metadata.kind {
+        FileType::Regular => ctx.who.require(&metadata, MAY_EXEC)?,
+        FileType::Directory => return Err(Errno::EISDIR),
+        _ => return Err(Errno::EACCES),
     }
     let exe = ns.path_of(&at, &ctx.root);
     let set_ids = set_ids_of(&metadata);
-    Ok((read_location(at)?, exe, set_ids))
+    let flags = OpenFlags {
+        read: true,
+        ..OpenFlags::default()
+    };
+    let file = ProgramFile::open(OpenFile::new(at, &flags)?)?;
+    Ok((file, exe, set_ids))
 }
 
 /// The ids a program takes on when it runs: its owner where the file is
