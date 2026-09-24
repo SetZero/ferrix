@@ -9,7 +9,8 @@
 //! instructions, and that includes constructors.
 
 use core::ffi::{CStr, c_char, c_int, c_void};
-use core::sync::atomic::Ordering;
+use core::ptr::null_mut;
+use core::sync::atomic::{AtomicPtr, Ordering};
 
 use crate::exit::exit;
 use crate::stdlib::environ;
@@ -47,6 +48,37 @@ unsafe extern "C" {
     static __fini_array_end: Hook;
 }
 
+/// The program's name as it was started, `argv[0]`: a GNU extension musl has
+/// too, which Mesa asks for to know which program it is driving.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+#[allow(non_upper_case_globals, reason = "C names it")]
+pub static program_invocation_name: AtomicPtr<c_char> = AtomicPtr::new(null_mut());
+
+/// The same name after its last `/`.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+#[allow(non_upper_case_globals, reason = "C names it")]
+pub static program_invocation_short_name: AtomicPtr<c_char> = AtomicPtr::new(null_mut());
+
+/// Record `name`, the program's `argv[0]` or null, as both of the names
+/// above, before a constructor can read them.
+///
+/// # Safety
+///
+/// `name` is null or a C string that lives as long as the process, as the
+/// kernel's arguments on the initial stack do.
+unsafe fn name_program(name: *mut c_char) {
+    program_invocation_name.store(name, Ordering::Relaxed);
+    let mut short = name;
+    if !name.is_null() {
+        // SAFETY: the caller's: a C string.
+        let bytes = unsafe { CStr::from_ptr(name) }.to_bytes();
+        if let Some(slash) = bytes.iter().rposition(|&byte| byte == b'/') {
+            short = name.wrapping_add(slash + 1);
+        }
+    }
+    program_invocation_short_name.store(short, Ordering::Relaxed);
+}
+
 /// Sets up the process, runs `main`, and exits with what it returns.
 ///
 /// # Safety
@@ -67,6 +99,8 @@ pub unsafe extern "C" fn __libc_start_main(
     let count = usize::try_from(argc).unwrap_or(0);
     let envp = argv.wrapping_add(count + 1);
     environ().store(envp, Ordering::Relaxed);
+    // SAFETY: `argv` holds `argc` pointers and a null, and nothing else runs.
+    unsafe { name_program(if count > 0 { argv.read() } else { null_mut() }) };
 
     let mut at = envp;
     // SAFETY: the environment ends in a null, and `at` has not passed it.
