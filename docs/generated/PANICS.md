@@ -62,6 +62,7 @@ Causes are listed most likely first.
 | [FX-0882](#fx-0882) | eventfd failed its self-check |
 | [FX-0883](#fx-0883) | timerfd failed its self-check |
 | [FX-0884](#fx-0884) | signalfd failed its self-check |
+| [FX-0890](#fx-0890) | sysfs did not show the machine's devices as Linux shows them |
 | [FX-0901](#fx-0901) | the native ABI's objects failed their self-check |
 | [FX-1001](#fx-1001) | PCI enumeration failed its self-check |
 | [FX-1002](#fx-1002) | a device node handed out memory or an interrupt it does not have |
@@ -968,9 +969,10 @@ fill a pipe from a file at an offset and move bytes between two pipes, and
 copy_file_range must copy a file, each refusing as Linux does. Then, by syscall
 number, mount -t proc and mount -t devtmpfs must each make a new instance on a
 directory under /tmp: the check process must be found through the procfs, zero
-must read zeros from the devtmpfs, /proc/mounts must list both, both must
-unmount, and mount -t sysfs must still be ENODEV. The whole run is done twice
-and must leave no frame behind.
+must read zeros from the devtmpfs, /proc/mounts must list both, and both must
+unmount; mount -t sysfs must mount and unmount, and mount -t devpts, a type
+there is not, must be ENODEV. The whole run is done twice and must leave no
+frame behind.
 
 1. A pipe end's drop no longer counts it out of the buffer, so a reader never
    sees end of file and the pipe outlives its descriptors as leaked frames.
@@ -1245,6 +1247,39 @@ the one-second recheck. The run is done twice and must leave no frame behind.
 See: kernel/src/fs/signalfd_check.rs; kernel/src/fs/signalfd.rs;
 kernel/src/syscall/signalfd.rs; kernel/src/syscall/signal.rs;
 kernel/src/syscall/process.rs notify_signal; kernel/src/fs/wake.rs.
+
+<a id="fx-0890"></a>
+
+## FX-0890 — sysfs did not show the machine's devices as Linux shows them
+
+`fs::sysfs::check::run` (docs/SYSFS.md §7), the last boot check, after devmgr
+has started its drivers, mounts a sysfs at /tmp/sysfs-check and walks all of it
+through the VFS: every directory must list names that each look up to the kind
+the listing said, every file must open and read to its end, and every link must
+lead, relative to where it is, to a directory in the mount. Then the facts must
+be the owners': every device node has a directory under /sys/bus/pci/devices or
+/sys/bus/platform/devices, and a PCI function's vendor, device and class read
+what enumeration found; a device devmgr said a driver drives has a driver link
+to that driver's directory, which links back, and a uevent beginning DRIVER=;
+devices/system/cpu/online lists the processors that are running and possible all
+of them; every disk devfs has is in /sys/block with its size, ro and dev, and
+/sys/dev/block names it; lo is in /sys/class/net with ifindex 1;
+/sys/dev/char/1:3 leads to devices/virtual/mem/null. A read-only attribute
+opened for writing, mkdir and unlink are refused as kernfs refuses them, statfs
+says SYSFS_MAGIC, and cgroup2 mounts on fs/cgroup.
+
+1. A directory lists a name its lookup does not find, or the other way round:
+   `entries` in kernel/src/fs/sysfs.rs and a core's list disagree.
+2. A link's target is spelt wrongly: `path_of` and the directories disagree
+   about where something is, or libs/sysfs's `path::relative` climbs to the
+   wrong ancestor.
+3. A core stopped recording the device node its driver serves (`Origin` in
+   devfs, `net_ring::node_of`, `Card::node`), so a device is shown in the wrong
+   directory.
+4. A format in libs/sysfs changed; its host tests pin each against Linux's.
+
+See: kernel/src/fs/sysfs.rs; kernel/src/fs/sysfs/check.rs; libs/sysfs;
+docs/SYSFS.md.
 
 <a id="fx-0901"></a>
 

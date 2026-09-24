@@ -394,6 +394,22 @@ package FerrixRoadmap {
              * architectures (2026-09-23). */
     }
 
+    #implemented requirement <'SY'> stageSysfs : Stage {
+        attribute :>> number = 12;
+        attribute :>> status = StageStatus::Done;
+        attribute :>> size = "26 points, spent";
+        doc /* Placed after stage 12 without a number of its own, built on
+             * 2026-09-24 in the shape the customer chose that day: an
+             * in-kernel view like procfs and cgroupfs, fed by the services
+             * that own each fact, with bind and unbind sent to devmgr to
+             * decide (docs/SYSFS.md). Exit met: the boot check walks a whole
+             * sysfs on all three architectures after devmgr has started its
+             * drivers and holds it against enumeration, the cores and
+             * devmgr, and cargo xtask test-sysfs reads what libdrm reads
+             * from a shell and unbinds and binds the card's driver through
+             * sysfs. */
+    }
+
     #implemented requirement <'S12'> stage12BtrfsWrite : Stage {
         attribute :>> number = 12;
         attribute :>> status = StageStatus::Done;
@@ -637,6 +653,7 @@ package FerrixRoadmap {
     dependency from stage11BtrfsRead to stage10UserspaceDrivers;
     dependency from stageNetworking to stage11BtrfsRead, stage10UserspaceDrivers;
     dependency from stageDynamicLinking to stage8Vfs, stage7LinuxAbi;
+    dependency from stageSysfs to stage8Vfs, stage10UserspaceDrivers;
     dependency from stage12BtrfsWrite to stage11BtrfsRead;
     dependency from stage13Isolation to stage12BtrfsWrite;
     dependency from stage14RealTime to stage13Isolation, stage4Smp;
@@ -682,6 +699,7 @@ package FerrixRoadmap {
     allocate stage7LinuxAbi to ferrix.kernel.futex;
     allocate stage8Vfs to ferrix.kernel.vfs;
     allocate stage8Vfs to ferrix.kernel.filesystems;
+    allocate stageSysfs to ferrix.kernel.filesystems;
     allocate stage9NativeAbi to ferrix.kernel.native;
     allocate stage10UserspaceDrivers to ferrix.kernel.devices;
     allocate stage10UserspaceDrivers to ferrix.kernel.iommu;

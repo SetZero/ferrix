@@ -613,10 +613,12 @@ const AT_DEV_DIR: u64 = 832;
 const AT_PROC_TYPE: u64 = 864;
 /// `devtmpfs`, as a type and as a source.
 const AT_DEVTMPFS_TYPE: u64 = 880;
-/// `sysfs`, which is not a type here.
+/// `sysfs`, mounted and unmounted.
 const AT_SYSFS_TYPE: u64 = 896;
 /// An options string procfs has on Linux and does not read here.
 const AT_OPTIONS: u64 = 912;
+/// `devpts`, which is not a type here; after the options' 18 bytes.
+const AT_DEVPTS_TYPE: u64 = 932;
 /// `self` in the second procfs.
 const AT_PROC_SELF: u64 = 944;
 /// `/proc/self`, to compare it with.
@@ -649,6 +651,7 @@ const DEV_DIR: &[u8] = b"/tmp/stage8-dev\0";
 const PROC_TYPE: &[u8] = b"proc\0";
 const DEVTMPFS_TYPE: &[u8] = b"devtmpfs\0";
 const SYSFS_TYPE: &[u8] = b"sysfs\0";
+const DEVPTS_TYPE: &[u8] = b"devpts\0";
 const OPTIONS: &[u8] = b"hidepid=invisible\0";
 const PROC_SELF: &[u8] = b"/tmp/stage8-proc/self\0";
 const SELF: &[u8] = b"/proc/self\0";
@@ -742,6 +745,7 @@ fn check_the_calls(process: &Process) -> Result<u64, &'static str> {
         (AT_DEVTMPFS_TYPE, DEVTMPFS_TYPE),
         (AT_SYSFS_TYPE, SYSFS_TYPE),
         (AT_OPTIONS, OPTIONS),
+        (AT_DEVPTS_TYPE, DEVPTS_TYPE),
         (AT_PROC_SELF, PROC_SELF),
         (AT_SELF, SELF),
         (AT_DEV_ZERO, DEV_ZERO),
@@ -1655,7 +1659,8 @@ fn check_dev_shm_holds_a_file(process: &Process, page: u64) -> Result<(), &'stat
 /// proc, an option it does not read. Through the second procfs the check
 /// process finds itself, and `self` answers as `/proc/self` does; from the
 /// second devtmpfs `zero` reads zeros; `/proc/mounts` lists both; both unmount;
-/// and `sysfs`, which does not exist, is still `ENODEV`.
+/// and `sysfs` mounts and unmounts, while `devpts`, which does not exist, is
+/// `ENODEV`.
 fn check_proc_and_devtmpfs_mount(process: &Process, page: u64) -> Result<(), &'static str> {
     for dir in [AT_PROC_DIR, AT_DEV_DIR] {
         answers(
@@ -1793,7 +1798,8 @@ fn check_a_second_devtmpfs(process: &Process, page: u64) -> Result<(), &'static 
 }
 
 /// `/proc/mounts` lists both mounts as Linux prints them; both unmount and
-/// their directories can be removed; and `sysfs` is still `ENODEV`.
+/// their directories can be removed; a sysfs mounts where the procfs was and
+/// unmounts; and `devpts` is `ENODEV`.
 fn check_both_are_listed_and_unmount(process: &Process, page: u64) -> Result<(), &'static str> {
     let listing = read_mounts(process, page)?;
     for line in [
@@ -1821,7 +1827,7 @@ fn check_both_are_listed_and_unmount(process: &Process, page: u64) -> Result<(),
         Errno::EINVAL,
         "umount2 of a directory nothing is mounted on any more was not EINVAL",
     )?;
-    refuses(
+    answers(
         by_number(
             process,
             Syscall::Mount,
@@ -1834,8 +1840,33 @@ fn check_both_are_listed_and_unmount(process: &Process, page: u64) -> Result<(),
                 0,
             ],
         ),
+        0,
+        "mount -t sysfs was refused",
+    )?;
+    answers(
+        by_number(
+            process,
+            Syscall::Umount2,
+            [page + AT_PROC_DIR, 0, 0, 0, 0, 0],
+        ),
+        0,
+        "umount2 of a sysfs mount was refused",
+    )?;
+    refuses(
+        by_number(
+            process,
+            Syscall::Mount,
+            [
+                page + AT_DEVPTS_TYPE,
+                page + AT_PROC_DIR,
+                page + AT_DEVPTS_TYPE,
+                0,
+                0,
+                0,
+            ],
+        ),
         Errno::ENODEV,
-        "mount -t sysfs, a type that does not exist, was not ENODEV",
+        "mount -t devpts, a type that does not exist, was not ENODEV",
     )?;
     for dir in [AT_PROC_DIR, AT_DEV_DIR] {
         answers(

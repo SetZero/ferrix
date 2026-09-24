@@ -386,6 +386,7 @@ ACRONYMS = {
     "tmpfs": "tmpfs",
     "devfs": "devfs",
     "cgroupfs": "cgroupfs",
+    "sysfs": "sysfs",
     "seccomp": "seccomp",
     "cpio": "cpio",
     "virtio": "virtio",

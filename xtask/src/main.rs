@@ -90,6 +90,7 @@ mod serial;
 mod shell;
 mod ssh;
 mod symbolize;
+mod sysfs;
 mod test_disk;
 mod threads;
 mod uutils;
@@ -166,6 +167,7 @@ COMMANDS:
     test-foot     Boot the compositor with foot, the ported Wayland terminal, and require its font and its text on screen
     test-jobs     Boot an interactive shell on the console, type a session with jobs at it, and require the answers
     test-restart  Boot a shell beside a virtio-gpu, kill -9 the gpu driver twice, and require it started again each time
+    test-sysfs    Boot a shell beside a card, input devices and a network adapter, read sysfs, and unbind and bind the card through it
     test-threads  Boot threads-test as init and require std::thread, Mutex, mpsc and /proc's thread count
     test-rustc    Attach the rustc volume scripts/fetch-rustc-sysroot.sh makes, run `rustc hello.rs && ./hello`
     test-chrome   Attach the volume scripts/fetch-chrome.sh makes, and require headless Chrome to run a page's script and draw it
@@ -380,6 +382,7 @@ fn run() -> Result<()> {
         "test-pty" => pty::test_pty(&args),
         "test-jobs" => jobs::test_jobs(&args),
         "test-restart" => restart::test_restart(&args),
+        "test-sysfs" => sysfs::test_sysfs(&args),
         "test-threads" => threads::test_threads(&args),
         "test-rustc" => rustc::test_rustc(&args),
         "test-chrome" => chrome::test_chrome(&args),

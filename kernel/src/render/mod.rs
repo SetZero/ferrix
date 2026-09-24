@@ -383,6 +383,9 @@ pub(crate) struct Renderer {
     /// buffers. The core hands out ranges of it and never reads what is
     /// written there (`docs/GPU.md` §3.3).
     pub(crate) work: Arc<Vmo>,
+    /// The device node the renderer is served from, by its index in
+    /// `device::devices()`: where sysfs shows it.
+    pub(crate) node: usize,
     control: Arc<Endpoint>,
     state: SpinLock<State>,
     changed: Arc<WaitQueue>,
@@ -556,6 +559,7 @@ fn accept(start: &Start, message: &ChannelMessage) -> Result<Arc<Renderer>, Refu
     let core_port = Port::new();
     let renderer = Arc::new(Renderer {
         index,
+        node: start.device.index(),
         work: Arc::clone(&work),
         control: Arc::clone(&start.control),
         state: SpinLock::new(State {

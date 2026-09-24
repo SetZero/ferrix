@@ -103,8 +103,8 @@ pub(super) fn cpuinfo(_: &Kernel) -> Result<Vec<u8>> {
     Ok(out)
 }
 
-/// `/proc/filesystems`: the filesystem types `mount` takes, none of them
-/// needing a block device, in the order Linux registers them.
+/// `/proc/filesystems`: the filesystem types `mount` takes, in the order
+/// Linux registers them, sysfs first; only btrfs needs a block device.
 ///
 /// The same names `syscall::fsctl`'s `filesystem_named` matches: a type this
 /// file lists and `mount` refuses, or the other way round, is a program
@@ -112,7 +112,8 @@ pub(super) fn cpuinfo(_: &Kernel) -> Result<Vec<u8>> {
 pub(super) fn filesystems(_: &Kernel) -> Result<Vec<u8>> {
     let mut out = Vec::new();
     for (name, nodev) in [
-        (&b"tmpfs"[..], true),
+        (&b"sysfs"[..], true),
+        (b"tmpfs", true),
         (b"proc", true),
         (b"cgroup2", true),
         (b"devtmpfs", true),

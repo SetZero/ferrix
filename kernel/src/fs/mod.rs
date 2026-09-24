@@ -51,6 +51,7 @@ pub(crate) mod signalfd;
 pub(crate) mod signalfd_check;
 pub(crate) mod socket;
 pub(crate) mod sockname;
+pub(crate) mod sysfs;
 pub(crate) mod terminal;
 pub(crate) mod timerfd;
 pub(crate) mod timerfd_check;
@@ -361,6 +362,7 @@ pub(crate) fn init(view: &BootView<'_>) -> Result<Report, InitError> {
 
     devfs::mount().map_err(|errno| InitError::Mount("/dev", errno))?;
     procfs::mount().map_err(|errno| InitError::Mount("/proc", errno))?;
+    sysfs::mount().map_err(|errno| InitError::Mount("/sys", errno))?;
 
     // `/dev/shm`, where POSIX shared memory and named semaphores live. devfs
     // carries the directory and nothing else; the files are in a tmpfs mounted

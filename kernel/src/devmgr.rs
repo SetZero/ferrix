@@ -17,11 +17,16 @@
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::convert::Infallible;
+use core::sync::atomic::{AtomicU16, Ordering};
 
 use ferrix_blkring::Location;
 use ferrix_blkring::control::DEVICE_RIGHTS;
 use ferrix_bootinfo::PAGE_SIZE;
-use ferrix_devmgr_proto::{DEVICES_MAX_BYTES, Devices, Message, NAME_BYTES, SHORT_BYTES};
+use ferrix_devmgr_proto::{
+    ANSWER_BUSY, ANSWER_DONE, ANSWER_FAILED, ANSWER_NO_DEVICE, BUS_PCI, BUS_PLATFORM,
+    DEVICES_MAX_BYTES, Devices, Message, NAME_BYTES, SHORT_BYTES,
+};
+use ferrix_linux_abi::errno::Errno;
 use ferrix_native_abi::rights::Rights;
 use ferrix_native_abi::signals::Signals;
 use ferrix_native_abi::types::{CHANNEL_MAX_BYTES, CHANNEL_MAX_HANDLES};
@@ -29,6 +34,7 @@ use ferrix_native_abi::types::{CHANNEL_MAX_BYTES, CHANNEL_MAX_HANDLES};
 use crate::object::channel::{Endpoint, ReadError};
 use crate::object::job::{self, Job};
 use crate::object::{Object, Transfer};
+use crate::sched::WaitQueue;
 use crate::sync::SpinLock;
 use crate::syscall::{exec, process};
 use crate::user::vmo::Vmo;
@@ -56,6 +62,241 @@ const KEPT_DEVICE_RIGHTS: Rights = Rights(DEVICE_RIGHTS.0 | Rights::DUPLICATE.0)
 /// The kernel's end of `devmgr`'s bootstrap channel, once it is started.
 static CHANNEL: SpinLock<Option<Arc<Endpoint>>> = SpinLock::new(None);
 
+/// How long a write to `bind` or `unbind` waits for `devmgr`'s DONE: a bind
+/// starts a driver and waits for it to publish, which takes seconds under
+/// TCG, as REPORT does.
+const REQUEST_PATIENCE_NANOS: u64 = REPORT_PATIENCE_NANOS;
+
+/// The bus a driver drives devices on, as sysfs lists it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Bus {
+    /// PCI functions: `/sys/bus/pci`.
+    Pci,
+    /// Device tree nodes: `/sys/bus/platform`.
+    Platform,
+}
+
+/// What `devmgr` has said about drivers: which it has, and which drives
+/// which device. `devmgr` owns these facts -- its table matches devices to
+/// drivers, and it starts and stops them -- and the kernel only keeps what it
+/// was told, for sysfs to show (`docs/SYSFS.md` §3).
+#[derive(Debug)]
+struct Bindings {
+    /// The drivers the manifest names, in DEVICES' order: a driver's number
+    /// in every message is its place here.
+    names: Vec<[u8; NAME_BYTES]>,
+    /// The drivers `devmgr` said it can start, each with its bus.
+    drivers: Vec<(u16, Bus)>,
+    /// Which driver drives which device, by the device's index in
+    /// `device::devices()`.
+    bound: Vec<(usize, u16)>,
+}
+
+static BINDINGS: SpinLock<Bindings> = SpinLock::new(Bindings {
+    names: Vec::new(),
+    drivers: Vec::new(),
+    bound: Vec::new(),
+});
+
+/// Requests sent and not yet collected: each token, and `devmgr`'s answer
+/// once DONE has come.
+static PENDING: SpinLock<Vec<(u16, Option<u32>)>> = SpinLock::new(Vec::new());
+
+/// Woken whenever an answer arrives, or `devmgr` goes.
+static ANSWERED: WaitQueue = WaitQueue::new();
+
+/// The next request's token.
+static NEXT_TOKEN: AtomicU16 = AtomicU16::new(1);
+
+/// The drivers `devmgr` can start on `bus`: each one's number and name.
+pub(crate) fn drivers_on(bus: Bus) -> Vec<(u16, Vec<u8>)> {
+    let bindings = BINDINGS.lock();
+    bindings
+        .drivers
+        .iter()
+        .filter(|(_, on)| *on == bus)
+        .filter_map(|&(driver, _)| {
+            let name = bindings.names.get(usize::from(driver))?;
+            Some((driver, name_bytes(name).to_vec()))
+        })
+        .collect()
+}
+
+/// The driver that drives the device with index `device`, if one does.
+pub(crate) fn driver_of(device: usize) -> Option<(u16, Vec<u8>)> {
+    let bindings = BINDINGS.lock();
+    let (_, driver) = bindings.bound.iter().find(|(at, _)| *at == device)?;
+    let name = bindings.names.get(usize::from(*driver))?;
+    Some((*driver, name_bytes(name).to_vec()))
+}
+
+/// The devices `driver` drives, by index, ascending.
+pub(crate) fn bound_to(driver: u16) -> Vec<usize> {
+    let mut devices: Vec<usize> = BINDINGS
+        .lock()
+        .bound
+        .iter()
+        .filter(|(_, by)| *by == driver)
+        .map(|(device, _)| *device)
+        .collect();
+    devices.sort_unstable();
+    devices
+}
+
+/// What a write to `bind` or `unbind` asks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Request {
+    /// Start the driver on the device.
+    Bind,
+    /// Stop the driver the device has.
+    Unbind,
+}
+
+/// Ask `devmgr` to bind `driver` to the device with index `device`, or to
+/// unbind it, and wait for the answer. The caller has checked what Linux
+/// checks before it asks a driver anything: that the device exists on the
+/// driver's bus, and for an unbind that this driver drives it.
+///
+/// # Errors
+///
+/// `ENODEV` when `devmgr` will not -- no such device, or the driver does not
+/// take it -- or is not there; `EBUSY` when the device already has a
+/// driver; `EIO` when the driver was started and did not publish, or
+/// `devmgr` went; `ETIMEDOUT` when no answer came within the patience.
+pub(crate) fn request(kind: Request, device: usize, driver: u16) -> Result<(), Errno> {
+    let channel = CHANNEL.lock().clone().ok_or(Errno::ENODEV)?;
+    let wire_device = u32::try_from(device).map_err(|_| Errno::ENODEV)?;
+    let token = NEXT_TOKEN.fetch_add(1, Ordering::Relaxed);
+    let message = match kind {
+        Request::Bind => Message::Bind {
+            device: wire_device,
+            driver,
+            token,
+        },
+        Request::Unbind => Message::Unbind {
+            device: wire_device,
+            driver,
+            token,
+        },
+    };
+    PENDING.lock().push((token, None));
+    let sent = channel.write(message.encode().to_vec(), 0, || {
+        Ok::<Vec<Transfer>, Infallible>(Vec::new())
+    });
+    let answered = sent.is_ok()
+        && ANSWERED.wait_until_deadline(
+            || {
+                PENDING
+                    .lock()
+                    .iter()
+                    .any(|(at, answer)| *at == token && answer.is_some())
+            },
+            timer::now_nanos().saturating_add(REQUEST_PATIENCE_NANOS),
+        );
+    let answer = {
+        let mut pending = PENDING.lock();
+        let at = pending.iter().position(|(at, _)| *at == token);
+        at.map(|at| pending.remove(at))
+            .and_then(|(_, answer)| answer)
+    };
+    let result = match (sent, answered, answer) {
+        (Err(_), _, _) => Err(Errno::EIO),
+        (Ok(_), false, _) => Err(Errno::ETIMEDOUT),
+        (Ok(_), true, Some(ANSWER_DONE)) => Ok(()),
+        (Ok(_), true, Some(ANSWER_NO_DEVICE)) => Err(Errno::ENODEV),
+        (Ok(_), true, Some(ANSWER_BUSY)) => Err(Errno::EBUSY),
+        (Ok(_), true, _) => Err(Errno::EIO),
+    };
+    let what = match kind {
+        Request::Bind => "bind",
+        Request::Unbind => "unbind",
+    };
+    let at = device::devices().get(device).map(|node| node.location());
+    let name = BINDINGS
+        .lock()
+        .names
+        .get(usize::from(driver))
+        .map(|name| name_bytes(name).to_vec())
+        .unwrap_or_default();
+    let name = core::str::from_utf8(&name).unwrap_or("?");
+    match (at, result) {
+        (Some(at), Ok(())) => crate::console::println!(
+            "  devmgr   {what} of {name} and the device at {at}, asked through sysfs: done"
+        ),
+        (Some(at), Err(errno)) => {
+            let said = match errno {
+                Errno::ENODEV => "ENODEV",
+                Errno::EBUSY => "EBUSY",
+                Errno::ETIMEDOUT => "ETIMEDOUT",
+                _ => "EIO",
+            };
+            crate::console::println!(
+                "  devmgr   {what} of {name} and the device at {at}, asked through sysfs: {said}"
+            );
+        }
+        (None, _) => {}
+    }
+    result
+}
+
+/// Take in what a message from `devmgr` says about drivers. Answers whether
+/// it was such a message.
+fn record(message: Message) -> bool {
+    match message {
+        Message::Driver { driver, bus } => {
+            let bus = match bus {
+                BUS_PCI => Bus::Pci,
+                BUS_PLATFORM => Bus::Platform,
+                _ => return true,
+            };
+            let Ok(driver) = u16::try_from(driver) else {
+                return true;
+            };
+            let mut bindings = BINDINGS.lock();
+            if !bindings.drivers.iter().any(|(at, _)| *at == driver) {
+                bindings.drivers.push((driver, bus));
+            }
+        }
+        Message::Bound { device, driver } => {
+            let (Ok(device), Ok(driver)) = (usize::try_from(device), u16::try_from(driver)) else {
+                return true;
+            };
+            let mut bindings = BINDINGS.lock();
+            bindings.bound.retain(|(at, _)| *at != device);
+            bindings.bound.push((device, driver));
+        }
+        Message::Unbound { device } => {
+            if let Ok(device) = usize::try_from(device) {
+                BINDINGS.lock().bound.retain(|(at, _)| *at != device);
+            }
+        }
+        Message::Done { token, answer } => {
+            if let Some((_, slot)) = PENDING.lock().iter_mut().find(|(at, _)| *at == token) {
+                *slot = Some(answer);
+            }
+            ANSWERED.wake_all();
+        }
+        _ => return false,
+    }
+    true
+}
+
+/// `devmgr` is gone: nothing it said about drivers holds any longer, and no
+/// request will be answered.
+fn forget_devmgr() {
+    {
+        let mut bindings = BINDINGS.lock();
+        bindings.drivers.clear();
+        bindings.bound.clear();
+    }
+    for (_, answer) in PENDING.lock().iter_mut() {
+        if answer.is_none() {
+            *answer = Some(ANSWER_FAILED);
+        }
+    }
+    ANSWERED.wake_all();
+}
+
 /// What `devmgr` reported, for the boot log.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Report {
@@ -82,6 +323,7 @@ pub(crate) fn start() -> Result<Option<Report>, &'static str> {
         return Ok(None);
     };
     let names = manifest(&ctx);
+    BINDINGS.lock().names.clone_from(&names);
     let mut images = Vec::new();
     for name in &names {
         let mut path = DRIVERS.to_vec();
@@ -281,10 +523,12 @@ fn report(channel: &Endpoint) -> Result<(u32, u32), &'static str> {
         match channel.read(CHANNEL_MAX_BYTES, CHANNEL_MAX_HANDLES, false) {
             Ok(message) => {
                 crate::object::dispose(message.handles.into_iter().map(|(object, _)| object));
-                return match Message::decode(&message.bytes) {
-                    Ok(Message::Report { started, failed }) => Ok((started, failed)),
-                    _ => Err("devmgr said something other than REPORT first"),
-                };
+                // Its drivers, and each one it starts, come before REPORT.
+                match Message::decode(&message.bytes) {
+                    Ok(Message::Report { started, failed }) => return Ok((started, failed)),
+                    Ok(said) if record(said) => continue,
+                    _ => return Err("devmgr said something other than REPORT first"),
+                }
             }
             Err(ReadError::Empty) => {}
             Err(_) => return Err("devmgr closed its channel before reporting"),
@@ -320,7 +564,10 @@ fn listen(_: usize) {
                     Ok(Message::Restarted { location, restarts }) => crate::console::println!(
                         "  devmgr   the driver of {location:#010x} was started again and published (restart {restarts})"
                     ),
-                    _ => {}
+                    Ok(said) => {
+                        let _ = record(said);
+                    }
+                    Err(_) => {}
                 }
             }
             Err(ReadError::Empty) => {
@@ -334,6 +581,7 @@ fn listen(_: usize) {
                 );
             }
             Err(_) => {
+                forget_devmgr();
                 crate::console::println!(
                     "  devmgr   devmgr is gone; no driver will be started again"
                 );

@@ -1,8 +1,9 @@
 //! The messages, byte for byte.
 
 use super::{
-    DEVICES, DEVICES_HEADER_BYTES, DEVICES_MAX_BYTES, DIED, Devices, DevicesView, FLAG_FIRST,
-    MAX_DRIVERS, Malformed, Message, NAME_BYTES, PUBLISHED, REPORT, RESTARTED, SHORT_BYTES,
+    ANSWER_BUSY, ANSWER_DONE, BIND, BOUND, BUS_PLATFORM, DEVICES, DEVICES_HEADER_BYTES,
+    DEVICES_MAX_BYTES, DIED, DONE, DRIVER, Devices, DevicesView, FLAG_FIRST, MAX_DRIVERS,
+    Malformed, Message, NAME_BYTES, PUBLISHED, REPORT, RESTARTED, SHORT_BYTES, UNBIND, UNBOUND,
 };
 
 fn name(text: &str) -> [u8; NAME_BYTES] {
@@ -165,8 +166,8 @@ fn the_short_messages_round_trip_and_are_sixteen_bytes() {
 fn bytes_that_are_not_a_message_are_malformed() {
     assert_eq!(Message::decode(&[1, 0, 0]), Err(Malformed::Short));
     assert_eq!(
-        Message::decode(&[9, 0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
-        Err(Malformed::UnknownType(9))
+        Message::decode(&[99, 0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+        Err(Malformed::UnknownType(99))
     );
     assert_eq!(
         Message::decode(&[2, 0, 0, 0, 16, 0, 0, 0]),
@@ -196,5 +197,92 @@ fn bytes_that_are_not_a_message_are_malformed() {
         DevicesView::decode(&lying[..len]),
         Err(Malformed::Length),
         "a name count the bytes do not carry"
+    );
+}
+
+#[test]
+fn the_binding_messages_round_trip() {
+    for message in [
+        Message::Driver {
+            driver: 3,
+            bus: BUS_PLATFORM,
+        },
+        Message::Bound {
+            device: 5,
+            driver: 2,
+        },
+        Message::Unbound { device: 35 },
+        Message::Bind {
+            device: 5,
+            driver: 2,
+            token: 0xfffe,
+        },
+        Message::Unbind {
+            device: 5,
+            driver: 2,
+            token: 1,
+        },
+        Message::Done {
+            token: 0xfffe,
+            answer: ANSWER_BUSY,
+        },
+        Message::Done {
+            token: 0,
+            answer: ANSWER_DONE,
+        },
+    ] {
+        let bytes = message.encode();
+        assert_eq!(
+            bytes[4..8],
+            (SHORT_BYTES as u32).to_le_bytes(),
+            "{message:?}"
+        );
+        assert_eq!(Message::decode(&bytes), Ok(message), "{message:?}");
+    }
+}
+
+#[test]
+fn the_binding_messages_are_laid_out_as_documented() {
+    let bind = Message::Bind {
+        device: 7,
+        driver: 0x0102,
+        token: 0x0304,
+    }
+    .encode();
+    assert_eq!(bind[0..4], BIND.to_le_bytes());
+    assert_eq!(bind[8..12], 7_u32.to_le_bytes(), "device");
+    assert_eq!(bind[12..14], 0x0102_u16.to_le_bytes(), "driver");
+    assert_eq!(bind[14..16], 0x0304_u16.to_le_bytes(), "token");
+    let unbind = Message::Unbind {
+        device: 7,
+        driver: 1,
+        token: 2,
+    }
+    .encode();
+    assert_eq!(unbind[0..4], UNBIND.to_le_bytes());
+    assert_eq!(unbind[12..16], [1, 0, 2, 0], "driver, then token");
+    let done = Message::Done {
+        token: 9,
+        answer: 3,
+    }
+    .encode();
+    assert_eq!(done[0..4], DONE.to_le_bytes());
+    assert_eq!(done[8..12], 9_u32.to_le_bytes(), "token");
+    assert_eq!(done[12..16], 3_u32.to_le_bytes(), "answer");
+    assert_eq!(
+        Message::Driver { driver: 1, bus: 1 }.encode()[0..4],
+        DRIVER.to_le_bytes()
+    );
+    assert_eq!(
+        Message::Bound {
+            device: 1,
+            driver: 1
+        }
+        .encode()[0..4],
+        BOUND.to_le_bytes()
+    );
+    assert_eq!(
+        Message::Unbound { device: 1 }.encode()[0..4],
+        UNBOUND.to_le_bytes()
     );
 }

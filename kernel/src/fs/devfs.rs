@@ -329,6 +329,79 @@ struct Disk {
     minor: u32,
     /// The disk.
     device: Arc<dyn BlockDevice>,
+    /// Where it came from, for sysfs.
+    origin: Origin,
+}
+
+/// Where a disk came from: the device node its driver serves, and what the
+/// driver said the disk is called. sysfs shows the disk inside the node's
+/// directory and its serial in `serial`; nothing else here reads either.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct Origin {
+    /// The device node, by its index in `device::devices()`; `None` for a
+    /// disk no node backs, which sysfs puts under `devices/virtual`.
+    pub(crate) node: Option<usize>,
+    /// The serial number the driver reported, NUL-padded; all zeros for
+    /// none.
+    pub(crate) serial: [u8; 20],
+}
+
+/// A registered disk, copied out for sysfs.
+#[derive(Debug, Clone)]
+pub(crate) struct DiskInfo {
+    /// Its registration serial: never reused, so a name that goes and comes
+    /// back is another disk.
+    pub(crate) registration: u64,
+    /// Its name in `/dev`.
+    pub(crate) name: Vec<u8>,
+    /// Its device number's major half.
+    pub(crate) major: u32,
+    /// And minor half.
+    pub(crate) minor: u32,
+    /// The disk.
+    pub(crate) device: Arc<dyn BlockDevice>,
+    /// Where it came from.
+    pub(crate) origin: Origin,
+}
+
+/// Every registered disk, in registration order, copied out so that the
+/// caller may ask each device anything with no lock held.
+pub(crate) fn disks() -> Vec<DiskInfo> {
+    disks_from(0)
+        .into_iter()
+        .map(|disk| DiskInfo {
+            registration: disk.serial,
+            name: disk.name().to_vec(),
+            major: disk.major,
+            minor: disk.minor,
+            origin: disk.origin,
+            device: disk.device,
+        })
+        .collect()
+}
+
+/// A static node of the table: its name, numbers and permission bits, for
+/// sysfs's `devices/virtual` and `/sys/dev/char`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CharNode {
+    /// Its name in `/dev`.
+    pub(crate) name: &'static [u8],
+    /// Its number.
+    pub(crate) major: u32,
+    /// And minor half.
+    pub(crate) minor: u32,
+    /// Its permission bits.
+    pub(crate) permissions: u32,
+}
+
+/// The table's nodes, in the table's order.
+pub(crate) fn char_nodes() -> impl Iterator<Item = CharNode> {
+    DEVICES.iter().map(|device| CharNode {
+        name: device.name,
+        major: device.major,
+        minor: device.minor,
+        permissions: device.permissions,
+    })
 }
 
 impl Disk {
@@ -431,6 +504,21 @@ pub(crate) fn register_block(
     minor: u32,
     device: Arc<dyn BlockDevice>,
 ) -> core::result::Result<BlockRegistration, BlockRefused> {
+    register_block_from(name, major, minor, device, Origin::default())
+}
+
+/// [`register_block`], saying where the disk came from.
+///
+/// # Errors
+///
+/// As [`register_block`].
+pub(crate) fn register_block_from(
+    name: &[u8],
+    major: u32,
+    minor: u32,
+    device: Arc<dyn BlockDevice>,
+    origin: Origin,
+) -> core::result::Result<BlockRegistration, BlockRefused> {
     let valid = !name.is_empty()
         && name
             .iter()
@@ -470,6 +558,7 @@ pub(crate) fn register_block(
         major,
         minor,
         device,
+        origin,
     });
     Ok(BlockRegistration {
         major,

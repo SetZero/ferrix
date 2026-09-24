@@ -42,7 +42,8 @@ use ferrix_pci::capability::{
 };
 use ferrix_pci::ecam::{BYTES_PER_BUS, Window};
 use ferrix_pci::header::{
-    CLASS_BRIDGE, COMMAND, COMMAND_MEMORY_SPACE, Endpoint, HeaderKind, SUBCLASS_HOST_BRIDGE,
+    BusNumbers, CLASS_BRIDGE, COMMAND, COMMAND_MEMORY_SPACE, Endpoint, HeaderKind,
+    SUBCLASS_HOST_BRIDGE,
 };
 use ferrix_pci::virtio::{self as virtio_pci, TYPE_ENTROPY, Transport};
 use ferrix_pci::walk::{Function, Walk};
@@ -438,12 +439,22 @@ fn check_host(
             .window
             .offset(function.address, 0, 1)
             .and_then(|offset| host.phys.checked_add(offset));
+        // What sysfs shows beside the identity: the board's ids for an
+        // endpoint, the bus behind a bridge.
+        let subsystem = Endpoint::read(&space, function.address).map_or((0, 0), |endpoint| {
+            (endpoint.subsystem_vendor, endpoint.subsystem)
+        });
+        let secondary_bus = BusNumbers::read(&space, function.address)
+            .ok()
+            .map(|numbers| numbers.secondary);
         nodes.push(DeviceNode::pci(
             function.address,
             &Seen {
                 config_phys,
                 identity: &function.identity,
                 transport: transport.as_ref(),
+                subsystem,
+                secondary_bus,
             },
             &regions,
             msix.as_ref(),

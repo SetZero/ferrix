@@ -43,7 +43,7 @@ works unchanged:
 
 | | Interface | What init uses it for |
 |---|---|---|
-| C1 | `mount -t cgroup2` at `/sys/fs/cgroup`, with `mkdir` and `rmdir` making and removing cgroups. Until sysfs exists, init mounts a small tmpfs at `/sys` to hold the mount point | the tree of slices and services (§5.1) |
+| C1 | `mount -t cgroup2` at `/sys/fs/cgroup`, with `mkdir` and `rmdir` making and removing cgroups. The mount point is sysfs's `fs/cgroup` (`docs/SYSFS.md`), which the kernel mounts on `/sys` at boot | the tree of slices and services (§5.1) |
 | C2 | `cgroup.procs`: read to list members, write to move one; `fork` and `clone` put the child in the parent's cgroup | membership, and a service's forked children staying its own |
 | C3 | `clone3` with `CLONE_INTO_CGROUP`, which answers `ENOSYS` today (`kernel/src/syscall/family.rs`) | starting a service already inside its cgroup, with no window outside it (§5.2) |
 | C4 | `cgroup.events`, with `populated` and `frozen`, waking `poll`/`epoll` with `POLLPRI` when it changes (there is no `inotify`) | knowing a service has ended, all of it |
@@ -641,10 +641,10 @@ nothing and names `/sbin/init`, so it reaches init either way.
 
 Init then:
 
-1. Mounts `/run` (tmpfs), then `/sys` (a tmpfs, until sysfs exists), then
-   cgroup2 at `/sys/fs/cgroup`. It moves itself into `init.scope` and enables
-   the controllers the kernel has (§5.1). `/proc`, `/dev` and `/tmp` are
-   already mounted by the kernel today; they have `.mount` units, whose mount
+1. Mounts `/run` (tmpfs), then cgroup2 at `/sys/fs/cgroup`. It moves itself
+   into `init.scope` and enables the controllers the kernel has (§5.1).
+   `/proc`, `/dev`, `/sys` and `/tmp` are already mounted by the kernel
+   today; they have `.mount` units, whose mount
    is skipped when the kernel already mounted them. That way a kernel that
    stops mounting them changes nothing above it.
 2. Receives K2's first message.

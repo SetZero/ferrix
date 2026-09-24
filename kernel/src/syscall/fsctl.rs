@@ -37,9 +37,11 @@
 //! a read-only medium — when the disk takes no writes or the volume is one
 //! it will not maintain, a snapshot or a quota-enabled volume among them.
 //!
-//! The types that do not exist yet -- `sysfs`, `devpts`, `cgroup2` and every
-//! other -- are `ENODEV`, Linux's answer for a type the kernel was built
-//! without; they are added to [`filesystem_named`] as they arrive.
+//! `sysfs` and `cgroup2` are views of the device tree and the job tree, a new
+//! instance of each over the one kernel. The types that do not exist yet --
+//! `devpts` and every other -- are `ENODEV`, Linux's answer for a type the
+//! kernel was built without; they are added to [`filesystem_named`] as they
+//! arrive.
 //!
 //! The per-mount flags `MS_NOSUID`, `MS_NODEV`, `MS_NOEXEC`, `MS_RELATIME`
 //! and the rest of the access-time ones are accepted for every type and do
@@ -386,8 +388,8 @@ pub(crate) fn sys_chroot(process: &Process, at: u64) -> Result<usize, Errno> {
 /// filesystems, on the disk `source` names for btrfs.
 ///
 /// The names are the ones Linux registers, and the ones `/proc/filesystems`
-/// lists. `sysfs` and `devpts` join this match when they exist; until then
-/// they fall to `ENODEV` with every name Linux would not know either.
+/// lists. `devpts` joins this match when it exists; until then it falls to
+/// `ENODEV` with every name Linux would not know either.
 /// `cgroup2` mounts read-only as well as writable, as on Linux, where a
 /// read-only mount is how a container is shown the tree it may not change;
 /// here the flag is not yet enforced on it.
@@ -403,6 +405,10 @@ fn filesystem_named(
         b"proc" => Ok(Arc::new(Procfs::new())),
         b"devtmpfs" => Ok(Arc::new(Devfs::new())),
         b"cgroup2" => Ok(Arc::new(fs::cgroupfs::Cgroupfs::new())),
+        // Read-only as well as writable, as on Linux, where a container is
+        // shown `/sys` read-only; nothing in it takes a write but `bind` and
+        // `unbind`, and the flag is not yet enforced on them.
+        b"sysfs" => Ok(Arc::new(fs::sysfs::Sysfs::new())),
         b"btrfs" => {
             if source == 0 {
                 return Err(Errno::EINVAL);

@@ -95,6 +95,28 @@ static STARTING: SpinLock<Vec<Start>> = SpinLock::new(Vec::new());
 /// Devices that have a ring.
 static CLAIMED: SpinLock<Vec<Arc<DeviceNode>>> = SpinLock::new(Vec::new());
 
+/// Which device node each interface a ring added is served from, by the
+/// interface's index: what sysfs shows the interface inside. The net core
+/// knows interfaces and not devices, and this is where the two meet.
+static PLACED: SpinLock<Vec<(u32, usize)>> = SpinLock::new(Vec::new());
+
+/// The device node the interface with index `interface` is served from, by
+/// its index in `device::devices()`; `None` for one no ring added, the
+/// loopback interface among them.
+pub(crate) fn node_of(interface: u32) -> Option<usize> {
+    PLACED
+        .lock()
+        .iter()
+        .find(|(index, _)| *index == interface)
+        .map(|(_, node)| *node)
+}
+
+/// Take interface `index` out of the net core and forget where it was.
+fn forget(index: u32) {
+    PLACED.lock().retain(|(placed, _)| *placed != index);
+    net::core().forget_interface(index);
+}
+
 /// Every ring's task by its ring's number, so a check that ended one ring
 /// can wait for that ring's task and no other: a machine with a real network
 /// adapter has a driver's ring running for the life of the machine.
@@ -338,6 +360,7 @@ fn take_up(start: &Start, message: &ChannelMessage) -> Result<Serving, Refusal> 
         | if flags.broadcast { IFF_BROADCAST } else { 0 }
         | if flags.multicast { IFF_MULTICAST } else { 0 };
     let index = core.add_interface(interface);
+    PLACED.lock().push((index, start.device.index()));
     core.set_carrier(index, flags.carrier);
 
     let kernel_port = Port::new();
@@ -362,7 +385,7 @@ fn take_up(start: &Start, message: &ChannelMessage) -> Result<Serving, Refusal> 
         .write(ready, 1, || Ok::<Vec<Transfer>, Infallible>(vec![handed]))
         .is_err()
     {
-        core.forget_interface(index);
+        forget(index);
         return Err(Refusal::Malformed);
     }
     Ok(Serving {
@@ -672,7 +695,7 @@ impl Serving {
     /// End the ring: take the interface down and give up every slot.
     fn finish(&mut self) {
         let abandoned = self.side.abandon();
-        net::core().forget_interface(self.interface);
+        forget(self.interface);
         let _ = abandoned;
         let _ = PACKET_SIGNAL;
     }

@@ -966,6 +966,17 @@ package FerrixStructure {
                  * Linux printed, and the maps parser the kernel's boot check
                  * reads its own output back with. */
         }
+        #implemented part sysfs : LibraryCrate {
+            attribute :>> path = "libs/sysfs";
+            attribute :>> forbidsUnsafe = true;
+            attribute :>> hostTests = 15;
+            doc /* The text of /sys as pure functions (docs/SYSFS.md): PCI
+                 * identifiers, modalias and uevent, processor lists, input
+                 * capability bitmaps in words of the kernel's long,
+                 * connector names, kernfs's relative link targets, and the
+                 * name a write to bind or unbind gives; pinned against
+                 * Linux's and fuzzed (sysfs_names). */
+        }
         #implemented part virtio : LibraryCrate {
             attribute :>> path = "libs/virtio";
             attribute :>> forbidsUnsafe = false;
@@ -1397,7 +1408,7 @@ package FerrixStructure {
         dependency from kernelCrate to acpi, blkRing, blockQueue, bootinfo, btrfs, btrfsVfs,
             btrfsWrite, crng, devmgrProto, displayctl, elf, fbtext, fdt, frameCrate, heap,
             inputctl, linuxAbi, nativeAbi, netCore, netlink, netRing, nettcp, netwire, objects,
-            paging, pci, procfs, qr, renderctl, sched, sync, ustack, vfs, virtio, vma;
+            paging, pci, procfs, qr, renderctl, sched, sync, sysfs, ustack, vfs, virtio, vma;
         dependency from bootCrate to bootinfo, elf, paging;
         dependency from xtask to elf, netwire;
         dependency from fuzz to acpi, blkRing, blockQueue, btrfs, cpio, displayctl, elf, fdt,

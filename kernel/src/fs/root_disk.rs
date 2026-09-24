@@ -6,7 +6,7 @@
 //! Linux's answer is `switch_root`, and this is Ferrix's: once the driver is
 //! serving the disk, [`switch`] mounts the btrfs volume on it at
 //! [`SYSROOT`], installs the system on it from the same archive, mounts
-//! `/dev`, `/proc` and `/tmp` inside it, and from then on every process the
+//! `/dev`, `/proc`, `/sys` and `/tmp` inside it, and from then on every process the
 //! kernel makes has that volume as its `/` ([`process_context`]). The
 //! kernel's own checks keep the tmpfs, where their fixtures are mounted.
 //!
@@ -53,7 +53,7 @@ use ferrix_vfs::{Access, Context, Errno, FileSystem, Location, OpenFlags, SetAtt
 
 use crate::block_ring::VIRTIO_BLK_MAJOR;
 use crate::console::println;
-use crate::fs::{devfs, procfs};
+use crate::fs::{devfs, procfs, sysfs};
 use crate::{fs, sched};
 
 /// The label the root volume carries: `mkfs.btrfs -L ferrix-root`.
@@ -248,26 +248,28 @@ fn write_stamp(inside: &Context, stamp: &[u8]) -> Result<(), Errno> {
     Ok(())
 }
 
-/// `/dev`, `/proc` and `/tmp` inside the volume, as `fs::init` makes them in
-/// the tmpfs, so a process whose `/` is the volume finds them where it looks.
+/// `/dev`, `/proc`, `/sys` and `/tmp` inside the volume, as `fs::init` makes
+/// them in the tmpfs, so a process whose `/` is the volume finds them where
+/// it looks.
 fn mount_kernel_filesystems(inside: &Context) -> Result<(), &'static str> {
     let ns = fs::namespace();
-    let mounts: [(&[u8], Arc<dyn FileSystem>, u32); 3] = [
+    let mounts: [(&[u8], Arc<dyn FileSystem>, u32); 4] = [
         (b"/dev", Arc::new(devfs::Devfs::new()), 0o755),
         (b"/proc", Arc::new(procfs::Procfs::new()), 0o555),
+        (b"/sys", Arc::new(sysfs::Sysfs::new()), 0o555),
         (b"/tmp", fs::new_tmpfs(), 0o1777),
     ];
     for (path, filesystem, mode) in mounts {
         match ns.mkdir(inside, None, path, mode) {
             Ok(()) | Err(Errno::EEXIST) => {}
-            Err(_) => return Err("has no room for /dev, /proc or /tmp"),
+            Err(_) => return Err("has no room for /dev, /proc, /sys or /tmp"),
         }
         let at = ns
             .resolve(inside, None, path, true)
-            .map_err(|_| "has no room for /dev, /proc or /tmp")?;
+            .map_err(|_| "has no room for /dev, /proc, /sys or /tmp")?;
         let _ = ns
             .mount(filesystem, &at)
-            .map_err(|_| "could not carry /dev, /proc or /tmp")?;
+            .map_err(|_| "could not carry /dev, /proc, /sys or /tmp")?;
     }
     // Sticky and writable by everyone, as every Unix `/tmp` is.
     let tmp = ns

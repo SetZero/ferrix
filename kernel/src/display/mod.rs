@@ -154,6 +154,9 @@ pub(crate) struct Card {
     /// its pixel clock was set for, rather than a virtual one that shows any
     /// size it is handed.
     pub(crate) hdmi: bool,
+    /// The device node the card is served from, by its index in
+    /// `device::devices()`: where sysfs shows it.
+    pub(crate) node: usize,
 }
 
 /// The range of the card VMO a buffer id was given.
@@ -960,6 +963,7 @@ fn accept(start: &Start, message: &ChannelMessage) -> Result<Arc<Card>, Refusal>
     let index = NUMBERS.take();
     let card = Arc::new(Card {
         index,
+        node: start.device.index(),
         vmo: Arc::clone(&vmo),
         modes: hello.modes,
         scanouts: usize::from(hello.scanouts),

@@ -250,3 +250,72 @@ before `devmgr` exists; `devmgr` then replaces that parent for the running
 system, with no change to the driver, and the boot check's line above is what
 `xtask` reads. `devmgr` is the last program on stage 10's list; the BAR trust
 row is beside it, not on the path.
+
+## 7. Drivers and bindings, for sysfs
+
+`devmgr` owns two facts sysfs shows (`docs/SYSFS.md` §2): which drivers it
+can start, and which drives which device. It tells the kernel both on the
+bootstrap channel, and the kernel keeps what it was told
+(`kernel/src/devmgr.rs`). A device is named by its place among the devices
+the DEVICES messages carried, in order, and a driver by its place among
+their names: a device tree node has no PCI address to be told apart by.
+
+```
+DRIVER   devmgr -> kernel, 16 bytes
+0   4  type = 6
+4   4  length = 16
+8   4  driver     its place among DEVICES' names
+12  4  bus        1 PCI, 2 platform (a device tree node)
+
+BOUND    devmgr -> kernel, 16 bytes
+0   4  type = 7
+4   4  length = 16
+8   4  device     its place among DEVICES' devices
+12  4  driver
+
+UNBOUND  devmgr -> kernel, 16 bytes
+0   4  type = 8
+4   4  length = 16
+8   4  device
+12  4  reserved   zero
+```
+
+DRIVER comes once for each driver in the table whose image the initramfs
+carries, before any driver is started; BOUND once a driver has published, or,
+for a port or a bus host, which publish nothing, once it has started; UNBOUND
+once a driver has died or been unbound and its device quiesced, beside DIED.
+All of them may come before REPORT, and the kernel takes them there too.
+
+A write to a driver's `bind` or `unbind` in sysfs is a request, which `devmgr`
+answers:
+
+```
+BIND     kernel -> devmgr, 16 bytes
+0   4  type = 9
+4   4  length = 16
+8   4  device
+12  2  driver
+14  2  token      echoed in DONE
+
+UNBIND   kernel -> devmgr, 16 bytes
+0   4  type = 10
+4   4  length = 16
+8   4  device
+12  2  driver     the driver whose unbind was written
+14  2  token
+
+DONE     devmgr -> kernel, 16 bytes
+0   4  type = 11
+4   4  length = 16
+8   4  token
+12  4  answer     0 done, 1 no device, 2 busy, 3 failed
+```
+
+`devmgr` watches its channel for requests for the life of the machine, beside
+its drivers' deaths. UNBIND kills the driver's job; its death is quiesced as
+§4 says and answered with DONE instead of DIED, and nothing is started again.
+BIND starts the driver the way it was started at boot -- a disk's `blk` with
+the name it had -- and answers once it has published; a bind does not count
+against the restart budget. A request that arrives while `devmgr` waits for a
+driver to publish is kept, and answered after. `docs/SYSFS.md` §5 is the
+kernel's half and the errnos.

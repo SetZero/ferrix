@@ -1063,13 +1063,23 @@ fn version(process: &Process, arg: u64) -> Result<usize, Errno> {
     Ok(0)
 }
 
-fn connector(process: &Process, card: &Card, arg: u64) -> Result<usize, Errno> {
-    let mut connector: GetConnector = read_arg(process, arg)?;
-    let head = head_of(card, connector.connector_id, CONNECTOR).ok_or(Errno::ENOENT)?;
-    let preferred = card.modes().get(head).copied().filter(|mode| mode.enabled);
-    // A board's HDMI output runs the one mode its pixel clock was set for; a
-    // virtual card shows any size.
-    let modes: Vec<ModeInfo> = preferred
+/// The type every connector of `card` has.
+const fn connector_type(card: &Card) -> u32 {
+    if card.hdmi {
+        drm::CONNECTOR_HDMIA
+    } else {
+        drm::CONNECTOR_VIRTUAL
+    }
+}
+
+/// The modes head `head` of `card` lists: none while nothing is connected;
+/// the one its pixel clock was set for on a board's HDMI output; the
+/// preferred size and the standard ones on a virtual card, which shows any.
+fn modes_of(card: &Card, head: usize) -> Vec<ModeInfo> {
+    card.modes()
+        .get(head)
+        .copied()
+        .filter(|mode| mode.enabled)
         .map(|mode| {
             if card.hdmi {
                 vec![mode_for(mode.width, mode.height)]
@@ -1077,7 +1087,46 @@ fn connector(process: &Process, card: &Card, arg: u64) -> Result<usize, Errno> {
                 listed_modes(mode.width, mode.height)
             }
         })
-        .unwrap_or_default();
+        .unwrap_or_default()
+}
+
+/// One connector, as sysfs shows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ConnectorView {
+    /// `DRM_MODE_CONNECTOR_*`.
+    pub(crate) kind: u32,
+    /// Its number among the card's connectors of that type, from one.
+    pub(crate) kind_index: u32,
+    /// Whether a display is there.
+    pub(crate) connected: bool,
+    /// What `modes` lists, preferred first, as `WxH`.
+    pub(crate) modes: Vec<(u32, u32)>,
+}
+
+/// Every connector of `card`, as the connector ioctl reports each: the same
+/// heads, types, numbers and modes, from the same functions.
+pub(crate) fn connectors(card: &Card) -> Vec<ConnectorView> {
+    (0..heads(card))
+        .map(|head| {
+            let modes = modes_of(card, head);
+            ConnectorView {
+                kind: connector_type(card),
+                kind_index: u32::try_from(head).unwrap_or(0).saturating_add(1),
+                connected: !modes.is_empty(),
+                modes: modes
+                    .iter()
+                    .map(|mode| (u32::from(mode.hdisplay), u32::from(mode.vdisplay)))
+                    .collect(),
+            }
+        })
+        .collect()
+}
+
+fn connector(process: &Process, card: &Card, arg: u64) -> Result<usize, Errno> {
+    let mut connector: GetConnector = read_arg(process, arg)?;
+    let head = head_of(card, connector.connector_id, CONNECTOR).ok_or(Errno::ENOENT)?;
+    let preferred = card.modes().get(head).copied().filter(|mode| mode.enabled);
+    let modes = modes_of(card, head);
     if connector.modes_ptr != 0 && connector.count_modes as usize >= modes.len() {
         let mut bytes = vec![0u8; modes.len() * ModeInfo::SIZE];
         for (index, mode) in modes.iter().enumerate() {
@@ -1099,11 +1148,7 @@ fn connector(process: &Process, card: &Card, arg: u64) -> Result<usize, Errno> {
     connector.count_props = 0;
     connector.count_encoders = 1;
     connector.encoder_id = object_id(head, ENCODER);
-    connector.connector_type = if card.hdmi {
-        drm::CONNECTOR_HDMIA
-    } else {
-        drm::CONNECTOR_VIRTUAL
-    };
+    connector.connector_type = connector_type(card);
     // Linux numbers connectors of one type from one upwards, and a program
     // prints the name as `Virtual-1`, `Virtual-2`.
     connector.connector_type_id = u32::try_from(head).unwrap_or(0).saturating_add(1);

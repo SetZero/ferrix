@@ -23,6 +23,18 @@
 //!   8 location u32   12 status i32
 //! RESTARTED  devmgr -> kernel, 16 bytes
 //!   8 location u32   12 restarts u32 (this is the device's how-manieth)
+//! DRIVER     devmgr -> kernel, 16 bytes
+//!   8 driver u32 (its place among DEVICES' names)   12 bus u32
+//! BOUND      devmgr -> kernel, 16 bytes
+//!   8 device u32 (its place among DEVICES' devices)   12 driver u32
+//! UNBOUND    devmgr -> kernel, 16 bytes
+//!   8 device u32   12 reserved
+//! BIND       kernel -> devmgr, 16 bytes
+//!   8 device u32   12 driver u16   14 token u16
+//! UNBIND     kernel -> devmgr, 16 bytes
+//!   8 device u32   12 driver u16   14 token u16
+//! DONE       devmgr -> kernel, 16 bytes
+//!   8 token u32   12 answer u32
 //! ```
 //!
 //! A channel message carries at most 64 handles and a device takes two, so
@@ -44,6 +56,35 @@ pub const PUBLISHED: u32 = 3;
 pub const DIED: u32 = 4;
 /// RESTARTED's message type.
 pub const RESTARTED: u32 = 5;
+/// DRIVER's message type.
+pub const DRIVER: u32 = 6;
+/// BOUND's message type.
+pub const BOUND: u32 = 7;
+/// UNBOUND's message type.
+pub const UNBOUND: u32 = 8;
+/// BIND's message type.
+pub const BIND: u32 = 9;
+/// UNBIND's message type.
+pub const UNBIND: u32 = 10;
+/// DONE's message type.
+pub const DONE: u32 = 11;
+
+/// DRIVER's `bus`: the driver drives PCI functions.
+pub const BUS_PCI: u32 = 1;
+/// DRIVER's `bus`: the driver drives device tree nodes, which sysfs shows
+/// on the platform bus.
+pub const BUS_PLATFORM: u32 = 2;
+
+/// DONE's `answer`: the driver was bound or unbound.
+pub const ANSWER_DONE: u32 = 0;
+/// DONE's `answer`: `devmgr` has no such device, or not with that driver
+/// bound, or the driver does not take the device: Linux's `ENODEV`.
+pub const ANSWER_NO_DEVICE: u32 = 1;
+/// DONE's `answer`: the device already has a driver: `EBUSY`.
+pub const ANSWER_BUSY: u32 = 2;
+/// DONE's `answer`: the driver was started and did not publish, or the
+/// device could not be quiesced: `EIO`.
+pub const ANSWER_FAILED: u32 = 3;
 
 /// Bytes of the type and length every message starts with.
 pub const HEADER_BYTES: usize = 8;
@@ -239,6 +280,56 @@ pub enum Message {
         /// counting this one.
         restarts: u32,
     },
+    /// `devmgr` to kernel: its table has a driver for devices on `bus`, and
+    /// the image is here. Sent for each before any driver is started, so
+    /// sysfs lists every driver `devmgr` could bind, bound or not.
+    Driver {
+        /// The driver, by its place among DEVICES' names.
+        driver: u32,
+        /// [`BUS_PCI`] or [`BUS_PLATFORM`].
+        bus: u32,
+    },
+    /// `devmgr` to kernel: `driver` drives `device` now -- it published, or
+    /// for a driver that publishes nowhere, it started.
+    Bound {
+        /// The device, by its place among DEVICES' devices.
+        device: u32,
+        /// The driver, by its place among DEVICES' names.
+        driver: u32,
+    },
+    /// `devmgr` to kernel: `device` has no driver any more: it died, or it
+    /// was unbound, and the device is quiesced.
+    Unbound {
+        /// The device, by its place among DEVICES' devices.
+        device: u32,
+    },
+    /// Kernel to `devmgr`: a write to `bind` asks for `driver` on `device`.
+    Bind {
+        /// The device, by its place among DEVICES' devices.
+        device: u32,
+        /// The driver, by its place among DEVICES' names.
+        driver: u16,
+        /// Echoed in DONE.
+        token: u16,
+    },
+    /// Kernel to `devmgr`: a write to `unbind` asks for `driver` to let go
+    /// of `device`.
+    Unbind {
+        /// The device, by its place among DEVICES' devices.
+        device: u32,
+        /// The driver the write was made to, by its place among DEVICES'
+        /// names.
+        driver: u16,
+        /// Echoed in DONE.
+        token: u16,
+    },
+    /// `devmgr` to kernel: the request `token` is finished.
+    Done {
+        /// The request's token.
+        token: u16,
+        /// [`ANSWER_DONE`] or why not; any other number is a failure.
+        answer: u32,
+    },
 }
 
 impl Message {
@@ -251,6 +342,20 @@ impl Message {
             Message::Published { location } => (PUBLISHED, location, 0),
             Message::Died { location, status } => (DIED, location, status as u32),
             Message::Restarted { location, restarts } => (RESTARTED, location, restarts),
+            Message::Driver { driver, bus } => (DRIVER, driver, bus),
+            Message::Bound { device, driver } => (BOUND, device, driver),
+            Message::Unbound { device } => (UNBOUND, device, 0),
+            Message::Bind {
+                device,
+                driver,
+                token,
+            } => (BIND, device, pair(driver, token)),
+            Message::Unbind {
+                device,
+                driver,
+                token,
+            } => (UNBIND, device, pair(driver, token)),
+            Message::Done { token, answer } => (DONE, u32::from(token), answer),
         };
         put(&mut bytes, 0, &kind.to_le_bytes());
         put(&mut bytes, 4, &(SHORT_BYTES as u32).to_le_bytes());
@@ -267,7 +372,10 @@ impl Message {
     /// since it is decoded by [`DevicesView::decode`].
     pub fn decode(bytes: &[u8]) -> Result<Message, Malformed> {
         let (kind, declared) = header(bytes)?;
-        if !matches!(kind, REPORT | PUBLISHED | DIED | RESTARTED) {
+        if !matches!(
+            kind,
+            REPORT | PUBLISHED | DIED | RESTARTED | DRIVER | BOUND | UNBOUND | BIND | UNBIND | DONE
+        ) {
             return Err(Malformed::UnknownType(kind));
         }
         if declared != SHORT_BYTES || bytes.len() != SHORT_BYTES {
@@ -275,6 +383,7 @@ impl Message {
         }
         let a = u32_at(bytes, 8).ok_or(Malformed::Length)?;
         let b = u32_at(bytes, 12).ok_or(Malformed::Length)?;
+        let (low, high) = ((b & 0xffff) as u16, (b >> 16) as u16);
         Ok(match kind {
             REPORT => Message::Report {
                 started: a,
@@ -285,12 +394,37 @@ impl Message {
                 location: a,
                 restarts: b,
             },
+            DRIVER => Message::Driver { driver: a, bus: b },
+            BOUND => Message::Bound {
+                device: a,
+                driver: b,
+            },
+            UNBOUND => Message::Unbound { device: a },
+            BIND => Message::Bind {
+                device: a,
+                driver: low,
+                token: high,
+            },
+            UNBIND => Message::Unbind {
+                device: a,
+                driver: low,
+                token: high,
+            },
+            DONE => Message::Done {
+                token: (a & 0xffff) as u16,
+                answer: b,
+            },
             _ => Message::Died {
                 location: a,
                 status: b as i32,
             },
         })
     }
+}
+
+/// A driver and a token in one word: the driver in the low half.
+const fn pair(driver: u16, token: u16) -> u32 {
+    (driver as u32) | ((token as u32) << 16)
 }
 
 /// The type and declared length, or [`Malformed::Short`].

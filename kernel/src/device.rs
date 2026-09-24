@@ -500,6 +500,12 @@ pub(crate) struct Seen<'a> {
     pub(crate) identity: &'a Identity,
     /// Its virtio transport, if it has one.
     pub(crate) transport: Option<&'a Transport>,
+    /// A type 0 header's subsystem vendor and subsystem, or zeros for a
+    /// bridge, which has none.
+    pub(crate) subsystem: (u16, u16),
+    /// A bridge's secondary bus: the bus behind it, whose functions sysfs
+    /// shows inside its directory.
+    pub(crate) secondary_bus: Option<u8>,
 }
 
 /// What enumeration read off a PCI function and kept, because whoever starts
@@ -513,6 +519,14 @@ pub(crate) struct PciFunction {
     /// The class code: base class in bits 23:16, subclass in 15:8, the
     /// programming interface in 7:0.
     pub(crate) class: u32,
+    /// The revision identifier.
+    pub(crate) revision: u8,
+    /// Who built the board, and the board's own identifier: zeros for a
+    /// bridge. sysfs shows both, and libdrm reads both to name a card.
+    pub(crate) subsystem_vendor: u16,
+    pub(crate) subsystem: u16,
+    /// For a bridge, the bus directly behind it.
+    pub(crate) secondary_bus: Option<u8>,
     /// Physical address of the function's configuration space, if the host
     /// window placed it.
     pub(crate) config_phys: Option<u64>,
@@ -635,6 +649,10 @@ impl DeviceNode {
             class: (u32::from(identity.class.base) << 16)
                 | (u32::from(identity.class.sub) << 8)
                 | u32::from(identity.class.interface),
+            revision: identity.revision,
+            subsystem_vendor: seen.subsystem.0,
+            subsystem: seen.subsystem.1,
+            secondary_bus: seen.secondary_bus,
             config_phys: seen.config_phys,
             virtio: seen
                 .transport
@@ -699,6 +717,18 @@ impl DeviceNode {
     /// Where the device was found.
     pub(crate) const fn location(&self) -> Location {
         self.location
+    }
+
+    /// Its place in [`devices`]: what sysfs and `devmgr` call it by, since
+    /// a device tree node has no PCI address to be told apart by.
+    pub(crate) const fn index(&self) -> usize {
+        self.index
+    }
+
+    /// For a device tree node of a binding the kernel knows, which one
+    /// (`TREE_STM32_HDMI` and the rest); zero otherwise.
+    pub(crate) const fn binding(&self) -> u16 {
+        self.binding
     }
 
     /// How many input control channels the device may hold at once: one

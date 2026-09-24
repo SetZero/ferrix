@@ -50,6 +50,7 @@ members = [
     "libs/paging",
     "libs/procfs",
     "libs/cgroupfs",
+    "libs/sysfs",
     "libs/pci",
     "libs/qr",
     "libs/sched",
@@ -141,6 +142,7 @@ ferrix-vfs = { path = "libs/vfs" }
 ferrix-paging = { path = "libs/paging" }
 ferrix-procfs = { path = "libs/procfs" }
 ferrix-cgroupfs = { path = "libs/cgroupfs" }
+ferrix-sysfs = { path = "libs/sysfs" }
 ferrix-pci = { path = "libs/pci" }
 ferrix-sched = { path = "libs/sched" }
 

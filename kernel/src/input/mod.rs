@@ -111,6 +111,9 @@ pub(crate) struct Open {
 pub(crate) struct InputDevice {
     /// `event<index>`.
     pub(crate) index: u32,
+    /// The device node the device is served from, by its index in
+    /// `device::devices()`: where sysfs shows it. A USB host serves several.
+    pub(crate) node: usize,
     control: Arc<Endpoint>,
     /// The session: the device's declaration and its state, which every
     /// `EVIOC*` reads.
@@ -343,6 +346,7 @@ fn accept(start: &Start, message: &ChannelMessage) -> Result<Arc<InputDevice>, R
     let name = describe(&session);
     let device = Arc::new(InputDevice {
         index,
+        node: start.device.index(),
         control: Arc::clone(&start.control),
         session: SpinLock::new(session),
         opens: SpinLock::new(Vec::new()),

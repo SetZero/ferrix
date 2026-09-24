@@ -1389,7 +1389,7 @@ const FIRMWARE_SLOT: u32 = 0x0a;
 /// QEMU's own default for the first NIC, kept so that a guest driver, a DHCP
 /// lease and a packet capture all name the guest the same way whether the
 /// frames went through this gateway or through anything else.
-const GUEST_MAC: &str = "52:54:00:12:34:56";
+pub(crate) const GUEST_MAC: &str = "52:54:00:12:34:56";
 
 /// What `--net` leaves behind for the caller to hold: the gateway serving the
 /// guest's wire.

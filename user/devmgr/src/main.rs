@@ -17,7 +17,10 @@
 
 use ferrix_blkring::control::{Block, CONTROL_RIGHTS, DEVICE_RIGHTS, Message as Ring, Start};
 use ferrix_blkring::identity::DiskName;
-use ferrix_devmgr_proto::{DEVICES_MAX_BYTES, DevicesView, Message, NAME_BYTES, SHORT_BYTES};
+use ferrix_devmgr_proto::{
+    ANSWER_BUSY, ANSWER_DONE, ANSWER_FAILED, ANSWER_NO_DEVICE, BUS_PCI, BUS_PLATFORM,
+    DEVICES_MAX_BYTES, DevicesView, Message, NAME_BYTES, SHORT_BYTES,
+};
 use ferrix_native_abi::handle::Handle;
 use ferrix_native_abi::rights::Requested;
 use ferrix_native_abi::signals::Signals;
@@ -170,12 +173,26 @@ const fn restarted(kind: Kind) -> bool {
 
 /// A driver devmgr started, and what it keeps of it.
 struct Started {
+    /// The device's place among the DEVICES the kernel sent: what BOUND,
+    /// UNBOUND, BIND and UNBIND name it by.
+    index: u32,
+    /// The driver's place among DEVICES' names.
+    driver: u16,
     /// The device's PCI address word, as START and HELLO carry it.
     location: u32,
     /// What the device is, as `device_info` said, and which driver it takes:
     /// what starting it again needs.
     info: DeviceInfo,
     kind: Kind,
+    /// How it was started, disk name and all, so a bind starts it the same
+    /// way again.
+    plan: Plan,
+    /// Whether the last quiesce succeeded: a device that is still on is
+    /// never handed to a driver again.
+    quiesced: bool,
+    /// A write to `unbind` asked for this driver to go, and the token its
+    /// DONE carries once the death is seen and the device quiesced.
+    unbinding: Option<u16>,
     /// How many times its driver has been started again.
     restarts: u32,
     /// The device, for the quiesce when the driver dies.
@@ -226,16 +243,23 @@ fn run(channel: &Channel<Kernel>) -> Result<(), Step> {
         return Err(Step::Devices);
     };
     let port = port::create(Kernel).map_err(|_| Step::Port)?;
+    announce_drivers(channel, &given.names, given.drivers);
+    let mut inbox = Inbox::default();
     let mut started: [Option<Started>; MAX_DEVICES] = [const { None }; MAX_DEVICES];
     let mut count = 0_u32;
     let mut failed = 0_u32;
     let mut disks = 0_u32;
-    for (device, keep) in given.devices.into_iter().take(given.count).flatten() {
+    for (index, pair) in given.devices.into_iter().take(given.count).enumerate() {
+        let Some((device, keep)) = pair else {
+            continue;
+        };
+        let index = u32::try_from(index).unwrap_or(u32::MAX);
         let Ok(info) = device.info() else {
             failed += 1;
             continue;
         };
-        let Some((image, kind)) = driver_for(&info, &given.names, given.drivers, &given.images)
+        let Some((image, kind, driver)) =
+            driver_for(&info, &given.names, given.drivers, &given.images)
         else {
             // A device nobody drives: both handles close here.
             continue;
@@ -281,12 +305,26 @@ fn run(channel: &Channel<Kernel>) -> Result<(), Step> {
                 let published = if matches!(kind, Kind::Port | Kind::Host) {
                     true
                 } else {
-                    await_published(channel, &port, info.location, u64::from(count))
+                    await_published(channel, &port, info.location, u64::from(count), &mut inbox)
                 };
+                if published {
+                    let _ = channel.write(
+                        &Message::Bound {
+                            device: index,
+                            driver: u32::from(driver),
+                        }
+                        .encode(),
+                    );
+                }
                 *slot = Some(Started {
+                    index,
+                    driver,
                     location: info.location,
                     info,
                     kind,
+                    plan,
+                    quiesced: false,
+                    unbinding: None,
                     restarts: 0,
                     device: keep,
                     job,
@@ -300,6 +338,24 @@ fn run(channel: &Channel<Kernel>) -> Result<(), Step> {
         }
     }
 
+    report(channel, &mut started, failed)?;
+    let drivers = Drivers {
+        job: &job,
+        names: &given.names,
+        count: given.drivers,
+        images: &given.images,
+    };
+    serve(channel, &port, &mut started, &drivers, &mut inbox)
+}
+
+/// REPORT: every driver that published counts as started, and every one
+/// that did not is ended and counts as failed, beside the `failed` that
+/// never started.
+fn report(
+    channel: &Channel<Kernel>,
+    started: &mut [Option<Started>; MAX_DEVICES],
+    mut failed: u32,
+) -> Result<(), Step> {
     let mut published = 0_u32;
     for entry in started.iter_mut().flatten() {
         if entry.published {
@@ -318,14 +374,68 @@ fn run(channel: &Channel<Kernel>) -> Result<(), Step> {
             }
             .encode(),
         )
-        .map_err(|_| Step::Report)?;
-    let drivers = Drivers {
-        job: &job,
-        names: &given.names,
-        count: given.drivers,
-        images: &given.images,
-    };
-    serve_deaths(channel, &port, &mut started, &drivers)
+        .map_err(|_| Step::Report)
+}
+
+/// Tell the kernel every driver the table has an image for, and the bus of
+/// the devices it drives: sysfs lists them under `/sys/bus/*/drivers`.
+fn announce_drivers(
+    channel: &Channel<Kernel>,
+    names: &[[u8; NAME_BYTES]; MAX_DRIVERS],
+    count: usize,
+) {
+    let pci = DRIVERS.iter().map(|(_, _, name, _)| (*name, BUS_PCI));
+    let platform = TREE_DRIVERS
+        .iter()
+        .map(|(_, name, _)| (*name, BUS_PLATFORM));
+    for (wanted, bus) in pci.chain(platform) {
+        if let Some(driver) = image_index(names, count, wanted) {
+            let _ = channel.write(
+                &Message::Driver {
+                    driver: u32::from(driver),
+                    bus,
+                }
+                .encode(),
+            );
+        }
+    }
+}
+
+/// The most requests held while devmgr waits for a driver to publish.
+const INBOX: usize = 8;
+
+/// BIND and UNBIND that arrived while devmgr was waiting for something else,
+/// answered as soon as it is not.
+#[derive(Default)]
+struct Inbox {
+    /// The requests, oldest first.
+    held: [Option<Message>; INBOX],
+}
+
+impl Inbox {
+    /// Keep `request` for later. With no room it is answered at once as
+    /// failed, rather than dropped and left for the writer to time out on.
+    fn keep(&mut self, channel: &Channel<Kernel>, request: Message) {
+        if let Some(slot) = self.held.iter_mut().find(|slot| slot.is_none()) {
+            *slot = Some(request);
+        } else if let Message::Bind { token, .. } | Message::Unbind { token, .. } = request {
+            done(channel, token, ANSWER_FAILED);
+        }
+    }
+
+    /// The oldest request kept. `keep` fills the first free slot, so the
+    /// held requests are always the front of the array, oldest first, and
+    /// taking the first and rotating keeps them so.
+    fn take(&mut self) -> Option<Message> {
+        let request = self.held.first_mut().and_then(Option::take);
+        self.held.rotate_left(1);
+        request
+    }
+}
+
+/// Answer the request `token` with `answer`.
+fn done(channel: &Channel<Kernel>, token: u16, answer: u32) {
+    let _ = channel.write(&Message::Done { token, answer }.encode());
 }
 
 /// What starting a driver again needs of what the kernel handed over.
@@ -410,11 +520,15 @@ const KEY_KERNEL: u64 = u64::MAX;
 /// native program has no clock, so a driver that neither publishes nor exits
 /// holds devmgr here until the kernel's patience for REPORT runs out. A
 /// channel that closes or says something else answers `false`.
+///
+/// A BIND or UNBIND that arrives meanwhile is kept in `inbox`, to be
+/// answered once this driver is settled.
 fn await_published(
     channel: &Channel<Kernel>,
     port: &Port<Kernel>,
     location: u32,
     key: u64,
+    inbox: &mut Inbox,
 ) -> bool {
     // Other drivers' deaths arrive here too; they are queued again after, for
     // `serve_deaths`.
@@ -427,6 +541,10 @@ fn await_published(
             Ok(got) => match Message::decode(short.get(..got.bytes).unwrap_or(&[])) {
                 Ok(Message::Published { location: at }) if at == location => break true,
                 Ok(Message::Published { .. }) => continue,
+                Ok(request @ (Message::Bind { .. } | Message::Unbind { .. })) => {
+                    inbox.keep(channel, request);
+                    continue;
+                }
                 _ => break false,
             },
             // A driver that published and then died is still published: the
@@ -467,17 +585,29 @@ fn await_published(
     published
 }
 
-/// Deaths, for the life of the machine: quiesce the device, tell the kernel,
-/// and start a driver of a kind that is [`restarted`] again.
-fn serve_deaths(
+/// For the life of the machine: deaths -- quiesce the device, tell the
+/// kernel, start a driver of a kind that is [`restarted`] again -- and the
+/// BIND and UNBIND a write to sysfs sends (`docs/SYSFS.md` §5).
+fn serve(
     channel: &Channel<Kernel>,
     port: &Port<Kernel>,
     started: &mut [Option<Started>; MAX_DEVICES],
     drivers: &Drivers<'_>,
+    inbox: &mut Inbox,
 ) -> Result<(), Step> {
+    let _ = channel.wait_async(port, Signals::READABLE | Signals::PEER_CLOSED, KEY_KERNEL);
     loop {
+        // What arrived while a driver was being waited for comes first.
+        while let Some(request) = inbox.take() {
+            answer(channel, port, started, drivers, inbox, request);
+        }
         let packet = port.wait(Deadline::Never).map_err(|_| Step::Wait)?;
         let key = packet.key;
+        if key == KEY_KERNEL {
+            take_requests(channel, inbox);
+            let _ = channel.wait_async(port, Signals::READABLE | Signals::PEER_CLOSED, KEY_KERNEL);
+            continue;
+        }
         let Some(entry) = started.get_mut(key as usize).and_then(Option::as_mut) else {
             continue;
         };
@@ -485,17 +615,23 @@ fn serve_deaths(
             continue;
         }
         entry.dead = true;
-        // A core that has not let go yet answers TIMED_OUT and is asked
-        // again; a live driver's BAD_STATE cannot happen for a dead one.
-        let mut quiesced = false;
-        for _ in 0..8 {
-            match entry.device.quiesce() {
-                Err(Error::TimedOut) => {}
-                result => {
-                    quiesced = result.is_ok();
-                    break;
-                }
+        entry.quiesced = quiesce(&entry.device);
+        let _ = channel.write(
+            &Message::Unbound {
+                device: entry.index,
             }
+            .encode(),
+        );
+        // An unbind asked for this death: it is answered, and nothing is
+        // started again.
+        if let Some(token) = entry.unbinding.take() {
+            let answer = if entry.quiesced {
+                ANSWER_DONE
+            } else {
+                ANSWER_FAILED
+            };
+            done(channel, token, answer);
+            continue;
         }
         let _ = channel.write(
             &Message::Died {
@@ -506,10 +642,10 @@ fn serve_deaths(
         );
         // Only a device that was quiesced is handed on: until then the dead
         // driver's core may still hold it, and the new one would be refused.
-        if quiesced
+        if entry.quiesced
             && restarted(entry.kind)
             && entry.restarts < MAX_RESTARTS
-            && restart(channel, port, key, entry, drivers)
+            && restart(channel, port, key, entry, drivers, inbox)
         {
             let _ = channel.write(
                 &Message::Restarted {
@@ -522,65 +658,189 @@ fn serve_deaths(
     }
 }
 
-/// Start `entry`'s driver again, in a job of its own, on a duplicate of the
-/// device handle devmgr keeps, and wait for it to publish as at boot.
-/// `false`, with the device left quiesced, when it could not be started or
-/// did not publish.
+/// Everything the kernel has written, kept in `inbox` if it is a request. A
+/// watch left armed by a wait for a driver fires in [`serve`] too, finding
+/// nothing or what this one would have: reading is idempotent.
+fn take_requests(channel: &Channel<Kernel>, inbox: &mut Inbox) {
+    loop {
+        let mut short = [0_u8; SHORT_BYTES];
+        let Ok(got) = channel.read(&mut short, &mut []) else {
+            return;
+        };
+        if let Ok(request @ (Message::Bind { .. } | Message::Unbind { .. })) =
+            Message::decode(short.get(..got.bytes).unwrap_or(&[]))
+        {
+            inbox.keep(channel, request);
+        }
+    }
+}
+
+/// Quiesce `device`: a core that has not let go yet answers `TIMED_OUT` and
+/// is asked again; a live driver's `BAD_STATE` cannot happen for a dead one.
+/// Answers whether it is quiesced.
+fn quiesce(device: &Device<Kernel>) -> bool {
+    for _ in 0..8 {
+        match device.quiesce() {
+            Err(Error::TimedOut) => {}
+            result => return result.is_ok(),
+        }
+    }
+    false
+}
+
+/// Answer a BIND or UNBIND.
+///
+/// An UNBIND of a live driver kills its job and is answered when its death
+/// comes round in [`serve`], once the device is quiesced, as Linux's
+/// `unbind` returns once the driver's `remove` has. A BIND starts the driver
+/// as it was started at boot and is answered once it has published. The
+/// kernel checked the device and the driver exist; what only devmgr knows --
+/// whether this driver drives this device, whether it is up -- is checked
+/// here.
+fn answer(
+    channel: &Channel<Kernel>,
+    port: &Port<Kernel>,
+    started: &mut [Option<Started>; MAX_DEVICES],
+    drivers: &Drivers<'_>,
+    inbox: &mut Inbox,
+    request: Message,
+) {
+    let (Message::Bind {
+        device,
+        driver,
+        token,
+    }
+    | Message::Unbind {
+        device,
+        driver,
+        token,
+    }) = request
+    else {
+        return;
+    };
+    let found = started
+        .iter_mut()
+        .enumerate()
+        .find(|(_, slot)| slot.as_ref().is_some_and(|entry| entry.index == device));
+    let Some((key, Some(entry))) = found else {
+        // devmgr never started a driver on it, so its table takes nothing
+        // for it: nothing can be bound or unbound.
+        done(channel, token, ANSWER_NO_DEVICE);
+        return;
+    };
+    if entry.driver != driver {
+        done(channel, token, ANSWER_NO_DEVICE);
+        return;
+    }
+    match request {
+        Message::Unbind { .. } => {
+            if entry.dead || entry.unbinding.is_some() {
+                done(channel, token, ANSWER_NO_DEVICE);
+                return;
+            }
+            entry.unbinding = Some(token);
+            // The death packet comes to `serve`, which answers.
+            let _ = entry.job.kill();
+        }
+        _ => {
+            if !entry.dead {
+                done(channel, token, ANSWER_BUSY);
+                return;
+            }
+            if !entry.quiesced {
+                done(channel, token, ANSWER_FAILED);
+                return;
+            }
+            let answered = if launch_again(channel, port, key as u64, entry, drivers, inbox) {
+                ANSWER_DONE
+            } else {
+                ANSWER_FAILED
+            };
+            done(channel, token, answered);
+        }
+    }
+}
+
+/// Start `entry`'s driver again after it died, counting the restart against
+/// [`MAX_RESTARTS`]. `false`, with the device left quiesced, when it could
+/// not be started or did not publish.
 fn restart(
     channel: &Channel<Kernel>,
     port: &Port<Kernel>,
     key: u64,
     entry: &mut Started,
     drivers: &Drivers<'_>,
+    inbox: &mut Inbox,
 ) -> bool {
     entry.restarts += 1;
+    launch_again(channel, port, key, entry, drivers, inbox)
+}
+
+/// Start `entry`'s driver again, in a job of its own, on a duplicate of the
+/// device handle devmgr keeps, the way it was started at boot, and wait for
+/// it to publish as at boot; tell the kernel it is bound. `false`, with the
+/// device left quiesced, when it could not be started or did not publish.
+fn launch_again(
+    channel: &Channel<Kernel>,
+    port: &Port<Kernel>,
+    key: u64,
+    entry: &mut Started,
+    drivers: &Drivers<'_>,
+    inbox: &mut Inbox,
+) -> bool {
     // The dead driver's job, and anything it left running in it, goes first.
     let _ = entry.job.kill();
-    let Some((image, _)) = driver_for(&entry.info, drivers.names, drivers.count, drivers.images)
+    let Some((image, _, _)) = driver_for(&entry.info, drivers.names, drivers.count, drivers.images)
     else {
         return false;
     };
     let Ok(device) = entry.device.duplicate(Requested::Exactly(DEVICE_RIGHTS)) else {
         return false;
     };
-    let plan = match entry.kind {
-        Kind::Display => Plan::Display,
-        // Nothing else is restarted.
-        _ => return false,
-    };
-    let Ok((job, process, _bootstrap)) =
-        start(drivers.job, device, image, &entry.info, plan, port, key)
-    else {
+    let Ok((job, process, _bootstrap)) = start(
+        drivers.job,
+        device,
+        image,
+        &entry.info,
+        entry.plan,
+        port,
+        key,
+    ) else {
         return false;
     };
     entry.job = job;
     entry.process = process;
     entry.dead = false;
-    if await_published(channel, port, entry.location, key) {
+    entry.quiesced = false;
+    let published = matches!(entry.kind, Kind::Port | Kind::Host)
+        || await_published(channel, port, entry.location, key, inbox);
+    if published {
         entry.published = true;
+        let _ = channel.write(
+            &Message::Bound {
+                device: entry.index,
+                driver: u32::from(entry.driver),
+            }
+            .encode(),
+        );
         return true;
     }
     // It died before publishing, or never would: its death packet, if any,
     // was taken by the wait above, so it is ended and quiesced here.
     let _ = entry.job.kill();
     entry.dead = true;
-    for _ in 0..8 {
-        match entry.device.quiesce() {
-            Err(Error::TimedOut) => {}
-            _ => break,
-        }
-    }
+    entry.quiesced = quiesce(&entry.device);
     false
 }
 
 /// The image of the driver for `info`, by the table, if the initramfs
-/// carries it.
+/// carries it, with the driver's kind and its place among the names.
 fn driver_for<'a>(
     info: &DeviceInfo,
     names: &[[u8; NAME_BYTES]; MAX_DRIVERS],
     drivers: usize,
     images: &'a [Option<Vmo<Kernel>>; MAX_DRIVERS],
-) -> Option<(&'a Vmo<Kernel>, Kind)> {
+) -> Option<(&'a Vmo<Kernel>, Kind, u16)> {
     let (wanted, kind) = match info.virtio {
         DEVICE_VIRTIO_PCI => DRIVERS
             .iter()
@@ -592,18 +852,27 @@ fn driver_for<'a>(
             .map(|(_, wanted, kind)| (wanted, kind))?,
         _ => return None,
     };
-    let image = (0..drivers)
-        .find(|&j| {
-            names.get(j).is_some_and(|name| {
-                let end = name
-                    .iter()
-                    .position(|&byte| byte == 0)
-                    .unwrap_or(name.len());
-                name.get(..end) == Some(*wanted)
-            })
+    let driver = image_index(names, drivers, wanted)?;
+    let image = images.get(usize::from(driver)).and_then(Option::as_ref)?;
+    Some((image, *kind, driver))
+}
+
+/// The place among the first `drivers` names of the one called `wanted`.
+fn image_index(
+    names: &[[u8; NAME_BYTES]; MAX_DRIVERS],
+    drivers: usize,
+    wanted: &[u8],
+) -> Option<u16> {
+    let at = (0..drivers).find(|&j| {
+        names.get(j).is_some_and(|name| {
+            let end = name
+                .iter()
+                .position(|&byte| byte == 0)
+                .unwrap_or(name.len());
+            name.get(..end) == Some(wanted)
         })
-        .and_then(|j| images.get(j).and_then(Option::as_ref))?;
-    Some((image, *kind))
+    })?;
+    u16::try_from(at).ok()
 }
 
 /// Start `image` on `device`: a ring of the kind the table names, a job, a

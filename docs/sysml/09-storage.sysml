@@ -150,9 +150,16 @@ package FerrixStorage {
              * filesystems, uptime, version, sys, sysrq-trigger and net
              * beside them. */
     }
-    #planned part def Sysfs :> Filesystem {
-        doc /* Not built: mount -t sysfs is ENODEV, and the boot check
-             * requires it to be. */
+    #implemented part def Sysfs :> Filesystem {
+        doc /* kernel/src/fs/sysfs.rs over libs/sysfs's text, a view that
+             * stores nothing, fed by the services that own each fact
+             * (docs/SYSFS.md): enumeration's device nodes under
+             * devices/pci and platform, the disks, interfaces, cards,
+             * render nodes and input devices the ring-3 drivers published,
+             * each inside the node its driver serves, and devmgr's word on
+             * which driver drives which device. A write to a driver's bind
+             * or unbind is sent to devmgr to decide. Mounted on /sys at
+             * boot; cgroup2 mounts on its fs/cgroup. */
     }
     #planned part def Cgroupfs :> Filesystem { @stage { number = 13; } }
 
@@ -234,7 +241,7 @@ package FerrixStorage {
         part tmpfs : Tmpfs;
         part devfs : Devfs;
         part procfs : Procfs;
-        #planned part sysfs : Sysfs;
+        part sysfs : Sysfs;
         #planned part cgroupfs : Cgroupfs;
         part btrfs : Btrfs;
         part initramfs : InitramfsUnpack;

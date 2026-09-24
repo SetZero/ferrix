@@ -61,7 +61,7 @@ use crate::user::vmo::{Held, Vmo};
 use crate::{mm, sched, timer};
 
 use crate::fs::block::BlockDevice;
-use crate::fs::devfs::{BlockRefused, BlockRegistration, register_block};
+use crate::fs::devfs::{BlockRefused, BlockRegistration, Origin, register_block_from};
 
 pub(crate) mod check;
 pub(crate) mod driver_check;
@@ -435,6 +435,8 @@ struct Accepted {
     device: Device,
     /// Its node name.
     name: DiskName,
+    /// The serial number the driver read off the device, for sysfs.
+    serial: [u8; 20],
     /// The ring VMO.
     ring: Arc<Vmo>,
     /// The data VMO.
@@ -491,6 +493,7 @@ fn decode_hello(
     Ok(Accepted {
         device,
         name: accepted.identity.name,
+        serial: accepted.identity.serial,
         ring: Arc::clone(ring),
         data: Arc::clone(data),
         driver_port: Arc::clone(driver_port),
@@ -545,11 +548,21 @@ fn take_up<'s>(
     .map_err(|_| Refusal::Device)?;
     let kernel_port = Port::new();
     let disk = Arc::new(RingDisk::new(device, limits, Arc::clone(&kernel_port)));
-    let registration = register_block(
+    // The device node the ring was made for, which sysfs shows the disk in.
+    let node = CLAIMS
+        .lock()
+        .iter()
+        .find(|claim| claim.id == start.id)
+        .map(|claim| claim.device.index());
+    let registration = register_block_from(
         accepted.name.as_str().as_bytes(),
         VIRTIO_BLK_MAJOR,
         accepted.name.minor(),
         Arc::clone(&disk) as Arc<dyn BlockDevice>,
+        Origin {
+            node,
+            serial: accepted.serial,
+        },
     )
     .map_err(|refused| match refused {
         BlockRefused::InvalidName => Refusal::Name,

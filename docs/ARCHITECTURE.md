@@ -346,6 +346,11 @@ table per mount namespace, page cache unified with VMOs. `rustc` opens tens of
 thousands of files during a build; this path is a performance requirement.
 
 **Filesystems.** tmpfs, devfs, procfs, sysfs and cgroupfs in-kernel and small.
+sysfs and cgroupfs are views that store nothing: cgroupfs of the job tree,
+sysfs of the devices as their owners describe them -- enumeration, the cores
+the ring-3 drivers publish into, and `devmgr`, which alone says which driver
+drives which device and to which a write to `bind` or `unbind` is sent to
+decide (`docs/SYSFS.md`).
 The real one is **btrfs, read and write**, staged:
 
 * **Stage A — read.** Superblock, chunk tree (logical→physical), root tree, fs

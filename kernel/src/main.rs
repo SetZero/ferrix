@@ -481,6 +481,29 @@ fn check_cgroupfs() {
     );
 }
 
+/// sysfs (`docs/SYSFS.md`): the device tree mounted and walked through the
+/// VFS, and what it says held against what enumeration and the cores know.
+fn check_sysfs() {
+    let checked = match fs::sysfs::check::run() {
+        Ok(checked) => checked,
+        Err(problem) => fatal!(catalog::SYSFS, "sysfs self-check failed: {problem}"),
+    };
+    println!(
+        "  sysfs    {} names walked in {} directories, {} links followed; {} devices, {} bound \
+         as devmgr says, {} disks, {} interfaces and {} processors as their owners say; {} \
+         refusals as kernfs refuses",
+        checked.names,
+        checked.directories,
+        checked.links,
+        checked.devices,
+        checked.bound,
+        checked.disks,
+        checked.interfaces,
+        checked.cpus,
+        checked.refusals,
+    );
+}
+
 /// Stage 8: build the root from the initramfs, and require it to be what the
 /// build wrote and to store what it is given.
 ///
@@ -530,7 +553,8 @@ fn check_filesystems(view: &BootView<'_>) {
     };
     println!(
         "  pipes    {} bytes through a pipe, a FIFO, sendfile, splice and copy_file_range; \
-         statfs, truncate and fallocate answered; proc and devtmpfs mounted, read and unmounted; {} frames leaked",
+         statfs, truncate and fallocate answered; proc and devtmpfs mounted, read and unmounted, \
+         sysfs mounted and unmounted; {} frames leaked",
         calls.bytes, calls.leaked,
     );
 
@@ -971,6 +995,10 @@ fn check_block_ring() {
     // they need -- a root filesystem for sockfs, and the scheduler for the
     // task that drives the stack -- and nothing else.
     check_net();
+    // Last, so that what sysfs shows is a running machine's: the device
+    // nodes, the disks and interfaces devmgr's drivers published, and which
+    // driver devmgr says drives which device.
+    check_sysfs();
 }
 
 /// The net core, over the loopback: a socket call reaches the stack, the
