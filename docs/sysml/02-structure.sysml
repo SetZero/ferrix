@@ -1324,6 +1324,20 @@ package FerrixStructure {
                  * does not, and the core's side as a state machine. Fuzzed by
                  * renderctl. */
         }
+        #implemented part gc400 : LibraryCrate {
+            attribute :>> path = "libs/gc400";
+            attribute :>> forbidsUnsafe = true;
+            attribute :>> hostTests = 28;
+            @stage { number = 19; }
+            doc /* The STM32MP157's Vivante GC400T as logic over registers and
+                 * command memory (docs/GPU.md §6.3): the registers and the
+                 * command stream from the etnaviv project's MIT-licensed
+                 * register database, the identity, reset and initialisation
+                 * in the order Linux's etnaviv driver uses them, and a
+                 * WAIT/LINK ring. Linked by user/gc400, which devmgr starts
+                 * on the board, where it ran on 2026-09-24; no QEMU machine
+                 * has the core, so no gate drives it. */
+        }
         #implemented part fbtext : LibraryCrate {
             attribute :>> path = "libs/fbtext";
             attribute :>> forbidsUnsafe = true;

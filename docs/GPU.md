@@ -1082,3 +1082,183 @@ compiles its GLSL with Mesa's virgl driver (§3.8).
 **32 points.** None of it can be gated in QEMU, which emulates no Vivante
 core: G2 to G5 are judged on the board by hand, and what can be
 host-tested (the command stream's words, the register layout) is.
+
+### 6.3 Where the GC400 stands (2026-09-24)
+
+G1 and G2 are done: on the board on 2026-09-24 the kernel clocked the core
+and took it out of reset, and `user/gc400` identified it, started its front
+end and ran two blocks through it, each ending in an event taken by
+interrupt. Nothing of either can run in QEMU: the three QEMU machines boot
+exactly as before (no `vivante,gc` node, so no line and no device), and
+devmgr now counts 8 drivers.
+
+**What was built.**
+
+* `kernel/src/stm32mp1_gpu.rs` (G1), a sibling of `stm32mp1_usb.rs` rather
+  than a part of `stm32mp1.rs`, which the display's session is changing. It
+  finds the enabled `vivante,gc` node at `0x5900_0000`, reads its interrupt
+  through `ferrix_fdt`, checks that PLL2 is on and locked and that its Q
+  output (`DIVQEN`), the GPU's core clock, is enabled, and computes its rate
+  as `stm32mp1`'s `pll4_q` does for PLL4, from `RCC_PLL2CFGR1`/`CFGR2`/
+  `FRACR` and the reference `RCC_RCK12SELR` selects. Only then does it write
+  the RCC: `GPUEN`, bit 5 of `RCC_MP_AHB6ENSETR` (0x218), which gates the bus
+  and the core clock alike, then `GPURST`, bit 5, set in `RCC_AHB6RSTSETR`
+  (0x198) and cleared in `RCC_AHB6RSTCLRR` (0x19C) 10 µs later. Every offset
+  and bit is Linux's `clk-stm32mp1.c` (`K_MGATE(G_GPU, RCC_AHB6ENSETR, 5, 0)`,
+  `pll2_q` gated by `RCC_PLL2CR` bit 5) and `stm32mp1-resets.h` (`GPU_R` =
+  3269 = 0x198 × 8 + 5). `device.rs`'s `gpu_node` publishes the node as
+  binding `TREE_STM32_GPU` (3): the registers a page, the interrupt as vector
+  0, and a `DmaShape` that is contiguous and not coherent, as the LTDC's is.
+  Anything off -- no PLL2, its Q output off, a node elsewhere -- is said on
+  a `gpu` line and no node is published.
+* `libs/gc400`, host-tested (28 tests): the registers and bitfields used, the
+  command encoders (`LOAD_STATE`, `END`, `NOP`, `WAIT`, `LINK`, `STALL`, the
+  semaphore, the pipe select and the event), the identity, the reset and
+  initialisation, the addressing, and the ring. Its tests pin every command
+  word against `cmdstream.xml.h`, pin the reset's register writes in order,
+  and run the ring through a model of the front end that parses slots,
+  follows `LINK`s and records events. That model found a bug before the
+  board could: a block queued before the front end started was never run,
+  because the start address followed the loop instead of staying at the
+  ring's first slot.
+* `user/gc400`, the driver, started by devmgr as a new kind, an *engine*:
+  handed its device and START as a port's driver is, publishing to no
+  subsystem, and taken at its word. It stays alive afterwards, answering any
+  interrupt by saying what it was: a driver that exited would have devmgr
+  quiesce the device and report it dead, and after the front end has been
+  started the command page must not go back to the allocator while the core
+  might still read it.
+
+**Where the numbers come from.** The register offsets, bitfields and command
+encodings are the etnaviv project's register database under the MIT licence:
+`cmdstream.xml.h`, `common.xml.h` and `state.xml.h` as Mesa 26.2.3 carries
+them, and `state_hi.xml.h` -- the host interface, power management and
+memory controller, which Mesa does not carry -- from Linux's
+`drivers/gpu/drm/etnaviv/`, where it is the same generated, MIT-licensed
+header. The sequence was learned by reading Linux's GPL etnaviv driver; none
+of its code was copied, and each step in `libs/gc400` names the function it
+follows.
+
+**The identity** is read as `etnaviv_hw_identify` reads it: `HI_CHIP_IDENTITY`
+first (a family of `0x01` is a core too old for the rest), then model,
+revision, date, time, customer, product and ECO (the last two not on a GC600
+of revision `0x19`, which faults), the major feature word, minor word 0, and
+words 1 to 5 only when word 0's `MORE_MINOR_FEATURES` says they exist. All
+fifteen values are printed raw, on one line. Which features drive the core
+follows etnaviv too: its hardware database (`etnaviv_hwdb.c`, numbers from
+Vivante's own feature database) has an entry for exactly this core -- model
+`0x400`, revision `0x4652`, product `0x70001`, customer `0x100`, ECO 0 --
+and when the registers match it, its feature words are used instead of the
+registers', which Vivante cores are known to get wrong. The second line
+says which were used.
+
+**The register sequence**, in order:
+
+1. *Soft reset*, as `etnaviv_hw_reset`, tried again until it takes or a
+   second has passed: `PM_POWER_CONTROLS` = 0 and read back (module clock
+   gating off: a gated module does not reset); `PM_PULSE_EATER` =
+   `0x01590880 | bit 17`, then `| bit 0`, read back (the frequency scaler
+   off); `HI_CLOCK_CONTROL` = `FSCALE_VAL(64)` with and then without
+   `FSCALE_CMD_LOAD` (full speed, latched); `| ISOLATE_GPU`; `| SOFT_RESET`;
+   20 µs; `SOFT_RESET` cleared; `ISOLATE_GPU` cleared. Then the checks: every
+   bit of `HI_IDLE_STATE` but `AXI_LP` set, both `IDLE_3D` and `IDLE_2D` set
+   in `HI_CLOCK_CONTROL`, and -- on a core with a version-2 MMU --
+   `MMUv2_CONTROL`'s enable clear. Then `DISABLE_DEBUG_REGISTERS` cleared, so
+   the `FE_DMA_*` registers read for a diagnosis are real.
+2. *Clock*, as `etnaviv_gpu_update_clock` for a core without dynamic
+   frequency scaling: `FSCALE_VAL(64)` loaded again into what the reset left.
+3. *Initialisation*, as `etnaviv_gpu_hw_init` for a GC400: `HI_AXI_CONFIG` =
+   `AWCACHE(2) | ARCACHE(2)`; `PM_PULSE_EATER` = `0x01590880`, the value
+   etnaviv gives every core that is not one of its listed exceptions;
+   `HI_INTR_ENBL` = all ones. **Module-level clock gating is left off**,
+   where etnaviv turns it on with per-revision exceptions that are fixes for
+   hangs: it saves power and nothing else, and it can be turned on once the
+   core has been seen running without it. The GC320, GC2000 and
+   security-block steps are other cores'.
+4. *Addressing*, below.
+5. `HI_INTR_ACKNOWLEDGE` read once, which clears anything left pending, and
+   printed as the stale interrupts.
+6. *The ring*, one page pinned `PIN_COHERENT`: a `WAIT(200)` and a
+   `LINK(2)` back to it at the page's start, and the front end started there
+   (`FE_COMMAND_ADDRESS`, then `FE_COMMAND_CONTROL` = `ENABLE | 2`, as
+   `etnaviv_gpu_start_fe`). Two blocks are spliced in one after the other,
+   each by overwriting the `WAIT` the front end spins on with a `LINK` to
+   the block -- argument word, barrier, header word, as
+   `etnaviv_buffer_replace_wait` orders it -- and each ending in a
+   `WAIT`/`LINK` of its own: the first is `PIPE_SELECT(3D)`, `GL_EVENT` =
+   `1 | FROM_PE`; the second `GL_EVENT` = `2 | FROM_PE`. Each event is taken
+   as the interrupt on a port: `HI_INTR_ACKNOWLEDGE` read (which acknowledges
+   the core), then the interrupt acknowledged to the kernel, and the time
+   from the splice printed. Then the last `WAIT` is overwritten with `END`,
+   as `etnaviv_buffer_end` does, and `HI_IDLE_STATE`'s front-end bit is
+   waited for.
+
+**A loop and not a stream that ends.** A stream of an event and an `END`
+would show the front end fetches and the interrupt arrives, and nothing
+more: every later step needs the front end started once and fed while it
+runs, which is what etnaviv's ring does and what G3 builds on. So the first
+run on the board is the loop, the splice and the event, together.
+
+**Addressing: physical, not a window at `0xC000_0000`.** The plan assumed a
+version-1 MMU with the linear window at the start of the DK board's memory.
+Reading the database and the driver says otherwise, twice. The database's
+GC400T has `chipMinorFeatures1_MMU_VERSION` set: its MMU is version 2, which
+comes out of reset disabled and passes every address through untranslated,
+and the first stream etnaviv runs on such a core, the one that turns the MMU
+on (`etnaviv_iommuv2_restore_nonsec`), is fetched from its *physical*
+address, with no memory base written. And for version-1 cores etnaviv today
+puts the window at 2 GiB whenever the command buffer is above 2 GiB, as all
+of this board's memory is, not at the memory's start. So the driver takes
+`Addressing::Physical` on a core with a version-2 MMU -- the command page's
+address is its physical one and no `MC_MEMORY_BASE_ADDR_*` is written -- and
+on a core with version 1 it writes 2 GiB to all five of those registers and
+gives the core the physical address less 2 GiB. The MMU itself is not
+programmed either way: nothing here uses an address it would translate. With
+it off the front end reads one run of physical addresses, which is why the
+node says contiguous and why G2 uses a single page; a buffer larger than a
+page, from G3 on, has to be physically contiguous or the MMU has to be
+turned on.
+
+**What the board printed** (2026-09-24, the DK1 with its firmware's PLL2:
+24 MHz HSE, M 2, N 65, fraction 0x1400, Q 0). The kernel, among the device
+lines:
+
+    gpu      GC400 at 0x59000000, interrupt 141, core clock 533.000 MHz from PLL2 Q, out of reset
+
+`devmgr` one more driver started, and the driver, the same in all five runs:
+
+    gc400: model 0x400 revision 0x4652 date 0x20160522 time 0x20594600 product 0x70001 customer 0x100 eco 0x0 identity 0x04010000 features 0xa0e9e004 minor 0xe1299fff 0xbe13b219 0xce110010 0x08000001 0x00020102 0x00020000
+    gc400: features from etnaviv's database for this core, 3D pipe, memory controller 1.0, addressing physical, MMUv2 off
+    gc400: reset in 1 attempt(s), clock control 0x00070100, idle 0x7fffffff, stale interrupts 0x00000000
+    gc400: command page at 0xd69ae000 (GPU 0xd69ae000); front end started there, now at 0xd69ae000 (WAIT)
+    gc400: event 1: interrupt with 0x00000002 after 133 us
+    gc400: event 2: interrupt with 0x00000004 after 105 us
+    gc400: front end ended at 0xd69ae040, idle 0x7fffffff: command buffer ran, events 1 and 2 by interrupt
+
+The last line is G2 done. A second line saying *features from the
+registers* would have meant the core is not the one in etnaviv's database.
+
+**What the run settled**, in the order it was doubted:
+
+* The features are the database's: model, revision, product `0x70001`,
+  customer `0x100` and ECO 0 match its entry exactly.
+* A version-2 MMU left off passes addresses above 2 GiB through: the front
+  end fetched the command page at `0xd69ae000` physical, and ended 64 bytes
+  on, after both blocks.
+* The pixel engine's event arrives with only a pipe select before it; no
+  `SEM`/`STALL` pair was needed while nothing is drawn.
+* The reset's idle mask is right: `HI_IDLE_STATE` read `0x7fffffff`, every
+  bit but `AXI_LP`, on the first attempt.
+* The board's firmware enables PLL2's Q output, and the interrupt is 141
+  (SPI 109), as the tree says.
+
+What is still unproven is everything after an event: that the core writes
+memory (G3's resolve), and that it draws (G4).
+
+**On a timeout** the driver prints, in one line, `HI_IDLE_STATE` with the
+front end's bit spelled out, `HI_INTR_ACKNOWLEDGE` (an event bit set there
+means the core raised it and no interrupt reached the program),
+`HI_AXI_STATUS`, `FE_DMA_STATUS`, `FE_DMA_DEBUG_STATE` with the parser
+state's database name (`WAIT`, `LINK`, `END` ...), `FE_DMA_ADDRESS`, and
+`FE_DMA_LOW`/`HIGH`, the command last fetched. It keeps the page and stays
+up either way.

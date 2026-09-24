@@ -137,10 +137,10 @@ package FerrixDrivers {
         @stage { number = 10; }
         doc /* An ordinary user process in its own Job, holding exactly the
              * capabilities devmgr gave it. A driver fault is a process fault;
-             * a wedged driver is a Job kill. Seven exist, native programs on
-             * user/rt under /lib/drivers: blk, net, gpu, ltdc, input, usbhid
-             * and vport, each a thin layer of handles over its libs/
-             * crates. */
+             * a wedged driver is a Job kill. Eight exist, native programs on
+             * user/rt under /lib/drivers: blk, net, gpu, ltdc, input,
+             * usbhid, gc400 and vport, each a thin layer of handles over its
+             * libs/ crates. */
         ref part job : Job;
         part ioMappings : IoMapping[0..*] {
             doc /* One per BAR or MMIO window, and nothing outside it. */
@@ -247,6 +247,21 @@ package FerrixDrivers {
              * device, so no boot test exercises it: its gates are
              * libs/usb-host's tests against a model of EHCI and the board's
              * bus, and it ran on the DK1 on 2026-09-23 (docs/INPUT.md §7). */
+    }
+
+    #inProgress part def Gc400Driver :> DriverProcess {
+        @stage { number = 19; }
+        doc /* user/gc400 over libs/gc400: the STM32MP157's Vivante GC400T,
+             * the G2 step of the board's gears (docs/GPU.md §6.3). It
+             * prints the core's identity, soft-resets and initialises it as
+             * etnaviv does, starts the front end on a WAIT/LINK loop in one
+             * page pinned PIN_COHERENT, splices in two blocks that each
+             * raise an event, and takes each as the interrupt. devmgr starts
+             * it as an engine, which serves no kernel subsystem yet, and does
+             * not wait for it. No QEMU machine has the core; its gates are
+             * libs/gc400's tests against models of the host interface and
+             * the front end, and on the board, on 2026-09-24, both events
+             * arrived by interrupt (G2 done). Drawing is G3 to G5. */
     }
 
     #implemented action def DriverBootstrap {

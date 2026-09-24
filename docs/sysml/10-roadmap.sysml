@@ -604,7 +604,8 @@ package FerrixRoadmap {
              * the host's RADV (cargo xtask test-vkgears); and gears drawn by
              * the DK1's own Vivante GC400T, an OpenGL ES 2.0 core with no
              * Vulkan in any driver, through a ring-3 driver of Ferrix's own,
-             * 32 points. */
+             * 32 points, of which G1 and G2 (11) ran on the board the same
+             * day: the core runs a command buffer, its events by interrupt. */
     }
 
     #planned requirement <'S21'> stage21BareMetalGpu : Stage {
