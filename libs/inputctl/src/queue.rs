@@ -59,8 +59,20 @@ use crate::session::Report;
 
 /// `EVDEV_MIN_BUFFER_SIZE`: the fewest events a queue holds.
 pub const MIN_BUFFER: usize = 64;
-/// `EVDEV_BUF_PACKETS`: how many estimated packets a queue holds.
-pub const BUFFER_PACKETS: usize = 8;
+/// How many estimated packets a queue holds: Linux's `EVDEV_BUF_PACKETS`
+/// is 8, and this is 256.
+///
+/// Linux's number assumes a reader that drains the queue within a few
+/// milliseconds, which libinput in a compositor drawing on a GPU does. Here
+/// the reader is a compositor drawing in software, and on the DK1's 650 MHz
+/// Cortex-A7 one frame took 100 ms and more while a gaming mouse reported a
+/// thousand times a second: eight packets were 35 ms of motion, the queue
+/// overflowed during every slow frame, and the drop rule -- empty the queue
+/// and say `SYN_DROPPED` -- threw the motion away. The pointer lagged, and
+/// drifted: a stroke down and back up lost a different part of each half
+/// (2026-09-24). 256 packets are about a second of such a mouse. The drop
+/// rule is Linux's still, for a reader slower than that.
+pub const BUFFER_PACKETS: usize = 256;
 /// The smallest ring [`Queue::new`] takes: the drop rule keeps two events.
 pub const MIN_SLOTS: usize = 4;
 

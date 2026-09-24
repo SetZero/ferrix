@@ -395,14 +395,15 @@ fn queues_are_as_long_as_evdev_makes_them() {
     keyboard.bits.sw = [0; SW_BYTES];
     keyboard.bits.leds = [0; LED_BYTES];
     keyboard.axes = [AxisRange::default(); AXES];
-    // One SYN_REPORT and seven for keys: 8 × 8 = 64.
-    assert_eq!(Capabilities::from_hello(&keyboard).queue_size(), 64);
-    // Plus ABS_X, ABS_Y, REL_X and REL_WHEEL: 12 × 8 = 96, rounded up.
-    assert_eq!(Capabilities::from_hello(&hello()).queue_size(), 128);
-    // Every axis short of multi-touch, 47 of them: 55 × 8 = 440.
+    // Linux's rule with 256 packets where Linux has 8 (`BUFFER_PACKETS` says
+    // why). One SYN_REPORT and seven for keys: 8 × 256 = 2048.
+    assert_eq!(Capabilities::from_hello(&keyboard).queue_size(), 2048);
+    // Plus ABS_X, ABS_Y, REL_X and REL_WHEEL: 12 × 256 = 3072, rounded up.
+    assert_eq!(Capabilities::from_hello(&hello()).queue_size(), 4096);
+    // Every axis short of multi-touch, 47 of them: 55 × 256 = 14080.
     let mut axes = hello();
     axes.bits.abs = [0xff; ABS_BYTES];
-    assert_eq!(Capabilities::from_hello(&axes).queue_size(), 512);
+    assert_eq!(Capabilities::from_hello(&axes).queue_size(), 16384);
 }
 
 // -- The session -----------------------------------------------------------------

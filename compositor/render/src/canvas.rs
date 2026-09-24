@@ -928,77 +928,46 @@ impl Canvas {
     }
 
     /// Blend a premultiplied `ARGB8888` surface drawn at `rect` into
-    /// `clips`, through tiny-skia's pattern shader with nearest sampling at
-    /// a whole-pixel offset, so each canvas pixel takes exactly one surface
-    /// pixel.
+    /// `clips`, each canvas pixel over exactly one surface pixel.
+    ///
+    /// This was tiny-skia's pattern shader with nearest sampling at a
+    /// whole-pixel offset, and is now that shader's arithmetic written out
+    /// ([`over_row`]): the same bytes, without a floating-point pipeline
+    /// run for every pixel of a window. On a Cortex-A7, which has no SIMD
+    /// the shader's portable code can use, that pipeline took a quarter of
+    /// a second for a translucent window's frame; and `foot`, the terminal
+    /// people run, always hands over `ARGB8888`.
+    ///
+    /// The surface's rows are read where they are -- a padded buffer needs
+    /// no gathering into tight rows first -- a band of rows a core. An
+    /// `XRGB8888` surface drawn at less than full opacity is blended as
+    /// opaque, its X byte read as a full alpha, as it always was.
     fn blend(&mut self, surface: &Surface<'_>, rect: Rect, opacity: f32, clips: &[Rect]) {
-        // `wl_shm`'s bytes are blue, green, red, alpha: canvas order. A
-        // padded buffer is gathered into tight rows first.
-        //
-        // Only the part of it the clips cover. A client's buffer is padded
-        // more often than not -- `foot` hands over a 1878-pixel row in a
-        // stride of 7680 bytes -- and gathering all of a full-screen terminal to draw the one
-        // cell that changed is three milliseconds of copying for a few
-        // hundred pixels of drawing. The part is cut on whole pixels and the
-        // pattern moved by the same whole pixels, so every canvas pixel
-        // still takes exactly the surface pixel it took.
-        let whole = Rect::new(
-            0,
-            0,
-            i64::from(surface.width()),
-            i64::from(surface.height()),
-        );
-        let mut gathered: Option<Vec<u8>> = None;
-        let (bytes, part) = match surface.tight() {
-            Some(tight) if surface.format() == Format::Argb8888 => (tight, whole),
-            _ => {
-                let Some(part) = bounding(clips)
-                    .map(|bounds| {
-                        bounds.translate(rect.x.saturating_neg(), rect.y.saturating_neg())
-                    })
-                    .and_then(|bounds| intersect(bounds, whole))
-                else {
-                    return;
-                };
-                (gathered.insert(part_rows(surface, part)).as_slice(), part)
-            }
-        };
-        let (Ok(width), Ok(height)) = (u32::try_from(part.width), u32::try_from(part.height))
-        else {
-            return;
-        };
-        let Some(pixmap) = PixmapRef::from_bytes(bytes, width, height) else {
-            return;
-        };
-        // A band at a time, each with the pattern moved up by where the
-        // band begins: the same surface pixel lands on the same canvas
-        // pixel through the same arithmetic, whoever draws the row.
-        let across = self.width();
-        let at = (rect.x.saturating_add(part.x), rect.y.saturating_add(part.y));
+        let opaque = surface.format() == Format::Xrgb8888;
+        let width = index(i64::from(self.width()));
         self.in_bands(clips, |band, top, local| {
-            let rows = u32::try_from(band.len() / (index(i64::from(across)) * 4)).unwrap_or(0);
-            let Some(mut band) = PixmapMut::from_bytes(band, across, rows) else {
-                return;
-            };
-            let shader = Pattern::new(
-                pixmap,
-                SpreadMode::Pad,
-                FilterQuality::Nearest,
-                opacity,
-                tiny_skia::Transform::from_translate(at.0 as f32, at.1.saturating_sub(top) as f32),
-            );
-            let paint = paint(shader, BlendMode::SourceOver);
             for &clip in local {
-                if let Some(rect) = skia_rect(clip) {
-                    band.fill_rect(rect, &paint, tiny_skia::Transform::identity(), None);
+                let from = index(clip.x.saturating_sub(rect.x)) * 4;
+                let len = index(clip.width) * 4;
+                for y in clip.y..clip.bottom() {
+                    let Some(row) = u32::try_from(y.saturating_add(top).saturating_sub(rect.y))
+                        .ok()
+                        .and_then(|row| surface.row(row))
+                    else {
+                        continue;
+                    };
+                    let start = (index(y) * width + index(clip.x)) * 4;
+                    if let (Some(pixels), Some(into)) = (
+                        row.get(from..from + len),
+                        band.get_mut(start..start + len),
+                    ) {
+                        over_row(into, pixels, opaque, opacity);
+                    }
                 }
             }
         });
         for &clip in clips {
             self.damage.add(clip);
-        }
-        if let Some(rows) = gathered {
-            crate::scratch::bytes_back(rows);
         }
     }
 
@@ -1494,6 +1463,72 @@ impl Blended {
             }
         }
     }
+}
+
+/// A premultiplied row over a canvas row, `SourceOver`, byte for byte as
+/// tiny-skia's high-precision pipeline blends a pattern at a whole-pixel
+/// offset -- the path [`Canvas::blend`] took through it before, which the
+/// expected images were drawn by.
+///
+/// That pipeline loads each byte as `byte * (1 / 255)`, scales the source
+/// by the pattern's opacity when it is not one (`scale_1_float`), blends
+/// as `dst * (1 - src_alpha) + src` (`source_over_rgba`, a multiply and an
+/// add, never fused), clamps to `0..=1`, multiplies by 255 and rounds half
+/// to even (`unnorm`, `round_int`). The same `f32` operations in the same
+/// order give the same bytes.
+///
+/// Two kinds of pixel need none of it at full opacity, and are most of any
+/// window: an opaque one, whose blend is the source whatever is under it,
+/// and an empty one, whose blend is what is under it. Both are exact: the
+/// pipeline's result for them rounds to exactly those bytes, as the test
+/// against tiny-skia over every alpha, colour and background shows.
+fn over_row(into: &mut [u8], pixels: &[u8], opaque: bool, opacity: f32) {
+    const FACTOR: f32 = 1.0 / 255.0;
+    let whole = opacity >= 1.0;
+    for (into, pixel) in into.chunks_exact_mut(4).zip(pixels.chunks_exact(4)) {
+        let (Ok(into), Ok(mut source)) =
+            (<&mut [u8; 4]>::try_from(into), <[u8; 4]>::try_from(pixel))
+        else {
+            continue;
+        };
+        if opaque {
+            source[3] = 0xFF;
+        }
+        if whole {
+            if source[3] == 0xFF {
+                *into = source;
+                continue;
+            }
+            if source == [0; 4] {
+                continue;
+            }
+        }
+        let load = |byte: u8| {
+            let value = f32::from(byte) * FACTOR;
+            if whole { value } else { value * opacity }
+        };
+        let keep = 1.0 - load(source[3]);
+        for (out, from) in into.iter_mut().zip(source) {
+            *out = unnorm((f32::from(*out) * FACTOR) * keep + load(from));
+        }
+    }
+}
+
+/// A channel from `0..=1` to a byte, as tiny-skia's `unnorm` stores it:
+/// clamped, times 255, rounded half to even. The rounding is the sum of
+/// the value and `2^23` taken away again, which in `f32` is exactly that
+/// rounding for any value under `2^23`, and what tiny-skia's portable
+/// `round` does; x86's conversion instruction rounds the same way.
+fn unnorm(value: f32) -> u8 {
+    const WHOLE: f32 = 8_388_608.0;
+    let scaled = value.max(0.0).min(1.0) * 255.0;
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "a whole number from 0 to 255"
+    )]
+    let byte = ((scaled + WHOLE) - WHOLE) as u8;
+    byte
 }
 
 /// Blend one premultiplied colour over one canvas pixel.
