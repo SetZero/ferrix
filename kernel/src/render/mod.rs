@@ -55,8 +55,8 @@ use ferrix_native_abi::rights::Rights;
 use ferrix_native_abi::signals::Signals;
 use ferrix_native_abi::types::CHANNEL_MAX_HANDLES;
 use ferrix_renderctl::message::{
-    BACKING_RIGHTS, Direction, MAX_BYTES, Message, Ready, Refusal, Status, Transfer as Move,
-    VERSION, WORK_VMO_RIGHTS, Work, flags,
+    BACKING_RIGHTS, Direction, MAX_BYTES, MakeBlob, Message, NO_WINDOW, Ready, Refusal, Status,
+    Transfer as Move, VERSION, WORK_VMO_RIGHTS, Work, features, flags,
 };
 use ferrix_renderctl::session::{Event, RequestError, Session};
 
@@ -72,6 +72,7 @@ use crate::sync::SpinLock;
 use crate::timer;
 use crate::user::vmo::Vmo;
 
+pub(crate) mod fence;
 pub(crate) mod node;
 
 /// How much work VMO one renderer gets: command buffers and object
@@ -196,6 +197,95 @@ struct Flying {
     sequence: u64,
 }
 
+/// The places of the device's host-visible window: where blobs are mapped
+/// for programs to reach (`docs/GPU.md` §6.1).
+///
+/// The core hands them out as it hands out ranges of the work VMO, and gives
+/// one back only when the device has said the blob in it is gone: a place
+/// given out again while the device still had a blob there would have two
+/// blobs in it. A blob the device would not let go of keeps its place for
+/// good, the rule `docs/DISPLAY.md` §2.2 states for pages.
+struct Places {
+    /// Where the window's first page is.
+    phys: u64,
+    /// How many bytes it has.
+    len: u64,
+    /// What is free, as `(offset, len)` runs in order, none touching.
+    free: Vec<(u64, u64)>,
+    /// What each blob holds, as `(object, offset, len)`.
+    held: Vec<(u32, u64, u64)>,
+}
+
+impl Places {
+    fn new(phys: u64, len: u64) -> Self {
+        Self {
+            phys,
+            len,
+            free: vec![(0, len)],
+            held: Vec::new(),
+        }
+    }
+
+    /// Hold `len` bytes for `object`, the first run that has room: where.
+    fn take(&mut self, object: u32, len: u64) -> Option<u64> {
+        let at = self.free.iter().position(|&(_, run)| run >= len)?;
+        let (offset, run) = *self.free.get(at)?;
+        if run == len {
+            let _ = self.free.remove(at);
+        } else if let Some(slot) = self.free.get_mut(at) {
+            *slot = (offset + len, run - len);
+        }
+        self.held.push((object, offset, len));
+        Some(offset)
+    }
+
+    /// The device has let `object` go, or would not: its place comes back
+    /// only in the first case.
+    fn settle(&mut self, object: u32, gone: bool) {
+        let Some(at) = self.held.iter().position(|&(held, _, _)| held == object) else {
+            return;
+        };
+        let (_, offset, len) = self.held.remove(at);
+        if !gone {
+            return;
+        }
+        let at = self.free.partition_point(|&(start, _)| start < offset);
+        self.free.insert(at, (offset, len));
+        // Join it to the runs either side, which keeps the window from
+        // fragmenting into places nothing fits.
+        if let Some(&(next, next_len)) = self.free.get(at + 1)
+            && offset + len == next
+        {
+            if let Some(slot) = self.free.get_mut(at) {
+                slot.1 += next_len;
+            }
+            let _ = self.free.remove(at + 1);
+        }
+        if at > 0
+            && let (Some(&(before, before_len)), Some(&(_, len))) =
+                (self.free.get(at - 1), self.free.get(at))
+            && before + before_len == offset
+        {
+            if let Some(slot) = self.free.get_mut(at - 1) {
+                slot.1 = before_len + len;
+            }
+            let _ = self.free.remove(at);
+        }
+    }
+}
+
+/// Where a mapped blob's pages are, and how the device said to cache them:
+/// what `mmap` of the blob maps.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct Placed {
+    /// Physical address of its first page.
+    pub(crate) phys: u64,
+    /// How many bytes.
+    pub(crate) len: u64,
+    /// The driver's word on caching, from `BLOB_MADE`.
+    pub(crate) map_info: u32,
+}
+
 /// What a flying request's reply will name.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Flight {
@@ -246,10 +336,13 @@ struct State {
     /// channel was full, and contexts that go once their objects have.
     leaving: Vec<u32>,
     closing: Vec<u32>,
-    /// The capability set the driver's streams are in, as the device gave
-    /// it: fetched once, before the renderer is published, so that
+    /// Every capability set a context may be made for, as the device gave
+    /// them: fetched once, before the renderer is published, so that
     /// `VIRTGPU_GET_CAPS` wakes nobody.
-    caps: Vec<u8>,
+    caps: Vec<(u32, Vec<u8>)>,
+    /// The device's host-visible window, for a driver that makes blobs and a
+    /// device that has one.
+    window: Option<Places>,
     gone: bool,
 }
 
@@ -542,6 +635,13 @@ fn accept(start: &Start, message: &ChannelMessage) -> Result<Arc<Renderer>, Refu
     };
     let rights: Vec<Rights> = message.handles.iter().map(|(_, rights)| *rights).collect();
     let session = Box::new(Session::accept(&hello, &rights, WORK_BYTES)?);
+    // The window is the kernel's, found when the device was enumerated; a
+    // driver that makes no blobs has no use for it.
+    let window = start
+        .device
+        .host_visible()
+        .filter(|_| hello.features & features::BLOBS != 0)
+        .map(|window| Places::new(window.phys, window.len));
     let Some((Object::Port(_driver_port), _)) = message.handles.first() else {
         return Err(Refusal::Rights);
     };
@@ -578,6 +678,7 @@ fn accept(start: &Start, message: &ChannelMessage) -> Result<Arc<Renderer>, Refu
             leaving: Vec::new(),
             closing: Vec::new(),
             caps: Vec::new(),
+            window,
             gone: false,
         }),
         changed: Arc::new(WaitQueue::new()),
@@ -603,10 +704,15 @@ fn accept(start: &Start, message: &ChannelMessage) -> Result<Arc<Renderer>, Refu
     }
     let state = renderer.state.lock();
     crate::console::println!(
-        "  render   renderD{index} is `{}`, version {VERSION}, capset {}, objects to {} MiB",
+        "  render   renderD{index} is `{}`, version {VERSION}, capsets {:#x}, objects to {} MiB, \
+         window {} MiB",
         state.session.name(),
-        state.session.capset(),
+        state.session.capsets(),
         state.session.object_limit() / (1024 * 1024),
+        state
+            .window
+            .as_ref()
+            .map_or(0, |window| window.len / (1024 * 1024)),
     );
     drop(state);
     Ok(renderer)
@@ -627,11 +733,32 @@ impl Renderer {
         alloc::string::String::from(self.state.lock().session.name())
     }
 
-    /// Which capability set the driver's command streams are in, as its
-    /// HELLO gave it: virgl's `CAPSET_VIRGL` here, and 0 for a device whose
-    /// streams are in none.
-    pub(crate) fn capset(&self) -> u32 {
-        self.state.lock().session.capset()
+    /// Which capability sets a context may be made for, a bit per set, as
+    /// the driver's HELLO gave them.
+    pub(crate) fn capsets(&self) -> u32 {
+        self.state.lock().session.capsets()
+    }
+
+    /// The capability set a context is made for when its program names
+    /// none: the lowest the driver offers, which is the one its streams have
+    /// always been in -- virgl's here -- and 0 for a device with none.
+    pub(crate) fn default_capset(&self) -> u32 {
+        let capsets = self.capsets();
+        if capsets == 0 {
+            0
+        } else {
+            capsets.trailing_zeros()
+        }
+    }
+
+    /// Whether the device has a window for blobs to be mapped through.
+    pub(crate) fn has_window(&self) -> bool {
+        self.state.lock().window.is_some()
+    }
+
+    /// Whether the driver fences a submission on a ring.
+    pub(crate) fn has_rings(&self) -> bool {
+        self.state.lock().session.features() & features::RINGS != 0
     }
 
     /// What `stat` says of the render node: a character device of major 226
@@ -721,21 +848,21 @@ impl Renderer {
         Err(RenderError::TimedOut)
     }
 
-    /// Make a context on the device, and answer the id it was given.
+    /// Make a context on the device for `capset`, and answer the id it was
+    /// given.
     ///
     /// A context is an open's own: what one program draws, and the objects
     /// it may name, are apart from every other's. The capability set is the
-    /// one the driver's streams are in, which its HELLO said.
+    /// one its program asked for, or the default.
     ///
     /// # Errors
     ///
     /// [`RenderError`].
-    pub(crate) fn make_context(&self) -> Result<u32, RenderError> {
+    pub(crate) fn make_context(&self, capset: u32) -> Result<u32, RenderError> {
         let context = self.request(|state| {
             // The session refuses an id it holds, so the next one it does
             // not is found by asking: there are few contexts and the ids
             // are dense.
-            let capset = state.session.capset();
             for _ in 0..=ferrix_renderctl::session::MAX_CONTEXTS {
                 let context = state.next_context;
                 state.next_context = state.next_context.checked_add(1).unwrap_or(1);
@@ -760,11 +887,127 @@ impl Renderer {
         }
     }
 
-    /// The capability set the driver's streams are in: its number, and its
-    /// bytes as the device gave them.
-    pub(crate) fn caps(&self) -> (u32, Vec<u8>) {
+    /// Capability set `capset`'s bytes, as the device gave them, if a
+    /// context may be made for it.
+    pub(crate) fn caps(&self, capset: u32) -> Option<Vec<u8>> {
         let state = self.state.lock();
-        (state.session.capset(), state.caps.clone())
+        state
+            .caps
+            .iter()
+            .find(|(held, _)| *held == capset)
+            .map(|(_, bytes)| bytes.clone())
+    }
+
+    /// Make a blob of `bytes` in `context`, and answer the id it was given
+    /// and, for a `mappable` one, where it is in the window.
+    ///
+    /// `memory`, `blob_flags` and `blob_id` are the program's words and the
+    /// driver's business (`docs/GPU.md` §3.3). A mappable blob is placed in
+    /// the window before it is asked for, so the driver can have the device
+    /// map it as it makes it, as Linux does; the place is given back if the
+    /// device makes nothing.
+    ///
+    /// # Errors
+    ///
+    /// [`RenderError`]; [`RequestError::Unsupported`] for a mappable blob on
+    /// a device with no window, and [`RequestError::Full`] for one the
+    /// window has no room for.
+    pub(crate) fn make_blob(
+        &self,
+        context: u32,
+        memory: u32,
+        blob_flags: u32,
+        blob_id: u64,
+        bytes: u64,
+        mappable: bool,
+    ) -> Result<(u32, Option<Placed>), RenderError> {
+        let (object, place) = {
+            let mut state = self.state.lock();
+            if state.gone {
+                return Err(RenderError::Gone);
+            }
+            let object = state
+                .take_object_id()
+                .ok_or(RenderError::Request(RequestError::Full))?;
+            let place = if mappable {
+                let window = state
+                    .window
+                    .as_mut()
+                    .ok_or(RenderError::Request(RequestError::Unsupported))?;
+                let offset = window
+                    .take(object, bytes)
+                    .ok_or(RenderError::Request(RequestError::Full))?;
+                Some((window.phys + offset, offset))
+            } else {
+                None
+            };
+            (object, place)
+        };
+        let give_back = |state: &mut State| {
+            if let Some(window) = state.window.as_mut() {
+                window.settle(object, true);
+            }
+        };
+        let asked = self.request(|state| {
+            let message = state
+                .session
+                .make_blob(MakeBlob {
+                    object,
+                    context,
+                    memory,
+                    flags: blob_flags,
+                    blob_id,
+                    bytes,
+                    window: place.map_or(NO_WINDOW, |(_, offset)| offset),
+                })
+                .map_err(RenderError::Request)?;
+            Ok((message, ()))
+        });
+        if let Err(error) = asked {
+            give_back(&mut self.state.lock());
+            return Err(error);
+        }
+        // A blob the driver answers late keeps its place for good: nothing
+        // here knows whether the device mapped it.
+        let event = self.collect(
+            |event| matches!(event, Event::BlobMade { object: made, .. } if *made == object),
+            |state| state.abandoned.push(Abandoned::Object(object)),
+        )?;
+        match event {
+            Event::BlobMade {
+                status: Status::Ok,
+                map_info,
+                ..
+            } => Ok((
+                object,
+                place.map(|(phys, _)| Placed {
+                    phys,
+                    len: bytes,
+                    map_info,
+                }),
+            )),
+            Event::BlobMade { status, .. } => {
+                give_back(&mut self.state.lock());
+                Err(RenderError::Refused(status))
+            }
+            _ => Err(RenderError::Gone),
+        }
+    }
+
+    /// Whether the submission `fence` names has been answered: for one on a
+    /// ring, whether its work has finished. What a fence descriptor polls.
+    pub(crate) fn fence_done(&self, fence: u64) -> bool {
+        let state = self.state.lock();
+        state.gone
+            || !state.flying.iter().any(
+                |held| matches!(held.flight, Flight::Submit { fence: kept, .. } if kept == fence),
+            )
+    }
+
+    /// The queue woken whenever the driver answers anything, which is what a
+    /// fence descriptor's waiters sleep on.
+    pub(crate) fn changed(&self) -> &Arc<WaitQueue> {
+        &self.changed
     }
 
     /// Make an object of `bytes` on the device, described by `words`, and
@@ -933,7 +1176,10 @@ impl Renderer {
         }
     }
 
-    /// Run `commands` in `context`: send them, and return.
+    /// Run `commands` in `context`: send them, and return the fence the
+    /// driver will answer. On a `ring` other than
+    /// [`ferrix_renderctl::message::NO_RING`], the answer comes when the work
+    /// has finished, which is what [`Renderer::fence_done`] then says.
     ///
     /// The bytes are the renderer's own language and go into a slot of the
     /// work VMO untouched (`docs/GPU.md` §3.3), where the driver has the
@@ -945,7 +1191,12 @@ impl Renderer {
     ///
     /// [`RenderError`]; [`RequestError::Work`] for a command buffer of no
     /// bytes or more than [`COMMAND_BYTES`].
-    pub(crate) fn submit(&self, context: u32, commands: &[u8]) -> Result<(), RenderError> {
+    pub(crate) fn submit(
+        &self,
+        context: u32,
+        ring: u32,
+        commands: &[u8],
+    ) -> Result<u64, RenderError> {
         if commands.is_empty() || commands.len() as u64 > COMMAND_BYTES {
             return Err(RenderError::Request(RequestError::Work));
         }
@@ -963,7 +1214,7 @@ impl Renderer {
             };
             self.wait_for_reply(seen, deadline)?;
         };
-        let sent = self.write_and_send(context, commands, slot, deadline);
+        let sent = self.write_and_send(context, ring, commands, slot, deadline);
         // A sent submission's slot is given back with its reply.
         if sent.is_err() {
             self.state.lock().give_command(slot);
@@ -975,10 +1226,11 @@ impl Renderer {
     fn write_and_send(
         &self,
         context: u32,
+        ring: u32,
         commands: &[u8],
         slot: usize,
         deadline: u64,
-    ) -> Result<(), RenderError> {
+    ) -> Result<u64, RenderError> {
         let at = DESCRIBE_REGION + slot as u64 * COMMAND_BYTES;
         for (index, chunk) in commands.chunks(PAGE_SIZE as usize).enumerate() {
             // A slot starts on a page boundary, so a chunk is a page's.
@@ -996,11 +1248,11 @@ impl Renderer {
                 let fence = state.next_fence;
                 let message = state
                     .session
-                    .submit(context, fence, range)
+                    .submit(context, ring, fence, range)
                     .map_err(RenderError::Request)?;
                 state.next_fence = fence.wrapping_add(1).max(1);
                 state.fly(Flight::Submit { fence, slot }, context);
-                Ok((message, ()))
+                Ok((message, fence))
             });
             match sent {
                 Err(RenderError::Busy | RenderError::Request(RequestError::Full)) => {
@@ -1129,6 +1381,13 @@ fn serve(renderer: &Renderer) {
             Ok(event) => {
                 let mut state = renderer.state.lock();
                 state.replies = state.replies.wrapping_add(1);
+                // A blob's place in the window is free once the device has
+                // unmapped it, and never if it would not.
+                if let Event::ObjectGone { object, status } = event
+                    && let Some(window) = state.window.as_mut()
+                {
+                    window.settle(object, status == Status::Ok);
+                }
                 // A reply is room in the driver's channel, and an object
                 // that has gone may be the last its context was waiting for.
                 state.let_go(&renderer.control);
@@ -1193,7 +1452,7 @@ fn serve(renderer: &Renderer) {
 /// itself and can read the channel directly rather than through [`serve`].
 fn prove(renderer: &Renderer) {
     let context = 1;
-    let capset = renderer.state.lock().session.capset();
+    let capset = renderer.default_capset();
     let Ok(ask) = renderer.state.lock().session.make_context(context, capset) else {
         return;
     };
@@ -1279,17 +1538,21 @@ fn prove_object(renderer: &Renderer, context: u32) {
     }
 }
 
-/// Fetch the capability set the driver's streams are in, and keep it.
+/// Fetch every capability set a context may be made for, and keep them.
 ///
-/// Asked once, here, while the core still has the channel to itself: the
-/// set is a property of the device and does not change, and a reply that
-/// brings a handle is one [`serve`] has no business with. Version 0 asks for
-/// the newest the device has.
+/// Asked once, here, while the core still has the channel to itself: a set
+/// is a property of the device and does not change, and a reply that brings
+/// a handle is one [`serve`] has no business with. Version 0 asks for the
+/// newest the device has.
 fn prove_caps(renderer: &Renderer) {
-    let capset = renderer.state.lock().session.capset();
-    if capset == 0 {
-        return;
+    let capsets = renderer.capsets();
+    for capset in (1..u32::BITS).filter(|capset| capsets & (1 << capset) != 0) {
+        prove_capset(renderer, capset);
     }
+}
+
+/// Fetch one capability set, and keep it.
+fn prove_capset(renderer: &Renderer, capset: u32) {
     let Ok(ask) = renderer.state.lock().session.get_caps(capset, 0) else {
         return;
     };
@@ -1320,7 +1583,7 @@ fn prove_caps(renderer: &Renderer) {
         renderer.index,
         caps.len()
     );
-    renderer.state.lock().caps = caps;
+    renderer.state.lock().caps.push((capset, caps));
 }
 
 /// Take the proof's context away again, so that a published renderer starts
@@ -1394,9 +1657,9 @@ fn flying_at(state: &State, event: Event) -> Option<usize> {
 /// Where an abandoned reply is recorded, if `event` is one.
 fn abandoned_at(state: &State, event: Event) -> Option<usize> {
     let which = match event {
-        Event::ObjectMade { object, .. } | Event::ObjectGone { object, .. } => {
-            Abandoned::Object(object)
-        }
+        Event::ObjectMade { object, .. }
+        | Event::BlobMade { object, .. }
+        | Event::ObjectGone { object, .. } => Abandoned::Object(object),
         Event::ContextMade { context, .. } | Event::ContextGone { context, .. } => {
             Abandoned::Context(context)
         }

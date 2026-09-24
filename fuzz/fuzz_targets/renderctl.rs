@@ -31,8 +31,8 @@
 
 use ferrix_native_abi::rights::Rights;
 use ferrix_renderctl::message::{
-    Hello, MAX_OBJECT_BYTES, MAX_WORK_BYTES, Message, NAME_BYTES, Status, VERSION, Work, features,
-    flags,
+    Hello, MAX_OBJECT_BYTES, MAX_WORK_BYTES, MakeBlob, Message, NAME_BYTES, NO_RING, NO_WINDOW,
+    Status, VERSION, Work, features, flags,
 };
 use ferrix_renderctl::session::{MAX_IN_FLIGHT, RequestError, Session};
 use libfuzzer_sys::fuzz_target;
@@ -97,8 +97,8 @@ fuzz_target!(|bytes: &[u8]| {
         version: VERSION,
         location: 0,
         name: named,
-        features: features::SUBMIT | features::FENCES,
-        capset: 2,
+        features: features::SUBMIT | features::FENCES | features::BLOBS | features::RINGS,
+        capsets: 1 << 2 | 1 << 4,
         object_max: 1 << 20,
     };
     let rights = [Rights(Rights::WRITE.0 | Rights::TRANSFER.0)];
@@ -111,16 +111,30 @@ fuzz_target!(|bytes: &[u8]| {
             match step & 0x7 {
                 0 => drop(core.make_context(id, 0)),
                 1 => drop(core.drop_context(id)),
-                2 => drop(core.make_object(
+                2 if step & 0x8 == 0 => drop(core.make_object(
                     id,
                     u32::from(step >> 5),
                     4096,
                     flags::TO_DEVICE,
                     Work { at: 0, len: 16 },
                 )),
+                2 => drop(core.make_blob(MakeBlob {
+                    object: id,
+                    context: u32::from(step >> 5),
+                    memory: 2,
+                    flags: 1,
+                    blob_id: fence,
+                    bytes: 4096,
+                    window: NO_WINDOW,
+                })),
                 3 => drop(core.drop_object(id)),
                 4 => {
-                    if core.submit(id, fence, Work { at: 0, len: 16 }).is_ok() {
+                    let ring = if step & 0x8 == 0 {
+                        NO_RING
+                    } else {
+                        u32::from(step >> 4)
+                    };
+                    if core.submit(id, ring, fence, Work { at: 0, len: 16 }).is_ok() {
                         in_flight += 1;
                     }
                 }
@@ -135,9 +149,14 @@ fuzz_target!(|bytes: &[u8]| {
                             context: id,
                             status: Status::Ok,
                         },
-                        1 => Message::ObjectMade {
+                        1 if step & 0x80 == 0 => Message::ObjectMade {
                             object: id,
                             status: Status::Ok,
+                        },
+                        1 => Message::BlobMade {
+                            object: id,
+                            status: Status::Ok,
+                            map_info: 1,
                         },
                         2 => Message::Submitted {
                             fence,

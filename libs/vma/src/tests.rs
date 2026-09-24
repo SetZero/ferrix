@@ -295,6 +295,8 @@ fn insert_rejects_an_unusable_file_offset() {
                 VmaFlags::READ,
                 Backing::Device {
                     physical: u64::MAX - 0xFFF,
+                    id: 0,
+                    cached: false,
                 }
             )
             .err(),
@@ -1061,12 +1063,18 @@ fn device_regions_merge_only_when_the_physical_pages_are_contiguous() {
     let mut space = space();
     let base = Backing::Device {
         physical: 0x8000_0000,
+        id: 0,
+        cached: false,
     };
     let next = Backing::Device {
         physical: 0x8000_2000,
+        id: 0,
+        cached: false,
     };
     let far = Backing::Device {
         physical: 0x9000_0000,
+        id: 0,
+        cached: false,
     };
 
     space
@@ -1091,6 +1099,43 @@ fn device_regions_merge_only_when_the_physical_pages_are_contiguous() {
         2,
         "a different device is a different region"
     );
+}
+
+/// Two windows of one BAR may lie side by side in it and in the address
+/// space, and still be two blobs: what keeps each is its own, and so is how
+/// it is cached. Neither merges with the other, or unmapping one would take
+/// the other's keeper with it.
+#[test]
+fn device_windows_merge_only_with_their_own_keeper_and_caching() {
+    let window = |physical, id, cached| Backing::Device {
+        physical,
+        id,
+        cached,
+    };
+    for (next, merges, why) in [
+        (window(0x8000_2000, 7, true), true, "the same window"),
+        (window(0x8000_2000, 8, true), false, "another keeper"),
+        (window(0x8000_2000, 7, false), false, "another caching"),
+        (
+            window(0x8000_2000, 0, true),
+            false,
+            "registers beside a window",
+        ),
+    ] {
+        let mut space = space();
+        space
+            .insert(
+                range(0x10_000, 0x12_000),
+                VmaFlags::READ_WRITE,
+                window(0x8000_0000, 7, true),
+            )
+            .expect("valid");
+        space
+            .insert(range(0x12_000, 0x14_000), VmaFlags::READ_WRITE, next)
+            .expect("valid");
+        check(&space);
+        assert_eq!(space.region_count() == 1, merges, "{why}");
+    }
 }
 
 #[test]
@@ -1339,6 +1384,8 @@ fn clone_for_fork_leaves_device_registers_alone() {
             VmaFlags::READ_WRITE,
             Backing::Device {
                 physical: 0x8000_0000,
+                id: 0,
+                cached: false,
             },
         )
         .expect("valid");

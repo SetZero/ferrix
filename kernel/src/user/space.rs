@@ -672,8 +672,11 @@ impl AddressSpace {
                 (id, offset.saturating_add(into_region), true)
             }
             // A device region has no object: its page is the device's own.
-            Backing::Device { physical } => {
-                return self.fault_device(page, physical.saturating_add(into_region), region.flags);
+            Backing::Device {
+                physical, cached, ..
+            } => {
+                let physical = physical.saturating_add(into_region);
+                return self.fault_device(page, physical, region.flags, cached);
             }
             // A private file mapping reads the file's pages until it writes
             // one, and writes into a shadow object of its own.
@@ -2007,8 +2010,89 @@ impl AddressSpace {
         };
         inner
             .map
-            .insert(range, flags, Backing::Device { physical })
+            .insert(
+                range,
+                flags,
+                Backing::Device {
+                    physical,
+                    id: 0,
+                    cached: false,
+                },
+            )
             .map_err(|_| SpaceError::BadRange)?;
+        Ok(at)
+    }
+
+    /// Map `len` bytes of a window of device memory at `physical`, which
+    /// `keeper` keeps the program's for as long as a region maps it, at
+    /// `place`. Returns where it went.
+    ///
+    /// What `mmap` of a GPU's blob does (`docs/GPU.md` §6.1). A window is
+    /// memory the device shares -- a BAR the host maps blob resources into --
+    /// rather than registers, so the device may say it is cached; and unlike
+    /// registers, which a driver holds for its whole life, a blob can be given
+    /// back while a program still maps it. So the region is given an id, as a
+    /// file mapping is, and `keeper` is kept under that id beside the file
+    /// mappings' own, until no region names it: until then nothing can hand
+    /// the window's pages to anyone else. A `fork` child keeps it too.
+    ///
+    /// # Errors
+    ///
+    /// As [`AddressSpace::map_device`].
+    pub(crate) fn map_window(
+        &self,
+        place: FilePlace,
+        len: u64,
+        physical: u64,
+        flags: VmaFlags,
+        cached: bool,
+        keeper: Arc<dyn Any + Send + Sync>,
+    ) -> Result<u64, SpaceError> {
+        if flags.execute {
+            return Err(SpaceError::Refused(0));
+        }
+        if len == 0 || !len.is_multiple_of(PAGE_SIZE) || !physical.is_multiple_of(PAGE_SIZE) {
+            return Err(SpaceError::BadRange);
+        }
+        let mut inner = self.inner.lock();
+        let at = match place {
+            FilePlace::Fixed(at) => at,
+            FilePlace::Anywhere(hint) => inner
+                .map
+                .find_free(len, PAGE_SIZE, hint)
+                .ok_or(SpaceError::OutOfMemory)?,
+        };
+        if !is_user_address(at) || at.checked_add(len).is_none_or(|end| end > USER_VIRT_END) {
+            return Err(SpaceError::NotUserRange(at));
+        }
+        let range = PageRange::from_len(at, len).map_err(|_| SpaceError::BadRange)?;
+        let id = inner.next_id;
+        inner.next_id = inner.next_id.saturating_add(1);
+        let flags = VmaFlags {
+            execute: false,
+            shared: true,
+            grows_down: false,
+            ..flags
+        };
+        inner
+            .map
+            .insert(
+                range,
+                flags,
+                Backing::Device {
+                    physical,
+                    id,
+                    cached,
+                },
+            )
+            .map_err(|_| SpaceError::BadRange)?;
+        let _ = inner.files.insert(
+            id,
+            FileMapping {
+                file: keeper,
+                may_write: false,
+            },
+        );
         Ok(at)
     }
 
@@ -2019,7 +2103,13 @@ impl AddressSpace {
     /// already present was resolved by another processor first, and the
     /// faulting instruction retries and succeeds, for the reason the anonymous
     /// path gives.
-    fn fault_device(&self, page: u64, physical: u64, flags: VmaFlags) -> Result<(), SpaceError> {
+    fn fault_device(
+        &self,
+        page: u64,
+        physical: u64,
+        flags: VmaFlags,
+        cached: bool,
+    ) -> Result<(), SpaceError> {
         if mm::translate_in(self.root * PAGE_SIZE, page).is_some() {
             return Ok(());
         }
@@ -2034,7 +2124,9 @@ impl AddressSpace {
                 execute: false,
                 user: true,
                 global: false,
-                device: true,
+                // Registers are device memory. A window the device said may
+                // be cached is ordinary memory to the processor.
+                device: !cached,
                 uncached: false,
             },
         )
@@ -2625,7 +2717,8 @@ fn writable_in_place(inner: &Inner, region: &Vma, address: u64, frame: Frame) ->
 fn still_named(map: &ferrix_vma::AddressSpace, id: u64) -> bool {
     map.iter().any(|region| match region.backing {
         Backing::Anonymous { id: named, .. } | Backing::File { id: named, .. } => named == id,
-        Backing::Device { .. } => false,
+        // A window's keeper is kept under its id; registers have none.
+        Backing::Device { id: named, .. } => named != 0 && named == id,
     })
 }
 

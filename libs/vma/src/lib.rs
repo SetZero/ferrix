@@ -305,10 +305,18 @@ pub enum Backing {
         /// Byte offset into that object of the region's first page.
         offset: u64,
     },
-    /// Device registers, never swapped and never copied.
+    /// Device memory, never swapped and never copied: a driver's registers,
+    /// or a window of memory a device shares with the guest, as a GPU's
+    /// host-visible BAR is.
     Device {
         /// Physical address of the region's first page.
         physical: u64,
+        /// Opaque to this crate: the kernel's name for what keeps the memory
+        /// the region's, or zero for registers, which nothing has to keep.
+        id: u64,
+        /// Whether the pages may be mapped cacheable: memory rather than
+        /// registers, as the device said it may be.
+        cached: bool,
     },
 }
 
@@ -331,8 +339,14 @@ impl Backing {
                 id,
                 offset: offset.saturating_add(bytes),
             },
-            Backing::Device { physical } => Backing::Device {
+            Backing::Device {
+                physical,
+                id,
+                cached,
+            } => Backing::Device {
                 physical: physical.saturating_add(bytes),
+                id,
+                cached,
             },
         }
     }
@@ -419,11 +433,19 @@ fn contiguous_backing(left: Backing, right: Backing, left_len: u64) -> bool {
         (
             Backing::Device {
                 physical: left_base,
+                id: left_id,
+                cached: left_cached,
             },
             Backing::Device {
                 physical: right_base,
+                id: right_id,
+                cached: right_cached,
             },
-        ) => left_base.checked_add(left_len) == Some(right_base),
+        ) => {
+            left_id == right_id
+                && left_cached == right_cached
+                && left_base.checked_add(left_len) == Some(right_base)
+        }
         _ => false,
     }
 }
@@ -433,7 +455,7 @@ fn validate_backing(backing: Backing, len: u64) -> Result<(), VmaError> {
     match backing {
         Backing::Anonymous { offset, .. } => validate_backing_base(offset, len),
         Backing::File { offset, .. } => validate_backing_base(offset, len),
-        Backing::Device { physical } => validate_backing_base(physical, len),
+        Backing::Device { physical, .. } => validate_backing_base(physical, len),
     }
 }
 

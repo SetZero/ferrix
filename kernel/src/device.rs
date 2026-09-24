@@ -72,7 +72,7 @@ use ferrix_pci::msix::{
     self, CAPABILITY_CONTROL, CONTROL_ENABLE, CONTROL_FUNCTION_MASK, ENTRY_ADDRESS_HIGH,
     ENTRY_ADDRESS_LOW, ENTRY_DATA, ENTRY_VECTOR_CONTROL, VECTOR_CONTROL_MASKED,
 };
-use ferrix_pci::virtio::{Location as VirtioLocation, Transport};
+use ferrix_pci::virtio::{Location as VirtioLocation, SharedMemory, Transport};
 use ferrix_sync::{IrqSpinLock, Once};
 
 use crate::mmio::Mmio;
@@ -506,6 +506,8 @@ pub(crate) struct Seen<'a> {
     /// A bridge's secondary bus: the bus behind it, whose functions sysfs
     /// shows inside its directory.
     pub(crate) secondary_bus: Option<u8>,
+    /// A virtio GPU's host-visible window, if it has one.
+    pub(crate) host_visible: Option<&'a SharedMemory>,
 }
 
 /// What enumeration read off a PCI function and kept, because whoever starts
@@ -534,6 +536,47 @@ pub(crate) struct PciFunction {
     pub(crate) virtio: Option<VirtioBlocks>,
     /// Entries in its MSI-X table; zero without one.
     pub(crate) msix_table_size: u16,
+    /// A virtio GPU's host-visible window, placed: where blob resources are
+    /// mapped for programs to reach (`docs/GPU.md` §6.1).
+    pub(crate) host_visible: Option<Window>,
+}
+
+/// A window of device memory in physical addresses: whole pages, clear of
+/// memory the kernel keeps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Window {
+    /// Where its first page is.
+    pub(crate) phys: u64,
+    /// How many bytes, a whole number of pages.
+    pub(crate) len: u64,
+}
+
+impl Window {
+    /// `window` placed through the BAR it names, or `None` if that BAR is not
+    /// an assigned memory BAR, the window is not whole pages, or it overlaps
+    /// memory the kernel keeps.
+    fn of(window: &SharedMemory, regions: &[Region], reserved: &Reserved) -> Option<Window> {
+        let region = regions.iter().find(|region| region.index == window.bar)?;
+        let Bar::Memory { address: base, .. } = region.bar else {
+            return None;
+        };
+        if base == 0 || !window.fits(region) {
+            return None;
+        }
+        let phys = base.checked_add(window.offset)?;
+        if !phys.is_multiple_of(PAGE_SIZE) || !window.length.is_multiple_of(PAGE_SIZE) {
+            return None;
+        }
+        let whole = Aperture {
+            phys,
+            len: window.length,
+            cacheable: true,
+        };
+        (!reserved.covers(whole)).then_some(Window {
+            phys,
+            len: window.length,
+        })
+    }
 }
 
 /// How a device reaches memory, where it is not how a virtio device does.
@@ -658,6 +701,9 @@ impl DeviceNode {
                 .transport
                 .and_then(|transport| VirtioBlocks::of(transport, regions)),
             msix_table_size: msix.map_or(0, |(_, table)| table.table_size),
+            host_visible: seen
+                .host_visible
+                .and_then(|window| Window::of(window, regions, reserved)),
         });
         if !decoding {
             node.undecoded = regions
@@ -712,6 +758,12 @@ impl DeviceNode {
         } else {
             self.apertures.push(aperture);
         }
+    }
+
+    /// A virtio GPU's host-visible window, where the render core maps blob
+    /// resources for programs, if the device has one.
+    pub(crate) fn host_visible(&self) -> Option<Window> {
+        self.pci.as_ref().and_then(|function| function.host_visible)
     }
 
     /// Where the device was found.

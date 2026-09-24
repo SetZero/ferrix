@@ -27,8 +27,8 @@ fn hello() -> Hello {
         version: VERSION,
         location: 0x0000_0800,
         name: Hello::named("virtio_gpu").expect("a name"),
-        features: features::SUBMIT | features::FENCES,
-        capset: 2,
+        features: features::SUBMIT | features::FENCES | features::BLOBS | features::RINGS,
+        capsets: 1 << 2 | 1 << 4,
         object_max: 64 * 1024 * 1024,
     }
 }
@@ -75,9 +75,26 @@ fn every_message_is_its_own_length_and_reads_back() {
         },
         Message::Submit(Submit {
             context: 1,
+            ring: NO_RING,
             fence: 9,
             commands: Work { at: 4096, len: 256 },
         }),
+        Message::Submit(Submit {
+            context: 1,
+            ring: MAX_RINGS - 1,
+            fence: 10,
+            commands: Work { at: 4096, len: 256 },
+        }),
+        Message::MakeBlob(a_blob()),
+        Message::MakeBlob(MakeBlob {
+            window: NO_WINDOW,
+            ..a_blob()
+        }),
+        Message::BlobMade {
+            object: 4,
+            status: Status::OutOfMemory,
+            map_info: 0,
+        },
         Message::Submitted {
             fence: 9,
             status: Status::Ok,
@@ -124,16 +141,17 @@ fn fields_lie_where_the_diagram_puts_them() {
     let bytes = encoded.as_bytes();
     assert_eq!(bytes.len(), 48);
     assert_eq!(u32_at(bytes, 0), 1, "HELLO");
-    assert_eq!(u16::from_le_bytes([bytes[8], bytes[9]]), 2, "VERSION");
+    assert_eq!(u16::from_le_bytes([bytes[8], bytes[9]]), 3, "VERSION");
     assert_eq!(u32_at(bytes, 12), 0x800, "location");
     assert_eq!(&bytes[16..26], b"virtio_gpu");
     assert!(bytes[26..32].iter().all(|&byte| byte == 0), "zero-padded");
-    assert_eq!(u32_at(bytes, 32), 0b11, "features");
-    assert_eq!(u32_at(bytes, 36), 2, "capset");
+    assert_eq!(u32_at(bytes, 32), 0b1111, "features");
+    assert_eq!(u32_at(bytes, 36), 0b1_0100, "capsets, a bit per set");
     assert_eq!(u64_at(bytes, 40), 64 * 1024 * 1024, "object_max");
 
     let encoded = Message::Submit(Submit {
         context: 3,
+        ring: 5,
         fence: 0x1234_5678_9abc_def0,
         commands: Work { at: 8192, len: 64 },
     })
@@ -141,9 +159,56 @@ fn fields_lie_where_the_diagram_puts_them() {
     let bytes = encoded.as_bytes();
     assert_eq!(bytes.len(), 32);
     assert_eq!(u32_at(bytes, 8), 3);
+    assert_eq!(u32_at(bytes, 12), 5, "ring");
     assert_eq!(u64_at(bytes, 16), 0x1234_5678_9abc_def0);
     assert_eq!(u32_at(bytes, 24), 8192);
     assert_eq!(u32_at(bytes, 28), 64);
+
+    let encoded = Message::MakeBlob(a_blob()).encode();
+    let bytes = encoded.as_bytes();
+    assert_eq!(bytes.len(), 48);
+    assert_eq!(u32_at(bytes, 0), 22, "MAKE_BLOB");
+    assert_eq!(
+        [
+            u32_at(bytes, 8),
+            u32_at(bytes, 12),
+            u32_at(bytes, 16),
+            u32_at(bytes, 20)
+        ],
+        [0x4000_0007, 3, 2, 1]
+    );
+    assert_eq!(u64_at(bytes, 24), 0xB10B, "blob_id");
+    assert_eq!(u64_at(bytes, 32), 0x20_0000, "bytes");
+    assert_eq!(u64_at(bytes, 40), 0x40_0000, "window");
+
+    let encoded = Message::BlobMade {
+        object: 0x4000_0007,
+        status: Status::Ok,
+        map_info: 1,
+    }
+    .encode();
+    let bytes = encoded.as_bytes();
+    assert_eq!(bytes.len(), 24);
+    assert_eq!(u32_at(bytes, 0), 23, "BLOB_MADE");
+    assert_eq!(
+        [u32_at(bytes, 8), u32_at(bytes, 12), u32_at(bytes, 16)],
+        [0x4000_0007, 0, 1]
+    );
+    assert_eq!(u32_at(bytes, 20), 0, "reserved");
+}
+
+/// A blob as Venus asks for one: host memory in context 3, mappable, at a
+/// place in the window.
+fn a_blob() -> MakeBlob {
+    MakeBlob {
+        object: 0x4000_0007,
+        context: 3,
+        memory: 2,
+        flags: 1,
+        blob_id: 0xB10B,
+        bytes: 0x20_0000,
+        window: 0x40_0000,
+    }
 }
 
 /// A type this protocol has not got, a length that is not the type's, and a
@@ -182,6 +247,19 @@ fn a_message_that_is_not_one_is_refused() {
     .to_vec();
     bytes[12] = 99;
     assert_eq!(Message::decode(&bytes), None);
+
+    // A ring past the most a context has.
+    let mut bytes: Vec<u8> = Message::Submit(Submit {
+        context: 1,
+        ring: 0,
+        fence: 1,
+        commands: Work { at: 0, len: 16 },
+    })
+    .encode()
+    .as_bytes()
+    .to_vec();
+    bytes[12..16].copy_from_slice(&MAX_RINGS.to_le_bytes());
+    assert_eq!(Message::decode(&bytes), None, "ring 64 of 64");
 }
 
 /// HELLO is checked field by field, and the name hardest of all: it is what
@@ -224,6 +302,11 @@ fn hello_is_validated_field_by_field() {
     let mut wrong = hello();
     wrong.object_max = 0;
     assert_eq!(wrong.validate(&rights), Err(Refusal::ObjectMax));
+
+    // Set 0 is none, so a driver offering it offers nothing it could name.
+    let mut wrong = hello();
+    wrong.capsets |= 1;
+    assert_eq!(wrong.validate(&rights), Err(Refusal::Capsets));
 
     assert_eq!(hello().validate(&[]), Err(Refusal::Rights));
     assert_eq!(
@@ -293,7 +376,7 @@ fn a_work_range_lies_inside_the_vmo() {
 /// is the reason that was meant.
 #[test]
 fn the_enumerations_round_trip() {
-    for (raw, refusal) in (1..=8).zip([
+    for (raw, refusal) in (1..=9).zip([
         Refusal::Version,
         Refusal::Name,
         Refusal::Features,
@@ -302,12 +385,13 @@ fn the_enumerations_round_trip() {
         Refusal::Malformed,
         Refusal::WrongLocation,
         Refusal::Protocol,
+        Refusal::Capsets,
     ]) {
         assert_eq!(Refusal::from_raw(raw), Some(refusal));
         assert_eq!(refusal as u32, raw);
     }
     assert_eq!(Refusal::from_raw(0), None);
-    assert_eq!(Refusal::from_raw(9), None);
+    assert_eq!(Refusal::from_raw(10), None);
 
     for (raw, status) in (0..=5).zip([
         Status::Ok,
@@ -520,7 +604,7 @@ fn a_context_is_made_before_anything_uses_it() {
 
     // Nothing may be submitted into a context that is not there.
     assert_eq!(
-        core.submit(1, 1, Work { at: 0, len: 16 }),
+        core.submit(1, NO_RING, 1, Work { at: 0, len: 16 }),
         Err(RequestError::NoSuchContext)
     );
 
@@ -534,7 +618,7 @@ fn a_context_is_made_before_anything_uses_it() {
     );
     // Still not usable: it has not been made yet.
     assert_eq!(
-        core.submit(1, 1, Work { at: 0, len: 16 }),
+        core.submit(1, NO_RING, 1, Work { at: 0, len: 16 }),
         Err(RequestError::NoSuchContext)
     );
     // And the id is taken, so it cannot be asked for twice.
@@ -550,7 +634,7 @@ fn a_context_is_made_before_anything_uses_it() {
             status: Status::Ok
         })
     );
-    assert!(core.submit(1, 1, Work { at: 0, len: 16 }).is_ok());
+    assert!(core.submit(1, NO_RING, 1, Work { at: 0, len: 16 }).is_ok());
 
     // The same answer twice is a driver answering a question nobody asked.
     assert_eq!(
@@ -775,15 +859,15 @@ fn a_fence_is_answered_once_for_each_thing_it_was_asked_about() {
         .expect("made");
 
     assert_eq!(
-        core.submit(1, 7, Work { at: 0, len: 0 }),
+        core.submit(1, NO_RING, 7, Work { at: 0, len: 0 }),
         Err(RequestError::Work),
         "nothing to run"
     );
     let _ = core
-        .submit(1, 7, Work { at: 0, len: 64 })
+        .submit(1, NO_RING, 7, Work { at: 0, len: 64 })
         .expect("submitted");
     assert_eq!(
-        core.submit(1, 7, Work { at: 0, len: 64 }),
+        core.submit(1, NO_RING, 7, Work { at: 0, len: 64 }),
         Err(RequestError::InUse),
         "one fence, one submission"
     );
@@ -846,4 +930,138 @@ fn a_refused_hello_is_no_session() {
         Session::accept(&told, &Hello::HANDLE_RIGHTS, 1 << 20).map(|_| ()),
         Err(Refusal::Features)
     );
+}
+
+/// A session whose context 3 is made.
+fn session_with_context() -> Session {
+    let mut core = session();
+    let _ = core.make_context(3, 4).expect("asked");
+    let _ = core
+        .receive(&Message::ContextMade {
+            context: 3,
+            status: Status::Ok,
+        })
+        .expect("made");
+    core
+}
+
+/// A blob is an object: made once, answered once, and then droppable. It
+/// has no backing, so no transfer reaches it, and an answer of the wrong
+/// kind -- an object made where a blob was asked for -- breaks the session.
+#[test]
+fn a_blob_is_an_object_the_device_side_made() {
+    let mut core = session_with_context();
+    assert_eq!(core.make_blob(a_blob()), Ok(Message::MakeBlob(a_blob())));
+    assert_eq!(core.make_blob(a_blob()), Err(RequestError::InUse));
+    assert_eq!(
+        core.receive(&Message::BlobMade {
+            object: 0x4000_0007,
+            status: Status::Ok,
+            map_info: 1,
+        }),
+        Ok(Event::BlobMade {
+            object: 0x4000_0007,
+            status: Status::Ok,
+            map_info: 1,
+        })
+    );
+    assert!(core.holds_object(0x4000_0007));
+    let transfer = Transfer {
+        object: 0x4000_0007,
+        context: 3,
+        ..a_transfer()
+    };
+    assert_eq!(core.transfer(transfer), Err(RequestError::Transfer));
+    assert_eq!(
+        core.drop_object(0x4000_0007),
+        Ok(Message::DropObject {
+            object: 0x4000_0007
+        })
+    );
+
+    let mut core = session_with_context();
+    let _ = core.make_blob(a_blob()).expect("asked");
+    assert_eq!(
+        core.receive(&Message::ObjectMade {
+            object: 0x4000_0007,
+            status: Status::Ok,
+        }),
+        Err(Refusal::Protocol)
+    );
+    assert!(core.is_broken());
+}
+
+/// A blob is asked for only of a driver that makes them, in a context that
+/// is there, and of a size the driver said it would make.
+#[test]
+fn a_blob_is_checked_like_an_object() {
+    let mut core = session_with_context();
+    for (make, error) in [
+        (
+            MakeBlob {
+                object: 0,
+                ..a_blob()
+            },
+            RequestError::ZeroId,
+        ),
+        (
+            MakeBlob {
+                context: 9,
+                ..a_blob()
+            },
+            RequestError::NoSuchContext,
+        ),
+        (
+            MakeBlob {
+                bytes: 0,
+                ..a_blob()
+            },
+            RequestError::ObjectBytes,
+        ),
+        (
+            MakeBlob {
+                bytes: 64 * 1024 * 1024 + 4096,
+                ..a_blob()
+            },
+            RequestError::ObjectBytes,
+        ),
+    ] {
+        assert_eq!(core.make_blob(make), Err(error), "{make:?}");
+    }
+
+    let mut plain = hello();
+    plain.features = features::SUBMIT;
+    let mut core = Session::accept(&plain, &Hello::HANDLE_RIGHTS, 1 << 20).expect("accepted");
+    assert_eq!(core.make_blob(a_blob()), Err(RequestError::Unsupported));
+}
+
+/// A submission on a ring is one the driver said it fences, on a ring a
+/// context has; with none it is the submission there always was.
+#[test]
+fn a_ring_is_one_the_driver_has() {
+    let mut core = session_with_context();
+    let range = Work { at: 0, len: 16 };
+    assert_eq!(core.submit(3, MAX_RINGS, 1, range), Err(RequestError::Ring));
+    assert_eq!(
+        core.submit(3, 63, 1, range),
+        Ok(Message::Submit(Submit {
+            context: 3,
+            ring: 63,
+            fence: 1,
+            commands: range,
+        }))
+    );
+
+    let mut plain = hello();
+    plain.features = features::SUBMIT;
+    let mut core = Session::accept(&plain, &Hello::HANDLE_RIGHTS, 1 << 20).expect("accepted");
+    let _ = core.make_context(3, 2).expect("asked");
+    let _ = core
+        .receive(&Message::ContextMade {
+            context: 3,
+            status: Status::Ok,
+        })
+        .expect("made");
+    assert_eq!(core.submit(3, 0, 1, range), Err(RequestError::Unsupported));
+    assert!(core.submit(3, NO_RING, 1, range).is_ok());
 }

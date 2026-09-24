@@ -248,12 +248,15 @@ fn map_file(
     // The open's own object is asked first: a render node's buffer objects
     // belong to the open, not to the name it was opened by. For a file whose
     // open is its inode this is one question asked once.
-    let (vmo, offset) = file
+    let (object, offset) = file
         .io()
         .mapping_at(offset)
         .or_else(|| file.inode().mapping_at(offset))
-        .and_then(|(object, offset)| Some((object.downcast::<Vmo>().ok()?, offset)))
         .ok_or(Errno::ENODEV)?;
+    let vmo = match object.downcast::<Vmo>() {
+        Ok(vmo) => vmo,
+        Err(object) => return map_window(process, object, addr, len, flags, vma, offset),
+    };
     // A sealed file: a shared writable mapping is `EPERM`, and a shared
     // read-only one may never be made writable. Linux's `seal_check_write`.
     let write_sealed = |seals: u32| seals & (F_SEAL_WRITE | F_SEAL_FUTURE_WRITE) != 0;
@@ -278,6 +281,44 @@ fn map_file(
         let _ = process.space().unmap(mapped, len);
         return Err(Errno::EPERM);
     }
+    Ok(usize_of(mapped))
+}
+
+/// `mmap` of a render node's blob: pages of the device's host-visible window
+/// rather than of a VMO (`docs/GPU.md` §6.1).
+///
+/// Shared only, as Linux's `virtio_gpu_vram_mmap` takes it: the pages are the
+/// device's, and a private copy of them would be a copy of what the host is
+/// still writing. The range must lie inside the blob. The region keeps the
+/// blob, so the device is not told to let it go while a program can still
+/// reach its pages.
+fn map_window(
+    process: &Process,
+    object: Arc<dyn Any + Send + Sync>,
+    addr: u64,
+    len: u64,
+    flags: u32,
+    vma: VmaFlags,
+    offset: u64,
+) -> Result<usize, Errno> {
+    let window = object
+        .downcast::<crate::render::node::Window>()
+        .map_err(|_| Errno::ENODEV)?;
+    let (phys, bytes, cached) = window.place().ok_or(Errno::ENODEV)?;
+    if !vma.shared {
+        return Err(Errno::EINVAL);
+    }
+    if offset
+        .checked_add(len)
+        .is_none_or(|end| end > bytes.next_multiple_of(PAGE_SIZE))
+    {
+        return Err(Errno::EINVAL);
+    }
+    let at = place(process, addr, len, flags)?;
+    let mapped = process
+        .space()
+        .map_window(at, len, phys + offset, vma, cached, window)
+        .map_err(refused)?;
     Ok(usize_of(mapped))
 }
 

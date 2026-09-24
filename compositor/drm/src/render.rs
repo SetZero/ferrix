@@ -23,8 +23,8 @@ use std::os::fd::{FromRawFd, OwnedFd};
 use ferrix_linux_abi::drm::{self, GemClose, PrimeHandle, Version};
 use ferrix_linux_abi::socket::Width;
 use ferrix_linux_abi::virtgpu::{
-    self, ExecBuffer, GetCaps, GetParam, Layout, Map, ResourceInfo, TransferFromHost,
-    TransferToHost, Wait,
+    self, ContextInit, ContextSetParam, ExecBuffer, Field, GetCaps, GetParam, Layout, Map,
+    ResourceCreateBlob, ResourceInfo, TransferFromHost, TransferToHost, Wait,
 };
 pub use ferrix_linux_abi::virtgpu::{Box3d, ResourceCreate};
 
@@ -212,8 +212,68 @@ impl Render {
         Ok((request.bo_handle, request.res_handle))
     }
 
+    /// Make this open's context for capability set `capset`, with `rings`
+    /// rings: `VIRTGPU_CONTEXT_INIT`, which an open does once and before
+    /// anything else that needs a context.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the node said; `EEXIST` for an open that has a context.
+    pub fn context_init(&self, capset: u32, rings: u32) -> io::Result<()> {
+        let mut params = [0u8; 2 * ContextSetParam::SIZE];
+        for (at, (param, value)) in [
+            (virtgpu::CONTEXT_PARAM_CAPSET_ID, u64::from(capset)),
+            (virtgpu::CONTEXT_PARAM_NUM_RINGS, u64::from(rings)),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let slot = params
+                .get_mut(at * ContextSetParam::SIZE..(at + 1) * ContextSetParam::SIZE)
+                .ok_or_else(|| io::Error::other("no room for a parameter"))?;
+            ContextSetParam { param, value }
+                .write(slot)
+                .ok_or_else(|| io::Error::other("a parameter larger than its slot"))?;
+        }
+        let mut request = ContextInit {
+            num_params: 2,
+            pad: 0,
+            ctx_set_params: params.as_ptr() as u64,
+        };
+        self.ioctl(virtgpu::IOCTL_CONTEXT_INIT, &mut request)
+    }
+
+    /// Make a blob of `size` bytes: `VIRTGPU_RESOURCE_CREATE_BLOB`, with no
+    /// commands to run first. Answers its handle and resource.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the node said.
+    pub fn create_blob(
+        &self,
+        blob_mem: u32,
+        blob_flags: u32,
+        blob_id: u64,
+        size: u64,
+    ) -> io::Result<(u32, u32)> {
+        let mut request = ResourceCreateBlob {
+            blob_mem,
+            blob_flags,
+            bo_handle: 0,
+            res_handle: 0,
+            size,
+            pad: 0,
+            cmd_size: 0,
+            cmd: 0,
+            blob_id,
+        };
+        self.ioctl(virtgpu::IOCTL_RESOURCE_CREATE_BLOB, &mut request)?;
+        Ok((request.bo_handle, request.res_handle))
+    }
+
     /// Map `len` bytes of object `handle`'s backing: the bytes a transfer
-    /// moves to and from the device.
+    /// moves to and from the device, or for a blob, its pages in the
+    /// device's window.
     ///
     /// # Errors
     ///
@@ -491,12 +551,55 @@ pub fn probe() -> String {
     let three_d = node.param(virtgpu::PARAM_3D_FEATURES).unwrap_or(0);
     let capsets = node.param(virtgpu::PARAM_SUPPORTED_CAPSET_IDS).unwrap_or(0);
     format!(
-        "{MARKER} renderD128 {driver} 3d {three_d} capsets 0x{capsets:x} {} {} {} {}",
+        "{MARKER} renderD128 {driver} 3d {three_d} capsets 0x{capsets:x} {} {} {} {} {}",
         object(&node),
         caps(&node, capsets),
         moved(&node),
         drew(&node),
+        blob(capsets),
     )
+}
+
+/// What making a Venus blob said: `blob <n> bytes`, the bytes of a pattern
+/// written through the mapping that read back, or `blob none <why>`.
+///
+/// Venus keeps its rings and every host-visible allocation in blobs of host
+/// memory, reached through the device's window (`docs/GPU.md` §6.1). This
+/// asks for the kind it asks for first: `blob_id` 0 in a Venus context, which
+/// the host's render server answers with plain shared memory. On an open of
+/// its own, because an open makes its context once and the probe's has one.
+/// A mapping that reached anything but the host's memory -- the window's
+/// unassigned space, or the wrong pages -- does not give the pattern back.
+fn blob(capsets: u64) -> String {
+    if capsets & (1 << virtgpu::CAPSET_VENUS) == 0 {
+        return "blob none no Venus".to_owned();
+    }
+    let attempt = || -> io::Result<usize> {
+        let node = Render::open()?;
+        node.context_init(virtgpu::CAPSET_VENUS, 64)?;
+        let (handle, _) = node.create_blob(
+            virtgpu::BLOB_MEM_HOST3D,
+            virtgpu::BLOB_FLAG_USE_MAPPABLE,
+            0,
+            u64::from(PROBE_BYTES),
+        )?;
+        let len = PROBE_BYTES as usize;
+        let mut mapping = node.map(handle, len)?;
+        let pattern = |at: usize| (at as u8).wrapping_mul(29) ^ 0xa5;
+        for (at, byte) in mapping.bytes_mut().iter_mut().enumerate() {
+            *byte = pattern(at);
+        }
+        Ok(mapping
+            .bytes()
+            .iter()
+            .enumerate()
+            .filter(|&(at, &byte)| byte == pattern(at))
+            .count())
+    };
+    match attempt() {
+        Ok(bytes) => format!("blob {bytes} bytes"),
+        Err(error) => format!("blob none {}", reason(&error)),
+    }
 }
 
 /// What asking for the capability set said: `caps <n> bytes v<version>`, or

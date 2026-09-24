@@ -330,6 +330,10 @@ pub(crate) fn mismatches(
 /// `compositor/drm`'s `drew`.
 const DREW: &str = "0xff0000 0x00ff00 0xff0000";
 
+/// How many bytes of the Venus blob the render probe writes and must read
+/// back through its mapping: a page, `compositor/drm`'s `PROBE_BYTES`.
+const BLOB: &str = "4096";
+
 /// What the program prints about the render node, before its own marker.
 pub(crate) const RENDER: &str = "render:";
 
@@ -400,7 +404,7 @@ fn read_dump(qmp: &mut Qmp, device: Option<&str>, file: &Path) -> Result<Image> 
 /// tries; without `--gl` there is no GPU, no node, and the program must say
 /// so. Each boot is the other's control: a check that cannot fail proves
 /// nothing (`docs/GPU.md` step 2).
-fn judge_render(arch: Arch, gl: bool, lines: &[String]) -> Result<()> {
+fn judge_render(arch: Arch, gl: bool, venus: bool, lines: &[String]) -> Result<()> {
     let render = lines
         .iter()
         .rev()
@@ -433,11 +437,29 @@ fn judge_render(arch: Arch, gl: bool, lines: &[String]) -> Result<()> {
             // the top right quarter where the rectangle went, red below
             // it. The third is what says rows are read back the way
             // they were drawn.
-            let (_, picture) = render.split_once("drew ").unwrap_or_default();
-            if picture.trim() != DREW {
+            let (_, after) = render.split_once("drew ").unwrap_or_default();
+            let picture = after
+                .split_whitespace()
+                .take(3)
+                .collect::<Vec<_>>()
+                .join(" ");
+            if picture != DREW {
                 return Err(Error::new(format!(
                     "{arch}: the GPU drew `{picture}`, not `{DREW}`: `{render}`"
                 )));
+            }
+            // With Venus on the card, a blob of host memory made in a
+            // Venus context and mapped through the device's window: every
+            // byte written there reads back (`docs/GPU.md` §6.1).
+            if venus {
+                let blob = render_did(render, "blob");
+                if blob != Some(BLOB) {
+                    return Err(Error::new(format!(
+                        "{arch}: the Venus blob gave back {} bytes of {BLOB}: `{render}`",
+                        blob.unwrap_or("none")
+                    )));
+                }
+                println!("  {arch}: the render node: a Venus blob, {BLOB} bytes mapped");
             }
         }
         (true, None) => {
@@ -502,7 +524,7 @@ fn boot_and_dump(arch: Arch, program: &Path, args: &Args, name: &str) -> Result<
             )));
         };
         println!("  {arch}: the card's primary plane {plane} shows the framebuffer");
-        judge_render(arch, args.gl, lines)?;
+        judge_render(arch, args.gl, args.venus, lines)?;
         // A GL console holds a texture on the host's GPU and no surface, and
         // QEMU's `screendump` reads only a surface (`docs/GPU.md` §3.1). So
         // the 3D boot is judged by what its render node did, above, and the

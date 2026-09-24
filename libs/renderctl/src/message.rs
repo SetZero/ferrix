@@ -8,7 +8,7 @@
 //! ```text
 //! HELLO      driver -> core, 48 bytes, handles [driver port]
 //!   8 version u16   10 reserved u16   12 location u32
-//!   16 name [u8; 16]   32 features u32   36 capset u32
+//!   16 name [u8; 16]   32 features u32   36 capsets u32 (a bit per id)
 //!   40 object_max u64
 //! READY      core -> driver, 24 bytes, handles [work VMO, core port]
 //!   8 renderer u32   12 reserved   16 work_bytes u64
@@ -24,7 +24,8 @@
 //! DROP_OBJ   core -> driver, 16 bytes: 8 object u32   12 reserved
 //! OBJ_GONE   driver -> core, 16 bytes: 8 object u32   12 status u32
 //! SUBMIT     core -> driver, 32 bytes
-//!   8 context u32   12 reserved   16 fence u64   24 at u32   28 len u32
+//!   8 context u32   12 ring u32 (NO_RING: none)   16 fence u64
+//!   24 at u32   28 len u32
 //! SUBMITTED  driver -> core, 24 bytes: 8 fence u64   16 status u32   20 reserved
 //! WAIT       core -> driver, 24 bytes: 8 context u32   12 reserved   16 fence u64
 //! WAITED     driver -> core, 24 bytes: 8 fence u64   16 status u32   20 reserved
@@ -36,6 +37,11 @@
 //! GET_CAPS   core -> driver, 16 bytes: 8 capset u32   12 version u32
 //! CAPS       driver -> core, 24 bytes, handles [caps VMO] when status is Ok
 //!   8 capset u32   12 status u32   16 len u32   20 reserved
+//! MAKE_BLOB  core -> driver, 48 bytes
+//!   8 object u32   12 context u32 (0: none)   16 memory u32   20 flags u32
+//!   24 blob_id u64   32 bytes u64   40 window u64 (NO_WINDOW: not mapped)
+//! BLOB_MADE  driver -> core, 24 bytes: 8 object u32   12 status u32
+//!   16 map_info u32   20 reserved
 //! STOP, STOPPED                8 bytes
 //! ```
 //!
@@ -66,13 +72,30 @@
 //! A capability set is the other way about: the *driver* read it from the
 //! device, so `CAPS` brings a VMO of the driver's making, and the core
 //! copies the bytes out and lets it go.
+//!
+//! # Blobs, and the window they are mapped through
+//!
+//! A *blob* is an object whose memory the device's side allocates -- Venus
+//! keeps every host-visible Vulkan allocation and its command rings in one
+//! (`docs/GPU.md` §6.1). It has no backing VMO: a program sees it through a
+//! window of device memory, a PCI BAR the host maps blobs into. The window is
+//! the kernel's, found when the device was enumerated, and the core hands out
+//! places in it the way it hands out ranges of the work VMO. `MAKE_BLOB`
+//! names the place and the driver asks its device to put the blob there;
+//! `BLOB_MADE` says how the device wants it cached, which is how the core
+//! maps it. What `memory`, `flags` and `blob_id` mean is the driver's --
+//! virtio-gpu's blob kinds here -- as a description is.
+//!
+//! A submission that names a *ring* is fenced on it: `SUBMITTED` comes when
+//! the work has finished, rather than when the device has taken it, which is
+//! what a program waiting on a fence descriptor needs.
 
 use ::core::fmt;
 
 use ferrix_native_abi::rights::Rights;
 
 /// The protocol version this crate speaks.
-pub const VERSION: u16 = 2;
+pub const VERSION: u16 = 3;
 
 /// HELLO's type.
 pub const HELLO: u32 = 1;
@@ -116,6 +139,10 @@ pub const TRANSFERRED: u32 = 19;
 pub const GET_CAPS: u32 = 20;
 /// CAPS's type.
 pub const CAPS: u32 = 21;
+/// `MAKE_BLOB`'s type.
+pub const MAKE_BLOB: u32 = 22;
+/// `BLOB_MADE`'s type.
+pub const BLOB_MADE: u32 = 23;
 
 /// Bytes of the type and length, and all of STOP and STOPPED.
 pub const HEADER_BYTES: usize = 8;
@@ -138,6 +165,8 @@ pub const REFUSED_BYTES: usize = 12;
 pub const MAKE_OBJ_BYTES: usize = 40;
 /// Bytes of `SUBMIT`.
 pub const SUBMIT_BYTES: usize = 32;
+/// Bytes of `MAKE_BLOB`.
+pub const MAKE_BLOB_BYTES: usize = 48;
 /// Bytes of a message that is a pair of words after the header.
 pub const PAIR_BYTES: usize = 16;
 /// Bytes of a message carrying a fence and a status.
@@ -146,6 +175,17 @@ pub const FENCE_BYTES: usize = 24;
 pub const TRANSFER_BYTES: usize = 64;
 /// Bytes of the longest message.
 pub const MAX_BYTES: usize = TRANSFER_BYTES;
+
+/// `SUBMIT`'s ring when it names none: the submission is answered when the
+/// device has taken it.
+pub const NO_RING: u32 = u32::MAX;
+
+/// The most rings a context may have, which is what Linux's `CONTEXT_INIT`
+/// lets a program ask for.
+pub const MAX_RINGS: u32 = 64;
+
+/// `MAKE_BLOB`'s window when the blob is not to be mapped.
+pub const NO_WINDOW: u64 = u64::MAX;
 
 /// Exactly the rights each side holds the other's port with.
 pub const PORT_RIGHTS: Rights = Rights(Rights::WRITE.0 | Rights::TRANSFER.0);
@@ -197,8 +237,14 @@ pub mod features {
     /// Fences are real: `WAIT` returns when the work has finished rather
     /// than when the device has read the command.
     pub const FENCES: u32 = 1 << 1;
+    /// The driver makes blobs, and maps a mappable one into the device's
+    /// window where the core says.
+    pub const BLOBS: u32 = 1 << 2;
+    /// A submission may name a ring of its context, and is then answered
+    /// when the work on it has finished.
+    pub const RINGS: u32 = 1 << 3;
     /// Every feature this version defines.
-    pub const KNOWN: u32 = SUBMIT | FENCES;
+    pub const KNOWN: u32 = SUBMIT | FENCES | BLOBS | RINGS;
 }
 
 /// `HELLO`: the driver introduces its device.
@@ -214,10 +260,11 @@ pub struct Hello {
     pub name: [u8; NAME_BYTES],
     /// What it can do: [`features`].
     pub features: u32,
-    /// Which capability set its command streams are in, for a device that
-    /// has them; 0 for one that does not. virtio-gpu's `CAPSET_VIRGL2`,
-    /// say.
-    pub capset: u32,
+    /// Which capability sets a context may be made for: bit `n` for the set
+    /// numbered `n`, as Linux's `VIRTGPU_PARAM_SUPPORTED_CAPSET_IDS` says
+    /// them. virtio-gpu's `CAPSET_VIRGL2` and `CAPSET_VENUS`, say; none for a
+    /// device that has none. Bit 0 names no set and is never set.
+    pub capsets: u32,
     /// The largest object it will make, in bytes.
     pub object_max: u64,
 }
@@ -291,6 +338,9 @@ impl Hello {
         if self.object_max == 0 {
             return Err(Refusal::ObjectMax);
         }
+        if self.capsets & 1 != 0 {
+            return Err(Refusal::Capsets);
+        }
         if handle_rights != Self::HANDLE_RIGHTS {
             return Err(Refusal::Rights);
         }
@@ -345,6 +395,8 @@ pub enum Refusal {
     WrongLocation = 7,
     /// The driver answered something the core did not ask.
     Protocol = 8,
+    /// `capsets` names set 0, which is none.
+    Capsets = 9,
 }
 
 impl Refusal {
@@ -360,6 +412,7 @@ impl Refusal {
             6 => Self::Malformed,
             7 => Self::WrongLocation,
             8 => Self::Protocol,
+            9 => Self::Capsets,
             _ => return None,
         })
     }
@@ -376,6 +429,7 @@ impl fmt::Display for Refusal {
             Self::Malformed => "malformed HELLO",
             Self::WrongLocation => "HELLO names another device",
             Self::Protocol => "the driver broke the protocol",
+            Self::Capsets => "the driver offers capability set 0",
         })
     }
 }
@@ -459,11 +513,35 @@ pub struct MakeObject {
     pub describe: Work,
 }
 
+/// `MAKE_BLOB`: the core asks for a blob.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct MakeBlob {
+    /// The id to give it, chosen as an object's is.
+    pub object: u32,
+    /// The context it is made in, whose protocol named `blob_id`, or 0.
+    pub context: u32,
+    /// Where its memory is, in the driver's words: virtio-gpu's
+    /// `BLOB_MEM_*`.
+    pub memory: u32,
+    /// What it may be used for, in the driver's words: virtio-gpu's
+    /// `BLOB_FLAG_*`.
+    pub flags: u32,
+    /// The context's own name for the memory, or 0.
+    pub blob_id: u64,
+    /// How big, in bytes: a whole number of pages.
+    pub bytes: u64,
+    /// Where in the device's window to map it, from the window's start, or
+    /// [`NO_WINDOW`].
+    pub window: u64,
+}
+
 /// `SUBMIT`: the core hands over a command buffer.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Submit {
     /// Which context it runs in.
     pub context: u32,
+    /// Which of the context's rings it is fenced on, or [`NO_RING`].
+    pub ring: u32,
     /// The fence to answer with, which the core chose.
     pub fence: u64,
     /// Where the command buffer is, in the work VMO.
@@ -632,6 +710,18 @@ pub enum Message {
         /// Which version of it.
         version: u32,
     },
+    /// Make a blob.
+    MakeBlob(MakeBlob),
+    /// It was made, and mapped if it was to be, or was not.
+    BlobMade {
+        /// Which.
+        object: u32,
+        /// How it went.
+        status: Status,
+        /// How the device wants the mapping cached, in its own words:
+        /// virtio-gpu's `MAP_CACHE_*`. 0 for a blob not mapped.
+        map_info: u32,
+    },
     /// Here they are, in the VMO this came with, or here they are not.
     Caps {
         /// Which set.
@@ -686,6 +776,8 @@ impl Message {
             Self::Transferred { .. } => TRANSFERRED,
             Self::GetCaps { .. } => GET_CAPS,
             Self::Caps { .. } => CAPS,
+            Self::MakeBlob(_) => MAKE_BLOB,
+            Self::BlobMade { .. } => BLOB_MADE,
             Self::Stop => STOP,
             Self::Stopped => STOPPED,
         }
@@ -702,7 +794,8 @@ impl Message {
             | TRANSFERRED | GET_CAPS => PAIR_BYTES,
             MAKE_OBJ => MAKE_OBJ_BYTES,
             SUBMIT => SUBMIT_BYTES,
-            SUBMITTED | WAIT | WAITED | CAPS => FENCE_BYTES,
+            SUBMITTED | WAIT | WAITED | CAPS | BLOB_MADE => FENCE_BYTES,
+            MAKE_BLOB => MAKE_BLOB_BYTES,
             TRANSFER => TRANSFER_BYTES,
             STOP | STOPPED => HEADER_BYTES,
             _ => return None,
@@ -727,7 +820,7 @@ impl Message {
                 put32(bytes, 12, hello.location);
                 put(bytes, 16, &hello.name);
                 put32(bytes, 32, hello.features);
-                put32(bytes, 36, hello.capset);
+                put32(bytes, 36, hello.capsets);
                 put64(bytes, 40, hello.object_max);
             }
             Self::Ready(ready) => {
@@ -759,6 +852,7 @@ impl Message {
             Self::DropObject { object } => put32(bytes, 8, object),
             Self::Submit(submit) => {
                 put32(bytes, 8, submit.context);
+                put32(bytes, 12, submit.ring);
                 put64(bytes, 16, submit.fence);
                 put32(bytes, 24, submit.commands.at);
                 put32(bytes, 28, submit.commands.len);
@@ -788,6 +882,16 @@ impl Message {
                 put32(bytes, 8, capset);
                 put32(bytes, 12, status as u32);
                 put32(bytes, 16, len);
+            }
+            Self::MakeBlob(make) => put_blob(bytes, &make),
+            Self::BlobMade {
+                object,
+                status,
+                map_info,
+            } => {
+                put32(bytes, 8, object);
+                put32(bytes, 12, status as u32);
+                put32(bytes, 16, map_info);
             }
             Self::Stop | Self::Stopped => {}
         }
@@ -882,7 +986,7 @@ impl Message {
                     location: get32(bytes, 12)?,
                     name,
                     features: get32(bytes, 32)?,
-                    capset: get32(bytes, 36)?,
+                    capsets: get32(bytes, 36)?,
                     object_max: get64(bytes, 40)?,
                 })
             }
@@ -907,9 +1011,11 @@ impl Message {
                 })
             }
             SUBMIT => {
-                zero32(12)?;
+                let ring = get32(bytes, 12)?;
+                (ring == NO_RING || ring < MAX_RINGS).then_some(())?;
                 Message::Submit(Submit {
                     context: get32(bytes, 8)?,
+                    ring,
                     fence: get64(bytes, 16)?,
                     commands: Work {
                         at: get32(bytes, 24)?,
@@ -939,6 +1045,15 @@ impl Message {
                 }
             }
             TRANSFER => Message::Transfer(get_transfer(bytes)?),
+            MAKE_BLOB => Message::MakeBlob(get_blob(bytes)?),
+            BLOB_MADE => {
+                zero32(20)?;
+                Message::BlobMade {
+                    object: get32(bytes, 8)?,
+                    status: status(12)?,
+                    map_info: get32(bytes, 16)?,
+                }
+            }
             CAPS => {
                 zero32(20)?;
                 Message::Caps {
@@ -996,6 +1111,30 @@ fn get_transfer(bytes: &[u8]) -> Option<Transfer> {
         },
         stride: get32(bytes, 56)?,
         layer_stride: get32(bytes, 60)?,
+    })
+}
+
+/// `MAKE_BLOB`'s fields, for the reason [`put_transfer`] is apart.
+fn put_blob(bytes: &mut [u8], make: &MakeBlob) {
+    put32(bytes, 8, make.object);
+    put32(bytes, 12, make.context);
+    put32(bytes, 16, make.memory);
+    put32(bytes, 20, make.flags);
+    put64(bytes, 24, make.blob_id);
+    put64(bytes, 32, make.bytes);
+    put64(bytes, 40, make.window);
+}
+
+/// The same, read back.
+fn get_blob(bytes: &[u8]) -> Option<MakeBlob> {
+    Some(MakeBlob {
+        object: get32(bytes, 8)?,
+        context: get32(bytes, 12)?,
+        memory: get32(bytes, 16)?,
+        flags: get32(bytes, 20)?,
+        blob_id: get64(bytes, 24)?,
+        bytes: get64(bytes, 32)?,
+        window: get64(bytes, 40)?,
     })
 }
 
