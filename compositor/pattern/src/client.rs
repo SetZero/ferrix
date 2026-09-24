@@ -766,6 +766,7 @@ fn run_with(
         buffer_format: None,
         released: 0,
         keys: 0,
+        pointer_placed: false,
         seat: false,
         scale: 1,
         menu_asked: false,
@@ -910,6 +911,15 @@ struct Client {
     /// drawn: the client draws a different one after each key, so that a key
     /// arriving is visible on the screen and not only in a log line.
     keys: u32,
+    /// Whether a motion has been reported since the pointer last entered.
+    ///
+    /// Only the first is: a USB mouse reports up to a thousand times a
+    /// second, and on a DK1 a line per motion kept one of its two cores
+    /// writing to the serial console for as long as the mouse moved. Nothing
+    /// reads the positions -- `xtask/src/seat.rs` waits for the enter and the
+    /// buttons -- and the first one after an enter is enough to see where the
+    /// pointer came in.
+    pointer_placed: bool,
     /// Whether the seat has been bound and asked for its objects.
     seat: bool,
     /// Whether the menu has been asked for, so it is asked for once.
@@ -1312,9 +1322,13 @@ impl Client {
     /// What the pointer said.
     fn pointer(&mut self, opcode: u16, args: &[Arg<'_>]) {
         match opcode {
-            wl_pointer::event::ENTER => say("pattern: pointer enter"),
+            wl_pointer::event::ENTER => {
+                self.pointer_placed = false;
+                say("pattern: pointer enter");
+            }
             wl_pointer::event::LEAVE => say("pattern: pointer leave"),
-            wl_pointer::event::MOTION => {
+            wl_pointer::event::MOTION if !self.pointer_placed => {
+                self.pointer_placed = true;
                 let (x, y) = (
                     args.get(1).and_then(Arg::as_fixed),
                     args.get(2).and_then(Arg::as_fixed),
