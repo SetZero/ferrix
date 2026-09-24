@@ -1,25 +1,29 @@
 //! `crypt.h`: one-way password hashing.
 //!
 //! `crypt` reads the hash to use from the setting string it is given, as every
-//! implementation since the traditional two-character salt has:
+//! implementation since the traditional two-character salt has. The order is
+//! musl 1.2.5's `crypt_r.c` (MIT):
 //!
 //! | Setting | Hash |
 //! |---|---|
 //! | `$1$salt$` | MD5, in [`md5`] |
+//! | `$2?$…` | blowfish, which is not here and gives `"*"` |
 //! | `$5$[rounds=n$]salt$` | SHA-256, in [`sha2`] |
 //! | `$6$[rounds=n$]salt$` | SHA-512, in [`sha2`] |
+//! | `_`, 4 characters of count, 4 of salt | BSDi's extended DES, in [`des`] |
+//! | anything else | the traditional DES hash of its first two characters, in [`des`] |
 //!
-//! A setting this does not understand — `$2a$` and the rest of the blowfish
-//! family, and the traditional DES hash — returns `"*"`, which matches no
-//! password, rather than a hash from the wrong algorithm. musl's `crypt` falls
-//! through to DES; until that is here, a DES entry in `/etc/shadow` cannot be
-//! checked, and `"*"` refuses the login rather than accepting it.
+//! Like musl's, a setting beginning with `$` that names none of these hashes
+//! is not refused but read as a DES salt. Blowfish settings give `"*"`, which
+//! matches no password, rather than a hash from the wrong algorithm.
 //!
 //! The result is written into storage the caller can read until the next call:
 //! a static buffer for `crypt`, and the caller's `struct crypt_data` for
-//! `crypt_r`. Neither ever fails with a null pointer; a setting that cannot be
-//! used gives `"*"`, as musl does.
+//! `crypt_r`. Neither ever fails with a null pointer. A setting that cannot be
+//! used gives `"*"`, or `"x"` if the setting itself begins with `*`, as musl
+//! does, so a locked entry never matches its own hash.
 
+pub(crate) mod des;
 pub(crate) mod md5;
 pub(crate) mod sha2;
 
@@ -152,16 +156,22 @@ impl<'a> Writer<'a> {
 fn hash(key: &[u8], setting: &[u8], out: &mut [u8]) -> Option<usize> {
     match setting {
         [b'$', b'1', b'$', ..] => md5::md5crypt(key, setting, out),
+        [b'$', b'2', _, b'$', ..] => None,
         [b'$', b'5', b'$', ..] => sha2::sha256crypt(key, setting, out),
         [b'$', b'6', b'$', ..] => sha2::sha512crypt(key, setting, out),
-        _ => None,
+        _ => des::descrypt(key, setting, out),
     }
 }
 
-/// Writes the refusal that matches no password.
-fn refuse(out: &mut [u8]) {
+/// Writes a refusal that cannot equal a locked setting.
+fn refuse(setting: &[u8], out: &mut [u8]) {
+    let refusal = if setting.first() == Some(&b'*') {
+        b"x"
+    } else {
+        b"*"
+    };
     let mut writer = Writer::new(out);
-    if writer.push(b"*").is_some() {
+    if writer.push(refusal).is_some() {
         let _ = writer.finish();
     }
 }
@@ -190,7 +200,7 @@ unsafe fn hash_into(key: *const c_char, setting: *const c_char, out: &mut [u8]) 
     // SAFETY: the caller promises a NUL-terminated string.
     let setting = unsafe { bytes(setting) };
     if hash(key, setting, out).is_none() {
-        refuse(out);
+        refuse(setting, out);
     }
     out.as_mut_ptr().cast()
 }
@@ -238,13 +248,11 @@ mod tests {
 
     fn hashed(key: &[u8], setting: &[u8]) -> String {
         let mut out = [0u8; BUFFER_LEN];
-        match hash(key, setting, &mut out) {
-            Some(len) => String::from_utf8_lossy(out.get(..len).unwrap_or(&[])).into_owned(),
-            None => {
-                refuse(&mut out);
-                "*".to_owned()
-            }
+        if hash(key, setting, &mut out).is_none() {
+            refuse(setting, &mut out);
         }
+        let len = out.iter().position(|&byte| byte == 0).unwrap_or(0);
+        String::from_utf8_lossy(out.get(..len).unwrap_or(&[])).into_owned()
     }
 
     #[test]
@@ -252,16 +260,24 @@ mod tests {
         assert!(hashed(b"password", b"$1$salt$").starts_with("$1$salt$"));
         assert!(hashed(b"password", b"$5$salt$").starts_with("$5$salt$"));
         assert!(hashed(b"password", b"$6$salt$").starts_with("$6$salt$"));
+        assert_eq!(hashed(b"password", b"ab"), "abJnggxhB/yWI");
+        assert_eq!(hashed(b"test", b"_J9..CCCC"), "_J9..CCCCZBIc.TMGpK.");
     }
 
     #[test]
-    fn a_hash_that_is_not_here_refuses_rather_than_guesses() {
-        // Blowfish and the traditional DES hash, which this does not have.
+    fn blowfish_refuses_rather_than_guesses() {
         assert_eq!(hashed(b"password", b"$2a$10$abcdefghijklmnopqrstuv"), "*");
-        assert_eq!(hashed(b"password", b"ab"), "*");
+        assert_eq!(hashed(b"password", b"$2y$04$abcdefghijklmnopqrstuv"), "*");
+    }
+
+    #[test]
+    fn a_refusal_never_equals_its_setting() {
         assert_eq!(hashed(b"password", b""), "*");
-        // A prefix that names no hash at all.
-        assert_eq!(hashed(b"password", b"$9$salt$"), "*");
+        assert_eq!(hashed(b"password", b"a"), "*");
+        assert_eq!(hashed(b"password", b"*"), "x");
+        let dollar = hashed(b"password", b"$9$salt$");
+        assert_eq!(dollar.len(), 13);
+        assert!(dollar.starts_with("$9"));
     }
 
     #[test]

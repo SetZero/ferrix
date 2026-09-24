@@ -51,6 +51,7 @@ int at_quick_exit (void (*) (void));
 _Noreturn void quick_exit (int);
 
 char *getenv (const char *);
+char *secure_getenv (const char *);
 
 int system (const char *);
 
@@ -156,7 +157,6 @@ int ptsname_r(int, char *, size_t);
 char *ecvt(double, int, int *, int *);
 char *fcvt(double, int, int *, int *);
 char *gcvt(double, int, char *);
-char *secure_getenv(const char *);
 struct __locale_struct;
 float strtof_l(const char *__restrict, char **__restrict, struct __locale_struct *);
 double strtod_l(const char *__restrict, char **__restrict, struct __locale_struct *);

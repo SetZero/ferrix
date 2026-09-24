@@ -6,7 +6,7 @@
 
 mod common;
 
-use common::{Case, check};
+use common::{Case, Ending, check};
 
 #[test]
 fn strtol_limits_bases_and_end_pointers() {
@@ -91,4 +91,18 @@ fn temporary_files_and_directories_get_exclusive_names() {
 #[test]
 fn realpath_resolves_links_dots_and_the_working_directory() {
     check(&Case::named("stdlib/realpath"));
+}
+
+#[test]
+fn posix_2024_conversions_suboptions_secure_environment_and_des_work() {
+    check(&Case::named("stdlib/posix2024"));
+}
+
+#[test]
+fn quick_exit_runs_its_separate_handler_stack_without_flushing() {
+    check(&Case {
+        stdout: "second\nfirst\n",
+        ending: Ending::Code(23),
+        ..Case::named("stdlib/quick_exit")
+    });
 }
