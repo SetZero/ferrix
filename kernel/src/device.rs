@@ -716,6 +716,15 @@ impl DeviceNode {
         self.dma
     }
 
+    /// The binding of a device tree node the kernel knows, `None` for any
+    /// other device.
+    pub(crate) const fn tree_binding(&self) -> Option<u16> {
+        match self.location {
+            Location::Tree(_) => Some(self.binding),
+            _ => None,
+        }
+    }
+
     /// What configuration space said, for a PCI function.
     pub(crate) const fn pci_function(&self) -> Option<&PciFunction> {
         self.pci.as_ref()

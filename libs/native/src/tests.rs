@@ -710,6 +710,30 @@ fn device_info_reads_the_kernel_bytes_back_and_quiesce_takes_the_handle() {
     assert_eq!(calls[0].number, nr::DEVICE_INFO);
     assert_eq!(calls[0].args[0], 0xA7, "the device handle first");
     assert_eq!(calls[1], made(nr::DEVICE_QUIESCE, &[0xA7]));
+
+    // The clock: asked, then set, the rate coming back as the value.
+    sys.returns(74_250_000);
+    assert_eq!(device.clock(75_000_000, false), Ok(74_250_000), "rounded");
+    sys.returns(49_500_000);
+    assert_eq!(device.clock(49_500_000, true), Ok(49_500_000), "set");
+    let calls = sys.take();
+    assert_eq!(
+        calls[0],
+        made(nr::DEVICE_CLOCK, &[0xA7, 75_000_000, 0]),
+        "asked"
+    );
+    assert_eq!(
+        calls[1],
+        made(
+            nr::DEVICE_CLOCK,
+            &[
+                0xA7,
+                49_500_000,
+                ferrix_native_abi::types::CLOCK_SET as usize
+            ]
+        ),
+        "set"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -904,6 +928,7 @@ fn every_call_in_the_native_table_has_a_wrapper() {
     let _ = device.input_control();
     let _ = device.info();
     let _ = device.quiesce();
+    let _ = device.clock(1, false);
     let _ = pending::create_process(&job, &vmo, "x");
     let _ = Process::from_owned(handle()).start(handle());
     let _ = interrupt.bind(&port, 0);

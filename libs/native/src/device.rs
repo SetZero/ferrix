@@ -109,6 +109,31 @@ impl<S: Syscall> Device<S> {
         )
     }
 
+    /// `device_clock`: the rate, in Hz, nearest `hz` that the kernel will run
+    /// the device's pixel clock at, and with `set`, that rate set. Needs
+    /// `MANAGE`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::WrongType`] for a device with no clock the kernel sets,
+    /// [`Error::BadState`] when it cannot be set now (something else runs
+    /// from it), [`Error::InvalidArgs`] for a rate of 0, and
+    /// [`Error::AccessDenied`] without `MANAGE`.
+    pub fn clock(&self, hz: u32, set: bool) -> Result<u32, Error> {
+        let options = if set {
+            ferrix_native_abi::types::CLOCK_SET
+        } else {
+            0
+        };
+        let value = Call::new(nr::DEVICE_CLOCK)
+            .value(register(self.handle()))
+            .value(hz as usize)
+            .value(options as usize)
+            .make(self.syscall());
+        let rate = decode(value)?;
+        u32::try_from(rate).map_err(|_| Error::InvalidArgs)
+    }
+
     /// Ask the kernel for a block ring on this device: the driver's end of
     /// the ring's control channel, over which HELLO goes next
     /// (`docs/BLOCK-RING.md` §6). Needs `MANAGE`.
