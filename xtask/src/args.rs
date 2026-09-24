@@ -211,6 +211,10 @@ pub(crate) struct Args {
     /// `--from <WHERE>`: where `wallpapers` finds pictures to convert, a
     /// directory of this machine's or `host:directory`.
     pub(crate) from: Option<String>,
+    /// `--plan <DIR>`: a plan of builds `FERRIX_BUILDS=record:` wrote, which
+    /// `test-selfhost` has Ferrix carry out and `builds-execute` carries out
+    /// (see `crate::builds`).
+    pub(crate) plan: Option<String>,
     /// `--size <W>x<H>`: the screen `run-compositor` gives the guest and
     /// `wallpapers` cuts pictures for, 1920x1080 for both when not given.
     pub(crate) size: Option<(u32, u32)>,
@@ -363,6 +367,7 @@ impl Args {
                 "--variant" => args.variant = Some(value(&mut items, "--variant")?),
                 "--wallpaper" => args.wallpaper = Some(value(&mut items, "--wallpaper")?),
                 "--from" => args.from = Some(value(&mut items, "--from")?),
+                "--plan" => args.plan = Some(value(&mut items, "--plan")?),
                 "--size" => args.size = Some(dimensions(&value(&mut items, "--size")?, "--size")?),
                 "--video-size" => {
                     let raw = value(&mut items, "--video-size")?;

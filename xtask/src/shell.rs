@@ -41,7 +41,7 @@ use std::path::{Path, PathBuf};
 use ferrix_elf::Elf;
 
 use crate::paths::{self, Arch};
-use crate::{Error, Result, cargo, ports};
+use crate::{Error, Result, ports};
 
 /// The script `sh -c` runs.
 pub(crate) const SCRIPT: &str = r#"echo "script: started"
@@ -200,13 +200,15 @@ pub(crate) fn ferrousli_shared(arch: Arch) -> Result<PathBuf> {
     }
     let out = paths::build_dir(arch).join("ferrousli-shared");
     let ferrousli = paths::workspace_root().join("ferrousli");
-    let mut command = std::process::Command::new("bash");
-    let _ = command
-        .arg("tools/build-shared.sh")
-        .args(["--arch", arch.name()])
-        .arg(&out);
-    crate::ferrousli::in_ferrousli(&mut command, &ferrousli);
-    cargo::run(command, "ferrousli/tools/build-shared.sh")?;
+    // A build `FERRIX_BUILDS` may record or replay, as busybox's is.
+    let mut build = crate::builds::Build::bash("ferrousli/tools/build-shared.sh", &ferrousli)
+        .args(["tools/build-shared.sh", "--arch", arch.name()])
+        .args([out.as_os_str()])
+        .output(&out);
+    if let Some(dir) = crate::ferrousli::target_dir(std::env::var_os("CARGO_TARGET_DIR")) {
+        build = build.env("CARGO_TARGET_DIR", dir);
+    }
+    build.run()?;
     Ok(out)
 }
 

@@ -7,7 +7,6 @@
 //! of its own.
 
 use std::path::PathBuf;
-use std::process::Command;
 
 use crate::paths::{self, Arch};
 use crate::{Error, Result};
@@ -40,18 +39,21 @@ pub(crate) fn built(arch: Arch) -> Result<Option<PathBuf>> {
     };
     println!("  building zinc for {target}");
     let target_dir = paths::target_dir().join("zinc");
-    let mut command = Command::new(crate::cargo::cargo());
-    let _ = command
-        .current_dir(paths::workspace_root().join("zinc"))
-        .args(["build", "--release", "--target", target])
-        .env("CARGO_TARGET_DIR", &target_dir)
-        // The flags `zinc/.cargo/config.toml` gives each target, set here
-        // because cargo merges rustflags from every config file up the tree,
-        // and the root one gives `armv7-unknown-linux-musleabi` the ARM
-        // loader's linker script. RUSTFLAGS replaces the configured flags.
-        .env("RUSTFLAGS", RUSTFLAGS);
-    crate::cargo::run(command, "cargo build (zinc)")?;
-    Ok(Some(target_dir.join(target).join("release").join("zinc")))
+    let program = target_dir.join(target).join("release").join("zinc");
+    crate::builds::Build::cargo(
+        format!("cargo build (zinc) --target {target}"),
+        paths::workspace_root().join("zinc"),
+    )
+    .args(["build", "--release", "--target", target])
+    .env("CARGO_TARGET_DIR", &target_dir)
+    // The flags `zinc/.cargo/config.toml` gives each target, set here
+    // because cargo merges rustflags from every config file up the tree,
+    // and the root one gives `armv7-unknown-linux-musleabi` the ARM
+    // loader's linker script. RUSTFLAGS replaces the configured flags.
+    .env("RUSTFLAGS", RUSTFLAGS)
+    .output(&program)
+    .run()?;
+    Ok(Some(program))
 }
 
 /// Build zinc for `arch` and return the program, or `None` on an

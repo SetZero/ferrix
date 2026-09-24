@@ -27,7 +27,6 @@
 use std::io::{BufRead, BufReader, Write};
 use std::net::{Ipv4Addr, SocketAddrV4, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::{Duration, Instant};
 
 use crate::args::Args;
@@ -90,23 +89,26 @@ pub(crate) fn build_blank(arch: Arch, negative: bool) -> Result<PathBuf> {
     let flavour = if negative { "negative" } else { "plain" };
     let target_dir = paths::target_dir().join("compositor").join(flavour);
     println!("  building compositor/blank ({flavour}) for {target}");
-    let mut command = Command::new(crate::cargo::cargo());
-    let _ = command
-        .current_dir(paths::workspace_root().join("compositor"))
-        .args([
-            "build",
-            "--release",
-            "-p",
-            "compositor-blank",
-            "--target",
-            target,
-        ])
-        .env("CARGO_TARGET_DIR", &target_dir);
+    let program = target_dir.join(target).join("release").join("blank");
+    let mut build = crate::builds::Build::cargo(
+        format!("cargo build (compositor/blank, {flavour}) --target {target}"),
+        paths::workspace_root().join("compositor"),
+    )
+    .args([
+        "build",
+        "--release",
+        "-p",
+        "compositor-blank",
+        "--target",
+        target,
+    ])
+    .env("CARGO_TARGET_DIR", &target_dir)
+    .output(&program);
     if negative {
-        let _ = command.args(["--features", "negative-control"]);
+        build = build.args(["--features", "negative-control"]);
     }
-    crate::cargo::run(command, "cargo build (compositor/blank)")?;
-    Ok(target_dir.join(target).join("release").join("blank"))
+    build.run()?;
+    Ok(program)
 }
 
 /// A free TCP port on localhost for QEMU's QMP server. The listener is closed

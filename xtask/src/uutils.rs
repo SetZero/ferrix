@@ -105,7 +105,7 @@ pub(crate) fn program(arch: Arch) -> Result<PathBuf> {
     let root = root()?;
     let program = first(&root, arch);
     let dir = crate::paths::workspace_root().join("ferrousli");
-    if ferrousli::stale(&program, &dir, INPUTS).is_none() {
+    if !crate::builds::active() && ferrousli::stale(&program, &dir, INPUTS).is_none() {
         return Ok(program);
     }
     // Another checkout may be building into the same directory: wait for it,
@@ -135,20 +135,18 @@ fn build_locked(arch: Arch, root: &Path) -> Result<PathBuf> {
     let program = first(&root, arch);
     let dir = crate::paths::workspace_root().join("ferrousli");
 
-    let (script, mut command) = if cfg!(windows) {
-        let mut command = Command::new(ferrousli::git_bash()?);
-        // One spelling of the directory for both the script and its caller,
-        // with the separators bash expects.
-        let root = root.to_string_lossy().replace('\\', "/");
-        let _ = command
-            .env(VAR, &root)
-            .args(["-c", SCRIPT, "bash", "build-windows.sh", &root]);
-        ("build-windows.sh", command)
-    } else {
-        let mut command = Command::new("bash");
-        let _ = command.args(["-c", SCRIPT, "bash", "build.sh"]).arg(&root);
-        ("build.sh", command)
-    };
+    // Linux builds through `crate::builds`; this is the Windows build.
+    if !cfg!(windows) {
+        return build_here(arch, &root);
+    }
+    let script = "build-windows.sh";
+    let mut command = Command::new(ferrousli::git_bash()?);
+    // One spelling of the directory for both the script and its caller,
+    // with the separators bash expects.
+    let spelled = root.to_string_lossy().replace('\\', "/");
+    let _ = command
+        .env(VAR, &spelled)
+        .args(["-c", SCRIPT, "bash", "build-windows.sh", &spelled]);
     ferrousli::in_ferrousli(&mut command, &dir);
 
     let description = format!("ferrousli/tools/uutils/{script}");
@@ -215,6 +213,41 @@ pub(crate) fn carried(arch: Arch) -> Result<Vec<(&'static str, Vec<u8>)>> {
         );
     }
     Ok(carried)
+}
+
+/// The Linux build, through [`crate::builds::Build`]: a build `FERRIX_BUILDS`
+/// may record or replay, reading the archives `build.sh` would otherwise
+/// download from `root/src`, and making every program of the family.
+fn build_here(arch: Arch, root: &Path) -> Result<PathBuf> {
+    let program = first(root, arch);
+    let ferrousli = crate::paths::workspace_root().join("ferrousli");
+    let mut build = crate::builds::Build::bash("ferrousli/tools/uutils/build.sh", &ferrousli)
+        .args(["-c", SCRIPT, "bash", "build.sh"])
+        .args([root])
+        .reads_dir(root.join("src"));
+    for binary in crate::initramfs::FAMILY {
+        build = build.output(installed(root, arch, binary.name));
+    }
+    if let Some(dir) = ferrousli::target_dir(std::env::var_os("CARGO_TARGET_DIR")) {
+        build = build.env("CARGO_TARGET_DIR", dir);
+    }
+    if let Err(error) = build.run() {
+        let list = root.join(ferrousli::UNDEFINED);
+        return Err(match std::fs::read_to_string(&list) {
+            Ok(symbols) if !symbols.trim().is_empty() => {
+                ferrousli::not_linked("uutils/coreutils", &symbols, &list)
+            }
+            _ => error,
+        });
+    }
+    if !program.is_file() {
+        return Err(Error::new(format!(
+            "build.sh reported success but {} does not exist",
+            program.display()
+        )));
+    }
+    println!("\nbuilt {}", program.display());
+    Ok(program)
 }
 
 #[cfg(test)]

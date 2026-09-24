@@ -19,7 +19,6 @@
 //! shape of the output rather than the events in it.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::{Duration, Instant};
 
 use crate::args::Args;
@@ -59,23 +58,26 @@ fn build_evecho(arch: Arch, negative: bool) -> Result<PathBuf> {
     let flavour = if negative { "negative" } else { "plain" };
     let target_dir = paths::target_dir().join("compositor").join("evecho");
     println!("  building compositor/evecho ({flavour}) for {target}");
-    let mut command = Command::new(crate::cargo::cargo());
-    let _ = command
-        .current_dir(paths::workspace_root().join("compositor"))
-        .args([
-            "build",
-            "--release",
-            "-p",
-            "compositor-evecho",
-            "--target",
-            target,
-        ])
-        .env("CARGO_TARGET_DIR", &target_dir);
+    let program = target_dir.join(target).join("release").join("evecho");
+    let mut build = crate::builds::Build::cargo(
+        format!("cargo build (compositor/evecho, {flavour}) --target {target}"),
+        paths::workspace_root().join("compositor"),
+    )
+    .args([
+        "build",
+        "--release",
+        "-p",
+        "compositor-evecho",
+        "--target",
+        target,
+    ])
+    .env("CARGO_TARGET_DIR", &target_dir)
+    .output(&program);
     if negative {
-        let _ = command.args(["--features", "negative-control"]);
+        build = build.args(["--features", "negative-control"]);
     }
-    crate::cargo::run(command, "cargo build (compositor/evecho)")?;
-    Ok(target_dir.join(target).join("release").join("evecho"))
+    build.run()?;
+    Ok(program)
 }
 
 /// One `InputEvent` of QMP's `input-send-event`, as its JSON.

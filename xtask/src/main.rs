@@ -9,7 +9,8 @@
 //! cargo xtask test-vfs  --arch all --init PATH/{arch}/busybox [--timeout SECONDS]
 //! cargo xtask test-threads --arch all [--timeout SECONDS]
 //! cargo xtask test-rustc [--accel kvm] [--memory M] [--timeout SECONDS]
-//! cargo xtask test-selfhost [--accel kvm] [--release] [--smp N] [--memory M] [--timeout SECONDS]
+//! cargo xtask test-selfhost [--accel kvm] [--release] [--smp N] [--memory M] [--timeout SECONDS] [--plan DIR]
+//! cargo xtask builds-execute --plan DIR
 //! cargo xtask check     [--fast] [--ferrousli] [--zinc] [--miri]
 //! cargo xtask remote-desktop [--host DEST] [--config PATH] [--vnc :N] [--send head]
 //!                       [--viewer tigervnc|realvnc] [--layout de] [--no-viewer]
@@ -56,6 +57,7 @@
 mod args;
 mod btrfs_check;
 mod btrfs_disk;
+mod builds;
 mod busybox;
 mod cargo;
 mod check;
@@ -87,6 +89,7 @@ mod rustc;
 mod seat;
 mod selfhost;
 mod serial;
+mod sha256;
 mod shell;
 mod ssh;
 mod symbolize;
@@ -172,7 +175,9 @@ COMMANDS:
     test-rustc    Attach the rustc volume scripts/fetch-rustc-sysroot.sh makes, run `rustc hello.rs && ./hello`
     test-chrome   Attach the volume scripts/fetch-chrome.sh makes, and require headless Chrome to run a page's script and draw it
     test-chrome-window  The same volume, and require Chrome in a window on the compositor, its page on the screen
-    test-selfhost  Run `cargo xtask build` on Ferrix from that toolchain and this checkout, and boot the image it made
+    test-selfhost  Run `cargo xtask build` on Ferrix from that toolchain and this checkout, and boot the image it made;
+                  with --plan DIR, have Ferrix make every build a FERRIX_BUILDS=record:DIR run wrote down
+    builds-execute  Make every build in --plan DIR here, keeping the outputs in DIR/store (see xtask/src/builds.rs)
     check         Run every quality gate (fmt, clippy, layering, audits, tests, docs)
     host-clippy   check's host clippy step alone, as CI runs it
     host-test     check's host test step alone, as CI runs it
@@ -338,45 +343,7 @@ fn run() -> Result<()> {
         "test-btrfs" => btrfs_check::test_btrfs(&args, |arch| build_image(arch, &args)),
         "test-powerfail" => powerfail::test_powerfail(&args, |arch| build_parts(arch, &args)),
         "test-boot" => test_boot(&args),
-        "test-shell" => {
-            for arch in args.arches()? {
-                // The shell the kernel starts. zinc, the shell this tree has,
-                // unless `--init` names another: the same script under a
-                // static busybox is what measures the ABI against somebody
-                // else's binary, and both are worth running.
-                let program = match args.init.as_deref() {
-                    Some(init) => program_for(init, arch)?,
-                    None => zinc::built(arch)?.ok_or_else(|| {
-                        Error::new(format!(
-                            "zinc is not built for {arch}; give --init PATH, a static \
-                             shell for each architecture, instead"
-                        ))
-                    })?,
-                };
-                let loader = cargo::build_loader(arch, args.release)?;
-                let kernel =
-                    cargo::build_kernel_with_init(arch, args.release, &program, shell::SCRIPT)?;
-                let natives = native::build(arch, args.release)?;
-                // A dynamically linked shell's linker and libraries, in the
-                // initramfs where the kernel and the linker will look.
-                let carried = shell::carried_for(arch, &program, &args)?;
-                let initramfs = initramfs::build(None, &natives, None, &carried)?;
-                let image = fat::write_image_with(arch, &loader, &kernel, &initramfs, None)?;
-                qemu::test_shell(arch, &image, &kernel, &args)?;
-                // The same shell and script again, started from files by
-                // `ferrix.init=`; and under busybox, `reboot(2)`'s commit.
-                let parts = init_file::Parts {
-                    arch,
-                    loader: &loader,
-                    kernel: &kernel,
-                    natives: &natives,
-                    program: &program,
-                    carried: &carried,
-                };
-                init_file::test(&parts, &args, args.init.is_some())?;
-            }
-            Ok(())
-        }
+        "test-shell" => test_shell(&args),
         "test-vfs" => test_vfs(&args),
         "test-net" => test_net(&args),
         "test-display" => display::test_display(&args),
@@ -396,6 +363,13 @@ fn run() -> Result<()> {
         "test-rustc" => rustc::test_rustc(&args),
         "test-chrome" | "test-chrome-window" => chrome::run(command, &args),
         "test-selfhost" => selfhost::test_selfhost(&args),
+        "builds-execute" => {
+            let plan = args
+                .plan
+                .as_deref()
+                .ok_or_else(|| Error::new("builds-execute needs --plan DIR"))?;
+            builds::execute(std::path::Path::new(plan)).map(|_| ())
+        }
         "check" => check::run(&args),
         "host-clippy" => check::host_clippy(),
         "host-test" => check::host_test(),
@@ -465,6 +439,45 @@ fn test_boot(args: &Args) -> Result<()> {
     for arch in args.arches()? {
         let (image, kernel) = build_image(arch, args)?;
         qemu::test_boot(arch, &image, &kernel, args)?;
+    }
+    Ok(())
+}
+
+fn test_shell(args: &Args) -> Result<()> {
+    for arch in args.arches()? {
+        // The shell the kernel starts. zinc, the shell this tree has,
+        // unless `--init` names another: the same script under a
+        // static busybox is what measures the ABI against somebody
+        // else's binary, and both are worth running.
+        let program = match args.init.as_deref() {
+            Some(init) => program_for(init, arch)?,
+            None => zinc::built(arch)?.ok_or_else(|| {
+                Error::new(format!(
+                    "zinc is not built for {arch}; give --init PATH, a static \
+                     shell for each architecture, instead"
+                ))
+            })?,
+        };
+        let loader = cargo::build_loader(arch, args.release)?;
+        let kernel = cargo::build_kernel_with_init(arch, args.release, &program, shell::SCRIPT)?;
+        let natives = native::build(arch, args.release)?;
+        // A dynamically linked shell's linker and libraries, in the
+        // initramfs where the kernel and the linker will look.
+        let carried = shell::carried_for(arch, &program, args)?;
+        let initramfs = initramfs::build(None, &natives, None, &carried)?;
+        let image = fat::write_image_with(arch, &loader, &kernel, &initramfs, None)?;
+        qemu::test_shell(arch, &image, &kernel, args)?;
+        // The same shell and script again, started from files by
+        // `ferrix.init=`; and under busybox, `reboot(2)`'s commit.
+        let parts = init_file::Parts {
+            arch,
+            loader: &loader,
+            kernel: &kernel,
+            natives: &natives,
+            program: &program,
+            carried: &carried,
+        };
+        init_file::test(&parts, args, args.init.is_some())?;
     }
     Ok(())
 }

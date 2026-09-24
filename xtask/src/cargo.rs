@@ -4,10 +4,10 @@
 //! workspace, which is why neither can be a default member and why `cargo
 //! build` at the root builds only this tool.
 
-use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use crate::builds::Build;
 use crate::paths::{self, Arch};
 use crate::{Error, Result};
 
@@ -18,12 +18,21 @@ use crate::{Error, Result};
 /// which checks the ELF against `boot/linker/armv7a.ld`'s contract, so a
 /// loader that breaks it fails the build rather than the boot.
 pub(crate) fn build_loader(arch: Arch, release: bool) -> Result<PathBuf> {
-    build("ferrix-boot", arch.loader_target(), release, &[])?;
+    let name = if arch.loader_is_elf() {
+        "ferrix-boot"
+    } else {
+        "ferrix-boot.efi"
+    };
+    let made = output(arch.loader_target(), release, name);
+    build("ferrix-boot", arch.loader_target(), release)?
+        .output(&made)
+        .run()?;
+    let made = artifact(made)?;
     if !arch.loader_is_elf() {
-        return artifact(arch.loader_target(), release, "ferrix-boot.efi");
+        return Ok(made);
     }
 
-    let elf = artifact(arch.loader_target(), release, "ferrix-boot")?;
+    let elf = made;
     let bytes = std::fs::read(&elf)
         .map_err(|error| Error::new(format!("reading {}: {error}", elf.display())))?;
     crate::pe::check_switch(&bytes)?;
@@ -36,8 +45,11 @@ pub(crate) fn build_loader(arch: Arch, release: bool) -> Result<PathBuf> {
 
 /// Build the kernel for `arch` and return the ELF it produced.
 pub(crate) fn build_kernel(arch: Arch, release: bool) -> Result<PathBuf> {
-    build("ferrix-kernel", arch.kernel_target(), release, &[])?;
-    artifact(arch.kernel_target(), release, "ferrix-kernel")
+    let made = output(arch.kernel_target(), release, "ferrix-kernel");
+    build("ferrix-kernel", arch.kernel_target(), release)?
+        .output(&made)
+        .run()?;
+    artifact(made)
 }
 
 /// Build `binary`, a native program in `package`, for `arch` into
@@ -54,24 +66,16 @@ pub(crate) fn build_native(
     binary: &str,
     target_dir: &Path,
 ) -> Result<PathBuf> {
-    build(
-        package,
-        arch.kernel_target(),
-        release,
-        &[("CARGO_TARGET_DIR", target_dir.as_os_str())],
-    )?;
     let profile = if release { "release" } else { "debug" };
     let path = target_dir
         .join(arch.kernel_target())
         .join(profile)
         .join(binary);
-    if !path.is_file() {
-        return Err(Error::new(format!(
-            "cargo reported success but {} does not exist",
-            path.display()
-        )));
-    }
-    Ok(path)
+    build(package, arch.kernel_target(), release)?
+        .env("CARGO_TARGET_DIR", target_dir)
+        .output(&path)
+        .run()?;
+    artifact(path)
 }
 
 /// Compile the kernel with `init` built in, told to run `script` with `sh -c`.
@@ -85,16 +89,13 @@ pub(crate) fn build_kernel_with_init(
     init: &Path,
     script: &str,
 ) -> Result<PathBuf> {
-    build(
-        "ferrix-kernel",
-        arch.kernel_target(),
-        release,
-        &[
-            ("FERRIX_INIT", init.as_os_str()),
-            ("FERRIX_INIT_SCRIPT", OsStr::new(script)),
-        ],
-    )?;
-    artifact(arch.kernel_target(), release, "ferrix-kernel")
+    let made = output(arch.kernel_target(), release, "ferrix-kernel");
+    build("ferrix-kernel", arch.kernel_target(), release)?
+        .input("FERRIX_INIT", init)
+        .env("FERRIX_INIT_SCRIPT", script)
+        .output(&made)
+        .run()?;
+    artifact(made)
 }
 
 /// Compile the kernel told to run the commands in `commands`, a file
@@ -107,36 +108,29 @@ pub(crate) fn build_kernel_with_commands(
     release: bool,
     commands: &Path,
 ) -> Result<PathBuf> {
-    build(
-        "ferrix-kernel",
-        arch.kernel_target(),
-        release,
-        &[("FERRIX_INIT_COMMANDS", commands.as_os_str())],
-    )?;
-    artifact(arch.kernel_target(), release, "ferrix-kernel")
+    let made = output(arch.kernel_target(), release, "ferrix-kernel");
+    build("ferrix-kernel", arch.kernel_target(), release)?
+        .input("FERRIX_INIT_COMMANDS", commands)
+        .output(&made)
+        .run()?;
+    artifact(made)
 }
 
-/// Run `cargo build -p <package> --target <target>`, with `env` added.
-fn build(package: &str, target: &str, release: bool, env: &[(&str, &OsStr)]) -> Result<()> {
+/// `cargo build -p <package> --target <target>`, for the caller to add to
+/// and run: a [`Build`], which `FERRIX_BUILDS` may record or replay.
+fn build(package: &str, target: &str, release: bool) -> Result<Build> {
     refuse_inherited_rustflags()?;
     println!("  building {package} for {target}");
-
-    let mut command = Command::new(cargo());
-    let _ = command.current_dir(paths::workspace_root()).args([
-        "build",
-        "--package",
-        package,
-        "--target",
-        target,
-    ]);
-    if release {
-        let _ = command.arg("--release");
-    }
-    for (key, value) in env {
-        let _ = command.env(key, value);
-    }
-
-    run(command, &format!("cargo build -p {package}"))
+    let build = Build::cargo(
+        format!("cargo build -p {package} --target {target}"),
+        paths::workspace_root(),
+    )
+    .args(["build", "--package", package, "--target", target]);
+    Ok(if release {
+        build.args(["--release"])
+    } else {
+        build
+    })
 }
 
 /// Refuse to build with `RUSTFLAGS` or `CARGO_ENCODED_RUSTFLAGS` set.
@@ -165,11 +159,15 @@ fn refuse_inherited_rustflags() -> Result<()> {
     Ok(())
 }
 
-/// The path an artefact was written to, checked for existence so that a
-/// rename in a manifest fails here rather than as a confusing image error.
-fn artifact(target: &str, release: bool, name: &str) -> Result<PathBuf> {
+/// Where cargo writes `name` for `target` in the target directory.
+fn output(target: &str, release: bool, name: &str) -> PathBuf {
     let profile = if release { "release" } else { "debug" };
-    let path = paths::target_dir().join(target).join(profile).join(name);
+    paths::target_dir().join(target).join(profile).join(name)
+}
+
+/// `path`, checked for existence so that a rename in a manifest fails here
+/// rather than as a confusing image error.
+fn artifact(path: PathBuf) -> Result<PathBuf> {
     if !path.is_file() {
         return Err(Error::new(format!(
             "cargo reported success but {} does not exist",
