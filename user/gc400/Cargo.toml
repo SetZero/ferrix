@@ -1,0 +1,23 @@
+[package]
+name = "ferrix-gc400-driver"
+description = "The STM32MP157's GPU driver process: identifies the Vivante GC400T, brings it up, and runs a command buffer to an interrupt, on ferrix-rt"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "gc400"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+ferrix-blkring.workspace = true
+ferrix-gc400.workspace = true
+ferrix-native-abi.workspace = true
+ferrix-rt.workspace = true
+
+[lints]
+workspace = true

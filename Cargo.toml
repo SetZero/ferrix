@@ -77,6 +77,7 @@ members = [
     "user/ltdc",
     "user/input",
     "user/usbhid",
+    "user/gc400",
     "user/vport",
     "user/devmgr",
 
