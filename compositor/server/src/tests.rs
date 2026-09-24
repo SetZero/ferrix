@@ -4833,3 +4833,44 @@ fn a_capture_with_no_buffer_is_refused() {
     let _ = client.read(&bytes, &[]);
     assert!(client.is_finished());
 }
+
+#[test]
+fn a_child_declared_older_than_its_manager_is_made_at_its_own_version() {
+    // pointer-gestures has its manager at 3 and its swipe at 2. A request's
+    // new object takes its parent's version, which is above what the swipe
+    // interface has; libwayland makes it all the same, and Chrome, which
+    // does this, lost its connection when this refused it.
+    use compositor_protocol::pointer_gestures;
+    let mut globals = Globals::new();
+    let seat = globals.add(&core::WL_SEAT, 7, Role::Seat).unwrap();
+    let gestures = globals
+        .add(
+            &pointer_gestures::ZWP_POINTER_GESTURES_V1,
+            3,
+            Role::PointerGestures,
+        )
+        .unwrap();
+    let mut client = Client::new(globals);
+    client.set_seat_capabilities(core::wl_seat::capability::POINTER);
+    let mut bytes = get_registry(2);
+    bytes.extend(bind(2, seat, "wl_seat", 7, 3));
+    bytes.extend(bind(2, gestures, "zwp_pointer_gestures_v1", 3, 4));
+    bytes.extend(request(
+        3,
+        core::wl_seat::request::GET_POINTER,
+        &[ArgType::NewId],
+        &[Arg::NewId(ObjectId(5))],
+    ));
+    bytes.extend(request(
+        4,
+        pointer_gestures::zwp_pointer_gestures_v1::request::GET_SWIPE_GESTURE,
+        &[ArgType::NewId, ArgType::Object { nullable: false }],
+        &[Arg::NewId(ObjectId(6)), Arg::Object(ObjectId(5))],
+    ));
+    let _ = client.read(&bytes, &[]);
+    assert_eq!(client.fatal(), None);
+    assert_eq!(
+        client.objects().get(ObjectId(6)).map(|entry| entry.version),
+        Some(2)
+    );
+}

@@ -4923,12 +4923,18 @@ impl Client {
         version: u32,
         role: Role,
     ) -> bool {
+        // A request's new object takes its parent's version, and a protocol
+        // may declare the child older than the parent: pointer-gestures has
+        // its manager at 3 and its swipe and pinch at 2. libwayland makes the
+        // child at the parent's version all the same; here it is made at the
+        // most its interface has, which is every request and event it can
+        // ever carry. Chrome ended its connection on this before.
+        let version = version.min(interface.version);
         match self.objects.insert(id, interface, version, role) {
             Ok(()) => true,
             Err(ObjectError::Version { .. }) => {
-                // Asked for above what the interface offers, which `bind`
-                // checks against the global first, so this is a request whose
-                // protocol version is wrong rather than the client's choice.
+                // Zero: `bind` refuses a global asked for at version zero
+                // first, so only a request's parent could carry it here.
                 self.fail(Fatal::BadBind { name: 0, version });
                 false
             }
