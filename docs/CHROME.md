@@ -6,11 +6,12 @@ a browser needs, what Ferrix has, what is missing, and what the missing part
 would cost. Whether any of it is worth doing was the product owner's to say,
 and on 2026-09-23 the customer asked for the work to start.
 
-## Where it stands, 2026-09-23
+## Where it stands, 2026-09-24
 
 **Chrome is not on the image, and does not run on Ferrix.** No part of
 Chromium has been built, ported or tried yet. What exists is the ground it
-would stand on:
+would stand on, and since 2026-09-24 the first foreign Wayland client
+running on it:
 
 | | state |
 |---|---|
@@ -21,22 +22,24 @@ would stand on:
 | `execve` of a binary past 64 MiB, mapped from the file on demand | not started (§2.2), 13 points |
 | `timerfd` | **done** 2026-09-24, on all three architectures, the first kernel row of §6's foot (§3) |
 | `madvise`, a vDSO and `signalfd` | not started (§3), ≈ 10 points |
-| libwayland-client, libxkbcommon, fontconfig with freetype and expat, a font | not started (§3), 13 points; sources pinned |
+| libwayland-client, libxkbcommon, fontconfig with freetype and expat, a font | **done** 2026-09-24, built against ferrousli with foot (§3, §6) |
+| foot, a Wayland terminal nobody here wrote, drawing on the compositor on Ferrix | **done** 2026-09-24, x86-64, `cargo xtask test-foot` (§6) |
 | Chromium built against ferrousli, with Alpine's musl patches rebased | not started (§5), 40+ points |
 | What running it finds missing | unsized, ≥ 40 (§5) |
 | A guest with the ~2 GiB a page wants | the default is 512 MiB (§2.3) |
 
-**Next: a foreign toolkit client inside the guest** (§6). `foot`, a real
-Wayland terminal nobody here wrote, running on Ferrix's compositor, proves
-the client libraries end to end at a fraction of a browser's cost. It needs,
-built against ferrousli: libffi 3.5.2, wayland 1.24.0 (the client library),
-libxkbcommon 1.11.0, pixman 0.46.4, freetype 2.14.1, expat 2.7.3, fontconfig
-2.17.1, tllist 1.1.0, fcft 3.3.2 and foot 1.24.0, whose tarballs were
-downloaded and their sha256s taken on 2026-09-23. **Then** `chrome
---headless --screenshot`, which needs no compositor, GPU, input or fonts but
+**Done, 2026-09-24: a foreign toolkit client inside the guest** (§6).
+`foot` 1.24.0, a real Wayland terminal nobody here wrote, runs on Ferrix's
+compositor and draws a program's output in the image's font. It is built
+by `ferrousli/tools/ports/foot` against ferrousli with libffi 3.5.2,
+wayland 1.24.0, wayland-protocols 1.45, libxkbcommon 1.11.0, pixman 0.46.4,
+freetype 2.14.1, expat 2.7.3, fontconfig 2.17.1, tllist 1.1.0 and fcft
+3.3.2, and DejaVu Sans Mono 2.37 is the font. **Next:** `chrome --headless
+--screenshot`, which needs no compositor, GPU, input or fonts but
 exercises everything hard -- processes over Mojo, hundreds of threads,
-PartitionAlloc and V8 -- and needs the two kernel rows above first. **Then**
-a window.
+PartitionAlloc and V8 -- and needs the two kernel rows still open above
+first: `execve` past 64 MiB, and `madvise` with a vDSO. **Then** a window,
+for which foot has now proved the client libraries.
 
 **Re-checked on 2026-09-19**, against a tree 37 commits further on. Everything
 in §2, §3 and §4 still holds but the two loose fixes in §6, which are now
@@ -75,8 +78,10 @@ are worth naming because each was built for something else and pays here.
   `epoll` calls, `eventfd2`, `memfd_create` with seals, and `AF_UNIX` with
   `SCM_RIGHTS` descriptor passing and full `cmsg` handling. That last one is
   Mojo, Chrome's own IPC, and it works today.
-* **The C library.** `docs/POSIX-2024.md` counts 1040 of POSIX.1-2024's 1243
-  interfaces present in ferrousli, none stubbed. Threads are complete down to
+* **The C library.** `docs/POSIX-2024.md` counts 1045 of POSIX.1-2024's 1243
+  interfaces present in ferrousli, none stubbed -- 1040 when this was
+  written, and the five pseudo-terminal calls foot opens its terminal with
+  since. Threads are complete down to
   robust and priority-inheriting mutexes and cancellation, and the thread
   control block keeps glibc's layout.
 * **A C++ runtime that is exercised.** `ferrousli/tools/ports/libcxx` builds
@@ -203,11 +208,15 @@ that a program which asks for isolation now finds out it cannot have it.
   area -- x87 and SSE -- and `CR4.OSXSAVE` is never set, so `CPUID` reports no
   OS support and V8 and Skia fall back to SSE2. That is correct rather than
   corrupting, and it is slow.
-* **Four C ports that do not exist:** libwayland-client and libxkbcommon, which
-  Ozone links; and fontconfig with freetype and expat, plus an actual font on
-  the image. The compositor draws its own text with the coverage cells
-  `compositor/term` carries, and no client could ask it for a font. Note that `compositor/README.md`'s "no C
-  device stack, ever" is a rule about the compositor, not about its clients.
+* ~~**Four C ports that do not exist.**~~ **Done, 2026-09-24,** for foot
+  (§6): libwayland-client and libxkbcommon, which Ozone links; and
+  fontconfig with freetype and expat, plus an actual font on the image. They
+  are static libraries in foot's build today; Chromium, built dynamically,
+  will want them as shared ones. The compositor still draws its own text
+  with the coverage cells `compositor/term` carries; a client brings its own
+  fonts, which is what these are for. Note that `compositor/README.md`'s "no
+  C device stack, ever" is a rule about the compositor, not about its
+  clients.
 * **No audio at all**, which a browser survives and a person notices.
 
 ---
@@ -296,7 +305,7 @@ separately for that reason.
 | **Already planned, only if the sandbox is wanted:** stage 13 | ≈ 60 |
 | Demand-paged file-backed `execve`, and binaries past 64 MiB | 13 |
 | `madvise`, a vDSO and `signalfd` (`/dev/shm` is done 2026-09-19, `timerfd` 2026-09-24) | ≈ 10 |
-| libwayland-client, libxkbcommon, fontconfig with freetype and expat, a font | 13 |
+| ~~libwayland-client, libxkbcommon, fontconfig with freetype and expat, a font~~ *built with foot, 2026-09-24* | ~~13~~ |
 | The Chromium cross-build against ferrousli, with Alpine's musl patches rebased | 40+, mostly unknown |
 | What running it finds missing | unsized, ≥ 40 |
 
@@ -321,6 +330,36 @@ not written against this tree's crates has ever run *on* Ferrix. Building
 libwayland-client and libxkbcommon against ferrousli and running foot in the
 guest proves the client story end to end for a fraction of a browser's cost,
 and it is on the browser's path rather than beside it.
+
+**Done, 2026-09-24.** `cargo xtask ports` builds foot and the ten libraries
+under it statically against ferrousli (`ferrousli/tools/ports/foot`), and
+`cargo xtask test-foot` boots the compositor with foot running `hyprctl
+version`. foot finds DejaVu Sans Mono through fontconfig, lays out a 7x13
+grid, starts four render threads and draws the three lines, which came
+through a ferrousli pseudoterminal. The test requires foot's own account
+of the font and the grid, no error from it, and antialiased text on the
+virtio-gpu's screen with the compositor's background around it. What it
+took beyond the ports was small, and each piece was found by linking or
+running rather than by reading:
+
+* the kernel's `timerfd` (§3);
+* nine names in ferrousli: the three `timerfd` wrappers, `posix_openpt`,
+  `grantpt`, `unlockpt` and `ptsname`, `fallocate`, and `eaccess`, which
+  libxkbcommon checks its include paths with;
+* a user in `/etc/passwd`, which foot looks up for its shell even when it
+  is given a program, and `/var/cache/fontconfig`, which fontconfig will not
+  make itself.
+
+What it still says, and none of it stops it: `fallocate` cannot punch a
+hole in a memfd, so foot's buffer pool keeps pages it could give back;
+libxkbcommon finds no `/usr/share/X11/xkb`, which it does not need while the
+compositor hands it the keymap; and foot is ported to x86-64 only. It was
+first run against the compositor on nazuna's own kernel, which proved the
+static build a working Wayland client before the kernel had `timerfd`.
+One thing the test's first version got wrong is worth keeping: it counted
+colours on QEMU's default console, which was the firmware's text screen,
+and passed. It reads the virtio-gpu now, and requires the compositor's
+background, which the firmware's screen does not have.
 
 **Then headless Chrome, not a window.** `chrome --headless --screenshot` drops
 the compositor, the GPU, input and the whole font-theme surface, and still

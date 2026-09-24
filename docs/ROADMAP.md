@@ -4596,8 +4596,10 @@ a read, poll and epoll_wait each woken at the deadline, the latest 3483 us
 after it; 22 calls refused as Linux refuses them; 0 frames leaked` on x86-64;
 AArch64 said 371 us and ARMv7-A 336 us. With the thread's wake removed, the
 boot panics with "a waiter on a timerfd was ended by its recheck, not by the
-deadline's wake". Still to do: ferrousli's wrappers (`docs/BACKLOG.md`), and
-`signalfd`.
+deadline's wake". ferrousli's wrappers landed with foot the same day, and
+foot's `cargo xtask test-foot` is the program on Ferrix that uses them: it
+creates its timers with them as it starts, and draws its text on the
+compositor (`docs/CHROME.md` §6). Still to do: `signalfd`.
 
 ---
 
