@@ -102,8 +102,9 @@ static NEXT_OPEN: AtomicUsize = AtomicUsize::new(1);
 pub(crate) struct Open {
     /// Which open, for `EVIOCGRAB`.
     pub(crate) id: OpenId,
-    /// Its events. A `Vec` of the size `queue_size` gave, which is Linux's
-    /// own for this device's declaration.
+    /// Its events. A `Vec` of the size `queue_size` gave: Linux's rule for
+    /// this device's declaration, with more packets than Linux keeps
+    /// (`ferrix_inputctl::queue::BUFFER_PACKETS` says why).
     pub(crate) queue: SpinLock<Queue<Vec<Stamped>>>,
 }
 

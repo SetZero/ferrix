@@ -261,9 +261,13 @@ opens of its node, each with a queue of `input_event`s.
 * **A full queue drops, and says so.** When a report does not fit, the open's
   queue is emptied and a `SYN_DROPPED` event is queued, which tells the reader
   to re-read the state with `EVIOCGKEY` and the others. Each queue's size
-  follows Linux's `evdev_compute_buffer_size`. L6 checks that behaviour and
-  that size against `drivers/input/evdev.c` of the header version the probe
-  records, not from memory.
+  follows Linux's `evdev_compute_buffer_size`, with 256 packets where Linux
+  has 8: a compositor drawing in software on the DK1 read its devices once
+  every 100 ms and more, and a 1000 Hz mouse overflowed eight packets in
+  35 ms, losing motion and making the pointer drift (2026-09-24,
+  `libs/inputctl/src/queue.rs`). L6 checks that behaviour against
+  `drivers/input/evdev.c` of the header version the probe records, not from
+  memory.
 * **Undeclared events are dropped.** An event whose type or code the device
   did not declare is not delivered, as Linux's input core does. The driver
   drops them first (§3.2); one reaching the core means the driver lied, which

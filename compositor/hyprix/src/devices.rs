@@ -33,6 +33,9 @@ use ferrix_linux_abi::input::{
 
 use crate::seat::Input;
 
+/// The most reads one device is given in one pass round the loop.
+const DRAIN_READS: usize = 64;
+
 /// How far one wheel click scrolls, in surface coordinates.
 ///
 /// libinput reports a wheel click as 15 units, which is what every toolkit
@@ -295,10 +298,21 @@ impl Devices {
                 continue;
             }
             self.events.clear();
+            // All of it, not one read's worth: a read takes 64 events, and a
+            // mouse reporting a thousand times a second queues that many in
+            // about 16 ms. Read once a frame, a frame slower than that left
+            // the rest queued, the queue grew with every slow frame, and the
+            // pointer trailed the hand by more and more (the DK1, 2026-09-24).
+            // Drained, every frame draws the pointer where the mouse is now.
+            // Bounded, so a device that never stops talking cannot keep the
+            // compositor from drawing: 64 reads are a queue's worth.
             // Nothing waiting is `Ok(0)`; an error is a device that has gone,
             // and the next pass will find it gone too.
-            if open.device.read_events(&mut self.events).is_err() {
-                continue;
+            for _ in 0..DRAIN_READS {
+                match open.device.read_events(&mut self.events) {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => {}
+                }
             }
             for event in &self.events {
                 if let Some(input) = translate(&mut open.axes, *event) {
