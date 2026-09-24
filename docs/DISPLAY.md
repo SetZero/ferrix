@@ -213,7 +213,7 @@ source is committed this time.
 | `MODE_SETCRTC` | `SCANOUT` then `FLUSH` of the whole buffer |
 | `MODE_PAGE_FLIP` | `SCANOUT` if the buffer changed, then `FLUSH`; `DRM_MODE_PAGE_FLIP_EVENT` queues a `drm_event_vblank` when `FLIPPED` arrives |
 | `MODE_DIRTYFB` | `FLUSH` of the clip rectangles |
-| `MODE_CURSOR`, `MODE_CURSOR2` | the head's cursor plane, as Linux's `drm_mode_cursor_universal` sets it: `MOVE` is a `MOVE` to the image's top-left corner and waits for nothing; `BO` is a `CURSOR` of a 64 × 64 dumb buffer, or none for handle 0, with `CURSOR2`'s hotspot (`CURSOR` has none), and returns at `FLIPPED`; both flags set the place first. Another size `EINVAL`, a handle this open has not got `ENOENT`, a card with no cursor plane -- the DK1's LTDC -- `ENXIO`, as Linux answers for a CRTC with none |
+| `MODE_CURSOR`, `MODE_CURSOR2` | the head's cursor plane, as Linux's `drm_mode_cursor_universal` sets it: `MOVE` is a `MOVE` to the image's top-left corner and waits for nothing; `BO` is a `CURSOR` of a 64 × 64 dumb buffer, or none for handle 0, with `CURSOR2`'s hotspot (`CURSOR` has none), and returns at `FLIPPED`; both flags set the place first. Another size `EINVAL`, a handle this open has not got `ENOENT`, a card with no cursor plane `ENXIO`, as Linux answers for a CRTC with none; the image is shown until the next one, and a card may read it from the buffer itself (the DK1's LTDC does), so a program draws each image into a buffer the card is not showing |
 | `read()` | `drm_event_vblank` records; blocks while none are queued, `EAGAIN` under `O_NONBLOCK` |
 | `MODE_GETPLANERESOURCES` | E4: one primary plane a head to an open that set `UNIVERSAL_PLANES`; no plane to one that did not |
 | `MODE_GETPLANE` | E4: format `XRGB8888`, `possible_crtcs` the bit of its head's CRTC, and the CRTC and framebuffer `SETCRTC` or `PAGE_FLIP` last showed on that head, 0 and 0 while nothing is; the formats are copied only into an array with room for all of them; another id `ENOENT` |
@@ -756,6 +756,58 @@ bytes a line), its range limits, one `ltdc: offered ...` line per mode with
 its pixel clock and whether the board makes it, one `ltdc: can run ...`
 line per mode listed to DRM, and `ltdc: running ...`.
 
+**The pointer on the second layer (2026-09-24).** The LTDC blends a
+second layer over the first, in a window that can be anywhere on the
+screen, from a buffer of its own: a cursor plane. HELLO says the card has
+one (`cursor`, as virtio-gpu's does) and the driver says so on the
+console: `ltdc: a 64x64 cursor plane on the second layer`. Without it the
+pointer was drawn into the frame, and on the board a frame is composed,
+turned for the portrait monitor and flipped in 25 ms on average and 100 to
+150 ms at worst, so the pointer moved only as often as frames came and
+lagged the hand by that much. With it a pointer moving is a MOVE: the
+driver rewrites the layer's window position and asks for the shadow
+reload at the next vertical blanking, and no frame is drawn.
+
+* CURSOR points the layer at the attached 64 × 64 buffer itself -- one run
+  of memory like every buffer on this card, which the core cleans from the
+  caches before it sends CURSOR -- and is answered at the reload, after
+  which the buffer shown before is no longer read. Nothing is copied: a
+  ring-3 driver on ARMv7-A cannot clean the caches, and a copy would have
+  needed contiguous memory of its own. `hyprix` draws each new image into
+  the other of two cursor buffers, so an image is never shown half drawn
+  and it and its hotspot's place change at the same blanking.
+* The layer is ARGB8888 with the blending factors for premultiplied
+  colour, which is what a Wayland client's pixels and the plane's image
+  are: `BF1` the constant alpha (one), `BF2` one less pixel alpha times
+  constant alpha (RM0436's `100` and `111`). Its default colour, blended
+  outside the window, is transparent black.
+* A MOVE and a flip in the same frame land at the same reload, and neither
+  waits for the other: both are shadow registers under the one
+  `SRCR.VBR`. A MOVE is answered by nobody, and a FLIPPED goes out at the
+  first reload after its request: a request read in the same batch as a
+  reload that has already happened settles that reload's answers first,
+  so it is not answered a frame early.
+* An image across the screen's left or top edge is shown from its first
+  column or row on the screen, the layer's start address moved on by the
+  pixels cut off and its window narrower; across the right or bottom edge
+  the window is only narrower. Wholly off the screen, or hidden (buffer
+  0), the layer is off. `ferrix_stm32_display::ltdc::Clip` is host-tested
+  at each edge and corner.
+* A mode switch stops the LTDC, which takes both layers off; the pointer
+  is put back where it was, clipped to the new screen, when the
+  controller starts again.
+* The monitor is turned (`transform, 3`), and the card knows nothing of
+  it. `hyprix` turns the plane's image, its hotspot and its place as it
+  turns the frame (`compositor/hyprix/src/plane.rs`, `turned`): the
+  pointer lands on the buffer pixel the frame would have drawn it on, for
+  all eight transforms, which virtio-gpu's plane gets as well -- before
+  this a turned monitor drew its pointer into the frame on every card.
+
+One reload serves both layers, and it cannot be taken back once asked
+for: a move written in the very instant a reload happens may land half
+in this frame and half in the next, which is one frame of a pointer one
+step off.
+
 **What ran on the board (2026-09-23).** At `FERRIX-BOOT-OK stages 1-12` the
 node was published, `devmgr   1 devices, 6 drivers, 1 started, 0 failed`,
 `display  card0 scanout 0: 1280x720`. `compositor/blank` as init printed
@@ -769,6 +821,6 @@ software on the 650 MHz Cortex-A7 once warm.
 USB host, 2026-09-23 (`docs/INPUT.md` §7). EDID blocks past the second (the
 E-DDC segment pointer). Rates above 74.25 MHz (the LTDC pins' speed, above).
 The connector's `EDID` property, which `compositor_drm::Plan` would read.
-Hotplug. The LTDC's second layer as a cursor plane. The panic screen:
+Hotplug. The panic screen:
 the firmware left no framebuffer on this board, so a panic is serial only,
 as §2.4 says.

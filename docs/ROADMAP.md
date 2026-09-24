@@ -4731,6 +4731,18 @@ nothing on the board, and the desktop has the keyboard only because the
 compositor takes longer to start than the hub takes to enumerate
 (`docs/INPUT.md` §7.3).
 
+**Done — the board's pointer on the LTDC's second layer (2026-09-24).**
+The DK1's card has a cursor plane: `user/ltdc` offers the LTDC's second
+layer, shows the compositor's 64 × 64 image from its own buffer blended as
+premultiplied colour, and moves it by rewriting the layer's window at the
+next vertical blanking, clipped at the screen's edges and put back after a
+mode switch. `hyprix` turns the plane's image, hotspot and place with a
+turned monitor, which the board's portrait monitor is and which kept the
+pointer in the frame on every card before. The pointer then moves at the
+screen's 60 Hz while frames take their 25 to 150 ms. Host-tested against
+the LTDC's register model and for all eight transforms (`docs/DISPLAY.md`
+§6). **Still to do:** the board's own run.
+
 **Done — epoll, iteration 2's first kernel row.** `epoll_create1`,
 `epoll_create`, `epoll_ctl`, `epoll_wait`, `epoll_pwait` and `epoll_pwait2`
 answer on all three architectures, with `struct epoll_event` packed to 12
