@@ -233,6 +233,12 @@ pub const EPOLL_PWAIT: usize = 22;
 pub const EPOLL_PWAIT2: usize = 441;
 /// `eventfd2`.
 pub const EVENTFD2: usize = 19;
+/// `timerfd_create`.
+pub const TIMERFD_CREATE: usize = 85;
+/// `timerfd_settime`.
+pub const TIMERFD_SETTIME: usize = 86;
+/// `timerfd_gettime`.
+pub const TIMERFD_GETTIME: usize = 87;
 /// `fadvise64`.
 pub const FADVISE64: usize = 223;
 /// `fallocate`.

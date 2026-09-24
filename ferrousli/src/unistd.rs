@@ -15,7 +15,7 @@ use core::ffi::{c_char, c_int, c_long, c_uchar, c_uint, c_void};
 use core::mem::size_of;
 use core::ptr::null_mut;
 
-use crate::fcntl::{AT_FDCWD, AT_REMOVEDIR, AT_SYMLINK_NOFOLLOW, F_GETFD};
+use crate::fcntl::{AT_EACCESS, AT_FDCWD, AT_REMOVEDIR, AT_SYMLINK_NOFOLLOW, F_GETFD};
 use crate::syscall::{self, nr};
 use crate::{errno, exit};
 
@@ -423,6 +423,29 @@ pub unsafe extern "C" fn faccessat(
 pub unsafe extern "C" fn access(path: *const c_char, mode: c_int) -> c_int {
     // SAFETY: the caller's contract is `faccessat`'s.
     unsafe { faccessat(AT_FDCWD, path, mode, 0) }
+}
+
+/// Checks whether the effective ids may access `path` as `mode` asks: a GNU
+/// extension musl has too, which libxkbcommon checks its include paths with.
+///
+/// # Safety
+///
+/// `path` must be a NUL-terminated string.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn euidaccess(path: *const c_char, mode: c_int) -> c_int {
+    // SAFETY: the caller's contract is `faccessat`'s.
+    unsafe { faccessat(AT_FDCWD, path, mode, AT_EACCESS) }
+}
+
+/// [`euidaccess`] under its other name.
+///
+/// # Safety
+///
+/// As [`euidaccess`].
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn eaccess(path: *const c_char, mode: c_int) -> c_int {
+    // SAFETY: the caller's contract is `euidaccess`'s.
+    unsafe { euidaccess(path, mode) }
 }
 
 /// Changes the working directory to `path`.

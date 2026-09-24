@@ -205,6 +205,8 @@ pub const EPOLL_PWAIT: usize = 346;
 pub const EPOLL_PWAIT2: usize = 441;
 /// `eventfd2`.
 pub const EVENTFD2: usize = 356;
+/// `timerfd_create`.
+pub const TIMERFD_CREATE: usize = 350;
 /// `fallocate`.
 pub const FALLOCATE: usize = 352;
 /// `mlock`.
@@ -463,6 +465,10 @@ pub const ARM_FADVISE64_64: usize = 270;
 pub const ARM_SYNC_FILE_RANGE: usize = 341;
 /// `sigreturn`.
 pub const SIGRETURN: usize = 119;
+/// `timerfd_settime64`.
+pub const TIMERFD_SETTIME64: usize = 411;
+/// `timerfd_gettime64`.
+pub const TIMERFD_GETTIME64: usize = 410;
 /// `arm_set_tls`.
 pub const ARM_SET_TLS: usize = 983045;
 /// `arm_cacheflush`.
@@ -491,6 +497,10 @@ pub const UTIMENSAT: usize = UTIMENSAT_TIME64;
 pub const SEMTIMEDOP: usize = SEMTIMEDOP_TIME64;
 /// `sched_rr_get_interval`: [`SCHED_RR_GET_INTERVAL_TIME64`], which takes its arguments here.
 pub const SCHED_RR_GET_INTERVAL: usize = SCHED_RR_GET_INTERVAL_TIME64;
+/// `timerfd_settime`: [`TIMERFD_SETTIME64`], which takes its arguments here.
+pub const TIMERFD_SETTIME: usize = TIMERFD_SETTIME64;
+/// `timerfd_gettime`: [`TIMERFD_GETTIME64`], which takes its arguments here.
+pub const TIMERFD_GETTIME: usize = TIMERFD_GETTIME64;
 /// `getuid`: [`GETUID32`], which takes its arguments here.
 pub const GETUID: usize = GETUID32;
 /// `getgid`: [`GETGID32`], which takes its arguments here.

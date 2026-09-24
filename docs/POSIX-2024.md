@@ -18,13 +18,13 @@ variables it specifies beside them.
 
 | Status | Interfaces | Meaning |
 |---|---|---|
-| present | 1040 | defined by `libferrousli.a`, or a macro the standard specifies as one and `include/` defines |
+| present | 1045 | defined by `libferrousli.a`, or a macro the standard specifies as one and `include/` defines |
 | macro only | 3 | a function the standard requires, which the header defines only as a macro: a call works, taking its address or `#undef` does not |
 | broken | 0 | present, but it fails to link or gives a wrong answer |
 | stubbed | 0 | a stand-in that ends the program; the last left `src/stubs.rs` on 2026-09-16, and the file is gone |
-| absent | 200 | not there |
+| absent | 195 | not there |
 
-203 interfaces are missing in one of the last four ways. None of them is
+198 interfaces are missing in one of the last four ways. None of them is
 written on a branch any more: the three unlanded branches of 2026-09-13,
 `ferrousli-math`, `ferrousli-threads` and `ferrousli-misc`, were built,
 fixed and landed on 2026-09-16.
@@ -52,13 +52,13 @@ new subsystem. Every area's missing names are in the index at the end.
 | Threads and scheduling | 145 | 6 | 0 | 3 | the `clock` variants of the condition, mutex, read-write lock and semaphore waits 2; `pthread_atfork` 1. Landed: cancellation, `pthread_cancel` and `pthread_testcancel` with their cancellation points |
 | Memory mapping and System V IPC | 21 | 1 | 0 | 1 | `ftok` |
 | Realtime: asynchronous I/O, message queues, timers, shared memory | 29 | 29 | 0 | 11 | `aio.h` over threads 3; `mqueue.h` 3; `timer_*` with `SIGEV_THREAD` 3; `shm_open`, `shm_unlink` 1; `clock_getcpuclockid` 1. Typed memory (`posix_typed_mem_*`, `posix_mem_offset`) is the TYM option, which ferrousli does not claim: 0 |
-| Terminals and devices | 25 | 7 | 0 | 3 | `posix_openpt`, `grantpt`, `unlockpt`, `ptsname`, `ptsname_r`, `ctermid` 2; `posix_devctl` and `<devctl.h>` 1 |
+| Terminals and devices | 25 | 2 | 0 | 2 | `ctermid` 1; `posix_devctl` and `<devctl.h>` 1. Landed: `posix_openpt`, `grantpt`, `unlockpt`, `ptsname`, `ptsname_r`, for foot (`docs/CHROME.md`) |
 | Networking and name resolution | 55 | 0 | 0 | 0 | landed: `getaddrinfo`, `getnameinfo`, `freeaddrinfo` and `gai_strerror` over `/etc/hosts` and a DNS stub resolver; the hosts, networks, protocols and services databases; `if_nameindex`, `if_freenameindex`, `if_indextoname`; `in6addr_any`, `in6addr_loopback`, `sockatmark` |
 | Patterns, paths and search | 23 | 3 | 0 | 5 | `wordexp` 3; `nftw` 2. Landed: `glob` and `globfree`; `search.h`'s hash table, trees, linear search and queues; `libgen.h`'s `basename` and `dirname`, and `regex.h`, replacing five stubs |
 | Users, groups and databases | 29 | 9 | 0 | 3 | `<ndbm.h>` and the `dbm_*` functions |
 | Dynamic loading | 5 | 4 | 0 | 2 | `dlopen`, `dlsym`, `dlclose` and `dlerror` for a static program, failing cleanly; a loader is the README's fifth item and is not priced here. Landed: `dladdr`, over the program's own headers |
 | Across areas | | | | 3 | POSIX.1-2024's declarations in `include/` 3 |
-| **All** | **1243** | **203** | **0** | **74** | |
+| **All** | **1243** | **198** | **0** | **73** | |
 
 ## Present but broken
 
@@ -345,7 +345,7 @@ interface.
 |---|---|---|
 | `<devctl.h>` | absent (1) | `posix_devctl` (DC) |
 | `<stdio.h>` | absent (1) | `ctermid` |
-| `<stdlib.h>` | absent (5) | `grantpt` (XSI), `posix_openpt` (XSI), `ptsname` (XSI), `ptsname_r` (XSI), `unlockpt` (XSI) |
+| `<stdlib.h>` | present (5) | `grantpt` (XSI), `posix_openpt` (XSI), `ptsname` (XSI), `ptsname_r` (XSI), `unlockpt` (XSI) |
 | `<termios.h>` | present (13) | `cfgetispeed`, `cfgetospeed`, `cfsetispeed`, `cfsetospeed`, `tcdrain`, `tcflow`, `tcflush`, `tcgetattr`, `tcgetsid`, `tcgetwinsize`, `tcsendbreak`, `tcsetattr`, `tcsetwinsize` |
 | `<unistd.h>` | present (5) | `isatty`, `tcgetpgrp`, `tcsetpgrp`, `ttyname`, `ttyname_r` |
 

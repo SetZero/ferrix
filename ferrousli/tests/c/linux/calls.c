@@ -152,6 +152,18 @@ int main(void)
 	CHECK(utimes("source", times) == -1 && errno == EINVAL);
 	CHECK(utimes("source", 0) == 0);
 
+	/* fallocate: storage for a range, and a mode the kernel refuses. */
+	CHECK(fallocate(source, 0, 0, 4096) == 0);
+	CHECK(fstat(source, &st) == 0 && st.st_size >= 4096);
+	errno = 0;
+	CHECK(fallocate(source, 0, -1, 1) == -1 && errno == EINVAL);
+
+	/* The effective ids' access check, under both its names. */
+	CHECK(euidaccess("source", R_OK | W_OK) == 0);
+	CHECK(eaccess("source", F_OK) == 0);
+	errno = 0;
+	CHECK(eaccess("missing", F_OK) == -1 && errno == ENOENT);
+
 	/* An interval timer, set, read back, and cancelled. */
 	memset(&timer, 0, sizeof timer);
 	timer.it_value.tv_sec = 100;

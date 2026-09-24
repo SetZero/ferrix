@@ -82,6 +82,7 @@ openat mkdirat fchownat newfstatat unlinkat renameat linkat symlinkat
 readlinkat fchmodat faccessat pselect6 ppoll utimensat dup3 pipe2 prlimit64
 renameat2 getrandom memfd_create execveat statx clone3 faccessat2
 epoll_create1 epoll_ctl epoll_pwait epoll_pwait2 eventfd2
+timerfd_create timerfd_settime timerfd_gettime
 fadvise64 fallocate mlock munlock mlockall munlockall getpriority setpriority
 waitid preadv pwritev mknodat setresuid setresgid fchmodat2 copy_file_range
 sync_file_range
@@ -109,7 +110,7 @@ getuid getgid geteuid getegid setuid setgid setreuid setregid getgroups
 setgroups chown fchown lchown setresuid setresgid getresuid getresgid
 clock_gettime clock_settime clock_getres clock_nanosleep clock_adjtime futex
 ppoll pselect6 rt_sigtimedwait utimensat semtimedop sched_rr_get_interval
-gettimeofday settimeofday nanosleep
+gettimeofday settimeofday nanosleep timerfd_settime timerfd_gettime
 """.split()
 
 # What ARMv7-A calls instead, and the calls it has that the others do not.
@@ -122,6 +123,7 @@ clock_gettime64 clock_settime64 clock_getres_time64 clock_nanosleep_time64
 clock_adjtime64 futex_time64 ppoll_time64 pselect6_time64
 rt_sigtimedwait_time64 utimensat_time64 semtimedop_time64
 sched_rr_get_interval_time64 arm_fadvise64_64 arm_sync_file_range sigreturn
+timerfd_settime64 timerfd_gettime64
 """.split()
 
 # The narrow calls whose wide form takes the very arguments ferrousli passes
@@ -145,6 +147,8 @@ ARM_SAME_ARGUMENTS = {
     "utimensat": "utimensat_time64",
     "semtimedop": "semtimedop_time64",
     "sched_rr_get_interval": "sched_rr_get_interval_time64",
+    "timerfd_settime": "timerfd_settime64",
+    "timerfd_gettime": "timerfd_gettime64",
     "getuid": "getuid32",
     "getgid": "getgid32",
     "geteuid": "geteuid32",

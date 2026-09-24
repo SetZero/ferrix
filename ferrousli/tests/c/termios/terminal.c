@@ -1,14 +1,16 @@
 /*
  * termios.h and unistd.h's terminal calls, on a pseudo-terminal the test
- * opens itself: attributes read, set with each action and read back, the
- * speed calls, raw mode against the header's own flags, draining, flushing
- * and flow, window sizes, ttyname, and the process group calls, which fail on
- * a terminal that controls no session.
+ * opens itself with stdlib.h's posix_openpt, grantpt, unlockpt and ptsname:
+ * attributes read, set with each action and read back, the speed calls, raw
+ * mode against the header's own flags, draining, flushing and flow, window
+ * sizes, ttyname, and the process group calls, which fail on a terminal that
+ * controls no session.
  */
 
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <termios.h>
@@ -36,17 +38,27 @@ int main(void)
 	struct termios t, u, raw;
 	struct winsize size = { 24, 80, 0, 0 }, got;
 	char name[64], path[32] = "/dev/pts/";
-	int master, slave, null, unlock = 0, number = -1;
+	int master, slave, null, number = -1;
 	const tcflag_t iflags = IGNBRK | BRKINT | PARMRK | ISTRIP | INLCR | IGNCR | ICRNL | IXON;
 	const tcflag_t lflags = ECHO | ECHONL | ICANON | ISIG | IEXTEN;
 
-	master = open("/dev/ptmx", O_RDWR | O_NOCTTY);
+	/* The pair, through stdlib.h's calls, and the slave's name both ways. */
+	master = posix_openpt(O_RDWR | O_NOCTTY);
 	CHECK(master >= 0);
-	CHECK(ioctl(master, TIOCSPTLCK, &unlock) == 0 && ioctl(master, TIOCGPTN, &number) == 0);
+	CHECK(grantpt(master) == 0 && unlockpt(master) == 0);
+	CHECK(ioctl(master, TIOCGPTN, &number) == 0);
 	append_number(path, number);
+	CHECK(ptsname(master) && !strcmp(ptsname(master), path));
+	CHECK(ptsname_r(master, name, sizeof name) == 0 && !strcmp(name, path));
+	CHECK(ptsname_r(master, name, strlen(path)) == ERANGE);
 	slave = open(path, O_RDWR | O_NOCTTY);
 	CHECK(slave >= 0);
 	null = open("/dev/null", O_RDONLY);
+	errno = 0;
+	CHECK(grantpt(null) == -1 && errno == EINVAL);
+	CHECK(ptsname_r(null, name, sizeof name) == ENOTTY);
+	errno = 0;
+	CHECK(ptsname(null) == 0 && errno == ENOTTY);
 
 	/* Attributes: read, changed, set with each action, and read back. */
 	CHECK(tcgetattr(slave, &t) == 0);

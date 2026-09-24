@@ -56,6 +56,9 @@ pub const AT_FDCWD: c_int = -100;
 pub const AT_SYMLINK_NOFOLLOW: c_int = 0x100;
 /// `AT_REMOVEDIR`, from `linux/fcntl.h`.
 pub const AT_REMOVEDIR: c_int = 0x200;
+/// `AT_EACCESS`, from `linux/fcntl.h`: `faccessat` checks with the effective
+/// ids. The same bit as `AT_REMOVEDIR`, which only `unlinkat` reads.
+pub const AT_EACCESS: c_int = 0x200;
 
 /// `F_GETFD`, from `asm-generic/fcntl.h`.
 pub const F_GETFD: c_int = 1;
@@ -280,31 +283,64 @@ pub extern "C" fn posix_fadvise(fd: c_int, offset: i64, len: i64, advice: c_int)
     }
 }
 
-/// Makes sure the `len` bytes of `fd` from `offset` have storage. Returns the
-/// error number rather than setting `errno`.
-#[cfg_attr(not(test), unsafe(no_mangle))]
-pub extern "C" fn posix_fallocate(fd: c_int, offset: i64, len: i64) -> c_int {
-    // SAFETY: `fallocate` reads no memory. Mode zero allocates.
-    #[cfg(not(target_arch = "arm"))]
-    let ret =
-        unsafe { syscall::syscall4(nr::FALLOCATE, fd as usize, 0, offset as usize, len as usize) };
-    // SAFETY: as above, the offset and length in pairs of registers.
-    #[cfg(target_arch = "arm")]
-    let ret = unsafe {
+/// The `fallocate` system call: `mode` done to the `len` bytes of `fd` from
+/// `offset`, answered as the kernel answers it.
+#[cfg(not(target_arch = "arm"))]
+fn fallocate_call(fd: c_int, mode: c_int, offset: i64, len: i64) -> isize {
+    // SAFETY: `fallocate` reads no memory.
+    unsafe {
+        syscall::syscall4(
+            nr::FALLOCATE,
+            fd as usize,
+            mode as usize,
+            offset as usize,
+            len as usize,
+        )
+    }
+}
+
+/// The `fallocate` system call, with the offset and length in pairs of
+/// registers.
+#[cfg(target_arch = "arm")]
+fn fallocate_call(fd: c_int, mode: c_int, offset: i64, len: i64) -> isize {
+    // SAFETY: `fallocate` reads no memory.
+    unsafe {
         syscall::syscall6(
             nr::FALLOCATE,
             fd as usize,
-            0,
+            mode as usize,
             syscall::low(offset),
             syscall::high(offset),
             syscall::low(len),
             syscall::high(len),
         )
-    };
-    match errno::decode(ret) {
+    }
+}
+
+/// Makes sure the `len` bytes of `fd` from `offset` have storage. Returns the
+/// error number rather than setting `errno`.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub extern "C" fn posix_fallocate(fd: c_int, offset: i64, len: i64) -> c_int {
+    // Mode zero allocates.
+    match errno::decode(fallocate_call(fd, 0, offset, len)) {
         Ok(_) => 0,
         Err(error) => error,
     }
+}
+
+/// Linux's `fallocate`: allocates the `len` bytes of `fd` from `offset` for
+/// mode zero, or does what `mode`'s `FALLOC_FL_*` bits ask -- keep the size,
+/// punch a hole, zero a range. Returns 0, or -1 with `errno` set, where
+/// [`posix_fallocate`] returns the error.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub extern "C" fn fallocate(fd: c_int, mode: c_int, offset: i64, len: i64) -> c_int {
+    errno::from_syscall(fallocate_call(fd, mode, offset, len)) as c_int
+}
+
+/// glibc's large-file name for [`fallocate`].
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub extern "C" fn fallocate64(fd: c_int, mode: c_int, offset: i64, len: i64) -> c_int {
+    fallocate(fd, mode, offset, len)
 }
 
 /// glibc's large-file name for [`open`].
