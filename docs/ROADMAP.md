@@ -1410,7 +1410,10 @@ resolved and a script's interpreter rather than the script, which is what
 glibc's static start-up reads back through `/proc/self/exe`; `AT_EXECFN` is the
 name `execve` was given. The shell init starts from its built-in
 image, which has no file of its own, is named `/bin/busybox`, so the host's
-static glibc busybox starts as init too.
+static glibc busybox starts as init too. Since 2026-09-24 a fork child is
+recorded as its parent was, as on Linux, and `/proc/<pid>/exe` is a magic
+link that leads to the file itself, renamed or deleted, which is how Chrome
+starts each child process (`docs/CHROME.md` §2.2).
 
 **Signals are delivered.** `kill`, `tkill` and `tgkill` send; a child's end
 sends its parent `SIGCHLD`; a write to a pipe with no reader raises `SIGPIPE`
@@ -3404,7 +3407,9 @@ buddy allocator in a single block, and the largest block is `2^MAX_ORDER`
 frames. btop is 4.6 MiB, and `timeout btop` failed with `ENOMEM`. A program
 is now read into a `vmap::Buffer`, on single frames mapped into the kernel's
 arena, so the limit is `READ_FILE_LIMIT`'s 64 MiB, which it was always
-documented to be.
+documented to be. Since 2026-09-24 a program is not read at all: `execve` maps
+it from its file and reads its pages when they are touched, so there is no
+limit left but memory (`docs/CHROME.md` §2.2).
 
 Every x86-64 image with a busybox carries `/bin/btop`. In a `test-net` guest,
 `timeout 8 btop` drew the CPU, memory, network and process panels on the

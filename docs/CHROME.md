@@ -19,7 +19,7 @@ running on it:
 | Somewhere to put it: btrfs written from Ferrix | **done** 2026-09-21, stage 12 (§2.3) |
 | `/dev/shm`, and `clone` refusing the namespaces it cannot give | **done** 2026-09-19, on `main` 2026-09-23 (§2.4, §3) |
 | The compositor a window would appear in, drawing on the GPU | **done**, stage 19's GPU path (§1, §5) |
-| `execve` of a binary past 64 MiB, mapped from the file on demand | not started (§2.2), 13 points |
+| `execve` of a binary past 64 MiB, mapped from the file on demand | **done** 2026-09-24, on all three architectures, with `execve("/proc/self/exe")` from a fork (§2.2) |
 | `timerfd` | **done** 2026-09-24, on all three architectures, the first kernel row of §6's foot (§3) |
 | `madvise`, a vDSO and `signalfd` | not started (§3), ≈ 10 points |
 | libwayland-client, libxkbcommon, fontconfig with freetype and expat, a font | **done** 2026-09-24, built against ferrousli with foot (§3, §6) |
@@ -37,9 +37,11 @@ freetype 2.14.1, expat 2.7.3, fontconfig 2.17.1, tllist 1.1.0 and fcft
 3.3.2, and DejaVu Sans Mono 2.37 is the font. **Next:** `chrome --headless
 --screenshot`, which needs no compositor, GPU, input or fonts but
 exercises everything hard -- processes over Mojo, hundreds of threads,
-PartitionAlloc and V8 -- and needs the two kernel rows still open above
-first: `execve` past 64 MiB, and `madvise` with a vDSO. **Then** a window,
-for which foot has now proved the client libraries.
+PartitionAlloc and V8 -- and needed two kernel rows first: `execve` past
+64 MiB, done on 2026-09-24 (§2.2), and `madvise` with a vDSO, which is now
+where Chrome stops: `chrome-headless-shell --version` runs on Ferrix until
+PartitionAlloc's first `madvise` is refused. **Then** a window, for which
+foot has now proved the client libraries.
 
 **Re-checked on 2026-09-19**, against a tree 37 commits further on. Everything
 in §2, §3 and §4 still holds but the two loose fixes in §6, which are now
@@ -118,6 +120,83 @@ This is the 39-point section `docs/ROADMAP.md` already stages, and §4 below
 says how much of it is done. It is unavoidable on either route.
 
 ### 2.2 The exec path cannot load a binary this size
+
+**Done, 2026-09-24.** `execve` does not read the program any more. It opens
+the file and reads its first page -- a script's `#!` line, or an ELF file's
+header and program header table, read on to the table's end if that is
+further -- and maps the segments from the file's page cache, the same object
+an `mmap` of the file maps (`kernel/src/syscall/program.rs`,
+`kernel/src/syscall/load.rs`). Every page wholly inside one segment's file
+contents is a private mapping of the file: read from the disk the first time
+the program touches it, shared by every process running the same program,
+and copied into the process's own object the first time it is written, so a
+writable segment never writes its file. The partial pages at a segment's
+two ends, a page two segments share and `.bss` are anonymous and are copied
+or zeroed as before. A file with no object to map, and a program built into
+the kernel, are still copied, a piece at a time rather than whole. The linker
+`PT_INTERP` names is loaded the same way; the libraries it maps never had the
+limit, since `mmap` of a file always mapped its object. What is left of a
+limit is memory for page tables.
+
+The boot check (`kernel/src/fs/exec_check.rs`, FX-0871) loads a 72 MiB
+program whose file is served by a page source that counts what it is asked
+for, as btrfs serves its page cache from disk. On every boot it reports
+`a 72 MiB program was loaded reading 3 of its 18437 pages, 67 by the time it
+had been touched and had run`: the headers' page, the data segment's and the
+partial page the large segment ends on; then one run of 32 for a read 40 MiB
+in, and one for a write 50 MiB in, which must read back while the file's page
+keeps its byte. The bytes past the segment's file contents must be zeros
+though the file's are not, and the program must run to its status. Made to
+read the whole file again, the check fails with `loading read 18437 of the
+program's 18437 pages`.
+
+**`/proc/self/exe`, the same day.** Chrome starts every child process -- the
+GPU process, the network service, each renderer -- by forking and running
+`execvp("/proc/self/exe")`, and that failed with `ENOENT`, which Chrome
+reports as `LaunchProcess: failed to execvp: /proc/self/exe` and then `GPU
+process isn't usable. Goodbye.` Two things were missing. A fork child did not
+inherit what its parent was started as, so its `/proc/self/exe` had no
+target at all; and the link was followed as its text, so a program whose file
+had been renamed or deleted could not be run again through it. A fork now
+takes its parent's identity (`Process::forked`), and `/proc/<pid>/exe` is a
+magic link, as on Linux: followed, it leads to the file the program was
+loaded from, by `Inode::link_location` (`libs/vfs/src/walk.rs`), whatever its
+name is now; read, it is that file's path with ` (deleted)` after a file since
+removed. The boot check forks the sparse 72 MiB program, removes its name,
+and has the fork `execve("/proc/self/exe")`, which must run it to its status.
+With the fork's identity left out, as before, it fails with `errno 2`, and
+with the link followed as text, with `errno 2` again.
+
+**On Chrome, 2026-09-24**, x86-64 under KVM with 2 GiB, the 198 MB
+`chrome-headless-shell` 154.0.8037.57 on the btrfs volume
+`scripts/fetch-chrome.sh` makes (branch `chrome/headless`), run by `cargo
+xtask test-chrome`:
+
+* on Debian's `ld-linux` and glibc, `execve` of the 198 MB file succeeds, the
+  linker maps its libraries and Chrome runs, until PartitionAlloc's first
+  `madvise` is refused with `ENOSYS`. Its `CHECK` executes `int3`, which a
+  program on Ferrix is ended for with `SIGSEGV`: `pid 215 ended by signal 11
+  at 0x0, pc 0x55555726974d`, the `int3` after `madvise@plt` at
+  `0x1d1474d`. With `madvise` answered 0, a trial kernel that is not landed,
+  it prints `Google Chrome for Testing 154.0.8037.57`; `--dump-dom` then
+  starts its child processes through `/proc/self/exe` with no `execvp`
+  failure, and two of them end at a `CHECK` of their own
+  (`+0x3f11f11`) while the browser ends reading a null pointer in libc.
+  Those are the next track's, not this one's;
+* on ferrousli's `ld.so` and `libc.so.6` in glibc's place, with the volume's
+  other libraries on `LD_LIBRARY_PATH`, the program is loaded and the loader
+  stops at the first glibc name ferrousli lacks: `ld-ferrousli: undefined
+  symbol: program_invocation_short_name`.
+
+Neither stops at `execve`. What is deliberately not done: `ETXTBSY`, so a
+running program's file can be written, and the program sees the new bytes
+in pages it has not yet copied, where Linux refuses the write; the partial
+pages at a segment's ends are copied, not mapped, so `/proc/<pid>/maps` shows
+a segment as its file's pages with an anonymous page either side, where
+Linux shows one run; and `/proc/<pid>/cwd`, `root` and `fd/<n>` are still
+followed as their text.
+
+What follows is how it stood before.
 
 `execve` reads the whole file through `fs::read_file`, whose `READ_FILE_LIMIT`
 is 64 MiB (`kernel/src/fs/mod.rs`), and `load.rs` maps the segments and copies
