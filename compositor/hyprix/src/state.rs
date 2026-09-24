@@ -1090,6 +1090,14 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
         // subscribes: its `Watcher` then starts at the state the plugin saw
         // rather than replaying events from before `subscribe`.
         let plugins_tracking = !plugins.is_empty() && (plugins.watches() || changed);
+        // Where the focus went this pass, taken every pass so that it
+        // never piles up: two windows mapped at once each took it, and a
+        // bar is told of both, as Hyprland tells it.
+        let trail: Vec<Option<u64>> = state
+            .take_focus_trail()
+            .into_iter()
+            .map(|window| window.map(|window| window.0))
+            .collect();
         if event_ready || events_watched || plugins_tracking || watched || workspaces_watched {
             let snapshot = crate::control::snapshot(
                 &state,
@@ -1109,10 +1117,10 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                 ),
             );
             if let Some(socket) = events.as_mut() {
-                socket.publish(&snapshot);
+                socket.publish(&snapshot, &trail);
             }
             // A plugin that subscribed hears the same lines a bar does.
-            plugins.tell(&snapshot);
+            plugins.tell(&snapshot, &trail);
             if workspaces_watched {
                 // `ext-workspace-v1`: the workspace numbers a bar draws,
                 // one group a monitor.

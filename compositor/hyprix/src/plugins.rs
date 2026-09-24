@@ -210,8 +210,8 @@ impl Plugins {
     /// A plugin hears what happens after it subscribes and not what happened
     /// before, which is what Hyprland's `registerCallbackDynamic` gives a
     /// plugin too: the state it starts from is the state it can ask for.
-    pub fn tell(&mut self, snapshot: &Snapshot) {
-        let events = self.watcher.changed(snapshot);
+    pub fn tell(&mut self, snapshot: &Snapshot, trail: &[Option<u64>]) {
+        let events = self.watcher.changed_through(snapshot, trail);
         if events.is_empty() || !self.loaded.iter().any(|plugin| plugin.subscribed) {
             return;
         }

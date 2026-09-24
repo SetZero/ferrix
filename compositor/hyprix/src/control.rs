@@ -841,7 +841,10 @@ impl Events {
     /// Hyprland leaves a fresh client to ask `hyprctl` for that; telling it
     /// is strictly more useful and no reader can be surprised by an event
     /// for a window it does not know about yet.
-    pub fn publish(&mut self, snapshot: &Snapshot) {
+    ///
+    /// `trail` is where the focus went during the pass, which the watcher
+    /// says a window at a time ([`compositor_ipc::Watcher::changed_through`]).
+    pub fn publish(&mut self, snapshot: &Snapshot, trail: &[Option<u64>]) {
         let mut fresh = Vec::new();
         while let Ok((stream, _)) = self.listener.accept() {
             // Written to and never read: a blocking write to a bar that has
@@ -855,7 +858,7 @@ impl Events {
         if !fresh.is_empty() && self.subscribers.is_empty() {
             self.watcher = compositor_ipc::Watcher::new();
         }
-        let events = self.watcher.changed(snapshot);
+        let events = self.watcher.changed_through(snapshot, trail);
         self.subscribers.append(&mut fresh);
         if events.is_empty() || self.subscribers.is_empty() {
             return;

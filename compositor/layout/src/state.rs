@@ -407,6 +407,9 @@ pub struct State {
     pointer: Option<(f64, f64)>,
     /// Every window, most recently focused last.
     history: Vec<WindowId>,
+    /// Each window the focus went to since [`State::take_focus_trail`] was
+    /// last asked, in order: `None` where nothing was focused.
+    focus_trail: Vec<Option<WindowId>>,
     /// The name of each workspace that has one, which is the special ones:
     /// a numbered workspace's name is its number.
     names: BTreeMap<WorkspaceId, String>,
@@ -491,6 +494,7 @@ impl State {
             windows: BTreeMap::new(),
             floating_rects: BTreeMap::new(),
             history: Vec::new(),
+            focus_trail: Vec::new(),
             names: BTreeMap::new(),
             groups: BTreeMap::new(),
             groups_locked: false,
@@ -2452,8 +2456,21 @@ impl State {
         }
         if after.focus != before.focus {
             changes.push(Change::Focus(after.focus));
+            self.focus_trail.push(after.focus);
         }
         changes
+    }
+
+    /// Every window the focus went to since the last time this was asked,
+    /// in order, and forget them.
+    ///
+    /// Hyprland posts `activewindow` at the moment the focus moves, so two
+    /// windows mapped one after the other are two events even when nothing
+    /// happens between them. A compositor that compares its state once a
+    /// pass would say only where the focus ended; this is what lets it say
+    /// where it went on the way.
+    pub fn take_focus_trail(&mut self) -> Vec<Option<WindowId>> {
+        std::mem::take(&mut self.focus_trail)
     }
 
     fn snapshot(&self) -> Snapshot {

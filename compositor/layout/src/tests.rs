@@ -4121,3 +4121,19 @@ fn keep_aspect_ratio_holds_the_shape_inside_the_limits() {
         r(0, 0, 1600, 800)
     );
 }
+
+/// Two windows opened one after the other each take the focus, and the
+/// trail says so in order, once: a compositor that looks at its state once
+/// a pass would otherwise see only the second.
+#[test]
+fn the_focus_trail_is_every_window_focused_in_order() {
+    let mut state = state_on(BARE, monitor(M1, 0, 0, 1920, 1080));
+    open(&mut state, &[1, 2]);
+    assert_eq!(
+        state.take_focus_trail(),
+        [Some(WindowId(1)), Some(WindowId(2))]
+    );
+    assert!(state.take_focus_trail().is_empty(), "taken, and forgotten");
+    focus(&mut state, 1);
+    assert_eq!(state.take_focus_trail(), [Some(WindowId(1))]);
+}

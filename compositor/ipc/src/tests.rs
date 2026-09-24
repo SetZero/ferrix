@@ -2338,3 +2338,40 @@ fn the_watcher_says_activelayout_for_a_group_that_moved() {
         }]
     );
 }
+
+/// Two windows mapped in one pass each took the focus, one after the other.
+/// The state after says only the second has it; the trail says both went
+/// by, and each is said, as Hyprland posts `activewindow` at each.
+#[test]
+fn every_window_the_focus_went_to_in_one_pass_is_said() {
+    let mut watcher = Watcher::new();
+    let _ = watcher.changed(&watched(&[], None));
+
+    let both = watched(
+        &[watched_window(1, "one"), watched_window(2, "two")],
+        Some(2),
+    );
+    let focused: Vec<Option<u64>> = watcher
+        .changed_through(&both, &[Some(1), Some(2)])
+        .into_iter()
+        .filter_map(|event| match event {
+            Event::ActiveWindow(window) => Some(window.map(|window| window.address)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(focused, [Some(1), Some(2)]);
+
+    // Where the focus went and came back from in one pass is still two
+    // moves; a window that has gone again is not said at all, and a trail
+    // that stayed where it began says nothing.
+    let events = watcher.changed_through(&both, &[Some(1), Some(3), Some(2)]);
+    let focused: Vec<Option<u64>> = events
+        .into_iter()
+        .filter_map(|event| match event {
+            Event::ActiveWindow(window) => Some(window.map(|window| window.address)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(focused, [Some(1), Some(2)]);
+    assert!(watcher.changed_through(&both, &[Some(2)]).is_empty());
+}

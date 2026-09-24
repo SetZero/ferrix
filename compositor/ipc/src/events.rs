@@ -33,7 +33,7 @@
 //! event with no counterpart here is an event a bar will not see, which is
 //! better than one it sees in the wrong shape.
 
-use crate::Snapshot;
+use crate::{Snapshot, Window};
 
 /// The longest payload a line carries, after which Hyprland cuts it.
 pub const MAX_DATA: usize = 1024;
@@ -339,6 +339,12 @@ fn line(event: &str, data: &str) -> String {
 /// reported in one go and in this function's order rather than in the order
 /// they happened, which no reader of a bar can tell apart from two changes a
 /// millisecond apart.
+///
+/// The focus is the exception, because comparing would lose an event rather
+/// than reorder it: two windows mapped in one pass each take the focus, and
+/// the state after says only the second has it. So the caller may hand over
+/// the trail of where the focus went, [`Watcher::changed_through`], and each
+/// window on it is said in turn, as Hyprland says each.
 #[derive(Clone, Debug, Default)]
 pub struct Watcher {
     seen: Option<Snapshot>,
@@ -357,6 +363,16 @@ impl Watcher {
     /// the workspace, each window -- which is what a bar that connected
     /// before the compositor finished starting needs to hear.
     pub fn changed(&mut self, now: &Snapshot) -> Vec<Event> {
+        self.changed_through(now, &[])
+    }
+
+    /// [`Watcher::changed`], told where the focus went during the pass:
+    /// `trail` is the address of each window it went to, in order, `None`
+    /// where it went to nothing. Every stop on the way before the last is
+    /// said as its own `activewindow`, then where it ended as ever. A
+    /// window that has gone again by the end of the pass is not said: a
+    /// reader cannot be told about a window it was never told exists.
+    pub fn changed_through(&mut self, now: &Snapshot, trail: &[Option<u64>]) -> Vec<Event> {
         let mut events = Vec::new();
         let before = self.seen.take().unwrap_or_default();
 
@@ -491,12 +507,30 @@ impl Watcher {
             events.push(Event::Submap(now.submap.clone()));
         }
 
-        if before.active_window != now.active_window {
-            events.push(Event::ActiveWindow(now.active().map(|window| WindowRef {
-                address: window.address,
-                class: window.class.clone(),
-                title: window.title.clone(),
-            })));
+        let reference = |window: &Window| WindowRef {
+            address: window.address,
+            class: window.class.clone(),
+            title: window.title.clone(),
+        };
+        let mut said = before.active_window;
+        for &stop in trail.split_last().map_or(&[][..], |(_, passed)| passed) {
+            if stop == said {
+                continue;
+            }
+            let window = match stop {
+                None => None,
+                Some(address) => {
+                    match now.windows.iter().find(|window| window.address == address) {
+                        Some(window) => Some(reference(window)),
+                        None => continue,
+                    }
+                }
+            };
+            events.push(Event::ActiveWindow(window));
+            said = stop;
+        }
+        if said != now.active_window {
+            events.push(Event::ActiveWindow(now.active().map(reference)));
         }
 
         // Fullscreen is a property of the focused window here, as the event
