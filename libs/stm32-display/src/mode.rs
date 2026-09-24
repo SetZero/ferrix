@@ -33,11 +33,10 @@ pub struct Mode {
 impl Mode {
     /// CEA-861 VIC 4: 1280x720 progressive at 60 Hz, a 74.25 MHz pixel clock.
     ///
-    /// The one mode the DK board scans out. Its pixel clock is exactly what
-    /// the board's firmware leaves on PLL4's Q output (24 MHz / 4 x 99 / 8),
-    /// which clocks the LTDC; every HDMI sink takes it; and at 3.6 MB a frame
-    /// its buffer fits one 4 MiB block of contiguous memory, which is the
-    /// largest the kernel's frame allocator hands out.
+    /// The mode the DK board scanned out before it read EDIDs, and the one
+    /// it falls back to: its pixel clock is exactly what the board's
+    /// firmware leaves on PLL4's Q output (24 MHz / 4 x 99 / 8), which clocks
+    /// the LTDC, and every HDMI sink takes it (`crate::choice`).
     pub const CEA_720P60: Mode = Mode {
         clock_khz: 74_250,
         hdisplay: 1280,
@@ -76,6 +75,17 @@ impl Mode {
             return 0;
         }
         ((self.clock_khz as u64 * 1000 + per_frame / 2) / per_frame) as u32
+    }
+
+    /// Frames a second, in thousandths: what tells 59.94 Hz from 60, and
+    /// what a log prints.
+    #[must_use]
+    pub const fn refresh_millihz(&self) -> u64 {
+        let per_frame = self.htotal as u64 * self.vtotal as u64;
+        if per_frame == 0 {
+            return 0;
+        }
+        (self.clock_khz as u64 * 1_000_000 + per_frame / 2) / per_frame
     }
 
     /// The mode an EDID detailed timing descriptor describes, or `None` for a

@@ -10,16 +10,19 @@
 //! register value is here, written against [`Registers`] and
 //! [`sii9022::Bus`], and tested against models of the hardware:
 //!
-//! * [`mode`]: a video mode, the one the board scans out (CEA-861's
+//! * [`mode`]: a video mode, the one the board falls back to (CEA-861's
 //!   1280x720 at 60 Hz), and the timing an EDID describes;
 //! * [`ltdc`]: the controller's timing, its first layer, and its reload and
 //!   interrupt bits;
 //! * [`i2c`]: the STM32 I2C controller as a polled master;
 //! * [`sii9022`]: the bridge's TPI registers, its DDC pass-through and its
 //!   AVI infoframe;
-//! * [`edid`]: the monitor's description, read through the bridge.
+//! * [`edid`]: the monitor's description, read through the bridge: every
+//!   mode it offers and the timings it accepts;
+//! * [`choice`]: which of those the board can make a pixel clock for, and
+//!   the largest, which is the one it runs.
 //!
-//! # What the kernel has already done
+//! # What the kernel has already done, and does on request
 //!
 //! Clocks and pins are not a driver's: the RCC and the GPIO banks are shared
 //! by every peripheral on the chip. The kernel turns on the LTDC's and the
@@ -27,7 +30,10 @@
 //! 64 MHz HSI, muxes both controllers' pins, takes the bridge out of reset,
 //! and checks that the LTDC's pixel clock is the one [`mode::Mode::CEA_720P60`]
 //! needs, before it publishes the device. What reaches this crate is two
-//! register windows that are ready to be programmed.
+//! register windows that are ready to be programmed. A mode with another
+//! pixel clock is the one thing that needs the RCC again, and the kernel
+//! rounds and sets that clock for the driver (`device_clock`), changing
+//! nothing of PLL4 but the divider of the output only the LTDC uses.
 //!
 //! # No clock
 //!
@@ -38,17 +44,22 @@
 #![no_std]
 #![forbid(unsafe_code)]
 
+pub mod choice;
 pub mod edid;
 pub mod i2c;
 pub mod ltdc;
 pub mod mode;
 pub mod sii9022;
+mod timings;
 
 #[cfg(test)]
 extern crate std;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod edid_tests;
 
 /// A window of 32-bit device registers, by byte offset.
 pub trait Registers {
