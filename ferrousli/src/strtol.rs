@@ -19,7 +19,7 @@
 //! bases 0 and 2, and those names accept it. The plain names keep C17's
 //! grammar, which musl's headers promise.
 
-use core::ffi::{c_char, c_int, c_long, c_longlong, c_ulong, c_ulonglong};
+use core::ffi::{c_char, c_int, c_long, c_longlong, c_ulong, c_ulonglong, c_void};
 
 use crate::errno;
 use crate::scan::{CText, Input, digit, set_end, skip_space};
@@ -251,6 +251,83 @@ strto!(
     __isoc23_strtoumax, UintMax, Unsigned, true
 );
 
+/// Defines one conversion that takes one more argument, which it ignores:
+/// the `locale_t` of the `_l` forms, or the `group` flag of glibc's
+/// `__strto*_internal`. An integer's grammar is the same in every locale
+/// but for glibc's grouping, which only its own `scanf` asks for, with
+/// `'`, and which `group` 0, what glibc's headers pass, turns off.
+macro_rules! strto_extra {
+    ($(#[$doc:meta])* $name:ident = $plain:ident, $ty:ty, $extra:ty) => {
+        $(#[$doc])*
+        ///
+        /// # Safety
+        ///
+        /// As the function without the last argument.
+        #[cfg_attr(not(test), unsafe(no_mangle))]
+        pub unsafe extern "C" fn $name(
+            s: *const c_char,
+            endptr: *mut *mut c_char,
+            base: c_int,
+            _extra: $extra,
+        ) -> $ty {
+            // SAFETY: the caller's contract is the plain function's.
+            unsafe { $plain(s, endptr, base) }
+        }
+    };
+}
+
+strto_extra!(
+    /// [`strtol`] in a locale, which an integer does not depend on.
+    strtol_l = strtol, c_long, *mut c_void
+);
+strto_extra!(
+    /// [`strtoul`] in a locale.
+    strtoul_l = strtoul, c_ulong, *mut c_void
+);
+strto_extra!(
+    /// [`strtoll`] in a locale.
+    strtoll_l = strtoll, c_longlong, *mut c_void
+);
+strto_extra!(
+    /// [`strtoull`] in a locale.
+    strtoull_l = strtoull, c_ulonglong, *mut c_void
+);
+strto_extra!(
+    /// [`__isoc23_strtol`] in a locale: glibc's headers call it for
+    /// `strtol_l` from 2.38.
+    __isoc23_strtol_l = __isoc23_strtol, c_long, *mut c_void
+);
+strto_extra!(
+    /// [`__isoc23_strtoul`] in a locale.
+    __isoc23_strtoul_l = __isoc23_strtoul, c_ulong, *mut c_void
+);
+strto_extra!(
+    /// [`__isoc23_strtoll`] in a locale. GLib calls it.
+    __isoc23_strtoll_l = __isoc23_strtoll, c_longlong, *mut c_void
+);
+strto_extra!(
+    /// [`__isoc23_strtoull`] in a locale. GLib calls it.
+    __isoc23_strtoull_l = __isoc23_strtoull, c_ulonglong, *mut c_void
+);
+strto_extra!(
+    /// glibc's internal [`strtol`], which its headers once inlined `strtol`
+    /// to and old programs still call. A nonzero `group` would accept the
+    /// locale's thousands separators; the C locale has none.
+    __strtol_internal = strtol, c_long, c_int
+);
+strto_extra!(
+    /// glibc's internal [`strtoul`]. Chrome calls it.
+    __strtoul_internal = strtoul, c_ulong, c_int
+);
+strto_extra!(
+    /// glibc's internal [`strtoll`].
+    __strtoll_internal = strtoll, c_longlong, c_int
+);
+strto_extra!(
+    /// glibc's internal [`strtoull`].
+    __strtoull_internal = strtoull, c_ulonglong, c_int
+);
+
 /// The decimal integer at the start of `text`, wrapping on overflow, for the
 /// `ato*` functions. C leaves their overflow undefined and they never set
 /// `errno`.
@@ -362,6 +439,23 @@ mod tests {
         assert_eq!(run(__isoc23_strtol, c"0b101", 10), (0, 1, 0));
         assert_eq!(run(__isoc23_strtoimax, c"0x10", 0), (16, 4, 0));
         assert_eq!(run(strtol, c"0b101", 2), (0, 1, 0));
+    }
+
+    #[test]
+    fn the_locale_and_internal_forms_are_the_plain_functions() {
+        let mut end = null_mut();
+        // SAFETY: a C string, a place for the end, and a locale never read.
+        let v = unsafe { __isoc23_strtoll_l(c"-0b101x".as_ptr(), &raw mut end, 0, null_mut()) };
+        assert_eq!(v, -5);
+        // SAFETY: as above.
+        let v = unsafe { __isoc23_strtoull_l(c"0xff".as_ptr(), &raw mut end, 0, null_mut()) };
+        assert_eq!(v, 255);
+        // SAFETY: as above, with glibc's `group` 0.
+        let v = unsafe { __strtoul_internal(c"  42z".as_ptr(), &raw mut end, 10, 0) };
+        assert_eq!(v, 42);
+        // SAFETY: as above.
+        let v = unsafe { strtoll_l(c"0b1".as_ptr(), &raw mut end, 0, null_mut()) };
+        assert_eq!(v, 0, "C17's grammar stops at the b");
     }
 
     #[test]

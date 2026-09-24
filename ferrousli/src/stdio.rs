@@ -12,16 +12,19 @@
 //!   [`fortify`] has glibc's checked entry points.
 //! * [`wide`] reads and writes wide characters and wide strings, and orients
 //!   streams with `fwide`; [`wprintf`] formats wide output and [`wscanf`] reads it.
+//! * [`ext`] is `stdio_ext.h`, and glibc's `__uflow` and `__overflow`.
 //!
-//! # No glibc `FILE` layout
+//! # glibc's `FILE` layout, as far as its macros read it
 //!
 //! `FILE` is opaque: musl's header declares `struct _IO_FILE` without members,
 //! and programs compiled against it reach a stream only through functions.
 //! glibc's header instead exposes its structure, and binaries built against
-//! it, particularly old ones, read and write its fields directly through
-//! macros such as `getc_unlocked` and `_IO_putc_unlocked`. Ferrousli's `FILE`
-//! does not have that layout, so such a binary cannot use these streams. That
-//! is out of scope until a glibc-compatible loader needs it.
+//! it read its fields directly through the inline `getc_unlocked`,
+//! `putc_unlocked`, `feof_unlocked` and `ferror_unlocked`. Ferrousli's `FILE`
+//! begins with the fields those read, arranged so that each finds its buffer
+//! used up and calls [`ext::__uflow`] or [`ext::__overflow`] (`file.rs`,
+//! `GlibcHead`). A program that reaches further into the structure, as only
+//! glibc's own `libio` should, is not served.
 //!
 //! # Not here yet
 //!
@@ -30,6 +33,7 @@
 //! `tmpnam` in [`crate::temp`]; `rename` and `renameat` are with the other file
 //! system calls.
 
+pub mod ext;
 pub mod file;
 pub mod float;
 pub mod fortify;

@@ -643,6 +643,103 @@ pub unsafe extern "C" fn __fxstatat(
     unsafe { fstatat(dirfd, path, buf, flags) }
 }
 
+// glibc's pre-2.33 large-file names for the same four, which Chrome and
+// SwiftShader, built against glibc 2.31, call. On a 64-bit architecture
+// `struct stat64` is `struct stat`. ARMv7-A's glibc gives them its 32-bit
+// `time_t` structure, which this library does not have, so they are not
+// defined there, and such a program fails to load naming one.
+
+/// glibc's pre-2.33 name for [`stat64`].
+///
+/// # Safety
+///
+/// As [`stat`].
+#[cfg(not(target_arch = "arm"))]
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn __xstat64(_version: c_int, path: *const c_char, buf: *mut Stat) -> c_int {
+    // SAFETY: the caller's contract is `stat`'s.
+    unsafe { stat(path, buf) }
+}
+
+/// glibc's pre-2.33 name for [`fstat64`].
+///
+/// # Safety
+///
+/// As [`fstat`].
+#[cfg(not(target_arch = "arm"))]
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn __fxstat64(_version: c_int, fd: c_int, buf: *mut Stat) -> c_int {
+    // SAFETY: the caller's contract is `fstat`'s.
+    unsafe { fstat(fd, buf) }
+}
+
+/// glibc's pre-2.33 name for [`lstat64`].
+///
+/// # Safety
+///
+/// As [`lstat`].
+#[cfg(not(target_arch = "arm"))]
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn __lxstat64(_version: c_int, path: *const c_char, buf: *mut Stat) -> c_int {
+    // SAFETY: the caller's contract is `lstat`'s.
+    unsafe { lstat(path, buf) }
+}
+
+/// glibc's pre-2.33 name for [`fstatat64`].
+///
+/// # Safety
+///
+/// As [`fstatat`].
+#[cfg(not(target_arch = "arm"))]
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn __fxstatat64(
+    _version: c_int,
+    dirfd: c_int,
+    path: *const c_char,
+    buf: *mut Stat,
+    flags: c_int,
+) -> c_int {
+    // SAFETY: the caller's contract is `fstatat`'s.
+    unsafe { fstatat(dirfd, path, buf, flags) }
+}
+
+/// Changes the mode of `path` itself, not of what a symbolic link names, as
+/// glibc has since 2.32: a file's mode changes, and a symbolic link, whose
+/// mode Linux does not change, fails with `EOPNOTSUPP`.
+///
+/// That is `fchmodat` with `AT_SYMLINK_NOFOLLOW`, which is `fchmodat2`. A
+/// kernel without it answers `EOPNOTSUPP` for everything, so then a path
+/// that is not a symbolic link has its mode changed the plain way.
+///
+/// # Safety
+///
+/// `path` must be a NUL-terminated string.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn lchmod(path: *const c_char, mode: c_uint) -> c_int {
+    /// `S_IFMT`, the file type bits of a mode.
+    const S_IFMT: c_uint = 0o170_000;
+    /// `S_IFLNK`, a symbolic link's type.
+    const S_IFLNK: c_uint = 0o120_000;
+    // SAFETY: the caller's contract is `fchmodat`'s.
+    if unsafe { fchmodat(AT_FDCWD, path, mode, AT_SYMLINK_NOFOLLOW) } == 0 {
+        return 0;
+    }
+    if errno::get() != errno::EOPNOTSUPP {
+        return -1;
+    }
+    let mut st = Stat::default();
+    // SAFETY: as above, and `st` is a live local.
+    if unsafe { lstat(path, &raw mut st) } != 0 {
+        return -1;
+    }
+    if st.st_mode & S_IFMT == S_IFLNK {
+        errno::set(errno::EOPNOTSUPP);
+        return -1;
+    }
+    // SAFETY: as above.
+    unsafe { fchmodat(AT_FDCWD, path, mode, 0) }
+}
+
 /// Sets `path`'s access and modification times to `times[0]` and `times[1]`,
 /// given in microseconds, or both to now if `times` is null. As in musl,
 /// microseconds outside `0..1000000` fail with `EINVAL`.

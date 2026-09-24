@@ -13,22 +13,39 @@
 //! spike that linked uutils/coreutils against this library found
 //! `__memcpy_chk` coming out of a C dependency built with the host's headers.
 //!
-//! The memory functions, `__mempcpy_chk`, and the two string functions a
-//! Debian busybox asks for are here; `printf`'s are in `stdio/fortify.rs`. The
-//! rest of the string family
-//! (`__stpcpy_chk`, `__strncpy_chk` and the rest) are not, and each will be
-//! added the same way when something needs it.
+//! The memory and string functions, and the system calls Chrome's libraries
+//! are built to check (`__read_chk`, `__poll_chk`, `__getcwd_chk` and the
+//! rest), are here; `printf`'s and `fgets`'s are in `stdio/fortify.rs`, and
+//! `__open_2` and `__openat_2` in `fcntl.rs`. Each is the check glibc makes
+//! and then the plain function.
 //!
 //! # What a failed check does
 //!
-//! glibc calls `__chk_fail`, which raises `SIGABRT` after writing a message.
-//! So does this, through [`crate::signal::abort`]. The check has found a
-//! buffer overrun that has not happened yet; there is nothing to return.
+//! glibc calls `__chk_fail`, which writes `*** buffer overflow detected ***:
+//! terminated` and raises `SIGABRT`. So does this, through
+//! [`crate::signal::abort`]. The check has found a buffer overrun that has
+//! not happened yet; there is nothing to return.
 
-use core::ffi::{c_char, c_int, c_void};
+use core::ffi::{c_char, c_int, c_long, c_uint, c_ulong, c_void};
+use core::mem::size_of;
 
+use crate::poll::{Pollfd, poll};
+use crate::process::getgroups;
+use crate::realpath::realpath;
 use crate::signal::abort;
-use crate::string::{memcpy, memmove, mempcpy, memset, strcat, strcpy, strlen};
+use crate::string::{
+    explicit_bzero, memcpy, memmove, mempcpy, memset, stpcpy, strcat, strcpy, strlen, strncat,
+    strncpy, strnlen,
+};
+use crate::syscall::{self, nr};
+use crate::unistd::{getcwd, read, readlinkat};
+
+/// `PATH_MAX`, the size `realpath` writes up to.
+const PATH_MAX: usize = 4096;
+/// `FD_SETSIZE`, the descriptors an `fd_set` holds.
+const FD_SETSIZE: c_long = 1024;
+/// `NFDBITS`, the descriptors one word of an `fd_set` holds.
+const NFDBITS: c_long = 8 * size_of::<c_long>() as c_long;
 
 /// Stops the program: a fortified call was asked to write more than its
 /// destination holds.
@@ -37,6 +54,14 @@ use crate::string::{memcpy, memmove, mempcpy, memset, strcat, strcpy, strlen};
 /// directly, so it keeps the name.
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn __chk_fail() -> ! {
+    fortify_fail(b"*** buffer overflow detected ***: terminated\n")
+}
+
+/// Writes `message` to standard error and aborts: glibc's `__fortify_fail`,
+/// whose message names the check that failed.
+pub(crate) fn fortify_fail(message: &[u8]) -> ! {
+    // SAFETY: `message` is live, and the kernel only reads it.
+    let _ = unsafe { syscall::syscall3(nr::WRITE, 2, message.as_ptr().addr(), message.len()) };
     abort()
 }
 
@@ -157,4 +182,201 @@ pub unsafe extern "C" fn __strcat_chk(
     }
     // SAFETY: the caller's contract is `strcat`'s, and the result fits.
     unsafe { strcat(dest, src) }
+}
+
+/// `stpcpy`, refusing a string longer than the destination.
+///
+/// # Safety
+///
+/// As `stpcpy`.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn __stpcpy_chk(
+    dest: *mut c_char,
+    src: *const c_char,
+    destlen: usize,
+) -> *mut c_char {
+    // SAFETY: the caller passes a NUL-terminated `src`.
+    if unsafe { strlen(src) } >= destlen {
+        __chk_fail();
+    }
+    // SAFETY: the caller's contract is `stpcpy`'s, and the copy fits.
+    unsafe { stpcpy(dest, src) }
+}
+
+/// `strncpy`, refusing a count larger than the destination: `strncpy` writes
+/// all `n` bytes, padding with NULs.
+///
+/// # Safety
+///
+/// As `strncpy`.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn __strncpy_chk(
+    dest: *mut c_char,
+    src: *const c_char,
+    n: usize,
+    destlen: usize,
+) -> *mut c_char {
+    if n > destlen {
+        __chk_fail();
+    }
+    // SAFETY: the caller's contract is `strncpy`'s, and the copy fits.
+    unsafe { strncpy(dest, src, n) }
+}
+
+/// `strncat`, refusing a result longer than the destination: the string
+/// already there, at most `n` bytes of `src`, and the NUL.
+///
+/// # Safety
+///
+/// As `strncat`.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn __strncat_chk(
+    dest: *mut c_char,
+    src: *const c_char,
+    n: usize,
+    destlen: usize,
+) -> *mut c_char {
+    // SAFETY: `dest` is NUL-terminated, and `src` is read no further than
+    // its NUL or `n` bytes.
+    let needed = unsafe { strlen(dest) }.saturating_add(unsafe { strnlen(src, n) });
+    if needed >= destlen {
+        __chk_fail();
+    }
+    // SAFETY: the caller's contract is `strncat`'s, and the result fits.
+    unsafe { strncat(dest, src, n) }
+}
+
+/// `explicit_bzero`, refusing a length larger than the object.
+///
+/// # Safety
+///
+/// As `explicit_bzero`.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn __explicit_bzero_chk(s: *mut c_void, n: usize, destlen: usize) {
+    if n > destlen {
+        __chk_fail();
+    }
+    // SAFETY: the caller's contract is `explicit_bzero`'s, and it fits.
+    unsafe { explicit_bzero(s, n) }
+}
+
+/// The word of an `fd_set` that holds descriptor `fd`, for glibc's `FD_SET`,
+/// `FD_CLR` and `FD_ISSET`, stopping the program for a descriptor the set
+/// cannot hold.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub extern "C" fn __fdelt_chk(fd: c_long) -> c_long {
+    if !(0..FD_SETSIZE).contains(&fd) {
+        fortify_fail(b"*** bit out of range 0 - FD_SETSIZE on fd_set ***: terminated\n");
+    }
+    fd / NFDBITS
+}
+
+/// `getcwd` into a buffer of `buflen` bytes.
+///
+/// # Safety
+///
+/// As `getcwd`.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn __getcwd_chk(buf: *mut c_char, size: usize, buflen: usize) -> *mut c_char {
+    if size > buflen {
+        __chk_fail();
+    }
+    // SAFETY: the caller's contract is `getcwd`'s, and the size fits.
+    unsafe { getcwd(buf, size) }
+}
+
+/// `getgroups` into an array of `listlen` bytes.
+///
+/// # Safety
+///
+/// As `getgroups`.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn __getgroups_chk(size: c_int, list: *mut c_uint, listlen: usize) -> c_int {
+    // A negative size is `getgroups`'s own EINVAL.
+    if let Ok(count) = usize::try_from(size)
+        && count.saturating_mul(size_of::<c_uint>()) > listlen
+    {
+        __chk_fail();
+    }
+    // SAFETY: the caller's contract is `getgroups`'s, and the array fits.
+    unsafe { getgroups(size, list) }
+}
+
+/// `poll` on an array of `fdslen` bytes.
+///
+/// # Safety
+///
+/// As `poll`.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn __poll_chk(
+    fds: *mut Pollfd,
+    count: c_ulong,
+    timeout: c_int,
+    fdslen: usize,
+) -> c_int {
+    if fdslen / size_of::<Pollfd>() < count as usize {
+        __chk_fail();
+    }
+    // SAFETY: the caller's contract is `poll`'s, and the array holds `count`.
+    unsafe { poll(fds, count, timeout) }
+}
+
+/// `read` into a buffer of `buflen` bytes.
+///
+/// # Safety
+///
+/// As `read`.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn __read_chk(
+    fd: c_int,
+    buf: *mut c_void,
+    count: usize,
+    buflen: usize,
+) -> isize {
+    if count > buflen {
+        __chk_fail();
+    }
+    // SAFETY: the caller's contract is `read`'s, and the read fits.
+    unsafe { read(fd, buf, count) }
+}
+
+/// `readlinkat` into a buffer of `buflen` bytes.
+///
+/// # Safety
+///
+/// As `readlinkat`.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn __readlinkat_chk(
+    dirfd: c_int,
+    path: *const c_char,
+    buf: *mut c_char,
+    size: usize,
+    buflen: usize,
+) -> isize {
+    if size > buflen {
+        __chk_fail();
+    }
+    // SAFETY: the caller's contract is `readlinkat`'s, and the size fits.
+    unsafe { readlinkat(dirfd, path, buf, size) }
+}
+
+/// `realpath` into a buffer of `resolvedlen` bytes, which must hold
+/// `PATH_MAX`, the most `realpath` may write. A null `resolved` comes with
+/// `(size_t)-1`.
+///
+/// # Safety
+///
+/// As `realpath`.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn __realpath_chk(
+    path: *const c_char,
+    resolved: *mut c_char,
+    resolvedlen: usize,
+) -> *mut c_char {
+    if resolvedlen < PATH_MAX {
+        __chk_fail();
+    }
+    // SAFETY: the caller's contract is `realpath`'s, and the buffer holds
+    // `PATH_MAX`.
+    unsafe { realpath(path, resolved) }
 }

@@ -300,7 +300,7 @@ pub unsafe extern "C" fn fwrite_unlocked(
 /// # Safety
 ///
 /// `s` must be valid for writes of `n` bytes.
-unsafe fn read_line(inner: &mut Inner, s: *mut c_char, n: c_int) -> *mut c_char {
+pub(super) unsafe fn read_line(inner: &mut Inner, s: *mut c_char, n: c_int) -> *mut c_char {
     let Some(limit) = usize::try_from(n).ok().and_then(|n| n.checked_sub(1)) else {
         errno::set(errno::EINVAL);
         return null_mut();

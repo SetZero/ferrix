@@ -55,7 +55,7 @@
 use core::cell::UnsafeCell;
 use core::ffi::{c_int, c_void};
 use core::ptr::null_mut;
-use core::sync::atomic::{AtomicPtr, Ordering};
+use core::sync::atomic::{AtomicI32, AtomicPtr, Ordering};
 
 use super::lock::RecursiveLock;
 use super::memory::{Cookie, Fmem, Memstream, WMemstream};
@@ -662,6 +662,51 @@ impl Inner {
         true
     }
 
+    /// The bytes of output waiting in the buffer, for `__fpending`.
+    pub fn pending_output(&self) -> usize {
+        if self.io == Io::Writing { self.wlen } else { 0 }
+    }
+
+    /// The bytes of input already read from the backend and not yet
+    /// consumed, pushback included, for `__freadahead`.
+    pub fn read_ahead(&self) -> usize {
+        if self.io == Io::Reading {
+            self.pushed + self.rend.saturating_sub(self.rpos)
+        } else {
+            0
+        }
+    }
+
+    /// Whether the last operation was a read, for `__freading`.
+    pub fn is_reading(&self) -> bool {
+        self.io == Io::Reading
+    }
+
+    /// Whether the last operation was a write, for `__fwriting`.
+    pub fn is_writing(&self) -> bool {
+        self.io == Io::Writing
+    }
+
+    /// Whether output is flushed at each newline, for `__flbf`.
+    pub fn is_line_buffered(&mut self) -> bool {
+        self.resolve_mode() == Mode::Line
+    }
+
+    /// The buffer's size, or 0 before one is allocated, for `__fbufsize`.
+    pub fn buffer_size(&self) -> usize {
+        if self.buf.is_null() { 0 } else { self.cap }
+    }
+
+    /// Discards buffered input and output without writing or giving back
+    /// either, as `__fpurge` does.
+    pub fn purge(&mut self) {
+        self.io = Io::Idle;
+        self.wlen = 0;
+        self.rpos = 0;
+        self.rend = 0;
+        self.pushed = 0;
+    }
+
     /// Writes pending output, or gives unread input back to a seekable
     /// backend. False if output could not be written.
     pub fn flush(&mut self) -> bool {
@@ -793,9 +838,42 @@ impl Inner {
     }
 }
 
+/// The start of glibc's `struct _IO_FILE`, which glibc's headers read inline.
+///
+/// A program built against glibc with optimisation expands `getc_unlocked`,
+/// `putc_unlocked`, `feof_unlocked` and `ferror_unlocked` into reads of the
+/// stream's own fields: the next byte is `*_IO_read_ptr++` unless the read
+/// pointer has reached `_IO_read_end`, when it calls `__uflow`, and writing
+/// is the same with `_IO_write_ptr`, `_IO_write_end` and `__overflow`. GLib
+/// is built that way. So a `FILE` begins as glibc's does. Every pointer here
+/// stays null, so each comparison finds the buffer used up and calls the
+/// function, which takes the byte from this library's own buffer; and
+/// `_flags` mirrors the end-of-file and error indicators, which the other
+/// two read, after every call on the stream.
+#[repr(C)]
+#[derive(Debug)]
+struct GlibcHead {
+    /// `_flags`: [`GLIBC_EOF_SEEN`] and [`GLIBC_ERR_SEEN`].
+    flags: AtomicI32,
+    /// `_IO_read_ptr` to `_IO_buf_end`, all null.
+    pointers: [usize; 8],
+}
+
+/// glibc's `_IO_EOF_SEEN`.
+const GLIBC_EOF_SEEN: i32 = 0x10;
+/// glibc's `_IO_ERR_SEEN`.
+const GLIBC_ERR_SEEN: i32 = 0x20;
+
+// `_flags` is an `int` at the start, and `_IO_read_ptr` the word after it,
+// as glibc's headers compile the offsets in.
+const _: () = assert!(core::mem::offset_of!(GlibcHead, pointers) == size_of::<usize>());
+
 /// C's `FILE`.
+#[repr(C)]
 #[derive(Debug)]
 pub struct File {
+    /// What a program built against glibc reads without a call. First.
+    glibc: GlibcHead,
     /// The lock `flockfile` takes.
     lock: RecursiveLock,
     /// The next stream in the open list, under [`LIST_LOCK`].
@@ -815,6 +893,10 @@ impl File {
     /// A stream with the given state.
     pub const fn new(inner: Inner) -> Self {
         Self {
+            glibc: GlibcHead {
+                flags: AtomicI32::new(0),
+                pointers: [0; 8],
+            },
             lock: RecursiveLock::new(),
             next: AtomicPtr::new(null_mut()),
             prev: AtomicPtr::new(null_mut()),
@@ -825,6 +907,18 @@ impl File {
     /// The stream's lock.
     pub fn lock(&self) -> &RecursiveLock {
         &self.lock
+    }
+
+    /// Copies `inner`'s indicators into glibc's `_flags`.
+    fn mirror(&self, inner: &Inner) {
+        let mut flags = 0;
+        if inner.eof {
+            flags |= GLIBC_EOF_SEEN;
+        }
+        if inner.error {
+            flags |= GLIBC_ERR_SEEN;
+        }
+        self.glibc.flags.store(flags, Ordering::Relaxed);
     }
 }
 
@@ -870,7 +964,9 @@ pub unsafe fn locked<R>(file: *mut File, op: impl FnOnce(&mut Inner) -> R) -> R 
     let file = unsafe { &*file };
     file.lock.lock();
     // SAFETY: the lock is held, so no other thread is using the state.
-    let result = op(unsafe { &mut *file.inner.get() });
+    let inner = unsafe { &mut *file.inner.get() };
+    let result = op(&mut *inner);
+    file.mirror(inner);
     file.lock.unlock();
     result
 }
@@ -886,7 +982,9 @@ pub unsafe fn unlocked<R>(file: *mut File, op: impl FnOnce(&mut Inner) -> R) -> 
     let file = unsafe { &*file };
     // SAFETY: the caller vouches that nothing else uses its state.
     let inner = unsafe { &mut *file.inner.get() };
-    op(inner)
+    let result = op(&mut *inner);
+    file.mirror(inner);
+    result
 }
 
 /// Allocates a stream with the state `inner` and links it into the open list.

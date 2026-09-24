@@ -367,7 +367,9 @@ pub unsafe extern "C" fn open64(path: *const c_char, flags: c_int, mode: c_uint)
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub unsafe extern "C" fn __open_2(path: *const c_char, flags: c_int) -> c_int {
     if flags & O_CREAT != 0 || flags & O_TMPFILE == O_TMPFILE {
-        crate::fortify::__chk_fail();
+        crate::fortify::fortify_fail(
+            b"*** invalid open call: O_CREAT or O_TMPFILE without mode ***: terminated\n",
+        );
     }
     // SAFETY: the caller's contract is `open`'s; no mode is read.
     unsafe { open(path, flags, 0) }
@@ -382,6 +384,34 @@ pub unsafe extern "C" fn __open_2(path: *const c_char, flags: c_int) -> c_int {
 pub unsafe extern "C" fn __open64_2(path: *const c_char, flags: c_int) -> c_int {
     // SAFETY: the caller's contract is `__open_2`'s.
     unsafe { __open_2(path, flags) }
+}
+
+/// [`__open_2`] for `openat`: the fortified two-argument `openat`, which
+/// stops the program when the flags would create a file with no mode.
+///
+/// # Safety
+///
+/// `path` must be a NUL-terminated string.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn __openat_2(dirfd: c_int, path: *const c_char, flags: c_int) -> c_int {
+    if flags & O_CREAT != 0 || flags & O_TMPFILE == O_TMPFILE {
+        crate::fortify::fortify_fail(
+            b"*** invalid openat call: O_CREAT or O_TMPFILE without mode ***: terminated\n",
+        );
+    }
+    // SAFETY: the caller's contract is `openat`'s; no mode is read.
+    unsafe { openat(dirfd, path, flags, 0) }
+}
+
+/// glibc's large-file name for [`__openat_2`].
+///
+/// # Safety
+///
+/// As [`__openat_2`].
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn __openat64_2(dirfd: c_int, path: *const c_char, flags: c_int) -> c_int {
+    // SAFETY: the caller's contract is `__openat_2`'s.
+    unsafe { __openat_2(dirfd, path, flags) }
 }
 
 /// glibc's large-file name for [`fcntl`]. `struct flock` is already the

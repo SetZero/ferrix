@@ -355,6 +355,18 @@ pub unsafe extern "C" fn mbrlen(s: *const c_char, n: usize, st: *mut MbState) ->
     unsafe { decode(null_mut(), s, n, MBRLEN_STATE.or(st)) }
 }
 
+/// glibc's internal name for [`mbrlen`], which its headers' inline `mbrlen`
+/// calls: Chrome, ANGLE and SwiftShader do.
+///
+/// # Safety
+///
+/// As [`mbrtowc`].
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn __mbrlen(s: *const c_char, n: usize, st: *mut MbState) -> usize {
+    // SAFETY: the caller's contract is `mbrlen`'s.
+    unsafe { mbrlen(s, n, st) }
+}
+
 /// Converts the character at `s`, of at most `n` bytes, to `*wc` without any
 /// state: an incomplete character is invalid.
 ///
