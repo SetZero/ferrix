@@ -381,6 +381,30 @@ pub const REMOVEXATTR: usize = 235;
 pub const LREMOVEXATTR: usize = 236;
 /// `fremovexattr`.
 pub const FREMOVEXATTR: usize = 237;
+/// `mincore`.
+pub const MINCORE: usize = 219;
+/// `ptrace`.
+pub const PTRACE: usize = 26;
+/// `mq_getsetattr`.
+pub const MQ_GETSETATTR: usize = 279;
+/// `sendmmsg`.
+pub const SENDMMSG: usize = 374;
+/// `pidfd_open`.
+pub const PIDFD_OPEN: usize = 434;
+/// `pidfd_send_signal`.
+pub const PIDFD_SEND_SIGNAL: usize = 424;
+/// `close_range`.
+pub const CLOSE_RANGE: usize = 436;
+/// `open_tree`.
+pub const OPEN_TREE: usize = 428;
+/// `move_mount`.
+pub const MOVE_MOUNT: usize = 429;
+/// `mount_setattr`.
+pub const MOUNT_SETATTR: usize = 442;
+/// `name_to_handle_at`.
+pub const NAME_TO_HANDLE_AT: usize = 370;
+/// `open_by_handle_at`.
+pub const OPEN_BY_HANDLE_AT: usize = 371;
 /// `mmap2`.
 pub const MMAP2: usize = 192;
 /// `_llseek`.
@@ -471,6 +495,8 @@ pub const SIGRETURN: usize = 119;
 pub const TIMERFD_SETTIME64: usize = 411;
 /// `timerfd_gettime64`.
 pub const TIMERFD_GETTIME64: usize = 410;
+/// `recvmmsg_time64`.
+pub const RECVMMSG_TIME64: usize = 417;
 /// `arm_set_tls`.
 pub const ARM_SET_TLS: usize = 983045;
 /// `arm_cacheflush`.
@@ -503,6 +529,8 @@ pub const SCHED_RR_GET_INTERVAL: usize = SCHED_RR_GET_INTERVAL_TIME64;
 pub const TIMERFD_SETTIME: usize = TIMERFD_SETTIME64;
 /// `timerfd_gettime`: [`TIMERFD_GETTIME64`], which takes its arguments here.
 pub const TIMERFD_GETTIME: usize = TIMERFD_GETTIME64;
+/// `recvmmsg`: [`RECVMMSG_TIME64`], which takes its arguments here.
+pub const RECVMMSG: usize = RECVMMSG_TIME64;
 /// `getuid`: [`GETUID32`], which takes its arguments here.
 pub const GETUID: usize = GETUID32;
 /// `getgid`: [`GETGID32`], which takes its arguments here.

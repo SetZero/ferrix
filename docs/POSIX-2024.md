@@ -18,13 +18,13 @@ variables it specifies beside them.
 
 | Status | Interfaces | Meaning |
 |---|---|---|
-| present | 1045 | defined by `libferrousli.a`, or a macro the standard specifies as one and `include/` defines |
+| present | 1048 | defined by `libferrousli.a`, or a macro the standard specifies as one and `include/` defines |
 | macro only | 3 | a function the standard requires, which the header defines only as a macro: a call works, taking its address or `#undef` does not |
 | broken | 0 | present, but it fails to link or gives a wrong answer |
 | stubbed | 0 | a stand-in that ends the program; the last left `src/stubs.rs` on 2026-09-16, and the file is gone |
-| absent | 195 | not there |
+| absent | 192 | not there |
 
-198 interfaces are missing in one of the last four ways. None of them is
+195 interfaces are missing in one of the last four ways. None of them is
 written on a branch any more: the three unlanded branches of 2026-09-13,
 `ferrousli-math`, `ferrousli-threads` and `ferrousli-misc`, were built,
 fixed and landed on 2026-09-16.
@@ -50,15 +50,15 @@ new subsystem. Every area's missing names are in the index at the end.
 | Signals and non-local jumps | 28 | 4 | 0 | 2 | `psignal`, `psiginfo` 1; `sig2str`, `str2sig` 1 |
 | Time and clocks | 29 | 3 | 0 | 3 | `getdate` and `getdate_err` 2; `timespec_get` 1 |
 | Threads and scheduling | 145 | 6 | 0 | 3 | the `clock` variants of the condition, mutex, read-write lock and semaphore waits 2; `pthread_atfork` 1. Landed: cancellation, `pthread_cancel` and `pthread_testcancel` with their cancellation points |
-| Memory mapping and System V IPC | 21 | 1 | 0 | 1 | `ftok` |
-| Realtime: asynchronous I/O, message queues, timers, shared memory | 29 | 29 | 0 | 11 | `aio.h` over threads 3; `mqueue.h` 3; `timer_*` with `SIGEV_THREAD` 3; `shm_open`, `shm_unlink` 1; `clock_getcpuclockid` 1. Typed memory (`posix_typed_mem_*`, `posix_mem_offset`) is the TYM option, which ferrousli does not claim: 0 |
+| Memory mapping and System V IPC | 21 | 0 | 0 | 0 | landed: `ftok`, for NSPR (`docs/CHROME.md`) |
+| Realtime: asynchronous I/O, message queues, timers, shared memory | 29 | 27 | 0 | 11 | `aio.h` over threads 3; the rest of `mqueue.h`, `mq_open` to `mq_notify`, 3; `timer_*` with `SIGEV_THREAD` 3; `shm_open`, `shm_unlink` 1; `clock_getcpuclockid` 1. Typed memory (`posix_typed_mem_*`, `posix_mem_offset`) is the TYM option, which ferrousli does not claim: 0 |
 | Terminals and devices | 25 | 2 | 0 | 2 | `ctermid` 1; `posix_devctl` and `<devctl.h>` 1. Landed: `posix_openpt`, `grantpt`, `unlockpt`, `ptsname`, `ptsname_r`, for foot (`docs/CHROME.md`) |
 | Networking and name resolution | 55 | 0 | 0 | 0 | landed: `getaddrinfo`, `getnameinfo`, `freeaddrinfo` and `gai_strerror` over `/etc/hosts` and a DNS stub resolver; the hosts, networks, protocols and services databases; `if_nameindex`, `if_freenameindex`, `if_indextoname`; `in6addr_any`, `in6addr_loopback`, `sockatmark` |
 | Patterns, paths and search | 23 | 3 | 0 | 5 | `wordexp` 3; `nftw` 2. Landed: `glob` and `globfree`; `search.h`'s hash table, trees, linear search and queues; `libgen.h`'s `basename` and `dirname`, and `regex.h`, replacing five stubs |
 | Users, groups and databases | 29 | 9 | 0 | 3 | `<ndbm.h>` and the `dbm_*` functions |
 | Dynamic loading | 5 | 4 | 0 | 2 | `dlopen`, `dlsym`, `dlclose` and `dlerror` for a static program, failing cleanly; a loader is the README's fifth item and is not priced here. Landed: `dladdr`, over the program's own headers |
 | Across areas | | | | 3 | POSIX.1-2024's declarations in `include/` 3 |
-| **All** | **1243** | **198** | **0** | **73** | |
+| **All** | **1243** | **195** | **0** | **72** | |
 
 ## Present but broken
 
@@ -142,10 +142,10 @@ with the git port:
 | Area | Functions |
 |---|---|
 | pthread | `pthread_getconcurrency`, `pthread_setconcurrency` |
-| unistd | `brk`, `getdtablesize`, `getpass`, `getwd`, `sbrk`, `ualarm` |
+| unistd | `brk`, `getpass`, `getwd`, `sbrk`, `ualarm` |
 | stdlib | `ecvt`, `fcvt`, `gcvt`, `ttyslot` |
 | err | `err`, `err_set_exit`, `err_set_file`, `errc`, `errx`, `verr`, `verrc`, `verrx`, `vwarn`, `vwarnc`, `vwarnx`, `warn`, `warnc`, `warnx` |
-| stdio | `__fpending`, `__fpurge`, `__freadable`, `__freading`, `__fwritable`, `__fwriting`, `cuserid`, `gets`, `renameat2`, `tempnam` |
+| stdio | `cuserid`, `gets`, `renameat2`, `tempnam` |
 | time | `timelocal`, `timespec_getres` |
 | arpa/inet | `inet_lnaof`, `inet_makeaddr`, `inet_netof`, `inet_network` |
 | shadow | `endspent`, `getspent`, `getspnam`, `setspent` |
@@ -156,7 +156,6 @@ with the git port:
 | float | `flt_rounds` |
 | sgtty | `gtty` |
 | string | `strnlen_s` |
-| sys/ptrace | `ptrace` |
 | sys/timeb | `ftime` |
 | utmp | `login_tty` |
 
@@ -324,7 +323,7 @@ interface.
 
 | Header | Status | Interfaces |
 |---|---|---|
-| `<sys/ipc.h>` | absent (1) | `ftok` (XSI) |
+| `<sys/ipc.h>` | present (1) | `ftok` (XSI) |
 | `<sys/mman.h>` | present (9) | `mlock` (MLR), `mlockall` (ML), `mmap`, `mprotect`, `msync` (XSI or SIO), `munlock` (MLR), `munlockall` (ML), `munmap`, `posix_madvise` (ADV) |
 | `<sys/msg.h>` | present (4) | `msgctl` (XSI), `msgget` (XSI), `msgrcv` (XSI), `msgsnd` (XSI) |
 | `<sys/sem.h>` | present (3) | `semctl` (XSI), `semget` (XSI), `semop` (XSI) |
@@ -335,7 +334,8 @@ interface.
 | Header | Status | Interfaces |
 |---|---|---|
 | `<aio.h>` | absent (8) | `aio_cancel`, `aio_error`, `aio_fsync` (FSC or SIO), `aio_read`, `aio_return`, `aio_suspend`, `aio_write`, `lio_listio` |
-| `<mqueue.h>` | absent (10) | `mq_close` (MSG), `mq_getattr` (MSG), `mq_notify` (MSG), `mq_open` (MSG), `mq_receive` (MSG), `mq_send` (MSG), `mq_setattr` (MSG), `mq_timedreceive` (MSG), `mq_timedsend` (MSG), `mq_unlink` (MSG) |
+| `<mqueue.h>` | absent (8) | `mq_close` (MSG), `mq_notify` (MSG), `mq_open` (MSG), `mq_receive` (MSG), `mq_send` (MSG), `mq_timedreceive` (MSG), `mq_timedsend` (MSG), `mq_unlink` (MSG) |
+| `<mqueue.h>` | present (2) | `mq_getattr` (MSG), `mq_setattr` (MSG) |
 | `<sys/mman.h>` | absent (5) | `posix_mem_offset` (TYM), `posix_typed_mem_get_info` (TYM), `posix_typed_mem_open` (TYM), `shm_open` (SHM), `shm_unlink` (SHM) |
 | `<time.h>` | absent (6) | `clock_getcpuclockid` (CPT), `timer_create`, `timer_delete`, `timer_getoverrun`, `timer_gettime`, `timer_settime` |
 

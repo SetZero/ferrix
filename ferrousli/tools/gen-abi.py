@@ -98,6 +98,8 @@ reboot syslog clock_adjtime settimeofday inotify_init1 inotify_add_watch
 inotify_rm_watch getresuid getresgid splice vmsplice
 setxattr lsetxattr fsetxattr getxattr lgetxattr fgetxattr listxattr llistxattr
 flistxattr removexattr lremovexattr fremovexattr
+mincore ptrace mq_getsetattr recvmmsg sendmmsg pidfd_open pidfd_send_signal
+close_range open_tree move_mount mount_setattr name_to_handle_at open_by_handle_at
 """.split()
 
 # ARMv7-A's calls that carry a 32-bit offset, size or time where the library's
@@ -111,6 +113,7 @@ setgroups chown fchown lchown setresuid setresgid getresuid getresgid
 clock_gettime clock_settime clock_getres clock_nanosleep clock_adjtime futex
 ppoll pselect6 rt_sigtimedwait utimensat semtimedop sched_rr_get_interval
 gettimeofday settimeofday nanosleep timerfd_settime timerfd_gettime
+recvmmsg
 """.split()
 
 # What ARMv7-A calls instead, and the calls it has that the others do not.
@@ -124,6 +127,7 @@ clock_adjtime64 futex_time64 ppoll_time64 pselect6_time64
 rt_sigtimedwait_time64 utimensat_time64 semtimedop_time64
 sched_rr_get_interval_time64 arm_fadvise64_64 arm_sync_file_range sigreturn
 timerfd_settime64 timerfd_gettime64
+recvmmsg_time64
 """.split()
 
 # The narrow calls whose wide form takes the very arguments ferrousli passes
@@ -149,6 +153,7 @@ ARM_SAME_ARGUMENTS = {
     "sched_rr_get_interval": "sched_rr_get_interval_time64",
     "timerfd_settime": "timerfd_settime64",
     "timerfd_gettime": "timerfd_gettime64",
+    "recvmmsg": "recvmmsg_time64",
     "getuid": "getuid32",
     "getgid": "getgid32",
     "geteuid": "geteuid32",

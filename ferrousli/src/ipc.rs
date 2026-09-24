@@ -124,6 +124,27 @@ fn segment_size(size: usize) -> usize {
     }
 }
 
+/// A System V key made from the file `path` and the low byte of `id`, as
+/// musl's `ftok` (MIT; see [`crate::math`] for the notice) and glibc's
+/// make it: the low 16 bits of the inode, the low 8 of the device, then
+/// `id`'s. -1 if `path` cannot be read.
+///
+/// # Safety
+///
+/// `path` must be a NUL-terminated string.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn ftok(path: *const core::ffi::c_char, id: c_int) -> c_int {
+    let mut st = crate::stat::Stat::default();
+    // SAFETY: the caller passes a C string, and `st` is a live local.
+    if unsafe { crate::stat::stat(path, &raw mut st) } < 0 {
+        return -1;
+    }
+    let key = (st.st_ino as u32 & 0xffff)
+        | ((st.st_dev as u32 & 0xff) << 16)
+        | ((id as u32 & 0xff) << 24);
+    key as c_int
+}
+
 /// Returns the id of the shared memory segment with `key`, creating one of
 /// `size` bytes if `flag` says so.
 #[cfg_attr(not(test), unsafe(no_mangle))]

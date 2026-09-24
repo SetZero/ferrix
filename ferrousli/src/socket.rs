@@ -602,6 +602,121 @@ pub unsafe extern "C" fn recvmsg(fd: c_int, msg: *mut Msghdr, flags: c_int) -> i
     ret
 }
 
+/// C's `struct mmsghdr`: a message header, and the bytes `sendmmsg` sent or
+/// `recvmmsg` received with it.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct Mmsghdr {
+    /// The message.
+    pub msg_hdr: Msghdr,
+    /// Its length, written by the call.
+    pub msg_len: c_uint,
+}
+
+#[cfg(target_pointer_width = "64")]
+const _: () = assert!(size_of::<Mmsghdr>() == 64);
+
+/// `IOV_MAX`, the most messages the kernel takes in one `sendmmsg`.
+#[cfg(target_pointer_width = "64")]
+const IOV_MAX: c_uint = 1024;
+
+/// Sends up to `vlen` messages on socket `fd`, and returns how many went,
+/// with each one's length in its `msg_len`; -1 only if the first fails.
+///
+/// As musl 1.2.5's `sendmmsg.c` (MIT; see [`crate::math`] for the notice).
+/// On a 64-bit architecture each message goes through [`sendmsg`], which
+/// clears the padding the kernel would read as the high half of a length;
+/// the kernel's own `sendmmsg` would read the caller's headers as they are.
+///
+/// # Safety
+///
+/// `msgvec` must hold `vlen` headers, each valid as `sendmsg` requires.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn sendmmsg(
+    fd: c_int,
+    msgvec: *mut Mmsghdr,
+    vlen: c_uint,
+    flags: c_uint,
+) -> c_int {
+    #[cfg(target_pointer_width = "64")]
+    {
+        let vlen = vlen.min(IOV_MAX) as usize;
+        let mut sent = 0;
+        while sent < vlen {
+            let message = msgvec.wrapping_add(sent);
+            // SAFETY: the caller vouches for `vlen` headers, and each begins
+            // with its `struct msghdr`.
+            let ret = unsafe { sendmsg(fd, message.cast_const().cast(), flags as c_int) };
+            if ret < 0 {
+                break;
+            }
+            // SAFETY: as above; Linux sends at most `INT_MAX` bytes at once.
+            unsafe { (*message).msg_len = ret as c_uint };
+            sent += 1;
+        }
+        if sent == 0 && vlen != 0 {
+            -1
+        } else {
+            sent as c_int
+        }
+    }
+    #[cfg(target_pointer_width = "32")]
+    {
+        call_cp(
+            nr::SENDMMSG,
+            [
+                fd as usize,
+                msgvec.addr(),
+                vlen as usize,
+                flags as usize,
+                0,
+                0,
+            ],
+        ) as c_int
+    }
+}
+
+/// Receives up to `vlen` messages from socket `fd`, waiting at most
+/// `*timeout` if it is not null, and returns how many came.
+///
+/// As musl 1.2.5's `recvmmsg.c`: the padding in each header is cleared
+/// first, and the kernel's call does the rest. This library's `struct
+/// timespec` is the kernel's on every architecture, so ARMv7-A calls
+/// `recvmmsg_time64` under the plain name.
+///
+/// # Safety
+///
+/// `msgvec` must hold `vlen` writable headers, each valid as `recvmsg`
+/// requires, and `timeout` must be null or valid for reading and writing.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn recvmmsg(
+    fd: c_int,
+    msgvec: *mut Mmsghdr,
+    vlen: c_uint,
+    flags: c_uint,
+    timeout: *mut crate::time::Timespec,
+) -> c_int {
+    #[cfg(target_pointer_width = "64")]
+    for i in 0..vlen as usize {
+        let message = msgvec.wrapping_add(i);
+        // SAFETY: the caller vouches for `vlen` writable headers.
+        unsafe { (*message).msg_hdr.__pad1 = 0 };
+        // SAFETY: as above.
+        unsafe { (*message).msg_hdr.__pad2 = 0 };
+    }
+    call_cp(
+        nr::RECVMMSG,
+        [
+            fd as usize,
+            msgvec.addr(),
+            vlen as usize,
+            flags as usize,
+            timeout.addr(),
+            0,
+        ],
+    ) as c_int
+}
+
 /// `SIOCATMARK`, from `include/bits/ioctl.h`.
 const SIOCATMARK: c_int = 0x8905;
 

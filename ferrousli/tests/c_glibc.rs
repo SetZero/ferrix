@@ -56,3 +56,8 @@ fn glibcs_inline_stream_macros_reach_the_stream_through_uflow_and_overflow() {
 fn glibcs_internal_and_older_names_are_the_standard_functions() {
     check(&Case::named("glibc/names"));
 }
+
+#[test]
+fn the_linux_calls_glibc_wraps_reach_the_kernel_with_their_arguments() {
+    check(&Case::named("glibc/linux"));
+}

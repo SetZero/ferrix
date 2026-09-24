@@ -504,6 +504,49 @@ pub unsafe extern "C" fn getcwd(buf: *mut c_char, size: usize) -> *mut c_char {
     }
 }
 
+/// The working directory in memory from `malloc`, which the caller frees:
+/// GNU's `get_current_dir_name`. As in glibc, `$PWD` is the answer when it
+/// names the working directory, which keeps the symbolic links the shell
+/// followed to get there; otherwise it is `getcwd`'s.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub extern "C" fn get_current_dir_name() -> *mut c_char {
+    /// `PATH_MAX`.
+    const PATH_MAX: usize = 4096;
+    // SAFETY: the name is a C string literal.
+    let pwd = unsafe { crate::stdlib::getenv(c"PWD".as_ptr()) };
+    if !pwd.is_null() {
+        let mut named = crate::stat::Stat::default();
+        let mut here = crate::stat::Stat::default();
+        // SAFETY: `pwd` is the environment's string, and `named` a local.
+        let both = unsafe { crate::stat::stat(pwd, &raw mut named) } == 0
+            // SAFETY: a C string literal, and `here` a local.
+            && unsafe { crate::stat::stat(c".".as_ptr(), &raw mut here) } == 0;
+        if both && named.st_dev == here.st_dev && named.st_ino == here.st_ino {
+            // SAFETY: `pwd` is a NUL-terminated string.
+            return unsafe { crate::string::strdup(pwd) };
+        }
+    }
+    let mut buf = [0 as c_char; PATH_MAX];
+    // SAFETY: `buf` is a live local of `PATH_MAX` bytes.
+    if unsafe { getcwd(buf.as_mut_ptr(), PATH_MAX) }.is_null() {
+        return null_mut();
+    }
+    // SAFETY: `getcwd` wrote a NUL-terminated string.
+    unsafe { crate::string::strdup(buf.as_ptr()) }
+}
+
+/// How many descriptors the process may have open: the soft
+/// `RLIMIT_NOFILE`, or `OPEN_MAX`'s 256 without one, as in musl.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub extern "C" fn getdtablesize() -> c_int {
+    let mut limit = crate::resource::Rlimit::default();
+    // SAFETY: `limit` is a live local.
+    if unsafe { crate::resource::getrlimit(crate::resource::RLIMIT_NOFILE, &raw mut limit) } != 0 {
+        return 256;
+    }
+    c_int::try_from(limit.rlim_cur).unwrap_or(c_int::MAX)
+}
+
 /// Removes the link `path`, relative to `dirfd`, or the empty directory with
 /// `AT_REMOVEDIR` in `flags`.
 ///

@@ -478,3 +478,29 @@ pub const REMOVEXATTR: usize = 197;
 pub const LREMOVEXATTR: usize = 198;
 /// `fremovexattr`.
 pub const FREMOVEXATTR: usize = 199;
+/// `mincore`.
+pub const MINCORE: usize = 27;
+/// `ptrace`.
+pub const PTRACE: usize = 101;
+/// `mq_getsetattr`.
+pub const MQ_GETSETATTR: usize = 245;
+/// `recvmmsg`.
+pub const RECVMMSG: usize = 299;
+/// `sendmmsg`.
+pub const SENDMMSG: usize = 307;
+/// `pidfd_open`.
+pub const PIDFD_OPEN: usize = 434;
+/// `pidfd_send_signal`.
+pub const PIDFD_SEND_SIGNAL: usize = 424;
+/// `close_range`.
+pub const CLOSE_RANGE: usize = 436;
+/// `open_tree`.
+pub const OPEN_TREE: usize = 428;
+/// `move_mount`.
+pub const MOVE_MOUNT: usize = 429;
+/// `mount_setattr`.
+pub const MOUNT_SETATTR: usize = 442;
+/// `name_to_handle_at`.
+pub const NAME_TO_HANDLE_AT: usize = 303;
+/// `open_by_handle_at`.
+pub const OPEN_BY_HANDLE_AT: usize = 304;

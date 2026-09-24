@@ -80,6 +80,7 @@ pub mod key;
 pub mod libgen;
 pub mod link;
 pub mod linux;
+pub mod linux_ext;
 pub mod loader;
 pub mod locale;
 pub mod lock;
