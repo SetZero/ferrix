@@ -1602,6 +1602,20 @@ pub const EFD_NONBLOCK: u32 = O_NONBLOCK;
 /// Make the eventfd count semaphore-style, decrementing by one per read.
 pub const EFD_SEMAPHORE: u32 = 0x0000_0001;
 
+/// Set close-on-exec on the descriptor `timerfd_create` returns. `O_CLOEXEC`,
+/// by `linux/timerfd.h`, which is the same number on all three architectures:
+/// neither `asm-arm/fcntl.h` nor `asm-arm64/fcntl.h` overrides it.
+pub const TFD_CLOEXEC: u32 = O_CLOEXEC;
+/// Make the descriptor `timerfd_create` returns non-blocking. `O_NONBLOCK`,
+/// generic on all three architectures for the same reason.
+pub const TFD_NONBLOCK: u32 = O_NONBLOCK;
+/// `timerfd_settime`: the new value is a time on the timer's clock, not a
+/// duration from now.
+pub const TFD_TIMER_ABSTIME: u32 = 1 << 0;
+/// `timerfd_settime`: with `TFD_TIMER_ABSTIME` on a real-time clock, end the
+/// timer with `ECANCELED` when the clock is set.
+pub const TFD_TIMER_CANCEL_ON_SET: u32 = 1 << 1;
+
 // ---------------------------------------------------------------------------
 // statx field mask
 // ---------------------------------------------------------------------------

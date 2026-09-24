@@ -452,8 +452,14 @@ pub mod x86_64 {
     pub const UTIMENSAT: usize = 280;
     /// Wait on an epoll set with a signal mask.
     pub const EPOLL_PWAIT: usize = 281;
+    /// Create a timer that expires into a descriptor.
+    pub const TIMERFD_CREATE: usize = 283;
     /// Create an eventfd with no flags.
     pub const EVENTFD: usize = 284;
+    /// Arm or disarm a timerfd.
+    pub const TIMERFD_SETTIME: usize = 286;
+    /// Read a timerfd's time left and interval.
+    pub const TIMERFD_GETTIME: usize = 287;
     /// Accept a connection, with flags for the new descriptor.
     pub const ACCEPT4: usize = 288;
     /// Create an eventfd with flags.
@@ -653,6 +659,12 @@ pub mod aarch64 {
     pub const FSYNC: usize = 82;
     /// Flush a file's data, and only the metadata needed to read it back.
     pub const FDATASYNC: usize = 83;
+    /// Create a timer that expires into a descriptor.
+    pub const TIMERFD_CREATE: usize = 85;
+    /// Arm or disarm a timerfd.
+    pub const TIMERFD_SETTIME: usize = 86;
+    /// Read a timerfd's time left and interval.
+    pub const TIMERFD_GETTIME: usize = 87;
     /// Set a file's access and modification times, to the nanosecond.
     pub const UTIMENSAT: usize = 88;
     /// Turn process accounting on or off.
@@ -1419,8 +1431,16 @@ pub mod arm {
     /// Set a file's times from two `timespec`s of two `long`s -- 32 bits each
     /// here. [`UTIMENSAT_TIME64`] is the form a time64 musl calls.
     pub const UTIMENSAT: usize = 348;
+    /// Create a timer that expires into a descriptor.
+    pub const TIMERFD_CREATE: usize = 350;
     /// Create an eventfd with no flags.
     pub const EVENTFD: usize = 351;
+    /// Arm or disarm a timerfd, from `itimerspec`s of two 32-bit `timespec`s.
+    /// [`TIMERFD_SETTIME64`] is the form a time64 musl calls.
+    pub const TIMERFD_SETTIME: usize = 353;
+    /// Read a timerfd's time left and interval into 32-bit `timespec`s.
+    /// [`TIMERFD_GETTIME64`] is the form a time64 musl calls.
+    pub const TIMERFD_GETTIME: usize = 354;
     /// Create an eventfd with flags.
     pub const EVENTFD2: usize = 356;
     /// Create an epoll set with flags.
@@ -1465,6 +1485,11 @@ pub mod arm {
     /// Sleep against a chosen clock, with 64-bit `timespec` arguments.
     /// ARMv7-A only.
     pub const CLOCK_NANOSLEEP_TIME64: usize = 407;
+    /// Read a timerfd's time left and interval into 64-bit `timespec`s.
+    /// ARMv7-A only.
+    pub const TIMERFD_GETTIME64: usize = 410;
+    /// Arm or disarm a timerfd from 64-bit `timespec`s. ARMv7-A only.
+    pub const TIMERFD_SETTIME64: usize = 411;
     /// Set a file's times from two 64-bit `timespec`s. ARMv7-A only.
     pub const UTIMENSAT_TIME64: usize = 412;
     /// Wait for readiness on descriptor sets, with a signal mask and a 64-bit
@@ -2079,6 +2104,19 @@ pub enum Syscall {
     Eventfd2,
     /// Create an eventfd with no flags. x86-64 and ARMv7-A only.
     Eventfd,
+    /// Create a timer that expires into a descriptor.
+    TimerfdCreate,
+    /// Arm or disarm a timerfd, from native-width `itimerspec`s.
+    TimerfdSettime,
+    /// Read a timerfd's time left and interval, as a native-width
+    /// `itimerspec`.
+    TimerfdGettime,
+    /// [`Syscall::TimerfdSettime`] with 64-bit `timespec` fields. ARMv7-A
+    /// only: a time64 musl calls this, not the 32-bit form.
+    TimerfdSettime64,
+    /// [`Syscall::TimerfdGettime`] with 64-bit `timespec` fields. ARMv7-A
+    /// only.
+    TimerfdGettime64,
     /// Issue a process-wide memory barrier.
     Membarrier,
     /// Register a restartable sequence area.
@@ -2445,6 +2483,9 @@ fn x86_64_clocks_and_timers(nr: usize) -> Option<Syscall> {
         x86_64::SETTIMEOFDAY => Syscall::Settimeofday,
         x86_64::CLOCK_SETTIME => Syscall::ClockSettime,
         x86_64::CLOCK_ADJTIME => Syscall::ClockAdjtime,
+        x86_64::TIMERFD_CREATE => Syscall::TimerfdCreate,
+        x86_64::TIMERFD_SETTIME => Syscall::TimerfdSettime,
+        x86_64::TIMERFD_GETTIME => Syscall::TimerfdGettime,
         _ => return None,
     };
     Some(call)
@@ -2749,6 +2790,9 @@ fn aarch64_clocks_and_timers(nr: usize) -> Option<Syscall> {
         aarch64::SETTIMEOFDAY => Syscall::Settimeofday,
         aarch64::ADJTIMEX => Syscall::Adjtimex,
         aarch64::CLOCK_ADJTIME => Syscall::ClockAdjtime,
+        aarch64::TIMERFD_CREATE => Syscall::TimerfdCreate,
+        aarch64::TIMERFD_SETTIME => Syscall::TimerfdSettime,
+        aarch64::TIMERFD_GETTIME => Syscall::TimerfdGettime,
         _ => return None,
     };
     Some(call)
@@ -3091,6 +3135,11 @@ fn arm_clocks_and_timers(nr: usize) -> Option<Syscall> {
         arm::CLOCK_ADJTIME => Syscall::ClockAdjtime,
         arm::CLOCK_SETTIME64 => Syscall::ClockSettime64,
         arm::CLOCK_ADJTIME64 => Syscall::ClockAdjtime64,
+        arm::TIMERFD_CREATE => Syscall::TimerfdCreate,
+        arm::TIMERFD_SETTIME => Syscall::TimerfdSettime,
+        arm::TIMERFD_GETTIME => Syscall::TimerfdGettime,
+        arm::TIMERFD_SETTIME64 => Syscall::TimerfdSettime64,
+        arm::TIMERFD_GETTIME64 => Syscall::TimerfdGettime64,
         _ => return None,
     };
     Some(call)

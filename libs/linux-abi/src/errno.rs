@@ -160,6 +160,9 @@ impl Errno {
     pub const EALREADY: Self = Self(114);
     /// Operation now in progress.
     pub const EINPROGRESS: Self = Self(115);
+    /// Operation canceled: a timerfd armed with `TFD_TIMER_CANCEL_ON_SET`
+    /// read after the real-time clock was set.
+    pub const ECANCELED: Self = Self(125);
 
     // The signal-restart codes. Linux keeps these in `include/linux/errno.h`,
     // above the numbers a program can see, precisely because they never reach

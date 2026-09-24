@@ -240,6 +240,21 @@ const SHARED: &[(usize, usize, Syscall)] = &[
     (x86_64::TIMES, aarch64::TIMES, Syscall::Times),
     (x86_64::GETITIMER, aarch64::GETITIMER, Syscall::Getitimer),
     (x86_64::SETITIMER, aarch64::SETITIMER, Syscall::Setitimer),
+    (
+        x86_64::TIMERFD_CREATE,
+        aarch64::TIMERFD_CREATE,
+        Syscall::TimerfdCreate,
+    ),
+    (
+        x86_64::TIMERFD_SETTIME,
+        aarch64::TIMERFD_SETTIME,
+        Syscall::TimerfdSettime,
+    ),
+    (
+        x86_64::TIMERFD_GETTIME,
+        aarch64::TIMERFD_GETTIME,
+        Syscall::TimerfdGettime,
+    ),
     (x86_64::PSELECT6, aarch64::PSELECT6, Syscall::Pselect6),
     (
         x86_64::RT_SIGPENDING,
@@ -1198,6 +1213,21 @@ fn open_flags_match_the_generic_header() {
 }
 
 #[test]
+fn timerfd_flags_match_the_uapi_header() {
+    // `include/uapi/linux/timerfd.h`: the two creation flags are the open
+    // flags, and the two setting flags are bits 0 and 1, which only
+    // `timerfd_settime` reads.
+    assert_eq!(types::TFD_CLOEXEC, 0o2_000_000, "TFD_CLOEXEC is O_CLOEXEC");
+    assert_eq!(types::TFD_NONBLOCK, 0o4000, "TFD_NONBLOCK is O_NONBLOCK");
+    assert_eq!(types::TFD_TIMER_ABSTIME, 1, "TFD_TIMER_ABSTIME is bit 0");
+    assert_eq!(
+        types::TFD_TIMER_CANCEL_ON_SET,
+        2,
+        "TFD_TIMER_CANCEL_ON_SET is bit 1"
+    );
+}
+
+#[test]
 fn file_type_bits_are_disjoint_under_the_mask() {
     let types_seen = [
         types::S_IFIFO,
@@ -1302,6 +1332,7 @@ fn errno_values_are_the_generic_ones() {
     assert_eq!(Errno::ENODATA.0, 61, "ENODATA is what a missing xattr is");
     assert_eq!(Errno::EOVERFLOW.0, 75, "EOVERFLOW is 75");
     assert_eq!(Errno::ECONNREFUSED.0, 111, "ECONNREFUSED is 111");
+    assert_eq!(Errno::ECANCELED.0, 125, "ECANCELED is 125");
 }
 
 #[test]
@@ -1628,13 +1659,13 @@ fn table_sizes_are_stable() {
     // `socket` being unreachable on AArch64.
     assert_eq!(
         mapped(from_x86_64).len(),
-        237,
-        "the x86-64 table maps 237 calls"
+        240,
+        "the x86-64 table maps 240 calls"
     );
     assert_eq!(
         mapped(from_aarch64).len(),
-        208,
-        "the AArch64 table maps 208 calls"
+        211,
+        "the AArch64 table maps 211 calls"
     );
 }
 /// Calls only ARMv7-A has, because it is the only 32-bit target.
@@ -1670,6 +1701,8 @@ const ARM_ONLY: &[Syscall] = &[
     Syscall::RtSigtimedwaitTime64,
     Syscall::SchedRrGetIntervalTime64,
     Syscall::SemtimedopTime64,
+    Syscall::TimerfdSettime64,
+    Syscall::TimerfdGettime64,
 ];
 
 /// Every ARMv7-A number this crate knows, paired with the call it means.
@@ -1885,7 +1918,10 @@ const ARM_NUMBERS: &[(usize, Syscall)] = &[
     (345, Syscall::Getcpu),                   // getcpu
     (346, Syscall::EpollPwait),               // epoll_pwait
     (348, Syscall::Utimensat),                // utimensat
+    (350, Syscall::TimerfdCreate),            // timerfd_create
     (351, Syscall::Eventfd),                  // eventfd
+    (353, Syscall::TimerfdSettime),           // timerfd_settime
+    (354, Syscall::TimerfdGettime),           // timerfd_gettime
     (356, Syscall::Eventfd2),                 // eventfd2
     (357, Syscall::EpollCreate1),             // epoll_create1
     (358, Syscall::Dup3),                     // dup3
@@ -1906,6 +1942,8 @@ const ARM_NUMBERS: &[(usize, Syscall)] = &[
     (404, Syscall::ClockSettime64),           // clock_settime64
     (405, Syscall::ClockAdjtime64),           // clock_adjtime64
     (407, Syscall::ClockNanosleepTime64),     // clock_nanosleep_time64
+    (410, Syscall::TimerfdGettime64),         // timerfd_gettime64
+    (411, Syscall::TimerfdSettime64),         // timerfd_settime64
     (412, Syscall::UtimensatTime64),          // utimensat_time64
     (413, Syscall::Pselect6Time64),           // pselect6_time64
     (414, Syscall::PpollTime64),              // ppoll_time64
@@ -2120,7 +2158,7 @@ fn arm_covers_the_calls_musl_startup_makes() {
 #[test]
 fn arm_table_size_is_stable() {
     // A canary, as for the other two tables.
-    assert_eq!(mapped_arm().len(), 252, "the ARMv7-A table maps 252 calls");
+    assert_eq!(mapped_arm().len(), 257, "the ARMv7-A table maps 257 calls");
 }
 
 /// The filesystem-control and extended-attribute calls, against the numbers in
