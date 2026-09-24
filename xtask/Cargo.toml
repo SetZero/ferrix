@@ -22,10 +22,9 @@ ferrix-elf.workspace = true
 # TCP parser in the build tool, disagreeing with the kernel's about a length
 # field at the worst possible moment; this one is already fuzzed.
 ferrix-netwire.workspace = true
-
-[dev-dependencies]
-# The kernel's own cpio reader, so the archive `initramfs.rs` writes is tested
-# against the code that will read it rather than against a second opinion.
+# The kernel's own cpio reader: `flash` reads the archive `initramfs.rs` wrote
+# to strip the card's copy of its programs, and the tests read every archive
+# with the code that will unpack it rather than with a second opinion.
 ferrix-cpio.workspace = true
 
 [lints]

@@ -29,17 +29,20 @@ const KERNEL_PATH: &str = "FERRIX/KERNEL.ELF";
 /// Where the initramfs goes, beside the kernel.
 const INITRD_PATH: &str = "FERRIX/INITRD.IMG";
 
-/// The kernel as the card gets it: without its debug information, which the
-/// loader never reads and the kernel never looks at -- a panic prints
-/// addresses, and they are resolved on the host against the ELF `build`
-/// leaves beside the image, which keeps all of it.
+/// The kernel as the card gets it: without its debug information or its
+/// symbol table, which the loader never reads and the kernel never looks at
+/// -- neither is in a loaded segment, and a panic prints addresses, which are
+/// resolved on the host against the ELF `build` leaves beside the image,
+/// which keeps all of it (`libs/elf/src/symbols.rs` is `xtask`'s reader).
 ///
-/// It matters for room, not speed. A debug kernel is some 70 MB, the board's
-/// `bootfs` is 128 MiB, and with the compositor's initramfs beside it the two
-/// no longer fit; stripped, the kernel is a tenth of that. The rust
-/// toolchain's own `llvm-objcopy` (the `llvm-tools` component
-/// `rust-toolchain.toml` asks for) does it; without one the whole kernel is
-/// copied and a line says so.
+/// It matters for room and for time. A debug kernel is some 70 MB, the
+/// board's `bootfs` is 128 MiB, and with the compositor's initramfs beside it
+/// the two no longer fit; stripped, the kernel is a tenth of that. And the
+/// loader reads the card at some 16 MB/s under U-Boot: the desktop's kernel
+/// was 10.5 MB without its debug information and 8.7 MB without its symbols
+/// too (2026-09-24), a tenth of a second of every boot. The rust toolchain's
+/// own `llvm-objcopy` (the `llvm-tools` component `rust-toolchain.toml` asks
+/// for) does it; without one the whole kernel is copied and a line says so.
 fn card_kernel(kernel: &Path) -> PathBuf {
     let stripped = kernel.with_extension("stripped.elf");
     let Some(objcopy) = llvm_objcopy() else {
@@ -47,7 +50,7 @@ fn card_kernel(kernel: &Path) -> PathBuf {
         return kernel.to_path_buf();
     };
     let status = std::process::Command::new(&objcopy)
-        .arg("--strip-debug")
+        .arg("--strip-all")
         .arg(kernel)
         .arg(&stripped)
         .status();
@@ -61,6 +64,60 @@ fn card_kernel(kernel: &Path) -> PathBuf {
             kernel.to_path_buf()
         }
     }
+}
+
+/// The initramfs as the card gets it: every program in it without its debug
+/// information or symbol table, for [`card_kernel`]'s reasons.
+///
+/// The drivers and `devmgr` are built in the tree's `dev` profile, with
+/// debug information, and were 13 MB of the desktop's archive that stripped
+/// come to 0.5 MB; the compositor's programs keep symbols that are
+/// another 2.9 MB (2026-09-24). A fault in one of them prints its `pc`, which
+/// resolves against the program the build left on the host, as a kernel
+/// panic's addresses do. Only the card's copy is stripped: images, and the
+/// archive every test boots, stay the bytes they were built as.
+fn card_initramfs(arch: Arch, archive: &[u8]) -> Result<Vec<u8>> {
+    let Some(objcopy) = llvm_objcopy() else {
+        println!("    llvm-objcopy not found; the initramfs's programs keep their symbols");
+        return Ok(archive.to_vec());
+    };
+    let scratch = paths::build_dir(arch).join("card-programs");
+    std::fs::create_dir_all(&scratch)
+        .map_err(|error| Error::new(format!("creating {}: {error}", scratch.display())))?;
+    let (mut programs, mut before, mut after) = (0usize, 0usize, 0usize);
+    let stripped = crate::initramfs::with_files_changed(archive, |name, data| {
+        if !data.starts_with(b"\x7fELF") {
+            return Ok(None);
+        }
+        let whole = scratch.join("whole");
+        let less = scratch.join("stripped");
+        std::fs::write(&whole, data)
+            .map_err(|error| Error::new(format!("writing {}: {error}", whole.display())))?;
+        let status = std::process::Command::new(&objcopy)
+            .arg("--strip-all")
+            .arg(&whole)
+            .arg(&less)
+            .status();
+        if !status.is_ok_and(|status| status.success()) {
+            println!(
+                "    {} could not strip /{name}; it goes whole",
+                objcopy.display()
+            );
+            return Ok(None);
+        }
+        let bytes = std::fs::read(&less)
+            .map_err(|error| Error::new(format!("reading {}: {error}", less.display())))?;
+        programs += 1;
+        before += data.len();
+        after += bytes.len();
+        Ok(Some(bytes))
+    })?;
+    println!(
+        "    {programs} programs in the initramfs stripped, {} KiB to {} KiB",
+        before / 1024,
+        after / 1024
+    );
+    Ok(stripped)
 }
 
 /// The toolchain's `llvm-objcopy`: in `lib/rustlib/<host>/bin` of the
@@ -103,7 +160,8 @@ pub(crate) struct BoardFiles {
     /// strips the copy the card gets, and a panic's addresses are resolved
     /// against this one.
     pub(crate) kernel: PathBuf,
-    /// The archive the loader hands over, byte for byte what an image carries.
+    /// The archive the loader hands over, byte for byte what an image
+    /// carries: [`card_initramfs`] strips the programs in the card's copy.
     pub(crate) initramfs: Vec<u8>,
     /// The image's own command-line options, for `FERRIX/DEFAULTS.TXT`, or
     /// none: `flash --compositor`'s `ferrix.checks=skip`.
@@ -140,12 +198,18 @@ pub(crate) fn run(arch: Arch, files: &BoardFiles, args: &Args) -> Result<()> {
     copy(loader, &loader_target)?;
     copy(&card_kernel(kernel), &kernel_target)?;
     write_defaults(&target, *defaults)?;
-    // The same archive an image carries, so a board unpacks what QEMU does.
+    // The same archive an image carries, so a board unpacks what QEMU does,
+    // less the programs' symbols.
+    let initramfs = card_initramfs(arch, initramfs)?;
     let initramfs_target = target.join(INITRD_PATH);
-    std::fs::write(&initramfs_target, initramfs)
+    std::fs::write(&initramfs_target, &initramfs)
         .map_err(|error| Error::new(format!("writing {}: {error}", initramfs_target.display())))?;
     flush(&initramfs_target)?;
-    println!("    {}", initramfs_target.display());
+    println!(
+        "    {} ({} KiB)",
+        initramfs_target.display(),
+        initramfs.len() / 1024
+    );
 
     // A card pulled from the slot with dirty pages still in the page cache is
     // a card with a truncated kernel on it, and the symptom is a loader that

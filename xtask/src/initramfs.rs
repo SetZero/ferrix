@@ -165,6 +165,41 @@ impl Newc {
     }
 }
 
+/// `archive` again, with each regular file's contents replaced where `change`
+/// returns new ones, and every other entry and header field as it was.
+///
+/// For what a card is given that an image is not -- its programs without
+/// their symbols, which `flash` strips -- after the archive is built, so that
+/// [`build`] and every image stay the bytes they are. A hard link's names
+/// are left alone: only the entry carrying the data has any to change.
+///
+/// # Errors
+///
+/// An archive that does not parse, or what `change` returned.
+pub(crate) fn with_files_changed(
+    archive: &[u8],
+    mut change: impl FnMut(&str, &[u8]) -> Result<Option<Vec<u8>>>,
+) -> Result<Vec<u8>> {
+    let mut out = Newc::new();
+    for entry in ferrix_cpio::Archive::new(archive).entries() {
+        let entry = entry.map_err(|error| Error::new(format!("reading the archive: {error:?}")))?;
+        let changed = if entry.mode & 0o170_000 == S_IFREG && !entry.data.is_empty() {
+            change(entry.name, entry.data)?
+        } else {
+            None
+        };
+        out.entry(
+            entry.name,
+            entry.mode,
+            entry.ino,
+            entry.nlink,
+            (entry.uid, entry.gid),
+            changed.as_deref().unwrap_or(entry.data),
+        )?;
+    }
+    out.finish()
+}
+
 /// Where a program given with `--init` goes, relative to the root.
 pub(crate) const PROGRAM_PATH: &str = "bin/busybox";
 
@@ -655,6 +690,31 @@ mod tests {
                 .find("bin/pattern")
                 .unwrap()
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn a_file_changed_after_the_archive_is_built_reads_back_changed_and_nothing_else_moves() {
+        let program: &[u8] = b"\x7fELF with its symbols";
+        let bytes = build_with(Some(program), &[]).unwrap();
+        // Nothing changed is the same bytes, so the rewrite loses no field.
+        assert_eq!(with_files_changed(&bytes, |_, _| Ok(None)).unwrap(), bytes);
+
+        let changed = with_files_changed(&bytes, |name, data| {
+            Ok((name == PROGRAM_PATH).then(|| data[..4].to_vec()))
+        })
+        .unwrap();
+        let archive = ferrix_cpio::Archive::new(&changed);
+        assert_eq!(
+            archive.find(PROGRAM_PATH).unwrap().unwrap().data,
+            b"\x7fELF"
+        );
+        // The hard link's data rides on its last name.
+        let link = format!("{MARKER_PATH}.link");
+        assert_eq!(archive.find(&link).unwrap().unwrap().data, MARKER);
+        assert_eq!(
+            archive.summary().unwrap().entries,
+            ferrix_cpio::Archive::new(&bytes).summary().unwrap().entries
         );
     }
 
