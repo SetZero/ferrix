@@ -8,18 +8,30 @@ extern "C" {
 #include <features.h>
 #include <sys/stat.h>
 
-#define FTW_F   1
-#define FTW_D   2
-#define FTW_DNR 3
-#define FTW_NS  4
-#define FTW_SL  5
-#define FTW_DP  6
-#define FTW_SLN 7
+/* Ferrousli, not musl 1.2.5: the type flags are glibc's, from 0, where
+ * musl's run from 1, because a program built against glibc calls the same
+ * nftw and compares with glibc's numbers. POSIX leaves the values open. */
+#define FTW_F   0
+#define FTW_D   1
+#define FTW_DNR 2
+#define FTW_NS  3
+#define FTW_SL  4
+#define FTW_DP  5
+#define FTW_SLN 6
 
 #define FTW_PHYS  1
 #define FTW_MOUNT 2
 #define FTW_CHDIR 4
 #define FTW_DEPTH 8
+
+#ifdef _GNU_SOURCE
+/* Ferrousli, not musl 1.2.5: glibc's FTW_ACTIONRETVAL and its answers. */
+#define FTW_ACTIONRETVAL 16
+#define FTW_CONTINUE 0
+#define FTW_STOP 1
+#define FTW_SKIP_SUBTREE 2
+#define FTW_SKIP_SIBLINGS 3
+#endif
 
 struct FTW {
 	int base;

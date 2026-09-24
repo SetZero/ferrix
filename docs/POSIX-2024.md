@@ -18,13 +18,13 @@ variables it specifies beside them.
 
 | Status | Interfaces | Meaning |
 |---|---|---|
-| present | 1048 | defined by `libferrousli.a`, or a macro the standard specifies as one and `include/` defines |
+| present | 1049 | defined by `libferrousli.a`, or a macro the standard specifies as one and `include/` defines |
 | macro only | 3 | a function the standard requires, which the header defines only as a macro: a call works, taking its address or `#undef` does not |
 | broken | 1 | present, but it fails to link or gives a wrong answer |
 | stubbed | 0 | a stand-in that ends the program; the last left `src/stubs.rs` on 2026-09-16, and the file is gone |
-| absent | 191 | not there |
+| absent | 190 | not there |
 
-195 interfaces are missing in one of the last four ways. None of them is
+194 interfaces are missing in one of the last four ways. None of them is
 written on a branch any more: the three unlanded branches of 2026-09-13,
 `ferrousli-math`, `ferrousli-threads` and `ferrousli-misc`, were built,
 fixed and landed on 2026-09-16.
@@ -54,11 +54,11 @@ new subsystem. Every area's missing names are in the index at the end.
 | Realtime: asynchronous I/O, message queues, timers, shared memory | 29 | 27 | 0 | 11 | `aio.h` over threads 3; the rest of `mqueue.h`, `mq_open` to `mq_notify`, 3; `timer_*` with `SIGEV_THREAD` 3; `shm_open`, `shm_unlink` 1; `clock_getcpuclockid` 1. Typed memory (`posix_typed_mem_*`, `posix_mem_offset`) is the TYM option, which ferrousli does not claim: 0 |
 | Terminals and devices | 25 | 2 | 0 | 2 | `ctermid` 1; `posix_devctl` and `<devctl.h>` 1. Landed: `posix_openpt`, `grantpt`, `unlockpt`, `ptsname`, `ptsname_r`, for foot (`docs/CHROME.md`) |
 | Networking and name resolution | 55 | 0 | 0 | 0 | landed: `getaddrinfo`, `getnameinfo`, `freeaddrinfo` and `gai_strerror` over `/etc/hosts` and a DNS stub resolver; the hosts, networks, protocols and services databases; `if_nameindex`, `if_freenameindex`, `if_indextoname`; `in6addr_any`, `in6addr_loopback`, `sockatmark` |
-| Patterns, paths and search | 23 | 3 | 0 | 5 | `wordexp` 3; `nftw` 2. Landed: `glob` and `globfree`; `search.h`'s hash table, trees, linear search and queues; `libgen.h`'s `basename` and `dirname`, and `regex.h`, replacing five stubs |
+| Patterns, paths and search | 23 | 2 | 0 | 3 | `wordexp` 3. Landed: `nftw`, musl's with glibc's type flags and `FTW_ACTIONRETVAL`, for GLib (`docs/CHROME.md`); `glob` and `globfree`; `search.h`'s hash table, trees, linear search and queues; `libgen.h`'s `basename` and `dirname`, and `regex.h`, replacing five stubs |
 | Users, groups and databases | 29 | 9 | 0 | 3 | `<ndbm.h>` and the `dbm_*` functions |
 | Dynamic loading | 5 | 4 | 0 | 2 | `dlopen`, `dlsym`, `dlclose` and `dlerror` for a static program, failing cleanly; a loader is the README's fifth item and is not priced here. Landed: `dladdr`, over the program's own headers |
 | Across areas | | | | 3 | POSIX.1-2024's declarations in `include/` 3 |
-| **All** | **1243** | **195** | **0** | **72** | |
+| **All** | **1243** | **194** | **0** | **70** | |
 
 ## Present but broken
 
@@ -368,7 +368,7 @@ interface.
 | Header | Status | Interfaces |
 |---|---|---|
 | `<fnmatch.h>` | present (1) | `fnmatch` |
-| `<ftw.h>` | absent (1) | `nftw` (XSI) |
+| `<ftw.h>` | present (1) | `nftw` (XSI) |
 | `<glob.h>` | present (2) | `glob`, `globfree` |
 | `<libgen.h>` | present (2) | `basename` (XSI), `dirname` (XSI) |
 | `<regex.h>` | present (4) | `regcomp`, `regerror`, `regexec`, `regfree` |

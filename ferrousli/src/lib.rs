@@ -63,6 +63,9 @@ pub mod fenv;
 pub mod float;
 pub mod fnmatch;
 pub mod fortify;
+#[cfg(not(target_arch = "arm"))]
+pub mod fts;
+pub mod ftw;
 pub mod futex;
 pub mod getopt;
 #[cfg(target_arch = "arm")]

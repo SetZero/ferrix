@@ -76,6 +76,11 @@ fn reentrant_protocol_lookups_and_the_resolver_state_answer_as_glibc() {
 }
 
 #[test]
+fn trees_are_walked_with_nftw_and_fts_and_read_with_scandirat() {
+    check(&Case::named("glibc/walk"));
+}
+
+#[test]
 fn gnus_math_additions_answer_through_cs_calling_convention() {
     check(&Case::named("glibc/math"));
 }

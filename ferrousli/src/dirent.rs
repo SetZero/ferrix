@@ -437,6 +437,56 @@ pub unsafe extern "C" fn scandir(
 ) -> c_int {
     // SAFETY: the caller passes a string.
     let dir = unsafe { opendir(path) };
+    // SAFETY: the caller's contract, with the stream this call opened.
+    unsafe { scan_stream(dir, namelist, filter, compar) }
+}
+
+/// [`scandir`] of the directory `path` names relative to `dirfd`: glibc's
+/// `scandirat`, which libmount calls.
+///
+/// # Safety
+///
+/// As [`scandir`].
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn scandirat(
+    dirfd: c_int,
+    path: *const c_char,
+    namelist: *mut *mut *mut Dirent,
+    filter: Filter,
+    compar: Compare,
+) -> c_int {
+    /// `O_RDONLY | O_DIRECTORY | O_CLOEXEC`.
+    const FLAGS: c_int = O_DIRECTORY | 0o2_000_000;
+    // SAFETY: the caller passes a string.
+    let fd = unsafe { crate::fcntl::openat(dirfd, path, FLAGS, 0) };
+    if fd < 0 {
+        return -1;
+    }
+    let dir = fdopendir(fd);
+    if dir.is_null() {
+        let error = get_errno();
+        // SAFETY: `close` reads no memory; the descriptor is this call's.
+        let _ = unsafe { syscall::syscall2(nr::CLOSE, fd as usize, 0) };
+        errno::set(error);
+        return -1;
+    }
+    // SAFETY: the caller's contract, with the stream this call opened.
+    unsafe { scan_stream(dir, namelist, filter, compar) }
+}
+
+/// The body of [`scandir`] and [`scandirat`], reading and closing `dir`,
+/// or failing at once if it is null.
+///
+/// # Safety
+///
+/// `dir` must be null or a stream nothing else uses, and the rest as
+/// [`scandir`].
+unsafe fn scan_stream(
+    dir: *mut Dir,
+    namelist: *mut *mut *mut Dirent,
+    filter: Filter,
+    compar: Compare,
+) -> c_int {
     if dir.is_null() {
         return -1;
     }
