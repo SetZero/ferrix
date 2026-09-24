@@ -756,11 +756,29 @@ impl Inode for Node {
             }),
             Place::Root | Place::Top(_) => (0, 0),
         };
+        // A directory's links are two and one per directory in it, as Linux
+        // counts them. For `/proc/<pid>/task` that is one per thread, and
+        // Chrome counts its threads that way before it will fork: its
+        // sandbox helper `CHECK`s the count through `fstatat`, and every
+        // child process it started died there while this said two.
+        let nlink = match self.place {
+            Place::Entry(pid, index)
+                if PER_PROCESS
+                    .get(index)
+                    .is_some_and(|entry| matches!(entry.content, Content::Threads)) =>
+            {
+                registry::find(pid).map_or(2, |process| {
+                    2_u32.saturating_add(u32::try_from(thread_ids(&process).len()).unwrap_or(0))
+                })
+            }
+            _ if kind == FileType::Directory => 2,
+            _ => 1,
+        };
         Metadata {
             ino: self.place.ino(),
             kind,
             permissions,
-            nlink: if kind == FileType::Directory { 2 } else { 1 },
+            nlink,
             uid,
             gid,
             // Linux reports zero for every generated file, and a program that
