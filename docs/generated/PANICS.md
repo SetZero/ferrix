@@ -959,12 +959,14 @@ unreadable argument; FIOCLEX and FIONCLEX must set and clear close-on-exec. A
 FIFO under /tmp must be one pipe for its openers. statfs of /tmp must decode
 TMPFS_MAGIC, and statfs64 must take 84 and musl's 88 as its size. truncate and
 fallocate must grow a file and fallocate never shrink one, and sendfile must
-copy a file with and without an offset. Then, by syscall number, mount -t proc
-and mount -t devtmpfs must each make a new instance on a directory under /tmp:
-the check process must be found through the procfs, zero must read zeros from
-the devtmpfs, /proc/mounts must list both, both must unmount, and mount -t sysfs
-must still be ENODEV. The whole run is done twice and must leave no frame
-behind.
+copy a file with and without an offset. splice must drain a pipe into /dev/null,
+fill a pipe from a file at an offset and move bytes between two pipes, and
+copy_file_range must copy a file, each refusing as Linux does. Then, by syscall
+number, mount -t proc and mount -t devtmpfs must each make a new instance on a
+directory under /tmp: the check process must be found through the procfs, zero
+must read zeros from the devtmpfs, /proc/mounts must list both, both must
+unmount, and mount -t sysfs must still be ENODEV. The whole run is done twice
+and must leave no frame behind.
 
 1. A pipe end's drop no longer counts it out of the buffer, so a reader never
    sees end of file and the pipe outlives its descriptors as leaked frames.
@@ -975,6 +977,8 @@ behind.
    program reads it.
 4. tmpfs's `grow_to` shrinks a file, or `sendfile` stopped putting its offset
    back.
+5. `splice` or `copy_file_range` in `kernel/src/syscall/pipe.rs` moved the wrong
+   bytes or offset, or `fs::pipe::splice_pipes` lost bytes between two pipes.
 
 See: kernel/src/fs/check.rs run_calls; kernel/src/fs/pipe.rs;
 kernel/src/syscall/pipe.rs; kernel/src/syscall/fsctl.rs; libs/vfs/src/pipe.rs;

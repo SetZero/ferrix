@@ -52,6 +52,7 @@
 use alloc::collections::BTreeMap;
 use alloc::format;
 use alloc::sync::{Arc, Weak};
+use alloc::vec;
 use core::any::Any;
 use core::fmt;
 use core::sync::atomic::{AtomicU64, Ordering};
@@ -553,4 +554,172 @@ fn wait_for_partner(pipe: &Pipe, reader: bool) -> Result<(), Errno> {
         return Err(Errno::ERESTARTSYS);
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Splicing
+// ---------------------------------------------------------------------------
+
+/// What one look at both pipes of a pipe-to-pipe `splice` found.
+enum Joined {
+    /// This many bytes went from one to the other.
+    Moved(usize),
+    /// The source is empty and has no writer left.
+    EndOfFile,
+    /// The source is empty and a writer may still fill it.
+    Empty,
+    /// The sink has no room.
+    Full,
+    /// The sink has no reader left.
+    Broken,
+}
+
+/// The pipe end `file` reads or writes through: an anonymous pipe's, or an
+/// opened FIFO's. `None` for anything else.
+fn end_of(file: &OpenFile) -> Option<Arc<End>> {
+    Arc::clone(file.io()).into_any().downcast::<End>().ok()
+}
+
+/// Whether `file` is a pipe to `splice`: an anonymous pipe or an opened FIFO,
+/// the two Linux's `get_pipe_info` finds.
+pub(crate) fn is_pipe(file: &OpenFile) -> bool {
+    end_of(file).is_some()
+}
+
+/// Whether `a` and `b` are ends of one pipe, which `splice` refuses to join.
+pub(crate) fn same_pipe(a: &OpenFile, b: &OpenFile) -> bool {
+    matches!((end_of(a), end_of(b)), (Some(a), Some(b)) if Arc::ptr_eq(&a.pipe, &b.pipe))
+}
+
+/// Take up to `buf.len()` bytes out of the pipe `file` is, waiting unless
+/// `nonblock`. `splice` decides that from its flags and the other
+/// descriptor, not from the pipe's own `O_NONBLOCK`, so this does not ask
+/// the file.
+pub(crate) fn read(file: &OpenFile, buf: &mut [u8], nonblock: bool) -> Result<usize, Errno> {
+    end_of(file)
+        .ok_or(Errno::EINVAL)?
+        .read_stream(buf, nonblock)
+}
+
+/// Queue `data` into the pipe `file` is, as [`read`] takes from one.
+pub(crate) fn write(file: &OpenFile, data: &[u8], nonblock: bool) -> Result<usize, Errno> {
+    end_of(file)
+        .ok_or(Errno::EINVAL)?
+        .write_stream(data, nonblock)
+}
+
+/// Wait until the pipe `file` is has room, and say how much: as much as a
+/// `splice` into it may read from its source, so that what it reads it can
+/// put down. `EPIPE`, with `SIGPIPE`, once no reader is left, as Linux's
+/// `wait_for_space` answers; `EAGAIN` for a full pipe under `nonblock`.
+pub(crate) fn room(file: &OpenFile, nonblock: bool) -> Result<usize, Errno> {
+    let end = end_of(file).ok_or(Errno::EINVAL)?;
+    loop {
+        // Bound first, so the guard is gone before anything below waits.
+        let (readers, room) = {
+            let buffer = end.pipe.buffer.lock();
+            (buffer.readers(), buffer.room())
+        };
+        if readers == 0 {
+            crate::syscall::kill::send_to_current(ferrix_linux_abi::types::SIGPIPE);
+            return Err(Errno::EPIPE);
+        }
+        if room > 0 {
+            return Ok(room);
+        }
+        if nonblock {
+            return Err(Errno::EAGAIN);
+        }
+        end.wait_to_write(1)?;
+    }
+}
+
+/// `splice` from one pipe into another: up to `len` bytes of what the source
+/// holds, as many as the sink has room for, moved with both locks held so
+/// that no byte is ever out of both pipes. Waits for bytes, then for room,
+/// unless `nonblock`. Two ends of one pipe are `EINVAL`, as on Linux; the
+/// caller checks that first, and this checks it again rather than take one
+/// lock twice.
+pub(crate) fn splice_pipes(
+    input: &OpenFile,
+    output: &OpenFile,
+    len: usize,
+    nonblock: bool,
+) -> Result<usize, Errno> {
+    let (Some(from), Some(to)) = (end_of(input), end_of(output)) else {
+        return Err(Errno::EINVAL);
+    };
+    if Arc::ptr_eq(&from.pipe, &to.pipe) {
+        return Err(Errno::EINVAL);
+    }
+    let mut bounce = vec![0_u8; len.min(PIPE_CAPACITY)];
+    loop {
+        // Bound first, so both guards are gone before anything below waits.
+        let joined = join(&from.pipe, &to.pipe, &mut bounce);
+        let refusal = match joined {
+            Joined::Moved(count) => {
+                from.pipe.writable.wake_all();
+                to.pipe.readable.wake_all();
+                return Ok(count);
+            }
+            Joined::EndOfFile => return Ok(0),
+            Joined::Broken => {
+                crate::syscall::kill::send_to_current(ferrix_linux_abi::types::SIGPIPE);
+                Errno::EPIPE
+            }
+            Joined::Empty | Joined::Full if nonblock => Errno::EAGAIN,
+            Joined::Empty => match from.wait_to_read() {
+                Ok(()) => continue,
+                Err(errno) => errno,
+            },
+            Joined::Full => match to.wait_to_write(1) {
+                Ok(()) => continue,
+                Err(errno) => errno,
+            },
+        };
+        return Err(refusal);
+    }
+}
+
+/// Move what fits from `from`'s buffer into `to`'s, through `bounce`, with
+/// both locks held. They are taken in address order, so two splices crossing
+/// the same two pipes in opposite directions cannot each hold the lock the
+/// other waits for. The checks go in the order Linux's
+/// `splice_pipe_to_pipe` makes them: an empty source a writer may still fill
+/// waits whatever the sink is, then a sink with no reader is broken, then an
+/// empty source is its end, then a full sink waits.
+fn join(from: &Pipe, to: &Pipe, bounce: &mut [u8]) -> Joined {
+    let (mut source, mut sink) = if core::ptr::from_ref(from) < core::ptr::from_ref(to) {
+        let source = from.buffer.lock();
+        (source, to.buffer.lock())
+    } else {
+        let sink = to.buffer.lock();
+        (from.buffer.lock(), sink)
+    };
+    if source.is_empty() && source.writers() > 0 {
+        return Joined::Empty;
+    }
+    if sink.readers() == 0 {
+        return Joined::Broken;
+    }
+    if source.is_empty() {
+        return Joined::EndOfFile;
+    }
+    let count = bounce.len().min(source.len()).min(sink.room());
+    if count == 0 {
+        return Joined::Full;
+    }
+    let Some(slot) = bounce.get_mut(..count) else {
+        return Joined::Full;
+    };
+    // Neither can come back short: the source holds `count` bytes, and the
+    // sink has room for them, which is all a write of any size needs.
+    let ReadOutcome::Read(read) = source.read(slot) else {
+        return Joined::Empty;
+    };
+    match sink.write(slot.get(..read).unwrap_or_default()) {
+        WriteOutcome::Wrote(wrote) => Joined::Moved(wrote),
+        WriteOutcome::Broken => Joined::Broken,
+        WriteOutcome::WouldBlock => Joined::Full,
+    }
 }

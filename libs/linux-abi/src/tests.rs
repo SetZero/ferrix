@@ -73,6 +73,12 @@ const SHARED: &[(usize, usize, Syscall)] = &[
     (x86_64::STATX, aarch64::STATX, Syscall::Statx),
     (x86_64::OPENAT, aarch64::OPENAT, Syscall::Openat),
     (x86_64::OPENAT2, aarch64::OPENAT2, Syscall::Openat2),
+    (x86_64::SPLICE, aarch64::SPLICE, Syscall::Splice),
+    (
+        x86_64::COPY_FILE_RANGE,
+        aarch64::COPY_FILE_RANGE,
+        Syscall::CopyFileRange,
+    ),
     (x86_64::LSEEK, aarch64::LSEEK, Syscall::Lseek),
     (x86_64::MMAP, aarch64::MMAP, Syscall::Mmap),
     (x86_64::MPROTECT, aarch64::MPROTECT, Syscall::Mprotect),
@@ -1581,7 +1587,7 @@ fn unknown_numbers_map_to_none_without_panicking() {
         60,
         70,
         75,
-        76,
+        77,
         109,
         110,
         250,
@@ -1659,13 +1665,13 @@ fn table_sizes_are_stable() {
     // `socket` being unreachable on AArch64.
     assert_eq!(
         mapped(from_x86_64).len(),
-        240,
-        "the x86-64 table maps 240 calls"
+        242,
+        "the x86-64 table maps 242 calls"
     );
     assert_eq!(
         mapped(from_aarch64).len(),
-        211,
-        "the AArch64 table maps 211 calls"
+        213,
+        "the AArch64 table maps 213 calls"
     );
 }
 /// Calls only ARMv7-A has, because it is the only 32-bit target.
@@ -1915,6 +1921,7 @@ const ARM_NUMBERS: &[(usize, Syscall)] = &[
     (337, Syscall::Unshare),                  // unshare
     (338, Syscall::SetRobustList),            // set_robust_list
     (339, Syscall::GetRobustList),            // get_robust_list
+    (340, Syscall::Splice),                   // splice
     (345, Syscall::Getcpu),                   // getcpu
     (346, Syscall::EpollPwait),               // epoll_pwait
     (348, Syscall::Utimensat),                // utimensat
@@ -1936,6 +1943,7 @@ const ARM_NUMBERS: &[(usize, Syscall)] = &[
     (385, Syscall::MemfdCreate),              // memfd_create
     (387, Syscall::Execveat),                 // execveat
     (389, Syscall::Membarrier),               // membarrier
+    (391, Syscall::CopyFileRange),            // copy_file_range
     (397, Syscall::Statx),                    // statx
     (398, Syscall::Rseq),                     // rseq
     (403, Syscall::ClockGettime64),           // clock_gettime64
@@ -2158,7 +2166,7 @@ fn arm_covers_the_calls_musl_startup_makes() {
 #[test]
 fn arm_table_size_is_stable() {
     // A canary, as for the other two tables.
-    assert_eq!(mapped_arm().len(), 257, "the ARMv7-A table maps 257 calls");
+    assert_eq!(mapped_arm().len(), 259, "the ARMv7-A table maps 259 calls");
 }
 
 /// The filesystem-control and extended-attribute calls, against the numbers in
@@ -2184,6 +2192,20 @@ fn filesystem_control_calls_match_the_kernel_tables() {
         (285, 47, 352, Syscall::Fallocate),
         (161, 51, 61, Syscall::Chroot),
         (306, 267, 373, Syscall::Syncfs),
+    ] {
+        assert_eq!(from_x86_64(x86), Some(call), "x86-64 {x86}");
+        assert_eq!(from_aarch64(generic), Some(call), "AArch64 {generic}");
+        assert_eq!(from_arm(eabi), Some(call), "ARMv7-A {eabi}");
+    }
+}
+
+/// `splice` and `copy_file_range`, against `asm-x86/unistd_64.h`,
+/// `asm-generic/unistd.h` and `asm-arm/unistd-common.h` as QEMU vendors them.
+#[test]
+fn splice_and_copy_file_range_match_the_kernel_tables() {
+    for (x86, generic, eabi, call) in [
+        (275, 76, 340, Syscall::Splice),
+        (326, 285, 391, Syscall::CopyFileRange),
     ] {
         assert_eq!(from_x86_64(x86), Some(call), "x86-64 {x86}");
         assert_eq!(from_aarch64(generic), Some(call), "AArch64 {generic}");

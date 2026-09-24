@@ -191,11 +191,14 @@ They are recorded as they are rather than tidied behind a `*`, so that the
 day they improve, the gate says so.
 
 **uutils asks the kernel for calls busybox never did.** `splice` (275) and
-`copy_file_range` (326) are both answered `ENOSYS`, and uutils falls back and
-gets the right answer — `cat` and `cp` reach for them first. This is §7's
+`copy_file_range` (326) were both answered `ENOSYS`, and uutils fell back and
+got the right answer — `cat` and `cp` reach for them first. This is §7's
 prediction arriving on schedule: `std` is a much larger consumer than busybox
-was, and what it needs shows up at run time rather than at link time.
-`docs/BACKLOG.md` has the row.
+was, and what it needs shows up at run time rather than at link time. Both
+are answered since 2026-09-24, through a kernel buffer as `sendfile` is.
+GNU grep forced it: writing to `/dev/null` from a pipe it drains its input
+with `splice` and falls back only on `EINVAL`, so under Ferrix it failed, and
+curl's `configure`, built on Ferrix for stage 20, said there was no grep.
 
 ## 4. Where each part of the userland comes from
 

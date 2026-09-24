@@ -1,7 +1,7 @@
-//! `pipe`, `pipe2` and `sendfile`.
+//! `pipe`, `pipe2`, `sendfile`, `splice` and `copy_file_range`.
 //!
 //! The pipe itself is `crate::fs::pipe`. What is here is making one into two
-//! descriptors, and `sendfile`, which moves bytes from one descriptor to
+//! descriptors, and the three calls that move bytes from one descriptor to
 //! another without the program ever holding them.
 //!
 //! # Two descriptors, or none
@@ -24,13 +24,24 @@
 //!
 //! ARMv7-A numbers only `sendfile64`, whose offset is a 64-bit `loff_t` like
 //! the 64-bit architectures' `off_t`, so every offset read here is eight bytes.
+//!
+//! # `splice` and `copy_file_range` the same way
+//!
+//! Both go through a kernel buffer as `sendfile` does. Between two pipes
+//! `splice` moves bytes under both pipes' locks, so none is ever out of both;
+//! into a pipe it reads no more than the pipe has room for, so a call never
+//! waits on itself; out of a pipe it reads what is there once, and loses what
+//! an output refuses part-way, as `sendfile` from a pipe does. GNU grep is why
+//! `splice` is here: writing to `/dev/null` from a pipe, it drains the rest of
+//! its input with `splice` and falls back to `read` only on `EINVAL`, so an
+//! `ENOSYS` was an error, and curl's `configure` concluded there was no grep.
 
 use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
 
 use ferrix_linux_abi::errno::Errno;
-use ferrix_linux_abi::types::{O_CLOEXEC, O_NONBLOCK};
+use ferrix_linux_abi::types::{O_CLOEXEC, O_NONBLOCK, SPLICE_F_ALL, SPLICE_F_NONBLOCK};
 use ferrix_vfs::{FileType, OpenFile, Whence};
 
 use crate::fs;
@@ -230,4 +241,312 @@ fn give_back(input: &OpenFile, positioned: bool, unread: usize) {
 /// A count so far, or `errno` if nothing was done.
 fn partial(done: usize, errno: Errno) -> Result<usize, Errno> {
     if done > 0 { Ok(done) } else { Err(errno) }
+}
+
+/// `splice`: move up to `len` bytes between two descriptors, at least one of
+/// them a pipe.
+///
+/// Checked in Linux's order: an empty move is done before anything is looked
+/// at, then the flags, the two descriptors, an offset given for a pipe
+/// (`ESPIPE`), the offsets' memory (`EFAULT`), and each end's access mode
+/// (`EBADF`). Two ends of one pipe, two descriptors neither of which is a
+/// pipe, an offset on a stream, a negative offset, an output under
+/// `O_APPEND` and a directory as input are `EINVAL`.
+///
+/// `SPLICE_F_NONBLOCK` makes the pipe side not wait, and so does
+/// `O_NONBLOCK` on the other descriptor, as Linux's `do_splice` has it; the
+/// pipe's own `O_NONBLOCK` counts only between two pipes. The other hints
+/// are taken and ignored, as `SPLICE_F_MOVE` has been on Linux since 2.6.21.
+pub(crate) fn sys_splice(
+    process: &Process,
+    in_fd: i32,
+    in_offset_at: u64,
+    out_fd: i32,
+    out_offset_at: u64,
+    len: u64,
+    flags: u32,
+) -> Result<usize, Errno> {
+    if len == 0 {
+        return Ok(0);
+    }
+    if flags & !SPLICE_F_ALL != 0 {
+        return Err(Errno::EINVAL);
+    }
+    let input = fd::file(process, in_fd)?;
+    let output = fd::file(process, out_fd)?;
+    let from_pipe = fs::pipe::is_pipe(&input);
+    let to_pipe = fs::pipe::is_pipe(&output);
+    if (from_pipe && in_offset_at != 0) || (to_pipe && out_offset_at != 0) {
+        return Err(Errno::ESPIPE);
+    }
+    let in_start = read_offset(process, in_offset_at)?;
+    let out_start = read_offset(process, out_offset_at)?;
+    if !input.readable() || !output.writable() {
+        return Err(Errno::EBADF);
+    }
+    let len = clamp(len);
+    let nonblock = flags & SPLICE_F_NONBLOCK != 0;
+    match (from_pipe, to_pipe) {
+        (true, true) => {
+            if fs::pipe::same_pipe(&input, &output) {
+                return Err(Errno::EINVAL);
+            }
+            let nonblock = nonblock || input.status().nonblock || output.status().nonblock;
+            fs::pipe::splice_pipes(&input, &output, len, nonblock)
+        }
+        (true, false) => {
+            let mut at = position(&output, out_start)?;
+            if output.status().append {
+                return Err(Errno::EINVAL);
+            }
+            let nonblock = nonblock || output.status().nonblock;
+            let moved = out_of_a_pipe(&input, &output, at.as_mut(), len, nonblock)?;
+            write_offset(process, out_offset_at, at)?;
+            Ok(moved)
+        }
+        (false, true) => {
+            let mut at = position(&input, in_start)?;
+            if input.kind() == FileType::Directory {
+                return Err(Errno::EINVAL);
+            }
+            let nonblock = nonblock || input.status().nonblock;
+            let moved = into_a_pipe(&input, &output, at.as_mut(), len, nonblock)?;
+            write_offset(process, in_offset_at, at)?;
+            Ok(moved)
+        }
+        (false, false) => Err(Errno::EINVAL),
+    }
+}
+
+/// `copy_file_range`: copy up to `len` bytes of one regular file into
+/// another, from and to the offsets given or else each file's position,
+/// moving whichever was used past what was copied.
+///
+/// Checked in Linux's order: the two descriptors, the offsets' memory, the
+/// flags, which must be zero, then a directory (`EISDIR`) or anything else
+/// that is not a regular file (`EINVAL`), then the access modes and an
+/// output under `O_APPEND` (`EBADF`), a negative offset, and ranges that
+/// overlap in one file (`EINVAL`). The copy stops at the input's end, so
+/// from there it answers 0.
+///
+/// Linux refuses a copy between two filesystems with `EXDEV` unless the
+/// filesystem copies for itself, and programs fall back to reading and
+/// writing. Every copy here reads and writes, so none is refused for that.
+pub(crate) fn sys_copy_file_range(
+    process: &Process,
+    in_fd: i32,
+    in_offset_at: u64,
+    out_fd: i32,
+    out_offset_at: u64,
+    len: u64,
+    flags: u32,
+) -> Result<usize, Errno> {
+    let input = fd::file(process, in_fd)?;
+    let output = fd::file(process, out_fd)?;
+    let in_start = read_offset(process, in_offset_at)?;
+    let out_start = read_offset(process, out_offset_at)?;
+    if flags != 0 {
+        return Err(Errno::EINVAL);
+    }
+    if input.kind() == FileType::Directory || output.kind() == FileType::Directory {
+        return Err(Errno::EISDIR);
+    }
+    if input.kind() != FileType::Regular || output.kind() != FileType::Regular {
+        return Err(Errno::EINVAL);
+    }
+    if !input.readable() || !output.writable() || output.status().append {
+        return Err(Errno::EBADF);
+    }
+    let from = match in_start {
+        Some(at) => u64::try_from(at).map_err(|_| Errno::EINVAL)?,
+        None => input.offset(),
+    };
+    let to = match out_start {
+        Some(at) => u64::try_from(at).map_err(|_| Errno::EINVAL)?,
+        None => output.offset(),
+    };
+    let len = clamp(len);
+    let wide = len as u64;
+    let overlap = to < from.saturating_add(wide) && from < to.saturating_add(wide);
+    if overlap && same_file(&input, &output) {
+        return Err(Errno::EINVAL);
+    }
+    let size = input.inode().metadata().size;
+    let count = usize::try_from(size.saturating_sub(from))
+        .unwrap_or(usize::MAX)
+        .min(len);
+    let (copied, stopped) = copy_between(&input, &output, from, to, count);
+    if copied > 0 {
+        let past = |at: u64| at.saturating_add(copied as u64);
+        match in_start {
+            Some(_) => write_offset(process, in_offset_at, Some(past(from)))?,
+            None => set_position(&input, past(from)),
+        }
+        match out_start {
+            Some(_) => write_offset(process, out_offset_at, Some(past(to)))?,
+            None => set_position(&output, past(to)),
+        }
+    }
+    match stopped {
+        Some(errno) => partial(copied, errno),
+        None => Ok(copied),
+    }
+}
+
+/// A count as `read` and `write` take one: at most [`MAX_RW_COUNT`].
+fn clamp(len: u64) -> usize {
+    usize::try_from(len.min(MAX_RW_COUNT)).unwrap_or(SENDFILE_CHUNK)
+}
+
+/// The offset a `loff_t *` argument points at, or `None` for a null one.
+fn read_offset(process: &Process, at: u64) -> Result<Option<i64>, Errno> {
+    if at == 0 {
+        return Ok(None);
+    }
+    let mut bytes = [0_u8; 8];
+    uaccess::copy_from_user(process.space(), at, &mut bytes).map_err(|_| Errno::EFAULT)?;
+    Ok(Some(i64::from_le_bytes(bytes)))
+}
+
+/// Write `end` back through a `loff_t *` argument, if the call was given one.
+fn write_offset(process: &Process, at: u64, end: Option<u64>) -> Result<(), Errno> {
+    match end {
+        Some(end) if at != 0 => uaccess::copy_to_user(process.space(), at, &end.to_le_bytes())
+            .map_err(|_| Errno::EFAULT),
+        _ => Ok(()),
+    }
+}
+
+/// Where `splice` reads or writes the file that is not a pipe: at the offset
+/// given, which a stream cannot take and which must not be negative, or else
+/// at the file's own position.
+fn position(file: &OpenFile, start: Option<i64>) -> Result<Option<u64>, Errno> {
+    let Some(at) = start else {
+        return Ok(None);
+    };
+    if file.is_stream() {
+        return Err(Errno::EINVAL);
+    }
+    u64::try_from(at).map(Some).map_err(|_| Errno::EINVAL)
+}
+
+/// One `splice` out of a pipe: what the pipe holds now, up to `len` and a
+/// chunk, read once and written to `output` at `at` or its position.
+///
+/// If the output refuses part-way, the bytes it did not take are lost, where
+/// Linux would have left them in the pipe; the pipe is read once per call,
+/// so that is at most one chunk, and only when the output fails.
+fn out_of_a_pipe(
+    input: &OpenFile,
+    output: &OpenFile,
+    at: Option<&mut u64>,
+    len: usize,
+    nonblock: bool,
+) -> Result<usize, Errno> {
+    let mut buffer = vec![0_u8; len.min(SENDFILE_CHUNK)];
+    let got = fs::pipe::read(input, &mut buffer, nonblock)?;
+    let chunk = buffer.get(..got).ok_or(Errno::EIO)?;
+    let mut put = 0;
+    while put < chunk.len() {
+        let rest = chunk.get(put..).unwrap_or_default();
+        let wrote = match at.as_deref() {
+            Some(&start) => output.write_at(start.saturating_add(put as u64), rest),
+            None => output.write(rest),
+        };
+        match wrote {
+            Ok(0) => break,
+            Ok(wrote) => put += wrote,
+            Err(errno) => return partial(put, errno),
+        }
+    }
+    if let Some(at) = at {
+        *at = at.saturating_add(put as u64);
+    }
+    Ok(put)
+}
+
+/// One `splice` into a pipe: no more than the pipe has room for, so the call
+/// never waits on itself, read from `input` at `at` or its position and
+/// queued. What the pipe did not take goes back to the input's position,
+/// where it has one.
+fn into_a_pipe(
+    input: &OpenFile,
+    output: &OpenFile,
+    at: Option<&mut u64>,
+    len: usize,
+    nonblock: bool,
+) -> Result<usize, Errno> {
+    let room = fs::pipe::room(output, nonblock)?;
+    let mut buffer = vec![0_u8; len.min(room).min(SENDFILE_CHUNK)];
+    let got = match at.as_deref() {
+        Some(&start) => input.read_at(start, &mut buffer)?,
+        None => input.read(&mut buffer)?,
+    };
+    let chunk = buffer.get(..got).ok_or(Errno::EIO)?;
+    if chunk.is_empty() {
+        return Ok(0);
+    }
+    let wrote = match fs::pipe::write(output, chunk, nonblock) {
+        Ok(wrote) => wrote,
+        Err(errno) => {
+            give_back(input, at.is_some(), got);
+            return Err(errno);
+        }
+    };
+    if wrote < got {
+        give_back(input, at.is_some(), got - wrote);
+    }
+    if let Some(at) = at {
+        *at = at.saturating_add(wrote as u64);
+    }
+    Ok(wrote)
+}
+
+/// Whether two open files are one file: the same inode on the same
+/// filesystem.
+fn same_file(a: &OpenFile, b: &OpenFile) -> bool {
+    let device = |file: &OpenFile| file.location().mount.filesystem().device();
+    a.inode().metadata().ino == b.inode().metadata().ino && device(a) == device(b)
+}
+
+/// Copy `count` bytes from `from` in `input` to `to` in `output`, a chunk at
+/// a time. Answers how much was copied, and the error that stopped it early.
+fn copy_between(
+    input: &OpenFile,
+    output: &OpenFile,
+    from: u64,
+    to: u64,
+    count: usize,
+) -> (usize, Option<Errno>) {
+    let mut buffer = vec![0_u8; count.min(SENDFILE_CHUNK)];
+    let mut copied = 0;
+    while copied < count {
+        let want = (count - copied).min(buffer.len());
+        let Some(slot) = buffer.get_mut(..want) else {
+            return (copied, Some(Errno::EIO));
+        };
+        let got = match input.read_at(from.saturating_add(copied as u64), slot) {
+            Ok(0) => break,
+            Ok(got) => got,
+            Err(errno) => return (copied, Some(errno)),
+        };
+        let mut put = 0;
+        while put < got {
+            let rest = slot.get(put..got).unwrap_or_default();
+            match output.write_at(to.saturating_add((copied + put) as u64), rest) {
+                Ok(0) => return (copied + put, None),
+                Ok(wrote) => put += wrote,
+                Err(errno) => return (copied + put, Some(errno)),
+            }
+        }
+        copied += got;
+    }
+    (copied, None)
+}
+
+/// Move a file's position to `at`, for a copy that was given no offset.
+fn set_position(file: &OpenFile, at: u64) {
+    if let Ok(at) = i64::try_from(at) {
+        let _ = file.seek(at, Whence::Set);
+    }
 }

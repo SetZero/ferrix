@@ -357,20 +357,6 @@ feature exactly the utilities that make them worth having. 5 points, and
 better spent when either project releases again. `docs/UUTILS.md` §6a has the
 detail.
 
-## `splice` and `copy_file_range` are answered `ENOSYS`, and uutils asks
-
-uutils/coreutils reaches for both before falling back: `cat` and `cp` take a
-kernel-side copy where there is one. Every `test-vfs` boot since uutils owned
-`/bin` reports them, four to six times a run, as `syscall number 275` and
-`number 326` in no table. Nothing fails — the fallbacks are correct — but the
-lines are noise in every log, and a copy through user space is the slow path
-for exactly the programs a userland uses most.
-
-busybox never asked for either, which is the point: `std` and the crates
-above it are a much larger consumer of the kernel than busybox was, and what
-they need shows up at run time. 3 points, and the control is the absence of
-those two lines from a `test-vfs` log.
-
 ## `su` failed under the musl busybox, and `AF_UNIX` names fixed it
 
 `cargo xtask test-vfs --arch x86_64` with the Alpine musl busybox failed

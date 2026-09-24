@@ -27,7 +27,7 @@ use ferrix_linux_abi::types::{
     AT_FDCWD, AT_REMOVEDIR, F_GETFD, F_GETFL, FALLOC_FL_KEEP_SIZE, FALLOC_FL_PUNCH_HOLE,
     FD_CLOEXEC, FIOCLEX, FIONBIO, FIONCLEX, MAP_ANONYMOUS, MAP_PRIVATE, MS_NODEV, MS_NOEXEC,
     MS_NOSUID, MS_RELATIME, O_APPEND, O_CLOEXEC, O_CREAT, O_NONBLOCK, O_RDONLY, O_RDWR, O_TRUNC,
-    O_WRONLY, PROT_READ, PROT_WRITE, SEEK_CUR,
+    O_WRONLY, PROT_READ, PROT_WRITE, SEEK_CUR, SPLICE_F_NONBLOCK,
 };
 use ferrix_vfs::pipe::PIPEFS_MAGIC;
 use ferrix_vfs::tmpfs::{PageSource, Pages, Storage, TMPFS_MAGIC};
@@ -577,7 +577,8 @@ fn check_a_store_distrusts_and_cuts_its_source(
 /// What the pipe and filesystem call checks measured, for the boot log.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct CallsReport {
-    /// Bytes the checks moved through a pipe, a FIFO and `sendfile`.
+    /// Bytes the checks moved through a pipe, a FIFO, `sendfile`, `splice`
+    /// and `copy_file_range`.
     pub(crate) bytes: u64,
     /// Frames the second run cost. Zero, or a pipe, a FIFO's pipe or a file
     /// outlives its last descriptor.
@@ -633,6 +634,8 @@ const AT_LINK: u64 = 1104;
 const AT_LINK_PROC: u64 = 1136;
 /// Where zeros are read to.
 const AT_ZEROS: u64 = 1168;
+/// `/dev/null`, which `splice` drains a pipe into; after the zeros' 16.
+const AT_DEV_NULL: u64 = 1184;
 /// Where `/proc/mounts` is read to, to the end of the page.
 const AT_LISTING: u64 = 1536;
 
@@ -652,6 +655,7 @@ const SELF: &[u8] = b"/proc/self\0";
 const DEV_ZERO: &[u8] = b"/tmp/stage8-dev/zero\0";
 const MOUNTS: &[u8] = b"/proc/mounts\0";
 const SHM_FILE: &[u8] = b"/dev/shm/stage8\0";
+const DEV_NULL: &[u8] = b"/dev/null\0";
 
 /// The flags an init script mounts `/proc` with.
 const PROC_FLAGS: u32 = MS_NOSUID | MS_NODEV | MS_NOEXEC | MS_RELATIME;
@@ -743,6 +747,7 @@ fn check_the_calls(process: &Process) -> Result<u64, &'static str> {
         (AT_DEV_ZERO, DEV_ZERO),
         (AT_MOUNTS, MOUNTS),
         (AT_SHM_FILE, SHM_FILE),
+        (AT_DEV_NULL, DEV_NULL),
     ] {
         uaccess::copy_to_user(process.space(), page + offset, bytes)
             .map_err(|_| "could not stage the file system call checks")?;
@@ -755,6 +760,10 @@ fn check_the_calls(process: &Process) -> Result<u64, &'static str> {
         .and_then(|bytes| check_statfs_says_tmp_is_tmpfs(process, page).map(|()| bytes))
         .and_then(|bytes| check_truncate_and_fallocate_grow(process, page).map(|()| bytes))
         .and_then(|bytes| check_sendfile_copies_a_file(process, page).map(|sent| bytes + sent))
+        .and_then(|bytes| check_splice_moves_bytes(process, page).map(|moved| bytes + moved))
+        .and_then(|bytes| {
+            check_copy_file_range_copies_a_file(process, page).map(|copied| bytes + copied)
+        })
         .and_then(|bytes| check_dev_shm_holds_a_file(process, page).map(|()| bytes))
         .and_then(|bytes| check_proc_and_devtmpfs_mount(process, page).map(|()| bytes));
 
@@ -1285,6 +1294,288 @@ fn check_sendfile_copies_a_file(process: &Process, page: u64) -> Result<u64, &'s
         "sendfile's copy is not as long as what it sent",
     )?;
     Ok(17_990)
+}
+
+/// The descriptors the `splice` checks work with.
+#[derive(Clone, Copy)]
+struct Spliced {
+    reader: i32,
+    writer: i32,
+    reader2: i32,
+    writer2: i32,
+    null: i32,
+    source: i32,
+}
+
+/// `splice` moves bytes out of a pipe into `/dev/null`, which is how GNU grep
+/// drains its input; from a file at an offset into a pipe, moving the offset
+/// and not the file position; and from one pipe into another. It refuses as
+/// Linux does.
+fn check_splice_moves_bytes(process: &Process, page: u64) -> Result<u64, &'static str> {
+    answers(
+        pipe::sys_pipe2(process, page + AT_FDS, O_NONBLOCK),
+        0,
+        "pipe2 for splice was refused",
+    )?;
+    let (reader, writer) = pair(process, page)?;
+    answers(
+        pipe::sys_pipe2(process, page + AT_FDS, O_NONBLOCK),
+        0,
+        "a second pipe for splice was refused",
+    )?;
+    let (reader2, writer2) = pair(process, page)?;
+    let null = descriptor(
+        fd::sys_openat(process, AT_FDCWD, page + AT_DEV_NULL, O_WRONLY, 0),
+        "/dev/null would not open for splice",
+    )?;
+    let source = descriptor(
+        fd::sys_openat(process, AT_FDCWD, page + AT_FILE, O_RDONLY, 0),
+        "the file to splice would not open",
+    )?;
+    let fds = Spliced {
+        reader,
+        writer,
+        reader2,
+        writer2,
+        null,
+        source,
+    };
+    let moved = check_splice_through_pipes(process, page, fds)?;
+    check_splice_refuses(process, page, fds)?;
+    for fd in [source, null, reader, writer, reader2, writer2] {
+        answers(
+            fd::sys_close(process, fd),
+            0,
+            "a descriptor splice used would not close",
+        )?;
+    }
+    Ok(moved)
+}
+
+/// The moves [`check_splice_moves_bytes`] makes: a pipe into `/dev/null`, a
+/// file at an offset into a pipe, and that pipe into the second.
+fn check_splice_through_pipes(
+    process: &Process,
+    page: u64,
+    fds: Spliced,
+) -> Result<u64, &'static str> {
+    let len = DATA.len();
+    answers(
+        file::sys_write(process, fds.writer, page + AT_DATA, len as u64),
+        len,
+        "a write into a pipe to splice came back short",
+    )?;
+    // By number, as grep makes it: an `ENOSYS` from a missing table entry or
+    // dispatch line is what sent curl's configure looking for another grep.
+    answers(
+        by_number(
+            process,
+            Syscall::Splice,
+            [register(fds.reader), 0, register(fds.null), 0, 1 << 16, 0],
+        ),
+        len,
+        "splice from a pipe into /dev/null did not take what the pipe held",
+    )?;
+    refuses(
+        pipe::sys_splice(
+            process,
+            fds.reader,
+            0,
+            fds.null,
+            0,
+            1 << 16,
+            SPLICE_F_NONBLOCK,
+        ),
+        Errno::EAGAIN,
+        "splice from an empty pipe under SPLICE_F_NONBLOCK did not answer EAGAIN",
+    )?;
+
+    uaccess::copy_to_user(process.space(), page + AT_OFFSET, &10_u64.to_le_bytes())
+        .map_err(|_| "could not stage splice's offset")?;
+    answers(
+        pipe::sys_splice(process, fds.source, page + AT_OFFSET, fds.writer, 0, 5, 0),
+        5,
+        "splice from a file at an offset into a pipe did not move five bytes",
+    )?;
+    if read_back(process, page + AT_OFFSET, 8)? != 15_u64.to_le_bytes() {
+        return Err("splice did not move its offset past what it moved");
+    }
+    answers(
+        fd::sys_lseek(process, fds.source, 0, SEEK_CUR),
+        0,
+        "splice with an offset moved the file position",
+    )?;
+    answers(
+        pipe::sys_splice(process, fds.reader, 0, fds.writer2, 0, 64, 0),
+        5,
+        "splice from one pipe into another did not move what the first held",
+    )?;
+    answers(
+        file::sys_read(process, fds.reader2, page + AT_BACK, 64),
+        5,
+        "the pipe splice filled did not give back five bytes",
+    )?;
+    if read_back(process, page + AT_BACK, 5)?.as_slice() != DATA.get(10..15).unwrap_or_default() {
+        return Err("splice moved different bytes than the file holds");
+    }
+    Ok(len as u64 + 10)
+}
+
+/// What `splice` refuses, as Linux does: nothing to move is 0 before anything
+/// is looked at, and two descriptors neither of which is a pipe, an offset
+/// for a pipe, two ends of one pipe and an unknown flag are refused.
+fn check_splice_refuses(process: &Process, page: u64, fds: Spliced) -> Result<(), &'static str> {
+    answers(
+        pipe::sys_splice(process, fds.source, 0, fds.writer, 0, 0, 0),
+        0,
+        "splice of nothing did not answer 0",
+    )?;
+    refuses(
+        pipe::sys_splice(process, fds.source, 0, fds.null, 0, 1, 0),
+        Errno::EINVAL,
+        "splice between two descriptors neither of which is a pipe was not EINVAL",
+    )?;
+    refuses(
+        pipe::sys_splice(process, fds.reader, page + AT_OFFSET, fds.null, 0, 1, 0),
+        Errno::ESPIPE,
+        "splice took an offset for a pipe",
+    )?;
+    refuses(
+        pipe::sys_splice(process, fds.reader, 0, fds.writer, 0, 1, 0),
+        Errno::EINVAL,
+        "splice joined the two ends of one pipe",
+    )?;
+    refuses(
+        pipe::sys_splice(process, fds.reader, 0, fds.null, 0, 1, 0x10),
+        Errno::EINVAL,
+        "splice took a flag it does not know",
+    )
+}
+
+/// `copy_file_range` copies a file as `sendfile` does, with and without an
+/// offset, answers 0 at the input's end, and refuses flags, a pipe and a
+/// descriptor open the wrong way.
+fn check_copy_file_range_copies_a_file(process: &Process, page: u64) -> Result<u64, &'static str> {
+    let source = descriptor(
+        fd::sys_openat(process, AT_FDCWD, page + AT_FILE, O_RDONLY, 0),
+        "the file to copy_file_range would not open",
+    )?;
+    let copy = descriptor(
+        fd::sys_openat(
+            process,
+            AT_FDCWD,
+            page + AT_COPY,
+            O_WRONLY | O_CREAT | O_TRUNC,
+            0o644,
+        ),
+        "a file to copy_file_range into could not be created",
+    )?;
+    uaccess::copy_to_user(process.space(), page + AT_OFFSET, &10_u64.to_le_bytes())
+        .map_err(|_| "could not stage copy_file_range's offset")?;
+    let at_offset = [
+        register(source),
+        page + AT_OFFSET,
+        register(copy),
+        0,
+        1 << 20,
+        0,
+    ];
+    answers(
+        by_number(process, Syscall::CopyFileRange, at_offset),
+        8990,
+        "copy_file_range from an offset did not copy the rest of the file",
+    )?;
+    if read_back(process, page + AT_OFFSET, 8)? != 9000_u64.to_le_bytes() {
+        return Err("copy_file_range did not move its offset past what it copied");
+    }
+    answers(
+        fd::sys_lseek(process, source, 0, SEEK_CUR),
+        0,
+        "copy_file_range with an offset moved the file position",
+    )?;
+    answers(
+        fd::sys_lseek(process, copy, 0, SEEK_CUR),
+        8990,
+        "copy_file_range without an output offset did not move the output's position",
+    )?;
+    answers(
+        pipe::sys_copy_file_range(process, source, 0, copy, 0, 1 << 20, 0),
+        9000,
+        "copy_file_range from the file position did not copy the whole file",
+    )?;
+    answers(
+        pipe::sys_copy_file_range(process, source, 0, copy, 0, 1, 0),
+        0,
+        "copy_file_range at the input's end did not answer 0",
+    )?;
+    check_copy_file_range_refuses(process, page, source, copy)?;
+    answers(fd::sys_close(process, copy), 0, "the copy would not close")?;
+    answers(
+        fd::sys_close(process, source),
+        0,
+        "the copied file would not close",
+    )?;
+    copied_from_byte_ten()?;
+    size_is(
+        COPY,
+        17_990,
+        "copy_file_range's copy is not as long as what it copied",
+    )?;
+    Ok(17_990)
+}
+
+/// What `copy_file_range` refuses: any flag, a pipe, and an input open only
+/// for writing.
+fn check_copy_file_range_refuses(
+    process: &Process,
+    page: u64,
+    source: i32,
+    copy: i32,
+) -> Result<(), &'static str> {
+    refuses(
+        pipe::sys_copy_file_range(process, source, 0, copy, 0, 1, 1),
+        Errno::EINVAL,
+        "copy_file_range took a flag",
+    )?;
+    answers(
+        pipe::sys_pipe2(process, page + AT_FDS, O_NONBLOCK),
+        0,
+        "pipe2 for copy_file_range was refused",
+    )?;
+    let (reader, writer) = pair(process, page)?;
+    let from_a_pipe = pipe::sys_copy_file_range(process, reader, 0, copy, 0, 1, 0);
+    for fd in [reader, writer] {
+        answers(fd::sys_close(process, fd), 0, "a pipe would not close")?;
+    }
+    refuses(
+        from_a_pipe,
+        Errno::EINVAL,
+        "copy_file_range copied out of a pipe",
+    )?;
+    refuses(
+        pipe::sys_copy_file_range(process, copy, 0, source, 0, 1, 0),
+        Errno::EBADF,
+        "copy_file_range read from a descriptor open only for writing",
+    )
+}
+
+/// The copy `copy_file_range` made at [`COPY`] starts with the data's bytes
+/// from byte 10 on, as a copy of the file from an offset of 10 must.
+fn copied_from_byte_ten() -> Result<(), &'static str> {
+    let ns = fs::namespace();
+    let read = OpenFlags {
+        read: true,
+        ..OpenFlags::default()
+    };
+    let copied = ns
+        .open(&ns.context(), None, name(COPY), &read, 0)
+        .map_err(|_| "the copy copy_file_range made would not open")?;
+    let mut head = [0_u8; 5];
+    let expected = DATA.get(10..15).unwrap_or_default();
+    if copied.read_at(0, &mut head) != Ok(5) || head.as_slice() != expected {
+        return Err("copy_file_range copied different bytes than the file holds");
+    }
+    Ok(())
 }
 
 /// Make `call` by its number, as a program on this architecture would.

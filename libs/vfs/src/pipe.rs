@@ -121,6 +121,13 @@ impl PipeBuffer {
         self.capacity.saturating_sub(self.data.len())
     }
 
+    /// Bytes a write could queue now: what `splice` into the pipe may take
+    /// from its source without taking more than it can put down.
+    #[must_use]
+    pub fn room(&self) -> usize {
+        self.free()
+    }
+
     /// Whether [`PipeBuffer::read`] into a non-empty buffer would not answer
     /// [`ReadOutcome::WouldBlock`]: the condition a blocked reader waits for.
     #[must_use]

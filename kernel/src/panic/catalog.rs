@@ -1324,7 +1324,9 @@ pub(crate) static STAGE8_PIPES_AND_FILESYSTEM_CALLS: Explanation = Explanation {
               pipe for its openers. statfs of /tmp must decode TMPFS_MAGIC, and statfs64 must \
               take 84 and musl's 88 as its size. truncate and fallocate must grow a file and \
               fallocate never shrink one, and sendfile must copy a file with and without an \
-              offset. Then, by syscall number, mount -t proc and mount -t devtmpfs must each \
+              offset. splice must drain a pipe into /dev/null, fill a pipe from a file at an \
+              offset and move bytes between two pipes, and copy_file_range must copy a file, \
+              each refusing as Linux does. Then, by syscall number, mount -t proc and mount -t devtmpfs must each \
               make a new instance on a directory under /tmp: the check process must be found \
               through the procfs, zero must read zeros from the devtmpfs, /proc/mounts must \
               list both, both must unmount, and mount -t sysfs must still be ENODEV. The whole \
@@ -1337,6 +1339,8 @@ pub(crate) static STAGE8_PIPES_AND_FILESYSTEM_CALLS: Explanation = Explanation {
         "A `statfs` layout in `libs/linux-abi` or its encoder in `libs/vfs/src/statfs.rs` \
          moved a field, so the magic number is not where a program reads it.",
         "tmpfs's `grow_to` shrinks a file, or `sendfile` stopped putting its offset back.",
+        "`splice` or `copy_file_range` in `kernel/src/syscall/pipe.rs` moved the wrong bytes \
+         or offset, or `fs::pipe::splice_pipes` lost bytes between two pipes.",
     ],
     see: "kernel/src/fs/check.rs run_calls; kernel/src/fs/pipe.rs; kernel/src/syscall/pipe.rs; \
           kernel/src/syscall/fsctl.rs; libs/vfs/src/pipe.rs; libs/vfs/src/statfs.rs; \

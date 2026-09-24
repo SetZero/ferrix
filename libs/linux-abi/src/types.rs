@@ -1616,6 +1616,18 @@ pub const TFD_TIMER_ABSTIME: u32 = 1 << 0;
 /// timer with `ECANCELED` when the clock is set.
 pub const TFD_TIMER_CANCEL_ON_SET: u32 = 1 << 1;
 
+/// `splice`: move pages rather than copy them, a hint Linux has ignored since
+/// 2.6.21 and Ferrix ignores too.
+pub const SPLICE_F_MOVE: u32 = 0x0001;
+/// `splice`: do not wait on the pipe.
+pub const SPLICE_F_NONBLOCK: u32 = 0x0002;
+/// `splice`: more is coming, a hint for a socket.
+pub const SPLICE_F_MORE: u32 = 0x0004;
+/// `vmsplice`'s gift of its pages, which `splice` takes and ignores.
+pub const SPLICE_F_GIFT: u32 = 0x0008;
+/// Every flag `splice` takes; any other bit is `EINVAL`.
+pub const SPLICE_F_ALL: u32 = SPLICE_F_MOVE | SPLICE_F_NONBLOCK | SPLICE_F_MORE | SPLICE_F_GIFT;
+
 // ---------------------------------------------------------------------------
 // statx field mask
 // ---------------------------------------------------------------------------

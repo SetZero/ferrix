@@ -1,7 +1,8 @@
 //! The calls about a filesystem as a whole rather than one file in it:
 //! `statfs`, `sync` and its kin, `truncate`, `fallocate`, `chroot`, `mount`,
 //! `umount2`, `pivot_root` and the extended attributes. [`dispatch`] also
-//! routes `pipe`, `pipe2` and `sendfile` to `crate::syscall::pipe`, so that
+//! routes `pipe`, `pipe2`, `sendfile`, `splice` and `copy_file_range` to
+//! `crate::syscall::pipe`, so that
 //! stage 8's calls hang off `with_process` by one line.
 //!
 //! # Writing out
@@ -103,6 +104,14 @@ pub(crate) fn dispatch(
         Syscall::Pipe2 => pipe::sys_pipe2(process, a[0], super::truncate(a[1])),
         Syscall::Sendfile | Syscall::Sendfile64 => {
             pipe::sys_sendfile(process, fd, fd::arg(a[1]), a[2], a[3])
+        }
+        Syscall::Splice => {
+            let flags = super::truncate(a[5]);
+            pipe::sys_splice(process, fd, a[1], fd::arg(a[2]), a[3], a[4], flags)
+        }
+        Syscall::CopyFileRange => {
+            let flags = super::truncate(a[5]);
+            pipe::sys_copy_file_range(process, fd, a[1], fd::arg(a[2]), a[3], a[4], flags)
         }
         Syscall::Statfs => sys_statfs(process, a[0], a[1]),
         Syscall::Fstatfs => sys_fstatfs(process, fd, a[1]),

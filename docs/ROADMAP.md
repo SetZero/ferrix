@@ -6644,6 +6644,19 @@ the kernel were, and the gate found three of them:
   The file now says 1, Linux's `OVERCOMMIT_ALWAYS`, which is what the kernel
   does.
 
+Building the C programs on Ferrix found two more, both fixed (2026-09-23
+and 24):
+
+* **What `lld` wrote through a mapping was lost.** It writes its output
+  through `MAP_SHARED`, which a writable btrfs never wrote back, so a
+  proc-macro uutils needs read back as invalid metadata. See stage 12.
+* **GNU grep could not drain a pipe.** Writing to `/dev/null` from a pipe,
+  grep empties its input with `splice` and falls back to `read` only on
+  `EINVAL`; Ferrix answered `ENOSYS`, so `echo x | grep x >/dev/null` failed
+  and curl's `configure` concluded there was no grep. `splice` and
+  `copy_file_range` now go through a kernel buffer as `sendfile` does, with
+  the boot's pipe check calling both by number.
+
 What the exit needs beyond the first step:
 
 * **The other two architectures.** Their kernels and loaders are built for

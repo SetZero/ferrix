@@ -448,6 +448,8 @@ pub mod x86_64 {
     pub const SET_ROBUST_LIST: usize = 273;
     /// Read a thread's robust futex list.
     pub const GET_ROBUST_LIST: usize = 274;
+    /// Move bytes between a pipe and another descriptor inside the kernel.
+    pub const SPLICE: usize = 275;
     /// Set a file's access and modification times, to the nanosecond.
     pub const UTIMENSAT: usize = 280;
     /// Wait on an epoll set with a signal mask.
@@ -490,6 +492,8 @@ pub mod x86_64 {
     pub const EXECVEAT: usize = 322;
     /// Issue a process-wide memory barrier.
     pub const MEMBARRIER: usize = 324;
+    /// Copy a range of one regular file into another inside the kernel.
+    pub const COPY_FILE_RANGE: usize = 326;
     /// Stat a file with an explicit field mask and 64-bit timestamps.
     pub const STATX: usize = 332;
     /// Register a restartable sequence area.
@@ -647,6 +651,8 @@ pub mod aarch64 {
     pub const PSELECT6: usize = 72;
     /// Poll with a signal mask and a `timespec` timeout.
     pub const PPOLL: usize = 73;
+    /// Move bytes between a pipe and another descriptor inside the kernel.
+    pub const SPLICE: usize = 76;
     /// Read a symbolic link relative to a directory file descriptor.
     pub const READLINKAT: usize = 78;
     /// Stat a file relative to a directory file descriptor.
@@ -932,6 +938,8 @@ pub mod aarch64 {
     pub const EXECVEAT: usize = 281;
     /// Issue a process-wide memory barrier.
     pub const MEMBARRIER: usize = 283;
+    /// Copy a range of one regular file into another inside the kernel.
+    pub const COPY_FILE_RANGE: usize = 285;
     /// Stat a file with an explicit field mask and 64-bit timestamps.
     pub const STATX: usize = 291;
     /// Register a restartable sequence area.
@@ -1424,6 +1432,8 @@ pub mod arm {
     pub const SET_ROBUST_LIST: usize = 338;
     /// Read a thread's robust futex list.
     pub const GET_ROBUST_LIST: usize = 339;
+    /// Move bytes between a pipe and another descriptor inside the kernel.
+    pub const SPLICE: usize = 340;
     /// Report the processor and NUMA node the caller is running on.
     pub const GETCPU: usize = 345;
     /// Wait on an epoll set with a signal mask.
@@ -1469,6 +1479,8 @@ pub mod arm {
     pub const EXECVEAT: usize = 387;
     /// Issue a process-wide memory barrier.
     pub const MEMBARRIER: usize = 389;
+    /// Copy a range of one regular file into another inside the kernel.
+    pub const COPY_FILE_RANGE: usize = 391;
     /// Stat a file with an explicit field mask and 64-bit timestamps.
     pub const STATX: usize = 397;
     /// Register a restartable sequence area.
@@ -1764,6 +1776,10 @@ pub enum Syscall {
     /// Copy data between two file descriptors, with a 64-bit offset argument.
     /// ARMv7-A's form of [`Syscall::Sendfile`].
     Sendfile64,
+    /// Move bytes between a pipe and another descriptor inside the kernel.
+    Splice,
+    /// Copy a range of one regular file into another inside the kernel.
+    CopyFileRange,
     /// Create a socket.
     Socket,
     /// Connect a socket to an address.
@@ -2230,6 +2246,8 @@ fn x86_64_file_and_process(nr: usize) -> Option<Syscall> {
         x86_64::NANOSLEEP => Syscall::Nanosleep,
         x86_64::GETPID => Syscall::Getpid,
         x86_64::SENDFILE => Syscall::Sendfile,
+        x86_64::SPLICE => Syscall::Splice,
+        x86_64::COPY_FILE_RANGE => Syscall::CopyFileRange,
         x86_64::CLONE => Syscall::Clone,
         x86_64::FORK => Syscall::Fork,
         x86_64::VFORK => Syscall::Vfork,
@@ -2580,6 +2598,8 @@ fn aarch64_files(nr: usize) -> Option<Syscall> {
         aarch64::PREAD64 => Syscall::Pread64,
         aarch64::PWRITE64 => Syscall::Pwrite64,
         aarch64::SENDFILE => Syscall::Sendfile,
+        aarch64::SPLICE => Syscall::Splice,
+        aarch64::COPY_FILE_RANGE => Syscall::CopyFileRange,
         aarch64::PPOLL => Syscall::Ppoll,
         aarch64::READLINKAT => Syscall::Readlinkat,
         aarch64::NEWFSTATAT => Syscall::Newfstatat,
@@ -2957,6 +2977,8 @@ fn arm_ids_and_at_family(nr: usize) -> Option<Syscall> {
         arm::GETTID => Syscall::Gettid,
         arm::TKILL => Syscall::Tkill,
         arm::SENDFILE64 => Syscall::Sendfile64,
+        arm::SPLICE => Syscall::Splice,
+        arm::COPY_FILE_RANGE => Syscall::CopyFileRange,
         arm::FUTEX => Syscall::Futex,
         arm::SCHED_SETAFFINITY => Syscall::SchedSetaffinity,
         arm::SCHED_GETAFFINITY => Syscall::SchedGetaffinity,
