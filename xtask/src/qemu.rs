@@ -1122,6 +1122,28 @@ fn qemu_command(
     let _ = command.current_dir(paths::workspace_root());
 
     let _ = command.args(["-accel", &accelerator]);
+
+    // Structural coverage: a TCG plugin counts the basic blocks a boot
+    // actually executes, which is the only way to measure the kernel's
+    // coverage at all -- `docs/sysml/11-assurance.sysml` records that a
+    // fuzzer cannot drive a page-fault handler and Miri cannot interpret a
+    // privileged instruction, so QEMU is the only thing that reaches ring 0.
+    // `scripts/coverage-report.py` turns what it writes into line coverage
+    // per certification ring. docs/certification/VERIFICATION.md.
+    //
+    // A plugin only sees blocks TCG translates, so this refuses to run under
+    // KVM rather than reporting a boot's worth of coverage as zero.
+    if let Ok(plugin) = std::env::var("FERRIX_QEMU_PLUGIN") {
+        if accelerator != "tcg" {
+            return Err(Error::new(format!(
+                "FERRIX_QEMU_PLUGIN needs `--accel tcg`: a TCG plugin observes \
+                 translated blocks, and under {accelerator} the guest never \
+                 translates any, so coverage would read as zero rather than \
+                 as an error."
+            )));
+        }
+        let _ = command.args(["-plugin", &plugin]);
+    }
     let _ = command.args([
         "-m",
         &args.memory.to_string(),
