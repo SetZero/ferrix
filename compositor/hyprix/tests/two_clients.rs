@@ -2415,3 +2415,50 @@ fn a_small_commit_redraws_a_small_part_of_the_screen() {
          {report}"
     );
 }
+
+/// Hyprland's `env = NAME,value` reaches what the compositor starts, as it
+/// reaches everything Hyprland starts. A Vulkan program told
+/// `MESA_VK_WSI_DEBUG,sw` this way is what needed it (`docs/GPU.md` §6.1).
+///
+/// What `exec-once` starts here is a shell writing the variable to a file,
+/// which is read back once the compositor has finished.
+#[test]
+fn a_configured_variable_reaches_what_the_compositor_starts() {
+    let work = workspace("env");
+    let socket = work.join("wayland");
+    let said = work.join("said");
+    let script = work.join("say.sh");
+    std::fs::write(
+        &script,
+        format!("echo \"$FERRIX_ENV_TEST\" > {}\n", said.display()),
+    )
+    .expect("a script");
+    let config = undithered(&work);
+    let mut text = std::fs::read_to_string(&config).expect("the configuration");
+    text.push_str(&format!(
+        "env = FERRIX_ENV_TEST,from the configuration\nexec-once = /bin/sh {}\n",
+        script.display()
+    ));
+    std::fs::write(&config, text).expect("the configuration");
+    let options = Options {
+        display: socket.to_string_lossy().into_owned(),
+        headless: Some((WIDTH, HEIGHT)),
+        deadline: Some(2000),
+        config: Some(config),
+        ..Options::default()
+    };
+    let _ = hyprix::run(&options).expect("the compositor ran");
+    // The shell runs beside the compositor, so it is given a moment more.
+    let mut got = String::new();
+    for _ in 0..200 {
+        if let Ok(text) = std::fs::read_to_string(&said)
+            && text.ends_with('\n')
+        {
+            got = text;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    let _ = std::fs::remove_dir_all(&work);
+    assert_eq!(got.trim_end(), "from the configuration");
+}

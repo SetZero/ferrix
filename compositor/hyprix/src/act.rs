@@ -61,6 +61,9 @@ pub struct Around<'a> {
     /// it starts needs in `$HYPRLAND_INSTANCE_SIGNATURE` to find `hyprctl`'s
     /// socket.
     pub instance: Option<&'a str>,
+    /// The configuration's `env` variables, which a program it starts is
+    /// given.
+    pub env: &'a [(String, String)],
     /// The keyboard and the pointer.
     pub seat: &'a mut Seat,
     /// The plugins, which are the table's last entry.
@@ -196,7 +199,7 @@ fn argument_or<'a>(argument: &'a str, instead: &'a str) -> &'a str {
 /// `exec`: start a program with this compositor's socket in its
 /// environment.
 fn start(command: &str, around: &mut Around<'_>) -> bool {
-    match crate::state::start(command, around.socket, around.instance) {
+    match crate::state::start(command, around.socket, around.instance, around.env) {
         Ok(pid) => around.say(&format!("hyprix: started {command} as {pid}")),
         Err(error) => around.say(&format!("hyprix: {command} did not start: {error}")),
     }

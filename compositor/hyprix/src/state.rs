@@ -392,7 +392,12 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
     // sockets, because it connects to one as soon as it runs.
     let mut plugins = crate::plugins::Plugins::new();
     for command in &config.plugins {
-        match start(command, listener.path(), options.instance.as_deref()) {
+        match start(
+            command,
+            listener.path(),
+            options.instance.as_deref(),
+            &config.env,
+        ) {
             Ok(pid) => report(&format!("hyprix: plugin {command} started as {pid}")),
             Err(error) => report(&format!("hyprix: plugin {command} did not start: {error}")),
         }
@@ -408,7 +413,12 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
         .map(String::as_str)
         .chain(options.exec.iter().map(String::as_str))
     {
-        match start(command, listener.path(), options.instance.as_deref()) {
+        match start(
+            command,
+            listener.path(),
+            options.instance.as_deref(),
+            &config.env,
+        ) {
             Ok(pid) => report(&format!("hyprix: started {command} as {pid}")),
             // A program that will not start is the person's to fix, not a
             // reason to have no compositor; Hyprland logs it and carries on.
@@ -707,6 +717,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                     sources: &sources,
                     socket: listener.path(),
                     instance: options.instance.as_deref(),
+                    env: &config.env,
                     opened: &mut opened,
                     seat: &mut seat,
                     plugins: &mut plugins,
@@ -883,12 +894,17 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
         }
 
         let mut pending = Vec::new();
+        // A request may change the configuration, `env` among it, so what a
+        // program started here is given is the configuration's as the batch
+        // began.
+        let env = config.env.clone();
         for reply in asked {
             let mut around = crate::act::Around {
                 slots: &mut slots,
                 sources: &sources,
                 socket: listener.path(),
                 instance: options.instance.as_deref(),
+                env: &env,
                 opened: &mut opened,
                 seat: &mut seat,
                 plugins: &mut plugins,
@@ -3231,7 +3247,7 @@ fn created_empty(
         return;
     };
     let _ = around.opened.insert(workspace);
-    match start(&command, around.socket, around.instance) {
+    match start(&command, around.socket, around.instance, around.env) {
         Ok(pid) => around.say(&format!(
             "hyprix: workspace {} was made empty, started {command} as {pid}",
             workspace.0
@@ -5656,7 +5672,14 @@ fn read_config(options: &Options) -> Result<Config, String> {
     Ok(compositor_config::parse(&name, &text, &mut NoSources).config)
 }
 
-/// Start a program with `WAYLAND_DISPLAY` pointing at this compositor.
+/// Start a program with `WAYLAND_DISPLAY` pointing at this compositor, and
+/// with the configuration's `env` variables.
+///
+/// Hyprland's `env = NAME,value` sets a variable in the compositor's own
+/// environment, which everything it starts then inherits; this gives each
+/// program it starts the same, rather than changing a process that has
+/// threads. A Vulkan program told `MESA_VK_WSI_DEBUG,sw` is what needed it
+/// first (`docs/GPU.md` §6.1).
 ///
 /// # Errors
 ///
@@ -5667,11 +5690,15 @@ pub(crate) fn start(
     command: &str,
     socket: &std::path::Path,
     instance: Option<&str>,
+    env: &[(String, String)],
 ) -> Result<u32, String> {
     let mut parts = command.split_whitespace();
     let program = parts.next().ok_or_else(|| "an empty command".to_owned())?;
     let mut child = std::process::Command::new(program);
-    let _ = child.args(parts).env("WAYLAND_DISPLAY", socket);
+    let _ = child
+        .args(parts)
+        .envs(env.iter().map(|(name, value)| (name, value)))
+        .env("WAYLAND_DISPLAY", socket);
     // The environment Hyprland gives everything it starts
     // (`CCompositor::initServer`). Without it a program started by
     // `exec-once` cannot find the compositor to ask: `hyprctl` looks for
