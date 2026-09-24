@@ -431,6 +431,13 @@ mod command {
 /// pretended to reset and carried on running is not. The Ctrl-Alt-Del
 /// switches are accepted; there is no keyboard to send the combination.
 ///
+/// Every command that stops the machine commits `/` and `/data` first, as the
+/// kernel's own power-off does (`power::sync_disks`). Linux leaves that to the
+/// caller, and a caller that skips it -- busybox's `poweroff -f -n`, or a
+/// program that only knows the call -- loses the last transaction there; an
+/// init that synced first costs this a second sync with nothing to commit
+/// (`docs/INIT.md` §8.2, K7).
+///
 /// The line printed first is the one Linux prints, so a log reads the same.
 /// Commands for kexec and suspend are `EINVAL`, as on a kernel built without
 /// them.
@@ -445,6 +452,12 @@ pub(crate) fn sys_reboot(
     credentials::require_privilege(process)?;
     if magic1 != REBOOT_MAGIC1 || !REBOOT_MAGIC2.contains(&magic2) {
         return Err(Errno::EINVAL);
+    }
+    if matches!(
+        cmd,
+        command::POWER_OFF | command::HALT | command::RESTART | command::RESTART2
+    ) {
+        crate::power::sync_disks();
     }
     match cmd {
         command::CAD_ON | command::CAD_OFF => Ok(0),

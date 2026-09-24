@@ -1613,6 +1613,26 @@ pub(crate) static STAGE8_PROGRAM_FILES: Explanation = Explanation {
           docs/CHROME.md",
 };
 
+/// For `finish` in `power.rs`, when init exits under `ferrix.onexit=panic`.
+pub(crate) static INIT_EXITED: Explanation = Explanation {
+    code: "FX-1501",
+    title: "init exited, and ferrix.onexit=panic asked for a panic",
+    meaning: "The program the kernel started as pid 1 -- the one `ferrix.init=` named, or the \
+              one built in -- has exited, and the command line carries `ferrix.onexit=panic`, \
+              which asks for what Linux does when init dies. Without the option the machine \
+              commits its disks and powers off, and with `ferrix.onexit=reset` it resets. \
+              The disks were committed before this panic, as they are before a power-off.",
+    causes: &[
+        "Init ran to its end: a shell whose session was ended with `exit`, or a script that \
+         finished.",
+        "Init failed and exited: the `init ... exited with` line above this report gives its \
+         status, and its own output above that says why.",
+        "Nothing could be started at all: no program is built in, `ferrix.init=` named a file \
+         that would not start, and the image carries no /sbin/init.",
+    ],
+    see: "kernel/src/power.rs finish; kernel/src/init.rs run; docs/INIT.md §8.3",
+};
+
 /// For `handle_page_fault` in `trap.rs`, the `unhandled page fault` report.
 pub(crate) static UNHANDLED_PAGE_FAULT: Explanation = Explanation {
     code: "FX-9001",
@@ -1811,6 +1831,7 @@ pub(crate) static ALL: &[&Explanation] = &[
     &NETLINK,
     &STAGE12_WRITE,
     &STAGE13_CGROUPFS,
+    &INIT_EXITED,
     &UNHANDLED_PAGE_FAULT,
     &SYSTEM_CALL_TRAP,
     &ILLEGAL_INSTRUCTION,

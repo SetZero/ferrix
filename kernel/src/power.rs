@@ -8,24 +8,34 @@
 //! line asks for a reset instead, which lands back at the firmware's prompt,
 //! ready for the next image.
 //!
+//! `ferrix.onexit=panic` asks for what Linux does when init exits: a panic,
+//! here the one the catalog calls `FX-1501`. The disks are committed first,
+//! which Linux does not do, because nothing is gained by losing them
+//! (`docs/INIT.md` §8.3).
+//!
 //! The option is read once, early, rather than when boot ends: by then the
 //! device tree may be unreachable for reasons that have nothing to do with it,
 //! and a typo is better reported at the start of a log than discovered at the
 //! end of one.
 
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicU8, Ordering};
 
 use ferrix_bootinfo::{BootView, option_in};
 
 use crate::arch;
 use crate::console::println;
+use crate::panic::{catalog, fatal};
 
-/// The command-line option, and the one value of it that is honoured.
+/// The command-line option, and the values of it that are honoured.
 const OPTION: &str = "ferrix.onexit";
 const RESET: &str = "reset";
+const PANIC: &str = "panic";
 
-/// Whether boot ends in a reset rather than a power-off.
-static RESET_ON_EXIT: AtomicBool = AtomicBool::new(false);
+/// What boot ends in: one of the three below.
+static ON_EXIT: AtomicU8 = AtomicU8::new(POWER_OFF);
+const POWER_OFF: u8 = 0;
+const RESET_ON_EXIT: u8 = 1;
+const PANIC_ON_EXIT: u8 = 2;
 
 /// Read `ferrix.onexit` from the loader's command line or, on a machine
 /// described by a device tree, from `/chosen/bootargs`, where U-Boot puts
@@ -47,8 +57,12 @@ pub(crate) fn init(view: &BootView<'_>) {
     match value {
         None => {}
         Some(RESET) => {
-            RESET_ON_EXIT.store(true, Ordering::Relaxed);
+            ON_EXIT.store(RESET_ON_EXIT, Ordering::Relaxed);
             println!("  power    {OPTION}={RESET}: the machine resets when boot ends");
+        }
+        Some(PANIC) => {
+            ON_EXIT.store(PANIC_ON_EXIT, Ordering::Relaxed);
+            println!("  power    {OPTION}={PANIC}: the kernel panics when init exits");
         }
         Some(other) => {
             println!(
@@ -58,20 +72,34 @@ pub(crate) fn init(view: &BootView<'_>) {
     }
 }
 
-/// End boot the way [`init`] was told to.
-pub(crate) fn finish() -> ! {
-    // The root disk's last half-minute, which its committer has not reached
-    // yet. A failure is said and does not stop the power-off.
+/// Commit `/` and `/data`: the root disk's last half-minute, which its
+/// committer has not reached yet, and the data disk, which has none.
+///
+/// Before the machine stops, whoever stops it: [`finish`] when init has
+/// exited, and `reboot(2)` when a program asks, so that a program calling it
+/// without a `sync` of its own loses no transaction either. A failure is said
+/// and does not stop the machine stopping.
+pub(crate) fn sync_disks() {
     if crate::fs::root_disk::sync().is_err() {
         println!("  power    / could not be committed before the power-off");
     }
     if crate::fs::data_disk::sync().is_err() {
         println!("  power    /data could not be committed before the power-off");
     }
-    if RESET_ON_EXIT.load(Ordering::Relaxed) {
-        println!("  power    resetting, as {OPTION}={RESET} asks");
-        arch::reset()
-    } else {
-        arch::shutdown()
+}
+
+/// End boot the way [`init`] was told to.
+pub(crate) fn finish() -> ! {
+    sync_disks();
+    match ON_EXIT.load(Ordering::Relaxed) {
+        RESET_ON_EXIT => {
+            println!("  power    resetting, as {OPTION}={RESET} asks");
+            arch::reset()
+        }
+        PANIC_ON_EXIT => fatal!(
+            catalog::INIT_EXITED,
+            "init exited, and {OPTION}={PANIC} asks for a panic"
+        ),
+        _ => arch::shutdown(),
     }
 }

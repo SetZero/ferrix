@@ -1,7 +1,7 @@
 //! Host-side driver for building, imaging and booting Ferrix.
 //!
 //! ```text
-//! cargo xtask build     --arch x86_64 [--release] [--init PATH/{arch}/busybox]
+//! cargo xtask build     --arch x86_64 [--release] [--init PATH/{arch}/busybox] [--init-path /sbin/init]
 //! cargo xtask run       --arch x86_64 [--release] [--gdb] [--smp N] [--memory M]
 //!                       [--accel auto|tcg|whpx|kvm|hvf] [--init PATH/{arch}/busybox] [--net]
 //! cargo xtask test-boot --arch x86_64 [--release] [--timeout SECONDS] [--reset] [--net]
@@ -67,6 +67,7 @@ mod fat;
 mod ferrousli;
 mod flash;
 mod gateway;
+mod init_file;
 mod initramfs;
 mod input;
 mod jobs;
@@ -152,7 +153,8 @@ COMMANDS:
     test-btrfs    Boot, write a tree on the blank btrfs disk, and require host btrfs check to find nothing
     test-powerfail  Kill QEMU while it writes btrfs, replay at the next boot, and require btrfs check to pass, --seeds times
     test-boot     Boot the image under QEMU and assert the kernel came up
-    test-shell    Boot with a static busybox built in and require its script's output
+    test-shell    Boot with a static busybox built in and require its script's output; again with it
+                  started from a file by ferrix.init=; under busybox, require reboot(2) to commit /data
     test-vfs      Boot with busybox in the initramfs and require stage 8's exit programs and applets
     test-net      Boot with a network device and require busybox to configure it and fetch a file
     test-display  Boot compositor/blank as init with a virtio-gpu, and require its colour on every pixel
@@ -279,6 +281,9 @@ OPTIONS:
     --init <PATH|ferrousli>              The busybox; {arch} is replaced. build, run, flash, deploy: [or FERRIX_INIT]
                                          start `sh -i`, with the applets linked in /bin.
                                          `ferrousli`: the x86_64 busybox built against ferrousli, rebuilt when stale
+    --init-path <PATH>                   build, run, test-boot: ferrix.init=PATH in CMDLINE.TXT, so the
+                                         kernel starts pid 1 from that file in the image, and the
+                                         program built in only if it will not start
     --interpreter <PATH|ferrousli>       test-shell: a dynamic linker, carried at --init's PT_INTERP path; {arch} is replaced
                                          `ferrousli`: ferrousli's ld-ferrousli, built from this tree
     --library <PATH|ferrousli>           test-shell: a shared library, carried in /lib; as many as needed; {arch} is replaced
@@ -347,6 +352,17 @@ fn run() -> Result<()> {
                 let initramfs = initramfs::build(None, &natives, None, &carried)?;
                 let image = fat::write_image_with(arch, &loader, &kernel, &initramfs, None)?;
                 qemu::test_shell(arch, &image, &kernel, &args)?;
+                // The same shell and script again, started from files by
+                // `ferrix.init=`; and under busybox, `reboot(2)`'s commit.
+                let parts = init_file::Parts {
+                    arch,
+                    loader: &loader,
+                    kernel: &kernel,
+                    natives: &natives,
+                    program: &program,
+                    carried: &carried,
+                };
+                init_file::test(&parts, &args, args.init.is_some())?;
             }
             Ok(())
         }
@@ -541,9 +557,18 @@ fn test_net(args: &Args) -> Result<()> {
 }
 
 /// The command line an image carries: `ferrix.onexit=reset` under `--reset`, so
-/// the machine resets when boot ends and `test-boot` can require that it did.
-fn image_cmdline(args: &Args) -> Option<&'static str> {
-    args.reset.then_some(qemu::RESET_CMDLINE)
+/// the machine resets when boot ends and `test-boot` can require that it did,
+/// and `ferrix.init=<PATH>` under `--init-path`, so pid 1 is started from
+/// that file in the image.
+fn image_cmdline(args: &Args) -> Option<String> {
+    let mut options = Vec::new();
+    if args.reset {
+        options.push(qemu::RESET_OPTION.to_owned());
+    }
+    if let Some(path) = &args.init_path {
+        options.push(qemu::init_option(path));
+    }
+    (!options.is_empty()).then(|| format!("{}\n", options.join(" ")))
 }
 
 /// Compile both halves for `arch` and assemble the bootable image.
@@ -565,11 +590,12 @@ fn build_image(arch: Arch, args: &Args) -> Result<(PathBuf, PathBuf)> {
     let Some(program) = optional_program(arch, args)? else {
         let (loader, kernel) = build_halves(arch, args)?;
         let links = rustc::default_links(args);
+        let cmdline = image_cmdline(args);
         let image = if links.is_empty() {
-            fat::write_image(arch, &loader, &kernel, &natives, image_cmdline(args))?
+            fat::write_image(arch, &loader, &kernel, &natives, cmdline.as_deref())?
         } else {
             let archive = initramfs::build(None, &natives, None, &links)?;
-            fat::write_image_with(arch, &loader, &kernel, &archive, image_cmdline(args))?
+            fat::write_image_with(arch, &loader, &kernel, &archive, cmdline.as_deref())?
         };
         return Ok((image, kernel));
     };
@@ -586,7 +612,8 @@ fn build_image(arch: Arch, args: &Args) -> Result<(PathBuf, PathBuf)> {
         &utilities,
         &ports,
     )?;
-    let image = fat::write_image_with(arch, &loader, &kernel, &initramfs, image_cmdline(args))?;
+    let cmdline = image_cmdline(args);
+    let image = fat::write_image_with(arch, &loader, &kernel, &initramfs, cmdline.as_deref())?;
     Ok((image, kernel))
 }
 

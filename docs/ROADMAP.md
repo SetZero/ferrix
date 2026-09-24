@@ -76,7 +76,9 @@ and on ferrousli's loader and `libc.so.6` in glibc's place, on all three
 architectures, since ferrousli itself was ported to AArch64 and ARMv7-A on
 2026-09-23. Stage 15 has job control and lacks a real init;
 one is designed in `docs/INIT.md`, and it waits on stage 13's cgroups, which
-the customer put first on 2026-09-23.
+the customer put first on 2026-09-23. The kernel's half of starting one is
+in: `ferrix.init=` names the file pid 1 is started from, and `reboot(2)`
+commits the disks first.
 Networking is done: sockets, a net core and a ring-3 virtio-net driver, with
 `curl` fetching over HTTPS and `git` cloning inside the guest. Stages 17 and
 18 are met, and the compositor runs: `cargo xtask test-compositor` boots it
@@ -136,7 +138,7 @@ sizes them.
 | Stage 22, Steam: the parts with a first guess (bubblewrap's rest 13, sound 30, Venus 8; glibc's names are dynamic linking's 13 and XWayland stage 19's, both counted above) | 51 | not started |
 | Stage 22, Steam: the 32-bit x86 ABI and what the runtime and Proton find missing | unsized, ≈ 100 as a guess | not started |
 | Stage 14, real-time domains | *month* ≈ 40 | not started |
-| Stage 15, a real userland | *week* ≈ 20, of which job control is spent; most of the rest landed as zinc and uutils, and what is left is an init, sized at 67 points in `docs/INIT.md` §13, and 18 later | partially complete: init and gettys remain, designed, waiting on stage 13's cgroups |
+| Stage 15, a real userland | *week* ≈ 20, of which job control is spent; most of the rest landed as zinc and uutils, and what is left is an init, sized at 67 points in `docs/INIT.md` §13, of which L3's 3 are spent, and 18 later | partially complete: init and gettys remain, designed; the kernel's `ferrix.init=` and a committing `reboot(2)` landed 2026-09-24 (L3); the rest waits on stage 13's cgroups |
 | ~~Stage 16, `rustc`~~ *exit met 2026-09-22* | ~~*the goal* ≈ 40~~ 8 spent | done |
 | Stage 20, self-hosting | *longer*, unsized | in progress: the x86-64 image builds on Ferrix and boots (2026-09-23) |
 | Stage 21, bare metal and a GPU of Ferrix's own | over 100, unsized | planned when bare-metal work is requested |
@@ -4171,12 +4173,25 @@ session at the serial port through QEMU's stdin -- `sleep 30 &`, `jobs`,
 answer to each keystroke. `qemu::Watching::type_in` is the new half of the
 harness: until now every gate here only read what the guest said.
 
+**Done -- the kernel's half of starting an init (L3, 2026-09-24).**
+`ferrix.init=<path>` on the kernel command line starts pid 1 from that file
+in the switched root, a `#!` script under its interpreter, and falls back to
+the built-in program with one line saying why when the file will not start;
+xtask's `--init-path` writes it into `CMDLINE.TXT`. `reboot(2)` commits `/`
+and `/data` before it stops the machine, as the kernel's own power-off does,
+and `ferrix.onexit=panic` gives Linux's answer to init exiting (`FX-1501`).
+`cargo xtask test-shell` boots its shell a second time from
+`ferrix.init=/etc/shell-test`, and under busybox writes `/data/k7`, powers
+off with `poweroff -f -n` and reads the file back on a second boot of the
+same volume. `docs/INIT.md` §16 has the details and the negative controls.
+
 **Still to do:** a real init. The kernel starts the shell itself as pid 1
-(`kernel/src/init.rs`), so nothing in user space mounts `/proc` and `/dev`,
-reaps what a session orphans, gives a shell a session and a controlling
-terminal of its own, respawns one that dies, or brings the machine down. That
-is the rest of "a working init", and the other half of the word *ttys*: one
-console is one terminal, and a getty per terminal is what makes more of them.
+(`kernel/src/init.rs`) in every image but one that names another, so nothing
+in user space mounts `/proc` and `/dev`, reaps what a session orphans, gives a
+shell a session and a controlling terminal of its own, respawns one that dies,
+or brings the machine down. That is the rest of "a working init", and the
+other half of the word *ttys*: one console is one terminal, and a getty per
+terminal is what makes more of them.
 
 **Designed (2026-09-23): `docs/INIT.md`.** `/sbin/init` is pid 1 and a
 service manager in one program. Its units are in systemd's syntax, with
@@ -4187,9 +4202,9 @@ serve instead. Init hands each service a bootstrap channel and routes named
 native services between them.
 
 Init waits on stage 13's cgroups, which the customer put first. Its landings
-come to 67 points up to hyprix no longer being pid 1: six kernel items of 11
-points besides stage 13, and `cargo xtask test-init` growing a stage per
-landing. Its first two landings, the unit parser and the dependency engine,
+come to 67 points up to hyprix no longer being pid 1, 3 of them spent on L3:
+six kernel items of 11 points besides stage 13, two of them (K0, K7) built,
+and `cargo xtask test-init` growing a stage per landing. Its first two landings, the unit parser and the dependency engine,
 are host-only and can be built while stage 13 is.
 
 `test-jobs` is x86-64 only, because `sleep` is uutils' and uutils is built

@@ -7,7 +7,7 @@ second order of the same day: *build stage 13's cgroups first, and plan the
 init as if they exist*. Nothing here is built. §14 lists the decisions that
 are the customer's and not this document's; until they are answered, the
 draft answers are what the rest of the text assumes. The first, C8, was
-answered the same day.
+answered the same day. §16 says what has been built since.
 
 It finishes stage 15. `docs/ROADMAP.md` says what is left there: "nothing in
 user space mounts `/proc` and `/dev`, reaps what a session orphans, gives a
@@ -628,10 +628,16 @@ marked *later*, and it is the rehearsal that proves the backend table true.
 ### 8.1 Boot
 
 The kernel runs its boot checks, starts `devmgr`, switches the root, then
-starts **the program `ferrix.init=` names**, by default `/sbin/init` if it
-exists. Otherwise it runs the built-in program as today (K0). Every gate that
-embeds a shell or hyprix keeps working unchanged; `test-init` (§15) is the
-one that does not embed.
+starts **the program `ferrix.init=` names** (K0, built in L3). The file may
+be a `#!` script, run under its interpreter as `execve` runs one. A file that
+is missing or will not start is said on one line (`init     ferrix.init=…
+could not be started: …; falling back to the built-in program`), and the
+built-in program runs as before. With nothing named, the order is the
+built-in program, then `/sbin/init` if the image has one, then nothing. The
+built-in program goes first so that no gate that embeds a shell or hyprix
+can change: none of today's images carries a `/sbin/init`, and one that
+starts to must not take a gate's boot from it. `test-init` (§15) embeds
+nothing and names `/sbin/init`, so it reaches init either way.
 
 Init then:
 
@@ -672,16 +678,19 @@ A process in no service does not survive step 1: it is in some cgroup, and
 every cgroup but init's is killed. The cgroup tree is what makes "stop
 everything" mean everything.
 
-`reboot(2)` does not sync today, unlike `power::finish`. **K7** makes it sync,
-so that a program calling it directly cannot lose a btrfs transaction either.
+`reboot(2)` commits `/` and `/data` before it acts (**K7**, built in L3), as
+`power::finish` does, so a program calling it directly cannot lose a btrfs
+transaction either. Init's own `sync` in step 2 then leaves it nothing to
+commit.
 
 ### 8.3 When init dies
 
 Linux panics. The kernel here does what it does today when pid 1 exits: it
 prints `init     … exited with N` and runs `power::finish`, which syncs and
-powers off. That is what every gate relies on, so it stays. A kernel option
+powers off. That is what every gate relies on, so it stays. The kernel option
 `ferrix.onexit=panic`, beside `reset`, gives Linux's behaviour to anyone who
-wants it.
+wants it (L3): the disks are committed, and then the kernel panics with
+`FX-1501`.
 
 ## 9. The event loop
 
@@ -745,12 +754,12 @@ outside init as well:
 
 | | Change | Also wanted by | Points |
 |---|---|---|---|
-| K0 | `ferrix.init=<path>`: start pid 1 from a file, the embedded program as the fallback | any image that is not a gate | 2 |
+| K0 | `ferrix.init=<path>`: start pid 1 from a file, the embedded program as the fallback. **Done in L3** | any image that is not a gate | 2 |
 | K2 | Init started with a bootstrap channel, as `devmgr` is | §7.3 | 2 |
 | K3 | `process_give(pid, handle)`: a parent installs one handle in its own child that has not yet called `execve`; `process_bootstrap()` returns that handle once, to the child | any Linux program that starts a native-aware one | 2 |
 | K4 | `port_fd(port)`: a descriptor readable while the port has packets | hyprix and the terminal, once they use a native service | 3 |
 | K6 | Read a process's exit status and signal from its handle (in the reserved `0x1032..0x1037`) | `devmgr` reports 137 for every death today | 1 |
-| K7 | `reboot(2)` syncs `/` and `/data` first, as `power::finish` does | any program calling it | 1 |
+| K7 | `reboot(2)` syncs `/` and `/data` first, as `power::finish` does. **Done in L3** | any program calling it | 1 |
 
 Together that is 11 points. None of the six changes the ABI of an existing
 call. Version 1's K1 (jobs inherited by `fork`) and K5 (a signal to every
@@ -787,7 +796,7 @@ cgroup half is what §0 asks for first.
 |---|---|---|---|---|
 | L1 | `libs/svc`: the unit-file parser, drop-ins, templates, the model; a fuzzer | | host tests, Miri, fuzz | 5 |
 | L2 | `libs/svc`: the graph, transactions, operations, the slice tree, the restart policy, `step` | L1 | host tests replaying event scripts | 8 |
-| L3 | K0, K7 | | `test-boot`, `test-shell` | 3 |
+| L3 | K0, K7. **Done 2026-09-24** (§16) | | `test-boot`, `test-shell` | 3 |
 | L4 | `init` minimal: pid 1, reaping, `/run` and cgroupfs, `init.scope`, a cgroup per service, `simple`/`exec`/`oneshot`, `KillMode=`, restart, shutdown by `cgroup.kill`; `getty` and the generator | L2, L3, C1-C5 | `test-init` stages one and two (§15) | 10 |
 | L5 | Slices and scopes; the resource keys; `OOMPolicy=`; `Delegate=` | L4, C6, C7 | `test-init` stage three | 6 |
 | L6 | `svc` and the control socket; `log` output; `set-property`, `top` | L4 | `test-init` stage four | 5 |
@@ -860,3 +869,50 @@ stage's own failure. Stage two's control, for example, is `KillMode=process`
 on the forking service, which must leave the grandchild alive and fail that
 stage's check. `test-jobs` moves onto a getty under init, and then it tests
 the system people will actually use.
+
+## 16. Where it stands (2026-09-24)
+
+| | State | On `main` as |
+|---|---|---|
+| L3 | done, 2026-09-24 | "Start pid 1 from the file ferrix.init= names, and commit the disks in reboot(2)" |
+| L1, L2 | being built on `init/svc` | |
+| L4 to L13 | not started | |
+
+64 of L1 to L10's 67 points are left.
+
+**L3, as built (3 points).** K0: `ferrix.init=<path>` on the kernel command
+line (`CMDLINE.TXT`, or U-Boot's `bootargs` on a board) starts pid 1 from
+that file in the switched root, with the path as its only argument and
+`PATH=/bin HOME=/ TERM=dumb` as its environment; a `#!` script runs under
+its interpreter. The kernel prints `init     starting <argv>`, then
+`init     <path> exited with <status>`. A missing or unstartable file prints
+`init     ferrix.init=<path> could not be started: <why>; falling back to
+the built-in program`, and a path that is not absolute is refused when the
+option is read. `cargo xtask build`, `run` and `test-boot` take
+`--init-path <PATH>`, which writes `ferrix.init=<PATH>` into `CMDLINE.TXT`;
+`qemu::init_option` builds the same option for a test (§8.1 for the order
+of the defaults). K7: `reboot(2)` calls `power::sync_disks` before power-off,
+halt and restart. `ferrix.onexit=panic` makes init's exit panic with
+`FX-1501` after the disks are committed (§8.3).
+
+`cargo xtask test-shell` is the gate (`xtask/src/init_file.rs`). After its
+built-in boot it boots the same shell and script from files,
+`ferrix.init=/etc/shell-test`, and requires the kernel's `starting` and
+`exited with 7` lines and no fallback. Under busybox (`--init`) it then
+writes `/data/k7` on a fresh volume and runs `poweroff -f -n`, which skips
+busybox's own `sync`. A second boot of that volume, under
+`ferrix.onexit=panic`, must read the file back and then panic with
+`FX-1501`. A test boot has no root disk and so no committer, so only the
+call can have committed the file. The three negative controls fired by the
+checks' own messages: a wrong path (the fallback line, then "the kernel
+fell back to the built-in shell"), no `sync_disks` in `reboot(2)` ("/data/k7
+did not survive poweroff -f -n"), and no `ferrix.onexit=panic` ("did not
+panic with FX-1501"). Under zinc only the first boot runs, because zinc
+cannot make the call.
+
+**What the next session does first.** L4, once L2 and C1 to C5 are in
+(`docs/CGROUPS.md` §7.1 has G4 for C3). `cargo xtask test-init` builds an
+image with no program in the kernel and `/sbin/init` in the initramfs, and
+puts `qemu::init_option("/sbin/init")` into `CMDLINE.TXT`, as
+`init_file::Parts::image` does. It judges the kernel's `init     …` lines
+as `init_file` does.

@@ -31,15 +31,71 @@
 //! `xtask/src/vfs.rs` parses; the two change together. While a command runs,
 //! every call answered `ENOSYS` is reported too, up to a bound, which is what
 //! turns a failing run into the name of the call that is missing.
+//!
+//! # A program named on the command line
+//!
+//! `ferrix.init=<path>` starts pid 1 from that file instead, in the `/` the
+//! kernel switched to, as Linux's `init=` does (`docs/INIT.md` §8.1). It is
+//! how a real init starts, and how an image that is not a gate boots without
+//! a program built into its kernel. The file may be a `#!` script, which runs
+//! under its interpreter as `execve` would run it. A file that is missing or
+//! will not start is said on one line and the built-in program runs as if
+//! nothing had been named, so a mistyped path costs a boot log line and not a
+//! machine that does nothing.
+//!
+//! With nothing named and nothing built in, `/sbin/init` is started if the
+//! image has one, which is §8.1's default. Built-in first, because every gate
+//! builds its program in and none of them may change: no image carries a
+//! `/sbin/init` today, and one that starts to must not take a gate's boot
+//! from it.
 
 use alloc::vec::Vec;
 use core::fmt;
+
+use ferrix_bootinfo::{BootView, option_in};
+use ferrix_linux_abi::errno::Errno;
+use ferrix_sync::Once;
 
 use crate::console::println;
 use crate::fs;
 use crate::syscall::load::Source;
 use crate::syscall::program::ProgramFile;
 use crate::syscall::{self, exec};
+
+/// The command-line option naming the file pid 1 is started from.
+const OPTION: &str = "ferrix.init";
+
+/// The file started when nothing is named and nothing is built in.
+const DEFAULT_INIT: &[u8] = b"/sbin/init";
+
+/// What `ferrix.init=` named, read once, early.
+static NAMED: Once<Vec<u8>> = Once::new();
+
+/// Read `ferrix.init` from the loader's command line or, on a machine
+/// described by a device tree, from `/chosen/bootargs`, as `power::init`
+/// reads its option.
+///
+/// Early rather than when init starts, for `power::init`'s reason: a typo is
+/// better reported at the start of a log than at the end of one. A path that
+/// is not absolute is refused here, since there is no working directory yet
+/// to resolve it from.
+pub(crate) fn read_option(view: &BootView<'_>) {
+    let tree = crate::fdt::open(view).ok();
+    let value = view.option(OPTION).or_else(|| {
+        tree.as_ref()
+            .and_then(|tree| option_in(tree.bootargs()?, OPTION))
+    });
+    match value {
+        None => {}
+        Some(path) if path.starts_with('/') => {
+            let _ = NAMED.call_once(|| Vec::from(path.as_bytes()));
+            println!("  init     {OPTION}={path}: pid 1 is started from that file");
+        }
+        Some(other) => println!(
+            "  init     {OPTION}={other} is not an absolute path; the built-in program is started"
+        ),
+    }
+}
 
 /// The embedded program, or nothing. See `kernel/build.rs`.
 pub(crate) static IMAGE: &[u8] = include_bytes!(env!("FERRIX_INIT_IMAGE"));
@@ -81,18 +137,95 @@ const UNANSWERED_LINES: u32 = 16;
 /// the log is not the place to read it.
 const SHOWN_BYTES: usize = 60;
 
-/// Start the shell or run the commands, and report how each ended.
+/// Start the program `ferrix.init=` named, or the shell or the commands built
+/// in, or `/sbin/init`, and report how each ended.
 ///
 /// Returns when the last program exits, which on an interactive session is
 /// when somebody types `exit`.
 pub(crate) fn run() {
+    if let Some(path) = NAMED.get() {
+        match run_file(path) {
+            Ok(status) => {
+                println!("  init     {} exited with {status}", Argv(&[path]));
+                return;
+            }
+            Err(why) => println!(
+                "  init     {OPTION}={} could not be started: {why}; falling back to the \
+                 built-in program",
+                Argv(&[path])
+            ),
+        }
+    }
     if !COMMANDS.is_empty() {
         run_commands(COMMANDS);
         return;
     }
     if IMAGE.is_empty() {
+        run_default();
         return;
     }
+    run_built_in();
+}
+
+/// Why a file could not be started as pid 1.
+#[derive(Debug)]
+enum Refusal {
+    /// Opening it, or its `#!` interpreter, was refused.
+    Open(Errno),
+    /// It opened, and would not load or run.
+    Exec(exec::ExecError),
+}
+
+impl fmt::Display for Refusal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Refusal::Open(errno) => write!(f, "errno {}", errno.0),
+            Refusal::Exec(problem) => write!(f, "{problem:?}"),
+        }
+    }
+}
+
+/// Start the file at `path` as pid 1, and wait for it to end.
+///
+/// A `#!` script runs under its interpreter with its own path as the last
+/// argument, one level deep, as `execve` runs one; any other file runs with
+/// its path as its only argument, as Linux starts `init=`.
+fn run_file(path: &[u8]) -> Result<i32, Refusal> {
+    let ctx = fs::root_disk::process_context();
+    let (mut program, mut exe, _) = fs::open_program(&ctx, None, path).map_err(Refusal::Open)?;
+    let mut argv: Vec<Vec<u8>> = Vec::new();
+    if program.head().starts_with(b"#!") {
+        let (interpreter, argument) =
+            exec::interpreter_line(program.head()).map_err(Refusal::Open)?;
+        (program, exe, _) = fs::open_program(&ctx, None, &interpreter).map_err(Refusal::Open)?;
+        if program.head().starts_with(b"#!") {
+            return Err(Refusal::Open(Errno::ENOEXEC));
+        }
+        argv.push(interpreter);
+        argv.extend(argument);
+    }
+    argv.push(Vec::from(path));
+    let args: Vec<&[u8]> = argv.iter().map(Vec::as_slice).collect();
+    println!("  init     starting {}", Argv(&args));
+    start(&program, &exe, path, &args).map_err(Refusal::Exec)
+}
+
+/// §8.1's default: `/sbin/init`, when nothing was named or built in. An image
+/// without one is every image today, and says nothing.
+fn run_default() {
+    match run_file(DEFAULT_INIT) {
+        Ok(status) => println!("  init     {} exited with {status}", Argv(&[DEFAULT_INIT])),
+        Err(Refusal::Open(Errno::ENOENT)) => {}
+        Err(why) => println!(
+            "  init     {} could not be started: {why}",
+            Argv(&[DEFAULT_INIT])
+        ),
+    }
+}
+
+/// Start the program built into the kernel: `sh -i`, or `sh -c` with the
+/// built-in script.
+fn run_built_in() {
     let interactive: [&[u8]; 2] = [b"sh", b"-i"];
     let scripted: [&[u8]; 3] = [b"sh", b"-c", SCRIPT];
     let (args, how): (&[&[u8]], _) = if SCRIPT.is_empty() {

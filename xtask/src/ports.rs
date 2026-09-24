@@ -170,7 +170,7 @@ pub(crate) const FILES: &[Installed] = &[
 ];
 
 /// What an installed path is.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Content {
     /// A regular file's bytes.
     Bytes(Vec<u8>),
@@ -181,7 +181,7 @@ pub(crate) enum Content {
 }
 
 /// A path of [`FILES`] that is installed, with what is there.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct File {
     pub(crate) path: String,
     pub(crate) mode: u32,

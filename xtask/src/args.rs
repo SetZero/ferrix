@@ -93,6 +93,10 @@ pub(crate) struct Args {
     /// is replaced by each architecture's name, so one path serves `--arch all`.
     /// `ferrousli` names the busybox built against ferrousli, in `busybox.rs`.
     pub(crate) init: Option<String>,
+    /// `--init-path`, a file in the image the kernel starts as pid 1:
+    /// `ferrix.init=<PATH>` in `CMDLINE.TXT`. Absolute, and one word, since
+    /// the command line is split at white space.
+    pub(crate) init_path: Option<String>,
     /// `--interpreter`, a dynamic linker `test-shell` carries in the initramfs
     /// at the path `--init`'s `PT_INTERP` names. `{arch}` is replaced as it is
     /// in `--init`.
@@ -328,6 +332,7 @@ impl Args {
                 "--to" => args.to = Some(value(&mut items, "--to")?),
                 "--port" => args.port = Some(value(&mut items, "--port")?),
                 "--init" => args.init = Some(value(&mut items, "--init")?),
+                "--init-path" => args.init_path = Some(init_path(&mut items)?),
                 "--interpreter" => {
                     args.interpreter = Some(value(&mut items, "--interpreter")?);
                 }
@@ -408,6 +413,19 @@ impl Args {
             _ => Err(Error::new("this command needs exactly one --arch")),
         }
     }
+}
+
+/// Take `--init-path`'s value: absolute, since the kernel has no working
+/// directory to resolve it from, and one word, since the command line is
+/// split at white space.
+fn init_path(items: &mut impl Iterator<Item = String>) -> Result<String> {
+    let path = value(items, "--init-path")?;
+    if !path.starts_with('/') || path.contains(char::is_whitespace) {
+        return Err(Error::new(format!(
+            "--init-path wants an absolute path with no spaces, not `{path}`"
+        )));
+    }
+    Ok(path)
 }
 
 /// Take the value following a `--key`.

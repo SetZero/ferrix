@@ -290,8 +290,9 @@ fn kmain(view: &BootView<'_>, memory: &mut EarlyMemory) -> ! {
 
     println!("{SUCCESS_MARKER} stages 1-12");
 
-    // After the marker, on purpose: see `init`. Returns at once when no program
-    // was built in.
+    // After the marker, on purpose: see `init`. Returns at once when nothing
+    // was named by `ferrix.init=` or built in, and the image has no
+    // /sbin/init.
     init::run();
     power::finish()
 }
@@ -1804,6 +1805,7 @@ fn report_clocks_and_power(view: &BootView<'_>, clocks: &irq::Report) {
     power::init(view);
     fs::btrfs_powerfail::init(view);
     fs::root_disk::init(view);
+    init::read_option(view);
 }
 
 /// Print what interrupt and time bring-up found.

@@ -817,8 +817,10 @@ fn read_strings(space: &AddressSpace, at: u64, budget: &mut usize) -> Result<Vec
     }
 }
 
-/// The interpreter and its one optional argument from a `#!` line.
-fn interpreter_line(image: &[u8]) -> Result<(Vec<u8>, Option<Vec<u8>>), Errno> {
+/// The interpreter and its one optional argument from a `#!` line: what
+/// `execve` runs a script with, and what init does when `ferrix.init=` names
+/// one.
+pub(crate) fn interpreter_line(image: &[u8]) -> Result<(Vec<u8>, Option<Vec<u8>>), Errno> {
     let line = image.get(2..).ok_or(Errno::ENOEXEC)?;
     let end = line
         .iter()

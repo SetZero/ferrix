@@ -107,6 +107,22 @@ pub(crate) fn ensure_blank() -> Result<PathBuf> {
     Ok(path)
 }
 
+/// A fresh copy of the blank fixture at `build/<name>`, apart from the one
+/// [`ensure_blank`] attaches as `vdc`: a volume for a test to attach at
+/// `/data` and read back on a later boot (`init_file`'s `reboot(2)` check).
+///
+/// # Errors
+///
+/// The fixture being malformed, or the file not writable.
+pub(crate) fn blank_copy(name: &str) -> Result<PathBuf> {
+    let directory = paths::workspace_root().join("build");
+    std::fs::create_dir_all(&directory)?;
+    let path = directory.join(name);
+    write_packed(&path, BLANK)
+        .map_err(|error| Error::new(format!("writing {}: {error}", path.display())))?;
+    Ok(path)
+}
+
 /// The root image's name under `build/`: `/` in an interactive boot.
 const ROOT_FILE_NAME: &str = "root.img";
 

@@ -25,8 +25,16 @@ pub(crate) const SUCCESS_MARKER: &str = "FERRIX-BOOT-OK";
 /// kernel will not recover, and waiting out the timeout only hides the reason.
 pub(crate) const PANIC_MARKER: &str = "FERRIX-PANIC";
 
-/// The command line `--reset` puts in the image's `CMDLINE.TXT`.
-pub(crate) const RESET_CMDLINE: &str = "ferrix.onexit=reset\n";
+/// The option `--reset` puts in the image's `CMDLINE.TXT`.
+pub(crate) const RESET_OPTION: &str = "ferrix.onexit=reset";
+
+/// The option that has the kernel start pid 1 from the file at `path` in the
+/// image, rather than from the program built into it (`kernel/src/init.rs`):
+/// what `--init-path` puts in `CMDLINE.TXT`, and what a test that boots a
+/// program from a file puts there itself.
+pub(crate) fn init_option(path: &str) -> String {
+    format!("ferrix.init={path}")
+}
 
 /// What the kernel says once it has read that option.
 const RESET_ARMED: &str = "power    ferrix.onexit=reset: the machine resets when boot ends";

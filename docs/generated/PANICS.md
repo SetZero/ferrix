@@ -75,6 +75,7 @@ Causes are listed most likely first.
 | [FX-1152](#fx-1152) | AF_NETLINK did not answer the requests `ip` makes |
 | [FX-1201](#fx-1201) | a btrfs volume Ferrix wrote did not read back as it was written |
 | [FX-1301](#fx-1301) | cgroupfs did not show the job tree as cgroup v2 |
+| [FX-1501](#fx-1501) | init exited, and ferrix.onexit=panic asked for a panic |
 | [FX-9001](#fx-9001) | a page fault the kernel cannot resolve |
 | [FX-9002](#fx-9002) | a system call the trap path cannot carry out |
 | [FX-9003](#fx-9003) | the processor refused to execute an instruction |
@@ -1653,6 +1654,25 @@ again from its start, and not after.
 
 See: kernel/src/fs/cgroupfs.rs; kernel/src/object/job.rs; libs/cgroupfs;
 docs/CGROUPS.md.
+
+<a id="fx-1501"></a>
+
+## FX-1501 — init exited, and ferrix.onexit=panic asked for a panic
+
+The program the kernel started as pid 1 -- the one `ferrix.init=` named, or the
+one built in -- has exited, and the command line carries `ferrix.onexit=panic`,
+which asks for what Linux does when init dies. Without the option the machine
+commits its disks and powers off, and with `ferrix.onexit=reset` it resets. The
+disks were committed before this panic, as they are before a power-off.
+
+1. Init ran to its end: a shell whose session was ended with `exit`, or a script
+   that finished.
+2. Init failed and exited: the `init ... exited with` line above this report
+   gives its status, and its own output above that says why.
+3. Nothing could be started at all: no program is built in, `ferrix.init=` named
+   a file that would not start, and the image carries no /sbin/init.
+
+See: kernel/src/power.rs finish; kernel/src/init.rs run; docs/INIT.md §8.3.
 
 <a id="fx-9001"></a>
 
