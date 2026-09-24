@@ -309,14 +309,26 @@ impl<B: Bus> Bridge<B> {
 /// the three header bytes (type 0x82, version 2, length 13), which the
 /// checksum still covers.
 ///
-/// RGB, no overscan information, the picture aspect from the size (16:9 for
-/// a wide one, 4:3 otherwise), the active format the same as the picture,
-/// and `vic`, which is 0 for a mode CEA-861 does not number.
+/// RGB, no overscan information, the picture aspect, the active format the
+/// same as the picture, and `vic`, which is 0 for a mode CEA-861 does not
+/// number.
+///
+/// The picture aspect is the one the VIC's format has, which is the only
+/// way to tell VIC 2 (720x480 at 4:3) from VIC 3 (the same timing at 16:9);
+/// for a mode with no VIC it is 16:9 or 4:3 when the size is exactly that,
+/// and "no data" otherwise -- a 16:10 monitor's own size is neither, and
+/// saying 4:3 of it, as this did while the board ran only 720p, would ask a
+/// sink to squeeze it.
 #[must_use]
 pub fn avi_infoframe(vic: u8, width: u16, height: u16) -> [u8; 14] {
     const HEADER: [u8; 3] = [0x82, 0x02, 0x0D];
-    let wide = u32::from(width) * 9 >= u32::from(height) * 16;
-    let aspect: u8 = if wide { 0b10 } else { 0b01 };
+    let (w, h) = (u32::from(width), u32::from(height));
+    let aspect: u8 = match crate::timings::vic(vic) {
+        Some(format) => format.aspect,
+        None if w * 9 == h * 16 => 0b10,
+        None if w * 3 == h * 4 => 0b01,
+        None => 0,
+    };
     // PB1: Y = RGB, and A0 set: the active format in PB2 is valid.
     let pb1 = 0x10;
     // PB2: no colorimetry, the picture aspect, active format = picture.
