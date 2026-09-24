@@ -454,6 +454,8 @@ pub mod x86_64 {
     pub const UTIMENSAT: usize = 280;
     /// Wait on an epoll set with a signal mask.
     pub const EPOLL_PWAIT: usize = 281;
+    /// Create a signalfd, or change one's mask, with no flags.
+    pub const SIGNALFD: usize = 282;
     /// Create a timer that expires into a descriptor.
     pub const TIMERFD_CREATE: usize = 283;
     /// Create an eventfd with no flags.
@@ -464,6 +466,8 @@ pub mod x86_64 {
     pub const TIMERFD_GETTIME: usize = 287;
     /// Accept a connection, with flags for the new descriptor.
     pub const ACCEPT4: usize = 288;
+    /// Create a signalfd, or change one's mask, with flags.
+    pub const SIGNALFD4: usize = 289;
     /// Create an eventfd with flags.
     pub const EVENTFD2: usize = 290;
     /// Create an epoll set with flags.
@@ -651,6 +655,8 @@ pub mod aarch64 {
     pub const PSELECT6: usize = 72;
     /// Poll with a signal mask and a `timespec` timeout.
     pub const PPOLL: usize = 73;
+    /// Create a signalfd, or change one's mask, with flags.
+    pub const SIGNALFD4: usize = 74;
     /// Move bytes between a pipe and another descriptor inside the kernel.
     pub const SPLICE: usize = 76;
     /// Read a symbolic link relative to a directory file descriptor.
@@ -1441,6 +1447,8 @@ pub mod arm {
     /// Set a file's times from two `timespec`s of two `long`s -- 32 bits each
     /// here. [`UTIMENSAT_TIME64`] is the form a time64 musl calls.
     pub const UTIMENSAT: usize = 348;
+    /// Create a signalfd, or change one's mask, with no flags.
+    pub const SIGNALFD: usize = 349;
     /// Create a timer that expires into a descriptor.
     pub const TIMERFD_CREATE: usize = 350;
     /// Create an eventfd with no flags.
@@ -1451,6 +1459,8 @@ pub mod arm {
     /// Read a timerfd's time left and interval into 32-bit `timespec`s.
     /// [`TIMERFD_GETTIME64`] is the form a time64 musl calls.
     pub const TIMERFD_GETTIME: usize = 354;
+    /// Create a signalfd, or change one's mask, with flags.
+    pub const SIGNALFD4: usize = 355;
     /// Create an eventfd with flags.
     pub const EVENTFD2: usize = 356;
     /// Create an epoll set with flags.
@@ -2120,6 +2130,11 @@ pub enum Syscall {
     Eventfd2,
     /// Create an eventfd with no flags. x86-64 and ARMv7-A only.
     Eventfd,
+    /// Create a signalfd, or change one's mask, with flags.
+    Signalfd4,
+    /// Create a signalfd, or change one's mask, with no flags. x86-64 and
+    /// ARMv7-A only.
+    Signalfd,
     /// Create a timer that expires into a descriptor.
     TimerfdCreate,
     /// Arm or disarm a timerfd, from native-width `itimerspec`s.
@@ -2369,6 +2384,8 @@ fn x86_64_at_family(nr: usize) -> Option<Syscall> {
         x86_64::EPOLL_PWAIT => Syscall::EpollPwait,
         x86_64::EVENTFD => Syscall::Eventfd,
         x86_64::EVENTFD2 => Syscall::Eventfd2,
+        x86_64::SIGNALFD => Syscall::Signalfd,
+        x86_64::SIGNALFD4 => Syscall::Signalfd4,
         x86_64::EPOLL_CREATE1 => Syscall::EpollCreate1,
         x86_64::DUP3 => Syscall::Dup3,
         x86_64::PIPE2 => Syscall::Pipe2,
@@ -2601,6 +2618,7 @@ fn aarch64_files(nr: usize) -> Option<Syscall> {
         aarch64::SPLICE => Syscall::Splice,
         aarch64::COPY_FILE_RANGE => Syscall::CopyFileRange,
         aarch64::PPOLL => Syscall::Ppoll,
+        aarch64::SIGNALFD4 => Syscall::Signalfd4,
         aarch64::READLINKAT => Syscall::Readlinkat,
         aarch64::NEWFSTATAT => Syscall::Newfstatat,
         aarch64::FSTAT => Syscall::Fstat,
@@ -3024,6 +3042,8 @@ fn arm_recent(nr: usize) -> Option<Syscall> {
         arm::UTIMENSAT => Syscall::Utimensat,
         arm::EVENTFD => Syscall::Eventfd,
         arm::EVENTFD2 => Syscall::Eventfd2,
+        arm::SIGNALFD => Syscall::Signalfd,
+        arm::SIGNALFD4 => Syscall::Signalfd4,
         arm::EPOLL_CREATE1 => Syscall::EpollCreate1,
         arm::DUP3 => Syscall::Dup3,
         arm::PIPE2 => Syscall::Pipe2,

@@ -962,6 +962,59 @@ pub const MS_INVALIDATE: u32 = 2;
 /// `msync`: write back and wait for it.
 pub const MS_SYNC: u32 = 4;
 
+// `madvise`'s advice, from `include/uapi/asm-generic/mman-common.h`, which
+// x86-64, AArch64 and the ARM EABI all include unchanged: none of their
+// `asm/mman.h` defines an `MADV_*` of its own. `madvise` takes it as an `int`.
+
+/// `madvise`: no special treatment.
+pub const MADV_NORMAL: i32 = 0;
+/// `madvise`: expect references in no particular order.
+pub const MADV_RANDOM: i32 = 1;
+/// `madvise`: expect references in order.
+pub const MADV_SEQUENTIAL: i32 = 2;
+/// `madvise`: the pages will be needed soon.
+pub const MADV_WILLNEED: i32 = 3;
+/// `madvise`: the pages are not needed; drop them, so that private
+/// anonymous memory reads as zeros and a private file mapping as the file.
+pub const MADV_DONTNEED: i32 = 4;
+/// `madvise`: private anonymous pages may be dropped whenever memory is
+/// wanted, until they are written again.
+pub const MADV_FREE: i32 = 8;
+/// `madvise`: punch a hole in what a shared mapping maps.
+pub const MADV_REMOVE: i32 = 9;
+/// `madvise`: leave the range out of a `fork` child.
+pub const MADV_DONTFORK: i32 = 10;
+/// `madvise`: undo [`MADV_DONTFORK`].
+pub const MADV_DOFORK: i32 = 11;
+/// `madvise`: let KSM merge identical pages.
+pub const MADV_MERGEABLE: i32 = 12;
+/// `madvise`: undo [`MADV_MERGEABLE`].
+pub const MADV_UNMERGEABLE: i32 = 13;
+/// `madvise`: worth backing with huge pages.
+pub const MADV_HUGEPAGE: i32 = 14;
+/// `madvise`: not worth backing with huge pages.
+pub const MADV_NOHUGEPAGE: i32 = 15;
+/// `madvise`: leave the range out of a core dump.
+pub const MADV_DONTDUMP: i32 = 16;
+/// `madvise`: undo [`MADV_DONTDUMP`].
+pub const MADV_DODUMP: i32 = 17;
+/// `madvise`: a `fork` child gets the range as zeros.
+pub const MADV_WIPEONFORK: i32 = 18;
+/// `madvise`: undo [`MADV_WIPEONFORK`].
+pub const MADV_KEEPONFORK: i32 = 19;
+/// `madvise`: the pages are cold; reclaim them before others.
+pub const MADV_COLD: i32 = 20;
+/// `madvise`: reclaim the pages now.
+pub const MADV_PAGEOUT: i32 = 21;
+/// `madvise`: fault the range in, readable.
+pub const MADV_POPULATE_READ: i32 = 22;
+/// `madvise`: fault the range in, writable.
+pub const MADV_POPULATE_WRITE: i32 = 23;
+/// `madvise`: [`MADV_DONTNEED`], on `mlock`ed memory too.
+pub const MADV_DONTNEED_LOCKED: i32 = 24;
+/// `madvise`: collapse the range into huge pages now.
+pub const MADV_COLLAPSE: i32 = 25;
+
 // ---------------------------------------------------------------------------
 // clone
 // ---------------------------------------------------------------------------
@@ -1627,6 +1680,16 @@ pub const SPLICE_F_MORE: u32 = 0x0004;
 pub const SPLICE_F_GIFT: u32 = 0x0008;
 /// Every flag `splice` takes; any other bit is `EINVAL`.
 pub const SPLICE_F_ALL: u32 = SPLICE_F_MOVE | SPLICE_F_NONBLOCK | SPLICE_F_MORE | SPLICE_F_GIFT;
+/// Set close-on-exec on the descriptor `signalfd4` makes. `O_CLOEXEC`, by
+/// `linux/signalfd.h`, generic on all three architectures as [`TFD_CLOEXEC`]
+/// is.
+pub const SFD_CLOEXEC: u32 = O_CLOEXEC;
+/// Make the descriptor `signalfd4` makes non-blocking. `O_NONBLOCK`, by the
+/// same header.
+pub const SFD_NONBLOCK: u32 = O_NONBLOCK;
+/// Bytes in `struct signalfd_siginfo`, what one read of a signalfd returns
+/// per signal: fixed-width fields padded to 128 on every architecture.
+pub const SIGNALFD_SIGINFO_BYTES: usize = 128;
 
 // ---------------------------------------------------------------------------
 // statx field mask

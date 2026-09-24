@@ -46,6 +46,7 @@ const X86_64_ONLY: &[Syscall] = &[
     Syscall::ArchPrctl,
     Syscall::EpollCreate,
     Syscall::Eventfd,
+    Syscall::Signalfd,
     Syscall::EpollWait,
     Syscall::Getpgrp,
     Syscall::Alarm,
@@ -261,6 +262,7 @@ const SHARED: &[(usize, usize, Syscall)] = &[
         aarch64::TIMERFD_GETTIME,
         Syscall::TimerfdGettime,
     ),
+    (x86_64::SIGNALFD4, aarch64::SIGNALFD4, Syscall::Signalfd4),
     (x86_64::PSELECT6, aarch64::PSELECT6, Syscall::Pselect6),
     (
         x86_64::RT_SIGPENDING,
@@ -1234,6 +1236,53 @@ fn timerfd_flags_match_the_uapi_header() {
 }
 
 #[test]
+fn signalfd_flags_match_the_uapi_header() {
+    // `include/uapi/linux/signalfd.h`: the two flags are the open flags, and
+    // `struct signalfd_siginfo` is padded to 128 bytes.
+    assert_eq!(types::SFD_CLOEXEC, 0o2_000_000, "SFD_CLOEXEC is O_CLOEXEC");
+    assert_eq!(types::SFD_NONBLOCK, 0o4000, "SFD_NONBLOCK is O_NONBLOCK");
+    assert_eq!(
+        types::SIGNALFD_SIGINFO_BYTES,
+        128,
+        "signalfd_siginfo is 128 bytes"
+    );
+}
+
+#[test]
+fn madvise_advice_matches_the_generic_header() {
+    // `include/uapi/asm-generic/mman-common.h`, which none of the three
+    // architectures overrides. 5 to 7 are unused.
+    let advice = [
+        (types::MADV_NORMAL, 0),
+        (types::MADV_RANDOM, 1),
+        (types::MADV_SEQUENTIAL, 2),
+        (types::MADV_WILLNEED, 3),
+        (types::MADV_DONTNEED, 4),
+        (types::MADV_FREE, 8),
+        (types::MADV_REMOVE, 9),
+        (types::MADV_DONTFORK, 10),
+        (types::MADV_DOFORK, 11),
+        (types::MADV_MERGEABLE, 12),
+        (types::MADV_UNMERGEABLE, 13),
+        (types::MADV_HUGEPAGE, 14),
+        (types::MADV_NOHUGEPAGE, 15),
+        (types::MADV_DONTDUMP, 16),
+        (types::MADV_DODUMP, 17),
+        (types::MADV_WIPEONFORK, 18),
+        (types::MADV_KEEPONFORK, 19),
+        (types::MADV_COLD, 20),
+        (types::MADV_PAGEOUT, 21),
+        (types::MADV_POPULATE_READ, 22),
+        (types::MADV_POPULATE_WRITE, 23),
+        (types::MADV_DONTNEED_LOCKED, 24),
+        (types::MADV_COLLAPSE, 25),
+    ];
+    for (constant, header) in advice {
+        assert_eq!(constant, header, "an MADV_ value differs from the header");
+    }
+}
+
+#[test]
 fn file_type_bits_are_disjoint_under_the_mask() {
     let types_seen = [
         types::S_IFIFO,
@@ -1670,8 +1719,8 @@ fn table_sizes_are_stable() {
     );
     assert_eq!(
         mapped(from_aarch64).len(),
-        213,
-        "the AArch64 table maps 213 calls"
+        214,
+        "the AArch64 table maps 214 calls"
     );
 }
 /// Calls only ARMv7-A has, because it is the only 32-bit target.
@@ -1925,10 +1974,12 @@ const ARM_NUMBERS: &[(usize, Syscall)] = &[
     (345, Syscall::Getcpu),                   // getcpu
     (346, Syscall::EpollPwait),               // epoll_pwait
     (348, Syscall::Utimensat),                // utimensat
+    (349, Syscall::Signalfd),                 // signalfd
     (350, Syscall::TimerfdCreate),            // timerfd_create
     (351, Syscall::Eventfd),                  // eventfd
     (353, Syscall::TimerfdSettime),           // timerfd_settime
     (354, Syscall::TimerfdGettime),           // timerfd_gettime
+    (355, Syscall::Signalfd4),                // signalfd4
     (356, Syscall::Eventfd2),                 // eventfd2
     (357, Syscall::EpollCreate1),             // epoll_create1
     (358, Syscall::Dup3),                     // dup3
