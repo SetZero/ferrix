@@ -2001,6 +2001,12 @@ const SERIAL_SHELL: &str = "/bin/busybox setsid -c /bin/busybox sh -i";
 /// and nothing else (`docs/DISPLAY.md` §6).
 const BOARD_SCREEN: (u32, u32) = (1280, 720);
 
+/// The keyboard a board's desktop reads unless told otherwise: the German
+/// layout, which is the keyboard plugged into the DK1. It goes first in the
+/// configuration, so a `--config` that sets `input:kb_layout` and a
+/// `--layout`, appended at the end, each override it: a later line wins.
+const BOARD_LAYOUT: &str = "input:kb_layout = de\n";
+
 /// What `flash --compositor` puts on a card: the desktop `run-compositor`
 /// boots -- the compositor as init, its clients, `hyprctl`, a shell -- as the
 /// loader, the kernel and the initramfs `flash` copies.
@@ -2019,6 +2025,7 @@ pub(crate) fn board_files(arch: Arch, args: &Args) -> Result<(PathBuf, PathBuf, 
             .map_err(|error| Error::new(format!("reading {path}: {error}")))?,
         None => RUN_CONFIG.to_owned(),
     };
+    let config = format!("{BOARD_LAYOUT}{config}");
     // A shell with no `ls` or `mkdir` is what the board's first desktop had:
     // the only busybox `Carried::wanted` finds unasked is ferrousli's, which
     // has no ARM port. So the static one the gates boot is carried, when it
@@ -4277,7 +4284,7 @@ fn judge_foot(arch: Arch, said: &[String], screen: Option<&Image>, dump: &Path) 
 
 #[cfg(test)]
 mod tests {
-    use super::{RUN_CONFIG, back_after_the_last_kill, with_layout};
+    use super::{BOARD_LAYOUT, RUN_CONFIG, back_after_the_last_kill, with_layout};
     use crate::args::Args;
 
     fn said(text: &[&str]) -> Vec<String> {
@@ -4357,6 +4364,26 @@ mod tests {
         );
         assert!(appended.contains("killactive\n"), "{appended}");
         assert!(appended.ends_with("input:kb_layout = de\n"), "{appended}");
+    }
+
+    /// A board's desktop types German unless a `--config` or a `--layout`
+    /// says otherwise. The default is the first line, so either of those
+    /// comes after it and wins: the parser takes the last line that sets an
+    /// option, and has its own test for that.
+    #[test]
+    fn a_boards_keyboard_is_german_until_something_later_says_otherwise() {
+        assert_eq!(BOARD_LAYOUT, "input:kb_layout = de\n");
+        assert!(!RUN_CONFIG.contains("kb_layout"));
+
+        let flag = with_layout(
+            format!("{BOARD_LAYOUT}{RUN_CONFIG}"),
+            &Args {
+                layout: Some("fr".to_owned()),
+                ..Args::default()
+            },
+        );
+        assert!(flag.starts_with(BOARD_LAYOUT), "{flag}");
+        assert!(flag.ends_with("input:kb_layout = fr\n"), "{flag}");
     }
 
     /// The configuration a watched boot writes when nothing else was named

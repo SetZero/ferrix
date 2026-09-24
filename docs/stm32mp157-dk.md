@@ -391,7 +391,9 @@ any the terminal has only zinc's builtins -- which is how the board's first
 desktop, on 2026-09-23, answered `command not found: mkdir`, since the
 busybox `run-compositor` picks up unasked is ferrousli's, which has no ARM
 port yet. There is no `git` or uutils on ARMv7-A either way; they are built
-for x86-64 only. `--config <hyprland.conf>` carries a configuration
+for x86-64 only. The keyboard is German (`input:kb_layout = de`) unless
+`--layout` or the configuration's own `input:kb_layout` names another.
+`--config <hyprland.conf>` carries a configuration
 of your own, as it does for `run-compositor`; `--wallpaper <name>` a picture
 from `cargo xtask wallpapers` (none is the board's default: scaling one is
 real work for a 650 MHz Cortex-A7). The boot says:

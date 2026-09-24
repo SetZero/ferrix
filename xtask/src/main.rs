@@ -259,8 +259,9 @@ OPTIONS:
                                          do nothing else
     --                                   remote-desktop: everything after this goes to the
                                          remote `cargo xtask` as it stands
-    --layout <LIST>                      run-compositor: the keyboard layout, as input:kb_layout
-                                         takes it: `de`, or `de,us` for two a switch moves between
+    --layout <LIST>                      run-compositor, flash --compositor: the keyboard layout, as
+                                         input:kb_layout takes it: `de`, or `de,us` for two a switch
+                                         moves between [flash --compositor default: de]
     --variant <LIST>                     run-compositor: their variants, as input:kb_variant
                                          takes them: `nodeadkeys,` is one for the first layout only
     --wallpaper <NAME>                   run-compositor: which kept wallpaper to show, by part of its
