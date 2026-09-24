@@ -354,9 +354,7 @@ impl Args {
                 "--port" => args.port = Some(value(&mut items, "--port")?),
                 "--init" => args.init = Some(value(&mut items, "--init")?),
                 "--init-path" => args.init_path = Some(init_path(&mut items)?),
-                "--interpreter" => {
-                    args.interpreter = Some(value(&mut items, "--interpreter")?);
-                }
+                "--interpreter" => args.interpreter = Some(value(&mut items, "--interpreter")?),
                 "--library" => args.libraries.push(value(&mut items, "--library")?),
                 "--boot" => args.boot = Some(value(&mut items, "--boot")?),
                 "--host" => args.host = Some(value(&mut items, "--host")?),
