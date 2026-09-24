@@ -16,6 +16,10 @@
 //!
 //! The port is behind a lock, taken once per [`println!`], so two CPUs
 //! printing at once produce two whole lines rather than one line of both.
+//! Behind the lock is a ring of bytes waiting to be sent, which the port's
+//! transmit interrupt empties once there is one, so that a writer does not
+//! spend the whole of its write polling the port with interrupts masked: see
+//! [`output`] for who queues and who still polls.
 //!
 //! The lock is also the one way the console can make a failure *worse*: a CPU
 //! that faults while holding it — in the middle of formatting, say — would
@@ -26,6 +30,7 @@
 //! line is legible; one that never appears is not.
 
 pub(crate) mod input;
+pub(crate) mod output;
 
 use core::fmt::{self, Write};
 use core::hint::spin_loop;
@@ -33,17 +38,20 @@ use core::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 
 use ferrix_sync::IrqSpinLock;
 
+use self::output::Transmit;
+
 /// Whether [`crate::arch::init_console`] has run.
 static READY: AtomicBool = AtomicBool::new(false);
 
 /// Whether something is reporting a failure the kernel will not survive.
 static PANICKING: AtomicBool = AtomicBool::new(false);
 
-/// The port, one writer at a time.
+/// The port, and what waits to be sent to it, one writer at a time.
 ///
 /// Interrupt-masking so that a handler that prints cannot interrupt a line
-/// being printed on its own CPU and wait for it.
-static PORT: IrqSpinLock<Port, crate::arch::Irq> = IrqSpinLock::new(Port);
+/// being printed on its own CPU and wait for it, and because the port's
+/// transmit interrupt takes it.
+static PORT: IrqSpinLock<Transmit, crate::arch::Irq> = IrqSpinLock::new(Transmit::new());
 
 /// Attempts at the lock a panicking writer makes before writing without it.
 ///
@@ -88,14 +96,81 @@ pub(crate) fn begin_panic() {
     PANICKING.store(true, Ordering::Relaxed);
 }
 
-/// Somewhere for `format_args!` to go.
-struct Port;
+/// A writer holding the port: somewhere for `format_args!` and a program's
+/// bytes to go.
+struct Writer<'port> {
+    /// The port and its ring, under the lock.
+    port: &'port mut Transmit,
+    /// Whether bytes go into the ring for the transmit interrupt, or straight
+    /// to the port by polling.
+    queued: bool,
+    /// Whether bytes are kept in [`RECENT`] for a failure report: the
+    /// kernel's own lines are, a program's output is not.
+    remembered: bool,
+    /// Whether a flush on the way in made room a waiting writer can use.
+    wake: bool,
+}
 
-impl Write for Port {
-    fn write_str(&mut self, text: &str) -> fmt::Result {
-        for byte in text.bytes() {
+impl<'port> Writer<'port> {
+    /// Start writing to `port`. A writer that polls empties the ring first, so
+    /// that its bytes follow everything queued before them; one that queues
+    /// first looks for a port that has stopped taking bytes.
+    fn new(port: &'port mut Transmit, queued: bool, remembered: bool) -> Writer<'port> {
+        let wake = if queued { port.unstall() } else { port.flush() };
+        Writer {
+            port,
+            queued,
+            remembered,
+            wake,
+        }
+    }
+
+    /// One byte, as this writer sends them.
+    fn put(&mut self, byte: u8) {
+        if self.queued {
+            self.port.queue(byte);
+        } else {
+            crate::arch::console::write_byte(byte);
+        }
+    }
+
+    /// `bytes`, a bare newline as CRLF if `crlf`.
+    fn bytes(&mut self, bytes: &[u8], crlf: bool) {
+        for &byte in bytes {
             // A serial terminal wants CRLF; a bare newline leaves the cursor
             // where it was and the boot log becomes a staircase.
+            if crlf && byte == b'\n' {
+                self.put(b'\r');
+            }
+            self.put(byte);
+            if self.remembered {
+                remember(byte);
+            }
+        }
+    }
+
+    /// Give the port what it has room for of what was queued, and say whether
+    /// writers waiting for room should be woken once the lock is dropped.
+    fn finish(self) -> bool {
+        let pumped = self.queued && self.port.pump(output::by_writer());
+        self.wake || pumped
+    }
+}
+
+impl Write for Writer<'_> {
+    fn write_str(&mut self, text: &str) -> fmt::Result {
+        self.bytes(text.as_bytes(), true);
+        Ok(())
+    }
+}
+
+/// Somewhere for a failure report to go when the port's lock cannot be had:
+/// straight to the port, past the ring and whoever holds it.
+struct Unlocked;
+
+impl Write for Unlocked {
+    fn write_str(&mut self, text: &str) -> fmt::Result {
+        for byte in text.bytes() {
             if byte == b'\n' {
                 crate::arch::console::write_byte(b'\r');
             }
@@ -129,26 +204,78 @@ pub(crate) fn recent(out: &mut [u8]) -> usize {
     count
 }
 
+/// Whether a writer here may queue for the transmit interrupt rather than
+/// poll: the interrupt is installed, this processor takes interrupts, and
+/// nothing is reporting a failure. Asked before the lock, which masks them.
+fn may_queue() -> bool {
+    output::interrupt_driven()
+        && !PANICKING.load(Ordering::Relaxed)
+        && crate::arch::interrupts_enabled()
+}
+
 /// Write formatted output to the console, if there is one yet.
+///
+/// Queued with interrupts on and polled with them masked, as [`output`]
+/// explains, and never waiting for room: the idle task prints too.
 pub(crate) fn write(arguments: fmt::Arguments<'_>) {
     if !READY.load(Ordering::Acquire) {
         return;
     }
     if !PANICKING.load(Ordering::Relaxed) {
-        let _ = PORT.lock().write_fmt(arguments);
+        let queued = may_queue();
+        let wake = {
+            let mut port = PORT.lock();
+            let mut writer = Writer::new(&mut port, queued, true);
+            let _ = writer.write_fmt(arguments);
+            writer.finish()
+        };
+        if wake {
+            output::wake_writers();
+        }
         return;
     }
 
     for _ in 0..PANIC_SPINS {
         if let Some(mut port) = PORT.try_lock() {
-            let _ = port.write_fmt(arguments);
+            let _ = Writer::new(&mut port, false, true).write_fmt(arguments);
             return;
         }
         spin_loop();
     }
     // Whoever holds the lock is not going to release it — quite possibly
-    // because it is this CPU, part way through the line that failed.
-    let _ = Port.write_fmt(arguments);
+    // because it is this CPU, part way through the line that failed. What was
+    // queued stays queued; the report goes out.
+    let _ = Unlocked.write_fmt(arguments);
+}
+
+/// Send everything written so far, and wait until the port has, for a caller
+/// about to power off, reset or stop.
+///
+/// The ring first, polled out, then the port's own FIFO and shift register:
+/// `arch::drain_console` alone waits for a FIFO that is empty while the last
+/// lines are still in the ring, and a power-off straight after cuts them off,
+/// as `SYSTEM_OFF` cut a DK1's last line mid-word before the port was
+/// drained at all. During a failure report the lock is waited for a bounded
+/// time, as [`write`] waits for it, and the ring left as it is if the lock
+/// never comes.
+pub(crate) fn drain() {
+    if READY.load(Ordering::Acquire) {
+        if PANICKING.load(Ordering::Relaxed) {
+            for _ in 0..PANIC_SPINS {
+                if let Some(mut port) = PORT.try_lock() {
+                    let _ = port.flush();
+                    break;
+                }
+                spin_loop();
+            }
+        } else {
+            let wake = PORT.lock().flush();
+            if wake {
+                output::wake_writers();
+            }
+        }
+    }
+    crate::arch::drain_console();
 }
 
 /// Write raw bytes to the console.
@@ -174,18 +301,28 @@ pub(crate) fn write_raw(bytes: &[u8]) {
     emit(bytes, false);
 }
 
-/// Put `bytes` on the port under its lock, a bare newline as CRLF if asked.
+/// Send `bytes` to the port, a bare newline as CRLF if asked.
+///
+/// A task that may sleep queues them and waits for room while the ring is
+/// full, as a program writing to a Linux tty does; anything else writes them
+/// as [`write`] writes a line. See [`output`].
 fn emit(bytes: &[u8], crlf: bool) {
     if !READY.load(Ordering::Acquire) {
         return;
     }
-    let mut port = PORT.lock();
-    let _ = port.write_str("");
-    for &byte in bytes {
-        if crlf && byte == b'\n' {
-            crate::arch::console::write_byte(b'\r');
-        }
-        crate::arch::console::write_byte(byte);
+    let queued = may_queue();
+    if queued && crate::sched::may_block() {
+        output::write_waiting(bytes, crlf);
+        return;
+    }
+    let wake = {
+        let mut port = PORT.lock();
+        let mut writer = Writer::new(&mut port, queued, false);
+        writer.bytes(bytes, crlf);
+        writer.finish()
+    };
+    if wake {
+        output::wake_writers();
     }
 }
 

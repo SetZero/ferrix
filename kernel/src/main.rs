@@ -203,6 +203,12 @@ fn kmain(view: &BootView<'_>, memory: &mut EarlyMemory) -> ! {
     // takes and gives back are mappings the sweep below has to see settled.
     start_scheduler(cpus);
 
+    // The console's transmit side, as a program's output goes out: from a
+    // task, which the scheduler just made this, into the ring the port's
+    // interrupt empties. Early, because every line after this one is sent
+    // the way it checks.
+    check_console_output();
+
     // Stage 6, so far the memory objects a process is built from and the
     // processor translating through one of them. Here
     // rather than after `finish_memory` because it allocates and frees frames
@@ -1816,6 +1822,27 @@ fn start_console_input(view: &BootView<'_>) {
         None => println!(
             "  input    {} bytes back in order from the ring, {} past it counted; the port is polled",
             ring.held, ring.dropped
+        ),
+    }
+}
+
+/// A task's write to the console, checked to leave the writer at once and go
+/// out by the port's transmit interrupt, and said how it went.
+fn check_console_output() {
+    match console::output::check() {
+        Ok(Some(checked)) => println!(
+            "  output   {} of that line's {} bytes sent by the transmit interrupt into {}, {} by the writer",
+            checked.by_interrupt,
+            checked.line,
+            arch::console::transmit_buffer(),
+            checked.by_writer,
+        ),
+        Ok(None) => {
+            println!("  output   the port is polled: it has no interrupt this kernel installed");
+        }
+        Err(problem) => fatal!(
+            catalog::CONSOLE_OUTPUT,
+            "console output self-check failed: {problem}"
         ),
     }
 }

@@ -30,6 +30,17 @@ const CR1: u64 = 0x00;
 /// `CR1`: interrupt when a received byte is waiting, and on an overrun. Named
 /// `RXFNEIE` on a port with its FIFO enabled; the same bit either way.
 const CR1_RXNEIE: u32 = 1 << 5;
+/// `CR1`: interrupt while [`ISR_TXE`] is set. Named `TXFNFIE` on a port with
+/// its FIFO enabled, where it interrupts whenever the FIFO has a free slot —
+/// once per byte sent, which is why such a port uses [`CR1_TXFEIE`] instead.
+const CR1_TXEIE: u32 = 1 << 7;
+/// `CR1`: the port's FIFOs are enabled, sixteen bytes each way. Firmware
+/// decides; RM0436 lets it be changed only with the port disabled, and this
+/// driver does not disable a port a terminal is attached to.
+const CR1_FIFOEN: u32 = 1 << 29;
+/// `CR1`: interrupt while the transmit FIFO is empty (`ISR`'s `TXFE`, bit 23).
+/// Only on a port with its FIFO enabled.
+const CR1_TXFEIE: u32 = 1 << 30;
 /// Interrupt and status register.
 const ISR: u64 = 0x1C;
 /// `ISR`: there is room for another byte, in the transmit register or in the
@@ -178,4 +189,65 @@ pub(crate) fn enable_receive_interrupt() {
         return;
     }
     write(CR1, read(CR1) | CR1_RXNEIE);
+}
+
+/// How many bytes the port can take now without anyone waiting: one while
+/// [`ISR_TXE`] says there is room, in the transmit register or in the FIFO,
+/// which the caller asks again after each.
+pub(crate) fn transmit_room() -> usize {
+    // SAFETY: single-threaded, as documented on the `Sync` impl above.
+    if unsafe { *BASE.0.get() } == 0 {
+        return 0;
+    }
+    usize::from(read(ISR) & ISR_TXE != 0)
+}
+
+/// Hand the port one byte, for a caller [`transmit_room`] said it had room
+/// for.
+pub(crate) fn put(byte: u8) {
+    // SAFETY: single-threaded, as documented on the `Sync` impl above.
+    if unsafe { *BASE.0.get() } == 0 {
+        return;
+    }
+    write(TDR, u32::from(byte));
+}
+
+/// Let the port interrupt when it can take more to send, or stop it.
+///
+/// Which interrupt depends on whether firmware enabled the FIFO, and is read
+/// from the port each time rather than assumed: with it, when the FIFO has
+/// emptied (`TXFEIE`), so that each interrupt is a FIFO's worth — sixteen
+/// bytes, while the shift register is still sending the last one, so the line
+/// never goes idle between them; without it, when the one transmit register
+/// has (`TXEIE`), which is an interrupt a byte. Both are levels: the handler
+/// turns them off when it has nothing more, or they would never stop.
+pub(crate) fn transmit_interrupt(on: bool) {
+    // SAFETY: single-threaded, as documented on the `Sync` impl above.
+    if unsafe { *BASE.0.get() } == 0 {
+        return;
+    }
+    let control = read(CR1);
+    let enable = if control & CR1_FIFOEN != 0 {
+        CR1_TXFEIE
+    } else {
+        CR1_TXEIE
+    };
+    write(
+        CR1,
+        if on {
+            control | enable
+        } else {
+            control & !enable
+        },
+    );
+}
+
+/// Whether the port's FIFO is enabled, for the boot line that says how the
+/// console sends.
+pub(crate) fn has_fifo() -> bool {
+    // SAFETY: single-threaded, as documented on the `Sync` impl above.
+    if unsafe { *BASE.0.get() } == 0 {
+        return false;
+    }
+    read(CR1) & CR1_FIFOEN != 0
 }

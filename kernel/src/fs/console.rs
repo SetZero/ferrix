@@ -164,8 +164,9 @@ impl Inode for Console {
 
     /// Reports the number of bytes written, which for the console is all of
     /// them. A short count is legal in the ABI and every correct caller loops
-    /// on it, but there is nothing here that can be short: the console does
-    /// not block and has no buffer to fill.
+    /// on it, but there is nothing here that can be short: a writer that
+    /// finds the console's transmit ring full waits for room, as a Linux tty's
+    /// does, rather than returning what fitted (`console::output`).
     fn write_at(
         &self,
         _offset: u64,

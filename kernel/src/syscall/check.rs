@@ -730,8 +730,9 @@ const TEST_BASE: u64 = 0x2000_0000;
 ///
 /// Skipping them on the warm-up costs the measurement nothing: they allocate
 /// exactly what the other checks do -- one mapping through `map_rw` -- and
-/// `console::write_bytes` touches no heap at all, so there is no size class
-/// reachable only through them.
+/// `console::write_bytes` touches no heap unless the transmit ring is full,
+/// when its wait lists the task the way every other wait does, so there is no
+/// size class reachable only through them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Output {
     /// The warm-up run.
