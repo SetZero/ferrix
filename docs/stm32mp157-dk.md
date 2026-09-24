@@ -486,10 +486,9 @@ them (CTA VICs 32 to 34, which many HDMI monitors do), and some small ones;
 a monitor whose EDID says it takes any timing inside its range limits also
 gets its listed sizes retimed, 1920x1200 at about 29 Hz if its range goes
 that low. The board picks the largest, and never less than 720p60. At 1080p a
-full redraw in software costs 2.25 times 720p's, about 225 ms. **There is no input
-yet** on `main` as this is written (a USB keyboard and mouse driver is on its
-way), so the desktop is to look at, not to type into.
-A frame takes about 100 ms in software once warm.
+full redraw in software costs 2.25 times 720p's. A USB keyboard and mouse
+drive the desktop (`docs/INPUT.md` §7), and a focus change between two
+terminals is a frame of 26 to 30 ms (2026-09-24).
 
 If the display line says `left alone:` instead, it names what the kernel
 could not check -- a pixel clock other than 74.25 MHz, which means firmware

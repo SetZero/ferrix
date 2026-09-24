@@ -814,8 +814,10 @@ node was published, `devmgr   1 devices, 6 drivers, 1 started, 0 failed`,
 `compositor: scanout 1280x720 1280x720 colour 0x1e1e2e plane 4 Primary` and
 the customer saw that colour on the monitor. `hyprix` as init reported `1
 monitor [card0 HDMI-A-1 1280x720 1280x720]`, started a terminal running
-zinc, and the customer saw the tiled window. A frame takes about 100 ms in
-software on the 650 MHz Cortex-A7 once warm.
+zinc, and the customer saw the tiled window. A frame took about 100 ms in
+software on the 650 MHz Cortex-A7 once warm; since 2026-09-24's work on the
+board (`docs/ROADMAP.md`, the desktop at the speed of a hand) a focus change
+between two terminals is a frame of 26 to 30 ms, most of it the flip's wait.
 
 **Not done.** Input is done beside it: USB keyboards and mice on the board's
 USB host, 2026-09-23 (`docs/INPUT.md` §7). EDID blocks past the second (the

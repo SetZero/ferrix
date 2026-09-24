@@ -4724,12 +4724,36 @@ own `FERRIX/DEFAULTS.TXT`, beside and below the card owner's `CMDLINE.TXT`,
 and `test-compositor --boot desktop` gates it. Under QEMU at two processors
 the kernel's banner to its marker is 0.34 s against 4.94 s. `flash` strips
 the card's programs and kernel, and oh-my-zsh loses its documentation and
-pictures: the desktop's card is 26 MB where it was 47 MB. **Still to do:**
-the board's own numbers; hyprix opening input devices that arrive after it
-starts, since usbhid says its bus has settled after a first poll that finds
-nothing on the board, and the desktop has the keyboard only because the
-compositor takes longer to start than the hub takes to enumerate
-(`docs/INPUT.md` §7.3).
+pictures: the desktop's card is 26 MB where it was 47 MB. On the board the
+loader's banner to hyprix's first frame is 3.6 s where it was 11.7 s: the
+initramfs read in 0.9 s, the kernel's banner to its marker 1.5 s. hyprix
+opens input devices that arrive after it starts (the keyboard behind the
+hub, 0.8 s later, on every boot since). **Still to do:** the firmware's
+5.6 s -- TF-A and OP-TEE 3 s, of which OP-TEE's finding of its device tree
+is 1.4 s, and U-Boot's 2 s autoboot countdown, which is the saved
+environment's `bootdelay`.
+
+**Done — the board's desktop at the speed of a hand (2026-09-24).** The
+customer found the DK1's desktop lagging -- windows switching visibly, a
+command a second to come back, the terminal a minute to its first prompt --
+and the pointer drifting. hyprix's frame report now says where its slowest
+frame went and what it drew, and each cause was found by it on the board:
+the portrait monitor's turn (148 ms of a frame, now tiled), shadows and
+translucent surfaces blended through floating point (both now exact tables
+and the arithmetic written out), a focus change redrawing both windows
+(now their rings), clients repainting for every configure (now none), a
+test client printing each mouse motion to a console polled with interrupts
+masked (now quiet, and the console transmits by interrupt), input read once
+a frame from a queue of Linux's 35 ms (now drained, from a second's queue),
+and zinc's start (31 s cold, 3 s warm, 0.45 s a command; now 5.3 s, 1.2 s
+and 0.11 s). Circling the pointer between two terminals ran at 43 to 46
+frames a second, the slowest of each second 26 to 30 ms, most of it the
+flip's wait, where frames had been 300 to 650 ms. **Still to do:** pointer
+motion off the frame thread, so a frame being drawn cannot hold the
+pointer (the cursor plane below moves it only between frames); the first
+blur of a translucent window, still 0.6 to 1.9 s in f32 on this core; the
+Cortex-A7 at 800 MHz, which the STM32MP157D is rated for and firmware runs
+at 650, a raise of VDDCORE through the PMIC first.
 
 **Done — the board's pointer on the LTDC's second layer (2026-09-24).**
 The DK1's card has a cursor plane: `user/ltdc` offers the LTDC's second
