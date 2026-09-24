@@ -16,7 +16,7 @@ None of the four can be claimed today. What changed is that the reasons are now
 specific, measured, and mostly documents rather than code.
 
 * [ITEM.md](ITEM.md) — what the ratings attach to, and why it is not all of Ferrix
-* [FINDINGS.md](FINDINGS.md) — the audit register, 30 findings
+* [FINDINGS.md](FINDINGS.md) — the audit register, 31 open findings and 3 closed
 * [SECURITY-TARGET.md](SECURITY-TARGET.md) — EAL5+ claim, SFRs, and where it would fail evaluation
 * [SOUP.md](SOUP.md) — generated; the item contains none
 * `coverage-x86_64.json` — statement coverage evidence, per file

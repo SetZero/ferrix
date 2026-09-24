@@ -4,8 +4,9 @@ The audit register for the item defined in [ITEM.md](ITEM.md). One entry per
 finding, each naming what was measured, which objective it bears on, and what
 would close it.
 
-No finding here is closed by argument. A finding closes when the thing it
-describes stops being true and something in the build says so.
+31 findings are open and 3 are closed. No finding here is closed by argument:
+a finding closes when the thing it describes stops being true and something in
+the build says so.
 
 **Severity.** *Blocking* — a rating cannot be claimed while it stands.
 *Major* — a named objective is unmet. *Moderate* — an objective is partially
@@ -13,7 +14,7 @@ met or met without evidence. *Minor* — a defect with no objective attached yet
 
 | | Blocking | Major | Moderate | Minor | Informational |
 |---|---:|---:|---:|---:|---:|
-| Open | 4 | 10 | 11 | 4 | 1 |
+| Open | 4 | 10 | 12 | 4 | 1 |
 
 Blocking: F-20, F-22, F-27, F-28 — a hazard analysis, a safety case,
 independent assessment and a quality management system. Two are documents that
