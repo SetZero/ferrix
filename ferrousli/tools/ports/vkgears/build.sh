@@ -39,6 +39,15 @@
 #     is not there -- Ferrix carries no XKB data -- so the context was null
 #     and the first keymap crashed on it. The compositor sends a whole keymap,
 #     which needs no include path, so none is asked for.
+#   * vkgears-dispatch.patch: vkgears polled its display without waiting and
+#     then read it with wl_display_dispatch, which waits for an event of the
+#     default queue. Mesa's Wayland code reads the same display from threads
+#     of its own, and when one of them took what made the socket readable,
+#     vkgears waited for the next event -- which a compositor waiting for
+#     vkgears' next frame never sends. It reads with prepare_read and
+#     read_events now, as libwayland asks of a display shared between
+#     threads. Seen against hyprix, which offers wp_fifo_v1, so Mesa asks for
+#     no frame callbacks whose arrival had been hiding the race.
 #   * venus-open-by-name.patch: Venus found its render node through libdrm's
 #     drmGetDevices2, which reads sysfs, and Ferrix has none. When that finds
 #     nothing, the render nodes are opened by name and the first whose driver
@@ -273,6 +282,7 @@ step "vkgears"
 demos=$(unpack mesa-demos)
 logged vkgears-patch patch -d "$demos" -p1 -i "$here/patches/vkgears-seat.patch"
 logged vkgears-xkb-patch patch -d "$demos" -p1 -i "$here/patches/vkgears-xkb.patch"
+logged vkgears-dispatch-patch patch -d "$demos" -p1 -i "$here/patches/vkgears-dispatch.patch"
 for shader in gear.vert gear.frag; do
     logged "glslang-$shader" glslangValidator "$demos/src/vulkan/$shader" -V -x \
         -o "$generated/$shader.spv.h"
