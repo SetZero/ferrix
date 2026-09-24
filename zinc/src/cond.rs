@@ -56,7 +56,7 @@ pub(crate) fn unary(sh: &Shell, op: u8, s: &[u8]) -> Result<bool, String> {
             unsafe { libc::isatty(fd) == 1 }
         }
         b'o' => sh.opt(&crate::shell::option_key(s)),
-        b'v' => sh.get(s).is_some(),
+        b'v' => sh.is_set(s),
         _ => return Err(format!("unknown condition: -{}", char::from(op))),
     })
 }

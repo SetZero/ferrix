@@ -250,36 +250,50 @@ pub(crate) fn expand_brace(sh: &mut Shell, inner: &[u8], dq: bool) -> Result<Exp
         }
         _ => {}
     }
-    if value.is_none() {
-        let mut v = if name.is_empty() { None } else { sh.get(&name) };
-        if f.indirect
-            && let Some(target) = v.take()
-        {
-            v = sh.get(&target.joined());
-        }
-        let set = v.is_some();
-        value = v;
-        if !set && isset {
-            return Ok(Expansion {
-                value: Value::Scalar(b"0".to_vec()),
-                splat: false,
-                rc: false,
-                split: false,
-            });
-        }
-    }
     let mut splat = f.splat || !dq || name == b"@";
     // Subscript. The brackets are tokenized or plain, depending on where the
     // word they came from was quoted.
-    if inner.get(i).is_some_and(|&c| tok::detok(c) == b'[') {
+    let subscripted = inner.get(i).is_some_and(|&c| tok::detok(c) == b'[');
+    if value.is_none() && subscripted && !f.indirect && !name.is_empty() {
+        // A named parameter's element is read where the parameter is kept,
+        // rather than out of a copy of all of it.
         let end = close_sub(inner, i + 1);
         let sub = inner.get(i + 1..end).unwrap_or(&[]).to_vec();
         i = end + 1;
-        let (v, whole) = subscript(sh, value.take(), &sub)?;
+        let (v, whole) = subscript_named(sh, &name, &sub)?;
         if whole {
             splat = !dq || matches!(sub.first().map(|&c| tok::detok(c)), Some(b'@'));
         }
         value = v;
+    } else {
+        if value.is_none() {
+            let mut v = if name.is_empty() { None } else { sh.get(&name) };
+            if f.indirect
+                && let Some(target) = v.take()
+            {
+                v = sh.get(&target.joined());
+            }
+            let set = v.is_some();
+            value = v;
+            if !set && isset {
+                return Ok(Expansion {
+                    value: Value::Scalar(b"0".to_vec()),
+                    splat: false,
+                    rc: false,
+                    split: false,
+                });
+            }
+        }
+        if subscripted {
+            let end = close_sub(inner, i + 1);
+            let sub = inner.get(i + 1..end).unwrap_or(&[]).to_vec();
+            i = end + 1;
+            let (v, whole) = subscript(sh, value.take(), &sub)?;
+            if whole {
+                splat = !dq || matches!(sub.first().map(|&c| tok::detok(c)), Some(b'@'));
+            }
+            value = v;
+        }
     }
     if isset {
         return Ok(Expansion {
@@ -549,18 +563,37 @@ fn unquote(s: &[u8]) -> Vec<u8> {
     out
 }
 
-/// Apply a subscript. Returns the new value and whether it selected the
-/// whole array (`[@]`, `[*]`).
-fn subscript(
-    sh: &mut Shell,
-    v: Option<Value>,
-    sub: &[u8],
-) -> Result<(Option<Value>, bool), String> {
+/// A subscript with its words expanded: what it picks out of a value, apart
+/// from the value it will pick it out of.
+///
+/// Evaluating a subscript may run anything -- a command substitution, an
+/// assignment in arithmetic -- and so needs the shell to itself, while
+/// applying one only reads. Keeping the two apart is what lets an element be
+/// read where its parameter is kept ([`Shell::stored`]) instead of out of a
+/// copy of the whole array or hash, which is what every `$_comps[$name]`
+/// compinit asks cost until they were.
+enum Sub {
+    /// `(r)`, `(i)`, `(k)` and the rest: the flags, the pattern, and, for a
+    /// hash's `(k)`, the key to compare with exactly.
+    Flags {
+        flags: Vec<u8>,
+        pat: Pattern,
+        literal: Vec<u8>,
+    },
+    /// A hash's key.
+    Key(Vec<u8>),
+    /// An array's or a string's index, or the range `lo,hi`.
+    Index(i64, Option<i64>),
+}
+
+/// Whether a subscript is `[@]` or `[*]`, the whole array.
+fn is_whole(sub: &[u8]) -> bool {
+    matches!(sub, [c] if matches!(tok::detok(*c), b'@' | b'*'))
+}
+
+/// Evaluate a subscript for a value that is a hash (`assoc`) or is not.
+fn eval_subscript(sh: &mut Shell, sub: &[u8], assoc: bool) -> Result<Sub, String> {
     let plain: Vec<u8> = sub.iter().map(|&c| tok::detok(c)).collect();
-    if plain == b"@" || plain == b"*" {
-        return Ok((v, true));
-    }
-    let Some(v) = v else { return Ok((None, false)) };
     // Subscript flags: (r) (R) (i) (I) (k) (K).
     if plain.first() == Some(&b'(')
         && let Some(close) = plain.iter().position(|&c| c == b')')
@@ -571,93 +604,19 @@ fn subscript(
             &expand_pattern(sh, &crate::pattern::tokenize(&pat_word))?,
             sh.opt("extendedglob"),
         );
-        let elems: Vec<(Vec<u8>, Vec<u8>)> = match &v {
-            Value::Array(a) => a
-                .iter()
-                .enumerate()
-                .map(|(n, x)| ((n + 1).to_string().into_bytes(), x.clone()))
-                .collect(),
-            Value::Assoc(p) => p.clone(),
-            Value::Scalar(s) => vec![(b"1".to_vec(), s.clone())],
-        };
-        // A hash reads these flags differently from an array, and zsh's own
-        // `colors` depends on it: `i`/`I` match the *keys* and give keys
-        // back, `r`/`R` match the values and give values, `k`/`K` look a key
-        // up. The capital of each pair answers with every match rather than
-        // the first, so `${color[(I)fg-*]}` is every colour name there is.
-        if let Value::Assoc(pairs) = &v {
-            let keys = flags.contains(&b'i') || flags.contains(&b'I');
-            let exact = flags.contains(&b'k');
-            let by_key = keys || exact || flags.contains(&b'K');
-            let every = flags.contains(&b'I') || flags.contains(&b'R') || flags.contains(&b'K');
-            let literal = if exact {
-                expand_single(sh, &pat_word)?
-            } else {
-                Vec::new()
-            };
-            let mut found: Vec<Vec<u8>> = Vec::new();
-            for (key, value) in pairs {
-                let subject = if by_key { key } else { value };
-                let hit = if exact {
-                    *subject == literal
-                } else {
-                    pat.matches(&tok::unmetafy(subject))
-                };
-                if hit {
-                    found.push(if keys { key.clone() } else { value.clone() });
-                    if !every {
-                        break;
-                    }
-                }
-            }
-            return Ok(if every {
-                (Some(Value::Array(found)), true)
-            } else {
-                (
-                    Some(Value::Scalar(found.into_iter().next().unwrap_or_default())),
-                    false,
-                )
-            });
-        }
-        let reverse = flags.contains(&b'R') || flags.contains(&b'I');
-        let want_index = flags.contains(&b'i') || flags.contains(&b'I');
-        let by_key = flags.contains(&b'k') || flags.contains(&b'K');
-        let mut it: Box<dyn Iterator<Item = &(Vec<u8>, Vec<u8>)>> = if reverse {
-            Box::new(elems.iter().rev())
+        let literal = if assoc && flags.contains(&b'k') {
+            expand_single(sh, &pat_word)?
         } else {
-            Box::new(elems.iter())
+            Vec::new()
         };
-        let found = it.find(|(k, x)| pat.matches(&tok::unmetafy(if by_key { k } else { x })));
-        return Ok((
-            Some(Value::Scalar(match found {
-                Some((k, x)) => {
-                    if want_index {
-                        k.clone()
-                    } else {
-                        x.clone()
-                    }
-                }
-                None if want_index => {
-                    if reverse {
-                        b"0".to_vec()
-                    } else {
-                        (elems.len() + 1).to_string().into_bytes()
-                    }
-                }
-                None => Vec::new(),
-            })),
-            false,
-        ));
+        return Ok(Sub::Flags {
+            flags,
+            pat,
+            literal,
+        });
     }
-    if let Value::Assoc(pairs) = &v {
-        let key = expand_single(sh, sub)?;
-        return Ok((
-            pairs
-                .iter()
-                .find(|(k, _)| *k == key)
-                .map(|(_, x)| Value::Scalar(x.clone())),
-            false,
-        ));
+    if assoc {
+        return Ok(Sub::Key(expand_single(sh, sub)?));
     }
     let text = expand_single(sh, sub)?;
     let (a, b) = match text.iter().position(|&c| c == b',') {
@@ -672,45 +631,201 @@ fn subscript(
         Some(b) => Some(crate::arith::eval(sh, &b)?),
         None => None,
     };
-    let elems: Vec<Vec<u8>> = match &v {
-        Value::Array(x) => x.clone(),
-        other => {
-            let s = other.joined();
-            match std::str::from_utf8(&s) {
-                Ok(t) => t.chars().map(|c| c.to_string().into_bytes()).collect(),
-                Err(_) => s.iter().map(|&c| vec![c]).collect(),
-            }
-        }
-    };
-    let n = i64::try_from(elems.len()).unwrap_or(i64::MAX);
-    let norm = |x: i64| if x < 0 { n + x + 1 } else { x };
-    let (lo, hi) = (norm(lo), hi.map(norm));
-    let pick = |from: i64, to: i64| -> Vec<Vec<u8>> {
-        let from = from.max(1);
-        (from..=to.min(n))
-            .filter_map(|k| {
-                usize::try_from(k - 1)
-                    .ok()
-                    .and_then(|k| elems.get(k))
-                    .cloned()
-            })
-            .collect()
-    };
-    let is_array = matches!(v, Value::Array(_));
-    Ok((
-        Some(match hi {
-            Some(hi) => {
-                let part = pick(lo, hi);
-                if is_array {
-                    Value::Array(part)
-                } else {
-                    Value::Scalar(part.concat())
+    Ok(Sub::Index(lo, hi))
+}
+
+/// Apply an evaluated subscript to `v`. Returns what it picked and whether
+/// that is the whole array; only a flag that answers with every match is.
+fn apply_subscript(v: &Value, s: &Sub) -> (Option<Value>, bool) {
+    match s {
+        Sub::Flags {
+            flags,
+            pat,
+            literal,
+        } => {
+            // A hash reads these flags differently from an array, and zsh's
+            // own `colors` depends on it: `i`/`I` match the *keys* and give
+            // keys back, `r`/`R` match the values and give values, `k`/`K`
+            // look a key up. The capital of each pair answers with every
+            // match rather than the first, so `${color[(I)fg-*]}` is every
+            // colour name there is.
+            if let Value::Assoc(pairs) = v {
+                let keys = flags.contains(&b'i') || flags.contains(&b'I');
+                let exact = flags.contains(&b'k');
+                let by_key = keys || exact || flags.contains(&b'K');
+                let every = flags.contains(&b'I') || flags.contains(&b'R') || flags.contains(&b'K');
+                let mut found: Vec<Vec<u8>> = Vec::new();
+                for (key, value) in pairs {
+                    let subject = if by_key { key } else { value };
+                    let hit = if exact {
+                        subject == literal
+                    } else {
+                        pat.matches(&tok::unmetafy(subject))
+                    };
+                    if hit {
+                        found.push(if keys { key.clone() } else { value.clone() });
+                        if !every {
+                            break;
+                        }
+                    }
                 }
+                return if every {
+                    (Some(Value::Array(found)), true)
+                } else {
+                    (
+                        Some(Value::Scalar(found.into_iter().next().unwrap_or_default())),
+                        false,
+                    )
+                };
             }
-            None => Value::Scalar(pick(lo, lo).concat()),
-        }),
-        false,
-    ))
+            // An array's keys are its indices, counted from one; a string is
+            // an array of the one element.
+            let elems: &[Vec<u8>] = match v {
+                Value::Array(a) => a,
+                Value::Scalar(s) => std::slice::from_ref(s),
+                Value::Assoc(_) => &[],
+            };
+            let reverse = flags.contains(&b'R') || flags.contains(&b'I');
+            let want_index = flags.contains(&b'i') || flags.contains(&b'I');
+            let by_key = flags.contains(&b'k') || flags.contains(&b'K');
+            let index = |n: usize| (n + 1).to_string().into_bytes();
+            let hit = |&(n, x): &(usize, &Vec<u8>)| {
+                if by_key {
+                    pat.matches(&tok::unmetafy(&index(n)))
+                } else {
+                    pat.matches(&tok::unmetafy(x))
+                }
+            };
+            let found = if reverse {
+                elems.iter().enumerate().rev().find(hit)
+            } else {
+                elems.iter().enumerate().find(hit)
+            };
+            let text = match found {
+                Some((n, x)) => {
+                    if want_index {
+                        index(n)
+                    } else {
+                        x.clone()
+                    }
+                }
+                None if want_index => {
+                    if reverse {
+                        b"0".to_vec()
+                    } else {
+                        (elems.len() + 1).to_string().into_bytes()
+                    }
+                }
+                None => Vec::new(),
+            };
+            (Some(Value::Scalar(text)), false)
+        }
+        Sub::Key(key) => match v {
+            Value::Assoc(pairs) => (
+                pairs
+                    .iter()
+                    .find(|(k, _)| k == key)
+                    .map(|(_, x)| Value::Scalar(x.clone())),
+                false,
+            ),
+            // A key is only ever evaluated for a hash.
+            _ => (None, false),
+        },
+        Sub::Index(lo, hi) => {
+            let chars: Vec<Vec<u8>>;
+            let elems: &[Vec<u8>] = match v {
+                Value::Array(x) => x,
+                other => {
+                    let s = other.joined();
+                    chars = match std::str::from_utf8(&s) {
+                        Ok(t) => t.chars().map(|c| c.to_string().into_bytes()).collect(),
+                        Err(_) => s.iter().map(|&c| vec![c]).collect(),
+                    };
+                    &chars
+                }
+            };
+            let n = i64::try_from(elems.len()).unwrap_or(i64::MAX);
+            let norm = |x: i64| if x < 0 { n + x + 1 } else { x };
+            let (lo, hi) = (norm(*lo), hi.map(norm));
+            let pick = |from: i64, to: i64| -> Vec<Vec<u8>> {
+                let from = from.max(1);
+                (from..=to.min(n))
+                    .filter_map(|k| {
+                        usize::try_from(k - 1)
+                            .ok()
+                            .and_then(|k| elems.get(k))
+                            .cloned()
+                    })
+                    .collect()
+            };
+            let is_array = matches!(v, Value::Array(_));
+            (
+                Some(match hi {
+                    Some(hi) => {
+                        let part = pick(lo, hi);
+                        if is_array {
+                            Value::Array(part)
+                        } else {
+                            Value::Scalar(part.concat())
+                        }
+                    }
+                    None => Value::Scalar(pick(lo, lo).concat()),
+                }),
+                false,
+            )
+        }
+    }
+}
+
+/// Apply a subscript to a value already in hand. Returns the new value and
+/// whether it selected the whole array (`[@]`, `[*]`).
+fn subscript(
+    sh: &mut Shell,
+    v: Option<Value>,
+    sub: &[u8],
+) -> Result<(Option<Value>, bool), String> {
+    if is_whole(sub) {
+        return Ok((v, true));
+    }
+    let Some(v) = v else { return Ok((None, false)) };
+    let s = eval_subscript(sh, sub, matches!(v, Value::Assoc(_)))?;
+    Ok(apply_subscript(&v, &s))
+}
+
+/// `${name[sub]}`: [`subscript`] for the parameter `name`, reading the
+/// element where the parameter is kept rather than out of a copy of it, and
+/// one element of `$commands` or `$functions` without listing the rest.
+fn subscript_named(
+    sh: &mut Shell,
+    name: &[u8],
+    sub: &[u8],
+) -> Result<(Option<Value>, bool), String> {
+    if is_whole(sub) {
+        return Ok((sh.get(name), true));
+    }
+    if Shell::is_special(name) {
+        if matches!(name, b"commands" | b"functions" | b"aliases" | b"galiases") {
+            let s = eval_subscript(sh, sub, true)?;
+            if let Sub::Key(key) = &s
+                && let Some(found) = sh.special_element(name, key)
+            {
+                return Ok((found.map(Value::Scalar), false));
+            }
+            return Ok(sh
+                .get(name)
+                .map_or((None, false), |v| apply_subscript(&v, &s)));
+        }
+        let v = sh.get(name);
+        return subscript(sh, v, sub);
+    }
+    let assoc = match sh.stored(name) {
+        Some(v) => matches!(v, Value::Assoc(_)),
+        None => return Ok((None, false)),
+    };
+    let s = eval_subscript(sh, sub, assoc)?;
+    Ok(sh
+        .stored(name)
+        .map_or((None, false), |v| apply_subscript(v, &s)))
 }
 
 #[expect(clippy::too_many_lines, reason = "one arm per operator")]

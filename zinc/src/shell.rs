@@ -6,6 +6,37 @@ use std::rc::Rc;
 use crate::ast::List;
 use crate::lex::{AliasDef, LexEnv, LexOpts};
 
+/// FNV-1a, the hash of the tables the shell looks a name up in on nearly
+/// every word it expands: parameters, functions, options.
+///
+/// std's default is SipHash, which is keyed so that a hostile peer cannot
+/// choose keys that collide; nothing hostile chooses a shell's parameter
+/// names, and SipHash on names this short cost more than the look-up it
+/// served -- `Shell::opt` alone was a tenth of oh-my-zsh's start-up.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Fnv(u64);
+
+impl Default for Fnv {
+    fn default() -> Fnv {
+        Fnv(0xcbf2_9ce4_8422_2325)
+    }
+}
+
+impl std::hash::Hasher for Fnv {
+    fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.0 = (self.0 ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+
+    fn finish(&self) -> u64 {
+        self.0
+    }
+}
+
+/// A hash map keyed by [`Fnv`].
+pub(crate) type Table<K, V> = HashMap<K, V, std::hash::BuildHasherDefault<Fnv>>;
+
 /// A parameter's value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Value {
@@ -74,10 +105,10 @@ pub(crate) struct Function {
 /// The whole state of the shell.
 #[derive(Debug)]
 pub(crate) struct Shell {
-    pub(crate) vars: HashMap<Vec<u8>, Var>,
+    pub(crate) vars: Table<Vec<u8>, Var>,
     /// One frame per function call: the values `local` replaced.
     pub(crate) locals: Vec<Vec<(Vec<u8>, Option<Var>)>>,
-    pub(crate) functions: HashMap<Vec<u8>, Function>,
+    pub(crate) functions: Table<Vec<u8>, Function>,
     /// Names `autoload` marked. zsh looks the file up along `fpath` when the
     /// function is first called, not when it is marked, so a later `fpath`
     /// still counts.
@@ -94,7 +125,7 @@ pub(crate) struct Shell {
     pub(crate) status: i32,
     pub(crate) flow: Flow,
     pub(crate) loop_depth: u32,
-    pub(crate) options: HashMap<String, bool>,
+    pub(crate) options: Table<String, bool>,
     pub(crate) interactive: bool,
     pub(crate) pid: i32,
     pub(crate) last_bg: i32,
@@ -275,7 +306,7 @@ const DEFAULT_ON: &[&str] = &[
 impl Shell {
     /// A shell with zsh's defaults, the environment imported and exported.
     pub(crate) fn new(name: String) -> Shell {
-        let mut vars = HashMap::new();
+        let mut vars = Table::default();
         for (k, v) in std::env::vars_os() {
             use std::os::unix::ffi::OsStrExt;
             let mut var = Var::scalar(crate::tok::metafy(v.as_bytes()));
@@ -288,7 +319,7 @@ impl Shell {
         let mut sh = Shell {
             vars,
             locals: Vec::new(),
-            functions: HashMap::new(),
+            functions: Table::default(),
             autoloads: std::collections::HashSet::new(),
             autoload_files: HashMap::new(),
             aliases: HashMap::new(),
@@ -448,6 +479,120 @@ impl Shell {
             }
         }
         out
+    }
+
+    /// `$commands[name]`: where `$PATH` finds the program `name`, looked up
+    /// on its own rather than by listing every directory as [`commands`]
+    /// does. The answer is the one that table would give -- the first
+    /// directory holding an executable file of that name -- at one probe a
+    /// directory instead of one per program installed, which is the
+    /// difference between a prompt that asks `(( $+commands[git] ))` costing
+    /// a few system calls and costing a few hundred.
+    ///
+    /// [`commands`]: Shell::commands
+    fn command_path(&self, name: &[u8]) -> Option<Vec<u8>> {
+        // A directory listing never names anything with a slash in it, nor
+        // anything empty, so neither is ever a key of the whole table.
+        if name.is_empty() || name.contains(&b'/') {
+            return None;
+        }
+        let path = self.get(b"PATH").map_or_else(
+            || b"/bin:/usr/bin".to_vec(),
+            |v| crate::tok::unmetafy(&v.joined()),
+        );
+        path.split(|&c| c == b':').find_map(|dir| {
+            let mut full = if dir.is_empty() { &b"."[..] } else { dir }.to_vec();
+            full.push(b'/');
+            full.extend_from_slice(name);
+            crate::exec::is_executable(&full).then_some(full)
+        })
+    }
+
+    /// Whether `name` is a parameter [`get`] computes rather than one it
+    /// reads out of the table: the ones [`stored`] must not answer for.
+    ///
+    /// [`get`]: Shell::get
+    /// [`stored`]: Shell::stored
+    pub(crate) fn is_special(name: &[u8]) -> bool {
+        matches!(
+            prompt_name(name),
+            b"?" | b"$"
+                | b"#"
+                | b"ARGC"
+                | b"@"
+                | b"*"
+                | b"argv"
+                | b"0"
+                | b"!"
+                | b"LINENO"
+                | b"RANDOM"
+                | b"EPOCHSECONDS"
+                | b"commands"
+                | b"-"
+                | b"UID"
+                | b"EUID"
+                | b"GID"
+                | b"EGID"
+                | b"aliases"
+                | b"functions"
+                | b"galiases"
+                | b"path"
+        ) || name.first().is_some_and(u8::is_ascii_digit)
+    }
+
+    /// The value of an ordinary parameter, where it is kept, for reading
+    /// without the copy [`get`] makes. `None` for a special parameter, which
+    /// has no place of its own ([`is_special`]), as well as for one unset.
+    ///
+    /// A copy of a hash of every completion function is what reading one of
+    /// its elements cost when [`get`] was the only way in: compinit's
+    /// `$_comps[$cmd]` copied the whole table on each look, and the cold
+    /// start of a shell with oh-my-zsh spent most of its time copying.
+    ///
+    /// [`get`]: Shell::get
+    /// [`is_special`]: Shell::is_special
+    pub(crate) fn stored(&self, name: &[u8]) -> Option<&Value> {
+        if Shell::is_special(name) {
+            return None;
+        }
+        self.vars.get(prompt_name(name)).map(|v| &v.value)
+    }
+
+    /// Whether parameter `name` is set, without copying its value.
+    pub(crate) fn is_set(&self, name: &[u8]) -> bool {
+        if Shell::is_special(name) {
+            return self.get(name).is_some();
+        }
+        self.vars.contains_key(prompt_name(name))
+    }
+
+    /// One element of a special hash, `key` in `$commands`, `$functions`,
+    /// `$aliases` or `$galiases`, answered without building the whole hash
+    /// as [`get`] does. The outer `None` is for a name that is not one of
+    /// those; the inner one for a key it does not have.
+    ///
+    /// [`get`]: Shell::get
+    pub(crate) fn special_element(&self, name: &[u8], key: &[u8]) -> Option<Option<Vec<u8>>> {
+        Some(match name {
+            b"commands" => self.command_path(key),
+            b"functions" => {
+                if self.functions.contains_key(key) {
+                    Some(b"{ ... }".to_vec())
+                } else if self.autoloads.contains(key) {
+                    Some(b"builtin autoload -XU".to_vec())
+                } else {
+                    None
+                }
+            }
+            b"aliases" | b"galiases" => {
+                let global = name == b"galiases";
+                self.aliases
+                    .get(key)
+                    .filter(|definition| definition.global == global)
+                    .map(|definition| definition.text.clone())
+            }
+            _ => return None,
+        })
     }
 
     /// The value of parameter `name`, including the special ones.
