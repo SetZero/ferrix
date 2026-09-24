@@ -1445,7 +1445,7 @@ pub(crate) static STAGE8_EVENTFD: Explanation = Explanation {
               each write although it stays readable. A flag eventfd2 does not take, a buffer \
               shorter than eight bytes, a write of u64::MAX and lseek are refused as Linux refuses \
               them. A poll and an epoll_wait waiting on an eventfd in tasks of their own must be \
-              ended by a write's wake, and a 300 ms poll on a quiet eventfd must look at most 12 \
+              ended by a write's wake, and a 120 ms poll on a quiet eventfd must look at most 12 \
               times, sleeping on its queues rather than looking every 5 ms. The run is done twice \
               and must leave no frame behind.",
     causes: &[

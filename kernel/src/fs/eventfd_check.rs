@@ -50,10 +50,15 @@ const STILL_WAITING_NANOS: u64 = 20_000_000;
 const LISTED_LOOK_NANOS: u64 = 1_000_000;
 
 /// How long the quiet poll waits.
-const QUIET_POLL_MILLIS: i32 = 300;
+///
+/// Long enough that a wait looking every 5 ms looks twice as often as
+/// [`QUIET_POLL_LOOKS`] allows, and no longer: the poll is waited out in
+/// full, twice a boot, on every boot. It was 300 ms, which made this check
+/// 0.8 s of every boot on the DK1 and under QEMU alike (2026-09-24) for a
+/// margin of ten where two is plenty.
+const QUIET_POLL_MILLIS: i32 = 120;
 /// The most looks a quiet poll may take in that time: a wait trusting its
-/// queues takes two or three, one looking every 5 ms about a hundred and
-/// twenty.
+/// queues takes two or three, one looking every 5 ms about twenty-four.
 const QUIET_POLL_LOOKS: u64 = 12;
 /// The waiting `poll` or `epoll_wait`'s own timeout, far past the patience.
 const WAITER_TIMEOUT_MILLIS: i32 = 10_000;
