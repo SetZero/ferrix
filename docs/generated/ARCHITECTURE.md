@@ -102,7 +102,7 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixAssurance` | `11-assurance.sysml` | docs/RELIABILITY.md and docs/ASSEMBLY.md: the quality gates, what each one verifies, and what the tests can actually reach. The gates cargo xtask check runs are in CI. Of the xtask boot gates, CI runs test-boot and test-rustc; the ones that need a binary the repository does not carry, a disk judged on the host or a screendump run in the landing gates of docs/BACKLOG.md instead (docs/ROADMAP.md, Continuously). |
 | `FerrixViews` | `12-views.sysml` | How to read the one model as two: what runs today, and what the roadmap still owes. The filters key on the lifecycle keywords every element carries. |
 
-13 files, 16 packages, 1647 elements, 198 relations. Model digest `b661bb4aafb55e15`.
+13 files, 16 packages, 1647 elements, 198 relations. Model digest `d8bddb7d8252d5a5`.
 
 | Maturity | Elements | Meaning |
 | --- | ---: | --- |
@@ -794,7 +794,7 @@ flowchart TB
 
 ### The kernel's bring-up
 
-kmain. Every stage's exit criterion runs here on every boot, and each failure panics with its own message so the boot test fails with a reason rather than a timeout. The marker at the end reads FERRIX-BOOT-OK stages 1-12. Stages 1 to 5 are broken down into their checks below; from stage 6 on each step names the check function in kernel/src/main.rs, in the order kmain calls them, which is not the stages' order.
+kmain. Every stage's exit criterion runs here on every boot, and each failure panics with its own message so the boot test fails with a reason rather than a timeout. The marker at the end reads FERRIX-BOOT-OK stages 1-12. ferrix.checks=skip (a desktop's image, kernel/src/checks.rs) keeps every bring-up step and leaves out the checks, and the marker then reads FERRIX-BOOT-UNCHECKED, which no boot test accepts. Stages 1 to 5 are broken down into their checks below; from stage 6 on each step names the check function in kernel/src/main.rs, in the order kmain calls them, which is not the stages' order.
 
 1. `validateHandoff` — Magic, version, arch and layout constants. No console yet, so a mismatch halts silently: there is no valid way to make one.
 2. `initConsole`

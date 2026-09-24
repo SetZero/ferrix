@@ -22,6 +22,7 @@ mod acpi;
 mod arch;
 mod backtrace;
 mod block_ring;
+mod checks;
 mod claim;
 mod console;
 mod device;
@@ -71,6 +72,11 @@ use panic::{catalog, fatal};
 /// `xtask/src/qemu.rs`, and the two are checked against each other there.
 const SUCCESS_MARKER: &str = "FERRIX-BOOT-OK";
 
+/// What a boot that skipped its self-checks prints where the success marker
+/// would be (`checks` says why it is another word). Checked against
+/// `xtask/src/qemu.rs` beside the success marker.
+const UNCHECKED_MARKER: &str = "FERRIX-BOOT-UNCHECKED";
+
 /// The kernel's entry point.
 ///
 /// The loader calls this with the boot info pointer as its only argument; the
@@ -117,6 +123,9 @@ fn kmain(view: &BootView<'_>, memory: &mut EarlyMemory) -> ! {
         );
     }
     println!("  stage 1  loader hand-off verified");
+    // Whether the rest of the stages check what they bring up. Read here,
+    // after the one check that always runs and before the first that may not.
+    checks::init(view);
 
     // Before anything else, and before anything can fault: until this runs the
     // CPU is still pointing at firmware's handlers, which stopped existing at
@@ -143,19 +152,12 @@ fn kmain(view: &BootView<'_>, memory: &mut EarlyMemory) -> ! {
         );
     }
 
-    if let Err(problem) = memory_check(&stats, view.raw().kernel_phys) {
-        fatal!(
-            catalog::STAGE2_ALLOCATORS,
-            "stage 2 self-check failed: {problem}"
-        );
-    }
-    println!("  stage 2  frame allocator, heap and vmap arena verified");
-
-    if let Err(problem) = trap_check() {
-        fatal!(
-            catalog::STAGE3_TRAPS,
-            "stage 3 self-check failed: {problem}"
-        );
+    // From here on each self-check runs only when `checks::run` says so; each
+    // step that brings something up runs whatever it says. The checks that
+    // are all check are gated here, in the order they run; the steps that do
+    // both gate their own checks inside.
+    if checks::run() {
+        check_allocators_and_traps(&stats, view.raw().kernel_phys);
     }
 
     // Everything above is synchronous: traps the kernel caused deliberately.
@@ -184,14 +186,7 @@ fn kmain(view: &BootView<'_>, memory: &mut EarlyMemory) -> ! {
     start_console_input(view);
     arch::enable_interrupts();
 
-    let measured = match timer_check() {
-        Ok(hertz) => hertz,
-        Err(problem) => fatal!(
-            catalog::STAGE3_TIMER,
-            "stage 3 self-check failed: {problem}"
-        ),
-    };
-    report_stage3(measured, view.raw());
+    check_timer_and_start_clocks(view.raw());
 
     // Stage 4. It has to be here: after interrupt bring-up, which maps the
     // local APIC x86-64 reads its own identifier from, and before
@@ -209,13 +204,126 @@ fn kmain(view: &BootView<'_>, memory: &mut EarlyMemory) -> ! {
     // rather than after `finish_memory` because it allocates and frees frames
     // and requires the count to return to where it started, which is a
     // measurement the reclaim below would otherwise move under it.
-    check_user_memory();
+    if checks::run() {
+        check_user_memory();
+    }
 
     // Stage 8's root filesystem. Before stage 7's checks, which open files,
     // and after stage 6's, because file contents are VMO pages and the
     // frames they take have to come back.
     check_filesystems(view);
 
+    if checks::run() {
+        check_programs();
+    }
+
+    // Stage 10's enumeration: every PCI function the machine's ECAM windows
+    // reach, with every BAR sized and every capability list walked. Before
+    // `finish_memory`, which reclaims the ACPI tables the MCFG is read from
+    // and sweeps the kernel's mappings, so the bus windows this maps have to
+    // be given back first.
+    let iommu = iommu::bring_up(view);
+    println!(
+        "  iommu    {} VT-d units and {} SMMUv3s translating, {} left alone",
+        iommu.vtd, iommu.smmu_v3, iommu.refused
+    );
+    if let Some(why) = iommu.why {
+        println!("  iommu    a unit was left alone: {why}");
+    }
+    let (pci, reserved) = check_pci(view);
+
+    // Stage 10's device nodes: every PCI function above and every virtio,mmio
+    // node in the device tree, with the rule a driver's memory and interrupts
+    // rest on — nothing outside what the device has — required of each.
+    // Straight after enumeration, which builds the PCI half.
+    check_devices(view, pci, &reserved);
+    check_iommu(view);
+
+    // Stage 9's device objects, on the nodes just published: an I/O mapping of
+    // a device's own aperture and nothing past it, reached from a forked
+    // child, and an interrupt held from delivery to acknowledgement. After
+    // `check_devices`, because before it there are no nodes to mint from.
+    if checks::run() {
+        check_device_objects();
+    }
+    check_block_ring();
+
+    // The rest of stage 2, deliberately last. Each of these needs something a
+    // later part of boot brought up — the arena needs the heap, the sweep
+    // needs every mapping the kernel is ever going to make, and reclaiming
+    // ACPI memory needs the tables to have been read, which happened in
+    // `init_interrupts` above.
+    if let Err(problem) = finish_memory(view) {
+        fatal!(
+            catalog::STAGE2_FINISH_MEMORY,
+            "stage 2 self-check failed: {problem}"
+        );
+    }
+
+    say_booted();
+
+    // After the marker, on purpose: see `init`. Returns at once when nothing
+    // was named by `ferrix.init=` or built in, and the image has no
+    // /sbin/init.
+    init::run();
+    power::finish()
+}
+
+/// Stage 2's allocators and stage 3's synchronous traps: all check.
+fn check_allocators_and_traps(stats: &mm::Stats, kernel_phys: u64) {
+    if let Err(problem) = memory_check(stats, kernel_phys) {
+        fatal!(
+            catalog::STAGE2_ALLOCATORS,
+            "stage 2 self-check failed: {problem}"
+        );
+    }
+    println!("  stage 2  frame allocator, heap and vmap arena verified");
+
+    if let Err(problem) = trap_check() {
+        fatal!(
+            catalog::STAGE3_TRAPS,
+            "stage 3 self-check failed: {problem}"
+        );
+    }
+}
+
+/// Stage 3's timer check, when the checks run, and then the realtime clock
+/// and the random generator, which are bring-up and started either way --
+/// without the check, from a counter nobody has measured this boot.
+fn check_timer_and_start_clocks(info: &BootInfo) {
+    if !checks::run() {
+        report_clock_and_random(info);
+        return;
+    }
+    let measured = match timer_check() {
+        Ok(hertz) => hertz,
+        Err(problem) => fatal!(
+            catalog::STAGE3_TIMER,
+            "stage 3 self-check failed: {problem}"
+        ),
+    };
+    report_stage3(measured, info);
+}
+
+/// The last line of boot before init: the success marker when every check
+/// ran, and the unchecked one, which no boot test accepts, when they were
+/// skipped.
+fn say_booted() {
+    if checks::run() {
+        println!("{SUCCESS_MARKER} stages 1-12");
+    } else {
+        println!(
+            "{UNCHECKED_MARKER} stages 1-12 brought up, the self-checks of 2 to 12 skipped as \
+             ferrix.checks=skip asks"
+        );
+    }
+}
+
+/// The checks that drive programs through the dispatch path, from stage 7's
+/// table to stage 9's objects: every one of them only checks, each tears down
+/// the processes it made and requires their frames back, and none brings up
+/// anything a later step uses, so they are skipped together.
+fn check_programs() {
     // Stage 7's dispatch path. After stage 5 because two of the calls it
     // answers ask the scheduler which task is running, and deliberately here
     // rather than waiting for a user program: the one thing this check
@@ -247,55 +355,6 @@ fn kmain(view: &BootView<'_>, memory: &mut EarlyMemory) -> ! {
     // system rests on are cheaper to find broken at boot than inside a
     // driver.
     check_native_objects();
-
-    // Stage 10's enumeration: every PCI function the machine's ECAM windows
-    // reach, with every BAR sized and every capability list walked. Before
-    // `finish_memory`, which reclaims the ACPI tables the MCFG is read from
-    // and sweeps the kernel's mappings, so the bus windows this maps have to
-    // be given back first.
-    let iommu = iommu::bring_up(view);
-    println!(
-        "  iommu    {} VT-d units and {} SMMUv3s translating, {} left alone",
-        iommu.vtd, iommu.smmu_v3, iommu.refused
-    );
-    if let Some(why) = iommu.why {
-        println!("  iommu    a unit was left alone: {why}");
-    }
-    let (pci, reserved) = check_pci(view);
-
-    // Stage 10's device nodes: every PCI function above and every virtio,mmio
-    // node in the device tree, with the rule a driver's memory and interrupts
-    // rest on — nothing outside what the device has — required of each.
-    // Straight after enumeration, which builds the PCI half.
-    check_devices(view, pci, &reserved);
-    check_iommu(view);
-
-    // Stage 9's device objects, on the nodes just published: an I/O mapping of
-    // a device's own aperture and nothing past it, reached from a forked
-    // child, and an interrupt held from delivery to acknowledgement. After
-    // `check_devices`, because before it there are no nodes to mint from.
-    check_device_objects();
-    check_block_ring();
-
-    // The rest of stage 2, deliberately last. Each of these needs something a
-    // later part of boot brought up — the arena needs the heap, the sweep
-    // needs every mapping the kernel is ever going to make, and reclaiming
-    // ACPI memory needs the tables to have been read, which happened in
-    // `init_interrupts` above.
-    if let Err(problem) = finish_memory(view) {
-        fatal!(
-            catalog::STAGE2_FINISH_MEMORY,
-            "stage 2 self-check failed: {problem}"
-        );
-    }
-
-    println!("{SUCCESS_MARKER} stages 1-12");
-
-    // After the marker, on purpose: see `init`. Returns at once when nothing
-    // was named by `ferrix.init=` or built in, and the image has no
-    // /sbin/init.
-    init::run();
-    power::finish()
 }
 
 /// Stage 6: the memory objects, the frames they must give back, and the
@@ -530,6 +589,12 @@ fn check_filesystems(view: &BootView<'_>) {
             "could not build the root filesystem: {problem}"
         ),
     };
+    if !checks::run() {
+        // What unpacking made is bring-up, and said either way; the check that
+        // the marker came through intact is not.
+        report_initrd(&built, "not verified");
+        return;
+    }
     let report = match fs::check::run(&built) {
         Ok(report) => report,
         Err(problem) => fatal!(
@@ -538,20 +603,14 @@ fn check_filesystems(view: &BootView<'_>) {
         ),
     };
 
-    match (built.initramfs_bytes, built.unpacked) {
-        (Some(bytes), Some(made)) => println!(
-            "  initrd   {} KiB unpacked: {} directories, {} files, {} hard links, \
-             {} symbolic links, {} refused, verified {}",
-            bytes.div_ceil(1024),
-            made.directories,
-            made.files,
-            made.hard_links,
-            made.symlinks,
-            made.skipped,
-            report.initramfs_verified,
-        ),
-        _ => println!("  initrd   none handed over; the root is an empty tmpfs"),
-    }
+    report_initrd(
+        &built,
+        if report.initramfs_verified {
+            "verified true"
+        } else {
+            "verified false"
+        },
+    );
     println!(
         "  tmpfs    {} pages written through a VMO and read back, {} filled from a page \
          source in runs, by reads and by faults, and cut, {} frames leaked",
@@ -625,6 +684,24 @@ fn check_filesystems(view: &BootView<'_>) {
          {} ticks advanced, no counter went backwards",
         pseudo.stat_apart_ms, pseudo.stat_cpus, pseudo.stat_ticks,
     );
+}
+
+/// What unpacking the initramfs made, and `verified`: whether the check that
+/// it came through intact passed, or that it did not run.
+fn report_initrd(built: &fs::Report, verified: &str) {
+    match (built.initramfs_bytes, built.unpacked) {
+        (Some(bytes), Some(made)) => println!(
+            "  initrd   {} KiB unpacked: {} directories, {} files, {} hard links, \
+             {} symbolic links, {} refused, {verified}",
+            bytes.div_ceil(1024),
+            made.directories,
+            made.files,
+            made.hard_links,
+            made.symlinks,
+            made.skipped,
+        ),
+        _ => println!("  initrd   none handed over; the root is an empty tmpfs"),
+    }
 }
 
 /// Stage 8: the system calls that take a path, against the real namespace.
@@ -986,6 +1063,32 @@ fn check_device_objects() {
 /// with no PCI function passes and says so: a ring names its disk by a PCI
 /// location.
 fn check_block_ring() {
+    if checks::run() {
+        check_ring_control();
+    }
+    // `devmgr` starts the drivers, the driver check waits for their disks
+    // (and starts them itself where `devmgr` did not) and mounts what comes
+    // next, and the net core is started: bring-up, whatever `checks` says.
+    // Each disk check below says it skipped on a machine without its disk.
+    let started_by_devmgr = check_devmgr();
+    check_driver(started_by_devmgr);
+    // The net core follows the same chain rather than a line of its own in
+    // `kmain`, for the reason the block ring's two do: it needs everything
+    // they need -- a root filesystem for sockfs, and the scheduler for the
+    // task that drives the stack -- and nothing else.
+    check_net();
+    // Last, so that what sysfs shows is a running machine's: the device
+    // nodes, the disks and interfaces devmgr's drivers published, and which
+    // driver devmgr says drives which device. Only a check: sysfs is mounted
+    // by whoever wants it, not by this.
+    if checks::run() {
+        check_sysfs();
+    }
+}
+
+/// Stage 10's block ring control plane, from a process given a device: all
+/// check, and on a machine with no PCI function nothing at all.
+fn check_ring_control() {
     let report = match block_ring::check::run() {
         Ok(report) => report,
         Err(problem) => fatal!(
@@ -1002,17 +1105,6 @@ fn check_block_ring() {
             report.refusals, report.published, report.leaked,
         );
     }
-    let started_by_devmgr = check_devmgr();
-    check_driver(started_by_devmgr);
-    // The net core follows the same chain rather than a line of its own in
-    // `kmain`, for the reason the block ring's two do: it needs everything
-    // they need -- a root filesystem for sockfs, and the scheduler for the
-    // task that drives the stack -- and nothing else.
-    check_net();
-    // Last, so that what sysfs shows is a running machine's: the device
-    // nodes, the disks and interfaces devmgr's drivers published, and which
-    // driver devmgr says drives which device.
-    check_sysfs();
 }
 
 /// The net core, over the loopback: a socket call reaches the stack, the
@@ -1031,6 +1123,9 @@ fn check_net() {
             catalog::NET_CORE,
             "the net core's task could not be started: {problem}"
         );
+    }
+    if !checks::run() {
+        return;
     }
     let report = match net::check::run() {
         Ok(report) => report,
@@ -1122,7 +1217,12 @@ fn check_driver(started_by_devmgr: bool) {
          through the registry as xtask wrote them",
         report.names, report.sectors, report.read,
     );
-    check_btrfs_disk();
+    // Stage 11's and 12's exits are checks against the gates' fixture disks;
+    // a boot that skips them still switches `/` to a root disk and mounts a
+    // data disk, which `check_btrfs_write` does last either way.
+    if checks::run() {
+        check_btrfs_disk();
+    }
     check_btrfs_write();
 }
 
@@ -1211,6 +1311,11 @@ fn check_btrfs_write() {
                 "stage 12 power-fail check failed: {problem}"
             ),
         }
+        return;
+    }
+    if !checks::run() {
+        fs::root_disk::switch();
+        fs::data_disk::mount();
         return;
     }
     let report = match fs::btrfs_write_check::run() {
@@ -1326,6 +1431,9 @@ fn check_iommu(view: &BootView<'_>) {
             );
         }
     }
+    if !checks::run() {
+        return;
+    }
     let domains = match iommu::check_domains(device::devices()) {
         Ok(report) => report,
         Err(problem) => fatal!(
@@ -1415,6 +1523,9 @@ fn bring_up_processors(view: &BootView<'_>) -> &'static smp::Topology {
         cpus.id_name(),
         cpus.boot_id(),
     );
+    if !checks::run() {
+        return cpus;
+    }
 
     let smp = match smp::check::run(cpus) {
         Ok(report) => report,
@@ -1468,6 +1579,9 @@ fn start_scheduler(cpus: &'static smp::Topology) {
             catalog::SCHEDULER_BRING_UP,
             "could not start the scheduler: {problem}"
         );
+    }
+    if !checks::run() {
+        return;
     }
 
     let report = match sched::run_checks(cpus) {
@@ -1570,8 +1684,11 @@ fn start_scheduler(cpus: &'static smp::Topology) {
 fn finish_memory(view: &BootView<'_>) -> Result<(), &'static str> {
     // Before: the sweep must be able to *see* a violation, or its passing
     // afterwards means nothing. The loader's identity map is one, by
-    // construction, so this is a test of the test.
-    if mm::check_w_xor_x(view).is_ok() {
+    // construction, so this is a test of the test. The sweeps and the
+    // identity map's absence are checks; dropping the map and the reclaim are
+    // not, and run whatever `checks` says.
+    let checking = checks::run();
+    if checking && mm::check_w_xor_x(view).is_ok() {
         return Err("the W^X sweep cannot see the loader's identity map");
     }
 
@@ -1585,10 +1702,35 @@ fn finish_memory(view: &BootView<'_>) -> Result<(), &'static str> {
     // of a walk of the kernel's tables: on the Arm pair the identity map is
     // the `TTBR0` regime, which that walk never reaches, so it would find
     // nothing whether the map had gone or not.
-    if arch::identity_map_live(view) {
-        return Err("the identity map outlived the call that dropped it");
+    if checking {
+        if arch::identity_map_live(view) {
+            return Err("the identity map outlived the call that dropped it");
+        }
+        sweep_w_xor_x(view)?;
     }
 
+    // SAFETY: called once, after the last use of `crate::acpi::Firmware` —
+    // interrupt bring-up above is the only reader — and the loader's code has
+    // not run since the jump into `_start`.
+    let reclaimed = unsafe { mm::reclaim_boot_memory(view) };
+    let usage = vmap::usage();
+    println!(
+        "  reclaim  {} MiB from the loader and ACPI, {} free; arena {} live, {} KiB",
+        reclaimed.total() * 4 / 1024,
+        mm::free_frames() * 4 / 1024,
+        usage.allocations,
+        usage.bytes / 1024,
+    );
+    if reclaimed.total() == 0 {
+        return Err("nothing was reclaimed, so the memory map describes no early boot");
+    }
+    Ok(())
+}
+
+/// The W^X sweep after the identity map has gone: no mapping the kernel
+/// holds is both writable and executable, and there are executable ones to
+/// have swept.
+fn sweep_w_xor_x(view: &BootView<'_>) -> Result<(), &'static str> {
     let wx = match mm::check_w_xor_x(view) {
         Ok(report) => report,
         Err(found) => {
@@ -1609,22 +1751,6 @@ fn finish_memory(view: &BootView<'_>) -> Result<(), &'static str> {
         "  w^x      {} mappings swept, {} executable, none writable",
         wx.leaves, wx.executable
     );
-
-    // SAFETY: called once, after the last use of `crate::acpi::Firmware` —
-    // interrupt bring-up above is the only reader — and the loader's code has
-    // not run since the jump into `_start`.
-    let reclaimed = unsafe { mm::reclaim_boot_memory(view) };
-    let usage = vmap::usage();
-    println!(
-        "  reclaim  {} MiB from the loader and ACPI, {} free; arena {} live, {} KiB",
-        reclaimed.total() * 4 / 1024,
-        mm::free_frames() * 4 / 1024,
-        usage.allocations,
-        usage.bytes / 1024,
-    );
-    if reclaimed.total() == 0 {
-        return Err("nothing was reclaimed, so the memory map describes no early boot");
-    }
     Ok(())
 }
 

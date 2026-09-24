@@ -392,8 +392,8 @@ fn run() -> Result<()> {
         "zsh-functions" => omz::install_functions(args.from.as_deref()),
         "flash" => {
             let arch = args.single_arch()?;
-            let (loader, kernel, initramfs) = build_board_files(arch, &args)?;
-            flash::run(arch, &loader, &kernel, &initramfs, &args)
+            let files = build_board_files(arch, &args)?;
+            flash::run(arch, &files, &args)
         }
         "watch-serial" => serial::watch(None, &args),
         // The whole of a board round-trip. Separate commands exist because
@@ -402,9 +402,9 @@ fn run() -> Result<()> {
         // command per step is a command per step to forget.
         "deploy" => {
             let arch = args.single_arch()?;
-            let (loader, kernel, initramfs) = build_board_files(arch, &args)?;
-            flash::run(arch, &loader, &kernel, &initramfs, &args)?;
-            serial::watch(Some(&kernel), &args)
+            let files = build_board_files(arch, &args)?;
+            flash::run(arch, &files, &args)?;
+            serial::watch(Some(&files.kernel), &args)
         }
         other => Err(Error::new(format!("unknown command `{other}`\n\n{USAGE}"))),
     }
@@ -654,7 +654,7 @@ fn build_image(arch: Arch, args: &Args) -> Result<(PathBuf, PathBuf)> {
 /// exactly as [`build_image`] arranges for QEMU, so a card boots to the shell
 /// an image does. Without one the files are the ones they always were. Either
 /// way the archive carries the tree's native programs, as an image's does.
-fn build_board_files(arch: Arch, args: &Args) -> Result<(PathBuf, PathBuf, Vec<u8>)> {
+fn build_board_files(arch: Arch, args: &Args) -> Result<flash::BoardFiles> {
     // `--compositor`: the desktop instead, which `compositor` knows how to make.
     if args.compositor {
         return compositor::board_files(arch, args);
@@ -662,7 +662,12 @@ fn build_board_files(arch: Arch, args: &Args) -> Result<(PathBuf, PathBuf, Vec<u
     let natives = native::build(arch, args.release)?;
     let Some(program) = optional_program(arch, args)? else {
         let (loader, kernel) = build_halves(arch, args)?;
-        return Ok((loader, kernel, initramfs::build(None, &natives, None, &[])?));
+        return Ok(flash::BoardFiles {
+            loader,
+            kernel,
+            initramfs: initramfs::build(None, &natives, None, &[])?,
+            defaults: None,
+        });
     };
     let loader = cargo::build_loader(arch, args.release)?;
     let kernel = cargo::build_kernel_with_init(arch, args.release, &program, "")?;
@@ -675,7 +680,12 @@ fn build_board_files(arch: Arch, args: &Args) -> Result<(PathBuf, PathBuf, Vec<u
         &utilities,
         &ports::installed(arch)?,
     )?;
-    Ok((loader, kernel, initramfs))
+    Ok(flash::BoardFiles {
+        loader,
+        kernel,
+        initramfs,
+        defaults: None,
+    })
 }
 
 /// The program `init` names for `arch`, with `{arch}` replaced by its name,

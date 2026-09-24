@@ -95,14 +95,30 @@ fn llvm_objcopy() -> Option<PathBuf> {
     path.is_file().then_some(path)
 }
 
-/// Copy a freshly built loader, kernel and initramfs onto the card.
-pub(crate) fn run(
-    arch: Arch,
-    loader: &Path,
-    kernel: &Path,
-    initramfs: &[u8],
-    args: &Args,
-) -> Result<()> {
+/// What `flash` puts on a card.
+pub(crate) struct BoardFiles {
+    /// The loader, which goes to `EFI/BOOT` under the architecture's name.
+    pub(crate) loader: PathBuf,
+    /// The kernel as built, with its debug information: [`card_kernel`]
+    /// strips the copy the card gets, and a panic's addresses are resolved
+    /// against this one.
+    pub(crate) kernel: PathBuf,
+    /// The archive the loader hands over, byte for byte what an image carries.
+    pub(crate) initramfs: Vec<u8>,
+    /// The image's own command-line options, for `FERRIX/DEFAULTS.TXT`, or
+    /// none: `flash --compositor`'s `ferrix.checks=skip`.
+    pub(crate) defaults: Option<&'static str>,
+}
+
+/// Copy a freshly built loader, kernel and initramfs onto the card, and the
+/// image's own options beside them.
+pub(crate) fn run(arch: Arch, files: &BoardFiles, args: &Args) -> Result<()> {
+    let BoardFiles {
+        loader,
+        kernel,
+        initramfs,
+        defaults,
+    } = files;
     let target = match args.to.as_deref() {
         Some(given) => verify(Path::new(given))?,
         None => discover()?,
@@ -123,6 +139,7 @@ pub(crate) fn run(
 
     copy(loader, &loader_target)?;
     copy(&card_kernel(kernel), &kernel_target)?;
+    write_defaults(&target, *defaults)?;
     // The same archive an image carries, so a board unpacks what QEMU does.
     let initramfs_target = target.join(INITRD_PATH);
     std::fs::write(&initramfs_target, initramfs)
@@ -141,6 +158,32 @@ pub(crate) fn run(
     }
 
     println!("  flashed; the card is safe to remove");
+    Ok(())
+}
+
+/// Write the image's own options to `FERRIX/DEFAULTS.TXT`, or take away a
+/// previous image's.
+///
+/// Rewritten by every `flash`, because the file belongs to the image and not
+/// to the card: a self-check image flashed over a desktop's must not boot
+/// with the desktop's `ferrix.checks=skip`. `CMDLINE.TXT`, which is the card
+/// owner's, is never touched, and wins over this file where both give a key.
+fn write_defaults(target: &Path, defaults: Option<&str>) -> Result<()> {
+    let path = target.join(crate::fat::DEFAULTS_PATH);
+    match defaults {
+        Some(text) => {
+            std::fs::write(&path, text)
+                .map_err(|error| Error::new(format!("writing {}: {error}", path.display())))?;
+            flush(&path)?;
+            println!("    {} ({})", path.display(), text.trim());
+        }
+        None if path.exists() => {
+            std::fs::remove_file(&path)
+                .map_err(|error| Error::new(format!("deleting {}: {error}", path.display())))?;
+            println!("    {} deleted: this image has no defaults", path.display());
+        }
+        None => {}
+    }
     Ok(())
 }
 
