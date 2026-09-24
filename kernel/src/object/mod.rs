@@ -158,14 +158,31 @@ static DISPOSING: AtomicBool = AtomicBool::new(false);
 /// is what stops an object queued just as the drainer finished from being
 /// stranded.
 ///
+/// A channel end is closed here too, whoever is draining: the last reference
+/// to it goes at once, so its peer sees `PEER_CLOSED` by the time the close
+/// returns, and only what its unread messages carry is queued. Queued whole,
+/// it stayed open until the drainer reached it -- on another processor, some
+/// time after the close had returned -- and a quiesce made the moment a
+/// driver's channel closed was refused as still served (FX-1004).
+///
 /// Call it with no lock held that an object's drop might need: a channel's
 /// queue, a process's handle table.
 pub(crate) fn dispose(objects: impl IntoIterator<Item = Object>) {
     for object in objects {
-        if object.drops_at_once() {
-            drop(object);
-        } else {
-            ORPHANS.lock().push(object);
+        match object {
+            // Another reference -- a message in flight, a peer's look at it
+            // -- keeps it open; whoever drops that one closes it.
+            Object::Channel(end) => {
+                if let Some(mut end) = Arc::into_inner(end) {
+                    let carried = end.take_unread();
+                    if !carried.is_empty() {
+                        ORPHANS.lock().extend(carried);
+                    }
+                    drop(end);
+                }
+            }
+            object if object.drops_at_once() => drop(object),
+            object => ORPHANS.lock().push(object),
         }
     }
     loop {
@@ -195,9 +212,10 @@ impl Object {
     /// Whether [`dispose`] drops it where it is rather than queueing it.
     ///
     /// Those whose drop reaches no other object: it cannot recurse, and a
-    /// close has let go of what they held by the time it returns. A channel
-    /// end holds the messages queued for it and a job its processes, which
-    /// is what the queue is for. A process handle holds only how the process
+    /// close has let go of what they held by the time it returns. A job holds
+    /// its processes, which is what the queue is for; a channel end, which
+    /// holds the messages queued for it, is closed at once and only what they
+    /// carry queued (see [`dispose`]). A process handle holds only how the process
     /// ended, but is queued as well: the end of a process is the heaviest
     /// teardown in the kernel, and nothing waits on its handle's close.
     fn drops_at_once(&self) -> bool {

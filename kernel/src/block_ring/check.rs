@@ -52,7 +52,7 @@ use super::{VIRTIO_BLK_MAJOR, location_of, start_for};
 use crate::device::{self, DeviceNode};
 use crate::fs::devfs;
 use crate::object::check::{SCRATCH, Side, device_handle, reg};
-use crate::{mm, sched, timer};
+use crate::{mm, object, sched, timer};
 
 /// Where this check keeps its buffers: the second page of [`SCRATCH`], which
 /// stage 9's checks leave alone.
@@ -330,17 +330,34 @@ fn end(
             return Err("the kernel kept its end of a stopped ring open");
         }
     }
-    let _ = side
-        .call(nr::HANDLE_CLOSE, &[reg(control)])
-        .map_err(|_| "closing the control channel failed")?;
     let at_once =
         ending == Ending::DriverDied && QUIESCE_AT_ONCE.load(core::sync::atomic::Ordering::Relaxed);
     if at_once {
         // As devmgr does on TERMINATED: before the ring's task has had a
-        // chance to see the closed channel. The quiesce waits for it.
+        // chance to see the closed channel. The quiesce waits for it. Both
+        // while another processor drains disposed objects, as though one did:
+        // a close used to queue the channel's end behind that drain and
+        // return with it open, and the quiesce was refused (FX-1004).
+        let _ = object::as_if_draining_elsewhere(|| {
+            let _ = side
+                .call(nr::HANDLE_CLOSE, &[reg(control)])
+                .map_err(|_| "closing the control channel failed")?;
+            side.call(nr::DEVICE_QUIESCE, &[reg(device)])
+                .map_err(|error| match error {
+                    status::BAD_STATE => {
+                        "quiescing the instant a driver died was refused: its channel was still \
+                         open"
+                    }
+                    status::TIMED_OUT => {
+                        "quiescing the instant a driver died timed out waiting for its ring to end"
+                    }
+                    _ => "quiescing the instant a driver died failed",
+                })
+        })?;
+    } else {
         let _ = side
-            .call(nr::DEVICE_QUIESCE, &[reg(device)])
-            .map_err(|_| "quiescing the instant a driver died failed")?;
+            .call(nr::HANDLE_CLOSE, &[reg(control)])
+            .map_err(|_| "closing the control channel failed")?;
     }
     let deadline = timer::now_nanos().saturating_add(PATIENCE_NANOS);
     while devfs::block_device(rdev).is_some() {

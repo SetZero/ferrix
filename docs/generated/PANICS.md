@@ -1438,7 +1438,12 @@ nothing here; a request on the ring is the ring-3 driver's check.
 4. The disk stayed published after the control channel closed: the ring's task
    did not see `PEER_CLOSED`, or `Serving::finish` did not drop the
    registration.
-5. The second round did not give every frame back: the ring's VMO holds, its
+5. A quiesce the instant the driver's channel closed was refused as still
+   served: `object::dispose` queued the closed end behind a drain on another
+   processor instead of closing it at once, so the close returned with the
+   channel open. The message says which of `BAD_STATE` and `TIMED_OUT` came
+   back.
+6. The second round did not give every frame back: the ring's VMO holds, its
    task's stack or the registry leak.
 
 See: kernel/src/block_ring/mod.rs; kernel/src/block_ring/check.rs;

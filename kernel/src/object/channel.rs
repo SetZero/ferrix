@@ -419,11 +419,20 @@ impl Drop for Endpoint {
             }
             peer.waiters.wake_all();
         }
-        let unread = self.inbox.get_mut().drain();
-        dispose(
-            unread
-                .into_iter()
-                .flat_map(|message| message.handles.into_iter().map(|(object, _)| object)),
-        );
+        dispose(self.take_unread());
+    }
+}
+
+impl Endpoint {
+    /// Take out what the messages queued for it and never read carry: what
+    /// closing it has to free, and what [`dispose`] queues rather than drop
+    /// inside the close.
+    pub(super) fn take_unread(&mut self) -> Vec<Object> {
+        self.inbox
+            .get_mut()
+            .drain()
+            .into_iter()
+            .flat_map(|message| message.handles.into_iter().map(|(object, _)| object))
+            .collect()
     }
 }

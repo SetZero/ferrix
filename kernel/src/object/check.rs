@@ -1485,6 +1485,11 @@ fn check_a_full_channel_says_wait(
 /// Closing the reader ends the channel for the writer, and frees a VMO that
 /// was still queued, unread, inside it. `run`'s frame count is what says the
 /// VMO's page came back.
+///
+/// Closed while another processor drains disposed objects, and the writer
+/// told at once: a close used to queue the end behind that drain, and returned
+/// with the channel still open. Stage 10's block ring check quiesced a device
+/// the moment its driver's channel closed and was refused (FX-1004).
 fn check_a_closed_peer_frees_what_was_queued(
     sender: &Side,
     near: Handle,
@@ -1503,24 +1508,26 @@ fn check_a_closed_peer_frees_what_was_queued(
         .call(nr::CHANNEL_WRITE, &[reg(near), PAYLOAD, 0, HANDLES, 1])
         .map_err(|_| "queueing a VMO failed")?;
 
-    let _ = receiver
-        .call(nr::HANDLE_CLOSE, &[reg(far)])
-        .map_err(|_| "closing the far end failed")?;
-    refused(
-        sender.call(nr::CHANNEL_WRITE, &[reg(near), PAYLOAD, 0, HANDLES, 0]),
-        status::PEER_CLOSED,
-        "a write to a closed channel was accepted",
-        counter,
-    )?;
-    refused(
-        sender.call(
-            nr::CHANNEL_READ,
-            &[reg(near), INBOX, 64, HANDLES, 4, ACTUAL],
-        ),
-        status::PEER_CLOSED,
-        "an empty channel with a closed peer said wait instead of closed",
-        counter,
-    )?;
+    object::as_if_draining_elsewhere(|| {
+        let _ = receiver
+            .call(nr::HANDLE_CLOSE, &[reg(far)])
+            .map_err(|_| "closing the far end failed")?;
+        refused(
+            sender.call(nr::CHANNEL_WRITE, &[reg(near), PAYLOAD, 0, HANDLES, 0]),
+            status::PEER_CLOSED,
+            "a write to a closed channel was accepted",
+            counter,
+        )?;
+        refused(
+            sender.call(
+                nr::CHANNEL_READ,
+                &[reg(near), INBOX, 64, HANDLES, 4, ACTUAL],
+            ),
+            status::PEER_CLOSED,
+            "an empty channel with a closed peer said wait instead of closed",
+            counter,
+        )
+    })?;
     let _ = sender
         .call(nr::HANDLE_CLOSE, &[reg(near)])
         .map_err(|_| "closing the near end failed")?;

@@ -2765,13 +2765,17 @@ The run recorded when it landed: `devmgr   8 devices, 1 drivers, 2 started,
 and at two, each followed by the driver check's sectors read back through
 the disks `devmgr` started.
 
+**FX-1004, the block ring check's flake, fixed on 2026-09-24.** Quiescing a
+device the instant its driver's channel closed was refused, about once in a
+few dozen loaded boots on x86-64 and AArch64: `object::dispose` queued a
+closed channel end whole, and a close made while another processor drained
+that queue returned with the end still open. A channel end now closes in
+`dispose` itself and only what its unread messages carry is queued; the ring
+check and the object check both close under a held drain now, and fail every
+boot without the fix. The wake change c2129a68, once the suspect, was not it.
+
 **Still to do, after the exit.** None of it was on the path to `rustc`.
 
-* **FX-1004, a flake in the block ring's self-check.** Once in eleven x86-64
-  boots on nazuna, on 2026-09-16, quiescing a device the instant its driver
-  died failed (`kernel/src/block_ring/check.rs`); it has not been explained
-  and is a P1 row in `docs/BACKLOG.md`. The wake change of that day,
-  c2129a68, is the first suspect.
 * **AMD-Vi**, which the stage's scope names beside VT-d and the SMMUv3: nothing
   reads an IVRS table or drives an AMD IOMMU yet, so on such a machine DMA
   would not be translated.

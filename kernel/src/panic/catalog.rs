@@ -1064,6 +1064,10 @@ pub(crate) static STAGE10_RING: Explanation = Explanation {
          registration in `take_up`, or `DiskName::minor`, disagrees with section 6.1.",
         "The disk stayed published after the control channel closed: the ring's task did not \
          see `PEER_CLOSED`, or `Serving::finish` did not drop the registration.",
+        "A quiesce the instant the driver's channel closed was refused as still served: \
+         `object::dispose` queued the closed end behind a drain on another processor instead \
+         of closing it at once, so the close returned with the channel open. The message says \
+         which of `BAD_STATE` and `TIMED_OUT` came back.",
         "The second round did not give every frame back: the ring's VMO holds, its task's \
          stack or the registry leak.",
     ],
