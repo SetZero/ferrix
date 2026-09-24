@@ -600,9 +600,11 @@ package FerrixRoadmap {
              * Gears, the customer's order of 2026-09-24 (docs/GPU.md 6):
              * vkgears through Venus -- Mesa's Vulkan driver in the guest,
              * the host's GPU under virglrenderer's render server -- on the
-             * Linux host, 39 points; and gears drawn by the DK1's own
-             * Vivante GC400T, an OpenGL ES 2.0 core with no Vulkan in any
-             * driver, through a ring-3 driver of Ferrix's own, 32 points. */
+             * Linux host, 39 points, done the same day: vkgears draws on
+             * the host's RADV (cargo xtask test-vkgears); and gears drawn by
+             * the DK1's own Vivante GC400T, an OpenGL ES 2.0 core with no
+             * Vulkan in any driver, through a ring-3 driver of Ferrix's own,
+             * 32 points. */
     }
 
     #planned requirement <'S21'> stage21BareMetalGpu : Stage {

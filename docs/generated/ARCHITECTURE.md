@@ -102,7 +102,7 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixAssurance` | `11-assurance.sysml` | docs/RELIABILITY.md and docs/ASSEMBLY.md: the quality gates, what each one verifies, and what the tests can actually reach. The gates cargo xtask check runs are in CI. Of the xtask boot gates, CI runs test-boot and test-rustc; the ones that need a binary the repository does not carry, a disk judged on the host or a screendump run in the landing gates of docs/BACKLOG.md instead (docs/ROADMAP.md, Continuously). |
 | `FerrixViews` | `12-views.sysml` | How to read the one model as two: what runs today, and what the roadmap still owes. The filters key on the lifecycle keywords every element carries. |
 
-13 files, 16 packages, 1642 elements, 198 relations. Model digest `5e56dc52ce0aea7a`.
+13 files, 16 packages, 1642 elements, 198 relations. Model digest `2e0742bd706f1903`.
 
 | Maturity | Elements | Meaning |
 | --- | ---: | --- |
@@ -3177,7 +3177,7 @@ The GPU path, decided on 2026-09-18 and built on 2026-09-19 (docs/GPU.md 3.7 and
 
 Of the 178, about 56 are left: the desktop's speed as it is watched (client pages as texture backing: 8 of 34, the cursor plane and the device queue spent), XWayland's 40, and the pointer-driven options and second-pass effects (no_screen_share, blur_popups, precise_mouse_move). The rest of the GPU road -- zwp_linux_dmabuf and a Mesa on ferrousli -- is for clients that render for themselves, not for the compositor.
 
-Gears, the customer's order of 2026-09-24 (docs/GPU.md 6): vkgears through Venus -- Mesa's Vulkan driver in the guest, the host's GPU under virglrenderer's render server -- on the Linux host, 39 points; and gears drawn by the DK1's own Vivante GC400T, an OpenGL ES 2.0 core with no Vulkan in any driver, through a ring-3 driver of Ferrix's own, 32 points.
+Gears, the customer's order of 2026-09-24 (docs/GPU.md 6): vkgears through Venus -- Mesa's Vulkan driver in the guest, the host's GPU under virglrenderer's render server -- on the Linux host, 39 points, done the same day: vkgears draws on the host's RADV (cargo xtask test-vkgears); and gears drawn by the DK1's own Vivante GC400T, an OpenGL ES 2.0 core with no Vulkan in any driver, through a ring-3 driver of Ferrix's own, 32 points.
 
 ### S21 — Stage 21 bare metal gpu
 

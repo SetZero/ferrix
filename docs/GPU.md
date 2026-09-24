@@ -990,6 +990,71 @@ mesa-demos' meson, which requires desktop GL. It needs `libwayland-client`,
 **39 points.** V1 to V3 are proved by a boot that makes a Venus context and
 maps a blob before any Mesa exists; V4 and V5 are the demo.
 
+**Built, 2026-09-24: vkgears draws on the host's GPU.** `cargo xtask
+test-vkgears` on the gate host:
+
+    deviceName    = Virtio-GPU Venus (AMD Ryzen 9 9900X 12-Core Processor
+                    (RADV RAPHAEL_MENDOCINO))
+    212 frames in 5.0 seconds = 42.353 FPS
+
+That is Vulkan 1.4 in the guest, executed by RADV on the host: an
+instance, a device, a pipeline whose SPIR-V the host compiles, command
+buffers on a Venus ring in host memory, and a fence on every frame that
+the guest polls. The frame is copied into shared memory for the compositor
+(`MESA_VK_WSI_DEBUG=sw`), so the 42 frames a second are the copy's as much
+as the GPU's; the same binary on the host against a headless hyprix draws
+over 3,000 a second. Each step, and what differed from the plan:
+
+* **V1**, the wire format: the blob commands and `OK_MAP_INFO` in
+  `libs/virtio::gpu`, and a shared memory capability found by its id in
+  `libs/pci`, with the high halves a window larger than 4 GiB needs. QEMU
+  with `hostmem` moves the registers to BAR 2 and makes BAR 4 the window.
+* **V2 and V3**, `libs/renderctl` version 3 and the node. HELLO names
+  every capability set rather than one; `MAKE_BLOB` places a blob in the
+  window as it is made, as Linux does, and the core gives a place back only
+  when the device has said the blob is gone. The window is the kernel's,
+  found at enumeration: the driver never maps it. `mmap` of a blob is a new
+  kind of region, device memory with an id, whose keeper is the node's
+  object -- so the device is not told to let a blob go, nor its place given
+  to another, while any program still maps it. A ringed `EXECBUFFER` is
+  fenced on its ring; the driver answers it when the host has signalled
+  the fence, and the node's fence descriptor polls readable then. Venus
+  needs no DRM sync objects when `GET_CAP` says there are none. Neither the
+  `/sys` entries nor syncobjs the plan feared were needed: when libdrm finds
+  no device, Venus opens the render nodes by name (a patch of the port's).
+  `/sys` landed the same day; whether libdrm now finds the node through it,
+  which would retire the patch, has not been tried.
+* **Mesa's header is newer than the kernel's.** Mesa 26.2 carries a
+  `drm_virtgpu_resource_create_blob` eight bytes longer than linux-libc-dev
+  7.0's, so its ioctl number differs. Linux's `drm_ioctl` matches a driver's
+  call by number and takes any size; the node does the same for this one.
+* **V4**, the port: see `ferrousli/tools/ports/vkgears/build.sh` and its
+  four patches. The driver is linked into the program rather than loaded,
+  as one relocatable object with Mesa's hidden symbols made local -- Mesa
+  builds its own C11 threads, which would collide with ferrousli's -- and
+  `vkshim.py` writes the loader's part from the Khronos registry. Mesa
+  needs ferrousli's `sincos` and `program_invocation_name`, which its glibc
+  names landing of the same day gives.
+* **V5**: judged from what vkgears says, the device and a count of frames.
+  The plan's `/bin/shot` of the gears is not done: the frame is a client's
+  in a GL-composited desktop, and counting frames drawn on the named device
+  is the claim. With the node's fences made never to signal, the boot fails
+  "found `Virtio-GPU Venus (...)` and drew no frames".
+* **Two things found on the way that were not Ferrix's.** vkgears polled its
+  display and then read it with `wl_display_dispatch`, which waits for an
+  event another thread -- Mesa's -- may already have taken; patched. And
+  hyprix offers `wp_fifo_v1` and `wp_commit_timing_v1` without holding a
+  commit at a barrier, sends no `wp_presentation.clock_id`, and stamps
+  presentation with wall-clock time; a FIFO client is unthrottled there.
+  hyprix's owner has them (`docs/BACKLOG.md`), and `hyprland.conf`'s `env`
+  now reaches what hyprix starts.
+
+**What is left:** zero-copy presentation, which is step 4 of §3 --
+`zwp_linux_dmabuf` in the compositor and the Venus blob imported into its
+virgl context -- after which `MESA_VK_WSI_DEBUG=sw` goes; and the Khronos
+loader, for a program that loads its driver rather than linking it, which
+waits on `dlopen` of a library with thread-local storage.
+
 ### 6.2 The GC400 on the DK1
 
 The core is at `0x5900_0000` (0x800 bytes of registers), interrupt SPI 109,
