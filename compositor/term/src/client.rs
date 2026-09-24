@@ -372,7 +372,18 @@ impl Terminal {
                     &[Arg::Uint(serial)],
                 );
                 self.acked = true;
-                self.dirty = Some(Dirty::Full);
+                // A configure is an answer to be acknowledged, and a new
+                // frame only when it changed what the frame is: the first
+                // one, or a new size. Focus moving between windows configures
+                // both with `activated` toggled, and a terminal that repainted
+                // its whole grid for each was two whole windows composited
+                // on every pass of the pointer from one to the other -- on a
+                // slow compositor faster than it could draw them, until the
+                // desktop was a slideshow (the DK1, 2026-09-24). The size
+                // is `refit`'s to judge, which runs on the toplevel's half.
+                if self.shared.is_none() {
+                    self.dirty = Some(Dirty::Full);
+                }
             }
             id::TOPLEVEL if opcode == xdg_toplevel::event::CLOSE => {
                 return Err("the compositor asked this window to close".to_owned());
@@ -681,7 +692,15 @@ impl Terminal {
         }
         // An output-scale change can leave the cell count unchanged while
         // replacing the shared-memory buffer, which still needs every pixel.
-        self.dirty = Some(Dirty::Full);
+        // A configure that changes nothing -- the same size at the same
+        // scale, which is every focus change -- needs none.
+        let (Ok(wide), Ok(tall)) = (i32::try_from(width), i32::try_from(height)) else {
+            self.dirty = Some(Dirty::Full);
+            return;
+        };
+        if self.shared.is_none() || self.buffer_size != (wide, tall) {
+            self.dirty = Some(Dirty::Full);
+        }
     }
 
     /// Draw the grid into a buffer and give it to the compositor.

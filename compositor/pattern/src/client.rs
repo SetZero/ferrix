@@ -1084,7 +1084,20 @@ impl Client {
                     &[Arg::Uint(serial)],
                 );
                 self.acked = true;
-                self.draw(out)?;
+                // Drawn again only for the first configure or a new size: a
+                // configure that changes nothing -- every focus change, which
+                // toggles `activated` -- is acknowledged and no more, as a
+                // toolkit does. Repainting for each made every pass of the
+                // pointer between two windows two whole windows to composite
+                // (the DK1, 2026-09-24).
+                let scale = self.scale.max(1);
+                let wanted = (
+                    self.width.saturating_mul(scale),
+                    self.height.saturating_mul(scale),
+                );
+                if self.shared.is_none() || self.buffer_size != wanted {
+                    self.draw(out)?;
+                }
                 // A menu is asked for after the window has something on it,
                 // which is when a toolkit would: a popup on a window that
                 // has never drawn is a menu with nothing under it.
