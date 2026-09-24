@@ -957,10 +957,9 @@ impl Canvas {
                         continue;
                     };
                     let start = (index(y) * width + index(clip.x)) * 4;
-                    if let (Some(pixels), Some(into)) = (
-                        row.get(from..from + len),
-                        band.get_mut(start..start + len),
-                    ) {
+                    if let (Some(pixels), Some(into)) =
+                        (row.get(from..from + len), band.get_mut(start..start + len))
+                    {
                         over_row(into, pixels, opaque, opacity);
                     }
                 }
