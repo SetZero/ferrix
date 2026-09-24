@@ -43,9 +43,6 @@ mod id {
     pub(super) const OUTPUT: ObjectId = ObjectId(14);
 }
 
-/// How long to run before giving up, so a test can never hang.
-const DEADLINE: Duration = Duration::from_secs(600);
-
 /// How long to keep drawing after the program has finished, so that what it
 /// wrote last is on the screen and can be looked at.
 ///
@@ -216,8 +213,11 @@ pub fn run(
         repeat_interval: None,
     };
 
-    let started = Instant::now();
-    while started.elapsed() < DEADLINE {
+    // No deadline: a terminal lasts as long as its program or its window.
+    // A test that boots one is bounded by its own QEMU timeout, and a
+    // deadline here closed every desktop terminal ten minutes after it
+    // opened.
+    loop {
         match connection.receive() {
             Ok(_) => {}
             Err(RecvError::WouldBlock) => {}
