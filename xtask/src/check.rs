@@ -57,6 +57,14 @@ pub(crate) fn run(args: &Args) -> Result<()> {
         python("scripts/check-item-boundary.py")
     })?;
 
+    // The item links no external crate on any architecture, which is what lets
+    // IEC 62304's SOUP obligation be answered with "none" rather than with an
+    // anomaly-list evaluation per dependency. That is a property worth
+    // re-establishing rather than remembering. docs/certification/SOUP.md.
+    step("SOUP register", || {
+        python_with("scripts/gen-soup.py", &["--check"])
+    })?;
+
     // The architecture document is generated from `docs/sysml/` and committed.
     // A model edited without regenerating leaves the two disagreeing, and the
     // document is exactly where nobody would notice; this is the cheapest
