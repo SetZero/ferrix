@@ -15,9 +15,16 @@ rustflags = ["-C", "link-self-contained=yes", "-C", "target-feature=+crt-static"
 # the ARM loader and zinc are built for: the root config gives that one the
 # loader's linker script, which cargo would merge into these flags, and a
 # compositor does its blending in floating point.
+#
+# And for the Cortex-A7, which is the one ARMv7-A core Ferrix runs on: the
+# DK1's, and the one QEMU is given (`xtask/src/qemu.rs`). The target's own
+# baseline has no NEON and sixteen double registers, so every loop over
+# pixels was scalar; this core has NEON, thirty-two registers (which the
+# kernel saves for a program on a core that has them) and hardware divide,
+# and the compiler schedules for its pipeline.
 [target.armv7-unknown-linux-musleabihf]
 linker = "rust-lld"
-rustflags = ["-C", "link-self-contained=yes", "-C", "target-feature=+crt-static", "-C", "relocation-model=static"]
+rustflags = ["-C", "link-self-contained=yes", "-C", "target-feature=+crt-static", "-C", "relocation-model=static", "-C", "target-cpu=cortex-a7"]
 
 # rav1d, the AV1 decoder `pattern` plays video with, asks for a feature gate on
 # 32-bit ARM only: `stdarch_arm_feature_detection`, for the CPU probe its
