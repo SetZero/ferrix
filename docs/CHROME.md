@@ -21,7 +21,8 @@ running on it:
 | The compositor a window would appear in, drawing on the GPU | **done**, stage 19's GPU path (§1, §5) |
 | `execve` of a binary past 64 MiB, mapped from the file on demand | **done** 2026-09-24, on all three architectures, with `execve("/proc/self/exe")` from a fork (§2.2) |
 | `timerfd` | **done** 2026-09-24, on all three architectures, the first kernel row of §6's foot (§3) |
-| `madvise`, a vDSO and `signalfd` | not started (§3), ≈ 10 points |
+| `madvise` and `signalfd` | **done** 2026-09-24, on all three architectures (§2.3, §3) |
+| A vDSO | not started (§3); what is left of the ≈ 10 points the three were sized at |
 | libwayland-client, libxkbcommon, fontconfig with freetype and expat, a font | **done** 2026-09-24, built against ferrousli with foot (§3, §6) |
 | foot, a Wayland terminal nobody here wrote, drawing on the compositor on Ferrix | **done** 2026-09-24, x86-64, `cargo xtask test-foot` (§6) |
 | Chromium built against ferrousli, with Alpine's musl patches rebased | not started (§5), 40+ points |
@@ -38,10 +39,10 @@ freetype 2.14.1, expat 2.7.3, fontconfig 2.17.1, tllist 1.1.0 and fcft
 --screenshot`, which needs no compositor, GPU, input or fonts but
 exercises everything hard -- processes over Mojo, hundreds of threads,
 PartitionAlloc and V8 -- and needed two kernel rows first: `execve` past
-64 MiB, done on 2026-09-24 (§2.2), and `madvise` with a vDSO, which is now
-where Chrome stops: `chrome-headless-shell --version` runs on Ferrix until
-PartitionAlloc's first `madvise` is refused. **Then** a window, for which
-foot has now proved the client libraries.
+64 MiB, done on 2026-09-24 (§2.2), and `madvise`, done the same day (§2.3).
+A vDSO, the other half of that second row, is still to come; Chrome runs
+without one, a trap per clock read. **Then** a window, for which foot has
+now proved the client libraries.
 
 **Re-checked on 2026-09-19**, against a tree 37 commits further on. Everything
 in §2, §3 and §4 still holds but the two loose fixes in §6, which are now
@@ -217,6 +218,12 @@ open one page. And `madvise` decodes but has no handler, so PartitionAlloc and
 V8 could never give memory back -- on a guest this size that is the difference
 between slow and dead.
 
+**`madvise` done, 2026-09-24** (§3): `MADV_DONTNEED` and `MADV_FREE` now give
+a range's frames back to the allocator at once and leave it mapped, so the
+next touch reads zeros. The memory is still 512 MiB against Chrome's 2 GiB;
+what changed is that an allocator which gives pages back actually gets them
+back.
+
 ### 2.4 The sandbox, and a bug worth fixing whatever is decided
 
 Chrome's zygote wants user, pid and mount namespaces and a seccomp-bpf filter.
@@ -251,7 +258,26 @@ that a program which asks for isolation now finds out it cannot have it.
 
 * **No vDSO.** `AT_SYSINFO_EHDR` is deliberately absent, so every
   `clock_gettime` is a trap. Chrome calls it per task, per timer and per trace
-  point.
+  point. **Still open, 2026-09-24:** of the three kernel rows §5 sized
+  together -- `madvise`, a vDSO and `signalfd` -- this is the one that
+  remains.
+* ~~**No `madvise`.**~~ **Done, 2026-09-24.** The number decoded and nothing
+  answered it, so PartitionAlloc and V8 (§2.3) could hand memory back and
+  never get it. `MADV_DONTNEED` and `MADV_FREE` now drop a range's pages and
+  leave it mapped: private anonymous memory reads as zeros on its next touch,
+  a private file mapping as its file, and a shared mapping keeps its contents,
+  as Linux's do. The frames go back to the allocator in `madvise` itself, in
+  the order every unmap here keeps -- translations down under the address
+  space's lock, one shootdown with the lock let go, and only then the frames.
+  `MADV_FREE` is allowed to keep its pages until memory is short, and here
+  drops them at once, as Linux does with no swap to age them against.
+  `MADV_REMOVE` punches a hole in shared anonymous memory; on a file it is
+  `EOPNOTSUPP`, as `fallocate`'s hole is here, which Chrome's discardable
+  memory on a memfd only logs. The hints are accepted where Linux accepts
+  them, and `MADV_WIPEONFORK` is refused rather than accepted and ignored,
+  since BoringSSL keys its reseeding on it. The boot check counts the frames:
+  eight written pages dropped must come back as exactly eight frames, on all
+  three architectures.
 * ~~**No `/dev/shm`.**~~ **Done, 2026-09-19**, and it was not one line, which
   is what this said. Chromium's shared memory prefers `memfd_create`, which
   exists with seals, but falls back to `/dev/shm`, and ferrousli's named
@@ -265,8 +291,24 @@ that a program which asks for isolation now finds out it cannot have it.
   Roughly 200 lines with its two checks rather than one. The lesson is the
   usual one: a cost this document calls trivial is the kind most worth
   checking before it is quoted.
-* ~~**No `timerfd` and no `signalfd`.**~~ **`timerfd` done, 2026-09-24;
-  `signalfd` remains.** foot, §6's first client, calls `timerfd_create`,
+* ~~**No `timerfd` and no `signalfd`.**~~ **Both done, 2026-09-24:
+  `timerfd` first, `signalfd` the same day.** Chrome's and glib's event
+  loops take `SIGCHLD` and `SIGTERM` through a `signalfd` in their epoll
+  set: the signals are blocked, and a read takes each one pending as a
+  `signalfd_siginfo`. `signalfd4` answers on all three architectures and
+  `signalfd` on the two that have it, with `SFD_NONBLOCK` and
+  `SFD_CLOEXEC`, and a read takes the reading thread's signals and then
+  its process's, as `rt_sigtimedwait` does. The waking wanted the same
+  care as `timerfd`'s, for a different reason: a signal a thread blocks
+  wakes nobody here, so a blocked read, `poll` or `epoll_wait` would have
+  learned of it only at its own recheck a second later. Every process now
+  has a queue its signals wake as they become pending, Linux's
+  `signalfd_wqh`, and the boot check requires that wake, not the recheck,
+  to end each of the three waits; they came back within 90 us of the
+  signal on x86-64, 102 us on AArch64 and 73 us on ARMv7-A (71 us at two
+  processors). ferrousli's
+  `signalfd` wrapper landed with it. As for `timerfd`: foot, §6's first
+  client, calls `timerfd_create`,
   `timerfd_settime` and `timerfd_gettime` about 45 times: its cursor blink,
   its flash, a delayed render and key repeat. All three are answered on all
   three architectures, with the `time64` forms on ARMv7-A, on
@@ -383,7 +425,7 @@ separately for that reason.
 | ~~**Already planned:** stage 12, btrfs write~~ *landed 2026-09-21* | ~~≈ 60~~ |
 | **Already planned, only if the sandbox is wanted:** stage 13 | ≈ 60 |
 | Demand-paged file-backed `execve`, and binaries past 64 MiB | 13 |
-| `madvise`, a vDSO and `signalfd` (`/dev/shm` is done 2026-09-19, `timerfd` 2026-09-24) | ≈ 10 |
+| A vDSO; `madvise` and `signalfd` were sized with it, and are done (`/dev/shm` 2026-09-19, `timerfd`, `madvise` and `signalfd` 2026-09-24) | what is left of ≈ 10 |
 | ~~libwayland-client, libxkbcommon, fontconfig with freetype and expat, a font~~ *built with foot, 2026-09-24* | ~~13~~ |
 | The Chromium cross-build against ferrousli, with Alpine's musl patches rebased | 40+, mostly unknown |
 | What running it finds missing | unsized, ≥ 40 |

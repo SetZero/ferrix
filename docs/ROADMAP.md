@@ -4405,7 +4405,8 @@ Nested `epoll`, `FIONBIO` and the plane objects were not counted before
 `docs/INPUT.md` §2 read Smithay's event loop.
 
 **Follow-up surface, not part of stage 17's met exit:** `timerfd` (wanted,
-not required; done 2026-09-24, below), atomic commit and per-open windows onto the card
+not required; done 2026-09-24, below), `signalfd` (done the same day, below),
+atomic commit and per-open windows onto the card
 VMO. E1–E3 (os-26) and E4 are done, so iteration 2's prerequisites are all
 in. E1–E3's paragraphs below record
 what they do not yet do as Linux does: `EPOLLRDHUP` and `EPOLLPRI` are never
@@ -4606,7 +4607,61 @@ boot panics with "a waiter on a timerfd was ended by its recheck, not by the
 deadline's wake". ferrousli's wrappers landed with foot the same day, and
 foot's `cargo xtask test-foot` is the program on Ferrix that uses them: it
 creates its timers with them as it starts, and draws its text on the
-compositor (`docs/CHROME.md` §6). Still to do: `signalfd`.
+compositor (`docs/CHROME.md` §6).
+
+**Done — `signalfd`, and `madvise` beside it (2026-09-24), for Chrome
+(`docs/CHROME.md` §2.3 and §3).** Chrome's and glib's event loops take
+`SIGCHLD` and `SIGTERM` through a signalfd in their epoll set. `signalfd4`
+answers on all three architectures and `signalfd` on x86-64 and ARMv7-A,
+numbers read from the vendored UAPI headers and again from ferrousli's
+copies, over an object on `anon_inodefs` named `anon_inode:[signalfd]`,
+with `SFD_NONBLOCK` and `SFD_CLOEXEC`. `fs/signalfd.c`'s rules: a mask size
+other than eight bytes is `EINVAL`, an unreadable mask `EFAULT`, `SIGKILL`
+and `SIGSTOP` are taken out of the mask, and a descriptor handed back gets
+the new mask or is `EINVAL` if it is no signalfd. A read takes the pending
+signals in the mask, the reading thread's own before its process's, as
+`rt_sigtimedwait` takes them, and answers a 128-byte `signalfd_siginfo`
+for each that fits; the first may wait, interruptibly, and the rest are
+taken only if already there. The signals are the reader's, not the
+maker's, as on Linux. Every process has a queue, `signal_arrived`, which
+`notify_signal` and `notify_signal_to` wake for every signal they make
+pending, so a thread that blocks a signal still learns of it: poll and
+epoll trust the signalfd and sleep a second between looks, and without the
+queue a waiter would have been a second late. The boot check, FX-0884, sends
+signals to a process with handlers installed, reads them back with their
+sender and `SI_USER`, leaves one outside the mask pending until
+`signalfd4` changes the mask, takes two in one read, refuses 10 calls as
+Linux does, and requires a blocked read, a `poll` and an `epoll_wait`,
+each waiting before the signal is sent, to be ended by that wake; they
+came back within 90 us on x86-64, 102 us on AArch64 and 73 us on ARMv7-A
+(71 us at two processors). With the wake removed from `notify_signal` the boot panics with
+"a waiter on a signalfd was ended by its recheck, not by the signal's
+wake". Not as Linux: `ssi_uid` is zero, since a pending signal does not
+record its sender's uid here, and the timer and queued-value fields are
+never filled, since there are no POSIX timers and no `sigqueue`.
+ferrousli's `signalfd` wrapper landed the same day, with a C test on the
+host.
+
+`madvise` had a number and no handler, so every call was `ENOSYS`, and
+PartitionAlloc and V8 could never give memory back. `MADV_DONTNEED` and
+`MADV_FREE` now drop a range's pages and keep it mapped: private anonymous
+memory reads zeros on the next touch, a private file mapping its file, a
+shared mapping what it held, and the frames go back to the allocator
+inside the call, after the one shootdown that takes their translations
+out of every TLB. `MADV_FREE` drops at once rather than lazily, as Linux
+does without swap. `MADV_REMOVE` punches a hole in shared anonymous memory
+and is `EOPNOTSUPP` on a file, which is `fallocate`'s answer to the same
+hole here. The hints are accepted where Linux accepts them and change
+nothing; `MADV_WIPEONFORK`, `MADV_KEEPONFORK`, KSM's pair, `MADV_POPULATE_*`
+and the rest are `EINVAL`, as from a Linux built without them. The boot
+check, FX-0872, counts the frames: eight written pages dropped must give
+back exactly eight frames in a frame window, with a page on either side
+keeping its table, and read zeros after; with the drop sabotaged to keep
+its pages the boot panics with "madvise did not give the frames of the
+pages it dropped back to the allocator". Not as Linux: `MADV_DONTFORK` is
+accepted and not honoured, a page held for a device keeps its frame and
+contents, and `MADV_WILLNEED` reads nothing ahead. Still to do for Chrome:
+the vDSO.
 
 ---
 

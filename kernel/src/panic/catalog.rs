@@ -1478,6 +1478,68 @@ pub(crate) static STAGE8_TIMERFD: Explanation = Explanation {
           kernel/src/sched/wait.rs",
 };
 
+/// For `check_signalfd` in `main.rs`, when the signalfd check fails.
+pub(crate) static STAGE8_SIGNALFD: Explanation = Explanation {
+    code: "FX-0884",
+    title: "signalfd failed its self-check",
+    meaning: "`fs::signalfd_check::run` builds a process, gives SIGUSR1, SIGUSR2 and SIGALRM \
+              handlers so a signal sent to it stays pending, and makes signalfds by number. \
+              signalfd4 must take SFD_NONBLOCK and SFD_CLOEXEC, refuse other flags, a mask that \
+              is not eight bytes, a mask it cannot read and a descriptor that is not a signalfd, \
+              and never keep SIGKILL or SIGSTOP in a mask. With nothing pending a read is EAGAIN \
+              and poll is not readable. A signal sent and pending must poll readable and read \
+              back as a signalfd_siginfo naming it, SI_USER and its sender, and be pending no \
+              longer; two come back in one read, lowest first; one outside the mask stays \
+              pending until signalfd4 gives the descriptor a mask holding it. A blocked read, a \
+              poll and an epoll_wait, each waiting before the signal is sent, must be ended by \
+              the wake its arrival makes and come back within a quarter of the one-second \
+              recheck. The run is done twice and must leave no frame behind.",
+    causes: &[
+        "`Process::notify_signal` or `notify_signal_to` does not wake `signal_arrived`, so a \
+         waiter on a signal it blocks is ended by its recheck a second late.",
+        "`SignalFd::take` reads the thread's queue or the process's but not both, or takes a \
+         signal outside the mask.",
+        "`Origin::encode_signalfd` puts a field at the wrong offset of `signalfd_siginfo`.",
+        "`sys_signalfd4` checks the flags before it reads the mask, or makes a new descriptor \
+         when it was handed one to change.",
+    ],
+    see: "kernel/src/fs/signalfd_check.rs; kernel/src/fs/signalfd.rs; \
+          kernel/src/syscall/signalfd.rs; kernel/src/syscall/signal.rs; \
+          kernel/src/syscall/process.rs notify_signal; kernel/src/fs/wake.rs",
+};
+
+/// For `check_madvise` in `main.rs`, when the madvise check fails.
+pub(crate) static STAGE8_MADVISE: Explanation = Explanation {
+    code: "FX-0872",
+    title: "madvise failed its self-check",
+    meaning: "`user::madvise_check::run` builds a process and calls madvise by number. Eight \
+              written pages of private anonymous memory dropped with MADV_DONTNEED, and again \
+              with MADV_FREE, must come back as exactly eight frames in a frame window, leave \
+              the resident count eight lower, and read as zeros, while the page on either side \
+              keeps what it held. A page a fork child shares copy-on-write must keep the child's \
+              contents when its parent drops it. A private mapping of a memfd must give back the \
+              two pages it copied and show the file there again; a shared one must still show \
+              what it wrote; the file must keep every page. MADV_REMOVE must punch a hole in \
+              shared anonymous memory that a fork child sees too, giving back two frames. Every \
+              hint must be accepted and drop nothing, and madvise must refuse as Linux does: an \
+              unaligned address, unknown advice, MADV_WIPEONFORK and MADV_MERGEABLE, a length \
+              that wraps, MADV_FREE and MADV_REMOVE where they do not apply, and a hole, which \
+              is ENOMEM once the mapped part is advised. The run is done twice and must leave \
+              no frame behind.",
+    causes: &[
+        "`AddressSpace::advise_region` takes the translations down but not the pages out of \
+         the region's object, or of a private file mapping's shadow, so no frame goes back \
+         and the next touch shows the old contents.",
+        "`advise` releases the frames before its shootdown, or holds its lock across it.",
+        "A shared mapping's pages are taken out of its object, which loses what every other \
+         mapping of it wrote.",
+        "`sys_madvise` rounds the length in 64 bits on a 32-bit build, or checks it before the \
+         advice and the alignment.",
+    ],
+    see: "kernel/src/user/madvise_check.rs; kernel/src/user/space.rs advise; \
+          kernel/src/syscall/memory.rs sys_madvise; kernel/src/user/vmo.rs take_range, retire",
+};
+
 /// For `check_filesystems` in `main.rs`, when the shared file mapping check
 /// fails.
 pub(crate) static STAGE8_FILE_MAPPINGS: Explanation = Explanation {
@@ -1721,10 +1783,12 @@ pub(crate) static ALL: &[&Explanation] = &[
     &STAGE8_PIPES_AND_FILESYSTEM_CALLS,
     &STAGE8_FILE_MAPPINGS,
     &STAGE8_PROGRAM_FILES,
+    &STAGE8_MADVISE,
     &STAGE8_MEMFD,
     &STAGE8_EPOLL,
     &STAGE8_EVENTFD,
     &STAGE8_TIMERFD,
+    &STAGE8_SIGNALFD,
     &STAGE9_OBJECTS,
     &STAGE10_PCI,
     &STAGE10_DEVICES,

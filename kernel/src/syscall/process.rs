@@ -178,6 +178,12 @@ pub(crate) struct Process {
     /// Woken when a signal is sent to it: what `pause`, `rt_sigsuspend` and
     /// `rt_sigtimedwait` wait on.
     signalled: WaitQueue,
+    /// Woken when a signal becomes pending for it or any of its threads, and
+    /// nothing else: what a signalfd's reader, `poll` and `epoll_wait` sleep
+    /// on, as Linux's `sighand->signalfd_wqh`. Shared, because a wait holds
+    /// on to the queues it sleeps on; and a queue of its own, so that every
+    /// wake it counts is a signal's arrival.
+    signal_arrived: Arc<WaitQueue>,
     /// The signal that stopped it, or zero while it runs.
     stopped: AtomicU32,
     /// A stop its parent has not yet been told of by `wait4`, or zero.
@@ -316,6 +322,7 @@ impl Process {
             execed: AtomicBool::new(false),
             vfork_done: WaitQueue::new(),
             signalled: WaitQueue::new(),
+            signal_arrived: Arc::new(WaitQueue::new()),
             stopped: AtomicU32::new(0),
             stop_report: AtomicU32::new(0),
             continue_report: AtomicBool::new(false),
@@ -1106,6 +1113,12 @@ impl Process {
         &self.signalled
     }
 
+    /// The queue woken when a signal becomes pending for it or one of its
+    /// threads: a signalfd's.
+    pub(crate) fn signal_arrived(&self) -> &Arc<WaitQueue> {
+        &self.signal_arrived
+    }
+
     /// Whether a wait it is in should end: it has ended, or a signal the
     /// waiting thread does not block is pending. What every call that waits
     /// checks, beside its own condition, to return `EINTR`.
@@ -1134,6 +1147,7 @@ impl Process {
     /// process's queue for the first thread to unblock it.
     pub(crate) fn notify_signal(&self, signal: u32) {
         self.signalled.wake_all();
+        self.signal_arrived.wake_all();
         let taker = thread::current_of(self)
             .filter(|me| !me.is_gone() && !me.blocks(signal))
             .or_else(|| {
@@ -1150,6 +1164,7 @@ impl Process {
     /// Make sure `thread` looks at a signal just made pending for it alone.
     pub(crate) fn notify_signal_to(&self, thread: &Thread) {
         self.signalled.wake_all();
+        self.signal_arrived.wake_all();
         self.wake_thread(thread);
     }
 

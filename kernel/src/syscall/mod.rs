@@ -67,6 +67,7 @@ pub(crate) mod process;
 pub(crate) mod program;
 pub(crate) mod registry;
 pub(crate) mod signal;
+pub(crate) mod signalfd;
 pub(crate) mod sockets;
 pub(crate) mod stat;
 pub(crate) mod system;
@@ -374,6 +375,7 @@ fn with_process(call: Syscall, args: &SyscallArgs, process: &Process) -> Result<
         Syscall::Brk => memory::sys_brk(process, a[0]),
         Syscall::Mremap => memory::sys_mremap(process, a[0], a[1], a[2], truncate(a[3]), a[4]),
         Syscall::Msync => memory::sys_msync(process, a[0], a[1], truncate(a[2])),
+        Syscall::Madvise => memory::sys_madvise(process, a[0], a[1], attributes::int(a[2])),
         Syscall::Unshare => namespace::sys_unshare(process, a[0]),
         Syscall::Setns => namespace::sys_setns(process, fd::arg(a[0]), truncate(a[1])),
         Syscall::SetTidAddress => Ok(set_tid_address(process, a[0])),
@@ -443,6 +445,8 @@ fn descriptors(call: Syscall, a: &[u64; 6], process: &Process) -> Option<Result<
         Syscall::MemfdCreate => memfd::sys_memfd_create(process, a[0], truncate(a[1])),
         Syscall::Eventfd2 => eventfd::sys_eventfd2(process, truncate(a[0]), truncate(a[1])),
         Syscall::Eventfd => eventfd::sys_eventfd(process, truncate(a[0])),
+        Syscall::Signalfd4 => signalfd::sys_signalfd4(process, fd, a[1], a[2], truncate(a[3])),
+        Syscall::Signalfd => signalfd::sys_signalfd(process, fd, a[1], a[2]),
         Syscall::TimerfdCreate => {
             timerfd::sys_timerfd_create(process, attributes::int(a[0]), truncate(a[1]))
         }

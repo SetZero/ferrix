@@ -1,4 +1,4 @@
-//! `mmap`, `munmap`, `mprotect`, `mremap` and `brk`.
+//! `mmap`, `munmap`, `mprotect`, `mremap`, `madvise` and `brk`.
 //!
 //! The four calls a program reshapes its own address space with, and the first
 //! four a static musl binary makes: it allocates with `mmap` before it does
@@ -22,15 +22,20 @@ use core::any::Any;
 use ferrix_bootinfo::{PAGE_SIZE, USER_VIRT_END};
 use ferrix_linux_abi::errno::Errno;
 use ferrix_linux_abi::types::{
-    F_SEAL_FUTURE_WRITE, F_SEAL_WRITE, MAP_ANONYMOUS, MAP_FIXED, MAP_FIXED_NOREPLACE, MAP_PRIVATE,
-    MAP_SHARED, MREMAP_FIXED, MREMAP_MAYMOVE, MS_ASYNC, MS_INVALIDATE, MS_SYNC, PROT_EXEC,
-    PROT_GROWSDOWN, PROT_GROWSUP, PROT_READ, PROT_SEM, PROT_WRITE,
+    F_SEAL_FUTURE_WRITE, F_SEAL_WRITE, MADV_COLD, MADV_DODUMP, MADV_DOFORK, MADV_DONTDUMP,
+    MADV_DONTFORK, MADV_DONTNEED, MADV_DONTNEED_LOCKED, MADV_FREE, MADV_HUGEPAGE, MADV_NOHUGEPAGE,
+    MADV_NORMAL, MADV_PAGEOUT, MADV_RANDOM, MADV_REMOVE, MADV_SEQUENTIAL, MADV_WILLNEED,
+    MAP_ANONYMOUS, MAP_FIXED, MAP_FIXED_NOREPLACE, MAP_PRIVATE, MAP_SHARED, MREMAP_FIXED,
+    MREMAP_MAYMOVE, MS_ASYNC, MS_INVALIDATE, MS_SYNC, PROT_EXEC, PROT_GROWSDOWN, PROT_GROWSUP,
+    PROT_READ, PROT_SEM, PROT_WRITE,
 };
 use ferrix_vma::VmaFlags;
 
 use crate::syscall::fd;
 use crate::syscall::process::Process;
-use crate::user::space::{Destination, FileMapping, FilePlace, MMAP_MIN_ADDR, SpaceError};
+use crate::user::space::{
+    Advice, Declined, Destination, FileMapping, FilePlace, MMAP_MIN_ADDR, SpaceError,
+};
 use crate::user::vmo::Vmo;
 
 /// What `mmap`'s sixth argument is counted in.
@@ -319,6 +324,99 @@ pub(crate) fn sys_msync(
         return Err(Errno::ENOMEM);
     }
     Ok(0)
+}
+
+/// `madvise`.
+///
+/// What `PartitionAlloc`, V8 and every `malloc` give memory back with while
+/// keeping the addresses: `MADV_DONTNEED` and `MADV_FREE` drop the pages of a
+/// range and leave it mapped, so the next touch reads zeros -- or, in a
+/// private file mapping, the file -- and the frames are the allocator's
+/// again at once. `MADV_FREE` is allowed to keep the pages until memory is
+/// wanted and a later write cancels it; here it drops them at once, as
+/// `MADV_DONTNEED` does, which is what Linux does itself when there is no
+/// swap to age them against and what a program may always be given. See
+/// [`crate::user::space::AddressSpace::advise`] for what each mapping kind
+/// does and `Advice` for the rest.
+///
+/// `MADV_REMOVE` punches a hole in shared anonymous memory; on a shared file
+/// mapping it is `EOPNOTSUPP`, which is `fallocate`'s answer here for the
+/// same hole. The hints -- `MADV_NORMAL`, `MADV_RANDOM`, `MADV_SEQUENTIAL`,
+/// `MADV_WILLNEED`, `MADV_DONTFORK`, `MADV_DOFORK`, `MADV_HUGEPAGE`,
+/// `MADV_NOHUGEPAGE`, `MADV_DONTDUMP`, `MADV_DODUMP`, `MADV_COLD` and
+/// `MADV_PAGEOUT` -- are accepted wherever Linux accepts them and change
+/// nothing: there is no read-ahead, no huge page, no core dump and no swap for
+/// them to steer. `MADV_DONTFORK` in particular is not honoured -- a `fork`
+/// child still gets the range, copy-on-write -- which costs such a child
+/// memory it was not meant to have, not correctness.
+///
+/// Everything else is `EINVAL`, as from a Linux built without what it needs:
+/// KSM's pair, `MADV_POPULATE_*`, `MADV_COLLAPSE`, the poisoning and guard
+/// advice, and `MADV_WIPEONFORK` with `MADV_KEEPONFORK`. Those two change what
+/// a `fork` child sees, and `BoringSSL` keys its random generator's reseeding
+/// on them: accepting one without honouring it would hand a child its
+/// parent's random state, where a refusal makes `BoringSSL` look another way.
+///
+/// The checks run in `do_madvise`'s order: the advice, then an address off a
+/// page boundary, then a length that wraps when rounded up or when added --
+/// all `EINVAL` -- and then a zero length succeeds. Part of the range mapped
+/// by nothing is `ENOMEM`, once the rest has been advised.
+pub(crate) fn sys_madvise(
+    process: &Process,
+    addr: u64,
+    len: u64,
+    advice: i32,
+) -> Result<usize, Errno> {
+    let advice = match advice {
+        MADV_DONTNEED => Advice::Discard { locked_too: false },
+        MADV_DONTNEED_LOCKED => Advice::Discard { locked_too: true },
+        MADV_FREE => Advice::Free,
+        MADV_REMOVE => Advice::Remove,
+        // `madvise_update_vma` refuses `MADV_DOFORK` on `VM_IO`, and
+        // `MADV_DODUMP` on `VM_SPECIAL`, which a device's registers are.
+        MADV_DOFORK | MADV_DODUMP => Advice::Hint {
+            not_on_device: true,
+            not_on_locked: false,
+        },
+        // `can_madv_lru_vma`: not on `VM_LOCKED` or `VM_PFNMAP`.
+        MADV_COLD | MADV_PAGEOUT => Advice::Hint {
+            not_on_device: true,
+            not_on_locked: true,
+        },
+        MADV_NORMAL | MADV_RANDOM | MADV_SEQUENTIAL | MADV_WILLNEED | MADV_DONTFORK
+        | MADV_HUGEPAGE | MADV_NOHUGEPAGE | MADV_DONTDUMP => Advice::Hint {
+            not_on_device: false,
+            not_on_locked: false,
+        },
+        _ => return Err(Errno::EINVAL),
+    };
+    if !addr.is_multiple_of(PAGE_SIZE) {
+        return Err(Errno::EINVAL);
+    }
+    // `size_t` arithmetic, so a 32-bit caller's length wraps where Linux's
+    // `PAGE_ALIGN` wraps it.
+    let start = usize::try_from(addr).map_err(|_| Errno::EINVAL)?;
+    let rounded = usize::try_from(len)
+        .ok()
+        .and_then(|len| len.checked_add(PAGE_SIZE as usize - 1))
+        .map(|len| len & !(PAGE_SIZE as usize - 1))
+        .ok_or(Errno::EINVAL)?;
+    if start.checked_add(rounded).is_none() {
+        return Err(Errno::EINVAL);
+    }
+    if rounded == 0 {
+        return Ok(0);
+    }
+    process
+        .space()
+        .advise(addr, rounded as u64, advice)
+        .map(|()| 0)
+        .map_err(|declined| match declined {
+            Declined::Unmapped => Errno::ENOMEM,
+            Declined::Invalid => Errno::EINVAL,
+            Declined::Denied => Errno::EACCES,
+            Declined::Unsupported => Errno::EOPNOTSUPP,
+        })
 }
 
 /// `munmap`.

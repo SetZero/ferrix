@@ -425,6 +425,42 @@ fn check_program_files() {
     );
 }
 
+/// `madvise`'s check: frames given back by `MADV_DONTNEED`, `MADV_FREE` and
+/// `MADV_REMOVE`, what a dropped page reads, the hints and the refusals.
+fn check_madvise() {
+    let checked = match user::madvise_check::run() {
+        Ok(checked) => checked,
+        Err(problem) => fatal!(
+            catalog::STAGE8_MADVISE,
+            "stage 8 madvise self-check failed: {problem}"
+        ),
+    };
+    println!(
+        "  madvise  {} frames given back by MADV_DONTNEED, MADV_FREE and MADV_REMOVE; dropped \
+         pages read as zeros, a private file mapping as its file, a shared one as it was; {} \
+         calls refused as Linux refuses them; {} frames leaked",
+        checked.given_back, checked.refusals, checked.leaked,
+    );
+}
+
+/// Stage 8's signalfd check: flags and masks, signals read and dequeued, and
+/// waiters woken by a signal's arrival.
+fn check_signalfd() {
+    let checked = match fs::signalfd_check::run() {
+        Ok(checked) => checked,
+        Err(problem) => fatal!(
+            catalog::STAGE8_SIGNALFD,
+            "stage 8 signalfd self-check failed: {problem}"
+        ),
+    };
+    println!(
+        "  signalfd {} signals read back, a read, poll and epoll_wait each woken by the \
+         signal's arrival, the latest {} us after it; {} calls refused as Linux refuses them; {} \
+         frames leaked",
+        checked.signals, checked.late_micros, checked.refusals, checked.leaked,
+    );
+}
+
 /// Stage 13's cgroupfs, landing G2: the job tree mounted as cgroup2, driven
 /// through the VFS as a program would drive it.
 fn check_cgroupfs() {
@@ -515,6 +551,8 @@ fn check_filesystems(view: &BootView<'_>) {
     check_eventfd();
     check_timerfd();
     check_program_files();
+    check_signalfd();
+    check_madvise();
     check_cgroupfs();
 
     let pseudo = match fs::procfs::check::run() {

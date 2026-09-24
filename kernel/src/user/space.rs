@@ -46,8 +46,9 @@
 //! # Taking a translation down
 //!
 //! Whoever takes a translation out of these tables — `munmap`, `mprotect`,
-//! `fork`'s write-protection, `mremap`, a copy-on-write fault, and a VMO taking a page
-//! away through [`AddressSpace::forget_pages`] — does it in one order:
+//! `fork`'s write-protection, `mremap`, `madvise`, a copy-on-write fault, and a
+//! VMO taking a page away through [`AddressSpace::forget_pages`] — does it in
+//! one order:
 //!
 //! 1. under the lock, the entries come out of the tables;
 //! 2. still under the lock, and only after that, the set is read and the
@@ -2326,6 +2327,261 @@ impl AddressSpace {
             .iter()
             .map(|vma| vma.range.end())
             .max()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// `madvise`: giving pages back without giving the range up.
+// ---------------------------------------------------------------------------
+
+/// What `madvise` asks of a range, as far as the address space is concerned.
+/// `crate::syscall::memory::sys_madvise` turns Linux's `MADV_*` into these.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Advice {
+    /// `MADV_DONTNEED`, and with `locked_too` `MADV_DONTNEED_LOCKED`: the
+    /// range stays mapped, and its pages go. Private anonymous memory reads
+    /// as zeros on its next touch and a private file mapping as the file,
+    /// since what it copied goes; a shared mapping only loses its
+    /// translations, and reads what the object holds, as on Linux, where the
+    /// pages are the page cache's or shmem's and not the mapping's.
+    Discard {
+        /// Whether an `mlock`ed region is dropped too, rather than refused.
+        locked_too: bool,
+    },
+    /// `MADV_FREE`: [`Advice::Discard`], on private anonymous memory only.
+    Free,
+    /// `MADV_REMOVE`: punch a hole in what a shared mapping maps, so every
+    /// mapping of it reads zeros there.
+    Remove,
+    /// Advice that changes nothing here, refused only where Linux refuses it:
+    /// on a device's registers, which Linux maps `VM_IO | VM_PFNMAP`, when
+    /// `not_on_device`, and on an `mlock`ed region when `not_on_locked`.
+    Hint {
+        /// Refused on a device region.
+        not_on_device: bool,
+        /// Refused on an `mlock`ed region.
+        not_on_locked: bool,
+    },
+}
+
+/// Why [`AddressSpace::advise`] refused, as `madvise` reports it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Declined {
+    /// Part of the range is mapped by nothing: `ENOMEM`, once every mapped
+    /// part has been advised.
+    Unmapped,
+    /// A region the advice cannot apply to: `EINVAL`.
+    Invalid,
+    /// A mapping that may not write what it maps: `EACCES`.
+    Denied,
+    /// What the mapping maps cannot have a hole punched in it here:
+    /// `EOPNOTSUPP`, which is what `fallocate` answers for the same hole.
+    Unsupported,
+}
+
+/// What [`AddressSpace::advise_region`] gathers under the lock, to finish
+/// once the lock is gone.
+struct Advised {
+    /// Addresses whose translations came down.
+    pages: TlbPages,
+    /// Pages taken out of an object, released after the shootdown.
+    retiring: Vec<(Arc<Vmo>, Retired)>,
+    /// Holes to punch: an object, its first page and how many.
+    punching: Vec<(Arc<Vmo>, u64, u64)>,
+}
+
+impl AddressSpace {
+    /// Apply `advice` to the `len` bytes at `at`, both whole pages.
+    ///
+    /// Linux's walk (`madvise_walk_vmas`): every mapped part of the range is
+    /// advised, in address order, until a region refuses, whose refusal is
+    /// the answer; a part mapped by nothing is [`Declined::Unmapped`] once
+    /// the rest has been advised.
+    ///
+    /// Dropping pages is an unmap without the unmap, in its three phases:
+    /// under the lock the translations come down and the pages come out of
+    /// the object that owns them -- the region's own for private anonymous
+    /// memory, its shadow for a private file mapping, none for a shared
+    /// mapping -- and the shootdown is counted pending; the shootdown runs
+    /// with the lock let go; and only then are the frames released, through
+    /// [`Vmo::retire`] as `give_back` releases them. The region stays, so the
+    /// next touch faults and commits a zero page, or shows the file again. A
+    /// page that a `fork` left shared keeps its other holder: the reference
+    /// this object had is what goes. A page held for a device stays where it
+    /// is, contents and all, as `munmap` leaves one.
+    ///
+    /// A hole is punched in shared anonymous memory by decommitting the
+    /// object's pages, which takes them out of every space that maps it
+    /// before they go back; that too runs with no lock held. A file cannot
+    /// have one punched yet: tmpfs writes into a file's frames under its own
+    /// inode lock, which this path does not take, and `fallocate` answers the
+    /// same hole with `EOPNOTSUPP` for that reason.
+    ///
+    /// # Errors
+    ///
+    /// As [`Declined`].
+    pub(crate) fn advise(&self, at: u64, len: u64, advice: Advice) -> Result<(), Declined> {
+        let end = at.saturating_add(len);
+        let mut advised = Advised {
+            pages: TlbPages::new(),
+            retiring: Vec::new(),
+            punching: Vec::new(),
+        };
+        let (cpus, outcome) = {
+            let inner = self.inner.lock();
+            let mut covered = at;
+            let mut hole = false;
+            let mut refused = None;
+            for region in inner.map.iter() {
+                if region.range.end() <= covered {
+                    continue;
+                }
+                if region.range.start() >= end {
+                    break;
+                }
+                if region.range.start() > covered {
+                    hole = true;
+                }
+                let start = region.range.start().max(covered);
+                let stop = region.range.end().min(end);
+                if let Err(why) =
+                    self.advise_region(&inner, region, (start, stop), advice, &mut advised)
+                {
+                    refused = Some(why);
+                    break;
+                }
+                covered = stop;
+            }
+            if covered < end {
+                hole = true;
+            }
+            let outcome = match refused {
+                Some(why) => Err(why),
+                None if hole => Err(Declined::Unmapped),
+                None => Ok(()),
+            };
+            // Read after the translations came down, under the lock, as every
+            // takedown here reads it.
+            let cpus = (!advised.pages.is_empty()).then(|| self.begin_shootdown(&inner));
+            (cpus, outcome)
+        };
+
+        let Advised {
+            pages,
+            retiring,
+            punching,
+        } = advised;
+        if let Some(cpus) = cpus {
+            self.shoot(&cpus, &pages);
+        }
+        // This space's translations are down and its shootdown has returned;
+        // nothing else maps a private object, so the retirement has nobody to
+        // ask and only releases.
+        for (vmo, retired) in retiring {
+            vmo.retire(
+                retired,
+                Some(Own {
+                    space: self,
+                    shootdown: None,
+                }),
+            );
+        }
+        for (vmo, first, count) in punching {
+            let _ = vmo.decommit_range(first, count);
+        }
+        outcome
+    }
+
+    /// [`AddressSpace::advise`] for the part `start..stop` of `region`, under
+    /// the lock `inner` proves: refuse it, or take its translations down and
+    /// note what goes back in `advised`.
+    fn advise_region(
+        &self,
+        inner: &Inner,
+        region: &Vma,
+        (start, stop): (u64, u64),
+        advice: Advice,
+        advised: &mut Advised,
+    ) -> Result<(), Declined> {
+        let locked = region.flags.locked;
+        let (id, offset, file) = match (advice, region.backing) {
+            (
+                Advice::Hint {
+                    not_on_device,
+                    not_on_locked,
+                },
+                backing,
+            ) => {
+                let device = matches!(backing, Backing::Device { .. });
+                return if (not_on_device && device) || (not_on_locked && locked) {
+                    Err(Declined::Invalid)
+                } else {
+                    Ok(())
+                };
+            }
+            // `VM_LOCKED`, and a device's registers, which Linux maps
+            // `VM_PFNMAP`: `madvise_dontneed_free_valid_vma` refuses both,
+            // and `MADV_REMOVE` the first.
+            (Advice::Discard { locked_too: false } | Advice::Free | Advice::Remove, _)
+                if locked =>
+            {
+                return Err(Declined::Invalid);
+            }
+            (_, Backing::Device { .. }) => return Err(Declined::Invalid),
+            (_, Backing::Anonymous { id, offset }) => (id, offset, false),
+            (_, Backing::File { id, offset }) => (id, offset, true),
+        };
+        let first = offset.saturating_add(start - region.range.start()) / PAGE_SIZE;
+        let count = (stop - start) / PAGE_SIZE;
+        let native = inner.native.contains(&id);
+        // A private region of an object some region of this space shares is
+        // the shared object's, as `fault` treats it.
+        let shared = region.flags.shared || native || (!file && shared_object(&inner.map, id));
+
+        let owner = match advice {
+            Advice::Remove => {
+                // Linux's order: no file behind the mapping is `EINVAL` --
+                // private anonymous memory, and here a VMO `vmo_map` put
+                // here, whose pages are its handle's -- and a mapping that
+                // may not write what it maps is `EACCES`.
+                if !file && (!shared || native) {
+                    return Err(Declined::Invalid);
+                }
+                if !shared {
+                    return Err(Declined::Denied);
+                }
+                if file {
+                    let may_write = inner
+                        .files
+                        .get(&id)
+                        .is_some_and(|mapping| mapping.may_write);
+                    return Err(if may_write {
+                        Declined::Unsupported
+                    } else {
+                        Declined::Denied
+                    });
+                }
+                let object = inner.objects.get(&id).ok_or(Declined::Invalid)?;
+                advised.punching.push((Arc::clone(object), first, count));
+                return Ok(());
+            }
+            // `MADV_FREE` is for private anonymous memory only: Linux's
+            // `vma_is_anonymous`, which shmem and every file mapping fail.
+            Advice::Free if shared || file => return Err(Declined::Invalid),
+            _ if shared => None,
+            _ if file => inner.shadows.get(&id),
+            _ => inner.objects.get(&id),
+        };
+
+        let _ = mm::unmap_in(self.root * PAGE_SIZE, start, stop - start);
+        advised.pages.add_range(start, stop - start);
+        if let Some(object) = owner {
+            let retired = object.take_range(first, count);
+            if !retired.is_empty() {
+                advised.retiring.push((Arc::clone(object), retired));
+            }
+        }
+        Ok(())
     }
 }
 

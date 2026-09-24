@@ -213,6 +213,42 @@ impl Origin {
         put_int(&mut info, 8, code);
         info
     }
+
+    /// The `struct signalfd_siginfo` a signalfd read answers for `signal`
+    /// raised this way: fixed-width fields, the same on every architecture
+    /// (`include/uapi/linux/signalfd.h`). `ssi_signo`, `ssi_errno` and
+    /// `ssi_code` at 0, 4 and 8; the sender's `ssi_pid` at 12 and `ssi_uid`
+    /// at 16; a child's `ssi_status` at 40; a fault's `ssi_addr` at 72. The
+    /// sender's uid is zero, as in [`Origin::encode`]: an origin does not
+    /// record it.
+    pub(crate) fn encode_signalfd(self, signal: u32) -> [u8; SIGINFO_BYTES] {
+        let mut info = [0_u8; SIGINFO_BYTES];
+        put_int(&mut info, 0, signal as i32);
+        let code = match self {
+            Origin::Kernel => SI_KERNEL,
+            Origin::User { pid } => {
+                put_int(&mut info, 12, pid as i32);
+                SI_USER
+            }
+            Origin::Thread { pid } => {
+                put_int(&mut info, 12, pid as i32);
+                SI_TKILL
+            }
+            Origin::Child { code, pid, status } => {
+                put_int(&mut info, 12, pid as i32);
+                put_int(&mut info, 40, status);
+                code
+            }
+            Origin::Fault { code, address } => {
+                if let Some(slot) = info.get_mut(72..80) {
+                    slot.copy_from_slice(&address.to_le_bytes());
+                }
+                code
+            }
+        };
+        put_int(&mut info, 8, code);
+        info
+    }
 }
 
 /// Put an `int` into a `siginfo` buffer. Every offset used is a constant well
@@ -928,6 +964,26 @@ pub(crate) fn take_from(
     set: u64,
 ) -> Option<Taken> {
     take_among(process, thread, set)
+}
+
+/// Take the first pending signal in `set` from the process's own queue, for a
+/// reader that is none of its threads: a kernel task reading a signalfd on
+/// its behalf, as the boot check does.
+pub(crate) fn take_shared(process: &mut Signals, set: u64) -> Option<Taken> {
+    let signal = match process.shared.next(set) {
+        0 => return None,
+        signal => signal,
+    };
+    let origin = process.shared.take(signal);
+    let action = index_of(signal)
+        .ok()
+        .and_then(|index| process.actions.get(index).copied())
+        .unwrap_or_default();
+    Some(Taken {
+        signal,
+        origin,
+        action,
+    })
 }
 
 /// Take the first pending signal among `ready`, own set before shared.

@@ -47,6 +47,8 @@ pub(crate) mod pipe;
 pub(crate) mod procfs;
 pub(crate) mod pty;
 pub(crate) mod root_disk;
+pub(crate) mod signalfd;
+pub(crate) mod signalfd_check;
 pub(crate) mod socket;
 pub(crate) mod sockname;
 pub(crate) mod terminal;
