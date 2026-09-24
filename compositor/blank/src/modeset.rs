@@ -5,7 +5,7 @@ use ferrix_linux_abi::drm::{self, ModeInfo};
 
 /// The colour the screen is filled with, as `XRGB8888`: a dark slate, so a
 /// screen that is merely black is not mistaken for success.
-pub(crate) const BACKGROUND: u32 = 0x001E_1E2E;
+pub(crate) const BACKGROUND: u32 = 0x0000_00FF;
 
 /// The colour the negative control draws its first pixel in.
 pub(crate) const NEGATIVE: u32 = 0x00FF_00FF;
