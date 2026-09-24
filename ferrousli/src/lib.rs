@@ -117,6 +117,7 @@ pub mod setjmp;
 pub mod shadow;
 pub mod sigaction;
 pub mod signal;
+pub mod signalfd;
 pub mod sigset;
 pub mod socket;
 pub mod spawn;

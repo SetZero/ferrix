@@ -207,6 +207,8 @@ pub const EPOLL_PWAIT2: usize = 441;
 pub const EVENTFD2: usize = 356;
 /// `timerfd_create`.
 pub const TIMERFD_CREATE: usize = 350;
+/// `signalfd4`.
+pub const SIGNALFD4: usize = 355;
 /// `fallocate`.
 pub const FALLOCATE: usize = 352;
 /// `mlock`.

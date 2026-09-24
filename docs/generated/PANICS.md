@@ -56,10 +56,12 @@ Causes are listed most likely first.
 | [FX-0860](#fx-0860) | pipes, a FIFO or the filesystem calls failed their self-check |
 | [FX-0870](#fx-0870) | a shared file mapping failed its self-check |
 | [FX-0871](#fx-0871) | a program mapped from its file failed its self-check |
+| [FX-0872](#fx-0872) | madvise failed its self-check |
 | [FX-0880](#fx-0880) | memfd_create or its seals failed their self-check |
 | [FX-0881](#fx-0881) | epoll failed its self-check |
 | [FX-0882](#fx-0882) | eventfd failed its self-check |
 | [FX-0883](#fx-0883) | timerfd failed its self-check |
+| [FX-0884](#fx-0884) | signalfd failed its self-check |
 | [FX-0901](#fx-0901) | the native ABI's objects failed their self-check |
 | [FX-1001](#fx-1001) | PCI enumeration failed its self-check |
 | [FX-1002](#fx-1002) | a device node handed out memory or an interrupt it does not have |
@@ -1047,6 +1049,39 @@ See: kernel/src/fs/exec_check.rs; kernel/src/syscall/load.rs;
 kernel/src/syscall/program.rs; kernel/src/syscall/exec.rs;
 kernel/src/fs/procfs.rs; libs/vfs/src/walk.rs; docs/CHROME.md.
 
+<a id="fx-0872"></a>
+
+## FX-0872 — madvise failed its self-check
+
+`user::madvise_check::run` builds a process and calls madvise by number. Eight
+written pages of private anonymous memory dropped with MADV_DONTNEED, and again
+with MADV_FREE, must come back as exactly eight frames in a frame window, leave
+the resident count eight lower, and read as zeros, while the page on either side
+keeps what it held. A page a fork child shares copy-on-write must keep the
+child's contents when its parent drops it. A private mapping of a memfd must
+give back the two pages it copied and show the file there again; a shared one
+must still show what it wrote; the file must keep every page. MADV_REMOVE must
+punch a hole in shared anonymous memory that a fork child sees too, giving back
+two frames. Every hint must be accepted and drop nothing, and madvise must
+refuse as Linux does: an unaligned address, unknown advice, MADV_WIPEONFORK and
+MADV_MERGEABLE, a length that wraps, MADV_FREE and MADV_REMOVE where they do not
+apply, and a hole, which is ENOMEM once the mapped part is advised. The run is
+done twice and must leave no frame behind.
+
+1. `AddressSpace::advise_region` takes the translations down but not the pages
+   out of the region's object, or of a private file mapping's shadow, so no
+   frame goes back and the next touch shows the old contents.
+2. `advise` releases the frames before its shootdown, or holds its lock across
+   it.
+3. A shared mapping's pages are taken out of its object, which loses what every
+   other mapping of it wrote.
+4. `sys_madvise` rounds the length in 64 bits on a 32-bit build, or checks it
+   before the advice and the alignment.
+
+See: kernel/src/user/madvise_check.rs; kernel/src/user/space.rs advise;
+kernel/src/syscall/memory.rs sys_madvise; kernel/src/user/vmo.rs take_range,
+retire.
+
 <a id="fx-0880"></a>
 
 ## FX-0880 — memfd_create or its seals failed their self-check
@@ -1178,6 +1213,37 @@ run is done twice and must leave no frame behind, the thread's stack included.
 See: kernel/src/fs/timerfd_check.rs; kernel/src/fs/timerfd.rs;
 kernel/src/syscall/timerfd.rs; kernel/src/syscall/time.rs;
 kernel/src/fs/wake.rs; kernel/src/sched/wait.rs.
+
+<a id="fx-0884"></a>
+
+## FX-0884 — signalfd failed its self-check
+
+`fs::signalfd_check::run` builds a process, gives SIGUSR1, SIGUSR2 and SIGALRM
+handlers so a signal sent to it stays pending, and makes signalfds by number.
+signalfd4 must take SFD_NONBLOCK and SFD_CLOEXEC, refuse other flags, a mask
+that is not eight bytes, a mask it cannot read and a descriptor that is not a
+signalfd, and never keep SIGKILL or SIGSTOP in a mask. With nothing pending a
+read is EAGAIN and poll is not readable. A signal sent and pending must poll
+readable and read back as a signalfd_siginfo naming it, SI_USER and its sender,
+and be pending no longer; two come back in one read, lowest first; one outside
+the mask stays pending until signalfd4 gives the descriptor a mask holding it. A
+blocked read, a poll and an epoll_wait, each waiting before the signal is sent,
+must be ended by the wake its arrival makes and come back within a quarter of
+the one-second recheck. The run is done twice and must leave no frame behind.
+
+1. `Process::notify_signal` or `notify_signal_to` does not wake
+   `signal_arrived`, so a waiter on a signal it blocks is ended by its recheck a
+   second late.
+2. `SignalFd::take` reads the thread's queue or the process's but not both, or
+   takes a signal outside the mask.
+3. `Origin::encode_signalfd` puts a field at the wrong offset of
+   `signalfd_siginfo`.
+4. `sys_signalfd4` checks the flags before it reads the mask, or makes a new
+   descriptor when it was handed one to change.
+
+See: kernel/src/fs/signalfd_check.rs; kernel/src/fs/signalfd.rs;
+kernel/src/syscall/signalfd.rs; kernel/src/syscall/signal.rs;
+kernel/src/syscall/process.rs notify_signal; kernel/src/fs/wake.rs.
 
 <a id="fx-0901"></a>
 

@@ -239,6 +239,8 @@ pub const TIMERFD_CREATE: usize = 85;
 pub const TIMERFD_SETTIME: usize = 86;
 /// `timerfd_gettime`.
 pub const TIMERFD_GETTIME: usize = 87;
+/// `signalfd4`.
+pub const SIGNALFD4: usize = 74;
 /// `fadvise64`.
 pub const FADVISE64: usize = 223;
 /// `fallocate`.

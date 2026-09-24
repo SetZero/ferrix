@@ -82,7 +82,7 @@ openat mkdirat fchownat newfstatat unlinkat renameat linkat symlinkat
 readlinkat fchmodat faccessat pselect6 ppoll utimensat dup3 pipe2 prlimit64
 renameat2 getrandom memfd_create execveat statx clone3 faccessat2
 epoll_create1 epoll_ctl epoll_pwait epoll_pwait2 eventfd2
-timerfd_create timerfd_settime timerfd_gettime
+timerfd_create timerfd_settime timerfd_gettime signalfd4
 fadvise64 fallocate mlock munlock mlockall munlockall getpriority setpriority
 waitid preadv pwritev mknodat setresuid setresgid fchmodat2 copy_file_range
 sync_file_range

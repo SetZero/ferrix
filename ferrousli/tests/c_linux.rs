@@ -21,3 +21,8 @@ fn an_eventfd_written_by_one_thread_wakes_another_threads_epoll_wait() {
 fn a_timerfd_expires_into_epoll_and_counts_the_periods_that_passed() {
     check(&Case::named("linux/timerfd"));
 }
+
+#[test]
+fn a_blocked_signal_is_read_through_a_signalfd_and_wakes_epoll() {
+    check(&Case::named("linux/signalfd"));
+}
