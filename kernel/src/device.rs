@@ -61,7 +61,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use ferrix_bootinfo::{BootView, MemKind, PAGE_SIZE};
 use ferrix_fdt::{Trigger as TreeTrigger, VIRTIO_MMIO_COMPATIBLE};
 use ferrix_native_abi::types::{
-    DEVICE_NOT_PCI, DEVICE_TREE_BLOCKS, DEVICE_VIRTIO_PCI, DeviceBlock, DeviceInfo,
+    DEVICE_NOT_PCI, DEVICE_TREE_BLOCKS, DEVICE_VIRTIO_PCI, DeviceBlock, DeviceInfo, TREE_STM32_GPU,
     TREE_STM32_HDMI, TREE_STM32_USBH, USB_INPUT_FUNCTIONS,
 };
 use ferrix_pci::Address;
@@ -76,7 +76,7 @@ use ferrix_pci::virtio::{Location as VirtioLocation, SharedMemory, Transport};
 use ferrix_sync::{IrqSpinLock, Once};
 
 use crate::mmio::Mmio;
-use crate::{acpi, arch, fdt, iommu, irq, stm32mp1, stm32mp1_usb, vmap};
+use crate::{acpi, arch, fdt, iommu, irq, stm32mp1, stm32mp1_gpu, stm32mp1_usb, vmap};
 
 /// GIC interrupt identifiers below this are software-generated or private to
 /// one core, and neither is a device's line.
@@ -1056,6 +1056,9 @@ fn tree_nodes(view: &BootView<'_>, reserved: &Reserved) -> Vec<DeviceNode> {
     if let Some(node) = usb_node(&tree, reserved, &mut held) {
         nodes.push(node);
     }
+    if let Some(node) = gpu_node(&tree, reserved, &mut held) {
+        nodes.push(node);
+    }
     nodes
 }
 
@@ -1108,6 +1111,59 @@ fn usb_node(
         masking: Masking::Controller,
     });
     crate::console::println!("  usb      {prepared}");
+    Some(node)
+}
+
+/// The STM32MP157's GPU, when there is one: the Vivante GC400T's registers
+/// and interrupt, once [`stm32mp1_gpu::prepare`] has clocked it and pulsed
+/// its reset (`docs/GPU.md` §6.2).
+fn gpu_node(
+    tree: &ferrix_fdt::Fdt<'_>,
+    reserved: &Reserved,
+    held: &mut BTreeSet<u32>,
+) -> Option<DeviceNode> {
+    let prepared = match stm32mp1_gpu::prepare(tree) {
+        Ok(found) => found?,
+        Err(why) => {
+            crate::console::println!("  gpu      the board's GPU is left alone: {why}");
+            return None;
+        }
+    };
+    let mut node = DeviceNode::empty(Location::Tree(prepared.registers.0));
+    node.binding = TREE_STM32_GPU;
+    // The core does not snoop the caches, and with its MMU off its front end
+    // reads one run of physical addresses, as the LTDC scans one out.
+    node.dma = DmaShape {
+        contiguous: true,
+        coherent: false,
+    };
+    node.mint(prepared.registers.0, prepared.registers.1, false, reserved);
+    if node.apertures.len() != 1 {
+        crate::console::println!(
+            "  gpu      the board's GPU is left alone: its registers overlap memory the kernel uses"
+        );
+        return None;
+    }
+    let interrupt = prepared.interrupt;
+    let usable = interrupt.id >= FIRST_SHARED_INTERRUPT
+        && !irq::is_registered(interrupt.id)
+        && held.insert(interrupt.id);
+    if !usable {
+        crate::console::println!(
+            "  gpu      the board's GPU is left alone: interrupt {} is taken",
+            interrupt.id
+        );
+        return None;
+    }
+    node.vectors.push(Vector {
+        number: interrupt.id,
+        trigger: interrupt.trigger.map(|trigger| match trigger {
+            TreeTrigger::EdgeRising | TreeTrigger::EdgeFalling => Trigger::Edge,
+            TreeTrigger::LevelHigh | TreeTrigger::LevelLow => Trigger::Level,
+        }),
+        masking: Masking::Controller,
+    });
+    crate::console::println!("  gpu      {prepared}");
     Some(node)
 }
 

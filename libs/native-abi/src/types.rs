@@ -148,6 +148,13 @@ pub const TREE_STM32_HDMI: u16 = 1;
 /// control channel for each keyboard or mouse it finds, up to
 /// [`USB_INPUT_FUNCTIONS`].
 pub const TREE_STM32_USBH: u16 = 2;
+/// [`DeviceInfo::device_id`] of an STM32MP157's GPU, a Vivante GC400T: its
+/// registers in `common`, nothing in `device`, and its interrupt as vector 0.
+/// Its memory is not snooped, so the driver pins what it shares with
+/// `PIN_COHERENT`; and while its MMU is off its front end reads one run of
+/// physical addresses, so a buffer it reads must be physically contiguous
+/// (`docs/GPU.md` §6.3).
+pub const TREE_STM32_GPU: u16 = 3;
 /// How many input control channels one USB host's node may hold at once.
 pub const USB_INPUT_FUNCTIONS: usize = 8;
 

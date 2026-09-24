@@ -25,8 +25,8 @@ use ferrix_native_abi::handle::Handle;
 use ferrix_native_abi::rights::Requested;
 use ferrix_native_abi::signals::Signals;
 use ferrix_native_abi::types::{
-    CHANNEL_MAX_HANDLES, DEVICE_TREE_BLOCKS, DEVICE_VIRTIO_PCI, DeviceInfo, TREE_STM32_HDMI,
-    TREE_STM32_USBH,
+    CHANNEL_MAX_HANDLES, DEVICE_TREE_BLOCKS, DEVICE_VIRTIO_PCI, DeviceInfo, TREE_STM32_GPU,
+    TREE_STM32_HDMI, TREE_STM32_USBH,
 };
 use ferrix_netring::control::{
     CONTROL_RIGHTS as NET_CONTROL_RIGHTS, DEVICE_RIGHTS as NET_DEVICE_RIGHTS, MAX_MESSAGE,
@@ -91,6 +91,10 @@ enum Kind {
     /// core for a channel of its own per keyboard or mouse, so there is no
     /// PUBLISHED for devmgr to wait for.
     Host,
+    /// `docs/GPU.md` §6.3: a GPU's rendering engine that no kernel
+    /// subsystem serves yet. Handed its device and START as a port's driver
+    /// is; it publishes nothing, so it is started and taken at its word.
+    Engine,
 }
 
 /// A driver about to be started: its kind, carrying what only that kind
@@ -112,6 +116,8 @@ enum Plan {
     Port,
     /// A bus host, which publishes nothing itself.
     Host,
+    /// A rendering engine, which publishes nowhere yet.
+    Engine,
 }
 
 /// The table: which driver, by name in the initramfs, drives which device,
@@ -129,9 +135,13 @@ const DRIVERS: [(u16, &[u16], &[u8], Kind); 5] = [
 /// HDMI output is a card, driven by `ltdc` (`docs/DISPLAY.md` §6).
 ///
 /// Its USB host is a bus host, driven by `usbhid` (`docs/INPUT.md` §7).
-const TREE_DRIVERS: [(u16, &[u8], Kind); 2] = [
+///
+/// Its GPU, a Vivante GC400T, is an engine, driven by `gc400`
+/// (`docs/GPU.md` §6.3).
+const TREE_DRIVERS: [(u16, &[u8], Kind); 3] = [
     (TREE_STM32_HDMI, b"ltdc", Kind::Display),
     (TREE_STM32_USBH, b"usbhid", Kind::Host),
+    (TREE_STM32_GPU, b"gc400", Kind::Engine),
 ];
 
 /// Where devmgr gave up, as the exit status.
@@ -280,6 +290,7 @@ fn run(channel: &Channel<Kernel>) -> Result<(), Step> {
             Kind::Input => Plan::Input,
             Kind::Port => Plan::Port,
             Kind::Host => Plan::Host,
+            Kind::Engine => Plan::Engine,
         };
         let Some(slot) = started.get_mut(count as usize) else {
             failed += 1;
@@ -298,11 +309,12 @@ fn run(channel: &Channel<Kernel>) -> Result<(), Step> {
                 // the next driver starts, so disks register in PCI order
                 // and two drivers never race to be vda.
                 //
-                // A port driver publishes to no subsystem, and a bus host's
-                // devices publish when they are found, so waiting for either
-                // would wait for ever and the kill below would count a
-                // working driver failed. It is started and taken at its word.
-                let published = if matches!(kind, Kind::Port | Kind::Host) {
+                // A port driver and an engine's publish to no subsystem, and
+                // a bus host's devices publish when they are found, so
+                // waiting for any of them would wait for ever and the kill
+                // below would count a working driver failed. It is started
+                // and taken at its word.
+                let published = if matches!(kind, Kind::Port | Kind::Host | Kind::Engine) {
                     true
                 } else {
                     await_published(channel, &port, info.location, u64::from(count), &mut inbox)
@@ -893,6 +905,7 @@ fn start(
         Plan::Input => start_input(job, device, image, info, port, key),
         Plan::Port => start_plain(job, device, image, info, port, key, "vport"),
         Plan::Host => start_plain(job, device, image, info, port, key, "usbhid"),
+        Plan::Engine => start_plain(job, device, image, info, port, key, "gc400"),
     }
 }
 
@@ -1092,17 +1105,18 @@ fn start_input(
 }
 
 /// A driver given its device and nothing else, as `program`: a virtio-serial
-/// port's, which serves no kernel subsystem, or a bus host's, which asks for
-/// its channels itself.
+/// port's or a rendering engine's, which serve no kernel subsystem, or a bus
+/// host's, which asks for its channels itself.
 ///
 /// Every other kind asks the device for a control channel of its subsystem's
 /// kind, and the kernel learns from that what the driver is for. A port has
-/// no subsystem to name (`docs/CLIPBOARD.md` §5), and a USB host has one
-/// input device per keyboard or mouse it finds, which only it can count
-/// (`docs/INPUT.md` §7), so `launch` makes the bootstrap channel START
-/// travels on, as it does for all of them, and the driver makes the rest.
-/// Nothing here waits for it: a port has no PUBLISHED it could ever send, and
-/// a host's devices publish whenever they are plugged in.
+/// no subsystem to name (`docs/CLIPBOARD.md` §5), nor has the GC400 yet
+/// (`docs/GPU.md` §6.3), and a USB host has one input device per keyboard or
+/// mouse it finds, which only it can count (`docs/INPUT.md` §7), so `launch`
+/// makes the bootstrap channel START travels on, as it does for all of them,
+/// and the driver makes the rest. Nothing here waits for it: a port or an
+/// engine has no PUBLISHED it could ever send, and a host's devices publish
+/// whenever they are plugged in.
 fn start_plain(
     job: &Job<Kernel>,
     device: Device<Kernel>,

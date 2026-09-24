@@ -47,6 +47,7 @@ mod render;
 mod sched;
 mod smp;
 mod stm32mp1;
+mod stm32mp1_gpu;
 mod stm32mp1_usb;
 mod sync;
 mod syscall;
