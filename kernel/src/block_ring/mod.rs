@@ -297,8 +297,15 @@ pub(crate) fn wait_until_unserved(
         let Some(control) = served_by(node) else {
             return Ok(());
         };
-        if !control.signals().intersects(Signals::PEER_CLOSED) {
-            return Err(StillServed::ByADriver);
+        // Allowing a moment for a driver's end its handle no longer holds but
+        // the kernel still does -- this ring's own READY, still waking the
+        // driver that read it: see `Endpoint::peer_gone`.
+        if !control.peer_gone(deadline, cancelled) {
+            return Err(if cancelled() {
+                StillServed::Waiting
+            } else {
+                StillServed::ByADriver
+            });
         }
         let ended = SERVED.wait_until_deadline(
             || {

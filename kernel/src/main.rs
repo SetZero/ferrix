@@ -1024,6 +1024,10 @@ fn check_ring_control() {
              accepted HELLO and unpublished when its driver stopped or died, {} frames leaked",
             report.refusals, report.published, report.leaked,
         );
+        println!(
+            "  ring     {} quiesce waited for a dead driver's end held after its handle closed",
+            report.waited_for_held_end,
+        );
     }
 }
 

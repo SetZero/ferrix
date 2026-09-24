@@ -29,6 +29,7 @@
 use alloc::collections::BTreeSet;
 use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 use crate::sync::SpinLock;
 use ferrix_native_abi::signals::Signals;
@@ -39,6 +40,26 @@ use ferrix_objects::reach::{Reach, reaches};
 use super::port::{Observer, PortError, register, triggered};
 use super::{Object, Transfer, dispose};
 use crate::sched::WaitQueue;
+
+/// How long [`Endpoint::peer_gone`] allows something in the kernel to let go
+/// of a peer whose owner has closed it.
+///
+/// Every such hold is a few instructions long unless its holder is switched
+/// out or its processor is not being run, and both of those last a slice or
+/// a host's hiccup, not longer. The cost falls only on a quiesce refused for
+/// a driver that really does still hold its end, which is a caller's
+/// mistake and can wait a moment to be told.
+const HELD_GRACE_NANOS: u64 = 20_000_000;
+
+/// How many times [`Endpoint::peer_gone`] found the peer alive and waited,
+/// for the check that holds a dead driver's end to know when the quiesce has
+/// started waiting for it.
+static WAITED_FOR_PEER: AtomicU64 = AtomicU64::new(0);
+
+/// See [`WAITED_FOR_PEER`].
+pub(crate) fn waits_for_peer() -> u64 {
+    WAITED_FOR_PEER.load(Ordering::Relaxed)
+}
 
 /// The most messages an endpoint holds unread.
 ///
@@ -279,6 +300,45 @@ impl Endpoint {
     /// Whether nobody holds the other end.
     pub(crate) fn peer_closed(&self) -> bool {
         self.peer.strong_count() == 0
+    }
+
+    /// Whether the peer is closed, allowing a moment for one whose last handle
+    /// has closed but which something in the kernel still holds: for a caller
+    /// that will conclude from a living peer that its owner still holds it.
+    ///
+    /// The peer is alive for as long as anything holds it, and not only its
+    /// handles do. [`Endpoint::write`] holds the end it writes to until it has
+    /// woken that end's reader, so a driver woken by the kernel's reply can
+    /// read it and close its handle while the writer, preempted by the
+    /// interrupt that ended its wake or on a processor the host has not run
+    /// for a while, still holds the end; [`Endpoint::signals`] and a read
+    /// that makes room hold it for a moment too; and a close made while
+    /// another processor is draining `object::dispose`'s queue leaves the end
+    /// in that queue. A quiesce issued the instant a driver's handle closed
+    /// met the first of these about one boot in ten under a loaded host, and
+    /// refused the device as still served.
+    ///
+    /// So a peer still alive is waited for, woken by its drop: for
+    /// [`HELD_GRACE_NANOS`], and for as long as a disposal is pending, up to
+    /// `deadline`. A peer alive after that is held by an owner. `false` also
+    /// when `cancelled` says to stop looking.
+    pub(crate) fn peer_gone(&self, deadline: u64, cancelled: &dyn Fn() -> bool) -> bool {
+        if self.peer_closed() {
+            return true;
+        }
+        let _ = WAITED_FOR_PEER.fetch_add(1, Ordering::Relaxed);
+        let grace = crate::timer::now_nanos()
+            .saturating_add(HELD_GRACE_NANOS)
+            .min(deadline);
+        let _ = self.waiters.wait_until_deadline(
+            || {
+                self.peer_closed()
+                    || cancelled()
+                    || (crate::timer::now_nanos() >= grace && !super::disposal_pending())
+            },
+            deadline,
+        );
+        self.peer_closed()
     }
 
     /// Queue a packet with `observer` the next time a message is readable on

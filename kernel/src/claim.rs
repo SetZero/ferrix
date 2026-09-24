@@ -24,8 +24,6 @@
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
-use ferrix_native_abi::signals::Signals;
-
 use crate::block_ring::StillServed;
 use crate::device::DeviceNode;
 use crate::object::channel::Endpoint;
@@ -98,8 +96,14 @@ impl Claims {
             let Some(control) = self.control_of(node) else {
                 return Ok(());
             };
-            if !control.signals().intersects(Signals::PEER_CLOSED) {
-                return Err(StillServed::ByADriver);
+            // As `block_ring::wait_until_unserved` allows: a driver's end
+            // the kernel holds a moment past its handle is not a driver.
+            if !control.peer_gone(deadline, cancelled) {
+                return Err(if cancelled() {
+                    StillServed::Waiting
+                } else {
+                    StillServed::ByADriver
+                });
             }
             let released = self
                 .released

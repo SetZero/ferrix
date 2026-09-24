@@ -25,7 +25,10 @@
 //!   too, but leaves the device bound until `device_quiesce`, which turns the
 //!   device off and frees it for the next ring — asked after the ring has
 //!   ended, and asked the instant the driver is gone, repeatedly, since the
-//!   quiesce then has to wait for the ring's task to notice;
+//!   quiesce then has to wait for the ring's task to notice -- the last time
+//!   with the driver's end still held a moment after its handle closed, as
+//!   the ring's own reply can hold it, which the quiesce has to wait out
+//!   rather than take for a driver still holding it;
 //! * `device_info` describes the device as enumeration found it, every virtio
 //!   block it names inside an aperture, and the START the kernel would build
 //!   from it agrees; `device_quiesce` is refused without `MANAGE` and while a
@@ -51,7 +54,10 @@ use ferrix_vfs::initramfs::makedev;
 use super::{VIRTIO_BLK_MAJOR, location_of, start_for};
 use crate::device::{self, DeviceNode};
 use crate::fs::devfs;
+use crate::object::Object;
+use crate::object::channel::{self, Endpoint};
 use crate::object::check::{SCRATCH, Side, device_handle, reg};
+use crate::sync::SpinLock;
 use crate::{mm, sched, timer};
 
 /// Where this check keeps its buffers: the second page of [`SCRATCH`], which
@@ -86,6 +92,15 @@ const PATIENCE_NANOS: u64 = 10_000_000_000;
 /// `devmgr` does on `TERMINATED`, rather than after the ring has ended.
 static QUIESCE_AT_ONCE: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
+/// Whether the at-once quiesce is made with the driver's end still held after
+/// its handle closed, as the ring's reply or a drain on another processor can
+/// hold it: see `Endpoint::peer_gone`.
+static HOLD_END: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+/// The driver's end the check holds for that round, until [`release_end`]
+/// lets it go.
+static HELD: SpinLock<Option<Arc<Endpoint>>> = SpinLock::new(None);
+
 /// The disk the accepted HELLO describes: eight sectors of 512 bytes, one per
 /// request, through a one-page data VMO.
 const BLOCK_SIZE: u32 = 512;
@@ -107,6 +122,9 @@ pub(crate) struct Report {
     pub(crate) leaked: i64,
     /// Why nothing was checked, on a machine with no PCI function.
     pub(crate) skipped: Option<&'static str>,
+    /// Quiesces that waited for a dead driver's end something still held,
+    /// and went ahead once it was let go.
+    pub(crate) waited_for_held_end: u32,
 }
 
 /// Counts what happened, so the report is a measurement and not a claim.
@@ -116,6 +134,8 @@ struct Counter {
     refusals: u32,
     /// See [`Report::published`].
     published: u32,
+    /// See [`Report::waited_for_held_end`].
+    waited_for_held_end: u32,
 }
 
 /// Run the check. `Err` names the first thing that was not true.
@@ -134,6 +154,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
             published: 0,
             leaked: 0,
             skipped: Some("no PCI function to make a ring for"),
+            waited_for_held_end: 0,
         });
     };
     // Twice, measured on the second, for the reason `syscall::check::run`
@@ -156,10 +177,15 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     // Outside the window: the deaths, each settled before the next so the
     // ring made after the quiesce has let the device go again.
     round(&node, &mut counter, Ending::DriverDied)?;
-    for _ in 0..3 {
+    // The last of them with the driver's end still held when the quiesce
+    // comes, which the ring's reply makes happen by chance and the check
+    // makes happen every time.
+    for held in [false, false, true] {
         settle()?;
         QUIESCE_AT_ONCE.store(true, core::sync::atomic::Ordering::Relaxed);
+        HOLD_END.store(held, core::sync::atomic::Ordering::Relaxed);
         let outcome = round(&node, &mut counter, Ending::DriverDied);
+        HOLD_END.store(false, core::sync::atomic::Ordering::Relaxed);
         QUIESCE_AT_ONCE.store(false, core::sync::atomic::Ordering::Relaxed);
         outcome?;
     }
@@ -168,6 +194,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
         published: counter.published,
         leaked,
         skipped: None,
+        waited_for_held_end: counter.waited_for_held_end,
     })
 }
 
@@ -300,6 +327,56 @@ fn published(rdev: u64) -> Result<(), &'static str> {
     }
 }
 
+/// Hold the driver's end of `control` beyond its handle, as the ring's reply
+/// holds it while it wakes the driver, and start the task that lets it go
+/// once the quiesce is waiting for it.
+///
+/// The release waits for the quiesce rather than for a time, so the round is
+/// decided by what the quiesce does and not by how soon either task runs: a
+/// quiesce that waits for the end is released into success, and one that
+/// does not has refused before the release could matter. A second is the
+/// release's own bound, for the second case.
+fn hold_end(side: &Side, control: Handle, waits_before: u64) -> Result<(), &'static str> {
+    let end = side
+        .process
+        .with_handles(|table| match table.get(control) {
+            Ok((Object::Channel(end), _)) => Some(Arc::clone(end)),
+            _ => None,
+        })
+        .ok_or("the driver's end of the control channel was not in the table")?;
+    *HELD.lock() = Some(end);
+    let before = usize::try_from(waits_before).unwrap_or(usize::MAX);
+    if sched::spawn(
+        "end-release",
+        release_end,
+        before,
+        ferrix_sched::NICE_0_WEIGHT,
+    )
+    .is_err()
+    {
+        let end = HELD.lock().take();
+        drop(end);
+        return Err("could not start the task that lets the held end go");
+    }
+    Ok(())
+}
+
+/// Let the held end go once a quiesce has started waiting for it, or after a
+/// second.
+fn release_end(waits_before: usize) {
+    const SECOND: u64 = 1_000_000_000;
+    let deadline = timer::now_nanos().saturating_add(SECOND);
+    while usize::try_from(channel::waits_for_peer()).unwrap_or(usize::MAX) == waits_before
+        && timer::now_nanos() < deadline
+    {
+        sched::sleep_for(1_000_000);
+    }
+    // Taken out before it is dropped: the drop wakes the kernel's end, which
+    // must not happen under the lock.
+    let end = HELD.lock().take();
+    drop(end);
+}
+
 /// End the ring as `ending` says, require its disk to go, and after a death
 /// require the device to stay bound.
 fn end(
@@ -330,17 +407,32 @@ fn end(
             return Err("the kernel kept its end of a stopped ring open");
         }
     }
+    let at_once =
+        ending == Ending::DriverDied && QUIESCE_AT_ONCE.load(core::sync::atomic::Ordering::Relaxed);
+    let held = at_once && HOLD_END.load(core::sync::atomic::Ordering::Relaxed);
+    let waits_before = channel::waits_for_peer();
+    if held {
+        hold_end(side, control, waits_before)?;
+    }
     let _ = side
         .call(nr::HANDLE_CLOSE, &[reg(control)])
         .map_err(|_| "closing the control channel failed")?;
-    let at_once =
-        ending == Ending::DriverDied && QUIESCE_AT_ONCE.load(core::sync::atomic::Ordering::Relaxed);
     if at_once {
         // As devmgr does on TERMINATED: before the ring's task has had a
         // chance to see the closed channel. The quiesce waits for it.
-        let _ = side
-            .call(nr::DEVICE_QUIESCE, &[reg(device)])
-            .map_err(|_| "quiescing the instant a driver died failed")?;
+        let _ = side.call(nr::DEVICE_QUIESCE, &[reg(device)]).map_err(|_| {
+            if held {
+                "a quiesce refused a device whose dead driver's end was held a moment longer"
+            } else {
+                "quiescing the instant a driver died failed"
+            }
+        })?;
+    }
+    if held {
+        if channel::waits_for_peer() == waits_before {
+            return Err("a quiesce did not wait for the end the check held");
+        }
+        counter.waited_for_held_end += 1;
     }
     let deadline = timer::now_nanos().saturating_add(PATIENCE_NANOS);
     while devfs::block_device(rdev).is_some() {

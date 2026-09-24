@@ -191,6 +191,17 @@ pub(crate) fn dispose(objects: impl IntoIterator<Item = Object>) {
     }
 }
 
+/// Whether some object may be waiting in [`dispose`]'s queue for another
+/// context to drop it: a drain is under way, or the queue holds something.
+///
+/// What a close that has returned does not promise. A handle closed on one
+/// processor while another is draining is queued, and its object lives on
+/// until that drain reaches it; a caller about to conclude from an object
+/// still being alive that something still holds it has to allow for that.
+pub(crate) fn disposal_pending() -> bool {
+    DISPOSING.load(Ordering::Acquire) || !ORPHANS.lock().is_empty()
+}
+
 impl Object {
     /// Whether [`dispose`] drops it where it is rather than queueing it.
     ///
