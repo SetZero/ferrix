@@ -418,13 +418,29 @@ real work for a 650 MHz Cortex-A7). The boot says:
   stage 1  loader hand-off verified
   checks   ferrix.checks=skip: stages 2 to 12 are brought up and not checked; this boot is not a boot test
   ...
-  display  LTDC at 0x5a001000, HDMI bridge at 0x39 on I2C 0x40012000, pixel clock 74.250 MHz, 30 pins muxed
-  display  card0 scanout 0: 1280x720
+  display  LTDC at 0x5a001000, HDMI bridge at 0x39 on I2C 0x40012000, pixel clock 74.250 MHz (at most 74.250), 30 pins muxed
+ltdc: monitor DELL U2415, EDID 1.3, 1 extension block, HDMI
+ltdc: edid 000 00ffffffffffff0010acbaa0554834333... (eight lines of 32 bytes)
+ltdc: range limits 49-61 Hz, 30-83 kHz, 170.000 MHz; takes timings it does not list: no
+ltdc: offered detailed 0.0 1920x1200 at 59.950 Hz, 154.000 MHz: over the LTDC's 90.000 MHz
+ltdc: offered VIC 34 1920x1080 at 30.000 Hz, 74.250 MHz, VIC 34: runs, at 74.250 MHz
+  ... one line per mode the monitor offers ...
+ltdc: can run 1920x1080 at 30.000 Hz, 74.250 MHz, VIC 34
+ltdc: can run 1280x720 at 60.000 Hz, 74.250 MHz, VIC 4
+  ... one line per mode listed to DRM ...
+  display  pixel clock 74.250 MHz: PLL4's VCO over 8
+ltdc: running 1920x1080 at 30.000 Hz, 74.250 MHz, VIC 34, HDMI
+  display  card0 scanout 0: 1920x1080
+  display  card0 runs 1920x1080 at 30 Hz, 6 modes listed
   devmgr   2 devices, 7 drivers, 2 started, 0 failed
 FERRIX-BOOT-UNCHECKED stages 1-12 brought up, the self-checks of 2 to 12 skipped as ferrix.checks=skip asks
 hyprix: 1 monitor [card0 HDMI-A-1 1280x720 1280x720]
+ltdc: now running 1280x720 at 60.000 Hz, 74.250 MHz, VIC 4
 hyprix: started /bin/term /bin/zinc as 190
 ```
+
+(The `ltdc:` lines are the driver's, as a U2415 would draw them; the order of
+the driver's and the kernel's lines depends on who writes first.)
 
 **The desktop's image skips the kernel's self-checks.** `flash --compositor`
 writes `ferrix.checks=skip` to `FERRIX/DEFAULTS.TXT` (step 3), and the kernel
@@ -454,17 +470,35 @@ edge) and `3` for one turned the other way; the desktop is then laid out
 720x1280. On 2026-09-23 the customer's monitor wanted `3`: `1` showed the
 desktop upside down, `3` upright.
 
+That line asks for 720p, and gets it: the card starts at the largest mode it
+can run on the monitor and switches when hyprix sets 1280x720. For the
+largest, write `preferred` (or `highres`) where the line says `1280x720@60`.
+
 Plug the monitor in before the boot: the card says it is connected whatever
-the socket holds, and there is no hotplug. The monitor must take 1280x720 at
-60 Hz, which every HDMI sink does; the pixel clock is the one the board's
-firmware leaves on PLL4, and no other mode is offered. **There is no input
+the socket holds, and there is no hotplug. **Which modes, and why not
+1920x1200 at 60 Hz** (`docs/DISPLAY.md` §6, **Modes**): the LTDC's pixel
+clock tops out at 90 MHz (DS12504 table 94), and 1920x1200 at 60 needs
+154 MHz; the board makes only 594 MHz divided by a whole number, held to
+74.25 MHz at the DK's medium pin speed, and a mode the monitor lists runs
+when one of those is within half a percent of its clock. In practice that is
+720p at 50 or 60 Hz, 1920x1080 at 24, 25 or 30 Hz where the monitor lists
+them (CTA VICs 32 to 34, which many HDMI monitors do), and some small ones;
+a monitor whose EDID says it takes any timing inside its range limits also
+gets its listed sizes retimed, 1920x1200 at about 29 Hz if its range goes
+that low. The board picks the largest, and never less than 720p60. At 1080p a
+full redraw in software costs 2.25 times 720p's, about 225 ms. **There is no input
 yet** on `main` as this is written (a USB keyboard and mouse driver is on its
 way), so the desktop is to look at, not to type into.
 A frame takes about 100 ms in software once warm.
 
 If the display line says `left alone:` instead, it names what the kernel
 could not check -- a pixel clock other than 74.25 MHz, which means firmware
-other than the mainline chain of step 1, is the likely one. If `devmgr`
+other than the mainline chain of step 1, is the likely one. `pixel clock
+left alone:` later on names why a mode's clock was not set (something else
+running from PLL4's Q output), and the driver then stays at 720p60. A
+monitor that shows "out of range" or nothing at the mode chosen: the
+`ltdc: edid` lines are its EDID, which is what to look into; a `monitor =`
+line naming 1280x720 runs 720p meanwhile. If `devmgr`
 reports the driver failed, the bridge most likely did not answer on I2C: its
 supplies are the PMIC's `ldo2` and `ldo6`, which Ferrix does not touch and
 which were on in every boot so far.
@@ -656,6 +690,7 @@ tasks onto one queue reads many times slower there than on the board.
 | `${fdtcontroladdr}` is the tree to pass; `${fdt_addr_r}` fails | on the board |
 | Main still boots the board, 2026-09-23 | `f03e210e` plus the HDMI stack, busybox as init: `FERRIX-BOOT-OK stages 1-11` at two processors, the shell answered `uname -a`, and `exit` reset the board to `STM32MP>` under `CMDLINE.TXT`'s `ferrix.onexit=reset` |
 | PLL4's Q output is 74.25 MHz on this firmware | read from U-Boot: `PLL4CR 0x73`, `PLL4CFGR1 0x00030062`, `PLL4CFGR2 0x00070705`, no fraction, `RCK4SELR` the HSE: 24 MHz / 4 x 99 / 8. The kernel reads the same registers and prints `pixel clock 74.250 MHz` |
+| The pixel clock's divider can be changed while Ferrix runs, and modes other than 720p60 show | **not yet on the board** (2026-09-24). What stands behind it: `PLL4CFGR2 0x00070705` above is DIVQ 7 in bits 14:8 with P and R beside it; TF-A's `pll4_cfg1` gives P to SDMMC1 only; Linux's clock tree gates `pll4_q` with `PLL4CR` bit 5 around its divider; the mode choice is host-tested against two Dells' EDIDs |
 | The RCC is the normal world's to write | OP-TEE's boot line `RCC tzen:0` |
 | HDMI out at 1280x720 from a Linux program | `compositor/blank` as init drew `0x1e1e2e` over `/dev/dri/card0`, seen on a monitor, 2026-09-23 (`docs/DISPLAY.md` §6) |
 | The Wayland compositor on the board | `hyprix` as init: `1 monitor [card0 HDMI-A-1 1280x720 1280x720]`, a terminal window tiled, seen on the monitor, about 100 ms a frame |

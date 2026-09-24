@@ -623,8 +623,10 @@ RGB bus into a Silicon Image SiI9022 HDMI transmitter on I2C1 at 0x39
 (`stm32mp15xx-dkx.dtsi`). The LTDC's pixel clock is PLL4's Q output, which
 the board's firmware (TF-A) leaves at exactly 74.25 MHz — 24 MHz from the
 HSE, divided by 4, times 99, divided by 8, read back from the RCC on the
-board — and that is CEA-861's 1280x720 at 60 Hz. The card runs that one
-mode; no clock is reprogrammed, because PLL4 clocks other things too.
+board — and that is CEA-861's 1280x720 at 60 Hz. Until 2026-09-24 the card
+ran that one mode; it now runs the largest mode the monitor offers that
+the board can make a pixel clock for (**Modes**, below), by changing Q's
+divider and nothing else of PLL4.
 
 **Who does what.**
 
@@ -637,28 +639,42 @@ mode; no clock is reprogrammed, because PLL4 clocks other things too.
   node, `Location::Tree`, with two apertures (the LTDC's page and I2C1's,
   each the whole page RM0436 gives the peripheral) and the LTDC's interrupt,
   and says so: `display  LTDC at 0x5a001000, HDMI bridge at 0x39 on I2C
-  0x40012000, pixel clock 74.250 MHz, 30 pins muxed`. Anything it cannot
-  check leaves the display alone with a line saying why.
+  0x40012000, pixel clock 74.250 MHz (at most 74.250), 30 pins muxed`.
+  Anything it cannot check leaves the display alone with a line saying why.
+  Later, on the driver's request (`device_clock`, native call 0x104F,
+  `MANAGE` on the device), it rounds and sets the pixel clock: PLL4's Q
+  divider, gated while it changes, and only while no other kernel clock
+  runs from Q — it reads the thirteen muxes that can pick `pll4_q` (Linux's
+  `clk-stm32mp1.c`) and DSI's gate each time. It prints `display  pixel
+  clock 74.250 MHz: PLL4's VCO over 8`, or why it would not.
 * **devmgr** matches the node by `device_info`'s new `DEVICE_TREE_BLOCKS`
   kind and the binding number `TREE_STM32_HDMI`, and starts `/lib/drivers/ltdc`
   with blk's START shape, the two register windows where virtio's blocks
   would be.
 * **The driver** (`user/ltdc`, logic in `libs/stm32-display`, host-tested
   against models of the LTDC, the I2C controller, the bridge and an EDID
-  EEPROM): finds the bridge in TPI mode and checks its chip id, reads the
-  monitor's EDID through the bridge's DDC pass-through to choose HDMI (with
-  an AVI infoframe, VIC 4) or DVI, starts the LTDC at 720p60 with its layer
-  off, tells the bridge the mode and turns TMDS on. HELLO offers one scanout,
-  1280x720.
+  EEPROM, and with real monitors' EDIDs): finds the bridge in TPI mode and
+  checks its chip id, reads the monitor's EDID (base block and first
+  extension) through the bridge's DDC pass-through, says what it found on
+  the console, chooses HDMI (with an AVI infoframe naming the mode's VIC) or
+  DVI, asks the kernel for the chosen mode's clock, starts the LTDC with its
+  layer off, tells the bridge the mode and turns TMDS on. HELLO offers one
+  scanout at the chosen size and lists every mode the board can run on the
+  monitor (display protocol version 5: up to sixteen timings after the
+  scanouts).
 
 **Buffers are one run of memory.** The LTDC has one address register per
 layer and nothing to translate through, so a buffer it shows must be
 physically contiguous. The core fills such a card's ranges at ATTACH with
 one block from the frame allocator — 720p's 3.6 MB fits the largest block,
-4 MiB — which `libs/frame`'s new `split` turns into single frames, so the
+4 MiB — or, for a larger buffer, with that many largest blocks lying back
+to back (`Frames::allocate_run`: 1920x1080's 8.3 MB and 1920x1200's 9.2 MB
+take three), which `libs/frame`'s `split` turns into single frames, so the
 card VMO owns, maps, decommits and gives back each page exactly as it does
-any other. The driver pins the range and refuses one that is not a single
-run below 4 GiB.
+any other, and the pages past the buffer go back at once. A run exists only
+where that much memory is free and aligned to 4 MiB, which after boot is
+most of the board's 512 MiB; a compositor makes its buffers at start. The
+driver pins the range and refuses one that is not a single run below 4 GiB.
 
 **The LTDC does not snoop the caches.** The compositor draws through a
 normal cacheable mapping, as on every other card, and the core writes the
@@ -675,11 +691,70 @@ most, never mid-screen. DETACH of a buffer on screen takes the layer off and
 waits for that reload before it unpins.
 
 **The DRM surface.** The connector is `DRM_MODE_CONNECTOR_HDMIA` and lists
-the one mode; a `monitor =` line asking for another size is left alone by
-`compositor_drm::Plan::take`, as for any size a connector does not list.
-It reports connected whatever the bridge's hotplug line says: there is no
-hotplug path to tell a compositor later, and a card that said disconnected
-at boot would stay dark until the next one.
+the modes the driver listed, each with its own timing and refresh, the one
+running first and marked preferred. `SETCRTC` with another listed size
+sends a SCANOUT of that size, and the driver switches mode on it (TMDS off,
+LTDC stopped, clock set, both started again); `SETCRTC` with a size not
+listed is `EINVAL`, as Linux's `mode_valid` refuses it. So `monitor =
+HDMI-A-1, preferred, ...` (and `highres`, which hyprix reads the same way)
+runs the largest mode, and `monitor = HDMI-A-1, 1280x720@60, 0x0, 1,
+transform, 3` still runs 720p: `compositor_drm::Plan::take` finds 1280x720
+in the list — the monitor's VIC 4, or the 720p60 the board always offers —
+and the switch happens at the first modeset. A size the connector does not
+list is still left alone by `Plan::take`. It reports connected whatever the
+bridge's hotplug line says: there is no hotplug path to tell a compositor
+later, and a card that said disconnected at boot would stay dark until the
+next one.
+
+**Modes (2026-09-24).** What limits them, with sources:
+
+* **The LTDC's pixel clock tops out at 90 MHz**: DS12504 Rev 4 (the
+  STM32MP157A/D datasheet), table 94, `fCLK` max 90 MHz at 2.7 to 3.6 V
+  with the pins at high or very high speed; Linux's `stm_drm_plat_data`
+  gives the same `pad_max_freq_hz`. 1920x1200 at 60 Hz needs 154 MHz with
+  CVT reduced blanking and 1920x1080 at 60 Hz 148.5 MHz: neither is in
+  reach on any STM32MP15. The monitor's native 1920x1200 is therefore
+  possible only at about 29 Hz, and only on a monitor that takes timings
+  it does not list.
+* **The DK boards' LTDC pins are at medium speed** (`ltdc_pins_a`,
+  `slew-rate = <1>` in Linux's `stm32mp15-pinctrl.dtsi`), for which the
+  datasheet gives no rate at all. The board runs 74.25 MHz there, so the
+  kernel holds the clock to the rate firmware left (74.25 MHz) unless the
+  tree asks for high speed; raising the pins' speed would open 84.857 MHz
+  (594/7) and is untested.
+* **Only Q's divider moves.** TF-A's `pll4_cfg1` runs PLL4's VCO at
+  594 MHz with P at 99 MHz for SDMMC1 (the SD card) and R at 74.25 MHz;
+  moving the VCO would move those. So the rates are 594 MHz / k: 74.25,
+  66, 59.4, 54, 49.5, ... 27 MHz. A mode the monitor lists runs if one of
+  them is within 0.5 % of its clock (CEA-861's tolerance, the one the boot
+  check uses): every 74.25 MHz mode — 720p60 and 50, and 1920x1080 at 24,
+  25 and 30 Hz (VICs 32 to 34) — 720x480 and 720x576 at 27 MHz, 800x600 at
+  75 Hz (49.5 MHz) and IBM's 720x400 at 70 Hz. VGA's 25.175 MHz, 800x600
+  at 60 (40 MHz) and 1024x768 at 60 (65 MHz) are 1 to 2.6 % off and do not.
+* **A monitor whose EDID says it takes any timing inside its range limits**
+  (feature byte bit 0: continuous frequency in EDID 1.4, default GTF in
+  1.3) also gets each size it lists retimed to a rate the board makes —
+  its own blanking or CVT's reduced blanking, whichever refreshes faster —
+  when that lands inside the vertical and horizontal ranges it gives.
+  Neither Dell 1920x1200 monitor in the tests sets that bit.
+* **720p60 is always offered**, listed or not, as the board ran it on every
+  HDMI sink before it read EDIDs; no monitor gets less than it had.
+
+The driver runs the largest, by pixels and then refresh. Two real monitors,
+from their EDIDs (`libs/stm32-display/src/edid_tests.rs`): a DELL U2415
+(1920x1200, HDMI) lists VICs 32 to 34 and gets **1920x1080 at 30 Hz**; a
+DELL U2412M (1920x1200, DVI) lists nothing between 720x400 and 154 MHz and
+stays at **1280x720 at 60 Hz**. Scanout bandwidth does not change with the
+mode — it is the pixel clock times four bytes, 297 MB/s at 74.25 MHz, as
+before — but a frame does: 1080p is 2.25 times 720p's pixels, so a full
+software redraw on the two 650 MHz Cortex-A7s costs 2.25 times as long
+(about 100 ms a frame at 720p once warm, so about 225 ms at 1080p), against
+a refresh that is half as fast. A `monitor =` line naming 720p keeps the
+cheaper mode. The driver's console lines at start, for the board test: the
+monitor's name and EDID version, the EDID in hex (`ltdc: edid 000 ...`, 32
+bytes a line), its range limits, one `ltdc: offered ...` line per mode with
+its pixel clock and whether the board makes it, one `ltdc: can run ...`
+line per mode listed to DRM, and `ltdc: running ...`.
 
 **What ran on the board (2026-09-23).** At `FERRIX-BOOT-OK stages 1-12` the
 node was published, `devmgr   1 devices, 6 drivers, 1 started, 0 failed`,
@@ -691,8 +766,9 @@ zinc, and the customer saw the tiled window. A frame takes about 100 ms in
 software on the 650 MHz Cortex-A7 once warm.
 
 **Not done.** Input is done beside it: USB keyboards and mice on the board's
-USB host, 2026-09-23 (`docs/INPUT.md` §7). Other modes: they need EDID's
-preferred timing and a PLL4 reprogramming that does not disturb what else it
-clocks. Hotplug. The LTDC's second layer as a cursor plane. The panic screen:
+USB host, 2026-09-23 (`docs/INPUT.md` §7). EDID blocks past the second (the
+E-DDC segment pointer). Rates above 74.25 MHz (the LTDC pins' speed, above).
+The connector's `EDID` property, which `compositor_drm::Plan` would read.
+Hotplug. The LTDC's second layer as a cursor plane. The panic screen:
 the firmware left no framebuffer on this board, so a panic is serial only,
 as §2.4 says.
