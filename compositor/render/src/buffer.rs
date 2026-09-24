@@ -175,16 +175,6 @@ impl<'a> Surface<'a> {
         let len = usize::try_from(u64::from(self.width) * 4).ok()?;
         self.data.get(start..start.checked_add(len)?)
     }
-
-    /// The pixels as one run of rows with no padding, when they already are
-    /// one: a stride of exactly four bytes a pixel.
-    pub(crate) fn tight(&self) -> Option<&'a [u8]> {
-        if u64::from(self.stride) != u64::from(self.width) * 4 {
-            return None;
-        }
-        let len = usize::try_from(u64::from(self.stride) * u64::from(self.height)).ok()?;
-        self.data.get(..len)
-    }
 }
 
 /// Where a frame is presented: the mapping of an `XRGB8888` dumb buffer,

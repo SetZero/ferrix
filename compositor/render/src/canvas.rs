@@ -943,26 +943,16 @@ impl Canvas {
     /// `XRGB8888` surface drawn at less than full opacity is blended as
     /// opaque, its X byte read as a full alpha, as it always was.
     fn blend(&mut self, surface: &Surface<'_>, rect: Rect, opacity: f32, clips: &[Rect]) {
-        let opaque = surface.format() == Format::Xrgb8888;
-        let width = index(i64::from(self.width()));
+        let blend = Blend {
+            surface,
+            rect,
+            opaque: surface.format() == Format::Xrgb8888,
+            opacity,
+            width: index(i64::from(self.width())),
+        };
         self.in_bands(clips, |band, top, local| {
             for &clip in local {
-                let from = index(clip.x.saturating_sub(rect.x)) * 4;
-                let len = index(clip.width) * 4;
-                for y in clip.y..clip.bottom() {
-                    let Some(row) = u32::try_from(y.saturating_add(top).saturating_sub(rect.y))
-                        .ok()
-                        .and_then(|row| surface.row(row))
-                    else {
-                        continue;
-                    };
-                    let start = (index(y) * width + index(clip.x)) * 4;
-                    if let (Some(pixels), Some(into)) =
-                        (row.get(from..from + len), band.get_mut(start..start + len))
-                    {
-                        over_row(into, pixels, opaque, opacity);
-                    }
-                }
+                blend.clip(band, top, clip);
             }
         });
         for &clip in clips {
@@ -1262,42 +1252,6 @@ impl Default for Rounding {
     }
 }
 
-/// The pixels of `part` of a surface as tight rows the shader can read,
-/// with an opaque surface's X byte forced to `0xFF` as [`opaque_rows`]
-/// forces it.
-fn part_rows(surface: &Surface<'_>, part: Rect) -> Vec<u8> {
-    let opaque = surface.format() == Format::Xrgb8888;
-    let (from, to) = (index(part.x) * 4, index(part.right()) * 4);
-    // From the kept buffers, and given back by the caller once drawn: a
-    // full-screen terminal's rows are eight megabytes, which was a mapping
-    // and its page faults for every frame that drew it whole.
-    let mut rows = crate::scratch::bytes(0);
-    rows.reserve(index(part.width) * index(part.height) * 4);
-    for y in part.y..part.bottom() {
-        let Some(row) = u32::try_from(y)
-            .ok()
-            .and_then(|y| surface.row(y))
-            .and_then(|row| row.get(from..to))
-        else {
-            continue;
-        };
-        let start = rows.len();
-        rows.extend_from_slice(row);
-        if opaque {
-            for pixel in rows
-                .get_mut(start..)
-                .into_iter()
-                .flatten()
-                .skip(3)
-                .step_by(4)
-            {
-                *pixel = 0xFF;
-            }
-        }
-    }
-    rows
-}
-
 /// A surface's pixels as tight rows the shader can read.
 ///
 /// An opaque surface's fourth byte is the X byte, which a client leaves at
@@ -1464,6 +1418,40 @@ impl Blended {
     }
 }
 
+/// A surface being blended by [`Canvas::blend`].
+struct Blend<'a> {
+    surface: &'a Surface<'a>,
+    /// Where it is drawn.
+    rect: Rect,
+    /// Whether it is `XRGB8888`, whose fourth byte is read as opaque.
+    opaque: bool,
+    opacity: f32,
+    /// The canvas's width in pixels.
+    width: usize,
+}
+
+impl Blend<'_> {
+    /// Blend `clip` of a band of canvas rows beginning at row `top`.
+    fn clip(&self, band: &mut [u8], top: i64, clip: Rect) {
+        let from = index(clip.x.saturating_sub(self.rect.x)) * 4;
+        let len = index(clip.width) * 4;
+        for y in clip.y..clip.bottom() {
+            let Some(row) = u32::try_from(y.saturating_add(top).saturating_sub(self.rect.y))
+                .ok()
+                .and_then(|row| self.surface.row(row))
+            else {
+                continue;
+            };
+            let start = (index(y) * self.width + index(clip.x)) * 4;
+            if let (Some(pixels), Some(into)) =
+                (row.get(from..from + len), band.get_mut(start..start + len))
+            {
+                over_row(into, pixels, self.opaque, self.opacity);
+            }
+        }
+    }
+}
+
 /// A premultiplied row over a canvas row, `SourceOver`, byte for byte as
 /// tiny-skia's high-precision pipeline blends a pattern at a whole-pixel
 /// offset -- the path [`Canvas::blend`] took through it before, which the
@@ -1520,7 +1508,7 @@ fn over_row(into: &mut [u8], pixels: &[u8], opaque: bool, opacity: f32) {
 /// `round` does; x86's conversion instruction rounds the same way.
 fn unnorm(value: f32) -> u8 {
     const WHOLE: f32 = 8_388_608.0;
-    let scaled = value.max(0.0).min(1.0) * 255.0;
+    let scaled = value.clamp(0.0, 1.0) * 255.0;
     #[expect(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
