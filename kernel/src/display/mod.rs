@@ -31,8 +31,8 @@ use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use ferrix_blkring::identity::Location;
 use ferrix_bootinfo::PAGE_SIZE;
 use ferrix_displayctl::message::{
-    Attach, AttachObject, CARD_VMO_RIGHTS, FORMAT, MAX_BUFFER_PAGES, MAX_BYTES, MAX_SCANOUTS,
-    Message, Ready, Rect, Refusal, ScanoutMode, Status,
+    Attach, AttachObject, CARD_VMO_RIGHTS, FORMAT, Hello, MAX_BUFFER_PAGES, MAX_BYTES,
+    MAX_SCANOUTS, Message, Ready, Rect, Refusal, ScanoutMode, Status, Timing, Timings,
 };
 use ferrix_displayctl::session::{Event, RequestError, Session};
 use ferrix_native_abi::rights::Rights;
@@ -150,13 +150,16 @@ pub(crate) struct Card {
     /// How the device reads the buffers: one run each, and whether the
     /// caches have to be cleaned for it.
     dma: DmaShape,
-    /// Whether the card is a board's HDMI output, which runs the one mode
-    /// its pixel clock was set for, rather than a virtual one that shows any
+    /// Whether the card is a board's HDMI output, which runs the modes it
+    /// can make a pixel clock for, rather than a virtual one that shows any
     /// size it is handed.
     pub(crate) hdmi: bool,
     /// The device node the card is served from, by its index in
     /// `device::devices()`: where sysfs shows it.
     pub(crate) node: usize,
+    /// The modes scanout 0 runs, the running one first, for a card that
+    /// runs only some (HELLO's timings); empty for one that shows any size.
+    timings: Timings,
 }
 
 /// The range of the card VMO a buffer id was given.
@@ -388,6 +391,12 @@ impl Card {
     /// Each scanout's preferred mode, as the driver reported it.
     pub(crate) fn modes(&self) -> &[ScanoutMode] {
         self.modes.get(..self.scanouts).unwrap_or(&[])
+    }
+
+    /// The modes scanout 0 runs, the one running at HELLO first; empty for
+    /// a card that shows any size.
+    pub(crate) fn timings(&self) -> &[Timing] {
+        self.timings.as_slice()
     }
 
     /// Whether the driver is gone.
@@ -1005,6 +1014,7 @@ fn accept(start: &Start, message: &ChannelMessage) -> Result<Arc<Card>, Refusal>
         opened: AtomicBool::new(false),
         dma: start.device.dma_shape(),
         hdmi: matches!(start.device.location(), device::Location::Tree(_)),
+        timings: hello.timings,
     });
 
     // Published before READY goes out, as the rings do: devmgr kills a driver
@@ -1035,6 +1045,13 @@ fn accept(start: &Start, message: &ChannelMessage) -> Result<Arc<Card>, Refusal>
     }
 
     CARDS.lock().push(Arc::clone(&card));
+    announce(&card, &hello);
+    Ok(card)
+}
+
+/// The boot lines for a card just published.
+fn announce(card: &Card, hello: &Hello) {
+    let index = card.index;
     // What the card is, before what it shows: a line a person reading a
     // boot log can tell a GPU from a framebuffer by, and the one thing
     // `docs/GPU.md`'s Path A can be checked against from outside the guest.
@@ -1064,7 +1081,16 @@ fn accept(start: &Start, message: &ChannelMessage) -> Result<Arc<Card>, Refusal>
             }
         );
     }
-    Ok(card)
+    if let Some(running) = card.timings().first() {
+        crate::console::println!(
+            "  display  card{index} runs {}x{} at {} Hz, {} mode{} listed",
+            running.hdisplay,
+            running.vdisplay,
+            running.refresh_hz(),
+            card.timings().len(),
+            if card.timings().len() == 1 { "" } else { "s" }
+        );
+    }
 }
 
 /// Take a range back from a buffer the driver let go of. Nothing the next

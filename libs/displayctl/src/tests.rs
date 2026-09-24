@@ -35,7 +35,110 @@ fn hello() -> Hello {
         capset: 0,
         capset_bytes: 0,
         cursor: true,
+        timings: Timings::NONE,
     }
+}
+
+/// A board's HDMI card: 1920x1080 at 30 Hz running, 1280x720 at 60 beside it.
+fn hdmi_hello() -> Hello {
+    let mut modes = [ScanoutMode::default(); MAX_SCANOUTS];
+    modes[0] = ScanoutMode {
+        width: 1920,
+        height: 1080,
+        enabled: true,
+    };
+    let mut timings = Timings::NONE;
+    timings.count = 2;
+    timings.list[0] = Timing {
+        clock_khz: 74_250,
+        hdisplay: 1920,
+        hsync_start: 2008,
+        hsync_end: 2052,
+        htotal: 2200,
+        vdisplay: 1080,
+        vsync_start: 1084,
+        vsync_end: 1089,
+        vtotal: 1125,
+        hsync_high: true,
+        vsync_high: true,
+    };
+    timings.list[1] = Timing {
+        clock_khz: 74_250,
+        hdisplay: 1280,
+        hsync_start: 1390,
+        hsync_end: 1430,
+        htotal: 1650,
+        vdisplay: 720,
+        vsync_start: 725,
+        vsync_end: 730,
+        vtotal: 750,
+        hsync_high: true,
+        vsync_high: false,
+    };
+    Hello {
+        modes,
+        cursor: false,
+        timings,
+        ..hello()
+    }
+}
+
+#[test]
+fn a_hello_carries_the_timings_a_card_runs() {
+    let card = hdmi_hello();
+    assert_eq!(card.validate(&Hello::HANDLE_RIGHTS), Ok(()));
+    let encoded = Message::Hello(card).encode();
+    let bytes = encoded.as_bytes();
+    assert_eq!(u32_at(bytes, 224), 2, "two timings");
+    assert_eq!(u32_at(bytes, 228), 74_250, "the first's clock");
+    assert_eq!(
+        u16::from_le_bytes([bytes[232], bytes[233]]),
+        1920,
+        "and its width"
+    );
+    assert_eq!(u32_at(bytes, 248), 0b11, "both syncs positive");
+    assert_eq!(
+        u32_at(bytes, 228 + 24 + 20),
+        0b01,
+        "the second's hsync only"
+    );
+    assert!(
+        bytes[228 + 48..].iter().all(|&byte| byte == 0),
+        "the rest zero"
+    );
+    assert_eq!(Message::decode(bytes), Ok(Message::Hello(card)));
+    assert_eq!(card.timings.as_slice()[1].refresh_hz(), 60);
+    assert_eq!(card.timings.as_slice()[0].refresh_hz(), 30);
+
+    // Flags past the polarities are malformed.
+    let mut odd = bytes.to_vec();
+    odd[248] |= 0x4;
+    assert_eq!(Message::decode(&odd), Err(MessageError::Field));
+}
+
+#[test]
+fn timings_that_do_not_describe_the_scanout_are_refused() {
+    let rights = Hello::HANDLE_RIGHTS;
+    // The first is not scanout 0's size.
+    let mut other = hdmi_hello();
+    other.timings.list.swap(0, 1);
+    assert_eq!(other.validate(&rights), Err(Refusal::Mode));
+    // More than there is room for.
+    let mut many = hdmi_hello();
+    many.timings.count = MAX_TIMINGS as u32 + 1;
+    assert_eq!(many.validate(&rights), Err(Refusal::Mode));
+    // One past the count that is not zero.
+    let mut stale = hdmi_hello();
+    stale.timings.count = 1;
+    assert_eq!(stale.validate(&rights), Err(Refusal::Mode));
+    // Spans out of order.
+    let mut backwards = hdmi_hello();
+    backwards.timings.list[1].hsync_end = 1300;
+    assert_eq!(backwards.validate(&rights), Err(Refusal::Mode));
+    // On a card of two scanouts, which of them would they be.
+    let mut two = hdmi_hello();
+    two.scanouts = 2;
+    assert_eq!(two.validate(&rights), Err(Refusal::Mode));
 }
 
 fn buffer(id: u32, offset: u64) -> Attach {
@@ -143,9 +246,10 @@ fn fields_lie_where_the_specification_puts_them() {
     let plain = Message::Hello(hello()).encode();
     let bytes = plain.as_bytes();
     // 16 of header and fields, 16 scanouts of 12, 12 for what the card said
-    // about 3D, and 4 for whether it has a cursor plane.
-    assert_eq!(bytes.len(), 224);
-    assert_eq!(u16::from_le_bytes([bytes[8], bytes[9]]), 4, "VERSION");
+    // about 3D, 4 for whether it has a cursor plane, and 4 + 16 x 24 for
+    // the timings a card that runs only some lists.
+    assert_eq!(bytes.len(), 612);
+    assert_eq!(u16::from_le_bytes([bytes[8], bytes[9]]), 5, "VERSION");
     assert_eq!(u16::from_le_bytes([bytes[10], bytes[11]]), 1);
     assert_eq!(u32_at(bytes, 12), 0x800);
     assert_eq!(

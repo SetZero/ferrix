@@ -38,7 +38,7 @@ use core::any::Any;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 use ferrix_bootinfo::PAGE_SIZE;
-use ferrix_displayctl::message::{CURSOR_SIZE, MAX_DIMENSION, MAX_SCANOUTS, Rect, Status};
+use ferrix_displayctl::message::{CURSOR_SIZE, MAX_DIMENSION, MAX_SCANOUTS, Rect, Status, Timing};
 use ferrix_linux_abi::drm::{
     self, CardRes, ClipRect, CreateDumb, Crtc, CrtcPageFlip, DestroyDumb, Event, EventVblank,
     FbCmd, FbCmd2, FbDirtyCmd, Field, GetCap, GetConnector, GetEncoder, GetPlane, GetPlaneRes,
@@ -428,6 +428,35 @@ fn listed_modes(width: u32, height: u32) -> Vec<ModeInfo> {
     core::iter::once(mode_for(width, height))
         .chain(standard)
         .collect()
+}
+
+/// A mode a card listed, as DRM has it: its own timing, `preferred` for the
+/// one the card runs from the start.
+fn mode_of(timing: &Timing, preferred: bool) -> ModeInfo {
+    let mut mode = mode_for(u32::from(timing.hdisplay), u32::from(timing.vdisplay));
+    mode.clock = timing.clock_khz;
+    mode.hsync_start = timing.hsync_start;
+    mode.hsync_end = timing.hsync_end;
+    mode.htotal = timing.htotal;
+    mode.vsync_start = timing.vsync_start;
+    mode.vsync_end = timing.vsync_end;
+    mode.vtotal = timing.vtotal;
+    mode.vrefresh = timing.refresh_hz();
+    mode.flags = if timing.hsync_high {
+        drm::MODE_FLAG_PHSYNC
+    } else {
+        drm::MODE_FLAG_NHSYNC
+    } | if timing.vsync_high {
+        drm::MODE_FLAG_PVSYNC
+    } else {
+        drm::MODE_FLAG_NVSYNC
+    };
+    mode.r#type = if preferred {
+        drm::MODE_TYPE_PREFERRED | drm::MODE_TYPE_DRIVER
+    } else {
+        drm::MODE_TYPE_DRIVER
+    };
+    mode
 }
 
 fn mode_for(width: u32, height: u32) -> ModeInfo {
@@ -1073,7 +1102,8 @@ const fn connector_type(card: &Card) -> u32 {
 }
 
 /// The modes head `head` of `card` lists: none while nothing is connected;
-/// the one its pixel clock was set for on a board's HDMI output; the
+/// on a board's HDMI output the modes its driver can make a pixel clock for,
+/// the one it chose first, or the one it runs where it said no more; the
 /// preferred size and the standard ones on a virtual card, which shows any.
 fn modes_of(card: &Card, head: usize) -> Vec<ModeInfo> {
     card.modes()
@@ -1081,7 +1111,13 @@ fn modes_of(card: &Card, head: usize) -> Vec<ModeInfo> {
         .copied()
         .filter(|mode| mode.enabled)
         .map(|mode| {
-            if card.hdmi {
+            if !card.timings().is_empty() && head == 0 {
+                card.timings()
+                    .iter()
+                    .enumerate()
+                    .map(|(index, timing)| mode_of(timing, index == 0))
+                    .collect()
+            } else if card.hdmi {
                 vec![mode_for(mode.width, mode.height)]
             } else {
                 listed_modes(mode.width, mode.height)
@@ -1387,6 +1423,19 @@ fn set_crtc(process: &Process, file: &CardFile, arg: u64) -> Result<usize, Errno
     // The connector has to be the one this CRTC drives: nothing here can
     // route a CRTC to another head's connector.
     if u32::from_le_bytes(connector) != object_id(head, CONNECTOR) {
+        return Err(Errno::EINVAL);
+    }
+    // A card that runs only the modes it listed is not asked for a size it
+    // did not list: its driver would leave the screen dark, which Linux's
+    // `mode_valid` refuses in the same place.
+    let timings = file.card.timings();
+    let size = (crtc.mode.hdisplay, crtc.mode.vdisplay);
+    if head == 0
+        && !timings.is_empty()
+        && !timings
+            .iter()
+            .any(|timing| (timing.hdisplay, timing.vdisplay) == size)
+    {
         return Err(Errno::EINVAL);
     }
     let fb = if crtc.fb_id == u32::MAX {

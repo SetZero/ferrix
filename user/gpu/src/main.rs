@@ -34,7 +34,7 @@ use core::sync::atomic::{Ordering, fence};
 use ferrix_blkring::control::{Block as StartBlock, Message as StartMessage, START_BYTES, Start};
 use ferrix_displayctl::message::{
     Hello, MAX_BUFFER_PAGES as MAX_PAGES, MAX_BYTES, MAX_DIMENSION, MAX_SCANOUTS, Message,
-    PORT_RIGHTS, ScanoutMode, VERSION,
+    PORT_RIGHTS, ScanoutMode, Timings, VERSION,
 };
 use ferrix_native_abi::handle::Handle;
 use ferrix_native_abi::rights::Requested;
@@ -1466,6 +1466,8 @@ fn hello(driver: &mut Gpu, port: &Port<Kernel>, location: u32) -> Result<Hello, 
         capset_bytes,
         // Every virtio-gpu has its cursor queue, and this driver runs it.
         cursor: true,
+        // And shows any size it is handed a scanout of: no list.
+        timings: Timings::NONE,
     })
 }
 

@@ -6,11 +6,15 @@
 //! [`Ready::HANDLE_RIGHTS`] say what they must be.
 //!
 //! ```text
-//! HELLO     driver -> core, 224 bytes, handles [driver port]
+//! HELLO     driver -> core, 612 bytes, handles [driver port]
 //!   8 version u16   10 scanouts u16   12 location u32
 //!   16 scanout 0: width u32, height u32, enabled u32   ... 16 of them, 12 bytes each
 //!   208 virgl u16   210 capsets u16   212 capset u32   216 capset_bytes u32
 //!   220 cursor u32: 1 for a card with a cursor plane, which CURSOR and MOVE need
+//!   224 timings u32: how many of the 16 that follow scanout 0 runs, 0 for any
+//!   228 timing 0: clock_khz u32, hdisplay hsync_start hsync_end htotal
+//!       vdisplay vsync_start vsync_end vtotal u16 each, flags u32 (bit 0
+//!       hsync positive, bit 1 vsync positive)   ... 16 of them, 24 bytes each
 //! READY     core -> driver, 24 bytes, handles [card VMO, core port]
 //!   8 card u32   12 reserved   16 card_bytes u64
 //! REFUSED   core -> driver, 12 bytes: 8 reason u32
@@ -46,14 +50,21 @@
 //! Reserved bytes are written as zero and a message with any of them set is
 //! malformed, so they can be given a meaning later without an old reader
 //! misreading them.
+//!
+//! HELLO's timings are for a card that runs only the modes it can make a
+//! clock for -- a board's HDMI output, not a virtio-gpu, which shows any
+//! size and lists none. The first is the mode the scanout runs now and has
+//! scanout 0's size; the core lists them all to DRM, the first preferred,
+//! and a SCANOUT whose rectangle is another one's size asks the driver to
+//! run that one.
 
 use ::core::fmt;
 
 use ferrix_linux_abi::drm::FORMAT_XRGB8888;
 use ferrix_native_abi::rights::Rights;
 
-/// The protocol version this crate speaks.
-pub const VERSION: u16 = 4;
+/// The protocol version this crate speaks. 5 added HELLO's timings.
+pub const VERSION: u16 = 5;
 
 /// HELLO's type.
 pub const HELLO: u32 = 1;
@@ -96,8 +107,14 @@ pub const HEADER_BYTES: usize = 8;
 pub const MAX_SCANOUTS: usize = 16;
 /// Bytes of one scanout in HELLO.
 pub const SCANOUT_BYTES: usize = 12;
+/// The most timings a HELLO lists.
+pub const MAX_TIMINGS: usize = 16;
+/// Bytes of one timing in HELLO.
+pub const TIMING_BYTES: usize = 24;
+/// Where HELLO's timing count lies.
+const TIMINGS_AT: usize = 16 + MAX_SCANOUTS * SCANOUT_BYTES + 16;
 /// Bytes of HELLO.
-pub const HELLO_BYTES: usize = 16 + MAX_SCANOUTS * SCANOUT_BYTES + 16;
+pub const HELLO_BYTES: usize = TIMINGS_AT + 4 + MAX_TIMINGS * TIMING_BYTES;
 /// Bytes of the longest message.
 pub const MAX_BYTES: usize = HELLO_BYTES;
 
@@ -133,6 +150,103 @@ pub struct ScanoutMode {
     pub height: u32,
     /// Whether a display is attached.
     pub enabled: bool,
+}
+
+/// One mode a scanout can run, in DRM's terms: each `*_start` and `*_end`
+/// counts from the first active pixel or line, and `*total` is the whole
+/// period.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct Timing {
+    /// The pixel clock, in kHz.
+    pub clock_khz: u32,
+    /// Active pixels a line.
+    pub hdisplay: u16,
+    /// Where horizontal sync starts.
+    pub hsync_start: u16,
+    /// Where it ends.
+    pub hsync_end: u16,
+    /// Pixel clocks a line, blanking included.
+    pub htotal: u16,
+    /// Active lines a frame.
+    pub vdisplay: u16,
+    /// Where vertical sync starts.
+    pub vsync_start: u16,
+    /// Where it ends.
+    pub vsync_end: u16,
+    /// Lines a frame, blanking included.
+    pub vtotal: u16,
+    /// Whether horizontal sync is active high.
+    pub hsync_high: bool,
+    /// Whether vertical sync is active high.
+    pub vsync_high: bool,
+}
+
+impl Timing {
+    /// Whether the numbers describe a mode a display can have: a clock,
+    /// every span non-empty and in order, nothing over [`MAX_DIMENSION`].
+    #[must_use]
+    pub fn is_mode(&self) -> bool {
+        let across = [self.hdisplay, self.hsync_start, self.hsync_end, self.htotal];
+        let down = [self.vdisplay, self.vsync_start, self.vsync_end, self.vtotal];
+        let ordered = |spans: [u16; 4]| {
+            spans.first().is_some_and(|&first| first > 0)
+                && spans
+                    .windows(2)
+                    .all(|pair| matches!(pair, [one, two] if one < two))
+        };
+        self.clock_khz > 0
+            && ordered(across)
+            && ordered(down)
+            && u32::from(self.htotal) <= MAX_DIMENSION * 2
+            && u32::from(self.hdisplay) <= MAX_DIMENSION
+            && u32::from(self.vdisplay) <= MAX_DIMENSION
+    }
+
+    /// Frames a second, rounded.
+    #[must_use]
+    pub fn refresh_hz(&self) -> u32 {
+        let frame = u64::from(self.htotal) * u64::from(self.vtotal);
+        if frame == 0 {
+            return 0;
+        }
+        u32::try_from((u64::from(self.clock_khz) * 1000 + frame / 2) / frame).unwrap_or(0)
+    }
+}
+
+/// The timings a HELLO lists, the first the one running.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct Timings {
+    /// How many of `list` are timings.
+    pub count: u32,
+    /// The timings; entries past `count` are zero.
+    pub list: [Timing; MAX_TIMINGS],
+}
+
+impl Timings {
+    /// A card that lists none: a virtual one, which shows any size.
+    pub const NONE: Timings = Timings {
+        count: 0,
+        list: [Timing {
+            clock_khz: 0,
+            hdisplay: 0,
+            hsync_start: 0,
+            hsync_end: 0,
+            htotal: 0,
+            vdisplay: 0,
+            vsync_start: 0,
+            vsync_end: 0,
+            vtotal: 0,
+            hsync_high: false,
+            vsync_high: false,
+        }; MAX_TIMINGS],
+    };
+
+    /// The timings listed.
+    #[must_use]
+    pub fn as_slice(&self) -> &[Timing] {
+        let count = usize::try_from(self.count).unwrap_or(usize::MAX);
+        self.list.get(..count).unwrap_or(&self.list)
+    }
 }
 
 /// A rectangle in pixels.
@@ -198,6 +312,9 @@ pub struct Hello {
     /// virtio-gpu has its cursor queue, and a card with no such thing says
     /// so rather than be sent what it cannot show.
     pub cursor: bool,
+    /// The modes scanout 0 can run, for a card that runs only some: none
+    /// for a virtio-gpu, which shows any size.
+    pub timings: Timings,
 }
 
 /// Why the core refuses a driver.
@@ -292,6 +409,7 @@ impl Hello {
                 return Err(Refusal::Mode);
             }
         }
+        self.validate_timings()?;
         // A card that did not get `VIRTIO_GPU_F_VIRGL` has no capability
         // sets to speak of, and one that did and reports none has nothing a
         // 3D driver could use. Either way the pair has to agree, or the
@@ -310,6 +428,30 @@ impl Hello {
             return Err(Refusal::Rights);
         }
         Ok(())
+    }
+
+    /// The timings: at most [`MAX_TIMINGS`], each a mode, only on a card of
+    /// one scanout, the first scanout 0's own size and that scanout
+    /// enabled, and every entry past the count zero.
+    fn validate_timings(&self) -> Result<(), Refusal> {
+        let count = usize::try_from(self.timings.count).unwrap_or(usize::MAX);
+        if count > MAX_TIMINGS {
+            return Err(Refusal::Mode);
+        }
+        let (listed, rest) = self.timings.list.split_at(count);
+        if rest.iter().any(|timing| *timing != Timing::default()) {
+            return Err(Refusal::Mode);
+        }
+        let Some(first) = listed.first() else {
+            return Ok(());
+        };
+        let scanout = self.modes.first().copied().unwrap_or_default();
+        let fine = self.scanouts == 1
+            && scanout.enabled
+            && (u32::from(first.hdisplay), u32::from(first.vdisplay))
+                == (scanout.width, scanout.height)
+            && listed.iter().all(Timing::is_mode);
+        if fine { Ok(()) } else { Err(Refusal::Mode) }
     }
 }
 
@@ -483,6 +625,12 @@ impl Status {
 
 /// Every message.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "HELLO's timings make it 600 bytes; a message lives on a stack for one decode, \
+              this crate has no allocator to box it in, and 600 bytes copied per message is \
+              nothing beside the channel round trip that carried it"
+)]
 pub enum Message {
     /// Driver to core.
     Hello(Hello),
@@ -864,6 +1012,47 @@ fn put_hello(bytes: &mut [u8], hello: &Hello) {
     put32(bytes, at + 4, hello.capset);
     put32(bytes, at + 8, hello.capset_bytes);
     put32(bytes, at + 12, u32::from(hello.cursor));
+    put32(bytes, TIMINGS_AT, hello.timings.count);
+    for (index, timing) in hello.timings.list.iter().enumerate() {
+        let at = TIMINGS_AT + 4 + index * TIMING_BYTES;
+        put32(bytes, at, timing.clock_khz);
+        let spans = [
+            timing.hdisplay,
+            timing.hsync_start,
+            timing.hsync_end,
+            timing.htotal,
+            timing.vdisplay,
+            timing.vsync_start,
+            timing.vsync_end,
+            timing.vtotal,
+        ];
+        for (slot, span) in spans.into_iter().enumerate() {
+            put16(bytes, at + 4 + slot * 2, span);
+        }
+        let flags = u32::from(timing.hsync_high) | (u32::from(timing.vsync_high) << 1);
+        put32(bytes, at + 20, flags);
+    }
+}
+
+/// HELLO's timing at `index`: `None` for flags other than the two sync
+/// polarities.
+fn get_timing(bytes: &[u8], index: usize) -> Option<Timing> {
+    let at = TIMINGS_AT + 4 + index * TIMING_BYTES;
+    let span = |slot: usize| get16(bytes, at + 4 + slot * 2);
+    let flags = get32(bytes, at + 20).filter(|&flags| flags & !0x3 == 0)?;
+    Some(Timing {
+        clock_khz: get32(bytes, at)?,
+        hdisplay: span(0)?,
+        hsync_start: span(1)?,
+        hsync_end: span(2)?,
+        htotal: span(3)?,
+        vdisplay: span(4)?,
+        vsync_start: span(5)?,
+        vsync_end: span(6)?,
+        vtotal: span(7)?,
+        hsync_high: flags & 1 != 0,
+        vsync_high: flags & 2 != 0,
+    })
 }
 
 /// HELLO, from `bytes`: `None` for a field outside its range.
@@ -880,6 +1069,13 @@ fn decode_hello(bytes: &[u8]) -> Option<Message> {
                 _ => return None,
             },
         };
+    }
+    let mut timings = Timings {
+        count: get32(bytes, TIMINGS_AT)?,
+        ..Timings::NONE
+    };
+    for (index, timing) in timings.list.iter_mut().enumerate() {
+        *timing = get_timing(bytes, index)?;
     }
     let at = 16 + MAX_SCANOUTS * SCANOUT_BYTES;
     Some(Message::Hello(Hello {
@@ -900,6 +1096,7 @@ fn decode_hello(bytes: &[u8]) -> Option<Message> {
             1 => true,
             _ => return None,
         },
+        timings,
     }))
 }
 
