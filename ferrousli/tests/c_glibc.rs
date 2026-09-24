@@ -58,6 +58,11 @@ fn glibcs_internal_and_older_names_are_the_standard_functions() {
 }
 
 #[test]
+fn gnus_math_additions_answer_through_cs_calling_convention() {
+    check(&Case::named("glibc/math"));
+}
+
+#[test]
 fn the_linux_calls_glibc_wraps_reach_the_kernel_with_their_arguments() {
     check(&Case::named("glibc/linux"));
 }

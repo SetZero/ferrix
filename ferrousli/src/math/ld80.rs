@@ -40,6 +40,7 @@ use core::ffi::c_int;
 use crate::math::classify::{FP_NAN, classify_x87};
 
 pub mod manipulate;
+pub mod pow;
 pub mod remainder;
 pub mod rounding;
 pub mod sqrt;
