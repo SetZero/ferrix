@@ -625,3 +625,25 @@ fn autoload_finds_a_burst_of_names_and_a_file_written_since() {
         "hi from f6\nlate\n"
     );
 }
+
+/// The last command of a subshell or a substitution, when it is external,
+/// runs in place of the process forked for it, as zsh runs it; what the
+/// shell sees of it -- its status, its output, the signal that ended it --
+/// is what it saw when a second process ran it.
+#[test]
+fn a_subshells_last_command_runs_in_its_place() {
+    assert_eq!(
+        run("(exit 3); echo $?; x=$(sh -c 'exit 4'); echo $?"),
+        "3\n4\n"
+    );
+    assert_eq!(run("x=$(sh -c 'kill -TERM $$'); echo $?"), "143\n");
+    assert_eq!(
+        run("echo $(echo a; echo b) \"$(printf '%s-' 1 2)\""),
+        "a b 1-2-\n"
+    );
+    assert_eq!(run("x=$(false; echo after); echo \"$x $?\""), "after 0\n");
+    assert_eq!(run("f() { echo in-f; }; x=$(f); echo $x"), "in-f\n");
+    // A pipeline's last element is still forked, so the elements before it
+    // keep a parent that waits for them.
+    assert_eq!(run("x=$(echo one two | wc -w); echo $x"), "2\n");
+}

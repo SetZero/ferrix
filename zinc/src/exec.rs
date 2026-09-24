@@ -5,7 +5,7 @@ use std::ffi::CString;
 use std::rc::Rc;
 
 use crate::ast::{
-    AndOr, Assign, AssignValue, CaseTerm, CmdKind, Command, List, ListMode, Pipeline,
+    AndOr, Assign, AssignValue, CaseTerm, CmdKind, Command, List, ListItem, ListMode, Pipeline,
 };
 use crate::ast::{Redir, RedirKind, Sublist, Sublist2};
 use crate::expand::{expand_pattern, expand_single, expand_words};
@@ -239,6 +239,44 @@ pub(crate) fn run_string(sh: &mut Shell, text: &[u8]) {
     }
 }
 
+/// [`run_string`] in a forked child, which then exits with the status.
+///
+/// The last command such a child runs is the last thing it will ever do, so
+/// an external one is run in place, as zsh runs it, rather than in a process
+/// forked for it while the child waits: `$(dircolors -b)` is one process
+/// instead of two, and so is oh-my-zsh's `$(git version)`, which on a
+/// machine without git is a fork only to find that out.
+fn run_string_and_exit(sh: &mut Shell, text: &[u8]) -> ! {
+    let mut lx = Lexer::new(text.to_vec(), sh.lex_opts());
+    loop {
+        lx.opts = sh.lex_opts();
+        let parsed = {
+            let mut p = Parser::new(&mut lx, &*sh);
+            p.parse_event()
+        };
+        match parsed {
+            Ok(Some(list)) => {
+                if lx.input.rest().iter().all(u8::is_ascii_whitespace) {
+                    run_list_last(sh, &list);
+                } else {
+                    run_list(sh, &list);
+                }
+            }
+            Ok(None) => break,
+            Err(e) => {
+                sh.lineno = e.lineno;
+                sh.error(&e.msg);
+                sh.status = 1;
+                break;
+            }
+        }
+        if sh.flow != Flow::Normal {
+            break;
+        }
+    }
+    exit_now(sh.status)
+}
+
 /// Run a command substitution and return its output.
 pub(crate) fn capture(sh: &mut Shell, cmd: &[u8]) -> Vec<u8> {
     if let Some(target) = simple_redir_name(sh, cmd) {
@@ -257,8 +295,7 @@ pub(crate) fn capture(sh: &mut Shell, cmd: &[u8]) -> Vec<u8> {
         dup2(w, 1);
         close(w);
         enter_subshell(sh);
-        run_string(sh, cmd);
-        exit_now(sh.status);
+        run_string_and_exit(sh, cmd);
     }
     close(w);
     let mut out = Vec::new();
@@ -412,33 +449,73 @@ pub(crate) fn run_list(sh: &mut Shell, list: &List) {
         if sh.flow != Flow::Normal {
             return;
         }
-        match item.mode {
-            ListMode::Sync => run_sublist(sh, &item.sublist),
-            ListMode::Async | ListMode::Disown => {
-                // The whole sublist runs in one process, which is the job's
-                // group leader: `a && b &` is one job, and its own children
-                // inherit the group, so one signal reaches all of it.
-                let outer = begin_job(sh, false);
-                let pid = spawn(sh, |sh| {
-                    run_sublist(sh, &item.sublist);
-                    sh.status
-                });
-                if pid < 0 {
-                    end_job(sh, outer);
-                    sh.error("fork failed");
-                    sh.status = 1;
-                    return;
-                }
-                if item.mode == ListMode::Disown {
-                    // Disowned: started, and then not this shell's business.
-                    sh.building = None;
-                    sh.last_bg = pid;
-                    sh.status = 0;
-                } else {
-                    finish_job(sh, 1);
-                }
+        run_item(sh, item);
+    }
+}
+
+/// Run a list that is the last thing a forked child does before it exits,
+/// where the final command, if it is external, replaces the child instead of
+/// being forked from it; see [`run_string_and_exit`].
+///
+/// Only a plain final pipeline is run that way: one after `&&` or `||`, one
+/// whose status `!` turns round, and one behind an EXIT trap still has
+/// something left to happen once it has finished.
+fn run_list_last(sh: &mut Shell, list: &List) {
+    let Some((last, rest)) = list.items.split_last() else {
+        return;
+    };
+    for item in rest {
+        if sh.flow != Flow::Normal {
+            return;
+        }
+        run_item(sh, item);
+    }
+    if sh.flow != Flow::Normal {
+        return;
+    }
+    let first = &last.sublist.first;
+    match &first.pipeline {
+        Some(p)
+            if last.mode == ListMode::Sync
+                && last.sublist.rest.is_empty()
+                && !first.not
+                && !first.coproc
+                && sh.exit_trap.is_none() =>
+        {
+            run_pipeline(sh, p, true);
+        }
+        _ => run_item(sh, last),
+    }
+}
+
+/// Run one element of a list, in the shell or, for `&`, in the background.
+fn run_item(sh: &mut Shell, item: &ListItem) {
+    match item.mode {
+        ListMode::Sync => run_sublist(sh, &item.sublist),
+        ListMode::Async | ListMode::Disown => {
+            // The whole sublist runs in one process, which is the job's
+            // group leader: `a && b &` is one job, and its own children
+            // inherit the group, so one signal reaches all of it.
+            let outer = begin_job(sh, false);
+            let pid = spawn(sh, |sh| {
+                run_sublist(sh, &item.sublist);
+                sh.status
+            });
+            if pid < 0 {
                 end_job(sh, outer);
+                sh.error("fork failed");
+                sh.status = 1;
+                return;
             }
+            if item.mode == ListMode::Disown {
+                // Disowned: started, and then not this shell's business.
+                sh.building = None;
+                sh.last_bg = pid;
+                sh.status = 0;
+            } else {
+                finish_job(sh, 1);
+            }
+            end_job(sh, outer);
         }
     }
 }
@@ -461,7 +538,7 @@ fn run_sublist(sh: &mut Shell, sl: &Sublist) {
 
 pub(crate) fn run_sublist2(sh: &mut Shell, s: &Sublist2) {
     if let Some(p) = &s.pipeline {
-        run_pipeline(sh, p);
+        run_pipeline(sh, p, false);
     }
     if s.not {
         sh.status = i32::from(sh.status == 0);
@@ -474,7 +551,11 @@ pub(crate) fn run_sublist2(sh: &mut Shell, s: &Sublist2) {
 /// signals reach the pipeline whole; `crate::jobs` says why that matters.
 /// The shell waits for them together in [`finish_job`] rather than one at a
 /// time, so that a Ctrl-Z in the middle of `a | b` suspends both.
-fn run_pipeline(sh: &mut Shell, p: &Pipeline) {
+///
+/// `exec_last` is for a forked child with nothing left to do after this
+/// pipeline ([`run_list_last`]): a pipeline of one external command replaces
+/// the child instead of being forked from it.
+fn run_pipeline(sh: &mut Shell, p: &Pipeline, exec_last: bool) {
     let n = p.cmds.len();
     if n == 0 {
         return;
@@ -482,7 +563,7 @@ fn run_pipeline(sh: &mut Shell, p: &Pipeline) {
     let outer = begin_job(sh, true);
     if n == 1 {
         if let Some(cmd) = p.cmds.first() {
-            run_command(sh, cmd, false);
+            run_command(sh, cmd, exec_last);
         }
         finish_job(sh, 1);
         end_job(sh, outer);
@@ -500,6 +581,10 @@ fn run_pipeline(sh: &mut Shell, p: &Pipeline) {
                 dup2(prev, 0);
                 close(prev);
             }
+            // Never in place here, `exec_last` or not: the elements before
+            // this one are this process's children, and a program it became
+            // would never wait for them. They would be left to init, which
+            // on a desktop whose pid 1 is the compositor nobody reaps.
             run_command(sh, cmd, false);
             if saved != -2 {
                 restore_fd(0, saved);
@@ -1240,6 +1325,13 @@ fn run_simple_body(
         exec_program(sh, &args)
     };
     if in_child || exec {
+        // A child running its last command in place may be one `fork` made
+        // rather than `spawn` -- a subshell's, a substitution's -- whose
+        // signals are still the interactive shell's, ignored; the program
+        // must not inherit that, for the reason `reset_signals` gives.
+        if in_child {
+            reset_signals();
+        }
         exit_now(child(sh));
     }
     if let Some(build) = &mut sh.building {
@@ -1489,7 +1581,7 @@ fn run_compound(sh: &mut Shell, kind: &CmdKind) {
             let pid = fork();
             if pid == 0 {
                 enter_subshell(sh);
-                run_list(sh, list);
+                run_list_last(sh, list);
                 exit_now(sh.status);
             }
             sh.status = wait_pid(pid);
