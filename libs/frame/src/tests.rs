@@ -564,6 +564,57 @@ fn a_long_random_workload_never_hands_out_the_same_frame_twice() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// Runs longer than a block
+// ---------------------------------------------------------------------------
+
+const BLOCK: u64 = 1 << MAX_ORDER;
+
+#[test]
+fn a_run_is_maximal_blocks_back_to_back_that_split_and_free_one_by_one() {
+    let (mut entries, base, count) = arena(0, 4 * BLOCK as usize);
+    let mut frames = frames!(entries, base, count);
+    let before = frames.free_blocks();
+
+    let run = frames.allocate_run(3).expect("three of four blocks");
+    assert_eq!(frames.free_frames(), BLOCK, "one block left");
+    for k in 0..3 {
+        let block = run + k * BLOCK;
+        assert_eq!(frames.state(block), Some(State::Allocated));
+        assert_eq!(frames.entry(block).unwrap().order, MAX_ORDER);
+    }
+    // As the display core does: each block split, the tail past what it
+    // needs given back at once, the rest page by page later.
+    let needed = 2 * BLOCK + 10;
+    for k in 0..3 {
+        frames.split(run + k * BLOCK, MAX_ORDER).unwrap();
+    }
+    for frame in run + needed..run + 3 * BLOCK {
+        assert_eq!(frames.release(frame), Ok(Released::Freed));
+    }
+    assert_eq!(frames.free_frames(), 4 * BLOCK - needed);
+    for frame in (run..run + needed).rev() {
+        assert_eq!(frames.release(frame), Ok(Released::Freed));
+    }
+    assert_eq!(frames.free_blocks(), before, "everything merged back");
+}
+
+#[test]
+fn a_run_needs_every_block_free_and_adjacent() {
+    let (mut entries, base, count) = arena(0, 4 * BLOCK as usize);
+    let mut frames = frames!(entries, base, count);
+    // One frame taken out of the second block leaves runs of one (the
+    // first) and two (the third and fourth).
+    assert_eq!(frames.claim(BLOCK + 7), Some(BLOCK + 7));
+    assert_eq!(frames.allocate_run(3), None, "no three in a row");
+    let free = frames.free_frames();
+    assert_eq!(frames.allocate_run(2), Some(2 * BLOCK), "the two after it");
+    assert_eq!(frames.free_frames(), free - 2 * BLOCK);
+    assert_eq!(frames.allocate_run(2), None, "none left");
+    assert_eq!(frames.allocate_run(0), None, "nothing is not a run");
+    assert_eq!(frames.allocate_run(1), Some(0), "a run of one is a block");
+}
+
 #[test]
 fn exhaustion_is_reported_rather_than_wrapping() {
     let (mut entries, base, count) = arena(0, 16);

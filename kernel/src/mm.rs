@@ -301,6 +301,16 @@ pub(crate) fn allocate_frames(order: u8) -> Option<Frame> {
     Some(frame)
 }
 
+/// Take `blocks` blocks of `2^MAX_ORDER` frames lying back to back, for
+/// memory that has to be one run longer than a block: the first frame, each
+/// block given back or split on its own as one from [`allocate_frames`]
+/// would be (`ferrix_frame::Frames::allocate_run`).
+pub(crate) fn allocate_frame_run(blocks: u64) -> Option<Frame> {
+    let frame = with_frames(|frames| frames.allocate_run(blocks))??;
+    count(Route::Allocated, blocks << ferrix_frame::MAX_ORDER);
+    Some(frame)
+}
+
 /// Take `2^order` contiguous frames lying wholly below frame `limit`.
 ///
 /// For the one caller that cares where its memory is: x86-64's trampoline,
