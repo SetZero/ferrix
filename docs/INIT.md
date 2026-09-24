@@ -1071,3 +1071,74 @@ image with no program in the kernel and `/sbin/init` in the initramfs, and
 puts `qemu::init_option("/sbin/init")` into `CMDLINE.TXT`, as
 `init_file::Parts::image` does. It judges the kernel's `init     …` lines
 as `init_file` does.
+
+**L4, what was found before it was built (2026-09-24).** L4 was designed
+against L2's manager and stopped at the day's wind-down with no code
+written. What its design found in `main`, each read from the code:
+
+* **`/proc/<pid>/stat` cannot pass stage one yet.** `stat_of`
+  (`kernel/src/fs/procfs/render.rs`) still writes `pgrp` and `session` as
+  the pid, `tty_nr` 0 and `tpgid` -1, under a comment that predates
+  `setsid`. L4 fixes it first: `pgrp` from `pgid()`, `session` from `sid()`,
+  and, when the console's session is the process's (and not 0), `tty_nr`
+  0x501 (the console is 5:1) and `tpgid` its foreground group. A
+  pseudo-terminal has no lookup from session to pty, so its `tty_nr` stays 0
+  and the docs say so.
+* **`/sbin/init` goes only where zinc goes.** With nothing named and nothing
+  built in, the kernel starts `/sbin/init` (L3). The images that carry no
+  program (`test-boot`'s, `test-btrfs`, `test-powerfail`, a board image with
+  none) would then run init and never end, so init's files cannot go into
+  every initramfs. Every image that carries zinc builds a program or a
+  command list into the kernel, so the built-in one still wins there. Init's
+  files join those images, `test-shell`'s and `test-init`'s own, through a
+  helper that returns them as carried files per architecture.
+* **Mounts.** The kernel mounts `/proc`, `/dev`, `/tmp`, `/dev/shm` and now
+  `/sys` (sysfs, whose `fs/cgroup` is an empty directory). Nothing mounts
+  cgroup2 or `/run`, and the initramfs has no `/run`. So init makes `/run`,
+  mounts a tmpfs on it and cgroup2 on `/sys/fs/cgroup`, and skips `/sys`.
+* **`MS_REMOUNT` is `EINVAL`** (`kernel/src/syscall/fsctl.rs`), so §8.2's
+  read-only remount fails today. Init logs it and goes on: K7's `reboot(2)`
+  commits `/` and `/data` regardless.
+* **No `/proc/cmdline`.** The generator's `console=` has nothing to read;
+  it falls back to `/dev/console`, which is devfs's only terminal anyway.
+* **The terminal.** `TIOCSCTTY` is `EPERM` unless the caller leads its
+  session, and with argument 1 takes the console from a live session. So
+  getty calls `setsid` (an `EPERM` is ignored), opens the terminal, then
+  `TIOCSCTTY` with 1. There is no `login` yet, so getty starts zinc as the
+  session. `getty@.service` wants `SendSIGHUP=yes` and a short
+  `TimeoutStopSec=`, or an interactive zinc that ignores `SIGTERM` holds
+  shutdown for the default 90 seconds.
+* **The loop.** `signalfd` (on `main` since 9eaee398) for `SIGCHLD`,
+  `SIGTERM` and `SIGINT`, blocked in init and unblocked in each child. The
+  exec pipe carries the child's errno on failure; its end of file means
+  `Spawned`, then `Execed`. Each made cgroup's `cgroup.events` is watched
+  with `EPOLLPRI` and read at once, since a fresh open reports `POLLPRI`
+  (G3), and a change from 1 to 0 is `Emptied`. A `Group` signal goes to each
+  pid in the group's `cgroup.procs`.
+* **The workspace.** `init/` follows `zinc/` (`Cargo.toml`,
+  `.cargo/config.toml`, the targets and flags in `xtask/src/zinc.rs`), with a
+  path dependency on `libs/svc` as `compositor/drm` has on `libs/linux-abi`.
+  Its `check` steps run by default, as the compositor's do.
+* **`test-init`'s stage two with zinc's builtins only**, so it runs on all
+  three architectures without uutils: a process that blocks for good is
+  `read x < /dev/ptmx` (a master with no slave blocks). Without `svc` (L6),
+  one service is stopped through `BindsTo=`: `forker.service` is
+  `Type=oneshot`, `RemainAfterExit=yes`, `BindsTo=` and `After=`
+  `anchor.service`, and killing anchor's main process from the prompt, by the
+  pid it wrote to a file, makes the manager stop forker. The negative control,
+  `KillMode=process`, looks for the grandchild right after
+  `forker.service: stopped`, before a next start's cleaning could kill it. The
+  "gone" check retries, since `/proc/<pid>` outlives an exit until init reaps
+  it. Markers are built from shell variables (`echo stage2-$y`), because the
+  console echoes the typed line. The lines to match are L2's:
+  `<unit>: active`, `<unit>: failed (<result>)`, `<unit>: stopped`,
+  `<unit>: <result>; restarting at <t>`, `booting <target>` and
+  `going down: poweroff.target`; the flaky service ends
+  `failed (start-limit-hit)`, and shutdown stops `multi-user.target`, then
+  `getty@console.service`, then `basic.target`, then `sysinit.target`.
+  `test-init`'s image carries zinc as plain files (`bin/zinc`, `bin/sh`),
+  keeping oh-my-zsh out, with a getty drop-in for `TERM=dumb` and a fixed
+  `PS1`, and a fresh blank volume as `/data` for `btrfs_check`, as
+  `init_file` makes one for K7.
+
+No gap in L2's interface turned up while designing against it.
