@@ -5679,7 +5679,15 @@ fn stop_and_continue(stopped: &Process) -> Result<(), &'static str> {
     until(
         &|| waiting(&|| Ok(word(0)? != still.0 && word(4)? != still.1)),
         "a stopped process's threads did not all run again after SIGCONT",
-    )
+    )?;
+    // A waiter the stop woke is still listed on its word until it answers, so
+    // the look above can pass while it is on its way out with the wrong
+    // answer. Give it the same window, and look at what it recorded again.
+    crate::sched::sleep_for(STOP_STILL_NANOS);
+    if word(12)? != 1 {
+        return Err("a FUTEX_WAIT stopped and continued returned instead of being restarted");
+    }
+    Ok(())
 }
 
 /// Runs of the forking program measured by

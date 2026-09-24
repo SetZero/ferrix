@@ -304,6 +304,15 @@ fn read_present_word(process: &Process, address: u64) -> Result<Option<u32>, Err
 /// Sleep on `address` if it holds `expected`, until a wake whose bitset
 /// shares a bit with `bitset`, the caller is ended, or `deadline` passes.
 /// `shared` is whether the call left out `FUTEX_PRIVATE_FLAG`.
+///
+/// **A wait that ends for none of those goes round again**, reading the word
+/// afresh, as Linux's `futex_wait` does after a spurious wakeup. What ended it
+/// can be gone by the time the answer is chosen: a `SIGSTOP` pending for the
+/// process ends the wait, and another thread may take it before this one looks
+/// again -- dequeued, and the process not yet marked stopped -- or the stop may
+/// be over, continued while this thread had not yet run. Answered as a
+/// timeout, a wait with none returned `ETIMEDOUT` from a stop: FX-0701's "a
+/// `FUTEX_WAIT` stopped and continued returned instead of being restarted".
 fn wait(
     process: &Process,
     address: u64,
@@ -317,53 +326,58 @@ fn wait(
         task: sched::current(),
         woken: AtomicBool::new(false),
     });
+    let deadline = deadline.unwrap_or(u64::MAX);
     loop {
-        // Faulted in here, outside the lock, and read again under it without
-        // a fault. Round again if the page went in between.
-        let _ = read_word(process, address)?;
-        let mut table = TABLE.lock();
-        match read_present_word(process, address)? {
-            None => {}
-            Some(word) if word != expected => return Err(Errno::EAGAIN),
-            Some(_) => {
-                table.push(Entry {
-                    key,
-                    bitset,
-                    sleeper: Arc::clone(&sleeper),
-                });
-                break;
+        loop {
+            // Faulted in here, outside the lock, and read again under it
+            // without a fault. Round again if the page went in between.
+            let _ = read_word(process, address)?;
+            let mut table = TABLE.lock();
+            match read_present_word(process, address)? {
+                None => {}
+                Some(word) if word != expected => return Err(Errno::EAGAIN),
+                Some(_) => {
+                    table.push(Entry {
+                        key: key.clone(),
+                        bitset,
+                        sleeper: Arc::clone(&sleeper),
+                    });
+                    break;
+                }
             }
         }
-    }
 
-    let _ = SLEEP.wait_until_deadline(
-        // A pending signal ends the wait with `EINTR`, as it ends every wait.
-        || sleeper.woken.load(Ordering::Acquire) || process.signal_pending(),
-        deadline.unwrap_or(u64::MAX),
-    );
+        let _ = SLEEP.wait_until_deadline(
+            // A pending signal ends the wait with `EINTR`, as it ends every wait.
+            || sleeper.woken.load(Ordering::Acquire) || process.signal_pending(),
+            deadline,
+        );
 
-    // Off the table however it left, and under the lock, so that a waker which
-    // found it has finished rousing it before this returns. The entry goes
-    // after the lock, with the key it holds.
-    let mut table = TABLE.lock();
-    let mine = table
-        .iter()
-        .position(|entry| Arc::ptr_eq(&entry.sleeper, &sleeper))
-        .map(|index| table.remove(index));
-    drop(table);
-    drop(mine);
-    // Woken wins over the other two: a wake that took this waiter off the
-    // table counted it, and reporting a timeout would lose that wake for
-    // whoever the waker meant it for.
-    if sleeper.woken.load(Ordering::Acquire) {
-        Ok(0)
-    } else if process.signal_pending() {
-        // A restart code, not `EINTR`: a futex wait restarts under
-        // `SA_RESTART`, which is how glibc's and musl's condition variables
-        // survive a handled signal. The way back settles it.
-        Err(Errno::ERESTARTSYS)
-    } else {
-        Err(Errno::ETIMEDOUT)
+        // Off the table however it left, and under the lock, so that a waker
+        // which found it has finished rousing it before this returns. The
+        // entry goes after the lock, with the key it holds.
+        let mut table = TABLE.lock();
+        let mine = table
+            .iter()
+            .position(|entry| Arc::ptr_eq(&entry.sleeper, &sleeper))
+            .map(|index| table.remove(index));
+        drop(table);
+        drop(mine);
+        // Woken wins over the other two: a wake that took this waiter off the
+        // table counted it, and reporting a timeout would lose that wake for
+        // whoever the waker meant it for.
+        if sleeper.woken.load(Ordering::Acquire) {
+            return Ok(0);
+        }
+        if process.signal_pending() {
+            // A restart code, not `EINTR`: a futex wait restarts under
+            // `SA_RESTART`, which is how glibc's and musl's condition
+            // variables survive a handled signal. The way back settles it.
+            return Err(Errno::ERESTARTSYS);
+        }
+        if crate::timer::now_nanos() >= deadline {
+            return Err(Errno::ETIMEDOUT);
+        }
     }
 }
 
