@@ -14,6 +14,11 @@ records names and version strings only, the interface glibc publishes, and
 nothing of glibc's code. `tools/build-shared.sh` turns it into the version
 script the shared library is linked with.
 
+Beside it, `tools/glibc-versions/<arch>-compat.txt` lists the older versions
+of a function that ferrousli's definition answers too, because glibc's older
+version is the same function (see `table`): a program built against an older
+glibc asks for those. build-shared.sh gives each an alias at that version.
+
 On ARMv7-A glibc keeps two functions for many names: the old one with a
 32-bit `time_t` or `off_t` under the plain name, and the 64-bit one under
 another, which a program built with `_TIME_BITS=64` or `_FILE_OFFSET_BITS=64`
@@ -55,12 +60,55 @@ ARCHES = ("x86_64", "aarch64", "armv7a")
 # libc.so.6 with the 32-bit names.
 MISMATCHED = {"__clock_adjtime64"}
 
-# A dynamic symbol line: `Num: Value Size Type Bind Vis Ndx Name@@VERSION`.
-DEFINED = re.compile(r"^\s*\d+:\s+\S+\s+\S+\s+\S+\s+(GLOBAL|WEAK)\s+\S+\s+(?!UND)\S+\s+(\S+?)@@(\S+)")
+# A dynamic symbol line: `Num: Value Size Type Bind Vis Ndx Name@@VERSION`,
+# or `Name@VERSION` for a version that is not the default.
+DEFINED = re.compile(
+    r"^\s*\d+:\s+(\S+)\s+\S+\s+(\S+)\s+(GLOBAL|WEAK)\s+\S+\s+(?!UND)\S+\s+(\S+?)(@@?)(\S+)"
+)
+
+# Names whose newest glibc version changed the interface, where ferrousli
+# keeps the older one. Each is written at its newest older version, so a
+# program built against the newer interface fails to load, naming it, rather
+# than calling a function that reads its arguments another way.
+#
+# glibc 2.42 made `speed_t` the baud rate itself, `B9600` 9600, where it had
+# been the termios code, `B9600` 015. ferrousli's headers are musl's, with
+# the codes, and its functions take the codes.
+OLDER_INTERFACE = {"cfgetispeed", "cfgetospeed", "cfsetispeed", "cfsetospeed", "cfsetspeed"}
+
+# libm families whose older version is another function, not the same one
+# with the SVID error handling glibc retired: `totalorder` took its arguments
+# by value before 2.31 and by pointer since, and `fromfp` returned `intmax_t`
+# before 2.43 and a floating type since.
+LIBM_OTHER_FUNCTION = re.compile(r"^(u?fromfpx?|totalorder)")
+
+# libc names whose older version is another function, but one whose contract
+# ferrousli's answers: `pthread_kill@GLIBC_2.2.5` is the function before 2.34,
+# which returned ESRCH for a thread that had exited and not been joined.
+# POSIX leaves that case undefined.
+LIBC_SAME_CONTRACT = {"pthread_kill"}
 
 
-def table(directory: pathlib.Path) -> dict[str, str]:
+def glibc_version_key(version: str) -> tuple[int, ...]:
+    """`GLIBC_2.3.4` as (2, 3, 4), for ordering versions."""
+    return tuple(int(part) for part in re.findall(r"\d+", version))
+
+
+def table(directory: pathlib.Path) -> tuple[dict[str, str], dict[str, list[str]]]:
+    """Each name's default version, and the older versions it answers too.
+
+    glibc keeps a function's older version beside its default when the
+    default moved. A program linked against the older glibc asks for the
+    older one: Chrome, built against glibc 2.31, asks for
+    `pthread_create@GLIBC_2.2.5`. Where the two are one function -- the same
+    address, as every name that moved from `libpthread.so.0` into `libc.so.6`
+    in 2.34 has -- or libm's older version is the same function with the SVID
+    error handling that 2.27 to 2.43 retired name by name, the older version
+    is recorded, and `build-shared.sh` makes ferrousli's definition answer it
+    too.
+    """
     versions: dict[str, str] = {}
+    compat: dict[str, list[str]] = {}
     for library in LIBRARIES:
         path = directory / library
         if not path.exists():
@@ -72,17 +120,42 @@ def table(directory: pathlib.Path) -> dict[str, str]:
             text=True,
             env={"LC_ALL": "C", "PATH": "/usr/bin:/bin"},
         ).stdout
+        # Each name's definitions: (version, is the default, address, type).
+        defined: dict[str, list[tuple[str, bool, str, str]]] = {}
         for line in out.splitlines():
             found = DEFINED.match(line)
             if not found:
                 continue
-            name, version = found.group(2), found.group(3)
+            address, kind, name = found.group(1), found.group(2), found.group(4)
+            default, version = found.group(5) == "@@", found.group(6)
+            defined.setdefault(name, []).append((version, default, address, kind))
+        for name, entries in defined.items():
             # A name is in one library; `libc.so.6`, read first, wins if two
             # ever disagree.
-            versions.setdefault(name, version)
+            defaults = [entry for entry in entries if entry[1]]
+            if not defaults or name in versions:
+                continue
+            version, _, address, kind = defaults[0]
+            older = [entry for entry in entries if not entry[1] and entry[0] != "GLIBC_PRIVATE"]
+            if name in OLDER_INTERFACE and older:
+                versions[name] = max((entry[0] for entry in older), key=glibc_version_key)
+                continue
+            versions[name] = version
+            answered = {
+                entry[0]
+                for entry in older
+                if kind in ("FUNC", "IFUNC")
+                and (
+                    entry[2] == address
+                    or (library == "libm.so.6" and not LIBM_OTHER_FUNCTION.match(name))
+                    or name in LIBC_SAME_CONTRACT
+                )
+            }
+            if answered:
+                compat[name] = sorted(answered, key=glibc_version_key)
     if "libc.so.6" not in {p.name for p in directory.iterdir()}:
         sys.exit(f"gen-glibc-versions: no libc.so.6 in {directory}")
-    return versions
+    return versions, compat
 
 
 def time64_base(name: str) -> str | None:
@@ -145,6 +218,16 @@ def render(arch: str, versions: dict[str, str]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def render_compat(arch: str, compat: dict[str, list[str]]) -> str:
+    lines = [
+        f"# Generated by tools/gen-glibc-versions.py for {arch}. Do not edit.",
+        "# Older versions of a function that glibc keeps beside its default and",
+        "# that ferrousli's one definition answers too: one `name VERSION` a line.",
+    ]
+    lines += [f"{name} {version}" for name, older in sorted(compat.items()) for version in older]
+    return "\n".join(lines) + "\n"
+
+
 def main() -> int:
     args = sys.argv[1:]
     check = "--check" in args
@@ -152,21 +235,30 @@ def main() -> int:
     if len(args) != 2 or args[0] not in ARCHES:
         sys.exit(__doc__)
     arch, directory = args[0], pathlib.Path(args[1])
-    versions = table(directory)
+    versions, compat = table(directory)
     if arch == "armv7a":
         for name in narrow_names(versions) | MISMATCHED:
             if name in versions:
                 versions[name] = "-"
-    text = render(arch, versions)
-    path = OUT / f"{arch}.txt"
+                compat.pop(name, None)
+    outputs = {
+        OUT / f"{arch}.txt": render(arch, versions),
+        OUT / f"{arch}-compat.txt": render_compat(arch, compat),
+    }
     if check:
-        if not path.exists() or path.read_text(encoding="utf-8") != text:
-            print(f"gen-glibc-versions: {path.relative_to(ROOT).as_posix()} is out of date")
-            return 1
-        return 0
+        stale = 0
+        for path, text in outputs.items():
+            if not path.exists() or path.read_text(encoding="utf-8") != text:
+                print(f"gen-glibc-versions: {path.relative_to(ROOT).as_posix()} is out of date")
+                stale = 1
+        return stale
     OUT.mkdir(parents=True, exist_ok=True)
-    path.write_text(text, encoding="utf-8", newline="\n")
-    print(f"gen-glibc-versions: {len(text.splitlines()) - 3} symbols for {arch}")
+    for path, text in outputs.items():
+        path.write_text(text, encoding="utf-8", newline="\n")
+    print(
+        f"gen-glibc-versions: {len(versions)} symbols and "
+        f"{sum(len(older) for older in compat.values())} older versions for {arch}"
+    )
     return 0
 
 

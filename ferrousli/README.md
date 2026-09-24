@@ -192,9 +192,13 @@ process panels in the serial console, refreshing them.
 `ld/` is the dynamic loader, `ld-ferrousli`, and `tools/build-shared.sh`
 builds it together with this library linked as `libc.so.6`: every symbol at
 the version glibc gives it, from `tools/glibc-versions/x86_64.txt`, which
-`tools/gen-glibc-versions.py` reads out of a glibc installation. A program
-linked against glibc then runs on the two in glibc's place; Debian's own
-busybox does, on Ferrix, since 2026-09-21:
+`tools/gen-glibc-versions.py` reads out of a glibc installation (2.43 for
+x86-64 and AArch64). Where glibc keeps an older version of a function beside
+its default and the two are one function, `pthread_create@GLIBC_2.2.5` beside
+`pthread_create@@GLIBC_2.34`, `<arch>-compat.txt` lists it and the library
+answers both, so a program built against an older glibc, Chrome among them,
+loads too. A program linked against glibc then runs on the two in glibc's
+place; Debian's own busybox does, on Ferrix, since 2026-09-21:
 
 ```
 tools/build-shared.sh        # leaves libc.so.6 and ld.so in target/shared/x86_64
