@@ -79,6 +79,9 @@ one is designed in `docs/INIT.md`, and it waits on stage 13's cgroups, which
 the customer put first on 2026-09-23. The kernel's half of starting one is
 in: `ferrix.init=` names the file pid 1 is started from, and `reboot(2)`
 commits the disks first.
+Chrome runs on Ferrix (2026-09-24): Google's prebuilt Chrome for Testing,
+headless and in a window on the compositor, on x86-64 (*Chrome*, after
+sysfs, and `docs/CHROME.md`).
 Networking is done: sockets, a net core and a ring-3 virtio-net driver, with
 `curl` fetching over HTTPS and `git` cloning inside the guest. sysfs is done
 (2026-09-24): `/sys` is a view of the devices as enumeration, the ring-3
@@ -138,6 +141,9 @@ sizes them.
 | ~~Dynamic linking: ferrousli's AArch64 and ARMv7-A port, which the customer put inside the stage on 2026-09-21~~ *done 2026-09-23* | ~~≈ 34~~ | done |
 | ~~Stage 12, btrfs write~~ *done 2026-09-21* | ~~≈ 60~~ | done |
 | ~~sysfs, fed by the services that own each fact (`docs/SYSFS.md`)~~ *done 2026-09-24* | ~~26~~ | done |
+| ~~Chrome on Ferrix, headless and in a window, x86-64 (`docs/CHROME.md`)~~ *done 2026-09-24* | foot and its ports 13, the kernel's rows ≈ 30, spent | done |
+| Chrome: the zygote's fork, the persistent-root stop, ferrousli in glibc's place | unsized; ferrousli's names on a branch | under way |
+| Chrome on the STM32MP157D-DK1 (`docs/CHROME.md` §10) | ≈ 45–55 | not started |
 | Stage 13, namespaces, cgroups, seccomp | cgroups 85 (`docs/CGROUPS.md` §7: 27 for what init needs, 58 for the controllers); namespaces and seccomp unsized, the old guess for the whole stage was *month* ≈ 60 | under way: G1 to G5 done (27 of 85), which is all init needs from it, C8 for native services included; its cgroups come first, as init's prerequisite (`docs/INIT.md` §0); the controllers are next, `pids` first |
 | Stage 22, Steam: the parts with a first guess (bubblewrap's rest 13, sound 30, Venus 8; glibc's names are dynamic linking's 13 and XWayland stage 19's, both counted above) | 51 | not started |
 | Stage 22, Steam: the 32-bit x86 ABI and what the runtime and Proton find missing | unsized, ≈ 100 as a guess | not started |
@@ -4095,6 +4101,64 @@ back.
 §6): uevents over `NETLINK_KOBJECT_UEVENT` (3 points), a function's
 `resource` (2) and `config` (3), `/sys/firmware/devicetree` on the DK1 (3),
 a processor's `topology`.
+
+---
+
+## Chrome — a browser on Ferrix  ·  *headless and in a window, 2026-09-24; the DK1 ≈ 45–55 points*
+
+Placed after sysfs without a number of its own. A browser was on no stage
+until the customer asked, on 2026-09-18, what one would take, and on
+2026-09-23 for the work to start; `docs/CHROME.md` is the account, from the
+first assessment to what each run found. On 2026-09-24 the customer chose
+Google's prebuilt Chrome over building Chromium, for a first result in days
+rather than a source build's 40-plus unknown points. The browser is Chrome
+for Testing 154.0.8037.57 on Debian 13's glibc, from a btrfs volume
+`scripts/fetch-chrome.sh` makes from pinned downloads; ferrousli standing in
+for that glibc is the other route, and its last missing names are on a branch.
+
+**Exit:** Chrome renders a page on Ferrix, headless and in a window on the
+compositor. Met on x86-64 (2026-09-24): `cargo xtask test-chrome` runs
+`chrome-headless-shell` three ways -- `--version`, `--dump-dom` of a page
+whose script only V8 could have run, and `--screenshot` -- and
+`cargo xtask test-chrome-window` boots the compositor with the full browser
+as a Wayland client and requires its page's colour over a tenth of the
+screen. `cargo xtask run-compositor --chrome` puts it on the desktop.
+
+**Done (2026-09-24).** In the order running it found them:
+
+* foot, a Wayland terminal nobody here wrote, with the client libraries a
+  browser links, built against ferrousli: `cargo xtask test-foot`
+  (§6 of `docs/CHROME.md`). `timerfd` in the kernel, for it.
+* `execve` of a program past 64 MiB, mapped from its file on demand, and
+  `execve("/proc/self/exe")` from a fork, which is how Chrome starts every
+  child (FX-0871).
+* `madvise`, which PartitionAlloc `CHECK`s, and `signalfd` (FX-0872,
+  FX-0884).
+* `CLOCK_THREAD_CPUTIME_ID` and `CLOCK_PROCESS_CPUTIME_ID`, `clock_getres`,
+  `creat`, and `/proc/<pid>/task`'s link count, which Chrome's sandbox helper
+  counts its threads by.
+* The compositor: a request's new object made at its interface's version,
+  as libwayland does -- Chrome lost its connection on that -- and Hyprland's
+  `env =` lines given to what it starts.
+
+**Still to do:**
+
+* The zygote's fork fails on Ferrix, so the tests run Chrome with
+  `--no-zygote`; `--no-sandbox` is stage 13's.
+* On the desktop's persistent btrfs root Chrome stops before its first
+  frame; `run-compositor --chrome` boots a tmpfs root until that is found.
+* Chrome on ferrousli's `libc.so.6`: 97 names were missing, measured on
+  2026-09-24; a branch answers all of them, `signalfd` landing separately.
+* A vDSO, `inotify`, and the GPU: Chrome draws in software.
+* **The STM32MP157D-DK1**, sized on 2026-09-24 (`docs/CHROME.md` §10), about
+  45 to 55 points: an armhf browser, Debian 13's Chromium 150, on the same
+  kind of volume (3); a ring-3 SDMMC driver so the volume can live on the
+  card rather than in 512 MiB of RAM (13); page-cache eviction, so the pages
+  of a 200 MB program it has touched can be given back (8–13); ARM's
+  `cacheflush` for V8's JIT, or `--js-flags=--jitless` (1–3); what running it
+  finds (13 or more); and the board's Ethernet, if pages are to come from the
+  network (8). Memory is the risk: 512 MiB may be too little whatever is
+  built.
 
 ---
 

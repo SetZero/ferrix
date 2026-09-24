@@ -39,6 +39,7 @@ what is left:
 | The zygote's fork, which fails on Ferrix, so Chrome runs with `--no-zygote` | not started (§8) |
 | Chrome on the desktop's persistent btrfs root, where it stops before its first frame, so `--chrome` boots a tmpfs root | not started (§9) |
 | Chrome on ferrousli's `libc.so.6` in glibc's place | 97 glibc names missing, measured (§8); being closed |
+| Chrome on the STM32MP157D-DK1: an armhf Chromium, an SDMMC driver, page-cache eviction | not started, ≈ 45–55 points (§10) |
 | Chromium built against ferrousli, with Alpine's musl patches rebased | not needed for a first Chrome: the prebuilt one runs (§5, §8) |
 | A guest with the ~2 GiB a page wants | `test-chrome` boots 4 GiB, as `test-rustc` does (§2.3) |
 
@@ -640,3 +641,31 @@ first Wayland requests, or before them, and with its profile in `/dev/shm`
 as well; on tmpfs it does not. That is open, and is a btrfs question more
 than a browser one. `cargo xtask remote-desktop --chrome` shows it from
 another machine.
+
+---
+
+## 10. On the STM32MP157D-DK1, sized 2026-09-24
+
+The customer asked what Chrome on the board would take. The board has two
+800 MHz Cortex-A7 cores, 512 MiB of RAM, a Vivante GC400 and an SD card, and
+Ferrix already runs its HDMI Wayland desktop with a USB keyboard and mouse.
+Everything the x86-64 run needed of the kernel -- `execve` from the file,
+`/proc/self/exe`, `madvise`, `timerfd`, `signalfd`, `creat`,
+`clock_getres` -- is on ARMv7-A too, and Debian's armhf glibc runs there.
+What is not, in points:
+
+| what | points |
+|---|---|
+| An ARM browser: Chrome for Testing is linux64 only, so Debian 13's Chromium 150 for armhf (199 MB installed), on a volume `fetch-chrome.sh` makes the same way | 3 |
+| The SD card at run time: U-Boot loads everything into RAM as the initramfs, and there is no SDMMC driver, so a 1 GB volume has nowhere to be; a ring-3 driver behind the block ring, then btrfs from a partition | 13 |
+| Memory: 512 MiB, no swap, and the page cache never evicts a file's pages, so every page of the program Chrome touches stays; eviction under pressure, with `--single-process` and one page at a time | 8–13 |
+| V8's JIT flushes the instruction cache with ARM's `cacheflush`, which `libs/linux-abi` numbers and the kernel does not answer; or `--js-flags=--jitless` | 1–3 |
+| What running it finds: on x86-64 that was six things in a day | 13 or more |
+| The board's Ethernet, a DWMAC with no driver, if pages are to come from the network | 8 |
+
+About 45 to 55 points to a slow but real Chrome window on the board, most of
+it the SD driver and the memory. The drawing is in software on two A7 cores:
+seconds a page. The GC400 work under way is GLES2, below what Chrome's GPU
+path wants, so it does not help here soon. Memory is the risk: 512 MiB may be
+too little whatever is built.
+

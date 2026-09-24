@@ -410,6 +410,21 @@ package FerrixRoadmap {
              * sysfs. */
     }
 
+    #inProgress requirement <'SC'> stageChrome : Stage {
+        attribute :>> number = 12;
+        attribute :>> status = StageStatus::InProgress;
+        attribute :>> size = "headless and a window spent; the DK1 about 45 to 55 points";
+        doc /* Placed after sysfs without a number of its own, asked for by
+             * the customer on 2026-09-23 (docs/CHROME.md). Google's prebuilt
+             * Chrome for Testing on Debian's glibc from a btrfs volume, by
+             * the customer's choice of 2026-09-24. Exit met on x86-64:
+             * cargo xtask test-chrome runs it headless, and
+             * cargo xtask test-chrome-window in a window on the compositor.
+             * Owed: the zygote's fork, the persistent-root stop, ferrousli in
+             * glibc's place, and the STM32MP157D-DK1, which needs an SDMMC
+             * driver and page-cache eviction first. */
+    }
+
     #implemented requirement <'S12'> stage12BtrfsWrite : Stage {
         attribute :>> number = 12;
         attribute :>> status = StageStatus::Done;
@@ -658,6 +673,7 @@ package FerrixRoadmap {
     dependency from stageNetworking to stage11BtrfsRead, stage10UserspaceDrivers;
     dependency from stageDynamicLinking to stage8Vfs, stage7LinuxAbi;
     dependency from stageSysfs to stage8Vfs, stage10UserspaceDrivers;
+    dependency from stageChrome to stageDynamicLinking, stage12BtrfsWrite, stage18Compositor;
     dependency from stage12BtrfsWrite to stage11BtrfsRead;
     dependency from stage13Isolation to stage12BtrfsWrite;
     dependency from stage14RealTime to stage13Isolation, stage4Smp;
@@ -704,6 +720,7 @@ package FerrixRoadmap {
     allocate stage8Vfs to ferrix.kernel.vfs;
     allocate stage8Vfs to ferrix.kernel.filesystems;
     allocate stageSysfs to ferrix.kernel.filesystems;
+    allocate stageChrome to ferrix.userland;
     allocate stage9NativeAbi to ferrix.kernel.native;
     allocate stage10UserspaceDrivers to ferrix.kernel.devices;
     allocate stage10UserspaceDrivers to ferrix.kernel.iommu;
