@@ -1,5 +1,6 @@
-//! The LTDC, the STM32MP15's display controller: timing, one layer, and the
-//! shadow registers that make a change take effect at vertical blanking.
+//! The LTDC, the STM32MP15's display controller: timing, its two layers --
+//! the frame on the first, the pointer on the second -- and the shadow
+//! registers that make a change take effect at vertical blanking.
 //!
 //! Register offsets and fields are the STM32MP15's (RM0436, "LCD-TFT display
 //! controller"), which Linux's `drivers/gpu/drm/stm/ltdc.c` calls hardware
@@ -14,6 +15,31 @@
 //! screen, and the reload's interrupt (`ISR.RRIF`) is when a page flip is
 //! done. A reload that changes nothing still raises it, which is what paces a
 //! flush of the buffer already shown.
+//!
+//! # The pointer on the second layer
+//!
+//! The controller blends its second layer over its first, in a window of
+//! its own that can be anywhere on the screen, from a buffer of its own.
+//! That is a cursor plane: a compositor's pointer image shown there moves
+//! by rewriting the window's two position registers, and no frame is
+//! composed, turned and flipped for it -- which on the DK1, whose frames
+//! take 25 ms on average and 150 ms at worst in software, is the
+//! difference between a pointer that keeps up with the hand and one that
+//! trails it.
+//!
+//! Its registers are shadowed like the first layer's and reloaded by the
+//! same `SRCR.VBR`: a move asked for while a flip waits for its blanking
+//! lands at that blanking with it, and neither waits for the other. The
+//! one reload has one cost: a move written in the instant a reload happens
+//! can land half this frame and half the next -- the window's position
+//! before its buffer's start, say, when the image crosses the screen's edge
+//! -- which is one frame of a pointer one step off, and nothing more.
+//!
+//! The image is premultiplied `ARGB8888`, as a Wayland client's pixels and
+//! `hyprix`'s cursor plane are, so the layer blends with a factor of one
+//! for its own colour and one less its pixel's alpha for what is beneath
+//! ([`BFCR_PREMULTIPLIED`]). Outside the window the layer contributes its
+//! default colour, which is left transparent black: nothing.
 
 use crate::Registers;
 use crate::mode::Mode;
@@ -96,6 +122,16 @@ pub const PF_ARGB8888: u32 = 0;
 /// `BFCR`: blend with the constant alpha alone, ignoring the pixels' own
 /// alpha byte, which in XRGB8888 is whatever the program left there.
 pub const BFCR_CONSTANT: u32 = (0b100 << 8) | 0b101;
+/// `BFCR` for premultiplied pixels: `BF1` the constant alpha (0xFF, so
+/// one) times the layer's colour, which already carries its alpha, and
+/// `BF2` one less pixel alpha times constant alpha times what is beneath --
+/// RM0436's `BF1 = 100` and `BF2 = 111`, the Porter-Duff "over" for
+/// premultiplied colour.
+pub const BFCR_PREMULTIPLIED: u32 = (0b100 << 8) | 0b111;
+/// The layer the frame is on.
+pub const FRAME_LAYER: u32 = 0;
+/// The layer the pointer is on.
+pub const CURSOR_LAYER: u32 = 1;
 
 /// The versions whose register layout this module is written for: the
 /// STM32MP15's, which Linux calls 1.2 and 1.3.
@@ -180,6 +216,77 @@ pub struct Frame {
     pub height: u32,
 }
 
+/// A pointer image the second layer can show: premultiplied `ARGB8888`,
+/// one contiguous run like a [`Frame`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct CursorImage {
+    /// Bus address of its top-left pixel.
+    pub address: u32,
+    /// Bytes from one row to the next.
+    pub pitch: u32,
+    /// Pixels a row.
+    pub width: u32,
+    /// Rows.
+    pub height: u32,
+}
+
+/// The part of a pointer image that is on the screen, and where: what the
+/// second layer's window and buffer registers are made from.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Clip {
+    /// Bus address of the first pixel shown: the image's own, moved on by
+    /// the rows cut off above and the columns cut off to the left.
+    pub address: u32,
+    /// The screen column of the first pixel shown, from 0.
+    pub x: u32,
+    /// The screen row of the first pixel shown, from 0.
+    pub y: u32,
+    /// Columns shown.
+    pub width: u32,
+    /// Rows shown.
+    pub height: u32,
+}
+
+impl Clip {
+    /// What of `image`, its top-left corner at `at` on a screen `screen`
+    /// pixels big, is on the screen: `None` when nothing is.
+    ///
+    /// The window cannot start left of the screen or above it, so an image
+    /// partly off the left or the top edge is shown from the first column or
+    /// row that is on it, read from that far into the buffer; off the right
+    /// or the bottom edge the window is only narrower or shorter.
+    #[must_use]
+    pub fn of(image: &CursorImage, at: (i32, i32), screen: (u32, u32)) -> Option<Clip> {
+        let span = |at: i32, length: u32, limit: u32| -> Option<(u32, u32, u32)> {
+            let (at, length, limit) = (i64::from(at), i64::from(length), i64::from(limit));
+            let first = at.max(0);
+            let end = at.saturating_add(length).min(limit);
+            if first >= end {
+                return None;
+            }
+            // Where on the screen, how many, and how many of the image's
+            // were cut off before it.
+            Some((
+                u32::try_from(first).ok()?,
+                u32::try_from(end - first).ok()?,
+                u32::try_from(first - at).ok()?,
+            ))
+        };
+        let (x, width, left) = span(at.0, image.width, screen.0)?;
+        let (y, height, top) = span(at.1, image.height, screen.1)?;
+        let skip = top
+            .checked_mul(image.pitch)?
+            .checked_add(left.checked_mul(4)?)?;
+        Some(Clip {
+            address: image.address.checked_add(skip)?,
+            x,
+            y,
+            width,
+            height,
+        })
+    }
+}
+
 /// What the interrupt said, taken and cleared.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct Events {
@@ -192,13 +299,16 @@ pub struct Events {
     pub transfer_error: bool,
 }
 
-/// The controller, driving its first layer.
+/// The controller, driving its first layer and, where it has one, its
+/// second as the pointer's.
 #[derive(Debug)]
 pub struct Ltdc<R: Registers> {
     registers: R,
     /// Bytes the controller's bus moves at once, which a line length counts
     /// past its end.
     bus_bytes: u32,
+    /// How many layers it has: `LCR`, two on every STM32MP15.
+    layers: u32,
     /// The mode it is running, once started.
     mode: Option<Mode>,
     /// The timing that mode came to.
@@ -217,7 +327,8 @@ impl<R: Registers> Ltdc<R> {
         if !KNOWN_VERSIONS.contains(&version) {
             return Err(LtdcError::Version(version));
         }
-        if registers.read32(LCR) == 0 {
+        let layers = registers.read32(LCR) & 0xF;
+        if layers == 0 {
             return Err(LtdcError::Layout);
         }
         let width_log2 = (registers.read32(GC2R) >> 4) & 0x7;
@@ -227,6 +338,7 @@ impl<R: Registers> Ltdc<R> {
         Ok(Ltdc {
             registers,
             bus_bytes: 1 << width_log2,
+            layers,
             mode: None,
             timing: None,
         })
@@ -235,6 +347,17 @@ impl<R: Registers> Ltdc<R> {
     /// The registers, for a test to look at.
     pub const fn registers(&self) -> &R {
         &self.registers
+    }
+
+    /// The registers, for a test to move its model of the screen on.
+    #[cfg(test)]
+    pub(crate) const fn registers_mut(&mut self) -> &mut R {
+        &mut self.registers
+    }
+
+    /// Whether there is a second layer to show a pointer on.
+    pub const fn has_cursor_layer(&self) -> bool {
+        self.layers > CURSOR_LAYER
     }
 
     /// The mode running, once [`Ltdc::start`] has run.
@@ -258,7 +381,7 @@ impl<R: Registers> Ltdc<R> {
         r.write32(AWCR, timing.awcr);
         r.write32(TWCR, timing.twcr);
         r.write32(BCCR, 0);
-        for layer in 0..2 {
+        for layer in [FRAME_LAYER, CURSOR_LAYER] {
             r.write32(LAYER + layer * LAYER_STRIDE + L_CR, 0);
         }
         r.write32(ICR, INT_RR | INT_FUE | INT_FUW | INT_TERR);
@@ -322,6 +445,75 @@ impl<R: Registers> Ltdc<R> {
         self.registers.write32(SRCR, SRCR_VBR);
     }
 
+    /// Show `image` on the second layer with its top-left corner at `at` in
+    /// the screen's pixels -- anywhere, including partly or wholly off the
+    /// screen -- from the next vertical blanking. Whether any of it is on
+    /// the screen: an image wholly off it takes the layer off.
+    ///
+    /// Every register of the layer is written each time, which is a dozen
+    /// writes for a move: the layer then needs no state here, and a mode
+    /// switch that turned it off is undone by the next call like any other.
+    ///
+    /// # Errors
+    ///
+    /// [`LtdcError::Mode`] before [`Ltdc::start`] or on a controller with
+    /// one layer, and [`LtdcError::Buffer`] for an image whose rows are
+    /// shorter than its pixels, whose pitch or line length the fields cannot
+    /// hold, or whose address is not a pixel's; nothing is written then.
+    pub fn show_cursor(&mut self, image: &CursorImage, at: (i32, i32)) -> Result<bool, LtdcError> {
+        let (Some(mode), Some(timing)) = (self.mode, self.timing) else {
+            return Err(LtdcError::Mode);
+        };
+        if !self.has_cursor_layer() {
+            return Err(LtdcError::Mode);
+        }
+        let row = image.width.checked_mul(4).ok_or(LtdcError::Buffer)?;
+        if image.pitch < row
+            || image.pitch > 0xFFFF
+            || row + self.bus_bytes - 1 > 0x1FFF
+            || !image.address.is_multiple_of(4)
+        {
+            return Err(LtdcError::Buffer);
+        }
+        let screen = (u32::from(mode.hdisplay), u32::from(mode.vdisplay));
+        let Some(clip) = Clip::of(image, at, screen) else {
+            self.hide_cursor();
+            return Ok(false);
+        };
+        let hbp = timing.bpcr >> 16;
+        let vbp = timing.bpcr & 0x7FF;
+        let first_x = hbp + 1 + clip.x;
+        let last_x = first_x + clip.width - 1;
+        let first_y = vbp + 1 + clip.y;
+        let last_y = first_y + clip.height - 1;
+        let line = clip.width * 4 + self.bus_bytes - 1;
+        let r = &mut self.registers;
+        let at = |offset: u32| LAYER + CURSOR_LAYER * LAYER_STRIDE + offset;
+        r.write32(at(L_WHPCR), (last_x << 16) | first_x);
+        r.write32(at(L_WVPCR), (last_y << 16) | first_y);
+        r.write32(at(L_PFCR), PF_ARGB8888);
+        r.write32(at(L_CACR), 0xFF);
+        r.write32(at(L_DCCR), 0);
+        r.write32(at(L_BFCR), BFCR_PREMULTIPLIED);
+        r.write32(at(L_CFBAR), clip.address);
+        r.write32(at(L_CFBLR), (image.pitch << 16) | line);
+        r.write32(at(L_CFBLNR), clip.height);
+        r.write32(at(L_CR), L_CR_LEN);
+        r.write32(SRCR, SRCR_VBR);
+        Ok(true)
+    }
+
+    /// Take the second layer off the screen at the next vertical blanking:
+    /// the pointer hidden, and its buffer no longer read once the reload
+    /// has happened.
+    pub fn hide_cursor(&mut self) {
+        if self.has_cursor_layer() {
+            self.registers
+                .write32(LAYER + CURSOR_LAYER * LAYER_STRIDE + L_CR, 0);
+            self.registers.write32(SRCR, SRCR_VBR);
+        }
+    }
+
     /// Ask for a reload at the next vertical blanking with nothing changed:
     /// its interrupt is when a flush of the buffer on screen is done.
     pub fn request_reload(&mut self) {
@@ -352,7 +544,9 @@ impl<R: Registers> Ltdc<R> {
     pub fn stop(&mut self) {
         let r = &mut self.registers;
         r.write32(IER, 0);
-        r.write32(LAYER + L_CR, 0);
+        for layer in [FRAME_LAYER, CURSOR_LAYER] {
+            r.write32(LAYER + layer * LAYER_STRIDE + L_CR, 0);
+        }
         r.write32(SRCR, SRCR_IMR);
         r.write32(GCR, 0);
         self.mode = None;

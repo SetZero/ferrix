@@ -56,9 +56,15 @@ fn a_descriptor_that_is_not_a_timing_is_none() {
 
 /// A register file that reads back what was written, starting from the
 /// identification an STM32MP15 gives, and keeps every write in order.
+///
+/// What is written is the shadow; `active` is what the controller is
+/// showing, copied from the shadows at once for `SRCR.IMR` and at the next
+/// [`RegisterFile::vertical_blank`] for `SRCR.VBR`, which then clears the
+/// request and raises the reload interrupt, as RM0436 has it.
 #[derive(Debug, Default)]
 struct RegisterFile {
     values: BTreeMap<u32, u32>,
+    active: BTreeMap<u32, u32>,
     writes: Vec<(u32, u32)>,
 }
 
@@ -75,6 +81,26 @@ impl RegisterFile {
     fn value(&self, offset: u32) -> u32 {
         self.values.get(&offset).copied().unwrap_or(0)
     }
+
+    /// What the controller shows from the register at `offset`.
+    fn shown(&self, offset: u32) -> u32 {
+        self.active.get(&offset).copied().unwrap_or(0)
+    }
+
+    /// The shadows copied in.
+    fn reload(&mut self) {
+        self.active.clone_from(&self.values);
+        let _ = self.values.insert(ltdc::SRCR, 0);
+        let status = self.value(ltdc::ISR) | ltdc::INT_RR;
+        let _ = self.values.insert(ltdc::ISR, status);
+    }
+
+    /// The screen's vertical blanking: a reload, if one was asked for.
+    fn vertical_blank(&mut self) {
+        if self.value(ltdc::SRCR) & ltdc::SRCR_VBR != 0 {
+            self.reload();
+        }
+    }
 }
 
 impl Registers for RegisterFile {
@@ -88,6 +114,13 @@ impl Registers for RegisterFile {
             // Write-one-to-clear, as the status register behaves.
             let status = self.value(ltdc::ISR) & !value;
             let _ = self.values.insert(ltdc::ISR, status);
+        } else if offset == ltdc::SRCR {
+            // Set by software, cleared only by the reload.
+            let asked = self.value(ltdc::SRCR) | value;
+            let _ = self.values.insert(ltdc::SRCR, asked);
+            if value & ltdc::SRCR_IMR != 0 {
+                self.reload();
+            }
         } else {
             let _ = self.values.insert(offset, value);
         }
@@ -225,6 +258,302 @@ fn a_frame_the_mode_cannot_show_is_refused_and_nothing_is_written() {
         written,
         "nothing written for a refusal"
     );
+}
+
+/// A 64 x 64 pointer image, rows packed, as the display core's cursor
+/// buffers are.
+const ARROW: ltdc::CursorImage = ltdc::CursorImage {
+    address: 0xC900_0000,
+    pitch: 256,
+    width: 64,
+    height: 64,
+};
+
+/// The screen's frame, 720p.
+const SCREEN: Frame = Frame {
+    address: 0xC800_0000,
+    pitch: 5120,
+    width: 1280,
+    height: 720,
+};
+
+/// The second layer's register at `offset`.
+const fn cursor(offset: u32) -> u32 {
+    ltdc::LAYER + ltdc::CURSOR_LAYER * ltdc::LAYER_STRIDE + offset
+}
+
+fn started() -> Ltdc<RegisterFile> {
+    let mut ltdc = Ltdc::new(RegisterFile::stm32mp15()).expect("an STM32MP15 LTDC");
+    ltdc.start(&Mode::CEA_720P60).expect("720p fits");
+    ltdc
+}
+
+#[test]
+fn the_pointer_goes_on_the_second_layer_blended_as_premultiplied() {
+    let mut ltdc = started();
+    assert!(ltdc.has_cursor_layer(), "LCR says two");
+    assert_eq!(ltdc.show_cursor(&ARROW, (100, 200)), Ok(true));
+    let r = ltdc.registers();
+    // 720p's back porches end at column 259 and row 24.
+    assert_eq!(
+        r.value(cursor(ltdc::L_WHPCR)),
+        ((259 + 100 + 64) << 16) | (259 + 101),
+        "columns 100 to 163 of the screen"
+    );
+    assert_eq!(
+        r.value(cursor(ltdc::L_WVPCR)),
+        ((24 + 200 + 64) << 16) | (24 + 201),
+        "rows 200 to 263"
+    );
+    assert_eq!(r.value(cursor(ltdc::L_PFCR)), ltdc::PF_ARGB8888);
+    assert_eq!(r.value(cursor(ltdc::L_CACR)), 0xFF, "constant alpha one");
+    assert_eq!(
+        r.value(cursor(ltdc::L_BFCR)),
+        (0b100 << 8) | 0b111,
+        "BF1 constant alpha, BF2 one less pixel alpha times constant alpha"
+    );
+    assert_eq!(
+        r.value(cursor(ltdc::L_DCCR)),
+        0,
+        "transparent outside the window"
+    );
+    assert_eq!(r.value(cursor(ltdc::L_CFBAR)), 0xC900_0000, "the image");
+    assert_eq!(
+        r.value(cursor(ltdc::L_CFBLR)),
+        (256 << 16) | (256 + 7),
+        "its pitch, and a row plus the bus width less one"
+    );
+    assert_eq!(r.value(cursor(ltdc::L_CFBLNR)), 64, "rows");
+    assert_eq!(r.value(cursor(ltdc::L_CR)), ltdc::L_CR_LEN, "shown");
+    assert_eq!(
+        r.writes.last(),
+        Some(&(ltdc::SRCR, ltdc::SRCR_VBR)),
+        "at the next blanking, never at once"
+    );
+    assert!(
+        r.writes.iter().all(
+            |&(offset, _)| !(ltdc::LAYER..ltdc::LAYER + ltdc::LAYER_STRIDE).contains(&offset)
+                || offset == ltdc::LAYER + ltdc::L_CR
+        ),
+        "the first layer's registers were not touched after start"
+    );
+}
+
+#[test]
+fn a_pointer_across_an_edge_is_shown_in_part() {
+    let screen = (1280, 720);
+    let clip = |at| ltdc::Clip::of(&ARROW, at, screen);
+    // Off the left and the top: the window starts at the screen's corner,
+    // and the buffer is read from as far into it as was cut off.
+    assert_eq!(
+        clip((-10, -3)),
+        Some(ltdc::Clip {
+            address: 0xC900_0000 + 3 * 256 + 10 * 4,
+            x: 0,
+            y: 0,
+            width: 54,
+            height: 61,
+        })
+    );
+    // Off the right and the bottom: only a narrower, shorter window.
+    assert_eq!(
+        clip((1250, 700)),
+        Some(ltdc::Clip {
+            address: 0xC900_0000,
+            x: 1250,
+            y: 700,
+            width: 30,
+            height: 20,
+        })
+    );
+    // One pixel of it in each corner, and none past them.
+    assert_eq!(clip((-63, -63)).map(|c| (c.width, c.height)), Some((1, 1)));
+    assert_eq!(clip((1279, 719)).map(|c| (c.width, c.height)), Some((1, 1)));
+    for off in [
+        (-64, 0),
+        (0, -64),
+        (1280, 0),
+        (0, 720),
+        (i32::MIN, i32::MAX),
+    ] {
+        assert_eq!(clip(off), None, "{off:?}");
+    }
+
+    // And the registers made from a clip off the left.
+    let mut ltdc = started();
+    assert_eq!(ltdc.show_cursor(&ARROW, (-10, 5)), Ok(true));
+    let r = ltdc.registers();
+    assert_eq!(
+        r.value(cursor(ltdc::L_WHPCR)),
+        ((259 + 54) << 16) | 260,
+        "the first 54 columns"
+    );
+    assert_eq!(r.value(cursor(ltdc::L_CFBAR)), 0xC900_0000 + 40);
+    assert_eq!(
+        r.value(cursor(ltdc::L_CFBLR)),
+        (256 << 16) | (54 * 4 + 7),
+        "the pitch as before, the line as long as what is shown"
+    );
+}
+
+#[test]
+fn a_pointer_off_the_screen_takes_the_layer_off() {
+    let mut ltdc = started();
+    assert_eq!(ltdc.show_cursor(&ARROW, (10, 10)), Ok(true));
+    ltdc.registers_mut().vertical_blank();
+    assert_eq!(ltdc.show_cursor(&ARROW, (-200, 10)), Ok(false));
+    ltdc.registers_mut().vertical_blank();
+    assert_eq!(ltdc.registers().shown(cursor(ltdc::L_CR)), 0, "off");
+    // And back on when it comes back.
+    assert_eq!(ltdc.show_cursor(&ARROW, (0, 0)), Ok(true));
+    ltdc.registers_mut().vertical_blank();
+    assert_eq!(ltdc.registers().shown(cursor(ltdc::L_CR)), ltdc::L_CR_LEN);
+    ltdc.hide_cursor();
+    assert!(ltdc.reload_pending(), "hidden at the next blanking");
+    ltdc.registers_mut().vertical_blank();
+    assert_eq!(ltdc.registers().shown(cursor(ltdc::L_CR)), 0, "hidden");
+}
+
+#[test]
+fn a_move_and_a_flip_in_one_frame_both_land_at_its_blanking() {
+    let mut ltdc = started();
+    ltdc.show(&SCREEN).expect("the mode's size");
+    assert_eq!(ltdc.show_cursor(&ARROW, (10, 10)), Ok(true));
+    ltdc.registers_mut().vertical_blank();
+    let _ = ltdc.take_events();
+
+    // The compositor flips to its other buffer, and before the blanking
+    // the pointer moves.
+    let other = Frame {
+        address: 0xC840_0000,
+        ..SCREEN
+    };
+    ltdc.show(&other).expect("the mode's size");
+    assert_eq!(ltdc.show_cursor(&ARROW, (20, 30)), Ok(true));
+    let r = ltdc.registers();
+    assert_eq!(
+        r.shown(ltdc::LAYER + ltdc::L_CFBAR),
+        0xC800_0000,
+        "nothing lands before the blanking"
+    );
+    assert_eq!(r.shown(cursor(ltdc::L_WHPCR)) & 0xFFF, 259 + 11);
+    ltdc.registers_mut().vertical_blank();
+    let r = ltdc.registers();
+    assert_eq!(
+        r.shown(ltdc::LAYER + ltdc::L_CFBAR),
+        0xC840_0000,
+        "the flip"
+    );
+    assert_eq!(
+        r.shown(cursor(ltdc::L_WHPCR)) & 0xFFF,
+        259 + 21,
+        "and the move"
+    );
+    assert_eq!(r.shown(cursor(ltdc::L_WVPCR)) & 0x7FF, 24 + 31);
+    assert!(ltdc.take_events().reloaded, "one reload, one interrupt");
+    assert!(!ltdc.reload_pending());
+
+    // A move alone asks for a reload and writes none of the first layer's
+    // registers, so a flip waiting for its blanking is left as it was.
+    ltdc.show(&SCREEN).expect("the mode's size");
+    let before = ltdc.registers().writes.len();
+    assert_eq!(ltdc.show_cursor(&ARROW, (21, 30)), Ok(true));
+    let first = ltdc::LAYER..ltdc::LAYER + ltdc::LAYER_STRIDE;
+    assert!(
+        ltdc.registers().writes[before..]
+            .iter()
+            .all(|(offset, _)| !first.contains(offset)),
+        "a move touches the second layer only"
+    );
+    ltdc.registers_mut().vertical_blank();
+    assert_eq!(
+        ltdc.registers().shown(ltdc::LAYER + ltdc::L_CFBAR),
+        0xC800_0000,
+        "the flip waiting under the move landed"
+    );
+}
+
+#[test]
+fn the_pointer_comes_back_after_a_mode_switch_only_when_shown_again() {
+    let mut ltdc = started();
+    assert_eq!(ltdc.show_cursor(&ARROW, (1000, 600)), Ok(true));
+    ltdc.registers_mut().vertical_blank();
+    ltdc.stop();
+    assert_eq!(
+        ltdc.registers().shown(cursor(ltdc::L_CR)),
+        0,
+        "stopped: nothing read from memory, the pointer's buffer included"
+    );
+    // 720x480 at 60 Hz: the old place is off this screen, and the image is
+    // clipped against the new mode's size.
+    let small = Mode {
+        clock_khz: 27_000,
+        hdisplay: 720,
+        hsync_start: 736,
+        hsync_end: 798,
+        htotal: 858,
+        vdisplay: 480,
+        vsync_start: 489,
+        vsync_end: 495,
+        vtotal: 525,
+        hsync_high: false,
+        vsync_high: false,
+        vic: 2,
+    };
+    ltdc.start(&small).expect("fits");
+    assert_eq!(ltdc.registers().shown(cursor(ltdc::L_CR)), 0, "off");
+    assert_eq!(ltdc.show_cursor(&ARROW, (1000, 600)), Ok(false));
+    assert_eq!(ltdc.show_cursor(&ARROW, (700, 470)), Ok(true));
+    let r = ltdc.registers();
+    let hbp = r.value(ltdc::BPCR) >> 16;
+    assert_eq!(
+        r.value(cursor(ltdc::L_WHPCR)),
+        ((hbp + 720) << 16) | (hbp + 701),
+        "clipped at the new right edge"
+    );
+    assert_eq!(r.value(cursor(ltdc::L_CFBLNR)), 10, "and the new bottom");
+}
+
+#[test]
+fn a_cursor_the_controller_cannot_show_is_refused_and_nothing_is_written() {
+    let mut ltdc = Ltdc::new(RegisterFile::stm32mp15()).expect("an STM32MP15 LTDC");
+    assert_eq!(
+        ltdc.show_cursor(&ARROW, (0, 0)),
+        Err(LtdcError::Mode),
+        "not started"
+    );
+    ltdc.start(&Mode::CEA_720P60).expect("720p fits");
+    let written = ltdc.registers().writes.len();
+    for bad in [
+        ltdc::CursorImage {
+            pitch: 252,
+            ..ARROW
+        },
+        ltdc::CursorImage {
+            address: 0xC900_0002,
+            ..ARROW
+        },
+        ltdc::CursorImage {
+            width: 0x1000,
+            pitch: 0x4000,
+            ..ARROW
+        },
+    ] {
+        assert_eq!(
+            ltdc.show_cursor(&bad, (0, 0)),
+            Err(LtdcError::Buffer),
+            "{bad:?}"
+        );
+    }
+    assert_eq!(ltdc.registers().writes.len(), written, "nothing written");
+
+    // A controller with one layer has no plane to offer.
+    let mut one = RegisterFile::stm32mp15();
+    let _ = one.values.insert(ltdc::LCR, 1);
+    let mut one = Ltdc::new(one).expect("an LTDC all the same");
+    one.start(&Mode::CEA_720P60).expect("720p fits");
+    assert!(!one.has_cursor_layer());
+    assert_eq!(one.show_cursor(&ARROW, (0, 0)), Err(LtdcError::Mode));
 }
 
 #[test]
