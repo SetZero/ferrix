@@ -428,6 +428,59 @@ impl<'a> Frames<'a> {
         None
     }
 
+    /// Take `blocks` blocks of `2^MAX_ORDER` frames that lie back to back:
+    /// one run of physical memory longer than the largest block, returned
+    /// as its first frame, each block allocated at [`MAX_ORDER`] on its own.
+    ///
+    /// For the one caller that needs more contiguous memory than a block: a
+    /// display controller with no scatter-gather reads a whole frame from
+    /// one run of addresses, and 1920x1080 at four bytes a pixel is 8.3 MB
+    /// where a block is 4 MiB. The module doc's "a caller that wants more
+    /// should be asking for a range" is this call. Maximal blocks are what
+    /// it walks, and only free ones: no block is split and nothing is moved,
+    /// so a run exists only where the whole of it is free and aligned to
+    /// maximal blocks, which on a machine not long booted is most of memory.
+    /// The caller gives each block back on its own, or splits it and frees
+    /// its frames one by one, exactly as it would a block from
+    /// [`Frames::allocate`].
+    ///
+    /// `None` for zero blocks or when no such run is free.
+    pub fn allocate_run(&mut self, blocks: u64) -> Option<Frame> {
+        let size = 1u64 << MAX_ORDER;
+        let free_maximal = |frames: &Self, frame: Frame| {
+            frames
+                .entry(frame)
+                .is_some_and(|entry| entry.state == State::Free && entry.order == MAX_ORDER)
+        };
+        if blocks == 0 {
+            return None;
+        }
+        let mut cursor = self.head(MAX_ORDER);
+        let mut start = None;
+        while cursor != NONE {
+            let frame = self.base + u64::from(cursor);
+            // Every block of a run is on the list; a run is found from its
+            // lowest block, whichever order the list holds them in.
+            let whole = (1..blocks).all(|k| {
+                frame
+                    .checked_add(k * size)
+                    .is_some_and(|next| free_maximal(self, next))
+            });
+            if whole {
+                start = Some(frame);
+                break;
+            }
+            cursor = self.entries.get(cursor as usize)?.next;
+        }
+        let start = start?;
+        for k in 0..blocks {
+            let block = start + k * size;
+            self.unlink(block, MAX_ORDER);
+            let _ = self.take(block, MAX_ORDER, MAX_ORDER);
+        }
+        Some(start)
+    }
+
     /// Finish taking a block of order `available`, already off its free list:
     /// split it down to `order`, freeing each unused upper half, and mark what
     /// is left allocated.

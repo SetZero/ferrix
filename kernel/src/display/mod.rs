@@ -789,25 +789,45 @@ impl Card {
 
 /// Fill `bytes` of `vmo` from `offset`, a range holding nothing, with zeroed
 /// frames that are one run of physical memory: one block from the allocator,
-/// split so the VMO owns and gives back each page as it would any other, the
-/// block's pages past the range given back at once. Whether it was done; a
-/// range the allocator has no block for, or one somebody filled meanwhile,
-/// is left as it was.
+/// or for a range longer than the largest block (4 MiB; a 1920x1080 buffer is
+/// 8.3 MB) that many largest blocks back to back, split so the VMO owns and
+/// gives back each page as it would any other, the pages past the range
+/// given back at once. Whether it was done; a range the allocator has no run
+/// for, or one somebody filled meanwhile, is left as it was.
 fn commit_contiguous(vmo: &Vmo, offset: u64, bytes: u64) -> bool {
     let pages = bytes / PAGE_SIZE;
-    let Some(order) = (0..=ferrix_frame::MAX_ORDER).find(|&order| 1u64 << order >= pages) else {
+    let largest = 1u64 << ferrix_frame::MAX_ORDER;
+    let (block, (order, blocks)) =
+        match (0..=ferrix_frame::MAX_ORDER).find(|&order| 1u64 << order >= pages) {
+            Some(order) => (crate::mm::allocate_frames(order), (order, 1)),
+            None => {
+                let blocks = pages.div_ceil(largest);
+                (
+                    crate::mm::allocate_frame_run(blocks),
+                    (ferrix_frame::MAX_ORDER, blocks),
+                )
+            }
+        };
+    let Some(block) = block else {
         return false;
     };
-    let Some(block) = crate::mm::allocate_frames(order) else {
-        return false;
-    };
-    if !crate::mm::split_frames(block, order) {
-        crate::mm::deallocate_frames(block, order);
+    let each = 1u64 << order;
+    // Split cannot refuse a block just allocated at its own order; if it
+    // somehow did, the blocks split so far go back page by page and the
+    // rest whole.
+    if let Some(refused) = (0..blocks).find(|&k| !crate::mm::split_frames(block + k * each, order))
+    {
+        for frame in block..block + refused * each {
+            let _ = crate::mm::release_frame(frame);
+        }
+        for k in refused..blocks {
+            crate::mm::deallocate_frames(block + k * each, order);
+        }
         return false;
     }
     let first = offset / PAGE_SIZE;
     let mut inserted = 0;
-    for page in 0..1u64 << order {
+    for page in 0..blocks * each {
         let frame = block + page;
         if page < pages {
             crate::mm::zero_frame(frame);
