@@ -108,12 +108,16 @@ pub(crate) fn anonymous_device() -> u64 {
 
 /// The clock timestamps are taken from.
 ///
-/// The counter since boot, read as time since 1970 — the same deliberately
-/// wrong answer `clock_gettime(CLOCK_REALTIME)` gives, for the reason
-/// `syscall::time` gives: nothing reads a real-time clock yet, and a file
-/// dated 1970 is a curiosity where a file with no date is an error.
+/// `CLOCK_REALTIME`: firmware's time at boot and the counter since, or the
+/// counter since boot read as time since 1970 on a machine whose firmware
+/// has no clock. The same clock `clock_gettime` answers, so a file written
+/// now is dated now to every program that compares the two. It read the
+/// counter alone once, and kept doing so after the real-time clock learned
+/// firmware's time: every new file was dated 1970, older than any file a
+/// tar archive unpacked, and automake's "newly created file is older than
+/// distributed files" stopped curl's `configure` on Ferrix.
 pub(crate) fn clock() -> Arc<dyn Clock> {
-    Arc::new(CounterClock)
+    Arc::new(RealtimeClock)
 }
 
 /// A new, empty tmpfs whose file contents are VMO pages.
@@ -269,11 +273,11 @@ fn read_location(at: Location) -> Result<vmap::Buffer, Errno> {
 
 /// See [`clock`].
 #[derive(Debug)]
-struct CounterClock;
+struct RealtimeClock;
 
-impl Clock for CounterClock {
+impl Clock for RealtimeClock {
     fn now(&self) -> Timespec {
-        let nanos = time::now_nanos();
+        let nanos = time::realtime_nanos();
         Timespec {
             tv_sec: i64::try_from(nanos / NANOS).unwrap_or(i64::MAX),
             tv_nsec: i64::try_from(nanos % NANOS).unwrap_or(0),

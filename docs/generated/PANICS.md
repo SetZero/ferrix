@@ -963,16 +963,16 @@ clear O_NONBLOCK on a pipe and on an AF_UNIX socket, and be EFAULT for an
 unreadable argument; FIOCLEX and FIONCLEX must set and clear close-on-exec. A
 FIFO under /tmp must be one pipe for its openers. statfs of /tmp must decode
 TMPFS_MAGIC, and statfs64 must take 84 and musl's 88 as its size. truncate and
-fallocate must grow a file and fallocate never shrink one, and sendfile must
-copy a file with and without an offset. splice must drain a pipe into /dev/null,
-fill a pipe from a file at an offset and move bytes between two pipes, and
-copy_file_range must copy a file, each refusing as Linux does. Then, by syscall
-number, mount -t proc and mount -t devtmpfs must each make a new instance on a
-directory under /tmp: the check process must be found through the procfs, zero
-must read zeros from the devtmpfs, /proc/mounts must list both, and both must
-unmount; mount -t sysfs must mount and unmount, and mount -t devpts, a type
-there is not, must be ENODEV. The whole run is done twice and must leave no
-frame behind.
+fallocate must grow a file and fallocate never shrink one, a file written now
+must be dated by CLOCK_REALTIME, and sendfile must copy a file with and without
+an offset. splice must drain a pipe into /dev/null, fill a pipe from a file at
+an offset and move bytes between two pipes, and copy_file_range must copy a
+file, each refusing as Linux does. Then, by syscall number, mount -t proc and
+mount -t devtmpfs must each make a new instance on a directory under /tmp: the
+check process must be found through the procfs, zero must read zeros from the
+devtmpfs, /proc/mounts must list both, and both must unmount; mount -t sysfs
+must mount and unmount, and mount -t devpts, a type there is not, must be
+ENODEV. The whole run is done twice and must leave no frame behind.
 
 1. A pipe end's drop no longer counts it out of the buffer, so a reader never
    sees end of file and the pipe outlives its descriptors as leaked frames.

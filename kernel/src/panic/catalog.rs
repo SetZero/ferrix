@@ -1378,7 +1378,8 @@ pub(crate) static STAGE8_PIPES_AND_FILESYSTEM_CALLS: Explanation = Explanation {
               /tmp must be one \
               pipe for its openers. statfs of /tmp must decode TMPFS_MAGIC, and statfs64 must \
               take 84 and musl's 88 as its size. truncate and fallocate must grow a file and \
-              fallocate never shrink one, and sendfile must copy a file with and without an \
+              fallocate never shrink one, a file written now must be dated by CLOCK_REALTIME, \
+              and sendfile must copy a file with and without an \
               offset. splice must drain a pipe into /dev/null, fill a pipe from a file at an \
               offset and move bytes between two pipes, and copy_file_range must copy a file, \
               each refusing as Linux does. Then, by syscall number, mount -t proc and mount -t devtmpfs must each \

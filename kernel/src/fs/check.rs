@@ -763,6 +763,7 @@ fn check_the_calls(process: &Process) -> Result<u64, &'static str> {
         .and_then(|piped| check_a_fifo_is_one_pipe(process, page).map(|fifo| piped + fifo))
         .and_then(|bytes| check_statfs_says_tmp_is_tmpfs(process, page).map(|()| bytes))
         .and_then(|bytes| check_truncate_and_fallocate_grow(process, page).map(|()| bytes))
+        .and_then(|bytes| check_a_new_file_is_dated_now().map(|()| bytes))
         .and_then(|bytes| check_sendfile_copies_a_file(process, page).map(|sent| bytes + sent))
         .and_then(|bytes| check_splice_moves_bytes(process, page).map(|moved| bytes + moved))
         .and_then(|bytes| {
@@ -1590,6 +1591,26 @@ fn by_number(process: &Process, call: Syscall, args: [u64; 6]) -> Result<usize, 
 /// A descriptor, as a register carries it.
 fn register(fd: i32) -> u64 {
     u64::from(fd.unsigned_abs())
+}
+
+/// The file the truncate check just wrote is dated within a minute of
+/// `CLOCK_REALTIME`, whether firmware set that clock or it counts from 1970:
+/// a program comparing the two, as automake's "newly created file is older
+/// than distributed files" does, must find a new file new.
+fn check_a_new_file_is_dated_now() -> Result<(), &'static str> {
+    let ns = fs::namespace();
+    let written = ns
+        .resolve(&ns.context(), None, name(FILE), true)
+        .and_then(|at| ns.stat(&at))
+        .map_err(|_| "the file the truncate check wrote would not stat")?
+        .metadata
+        .mtime;
+    let now = crate::syscall::time::realtime_nanos() / 1_000_000_000;
+    let now = i64::try_from(now).unwrap_or(i64::MAX);
+    if written.tv_sec.abs_diff(now) > 60 {
+        return Err("a file written now is not dated by CLOCK_REALTIME");
+    }
+    Ok(())
 }
 
 /// `/dev/shm` is a directory a program can make a file in, and `/proc/mounts`
