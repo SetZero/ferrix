@@ -166,6 +166,8 @@ pub(crate) struct Shell {
     pub(crate) procsubs: Vec<i32>,
     /// `zstyle`'s database: a style name and the patterns defined for it.
     pub(crate) styles: Vec<crate::zstyle::Style>,
+    /// What `fpath`'s directories held when `autoload` last listed them.
+    pub(crate) fpath_listing: Option<crate::builtins::FpathListing>,
 }
 
 /// The id `name` asks for, read from the kernel each time rather than kept:
@@ -348,6 +350,7 @@ impl Shell {
             script: Vec::new(),
             procsubs: Vec::new(),
             styles: Vec::new(),
+            fpath_listing: None,
         };
         for (k, v) in [
             ("IFS", &b" \t\n\x83 "[..]),

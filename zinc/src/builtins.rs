@@ -1035,6 +1035,78 @@ fn whence(sh: &mut Shell, cmd: &[u8], args: &[Vec<u8>]) -> i32 {
     status
 }
 
+/// Where `read` takes its bytes from.
+///
+/// A byte at a time, as zsh reads, because whatever comes after the line is
+/// not `read`'s to take: the next command reads the same pipe or terminal
+/// from where this one stopped. A regular file is the exception, since its
+/// offset can be put back: a block is read and what the line did not use is
+/// given back with `lseek`, which leaves the file exactly where reading byte
+/// by byte would have. compinit reads the first line of every completion
+/// function there is, over a thousand of them, and at one system call a byte
+/// that was twenty-odd thousand calls on every cold start.
+struct ReadSource {
+    fd: i32,
+    /// Whether `fd` is a regular file, and so read by the block.
+    blocks: bool,
+    buf: Vec<u8>,
+    at: usize,
+}
+
+impl ReadSource {
+    /// How much of a regular file is read at once: a line or two of the
+    /// scripts and data a shell reads.
+    const BLOCK: usize = 512;
+
+    fn new(fd: i32) -> ReadSource {
+        // SAFETY: an all-zero stat is a valid value for fstat to fill.
+        let mut st: libc::stat = unsafe { std::mem::zeroed() };
+        // SAFETY: st is a writable stat buffer.
+        let blocks = unsafe { libc::fstat(fd, &raw mut st) } == 0
+            && st.st_mode & libc::S_IFMT == libc::S_IFREG;
+        ReadSource {
+            fd,
+            blocks,
+            buf: Vec::new(),
+            at: 0,
+        }
+    }
+
+    /// The next byte, or `None` at the end of the input or on an error.
+    fn next(&mut self) -> Option<u8> {
+        if let Some(&c) = self.buf.get(self.at) {
+            self.at += 1;
+            return Some(c);
+        }
+        let want = if self.blocks { Self::BLOCK } else { 1 };
+        self.buf.resize(want, 0);
+        self.at = 0;
+        loop {
+            // SAFETY: buf is writable for `want` bytes.
+            let n = unsafe { libc::read(self.fd, self.buf.as_mut_ptr().cast(), want) };
+            if n < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR) {
+                continue;
+            }
+            self.buf.truncate(usize::try_from(n).unwrap_or(0));
+            break;
+        }
+        let c = self.buf.first().copied()?;
+        self.at = 1;
+        Some(c)
+    }
+
+    /// Put back what was read and not used, so the file's offset is just
+    /// past the last byte `read` took.
+    fn give_back(self) {
+        let unused = self.buf.len().saturating_sub(self.at);
+        if unused > 0 {
+            let back = libc::off_t::try_from(unused).unwrap_or(0);
+            // SAFETY: lseek has no memory-safety preconditions.
+            let _offset = unsafe { libc::lseek(self.fd, -back, libc::SEEK_CUR) };
+        }
+    }
+}
+
 fn read(sh: &mut Shell, args: &[Vec<u8>]) -> i32 {
     let (mut raw, mut array, mut fd, mut delim, mut count) =
         (false, false, 0, b'\n', None::<usize>);
@@ -1092,37 +1164,30 @@ fn read(sh: &mut Shell, args: &[Vec<u8>]) -> i32 {
     }
     let mut line = Vec::new();
     let mut got_any = false;
-    let mut byte = [0u8; 1];
+    let mut input = ReadSource::new(fd);
     loop {
         if count.is_some_and(|n| line.len() >= n) {
             break;
         }
-        // SAFETY: byte is one writable byte.
-        let n = unsafe { libc::read(fd, byte.as_mut_ptr().cast(), 1) };
-        if n < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR) {
-            continue;
-        }
-        if n <= 0 {
+        let Some(c) = input.next() else {
             break;
-        }
+        };
         got_any = true;
-        let c = byte[0];
         if count.is_none() && c == delim {
             break;
         }
         if !raw && c == b'\\' && count.is_none() {
-            // SAFETY: byte is one writable byte.
-            let m = unsafe { libc::read(fd, byte.as_mut_ptr().cast(), 1) };
-            if m <= 0 {
+            let Some(next) = input.next() else {
                 break;
-            }
-            if byte[0] != b'\n' {
-                line.push(byte[0]);
+            };
+            if next != b'\n' {
+                line.push(next);
             }
             continue;
         }
         line.push(c);
     }
+    input.give_back();
     let ended = !got_any;
     let line = tok::metafy(&line);
     let ifs = sh
@@ -1649,7 +1714,16 @@ fn autoload(sh: &mut Shell, args: &[Vec<u8>]) -> i32 {
         // compinit marks every completion function there is, some 1200, and
         // reading them all here made each start-up parse every one. A name
         // not found now is still marked, and the call looks again.
-        match find_in_fpath(sh, name) {
+        //
+        // `+X` looks on the disk itself; a plain mark may look in what the
+        // shell remembers of `fpath`'s directories, which can at worst have
+        // missed a file written since, and then the call looks again.
+        let found = if now {
+            find_in_fpath(sh, name)
+        } else {
+            find_in_listing(sh, name)
+        };
+        match found {
             Some(file) if now => status |= define_from_file(sh, name, &file),
             Some(file) => drop(sh.autoload_files.insert(name.clone(), file)),
             None if now => status = 1,
@@ -1675,10 +1749,123 @@ pub(crate) fn load_autoload(sh: &mut Shell, name: &[u8]) -> bool {
     define_from_file(sh, name, &file) == 0 && sh.functions.contains_key(name)
 }
 
-/// The first file named `name` in a directory of `fpath`.
-fn find_in_fpath(sh: &Shell, name: &[u8]) -> Option<Vec<u8>> {
-    let fpath: Vec<Vec<u8>> = match sh.get(b"fpath") {
-        Some(Value::Array(a)) => a,
+/// What the directories of `fpath` held when the shell last listed them.
+///
+/// compinit marks every completion function there is, one `autoload` each,
+/// and finding each one's file a `stat` at a time down `fpath` was some
+/// eighteen thousand failed look-ups on a cold start. One listing of each
+/// directory answers them all instead, for as long as nothing can have
+/// changed a directory: the listing is of one `fpath` and one value of
+/// `exec::fs_epoch`, which every process the shell starts and every file it
+/// writes moves on. What can still slip past it is another process writing
+/// into `fpath` meanwhile, and the worst that does is leave a name to be
+/// looked for again when it is called, as a name not found at all is.
+///
+/// A listing costs a few system calls a directory, and a name looked for the
+/// long way one for each directory it is not in, so the directories are
+/// listed only once a burst of names is being looked for -- compinit's --
+/// and a name marked here and there is looked for the long way.
+#[derive(Debug, Default)]
+pub(crate) struct FpathListing {
+    /// The `fpath` this is for, joined with colons.
+    fpath: Vec<u8>,
+    epoch: u64,
+    /// How many names have been looked for under this `fpath` and epoch.
+    looked: u32,
+    /// Each directory, and the names in it that may be files: `true` for a
+    /// regular file, `false` for a name whose type the listing did not say
+    /// or that is a symbolic link, which a `stat` decides. `None` until
+    /// [`FpathListing::BURST`] names have been looked for.
+    dirs: Option<Listed>,
+}
+
+/// The directories of `fpath` as listed: each with the names in it that
+/// may be files.
+type Listed = Vec<(Vec<u8>, std::collections::HashMap<Vec<u8>, bool>)>;
+
+impl FpathListing {
+    /// How many names are looked for the long way before the directories
+    /// are listed.
+    const BURST: u32 = 4;
+
+    /// List the directories of `fpath`, or `None` if one of them is not
+    /// something a listing can stand in for: a relative directory, whose
+    /// meaning moves with `cd`, or a name that is not UTF-8, which the file
+    /// names [`find_in_fpath`] tries are not either.
+    fn list(fpath: &[Vec<u8>]) -> Option<Listed> {
+        use std::os::unix::ffi::OsStrExt;
+        let plain: Vec<Vec<u8>> = fpath.iter().map(|dir| tok::unmetafy(dir)).collect();
+        if plain
+            .iter()
+            .any(|dir| dir.first() != Some(&b'/') || std::str::from_utf8(dir).is_err())
+        {
+            return None;
+        }
+        let mut dirs = Vec::with_capacity(fpath.len());
+        for (dir, plain) in fpath.iter().zip(plain) {
+            let mut names = std::collections::HashMap::new();
+            if let Ok(entries) = std::fs::read_dir(std::ffi::OsStr::from_bytes(&plain)) {
+                for entry in entries.flatten() {
+                    let kind = entry.file_type().ok();
+                    if kind.is_some_and(|kind| kind.is_dir()) {
+                        continue;
+                    }
+                    let sure = kind.is_some_and(|kind| kind.is_file());
+                    let _old = names.insert(entry.file_name().as_bytes().to_vec(), sure);
+                }
+            }
+            dirs.push((dir.clone(), names));
+        }
+        Some(dirs)
+    }
+
+    /// The file [`find_in_fpath`] would find for `name`, by the listing, or
+    /// `None` inside when there is no listing to ask.
+    fn find(&self, name: &[u8]) -> Option<Option<Vec<u8>>> {
+        let plain = tok::unmetafy(name);
+        Some(self.dirs.as_ref()?.iter().find_map(|(dir, names)| {
+            let sure = *names.get(&plain)?;
+            let path = [dir.as_slice(), b"/", name].concat();
+            (sure || std::path::Path::new(&lossy(&path)).is_file()).then_some(path)
+        }))
+    }
+}
+
+/// [`find_in_fpath`], answered from the shell's [`FpathListing`] where it
+/// can be.
+fn find_in_listing(sh: &mut Shell, name: &[u8]) -> Option<Vec<u8>> {
+    // A name that is not one file name, or not UTF-8, is looked for the
+    // long way, where what it means is what it always meant.
+    let plain = tok::unmetafy(name);
+    if plain.is_empty() || plain.contains(&b'/') || std::str::from_utf8(&plain).is_err() {
+        return find_in_fpath(sh, name);
+    }
+    let fpath = fpath_dirs(sh);
+    let joined = fpath.join(&b':');
+    let epoch = exec::fs_epoch();
+    let listing = sh.fpath_listing.get_or_insert_with(FpathListing::default);
+    if listing.epoch != epoch || listing.fpath != joined {
+        *listing = FpathListing {
+            fpath: joined,
+            epoch,
+            looked: 0,
+            dirs: None,
+        };
+    }
+    listing.looked = listing.looked.saturating_add(1);
+    if listing.dirs.is_none() && listing.looked > FpathListing::BURST {
+        listing.dirs = FpathListing::list(&fpath);
+    }
+    match listing.find(name) {
+        Some(found) => found,
+        None => find_in_fpath(sh, name),
+    }
+}
+
+/// The directories of `fpath`, from the array or else from `FPATH`.
+fn fpath_dirs(sh: &Shell) -> Vec<Vec<u8>> {
+    match sh.stored(b"fpath") {
+        Some(Value::Array(a)) => a.clone(),
         Some(v) => v
             .joined()
             .split(|&c| c == b':')
@@ -1693,8 +1880,12 @@ fn find_in_fpath(sh: &Shell, name: &[u8]) -> Option<Vec<u8>> {
                     .collect()
             })
             .unwrap_or_default(),
-    };
-    fpath
+    }
+}
+
+/// The first file named `name` in a directory of `fpath`.
+fn find_in_fpath(sh: &Shell, name: &[u8]) -> Option<Vec<u8>> {
+    fpath_dirs(sh)
         .iter()
         .map(|d| [d.as_slice(), b"/", name].concat())
         .find(|p| std::path::Path::new(&lossy(p)).is_file())
@@ -1880,6 +2071,7 @@ fn zcompile(sh: &mut Shell, args: &[Vec<u8>]) -> i32 {
         digest.push(b'\n');
         digest.extend_from_slice(&text);
     }
+    exec::fs_touched();
     if let Err(error) = std::fs::write(lossy(&target), &digest) {
         sh.error_at(
             "zcompile",
