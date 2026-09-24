@@ -142,7 +142,7 @@ sizes them.
 | ~~Stage 12, btrfs write~~ *done 2026-09-21* | ~~≈ 60~~ | done |
 | ~~sysfs, fed by the services that own each fact (`docs/SYSFS.md`)~~ *done 2026-09-24* | ~~26~~ | done |
 | ~~Chrome on Ferrix, headless and in a window, x86-64 (`docs/CHROME.md`)~~ *done 2026-09-24* | foot and its ports 13, the kernel's rows ≈ 30, spent | done |
-| Chrome: the zygote's fork, the persistent-root stop, ferrousli in glibc's place | unsized; ferrousli's names on a branch | under way |
+| Chrome: the zygote's fork, the persistent-root stop, ferrousli in glibc's place | unsized; ferrousli answers every glibc name the set imports since 2026-09-24 | under way |
 | Chrome on the STM32MP157D-DK1 (`docs/CHROME.md` §10) | ≈ 45–55 | not started |
 | Stage 13, namespaces, cgroups, seccomp | cgroups 85 (`docs/CGROUPS.md` §7: 27 for what init needs, 58 for the controllers); namespaces and seccomp unsized, the old guess for the whole stage was *month* ≈ 60 | under way: G1 to G5 done (27 of 85), which is all init needs from it, C8 for native services included; its cgroups come first, as init's prerequisite (`docs/INIT.md` §0); the controllers are next, `pids` first |
 | Stage 22, Steam: the parts with a first guess (bubblewrap's rest 13, sound 30, Venus 8; glibc's names are dynamic linking's 13 and XWayland stage 19's, both counted above) | 51 | not started |
@@ -4114,7 +4114,8 @@ Google's prebuilt Chrome over building Chromium, for a first result in days
 rather than a source build's 40-plus unknown points. The browser is Chrome
 for Testing 154.0.8037.57 on Debian 13's glibc, from a btrfs volume
 `scripts/fetch-chrome.sh` makes from pinned downloads; ferrousli standing in
-for that glibc is the other route, and its last missing names are on a branch.
+for that glibc is the other route, and since 2026-09-24 ferrousli answers
+every glibc name Chrome and its libraries import.
 
 **Exit:** Chrome renders a page on Ferrix, headless and in a window on the
 compositor. Met on x86-64 (2026-09-24): `cargo xtask test-chrome` runs
@@ -4147,8 +4148,11 @@ screen. `cargo xtask run-compositor --chrome` puts it on the desktop.
   `--no-zygote`; `--no-sandbox` is stage 13's.
 * On the desktop's persistent btrfs root Chrome stops before its first
   frame; `run-compositor --chrome` boots a tmpfs root until that is found.
-* Chrome on ferrousli's `libc.so.6`: 97 names were missing, measured on
-  2026-09-24; a branch answers all of them, `signalfd` landing separately.
+* Chrome on ferrousli's `libc.so.6`: the 159 versioned names it lacked
+  (97 by name) are answered since 2026-09-24, at glibc's versions, the old
+  ones Chrome's 2.31 build asks for among them. What is left is to run it:
+  ferrousli's `ld.so` cannot yet be run as a command, so Chrome is started
+  through it by `PT_INTERP`, which is the next test.
 * A vDSO, `inotify`, and the GPU: Chrome draws in software.
 * **The STM32MP157D-DK1**, sized on 2026-09-24 (`docs/CHROME.md` §10), about
   45 to 55 points: an armhf browser, Debian 13's Chromium 150, on the same

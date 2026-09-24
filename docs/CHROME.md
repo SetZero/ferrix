@@ -38,7 +38,7 @@ what is left:
 | Chrome in a window on the compositor, a Wayland client drawing in software | **done** 2026-09-24, x86-64, `cargo xtask test-chrome-window`, `run-compositor --chrome` (§9) |
 | The zygote's fork, which fails on Ferrix, so Chrome runs with `--no-zygote` | not started (§8) |
 | Chrome on the desktop's persistent btrfs root, where it stops before its first frame, so `--chrome` boots a tmpfs root | not started (§9) |
-| Chrome on ferrousli's `libc.so.6` in glibc's place | 97 glibc names missing, measured (§8); being closed |
+| Chrome on ferrousli's `libc.so.6` in glibc's place | every glibc name the set imports answered, 2026-09-24 (§8); running Chrome on it is next |
 | Chrome on the STM32MP157D-DK1: an armhf Chromium, an SDMMC driver, page-cache eviction | not started, ≈ 45–55 points (§10) |
 | Chromium built against ferrousli, with Alpine's musl patches rebased | not needed for a first Chrome: the prebuilt one runs (§5, §8) |
 | A guest with the ~2 GiB a page wants | `test-chrome` boots 4 GiB, as `test-rustc` does (§2.3) |
@@ -597,8 +597,11 @@ the other route, and the one this document started from. Measured on
 2026-09-24: Chrome and its forty libraries import 730 glibc names, and 97 of
 them are not in `libferrousli.a` -- the `_chk` fortify family, the old
 `__xstat64` entry points, `iconv`, gettext's `textdomain` family, `fts64`,
-`nftw64`, `statx`, `pidfd_open` and the rest. Closing that list is under
-way; the same volume and test then run Chrome on ferrousli's loader.
+`nftw64`, `statx`, `pidfd_open` and the rest. Counted by name and version
+against the shared library it was 159, the rest hidden by the link or
+exported only at glibc's newest version where Chrome, built against 2.31,
+asks for older ones. All of them are answered since 2026-09-24; the same
+volume and test are to run Chrome on ferrousli's loader next.
 
 ---
 
