@@ -28,7 +28,10 @@
 //! table back and `MAP` names the backing for `mmap`. `TRANSFER_TO_HOST` and
 //! `TRANSFER_FROM_HOST` move bytes between the backing and the device's copy,
 //! and `EXECBUFFER` runs a command stream, whose bytes are the renderer's
-//! own language and are never read here.
+//! own language and are never read here. `TRANSFER_TO_HOST` and `EXECBUFFER`
+//! return once the work is on its way, as on Linux, and `WAIT` waits for it:
+//! a program writing a backing the device may still be reading calls `WAIT`
+//! first (`super`'s note).
 //!
 //! An open has one context, made the first time it is needed, as Linux makes
 //! one for a device that has no `CONTEXT_INIT`: what one program draws and
@@ -39,10 +42,11 @@
 //!
 //! What is not answered, and what is in the way of each:
 //!
-//! * **`WAIT` that waits.** The driver does not offer fences, so nothing
-//!   says when the GPU has *finished* a stream rather than taken it. A
-//!   transfer from the device is ordered after every stream before it, which
-//!   is the one place this path needs to know, so `WAIT` answers at once.
+//! * **Fences.** The driver does not offer them, so `WAIT` waits for what
+//!   this open sent before it to be *answered* -- taken by the device and
+//!   done with, which for a stream is not the GPU having finished drawing.
+//!   A transfer from the device is ordered after every stream before it,
+//!   which is the one place this path needs to know that.
 //! * **`CONTEXT_INIT` and blob resources**, which `GETPARAM` says are not
 //!   offered.
 
@@ -434,8 +438,8 @@ fn map(process: &Process, file: &RenderFile, arg: u64) -> Result<usize, Errno> {
 }
 
 /// `VIRTGPU_TRANSFER_TO_HOST` and `VIRTGPU_TRANSFER_FROM_HOST`: move bytes
-/// between an object's backing and the device's copy, and wait until they
-/// have moved.
+/// between an object's backing and the device's copy. To the device returns
+/// once they are on their way, from the device once they have arrived.
 ///
 /// The two structures are one layout, which a test in `libs/linux-abi`
 /// holds them to, so one reader serves both.
@@ -472,11 +476,12 @@ fn transfer(
     Ok(0)
 }
 
-/// `VIRTGPU_EXECBUFFER`: run a command stream in this open's context.
+/// `VIRTGPU_EXECBUFFER`: run a command stream in this open's context, and
+/// return once it is on its way.
 ///
 /// The stream is copied once, into the core, and from there into the work
-/// VMO: a program's memory is not something a driver in another process can
-/// be pointed at. No fence comes in or goes out, and no ring is named: the
+/// VMO, where the device reads it: a program's memory is not something a
+/// driver in another process can be pointed at. No fence comes in or goes out, and no ring is named: the
 /// flags that ask for those are refused, as `GETPARAM` said they would be.
 /// `bo_handles` is a hint on Linux -- which objects the stream touches, for
 /// fencing them -- and with no fences to hang on them it is not read.
@@ -502,14 +507,35 @@ fn exec_buffer(process: &Process, file: &RenderFile, arg: u64) -> Result<usize, 
 
 /// `VIRTGPU_WAIT`: wait until an object is idle.
 ///
-/// Answered at once for an object this open has; see the module's note on
-/// why that is honest here and what would make it wait.
+/// Until every upload and stream this open sent before it has been
+/// answered, which covers every one that touches the object: coarser than
+/// Linux's wait on the object's own fences, and never shorter. With
+/// `VIRTGPU_WAIT_NOWAIT` it only asks, and `EBUSY` is "not yet", as it is
+/// for a wait that runs out of patience.
 fn wait(process: &Process, file: &RenderFile, arg: u64) -> Result<usize, Errno> {
     let mut bytes = vec![0u8; Wait::SIZE];
     uaccess::copy_from_user(process.space(), arg, &mut bytes).map_err(|_| Errno::EFAULT)?;
     let wait = Wait::read(&bytes).ok_or(Errno::EFAULT)?;
     let _ = file.held(wait.handle)?;
-    Ok(0)
+    if wait.flags & !virtgpu::WAIT_NOWAIT != 0 {
+        return Err(Errno::EINVAL);
+    }
+    // An open that never needed a context has sent nothing.
+    let Some(context) = *file.context.lock() else {
+        return Ok(0);
+    };
+    if wait.flags & virtgpu::WAIT_NOWAIT != 0 {
+        return if file.renderer.is_settled(context) {
+            Ok(0)
+        } else {
+            Err(Errno::EBUSY)
+        };
+    }
+    match file.renderer.settle(context) {
+        Ok(()) => Ok(0),
+        Err(RenderError::TimedOut) => Err(Errno::EBUSY),
+        Err(error) => Err(errno_of(error)),
+    }
 }
 
 /// `VIRTGPU_GET_CAPS`: the capability set, as the device gave it.

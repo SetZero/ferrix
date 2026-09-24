@@ -27,6 +27,20 @@
 //! same division as the display's: [`Renderer::request`] sends with the
 //! state locked, [`Renderer::collect`] sleeps on the wait queue, and no spin
 //! lock is ever held across the sleep.
+//!
+//! # An upload or a stream is answered when it is sent
+//!
+//! `VIRTGPU_TRANSFER_TO_HOST` and `VIRTGPU_EXECBUFFER` return on Linux once
+//! the work is queued, and a program that is about to write a backing again
+//! calls `VIRTGPU_WAIT` first. So they do here: [`Renderer::transfer`] to the
+//! device and [`Renderer::submit`] send their request and return, and the
+//! reply is taken by [`serve`], which is what gives a command slot back and
+//! what [`Renderer::settle`] -- `WAIT` -- waits for. A frame that was an
+//! upload or two, a stream and a flush, each a round trip through the driver
+//! and the device (`docs/GPU.md` §3.9), is one round trip, the flush's,
+//! with the rest on the device behind it. What such a reply says goes
+//! unheard, as it does on Linux: the device refusing a stream is a picture
+//! that is wrong, and the core says so once on the console.
 
 use alloc::boxed::Box;
 use alloc::sync::Arc;
@@ -41,8 +55,8 @@ use ferrix_native_abi::rights::Rights;
 use ferrix_native_abi::signals::Signals;
 use ferrix_native_abi::types::CHANNEL_MAX_HANDLES;
 use ferrix_renderctl::message::{
-    BACKING_RIGHTS, MAX_BYTES, Message, Ready, Refusal, Status, Transfer as Move, VERSION,
-    WORK_VMO_RIGHTS, Work, flags,
+    BACKING_RIGHTS, Direction, MAX_BYTES, Message, Ready, Refusal, Status, Transfer as Move,
+    VERSION, WORK_VMO_RIGHTS, Work, flags,
 };
 use ferrix_renderctl::session::{Event, RequestError, Session};
 
@@ -84,8 +98,9 @@ pub(crate) const DESCRIBE_BYTES: u64 = 64;
 /// buffer one submission carries.
 ///
 /// A frame of virgl is state and draws -- pixels go by `TRANSFER`, not
-/// inline -- so tens of kilobytes is a great many windows, and the driver's
-/// command area, which a submission is copied into whole, has room for it.
+/// inline -- so tens of kilobytes is a great many windows. The driver has the
+/// device read it where it lies, and its command area, which a submission is
+/// copied into whole when the work VMO could not be pinned, has room for it.
 pub(crate) const COMMAND_BYTES: u64 = 64 * 1024;
 
 /// How many command buffers can be on their way at once: what is left of
@@ -164,8 +179,28 @@ enum Abandoned {
     Object(u32),
     /// A context's `CTX_MADE` or `CTX_GONE`.
     Context(u32),
+    /// An object's `TRANSFERRED`, from the device.
+    Transfer(u32),
+}
+
+/// An upload or a command stream whose caller was answered when it was
+/// sent, and whose reply is still to come.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct Flying {
+    /// What the reply will name.
+    flight: Flight,
+    /// The context it was sent for, whose `WAIT` waits for it.
+    context: u32,
+    /// Its place among everything sent, so that a `WAIT` waits for what came
+    /// before it and nothing after.
+    sequence: u64,
+}
+
+/// What a flying request's reply will name.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Flight {
     /// A submission's `SUBMITTED`, and the command slot the driver may still
-    /// be reading, which is given back only now.
+    /// be reading, which is given back only then.
     Submit {
         /// Its fence.
         fence: u64,
@@ -196,6 +231,17 @@ struct State {
     next_fence: u64,
     /// Replies nobody is waiting for any more.
     abandoned: Vec<Abandoned>,
+    /// Uploads and streams sent and not answered yet.
+    flying: Vec<Flying>,
+    /// How many have been sent, which numbers the next.
+    sent: u64,
+    /// How many replies the driver has sent: a request waiting for room --
+    /// a command slot, the session's, the channel's, an object that is
+    /// moving -- waits for this to change.
+    replies: u64,
+    /// Whether a refused upload or stream has been reported, which is done
+    /// once.
+    refusal_said: bool,
     /// Objects a closed open left, not yet asked to go because the driver's
     /// channel was full, and contexts that go once their objects have.
     leaving: Vec<u32>,
@@ -256,21 +302,51 @@ impl State {
         }
     }
 
+    /// Record `flight`, sent for `context`, as on its way.
+    fn fly(&mut self, flight: Flight, context: u32) {
+        let sequence = self.sent;
+        self.sent = self.sent.wrapping_add(1);
+        self.flying.push(Flying {
+            flight,
+            context,
+            sequence,
+        });
+    }
+
+    /// Whether anything `context` sent before the `upto`th request is still
+    /// on its way.
+    fn unsettled(&self, context: u32, upto: u64) -> bool {
+        self.flying
+            .iter()
+            .any(|flying| flying.context == context && flying.sequence < upto)
+    }
+
     /// Ask for what closed opens left behind to go, as far as the driver's
     /// channel has room: objects first, then each context whose objects have
     /// all gone. Whatever is left waits for the next reply to make room.
     fn let_go(&mut self, control: &Endpoint) {
-        while let Some(&object) = self.leaving.last() {
+        let mut at = 0;
+        while let Some(&object) = self.leaving.get(at) {
             if !control.peer_has_room() {
                 return;
             }
-            let _ = self.leaving.pop();
             // Only an id the session took the request for is abandoned: one
             // it refused was never asked about, so no reply is coming and
-            // recording it would leave an entry nothing ever clears.
-            let Ok(message) = self.session.drop_object(object) else {
-                continue;
+            // recording it would leave an entry nothing ever clears. One
+            // whose bytes are still on their way is asked about again after
+            // the next reply, which may be the one that says they arrived.
+            let message = match self.session.drop_object(object) {
+                Ok(message) => message,
+                Err(RequestError::Busy) => {
+                    at += 1;
+                    continue;
+                }
+                Err(_) => {
+                    let _ = self.leaving.remove(at);
+                    continue;
+                }
             };
+            let _ = self.leaving.remove(at);
             self.abandoned.push(Abandoned::Object(object));
             if !send(control, &message) {
                 return;
@@ -491,6 +567,10 @@ fn accept(start: &Start, message: &ChannelMessage) -> Result<Arc<Renderer>, Refu
             next_context: 1,
             next_fence: 1,
             abandoned: Vec::new(),
+            flying: Vec::new(),
+            sent: 0,
+            replies: 0,
+            refusal_said: false,
             leaving: Vec::new(),
             closing: Vec::new(),
             caps: Vec::new(),
@@ -799,21 +879,43 @@ impl Renderer {
         }
     }
 
-    /// Move bytes between an object's backing and the device's copy of it,
-    /// and wait until they have moved.
+    /// Move bytes between an object's backing and the device's copy of it.
+    ///
+    /// To the device, this returns once the request is sent, and the caller
+    /// waits with [`Renderer::settle`] before it writes the backing again;
+    /// from the device, it waits until the bytes are there, since a caller
+    /// asks in order to read them. Either waits first for room, and for the
+    /// object's last transfer to be answered: one at a time an object.
     ///
     /// # Errors
     ///
     /// [`RenderError`]; the session refuses an object with no backing.
     pub(crate) fn transfer(&self, transfer: Move) -> Result<(), RenderError> {
         let object = transfer.object;
-        self.request(|state| {
-            let message = state
-                .session
-                .transfer(transfer)
-                .map_err(RenderError::Request)?;
-            Ok((message, ()))
-        })?;
+        let flying = transfer.direction == Direction::ToDevice;
+        let deadline = timer::now_nanos().saturating_add(REPLY_PATIENCE_NANOS);
+        loop {
+            let seen = self.replies();
+            let sent = self.request(|state| {
+                let message = state
+                    .session
+                    .transfer(transfer)
+                    .map_err(RenderError::Request)?;
+                if flying {
+                    state.fly(Flight::Transfer(object), transfer.context);
+                }
+                Ok((message, ()))
+            });
+            match sent {
+                Err(
+                    RenderError::Busy
+                    | RenderError::Request(RequestError::Full | RequestError::InUse),
+                ) => self.wait_for_reply(seen, deadline)?,
+                Err(error) => return Err(error),
+                Ok(()) if flying => return Ok(()),
+                Ok(()) => break,
+            }
+        }
         let event = self.collect(
             |event| matches!(event, Event::Transferred { object: moved, .. } if *moved == object),
             |state| state.abandoned.push(Abandoned::Transfer(object)),
@@ -827,14 +929,13 @@ impl Renderer {
         }
     }
 
-    /// Run `commands` in `context`, and wait until the device has taken
-    /// them.
+    /// Run `commands` in `context`: send them, and return.
     ///
     /// The bytes are the renderer's own language and go into a slot of the
-    /// work VMO untouched (`docs/GPU.md` §3.3). The slot is held until the
-    /// driver has answered, because until then it may still be reading it;
-    /// a submission that timed out keeps its slot until the answer does
-    /// come.
+    /// work VMO untouched (`docs/GPU.md` §3.3), where the driver has the
+    /// device read them. The slot is held until the driver has answered,
+    /// because until then the device may still be reading it; with every
+    /// slot held, this waits for an answer.
     ///
     /// # Errors
     ///
@@ -844,33 +945,35 @@ impl Renderer {
         if commands.is_empty() || commands.len() as u64 > COMMAND_BYTES {
             return Err(RenderError::Request(RequestError::Work));
         }
-        let (slot, fence) = {
-            let mut state = self.state.lock();
-            if state.gone {
-                return Err(RenderError::Gone);
-            }
-            let slot = state
-                .take_command()
-                .ok_or(RenderError::Request(RequestError::Full))?;
-            let fence = state.next_fence;
-            state.next_fence = state.next_fence.wrapping_add(1).max(1);
-            (slot, fence)
+        let deadline = timer::now_nanos().saturating_add(REPLY_PATIENCE_NANOS);
+        let slot = loop {
+            let seen = {
+                let mut state = self.state.lock();
+                if state.gone {
+                    return Err(RenderError::Gone);
+                }
+                if let Some(slot) = state.take_command() {
+                    break slot;
+                }
+                state.replies
+            };
+            self.wait_for_reply(seen, deadline)?;
         };
-        let outcome = self.write_and_submit(context, commands, slot, fence);
-        // A timed-out submission's slot went with its abandoned reply.
-        if !matches!(outcome, Err(RenderError::TimedOut)) {
+        let sent = self.write_and_send(context, commands, slot, deadline);
+        // A sent submission's slot is given back with its reply.
+        if sent.is_err() {
             self.state.lock().give_command(slot);
         }
-        outcome
+        sent
     }
 
-    /// [`Renderer::submit`] once its slot and fence are in hand.
-    fn write_and_submit(
+    /// [`Renderer::submit`] once its slot is in hand.
+    fn write_and_send(
         &self,
         context: u32,
         commands: &[u8],
         slot: usize,
-        fence: u64,
+        deadline: u64,
     ) -> Result<(), RenderError> {
         let at = DESCRIBE_REGION + slot as u64 * COMMAND_BYTES;
         for (index, chunk) in commands.chunks(PAGE_SIZE as usize).enumerate() {
@@ -883,23 +986,82 @@ impl Renderer {
             at: u32::try_from(at).map_err(|_| RenderError::Request(RequestError::Work))?,
             len: commands.len() as u32,
         };
-        self.request(|state| {
-            let message = state
-                .session
-                .submit(context, fence, range)
-                .map_err(RenderError::Request)?;
-            Ok((message, ()))
-        })?;
-        let event = self.collect(
-            |event| matches!(event, Event::Submitted { fence: taken, .. } if *taken == fence),
-            |state| state.abandoned.push(Abandoned::Submit { fence, slot }),
-        )?;
-        match event {
-            Event::Submitted {
-                status: Status::Ok, ..
-            } => Ok(()),
-            Event::Submitted { status, .. } => Err(RenderError::Refused(status)),
-            _ => Err(RenderError::Gone),
+        loop {
+            let seen = self.replies();
+            let sent = self.request(|state| {
+                let fence = state.next_fence;
+                let message = state
+                    .session
+                    .submit(context, fence, range)
+                    .map_err(RenderError::Request)?;
+                state.next_fence = fence.wrapping_add(1).max(1);
+                state.fly(Flight::Submit { fence, slot }, context);
+                Ok((message, ()))
+            });
+            match sent {
+                Err(RenderError::Busy | RenderError::Request(RequestError::Full)) => {
+                    self.wait_for_reply(seen, deadline)?;
+                }
+                other => return other,
+            }
+        }
+    }
+
+    /// Wait until every upload and stream `context` sent before this has
+    /// been answered: `VIRTGPU_WAIT`, which a program calls before it writes
+    /// a backing the device may still be reading.
+    ///
+    /// # Errors
+    ///
+    /// [`RenderError::TimedOut`], and [`RenderError::Gone`] for a driver
+    /// that went with them unanswered.
+    pub(crate) fn settle(&self, context: u32) -> Result<(), RenderError> {
+        let deadline = timer::now_nanos().saturating_add(REPLY_PATIENCE_NANOS);
+        let upto = self.state.lock().sent;
+        let _ = self.changed.wait_until_deadline(
+            || {
+                let state = self.state.lock();
+                state.gone || !state.unsettled(context, upto)
+            },
+            deadline,
+        );
+        let state = self.state.lock();
+        if !state.unsettled(context, upto) {
+            Ok(())
+        } else if state.gone {
+            Err(RenderError::Gone)
+        } else {
+            Err(RenderError::TimedOut)
+        }
+    }
+
+    /// Whether anything `context` has sent is still on its way.
+    pub(crate) fn is_settled(&self, context: u32) -> bool {
+        !self.state.lock().unsettled(context, u64::MAX)
+    }
+
+    /// How many replies the driver has sent so far.
+    fn replies(&self) -> u64 {
+        self.state.lock().replies
+    }
+
+    /// Sleep until the driver has sent a reply since it had sent `seen`,
+    /// which is what makes room for a request that found none.
+    fn wait_for_reply(&self, seen: u64, deadline: u64) -> Result<(), RenderError> {
+        let _ = self.changed.wait_until_deadline(
+            || {
+                let state = self.state.lock();
+                state.gone || state.replies != seen
+            },
+            deadline,
+        );
+        let state = self.state.lock();
+        if state.gone {
+            Err(RenderError::Gone)
+        } else if state.replies != seen {
+            Ok(())
+        } else {
+            Err(RenderError::TimedOut)
         }
     }
 
@@ -962,16 +1124,42 @@ fn serve(renderer: &Renderer) {
             Ok(Event::Stopped) => break,
             Ok(event) => {
                 let mut state = renderer.state.lock();
+                state.replies = state.replies.wrapping_add(1);
                 // A reply is room in the driver's channel, and an object
                 // that has gone may be the last its context was waiting for.
                 state.let_go(&renderer.control);
+                // An upload or a stream whose caller was answered when it
+                // was sent: its slot comes back, and a `WAIT` may be over.
+                if let Some(at) = flying_at(&state, event) {
+                    let flying = state.flying.remove(at);
+                    if let Flight::Submit { slot, .. } = flying.flight {
+                        state.give_command(slot);
+                    }
+                    let refused = matches!(
+                        event,
+                        Event::Transferred { status, .. } | Event::Submitted { status, .. }
+                            if status != Status::Ok
+                    );
+                    let say = refused && !core::mem::replace(&mut state.refusal_said, true);
+                    drop(state);
+                    if say {
+                        crate::console::println!(
+                            "  render   renderD{}: the device refused an upload or a command stream \
+                             nobody waits for; later ones go unsaid",
+                            renderer.index
+                        );
+                    }
+                    renderer.changed.wake_all();
+                    continue;
+                }
                 // The session has settled the id either way; what is left is
                 // whether anyone is still waiting to be told. An abandoned
                 // one is dropped here rather than growing `events` for ever.
                 if let Some(at) = abandoned_at(&state, event) {
-                    if let Abandoned::Submit { slot, .. } = state.abandoned.remove(at) {
-                        state.give_command(slot);
-                    }
+                    let _ = state.abandoned.remove(at);
+                    drop(state);
+                    // Room, for whoever is waiting for some.
+                    renderer.changed.wake_all();
                     continue;
                 }
                 state.events.push(event);
@@ -1185,6 +1373,20 @@ fn exchange_with(renderer: &Renderer, ask: &Message) -> Option<(Event, Vec<Trans
     }
 }
 
+/// Where a flying request is recorded, if `event` is its reply.
+fn flying_at(state: &State, event: Event) -> Option<usize> {
+    let flight = match event {
+        Event::Transferred { object, .. } => Flight::Transfer(object),
+        Event::Submitted { fence, .. } => {
+            return state.flying.iter().position(
+                |held| matches!(held.flight, Flight::Submit { fence: kept, .. } if kept == fence),
+            );
+        }
+        _ => return None,
+    };
+    state.flying.iter().position(|held| held.flight == flight)
+}
+
 /// Where an abandoned reply is recorded, if `event` is one.
 fn abandoned_at(state: &State, event: Event) -> Option<usize> {
     let which = match event {
@@ -1195,11 +1397,6 @@ fn abandoned_at(state: &State, event: Event) -> Option<usize> {
             Abandoned::Context(context)
         }
         Event::Transferred { object, .. } => Abandoned::Transfer(object),
-        Event::Submitted { fence, .. } => {
-            return state.abandoned.iter().position(
-                |held| matches!(held, Abandoned::Submit { fence: kept, .. } if *kept == fence),
-            );
-        }
         _ => return None,
     };
     state.abandoned.iter().position(|held| *held == which)

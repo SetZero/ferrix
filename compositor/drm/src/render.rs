@@ -24,7 +24,7 @@ use ferrix_linux_abi::drm::{self, GemClose, PrimeHandle, Version};
 use ferrix_linux_abi::socket::Width;
 use ferrix_linux_abi::virtgpu::{
     self, ExecBuffer, GetCaps, GetParam, Layout, Map, ResourceInfo, TransferFromHost,
-    TransferToHost,
+    TransferToHost, Wait,
 };
 pub use ferrix_linux_abi::virtgpu::{Box3d, ResourceCreate};
 
@@ -371,6 +371,21 @@ impl Render {
         Ok(unsafe { OwnedFd::from_raw_fd(request.fd) })
     }
 
+    /// Wait until the device is done with object `handle`:
+    /// `VIRTGPU_WAIT`. An upload and a command stream return once they are
+    /// on their way, as they do on Linux, so this is what comes before
+    /// writing a backing the device may still be reading, and before
+    /// reading one the device was asked to fill.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the node said; `EBUSY` for a device that did not finish in
+    /// the node's patience.
+    pub fn wait(&self, handle: u32) -> io::Result<()> {
+        let mut request = Wait { handle, flags: 0 };
+        self.ioctl(virtgpu::IOCTL_WAIT, &mut request)
+    }
+
     /// Let go of object `handle`: `DRM_IOCTL_GEM_CLOSE`.
     ///
     /// # Errors
@@ -534,8 +549,12 @@ fn moved(node: &Render) -> String {
             d: 1,
         };
         node.transfer_to_host(handle, whole, 0, 0)?;
+        // The upload is on its way, not there: the pattern is the device's
+        // to read until the wait says it has.
+        node.wait(handle)?;
         mapping.bytes_mut().fill(0);
         node.transfer_from_host(handle, whole, 0, 0)?;
+        node.wait(handle)?;
         Ok(mapping
             .bytes()
             .iter()
@@ -689,6 +708,7 @@ fn draw_and_read(node: &Render) -> io::Result<[u32; 3]> {
         0,
         SIDE * 4,
     )?;
+    node.wait(target)?;
     let pixel = |x: u32, y: u32| -> u32 {
         let at = ((y * SIDE + x) * 4) as usize;
         // B, G, R, A in memory.

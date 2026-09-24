@@ -79,6 +79,7 @@ offsetof.drm_virtgpu_execbuffer.out_syncobjs 56
 VIRTGPU_EXECBUF_FENCE_FD_IN 1
 VIRTGPU_EXECBUF_FENCE_FD_OUT 2
 VIRTGPU_EXECBUF_RING_IDX 4
+VIRTGPU_WAIT_NOWAIT 1
 sizeof.drm_virtgpu_3d_box 24
 offsetof.drm_virtgpu_3d_box.x 0
 offsetof.drm_virtgpu_3d_box.y 4

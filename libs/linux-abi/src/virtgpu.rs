@@ -110,6 +110,10 @@ pub const CONTEXT_PARAM_DEBUG_NAME: u64 = 4;
 // What a submission asks for
 // ---------------------------------------------------------------------------
 
+/// `VIRTGPU_WAIT_NOWAIT`: answer whether the object is idle rather than
+/// wait for it, `EBUSY` for not yet.
+pub const WAIT_NOWAIT: u32 = 1;
+
 /// `VIRTGPU_EXECBUF_FENCE_FD_IN`: wait on `fence_fd` before running.
 pub const EXECBUF_FENCE_FD_IN: u32 = 1;
 /// `VIRTGPU_EXECBUF_FENCE_FD_OUT`: return a fence in `fence_fd`.

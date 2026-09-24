@@ -30,6 +30,9 @@ struct Moved {
     mapping: Mapping,
     width: u32,
     height: u32,
+    /// Whether an upload from the backing may still be on its way: the
+    /// backing is the device's to read until a wait says it is done.
+    moving: bool,
 }
 
 /// An open render node, as a [`Device`].
@@ -146,6 +149,7 @@ impl Device for RenderDevice {
                     mapping,
                     width: texture.width,
                     height: texture.height,
+                    moving: false,
                 },
             );
         }
@@ -171,6 +175,13 @@ impl Device for RenderDevice {
         inside(region, held.width, held.height)?;
         let first = offset_of(region, held.width)
             .ok_or_else(|| io::Error::other("a region too far in to describe"))?;
+        // The last upload returned when it was on its way; its bytes may
+        // still be being read. By the next frame they almost always have
+        // been, and the wait costs no trip to the device.
+        if held.moving {
+            self.node.wait(held.handle)?;
+            held.moving = false;
+        }
         let own_stride = held.width as usize * 4;
         let row_bytes = region.width as usize * 4;
         // Row by row into the backing, at the place the region has in the
@@ -198,7 +209,9 @@ impl Device for RenderDevice {
             box_of(region),
             first,
             held.width.saturating_mul(4),
-        )
+        )?;
+        held.moving = true;
+        Ok(())
     }
 
     fn submit(&mut self, words: &[u32]) -> io::Result<()> {
@@ -240,6 +253,7 @@ impl Device for RenderDevice {
             first,
             held.width.saturating_mul(4),
         )?;
+        self.node.wait(held.handle)?;
         let own_stride = held.width as usize * 4;
         let row_bytes = region.width as usize * 4;
         let mut data = Vec::with_capacity(row_bytes * region.height as usize);

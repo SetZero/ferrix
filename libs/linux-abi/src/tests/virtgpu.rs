@@ -113,6 +113,7 @@ fn values() -> Vec<(&'static str, u64)> {
             virtgpu::EXECBUF_FENCE_FD_OUT.into(),
         ),
         ("VIRTGPU_EXECBUF_RING_IDX", virtgpu::EXECBUF_RING_IDX.into()),
+        ("VIRTGPU_WAIT_NOWAIT", virtgpu::WAIT_NOWAIT.into()),
     ]
 }
 

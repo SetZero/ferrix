@@ -714,7 +714,8 @@ What is left, in the order a person feels it:
   Genode's GPU session are the reference for the other way: descriptors in
   shared rings, a whole queue drained into the virtqueue behind one
   doorbell, completions taken in batches, and a client that says "run the
-  buffer at this offset" rather than handing the bytes over.
+  buffer at this offset" rather than handing the bytes over. *Done,
+  §3.11.*
 * **Client pixels are copied in the guest** into a texture's backing before
   the device moves them -- the 13.6 MB a frame of §3.8's table. sDDF's GPU
   class makes the client's own memory the resource's backing instead.
@@ -741,9 +742,8 @@ damage (`compositor/hyprix/src/plane.rs`). Top to bottom:
   framework runs its queues -- commands in slots of a page of their own,
   what is owed posted behind one doorbell, completions taken back when the
   next command is posted, no interrupt at all -- and the newest place of a
-  scanout, never a stale one, when every slot is taken. It is the one part
-  of the driver that runs that way; the control queue is still one command
-  at a time, which is §3.9's second item.
+  scanout, never a stale one, when every slot is taken. It was the first
+  part of the driver to run that way; the control queue followed in §3.11.
 
 Measured the way §3.9 measures, on the 3D card under KVM at 1920x1080, the
 viewer circling the pointer sixty times a second for 25 seconds: the
@@ -769,6 +769,70 @@ boot keeps judging the arrow drawn into the frame, with Hyprland's
 A client's own cursor larger than the plane, a screen with no plane, and the
 headless backend draw the pointer into the frame as before, and a drag's icon
 is still drawn: it follows the pointer, so a drag owes frames.
+
+### 3.11 Commands in flight, and a frame that waits once (2026-09-24)
+
+§3.9's second item. A frame on the GPU was an upload or two, a command
+stream and a flush, and each was a round trip of its own: the program's
+ioctl, the render or display core, a channel message to the driver, the
+virtqueue, virglrenderer, the interrupt, the reply, the core, the program --
+about 0.95 ms each, with the driver taking one command at a time and the
+program waiting for each. Now only the flush is waited for.
+
+**The driver keeps eight commands in flight** (`libs/virtio-gpu`). The
+command area starts with slots, each a request and its response in a
+quarter of a page; a command too long for a slot -- a backing list of many
+pages, a capability set -- takes the one large place after them, as every
+command did when there was only one. `Driver::post` writes a command into a
+free slot and publishes it without ringing the doorbell, `Driver::kick`
+rings it once for everything posted since, and `Driver::take_done` hands the
+completions back in whatever order the device made them, each with the tag
+it was posted with. That is seL4's device driver framework's shape again,
+the cursor queue's of §3.10, on the queue that carries the frames.
+
+**A command stream is run where the core wrote it**, Genode's "execute the
+buffer at this offset". The driver pins the render core's work VMO
+read-only for the device when READY hands it over, and a `SUBMIT_3D` is its
+header in a slot followed, in the same chain, by the addresses of the pages
+the stream lies in. The stream used to be read into this process and copied
+a byte at a time into the command area; now neither happens. The core holds
+a stream's slot until the driver answers, which is after the device is done
+with it, so the device never reads a slot that is being rewritten. Shown to
+fire: with the first page's address shifted by four bytes, virglrenderer
+reports an illegal command buffer and the render node's probe draws black
+where it draws red.
+
+**A request's order is kept across the two conversations.** `user/gpu`
+reads the render core's channel into a backlog and puts it on the device in
+order, uploads and streams at once -- one slot is always left for the
+display -- and anything else (a context, an object, a capability set) only
+once nothing is in flight, as before, since those are rare and several are
+more than one command. A display request is given to the pipeline only
+when every render request read before it is on the device, and the render
+channel is read again after each display request is taken: a stream written
+before a flush is in its channel by the time the flush can be read, so the
+device draws before it shows.
+
+**An upload and a stream return when they are sent**, as they do on Linux
+(`kernel/src/render`). `VIRTGPU_TRANSFER_TO_HOST` and `VIRTGPU_EXECBUFFER`
+send their request and return; the reply is taken by the renderer's task,
+which gives the stream's slot back, and `VIRTGPU_WAIT` -- which answered at
+once, since nothing was ever outstanding -- now waits until everything its
+open sent before it has been answered. A program writes a backing again only
+after a wait, which is Linux's contract; `compositor/drm`'s render device
+keeps it, and waits only when an upload from that texture may still be on
+its way. A transfer *from* the device still waits for its bytes, since its
+caller asked in order to read them, and is ordered behind the object's
+upload. A refused upload or stream goes unheard, as on Linux, and the core
+says so once on the console.
+
+What it is worth is not measured yet: the gate host was never idle the
+evening this landed, and a frame time from a contended host is noise
+(§3.8). It is owed as §3.9 measures it -- the AV1 wallpaper at 1920x1080
+on the 3D card under KVM, main and this change run alternately.
+
+What is left of §3.9 is the third item: a client's pixels are still copied
+into a texture's backing in the guest before the device moves them.
 
 ### 3a, which was not chosen for the compositor
 

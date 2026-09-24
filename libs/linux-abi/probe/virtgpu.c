@@ -131,6 +131,8 @@ int main(void)
 	VALUE(VIRTGPU_EXECBUF_FENCE_FD_IN);
 	VALUE(VIRTGPU_EXECBUF_FENCE_FD_OUT);
 	VALUE(VIRTGPU_EXECBUF_RING_IDX);
+	/* What a wait may ask for. */
+	VALUE(VIRTGPU_WAIT_NOWAIT);
 
 	SIZE(drm_virtgpu_3d_box);
 	FIELD(drm_virtgpu_3d_box, x);

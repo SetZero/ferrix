@@ -523,7 +523,7 @@ package FerrixRoadmap {
     #inProgress requirement <'S19'> stage19HyprlandFidelity : Stage {
         attribute :>> number = 19;
         attribute :>> status = StageStatus::InProgress;
-        attribute :>> size = "178 points, about 69 left";
+        attribute :>> size = "178 points, about 56 left";
         doc /* What makes a Hyprland rather than a tiling compositor:
              * animations with bezier curves, rounded corners, blur, shadows,
              * opacity rules, special workspaces, groups, multiple monitors,
@@ -546,11 +546,15 @@ package FerrixRoadmap {
              * 16.7. A card of Ferrix's own is stage 21. Since 2026-09-23 a
              * served desktop takes the 3D card by default (docs/GPU.md 3.9)
              * and the pointer is on virtio-gpu's cursor plane, so moving it
-             * draws no frame (docs/GPU.md 3.10).
+             * draws no frame (docs/GPU.md 3.10). The driver keeps eight
+             * commands in flight on the control queue and has the device
+             * read a command stream where it lies, and an upload and a
+             * stream return once they are on their way, so a frame waits
+             * once, for its flush (docs/GPU.md 3.11).
              *
-             * Of the 178, about 69 are left: the desktop's speed as it is
-             * watched (an sDDF-shaped device queue and client pages as
-             * texture backing: 21 of 34, the cursor plane spent), XWayland's
+             * Of the 178, about 56 are left: the desktop's speed as it is
+             * watched (client pages as texture backing: 8 of 34, the cursor
+             * plane and the device queue spent), XWayland's
              * 40, and the
              * pointer-driven options and second-pass effects
              * (no_screen_share, blur_popups, precise_mouse_move). The rest
