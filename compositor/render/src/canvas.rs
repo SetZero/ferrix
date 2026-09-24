@@ -1,9 +1,7 @@
 //! The frame being drawn: a tiny-skia pixmap in the canvas byte order the
 //! crate docs describe, and the drawing operations clipped to damage.
 
-use tiny_skia::{
-    BlendMode, FilterQuality, Paint, Pattern, Pixmap, PixmapMut, PixmapRef, Shader, SpreadMode,
-};
+use tiny_skia::{BlendMode, FilterQuality, Paint, Pattern, Pixmap, PixmapRef, Shader, SpreadMode};
 
 use crate::blur::{Block, Blur};
 use crate::damage::{bounding, intersect, is_empty};
