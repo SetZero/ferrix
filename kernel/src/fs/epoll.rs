@@ -52,7 +52,8 @@ use core::any::Any;
 use core::fmt;
 
 use ferrix_linux_abi::types::{
-    EPOLLERR, EPOLLET, EPOLLHUP, EPOLLIN, EPOLLONESHOT, EPOLLOUT, EPOLLRDNORM, EPOLLWRNORM,
+    EPOLLERR, EPOLLET, EPOLLHUP, EPOLLIN, EPOLLONESHOT, EPOLLOUT, EPOLLPRI, EPOLLRDNORM,
+    EPOLLWRNORM,
 };
 use ferrix_vfs::{Errno, Inode, Metadata, OpenFile, Readiness};
 
@@ -188,6 +189,9 @@ const fn bits(ready: Readiness) -> u32 {
     }
     if ready.error {
         bits |= EPOLLERR;
+    }
+    if ready.priority {
+        bits |= EPOLLPRI;
     }
     bits
 }
@@ -546,6 +550,7 @@ impl Inode for Epoll {
             writable: false,
             hangup: false,
             error: false,
+            priority: false,
         }
     }
 

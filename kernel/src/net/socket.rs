@@ -227,6 +227,7 @@ impl InetSocket {
             writable: ready.writable,
             hangup: ready.hangup,
             error: ready.error,
+            priority: false,
         }
     }
 

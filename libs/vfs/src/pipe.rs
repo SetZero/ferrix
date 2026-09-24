@@ -217,6 +217,7 @@ impl PipeBuffer {
             writable: false,
             hangup: self.writers == 0,
             error: false,
+            priority: false,
         }
     }
 
@@ -232,6 +233,7 @@ impl PipeBuffer {
             writable: self.readers == 0 || self.free() >= PIPE_BUF,
             hangup: false,
             error: self.readers == 0,
+            priority: false,
         }
     }
 }

@@ -1630,16 +1630,25 @@ cgroup.kill must refuse 0 with ERANGE and, given 1, end the process and leave
 the cgroup empty and removable. cgroup.max.descendants 1 must allow one child
 and refuse a second with EAGAIN, and cgroup.stat must count it. A controller not
 built, a negative depth, `threaded` and a negative pid are refused as Linux
-refuses them.
+refuses them. Landing G3: an epoll set asking EPOLLPRI of a two-member cgroup's
+cgroup.events must keep a waiting task asleep through the first member's release
+and wake it, by the job's event queue and with its cookie, at the last; the file
+must then poll POLLPRI and POLLERR and be in select's exception set until read
+again from its start, and not after.
 
-1. `Job::new_named_child`, `remove_named_child` or `children` in
+1. `EventsFile` in kernel/src/fs/cgroupfs.rs does not name the job's `events`
+   queue in `poll_queues`, or does not compare the queue's wake count with the
+   one it last rendered at; or `job::notify` did not wake the queue at the flip.
+2. `poll::revents`, `poll::select_sets` or epoll's `bits` lost
+   `Readiness::priority`.
+3. `Job::new_named_child`, `remove_named_child` or `children` in
    kernel/src/object/job.rs lost a named child, or `room_for_a_child` reads the
    limits wrongly.
-2. `Process::move_to` did not move the process, or its job's counts, so
+4. `Process::move_to` did not move the process, or its job's counts, so
    cgroup.procs or cgroup.events disagree with where the process is.
-3. `Job::kill_members` did not find the member through the registry, or sealed
+5. `Job::kill_members` did not find the member through the registry, or sealed
    the job.
-4. A write's text is parsed differently from Linux's: libs/cgroupfs, whose host
+6. A write's text is parsed differently from Linux's: libs/cgroupfs, whose host
    tests pin each parse.
 
 See: kernel/src/fs/cgroupfs.rs; kernel/src/object/job.rs; libs/cgroupfs;

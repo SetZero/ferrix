@@ -479,6 +479,7 @@ impl Inode for MasterFile {
             writable: true,
             hangup: false,
             error: false,
+            priority: false,
         }
     }
 
@@ -551,6 +552,7 @@ impl Inode for SlaveFile {
             writable: !gone,
             hangup: gone,
             error: false,
+            priority: false,
         }
     }
 

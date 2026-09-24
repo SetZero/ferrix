@@ -206,6 +206,7 @@ impl Inode for SignalFd {
             writable: false,
             hangup: false,
             error: false,
+            priority: false,
         }
     }
 

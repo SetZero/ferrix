@@ -194,7 +194,7 @@ pub const FIRST_CURSOR: u64 = 2;
 
 /// What an open object is ready for, as `poll` and `select` report it.
 ///
-/// Four booleans rather than `POLL*` bits, because the bits are the system
+/// Five booleans rather than `POLL*` bits, because the bits are the system
 /// call layer's encoding and this crate does not encode anything.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[allow(
@@ -211,6 +211,11 @@ pub struct Readiness {
     pub hangup: bool,
     /// Writing would fail: `POLLERR`.
     pub error: bool,
+    /// Something exceptional is to be read: `POLLPRI`, `EPOLLPRI`, and
+    /// `select`'s exception set. False for everything but a file that
+    /// announces a change this way, as `cgroup.events` does: from a change
+    /// until the file is read again.
+    pub priority: bool,
 }
 
 impl Readiness {
@@ -221,6 +226,7 @@ impl Readiness {
         writable: true,
         hangup: false,
         error: false,
+        priority: false,
     };
 }
 

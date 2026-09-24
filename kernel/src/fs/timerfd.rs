@@ -382,6 +382,7 @@ impl Inode for TimerFd {
             writable: false,
             hangup: false,
             error: false,
+            priority: false,
         }
     }
 

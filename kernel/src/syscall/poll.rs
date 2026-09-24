@@ -16,8 +16,9 @@
 //! [`wait_for`], and differ only in how the question is read and the answer
 //! written. `select`'s mapping is Linux's: a descriptor is in the read set if
 //! it is readable, has hung up or has an error, in the write set if it is
-//! writable or has an error, and never in the exception set, which is for
-//! out-of-band data nothing here has.
+//! writable or has an error, and in the exception set if it has something of
+//! priority to read (`POLLPRI`), which is how `cgroup.events` announces a
+//! change and which nothing else here reports.
 //!
 //! # The signal mask a wait waits under
 //!
@@ -32,6 +33,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use ferrix_linux_abi::errno::Errno;
+use ferrix_vfs::Readiness;
 
 use crate::fs::wake::Sources;
 use crate::syscall::fd;
@@ -43,6 +45,8 @@ use crate::syscall::uaccess;
 
 /// There is data to read.
 pub(crate) const POLLIN: u16 = 0x001;
+/// Something of priority is to be read: a change `cgroup.events` announces.
+pub(crate) const POLLPRI: u16 = 0x002;
 /// Writing will not block.
 pub(crate) const POLLOUT: u16 = 0x004;
 /// An error condition, reported whether asked for or not.
@@ -433,24 +437,7 @@ fn scan(process: &Process, entries: &mut [u8]) -> Result<usize, Errno> {
         } else {
             match fd::file(process, fd) {
                 Err(_) => POLLNVAL,
-                Ok(file) => {
-                    let readiness = file.poll();
-                    let mut offered = 0;
-                    if readiness.readable {
-                        offered |= POLLIN | POLLRDNORM;
-                    }
-                    if readiness.writable {
-                        offered |= POLLOUT | POLLWRNORM;
-                    }
-                    let mut revents = offered & events;
-                    if readiness.hangup {
-                        revents |= POLLHUP;
-                    }
-                    if readiness.error {
-                        revents |= POLLERR;
-                    }
-                    revents
-                }
+                Ok(file) => revents(file.poll(), events),
             }
         };
         entry
@@ -462,6 +449,41 @@ fn scan(process: &Process, entries: &mut [u8]) -> Result<usize, Errno> {
         }
     }
     Ok(ready)
+}
+
+/// What `poll` answers in `revents` for a file ready as `readiness`, asked
+/// about `events`: what was asked of what it is ready for, and errors and
+/// hang-ups whether asked for or not, as on Linux.
+pub(crate) fn revents(readiness: Readiness, events: u16) -> u16 {
+    let mut offered = 0;
+    if readiness.readable {
+        offered |= POLLIN | POLLRDNORM;
+    }
+    if readiness.writable {
+        offered |= POLLOUT | POLLWRNORM;
+    }
+    if readiness.priority {
+        offered |= POLLPRI;
+    }
+    let mut revents = offered & events;
+    if readiness.hangup {
+        revents |= POLLHUP;
+    }
+    if readiness.error {
+        revents |= POLLERR;
+    }
+    revents
+}
+
+/// Which of `select`'s three sets -- read, write, exception -- a file ready
+/// as `readiness` is in: Linux's `POLLIN_SET`, `POLLOUT_SET` and
+/// `POLLEX_SET`.
+pub(crate) fn select_sets(readiness: Readiness) -> [bool; 3] {
+    [
+        readiness.readable || readiness.hangup || readiness.error,
+        readiness.writable || readiness.error,
+        readiness.priority,
+    ]
 }
 
 /// `select`'s wait: read the three sets, refuse a closed descriptor in any of
@@ -541,12 +563,7 @@ fn scan_sets(
         let Ok(file) = fd::file(process, fd) else {
             continue;
         };
-        let readiness = file.poll();
-        let offered = [
-            readiness.readable || readiness.hangup || readiness.error,
-            readiness.writable || readiness.error,
-            false,
-        ];
+        let offered = select_sets(file.poll());
         for ((set, want), offer) in answer.iter_mut().zip(wanted).zip(offered) {
             if offer && want.as_ref().is_some_and(|want| bit(want, number)) {
                 set_bit(set, number);

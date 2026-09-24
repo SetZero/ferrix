@@ -13,7 +13,7 @@
 //! # What G2 has, and what comes later
 //!
 //! The tree, `cgroup.procs` read and moves, `cgroup.kill`, `cgroup.events`
-//! read (`POLLPRI` is G3), the limits on depth and descendants, and
+//! read and polled for `POLLPRI` (G3), the limits on depth and descendants, and
 //! `cgroup.subtree_control` with no controller to enable yet. A move needs
 //! write access to the target's `cgroup.procs`, which only root has until
 //! delegation (G4) lets `chown` hand a subtree to a user. `cgroup.freeze`
@@ -31,13 +31,17 @@ use ferrix_cgroupfs::write::{self, Target};
 use ferrix_cgroupfs::{Refusal, name, render};
 use ferrix_linux_abi::errno::Errno;
 use ferrix_vfs::{
-    DirEntry, FIRST_CURSOR, FileSystem, FileType, Inode, Metadata, NewNode, StatFs, Timespec,
+    DirEntry, FIRST_CURSOR, FileSystem, FileType, Inode, Metadata, NewNode, Readiness, StatFs,
+    Timespec,
 };
 
 use crate::fs::{self, procfs};
 use crate::object::job::{self, Job, JobError};
+use crate::sync::SpinLock;
 use crate::syscall::process;
 use crate::syscall::registry;
+
+mod events_check;
 
 /// The result every operation here returns.
 type Result<T> = core::result::Result<T, Errno>;
@@ -308,8 +312,16 @@ impl Inode for Interface {
     }
 
     /// The contents as they are now, and a writer for a file that takes
-    /// writes.
+    /// writes. `cgroup.events` is the exception: it is rendered when read,
+    /// and polled, so an open of it is an [`EventsFile`].
     fn open(&self) -> Result<Option<Arc<dyn Inode>>> {
+        if self.file.kind == Kind::Events {
+            return Ok(Some(Arc::new(EventsFile {
+                job: Arc::clone(&self.job),
+                metadata: self.metadata,
+                rendered: SpinLock::new(Rendered::default()),
+            })));
+        }
         let bytes = contents(&self.job, self.file.kind);
         let job = Arc::clone(&self.job);
         let kind = self.file.kind;
@@ -323,6 +335,106 @@ impl Inode for Interface {
             writer,
             Errno::EACCES,
         )))
+    }
+}
+
+/// One open of a `cgroup.events` (`docs/CGROUPS.md` §4): what it says,
+/// rendered afresh by every read from its start, and `POLLPRI` from a change
+/// until it is read that way again.
+///
+/// That is kernfs's `kernfs_generic_poll`. The job's event queue is woken at
+/// every flip of populated, and its wake count is the change counter: a read
+/// from the start records the count it rendered at, and the file reports
+/// priority (with `POLLERR`, as Linux does) while the count has moved since.
+/// An open file not yet read reports it too, as on Linux, where the open
+/// node's counter starts one ahead of a new open file's.
+#[derive(Debug)]
+struct EventsFile {
+    /// The job it reports on.
+    job: Arc<Job>,
+    /// What `stat` reports, less the size, which is the last rendering's.
+    metadata: Metadata,
+    /// The last rendering.
+    rendered: SpinLock<Rendered>,
+}
+
+/// What an [`EventsFile`] last rendered, and when.
+#[derive(Debug, Default)]
+struct Rendered {
+    /// The text.
+    bytes: Vec<u8>,
+    /// The job's wake count read just before it was rendered, or `None`
+    /// before the first read.
+    seen: Option<u64>,
+}
+
+impl EventsFile {
+    /// Whether the job has changed since the last rendering.
+    fn changed(&self) -> bool {
+        self.rendered.lock().seen != Some(self.job.events().wakes())
+    }
+}
+
+impl Inode for EventsFile {
+    fn metadata(&self) -> Metadata {
+        Metadata {
+            size: self.rendered.lock().bytes.len() as u64,
+            ..self.metadata
+        }
+    }
+
+    fn into_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync> {
+        self
+    }
+
+    /// A read from the start renders the file again, as a `seq_file` does
+    /// after `lseek` to 0, and that is what clears `POLLPRI`; a read further
+    /// on continues the last rendering.
+    fn read_at(&self, offset: u64, buf: &mut [u8]) -> Result<usize> {
+        if offset == 0 {
+            // The count before the text: a flip in between leaves the count
+            // ahead of what was rendered, and the file still reporting.
+            let seen = self.job.events().wakes();
+            let bytes = contents(&self.job, Kind::Events);
+            *self.rendered.lock() = Rendered {
+                bytes,
+                seen: Some(seen),
+            };
+        }
+        let rendered = self.rendered.lock();
+        let start = usize::try_from(offset).unwrap_or(usize::MAX);
+        let rest = rendered.bytes.get(start..).unwrap_or_default();
+        let count = rest.len().min(buf.len());
+        let (Some(to), Some(from)) = (buf.get_mut(..count), rest.get(..count)) else {
+            return Ok(0);
+        };
+        to.copy_from_slice(from);
+        Ok(count)
+    }
+
+    fn write_at(&self, _offset: u64, _data: &[u8], _append: bool) -> Result<(usize, u64)> {
+        Err(Errno::EACCES)
+    }
+
+    /// Always readable, as kernfs's `DEFAULT_POLLMASK` is, and `POLLPRI`
+    /// with `POLLERR` while the job has changed since the last rendering.
+    fn poll(&self) -> Readiness {
+        let changed = self.changed();
+        Readiness {
+            error: changed,
+            priority: changed,
+            ..Readiness::ALWAYS
+        }
+    }
+
+    fn poll_changes(&self) -> Option<u64> {
+        Some(self.job.events().wakes())
+    }
+
+    /// The job's event queue, which every flip wakes.
+    fn poll_queues(&self, visit: &mut dyn FnMut(ferrix_vfs::WakeSource)) -> bool {
+        visit(fs::wake::shared(self.job.events()));
+        true
     }
 }
 
@@ -411,6 +523,8 @@ pub(crate) struct Report {
     pub(crate) made: u32,
     /// Writes and names refused as Linux refuses them.
     pub(crate) refusals: u32,
+    /// Waits on `cgroup.events` that a release's wake ended.
+    pub(crate) woken: u32,
 }
 
 /// Where [`check`] mounts its cgroupfs: under `/tmp`, and gone afterwards.
@@ -447,6 +561,11 @@ impl Harness {
             ..ferrix_vfs::OpenFlags::default()
         };
         let file = self.ns.open(&self.ctx, None, whole, &flags, 0)?;
+        Harness::read_to_end(&file)
+    }
+
+    /// Everything left in an open file, read to the end.
+    fn read_to_end(file: &ferrix_vfs::OpenFile) -> Result<Vec<u8>> {
         let mut contents = Vec::new();
         let mut chunk = [0_u8; 256];
         loop {
@@ -456,6 +575,16 @@ impl Harness {
             };
             contents.extend_from_slice(read);
         }
+    }
+
+    /// The file at `tail` beneath the mount, opened for reading.
+    fn open_read(&self, tail: &[u8]) -> Result<Arc<ferrix_vfs::OpenFile>> {
+        let flags = ferrix_vfs::OpenFlags {
+            read: true,
+            ..ferrix_vfs::OpenFlags::default()
+        };
+        self.ns
+            .open(&self.ctx, None, &Harness::path(tail), &flags, 0)
     }
 
     /// The file at `tail` beneath the mount, read whole.
@@ -542,6 +671,7 @@ pub(crate) fn check() -> Checked<Report> {
     check_the_root(&harness, process.pid())?;
     check_a_move_and_a_kill(&mut harness, &process)?;
     check_the_limits(&mut harness)?;
+    harness.report.woken = events_check::run(&mut harness)?;
 
     let root = ns
         .resolve(&harness.ctx, None, CHECK_AT, true)

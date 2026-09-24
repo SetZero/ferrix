@@ -115,6 +115,7 @@ impl Inode for EventFile {
             // A queue reports no error of its own: `evdev_poll` sets
             // `EPOLLERR` only beside `EPOLLHUP`, for a device that is gone.
             error: poll.hangup,
+            priority: false,
         }
     }
 

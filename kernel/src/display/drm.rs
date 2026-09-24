@@ -270,6 +270,7 @@ impl Inode for CardFile {
             writable: false,
             hangup: false,
             error: false,
+            priority: false,
         }
     }
 

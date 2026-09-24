@@ -461,8 +461,9 @@ fn check_signalfd() {
     );
 }
 
-/// Stage 13's cgroupfs, landing G2: the job tree mounted as cgroup2, driven
-/// through the VFS as a program would drive it.
+/// Stage 13's cgroupfs, landings G2 and G3: the job tree mounted as cgroup2,
+/// driven through the VFS as a program would drive it, and `cgroup.events`
+/// waited on with epoll.
 fn check_cgroupfs() {
     let checked = match fs::cgroupfs::check() {
         Ok(checked) => checked,
@@ -473,8 +474,9 @@ fn check_cgroupfs() {
     };
     println!(
         "  cgroups  {} cgroups made and removed through cgroup2, a process moved in by its pid \
-         and ended by cgroup.kill, {} writes and names refused as Linux refuses them",
-        checked.made, checked.refusals,
+         and ended by cgroup.kill, {} writes and names refused as Linux refuses them, {} epoll \
+         wait on cgroup.events woken with EPOLLPRI by the last release and not before",
+        checked.made, checked.refusals, checked.woken,
     );
 }
 

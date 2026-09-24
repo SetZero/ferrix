@@ -4,8 +4,8 @@ Version 1, a draft. Written on 2026-09-23. It is the cgroup half of stage 13,
 which the customer put first that day, and builds on the customer's decision
 of the same day that **every cgroup is backed by a `Job`** (`docs/INIT.md` §0,
 C8; `docs/BACKLOG.md`, Decisions). `docs/INIT.md` §0.1 is what the first user
-needs from this; `docs/ARCHITECTURE.md` §3 and §6 are the architecture. G1 and
-G2 (§7) are built. §9 lists what is still the customer's to decide.
+needs from this; `docs/ARCHITECTURE.md` §3 and §6 are the architecture. G1 to
+G3 (§7) are built. §9 lists what is still the customer's to decide.
 
 ## 1. What this is, and what it is not
 
@@ -188,19 +188,30 @@ parent as the writer. It is init's race-free start (`docs/INIT.md` §5.2).
 
 `cgroup.events` changes are announced as Linux announces them: the file polls
 `POLLPRI` (and `EPOLLPRI`) once after every change, and `select` reports it
-in the exception set. Nothing here polls priority yet, so:
+in the exception set. Nothing polled priority before G3, so, as built:
 
-* `Readiness` (`libs/vfs/src/node.rs`) gains `priority`;
-* `poll`, `ppoll`, `select` and `epoll` map it to `POLLPRI`/`EPOLLPRI` and
-  to the exception set. The constants already exist in `libs/linux-abi`;
-* a job gains an `events: WaitQueue`, woken on every populated or frozen
-  flip, and `cgroup.events` answers `poll_queues` with it and
-  `poll_changes` with its `wakes()` count, as eventfd does.
+* `Readiness` (`libs/vfs/src/node.rs`) has `priority`, false for every file
+  but `cgroup.events`;
+* `poll` and `ppoll` map it to `POLLPRI` (`poll::revents`), `select` to the
+  exception set (`poll::select_sets`, Linux's `POLLEX_SET`), and `epoll` to
+  `EPOLLPRI` (`fs/epoll.rs`'s `bits`);
+* a job's `events` queue, woken on every populated flip since G1 (and on
+  frozen flips from F1), is shared (`Arc<WaitQueue>`), and an open of
+  `cgroup.events` is an `EventsFile` of its own, no longer procfs's
+  snapshot: it answers `poll_queues` with that queue and `poll_changes`
+  with its `wakes()` count, as eventfd does.
 
 Linux's semantics are edge-triggered in effect: `POLLPRI` is asserted from a
-change until the file is read again. A `cgroup.events` open records the
-`wakes()` count it last rendered, and reports `priority` while the count has
-moved since. `memory.events` and `pids.events` use the same mechanism.
+change until the file is read again. An `EventsFile` renders afresh on every
+read from offset 0, as a `seq_file` does after `lseek` to 0, and records
+the `wakes()` count it read just before rendering; it reports `priority` while
+the count has moved since. With it comes `POLLERR`, because kernfs's
+`kernfs_generic_poll` answers `DEFAULT_POLLMASK|EPOLLERR|EPOLLPRI`, so a
+changed file is also in `select`'s read and write sets, as on Linux. An open
+file not yet read reports `POLLPRI` at once, as Linux's does: kernfs's open
+node starts its counter at 1 and a new open file's at 0. A program reads,
+then waits, as systemd does. `memory.events` and `pids.events` will use the
+same mechanism.
 
 ## 5. The native side: `EMPTY`, and a job for a cgroup
 
@@ -279,33 +290,31 @@ Order: G1, G2, G3, G4 (init's C1 to C5), then G5 and P1, then M1 and M2 (the
 stage exit's memory limit), then F1, S1, S2 and B1. Namespaces and seccomp
 follow, as `docs/BACKLOG.md` decided.
 
-### 7.1 Where it stands (2026-09-23, end of day)
+### 7.1 Where it stands (2026-09-24)
 
 | | State | On `main` as |
 |---|---|---|
 | G1 | done | 2a56325b |
 | G2 | done | ae76c099, and 491aeb1f for the two lock files it left out |
-| G3 to G5, P1, M1, M2, F1, S1, S2, B1 | not started | |
+| G3 | done, 2026-09-24 | "Wake a poll of cgroup.events with POLLPRI when a cgroup fills or empties" |
+| G4, G5, P1, M1, M2, F1, S1, S2, B1 | not started | |
 
-69 of the cgroup half's 85 points are left. Only 8 of them stand before
-`docs/INIT.md`'s first boot: G3 (3) and G4 (5) meet C4, C3 and C7. The
-init's own L1 and L2 need nothing from the kernel and could start today.
-Nothing is on a branch: the next landing starts from `main`.
+66 of the cgroup half's 85 points are left. Only 5 of them stand before
+`docs/INIT.md`'s first boot: G4 meets C3 and C7. G3 met C4.
+
+**G3, as built (3 points).** §4 says what it is. The `cgroups` boot check
+(`kernel/src/fs/cgroupfs/events_check.rs`) gives a cgroup two members, reads
+its `cgroup.events`, and puts it in an epoll set asking `EPOLLPRI`; a task
+waits on the set as `epoll_wait` does. The first member's release must leave
+the waiter asleep, the last must wake it with `EPOLLPRI` and its cookie, by
+the job's queue and not by the wait's own recheck (`waits_ended_by_a_wake`),
+and then the file must poll `POLLPRI` and `POLLERR`, and be in `select`'s
+exception set, until it is read again from its start, and not after. Its
+negative control, `EventsFile::poll_queues` naming no queue, fails by the
+check's own message ("ended by its recheck, not by the release's wake").
 
 **What the next session does first, and where each starts.**
 
-* **G3, `POLLPRI`** (3 points). Add `priority` to `Readiness`
-  (`libs/vfs/src/node.rs`), map it in `poll`'s `scan` and `scan_sets`
-  (`kernel/src/syscall/poll.rs`) and in epoll's `bits`
-  (`kernel/src/fs/epoll.rs`). Then `cgroup.events` must stop answering
-  `open` with a procfs snapshot, which cannot poll
-  (`libs/vfs/src/file.rs` asks the replacement inode). It needs an inode of
-  its own that answers `poll_queues` with the job's `events()` queue and
-  `poll_changes` with its `wakes()`, and reports `priority` while the count
-  has moved since the open last rendered (§4). The job already wakes that
-  queue on every populated flip (G1). The gate: `check`, `test-boot` on
-  x86-64, and a boot check where an `epoll` on `cgroup.events` wakes at a
-  member's release and not before, with its negative control.
 * **G4, `CLONE_INTO_CGROUP` and delegation** (5 points). In
   `kernel/src/syscall/family.rs`, `clone3` parses the `cgroup` field and
   refuses the flag with `ENOSYS`. Resolve that descriptor to a cgroupfs

@@ -206,6 +206,7 @@ impl NetlinkSocket {
             writable: true,
             hangup: false,
             error: false,
+            priority: false,
         }
     }
 

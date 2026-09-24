@@ -271,6 +271,7 @@ impl Inode for End {
             // An end open for both is its own partner, and never hangs up.
             hangup: self.reads && !self.writes && read.hangup,
             error: self.writes && !self.reads && write.error,
+            priority: false,
         }
     }
 

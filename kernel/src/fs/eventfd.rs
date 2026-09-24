@@ -161,6 +161,7 @@ impl Inode for EventFd {
             writable: fits(count, 1),
             hangup: false,
             error: count == u64::MAX,
+            priority: false,
         }
     }
 

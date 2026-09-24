@@ -126,8 +126,9 @@ pub(crate) struct Job {
     state: SpinLock<Members>,
     /// Woken when it is killed, for anything waiting on `TERMINATED`.
     waiters: WaitQueue,
-    /// Woken whenever it becomes populated or empty.
-    events: WaitQueue,
+    /// Woken whenever it becomes populated or empty. Shared, so that a
+    /// `poll` of its `cgroup.events` can hold it for as long as it sleeps.
+    events: Arc<WaitQueue>,
 }
 
 /// What a job holds.
@@ -203,7 +204,7 @@ impl Job {
             name,
             state: SpinLock::new(Members::default()),
             waiters: WaitQueue::new(),
-            events: WaitQueue::new(),
+            events: Arc::new(WaitQueue::new()),
         }
     }
 
@@ -384,7 +385,7 @@ impl Job {
     }
 
     /// The queue woken whenever it becomes populated or empty.
-    pub(crate) fn events(&self) -> &WaitQueue {
+    pub(crate) fn events(&self) -> &Arc<WaitQueue> {
         &self.events
     }
 

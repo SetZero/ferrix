@@ -1102,6 +1102,7 @@ impl Socket {
                 writable: false,
                 hangup: false,
                 error: false,
+                priority: false,
             };
         }
         let (readable, ended) = {
@@ -1123,6 +1124,7 @@ impl Socket {
             hangup: (peer.is_none() && self.kind != SocketType::Datagram)
                 || (ended && (shut_write || peer_refuses)),
             error: false,
+            priority: false,
         }
     }
 
