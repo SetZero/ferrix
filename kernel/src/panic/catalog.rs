@@ -1439,6 +1439,41 @@ pub(crate) static STAGE8_EVENTFD: Explanation = Explanation {
           kernel/src/fs/anon.rs",
 };
 
+/// For `check_timerfd` in `main.rs`, when the timerfd check fails.
+pub(crate) static STAGE8_TIMERFD: Explanation = Explanation {
+    code: "FX-0883",
+    title: "timerfd failed its self-check",
+    meaning: "`fs::timerfd_check::run` builds a process and makes timerfds by number. \
+              timerfd_create must take TFD_NONBLOCK and TFD_CLOEXEC and refuse other flags and \
+              clocks; a disarmed timer reads EAGAIN. A one-shot timer must not be readable before \
+              its deadline and must read 1, once, after it. A periodic timer armed at an absolute \
+              time in the past must be readable at once and read every interval that passed. \
+              timerfd_gettime must report the time left and the interval in both itimerspec \
+              layouts, timerfd_settime the setting it replaced, and a zero value must disarm. A \
+              set of CLOCK_REALTIME must fire an absolute real-time timer it carried past, make \
+              one armed with TFD_TIMER_CANCEL_ON_SET read ECANCELED once, and leave a monotonic \
+              one alone. A blocked read, a poll and an epoll_wait, each waiting before the timer \
+              is armed, must be ended by the timerfds thread's wake at the deadline and come back \
+              within a quarter of the one-second recheck. The run is done twice and must leave no \
+              frame behind, the thread's stack included.",
+    causes: &[
+        "The `timerfds` thread did not start when a timer was armed, sleeps past the earliest \
+         deadline, or counts an expiration without waking the timer's queue, so a waiter is \
+         ended by its recheck a second late.",
+        "`State::count` miscounts the intervals that passed, or moves the deadline to the wrong \
+         side of now.",
+        "`TimerFd::set` keeps the count of the setting it replaced, or keeps no interval when \
+         disarming.",
+        "`clock_was_set` is not called from `clock_settime` or `settimeofday`, or does not wake \
+         the thread, so a real-time deadline does not move with the clock.",
+        "The thread does not exit once nothing is armed, or a timer closed does not tell it, so \
+         its stack is counted against the frame window.",
+    ],
+    see: "kernel/src/fs/timerfd_check.rs; kernel/src/fs/timerfd.rs; \
+          kernel/src/syscall/timerfd.rs; kernel/src/syscall/time.rs; kernel/src/fs/wake.rs; \
+          kernel/src/sched/wait.rs",
+};
+
 /// For `check_filesystems` in `main.rs`, when the shared file mapping check
 /// fails.
 pub(crate) static STAGE8_FILE_MAPPINGS: Explanation = Explanation {
@@ -1652,6 +1687,7 @@ pub(crate) static ALL: &[&Explanation] = &[
     &STAGE8_MEMFD,
     &STAGE8_EPOLL,
     &STAGE8_EVENTFD,
+    &STAGE8_TIMERFD,
     &STAGE9_OBJECTS,
     &STAGE10_PCI,
     &STAGE10_DEVICES,

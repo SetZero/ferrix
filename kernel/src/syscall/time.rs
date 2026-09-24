@@ -31,9 +31,9 @@ const NANOS: u64 = 1_000_000_000;
 /// `CLOCK_REALTIME_ALARM`, `CLOCK_BOOTTIME_ALARM` and `CLOCK_TAI`, from
 /// `linux/time.h`: clocks Linux has that no call here sets. Of the three only
 /// `CLOCK_TAI` can be read, in [`sys_clock_gettime`].
-const CLOCK_REALTIME_ALARM: u32 = 8;
+pub(crate) const CLOCK_REALTIME_ALARM: u32 = 8;
 /// See [`CLOCK_REALTIME_ALARM`].
-const CLOCK_BOOTTIME_ALARM: u32 = 9;
+pub(crate) const CLOCK_BOOTTIME_ALARM: u32 = 9;
 /// See [`CLOCK_REALTIME_ALARM`].
 const CLOCK_TAI: u32 = 11;
 
@@ -291,7 +291,7 @@ pub(crate) fn read_pair(process: &Process, at: u64, width: TimeWidth) -> Result<
 
 /// A `timespec` as nanoseconds, if it is valid: `timespec64_valid`, which
 /// refuses a negative second and a nanosecond field outside 0..10^9.
-fn nanos_of(seconds: i64, nanos: i64) -> Result<u64, Errno> {
+pub(crate) fn nanos_of(seconds: i64, nanos: i64) -> Result<u64, Errno> {
     let seconds = u64::try_from(seconds).map_err(|_| Errno::EINVAL)?;
     let nanos = u64::try_from(nanos)
         .ok()
@@ -487,6 +487,7 @@ pub(crate) fn sys_clock_settime(
     // `CAP_SYS_TIME`, after the time is found settable, as Linux orders it.
     credentials::require_privilege(process)?;
     set_realtime(target);
+    crate::fs::timerfd::clock_was_set();
     Ok(0)
 }
 
@@ -522,6 +523,7 @@ pub(crate) fn sys_settimeofday(process: &Process, tv: u64, tz: u64) -> Result<us
     credentials::require_privilege(process)?;
     if let Some(target) = target {
         set_realtime(target);
+        crate::fs::timerfd::clock_was_set();
     }
     Ok(0)
 }

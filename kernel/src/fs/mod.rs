@@ -49,6 +49,8 @@ pub(crate) mod root_disk;
 pub(crate) mod socket;
 pub(crate) mod sockname;
 pub(crate) mod terminal;
+pub(crate) mod timerfd;
+pub(crate) mod timerfd_check;
 pub(crate) mod wake;
 
 use alloc::sync::Arc;

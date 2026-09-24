@@ -599,7 +599,7 @@ input iteration does not wait for them:
 | E2 | `eventfd2` with `EFD_CLOEXEC`, `EFD_NONBLOCK`, `EFD_SEMAPHORE`. Landed with `eventfd` (os-26, 9ed8808f) | yes | 2 |
 | E3 | `ioctl(FIONBIO)` (and `FIOCLEX`/`FIONCLEX`) on every descriptor. `FIONBIO` landed (os-26, 2dbeadbf); `FIOCLEX` and `FIONCLEX` landed after it | yes | 1 |
 | E4 | `card0`'s primary plane and properties: `GETPLANERESOURCES`, `GETPLANE`, `OBJ_GETPROPERTIES`, `GETPROPERTY`, from `probe/drm.c` extended. In progress (GUI session) | yes | 3 |
-| E5 | `timerfd_create`, `timerfd_settime`, `timerfd_gettime` (wanted, not required) | yes | 3 |
+| E5 | `timerfd_create`, `timerfd_settime`, `timerfd_gettime` (wanted, not required). Done 2026-09-24, with the `time64` forms on ARMv7-A | yes | 3 |
 |  | **Required for iteration 2 (E1–E4)** |  | **14** |
 
 Stage 17 was 55 points, of which iteration 1 took 37. The input iteration
@@ -702,7 +702,7 @@ Linux does.
    rule, and a small surface. §2.4 stays as the check that the subset would
    serve an `evdev`-crate consumer too.
 7. **os-26 holds E1** (`epoll`, with nesting), **E2** (`eventfd2`) **and E3**
-   (`FIONBIO`). E5 (`timerfd`) is wanted, not required, and not assigned.
+   (`FIONBIO`). E5 (`timerfd`), wanted and not required, is done (2026-09-24).
 8. **E4, `card0`'s planes and properties (3 points), belongs to the GUI
    session (os-e5)**, and `docs/DISPLAY.md` §2.3 describes it as iteration 2:
    `GETPLANERESOURCES`, `GETPLANE`, `OBJ_GETPROPERTIES` and `GETPROPERTY`,

@@ -4398,7 +4398,7 @@ Nested `epoll`, `FIONBIO` and the plane objects were not counted before
 `docs/INPUT.md` §2 read Smithay's event loop.
 
 **Follow-up surface, not part of stage 17's met exit:** `timerfd` (wanted,
-not required, deferred), atomic commit and per-open windows onto the card
+not required; done 2026-09-24, below), atomic commit and per-open windows onto the card
 VMO. E1–E3 (os-26) and E4 are done, so iteration 2's prerequisites are all
 in. E1–E3's paragraphs below record
 what they do not yet do as Linux does: `EPOLLRDHUP` and `EPOLLPRI` are never
@@ -4557,6 +4557,47 @@ test-display` requires its marker line to end in `plane <id> Primary` on
 x86-64 and AArch64. With the plane's `type` value set to `Overlay`, the line
 ends in `plane 4 Overlay` and the test fails with "the program found no
 primary plane on the card" on both.
+
+**Done — E5, `timerfd` (2026-09-24), for foot, the first step of
+`docs/CHROME.md` §6.** foot calls it about 45 times: cursor blink, flash,
+delayed render and key repeat. `timerfd_create`, `timerfd_settime` and
+`timerfd_gettime` on all three architectures, and `timerfd_settime64` and
+`timerfd_gettime64` on ARMv7-A, whose numbers were read from the vendored
+UAPI headers and checked again against ferrousli's copies of them. A timer
+counts on `CLOCK_MONOTONIC`, `CLOCK_BOOTTIME` or `CLOCK_REALTIME`, lives on
+`anon_inodefs` as `anon_inode:[timerfd]`, and takes `TFD_NONBLOCK` and
+`TFD_CLOEXEC`. A read takes the expiration count as eight bytes, every
+interval that passed included when a periodic timer is read late, and waits,
+interruptibly, or is `EAGAIN` while the count is zero. `timerfd_gettime`
+answers the time left and the interval, `timerfd_settime` the setting it
+replaced, and a zero value disarms and keeps the interval, as in
+`fs/timerfd.c`. Expirations are driven, not discovered: one kernel thread,
+`timerfds`, started on demand as `itimers` is, holds every timer weakly,
+sleeps until the earliest deadline, counts it and wakes that timer's queue,
+and exits when nothing is armed. As on Linux, an unread expiration stops the
+timer announcing more until the read that takes it, so a periodic timer
+nobody reads costs one wake, not one per interval. A set of the real-time
+clock moves real-time deadlines with it, and `TFD_TIMER_CANCEL_ON_SET` makes
+an absolute real-time timer readable at the set and its next read, or its
+next arming, `ECANCELED`. Not as Linux: `CLOCK_REALTIME_ALARM` and
+`CLOCK_BOOTTIME_ALARM` are `EPERM` without privilege, as there, but
+`EOPNOTSUPP` with it, where Linux would make a timer that cannot wake a
+suspended machine; that is `clock_nanosleep`'s answer here too.
+`TFD_IOC_SET_TICKS`, a checkpoint-restore request, is not answered. A
+periodic timer read `ECANCELED` goes on expiring, where Linux leaves one
+whose expiration was already pending stopped until the next setting. The boot check covers the flags and clocks, a one-shot
+timer read before and after its deadline, the overrun count of a periodic
+timer armed in the past, both `itimerspec` layouts, a clock set under three
+timers, and 22 refusals. A blocked read, a `poll` and an `epoll_wait`, each
+waiting before its timer is armed, must be ended by the thread's wake, as
+the queue's count of wake-ended waits shows, and come back within a quarter
+of the one-second recheck. The line reads `timerfd  8 expirations read back,
+a read, poll and epoll_wait each woken at the deadline, the latest 3483 us
+after it; 22 calls refused as Linux refuses them; 0 frames leaked` on x86-64;
+AArch64 said 371 us and ARMv7-A 336 us. With the thread's wake removed, the
+boot panics with "a waiter on a timerfd was ended by its recheck, not by the
+deadline's wake". Still to do: ferrousli's wrappers (`docs/BACKLOG.md`), and
+`signalfd`.
 
 ---
 

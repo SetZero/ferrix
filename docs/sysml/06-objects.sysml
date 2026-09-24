@@ -176,9 +176,9 @@ package FerrixObjects {
              * is the only place in the kernel that knows which of the three
              * number tables this build uses. Memory, files and paths,
              * processes and threads, futex, signals, time, identity and
-             * credentials, terminals, sockets, epoll and eventfd; enough for
-             * somebody else's busybox (cargo xtask test-shell), a Rust
-             * program's threads (test-threads) and rustc compiling hello.rs
+             * credentials, terminals, sockets, epoll, eventfd and timerfd;
+             * enough for somebody else's busybox (cargo xtask test-shell), a
+             * Rust program's threads (test-threads) and rustc compiling hello.rs
              * (test-rustc). The boot test puts every number in 0..=600
              * through dispatch. Still ENOSYS, each named at its arm: swap,
              * modules, System V IPC, acct, vhangup and rseq. */

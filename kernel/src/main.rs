@@ -379,6 +379,24 @@ fn check_eventfd() {
     );
 }
 
+/// Stage 8's timerfd check: flags and clocks, expirations counted, the
+/// settings in both layouts, a clock set, and waiters woken at the deadline.
+fn check_timerfd() {
+    let checked = match fs::timerfd_check::run() {
+        Ok(checked) => checked,
+        Err(problem) => fatal!(
+            catalog::STAGE8_TIMERFD,
+            "stage 8 timerfd self-check failed: {problem}"
+        ),
+    };
+    println!(
+        "  timerfd  {} expirations read back, a read, poll and epoll_wait each woken at the \
+         deadline, the latest {} us after it; {} calls refused as Linux refuses them; {} frames \
+         leaked",
+        checked.expirations, checked.late_micros, checked.refusals, checked.leaked,
+    );
+}
+
 /// Stage 13's cgroupfs, landing G2: the job tree mounted as cgroup2, driven
 /// through the VFS as a program would drive it.
 fn check_cgroupfs() {
@@ -467,6 +485,7 @@ fn check_filesystems(view: &BootView<'_>) {
     check_memfd();
     check_epoll();
     check_eventfd();
+    check_timerfd();
     check_cgroupfs();
 
     let pseudo = match fs::procfs::check::run() {

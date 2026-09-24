@@ -19,7 +19,8 @@ would stand on:
 | `/dev/shm`, and `clone` refusing the namespaces it cannot give | **done** 2026-09-19, on `main` 2026-09-23 (§2.4, §3) |
 | The compositor a window would appear in, drawing on the GPU | **done**, stage 19's GPU path (§1, §5) |
 | `execve` of a binary past 64 MiB, mapped from the file on demand | not started (§2.2), 13 points |
-| `madvise`, a vDSO, `timerfd` and `signalfd` | not started (§3), ≈ 13 points |
+| `timerfd` | **done** 2026-09-24, on all three architectures, the first kernel row of §6's foot (§3) |
+| `madvise`, a vDSO and `signalfd` | not started (§3), ≈ 10 points |
 | libwayland-client, libxkbcommon, fontconfig with freetype and expat, a font | not started (§3), 13 points; sources pinned |
 | Chromium built against ferrousli, with Alpine's musl patches rebased | not started (§5), 40+ points |
 | What running it finds missing | unsized, ≥ 40 (§5) |
@@ -180,7 +181,24 @@ that a program which asks for isolation now finds out it cannot have it.
   Roughly 200 lines with its two checks rather than one. The lesson is the
   usual one: a cost this document calls trivial is the kind most worth
   checking before it is quoted.
-* **No `timerfd` and no `signalfd`.**
+* ~~**No `timerfd` and no `signalfd`.**~~ **`timerfd` done, 2026-09-24;
+  `signalfd` remains.** foot, §6's first client, calls `timerfd_create`,
+  `timerfd_settime` and `timerfd_gettime` about 45 times: its cursor blink,
+  its flash, a delayed render and key repeat. All three are answered on all
+  three architectures, with the `time64` forms on ARMv7-A, on
+  `CLOCK_MONOTONIC`, `CLOCK_REALTIME` and `CLOCK_BOOTTIME`, with
+  `TFD_TIMER_ABSTIME` and `TFD_TIMER_CANCEL_ON_SET`. The thing worth
+  checking was not the counting but the waking: a `poll` or `epoll_wait` on
+  a timerfd sleeps up to a second between looks of its own, so a timer that
+  became readable only when somebody looked would blink a cursor a second
+  late. A kernel thread, `timerfds`, sleeps until the earliest deadline and
+  wakes the timer's waiters there. The boot check arms a timer only once a
+  blocked read, a `poll` and an `epoll_wait` are each waiting on it, and
+  requires the thread's wake to end each wait within a quarter of that
+  second. In the seven boots made for it on nazuna's QEMU -- x86-64,
+  AArch64, and ARMv7-A at four processors and at two -- no waiter came back
+  more than 3.5 ms after its deadline, and most within half a millisecond.
+  What is not as Linux has it is in `docs/ROADMAP.md`, stage 17.
 * **No AVX.** `kernel/src/arch/x86_64/switch.rs` saves a 512-byte `FXSAVE`
   area -- x87 and SSE -- and `CR4.OSXSAVE` is never set, so `CPUID` reports no
   OS support and V8 and Skia fall back to SSE2. That is correct rather than
@@ -277,7 +295,7 @@ separately for that reason.
 | ~~**Already planned:** stage 12, btrfs write~~ *landed 2026-09-21* | ~~≈ 60~~ |
 | **Already planned, only if the sandbox is wanted:** stage 13 | ≈ 60 |
 | Demand-paged file-backed `execve`, and binaries past 64 MiB | 13 |
-| `madvise`, a vDSO, `timerfd` and `signalfd` (`/dev/shm` is done) | ≈ 13 |
+| `madvise`, a vDSO and `signalfd` (`/dev/shm` is done 2026-09-19, `timerfd` 2026-09-24) | ≈ 10 |
 | libwayland-client, libxkbcommon, fontconfig with freetype and expat, a font | 13 |
 | The Chromium cross-build against ferrousli, with Alpine's musl patches rebased | 40+, mostly unknown |
 | What running it finds missing | unsized, ≥ 40 |

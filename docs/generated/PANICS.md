@@ -58,6 +58,7 @@ Causes are listed most likely first.
 | [FX-0880](#fx-0880) | memfd_create or its seals failed their self-check |
 | [FX-0881](#fx-0881) | epoll failed its self-check |
 | [FX-0882](#fx-0882) | eventfd failed its self-check |
+| [FX-0883](#fx-0883) | timerfd failed its self-check |
 | [FX-0901](#fx-0901) | the native ABI's objects failed their self-check |
 | [FX-1001](#fx-1001) | PCI enumeration failed its self-check |
 | [FX-1002](#fx-1002) | a device node handed out memory or an interrupt it does not have |
@@ -1108,6 +1109,40 @@ behind.
 See: kernel/src/fs/eventfd_check.rs; kernel/src/fs/eventfd.rs;
 kernel/src/fs/wake.rs; kernel/src/sched/wait.rs; kernel/src/syscall/eventfd.rs;
 kernel/src/fs/anon.rs.
+
+<a id="fx-0883"></a>
+
+## FX-0883 — timerfd failed its self-check
+
+`fs::timerfd_check::run` builds a process and makes timerfds by number.
+timerfd_create must take TFD_NONBLOCK and TFD_CLOEXEC and refuse other flags and
+clocks; a disarmed timer reads EAGAIN. A one-shot timer must not be readable
+before its deadline and must read 1, once, after it. A periodic timer armed at
+an absolute time in the past must be readable at once and read every interval
+that passed. timerfd_gettime must report the time left and the interval in both
+itimerspec layouts, timerfd_settime the setting it replaced, and a zero value
+must disarm. A set of CLOCK_REALTIME must fire an absolute real-time timer it
+carried past, make one armed with TFD_TIMER_CANCEL_ON_SET read ECANCELED once,
+and leave a monotonic one alone. A blocked read, a poll and an epoll_wait, each
+waiting before the timer is armed, must be ended by the timerfds thread's wake
+at the deadline and come back within a quarter of the one-second recheck. The
+run is done twice and must leave no frame behind, the thread's stack included.
+
+1. The `timerfds` thread did not start when a timer was armed, sleeps past the
+   earliest deadline, or counts an expiration without waking the timer's queue,
+   so a waiter is ended by its recheck a second late.
+2. `State::count` miscounts the intervals that passed, or moves the deadline to
+   the wrong side of now.
+3. `TimerFd::set` keeps the count of the setting it replaced, or keeps no
+   interval when disarming.
+4. `clock_was_set` is not called from `clock_settime` or `settimeofday`, or does
+   not wake the thread, so a real-time deadline does not move with the clock.
+5. The thread does not exit once nothing is armed, or a timer closed does not
+   tell it, so its stack is counted against the frame window.
+
+See: kernel/src/fs/timerfd_check.rs; kernel/src/fs/timerfd.rs;
+kernel/src/syscall/timerfd.rs; kernel/src/syscall/time.rs;
+kernel/src/fs/wake.rs; kernel/src/sched/wait.rs.
 
 <a id="fx-0901"></a>
 

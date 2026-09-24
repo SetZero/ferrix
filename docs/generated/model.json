@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "digest": "caab8d98807091bdd9c227b435e900dbaa436ae1db1fa19802d73ea01e168140",
+  "digest": "edfe65ee8a1b2c97943a68c334afb97efa26d62bbee1a2a17ee59d69d2a431ea",
   "files": [
     {
       "path": "docs/sysml/00-lifecycle.sysml",
@@ -13483,7 +13483,7 @@
           "definition": true,
           "maturity": "implemented",
           "stage": 7,
-          "doc": "The entry path on every architecture, the dispatch table, and the ~150-call surface rustc needs. libs/linux-abi holds the numbers for x86-64, AArch64 and the ARM EABI table, the errnos, and the repr(C) layouts (statx, dirent64, sigaction, ...).\n\nkernel/src/syscall, reached through arch::decode_syscall, which is the only place in the kernel that knows which of the three number tables this build uses. Memory, files and paths, processes and threads, futex, signals, time, identity and credentials, terminals, sockets, epoll and eventfd; enough for somebody else's busybox (cargo xtask test-shell), a Rust program's threads (test-threads) and rustc compiling hello.rs (test-rustc). The boot test puts every number in 0..=600 through dispatch. Still ENOSYS, each named at its arm: swap, modules, System V IPC, acct, vhangup and rseq.",
+          "doc": "The entry path on every architecture, the dispatch table, and the ~150-call surface rustc needs. libs/linux-abi holds the numbers for x86-64, AArch64 and the ARM EABI table, the errnos, and the repr(C) layouts (statx, dirent64, sigaction, ...).\n\nkernel/src/syscall, reached through arch::decode_syscall, which is the only place in the kernel that knows which of the three number tables this build uses. Memory, files and paths, processes and threads, futex, signals, time, identity and credentials, terminals, sockets, epoll, eventfd and timerfd; enough for somebody else's busybox (cargo xtask test-shell), a Rust program's threads (test-threads) and rustc compiling hello.rs (test-rustc). The boot test puts every number in 0..=600 through dispatch. Still ENOSYS, each named at its arm: swap, modules, System V IPC, acct, vhangup and rseq.",
           "source": {
             "file": "docs/sysml/06-objects.sysml",
             "line": 168

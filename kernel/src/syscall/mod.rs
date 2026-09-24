@@ -71,6 +71,7 @@ pub(crate) mod stat;
 pub(crate) mod system;
 pub(crate) mod thread;
 pub(crate) mod time;
+pub(crate) mod timerfd;
 pub(crate) mod tty;
 pub(crate) mod uaccess;
 pub(crate) mod unmap_check;
@@ -441,6 +442,29 @@ fn descriptors(call: Syscall, a: &[u64; 6], process: &Process) -> Option<Result<
         Syscall::MemfdCreate => memfd::sys_memfd_create(process, a[0], truncate(a[1])),
         Syscall::Eventfd2 => eventfd::sys_eventfd2(process, truncate(a[0]), truncate(a[1])),
         Syscall::Eventfd => eventfd::sys_eventfd(process, truncate(a[0])),
+        Syscall::TimerfdCreate => {
+            timerfd::sys_timerfd_create(process, attributes::int(a[0]), truncate(a[1]))
+        }
+        Syscall::TimerfdSettime => timerfd::sys_timerfd_settime(
+            process,
+            fd,
+            truncate(a[1]),
+            [a[2], a[3]],
+            time::TimeWidth::Native,
+        ),
+        Syscall::TimerfdSettime64 => timerfd::sys_timerfd_settime(
+            process,
+            fd,
+            truncate(a[1]),
+            [a[2], a[3]],
+            time::TimeWidth::Wide,
+        ),
+        Syscall::TimerfdGettime => {
+            timerfd::sys_timerfd_gettime(process, fd, a[1], time::TimeWidth::Native)
+        }
+        Syscall::TimerfdGettime64 => {
+            timerfd::sys_timerfd_gettime(process, fd, a[1], time::TimeWidth::Wide)
+        }
         Syscall::EpollCreate1 => epoll::sys_epoll_create1(process, truncate(a[0])),
         Syscall::EpollCreate => epoll::sys_epoll_create(process, fd::arg(a[0])),
         Syscall::EpollCtl => epoll::sys_epoll_ctl(process, fd, truncate(a[1]), fd::arg(a[2]), a[3]),
