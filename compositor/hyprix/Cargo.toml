@@ -36,6 +36,8 @@ compositor-socket = { path = "../socket" }
 compositor-wire = { path = "../wire" }
 # The evdev numbers the devices report.
 ferrix-linux-abi = { path = "../../libs/linux-abi" }
+# The bitmap face `debug:overlay` writes its numbers in.
+ferrix-fbtext = { path = "../../libs/fbtext" }
 # Declarations only: `mmap` of a client's pool, and `pause`.
 libc = "0.2.189"
 

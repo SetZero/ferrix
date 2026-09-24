@@ -149,7 +149,11 @@ names the part of Hyprland or hyprlang it follows.
   client's shared memory, and the screen. The screen is `compositor/drm`'s
   card, with two dumb buffers drawn into in turn and shown with a page flip;
   `--headless WxH` draws into memory instead, and `--dump <dir>` writes each
-  frame as a PPM. `cargo xtask test-compositor` boots it as init on Ferrix
+  frame as a PPM. `debug:overlay = 1`, in the configuration or by `hyprctl
+  keyword`, draws Hyprland's frames-per-second counter over the first
+  screen's top left corner, a port of its `src/debug/Overlay.cpp` written in
+  Spleen, `libs/fbtext`'s face (`hyprix/src/overlay.rs`).
+  `cargo xtask test-compositor` boots it as init on Ferrix
   with two `pattern` clients in the initramfs, and requires QEMU's screendump
   to be the same picture the host test makes, pixel for pixel.
 * **`pattern`** is a Wayland client in one file, over `wire` and `socket`

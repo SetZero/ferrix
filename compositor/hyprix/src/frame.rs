@@ -1,6 +1,7 @@
 //! Turning what the clients have committed into one frame.
 
 use std::collections::BTreeMap;
+use std::time::{Duration, Instant};
 
 use compositor_layout::Rect;
 use compositor_layout::{MonitorLayout, WindowId};
@@ -63,6 +64,11 @@ pub struct Output<'a> {
     /// the one that holds the frame before last, so it is owed that frame's
     /// damage as well as this one's. `crate::damage` says the rest.
     pub present: Damage,
+    /// `debug:overlay`'s counter, on the one screen it is drawn on.
+    pub overlay: Option<&'a crate::overlay::Picture>,
+    /// How long drawing the counter took, which the drawing fills in: what
+    /// the counter's "Rendertime (No Overlay)" takes away.
+    pub overlay_took: Duration,
 }
 
 /// A frame drawn on a GPU: the canvas, and what is kept behind the windows.
@@ -325,6 +331,7 @@ struct Scene<'a> {
     styles: &'a BTreeMap<WindowId, compositor_render::WindowStyle>,
     cursor: Option<Cursor>,
     drag_icon: Option<Placed>,
+    overlay: Option<&'a crate::overlay::Picture>,
 }
 
 /// The two above, which differ only in what they are given to draw.
@@ -348,19 +355,25 @@ fn draw_windows(
         styles: target.styles,
         cursor: target.cursor,
         drag_icon: target.drag_icon,
+        overlay: target.overlay,
     };
     // The same frame on whichever painter there is: what differs is where
     // its pixels are when it is done, which is `shown`'s business.
-    match target.gpu.as_deref_mut() {
+    target.overlay_took = match target.gpu.as_deref_mut() {
         Some(gpu) => composed(&mut gpu.canvas, &mut gpu.backdrop, &scene),
         None => composed(&mut *target.canvas, &mut *target.backdrop, &scene),
-    }
+    };
     shown(target)
 }
 
 /// Draw `scene` with `painter`: the windows and the layer surfaces, then
-/// what a drag carries, then the pointer.
-fn composed<P: Painter>(painter: &mut P, backdrop: &mut P::Backdrop, scene: &Scene<'_>) {
+/// what a drag carries, then `debug:overlay`'s counter, then the pointer.
+/// How long the counter took.
+fn composed<P: Painter>(
+    painter: &mut P,
+    backdrop: &mut P::Backdrop,
+    scene: &Scene<'_>,
+) -> Duration {
     let (origin, scale, clients, damage) = (scene.origin, scene.scale, scene.clients, scene.damage);
     // The layout, the decorations and the layer surfaces are all in logical
     // pixels; a scaled monitor draws each of them as `scale` buffer pixels.
@@ -426,6 +439,16 @@ fn composed<P: Painter>(painter: &mut P, backdrop: &mut P::Backdrop, scene: &Sce
         painter.composite(&surface, at, damage);
     }
 
+    // The counter over everything the frame shows, as Hyprland draws it
+    // after the windows, the layers and its own notifications. Timed, so
+    // that the counter can say what a frame costs without it.
+    let mut took = Duration::ZERO;
+    if let Some(picture) = scene.overlay {
+        let began = Instant::now();
+        picture.paint(painter, style.blur.as_ref(), damage);
+        took = began.elapsed();
+    }
+
     // The pointer last, over everything: it is not a window, not a layer
     // surface and not part of the layout, and a compositor that drew it
     // under a menu would have a pointer nobody can follow.
@@ -452,6 +475,7 @@ fn composed<P: Painter>(painter: &mut P, backdrop: &mut P::Backdrop, scene: &Sce
             painter.composite(&surface, at, damage);
         }
     }
+    took
 }
 
 /// Put the frame that was composed on the screen.

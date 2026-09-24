@@ -352,6 +352,7 @@ dependencies = [
  "compositor-virgl",
  "compositor-wire",
  "compositor-xkb",
+ "ferrix-fbtext",
  "ferrix-linux-abi",
  "libc",
 ]

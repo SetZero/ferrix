@@ -164,6 +164,11 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
     let mut config = read_config(options)?;
     let mut settings = Settings::from_config(&config);
     let mut style = Style::from_config(&config);
+    // `debug:overlay`'s samples, kept whether or not it is up so that it
+    // shows numbers the moment it is turned on; and whether the last frame
+    // drew it, so that turning it on or off is owed a frame.
+    let mut overlay = crate::overlay::Overlay::default();
+    let mut overlay_was = false;
 
     // The screens: memory when `--headless` asked for one, and every
     // connected connector of every card otherwise. A card's size is the
@@ -1168,11 +1173,26 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
             report,
         );
         owed |= changed;
+        // `debug:overlay`, read every pass so that `hyprctl keyword` turns
+        // it on and off at once. While it is up its numbers move every
+        // 200 ms, and a frame is owed that often, as Hyprland's
+        // `COverlay::draw` schedules one.
+        let overlay_on = config.int("debug:overlay").unwrap_or(0) == 1;
+        if overlay_on != overlay_was || (overlay_on && overlay.ask(Instant::now())) {
+            owed = true;
+        }
+        overlay_was = overlay_on;
         if (owed || drawn == 0 || animating || settling)
             && pace.due(Instant::now(), refresh_ns(&screens))
         {
             owed = false;
             settling = animating;
+            // A pass that moves the animations is one of their ticks:
+            // Hyprland keeps how long it was since the last.
+            if animating {
+                overlay.tick(Instant::now());
+            }
+            overlay.screens(screens.iter().map(|screen| screen.name.as_str()));
             let outputs = state.layout();
             #[expect(
                 clippy::cast_possible_truncation,
@@ -1221,6 +1241,17 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                     screen.gpu = None;
                     screen.watch = crate::damage::Watch::default();
                     screen.plane.forget();
+                }
+                // When this screen's frame began, which is what the
+                // counter's frame times and render times are taken from.
+                let screen_began = Instant::now();
+                if overlay_on {
+                    overlay.frame(
+                        &screen.name,
+                        screen.output().refresh,
+                        which == 0,
+                        screen_began,
+                    );
                 }
                 // Where each window *is*, rather than where the tiling put
                 // it.
@@ -1306,7 +1337,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                 } else {
                     compositor_render::scaled(output, origin, scale)
                 };
-                let blurred = blurs_behind(
+                let mut blurred = blurs_behind(
                     &scaled,
                     &layout,
                     &over,
@@ -1315,6 +1346,21 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                     &drawn_with,
                     (origin, scale),
                 );
+                // The counter, on the first screen as Hyprland draws it,
+                // over everything but a screen that is off. Its boxes blur
+                // what is behind them as it stands, which the damage has to
+                // know to redraw them whole.
+                let picture = (overlay_on && which == 0 && !dark)
+                    .then(|| overlay.picture(screen_began, scale));
+                if scaled.blur.is_some()
+                    && let Some(picture) = picture.as_ref()
+                {
+                    blurred.extend(
+                        picture
+                            .blurred()
+                            .map(|rect| crate::damage::Blurred { rect, live: true }),
+                    );
+                }
                 // Everything this frame is drawn from but the clients' own
                 // pixels, which is what the damage is worked out from by
                 // comparing it with the frame before's.
@@ -1339,6 +1385,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                     drag_icon: drag_icon.and_then(|icon| {
                         Some((icon, crate::frame::drag_rect(&slots, &icon, origin, scale)?))
                     }),
+                    overlay: picture.as_ref().map(|picture| picture.stamp),
                     plane: screen
                         .plane
                         .on
@@ -1365,6 +1412,8 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                     gamma,
                     cursor,
                     present: frame.screen,
+                    overlay: picture.as_ref(),
+                    overlay_took: Duration::ZERO,
                 };
                 let drew = if dark {
                     crate::frame::draw_dark(&mut target, &frame.canvas)
@@ -1383,6 +1432,10 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                 } else {
                     crate::frame::draw(&mut target, output, &slots, &sources, &over, &frame.canvas)
                 };
+                let overlay_took = target.overlay_took;
+                if overlay_on {
+                    overlay.rendered(&screen.name, screen_began.elapsed(), overlay_took);
+                }
                 match drew {
                     Ok(()) if screen.backend.lost() => {
                         report(&format!(
@@ -1512,7 +1565,10 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
             })
             .flatten();
         let deadline_wait = deadline.map(|limit| limit.saturating_sub(started.elapsed()));
-        let timeout = [frame_wait, idle_wait, deadline_wait]
+        // The counter's next 200 ms, so that its numbers move over a
+        // desktop where nothing else does.
+        let overlay_wait = overlay_was.then(|| overlay.wait(Instant::now()));
+        let timeout = [frame_wait, idle_wait, deadline_wait, overlay_wait]
             .into_iter()
             .flatten()
             .min();

@@ -32,6 +32,7 @@ pub mod dragging;
 pub mod frame;
 pub mod keymap;
 pub mod options;
+pub mod overlay;
 pub(crate) mod pace;
 pub mod plane;
 pub mod plugins;

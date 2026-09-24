@@ -312,6 +312,9 @@ pub(crate) struct Plan {
     /// clients' buffers are, because whether a surface can be seen through
     /// is half of the renderer's condition for blurring behind it.
     pub(crate) blurred: Vec<Blurred>,
+    /// Where `debug:overlay`'s counter is and which rewrite of its numbers
+    /// it shows, on the screen that draws it.
+    pub(crate) overlay: Option<crate::overlay::Stamp>,
 }
 
 /// One surface a frame draws a blur behind.
@@ -449,8 +452,20 @@ impl Plan {
         self.windows_since(old, &mut region);
         self.layers_since(old, &mut region, behind);
         self.pointer_since(old, &mut region);
+        self.overlay_since(old, &mut region);
         self.blurs_since(old, &mut region);
         region
+    }
+
+    /// The counter where it was and where it is, when it moved, grew or
+    /// was rewritten: Hyprland damages the old box and the new one the
+    /// same way (`COverlay::draw`).
+    fn overlay_since(&self, old: &Self, region: &mut Damage) {
+        if old.overlay != self.overlay {
+            for stamp in [old.overlay, self.overlay].into_iter().flatten() {
+                region.add(stamp.rect);
+            }
+        }
     }
 
     /// A surface whose blur is another kind than it was, or that has one
