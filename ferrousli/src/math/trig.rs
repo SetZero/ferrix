@@ -162,6 +162,61 @@ pub extern "C" fn cos(x: f64) -> f64 {
     }
 }
 
+/// The sine and the cosine of `x`, in radians, through `sin` and `cos`,
+/// with `x` reduced once. From musl's `sincos.c`.
+///
+/// A GNU extension, and one no program has to ask for by name: GCC turns a
+/// `sin` and a `cos` of the same argument into a call to this.
+///
+/// # Safety
+///
+/// `sin` and `cos` must be valid for writes of one `double` each.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn sincos(x: f64, sin: *mut f64, cos: *mut f64) {
+    let (s, c) = sin_cos(x);
+    // SAFETY: the caller's.
+    unsafe {
+        sin.write(s);
+        cos.write(c);
+    }
+}
+
+/// `sincos`'s arithmetic: `(sin x, cos x)`.
+pub(crate) fn sin_cos(x: f64) -> (f64, f64) {
+    let ix = high_word(x) & 0x7fff_ffff;
+
+    // |x| ~<= π/4.
+    if ix <= 0x3fe9_21fb {
+        if ix < 0x3e46_a09e {
+            // |x| < 2^-27·√2: raise inexact if x is not zero, and underflow if
+            // it is subnormal.
+            if ix < 0x0010_0000 {
+                force_eval(x / hexf64!("0x1p120"));
+            } else {
+                force_eval(x + hexf64!("0x1p120"));
+            }
+            return (x, 1.0);
+        }
+        return (kernel_sin(x, 0.0, false), kernel_cos(x, 0.0));
+    }
+
+    // sincos(Inf or NaN) is NaN, NaN.
+    if ix >= 0x7ff0_0000 {
+        let nan = barrier(x) - x;
+        return (nan, nan);
+    }
+
+    let (n, y0, y1) = rem_pio2(x);
+    let s = kernel_sin(y0, y1, true);
+    let c = kernel_cos(y0, y1);
+    match n & 3 {
+        0 => (s, c),
+        1 => (c, -s),
+        2 => (-s, -c),
+        _ => (-c, s),
+    }
+}
+
 /// musl's `__sin`: sin(x + y) for |x| ~<= π/4, where `y` is the tail of `x`
 /// and is read only if `tail` is set. The caller returns sin(-0) itself.
 pub(crate) fn kernel_sin(x: f64, y: f64, tail: bool) -> f64 {
@@ -650,6 +705,41 @@ mod tests {
                 "sin({x:e}) in mode {mode:#x}"
             );
             assert_eq!(raised, FE_INEXACT, "sin({x:e}) in mode {mode:#x}");
+        }
+    }
+
+    /// musl's `sincos` runs `sin`'s and `cos`'s own kernels on one reduction,
+    /// so each half is the other function's answer to the bit.
+    #[test]
+    fn sincos_is_sin_and_cos() {
+        let mut inputs = vec![
+            0.0,
+            -0.0,
+            hexf64!("0x1p-1074"),
+            hexf64!("0x1p-30"),
+            0.5,
+            1.0,
+            -2.5,
+            hexf64!("0x1.921fb54442d18p0"),
+            1e22,
+            -1e300,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::NAN,
+        ];
+        // Every step of 0.37 radians across a few turns either way, which
+        // lands in each quadrant.
+        inputs.extend((-60..60).map(|step| f64::from(step) * 0.37));
+        for x in inputs {
+            let (mut s, mut c) = (0.0, 0.0);
+            // SAFETY: both point at a local.
+            unsafe { sincos(x, &raw mut s, &raw mut c) };
+            if x.is_nan() || x.is_infinite() {
+                assert!(s.is_nan() && c.is_nan(), "sincos({x:e})");
+                continue;
+            }
+            assert_eq!(s.to_bits(), sin(x).to_bits(), "sin half of sincos({x:e})");
+            assert_eq!(c.to_bits(), cos(x).to_bits(), "cos half of sincos({x:e})");
         }
     }
 
