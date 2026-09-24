@@ -142,7 +142,7 @@ sizes them.
 | Stage 22, Steam: the parts with a first guess (bubblewrap's rest 13, sound 30, Venus 8; glibc's names are dynamic linking's 13 and XWayland stage 19's, both counted above) | 51 | not started |
 | Stage 22, Steam: the 32-bit x86 ABI and what the runtime and Proton find missing | unsized, ≈ 100 as a guess | not started |
 | Stage 14, real-time domains | *month* ≈ 40 | not started |
-| Stage 15, a real userland | *week* ≈ 20, of which job control is spent; most of the rest landed as zinc and uutils, and what is left is an init, sized at 67 points in `docs/INIT.md` §13, of which L3's 3 and L1's 5 are spent, and 18 later | partially complete: init and gettys remain, designed; the kernel's `ferrix.init=` and a committing `reboot(2)` landed 2026-09-24 (L3), and so did the unit files in `libs/svc` (L1) and the stage 13 cgroups its first boot needs (G1 to G4) |
+| Stage 15, a real userland | *week* ≈ 20, of which job control is spent; most of the rest landed as zinc and uutils, and what is left is an init, sized at 67 points in `docs/INIT.md` §13, of which L3's 3, L1's 5 and L2's 8 are spent, and 18 later | partially complete: init and gettys remain, designed; the kernel's `ferrix.init=` and a committing `reboot(2)` landed 2026-09-24 (L3), and so did `libs/svc`, the manager's pure core (L1, L2) and the stage 13 cgroups its first boot needs (G1 to G4) |
 | ~~Stage 16, `rustc`~~ *exit met 2026-09-22* | ~~*the goal* ≈ 40~~ 8 spent | done |
 | Stage 20, self-hosting | *longer*, unsized | in progress: the x86-64 image builds on Ferrix and boots (2026-09-23) |
 | Stage 21, bare metal and a GPU of Ferrix's own | over 100, unsized | planned when bare-metal work is requested |
@@ -4272,6 +4272,23 @@ does not know is a warning, so a systemd unit file loads. 52 host tests,
 Miri, and the `svc_unit` fuzz target. `docs/INIT.md` §16 records what
 the building changed in the design.
 
+**Done -- L2, the manager (2026-09-24, 8 points).** The rest of
+`libs/svc`: `Manager::step(event, now) -> actions` and `deadline()`, as
+`docs/INIT.md` §3 has them. Requests become transactions of operations
+along systemd's dependencies, with its conflict rules, a `Wants=` cycle
+broken with a warning and a `Requires=` cycle refused; what is not ordered
+starts in the same step. It builds the slice tree with its limits, runs
+services through systemd's states for `simple`, `exec`, `oneshot` and
+`forking`, stops them by `KillMode=` with `cgroup.kill` after
+`TimeoutStopSec=`, counts a service stopped only when its cgroup is
+empty, restarts by `Restart=` with a doubling backoff and the start limit,
+boots `default.target` with `rescue.target` as the fallback, and shuts
+down in reverse order before killing every cgroup left. 92 host tests
+replay event scripts; Miri runs them, and the `svc_manager` fuzz target
+drives the manager with events in any order. The core never holds a
+handle: every action names a `UnitId`, a `GroupPath`, a `Token` or a
+`ClientId`, for the init program's backends to map (`docs/INIT.md` §16).
+
 **Still to do:** a real init. The kernel starts the shell itself as pid 1
 (`kernel/src/init.rs`) in every image but one that names another, so nothing
 in user space mounts `/proc` and `/dev`, reaps what a session orphans, gives a
@@ -4290,15 +4307,16 @@ native services between them.
 
 Init waited on stage 13's cgroups, which the customer put first; what its
 first boot needs of them (C1 to C5 and C7) landed on 2026-09-24. Its landings
-come to 67 points up to hyprix no longer being pid 1, 8 of them spent on L3
-and L1: six kernel items of 11 points besides stage 13, two of them (K0, K7)
-built, and `cargo xtask test-init` growing a stage per landing. Its first
-two landings, the unit parser and the dependency engine, are host-only and
-can be built while stage 13 is.
+come to 67 points up to hyprix no longer being pid 1, 16 of them spent on
+L3, L1 and L2: six kernel items of 11 points besides stage 13, two of them
+(K0, K7) built, and `cargo xtask test-init` growing a stage per landing. Its
+first two landings, the unit parser and the dependency engine, were
+host-only and were built while stage 13 was.
 
-**Where it stands.** The next landing is L2, the dependency engine and
-`Manager::step`, host-only like L1 and being built on `init/svc`. The
-first boot, L4, needs L2; stage 13's `CLONE_INTO_CGROUP` (G4) landed on
+**Where it stands.** The pure core is done. The next landing is L4, the
+init program: pid 1, its event loop and the Linux backends over
+`libs/svc`, `getty` and the generator, gated by `cargo xtask test-init`.
+What it needs of stage 13, `CLONE_INTO_CGROUP` (G4) included, landed on
 2026-09-24.
 
 `test-jobs` is x86-64 only, because `sleep` is uutils' and uutils is built
@@ -7023,23 +7041,24 @@ at three in the morning against a machine that reboots on a mistake.
 | `libs/netring` | Networking — the net ring, `docs/NET-RING.md` in code: the memory the kernel shares with a ring-3 network driver. The block ring's discipline with its allocator removed, because a frame is bounded by the MTU: the data VMO is `entries` slots of a fixed size and a submission names its slot, which takes away the class of bug where a region is reused before its completion — on an untranslated domain, a device writing into somebody else's packet. Private indices, checked reads of the peer's, the want-bell handshake, and every entry checked when it is read; corruption is terminal for the side that sees it. | 32 |
 | `libs/netlink` | Networking — reached already, by the `AF_NETLINK` sockets above: walking a buffer of netlink messages and the attributes after each fixed header, and building replies into a caller's buffer with every length and pad computed rather than taken. The walks refuse a length below the header they introduce, one past the end, and the zero that walks the same message for ever, and every step forward is at least a header wide, so a walk over any bytes ends. Its `netlink_walk` fuzz target requires that, requires what a walk borrows to lie inside the input, and requires anything the builder writes to walk back to what was built. | 48 |
 | `libs/netserve` | Networking — a ring-3 network driver's serve loop, between the net ring and a virtio-net device. The two directions are not symmetrical and that is the design: sending is a copy and a submission, while a frame arrives into a buffer the *device* chose and takes the oldest receive slot the kernel posted, or is dropped if none is waiting. A submission is never taken that cannot be answered, a device buffer goes back the moment its bytes are copied, and frames the device refuses wait in the order the kernel asked for them — a queue and not a single frame, because the ring's head advances for a whole batch and keeping one would drop the rest. | 12 |
-| `libs/svc` | 15 — the service manager's pure core (`docs/INIT.md` §3): unit files in systemd's syntax, read as `conf-parser.c` reads them, the three layered unit directories as a source the backend fills, drop-ins, masking, aliases, templates and specifiers, and every version-1 kind's keys. `no_std`, so that `devmgr` can share its restart policy; it names no system call and holds no handle. Has its fuzz target (`svc_unit`) and its Miri step. | 52 |
+| `libs/svc` | 15 — the service manager's pure core (`docs/INIT.md` §3): unit files in systemd's syntax, read as `conf-parser.c` reads them, the three layered unit directories as a source the backend fills, drop-ins, masking, aliases, templates and specifiers, and every version-1 kind's keys; then the manager, `Manager::step` and `deadline`: the dependency graph, transactions and operations, the slice tree, each kind's state machine, restart policy, boot and shutdown. `no_std`, so that `devmgr` can share its restart policy; it names no system call and holds no handle. Has its fuzz targets (`svc_unit`, `svc_manager`) and its Miri step. | 92 |
 
 With the five crates the boot path was built on — `bootinfo`, `elf` (the
 loader's), `frame`, `heap`, `paging` — that was **1101 host unit tests** when
 it was first counted, plus the doc-tests and the 41 of `xtask` itself. On
 2026-09-23 the same crates have 1512, and `xtask` 242. On 2026-09-24 every
-crate under `libs/` together has 2135, 52 of them `libs/svc`'s.
+crate under `libs/` together has 2178, 92 of them `libs/svc`'s.
 
 **The gap this opens, stated rather than hidden.** The continuous rule below
 asks for a fuzz target *and* a Miri run per crate, and `fuzz/` has
-thirty-one: `elf_parse`, `frame_alloc`, `ustack_build`, `handle_table`,
+thirty-two: `elf_parse`, `frame_alloc`, `ustack_build`, `handle_table`,
 `vfs_ops`, `pci_walk`, `btrfs_read`, `block_queue`, `blkring`, `virtio_blk`,
 `virtio_net`, `cpio_parse`, `fdt_parse`, `acpi_tables`, `netwire_parse`,
 `nettcp_state`, `net_input`, `netlink_walk`, `hyprconf_parse`, `virtio_gpu`,
 `virtio_input`, `displayctl`, `renderctl`, `inputctl`,
 `virtio_gpu_pipeline`, `virtio_input_driver`, `wayland_wire`,
-`linux_abi`, `cgroupfs_write`, `sysfs_names` and `svc_unit`. Every crate
+`linux_abi`, `cgroupfs_write`, `sysfs_names`, `svc_unit` and `svc_manager`.
+Every crate
 in the table above parses bytes that came from outside the system — a disk,
 a firmware table, an archive a stranger built — which is precisely the
 population the rule was written for. `virtio` was owed a target and has

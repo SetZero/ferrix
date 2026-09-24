@@ -877,10 +877,10 @@ the system people will actually use.
 |---|---|---|
 | L3 | done, 2026-09-24 | "Start pid 1 from the file ferrix.init= names, and commit the disks in reboot(2)" |
 | L1 | done, 2026-09-24 | "Read unit files in systemd's syntax" |
-| L2 | being built on `init/svc` | |
+| L2 | done, 2026-09-24 | "Run units as one state machine of events and actions" |
 | L4 to L13 | not started | |
 
-59 of L1 to L10's 67 points are left.
+51 of L1 to L10's 67 points are left.
 
 **L1, as built (5 points).** `libs/svc` is on `main`: `no_std` with
 `alloc`, `forbid(unsafe_code)`, 52 host tests, a Miri step in CI and in
@@ -937,6 +937,103 @@ corpus. What it does, module by module:
   combines results. The tests themselves look at the machine, so they are
   the backend's to run.
 
+**L2, as built (8 points).** `Manager` in `libs/svc`: `step(event, now)`
+returns the actions, and `deadline()` says when the next `Timer` is due. It
+loads units as they are named (at `Boot`, every unit the directories have),
+resolves their dependencies with each kind's implied and default ones, and
+turns a request into a transaction of *operations* (§4.3): pulled in along
+`Requires=`, `BindsTo=`, `Wants=`, `Requisite=` and `Conflicts=`, stopped
+along what requires or is part of a stopping unit, checked for units both
+started and stopped, cut free of ordering cycles by dropping an operation
+only `Wants=` pulled in (with a log line), refused on a cycle of essential
+ones, and merged into the queue in `replace`, `fail`, `isolate` or
+irreversible mode. An operation starts when no operation it is ordered after
+is queued, so what is unordered starts in the same step. The slice tree is
+built from `Slice=` down from `-.slice`, a `MakeGroup` for each level with
+its `Limits`. Services have systemd's state machine: cleaning, start-pre,
+start, start-post, running, exited, stop, stop-sigterm, stop-sigkill,
+stop-post, auto-restart; `simple`, `exec`, `oneshot` and `forking` are
+driven through it, and `notify` and `native` reach running on `Ready`. A stop
+sends `KillSignal=` by `KillMode=`, writes `cgroup.kill` after
+`TimeoutStopSec=`, and is done when the cgroup is empty (`Emptied`), not when
+the main process exits. `Restart=` follows systemd's table, with
+`RestartSec=` doubled per restart in a row up to 32 times, and the start
+limit counts every start; the policy is `restart::Policy`, which takes
+`Option<Instant>` and is a pure count without a clock, for `devmgr` (L11).
+Boot starts `default.target` or `ferrix.target=`'s, and isolates
+`rescue.target` if that cannot start or fails. Shutdown stops everything
+that conflicts with `shutdown.target` in reverse order, writes `cgroup.kill`
+in every cgroup left, deepest first, waits up to 90 seconds for them to
+empty, and then asks for `Power`. Scopes (`Request::Scope`, `Move`) and the
+directory's OPEN (`Route`, `Refuse`, starting the provider first) are in the
+core already, for L5 and L8 to wire up. 92 host tests replay event scripts:
+boot order and parallelism, both kinds of cycle, the slice tree, backoff to
+the cap, the start limit and `reset-failed`, stop escalation in all three
+kill modes, shutdown order and the final kill, a forking service
+deactivating until its cgroup empties, rescue, conditions, conflicts,
+`BindsTo=`, `OOMPolicy=`, isolate, restart, `fail` mode, the directory and a
+scope. Miri runs them, and a second fuzz target, `svc_manager`, drives the
+manager with event scripts in any order and requires that a cgroup is made
+once, removed only when made, and spawned into only when made.
+
+**What building L2 changed.**
+
+* §3's lists grew. `Event` gained `Boot` (the backend has mounted cgroup2
+  and moved itself into `init.scope`), `Execed` (the exec pipe closed, for
+  `Type=exec`), `SpawnFailed`, `MainPid` (a `forking` service's daemon, for
+  L7) and `Unmounted`. `Action` gained `Move` (a scope's processes into its
+  cgroup) and `Refuse` (§6's REFUSED). `Request` carries systemd's job mode.
+* Conditions are run by a `Probe` the backend gives `Manager::new`, when an
+  operation begins, since they look at the machine. A failed condition skips
+  the unit, and what is ordered after it still starts.
+* `Kind::implied` is on the trait, with each kind's default dependencies.
+  §4.2's `advance` is not: each kind's state differs, so the state machines
+  are modules of the manager, chosen by the unit's type, and a new kind adds
+  one there as well as its trait implementation.
+* The default dependencies are §4.3's for services, and systemd's for the
+  rest: slices, scopes and targets conflict with and are before
+  `shutdown.target`, and a target is after what it wants. Mounts have none,
+  because shutdown's last step unmounts (§8.2). `poweroff.target` and
+  `reboot.target` pull in `shutdown.target` themselves.
+* **`drivers.slice` is never killed.** §8.2's step 1 kills every cgroup
+  beside `init.scope`, but the block driver that step 2's `sync` needs lives
+  in `drivers.slice`. The manager adopts it, as §7.3 says, and never makes,
+  stops, removes or kills it; `-.slice` and `init.scope` are the same.
+* A stop that has to escalate ends `failed`, with the result `timeout`, as in
+  systemd. `KillMode=mixed` writes `cgroup.kill` at the timeout, not when the
+  main process exits. With `KillMode=process` the next start first kills
+  what the last run left (the `cleaning` state), as §5.4 asks.
+* The backoff starts again at a requested start and at `reset-failed`.
+
+**For the init program's author (L4).** The loop, in outline:
+
+```rust
+let mut source = Source::new();          // walk the three directories
+source.add(Layer::Image, "getty@.service", Entry::File(bytes))?;
+let mut manager = Manager::new(source, Box::new(probe), Options { target });
+let mut actions = manager.step(Event::Boot, now());
+loop {
+    for action in actions { backend.perform(action) }   // map names to fds
+    let event = backend.wait(manager.deadline());       // epoll, timeout
+    actions = manager.step(event, now());
+}
+```
+
+Every `Action` names a `UnitId`; `Manager::group(unit)` gives its
+`GroupPath`, relative to the cgroup2 mount, and `Manager::name(unit)` its
+name. `MakeGroup` is `mkdir` and the limit files (and, for a slice,
+`subtree_control`); `RemoveGroup` is `rmdir`; `Spawn` is `clone3` into
+`spec.group`, answered by `Spawned` (or `SpawnFailed`), then `Execed` when
+the exec pipe closes; `Move` writes `cgroup.procs`; `Signal` goes to one pid
+or every pid in `cgroup.procs`; `KillGroup` writes `cgroup.kill`; `Log` is a
+line to print as `  init     <line>`; `Power` is §8.2's steps 2 and 3. Every
+reaped pid goes in as `Exited`, the manager's or not; every cgroup it made
+reports `Emptied` when `populated` drops to 0. A `SIGTERM` or `SIGINT` to
+pid 1 is `Request::Poweroff` from a client of the backend's own. What needs
+the machine stays the backend's: expanding `$VAR` in a command whose
+`expand_environment` is set, reading `EnvironmentFile=`, looking up `User=`
+and `Group=`, opening `TTYPath=`, and a `Probe` for the conditions.
+
 **L3, as built (3 points).** K0: `ferrix.init=<path>` on the kernel command
 line (`CMDLINE.TXT`, or U-Boot's `bootargs` on a board) starts pid 1 from
 that file in the switched root, with the path as its only argument and
@@ -967,12 +1064,9 @@ did not survive poweroff -f -n"), and no `ferrix.onexit=panic` ("did not
 panic with FX-1501"). Under zinc only the first boot runs, because zinc
 cannot make the call.
 
-**What the next session does first.** L2 is being built on `init/svc`, in
-the same crate: `Kind::implied`, the graph, transactions, the slice tree,
-the restart policy, `Manager::step` and `deadline`, and the names the init
-program maps (`UnitId`, `GroupPath`, `Token`, `ClientId`). Then L4, once
-L2 is in; C1 to C5 are, since G4 landed on 2026-09-24
-(`docs/CGROUPS.md` §7.1). `cargo xtask test-init` builds an
+**What the next session does first.** L4. What it needs of stage 13, C1
+to C5, is in since G4 landed on 2026-09-24 (`docs/CGROUPS.md` §7.1), and
+L2 has given it the manager. `cargo xtask test-init` builds an
 image with no program in the kernel and `/sbin/init` in the initramfs, and
 puts `qemu::init_option("/sbin/init")` into `CMDLINE.TXT`, as
 `init_file::Parts::image` does. It judges the kernel's `init     …` lines

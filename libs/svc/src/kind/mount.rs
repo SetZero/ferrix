@@ -8,7 +8,7 @@
 use alloc::string::String;
 use core::time::Duration;
 
-use super::{Config, Kind, UnitError};
+use super::{Config, UnitError};
 use crate::Warnings;
 use crate::ini::Section;
 use crate::keys::{self, Setter};
@@ -74,44 +74,30 @@ const MOUNT_KEYS: [(&str, Setter<Mount>); 7] = [
 /// The mount kind.
 pub(super) struct MountKind;
 
-impl Kind for MountKind {
-    fn unit_type(&self) -> UnitType {
-        UnitType::Mount
+/// The `[Mount]` section, parsed and checked against the unit's name.
+pub(super) fn parse(
+    name: &UnitName,
+    section: &Section,
+    warnings: &mut Warnings,
+) -> Result<Config, UnitError> {
+    let mut mount = Mount::default();
+    keys::apply(section, &MOUNT_KEYS, &mut mount, warnings);
+    if mount.r#where.is_empty() {
+        mount.r#where = if name.stem() == "-" {
+            String::from("/")
+        } else {
+            let mut path = String::from("/");
+            path.push_str(&unescape(name.stem()));
+            path
+        };
     }
-
-    fn section(&self) -> Option<&'static str> {
-        Some("Mount")
+    if UnitName::for_path(&mount.r#where, UnitType::Mount).as_ref() != Ok(name) {
+        return Err(UnitError::new(
+            "Where= setting doesn't match unit name. Refusing.",
+        ));
     }
-
-    fn needs_file(&self) -> bool {
-        true
+    if mount.what.is_empty() {
+        return Err(UnitError::new("What= setting is missing. Refusing."));
     }
-
-    fn parse(
-        &self,
-        name: &UnitName,
-        section: &Section,
-        warnings: &mut Warnings,
-    ) -> Result<Config, UnitError> {
-        let mut mount = Mount::default();
-        keys::apply(section, &MOUNT_KEYS, &mut mount, warnings);
-        if mount.r#where.is_empty() {
-            mount.r#where = if name.stem() == "-" {
-                String::from("/")
-            } else {
-                let mut path = String::from("/");
-                path.push_str(&unescape(name.stem()));
-                path
-            };
-        }
-        if UnitName::for_path(&mount.r#where, UnitType::Mount).as_ref() != Ok(name) {
-            return Err(UnitError::new(
-                "Where= setting doesn't match unit name. Refusing.",
-            ));
-        }
-        if mount.what.is_empty() {
-            return Err(UnitError::new("What= setting is missing. Refusing."));
-        }
-        Ok(Config::Mount(mount))
-    }
+    Ok(Config::Mount(mount))
 }

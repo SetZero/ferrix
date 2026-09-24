@@ -7,7 +7,7 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use super::{Config, Kind, UnitError};
+use super::{Config, UnitError};
 use crate::Warnings;
 use crate::ini::{Assignment, Section};
 use crate::keys::{self, Setter};
@@ -97,32 +97,18 @@ const SOCKET_KEYS: [(&str, Setter<Socket>); 8] = [
 /// The socket kind.
 pub(super) struct SocketKind;
 
-impl Kind for SocketKind {
-    fn unit_type(&self) -> UnitType {
-        UnitType::Socket
+/// The `[Socket]` section, parsed and checked.
+pub(super) fn parse(
+    _: &UnitName,
+    section: &Section,
+    warnings: &mut Warnings,
+) -> Result<Config, UnitError> {
+    let mut socket = Socket::default();
+    keys::apply(section, &SOCKET_KEYS, &mut socket, warnings);
+    if socket.listen.is_empty() {
+        return Err(UnitError::new(
+            "Socket unit lacks Listen*= setting. Refusing.",
+        ));
     }
-
-    fn section(&self) -> Option<&'static str> {
-        Some("Socket")
-    }
-
-    fn needs_file(&self) -> bool {
-        true
-    }
-
-    fn parse(
-        &self,
-        _: &UnitName,
-        section: &Section,
-        warnings: &mut Warnings,
-    ) -> Result<Config, UnitError> {
-        let mut socket = Socket::default();
-        keys::apply(section, &SOCKET_KEYS, &mut socket, warnings);
-        if socket.listen.is_empty() {
-            return Err(UnitError::new(
-                "Socket unit lacks Listen*= setting. Refusing.",
-            ));
-        }
-        Ok(Config::Socket(socket))
-    }
+    Ok(Config::Socket(socket))
 }

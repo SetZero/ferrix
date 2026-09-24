@@ -201,6 +201,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "svc_manager"
+path = "fuzz_targets/svc_manager.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "hyprconf_parse"
 path = "fuzz_targets/hyprconf_parse.rs"
 test = false
