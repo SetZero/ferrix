@@ -54,6 +54,13 @@ else
   ZSH_THEME=${ZSH_THEME:-agnoster}
 fi
 plugins=(git)
+# No compaudit. oh-my-zsh runs it on every start, once in a process of its
+# own in the background and once more in compinit, to warn of a directory
+# of fpath that someone other than root and the user could write to. Every
+# one here is the image's, root's and 0755, or the /tmp one this file makes
+# for the user, so it warns of nothing, at the price of a stat of every
+# completion function and a process beside the desktop at every start.
+ZSH_DISABLE_COMPFIX=true
 # Where oh-my-zsh writes: its cache and its completion dump. /tmp, because it
 # is the one directory every boot has and can write in.
 export ZSH_CACHE_DIR=/tmp/oh-my-zsh
@@ -322,6 +329,8 @@ mod tests {
         // Nothing it writes goes anywhere but /tmp.
         assert!(text.contains("export ZSH_CACHE_DIR=/tmp/oh-my-zsh"));
         assert!(text.contains("export ZSH_COMPDUMP=/tmp/oh-my-zsh/zcompdump"));
+        // And it is not audited: the tree is root's, and 0755.
+        assert!(text.contains("ZSH_DISABLE_COMPFIX=true"));
     }
 
     #[test]
