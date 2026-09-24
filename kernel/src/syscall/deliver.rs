@@ -72,9 +72,12 @@ use crate::user::space::AddressSpace;
 
 pub(crate) use crate::syscall::signal::SIGINFO_BYTES;
 
-/// How many signals one way back to user mode acts on. One more than there
-/// are signals, so every pending one can be taken; a bound, so that a stop
-/// and continue sent in a tight loop cannot keep a task in the kernel.
+/// How many signals one round of the way back to user mode acts on before it
+/// looks again with interrupts masked. One more than there are signals, so
+/// every pending one can be taken in one round. Not a bound on the time spent
+/// in the kernel: [`return_to_user`] goes round again while there is more to
+/// do, as Linux does, so a task sent stops and continues in a tight loop stays
+/// in the kernel for as long as they keep coming -- interruptible throughout.
 const DELIVERY_ROUNDS: usize = 65;
 
 /// A frame the architecture could not write, or would not accept back.
@@ -244,63 +247,84 @@ pub(crate) fn needs_attention() -> bool {
 /// in between: writing a frame can fault in a page of the program's stack,
 /// and a stopped process waits here for as long as it stays stopped.
 ///
+/// **Returns only once a look with interrupts masked finds nothing to do**, as
+/// Linux's `exit_to_user_mode_loop` does. A stop, a kill or a signal that
+/// arrives while they are open finds this task in the kernel, and the
+/// interrupt that was to bring it back through here -- the kick
+/// [`crate::sched::interrupt`] sends a task running in user mode -- is taken
+/// on the spot and spent, since only an interrupt from user mode looks. Left
+/// unchecked, the task went back to its program with its process stopped and
+/// nothing pending to stop it, and a task alone on its processor gets no tick:
+/// FX-0701's "a thread of a stopped process kept running instead of stopping".
+/// Every `SIGSTOP` to a process of spinning threads sets it up, because the
+/// kick is a broadcast and a signal pending for the process draws every
+/// thread in here at once: one takes the stop, and another, having seen no
+/// stop and then no signal, was on its way out as the stop's own kick landed.
+///
 /// Does not return when the process has ended.
 pub(crate) fn return_to_user(context: &mut arch::UserContext) {
     let Some(thread) = thread::current() else {
         return;
     };
     let process = thread.process();
-    arch::enable_interrupts();
 
-    // A blocking call interrupted by a signal returns a restart code in the
-    // return register. Resolve it against the signal about to be delivered,
-    // the way Linux does on the syscall exit path. `take_restart` answers
-    // `Some` only just after such a call, and takes it once so a later trap
-    // cannot act on a stale one; the register is checked too, so a way back
-    // that is not a syscall return -- a tick, a fault -- is never rewound.
-    let mut restart = thread
-        .with_own_signals(signal::ThreadSignals::take_restart)
-        .zip(RestartKind::of(context.syscall_result()));
+    loop {
+        arch::enable_interrupts();
 
-    for _ in 0..DELIVERY_ROUNDS {
+        // A blocking call interrupted by a signal returns a restart code in the
+        // return register. Resolve it against the signal about to be delivered,
+        // the way Linux does on the syscall exit path. `take_restart` answers
+        // `Some` only just after such a call, and takes it once so a later trap
+        // -- or a later round of this loop -- cannot act on a stale one; the
+        // register is checked too, so a way back that is not a syscall return
+        // -- a tick, a fault -- is never rewound.
+        let mut restart = thread
+            .with_own_signals(signal::ThreadSignals::take_restart)
+            .zip(RestartKind::of(context.syscall_result()));
+
+        for _ in 0..DELIVERY_ROUNDS {
+            if process.must_leave(&thread) {
+                break;
+            }
+            if process.is_stopped() {
+                let _ = process.resumed().wait_until_deadline(
+                    || !process.is_stopped() || process.must_leave(&thread),
+                    u64::MAX,
+                );
+                continue;
+            }
+            let Some(taken) = thread.with_signals(signal::take_next) else {
+                break;
+            };
+            // The first signal that runs a handler settles the restart: only a
+            // handler can turn one into `EINTR`. A default action -- a stop, an
+            // ignore -- leaves it pending, so a stop then continue restarts
+            // transparently and a later handler still gets to decide.
+            if let Some((ctx, kind)) = restart
+                && runs_a_handler(&taken)
+            {
+                resolve_restart(context, &ctx, kind, taken.action.flags);
+                restart = None;
+            }
+            act(&thread, context, &taken);
+        }
+        // No handler ran -- a stop, an ignore, or nothing was left to deliver --
+        // so the call restarts transparently.
+        if let Some((ctx, kind)) = restart {
+            restart_call(context, &ctx, kind);
+        }
+        restore_saved_mask(&thread);
         if process.must_leave(&thread) {
-            break;
+            // Left with interrupts still open, as the release its exit may run
+            // needs. Nothing after the thread's exit runs to drop it.
+            drop(thread);
+            process::leave_current();
         }
-        if process.is_stopped() {
-            let _ = process.resumed().wait_until_deadline(
-                || !process.is_stopped() || process.must_leave(&thread),
-                u64::MAX,
-            );
-            continue;
+        arch::disable_interrupts();
+        if !needs_attention() {
+            return;
         }
-        let Some(taken) = thread.with_signals(signal::take_next) else {
-            break;
-        };
-        // The first signal that runs a handler settles the restart: only a
-        // handler can turn one into `EINTR`. A default action -- a stop, an
-        // ignore -- leaves it pending, so a stop then continue restarts
-        // transparently and a later handler still gets to decide.
-        if let Some((ctx, kind)) = restart
-            && runs_a_handler(&taken)
-        {
-            resolve_restart(context, &ctx, kind, taken.action.flags);
-            restart = None;
-        }
-        act(&thread, context, &taken);
     }
-    // No handler ran -- a stop, an ignore, or nothing was left to deliver --
-    // so the call restarts transparently.
-    if let Some((ctx, kind)) = restart {
-        restart_call(context, &ctx, kind);
-    }
-    restore_saved_mask(&thread);
-    if process.must_leave(&thread) {
-        // Left with interrupts still open, as the release its exit may run
-        // needs. Nothing after the thread's exit runs to drop it.
-        drop(thread);
-        process::leave_current();
-    }
-    arch::disable_interrupts();
 }
 
 /// Which restart code a system call left in the return register, if any. The
