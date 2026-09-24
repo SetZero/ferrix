@@ -25,10 +25,9 @@ use core::mem::size_of;
 use super::dns::{self, QUERY_MAX};
 use super::lookup::{Address, first4, ipliteral, mapped};
 use super::{
-    AF_INET, AF_INET6, AF_UNSPEC, Database, HOST_NOT_FOUND, IPPROTO_TCP, NO_DATA,
-    SOCK_CLOEXEC, SOCK_DGRAM, SOCK_NONBLOCK, SOCK_STREAM, SOCKADDR_IN_LEN, SOCKADDR_IN6_LEN,
-    SYSTEM, SockaddrIn6, Sources, TRY_AGAIN, at, c_bytes_max, c_len, find, has_at, is_space,
-    set_h_errno, strtoul,
+    AF_INET, AF_INET6, AF_UNSPEC, Database, HOST_NOT_FOUND, IPPROTO_TCP, NO_DATA, SOCK_CLOEXEC,
+    SOCK_DGRAM, SOCK_NONBLOCK, SOCK_STREAM, SOCKADDR_IN_LEN, SOCKADDR_IN6_LEN, SYSTEM, SockaddrIn6,
+    Sources, TRY_AGAIN, at, c_bytes_max, c_len, find, has_at, is_space, set_h_errno, strtoul,
 };
 use crate::cancel;
 use crate::errno;
@@ -85,6 +84,10 @@ pub struct ResolvConf {
 /// Without a file, or without a usable `nameserver` line, the name server is
 /// 127.0.0.1. `Err` holds the error number if the file exists and cannot be
 /// read.
+#[allow(
+    clippy::excessive_nesting,
+    reason = "each resolver option is parsed inside the matching file line"
+)]
 pub fn get_resolv_conf(
     src: &Sources<'_>,
     mut search: Option<&mut [u8; 256]>,
@@ -173,6 +176,9 @@ pub fn get_resolv_conf(
             for (index, slot) in search.iter_mut().enumerate().take(l + 1) {
                 *slot = at(&line, p + index);
             }
+        }
+        if db.error() {
+            return Err(crate::pwd::last_errno());
         }
     }
 
@@ -298,6 +304,10 @@ fn start_tcp(pfd: &mut Pollfd, family: c_int, sa: &SockaddrIn6, sl: c_uint, q: &
 ///
 /// `Err` with `errno` set if no socket could be opened and bound; past that,
 /// each query simply has an answer or not.
+#[allow(
+    clippy::result_unit_err,
+    reason = "the error detail is carried in errno, as the C resolver requires"
+)]
 pub fn msend_rc(
     queries: &[&[u8]],
     answers: &mut [&mut [u8]],
@@ -313,6 +323,10 @@ pub fn msend_rc(
 }
 
 /// The body of [`msend_rc`], with cancellation disabled.
+#[allow(
+    clippy::excessive_nesting,
+    reason = "the DNS exchange is a state machine over UDP and TCP slots"
+)]
 fn exchange(
     queries: &[&[u8]],
     answers: &mut [&mut [u8]],
@@ -343,7 +357,12 @@ fn exchange(
     let mut fd = socket(family, SOCK_DGRAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
     if fd < 0 && family == AF_INET6 && crate::pwd::last_errno() == errno::EAFNOSUPPORT {
         // Without IPv6, go on with the IPv4 name servers, if there are any.
-        if conf.ns.iter().take(nns).all(|iplit| iplit.family == AF_INET6) {
+        if conf
+            .ns
+            .iter()
+            .take(nns)
+            .all(|iplit| iplit.family == AF_INET6)
+        {
             return Err(());
         }
         fd = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
@@ -370,7 +389,7 @@ fn exchange(
         }
     }
 
-    let mut sa = SockaddrIn6 {
+    let sa = SockaddrIn6 {
         sin6_family: family as u16,
         ..SockaddrIn6::default()
     };
@@ -430,7 +449,14 @@ fn exchange(
                 for server in ns.iter().take(nns) {
                     // SAFETY: the query and the address are live.
                     let _ = unsafe {
-                        sendto(fd, q.as_ptr().cast(), q.len(), MSG_NOSIGNAL, server.as_ptr(), sl)
+                        sendto(
+                            fd,
+                            q.as_ptr().cast(),
+                            q.len(),
+                            MSG_NOSIGNAL,
+                            server.as_ptr(),
+                            sl,
+                        )
                     };
                 }
             }
@@ -475,11 +501,9 @@ fn exchange(
             let rlen_bytes = rlen as usize;
             // Only from an address the query went to.
             let from_bytes = from.bytes();
-            let Some(j) = ns
-                .iter()
-                .take(nns)
-                .position(|server| server.bytes().get(..sl as usize) == from_bytes.get(..sl as usize))
-            else {
+            let Some(j) = ns.iter().take(nns).position(|server| {
+                server.bytes().get(..sl as usize) == from_bytes.get(..sl as usize)
+            }) else {
                 continue;
             };
             let got = answers.get(next).map_or(&[][..], |answer| &**answer);
@@ -503,7 +527,14 @@ fn exchange(
                         let server = ns.get(j).copied().unwrap_or_default();
                         // SAFETY: the query and the address are live.
                         let _ = unsafe {
-                            sendto(fd, q.as_ptr().cast(), q.len(), MSG_NOSIGNAL, server.as_ptr(), sl)
+                            sendto(
+                                fd,
+                                q.as_ptr().cast(),
+                                q.len(),
+                                MSG_NOSIGNAL,
+                                server.as_ptr(),
+                                sl,
+                            )
                         };
                     }
                     continue;
@@ -715,7 +746,13 @@ pub unsafe extern "C" fn res_send(
 /// `dest`, as musl's `res_query` does. Returns the answer's length, or -1 with
 /// `h_errno` set: `TRY_AGAIN` without an answer, `HOST_NOT_FOUND` for a name
 /// error, `NO_DATA` for a success with no answers.
-pub fn query_from(src: &Sources<'_>, name: &[u8], class: c_int, kind: c_int, dest: &mut [u8]) -> c_int {
+pub fn query_from(
+    src: &Sources<'_>,
+    name: &[u8],
+    class: c_int,
+    kind: c_int,
+    dest: &mut [u8],
+) -> c_int {
     let Some((q, ql)) = dns::mkquery(0, name, class, kind, dns::query_id()) else {
         return -1;
     };
@@ -847,20 +884,29 @@ mod tests {
 
         let paths = Paths::new("absent");
         let conf = get_resolv_conf(&paths.sources(53), None);
-        assert_eq!(conf.map(|conf| (conf.nns, conf.ndots, conf.timeout, first4(&conf.ns[0].addr))), Ok((1, 1, 5, [127, 0, 0, 1])));
+        assert_eq!(
+            conf.map(|conf| (conf.nns, conf.ndots, conf.timeout, first4(&conf.ns[0].addr))),
+            Ok((1, 1, 5, [127, 0, 0, 1]))
+        );
         let paths = Paths {
             resolv_conf: fixture(""),
             ..Paths::new("resolv.conf")
         };
         // A directory cannot be read as a file.
-        assert_eq!(get_resolv_conf(&paths.sources(53), None).map(|_| ()), Err(errno::EISDIR));
+        assert_eq!(
+            get_resolv_conf(&paths.sources(53), None).map(|_| ()),
+            Err(errno::EISDIR)
+        );
     }
 
     #[test]
     fn a_long_line_is_skipped_whole() {
         let paths = Paths::new("resolv-long.conf");
         let conf = get_resolv_conf(&paths.sources(53), None);
-        assert_eq!(conf.map(|conf| (conf.nns, first4(&conf.ns[0].addr))), Ok((1, [192, 0, 2, 1])));
+        assert_eq!(
+            conf.map(|conf| (conf.nns, first4(&conf.ns[0].addr))),
+            Ok((1, [192, 0, 2, 1]))
+        );
     }
 
     #[test]
@@ -875,10 +921,16 @@ mod tests {
         let mut dest = [0u8; 100];
         let r = query_from(&src, b"found.test", 1, dns::RR_A, &mut dest);
         assert_eq!(r, 12 + 16 + 16);
-        assert_eq!(dest.get(r as usize - 4..r as usize), Some(&[192, 0, 2, 1][..]));
+        assert_eq!(
+            dest.get(r as usize - 4..r as usize),
+            Some(&[192, 0, 2, 1][..])
+        );
         assert_eq!(query_from(&src, b"empty.test", 1, dns::RR_A, &mut dest), -1);
         assert_eq!(h_errno(), NO_DATA);
-        assert_eq!(query_from(&src, b"missing.test", 1, dns::RR_A, &mut dest), -1);
+        assert_eq!(
+            query_from(&src, b"missing.test", 1, dns::RR_A, &mut dest),
+            -1
+        );
         assert_eq!(h_errno(), HOST_NOT_FOUND);
         assert_eq!(query_from(&src, b"a..b", 1, dns::RR_A, &mut dest), -1);
     }
@@ -893,7 +945,10 @@ mod tests {
             .and_then(|socket| socket.local_addr().ok())
             .map_or(9, |address| address.port());
         let mut dest = [0u8; 600];
-        assert_eq!(query_from(&paths.sources(port), b"x.test", 1, 1, &mut dest), -1);
+        assert_eq!(
+            query_from(&paths.sources(port), b"x.test", 1, 1, &mut dest),
+            -1
+        );
         assert_eq!(h_errno(), TRY_AGAIN);
     }
 
@@ -903,8 +958,14 @@ mod tests {
         let base = bytes.as_mut_ptr().cast::<c_void>();
         let fresh = |base: *mut c_void| {
             [
-                Iovec { iov_base: base, iov_len: 2 },
-                Iovec { iov_base: base.wrapping_byte_add(2), iov_len: 6 },
+                Iovec {
+                    iov_base: base,
+                    iov_len: 2,
+                },
+                Iovec {
+                    iov_base: base.wrapping_byte_add(2),
+                    iov_len: 6,
+                },
             ]
         };
         let mut iov = fresh(base);
@@ -912,7 +973,10 @@ mod tests {
         assert_eq!(iov[0].iov_len, 2);
         let mut iov = fresh(base);
         assert_eq!(step(&mut iov, 3), 1);
-        assert_eq!((iov[1].iov_base, iov[1].iov_len), (base.wrapping_byte_add(3), 5));
+        assert_eq!(
+            (iov[1].iov_base, iov[1].iov_len),
+            (base.wrapping_byte_add(3), 5)
+        );
         let mut iov = fresh(base);
         assert_eq!(step(&mut iov, 8), 2);
         assert_eq!(header(&mut iov, 2, core::ptr::null_mut(), 0).msg_iovlen, 0);

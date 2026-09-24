@@ -6,6 +6,7 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <net/if.h>
+#include <netinet/ether.h>
 #include <netinet/in.h>
 #include <string.h>
 
@@ -18,6 +19,8 @@ int main(void)
 	char text[INET6_ADDRSTRLEN];
 	unsigned char bytes[4];
 	uint32_t big;
+	struct ether_addr ethernet;
+	char host[32];
 
 	big = htonl(0x7f000001);
 	memcpy(bytes, &big, sizeof bytes);
@@ -44,5 +47,10 @@ int main(void)
 
 	CHECK(if_nametoindex("lo") > 0);
 	CHECK(if_nametoindex("ferrousli-none") == 0);
+
+	CHECK(ether_aton_r("52:54:00:12:34:56", &ethernet) == &ethernet);
+	CHECK(!strcmp(ether_ntoa_r(&ethernet, text), "52:54:00:12:34:56"));
+	CHECK(!ether_line("02:00:00:00:00:01 ferrix", &ethernet, host));
+	CHECK(!strcmp(host, "ferrix") && ethernet.ether_addr_octet[0] == 2);
 	return t_status;
 }

@@ -2770,7 +2770,11 @@ and layouts a program passes: `sockaddr_in` and `sockaddr_in6`, the
 netlink and its routing messages, each checked against a probe compiled from
 the UAPI headers. The TCP state machine, netlink message encoding and
 virtio-net's device protocol are still to be written, and nothing in the
-kernel calls any of it yet.
+kernel calls any of it yet. Ferrousli's userland side is also ready ahead of
+the kernel: `/etc/hosts`, `/etc/services` and DNS name resolution, the resolver
+and nameserver packet interfaces, route-netlink interface enumeration, and the
+Ethernet address database all run on Linux and degrade through the socket
+errors the future Ferrix net core must replace.
 
 **Exit:** under QEMU's user-mode network, busybox configures `eth0` with `ip`,
 and `route` and `netstat` report through `/proc/net`. `wget` fetches a file
