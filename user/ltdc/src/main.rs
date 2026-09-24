@@ -9,13 +9,24 @@
 //!    display control channel, and the device's two register windows -- the
 //!    LTDC's where virtio's common block would be, the HDMI bridge's I2C
 //!    controller's where its device block would be.
-//! 2. The bridge is found on the bus and its monitor's EDID read, which says
-//!    whether to speak HDMI or DVI; the LTDC starts 720p60 with its layer
-//!    off; the bridge is told the mode and its TMDS output turned on. HELLO
-//!    then offers the one scanout, and READY brings the card VMO back.
+//! 2. The bridge is found on the bus and its monitor's EDID read: whether to
+//!    speak HDMI or DVI, and every mode the monitor offers. The driver says
+//!    on standard error, which is the console, what the monitor is, its EDID
+//!    in hex, and each mode with its pixel clock and whether the board can
+//!    make it; the largest the board can run is the one it runs
+//!    (`ferrix_stm32_display::choice`), 720p60 when nothing larger is. The
+//!    kernel sets the pixel clock for it (`device_clock`), the LTDC starts
+//!    it with its layer off, the bridge is told the mode and its TMDS output
+//!    turned on. HELLO then offers the one scanout at that size with every
+//!    mode the board can run on the monitor listed, and READY brings the
+//!    card VMO back.
 //! 3. ATTACH pins a buffer's range read-only and requires it to be one run
 //!    of addresses, which the kernel makes it for this device. SCANOUT points
-//!    the layer at it; FLUSH asks for a reload at the next vertical blanking
+//!    the layer at it -- and when its rectangle is the size of another mode
+//!    listed, switches to that mode first: TMDS off, the LTDC stopped, the
+//!    clock set, both started again, which is how a `monitor =` line asking
+//!    for 1280x720 on a monitor started at 1920x1080 gets it. FLUSH asks for
+//!    a reload at the next vertical blanking
 //!    and FLIPPED goes out when the reload's interrupt comes, so a
 //!    compositor's page flips are paced by the screen. DETACH waits for a
 //!    buffer on screen to leave it before it unpins.
@@ -27,12 +38,13 @@
 #![no_std]
 #![no_main]
 
+use core::fmt::{self, Write as _};
 use core::ptr;
 
 use ferrix_blkring::control::{Block as StartBlock, Message as StartMessage, START_BYTES, Start};
 use ferrix_displayctl::message::{
-    Attach, Hello, MAX_BUFFER_PAGES as MAX_PAGES, MAX_BYTES, MAX_SCANOUTS, Message, PORT_RIGHTS,
-    Rect, ScanoutMode, Status, Timings, VERSION,
+    Attach, Hello, MAX_BUFFER_PAGES as MAX_PAGES, MAX_BYTES, MAX_SCANOUTS, MAX_TIMINGS, Message,
+    PORT_RIGHTS, Rect, ScanoutMode, Status, Timing, Timings, VERSION,
 };
 use ferrix_native_abi::handle::Handle;
 use ferrix_native_abi::rights::Requested;
@@ -49,6 +61,8 @@ use ferrix_rt::native::pin::{Pin, PinAccess, device_address};
 use ferrix_rt::native::port::{self, Port};
 use ferrix_rt::native::vmo::{self, Vmo};
 use ferrix_rt::{Bootstrap, Kernel};
+use ferrix_stm32_display::choice::{self, Candidate, How, Runnable, Verdict};
+use ferrix_stm32_display::edid::{Offer, Source, Unusable};
 use ferrix_stm32_display::i2c::{I2c, TIMING_100KHZ_AT_64MHZ};
 use ferrix_stm32_display::ltdc::{Frame, Ltdc};
 use ferrix_stm32_display::mode::Mode;
@@ -75,11 +89,13 @@ const KEY_INTERRUPT: u64 = 1;
 const KEY_CONTROL: u64 = 2;
 
 /// How long a buffer leaving the screen may take to go: one frame is
-/// 16.7 ms, and a register read is well under a microsecond.
-const LEAVE_BUDGET: Budget = Budget(2_000_000);
+/// 16.7 ms at 60 Hz and 41.7 at 1080p's slowest, 24 Hz, and a register
+/// read is well under a microsecond.
+const LEAVE_BUDGET: Budget = Budget(5_000_000);
 
-/// The mode the board runs, the one its pixel clock was set for.
-const MODE: Mode = Mode::CEA_720P60;
+/// The mode the board runs when it can run nothing it chose: the one the
+/// firmware's pixel clock is set for.
+const FALLBACK: Mode = Mode::CEA_720P60;
 
 /// Where a run stopped, as the exit status.
 #[derive(Clone, Copy, Debug)]
@@ -239,38 +255,161 @@ fn started(boot: &Channel<Kernel>) -> Result<Started, Step> {
     }
 }
 
-/// Find the bridge and ask the monitor what it speaks: HDMI when its EDID
-/// has an HDMI vendor block, DVI when it has none or cannot be read.
-fn bridge(i2c: I2c<Window>) -> Result<(Bridge<I2c<Window>>, bool), Step> {
+/// Find the bridge on the bus.
+fn bridge(i2c: I2c<Window>) -> Result<Bridge<I2c<Window>>, Step> {
     use sii9022::{BridgeError, BusError};
-    let mut bridge = Bridge::probe(i2c, sii9022::ADDRESS).map_err(|error| match error {
+    Bridge::probe(i2c, sii9022::ADDRESS).map_err(|error| match error {
         BridgeError::Bus(BusError::Nack) => Step::BridgeSilent,
         BridgeError::Chip(_) => Step::BridgeChip,
         _ => Step::BridgeBus,
-    })?;
-    let mut base = [0_u8; edid::BLOCK_BYTES];
-    let mut extension = [0_u8; edid::BLOCK_BYTES];
-    let hdmi = bridge.read_edid(0, &mut base).is_ok()
-        && edid::is_base(&base)
-        && edid::extensions(&base) > 0
-        && bridge.read_edid(1, &mut extension).is_ok()
-        && edid::is_hdmi(&extension);
-    Ok((bridge, hdmi))
+    })
 }
 
-/// Say HELLO for the one scanout and take READY's card VMO.
+/// The rate in kHz the kernel would run the pixel clock at for `khz`.
+fn rounded(device: &Device<Kernel>, khz: u32) -> Option<u32> {
+    device
+        .clock(khz.saturating_mul(1000), false)
+        .ok()
+        .map(|hz| hz / 1000)
+}
+
+/// Have the kernel run the pixel clock for `mode`: whether it now does,
+/// within the half a percent a sink takes.
+fn set_clock(device: &Device<Kernel>, mode: &Mode) -> bool {
+    device
+        .clock(mode.clock_khz.saturating_mul(1000), true)
+        .is_ok_and(|hz| choice::close_enough(mode.clock_khz, hz / 1000))
+}
+
+/// Ask the monitor what it is and what it takes: whether it speaks HDMI (an
+/// HDMI vendor block in its CTA-861 extension) or only DVI, and the modes
+/// the board can run on it, all said on the console as they are found.
+/// `None` for the modes when there is no EDID to read, which leaves the
+/// board at 720p60 as before it read any.
+fn monitor(bridge: &mut Bridge<I2c<Window>>, device: &Device<Kernel>) -> (bool, Option<Runnable>) {
+    let mut base = [0_u8; edid::BLOCK_BYTES];
+    let mut extension = [0_u8; edid::BLOCK_BYTES];
+    if bridge.read_edid(0, &mut base).is_err() || !edid::is_base(&base) {
+        say(format_args!(
+            "ltdc: the monitor gave no EDID; DVI at 1280x720, 60 Hz"
+        ));
+        return (false, None);
+    }
+    let extensions = edid::extensions(&base);
+    // Blocks past the second need the E-DDC segment pointer, which the
+    // bridge's pass-through is not told; nearly every monitor has at most
+    // one extension.
+    let read = extensions > 0 && bridge.read_edid(1, &mut extension).is_ok();
+    let following: &[[u8; edid::BLOCK_BYTES]] = if read {
+        core::slice::from_ref(&extension)
+    } else {
+        &[]
+    };
+    let hdmi = following.first().is_some_and(edid::is_hdmi);
+    tell_edid(&base, following, extensions, hdmi);
+    let offers = edid::offers(&base, following);
+    let mut round = |khz: u32| rounded(device, khz);
+    for offer in offers.as_slice() {
+        tell_offer(offer, &mut round);
+    }
+    if offers.dropped() > 0 {
+        say(format_args!(
+            "ltdc: {} more offered modes not read",
+            offers.dropped()
+        ));
+    }
+    let runnable = choice::runnable(
+        &offers,
+        edid::range_limits(&base),
+        edid::continuous(&base),
+        round,
+    );
+    for candidate in runnable.as_slice() {
+        say(format_args!(
+            "ltdc: can run {}{}",
+            Described(&candidate.mode),
+            match candidate.how {
+                How::Listed => "",
+                How::Retimed => ", retimed inside the monitor's range limits",
+                How::Assumed => ", as every HDMI sink does though this one does not list it",
+            }
+        ));
+    }
+    (hdmi, Some(runnable))
+}
+
+/// The mode to start with: the largest the board can run, with the clock
+/// set for it, or 720p60 with the clock set back for that.
+fn first_mode(device: &Device<Kernel>, runnable: &mut Option<Runnable>) -> Mode {
+    let Some(chosen) = runnable.as_ref().and_then(Runnable::chosen) else {
+        *runnable = None;
+        // A driver started again after one that set another rate finds that
+        // rate still there: 720p60's is asked for, not assumed.
+        let _ = set_clock(device, &FALLBACK);
+        return FALLBACK;
+    };
+    if set_clock(device, &chosen.mode) {
+        return chosen.mode;
+    }
+    say(format_args!(
+        "ltdc: the kernel would not set the pixel clock for {}; 720p60 instead",
+        Described(&chosen.mode)
+    ));
+    // The mode list goes with it: a card that cannot set its clock runs
+    // the one mode it has the clock for.
+    *runnable = None;
+    let _ = set_clock(device, &FALLBACK);
+    FALLBACK
+}
+
+/// A mode as DRM's list gives it to the core.
+fn timing(mode: &Mode) -> Timing {
+    Timing {
+        clock_khz: mode.clock_khz,
+        hdisplay: mode.hdisplay,
+        hsync_start: mode.hsync_start,
+        hsync_end: mode.hsync_end,
+        htotal: mode.htotal,
+        vdisplay: mode.vdisplay,
+        vsync_start: mode.vsync_start,
+        vsync_end: mode.vsync_end,
+        vtotal: mode.vtotal,
+        hsync_high: mode.hsync_high,
+        vsync_high: mode.vsync_high,
+    }
+}
+
+/// Say HELLO for the one scanout, running `mode`, with the modes the board
+/// can run listed (`mode` first), and take READY's card VMO.
 fn introduce(
     control: &Channel<Kernel>,
     port: &Port<Kernel>,
     location: u32,
+    mode: &Mode,
+    runnable: Option<&Runnable>,
 ) -> Result<Vmo<Kernel>, Step> {
     let mut modes = [ScanoutMode::default(); MAX_SCANOUTS];
     if let Some(first) = modes.first_mut() {
         *first = ScanoutMode {
-            width: u32::from(MODE.hdisplay),
-            height: u32::from(MODE.vdisplay),
+            width: u32::from(mode.hdisplay),
+            height: u32::from(mode.vdisplay),
             enabled: true,
         };
+    }
+    let mut timings = Timings::NONE;
+    let listed = runnable.map_or(&[][..], Runnable::as_slice);
+    let others = listed
+        .iter()
+        .map(|c| c.mode)
+        .filter(|m| !m.same_timing(mode));
+    for (slot, each) in timings
+        .list
+        .iter_mut()
+        .zip(core::iter::once(*mode).chain(others))
+        .take(MAX_TIMINGS)
+    {
+        *slot = timing(&each);
+        timings.count += 1;
     }
     let hello = Hello {
         version: VERSION,
@@ -284,8 +423,7 @@ fn introduce(
         // The LTDC's second layer could be one, and is not yet: the core
         // sends no CURSOR or MOVE to a card that says it has none.
         cursor: false,
-        // The one mode its pixel clock was set for: nothing to list.
-        timings: Timings::NONE,
+        timings,
     };
     let share = port
         .as_owned()
@@ -330,14 +468,21 @@ fn run(boot: &Channel<Kernel>) -> Result<(), Step> {
         .map_err(|_| Step::Events)?;
 
     let mut ltdc = Ltdc::new(ltdc_window).map_err(|_| Step::Controller)?;
-    let (mut bridge, hdmi) = bridge(I2c::new(i2c_window, TIMING_100KHZ_AT_64MHZ))?;
+    let mut bridge = bridge(I2c::new(i2c_window, TIMING_100KHZ_AT_64MHZ))?;
+    let (hdmi, mut runnable) = monitor(&mut bridge, &device);
+    let mode = first_mode(&device, &mut runnable);
+    say(format_args!(
+        "ltdc: running {}, {}",
+        Described(&mode),
+        if hdmi { "HDMI" } else { "DVI" }
+    ));
     // The bridge learns the mode with its output off, the controller starts
     // sending it, and only then does the monitor see a signal.
-    bridge.set_mode(&MODE, hdmi).map_err(|_| Step::BridgeMode)?;
-    ltdc.start(&MODE).map_err(|_| Step::Controller)?;
+    bridge.set_mode(&mode, hdmi).map_err(|_| Step::BridgeMode)?;
+    ltdc.start(&mode).map_err(|_| Step::Controller)?;
     bridge.enable().map_err(|_| Step::BridgeBus)?;
 
-    let card = match introduce(&control, &port, start.location) {
+    let card = match introduce(&control, &port, start.location, &mode, runnable.as_ref()) {
         Ok(card) => card,
         Err(step) => {
             ltdc.stop();
@@ -351,6 +496,9 @@ fn run(boot: &Channel<Kernel>) -> Result<(), Step> {
 
     let mut serving = Serving {
         ltdc,
+        bridge,
+        hdmi,
+        runnable,
         interrupt,
         card,
         device,
@@ -364,7 +512,7 @@ fn run(boot: &Channel<Kernel>) -> Result<(), Step> {
     };
     let ended = serving.serve();
     serving.ltdc.stop();
-    let _ = bridge.disable();
+    let _ = serving.bridge.disable();
     if matches!(ended, Ok(true)) {
         let _ = serving.control.write(Message::Stopped.encode().as_bytes());
     }
@@ -389,6 +537,12 @@ struct Buffer {
 /// The serve loop's state.
 struct Serving {
     ltdc: Ltdc<Window>,
+    bridge: Bridge<I2c<Window>>,
+    /// Whether the sink speaks HDMI, which the bridge is told at each mode.
+    hdmi: bool,
+    /// The modes the board can run on this monitor, for a SCANOUT of
+    /// another size; `None` runs only the mode it started with.
+    runnable: Option<Runnable>,
     interrupt: Interrupt<Kernel>,
     card: Vmo<Kernel>,
     device: Device<Kernel>,
@@ -489,10 +643,7 @@ impl Serving {
                 buffer: attach.buffer,
                 status: Status::Invalid,
             }),
-            Message::Scanout { buffer, rect, .. } => {
-                self.scanout(buffer, rect);
-                Ok(())
-            }
+            Message::Scanout { buffer, rect, .. } => self.scanout(buffer, rect),
             Message::Flush {
                 buffer, sequence, ..
             } => self.flush(buffer, sequence),
@@ -563,21 +714,22 @@ impl Serving {
     }
 
     /// Point the layer at `rect` of a buffer, from the next frame; buffer 0
-    /// takes it off the screen. A buffer that is not the mode's size, or a
-    /// rectangle that does not start it at the screen's corner, is left off
+    /// takes it off the screen. A rectangle the size of another mode listed
+    /// switches to that mode first. A buffer that is not the mode's size, or
+    /// a rectangle that does not start it at the screen's corner, is left off
     /// the screen: the core does not wait for an answer to SCANOUT.
-    fn scanout(&mut self, id: u32, rect: Rect) {
+    fn scanout(&mut self, id: u32, rect: Rect) -> Result<(), Step> {
         if id == 0 {
             self.ltdc.hide();
             self.shown = None;
-            return;
+            return Ok(());
         }
         let Some(buffer) = self.buffer(id) else {
-            return;
+            return Ok(());
         };
         let start = u64::from(rect.y) * u64::from(buffer.stride) + u64::from(rect.x) * 4;
         let Ok(address) = u32::try_from(u64::from(buffer.address) + start) else {
-            return;
+            return Ok(());
         };
         let frame = Frame {
             address,
@@ -585,9 +737,57 @@ impl Serving {
             width: rect.width.min(buffer.width),
             height: rect.height.min(buffer.height),
         };
+        let running = self
+            .ltdc
+            .mode()
+            .map(|mode| (u32::from(mode.hdisplay), u32::from(mode.vdisplay)));
+        if running != Some((frame.width, frame.height)) {
+            let wanted = self
+                .runnable
+                .as_ref()
+                .and_then(|runnable| runnable.of_size(frame.width, frame.height));
+            let Some(wanted) = wanted else {
+                return Ok(());
+            };
+            self.switch(&wanted)?;
+        }
         if self.ltdc.show(&frame).is_ok() {
             self.shown = Some(id);
         }
+        Ok(())
+    }
+
+    /// Run another mode: TMDS off, the LTDC stopped, the kernel asked for
+    /// the mode's clock, and both started again with the layer off, as at
+    /// the start. Flushes waiting for a reload are answered first, since the
+    /// stop is the end of the frame they waited for. A clock the kernel will
+    /// not set leaves the mode that ran, and the layer off.
+    fn switch(&mut self, wanted: &Candidate) -> Result<(), Step> {
+        self.flipped()?;
+        let Some(running) = self.ltdc.mode() else {
+            return Ok(());
+        };
+        let _ = self.bridge.disable();
+        self.ltdc.stop();
+        self.shown = None;
+        let mode = if set_clock(&self.device, &wanted.mode) {
+            wanted.mode
+        } else {
+            say(format_args!(
+                "ltdc: the kernel would not set the pixel clock for {}; staying at {}",
+                Described(&wanted.mode),
+                Described(&running)
+            ));
+            let _ = set_clock(&self.device, &running);
+            running
+        };
+        self.bridge
+            .set_mode(&mode, self.hdmi)
+            .map_err(|_| Step::BridgeMode)?;
+        self.ltdc.start(&mode).map_err(|_| Step::Controller)?;
+        self.bridge.enable().map_err(|_| Step::BridgeBus)?;
+        say(format_args!("ltdc: now running {}", Described(&mode)));
+        Ok(())
     }
 
     /// Ask for a reload at the next vertical blanking and answer when it
@@ -629,5 +829,187 @@ impl Serving {
             }
             None => Status::Invalid,
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The console
+// ---------------------------------------------------------------------------
+
+/// A line on standard error, which a native process has open on the
+/// console.
+fn say(arguments: fmt::Arguments<'_>) {
+    let mut line = Line::default();
+    let _ = line.write_fmt(arguments);
+    let _ = line.write_str("\n");
+    let _ = ferrix_rt::linux::write(2, line.as_bytes());
+}
+
+struct Line {
+    bytes: [u8; 160],
+    len: usize,
+}
+
+impl Default for Line {
+    fn default() -> Self {
+        Line {
+            bytes: [0; 160],
+            len: 0,
+        }
+    }
+}
+
+impl Line {
+    fn as_bytes(&self) -> &[u8] {
+        self.bytes.get(..self.len).unwrap_or(&[])
+    }
+
+    fn as_str(&self) -> &str {
+        core::str::from_utf8(self.as_bytes()).unwrap_or("")
+    }
+}
+
+impl fmt::Write for Line {
+    fn write_str(&mut self, text: &str) -> fmt::Result {
+        for &byte in text.as_bytes() {
+            if let Some(slot) = self.bytes.get_mut(self.len) {
+                *slot = byte;
+                self.len += 1;
+            }
+        }
+        Ok(())
+    }
+}
+
+/// A rate in kHz, as MHz to the kHz.
+struct Mhz(u32);
+
+impl fmt::Display for Mhz {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}.{:03} MHz", self.0 / 1000, self.0 % 1000)
+    }
+}
+
+/// A mode as a person reads it: size, refresh and pixel clock, and its VIC.
+struct Described<'a>(&'a Mode);
+
+impl fmt::Display for Described<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mode = self.0;
+        let millihz = mode.refresh_millihz();
+        write!(
+            f,
+            "{}x{} at {}.{:03} Hz, {}",
+            mode.hdisplay,
+            mode.vdisplay,
+            millihz / 1000,
+            millihz % 1000,
+            Mhz(mode.clock_khz)
+        )?;
+        if mode.vic != 0 {
+            write!(f, ", VIC {}", mode.vic)?;
+        }
+        Ok(())
+    }
+}
+
+/// Say what the monitor is, and its EDID in hex: the one thing a board's
+/// serial log has to carry for a monitor to be looked into later.
+fn tell_edid(
+    base: &[u8; edid::BLOCK_BYTES],
+    following: &[[u8; edid::BLOCK_BYTES]],
+    extensions: u8,
+    hdmi: bool,
+) {
+    let (name, len) = edid::name(base).unwrap_or(([b'?'; 13], 1));
+    let name = core::str::from_utf8(name.get(..len).unwrap_or(&[])).unwrap_or("?");
+    let [version, revision] = [18, 19].map(|at| base.get(at).copied().unwrap_or(0));
+    say(format_args!(
+        "ltdc: monitor {name}, EDID {version}.{revision}, {extensions} extension block{}, {}",
+        if extensions == 1 { "" } else { "s" },
+        if hdmi { "HDMI" } else { "DVI" }
+    ));
+    for (number, block) in core::iter::once(base).chain(following).enumerate() {
+        for (row, bytes) in block.chunks(32).enumerate() {
+            let mut hex = Line::default();
+            for byte in bytes {
+                let _ = write!(hex, "{byte:02x}");
+            }
+            say(format_args!(
+                "ltdc: edid {:03x} {}",
+                number * edid::BLOCK_BYTES + row * 32,
+                hex.as_str()
+            ));
+        }
+    }
+    match edid::range_limits(base) {
+        Some(limits) => say(format_args!(
+            "ltdc: range limits {}-{} Hz, {}-{} kHz, {}; takes timings it does not list: {}",
+            limits.vertical_hz.0,
+            limits.vertical_hz.1,
+            limits.horizontal_khz.0,
+            limits.horizontal_khz.1,
+            Mhz(limits.max_clock_khz),
+            if edid::continuous(base) { "yes" } else { "no" }
+        )),
+        None => say(format_args!("ltdc: no range limits")),
+    }
+}
+
+/// Say one offered mode, its pixel clock, and whether the board makes it.
+fn tell_offer(offer: &Offer, round: &mut impl FnMut(u32) -> Option<u32>) {
+    let mut source = Line::default();
+    let _ = match offer.source {
+        Source::Detailed { block, index } => write!(source, "detailed {block}.{index}"),
+        Source::Established(bit) => write!(source, "established bit {bit}"),
+        Source::Standard(code) => write!(source, "standard {code:04x}"),
+        Source::Vic { vic, native } => {
+            write!(source, "VIC {vic}{}", if native { " native" } else { "" })
+        }
+    };
+    let source = source.as_str();
+    let mode = match offer.mode {
+        Ok(mode) => mode,
+        Err(why) => {
+            let why = match why {
+                Unusable::Interlaced => "interlaced",
+                Unusable::Timing => "a timing with analog or composite sync",
+                Unusable::Unknown => "no timing known for it",
+            };
+            if let Source::Standard(code) = offer.source {
+                let (w, h, hz) = edid::standard_size(code);
+                say(format_args!(
+                    "ltdc: offered {source} {w}x{h} at {hz} Hz: {why}"
+                ));
+            } else {
+                say(format_args!("ltdc: offered {source}: {why}"));
+            }
+            return;
+        }
+    };
+    let described = Described(&mode);
+    match choice::verdict(&mode, round) {
+        Verdict::Runs { clock_khz } => say(format_args!(
+            "ltdc: offered {source} {described}: runs, at {}",
+            Mhz(clock_khz)
+        )),
+        Verdict::TooFast => say(format_args!(
+            "ltdc: offered {source} {described}: over the LTDC's {}",
+            Mhz(choice::MAX_PIXEL_KHZ)
+        )),
+        Verdict::TooSlow => say(format_args!(
+            "ltdc: offered {source} {described}: under the bridge's {}",
+            Mhz(choice::MIN_PIXEL_KHZ)
+        )),
+        Verdict::Clock { nearest_khz } => say(format_args!(
+            "ltdc: offered {source} {described}: the nearest clock is {}",
+            Mhz(nearest_khz)
+        )),
+        Verdict::NoClock => say(format_args!(
+            "ltdc: offered {source} {described}: the kernel sets no clock"
+        )),
+        Verdict::Counters => say(format_args!(
+            "ltdc: offered {source} {described}: too large for the LTDC"
+        )),
     }
 }
