@@ -1309,12 +1309,21 @@ fn attach_display(command: &mut Command, arch: Arch, args: &Args, binary: &Path)
             } else {
                 String::new()
             };
+            // Venus keeps its rings and every host-visible allocation in blob
+            // resources, which the host maps into a window of its own:
+            // `hostmem` is that window's size, and a gigabyte is room for a
+            // Vulkan program's allocations many times over.
+            let venus = if args.venus && gl_card == crate::window::GL_CARD {
+                ",venus=on,blob=on,hostmem=1G"
+            } else {
+                ""
+            };
             let _ = command.args([
                 "-device",
                 // 1024x768 is what every judged boot's pictures are of;
                 // `run-compositor` says another.
                 &format!(
-                    "{card},id={id}{slot},{flags},xres={wide},yres={tall}",
+                    "{card},id={id}{slot},{flags}{venus},xres={wide},yres={tall}",
                     card = gl_card,
                     id = crate::display::device_id(index),
                     wide = args.size.map_or(1024, |size| size.0),

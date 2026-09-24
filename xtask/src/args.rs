@@ -134,6 +134,11 @@ pub(crate) struct Args {
     /// boots want. A QEMU that has not got it says so and the 2D device is
     /// used instead.
     pub(crate) gl: bool,
+    /// `--venus`: the 3D card offers Venus, Vulkan on the host's GPU, with
+    /// the blob resources and the host-visible window it needs
+    /// (`docs/GPU.md` §6.1). Turns `--gl` on. The host must be Linux with a
+    /// virglrenderer built with Venus; QEMU refuses the card otherwise.
+    pub(crate) venus: bool,
     /// `--no-gl`: a watched desktop draws in software even where the host
     /// could have given it the 3D card (`window::watched_gl`).
     pub(crate) no_gl: bool,
@@ -314,6 +319,11 @@ impl Args {
                 // A 3D card is still a card: `--gl` on its own turns the
                 // display on, so nobody has to write both.
                 "--gl" => {
+                    args.gl = true;
+                    args.display = true;
+                }
+                "--venus" => {
+                    args.venus = true;
                     args.gl = true;
                     args.display = true;
                 }

@@ -210,6 +210,9 @@ OPTIONS:
                                          [FERRIX_QEMU names a QEMU that is not the one on PATH: a
                                          directory of its binaries, or one binary; without it, the
                                          first QEMU on PATH that has the 3D card]
+    --venus                              the 3D card offers Venus -- Vulkan on the host's GPU -- with
+                                         blob resources and a 1 GiB host-visible window; turns --gl
+                                         on. Linux hosts with a Venus-built virglrenderer only
     --no-gl                              run-compositor: the 2D card and the software renderer.
                                          Without either flag a VNC screen gets the 3D card when a
                                          QEMU here has it and the host has a render node
