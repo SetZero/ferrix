@@ -88,6 +88,25 @@ fn values() -> Vec<(&'static str, u64)> {
         ),
         ("VIRTGPU_DRM_CAPSET_VIRGL", virtgpu::CAPSET_VIRGL.into()),
         ("VIRTGPU_DRM_CAPSET_VIRGL2", virtgpu::CAPSET_VIRGL2.into()),
+        ("VIRTGPU_DRM_CAPSET_VENUS", virtgpu::CAPSET_VENUS.into()),
+        ("VIRTGPU_BLOB_MEM_GUEST", virtgpu::BLOB_MEM_GUEST.into()),
+        ("VIRTGPU_BLOB_MEM_HOST3D", virtgpu::BLOB_MEM_HOST3D.into()),
+        (
+            "VIRTGPU_BLOB_MEM_HOST3D_GUEST",
+            virtgpu::BLOB_MEM_HOST3D_GUEST.into(),
+        ),
+        (
+            "VIRTGPU_BLOB_FLAG_USE_MAPPABLE",
+            virtgpu::BLOB_FLAG_USE_MAPPABLE.into(),
+        ),
+        (
+            "VIRTGPU_BLOB_FLAG_USE_SHAREABLE",
+            virtgpu::BLOB_FLAG_USE_SHAREABLE.into(),
+        ),
+        (
+            "VIRTGPU_BLOB_FLAG_USE_CROSS_DEVICE",
+            virtgpu::BLOB_FLAG_USE_CROSS_DEVICE.into(),
+        ),
         (
             "VIRTGPU_CONTEXT_PARAM_CAPSET_ID",
             virtgpu::CONTEXT_PARAM_CAPSET_ID,
@@ -141,6 +160,7 @@ fn expected() -> BTreeMap<String, u64> {
     lines.extend(layouts::<virtgpu::ContextInit>());
     lines.extend(layouts::<virtgpu::ContextSetParam>());
     lines.extend(layouts::<virtgpu::ResourceCreate>());
+    lines.extend(layouts::<virtgpu::ResourceCreateBlob>());
     lines.extend(layouts::<virtgpu::ResourceInfo>());
     lines.extend(layouts::<virtgpu::Map>());
     lines.extend(layouts::<virtgpu::GetCaps>());
@@ -222,6 +242,7 @@ fn every_structure_reads_and_writes_back() {
     round_trip::<virtgpu::ContextInit>();
     round_trip::<virtgpu::ContextSetParam>();
     round_trip::<virtgpu::ResourceCreate>();
+    round_trip::<virtgpu::ResourceCreateBlob>();
     round_trip::<virtgpu::ResourceInfo>();
     round_trip::<virtgpu::Map>();
     round_trip::<virtgpu::GetCaps>();

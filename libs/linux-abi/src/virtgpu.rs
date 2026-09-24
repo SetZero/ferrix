@@ -92,6 +92,25 @@ pub const PARAM_EXPLICIT_DEBUG_NAME: u64 = 8;
 pub const CAPSET_VIRGL: u32 = 1;
 /// `VIRTGPU_DRM_CAPSET_VIRGL2`: virgl's second.
 pub const CAPSET_VIRGL2: u32 = 2;
+/// `VIRTGPU_DRM_CAPSET_VENUS`: Vulkan, carried by Venus.
+pub const CAPSET_VENUS: u32 = 4;
+
+// ---------------------------------------------------------------------------
+// Blob resources
+// ---------------------------------------------------------------------------
+
+/// `VIRTGPU_BLOB_MEM_GUEST`: the blob's memory is the guest's.
+pub const BLOB_MEM_GUEST: u32 = 1;
+/// `VIRTGPU_BLOB_MEM_HOST3D`: the host's renderer allocates it.
+pub const BLOB_MEM_HOST3D: u32 = 2;
+/// `VIRTGPU_BLOB_MEM_HOST3D_GUEST`: the host's renderer, over guest memory.
+pub const BLOB_MEM_HOST3D_GUEST: u32 = 3;
+/// `VIRTGPU_BLOB_FLAG_USE_MAPPABLE`: a program may map it.
+pub const BLOB_FLAG_USE_MAPPABLE: u32 = 1;
+/// `VIRTGPU_BLOB_FLAG_USE_SHAREABLE`: it may be shared, as a dmabuf.
+pub const BLOB_FLAG_USE_SHAREABLE: u32 = 2;
+/// `VIRTGPU_BLOB_FLAG_USE_CROSS_DEVICE`: with another virtio device too.
+pub const BLOB_FLAG_USE_CROSS_DEVICE: u32 = 4;
 
 // ---------------------------------------------------------------------------
 // Context parameters
@@ -189,6 +208,32 @@ layout! {
         size: u32 = 48 / "size",
         /// Bytes per row, which the host validates transfers against.
         stride: u32 = 52 / "stride",
+    }
+}
+
+layout! {
+    /// `struct drm_virtgpu_resource_create_blob`:
+    /// `VIRTGPU_RESOURCE_CREATE_BLOB`'s argument. The device fills in
+    /// `bo_handle` and `res_handle`.
+    ResourceCreateBlob = "drm_virtgpu_resource_create_blob", 48 {
+        /// Where the memory is, a `BLOB_MEM_*`.
+        blob_mem: u32 = 0 / "blob_mem",
+        /// What it may be used for, `BLOB_FLAG_*`.
+        blob_flags: u32 = 4 / "blob_flags",
+        /// The object, filled in by the device.
+        bo_handle: u32 = 8 / "bo_handle",
+        /// Its resource, filled in by the device.
+        res_handle: u32 = 12 / "res_handle",
+        /// How many bytes.
+        size: u64 = 16 / "size",
+        /// Padding, zero.
+        pad: u32 = 24 / "pad",
+        /// How many bytes of commands to run before it is made.
+        cmd_size: u32 = 28 / "cmd_size",
+        /// The user address of those commands.
+        cmd: u64 = 32 / "cmd",
+        /// The context's name for the memory, for host blobs.
+        blob_id: u64 = 40 / "blob_id",
     }
 }
 
