@@ -3035,3 +3035,137 @@ fn a_socket_buffer_shows_its_ancillary_data_without_taking_it() {
     ));
     assert_eq!(buf.ancillary().copied().collect::<Vec<_>>(), [9]);
 }
+
+// -- Magic links -----------------------------------------------------------
+
+/// A directory of magic links, as `/proc/<pid>` holds `exe`: each name stands
+/// for a location, and reads as a path that leads nowhere, so a walk that
+/// followed the text instead of the object would fail.
+#[derive(Debug, Default)]
+struct Magic {
+    links: ferrix_sync::SpinLock<Vec<(Vec<u8>, Option<Location>)>>,
+}
+
+/// One of [`Magic`]'s links.
+#[derive(Debug)]
+struct MagicLink(Option<Location>);
+
+impl crate::Inode for MagicLink {
+    fn metadata(&self) -> crate::Metadata {
+        Volatile::meta(3, FileType::Symlink)
+    }
+
+    fn into_any(self: Arc<Self>) -> Arc<dyn core::any::Any + Send + Sync> {
+        self
+    }
+
+    fn read_link(&self) -> Result<Vec<u8>, Errno> {
+        Ok(b"/nowhere".to_vec())
+    }
+
+    fn link_location(&self) -> Option<Result<Location, Errno>> {
+        Some(self.0.clone().ok_or(Errno::ENOENT))
+    }
+}
+
+impl crate::Inode for Magic {
+    fn metadata(&self) -> crate::Metadata {
+        Volatile::meta(1, FileType::Directory)
+    }
+
+    fn into_any(self: Arc<Self>) -> Arc<dyn core::any::Any + Send + Sync> {
+        self
+    }
+
+    fn caches_lookups(&self) -> bool {
+        false
+    }
+
+    fn lookup(&self, name: &[u8]) -> Result<Arc<dyn crate::Inode>, Errno> {
+        let links = self.links.lock();
+        let (_, target) = links
+            .iter()
+            .find(|(held, _)| held == name)
+            .ok_or(Errno::ENOENT)?;
+        Ok(Arc::new(MagicLink(target.clone())))
+    }
+}
+
+#[derive(Debug)]
+struct MagicFs(Arc<Magic>);
+
+impl FileSystem for MagicFs {
+    fn root(&self) -> Arc<dyn crate::Inode> {
+        Arc::clone(&self.0) as Arc<dyn crate::Inode>
+    }
+
+    fn name(&self) -> &'static str {
+        "magic"
+    }
+
+    fn device(&self) -> u64 {
+        10
+    }
+}
+
+#[test]
+fn a_magic_link_leads_to_its_object_and_not_to_its_text() {
+    let (ns, ctx) = fresh();
+    ns.mkdir(&ctx, None, b"/bin", 0o755).unwrap();
+    ns.mkdir(&ctx, None, b"/etc", 0o755).unwrap();
+    ns.mkdir(&ctx, None, b"/proc", 0o755).unwrap();
+    write_file(&ns, &ctx, "/bin/prog", b"the program");
+    write_file(&ns, &ctx, "/etc/conf", b"a setting");
+    let program = ns.resolve(&ctx, None, b"/bin/prog", true).unwrap();
+    let etc = ns.resolve(&ctx, None, b"/etc", true).unwrap();
+
+    let magic = Arc::new(Magic::default());
+    magic.links.lock().extend([
+        (b"exe".to_vec(), Some(program.clone())),
+        (b"cwd".to_vec(), Some(etc)),
+        (b"gone".to_vec(), None),
+    ]);
+    let at = ns.resolve(&ctx, None, b"/proc", true).unwrap();
+    let _ = ns.mount(Arc::new(MagicFs(magic)), &at).unwrap();
+
+    let found = ns.resolve(&ctx, None, b"/proc/exe", true).unwrap();
+    assert!(found.same(&program), "followed, it is the program's file");
+    assert_eq!(read_file(&ns, &ctx, "/proc/exe").unwrap(), b"the program");
+    assert_eq!(
+        ns.read_link(&ctx, None, b"/proc/exe").unwrap(),
+        b"/nowhere".to_vec(),
+        "read, it is still the text"
+    );
+    let link = ns.resolve(&ctx, None, b"/proc/exe", false).unwrap();
+    assert!(!link.same(&program), "not followed, it is the link itself");
+    assert_eq!(
+        ns.stat(&link).unwrap().metadata.kind,
+        FileType::Symlink,
+        "not followed, it is the link itself"
+    );
+
+    // Through a magic link to a directory, the walk goes on from there.
+    assert_eq!(
+        read_file(&ns, &ctx, "/proc/cwd/conf").unwrap(),
+        b"a setting"
+    );
+    assert_eq!(
+        read_file(&ns, &ctx, "/proc/exe/conf").err(),
+        Some(Errno::ENOTDIR),
+        "a file is not a directory, however it was reached"
+    );
+
+    // What the object is, not where it was: gone from its directory, the
+    // program is still what the link leads to.
+    ns.unlink(&ctx, None, b"/bin/prog").unwrap();
+    assert_eq!(read_file(&ns, &ctx, "/bin/prog").err(), Some(Errno::ENOENT));
+    assert_eq!(read_file(&ns, &ctx, "/proc/exe").unwrap(), b"the program");
+
+    // A magic link with nothing behind it is its own error, and nothing may
+    // be made or removed through one.
+    assert_eq!(
+        ns.resolve(&ctx, None, b"/proc/gone", true).err(),
+        Some(Errno::ENOENT)
+    );
+    assert!(ns.mkdir(&ctx, None, b"/proc/cwd", 0o755).is_err());
+}

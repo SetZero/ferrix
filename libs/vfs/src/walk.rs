@@ -272,6 +272,18 @@ impl Namespace {
         if at.links > MAX_SYMLINKS {
             return Err(Errno::ELOOP);
         }
+        // A magic link is not a path: the walk jumps to the object it stands
+        // for, and resolves the rest of the path from there. The directory
+        // that holds the object is the one the component counts as resolved
+        // in, and it has no name to be created or removed by: nothing that
+        // needs one may be done through a magic link.
+        if let Some(target) = inode.link_location() {
+            let target = target?;
+            at.parent = up(&target, Some(&ctx.root));
+            at.current = target;
+            at.last = LastPart::Root;
+            return Ok(None);
+        }
         let target = inode.read_link()?;
         if target.is_empty() {
             return Err(Errno::ENOENT);

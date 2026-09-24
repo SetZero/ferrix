@@ -566,6 +566,23 @@ pub trait Inode: Send + Sync + fmt::Debug {
         Err(Errno::EINVAL)
     }
 
+    /// Where following this link leads, for a *magic* link: one that stands
+    /// for an object rather than naming a path.
+    ///
+    /// `/proc/<pid>/exe` is the one that matters. A walk that follows it
+    /// arrives at the file the process's program was loaded from, whatever
+    /// [`Inode::read_link`] says and whether or not a path still reaches that
+    /// file: `execve("/proc/self/exe")` runs the same program after its file
+    /// was renamed, replaced or deleted, as Chrome does to start every child
+    /// process. That is Linux's `nd_jump_link`.
+    ///
+    /// `None`, the default, for an ordinary symbolic link, whose target is
+    /// the path [`Inode::read_link`] returns; and for a magic link with no
+    /// object behind it, which is then followed as one.
+    fn link_location(&self) -> Option<Result<crate::Location>> {
+        None
+    }
+
     /// The object a memory mapping of this file maps: in the kernel, the
     /// file's VMO, whose pages `read_at` copies out of too.
     ///
