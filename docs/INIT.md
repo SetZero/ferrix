@@ -784,7 +784,8 @@ stage 13, namespaces + seccomp ────────────────�
 ```
 
 L1 and L2 are host-only and need nothing from the kernel, so they can be
-built while stage 13 is. Init's first boot, L4, waits for C1 to C5.
+built while stage 13 is. Init's first boot, L4, waits for C1 to C5, which
+landed with C7 on 2026-09-24 (`docs/CGROUPS.md` §7.1).
 
 ## 13. Landings and points
 
@@ -970,8 +971,8 @@ cannot make the call.
 the same crate: `Kind::implied`, the graph, transactions, the slice tree,
 the restart policy, `Manager::step` and `deadline`, and the names the init
 program maps (`UnitId`, `GroupPath`, `Token`, `ClientId`). Then L4, once
-L2 and C1 to C5 are in
-(`docs/CGROUPS.md` §7.1 has G4 for C3). `cargo xtask test-init` builds an
+L2 is in; C1 to C5 are, since G4 landed on 2026-09-24
+(`docs/CGROUPS.md` §7.1). `cargo xtask test-init` builds an
 image with no program in the kernel and `/sbin/init` in the initramfs, and
 puts `qemu::init_option("/sbin/init")` into `CMDLINE.TXT`, as
 `init_file::Parts::image` does. It judges the kernel's `init     …` lines

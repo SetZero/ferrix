@@ -320,6 +320,23 @@ pub(crate) const APPLETS: &[Command] = &[
             "root still reads: secret",
         ]),
     },
+    // Delegation (stage 13, `docs/CGROUPS.md` §3.1): a cgroup subtree
+    // `chown`ed to the user `ferrix`, who moves its own shell within it and
+    // is refused moving it out.
+    Command {
+        argv: &["sh", "-c", DELEGATION_SCRIPT],
+        status: 8,
+        expect: Expect::Lines(&[
+            "delegated to 1000",
+            "made by 1000",
+            "moved itself in",
+            "0::/deleg/work",
+            "move out of the subtree refused",
+            "move to the root refused",
+            "0::/deleg/work",
+            "root took its shell back",
+        ]),
+    },
     // `mount -t proc` and `mount -t devtmpfs` go here once mount takes them.
 ];
 
@@ -353,6 +370,33 @@ mknod /tmp/dac-null c 1 3'
 su - ferrix -c 'echo "login shell $0 in $PWD as $EUID"'
 echo "root still reads: $(cat /tmp/dac-private)"
 exit 9
+"#;
+
+/// Root mounts cgroup2, makes `deleg` and `other`, and hands `deleg` to uid
+/// 1000 as Linux's delegation does: `chown` of the directory and of the
+/// files the delegate writes. It also hands over `other`'s `cgroup.procs`,
+/// so that the one thing standing between the delegate and a move there is
+/// the common ancestor's `cgroup.procs`, which is root's. Root moves its own
+/// shell into `deleg`, and `su` becomes `ferrix` there: the user makes
+/// `work`, whose files are its own, moves its shell in and reads that from
+/// `/proc/self/cgroup`, and is refused moving it to `other` and to the root.
+/// Each refusal is judged by its status, not its message, which differs
+/// between shells. Root then takes its shell back and removes everything.
+const DELEGATION_SCRIPT: &str = r#"mkdir -p /tmp/cg && mount -t cgroup2 none /tmp/cg || exit 1
+mkdir /tmp/cg/deleg /tmp/cg/other || exit 2
+chown 1000:1000 /tmp/cg/deleg /tmp/cg/deleg/cgroup.procs /tmp/cg/deleg/cgroup.threads /tmp/cg/deleg/cgroup.subtree_control /tmp/cg/other/cgroup.procs || exit 3
+stat -c "delegated to %u" /tmp/cg/deleg/cgroup.procs
+echo $$ > /tmp/cg/deleg/cgroup.procs || exit 4
+su ferrix -c 'mkdir /tmp/cg/deleg/work && stat -c "made by %u" /tmp/cg/deleg/work/cgroup.procs
+echo $$ > /tmp/cg/deleg/work/cgroup.procs && echo "moved itself in"
+cat /proc/self/cgroup
+{ echo $$ > /tmp/cg/other/cgroup.procs; } 2>/dev/null && echo "moved out of the subtree" || echo "move out of the subtree refused"
+{ echo $$ > /tmp/cg/cgroup.procs; } 2>/dev/null && echo "moved to the root" || echo "move to the root refused"
+cat /proc/self/cgroup'
+echo $$ > /tmp/cg/cgroup.procs && echo "root took its shell back"
+rmdir /tmp/cg/deleg/work /tmp/cg/deleg /tmp/cg/other || exit 6
+umount /tmp/cg || exit 7
+exit 8
 "#;
 
 /// The list as `kernel/build.rs` takes it: each argument ends in a NUL, and

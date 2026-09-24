@@ -442,7 +442,10 @@ package FerrixRoadmap {
              * 2026-09-23: every process in exactly one job, fork inheriting
              * it, populated counted exactly, the two kills apart. G2
              * done the same day: cgroupfs mounts as cgroup2, over
-             * libs/cgroupfs. */
+             * libs/cgroupfs. G3 and G4 done on 2026-09-24: cgroup.events
+             * wakes poll, select and epoll with POLLPRI; clone3 starts a
+             * child in a cgroup; chown delegates a subtree under cgroup v2's
+             * common-ancestor rule. C1-C5 and C7 are met. */
     }
 
     #planned requirement <'S14'> stage14RealTime : Stage {
@@ -487,7 +490,8 @@ package FerrixRoadmap {
              * Designed on 2026-09-23 in docs/INIT.md: pid 1 and a service
              * manager, systemd-shaped units, a cgroup per service, a pure
              * manager in libs/svc behind backends a microkernel could
-             * serve. 67 points to L10; waits on stage 13's cgroups. */
+             * serve. 67 points to L10; the stage 13 cgroups its first
+             * boot needs landed on 2026-09-24. */
     }
 
     #implemented requirement <'S16'> stage16Rustc : Stage {

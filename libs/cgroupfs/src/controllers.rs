@@ -46,6 +46,14 @@ impl Controller {
         }
     }
 
+    /// Whether it is one of Linux's threaded controllers, which can share
+    /// a cgroup with processes (`cpu` and `pids`; `cpuset` and `perf_event`
+    /// are the others, and are not built here). `memory` and `io` are domain
+    /// controllers, which the no-internal-process rule is about.
+    pub fn threaded(self) -> bool {
+        matches!(self, Controller::Cpu | Controller::Pids)
+    }
+
     /// Its bit in a [`Set`].
     fn bit(self) -> u8 {
         1 << (self as u8)
@@ -85,6 +93,32 @@ impl Set {
     /// Whether every controller in it is also in `other`.
     pub fn is_subset(self, other: Set) -> bool {
         self.0 & !other.0 == 0
+    }
+
+    /// Its domain controllers: those not [`Controller::threaded`].
+    #[must_use]
+    pub fn domain(self) -> Set {
+        self.iter()
+            .filter(|controller| !controller.threaded())
+            .fold(Set::EMPTY, Set::with)
+    }
+
+    /// It, with every controller in `other` added.
+    #[must_use]
+    pub fn union(self, other: Set) -> Set {
+        Set(self.0 | other.0)
+    }
+
+    /// The controllers in both it and `other`.
+    #[must_use]
+    pub fn intersect(self, other: Set) -> Set {
+        Set(self.0 & other.0)
+    }
+
+    /// It, with every controller in `other` taken out.
+    #[must_use]
+    pub fn minus(self, other: Set) -> Set {
+        Set(self.0 & !other.0)
     }
 
     /// Its controllers, in order.
@@ -145,4 +179,73 @@ pub fn parse_change(text: &[u8], known: Set) -> Result<Change, Refusal> {
         }
     }
     Ok(change)
+}
+
+/// Where a cgroup stands, for the no-internal-process rule: the facts about
+/// it Linux's rule reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "three independent facts about one cgroup, each a condition of Linux's rule"
+)]
+pub struct Standing {
+    /// Whether it is the root, which the rule exempts: `cgroup_is_mixable`.
+    pub root: bool,
+    /// Whether it has processes of its own: `cgroup_has_tasks`.
+    pub has_tasks: bool,
+    /// Whether a child of it is populated: `nr_populated_domain_children`.
+    pub populated_children: bool,
+    /// What its `cgroup.subtree_control` enables for its children now.
+    pub subtree_control: Set,
+}
+
+impl Standing {
+    /// Linux's `cgroup_can_be_thread_root`, for a cgroup that is not
+    /// threaded (none is here): the root always, otherwise one with no
+    /// populated child and no domain controller enabled. Such a cgroup may
+    /// hold processes beside threaded controllers, since it could become the
+    /// root of a threaded subtree.
+    pub fn can_be_thread_root(self) -> bool {
+        self.root || (!self.populated_children && self.subtree_control.domain().is_empty())
+    }
+}
+
+/// Whether `enable`, the controllers a `cgroup.subtree_control` write turns
+/// on that were not on already, may be turned on for a cgroup standing as
+/// `standing`: Linux's `cgroup_vet_subtree_control_enable`.
+///
+/// Controllers may not be enabled for the children of a cgroup that has
+/// processes of its own, because the children would then compete with those
+/// processes for what the controller divides. The root is exempt, and so are
+/// threaded controllers wherever the cgroup could be a threaded root.
+///
+/// # Errors
+///
+/// [`Refusal::Busy`] when the rule forbids it.
+pub fn vet_enable(enable: Set, standing: Standing) -> Result<(), Refusal> {
+    if enable.is_empty() || standing.root {
+        return Ok(());
+    }
+    if enable.domain().is_empty() && standing.can_be_thread_root() {
+        return Ok(());
+    }
+    if standing.has_tasks {
+        return Err(Refusal::Busy);
+    }
+    Ok(())
+}
+
+/// Whether a process may be moved into a cgroup standing as `standing`, by
+/// `cgroup.procs` or `clone3`'s `CLONE_INTO_CGROUP`: Linux's
+/// `cgroup_migrate_vet_dst`. Not into a cgroup that enables a controller for
+/// its children, unless it could be a threaded root.
+///
+/// # Errors
+///
+/// [`Refusal::Busy`] when the rule forbids it.
+pub fn vet_destination(standing: Standing) -> Result<(), Refusal> {
+    if standing.can_be_thread_root() || standing.subtree_control.is_empty() {
+        return Ok(());
+    }
+    Err(Refusal::Busy)
 }

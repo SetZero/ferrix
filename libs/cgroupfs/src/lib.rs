@@ -18,8 +18,9 @@
 //! * [`name`] -- which names `mkdir` may give a cgroup.
 //! * [`files`] -- the interface files every cgroup has, and which the root
 //!   lacks.
-//! * [`controllers`] -- the controller names, `cgroup.controllers` and what a
-//!   write to `cgroup.subtree_control` asks for.
+//! * [`controllers`] -- the controller names, `cgroup.controllers`, what a
+//!   write to `cgroup.subtree_control` asks for, and the no-internal-process
+//!   rule that decides whether it, or a move into a cgroup, may happen.
 //! * [`write`](mod@write) -- the writes of a number: `cgroup.procs`, `cgroup.kill`,
 //!   `cgroup.max.depth`, `cgroup.max.descendants` and `cgroup.type`.
 //! * [`render`] -- `cgroup.procs`, `cgroup.events`, `cgroup.stat`, the limits,
@@ -51,4 +52,6 @@ pub enum Refusal {
     NotSupported,
     /// A name longer than a directory entry may be: `ENAMETOOLONG`.
     TooLong,
+    /// What the no-internal-process rule forbids: `EBUSY`.
+    Busy,
 }

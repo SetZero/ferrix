@@ -138,11 +138,11 @@ sizes them.
 | ~~Dynamic linking: ferrousli's AArch64 and ARMv7-A port, which the customer put inside the stage on 2026-09-21~~ *done 2026-09-23* | ~~≈ 34~~ | done |
 | ~~Stage 12, btrfs write~~ *done 2026-09-21* | ~~≈ 60~~ | done |
 | ~~sysfs, fed by the services that own each fact (`docs/SYSFS.md`)~~ *done 2026-09-24* | ~~26~~ | done |
-| Stage 13, namespaces, cgroups, seccomp | cgroups 85 (`docs/CGROUPS.md` §7: 27 for what init needs, 58 for the controllers); namespaces and seccomp unsized, the old guess for the whole stage was *month* ≈ 60 | under way: G1 to G3 done (19 of 85); its cgroups come first, as init's prerequisite (`docs/INIT.md` §0) |
+| Stage 13, namespaces, cgroups, seccomp | cgroups 85 (`docs/CGROUPS.md` §7: 27 for what init needs, 58 for the controllers); namespaces and seccomp unsized, the old guess for the whole stage was *month* ≈ 60 | under way: G1 to G4 done (24 of 85), which is all init's first boot needs; its cgroups come first, as init's prerequisite (`docs/INIT.md` §0) |
 | Stage 22, Steam: the parts with a first guess (bubblewrap's rest 13, sound 30, Venus 8; glibc's names are dynamic linking's 13 and XWayland stage 19's, both counted above) | 51 | not started |
 | Stage 22, Steam: the 32-bit x86 ABI and what the runtime and Proton find missing | unsized, ≈ 100 as a guess | not started |
 | Stage 14, real-time domains | *month* ≈ 40 | not started |
-| Stage 15, a real userland | *week* ≈ 20, of which job control is spent; most of the rest landed as zinc and uutils, and what is left is an init, sized at 67 points in `docs/INIT.md` §13, of which L3's 3 and L1's 5 are spent, and 18 later | partially complete: init and gettys remain, designed; the kernel's `ferrix.init=` and a committing `reboot(2)` landed 2026-09-24 (L3), and so did the unit files in `libs/svc` (L1); the rest waits on stage 13's cgroups |
+| Stage 15, a real userland | *week* ≈ 20, of which job control is spent; most of the rest landed as zinc and uutils, and what is left is an init, sized at 67 points in `docs/INIT.md` §13, of which L3's 3 and L1's 5 are spent, and 18 later | partially complete: init and gettys remain, designed; the kernel's `ferrix.init=` and a committing `reboot(2)` landed 2026-09-24 (L3), and so did the unit files in `libs/svc` (L1) and the stage 13 cgroups its first boot needs (G1 to G4) |
 | ~~Stage 16, `rustc`~~ *exit met 2026-09-22* | ~~*the goal* ≈ 40~~ 8 spent | done |
 | Stage 20, self-hosting | *longer*, unsized | in progress: the x86-64 image builds on Ferrix and boots (2026-09-23) |
 | Stage 21, bare metal and a GPU of Ferrix's own | over 100, unsized | planned when bare-metal work is requested |
@@ -4169,8 +4169,23 @@ through one member's release and be woken by the job's queue at the last,
 then `POLLPRI` once and not after a re-read; its negative control, the file
 naming no queue, fails by the check's own message. Init's C4 is met.
 
-**Still to do** for init: G4 (`CLONE_INTO_CGROUP`, delegation), G5
-(`EMPTY`, `job_for_cgroup`); then the controllers. `docs/CGROUPS.md` §7.1 says where each starts in the code,
+**Done -- G4, `CLONE_INTO_CGROUP` and delegation (2026-09-24, 5 points).**
+`clone3` starts a child in the cgroup a descriptor names, counted there from
+the start, with Linux's checks and errnos. A cgroup's directory and files
+each have an owner and a mode, so `chown` hands a subtree to a user, who may
+move processes within it and not out of it: a move needs write access to
+the common ancestor's `cgroup.procs`, judged as whoever opened the file, as
+cgroup v2 judges it. A `mkdir` by a user gives it the new cgroup's files. A
+removed cgroup refuses moves, `ENODEV`. The no-internal-process rule is
+built and host-tested, and waits for a controller to be reachable. The
+`cgroups` boot check covers `CLONE_INTO_CGROUP` from a program on all three
+architectures and the delegation rules, and a `test-vfs` command runs them
+as the user `ferrix` in a subtree `chown`ed to it; each has a negative
+control. Init's C3 and C7 are met, so C1 to C5 and C7 are: nothing of stage
+13 stands before init's first boot any more.
+
+**Still to do:** G5 (`EMPTY`, `job_for_cgroup`), which init's native
+services wait on; then the controllers. `docs/CGROUPS.md` §7.1 says where each starts in the code,
 how landings are gated now, and what cost a gate on 2026-09-23.
 
 ---
@@ -4273,7 +4288,8 @@ runs in a cgroup of its own. Its manager is a pure state machine in
 serve instead. Init hands each service a bootstrap channel and routes named
 native services between them.
 
-Init waits on stage 13's cgroups, which the customer put first. Its landings
+Init waited on stage 13's cgroups, which the customer put first; what its
+first boot needs of them (C1 to C5 and C7) landed on 2026-09-24. Its landings
 come to 67 points up to hyprix no longer being pid 1, 8 of them spent on L3
 and L1: six kernel items of 11 points besides stage 13, two of them (K0, K7)
 built, and `cargo xtask test-init` growing a stage per landing. Its first
@@ -4282,7 +4298,8 @@ can be built while stage 13 is.
 
 **Where it stands.** The next landing is L2, the dependency engine and
 `Manager::step`, host-only like L1 and being built on `init/svc`. The
-first boot, L4, needs L2 and stage 13's `CLONE_INTO_CGROUP` (G4).
+first boot, L4, needs L2; stage 13's `CLONE_INTO_CGROUP` (G4) landed on
+2026-09-24.
 
 `test-jobs` is x86-64 only, because `sleep` is uutils' and uutils is built
 for x86-64 alone (`docs/UUTILS.md` D3).

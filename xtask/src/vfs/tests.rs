@@ -242,6 +242,19 @@ const APPLETS_ON_X86_64: &[(usize, &[&str])] = &[
             "root still reads: secret",
         ],
     ),
+    (
+        18,
+        &[
+            "delegated to 1000",
+            "made by 1000",
+            "moved itself in",
+            "0::/deleg/work",
+            "move out of the subtree refused",
+            "move to the root refused",
+            "0::/deleg/work",
+            "root took its shell back",
+        ],
+    ),
 ];
 
 /// A log of the applets alone, numbered after the criterion's commands, each

@@ -41,10 +41,11 @@ use ferrix_linux_abi::nr::Syscall;
 use ferrix_linux_abi::types::SIGCHLD;
 
 use crate::arch;
-use crate::object::job;
+use crate::fs::cgroupfs;
+use crate::object::job::{self, Job};
 use crate::syscall::process::{self, Process};
 use crate::syscall::thread::{self, Thread};
-use crate::syscall::{registry, uaccess};
+use crate::syscall::{fd, registry, uaccess};
 
 /// The low byte of `clone`'s flags: the signal the parent is told with.
 const CSIGNAL: u64 = 0xFF;
@@ -157,6 +158,9 @@ struct CloneRequest {
     child_tid: u64,
     /// The thread pointer `CLONE_SETTLS` gives the child.
     tls: u64,
+    /// `clone3`'s `CLONE_INTO_CGROUP`: the descriptor of the cgroup
+    /// directory the child starts in.
+    cgroup: Option<i32>,
 }
 
 /// `clone`, `clone3`, `fork` and `vfork`. Answers the child's pid to the
@@ -195,6 +199,7 @@ pub(crate) fn sys_clone(
                 parent_tid: a[2],
                 child_tid: a[3],
                 tls: a[4],
+                cgroup: None,
             },
             Arch::AArch64 | Arch::Armv7a => CloneRequest {
                 flags: a[0] & CLONE_LEGACY_FLAGS,
@@ -202,6 +207,7 @@ pub(crate) fn sys_clone(
                 parent_tid: a[2],
                 tls: a[3],
                 child_tid: a[4],
+                cgroup: None,
             },
         },
     };
@@ -242,8 +248,9 @@ pub(crate) fn sys_clone(
 /// what Linux's `clone3_args_valid` refuses -- unknown flags, an exit signal
 /// both in the flags and in its field, `CLONE_SIGHAND` with
 /// `CLONE_CLEAR_SIGHAND`, a stack without a size or a size without a stack;
-/// `ENOSYS` for `set_tid` and `CLONE_INTO_CGROUP`, which need pid namespaces
-/// and cgroups this kernel does not have.
+/// `ENOSYS` for `set_tid`, which needs pid namespaces this kernel does not
+/// have; `EINVAL` for `CLONE_INTO_CGROUP` with a descriptor past `INT_MAX` or
+/// a structure too old to carry one, as `copy_clone_args_from_user` refuses.
 fn clone3_request(parent: &Process, at: u64, size: u64) -> Result<CloneRequest, Errno> {
     if size > PAGE_SIZE {
         return Err(Errno::E2BIG);
@@ -281,7 +288,7 @@ fn clone3_request(parent: &Process, at: u64, size: u64) -> Result<CloneRequest, 
         tls,
         set_tid,
         set_tid_size,
-        _cgroup,
+        cgroup,
     ]: [u64; 11] = core::array::from_fn(|index| {
         bytes
             .get(index * 8..index * 8 + 8)
@@ -317,7 +324,14 @@ fn clone3_request(parent: &Process, at: u64, size: u64) -> Result<CloneRequest, 
             top
         }
     };
-    if set_tid != 0 || flags & CLONE_INTO_CGROUP != 0 {
+    let cgroup = if flags & CLONE_INTO_CGROUP == 0 {
+        None
+    } else if size < CLONE_ARGS_KNOWN {
+        return Err(Errno::EINVAL);
+    } else {
+        Some(i32::try_from(cgroup).map_err(|_| Errno::EINVAL)?)
+    };
+    if set_tid != 0 {
         return Err(Errno::ENOSYS);
     }
     Ok(CloneRequest {
@@ -329,7 +343,22 @@ fn clone3_request(parent: &Process, at: u64, size: u64) -> Result<CloneRequest, 
         parent_tid,
         child_tid,
         tls,
+        cgroup,
     })
+}
+
+/// The job `CLONE_INTO_CGROUP` asks a child of `parent` to start in, from
+/// the descriptor `descriptor`: `cgroupfs::clone_target`'s answer, and for a
+/// thread, which cannot leave its process's cgroup, `EOPNOTSUPP` unless that
+/// is the one named, as Linux answers a thread asked into another domain.
+fn cgroup_target(parent: &Process, descriptor: i32, thread: bool) -> Result<Arc<Job>, Errno> {
+    let file = fd::file(parent, descriptor).map_err(|_| Errno::EBADF)?;
+    let from = parent.job();
+    let to = cgroupfs::clone_target(&file, parent, &from)?;
+    if thread && !Arc::ptr_eq(&to, &from) {
+        return Err(Errno::EOPNOTSUPP);
+    }
+    Ok(to)
 }
 
 /// Make the process `request` asks for. See [`sys_clone`].
@@ -344,6 +373,7 @@ fn clone_with(
         parent_tid,
         child_tid,
         tls,
+        cgroup,
     } = *request;
     // A namespace asked for is a namespace that has to exist. Ignoring the
     // flag would answer a sandbox's request for isolation with a child that
@@ -361,6 +391,9 @@ fn clone_with(
     if flags & CLONE_SIGHAND != 0 && flags & CLONE_VM == 0 {
         return Err(Errno::EINVAL);
     }
+    let into = cgroup
+        .map(|descriptor| cgroup_target(parent, descriptor, flags & CLONE_THREAD != 0))
+        .transpose()?;
     if flags & CLONE_THREAD != 0 {
         return clone_thread(parent, request, regs);
     }
@@ -381,13 +414,16 @@ fn clone_with(
     // process group's signal or `/proc` can reach it. Its space and its heap
     // are copied under the heap lock, so a `brk` on another thread is seen
     // whole or not at all.
+    // A child asked into a cgroup is counted there from the start, and never
+    // in its parent's: its first instruction already runs in it.
     let child = parent
         .fork_memory(|space| {
-            Arc::new(Process::forked(
+            Arc::new(Process::forked_into(
                 parent,
                 space,
                 flags & CLONE_FILES != 0,
                 flags & CLONE_FS != 0,
+                into.clone(),
             ))
         })
         .map_err(|_| Errno::ENOMEM)?;
@@ -422,6 +458,12 @@ fn clone_with(
     if child.job().is_dying() {
         process::kill(&child, job::KILLED_STATUS);
         return Err(Errno::EAGAIN);
+    }
+    // And a cgroup `rmdir` removed between the check and the count, which
+    // Linux's `cgroup_mutex` shuts out and this sees here instead.
+    if into.is_some() && child.job().is_removed() {
+        process::kill(&child, job::KILLED_STATUS);
+        return Err(Errno::ENODEV);
     }
 
     // A failure to write either id is ignored, as Linux ignores it: the child
@@ -486,6 +528,7 @@ fn clone_thread(
         parent_tid,
         child_tid,
         tls,
+        ..
     } = *request;
     if flags & (CLONE_FILES | CLONE_FS) != CLONE_FILES | CLONE_FS
         || flags & (CLONE_VFORK | CLONE_PIDFD) != 0

@@ -358,7 +358,22 @@ impl Process {
         share_files: bool,
         share_fs: bool,
     ) -> Process {
-        let mut child = Process::with_pid(space, registry::allocate().unwrap_or(0), parent.job());
+        Process::forked_into(parent, space, share_files, share_fs, None)
+    }
+
+    /// [`Process::forked`], into `job` rather than the parent's when one is
+    /// given: `clone3`'s `CLONE_INTO_CGROUP`, whose caller has checked that
+    /// the parent may put a process there. The child is counted there from
+    /// the start, so it is never in the parent's job at all.
+    pub(crate) fn forked_into(
+        parent: &Arc<Process>,
+        space: Arc<AddressSpace>,
+        share_files: bool,
+        share_fs: bool,
+        job: Option<Arc<Job>>,
+    ) -> Process {
+        let job = job.unwrap_or_else(|| parent.job());
+        let mut child = Process::with_pid(space, registry::allocate().unwrap_or(0), job);
         child.files = if share_files {
             Arc::clone(&parent.files)
         } else {
@@ -397,7 +412,9 @@ impl Process {
     ///
     /// # Errors
     ///
-    /// [`JobError::Killed`] if `to`, or a job above it, has been killed.
+    /// [`JobError::Killed`] if `to`, or a job above it, has been killed;
+    /// [`JobError::Removed`] if `rmdir` took it; [`JobError::Internal`] if
+    /// the no-internal-process rule keeps processes out of it.
     pub(crate) fn move_to(&self, to: &Arc<Job>) -> Result<(), JobError> {
         let mut flipped = job::Flipped::new();
         let left = {
@@ -409,8 +426,10 @@ impl Process {
                 return Ok(());
             }
             if self.counted.load(Ordering::Acquire) {
-                to.count_in(&mut flipped);
+                to.count_in_checked(&mut flipped)?;
                 membership.count_out(&mut flipped);
+            } else {
+                to.admits()?;
             }
             core::mem::replace(&mut *membership, Arc::clone(to))
         };

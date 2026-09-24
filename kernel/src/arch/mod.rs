@@ -65,6 +65,13 @@ pub(crate) use armv7a::{
     uninstall_user_root, unmask_interrupt, user_hwcaps, user_platform, wait_for_interrupt,
     wait_for_work,
 };
+// The program stage 13's `CLONE_INTO_CGROUP` check runs.
+#[cfg(target_arch = "aarch64")]
+pub(crate) use aarch64::USER_INTO_CGROUP_PROGRAM;
+#[cfg(target_arch = "arm")]
+pub(crate) use armv7a::USER_INTO_CGROUP_PROGRAM;
+#[cfg(target_arch = "x86_64")]
+pub(crate) use x86_64::USER_INTO_CGROUP_PROGRAM;
 // Signal delivery: the register context the way back to user mode loads, the
 // architecture's signal frame, and the signal a user-mode fault becomes.
 #[cfg(target_arch = "aarch64")]

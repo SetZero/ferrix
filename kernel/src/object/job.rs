@@ -57,6 +57,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 use crate::sync::SpinLock;
 
+use ferrix_cgroupfs::controllers::{self, Change, Set, Standing};
 use ferrix_cgroupfs::write::Limit;
 use ferrix_native_abi::signals::Signals;
 use ferrix_sync::Once;
@@ -86,6 +87,11 @@ pub(crate) enum JobError {
     /// A limit above it (`cgroup.max.depth`, `cgroup.max.descendants`)
     /// allows no further job there.
     Limited,
+    /// It has been removed by `rmdir`, and takes no process.
+    Removed,
+    /// The no-internal-process rule forbids it (`docs/CGROUPS.md` §3.1):
+    /// processes beside controllers enabled for the children.
+    Internal,
 }
 
 /// Serialises every change to a job's counts, across the whole tree.
@@ -129,6 +135,23 @@ pub(crate) struct Job {
     /// Woken whenever it becomes populated or empty. Shared, so that a
     /// `poll` of its `cgroup.events` can hold it for as long as it sleeps.
     events: Arc<WaitQueue>,
+    /// The owner, group and mode `chown` and `chmod` gave its cgroupfs
+    /// directory and files, by each node's slot there. cgroupfs's, kept here
+    /// because a directory there is a view made afresh at every lookup, and
+    /// the job is what lasts. A node not listed has cgroupfs's defaults.
+    nodes: SpinLock<Vec<(u64, NodeAttributes)>>,
+}
+
+/// Who owns one node of a job's cgroupfs directory, and its mode: what
+/// delegation by `chown` changes (`docs/CGROUPS.md` §3.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct NodeAttributes {
+    /// The owner.
+    pub(crate) uid: u32,
+    /// The group.
+    pub(crate) gid: u32,
+    /// The permission bits.
+    pub(crate) permissions: u32,
 }
 
 /// What a job holds.
@@ -154,6 +177,11 @@ struct Members {
     max_depth: Limit,
     /// `cgroup.max.descendants`: how many jobs may be beneath it at once.
     max_descendants: Limit,
+    /// Set by `rmdir` ([`Job::remove_named_child`]): a removed job takes no
+    /// process, so none can be moved into a directory that is gone.
+    removed: bool,
+    /// `cgroup.subtree_control`: the controllers it enables for its children.
+    subtree_control: Set,
 }
 
 impl Default for Members {
@@ -168,6 +196,8 @@ impl Default for Members {
             observers: Vec::new(),
             max_depth: Limit::Max,
             max_descendants: Limit::Max,
+            removed: false,
+            subtree_control: Set::EMPTY,
         }
     }
 }
@@ -176,6 +206,24 @@ impl Members {
     /// Whether it, or anything beneath it, has a member not yet released.
     fn populated(&self) -> bool {
         self.live != 0 || self.busy != 0
+    }
+
+    /// Where it stands for the no-internal-process rule, a root or not.
+    fn standing(&self, root: bool) -> Standing {
+        Standing {
+            root,
+            has_tasks: self.live != 0,
+            populated_children: self.busy != 0,
+            subtree_control: self.subtree_control,
+        }
+    }
+
+    /// Whether a process may arrive in it, by a move or `CLONE_INTO_CGROUP`.
+    fn admits(&self, root: bool) -> Result<(), JobError> {
+        if self.removed {
+            return Err(JobError::Removed);
+        }
+        controllers::vet_destination(self.standing(root)).map_err(|_| JobError::Internal)
     }
 }
 
@@ -205,6 +253,7 @@ impl Job {
             state: SpinLock::new(Members::default()),
             waiters: WaitQueue::new(),
             events: Arc::new(WaitQueue::new()),
+            nodes: SpinLock::new(Vec::new()),
         }
     }
 
@@ -231,14 +280,17 @@ impl Job {
     ///
     /// # Errors
     ///
-    /// [`JobError::Killed`], [`JobError::Exists`] if a named child already
-    /// has that name, or [`JobError::Limited`] if a limit at or above it
-    /// allows no further job.
+    /// [`JobError::Killed`], [`JobError::Removed`] if `rmdir` took this one,
+    /// [`JobError::Exists`] if a named child already has that name, or
+    /// [`JobError::Limited`] if a limit at or above it allows no further job.
     pub(crate) fn new_named_child(self: &Arc<Job>, name: &str) -> Result<Arc<Job>, JobError> {
         self.room_for_a_child()?;
         let mut members = self.state.lock();
         if members.killed {
             return Err(JobError::Killed);
+        }
+        if members.removed {
+            return Err(JobError::Removed);
         }
         if members.named.iter().any(|child| child.name() == Some(name)) {
             return Err(JobError::Exists);
@@ -261,6 +313,89 @@ impl Job {
     /// Whether it is a root: the tree's, or one a boot check made alone.
     pub(crate) fn is_root(&self) -> bool {
         self.parent.is_none()
+    }
+
+    /// The job it is inside, unless it is a root.
+    pub(crate) fn parent(&self) -> Option<&Arc<Job>> {
+        self.parent.as_ref()
+    }
+
+    /// Whether `rmdir` has taken it out of its parent.
+    pub(crate) fn is_removed(&self) -> bool {
+        self.state.lock().removed
+    }
+
+    /// Whether a process may be moved into it now, by `cgroup.procs` or
+    /// `CLONE_INTO_CGROUP`: it has not been removed, and the
+    /// no-internal-process rule allows it. A move that counts the process in
+    /// asks again under the lock it counts under ([`Job::count_in_checked`]).
+    ///
+    /// # Errors
+    ///
+    /// [`JobError::Removed`] or [`JobError::Internal`].
+    pub(crate) fn admits(&self) -> Result<(), JobError> {
+        self.state.lock().admits(self.parent.is_none())
+    }
+
+    /// Its `cgroup.subtree_control`.
+    pub(crate) fn subtree_control(&self) -> Set {
+        self.state.lock().subtree_control
+    }
+
+    /// Apply a write to its `cgroup.subtree_control`, as Linux's
+    /// `cgroup_subtree_control_write` does: a controller already on is not
+    /// enabled again, nor one already off disabled; each newly enabled must
+    /// be `offered` (its `cgroup.controllers`); none may be disabled that a
+    /// child still enables; and what is enabled must pass the
+    /// no-internal-process rule, which is decided under the lock a move
+    /// counts a process in under.
+    ///
+    /// # Errors
+    ///
+    /// [`JobError::Missing`] for a controller not offered, [`JobError::Busy`]
+    /// for one a child still enables, [`JobError::Internal`] for the rule.
+    pub(crate) fn change_subtree_control(
+        &self,
+        change: Change,
+        offered: Set,
+    ) -> Result<(), JobError> {
+        let current = self.subtree_control();
+        let enable = change.enable.minus(current);
+        let disable = change.disable.intersect(current);
+        if !enable.is_subset(offered) {
+            return Err(JobError::Missing);
+        }
+        if self
+            .children()
+            .iter()
+            .any(|child| !child.subtree_control().intersect(disable).is_empty())
+        {
+            return Err(JobError::Busy);
+        }
+        let mut members = self.state.lock();
+        controllers::vet_enable(enable, members.standing(self.parent.is_none()))
+            .map_err(|_| JobError::Internal)?;
+        members.subtree_control = members.subtree_control.union(enable).minus(disable);
+        Ok(())
+    }
+
+    /// The owner, group and mode `chown` or `chmod` gave the node at `slot`
+    /// of its cgroupfs directory, if either did.
+    pub(crate) fn node(&self, slot: u64) -> Option<NodeAttributes> {
+        self.nodes
+            .lock()
+            .iter()
+            .find(|(at, _)| *at == slot)
+            .map(|(_, attributes)| *attributes)
+    }
+
+    /// Record the owner, group and mode of the node at `slot`.
+    pub(crate) fn set_node(&self, slot: u64, attributes: NodeAttributes) {
+        let mut nodes = self.nodes.lock();
+        match nodes.iter_mut().find(|(at, _)| *at == slot) {
+            Some((_, held)) => *held = attributes,
+            None => nodes.push((slot, attributes)),
+        }
     }
 
     /// The jobs directly inside it that still exist, named ones first in the
@@ -295,14 +430,18 @@ impl Job {
             .position(|child| child.name() == Some(name))
             .ok_or(JobError::Missing)?;
         let child = members.named.get(at).cloned().ok_or(JobError::Missing)?;
-        let busy = {
-            let inner = child.state.lock();
-            inner.populated()
+        {
+            let mut inner = child.state.lock();
+            let busy = inner.populated()
                 || !inner.named.is_empty()
-                || inner.children.iter().any(|child| child.strong_count() > 0)
-        };
-        if busy {
-            return Err(JobError::Busy);
+                || inner.children.iter().any(|child| child.strong_count() > 0);
+            if busy {
+                return Err(JobError::Busy);
+            }
+            // Under the child's lock, where a move counts a process in, so a
+            // move either lands first, and the child is busy, or finds it
+            // removed.
+            inner.removed = true;
         }
         let _ = members.named.remove(at);
         Ok(child)
@@ -422,23 +561,44 @@ impl Job {
     /// Called with the member's membership lock held, or for a process no
     /// one else can reach yet.
     pub(crate) fn count_in(self: &Arc<Job>, flipped: &mut Flipped) {
-        self.count(true, flipped);
+        let _ = self.count(true, false, flipped);
+    }
+
+    /// [`Job::count_in`] for a process moved in, which the job may refuse:
+    /// it asks [`Job::admits`]'s question under the lock it counts under, so
+    /// an `rmdir` or a `cgroup.subtree_control` write cannot slip between the
+    /// answer and the count. Nothing is counted when it refuses.
+    ///
+    /// # Errors
+    ///
+    /// As [`Job::admits`].
+    pub(crate) fn count_in_checked(self: &Arc<Job>, flipped: &mut Flipped) -> Result<(), JobError> {
+        self.count(true, true, flipped)
     }
 
     /// Count one member of its own fewer: a process released or moved out.
     pub(crate) fn count_out(self: &Arc<Job>, flipped: &mut Flipped) {
-        self.count(false, flipped);
+        let _ = self.count(false, false, flipped);
     }
 
     /// Change `live` by one, and every ancestor's `busy` for as long as the
-    /// job below it flipped.
-    fn count(self: &Arc<Job>, arriving: bool, flipped: &mut Flipped) {
+    /// job below it flipped. With `checked`, an arrival the job does not
+    /// admit is refused before anything changes.
+    fn count(
+        self: &Arc<Job>,
+        arriving: bool,
+        checked: bool,
+        flipped: &mut Flipped,
+    ) -> Result<(), JobError> {
         let _tree = TREE.lock();
         let mut job = Arc::clone(self);
         let mut own = true;
         loop {
             let changed = {
                 let mut members = job.state.lock();
+                if own && checked {
+                    members.admits(job.parent.is_none())?;
+                }
                 let before = members.populated();
                 let count = if own {
                     &mut members.live
@@ -464,6 +624,7 @@ impl Job {
             job = parent;
             own = false;
         }
+        Ok(())
     }
 
     /// Put `process` in this job, taking it out of the one it is in.

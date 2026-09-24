@@ -802,8 +802,23 @@ pub(crate) static STAGE13_CGROUPFS: Explanation = Explanation {
               a waiting task asleep through the first member's release and wake it, by the \
               job's event queue and with its cookie, at the last; the file must then poll \
               POLLPRI and POLLERR and be in select's exception set until read again from its \
-              start, and not after.",
+              start, and not after. Landing G4: a program's child started by clone3 with \
+              CLONE_INTO_CGROUP must read `0::/check-g` from /proc/self/cgroup first thing, and \
+              the call must be EBADF for a descriptor not open and for one of /tmp; chown of a \
+              cgroup directory and its cgroup.procs must last to the next lookup; uid 1000 must \
+              be able to mkdir in the cgroup it was given and not in root's, open its own \
+              cgroup.procs for writing and not root's, move a process within its subtree and \
+              back, and be refused EACCES moving it out, even to a cgroup.procs it owns; a \
+              cgroup rmdir removed must refuse a move and a mkdir with ENODEV.",
     causes: &[
+        "`forked_into` in kernel/src/syscall/process.rs or `clone_with`/`cgroup_target` in \
+         kernel/src/syscall/family.rs put the child in its parent's job, or \
+         `cgroupfs::clone_target` did not recognise a cgroupfs directory.",
+        "`attach_permissions` in kernel/src/fs/cgroupfs.rs did not find the common ancestor, \
+         or judged the move as someone other than the file's opener; or `set_node`/`node` \
+         lost an owner, so a lookup reports root's.",
+        "`Job::remove_named_child` did not mark the job removed, or `count_in_checked` and \
+         `new_named_child` did not look.",
         "`EventsFile` in kernel/src/fs/cgroupfs.rs does not name the job's `events` queue in \
          `poll_queues`, or does not compare the queue's wake count with the one it last \
          rendered at; or `job::notify` did not wake the queue at the flip.",

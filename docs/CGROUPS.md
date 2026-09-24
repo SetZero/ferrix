@@ -5,7 +5,7 @@ which the customer put first that day, and builds on the customer's decision
 of the same day that **every cgroup is backed by a `Job`** (`docs/INIT.md` §0,
 C8; `docs/BACKLOG.md`, Decisions). `docs/INIT.md` §0.1 is what the first user
 needs from this; `docs/ARCHITECTURE.md` §3 and §6 are the architecture. G1 to
-G3 (§7) are built. §9 lists what is still the customer's to decide.
+G4 (§7) are built. §9 lists what is still the customer's to decide.
 
 ## 1. What this is, and what it is not
 
@@ -164,25 +164,57 @@ no controller limit files, as on Linux.
 ### 3.1 Moving a process, and delegation
 
 A write of a pid to `cgroup.procs` moves the whole process, all its threads,
-by §2.5's order. It is allowed when the writer is privileged, or when it
-holds write permission on the target's `cgroup.procs` and on the
-`cgroup.procs` of the common ancestor of the source and the target, and the
-process's effective uid matches its own. Those are Linux's delegation rules,
-and with them `chown` of a directory hands a subtree to a user (C7). A move
-into a job that is sealed or being removed fails `ENOENT`.
+by §2.5's order. It is allowed when the writer holds write permission on the
+target's `cgroup.procs`, which the open checks, and on the `cgroup.procs` of
+the common ancestor of the source and the target, which the write checks as
+whoever opened the file (Linux's `cgroup_procs_write_permission`, with the
+opener's credentials, so a descriptor passed on carries only its opener's
+rights). Root passes both. Those are Linux's cgroup v2 delegation rules, and
+with them `chown` of a directory and of the files the delegate writes
+(`cgroup.procs`, `cgroup.threads`, `cgroup.subtree_control`) hands a subtree
+to a user (C7). The delegate may move its processes within the subtree and
+not out of it: out of it, the common ancestor is above the subtree and not
+the delegate's. This document's first draft also asked that the writer's
+effective uid match the process's. That is cgroup v1's rule, which v2
+dropped for the common ancestor, so it is not built (G4).
 
-**No internal processes.** A cgroup that enables a controller in
-`subtree_control` may not hold processes, except the root. Such a write
-fails `EBUSY` while it has members, and a move into such a cgroup fails
-`EBUSY`. This is the rule that makes controllers' arithmetic well defined,
-and it is why `docs/INIT.md`'s init moves itself into `init.scope` first.
+Every directory and file has its own owner, group and mode, as kernfs keeps
+them per node. `chown` and `chmod` change one node; a `mkdir` by someone
+other than root makes the new directory and all its files the maker's, as
+Linux's `cgroup_kn_set_ugid` does, and gives the directory the mode `mkdir`
+asked for. They are kept on the job, because a cgroupfs directory is a view
+made afresh at every lookup. A move into a job that native `job_kill`
+sealed fails `ENOENT`, and into one `rmdir` removed, `ENODEV`, as Linux
+answers for a dead cgroup; a `mkdir` in a removed one is `ENODEV` too.
+
+**No internal processes.** A cgroup that enables a domain controller
+(`memory`, `io`) in `subtree_control` may not hold processes, except the
+root. Such a write fails `EBUSY` while it has members, and a move into such
+a cgroup fails `EBUSY`. Threaded controllers (`cpu`, `pids`) are exempt
+while the cgroup could still be a threaded root: no domain controller on and
+no populated child. That is Linux's `cgroup_vet_subtree_control_enable` and
+`cgroup_migrate_vet_dst`, in `ferrix_cgroupfs::controllers` with host tests;
+the kernel decides it under the lock a move counts a process in under, so a
+move and a `subtree_control` write cannot pass each other. Until a
+controller is built `subtree_control` takes no name, so no boot check can
+reach the rule yet. This is the rule that makes controllers' arithmetic well
+defined, and it is why `docs/INIT.md`'s init moves itself into `init.scope`
+first.
 
 ### 3.2 `clone3` into a cgroup
 
-`CLONE_INTO_CGROUP` stops answering `ENOSYS` (`family.rs`). The `cgroup`
-field is a descriptor of a cgroupfs directory, and the child joins that job
-in place of its parent's, before publication. The checks are §3.1's, with the
-parent as the writer. It is init's race-free start (`docs/INIT.md` §5.2).
+`CLONE_INTO_CGROUP` no longer answers `ENOSYS` (`family.rs`, G4). The
+`cgroup` field is a descriptor of a cgroupfs directory, `O_PATH` or not, and
+the child is counted in that job from the moment it is made, never in its
+parent's, so its first instruction already runs there. The checks are
+Linux's `cgroup_css_set_fork`'s, with the parent as the writer: `EBADF` for a
+descriptor not open and for one that is not a cgroup directory (a file
+inside one included), `ENODEV` for a removed cgroup, `EACCES` without write
+access to its `cgroup.procs` or the common ancestor's, `EBUSY` for the
+no-internal-process rule; and `EINVAL`, before any of those, for a
+descriptor past `INT_MAX` or a `struct clone_args` shorter than
+`CLONE_ARGS_SIZE_VER2`. A thread asked into another cgroup is
+`EOPNOTSUPP`. It is init's race-free start (`docs/INIT.md` §5.2).
 
 ## 4. `POLLPRI`: the change notification
 
@@ -296,11 +328,13 @@ follow, as `docs/BACKLOG.md` decided.
 |---|---|---|
 | G1 | done | 2a56325b |
 | G2 | done | ae76c099, and 491aeb1f for the two lock files it left out |
-| G3 | done, 2026-09-24 | "Wake a poll of cgroup.events with POLLPRI when a cgroup fills or empties" |
-| G4, G5, P1, M1, M2, F1, S1, S2, B1 | not started | |
+| G3 | done, 2026-09-24 | 02bfbe69 |
+| G4 | done, 2026-09-24 | "Start a child in a cgroup with clone3, and hand a subtree to a user by chown" |
+| G5, P1, M1, M2, F1, S1, S2, B1 | not started | |
 
-66 of the cgroup half's 85 points are left. Only 5 of them stand before
-`docs/INIT.md`'s first boot: G4 meets C3 and C7. G3 met C4.
+61 of the cgroup half's 85 points are left, and none of them stands before
+`docs/INIT.md`'s first boot: G1 to G4 met C1 to C5 and C7. G5 (C8) is what
+`Type=native` services wait on (init's L8).
 
 **G3, as built (3 points).** §4 says what it is. The `cgroups` boot check
 (`kernel/src/fs/cgroupfs/events_check.rs`) gives a cgroup two members, reads
@@ -313,17 +347,30 @@ exception set, until it is read again from its start, and not after. Its
 negative control, `EventsFile::poll_queues` naming no queue, fails by the
 check's own message ("ended by its recheck, not by the release's wake").
 
+**G4, as built (5 points).** §3.1 and §3.2 say what it is. Its checks are
+under the `cgroups` boot line (`kernel/src/fs/cgroupfs/delegation_check.rs`):
+a program, `arch::USER_INTO_CGROUP_PROGRAM` on all three architectures,
+starts a child with `CLONE_INTO_CGROUP` that reads `0::/check-g` from
+`/proc/self/cgroup` first thing, and gets `EBADF` for a descriptor not open
+and for one of `/tmp`; uid 1000, given a subtree by `chown`, makes a cgroup
+in it and not in root's, opens its own `cgroup.procs` and not root's, moves
+a process within the subtree and back and is refused `EACCES` moving it out,
+even to a `cgroup.procs` it owns; and a removed cgroup refuses a move and a
+`mkdir` with `ENODEV`. The user-level run G2 moved here is a `test-vfs`
+command, not `test-shell`, because `test-vfs` is where the image has `su`
+and the user `ferrix`: root hands `deleg` to uid 1000, `su ferrix` makes
+`work`, moves its own shell in, reads it from `/proc/self/cgroup`, and is
+refused moving it to `other` and to the root. Each check has a negative
+control that fails by its own message: the child forked into its parent's
+job, no common-ancestor check, and `cgroup.procs` judged as root whoever
+opened it. The rule of no internal processes has host tests only, since
+`subtree_control` takes no name until P1. G4 also fixed G2's inode
+numbers, which were one number for every file of a cgroup: `file_slot`
+compared addresses in a `const` table, which need not be the same table
+twice.
+
 **What the next session does first, and where each starts.**
 
-* **G4, `CLONE_INTO_CGROUP` and delegation** (5 points). In
-  `kernel/src/syscall/family.rs`, `clone3` parses the `cgroup` field and
-  refuses the flag with `ENOSYS`. Resolve that descriptor to a cgroupfs
-  `Directory` (downcast through `into_any`), and join the child to its job
-  instead of the parent's, before `publish_forked`. Delegation (§3.1)
-  needs `Directory::set_attributes` for `chown` and an owner on the job,
-  plus the common-ancestor write check on moves. It also needs the
-  no-internal-process rule. G2's `test-shell` run was moved here, since a
-  delegated subtree needs a non-root user anyway.
 * **G5, `EMPTY` and `job_for_cgroup`** (3 points). `Signals` in
   `libs/native-abi/src/signals.rs` gains bit 4. The job's count walk (G1)
   is where it flips, beside `events`. The call number is 0x102A.

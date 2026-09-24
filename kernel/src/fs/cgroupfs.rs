@@ -10,14 +10,26 @@
 //! where the host tests and the fuzzer reach it. What this module adds is the
 //! kernel's half: which job, which process, which errno.
 //!
-//! # What G2 has, and what comes later
+//! # What is here, and what comes later
 //!
 //! The tree, `cgroup.procs` read and moves, `cgroup.kill`, `cgroup.events`
-//! read and polled for `POLLPRI` (G3), the limits on depth and descendants, and
-//! `cgroup.subtree_control` with no controller to enable yet. A move needs
-//! write access to the target's `cgroup.procs`, which only root has until
-//! delegation (G4) lets `chown` hand a subtree to a user. `cgroup.freeze`
+//! read and polled for `POLLPRI` (G3), the limits on depth and descendants,
+//! and `cgroup.subtree_control` with no controller to enable yet. `cgroup.freeze`
 //! reads `0` and refuses writes until F1.
+//!
+//! # Delegation (G4)
+//!
+//! Every directory and file has an owner, a group and a mode, which `chown`
+//! and `chmod` change and a `mkdir` by someone other than root sets to its
+//! maker, as kernfs does. They are kept on the job ([`Job::node`]), since a
+//! directory here is made afresh at every lookup. A move by `cgroup.procs`
+//! needs what Linux's cgroup v2 asks: write access to the target's
+//! `cgroup.procs`, which the open checks, and to the `cgroup.procs` of the
+//! common ancestor of where the process is and where it goes, checked here as
+//! whoever opened the file. So a user given a subtree by `chown` moves its
+//! processes within it and not out of it. `clone3`'s `CLONE_INTO_CGROUP`
+//! asks the same, of the caller, through [`clone_target`]. The
+//! no-internal-process rule is `ferrix-cgroupfs`'s and the job's.
 
 use alloc::boxed::Box;
 use alloc::string::String;
@@ -30,17 +42,19 @@ use ferrix_cgroupfs::files::{self, Kind};
 use ferrix_cgroupfs::write::{self, Target};
 use ferrix_cgroupfs::{Refusal, name, render};
 use ferrix_linux_abi::errno::Errno;
+use ferrix_vfs::access::{Access, MAY_WRITE};
 use ferrix_vfs::{
-    DirEntry, FIRST_CURSOR, FileSystem, FileType, Inode, Metadata, NewNode, Readiness, StatFs,
-    Timespec,
+    DirEntry, FIRST_CURSOR, FileSystem, FileType, Inode, Metadata, NewNode, OpenFile, Readiness,
+    SetAttributes, StatFs, Timespec,
 };
 
 use crate::fs::{self, procfs};
-use crate::object::job::{self, Job, JobError};
+use crate::object::job::{self, Job, JobError, NodeAttributes};
 use crate::sync::SpinLock;
-use crate::syscall::process;
+use crate::syscall::process::{self, Process};
 use crate::syscall::registry;
 
+mod delegation_check;
 mod events_check;
 
 /// The result every operation here returns.
@@ -117,13 +131,157 @@ fn errno(refusal: Refusal) -> Errno {
         Refusal::Range => Errno::ERANGE,
         Refusal::NotSupported => Errno::EOPNOTSUPP,
         Refusal::TooLong => Errno::ENAMETOOLONG,
+        Refusal::Busy => Errno::EBUSY,
     }
+}
+
+/// The errno Linux answers a move a job refused with.
+fn move_errno(refused: JobError) -> Errno {
+    match refused {
+        // Linux's `cgroup_kn_lock_live` on a cgroup whose directory is gone.
+        JobError::Removed => Errno::ENODEV,
+        // `cgroup_migrate_vet_dst`.
+        JobError::Internal => Errno::EBUSY,
+        // Sealed by the native `job_kill`, which Linux has no counterpart of.
+        JobError::Killed
+        | JobError::Exists
+        | JobError::Missing
+        | JobError::Busy
+        | JobError::Limited => Errno::ENOENT,
+    }
+}
+
+/// The identity the running process's permission checks are made as: its
+/// filesystem ids and groups, or root's for the kernel's own checks.
+fn caller_access() -> Access {
+    process::current().map_or_else(Access::root, |caller| access_of(&caller))
+}
+
+/// The identity `process`'s permission checks are made as.
+pub(crate) fn access_of(process: &Process) -> Access {
+    process.with_credentials(|credentials| Access {
+        uid: credentials.user.filesystem,
+        gid: credentials.group.filesystem,
+        groups: credentials.groups.clone(),
+    })
+}
+
+/// The slot of `cgroup.procs` among a directory's nodes.
+fn procs_slot() -> u64 {
+    files::FILES
+        .iter()
+        .find(|file| file.kind == Kind::Procs)
+        .map_or(0, |file| 1 + file_slot(file))
 }
 
 /// The inode number of a job's directory; its files follow it. A job's id is
 /// never reused, so neither is a number.
 fn ino(job: &Job, slot: u64) -> u64 {
     job.id().saturating_mul(32).saturating_add(slot)
+}
+
+/// The metadata of the node at `slot` of `job`'s directory -- 0 for the
+/// directory itself, one past a file's place in [`files::FILES`] for a file --
+/// with the owner, group and mode `chown` and `chmod` gave it, or root's and
+/// `permissions` if neither did.
+fn node_metadata(
+    job: &Job,
+    shared: &Shared,
+    slot: u64,
+    kind: FileType,
+    permissions: u32,
+) -> Metadata {
+    let owned = job.node(slot).unwrap_or(NodeAttributes {
+        uid: 0,
+        gid: 0,
+        permissions,
+    });
+    Metadata {
+        ino: ino(job, slot),
+        kind,
+        permissions: owned.permissions,
+        nlink: if kind == FileType::Directory { 2 } else { 1 },
+        uid: owned.uid,
+        gid: owned.gid,
+        size: 0,
+        rdev: 0,
+        blocks: 0,
+        block_size: 4096,
+        atime: shared.made,
+        mtime: shared.made,
+        ctime: shared.made,
+    }
+}
+
+/// Record `change`'s owner, group and mode for the node `before` describes,
+/// as chown and chmod leave them. Times are accepted and not kept: every
+/// time here is the mount's.
+fn set_node(job: &Job, slot: u64, before: &Metadata, change: &SetAttributes) {
+    job.set_node(
+        slot,
+        NodeAttributes {
+            uid: change.uid.unwrap_or(before.uid),
+            gid: change.gid.unwrap_or(before.gid),
+            permissions: change
+                .permissions
+                .map_or(before.permissions, |permissions| permissions & 0o7777),
+        },
+    );
+}
+
+/// The metadata of `job`'s `cgroup.procs`, whose write permission is what a
+/// move is judged by.
+fn procs_metadata(job: &Job, shared: &Shared) -> Metadata {
+    node_metadata(job, shared, procs_slot(), FileType::Regular, 0o644)
+}
+
+/// Whether `who` may move a process from `from` to `to`, as Linux's
+/// `cgroup_attach_permissions` decides for cgroup v2: write access to the
+/// `cgroup.procs` of the nearest job containing both, and a destination the
+/// no-internal-process rule allows. Write access to the destination's own
+/// `cgroup.procs` is the caller's to have checked: the open of the file, or
+/// [`clone_target`].
+///
+/// Linux's cgroup v1 also asked that the writer's effective uid match the
+/// process's; v2 dropped that, the common ancestor being the delegation
+/// boundary, and so does this.
+fn attach_permissions(who: &Access, from: &Arc<Job>, to: &Arc<Job>, shared: &Shared) -> Result<()> {
+    let mut common = Some(Arc::clone(from));
+    while let Some(at) = common.take_if(|at| !at.contains(to)) {
+        common = at.parent().cloned();
+    }
+    match common {
+        Some(common) => who.require(&procs_metadata(&common, shared), MAY_WRITE)?,
+        // Two trees with nothing above both: only a boot check's own jobs.
+        None if who.privileged() => {}
+        None => return Err(Errno::EACCES),
+    }
+    to.admits().map_err(move_errno)
+}
+
+/// The job `clone3`'s `CLONE_INTO_CGROUP` starts a child of `parent` in: the
+/// cgroupfs directory `file` is open on, if `parent`, whose job is `from`,
+/// may put a process there. Linux's `cgroup_css_set_fork`, in its order.
+///
+/// # Errors
+///
+/// `EBADF` for a file that is not a cgroup directory -- a file inside one
+/// included, as `cgroup_get_from_file` refuses it; `ENODEV` for one `rmdir`
+/// removed; `EACCES` without write access to its `cgroup.procs` or the
+/// common ancestor's; `EBUSY` for the no-internal-process rule.
+pub(crate) fn clone_target(file: &OpenFile, parent: &Process, from: &Arc<Job>) -> Result<Arc<Job>> {
+    let directory = Arc::clone(file.inode())
+        .into_any()
+        .downcast::<Directory>()
+        .map_err(|_| Errno::EBADF)?;
+    let to = &directory.job;
+    if to.is_removed() {
+        return Err(Errno::ENODEV);
+    }
+    let who = access_of(parent);
+    who.require(&procs_metadata(to, &directory.shared), MAY_WRITE)?;
+    attach_permissions(&who, from, to, &directory.shared)?;
+    Ok(Arc::clone(to))
 }
 
 /// A job's directory.
@@ -136,25 +294,6 @@ struct Directory {
 }
 
 impl Directory {
-    /// Metadata for something in this directory's instance.
-    fn metadata_for(&self, ino: u64, kind: FileType, permissions: u32) -> Metadata {
-        Metadata {
-            ino,
-            kind,
-            permissions,
-            nlink: if kind == FileType::Directory { 2 } else { 1 },
-            uid: 0,
-            gid: 0,
-            size: 0,
-            rdev: 0,
-            blocks: 0,
-            block_size: 4096,
-            atime: self.shared.made,
-            mtime: self.shared.made,
-            ctime: self.shared.made,
-        }
-    }
-
     /// The child job shown as `name`, if there is one.
     fn child(&self, name: &[u8]) -> Option<Arc<Job>> {
         self.job
@@ -171,11 +310,21 @@ impl Directory {
 
 impl Inode for Directory {
     fn metadata(&self) -> Metadata {
-        self.metadata_for(ino(&self.job, 0), FileType::Directory, 0o755)
+        node_metadata(&self.job, &self.shared, 0, FileType::Directory, 0o755)
     }
 
     fn into_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync> {
         self
+    }
+
+    /// `chown` and `chmod` of the directory alone, as kernfs keeps them per
+    /// node: delegating a subtree is a `chown` of the directory and of the
+    /// files the delegate is to write (`cgroup.procs`, `cgroup.threads`,
+    /// `cgroup.subtree_control`). The namespace has already checked the
+    /// change is the caller's to make.
+    fn set_attributes(&self, change: &SetAttributes) -> Result<()> {
+        set_node(&self.job, 0, &self.metadata(), change);
+        Ok(())
     }
 
     /// Asked afresh on every walk: a native `job_create` adds a directory,
@@ -189,11 +338,7 @@ impl Inode for Directory {
             return Ok(Arc::new(Interface {
                 job: Arc::clone(&self.job),
                 file,
-                metadata: self.metadata_for(
-                    ino(&self.job, 1 + file_slot(file)),
-                    FileType::Regular,
-                    u32::from(file.mode()),
-                ),
+                shared: Arc::clone(&self.shared),
             }));
         }
         let child = self.child(name).ok_or(Errno::ENOENT)?;
@@ -205,7 +350,7 @@ impl Inode for Directory {
 
     /// `mkdir`: a new named job. Anything else is refused, as kernfs refuses
     /// a file made in a cgroup directory.
-    fn create(&self, name: &[u8], node: NewNode<'_>, _permissions: u32) -> Result<Arc<dyn Inode>> {
+    fn create(&self, name: &[u8], node: NewNode<'_>, permissions: u32) -> Result<Arc<dyn Inode>> {
         if node != NewNode::Directory {
             return Err(Errno::EACCES);
         }
@@ -220,8 +365,12 @@ impl Inode for Directory {
             .map_err(|refused| match refused {
                 JobError::Exists => Errno::EEXIST,
                 JobError::Limited => Errno::EAGAIN,
-                JobError::Killed | JobError::Missing | JobError::Busy => Errno::ENOENT,
+                JobError::Removed => Errno::ENODEV,
+                JobError::Killed | JobError::Missing | JobError::Busy | JobError::Internal => {
+                    Errno::ENOENT
+                }
             })?;
+        own_new(&child, permissions);
         Ok(Arc::new(Directory {
             job: child,
             shared: Arc::clone(&self.shared),
@@ -277,11 +426,50 @@ impl Inode for Directory {
     }
 }
 
-/// A file's place in [`files::FILES`], which its inode number is made from.
+/// Give a job `mkdir` just made its maker's ownership, as Linux's
+/// `cgroup_kn_set_ugid` does for the directory and every file in it: the
+/// maker's filesystem ids, unless both are root's, which every node has
+/// anyway. The directory takes the mode `mkdir` asked for, as kernfs gives
+/// it.
+fn own_new(job: &Job, permissions: u32) {
+    let who = caller_access();
+    let root = who.uid == 0 && who.gid == 0;
+    if permissions & 0o7777 != 0o755 || !root {
+        job.set_node(
+            0,
+            NodeAttributes {
+                uid: who.uid,
+                gid: who.gid,
+                permissions: permissions & 0o7777,
+            },
+        );
+    }
+    if root {
+        return;
+    }
+    for file in files::FILES {
+        job.set_node(
+            1 + file_slot(file),
+            NodeAttributes {
+                uid: who.uid,
+                gid: who.gid,
+                permissions: u32::from(file.mode()),
+            },
+        );
+    }
+}
+
+/// A file's place in [`files::FILES`], which its inode number, and where its
+/// owner is kept, are made from.
+///
+/// Found by its kind, which is one per file, and not by address: `FILES` is a
+/// `const`, so the table `files::named` hands out a reference into need not
+/// be the one this crate's copy of it is, and a comparison of addresses found
+/// no file at all, giving every file the same inode number.
 fn file_slot(file: &files::File) -> u64 {
     files::FILES
         .iter()
-        .position(|each| core::ptr::eq(each, file))
+        .position(|each| each.kind == file.kind)
         .map_or(0, |at| at as u64)
 }
 
@@ -292,17 +480,36 @@ struct Interface {
     job: Arc<Job>,
     /// Which file.
     file: &'static files::File,
-    /// What `stat` reports.
-    metadata: Metadata,
+    /// The instance's device and timestamps.
+    shared: Arc<Shared>,
+}
+
+impl Interface {
+    /// Its slot among its directory's nodes.
+    fn slot(&self) -> u64 {
+        1 + file_slot(self.file)
+    }
 }
 
 impl Inode for Interface {
     fn metadata(&self) -> Metadata {
-        self.metadata
+        node_metadata(
+            &self.job,
+            &self.shared,
+            self.slot(),
+            FileType::Regular,
+            u32::from(self.file.mode()),
+        )
     }
 
     fn into_any(self: Arc<Self>) -> Arc<dyn Any + Send + Sync> {
         self
+    }
+
+    /// `chown` and `chmod` of this one file.
+    fn set_attributes(&self, change: &SetAttributes) -> Result<()> {
+        set_node(&self.job, self.slot(), &self.metadata(), change);
+        Ok(())
     }
 
     /// Accepted and ignored, as kernfs ignores the `O_TRUNC` a shell's `>`
@@ -315,22 +522,29 @@ impl Inode for Interface {
     /// writes. `cgroup.events` is the exception: it is rendered when read,
     /// and polled, so an open of it is an [`EventsFile`].
     fn open(&self) -> Result<Option<Arc<dyn Inode>>> {
+        let metadata = self.metadata();
         if self.file.kind == Kind::Events {
             return Ok(Some(Arc::new(EventsFile {
                 job: Arc::clone(&self.job),
-                metadata: self.metadata,
+                metadata,
                 rendered: SpinLock::new(Rendered::default()),
             })));
         }
         let bytes = contents(&self.job, self.file.kind);
         let job = Arc::clone(&self.job);
         let kind = self.file.kind;
-        let writer: Option<procfs::Writer> = self
-            .file
-            .writable
-            .then(|| Box::new(move |data: &[u8]| write_to(&job, kind, data)) as procfs::Writer);
+        // A move is judged as whoever opened the file, as Linux judges it
+        // with the opener's credentials, so a descriptor handed to someone
+        // else carries only what its opener could do.
+        let writer: Option<procfs::Writer> = self.file.writable.then(|| {
+            let opener = Writer {
+                who: caller_access(),
+                shared: Arc::clone(&self.shared),
+            };
+            Box::new(move |data: &[u8]| write_to(&job, kind, data, &opener)) as procfs::Writer
+        });
         Ok(Some(procfs::snapshot(
-            self.metadata,
+            metadata,
             bytes,
             writer,
             Errno::EACCES,
@@ -452,8 +666,8 @@ fn contents(job: &Arc<Job>, kind: Kind) -> Vec<u8> {
             tids.sort_unstable();
             render::ids(&mut out, &tids);
         }
-        // What the parent enables here; the root is offered what is built.
-        Kind::Controllers | Kind::SubtreeControl => controllers::render(&mut out, BUILT),
+        Kind::Controllers => controllers::render(&mut out, offered(job)),
+        Kind::SubtreeControl => controllers::render(&mut out, job.subtree_control()),
         Kind::Events => render::events(&mut out, job.is_populated(), false),
         Kind::MaxDescendants => render::limit(&mut out, job.limits().1),
         Kind::MaxDepth => render::limit(&mut out, job.limits().0),
@@ -465,7 +679,7 @@ fn contents(job: &Arc<Job>, kind: Kind) -> Vec<u8> {
 }
 
 /// The live processes directly in `job`, not beneath it, in pid order.
-fn members_processes(job: &Arc<Job>) -> Vec<Arc<process::Process>> {
+fn members_processes(job: &Arc<Job>) -> Vec<Arc<Process>> {
     registry::live()
         .into_iter()
         .filter(|process| Arc::ptr_eq(&process.job(), job) && !process.is_terminated())
@@ -480,24 +694,49 @@ fn members(job: &Arc<Job>) -> Vec<u32> {
         .collect()
 }
 
-/// A write of `data` to a file of `job`.
-fn write_to(job: &Arc<Job>, kind: Kind, data: &[u8]) -> Result<usize> {
+/// What a job's `cgroup.controllers` lists: what its parent enables for
+/// its children, or for the root, what is built.
+fn offered(job: &Job) -> Set {
+    job.parent()
+        .map_or(BUILT, |parent| parent.subtree_control())
+}
+
+/// Who opened a file that takes writes, which a move is judged as.
+struct Writer {
+    /// The opener's identity.
+    who: Access,
+    /// The instance, for the metadata a permission is judged by.
+    shared: Arc<Shared>,
+}
+
+/// A write of `data` to a file of `job`, opened by `opener`.
+fn write_to(job: &Arc<Job>, kind: Kind, data: &[u8], opener: &Writer) -> Result<usize> {
     match kind {
         Kind::Procs => {
-            let process = match write::parse_procs(data).map_err(errno)? {
+            let target = write::parse_procs(data).map_err(errno)?;
+            if job.is_removed() {
+                return Err(Errno::ENODEV);
+            }
+            let process = match target {
                 Target::Writer => process::current().ok_or(Errno::ESRCH)?,
                 Target::Pid(pid) => registry::find(pid).ok_or(Errno::ESRCH)?,
             };
-            job.adopt(&process).map_err(|_| Errno::ENOENT)?;
+            attach_permissions(&opener.who, &process.job(), job, &opener.shared)?;
+            job.adopt(&process).map_err(move_errno)?;
         }
         Kind::Kill => {
             write::parse_kill(data).map_err(errno)?;
             let _ = job.kill_members();
         }
         Kind::SubtreeControl => {
-            // Nothing is built, so nothing parses but an empty change, and an
-            // empty change changes nothing.
-            let _change = controllers::parse_change(data, BUILT).map_err(errno)?;
+            // Nothing is built yet, so nothing parses but an empty change;
+            // the rules below are ready for the first controller (P1).
+            let change = controllers::parse_change(data, BUILT).map_err(errno)?;
+            job.change_subtree_control(change, offered(job))
+                .map_err(|refused| match refused {
+                    JobError::Busy | JobError::Internal => Errno::EBUSY,
+                    _ => Errno::ENOENT,
+                })?;
         }
         Kind::MaxDepth => job.set_max_depth(write::parse_limit(data).map_err(errno)?),
         Kind::MaxDescendants => job.set_max_descendants(write::parse_limit(data).map_err(errno)?),
@@ -525,6 +764,10 @@ pub(crate) struct Report {
     pub(crate) refusals: u32,
     /// Waits on `cgroup.events` that a release's wake ended.
     pub(crate) woken: u32,
+    /// Moves judged by the delegation rules, allowed and refused.
+    pub(crate) moves: u32,
+    /// Whether a child started by `CLONE_INTO_CGROUP` found itself there.
+    pub(crate) cloned: bool,
 }
 
 /// Where [`check`] mounts its cgroupfs: under `/tmp`, and gone afterwards.
@@ -565,7 +808,7 @@ impl Harness {
     }
 
     /// Everything left in an open file, read to the end.
-    fn read_to_end(file: &ferrix_vfs::OpenFile) -> Result<Vec<u8>> {
+    fn read_to_end(file: &OpenFile) -> Result<Vec<u8>> {
         let mut contents = Vec::new();
         let mut chunk = [0_u8; 256];
         loop {
@@ -578,7 +821,7 @@ impl Harness {
     }
 
     /// The file at `tail` beneath the mount, opened for reading.
-    fn open_read(&self, tail: &[u8]) -> Result<Arc<ferrix_vfs::OpenFile>> {
+    fn open_read(&self, tail: &[u8]) -> Result<Arc<OpenFile>> {
         let flags = ferrix_vfs::OpenFlags {
             read: true,
             ..ferrix_vfs::OpenFlags::default()
@@ -672,6 +915,9 @@ pub(crate) fn check() -> Checked<Report> {
     check_a_move_and_a_kill(&mut harness, &process)?;
     check_the_limits(&mut harness)?;
     harness.report.woken = events_check::run(&mut harness)?;
+    let delegated = delegation_check::run(&mut harness)?;
+    harness.report.moves = delegated.moves;
+    harness.report.cloned = delegated.cloned;
 
     let root = ns
         .resolve(&harness.ctx, None, CHECK_AT, true)
@@ -703,7 +949,7 @@ fn check_the_root(harness: &Harness, pid: u32) -> Checked<()> {
 
 /// A cgroup made, a process moved in by its pid and seen there, the cgroup
 /// kept while populated, then emptied by `cgroup.kill` and removed.
-fn check_a_move_and_a_kill(harness: &mut Harness, process: &process::Process) -> Checked<()> {
+fn check_a_move_and_a_kill(harness: &mut Harness, process: &Process) -> Checked<()> {
     const EMPTY: &[u8] = b"populated 0\nfrozen 0\n";
     const FULL: &[u8] = b"populated 1\nfrozen 0\n";
     let pid = process.pid();
