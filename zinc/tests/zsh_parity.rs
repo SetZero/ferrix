@@ -555,3 +555,34 @@ fn a_lone_input_redirection_substitutes_the_file() {
         "st=1 []\n"
     );
 }
+
+/// An element of an array or a hash is read and set where the parameter is
+/// kept. compinit reads and writes `_comps`, a hash of every command it can
+/// complete, one key at a time; while each of those copied the whole hash,
+/// a cold start of oh-my-zsh spent most of its time copying.
+#[test]
+fn an_element_is_read_and_set_in_place() {
+    assert_eq!(
+        run("a=(x y z); a[2]=Y; a[5]=E; echo ${a[2]} ${#a} \"[${a[4]}]\" $a[-1]"),
+        "Y 5 [] E\n"
+    );
+    assert_eq!(
+        run("typeset -A h; h[k]=1; h[k]+=2; h[j]=3; echo $h[k] ${h[j]} ${+h[n]} ${+h[j]}"),
+        "12 3 0 1\n"
+    );
+    assert_eq!(run("a=(1); a+=2; a+=(3 4); echo $a ${#a}"), "1 2 3 4 4\n");
+    assert_eq!(
+        run("a=(p q r); i=2; echo ${a[i]} ${a[$i]} ${a[2,-1]} ${a[(i)r]} ${a[(r)q*]} ${a[(I)z]}"),
+        "q q q r 3 q 0\n"
+    );
+    assert_eq!(
+        run("typeset -A h; h=(one 1 two 2); echo ${h[(i)t*]} ${h[(r)1]} ${h[(k)one]}"),
+        "two 1 1\n"
+    );
+    // One key of `$commands` is one look-up down `$PATH`, which a name with
+    // a slash in it is never the key of.
+    assert_eq!(
+        run("echo ${+commands[sh]} ${+commands[no-such-program-here]} ${+commands[/bin/sh]}"),
+        "1 0 0\n"
+    );
+}

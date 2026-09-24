@@ -399,9 +399,8 @@ pub(crate) fn run_list(sh: &mut Shell, list: &List) {
                 // group leader: `a && b &` is one job, and its own children
                 // inherit the group, so one signal reaches all of it.
                 let outer = begin_job(sh, false);
-                let sublist = item.sublist.clone();
-                let pid = spawn(sh, move |sh| {
-                    run_sublist(sh, &sublist);
+                let pid = spawn(sh, |sh| {
+                    run_sublist(sh, &item.sublist);
                     sh.status
                 });
                 if pid < 0 {
@@ -497,7 +496,6 @@ fn run_pipeline(sh: &mut Shell, p: &Pipeline) {
             return;
         }
         let [r, w] = fds;
-        let cmd = cmd.clone();
         let pid = spawn(sh, move |sh| {
             close(r);
             if prev >= 0 {
@@ -506,7 +504,7 @@ fn run_pipeline(sh: &mut Shell, p: &Pipeline) {
             }
             dup2(w, 1);
             close(w);
-            run_command(sh, &cmd, true);
+            run_command(sh, cmd, true);
             sh.status
         });
         close(w);
@@ -784,20 +782,20 @@ pub(crate) fn run_command(sh: &mut Shell, cmd: &Command, in_child: bool) {
             words,
             args,
         } => {
-            let (a, w, r) = (assigns.clone(), words.clone(), args.clone());
             with_redirs(sh, &cmd.redirs, |sh| {
-                for asg in &a {
+                for asg in assigns {
                     if let Err(e) = assign(sh, asg, false) {
                         sh.error(&e);
                     }
                 }
-                crate::builtins::typeset(sh, &w, &r);
+                crate::builtins::typeset(sh, words, args);
             });
         }
-        kind => {
-            let kind = kind.clone();
-            with_redirs(sh, &cmd.redirs, |sh| run_compound(sh, &kind));
-        }
+        // The tree is borrowed, not copied: whatever owns it -- the parsed
+        // input, or the `Rc` a running function holds -- outlives the run.
+        // A copy here was a copy of every loop and `if` each time it ran,
+        // with everything nested in it, and a fifth of compinit's time.
+        kind => with_redirs(sh, &cmd.redirs, |sh| run_compound(sh, kind)),
     }
 }
 
@@ -828,7 +826,7 @@ pub(crate) fn assign(sh: &mut Shell, a: &Assign, local: bool) -> Result<(), Stri
     }
     match &a.value {
         AssignValue::None => {
-            if sh.get(&name).is_none() || local {
+            if !sh.is_set(&name) || local {
                 sh.set_scalar(&name, Vec::new());
             }
         }
@@ -839,6 +837,12 @@ pub(crate) fn assign(sh: &mut Shell, a: &Assign, local: bool) -> Result<(), Stri
             }
             if let Some(sub) = sub {
                 return assign_element(sh, &name, &sub, val, a.append);
+            }
+            if a.append
+                && let Some(Value::Array(arr)) = plain_array(sh, &name)
+            {
+                arr.push(val);
+                return Ok(());
             }
             let new = match (a.append, sh.get(&name)) {
                 (true, Some(Value::Array(mut arr))) => {
@@ -856,7 +860,17 @@ pub(crate) fn assign(sh: &mut Shell, a: &Assign, local: bool) -> Result<(), Stri
         }
         AssignValue::Array(words) => {
             let vals = expand_words(sh, words)?;
-            let is_assoc = matches!(sh.get(&name), Some(Value::Assoc(_)));
+            let is_assoc = match sh.stored(&name) {
+                Some(value) => matches!(value, Value::Assoc(_)),
+                None => matches!(sh.get(&name), Some(Value::Assoc(_))),
+            };
+            if a.append
+                && !is_assoc
+                && let Some(Value::Array(arr)) = plain_array(sh, &name)
+            {
+                arr.extend(vals);
+                return Ok(());
+            }
             let new = if is_assoc && !a.append {
                 Value::Assoc(
                     vals.chunks(2)
@@ -912,19 +926,61 @@ pub(crate) fn assign_element(
         let _old = sh.aliases.insert(key, AliasDef { text, global });
         return Ok(());
     }
+    // An element of an ordinary array or hash is set where the parameter is
+    // kept. Copying the whole of it out, changing one element and storing
+    // the copy back made every `_comps[$cmd]=$func` compinit runs cost the
+    // size of the table: quadratic, over a thousand completion functions.
+    // A special parameter, an integer, and `fpath`, whose every change is
+    // mirrored into `FPATH`, still go the long way through `set_value`.
+    let stored = crate::shell::prompt_name(name);
+    let in_place = if Shell::is_special(name) || matches!(stored, b"fpath" | b"FPATH") {
+        None
+    } else {
+        sh.vars
+            .get(stored)
+            .filter(|v| !v.integer)
+            .map(|v| matches!(v.value, Value::Assoc(_)))
+    };
+    match in_place {
+        Some(true) => {
+            let key = expand_single(sh, sub)?;
+            match sh.vars.get_mut(stored).map(|v| &mut v.value) {
+                Some(Value::Assoc(pairs)) => set_pair(pairs, key, val, append),
+                // Expanding the key unset the hash, or made it something
+                // else: what is left to set is a hash of the one element.
+                _ => sh.set_value(name, Value::Assoc(vec![(key, val)])),
+            }
+            return Ok(());
+        }
+        Some(false) => {
+            let text = expand_single(sh, sub)?;
+            let idx = crate::arith::eval(sh, &text)?;
+            let Some(var) = sh.vars.get_mut(stored).filter(|v| !v.integer) else {
+                let mut arr = Vec::new();
+                set_index(&mut arr, idx, val, append)?;
+                sh.set_value(name, Value::Array(arr));
+                return Ok(());
+            };
+            // A scalar becomes an array of itself, as it does below; the
+            // index is checked first, so a refused one changes nothing.
+            if !matches!(var.value, Value::Array(_)) {
+                let mut arr = match &var.value {
+                    Value::Scalar(s) if !s.is_empty() => vec![s.clone()],
+                    _ => Vec::new(),
+                };
+                set_index(&mut arr, idx, val, append)?;
+                var.value = Value::Array(arr);
+            } else if let Value::Array(arr) = &mut var.value {
+                set_index(arr, idx, val, append)?;
+            }
+            return Ok(());
+        }
+        None => {}
+    }
     match sh.get(name) {
         Some(Value::Assoc(mut pairs)) => {
             let key = expand_single(sh, sub)?;
-            match pairs.iter_mut().find(|(k, _)| *k == key) {
-                Some((_, v)) => {
-                    if append {
-                        v.extend_from_slice(&val);
-                    } else {
-                        *v = val;
-                    }
-                }
-                None => pairs.push((key, val)),
-            }
+            set_pair(&mut pairs, key, val, append);
             sh.set_value(name, Value::Assoc(pairs));
         }
         other => {
@@ -935,22 +991,57 @@ pub(crate) fn assign_element(
             };
             let text = expand_single(sh, sub)?;
             let idx = crate::arith::eval(sh, &text)?;
-            let len = i64::try_from(arr.len()).unwrap_or(0);
-            let idx = if idx < 0 { len + idx + 1 } else { idx };
-            let Ok(k) = usize::try_from(idx - 1) else {
-                return Err("assignment to invalid subscript range".to_owned());
-            };
-            while arr.len() <= k {
-                arr.push(Vec::new());
-            }
-            if let Some(slot) = arr.get_mut(k) {
-                if append {
-                    slot.extend_from_slice(&val);
-                } else {
-                    *slot = val;
-                }
-            }
+            set_index(&mut arr, idx, val, append)?;
             sh.set_value(name, Value::Array(arr));
+        }
+    }
+    Ok(())
+}
+
+/// The value of an ordinary parameter, to be changed where it is kept rather
+/// than copied out and stored back: `None` for a special parameter, an
+/// integer, and `fpath`, each of which `set_value` has more to do for.
+fn plain_array<'a>(sh: &'a mut Shell, name: &[u8]) -> Option<&'a mut Value> {
+    let stored = crate::shell::prompt_name(name);
+    if Shell::is_special(name) || matches!(stored, b"fpath" | b"FPATH") {
+        return None;
+    }
+    sh.vars
+        .get_mut(stored)
+        .filter(|v| !v.integer)
+        .map(|v| &mut v.value)
+}
+
+/// `hash[key]=val`, or `+=` when `append`, on a hash's pairs.
+fn set_pair(pairs: &mut Vec<(Vec<u8>, Vec<u8>)>, key: Vec<u8>, val: Vec<u8>, append: bool) {
+    match pairs.iter_mut().find(|(k, _)| *k == key) {
+        Some((_, v)) => {
+            if append {
+                v.extend_from_slice(&val);
+            } else {
+                *v = val;
+            }
+        }
+        None => pairs.push((key, val)),
+    }
+}
+
+/// `array[idx]=val`, or `+=` when `append`: a negative index counts from
+/// the end, and an index past it grows the array with empty elements.
+fn set_index(arr: &mut Vec<Vec<u8>>, idx: i64, val: Vec<u8>, append: bool) -> Result<(), String> {
+    let len = i64::try_from(arr.len()).unwrap_or(0);
+    let idx = if idx < 0 { len + idx + 1 } else { idx };
+    let Ok(k) = usize::try_from(idx - 1) else {
+        return Err("assignment to invalid subscript range".to_owned());
+    };
+    while arr.len() <= k {
+        arr.push(Vec::new());
+    }
+    if let Some(slot) = arr.get_mut(k) {
+        if append {
+            slot.extend_from_slice(&val);
+        } else {
+            *slot = val;
         }
     }
     Ok(())
