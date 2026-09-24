@@ -160,6 +160,7 @@ COMMANDS:
     test-input    Boot compositor/evecho as init with virtio-input, send a key and a touch over QMP, and require them back
     test-seat     Boot the compositor with a client, type into it over QMP, and require the key and the keybind to land
     test-pty      Boot compositor/term as init, run a program on a pseudoterminal, and require its output back
+    test-foot     Boot the compositor with foot, the ported Wayland terminal, and require its font and its text on screen
     test-jobs     Boot an interactive shell on the console, type a session with jobs at it, and require the answers
     test-restart  Boot a shell beside a virtio-gpu, kill -9 the gpu driver twice, and require it started again each time
     test-threads  Boot threads-test as init and require std::thread, Mutex, mpsc and /proc's thread count
@@ -174,7 +175,7 @@ COMMANDS:
     model-doc     Regenerate docs/generated/ from the SysML model
     busybox       Build busybox against ferrousli (x86_64) for --init ferrousli
     uutils        Build uutils/coreutils against ferrousli (x86_64), the utilities replacing busybox's
-    ports         Build the programs ported onto ferrousli (x86_64: curl, btop, git, sshdt; Arm: curl, git), which images carry
+    ports         Build the programs ported onto ferrousli (x86_64: curl, btop, git, sshdt, foot; Arm: curl, git), which images carry
     flash         Copy the loader and kernel onto a board's boot partition
     watch-serial  Watch a real serial port for the kernel's boot report
     deploy        flash, then watch-serial: one command for a board
@@ -355,6 +356,7 @@ fn run() -> Result<()> {
         "wallpapers" => wallpaper::import(&args),
         "test-compositor" => compositor::test_compositor(&args),
         "test-video" => compositor::test_video(&args),
+        "test-foot" => compositor::test_foot(&args),
         "test-input" => input::test_input(&args),
         "test-seat" => seat::test_seat(&args),
         "test-pty" => pty::test_pty(&args),

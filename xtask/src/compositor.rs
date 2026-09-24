@@ -4035,6 +4035,246 @@ fn differences(screen: &Image, want: &[u8]) -> (Option<(usize, usize)>, usize) {
     (first, count)
 }
 
+/// The configuration `test-foot` gives the compositor: foot, running
+/// `hyprctl version` and holding its window open after it exits.
+///
+/// `hyprctl version` for `TERMINAL_CONFIG`'s reason: three lines, and a
+/// round trip through the control socket on the way. What foot draws of them
+/// came through a pseudoterminal ferrousli opened, into a grid laid out in a
+/// font fontconfig found and freetype rasterised, into a `wl_shm` buffer
+/// libwayland-client handed the compositor. `--log-level=info` makes foot say
+/// which font it loaded, which is how the serial port shows it was the
+/// image's, and `--log-colorize=never` leaves its lines plain enough to read
+/// an error off.
+const FOOT_CONFIG: &str = "\
+# Carried into the initramfs by `cargo xtask test-foot`.
+exec-once = /bin/foot --log-level=info --log-colorize=never --log-no-syslog --hold /bin/hyprctl version
+";
+
+/// Who uid 0 is. foot looks its user up for the shell it would start, and
+/// says it could not as an error even when it was given a program instead;
+/// with the user there, an error from foot is one worth failing on.
+const FOOT_PASSWD: &str = "root:x:0:0:root:/:/bin/sh\n";
+
+/// Where fontconfig keeps its cache, which it will not make itself.
+const FONTCONFIG_CACHE: [&str; 3] = ["var", "var/cache", "var/cache/fontconfig"];
+
+/// Where the port installs foot, and so where the configuration starts it.
+const FOOT_PATH: &str = "bin/foot";
+
+/// What foot says when fontconfig has found the image's font and freetype
+/// has opened it: the path of the file it loaded.
+const FOOT_FONT: &str = "/usr/share/fonts/dejavu/DejaVuSansMono.ttf";
+
+/// What foot says once it has a grid, which it lays out from the font's
+/// metrics: the last thing before its first frame.
+const FOOT_GRID: &str = "cell width=";
+
+/// What foot prints ahead of an error of its own, after the padding that
+/// lines it up with `info` and `warn`.
+const FOOT_ERROR: &str = "err: ";
+
+/// The fewest colours a screen with foot's text on it has.
+///
+/// A window with nothing drawn in it is a handful: the compositor's
+/// background, the border, and foot's own background -- seven, as the
+/// development host's probe of a foot with no output records
+/// (`compositor/hyprix/probe/real-client.txt`). Text is antialiased, and
+/// every glyph's edges are greys between foot's foreground and background,
+/// so three short lines of it are dozens more.
+const TEXT_COLOURS: usize = 24;
+
+/// How long foot gets to connect, load its font, start `hyprctl` and draw
+/// what it printed, after the compositor is on the screen: a static C
+/// program of four megabytes and a font of a third of one, read from the
+/// initramfs under emulation.
+const FOOT_PATIENCE: Duration = Duration::from_secs(120);
+
+/// How many different colours a screen has, or none when it is not the
+/// compositor's: a screen with none of its background is the firmware's
+/// console, whose antialiased text has as many colours as a terminal's.
+fn colours(screen: &Image) -> usize {
+    let mut seen = std::collections::BTreeSet::new();
+    let (pixels, _) = screen.pixels.as_chunks::<3>();
+    for pixel in pixels {
+        let _ = seen.insert(*pixel);
+    }
+    if seen.contains(&BACKGROUND) {
+        seen.len()
+    } else {
+        0
+    }
+}
+
+/// `test-foot`: foot, a Wayland terminal nobody here wrote, on the
+/// compositor, on Ferrix.
+///
+/// `docs/CHROME.md` §6's first milestone. The compositor's own tests use
+/// clients written against its own crates, which proves the two halves
+/// agree, not that the protocol is right; `compositor/hyprix/probe` runs
+/// foot against the compositor on a development host, which proves the
+/// protocol and nothing about Ferrix. This is both at once: foot and every
+/// library it links -- libwayland-client, libxkbcommon, pixman, freetype,
+/// fontconfig, fcft -- built against ferrousli by
+/// `ferrousli/tools/ports/foot`, started by the compositor on the guest,
+/// drawing text in a font the image carries.
+///
+/// No picture is blessed: foot's text is foot's rendering of a font, and an
+/// expected image would bless both. What is required is what foot said --
+/// the image's font loaded, a grid laid out, no error of its own -- and a
+/// screen with antialiased text on it, which a window with nothing drawn in
+/// it is not.
+pub(crate) fn test_foot(args: &Args) -> Result<()> {
+    for arch in args.arches()? {
+        if crate::display::target(arch).is_none() {
+            println!("  {arch}: no virtio-gpu in QEMU's machine; skipped");
+            continue;
+        }
+        let ports = crate::ports::installed_port(arch, "foot")?;
+        if !ports.iter().any(|file| file.path == FOOT_PATH) {
+            if arch == Arch::X86_64 {
+                return Err(Error::new(format!(
+                    "{arch}: foot is not built: `cargo xtask ports` builds it"
+                )));
+            }
+            println!("  {arch}: foot is ported to x86-64 only; skipped");
+            continue;
+        }
+        let programs = Programs::build(arch)?;
+        let mut ports = ports;
+        ports.push(crate::ports::File {
+            path: "etc/passwd".to_owned(),
+            mode: 0o644,
+            content: crate::ports::Content::Bytes(FOOT_PASSWD.as_bytes().to_vec()),
+        });
+        for directory in FONTCONFIG_CACHE {
+            ports.push(crate::ports::File {
+                path: directory.to_owned(),
+                mode: 0o755,
+                content: crate::ports::Content::Directory,
+            });
+        }
+        let carried = Carried {
+            ports,
+            ..Carried::none()
+        };
+        let (image, kernel) =
+            build_image(arch, &programs, &undithered(FOOT_CONFIG), carried, args)?;
+        let port = free_port()?;
+        let mut qemu_args = args.clone();
+        qemu_args.display = true;
+        qemu_args.qmp_port = Some(port);
+        let dump = paths::build_dir(arch).join("foot.ppm");
+        let mut said: Vec<String> = Vec::new();
+        let mut best: Option<Image> = None;
+        let hook = |watching: &mut Watching<'_>| -> Result<()> {
+            let mut qmp = Qmp::connect(port, Instant::now() + Duration::from_secs(10))?;
+            let up = watching.read_more(Instant::now() + SETTLE, |lines| {
+                lines
+                    .iter()
+                    .any(|line| line.contains(MARKER) || line.contains(FAILED))
+            })?;
+            if !up {
+                return Err(with_the_transcript(
+                    &Error::new(format!("{arch}: the compositor never printed `{MARKER}`")),
+                    watching,
+                ));
+            }
+            say_the_marker(watching, arch);
+            let deadline = Instant::now() + FOOT_PATIENCE;
+            let _ = watching.read_more(deadline, |lines| {
+                lines
+                    .iter()
+                    .any(|line| line.contains(FOOT_GRID) || line.contains(FOOT_ERROR))
+            })?;
+            // The screen until it carries text, or the time is up: the grid
+            // is laid out before `hyprctl` has printed anything, and its
+            // lines reach the screen a frame or two later.
+            loop {
+                qmp.screendump(Some(DEVICE_ID), &dump)?;
+                let bytes = std::fs::read(&dump)
+                    .map_err(|error| Error::new(format!("reading {}: {error}", dump.display())))?;
+                let screen = parse_ppm(&bytes)?;
+                let enough = colours(&screen) >= TEXT_COLOURS;
+                if best
+                    .as_ref()
+                    .is_none_or(|kept| colours(kept) < colours(&screen))
+                {
+                    best = Some(screen);
+                }
+                if enough || Instant::now() >= deadline {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(500));
+            }
+            let _ = watching.read_more(Instant::now() + Duration::from_secs(2), |_| false)?;
+            said = watching
+                .lines()
+                .iter()
+                .chain(watching.after())
+                .cloned()
+                .collect();
+            Ok(())
+        };
+        let _ = crate::qemu::watch_then(arch, &image, &kernel, &qemu_args, EITHER, hook)?;
+        judge_foot(arch, &said, best.as_ref(), &dump)?;
+    }
+    Ok(())
+}
+
+/// What [`test_foot`] requires of what the guest said and showed.
+fn judge_foot(arch: Arch, said: &[String], screen: Option<&Image>, dump: &Path) -> Result<()> {
+    let transcript = || {
+        said.iter()
+            .map(|line| said_on_its_own(line).to_owned())
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let fail = |why: String| Err(Error::new(format!("{arch}: {why}\n{}", transcript())));
+    if let Some(line) = said.iter().find(|line| line.contains("FERRIX-PANIC")) {
+        return fail(format!(
+            "the kernel stopped while foot ran: {}",
+            line.trim()
+        ));
+    }
+    if let Some(line) = said
+        .iter()
+        .find(|line| said_on_its_own(line).trim_start().starts_with(FOOT_ERROR))
+    {
+        return fail(format!("foot said: {}", said_on_its_own(line)));
+    }
+    if !said.iter().any(|line| line.contains(FOOT_FONT)) {
+        return fail(format!("foot never said it loaded {FOOT_FONT}"));
+    }
+    if !said.iter().any(|line| line.contains(FOOT_GRID)) {
+        return fail("foot never laid out its grid".to_owned());
+    }
+    let Some(screen) = screen else {
+        return fail("the boot took no picture".to_owned());
+    };
+    // The busiest screen, where it can be looked at: what is judged is a
+    // count, and a person reading a failure wants the picture.
+    let kept = dump.with_file_name("foot-busiest.ppm");
+    let mut ppm = format!("P6\n{} {}\n255\n", screen.width, screen.height).into_bytes();
+    ppm.extend_from_slice(&screen.pixels);
+    std::fs::write(&kept, &ppm)
+        .map_err(|error| Error::new(format!("writing {}: {error}", kept.display())))?;
+    let found = colours(screen);
+    if found < TEXT_COLOURS {
+        return fail(format!(
+            "the screen has {found} colours, fewer than the {TEXT_COLOURS} of a terminal with \
+             text in it; the busiest screen is {}",
+            kept.display()
+        ));
+    }
+    println!(
+        "  {arch}: foot loaded the image's DejaVu Sans Mono, laid out its grid, and drew \
+         `hyprctl version` in {found} colours; the screen is {}",
+        kept.display()
+    );
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{RUN_CONFIG, back_after_the_last_kill, with_layout};

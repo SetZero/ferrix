@@ -32,7 +32,9 @@ use crate::{Error, Result, cargo};
 /// `ferrousli/tools/ports/` holding a `build.sh`. `libcxx` is the C++ runtime
 /// btop links against, and installs nothing an image carries. `sshdt` is Rust
 /// rather than C, built the way uutils is, and needs cargo's crates.io.
-const PORTS: &[&str] = &["curl", "libcxx", "btop", "zlib", "git", "sshdt"];
+/// `foot` is the Wayland terminal `docs/CHROME.md` starts from, built with
+/// every library it links and the one font it draws with.
+const PORTS: &[&str] = &["curl", "libcxx", "btop", "zlib", "git", "sshdt", "foot"];
 
 /// The ports AArch64 and ARMv7-A build, in order: git and what it links.
 const ARM_PORTS: &[&str] = &["curl", "zlib", "git"];
@@ -141,6 +143,30 @@ pub(crate) const FILES: &[Installed] = &[
         kind: Kind::File,
         port: "sshdt",
     },
+    Installed {
+        path: "bin/foot",
+        mode: 0o755,
+        kind: Kind::File,
+        port: "foot",
+    },
+    Installed {
+        path: "bin/footclient",
+        mode: 0o755,
+        kind: Kind::File,
+        port: "foot",
+    },
+    Installed {
+        path: "etc/fonts/fonts.conf",
+        mode: 0o644,
+        kind: Kind::File,
+        port: "foot",
+    },
+    Installed {
+        path: "usr/share/fonts/dejavu",
+        mode: 0o755,
+        kind: Kind::Tree,
+        port: "foot",
+    },
 ];
 
 /// What an installed path is.
@@ -246,13 +272,24 @@ fn installed_path(root: &Path, arch: Arch, file: &Installed) -> PathBuf {
 /// The installed files for `arch`, for an image to carry, and a line naming
 /// the ports that are not there, of those `arch` builds.
 pub(crate) fn installed(arch: Arch) -> Result<Vec<File>> {
+    installed_where(arch, |port| ports_for(arch).contains(&port))
+}
+
+/// The installed files of one port for `arch`, for a boot that wants that
+/// program and not the megabytes of the others, and the same line when it is
+/// not there.
+pub(crate) fn installed_port(arch: Arch, port: &str) -> Result<Vec<File>> {
+    installed_where(arch, |wanted| {
+        wanted == port && ports_for(arch).contains(&port)
+    })
+}
+
+/// The installed files of the ports `wanted` names.
+fn installed_where(arch: Arch, wanted: impl Fn(&str) -> bool) -> Result<Vec<File>> {
     let root = root()?;
     let mut files = Vec::new();
     let mut missing: Vec<&str> = Vec::new();
-    for file in FILES
-        .iter()
-        .filter(|file| ports_for(arch).contains(&file.port))
-    {
+    for file in FILES.iter().filter(|file| wanted(file.port)) {
         let path = installed_path(&root, arch, file);
         if std::fs::symlink_metadata(&path).is_err() {
             if !missing.contains(&file.port) {
@@ -373,7 +410,7 @@ mod tests {
             // git links zlib and libcurl, which must be built first.
             let at = |port| ports.iter().position(|p| *p == port).unwrap();
             assert!(at("zlib") < at("git") && at("curl") < at("git"), "{arch}");
-            for port in ["btop", "libcxx", "sshdt"] {
+            for port in ["btop", "libcxx", "sshdt", "foot"] {
                 assert!(!ports.contains(&port), "{arch} {port}");
             }
             assert!(ports.iter().all(|port| PORTS.contains(port)), "{arch}");
