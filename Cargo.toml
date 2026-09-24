@@ -37,6 +37,7 @@ members = [
     "libs/objects",
     "libs/stm32-display",
     "libs/usb-host",
+    "libs/gc400",
     "libs/sync",
     "libs/ustack",
     "libs/vdagent",
@@ -119,6 +120,7 @@ ferrix-native-abi = { path = "libs/native-abi" }
 ferrix-native = { path = "libs/native" }
 ferrix-stm32-display = { path = "libs/stm32-display" }
 ferrix-usb-host = { path = "libs/usb-host" }
+ferrix-gc400 = { path = "libs/gc400" }
 ferrix-netwire = { path = "libs/netwire" }
 ferrix-nettcp = { path = "libs/nettcp" }
 ferrix-net = { path = "libs/net" }

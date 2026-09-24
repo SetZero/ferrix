@@ -161,6 +161,10 @@ name = "ferrix-frame"
 version = "0.1.0"
 
 [[package]]
+name = "ferrix-gc400"
+version = "0.1.0"
+
+[[package]]
 name = "ferrix-gpu"
 version = "0.1.0"
 dependencies = [
