@@ -459,6 +459,53 @@ What the number is good for and what it is not:
   wallpapers 8, the two decisions 3) but because a size given after the fact
   is not an estimate. The next count should not have such a row.
 
+### Update, 2026-09-24
+
+**The code base** (`git ls-files` on `main` at 046ea79a): 702,675 lines of
+Rust in 2,080 tracked files of all kinds, plus 47,769 lines of C, headers and
+assembly (ferrousli's and the ports' glue). By tree: libs 188,154, compositor
+169,567, kernel 122,989, ferrousli 114,688, zinc 52,011, xtask 34,449, user
+9,152, fuzz 7,970, boot 3,474. The docs are 26,714 lines of Markdown, 25,061
+of them under `docs/`. Nothing is excluded or generated-filtered, so read the
+Rust total as an upper bound.
+
+**Today.** The 66 commits that landed on 2026-09-24 add 54,477 lines and
+remove 4,309, of which 45,560 added and 2,054 removed are Rust: a net
++50,168 lines in the day, ≈ 7 % of everything above.
+
+| landing | points | of |
+|---|---|---|
+| sysfs (`b65b5e41`) | 26 | 26 |
+| the init push: G3, G4, L1, L2, L3, G5 | ≈ 23 | 22 |
+| vkgears through Venus (V1–V5) | 39 | 39 |
+| the GC400's first two steps (G1, G2) | 11 | 11 |
+
+That is **≈ 99 points landed on 2026-09-24**, against the ≈ 54 a day the
+backfill below gives for 09-18 to 09-23. The landings ran from about 18:15
+to 22:45, so about 4.5 hours: **≈ 22 points an hour**, level with the 21 an
+hour measured on the 14th and the 17th. It is a few sessions, not a
+fleet: four agents ran in parallel on the init push and two other sessions
+landed the rest.
+
+Not counted, because nothing was sized before it started (the rule above):
+Chrome's headless run, foot on the compositor, timerfd and signalfd, the
+control queue and the debug FPS overlay, ferrousli's glibc names for Chrome,
+stage 20's build recording, splice and copy_file_range. Sized afterwards they
+would be perhaps 60–80 more, which is why 99 is a floor. The day's cost was
+not in the code: the sysfs landing was gated three times and the gears
+landing four times because `main` moved under every gate, and FX-1004 flaked
+in two of the rows.
+
+**The days between, 09-18 to 09-23**, are not in the table above because no
+session reported them. They were sized afterwards from `git log`, in clusters
+against the same scale, and are lower in confidence: ≈ 50, 50, 55, 96 and 20
+for 09-18 to 09-22, about 324 in six days (btrfs write's 60 included), ≈ 54 a
+calendar day. With the first count's 445 and today's 99 the running
+total is ≈ 870 points in 11 calendar days, ≈ 79 a day. The drop from the
+first week's 111 a day reads as a change in the kind of work (the zsh
+compatibility tail, and GPU, dynamic linking and btrfs write, whose steps
+each have unknowns) and not as a stall.
+
 ---
 
 ## Decisions

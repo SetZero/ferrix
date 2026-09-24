@@ -121,7 +121,10 @@ points era that the fleet ran, 2026-09-14 to -17, about 445 points landed:
 was running, with 8–10 sessions, 15–20 points a session-day, and 21 points a
 queue-hour on both days that were measured finely. Every estimate under 8
 held, and stages 17 and 18 came in at the sizes they were given
-(`docs/BACKLOG.md`, *Velocity*). That is historical velocity, not a current
+(`docs/BACKLOG.md`, *Velocity*). The count since then, to 2026-09-24, is
+≈ 870 points in 11 calendar days (≈ 79 a day), and 2026-09-24 alone landed
+≈ 99, about 22 an hour over the landing window, on a code base of 703 k
+lines of Rust. That is historical velocity, not a current
 schedule: the dates projected from it have elapsed, and stage 19 and
 dynamic linking remain under way. The table records the state now.
 Stages 12 to 16 were sized in words before points existed; their points are
@@ -152,6 +155,45 @@ sizes them.
 | ~~Stage 16, `rustc`~~ *exit met 2026-09-22* | ~~*the goal* ≈ 40~~ 8 spent | done |
 | Stage 20, self-hosting | *longer*, unsized | in progress: the x86-64 image builds on Ferrix and boots (2026-09-23); every build of the matrix recorded, Ferrix making them stops on FX-0001 (2026-09-24) |
 | Stage 21, bare metal and a GPU of Ferrix's own | over 100, unsized | planned when bare-metal work is requested |
+
+### Burndown
+
+Scope is the table's sized, unfinished rows on 2026-09-24, after the day's
+landings: client pages 8, XWayland and the second pass 48, dmabuf and virgl
+48, the GC400's remaining 21 of 32, Chrome on the DK1 50, stage 13's rest 58,
+stage 15's rest 51, stage 14 40 and stage 22's 151 (its 51 and the guess of
+100) -- **≈ 475 points**. The unsized rows (stage 20, stage 21, the Chrome
+zygote) are outside it, so the chart shows when the *sized* work ends, not
+when the roadmap does. Scope has grown as often as it has shrunk (stage 19
+went from 144 to 178, Chrome and gears were added), so the chart is a
+forecast from today, not a history.
+
+![Burndown: 475 sized points remaining from 2026-09-24, done 10-01 at 79 a day or 10-03 at 54 a day; below it, points landed per day from 09-14 to 09-24, about 868 in total](img/burndown.svg)
+
+In the upper chart the steeper line is the running average, 79 a day, and
+the shallower is the 54 a day of 09-18 to 09-23, the better guide while the
+work is GPU, ports and a server. Neither allows for the qualification
+below: a step full of unknowns may take twice its estimate. The lower chart
+is what has landed, by day, and the running total; the hatched days, 09-18
+to 09-23, were sized afterwards from `git log` (`docs/BACKLOG.md`,
+*Velocity*).
+
+### Gantt
+
+Done bars are dated from the rows above and the ledger, and start where the
+first landing was; they overlap because the work ran in parallel. The
+forecast is one queue at 54 points a day, in the order of the table, with
+the sized rows only. It is a sequence for reading the size of the work, not
+a plan: several of these would run side by side, and the order is the
+customer's to change.
+
+![Gantt: done work from 2026-09-13 to 09-24, five streams in progress, and the sized remainder as one queue at 54 points a day ending 10-03](img/gantt.svg)
+
+Both charts are drawn by `scripts/gen-roadmap-charts.py`, which holds their
+numbers; change them there when the table or the velocity count changes, and
+rerun it.
+
+---
 
 Three things qualify these estimates:
 
