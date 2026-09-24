@@ -2,8 +2,8 @@
 //!
 //! A [`Session`] starts from an accepted HELLO. The core asks it for each
 //! message it wants to send -- [`Session::make_context`],
-//! [`Session::make_object`], [`Session::submit`], [`Session::wait`] and
-//! their opposites -- and the session refuses a request that would put the
+//! [`Session::make_object`], [`Session::make_blob`], [`Session::submit`],
+//! [`Session::wait`] and their opposites -- and the session refuses a request that would put the
 //! conversation in a state the protocol does not have: an object in a
 //! context that is not there, a submission into a context still being made,
 //! a fence waited for twice. Every message from the driver goes through
@@ -25,8 +25,8 @@
 use ferrix_native_abi::rights::Rights;
 
 use crate::message::{
-    Direction, Hello, MAX_CAPS_BYTES, MakeObject, Message, Refusal, Status, Submit, Transfer, Work,
-    flags,
+    Direction, Hello, MAX_CAPS_BYTES, MAX_RINGS, MakeBlob, MakeObject, Message, NO_RING, Refusal,
+    Status, Submit, Transfer, Work, features, flags,
 };
 
 /// The most contexts one session tracks.
@@ -66,6 +66,11 @@ pub enum RequestError {
     /// A transfer on an object with no backing to move bytes to or from, or
     /// of a box with no volume, or the wrong way for what the object is for.
     Transfer,
+    /// Something the driver did not say in HELLO that it does: a blob, or a
+    /// submission on a ring.
+    Unsupported,
+    /// A ring past the most a context has.
+    Ring,
 }
 
 /// What a message from the driver meant.
@@ -91,6 +96,15 @@ pub enum Event {
         object: u32,
         /// How it went.
         status: Status,
+    },
+    /// A blob is made, and mapped if it was to be, or was refused.
+    BlobMade {
+        /// Which.
+        object: u32,
+        /// How it went.
+        status: Status,
+        /// How the device wants the mapping cached, in its own words.
+        map_info: u32,
     },
     /// An object is gone, or would not go.
     ///
@@ -161,6 +175,11 @@ impl Slot {
     }
 }
 
+/// What a blob was made for, in [`Session`]'s `purposes`: none of the
+/// object flags, which is also what keeps a transfer off it -- it has no
+/// backing to move bytes to or from.
+const BLOB_PURPOSE: u8 = 0x80;
+
 /// A submission or a wait the driver has not answered.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 struct Pending {
@@ -174,7 +193,7 @@ struct Pending {
 pub struct Session {
     name: [u8; crate::message::NAME_BYTES],
     features: u32,
-    capset: u32,
+    capsets: u32,
     object_limit: u64,
     work_bytes: u64,
     contexts: [Slot; MAX_CONTEXTS],
@@ -210,7 +229,7 @@ impl Session {
         Ok(Self {
             name: hello.name,
             features: hello.features,
-            capset: hello.capset,
+            capsets: hello.capsets,
             object_limit: hello.object_limit(),
             work_bytes,
             contexts: [Slot::Free; MAX_CONTEXTS],
@@ -241,10 +260,10 @@ impl Session {
         ::core::str::from_utf8(self.name.get(..end).unwrap_or(&[])).unwrap_or("")
     }
 
-    /// Which capability set the driver's command streams are in.
+    /// Which capability sets a context may be made for, a bit per set.
     #[must_use]
-    pub const fn capset(&self) -> u32 {
-        self.capset
+    pub const fn capsets(&self) -> u32 {
+        self.capsets
     }
 
     /// What the driver said it can do.
@@ -385,6 +404,48 @@ impl Session {
         }))
     }
 
+    /// Ask for a blob: an object whose memory the device's side makes,
+    /// mapped into the device's window at `make.window` unless that is
+    /// [`crate::message::NO_WINDOW`].
+    ///
+    /// The window's places are the core's to hand out, as work VMO ranges
+    /// are, and the session does not check them: it has not seen the
+    /// window. What `memory` and `flags` mean is the driver's.
+    ///
+    /// # Errors
+    ///
+    /// A request the conversation has no room or no state for, or a driver
+    /// that makes no blobs.
+    pub fn make_blob(&mut self, make: MakeBlob) -> Result<Message, RequestError> {
+        self.open()?;
+        if self.features & features::BLOBS == 0 {
+            return Err(RequestError::Unsupported);
+        }
+        if make.object == 0 {
+            return Err(RequestError::ZeroId);
+        }
+        if find(&self.objects, make.object).is_some() {
+            return Err(RequestError::InUse);
+        }
+        if make.context != 0 && live(&self.contexts, make.context).is_none() {
+            return Err(RequestError::NoSuchContext);
+        }
+        if make.bytes == 0 || make.bytes > self.object_limit {
+            return Err(RequestError::ObjectBytes);
+        }
+        let at = free_at(&self.objects).ok_or(RequestError::Full)?;
+        if let Some(slot) = self.objects.get_mut(at) {
+            *slot = Slot::Making(make.object);
+        }
+        if let Some(owner) = self.owners.get_mut(at) {
+            *owner = make.context;
+        }
+        if let Some(purpose) = self.purposes.get_mut(at) {
+            *purpose = BLOB_PURPOSE;
+        }
+        Ok(Message::MakeBlob(make))
+    }
+
     /// Ask for an object to go.
     ///
     /// # Errors
@@ -404,20 +465,32 @@ impl Session {
         Ok(Message::DropObject { object })
     }
 
-    /// Hand over a command buffer, which the driver answers with the fence.
+    /// Hand over a command buffer, which the driver answers with the fence:
+    /// when it has the buffer, or on a `ring` other than [`NO_RING`], when
+    /// the work has finished.
     ///
     /// # Errors
     ///
-    /// A request the conversation has no room or no state for.
+    /// A request the conversation has no room or no state for, or a ring
+    /// the driver did not say it has.
     pub fn submit(
         &mut self,
         context: u32,
+        ring: u32,
         fence: u64,
         commands: Work,
     ) -> Result<Message, RequestError> {
         self.open()?;
         if live(&self.contexts, context).is_none() {
             return Err(RequestError::NoSuchContext);
+        }
+        if ring != NO_RING {
+            if self.features & features::RINGS == 0 {
+                return Err(RequestError::Unsupported);
+            }
+            if ring >= MAX_RINGS {
+                return Err(RequestError::Ring);
+            }
         }
         // A command buffer of no bytes is nothing to run, and a range the
         // core did not hand out is one the driver would pin blind.
@@ -436,6 +509,7 @@ impl Session {
         });
         Ok(Message::Submit(Submit {
             context,
+            ring,
             fence,
             commands,
         }))
@@ -563,8 +637,29 @@ impl Session {
             }
             Message::ObjectMade { object, status } => {
                 let at = making(&self.objects, object).ok_or(Refusal::Protocol)?;
+                // And one asked for as a blob is answered as one.
+                if self.purposes.get(at) == Some(&BLOB_PURPOSE) {
+                    return Err(Refusal::Protocol);
+                }
                 self.settle_object(at, status, true);
                 Ok(Event::ObjectMade { object, status })
+            }
+            Message::BlobMade {
+                object,
+                status,
+                map_info,
+            } => {
+                let at = making(&self.objects, object).ok_or(Refusal::Protocol)?;
+                // An object answered as a blob was asked for as one.
+                if self.purposes.get(at) != Some(&BLOB_PURPOSE) {
+                    return Err(Refusal::Protocol);
+                }
+                self.settle_object(at, status, true);
+                Ok(Event::BlobMade {
+                    object,
+                    status,
+                    map_info,
+                })
             }
             Message::ObjectGone { object, status } => {
                 let at = dropping(&self.objects, object).ok_or(Refusal::Protocol)?;
