@@ -92,22 +92,137 @@ const MAX_FILE: usize = 1 << 20;
 /// musl.
 const ZONE_DIRS: [&[u8]; 3] = [b"/usr/share/zoneinfo", b"/share/zoneinfo", b"/etc/zoneinfo"];
 
-/// The abbreviations of standard and daylight saving time in the current
-/// zone: `char *tzname[2]`. `AtomicPtr` has a pointer's layout.
-#[cfg_attr(not(test), unsafe(no_mangle))]
-#[allow(non_upper_case_globals, reason = "C names it")]
-pub static tzname: [AtomicPtr<c_char>; 2] =
-    [AtomicPtr::new(null_mut()), AtomicPtr::new(null_mut())];
+// The three variables C names, each with glibc's second name at the same
+// address: `tzname` and `__tzname`, `timezone` and `__timezone`, `daylight`
+// and `__daylight`. Chrome reads `__timezone`. Two names for one variable
+// are only possible in assembly, as `environ`'s three are (`stdlib.rs`),
+// and the library reaches each through its GOT, so that a program's copy of
+// the variable is the one it writes.
+//
+// `tzname` is `char *tzname[2]`, whose `AtomicPtr`s have a pointer's
+// layout; `timezone` is the seconds west of UTC of the zone's standard time,
+// kept in 64 bits; `daylight` is whether the zone has daylight saving time.
+#[cfg(all(not(test), target_pointer_width = "64"))]
+core::arch::global_asm!(
+    ".pushsection .bss.ferrousli_tz,\"aw\",%nobits",
+    ".p2align 3",
+    ".globl tzname",
+    ".type tzname, %object",
+    ".size tzname, 16",
+    ".globl __tzname",
+    ".type __tzname, %object",
+    ".size __tzname, 16",
+    "tzname:",
+    "__tzname:",
+    ".zero 16",
+    ".globl timezone",
+    ".type timezone, %object",
+    ".size timezone, 8",
+    ".globl __timezone",
+    ".type __timezone, %object",
+    ".size __timezone, 8",
+    "timezone:",
+    "__timezone:",
+    ".zero 8",
+    ".globl daylight",
+    ".type daylight, %object",
+    ".size daylight, 4",
+    ".globl __daylight",
+    ".type __daylight, %object",
+    ".size __daylight, 4",
+    "daylight:",
+    "__daylight:",
+    ".zero 4",
+    ".popsection",
+);
 
-/// Seconds west of UTC of the current zone's standard time: `long timezone`.
-#[cfg_attr(not(test), unsafe(no_mangle))]
-#[allow(non_upper_case_globals, reason = "C names it")]
-pub static timezone: AtomicI64 = AtomicI64::new(0);
+// The same with 4-byte pointers.
+#[cfg(all(not(test), target_pointer_width = "32"))]
+core::arch::global_asm!(
+    ".pushsection .bss.ferrousli_tz,\"aw\",%nobits",
+    ".p2align 3",
+    ".globl tzname",
+    ".type tzname, %object",
+    ".size tzname, 8",
+    ".globl __tzname",
+    ".type __tzname, %object",
+    ".size __tzname, 8",
+    "tzname:",
+    "__tzname:",
+    ".zero 8",
+    ".globl timezone",
+    ".type timezone, %object",
+    ".size timezone, 8",
+    ".globl __timezone",
+    ".type __timezone, %object",
+    ".size __timezone, 8",
+    "timezone:",
+    "__timezone:",
+    ".zero 8",
+    ".globl daylight",
+    ".type daylight, %object",
+    ".size daylight, 4",
+    ".globl __daylight",
+    ".type __daylight, %object",
+    ".size __daylight, 4",
+    "daylight:",
+    "__daylight:",
+    ".zero 4",
+    ".popsection",
+);
 
-/// Whether the current zone has daylight saving time: `int daylight`.
-#[cfg_attr(not(test), unsafe(no_mangle))]
-#[allow(non_upper_case_globals, reason = "C names it")]
-pub static daylight: AtomicI32 = AtomicI32::new(0);
+#[cfg(not(test))]
+unsafe extern "C" {
+    /// `tzname`, defined above.
+    #[link_name = "tzname"]
+    static TZNAME: [AtomicPtr<c_char>; 2];
+    /// `timezone`, defined above.
+    #[link_name = "timezone"]
+    static TIMEZONE: AtomicI64;
+    /// `daylight`, defined above.
+    #[link_name = "daylight"]
+    static DAYLIGHT: AtomicI32;
+}
+
+/// The variables, in unit tests: the test binary's own C library defines
+/// the C names.
+#[cfg(test)]
+static TZNAME: [AtomicPtr<c_char>; 2] = [AtomicPtr::new(null_mut()), AtomicPtr::new(null_mut())];
+/// See [`TZNAME`].
+#[cfg(test)]
+static TIMEZONE: AtomicI64 = AtomicI64::new(0);
+/// See [`TZNAME`].
+#[cfg(test)]
+static DAYLIGHT: AtomicI32 = AtomicI32::new(0);
+
+/// `tzname`: the abbreviations of standard and daylight saving time in the
+/// current zone.
+pub fn tzname() -> &'static [AtomicPtr<c_char>; 2] {
+    #[allow(unused_unsafe, reason = "the variable is a Rust static in unit tests")]
+    // SAFETY: the variable lives as long as the process, and every access
+    // to it is atomic.
+    unsafe {
+        &TZNAME
+    }
+}
+
+/// `timezone`: seconds west of UTC of the current zone's standard time.
+pub fn timezone() -> &'static AtomicI64 {
+    #[allow(unused_unsafe, reason = "the variable is a Rust static in unit tests")]
+    // SAFETY: as for `tzname`.
+    unsafe {
+        &TIMEZONE
+    }
+}
+
+/// `daylight`: whether the current zone has daylight saving time.
+pub fn daylight() -> &'static AtomicI32 {
+    #[allow(unused_unsafe, reason = "the variable is a Rust static in unit tests")]
+    // SAFETY: as for `tzname`.
+    unsafe {
+        &DAYLIGHT
+    }
+}
 
 /// The zone in effect at one moment.
 #[derive(Debug, Clone, Copy)]
@@ -1201,11 +1316,11 @@ fn refresh() {
         }
         state.key_len = tz.len().min(KEY_CAP);
         state.loaded = true;
-        let [std, dst] = &tzname;
+        let [std, dst] = tzname();
         std.store(globals.names[0].cast_mut(), Ordering::Relaxed);
         dst.store(globals.names[1].cast_mut(), Ordering::Relaxed);
-        timezone.store(globals.timezone, Ordering::Relaxed);
-        daylight.store(c_int::from(globals.daylight), Ordering::Relaxed);
+        timezone().store(globals.timezone, Ordering::Relaxed);
+        daylight().store(c_int::from(globals.daylight), Ordering::Relaxed);
         core::mem::replace(&mut state.config, config)
     });
     old.release();

@@ -62,11 +62,16 @@ pub unsafe extern "C" fn __libc_start_main(
     init: InitHook,
     fini: Hook,
     rtld_fini: Hook,
-    _stack_end: *mut c_void,
+    stack_end: *mut c_void,
 ) -> ! {
     let count = usize::try_from(argc).unwrap_or(0);
     let envp = argv.wrapping_add(count + 1);
     environ().store(envp, Ordering::Relaxed);
+    // SAFETY: `argv` holds at least its terminating null.
+    let argv0 = unsafe { argv.read() };
+    // SAFETY: `argv[0]` is null or the program's name, on the initial stack,
+    // which lives as long as the process.
+    unsafe { crate::gnu::init(argv0, stack_end) };
 
     let mut at = envp;
     // SAFETY: the environment ends in a null, and `at` has not passed it.

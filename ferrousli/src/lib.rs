@@ -68,6 +68,7 @@ pub mod getopt;
 #[cfg(target_arch = "arm")]
 pub mod glibc_time64;
 pub mod glob;
+pub mod gnu;
 pub mod growable;
 pub mod grp;
 #[cfg(test)]

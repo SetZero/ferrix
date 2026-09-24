@@ -63,6 +63,19 @@ fn gnus_error_names_format_parser_generators_and_allocator_calls() {
 }
 
 #[test]
+fn the_program_name_stack_end_thread_destructors_and_fork_handlers() {
+    check(&Case {
+        stdout: "ordered\n",
+        ..Case::named("glibc/process")
+    });
+}
+
+#[test]
+fn reentrant_protocol_lookups_and_the_resolver_state_answer_as_glibc() {
+    check(&Case::named("glibc/netdb"));
+}
+
+#[test]
 fn gnus_math_additions_answer_through_cs_calling_convention() {
     check(&Case::named("glibc/math"));
 }

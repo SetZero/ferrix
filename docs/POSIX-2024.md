@@ -155,7 +155,6 @@ with the git port:
 | shadow | `endspent`, `getspent`, `getspnam`, `setspent` |
 | dirent | `fdclosedir` |
 | pty | `forkpty`, `openpty` |
-| cxa.rs | `__cxa_thread_atexit_impl` |
 | dl-tls | `__tls_get_addr` |
 | float | `flt_rounds` |
 | sgtty | `gtty` |

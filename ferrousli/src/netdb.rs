@@ -41,6 +41,7 @@ pub mod addrinfo;
 pub mod dns;
 pub mod hostent;
 pub mod lookup;
+pub mod res_state;
 pub mod resolver;
 
 use core::ffi::{CStr, c_char, c_int, c_uint, c_void};

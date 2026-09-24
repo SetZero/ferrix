@@ -167,6 +167,7 @@ pub fn run_handlers() {
 /// musl does, so that output a destructor writes still appears.
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub extern "C" fn exit(status: c_int) -> ! {
+    crate::gnu::run_thread_dtors_at_exit();
     run_handlers();
     crate::stdio::exit_flush();
     _Exit(status)
