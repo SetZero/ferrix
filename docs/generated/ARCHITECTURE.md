@@ -100,7 +100,7 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixAssurance` | `11-assurance.sysml` | docs/RELIABILITY.md and docs/ASSEMBLY.md: the quality gates, what each one verifies, and what the tests can actually reach. The gates cargo xtask check runs are in CI. Of the xtask boot gates, CI runs test-boot and test-rustc; the ones that need a binary the repository does not carry, a disk judged on the host or a screendump run in the landing gates of docs/BACKLOG.md instead (docs/ROADMAP.md, Continuously). |
 | `FerrixViews` | `12-views.sysml` | How to read the one model as two: what runs today, and what the roadmap still owes. The filters key on the lifecycle keywords every element carries. |
 
-13 files, 16 packages, 1630 elements, 194 relations. Model digest `edfe65ee8a1b2c97`.
+13 files, 16 packages, 1630 elements, 194 relations. Model digest `606b101d89be2184`.
 
 | Maturity | Elements | Meaning |
 | --- | ---: | --- |
@@ -3146,6 +3146,8 @@ Well under way: every one of Hyprland's globals, dispatchers and hyprctl command
 The GPU path, decided on 2026-09-18 and built on 2026-09-19 (docs/GPU.md 3.7 and 3.8), is Path A: the host's driver through virtio-gpu 3D. All four of its pieces are in -- the ring-3 driver's 3D commands, a render node with the virtgpu ioctls and 3D scanout, the host half in xtask, and a Rust virgl encoder behind a renderer trait with the software renderer still under it. The desktop composites on the GPU: a 1920x1080 frame of a video wallpaper behind a blurred translucent terminal went from 39 ms to 12, where 60 fps is 16.7. A card of Ferrix's own is stage 21. Since 2026-09-23 a served desktop takes the 3D card by default (docs/GPU.md 3.9) and the pointer is on virtio-gpu's cursor plane, so moving it draws no frame (docs/GPU.md 3.10).
 
 Of the 178, about 69 are left: the desktop's speed as it is watched (an sDDF-shaped device queue and client pages as texture backing: 21 of 34, the cursor plane spent), XWayland's 40, and the pointer-driven options and second-pass effects (no_screen_share, blur_popups, precise_mouse_move). The rest of the GPU road -- zwp_linux_dmabuf and a Mesa on ferrousli -- is for clients that render for themselves, not for the compositor.
+
+Gears, the customer's order of 2026-09-24 (docs/GPU.md 6): vkgears through Venus -- Mesa's Vulkan driver in the guest, the host's GPU under virglrenderer's render server -- on the Linux host, 39 points; and gears drawn by the DK1's own Vivante GC400T, an OpenGL ES 2.0 core with no Vulkan in any driver, through a ring-3 driver of Ferrix's own, 32 points.
 
 ### S21 — Stage 21 bare metal gpu
 

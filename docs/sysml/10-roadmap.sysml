@@ -556,7 +556,14 @@ package FerrixRoadmap {
              * (no_screen_share, blur_popups, precise_mouse_move). The rest
              * of the GPU road -- zwp_linux_dmabuf and a Mesa on ferrousli --
              * is for clients that render for themselves, not for the
-             * compositor. */
+             * compositor.
+             *
+             * Gears, the customer's order of 2026-09-24 (docs/GPU.md 6):
+             * vkgears through Venus -- Mesa's Vulkan driver in the guest,
+             * the host's GPU under virglrenderer's render server -- on the
+             * Linux host, 39 points; and gears drawn by the DK1's own
+             * Vivante GC400T, an OpenGL ES 2.0 core with no Vulkan in any
+             * driver, through a ring-3 driver of Ferrix's own, 32 points. */
     }
 
     #planned requirement <'S21'> stage21BareMetalGpu : Stage {

@@ -841,3 +841,115 @@ a GPU's picture. What B adds is a second thing under the render node.
 * Drivers stay in ring 3.
 * No C in the compositor. Path A's 3b keeps that; 3a and Path B's userspace
   are where it would be argued again, by name, when they come up.
+
+---
+
+## 6. Gears: Vulkan through Venus, and the board's own GPU (decided 2026-09-24)
+
+The customer asked for vkgears on Ferrix, as a 3D demo that tests Vulkan and
+GPU acceleration, and then for the same on the DK1. Two facts shaped the
+answer, and the customer chose on them:
+
+* **Ferrix has no Vulkan driver**, and there is no Mesa on ferrousli (§3a).
+  Under virtio-gpu, a Vulkan that the host's GPU executes is **Venus**:
+  Mesa's `virtio` Vulkan driver in the guest serialises Vulkan calls, and
+  virglrenderer's render server replays them into the host's own Vulkan
+  driver. That needs a Linux host with KVM. The Windows machine's `whpx`
+  QEMU offers virgl, which is OpenGL (§3, *What Path A does not give*).
+* **The DK1's GPU cannot do Vulkan at all.** The STM32MP157 carries a
+  Vivante GC400T, an OpenGL ES 2.0 core. No Vulkan exists for it, in its
+  hardware or in any driver, Linux's included. vkgears there would have to
+  run on a CPU Vulkan (Mesa's lavapipe) and would test nothing about the GPU.
+
+**Decided:** real vkgears through Venus in QEMU on the Linux host, and
+**GLES2-level gears on the GC400** on the board, drawn by the GPU itself.
+Both are first guesses in points, recorded here the way §3 was.
+
+### 6.1 Venus, in QEMU on the Linux host
+
+**The host is ready.** Checked on 2026-09-24: the distribution's QEMU
+(10.2.1, `/usr/bin`) has `venus=`, `blob=` and `hostmem=` on
+`virtio-gpu-gl-pci`, its virglrenderer was built with Venus and ships
+`virgl_render_server`, and RADV drives the AMD node (`renderD128`) that
+`--gl` already uses. The source-built QEMU 9.2.4 first on `PATH` has none of
+it, so `FERRIX_QEMU=/usr/bin` again.
+
+**What Mesa's Venus driver asks of the kernel**, read from
+`src/virtio/vulkan/vn_renderer_virtgpu.c` of Mesa 26.2.3:
+
+* `VIRTGPU_GETPARAM` answering `3D_FEATURES`, `CAPSET_QUERY_FIX`,
+  `RESOURCE_BLOB`, `CONTEXT_INIT` and `HOST_VISIBLE` with non-zero, and
+  `SUPPORTED_CAPSET_IDS` with bit 4 (`VIRTIO_GPU_CAPSET_VENUS`);
+* `GET_CAPS` for the Venus capset, whose `wire_format_version` must not be 0
+  and whose `supports_blob_id_0` must be set;
+* `CONTEXT_INIT` with a capset id, 64 rings and no polled rings;
+* `RESOURCE_CREATE_BLOB` of `BLOB_MEM_HOST3D`, `USE_MAPPABLE`: the rings and
+  every host-visible Vulkan allocation are host memory, and `MAP` + `mmap`
+  must put it in the program's address space. That memory is QEMU's
+  `hostmem` region, a PCI BAR the driver maps blob resources into with
+  `RESOURCE_MAP_BLOB`;
+* `EXECBUFFER` with `RING_IDX` and `FENCE_FD_OUT`, returning a descriptor
+  that `poll` reports readable once the ring's fence has signalled. Venus
+  then simulates its sync objects on those descriptors
+  (`vn_renderer_sim_syncobj.c`) and needs **no DRM syncobjs**, provided
+  `DRM_CAP_SYNCOBJ_TIMELINE` is answered 0;
+* `DRM_IOCTL_VERSION` naming `virtio_gpu` 0.x, which the node does, and
+  libdrm's `drmGetDevices2` finding the node, which reads `/dev/dri` and
+  `/sys/dev/char/226:<minor>/device`;
+* `GEM_CLOSE`, `RESOURCE_INFO` and the `PRIME` pair.
+
+**Presentation needs no dmabuf yet.** Mesa's Wayland WSI takes the CPU path
+when a device is a "software" one, which `MESA_VK_WSI_DEBUG=sw` forces: the
+frame is rendered by the host GPU, copied into host-visible memory, and
+handed to the compositor as `wl_shm`, which `hyprix` shows today. So step 4
+(`zwp_linux_dmabuf`) is where zero-copy comes from later, not a
+prerequisite.
+
+**The guest userspace is static.** Mesa loads a Vulkan driver as a shared
+object through the Khronos loader and `dlopen`. ferrousli's ports are all
+static, and its `dlopen` refuses a library with its own TLS, which Mesa has.
+So the Venus driver is built as a static archive, and a small static loader
+of Ferrix's own hands vkgears its `vkGetInstanceProcAddr` through the
+driver's `vk_icdGetInstanceProcAddr`. vkgears is built from its three source
+files (`vkgears.c`, `wsi/wsi.c`, `wsi/wayland.c`) rather than through
+mesa-demos' meson, which requires desktop GL. It needs `libwayland-client`,
+`libxkbcommon` and `libdecor`: the first two come with the foot port.
+
+| # | what | points |
+|---|---|---|
+| V1 | **Blob resources and Venus in `libs/virtio::gpu`**: `RESOURCE_CREATE_BLOB`, `RESOURCE_MAP_BLOB`/`UNMAP_BLOB`, a context's capset in `CTX_CREATE`, a fence's ring index, the PCI shared-memory capability. Host-tested and fuzzed as the rest | 5 |
+| V2 | **`user/gpu`**: negotiate `RESOURCE_BLOB` and `CONTEXT_INIT`, map the `hostmem` BAR, carry the Venus capset, and complete fences per ring. `libs/renderctl` gains blob objects and ring fences | 8 |
+| V3 | **The render node**: the ioctls and parameters above, a blob's host pages mapped into the program, fence descriptors that `poll`, and the `/sys` entries libdrm reads | 8 |
+| V4 | **The ports**: libdrm, Mesa's Venus driver as a static archive, the static loader, libdecor and vkgears, against ferrousli, with vkgears' shaders compiled to SPIR-V on the host | 13 |
+| V5 | **`cargo xtask test-vkgears`**: a `venus=on,blob=on,hostmem=` boot on the Linux host, judged from inside the guest: the device vkgears names is the host's GPU through Venus, frames are counted, and `/bin/shot` finds gears in the frame | 5 |
+
+**39 points.** V1 to V3 are proved by a boot that makes a Venus context and
+maps a blob before any Mesa exists; V4 and V5 are the demo.
+
+### 6.2 The GC400 on the DK1
+
+The core is at `0x5900_0000` (0x800 bytes of registers), interrupt SPI 109,
+with a bus and a core clock and a reset line in the RCC (Linux's
+`stm32mp157.dtsi`, `gpu@59000000`, `compatible = "vivante,gc"`). Nothing in
+Ferrix touches it yet: the board's display is the LTDC alone
+(`docs/DISPLAY.md` §6).
+
+Vivante's command stream and state registers are documented by the etnaviv
+project's reverse-engineered register database, which Mesa carries under the
+MIT licence in `src/etnaviv/hw/`. Linux's etnaviv driver is GPL and is read,
+never copied, the way glibc is for ferrousli. A shader is Vivante machine
+code, and the gears need only a fixed few, so they are compiled on the host
+by Mesa's etnaviv compiler and checked in, as `compositor/virgl/shaders/`
+compiles its GLSL with Mesa's virgl driver (§3.8).
+
+| # | what | points |
+|---|---|---|
+| G1 | **The kernel's part**: the GPU's clocks and reset in `kernel/src/stm32mp1.rs`, and a device node with its registers and interrupt, as the LTDC has | 3 |
+| G2 | **`user/gc400`, a ring-3 driver**: identify the core (model, revision, features), power it, run a command buffer through the front end, take its completion by interrupt. Proved on the board by a `WAIT`/`LINK` loop and an event | 8 |
+| G3 | **Pixels**: a render target cleared and resolved by the GPU into a buffer the LTDC shows | 8 |
+| G4 | **Drawing**: vertex streams, a depth buffer, the host-compiled shaders, and draws | 8 |
+| G5 | **`gears` on the board**: the three gears lit and turning, drawn by the GC400, with frames per second on the serial console | 5 |
+
+**32 points.** None of it can be gated in QEMU, which emulates no Vivante
+core: G2 to G5 are judged on the board by hand, and what can be
+host-tested (the command stream's words, the register layout) is.
