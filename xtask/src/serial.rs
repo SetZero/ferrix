@@ -14,7 +14,7 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use crate::args::Args;
-use crate::qemu::{PANIC_MARKER, SUCCESS_MARKER};
+use crate::qemu::{PANIC_MARKER, SUCCESS_MARKER, UNCHECKED_MARKER};
 use crate::{Error, Result};
 
 /// The line speed every board this targets uses, and what the STM32MP157-DK's
@@ -106,6 +106,26 @@ pub(crate) fn watch(kernel: Option<&Path>, args: &Args) -> Result<()> {
                 if line.contains(SUCCESS_MARKER) {
                     println!("  board: boot ok");
                     return Ok(());
+                }
+                // A desktop's card skips the checks on purpose (`flash
+                // --compositor` writes `ferrix.checks=skip` among the image's
+                // defaults), and `deploy --compositor` watching it is waiting
+                // for the desktop, not for a boot test. Anywhere else a boot
+                // that skipped them is not the verdict that was asked for.
+                if line.contains(UNCHECKED_MARKER) {
+                    if args.compositor {
+                        println!(
+                            "  board: booted with its self-checks skipped, as the desktop's image asks"
+                        );
+                        return Ok(());
+                    }
+                    return Err(Error::new(format!(
+                        "the board skipped its self-checks (`{UNCHECKED_MARKER}`): its command \
+                         line says ferrix.checks=skip, from the card's CMDLINE.TXT or the image's \
+                         DEFAULTS.TXT. Flash without --compositor, or put ferrix.checks=run in \
+                         CMDLINE.TXT, for a boot test.\n  What arrived is in {}",
+                        log_path.display()
+                    )));
                 }
                 if line.contains(PANIC_MARKER) {
                     crate::qemu::take_panic_report(&receiver, &mut log, symbols.as_ref())?;

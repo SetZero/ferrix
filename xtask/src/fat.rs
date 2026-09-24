@@ -469,6 +469,10 @@ fn directory_entry(name: &[u8; 11], attr: u8, first_cluster: u32, size: u32) -> 
     entry
 }
 
+/// Where an image's own command-line options go, and `flash` puts them on a
+/// card: the loader reads the file after `CMDLINE.TXT`.
+pub(crate) const DEFAULTS_PATH: &str = "FERRIX/DEFAULTS.TXT";
+
 /// Assemble the bootable image for `arch` from a built loader and kernel, with
 /// the initramfs every image carries: the tree's native programs, and no
 /// `--init` program.
@@ -498,6 +502,20 @@ pub(crate) fn write_image_with(
     initramfs: &[u8],
     cmdline: Option<&str>,
 ) -> Result<PathBuf> {
+    write_image_carrying(arch, loader, kernel, initramfs, cmdline, None)
+}
+
+/// [`write_image_with`], and the image's own options in `FERRIX/DEFAULTS.TXT`
+/// when there are any: the file `flash` writes beside a card owner's
+/// `CMDLINE.TXT`, which the loader appends after it (`boot/src/main.rs`).
+pub(crate) fn write_image_carrying(
+    arch: Arch,
+    loader: &Path,
+    kernel: &Path,
+    initramfs: &[u8],
+    cmdline: Option<&str>,
+    defaults: Option<&str>,
+) -> Result<PathBuf> {
     let mut fs = Fat32::new(IMAGE_BYTES)?;
 
     let loader_bytes = std::fs::read(loader)
@@ -518,6 +536,9 @@ pub(crate) fn write_image_with(
     // from beside the kernel and hands it over in the boot info.
     if let Some(cmdline) = cmdline {
         fs.add_file("FERRIX/CMDLINE.TXT", cmdline.as_bytes())?;
+    }
+    if let Some(defaults) = defaults {
+        fs.add_file(DEFAULTS_PATH, defaults.as_bytes())?;
     }
 
     let directory = paths::build_dir(arch);

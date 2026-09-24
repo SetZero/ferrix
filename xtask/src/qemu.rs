@@ -24,6 +24,11 @@ pub(crate) const SUCCESS_MARKER: &str = "FERRIX-BOOT-OK";
 /// What the panic handler prints. Seeing this ends the test immediately: the
 /// kernel will not recover, and waiting out the timeout only hides the reason.
 pub(crate) const PANIC_MARKER: &str = "FERRIX-PANIC";
+/// What the kernel prints instead of [`SUCCESS_MARKER`] when
+/// `ferrix.checks=skip` had it bring every stage up without checking it. Never
+/// a pass: a boot waiting for the success marker that sees this one fails at
+/// once, and says why, rather than waiting out its timeout.
+pub(crate) const UNCHECKED_MARKER: &str = "FERRIX-BOOT-UNCHECKED";
 
 /// The command line `--reset` puts in the image's `CMDLINE.TXT`.
 pub(crate) const RESET_CMDLINE: &str = "ferrix.onexit=reset\n";
@@ -828,15 +833,7 @@ fn watch_hooked(
     // A reader thread and a channel, rather than a non-blocking read: the guest
     // may say nothing for seconds at a time, and the timeout has to apply to
     // the boot as a whole rather than to each line.
-    let (sender, receiver) = mpsc::channel();
-    let reader = std::thread::spawn(move || {
-        for line in BufReader::new(stdout).lines() {
-            let Ok(line) = line else { break };
-            if sender.send(line).is_err() {
-                break;
-            }
-        }
-    });
+    let (receiver, reader) = read_lines(stdout);
 
     let log_path = paths::build_dir(arch).join("serial.log");
     let mut log = std::fs::File::create(&log_path)?;
@@ -854,6 +851,7 @@ fn watch_hooked(
     let mut resetting = false;
     let mut restarted = false;
     let mut closed = false;
+    let mut unchecked = false;
     while verdict == Verdict::Silent || (args.reset && verdict == Verdict::Reached && !restarted) {
         let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
             break;
@@ -873,6 +871,8 @@ fn watch_hooked(
                     }
                 } else if line.contains(PANIC_MARKER) {
                     verdict = Verdict::Panicked;
+                } else if until == SUCCESS_MARKER && line.contains(UNCHECKED_MARKER) {
+                    unchecked = true;
                 }
                 if args.reset && verdict == Verdict::Reached {
                     if line.contains(RESETTING) {
@@ -882,6 +882,9 @@ fn watch_hooked(
                     }
                 }
                 lines.push(line);
+                if unchecked {
+                    break;
+                }
             }
             // The guest closed the serial port: QEMU is on its way out, so stop
             // reading and judge on the exit status below.
@@ -918,18 +921,15 @@ fn watch_hooked(
     // thread is not still being fed while they are read.
     report_network(&network);
 
+    if unchecked {
+        return Err(skipped_its_checks(arch, &log_path));
+    }
     // QEMU gone before the guest said what it was waited for is not a timeout,
     // and every caller would otherwise report one: an argument QEMU refuses
     // ends it at once, with the reason on the stderr above, and "did not
     // finish within 600s" sends whoever reads it to look at the guest.
     if closed && verdict == Verdict::Silent {
-        return Err(Error::new(format!(
-            "{arch}: QEMU exited ({status}) {:.1}s after it started, before the guest printed \
-             `{until}`; QEMU's own error, if it gave one, is above.\n  \
-             Serial output is in {}",
-            started.elapsed().as_secs_f64(),
-            log_path.display()
-        )));
+        return Err(exited_early(arch, status, started, until, &log_path));
     }
 
     hooked?;
@@ -939,6 +939,50 @@ fn watch_hooked(
         status,
         log: log_path,
     })
+}
+
+/// Read `stdout` a line at a time on a thread of its own, into a channel.
+fn read_lines(
+    stdout: std::process::ChildStdout,
+) -> (mpsc::Receiver<String>, std::thread::JoinHandle<()>) {
+    let (sender, receiver) = mpsc::channel();
+    let reader = std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            let Ok(line) = line else { break };
+            if sender.send(line).is_err() {
+                break;
+            }
+        }
+    });
+    (receiver, reader)
+}
+
+/// The error for a boot that was waited on for [`SUCCESS_MARKER`] and printed
+/// [`UNCHECKED_MARKER`] instead.
+fn skipped_its_checks(arch: Arch, log: &Path) -> Error {
+    Error::new(format!(
+        "{arch}: the kernel skipped its self-checks (`{UNCHECKED_MARKER}`): the command \
+         line asked for ferrix.checks=skip, and a boot that was waited on for \
+         `{SUCCESS_MARKER}` needs them run.\n  Serial output is in {}",
+        log.display()
+    ))
+}
+
+/// The error for a QEMU that exited before the guest printed `until`.
+fn exited_early(
+    arch: Arch,
+    status: std::process::ExitStatus,
+    started: Instant,
+    until: &str,
+    log: &Path,
+) -> Error {
+    Error::new(format!(
+        "{arch}: QEMU exited ({status}) {:.1}s after it started, before the guest printed \
+         `{until}`; QEMU's own error, if it gave one, is above.\n  \
+         Serial output is in {}",
+        started.elapsed().as_secs_f64(),
+        log.display()
+    ))
 }
 
 /// Run the marker hook, if there is one and the marker was reached, and
@@ -1865,7 +1909,10 @@ fn prepare_vars(arch: Arch, code: &Path, template: Option<&Path>) -> Result<Path
 
 #[cfg(test)]
 mod tests {
-    use super::{Arch, devmgr_problem, entropy_problem, fault_problem, iommu_problem};
+    use super::{
+        Arch, SUCCESS_MARKER, UNCHECKED_MARKER, devmgr_problem, entropy_problem, fault_problem,
+        iommu_problem,
+    };
 
     fn lines(text: &[&str]) -> Vec<String> {
         text.iter().map(|line| (*line).to_owned()).collect()
@@ -1963,5 +2010,21 @@ mod tests {
             None,
             "ARMv7-A is not asked"
         );
+    }
+
+    #[test]
+    fn the_markers_are_the_ones_the_kernel_prints() {
+        let path = crate::paths::workspace_root().join("kernel/src/main.rs");
+        let kernel = std::fs::read_to_string(&path).expect("reading the kernel's main.rs");
+        for marker in [SUCCESS_MARKER, UNCHECKED_MARKER] {
+            assert!(
+                kernel.contains(&format!("\"{marker}\"")),
+                "{} does not print `{marker}`",
+                path.display()
+            );
+        }
+        // Every reader of the success marker matches a substring: a skipped
+        // boot's marker must not contain it, or it would pass for one.
+        assert!(!UNCHECKED_MARKER.contains(SUCCESS_MARKER));
     }
 }

@@ -48,6 +48,13 @@ const INITRD_PATH: &str = "/FERRIX/INITRD.IMG";
 /// clears what firmware was told.
 const CMDLINE_PATH: &str = "/FERRIX/CMDLINE.TXT";
 
+/// Where the image keeps options of its own: `cargo xtask flash --compositor`
+/// writes `ferrix.checks=skip` here, and every `flash` rewrites or removes it.
+/// A file of its own rather than lines in `CMDLINE.TXT`, which is the card
+/// owner's and which `flash` never touches; appended after it, so that an
+/// option given in both is the owner's, the kernel taking the first of a key.
+const DEFAULTS_PATH: &str = "/FERRIX/DEFAULTS.TXT";
+
 /// Bytes set aside for the boot info structure and the memory map behind it.
 /// At 24 bytes a region this holds around 2700 of them; firmware typically
 /// reports fewer than a hundred.
@@ -505,48 +512,70 @@ fn leave_firmware(services: &Services, buffer: Allocation) -> Result<MemoryMap> 
     Ok(map)
 }
 
-/// Read `CMDLINE.TXT`, if the volume has one, into the boot info area, and say
-/// how many bytes of command line it gave.
+/// Read `CMDLINE.TXT` and then `DEFAULTS.TXT`, where the volume has them, into
+/// the boot info area as one command line, and say how many bytes it came to.
 ///
 /// A missing file is the ordinary case and says nothing. A file that cannot be
 /// used is reported and ignored rather than refused: every option the kernel
 /// reads has a safe default, and a board that will not boot because of a typo
-/// in a text file is worse than one that boots without the option.
+/// in a text file is worse than one that boots without the option. The two
+/// are joined by a space, the owner's first, so the kernel -- which takes the
+/// first word with a key -- takes the owner's value over the image's.
 fn load_cmdline(services: &Services, info_area: Allocation) -> u64 {
-    let (file, len) = match services.read_file(CMDLINE_PATH, MemoryType::LOADER_DATA) {
+    let capacity = (REGIONS_OFFSET - CMDLINE_OFFSET) as usize;
+    // SAFETY: these bytes are inside `info_area`, the loader's own zeroed
+    // allocation of BOOT_INFO_BYTES, between the `BootInfo` and the region
+    // array, which nothing else refers to until the kernel is entered; the
+    // files the text is read into are other allocations.
+    let destination = unsafe {
+        core::slice::from_raw_parts_mut((info_area.address + CMDLINE_OFFSET) as *mut u8, capacity)
+    };
+    let mut written = 0usize;
+    for (path, whose) in [
+        (CMDLINE_PATH, ""),
+        (DEFAULTS_PATH, ", the image's defaults"),
+    ] {
+        let Some(text) = read_command_file(services, path, capacity) else {
+            continue;
+        };
+        if text.is_empty() {
+            continue;
+        }
+        let gap = usize::from(written > 0);
+        let Some(slot) = destination.get_mut(written..written + gap + text.len()) else {
+            println!("  cmdline  {path} is ignored: the command line has no room left for it");
+            continue;
+        };
+        let (space, rest) = slot.split_at_mut(gap);
+        space.fill(b' ');
+        rest.copy_from_slice(text.as_bytes());
+        written += gap + text.len();
+        println!("  cmdline  {text}  (from {path}{whose})");
+    }
+    written as u64
+}
+
+/// One command-line file's text, trimmed, or nothing when it is missing or
+/// cannot be used -- which [`load_cmdline`] explains.
+fn read_command_file<'a>(services: &Services, path: &str, capacity: usize) -> Option<&'a str> {
+    let (file, len) = match services.read_file(path, MemoryType::LOADER_DATA) {
         Ok(read) => read,
-        Err(error) if error.status == Some(Status::NOT_FOUND) => return 0,
+        Err(error) if error.status == Some(Status::NOT_FOUND) => return None,
         Err(error) => {
-            println!("  cmdline  {CMDLINE_PATH} could not be read, so it is ignored: {error}");
-            return 0;
+            println!("  cmdline  {path} could not be read, so it is ignored: {error}");
+            return None;
         }
     };
     // SAFETY: `read_file` filled `len` bytes of its own allocation, which is
-    // identity mapped under boot services and not written again.
+    // identity mapped under boot services, never freed and not written again.
     let bytes = unsafe { core::slice::from_raw_parts(file.address as *const u8, len as usize) };
-    let capacity = (REGIONS_OFFSET - CMDLINE_OFFSET) as usize;
-    let text = match ferrix_bootinfo::command_line_from_file(bytes, capacity) {
-        Ok(text) => text,
+    match ferrix_bootinfo::command_line_from_file(bytes, capacity) {
+        Ok(text) => Some(text),
         Err(why) => {
-            println!("  cmdline  {CMDLINE_PATH} is ignored: {why}");
-            return 0;
+            println!("  cmdline  {path} is ignored: {why}");
+            None
         }
-    };
-    // SAFETY: the destination is inside `info_area`, the loader's own zeroed
-    // allocation of BOOT_INFO_BYTES, between the `BootInfo` and the region
-    // array, and `text` was checked to fit there; it is a different
-    // allocation from the file the bytes come from.
-    unsafe {
-        ptr::copy_nonoverlapping(
-            text.as_ptr(),
-            (info_area.address + CMDLINE_OFFSET) as *mut u8,
-            text.len(),
-        );
     }
-    if !text.is_empty() {
-        println!("  cmdline  {text}  (from {CMDLINE_PATH})");
-    }
-    text.len() as u64
 }
 
 /// Copy the firmware memory map into the boot info, sorted by address.

@@ -1184,6 +1184,28 @@ fn build_image(
     Ok((image, kernel))
 }
 
+/// [`build_image`] for a desktop: the same image, carrying
+/// [`DESKTOP_DEFAULTS`] as `FERRIX/DEFAULTS.TXT`, so that the kernel skips its
+/// self-checks as a board's desktop does.
+fn build_desktop_image(
+    arch: Arch,
+    programs: &Programs,
+    config: &str,
+    carried_too: Carried,
+    args: &Args,
+) -> Result<(PathBuf, PathBuf)> {
+    let (loader, kernel, initramfs) = build_parts(arch, programs, config, carried_too, args)?;
+    let image = crate::fat::write_image_carrying(
+        arch,
+        &loader,
+        &kernel,
+        &initramfs,
+        None,
+        Some(DESKTOP_DEFAULTS),
+    )?;
+    Ok((image, kernel))
+}
+
 /// What [`build_image`] puts in an image, which is also what `flash` copies
 /// onto a card: the loader, the kernel with the compositor as init, and the
 /// initramfs.
@@ -1973,7 +1995,10 @@ pub(crate) fn run_compositor(args: &Args) -> Result<()> {
     let programs = Programs::build(arch)?;
     let size = args.size.unwrap_or(crate::wallpaper::SCREEN);
     let (config, carried) = desktop(arch, config, size, args)?;
-    let (image, _) = build_image(arch, &programs, &config, carried, args)?;
+    // The desktop a person watches boots as a board's does: with its
+    // self-checks skipped, which only the `desktop` boot of the judged ones
+    // is.
+    let (image, _) = build_desktop_image(arch, &programs, &config, carried, args)?;
     // The host's GPU behind the card where it can be had: `window::watched_gl`
     // says when, and why it is the default for a desktop somebody watches.
     let args = crate::window::watched_gl(arch, args)?;
@@ -1997,6 +2022,17 @@ pub(crate) fn run_compositor(args: &Args) -> Result<()> {
 /// its own with the console as its terminal.
 const SERIAL_SHELL: &str = "/bin/busybox setsid -c /bin/busybox sh -i";
 
+/// The command-line options a desktop's image carries, in the file the loader
+/// reads after the card owner's `CMDLINE.TXT` (`FERRIX/DEFAULTS.TXT`).
+///
+/// `ferrix.checks=skip`: every stage is brought up and none of its self-checks
+/// run (`kernel/src/checks.rs`). They were most of the DK1's 6.5 s from the
+/// kernel's banner to its marker on 2026-09-24, and a desktop somebody
+/// switches on is not a boot test; the rows that are boot tests never carry
+/// this file, and a boot waited on for `FERRIX-BOOT-OK` that skipped them
+/// fails. A card's `CMDLINE.TXT` saying `ferrix.checks=run` runs them anyway.
+pub(crate) const DESKTOP_DEFAULTS: &str = "ferrix.checks=skip\n";
+
 /// The screen a board's HDMI output runs: the DK1's LTDC scans out 720p60
 /// and nothing else (`docs/DISPLAY.md` §6).
 const BOARD_SCREEN: (u32, u32) = (1280, 720);
@@ -2008,7 +2044,7 @@ const BOARD_SCREEN: (u32, u32) = (1280, 720);
 /// No network, since the board has none Ferrix drives, and no wallpaper
 /// unless one is named: a picture scaled every frame, let alone a video
 /// decoded, is a large share of what a 650 MHz Cortex-A7 has to give.
-pub(crate) fn board_files(arch: Arch, args: &Args) -> Result<(PathBuf, PathBuf, Vec<u8>)> {
+pub(crate) fn board_files(arch: Arch, args: &Args) -> Result<crate::flash::BoardFiles> {
     if crate::display::target(arch).is_none() {
         return Err(Error::new(format!(
             "the compositor is not built for {arch}"
@@ -2048,7 +2084,13 @@ pub(crate) fn board_files(arch: Arch, args: &Args) -> Result<(PathBuf, PathBuf, 
     } else {
         config
     };
-    build_parts(arch, &programs, &config, carried, args)
+    let (loader, kernel, initramfs) = build_parts(arch, &programs, &config, carried, args)?;
+    Ok(crate::flash::BoardFiles {
+        loader,
+        kernel,
+        initramfs,
+        defaults: Some(DESKTOP_DEFAULTS),
+    })
 }
 
 /// The static busybox the gates boot as `--init`, at
@@ -2213,7 +2255,7 @@ fn said_on_its_own(line: &str) -> &str {
 /// each takes minutes under emulation and there are twenty of them, so a
 /// change to one is otherwise an hour a try.
 type Boot = fn(Arch, &Programs, &Args) -> Result<()>;
-const BOOTS: [(&str, Boot); 23] = [
+const BOOTS: [(&str, Boot); 24] = [
     ("restart", test_driver_restart),
     ("dispatchers", test_dispatchers),
     ("bar", test_bar),
@@ -2237,7 +2279,129 @@ const BOOTS: [(&str, Boot); 23] = [
     ("mode", test_mode),
     ("transform", test_transform),
     ("typing", test_typing),
+    ("desktop", test_desktop),
 ];
+
+/// The desktop boot's configuration: the two windows `dispatchers` tiles
+/// first, and nothing to press.
+const DESKTOP_CONFIG: &str = "\
+# Carried into the initramfs by `cargo xtask test-compositor`.
+exec-once = /bin/pattern checkerboard one
+exec-once = /bin/pattern gradient two
+";
+
+/// What the kernel says when it read `ferrix.checks=skip`
+/// (`kernel/src/checks.rs`).
+const CHECKS_SKIPPED: &str =
+    "checks   ferrix.checks=skip: stages 2 to 12 are brought up and not checked";
+
+/// A line only a boot that ran stage 5's checks prints.
+const STAGE5_CHECKED: &str = "  stage 5  ";
+
+/// The boot a desktop makes: the image `run-compositor` and `flash
+/// --compositor` build, which carries [`DESKTOP_DEFAULTS`] and so skips the
+/// kernel's self-checks.
+///
+/// Every other boot here runs them, and so does every other row; this one is
+/// what keeps the skipping honest in both directions. The kernel must say it
+/// skipped them, end in the unchecked marker and never the success one, and
+/// print no check's line; and what the checks would have come with must
+/// still be there without them -- the root, `devmgr` and the card, the seat
+/// -- so that the compositor comes up and tiles the two windows as the first
+/// picture of `dispatchers` has them, pixel for pixel.
+fn test_desktop(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
+    let (image, kernel) = build_desktop_image(
+        arch,
+        programs,
+        &undithered(DESKTOP_CONFIG),
+        Carried::none(),
+        args,
+    )?;
+    let port = free_port()?;
+    let mut qemu_args = args.clone();
+    qemu_args.display = true;
+    qemu_args.qmp_port = Some(port);
+    let dump = paths::build_dir(arch).join("compositor.ppm");
+    let (what, path) = EXPECTED[0];
+    let want = expected(path)?;
+    let mut said: Vec<String> = Vec::new();
+    let mut screen = None;
+    let hook = |watching: &mut Watching<'_>| -> Result<()> {
+        let mut qmp = Qmp::connect(port, Instant::now() + Duration::from_secs(10))?;
+        let _ = watching.read_more(Instant::now() + SETTLE, |lines| {
+            lines
+                .iter()
+                .any(|line| line.contains(MARKER) || line.contains(FAILED))
+        })?;
+        let up = watching
+            .lines()
+            .iter()
+            .chain(watching.after())
+            .any(|line| line.contains(MARKER));
+        if up {
+            say_the_marker(watching, arch);
+            screen = Some(settle(&mut qmp, &dump, &want)?);
+        }
+        let _ = watching.read_more(Instant::now() + Duration::from_secs(2), |_| false)?;
+        said = watching
+            .lines()
+            .iter()
+            .chain(watching.after())
+            .cloned()
+            .collect();
+        Ok(())
+    };
+    let _ = crate::qemu::watch_then(arch, &image, &kernel, &qemu_args, EITHER, hook)?;
+    judge_desktop(arch, &said)?;
+    let Some(screen) = screen else {
+        return Err(Error::new(format!(
+            "{arch}: the compositor never printed `{MARKER}` on a boot that skipped its checks"
+        )));
+    };
+    let (found, count) = differences(&screen, &want);
+    if count != 0 {
+        return Err(unexpected(arch, what, &screen, found, count));
+    }
+    println!(
+        "  {arch}: with the kernel's self-checks skipped, {what}, every one of {} pixels",
+        screen.width * screen.height
+    );
+    Ok(())
+}
+
+/// What [`test_desktop`] requires of what the guest said.
+fn judge_desktop(arch: Arch, said: &[String]) -> Result<()> {
+    let any = |text: &str| said.iter().any(|line| line.contains(text));
+    let problem = if !any(CHECKS_SKIPPED) {
+        Some(format!("the kernel never said `{CHECKS_SKIPPED}`"))
+    } else if any(crate::qemu::SUCCESS_MARKER) {
+        Some(format!(
+            "a boot that skipped its checks printed `{}`",
+            crate::qemu::SUCCESS_MARKER
+        ))
+    } else if !any(crate::qemu::UNCHECKED_MARKER) {
+        Some(format!(
+            "the kernel never printed `{}`",
+            crate::qemu::UNCHECKED_MARKER
+        ))
+    } else if any(STAGE5_CHECKED) {
+        Some("stage 5's checks ran on a boot that skipped them".to_owned())
+    } else if !any("  devmgr   ") {
+        Some("devmgr was never started".to_owned())
+    } else {
+        None
+    };
+    match problem {
+        Some(problem) => Err(Error::new(format!("{arch}: {problem}"))),
+        None => {
+            println!(
+                "  {arch}: the kernel skipped its self-checks and said `{}`",
+                crate::qemu::UNCHECKED_MARKER
+            );
+            Ok(())
+        }
+    }
+}
 
 /// Where the restart boot's script is on the guest.
 const KILL_GPU_PATH: &str = "etc/killgpu";

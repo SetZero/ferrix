@@ -372,6 +372,20 @@ the image with `--reset`, which puts exactly that line in it.
 `cargo xtask test-boot --reset` boots such an image and requires QEMU to see the
 machine reset rather than power off, on every architecture.
 
+**The image's own options** go beside it, in `FERRIX/DEFAULTS.TXT`, which is
+the image's and not yours: every `flash` rewrites it, or deletes it when the
+image has none, so a self-check image flashed over a desktop does not boot
+with the desktop's options. The loader reads `CMDLINE.TXT` first and
+`DEFAULTS.TXT` after it and joins the two, and the kernel takes the first
+value of a key, so a line in `CMDLINE.TXT` always wins. It says both:
+
+```
+  cmdline  ferrix.onexit=reset  (from /FERRIX/CMDLINE.TXT)
+  cmdline  ferrix.checks=skip  (from /FERRIX/DEFAULTS.TXT, the image's defaults)
+```
+
+Only `flash --compositor` writes one today (step 4).
+
 ## 4. The desktop, over HDMI
 
 The board's HDMI socket is a card like QEMU's virtio-gpu (`docs/DISPLAY.md`
@@ -397,12 +411,34 @@ from `cargo xtask wallpapers` (none is the board's default: scaling one is
 real work for a 650 MHz Cortex-A7). The boot says:
 
 ```
+  cmdline  ferrix.checks=skip  (from /FERRIX/DEFAULTS.TXT, the image's defaults)
+  ...
+  stage 1  loader hand-off verified
+  checks   ferrix.checks=skip: stages 2 to 12 are brought up and not checked; this boot is not a boot test
+  ...
   display  LTDC at 0x5a001000, HDMI bridge at 0x39 on I2C 0x40012000, pixel clock 74.250 MHz, 30 pins muxed
   display  card0 scanout 0: 1280x720
-FERRIX-BOOT-OK stages 1-12
+  devmgr   2 devices, 7 drivers, 2 started, 0 failed
+FERRIX-BOOT-UNCHECKED stages 1-12 brought up, the self-checks of 2 to 12 skipped as ferrix.checks=skip asks
 hyprix: 1 monitor [card0 HDMI-A-1 1280x720 1280x720]
 hyprix: started /bin/term /bin/zinc as 190
 ```
+
+**The desktop's image skips the kernel's self-checks.** `flash --compositor`
+writes `ferrix.checks=skip` to `FERRIX/DEFAULTS.TXT` (step 3), and the kernel
+then brings every stage up -- the allocators, the processors, the scheduler,
+the root from the initramfs, the device nodes, `devmgr`, the net core, the
+reclaim -- without the checks that prove each one works. They were most of
+the kernel's 6.5 s from its banner to its marker on 2026-09-24; under QEMU at
+two processors the same boot takes 0.34 s from the banner to the marker where
+the checks take 4.9 s. The marker is `FERRIX-BOOT-UNCHECKED` rather than
+`FERRIX-BOOT-OK`, so nothing that waits for the second is fooled by such a
+boot: `test-boot` fails at once, and `watch-serial` fails too unless it is
+`deploy --compositor` watching the desktop it has just flashed. For a boot
+test on this card, flash without `--compositor` (which deletes the file), or
+keep the desktop and put `ferrix.checks=run` in `CMDLINE.TXT`, which wins.
+`cargo xtask test-compositor --boot desktop` is the gate that a desktop still
+comes up with the checks skipped.
 
 A monitor standing in portrait takes Hyprland's own line, in the
 configuration given with `--config`:
