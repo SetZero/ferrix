@@ -1,9 +1,9 @@
 //! The frame being drawn: a tiny-skia pixmap in the canvas byte order the
 //! crate docs describe, and the drawing operations clipped to damage.
 
-use tiny_skia::{
-    BlendMode, FilterQuality, Paint, Pattern, Pixmap, PixmapMut, PixmapRef, Shader, SpreadMode,
-};
+use std::collections::BTreeMap;
+
+use tiny_skia::{BlendMode, FilterQuality, Paint, Pattern, Pixmap, PixmapRef, Shader, SpreadMode};
 
 use crate::blur::{Block, Blur};
 use crate::damage::{bounding, intersect, is_empty};
@@ -473,6 +473,16 @@ impl Canvas {
         if clips.is_empty() {
             return;
         }
+        // An opaque surface at full opacity covers what is under it: every
+        // pixel is the surface's, sampled, with nothing to blend. That is
+        // every tiled window part-way through a move, and it is done here in
+        // whole numbers, a band of rows a core, rather than through the
+        // shader's floating-point pipeline -- which on a Cortex-A7 took over
+        // a second for a window's frame.
+        if surface.format() == Format::Xrgb8888 && opacity >= 1.0 {
+            self.stretch_opaque(surface, rect, nearest, &clips);
+            return;
+        }
         let gathered = opaque_rows(surface);
         let Some(pixmap) = PixmapRef::from_bytes(&gathered, surface.width(), surface.height())
         else {
@@ -509,6 +519,50 @@ impl Canvas {
         );
         let paint = paint(shader, BlendMode::SourceOver);
         self.fill_clips(&clips, &paint);
+    }
+
+    /// [`Canvas::composite_scaled`] for an opaque surface at full opacity:
+    /// each canvas pixel of `clips` is the surface sampled where `rect`
+    /// stretches it to, bilinearly unless `nearest`.
+    ///
+    /// The sampling is the shader's -- a pixel's centre mapped into the
+    /// surface, the four texels round it weighed by how near it falls, the
+    /// edges clamped -- in sixteenths of a sixteenth of a pixel rather than
+    /// in floating point. Where each column and each row of the rectangle
+    /// samples is worked out once, not once a pixel.
+    fn stretch_opaque(&mut self, surface: &Surface<'_>, rect: Rect, nearest: bool, clips: &[Rect]) {
+        let Some(covered) = bounding(clips) else {
+            return;
+        };
+        let columns = samples(
+            covered.x.saturating_sub(rect.x),
+            covered.width,
+            rect.width,
+            surface.width(),
+            nearest,
+        );
+        let rows = samples(
+            covered.y.saturating_sub(rect.y),
+            covered.height,
+            rect.height,
+            surface.height(),
+            nearest,
+        );
+        let stretch = Stretch {
+            surface,
+            columns,
+            rows,
+            covered,
+            width: index(i64::from(self.width())),
+        };
+        self.in_bands(clips, |band, top, local| {
+            for &clip in local {
+                stretch.clip(band, top, clip);
+            }
+        });
+        for &clip in clips {
+            self.damage.add(clip);
+        }
     }
 
     /// The parts of `rect` inside `damage` and the canvas, with its corners
@@ -600,9 +654,46 @@ impl Canvas {
         }
         let shape = Falloff::new(full, shadow.rounding.radius, shadow.range, shadow.power);
         let alpha = f32::from(shadow.color.alpha()) / 255.0;
+        // A shadow's alpha is a function of where a pixel is in its box, and
+        // most of the box is the same function of fewer things. At least
+        // `inset` inside -- past the fade and clear of the corners -- it is
+        // the full alpha. In the bands along the top and bottom edges it is
+        // the row's, and along the sides the column's: the fade there is the
+        // distance to that one edge. Only the four corners are each pixel's
+        // own. So each of those alphas' blend of every byte a pixel can hold
+        // is worked out once, by the arithmetic every pixel would have gone
+        // through, and the pixels are looked up in it: the same bytes,
+        // without three multiplications and a rounding in software for every
+        // pixel. On the DK1 a focus change's damage is mostly those bands.
+        let inset = shape.inset();
+        let colour = [
+            shadow.color.blue(),
+            shadow.color.green(),
+            shadow.color.red(),
+        ];
+        if full.width < inset.saturating_mul(2) || full.height < inset.saturating_mul(2) {
+            for clip in clips {
+                for y in clip.y..clip.bottom() {
+                    self.shadow_row(clip, y, full, &shape, shadow.color, alpha);
+                }
+                self.damage.add(clip);
+            }
+            return;
+        }
+        let mut shade = Shade {
+            full,
+            shape,
+            alpha,
+            color: shadow.color,
+            colour,
+            inset,
+            inside: Blended::of(colour, alpha),
+            rows: BTreeMap::new(),
+            columns: BTreeMap::new(),
+        };
         for clip in clips {
             for y in clip.y..clip.bottom() {
-                self.shadow_row(clip, y, full, &shape, shadow.color, alpha);
+                shade.row(self, clip, y);
             }
             self.damage.add(clip);
         }
@@ -831,77 +922,35 @@ impl Canvas {
     }
 
     /// Blend a premultiplied `ARGB8888` surface drawn at `rect` into
-    /// `clips`, through tiny-skia's pattern shader with nearest sampling at
-    /// a whole-pixel offset, so each canvas pixel takes exactly one surface
-    /// pixel.
+    /// `clips`, each canvas pixel over exactly one surface pixel.
+    ///
+    /// This was tiny-skia's pattern shader with nearest sampling at a
+    /// whole-pixel offset, and is now that shader's arithmetic written out
+    /// ([`over_row`]): the same bytes, without a floating-point pipeline
+    /// run for every pixel of a window. On a Cortex-A7, which has no SIMD
+    /// the shader's portable code can use, that pipeline took a quarter of
+    /// a second for a translucent window's frame; and `foot`, the terminal
+    /// people run, always hands over `ARGB8888`.
+    ///
+    /// The surface's rows are read where they are -- a padded buffer needs
+    /// no gathering into tight rows first -- a band of rows a core. An
+    /// `XRGB8888` surface drawn at less than full opacity is blended as
+    /// opaque, its X byte read as a full alpha, as it always was.
     fn blend(&mut self, surface: &Surface<'_>, rect: Rect, opacity: f32, clips: &[Rect]) {
-        // `wl_shm`'s bytes are blue, green, red, alpha: canvas order. A
-        // padded buffer is gathered into tight rows first.
-        //
-        // Only the part of it the clips cover. A client's buffer is padded
-        // more often than not -- `foot` hands over a 1878-pixel row in a
-        // stride of 7680 bytes -- and gathering all of a full-screen terminal to draw the one
-        // cell that changed is three milliseconds of copying for a few
-        // hundred pixels of drawing. The part is cut on whole pixels and the
-        // pattern moved by the same whole pixels, so every canvas pixel
-        // still takes exactly the surface pixel it took.
-        let whole = Rect::new(
-            0,
-            0,
-            i64::from(surface.width()),
-            i64::from(surface.height()),
-        );
-        let mut gathered: Option<Vec<u8>> = None;
-        let (bytes, part) = match surface.tight() {
-            Some(tight) if surface.format() == Format::Argb8888 => (tight, whole),
-            _ => {
-                let Some(part) = bounding(clips)
-                    .map(|bounds| {
-                        bounds.translate(rect.x.saturating_neg(), rect.y.saturating_neg())
-                    })
-                    .and_then(|bounds| intersect(bounds, whole))
-                else {
-                    return;
-                };
-                (gathered.insert(part_rows(surface, part)).as_slice(), part)
-            }
+        let blend = Blend {
+            surface,
+            rect,
+            opaque: surface.format() == Format::Xrgb8888,
+            opacity,
+            width: index(i64::from(self.width())),
         };
-        let (Ok(width), Ok(height)) = (u32::try_from(part.width), u32::try_from(part.height))
-        else {
-            return;
-        };
-        let Some(pixmap) = PixmapRef::from_bytes(bytes, width, height) else {
-            return;
-        };
-        // A band at a time, each with the pattern moved up by where the
-        // band begins: the same surface pixel lands on the same canvas
-        // pixel through the same arithmetic, whoever draws the row.
-        let across = self.width();
-        let at = (rect.x.saturating_add(part.x), rect.y.saturating_add(part.y));
         self.in_bands(clips, |band, top, local| {
-            let rows = u32::try_from(band.len() / (index(i64::from(across)) * 4)).unwrap_or(0);
-            let Some(mut band) = PixmapMut::from_bytes(band, across, rows) else {
-                return;
-            };
-            let shader = Pattern::new(
-                pixmap,
-                SpreadMode::Pad,
-                FilterQuality::Nearest,
-                opacity,
-                tiny_skia::Transform::from_translate(at.0 as f32, at.1.saturating_sub(top) as f32),
-            );
-            let paint = paint(shader, BlendMode::SourceOver);
             for &clip in local {
-                if let Some(rect) = skia_rect(clip) {
-                    band.fill_rect(rect, &paint, tiny_skia::Transform::identity(), None);
-                }
+                blend.clip(band, top, clip);
             }
         });
         for &clip in clips {
             self.damage.add(clip);
-        }
-        if let Some(rows) = gathered {
-            crate::scratch::bytes_back(rows);
         }
     }
 
@@ -995,11 +1044,121 @@ fn copy_rows(data: &mut [u8], width: usize, surface: &Surface<'_>, rect: Rect, c
 /// making each pixel opaque: an `XRGB8888` client leaves its X byte zero, and
 /// a canvas pixel with a zero alpha would draw nothing.
 fn copy_opaque(dst: &mut [u8], src: &[u8]) {
+    // A word a pixel, with the alpha byte set in it, rather than four byte
+    // stores: the same bytes, in a loop the compiler can widen.
     for (dst, src) in dst.chunks_exact_mut(4).zip(src.chunks_exact(4)) {
-        if let ([b, g, r, x], [sb, sg, sr, _]) = (dst, src) {
-            (*b, *g, *r, *x) = (*sb, *sg, *sr, 0xFF);
+        if let (Ok(dst), Ok(src)) = (<&mut [u8; 4]>::try_from(dst), <[u8; 4]>::try_from(src)) {
+            *dst = (u32::from_le_bytes(src) | 0xFF00_0000).to_le_bytes();
         }
     }
+}
+
+/// Where each of `count` pixels, from `first` into a span `span` pixels
+/// long, samples a surface `size` texels long: the two texels either side of
+/// the pixel's centre and how far towards the second it is, out of 256.
+///
+/// The centre of pixel `i` falls at texel `(i + 0.5) * size / span - 0.5`,
+/// clamped to the surface's edges as the shader's `Pad` clamps it; nearest
+/// sampling takes the texel that centre is in and no second.
+fn samples(first: i64, count: i64, span: i64, size: u32, nearest: bool) -> Vec<(u32, u32, u32)> {
+    let span = span.max(1);
+    let last = i64::from(size).saturating_sub(1).max(0);
+    (0..count.max(0))
+        .map(|at| {
+            let pixel = first.saturating_add(at);
+            // In 1/65536ths of a texel.
+            let centre = pixel
+                .saturating_mul(2)
+                .saturating_add(1)
+                .saturating_mul(i64::from(size))
+                .saturating_mul(1 << 16)
+                / span.saturating_mul(2);
+            let texel = |value: i64| u32::try_from(value.clamp(0, last)).unwrap_or(0);
+            if nearest {
+                let at = texel(centre >> 16);
+                return (at, at, 0);
+            }
+            let position = centre.saturating_sub(1 << 15);
+            if position <= 0 {
+                return (0, 0, 0);
+            }
+            let whole = position >> 16;
+            let part = u32::try_from((position >> 8) & 0xFF).unwrap_or(0);
+            (texel(whole), texel(whole.saturating_add(1)), part)
+        })
+        .collect()
+}
+
+/// A surface being stretched by [`Canvas::stretch_opaque`], and where each
+/// column and row of what it covers samples it.
+struct Stretch<'a> {
+    surface: &'a Surface<'a>,
+    /// For each column of `covered`: the two texels and the weight.
+    columns: Vec<(u32, u32, u32)>,
+    /// For each row of `covered`: the two rows and the weight.
+    rows: Vec<(u32, u32, u32)>,
+    /// The part of the canvas the columns and rows begin at.
+    covered: Rect,
+    /// The canvas's width in pixels.
+    width: usize,
+}
+
+impl Stretch<'_> {
+    /// Draw `clip` of a band of canvas rows beginning at row `top`.
+    fn clip(&self, band: &mut [u8], top: i64, clip: Rect) {
+        let from = index(clip.x.saturating_sub(self.covered.x));
+        let columns = self.columns.get(from..).unwrap_or(&[]);
+        for y in clip.y..clip.bottom() {
+            let at = index(y.saturating_add(top).saturating_sub(self.covered.y));
+            let Some(&(first, second, down)) = self.rows.get(at) else {
+                continue;
+            };
+            let start = (index(y) * self.width + index(clip.x)) * 4;
+            let end = start + index(clip.width) * 4;
+            if let (Some(upper), Some(lower), Some(out)) = (
+                self.surface.row(first),
+                self.surface.row(second),
+                band.get_mut(start..end),
+            ) {
+                stretch_row(out, (upper, lower), down, columns);
+            }
+        }
+    }
+}
+
+/// One row of [`Canvas::stretch_opaque`]: each pixel of `out` mixed from the
+/// `rows` above and below its centre, `down` 256ths of the way to the lower,
+/// at the texels `columns` names.
+fn stretch_row(out: &mut [u8], rows: (&[u8], &[u8]), down: u32, columns: &[(u32, u32, u32)]) {
+    let texel = |row: &[u8], at: u32| {
+        let at = (at as usize).wrapping_mul(4);
+        row.get(at..at.wrapping_add(4))
+            .and_then(|bytes| <[u8; 4]>::try_from(bytes).ok())
+            .map_or(0, u32::from_le_bytes)
+    };
+    let (upper, lower) = rows;
+    for (pixel, &(left, right, across)) in out.chunks_exact_mut(4).zip(columns) {
+        let above = mix(texel(upper, left), texel(upper, right), across);
+        let below = mix(texel(lower, left), texel(lower, right), across);
+        let value = mix(above, below, down) | 0xFF00_0000;
+        pixel.copy_from_slice(&value.to_le_bytes());
+    }
+}
+
+/// `a` and `b`, two pixels, mixed `towards` 256ths of the way to `b`, two
+/// channels at a time: blue and red in one word, green and the fourth byte
+/// in another, each channel sixteen bits apart so neither spills.
+fn mix(a: u32, b: u32, towards: u32) -> u32 {
+    if towards == 0 {
+        return a;
+    }
+    // Each lane is at most 255 x 256, so nothing wraps; the arithmetic says
+    // so rather than paying for an overflow check a pixel.
+    let back = 256u32.wrapping_sub(towards);
+    let lanes = |a: u32, b: u32| a.wrapping_mul(back).wrapping_add(b.wrapping_mul(towards));
+    let even = (lanes(a & 0x00FF_00FF, b & 0x00FF_00FF) >> 8) & 0x00FF_00FF;
+    let odd = lanes((a >> 8) & 0x00FF_00FF, (b >> 8) & 0x00FF_00FF) & 0xFF00_FF00;
+    even | odd
 }
 
 /// How far a rounded corner's row is inset from the rectangle's edge.
@@ -1087,42 +1246,6 @@ impl Default for Rounding {
     }
 }
 
-/// The pixels of `part` of a surface as tight rows the shader can read,
-/// with an opaque surface's X byte forced to `0xFF` as [`opaque_rows`]
-/// forces it.
-fn part_rows(surface: &Surface<'_>, part: Rect) -> Vec<u8> {
-    let opaque = surface.format() == Format::Xrgb8888;
-    let (from, to) = (index(part.x) * 4, index(part.right()) * 4);
-    // From the kept buffers, and given back by the caller once drawn: a
-    // full-screen terminal's rows are eight megabytes, which was a mapping
-    // and its page faults for every frame that drew it whole.
-    let mut rows = crate::scratch::bytes(0);
-    rows.reserve(index(part.width) * index(part.height) * 4);
-    for y in part.y..part.bottom() {
-        let Some(row) = u32::try_from(y)
-            .ok()
-            .and_then(|y| surface.row(y))
-            .and_then(|row| row.get(from..to))
-        else {
-            continue;
-        };
-        let start = rows.len();
-        rows.extend_from_slice(row);
-        if opaque {
-            for pixel in rows
-                .get_mut(start..)
-                .into_iter()
-                .flatten()
-                .skip(3)
-                .step_by(4)
-            {
-                *pixel = 0xFF;
-            }
-        }
-    }
-    rows
-}
-
 /// A surface's pixels as tight rows the shader can read.
 ///
 /// An opaque surface's fourth byte is the X byte, which a client leaves at
@@ -1193,6 +1316,22 @@ impl Falloff {
         }
     }
 
+    /// How far inside the box every point is past the fade and clear of
+    /// the corners, where [`Falloff::at`] is exactly one.
+    ///
+    /// A pixel's centre is half a pixel into it, so a column `inset` in is
+    /// past a corner's centre (which is `inset` in) and at least `range`
+    /// from every side; `inset` is `range` and the rounding, never less
+    /// than `range`.
+    fn inset(&self) -> i64 {
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "a shadow's range and a rounding in pixels, made from integers"
+        )]
+        let inset = self.inset as i64;
+        inset
+    }
+
     /// The alpha at `(x, y)` inside the box, 0 to 1.
     fn at(&self, x: i64, y: i64) -> f32 {
         #[expect(
@@ -1235,6 +1374,251 @@ fn rounded_distance(distance: f32, radius: f32, range: f32, power: i32) -> f32 {
         return ((radius - distance) / range).clamp(0.0, 1.0).powi(power);
     }
     1.0
+}
+
+/// A shadow being drawn by [`Canvas::shadow`]: its box and falloff, and
+/// the tables its bands are blended through, made as each is first met.
+struct Shade {
+    full: Rect,
+    shape: Falloff,
+    alpha: f32,
+    color: Color,
+    /// `color`'s three channels in the canvas's order.
+    colour: [u8; 3],
+    /// How far in the corners and the fade end.
+    inset: i64,
+    /// The middle's table, at the full alpha.
+    inside: Option<Blended>,
+    /// The top and bottom bands' tables, by canvas row.
+    rows: BTreeMap<i64, Option<Blended>>,
+    /// The side bands' tables, by canvas column.
+    columns: BTreeMap<i64, Option<Blended>>,
+}
+
+impl Shade {
+    /// Row `y` of `clip`: its corner, band and middle pieces, each the way
+    /// [`Canvas::shadow`] says.
+    fn row(&mut self, canvas: &mut Canvas, clip: Rect, y: i64) {
+        let (left, right) = (
+            self.full.x.saturating_add(self.inset),
+            self.full.right().saturating_sub(self.inset),
+        );
+        let band = y < self.full.y.saturating_add(self.inset)
+            || y >= self.full.bottom().saturating_sub(self.inset);
+        let pieces = [
+            (clip.x, clip.right().min(left)),
+            (clip.x.max(left), clip.right().min(right)),
+            (clip.x.max(right), clip.right()),
+        ];
+        let width = index(i64::from(canvas.width()));
+        for (at, (from, to)) in pieces.into_iter().enumerate() {
+            if from >= to {
+                continue;
+            }
+            let start = (index(y) * width + index(from)) * 4;
+            let end = start + index(to.saturating_sub(from)) * 4;
+            match (band, at) {
+                // A corner: each pixel its own.
+                (true, 0 | 2) => {
+                    let span = Rect::new(from, y, to.saturating_sub(from), 1);
+                    canvas.shadow_row(span, y, self.full, &self.shape, self.color, self.alpha);
+                }
+                // A band along the top or the bottom: the row's.
+                (true, _) => {
+                    let (shape, full, inset, alpha, colour) =
+                        (self.shape, self.full, self.inset, self.alpha, self.colour);
+                    let table = self.rows.entry(y).or_insert_with(|| {
+                        Blended::of(colour, shape.at(inset, y.saturating_sub(full.y)) * alpha)
+                    });
+                    through(table.as_ref(), canvas.pixmap.data_mut().get_mut(start..end));
+                }
+                // The middle: the full alpha.
+                (false, 1) => {
+                    through(
+                        self.inside.as_ref(),
+                        canvas.pixmap.data_mut().get_mut(start..end),
+                    );
+                }
+                // A band along a side: each column's.
+                (false, _) => {
+                    let (shape, full, inset, alpha, colour) =
+                        (self.shape, self.full, self.inset, self.alpha, self.colour);
+                    let make = |x: i64| {
+                        Blended::of(colour, shape.at(x.saturating_sub(full.x), inset) * alpha)
+                    };
+                    let pixels = canvas.pixmap.data_mut().get_mut(start..end);
+                    by_column(pixels, from, &mut self.columns, make);
+                }
+            }
+        }
+    }
+}
+
+/// Blend `pixels` through `table`, when there are both.
+fn through(table: Option<&Blended>, pixels: Option<&mut [u8]>) {
+    if let (Some(table), Some(pixels)) = (table, pixels) {
+        table.apply(pixels);
+    }
+}
+
+/// Blend `pixels`, a run of a row beginning at column `from`, each through
+/// its own column's table, made by `make` the first time a column is met.
+fn by_column(
+    pixels: Option<&mut [u8]>,
+    from: i64,
+    tables: &mut BTreeMap<i64, Option<Blended>>,
+    make: impl Fn(i64) -> Option<Blended>,
+) {
+    let Some(pixels) = pixels else {
+        return;
+    };
+    for (x, pixel) in (from..).zip(pixels.chunks_exact_mut(4)) {
+        if let Some(table) = tables.entry(x).or_insert_with(|| make(x)).as_ref() {
+            table.apply(pixel);
+        }
+    }
+}
+
+/// What [`over`] makes of every byte a canvas pixel can hold, for one
+/// colour at one alpha: a table a channel.
+///
+/// Built by calling [`over`] itself, so a pixel looked up here is the byte
+/// that blending it would have written.
+struct Blended([[u8; 256]; 3]);
+
+impl Blended {
+    /// The table for `colour` at `alpha`, or `None` where the alpha is
+    /// nothing, which [`over`] is never called for.
+    fn of(colour: [u8; 3], alpha: f32) -> Option<Self> {
+        (alpha > 0.0).then(|| Self::new(colour, alpha))
+    }
+
+    fn new(colour: [u8; 3], alpha: f32) -> Self {
+        let mut table = [[0u8; 256]; 3];
+        for level in 0..=255u8 {
+            let mut pixel = [level, level, level, 0];
+            over(&mut pixel, colour, alpha);
+            for (channel, byte) in table.iter_mut().zip(pixel) {
+                if let Some(slot) = channel.get_mut(usize::from(level)) {
+                    *slot = byte;
+                }
+            }
+        }
+        Self(table)
+    }
+
+    /// Blend every pixel of `pixels`, canvas bytes, through the table.
+    fn apply(&self, pixels: &mut [u8]) {
+        let [blue, green, red] = &self.0;
+        for pixel in pixels.chunks_exact_mut(4) {
+            if let [b, g, r, _] = pixel {
+                let look = |table: &[u8; 256], byte: u8| {
+                    table.get(usize::from(byte)).copied().unwrap_or(byte)
+                };
+                (*b, *g, *r) = (look(blue, *b), look(green, *g), look(red, *r));
+            }
+        }
+    }
+}
+
+/// A surface being blended by [`Canvas::blend`].
+struct Blend<'a> {
+    surface: &'a Surface<'a>,
+    /// Where it is drawn.
+    rect: Rect,
+    /// Whether it is `XRGB8888`, whose fourth byte is read as opaque.
+    opaque: bool,
+    opacity: f32,
+    /// The canvas's width in pixels.
+    width: usize,
+}
+
+impl Blend<'_> {
+    /// Blend `clip` of a band of canvas rows beginning at row `top`.
+    fn clip(&self, band: &mut [u8], top: i64, clip: Rect) {
+        let from = index(clip.x.saturating_sub(self.rect.x)) * 4;
+        let len = index(clip.width) * 4;
+        for y in clip.y..clip.bottom() {
+            let Some(row) = u32::try_from(y.saturating_add(top).saturating_sub(self.rect.y))
+                .ok()
+                .and_then(|row| self.surface.row(row))
+            else {
+                continue;
+            };
+            let start = (index(y) * self.width + index(clip.x)) * 4;
+            if let (Some(pixels), Some(into)) =
+                (row.get(from..from + len), band.get_mut(start..start + len))
+            {
+                over_row(into, pixels, self.opaque, self.opacity);
+            }
+        }
+    }
+}
+
+/// A premultiplied row over a canvas row, `SourceOver`, byte for byte as
+/// tiny-skia's high-precision pipeline blends a pattern at a whole-pixel
+/// offset -- the path [`Canvas::blend`] took through it before, which the
+/// expected images were drawn by.
+///
+/// That pipeline loads each byte as `byte * (1 / 255)`, scales the source
+/// by the pattern's opacity when it is not one (`scale_1_float`), blends
+/// as `dst * (1 - src_alpha) + src` (`source_over_rgba`, a multiply and an
+/// add, never fused), clamps to `0..=1`, multiplies by 255 and rounds half
+/// to even (`unnorm`, `round_int`). The same `f32` operations in the same
+/// order give the same bytes.
+///
+/// Two kinds of pixel need none of it at full opacity, and are most of any
+/// window: an opaque one, whose blend is the source whatever is under it,
+/// and an empty one, whose blend is what is under it. Both are exact: the
+/// pipeline's result for them rounds to exactly those bytes, as the test
+/// against tiny-skia over every alpha, colour and background shows.
+fn over_row(into: &mut [u8], pixels: &[u8], opaque: bool, opacity: f32) {
+    const FACTOR: f32 = 1.0 / 255.0;
+    let whole = opacity >= 1.0;
+    for (into, pixel) in into.chunks_exact_mut(4).zip(pixels.chunks_exact(4)) {
+        let (Ok(into), Ok(mut source)) =
+            (<&mut [u8; 4]>::try_from(into), <[u8; 4]>::try_from(pixel))
+        else {
+            continue;
+        };
+        if opaque {
+            source[3] = 0xFF;
+        }
+        if whole {
+            if source[3] == 0xFF {
+                *into = source;
+                continue;
+            }
+            if source == [0; 4] {
+                continue;
+            }
+        }
+        let load = |byte: u8| {
+            let value = f32::from(byte) * FACTOR;
+            if whole { value } else { value * opacity }
+        };
+        let keep = 1.0 - load(source[3]);
+        for (out, from) in into.iter_mut().zip(source) {
+            *out = unnorm((f32::from(*out) * FACTOR) * keep + load(from));
+        }
+    }
+}
+
+/// A channel from `0..=1` to a byte, as tiny-skia's `unnorm` stores it:
+/// clamped, times 255, rounded half to even. The rounding is the sum of
+/// the value and `2^23` taken away again, which in `f32` is exactly that
+/// rounding for any value under `2^23`, and what tiny-skia's portable
+/// `round` does; x86's conversion instruction rounds the same way.
+fn unnorm(value: f32) -> u8 {
+    const WHOLE: f32 = 8_388_608.0;
+    let scaled = value.clamp(0.0, 1.0) * 255.0;
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "a whole number from 0 to 255"
+    )]
+    let byte = ((scaled + WHOLE) - WHOLE) as u8;
+    byte
 }
 
 /// Blend one premultiplied colour over one canvas pixel.

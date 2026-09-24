@@ -3270,3 +3270,92 @@ fn rows(data: &[u8], rect: Rect) -> Vec<u8> {
         })
         .collect()
 }
+
+/// The blend written out ([`Canvas::composite_with`] on a premultiplied
+/// surface) against tiny-skia's pattern shader, which drew every expected
+/// image: every alpha, every colour a pixel of that alpha can have, over
+/// every byte a canvas can hold, at full opacity and at two others.
+#[test]
+fn a_translucent_surface_blends_as_tiny_skia_blends_it() {
+    use tiny_skia::{BlendMode, FilterQuality, Paint, Pattern, PixmapMut, PixmapRef, SpreadMode};
+
+    const SIDE: u32 = 256;
+    for opacity in [1.0_f32, 0.5, 0.8] {
+        for alpha in 0..=255u32 {
+            // Row `y` is colour `min(y, alpha)` in all three channels, over a
+            // canvas whose column `x` is `x` in blue, `255 - x` in green, and
+            // whose own alpha runs down the rows.
+            let surface_bytes: Vec<u8> = (0..SIDE * SIDE)
+                .flat_map(|at| {
+                    let (x, y) = (at % SIDE, at / SIDE);
+                    let colour = |value: u32| u8::try_from(value.min(alpha)).unwrap();
+                    [
+                        colour(y),
+                        colour(x),
+                        colour((x * 7 + y) & 0xFF),
+                        u8::try_from(alpha).unwrap(),
+                    ]
+                })
+                .collect();
+            let under: Vec<u8> = (0..SIDE * SIDE)
+                .flat_map(|at| {
+                    let (x, y) = (at % SIDE, at / SIDE);
+                    [
+                        u8::try_from(x).unwrap(),
+                        u8::try_from(255 - x).unwrap(),
+                        u8::try_from((x + y) & 0xFF).unwrap(),
+                        u8::try_from(y.max(alpha)).unwrap(),
+                    ]
+                })
+                .collect();
+            let whole = Rect::new(0, 0, i64::from(SIDE), i64::from(SIDE));
+
+            let mut canvas = Canvas::new(SIDE, SIDE).unwrap();
+            canvas.data_mut().copy_from_slice(&under);
+            let surface =
+                Surface::new(&surface_bytes, SIDE, SIDE, SIDE * 4, Format::Argb8888).unwrap();
+            canvas.composite_with(
+                &surface,
+                whole,
+                Rounding::none(),
+                opacity,
+                &Damage::from(whole),
+            );
+
+            let mut expected = under.clone();
+            let mut pixmap = PixmapMut::from_bytes(&mut expected, SIDE, SIDE).unwrap();
+            let shader = Pattern::new(
+                PixmapRef::from_bytes(&surface_bytes, SIDE, SIDE).unwrap(),
+                SpreadMode::Pad,
+                FilterQuality::Nearest,
+                opacity,
+                tiny_skia::Transform::identity(),
+            );
+            let paint = Paint {
+                shader,
+                blend_mode: BlendMode::SourceOver,
+                anti_alias: false,
+                force_hq_pipeline: true,
+                ..Paint::default()
+            };
+            pixmap.fill_rect(
+                tiny_skia::Rect::from_xywh(0.0, 0.0, SIDE as f32, SIDE as f32).unwrap(),
+                &paint,
+                tiny_skia::Transform::identity(),
+                None,
+            );
+
+            if let Some((at, (got, want))) = canvas
+                .data()
+                .iter()
+                .zip(&expected)
+                .enumerate()
+                .find(|(_, (got, want))| got != want)
+            {
+                panic!(
+                    "alpha {alpha} at opacity {opacity}: byte {at} is {got}, tiny-skia made {want}"
+                );
+            }
+        }
+    }
+}
