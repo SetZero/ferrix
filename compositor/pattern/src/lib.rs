@@ -18,5 +18,6 @@ mod av1;
 pub mod client;
 
 pub use client::{
-    Movie, Picture, Shape, run, run_on, run_shaped, run_shaped_on, run_video, run_wallpaper,
+    Movie, Picture, Shape, announce_when_drawn, run, run_on, run_shaped, run_shaped_on, run_video,
+    run_wallpaper,
 };

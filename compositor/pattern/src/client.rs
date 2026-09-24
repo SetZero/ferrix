@@ -583,6 +583,18 @@ fn picture(frame: Frame) -> Picture {
     }
 }
 
+/// Where this process says its window is on the screen: a file made once
+/// the compositor has drawn a frame with the window in it, which is when it
+/// has been placed. Set by the program, never by a client run in a thread,
+/// so a compositor's own tests leave nothing behind.
+static DRAWN: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+
+/// Say, by making `path` once the window's first frame has been drawn, that
+/// the window is placed: what `pattern --after` waits for.
+pub fn announce_when_drawn(path: std::path::PathBuf) {
+    let _ = DRAWN.set(path);
+}
+
 /// Connect, make a window, draw `pattern` in it, and keep drawing until the
 /// compositor goes away.
 ///
@@ -1042,6 +1054,13 @@ impl Client {
             // is for on a desktop that has to be told.
             id::FRAME if opcode == core::wl_callback::event::DONE => {
                 self.awaiting = false;
+                // The compositor drew a frame with this window in it: it is
+                // placed. Said once, to whoever waits with `--after`.
+                if let Some(path) = DRAWN.get()
+                    && !path.exists()
+                {
+                    let _ = std::fs::write(path, b"");
+                }
             }
             id::SHELL if opcode == xdg_wm_base::event::PING => {
                 let serial = args.first().and_then(Arg::as_uint).unwrap_or(0);
@@ -2201,9 +2220,12 @@ impl Client {
             *filled = true;
         }
         // Ask to be told when this frame reaches the screen, which is what
-        // the next one waits for. Only a wallpaper that moves asks: for
-        // everything else the answer would never be read.
-        if matches!(self.shown, Shown::Moving(_)) && !self.awaiting {
+        // the next one waits for. A wallpaper that moves asks every frame;
+        // anything else only for its first, and only when the program says
+        // where to announce that it has been drawn (`announce_when_drawn`):
+        // otherwise the answer would never be read.
+        let announcing = self.drawn == 0 && DRAWN.get().is_some();
+        if (matches!(self.shown, Shown::Moving(_)) || announcing) && !self.awaiting {
             request(
                 out,
                 id::SURFACE,

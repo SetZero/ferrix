@@ -134,7 +134,7 @@ const MODE_EXPECTED: [(&str, &str); 1] = [(
 const MODE_CONFIG: &str = "# Carried into the initramfs by `cargo xtask test-compositor`.
 monitor = , 1920x1080@60, auto, 1
 exec-once = /bin/pattern checkerboard one
-exec-once = /bin/pattern gradient two
+exec-once = /bin/pattern gradient two --after one
 ";
 
 /// The pictures the transform boot requires, one a boot: the two windows on
@@ -169,7 +169,7 @@ fn transform_config(transform: u32) -> String {
 monitor = , preferred, auto, 1, transform, {transform}
 exec-once = /bin/hyprctl monitors
 exec-once = /bin/pattern checkerboard one
-exec-once = /bin/pattern gradient two
+exec-once = /bin/pattern gradient two --after one
 "
     )
 }
@@ -201,7 +201,7 @@ decoration:shadow:render_power = 2
 decoration:dim_inactive = 1
 decoration:dim_strength = 0.4
 exec-once = /bin/pattern checkerboard one
-exec-once = /bin/pattern gradient two
+exec-once = /bin/pattern gradient two --after one
 ";
 
 /// The two pictures the group boot requires: the windows tiled, then both
@@ -230,7 +230,7 @@ const GROUP_CONFIG: &str = "\
 # Carried into the initramfs by `cargo xtask test-compositor`.
 exec-once = /bin/hyprctl subscribe
 exec-once = /bin/pattern checkerboard one
-exec-once = /bin/pattern gradient two
+exec-once = /bin/pattern gradient two --after one
 bind = SUPER, G, exec, /bin/hyprctl --batch dispatch togglegroup ; \
 dispatch movefocus l ; dispatch moveintogroup r
 bind = SUPER, C, exec, /bin/hyprctl clients
@@ -266,7 +266,7 @@ const MONITOR_CONFIG: &str = "\
 # Carried into the initramfs by `cargo xtask test-compositor`.
 exec-once = /bin/hyprctl subscribe
 exec-once = /bin/pattern checkerboard one
-exec-once = /bin/pattern gradient two
+exec-once = /bin/pattern gradient two --after one
 bind = SUPER, M, movewindow, mon:1
 # Both answers from one press, because the presses are the ones every boot
 # makes: the monitors, and the clients whose last line is what the wait for
@@ -291,7 +291,7 @@ const SCALED_CONFIG: &str = "\
 # Carried into the initramfs by `cargo xtask test-compositor`.
 monitor = , preferred, auto, 2
 exec-once = /bin/pattern checkerboard one
-exec-once = /bin/pattern gradient two
+exec-once = /bin/pattern gradient two --after one
 ";
 
 /// The two pictures the plugin boot requires: the windows tiled, then
@@ -317,7 +317,7 @@ const PLUGIN_CONFIG: &str = "\
 # Carried into the initramfs by `cargo xtask test-compositor`.
 plugin = /bin/plug
 exec-once = /bin/pattern checkerboard one
-exec-once = /bin/pattern gradient two
+exec-once = /bin/pattern gradient two --after one
 bind = SUPER, P, swapthem
 bind = SUPER, C, exec, /bin/hyprctl --batch plugin list ; clients
 bind = SUPER, W, exec, /bin/hyprctl activewindow
@@ -378,7 +378,7 @@ decoration:dim_inactive = 1
 decoration:dim_strength = 0.4
 animation = windows, 1, 20, default
 exec-once = /bin/pattern checkerboard one
-exec-once = /bin/pattern gradient two
+exec-once = /bin/pattern gradient two --after one
 bind = SUPER, A, exec, /bin/hyprctl --batch dispatch movefocus l ; \
 dispatch movewindow r
 ";
@@ -404,7 +404,7 @@ windowrule = opacity 0.6, match:title ^(two)$
 windowrule = rounding 12, match:title ^(one)$
 windowrule = no_shadow, match:title ^(one)$
 exec-once = /bin/pattern checkerboard one
-exec-once = /bin/pattern gradient two
+exec-once = /bin/pattern gradient two --after one
 ";
 
 /// The two pictures the pointer boot requires: the windows, and the same
@@ -486,7 +486,7 @@ const POINTER_CONFIG: &str = "\
 # Carried into the initramfs by `cargo xtask test-compositor`.
 cursor:no_hardware_cursors = 1
 exec-once = /bin/pattern checkerboard one
-exec-once = /bin/pattern gradient two
+exec-once = /bin/pattern gradient two --after one
 ";
 
 /// The picture a window with a menu on it makes, which the sixteenth boot
@@ -508,7 +508,7 @@ const MENU_EXPECTED: [(&str, &str); 1] = [(
 const MENU_CONFIG: &str = "\
 # Carried into the initramfs by `cargo xtask test-compositor`.
 exec-once = /bin/pattern checkerboard one --menu 200
-exec-once = /bin/pattern gradient two
+exec-once = /bin/pattern gradient two --after one
 ";
 
 /// The three pictures the lock boot requires, and the two keys between them.
@@ -550,7 +550,7 @@ const LOCK_BINDS: [(&str, &[&str]); 2] = [
 const LOCK_CONFIG: &str = "\
 # Carried into the initramfs by `cargo xtask test-compositor`.
 exec-once = /bin/pattern checkerboard one
-exec-once = /bin/pattern gradient two
+exec-once = /bin/pattern gradient two --after one
 bind = , L, exec, /bin/lock 4
 bind = , K, exec, /bin/lswt close one
 ";
@@ -585,7 +585,7 @@ const SHOT_BINDS: [(&str, &[&str]); 1] = [("S, which takes a screenshot", &["s"]
 const SHOT_CONFIG: &str = "\
 # Carried into the initramfs by `cargo xtask test-compositor`.
 exec-once = /bin/pattern checkerboard one
-exec-once = /bin/pattern gradient two
+exec-once = /bin/pattern gradient two --after one
 bind = , S, exec, /bin/shot
 ";
 
@@ -656,7 +656,7 @@ exec-once = /bin/pattern gradient two --twin
 const TASKBAR_CONFIG: &str = "\
 # Carried into the initramfs by `cargo xtask test-compositor`.
 exec-once = /bin/pattern checkerboard one
-exec-once = /bin/pattern gradient two
+exec-once = /bin/pattern gradient two --after one
 bind = , B, exec, /bin/lswt
 bind = , K, exec, /bin/lswt close one
 ";
@@ -722,7 +722,7 @@ const SUBMAP_CONFIG: &str = "\
 # Carried into the initramfs by `cargo xtask test-compositor`.
 exec-once = /bin/hyprctl subscribe
 exec-once = /bin/pattern checkerboard one
-exec-once = /bin/pattern gradient two
+exec-once = /bin/pattern gradient two --after one
 bind = SUPER, R, submap, resize
 bind = , C, exec, /bin/hyprctl submap
 submap = resize
@@ -754,7 +754,7 @@ fn clipboard_config() -> String {
     format!(
         "# Carried into the initramfs by `cargo xtask test-compositor`.\n\
          exec-once = /bin/pattern checkerboard one\n\
-         exec-once = /bin/pattern gradient two\n\
+         exec-once = /bin/pattern gradient two --after one\n\
          exec-once = /bin/clip copy {CLIPBOARD_TEXT}\n\
          exec-once = /bin/clip paste\n\
          exec-once = /bin/clip --primary copy {PRIMARY_TEXT}\n\
@@ -798,7 +798,7 @@ const BAR_CONFIG: &str = "\
 # Carried into the initramfs by `cargo xtask test-compositor`.
 exec-once = /bin/pattern checkerboard bar --bar 30
 exec-once = /bin/pattern checkerboard one
-exec-once = /bin/pattern gradient two
+exec-once = /bin/pattern gradient two --after one
 bind = , A, exec, /bin/hyprctl --batch binds ; devices ; layers ; cursorpos ; locked
 ";
 
@@ -824,7 +824,7 @@ const CONFIG: &str = "\
 # Carried into the initramfs by `cargo xtask test-compositor`.
 exec-once = /bin/hyprctl subscribe
 exec-once = /bin/pattern checkerboard one
-exec-once = /bin/pattern gradient two
+exec-once = /bin/pattern gradient two --after one
 bind = SUPER, L, movefocus, l
 bind = SUPER SHIFT, L, movewindow, r
 bind = SUPER, C, exec, /bin/hyprctl clients
@@ -1611,7 +1611,7 @@ decoration:shadow:render_power = 2
 decoration:dim_inactive = 1
 decoration:dim_strength = 0.4
 exec-once = /bin/pattern checkerboard one
-exec-once = /bin/pattern gradient two
+exec-once = /bin/pattern gradient two --after one
 bind = , S, exec, /bin/shot 0 /etc/expected.xrle
 ";
 
@@ -2381,7 +2381,7 @@ const BOOTS: [(&str, Boot); 24] = [
 const DESKTOP_CONFIG: &str = "\
 # Carried into the initramfs by `cargo xtask test-compositor`.
 exec-once = /bin/pattern checkerboard one
-exec-once = /bin/pattern gradient two
+exec-once = /bin/pattern gradient two --after one
 ";
 
 /// What the kernel says when it read `ferrix.checks=skip`
@@ -2531,7 +2531,7 @@ done
 const RESTART_CONFIG: &str = "\
 # Carried into the initramfs by `cargo xtask test-compositor --boot restart`.
 exec-once = /bin/pattern checkerboard one
-exec-once = /bin/pattern gradient two
+exec-once = /bin/pattern gradient two --after one
 exec-once = /bin/zinc /etc/killgpu
 ";
 
@@ -2970,7 +2970,7 @@ const CURSOR_EXPECTED: [(&str, &str); 2] = [
 const CURSOR_CONFIG: &str = "\
 # Carried into the initramfs by `cargo xtask test-compositor`.
 exec-once = /bin/pattern checkerboard one
-exec-once = /bin/pattern gradient two
+exec-once = /bin/pattern gradient two --after one
 ";
 
 /// The most frames the compositor may draw while the pointer is swept over
@@ -3518,7 +3518,7 @@ const TYPING_BINDS: [(&str, &[&str]); 1] =
 const TYPING_CONFIG: &str = "\
 # Carried into the initramfs by `cargo xtask test-compositor`.
 exec-once = /bin/pattern checkerboard one
-exec-once = /bin/pattern gradient two
+exec-once = /bin/pattern gradient two --after one
 bind = , V, exec, /bin/vkbd SUPER Q
 bind = SUPER, Q, closewindow, title:^(one)$
 ";

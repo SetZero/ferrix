@@ -34,6 +34,19 @@ fn main() {
         .get(1)
         .cloned()
         .unwrap_or_else(|| format!("{pattern:?}"));
+    // A window's placed once the compositor has drawn it; `--after <title>`
+    // waits for the window of that title to be before this one connects.
+    // Two windows started together otherwise race to be placed, and a
+    // tiling layout puts whichever wins first: a test that expects `one` on
+    // the left and `two` on the right says `two --after one`.
+    compositor_pattern::announce_when_drawn(drawn_path(&title));
+    if let Some(at) = arguments.iter().position(|word| word == "--after") {
+        let Some(other) = arguments.get(at + 1) else {
+            say("pattern: --after takes the title of the window to wait for");
+            std::process::exit(2);
+        };
+        wait_until_drawn(other);
+    }
     let sized = |flag: &str| {
         arguments
             .iter()
@@ -78,6 +91,30 @@ fn main() {
             say(&format!("pattern: failed: {error}"));
             std::process::exit(1);
         }
+    }
+}
+
+/// Where the window titled `title` says it has been drawn.
+fn drawn_path(title: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("pattern-{title}.drawn"))
+}
+
+/// Wait until the window titled `title` has been drawn, for as long as a
+/// slow emulated machine could take to start one, and then go on either
+/// way: a window that never comes is the other window's failure to report,
+/// not this one's.
+fn wait_until_drawn(title: &str) {
+    const PATIENCE: std::time::Duration = std::time::Duration::from_secs(60);
+    let path = drawn_path(title);
+    let began = std::time::Instant::now();
+    while !path.exists() {
+        if began.elapsed() >= PATIENCE {
+            say(&format!(
+                "pattern: {title} was never drawn; going on without it"
+            ));
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
     }
 }
 
