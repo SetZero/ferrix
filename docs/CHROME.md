@@ -8,6 +8,10 @@ and on 2026-09-23 the customer asked for the work to start.
 
 ## Where it stands, 2026-09-24
 
+**Chrome runs on Ferrix, in a window on the compositor, since 2026-09-24.**
+`cargo xtask run-compositor --chrome` opens it on the desktop, and
+`cargo xtask test-chrome-window` requires its page on the screen (§9).
+
 **Headless Chrome runs on Ferrix, since 2026-09-24.** Google's prebuilt
 `chrome-headless-shell` 154.0.8037.57 -- Chrome for Testing's linux64 build,
 not one built here -- starts on Ferrix with its GPU process and renderers,
@@ -31,7 +35,9 @@ what is left:
 | foot, a Wayland terminal nobody here wrote, drawing on the compositor on Ferrix | **done** 2026-09-24, x86-64, `cargo xtask test-foot` (§6) |
 | Headless Chrome on Ferrix: `--dump-dom` and `--screenshot`, multi-process, with `--no-sandbox --no-zygote` | **done** 2026-09-24, x86-64, `cargo xtask test-chrome` (§8) |
 | What running it found missing: `CLOCK_THREAD_CPUTIME_ID` and `CLOCK_PROCESS_CPUTIME_ID`, `clock_getres`, `creat`, and `/proc/<pid>/task`'s link count | **done** 2026-09-24 (§8) |
+| Chrome in a window on the compositor, a Wayland client drawing in software | **done** 2026-09-24, x86-64, `cargo xtask test-chrome-window`, `run-compositor --chrome` (§9) |
 | The zygote's fork, which fails on Ferrix, so Chrome runs with `--no-zygote` | not started (§8) |
+| Chrome on the desktop's persistent btrfs root, where it stops before its first frame, so `--chrome` boots a tmpfs root | not started (§9) |
 | Chrome on ferrousli's `libc.so.6` in glibc's place | 97 glibc names missing, measured (§8); being closed |
 | Chromium built against ferrousli, with Alpine's musl patches rebased | not needed for a first Chrome: the prebuilt one runs (§5, §8) |
 | A guest with the ~2 GiB a page wants | `test-chrome` boots 4 GiB, as `test-rustc` does (§2.3) |
@@ -592,3 +598,45 @@ them are not in `libferrousli.a` -- the `_chk` fortify family, the old
 `__xstat64` entry points, `iconv`, gettext's `textdomain` family, `fts64`,
 `nftw64`, `statx`, `pidfd_open` and the rest. Closing that list is under
 way; the same volume and test then run Chrome on ferrousli's loader.
+
+---
+
+## 9. Chrome in a window, 2026-09-24
+
+The customer asked to see it. `chrome-headless-shell` has no windowing, so
+the volume carries the same version's full browser too, Chrome for Testing's
+`chrome-linux64`, a 294 MB program. `scripts/fetch-chrome.sh`'s library
+check added the 32 Debian packages it needs beyond the headless one -- cairo,
+pango, CUPS and what they load, GnuTLS and Kerberos among them -- in four
+rounds; the volume is 1220 MiB.
+
+Chrome's Ozone layer with `--ozone-platform=wayland` is a Wayland client
+with its own libwayland, and draws through `wl_shm` with `--disable-gpu`. It
+was run against the compositor on nazuna's own kernel first, from the
+volume's files, and drew its tab strip, toolbar and page there; the only
+thing it needed was the crash handler's `PT_INTERP` pointed at the volume's
+loader too, which on Ferrix `/lib64` does.
+
+On Ferrix it drew its window, and ended its connection seven seconds later
+on a protocol error: "no global 0 at version 3". The compositor made a
+request's new object at its parent's version, which is Wayland's rule, and
+refused it when that was above the version the object's own interface
+declares -- which protocols do, pointer-gestures having its manager at 3 and
+its swipe at 2. libwayland makes such an object all the same; the compositor
+now makes it at its interface's version. The compositor also parsed
+Hyprland's `env =` lines and gave them to nothing it started; it gives them
+to every program now, which is how Chrome gets a home it can write.
+
+`cargo xtask test-chrome-window` boots the compositor with Chrome showing a
+page whose background is `#fc0`, and requires over a tenth of the screen in
+that yellow with the compositor's background around the window; the first
+run that passed had 532 386 such pixels on a 1024x768 screen, and its
+screenshot is Chrome's own window chrome around the page.
+
+`cargo xtask run-compositor --chrome` is the same on the desktop, with a
+network: Chrome opens with the desktop, and SUPER+B opens another. It boots a
+tmpfs root. On the desktop's persistent btrfs root Chrome stops after its
+first Wayland requests, or before them, and with its profile in `/dev/shm`
+as well; on tmpfs it does not. That is open, and is a btrfs question more
+than a browser one. `cargo xtask remote-desktop --chrome` shows it from
+another machine.

@@ -1954,12 +1954,33 @@ pub(crate) fn run_compositor(args: &Args) -> Result<()> {
         )));
     }
     let mut args = args.clone();
-    crate::rustc::prepare_default(arch, &mut args)?;
+    if args.chrome {
+        // One data disk: Chrome's, in the rustc volume's place.
+        if arch != Arch::X86_64 {
+            return Err(Error::new(
+                "--chrome runs on x86_64 only: Chrome for Testing publishes linux64 alone",
+            ));
+        }
+        args.data_image = Some(crate::chrome::volume()?);
+        if !args.memory_given {
+            args.memory = crate::chrome::MEMORY;
+        }
+        // On the persistent btrfs root Chrome stops before its first frame,
+        // and on tmpfs it does not; until that is found, a Chrome desktop
+        // starts from the initramfs each time.
+        if !args.tmpfs_root {
+            println!("  --chrome: the root is tmpfs this boot (--tmpfs-root)");
+            args.tmpfs_root = true;
+        }
+    } else {
+        crate::rustc::prepare_default(arch, &mut args)?;
+    }
     let config = match &args.config {
         Some(path) => std::fs::read_to_string(path)
             .map_err(|error| Error::new(format!("reading {path}: {error}")))?,
         None => RUN_CONFIG.to_owned(),
     };
+    let config = with_chrome(config, &args);
     // A watched boot has a network unless it was told not to: a person at a
     // screen expects a machine that can fetch something, and finding out
     // that `ping` says `bad address` for want of a device is nobody's
@@ -2076,7 +2097,12 @@ fn gates_busybox(arch: Arch) -> Option<String> {
 fn desktop(arch: Arch, config: String, size: (u32, u32), args: &Args) -> Result<(String, Carried)> {
     let config = with_network(with_layout(config, args), args);
     let mut carried = Carried::wanted(arch, args)?;
-    carried.ports.extend(crate::rustc::default_links(args));
+    if args.chrome {
+        let links = chrome_links(&carried.ports);
+        carried.ports.extend(links);
+    } else {
+        carried.ports.extend(crate::rustc::default_links(args));
+    }
     let config = crate::ssh::with_server(config, args, &mut carried.ports)?;
     // A wallpaper, from this machine's own and from nowhere else:
     // `crate::wallpaper` says where they come from and why a run never goes
@@ -4277,6 +4303,225 @@ fn judge_foot(arch: Arch, said: &[String], screen: Option<&Image>, dump: &Path) 
     println!(
         "  {arch}: foot loaded the image's DejaVu Sans Mono, laid out its grid, and drew \
          `hyprctl version` in {found} colours; the screen is {}",
+        kept.display()
+    );
+    Ok(())
+}
+
+/// The page Chrome's window shows: `test-chrome`'s picture, a yellow a
+/// screen counts. No spaces, because the compositor splits `exec-once` at
+/// them.
+const CHROME_WINDOW_PAGE: &str =
+    "data:text/html,<body%20style=background:%23fc0><h1>Hello%20from%20Chrome%20on%20Ferrix</h1>";
+
+/// That page's background, `#fc0`, as the screen has it.
+const CHROME_YELLOW: [u8; 3] = [0xff, 0xcc, 0x00];
+
+/// The fewest yellow pixels a screen with the page on it has: a tenth of a
+/// 1024x768 screen. The window is most of the screen and the page most of
+/// the window; the firmware's screen and a window Chrome has not yet drawn
+/// into have none.
+const CHROME_YELLOW_PIXELS: usize = 78_643;
+
+/// How long Chrome gets from the compositor coming up to its page on the
+/// screen: a 294 MB browser and three of its processes, started from a btrfs
+/// volume, laying out and drawing in software.
+const CHROME_WINDOW_PATIENCE: Duration = Duration::from_secs(240);
+
+/// The configuration `test-chrome-window` gives the compositor.
+///
+/// Chrome's environment and command are [`crate::chrome::window_command`]'s,
+/// which `run-compositor --chrome` starts too.
+fn chrome_window_config() -> String {
+    format!(
+        "# Carried into the initramfs by `cargo xtask test-chrome-window`.\n{}exec-once = {}\n",
+        crate::chrome::WINDOW_ENV,
+        crate::chrome::window_command(CHROME_WINDOW_PAGE)
+    )
+}
+
+/// The volume's links for a desktop that already carries files of its own.
+///
+/// A link cannot stand where the archive has made a directory with files in
+/// it -- the initramfs refuses the entry, and the boot stops. The desktop
+/// carries foot's port, which puts fontconfig's configuration in
+/// `/etc/fonts` and its one font in `/usr/share/fonts`; that
+/// configuration scans every directory under `/usr/share/fonts`, so there the
+/// volume's fonts are linked in beside foot's as `truetype`, where Debian
+/// keeps them, and `/etc/fonts` stays foot's.
+fn chrome_links(carried: &[crate::ports::File]) -> Vec<crate::ports::File> {
+    let taken = |path: &str| {
+        carried.iter().any(|file| {
+            file.path == path
+                || file
+                    .path
+                    .strip_prefix(path)
+                    .is_some_and(|rest| rest.starts_with('/'))
+        })
+    };
+    let mut links: Vec<(&str, &str)> = Vec::new();
+    for &(path, target) in crate::chrome::LINKS {
+        if !taken(path) {
+            links.push((path, target));
+        } else if path == "usr/share/fonts" {
+            links.push(("usr/share/fonts/truetype", "/data/usr/share/fonts/truetype"));
+        }
+    }
+    crate::rustc::files(&links)
+}
+
+/// The page `run-compositor --chrome` opens with.
+const CHROME_WELCOME_PAGE: &str = "data:text/html,<body%20style=font-family:sans-serif;background:%23fc0><h1>Chrome%20on%20Ferrix</h1><p>Type%20an%20address%20above.</p>";
+
+/// What `run-compositor --chrome` adds to the desktop's configuration:
+/// Chrome's environment, a window as the desktop starts, and SUPER+B for
+/// another.
+fn with_chrome(config: String, args: &Args) -> String {
+    if !args.chrome {
+        return config;
+    }
+    let command = crate::chrome::window_command(CHROME_WELCOME_PAGE);
+    format!(
+        "{config}\n# Added by `cargo xtask run-compositor --chrome`.\n{}exec-once = {command}\n\
+         bind = SUPER, B, exec, {command}\n",
+        crate::chrome::WINDOW_ENV
+    )
+}
+
+/// How many pixels of a screen are Chrome's page yellow, or none when the
+/// screen is not the compositor's.
+fn yellow_pixels(screen: &Image) -> usize {
+    let (pixels, _) = screen.pixels.as_chunks::<3>();
+    if !pixels.contains(&BACKGROUND) {
+        return 0;
+    }
+    pixels
+        .iter()
+        .filter(|pixel| **pixel == CHROME_YELLOW)
+        .count()
+}
+
+/// `test-chrome-window`: Google's Chrome in a window on the compositor, on
+/// Ferrix.
+///
+/// The full browser from the volume `scripts/fetch-chrome.sh` makes -- the
+/// same version `test-chrome` runs headless -- started by the compositor's
+/// `exec-once` as a Wayland client, drawing its tabs, its toolbar and a page
+/// into a window the compositor tiles. What is required is the page on the
+/// screen: its yellow, over a tenth of it, with the compositor's background
+/// around the window. The busiest screen is kept, to be looked at.
+pub(crate) fn test_chrome_window(args: &Args) -> Result<()> {
+    let arch = Arch::X86_64;
+    if args.arches()?.iter().any(|&asked| asked != arch) {
+        return Err(Error::new(
+            "test-chrome-window runs on x86-64 only: Chrome for Testing publishes linux64 alone",
+        ));
+    }
+    let mut args = args.clone();
+    args.data_image = Some(crate::chrome::volume()?);
+    if !args.memory_given {
+        args.memory = crate::chrome::MEMORY;
+    }
+    let programs = Programs::build(arch)?;
+    let carried = Carried {
+        ports: crate::rustc::files(crate::chrome::LINKS),
+        ..Carried::none()
+    };
+    let (image, kernel) = build_image(
+        arch,
+        &programs,
+        &undithered(&chrome_window_config()),
+        carried,
+        &args,
+    )?;
+    let port = free_port()?;
+    let mut qemu_args = args;
+    qemu_args.display = true;
+    qemu_args.qmp_port = Some(port);
+    let dump = paths::build_dir(arch).join("chrome-window.ppm");
+    let mut said: Vec<String> = Vec::new();
+    let mut best: Option<Image> = None;
+    let hook = |watching: &mut Watching<'_>| -> Result<()> {
+        let mut qmp = Qmp::connect(port, Instant::now() + Duration::from_secs(10))?;
+        let up = watching.read_more(Instant::now() + SETTLE, |lines| {
+            lines
+                .iter()
+                .any(|line| line.contains(MARKER) || line.contains(FAILED))
+        })?;
+        if !up {
+            return Err(with_the_transcript(
+                &Error::new(format!("{arch}: the compositor never printed `{MARKER}`")),
+                watching,
+            ));
+        }
+        say_the_marker(watching, arch);
+        let deadline = Instant::now() + CHROME_WINDOW_PATIENCE;
+        loop {
+            qmp.screendump(Some(DEVICE_ID), &dump)?;
+            let bytes = std::fs::read(&dump)
+                .map_err(|error| Error::new(format!("reading {}: {error}", dump.display())))?;
+            let screen = parse_ppm(&bytes)?;
+            let found = yellow_pixels(&screen);
+            if best.as_ref().is_none_or(|kept| yellow_pixels(kept) < found) {
+                best = Some(screen);
+            }
+            if found >= CHROME_YELLOW_PIXELS || Instant::now() >= deadline {
+                break;
+            }
+            let _ = watching.read_more(Instant::now() + Duration::from_secs(2), |_| false)?;
+        }
+        let _ = watching.read_more(Instant::now() + Duration::from_secs(2), |_| false)?;
+        said = watching
+            .lines()
+            .iter()
+            .chain(watching.after())
+            .cloned()
+            .collect();
+        Ok(())
+    };
+    let _ = crate::qemu::watch_then(arch, &image, &kernel, &qemu_args, EITHER, hook)?;
+    judge_chrome_window(arch, &said, best.as_ref(), &dump)
+}
+
+/// What [`test_chrome_window`] requires of what the guest said and showed.
+fn judge_chrome_window(
+    arch: Arch,
+    said: &[String],
+    screen: Option<&Image>,
+    dump: &Path,
+) -> Result<()> {
+    let transcript = || {
+        said.iter()
+            .map(|line| said_on_its_own(line).to_owned())
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let fail = |why: String| Err(Error::new(format!("{arch}: {why}\n{}", transcript())));
+    if let Some(line) = said.iter().find(|line| line.contains("FERRIX-PANIC")) {
+        return fail(format!(
+            "the kernel stopped while Chrome ran: {}",
+            line.trim()
+        ));
+    }
+    let Some(screen) = screen else {
+        return fail("the boot took no picture".to_owned());
+    };
+    let kept = dump.with_file_name("chrome-window-busiest.ppm");
+    let mut ppm = format!("P6\n{} {}\n255\n", screen.width, screen.height).into_bytes();
+    ppm.extend_from_slice(&screen.pixels);
+    std::fs::write(&kept, &ppm)
+        .map_err(|error| Error::new(format!("writing {}: {error}", kept.display())))?;
+    let found = yellow_pixels(screen);
+    if found < CHROME_YELLOW_PIXELS {
+        return fail(format!(
+            "the screen has {found} pixels of the page's yellow, fewer than the \
+             {CHROME_YELLOW_PIXELS} of Chrome's window with it drawn; the busiest screen is {}",
+            kept.display()
+        ));
+    }
+    println!(
+        "  {arch}: Chrome drew its window and the page on the compositor, {found} pixels of \
+         the page's yellow; the screen is {}",
         kept.display()
     );
     Ok(())

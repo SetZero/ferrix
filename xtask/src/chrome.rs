@@ -78,7 +78,7 @@ const STATUS: i32 = 16;
 
 /// Each path glibc and fontconfig name absolutely, and where on the volume
 /// it is.
-const LINKS: &[(&str, &str)] = &[
+pub(crate) const LINKS: &[(&str, &str)] = &[
     ("lib64", "/data/usr/lib64"),
     ("lib/x86_64-linux-gnu", "/data/usr/lib/x86_64-linux-gnu"),
     ("usr/lib/x86_64-linux-gnu", "/data/usr/lib/x86_64-linux-gnu"),
@@ -89,15 +89,39 @@ const LINKS: &[(&str, &str)] = &[
 
 /// Guest memory unless `--memory` says otherwise: Chrome wants about two
 /// GiB to open a page, and the page cache holds its 260 MiB of code.
-const MEMORY: u32 = 4096;
+pub(crate) const MEMORY: u32 = 4096;
 
 /// Seconds to wait unless `--timeout` says otherwise: three starts of a
 /// browser, emulated when there is no KVM.
 const TIMEOUT: u64 = 1800;
 
+/// The command that starts the full browser in a window on the compositor,
+/// showing `page`, which may hold no spaces: the compositor splits a command
+/// at them.
+///
+/// `--ozone-platform=wayland` makes Chrome a Wayland client, drawing through
+/// `wl_shm`; `--disable-gpu` keeps its GPU process to software, since the
+/// render node is the compositor's. `--user-data-dir` is in `/dev/shm`,
+/// which is tmpfs whatever the root is: on the desktop's persistent btrfs
+/// root, a profile in `/tmp` left Chrome waiting after its first Wayland
+/// requests, and on tmpfs it does not. `--no-sandbox --no-zygote` for the
+/// reasons at the top of this file.
+pub(crate) fn window_command(page: &str) -> String {
+    format!(
+        "/data/chrome-window/chrome --no-sandbox --no-zygote --ozone-platform=wayland \
+         --user-data-dir=/dev/shm/chrome --no-first-run --disable-gpu --disable-crash-reporter \
+         --disable-breakpad --enable-logging=stderr {page}"
+    )
+}
+
+/// The environment the compositor gives Chrome, as `env =` lines: a home in
+/// tmpfs, for [`window_command`]'s reason -- NSS keeps its database there --
+/// and a runtime directory that can be written.
+pub(crate) const WINDOW_ENV: &str = "env = HOME,/dev/shm\nenv = XDG_RUNTIME_DIR,/tmp\n";
+
 /// Where `scripts/fetch-chrome.sh` writes, unless `FERRIX_CHROME_VOLUME`
 /// names another directory.
-fn volume() -> Result<std::path::PathBuf> {
+pub(crate) fn volume() -> Result<std::path::PathBuf> {
     let directory = match std::env::var_os("FERRIX_CHROME_VOLUME") {
         Some(directory) => std::path::PathBuf::from(directory),
         None => {
@@ -120,6 +144,21 @@ fn volume() -> Result<std::path::PathBuf> {
 /// The script, with the pages in it.
 fn script() -> String {
     SCRIPT.replace("PAGE", PAGE).replace("PICTURE", PICTURE)
+}
+
+/// `test-chrome` or `test-chrome-window`, whichever `command` names: the
+/// browser headless, or in a window on the compositor
+/// ([`crate::compositor::test_chrome_window`]).
+///
+/// # Errors
+///
+/// As the one it runs.
+pub(crate) fn run(command: &str, args: &Args) -> Result<()> {
+    if command == "test-chrome-window" {
+        crate::compositor::test_chrome_window(args)
+    } else {
+        test_chrome(args)
+    }
 }
 
 /// Boot a shell whose script runs Chrome three times.

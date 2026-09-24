@@ -171,6 +171,7 @@ COMMANDS:
     test-threads  Boot threads-test as init and require std::thread, Mutex, mpsc and /proc's thread count
     test-rustc    Attach the rustc volume scripts/fetch-rustc-sysroot.sh makes, run `rustc hello.rs && ./hello`
     test-chrome   Attach the volume scripts/fetch-chrome.sh makes, and require headless Chrome to run a page's script and draw it
+    test-chrome-window  The same volume, and require Chrome in a window on the compositor, its page on the screen
     test-selfhost  Run `cargo xtask build` on Ferrix from that toolchain and this checkout, and boot the image it made
     check         Run every quality gate (fmt, clippy, layering, audits, tests, docs)
     host-clippy   check's host clippy step alone, as CI runs it
@@ -202,6 +203,8 @@ OPTIONS:
                                          test-net turns it on whether or not it is given;
                                          run-compositor has one unless --no-net
     --no-net                             run-compositor: no network device and no gateway
+    --chrome                             run-compositor: Chrome on the desktop, from the volume
+                                         scripts/fetch-chrome.sh makes; SUPER+B opens another
     --forward <HOST>:<GUEST>             the host's 127.0.0.1:HOST leads to the guest's port GUEST,
                                          e.g. 2222:22 for sshdt; repeatable; turns --net on
     --ssh <PORT>                         run-compositor: start sshdt in the guest, reached at
@@ -391,7 +394,7 @@ fn run() -> Result<()> {
         "test-sysfs" => sysfs::test_sysfs(&args),
         "test-threads" => threads::test_threads(&args),
         "test-rustc" => rustc::test_rustc(&args),
-        "test-chrome" => chrome::test_chrome(&args),
+        "test-chrome" | "test-chrome-window" => chrome::run(command, &args),
         "test-selfhost" => selfhost::test_selfhost(&args),
         "check" => check::run(&args),
         "host-clippy" => check::host_clippy(),

@@ -53,6 +53,10 @@ pub(crate) struct Args {
     /// expects a machine that can reach the network, so that boot asks for
     /// it unasked, and this is how they say they would rather it did not.
     pub(crate) no_net: bool,
+    /// `--chrome`: `run-compositor` with Google's Chrome on the desktop,
+    /// from the volume `scripts/fetch-chrome.sh` makes, in place of the
+    /// rustc volume, and a keybind for another window.
+    pub(crate) chrome: bool,
     /// `-h`/`--help`.
     pub(crate) help: bool,
     /// `--smp`, virtual CPUs.
@@ -296,6 +300,7 @@ impl Args {
                 "--tmpfs-root" => args.tmpfs_root = true,
                 "--net" => args.net = true,
                 "--no-net" => args.no_net = true,
+                "--chrome" => args.chrome = true,
                 "--forward" => {
                     let raw = value(&mut items, "--forward")?;
                     args.forwards.push(crate::gateway::Forward::parse(&raw)?);

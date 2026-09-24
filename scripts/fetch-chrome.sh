@@ -39,6 +39,9 @@ out=${FERRIX_CHROME_VOLUME:-$HOME/.local/share/ferrix/chrome}
 
 CHROME_VERSION=154.0.8037.57
 CHROME_SHA256=5a6979d0ab7cf952ea575d35164e7bdce4872b2ced8f8a215c8f8e8eda00ee09
+# The same version's full browser, which draws windows: Ozone's Wayland
+# backend, with its own libwayland, talks to Ferrix's compositor.
+CHROME_WINDOW_SHA256=ceee2972074d441ea7c4ba8bcc0eaab77e7e87680f6653d73d3065851fe10302
 
 # Pool path and SHA-256 of each Debian 13 package from the main archive.
 debs=(
@@ -81,6 +84,30 @@ debs=(
     "main/f/fontconfig/fontconfig-config_2.15.0-2.3_amd64.deb 0475c00d02660c07a15085051818625331bb502e053242106aaaa1f2ddb41225"
     "main/f/fonts-dejavu/fonts-dejavu-core_2.37-8_all.deb 86635b3d25b3655fc11cb3ecc3af59f0bf19643b02b94f2de48bd10253cdba12"
     "main/f/fonts-dejavu/fonts-dejavu-mono_2.37-8_all.deb 3003e98a5debfdeadc7040a7f715fe9fe6fb67f68deacf6049b54e30f07fc014"
+    "main/c/cairo/libcairo2_1.18.4-1+b1_amd64.deb 01390b049661e4cc8bd39cef78b41c2587d4035619d3b00d6c7846f43d80bbba"
+    "main/p/pango1.0/libpango-1.0-0_1.56.3-1_amd64.deb 4fa38472696d2ddb10bfc9a4692a9446e8478fdb1f48c769a609fc9fec3adfc5"
+    "main/a/avahi/libavahi-client3_0.8-16_amd64.deb 27df3f1c0190d13ec6d014c5515c2ec8e9a49d0983f48fc9e5756ee4e62d7e37"
+    "main/a/avahi/libavahi-common3_0.8-16_amd64.deb fb092fc55f1c7f3db0ac64467f30ebae8145543570b8e99f17ce84cf1dd28bb6"
+    "main/f/fontconfig/libfontconfig1_2.15.0-2.3_amd64.deb 7ae91ec59857cc8e375eb2bdd371a4a69daea38f7787d06d474a847867d852b1"
+    "main/f/fribidi/libfribidi0_1.0.16-1_amd64.deb f8c35ec8606d0843bd3cf020c6cfa39ddfe717ec58ed826b5855ba9927eb0d55"
+    "main/h/harfbuzz/libharfbuzz0b_10.2.0-1+deb13u1_amd64.deb 932165b933e5eb633293afe984a983ebe89cb27c923ce7208626f1da6c0c7941"
+    "main/p/pixman/libpixman-1-0_0.44.0-3_amd64.deb 3862c87596f6b4b60fc916395fd69aa10af28a875a8e5c081a8cf30ddd120bd6"
+    "main/libt/libthai/libthai0_0.1.29-2+b1_amd64.deb e6364c07aeeffe9a95f267061d9df168e48e9dc9126c3b40e19dc829f67702a7"
+    "main/libx/libxcb/libxcb-render0_1.17.0-2+b1_amd64.deb 7f6e36978e0f70a590fbad4042a692c70b50ca7cbcdc53fa7e9d9ab87933acc6"
+    "main/libx/libxcb/libxcb-shm0_1.17.0-2+b1_amd64.deb d1777a813f484e89f3dcaadd1d5f2b1a13e9313b6bf70eded16d8ce743208fef"
+    "main/b/brotli/libbrotli1_1.1.0-2+b7_amd64.deb 0fb79f88db210afbd69282ab9649e525f393ec6950ca34da1a6b359250b8d7db"
+    "main/b/bzip2/libbz2-1.0_1.0.8-6_amd64.deb cba4cda04244b5e481bb15524bc3c983a7d1b6f330013b9b381706a2fcb65310"
+    "main/e/e2fsprogs/libcom-err2_1.47.2-3+b12_amd64.deb bd43e020b8fed399db3eebf098111f10fba4c436fff99ccad72cc7e27c9764ec"
+    "main/libd/libdatrie/libdatrie1_0.2.13-3+b1_amd64.deb 339eb88f23d72b8f0b7b1aebcefbab6de600d97b88bc6222dd8aad11d2ca9051"
+    "main/g/gmp/libgmp10_6.3.0+dfsg-3_amd64.deb d0d0265eb01770f17afd0f7c8c0622f80479dcfbbe13653a0debeec61464e622"
+    "main/g/graphite2/libgraphite2-3_1.3.14-2+deb13u1_amd64.deb 1769ba3ed3c1fc75b7fbe02678e32aa24391205813eceef4e1e3500015d12ee3"
+    "main/n/nettle/libhogweed6t64_3.10.1-1_amd64.deb b059ed155115ac09da295322de48ee1ed58ef5fa45edcc9e12ff0e94636ef25f"
+    "main/libi/libidn2/libidn2-0_2.3.8-2_amd64.deb 90b039bcdc4578f8e1c4935adf8dbb525e36a164deefdbbb8c45bac347d48278"
+    "main/n/nettle/libnettle8t64_3.10.1-1_amd64.deb 1b03d4a9cd9c8143ba50fe6396f36937e901a317d492d179f4596862c1731cfe"
+    "main/p/p11-kit/libp11-kit0_0.25.5-3_amd64.deb 784bf2063e166c8bc851a32623b74ebd85c499043a9d57c5bbd64fa63447f45a"
+    "main/libt/libtasn1-6/libtasn1-6_4.20.0-2+deb13u1_amd64.deb 23fec6e06583ce2bad9b2c04c9b485e90440e259b1abf8677cd80d3ce60831ad"
+    "main/libu/libunistring/libunistring5_1.3-2_amd64.deb 6dd3490bef06ea1096f32d10766b7e016cf579bfae8451d1b7df15ce05b8aa46"
+    "main/k/keyutils/libkeyutils1_1.6.3-6_amd64.deb 0b11ad17be0300b63ad4eeb4c6450fed24d34b7b740f23e5363dcb29ee6d5eba"
 )
 
 # The same, from the security archive.
@@ -89,6 +116,14 @@ security_debs=(
     "updates/main/u/util-linux/libmount1_2.41.5-0+deb13u1_amd64.deb 6d00f45f2e80e078e906e3eedecd3ba6913e39fef49bff361ee583f17f00ec05"
     "updates/main/e/expat/libexpat1_2.8.3-1~deb13u1_amd64.deb 38abe0e710a07688e9c149d74536e67cfee0364bdb64dd6d644c32a1cfad389f"
     "updates/main/n/nss/libnss3_3.110-1+deb13u4_amd64.deb 8d20d0754039e15e9bd2c8484e98dc9c2982907d4f20834da29a9501913d00b5"
+    "updates/main/c/cups/libcups2t64_2.4.10-3+deb13u1_amd64.deb 3ad4c8a3aeb00f3e5c950e43e92618f1b6ebffc6a1d7d46a62c75a56098dded4"
+    "updates/main/f/freetype/libfreetype6_2.13.3+dfsg-1+deb13u1_amd64.deb e4947f3291528f03d574f2b01d5c5fc45c58c47480f32888a5cdf0f231ab584e"
+    "updates/main/g/gnutls28/libgnutls30t64_3.8.9-3+deb13u4_amd64.deb 18a8bdfd91c7e3bcb01719d55a2b56849c7160b34f1f52b1c4fdfdd41bf1352b"
+    "updates/main/k/krb5/libgssapi-krb5-2_1.21.3-5+deb13u1_amd64.deb 30847c1fde4240567d7ed3aeab4f655dd591203758b857e85e824045aae70299"
+    "updates/main/libp/libpng1.6/libpng16-16t64_1.6.48-1+deb13u5_amd64.deb 2465b4e9fa85cff54dc10a6da3e64074d8d9292c86e4a8f989b809d6b158e97e"
+    "updates/main/k/krb5/libk5crypto3_1.21.3-5+deb13u1_amd64.deb 7da07ee674b47f1f0be7cc89317c25310086a1f1761217d0f72e6ae2c5a69b84"
+    "updates/main/k/krb5/libkrb5-3_1.21.3-5+deb13u1_amd64.deb 47d71d6a7f2e59b9bae5f89602397594805113b95889ad18fa703cd53abafc97"
+    "updates/main/k/krb5/libkrb5support0_1.21.3-5+deb13u1_amd64.deb 3a0acd8b37955c0e102c756b52c97df2a31f67b96453c35dab70df218d309117"
 )
 
 for tool in curl sha256sum dpkg-deb unzip readelf mkfs.btrfs; do
@@ -127,12 +162,17 @@ unpacked=$(mktemp -d)
 trap 'rm -rf "$unpacked"' EXIT
 unzip -q "$zip" -d "$unpacked"
 mv "$unpacked/chrome-headless-shell-linux64" "$tree/chrome"
+window_zip=$(fetch "$CHROME_VERSION/linux64/chrome-linux64.zip" "$chrome_dist" "$CHROME_WINDOW_SHA256")
+unzip -q "$window_zip" -d "$unpacked"
+mv "$unpacked/chrome-linux64" "$tree/chrome-window"
 
 # Documentation and manuals, which nothing runs.
 rm -rf "$tree/usr/share/doc" "$tree/usr/share/man" "$tree/usr/share/lintian"
 
 test -x "$tree/chrome/chrome-headless-shell" \
     || { echo "fetch-chrome: no chrome-headless-shell in the tree" >&2; exit 1; }
+test -x "$tree/chrome-window/chrome" \
+    || { echo "fetch-chrome: no chrome in the tree" >&2; exit 1; }
 test -e "$tree/usr/lib64/ld-linux-x86-64.so.2" \
     || { echo "fetch-chrome: no linker at usr/lib64" >&2; exit 1; }
 
@@ -145,12 +185,13 @@ while IFS= read -r -d '' file; do
         if [ ! -e "$tree/usr/lib/x86_64-linux-gnu/$needed" ] \
             && [ ! -e "$tree/lib/x86_64-linux-gnu/$needed" ] \
             && [ ! -e "$tree/chrome/$needed" ] \
+            && [ ! -e "$tree/chrome-window/$needed" ] \
             && [ ! -e "$tree/usr/lib64/$needed" ]; then
             echo "fetch-chrome: ${file#"$tree"/} needs $needed, which is not on the volume" >&2
             missing=1
         fi
     done
-done < <(find "$tree/chrome" "$tree/usr/lib/x86_64-linux-gnu" -maxdepth 1 -type f -print0)
+done < <(find "$tree/chrome" "$tree/chrome-window" "$tree/usr/lib/x86_64-linux-gnu" -maxdepth 1 -type f -print0)
 [ "$missing" = 0 ] || exit 1
 
 # Room for Chrome's profile, caches and the screenshot, and a size that does

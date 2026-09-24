@@ -973,6 +973,10 @@ fn forwarded(args: &Args, viewer: &Viewer) -> Vec<String> {
             extra.push(value.clone());
         }
     }
+    // Chrome on the desktop, which only the boot over there can give it.
+    if args.chrome {
+        extra.push("--chrome".to_owned());
+    }
     extra.extend(args.passthrough.iter().cloned());
     extra
 }
@@ -1503,6 +1507,17 @@ send = "head"
             forwarded(&args, &Viewer::Known(Known::RealVnc)),
             ["--layout", "de", "--keymap", "de", "--smp", "2"],
             "a viewer that sends characters gets the layout's keymap"
+        );
+        let args = Args::parse(
+            ["remote-desktop", "--chrome"]
+                .into_iter()
+                .map(str::to_owned),
+        )
+        .unwrap();
+        assert_eq!(
+            forwarded(&args, &Viewer::Known(Known::TigerVnc)),
+            ["--chrome"],
+            "--chrome reaches the boot"
         );
     }
 
