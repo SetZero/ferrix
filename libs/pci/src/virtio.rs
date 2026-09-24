@@ -38,6 +38,8 @@ pub const TYPE_NET: u16 = 1;
 pub const TYPE_BLOCK: u16 = 2;
 /// Virtio device type: entropy source.
 pub const TYPE_ENTROPY: u16 = 4;
+/// Virtio device type: GPU.
+pub const TYPE_GPU: u16 = 16;
 
 /// Configuration type: common configuration.
 pub const CFG_COMMON: u8 = 1;

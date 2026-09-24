@@ -44,7 +44,7 @@ use ferrix_pci::ecam::{BYTES_PER_BUS, Window};
 use ferrix_pci::header::{
     CLASS_BRIDGE, COMMAND, COMMAND_MEMORY_SPACE, Endpoint, HeaderKind, SUBCLASS_HOST_BRIDGE,
 };
-use ferrix_pci::virtio::{self as virtio_pci, TYPE_ENTROPY, Transport};
+use ferrix_pci::virtio::{self as virtio_pci, SharedMemory, TYPE_ENTROPY, TYPE_GPU, Transport};
 use ferrix_pci::walk::{Function, Walk};
 use ferrix_pci::{Address, ConfigSpace, PciError};
 
@@ -430,7 +430,7 @@ fn check_host(
     }
 
     for function in found {
-        let (regions, msix, decoding, transport) =
+        let (regions, msix, decoding, transport, host_visible) =
             check_function(&mut space, function, reserved, report)?;
         // Where the function's configuration space is, which minting one of
         // its MSI-X vectors writes to turn MSI-X on.
@@ -444,6 +444,7 @@ fn check_host(
                 config_phys,
                 identity: &function.identity,
                 transport: transport.as_ref(),
+                host_visible: host_visible.as_ref(),
             },
             &regions,
             msix.as_ref(),
@@ -455,12 +456,14 @@ fn check_host(
 }
 
 /// What examining one function yields: its sized BARs, its MSI-X capability
-/// if it has one, and whether firmware left its memory decoding on.
+/// if it has one, whether firmware left its memory decoding on, its virtio
+/// transport, and a virtio GPU's host-visible window.
 type Examined = (
     Vec<Region>,
     Option<(Capability, MsiX)>,
     bool,
     Option<Transport>,
+    Option<SharedMemory>,
 );
 
 /// Size every BAR of one function and walk both its capability lists,
@@ -517,12 +520,25 @@ fn check_function(
         0
     };
     let mut found_transport = None;
+    let mut host_visible = None;
     if let Some(kind) = virtio_pci::device_type(&identity, subsystem)
         && let Some(transport) = Transport::find(&*space, address)?
     {
         transport.verify(&regions)?;
         report.virtio += 1;
         found_transport = Some(transport);
+        // The window a virtio GPU's host maps blob resources into
+        // (`docs/GPU.md` §6.1). Taken only whole inside a BAR: the render
+        // core maps its pages into programs, and a window that ran past its
+        // BAR would hand them whatever lies beyond.
+        if kind == TYPE_GPU {
+            host_visible = SharedMemory::find(
+                &*space,
+                address,
+                ferrix_virtio::gpu::SHM_ID_HOST_VISIBLE,
+            )?
+            .filter(|window| regions.iter().any(|region| window.fits(region)));
+        }
         if kind == TYPE_ENTROPY {
             match virtio::entropy(
                 space,
@@ -559,5 +575,5 @@ fn check_function(
             }
         }
     }
-    Ok((regions, msix, decoding, found_transport))
+    Ok((regions, msix, decoding, found_transport, host_visible))
 }
