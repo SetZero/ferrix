@@ -378,9 +378,7 @@ mod tests {
         }
         assert_eq!(resumed, expected);
         // SAFETY: too small a state, refused before anything is written.
-        assert_eq!(
-            unsafe { initstate_r(1, state.as_mut_ptr().cast(), 7, &raw mut fresh) },
-            -1
-        );
+        let refused = unsafe { initstate_r(1, state.as_mut_ptr().cast(), 7, &raw mut fresh) };
+        assert_eq!(refused, -1);
     }
 }
