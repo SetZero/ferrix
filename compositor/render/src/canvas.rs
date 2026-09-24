@@ -473,6 +473,16 @@ impl Canvas {
         if clips.is_empty() {
             return;
         }
+        // An opaque surface at full opacity covers what is under it: every
+        // pixel is the surface's, sampled, with nothing to blend. That is
+        // every tiled window part-way through a move, and it is done here in
+        // whole numbers, a band of rows a core, rather than through the
+        // shader's floating-point pipeline -- which on a Cortex-A7 took over
+        // a second for a window's frame.
+        if surface.format() == Format::Xrgb8888 && opacity >= 1.0 {
+            self.stretch_opaque(surface, rect, nearest, &clips);
+            return;
+        }
         let gathered = opaque_rows(surface);
         let Some(pixmap) = PixmapRef::from_bytes(&gathered, surface.width(), surface.height())
         else {
@@ -509,6 +519,50 @@ impl Canvas {
         );
         let paint = paint(shader, BlendMode::SourceOver);
         self.fill_clips(&clips, &paint);
+    }
+
+    /// [`Canvas::composite_scaled`] for an opaque surface at full opacity:
+    /// each canvas pixel of `clips` is the surface sampled where `rect`
+    /// stretches it to, bilinearly unless `nearest`.
+    ///
+    /// The sampling is the shader's -- a pixel's centre mapped into the
+    /// surface, the four texels round it weighed by how near it falls, the
+    /// edges clamped -- in sixteenths of a sixteenth of a pixel rather than
+    /// in floating point. Where each column and each row of the rectangle
+    /// samples is worked out once, not once a pixel.
+    fn stretch_opaque(&mut self, surface: &Surface<'_>, rect: Rect, nearest: bool, clips: &[Rect]) {
+        let Some(covered) = bounding(clips) else {
+            return;
+        };
+        let columns = samples(
+            covered.x.saturating_sub(rect.x),
+            covered.width,
+            rect.width,
+            surface.width(),
+            nearest,
+        );
+        let rows = samples(
+            covered.y.saturating_sub(rect.y),
+            covered.height,
+            rect.height,
+            surface.height(),
+            nearest,
+        );
+        let stretch = Stretch {
+            surface,
+            columns,
+            rows,
+            covered,
+            width: index(i64::from(self.width())),
+        };
+        self.in_bands(clips, |band, top, local| {
+            for &clip in local {
+                stretch.clip(band, top, clip);
+            }
+        });
+        for &clip in clips {
+            self.damage.add(clip);
+        }
     }
 
     /// The parts of `rect` inside `damage` and the canvas, with its corners
@@ -600,9 +654,52 @@ impl Canvas {
         }
         let shape = Falloff::new(full, shadow.rounding.radius, shadow.range, shadow.power);
         let alpha = f32::from(shadow.color.alpha()) / 255.0;
+        // Everything at least `inset` inside the box -- past the fade and
+        // clear of the corners -- is the shadow's colour at its full alpha,
+        // the same blend at every pixel. So what that blend makes of each
+        // byte a pixel can hold is worked out once, by the arithmetic every
+        // pixel would have gone through, and the pixels are looked up in it:
+        // the same bytes, without three multiplications and a rounding in
+        // software for every pixel of a box the size of a window.
+        let inset = shape.inset();
+        let inside = Rect::new(
+            full.x.saturating_add(inset),
+            full.y.saturating_add(inset),
+            full.width.saturating_sub(inset.saturating_mul(2)),
+            full.height.saturating_sub(inset.saturating_mul(2)),
+        );
+        let table = Blended::new(
+            [
+                shadow.color.blue(),
+                shadow.color.green(),
+                shadow.color.red(),
+            ],
+            alpha,
+        );
         for clip in clips {
             for y in clip.y..clip.bottom() {
-                self.shadow_row(clip, y, full, &shape, shadow.color, alpha);
+                let middle = (y >= inside.y && y < inside.bottom())
+                    .then(|| intersect(Rect::new(clip.x, y, clip.width, 1), inside))
+                    .flatten();
+                let Some(middle) = middle else {
+                    self.shadow_row(clip, y, full, &shape, shadow.color, alpha);
+                    continue;
+                };
+                let left = Rect::new(clip.x, y, middle.x.saturating_sub(clip.x), 1);
+                let right = Rect::new(
+                    middle.right(),
+                    y,
+                    clip.right().saturating_sub(middle.right()),
+                    1,
+                );
+                self.shadow_row(left, y, full, &shape, shadow.color, alpha);
+                self.shadow_row(right, y, full, &shape, shadow.color, alpha);
+                let width = index(i64::from(self.width()));
+                let start = (index(y) * width + index(middle.x)) * 4;
+                let end = start + index(middle.width) * 4;
+                if let Some(pixels) = self.pixmap.data_mut().get_mut(start..end) {
+                    table.apply(pixels);
+                }
             }
             self.damage.add(clip);
         }
@@ -995,11 +1092,121 @@ fn copy_rows(data: &mut [u8], width: usize, surface: &Surface<'_>, rect: Rect, c
 /// making each pixel opaque: an `XRGB8888` client leaves its X byte zero, and
 /// a canvas pixel with a zero alpha would draw nothing.
 fn copy_opaque(dst: &mut [u8], src: &[u8]) {
+    // A word a pixel, with the alpha byte set in it, rather than four byte
+    // stores: the same bytes, in a loop the compiler can widen.
     for (dst, src) in dst.chunks_exact_mut(4).zip(src.chunks_exact(4)) {
-        if let ([b, g, r, x], [sb, sg, sr, _]) = (dst, src) {
-            (*b, *g, *r, *x) = (*sb, *sg, *sr, 0xFF);
+        if let (Ok(dst), Ok(src)) = (<&mut [u8; 4]>::try_from(dst), <[u8; 4]>::try_from(src)) {
+            *dst = (u32::from_le_bytes(src) | 0xFF00_0000).to_le_bytes();
         }
     }
+}
+
+/// Where each of `count` pixels, from `first` into a span `span` pixels
+/// long, samples a surface `size` texels long: the two texels either side of
+/// the pixel's centre and how far towards the second it is, out of 256.
+///
+/// The centre of pixel `i` falls at texel `(i + 0.5) * size / span - 0.5`,
+/// clamped to the surface's edges as the shader's `Pad` clamps it; nearest
+/// sampling takes the texel that centre is in and no second.
+fn samples(first: i64, count: i64, span: i64, size: u32, nearest: bool) -> Vec<(u32, u32, u32)> {
+    let span = span.max(1);
+    let last = i64::from(size).saturating_sub(1).max(0);
+    (0..count.max(0))
+        .map(|at| {
+            let pixel = first.saturating_add(at);
+            // In 1/65536ths of a texel.
+            let centre = pixel
+                .saturating_mul(2)
+                .saturating_add(1)
+                .saturating_mul(i64::from(size))
+                .saturating_mul(1 << 16)
+                / span.saturating_mul(2);
+            let texel = |value: i64| u32::try_from(value.clamp(0, last)).unwrap_or(0);
+            if nearest {
+                let at = texel(centre >> 16);
+                return (at, at, 0);
+            }
+            let position = centre.saturating_sub(1 << 15);
+            if position <= 0 {
+                return (0, 0, 0);
+            }
+            let whole = position >> 16;
+            let part = u32::try_from((position >> 8) & 0xFF).unwrap_or(0);
+            (texel(whole), texel(whole.saturating_add(1)), part)
+        })
+        .collect()
+}
+
+/// A surface being stretched by [`Canvas::stretch_opaque`], and where each
+/// column and row of what it covers samples it.
+struct Stretch<'a> {
+    surface: &'a Surface<'a>,
+    /// For each column of `covered`: the two texels and the weight.
+    columns: Vec<(u32, u32, u32)>,
+    /// For each row of `covered`: the two rows and the weight.
+    rows: Vec<(u32, u32, u32)>,
+    /// The part of the canvas the columns and rows begin at.
+    covered: Rect,
+    /// The canvas's width in pixels.
+    width: usize,
+}
+
+impl Stretch<'_> {
+    /// Draw `clip` of a band of canvas rows beginning at row `top`.
+    fn clip(&self, band: &mut [u8], top: i64, clip: Rect) {
+        let from = index(clip.x.saturating_sub(self.covered.x));
+        let columns = self.columns.get(from..).unwrap_or(&[]);
+        for y in clip.y..clip.bottom() {
+            let at = index(y.saturating_add(top).saturating_sub(self.covered.y));
+            let Some(&(first, second, down)) = self.rows.get(at) else {
+                continue;
+            };
+            let start = (index(y) * self.width + index(clip.x)) * 4;
+            let end = start + index(clip.width) * 4;
+            if let (Some(upper), Some(lower), Some(out)) = (
+                self.surface.row(first),
+                self.surface.row(second),
+                band.get_mut(start..end),
+            ) {
+                stretch_row(out, (upper, lower), down, columns);
+            }
+        }
+    }
+}
+
+/// One row of [`Canvas::stretch_opaque`]: each pixel of `out` mixed from the
+/// `rows` above and below its centre, `down` 256ths of the way to the lower,
+/// at the texels `columns` names.
+fn stretch_row(out: &mut [u8], rows: (&[u8], &[u8]), down: u32, columns: &[(u32, u32, u32)]) {
+    let texel = |row: &[u8], at: u32| {
+        let at = (at as usize).wrapping_mul(4);
+        row.get(at..at.wrapping_add(4))
+            .and_then(|bytes| <[u8; 4]>::try_from(bytes).ok())
+            .map_or(0, u32::from_le_bytes)
+    };
+    let (upper, lower) = rows;
+    for (pixel, &(left, right, across)) in out.chunks_exact_mut(4).zip(columns) {
+        let above = mix(texel(upper, left), texel(upper, right), across);
+        let below = mix(texel(lower, left), texel(lower, right), across);
+        let value = mix(above, below, down) | 0xFF00_0000;
+        pixel.copy_from_slice(&value.to_le_bytes());
+    }
+}
+
+/// `a` and `b`, two pixels, mixed `towards` 256ths of the way to `b`, two
+/// channels at a time: blue and red in one word, green and the fourth byte
+/// in another, each channel sixteen bits apart so neither spills.
+fn mix(a: u32, b: u32, towards: u32) -> u32 {
+    if towards == 0 {
+        return a;
+    }
+    // Each lane is at most 255 x 256, so nothing wraps; the arithmetic says
+    // so rather than paying for an overflow check a pixel.
+    let back = 256u32.wrapping_sub(towards);
+    let lanes = |a: u32, b: u32| a.wrapping_mul(back).wrapping_add(b.wrapping_mul(towards));
+    let even = (lanes(a & 0x00FF_00FF, b & 0x00FF_00FF) >> 8) & 0x00FF_00FF;
+    let odd = lanes((a >> 8) & 0x00FF_00FF, (b >> 8) & 0x00FF_00FF) & 0xFF00_FF00;
+    even | odd
 }
 
 /// How far a rounded corner's row is inset from the rectangle's edge.
@@ -1193,6 +1400,22 @@ impl Falloff {
         }
     }
 
+    /// How far inside the box every point is past the fade and clear of
+    /// the corners, where [`Falloff::at`] is exactly one.
+    ///
+    /// A pixel's centre is half a pixel into it, so a column `inset` in is
+    /// past a corner's centre (which is `inset` in) and at least `range`
+    /// from every side; `inset` is `range` and the rounding, never less
+    /// than `range`.
+    fn inset(&self) -> i64 {
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "a shadow's range and a rounding in pixels, made from integers"
+        )]
+        let inset = self.inset as i64;
+        inset
+    }
+
     /// The alpha at `(x, y)` inside the box, 0 to 1.
     fn at(&self, x: i64, y: i64) -> f32 {
         #[expect(
@@ -1235,6 +1458,42 @@ fn rounded_distance(distance: f32, radius: f32, range: f32, power: i32) -> f32 {
         return ((radius - distance) / range).clamp(0.0, 1.0).powi(power);
     }
     1.0
+}
+
+/// What [`over`] makes of every byte a canvas pixel can hold, for one
+/// colour at one alpha: a table a channel.
+///
+/// Built by calling [`over`] itself, so a pixel looked up here is the byte
+/// that blending it would have written.
+struct Blended([[u8; 256]; 3]);
+
+impl Blended {
+    fn new(colour: [u8; 3], alpha: f32) -> Self {
+        let mut table = [[0u8; 256]; 3];
+        for level in 0..=255u8 {
+            let mut pixel = [level, level, level, 0];
+            over(&mut pixel, colour, alpha);
+            for (channel, byte) in table.iter_mut().zip(pixel) {
+                if let Some(slot) = channel.get_mut(usize::from(level)) {
+                    *slot = byte;
+                }
+            }
+        }
+        Self(table)
+    }
+
+    /// Blend every pixel of `pixels`, canvas bytes, through the table.
+    fn apply(&self, pixels: &mut [u8]) {
+        let [blue, green, red] = &self.0;
+        for pixel in pixels.chunks_exact_mut(4) {
+            if let [b, g, r, _] = pixel {
+                let look = |table: &[u8; 256], byte: u8| {
+                    table.get(usize::from(byte)).copied().unwrap_or(byte)
+                };
+                (*b, *g, *r) = (look(blue, *b), look(green, *g), look(red, *r));
+            }
+        }
+    }
 }
 
 /// Blend one premultiplied colour over one canvas pixel.

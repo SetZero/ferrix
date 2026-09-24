@@ -950,3 +950,132 @@ pub fn damage_between(old: &MonitorLayout, new: &MonitorLayout, origin: (i64, i6
     }
     damage
 }
+
+/// [`damage_between`], knowing how each window is drawn: a window whose
+/// focus is all that changed is owed only its border, and the part of its
+/// box its corners cut, rather than all of it.
+///
+/// Focus decides three things about a window's pixels: its border's colour,
+/// how much of it shows (`active_opacity` and `inactive_opacity`), and
+/// whether it is dimmed (`dim_inactive`). Where the second and third come
+/// out the same either way -- which they do unless a configuration sets
+/// them -- moving the focus between two windows changes their borders and
+/// nothing inside them. Redrawing all of both was most of what a focus
+/// change cost on a slow machine: two windows' worth of pixels drawn and
+/// copied to the screen, turned for a monitor standing on its edge, for a
+/// frame whose only change was two coloured rings.
+///
+/// The ring is the border's box less the window's rectangle drawn in by its
+/// rounding's radius: under a rounded corner the border's fill shows, so
+/// that corner is part of what changed colour.
+#[must_use]
+pub fn damage_between_styled(
+    old: &MonitorLayout,
+    new: &MonitorLayout,
+    origin: (i64, i64),
+    styles: &Styles<'_>,
+) -> Damage {
+    // Windows whose focus alone changed, in the same place in the stack,
+    // where the focus changes nothing inside them: answered with a ring
+    // each, and left out of the layouts the rest is worked out from.
+    let mut rings = Damage::new();
+    let mut only_focus = Vec::new();
+    for (was, now) in old.windows.iter().zip(&new.windows) {
+        let refocused = Placed {
+            focused: now.focused,
+            ..*was
+        };
+        if was.focused != now.focused && refocused == *now && focus_is_border_only(styles, now) {
+            only_focus.push(now.window);
+            for part in ring(now, styles) {
+                rings.add(part.translate(origin.0.saturating_neg(), origin.1.saturating_neg()));
+            }
+        }
+    }
+    if only_focus.is_empty() {
+        return damage_between(old, new, origin);
+    }
+    let without = |layout: &MonitorLayout| MonitorLayout {
+        windows: layout
+            .windows
+            .iter()
+            .map(|placed| {
+                if only_focus.contains(&placed.window) {
+                    Placed {
+                        focused: false,
+                        ..*placed
+                    }
+                } else {
+                    *placed
+                }
+            })
+            .collect(),
+        ..layout.clone()
+    };
+    let mut damage = damage_between(&without(old), &without(new), origin);
+    for part in rings.rects() {
+        damage.add(*part);
+    }
+    damage
+}
+
+/// Whether focusing or unfocusing `placed` changes nothing of it but its
+/// border: it shows as much of itself and is dimmed alike either way.
+fn focus_is_border_only(styles: &Styles<'_>, placed: &Placed) -> bool {
+    let style = styles.base;
+    let own = styles.of(placed.window);
+    let opacity = |focused: bool| {
+        own.opacity
+            .unwrap_or_else(|| style.opacity(focused, placed.fullscreen))
+    };
+    let dimmed = style.dim > 0.0 && own.dim;
+    opacity(true).to_bits() == opacity(false).to_bits() && !dimmed
+}
+
+/// The part of `placed`'s box a change of its border's colour repaints:
+/// the border, and the corners its rounding cuts out of the window.
+fn ring(placed: &Placed, styles: &Styles<'_>) -> [Rect; 4] {
+    let own = styles.of(placed.window);
+    let border = if own.decorate {
+        own.border.unwrap_or(placed.border).max(0)
+    } else {
+        0
+    };
+    let rect = placed.rect;
+    let radius = own
+        .rounding
+        .unwrap_or(styles.base.rounding.radius)
+        .max(0)
+        .min(rect.width / 2)
+        .min(rect.height / 2);
+    let outer = Rect::new(
+        rect.x.saturating_sub(border),
+        rect.y.saturating_sub(border),
+        rect.width.saturating_add(border.saturating_mul(2)),
+        rect.height.saturating_add(border.saturating_mul(2)),
+    );
+    let inner = Rect::new(
+        rect.x.saturating_add(radius),
+        rect.y.saturating_add(radius),
+        rect.width.saturating_sub(radius.saturating_mul(2)),
+        rect.height.saturating_sub(radius.saturating_mul(2)),
+    );
+    let above = inner.y.saturating_sub(outer.y);
+    let below = outer.bottom().saturating_sub(inner.bottom());
+    [
+        Rect::new(outer.x, outer.y, outer.width, above),
+        Rect::new(outer.x, inner.bottom(), outer.width, below),
+        Rect::new(
+            outer.x,
+            inner.y,
+            inner.x.saturating_sub(outer.x),
+            inner.height,
+        ),
+        Rect::new(
+            inner.right(),
+            inner.y,
+            outer.right().saturating_sub(inner.right()),
+            inner.height,
+        ),
+    ]
+}

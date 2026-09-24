@@ -6,8 +6,8 @@ use compositor_layout::{Monitor, MonitorId, MonitorLayout, Placed, Settings, Sta
 use crate::golden::{self, Mismatch};
 use crate::{
     Backdrop, Blur, Canvas, Color, Damage, Error, Format, Gradient, LayerFrame, Pattern, Rect,
-    Rounding, Style, Styles, Surface, Target, Transform, cursor, damage_between, outer,
-    reads_backdrop, render, render_onto, render_with_layers,
+    Rounding, Style, Styles, Surface, Target, Transform, cursor, damage_between,
+    damage_between_styled, outer, reads_backdrop, render, render_onto, render_with_layers,
 };
 
 const BG: u32 = 0x0020_4060;
@@ -1708,6 +1708,88 @@ fn a_frame_with_partial_damage_leaves_the_rest_alone() {
     }
     assert_eq!(canvas.pixel(20, 300), Some(0xFFFF_FFFF));
     assert_eq!(canvas.pixel(517, 300), Some(0xFF44_4444));
+}
+
+#[test]
+fn a_focus_change_redraws_the_two_borders_and_nothing_inside() {
+    // Square and rounded: under a rounded corner the border's fill shows,
+    // so the corner is part of the ring.
+    for rounding in [Rounding::none(), Rounding::circle(12)] {
+        let (mut state, before) = two_clients();
+        let buffers = client_buffers(&before);
+        let surfaces = surfaces(&buffers);
+        let style = Style {
+            rounding,
+            ..plain_style()
+        };
+        let styles = Styles::plain(&style);
+        let mut canvas = Canvas::new(WIDTH, HEIGHT).unwrap();
+        let _ = render(
+            &mut canvas,
+            &before,
+            (0, 0),
+            &style,
+            &surfaces,
+            &Damage::full(WIDTH, HEIGHT),
+        );
+
+        let bind = parse("t.conf", "bind = SUPER, H, movefocus, l\n", &mut NoSources)
+            .config
+            .binds
+            .remove(0);
+        assert!(!state.dispatch_bind(&bind).unwrap().is_empty());
+        let after = state.layout().remove(0);
+        let damage = damage_between_styled(&before, &after, (0, 0), &styles);
+        let whole: Damage = before.windows.iter().map(outer).collect();
+        assert!(
+            damage.area() < whole.area() / 10,
+            "a focus change damaged {} pixels of the windows' {}",
+            damage.area(),
+            whole.area()
+        );
+
+        // Drawn through that damage alone, the frame is the one a full
+        // redraw of the new layout makes.
+        let _ = render(&mut canvas, &after, (0, 0), &style, &surfaces, &damage);
+        let mut fresh = Canvas::new(WIDTH, HEIGHT).unwrap();
+        let _ = render(
+            &mut fresh,
+            &after,
+            (0, 0),
+            &style,
+            &surfaces,
+            &Damage::full(WIDTH, HEIGHT),
+        );
+        assert!(
+            canvas.data() == fresh.data(),
+            "the ring left a pixel of the old focus behind (rounding {rounding:?})"
+        );
+    }
+}
+
+#[test]
+fn a_focus_change_that_fades_or_dims_a_window_redraws_all_of_it() {
+    let (mut state, before) = two_clients();
+    let bind = parse("t.conf", "bind = SUPER, H, movefocus, l\n", &mut NoSources)
+        .config
+        .binds
+        .remove(0);
+    assert!(!state.dispatch_bind(&bind).unwrap().is_empty());
+    let after = state.layout().remove(0);
+    let whole: Damage = before.windows.iter().map(outer).collect();
+    for style in [
+        Style {
+            inactive_opacity: 0.8,
+            ..plain_style()
+        },
+        Style {
+            dim: 0.5,
+            ..plain_style()
+        },
+    ] {
+        let damage = damage_between_styled(&before, &after, (0, 0), &Styles::plain(&style));
+        assert_eq!(damage, whole);
+    }
 }
 
 #[test]

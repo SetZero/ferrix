@@ -63,6 +63,25 @@ fn index(value: i64) -> usize {
     usize::try_from(value).unwrap_or(0)
 }
 
+/// Whether two runs of pixels hold the same bytes.
+///
+/// A word at a time rather than through `memcmp`, which musl -- the C
+/// library every Ferrix program links -- implements a byte at a time: on a
+/// Cortex-A7 that comparison was most of what keeping the backdrop cost.
+fn same(one: &[u8], other: &[u8]) -> bool {
+    const WORD: usize = 8;
+    if one.len() != other.len() {
+        return false;
+    }
+    let (ones, other_words) = (one.chunks_exact(WORD), other.chunks_exact(WORD));
+    let tails = ones.remainder() == other_words.remainder();
+    tails
+        && ones.zip(other_words).all(|(a, b)| {
+            let word = |bytes: &[u8]| <[u8; WORD]>::try_from(bytes).map_or(0, u64::from_ne_bytes);
+            word(a) == word(b)
+        })
+}
+
 /// Where the tile at `at` along one direction of the grid begins, in pixels.
 fn place(at: usize) -> i64 {
     i64::try_from(at).unwrap_or(0).saturating_mul(TILE)
@@ -235,7 +254,7 @@ impl Backdrop {
             ) else {
                 continue;
             };
-            if source == target {
+            if same(source, target) {
                 continue;
             }
             target.copy_from_slice(source);

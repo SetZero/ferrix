@@ -475,7 +475,18 @@ impl Plan {
     /// rule now draws differently.
     fn windows_since(&self, old: &Self, region: &mut Damage) {
         let margin = self.margin();
-        let between = compositor_render::damage_between(&old.layout, &self.layout, self.origin);
+        // What the plan draws each window with, so that a window whose focus
+        // is all that changed is owed its border and not all of it.
+        let styles = compositor_render::Styles {
+            base: &self.style,
+            windows: &self.styles,
+        };
+        let between = compositor_render::damage_between_styled(
+            &old.layout,
+            &self.layout,
+            self.origin,
+            &styles,
+        );
         for rect in between.rects() {
             region.add(grown(*rect, margin));
         }
