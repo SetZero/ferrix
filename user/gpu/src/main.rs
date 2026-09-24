@@ -527,30 +527,51 @@ fn render_introduce(
     let Some(name) = rc::Hello::named("virtio_gpu") else {
         return Ok(None);
     };
-    // Which capability set this device's streams are in, asked for afresh:
-    // the display's HELLO read one too, and a driver that kept one number in
-    // two places would eventually disagree with itself. The device lists
-    // its sets oldest first and a renderer wants the newest it knows, so
-    // `CAPSET_VIRGL2` is taken over `CAPSET_VIRGL` when both are there.
-    let mut capset: Option<gpu::CapsetInfo> = None;
+    // Which capability sets a context may be made for, asked for afresh:
+    // the display's HELLO read them too, and a driver that kept one number in
+    // two places would eventually disagree with itself. virgl's is the one
+    // the compositor's streams are in; the device lists its sets oldest
+    // first and a renderer wants the newest it knows, so `CAPSET_VIRGL2` is
+    // taken over `CAPSET_VIRGL` when both are there. Venus's is offered only
+    // where blobs and rings are: it keeps everything in host memory and
+    // fences on rings (`docs/GPU.md` §6.1).
+    let granted = driver.info().features;
+    let blobs = granted & gpu::FEATURE_RESOURCE_BLOB != 0;
+    let rings = granted & gpu::FEATURE_CONTEXT_INIT != 0;
+    let mut capsets: [Option<gpu::CapsetInfo>; 2] = [None, None];
     for index in 0..driver.info().config.num_capsets.min(MAX_CAPSETS) {
-        if let Ok(Response::CapsetInfo(info)) =
+        let Ok(Response::CapsetInfo(info)) =
             run_command(driver, port, &Command::GetCapsetInfo { index })?
-            && matches!(info.id, gpu::CAPSET_VIRGL | gpu::CAPSET_VIRGL2)
-            && capset.is_none_or(|held| info.id > held.id)
-        {
-            capset = Some(info);
+        else {
+            continue;
+        };
+        match info.id {
+            gpu::CAPSET_VIRGL | gpu::CAPSET_VIRGL2
+                if capsets[0].is_none_or(|held| info.id > held.id) =>
+            {
+                capsets[0] = Some(info);
+            }
+            gpu::CAPSET_VENUS if blobs && rings => capsets[1] = Some(info),
+            _ => {}
         }
+    }
+    let mut features = rc::features::SUBMIT;
+    if blobs {
+        features |= rc::features::BLOBS;
+    }
+    if rings {
+        features |= rc::features::RINGS;
     }
     let stream = Stream::new()?;
     let hello = RenderMessage::Hello(rc::Hello {
         version: rc::VERSION,
         location,
         name,
-        // Fences are encoded but nothing waits on one yet, so they are not
-        // offered: a feature bit is a promise the core would hold us to.
-        features: rc::features::SUBMIT,
-        capset: capset.map_or(0, |info| info.id),
+        features,
+        capsets: capsets
+            .iter()
+            .flatten()
+            .fold(0, |mask, info| mask | 1_u32.checked_shl(info.id).unwrap_or(0)),
         object_max: MAX_OBJECT_BYTES,
     });
     let share = port
@@ -608,9 +629,10 @@ fn render_introduce(
         control,
         work,
         window,
-        capset,
+        capsets,
         stream,
         backings: [const { None }; MAX_BACKINGS],
+        mapped: [0; MAX_BACKINGS],
     }))
 }
 
@@ -627,8 +649,9 @@ struct RenderSide {
     /// The work VMO pinned read-only for the device, which then reads a
     /// command buffer where it lies.
     window: Option<WorkWindow>,
-    /// The capability set HELLO named, which `GET_CAPS` fetches.
-    capset: Option<gpu::CapsetInfo>,
+    /// The capability sets HELLO named, which `GET_CAPS` fetches: virgl's
+    /// and Venus's.
+    capsets: [Option<gpu::CapsetInfo>; 2],
     /// Where a command buffer is copied to on its way from the work VMO,
     /// which this process may read and may not map, to the command area.
     stream: Stream,
@@ -637,6 +660,9 @@ struct RenderSide {
     /// device would not let its object go, which is the rule that pages a
     /// device may still hold are never unpinned.
     backings: [Option<Backing>; MAX_BACKINGS],
+    /// The blobs mapped into the device's window, by object; 0 is none. One
+    /// is taken out of the window before it goes.
+    mapped: [u32; MAX_BACKINGS],
 }
 
 /// One mappable object's backing, pinned for the device.
@@ -819,6 +845,27 @@ fn drop_object(
     side: &mut RenderSide,
     object: u32,
 ) -> Result<ferrix_renderctl::message::Message, Step> {
+    // A mapped blob leaves the window first. One the device would not take
+    // out stays, and so does its place: the core gives a place back only for
+    // an object that went.
+    if let Some(slot) = side.mapped.iter().position(|held| *held == object) {
+        let unmapped = run_command(
+            driver,
+            port,
+            &Command::ResourceUnmapBlob {
+                resource_id: object,
+            },
+        )?;
+        if unmapped.is_err() {
+            return Ok(ferrix_renderctl::message::Message::ObjectGone {
+                object,
+                status: status_of(unmapped),
+            });
+        }
+        if let Some(held) = side.mapped.get_mut(slot) {
+            *held = 0;
+        }
+    }
     let gone = run_command(
         driver,
         port,
@@ -963,6 +1010,85 @@ fn make_object(
     answer(status)
 }
 
+/// Make one blob on the device, and map it into the window where the core
+/// said: Venus's host memory (`docs/GPU.md` §6.1).
+///
+/// Made in the context that named its `blob_id`, which is where the device
+/// asks for the memory; mapped as Linux maps one, straight after, so the
+/// core can hand a program its pages as soon as it is answered. A blob that
+/// could not be mapped is given back rather than left half-made: the core
+/// frees the id on anything but `Ok`.
+fn make_blob(
+    driver: &mut Gpu,
+    port: &Port<Kernel>,
+    side: &mut RenderSide,
+    make: &ferrix_renderctl::message::MakeBlob,
+) -> Result<ferrix_renderctl::message::Message, Step> {
+    use ferrix_renderctl::message::{Message as RenderMessage, NO_WINDOW, Status};
+
+    let answer = |status, map_info| {
+        Ok(RenderMessage::BlobMade {
+            object: make.object,
+            status,
+            map_info,
+        })
+    };
+    let slot = if make.window == NO_WINDOW {
+        None
+    } else {
+        let Some(slot) = side.mapped.iter().position(|held| *held == 0) else {
+            return answer(Status::OutOfMemory, 0);
+        };
+        Some(slot)
+    };
+    let made = run_command_in(
+        driver,
+        port,
+        in_context(make.context),
+        &Command::ResourceCreateBlob {
+            resource_id: make.object,
+            blob_mem: make.memory,
+            blob_flags: make.flags,
+            blob_id: make.blob_id,
+            size: make.bytes,
+            entries: &[],
+        },
+    )?;
+    if made.is_err() {
+        return answer(status_of(made), 0);
+    }
+    let Some(slot) = slot else {
+        return answer(Status::Ok, 0);
+    };
+    let mapped = run_command(
+        driver,
+        port,
+        &Command::ResourceMapBlob {
+            resource_id: make.object,
+            offset: make.window,
+        },
+    )?;
+    if let Ok(Response::MapInfo { map_info }) = mapped {
+        if let Some(held) = side.mapped.get_mut(slot) {
+            *held = make.object;
+        }
+        return answer(Status::Ok, map_info);
+    }
+    let status = if mapped.is_ok() {
+        Status::Invalid
+    } else {
+        status_of(mapped)
+    };
+    let _ = run_command(
+        driver,
+        port,
+        &Command::ResourceUnref {
+            resource_id: make.object,
+        },
+    )?;
+    answer(status, 0)
+}
+
 /// A context's header fields: its id, and no fence.
 const fn in_context(id: u32) -> gpu::Context {
     gpu::Context {
@@ -1029,7 +1155,13 @@ fn get_caps(
             .map_err(|_| Step::Control)
             .map(Some)
     };
-    let Some(info) = side.capset.filter(|info| info.id == capset) else {
+    let Some(info) = side
+        .capsets
+        .iter()
+        .flatten()
+        .find(|info| info.id == capset)
+        .copied()
+    else {
         return refuse(Status::Invalid);
     };
     if info.max_size > CAPSET_ROOM {
@@ -1876,7 +2008,18 @@ impl Serving {
                 let at = submit.commands.at as usize;
                 let len = submit.commands.len as usize;
                 let mut runs = [(0_u64, 0_u32); MAX_STREAM_RUNS];
-                let context = in_context(submit.context);
+                // On a ring, the stream is fenced there, and the device
+                // answers it only when the host has finished it: that answer
+                // is what a program's fence descriptor waits for.
+                let context = if submit.ring == ferrix_renderctl::message::NO_RING {
+                    in_context(submit.context)
+                } else {
+                    gpu::Context {
+                        id: submit.context,
+                        fence: Some(submit.fence),
+                        ring: u8::try_from(submit.ring).ok(),
+                    }
+                };
                 // Where the core wrote it, if the work VMO is pinned; copied
                 // through this process otherwise.
                 let posted = if let Some(count) = side
@@ -1959,6 +2102,7 @@ impl Serving {
             RenderMessage::DropObject { object } => {
                 drop_object(&mut self.driver, &self.port, side, object)?
             }
+            RenderMessage::MakeBlob(make) => make_blob(&mut self.driver, &self.port, side, &make)?,
             RenderMessage::GetCaps { capset, version } => {
                 // Its reply carries a handle, so it is written there.
                 let _ = get_caps(&mut self.driver, &self.port, side, capset, version)?;

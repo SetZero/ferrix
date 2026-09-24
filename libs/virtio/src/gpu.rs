@@ -85,7 +85,12 @@ pub const DRIVER_FEATURES: u64 = FEATURE_VERSION_1 | FEATURE_ACCESS_PLATFORM;
 /// what the device does: QEMU brings virglrenderer up for a driver that
 /// took [`FEATURE_VIRGL`], and a boot that is judged on the 2D path has no
 /// business asking for that.
-pub const DRIVER_FEATURES_3D: u64 = DRIVER_FEATURES | FEATURE_VIRGL | FEATURE_CONTEXT_INIT;
+///
+/// [`FEATURE_RESOURCE_BLOB`] is accepted with them, for Venus: a device
+/// offers it only with `blob=on`, and granting it changes nothing a virgl
+/// renderer does -- it only lets the driver send the blob commands.
+pub const DRIVER_FEATURES_3D: u64 =
+    DRIVER_FEATURES | FEATURE_VIRGL | FEATURE_CONTEXT_INIT | FEATURE_RESOURCE_BLOB;
 
 /// The features without which the driver gives up.
 pub const REQUIRED_FEATURES: u64 = FEATURE_VERSION_1;
