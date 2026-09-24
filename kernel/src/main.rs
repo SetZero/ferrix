@@ -462,10 +462,11 @@ fn check_signalfd() {
     );
 }
 
-/// Stage 13's cgroupfs, landings G2 to G4: the job tree mounted as cgroup2,
+/// Stage 13's cgroupfs, landings G2 to G5: the job tree mounted as cgroup2,
 /// driven through the VFS as a program would drive it, `cgroup.events`
-/// waited on with epoll, a subtree delegated by `chown`, and a child started
-/// in a cgroup by `clone3`.
+/// waited on with epoll, a subtree delegated by `chown`, a child started in
+/// a cgroup by `clone3`, and a cgroup's job waited on for `EMPTY` through a
+/// handle `job_for_cgroup` gave.
 fn check_cgroupfs() {
     let checked = match fs::cgroupfs::check() {
         Ok(checked) => checked,
@@ -478,11 +479,13 @@ fn check_cgroupfs() {
         "  cgroups  {} cgroups made and removed through cgroup2, a process moved in by its pid \
          and ended by cgroup.kill, {} writes and names refused as Linux refuses them, {} epoll \
          wait on cgroup.events woken with EPOLLPRI by the last release and not before, {} moves \
-         judged by delegation to uid 1000, {}",
+         judged by delegation to uid 1000, {} native waits for EMPTY fired with the populated \
+         flip, {}",
         checked.made,
         checked.refusals,
         checked.woken,
         checked.moves,
+        checked.emptied,
         if checked.cloned {
             "a child started by CLONE_INTO_CGROUP in its cgroup from its first instruction"
         } else {

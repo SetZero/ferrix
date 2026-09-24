@@ -138,7 +138,7 @@ sizes them.
 | ~~Dynamic linking: ferrousli's AArch64 and ARMv7-A port, which the customer put inside the stage on 2026-09-21~~ *done 2026-09-23* | ~~≈ 34~~ | done |
 | ~~Stage 12, btrfs write~~ *done 2026-09-21* | ~~≈ 60~~ | done |
 | ~~sysfs, fed by the services that own each fact (`docs/SYSFS.md`)~~ *done 2026-09-24* | ~~26~~ | done |
-| Stage 13, namespaces, cgroups, seccomp | cgroups 85 (`docs/CGROUPS.md` §7: 27 for what init needs, 58 for the controllers); namespaces and seccomp unsized, the old guess for the whole stage was *month* ≈ 60 | under way: G1 to G4 done (24 of 85), which is all init's first boot needs; its cgroups come first, as init's prerequisite (`docs/INIT.md` §0) |
+| Stage 13, namespaces, cgroups, seccomp | cgroups 85 (`docs/CGROUPS.md` §7: 27 for what init needs, 58 for the controllers); namespaces and seccomp unsized, the old guess for the whole stage was *month* ≈ 60 | under way: G1 to G5 done (27 of 85), which is all init needs from it, C8 for native services included; its cgroups come first, as init's prerequisite (`docs/INIT.md` §0); the controllers are next, `pids` first |
 | Stage 22, Steam: the parts with a first guess (bubblewrap's rest 13, sound 30, Venus 8; glibc's names are dynamic linking's 13 and XWayland stage 19's, both counted above) | 51 | not started |
 | Stage 22, Steam: the 32-bit x86 ABI and what the runtime and Proton find missing | unsized, ≈ 100 as a guess | not started |
 | Stage 14, real-time domains | *month* ≈ 40 | not started |
@@ -4188,9 +4188,25 @@ as the user `ferrix` in a subtree `chown`ed to it; each has a negative
 control. Init's C3 and C7 are met, so C1 to C5 and C7 are: nothing of stage
 13 stands before init's first boot any more.
 
-**Still to do:** G5 (`EMPTY`, `job_for_cgroup`), which init's native
-services wait on; then the controllers. `docs/CGROUPS.md` §7.1 says where each starts in the code,
-how landings are gated now, and what cost a gate on 2026-09-23.
+**Done -- G5, `EMPTY` and `job_for_cgroup` (2026-09-24, 3 points).** A job
+asserts the native signal `EMPTY` while it is not populated, a level that
+clears when a process arrives, and a port registration for it fires at the
+flip that empties the job. `job_for_cgroup` (0x102A) gives a handle to the
+job behind a cgroupfs directory descriptor, with `WAIT` for whoever may
+read its `cgroup.procs` and `MANAGE` as well for whoever may write it; no
+call goes the other way. `libs/native` wraps it as `job::for_cgroup`. The
+`cgroups` boot check asks for the handle as root and as uid 1000, and
+requires a registration for `EMPTY` to stay quiet through one member's
+release and fire at the last, with `cgroup.events` already `populated 0`;
+its negative control, `notify` firing no registration, fails by the check's
+own message. A native job made inside a cgroup shows as `job-<id>`, as
+`devmgr`'s drivers do under `drivers.slice`. Init's C8 is met, so every
+`Type=native` service init's L8 starts has what it waits on.
+
+**Still to do:** the controllers, `pids` (P1) first, then `memory` (M1,
+M2), then freezing, `cpu` and `io`. `docs/CGROUPS.md` §7.1 says where each
+starts in the code, how landings are gated now, and what cost a gate on
+2026-09-23.
 
 ---
 

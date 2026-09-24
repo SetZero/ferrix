@@ -28,6 +28,11 @@
 //! made under [`TREE`], one lock for the whole tree, so that a flip of a child
 //! and the matching change to its parent cannot be applied out of order.
 //!
+//! The same state is native `EMPTY` (`docs/CGROUPS.md` §5): a level a job
+//! asserts while it is not populated, which [`notify`] fires registrations
+//! for at the flip, so a native service manager holding the job, from
+//! `job_for_cgroup`, waits for it where a Linux one polls `cgroup.events`.
+//!
 //! # Two kills
 //!
 //! [`Job::kill`] is the native `job_kill`: it ends everything and seals the
@@ -62,7 +67,7 @@ use ferrix_cgroupfs::write::Limit;
 use ferrix_native_abi::signals::Signals;
 use ferrix_sync::Once;
 
-use super::port::{Observer, PortError, register};
+use super::port::{Observer, PortError, register, triggered};
 use crate::sched::WaitQueue;
 use crate::syscall::process::{self, Process};
 use crate::syscall::registry;
@@ -130,7 +135,8 @@ pub(crate) struct Job {
     name: Option<Box<str>>,
     /// Its members' counts, its children, and whether it has been killed.
     state: SpinLock<Members>,
-    /// Woken when it is killed, for anything waiting on `TERMINATED`.
+    /// Woken when it is killed and whenever it becomes populated or empty,
+    /// for a native wait on `TERMINATED` or `EMPTY`.
     waiters: WaitQueue,
     /// Woken whenever it becomes populated or empty. Shared, so that a
     /// `poll` of its `cgroup.events` can hold it for as long as it sleeps.
@@ -171,7 +177,7 @@ struct Members {
     live: usize,
     /// Its children that are populated. Changed only under [`TREE`].
     busy: usize,
-    /// Port registrations waiting for it to be killed.
+    /// Port registrations waiting for it to be killed or to become empty.
     observers: Vec<Observer>,
     /// `cgroup.max.depth`: how many levels of jobs may be made beneath it.
     max_depth: Limit,
@@ -208,6 +214,19 @@ impl Members {
         self.live != 0 || self.busy != 0
     }
 
+    /// Its native signals: `TERMINATED` once killed, `EMPTY` while not
+    /// populated.
+    fn signals(&self) -> Signals {
+        let mut signals = Signals::NONE;
+        if self.killed {
+            signals = signals | Signals::TERMINATED;
+        }
+        if !self.populated() {
+            signals = signals | Signals::EMPTY;
+        }
+        signals
+    }
+
     /// Where it stands for the no-internal-process rule, a root or not.
     fn standing(&self, root: bool) -> Standing {
         Standing {
@@ -231,10 +250,29 @@ impl Members {
 /// lock is let go ([`notify`]).
 pub(crate) type Flipped = Vec<Arc<Job>>;
 
-/// Wake whatever waits on each job a count change flipped.
+/// Wake whatever waits on each job a count change flipped: a poll of its
+/// `cgroup.events`, a native wait on its handle, and the port registrations
+/// waiting for [`Signals::EMPTY`], which fire if the job is empty now.
+///
+/// "Now", under its lock, and not "when it flipped": a job that filled again
+/// between the flip and here no longer asserts `EMPTY`, and a registration
+/// is for a level, so it waits on. One made in between found the job empty
+/// and fired as it was made ([`Job::observe`]), so none is lost either way.
 pub(crate) fn notify(flipped: Flipped) {
     for job in flipped {
+        let emptied = {
+            let mut members = job.state.lock();
+            if members.populated() {
+                Vec::new()
+            } else {
+                triggered(&mut members.observers, Signals::EMPTY)
+            }
+        };
+        for observer in emptied {
+            observer.fire(Signals::EMPTY);
+        }
         job.events.wake_all();
+        job.waiters.wake_all();
     }
 }
 
@@ -649,8 +687,12 @@ impl Job {
         false
     }
 
-    /// Queue a packet with `observer` when this job is killed, or at once if
-    /// it already has been.
+    /// Queue a packet with `observer` when this job is killed or becomes
+    /// empty, whichever it waits for, or at once if that is so already.
+    ///
+    /// Decided under the lock every count change is made under, so a
+    /// registration either finds the job empty and fires here, or is listed
+    /// before the last member leaves and is fired by [`notify`].
     ///
     /// # Errors
     ///
@@ -658,12 +700,19 @@ impl Job {
     /// [`super::port::MAX_OBSERVERS`] registrations.
     pub(crate) fn observe(&self, observer: Observer) -> Result<(), PortError> {
         let mut members = self.state.lock();
-        if members.killed {
+        let asserted = members.signals();
+        if observer.wants(asserted) {
             drop(members);
-            observer.fire(Signals::TERMINATED);
+            observer.fire(asserted);
             return Ok(());
         }
         register(&mut members.observers, observer)
+    }
+
+    /// What a native waiter on it sees: [`Signals::TERMINATED`] once it has
+    /// been killed, and [`Signals::EMPTY`] while it is not populated.
+    pub(crate) fn signals(&self) -> Signals {
+        self.state.lock().signals()
     }
 
     /// Whether it has been killed.
@@ -671,7 +720,7 @@ impl Job {
         self.state.lock().killed
     }
 
-    /// The queue woken when it is killed.
+    /// The queue woken when it is killed, becomes empty or fills.
     pub(crate) fn waiters(&self) -> &WaitQueue {
         &self.waiters
     }
@@ -730,7 +779,9 @@ impl Job {
         let mut observers = Vec::new();
         let jobs = self.walk(|members| {
             members.killed = true;
-            observers.append(&mut members.observers);
+            // Only those waiting for the kill: one waiting for `EMPTY` alone
+            // waits on for the members to end.
+            observers.append(&mut triggered(&mut members.observers, Signals::TERMINATED));
         });
         for observer in observers {
             observer.fire(Signals::TERMINATED);

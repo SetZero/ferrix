@@ -45,6 +45,7 @@ use ferrix_native_abi::types::{
 use ferrix_objects::message::Message;
 use ferrix_objects::reach::Reach;
 use ferrix_objects::table::TableError;
+use ferrix_vfs::access::{MAY_READ, MAY_WRITE};
 use ferrix_vma::VmaFlags;
 
 use crate::block_ring;
@@ -58,6 +59,7 @@ use crate::object::port::{Observer, Port};
 use crate::object::{self, HandleTable, Object};
 use crate::syscall::SyscallArgs;
 use crate::syscall::exec;
+use crate::syscall::fd;
 use crate::syscall::load::LoadError;
 use crate::syscall::process::{self, Process, ProcessRef};
 use crate::syscall::uaccess::{self, UserError};
@@ -146,6 +148,7 @@ pub(crate) fn dispatch(args: &SyscallArgs, process: Option<&Process>) -> Result<
         NativeCall::ObjectWaitOne => object_wait_one(process, handle(a[0]), a[1], a[2], a[3]),
         NativeCall::JobCreate => job_create(process, handle(a[0])),
         NativeCall::JobKill => job_kill(process, handle(a[0])),
+        NativeCall::JobForCgroup => job_for_cgroup(process, a[0], a[1]),
         NativeCall::ProcessCreate => process_create(
             process,
             handle(a[0]),
@@ -862,6 +865,36 @@ fn job_kill(process: &Process, job: Handle) -> Result<usize, Errno> {
     let job = job_in(process, job, Rights::MANAGE)?;
     let _ended = job.kill(job::KILLED_STATUS);
     Ok(0)
+}
+
+/// `job_for_cgroup`: a handle to the job behind a cgroupfs directory, with
+/// the rights the caller's access to its `cgroup.procs` allows
+/// (`docs/CGROUPS.md` §5): `WAIT` to read it, `MANAGE` as well to write it,
+/// and `DUPLICATE` and `TRANSFER` with either, so a service manager can hand
+/// the handle on. It is judged as the caller, whoever opened the descriptor,
+/// since what is made is a new capability and not a use of the open file.
+///
+/// One way only: nothing names a cgroup's path from a job handle, because a
+/// handle is a capability and a path is not.
+fn job_for_cgroup(process: &Process, dirfd: u64, rights: u64) -> Result<usize, Errno> {
+    let requested = Requested::from_register(rights).ok_or(status::INVALID_ARGS)?;
+    let file = fd::file(process, fd::arg(dirfd)).map_err(|_| status::BAD_HANDLE)?;
+    let (job, procs) = crate::fs::cgroupfs::directory_job(&file).ok_or(status::WRONG_TYPE)?;
+    drop(file);
+    if job.is_removed() {
+        return Err(status::BAD_STATE);
+    }
+    let who = crate::fs::cgroupfs::access_of(process);
+    let passed = Rights::DUPLICATE | Rights::TRANSFER;
+    let allowed = if who.permitted(&procs, MAY_WRITE) {
+        passed | Rights::WAIT | Rights::MANAGE
+    } else if who.permitted(&procs, MAY_READ) {
+        passed | Rights::WAIT
+    } else {
+        return Err(status::ACCESS_DENIED);
+    };
+    let granted = requested.resolve(allowed).ok_or(status::ACCESS_DENIED)?;
+    insert_new(process, Object::Job(job), granted)
 }
 
 /// The largest ELF image `process_create` reads out of a VMO: sixteen

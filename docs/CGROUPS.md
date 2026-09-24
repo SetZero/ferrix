@@ -5,7 +5,7 @@ which the customer put first that day, and builds on the customer's decision
 of the same day that **every cgroup is backed by a `Job`** (`docs/INIT.md` §0,
 C8; `docs/BACKLOG.md`, Decisions). `docs/INIT.md` §0.1 is what the first user
 needs from this; `docs/ARCHITECTURE.md` §3 and §6 are the architecture. G1 to
-G4 (§7) are built. §9 lists what is still the customer's to decide.
+G5 (§7) are built. §9 lists what is still the customer's to decide.
 
 ## 1. What this is, and what it is not
 
@@ -329,12 +329,15 @@ follow, as `docs/BACKLOG.md` decided.
 | G1 | done | 2a56325b |
 | G2 | done | ae76c099, and 491aeb1f for the two lock files it left out |
 | G3 | done, 2026-09-24 | 02bfbe69 |
-| G4 | done, 2026-09-24 | "Start a child in a cgroup with clone3, and hand a subtree to a user by chown" |
-| G5, P1, M1, M2, F1, S1, S2, B1 | not started | |
+| G4 | done, 2026-09-24 | 410aef15 |
+| G5 | done, 2026-09-24 | "Wait for a cgroup to empty through a native job handle" |
+| P1, M1, M2, F1, S1, S2, B1 | not started | |
 
-61 of the cgroup half's 85 points are left, and none of them stands before
-`docs/INIT.md`'s first boot: G1 to G4 met C1 to C5 and C7. G5 (C8) is what
-`Type=native` services wait on (init's L8).
+58 of the cgroup half's 85 points are left, all of them controllers, and
+none stands before anything of `docs/INIT.md`: G1 to G5 met C1 to C5, C7
+and C8. Init's L5 writes `TasksMax=` and `MemoryMax=` to the `pids` and
+`memory` files P1 and M1 make, and until they land it has nothing to write
+them to.
 
 **G3, as built (3 points).** §4 says what it is. The `cgroups` boot check
 (`kernel/src/fs/cgroupfs/events_check.rs`) gives a cgroup two members, reads
@@ -369,11 +372,45 @@ numbers, which were one number for every file of a cgroup: `file_slot`
 compared addresses in a `const` table, which need not be the same table
 twice.
 
+**G5, as built (3 points).** §5 says what it is. `Job::signals` reports
+`EMPTY` from the job's own counts, `Job::observe` fires a registration at
+once when the job already asserts what it waits for, and `job::notify`,
+which the count walk's caller runs once every lock is let go, fires the
+`EMPTY` registrations of each job that is empty by then and wakes its
+native waiters beside `events`. A job kill fires only the registrations
+waiting for `TERMINATED`, so one for `EMPTY` waits on for the members to
+end. `job_for_cgroup` judges the caller, not whoever opened the
+descriptor, since it makes a new capability rather than using the file:
+`DUPLICATE`, `TRANSFER` and `WAIT` to a reader of `cgroup.procs`, and
+`MANAGE` too to a writer. The check (`kernel/src/fs/cgroupfs/native_check.rs`,
+under the `cgroups` boot line) drives it through the native dispatch; its
+negative control, `notify` firing no registration, fails by the check's own
+message ("the last member's release fired no EMPTY packet with its key").
+`devmgr`'s jobs were under `drivers.slice` since G1, each a `job-<id>`
+there.
+
 **What the next session does first, and where each starts.**
 
-* **G5, `EMPTY` and `job_for_cgroup`** (3 points). `Signals` in
-  `libs/native-abi/src/signals.rs` gains bit 4. The job's count walk (G1)
-  is where it flips, beside `events`. The call number is 0x102A.
+* **P1, `pids`** (3 points). `BUILT` in `kernel/src/fs/cgroupfs.rs` gains
+  `pids`, and `libs/cgroupfs`'s `files` a table of controller files beside
+  the base ones (`pids.max`, `pids.current`, `pids.events`), each listed
+  only where the parent's `subtree_control` enables it. The charge is per
+  task, hierarchical, and taken where §6 says: in `clone_with` for the job
+  the child will be in, read once and passed to `Process::forked_into`
+  (so a move of the parent cannot split the charge from the membership),
+  in `native::process_create` against the target job before
+  `exec::load_native` makes the process, and in `clone_thread` before
+  `registry::allocate_thread`; each is let go at `Drop for Process` and
+  at a thread's `release_thread`. Keep the count on `Members` beside
+  `live`, changed under `TREE`, and move a process's charge with it in
+  `Process::move_to` without a limit check, as Linux's `pids_can_attach`
+  does. `pids.events`' `max` is an `EventsFile`-like file over a queue of
+  its own. With a controller built, the no-internal-process rule becomes
+  reachable: close G4's race by counting a `CLONE_INTO_CGROUP` child in
+  with `count_in_checked`, failing the fork (`EBUSY`) when the target
+  turned internal after `cgroup_target` looked.
+* **M1, `memory` charging** (13 points), after P1: §6, and §8's warning
+  about the seven allocation sites.
 
 **How a landing was gated today, and what to keep.** The customer's rule
 since 2026-09-23: `cargo xtask check` plus only the rows the change

@@ -30,9 +30,15 @@ impl Signals {
     pub const PEER_CLOSED: Signals = Signals(1 << 2);
     /// A process or job has ended. Asserted once and never cleared.
     pub const TERMINATED: Signals = Signals(1 << 3);
+    /// A job holds no process that has not ended, neither of its own nor in a
+    /// job beneath it: what `cgroup.events` reports as `populated 0`
+    /// (`docs/CGROUPS.md` §5). Unlike [`Signals::TERMINATED`] it is a level
+    /// that comes and goes: cleared when a process arrives, asserted again
+    /// when the last one ends. A job nothing was ever put in asserts it.
+    pub const EMPTY: Signals = Signals(1 << 4);
 
     /// Every defined signal.
-    pub const ALL: Signals = Signals(0xF);
+    pub const ALL: Signals = Signals(0x1F);
 
     /// Whether any signal in `other` is also in `self`.
     ///

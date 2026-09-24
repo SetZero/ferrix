@@ -1687,7 +1687,7 @@ fn check_a_wait_is_woken_by_what_it_waits_for(counter: &mut Counter) -> Result<(
         counter,
     )?;
     refused(
-        wait(1 << 4),
+        wait(1 << 5),
         status::INVALID_ARGS,
         "a wait for a signal that does not exist was accepted",
         counter,

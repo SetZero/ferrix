@@ -1683,7 +1683,14 @@ lookup; uid 1000 must be able to mkdir in the cgroup it was given and not in
 root's, open its own cgroup.procs for writing and not root's, move a process
 within its subtree and back, and be refused EACCES moving it out, even to a
 cgroup.procs it owns; a cgroup rmdir removed must refuse a move and a mkdir with
-ENODEV.
+ENODEV. Landing G5: native job_for_cgroup must answer the job behind a cgroup
+directory, with every right a job carries for root and WAIT without MANAGE for
+uid 1000, and refuse a descriptor not open, one of /tmp and an unknown right;
+the job must assert EMPTY while nothing is in it and not while it has members,
+and a port registration for EMPTY must stay quiet through the first member's
+release and fire at the last, at once, with cgroup.events saying `populated 0`;
+one made on an empty job fires as it is made; a native job made inside shows as
+`job-<id>`, keeps the cgroup from rmdir, and goes when its handle closes.
 
 1. `forked_into` in kernel/src/syscall/process.rs or
    `clone_with`/`cgroup_target` in kernel/src/syscall/family.rs put the child in
@@ -1706,8 +1713,13 @@ ENODEV.
    cgroup.procs or cgroup.events disagree with where the process is.
 8. `Job::kill_members` did not find the member through the registry, or sealed
    the job.
-9. A write's text is parsed differently from Linux's: libs/cgroupfs, whose host
-   tests pin each parse.
+9. `job::notify` did not fire the job's EMPTY registrations at the flip,
+   `Job::observe` did not fire one on an empty job at once, or `Job::signals`
+   does not report EMPTY; or `job_for_cgroup` in kernel/src/syscall/native.rs
+   judged the rights by someone other than the caller, or
+   `cgroupfs::directory_job` did not recognise a cgroup directory.
+10. A write's text is parsed differently from Linux's: libs/cgroupfs, whose host
+    tests pin each parse.
 
 See: kernel/src/fs/cgroupfs.rs; kernel/src/object/job.rs; libs/cgroupfs;
 docs/CGROUPS.md.

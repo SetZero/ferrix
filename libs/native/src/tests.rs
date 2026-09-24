@@ -31,7 +31,7 @@ use crate::channel::{self, Channel, ReadError, Received};
 use crate::device::{Device, Interrupt, IoMapping};
 use crate::error::{Error, decode, decode_handle};
 use crate::handle::{Deadline, Object, OwnedHandle, rights_register};
-use crate::job::Job;
+use crate::job::{self, Job};
 use crate::pending::{self, Process, Protection};
 use crate::pin::{Addresses, Pin, PinAccess, device_address};
 use crate::port::{self, Port};
@@ -631,6 +631,27 @@ fn job_calls_name_the_job() {
 }
 
 #[test]
+fn a_job_is_had_for_a_cgroup_by_its_descriptor() {
+    let sys = Recorder::default();
+    sys.returns(0x93);
+    let job = job::for_cgroup(&sys, 5, Requested::Exactly(Rights::WAIT)).unwrap();
+    sys.fails(status::ACCESS_DENIED);
+    assert_eq!(
+        job::for_cgroup(&sys, -1, Requested::Same).unwrap_err(),
+        Error::AccessDenied
+    );
+    drop(job);
+    assert_eq!(
+        sys.take(),
+        [
+            made(nr::JOB_FOR_CGROUP, &[5, Rights::WAIT.0 as usize]),
+            made(nr::JOB_FOR_CGROUP, &[0xFFFF_FFFF, SAME_RIGHTS as usize]),
+            made(nr::HANDLE_CLOSE, &[0x93]),
+        ]
+    );
+}
+
+#[test]
 fn a_device_hands_out_interrupts_and_apertures() {
     let sys = Recorder::default();
     let device = Device::from_owned(owned(&sys, 0xA1));
@@ -896,6 +917,7 @@ fn every_call_in_the_native_table_has_a_wrapper() {
     let _ = vmo.map(None, 1, Protection::Read, 0);
     let _ = job.create_child();
     let _ = job.kill();
+    let _ = job::for_cgroup(&sys, 0, Requested::Same);
     let _ = device.interrupt(0);
     let _ = device.block_ring();
     let _ = device.net_ring();

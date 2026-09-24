@@ -83,12 +83,11 @@ impl Object {
         match self {
             Object::Channel(endpoint) => endpoint.signals(),
             Object::Vmo(_) => Signals::NONE,
-            Object::Job(job) if job.is_killed() => Signals::TERMINATED,
+            Object::Job(job) => job.signals(),
             Object::Interrupt(interrupt) if interrupt.is_pending() => Signals::READABLE,
             Object::Port(port) if !port.is_empty() => Signals::READABLE,
             Object::Process(process) if process.exit().is_closed() => Signals::TERMINATED,
-            Object::Job(_)
-            | Object::Device(_)
+            Object::Device(_)
             | Object::Interrupt(_)
             | Object::IoMapping(_)
             | Object::Pin(_)

@@ -58,6 +58,8 @@ pub const VMO_PIN_ADDRESSES: usize = 0x1026;
 pub const JOB_CREATE: usize = 0x1028;
 /// [`NativeCall::JobKill`].
 pub const JOB_KILL: usize = 0x1029;
+/// [`NativeCall::JobForCgroup`].
+pub const JOB_FOR_CGROUP: usize = 0x102A;
 
 /// [`NativeCall::ProcessCreate`].
 pub const PROCESS_CREATE: usize = 0x1030;
@@ -168,6 +170,17 @@ pub enum NativeCall {
     /// `(job)`. End every process in the job and every job inside it. Needs
     /// `MANAGE`.
     JobKill,
+    /// `(dirfd, rights)` → handle. The job behind the cgroupfs directory the
+    /// descriptor `dirfd` is open on (`docs/CGROUPS.md` §5): the one bridge
+    /// from a cgroup path to a job handle, and one way only. The handle
+    /// carries `DUPLICATE` and `TRANSFER`, `WAIT` if the caller may read that
+    /// directory's `cgroup.procs`, and `MANAGE` too if it may write it;
+    /// `rights` asks for a subset of those, or for all of them with
+    /// [`crate::rights::SAME_RIGHTS`]. `BAD_HANDLE` for a descriptor not
+    /// open, `WRONG_TYPE` for one that is not a cgroup directory,
+    /// `ACCESS_DENIED` for rights past the caller's access, `BAD_STATE` for a
+    /// cgroup `rmdir` removed.
+    JobForCgroup,
     /// `(job, image, name, name_len)` → handle. Make a process in `job` from
     /// the ELF image the VMO holds, not yet running: the image is read out of
     /// the VMO and loaded as the process's own memory, with nothing on its
@@ -229,7 +242,7 @@ pub enum NativeCall {
 }
 
 /// Every native call, in number order.
-pub const ALL: [NativeCall; 34] = [
+pub const ALL: [NativeCall; 35] = [
     NativeCall::HandleClose,
     NativeCall::HandleDuplicate,
     NativeCall::HandleReplace,
@@ -250,6 +263,7 @@ pub const ALL: [NativeCall; 34] = [
     NativeCall::VmoPinAddresses,
     NativeCall::JobCreate,
     NativeCall::JobKill,
+    NativeCall::JobForCgroup,
     NativeCall::ProcessCreate,
     NativeCall::ProcessStart,
     NativeCall::InterruptCreate,
@@ -299,6 +313,7 @@ pub const fn decode(number: usize) -> Option<NativeCall> {
         VMO_PIN_ADDRESSES => NativeCall::VmoPinAddresses,
         JOB_CREATE => NativeCall::JobCreate,
         JOB_KILL => NativeCall::JobKill,
+        JOB_FOR_CGROUP => NativeCall::JobForCgroup,
         PROCESS_CREATE => NativeCall::ProcessCreate,
         PROCESS_START => NativeCall::ProcessStart,
         INTERRUPT_CREATE => NativeCall::InterruptCreate,
@@ -342,6 +357,7 @@ pub const fn number(call: NativeCall) -> usize {
         NativeCall::VmoPinAddresses => VMO_PIN_ADDRESSES,
         NativeCall::JobCreate => JOB_CREATE,
         NativeCall::JobKill => JOB_KILL,
+        NativeCall::JobForCgroup => JOB_FOR_CGROUP,
         NativeCall::ProcessCreate => PROCESS_CREATE,
         NativeCall::ProcessStart => PROCESS_START,
         NativeCall::InterruptCreate => INTERRUPT_CREATE,

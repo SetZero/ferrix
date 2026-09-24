@@ -56,6 +56,7 @@ use crate::syscall::registry;
 
 mod delegation_check;
 mod events_check;
+mod native_check;
 
 /// The result every operation here returns.
 type Result<T> = core::result::Result<T, Errno>;
@@ -282,6 +283,20 @@ pub(crate) fn clone_target(file: &OpenFile, parent: &Process, from: &Arc<Job>) -
     who.require(&procs_metadata(to, &directory.shared), MAY_WRITE)?;
     attach_permissions(&who, from, to, &directory.shared)?;
     Ok(Arc::clone(to))
+}
+
+/// The job behind the cgroupfs directory `file` is open on, `O_PATH` or not,
+/// with the metadata of that directory's `cgroup.procs`, by whose permissions
+/// native `job_for_cgroup` decides what a handle to it may do
+/// (`docs/CGROUPS.md` §5). `None` for a file that is not a cgroup directory,
+/// a file inside one included, as [`clone_target`] refuses it.
+pub(crate) fn directory_job(file: &OpenFile) -> Option<(Arc<Job>, Metadata)> {
+    let directory = Arc::clone(file.inode())
+        .into_any()
+        .downcast::<Directory>()
+        .ok()?;
+    let procs = procs_metadata(&directory.job, &directory.shared);
+    Some((Arc::clone(&directory.job), procs))
 }
 
 /// A job's directory.
@@ -768,6 +783,8 @@ pub(crate) struct Report {
     pub(crate) moves: u32,
     /// Whether a child started by `CLONE_INTO_CGROUP` found itself there.
     pub(crate) cloned: bool,
+    /// Native registrations for `EMPTY` fired by the populated flip.
+    pub(crate) emptied: u32,
 }
 
 /// Where [`check`] mounts its cgroupfs: under `/tmp`, and gone afterwards.
@@ -918,6 +935,7 @@ pub(crate) fn check() -> Checked<Report> {
     let delegated = delegation_check::run(&mut harness)?;
     harness.report.moves = delegated.moves;
     harness.report.cloned = delegated.cloned;
+    harness.report.emptied = native_check::run(&mut harness)?;
 
     let root = ns
         .resolve(&harness.ctx, None, CHECK_AT, true)

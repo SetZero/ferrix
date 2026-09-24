@@ -184,7 +184,12 @@ fn a_wait_for_an_undefined_signal_is_refused() {
         Some(Signals::ALL),
         "every defined signal"
     );
-    assert_eq!(Signals::from_register(1 << 4), None, "bit 4");
+    assert_eq!(
+        Signals::from_register(1 << 4),
+        Some(Signals::EMPTY),
+        "bit 4 is a job's EMPTY"
+    );
+    assert_eq!(Signals::from_register(1 << 5), None, "bit 5");
     assert_eq!(Signals::from_register(1 << 40), None, "a high bit");
     assert!(
         (Signals::READABLE | Signals::PEER_CLOSED).intersects(Signals::PEER_CLOSED),
