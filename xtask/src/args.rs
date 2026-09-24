@@ -89,6 +89,10 @@ pub(crate) struct Args {
     /// `--to`, the mounted boot partition `flash` writes to. `None` means
     /// "find the only one".
     pub(crate) to: Option<String>,
+    /// `--stage`, a directory `flash` writes the card's files into instead of
+    /// a card: for a board on another machine than the build, whose card is
+    /// then given the directory's contents by hand.
+    pub(crate) stage: Option<String>,
     /// `--port`, the serial device `watch-serial` reads. `None` means "find
     /// the only one".
     pub(crate) port: Option<String>,
@@ -346,6 +350,7 @@ impl Args {
                 "--seeds" => args.seeds = number(&mut items, "--seeds")?,
                 "--accel" => args.accel = Some(value(&mut items, "--accel")?),
                 "--to" => args.to = Some(value(&mut items, "--to")?),
+                "--stage" => args.stage = Some(value(&mut items, "--stage")?),
                 "--port" => args.port = Some(value(&mut items, "--port")?),
                 "--init" => args.init = Some(value(&mut items, "--init")?),
                 "--init-path" => args.init_path = Some(init_path(&mut items)?),

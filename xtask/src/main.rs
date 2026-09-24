@@ -19,7 +19,7 @@
 //! cargo xtask ports     [--arch x86_64|aarch64|armv7a]
 //! cargo xtask omz       --from DIRECTORY-OR-URL
 //! cargo xtask zsh-functions --from DIRECTORY
-//! cargo xtask flash     [--arch armv7a] [--to MOUNT] [--compositor [--config PATH]]
+//! cargo xtask flash     [--arch armv7a] [--to MOUNT | --stage DIR] [--compositor [--config PATH]]
 //! cargo xtask watch-serial            [--port DEVICE] [--timeout SECONDS]
 //! cargo xtask deploy    [--arch armv7a] [--to MOUNT] [--port DEVICE]
 //! ```
@@ -296,6 +296,7 @@ OPTIONS:
     --reset                              test-boot: ferrix.onexit=reset in CMDLINE.TXT, and require a reset;
                                          build, run: put that CMDLINE.TXT in the image
     --to <MOUNT>                         flash: the card's mounted boot partition
+    --stage <DIR>                        flash: write the card's files into DIR instead, to copy by hand
     --compositor                         flash, deploy: the desktop run-compositor boots, not the self-checks
     --port <DEVICE>                      watch-serial: e.g. /dev/ttyACM0
     --init <PATH|ferrousli>              The busybox; {arch} is replaced. build, run, flash, deploy: [or FERRIX_INIT]
