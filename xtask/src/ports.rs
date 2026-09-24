@@ -33,8 +33,12 @@ use crate::{Error, Result, cargo};
 /// btop links against, and installs nothing an image carries. `sshdt` is Rust
 /// rather than C, built the way uutils is, and needs cargo's crates.io.
 /// `foot` is the Wayland terminal `docs/CHROME.md` starts from, built with
-/// every library it links and the one font it draws with.
-const PORTS: &[&str] = &["curl", "libcxx", "btop", "zlib", "git", "sshdt", "foot"];
+/// every library it links and the one font it draws with. `vkgears` is
+/// Vulkan's gears with Mesa's Venus driver linked into it (`docs/GPU.md`
+/// §6.1), and links libcxx's runtime.
+const PORTS: &[&str] = &[
+    "curl", "libcxx", "btop", "zlib", "git", "sshdt", "foot", "vkgears",
+];
 
 /// The ports AArch64 and ARMv7-A build, in order: git and what it links.
 const ARM_PORTS: &[&str] = &["curl", "zlib", "git"];
@@ -166,6 +170,12 @@ pub(crate) const FILES: &[Installed] = &[
         mode: 0o755,
         kind: Kind::Tree,
         port: "foot",
+    },
+    Installed {
+        path: "bin/vkgears",
+        mode: 0o755,
+        kind: Kind::File,
+        port: "vkgears",
     },
 ];
 
@@ -410,7 +420,7 @@ mod tests {
             // git links zlib and libcurl, which must be built first.
             let at = |port| ports.iter().position(|p| *p == port).unwrap();
             assert!(at("zlib") < at("git") && at("curl") < at("git"), "{arch}");
-            for port in ["btop", "libcxx", "sshdt", "foot"] {
+            for port in ["btop", "libcxx", "sshdt", "foot", "vkgears"] {
                 assert!(!ports.contains(&port), "{arch} {port}");
             }
             assert!(ports.iter().all(|port| PORTS.contains(port)), "{arch}");

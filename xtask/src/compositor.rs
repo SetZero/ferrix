@@ -4222,6 +4222,148 @@ pub(crate) fn test_foot(args: &Args) -> Result<()> {
     Ok(())
 }
 
+/// The configuration `test-vkgears` gives the compositor: vkgears, printing
+/// the Vulkan device it drew on before it starts.
+///
+/// `MESA_VK_WSI_DEBUG,sw` for `docs/GPU.md` §6.1's reason: until the
+/// compositor takes dmabuf, a frame the host's GPU drew is copied into
+/// shared memory and handed over as `wl_shm`, which is what Mesa's Wayland
+/// code does for a device it is told is a software one.
+const VKGEARS_CONFIG: &str = "\
+# Carried into the initramfs by `cargo xtask test-vkgears`.
+env = MESA_VK_WSI_DEBUG,sw
+exec-once = /bin/vkgears -info
+";
+
+/// Where the port installs vkgears, and so where the configuration starts it.
+const VKGEARS_PATH: &str = "bin/vkgears";
+
+/// What vkgears prints of the device it is drawing on, before its first frame.
+const VKGEARS_DEVICE: &str = "deviceName    = ";
+
+/// What Mesa's Venus driver calls every device it hands out: the host's own
+/// GPU, by its own name, after this.
+const VENUS_DEVICE: &str = "Virtio-GPU Venus";
+
+/// What vkgears prints every five seconds of drawing.
+const VKGEARS_FRAMES: &str = " frames in ";
+
+/// How long vkgears gets to start, reach the host's GPU through Venus and
+/// draw its first five seconds: a static program of a few megabytes read
+/// from the initramfs, then a Vulkan instance, device and pipeline made over
+/// the render node.
+const VKGEARS_PATIENCE: Duration = Duration::from_secs(120);
+
+/// `test-vkgears`: Vulkan's gears on Ferrix, drawn by the host's GPU.
+///
+/// `docs/GPU.md` §6.1's exit. vkgears is mesa-demos' own, and Mesa's Venus
+/// driver is linked into it (`ferrousli/tools/ports/vkgears`): it opens the
+/// render node, makes a Venus context and its rings in host memory mapped
+/// through the device's window, compiles nothing -- the SPIR-V goes to the
+/// host's Vulkan driver -- and fences each frame on a ring, polling the
+/// descriptors the node answers with. The host is Linux with a Venus-built
+/// virglrenderer: QEMU's card is `--venus`'s.
+///
+/// No picture is blessed, and none could be taken: a GL console cannot be
+/// dumped (§3.1). What is required is what vkgears said -- that its device is
+/// the host's GPU through Venus, and that it drew frames -- and that the
+/// kernel did not stop while it did.
+pub(crate) fn test_vkgears(args: &Args) -> Result<()> {
+    let arch = Arch::X86_64;
+    let ports = crate::ports::installed_port(arch, "vkgears")?;
+    if !ports.iter().any(|file| file.path == VKGEARS_PATH) {
+        return Err(Error::new(format!(
+            "{arch}: vkgears is not built: `cargo xtask ports` builds it"
+        )));
+    }
+    let programs = Programs::build(arch)?;
+    let carried = Carried {
+        ports,
+        ..Carried::none()
+    };
+    let (image, kernel) =
+        build_image(arch, &programs, &undithered(VKGEARS_CONFIG), carried, args)?;
+    let mut qemu_args = args.clone();
+    qemu_args.display = true;
+    qemu_args.gl = true;
+    qemu_args.venus = true;
+    let mut said: Vec<String> = Vec::new();
+    let hook = |watching: &mut Watching<'_>| -> Result<()> {
+        let up = watching.read_more(Instant::now() + SETTLE, |lines| {
+            lines
+                .iter()
+                .any(|line| line.contains(MARKER) || line.contains(FAILED))
+        })?;
+        if !up {
+            return Err(with_the_transcript(
+                &Error::new(format!("{arch}: the compositor never printed `{MARKER}`")),
+                watching,
+            ));
+        }
+        say_the_marker(watching, arch);
+        let _ = watching.read_more(Instant::now() + VKGEARS_PATIENCE, |lines| {
+            lines.iter().any(|line| {
+                line.contains(VKGEARS_FRAMES) || line.contains("FERRIX-PANIC")
+            })
+        })?;
+        said = watching
+            .lines()
+            .iter()
+            .chain(watching.after())
+            .cloned()
+            .collect();
+        Ok(())
+    };
+    let _ = crate::qemu::watch_then(arch, &image, &kernel, &qemu_args, EITHER, hook)?;
+    judge_vkgears(arch, &said)
+}
+
+/// What [`test_vkgears`] requires of what the guest said.
+fn judge_vkgears(arch: Arch, said: &[String]) -> Result<()> {
+    let transcript = || {
+        said.iter()
+            .map(|line| said_on_its_own(line).to_owned())
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let fail = |why: String| Err(Error::new(format!("{arch}: {why}\n{}", transcript())));
+    if let Some(line) = said.iter().find(|line| line.contains("FERRIX-PANIC")) {
+        return fail(format!(
+            "the kernel stopped while vkgears ran: {}",
+            line.trim()
+        ));
+    }
+    let Some(device) = said
+        .iter()
+        .find_map(|line| said_on_its_own(line).split_once(VKGEARS_DEVICE))
+        .map(|(_, name)| name.trim().to_owned())
+    else {
+        return fail("vkgears never named its Vulkan device".to_owned());
+    };
+    if !device.starts_with(VENUS_DEVICE) {
+        return fail(format!(
+            "vkgears drew on `{device}`, which is not the host's GPU through Venus"
+        ));
+    }
+    let Some(frames) = said
+        .iter()
+        .map(|line| said_on_its_own(line))
+        .find(|line| line.contains(VKGEARS_FRAMES))
+    else {
+        return fail(format!("vkgears found `{device}` and drew no frames"));
+    };
+    let drawn: u64 = frames
+        .split_whitespace()
+        .next()
+        .and_then(|count| count.parse().ok())
+        .unwrap_or(0);
+    if drawn == 0 {
+        return fail(format!("vkgears drew no frames on `{device}`: `{frames}`"));
+    }
+    println!("  {arch}: vkgears drew on `{device}`: {}", frames.trim());
+    Ok(())
+}
+
 /// What [`test_foot`] requires of what the guest said and showed.
 fn judge_foot(arch: Arch, said: &[String], screen: Option<&Image>, dump: &Path) -> Result<()> {
     let transcript = || {
