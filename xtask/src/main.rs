@@ -59,6 +59,7 @@ mod btrfs_disk;
 mod busybox;
 mod cargo;
 mod check;
+mod chrome;
 mod compositor;
 mod console;
 mod display;
@@ -165,6 +166,7 @@ COMMANDS:
     test-restart  Boot a shell beside a virtio-gpu, kill -9 the gpu driver twice, and require it started again each time
     test-threads  Boot threads-test as init and require std::thread, Mutex, mpsc and /proc's thread count
     test-rustc    Attach the rustc volume scripts/fetch-rustc-sysroot.sh makes, run `rustc hello.rs && ./hello`
+    test-chrome   Attach the volume scripts/fetch-chrome.sh makes, and require headless Chrome to run a page's script and draw it
     test-selfhost  Run `cargo xtask build` on Ferrix from that toolchain and this checkout, and boot the image it made
     check         Run every quality gate (fmt, clippy, layering, audits, tests, docs)
     host-clippy   check's host clippy step alone, as CI runs it
@@ -364,6 +366,7 @@ fn run() -> Result<()> {
         "test-restart" => restart::test_restart(&args),
         "test-threads" => threads::test_threads(&args),
         "test-rustc" => rustc::test_rustc(&args),
+        "test-chrome" => chrome::test_chrome(&args),
         "test-selfhost" => selfhost::test_selfhost(&args),
         "check" => check::run(&args),
         "host-clippy" => check::host_clippy(),

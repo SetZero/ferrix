@@ -8,10 +8,14 @@ and on 2026-09-23 the customer asked for the work to start.
 
 ## Where it stands, 2026-09-24
 
-**Chrome is not on the image, and does not run on Ferrix.** No part of
-Chromium has been built, ported or tried yet. What exists is the ground it
-would stand on, and since 2026-09-24 the first foreign Wayland client
-running on it:
+**Headless Chrome runs on Ferrix, since 2026-09-24.** Google's prebuilt
+`chrome-headless-shell` 154.0.8037.57 -- Chrome for Testing's linux64 build,
+not one built here -- starts on Ferrix with its GPU process and renderers,
+runs a page's JavaScript in V8 and writes a screenshot, and `cargo xtask
+test-chrome` requires all three (§8). It is not on the image: it lives on a
+btrfs volume `scripts/fetch-chrome.sh` makes from pinned downloads, with
+Debian 13's glibc and the forty libraries it loads. What it runs with, and
+what is left:
 
 | | state |
 |---|---|
@@ -25,9 +29,12 @@ running on it:
 | A vDSO | not started (§3); what is left of the ≈ 10 points the three were sized at |
 | libwayland-client, libxkbcommon, fontconfig with freetype and expat, a font | **done** 2026-09-24, built against ferrousli with foot (§3, §6) |
 | foot, a Wayland terminal nobody here wrote, drawing on the compositor on Ferrix | **done** 2026-09-24, x86-64, `cargo xtask test-foot` (§6) |
-| Chromium built against ferrousli, with Alpine's musl patches rebased | not started (§5), 40+ points |
-| What running it finds missing | unsized, ≥ 40 (§5) |
-| A guest with the ~2 GiB a page wants | the default is 512 MiB (§2.3) |
+| Headless Chrome on Ferrix: `--dump-dom` and `--screenshot`, multi-process, with `--no-sandbox --no-zygote` | **done** 2026-09-24, x86-64, `cargo xtask test-chrome` (§8) |
+| What running it found missing: `CLOCK_THREAD_CPUTIME_ID` and `CLOCK_PROCESS_CPUTIME_ID`, `clock_getres`, `creat`, and `/proc/<pid>/task`'s link count | **done** 2026-09-24 (§8) |
+| The zygote's fork, which fails on Ferrix, so Chrome runs with `--no-zygote` | not started (§8) |
+| Chrome on ferrousli's `libc.so.6` in glibc's place | 97 glibc names missing, measured (§8); being closed |
+| Chromium built against ferrousli, with Alpine's musl patches rebased | not needed for a first Chrome: the prebuilt one runs (§5, §8) |
+| A guest with the ~2 GiB a page wants | `test-chrome` boots 4 GiB, as `test-rustc` does (§2.3) |
 
 **Done, 2026-09-24: a foreign toolkit client inside the guest** (§6).
 `foot` 1.24.0, a real Wayland terminal nobody here wrote, runs on Ferrix's
@@ -35,14 +42,9 @@ compositor and draws a program's output in the image's font. It is built
 by `ferrousli/tools/ports/foot` against ferrousli with libffi 3.5.2,
 wayland 1.24.0, wayland-protocols 1.45, libxkbcommon 1.11.0, pixman 0.46.4,
 freetype 2.14.1, expat 2.7.3, fontconfig 2.17.1, tllist 1.1.0 and fcft
-3.3.2, and DejaVu Sans Mono 2.37 is the font. **Next:** `chrome --headless
---screenshot`, which needs no compositor, GPU, input or fonts but
-exercises everything hard -- processes over Mojo, hundreds of threads,
-PartitionAlloc and V8 -- and needed two kernel rows first: `execve` past
-64 MiB, done on 2026-09-24 (§2.2), and `madvise`, done the same day (§2.3).
-A vDSO, the other half of that second row, is still to come; Chrome runs
-without one, a trap per clock read. **Then** a window, for which foot has
-now proved the client libraries.
+3.3.2, and DejaVu Sans Mono 2.37 is the font. **Then** headless Chrome,
+the same day (§8). **Next:** the zygote, Chrome on ferrousli in glibc's
+place, and a window, for which foot has proved the client libraries.
 
 **Re-checked on 2026-09-19**, against a tree 37 commits further on. Everything
 in §2, §3 and §4 still holds but the two loose fixes in §6, which are now
@@ -522,3 +524,71 @@ how much of Alpine's patch set applies to a library that is closer to glibc
 than to musl; and what a 512 MiB guest does to a program that expects to be
 told how much memory it has. None of those is answerable without trying it,
 which is the honest reason the last row of §5 is unsized.
+
+---
+
+## 8. Headless Chrome on Ferrix, 2026-09-24
+
+The customer chose, on 2026-09-24, to run Google's prebuilt Chrome first
+rather than build Chromium: a first result in days rather than in the
+40-plus points §5 priced a source build at, most of them unknown. Chrome
+for Testing publishes `chrome-headless-shell` for linux64: a 198 MB
+position-independent glibc program, with ANGLE and SwiftShader beside it,
+that loads forty of the system's libraries -- glib, NSS, D-Bus, the X11
+client libraries, gbm, udev, ALSA and what those load.
+
+**Where it runs from.** `scripts/fetch-chrome.sh` puts it on a btrfs volume
+with Debian 13's glibc and loader and the Debian packages of those forty
+libraries, fontconfig's configuration and DejaVu, every download pinned by
+its SHA-256. After unpacking, it looks up every library each ELF file on the
+volume needs, which found two -- `libcap` and `libsqlite3` -- that Debian's
+builds need and the development host's did not. The same volume ran Chrome
+on nazuna's own kernel, through a copy whose `PT_INTERP` named the volume's
+loader, before it was tried on Ferrix. It is not on the image: 809 MiB.
+
+**What `cargo xtask test-chrome` requires**, booting 4 GiB with the volume at
+`/data`: `--version`; `--dump-dom` of a page whose script writes `6*7` into
+an element, so that the DOM holds `computed 42`, which only V8 could have
+put there; and `--screenshot` of a page to a PNG on the disk. The first run
+that passed wrote 4796 bytes.
+
+**What running it found**, in the order it was found, each by booting it and
+reading where it stopped:
+
+1. `execve` read the whole file, and stopped at 64 MiB (§2.2). Done: mapped
+   from the file on demand.
+2. PartitionAlloc's `madvise(MADV_DONTNEED)` was `ENOSYS`, and Chrome's
+   `CHECK` on it ended the process. Done.
+3. Every child -- GPU process, network service, renderer -- is started by
+   `execve("/proc/self/exe")`, which was `ENOENT` in a fork. Done.
+4. Chrome's time code reads `CLOCK_THREAD_CPUTIME_ID` and `CHECK`s that it
+   answered; it was `EINVAL`. Done: a thread's clock is its scheduler task's
+   run time, charged up to the instant it is read, and a process's the sum
+   of its threads'. Not as Linux: a thread that has ended takes its time
+   with it.
+5. The sandbox's thread helper counts threads by the link count of
+   `/proc/self/task`, two and one per thread on Linux, and `CHECK`s it; it
+   was two. Done.
+6. `creat`, which the headless shell writes its screenshot with, and
+   `clock_getres` were `ENOSYS` on x86-64 and ARMv7-A. Done.
+7. The zygote, which Chrome forks its children from, says it could not
+   fork, and none of its children start. Open. `--no-zygote` makes the
+   browser start each child itself, which works, and is what the test runs
+   with; `--no-sandbox` because Ferrix has no namespaces or seccomp (§2.4).
+
+A trial kernel that let `madvise` answer and raised the read limit, never
+landed, is how the later items were found before the earlier were fixed;
+`--single-process` did the same for the children before item 3 was.
+
+**What it still says, and none of it stops it:** `inotify_init` is `ENOSYS`,
+so Chrome watches no files; `pkey_alloc`, `landlock_create_ruleset` and
+`rseq` are `ENOSYS`, which Chrome and glibc take in their stride; and there
+is no D-Bus or udev to talk to.
+
+**Chrome on ferrousli.** Standing ferrousli's `libc.so.6` in for Debian's is
+the other route, and the one this document started from. Measured on
+2026-09-24: Chrome and its forty libraries import 730 glibc names, and 97 of
+them are not in `libferrousli.a` -- the `_chk` fortify family, the old
+`__xstat64` entry points, `iconv`, gettext's `textdomain` family, `fts64`,
+`nftw64`, `statx`, `pidfd_open` and the rest. Closing that list is under
+way; the same volume and test then run Chrome on ferrousli's loader.
