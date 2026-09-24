@@ -2040,10 +2040,15 @@ fn start_console_input(view: &BootView<'_>) {
 /// out by the port's transmit interrupt, and said how it went.
 fn check_console_output() {
     match console::output::check() {
+        // What the interrupt sent while the line went out, which includes
+        // whatever was queued ahead of it: on the DK1 the boot's own lines
+        // are, and the writer then leaves all but a few bytes to the port.
         Ok(Some(checked)) => println!(
-            "  output   {} of that line's {} bytes sent by the transmit interrupt into {}, {} by the writer",
-            checked.by_interrupt,
+            "  output   a task's line of {} bytes went out by interrupt: {} bytes sent by the \
+             transmit interrupt into {} meanwhile, what was queued ahead of it included, {} by \
+             the writer",
             checked.line,
+            checked.by_interrupt,
             arch::console::transmit_buffer(),
             checked.by_writer,
         ),
