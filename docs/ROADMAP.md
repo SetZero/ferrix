@@ -4787,6 +4787,8 @@ such waits woke each other. The eventfd check now runs a `poll` and an
 every 5 ms takes about 120. Three controls, each run and each failing the
 boot. With waits that never trust their queues, it panics with "a poll on a
 quiet eventfd kept looking instead of sleeping on its queues" after 119 looks.
+(The poll is 120 ms since 2026-09-24, the check having been 0.8 s of every
+boot; the same control then panicked after 49 looks on x86-64.)
 With an eventfd naming no queue, it panics with the same. With an eventfd
 naming only its writable queue, it panics with "a waiting poll was ended by
 looking again, not by the write's wake".
