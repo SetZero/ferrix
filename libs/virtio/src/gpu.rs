@@ -9,7 +9,8 @@
 //! device — the queue, the order of commands, what to do when it misbehaves —
 //! is `ferrix-virtio-gpu`'s. The 3D commands and capability sets came with
 //! `docs/GPU.md`'s Path A and the cursor queue's two commands ([`Cursor`])
-//! with its §3.10; blob resources and EDID are later.
+//! with its §3.10, and blob resources, which Venus makes every host-visible
+//! Vulkan allocation as, with §6.1. EDID is later.
 //!
 //! # A command is two buffers
 //!
@@ -198,6 +199,9 @@ pub const CMD_RESOURCE_DETACH_BACKING: u32 = 0x0107;
 pub const CMD_GET_CAPSET_INFO: u32 = 0x0108;
 /// `VIRTIO_GPU_CMD_GET_CAPSET`.
 pub const CMD_GET_CAPSET: u32 = 0x0109;
+/// `VIRTIO_GPU_CMD_RESOURCE_CREATE_BLOB`, which follows `GET_EDID` and
+/// `RESOURCE_ASSIGN_UUID` in the 2D commands' numbering.
+pub const CMD_RESOURCE_CREATE_BLOB: u32 = 0x010c;
 /// `VIRTIO_GPU_CMD_CTX_CREATE`, the first of the 3D commands.
 pub const CMD_CTX_CREATE: u32 = 0x0200;
 /// `VIRTIO_GPU_CMD_CTX_DESTROY`.
@@ -214,6 +218,10 @@ pub const CMD_TRANSFER_TO_HOST_3D: u32 = 0x0205;
 pub const CMD_TRANSFER_FROM_HOST_3D: u32 = 0x0206;
 /// `VIRTIO_GPU_CMD_SUBMIT_3D`.
 pub const CMD_SUBMIT_3D: u32 = 0x0207;
+/// `VIRTIO_GPU_CMD_RESOURCE_MAP_BLOB`.
+pub const CMD_RESOURCE_MAP_BLOB: u32 = 0x0208;
+/// `VIRTIO_GPU_CMD_RESOURCE_UNMAP_BLOB`.
+pub const CMD_RESOURCE_UNMAP_BLOB: u32 = 0x0209;
 
 /// `VIRTIO_GPU_RESP_OK_NODATA`.
 pub const RESP_OK_NODATA: u32 = 0x1100;
@@ -223,6 +231,8 @@ pub const RESP_OK_DISPLAY_INFO: u32 = 0x1101;
 pub const RESP_OK_CAPSET_INFO: u32 = 0x1102;
 /// `VIRTIO_GPU_RESP_OK_CAPSET`.
 pub const RESP_OK_CAPSET: u32 = 0x1103;
+/// `VIRTIO_GPU_RESP_OK_MAP_INFO`, after `OK_EDID` and `OK_RESOURCE_UUID`.
+pub const RESP_OK_MAP_INFO: u32 = 0x1106;
 /// `VIRTIO_GPU_RESP_ERR_UNSPEC`, the first error response.
 pub const RESP_ERR_UNSPEC: u32 = 0x1200;
 /// `VIRTIO_GPU_RESP_ERR_OUT_OF_MEMORY`.
@@ -329,6 +339,49 @@ pub const CAPSET_VIRGL2: u32 = 2;
 pub const CAPSET_VENUS: u32 = 4;
 /// `VIRTIO_GPU_CAPSET_DRM`: the native-context capability set.
 pub const CAPSET_DRM: u32 = 6;
+
+/// `VIRTIO_GPU_BLOB_MEM_GUEST`: a blob whose memory is the guest's pages,
+/// given as backing entries.
+pub const BLOB_MEM_GUEST: u32 = 1;
+/// `VIRTIO_GPU_BLOB_MEM_HOST3D`: a blob whose memory the host's renderer
+/// allocates, named by the `blob_id` a context gave it. What Venus makes
+/// every host-visible allocation and ring as.
+pub const BLOB_MEM_HOST3D: u32 = 2;
+/// `VIRTIO_GPU_BLOB_MEM_HOST3D_GUEST`: host renderer memory with guest pages
+/// behind it.
+pub const BLOB_MEM_HOST3D_GUEST: u32 = 3;
+
+/// `VIRTIO_GPU_BLOB_FLAG_USE_MAPPABLE`: the blob may be mapped into the
+/// host-visible window with [`Command::ResourceMapBlob`].
+pub const BLOB_FLAG_USE_MAPPABLE: u32 = 1 << 0;
+/// `VIRTIO_GPU_BLOB_FLAG_USE_SHAREABLE`: the blob may be shared with another
+/// context, as a dmabuf is on Linux.
+pub const BLOB_FLAG_USE_SHAREABLE: u32 = 1 << 1;
+/// `VIRTIO_GPU_BLOB_FLAG_USE_CROSS_DEVICE`: the blob may be shared with
+/// another virtio device.
+pub const BLOB_FLAG_USE_CROSS_DEVICE: u32 = 1 << 2;
+
+/// `VIRTIO_GPU_MAP_CACHE_MASK`: which of [`Response::MapInfo`]'s bits are
+/// the caching.
+pub const MAP_CACHE_MASK: u32 = 0x0f;
+/// `VIRTIO_GPU_MAP_CACHE_NONE`: the device says nothing about caching.
+pub const MAP_CACHE_NONE: u32 = 0x00;
+/// `VIRTIO_GPU_MAP_CACHE_CACHED`: map it write-back, as ordinary memory.
+pub const MAP_CACHE_CACHED: u32 = 0x01;
+/// `VIRTIO_GPU_MAP_CACHE_UNCACHED`: map it uncached.
+pub const MAP_CACHE_UNCACHED: u32 = 0x02;
+/// `VIRTIO_GPU_MAP_CACHE_WC`: map it write-combining.
+pub const MAP_CACHE_WC: u32 = 0x03;
+
+/// `VIRTIO_GPU_SHM_ID_HOST_VISIBLE`: the shared memory region
+/// [`Command::ResourceMapBlob`] places blobs in, which a PCI device offers
+/// as a `VIRTIO_PCI_CAP_SHARED_MEMORY_CFG` capability with this id.
+pub const SHM_ID_HOST_VISIBLE: u8 = 1;
+
+/// Bytes of `virtio_gpu_resource_create_blob` before its backing entries.
+pub const CREATE_BLOB_LEN: usize = HEADER_LEN + 32;
+/// Bytes of `struct virtio_gpu_resp_map_info`.
+pub const MAP_INFO_LEN: usize = HEADER_LEN + 8;
 
 /// Bytes of `struct virtio_gpu_box`: a rectangle with a depth, which is what
 /// a 3D transfer names instead of a [`Rect`].
@@ -639,6 +692,42 @@ pub enum Command<'a> {
         /// The resource.
         resource_id: u32,
     },
+    /// Create a blob resource: bytes with no shape, which a context's own
+    /// protocol gives meaning to. Venus makes every Vulkan allocation the
+    /// guest maps as one.
+    ///
+    /// Sent inside the context that made the `blob_id`, for host memory;
+    /// the header's context is how the device knows which renderer to ask.
+    ResourceCreateBlob {
+        /// The id to give it, not 0.
+        resource_id: u32,
+        /// [`BLOB_MEM_GUEST`], [`BLOB_MEM_HOST3D`] or
+        /// [`BLOB_MEM_HOST3D_GUEST`].
+        blob_mem: u32,
+        /// [`BLOB_FLAG_USE_MAPPABLE`] and the rest.
+        blob_flags: u32,
+        /// The host renderer's name for the memory, for host blobs; 0 asks
+        /// Venus's render server for plain shared memory.
+        blob_id: u64,
+        /// Its size in bytes, which is a whole number of pages.
+        size: u64,
+        /// Guest backing, for the kinds that have it; empty for
+        /// [`BLOB_MEM_HOST3D`].
+        entries: &'a [MemEntry],
+    },
+    /// Map a mappable blob into the host-visible window at `offset`, which
+    /// the driver chose. The device answers with how to cache it.
+    ResourceMapBlob {
+        /// The blob.
+        resource_id: u32,
+        /// Where in the window, from its start; a whole number of pages.
+        offset: u64,
+    },
+    /// Take a blob out of the window again.
+    ResourceUnmapBlob {
+        /// The blob.
+        resource_id: u32,
+    },
 }
 
 impl Command<'_> {
@@ -664,6 +753,9 @@ impl Command<'_> {
             Self::TransferToHost3d { .. } => CMD_TRANSFER_TO_HOST_3D,
             Self::TransferFromHost3d { .. } => CMD_TRANSFER_FROM_HOST_3D,
             Self::Submit3d { .. } | Self::Submit3dHeader { .. } => CMD_SUBMIT_3D,
+            Self::ResourceCreateBlob { .. } => CMD_RESOURCE_CREATE_BLOB,
+            Self::ResourceMapBlob { .. } => CMD_RESOURCE_MAP_BLOB,
+            Self::ResourceUnmapBlob { .. } => CMD_RESOURCE_UNMAP_BLOB,
         }
     }
 
@@ -693,6 +785,12 @@ impl Command<'_> {
             Self::ResourceAttachBacking { entries, .. } => {
                 HEADER_LEN + 8 + entries.len() * MEM_ENTRY_LEN
             }
+            Self::ResourceCreateBlob { entries, .. } => {
+                CREATE_BLOB_LEN + entries.len() * MEM_ENTRY_LEN
+            }
+            // `resource_id`, padding and the `offset`.
+            Self::ResourceMapBlob { .. } => HEADER_LEN + 16,
+            Self::ResourceUnmapBlob { .. } => HEADER_LEN + 8,
         }
     }
 
@@ -711,6 +809,7 @@ impl Command<'_> {
             // The set itself is as long as the device said it would be,
             // which the caller took from `GET_CAPSET_INFO` and passed back.
             Self::GetCapset { max_size, .. } => HEADER_LEN + max_size as usize,
+            Self::ResourceMapBlob { .. } => MAP_INFO_LEN,
             _ => HEADER_LEN,
         }
     }
@@ -851,15 +950,51 @@ impl Command<'_> {
                 // At most MAX_BACKING_ENTRIES, which `check` enforced.
                 let count = u32::try_from(entries.len()).unwrap_or(u32::MAX);
                 put(body + 4, &count.to_le_bytes());
-                for (index, entry) in entries.iter().enumerate() {
-                    let at = body + 8 + index * MEM_ENTRY_LEN;
-                    put(at, &entry.addr.to_le_bytes());
-                    put(at + 8, &entry.length.to_le_bytes());
-                    put(at + 12, &[0; 4]);
-                }
+                put_entries(&mut put, body + 8, entries);
             }
+            Self::ResourceCreateBlob { .. }
+            | Self::ResourceMapBlob { .. }
+            | Self::ResourceUnmapBlob { .. } => self.write_blob(body, &mut put),
         }
         Ok(self.len())
+    }
+
+    /// The body of the three blob commands, for the reason
+    /// [`Command::write_3d`] is apart.
+    fn write_blob(&self, body: usize, put: &mut dyn FnMut(usize, &[u8])) {
+        match *self {
+            Self::ResourceCreateBlob {
+                resource_id,
+                blob_mem,
+                blob_flags,
+                blob_id,
+                size,
+                entries,
+            } => {
+                put(body, &resource_id.to_le_bytes());
+                put(body + 4, &blob_mem.to_le_bytes());
+                put(body + 8, &blob_flags.to_le_bytes());
+                // At most MAX_BACKING_ENTRIES, which `check` enforced.
+                let count = u32::try_from(entries.len()).unwrap_or(u32::MAX);
+                put(body + 12, &count.to_le_bytes());
+                put(body + 16, &blob_id.to_le_bytes());
+                put(body + 24, &size.to_le_bytes());
+                put_entries(put, CREATE_BLOB_LEN, entries);
+            }
+            Self::ResourceMapBlob {
+                resource_id,
+                offset,
+            } => {
+                put(body, &resource_id.to_le_bytes());
+                put(body + 4, &[0; 4]);
+                put(body + 8, &offset.to_le_bytes());
+            }
+            Self::ResourceUnmapBlob { resource_id } => {
+                put(body, &resource_id.to_le_bytes());
+                put(body + 4, &[0; 4]);
+            }
+            _ => {}
+        }
     }
 
     /// The body of every 3D command -- virtio's `0x02xx` -- which is the
@@ -982,8 +1117,47 @@ impl Command<'_> {
                 Err(GpuError::StreamSize(commands.len()))
             }
             Self::Submit3dHeader { size: 0 } => Err(GpuError::StreamSize(0)),
+            // A blob is whole pages, as Linux's `virtio_gpu_resource_create_blob`
+            // requires, and has one of the three kinds of memory. Guest
+            // memory comes with backing and host memory without: QEMU reads
+            // the entries of a host blob as a list it must map, and a guest
+            // blob with none has nothing behind it.
+            Self::ResourceCreateBlob {
+                blob_mem,
+                size,
+                entries,
+                ..
+            } => {
+                let guest = matches!(blob_mem, BLOB_MEM_GUEST | BLOB_MEM_HOST3D_GUEST);
+                if size == 0 || !size.is_multiple_of(PAGE_SIZE) {
+                    Err(GpuError::BlobSize(size))
+                } else if !matches!(
+                    blob_mem,
+                    BLOB_MEM_GUEST | BLOB_MEM_HOST3D | BLOB_MEM_HOST3D_GUEST
+                ) {
+                    Err(GpuError::BlobMemory(blob_mem))
+                } else if entries.len() > MAX_BACKING_ENTRIES || guest == entries.is_empty() {
+                    Err(GpuError::BackingEntries(entries.len()))
+                } else {
+                    Ok(())
+                }
+            }
+            Self::ResourceMapBlob { offset, .. } if !offset.is_multiple_of(PAGE_SIZE) => {
+                Err(GpuError::MisalignedPage(offset))
+            }
             _ => Ok(()),
         }
+    }
+}
+
+/// Put `entries` as `struct virtio_gpu_mem_entry`s from `at` on, padding and
+/// all, which a backing list and a blob's guest memory are alike.
+fn put_entries(put: &mut dyn FnMut(usize, &[u8]), at: usize, entries: &[MemEntry]) {
+    for (index, entry) in entries.iter().enumerate() {
+        let at = at + index * MEM_ENTRY_LEN;
+        put(at, &entry.addr.to_le_bytes());
+        put(at + 8, &entry.length.to_le_bytes());
+        put(at + 12, &[0; 4]);
     }
 }
 
@@ -994,6 +1168,7 @@ pub const fn expects(code: u32) -> u32 {
         CMD_GET_DISPLAY_INFO => RESP_OK_DISPLAY_INFO,
         CMD_GET_CAPSET_INFO => RESP_OK_CAPSET_INFO,
         CMD_GET_CAPSET => RESP_OK_CAPSET,
+        CMD_RESOURCE_MAP_BLOB => RESP_OK_MAP_INFO,
         _ => RESP_OK_NODATA,
     }
 }
@@ -1120,6 +1295,13 @@ pub enum Response {
         /// How many bytes of the set there are, from the header onwards.
         len: usize,
     },
+    /// A blob is in the host-visible window, from `RESOURCE_MAP_BLOB`, and
+    /// this is how the device says to cache it: [`MAP_CACHE_CACHED`] and the
+    /// rest, under [`MAP_CACHE_MASK`].
+    MapInfo {
+        /// The device's word, whole; the caching is its low bits.
+        map_info: u32,
+    },
 }
 
 /// An error response, by its code.
@@ -1171,7 +1353,8 @@ impl Response {
             RESP_ERR_INVALID_RESOURCE_ID => Some(DeviceError::InvalidResourceId),
             RESP_ERR_INVALID_CONTEXT_ID => Some(DeviceError::InvalidContextId),
             RESP_ERR_INVALID_PARAMETER => Some(DeviceError::InvalidParameter),
-            RESP_OK_NODATA | RESP_OK_DISPLAY_INFO | RESP_OK_CAPSET_INFO | RESP_OK_CAPSET => None,
+            RESP_OK_NODATA | RESP_OK_DISPLAY_INFO | RESP_OK_CAPSET_INFO | RESP_OK_CAPSET
+            | RESP_OK_MAP_INFO => None,
             other => return Err(GpuError::UnknownResponse(other)),
         };
         if let Some(error) = error {
@@ -1212,6 +1395,13 @@ impl Response {
                 return Err(GpuError::ResponseTooShort(written));
             }
             return Ok(Self::Capset { len });
+        }
+        if code == RESP_OK_MAP_INFO {
+            if written < MAP_INFO_LEN {
+                return Err(GpuError::ResponseTooShort(written));
+            }
+            let map_info = get32(bytes, HEADER_LEN).ok_or(GpuError::ResponseTooShort(written))?;
+            return Ok(Self::MapInfo { map_info });
         }
         if written < DISPLAY_INFO_LEN {
             return Err(GpuError::ResponseTooShort(written));
@@ -1330,6 +1520,10 @@ pub enum GpuError {
     ContextName(usize),
     /// A command stream of no bytes, or more than its length field holds.
     StreamSize(usize),
+    /// A blob of no size, or of a size that is not whole pages.
+    BlobSize(u64),
+    /// A blob memory kind virtio does not define.
+    BlobMemory(u32),
     /// The device refused the command.
     Device(DeviceError),
 }
@@ -1380,6 +1574,8 @@ impl fmt::Display for GpuError {
             Self::StreamSize(len) => {
                 write!(f, "a {len}-byte virgl command stream")
             }
+            Self::BlobSize(size) => write!(f, "a {size}-byte virtio-gpu blob"),
+            Self::BlobMemory(kind) => write!(f, "virtio-gpu blob memory kind {kind}"),
             Self::Device(error) => write!(f, "virtio-gpu refused the command: {error:?}"),
         }
     }

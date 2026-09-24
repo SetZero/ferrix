@@ -24,7 +24,7 @@ use crate::header::{
     self, BusNumbers, COMMAND, COMMAND_BUS_MASTER, COMMAND_MEMORY_SPACE, Class, Endpoint,
     HeaderKind, Identity, STATUS_CAPABILITIES_LIST,
 };
-use crate::virtio::{self, Location, Transport};
+use crate::virtio::{self, Location, SharedMemory, Transport};
 use crate::walk::{Function, Reason, Unfollowed, Walk};
 use crate::{Address, CONFIG_SPACE_SIZE, ConfigSpace, PciError};
 
@@ -1219,6 +1219,93 @@ fn a_virtio_transport_missing_a_block_is_none_and_a_short_capability_is_an_error
         }),
         "runs past the legacy space"
     );
+}
+
+/// A virtio-gpu-pci with `hostmem` set, as QEMU 10.2 lays it out
+/// (`virtio_gpu_pci_base_realize`): the registers move to BAR 2, and BAR 4 is
+/// a 64-bit prefetchable window of 1 GiB named by a shared memory capability
+/// with id 1, `struct virtio_pci_cap64`: bar at 4, id at 5, offset at 8,
+/// length at 12, and their high halves at 16 and 20.
+fn virtio_gpu_with_hostmem() -> (Bus, Address) {
+    let mut bus = Bus::new();
+    let mut d = Device::endpoint(0x1AF4, 0x1050);
+    d.bar(2, 0x0000_000C, 0xFFFF_C000);
+    d.bar(3, 0x0000_0080, 0xFFFF_FFFF);
+    d.bar(4, 0x0000_000C, 0xC000_0000);
+    d.bar(5, 0x0000_0100, 0xFFFF_FFFF);
+    d.capabilities(0xA0);
+    d.capability(0xA0, ID_VENDOR, 0x40);
+    d.put8(0xA2, 24);
+    d.put8(0xA3, virtio::CFG_SHARED_MEMORY);
+    d.put8(0xA4, 4);
+    d.put8(0xA5, 1);
+    d.put32(0xA8, 0);
+    d.put32(0xAC, 0x4000_0000);
+    d.put32(0xB0, 0);
+    d.put32(0xB4, 0);
+    d.virtio_capability(0x40, 0x00, virtio::CFG_COMMON, 2, 0x0000, 0x1000);
+    bus.put(at(0, 4, 0), d);
+    (bus, at(0, 4, 0))
+}
+
+#[test]
+fn a_shared_memory_region_is_found_by_its_id_with_wide_fields() {
+    let (mut bus, f) = virtio_gpu_with_hostmem();
+    let found = SharedMemory::find(&bus, f, 1).unwrap().unwrap();
+    assert_eq!(
+        found,
+        SharedMemory {
+            capability: 0xA0,
+            bar: 4,
+            id: 1,
+            offset: 0,
+            length: 0x4000_0000,
+        }
+    );
+    assert_eq!(SharedMemory::find(&bus, f, 2), Ok(None), "no region 2");
+    let region: Region = bar::size(&mut bus, f, HeaderKind::Endpoint, 4)
+        .unwrap()
+        .unwrap();
+    assert_eq!(region.size, 0x4000_0000);
+    assert!(found.fits(&region), "the whole BAR is the window");
+
+    // A region past 4 GiB carries its high halves.
+    bus.device_mut(f).put32(0xB0, 1);
+    bus.device_mut(f).put32(0xB4, 2);
+    let wide = SharedMemory::find(&bus, f, 1).unwrap().unwrap();
+    assert_eq!((wide.offset, wide.length), (1 << 32, 0x2_4000_0000));
+    assert!(!wide.fits(&region), "and no longer fits a 1 GiB BAR");
+}
+
+#[test]
+fn a_short_or_reserved_shared_memory_capability_is_not_a_region() {
+    let (mut bus, f) = virtio_gpu_with_hostmem();
+    bus.device_mut(f).put8(0xA2, 16);
+    assert_eq!(
+        SharedMemory::find(&bus, f, 1),
+        Err(PciError::CapabilityTooShort {
+            function: f,
+            at: 0xA0,
+            len: 16
+        }),
+        "a capability without its high halves"
+    );
+    let (mut bus, f) = virtio_gpu_with_hostmem();
+    bus.device_mut(f).put8(0xA4, 7);
+    assert_eq!(SharedMemory::find(&bus, f, 1), Ok(None), "a reserved BAR");
+    let (bus, f) = virtio_gpu_with_hostmem();
+    let found = SharedMemory::find(&bus, f, 1).unwrap().unwrap();
+    let empty = SharedMemory { length: 0, ..found };
+    let region = Region {
+        index: 4,
+        bar: Bar::Memory {
+            address: 0x100_0000_0000,
+            prefetchable: true,
+            wide: true,
+        },
+        size: 0x4000_0000,
+    };
+    assert!(!empty.fits(&region), "a region of nothing is no window");
 }
 
 #[test]

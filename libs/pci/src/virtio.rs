@@ -49,12 +49,21 @@ pub const CFG_ISR: u8 = 3;
 pub const CFG_DEVICE: u8 = 4;
 /// Configuration type: access to the others through configuration space.
 pub const CFG_PCI: u8 = 5;
+/// Configuration type: a shared memory region, which is not registers but
+/// memory the device and the driver both see (virtio 1.2 §4.1.4.7).
+/// virtio-gpu's host-visible window, where the host maps blob resources, is
+/// one.
+pub const CFG_SHARED_MEMORY: u8 = 8;
 
 /// Bytes of a virtio capability.
 pub const CAPABILITY_LEN: u16 = 16;
 
 /// Bytes of the notification capability, which adds a multiplier.
 pub const NOTIFY_CAPABILITY_LEN: u16 = 20;
+
+/// Bytes of `struct virtio_pci_cap64`, the shared memory capability, whose
+/// offset and length have high halves: a region may be larger than 4 GiB.
+pub const SHARED_MEMORY_CAPABILITY_LEN: u16 = 24;
 
 /// The virtio device type of a function, or `None` if it is not a virtio
 /// device.
@@ -95,6 +104,85 @@ impl Location {
         matches!(region.bar, Bar::Memory { .. })
             && region.index == self.bar
             && region.contains(self.offset as u64, self.length as u64)
+    }
+}
+
+/// A shared memory region inside a BAR: memory rather than registers, named
+/// by an id the device type defines.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct SharedMemory {
+    /// Where the capability describing it is, for errors.
+    pub capability: u16,
+    /// The BAR.
+    pub bar: u8,
+    /// The device type's name for the region.
+    pub id: u8,
+    /// Bytes into the BAR.
+    pub offset: u64,
+    /// Bytes long.
+    pub length: u64,
+}
+
+impl SharedMemory {
+    /// The shared memory region `function` names `id`, if it has one: the
+    /// first, as the specification tells a driver to take.
+    ///
+    /// Returns `None` for a region in a BAR index the specification reserves,
+    /// which a driver ignores, as [`read`] does.
+    ///
+    /// # Errors
+    ///
+    /// Any error walking the capability list, and
+    /// [`PciError::CapabilityTooShort`] for a shared memory capability
+    /// shorter than `struct virtio_pci_cap64`.
+    pub fn find<C: ConfigSpace + ?Sized>(
+        space: &C,
+        function: Address,
+        id: u8,
+    ) -> Result<Option<Self>, PciError> {
+        for capability in Capabilities::new(space, function) {
+            let capability = capability?;
+            let at = capability.offset;
+            if capability.id != ID_VENDOR || space.read8(function, at + 3) != CFG_SHARED_MEMORY {
+                continue;
+            }
+            let declared = u16::from(space.read8(function, at + 2));
+            let room = LEGACY_CONFIG_SPACE_SIZE.saturating_sub(at);
+            if declared < SHARED_MEMORY_CAPABILITY_LEN || room < SHARED_MEMORY_CAPABILITY_LEN {
+                return Err(PciError::CapabilityTooShort {
+                    function,
+                    at,
+                    len: declared.min(room),
+                });
+            }
+            let bar = space.read8(function, at + 4);
+            if bar > 5 || space.read8(function, at + 5) != id {
+                continue;
+            }
+            let wide = |low: u16, high: u16| {
+                u64::from(space.read32(function, at + low))
+                    | u64::from(space.read32(function, at + high)) << 32
+            };
+            return Ok(Some(Self {
+                capability: at,
+                bar,
+                id,
+                offset: wide(8, 16),
+                length: wide(12, 20),
+            }));
+        }
+        Ok(None)
+    }
+
+    /// Whether the region lies inside `region`, which must be the sized BAR
+    /// it names, and that BAR is memory: [`Location::fits`] for a region
+    /// whose offset and length need not fit in 32 bits.
+    #[must_use]
+    pub const fn fits(self, region: &Region) -> bool {
+        matches!(region.bar, Bar::Memory { .. })
+            && region.index == self.bar
+            && self.length != 0
+            && region.contains(self.offset, self.length)
     }
 }
 

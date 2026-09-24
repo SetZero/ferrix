@@ -477,6 +477,27 @@ fn write_with_puts_every_byte_once_and_agrees_with_encode() {
             entries: &entries,
         },
         Command::ResourceDetachBacking { resource_id: 1 },
+        Command::ResourceCreateBlob {
+            resource_id: 1,
+            blob_mem: BLOB_MEM_GUEST,
+            blob_flags: BLOB_FLAG_USE_MAPPABLE,
+            blob_id: 0,
+            size: 12288,
+            entries: &entries,
+        },
+        Command::ResourceCreateBlob {
+            resource_id: 2,
+            blob_mem: BLOB_MEM_HOST3D,
+            blob_flags: BLOB_FLAG_USE_MAPPABLE,
+            blob_id: 7,
+            size: 4096,
+            entries: &[],
+        },
+        Command::ResourceMapBlob {
+            resource_id: 2,
+            offset: 0x3000,
+        },
+        Command::ResourceUnmapBlob { resource_id: 2 },
     ] {
         let mut out = vec![0xEEu8; command.len()];
         let mut times = vec![0u32; command.len()];
@@ -933,4 +954,177 @@ fn a_cursor_is_one_structure_for_an_update_and_a_move() {
     let moved = cursor.encode(false);
     assert_eq!(u32_at(&moved, 0), 0x0301);
     assert_eq!(moved[4..], update[4..]);
+}
+
+/// A blob is created in the context that owns its memory, and carries its
+/// guest backing after a fixed body when it has any.
+///
+/// Offsets by hand from `struct virtio_gpu_resource_create_blob`: resource
+/// at 24, `blob_mem` at 28, `blob_flags` at 32, `nr_entries` at 36,
+/// `blob_id` at 40 and `size` at 48, then the entries from 56, sixteen bytes
+/// each as `RESOURCE_ATTACH_BACKING`'s are.
+#[test]
+fn a_blob_names_its_memory_its_id_and_its_size() {
+    let host = Command::ResourceCreateBlob {
+        resource_id: 0x4000_0001,
+        blob_mem: BLOB_MEM_HOST3D,
+        blob_flags: BLOB_FLAG_USE_MAPPABLE | BLOB_FLAG_USE_SHAREABLE,
+        blob_id: 0x1122_3344_5566_7788,
+        size: 0x20_0000,
+        entries: &[],
+    };
+    let mut bytes = vec![0u8; 128];
+    let len = host
+        .encode_in(
+            Context {
+                id: 3,
+                fence: None,
+                ring: None,
+            },
+            &mut bytes,
+        )
+        .expect("it encodes");
+    assert_eq!(len, 56, "a host blob has no entries after its body");
+    assert_eq!(
+        u32_at(&bytes, 0),
+        0x010c,
+        "VIRTIO_GPU_CMD_RESOURCE_CREATE_BLOB"
+    );
+    assert_eq!(
+        u32_at(&bytes, 16),
+        3,
+        "sent in the context that made the blob id"
+    );
+    assert_eq!(
+        [
+            u32_at(&bytes, 24),
+            u32_at(&bytes, 28),
+            u32_at(&bytes, 32),
+            u32_at(&bytes, 36)
+        ],
+        [0x4000_0001, 2, 1 | 2, 0]
+    );
+    assert_eq!(u64_at(&bytes, 40), 0x1122_3344_5566_7788);
+    assert_eq!(u64_at(&bytes, 48), 0x20_0000);
+
+    let entries = [MemEntry {
+        addr: 0x8000,
+        length: 8192,
+    }];
+    let guest = encoded(&Command::ResourceCreateBlob {
+        resource_id: 1,
+        blob_mem: BLOB_MEM_GUEST,
+        blob_flags: 0,
+        blob_id: 0,
+        size: 8192,
+        entries: &entries,
+    });
+    assert_eq!(guest.len(), 56 + 16);
+    assert_eq!(u32_at(&guest, 36), 1, "nr_entries");
+    assert_eq!(u64_at(&guest, 56), 0x8000);
+    assert_eq!(u32_at(&guest, 64), 8192);
+    assert_eq!(u32_at(&guest, 68), 0, "the entry's padding");
+}
+
+/// What a blob may not be: a size that is not whole pages or is nothing, a
+/// memory kind virtio does not have, guest memory with no backing, or host
+/// memory with some.
+#[test]
+fn a_blob_that_cannot_be_described_is_refused() {
+    let entry = [MemEntry {
+        addr: 0x8000,
+        length: 4096,
+    }];
+    let blob = |blob_mem, size, entries| Command::ResourceCreateBlob {
+        resource_id: 1,
+        blob_mem,
+        blob_flags: 0,
+        blob_id: 0,
+        size,
+        entries,
+    };
+    let mut out = [0u8; 256];
+    for (command, error) in [
+        (blob(BLOB_MEM_HOST3D, 0, &[][..]), GpuError::BlobSize(0)),
+        (blob(BLOB_MEM_HOST3D, 4097, &[]), GpuError::BlobSize(4097)),
+        (blob(0, 4096, &[]), GpuError::BlobMemory(0)),
+        (blob(4, 4096, &[]), GpuError::BlobMemory(4)),
+        (blob(BLOB_MEM_GUEST, 4096, &[]), GpuError::BackingEntries(0)),
+        (
+            blob(BLOB_MEM_HOST3D_GUEST, 4096, &[]),
+            GpuError::BackingEntries(0),
+        ),
+        (
+            blob(BLOB_MEM_HOST3D, 4096, &entry),
+            GpuError::BackingEntries(1),
+        ),
+        (
+            Command::ResourceMapBlob {
+                resource_id: 1,
+                offset: 0x1234,
+            },
+            GpuError::MisalignedPage(0x1234),
+        ),
+    ] {
+        assert_eq!(command.encode(&mut out), Err(error), "{command:?}");
+    }
+}
+
+/// `RESOURCE_MAP_BLOB` names where in the host-visible window the driver
+/// wants the blob, and is answered by how to cache it; `UNMAP_BLOB` is the
+/// resource alone.
+///
+/// Offsets by hand from `struct virtio_gpu_resource_map_blob` (resource at
+/// 24, padding, `offset` at 32), `struct virtio_gpu_resp_map_info`
+/// (`map_info` at 24, padding to 32) and
+/// `struct virtio_gpu_resource_unmap_blob` (resource at 24, padding to 32).
+#[test]
+fn a_blob_is_mapped_at_the_drivers_offset_and_told_its_caching() {
+    let map = Command::ResourceMapBlob {
+        resource_id: 9,
+        offset: 0x1_0020_0000,
+    };
+    let bytes = encoded(&map);
+    assert_eq!(bytes.len(), 40);
+    assert_eq!(
+        u32_at(&bytes, 0),
+        0x0208,
+        "VIRTIO_GPU_CMD_RESOURCE_MAP_BLOB"
+    );
+    assert_eq!([u32_at(&bytes, 24), u32_at(&bytes, 28)], [9, 0]);
+    assert_eq!(u64_at(&bytes, 32), 0x1_0020_0000);
+    assert_eq!(map.response_len(), 32);
+    assert_eq!(map.expects(), 0x1106, "VIRTIO_GPU_RESP_OK_MAP_INFO");
+
+    let answer = response(0x1106, &[0x01, 0, 0, 0, 0, 0, 0, 0]);
+    assert_eq!(
+        Response::parse(&map, &answer, written(&answer)),
+        Ok(Response::MapInfo {
+            map_info: MAP_CACHE_CACHED
+        })
+    );
+    // The body is the whole of the answer: a header alone is too short.
+    let bare = response(0x1106, &[]);
+    assert_eq!(
+        Response::parse(&map, &bare, written(&bare)),
+        Err(GpuError::ResponseTooShort(24))
+    );
+    // And the other commands do not take it.
+    let unmap = Command::ResourceUnmapBlob { resource_id: 9 };
+    assert!(matches!(
+        Response::parse(&unmap, &answer, written(&answer)),
+        Err(GpuError::UnexpectedResponse {
+            command: 0x0209,
+            response: 0x1106
+        })
+    ));
+
+    let bytes = encoded(&unmap);
+    assert_eq!(bytes.len(), 32);
+    assert_eq!(
+        u32_at(&bytes, 0),
+        0x0209,
+        "VIRTIO_GPU_CMD_RESOURCE_UNMAP_BLOB"
+    );
+    assert_eq!([u32_at(&bytes, 24), u32_at(&bytes, 28)], [9, 0]);
 }
