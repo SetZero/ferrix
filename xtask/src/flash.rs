@@ -177,12 +177,27 @@ pub(crate) fn run(arch: Arch, files: &BoardFiles, args: &Args) -> Result<()> {
         initramfs,
         defaults,
     } = files;
-    let target = match args.to.as_deref() {
-        Some(given) => verify(Path::new(given))?,
-        None => discover()?,
+    // A staging directory is written exactly as a card would be, and none of
+    // a card's checks apply to it: it is not a mounted filesystem, and the
+    // only thing it can be mistaken for is itself. The builds run on one
+    // machine and the board hangs off another; the second copies the
+    // directory onto the card.
+    let staged = args.stage.as_deref().map(PathBuf::from);
+    let target = match (staged.as_ref(), args.to.as_deref()) {
+        (Some(stage), _) => {
+            std::fs::create_dir_all(stage)
+                .map_err(|error| Error::new(format!("creating {}: {error}", stage.display())))?;
+            stage.clone()
+        }
+        (None, Some(given)) => verify(Path::new(given))?,
+        (None, None) => discover()?,
     };
 
-    println!("  flashing to {}", target.display());
+    println!(
+        "  {} {}",
+        if staged.is_some() { "staging in" } else { "flashing to" },
+        target.display()
+    );
 
     let boot_name = arch.removable_boot_name();
     let loader_target = target.join(BOOT_DIRECTORY).join(boot_name);
@@ -216,6 +231,10 @@ pub(crate) fn run(arch: Arch, files: &BoardFiles, args: &Args) -> Result<()> {
     // rejects the image for reasons that have nothing to do with the build.
     // Each file was flushed as it was written; this is the rest, the
     // directories and the FAT itself, where the host has a way to ask.
+    if staged.is_some() {
+        println!("  staged; copy the directory's contents onto the card's boot partition");
+        return Ok(());
+    }
     sync();
     if cfg!(windows) {
         sync_volume(&target);
