@@ -41,7 +41,27 @@ pub(crate) fn write_fd(fd: i32, bytes: &[u8]) -> bool {
     true
 }
 
+/// A count of the times the shell may have changed the file system: bumped
+/// by every process it starts and every file it opens for writing, which is
+/// every way a script has of changing a directory. What the shell remembers
+/// about a directory's contents it remembers for one value of this, and
+/// looks again once it has moved on; see `builtins::FpathListing`.
+static FS_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Note that the file system may have changed.
+pub(crate) fn fs_touched() {
+    let _old = FS_EPOCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The current value of [`FS_EPOCH`].
+pub(crate) fn fs_epoch() -> u64 {
+    FS_EPOCH.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 fn fork() -> i32 {
+    // Whatever runs in the child may write anywhere, and goes on doing it
+    // while the shell carries on.
+    fs_touched();
     // SAFETY: the shell is single-threaded, so the child may run any code.
     unsafe { libc::fork() }
 }
@@ -560,6 +580,9 @@ pub(crate) fn errmsg(err: i32) -> String {
 
 fn open_file(path: &[u8], flags: i32) -> Result<i32, String> {
     let c = CString::new(tok::unmetafy(path)).map_err(|_| "bad file name".to_owned())?;
+    if flags & libc::O_ACCMODE != libc::O_RDONLY {
+        fs_touched();
+    }
     // SAFETY: c is a valid NUL-terminated string.
     let fd = unsafe { libc::open(c.as_ptr(), flags | libc::O_CLOEXEC, 0o666) };
     if fd < 0 {

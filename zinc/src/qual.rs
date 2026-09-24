@@ -374,9 +374,33 @@ impl Quals {
         if self.alts.is_empty() {
             return true;
         }
+        let mut stats = Stats::default();
         self.alts
             .iter()
-            .any(|alt| alt.iter().all(|q| holds(q, path)))
+            .any(|alt| alt.iter().all(|q| holds(q, path, &mut stats)))
+    }
+}
+
+/// What one file is, looked up once for all the qualifiers asking.
+///
+/// zsh stats a file once per glob match whatever the qualifiers, and so
+/// does this now: compaudit's `(N-f:g+w:,-f:o+w:,-^u0u$EUID)` is four tests
+/// in three alternatives over every file of `fpath`, and each of them was a
+/// system call of its own.
+#[derive(Default)]
+struct Stats {
+    followed: Option<Option<std::fs::Metadata>>,
+    unfollowed: Option<Option<std::fs::Metadata>>,
+}
+
+impl Stats {
+    fn of(&mut self, path: &[u8], follow: bool) -> Option<&std::fs::Metadata> {
+        let slot = if follow {
+            &mut self.followed
+        } else {
+            &mut self.unfollowed
+        };
+        slot.get_or_insert_with(|| stat_of(path, follow)).as_ref()
     }
 }
 
@@ -394,13 +418,13 @@ fn stat_of(path: &[u8], follow: bool) -> Option<std::fs::Metadata> {
     }
 }
 
-fn holds(q: &Qual, path: &[u8]) -> bool {
-    let yes = test_holds(&q.test, path, q.follow);
+fn holds(q: &Qual, path: &[u8], stats: &mut Stats) -> bool {
+    let yes = test_holds(&q.test, stats.of(path, q.follow));
     yes != q.negate
 }
 
-fn test_holds(test: &Test, path: &[u8], follow: bool) -> bool {
-    let Some(md) = stat_of(path, follow) else {
+fn test_holds(test: &Test, md: Option<&std::fs::Metadata>) -> bool {
+    let Some(md) = md else {
         return false;
     };
     let mode = md.mode();

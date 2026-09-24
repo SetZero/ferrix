@@ -907,10 +907,16 @@ fn glob(sh: &Shell, pat: &[u8], qualifiers: Option<&crate::qual::Quals>) -> Vec<
                     p.push(b'/');
                 }
                 p.extend_from_slice(&tok::remove_nulls(comp));
-                if std::fs::symlink_metadata(std::ffi::OsStr::new(&*String::from_utf8_lossy(
-                    &tok::unmetafy(&p),
-                )))
-                .is_ok()
+                // Only the last name is looked up, as zsh's `scanner` does:
+                // a directory on the way that is not there fails the listing
+                // or the look-up after it just the same, and asking about
+                // each one cost `/home`, `/home/user`, ... again for every
+                // directory of `fpath` compinit globs in.
+                if !last
+                    || std::fs::symlink_metadata(std::ffi::OsStr::new(&*String::from_utf8_lossy(
+                        &tok::unmetafy(&p),
+                    )))
+                    .is_ok()
                 {
                     next.push(p);
                 }

@@ -586,3 +586,42 @@ fn an_element_is_read_and_set_in_place() {
         "1 0 0\n"
     );
 }
+
+/// `read` from a regular file takes one line and leaves the rest where the
+/// next reader finds it, as reading a byte at a time would: it reads a block
+/// and gives back what the line did not use.
+#[test]
+fn read_leaves_a_file_where_the_line_ended() {
+    const F: &str = "f=/tmp/zinc-parity-read-offset; ";
+    assert_eq!(
+        run(&format!(
+            "{F}print -l one two three > $f; {{ read a; read b; echo \"$a,$b\"; cat; }} < $f"
+        )),
+        "one,two\nthree\n"
+    );
+    // A line continued with a backslash is read on into the next.
+    assert_eq!(
+        run(&format!(
+            "{F}print -rn -- 'a\\' > $f; print b >> $f; print c >> $f; \
+             {{ read x; read -r y; echo \"$x|$y\"; }} < $f"
+        )),
+        "ab|c\n"
+    );
+}
+
+/// `autoload` finds a burst of names -- compinit's, one per completion
+/// function -- in one listing of `fpath`'s directories, and a file written
+/// after an earlier listing is found all the same.
+#[test]
+fn autoload_finds_a_burst_of_names_and_a_file_written_since() {
+    let dir = "/tmp/zinc-autoload-listing";
+    assert_eq!(
+        run(&format!(
+            "rm -rf {dir}; mkdir -p {dir}; \
+             for n in f1 f2 f3 f4 f5 f6; do print -r -- \"echo hi from $n\" > {dir}/$n; done; \
+             fpath=({dir} $fpath); autoload -Uz f1 f2 f3 f4 f5 f6; f6; \
+             print -r -- 'echo late' > {dir}/late; autoload -Uz f1 f2 f3 f4 f5 late; late"
+        )),
+        "hi from f6\nlate\n"
+    );
+}
