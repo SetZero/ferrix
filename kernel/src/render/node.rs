@@ -40,34 +40,50 @@
 //! `DRM_IOCTL_GEM_CLOSE` lets a handle go, and an open that closes lets go
 //! of the rest.
 //!
+//! # Venus: contexts of a capability set, blobs and fences
+//!
+//! What Mesa's Venus driver asks of a render node (`docs/GPU.md` §6.1).
+//! `CONTEXT_INIT` makes this open's context for the capability set it names,
+//! with up to [`MAX_RINGS`] rings. `RESOURCE_CREATE_BLOB` makes a blob -- host
+//! memory the device's renderer allocates, named by the context's own
+//! `blob_id` -- after running the commands that name it, and a mappable one is
+//! placed in the device's host-visible window as it is made; `MAP` and `mmap`
+//! then reach those pages, cached as the device said. `EXECBUFFER` on a ring
+//! with `EXECBUF_FENCE_FD_OUT` answers a descriptor ([`super::fence`]) that
+//! polls readable when the work has finished. `DRM_IOCTL_GET_CAP` says there
+//! are no sync objects, which is what sends Venus to its own on top of those
+//! descriptors.
+//!
 //! What is not answered, and what is in the way of each:
 //!
-//! * **Fences.** The driver does not offer them, so `WAIT` waits for what
-//!   this open sent before it to be *answered* -- taken by the device and
-//!   done with, which for a stream is not the GPU having finished drawing.
-//!   A transfer from the device is ordered after every stream before it,
-//!   which is the one place this path needs to know that.
-//! * **`CONTEXT_INIT` and blob resources**, which `GETPARAM` says are not
-//!   offered.
+//! * **Fences into a submission**, `EXECBUF_FENCE_FD_IN`, and sync objects:
+//!   Venus waits on its fences itself, by polling them.
+//! * **Blobs of guest memory**, `BLOB_MEM_GUEST` and `BLOB_MEM_HOST3D_GUEST`,
+//!   which need the guest's pages handed to the device as a resource's
+//!   backing is; Venus keeps everything in host memory when the window is
+//!   there.
+//! * **An unfenced submission's work finishing.** `WAIT` still waits for
+//!   what this open sent before it to be *answered*, which for a stream on no
+//!   ring is the device having taken it, not the GPU having finished it.
 
 use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::any::Any;
 
-use ferrix_linux_abi::drm::{self, GemClose, PrimeHandle, Version};
+use ferrix_linux_abi::drm::{self, GemClose, GetCap, PrimeHandle, Version};
 use ferrix_linux_abi::errno::Errno;
 use ferrix_linux_abi::socket::Width;
 use ferrix_linux_abi::types;
 use ferrix_linux_abi::virtgpu::{
-    self, ExecBuffer, Field, GetCaps, GetParam, Layout, Map, ResourceCreate, ResourceInfo,
-    TransferToHost, Wait,
+    self, ContextInit, ContextSetParam, ExecBuffer, Field, GetCaps, GetParam, Layout, Map,
+    ResourceCreate, ResourceCreateBlob, ResourceInfo, TransferToHost, Wait,
 };
-use ferrix_renderctl::message::{Direction, Region, Status, Transfer, flags};
+use ferrix_renderctl::message::{Direction, MAX_RINGS, NO_RING, Region, Status, Transfer, flags};
 use ferrix_renderctl::session::RequestError;
 use ferrix_vfs::{Inode, Metadata, Result as VfsResult};
 
-use super::{COMMAND_BYTES, RenderError, Renderer};
+use super::{COMMAND_BYTES, Placed, RenderError, Renderer};
 use crate::sync::SpinLock;
 use crate::syscall::process::Process;
 use crate::syscall::uaccess;
@@ -113,6 +129,31 @@ pub(crate) struct Object {
     bytes: u32,
     /// That backing, which `mmap` maps and the driver pinned for the device.
     backing: Option<Arc<Vmo>>,
+    /// For a blob, which kind of memory it is, as `RESOURCE_INFO` reports.
+    blob_mem: u32,
+    /// For a mappable blob, where its pages are in the device's window.
+    placed: Option<Placed>,
+}
+
+/// A mapped blob, as `mmap` keeps it: the object, held for as long as any
+/// region maps its pages, so the device cannot be told to let it go -- and
+/// its place in the window cannot be given to another blob -- while a
+/// program can still reach them.
+#[derive(Debug)]
+pub(crate) struct Window {
+    object: Arc<Object>,
+}
+
+impl Window {
+    /// Where the blob's pages are, how many, and whether the device said
+    /// they may be cached: `VIRTIO_GPU_MAP_CACHE_CACHED`, or no word at all,
+    /// which Linux's `virtio_gpu_vram_mmap` maps cached too. Write-combining
+    /// is mapped uncached, which is slower and never wrong.
+    pub(crate) fn place(&self) -> Option<(u64, u64, bool)> {
+        let placed = self.object.placed?;
+        let cache = placed.map_info & 0x0f;
+        Some((placed.phys, placed.len, cache == 0x00 || cache == 0x01))
+    }
 }
 
 impl core::fmt::Debug for Object {
@@ -162,8 +203,9 @@ struct Handle {
 pub(crate) struct RenderFile {
     renderer: Arc<Renderer>,
     handles: SpinLock<Handles>,
-    /// This open's context on the device, once something has needed one.
-    context: SpinLock<Option<u32>>,
+    /// This open's context on the device, once something has needed one,
+    /// and how many rings `CONTEXT_INIT` gave it.
+    context: SpinLock<Option<(u32, u32)>>,
 }
 
 /// An open's handle table.
@@ -198,28 +240,41 @@ impl RenderFile {
         }))
     }
 
-    /// This open's context, made now if it has none.
+    /// This open's context, made now for the default capability set if it
+    /// has none.
     ///
     /// Two threads of one program may both find none and both make one; the
     /// second is given straight back. Making one sleeps, so the lock cannot
     /// be held across it.
     fn context(&self) -> Result<u32, Errno> {
-        if let Some(context) = *self.context.lock() {
+        if let Some((context, _)) = *self.context.lock() {
             return Ok(context);
         }
-        let made = self.renderer.make_context().map_err(errno_of)?;
+        let made = self
+            .renderer
+            .make_context(self.renderer.default_capset())
+            .map_err(errno_of)?;
         let mut held = self.context.lock();
         match *held {
-            Some(first) => {
+            Some((first, _)) => {
                 drop(held);
                 self.renderer.release(&[], Some(made));
                 Ok(first)
             }
             None => {
-                *held = Some(made);
+                *held = Some((made, 0));
                 Ok(made)
             }
         }
+    }
+
+    /// Put `object` in this open's handle table, and answer its handle.
+    fn hold(&self, object: Arc<Object>) -> u32 {
+        let mut handles = self.handles.lock();
+        let handle = handles.next;
+        handles.next = handles.next.saturating_add(1);
+        handles.live.push(Handle { handle, object });
+        handle
     }
 
     /// What is behind `handle`, if this open has it.
@@ -252,7 +307,8 @@ impl Drop for RenderFile {
         // have. Nothing is said about the objects here, so a handle another
         // descriptor still names keeps its object.
         let _ = objects;
-        self.renderer.release(&[], *self.context.get_mut());
+        self.renderer
+            .release(&[], self.context.get_mut().map(|(context, _)| context));
     }
 }
 
@@ -275,12 +331,19 @@ impl Inode for RenderFile {
         Err(Errno::EINVAL)
     }
 
-    /// The backing of the object a `VIRTGPU_MAP` offset names.
+    /// The backing of the object a `VIRTGPU_MAP` offset names: its VMO, or
+    /// for a blob, its place in the device's window.
     fn mapping_at(&self, offset: u64) -> Option<(Arc<dyn Any + Send + Sync>, u64)> {
         let handle = u32::try_from(offset >> MAP_SHIFT).ok()?;
-        let backing = self.held(handle).ok()?.object.backing.clone()?;
-        let object: Arc<dyn Any + Send + Sync> = backing;
-        Some((object, offset & ((1 << MAP_SHIFT) - 1)))
+        let object = self.held(handle).ok()?.object;
+        let within = offset & ((1 << MAP_SHIFT) - 1);
+        if let Some(backing) = object.backing.clone() {
+            let backing: Arc<dyn Any + Send + Sync> = backing;
+            return Some((backing, within));
+        }
+        let _ = object.placed?;
+        let window: Arc<dyn Any + Send + Sync> = Arc::new(Window { object });
+        Some((window, within))
     }
 }
 
@@ -324,6 +387,9 @@ pub(crate) fn ioctl(
         virtgpu::IOCTL_EXECBUFFER => exec_buffer(process, file, arg),
         virtgpu::IOCTL_WAIT => wait(process, file, arg),
         virtgpu::IOCTL_GET_CAPS => get_caps(process, file, arg),
+        virtgpu::IOCTL_CONTEXT_INIT => context_init(process, file, arg),
+        virtgpu::IOCTL_RESOURCE_CREATE_BLOB => resource_create_blob(process, file, arg),
+        drm::IOCTL_GET_CAP => get_cap(process, arg),
         drm::IOCTL_GEM_CLOSE => gem_close(process, file, arg),
         drm::IOCTL_PRIME_HANDLE_TO_FD => export(process, file, arg),
         _ => Err(Errno::ENOTTY),
@@ -400,17 +466,10 @@ fn resource_create(process: &Process, file: &RenderFile, arg: u64) -> Result<usi
         stride: create.stride,
         bytes: create.size,
         backing,
+        blob_mem: 0,
+        placed: None,
     });
-    let handle = {
-        let mut handles = file.handles.lock();
-        let handle = handles.next;
-        handles.next = handles.next.saturating_add(1);
-        handles.live.push(Handle {
-            handle,
-            object: held,
-        });
-        handle
-    };
+    let handle = file.hold(held);
     create.bo_handle = handle;
     create.res_handle = object;
     create.write(&mut bytes).ok_or(Errno::EFAULT)?;
@@ -428,7 +487,8 @@ fn map(process: &Process, file: &RenderFile, arg: u64) -> Result<usize, Errno> {
     let mut bytes = vec![0u8; Map::SIZE];
     uaccess::copy_from_user(process.space(), arg, &mut bytes).map_err(|_| Errno::EFAULT)?;
     let mut map = Map::read(&bytes).ok_or(Errno::EFAULT)?;
-    if file.held(map.handle)?.object.backing.is_none() {
+    let object = file.held(map.handle)?.object;
+    if object.backing.is_none() && object.placed.is_none() {
         return Err(Errno::EINVAL);
     }
     map.offset = u64::from(map.handle) << MAP_SHIFT;
@@ -481,15 +541,22 @@ fn transfer(
 ///
 /// The stream is copied once, into the core, and from there into the work
 /// VMO, where the device reads it: a program's memory is not something a
-/// driver in another process can be pointed at. No fence comes in or goes out, and no ring is named: the
-/// flags that ask for those are refused, as `GETPARAM` said they would be.
-/// `bo_handles` is a hint on Linux -- which objects the stream touches, for
-/// fencing them -- and with no fences to hang on them it is not read.
+/// driver in another process can be pointed at.
+///
+/// With `EXECBUF_RING_IDX` it runs on that ring of the context, which
+/// `CONTEXT_INIT` gave it; with `EXECBUF_FENCE_FD_OUT` it is fenced there --
+/// on ring 0 if none is named -- and the answer carries a descriptor that
+/// polls readable once the work has finished. No fence comes *in*, and no
+/// sync object either way: those are refused, as `GET_CAP` says there are
+/// none. `bo_handles` is a hint on Linux -- which objects the stream
+/// touches, for fencing them -- and a fence here is on the stream, so it is
+/// not read.
 fn exec_buffer(process: &Process, file: &RenderFile, arg: u64) -> Result<usize, Errno> {
     let mut bytes = vec![0u8; ExecBuffer::SIZE];
     uaccess::copy_from_user(process.space(), arg, &mut bytes).map_err(|_| Errno::EFAULT)?;
-    let exec = ExecBuffer::read(&bytes).ok_or(Errno::EFAULT)?;
-    if exec.flags != 0 || exec.num_in_syncobjs != 0 || exec.num_out_syncobjs != 0 {
+    let mut exec = ExecBuffer::read(&bytes).ok_or(Errno::EFAULT)?;
+    let known = virtgpu::EXECBUF_RING_IDX | virtgpu::EXECBUF_FENCE_FD_OUT;
+    if exec.flags & !known != 0 || exec.num_in_syncobjs != 0 || exec.num_out_syncobjs != 0 {
         return Err(Errno::EINVAL);
     }
     // A stream is words, and one longer than a slot is not split: only its
@@ -501,7 +568,180 @@ fn exec_buffer(process: &Process, file: &RenderFile, arg: u64) -> Result<usize, 
     uaccess::copy_from_user(process.space(), exec.command, &mut commands)
         .map_err(|_| Errno::EFAULT)?;
     let context = file.context()?;
-    file.renderer.submit(context, &commands).map_err(errno_of)?;
+    let rings = file.context.lock().map_or(0, |(_, rings)| rings);
+    let named = exec.flags & virtgpu::EXECBUF_RING_IDX != 0;
+    let fenced = exec.flags & virtgpu::EXECBUF_FENCE_FD_OUT != 0;
+    if named && exec.ring_idx >= rings {
+        return Err(Errno::EINVAL);
+    }
+    let ring = match (fenced, named) {
+        (true, true) => exec.ring_idx,
+        (true, false) => 0,
+        (false, _) => NO_RING,
+    };
+    if fenced && !file.renderer.has_rings() {
+        return Err(Errno::EINVAL);
+    }
+    let fence = file
+        .renderer
+        .submit(context, ring, &commands)
+        .map_err(errno_of)?;
+    if fenced {
+        let open = super::fence::open(Arc::clone(&file.renderer), fence)?;
+        let descriptor = process.files().lock().insert(open, true)?;
+        exec.fence_fd = i32::try_from(descriptor).map_err(|_| Errno::EMFILE)?;
+        exec.write(&mut bytes).ok_or(Errno::EFAULT)?;
+        uaccess::copy_to_user(process.space(), arg, &bytes).map_err(|_| Errno::EFAULT)?;
+    }
+    Ok(0)
+}
+
+/// `VIRTGPU_CONTEXT_INIT`: make this open's context for the capability set
+/// the program names, with the rings it asks for.
+///
+/// Once an open, as Linux has it: an open whose context is made -- by this,
+/// or by any call that needed one first -- is `EEXIST`. A set the driver did
+/// not offer is `EINVAL`, and so is a ring count past [`MAX_RINGS`].
+/// `POLL_RINGS_MASK` asks for events on the node's descriptor when a ring's
+/// fence passes; nothing is read from this node, so only no rings is taken.
+/// A debug name is for the host's log and is not carried.
+fn context_init(process: &Process, file: &RenderFile, arg: u64) -> Result<usize, Errno> {
+    let mut bytes = vec![0u8; ContextInit::SIZE];
+    uaccess::copy_from_user(process.space(), arg, &mut bytes).map_err(|_| Errno::EFAULT)?;
+    let init = ContextInit::read(&bytes).ok_or(Errno::EFAULT)?;
+    if init.pad != 0 || init.num_params == 0 || init.num_params > 4 {
+        return Err(Errno::EINVAL);
+    }
+    let mut capset = file.renderer.default_capset();
+    let mut rings = 0_u32;
+    for index in 0..u64::from(init.num_params) {
+        let mut param = vec![0u8; ContextSetParam::SIZE];
+        let at = init
+            .ctx_set_params
+            .checked_add(index * ContextSetParam::SIZE as u64)
+            .ok_or(Errno::EFAULT)?;
+        uaccess::copy_from_user(process.space(), at, &mut param).map_err(|_| Errno::EFAULT)?;
+        let param = ContextSetParam::read(&param).ok_or(Errno::EFAULT)?;
+        match param.param {
+            virtgpu::CONTEXT_PARAM_CAPSET_ID => {
+                capset = u32::try_from(param.value).map_err(|_| Errno::EINVAL)?;
+                if capset == 0 || capset >= u32::BITS || file.renderer.capsets() & (1 << capset) == 0
+                {
+                    return Err(Errno::EINVAL);
+                }
+            }
+            virtgpu::CONTEXT_PARAM_NUM_RINGS => {
+                rings = u32::try_from(param.value).map_err(|_| Errno::EINVAL)?;
+                if rings > MAX_RINGS {
+                    return Err(Errno::EINVAL);
+                }
+            }
+            virtgpu::CONTEXT_PARAM_POLL_RINGS_MASK if param.value == 0 => {}
+            virtgpu::CONTEXT_PARAM_DEBUG_NAME => {}
+            _ => return Err(Errno::EINVAL),
+        }
+    }
+    if file.context.lock().is_some() {
+        return Err(Errno::EEXIST);
+    }
+    let made = file.renderer.make_context(capset).map_err(errno_of)?;
+    let mut held = file.context.lock();
+    if held.is_some() {
+        drop(held);
+        file.renderer.release(&[], Some(made));
+        return Err(Errno::EEXIST);
+    }
+    *held = Some((made, rings));
+    Ok(0)
+}
+
+/// `VIRTGPU_RESOURCE_CREATE_BLOB`: make a blob, and a handle for it.
+///
+/// Host memory only, `BLOB_MEM_HOST3D`, in this open's context: the context's
+/// own protocol names the memory by `blob_id`, which is why the commands a
+/// program hands over with the call run first, in that context, before the
+/// blob is asked for. A mappable one is placed in the device's window as it
+/// is made, and one on a device with no window is `EINVAL`; so is sharing
+/// across devices, which Linux also answers only where it has another
+/// device to share with. The size is rounded up to whole pages, as Linux
+/// rounds it.
+fn resource_create_blob(process: &Process, file: &RenderFile, arg: u64) -> Result<usize, Errno> {
+    let mut bytes = vec![0u8; ResourceCreateBlob::SIZE];
+    uaccess::copy_from_user(process.space(), arg, &mut bytes).map_err(|_| Errno::EFAULT)?;
+    let mut create = ResourceCreateBlob::read(&bytes).ok_or(Errno::EFAULT)?;
+    let known = virtgpu::BLOB_FLAG_USE_MAPPABLE | virtgpu::BLOB_FLAG_USE_SHAREABLE;
+    if create.blob_mem != virtgpu::BLOB_MEM_HOST3D
+        || create.blob_flags & !known != 0
+        || create.pad != 0
+        || create.size == 0
+    {
+        return Err(Errno::EINVAL);
+    }
+    let page = ferrix_bootinfo::PAGE_SIZE;
+    let size = create
+        .size
+        .checked_add(page - 1)
+        .map(|size| size & !(page - 1))
+        .ok_or(Errno::EINVAL)?;
+    let mappable = create.blob_flags & virtgpu::BLOB_FLAG_USE_MAPPABLE != 0;
+    if mappable && !file.renderer.has_window() {
+        return Err(Errno::EINVAL);
+    }
+    let context = file.context()?;
+    if create.cmd_size != 0 {
+        if !create.cmd_size.is_multiple_of(4) || u64::from(create.cmd_size) > COMMAND_BYTES {
+            return Err(Errno::EINVAL);
+        }
+        let mut commands = vec![0u8; create.cmd_size as usize];
+        uaccess::copy_from_user(process.space(), create.cmd, &mut commands)
+            .map_err(|_| Errno::EFAULT)?;
+        let _ = file
+            .renderer
+            .submit(context, NO_RING, &commands)
+            .map_err(errno_of)?;
+    }
+    let (object, placed) = file
+        .renderer
+        .make_blob(
+            context,
+            create.blob_mem,
+            create.blob_flags,
+            create.blob_id,
+            size,
+            mappable,
+        )
+        .map_err(errno_of)?;
+    let held = Arc::new(Object {
+        renderer: Arc::clone(&file.renderer),
+        id: object,
+        width: 0,
+        height: 0,
+        stride: 0,
+        bytes: u32::try_from(size).unwrap_or(u32::MAX),
+        backing: None,
+        blob_mem: create.blob_mem,
+        placed,
+    });
+    create.bo_handle = file.hold(held);
+    create.res_handle = object;
+    create.write(&mut bytes).ok_or(Errno::EFAULT)?;
+    uaccess::copy_to_user(process.space(), arg, &bytes).map_err(|_| Errno::EFAULT)?;
+    Ok(0)
+}
+
+/// `DRM_IOCTL_GET_CAP` on a render node: that there are no sync objects,
+/// which is how Venus learns to make its own on fence descriptors. Every
+/// other capability is the card's to answer, and is `EINVAL` here.
+fn get_cap(process: &Process, arg: u64) -> Result<usize, Errno> {
+    let mut bytes = vec![0u8; GetCap::SIZE];
+    uaccess::copy_from_user(process.space(), arg, &mut bytes).map_err(|_| Errno::EFAULT)?;
+    let mut cap = GetCap::read(&bytes).ok_or(Errno::EFAULT)?;
+    cap.value = match cap.capability {
+        drm::CAP_SYNCOBJ | drm::CAP_SYNCOBJ_TIMELINE => 0,
+        _ => return Err(Errno::EINVAL),
+    };
+    cap.write(&mut bytes).ok_or(Errno::EFAULT)?;
+    uaccess::copy_to_user(process.space(), arg, &bytes).map_err(|_| Errno::EFAULT)?;
     Ok(0)
 }
 
@@ -521,7 +761,7 @@ fn wait(process: &Process, file: &RenderFile, arg: u64) -> Result<usize, Errno> 
         return Err(Errno::EINVAL);
     }
     // An open that never needed a context has sent nothing.
-    let Some(context) = *file.context.lock() else {
+    let Some((context, _)) = *file.context.lock() else {
         return Ok(0);
     };
     if wait.flags & virtgpu::WAIT_NOWAIT != 0 {
@@ -538,17 +778,20 @@ fn wait(process: &Process, file: &RenderFile, arg: u64) -> Result<usize, Errno> 
     }
 }
 
-/// `VIRTGPU_GET_CAPS`: the capability set, as the device gave it.
+/// `VIRTGPU_GET_CAPS`: a capability set, as the device gave it.
 ///
 /// As many bytes as the caller has room for, which is how Linux answers it:
 /// a renderer built against an older, shorter set reads the front of a
-/// newer one. A set the driver's streams are not in is `EINVAL`.
+/// newer one. A set the driver did not offer is `EINVAL`.
 fn get_caps(process: &Process, file: &RenderFile, arg: u64) -> Result<usize, Errno> {
     let mut bytes = vec![0u8; GetCaps::SIZE];
     uaccess::copy_from_user(process.space(), arg, &mut bytes).map_err(|_| Errno::EFAULT)?;
     let asked = GetCaps::read(&bytes).ok_or(Errno::EFAULT)?;
-    let (capset, caps) = file.renderer.caps();
-    if asked.cap_set_id != capset || caps.is_empty() {
+    let caps = file
+        .renderer
+        .caps(asked.cap_set_id)
+        .ok_or(Errno::EINVAL)?;
+    if caps.is_empty() {
         return Err(Errno::EINVAL);
     }
     let given = caps
@@ -574,9 +817,8 @@ fn resource_info(process: &Process, file: &RenderFile, arg: u64) -> Result<usize
     let held = file.held(info.bo_handle)?;
     info.res_handle = held.object.id;
     info.size = held.object.bytes;
-    // Not a blob resource: `PARAM_RESOURCE_BLOB` says the device offers
-    // none, so nothing here can be one.
-    info.blob_mem = 0;
+    // Zero for a resource that is not a blob.
+    info.blob_mem = held.object.blob_mem;
     info.write(&mut bytes).ok_or(Errno::EFAULT)?;
     uaccess::copy_to_user(process.space(), arg, &bytes).map_err(|_| Errno::EFAULT)?;
     Ok(0)
@@ -744,19 +986,18 @@ fn get_param(process: &Process, file: &RenderFile, arg: u64) -> Result<usize, Er
         // The core asks for a capability set by its number, which is the
         // fixed query this parameter stands for.
         virtgpu::PARAM_CAPSET_QUERY_FIX => 1,
-        // A bitmask, one bit per set. The core knows the one set the
-        // driver named in its HELLO and claims no more than that; the
-        // device may well have others, which the driver read and the core
-        // was never told about.
-        virtgpu::PARAM_SUPPORTED_CAPSET_IDS => 1_u64 << file.renderer.capset(),
-        // Blob resources, host-visible memory, sharing across devices and
-        // the rest are not offered yet. They are the protocol's to carry
-        // before they are the node's to answer.
-        virtgpu::PARAM_RESOURCE_BLOB
-        | virtgpu::PARAM_HOST_VISIBLE
-        | virtgpu::PARAM_CROSS_DEVICE
-        | virtgpu::PARAM_CONTEXT_INIT
-        | virtgpu::PARAM_EXPLICIT_DEBUG_NAME => 0,
+        // A bitmask, one bit per set: the ones the driver offered in its
+        // HELLO, which are the ones a context may be made for.
+        virtgpu::PARAM_SUPPORTED_CAPSET_IDS => u64::from(file.renderer.capsets()),
+        // A context may be made for any of them, with rings.
+        virtgpu::PARAM_CONTEXT_INIT => 1,
+        // Blobs of host memory, mapped through the device's window: both
+        // there only where the device has the window.
+        virtgpu::PARAM_RESOURCE_BLOB | virtgpu::PARAM_HOST_VISIBLE => {
+            u64::from(file.renderer.has_window())
+        }
+        // Sharing across devices and named contexts are not offered.
+        virtgpu::PARAM_CROSS_DEVICE | virtgpu::PARAM_EXPLICIT_DEBUG_NAME => 0,
         _ => return Err(Errno::EINVAL),
     };
     // The answer goes where the caller's pointer says, not into the
