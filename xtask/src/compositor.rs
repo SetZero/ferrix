@@ -2017,7 +2017,7 @@ pub(crate) fn run_compositor(args: &Args) -> Result<()> {
     };
     let programs = Programs::build(arch)?;
     let size = args.size.unwrap_or(crate::wallpaper::SCREEN);
-    let (config, carried) = desktop(arch, config, size, args)?;
+    let (config, carried) = desktop(arch, config, size, Backdrop::Any, args)?;
     // The desktop a person watches boots as a board's does: with its
     // self-checks skipped, which only the `desktop` boot of the judged ones
     // is.
@@ -2070,9 +2070,12 @@ const BOARD_LAYOUT: &str = "input:kb_layout = de\n";
 /// boots -- the compositor as init, its clients, `hyprctl`, a shell -- as the
 /// loader, the kernel and the initramfs `flash` copies.
 ///
-/// No network, since the board has none Ferrix drives, and no wallpaper
-/// unless one is named: a picture scaled every frame, let alone a video
-/// decoded, is a large share of what a 650 MHz Cortex-A7 has to give.
+/// No network, since the board has none Ferrix drives. A wallpaper as
+/// `run-compositor` has one, but still unless one that moves is named, and
+/// cut for the screen as the desktop lays it out (`laid_out`): a still
+/// picture of the screen's own size is copied once and costs a frame
+/// nothing, where a video decoded on a 650 MHz Cortex-A7 would cost most of
+/// the machine. `--wallpaper none` is a bare desktop.
 pub(crate) fn board_files(arch: Arch, args: &Args) -> Result<crate::flash::BoardFiles> {
     if crate::display::target(arch).is_none() {
         return Err(Error::new(format!(
@@ -2096,13 +2099,13 @@ pub(crate) fn board_files(arch: Arch, args: &Args) -> Result<crate::flash::Board
         .or_else(|| gates_busybox(arch));
     let args = &Args {
         net: false,
-        wallpaper: args.wallpaper.clone().or_else(|| Some("none".to_owned())),
         init,
         ..args.clone()
     };
     let programs = Programs::build(arch)?;
     let size = args.size.unwrap_or(BOARD_SCREEN);
-    let (config, mut carried) = desktop(arch, config, size, args)?;
+    let screen = laid_out(size, &config);
+    let (config, mut carried) = desktop(arch, config, size, Backdrop::Board(screen), args)?;
     // Nor the ports: on ARMv7-A they are curl, git and the TLS test server
     // curl's gate talks to, programs for a network the board does not have,
     // and 13 MB of an archive the loader reads off the card at some 16 MB/s
@@ -2151,7 +2154,46 @@ fn gates_busybox(arch: Arch) -> Option<String> {
 /// A desktop a person uses, from `config`: the layout and network lines,
 /// the ssh server when asked for, the screen's size as a `monitor =` line,
 /// and a wallpaper; with the busybox, zinc and ports that ride along.
-fn desktop(arch: Arch, config: String, size: (u32, u32), args: &Args) -> Result<(String, Carried)> {
+/// Which wallpapers a desktop may be given.
+#[derive(Clone, Copy, Debug)]
+enum Backdrop {
+    /// Any kept one, still or moving: a desktop in QEMU.
+    Any,
+    /// A still one unless one is named, cut for a screen laid out at this
+    /// size: a board's desktop (`crate::wallpaper::for_board` says why).
+    Board((u32, u32)),
+}
+
+/// The size a desktop on a `size` screen is laid out at: the screen's own,
+/// or with its width and height exchanged where the configuration turns the
+/// monitor a quarter -- `monitor = ..., transform, 1` or `3`, and the
+/// flipped `5` and `7` -- as the customer's portrait monitor on the DK1 is.
+/// The last `monitor` line that says a transform wins, as it does in the
+/// compositor, where a configuration's own line comes after the default.
+fn laid_out(size: (u32, u32), config: &str) -> (u32, u32) {
+    let turned = config
+        .lines()
+        .filter_map(|line| {
+            let (key, value) = line.split_once('=')?;
+            if key.trim() != "monitor" {
+                return None;
+            }
+            let fields: Vec<&str> = value.split(',').map(str::trim).collect();
+            let at = fields.iter().position(|field| *field == "transform")?;
+            fields.get(at + 1)?.parse::<u32>().ok()
+        })
+        .next_back()
+        .is_some_and(|transform| transform % 2 == 1);
+    if turned { (size.1, size.0) } else { size }
+}
+
+fn desktop(
+    arch: Arch,
+    config: String,
+    size: (u32, u32),
+    backdrop: Backdrop,
+    args: &Args,
+) -> Result<(String, Carried)> {
     let config = with_network(with_layout(config, args), args);
     let mut carried = Carried::wanted(arch, args)?;
     if args.chrome {
@@ -2180,7 +2222,11 @@ fn desktop(arch: Arch, config: String, size: (u32, u32), args: &Args) -> Result<
     // `mpvpaper ALL <file>` is started from a Linux desktop's `exec-once`:
     // the difference is the flag, and that the frames were decoded on a
     // machine that has a decoder.
-    let config = match crate::wallpaper::file(args, size)? {
+    let chosen = match backdrop {
+        Backdrop::Any => crate::wallpaper::file(args, size)?,
+        Backdrop::Board(screen) => crate::wallpaper::for_board(args, screen)?,
+    };
+    let config = match chosen {
         Some(chosen) => {
             // A moving one is started the way `mpvpaper` is on a desktop,
             // down to the words: `-o no-audio` and `ALL` mean here what they
@@ -4849,6 +4895,21 @@ fn judge_chrome_window(
 
 #[cfg(test)]
 mod tests {
+
+    /// A monitor turned a quarter lays its desktop out the other way up; a
+    /// half turn, none, or a line for no monitor at all leaves it be; and the
+    /// configuration's own line, which comes later, wins.
+    #[test]
+    fn a_turned_monitor_lays_its_desktop_out_the_other_way() {
+        let screen = (1280, 720);
+        let turned = "monitor = HDMI-A-1, 1280x720@60, 0x0, 1, transform, 3\n";
+        assert_eq!(super::laid_out(screen, turned), (720, 1280));
+        let half = "monitor = , 1280x720@60, auto, 1, transform, 2\n";
+        assert_eq!(super::laid_out(screen, half), screen);
+        assert_eq!(super::laid_out(screen, "exec-once = /bin/term\n"), screen);
+        let both = format!("{turned}monitor = HDMI-A-1, 1280x720@60, 0x0, 1, transform, 0\n");
+        assert_eq!(super::laid_out(screen, &both), screen);
+    }
     use super::{BOARD_LAYOUT, RUN_CONFIG, back_after_the_last_kill, with_layout};
     use crate::args::Args;
 

@@ -409,8 +409,12 @@ for x86-64 only. The keyboard is German (`input:kb_layout = de`) unless
 `--layout` or the configuration's own `input:kb_layout` names another.
 `--config <hyprland.conf>` carries a configuration
 of your own, as it does for `run-compositor`; `--wallpaper <name>` a picture
-from `cargo xtask wallpapers` (none is the board's default: scaling one is
-real work for a 650 MHz Cortex-A7). The boot says:
+from `cargo xtask wallpapers`. Without one the board gets a still picture
+chosen as `run-compositor` chooses, and never a video unless one is named
+(decoding one is most of what a 650 MHz Cortex-A7 has); `flash` cuts it for
+the screen as the desktop lays it out -- 720x1280 for a monitor turned
+`transform, 3` -- so the board copies it once and scales nothing.
+`--wallpaper none` is a bare desktop. The boot says:
 
 ```
   cmdline  ferrix.checks=skip  (from /FERRIX/DEFAULTS.TXT, the image's defaults)

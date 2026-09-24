@@ -102,6 +102,47 @@ const KINDS: [&str; 9] = [
 /// typed, and one that has gone stale should say so rather than show
 /// something else every boot for a month.
 pub(crate) fn file(args: &Args, size: (u32, u32)) -> Result<Option<Chosen>> {
+    pick(args, size, false)
+}
+
+/// [`file()`] for a board's desktop, whose screen is `screen` as the desktop
+/// is laid out -- a monitor standing on its edge is taller than wide.
+///
+/// Two things differ from a desktop in QEMU. A wallpaper that moves is
+/// chosen only by name: on the DK1's 650 MHz Cortex-A7, decoding a
+/// screen's worth of AV1 thirty times a second would be most of what the
+/// machine has, so a desktop that picks for itself picks a still one. And
+/// a still one kept for another screen is cut for this one here, on the
+/// machine that builds the image, rather than scaled by the client on the
+/// board when it starts: the kept pictures are 1920x1080, a portrait
+/// monitor wants 720x1280, and the card carries 3.7 MB of the right size
+/// instead of 8.3 MB of the wrong one.
+///
+/// # Errors
+///
+/// As [`file()`].
+pub(crate) fn for_board(args: &Args, screen: (u32, u32)) -> Result<Option<Chosen>> {
+    Ok(match pick(args, screen, true)? {
+        Some(Chosen::Still(bytes)) => match picture_size(&bytes) {
+            Some(size) if size != screen => {
+                let cut = recut(&bytes, screen);
+                if cut.is_some() {
+                    println!(
+                        "  wallpaper cut from {}x{} for a {}x{} screen",
+                        size.0, size.1, screen.0, screen.1
+                    );
+                }
+                Some(Chosen::Still(cut.unwrap_or(bytes)))
+            }
+            _ => Some(Chosen::Still(bytes)),
+        },
+        other => other,
+    })
+}
+
+/// [`file()`]'s choice, of any kept wallpaper or of the still ones only when
+/// nothing names one.
+fn pick(args: &Args, size: (u32, u32), stills_only: bool) -> Result<Option<Chosen>> {
     let settings = Settings::load();
     let named = config::path().map_or_else(
         || "the settings file's `name`".to_owned(),
@@ -131,6 +172,7 @@ pub(crate) fn file(args: &Args, size: (u32, u32)) -> Result<Option<Chosen>> {
         .flatten()
         .map(|entry| entry.file_name().to_string_lossy().into_owned())
         .filter(|name| name.ends_with(KIND) || name.ends_with(MOVIE_KIND))
+        .filter(|name| !stills_only || asked.is_some() || name.ends_with(KIND))
         .collect();
     kept.sort();
     let cut = [
@@ -160,6 +202,84 @@ pub(crate) fn file(args: &Args, size: (u32, u32)) -> Result<Option<Chosen>> {
         }
     }
     Ok(chosen)
+}
+
+/// A kept picture's width and height, from its header.
+fn picture_size(bytes: &[u8]) -> Option<(u32, u32)> {
+    let header = bytes.get(..MAGIC.len().checked_add(8)?)?;
+    let (magic, numbers) = header.split_at(MAGIC.len());
+    if magic != MAGIC {
+        return None;
+    }
+    let number = |at: usize| -> Option<u32> {
+        Some(u32::from_le_bytes(
+            numbers.get(at..at + 4)?.try_into().ok()?,
+        ))
+    };
+    Some((number(0)?, number(4)?))
+}
+
+/// A kept picture cut for a `size` screen: scaled until it covers it, the
+/// same amount each way, cut evenly on the two sides that overflow -- what
+/// `wallpapers` asks `ffmpeg` for, and what the client does itself with a
+/// picture of another size -- sampled bilinearly, since this runs once, on
+/// the machine building the image, where the client's nearest pixel runs
+/// on the board at every start. `None` for bytes that are not a whole
+/// picture, or an empty size.
+fn recut(bytes: &[u8], size: (u32, u32)) -> Option<Vec<u8>> {
+    let (width, height) = picture_size(bytes)?;
+    let pixels = bytes.get(MAGIC.len() + 8..)?;
+    let (from_w, from_h) = (usize::try_from(width).ok()?, usize::try_from(height).ok()?);
+    let (to_w, to_h) = (usize::try_from(size.0).ok()?, usize::try_from(size.1).ok()?);
+    if from_w == 0 || from_h == 0 || to_w == 0 || to_h == 0 {
+        return None;
+    }
+    if pixels.len() != from_w.checked_mul(from_h)?.checked_mul(4)? {
+        return None;
+    }
+    // Source pixels per screen pixel, the smaller of the two ratios, so the
+    // picture covers the screen both ways; the overflow is cut evenly.
+    let (sw, sh, tw, th) = (from_w as f64, from_h as f64, to_w as f64, to_h as f64);
+    let step = (sw / tw).min(sh / th);
+    let (left, top) = ((sw - tw * step) / 2.0, (sh - th * step) / 2.0);
+    let sample = |x: f64, y: f64| -> [u8; 4] {
+        let at = |value: f64, most: usize| (value.max(0.0) as usize).min(most - 1);
+        let (x0, y0) = (at(x.floor(), from_w), at(y.floor(), from_h));
+        let (x1, y1) = ((x0 + 1).min(from_w - 1), (y0 + 1).min(from_h - 1));
+        let (fx, fy) = (
+            (x - x.floor()).clamp(0.0, 1.0),
+            (y - y.floor()).clamp(0.0, 1.0),
+        );
+        let texel = |px: usize, py: usize| -> [u8; 4] {
+            let start = (py * from_w + px) * 4;
+            pixels
+                .get(start..start + 4)
+                .and_then(|texel| <[u8; 4]>::try_from(texel).ok())
+                .unwrap_or([0, 0, 0, 0xFF])
+        };
+        let (a, b, c, d) = (texel(x0, y0), texel(x1, y0), texel(x0, y1), texel(x1, y1));
+        let mut out = [0u8; 4];
+        for (channel, slot) in out.iter_mut().enumerate() {
+            let level = |p: [u8; 4]| f64::from(p.get(channel).copied().unwrap_or(0));
+            let mix = |p: [u8; 4], q: [u8; 4], t: f64| level(p) * (1.0 - t) + level(q) * t;
+            let value = mix(a, b, fx) * (1.0 - fy) + mix(c, d, fx) * fy;
+            let byte = value.round().clamp(0.0, 255.0) as u8;
+            *slot = byte;
+        }
+        out
+    };
+    let mut out = Vec::with_capacity(MAGIC.len() + 8 + to_w * to_h * 4);
+    out.extend_from_slice(MAGIC);
+    out.extend_from_slice(&size.0.to_le_bytes());
+    out.extend_from_slice(&size.1.to_le_bytes());
+    for row in 0..to_h {
+        let y = top + (row as f64 + 0.5) * step - 0.5;
+        for column in 0..to_w {
+            let x = left + (column as f64 + 0.5) * step - 0.5;
+            out.extend_from_slice(&sample(x, y));
+        }
+    }
+    Some(out)
 }
 
 /// What a run found to put behind the desktop.
@@ -560,6 +680,59 @@ fn keep(path: &Path, bytes: &[u8]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A picture file of `width` by `height` whose pixel at (x, y) is the
+    /// bytes `[x, y, 7, 0xFF]`.
+    fn picture(width: u32, height: u32) -> Vec<u8> {
+        let mut bytes = MAGIC.to_vec();
+        bytes.extend_from_slice(&width.to_le_bytes());
+        bytes.extend_from_slice(&height.to_le_bytes());
+        for y in 0..height {
+            for x in 0..width {
+                bytes.extend_from_slice(&[x as u8, y as u8, 7, 0xFF]);
+            }
+        }
+        bytes
+    }
+
+    /// A landscape picture cut for a portrait screen: the header says the
+    /// screen's size, the rows are all there, and what is kept is the
+    /// middle, scaled to cover -- the columns either side are cut away.
+    #[test]
+    fn a_picture_is_cut_to_cover_a_screen_of_another_shape() {
+        let wide = picture(64, 36);
+        let cut = recut(&wide, (18, 32)).unwrap();
+        assert_eq!(picture_size(&cut), Some((18, 32)));
+        assert_eq!(cut.len(), MAGIC.len() + 8 + 18 * 32 * 4);
+        // 36 rows cover 32: a step of 1.125 source pixels a screen pixel,
+        // and 18 columns of that are 20.25 source columns out of 64, from
+        // column 21.875 -- the middle.
+        let first = &cut[MAGIC.len() + 8..MAGIC.len() + 12];
+        assert!(
+            (21..=23).contains(&first[0]),
+            "the left edge is column {}",
+            first[0]
+        );
+        assert_eq!(first[2], 7);
+        assert_eq!(first[3], 0xFF);
+        let last_row = MAGIC.len() + 8 + (31 * 18) * 4;
+        assert!(
+            cut[last_row + 1] >= 34,
+            "the bottom row is row {}",
+            cut[last_row + 1]
+        );
+    }
+
+    /// A picture already the screen's size is the screen's picture, and
+    /// bytes that are not one are refused rather than cut into noise.
+    #[test]
+    fn a_picture_cut_to_its_own_size_is_itself_and_a_broken_one_is_not_cut() {
+        let same = picture(8, 4);
+        assert_eq!(recut(&same, (8, 4)).as_deref(), Some(same.as_slice()));
+        assert_eq!(recut(&same[..same.len() - 1], (4, 8)), None);
+        assert_eq!(recut(b"not a picture at all", (4, 8)), None);
+        assert_eq!(recut(&same, (0, 8)), None);
+    }
 
     /// A host and a directory, a directory alone, and a Windows path, which
     /// has a colon and no host.
