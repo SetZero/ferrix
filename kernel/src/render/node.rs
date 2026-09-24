@@ -103,6 +103,34 @@ const NATIVE: Width = if size_of::<usize>() == 8 {
     Width::Bits32
 };
 
+/// Where an ioctl number keeps its argument's size: bits 16 to 29.
+const IOC_SIZE_SHIFT: u32 = 16;
+const IOC_SIZE_MASK: u32 = 0x3FFF << IOC_SIZE_SHIFT;
+
+/// Whether `request` is `known` with an argument of another size.
+///
+/// DRM matches a driver's ioctl by its number alone and takes an argument of
+/// any size, copying what both sides know and zeroing the rest
+/// (`drm_ioctl`): a program built against a newer header, whose structure
+/// grew, still reaches the call it meant. Mesa 26 carries a
+/// `drm_virtgpu_resource_create_blob` with a `blob_hints` word the Linux
+/// headers this crate's table was probed from have not got yet, so its
+/// number is not theirs.
+const fn same_call(request: u32, known: u32) -> bool {
+    request & !IOC_SIZE_MASK == known & !IOC_SIZE_MASK
+}
+
+/// How many bytes of argument `request` says it has.
+const fn argument_size(request: u32) -> usize {
+    ((request & IOC_SIZE_MASK) >> IOC_SIZE_SHIFT) as usize
+}
+
+/// `DRM_VIRTGPU_BLOB_FLAG_HINT_DEFER_MAPPING`, the one hint a grown
+/// `drm_virtgpu_resource_create_blob` carries: that the program may never
+/// map the blob. Taken and not acted on -- a mappable blob is placed in the
+/// window as it is made either way, which costs a place and nothing else.
+const BLOB_HINT_DEFER_MAPPING: u32 = 1;
+
 /// What `DRM_IOCTL_VERSION` reports beside the driver's own name.
 const VERSION_MAJOR: i32 = 0;
 const VERSION_MINOR: i32 = 1;
@@ -388,7 +416,9 @@ pub(crate) fn ioctl(
         virtgpu::IOCTL_WAIT => wait(process, file, arg),
         virtgpu::IOCTL_GET_CAPS => get_caps(process, file, arg),
         virtgpu::IOCTL_CONTEXT_INIT => context_init(process, file, arg),
-        virtgpu::IOCTL_RESOURCE_CREATE_BLOB => resource_create_blob(process, file, arg),
+        request if same_call(request, virtgpu::IOCTL_RESOURCE_CREATE_BLOB) => {
+            resource_create_blob(process, file, arg, argument_size(request))
+        }
         drm::IOCTL_GET_CAP => get_cap(process, arg),
         drm::IOCTL_GEM_CLOSE => gem_close(process, file, arg),
         drm::IOCTL_PRIME_HANDLE_TO_FD => export(process, file, arg),
@@ -665,9 +695,33 @@ fn context_init(process: &Process, file: &RenderFile, arg: u64) -> Result<usize,
 /// across devices, which Linux also answers only where it has another
 /// device to share with. The size is rounded up to whole pages, as Linux
 /// rounds it.
-fn resource_create_blob(process: &Process, file: &RenderFile, arg: u64) -> Result<usize, Errno> {
-    let mut bytes = vec![0u8; ResourceCreateBlob::SIZE];
+///
+/// `given` is how many bytes of argument the program's header said: the
+/// structure this crate knows, or one grown by a hint word and its padding,
+/// whose hint is checked and whose padding is zero.
+fn resource_create_blob(
+    process: &Process,
+    file: &RenderFile,
+    arg: u64,
+    given: usize,
+) -> Result<usize, Errno> {
+    const GROWN: usize = ResourceCreateBlob::SIZE + 8;
+    if given != ResourceCreateBlob::SIZE && given != GROWN {
+        return Err(Errno::EINVAL);
+    }
+    let mut bytes = vec![0u8; given];
     uaccess::copy_from_user(process.space(), arg, &mut bytes).map_err(|_| Errno::EFAULT)?;
+    if let Some(grown) = bytes.get(ResourceCreateBlob::SIZE..GROWN) {
+        let word = |at: usize| {
+            grown
+                .get(at..at + 4)
+                .and_then(|word| word.try_into().ok())
+                .map_or(u32::MAX, u32::from_le_bytes)
+        };
+        if word(0) & !BLOB_HINT_DEFER_MAPPING != 0 || word(4) != 0 {
+            return Err(Errno::EINVAL);
+        }
+    }
     let mut create = ResourceCreateBlob::read(&bytes).ok_or(Errno::EFAULT)?;
     let known = virtgpu::BLOB_FLAG_USE_MAPPABLE | virtgpu::BLOB_FLAG_USE_SHAREABLE;
     if create.blob_mem != virtgpu::BLOB_MEM_HOST3D
