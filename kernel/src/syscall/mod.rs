@@ -82,7 +82,11 @@ use core::sync::atomic::{AtomicU32, Ordering};
 
 use ferrix_linux_abi::errno::{self, Errno};
 use ferrix_linux_abi::nr::Syscall;
-use ferrix_linux_abi::types::AT_FDCWD;
+use ferrix_linux_abi::types::{AT_FDCWD, O_CREAT, O_TRUNC, O_WRONLY};
+
+/// `creat`'s flags: it is `open` with these, by its definition in POSIX and
+/// in `fs/open.c`.
+const CREAT_FLAGS: u32 = O_CREAT | O_WRONLY | O_TRUNC;
 
 use crate::arch;
 use crate::console::println;
@@ -382,6 +386,12 @@ fn with_process(call: Syscall, args: &SyscallArgs, process: &Process) -> Result<
         Syscall::ClockGettime => {
             time::sys_clock_gettime(process, a[0], a[1], time::TimeWidth::Native)
         }
+        Syscall::ClockGetres => {
+            time::sys_clock_getres(process, a[0], a[1], time::TimeWidth::Native)
+        }
+        Syscall::ClockGetresTime64 => {
+            time::sys_clock_getres(process, a[0], a[1], time::TimeWidth::Wide)
+        }
         Syscall::ClockGettime64 => {
             time::sys_clock_gettime(process, a[0], a[1], time::TimeWidth::Wide)
         }
@@ -422,6 +432,7 @@ fn descriptors(call: Syscall, a: &[u64; 6], process: &Process) -> Option<Result<
     let answer = match call {
         Syscall::Openat => fd::sys_openat(process, fd, a[1], truncate(a[2]), truncate(a[3])),
         Syscall::Open => fd::sys_openat(process, AT_FDCWD, a[0], truncate(a[1]), truncate(a[2])),
+        Syscall::Creat => fd::sys_openat(process, AT_FDCWD, a[0], CREAT_FLAGS, truncate(a[1])),
         Syscall::Close => fd::sys_close(process, fd),
         Syscall::Read => file::sys_read(process, fd, a[1], a[2]),
         Syscall::Write => file::sys_write(process, fd, a[1], a[2]),

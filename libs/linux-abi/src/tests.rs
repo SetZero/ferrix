@@ -24,6 +24,7 @@ use crate::types;
 /// difference between the two tables exactly, rather than spot-checking it.
 const X86_64_ONLY: &[Syscall] = &[
     Syscall::Open,
+    Syscall::Creat,
     Syscall::Stat,
     Syscall::Lstat,
     Syscall::Poll,
@@ -246,6 +247,11 @@ const SHARED: &[(usize, usize, Syscall)] = &[
     ),
     (x86_64::TIMES, aarch64::TIMES, Syscall::Times),
     (x86_64::GETITIMER, aarch64::GETITIMER, Syscall::Getitimer),
+    (
+        x86_64::CLOCK_GETRES,
+        aarch64::CLOCK_GETRES,
+        Syscall::ClockGetres,
+    ),
     (x86_64::SETITIMER, aarch64::SETITIMER, Syscall::Setitimer),
     (
         x86_64::TIMERFD_CREATE,
@@ -1597,7 +1603,7 @@ fn no_two_numbers_map_to_the_same_call() {
 fn unknown_numbers_map_to_none_without_panicking() {
     for nr in [
         78,
-        85,
+        174,
         101,
         132,
         134,
@@ -1714,13 +1720,13 @@ fn table_sizes_are_stable() {
     // `socket` being unreachable on AArch64.
     assert_eq!(
         mapped(from_x86_64).len(),
-        244,
-        "the x86-64 table maps 244 calls"
+        246,
+        "the x86-64 table maps 246 calls"
     );
     assert_eq!(
         mapped(from_aarch64).len(),
-        214,
-        "the AArch64 table maps 214 calls"
+        215,
+        "the AArch64 table maps 215 calls"
     );
 }
 /// Calls only ARMv7-A has, because it is the only 32-bit target.
@@ -1758,6 +1764,7 @@ const ARM_ONLY: &[Syscall] = &[
     Syscall::SemtimedopTime64,
     Syscall::TimerfdSettime64,
     Syscall::TimerfdGettime64,
+    Syscall::ClockGetresTime64,
 ];
 
 /// Every ARMv7-A number this crate knows, paired with the call it means.
@@ -1778,6 +1785,7 @@ const ARM_NUMBERS: &[(usize, Syscall)] = &[
     (4, Syscall::Write),                      // write
     (5, Syscall::Open),                       // open
     (6, Syscall::Close),                      // close
+    (8, Syscall::Creat),                      // creat
     (9, Syscall::Link),                       // link
     (10, Syscall::Unlink),                    // unlink
     (11, Syscall::Execve),                    // execve
@@ -1919,6 +1927,7 @@ const ARM_NUMBERS: &[(usize, Syscall)] = &[
     (256, Syscall::SetTidAddress),            // set_tid_address
     (262, Syscall::ClockSettime),             // clock_settime
     (263, Syscall::ClockGettime),             // clock_gettime
+    (264, Syscall::ClockGetres),              // clock_getres
     (265, Syscall::ClockNanosleep),           // clock_nanosleep
     (266, Syscall::Statfs64),                 // statfs64
     (267, Syscall::Fstatfs64),                // fstatfs64
@@ -2000,6 +2009,7 @@ const ARM_NUMBERS: &[(usize, Syscall)] = &[
     (403, Syscall::ClockGettime64),           // clock_gettime64
     (404, Syscall::ClockSettime64),           // clock_settime64
     (405, Syscall::ClockAdjtime64),           // clock_adjtime64
+    (406, Syscall::ClockGetresTime64),        // clock_getres_time64
     (407, Syscall::ClockNanosleepTime64),     // clock_nanosleep_time64
     (410, Syscall::TimerfdGettime64),         // timerfd_gettime64
     (411, Syscall::TimerfdSettime64),         // timerfd_settime64
@@ -2217,7 +2227,7 @@ fn arm_covers_the_calls_musl_startup_makes() {
 #[test]
 fn arm_table_size_is_stable() {
     // A canary, as for the other two tables.
-    assert_eq!(mapped_arm().len(), 261, "the ARMv7-A table maps 261 calls");
+    assert_eq!(mapped_arm().len(), 264, "the ARMv7-A table maps 264 calls");
 }
 
 /// The filesystem-control and extended-attribute calls, against the numbers in

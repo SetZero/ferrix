@@ -964,7 +964,49 @@ fn check_memory_and_time_answer_as_linux_does(process: &Process) -> Result<(), &
     if told.is_err() {
         return Err("clock_gettime refused CLOCK_TAI");
     }
-    Ok(())
+    check_the_cpu_time_clocks(process)
+}
+
+/// `CLOCK_THREAD_CPUTIME_ID` counts the time this thread runs, charged up to
+/// the instant it is read, and never faster than the wall clock; and
+/// `CLOCK_PROCESS_CPUTIME_ID` answers. Chrome's `ThreadTicks` asserts the
+/// first succeeds, and ended its renderer when it was `EINVAL`.
+fn check_the_cpu_time_clocks(process: &Process) -> Result<(), &'static str> {
+    use ferrix_linux_abi::types::{CLOCK_PROCESS_CPUTIME_ID, CLOCK_THREAD_CPUTIME_ID};
+    const MILLI: u64 = 1_000_000;
+    let page = map_rw(process, PAGE_SIZE)?;
+    let read = |clock: u32| -> Result<u64, &'static str> {
+        let _ = time::sys_clock_gettime(process, u64::from(clock), page, time::TimeWidth::Native)
+            .map_err(|_| "clock_gettime refused a CPU-time clock")?;
+        let pair = read_user::<16>(process, page)?;
+        let word = size_of::<usize>();
+        Ok(le_at(&pair, 0, word)
+            .saturating_mul(1_000_000_000)
+            .saturating_add(le_at(&pair, word, word)))
+    };
+    let outcome = (|| {
+        let wall_start = crate::timer::now_nanos();
+        let start = read(CLOCK_THREAD_CPUTIME_ID)?;
+        // Spin until the thread has run a millisecond by its own clock, or a
+        // second has passed on the wall's: a clock that never moves fails
+        // there rather than hanging the boot.
+        let mut now = start;
+        while now.saturating_sub(start) < MILLI {
+            if crate::timer::now_nanos().saturating_sub(wall_start) > 1_000 * MILLI {
+                return Err("CLOCK_THREAD_CPUTIME_ID did not advance while the thread ran");
+            }
+            core::hint::spin_loop();
+            now = read(CLOCK_THREAD_CPUTIME_ID)?;
+        }
+        let wall = crate::timer::now_nanos().saturating_sub(wall_start);
+        if now.saturating_sub(start) > wall {
+            return Err("CLOCK_THREAD_CPUTIME_ID ran faster than the wall clock");
+        }
+        let _ = read(CLOCK_PROCESS_CPUTIME_ID)?;
+        Ok(())
+    })();
+    let _ = memory::sys_munmap(process, page, PAGE_SIZE);
+    outcome
 }
 
 /// Nothing lands below `MMAP_MIN_ADDR`: a fixed request there is `EPERM`, as on
@@ -4186,6 +4228,7 @@ mod paths {
         let process = process::new_for_check().map_err(|_| "could not make a process")?;
         let mut p = Paths::new(&process)?;
         check_names_are_made_and_read(&mut p)?;
+        check_creat_truncates_and_opens_for_writing(&mut p)?;
         check_renames_replace_only_when_allowed(&mut p)?;
         check_every_stat_describes_the_same_file(&mut p)?;
         let (listed, listing_calls) = check_a_listing_in_pieces_sees_each_name_once(&mut p)?;
@@ -4507,6 +4550,48 @@ mod paths {
             if p.call(Syscall::Readlinkat, [CWD, root, p.out, 64, 0, 0]) != Err(Errno::EINVAL) {
                 return Err("readlinkat of a directory was not EINVAL");
             }
+        }
+        Ok(())
+    }
+
+    /// `creat` is `open` with `O_CREAT | O_WRONLY | O_TRUNC`: a file that held
+    /// bytes is empty after it, and the descriptor it returns writes and does
+    /// not read. Where the architecture has no number for it -- AArch64 --
+    /// the call is `ENOSYS`, as a program there would find.
+    ///
+    /// Chrome's headless shell writes its screenshot with `creat`, and was
+    /// told `ENOSYS` before this.
+    fn check_creat_truncates_and_opens_for_writing(p: &mut Paths<'_>) -> Result<(), &'static str> {
+        use ferrix_linux_abi::types::{F_GETFL, O_ACCMODE, O_WRONLY, SEEK_END};
+        let file = p.path(b"/tmp/pathcheck/file")?;
+        if number_for(Syscall::Creat).is_none() {
+            return if p.call(Syscall::Creat, [file, 0o644, 0, 0, 0, 0]) == Err(Errno::ENOSYS) {
+                Ok(())
+            } else {
+                Err("creat answered on an architecture that has no number for it")
+            };
+        }
+        let fd = p
+            .call(Syscall::Openat, [CWD, file, u64::from(O_WRONLY), 0, 0, 0])
+            .map_err(|_| "the file creat is checked on did not open")?;
+        let fd = fd as u64;
+        p.fill_out(4, b'x')?;
+        let wrote = p.call(Syscall::Write, [fd, p.out, 4, 0, 0, 0]);
+        let _ = p.call(Syscall::Close, [fd, 0, 0, 0, 0, 0]);
+        if wrote != Ok(4) {
+            return Err("a write to the file creat is checked on was short");
+        }
+        let fd = p
+            .call(Syscall::Creat, [file, 0o644, 0, 0, 0, 0])
+            .map_err(|_| "creat of an existing file was refused")? as u64;
+        let mode = p.call(Syscall::Fcntl, [fd, u64::from(F_GETFL), 0, 0, 0, 0]);
+        let end = p.call(Syscall::Lseek, [fd, 0, u64::from(SEEK_END), 0, 0, 0]);
+        let _ = p.call(Syscall::Close, [fd, 0, 0, 0, 0, 0]);
+        if mode.map(|flags| flags as u32 & O_ACCMODE) != Ok(O_WRONLY) {
+            return Err("creat did not open its file for writing only");
+        }
+        if end != Ok(0) {
+            return Err("creat did not truncate the file it opened");
         }
         Ok(())
     }

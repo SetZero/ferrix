@@ -1186,6 +1186,24 @@ pub(crate) fn current() -> Option<Arc<Task>> {
     task
 }
 
+/// Real nanoseconds the task running on this processor has run for,
+/// charged up to this instant: what `CLOCK_THREAD_CPUTIME_ID` reads. Zero
+/// where nothing runs, before the scheduler has started.
+///
+/// The queue is charged under its lock, as [`for_each_queue_charged`] does,
+/// so a reading taken mid-slice counts the slice so far and two readings
+/// never go backwards. The task is released after the lock is.
+pub(crate) fn current_runtime() -> u64 {
+    let saved = <arch::Irq as IrqControl>::disable();
+    let task = this_cpu().and_then(queue_of).and_then(|lock| {
+        let mut queue = lock.lock();
+        queue.account(crate::timer::now_nanos());
+        queue.current.clone()
+    });
+    <arch::Irq as IrqControl>::restore(saved);
+    task.map_or(0, |task| task.runtime())
+}
+
 /// Give up the rest of this task's slice.
 pub(crate) fn yield_now() {
     let saved = <arch::Irq as IrqControl>::disable();

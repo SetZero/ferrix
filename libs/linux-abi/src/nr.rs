@@ -217,6 +217,9 @@ pub mod x86_64 {
     pub const MKDIR: usize = 83;
     /// Remove an empty directory.
     pub const RMDIR: usize = 84;
+    /// Create a file, or truncate it, and open it for writing: `open` with
+    /// `O_CREAT | O_WRONLY | O_TRUNC`. x86-64 and ARMv7-A only.
+    pub const CREAT: usize = 85;
     /// Create a hard link.
     pub const LINK: usize = 86;
     /// Remove a directory entry.
@@ -395,6 +398,8 @@ pub mod x86_64 {
     pub const CLOCK_SETTIME: usize = 227;
     /// Read a clock.
     pub const CLOCK_GETTIME: usize = 228;
+    /// Read a clock's resolution.
+    pub const CLOCK_GETRES: usize = 229;
     /// Sleep against a chosen clock, optionally until an absolute time.
     pub const CLOCK_NANOSLEEP: usize = 230;
     /// Terminate every thread in the process.
@@ -717,6 +722,8 @@ pub mod aarch64 {
     pub const CLOCK_SETTIME: usize = 112;
     /// Read a clock.
     pub const CLOCK_GETTIME: usize = 113;
+    /// Read a clock's resolution.
+    pub const CLOCK_GETRES: usize = 114;
     /// Sleep against a chosen clock, optionally until an absolute time.
     pub const CLOCK_NANOSLEEP: usize = 115;
     /// Read or control the kernel log buffer.
@@ -1029,6 +1036,8 @@ pub mod arm {
     pub const OPEN: usize = 5;
     /// Close a file descriptor.
     pub const CLOSE: usize = 6;
+    /// Create a file, or truncate it, and open it for writing.
+    pub const CREAT: usize = 8;
     /// Create a hard link.
     pub const LINK: usize = 9;
     /// Remove a directory entry.
@@ -1328,6 +1337,8 @@ pub mod arm {
     pub const CLOCK_SETTIME: usize = 262;
     /// Read a clock.
     pub const CLOCK_GETTIME: usize = 263;
+    /// Read a clock's resolution into a 32-bit `timespec`.
+    pub const CLOCK_GETRES: usize = 264;
     /// Sleep against a chosen clock, optionally until an absolute time.
     pub const CLOCK_NANOSLEEP: usize = 265;
     /// Report file system statistics by path, into `struct statfs64`. ARMv7-A
@@ -1504,6 +1515,8 @@ pub mod arm {
     /// Read or tune a chosen clock's discipline, with 64-bit time fields.
     /// ARMv7-A only.
     pub const CLOCK_ADJTIME64: usize = 405;
+    /// Read a clock's resolution into a 64-bit `timespec`. ARMv7-A only.
+    pub const CLOCK_GETRES_TIME64: usize = 406;
     /// Sleep against a chosen clock, with 64-bit `timespec` arguments.
     /// ARMv7-A only.
     pub const CLOCK_NANOSLEEP_TIME64: usize = 407;
@@ -1601,6 +1614,9 @@ pub enum Syscall {
     Write,
     /// Open a file by path. x86-64 and ARMv7-A only.
     Open,
+    /// Create a file, or truncate it, and open it for writing. x86-64 and
+    /// ARMv7-A only.
+    Creat,
     /// Open a file relative to a directory file descriptor.
     Openat,
     /// Open a file from a versioned argument structure.
@@ -1742,6 +1758,10 @@ pub enum Syscall {
     /// since 1.2, so this, not [`Syscall::ClockGettime`], is what a current
     /// 32-bit binary calls.
     ClockGettime64,
+    /// Read a clock's resolution.
+    ClockGetres,
+    /// Read a clock's resolution into a 64-bit `timespec`. ARMv7-A only.
+    ClockGetresTime64,
     /// Sleep against a chosen clock, optionally until an absolute time.
     ClockNanosleep,
     /// Sleep against a chosen clock, with 64-bit `timespec` arguments. ARMv7-A
@@ -2231,6 +2251,7 @@ fn x86_64_file_and_process(nr: usize) -> Option<Syscall> {
         x86_64::READ => Syscall::Read,
         x86_64::WRITE => Syscall::Write,
         x86_64::OPEN => Syscall::Open,
+        x86_64::CREAT => Syscall::Creat,
         x86_64::CLOSE => Syscall::Close,
         x86_64::STAT => Syscall::Stat,
         x86_64::FSTAT => Syscall::Fstat,
@@ -2348,6 +2369,7 @@ fn x86_64_threads_and_time(nr: usize) -> Option<Syscall> {
         x86_64::GETDENTS64 => Syscall::Getdents64,
         x86_64::SET_TID_ADDRESS => Syscall::SetTidAddress,
         x86_64::CLOCK_GETTIME => Syscall::ClockGettime,
+        x86_64::CLOCK_GETRES => Syscall::ClockGetres,
         x86_64::CLOCK_NANOSLEEP => Syscall::ClockNanosleep,
         x86_64::EXIT_GROUP => Syscall::ExitGroup,
         x86_64::EPOLL_CREATE => Syscall::EpollCreate,
@@ -2645,6 +2667,7 @@ fn aarch64_signals_and_ids(nr: usize) -> Option<Syscall> {
         aarch64::GET_ROBUST_LIST => Syscall::GetRobustList,
         aarch64::NANOSLEEP => Syscall::Nanosleep,
         aarch64::CLOCK_GETTIME => Syscall::ClockGettime,
+        aarch64::CLOCK_GETRES => Syscall::ClockGetres,
         aarch64::CLOCK_NANOSLEEP => Syscall::ClockNanosleep,
         aarch64::SCHED_SETSCHEDULER => Syscall::SchedSetscheduler,
         aarch64::SCHED_GETSCHEDULER => Syscall::SchedGetscheduler,
@@ -2885,6 +2908,7 @@ fn arm_early(nr: usize) -> Option<Syscall> {
         arm::READ => Syscall::Read,
         arm::WRITE => Syscall::Write,
         arm::OPEN => Syscall::Open,
+        arm::CREAT => Syscall::Creat,
         arm::CLOSE => Syscall::Close,
         arm::LINK => Syscall::Link,
         arm::UNLINK => Syscall::Unlink,
@@ -3006,6 +3030,7 @@ fn arm_ids_and_at_family(nr: usize) -> Option<Syscall> {
         arm::EPOLL_WAIT => Syscall::EpollWait,
         arm::SET_TID_ADDRESS => Syscall::SetTidAddress,
         arm::CLOCK_GETTIME => Syscall::ClockGettime,
+        arm::CLOCK_GETRES => Syscall::ClockGetres,
         arm::CLOCK_NANOSLEEP => Syscall::ClockNanosleep,
         arm::STATFS64 => Syscall::Statfs64,
         arm::FSTATFS64 => Syscall::Fstatfs64,
@@ -3177,6 +3202,7 @@ fn arm_clocks_and_timers(nr: usize) -> Option<Syscall> {
         arm::CLOCK_ADJTIME => Syscall::ClockAdjtime,
         arm::CLOCK_SETTIME64 => Syscall::ClockSettime64,
         arm::CLOCK_ADJTIME64 => Syscall::ClockAdjtime64,
+        arm::CLOCK_GETRES_TIME64 => Syscall::ClockGetresTime64,
         arm::TIMERFD_CREATE => Syscall::TimerfdCreate,
         arm::TIMERFD_SETTIME => Syscall::TimerfdSettime,
         arm::TIMERFD_GETTIME => Syscall::TimerfdGettime,

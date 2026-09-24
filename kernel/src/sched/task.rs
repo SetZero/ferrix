@@ -348,6 +348,12 @@ impl Task {
         let _ = self.sum_exec.fetch_add(nanos, Ordering::Relaxed);
     }
 
+    /// Real nanoseconds it has run for, up to when it was last charged: the
+    /// CPU-time clocks' reading.
+    pub(crate) fn runtime(&self) -> u64 {
+        self.sum_exec.load(Ordering::Relaxed)
+    }
+
     /// Start a measurement window here, and count this task in it.
     pub(crate) fn open_window(&self) {
         self.baseline

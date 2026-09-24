@@ -189,10 +189,61 @@ pub(crate) fn sys_clock_gettime(
         CLOCK_MONOTONIC | CLOCK_MONOTONIC_RAW | CLOCK_MONOTONIC_COARSE | CLOCK_BOOTTIME => {
             now_nanos()
         }
+        CLOCK_THREAD_CPUTIME_ID => sched::current_runtime(),
+        CLOCK_PROCESS_CPUTIME_ID => process_runtime(process),
         _ => return Err(Errno::EINVAL),
     };
     write_pair(process, at, nanos / NANOS, nanos % NANOS, width)?;
     Ok(0)
+}
+
+/// `clock_getres` and `clock_getres_time64`: the resolution of a clock
+/// `clock_gettime` reads, written through a non-null `at`.
+///
+/// A nanosecond for every one of them. Linux answers a tick for the
+/// `_COARSE` clocks because it reads them from the last tick; here they read
+/// the same counter as the others, so a nanosecond is what they have. The
+/// clocks `clock_gettime` refuses are refused here too, with `EINVAL`, before
+/// the buffer is touched. Chrome's headless shell asks before it draws.
+pub(crate) fn sys_clock_getres(
+    process: &Process,
+    clock: u64,
+    at: u64,
+    width: TimeWidth,
+) -> Result<usize, Errno> {
+    let clock = u32::try_from(clock).map_err(|_| Errno::EINVAL)?;
+    match clock {
+        CLOCK_REALTIME
+        | CLOCK_REALTIME_COARSE
+        | CLOCK_TAI
+        | CLOCK_MONOTONIC
+        | CLOCK_MONOTONIC_RAW
+        | CLOCK_MONOTONIC_COARSE
+        | CLOCK_BOOTTIME
+        | CLOCK_THREAD_CPUTIME_ID
+        | CLOCK_PROCESS_CPUTIME_ID => {}
+        _ => return Err(Errno::EINVAL),
+    }
+    if at != 0 {
+        write_pair(process, at, 0, 1, width)?;
+    }
+    Ok(0)
+}
+
+/// `CLOCK_PROCESS_CPUTIME_ID`: what the process's threads have run for.
+///
+/// The calling thread is charged up to now first; the others count up to
+/// their own processors' last charge, which is at most a tick behind. Not as
+/// Linux: a thread that has ended takes its time with it, where Linux keeps
+/// it in the process's sum, so the clock can step back when one ends.
+/// Chrome's `ThreadTicks` reads the thread clock, which is exact.
+fn process_runtime(process: &Process) -> u64 {
+    let _ = sched::current_runtime();
+    process
+        .tasks()
+        .iter()
+        .map(|task| task.runtime())
+        .fold(0, u64::saturating_add)
 }
 
 /// `gettimeofday`: the real-time clock, in microseconds.
