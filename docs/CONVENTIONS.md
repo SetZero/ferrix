@@ -66,6 +66,66 @@ restoring the working tree destroys work unless nothing unstaged is provably
 there. And judge a gate by its exit status and its output — never through
 `gate | tail && next`, whose status is `tail`'s.
 
+## Splitting one piece of work across several agents
+
+On 2026-09-24 one session split the init and stage 13's cgroups across five
+agents. Six landings went in (22 points) in about two hours, and the one
+that mattered most never started. The nazuna gate summaries, kept under
+`~/.local/share/ferrix/logs/init-gate-*`, show where the time went. Each
+rule below comes from something seen there.
+
+1. **Start the critical path first.** The largest landing was the init
+   program itself. It waited until the landings it builds on were in, then
+   got a quarter of an hour before the day's wind-down, and ended with 0 of
+   its 10 points. Its design needed only the interface of the library being
+   written beside it, and that was readable on the other branch from the
+   start. Start the landing everything else leads to in the first round.
+   Let it design against in-progress work, and rebase it as that work lands.
+2. **Read another branch; don't copy it.** Use `git show <branch>:<path>`
+   and `git log <branch>`. One agent unpacked another branch's crate into its
+   own worktree, then was refused both the cherry-pick and the reset that
+   would have undone it. The worktree was left with 34 uncommitted files for
+   the person to clear by hand.
+3. **Don't re-gate for docs, or for areas the change doesn't reach.** 14 gate
+   runs went to 6 landings. `main` moved about ten times in those two hours,
+   and one landing was re-gated only because another landing had changed the
+   roadmap. Re-gate when the rebase changed code the landing touches or
+   depends on. Otherwise the gate still applies, and saying so in the report
+   is enough.
+4. **Keep shared-doc edits to your own lines.** Every agent edits
+   `ROADMAP.md`, `BACKLOG.md` and the design doc, so every rebase conflicts
+   there. Edit your own row, paragraph or "where it stands" entry, and never
+   reflow a neighbour's. On a conflict, take `main`'s side and add your lines
+   again. Recount a total such as the roadmap's host-test count against
+   `main`'s number, rather than merging two sums.
+5. **Give a new failure a row the day it is seen.** Four of the 14 runs
+   failed on something the change didn't touch and passed on rerun. Each
+   cost a full row, and two of them had no backlog row until the coordinator
+   filed them afterwards. Copy the log aside before rerunning, rerun once,
+   and file the row with the log's path and the commit. A flake that keeps
+   firing is cheaper to fix than to rerun.
+6. **Name what you put in shared places.** Parallel agents share the
+   session's scratch directory and nazuna's home. One agent copied another's
+   `adhoc.sh` to nazuna by mistake, because both scripts had the same name.
+   Prefix your scripts, worktrees, refs, target directories and `TMPDIR`
+   with your stream's name, and remove only those, by exact name.
+7. **Make agent worktrees by hand.** The Agent tool's `isolation: worktree`
+   refuses this checkout: the session's path is `f:\…`, git reports `F:/…`,
+   and the tool sees a redirect. Run `git worktree add -b <branch>
+   .claude/worktrees/<name> main` yourself, and give the agent that path.
+   Tell every agent to run gates and boots in the foreground, because a
+   subagent is not woken by its own background task.
+8. **Wind down to a state the next session can start from.** When asked to
+   stop, an agent lands only what is already gated or still gating. Anything
+   else stays on its branch as a WIP commit, never on `main`. What the next
+   session needs goes into the design document's "where it stands" section
+   on `main`, not only into a report. The landing that stopped before it
+   wrote any code still left its findings there (`docs/INIT.md` §16).
+9. **Record estimate against spend for each landing.** Put the points
+   estimated beside the points spent, and the gate summary's times beside
+   both, in each agent's report. That is what shows whether a stream is slow
+   because of its code, its gates, or its reruns.
+
 ## Before calling a change done
 
 ```
