@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 
 use compositor_layout::Rect;
 use compositor_layout::{MonitorLayout, WindowId};
+use compositor_render::timing::{Phase, Timer, timed};
 use compositor_render::{
     Backdrop, Canvas, Damage, Format, LayerFrame, Painter, Style, Surface, Target, Transform,
     render_onto,
@@ -415,6 +416,7 @@ fn composed<P: Painter>(painter: &mut P, backdrop: &mut P::Backdrop, scene: &Sce
         damage,
     );
 
+    let _over = Timer::start(Phase::Over);
     // The drag icon under the pointer and over everything else: what a
     // drag looks like is a thing following the pointer, and a compositor
     // that drew it under a window would have a drag nobody can see.
@@ -516,6 +518,7 @@ fn shown(target: &mut Output<'_>) -> Result<(), String> {
             }
         }
         None => {
+            let _present = Timer::start(Phase::Present);
             let mut screen = Target::new(backend.buffer(), width, height, stride)
                 .map_err(|error| format!("the screen's buffer is not one: {error:?}"))?;
             match transform {
@@ -544,7 +547,7 @@ fn shown(target: &mut Output<'_>) -> Result<(), String> {
     if let Some(gamma) = gamma {
         gamma.apply(backend.buffer(), stride, written);
     }
-    backend.present(written).map_err(|error| error.to_string())
+    timed(Phase::Flip, || backend.present(written)).map_err(|error| error.to_string())
 }
 
 /// Write `pixels`, the rows of `rect` of a turned monitor's frame as the GPU

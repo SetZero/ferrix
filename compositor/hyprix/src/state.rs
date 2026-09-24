@@ -439,6 +439,7 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
     let mut since = Duration::ZERO;
     let mut spent = Duration::ZERO;
     let mut counted = 0u32;
+    let mut since_phases = [0; compositor_render::timing::Phase::ALL.len()];
     let mut reported = Instant::now();
     let mut next_window = 1u32;
     let mut drawn = 0u32;
@@ -1438,6 +1439,13 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
             // one somebody hoped for.
             let took = began.elapsed();
             slowest = slowest.max(took);
+            // Where the slowest frame of the report's interval spent its
+            // time, which the report prints after it: a slow frame on a slow
+            // machine is a question whose answer is one of these.
+            let phases = compositor_render::timing::take();
+            if took >= since {
+                since_phases = phases;
+            }
             // Every so many frames, say how long the slowest of them took.
             // The compositor does not end on a machine it is the session of,
             // so a number only in the line it prints when it stops is a
@@ -1454,9 +1462,10 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
             counted = counted.saturating_add(1);
             if reported.elapsed() >= FRAME_REPORT {
                 report(&format!(
-                    "hyprix: frames {drawn} slowest of the last {counted} {} us, all of them {} us",
+                    "hyprix: frames {drawn} slowest of the last {counted} {} us, all of them {} us ({})",
                     since.as_micros(),
-                    spent.as_micros()
+                    spent.as_micros(),
+                    compositor_render::timing::describe(&since_phases)
                 ));
                 (since, spent, counted, reported) =
                     (Duration::ZERO, Duration::ZERO, 0, Instant::now());
