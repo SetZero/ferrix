@@ -927,8 +927,11 @@ impl Card {
     /// at `at`.
     ///
     /// `DRM_IOCTL_MODE_CURSOR2`, the image and the place together. It
-    /// returns once the image is on the card, so the buffer may be drawn
-    /// into again at once.
+    /// returns once the card shows the image, and the image shown before is
+    /// no longer read. virtio-gpu's host has taken a copy by then; the DK1's
+    /// LTDC shows the plane from the buffer itself and goes on reading it,
+    /// so the next image goes into another buffer, as Linux's compositors
+    /// keep a swapchain for the cursor.
     ///
     /// # Errors
     ///

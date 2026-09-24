@@ -259,8 +259,17 @@ pub struct Drm {
     lost: Option<std::time::Instant>,
     /// The size of image the card's cursor plane shows, if it has one.
     cursor_size: Option<(u32, u32)>,
-    /// The cursor plane's image, made the first time one is shown.
-    cursor: Option<compositor_drm::Dumb>,
+    /// The cursor plane's two images, each made the first time it is
+    /// needed, and which the next image is drawn into.
+    ///
+    /// Two, because a card may show the plane from the buffer itself: the
+    /// DK1's LTDC scans its second layer straight out of it, where
+    /// virtio-gpu's host takes a copy. Drawn into while shown, the pointer
+    /// would be half the old image and half the new, at the old hotspot's
+    /// place, until the card was told; drawn into the other one, the image
+    /// and its place change together at the card's next frame.
+    cursors: [Option<compositor_drm::Dumb>; 2],
+    next_cursor: usize,
 }
 
 /// How often a lost screen's card is looked for.
@@ -372,7 +381,8 @@ impl Drm {
             frames: 0,
             lost: None,
             cursor_size,
-            cursor: None,
+            cursors: [None, None],
+            next_cursor: 0,
         })
     }
 
@@ -485,10 +495,13 @@ impl Backend for Drm {
         let (width, height) = self
             .cursor_size
             .ok_or_else(|| io::Error::other("this card has no cursor plane"))?;
-        if self.cursor.is_none() {
-            self.cursor = Some(compositor_drm::Dumb::new(&self.card, width, height)?);
+        let Some(slot) = self.cursors.get_mut(self.next_cursor) else {
+            return Ok(());
+        };
+        if slot.is_none() {
+            *slot = Some(compositor_drm::Dumb::new(&self.card, width, height)?);
         }
-        let Some(buffer) = self.cursor.as_mut() else {
+        let Some(buffer) = slot.as_mut() else {
             return Ok(());
         };
         let pitch = buffer.pitch as usize;
@@ -499,10 +512,14 @@ impl Backend for Drm {
                 to.copy_from_slice(from);
             }
         }
-        match self
-            .card
-            .set_cursor(&self.plan, self.cursor.as_ref(), hot, at)
-        {
+        let shown = self.cursors.get(self.next_cursor).and_then(Option::as_ref);
+        let result = self.card.set_cursor(&self.plan, shown, hot, at);
+        // The card now shows this one, and the call returned once it did:
+        // the other is no longer read, and takes the next image.
+        if result.is_ok() {
+            self.next_cursor ^= 1;
+        }
+        match result {
             Err(error) if gone(&error) => {
                 self.lose();
                 Ok(())

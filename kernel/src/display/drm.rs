@@ -1013,9 +1013,12 @@ fn dirty_fb(process: &Process, file: &CardFile, arg: u64) -> Result<usize, Errno
 /// `MOVE` puts the image's top-left corner at (`x`, `y`) and waits for
 /// nothing. `BO` shows the dumb buffer `handle` names -- 64 × 64, which is
 /// the one size the host shows, or none for handle 0 -- with its hotspot,
-/// and returns once its pixels are on the device, so that the program may
-/// draw the next image into the same buffer. A call with both sets the place
-/// first and shows the image there, as `drm_mode_cursor_universal` does.
+/// and returns once the device shows it. virtio-gpu's host has copied the
+/// pixels by then and the buffer may be drawn into again; the DK1's LTDC
+/// shows its second layer straight from the buffer, so a program draws the
+/// next image into another one, as Linux's compositors do. A call with both
+/// sets the place first and shows the image there, as
+/// `drm_mode_cursor_universal` does.
 fn cursor(file: &CardFile, request: &ModeCursor2) -> Result<usize, Errno> {
     if request.flags == 0 || request.flags & !drm::MODE_CURSOR_FLAGS != 0 {
         return Err(Errno::EINVAL);
