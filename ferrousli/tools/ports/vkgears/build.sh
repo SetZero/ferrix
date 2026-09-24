@@ -34,6 +34,11 @@
 #   * vkgears-seat.patch: vkgears asked the seat for a keyboard whether or not
 #     the seat had one, which is a protocol error that ends the connection
 #     when it has none. It now waits for the capability.
+#   * vkgears-xkb.patch: vkgears made its keymap context with XKB's default
+#     include path, and libxkbcommon refuses to make one when that directory
+#     is not there -- Ferrix carries no XKB data -- so the context was null
+#     and the first keymap crashed on it. The compositor sends a whole keymap,
+#     which needs no include path, so none is asked for.
 #   * venus-open-by-name.patch: Venus found its render node through libdrm's
 #     drmGetDevices2, which reads sysfs, and Ferrix has none. When that finds
 #     nothing, the render nodes are opened by name and the first whose driver
@@ -267,6 +272,7 @@ echo "libdecor compiled"
 step "vkgears"
 demos=$(unpack mesa-demos)
 logged vkgears-patch patch -d "$demos" -p1 -i "$here/patches/vkgears-seat.patch"
+logged vkgears-xkb-patch patch -d "$demos" -p1 -i "$here/patches/vkgears-xkb.patch"
 for shader in gear.vert gear.frag; do
     logged "glslang-$shader" glslangValidator "$demos/src/vulkan/$shader" -V -x \
         -o "$generated/$shader.spv.h"
