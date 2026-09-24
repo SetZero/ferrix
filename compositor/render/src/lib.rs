@@ -103,6 +103,7 @@ mod gradient;
 mod paint;
 mod patterns;
 mod scratch;
+pub mod timing;
 pub mod transform;
 
 // Public, and not only for this crate's own tests: `compositor/term` draws

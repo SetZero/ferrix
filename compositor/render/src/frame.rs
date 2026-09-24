@@ -592,11 +592,13 @@ pub fn render_onto<P: Painter>(
 ) -> Damage {
     let style = styles.base;
     let local = |rect: Rect| rect.translate(origin.0.saturating_neg(), origin.1.saturating_neg());
-    behind_windows(canvas, origin, style, layers, damage);
+    timed(Phase::Behind, || {
+        behind_windows(canvas, origin, style, layers, damage);
+    });
     // Everything behind the windows is drawn; that is the backdrop, and it
     // is taken now, before a window goes over it.
     if let Some(behind) = backdrop.as_deref_mut() {
-        canvas.keep_backdrop(behind, damage);
+        timed(Phase::Backdrop, || canvas.keep_backdrop(behind, damage));
     }
     for (at, placed) in output.windows.iter().enumerate() {
         if styles.of(placed.window).dim_around {
@@ -618,14 +620,16 @@ pub fn render_onto<P: Painter>(
         if layer.dim_around {
             dim_behind(canvas, style, damage);
         }
-        draw_layer(
-            canvas,
-            backdrop.as_deref_mut().filter(|_| layer.xray),
-            layer,
-            local(layer.rect),
-            style,
-            damage,
-        );
+        timed(Phase::Over, || {
+            draw_layer(
+                canvas,
+                backdrop.as_deref_mut().filter(|_| layer.xray),
+                layer,
+                local(layer.rect),
+                style,
+                damage,
+            );
+        });
     }
     damage.clipped(canvas.bounds())
 }
@@ -827,6 +831,7 @@ fn window<P: Painter>(
         damage
     };
     if let Some(shadow) = style.shadow.as_ref().filter(|_| own.shadow && own.decorate) {
+        let _shadow = Timer::start(Phase::Shadow);
         canvas.shadow(
             Rect::new(
                 rect.x.saturating_sub(width),
@@ -850,6 +855,7 @@ fn window<P: Painter>(
     // the box `renderBorder` gives the shader: the rounded path fills that
     // box and the square one draws four windows onto it, so a window's
     // corner is the same colour whichever path drew it.
+    let border = Timer::start(Phase::Border);
     if !rounding.is_square() {
         let outer = Rect::new(
             rect.x.saturating_sub(width),
@@ -869,13 +875,16 @@ fn window<P: Painter>(
     } else {
         canvas.border_gradient(rect, width, gradient, damage);
     }
+    drop(border);
     if let Some(blur) = blur {
+        let _blur = Timer::start(Phase::Blur);
         match backdrop {
             Some(behind) => canvas.blur_backdrop(behind, rect, rounding, &blur, damage),
             None => canvas.blur(rect, rounding, &blur, damage),
         }
     }
     if let Some(surface) = surfaces.get(&placed.window) {
+        let _surface = Timer::start(Phase::Surface);
         // Scaled, which is the exact path when the surface is already the
         // rectangle's size -- which it is for every window that is not
         // part-way through an animation.

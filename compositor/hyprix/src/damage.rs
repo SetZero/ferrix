@@ -658,6 +658,10 @@ pub(crate) struct Frame {
     /// The part of the screen it copies into, which is this frame's damage
     /// and the frame before's: the module comment says why.
     pub(crate) screen: Damage,
+    /// Where the damage came from, in pixels: the plan's change since the
+    /// last frame, the clients' commits, and what the two blur rules added.
+    /// For the compositor's report, which says it of its slowest frame.
+    pub(crate) sources: [i64; 4],
 }
 
 /// One screen's memory of what it last drew.
@@ -685,13 +689,22 @@ impl Watch {
             Some(old) if !heard.everything => plan.since(old, &mut behind),
             _ => Damage::full(width, height),
         };
+        let planned = region.area();
         region.extend(&heard.region);
+        let told = region.area();
         // And whatever the blurs are owed to come out the same as a whole
         // frame's would, which is the last thing added: it grows around
         // everything else. The backdrop's first, since what that adds may
         // touch a surface the second has to redraw whole.
         plan.behind_reaches(&behind, &mut region);
+        let reached = region.area();
         plan.blurs_whole(&mut region);
+        let sources = [
+            planned,
+            heard.region.area(),
+            reached.saturating_sub(told),
+            region.area().saturating_sub(reached),
+        ];
         let region = region.clipped(Rect::new(0, 0, i64::from(width), i64::from(height)));
         let mut screen = region.clone();
         if age > 1 {
@@ -702,6 +715,7 @@ impl Watch {
         Frame {
             canvas: region,
             screen,
+            sources,
         }
     }
 }

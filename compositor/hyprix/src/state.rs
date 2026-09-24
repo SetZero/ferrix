@@ -444,6 +444,9 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
     let mut since = Duration::ZERO;
     let mut spent = Duration::ZERO;
     let mut counted = 0u32;
+    let mut since_phases = [0; compositor_render::timing::Phase::ALL.len()];
+    let mut since_drew = (0i64, 0usize, 0i64);
+    let mut since_from = [0i64; 4];
     let mut reported = Instant::now();
     let mut next_window = 1u32;
     let mut drawn = 0u32;
@@ -1220,6 +1223,8 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
             // damage tracking is worth is how little a frame that changes
             // little costs, and the line the loop prints says so.
             let mut redrew = 0i64;
+            let mut drew_what = (0i64, 0usize, 0i64);
+            let mut drew_from = [0i64; 4];
             // Whether a screen is lost and not yet back: the next frame is
             // owed so that it is looked for again.
             let mut waiting = false;
@@ -1406,6 +1411,16 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                 let heard = commits.on(&plan, &sources);
                 let frame = screen.watch.frame(plan, &heard, screen.backend.age());
                 redrew = redrew.saturating_add(frame.canvas.area());
+                // What the report says of the slowest frame's damage: how much
+                // was drawn and in how many pieces, and how much was copied to
+                // the screen -- a small change drawn as a large one is a
+                // damage question, not a drawing one.
+                drew_what = (
+                    drew_what.0.saturating_add(frame.canvas.area()),
+                    drew_what.1.saturating_add(frame.canvas.rects().len()),
+                    drew_what.2.saturating_add(frame.screen.area()),
+                );
+                drew_from = frame.sources;
                 let mut target = crate::frame::Output {
                     canvas: &mut screen.canvas,
                     backdrop: &mut screen.backdrop,
@@ -1499,6 +1514,15 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
             // one somebody hoped for.
             let took = began.elapsed();
             slowest = slowest.max(took);
+            // Where the slowest frame of the report's interval spent its
+            // time, which the report prints after it: a slow frame on a slow
+            // machine is a question whose answer is one of these.
+            let phases = compositor_render::timing::take();
+            if took >= since {
+                since_phases = phases;
+                since_drew = drew_what;
+                since_from = drew_from;
+            }
             // Every so many frames, say how long the slowest of them took.
             // The compositor does not end on a machine it is the session of,
             // so a number only in the line it prints when it stops is a
@@ -1515,9 +1539,17 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
             counted = counted.saturating_add(1);
             if reported.elapsed() >= FRAME_REPORT {
                 report(&format!(
-                    "hyprix: frames {drawn} slowest of the last {counted} {} us, all of them {} us",
+                    "hyprix: frames {drawn} slowest of the last {counted} {} us, all of them {} us ({}; drew {} px in {} rects, showed {} px; from layout {} commits {} backdrop {} blurs {})",
                     since.as_micros(),
-                    spent.as_micros()
+                    spent.as_micros(),
+                    compositor_render::timing::describe(&since_phases),
+                    since_drew.0,
+                    since_drew.1,
+                    since_drew.2,
+                    since_from[0],
+                    since_from[1],
+                    since_from[2],
+                    since_from[3]
                 ));
                 (since, spent, counted, reported) =
                     (Duration::ZERO, Duration::ZERO, 0, Instant::now());
