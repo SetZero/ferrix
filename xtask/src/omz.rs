@@ -67,12 +67,21 @@ mkdir -p $ZSH_CACHE_DIR/completions
 /// a run of it on the build host left behind.
 const SKIPPED: &[&str] = &[".git", ".github", ".devcontainer", "cache"];
 
-/// Whether a name in a tree is left out of the image: [`SKIPPED`], and the
+/// What a file is for when its name ends in one of these: a person reading
+/// about a plugin -- its README, its screenshots, the animated demo -- and
+/// never a shell starting one. 3.8 MB of oh-my-zsh's 7.5 MB (2026-09-24), in
+/// every image that carries it and on a board's card, where the loader reads
+/// the whole archive at some 16 MB/s on every boot.
+const READ_BY_PEOPLE: &[&str] = &[".md", ".gif", ".png", ".jpg"];
+
+/// Whether a name in a tree is left out of the image: [`SKIPPED`], the
 /// `.zwc` files zsh compiles its functions into, which are zsh's own binary
 /// format rather than anything zinc reads -- it finds the plain file beside
-/// each one.
+/// each one -- and what is [`READ_BY_PEOPLE`].
 fn skipped(name: &str) -> bool {
-    SKIPPED.contains(&name) || name.ends_with(".zwc")
+    SKIPPED.contains(&name)
+        || name.ends_with(".zwc")
+        || READ_BY_PEOPLE.iter().any(|suffix| name.ends_with(suffix))
 }
 
 /// Where the checkout is installed on this machine.

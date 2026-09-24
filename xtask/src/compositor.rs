@@ -2072,7 +2072,20 @@ pub(crate) fn board_files(arch: Arch, args: &Args) -> Result<crate::flash::Board
     };
     let programs = Programs::build(arch)?;
     let size = args.size.unwrap_or(BOARD_SCREEN);
-    let (config, carried) = desktop(arch, config, size, args)?;
+    let (config, mut carried) = desktop(arch, config, size, args)?;
+    // Nor the ports: on ARMv7-A they are curl, git and the TLS test server
+    // curl's gate talks to, programs for a network the board does not have,
+    // and 13 MB of an archive the loader reads off the card at some 16 MB/s
+    // on every boot (2026-09-24). `run-compositor` still carries them.
+    let ported: Vec<String> = crate::ports::installed(arch)?
+        .into_iter()
+        .map(|file| file.path)
+        .collect();
+    let before = carried.ports.len();
+    carried.ports.retain(|file| !ported.contains(&file.path));
+    if carried.ports.len() < before {
+        println!("  the ports stay off the card: the board has no network for them");
+    }
     // A shell on the serial port beside the desktop, which is how a board
     // with nobody at its screen is reached -- and where `reboot
     // --firmware-setup` takes it back to U-Boot's prompt. It inherits the
