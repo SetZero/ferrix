@@ -1,0 +1,677 @@
+{
+  "//": [
+    "The boundary of the certified item: which kernel source files are inside",
+    "the thing a certificate would attach to, which are the uncertified load",
+    "above it, and which are verification rather than product.",
+    "",
+    "Enforced by scripts/check-item-boundary.py and explained in",
+    "docs/certification/ITEM.md. Every assurance artifact in docs/certification",
+    "is scoped to this file: the Security Target's TOE, the hazard analysis's",
+    "safety item, the traceability matrix and the coverage obligation all mean",
+    "'the rings named here'. Move a file between rings and you have changed",
+    "what four ratings are claims about, which is why it is a diff somebody has",
+    "to argue for rather than a directory convention.",
+    "",
+    "Three rings, nested, tightest first. The point of the nesting is that the",
+    "boundary can ratchet inward without re-scoping the scheme: raising the",
+    "target from EAL5+ to EAL6+, or from SIL 2 to ASIL D, is then a matter of",
+    "moving modules from 'item' to 'core', not of rewriting the artifacts.",
+    "",
+    "A file in no ring fails the build. That is the ratchet's teeth: a new",
+    "kernel module cannot drift into the item by being written, and cannot",
+    "drift out of the analysis by being forgotten."
+  ],
+  "reference_configuration": {
+    "//": [
+      "A certificate attaches to a configuration, not to a repository. This is",
+      "the one under evaluation: three architectures, release profile, the",
+      "gate set cargo xtask check runs, and the toolchain rust-toolchain.toml",
+      "pins. Seven Cargo features exist in the whole workspace and none is in",
+      "kernel/ or boot/, so there is no configuration space to enumerate --",
+      "which is most of why this item is analysable at all."
+    ],
+    "architectures": [
+      "x86_64",
+      "aarch64",
+      "armv7a"
+    ],
+    "profile": "release",
+    "toolchain": "1.97.1",
+    "kernel_cargo_features": 0
+  },
+  "test_file_patterns": [
+    "check.rs",
+    "checks.rs",
+    "*_check.rs",
+    "fs/btrfs_powerfail.rs"
+  ],
+  "//test_file_patterns": [
+    "In-kernel self-tests: the code behind 'every boot proves its own claims'.",
+    "Product code and verification code are counted apart everywhere in the",
+    "assurance argument, because a standard asks quite different questions of",
+    "each -- the first has to be covered by tests, the second *is* the test.",
+    "Roughly a quarter of kernel/ is this. Excluding it from the item's size",
+    "is not a way of looking smaller: these files are cited as verification",
+    "evidence in docs/certification/VERIFICATION.md, where they have to earn",
+    "their place against requirements instead."
+  ],
+  "rings": {
+    "core": {
+      "targets": [
+        "EAL6+",
+        "ASIL D",
+        "SIL 3/4",
+        "DAL B"
+      ],
+      "status": "aspirational -- the ratchet's destination, not a current claim",
+      "why": [
+        "The minimal trusted computing base: the code that must be correct for",
+        "memory protection, scheduling and capability enforcement to mean",
+        "anything. Nothing here may depend on a filesystem, a network stack or",
+        "a device driver, and that is checked rather than intended.",
+        "",
+        "This ring is what a later EAL6+ or ASIL D effort would evaluate. It is",
+        "named now, while it is cheap to name, because the cost of discovering",
+        "a boundary later is every artifact written against the wrong one."
+      ],
+      "members": [
+        "acpi.rs",
+        "arch/**",
+        "backtrace.rs",
+        "claim.rs",
+        "console.rs",
+        "console/**",
+        "device.rs",
+        "early.rs",
+        "fdt.rs",
+        "iommu.rs",
+        "iommu/**",
+        "irq.rs",
+        "mm.rs",
+        "mmio.rs",
+        "object/**",
+        "panic.rs",
+        "panic/**",
+        "sched/**",
+        "smp.rs",
+        "smp/**",
+        "sync.rs",
+        "timer.rs",
+        "trap.rs",
+        "user/**",
+        "vmap.rs"
+      ]
+    },
+    "item": {
+      "targets": [
+        "EAL5+",
+        "DAL C",
+        "IEC 62304 Class C",
+        "EN 50716 SIL 2"
+      ],
+      "status": "the boundary the current artifacts are written against",
+      "why": [
+        "The core, plus the code that brings it up, dispatches into it and",
+        "enumerates the hardware it hands to ring 3. This is the item all four",
+        "present ratings attach to.",
+        "",
+        "The native ABI is here rather than in the core because it is the",
+        "interface the item exports, and an interface is evaluated with the",
+        "thing that exports it. The Linux personality is deliberately *not*",
+        "here: it is a compatibility obligation over which the project has no",
+        "design authority, its syscall surface is the largest single body of",
+        "code in the kernel, and none of it has to be correct for isolation to",
+        "hold. That is the whole argument for the boundary sitting where it",
+        "does.",
+        "",
+        "Device enumeration is inside; device drivers are not. The kernel walks",
+        "ACPI, the device tree and PCI because that needs privilege, then hands",
+        "an IoMapping and an IOMMU domain to a ring-3 driver. scripts/",
+        "check-device-access.py already holds that seam for the code; this",
+        "holds it for the certificate."
+      ],
+      "members": [
+        "checks.rs",
+        "devmgr.rs",
+        "init.rs",
+        "main.rs",
+        "pci.rs",
+        "pci/**",
+        "power.rs",
+        "random.rs",
+        "syscall/futex.rs",
+        "syscall/limits.rs",
+        "syscall/memory.rs",
+        "syscall/mod.rs",
+        "syscall/native.rs",
+        "syscall/program.rs",
+        "syscall/registry.rs",
+        "syscall/system.rs",
+        "syscall/thread.rs",
+        "syscall/uaccess.rs",
+        "syscall/unmap_check.rs"
+      ]
+    },
+    "load": {
+      "targets": [],
+      "status": "uncertified -- carries no assurance claim",
+      "why": [
+        "Everything the item runs but does not vouch for. A defect here is",
+        "bounded by the item's own enforcement: a ring-3 driver fault is a",
+        "process fault, and a Linux-personality defect cannot reach an address",
+        "space the core did not hand it.",
+        "",
+        "This is not a list of code that matters less. It is the filesystem,",
+        "the network stack and the compatibility layer -- most of what makes",
+        "Ferrix useful. It is excluded because a claim over 93,714 lines of",
+        "product code is a claim nobody can afford to substantiate, and one",
+        "over ~40,000 is a claim that can be."
+      ],
+      "members": [
+        "block_ring/**",
+        "display/**",
+        "fs/**",
+        "input/**",
+        "net/**",
+        "net_ring/**",
+        "render/**",
+        "stm32mp1.rs",
+        "stm32mp1_gpu.rs",
+        "stm32mp1_usb.rs",
+        "syscall/attributes.rs",
+        "syscall/check.rs",
+        "syscall/credentials.rs",
+        "syscall/deliver.rs",
+        "syscall/epoll.rs",
+        "syscall/eventfd.rs",
+        "syscall/exec.rs",
+        "syscall/family.rs",
+        "syscall/fd.rs",
+        "syscall/file.rs",
+        "syscall/flock.rs",
+        "syscall/fsctl.rs",
+        "syscall/image.rs",
+        "syscall/kill.rs",
+        "syscall/load.rs",
+        "syscall/memfd.rs",
+        "syscall/namespace.rs",
+        "syscall/path.rs",
+        "syscall/pipe.rs",
+        "syscall/poll.rs",
+        "syscall/process.rs",
+        "syscall/signal.rs",
+        "syscall/signalfd.rs",
+        "syscall/sockets.rs",
+        "syscall/stat.rs",
+        "syscall/time.rs",
+        "syscall/timerfd.rs",
+        "syscall/tty.rs"
+      ]
+    }
+  },
+  "dependency_rules": [
+    {
+      "from": "core",
+      "may_not_reference": [
+        "item",
+        "load"
+      ],
+      "why": "A trusted computing base that reaches upward is not one."
+    },
+    {
+      "from": "item",
+      "may_not_reference": [
+        "load"
+      ],
+      "why": "The item may be called by the load above it, and may not call into it. Where it must -- init has to start a filesystem -- the call goes through an interface the item defines, not a module it names."
+    }
+  ],
+  "known_violations": {
+    "//": [
+      "References that break a dependency rule today, each one a finding in",
+      "docs/certification/FINDINGS.md. The list exists so the gate can go into",
+      "CI green and ratchet down; it is a debt register, not an exemption",
+      "mechanism. Every entry needs a finding id, and the gate fails if the",
+      "list grows or if an entry goes stale.",
+      "",
+      "Populated by running the gate. An empty list here on a tree that has",
+      "never been measured would be a lie told by omission."
+    ],
+    "entries": [
+      {
+        "file": "object/job.rs",
+        "references": "syscall::process",
+        "from_ring": "core",
+        "to_ring": "load",
+        "finding": "F-01"
+      },
+      {
+        "file": "object/mod.rs",
+        "references": "syscall::process",
+        "from_ring": "core",
+        "to_ring": "load",
+        "finding": "F-01"
+      },
+      {
+        "file": "sched/task.rs",
+        "references": "syscall::process",
+        "from_ring": "core",
+        "to_ring": "load",
+        "finding": "F-01"
+      },
+      {
+        "file": "syscall/futex.rs",
+        "references": "syscall::process",
+        "from_ring": "item",
+        "to_ring": "load",
+        "finding": "F-01"
+      },
+      {
+        "file": "syscall/limits.rs",
+        "references": "syscall::process",
+        "from_ring": "item",
+        "to_ring": "load",
+        "finding": "F-01"
+      },
+      {
+        "file": "syscall/memory.rs",
+        "references": "syscall::process",
+        "from_ring": "item",
+        "to_ring": "load",
+        "finding": "F-01"
+      },
+      {
+        "file": "syscall/mod.rs",
+        "references": "syscall::process",
+        "from_ring": "item",
+        "to_ring": "load",
+        "finding": "F-01"
+      },
+      {
+        "file": "syscall/native.rs",
+        "references": "syscall::process",
+        "from_ring": "item",
+        "to_ring": "load",
+        "finding": "F-01"
+      },
+      {
+        "file": "syscall/registry.rs",
+        "references": "syscall::process",
+        "from_ring": "item",
+        "to_ring": "load",
+        "finding": "F-01"
+      },
+      {
+        "file": "syscall/system.rs",
+        "references": "syscall::process",
+        "from_ring": "item",
+        "to_ring": "load",
+        "finding": "F-01"
+      },
+      {
+        "file": "syscall/thread.rs",
+        "references": "syscall::process",
+        "from_ring": "item",
+        "to_ring": "load",
+        "finding": "F-01"
+      },
+      {
+        "file": "trap.rs",
+        "references": "syscall::process",
+        "from_ring": "core",
+        "to_ring": "load",
+        "finding": "F-01"
+      },
+      {
+        "file": "arch/aarch64/signal.rs",
+        "references": "syscall::deliver",
+        "from_ring": "core",
+        "to_ring": "load",
+        "finding": "F-02"
+      },
+      {
+        "file": "arch/aarch64/trap.rs",
+        "references": "syscall::deliver",
+        "from_ring": "core",
+        "to_ring": "load",
+        "finding": "F-02"
+      },
+      {
+        "file": "arch/armv7a/signal.rs",
+        "references": "syscall::deliver",
+        "from_ring": "core",
+        "to_ring": "load",
+        "finding": "F-02"
+      },
+      {
+        "file": "arch/armv7a/trap.rs",
+        "references": "syscall::deliver",
+        "from_ring": "core",
+        "to_ring": "load",
+        "finding": "F-02"
+      },
+      {
+        "file": "arch/x86_64/signal.rs",
+        "references": "syscall::deliver",
+        "from_ring": "core",
+        "to_ring": "load",
+        "finding": "F-02"
+      },
+      {
+        "file": "arch/x86_64/syscall.rs",
+        "references": "syscall::deliver",
+        "from_ring": "core",
+        "to_ring": "load",
+        "finding": "F-02"
+      },
+      {
+        "file": "trap.rs",
+        "references": "syscall::deliver",
+        "from_ring": "core",
+        "to_ring": "load",
+        "finding": "F-02"
+      },
+      {
+        "file": "arch/aarch64/mod.rs",
+        "references": "syscall::stat",
+        "from_ring": "core",
+        "to_ring": "load",
+        "finding": "F-03"
+      },
+      {
+        "file": "arch/armv7a/mod.rs",
+        "references": "syscall::stat",
+        "from_ring": "core",
+        "to_ring": "load",
+        "finding": "F-03"
+      },
+      {
+        "file": "arch/x86_64/mod.rs",
+        "references": "syscall::stat",
+        "from_ring": "core",
+        "to_ring": "load",
+        "finding": "F-03"
+      },
+      {
+        "file": "device.rs",
+        "references": "stm32mp1",
+        "from_ring": "core",
+        "to_ring": "load",
+        "finding": "F-04"
+      },
+      {
+        "file": "device.rs",
+        "references": "stm32mp1_gpu",
+        "from_ring": "core",
+        "to_ring": "load",
+        "finding": "F-04"
+      },
+      {
+        "file": "device.rs",
+        "references": "stm32mp1_usb",
+        "from_ring": "core",
+        "to_ring": "load",
+        "finding": "F-04"
+      },
+      {
+        "file": "power.rs",
+        "references": "stm32mp1",
+        "from_ring": "item",
+        "to_ring": "load",
+        "finding": "F-04"
+      },
+      {
+        "file": "syscall/native.rs",
+        "references": "stm32mp1",
+        "from_ring": "item",
+        "to_ring": "load",
+        "finding": "F-04"
+      },
+      {
+        "file": "syscall/system.rs",
+        "references": "stm32mp1",
+        "from_ring": "item",
+        "to_ring": "load",
+        "finding": "F-04"
+      },
+      {
+        "file": "claim.rs",
+        "references": "block_ring",
+        "from_ring": "core",
+        "to_ring": "load",
+        "finding": "F-05"
+      },
+      {
+        "file": "object/job.rs",
+        "references": "syscall::registry",
+        "from_ring": "core",
+        "to_ring": "item",
+        "finding": "F-06"
+      },
+      {
+        "file": "sched/mod.rs",
+        "references": "syscall::thread",
+        "from_ring": "core",
+        "to_ring": "item",
+        "finding": "F-06"
+      },
+      {
+        "file": "sched/task.rs",
+        "references": "syscall::thread",
+        "from_ring": "core",
+        "to_ring": "item",
+        "finding": "F-06"
+      },
+      {
+        "file": "trap.rs",
+        "references": "syscall::signal",
+        "from_ring": "core",
+        "to_ring": "load",
+        "finding": "F-06"
+      },
+      {
+        "file": "syscall/native.rs",
+        "references": "block_ring",
+        "from_ring": "item",
+        "to_ring": "load",
+        "finding": "F-07"
+      },
+      {
+        "file": "syscall/native.rs",
+        "references": "display",
+        "from_ring": "item",
+        "to_ring": "load",
+        "finding": "F-07"
+      },
+      {
+        "file": "syscall/native.rs",
+        "references": "fs::cgroupfs",
+        "from_ring": "item",
+        "to_ring": "load",
+        "finding": "F-07"
+      },
+      {
+        "file": "syscall/native.rs",
+        "references": "input",
+        "from_ring": "item",
+        "to_ring": "load",
+        "finding": "F-07"
+      },
+      {
+        "file": "syscall/native.rs",
+        "references": "net_ring",
+        "from_ring": "item",
+        "to_ring": "load",
+        "finding": "F-07"
+      },
+      {
+        "file": "syscall/native.rs",
+        "references": "render",
+        "from_ring": "item",
+        "to_ring": "load",
+        "finding": "F-07"
+      },
+      {
+        "file": "syscall/native.rs",
+        "references": "syscall::exec",
+        "from_ring": "item",
+        "to_ring": "load",
+        "finding": "F-07"
+      },
+      {
+        "file": "syscall/native.rs",
+        "references": "syscall::fd",
+        "from_ring": "item",
+        "to_ring": "load",
+        "finding": "F-07"
+      },
+      {
+        "file": "syscall/native.rs",
+        "references": "syscall::load",
+        "from_ring": "item",
+        "to_ring": "load",
+        "finding": "F-07"
+      },
+      {
+        "file": "devmgr.rs",
+        "references": "block_ring",
+        "from_ring": "item",
+        "to_ring": "load",
+        "finding": "F-08"
+      },
+      {
+        "file": "devmgr.rs",
+        "references": "fs",
+        "from_ring": "item",
+        "to_ring": "load",
+        "finding": "F-08"
+      },
+      {
+        "file": "init.rs",
+        "references": "fs",
+        "from_ring": "item",
+        "to_ring": "load",
+        "finding": "F-08"
+      },
+      {
+        "file": "init.rs",
+        "references": "syscall::load",
+        "from_ring": "item",
+        "to_ring": "load",
+        "finding": "F-08"
+      },
+      {
+        "file": "power.rs",
+        "references": "fs::data_disk",
+        "from_ring": "item",
+        "to_ring": "load",
+        "finding": "F-08"
+      },
+      {
+        "file": "power.rs",
+        "references": "fs::root_disk",
+        "from_ring": "item",
+        "to_ring": "load",
+        "finding": "F-08"
+      },
+      {
+        "file": "arch/aarch64/trap.rs",
+        "references": "syscall",
+        "from_ring": "core",
+        "to_ring": "item",
+        "finding": "F-09"
+      },
+      {
+        "file": "arch/armv7a/trap.rs",
+        "references": "syscall",
+        "from_ring": "core",
+        "to_ring": "item",
+        "finding": "F-09"
+      },
+      {
+        "file": "arch/x86_64/syscall.rs",
+        "references": "syscall",
+        "from_ring": "core",
+        "to_ring": "item",
+        "finding": "F-09"
+      },
+      {
+        "file": "syscall/futex.rs",
+        "references": "syscall::poll",
+        "from_ring": "item",
+        "to_ring": "load",
+        "finding": "F-09"
+      },
+      {
+        "file": "syscall/futex.rs",
+        "references": "syscall::time",
+        "from_ring": "item",
+        "to_ring": "load",
+        "finding": "F-09"
+      },
+      {
+        "file": "syscall/limits.rs",
+        "references": "syscall::attributes",
+        "from_ring": "item",
+        "to_ring": "load",
+        "finding": "F-09"
+      },
+      {
+        "file": "syscall/limits.rs",
+        "references": "syscall::credentials",
+        "from_ring": "item",
+        "to_ring": "load",
+        "finding": "F-09"
+      },
+      {
+        "file": "syscall/limits.rs",
+        "references": "syscall::time",
+        "from_ring": "item",
+        "to_ring": "load",
+        "finding": "F-09"
+      },
+      {
+        "file": "syscall/memory.rs",
+        "references": "render::node",
+        "from_ring": "item",
+        "to_ring": "load",
+        "finding": "F-09"
+      },
+      {
+        "file": "syscall/memory.rs",
+        "references": "syscall::fd",
+        "from_ring": "item",
+        "to_ring": "load",
+        "finding": "F-09"
+      },
+      {
+        "file": "syscall/system.rs",
+        "references": "syscall::attributes",
+        "from_ring": "item",
+        "to_ring": "load",
+        "finding": "F-09"
+      },
+      {
+        "file": "syscall/system.rs",
+        "references": "syscall::credentials",
+        "from_ring": "item",
+        "to_ring": "load",
+        "finding": "F-09"
+      },
+      {
+        "file": "syscall/system.rs",
+        "references": "syscall::time",
+        "from_ring": "item",
+        "to_ring": "load",
+        "finding": "F-09"
+      },
+      {
+        "file": "syscall/thread.rs",
+        "references": "syscall::signal",
+        "from_ring": "item",
+        "to_ring": "load",
+        "finding": "F-09"
+      }
+    ]
+  }
+}

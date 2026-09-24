@@ -48,6 +48,15 @@ pub(crate) fn run(args: &Args) -> Result<()> {
     step("unsafe audit", || python("scripts/check-unsafe-audit.py"))?;
     step("panic audit", || python("scripts/check-panic-audit.py"))?;
 
+    // The boundary four assurance ratings attach to. Every artifact in
+    // docs/certification is scoped to `scripts/certification-item.json`, so a
+    // kernel file that drifts into the trusted core -- or an unclassified new
+    // one that nobody decided about -- silently changes what those ratings
+    // claim. docs/certification/ITEM.md.
+    step("certification item boundary", || {
+        python("scripts/check-item-boundary.py")
+    })?;
+
     // The architecture document is generated from `docs/sysml/` and committed.
     // A model edited without regenerating leaves the two disagreeing, and the
     // document is exactly where nobody would notice; this is the cheapest
