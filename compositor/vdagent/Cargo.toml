@@ -1,0 +1,28 @@
+[package]
+name = "compositor-vdagent"
+description = "The clipboard agent: SPICE's vdagent on a virtio-serial port at one end, ext-data-control at the other, so the host's selection and the guest's are the same one"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "vdagent"
+path = "src/main.rs"
+
+[dependencies]
+compositor-evecho = { path = "../evecho" }
+compositor-protocol = { path = "../protocol" }
+compositor-socket = { path = "../socket" }
+compositor-wire = { path = "../wire" }
+# The protocol as bytes, shared with the driver's side of the port. It is a
+# Ferrix library rather than a compositor one because the wire it describes is
+# the same wire `user/vport` carries, and there must be one definition of it.
+ferrix-vdagent = { path = "../../libs/vdagent" }
+# Declarations only: the pipe a paste travels through, and the descriptor the
+# compositor hands over to be written.
+libc = "0.2.189"
+
+[lints]
+workspace = true
