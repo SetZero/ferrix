@@ -359,6 +359,29 @@ feature exactly the utilities that make them worth having. 5 points, and
 better spent when either project releases again. `docs/UUTILS.md` §6a has the
 detail.
 
+## A shootdown gives the processors it waits on one second, and a busy host takes more
+
+FX-0001, "processor N never flushed its TLB for a shootdown", stopped
+`test-selfhost --plan` twice in a row on 2026-09-24 (os-8d). Ferrix had eight
+virtual processors in a parallel build: once in `munmap`, once in `execve`'s
+`vmap::free`. Both times nazuna was at a load of 42 to 52 on 24 cores. Last
+night the same eight-processor run went 56 minutes without it. `smp.rs`
+already gives a waiting holder four seconds (`TURN_TIMEOUT_NANOS`), "because
+a holder preempted on a host with more virtual processors than real ones
+can lose whole seconds without being stuck". The processors a shootdown
+waits on get only `SHOOTDOWN_TIMEOUT_NANOS`, one second, and a preempted
+virtual processor loses that time just the same. The fix to try first is the
+same room for both, or Linux's unbounded wait with a warning; then run
+stage 20's plan again. Logs:
+`~/ferrix-logs/fx0001/2026-09-24-selfhost-plan-smp8-454eaab{,-2}.log` on
+nazuna.
+
+The same night's matrix recorded one self-check failure no row had shown
+before: stage 7's "a signal sent to a process of two threads was given to no
+thread", in `test-input` on x86-64 under a load of 37. Log:
+`~/ferrix-logs/signal-no-thread/2026-09-24-input-x86_64-454eaab.log`.
+2 points | os-8d | 20
+
 ## `su` failed under the musl busybox, and `AF_UNIX` names fixed it
 
 `cargo xtask test-vfs --arch x86_64` with the Alpine musl busybox failed

@@ -150,7 +150,7 @@ sizes them.
 | Stage 14, real-time domains | *month* ≈ 40 | not started |
 | Stage 15, a real userland | *week* ≈ 20, of which job control is spent; most of the rest landed as zinc and uutils, and what is left is an init, sized at 67 points in `docs/INIT.md` §13, of which L3's 3, L1's 5 and L2's 8 are spent, and 18 later | partially complete: init and gettys remain, designed; the kernel's `ferrix.init=` and a committing `reboot(2)` landed 2026-09-24 (L3), and so did `libs/svc`, the manager's pure core (L1, L2) and the stage 13 cgroups its first boot needs (G1 to G4) |
 | ~~Stage 16, `rustc`~~ *exit met 2026-09-22* | ~~*the goal* ≈ 40~~ 8 spent | done |
-| Stage 20, self-hosting | *longer*, unsized | in progress: the x86-64 image builds on Ferrix and boots (2026-09-23) |
+| Stage 20, self-hosting | *longer*, unsized | in progress: the x86-64 image builds on Ferrix and boots (2026-09-23); every build of the matrix recorded, Ferrix making them stops on FX-0001 (2026-09-24) |
 | Stage 21, bare metal and a GPU of Ferrix's own | over 100, unsized | planned when bare-metal work is requested |
 
 Three things qualify these estimates:
@@ -6933,7 +6933,7 @@ the kernel were, and the gate found three of them:
   The file now says 1, Linux's `OVERCOMMIT_ALWAYS`, which is what the kernel
   does.
 
-Building the C programs on Ferrix found two more, both fixed (2026-09-23
+Building the C programs on Ferrix found three more, all fixed (2026-09-23
 and 24):
 
 * **What `lld` wrote through a mapping was lost.** It writes its output
@@ -6945,19 +6945,61 @@ and 24):
   and curl's `configure` concluded there was no grep. `splice` and
   `copy_file_range` now go through a kernel buffer as `sendfile` does, with
   the boot's pipe check calling both by number.
+* **Every new file was dated 1970.** The filesystems' clock read the counter
+  since boot after `CLOCK_REALTIME` had learned firmware's time, so a file
+  written now was older than any a tar archive unpacked, and automake's
+  "newly created file is older than distributed files" stopped curl's
+  `configure`. Files are dated by `CLOCK_REALTIME` now, and the pipe check
+  requires it.
 
-What the exit needs beyond the first step:
+**Every build, not only the image (2026-09-24).** The rest of the exit is
+the test matrix booting only what Ferrix compiled, and three pieces for it
+are in place:
 
-* **The other two architectures.** Their kernels and loaders are built for
-  `aarch64-unknown-none-softfloat`, `aarch64-unknown-uefi`, `armv7a-none-eabi`
-  and `armv7-unknown-linux-musleabi`: four more standard libraries in the
-  sysroot, and three images for the host to boot.
-* **The programs the other tests boot.** zinc needs the musl targets'
-  standard libraries; uutils, busybox and the ports are built against
-  ferrousli, which is C, and the sysroot carries no C compiler (`cc1`); the
-  compositor is a workspace of its own, with its own crates to vendor.
-* **Every test, not the boot test.** The guest's image passes `test-boot`;
-  the exit is the whole matrix on the guest's images.
+* `FERRIX_BUILDS=record:<DIR>` makes xtask write down every build it makes
+  -- Cargo's and the C programs' build scripts, each keyed by SHA-256 over
+  its command, its environment and the files it reads -- as a plan, while
+  the matrix runs as usual (`xtask/src/builds.rs`).
+  `FERRIX_BUILDS=replay:<DIR>/store` makes no build at all: each is answered
+  from the store, and one the store lacks fails with "was not built on
+  Ferrix".
+* `cargo xtask test-selfhost --plan <DIR>` gives Ferrix the plan, the
+  vendored crates of every workspace and the sources the C builds read, and
+  zinc runs `cargo xtask builds-execute` there; the store it writes comes
+  back to the host.
+* `scripts/selfhost-matrix.sh record|replay <DIR>` runs the matrix both
+  ways, in a home of its own. A plan belongs to the tree it was recorded on.
+
+The toolchain grew to match: every target's standard library, gcc and g++ 15,
+binutils, make, cmake, ninja, meson, bison, pkg-config, Perl, Python and
+wayland-scanner 1.24.0 for foot, 151 Debian packages pinned by
+`scripts/fetch-rustc-sysroot.sh`. foot builds from that tree alone in a
+sandbox shaped like the guest. On 2026-09-24 the whole matrix recorded 147
+builds; 26 of its 31 rows passed, and the five that failed were kernel
+self-check flakes and one slow frame on a host at a load of 20 to 50. Ferrix
+then made builds of the plan until two runs in a row stopped on FX-0001, a
+processor that did not answer a TLB shootdown within its one second; that is
+the next step, below.
+
+What the exit needs now:
+
+* **Room for a preempted processor.** Both FX-0001 stops came with nazuna at
+  a load of 42 to 52 on 24 cores, eight virtual processors deep in a parallel
+  build. `smp.rs` already gives a shootdown holder four seconds because "a
+  holder preempted on a host with more virtual processors than real ones can
+  lose whole seconds without being stuck"; the processors it waits on get
+  one. Giving them the same room, as Linux's unbounded wait does, is the fix
+  to try first; then run the plan again.
+* **The plan made on Ferrix, then replayed.** Record on the final tree,
+  `test-selfhost --plan`, then `selfhost-matrix.sh replay` until every row
+  passes on what Ferrix built.
+* **The Arm C programs.** The Arm ports and busybox are built with cross gcc
+  and ferrousli's Arm `libc.so.6` with Rust targets the sysroot lacks
+  (`aarch64-unknown-linux-gnu`, `armv7-unknown-linux-gnueabihf`,
+  `armv7-unknown-linux-musleabihf`), so the matrix's Arm rows boot Alpine's
+  musl busybox and `test-shell` on ferrousli's loader runs on x86-64 only.
+* **Chrome.** `test-chrome` needs the volume `scripts/fetch-chrome.sh`
+  makes, and is not in the matrix.
 
 ---
 
