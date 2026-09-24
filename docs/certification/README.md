@@ -7,7 +7,7 @@ everywhere it matters.
 
 | Target | Standard | Verdict |
 |---|---|---|
-| EAL5+ | Common Criteria (ISO/IEC 15408) | **Not met.** Blocked on a Security Target and a vulnerability analysis; the structural prerequisites are largely in place. |
+| EAL5+ | Common Criteria (ISO/IEC 15408) | **Not met.** Security Target now written; blocked on a vulnerability analysis and design evidence at module granularity. |
 | DAL C | DO-178C / ED-12C | **Not met.** The coverage blocker is retired; planning data and requirements traceability are not. |
 | Class C | IEC 62304 | **Closest of the four.** Technically strong — no SOUP in the item — and blocked on a risk management file and a QMS. |
 | SIL 2 | EN 50716:2023 | **Reachable.** Most of the Annex A technique table is already satisfied; blocked on a safety case. |
@@ -17,6 +17,7 @@ specific, measured, and mostly documents rather than code.
 
 * [ITEM.md](ITEM.md) — what the ratings attach to, and why it is not all of Ferrix
 * [FINDINGS.md](FINDINGS.md) — the audit register, 30 findings
+* [SECURITY-TARGET.md](SECURITY-TARGET.md) — EAL5+ claim, SFRs, and where it would fail evaluation
 * [SOUP.md](SOUP.md) — generated; the item contains none
 * `coverage-x86_64.json` — statement coverage evidence, per file
 
@@ -77,10 +78,17 @@ document disagree. Well-structured internals supported by eleven gates.
 Reproducible byte-identical builds. A complete implementation representation,
 since the item is 100% first-party source.
 
-*Missing:* the entire ASE class — no Security Target, no assets, threats or
-SFRs (F-21, blocking). No vulnerability analysis to `AVA_VAN.4`'s moderate
-attack potential. The SysML model describes Ferrix, not the item, and does not
-reach module granularity (F-15).
+*Written since this audit began:* [SECURITY-TARGET.md](SECURITY-TARGET.md),
+which closes F-21 — TOE scope, assets, seven threats, four assumptions, eight
+objectives, SFRs from CC Part 2 (FDP_ACC/ACF, FDP_IFC/IFF, FDP_RIP.2, FMT_MSA,
+FPT_FLS/STM/TDC, FRU_RSA), and a summary specification mapping each objective to
+the code and the test that exercises it.
+
+*Missing:* a vulnerability analysis to `AVA_VAN.4`'s moderate attack potential
+(F-21a) — the largest single gap. Design evidence at module granularity for
+`ADV_TDS.3`; the SysML model describes Ferrix, not the TOE (F-15). And the TOE
+claims neither audit nor authentication (F-21b), which is defensible for an
+isolation kernel and is why no Protection Profile is claimed.
 
 *Nearest credible claim:* EAL4+ looks defensible on this evidence with an ST
 written, which is also where RHEL and SUSE sit. EAL5 needs the design
@@ -139,9 +147,10 @@ classification to §6.7 (F-18, F-19). A coding standard with complexity metrics
 
 In order of value per unit of effort:
 
-1. **Write the Security Target.** It unblocks EAL5+ entirely and forces the
-   threat model that three of the four standards want in different words.
-   [ITEM.md](ITEM.md) already supplies the hard part.
+1. **Run a vulnerability analysis against the ST's threat model (F-21a).** The
+   Security Target now states seven threats; nothing has systematically tried
+   to realise them. It is the last EAL5 gap that is engineering rather than
+   paperwork.
 2. **Extract `Process` into the core (F-01).** Twelve of the 62 boundary
    violations are one misplaced type, and it is the most-cited structural
    defect in the register.

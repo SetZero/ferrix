@@ -13,12 +13,12 @@ met or met without evidence. *Minor* — a defect with no objective attached yet
 
 | | Blocking | Major | Moderate | Minor | Informational |
 |---|---:|---:|---:|---:|---:|
-| Open | 5 | 9 | 11 | 4 | 1 |
+| Open | 4 | 10 | 11 | 4 | 1 |
 
-Blocking: F-20, F-21, F-22, F-27, F-28 — a hazard analysis, a Security Target,
-a safety case, independent assessment and a quality management system. Four of
-the five are documents that do not exist; the fifth is an organisation that
-does not exist. None is a defect in the code.
+Blocking: F-20, F-22, F-27, F-28 — a hazard analysis, a safety case,
+independent assessment and a quality management system. Two are documents that
+need an application context the repository does not have; two need an
+organisation. None is a defect in the code.
 
 ---
 
@@ -217,10 +217,24 @@ repository does not have. A generic hazard list would be a document, not
 evidence.
 
 ### F-21 — no Security Target
-**Blocking** for EAL5+. No TOE definition in CC terms, assets, threats,
-assumptions, security objectives, SFRs or rationale. The whole ASE class is
-unstarted. [ITEM.md](ITEM.md) supplies the TOE boundary an ST would need, which
-is the hardest part, and nothing else.
+**Closed 2026-09-25** by [SECURITY-TARGET.md](SECURITY-TARGET.md): TOE
+description and scope, assets, threats, assumptions, security objectives, SFRs
+drawn from CC Part 2, a TOE summary specification mapping each objective to the
+code and the evidence, and rationale. EAL5+ (ALC_FLR.2) claimed.
+
+Superseded by F-21a and F-21b, which are what the ST itself records as the
+reasons it would not survive evaluation.
+
+### F-21a — no vulnerability analysis
+**Major.** `AVA_VAN.4` requires a methodical analysis against moderate attack
+potential. None has been performed, and it is the largest single gap between
+the Security Target and an evaluable one.
+
+### F-21b — the TOE claims no audit and no authentication
+**Moderate.** There is no FAU family at all, and FIA lives in the uncertified
+load ring. Defensible for an isolation kernel and the reason no OS Protection
+Profile can be claimed — but an evaluator would press on whether a TOE that
+cannot record a security-relevant event can claim EAL5.
 
 ### F-22 — no safety case
 **Blocking** for EN 50716 SIL 2. No EN 50129-shaped argument, no generic
