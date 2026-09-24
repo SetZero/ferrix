@@ -888,3 +888,105 @@ fn an_interpreter_segment_outside_the_image_is_refused() {
         "a PT_INTERP running past the image was not refused"
     );
 }
+
+#[test]
+fn the_headers_are_the_file_header_and_the_program_header_table() {
+    let image = kernel_image();
+    let end = (EHDR_SIZE + 2 * PHDR_SIZE) as u64;
+    // Only the file header is needed to say how much more to read.
+    assert_eq!(Elf::headers_len(&image[..EHDR_SIZE]), Ok(end));
+    assert_eq!(Elf::headers_len(&image), Ok(end));
+    let arm = arm32_kernel_image();
+    assert_eq!(
+        Elf::headers_len(&arm[..EHDR32_SIZE]),
+        Ok((EHDR32_SIZE + 2 * PHDR32_SIZE) as u64)
+    );
+
+    // Exactly that much parses, and one byte less does not.
+    let headers = &image[..end as usize];
+    assert!(Elf::parse(headers).is_ok());
+    assert_eq!(
+        Elf::parse(&image[..end as usize - 1]).unwrap_err(),
+        ElfError::HeaderOutOfBounds
+    );
+}
+
+#[test]
+fn an_image_with_no_program_headers_needs_only_its_file_header() {
+    let mut image = kernel_image();
+    image[56..58].copy_from_slice(&0u16.to_le_bytes());
+    assert_eq!(Elf::headers_len(&image), Ok(EHDR_SIZE as u64));
+}
+
+#[test]
+fn the_headers_length_refuses_what_parse_refuses() {
+    assert_eq!(Elf::headers_len(&[0x7F, b'E']), Err(ElfError::TooShort));
+    let mut image = kernel_image();
+    image[0] = 0;
+    assert_eq!(Elf::headers_len(&image), Err(ElfError::BadMagic));
+
+    let mut image = kernel_image();
+    image[32..40].copy_from_slice(&u64::MAX.to_le_bytes());
+    assert_eq!(
+        Elf::headers_len(&image),
+        Err(ElfError::HeaderOutOfBounds),
+        "a table whose end wraps has no length"
+    );
+    let mut image = kernel_image();
+    image[54..56].copy_from_slice(&16u16.to_le_bytes());
+    assert_eq!(
+        Elf::headers_len(&image),
+        Err(ElfError::HeaderOutOfBounds),
+        "entries too small to be program headers"
+    );
+}
+
+#[test]
+fn segments_are_validated_against_the_file_the_headers_began() {
+    let image = kernel_image();
+    let end = Elf::headers_len(&image).unwrap() as usize;
+    let headers = Elf::parse(&image[..end]).unwrap();
+    // The headers alone cannot hold the segments' contents, and need not.
+    assert_eq!(
+        headers.validate_segments().unwrap_err(),
+        ElfError::SegmentOutOfBounds
+    );
+    headers
+        .validate_segments_within(image.len() as u64)
+        .unwrap();
+    assert_eq!(
+        headers
+            .validate_segments_within(image.len() as u64 - 1)
+            .unwrap_err(),
+        ElfError::SegmentOutOfBounds,
+        "a file one byte short of the last segment's contents"
+    );
+
+    let mut image = kernel_image();
+    let base = EHDR_SIZE + 40; // p_memsz of the first segment
+    image[base..base + 8].copy_from_slice(&1u64.to_le_bytes());
+    let elf = Elf::parse(&image).unwrap();
+    assert_eq!(
+        elf.validate_segments_within(u64::MAX).unwrap_err(),
+        ElfError::SegmentMalformed,
+        "the size checks do not depend on where the contents are"
+    );
+
+    let mut image = kernel_image();
+    let base = EHDR_SIZE + 8; // p_offset of the first segment
+    image[base..base + 8].copy_from_slice(&u64::MAX.to_le_bytes());
+    let elf = Elf::parse(&image).unwrap();
+    assert_eq!(
+        elf.validate_segments_within(u64::MAX).unwrap_err(),
+        ElfError::SegmentOutOfBounds,
+        "contents whose end wraps are nowhere in any file"
+    );
+}
+
+#[test]
+fn an_interpreter_read_from_the_file_is_checked_as_the_image_would_check_it() {
+    assert_eq!(interpreter_name(b"/lib/ld\0"), Ok(&b"/lib/ld"[..]));
+    for data in [&b""[..], b"/lib/ld", b"\0", b"/lib\0/ld\0"] {
+        assert_eq!(interpreter_name(data), Err(ElfError::BadInterpreter));
+    }
+}

@@ -452,45 +452,31 @@ pub struct Elf<'a> {
 impl<'a> Elf<'a> {
     /// Validate the file header of `image` and borrow it.
     pub fn parse(image: &'a [u8]) -> Result<Self, ElfError> {
-        let ident = image.get(0..16).ok_or(ElfError::TooShort)?;
-        if ident.get(0..4) != Some(&ELF_MAGIC) {
-            return Err(ElfError::BadMagic);
+        let header = read_header(image)?;
+        // The whole program header table has to be inside the image. Checking
+        // it once here is what lets `segments()` be infallible.
+        if headers_end(&header)? > image.len() as u64 {
+            return Err(ElfError::HeaderOutOfBounds);
         }
-        let class = match ident.get(4).copied() {
-            Some(ELFCLASS64) => Class::Elf64,
-            Some(ELFCLASS32) => Class::Elf32,
-            Some(other) => return Err(ElfError::UnsupportedClass(other)),
-            None => return Err(ElfError::TooShort),
-        };
-        if ident.get(5) != Some(&ELFDATA2LSB) {
-            return Err(ElfError::NotLittleEndian);
-        }
-        if image.len() < class.header_size() {
-            return Err(ElfError::TooShort);
-        }
-
-        let header = Header::read(class, image).ok_or(ElfError::TooShort)?;
-
-        // The whole program header table has to be inside the image, and its
-        // entries at least as large as a program header of this class.
-        // Checking it once here is what lets `segments()` be infallible.
-        if header.phnum != 0 {
-            if (header.phentsize as usize) < class.phdr_size() {
-                return Err(ElfError::HeaderOutOfBounds);
-            }
-            let span = (header.phnum as u64)
-                .checked_mul(header.phentsize as u64)
-                .ok_or(ElfError::HeaderOutOfBounds)?;
-            let end = header
-                .phoff
-                .checked_add(span)
-                .ok_or(ElfError::HeaderOutOfBounds)?;
-            if end > image.len() as u64 {
-                return Err(ElfError::HeaderOutOfBounds);
-            }
-        }
-
         Ok(Elf { image, header })
+    }
+
+    /// How many leading bytes of a file hold its file header and its whole
+    /// program header table: what [`Elf::parse`] has to be handed, for a
+    /// caller that reads a file a piece at a time rather than whole.
+    ///
+    /// `image` need hold only the file header. Nothing bounds the answer --
+    /// a table may claim to end anywhere -- so a caller about to read that
+    /// much sets a limit of its own first.
+    ///
+    /// # Errors
+    ///
+    /// What [`Elf::parse`] refuses about the file header, and
+    /// [`ElfError::HeaderOutOfBounds`] for a table whose end wraps or whose
+    /// entries are too small to be program headers.
+    pub fn headers_len(image: &[u8]) -> Result<u64, ElfError> {
+        let header = read_header(image)?;
+        Ok(headers_end(&header)?.max(header.class.header_size() as u64))
     }
 
     /// The decoded file header.
@@ -626,6 +612,17 @@ impl<'a> Elf<'a> {
     /// A loader should call this once before it maps anything, so that a
     /// malformed image fails before it has had any effect.
     pub fn validate_segments(&self) -> Result<(), ElfError> {
+        self.validate_segments_within(self.image.len() as u64)
+    }
+
+    /// [`Elf::validate_segments`], for an image that holds only the
+    /// beginning of a file of `file_len` bytes: each loadable segment's
+    /// contents have to be inside the file rather than inside the image.
+    ///
+    /// What a loader that maps a file, rather than reading it whole, checks
+    /// before it maps anything. Only where the contents are is asked, never
+    /// what they hold.
+    pub fn validate_segments_within(&self, file_len: u64) -> Result<(), ElfError> {
         for segment in self.segments() {
             if segment.kind != PT_LOAD {
                 continue;
@@ -636,7 +633,13 @@ impl<'a> Elf<'a> {
             if self.end_of(&segment).is_none() {
                 return Err(ElfError::SegmentMalformed);
             }
-            let _ = segment.data(self.image)?;
+            let end = segment
+                .offset
+                .checked_add(segment.filesz)
+                .ok_or(ElfError::SegmentOutOfBounds)?;
+            if end > file_len {
+                return Err(ElfError::SegmentOutOfBounds);
+            }
         }
         Ok(())
     }
@@ -907,9 +910,60 @@ pub use symbols::{
     STT_OBJECT, SYM_SIZE, SYM32_SIZE, Symbol, Symbols,
 };
 
+/// The file header at the start of `image`, checked as far as it can be
+/// without the program header table.
+fn read_header(image: &[u8]) -> Result<Header, ElfError> {
+    let ident = image.get(0..16).ok_or(ElfError::TooShort)?;
+    if ident.get(0..4) != Some(&ELF_MAGIC) {
+        return Err(ElfError::BadMagic);
+    }
+    let class = match ident.get(4).copied() {
+        Some(ELFCLASS64) => Class::Elf64,
+        Some(ELFCLASS32) => Class::Elf32,
+        Some(other) => return Err(ElfError::UnsupportedClass(other)),
+        None => return Err(ElfError::TooShort),
+    };
+    if ident.get(5) != Some(&ELFDATA2LSB) {
+        return Err(ElfError::NotLittleEndian);
+    }
+    if image.len() < class.header_size() {
+        return Err(ElfError::TooShort);
+    }
+    Header::read(class, image).ok_or(ElfError::TooShort)
+}
+
+/// One past the last byte of the program header table `header` describes,
+/// or zero when it describes none; refused when the end wraps or the entries
+/// are smaller than a program header of the header's class.
+fn headers_end(header: &Header) -> Result<u64, ElfError> {
+    if header.phnum == 0 {
+        return Ok(0);
+    }
+    if (header.phentsize as usize) < header.class.phdr_size() {
+        return Err(ElfError::HeaderOutOfBounds);
+    }
+    let span = (header.phnum as u64)
+        .checked_mul(header.phentsize as u64)
+        .ok_or(ElfError::HeaderOutOfBounds)?;
+    header
+        .phoff
+        .checked_add(span)
+        .ok_or(ElfError::HeaderOutOfBounds)
+}
+
 /// The path inside a `PT_INTERP` segment: its contents less the NUL, checked.
 fn interpreter_path<'a>(segment: &Segment, image: &'a [u8]) -> Result<&'a [u8], ElfError> {
-    let data = segment.data(image)?;
+    interpreter_name(segment.data(image)?)
+}
+
+/// The path a `PT_INTERP` segment's contents `data` name, less the NUL they
+/// end in: [`Elf::interpreter`]'s answer, for a caller that read the
+/// segment's contents from the file itself.
+///
+/// # Errors
+///
+/// [`ElfError::BadInterpreter`] for contents that are not a path.
+pub fn interpreter_name(data: &[u8]) -> Result<&[u8], ElfError> {
     // A path, not a string: it is handed to the same name resolution an
     // `execve` argument is, so the only shapes refused here are the ones no
     // resolution could take. An empty segment names nothing; a segment that
