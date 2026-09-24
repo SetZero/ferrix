@@ -25,6 +25,8 @@ fn main() {
         "dlerror",
         "dladdr",
         "dl_iterate_phdr",
+        "dladdr1",
+        "dlinfo",
     ] {
         println!("cargo::rustc-link-arg-bins={prefix}--export-dynamic-symbol={symbol}");
     }

@@ -1,10 +1,15 @@
 //! `dlfcn.h`, the loader's half: `dlopen`, `dlsym`, `dlclose`, `dlerror`,
-//! `dladdr` and `link.h`'s `dl_iterate_phdr`, over the scope the loader built.
+//! `dladdr` and `link.h`'s `dl_iterate_phdr`, over the scope the loader built;
+//! and glibc's `dladdr1` and `dlinfo`, with the `struct link_map` they hand
+//! out.
 //!
 //! The C library exports the same names and, loaded by this loader, forwards
 //! to these through [`crate::interface`]; the loader exports them too, so
 //! that a program with no C library can call them, which is how
-//! `tests/link.rs` does.
+//! `tests/link.rs` does. `dladdr1` and `dlinfo` are the loader's alone: the
+//! loader's names carry no version, so a program linked against glibc binds
+//! them here whatever version it asks for, and a static program has nothing
+//! loaded to ask about.
 //!
 //! # Handles
 //!
@@ -40,7 +45,7 @@ use core::cell::UnsafeCell;
 use core::ffi::{c_char, c_int, c_void};
 use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 
-use crate::elf::{PT_LOAD, Phdr, STT_GNU_IFUNC, st_type};
+use crate::elf::{PT_DYNAMIC, PT_LOAD, Phdr, STT_GNU_IFUNC, st_type};
 use crate::object::{MAX_OBJECTS, Object};
 use crate::report::Error;
 use crate::scope::Scope;
@@ -466,6 +471,232 @@ pub(crate) unsafe extern "C" fn dladdr(address: *const c_void, info: *mut DlInfo
     // SAFETY: the caller vouches for `info`.
     unsafe { info.write(answer) };
     1
+}
+
+/// glibc's `struct link_map`, the part `<link.h>` shows: a loaded object's
+/// load bias, name and dynamic section, and its neighbours in load order.
+#[repr(C)]
+#[derive(Debug)]
+pub(crate) struct LinkMap {
+    /// The load bias.
+    l_addr: usize,
+    /// The name it was loaded as.
+    l_name: *const c_char,
+    /// Its `PT_DYNAMIC`, at its run-time address, or 0.
+    l_ld: usize,
+    /// The object loaded after it.
+    l_next: *mut LinkMap,
+    /// The object loaded before it.
+    l_prev: *mut LinkMap,
+}
+
+/// One [`LinkMap`] for each object in the scope, rebuilt under [`LOCK`]
+/// before one is handed out, so that the chain follows every `dlopen`.
+struct LinkMaps(UnsafeCell<[LinkMap; MAX_OBJECTS]>);
+
+// SAFETY: written only under `LOCK`; a caller reads its entries as C does,
+// and they only ever change to describe more objects.
+unsafe impl Sync for LinkMaps {}
+
+/// See [`LinkMaps`].
+static LINK_MAPS: LinkMaps = LinkMaps(UnsafeCell::new(
+    [const {
+        LinkMap {
+            l_addr: 0,
+            l_name: core::ptr::null(),
+            l_ld: 0,
+            l_next: core::ptr::null_mut(),
+            l_prev: core::ptr::null_mut(),
+        }
+    }; MAX_OBJECTS],
+));
+
+/// The link map of object `index`, after bringing every entry up to date.
+/// Called with [`LOCK`] held, through [`with_scope`].
+fn link_map(scope: &Scope, index: usize) -> *mut LinkMap {
+    let maps = LINK_MAPS.0.get().cast::<LinkMap>();
+    let count = scope.len().min(MAX_OBJECTS);
+    for i in 0..count {
+        let Some(object) = scope.get(i) else {
+            continue;
+        };
+        let dynamic = headers(object)
+            .find(|header| header.p_type == PT_DYNAMIC)
+            .map_or(0, |header| {
+                object.base.wrapping_add(header.p_vaddr as usize)
+            });
+        let entry = LinkMap {
+            l_addr: object.base,
+            l_name: scope.name_at(i),
+            l_ld: dynamic,
+            l_next: if i + 1 < count {
+                maps.wrapping_add(i + 1)
+            } else {
+                core::ptr::null_mut()
+            },
+            l_prev: if i > 0 {
+                maps.wrapping_add(i - 1)
+            } else {
+                core::ptr::null_mut()
+            },
+        };
+        // SAFETY: `i` is inside the array, and the lock is held.
+        unsafe { maps.wrapping_add(i).write(entry) };
+    }
+    if index < count {
+        maps.wrapping_add(index)
+    } else {
+        core::ptr::null_mut()
+    }
+}
+
+/// `dladdr1`'s `RTLD_DL_SYMENT`: the symbol's table entry.
+const RTLD_DL_SYMENT: c_int = 1;
+/// `dladdr1`'s `RTLD_DL_LINKMAP`: the object's link map.
+const RTLD_DL_LINKMAP: c_int = 2;
+
+/// `dladdr1(address, info, extra, flags)`: [`dladdr`], and with
+/// `RTLD_DL_SYMENT` the nearest symbol's table entry, or with
+/// `RTLD_DL_LINKMAP` the object's link map, in `*extra`. libasound calls
+/// it.
+///
+/// # Safety
+///
+/// `info` must be valid for writing a `Dl_info`, and `extra` for writing a
+/// pointer when `flags` asks for one.
+#[unsafe(no_mangle)]
+pub(crate) unsafe extern "C" fn dladdr1(
+    address: *const c_void,
+    info: *mut DlInfo,
+    extra: *mut *mut c_void,
+    flags: c_int,
+) -> c_int {
+    // SAFETY: the caller vouches for `info`.
+    if unsafe { dladdr(address, info) } == 0 {
+        return 0;
+    }
+    if flags != RTLD_DL_SYMENT && flags != RTLD_DL_LINKMAP {
+        return 1;
+    }
+    let wanted = address.addr();
+    let answer = with_scope(|scope| {
+        let index = (0..scope.len()).find(|&index| {
+            scope
+                .get(index)
+                .is_some_and(|object| object.phdr != 0 && contains(object, wanted))
+        })?;
+        if flags == RTLD_DL_LINKMAP {
+            return Some(link_map(scope, index).cast::<c_void>());
+        }
+        let object = scope.get(index)?;
+        crate::sym::nearest_entry(object, wanted).map(|entry| entry.cast_mut().cast())
+    });
+    // SAFETY: the caller vouches for `extra`.
+    unsafe { extra.write(answer.unwrap_or(core::ptr::null_mut())) };
+    1
+}
+
+/// `dlinfo`'s requests: the namespace, the link map, the origin, and the
+/// TLS module number.
+const RTLD_DI_LMID: c_int = 1;
+/// See [`RTLD_DI_LMID`].
+const RTLD_DI_LINKMAP: c_int = 2;
+/// See [`RTLD_DI_LMID`].
+const RTLD_DI_ORIGIN: c_int = 6;
+/// See [`RTLD_DI_LMID`].
+const RTLD_DI_TLS_MODID: c_int = 9;
+
+/// `dlinfo(handle, request, arg)`: what `request` asks about the object
+/// `handle` names, written to `arg`. 0, or -1 with the reason for
+/// `dlerror`. The namespace is always the base one, and the origin is the
+/// directory the object was loaded from, as its name gives it. libasound
+/// calls it.
+///
+/// # Safety
+///
+/// `arg` must be valid for what `request` writes: a `Lmid_t`, a pointer, a
+/// `size_t`, or for `RTLD_DI_ORIGIN` a buffer of `PATH_MAX` bytes.
+#[unsafe(no_mangle)]
+pub(crate) unsafe extern "C" fn dlinfo(
+    handle: *mut c_void,
+    request: c_int,
+    arg: *mut c_void,
+) -> c_int {
+    enum Answer {
+        Word(usize),
+        Origin(*const c_char),
+    }
+    let answer = with_scope(|scope| {
+        let index = scope.index_of_handle(handle)?;
+        let object = scope.get(index)?;
+        Some(match request {
+            RTLD_DI_LMID => Some(Answer::Word(0)),
+            RTLD_DI_LINKMAP => Some(Answer::Word(link_map(scope, index).addr())),
+            RTLD_DI_TLS_MODID => Some(Answer::Word(if object.tls.is_some() {
+                index + 1
+            } else {
+                0
+            })),
+            RTLD_DI_ORIGIN => Some(Answer::Origin(scope.name_at(index))),
+            _ => None,
+        })
+    });
+    let answer = match answer {
+        None => {
+            fail("not a handle from dlopen", None);
+            return -1;
+        }
+        Some(None) => {
+            fail("unsupported dlinfo request", None);
+            return -1;
+        }
+        Some(Some(answer)) => answer,
+    };
+    match answer {
+        Answer::Word(word) => {
+            // SAFETY: the caller vouches for a word at `arg`.
+            unsafe { arg.cast::<usize>().write(word) };
+        }
+        Answer::Origin(name) => {
+            // The name up to its last `/`, or `.` for a name without one.
+            let out = arg.cast::<u8>();
+            let mut end = None;
+            let mut len = 0;
+            // SAFETY: the name is NUL-terminated, and read up to its NUL.
+            while !name.is_null() && unsafe { name.wrapping_add(len).read() } != 0 {
+                // SAFETY: as above.
+                if unsafe { name.wrapping_add(len).read() } == b'/' as c_char {
+                    end = Some(len);
+                }
+                len += 1;
+            }
+            match end {
+                Some(0) => {
+                    // SAFETY: the caller's buffer holds `PATH_MAX` bytes.
+                    unsafe { out.write(b'/') };
+                    // SAFETY: as above.
+                    unsafe { out.wrapping_add(1).write(0) };
+                }
+                Some(end) => {
+                    for i in 0..end {
+                        // SAFETY: `i` is inside the name and the buffer.
+                        let byte = unsafe { name.wrapping_add(i).read() } as u8;
+                        // SAFETY: as above.
+                        unsafe { out.wrapping_add(i).write(byte) };
+                    }
+                    // SAFETY: as above.
+                    unsafe { out.wrapping_add(end).write(0) };
+                }
+                None => {
+                    // SAFETY: as above.
+                    unsafe { out.write(b'.') };
+                    // SAFETY: as above.
+                    unsafe { out.wrapping_add(1).write(0) };
+                }
+            }
+        }
+    }
+    0
 }
 
 /// `struct dl_phdr_info`, glibc's.

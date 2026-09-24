@@ -300,6 +300,22 @@ pub(crate) fn nearest(object: &Object, address: usize) -> Option<(*const c_char,
     best
 }
 
+/// The symbol table entry [`nearest`] names, for `dladdr1`'s
+/// `RTLD_DL_SYMENT`.
+#[must_use]
+pub(crate) fn nearest_entry(object: &Object, address: usize) -> Option<*const Sym> {
+    let (name, at) = nearest(object, address)?;
+    (1..count(object))
+        .map(|index| object.symtab.wrapping_add(index))
+        .find(|&entry| {
+            // SAFETY: `index` is below the symbol count, as in `nearest`.
+            let symbol = unsafe { entry.read() };
+            (symbol.st_value as usize).wrapping_add(object.base) == at
+                && symbol.st_shndx != SHN_UNDEF
+                && object.name(symbol.st_name) == Some(name)
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

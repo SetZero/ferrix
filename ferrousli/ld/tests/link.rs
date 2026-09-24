@@ -424,7 +424,9 @@ fn dlopen_dlsym_dladdr_and_dl_iterate_phdr_work_through_the_loader() {
         Some(EXPECTED),
         "dlfcn.h through the loader: 91 dlopen, 92 dlsym of a function, 93 of \
          a datum, 94 dladdr, 95 dlerror, 96 dl_iterate_phdr, 97 a second \
-         dlopen, 98 the TLS refusal, 99 dlclose, and a signal a fault"
+         dlopen, 98 the TLS refusal, 86 and 87 dladdr1's link map and symbol, \
+         88 to 90 dlinfo's link map, origin and refusal, 99 dlclose, and a \
+         signal a fault"
     );
 }
 

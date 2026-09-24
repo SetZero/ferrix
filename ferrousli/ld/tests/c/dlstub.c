@@ -14,3 +14,9 @@ int dladdr(const void *address, void *info) { (void)address; (void)info; return 
 int dl_iterate_phdr(int (*callback)(void *, size_t, void *), void *data) {
 	(void)callback; (void)data; return 0;
 }
+int dladdr1(const void *address, void *info, void **extra, int flags) {
+	(void)address; (void)info; (void)extra; (void)flags; return 0;
+}
+int dlinfo(void *handle, int request, void *arg) {
+	(void)handle; (void)request; (void)arg; return -1;
+}
