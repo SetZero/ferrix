@@ -59,6 +59,7 @@ int main(void)
 	/* The capability sets GET_CAPS may be asked for. */
 	VALUE(VIRTGPU_DRM_CAPSET_VIRGL);
 	VALUE(VIRTGPU_DRM_CAPSET_VIRGL2);
+	VALUE(VIRTGPU_DRM_CAPSET_VENUS);
 
 	SIZE(drm_virtgpu_getparam);
 	FIELD(drm_virtgpu_getparam, param);
@@ -94,6 +95,25 @@ int main(void)
 	FIELD(drm_virtgpu_resource_create, res_handle);
 	FIELD(drm_virtgpu_resource_create, size);
 	FIELD(drm_virtgpu_resource_create, stride);
+
+	SIZE(drm_virtgpu_resource_create_blob);
+	FIELD(drm_virtgpu_resource_create_blob, blob_mem);
+	FIELD(drm_virtgpu_resource_create_blob, blob_flags);
+	FIELD(drm_virtgpu_resource_create_blob, bo_handle);
+	FIELD(drm_virtgpu_resource_create_blob, res_handle);
+	FIELD(drm_virtgpu_resource_create_blob, size);
+	FIELD(drm_virtgpu_resource_create_blob, pad);
+	FIELD(drm_virtgpu_resource_create_blob, cmd_size);
+	FIELD(drm_virtgpu_resource_create_blob, cmd);
+	FIELD(drm_virtgpu_resource_create_blob, blob_id);
+
+	/* Where a blob's memory is, and what it may be used for. */
+	VALUE(VIRTGPU_BLOB_MEM_GUEST);
+	VALUE(VIRTGPU_BLOB_MEM_HOST3D);
+	VALUE(VIRTGPU_BLOB_MEM_HOST3D_GUEST);
+	VALUE(VIRTGPU_BLOB_FLAG_USE_MAPPABLE);
+	VALUE(VIRTGPU_BLOB_FLAG_USE_SHAREABLE);
+	VALUE(VIRTGPU_BLOB_FLAG_USE_CROSS_DEVICE);
 
 	SIZE(drm_virtgpu_resource_info);
 	FIELD(drm_virtgpu_resource_info, bo_handle);
