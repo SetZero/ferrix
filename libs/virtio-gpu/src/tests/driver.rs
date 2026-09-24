@@ -8,14 +8,16 @@ use std::vec::Vec;
 
 use ferrix_displayctl::message::{Attach, FORMAT, Message, Rect as CtlRect, Status};
 use ferrix_virtio::gpu::{
-    CMD_GET_DISPLAY_INFO, CMD_RESOURCE_UNREF, Command, DeviceError as Refusal, MemEntry, PAGE_SIZE,
-    Response, backing_entries,
+    CMD_GET_DISPLAY_INFO, CMD_RESOURCE_ATTACH_BACKING, CMD_RESOURCE_UNREF, CMD_SUBMIT_3D, Command,
+    Context, DeviceError as Refusal, MemEntry, PAGE_SIZE, Response, backing_entries,
 };
 use ferrix_virtio::pci::FEATURE_VERSION_1;
 
 use super::fake::{Bus, Device, Handle, PAGE, Region};
 use crate::pipeline::{Pipeline, Request, Step};
-use crate::{DeviceError, Done, Driver, Options, Parts, SubmitError, Teardown};
+use crate::{
+    CONTROL_SLOTS, DeviceError, DevicePages, Done, Driver, Options, Parts, SubmitError, Teardown,
+};
 
 pub(super) type TestDriver = Driver<Handle, Region, Region>;
 
@@ -30,7 +32,8 @@ pub(super) fn build(mode: (u32, u32)) -> (Rc<Bus>, Rc<RefCell<Device>>, TestDriv
     let parts = Parts {
         transport: handle,
         rings: bus.pin(2, false),
-        area: bus.pin(2, true),
+        // Two pages of slots, a page of large request, a page of response.
+        area: bus.pin(4, true),
         cursor_rings: bus.pin(1, false),
         cursor_area: bus.pin(1, false),
     };
@@ -53,9 +56,23 @@ pub(super) fn run(
 ) -> Done {
     driver.submit(command).expect("submitted");
     device.borrow_mut().serve();
-    let (done, _) = driver.on_interrupt().expect("a sound response");
-    let done = done.expect("a response");
+    let _ = driver.on_interrupt().expect("a sound device");
+    let done = driver
+        .take_done()
+        .expect("a sound response")
+        .expect("a response");
     assert_eq!(done.command, command.code());
+    assert_eq!(driver.take_done(), Ok(None), "one command, one completion");
+    done
+}
+
+/// Every completion the device has made, in the order it made them.
+fn take_all(driver: &mut TestDriver) -> Vec<Done> {
+    let _ = driver.on_interrupt().expect("a sound device");
+    let mut done = Vec::new();
+    while let Some(one) = driver.take_done().expect("a sound response") {
+        done.push(one);
+    }
     done
 }
 
@@ -85,17 +102,8 @@ fn bring_up_negotiates_and_reads_the_displays() {
 }
 
 #[test]
-fn one_command_at_a_time_and_refusals_are_not_faults() {
+fn refusals_are_not_faults() {
     let (_bus, device, mut driver) = build((640, 480));
-    driver.submit(&Command::GetDisplayInfo).expect("submitted");
-    assert_eq!(
-        driver.submit(&Command::GetDisplayInfo),
-        Err(SubmitError::Busy)
-    );
-    assert_eq!(driver.on_interrupt().expect("nothing yet").0, None);
-    device.borrow_mut().serve();
-    assert!(driver.on_interrupt().expect("served").0.is_some());
-
     assert_eq!(
         run(
             &mut driver,
@@ -109,10 +117,133 @@ fn one_command_at_a_time_and_refusals_are_not_faults() {
     assert_eq!(device.borrow().commands.last(), Some(&CMD_RESOURCE_UNREF));
 }
 
+/// Every slot and the large place in flight at once behind one doorbell,
+/// the next command told to wait, and the completions matched to their
+/// tags however the device orders them.
+#[test]
+fn every_slot_in_flight_behind_one_doorbell_and_back_in_any_order() {
+    let (_bus, device, mut driver) = build((640, 480));
+    let doorbells = |driver: &TestDriver| *driver.transport().doorbells.borrow();
+    let before = doorbells(&driver);
+    for tag in 0..CONTROL_SLOTS as u64 {
+        driver
+            .post(
+                tag,
+                Context::NONE,
+                &Command::ResourceUnref {
+                    resource_id: 100 + tag as u32,
+                },
+                &[],
+            )
+            .expect("a free slot");
+    }
+    assert_eq!(driver.free_slots(), 0);
+    // Too many entries for a slot: the large place takes it.
+    let entries = vec![
+        MemEntry {
+            addr: 0x1000,
+            length: 4096
+        };
+        100
+    ];
+    let long = Command::ResourceAttachBacking {
+        resource_id: 1,
+        entries: &entries,
+    };
+    driver
+        .post(99, Context::NONE, &long, &[])
+        .expect("the large place");
+    assert_eq!(
+        driver.post(7, Context::NONE, &Command::GetDisplayInfo, &[]),
+        Err(SubmitError::Busy)
+    );
+    assert_eq!(
+        driver.post(7, Context::NONE, &long, &[]),
+        Err(SubmitError::Busy)
+    );
+    assert_eq!(doorbells(&driver), before, "posting rings nothing");
+    driver.kick();
+    driver.kick();
+    assert_eq!(
+        doorbells(&driver),
+        before + 1,
+        "one doorbell for all of them"
+    );
+
+    device.borrow_mut().complete_backwards = true;
+    device.borrow_mut().serve();
+    let done = take_all(&mut driver);
+    let tags: Vec<u64> = done.iter().map(|done| done.tag).collect();
+    let mut expected: Vec<u64> = (0..CONTROL_SLOTS as u64).chain([99]).collect();
+    expected.reverse();
+    assert_eq!(tags, expected);
+    for one in &done {
+        let code = if one.tag == 99 {
+            CMD_RESOURCE_ATTACH_BACKING
+        } else {
+            CMD_RESOURCE_UNREF
+        };
+        assert_eq!(one.command, code);
+        assert_eq!(
+            one.result,
+            Err(Refusal::InvalidResourceId),
+            "no such resource"
+        );
+    }
+    assert!(!driver.is_busy());
+    assert_eq!(driver.free_slots(), CONTROL_SLOTS);
+    assert!(
+        device.borrow().protocol_errors.is_empty(),
+        "{:?}",
+        device.borrow().protocol_errors
+    );
+    // And the slots are good for more.
+    let Ok(Response::DisplayInfo(_)) = run(&mut driver, &device, &Command::GetDisplayInfo).result
+    else {
+        panic!("display info");
+    };
+}
+
+/// A command stream is read where its writer left it: the request is the
+/// header, and the stream's scattered pages follow it in the chain.
+#[test]
+fn a_stream_is_read_where_it_lies() {
+    let (bus, device, mut driver) = build((640, 480));
+    let work = bus.pin(3, true);
+    let stream: Vec<u8> = (0..PAGE + 40)
+        .map(|index| (index * 31 % 251) as u8)
+        .collect();
+    work.write_bytes(PAGE, &stream);
+    let pages = work.device_pages();
+    let following = [(pages[1], PAGE as u32), (pages[2], 40)];
+    driver
+        .post(
+            5,
+            Context::NONE,
+            &Command::Submit3dHeader {
+                size: stream.len() as u32,
+            },
+            &following,
+        )
+        .expect("posted");
+    driver.kick();
+    device.borrow_mut().serve();
+    let done = take_all(&mut driver);
+    assert_eq!(done.len(), 1);
+    assert_eq!((done[0].tag, done[0].command), (5, CMD_SUBMIT_3D));
+    assert!(done[0].result.is_ok(), "{:?}", done[0].result);
+    assert_eq!(device.borrow().streams, [stream]);
+    assert!(
+        device.borrow().protocol_errors.is_empty(),
+        "{:?}",
+        device.borrow().protocol_errors
+    );
+}
+
 #[test]
 fn a_request_larger_than_the_area_is_refused() {
     let (_bus, _device, mut driver) = build((640, 480));
-    // Two pages less the response is room for (8192 - 512 - 32) / 16 entries.
+    // The large place is a page: room for (4096 - 32) / 16 entries.
     let entries = vec![
         MemEntry {
             addr: 0x1000,
@@ -361,7 +492,8 @@ fn a_device_that_breaks_the_protocol_is_failed() {
             .submit(&Command::ResourceUnref { resource_id: 1 })
             .expect("submitted");
         device.borrow_mut().serve();
-        assert_eq!(driver.on_interrupt().map(|(done, _)| done), Err(expected));
+        let taken = driver.on_interrupt().and_then(|_| driver.take_done());
+        assert_eq!(taken, Err(expected));
         assert_eq!(driver.fault(), Some(expected));
         assert_eq!(
             driver.submit(&Command::GetDisplayInfo),

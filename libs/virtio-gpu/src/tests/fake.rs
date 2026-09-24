@@ -16,9 +16,9 @@ use std::vec::Vec;
 use ferrix_virtio::gpu::{
     CMD_GET_DISPLAY_INFO, CMD_MOVE_CURSOR, CMD_RESOURCE_ATTACH_BACKING, CMD_RESOURCE_CREATE_2D,
     CMD_RESOURCE_DETACH_BACKING, CMD_RESOURCE_FLUSH, CMD_RESOURCE_UNREF, CMD_SET_SCANOUT,
-    CMD_TRANSFER_TO_HOST_2D, CMD_UPDATE_CURSOR, CURSOR_LEN, CURSOR_SIZE, DeviceConfig,
-    MAX_SCANOUTS, PAGE_SIZE, RESP_ERR_INVALID_PARAMETER, RESP_ERR_INVALID_RESOURCE_ID,
-    RESP_OK_DISPLAY_INFO, RESP_OK_NODATA,
+    CMD_SUBMIT_3D, CMD_TRANSFER_TO_HOST_2D, CMD_UPDATE_CURSOR, CURSOR_LEN, CURSOR_SIZE,
+    DeviceConfig, MAX_SCANOUTS, PAGE_SIZE, RESP_ERR_INVALID_PARAMETER,
+    RESP_ERR_INVALID_RESOURCE_ID, RESP_OK_DISPLAY_INFO, RESP_OK_NODATA,
 };
 use ferrix_virtio::pci::{
     CommonConfig, DEVICE_FEATURE, DEVICE_FEATURE_SELECT, DEVICE_STATUS, DRIVER_FEATURE,
@@ -269,6 +269,11 @@ pub(super) struct Device {
     pub(super) cursor_image: Vec<u8>,
     pub(super) misbehave: Misbehave,
     pub(super) protocol_errors: Vec<&'static str>,
+    /// Every `SUBMIT_3D` stream, as the device read it out of its chain.
+    pub(super) streams: Vec<Vec<u8>>,
+    /// Hand the chains of one [`Device::serve`] back last first, which a
+    /// device may: a completion names its chain, not its turn.
+    pub(super) complete_backwards: bool,
 }
 
 impl Device {
@@ -294,6 +299,8 @@ impl Device {
             cursor_image: Vec::new(),
             misbehave: Misbehave::default(),
             protocol_errors: Vec::new(),
+            streams: Vec::new(),
+            complete_backwards: false,
         }
     }
 
@@ -469,12 +476,10 @@ impl Device {
 
     /// Serve every chain the driver has published.
     pub(super) fn serve(&mut self) {
-        loop {
-            let Some(ring) = self.queues[0].ring.as_mut() else {
-                return;
-            };
+        let mut finished = Vec::new();
+        while let Some(ring) = self.queues[0].ring.as_mut() {
             let Ok(Some(head)) = ring.next_chain() else {
-                return;
+                break;
             };
             let mut descriptors = [Descriptor {
                 address: 0,
@@ -495,7 +500,7 @@ impl Device {
             let [response] = writable.as_slice() else {
                 self.protocol_errors
                     .push("a chain without exactly one response buffer");
-                return;
+                break;
             };
             let (code, mut answer) = self.execute(&request);
             if let Some(other) = self.misbehave.response {
@@ -509,7 +514,15 @@ impl Device {
             }
             self.commands.push(code);
             let written = self.misbehave.written.unwrap_or(answer.len() as u32);
-            let ring = self.queues[0].ring.as_mut().expect("still there");
+            finished.push((head, written));
+        }
+        if self.complete_backwards {
+            finished.reverse();
+        }
+        let Some(ring) = self.queues[0].ring.as_mut() else {
+            return;
+        };
+        for (head, written) in finished {
             ring.complete(head, written).expect("completes");
         }
     }
@@ -607,6 +620,22 @@ impl Device {
                 RESP_OK_NODATA
             }
             CMD_TRANSFER_TO_HOST_2D => self.transfer(request),
+            // `virgl_cmd_submit_3d`: the stream is the `size` bytes after the
+            // header and its padding, wherever in the chain they are.
+            CMD_SUBMIT_3D => {
+                let size = field(24) as usize;
+                match request.get(32..32 + size) {
+                    Some(stream) if request.len() == 32 + size => {
+                        self.streams.push(stream.to_vec());
+                        RESP_OK_NODATA
+                    }
+                    _ => {
+                        self.protocol_errors
+                            .push("a stream of another length than its size");
+                        RESP_ERR_INVALID_PARAMETER
+                    }
+                }
+            }
             CMD_RESOURCE_FLUSH => {
                 if self.scanout == Some(resource(40))
                     && let Some(target) = self.resources.get(&resource(40))

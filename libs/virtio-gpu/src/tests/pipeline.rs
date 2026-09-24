@@ -617,3 +617,46 @@ fn a_cursor_message_is_a_request_and_a_move_is_not() {
         None
     );
 }
+
+/// A command the driver had no room for is given again, and taking back
+/// what was not given is refused.
+#[test]
+fn a_command_taken_back_is_given_again() {
+    let mut pipeline = Pipeline::new();
+    attached(&mut pipeline, 1);
+    let whole = CtlRect {
+        x: 0,
+        y: 0,
+        width: 64,
+        height: 16,
+    };
+    pipeline
+        .push(Request::Flush {
+            buffer: 1,
+            sequence: 9,
+            rect: whole,
+        })
+        .expect("room");
+    let first = pipeline.next(&ENTRIES);
+    assert!(matches!(
+        first,
+        Step::Submit(Command::TransferToHost2d { .. })
+    ));
+    assert_eq!(pipeline.next(&ENTRIES), Step::Wait);
+    pipeline.unsent().expect("it was given");
+    assert_eq!(pipeline.next(&ENTRIES), first);
+    pipeline.done(OK).expect("waiting");
+    assert!(matches!(
+        pipeline.next(&ENTRIES),
+        Step::Submit(Command::ResourceFlush { .. })
+    ));
+    pipeline.done(OK).expect("waiting");
+    assert_eq!(
+        pipeline.next(&ENTRIES),
+        Step::Reply(Message::Flipped {
+            sequence: 9,
+            status: Status::Ok
+        })
+    );
+    assert_eq!(pipeline.unsent(), Err(PipelineError::NotWaiting));
+}

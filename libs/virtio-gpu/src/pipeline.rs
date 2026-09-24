@@ -602,6 +602,18 @@ impl Pipeline {
         Ok(())
     }
 
+    /// Take back the [`Step::Submit`] just given, which the driver had no
+    /// room for: the next [`Pipeline::next`] gives the same command again.
+    pub fn unsent(&mut self) -> Result<(), PipelineError> {
+        let op = self
+            .current
+            .as_mut()
+            .filter(|op| op.waiting && op.stage != Stage::Pin)
+            .ok_or(PipelineError::NotWaiting)?;
+        op.waiting = false;
+        Ok(())
+    }
+
     /// Report the outcome of the command [`Step::Submit`] asked for.
     pub fn done(&mut self, result: Result<Response, Refusal>) -> Result<(), PipelineError> {
         let op = self

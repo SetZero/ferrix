@@ -873,6 +873,30 @@ fn a_submitted_stream_is_carried_whole() {
     );
 }
 
+/// A `SUBMIT_3D` whose stream follows in buffers of its own is the same
+/// bytes up to the stream: a device reading the chain as one run cannot
+/// tell the two apart.
+#[test]
+fn a_submit_header_is_the_submit_less_its_stream() {
+    let stream: Vec<u8> = (0..32u8).collect();
+    let whole = encoded(&Command::Submit3d { commands: &stream });
+    let header = Command::Submit3dHeader { size: 32 };
+    assert_eq!(
+        header.code(),
+        Command::Submit3d { commands: &stream }.code()
+    );
+    assert_eq!(header.response_len(), 24);
+    let bytes = encoded(&header);
+    assert_eq!(bytes.len(), 24 + 8);
+    assert_eq!(bytes.as_slice(), &whole[..32]);
+
+    let mut out = vec![0u8; 64];
+    assert_eq!(
+        Command::Submit3dHeader { size: 0 }.encode(&mut out),
+        Err(GpuError::StreamSize(0))
+    );
+}
+
 /// `struct virtio_gpu_update_cursor`: the header, then
 /// `struct virtio_gpu_cursor_pos { scanout_id, x, y, padding }` at 24,
 /// `resource_id` at 40, `hot_x` at 44, `hot_y` at 48 and padding to 56.

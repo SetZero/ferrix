@@ -9,19 +9,32 @@
 //! crate is written against [`Transport`], [`DevicePages`] and [`CommandArea`],
 //! which the process implements over its handles, and holds everything else:
 //!
-//! * [`Driver`] brings the device up and runs one control command at a time
-//!   through the control queue, checking every response;
+//! * [`Driver`] brings the device up and runs control commands through the
+//!   control queue, several in flight at once, checking every response;
 //! * [`pipeline::Pipeline`] turns the display core's requests — ATTACH,
 //!   SCANOUT, FLUSH, DETACH — into the device commands each takes, and the
 //!   commands' outcomes into the replies the core waits for.
 //!
-//! # One command at a time
+//! # Commands in slots, as many in flight as there are slots
 //!
-//! A frame is two commands and the core waits for each FLIPPED, so there is
-//! nothing to gain from running commands concurrently and a lot of
-//! bookkeeping to lose. The command area holds the one request in flight at
-//! its start and the response at its end; [`Driver::submit`] refuses a second
-//! command until [`Driver::on_interrupt`] has taken the first's response.
+//! The display waits for each FLIPPED, but a frame drawn on the GPU is an
+//! upload or two, a command stream and a flush, and each used to be a round
+//! trip of its own through two processes, the device and back (`docs/GPU.md`
+//! §3.9). So the control queue is run the way seL4's device driver framework
+//! runs a queue: the command area starts with [`CONTROL_SLOTS`] slots, each a
+//! request and its response, [`Driver::post`] writes a command into a free
+//! one and publishes it without ringing the doorbell, [`Driver::kick`] rings
+//! it once for everything posted since, and [`Driver::take_done`] hands the
+//! completions back in whatever order the device made them, each with the
+//! tag it was posted with. A command too long for a slot -- a backing list
+//! of many pages, a capability set -- takes the one large place after the
+//! slots, the request and then a page of response, as every command did
+//! when there was only one.
+//!
+//! A command stream need not be copied at all: [`Driver::post`] takes
+//! buffers the device reads after the request, so a stream already in
+//! pinned memory is handed over where it lies, with
+//! [`Command::Submit3dHeader`] as the request.
 //!
 //! # The cursor queue is the other way round
 //!
@@ -100,9 +113,34 @@ pub const RESPONSE_BYTES: usize = 4096;
 /// device's is larger, rather than asking for a set that will not fit.
 pub const CAPSET_ROOM: u32 = (RESPONSE_BYTES - gpu::HEADER_LEN) as u32;
 
-/// The control queue's size. A command is at most a few chains' worth of
-/// request pages and one response buffer, and only one is in flight.
-pub const QUEUE_SIZE: u16 = 64;
+/// The control queue's size: room for every slot's chain and the large
+/// command's, whose request may cross many pages that are not side by side.
+pub const QUEUE_SIZE: u16 = 128;
+
+/// Commands the control queue may have in slots at once, beside the large
+/// one.
+pub const CONTROL_SLOTS: usize = 8;
+
+/// Bytes of one slot: its request and then its response. A quarter of a
+/// page, so that no slot crosses one.
+const SLOT_BYTES: usize = 1024;
+
+/// Bytes of a slot's request: every command but a long backing list or an
+/// inline stream fits, and `CTX_CREATE`, the longest, is 96.
+const SLOT_REQUEST_BYTES: usize = 512;
+
+/// Bytes of a slot's response: `GET_DISPLAY_INFO`'s 408 is the longest a
+/// slot is asked to hold.
+const SLOT_RESPONSE_BYTES: usize = SLOT_BYTES - SLOT_REQUEST_BYTES;
+
+/// Bytes at the start of the command area the slots take.
+pub const SLOT_AREA_BYTES: usize = CONTROL_SLOTS * SLOT_BYTES;
+
+/// Where the large command is in the table of what is in flight.
+const LARGE: usize = CONTROL_SLOTS;
+
+/// The most buffers one chain is made of.
+const MAX_CHAIN: usize = 64;
 
 /// Cursor commands the cursor queue may hold at once: its size, and the
 /// slots of the cursor area.
@@ -145,6 +183,21 @@ pub trait CommandArea: DevicePages {
     fn read_u8(&self, offset: usize) -> u8;
     /// Write the byte at `offset`.
     fn write_u8(&mut self, offset: usize, value: u8);
+
+    /// Read `out.len()` bytes from `offset`. A byte at a time unless the
+    /// memory knows better, which mapped memory does.
+    fn read_bytes(&self, offset: usize, out: &mut [u8]) {
+        for (index, byte) in out.iter_mut().enumerate() {
+            *byte = self.read_u8(offset + index);
+        }
+    }
+
+    /// Write `bytes` from `offset`, the same way.
+    fn write_bytes(&mut self, offset: usize, bytes: &[u8]) {
+        for (index, &byte) in bytes.iter().enumerate() {
+            self.write_u8(offset + index, byte);
+        }
+    }
 }
 
 /// Everything a driver is built from.
@@ -153,7 +206,9 @@ pub struct Parts<T, R, A> {
     pub transport: T,
     /// The control queue's rings: pages holding a queue of [`QUEUE_SIZE`].
     pub rings: R,
-    /// Requests and responses: at least one page.
+    /// Requests and responses: the slots, then the large command's request
+    /// and a page for its response, so more than [`SLOT_AREA_BYTES`] and a
+    /// page.
     pub area: A,
     /// The cursor queue's rings: pages holding a queue of [`CURSOR_SLOTS`].
     pub cursor_rings: R,
@@ -222,7 +277,9 @@ pub enum InitError {
 pub enum SubmitError {
     /// The device has failed; shut the driver down.
     Broken,
-    /// A command is already in flight.
+    /// Every place the command could go is in flight, or the queue has no
+    /// descriptors left for it until some come back: post it again after a
+    /// completion.
     Busy,
     /// The request does not fit the command area or the queue.
     TooLarge,
@@ -250,6 +307,8 @@ pub enum DeviceError {
 /// A command's outcome.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Done {
+    /// What [`Driver::post`] was given, so the caller knows whose it is.
+    pub tag: u64,
     /// The command's type code.
     pub command: u32,
     /// The response, or the device's refusal of the command.
@@ -360,11 +419,13 @@ impl<T, R, A> fmt::Debug for Parts<T, R, A> {
     }
 }
 
-/// The command in flight.
+/// A command in flight, in the table at the index of its place: a slot, or
+/// [`LARGE`].
 #[derive(Clone, Copy, Debug)]
 struct InFlight {
     head: u16,
     command: u32,
+    tag: u64,
 }
 
 /// A virtio-gpu device, brought up and driven.
@@ -376,7 +437,14 @@ pub struct Driver<T, R, A> {
     notify_off: u16,
     reset_polls: u32,
     fault: Option<DeviceError>,
-    in_flight: Option<InFlight>,
+    /// What each slot, and then the large place, holds while the device has
+    /// it.
+    in_flight: [Option<InFlight>; CONTROL_SLOTS + 1],
+    /// Whether something was posted since the doorbell last rang.
+    posted: bool,
+    /// The place of the command [`Driver::take_done`] last handed back,
+    /// whose response [`Driver::read_response`] reads.
+    last_taken: Option<usize>,
     cursor_queue: ManuallyDrop<SplitQueue<R>>,
     cursor_area: ManuallyDrop<A>,
     cursor_notify_off: u16,
@@ -414,6 +482,34 @@ fn contiguous(pages: &[u64], start: usize, len: usize) -> Option<u64> {
         }
     }
     base.checked_add(u64::try_from(start % page).ok()?)
+}
+
+/// Add `len` readable bytes at `address` to the chain being built in
+/// `buffers`, joined to the last buffer where they follow it.
+fn append(
+    buffers: &mut [Buffer],
+    count: &mut usize,
+    address: u64,
+    len: usize,
+) -> Result<(), SubmitError> {
+    let len = u32::try_from(len).map_err(|_| SubmitError::TooLarge)?;
+    let joined = count
+        .checked_sub(1)
+        .and_then(|last| buffers.get_mut(last))
+        .filter(|last| last.address.checked_add(u64::from(last.len)) == Some(address))
+        .filter(|last| last.len.checked_add(len).is_some());
+    if let Some(last) = joined {
+        last.len += len;
+        return Ok(());
+    }
+    // The last place is the response's.
+    if *count + 1 >= buffers.len() {
+        return Err(SubmitError::TooLarge);
+    }
+    let slot = buffers.get_mut(*count).ok_or(SubmitError::TooLarge)?;
+    *slot = Buffer::readable(address, len);
+    *count += 1;
+    Ok(())
 }
 
 /// Where the rings of `layout` are in `pages`.
@@ -577,7 +673,8 @@ where
             .map_err(InitError::Transport)
             .and_then(|features| {
                 let config = Config::read(&transport).map_err(InitError::Config)?;
-                let room = area.device_pages().len() * PAGE_SIZE as usize > RESPONSE_BYTES
+                let room = area.device_pages().len() * PAGE_SIZE as usize
+                    > SLOT_AREA_BYTES + RESPONSE_BYTES
                     && cursor_area.device_pages().len() * PAGE_SIZE as usize
                         >= CURSOR_SLOTS * CURSOR_SLOT_BYTES;
                 let control = plan_queue(
@@ -647,7 +744,9 @@ where
             notify_off: active.notify_off,
             reset_polls: polls,
             fault: None,
-            in_flight: None,
+            in_flight: [None; CONTROL_SLOTS + 1],
+            posted: false,
+            last_taken: None,
             cursor_queue: ManuallyDrop::new(cursor_queue),
             cursor_area: ManuallyDrop::new(cursor_area),
             cursor_notify_off: cursor_active.notify_off,
@@ -672,10 +771,21 @@ where
         self.fault
     }
 
-    /// Whether a command is in flight.
+    /// Whether any command is in flight.
     #[must_use]
-    pub const fn is_busy(&self) -> bool {
-        self.in_flight.is_some()
+    pub fn is_busy(&self) -> bool {
+        self.in_flight.iter().any(Option::is_some)
+    }
+
+    /// How many slots are free: commands short enough for one that could be
+    /// posted now.
+    #[must_use]
+    pub fn free_slots(&self) -> usize {
+        self.in_flight
+            .iter()
+            .take(CONTROL_SLOTS)
+            .filter(|slot| slot.is_none())
+            .count()
     }
 
     /// The device's registers.
@@ -691,13 +801,63 @@ where
         }
     }
 
-    /// Bytes of the command area a request may use.
-    fn request_room(&self) -> usize {
-        (self.area.device_pages().len() * PAGE_SIZE as usize).saturating_sub(RESPONSE_BYTES)
+    /// Bytes of the command area.
+    fn area_bytes(&self) -> usize {
+        self.area.device_pages().len() * PAGE_SIZE as usize
     }
 
-    /// Write `command` into the command area, publish it with a response
-    /// buffer, and notify the device.
+    /// Where the request of the command at `place` starts, and how long it
+    /// may be.
+    fn request_of(&self, place: usize) -> (usize, usize) {
+        if place < CONTROL_SLOTS {
+            (place * SLOT_BYTES, SLOT_REQUEST_BYTES)
+        } else {
+            (
+                SLOT_AREA_BYTES,
+                self.area_bytes()
+                    .saturating_sub(SLOT_AREA_BYTES + RESPONSE_BYTES),
+            )
+        }
+    }
+
+    /// Where the response of the command at `place` starts, and its room.
+    fn response_of(&self, place: usize) -> (usize, usize) {
+        if place < CONTROL_SLOTS {
+            (place * SLOT_BYTES + SLOT_REQUEST_BYTES, SLOT_RESPONSE_BYTES)
+        } else {
+            (
+                self.area_bytes().saturating_sub(RESPONSE_BYTES),
+                RESPONSE_BYTES,
+            )
+        }
+    }
+
+    /// Where a command of `len` bytes whose response is `response` bytes
+    /// goes: a free slot if it fits one, else the large place.
+    fn place_for(&self, len: usize, response: usize) -> Result<usize, SubmitError> {
+        let free = |place: usize| self.in_flight.get(place).is_some_and(Option::is_none);
+        if len <= SLOT_REQUEST_BYTES
+            && response <= SLOT_RESPONSE_BYTES
+            && let Some(slot) = (0..CONTROL_SLOTS).find(|&slot| free(slot))
+        {
+            return Ok(slot);
+        }
+        if len > self.request_of(LARGE).1 || response > RESPONSE_BYTES {
+            return Err(SubmitError::TooLarge);
+        }
+        if free(LARGE) {
+            Ok(LARGE)
+        } else {
+            Err(SubmitError::Busy)
+        }
+    }
+
+    /// Post `command` and ring the doorbell: [`Driver::post`] and
+    /// [`Driver::kick`], tagged 0, for a caller with one command at a time.
+    ///
+    /// # Errors
+    ///
+    /// As [`Driver::post`].
     pub fn submit(&mut self, command: &Command<'_>) -> Result<(), SubmitError> {
         self.submit_in(gpu::Context::NONE, command)
     }
@@ -707,98 +867,126 @@ where
     ///
     /// # Errors
     ///
-    /// As [`Driver::submit`].
+    /// As [`Driver::post`].
     pub fn submit_in(
         &mut self,
         context: gpu::Context,
         command: &Command<'_>,
     ) -> Result<(), SubmitError> {
+        self.post(0, context, command, &[])?;
+        self.kick();
+        Ok(())
+    }
+
+    /// Write `command` into a free place of the command area and publish it,
+    /// with a response buffer, without ringing the doorbell: that is
+    /// [`Driver::kick`]'s, once for everything posted.
+    ///
+    /// `following` is memory the device reads after the request, as
+    /// `(device address, bytes)`: the stream of a
+    /// [`Command::Submit3dHeader`], where its writer left it. It must stay
+    /// as it is until the command is done.
+    ///
+    /// `tag` comes back in the command's [`Done`].
+    ///
+    /// # Errors
+    ///
+    /// [`SubmitError::Busy`] to try again after a completion;
+    /// [`SubmitError::TooLarge`] for a command that would not fit even with
+    /// nothing in flight.
+    pub fn post(
+        &mut self,
+        tag: u64,
+        context: gpu::Context,
+        command: &Command<'_>,
+        following: &[(u64, u32)],
+    ) -> Result<(), SubmitError> {
         if self.fault.is_some() {
             return Err(SubmitError::Broken);
         }
-        if self.in_flight.is_some() {
-            return Err(SubmitError::Busy);
-        }
         let len = command.len();
-        let room = self.request_room();
-        if len > room {
-            return Err(SubmitError::TooLarge);
-        }
+        let place = self.place_for(len, command.response_len())?;
+        let (base, _) = self.request_of(place);
+        let (response_at, response_room) = self.response_of(place);
 
         // One readable descriptor per run of device-consecutive pages the
-        // request covers, then the response buffer.
-        let mut buffers = [Buffer::readable(0, 0); QUEUE_SIZE as usize];
-        let page = PAGE_SIZE as usize;
-        let pages = self.area.device_pages();
+        // request covers, then what follows it, then the response buffer.
+        let mut buffers = [Buffer::readable(0, 0); MAX_CHAIN];
         let mut count = 0usize;
+        let pages = self.area.device_pages();
+        let page = PAGE_SIZE as usize;
         let mut offset = 0usize;
         while offset < len {
-            let chunk = (page - offset % page).min(len - offset);
-            let address = contiguous(pages, offset, chunk).ok_or(SubmitError::TooLarge)?;
-            let joined = count
-                .checked_sub(1)
-                .and_then(|last| buffers.get_mut(last))
-                .filter(|last| last.address.checked_add(u64::from(last.len)) == Some(address));
-            if let Some(last) = joined {
-                last.len += u32::try_from(chunk).map_err(|_| SubmitError::TooLarge)?;
-            } else {
-                let slot = buffers
-                    .get_mut(count)
-                    .filter(|_| count + 1 < usize::from(QUEUE_SIZE))
-                    .ok_or(SubmitError::TooLarge)?;
-                *slot = Buffer::readable(
-                    address,
-                    u32::try_from(chunk).map_err(|_| SubmitError::TooLarge)?,
-                );
-                count += 1;
-            }
+            let at = base + offset;
+            let chunk = (page - at % page).min(len - offset);
+            let address = contiguous(pages, at, chunk).ok_or(SubmitError::TooLarge)?;
+            append(&mut buffers, &mut count, address, chunk)?;
             offset += chunk;
         }
-        let response_at = room;
+        for &(address, bytes) in following {
+            append(&mut buffers, &mut count, address, bytes as usize)?;
+        }
         let response =
-            contiguous(pages, response_at, RESPONSE_BYTES).ok_or(SubmitError::TooLarge)?;
+            contiguous(pages, response_at, response_room).ok_or(SubmitError::TooLarge)?;
         let slot = buffers.get_mut(count).ok_or(SubmitError::TooLarge)?;
-        *slot = Buffer::writable(response, RESPONSE_BYTES as u32);
+        *slot = Buffer::writable(response, response_room as u32);
         count += 1;
         let chain = buffers.get(..count).ok_or(SubmitError::TooLarge)?;
 
         let area = &mut *self.area;
         let _ = command
-            .write_with_in(context, |at, bytes| {
-                for (index, &byte) in bytes.iter().enumerate() {
-                    area.write_u8(at + index, byte);
-                }
-            })
+            .write_with_in(context, |at, bytes| area.write_bytes(base + at, bytes))
             .map_err(SubmitError::Command)?;
         // The response buffer starts unwritten, so a device that completes
         // the chain without writing a response is caught.
-        for index in 0..4 {
-            self.area.write_u8(response_at + index, 0);
-        }
+        self.area.write_bytes(response_at, &[0; 4]);
 
         let head = match self.queue.add_chain(chain) {
             Ok(head) => head,
             Err(QueueError::ChainTooLong | QueueError::OutOfDescriptors) => {
-                return Err(SubmitError::TooLarge);
+                // Descriptors come back with completions; a chain that does
+                // not fit an empty queue never will.
+                return Err(if self.is_busy() {
+                    SubmitError::Busy
+                } else {
+                    SubmitError::TooLarge
+                });
             }
             Err(error) => {
                 self.break_down(DeviceError::Queue(error));
                 return Err(SubmitError::Device(DeviceError::Queue(error)));
             }
         };
-        self.in_flight = Some(InFlight {
-            head,
-            command: command.code(),
-        });
-        if self.queue.device_wants_notification() {
-            self.transport.notify(gpu::CONTROL_QUEUE, self.notify_off);
+        if let Some(held) = self.in_flight.get_mut(place) {
+            *held = Some(InFlight {
+                head,
+                command: command.code(),
+                tag,
+            });
         }
+        self.posted = true;
         Ok(())
     }
 
-    /// Take the response of the command in flight, if the device has written
-    /// it. Returns the ISR bits alongside, so a display change is not lost.
-    pub fn on_interrupt(&mut self) -> Result<(Option<Done>, u8), DeviceError> {
+    /// Ring the control queue's doorbell once for everything posted since it
+    /// last rang, unless the device said it is looking already.
+    pub fn kick(&mut self) {
+        if core::mem::take(&mut self.posted)
+            && self.fault.is_none()
+            && self.queue.device_wants_notification()
+        {
+            self.transport.notify(gpu::CONTROL_QUEUE, self.notify_off);
+        }
+    }
+
+    /// Acknowledge the interrupt and see to the cursor queue. Returns the ISR
+    /// bits, so a display change is not lost; the control queue's
+    /// completions are [`Driver::take_done`]'s.
+    ///
+    /// # Errors
+    ///
+    /// How the device broke the protocol.
+    pub fn on_interrupt(&mut self) -> Result<u8, DeviceError> {
         let isr = self.transport.acknowledge_interrupt();
         if let Some(fault) = self.fault {
             return Err(fault);
@@ -813,29 +1001,50 @@ where
         if let Err(SubmitError::Device(error)) = self.pump_cursor() {
             return Err(error);
         }
+        Ok(isr)
+    }
+
+    /// Take one command the device has finished, if there is one: its tag
+    /// and its outcome. Ask until `None` after every interrupt, since one
+    /// interrupt may stand for many completions.
+    ///
+    /// # Errors
+    ///
+    /// How the device broke the protocol.
+    pub fn take_done(&mut self) -> Result<Option<Done>, DeviceError> {
+        if let Some(fault) = self.fault {
+            return Err(fault);
+        }
         let used = match self.queue.take_used() {
             Ok(Some(used)) => used,
-            Ok(None) => return Ok((None, isr)),
+            Ok(None) => return Ok(None),
             Err(error) => {
                 self.break_down(DeviceError::Queue(error));
                 return Err(DeviceError::Queue(error));
             }
         };
-        let Some(flight) = self
+        let Some((place, flight)) = self
             .in_flight
-            .take()
-            .filter(|flight| flight.head == used.head)
+            .iter_mut()
+            .enumerate()
+            .find(|(_, held)| held.is_some_and(|flight| flight.head == used.head))
+            .and_then(|(place, held)| Some((place, held.take()?)))
         else {
             let error = DeviceError::UnknownChain(used.head);
             self.break_down(error);
             return Err(error);
         };
-        let at = self.request_room();
+        let (at, room) = self.response_of(place);
         let mut response = [0u8; RESPONSE_BYTES];
-        for (index, byte) in response.iter_mut().enumerate() {
-            *byte = self.area.read_u8(at + index);
+        let written = (used.written as usize).min(room);
+        if let Some(bytes) = response.get_mut(..written) {
+            self.area.read_bytes(at, bytes);
         }
-        let result = match Response::parse_for(flight.command, &response, used.written) {
+        let result = match Response::parse_for(
+            flight.command,
+            response.get(..room).unwrap_or_default(),
+            used.written,
+        ) {
             Ok(response) => Ok(response),
             Err(GpuError::Device(refusal)) => Err(refusal),
             Err(error) => {
@@ -843,30 +1052,31 @@ where
                 return Err(DeviceError::Protocol(error));
             }
         };
-        Ok((
-            Some(Done {
-                command: flight.command,
-                result,
-            }),
-            isr,
-        ))
+        self.last_taken = Some(place);
+        Ok(Some(Done {
+            tag: flight.tag,
+            command: flight.command,
+            result,
+        }))
     }
 
-    /// Copy out what followed the header of the last response, from
-    /// `offset` bytes into it: a capability set's bytes, which
-    /// [`Response::Capset`] gives only the length of.
+    /// Copy out what followed the header of the response
+    /// [`Driver::take_done`] last handed back, from `offset` bytes into it: a
+    /// capability set's bytes, which [`Response::Capset`] gives only the
+    /// length of.
     ///
-    /// The response stays where the device wrote it until the next command
-    /// is submitted, so this is asked between the two. Bytes past the
-    /// response buffer's end are left as they were.
+    /// The response stays where the device wrote it until another command is
+    /// posted, so this is asked between the two. Bytes past the response
+    /// buffer's end are left as they were.
     pub fn read_response(&self, offset: usize, out: &mut [u8]) {
-        let at = self.request_room() + gpu::HEADER_LEN;
-        let room = RESPONSE_BYTES - gpu::HEADER_LEN;
-        for (index, byte) in out.iter_mut().enumerate() {
-            let Some(place) = offset.checked_add(index).filter(|place| *place < room) else {
-                break;
-            };
-            *byte = self.area.read_u8(at + place);
+        let Some(place) = self.last_taken else {
+            return;
+        };
+        let (at, room) = self.response_of(place);
+        let room = room.saturating_sub(gpu::HEADER_LEN);
+        let len = room.saturating_sub(offset).min(out.len());
+        if let Some(out) = out.get_mut(..len) {
+            self.area.read_bytes(at + gpu::HEADER_LEN + offset, out);
         }
     }
 

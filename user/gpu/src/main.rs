@@ -42,6 +42,7 @@ use ferrix_native_abi::signals::Signals;
 use ferrix_native_abi::types::{
     IoMappingSpec, PACKET_INTERRUPT, PACKET_SIGNAL, PACKET_USER, PortPacket,
 };
+use ferrix_renderctl::message::{MAX_BYTES as RENDER_MAX_BYTES, Message as RenderMessage};
 use ferrix_rt::native::channel::{Channel, ReadError};
 use ferrix_rt::native::device::{Device, Interrupt, IoMapping};
 use ferrix_rt::native::error::Error;
@@ -56,7 +57,8 @@ use ferrix_virtio::gpu::{self, Command, DeviceConfig, DeviceError as Refusal, Me
 use ferrix_virtio::pci::{CommonConfig, NO_VECTOR};
 use ferrix_virtio_gpu::pipeline::{Pipeline, Request, Step as Next};
 use ferrix_virtio_gpu::{
-    CAPSET_ROOM, CommandArea, DevicePages, Driver, ISR_QUEUE, Options, Parts, Teardown, Transport,
+    CAPSET_ROOM, CONTROL_SLOTS, CommandArea, DevicePages, Driver, ISR_QUEUE, Options, Parts,
+    SLOT_AREA_BYTES, SubmitError, Teardown, Transport,
 };
 
 ferrix_rt::entry!(main);
@@ -76,13 +78,15 @@ const ATTACH_BACKING_HEADER: usize = 32;
 /// Bytes of one backing entry on the wire.
 const ENTRY_BYTES: usize = 16;
 
-/// Pages of command area: the largest request is a backing list of one
-/// entry per page, with the response after it. Sized for the worst case,
-/// pages no two of which the device sees side by side, so no ATTACH the
-/// protocol allows is too large to submit.
-const AREA_PAGES: usize =
-    (ATTACH_BACKING_HEADER + MAX_BUFFER_PAGES * ENTRY_BYTES + ferrix_virtio_gpu::RESPONSE_BYTES)
-        .div_ceil(PAGE);
+/// Pages of command area: the slots, then the large place, whose largest
+/// request is a backing list of one entry per page, with the response after
+/// it. Sized for the worst case, pages no two of which the device sees side
+/// by side, so no ATTACH the protocol allows is too large to submit.
+const AREA_PAGES: usize = (SLOT_AREA_BYTES
+    + ATTACH_BACKING_HEADER
+    + MAX_BUFFER_PAGES * ENTRY_BYTES
+    + ferrix_virtio_gpu::RESPONSE_BYTES)
+    .div_ceil(PAGE);
 
 /// Buffers pinned at once.
 const MAX_PINS: usize = 32;
@@ -156,6 +160,41 @@ impl Mapped {
         // SAFETY: as for `read_u8`, and the mapping is writable.
         unsafe { ptr::write_volatile((self.base + offset) as *mut u8, value) }
     }
+
+    fn read_bytes(&self, offset: usize, out: &mut [u8]) {
+        assert!(
+            offset
+                .checked_add(out.len())
+                .is_some_and(|end| end <= self.len),
+            "a read inside the mapping"
+        );
+        // SAFETY: as for `read_u8`, the whole range checked. A response is
+        // read only once its completion has been taken, after which the
+        // device writes none of it, so a plain copy sees what it wrote; the
+        // queue's barrier orders the copy after the completion was read.
+        unsafe {
+            ptr::copy_nonoverlapping(
+                (self.base + offset) as *const u8,
+                out.as_mut_ptr(),
+                out.len(),
+            );
+        }
+    }
+
+    fn write_bytes(&mut self, offset: usize, bytes: &[u8]) {
+        assert!(
+            offset
+                .checked_add(bytes.len())
+                .is_some_and(|end| end <= self.len),
+            "a write inside the mapping"
+        );
+        // SAFETY: as for `write_u8`, the whole range checked. A request is
+        // written before its chain is published, and the queue's barrier, a
+        // full fence, orders the copy before the index the device reads.
+        unsafe {
+            ptr::copy_nonoverlapping(bytes.as_ptr(), (self.base + offset) as *mut u8, bytes.len());
+        }
+    }
 }
 
 /// A VMO this process made, pinned read-write for the device and mapped.
@@ -210,6 +249,14 @@ impl CommandArea for Pinned {
 
     fn write_u8(&mut self, offset: usize, value: u8) {
         self.mapped.write_u8(offset, value);
+    }
+
+    fn read_bytes(&self, offset: usize, out: &mut [u8]) {
+        self.mapped.read_bytes(offset, out);
+    }
+
+    fn write_bytes(&mut self, offset: usize, bytes: &[u8]) {
+        self.mapped.write_bytes(offset, bytes);
     }
 }
 
@@ -533,9 +580,11 @@ fn render_introduce(
     let Ok(received) = control.read(&mut bytes, &mut handles) else {
         return Ok(None);
     };
-    let taken = RenderMessage::decode(bytes.get(..received.bytes).unwrap_or_default())
-        .is_some_and(|message| matches!(message, RenderMessage::Ready(_)))
-        && received.handles == 2;
+    let ready = match RenderMessage::decode(bytes.get(..received.bytes).unwrap_or_default()) {
+        Some(RenderMessage::Ready(ready)) => Some(ready),
+        _ => None,
+    };
+    let taken = ready.is_some() && received.handles == 2;
     for (index, handle) in handles.iter_mut().enumerate().take(received.handles) {
         let owned = OwnedHandle::from_raw(Kernel, *handle);
         match (taken, index) {
@@ -549,9 +598,16 @@ fn render_introduce(
     if !taken {
         return Ok(None);
     }
+    // The work VMO pinned for the device, so that a command buffer is run
+    // where the core wrote it. A card whose pin fails copies instead.
+    let window = work
+        .as_ref()
+        .zip(ready)
+        .and_then(|(vmo, ready)| WorkWindow::pin(device, vmo, ready.work_bytes));
     Ok(Some(RenderSide {
         control,
         work,
+        window,
         capset,
         stream,
         backings: [const { None }; MAX_BACKINGS],
@@ -561,12 +617,16 @@ fn render_introduce(
 /// The render conversation, once the core has answered READY.
 ///
 /// Served from [`Serving::serve`] rather than by a loop of its own, so that
-/// the display and the GPU take the device's one command slot in turn.
+/// the display's requests and the GPU's go to the device in the order they
+/// were asked for.
 struct RenderSide {
     control: Channel<Kernel>,
     /// READY's work VMO: an object's description and a command buffer are
     /// ranges of it. The driver reads those ranges and never writes them.
     work: Option<Vmo<Kernel>>,
+    /// The work VMO pinned read-only for the device, which then reads a
+    /// command buffer where it lies.
+    window: Option<WorkWindow>,
     /// The capability set HELLO named, which `GET_CAPS` fetches.
     capset: Option<gpu::CapsetInfo>,
     /// Where a command buffer is copied to on its way from the work VMO,
@@ -597,7 +657,86 @@ const MAX_CAPSETS: u32 = 8;
 /// slot and fits the command area beside its header and the response.
 const STREAM_BYTES: usize = 64 * 1024;
 
-/// A private buffer a command buffer is read into.
+/// Pages of the largest work VMO pinned for the device: the render core's
+/// is a megabyte.
+const WORK_PAGES: usize = 256;
+
+/// The most runs of device-consecutive pages one command buffer covers: a
+/// page each, and one more for a buffer that starts part way into one.
+const MAX_STREAM_RUNS: usize = STREAM_BYTES / PAGE + 1;
+
+/// The work VMO, pinned read-only for the device for as long as the render
+/// conversation lasts: a command buffer is handed over where the core wrote
+/// it, as the address of each page it covers after `SUBMIT_3D`'s header,
+/// rather than copied through this process and into the command area --
+/// Genode's "run the buffer at this offset", which `docs/GPU.md` §3.9 names.
+///
+/// The core holds a buffer's slot until its `SUBMITTED`, which is sent only
+/// when the device has finished the command, so a slot is never rewritten
+/// under the device. The device is virtio's, which is cache-coherent, so the
+/// core's writes need no cleaning before it reads them.
+struct WorkWindow {
+    _pin: Pin<Kernel>,
+    pages: [u64; WORK_PAGES],
+    bytes: usize,
+}
+
+impl WorkWindow {
+    fn pin(device: &Device<Kernel>, vmo: &Vmo<Kernel>, bytes: u64) -> Option<WorkWindow> {
+        let bytes = usize::try_from(bytes).ok()?;
+        let count = bytes / PAGE;
+        if count == 0 || count > WORK_PAGES || !bytes.is_multiple_of(PAGE) {
+            return None;
+        }
+        let pin = device.pin(vmo, 0, bytes, PinAccess::ReadOnly).ok()?;
+        let mut raw = [[0_u8; 8]; WORK_PAGES];
+        let got = pin.addresses(raw.get_mut(..count)?).ok()?;
+        if !got.is_complete() || got.pages != count {
+            return None;
+        }
+        let mut pages = [0_u64; WORK_PAGES];
+        for (slot, address) in pages.iter_mut().zip(raw.iter().take(count)) {
+            *slot = device_address(*address);
+        }
+        Some(WorkWindow {
+            _pin: pin,
+            pages,
+            bytes,
+        })
+    }
+
+    /// The device's view of `len` bytes from `at`, as runs of consecutive
+    /// device addresses written into `out`: how many, or `None` for a range
+    /// outside the window or one `out` has no room for.
+    fn runs(&self, at: usize, len: usize, out: &mut [(u64, u32)]) -> Option<usize> {
+        let end = at.checked_add(len).filter(|&end| end <= self.bytes)?;
+        if len == 0 {
+            return None;
+        }
+        let mut count = 0usize;
+        let mut offset = at;
+        while offset < end {
+            let chunk = (PAGE - offset % PAGE).min(end - offset);
+            let address = self.pages.get(offset / PAGE)? + (offset % PAGE) as u64;
+            let chunk = u32::try_from(chunk).ok()?;
+            let joined = count
+                .checked_sub(1)
+                .and_then(|last| out.get_mut(last))
+                .filter(|(start, run)| start + u64::from(*run) == address);
+            if let Some((_, run)) = joined {
+                *run += chunk;
+            } else {
+                *out.get_mut(count)? = (address, chunk);
+                count += 1;
+            }
+            offset += chunk as usize;
+        }
+        Some(count)
+    }
+}
+
+/// A private buffer a command buffer is read into, for a card whose work
+/// VMO could not be pinned.
 struct Stream {
     _vmo: Vmo<Kernel>,
     base: usize,
@@ -824,12 +963,17 @@ fn make_object(
     answer(status)
 }
 
-/// Move bytes between an object's backing and the device's copy.
-fn transfer(
-    driver: &mut Gpu,
-    port: &Port<Kernel>,
-    transfer: &ferrix_renderctl::message::Transfer,
-) -> Result<ferrix_renderctl::message::Message, Step> {
+/// A context's header fields: its id, and no fence.
+const fn in_context(id: u32) -> gpu::Context {
+    gpu::Context {
+        id,
+        ..gpu::Context::NONE
+    }
+}
+
+/// The command that moves bytes between an object's backing and the
+/// device's copy.
+fn transfer_command(transfer: &ferrix_renderctl::message::Transfer) -> Command<'static> {
     use ferrix_renderctl::message::Direction;
 
     let region = gpu::Box3d {
@@ -840,7 +984,7 @@ fn transfer(
         height: transfer.region.height,
         depth: transfer.region.depth,
     };
-    let command = match transfer.direction {
+    match transfer.direction {
         Direction::ToDevice => Command::TransferToHost3d {
             region,
             offset: transfer.offset,
@@ -857,56 +1001,7 @@ fn transfer(
             stride: transfer.stride,
             layer_stride: transfer.layer_stride,
         },
-    };
-    let moved = run_command_in(
-        driver,
-        port,
-        gpu::Context {
-            id: transfer.context,
-            ..gpu::Context::NONE
-        },
-        &command,
-    )?;
-    Ok(ferrix_renderctl::message::Message::Transferred {
-        object: transfer.object,
-        status: status_of(moved),
-    })
-}
-
-/// Hand the device a command buffer, copied out of the work VMO.
-fn submit(
-    driver: &mut Gpu,
-    port: &Port<Kernel>,
-    side: &mut RenderSide,
-    submit: &ferrix_renderctl::message::Submit,
-) -> Result<ferrix_renderctl::message::Message, Step> {
-    use ferrix_renderctl::message::{Message as RenderMessage, Status};
-
-    let len = submit.commands.len as usize;
-    let read = len <= STREAM_BYTES
-        && side.work.as_ref().is_some_and(|work| {
-            work.read(side.stream.bytes(len), u64::from(submit.commands.at))
-                .is_ok()
-        });
-    let status = if read {
-        status_of(run_command_in(
-            driver,
-            port,
-            gpu::Context {
-                id: submit.context,
-                ..gpu::Context::NONE
-            },
-            &Command::Submit3d {
-                commands: side.stream.bytes(len),
-            },
-        )?)
-    } else {
-        Status::Invalid
-    };
-    Ok(RenderMessage::Submitted {
-        fence: submit.fence,
-        status,
-    })
+    }
 }
 
 /// Fetch a capability set and hand its bytes over in a VMO of this
@@ -1071,6 +1166,10 @@ fn status_of(answer: Result<Response, Refusal>) -> ferrix_renderctl::message::St
 }
 
 /// [`run_command`] for a command that belongs to a context.
+///
+/// Only with nothing else in flight: bring-up, and the render requests that
+/// wait for an idle device. Any completion but its own is a driver out of
+/// step with itself.
 fn run_command_in(
     driver: &mut Gpu,
     port: &Port<Kernel>,
@@ -1087,34 +1186,29 @@ fn run_command_in(
             deferred.keep(&packet);
             continue;
         }
-        if let (Some(done), _) = driver.on_interrupt().map_err(|_| Step::Device)? {
-            break done.result;
+        let _ = driver.on_interrupt().map_err(|_| Step::Device)?;
+        let mut mine = None;
+        while let Some(done) = driver.take_done().map_err(|_| Step::Device)? {
+            if done.tag != TAG_BLOCKING {
+                return Err(Step::Faulted);
+            }
+            mine = Some(done.result);
+        }
+        if let Some(result) = mine {
+            break result;
         }
     };
     deferred.give_back(port);
     Ok(result)
 }
 
-/// Submit a command and wait for its outcome, before the pipeline runs.
+/// Submit a command and wait for its outcome.
 fn run_command(
     driver: &mut Gpu,
     port: &Port<Kernel>,
     command: &Command<'_>,
 ) -> Result<Result<Response, Refusal>, Step> {
-    driver.submit(command).map_err(|_| Step::Device)?;
-    let mut deferred = Deferred::new();
-    let result = loop {
-        let packet = port.wait(Deadline::Never).map_err(|_| Step::Events)?;
-        if (packet.kind, packet.key) != (PACKET_INTERRUPT, KEY_INTERRUPT) {
-            deferred.keep(&packet);
-            continue;
-        }
-        if let (Some(done), _) = driver.on_interrupt().map_err(|_| Step::Device)? {
-            break done.result;
-        }
-    };
-    deferred.give_back(port);
-    Ok(result)
+    run_command_in(driver, port, gpu::Context::NONE, command)
 }
 
 /// How many packets one wait may keep: the display's channel, the render
@@ -1395,37 +1489,32 @@ fn run(boot: &Channel<Kernel>) -> Result<(), Step> {
     arm_waits(&port, &control, render.as_ref())?;
 
     let mut serving = Serving {
-        driver,
-        pipeline: Pipeline::new(),
-        pins: [const { None }; MAX_PINS],
-        scratch,
-        card,
-        device,
-        control,
-        port,
-        paused: false,
+        render_armed: render.is_some(),
         render,
-        render_waiting: false,
+        ..Serving::new(driver, scratch, card, device, control, port)
     };
     let ended = serving.serve();
     let Serving {
         driver,
         pins,
         control,
+        render,
         ..
     } = serving;
     match driver.shutdown() {
         Teardown::Released(released) => {
             drop(released);
             drop(pins);
+            drop(render);
             if matches!(ended, Ok(true)) {
                 let _ = control.write(Message::Stopped.encode().as_bytes());
             }
             ended.map(drop)
         }
         Teardown::Wedged(kept) => {
-            // The device may still read the buffers' pages: the pins stay.
-            let _kept_for_good = (kept, ManuallyDrop::new(pins));
+            // The device may still read the buffers' pages, the objects'
+            // backings and the work VMO: the pins stay.
+            let _kept_for_good = (kept, ManuallyDrop::new(pins), ManuallyDrop::new(render));
             Err(Step::Wedged)
         }
     }
@@ -1441,223 +1530,415 @@ struct Serving {
     device: Device<Kernel>,
     control: Channel<Kernel>,
     port: Port<Kernel>,
-    /// Whether reading the control channel stopped because the pipeline was
-    /// full: its wait is not armed until there is room again.
-    paused: bool,
+    /// Whether the display core's channel may hold messages not read yet.
+    /// Its wait is armed again only once a read finds it empty.
+    display_readable: bool,
+    /// A display request read and not given to the pipeline yet, because
+    /// render requests read before it have still to go to the device.
+    held: Option<Message>,
     /// The render conversation, while the core keeps it open. `None` for a
     /// card with no GPU behind it, and once the core has gone.
     render: Option<RenderSide>,
-    /// Whether the render core has sent something not served yet, because
-    /// the device's one command slot was the display's at the time.
-    render_waiting: bool,
+    /// Whether the render core's channel may hold messages not read yet.
+    render_readable: bool,
+    /// Whether a wait on the render channel is armed and not delivered: a
+    /// read that finds the channel empty arms one only if not, since a
+    /// display request has the channel read without being woken for it.
+    render_armed: bool,
+    /// Render requests read and not yet on the device, in order.
+    backlog: Backlog,
+    /// What the completion of each render command on the device is to be
+    /// answered with, by its tag less [`TAG_RENDER`].
+    owed: [Option<Owed>; CONTROL_SLOTS + 1],
+}
+
+/// The tag of a command a blocking helper waits for, which is
+/// [`Driver::submit`]'s.
+const TAG_BLOCKING: u64 = 0;
+/// The tag of the display pipeline's commands.
+const TAG_DISPLAY: u64 = 1;
+/// The first tag of a render command's: the rest is its place in
+/// [`Serving::owed`].
+const TAG_RENDER: u64 = 2;
+
+/// Render requests read ahead of the device.
+const BACKLOG: usize = 16;
+
+/// What a render command's completion is answered with.
+#[derive(Clone, Copy, Debug)]
+enum Owed {
+    Submitted { fence: u64 },
+    Transferred { object: u32 },
+}
+
+impl Owed {
+    const fn reply(self, status: ferrix_renderctl::message::Status) -> RenderMessage {
+        match self {
+            Self::Submitted { fence } => RenderMessage::Submitted { fence, status },
+            Self::Transferred { object } => RenderMessage::Transferred { object, status },
+        }
+    }
+}
+
+/// A render request waiting for the device, or the end of the conversation,
+/// which waits too: the device may still be reading the work VMO the
+/// conversation's pin holds.
+enum Pending {
+    Request(RenderMessage, Option<Vmo<Kernel>>),
+    End,
+}
+
+/// [`Pending`]s in the order they were read.
+struct Backlog {
+    items: [Option<Pending>; BACKLOG],
+    head: usize,
+    count: usize,
+}
+
+impl Backlog {
+    const fn new() -> Self {
+        Self {
+            items: [const { None }; BACKLOG],
+            head: 0,
+            count: 0,
+        }
+    }
+
+    const fn is_empty(&self) -> bool {
+        self.count == 0
+    }
+
+    const fn is_full(&self) -> bool {
+        self.count == BACKLOG
+    }
+
+    fn push(&mut self, pending: Pending) {
+        if let Some(slot) = self.items.get_mut((self.head + self.count) % BACKLOG) {
+            *slot = Some(pending);
+            self.count += 1;
+        }
+    }
+
+    fn front(&self) -> Option<&Pending> {
+        if self.count == 0 {
+            return None;
+        }
+        self.items.get(self.head).and_then(Option::as_ref)
+    }
+
+    fn pop(&mut self) -> Option<Pending> {
+        if self.count == 0 {
+            return None;
+        }
+        let pending = self.items.get_mut(self.head).and_then(Option::take);
+        self.head = (self.head + 1) % BACKLOG;
+        self.count -= 1;
+        pending
+    }
+}
+
+/// What became of posting a render command.
+enum Posting {
+    /// On the device; its completion is owed this.
+    Posted(Owed),
+    /// Answered already, without the device.
+    Answered(RenderMessage),
+    /// The device has no room for it yet.
+    Wait,
 }
 
 impl Serving {
+    /// A card's serving, with no render conversation yet: both waits armed
+    /// and nothing read.
+    fn new(
+        driver: Gpu,
+        scratch: Scratch,
+        card: Vmo<Kernel>,
+        device: Device<Kernel>,
+        control: Channel<Kernel>,
+        port: Port<Kernel>,
+    ) -> Self {
+        Self {
+            driver,
+            pipeline: Pipeline::new(),
+            pins: [const { None }; MAX_PINS],
+            scratch,
+            card,
+            device,
+            control,
+            port,
+            display_readable: false,
+            held: None,
+            render: None,
+            render_readable: false,
+            render_armed: false,
+            backlog: Backlog::new(),
+            owed: [None; CONTROL_SLOTS + 1],
+        }
+    }
+
     /// Serve until STOP (`true`) or the core closing its end (`false`).
     fn serve(&mut self) -> Result<bool, Step> {
         loop {
-            self.pump()?;
-            // The GPU's requests take the device's one command slot, so they
-            // go between the display's: `pump` has just left the pipeline
-            // waiting on the device or with nothing to do.
-            self.serve_render()?;
-            if self.paused && !self.pipeline.is_full() {
-                self.paused = false;
-                if let Some(stopped) = self.listen()? {
-                    return Ok(stopped);
-                }
-                continue;
+            if let Some(stopped) = self.advance()? {
+                return Ok(stopped);
             }
             let packet = self.port.wait(Deadline::Never).map_err(|_| Step::Events)?;
             // A packet given back by a command's wait is a user packet
             // standing for the signal it was, so both forms are read alike.
             match (packet.kind, packet.key) {
-                (PACKET_INTERRUPT, KEY_INTERRUPT) => {
-                    if let (Some(done), _) =
-                        self.driver.on_interrupt().map_err(|_| Step::Faulted)?
-                    {
-                        self.pipeline.done(done.result).map_err(|_| Step::Faulted)?;
-                    }
+                (PACKET_INTERRUPT, KEY_INTERRUPT) => self.completions()?,
+                (PACKET_SIGNAL | PACKET_USER, KEY_CONTROL) => self.display_readable = true,
+                (PACKET_SIGNAL | PACKET_USER, KEY_RENDER) => {
+                    self.render_readable = true;
+                    self.render_armed = false;
                 }
-                (PACKET_SIGNAL | PACKET_USER, KEY_CONTROL) => {
-                    if let Some(stopped) = self.listen()? {
-                        return Ok(stopped);
-                    }
-                }
-                (PACKET_SIGNAL | PACKET_USER, KEY_RENDER) => self.render_waiting = true,
                 _ => {}
             }
         }
     }
 
-    /// Take what the core has sent, and wait for more unless the pipeline
-    /// is full. `Some` when the run is over.
-    fn listen(&mut self) -> Result<Option<bool>, Step> {
-        if let Some(stopped) = self.take_messages()? {
-            return Ok(Some(stopped));
+    /// Move everything that can move: requests read from both cores, put
+    /// on the device in the order they were asked for, until nothing more
+    /// can go before a completion; then ring the doorbell once for all of
+    /// it. `Some` when the run is over.
+    fn advance(&mut self) -> Result<Option<bool>, Step> {
+        loop {
+            let mut moved = self.read_render()?;
+            moved |= self.start_render()?;
+            if let Some(stopped) = self.read_display()? {
+                self.driver.kick();
+                return Ok(Some(stopped));
+            }
+            moved |= self.pump()?;
+            if !moved {
+                break;
+            }
         }
-        if !self.paused {
-            self.control
-                .wait_async(
-                    &self.port,
-                    Signals::READABLE | Signals::PEER_CLOSED,
-                    KEY_CONTROL,
-                )
-                .map_err(|_| Step::Events)?;
-        }
+        self.driver.kick();
         Ok(None)
     }
 
-    /// Take the messages the core has sent, until none is left or the
-    /// pipeline has no room. `Some` when the run is over.
-    fn take_messages(&mut self) -> Result<Option<bool>, Step> {
-        loop {
-            if self.pipeline.is_full() {
-                // The rest wait in the channel, which the core bounds, until
-                // a request finishes.
-                self.paused = true;
-                return Ok(None);
+    /// Take the device's completions and hand each to whoever posted it.
+    fn completions(&mut self) -> Result<(), Step> {
+        let _ = self.driver.on_interrupt().map_err(|_| Step::Faulted)?;
+        while let Some(done) = self.driver.take_done().map_err(|_| Step::Faulted)? {
+            if done.tag == TAG_DISPLAY {
+                self.pipeline.done(done.result).map_err(|_| Step::Faulted)?;
+                continue;
             }
-            let mut bytes = [0_u8; MAX_BYTES];
-            match self.control.read(&mut bytes, &mut []) {
-                Ok(received) => {
-                    match Message::decode(bytes.get(..received.bytes).unwrap_or_default()) {
-                        Ok(Message::Stop) => return Ok(Some(true)),
-                        Ok(Message::Refused(_)) => return Err(Step::Control),
-                        Ok(message) => self.take(&message)?,
-                        Err(_) => return Err(Step::Control),
-                    }
-                }
-                Err(ReadError::Failed(Error::PeerClosed)) => return Ok(Some(false)),
-                Err(ReadError::Failed(Error::ShouldWait)) => return Ok(None),
-                Err(_) => return Err(Step::Control),
-            }
-        }
-    }
-
-    /// Act on one request from the core.
-    ///
-    /// A pointer moving waits for nothing on the control queue, so it goes to
-    /// the cursor queue as it is read, and so does where a new cursor is: an
-    /// image shown later is shown where the pointer is then. Everything else
-    /// goes down the pipeline in order.
-    fn take(&mut self, message: &Message) -> Result<(), Step> {
-        match *message {
-            Message::Move { scanout, x, y } => {
-                return self
-                    .driver
-                    .move_cursor(scanout, x, y)
-                    .map_err(|_| Step::Faulted);
-            }
-            Message::Cursor { scanout, x, y, .. } => {
-                self.driver
-                    .place_cursor(scanout, x, y)
-                    .map_err(|_| Step::Faulted)?;
-            }
-            _ => {}
-        }
-        let request = Request::from_message(message).ok_or(Step::Control)?;
-        self.pipeline.push(request).map_err(|_| Step::Control)
-    }
-
-    /// Do what the pipeline says until it waits on the device or has nothing.
-    fn pump(&mut self) -> Result<(), Step> {
-        loop {
-            match self.pipeline.next(self.scratch.entries()) {
-                Next::Pin {
-                    buffer,
-                    offset,
-                    length,
-                } => {
-                    let result = self.pin(buffer, offset, length);
-                    self.pipeline.pinned(result).map_err(|_| Step::Faulted)?;
-                }
-                Next::Submit(command) => {
-                    if self.driver.submit(&command).is_err() {
-                        return Err(Step::Faulted);
-                    }
-                    return Ok(());
-                }
-                Next::Unpin { buffer } => self.unpin(buffer),
-                Next::Cursor {
-                    scanout,
-                    resource,
-                    hot_x,
-                    hot_y,
-                } => {
-                    self.driver
-                        .update_cursor(scanout, resource, hot_x, hot_y)
-                        .map_err(|_| Step::Faulted)?;
-                }
-                Next::Reply(message) => {
-                    self.control
-                        .write(message.encode().as_bytes())
-                        .map_err(|_| Step::Control)?;
-                }
-                Next::Wait | Next::Idle => return Ok(()),
-            }
-        }
-    }
-
-    /// Serve what the render core has asked for, while the display's
-    /// pipeline is idle and the device's one command slot is free.
-    ///
-    /// A request runs to completion here, waiting on the device itself.
-    /// That is only safe because nothing of the display's can be in flight:
-    /// the device takes one command at a time, so the only completion that
-    /// can arrive is this command's. The display waits a command or two,
-    /// which is microseconds, rather than the GPU waiting for a frame.
-    fn serve_render(&mut self) -> Result<(), Step> {
-        while self.render_waiting && self.pipeline.is_idle() && !self.driver.is_busy() {
-            match self.render_one()? {
-                None => break,
-                Some(true) => {}
-                Some(false) => {
-                    // STOP, or a core this driver cannot answer: the render
-                    // node goes and the display carries on without it.
-                    self.render = None;
-                    self.render_waiting = false;
-                }
-            }
+            // A blocking helper takes its own and nothing else is posted
+            // while one runs, so any other tag is a render command's.
+            let owed = done
+                .tag
+                .checked_sub(TAG_RENDER)
+                .and_then(|at| self.owed.get_mut(usize::try_from(at).ok()?))
+                .and_then(Option::take)
+                .ok_or(Step::Faulted)?;
+            self.answer_render(owed.reply(status_of(done.result)))?;
         }
         Ok(())
     }
 
-    /// Take one request from the render core and answer it. `None` when the
-    /// channel had nothing left; `Some(false)` when the conversation is over.
-    fn render_one(&mut self) -> Result<Option<bool>, Step> {
-        use ferrix_renderctl::message::{MAX_BYTES as RENDER_MAX_BYTES, Message as RenderMessage};
+    /// Read the render core's messages into the backlog, while there is
+    /// room. Whether anything was read.
+    fn read_render(&mut self) -> Result<bool, Step> {
+        let mut moved = false;
+        while self.render_readable && !self.backlog.is_full() {
+            let Some(side) = self.render.as_ref() else {
+                self.render_readable = false;
+                break;
+            };
+            let mut bytes = [0_u8; RENDER_MAX_BYTES];
+            // One handle at most: a mappable object's backing.
+            let mut handles = [Handle::INVALID; 1];
+            let pending = match side.control.read(&mut bytes, &mut handles) {
+                Ok(received) => {
+                    // Owned before anything else, so that a handle is closed
+                    // whichever way this goes.
+                    let handed = (received.handles == 1)
+                        .then(|| Vmo::from_owned(OwnedHandle::from_raw(Kernel, handles[0])));
+                    match RenderMessage::decode(bytes.get(..received.bytes).unwrap_or_default()) {
+                        Some(message) => Pending::Request(message, handed),
+                        None => Pending::End,
+                    }
+                }
+                Err(ReadError::Failed(Error::ShouldWait)) => {
+                    // Nothing more until the core speaks again.
+                    self.render_readable = false;
+                    if !self.render_armed {
+                        side.control
+                            .wait_async(
+                                &self.port,
+                                Signals::READABLE | Signals::PEER_CLOSED,
+                                KEY_RENDER,
+                            )
+                            .map_err(|_| Step::Events)?;
+                        self.render_armed = true;
+                    }
+                    break;
+                }
+                Err(_) => Pending::End,
+            };
+            if matches!(pending, Pending::End) {
+                // Nothing after the end is read, and nothing arms the wait.
+                self.render_readable = false;
+            }
+            self.backlog.push(pending);
+            moved = true;
+        }
+        Ok(moved)
+    }
+
+    /// Put the backlog on the device, in order, as far as it will go.
+    ///
+    /// An upload or a command stream is posted and answered when it
+    /// completes, and the next goes straight after it; one slot is always
+    /// left for the display, whose flush is what a person is waiting on.
+    /// Anything else -- a context, an object, a capability set, the end --
+    /// waits until nothing is in flight and then runs to completion here, as
+    /// every request once did: they are rare, and several are more than one
+    /// command whose later steps depend on the earlier.
+    fn start_render(&mut self) -> Result<bool, Step> {
+        let mut moved = false;
+        while let Some(front) = self.backlog.front() {
+            let hot = match front {
+                Pending::Request(
+                    message @ (RenderMessage::Submit(_) | RenderMessage::Transfer(_)),
+                    _,
+                ) => Some(*message),
+                _ => None,
+            };
+            if let Some(message) = hot {
+                if !self.start_hot(message)? {
+                    break;
+                }
+                let _ = self.backlog.pop();
+            } else {
+                if self.driver.is_busy() {
+                    break;
+                }
+                if let Some(pending) = self.backlog.pop() {
+                    self.run_render(pending)?;
+                }
+            }
+            moved = true;
+        }
+        Ok(moved)
+    }
+
+    /// Put one upload or command stream on the device, or answer it at
+    /// once. `false` when it has to wait for a completion.
+    fn start_hot(&mut self, message: RenderMessage) -> Result<bool, Step> {
+        // One slot stays the display's.
+        if self.driver.free_slots() < 2 {
+            return Ok(false);
+        }
+        let Some(at) = self.owed.iter().position(Option::is_none) else {
+            return Ok(false);
+        };
+        match self.post_render(message, at)? {
+            Posting::Posted(owed) => {
+                if let Some(slot) = self.owed.get_mut(at) {
+                    *slot = Some(owed);
+                }
+            }
+            Posting::Answered(reply) => self.answer_render(reply)?,
+            Posting::Wait => return Ok(false),
+        }
+        Ok(true)
+    }
+
+    /// Post one upload or command stream, tagged with its place in `owed`.
+    fn post_render(&mut self, message: RenderMessage, at: usize) -> Result<Posting, Step> {
+        use ferrix_renderctl::message::Status;
 
         let Some(side) = self.render.as_mut() else {
-            self.render_waiting = false;
-            return Ok(None);
+            return Ok(Posting::Wait);
         };
-        let mut bytes = [0_u8; RENDER_MAX_BYTES];
-        // One handle at most: a mappable object's backing.
-        let mut handles = [Handle::INVALID; 1];
-        let received = match side.control.read(&mut bytes, &mut handles) {
-            Ok(received) => received,
-            Err(ReadError::Failed(Error::ShouldWait)) => {
-                // Nothing more until the core speaks again.
-                self.render_waiting = false;
-                side.control
-                    .wait_async(
-                        &self.port,
-                        Signals::READABLE | Signals::PEER_CLOSED,
-                        KEY_RENDER,
+        let tag = TAG_RENDER + at as u64;
+        let (owed, posted) = match message {
+            RenderMessage::Transfer(moving) => (
+                Owed::Transferred {
+                    object: moving.object,
+                },
+                self.driver.post(
+                    tag,
+                    in_context(moving.context),
+                    &transfer_command(&moving),
+                    &[],
+                ),
+            ),
+            RenderMessage::Submit(submit) => {
+                let owed = Owed::Submitted {
+                    fence: submit.fence,
+                };
+                let at = submit.commands.at as usize;
+                let len = submit.commands.len as usize;
+                let mut runs = [(0_u64, 0_u32); MAX_STREAM_RUNS];
+                let context = in_context(submit.context);
+                // Where the core wrote it, if the work VMO is pinned; copied
+                // through this process otherwise.
+                let posted = if let Some(count) = side
+                    .window
+                    .as_ref()
+                    .and_then(|window| window.runs(at, len, &mut runs))
+                {
+                    self.driver.post(
+                        tag,
+                        context,
+                        &Command::Submit3dHeader { size: len as u32 },
+                        runs.get(..count).unwrap_or_default(),
                     )
-                    .map_err(|_| Step::Events)?;
-                return Ok(None);
+                } else if len <= STREAM_BYTES
+                    && side
+                        .work
+                        .as_ref()
+                        .is_some_and(|work| work.read(side.stream.bytes(len), at as u64).is_ok())
+                {
+                    self.driver.post(
+                        tag,
+                        context,
+                        &Command::Submit3d {
+                            commands: side.stream.bytes(len),
+                        },
+                        &[],
+                    )
+                } else {
+                    return Ok(Posting::Answered(owed.reply(Status::Invalid)));
+                };
+                (owed, posted)
             }
-            Err(_) => return Ok(Some(false)),
+            _ => return Ok(Posting::Wait),
         };
-        // Owned before anything can return, so that a handle is closed
-        // whichever way this goes.
-        let handed = (received.handles == 1)
-            .then(|| Vmo::from_owned(OwnedHandle::from_raw(Kernel, handles[0])));
-        let Some(message) = RenderMessage::decode(bytes.get(..received.bytes).unwrap_or_default())
-        else {
-            return Ok(Some(false));
+        match posted {
+            Ok(()) => Ok(Posting::Posted(owed)),
+            Err(SubmitError::Busy) => Ok(Posting::Wait),
+            Err(SubmitError::Broken | SubmitError::Device(_)) => Err(Step::Faulted),
+            // A command the device could never take is the core's mistake,
+            // and answered as one.
+            Err(_) => Ok(Posting::Answered(owed.reply(Status::Invalid))),
+        }
+    }
+
+    /// Answer the render core, if it is still there to answer.
+    fn answer_render(&self, reply: RenderMessage) -> Result<(), Step> {
+        let Some(side) = self.render.as_ref() else {
+            return Ok(());
+        };
+        side.control
+            .write(reply.encode().as_bytes())
+            .map_err(|_| Step::Control)
+    }
+
+    /// Run one render request that waits for an idle device, and answer it.
+    fn run_render(&mut self, pending: Pending) -> Result<(), Step> {
+        let Pending::Request(message, handed) = pending else {
+            self.end_render();
+            return Ok(());
+        };
+        let Some(side) = self.render.as_mut() else {
+            return Ok(());
         };
         let answer = match message {
             RenderMessage::MakeContext { context, capset } => {
@@ -1678,24 +1959,159 @@ impl Serving {
             RenderMessage::DropObject { object } => {
                 drop_object(&mut self.driver, &self.port, side, object)?
             }
-            RenderMessage::Transfer(moving) => transfer(&mut self.driver, &self.port, &moving)?,
-            RenderMessage::Submit(submitted) => {
-                submit(&mut self.driver, &self.port, side, &submitted)?
-            }
             RenderMessage::GetCaps { capset, version } => {
                 // Its reply carries a handle, so it is written there.
-                return Ok(
-                    get_caps(&mut self.driver, &self.port, side, capset, version)?.map(|()| true),
-                );
+                let _ = get_caps(&mut self.driver, &self.port, side, capset, version)?;
+                return Ok(());
             }
-            RenderMessage::Stop => RenderMessage::Stopped,
-            _ => return Ok(Some(false)),
+            RenderMessage::Stop => {
+                self.answer_render(RenderMessage::Stopped)?;
+                self.end_render();
+                return Ok(());
+            }
+            _ => {
+                // A core this driver cannot answer: the render node goes and
+                // the display carries on without it.
+                self.end_render();
+                return Ok(());
+            }
         };
-        let stopping = matches!(answer, RenderMessage::Stopped);
-        side.control
-            .write(answer.encode().as_bytes())
-            .map_err(|_| Step::Control)?;
-        Ok(Some(!stopping))
+        self.answer_render(answer)
+    }
+
+    /// Let the render conversation go: STOP, or a core that went or said
+    /// something this driver cannot answer. Only with nothing in flight,
+    /// because its pins are memory the device may be reading.
+    fn end_render(&mut self) {
+        self.render = None;
+        self.render_readable = false;
+        while self.backlog.pop().is_some() {}
+    }
+
+    /// Read what the display core has sent, until none is left, the
+    /// pipeline has no room, or a request has to wait for render requests
+    /// read before it. `Some` when the run is over.
+    ///
+    /// A render request is answered only when the device has run it, but
+    /// its caller need not wait for that: a program may submit a frame's
+    /// drawing and flush the screen straight after. So a flush has to reach
+    /// the device after the drawing, and that is why the render channel is
+    /// read again after each display request and before it goes further: a
+    /// render request written before a display request is in its channel by
+    /// the time the display request can be read.
+    fn read_display(&mut self) -> Result<Option<bool>, Step> {
+        loop {
+            if let Some(message) = self.held {
+                if !self.backlog.is_empty() {
+                    return Ok(None);
+                }
+                self.held = None;
+                self.take(&message)?;
+                continue;
+            }
+            if !self.display_readable || self.pipeline.is_full() {
+                // The rest wait in the channel, which the core bounds.
+                return Ok(None);
+            }
+            let mut bytes = [0_u8; MAX_BYTES];
+            let message = match self.control.read(&mut bytes, &mut []) {
+                Ok(received) => {
+                    match Message::decode(bytes.get(..received.bytes).unwrap_or_default()) {
+                        Ok(Message::Stop) => return Ok(Some(true)),
+                        Ok(Message::Refused(_)) | Err(_) => return Err(Step::Control),
+                        Ok(message) => message,
+                    }
+                }
+                Err(ReadError::Failed(Error::PeerClosed)) => return Ok(Some(false)),
+                Err(ReadError::Failed(Error::ShouldWait)) => {
+                    self.display_readable = false;
+                    self.control
+                        .wait_async(
+                            &self.port,
+                            Signals::READABLE | Signals::PEER_CLOSED,
+                            KEY_CONTROL,
+                        )
+                        .map_err(|_| Step::Events)?;
+                    return Ok(None);
+                }
+                Err(_) => return Err(Step::Control),
+            };
+            // A pointer moving waits for nothing, least of all the GPU.
+            if let Message::Move { scanout, x, y } = message {
+                self.driver
+                    .move_cursor(scanout, x, y)
+                    .map_err(|_| Step::Faulted)?;
+                continue;
+            }
+            self.render_readable |= self.render.is_some();
+            let _ = self.read_render()?;
+            let _ = self.start_render()?;
+            self.held = Some(message);
+        }
+    }
+
+    /// Act on one request from the core.
+    ///
+    /// Where a new cursor is goes to the driver as it is taken: an image
+    /// shown later is shown where the pointer is then. Everything else goes
+    /// down the pipeline in order.
+    fn take(&mut self, message: &Message) -> Result<(), Step> {
+        if let Message::Cursor { scanout, x, y, .. } = *message {
+            self.driver
+                .place_cursor(scanout, x, y)
+                .map_err(|_| Step::Faulted)?;
+        }
+        let request = Request::from_message(message).ok_or(Step::Control)?;
+        self.pipeline.push(request).map_err(|_| Step::Control)
+    }
+
+    /// Do what the pipeline says until it waits on the device or has
+    /// nothing. Whether it did anything.
+    fn pump(&mut self) -> Result<bool, Step> {
+        let mut moved = false;
+        loop {
+            match self.pipeline.next(self.scratch.entries()) {
+                Next::Pin {
+                    buffer,
+                    offset,
+                    length,
+                } => {
+                    let result = self.pin(buffer, offset, length);
+                    self.pipeline.pinned(result).map_err(|_| Step::Faulted)?;
+                }
+                Next::Submit(command) => {
+                    match self
+                        .driver
+                        .post(TAG_DISPLAY, gpu::Context::NONE, &command, &[])
+                    {
+                        Ok(()) => return Ok(true),
+                        Err(SubmitError::Busy) => {
+                            self.pipeline.unsent().map_err(|_| Step::Faulted)?;
+                            return Ok(moved);
+                        }
+                        Err(_) => return Err(Step::Faulted),
+                    }
+                }
+                Next::Unpin { buffer } => self.unpin(buffer),
+                Next::Cursor {
+                    scanout,
+                    resource,
+                    hot_x,
+                    hot_y,
+                } => {
+                    self.driver
+                        .update_cursor(scanout, resource, hot_x, hot_y)
+                        .map_err(|_| Step::Faulted)?;
+                }
+                Next::Reply(message) => {
+                    self.control
+                        .write(message.encode().as_bytes())
+                        .map_err(|_| Step::Control)?;
+                }
+                Next::Wait | Next::Idle => return Ok(moved),
+            }
+            moved = true;
+        }
     }
 
     /// Close `buffer`'s pin: the device no longer holds its pages.

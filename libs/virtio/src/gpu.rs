@@ -583,6 +583,18 @@ pub enum Command<'a> {
         /// The stream.
         commands: &'a [u8],
     },
+    /// [`Command::Submit3d`] less its stream: the header and the `size`,
+    /// for a driver that hands the device the stream in buffers of their
+    /// own, after this one in the chain, rather than copying it in.
+    ///
+    /// The device reads a request as one run of bytes however the chain
+    /// splits it -- QEMU's `virgl_cmd_submit_3d` copies the stream out of
+    /// the whole chain from the end of the header -- so the stream can stay
+    /// where its writer put it.
+    Submit3dHeader {
+        /// Bytes of the stream that follows.
+        size: u32,
+    },
     /// Destroy a resource.
     ResourceUnref {
         /// The resource.
@@ -651,7 +663,7 @@ impl Command<'_> {
             Self::ResourceCreate3d { .. } => CMD_RESOURCE_CREATE_3D,
             Self::TransferToHost3d { .. } => CMD_TRANSFER_TO_HOST_3D,
             Self::TransferFromHost3d { .. } => CMD_TRANSFER_FROM_HOST_3D,
-            Self::Submit3d { .. } => CMD_SUBMIT_3D,
+            Self::Submit3d { .. } | Self::Submit3dHeader { .. } => CMD_SUBMIT_3D,
         }
     }
 
@@ -668,6 +680,7 @@ impl Command<'_> {
             }
             // The stream follows the `size` and its padding.
             Self::Submit3d { commands } => HEADER_LEN + 8 + commands.len(),
+            Self::Submit3dHeader { .. } => HEADER_LEN + 8,
             Self::ResourceCreate2d { .. } => HEADER_LEN + 16,
             Self::ResourceUnref { .. }
             | Self::ResourceDetachBacking { .. }
@@ -816,7 +829,8 @@ impl Command<'_> {
             | Self::ResourceCreate3d { .. }
             | Self::TransferToHost3d { .. }
             | Self::TransferFromHost3d { .. }
-            | Self::Submit3d { .. } => self.write_3d(body, &mut put),
+            | Self::Submit3d { .. }
+            | Self::Submit3dHeader { .. } => self.write_3d(body, &mut put),
             Self::GetCapsetInfo { index } => {
                 put(body, &index.to_le_bytes());
                 put(body + 4, &[0; 4]);
@@ -935,6 +949,10 @@ impl Command<'_> {
                 put(body + 4, &[0; 4]);
                 put(body + 8, commands);
             }
+            Self::Submit3dHeader { size } => {
+                put(body, &size.to_le_bytes());
+                put(body + 4, &[0; 4]);
+            }
             _ => {}
         }
     }
@@ -963,6 +981,7 @@ impl Command<'_> {
             {
                 Err(GpuError::StreamSize(commands.len()))
             }
+            Self::Submit3dHeader { size: 0 } => Err(GpuError::StreamSize(0)),
             _ => Ok(()),
         }
     }
