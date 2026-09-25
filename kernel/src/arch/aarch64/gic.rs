@@ -3,7 +3,8 @@
 //!
 //! A GICv2 is `crate::arch::gicv2`, shared with ARMv7-A; a GICv3 is
 //! [`super::gicv3`], which is this architecture's alone because its CPU
-//! interface is system registers. Where the registers are comes from the MADT
+//! interface is system registers, with [`super::gicv3_its`] for its
+//! message-signalled interrupts. Where the registers are comes from the MADT
 //! on a machine with ACPI and from the device tree on one without -- the
 //! Pixel 7's loader hands over a tree and no RSDP. Every other caller goes
 //! through the functions at the bottom, which send it to the driver `init`
@@ -15,10 +16,10 @@
 
 use core::sync::atomic::{AtomicU8, Ordering};
 
-use ferrix_acpi::{Acpi, MadtEntry};
+use ferrix_acpi::{Acpi, Madt, MadtEntry};
 use ferrix_fdt::{Fdt, GicVersion};
 
-use super::gicv3;
+use super::{gicv3, gicv3_its};
 use crate::acpi::DirectMap;
 use crate::arch::gicv2;
 
@@ -39,6 +40,8 @@ struct Layout {
     /// The first `GICv2m` frame: its address, and its SPI range if firmware
     /// states one.
     msi_frame: Option<(u64, Option<(u32, u32)>)>,
+    /// The first GICv3 ITS's control frame.
+    its: Option<u64>,
 }
 
 /// Read the distributor and CPU interface addresses out of the MADT.
@@ -97,6 +100,15 @@ fn layout(acpi: &Acpi<'_, DirectMap>) -> Result<Layout, &'static str> {
         redistributors,
         version,
         msi_frame,
+        its: first_its(&madt),
+    })
+}
+
+/// The first GICv3 ITS the MADT describes, by its control frame's address.
+fn first_its(madt: &Madt<'_>) -> Option<u64> {
+    madt.entries().find_map(|entry| match entry {
+        MadtEntry::GicIts(its) => Some(its.physical_base_address),
+        _ => None,
     })
 }
 
@@ -135,7 +147,7 @@ unsafe fn init_v2(layout: &Layout) -> Result<(), &'static str> {
     Ok(())
 }
 
-/// Bring up the GICv3 the MADT describes.
+/// Bring up the GICv3 the MADT describes, and its ITS if it has one.
 ///
 /// # Safety
 ///
@@ -145,7 +157,13 @@ unsafe fn init_v3(layout: &Layout) -> Result<(), &'static str> {
         .redistributors
         .ok_or("the MADT describes a GICv3 with no redistributor range")?;
     // SAFETY: the caller's contract is `gicv3::init`'s.
-    unsafe { gicv3::init(layout.distributor, base, len) }
+    unsafe { gicv3::init(layout.distributor, base, len)? };
+    // As with a `GICv2m` frame: an ITS that cannot be used leaves the machine
+    // without MSI vectors and nothing else, and `msi_allocate` says why.
+    if let Some(its) = layout.its {
+        let _ = gicv3_its::init(its);
+    }
+    Ok(())
 }
 
 /// Find the controller in the MADT and bring it up, returning its version.
@@ -208,6 +226,9 @@ pub(crate) unsafe fn init_from_tree(tree: &Fdt<'_>) -> Result<u8, &'static str> 
                     redistributors.address,
                     redistributors.size,
                 )?;
+            }
+            if let Some(its) = tree.gicv3_its() {
+                let _ = gicv3_its::init(its.address);
             }
             3
         }
@@ -292,16 +313,22 @@ pub(crate) fn send_sgi_to_others() {
     }
 }
 
-/// Take an interrupt the device whose writes carry requester ID `_device` can
-/// raise by message. A GICv3 has none to give until its ITS has a driver.
-pub(crate) fn msi_allocate(_device: u32) -> Result<crate::irq::Msi, &'static str> {
+/// Take an interrupt the device whose writes carry requester ID `device` can
+/// raise by message: an LPI through a GICv3's ITS, which translates by the
+/// device, or an SPI through a `GICv2m` frame, which does not.
+pub(crate) fn msi_allocate(device: u32) -> Result<crate::irq::Msi, &'static str> {
     if is_v3() {
-        return Err("this GICv3's ITS has no driver, so there are no MSI vectors");
+        gicv3_its::allocate(device)
+    } else {
+        gicv2::msi_allocate()
     }
-    gicv2::msi_allocate()
 }
 
 /// The page a device's MSI writes land in, if there is one.
 pub(crate) fn msi_doorbell() -> Option<u64> {
-    if is_v3() { None } else { gicv2::msi_doorbell() }
+    if is_v3() {
+        gicv3_its::doorbell()
+    } else {
+        gicv2::msi_doorbell()
+    }
 }

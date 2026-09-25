@@ -18,13 +18,14 @@
 //! GICv2's are, so for interrupts 32 upwards the two drivers write the same
 //! offsets.
 //!
-//! No message-signalled interrupts yet: a GICv3 takes them through an ITS,
-//! which is its own driver, and until there is one a device asking for a
-//! vector is told there are none.
+//! Message-signalled interrupts arrive as LPIs, through an ITS, which is its
+//! own driver: `super::gicv3_its`. What this one does for them is hand the
+//! ITS driver this core's redistributor and hand an LPI's identifier to it
+//! for the number the kernel knows it by.
 
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
-use super::cpu;
+use super::{cpu, gicv3_its};
 use crate::mmio::Mmio;
 
 /// Distributor control.
@@ -112,6 +113,8 @@ const MPIDR_AFFINITY: u64 = 0x0000_00FF_00FF_FFFF;
 static DISTRIBUTOR: AtomicU64 = AtomicU64::new(0);
 /// The redistributor region, mapped, and its length.
 static REDISTRIBUTORS: AtomicU64 = AtomicU64::new(0);
+/// Its physical address, which an ITS may name a redistributor by.
+static REDISTRIBUTORS_PHYS: AtomicU64 = AtomicU64::new(0);
 /// Bytes of it.
 static REDISTRIBUTORS_LEN: AtomicU64 = AtomicU64::new(0);
 
@@ -161,6 +164,7 @@ pub(crate) unsafe fn init(
         .map_err(|_| "could not map the GIC redistributors")?;
     DISTRIBUTOR.store(gicd, Ordering::Relaxed);
     REDISTRIBUTORS.store(gicr, Ordering::Relaxed);
+    REDISTRIBUTORS_PHYS.store(redistributors, Ordering::Relaxed);
     REDISTRIBUTORS_LEN.store(redistributors_len, Ordering::Relaxed);
 
     configure_distributor(Mmio::at(gicd))?;
@@ -227,6 +231,19 @@ fn this_redistributor() -> Option<u64> {
         };
     }
     None
+}
+
+/// This core's redistributor, mapped and by physical address.
+pub(super) fn this_redistributor_both() -> Option<(u64, u64)> {
+    let mapped = this_redistributor()?;
+    let offset = mapped - REDISTRIBUTORS.load(Ordering::Relaxed);
+    Some((mapped, REDISTRIBUTORS_PHYS.load(Ordering::Relaxed) + offset))
+}
+
+/// The distributor's type register: whether it supports LPIs, and how many
+/// identifier bits it has.
+pub(super) fn distributor_typer() -> u32 {
+    window(&DISTRIBUTOR).read32(GICD_TYPER)
 }
 
 /// Bring up this core's side of the controller: wake its redistributor, put
@@ -332,14 +349,15 @@ pub(crate) fn disable(id: u32) {
 /// Claim the interrupt that arrived, or `None` if there was none.
 ///
 /// The whole register value is kept for [`complete`], as the GICv2 driver
-/// keeps its own.
+/// keeps its own. An LPI is dispatched by the number the ITS driver gave it,
+/// and retired by the GIC's own identifier.
 pub(crate) fn claim() -> Option<(u32, u32)> {
     let acknowledgement = cpu::read_icc_iar1();
     let id = (acknowledgement & IAR_ID_MASK) as u32;
     if (FIRST_SPECIAL_ID..1024).contains(&id) {
         return None;
     }
-    Some((id, id))
+    Some((gicv3_its::number(id), id))
 }
 
 /// Tell the controller the interrupt has been handled.

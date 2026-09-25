@@ -119,6 +119,12 @@
       "reason": "Stream table entries in RAM the SMMUv3 walks itself. As vtd.rs."
     },
     {
+      "file": "kernel/src/arch/aarch64/gicv3_its.rs",
+      "kind": "shared",
+      "max_sites": 3,
+      "reason": "The GICv3 ITS's command queue and the LPI property table, in RAM the ITS and the redistributor read themselves. As smmuv3.rs: volatile because the interrupt controller observes the write, not because the address is a register."
+    },
+    {
       "file": "kernel/src/block_ring/mod.rs",
       "kind": "shared",
       "max_sites": 4,

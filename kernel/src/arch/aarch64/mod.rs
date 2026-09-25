@@ -4,6 +4,7 @@ pub(crate) mod console;
 mod cpu;
 mod gic;
 mod gicv3;
+mod gicv3_its;
 mod gs201;
 mod signal;
 mod smp;

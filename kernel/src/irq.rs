@@ -29,8 +29,10 @@ use ferrix_sync::IrqSpinLock;
 ///
 /// Sized for the largest of the architectures: the GIC's interrupt
 /// identifier space runs to 1020, while x86-64 has 224 usable vectors above
-/// the CPU's own exceptions.
-pub(crate) const SLOTS: usize = 1024;
+/// the CPU's own exceptions. Then 256 more for the message-signalled vectors
+/// a GICv3's ITS hands out: the GIC numbers them from 8192, and its driver
+/// presents them from 1024 so that the table need not span the gap.
+pub(crate) const SLOTS: usize = 1024 + 256;
 
 /// What a device interrupt runs. Takes its own number, so one function can
 /// serve several lines without a closure — there is no allocator guarantee at
