@@ -6135,6 +6135,20 @@ grid, printed a row at a time.
 /bin/hyprctl version` and requires the picture the terminal makes, pixel for pixel,
 on x86-64 and on AArch64.
 
+**Done — scrollback, the pointer and the clipboard in the terminal
+(2026-09-26).** The grid keeps the last 10,000 rows that scroll off the top,
+and the wheel (three rows a notch) and shift with Page Up and Page Down look
+back through them. A drag selects, a double click takes a word and a triple
+click a line, held in absolute line numbers so the selection moves with its
+text. Control-shift-C copies it through `wl_data_device` and control-shift-V
+pastes, bracketed when the program asks with `CSI ? 2004 h`. The program on
+the terminal now gets the terminal's environment -- it had `TERM` alone, so
+nothing the shell started had a `PATH` or a `WAYLAND_DISPLAY`. Host tests
+hold the grid's rules; a boot driven over VNC checked the rest. Left: the
+primary selection and its middle click, an alternate screen (so a full-screen
+program's rows do not fill the scrollback), and bracketed paste in zinc,
+which never asks for it, so a pasted block runs a line at a time.
+
 **Done — the eight protocols a real toolkit asked for (2026-09-17).** Not
 chosen from a list: `foot`, a Wayland terminal written against libwayland and
 every other compositor, prints a warning line for each protocol it wanted and
