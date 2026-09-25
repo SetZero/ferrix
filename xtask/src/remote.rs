@@ -235,7 +235,12 @@ pub(crate) fn remote_desktop(args: &Args) -> Result<()> {
             Send::Head => git(&root, &["rev-parse", "HEAD"], &[])?,
             Send::WorkingTree => "<working-tree-snapshot>".to_owned(),
         };
-        let script = boot_script(&config, &directory, &sha, &forwarded(args, &config.viewer));
+        let script = boot_script(
+            &config,
+            &directory,
+            &sha,
+            &forwarded(args, &config.viewer, host_layout()),
+        );
         let remote = format!("{}:{directory}", config.host);
         println!("config:  {from}");
         println!("push:    git push {remote} {sha}:{REMOTE_REF}");
@@ -262,7 +267,12 @@ pub(crate) fn remote_desktop(args: &Args) -> Result<()> {
     // a twenty-minute build on the other machine.
     let viewer = viewer_argv(&config.viewer, port)?;
     let (sha, described) = snapshot(config.send, &root)?;
-    let script = boot_script(&config, &directory, &sha, &forwarded(args, &config.viewer));
+    let script = boot_script(
+        &config,
+        &directory,
+        &sha,
+        &forwarded(args, &config.viewer, host_layout()),
+    );
 
     println!("config:  {from}");
     println!("sending: {described}");
@@ -947,6 +957,11 @@ fn push(root: &Path, host: &str, directory: &str, sha: &str) -> Result<()> {
     Ok(())
 }
 
+/// This machine's keyboard layout and variant, for [`forwarded`].
+fn host_layout() -> Option<(String, Option<String>)> {
+    crate::keyboard::host().map(|(layout, variant, _)| (layout, variant))
+}
+
 /// The flags on this command line that are the boot's rather than this
 /// command's -- the keyboard's layout and variant -- then everything after
 /// `--`. They are parsed with the rest, since there is one parser, and a flag
@@ -956,16 +971,26 @@ fn push(root: &Path, host: &str, directory: &str, sha: &str) -> Result<()> {
 /// `--keymap` too, and for `RealVNC` one follows from `--layout` when none was
 /// given: it sends characters, and QEMU turns a German `~` back into `AltGr`
 /// and `+` only through the German keymap.
-fn forwarded(args: &Args, viewer: &Viewer) -> Vec<String> {
+///
+/// Given neither `--layout` nor `--variant`, the layout is `host`'s -- *this*
+/// machine's, from [`host_layout`] -- passed on as if it had been typed: the
+/// keyboard is the one in front of the viewer, and the machine over there,
+/// which would otherwise read its own, may have another.
+fn forwarded(args: &Args, viewer: &Viewer, host: Option<(String, Option<String>)>) -> Vec<String> {
+    let (layout, variant) = if args.layout.is_none() && args.variant.is_none() {
+        host.map_or((None, None), |(layout, variant)| (Some(layout), variant))
+    } else {
+        (args.layout.clone(), args.variant.clone())
+    };
     let keymap = args.keymap.clone().or_else(|| {
         (*viewer == Viewer::Known(Known::RealVnc))
-            .then(|| args.layout.clone())
+            .then(|| layout.clone())
             .flatten()
     });
     let mut extra = Vec::new();
     for (flag, value) in [
-        ("--layout", &args.layout),
-        ("--variant", &args.variant),
+        ("--layout", &layout),
+        ("--variant", &variant),
         ("--keymap", &keymap),
     ] {
         if let Some(value) = value {
@@ -1501,12 +1526,12 @@ send = "head"
         )
         .unwrap();
         assert_eq!(
-            forwarded(&args, &Viewer::Known(Known::TigerVnc)),
+            forwarded(&args, &Viewer::Known(Known::TigerVnc), None),
             ["--layout", "de", "--smp", "2"],
             "a viewer that sends keys gets no keymap"
         );
         assert_eq!(
-            forwarded(&args, &Viewer::Known(Known::RealVnc)),
+            forwarded(&args, &Viewer::Known(Known::RealVnc), None),
             ["--layout", "de", "--keymap", "de", "--smp", "2"],
             "a viewer that sends characters gets the layout's keymap"
         );
@@ -1517,9 +1542,35 @@ send = "head"
         )
         .unwrap();
         assert_eq!(
-            forwarded(&args, &Viewer::Known(Known::TigerVnc)),
+            forwarded(&args, &Viewer::Known(Known::TigerVnc), None),
             ["--chrome"],
             "--chrome reaches the boot"
+        );
+        // Nothing said: the layout of the keyboard in front of the viewer.
+        let german = Some(("de".to_owned(), Some("nodeadkeys".to_owned())));
+        assert_eq!(
+            forwarded(&args, &Viewer::Known(Known::RealVnc), german.clone()),
+            [
+                "--layout",
+                "de",
+                "--variant",
+                "nodeadkeys",
+                "--keymap",
+                "de",
+                "--chrome"
+            ],
+            "this machine's layout reaches the boot when none was given"
+        );
+        // Something said: that, and not this machine's.
+        let args = Args::parse(
+            ["remote-desktop", "--layout", "us"]
+                .into_iter()
+                .map(str::to_owned),
+        )
+        .unwrap();
+        assert_eq!(
+            forwarded(&args, &Viewer::Known(Known::TigerVnc), german),
+            ["--layout", "us"],
         );
     }
 

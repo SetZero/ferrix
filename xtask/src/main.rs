@@ -74,6 +74,7 @@ mod init_file;
 mod initramfs;
 mod input;
 mod jobs;
+mod keyboard;
 mod native;
 mod net;
 mod noise;
@@ -277,7 +278,9 @@ OPTIONS:
                                          remote `cargo xtask` as it stands
     --layout <LIST>                      run-compositor, flash --compositor: the keyboard layout, as
                                          input:kb_layout takes it: `de`, or `de,us` for two a switch
-                                         moves between [flash --compositor default: de]
+                                         moves between [flash --compositor default: de;
+                                         run-compositor default: this machine's, from
+                                         /etc/default/keyboard or /etc/vconsole.conf]
     --variant <LIST>                     run-compositor: their variants, as input:kb_variant
                                          takes them: `nodeadkeys,` is one for the first layout only
     --wallpaper <NAME>                   run-compositor: which kept wallpaper to show, by part of its

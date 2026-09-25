@@ -1978,6 +1978,16 @@ pub(crate) fn run_compositor(args: &Args) -> Result<()> {
         )));
     }
     let mut args = args.clone();
+    // The layout of the keyboard in front of the window, when the command
+    // line does not name one: `crate::keyboard` says why and from where.
+    if args.layout.is_none()
+        && args.variant.is_none()
+        && let Some((layout, variant, file)) = crate::keyboard::host()
+    {
+        println!("  keyboard: this machine's, from {file} (--layout us for another)");
+        args.layout = Some(layout);
+        args.variant = variant;
+    }
     if args.chrome {
         // One data disk: Chrome's, in the rustc volume's place.
         if arch != Arch::X86_64 {

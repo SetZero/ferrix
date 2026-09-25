@@ -356,7 +356,9 @@ What the keyboard does, in the configuration it writes itself:
 | `SUPER`+`C`, `SUPER`+`W` | `hyprctl clients`, `hyprctl activewindow` |
 
 `--config <PATH>` carries a real `hyprland.conf` instead, and what that one
-starts is yours. `--layout de,us` is `input:kb_layout`; `--size <W>x<H>` is
+starts is yours. `--layout de,us` is `input:kb_layout`, and without it the
+layout is this machine's own, read from `/etc/default/keyboard` or
+`/etc/vconsole.conf` (`--layout us` for the old default); `--size <W>x<H>` is
 the screen, 1920x1080 when not given. The boot has a network unless
 `--no-net` -- `udhcpc` runs as an `exec-once`, so `curl` in the terminal
 reaches the host's own resolver -- and `--vnc <DISPLAY>` serves the screen at
