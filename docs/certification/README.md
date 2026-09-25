@@ -18,7 +18,7 @@ specific, measured, and mostly documents rather than code.
 * [IMPLEMENTATION.md](IMPLEMENTATION.md) — **start here to build**: ten work orders, ordered
 * [TODO.md](TODO.md) — start here to re-audit: what to re-measure, and what not to write
 * [ITEM.md](ITEM.md) — what the ratings attach to, and why it is not all of Ferrix
-* [FINDINGS.md](FINDINGS.md) — the audit register, 28 open findings and 10 closed
+* [FINDINGS.md](FINDINGS.md) — the audit register, 27 open findings and 11 closed
 * [SECURITY-TARGET.md](SECURITY-TARGET.md) — EAL5+ claim, SFRs, and where it would fail evaluation
 * [VULNERABILITY-ANALYSIS.md](VULNERABILITY-ANALYSIS.md) — AVA_VAN.4 over the seven threats; five residual vulnerabilities
 * [SOUP.md](SOUP.md) — generated; the item contains none
@@ -70,6 +70,7 @@ boundary.
 | Upward boundary references | **52**, from 62 at the start of the work |
 | `unsafe` blocks, all documented | 662 |
 | Directly recursive functions in the item | **0** |
+| SMEP + SMAP (x86-64) | **on** |
 | Assembly | 303 lines, 19 allow-listed sites |
 | Cargo features in `kernel/`/`boot/` | 0 |
 
