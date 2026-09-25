@@ -195,6 +195,22 @@ static LOWER_CASE_START: TableStart<i32> = TableStart(LOWER_CASE.as_ptr().wrappi
 /// Index 0 of [`UPPER_CASE`].
 static UPPER_CASE_START: TableStart<i32> = TableStart(UPPER_CASE.as_ptr().wrapping_add(OFFSET));
 
+/// Index 0 of the class table, as glibc's `locale_t` carries it in
+/// `__ctype_b`.
+pub(crate) const fn class_table() -> *const u16 {
+    CLASSES.as_ptr().wrapping_add(OFFSET)
+}
+
+/// Index 0 of the lower-case table, glibc's `__ctype_tolower`.
+pub(crate) const fn lower_table() -> *const i32 {
+    LOWER_CASE.as_ptr().wrapping_add(OFFSET)
+}
+
+/// Index 0 of the upper-case table, glibc's `__ctype_toupper`.
+pub(crate) const fn upper_table() -> *const i32 {
+    UPPER_CASE.as_ptr().wrapping_add(OFFSET)
+}
+
 /// glibc's class table: a pointer to a pointer to index 0 of a table of
 /// masks that can be indexed from -128 to 255.
 #[cfg_attr(not(test), unsafe(no_mangle))]

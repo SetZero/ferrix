@@ -135,32 +135,100 @@ static C_DOT_UTF8: Map = Map {
 /// The name of a category that is the C locale.
 const C_NAME: &CStr = c"C";
 
-/// `struct __locale_struct`, which a `locale_t` points at: one [`Map`] per
-/// category, null for the C locale.
+/// How many categories glibc's `struct __locale_struct` has room for, in
+/// `__locales` and `__names`: `LC_CTYPE` to `LC_IDENTIFICATION`.
+const GLIBC_CATEGORIES: usize = 13;
+
+/// `LC_ALL`'s index in `__names`, where glibc keeps the whole locale's name.
+const ALL_INDEX: usize = 6;
+
+/// `struct __locale_struct`, which a `locale_t` points at, laid out as
+/// glibc's.
 ///
-/// A program never looks inside, so the layout is this library's. Each
-/// category is an atomic so that the global locale can be changed while other
-/// threads read it.
+/// C++ built against glibc reads it: libc++ and libstdc++ take their
+/// `ctype<char>` tables from a C locale's `__ctype_b`, `__ctype_tolower` and
+/// `__ctype_toupper` rather than through a call, and libstdc++ its names from
+/// `__names`. Chrome's libc++ read a null `__ctype_b` from this library's
+/// older, smaller layout. What glibc keeps in `__locales` is its own; here the
+/// first [`CATEGORIES`] slots hold this library's [`Map`] per category, null
+/// for C, and the rest are null.
+///
+/// Every field is an atomic so that the global locale can be changed while
+/// other threads read it.
 #[repr(C)]
 #[derive(Debug)]
 pub struct Locale {
-    /// Each category's map.
-    categories: [AtomicPtr<Map>; CATEGORIES],
+    /// glibc's `__locales`: each category's map.
+    categories: [AtomicPtr<Map>; GLIBC_CATEGORIES],
+    /// glibc's `__ctype_b`: index 0 of the class table.
+    ctype_b: AtomicPtr<u16>,
+    /// glibc's `__ctype_tolower`.
+    ctype_tolower: AtomicPtr<i32>,
+    /// glibc's `__ctype_toupper`.
+    ctype_toupper: AtomicPtr<i32>,
+    /// glibc's `__names`: each category's name, and at `LC_ALL` the
+    /// locale's.
+    names: [AtomicPtr<c_char>; GLIBC_CATEGORIES],
+}
+
+#[cfg(target_pointer_width = "64")]
+const _: () = assert!(size_of::<Locale>() == 232);
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(size_of::<Locale>() == 116);
+const _: () = assert!(core::mem::offset_of!(Locale, ctype_b) == 13 * size_of::<usize>());
+
+/// A category's name: its map's, which is the map's first field, or C.
+const fn map_name_pointer(map: *const Map) -> *mut c_char {
+    if map.is_null() {
+        C_NAME.as_ptr().cast_mut()
+    } else {
+        map.cast::<c_char>().cast_mut()
+    }
+}
+
+/// What `__names` holds for `maps`: each category's name; at `LC_ALL` the
+/// name all of them share, or `LC_CTYPE`'s when they differ; C beyond.
+#[allow(
+    clippy::indexing_slicing,
+    reason = "each index runs below CATEGORIES or GLIBC_CATEGORIES, the lengths of the arrays it indexes"
+)]
+const fn names_of(maps: [*const Map; CATEGORIES]) -> [*mut c_char; GLIBC_CATEGORIES] {
+    let mut names = [C_NAME.as_ptr().cast_mut(); GLIBC_CATEGORIES];
+    let mut index = 0;
+    while index < CATEGORIES {
+        names[index] = map_name_pointer(maps[index]);
+        index += 1;
+    }
+    names[ALL_INDEX] = map_name_pointer(maps[0]);
+    names
 }
 
 impl Locale {
     /// A locale with these categories.
+    #[allow(
+        clippy::indexing_slicing,
+        reason = "each index runs below CATEGORIES or GLIBC_CATEGORIES, the lengths of the arrays it indexes"
+    )]
     const fn new(categories: [*const Map; CATEGORIES]) -> Self {
-        let [ctype, numeric, time, collate, monetary, messages] = categories;
+        let mut maps = [const { AtomicPtr::new(null_mut()) }; GLIBC_CATEGORIES];
+        let mut index = 0;
+        while index < CATEGORIES {
+            maps[index] = AtomicPtr::new(categories[index].cast_mut());
+            index += 1;
+        }
+        let names_now = names_of(categories);
+        let mut names = [const { AtomicPtr::new(null_mut()) }; GLIBC_CATEGORIES];
+        let mut index = 0;
+        while index < GLIBC_CATEGORIES {
+            names[index] = AtomicPtr::new(names_now[index]);
+            index += 1;
+        }
         Self {
-            categories: [
-                AtomicPtr::new(ctype.cast_mut()),
-                AtomicPtr::new(numeric.cast_mut()),
-                AtomicPtr::new(time.cast_mut()),
-                AtomicPtr::new(collate.cast_mut()),
-                AtomicPtr::new(monetary.cast_mut()),
-                AtomicPtr::new(messages.cast_mut()),
-            ],
+            categories: maps,
+            ctype_b: AtomicPtr::new(crate::ctype::class_table().cast_mut()),
+            ctype_tolower: AtomicPtr::new(crate::ctype::lower_table().cast_mut()),
+            ctype_toupper: AtomicPtr::new(crate::ctype::upper_table().cast_mut()),
+            names,
         }
     }
 
@@ -173,10 +241,13 @@ impl Locale {
         maps
     }
 
-    /// Sets every category's map.
+    /// Sets every category's map, and the names glibc's layout carries.
     fn store(&self, maps: [*const Map; CATEGORIES]) {
         for (category, map) in self.categories.iter().zip(maps) {
             category.store(map.cast_mut(), Ordering::Relaxed);
+        }
+        for (slot, name) in self.names.iter().zip(names_of(maps)) {
+            slot.store(name, Ordering::Relaxed);
         }
     }
 
@@ -190,8 +261,11 @@ impl Locale {
 
     /// Sets category `category`'s map.
     fn set_category(&self, category: usize, map: *const Map) {
-        if let Some(slot) = self.categories.get(category) {
+        if category < CATEGORIES
+            && let Some(slot) = self.categories.get(category)
+        {
             slot.store(map.cast_mut(), Ordering::Relaxed);
+            self.store(self.load());
         }
     }
 
