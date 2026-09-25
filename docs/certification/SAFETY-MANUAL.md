@@ -167,15 +167,29 @@ cause.
 | FM-6 | The element continues in a corrupt state | any ASR may be violated silently | invariant checks | safe state on detection | detection is not exhaustive |
 | FM-7 | A partition exhausts memory | safe state entered, service lost | allocation failure | job quotas | unquota'd paths exist (V-05, AoU-5) |
 | FM-8 | A partition is starved of processor time | ASR-8 violated | none | EEVDF eligibility, EDF admission | no WCET, so no bound is provable (AoU-4) |
-| FM-9 | Kernel stack overflow | undefined behaviour, corruption | none | no recursion in the element, established by `check-complexity.py` | **no guard page** (V-02) |
+| FM-9 | Kernel stack overflow | page fault at the instruction that overflowed | **guard page below every kernel stack**, and a boot check that the guard is unmapped | `vmap` reserves an unmapped page on each side of every allocation; no recursion in the element | the loader-provided boot stack is not guarded (early boot only) |
 
-**FM-9 is the worst entry in this table.** There is no guard page beneath the
-kernel stack, so an overflow corrupts whatever lies below it with no detection.
-The mitigating evidence is real — the complexity gate establishes that no
-function in the element is directly recursive — but it does not see mutual
-recursion or recursion through a function pointer, and it is not a bound on
-depth. An integrator should treat this as the element's least-defended failure
-mode.
+**FM-9 was recorded as the worst entry in this table and that was wrong.**
+Every kernel stack is guard-paged at both ends: `crate::vmap` reserves an
+unmapped page on each side of every allocation, *inside* the range the arena
+hands out so the guard cannot be handed to anybody else, and the module's own
+documentation says the guard below a stack is why it exists. `check_stacks`
+asserts it on every boot — it writes the first and last usable words, then
+requires that `stack.base - PAGE_SIZE` and `stack.top` translate to nothing,
+failing with *"a kernel stack has no guard page below it, so an overflow would
+be silent"*. So an overflow is a page fault at the instruction that caused it,
+not silent corruption, and that is verified rather than intended.
+
+The narrow residual: the **boot stack the loader allocates**
+(`MemKind::BootStack`) is an ordinary pool allocation with no guard. It carries
+early boot, before the arena the guarded stacks come from exists. An overflow
+there would be silent, and the window is bounded by bring-up rather than open
+for the life of the system.
+
+With FM-9 corrected, the least-defended modes are **FM-5** (a frame is zeroed
+on allocation rather than on free, so contents persist until reuse) and
+**FM-8** (no bound on scheduling latency is provable, because no WCET is
+claimed — AoU-4).
 
 ---
 
