@@ -74,34 +74,22 @@ pub(crate) fn text(value: &str) {
     value.bytes().for_each(byte);
 }
 
-/// Append a number as `0x` and sixteen hexadecimal digits.
-pub(crate) fn hex(value: u64) {
-    text("0x");
-    for shift in (0..16).rev() {
-        let digit = ((value >> (shift * 4)) & 0xf) as u8;
-        byte(if digit < 10 {
-            b'0' + digit
-        } else {
-            b'a' + digit - 10
-        });
+/// The record as a `core::fmt` sink, for [`say!`].
+#[derive(Debug)]
+pub(crate) struct Writer;
+
+impl core::fmt::Write for Writer {
+    fn write_str(&mut self, value: &str) -> core::fmt::Result {
+        text(value);
+        Ok(())
     }
 }
 
-/// Append a number in decimal.
-pub(crate) fn decimal(value: u64) {
-    let mut divisor = 1;
-    while value / divisor >= 10 {
-        divisor *= 10;
-    }
-    while divisor > 0 {
-        byte(b'0' + ((value / divisor) % 10) as u8);
-        divisor /= 10;
-    }
+/// Append a formatted line to the record.
+macro_rules! say {
+    ($($argument:tt)*) => {{
+        use core::fmt::Write as _;
+        let _ = writeln!($crate::log::Writer, $($argument)*);
+    }};
 }
-
-/// Append a labelled number and end the line.
-pub(crate) fn field(label: &str, value: u64) {
-    text(label);
-    hex(value);
-    byte(b'\n');
-}
+pub(crate) use say;
