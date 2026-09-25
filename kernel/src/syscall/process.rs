@@ -1834,7 +1834,11 @@ impl Drop for Process {
 ///
 /// `None` for a kernel thread.
 pub(crate) fn current() -> Option<Arc<Process>> {
-    sched::current().and_then(|task| task.process().cloned())
+    // Through the thread rather than through a `Task::process` accessor: the
+    // scheduler is core and `Process` is the Linux personality's, so the core
+    // should not carry a way to name one. The thread is what owns the process
+    // anyway -- `Thread::process` is the real relationship.
+    sched::current().and_then(|task| task.thread().map(|thread| Arc::clone(thread.process())))
 }
 
 /// Load a program into a new process, without running it.

@@ -21,7 +21,6 @@ use core::sync::atomic::{AtomicBool, AtomicI64, AtomicU8, AtomicU32, AtomicU64, 
 use ferrix_sched::{CpuSet, EntityState};
 
 use crate::arch;
-use crate::syscall::process::Process;
 use crate::syscall::thread::Thread;
 use crate::user::space::AddressSpace;
 use crate::vmap::Stack;
@@ -442,12 +441,6 @@ impl Task {
     /// be a contended atomic on the hottest path in the kernel.
     pub(crate) fn address_space(&self) -> Option<&Arc<AddressSpace>> {
         self.address_space.as_ref()
-    }
-
-    /// The process this task runs user code for, or `None` for a kernel
-    /// thread.
-    pub(crate) fn process(&self) -> Option<&Arc<Process>> {
-        self.thread.as_ref().map(|thread| thread.process())
     }
 
     /// The thread this task runs user code for, or `None` for a kernel thread.

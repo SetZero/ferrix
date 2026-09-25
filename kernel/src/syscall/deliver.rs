@@ -85,7 +85,25 @@ static RETURN_PATH: crate::trap::ReturnPath = crate::trap::ReturnPath {
     needs_attention,
     return_to_user,
     sigreturn,
+    fault_signal,
 };
+
+/// Force `signal` on the running program for a fault, and say what became of
+/// it in terms the core owns.
+///
+/// The core decides a fault is the program's problem; this decides what that
+/// means. `Posted` and `Origin` stay on this side of the interface.
+fn fault_signal(signal: u32, code: i32, address: u64) -> crate::trap::FaultOutcome {
+    use crate::trap::FaultOutcome;
+
+    match force(signal, Origin::Fault { code, address }) {
+        None => FaultOutcome::NoProcess,
+        Some(Posted::Fatal) => FaultOutcome::Ended {
+            pid: process::current().map_or(0, |process| process.pid()),
+        },
+        Some(Posted::Discarded | Posted::Pending) => FaultOutcome::Delivered,
+    }
+}
 
 /// Hand the core this personality's return path.
 ///

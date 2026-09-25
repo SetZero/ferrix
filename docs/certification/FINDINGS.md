@@ -4,7 +4,7 @@ The audit register for the item defined in [ITEM.md](ITEM.md). One entry per
 finding, each naming what was measured, which objective it bears on, and what
 would close it.
 
-25 findings are open and 13 are closed. F-10 advanced from 71.4% to 81.9%. No finding here is closed by argument:
+24 findings are open and 14 are closed. F-10 advanced from 71.4% to 81.9%. No finding here is closed by argument:
 a finding closes when the thing it describes stops being true and something in
 the build says so.
 
@@ -14,7 +14,7 @@ met or met without evidence. *Minor* — a defect with no objective attached yet
 
 | | Blocking | Major | Moderate | Minor | Informational |
 |---|---:|---:|---:|---:|---:|
-| Open | 2 | 9 | 12 | 2 | 1 |
+| Open | 2 | 9 | 11 | 2 | 1 |
 
 Blocking: F-27 and F-28 — independent assessment and a quality management
 system. Both need an organisation; neither is a defect in the code.
@@ -62,15 +62,26 @@ Verified by booting all three architectures, since signal frames are
 architecture-specific and the change touched every one.
 
 ### F-02a — a fault becomes a signal by an upcall from the core
-**Moderate.** 1 reference. `trap.rs`'s `user_fault` names `syscall::deliver`,
-`syscall::signal` and `syscall::process` to turn a page fault into a `SIGSEGV`.
+**Closed 2026-09-25**, and it did not need F-01 first after all.
 
-A different upcall from the one F-02 inverted: that was the return path, this
-is fault delivery. Split out rather than folded into F-02, because closing the
-return path does not close this and the register should not imply otherwise.
-The fix is the same shape — a core-owned interface the personality registers
-into — and it wants F-01 done first, since two of its three references are the
-`Process` type.
+`ReturnPath` gained a fourth entry, `fault_signal`, and a core-owned answer
+type `FaultOutcome` with three cases — delivered, ended with a pid, or no
+process. `Posted` and `Origin` stay on the personality's side of the interface,
+which is the whole point: a trap path that had to name them would be back where
+F-02 started.
+
+The fault *resolver* needed no interface at all, only a better question. It was
+asking the Linux personality for the current process in order to reach its
+address space; the scheduler already knows which address space is running, and
+sets it from that same process when the task is made. `sched::current()
+.address_space()` is both correct and more honest about what the fault path
+means.
+
+**`trap.rs` now names nothing above the core.** All three of its references —
+`syscall::deliver`, `syscall::signal`, `syscall::process` — are gone, and the
+most trusted file in the kernel is clean. Verified by booting all three
+architectures with the fault path exercised: the `signal pid N ended by signal
+11` lines still print, with the right pids.
 
 ### F-03 — architecture modules name the personality's `StatLayout`
 **Closed 2026-09-25.** The `StatLayout` enum moved to `kernel/src/arch/mod.rs`,

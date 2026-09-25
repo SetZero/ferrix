@@ -27,7 +27,7 @@ specific, measured, and mostly documents rather than code.
 * [TODO.md](TODO.md) — start here to re-audit: what to re-measure, and what not to write
 * [SAFETY-MANUAL.md](SAFETY-MANUAL.md) — the out-of-context argument: assumed requirements, safe state, ten assumptions of use, element failure analysis
 * [ITEM.md](ITEM.md) — what the ratings attach to, and why it is not all of Ferrix
-* [FINDINGS.md](FINDINGS.md) — the audit register, 25 open findings and 13 closed
+* [FINDINGS.md](FINDINGS.md) — the audit register, 24 open findings and 14 closed
 * [SECURITY-TARGET.md](SECURITY-TARGET.md) — EAL5+ claim, SFRs, and where it would fail evaluation
 * [VULNERABILITY-ANALYSIS.md](VULNERABILITY-ANALYSIS.md) — AVA_VAN.4 over the seven threats; five residual vulnerabilities
 * [MEMORY-AND-TIMING.md](MEMORY-AND-TIMING.md) — what the item allocates, and what it promises about time
@@ -77,7 +77,7 @@ boundary.
 | Unreached statements, enumerated | 1,278 |
 | SOUP in the item | **0** |
 | External crates, host-side | 21 |
-| Upward boundary references | **52**, from 62 at the start of the work |
+| Upward boundary references | **48**, from 62 at the start of the work |
 | `unsafe` blocks, all documented | 662 |
 | Directly recursive functions in the item | **0** |
 | SMEP + SMAP (x86-64) | **on** |

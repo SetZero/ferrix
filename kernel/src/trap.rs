@@ -167,6 +167,26 @@ pub(crate) fn dispatch(frame: &mut arch::TrapFrame) {
 /// an upcall from the most trusted path in the system into the uncertified
 /// ring above it means the core cannot be built, analysed or evaluated
 /// without that ring present.
+/// What became of a signal the core asked the personality to force.
+///
+/// A core-owned answer on purpose: `Posted` and `Origin` are the personality's
+/// types, and a trap path that had to name them would be back where F-02
+/// started.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum FaultOutcome {
+    /// Delivered to a handler, or queued, or discarded because the program
+    /// ignores it. The program continues either way.
+    Delivered,
+    /// It ended the program, whose pid this is, for the report.
+    Ended {
+        /// The program that ended.
+        pid: u32,
+    },
+    /// There was no process to signal, which from user mode is a kernel bug
+    /// rather than a program's.
+    NoProcess,
+}
+
 #[derive(Debug)]
 pub(crate) struct ReturnPath {
     /// Whether the way back has anything to do for the running task. Asked on
@@ -179,6 +199,13 @@ pub(crate) struct ReturnPath {
     /// Restore the registers a signal frame saved: `sigreturn`, and
     /// `rt_sigreturn` when the flag is set.
     pub(crate) sigreturn: fn(&mut arch::UserContext, bool),
+    /// Force a signal on the running program for a fault it took: the
+    /// signal number, its `si_code`, and the faulting address.
+    ///
+    /// The second upcall the core owed an interface for. A fault becoming a
+    /// `SIGSEGV` is the personality's policy, but deciding that a fault *is*
+    /// the program's problem is the trap path's, and the trap path is core.
+    pub(crate) fault_signal: fn(u32, i32, u64) -> FaultOutcome,
 }
 
 /// The registered return path, or null until the personality registers one.
@@ -218,33 +245,39 @@ fn user_fault(frame: &arch::TrapFrame, trap: &Trap) {
 /// a fault the architecture cannot classify alone: a touch of a file mapping
 /// past the end of its file is `SIGBUS`, which only the address space knows.
 fn user_fault_as(frame: &arch::TrapFrame, trap: &Trap, (signal, code, address): (u32, i32, u64)) {
-    use crate::syscall::deliver;
-    use crate::syscall::signal::{Origin, Posted};
+    let Some(path) = return_path() else {
+        // No personality registered, so nothing can turn a fault into a
+        // signal. A kernel built that way has no user programs to fault.
+        fatal(
+            frame,
+            "a fault from user mode with no personality registered",
+            &crate::panic::catalog::UNEXPECTED_EXCEPTION,
+        )
+    };
 
     // Open while the signal is forced. A fatal one ends the process here, which
     // wakes and interrupts its other threads and, when none of them is live,
     // closes its handles and descriptors and tells whoever watches it, none of
     // which may run with interrupts masked.
     // A trap from user mode holds no kernel lock, which is also what lets
-    // `deliver::return_to_user` open them from this same dispatch; they are
-    // masked again before anything else here runs.
+    // the personality's return path open them from this same dispatch; they
+    // are masked again before anything else here runs.
     arch::enable_interrupts();
-    let posted = deliver::force(signal, Origin::Fault { code, address });
+    let outcome = (path.fault_signal)(signal, code, address);
     arch::disable_interrupts();
-    match posted {
-        None => fatal(
+    match outcome {
+        FaultOutcome::NoProcess => fatal(
             frame,
             "a fault from user mode with no process",
             &crate::panic::catalog::UNEXPECTED_EXCEPTION,
         ),
-        Some(Posted::Fatal) => {
-            let pid = crate::syscall::process::current().map_or(0, |process| process.pid());
+        FaultOutcome::Ended { pid } => {
             println!(
                 "  signal   pid {pid} ended by signal {signal} at {address:#x}, pc {:#x}: {trap:?}",
                 frame.instruction_pointer()
             );
         }
-        Some(Posted::Discarded | Posted::Pending) => {}
+        FaultOutcome::Delivered => {}
     }
 }
 
@@ -262,17 +295,21 @@ fn user_fault_as(frame: &arch::TrapFrame, trap: &Trap, (signal, code, address): 
 /// of a file mapping past the end of its file is `SIGBUS`. `None` in the error
 /// means there was no process to ask.
 fn resolve_user_fault(fault: &PageFault) -> Result<(), Option<crate::user::space::SpaceError>> {
-    let Some(process) = crate::syscall::process::current() else {
-        // A fault from user mode with no process is not a program's mistake,
-        // it is the kernel having entered ring 3 without recording who was
-        // running. Reported as fatal rather than resolved.
+    // Through the running task rather than through the Linux personality's
+    // process: `sched` sets a task's address space from its thread's process
+    // when the task is made, so these are the same object, and the fault path
+    // is asking the scheduler what is running -- which is what it means.
+    let Some(space) = crate::sched::current().and_then(|task| task.address_space().cloned()) else {
+        // A fault from user mode with no address space is not a program's
+        // mistake, it is the kernel having entered ring 3 without recording
+        // who was running. Reported as fatal rather than resolved.
         return Err(None);
     };
     let access = crate::user::space::Access {
         write: fault.write,
         execute: fault.execute,
     };
-    process.space().fault(fault.address, access).map_err(Some)
+    space.fault(fault.address, access).map_err(Some)
 }
 
 fn handle_page_fault(frame: &mut arch::TrapFrame, fault: PageFault) {

@@ -254,13 +254,6 @@
         "finding": "F-01"
       },
       {
-        "file": "sched/task.rs",
-        "references": "syscall::process",
-        "from_ring": "core",
-        "to_ring": "load",
-        "finding": "F-01"
-      },
-      {
         "file": "syscall/futex.rs",
         "references": "syscall::process",
         "from_ring": "item",
@@ -315,20 +308,6 @@
         "from_ring": "item",
         "to_ring": "load",
         "finding": "F-01"
-      },
-      {
-        "file": "trap.rs",
-        "references": "syscall::process",
-        "from_ring": "core",
-        "to_ring": "load",
-        "finding": "F-01"
-      },
-      {
-        "file": "trap.rs",
-        "references": "syscall::deliver",
-        "from_ring": "core",
-        "to_ring": "load",
-        "finding": "F-02a"
       },
       {
         "file": "device.rs",
@@ -391,13 +370,6 @@
         "references": "syscall::thread",
         "from_ring": "core",
         "to_ring": "item",
-        "finding": "F-06"
-      },
-      {
-        "file": "trap.rs",
-        "references": "syscall::signal",
-        "from_ring": "core",
-        "to_ring": "load",
         "finding": "F-06"
       },
       {
