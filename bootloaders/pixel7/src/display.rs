@@ -21,6 +21,8 @@
 
 use core::ptr;
 
+use ferrix_bootinfo::{Framebuffer, PixelFormat};
+
 use crate::log::say;
 
 /// DECON0 `main`: global control, trigger and blender registers.
@@ -140,15 +142,22 @@ const HW_TRIG_MASK_DECON: u32 = 1 << 4;
 /// `GLOBAL_CON`: command mode.
 const GLOBAL_CON_COMMAND_MODE: u32 = 1 << 8;
 
-/// First light: fill ABL's framebuffer -- the top two thirds white, the rest
-/// black, so which way up it is shows -- and unmask the TE trigger ABL
-/// masked, so DECON sends it on the next TE.
+/// Take over the display ABL left running: clear its framebuffer to black
+/// and unmask the TE trigger ABL masked, so DECON sends the framebuffer to
+/// the panel at every TE from now on -- whatever the kernel draws there
+/// reaches the screen with nothing more to do. Returns the framebuffer for
+/// the boot info, or `None` when the hardware is not as ABL left it.
 ///
 /// It writes that RAM and `TRIG_CON`, both gone at the next reset, and
 /// nothing else: no command reaches the panel, whose link ABL set up. Only if
-/// the hardware is still as ABL left it -- DPP0 fetching 1080 x 2400 from
-/// [`FRAMEBUFFER`] for DECON in command mode -- and otherwise says why not.
-pub(crate) fn first_light() {
+/// DPP0 is still fetching 1080 x 2400 from [`FRAMEBUFFER`] for DECON in
+/// command mode.
+///
+/// What was measured, on the phone: first light, white above black, was the
+/// right way up; and four bands each with one byte cleared showed yellow,
+/// magenta, cyan and white, top to bottom, so byte 0 is blue, 1 green, 2 red
+/// and 3 unused -- UEFI's `Bgrx8888`, whatever the format's name says.
+pub(crate) fn take_over() -> Option<Framebuffer> {
     let base = read(DPP_DMA + 0x40);
     let size = read(DPP_DMA + 0x18);
     let global = read(DECON_MAIN + 0x020);
@@ -159,19 +168,15 @@ pub(crate) fn first_light() {
         say!(
             "  display  not as ABL left it (base {base:#x}, size {size:#x}, GLOBAL_CON {global:#x}); nothing written"
         );
-        return;
+        return None;
     }
 
     crate::entry::invalidate_dcache(FRAMEBUFFER, FRAMEBUFFER_BYTES);
-    for row in 0..HEIGHT {
-        let value = if row < HEIGHT * 2 / 3 { u32::MAX } else { 0 };
-        let line = FRAMEBUFFER + row * WIDTH * 4;
-        for column in 0..WIDTH {
-            // SAFETY: inside ABL's framebuffer, RAM that no reserved region
-            // covers and nothing else in the loader uses; the caches are off,
-            // so the write reaches RAM, where DPP0 reads it.
-            unsafe { ptr::write_volatile((line + column * 4) as *mut u32, value) };
-        }
+    for offset in (0..FRAMEBUFFER_BYTES).step_by(4) {
+        // SAFETY: inside ABL's framebuffer, RAM that no reserved region
+        // covers and nothing else in the loader uses; the caches are off,
+        // so the write reaches RAM, where DPP0 reads it.
+        unsafe { ptr::write_volatile((FRAMEBUFFER + offset) as *mut u32, 0) };
     }
 
     let before = read(TRIG_CON);
@@ -187,8 +192,18 @@ pub(crate) fn first_light() {
     let (start, hz) = crate::entry::counter();
     while crate::entry::counter().0.wrapping_sub(start) < hz / 5 {}
     say!(
-        "  display  framebuffer filled; TRIG_CON {before:#x} -> {:#x}; frames {frames} -> {} in 200 ms",
+        "  display  {WIDTH}x{HEIGHT} at {FRAMEBUFFER:#x} cleared; TRIG_CON {before:#x} -> {:#x}; frames {frames} -> {} in 200 ms",
         read(TRIG_CON),
         read(DECON_MAIN + 0x004)
     );
+    Some(Framebuffer {
+        phys: FRAMEBUFFER,
+        size: FRAMEBUFFER_BYTES,
+        width: WIDTH as u32,
+        height: HEIGHT as u32,
+        stride: WIDTH as u32,
+        format: PixelFormat::Bgrx8888,
+        reclaimable: 0,
+        reserved: 0,
+    })
 }

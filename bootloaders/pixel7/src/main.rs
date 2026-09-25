@@ -25,7 +25,7 @@ mod payload;
 use core::panic::PanicInfo;
 use core::ptr;
 
-use ferrix_bootinfo::MemKind;
+use ferrix_bootinfo::{Framebuffer, MemKind};
 use ferrix_fdt::Fdt;
 
 use board::{CMDLINE, WATCHDOGS, WTCNT, WTCON};
@@ -65,15 +65,15 @@ extern "C" fn main(device_tree: u64) -> ! {
     );
     report_watchdogs();
     display::report();
-    display::first_light();
-    if let Err(why) = start(device_tree) {
+    let framebuffer = display::take_over();
+    if let Err(why) = start(device_tree, framebuffer.unwrap_or(Framebuffer::NONE)) {
         say!("FERRIX-PANIC loader: {why}");
     }
     entry::wait_for_watchdog()
 }
 
 /// Everything between the hand-over and the kernel, as one fallible step.
-fn start(device_tree: u64) -> Result<(), &'static str> {
+fn start(device_tree: u64, framebuffer: Framebuffer) -> Result<(), &'static str> {
     let blob = device_tree_blob(device_tree)?;
     let tree = Fdt::parse(blob).map_err(|_| "ABL's device tree does not parse")?;
     let mut memory = Memory::new();
@@ -101,6 +101,7 @@ fn start(device_tree: u64) -> Result<(), &'static str> {
             device_tree: blob,
             cmdline: CMDLINE,
             loader,
+            framebuffer,
         },
     )
 }

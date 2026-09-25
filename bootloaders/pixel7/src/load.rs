@@ -17,7 +17,7 @@ use core::ptr;
 use ferrix_bootinfo::{
     Arch, BOOT_STACK_SIZE, BOOTINFO_MAGIC, BOOTINFO_VERSION, BootInfo, Framebuffer,
     KERNEL_VIRT_BASE, MemKind, MemRegion, PAGE_SIZE, PHYSMAP_ALIGN, PHYSMAP_BASE, PHYSMAP_END,
-    direct_map_address, direct_map_runs, physmap_origin,
+    allocator_owns, direct_map_address, direct_map_runs, physmap_origin,
 };
 use ferrix_elf::{Class, EM_AARCH64, Elf, PF_W, PF_X, Segment};
 use ferrix_paging::aarch64::{AArch64, MAIR_EL1};
@@ -58,6 +58,9 @@ pub(crate) struct Carried<'a> {
     pub(crate) cmdline: &'a str,
     /// The loader's own image, which the identity map covers.
     pub(crate) loader: (u64, u64),
+    /// The framebuffer the display is showing, or [`Framebuffer::NONE`].
+    /// `reclaimable` is filled in here, from the final memory map.
+    pub(crate) framebuffer: Framebuffer,
 }
 
 /// The page table pool: physical memory, used directly, because the MMU is
@@ -289,7 +292,12 @@ struct Placed {
 
 /// Write the boot info, the command line and the memory map into the info
 /// area.
-fn write_boot_info(placed: &Placed, regions: &[MemRegion], cmdline: &str) {
+fn write_boot_info(
+    placed: &Placed,
+    regions: &[MemRegion],
+    cmdline: &str,
+    framebuffer: Framebuffer,
+) {
     let (origin, len) = placed.direct;
     let info = placed.info;
     let cmdline_room = (REGIONS_OFFSET - CMDLINE_OFFSET) as usize;
@@ -330,7 +338,13 @@ fn write_boot_info(placed: &Placed, regions: &[MemRegion], cmdline: &str) {
         loader_alias_len: 0,
         boot_stack_top: direct_map_address(origin, placed.stack.base + placed.stack.len),
         boot_stack_size: placed.stack.len,
-        framebuffer: Framebuffer::NONE,
+        framebuffer: Framebuffer {
+            reclaimable: u32::from(
+                framebuffer.is_present()
+                    && allocator_owns(regions.iter().copied(), framebuffer.phys, framebuffer.size),
+            ),
+            ..framebuffer
+        },
         initrd_phys: placed.initrd.map_or(0, |(taken, _)| taken.base),
         initrd_len: placed.initrd.map_or(0, |(_, len)| len),
         rsdp: 0,
@@ -399,7 +413,7 @@ pub(crate) fn boot(memory: &mut Memory, carried: Carried<'_>) -> Result<(), &'st
         roots,
         direct,
     };
-    write_boot_info(&placed, regions, carried.cmdline);
+    write_boot_info(&placed, regions, carried.cmdline, carried.framebuffer);
 
     let written = [image, pool, stack, info, device_tree];
     for taken in written
