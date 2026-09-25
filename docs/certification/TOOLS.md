@@ -128,3 +128,58 @@ DO-330 offers two routes, and the cheaper one is available here.
 
 For `rustc` the output-verification route is the DAL A source-to-object
 analysis, and it is not proportionate at DAL C. Ferrocene is the answer.
+
+---
+
+## 6. Tool operational requirements
+
+DO-330 asks, for each tool whose output is relied on, what the tool must do,
+what it must not do, and how that is verified. For the three T3 tools inside
+the item boundary the output-verification route applies, and this is that
+argument written down. It closes the *documentation* half of F-18 and F-19; the
+qualification of `rustc` (F-17) is untouched and is the reason neither finding
+is struck out.
+
+### TOR-1 — `gen-panic-catalog.py`
+
+| | |
+|---|---|
+| Output in the item | the panic explanation catalogue compiled into `kernel/src/panic/catalog.rs` |
+| **Shall** | derive every entry from the catalogue source, deterministically |
+| **Shall not** | emit an entry that its input does not contain, or omit one it does |
+| Failure mode | a panic prints the wrong explanation; the kernel's behaviour is unchanged |
+| Verification | `--check` re-derives the output and fails the build on any difference, on every run of `cargo xtask check` |
+| Residual | a defect present in *both* the generator and its `--check` path would not be caught. The two share code, so this is not independent verification. |
+
+### TOR-2 — `gen-font.py`
+
+| | |
+|---|---|
+| Output in the item | the panic screen's glyph table |
+| **Shall** | rasterise from the committed BDF, byte-identically on any host |
+| **Shall not** | depend on a font library installed on the build machine |
+| Failure mode | the panic screen is unreadable. It cannot affect any other behaviour: the table is read only by the panic path, after the serial report has already been written. |
+| Verification | `--check`, as TOR-1 |
+| Residual | as TOR-1, plus: nothing verifies the glyphs are *legible*, only that they match the input |
+
+### TOR-3 — `coverage-report.py`
+
+The one whose failure is least visible, and the only one whose output is
+offered directly as evidence against an objective rather than used to find
+defects.
+
+| | |
+|---|---|
+| Output | the statement-coverage figure in [VERIFICATION.md](VERIFICATION.md) |
+| **Shall** | count as reached only statements whose address lies in a basic block the run executed |
+| **Shall not** | over-report; where it cannot be exact it must err low, or declare the direction |
+| Failure mode | **a coverage figure nobody can distinguish from a correct one** |
+| Verification | none independent. This is the gap. |
+| Known biases | two, both optimistic and both declared in the tool's docstring and in F-11: a basic block credits every statement inside it even when a trap left it early, and optimised builds map one address to several source lines |
+| Evidence it is not wildly wrong | three measurement defects were found and fixed by cross-checking its output against raw `objdump` and against the source — the bare-name recursion match, the `Drop::drop` case, and `extern "C"` declarations taking the following item's body |
+
+**TOR-3 has no independent verification and should not pretend to.** The
+honest mitigation is that its biases are documented, its residual output is
+enumerable (`coverage-residual-x86_64.json`), and a reviewer can spot-check any
+file against the source. A qualification effort would need a second
+implementation to compare against.

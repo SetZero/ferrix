@@ -226,10 +226,26 @@ its input disagree, which is the beginning of the argument.
 Only `gen-panic-catalog.py` and `gen-font.py` touch the item; the rest generate
 load-ring or compositor code and are out of scope at the present boundary.
 
+**Tool operational requirements written 2026-09-25**: [TOOLS.md](TOOLS.md) §6
+carries TOR-1 and TOR-2 for those two — what each shall and shall not do, its
+failure mode, how it is verified, and the residual that generator and
+`--check` share code so the verification is not independent. The documentation
+half is done; the finding stands because a shared-code check is not
+qualification.
+
 ### F-19 — the build driver and gates are unclassified
-**Moderate.** `xtask` (242 tests) and the eleven gate scripts decide what ships
-and whether it passes. They need T1/T2/T3 classification and, for anything T3,
-a qualification argument.
+**Moderate, classified 2026-09-25.** [TOOLS.md](TOOLS.md) §3 gives every gate
+and `xtask` a T1/T2/T3 class, and §6's TOR-3 covers `coverage-report.py`, the
+one whose failure would be least visible — coverage is offered directly as
+evidence against DO-178C table A-7 rather than used to find defects, so a tool
+that over-reports produces a number nobody can distinguish from a correct one.
+
+TOR-3 records that it has **no independent verification** and does not pretend
+otherwise. Its mitigation is that both biases are declared, the residual is
+enumerable, and cross-checking it against raw `objdump` is what found three
+measurement defects. Qualification would need a second implementation.
+
+The finding stands on that residual.
 
 ---
 
@@ -356,17 +372,39 @@ cannot record a security-relevant event can claim EAL5.
 application conditions.
 
 ### F-23 — dynamic memory allocation throughout, with no bounded-allocation argument
-**Major.** Buddy allocator, slab, kernel heap, reclaim, demand paging, CoW and
-an OOM killer, all inside the item.
+**Major, analysed 2026-09-25** in
+[MEMORY-AND-TIMING.md](MEMORY-AND-TIMING.md) §1. Not closed: the analysis
+concludes the property does not hold, and recording that as a closure would be
+the failure this register exists to avoid.
 
-EN 50716 Annex A discourages dynamic memory at SIL 2 and above; DO-178C needs
-a defect-free-allocation argument covering fragmentation and exhaustion. An OOM
-killer is a non-deterministic failure mode in the trusted base.
+Now measured rather than impressionistic. **225 allocation sites across 40
+files** in the item's product code, over four allocators. And the part that is
+worse than "unbounded": `KernelAllocator::alloc` returns null on failure and
+**there is no `#[alloc_error_handler]` in the tree**, so a failing `Box::new`
+reaches Rust's default handler and aborts. Allocation failure in the certified
+item is fatal, not recoverable, at all 225 sites — even though `libs/heap`
+itself reports `OutOfMemory` properly and the `GlobalAlloc` adapter above it
+throws that distinction away.
+
+The analysis lists four closure routes by cost, of which the cheapest is worth
+doing on its own: an `#[alloc_error_handler]` with a catalogued explanation, so
+the present behaviour is deliberate rather than inherited.
 
 ### F-24 — no worst-case execution time analysis
-**Moderate.** `docs/ARCHITECTURE.md` §5 states plainly that no certified WCET
-is promised for a kernel that also hosts LLVM. Correct, self-aware, and a gap
-that must be declared in any safety case rather than discovered in one.
+**Moderate, scoped 2026-09-25** in
+[MEMORY-AND-TIMING.md](MEMORY-AND-TIMING.md) §2. Not closed, and will not be:
+no WCET is claimed.
+
+What the analysis adds is consequences. It lists what the item *does* promise
+instead — EDF admission control, partitioned scheduling, bounded RT critical
+sections, a preemptible kernel, interrupts that cannot steal unaccounted time —
+and what each standard therefore does and does not get. It also notes that DAL
+C does not require WCET as such, so this is not what blocks that rating; the
+absence of any stated timing requirement to verify is, and that is F-15.
+
+The boundary helps here more than anywhere: a WCET argument over 93,714 lines
+including btrfs and a TCP stack is not a project; over the 38,719-line `core`
+ring, with no recursion anywhere, it is at least conceivable.
 
 ### F-25 — no complexity, unit-size or recursion limits
 **Closed 2026-09-25** by `scripts/check-complexity.py`, a ratchet over
