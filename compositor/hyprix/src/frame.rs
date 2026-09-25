@@ -390,7 +390,16 @@ fn composed<P: Painter>(
         let Some(slot) = clients.get(source.client) else {
             continue;
         };
-        if let Some(surface) = pixels(slot, source.surface) {
+        // The window, without the shadows its client drew around it:
+        // what is stretched to the rectangle is the part the client said
+        // is the window, so a window whose tile is its own size is drawn
+        // pixel for pixel.
+        let window = pixels(slot, source.surface).map(|surface| {
+            window_crop(slot.client(), source.surface)
+                .and_then(|crop| crop.of(&surface))
+                .unwrap_or(surface)
+        });
+        if let Some(surface) = window {
             let _ = surfaces.insert(placed.window, surface);
         }
     }
@@ -656,6 +665,78 @@ pub(crate) fn local(rect: Rect, origin: (i64, i64), scale: f64) -> Rect {
         at.width,
         at.height,
     )
+}
+
+/// The part of a toplevel's buffer that is its window, as the client said
+/// with `xdg_surface.set_window_geometry`, in the buffer's own pixels.
+///
+/// Chrome's surface is its window and 10 pixels of shadow all round. Drawn
+/// whole into its tile, the window came out a little smaller than it is and
+/// its text resampled, and the pointer had to be scaled back through the
+/// squeeze; Hyprland draws the window geometry into the tile, and so does
+/// this. `None` -- the whole buffer is the window -- for a surface that
+/// never said, one scaled or turned by a viewport or a transform, where the
+/// geometry and the buffer's pixels are not one scale apart, and a geometry
+/// that is the whole buffer or does not fit inside it.
+pub(crate) fn window_crop(client: &compositor_server::Client, surface: ObjectId) -> Option<Crop> {
+    let (x, y, width, height) = client.window_geometry(surface)?;
+    let state = &client.surface(surface)?.current;
+    if state.viewport_size.is_some() || state.viewport_source.is_some() || state.transform != 0 {
+        return None;
+    }
+    let buffer = client.buffer(state.buffer?)?;
+    let scale = state.scale.max(1);
+    let crop = Crop {
+        x: u32::try_from(x.checked_mul(scale)?).ok()?,
+        y: u32::try_from(y.checked_mul(scale)?).ok()?,
+        width: u32::try_from(width.checked_mul(scale)?).ok()?,
+        height: u32::try_from(height.checked_mul(scale)?).ok()?,
+        scale: u32::try_from(scale).ok()?,
+    };
+    let (buffer_width, buffer_height) = (
+        u32::try_from(buffer.width).ok()?,
+        u32::try_from(buffer.height).ok()?,
+    );
+    let inside = crop.width > 0
+        && crop.height > 0
+        && crop.x.checked_add(crop.width)? <= buffer_width
+        && crop.y.checked_add(crop.height)? <= buffer_height;
+    let whole = (crop.x, crop.y, crop.width, crop.height) == (0, 0, buffer_width, buffer_height);
+    (inside && !whole).then_some(crop)
+}
+
+/// A window's part of its buffer: [`window_crop`]'s answer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Crop {
+    /// Where the window starts in the buffer, in its pixels.
+    pub x: u32,
+    /// See [`Crop::x`].
+    pub y: u32,
+    /// How big the window is, in the buffer's pixels.
+    pub width: u32,
+    /// See [`Crop::width`].
+    pub height: u32,
+    /// The buffer's pixels per surface pixel.
+    pub scale: u32,
+}
+
+impl Crop {
+    /// The window's pixels out of the whole buffer's.
+    pub(crate) fn of<'a>(&self, surface: &Surface<'a>) -> Option<Surface<'a>> {
+        surface.cropped(self.x, self.y, self.width, self.height)
+    }
+
+    /// The window's part in surface coordinates: where it starts and how
+    /// big it is.
+    pub(crate) fn in_surface(&self) -> (f64, f64, f64, f64) {
+        let scale = f64::from(self.scale);
+        (
+            f64::from(self.x) / scale,
+            f64::from(self.y) / scale,
+            f64::from(self.width) / scale,
+            f64::from(self.height) / scale,
+        )
+    }
 }
 
 /// Whether a surface can be seen through, which is half of what decides

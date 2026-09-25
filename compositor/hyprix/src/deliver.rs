@@ -198,13 +198,18 @@ impl Focus {
             at.0 >= left && at.0 < right && at.1 >= top && at.1 < bottom
         });
         let wanted = over.map(|placed| (placed.client, placed.surface));
+        // Where in the surface the pointer is. The frame stretches a
+        // window's surface to its rectangle, so the pointer's place in the
+        // rectangle is scaled back by the same ratio: a surface bigger than
+        // its tile -- Chrome's, with its shadows around the window -- is
+        // drawn smaller than it is, and a pointer taken at the rectangle's
+        // own scale drifted from what was under it, by nothing at the
+        // top-left corner and by the whole difference at the bottom-right.
         let local = over.map(|placed| {
-            let (x, y, _, _) = placed.rect;
-            #[expect(
-                clippy::cast_precision_loss,
-                reason = "as above: the origin is a screen coordinate"
-            )]
-            (at.0 - x as f64, at.1 - y as f64)
+            let window = slots
+                .get(placed.client)
+                .and_then(|slot| window_part(slot, placed.surface));
+            surface_point(at, placed.rect, window)
         });
 
         if wanted != self.pointer {
@@ -441,6 +446,55 @@ fn placements(state: &State, sources: &BTreeMap<WindowId, Source>) -> Vec<Placem
     out
 }
 
+/// The point `at` on the screen as a place in a surface whose `window` --
+/// its part, in surface coordinates -- the frame draws stretched to `rect`:
+/// the window's corner plus the point's place in the rectangle, scaled by
+/// the window over the rectangle, which is the inverse of the drawing. A
+/// window of the tile's size and no shadows is reached one to one; one of no
+/// known size, or a rectangle of none, unscaled from the rectangle's corner.
+fn surface_point(
+    at: (f64, f64),
+    rect: (i64, i64, i64, i64),
+    window: Option<(f64, f64, f64, f64)>,
+) -> (f64, f64) {
+    let (x, y, width, height) = rect;
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "a window's corner and size are screen coordinates, far inside f64"
+    )]
+    let (x, y, width, height) = (x as f64, y as f64, width as f64, height as f64);
+    let (left, top, along, down) = window
+        .filter(|_| width > 0.0 && height > 0.0)
+        .map_or((0.0, 0.0, 1.0, 1.0), |(left, top, w, h)| {
+            (left, top, w / width, h / height)
+        });
+    (left + (at.0 - x) * along, top + (at.1 - y) * down)
+}
+
+/// The part of a surface the frame stretches to the window's rectangle, in
+/// surface coordinates: the window geometry [`crate::frame::window_crop`]
+/// draws, or else the whole surface -- the viewport's destination if it has
+/// one, else its buffer's size over the buffer's scale. `None` for a surface
+/// with no buffer, which the pointer then reaches unscaled.
+fn window_part(slot: &Slot, surface: ObjectId) -> Option<(f64, f64, f64, f64)> {
+    let client = slot.client();
+    if let Some(crop) = crate::frame::window_crop(client, surface) {
+        return Some(crop.in_surface());
+    }
+    let state = &client.surface(surface)?.current;
+    if let Some((width, height)) = state.viewport_size {
+        return Some((0.0, 0.0, f64::from(width), f64::from(height)));
+    }
+    let buffer = client.buffer(state.buffer?)?;
+    let scale = f64::from(state.scale.max(1));
+    Some((
+        0.0,
+        0.0,
+        f64::from(buffer.width) / scale,
+        f64::from(buffer.height) / scale,
+    ))
+}
+
 /// A pixel position as Wayland's 24.8 fixed point.
 fn fixed(value: f64) -> Fixed {
     Fixed::from_f64(value)
@@ -460,7 +514,41 @@ fn moved(held: &mut Option<(usize, ObjectId)>, places: &[Option<usize>]) {
 
 #[cfg(test)]
 mod tests {
-    use super::{ObjectId, Placement, WindowId};
+    use super::{ObjectId, Placement, WindowId, surface_point};
+
+    /// Chrome's surface is its window and 10 pixels of shadow all round;
+    /// the frame draws only the window into the tile, so the pointer at the
+    /// tile's corner is on the window's corner, 10 pixels into the surface,
+    /// and one pixel across the tile is one across the window.
+    #[test]
+    fn the_pointer_is_on_the_window_its_client_drew_inside_its_shadows() {
+        let tile = (21, 21, 982, 726);
+        let chrome = Some((10.0, 10.0, 982.0, 726.0));
+        assert_eq!(surface_point((21.0, 21.0), tile, chrome), (10.0, 10.0));
+        assert_eq!(surface_point((1002.0, 746.0), tile, chrome), (991.0, 735.0));
+        assert_eq!(
+            surface_point((512.5, 384.25), tile, chrome),
+            (501.5, 373.25)
+        );
+    }
+
+    /// A window part-way through an animation is stretched to a tile that is
+    /// not its size, and the pointer is scaled back through the stretch.
+    #[test]
+    fn the_pointer_is_scaled_back_through_a_stretch() {
+        let tile = (0, 0, 500, 400);
+        let (x, y) = surface_point((250.0, 100.0), tile, Some((0.0, 0.0, 1000.0, 800.0)));
+        assert!(
+            (x - 500.0).abs() < 1e-9 && (y - 200.0).abs() < 1e-9,
+            "({x}, {y})"
+        );
+        // No buffer yet, or a rectangle of nothing: unscaled, not a NaN.
+        assert_eq!(surface_point((100.0, 50.0), tile, None), (100.0, 50.0));
+        assert_eq!(
+            surface_point((100.0, 50.0), (0, 0, 0, 0), Some((0.0, 0.0, 10.0, 10.0))),
+            (100.0, 50.0)
+        );
+    }
 
     #[test]
     fn a_point_is_on_a_window_from_its_corner_to_before_its_far_edges() {

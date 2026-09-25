@@ -119,6 +119,33 @@ impl<'a> Surface<'a> {
         self
     }
 
+    /// The part of these pixels `width` × `height` from `(x, y)`, as a
+    /// surface of its own over the same bytes: a window without the shadows
+    /// its client draws around it. Its name moves with the part, so that a
+    /// renderer keeping a copy by name does not take one part's for
+    /// another's. `None` for a part that is empty or not inside.
+    #[must_use]
+    pub fn cropped(&self, x: u32, y: u32, width: u32, height: u32) -> Option<Self> {
+        if width == 0
+            || height == 0
+            || x.checked_add(width)? > self.width
+            || y.checked_add(height)? > self.height
+        {
+            return None;
+        }
+        let start = usize::try_from(y)
+            .ok()?
+            .checked_mul(usize::try_from(self.stride).ok()?)?
+            .checked_add(usize::try_from(x).ok()?.checked_mul(4)?)?;
+        let data = self.data.get(start..)?;
+        let part = Self::new(data, width, height, self.stride, self.format).ok()?;
+        let name = match self.name {
+            0 => 0,
+            name => name ^ (u64::from(x) << 40) ^ (u64::from(y) << 52),
+        };
+        Some(part.named(name))
+    }
+
     /// What [`Surface::named`] called it, or zero.
     #[must_use]
     pub const fn name(&self) -> u64 {
@@ -239,5 +266,44 @@ impl<'a> Target<'a> {
         let start = u64::from(y) * u64::from(self.stride) + u64::from(x) * 4;
         let start = usize::try_from(start).ok()?;
         self.data.get_mut(start..start.checked_add(len)?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Format, Surface};
+
+    /// A 4 × 3 buffer whose every pixel's first byte is its index.
+    fn numbered() -> Vec<u8> {
+        (0..12_u8).flat_map(|at| [at, 0, 0, 0xff]).collect()
+    }
+
+    #[test]
+    fn a_crop_is_the_part_it_names_with_the_same_stride() {
+        let bytes = numbered();
+        let whole = Surface::new(&bytes, 4, 3, 16, Format::Argb8888)
+            .unwrap()
+            .named(7);
+        let part = whole.cropped(1, 1, 2, 2).unwrap();
+        assert_eq!((part.width(), part.height(), part.stride()), (2, 2, 16));
+        // Row 1 from column 1: pixels 5 and 6, then row 2's 9 and 10.
+        let first = |row: usize, column: usize| part.data()[row * 16 + column * 4];
+        assert_eq!(
+            [first(0, 0), first(0, 1), first(1, 0), first(1, 1)],
+            [5, 6, 9, 10]
+        );
+        // Another part of the same surface is not taken for this one.
+        assert_ne!(part.name(), whole.cropped(0, 0, 2, 2).unwrap().name());
+        assert_eq!(whole.cropped(0, 0, 4, 3).unwrap().data().len(), bytes.len());
+    }
+
+    #[test]
+    fn a_crop_that_is_empty_or_reaches_outside_is_refused() {
+        let bytes = numbered();
+        let whole = Surface::new(&bytes, 4, 3, 16, Format::Argb8888).unwrap();
+        assert!(whole.cropped(0, 0, 0, 1).is_none());
+        assert!(whole.cropped(3, 0, 2, 1).is_none());
+        assert!(whole.cropped(0, 2, 1, 2).is_none());
+        assert!(whole.cropped(u32::MAX, 0, 1, 1).is_none());
     }
 }

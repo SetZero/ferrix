@@ -1125,6 +1125,18 @@ impl Client {
         self.xdg_surfaces.get(&id)
     }
 
+    /// The part of the `wl_surface` `surface` that is its window, as its
+    /// toplevel's `set_window_geometry` said, in surface coordinates:
+    /// `None` for a surface that is no toplevel or never said, whose window
+    /// is the whole surface.
+    #[must_use]
+    pub fn window_geometry(&self, surface: ObjectId) -> Option<(i32, i32, i32, i32)> {
+        self.xdg_surfaces
+            .values()
+            .find(|xdg| xdg.surface == surface && matches!(xdg.role, Some(XdgRole::Toplevel(_))))
+            .and_then(|xdg| xdg.geometry)
+    }
+
     /// The toplevel `id` names, if it is one.
     #[must_use]
     pub fn toplevel(&self, id: ObjectId) -> Option<&Toplevel> {

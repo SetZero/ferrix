@@ -3639,6 +3639,34 @@ fn painted(client: &Client, index: usize, surface: ObjectId) -> crate::damage::P
                 .chain(state.current.damage.iter().map(|rect| held(rect, scale))),
         );
     }
+    // A window drawn without its shadows: what is stretched to its tile is
+    // the crop, so the damage is the crop's part of it, from the crop's
+    // corner, and the buffer is the crop's size.
+    if let Some(crop) = crate::frame::window_crop(client, surface) {
+        let window = Rect::new(
+            i64::from(crop.x),
+            i64::from(crop.y),
+            i64::from(crop.width),
+            i64::from(crop.height),
+        );
+        let rects = rects
+            .iter()
+            .filter_map(|rect| {
+                let left = rect.x.max(window.x);
+                let top = rect.y.max(window.y);
+                let right = rect.right().min(window.right());
+                let bottom = rect.bottom().min(window.bottom());
+                (right > left && bottom > top)
+                    .then(|| Rect::new(left - window.x, top - window.y, right - left, bottom - top))
+            })
+            .collect();
+        return crate::damage::Painted {
+            client: index,
+            surface,
+            buffer: Some((window.width, window.height)),
+            rects,
+        };
+    }
     crate::damage::Painted {
         client: index,
         surface,
