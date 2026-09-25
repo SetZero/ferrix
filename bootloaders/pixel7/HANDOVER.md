@@ -118,6 +118,32 @@ the loader rebuilds in a second. Nothing is ever written to the phone's flash.
   `0x8a000000` (384 KiB), entered at EL2 with MMU and caches off
   (`HCR_EL2` 0x80000002, `SCTLR_EL2` 0x30c50830), counter 24.576 MHz.
 
+## Update from nazuna (2026-09-25, branch `pixel7/stage3`)
+
+Steps 1 to 3 below are written and pass under QEMU; none has run on the phone.
+
+* `kernel/src/arch/aarch64/gicv3.rs` is the GICv3 driver (distributor,
+  redistributor walk and wake, `ICC_*_EL1` through four new accessors in
+  `cpu.rs`, which is at 94 of 100 lines). `gic.rs` is now the front both
+  drivers sit behind, found from the MADT or the device tree.
+* `init_interrupts`, `describe_cpus` and the PSCI conduit take the device
+  tree when `rsdp == 0`, ACPI otherwise, so QEMU's gates did not move.
+* `FERRIX_ARM_MACHINE` appends a `-machine` to xtask's Arm QEMU line.
+  `test-boot --arch aarch64` reaches stages 3, 4 and 5 with
+  `gic-version=3` (ACPI) and with `gic-version=3,acpi=off` (device tree),
+  and fails at stage 10 in both because a GICv3 has no MSI vectors until an
+  ITS driver exists; the phone has no virtio, so that does not block it.
+  The default GICv2 boot still passes stages 1-12.
+* A `ramoops` console reports no receive interrupt: SPI 1 is QEMU's PL011
+  and some other device on the phone.
+* **The loader now passes `nosmp`.** TF-A's PSCI starts a secondary at the
+  highest non-secure level, EL2 here, and `smp.rs`'s entry sequence is
+  written for EL1. The next kernel step after a phone run is that entry
+  dropping to EL1 the way `bootloaders/pixel7/src/entry.rs` does (it will
+  need its assembly budget raised), then removing `nosmp`.
+* Not yet on nazuna: `adb` and `fastboot`, and the udev rules. The factory
+  zip, `vendor_boot.img` and `avbtool.py` are in `~/.local/share/ferrix/pixel7`.
+
 ## What to do next: stage 3
 
 The kernel's AArch64 `init_interrupts` (`kernel/src/arch/aarch64/mod.rs`

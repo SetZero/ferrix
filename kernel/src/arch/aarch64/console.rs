@@ -129,7 +129,7 @@ pub(crate) fn init(view: &BootView<'_>, memory: &mut EarlyMemory) -> Result<(), 
 }
 
 /// True when the console is a `ramoops` record rather than a UART.
-fn is_ramoops() -> bool {
+pub(crate) fn is_ramoops() -> bool {
     RAMOOPS_CAPACITY.load(Ordering::Relaxed) != 0
 }
 

@@ -2,7 +2,9 @@
 //!
 //! On an ACPI machine the MADT's GIC CPU interface entries *are* the processor
 //! list: one per core, each carrying that core's `MPIDR_EL1` affinity, which
-//! is the number PSCI takes to start it.
+//! is the number PSCI takes to start it. On a machine described by a device
+//! tree instead -- the Pixel 7 -- the list is `/cpus`, whose `reg` is the same
+//! number, and PSCI's conduit is the `/psci` node's `method`.
 //!
 //! # Starting one
 //!
@@ -24,6 +26,7 @@ use alloc::vec::Vec;
 
 use ferrix_acpi::MadtEntry;
 use ferrix_bootinfo::{BootView, PAGE_SIZE};
+use ferrix_fdt::PsciConduit;
 use ferrix_paging::MapFlags;
 
 use super::cpu;
@@ -49,10 +52,38 @@ const BOOT_ARCH_HVC: u16 = 1 << 1;
 
 /// Every processor firmware says can be started, and which one this is.
 ///
+/// `nosmp` on the command line keeps the boot processor alone, for the reason
+/// ARMv7-A has it: on a new machine, a failure that involves a second core
+/// looks exactly like one that stops partway through stage 4, and turning
+/// the others off tells the two apart.
+///
 /// # Errors
 ///
-/// If the ACPI tables or the MADT cannot be read.
+/// If the ACPI tables or the MADT cannot be read, or on a machine without
+/// ACPI, the device tree.
 pub(crate) fn describe_cpus(view: &BootView<'_>) -> Result<Described, &'static str> {
+    let boot = hardware_id();
+    if view.flag("nosmp") {
+        return Ok(Described {
+            id_name: "MPIDR",
+            boot,
+            ids: alloc::vec![boot],
+        });
+    }
+    let ids = if view.raw().rsdp == 0 {
+        cpus_from_tree(view)?
+    } else {
+        cpus_from_madt(view)?
+    };
+    Ok(Described {
+        id_name: "MPIDR",
+        boot,
+        ids,
+    })
+}
+
+/// The MADT's enabled GIC CPU interfaces, by affinity.
+fn cpus_from_madt(view: &BootView<'_>) -> Result<Vec<u64>, &'static str> {
     let firmware =
         crate::acpi::Firmware::open(view).map_err(|_| "the machine has no readable ACPI tables")?;
     let acpi = firmware.acpi();
@@ -68,12 +99,29 @@ pub(crate) fn describe_cpus(view: &BootView<'_>) -> Result<Described, &'static s
             ids.push(gicc.mpidr & MPIDR_AFFINITY);
         }
     }
+    Ok(ids)
+}
 
-    Ok(Described {
-        id_name: "MPIDR",
-        boot: hardware_id(),
-        ids,
-    })
+/// `/cpus`, by affinity: the boot processor, and every other one PSCI can
+/// start. A node with no `enable-method` is taken to mean PSCI when the tree
+/// has a PSCI node, as Linux does and as ARMv7-A's `describe_cpus` explains;
+/// one naming another method is left out, since nothing here speaks it.
+fn cpus_from_tree(view: &BootView<'_>) -> Result<Vec<u64>, &'static str> {
+    let tree = crate::fdt::open(view)?;
+    let boot = hardware_id();
+    let psci = tree.psci_conduit().is_some();
+    Ok(tree
+        .cpus()
+        .map(|cpu| (cpu.id & MPIDR_AFFINITY, cpu.enable_method()))
+        .filter(|&(id, method)| {
+            id == boot
+                || match method {
+                    Some(named) => named == "psci",
+                    None => psci,
+                }
+        })
+        .map(|(id, _)| id)
+        .collect())
 }
 
 /// This processor's hardware identifier: the affinity fields of its
@@ -301,8 +349,17 @@ impl CpuStarter {
     }
 }
 
-/// How firmware says PSCI is reached.
+/// How firmware says PSCI is reached: the FADT's boot flags under ACPI, the
+/// `/psci` node's `method` otherwise.
 fn psci_conduit(view: &BootView<'_>) -> Result<Conduit, &'static str> {
+    if view.raw().rsdp == 0 {
+        let tree = crate::fdt::open(view)?;
+        return match tree.psci_conduit() {
+            Some(PsciConduit::Hvc) => Ok(Conduit::Hvc),
+            Some(PsciConduit::Smc) => Ok(Conduit::Smc),
+            None => Err("the device tree describes no PSCI, and spin tables are not supported"),
+        };
+    }
     let firmware =
         crate::acpi::Firmware::open(view).map_err(|_| "the machine has no readable ACPI tables")?;
     let flags = firmware
@@ -350,7 +407,7 @@ extern "C" fn secondary_start(record: u64) -> ! {
     // SAFETY: once on this core, before anything on it can fault, with every
     // exception masked.
     unsafe { super::trap::init() };
-    super::gicv2::init_this_cpu();
+    super::gic::init_this_cpu();
     crate::smp::install_secondary_record(record);
     crate::smp::secondary_main(record)
 }

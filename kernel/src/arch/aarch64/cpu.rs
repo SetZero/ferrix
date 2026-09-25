@@ -728,6 +728,71 @@ pub(crate) fn write_cntv_ctl(control: u64) {
     }
 }
 
+/// Turn on this core's GICv3 CPU interface, which is system registers rather
+/// than memory, and return `ICC_SRE_EL1` as it reads afterwards.
+///
+/// In order: select the system register interface (`SRE`), let every priority
+/// through, take the default `ICC_CTLR_EL1` -- one write to `ICC_EOIR1_EL1`
+/// both drops the priority and deactivates -- and enable group 1, the group a
+/// non-secure kernel's interrupts are in. A returned value with bit 0 clear
+/// means `SRE` did not stick: EL2 or EL3 has not allowed EL1 the system
+/// registers, and none of the others did anything.
+pub(crate) fn enable_gicv3_cpu_interface() -> u64 {
+    let sre: u64;
+    // SAFETY: each write configures this core's own view of the interrupt
+    // controller, and interrupts stay masked in `DAIF` throughout, so nothing
+    // is delivered halfway through.
+    unsafe {
+        asm!(
+            "mrs {sre}, icc_sre_el1",
+            "orr {sre}, {sre}, #1",
+            "msr icc_sre_el1, {sre}",
+            "isb",
+            "msr icc_pmr_el1, {all}",
+            "msr icc_ctlr_el1, xzr",
+            "msr icc_igrpen1_el1, {one}",
+            "mrs {sre}, icc_sre_el1",
+            sre = out(reg) sre,
+            all = in(reg) 0xFF_u64,
+            one = in(reg) 1_u64,
+            options(nostack, preserves_flags),
+        );
+    }
+    sre
+}
+
+/// Acknowledge the highest priority pending group 1 interrupt:
+/// `ICC_IAR1_EL1`, whose low 24 bits are its identifier.
+pub(crate) fn read_icc_iar1() -> u64 {
+    let value: u64;
+    // SAFETY: the read claims an interrupt, which is what the caller asked
+    // for, and changes nothing else.
+    unsafe {
+        asm!("mrs {}, icc_iar1_el1", out(reg) value, options(nostack, preserves_flags));
+    }
+    value
+}
+
+/// Retire an interrupt [`read_icc_iar1`] returned, with exactly its value.
+pub(crate) fn write_icc_eoir1(value: u64) {
+    // SAFETY: ends the interrupt the value names on this core, nothing else.
+    unsafe {
+        asm!("msr icc_eoir1_el1, {}", in(reg) value, options(nostack, preserves_flags));
+    }
+}
+
+/// Send a group 1 software-generated interrupt: `ICC_SGI1R_EL1`.
+///
+/// The `isb` makes the write take effect now rather than whenever the core
+/// next synchronises, which for an inter-processor interrupt is the whole
+/// point.
+pub(crate) fn write_icc_sgi1r(value: u64) {
+    // SAFETY: raises an interrupt on the cores the value names.
+    unsafe {
+        asm!("msr icc_sgi1r_el1, {}", "isb", in(reg) value, options(nostack, preserves_flags));
+    }
+}
+
 /// A 64-bit random number from the CPU's `RNDR` register, tried ten times;
 /// `None` on a core without it, which `ID_AA64ISAR0_EL1` says, or one that
 /// kept reporting failure.

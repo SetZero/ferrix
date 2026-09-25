@@ -1267,7 +1267,14 @@ fn qemu_command(
             // address, the architected timer, a virtio disk. Only the CPU
             // differs, and with it the width of everything the CPU does.
             let cpu = arm_cpu(arch);
-            let _ = command.args(VIRT_MACHINE).args([
+            let _ = command.args(VIRT_MACHINE);
+            // QEMU merges a second `-machine` into the first, so this adds to
+            // `virt` rather than replacing it: `gic-version=3` for the GICv3
+            // driver, `acpi=off` for the device-tree path the Pixel 7 takes.
+            if let Ok(extra) = std::env::var("FERRIX_ARM_MACHINE") {
+                let _ = command.args(["-machine", &extra]);
+            }
+            let _ = command.args([
                 "-cpu",
                 &cpu,
                 "-drive",

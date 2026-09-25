@@ -3,6 +3,7 @@
 pub(crate) mod console;
 mod cpu;
 mod gic;
+mod gicv3;
 mod signal;
 mod smp;
 mod switch;
@@ -24,7 +25,6 @@ use ferrix_bootinfo::{Arch, BootView};
 use ferrix_linux_abi::nr::{self, Syscall};
 use ferrix_linux_abi::types::{self, OpenFlagBits};
 
-use super::gicv2;
 use crate::early::{EarlyError, EarlyMemory};
 use crate::irq::Report;
 
@@ -914,20 +914,18 @@ pub(crate) fn take_console_byte() -> Option<u8> {
 /// address beside it.
 const QEMU_VIRT_UART0_INTERRUPT: u32 = 33;
 
-/// The GIC interrupt the console port receives on.
-#[expect(
-    clippy::missing_const_for_fn,
-    reason = "another architecture's version of this reads the device tree"
-)]
+/// The GIC interrupt the console port receives on, or `None` for a
+/// `ramoops` record, which receives nothing -- and on whose machine SPI 1 is
+/// some other device's line.
 pub(crate) fn console_receive_irq(_view: &BootView<'_>) -> Option<u32> {
-    Some(QEMU_VIRT_UART0_INTERRUPT)
+    (!console::is_ramoops()).then_some(QEMU_VIRT_UART0_INTERRUPT)
 }
 
 /// Enable the console port's receive interrupt `irq`, at the GIC and in the
 /// port. On the calling processor, like the timer's: a shared interrupt goes
 /// to the core that enables it.
 pub(crate) fn enable_console_receive(irq: u32) {
-    gicv2::enable(irq);
+    gic::enable(irq);
     console::enable_receive_interrupt();
 }
 
@@ -1104,28 +1102,42 @@ pub(crate) fn halt() -> ! {
 /// Must be called exactly once, on the boot CPU, after [`init_traps`] and
 /// while interrupts are masked.
 pub(crate) unsafe fn init_interrupts(view: &BootView<'_>) -> Result<Report, &'static str> {
-    let firmware =
-        crate::acpi::Firmware::open(view).map_err(|_| "the machine has no readable ACPI tables")?;
-    let acpi = firmware.acpi();
-
-    // SAFETY: called once from `kmain`, on the boot CPU, after the vector
-    // table is installed and with interrupts masked.
-    let version = unsafe { gic::init(&acpi)? };
-    timer::init(&acpi)?;
+    // ACPI when the loader found an RSDP, which every QEMU boot does; the
+    // device tree when it did not, which is the Pixel 7's loader. Decided by
+    // the RSDP rather than by trying ACPI first, so a machine with ACPI whose
+    // tables are broken says so instead of quietly booting from a tree that
+    // may describe something else.
+    let version = if view.raw().rsdp == 0 {
+        let tree = crate::fdt::open(view)?;
+        // SAFETY: called once from `kmain`, on the boot CPU, after the vector
+        // table is installed and with interrupts masked.
+        let version = unsafe { gic::init_from_tree(&tree)? };
+        timer::init_from_tree(&tree)?;
+        version
+    } else {
+        let firmware = crate::acpi::Firmware::open(view)
+            .map_err(|_| "the machine has no readable ACPI tables")?;
+        let acpi = firmware.acpi();
+        // SAFETY: as above.
+        let version = unsafe { gic::init(&acpi)? };
+        timer::init(&acpi)?;
+        version
+    };
 
     // The timer is a private peripheral interrupt, so enabling it is a
     // distributor operation like any other — it is only *private* in that
     // each core has its own copy of the number.
-    gicv2::enable(timer::irq());
+    gic::enable(timer::irq());
     // And the inter-processor interrupt, whose enable bit is this core's
-    // own: every secondary turns on its copy in `gicv2::init_this_cpu`.
-    gicv2::enable(gicv2::IPI_SGI);
+    // own: every secondary turns on its copy in `gic::init_this_cpu`.
+    gic::enable(gic::IPI_SGI);
 
     Ok(Report {
         counter: "generic timer",
         counter_hz: timer::counter_hz(),
         controller: match version {
             2 => "GICv2",
+            3 => "GICv3",
             _ => "GIC",
         },
         timer: "virtual timer",
@@ -1158,7 +1170,7 @@ pub(crate) fn interrupts_enabled() -> bool {
 
 /// The interrupt number inter-processor interrupts arrive on.
 pub(crate) const fn ipi_irq() -> u32 {
-    gicv2::IPI_SGI
+    gic::IPI_SGI
 }
 
 /// Interrupt every core but this one.
@@ -1169,7 +1181,7 @@ pub(crate) const fn ipi_irq() -> u32 {
 /// architecture spells its own.
 pub(crate) fn send_ipi_to_others() -> Result<(), &'static str> {
     cpu::dsb_ishst();
-    gicv2::send_sgi_to_others();
+    gic::send_sgi_to_others();
     Ok(())
 }
 
@@ -1231,12 +1243,12 @@ pub(crate) fn timer_irq() -> u32 {
 ///
 /// No usable frame, or every SPI it has already taken.
 pub(crate) fn msi_allocate() -> Result<crate::irq::Msi, &'static str> {
-    gicv2::msi_allocate()
+    gic::msi_allocate()
 }
 
 /// The page a device's MSI writes land in, which an IOMMU domain must map.
 pub(crate) fn msi_doorbell() -> Option<u64> {
-    gicv2::msi_doorbell()
+    gic::msi_doorbell()
 }
 
 /// Stop interrupt `number` being delivered until [`unmask_interrupt`] lets
@@ -1246,10 +1258,10 @@ pub(crate) fn msi_doorbell() -> Option<u64> {
 ///
 /// If `number` is not a line the interrupt controller has.
 pub(crate) fn mask_interrupt(number: u32) -> Result<(), &'static str> {
-    if number >= gicv2::FIRST_SPECIAL_ID {
+    if number >= gic::FIRST_SPECIAL_ID {
         return Err("not a line the interrupt controller has");
     }
-    gicv2::disable(number);
+    gic::disable(number);
     Ok(())
 }
 
@@ -1259,10 +1271,10 @@ pub(crate) fn mask_interrupt(number: u32) -> Result<(), &'static str> {
 ///
 /// If `number` is not a line the interrupt controller has.
 pub(crate) fn unmask_interrupt(number: u32) -> Result<(), &'static str> {
-    if number >= gicv2::FIRST_SPECIAL_ID {
+    if number >= gic::FIRST_SPECIAL_ID {
         return Err("not a line the interrupt controller has");
     }
-    gicv2::enable(number);
+    gic::enable(number);
     Ok(())
 }
 
@@ -1273,9 +1285,9 @@ pub(crate) fn unmask_interrupt(number: u32) -> Result<(), &'static str> {
 /// asserted and take the exception again immediately. Reading `GICC_IAR` until
 /// it reports a special identifier is how the controller says it has no more.
 pub(crate) fn service_interrupts(_frame: &mut TrapFrame, handle: fn(u32)) {
-    while let Some((id, acknowledgement)) = gicv2::claim() {
+    while let Some((id, acknowledgement)) = gic::claim() {
         handle(id);
-        gicv2::complete(acknowledgement);
+        gic::complete(acknowledgement);
     }
 }
 

@@ -16,6 +16,7 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use ferrix_acpi::Acpi;
+use ferrix_fdt::{Fdt, TimerInterrupt};
 
 use super::cpu;
 use crate::acpi::DirectMap;
@@ -42,11 +43,22 @@ static IRQ: AtomicU32 = AtomicU32::new(DEFAULT_VIRTUAL_PPI);
 /// If `CNTFRQ_EL0` reads zero, which means firmware never programmed it. Every
 /// duration the kernel computes would divide by it.
 pub(crate) fn init(acpi: &Acpi<'_, DirectMap>) -> Result<(), &'static str> {
-    let described = acpi
-        .gtdt()
-        .ok()
-        .map(|gtdt| gtdt.virtual_el1_timer().gsiv)
-        .filter(|gsiv| PPI_RANGE.contains(gsiv));
+    finish(acpi.gtdt().ok().map(|gtdt| gtdt.virtual_el1_timer().gsiv))
+}
+
+/// [`init`], with the interrupt from the device tree's timer node.
+///
+/// # Errors
+///
+/// As [`init`].
+pub(crate) fn init_from_tree(tree: &Fdt<'_>) -> Result<(), &'static str> {
+    finish(tree.timer_interrupt(TimerInterrupt::Virtual))
+}
+
+/// Record the interrupt firmware `described`, if it is a private one, and
+/// check the counter runs.
+fn finish(described: Option<u32>) -> Result<(), &'static str> {
+    let described = described.filter(|id| PPI_RANGE.contains(id));
     IRQ.store(described.unwrap_or(DEFAULT_VIRTUAL_PPI), Ordering::Relaxed);
 
     if cpu::read_cntfrq() == 0 {

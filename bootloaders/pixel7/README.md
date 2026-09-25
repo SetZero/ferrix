@@ -7,8 +7,11 @@ program, which is to do for Ferrix what `boot/` does under UEFI.
 
 **Where it stands (2026-09-25):** it loads and starts Ferrix. On the phone
 the kernel verifies the hand-off and its memory (stages 1 and 2: 7.7 GiB, 43
-regions) and stops at stage 3, where the AArch64 kernel still wants ACPI's
-MADT for its interrupt controller; see the last section.
+regions) and stopped at stage 3, where the AArch64 kernel wanted ACPI's MADT
+for its interrupt controller. Branch `pixel7/stage3` gives it the device-tree
+path and a GICv3 driver; both pass stages 3 to 5 under QEMU
+(`FERRIX_ARM_MACHINE=gic-version=3,acpi=off`), and have not yet run on the
+phone. The loader passes `nosmp` until secondaries can start at EL2.
 
 ## Building and running it
 
@@ -72,9 +75,10 @@ session, including why the phone last reset.
 The AArch64 kernel is written for QEMU's `virt` machine. On this phone it
 would need, besides this loader building a `BootInfo`:
 
-* the GIC found from the device tree rather than ACPI's MADT, and GICv3
-  redistributors (distributor `0x10400000`, redistributors `0x10440000`);
+* ~~the GIC found from the device tree rather than ACPI's MADT, and GICv3
+  redistributors~~ -- done on `pixel7/stage3`, unproven on the phone;
 * ~~a console that is not the PL011~~ -- done: the `ramoops` record;
-* PSCI's conduit (`smc`) from the device tree rather than the FADT;
+* ~~PSCI's conduit (`smc`) from the device tree rather than the FADT~~ --
+  done with the above; secondaries still need an entry that starts at EL2;
 * the watchdogs stopped (`WTCON` at `0x10060000` and `0x10070000`);
 * and, to be useful, drivers: there is no virtio here.

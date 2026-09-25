@@ -16,7 +16,11 @@ pub(crate) const RAMOOPS_CONSOLE_SIZE: u64 = 0x20_0000;
 /// The kernel command line: continue the loader's `ramoops` record as the
 /// console, since the kernel's PL011 is QEMU's and this phone has none it can
 /// reach. Must name the same zone as the two constants above.
-pub(crate) const CMDLINE: &str = "console=ramoops,0xfd3ff000,0x200000";
+///
+/// `nosmp` until the kernel's secondary entry can start at EL2: TF-A's PSCI
+/// starts a core at the highest non-secure level, which here is EL2, and that
+/// entry sequence is written for the EL1 QEMU starts one at.
+pub(crate) const CMDLINE: &str = "console=ramoops,0xfd3ff000,0x200000 nosmp";
 
 /// The two watchdogs, `watchdog_cl0@10060000` and `watchdog_cl1@10070000`,
 /// each with a 30 second timeout in the device tree.
