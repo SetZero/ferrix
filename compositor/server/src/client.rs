@@ -2870,6 +2870,12 @@ impl Client {
     /// another from -- and says which was asked for, so that a client is
     /// answered rather than refused and the log records what a real toolkit
     /// wanted.
+    ///
+    /// The arrow is what a client that has said nothing about its cursor
+    /// gets, so a shape leaves it there: said, with no surface, is what
+    /// `set_cursor` with a null surface leaves, which hides the pointer.
+    /// Chrome, with no cursor theme to draw from, names a shape for every
+    /// cursor, and its windows had no pointer at all.
     fn cursor_shape_device(&mut self, opcode: u16, args: &[Arg<'_>]) {
         if opcode != wp_cursor_shape_device_v1::request::SET_SHAPE {
             return;
@@ -2884,7 +2890,7 @@ impl Client {
             return;
         }
         self.cursor = None;
-        self.said_cursor = true;
+        self.said_cursor = false;
         self.events.push(Event::CursorShaped { shape });
     }
 

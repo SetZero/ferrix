@@ -4916,3 +4916,80 @@ fn a_seat_that_gains_a_keyboard_says_so_to_a_bound_client() {
         "the keyboard it was told of is its to ask for"
     );
 }
+
+/// A cursor shape is drawn as the compositor's arrow, which is what a client
+/// that has said nothing gets; only `set_cursor` with a null surface hides
+/// the pointer. Chrome names a shape for every cursor, and with shapes
+/// hiding it, its windows had no pointer at all.
+#[test]
+fn a_cursor_shape_shows_the_arrow_and_a_null_cursor_hides_it() {
+    let mut globals = Globals::new();
+    for (interface, version, role) in [
+        (&core::WL_SEAT, 7, Role::Seat),
+        (
+            &compositor_protocol::cursor_shape::WP_CURSOR_SHAPE_MANAGER_V1,
+            1,
+            Role::CursorShapeManager,
+        ),
+    ] {
+        assert!(globals.add(interface, version, role).is_some());
+    }
+    let mut client = Client::new(globals);
+    client.set_seat_capabilities(core::wl_seat::capability::POINTER);
+    let mut bytes = get_registry(2);
+    bytes.extend(bind(2, 1, "wl_seat", 7, 3));
+    bytes.extend(bind(2, 2, "wp_cursor_shape_manager_v1", 1, 4));
+    bytes.extend(request(
+        3,
+        core::wl_seat::request::GET_POINTER,
+        &[ArgType::NewId],
+        &[Arg::NewId(ObjectId(5))],
+    ));
+    assert_eq!(client.read(&bytes, &[]), bytes.len());
+    assert_eq!(client.fatal(), None);
+    assert!(!client.said_cursor(), "nothing said: the arrow");
+
+    let hide = request(
+        5,
+        core::wl_pointer::request::SET_CURSOR,
+        &[
+            ArgType::Uint,
+            ArgType::Object { nullable: true },
+            ArgType::Int,
+            ArgType::Int,
+        ],
+        &[
+            Arg::Uint(0),
+            Arg::Object(ObjectId::NULL),
+            Arg::Int(0),
+            Arg::Int(0),
+        ],
+    );
+    assert_eq!(client.read(&hide, &[]), hide.len());
+    assert!(
+        client.said_cursor() && client.cursor().is_none(),
+        "a null cursor is asked for no pointer"
+    );
+
+    let mut shaped = request(
+        4,
+        compositor_protocol::cursor_shape::wp_cursor_shape_manager_v1::request::GET_POINTER,
+        &[ArgType::NewId, ArgType::Object { nullable: false }],
+        &[Arg::NewId(ObjectId(6)), Arg::Object(ObjectId(5))],
+    );
+    shaped.extend(request(
+        6,
+        compositor_protocol::cursor_shape::wp_cursor_shape_device_v1::request::SET_SHAPE,
+        &[ArgType::Uint, ArgType::Uint],
+        &[
+            Arg::Uint(0),
+            Arg::Uint(compositor_protocol::cursor_shape::wp_cursor_shape_device_v1::shape::DEFAULT),
+        ],
+    ));
+    assert_eq!(client.read(&shaped, &[]), shaped.len());
+    assert_eq!(client.fatal(), None);
+    assert!(
+        !client.said_cursor() && client.cursor().is_none(),
+        "a shape is drawn as the arrow, not hidden"
+    );
+}
