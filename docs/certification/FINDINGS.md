@@ -144,9 +144,16 @@ process object is in the wrong place.
 takes the certified item to 5,795 of 7,073 statements: core 80.4%, item ring
 85.2%.
 
-The residual is now *enumerated* rather than implied:
+The residual is now enumerated *and sorted*:
 `coverage-residual-x86_64.json` lists all 1,278 unreached statements by file
-and line, which is the list the remaining work starts from.
+and line, and [COVERAGE-RESIDUAL.md](COVERAGE-RESIDUAL.md) puts each into the
+category table A-7 asks about.
+
+The sorted answer is less comfortable than the percentage. **103 statements are
+argued** — 65 unreachable on the measured architecture, 38 reached only when
+the kernel is stopping — 121 are a statement about which machine was measured
+rather than an argument, and **1,054 simply need a test**. 82% of the residual
+is real work, not justification.
 
 Two things learned in the attempt. Four further gates -- `test-btrfs`,
 `test-shell`, `test-sysfs`, `test-restart` -- pass under the plugin and write
@@ -156,8 +163,8 @@ down instead. And part of the residual is unreachable by construction rather
 than untested: `iommu/smmuv3.rs` is 65 statements of AArch64 IOMMU that no
 x86-64 run can reach, so the justification has to be made per configuration.
 
-*Closes when:* every one of the 1,278 is either covered by a test naming a
-requirement or carries a written justification.
+*Closes when:* the 1,054 in the *needs-a-test* category are covered or
+individually justified. The other 224 have their argument written.
 
 ### F-11 — coverage measures the debug profile, the item ships release
 **Closed 2026-09-25.** The release profile is now measured:

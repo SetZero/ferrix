@@ -73,6 +73,13 @@ pub(crate) fn run(args: &Args) -> Result<()> {
         python("scripts/check-safety-requirements.py")
     })?;
 
+    // The uncovered statements, sorted into what is argued and what is a gap.
+    // Regenerated from the residual the coverage run writes, so the two cannot
+    // disagree. docs/certification/COVERAGE-RESIDUAL.md.
+    step("coverage residual", || {
+        python_with("scripts/gen-coverage-justification.py", &["--check"])
+    })?;
+
     // The item links no external crate on any architecture, which is what lets
     // IEC 62304's SOUP obligation be answered with "none" rather than with an
     // anomaly-list evaluation per dependency. That is a property worth

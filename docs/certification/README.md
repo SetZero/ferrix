@@ -33,6 +33,7 @@ specific, measured, and mostly documents rather than code.
 * [MEMORY-AND-TIMING.md](MEMORY-AND-TIMING.md) — what the item allocates, and what it promises about time
 * [SOUP.md](SOUP.md) — generated; the item contains none
 * [VERIFICATION.md](VERIFICATION.md) — what exercises the item, and the traceability gap
+* [COVERAGE-RESIDUAL.md](COVERAGE-RESIDUAL.md) — generated; the uncovered statements, sorted into argued and gap
 * [TOOLS.md](TOOLS.md) — tool classification under EN 50716 §6.7 and DO-330
 * `coverage-x86_64.json` — statement coverage evidence, per file
 
@@ -74,7 +75,7 @@ boundary.
 | In-kernel self-tests | 31,107 lines |
 | Statement coverage, certified item | **81.9%** |
 | Statement coverage, core ring | 80.4% |
-| Unreached statements, enumerated | 1,278 |
+| Unreached statements | 1,278 — **103 argued, 1,054 need a test** |
 | SOUP in the item | **0** |
 | External crates, host-side | 21 |
 | Upward boundary references | **48**, from 62 at the start of the work |
