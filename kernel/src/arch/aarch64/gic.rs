@@ -100,6 +100,54 @@ fn layout(acpi: &Acpi<'_, DirectMap>) -> Result<Layout, &'static str> {
     })
 }
 
+/// The architecture version the MADT's layout describes.
+///
+/// Version 0 means firmware declined to say and the OS should probe. On a
+/// machine that also gave a CPU interface address, that is a GICv2 layout:
+/// GICv3 has no CPU interface to give an address for, and has a redistributor
+/// range instead.
+const fn described_version(layout: &Layout) -> u8 {
+    match layout.version {
+        0 if layout.cpu_interface != 0 => 2,
+        0 if layout.redistributors.is_some() => 3,
+        other => other,
+    }
+}
+
+/// Bring up the GICv2 the MADT describes, and its `GICv2m` frame if it has
+/// one.
+///
+/// # Safety
+///
+/// `gicv2::init`'s contract.
+unsafe fn init_v2(layout: &Layout) -> Result<(), &'static str> {
+    if layout.cpu_interface == 0 {
+        return Err("the MADT describes a GICv2 with no CPU interface");
+    }
+    // SAFETY: the caller's contract is `gicv2::init`'s, and these are the two
+    // register blocks firmware describes, checked above to be a GICv2's.
+    unsafe { gicv2::init(layout.distributor, layout.cpu_interface)? };
+    // A frame that cannot be used leaves the machine without MSI vectors and
+    // nothing else: `gicv2::msi_allocate` says so to whoever asks for one.
+    if let Some((base, spis)) = layout.msi_frame {
+        let _ = gicv2::init_msi_frame(base, spis);
+    }
+    Ok(())
+}
+
+/// Bring up the GICv3 the MADT describes.
+///
+/// # Safety
+///
+/// `gicv3::init`'s contract.
+unsafe fn init_v3(layout: &Layout) -> Result<(), &'static str> {
+    let (base, len) = layout
+        .redistributors
+        .ok_or("the MADT describes a GICv3 with no redistributor range")?;
+    // SAFETY: the caller's contract is `gicv3::init`'s.
+    unsafe { gicv3::init(layout.distributor, base, len) }
+}
+
 /// Find the controller in the MADT and bring it up, returning its version.
 ///
 /// # Safety
@@ -108,44 +156,17 @@ fn layout(acpi: &Acpi<'_, DirectMap>) -> Result<Layout, &'static str> {
 /// table is installed and while interrupts are masked.
 pub(crate) unsafe fn init(acpi: &Acpi<'_, DirectMap>) -> Result<u8, &'static str> {
     let layout = layout(acpi)?;
-
-    // Version 0 means firmware declined to say and the OS should probe. On a
-    // machine that also gave a CPU interface address, that is a GICv2 layout:
-    // GICv3 has no CPU interface to give an address for.
-    let version = match layout.version {
-        0 if layout.cpu_interface != 0 => 2,
-        0 if layout.redistributors.is_some() => 3,
-        other => other,
-    };
-    match version {
-        2 => {
-            if layout.cpu_interface == 0 {
-                return Err("the MADT describes a GICv2 with no CPU interface");
-            }
-            // SAFETY: the caller's contract is `gicv2::init`'s, and these are
-            // the two register blocks firmware describes, checked above to be
-            // a GICv2's.
-            unsafe { gicv2::init(layout.distributor, layout.cpu_interface)? };
-            // A frame that cannot be used leaves the machine without MSI
-            // vectors and nothing else: `gicv2::msi_allocate` says so to
-            // whoever asks for one.
-            if let Some((base, spis)) = layout.msi_frame {
-                let _ = gicv2::init_msi_frame(base, spis);
-            }
-        }
+    let version = match described_version(&layout) {
+        // SAFETY: the caller's contract, passed on.
+        2 => unsafe { init_v2(&layout) }.map(|()| 2)?,
         // A `GICv4` is a GICv3 with virtual interrupts added, which a kernel
         // that is not a hypervisor never touches.
-        3 | 4 => {
-            let (base, len) = layout
-                .redistributors
-                .ok_or("the MADT describes a GICv3 with no redistributor range")?;
-            // SAFETY: the caller's contract is `gicv3::init`'s.
-            unsafe { gicv3::init(layout.distributor, base, len)? };
-        }
+        // SAFETY: as above.
+        3 | 4 => unsafe { init_v3(&layout) }.map(|()| 3)?,
         _ => return Err("this GIC is neither a GICv2 nor a GICv3"),
-    }
-    VERSION.store(version.min(3), Ordering::Relaxed);
-    Ok(version.min(3))
+    };
+    VERSION.store(version, Ordering::Relaxed);
+    Ok(version)
 }
 
 /// Find the controller in the device tree and bring it up, returning its
