@@ -1363,3 +1363,9 @@ pub(crate) fn permit_user_access() {}
 
 /// Refuse user pages to this processor again. A no-op, as above.
 pub(crate) fn forbid_user_access() {}
+
+/// No board this architecture boots leaves a watchdog running.
+pub(crate) const fn init_watchdogs(_tree: &ferrix_fdt::Fdt<'_>) {}
+
+/// Nothing to feed: see [`init_watchdogs`].
+pub(crate) const fn start_watchdogs() {}

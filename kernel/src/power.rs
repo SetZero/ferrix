@@ -49,8 +49,7 @@ pub(crate) fn init(view: &BootView<'_>) {
     // Where a board keeps the boot mode `reboot(2)`'s word sets.
     if let Some(tree) = &tree {
         crate::stm32mp1::note_boot_context(tree);
-        #[cfg(target_arch = "aarch64")]
-        arch::gs201::init(tree);
+        arch::init_watchdogs(tree);
     }
     let value = view.option(OPTION).or_else(|| {
         tree.as_ref()

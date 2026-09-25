@@ -1594,8 +1594,7 @@ fn start_scheduler(cpus: &'static smp::Topology) {
     }
     // First thing once a task can run: on the Pixel 7 the watchdogs have
     // been counting since the loader, and the checks below take seconds.
-    #[cfg(target_arch = "aarch64")]
-    arch::gs201::start();
+    arch::start_watchdogs();
     if !checks::run() {
         return;
     }

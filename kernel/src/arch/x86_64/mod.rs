@@ -1437,3 +1437,9 @@ pub(crate) fn clean_for_device(start: u64, len: u64) {
 pub(crate) fn flush_for_device(start: u64, len: u64) {
     let _ = (start, len);
 }
+
+/// No board this architecture boots leaves a watchdog running.
+pub(crate) const fn init_watchdogs(_tree: &ferrix_fdt::Fdt<'_>) {}
+
+/// Nothing to feed: see [`init_watchdogs`].
+pub(crate) const fn start_watchdogs() {}

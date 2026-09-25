@@ -26,10 +26,6 @@ mod x86_64;
 /// `crate::syscall::stat::StatLayout`, and the trusted core therefore depended
 /// on the Linux personality for a constant. Data here, behaviour there, and
 /// the dependency points the way `scripts/check-item-boundary.py` requires.
-/// The Pixel 7's watchdogs: fed while the kernel runs, fired to reset it.
-#[cfg(target_arch = "aarch64")]
-pub(crate) use aarch64::gs201;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum StatLayout {
     /// x86-64's own, from `arch/x86/include/uapi/asm/stat.h`: 144 bytes. It
@@ -94,6 +90,14 @@ pub(crate) use armv7a::{
     take_console_byte, timer_arm, timer_disarm, timer_irq, uninstall_user_root, unmask_interrupt,
     user_hwcaps, user_platform, wait_for_interrupt, wait_for_work,
 };
+// The watchdogs a board's firmware leaves running: found at boot, fed once
+// the scheduler can run a task, fired to reset. Only the Pixel 7's today.
+#[cfg(target_arch = "aarch64")]
+pub(crate) use aarch64::{init_watchdogs, start_watchdogs};
+#[cfg(target_arch = "arm")]
+pub(crate) use armv7a::{init_watchdogs, start_watchdogs};
+#[cfg(target_arch = "x86_64")]
+pub(crate) use x86_64::{init_watchdogs, start_watchdogs};
 // The program stage 13's `CLONE_INTO_CGROUP` check runs.
 #[cfg(target_arch = "aarch64")]
 pub(crate) use aarch64::USER_INTO_CGROUP_PROGRAM;

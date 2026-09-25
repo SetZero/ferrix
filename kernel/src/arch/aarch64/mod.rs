@@ -4,7 +4,7 @@ pub(crate) mod console;
 mod cpu;
 mod gic;
 mod gicv3;
-pub(crate) mod gs201;
+mod gs201;
 mod signal;
 mod smp;
 mod switch;
@@ -1073,6 +1073,17 @@ pub(crate) fn shutdown() -> ! {
     gs201::reset_now();
     cpu::psci_system_off();
     halt()
+}
+
+/// Find the watchdogs the device tree lists that firmware left running --
+/// the Pixel 7's two -- and feed them once. Nothing elsewhere.
+pub(crate) fn init_watchdogs(tree: &ferrix_fdt::Fdt<'_>) {
+    gs201::init(tree);
+}
+
+/// Start the task that keeps feeding them, once the scheduler can run one.
+pub(crate) fn start_watchdogs() {
+    gs201::start();
 }
 
 /// Reset the machine, once the console has sent its last line.
