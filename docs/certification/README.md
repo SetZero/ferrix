@@ -15,6 +15,7 @@ everywhere it matters.
 None of the four can be claimed today. What changed is that the reasons are now
 specific, measured, and mostly documents rather than code.
 
+* [TODO.md](TODO.md) — **start here if you are continuing this work**
 * [ITEM.md](ITEM.md) — what the ratings attach to, and why it is not all of Ferrix
 * [FINDINGS.md](FINDINGS.md) — the audit register, 31 open findings and 3 closed
 * [SECURITY-TARGET.md](SECURITY-TARGET.md) — EAL5+ claim, SFRs, and where it would fail evaluation
