@@ -90,6 +90,33 @@ cp "$archive" "$runtime"
 grep -v '^ferrousli-' "$work/members" | xargs -r ar d "$own"
 grep '^ferrousli-' "$work/members" | xargs -r ar d "$runtime"
 
+# Where glibc's `libc.so.6` exports GNU's variant under a name whose POSIX
+# variant this library's header declares -- `strerror_r`, returning the
+# message rather than an `int` -- the library defines GNU's as
+# `__ferrousli_gnu_<name>`, and here the two swap names: the static library
+# keeps POSIX's, and `libc.so.6` answers GNU's, as glibc's does.
+nm -g --defined-only "$own" 2> /dev/null \
+    | awk 'NF == 3 { sub(/^__ferrousli_gnu_/, "", $3) && gnu[$3] = 1 } END { for (n in gnu) print n }' \
+    | sort > "$work/gnu"
+# The toolchain's llvm-objcopy, which `rust-toolchain.toml`'s `llvm-tools`
+# installs: the host's binutils cannot read the Arm objects, and said so
+# only as a warning.
+if [ -s "$work/gnu" ]; then
+    host=$(rustc -vV | sed -n 's/^host: //p')
+    objcopy=$(rustc --print sysroot)/lib/rustlib/$host/bin/llvm-objcopy
+    swaps=()
+    while read -r name; do
+        swaps+=(--redefine-sym "$name=__ferrousli_posix_$name")
+        swaps+=(--redefine-sym "__ferrousli_gnu_$name=$name")
+    done < "$work/gnu"
+    "$objcopy" "${swaps[@]}" "$own"
+    if nm -g --defined-only "$own" 2> /dev/null | grep -q ' __ferrousli_gnu_'; then
+        echo "build-shared: a GNU variant kept its own name:" \
+            "$(nm -g --defined-only "$own" 2> /dev/null | grep -o '__ferrousli_gnu_[A-Za-z0-9_]*' | sort -u)" >&2
+        exit 1
+    fi
+fi
+
 # The C names the library defines. Rust's own symbols, the compiler's
 # anonymous ones, the library's own `__ferrousli_` internals, and the literal
 # `name@VERSION` aliases a static link needs (the version script below gives

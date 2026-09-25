@@ -377,13 +377,26 @@ pub extern "C" fn strerrordesc_np(error: c_int) -> *const c_char {
 ///
 /// glibc's own `strerror_r` symbol is the GNU version, which returns a
 /// `char *`. The header this library ships declares the XSI one, so that is
-/// what the name exports.
+/// what the name exports from the static library; linked as `libc.so.6` in
+/// glibc's place, the name is [`__ferrousli_gnu_strerror_r`] instead.
 ///
 /// # Safety
 ///
 /// `buf` must be valid for writing `len` bytes.
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub unsafe extern "C" fn strerror_r(error: c_int, buf: *mut c_char, len: usize) -> c_int {
+    // SAFETY: the caller's contract.
+    unsafe { xsi_strerror_r(error, buf, len) }
+}
+
+/// [`strerror_r`]'s work, called by it and by [`__xpg_strerror_r`] as a Rust
+/// function: `tools/build-shared.sh` renames the C symbol `strerror_r`, and
+/// a call through that name would follow it to GNU's.
+///
+/// # Safety
+///
+/// As [`strerror_r`].
+unsafe fn xsi_strerror_r(error: c_int, buf: *mut c_char, len: usize) -> c_int {
     let text = error_message(error).to_bytes();
     let Some(room) = len.checked_sub(1) else {
         return e::ERANGE;
@@ -402,6 +415,23 @@ pub unsafe extern "C" fn strerror_r(error: c_int, buf: *mut c_char, len: usize) 
     if text.len() > room { e::ERANGE } else { 0 }
 }
 
+/// GNU's `strerror_r`, which returns the message rather than copying it:
+/// the static text for `error`, which glibc may hand back instead of
+/// filling `buf`, and does for every number it knows.
+///
+/// `tools/build-shared.sh` exports it as `strerror_r` from `libc.so.6`,
+/// where a program or library built against glibc's `<string.h>` with
+/// `_GNU_SOURCE` -- GLib, fontconfig, systemd, Chrome -- asks that name for
+/// this one. Given the XSI one's `int`, they took 0 for a null message.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub extern "C" fn __ferrousli_gnu_strerror_r(
+    error: c_int,
+    _buf: *mut c_char,
+    _len: usize,
+) -> *mut c_char {
+    error_message(error).as_ptr().cast_mut()
+}
+
 /// glibc's exported name for the XSI [`strerror_r`], which its header
 /// selects when a program asks for POSIX rather than GNU.
 ///
@@ -411,7 +441,7 @@ pub unsafe extern "C" fn strerror_r(error: c_int, buf: *mut c_char, len: usize) 
 #[cfg_attr(not(test), unsafe(no_mangle))]
 pub unsafe extern "C" fn __xpg_strerror_r(error: c_int, buf: *mut c_char, len: usize) -> c_int {
     // SAFETY: the caller meets `strerror_r`'s contract.
-    unsafe { strerror_r(error, buf, len) }
+    unsafe { xsi_strerror_r(error, buf, len) }
 }
 
 /// The description of any signal number without one.
