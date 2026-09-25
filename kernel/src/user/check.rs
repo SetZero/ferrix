@@ -727,6 +727,10 @@ fn fault_and_write_installed(
     // below before anything else can want a user address.
     unsafe { space.install(None) };
 
+    // As in `walk_through_installed`: reaching a user linear address from ring
+    // 0 is the point of the check, and SMAP refuses it without `EFLAGS.AC`.
+    arch::permit_user_access();
+
     let through = at as *mut u64;
     // SAFETY: the caller faulted this page in read-only through `space`, which
     // is installed on this processor. This read is what puts the entry the
@@ -740,6 +744,7 @@ fn fault_and_write_installed(
         unsafe { through.write_volatile(value) };
     }
 
+    arch::forbid_user_access();
     // SAFETY: nothing after this wants a user address.
     unsafe { space.uninstall() };
     <arch::Irq as IrqControl>::restore(state);
@@ -767,32 +772,49 @@ fn walk_through_installed(
     // uninstalls before going on.
     unsafe { space.install(None) };
 
-    for index in 0..pages {
-        let virt = base + index * PAGE_SIZE;
-        let written = 0xC0FF_EE00_u64 + round * 0x100 + index;
+    // SMAP refuses ring 0 a user linear address, and reaching one on purpose is
+    // the whole point of this check: it proves the processor walks an installed
+    // space. `arch::permit_user_access` sets `EFLAGS.AC` for exactly this, and
+    // the window closes below. Nothing in the kernel's ordinary paths needs it
+    // -- `syscall::uaccess` goes through the direct map -- which is why this is
+    // the only caller.
+    arch::permit_user_access();
 
-        let at = virt as *mut u64;
-        // SAFETY: the page at `virt` was faulted in by the caller, the region
-        // is writable, and this address space is installed on this processor —
-        // so this is a write to a page of RAM nothing else is using.
-        unsafe { at.write_volatile(written) };
-        // SAFETY: the same address, just written.
-        if unsafe { at.read_volatile() } != written {
-            return Err("a user address did not hold what the processor wrote to it");
-        }
+    // Computed before the window closes, because three of the paths out of
+    // this loop are early returns and an `EFLAGS.AC` left set is SMAP switched
+    // off for this processor until it next enters user mode.
+    let walked = (|| {
+        for index in 0..pages {
+            let virt = base + index * PAGE_SIZE;
+            let written = 0xC0FF_EE00_u64 + round * 0x100 + index;
 
-        // The alias, and the whole point of the check.
-        let Some(phys) = mm::translate_in(space.root_table(), virt) else {
-            return Err("a faulted page does not translate in its own address space");
-        };
-        let alias = mm::direct_map(phys) as *const u64;
-        // SAFETY: `phys` is the frame this space says backs `virt`, and the
-        // direct map covers every frame of RAM.
-        if unsafe { alias.read_volatile() } != written {
-            return Err("a write through a user address did not land in the frame behind it");
+            let at = virt as *mut u64;
+            // SAFETY: the page at `virt` was faulted in by the caller, the
+            // region is writable, and this address space is installed on this
+            // processor — so this is a write to a page of RAM nothing else is
+            // using.
+            unsafe { at.write_volatile(written) };
+            // SAFETY: the same address, just written.
+            if unsafe { at.read_volatile() } != written {
+                return Err("a user address did not hold what the processor wrote to it");
+            }
+
+            // The alias, and the whole point of the check.
+            let Some(phys) = mm::translate_in(space.root_table(), virt) else {
+                return Err("a faulted page does not translate in its own address space");
+            };
+            let alias = mm::direct_map(phys) as *const u64;
+            // SAFETY: `phys` is the frame this space says backs `virt`, and
+            // the direct map covers every frame of RAM.
+            if unsafe { alias.read_volatile() } != written {
+                return Err("a write through a user address did not land in the frame behind it");
+            }
         }
-    }
-    Ok(())
+        Ok(())
+    })();
+
+    arch::forbid_user_access();
+    walked
 }
 
 // ---------------------------------------------------------------------------
@@ -1028,6 +1050,11 @@ static SWAP_WRONG: AtomicU64 = AtomicU64::new(0);
 fn read_own_space(expected: usize) {
     for _ in 0..SWAP_ROUNDS {
         let at = SWAP_AT as *const u64;
+        // Tight around the read, and deliberately not around the loop: the
+        // yield below switches tasks, and `EFLAGS.AC` is part of the context a
+        // switch carries. A window held across it would hand SMAP's exception
+        // to whatever ran next.
+        arch::permit_user_access();
         // SAFETY: this task owns an address space in which `SWAP_AT` is mapped
         // and was faulted in before the task existed, and the scheduler
         // installs that space on whichever processor runs the task, before the
@@ -1035,6 +1062,7 @@ fn read_own_space(expected: usize) {
         // if it does not happen this faults rather than reading rubbish, which
         // is the failure this check wants.
         let seen = unsafe { at.read_volatile() };
+        arch::forbid_user_access();
         if seen == expected as u64 {
             let _ = SWAP_RIGHT.fetch_add(1, Ordering::Relaxed);
         } else {

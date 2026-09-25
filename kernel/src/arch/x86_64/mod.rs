@@ -146,6 +146,29 @@ pub(crate) unsafe fn init_traps() {
     unsafe { gdt::init() };
     // SAFETY: after `gdt::init`, whose kernel code selector every gate names.
     unsafe { trap::init() };
+    // After the IDT, so that a fault this turns on is *reported* rather than
+    // becoming a triple fault, and before user mode so that it covers every
+    // program. Secondary processors inherit it: `smp::secondary_start` copies
+    // the boot processor's `CR4`, snapshotted later in `CpuStarter::new`.
+    let (smep, smap) = cpu::enable_user_access_protection();
+    crate::console::println!(
+        "  cpu      ring 0 kept out of user pages: SMEP {}, SMAP {}",
+        if smep { "on" } else { "unavailable" },
+        if smap { "on" } else { "unavailable" },
+    );
+}
+
+/// Permit this processor to touch user pages until [`forbid_user_access`].
+///
+/// SMAP's `EFLAGS.AC` window. `cpu::permit_user_access` explains why almost
+/// nothing needs it.
+pub(crate) fn permit_user_access() {
+    cpu::permit_user_access();
+}
+
+/// Refuse user pages to this processor again.
+pub(crate) fn forbid_user_access() {
+    cpu::forbid_user_access();
 }
 
 /// Invalidate the whole TLB — this processor's, global entries included.

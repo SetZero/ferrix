@@ -237,7 +237,7 @@ How the TOE meets each objective, with the evidence that exists today.
 | O.DMA | `kernel/src/iommu/{vtd,smmuv3}.rs`; a driver receives an `IoMapping` and a domain. | `iommu/gate.rs`; `scripts/check-device-access.py` holds the seam at build time |
 | O.SCRUB | `mm::zero_frame` on every frame handed to a VMO. | `kernel/src/mm.rs:1140`, called from `user/vmo.rs` at three sites |
 | O.QUOTA | `kernel/src/object/job.rs`. | `object/check.rs` |
-| O.VALIDATE | `kernel/src/syscall/uaccess.rs`. **Software bound check only — SMAP, SMEP and PAN are not enabled** (V-01). | `syscall/check.rs`, 9,537 lines, 427 refusal assertions |
+| O.VALIDATE | `kernel/src/syscall/uaccess.rs`, backed on x86-64 by SMEP and SMAP since 2026-09-25. PAN is still off on both Arm architectures (V-01). | `syscall/check.rs`, 9,537 lines, 427 refusal assertions; the boot reports *SMEP on, SMAP on* |
 | O.FAILSAFE | `kernel/src/panic.rs` with a catalogue of explanations. | `scripts/check-panic-audit.py`; `gen-panic-catalog.py --check` |
 
 ---

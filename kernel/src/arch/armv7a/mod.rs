@@ -1354,3 +1354,12 @@ pub(crate) fn service_interrupts(_frame: &mut TrapFrame, handle: fn(u32)) {
 pub(crate) use switch::{
     UserState, prepare_stack, reset_user_state, restore_user_state, save_user_state, switch_to,
 };
+
+/// Permit this processor to touch user pages. A no-op here: PAN is not
+/// enabled on armv7a, so nothing in the hardware refuses the access that
+/// `permit_user_access` exists to allow. Finding F-32 tracks turning it on,
+/// and when it is, this is where the `PAN` toggle goes.
+pub(crate) fn permit_user_access() {}
+
+/// Refuse user pages to this processor again. A no-op, as above.
+pub(crate) fn forbid_user_access() {}

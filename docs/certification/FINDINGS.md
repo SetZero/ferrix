@@ -267,7 +267,32 @@ It also corrected an error in the Security Target it was written against, which
 is the most useful thing it did. See F-32.
 
 ### F-32 — no SMAP, SMEP or PAN; one software check guards kernel memory
-**Major.** `uaccess.rs` says so in its own header and the code confirms it: no
+**Closed on x86-64, 2026-09-25**; open on AArch64 (PAN) and ARMv7-A.
+`CR4.SMEP` and `CR4.SMAP` are set in `init_traps` when CPUID reports them, and
+secondary processors inherit them through the `CR4` snapshot
+`smp::secondary_start` already copied. The boot says so:
+*"cpu   ring 0 kept out of user pages: SMEP on, SMAP on"*.
+
+**Turning it on found three real violations, and all three are in test code.**
+`user/check.rs` installs an address space and reaches a user linear address on
+purpose — to prove the processor walks an installed space, and to prove a
+task's own space is the one installed when it runs. SMAP refused each, loudly:
+a page fault at 0x50000000, then 0x30000000. They are bracketed with
+`arch::permit_user_access` / `forbid_user_access`, `EFLAGS.AC` via `stac` and
+`clac`, with the window kept tight around the access in the case that yields,
+since `AC` is part of the context a switch carries.
+
+**No product-code path needed one.** That is the result worth having: the claim
+in `uaccess`'s header — that every legitimate access to a program's memory goes
+through the direct map and never through a user linear address — is now
+enforced by hardware rather than asserted, and it survived `test-boot`,
+`test-threads` and `test-vfs`.
+
+Residual (V-01 remains partly open): PAN is not enabled on AArch64 and ARMv7-A,
+where `permit_user_access` is a no-op and the software bound check is still the
+only barrier. Original text follows.
+
+**Was:** **Major.** `uaccess.rs` says so in its own header and the code confirms it: no
 `CR4.SMAP` or `CR4.SMEP` bit is set on x86-64, no `PAN` on AArch64. The bound
 check in `uaccess` is the only thing between a user pointer and a read or write
 of kernel memory at kernel privilege (V-01), and it bears on three of the seven

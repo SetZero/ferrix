@@ -6,6 +6,7 @@
 //! not because assembly is convenient.
 
 use core::arch::asm;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 /// Write a byte to an I/O port.
 ///
@@ -68,6 +69,106 @@ pub(crate) fn disable_interrupts() {
 /// `CR4.PGE` — the bit that makes the global bit in a page table entry mean
 /// anything. The loader sets it; see `boot/src/arch/x86_64.rs`.
 const CR4_PGE: u64 = 1 << 7;
+
+/// `CR4.SMEP` — the processor refuses to *execute* a user page in ring 0.
+const CR4_SMEP: u64 = 1 << 20;
+
+/// `CR4.SMAP` — the processor refuses to *read or write* a user page in ring 0
+/// unless `EFLAGS.AC` is set.
+const CR4_SMAP: u64 = 1 << 21;
+
+/// Turn on the hardware that keeps ring 0 out of user pages.
+///
+/// # Why this is safe to switch on without auditing every access
+///
+/// SMAP faults a kernel access to a user *linear* address, and this kernel
+/// makes none. Every system call that takes a pointer goes through
+/// `crate::syscall::uaccess`, which resolves the address through the target
+/// [`AddressSpace`] and reaches the page through the **direct map** — a kernel
+/// address — precisely so that it works on a space that is not installed on
+/// this processor, which is what `execve` needs. So the paths that legitimately
+/// touch a program's memory are already invisible to SMAP, and nothing needs
+/// `stac`/`clac` around it.
+///
+/// That makes this cheap to turn on and worth having: what SMAP now catches is
+/// the case `uaccess`'s own header calls out as the one nothing in the hardware
+/// was stopping — a path that dereferences a user pointer directly, whether by
+/// a future mistake or a wild pointer. Until now the bound check in `uaccess`
+/// was the only barrier, which `docs/certification/VULNERABILITY-ANALYSIS.md`
+/// records as V-01 and finding F-32.
+///
+/// SMEP is the same argument for instruction fetches, and there is no
+/// legitimate case at all: the kernel never executes a user page.
+///
+/// # What happens if the premise is wrong
+///
+/// A page fault with the reserved-bit-clear, user-page, supervisor-mode
+/// signature, reported by `report_trap` like any other. That is the intended
+/// outcome — it is the bug being made visible — and it is why this is enabled
+/// before user mode rather than quietly at the end of boot.
+///
+/// Returns which of the two the processor had, for the boot log.
+pub(crate) fn enable_user_access_protection() -> (bool, bool) {
+    use core::arch::x86_64::{__cpuid, __cpuid_count};
+
+    // Leaf 7 is only read when leaf 0 says it exists.
+    if __cpuid(0).eax < 7 {
+        return (false, false);
+    }
+    let features = __cpuid_count(7, 0).ebx;
+
+    let smep = features & (1 << 7) != 0;
+    let smap = features & (1 << 20) != 0;
+
+    let mut cr4 = read_cr4();
+    if smep {
+        cr4 |= CR4_SMEP;
+    }
+    if smap {
+        cr4 |= CR4_SMAP;
+    }
+    // SAFETY: each bit is set only when CPUID reported the feature, and both
+    // are legal in long mode with the four-level table already in force.
+    unsafe { write_cr4(cr4) };
+    SMAP_ON.store(smap, Ordering::Relaxed);
+
+    (smep, smap)
+}
+
+/// Whether `stac` and `clac` may be executed at all.
+///
+/// They are SMAP's instructions: on a processor without the feature they are
+/// `#UD`, so the flag is read before either is issued rather than assuming the
+/// hardware that [`enable_user_access_protection`] found.
+static SMAP_ON: AtomicBool = AtomicBool::new(false);
+
+/// Permit this processor to touch user pages until [`forbid_user_access`].
+///
+/// Sets `EFLAGS.AC`, which is the exception SMAP is built around. Almost
+/// nothing needs it: `crate::syscall::uaccess` reaches a program's memory
+/// through the direct map and never through a user linear address, so the
+/// ordinary path is already invisible to SMAP. What needs it is the deliberate
+/// case — `crate::user::check` installs an address space and reads back
+/// through the user address *on purpose*, to prove the processor walks an
+/// installed space, and that is exactly the access SMAP exists to refuse.
+///
+/// Keep the window as short as the access. An `AC` left set is SMAP switched
+/// off for this processor.
+pub(crate) fn permit_user_access() {
+    if SMAP_ON.load(Ordering::Relaxed) {
+        // SAFETY: `stac` sets one flag, and is only reached when CPUID
+        // reported SMAP, without which it would be an undefined instruction.
+        unsafe { asm!("stac", options(nomem, nostack)) };
+    }
+}
+
+/// Refuse user pages to this processor again.
+pub(crate) fn forbid_user_access() {
+    if SMAP_ON.load(Ordering::Relaxed) {
+        // SAFETY: `clac` clears one flag, under the same guard as `stac`.
+        unsafe { asm!("clac", options(nomem, nostack)) };
+    }
+}
 
 /// Invalidate the whole `TLB`, **including global entries**.
 ///
