@@ -1,0 +1,17 @@
+[package]
+name = "ferrix-boot-pixel7"
+description = "Second-stage loader that starts Ferrix from the Pixel 7's Android bootloader"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "ferrix-boot-pixel7"
+path = "src/main.rs"
+test = false
+bench = false
+
+[lints]
+workspace = true

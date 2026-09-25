@@ -73,6 +73,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferrix-boot-pixel7"
+version = "0.1.0"
+
+[[package]]
 name = "ferrix-bootinfo"
 version = "0.1.0"
 
