@@ -26,6 +26,10 @@ mod x86_64;
 /// `crate::syscall::stat::StatLayout`, and the trusted core therefore depended
 /// on the Linux personality for a constant. Data here, behaviour there, and
 /// the dependency points the way `scripts/check-item-boundary.py` requires.
+/// The Pixel 7's watchdogs: fed while the kernel runs, fired to reset it.
+#[cfg(target_arch = "aarch64")]
+pub(crate) use aarch64::gs201;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum StatLayout {
     /// x86-64's own, from `arch/x86/include/uapi/asm/stat.h`: 144 bytes. It

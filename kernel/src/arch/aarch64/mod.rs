@@ -4,6 +4,7 @@ pub(crate) mod console;
 mod cpu;
 mod gic;
 mod gicv3;
+pub(crate) mod gs201;
 mod signal;
 mod smp;
 mod switch;
@@ -1069,7 +1070,7 @@ pub(crate) fn shutdown() -> ! {
     // On the Pixel 7, a watchdog reset instead: powered off, the phone would
     // lose the `ramoops` record that is its whole console. Returns anywhere
     // else.
-    crate::gs201::reset_now();
+    gs201::reset_now();
     cpu::psci_system_off();
     halt()
 }
@@ -1081,7 +1082,7 @@ pub(crate) fn shutdown() -> ! {
 /// carries on as though it had reset is not.
 pub(crate) fn reset() -> ! {
     crate::console::drain();
-    crate::gs201::reset_now();
+    gs201::reset_now();
     cpu::psci_system_reset();
     crate::console::println!("  power    firmware did not reset the machine; powering off");
     shutdown()

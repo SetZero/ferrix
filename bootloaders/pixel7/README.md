@@ -67,7 +67,7 @@ session, including why the phone last reset.
 | Entry | EL2, MMU and caches off, `HCR_EL2` = `0x80000002` |
 | EL2 to EL1 | works with the sequence in `src/entry.rs` |
 | Generic timer | 24.576 MHz |
-| Watchdogs | both **running** at hand-off (`WTCON` bit 5); the kernel feeds them (`kernel/src/gs201.rs`) and ends a boot by firing one |
+| Watchdogs | both **running** at hand-off (`WTCON` bit 5); the kernel feeds them (`kernel/src/arch/aarch64/gs201.rs`) and ends a boot by firing one |
 | Reboot reason | the PMU register at `0x18060810` ignores a non-secure write |
 | Panel | DSI **command mode**, TE-triggered; ABL masks the trigger before hand-off, so a framebuffer write shows only once `TRIG_CON` is unmasked |
 | Display | DECON0 running; window 5 from DPP0; framebuffer 1080 x 2400 at `0xfac00000`, bytes B, G, R, unused (measured); display SysMMU reads as off |
@@ -83,5 +83,5 @@ would need, besides this loader building a `BootInfo`:
 * ~~PSCI's conduit (`smc`) from the device tree rather than the FADT~~ --
   done with the above; secondaries still need an entry that starts at EL2;
 * ~~the watchdogs stopped~~ -- fed instead, so a hang still resets the phone
-  with its log: `kernel/src/gs201.rs`;
+  with its log: `kernel/src/arch/aarch64/gs201.rs`;
 * and, to be useful, drivers: there is no virtio here.

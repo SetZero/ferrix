@@ -22,7 +22,7 @@ you touch the phone.
   | `40215968` | Device-tree path on AArch64 + GICv3 driver (`gicv3.rs`, `gic.rs` front) |
   | `0d0a3d1c` | Docs: boots to stage 12 on one core |
   | `0862480a` | Clippy fix for `gic.rs`; **`40215968` alone fails clippy** |
-  | `502da10b` | `kernel/src/gs201.rs`: feed the watchdogs; end a boot by firing one |
+  | `502da10b` | `kernel/src/arch/aarch64/gs201.rs`: feed the watchdogs; end a boot by firing one |
   | `0d8245ba` | Loader: display dump, first light, park for the watchdog on failure |
   | `40d1715d` | Loader: hand ABL's framebuffer to the kernel as `BootInfo.framebuffer` |
   | `72cca027` | Docs: the screen, and the no-persistent-writes rule |

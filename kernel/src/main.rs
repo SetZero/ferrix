@@ -31,8 +31,6 @@ mod display;
 mod early;
 mod fdt;
 mod fs;
-#[cfg(target_arch = "aarch64")]
-mod gs201;
 mod init;
 mod input;
 mod iommu;
@@ -1597,7 +1595,7 @@ fn start_scheduler(cpus: &'static smp::Topology) {
     // First thing once a task can run: on the Pixel 7 the watchdogs have
     // been counting since the loader, and the checks below take seconds.
     #[cfg(target_arch = "aarch64")]
-    gs201::start();
+    arch::gs201::start();
     if !checks::run() {
         return;
     }

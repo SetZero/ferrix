@@ -50,7 +50,7 @@ pub(crate) fn init(view: &BootView<'_>) {
     if let Some(tree) = &tree {
         crate::stm32mp1::note_boot_context(tree);
         #[cfg(target_arch = "aarch64")]
-        crate::gs201::init(tree);
+        arch::gs201::init(tree);
     }
     let value = view.option(OPTION).or_else(|| {
         tree.as_ref()
