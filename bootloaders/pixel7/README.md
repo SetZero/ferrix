@@ -64,7 +64,7 @@ session, including why the phone last reset.
 | Entry | EL2, MMU and caches off, `HCR_EL2` = `0x80000002` |
 | EL2 to EL1 | works with the sequence in `src/entry.rs` |
 | Generic timer | 24.576 MHz |
-| Watchdogs | both **running** at hand-off (`WTCON` bit 5): the loader must stop them or the phone resets |
+| Watchdogs | both **running** at hand-off (`WTCON` bit 5); the kernel feeds them (`kernel/src/gs201.rs`) and ends a boot by firing one |
 | Reboot reason | the PMU register at `0x18060810` ignores a non-secure write |
 | Panel | DSI **command mode**: it shows only frames the display controller is told to send, so writing a framebuffer changes nothing on screen |
 
@@ -78,5 +78,6 @@ would need, besides this loader building a `BootInfo`:
 * ~~a console that is not the PL011~~ -- done: the `ramoops` record;
 * ~~PSCI's conduit (`smc`) from the device tree rather than the FADT~~ --
   done with the above; secondaries still need an entry that starts at EL2;
-* the watchdogs stopped (`WTCON` at `0x10060000` and `0x10070000`);
+* ~~the watchdogs stopped~~ -- fed instead, so a hang still resets the phone
+  with its log: `kernel/src/gs201.rs`;
 * and, to be useful, drivers: there is no virtio here.

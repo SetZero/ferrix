@@ -1066,6 +1066,10 @@ pub(crate) fn frame_pointer() -> u64 {
 /// Stop the machine, once the console has sent its last line.
 pub(crate) fn shutdown() -> ! {
     crate::console::drain();
+    // On the Pixel 7, a watchdog reset instead: powered off, the phone would
+    // lose the `ramoops` record that is its whole console. Returns anywhere
+    // else.
+    crate::gs201::reset_now();
     cpu::psci_system_off();
     halt()
 }
@@ -1077,6 +1081,7 @@ pub(crate) fn shutdown() -> ! {
 /// carries on as though it had reset is not.
 pub(crate) fn reset() -> ! {
     crate::console::drain();
+    crate::gs201::reset_now();
     cpu::psci_system_reset();
     crate::console::println!("  power    firmware did not reset the machine; powering off");
     shutdown()

@@ -99,13 +99,14 @@ the loader rebuilds in a second. Nothing is ever written to the phone's flash.
   boot, so Android reports "found existing invalid buffer" and the file shows
   ABL's log *followed by* ours. Search for the text; do not trust the header.
   After a normal `adb reboot` the zone came back empty.
-* **Both watchdogs are running at hand-off** (`WTCON` 0x1af39 / 0x18021) and
-  nothing kicks them, so every run ends in a watchdog reset about 90 s after
-  `fastboot boot`. That is currently the feedback loop, so the loader leaves
-  them alone. When the kernel needs to run longer, stop them (clear `WTCON`
-  bits 5 and 0 at `0x10060000` and `0x10070000`, as Linux's `s3c2410_wdt`
-  does) and accept that a hang then needs the owner to hold Power + Volume
-  Down.
+* **Both watchdogs are running at hand-off** (`WTCON` 0x1af39 / 0x18021).
+  Until `pixel7/stage3` nothing fed them and every run ended in a watchdog
+  reset about 90 s after `fastboot boot`. Now `kernel/src/gs201.rs` feeds
+  them every 500 ms from a task (a 120 s hold after BOOT-OK survived), and
+  `shutdown`/`reset` fire one at once instead of calling PSCI: a watchdog
+  reset is the one that keeps the `ramoops` log, and powering off would lose
+  it. A run now takes about 52 s from `fastboot boot` to adb. A hang still
+  resets the phone, with its log, once the task stops running.
 * **PSCI `SYSTEM_RESET` over `smc` is unproven.** The probe logged "resetting"
   and the reset that followed was the watchdog's. Treat reset as "wait for the
   watchdog" until shown otherwise.
