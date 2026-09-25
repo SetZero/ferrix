@@ -44,25 +44,15 @@ use ferrix_linux_abi::types::{
 use ferrix_vfs::dirent::DirentWriter;
 use ferrix_vfs::{Access, Stat, Timespec};
 
-use crate::arch;
+use crate::arch::{self, StatLayout};
 use crate::syscall::fd;
 use crate::syscall::path::{self, Target};
 use crate::syscall::process::Process;
 use crate::syscall::uaccess;
 
-/// Which `struct stat` this architecture's stat calls fill in.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum StatLayout {
-    /// x86-64's own, from `arch/x86/include/uapi/asm/stat.h`: 144 bytes. It
-    /// predates the generic header and was kept rather than replaced.
-    Legacy,
-    /// The generic one, from `include/uapi/asm-generic/stat.h`: 128 bytes.
-    Generic,
-    /// ARMv7-A's `struct stat64`, from `arch/arm/include/uapi/asm/stat.h`:
-    /// 104 bytes, filled by the `64` calls that are all it answers.
-    Stat64,
-}
-
+/// The encoding half of [`arch::StatLayout`], whose variants are declared in
+/// the architecture facade because choosing one is an architecture's business
+/// and laying out the bytes is this module's.
 impl StatLayout {
     /// How many bytes a record in this layout is.
     pub(crate) const fn size(self) -> usize {

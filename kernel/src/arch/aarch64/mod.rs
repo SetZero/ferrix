@@ -42,8 +42,7 @@ pub(crate) const ARCH: Arch = Arch::AArch64;
 /// Which `struct stat` the stat calls fill in: the generic one, 128 bytes,
 /// from `include/uapi/asm-generic/stat.h`, as on every architecture added
 /// after 2011.
-pub(crate) const STAT_LAYOUT: crate::syscall::stat::StatLayout =
-    crate::syscall::stat::StatLayout::Generic;
+pub(crate) const STAT_LAYOUT: super::StatLayout = super::StatLayout::Generic;
 
 /// AArch64's `struct epoll_event`, 16 bytes: not packed, so `data` is
 /// aligned at offset 8.

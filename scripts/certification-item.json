@@ -372,27 +372,6 @@
         "finding": "F-02"
       },
       {
-        "file": "arch/aarch64/mod.rs",
-        "references": "syscall::stat",
-        "from_ring": "core",
-        "to_ring": "load",
-        "finding": "F-03"
-      },
-      {
-        "file": "arch/armv7a/mod.rs",
-        "references": "syscall::stat",
-        "from_ring": "core",
-        "to_ring": "load",
-        "finding": "F-03"
-      },
-      {
-        "file": "arch/x86_64/mod.rs",
-        "references": "syscall::stat",
-        "from_ring": "core",
-        "to_ring": "load",
-        "finding": "F-03"
-      },
-      {
         "file": "device.rs",
         "references": "stm32mp1",
         "from_ring": "core",

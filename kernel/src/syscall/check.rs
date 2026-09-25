@@ -4125,7 +4125,7 @@ mod paths {
     use crate::fs;
     use crate::mm;
     use crate::syscall::process::{self, Process};
-    use crate::syscall::stat::StatLayout;
+    use crate::arch::StatLayout;
     use crate::syscall::{memory, uaccess};
 
     /// What the path checks measured, for the boot log.

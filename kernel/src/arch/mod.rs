@@ -13,6 +13,31 @@ mod armv7a;
 #[cfg(target_arch = "x86_64")]
 mod x86_64;
 
+/// Which `struct stat` this architecture's stat calls fill in.
+///
+/// The choice is an architecture's, so it is stated here beside the other ABI
+/// facts the facade carries — `OPEN_FLAGS`, `EPOLL_EVENT_BYTES` — and each
+/// architecture names one in its `STAT_LAYOUT`. What the bytes *are* is not an
+/// architecture's business: `crate::syscall::stat` owns the encoding and
+/// carries this type's `impl`.
+///
+/// It reads oddly to define a Linux type in the architecture facade until you
+/// try it the other way round, which is how it was: the facade named
+/// `crate::syscall::stat::StatLayout`, and the trusted core therefore depended
+/// on the Linux personality for a constant. Data here, behaviour there, and
+/// the dependency points the way `scripts/check-item-boundary.py` requires.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StatLayout {
+    /// x86-64's own, from `arch/x86/include/uapi/asm/stat.h`: 144 bytes. It
+    /// predates the generic header and was kept rather than replaced.
+    Legacy,
+    /// The generic one, from `include/uapi/asm-generic/stat.h`: 128 bytes.
+    Generic,
+    /// ARMv7-A's `struct stat64`, from `arch/arm/include/uapi/asm/stat.h`:
+    /// 104 bytes, filled by the `64` calls that are all it answers.
+    Stat64,
+}
+
 // Register-level drivers for hardware the architecture that uses them has
 // already found in the machine's description — the MADT on AArch64, the device
 // tree on ARMv7-A. The GICv2 is shared by both Arm architectures. The two

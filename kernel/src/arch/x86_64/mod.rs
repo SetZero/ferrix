@@ -38,8 +38,7 @@ pub(crate) const ARCH: Arch = Arch::X86_64;
 /// Which `struct stat` the stat calls fill in: x86-64's own, 144 bytes, from
 /// `arch/x86/include/uapi/asm/stat.h`. x86-64 kept the layout it grew rather
 /// than adopting the generic one, so this is not the AArch64 answer.
-pub(crate) const STAT_LAYOUT: crate::syscall::stat::StatLayout =
-    crate::syscall::stat::StatLayout::Legacy;
+pub(crate) const STAT_LAYOUT: super::StatLayout = super::StatLayout::Legacy;
 
 /// x86-64's `struct epoll_event`, 12 bytes: `EPOLL_PACKED` in
 /// `include/uapi/linux/eventpoll.h`, so `data` follows `events` with no

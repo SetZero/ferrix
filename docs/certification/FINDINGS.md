@@ -4,7 +4,7 @@ The audit register for the item defined in [ITEM.md](ITEM.md). One entry per
 finding, each naming what was measured, which objective it bears on, and what
 would close it.
 
-31 findings are open and 3 are closed. No finding here is closed by argument:
+30 findings are open and 4 are closed. No finding here is closed by argument:
 a finding closes when the thing it describes stops being true and something in
 the build says so.
 
@@ -14,7 +14,7 @@ met or met without evidence. *Minor* — a defect with no objective attached yet
 
 | | Blocking | Major | Moderate | Minor | Informational |
 |---|---:|---:|---:|---:|---:|
-| Open | 4 | 10 | 12 | 4 | 1 |
+| Open | 4 | 10 | 12 | 3 | 1 |
 
 Blocking: F-20, F-22, F-27, F-28 — a hazard analysis, a safety case,
 independent assessment and a quality management system. Two are documents that
@@ -58,11 +58,11 @@ equivalent) that the personality registers into at init, and `arch/` names only
 that.
 
 ### F-03 — architecture modules name the personality's `StatLayout`
-**Minor.** 3 references; each `arch/*/mod.rs` declares a `STAT_LAYOUT` constant
-typed by `syscall::stat::StatLayout`.
-
-A dependency pointing the wrong way: the personality should ask the arch facade
-which layout it wants, not have the arch facade name a personality type.
+**Closed 2026-09-25.** The `StatLayout` enum moved to `kernel/src/arch/mod.rs`,
+beside the other ABI facts the facade carries; its `impl` stayed in
+`syscall/stat.rs`, which is legal within a crate. Data in the core, behaviour
+in the personality, and the dependency now points downward. 62 upward
+references became 59.
 
 ### F-04 — the core device registry names STM32MP1 board support
 **Minor.** 6 references from `device.rs` into `stm32mp1`, `stm32mp1_gpu` and
