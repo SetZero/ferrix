@@ -57,6 +57,14 @@ pub(crate) fn run(args: &Args) -> Result<()> {
         python("scripts/check-item-boundary.py")
     })?;
 
+    // A coding standard with metrics, which EN 50716 requires and the other
+    // gates did not supply: how complicated one function in the certified item
+    // may be, how long, and whether it calls itself. A ratchet over a recorded
+    // baseline, like the item boundary above it.
+    step("complexity budget", || {
+        python("scripts/check-complexity.py")
+    })?;
+
     // The item links no external crate on any architecture, which is what lets
     // IEC 62304's SOUP obligation be answered with "none" rather than with an
     // anomaly-list evaluation per dependency. That is a property worth

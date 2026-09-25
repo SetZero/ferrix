@@ -1,0 +1,193 @@
+{
+  "//": [
+    "Functions in the certified item at or above the floors in",
+    "scripts/check-complexity.py, with the scores they had when",
+    "recorded. A debt register, not an allowance: an entry may",
+    "improve or vanish freely, and the gate fails when one gets",
+    "worse, when a new one appears, or when a stale entry is",
+    "left behind.",
+    "",
+    "Complexity here is an approximation counting branch tokens,",
+    "not a control-flow graph. The script's docstring says where",
+    "it is wrong."
+  ],
+  "complexity_floor": 15,
+  "lines_floor": 60,
+  "functions": {
+    "arch/aarch64/signal.rs::setup_signal_frame": {
+      "complexity": 23,
+      "lines": 43,
+      "recursive": false
+    },
+    "arch/armv7a/signal.rs::setup_signal_frame": {
+      "complexity": 25,
+      "lines": 40,
+      "recursive": false
+    },
+    "arch/x86_64/signal.rs::setup_signal_frame": {
+      "complexity": 21,
+      "lines": 40,
+      "recursive": false
+    },
+    "arch/x86_64/trap.rs::vector_name": {
+      "complexity": 21,
+      "lines": 21,
+      "recursive": false
+    },
+    "devmgr.rs::start": {
+      "complexity": 24,
+      "lines": 65,
+      "recursive": false
+    },
+    "main.rs::kmain": {
+      "complexity": 14,
+      "lines": 73,
+      "recursive": false
+    },
+    "main.rs::say_booted": {
+      "complexity": 19,
+      "lines": 102,
+      "recursive": false
+    },
+    "pci.rs::check_function": {
+      "complexity": 32,
+      "lines": 69,
+      "recursive": false
+    },
+    "pci/virtio.rs::drive": {
+      "complexity": 29,
+      "lines": 90,
+      "recursive": false
+    },
+    "pci/virtio.rs::probe_out_of_domain": {
+      "complexity": 28,
+      "lines": 62,
+      "recursive": false
+    },
+    "syscall/futex.rs::sys_futex": {
+      "complexity": 16,
+      "lines": 61,
+      "recursive": false
+    },
+    "syscall/futex.rs::wait": {
+      "complexity": 15,
+      "lines": 37,
+      "recursive": false
+    },
+    "syscall/limits.rs::dispatch": {
+      "complexity": 15,
+      "lines": 19,
+      "recursive": false
+    },
+    "syscall/memory.rs::map_file": {
+      "complexity": 20,
+      "lines": 32,
+      "recursive": false
+    },
+    "syscall/memory.rs::sys_madvise": {
+      "complexity": 18,
+      "lines": 42,
+      "recursive": false
+    },
+    "syscall/memory.rs::sys_mmap": {
+      "complexity": 16,
+      "lines": 42,
+      "recursive": false
+    },
+    "syscall/memory.rs::sys_mremap": {
+      "complexity": 16,
+      "lines": 37,
+      "recursive": false
+    },
+    "syscall/mod.rs::descriptors": {
+      "complexity": 38,
+      "lines": 57,
+      "recursive": false
+    },
+    "syscall/mod.rs::dispatch": {
+      "complexity": 16,
+      "lines": 53,
+      "recursive": false
+    },
+    "syscall/mod.rs::with_process": {
+      "complexity": 51,
+      "lines": 68,
+      "recursive": false
+    },
+    "syscall/native.rs::channel_read": {
+      "complexity": 16,
+      "lines": 54,
+      "recursive": false
+    },
+    "syscall/native.rs::channel_write": {
+      "complexity": 22,
+      "lines": 43,
+      "recursive": false
+    },
+    "syscall/native.rs::dispatch": {
+      "complexity": 39,
+      "lines": 88,
+      "recursive": false
+    },
+    "syscall/native.rs::object_wait_async": {
+      "complexity": 16,
+      "lines": 28,
+      "recursive": false
+    },
+    "syscall/native.rs::vmo_copy": {
+      "complexity": 17,
+      "lines": 32,
+      "recursive": false
+    },
+    "syscall/native.rs::vmo_pin": {
+      "complexity": 24,
+      "lines": 38,
+      "recursive": false
+    },
+    "syscall/registry.rs::check": {
+      "complexity": 21,
+      "lines": 32,
+      "recursive": false
+    },
+    "syscall/system.rs::sys_syslog": {
+      "complexity": 16,
+      "lines": 21,
+      "recursive": false
+    },
+    "trap.rs::handle_page_fault": {
+      "complexity": 17,
+      "lines": 50,
+      "recursive": false
+    },
+    "user/space.rs::advise": {
+      "complexity": 15,
+      "lines": 53,
+      "recursive": false
+    },
+    "user/space.rs::advise_region": {
+      "complexity": 32,
+      "lines": 57,
+      "recursive": false
+    },
+    "user/space.rs::fault_private_file": {
+      "complexity": 16,
+      "lines": 54,
+      "recursive": false
+    },
+    "user/space.rs::fork": {
+      "complexity": 19,
+      "lines": 70,
+      "recursive": false
+    },
+    "user/space.rs::protect": {
+      "complexity": 15,
+      "lines": 34,
+      "recursive": false
+    },
+    "user/space.rs::resolve": {
+      "complexity": 22,
+      "lines": 90,
+      "recursive": false
+    }
+  }
+}

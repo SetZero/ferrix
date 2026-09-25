@@ -4,7 +4,7 @@ The audit register for the item defined in [ITEM.md](ITEM.md). One entry per
 finding, each naming what was measured, which objective it bears on, and what
 would close it.
 
-29 findings are open and 6 are closed. No finding here is closed by argument:
+28 findings are open and 7 are closed. No finding here is closed by argument:
 a finding closes when the thing it describes stops being true and something in
 the build says so.
 
@@ -14,7 +14,7 @@ met or met without evidence. *Minor* — a defect with no objective attached yet
 
 | | Blocking | Major | Moderate | Minor | Informational |
 |---|---:|---:|---:|---:|---:|
-| Open | 4 | 9 | 13 | 2 | 1 |
+| Open | 4 | 9 | 12 | 2 | 1 |
 
 Blocking: F-20, F-22, F-27, F-28 — a hazard analysis, a safety case,
 independent assessment and a quality management system. Two are documents that
@@ -269,10 +269,26 @@ is promised for a kernel that also hosts LLVM. Correct, self-aware, and a gap
 that must be declared in any safety case rather than discovered in one.
 
 ### F-25 — no complexity, unit-size or recursion limits
-**Moderate.** Eleven gates enforce unsafe documentation, panic exemptions, the
-assembly budget, device access, crate layering and now the item boundary —
-none bounds cyclomatic complexity, function length or recursion, all of which
-a SIL 2 coding standard must specify with metrics.
+**Closed 2026-09-25** by `scripts/check-complexity.py`, a ratchet over
+`scripts/complexity-baseline.json` in the shape the item-boundary gate uses:
+35 functions in the item sit above a floor, and the gate fails when one gets
+worse, when a new one appears, or when a stale entry is left behind.
+
+The measurement that matters: **no function in the certified item is directly
+recursive.** For a kernel with no guard page under its stack that is worth
+having as an enforced property rather than a belief.
+
+Getting there needed three corrections, each a real defect in the measurement
+rather than in the tree. Matching a bare name called 124 architecture-facade
+shims recursive, because `fn flush_tlb` forwarding to `aarch64::flush_tlb`
+names itself. `drop(x)` inside a `Drop::drop` body is `core::mem::drop`. And
+taking the next `{` after a signature gave every `extern "C"` declaration the
+*following* item's body, which is how the assembly symbol `ferrix_switch` came
+out recursive with borrowed complexity and length scores.
+
+Complexity is an approximation — branch tokens, not a control-flow graph — and
+the script's docstring says so, along with the two kinds of recursion it cannot
+see: mutual, and through a function pointer or trait object.
 
 ### F-26 — `unsafe` is documented but not traced
 **Moderate.** 662 blocks, every one with a `SAFETY:` comment, one operation
