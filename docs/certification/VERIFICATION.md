@@ -27,7 +27,7 @@ structural coverage measurement at all. As of 2026-09-25 it does, via QEMU's
 
 | Layer | Mechanism | Scale |
 |---|---|---|
-| In-kernel self-tests | `check.rs` / `*_check.rs`, run on every boot | **31,107 lines**, 29 files |
+| In-kernel self-tests | `check.rs` / `*_check.rs`, run on every boot | **31,135 lines**, 29 files |
 | Boot gates | `cargo xtask test-*` under QEMU | 18 commands, 3 architectures |
 | Host unit tests | `cargo test` over `libs/` | ~1,950 plus doc tests (2026-09-23), `xtask` 242 |
 | UB detection | `cargo miri test` | 13 crates |
@@ -151,8 +151,9 @@ statement coverage. This is that measurement, for ring-0 code, on every
 architecture and both profiles in the reference configuration, without
 modifying the toolchain.
 
-**What it does not.** 71.4% is not 100%, and the residual is neither covered
-nor justified as unreachable (F-10). The Arm architectures have only a single
+**What it does not.** 81.9% is not 100%. The residual is enumerated and
+sorted in [COVERAGE-RESIDUAL.md](COVERAGE-RESIDUAL.md), and 1,054 of its 1,278
+statements still need a test rather than an argument (F-10). The Arm architectures have only a single
 gate's worth of data, not the suite (F-12 is closed in the sense that they can
 now be measured; raising them is part of F-10). There is no decision or MC/DC
 coverage, which DAL C does not require and DAL B and A do (F-13).
@@ -169,7 +170,7 @@ Everything in §2 and §3 verifies *behaviour*. Almost none of it is linked to a
 `docs/sysml/` carries 33 requirements with stable ids and 32 `verify` /
 `objective` links — real bidirectional traceability, and better than most
 projects have. But those requirements are at system level (`<'G.1'>` kernel
-threads, `<'G.2'>` address-space scale), and 48,887 lines of item product code
+threads, `<'G.2'>` address-space scale), and 49,431 lines of item product code
 trace to 33 of them.
 
 No test names a requirement id. The boot gates assert that 16 of 16 interrupt
@@ -183,7 +184,7 @@ for the item's modules, and a requirement id attached to each assertion.
 
 The [Security Target](SECURITY-TARGET.md) §7 is the first piece of that work: it
 maps each of eight security objectives to the code implementing it and the test
-exercising it. Eight objectives is not 48,887 lines of traceability, but it is
+exercising it. Eight objectives is not 49,431 lines of traceability, but it is
 the shape the rest should take.
 
 ---

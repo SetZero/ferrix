@@ -15,8 +15,8 @@ that does not exist.
 
 | Target | Standard | Verdict |
 |---|---|---|
-| EAL5+ | Common Criteria (ISO/IEC 15408) | **Not met.** Security Target now written; blocked on a vulnerability analysis and design evidence at module granularity. |
-| DAL C | DO-178C / ED-12C | **Not met.** The coverage blocker is retired; planning data and requirements traceability are not. |
+| EAL5+ | Common Criteria (ISO/IEC 15408) | **Not met.** Security Target and vulnerability analysis written; blocked on design evidence at module granularity, the boundary's 48 upward references, and an accredited laboratory. |
+| DAL C | DO-178C / ED-12C | **Not met.** Coverage is measured, at 81.9%; planning data, requirements traceability and the 1,054 statements that still need a test are not done. |
 | Class C | IEC 62304 | **Closest of the four.** No SOUP in the item; element-level safety analysis written. Blocked on a QMS and the integrator's risk file. |
 | SIL 2 | EN 50716:2023 | **Reachable.** Most of Annex A satisfied; generic software argument and application conditions written. Blocked on independent assessment. |
 
@@ -58,7 +58,7 @@ The item is a **49,431-line subset of the kernel**, defined in
 enforced on every build by `scripts/check-item-boundary.py`. Memory protection,
 scheduling, capability objects, the trap and syscall entry paths, the IOMMU,
 SMP and device enumeration are inside; the VFS, btrfs, the network stack, the
-Linux personality and the drivers are uncertified load above it, 44,203 lines
+Linux personality and the drivers are uncertified load above it, 44,215 lines
 of it.
 
 The boundary is nested so it can ratchet inward: a 38,989-line `core` ring is
@@ -71,8 +71,8 @@ boundary.
 | | |
 |---|---:|
 | Item product code | 49,431 lines |
-| Uncertified load | 44,203 lines |
-| In-kernel self-tests | 31,107 lines |
+| Uncertified load | 44,215 lines |
+| In-kernel self-tests | 31,135 lines |
 | Statement coverage, certified item | **81.9%** |
 | Statement coverage, core ring | 80.4% |
 | Unreached statements | 1,278 — **103 argued, 1,054 need a test** |
@@ -114,13 +114,18 @@ the code and the test that exercises it.
 
 *Also written:* [VULNERABILITY-ANALYSIS.md](VULNERABILITY-ANALYSIS.md),
 closing F-21a — `AVA_VAN.4` over all seven threats, with five residual
-vulnerabilities. It found that **no SMAP, SMEP or PAN is enabled** (F-32), so
-one software bound check is the only barrier between a user pointer and kernel
+vulnerabilities. It found that **no SMAP, SMEP or PAN was enabled** (F-32), so
+one software bound check was the only barrier between a user pointer and kernel
 memory, and it corrected this ST's own claim to the contrary.
 
-*Missing:* F-32 itself, which is now the most serious open technical finding.
-Design evidence at module granularity for `ADV_TDS.3`; the SysML model
-describes Ferrix, not the TOE (F-15). And the TOE claims neither audit nor
+*Fixed since:* F-32. SMEP and SMAP are on for x86-64, and PAN is implemented
+for AArch64. The reference `cortex-a72` is ARMv8.0 and lacks PAN, and ARMv7-A
+cannot have it at all, so V-01 still stands on Arm (AoU-6).
+
+*Missing:* Design evidence at module granularity for `ADV_TDS.3`; the SysML model
+describes Ferrix, not the TOE (F-15). The TSF still has 48 upward references into the load ring
+(`ADV_INT.2`, F-01 to F-09). There are no side-channel defences and no layout
+randomisation (F-31). And the TOE claims neither audit nor
 authentication (F-21b), which is defensible for an isolation kernel and is why
 no Protection Profile is claimed.
 
@@ -191,20 +196,30 @@ unexamined gap (F-23, AoU-5).
 
 In order of value per unit of effort:
 
-1. **Run a vulnerability analysis against the ST's threat model (F-21a).** The
-   Security Target now states seven threats; nothing has systematically tried
-   to realise them. It is the last EAL5 gap that is engineering rather than
-   paperwork.
-2. **Extract `Process` into the core (F-01).** Twelve of the 62 boundary
-   violations are one misplaced type, and it is the most-cited structural
-   defect in the register.
-3. **Trace tests to requirements (F-14, F-15).** The boot gates already assert
-   rich properties; they need requirement ids attached and low-level
-   requirements to attach them to.
+1. **Split `Process` into a core object and a POSIX extension (F-01, W-1).**
+   Ten of the 48 remaining boundary references are this one type, most of
+   F-09's fourteen are downstream of it, and it is the most-cited structural
+   defect in the register. It is a redesign of the task, thread and process
+   ownership chain, not a file move; IMPLEMENTATION.md says why.
+2. **Trace tests to requirements (F-14, F-15, W-8).** The boot gates already
+   assert rich properties; they need requirement ids attached and low-level
+   requirements to attach them to. This one piece of work unblocks DAL C,
+   62304 §5.4 and `ADV_TDS.3`.
+3. **Cover the 1,054 statements that need a test (F-10).** Four gates —
+   `test-btrfs`, `test-shell`, `test-sysfs`, `test-restart` — write an empty
+   trace because they end by killing QEMU; powering the guest down instead is
+   the cheapest part. The two Arm architectures have one gate's worth of data
+   each and want the suite.
 4. **Adopt Ferrocene (F-17).** A qualified toolchain is the difference between
    "written in a memory-safe language" as a talking point and as evidence.
-5. **Raise coverage past 71.4% and measure the release profile on all three
-   architectures (F-10 to F-12).** The tooling exists; nobody has run it.
+   Whether it covers `armv7a-none-eabi` and the UEFI targets is the first
+   question.
+5. **Invert the remaining boundary references (F-04, F-07, F-08).** Board
+   support, the native dispatcher and bring-up still name the load ring.
+
+Done since the audit began: the vulnerability analysis (F-21a), SMEP, SMAP and
+PAN (F-32), the release profile and both Arm architectures measured (F-11,
+F-12), and the complexity and recursion gate (F-25).
 
 ## 5. What cannot be fixed from here
 

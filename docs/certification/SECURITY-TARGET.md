@@ -28,7 +28,7 @@ running as unprivileged user processes.
 
 ### 1.2 Physical and logical scope
 
-The TOE is the `core` and `item` rings of [ITEM.md](ITEM.md): **48,887 lines of
+The TOE is the `core` and `item` rings of [ITEM.md](ITEM.md): **49,431 lines of
 Rust**, built for x86-64, AArch64 and ARMv7-A from the reference configuration.
 It comprises the memory manager (buddy allocator, VMOs, address spaces, page
 tables), the scheduler, the capability object system (handles, channels, ports,
@@ -70,7 +70,7 @@ CC Part 2 conformant, CC Part 3 conformant, EAL5 augmented with ALC_FLR.2.
 ### 2.2 Rationale for the assurance level
 EAL5 is the highest level whose `ADV_IMP.1` (implementation representation of
 the TSF, sampled) and `ADV_INT.2` (well-structured internals) are plausible for
-a 48,887-line TOE with the evidence described in §8. EAL6 requires `ADV_SPM`, a
+a 49,431-line TOE with the evidence described in §8. EAL6 requires `ADV_SPM`, a
 formal security policy model, and `ADV_IMP.2` over the complete implementation
 representation; neither is available, and [ITEM.md](ITEM.md) §3 names the
 `core` ring as where that would later be attempted.
@@ -237,7 +237,7 @@ How the TOE meets each objective, with the evidence that exists today.
 | O.DMA | `kernel/src/iommu/{vtd,smmuv3}.rs`; a driver receives an `IoMapping` and a domain. | `iommu/gate.rs`; `scripts/check-device-access.py` holds the seam at build time |
 | O.SCRUB | `mm::zero_frame` on every frame handed to a VMO. | `kernel/src/mm.rs:1140`, called from `user/vmo.rs` at three sites |
 | O.QUOTA | `kernel/src/object/job.rs`. | `object/check.rs` |
-| O.VALIDATE | `kernel/src/syscall/uaccess.rs`, backed on x86-64 by SMEP and SMAP since 2026-09-25. PAN is still off on both Arm architectures (V-01). | `syscall/check.rs`, 9,537 lines, 427 refusal assertions; the boot reports *SMEP on, SMAP on* |
+| O.VALIDATE | `kernel/src/syscall/uaccess.rs`, backed on x86-64 by SMEP and SMAP since 2026-09-25, and on AArch64 by PAN where the CPU has it. The reference `cortex-a72` does not, and ARMv7-A cannot (V-01). | `syscall/check.rs`, 9,537 lines, 427 refusal assertions; the boot reports *SMEP on, SMAP on* |
 | O.FAILSAFE | `kernel/src/panic.rs` with a catalogue of explanations. | `scripts/check-panic-audit.py`; `gen-panic-catalog.py --check` |
 
 ---
@@ -263,7 +263,7 @@ than one, since they are the threats the TOE exists to address.
 | O.FAILSAFE | FPT_FLS.1 |
 
 ### 8.3 Why EAL5 is the right claim
-§2.2. The three arguments that carry it: the TOE is 48,887 lines and 100%
+§2.2. The three arguments that carry it: the TOE is 49,431 lines and 100%
 first-party source, so `ADV_IMP.1` is satisfiable; the reference configuration
 has zero Cargo features, so there is no configuration space to enumerate; and
 eleven build-time gates support `ADV_INT.2`'s well-structuredness in a way
@@ -292,14 +292,19 @@ burden, which is a large assumption to place on the environment.
 ### 9.3 The vulnerability analysis found a single point of failure
 [VULNERABILITY-ANALYSIS.md](VULNERABILITY-ANALYSIS.md) now covers `AVA_VAN.4`
 over all seven threats. It found five residual vulnerabilities, of which V-01
-bears on three: **no SMAP, SMEP or PAN is enabled**, so the software bound
-check in `uaccess` is the only barrier between a user pointer and kernel
+bears on three: **no SMAP, SMEP or PAN was enabled**, so the software bound
+check in `uaccess` was the only barrier between a user pointer and kernel
 memory at kernel privilege.
+
+F-32 has since enabled SMEP and SMAP on x86-64 and PAN on AArch64, and no
+product-code path needed an access window. V-01 remains on Arm: the reference
+`cortex-a72` is ARMv8.0 and lacks PAN, and the Cortex-A7 of ARMv7-A cannot
+have it. There the bound check is still the only barrier.
 
 An earlier draft of this ST claimed SMAP and PAN were enforced. That was wrong
 — the tree's 56 apparent references to "smap" are `smap_base` and `smap_len`,
 the system memory map — and §7 is corrected above. The mitigation is sound and
-centralised; it has no hardware defence in depth.
+centralised; on Arm it still has no hardware defence in depth.
 
 ### 9.4 The design evidence does not yet reach the TOE's modules
 `ADV_TDS.3` needs a semiformal design decomposing the TSF into subsystems and
@@ -307,7 +312,8 @@ modules. `docs/sysml/` is the right notation and describes Ferrix rather than
 the TOE, at system granularity (F-15).
 
 ### 9.5 The TSF is not free of upward dependencies
-62 references reach from the TOE into the uncertified load ring (F-01 to F-09),
-including from the trap return path. An evaluator would reasonably ask whether
+48 references reach from the TOE into the uncertified load ring (F-01 to F-09),
+down from 62. The trap return path no longer reaches the load ring (F-02, F-02a);
+the architecture trap entries still name the item ring's syscall dispatcher. An evaluator would reasonably ask whether
 the TSF boundary is real, and the honest answer today is that it is enforced
 and not yet clean.

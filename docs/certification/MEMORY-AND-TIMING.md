@@ -134,8 +134,8 @@ Real, and narrower than a WCET:
 ### 2.4 An honest note on the boundary
 
 The item boundary helps here more than anywhere else. A WCET argument over
-93,714 lines including btrfs and a TCP stack is not a project anybody would
-start. Over the 38,719-line `core` ring, with no dynamic allocation on the RT
+93,646 lines including btrfs and a TCP stack is not a project anybody would
+start. Over the 38,989-line `core` ring, with no dynamic allocation on the RT
 path and no recursion anywhere (`scripts/check-complexity.py` establishes the
 second), it is at least conceivable. It has not been started.
 

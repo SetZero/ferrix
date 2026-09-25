@@ -29,12 +29,14 @@ of use, which is how every general-purpose certified kernel handles them.
 
 ## A. Boundary integrity
 
-Measured by `scripts/check-item-boundary.py`; 62 upward references in 27 files.
+Measured by `scripts/check-item-boundary.py`; 48 upward references in 19 files,
+from 62 in 27 when the audit began.
 These are recorded in `scripts/certification-item.json` as a debt register that
 may shrink freely and may not grow.
 
 ### F-01 — the `Process` type is a core concept living in the Linux personality
-**Major.** 12 references from `core` into `syscall::process`, for `Process`,
+**Major.** 10 references from `core` into `syscall::process` (12 when the audit
+began), for `Process`,
 `ProcessRef` and `current()`.
 
 A process *is* the address-space and capability container the core enforces
@@ -44,8 +46,11 @@ isolation between, so the core is right to need it. But it is defined in
 almost entirely untrusted. EAL5 `ADV_INT.2` asks for well-structured internals
 and this is the clearest counter-example in the item.
 
-*Closes when:* `Process`, `ProcessRef` and `current()` move to
-`kernel/src/object/process.rs` and the 12 references point into `core`.
+*Closes when:* the core fields of `Process` (space, pid, handles, start time)
+live in `kernel/src/object/process.rs` with `ProcessRef` and `current()`, the
+POSIX state stays in the personality, and the 10 references point into `core`.
+Moving the type whole would drag the fd table, filesystem context and signal
+state into the core; IMPLEMENTATION.md W-1 says why that is the wrong change.
 
 ### F-02 — the trap return path calls signal delivery directly
 **Closed 2026-09-25.** Six of the seven references are gone. The frame types
@@ -105,7 +110,7 @@ happens to be serving it. Moved to `kernel/src/claim.rs`; `block_ring`,
 `render`, `display` and `native` now answer with the core's type.
 
 ### F-06 — core names two item-ring modules
-**Minor.** 4 references from `object/job.rs` and `sched/` into
+**Minor.** 3 references from `object/job.rs` and `sched/` into
 `syscall::registry` and `syscall::thread`. Inner-ring only: it does not affect
 the present ratings, and it is on the ratchet's path to an EAL6+/ASIL D `core`.
 
@@ -214,7 +219,7 @@ requirements with the design between them; 62304 §5.4 needs detailed design
 down to the software *unit*; EN 50716 needs a Software Requirements
 Specification traced to components.
 
-48,887 lines of item product code trace to 33 requirements.
+49,431 lines of item product code trace to 33 requirements.
 
 ### F-16 — requirements are narrative, not verifiable
 **Major.** They are prose doc comments (*"Forces: 1:1 kernel threads, a real
@@ -448,8 +453,8 @@ and what each standard therefore does and does not get. It also notes that DAL
 C does not require WCET as such, so this is not what blocks that rating; the
 absence of any stated timing requirement to verify is, and that is F-15.
 
-The boundary helps here more than anywhere: a WCET argument over 93,714 lines
-including btrfs and a TCP stack is not a project; over the 38,719-line `core`
+The boundary helps here more than anywhere: a WCET argument over 93,646 lines
+including btrfs and a TCP stack is not a project; over the 38,989-line `core`
 ring, with no recursion anywhere, it is at least conceivable.
 
 ### F-25 — no complexity, unit-size or recursion limits

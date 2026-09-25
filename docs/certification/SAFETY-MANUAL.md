@@ -30,7 +30,7 @@ still has to happen. It happens at the integrator, and this item's certificate
 | Element | Ferrix certified item, `core` + `item` rings |
 | Size | 49,431 lines of product code, 38,989 of it in `core` |
 | Scope | memory protection, scheduling, capability objects, trap and syscall entry, IOMMU, SMP, device enumeration |
-| Not in scope | VFS, btrfs, network stack, Linux personality, ring-3 drivers — 44,203 lines of uncertified load |
+| Not in scope | VFS, btrfs, network stack, Linux personality, ring-3 drivers — 44,215 lines of uncertified load |
 | Reference configuration | x86-64, AArch64, ARMv7-A; release profile; rustc 1.97.1; zero Cargo features |
 
 The boundary is enforced on every build by `scripts/check-item-boundary.py`, so

@@ -44,10 +44,10 @@ three nested rings. A file in no ring fails the build.
 |---|---:|---:|---|
 | `core` | 38,989 | 7,807 | EAL6+, ASIL D, SIL 3/4, DAL B — *aspirational* |
 | `item` | 10,442 | 248 | EAL5+, DAL C, Class C, SIL 2 — *the present claim* |
-| `load` | 44,203 | 23,080 | nothing |
+| `load` | 44,215 | 23,080 | nothing |
 
 **The certified item is `core` + `item`: 49,431 lines of product code**, against
-44,203 lines of uncertified load. The item is 52.8% of the kernel's product
+44,215 lines of uncertified load. The item is 52.8% of the kernel's product
 code.
 
 ### `core` — the minimal trusted base
@@ -79,7 +79,7 @@ drivers' kernel halves; STM32MP1 board support.
 
 This is not a list of code that matters less — it is most of what makes Ferrix
 useful. It is excluded because a defect in it is bounded by the item's own
-enforcement, and because a claim over 93,714 lines is one nobody can afford to
+enforcement, and because a claim over 93,646 lines is one nobody can afford to
 substantiate.
 
 ---

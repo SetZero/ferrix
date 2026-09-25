@@ -41,7 +41,7 @@ commit` commits on failure. Check the status and the text separately.
 
 ## W-1 — Split `Process` into a core object and a POSIX extension
 
-**Closes:** F-01 (12 references), and most of F-09 (14) downstream.
+**Closes:** F-01 (10 references), and most of F-09 (14) downstream.
 **Size:** large. Do it first anyway — it is the keystone.
 
 ### The trap
@@ -139,7 +139,7 @@ Land as a sequence, not one commit:
 
 ### Verify
 
-`python3 scripts/check-item-boundary.py` reports ~26 fewer references, and the
+`python3 scripts/check-item-boundary.py` reports ~24 fewer references, and the
 `F-01`/`F-09` entries are gone from the manifest (the gate fails on stale
 entries, so it will tell you which). `cargo xtask test-boot --arch all` passes;
 `object/check.rs` and `sched/check.rs` cover this code and run on every boot.
@@ -198,6 +198,8 @@ wants, via an arch-owned enum or a plain discriminant the personality maps.
 ---
 
 ## W-4 — Registration for board support and the block ring
+
+**Half done 2026-09-25:** F-05 closed. The board half, F-04, remains.
 
 **Closes:** F-04 (6), F-05 (1). **Size:** small.
 
@@ -260,6 +262,12 @@ is below them — record what exists, then ratchet.
 
 ## W-7 — Finish the coverage story
 
+**Mostly done 2026-09-25.** Steps 1, 2 and 4 are done (F-11 and F-12 closed,
+the residual sorted in COVERAGE-RESIDUAL.md). Step 3 added `test-jobs` and
+took the item to 81.9%; the other four gates write an empty trace because
+they end by killing QEMU, and the plugin only flushes when QEMU exits. Step 5
+is not wired up. F-10 stays open on 1,054 statements that need a test.
+
 **Closes:** F-10, F-11, F-12. **Size:** medium, mostly running things.
 
 Tooling exists and works. Reproduction:
@@ -295,10 +303,10 @@ launcher refuses rather than reporting zero. Gates with a userland need
 
 **Closes:** F-14, F-15, F-16. **Size:** large. **The biggest structural gap.**
 
-48,887 lines of item product code trace to 33 system-level requirements, and no
+49,431 lines of item product code trace to 33 system-level requirements, and no
 test names a requirement id.
 
-**This is not a testing task.** There are 31,107 lines of in-kernel self-test
+**This is not a testing task.** There are 31,135 lines of in-kernel self-test
 already, asserting genuinely rich properties. What is missing is requirements
 for them to discharge.
 
@@ -320,6 +328,10 @@ Unblocks DAL C, 62304 §5.4 and `ADV_TDS.3` at once.
 ---
 
 ## W-9 — Vulnerability analysis against the ST threat model
+
+**Done 2026-09-25.** See F-21a and VULNERABILITY-ANALYSIS.md. It found that
+no SMAP, SMEP or PAN was enabled, which F-32 then fixed on x86-64 and AArch64.
+The attack tests per threat below remain worth writing as regression tests.
 
 **Closes:** F-21a. **Size:** medium. Last EAL5 gap that is engineering.
 
@@ -356,17 +368,14 @@ engineering — **answer step 1 before planning anything that depends on it.**
 
 ## Suggested order
 
-**Done:** order zero, W-3, W-2, W-6, and F-05 (the first half of W-4).
-**Remaining:** W-1 (keystone) → W-4's board half → W-5 → W-7 → W-8 (largest) →
-W-9, with W-10 in parallel whenever someone can answer step 1.
+**Done:** order zero, W-3, W-2, W-6, W-9, F-05 (the first half of W-4), and
+most of W-7.
+**Remaining:** W-1 (keystone) → W-4's board half → W-5 → W-7's last gates →
+W-8 (largest), with W-10 in parallel whenever someone can answer step 1.
 
-W-1 is still first among what is left: twenty-six of the sixty-two original
-boundary references are it and its downstream, and W-5 and W-8 both read better
-once the core object exists. Fifty-two references remain.
-
-W-1 first among the substantial ones because ~26 of the 62 boundary references
-are it and its downstream, and because W-5 and W-8 both read better once the
-core object exists.
+W-1 is still first among what is left: twenty-four of the 48 remaining
+boundary references are it and its downstream, and W-5 and W-8 both read
+better once the core object exists.
 
 ## Not on this list
 
