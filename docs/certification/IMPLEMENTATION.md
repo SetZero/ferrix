@@ -83,6 +83,48 @@ extension holding what POSIX needs.
    direction.
 3. `current()` moves with the core type.
 
+### What the measurement says (2026-09-25)
+
+Investigated properly before starting, and the shape is different from what
+F-01's wording suggests.
+
+**The core-facing interface is small.** Everything the trusted rings actually
+need from `Process` is about seven operations:
+
+| Caller | Needs |
+|---|---|
+| `sched/mod.rs` | `space()`, `thread_starting()`, `thread_gone(bool)` |
+| `object/job.rs` | `move_to(job)`, and `process::kill` |
+| `object/mod.rs` | `ProcessRef::exit()` |
+| `trap.rs` | `current()`, `pid()`, `space()` |
+
+Seven operations against a type with 78 methods. A core-side trait would be
+cheap, and `Arc<Process>` coerces to `Arc<dyn CoreProcess>` without touching
+the personality.
+
+**But the ownership chain crosses two boundaries, not one.** `sched::Task` does
+not hold a `Process`: `task.rs:450` is
+`self.thread.as_ref().map(|thread| thread.process())`. It holds a **`Thread`**,
+and `Thread` holds `Arc<Process>`. So the chain is
+
+    Task (core) -> Thread (item) -> Process (load)
+
+which is why the register carries both F-01 and F-06 and why closing either
+alone does not help. The 34 personality callers all go through
+`Thread::process()`, so they are *not* affected by a change to `Task` — that is
+the good news, and it is what makes a trait viable at all.
+
+**Consequence for the work order.** A correct fix needs a core-side abstraction
+for `Thread` as well as for `Process`, and `Thread` in turn names
+`syscall::process` and `syscall::signal`. Deciding where `Thread` belongs is
+the real design question: a thread is what the scheduler schedules, which
+argues for the core, but `syscall/thread.rs` reaches into the personality for
+signals and process state.
+
+That is an architectural restructuring of the process/thread/task ownership
+model, not a file move. It wants a deliberate design pass, and it is the reason
+this order remains open after a session that closed eleven other findings.
+
 ### Order, to keep the tree green
 
 Land as a sequence, not one commit:
