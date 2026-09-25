@@ -397,10 +397,14 @@ extern "C" fn ferrix_syscall_entry(frame: &mut SyscallFrame) {
     if let Some(ferrix_linux_abi::nr::Syscall::RtSigreturn) = super::decode_syscall(args.number) {
         let mut context = super::signal::UserContext::from_syscall(frame);
         super::enable_interrupts();
-        crate::syscall::deliver::sigreturn(&mut context, true);
+        if let Some(path) = crate::trap::return_path() {
+            (path.sigreturn)(&mut context, true);
+        }
         super::disable_interrupts();
-        if crate::syscall::deliver::needs_attention() {
-            crate::syscall::deliver::return_to_user(&mut context);
+        if let Some(path) = crate::trap::return_path()
+            && (path.needs_attention)()
+        {
+            (path.return_to_user)(&mut context);
         }
         // SAFETY: this task's own system call, on its own kernel stack, with
         // nothing owned on it; `context` holds ring 3's selectors and user
@@ -455,9 +459,11 @@ extern "C" fn ferrix_syscall_entry(frame: &mut SyscallFrame) {
     // On the way back: a process ended from outside ends here, a stopped one
     // waits, and a signal with a handler is delivered by pointing the frame at
     // it. See `crate::syscall::deliver`.
-    if crate::syscall::deliver::needs_attention() {
+    if let Some(path) = crate::trap::return_path()
+        && (path.needs_attention)()
+    {
         let mut context = super::signal::UserContext::from_syscall(frame);
-        crate::syscall::deliver::return_to_user(&mut context);
+        (path.return_to_user)(&mut context);
         context.store_syscall(frame);
     }
 }

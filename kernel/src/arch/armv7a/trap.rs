@@ -462,7 +462,9 @@ pub(crate) fn system_call(frame: &mut TrapFrame) -> Result<(), &'static str> {
     {
         let mut context = super::signal::UserContext::from_trap(frame);
         super::enable_interrupts();
-        crate::syscall::deliver::sigreturn(&mut context, call == Syscall::RtSigreturn);
+        if let Some(path) = crate::trap::return_path() {
+            (path.sigreturn)(&mut context, call == Syscall::RtSigreturn);
+        }
         super::disable_interrupts();
         context.store_trap(frame);
         return Ok(());

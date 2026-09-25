@@ -4,7 +4,7 @@ The audit register for the item defined in [ITEM.md](ITEM.md). One entry per
 finding, each naming what was measured, which objective it bears on, and what
 would close it.
 
-30 findings are open and 4 are closed. No finding here is closed by argument:
+30 findings are open and 5 are closed. No finding here is closed by argument:
 a finding closes when the thing it describes stops being true and something in
 the build says so.
 
@@ -14,7 +14,7 @@ met or met without evidence. *Minor* — a defect with no objective attached yet
 
 | | Blocking | Major | Moderate | Minor | Informational |
 |---|---:|---:|---:|---:|---:|
-| Open | 4 | 10 | 12 | 3 | 1 |
+| Open | 4 | 9 | 13 | 3 | 1 |
 
 Blocking: F-20, F-22, F-27, F-28 — a hazard analysis, a safety case,
 independent assessment and a quality management system. Two are documents that
@@ -44,18 +44,29 @@ and this is the clearest counter-example in the item.
 `kernel/src/object/process.rs` and the 12 references point into `core`.
 
 ### F-02 — the trap return path calls signal delivery directly
-**Major.** 7 references from `arch/*/signal.rs`, `arch/*/trap.rs`,
-`arch/x86_64/syscall.rs` and `trap.rs` into `syscall::deliver`, for
-`needs_attention`, `return_to_user` and `sigreturn`.
+**Closed 2026-09-25.** Six of the seven references are gone. The frame types
+`arch/*/signal.rs` needs moved to `kernel/src/signal_frame.rs` in the core, and
+the three functions the trap return called are now reached through
+`crate::trap::ReturnPath` — a struct of three function pointers the personality
+registers at boot, held in an `AtomicPtr` rather than a lock because it is read
+on every return to user mode.
 
-The return-to-user path must ask whether a signal is pending, so the call is
-legitimate; its *direction* is not. This is an upcall from the most trusted
-path in the system into the personality, and it means the core cannot be built,
-analysed or certified without the personality present.
+A kernel whose personality registers nothing now returns to user mode directly,
+which is the property that makes the core independently analysable.
 
-*Closes when:* the core defines an interface (a `ReturnPath` hook or
-equivalent) that the personality registers into at init, and `arch/` names only
-that.
+Verified by booting all three architectures, since signal frames are
+architecture-specific and the change touched every one.
+
+### F-02a — a fault becomes a signal by an upcall from the core
+**Moderate.** 1 reference. `trap.rs`'s `user_fault` names `syscall::deliver`,
+`syscall::signal` and `syscall::process` to turn a page fault into a `SIGSEGV`.
+
+A different upcall from the one F-02 inverted: that was the return path, this
+is fault delivery. Split out rather than folded into F-02, because closing the
+return path does not close this and the register should not imply otherwise.
+The fix is the same shape — a core-owned interface the personality registers
+into — and it wants F-01 done first, since two of its three references are the
+`Process` type.
 
 ### F-03 — architecture modules name the personality's `StatLayout`
 **Closed 2026-09-25.** The `StatLayout` enum moved to `kernel/src/arch/mod.rs`,

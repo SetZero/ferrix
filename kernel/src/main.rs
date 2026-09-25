@@ -135,6 +135,11 @@ fn kmain(view: &BootView<'_>, memory: &mut EarlyMemory) -> ! {
     //
     // SAFETY: called exactly once, on the boot CPU, with interrupts masked.
     unsafe { arch::init_traps() };
+    // The trap return is the core's; what happens on it is the Linux
+    // personality's, and the core holds only a pointer to it
+    // (`crate::trap::ReturnPath`). Registered here because the first user
+    // program is a boot check below, not init.
+    syscall::deliver::install();
     println!("  traps    vectors installed");
 
     let stats = match mm::init(view) {

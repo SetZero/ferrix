@@ -76,6 +76,25 @@ use crate::signal_frame::{BadFrame, FrameRequest, StackRecord};
 /// in the kernel for as long as they keep coming -- interruptible throughout.
 const DELIVERY_ROUNDS: usize = 65;
 
+/// What this personality does on the way back to user mode.
+///
+/// `crate::trap` owns the trap return and states the interface; this is the
+/// Linux personality filling it in. Registered by [`install`] before any user
+/// mode runs, so the core never names this module.
+static RETURN_PATH: crate::trap::ReturnPath = crate::trap::ReturnPath {
+    needs_attention,
+    return_to_user,
+    sigreturn,
+};
+
+/// Hand the core this personality's return path.
+///
+/// Called once from `_start`, before the first user program -- which is a boot
+/// check, not init, so this cannot wait for `init::run`.
+pub(crate) fn install() {
+    crate::trap::set_return_path(&RETURN_PATH);
+}
+
 /// Whether the way back to user mode has anything to do for the running task:
 /// its process ended or stopped, a signal to deliver to its thread, or a mask
 /// to put back.

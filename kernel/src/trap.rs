@@ -7,7 +7,8 @@
 //! `arch` module classifies its own frame into the [`Trap`] below, and the
 //! policy is written once.
 
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::ptr;
+use core::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
 
 use crate::arch;
 use crate::console::println;
@@ -145,11 +146,63 @@ pub(crate) fn dispatch(frame: &mut arch::TrapFrame) {
     // outside finds out and a signal is delivered: a task spinning in user
     // mode reaches here on its next tick, and one that was preempted reaches
     // here when it is resumed. See `crate::syscall::deliver`.
-    if frame.came_from_user() && crate::syscall::deliver::needs_attention() {
+    if let Some(path) = return_path().filter(|_| frame.came_from_user())
+        && (path.needs_attention)()
+    {
         let mut context = arch::UserContext::from_trap(frame);
-        crate::syscall::deliver::return_to_user(&mut context);
+        (path.return_to_user)(&mut context);
         context.store_trap(frame);
     }
+}
+
+/// What the way back to user mode does before the program runs again.
+///
+/// The core owns the trap return; what happens on it -- a signal delivered, a
+/// process that ended finding out, a stop waited on -- is the personality's,
+/// and the personality is not part of the certified item. So the core states
+/// the interface and the personality fills it in, rather than the trap path
+/// naming `crate::syscall::deliver` directly.
+///
+/// `docs/certification/ITEM.md` is why this shape and not the direct call:
+/// an upcall from the most trusted path in the system into the uncertified
+/// ring above it means the core cannot be built, analysed or evaluated
+/// without that ring present.
+#[derive(Debug)]
+pub(crate) struct ReturnPath {
+    /// Whether the way back has anything to do for the running task. Asked on
+    /// every return from user mode, so it is kept cheap and the registers are
+    /// only copied into an [`arch::UserContext`] when something will use them.
+    pub(crate) needs_attention: fn() -> bool,
+    /// Act on whatever `needs_attention` found. Does not return when the
+    /// process has ended.
+    pub(crate) return_to_user: fn(&mut arch::UserContext),
+    /// Restore the registers a signal frame saved: `sigreturn`, and
+    /// `rt_sigreturn` when the flag is set.
+    pub(crate) sigreturn: fn(&mut arch::UserContext, bool),
+}
+
+/// The registered return path, or null until the personality registers one.
+///
+/// An `AtomicPtr` to a `'static` rather than a lock, as `crate::panic`'s
+/// explanation is: this is read on every return to user mode, and a lock on
+/// that path would be paid by every trap in the system.
+static RETURN_PATH: AtomicPtr<ReturnPath> = AtomicPtr::new(ptr::null_mut());
+
+/// Register what the way back to user mode should do.
+///
+/// Called once, from init, before any user mode runs. A kernel built without
+/// a personality registers nothing and returns to user mode directly, which
+/// is the property that makes the core independently analysable.
+pub(crate) fn set_return_path(path: &'static ReturnPath) {
+    RETURN_PATH.store(ptr::from_ref(path).cast_mut(), Ordering::Release);
+}
+
+/// The registered return path, if there is one.
+pub(crate) fn return_path() -> Option<&'static ReturnPath> {
+    let path = RETURN_PATH.load(Ordering::Acquire);
+    // SAFETY: only `set_return_path` stores here, and only the address of a
+    // `'static` that is never written through.
+    unsafe { path.as_ref() }
 }
 
 /// A trap a program's own instruction took that nothing resolves: the signal

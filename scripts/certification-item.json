@@ -324,32 +324,11 @@
         "finding": "F-01"
       },
       {
-        "file": "arch/aarch64/trap.rs",
-        "references": "syscall::deliver",
-        "from_ring": "core",
-        "to_ring": "load",
-        "finding": "F-02"
-      },
-      {
-        "file": "arch/armv7a/trap.rs",
-        "references": "syscall::deliver",
-        "from_ring": "core",
-        "to_ring": "load",
-        "finding": "F-02"
-      },
-      {
-        "file": "arch/x86_64/syscall.rs",
-        "references": "syscall::deliver",
-        "from_ring": "core",
-        "to_ring": "load",
-        "finding": "F-02"
-      },
-      {
         "file": "trap.rs",
         "references": "syscall::deliver",
         "from_ring": "core",
         "to_ring": "load",
-        "finding": "F-02"
+        "finding": "F-02a"
       },
       {
         "file": "device.rs",

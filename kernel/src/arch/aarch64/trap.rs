@@ -404,7 +404,9 @@ pub(crate) fn system_call(frame: &mut TrapFrame) -> Result<(), &'static str> {
     if let Some(ferrix_linux_abi::nr::Syscall::RtSigreturn) = super::decode_syscall(args.number) {
         let mut context = super::signal::UserContext::from_trap(frame);
         super::enable_interrupts();
-        crate::syscall::deliver::sigreturn(&mut context, true);
+        if let Some(path) = crate::trap::return_path() {
+            (path.sigreturn)(&mut context, true);
+        }
         super::disable_interrupts();
         context.store_trap(frame);
         return Ok(());
