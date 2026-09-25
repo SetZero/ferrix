@@ -15,6 +15,7 @@
 #![no_main]
 
 mod board;
+mod display;
 mod entry;
 mod load;
 mod log;
@@ -63,10 +64,12 @@ extern "C" fn main(device_tree: u64) -> ! {
         entry::current_el()
     );
     report_watchdogs();
+    display::report();
+    display::first_light();
     if let Err(why) = start(device_tree) {
         say!("FERRIX-PANIC loader: {why}");
     }
-    entry::system_reset()
+    entry::wait_for_watchdog()
 }
 
 /// Everything between the hand-over and the kernel, as one fallible step.
@@ -80,6 +83,13 @@ fn start(device_tree: u64) -> Result<(), &'static str> {
     // ABL's own copy of the tree is left behind once the loader has taken one
     // for the kernel.
     memory.mark(device_tree, blob.len() as u64, MemKind::Loader)?;
+    // ABL's framebuffer, which the display keeps fetching: not RAM for the
+    // kernel to hand out, or the screen shows whatever it put there.
+    memory.mark(
+        display::FRAMEBUFFER,
+        display::FRAMEBUFFER_BYTES,
+        MemKind::Framebuffer,
+    )?;
     say!(
         "  device tree {} bytes, model {:?}",
         blob.len(),
@@ -133,15 +143,16 @@ fn report_watchdogs() {
     }
 }
 
-/// Called from every vector: report the exception and reset.
+/// Called from every vector: report the exception, and leave the reset to a
+/// watchdog, whose reset keeps the report.
 extern "C" fn trap(kind: u64, syndrome: u64, at: u64, address: u64) -> ! {
     say!("FERRIX-PANIC loader exception {kind}: ESR {syndrome:#x} ELR {at:#x} FAR {address:#x}");
-    entry::system_reset()
+    entry::wait_for_watchdog()
 }
 
-/// Report where the loader panicked and reset.
+/// Report where the loader panicked, and leave the reset to a watchdog.
 #[panic_handler]
 fn panic(info: &PanicInfo<'_>) -> ! {
     say!("FERRIX-PANIC loader: {info}");
-    entry::system_reset()
+    entry::wait_for_watchdog()
 }

@@ -285,16 +285,14 @@ pub(crate) unsafe fn enter_kernel(handoff: Handoff) -> ! {
     }
 }
 
-/// Reset the phone through PSCI, which the device tree says is reached by
-/// `smc`. ABL then boots whatever the active slot holds.
-pub(crate) fn system_reset() -> ! {
-    /// `SYSTEM_RESET`, PSCI 0.2's function 9.
-    const PSCI_SYSTEM_RESET: u64 = 0x8400_0009;
-    // SAFETY: SYSTEM_RESET does not return; if firmware refuses it, the loop
-    // after keeps this function's promise.
-    unsafe {
-        asm!("smc #0", in("x0") PSCI_SYSTEM_RESET, options(nostack));
-    }
+/// Wait for a watchdog to reset the phone.
+///
+/// Not PSCI's `SYSTEM_RESET`. It appears to work -- two display probes whose
+/// reads faulted were back in Android within seconds -- but that reset loses
+/// the `ramoops` record, so a loader that failed and reset that way left no
+/// word of why. The watchdogs are running at hand-off and the loader never
+/// feeds them, so one fires within a minute, and its reset keeps the record.
+pub(crate) fn wait_for_watchdog() -> ! {
     loop {
         // SAFETY: `wfe` only waits.
         unsafe {
