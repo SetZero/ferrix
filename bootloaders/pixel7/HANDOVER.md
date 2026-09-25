@@ -90,10 +90,13 @@ the loader rebuilds in a second. Nothing is ever written to the phone's flash.
   a few boots Android shows *"Cannot load Android system. Your data may be
   corrupt."* It happened once; **"Try again" fixed it. "Factory data reset"
   would erase the phone** -- tell the owner which to press if it recurs.
-* **The screen shows nothing we do.** The panel is DSI command mode: it only
-  shows frames the display controller is triggered to send. The owner sees
-  ABL's orange "bootloader is unlocked" warning and then black or the last
-  frame. All feedback is through `ramoops`.
+* **The screen works now** (2026-09-26, `src/display.rs`). ABL leaves DECON0
+  running in command mode with its TE trigger masked; the loader clears
+  ABL's framebuffer at `0xfac00000`, unmasks `TRIG_CON`, and hands the
+  framebuffer to the kernel, whose panic screen showed on the phone. Reading
+  some display registers faults (a synchronous external abort): the display
+  SysMMU past `+0x8`, `pd-disp` past `+0x10`. The dump logs one register a
+  line, so a fault names itself.
 * **`ramoops` survives a watchdog reset, not reliably any other.** ABL writes
   its own log into the same console zone and rewrites the header on every
   boot, so Android reports "found existing invalid buffer" and the file shows
@@ -107,9 +110,11 @@ the loader rebuilds in a second. Nothing is ever written to the phone's flash.
   reset is the one that keeps the `ramoops` log, and powering off would lose
   it. A run now takes about 52 s from `fastboot boot` to adb. A hang still
   resets the phone, with its log, once the task stops running.
-* **PSCI `SYSTEM_RESET` over `smc` is unproven.** The probe logged "resetting"
-  and the reset that followed was the watchdog's. Treat reset as "wait for the
-  watchdog" until shown otherwise.
+* **PSCI `SYSTEM_RESET` over `smc` seems to work, and loses the log.** Two
+  display probes that faulted were back in Android within seconds with no
+  `console-ramoops-0` at all. The loader now waits for a watchdog instead,
+  and the kernel fires one (`kernel/src/gs201.rs`), because that reset keeps
+  the record.
 * **The reboot-reason register (`0x18060810`) ignores non-secure writes.**
 * `fastboot oem dmesg` prints ABL's log for the *current* ABL session,
   including `Reboot Info` (why the phone last reset). `fastboot oem help` does
@@ -190,6 +195,18 @@ The phone's live device tree is `/sys/firmware/fdt`: `adb exec-out su -c
 'cat /sys/firmware/fdt' > panther.dtb`, then `dtc -I dtb -O dts` reads it. Useful nodes: `/reserved-memory`
 (`ramoops_mem@fd3ff000`), `/psci` (`smc`), `watchdog_cl0@10060000`,
 `drmdecon@1C240000`, `pixel-reboot` (syscon `0x18060000`, offset `0x810`).
+
+## Never write anything that survives a reset
+
+The owner has lost a device's touchscreen calibration to an agent before, and
+it must not happen here. On this phone, only volatile things may be written:
+RAM, and SoC controller registers such as DECON's. Never `fastboot flash`,
+`erase` or an `oem` write; never a DSI command to the panel (an OLED panel's
+MTP can be written); never the touch controller, the PMIC or regulators,
+power domains, fuses or security blocks, or UFS. Before a test that writes
+hardware, list the exact addresses, check them against the device tree, and
+make the write conditional on the hardware being as expected, as
+`display::take_over` is.
 
 ## House rules that apply here
 

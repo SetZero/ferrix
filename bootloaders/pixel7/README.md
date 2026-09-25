@@ -10,6 +10,9 @@ program, which is to do for Ferrix what `boot/` does under UEFI.
 AArch64 kernel the device-tree path and a GICv3 driver, which is what stopped
 it at stage 3 before. The loader passes `nosmp` until secondaries can start at
 EL2; the phone has no clock the kernel reads and no entropy it seeds from.
+The screen works: the loader takes over the display ABL left running
+(`src/display.rs`) and hands its framebuffer to the kernel, whose panic
+screen has been seen on the phone.
 
 ## Building and running it
 
@@ -66,7 +69,8 @@ session, including why the phone last reset.
 | Generic timer | 24.576 MHz |
 | Watchdogs | both **running** at hand-off (`WTCON` bit 5); the kernel feeds them (`kernel/src/gs201.rs`) and ends a boot by firing one |
 | Reboot reason | the PMU register at `0x18060810` ignores a non-secure write |
-| Panel | DSI **command mode**: it shows only frames the display controller is told to send, so writing a framebuffer changes nothing on screen |
+| Panel | DSI **command mode**, TE-triggered; ABL masks the trigger before hand-off, so a framebuffer write shows only once `TRIG_CON` is unmasked |
+| Display | DECON0 running; window 5 from DPP0; framebuffer 1080 x 2400 at `0xfac00000`, bytes B, G, R, unused (measured); display SysMMU reads as off |
 
 ## What Ferrix needs before it can run here
 
