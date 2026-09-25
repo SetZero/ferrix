@@ -237,7 +237,7 @@ How the TOE meets each objective, with the evidence that exists today.
 | O.DMA | `kernel/src/iommu/{vtd,smmuv3}.rs`; a driver receives an `IoMapping` and a domain. | `iommu/gate.rs`; `scripts/check-device-access.py` holds the seam at build time |
 | O.SCRUB | `mm::zero_frame` on every frame handed to a VMO. | `kernel/src/mm.rs:1140`, called from `user/vmo.rs` at three sites |
 | O.QUOTA | `kernel/src/object/job.rs`. | `object/check.rs` |
-| O.VALIDATE | `kernel/src/syscall/uaccess.rs`, SMAP/PAN enforced. | `syscall/check.rs`, 9,537 lines of refusal tests |
+| O.VALIDATE | `kernel/src/syscall/uaccess.rs`. **Software bound check only — SMAP, SMEP and PAN are not enabled** (V-01). | `syscall/check.rs`, 9,537 lines, 427 refusal assertions |
 | O.FAILSAFE | `kernel/src/panic.rs` with a catalogue of explanations. | `scripts/check-panic-audit.py`; `gen-panic-catalog.py --check` |
 
 ---
@@ -289,10 +289,17 @@ cannot record a security-relevant event can meaningfully claim EAL5.
 The TOE does not verify its own integrity. A.FIRMWARE carries the whole of that
 burden, which is a large assumption to place on the environment.
 
-### 9.3 No vulnerability analysis
-`AVA_VAN.4` requires a methodical analysis against moderate attack potential.
-None has been performed. This is the largest single gap between this document
-and an evaluable one.
+### 9.3 The vulnerability analysis found a single point of failure
+[VULNERABILITY-ANALYSIS.md](VULNERABILITY-ANALYSIS.md) now covers `AVA_VAN.4`
+over all seven threats. It found five residual vulnerabilities, of which V-01
+bears on three: **no SMAP, SMEP or PAN is enabled**, so the software bound
+check in `uaccess` is the only barrier between a user pointer and kernel
+memory at kernel privilege.
+
+An earlier draft of this ST claimed SMAP and PAN were enforced. That was wrong
+— the tree's 56 apparent references to "smap" are `smap_base` and `smap_len`,
+the system memory map — and §7 is corrected above. The mitigation is sound and
+centralised; it has no hardware defence in depth.
 
 ### 9.4 The design evidence does not yet reach the TOE's modules
 `ADV_TDS.3` needs a semiformal design decomposing the TSF into subsystems and

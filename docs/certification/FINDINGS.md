@@ -4,7 +4,7 @@ The audit register for the item defined in [ITEM.md](ITEM.md). One entry per
 finding, each naming what was measured, which objective it bears on, and what
 would close it.
 
-26 findings are open and 9 are closed. F-10 advanced from 71.4% to 81.9%. No finding here is closed by argument:
+28 findings are open and 10 are closed. F-10 advanced from 71.4% to 81.9%. No finding here is closed by argument:
 a finding closes when the thing it describes stops being true and something in
 the build says so.
 
@@ -14,7 +14,7 @@ met or met without evidence. *Minor* — a defect with no objective attached yet
 
 | | Blocking | Major | Moderate | Minor | Informational |
 |---|---:|---:|---:|---:|---:|
-| Open | 4 | 9 | 10 | 2 | 1 |
+| Open | 4 | 10 | 11 | 2 | 1 |
 
 Blocking: F-20, F-22, F-27, F-28 — a hazard analysis, a safety case,
 independent assessment and a quality management system. Two are documents that
@@ -258,9 +258,42 @@ Superseded by F-21a and F-21b, which are what the ST itself records as the
 reasons it would not survive evaluation.
 
 ### F-21a — no vulnerability analysis
-**Major.** `AVA_VAN.4` requires a methodical analysis against moderate attack
-potential. None has been performed, and it is the largest single gap between
-the Security Target and an evaluable one.
+**Closed 2026-09-25** by
+[VULNERABILITY-ANALYSIS.md](VULNERABILITY-ANALYSIS.md): all seven ST threats,
+attack paths enumerated per threat with the resisting mechanism, the evidence
+and a verdict. Five residual vulnerabilities V-01 to V-05, superseded by F-32.
+
+It also corrected an error in the Security Target it was written against, which
+is the most useful thing it did. See F-32.
+
+### F-32 — no SMAP, SMEP or PAN; one software check guards kernel memory
+**Major.** `uaccess.rs` says so in its own header and the code confirms it: no
+`CR4.SMAP` or `CR4.SMEP` bit is set on x86-64, no `PAN` on AArch64. The bound
+check in `uaccess` is the only thing between a user pointer and a read or write
+of kernel memory at kernel privilege (V-01), and it bears on three of the seven
+threats.
+
+The mitigation is sound — one chokepoint, checked first, before any arithmetic
+that could wrap — and it has no defence in depth. One syscall that ever
+dereferences a user pointer without going through `uaccess` is an immediate
+compromise; SMAP and PAN exist to make that a fault instead.
+
+Worth recording how it was missed: an early sweep of this tree counted 56
+matches for "smap" and concluded the feature was wired up. They are
+`smap_base`, `smap_len` and `smap_phys` — the **s**ystem **map**. The Security
+Target asserted SMAP/PAN enforcement on that basis until the vulnerability
+analysis checked the registers.
+
+*Closes when:* SMEP and SMAP are enabled on x86-64 with `stac`/`clac` around
+the copy, and PAN on AArch64.
+
+### F-31 — no side-channel or layout-randomisation defences
+**Moderate.** No Spectre, Meltdown or cache-timing analysis has been performed
+and no mitigation exists: no retpolines, no KPTI, no IBT or shadow stacks. No
+ASLR or KASLR either, so an attacker who achieves V-01 faces a fixed layout.
+
+At `AVA_VAN.4`'s moderate attack potential this is arguably in scope for a TOE
+whose entire claim is isolation between mutually distrusting processes.
 
 ### F-21b — the TOE claims no audit and no authentication
 **Moderate.** There is no FAU family at all, and FIA lives in the uncertified

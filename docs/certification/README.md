@@ -18,8 +18,9 @@ specific, measured, and mostly documents rather than code.
 * [IMPLEMENTATION.md](IMPLEMENTATION.md) — **start here to build**: ten work orders, ordered
 * [TODO.md](TODO.md) — start here to re-audit: what to re-measure, and what not to write
 * [ITEM.md](ITEM.md) — what the ratings attach to, and why it is not all of Ferrix
-* [FINDINGS.md](FINDINGS.md) — the audit register, 28 open findings and 7 closed
+* [FINDINGS.md](FINDINGS.md) — the audit register, 28 open findings and 10 closed
 * [SECURITY-TARGET.md](SECURITY-TARGET.md) — EAL5+ claim, SFRs, and where it would fail evaluation
+* [VULNERABILITY-ANALYSIS.md](VULNERABILITY-ANALYSIS.md) — AVA_VAN.4 over the seven threats; five residual vulnerabilities
 * [SOUP.md](SOUP.md) — generated; the item contains none
 * [VERIFICATION.md](VERIFICATION.md) — what exercises the item, and the traceability gap
 * [TOOLS.md](TOOLS.md) — tool classification under EN 50716 §6.7 and DO-330
@@ -98,11 +99,17 @@ objectives, SFRs from CC Part 2 (FDP_ACC/ACF, FDP_IFC/IFF, FDP_RIP.2, FMT_MSA,
 FPT_FLS/STM/TDC, FRU_RSA), and a summary specification mapping each objective to
 the code and the test that exercises it.
 
-*Missing:* a vulnerability analysis to `AVA_VAN.4`'s moderate attack potential
-(F-21a) — the largest single gap. Design evidence at module granularity for
-`ADV_TDS.3`; the SysML model describes Ferrix, not the TOE (F-15). And the TOE
-claims neither audit nor authentication (F-21b), which is defensible for an
-isolation kernel and is why no Protection Profile is claimed.
+*Also written:* [VULNERABILITY-ANALYSIS.md](VULNERABILITY-ANALYSIS.md),
+closing F-21a — `AVA_VAN.4` over all seven threats, with five residual
+vulnerabilities. It found that **no SMAP, SMEP or PAN is enabled** (F-32), so
+one software bound check is the only barrier between a user pointer and kernel
+memory, and it corrected this ST's own claim to the contrary.
+
+*Missing:* F-32 itself, which is now the most serious open technical finding.
+Design evidence at module granularity for `ADV_TDS.3`; the SysML model
+describes Ferrix, not the TOE (F-15). And the TOE claims neither audit nor
+authentication (F-21b), which is defensible for an isolation kernel and is why
+no Protection Profile is claimed.
 
 *Nearest credible claim:* EAL4+ looks defensible on this evidence with an ST
 written, which is also where RHEL and SUSE sit. EAL5 needs the design
