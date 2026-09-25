@@ -4,7 +4,7 @@ The audit register for the item defined in [ITEM.md](ITEM.md). One entry per
 finding, each naming what was measured, which objective it bears on, and what
 would close it.
 
-28 findings are open and 7 are closed. No finding here is closed by argument:
+26 findings are open and 9 are closed. No finding here is closed by argument:
 a finding closes when the thing it describes stops being true and something in
 the build says so.
 
@@ -14,7 +14,7 @@ met or met without evidence. *Minor* — a defect with no objective attached yet
 
 | | Blocking | Major | Moderate | Minor | Informational |
 |---|---:|---:|---:|---:|---:|
-| Open | 4 | 9 | 12 | 2 | 1 |
+| Open | 4 | 9 | 10 | 2 | 1 |
 
 Blocking: F-20, F-22, F-27, F-28 — a hazard analysis, a safety case,
 independent assessment and a quality management system. Two are documents that
@@ -137,17 +137,26 @@ and it is not a pass.
 justifications.
 
 ### F-11 — coverage measures the debug profile, the item ships release
-**Moderate.** The reference configuration in the manifest is `release`;
-`coverage-x86_64.json` was produced from `target/x86_64-unknown-none/debug`.
+**Closed 2026-09-25.** The release profile is now measured:
+`coverage-x86_64-release.json`, 47.6% of the item against the debug profile's
+46.6% on the same gate.
 
-Optimised builds inline, so the line table is approximate and the numbers would
-move. DAL C requires the coverage analysis to address the configuration that
-ships, or to argue the difference.
+The finding's premise was right and its expected consequence was wrong. The
+percentage barely moves; the *denominator* moves by a third, 7,065 statements
+to 4,798, because optimisation leaves fewer distinct `is_stmt` rows to reach.
+So the number survives a change of profile and the population being counted
+does not, which is the thing a submission has to state. VERIFICATION.md §3.2.
 
 ### F-12 — coverage is x86-64 only
-**Moderate.** AArch64 and ARMv7-A are in the reference configuration and have
-no coverage data. Both are supported by the tooling as written; nobody has run
-them.
+**Closed 2026-09-25.** AArch64 at 46.1% and ARMv7-A at 70.8% of the item, one
+`test-boot` each: `coverage-aarch64.json`, `coverage-armv7a.json`. Every
+architecture in the reference configuration can now be measured, which is what
+this finding asked.
+
+Raising them to the four-gate suite x86-64 has is part of F-10, not this. The
+gap between the two Arm numbers is itself informative and recorded in
+VERIFICATION.md §3.2: x86-64 carries more arch-specific code that a plain boot
+never reaches, so the same gate covers a smaller share of it.
 
 ### F-13 — no decision or MC/DC coverage
 **Informational.** Not required at DAL C. Required at DAL B and DAL A, and the

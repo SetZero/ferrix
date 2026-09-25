@@ -63,43 +63,73 @@ check.rs` at 9,537 lines, `object/check.rs` at 3,318, `user/check.rs` at 1,263,
 
 ## 3. Structural coverage
 
-Measured 2026-09-25, x86-64, debug profile, union of four boot gates
-(`test-boot`, `test-threads`, `test-vfs`, `test-net`). Raw data in
-`coverage-x86_64.json`.
+Measured 2026-09-25. Raw per-file data in `coverage-*.json`.
 
-| Ring | Statements reached | Total | Covered |
+### 3.1 The suite, x86-64
+
+Union of four boot gates — `test-boot`, `test-threads`, `test-vfs`,
+`test-net` — on the debug profile:
+
+| Ring | Reached | Total | Covered |
 |---|---:|---:|---:|
 | `core` | 3,138 | 4,516 | **69.5%** |
 | `item` | 1,872 | 2,500 | **74.9%** |
 | **Certified item** | **5,010** | **7,016** | **71.4%** |
 | `load` (not claimed) | 6,620 | 10,916 | 60.6% |
 
-731,370 basic blocks executed across the four runs, 210,362 of them inside the
-kernel image.
+### 3.2 Every architecture, and both profiles
 
-**Method.** QEMU's `drcov` plugin records every basic block the guest
-translates and executes. The kernel's DWARF line table says which source
-statement each address belongs to; the denominator is the rows the compiler
-marked `is_stmt`, which is what gcov-shaped tools count. `scripts/
-coverage-report.py` intersects the two and attributes each file to a ring using
-the same classifier the boundary gate uses, so the two cannot disagree.
+One `test-boot` each, so these are **not** comparable with the four-gate suite
+above; they answer whether the configuration can be measured at all, which
+until now it could not.
+
+| Configuration | Certified item | Core | Statements |
+|---|---:|---:|---:|
+| x86-64, debug, one boot | 46.6% | 44.9% | 7,065 |
+| x86-64, **release**, one boot | **47.6%** | 47.8% | 4,798 |
+| AArch64, debug, one boot | 46.1% | 44.2% | 6,841 |
+| ARMv7-A, debug, one boot | **70.8%** | 66.8% | 7,127 |
+
+Two things in that table are worth reading carefully.
+
+**The profile moves the denominator, not the percentage.** Release optimisation
+cuts the item's statement count by a third — 7,065 to 4,798 — because inlining
+and merging leave fewer distinct `is_stmt` rows to reach. The proportion
+reached barely moves, 46.6% to 47.6%. So the coverage *figure* survives the
+change of configuration while the *population being counted* does not, and a
+submission has to say which one it measured. This one measures release as well
+as debug, which is what F-11 asked for.
+
+**ARMv7-A reaches far more from one boot** — 70.8% against x86-64's 46.6% on
+the same gate. Not a better-tested architecture: x86-64 carries more
+arch-specific code that a plain boot never touches (the APIC, MSI, the GDT, the
+`SYSCALL` entry, the paranoid-stack path), so its denominator contains more
+code that only later gates reach. It is a reminder that a coverage percentage
+is only meaningful against a stated configuration and a stated test set.
+
+### 3.3 Method
+
+QEMU's `drcov` TCG plugin records every basic block the guest translates and
+executes. The kernel's DWARF line table says which source statement each
+address belongs to; the denominator is the rows the compiler marked `is_stmt`,
+which is what gcov-shaped tools count. `scripts/coverage-report.py` intersects
+the two and attributes each file to a ring using the same classifier the
+boundary gate uses, so the two cannot disagree.
 
 **What this supports.** DO-178C table A-7 objective 5 at DAL C asks for
-statement coverage. This is that measurement, for ring-0 code, without
-modifying the toolchain — which is the part usually assumed impossible.
+statement coverage. This is that measurement, for ring-0 code, on every
+architecture and both profiles in the reference configuration, without
+modifying the toolchain.
 
-**What it does not support.** 71.4% is not 100%, and the remaining 2,006
-statements are neither covered nor justified as unreachable (F-10). The
-measurement is of the debug profile while the reference configuration is
-release (F-11), and of x86-64 only while the configuration names three
-architectures (F-12). There is no decision or MC/DC coverage, which DAL C does
-not require and DAL B and A do (F-13).
+**What it does not.** 71.4% is not 100%, and the residual is neither covered
+nor justified as unreachable (F-10). The Arm architectures have only a single
+gate's worth of data, not the suite (F-12 is closed in the sense that they can
+now be measured; raising them is part of F-10). There is no decision or MC/DC
+coverage, which DAL C does not require and DAL B and A do (F-13).
 
 Two biases, both optimistic and both declared in the tool's own docstring: a
 basic block credits every statement inside it even if a trap left it early, and
 optimised builds map one address to several source lines.
-
----
 
 ## 4. The traceability gap
 
