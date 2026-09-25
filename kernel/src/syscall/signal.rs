@@ -55,7 +55,8 @@ use ferrix_linux_abi::types::{
 };
 
 use crate::arch;
-use crate::syscall::deliver::{self, StackRecord};
+use crate::signal_frame::StackRecord;
+use crate::syscall::deliver;
 use crate::syscall::process::Process;
 use crate::syscall::thread::Thread;
 use crate::syscall::time::{self, TimeWidth};
@@ -177,7 +178,7 @@ const SI_USER: i32 = 0;
 const SI_TKILL: i32 = -6;
 
 /// Bytes in `siginfo_t` on every architecture.
-pub(crate) const SIGINFO_BYTES: usize = 128;
+pub(crate) use crate::signal_frame::SIGINFO_BYTES;
 
 impl Origin {
     /// The `siginfo_t` a handler sees for `signal` raised this way.

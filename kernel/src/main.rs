@@ -46,6 +46,7 @@ mod power;
 mod random;
 mod render;
 mod sched;
+mod signal_frame;
 mod smp;
 mod stm32mp1;
 mod stm32mp1_gpu;

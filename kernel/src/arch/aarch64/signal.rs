@@ -23,7 +23,7 @@ use ferrix_linux_abi::types::SA_RESTORER;
 
 use super::switch::{self, UserState};
 use super::trap::{TrapFrame, USER_SPSR};
-use crate::syscall::deliver::{BadFrame, FrameBytes, FrameRequest, Restored};
+use crate::signal_frame::{BadFrame, FrameBytes, FrameRequest, Restored};
 use crate::user::space::AddressSpace;
 
 /// No red zone in the AAPCS64: nothing below the stack pointer is the

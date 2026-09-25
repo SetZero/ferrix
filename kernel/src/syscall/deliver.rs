@@ -52,9 +52,6 @@
 //! It is made before any handler frame is built, so the frame saves the
 //! resolved resume point and `rt_sigreturn` returns straight into it.
 
-use alloc::vec;
-use alloc::vec::Vec;
-
 use ferrix_bootinfo::is_user_address;
 use ferrix_linux_abi::errno::Errno;
 use ferrix_linux_abi::types::{SA_RESTART, SIG_DFL, SIG_IGN, SIGSEGV};
@@ -68,9 +65,8 @@ use crate::syscall::signal::{
 use crate::syscall::thread::{self, Thread};
 use crate::syscall::time::TimeWidth;
 use crate::syscall::uaccess;
-use crate::user::space::AddressSpace;
 
-pub(crate) use crate::syscall::signal::SIGINFO_BYTES;
+use crate::signal_frame::{BadFrame, FrameRequest, StackRecord};
 
 /// How many signals one round of the way back to user mode acts on before it
 /// looks again with interrupts masked. One more than there are signals, so
@@ -79,151 +75,6 @@ pub(crate) use crate::syscall::signal::SIGINFO_BYTES;
 /// do, as Linux does, so a task sent stops and continues in a tight loop stays
 /// in the kernel for as long as they keep coming -- interruptible throughout.
 const DELIVERY_ROUNDS: usize = 65;
-
-/// A frame the architecture could not write, or would not accept back.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct BadFrame;
-
-/// `stack_t` as a frame records it.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) struct StackRecord {
-    /// `ss_sp`.
-    pub(crate) sp: u64,
-    /// `ss_flags`.
-    pub(crate) flags: i32,
-    /// `ss_size`.
-    pub(crate) size: u64,
-}
-
-/// Everything an architecture needs to put a handler's frame on the stack.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct FrameRequest {
-    /// The signal.
-    pub(crate) signal: u32,
-    /// Its `siginfo_t`, already encoded.
-    pub(crate) info: [u8; SIGINFO_BYTES],
-    /// Where the handler is.
-    pub(crate) handler: u64,
-    /// The handler's `SA_*` flags.
-    pub(crate) flags: u64,
-    /// Where the handler returns to.
-    pub(crate) restorer: u64,
-    /// The mask the frame saves, which `rt_sigreturn` puts back.
-    pub(crate) mask: u64,
-    /// The address the frame is built below, alternate stack already chosen.
-    pub(crate) stack: u64,
-    /// The alternate stack, as `uc_stack` records it.
-    pub(crate) altstack: StackRecord,
-}
-
-/// What an architecture read back out of a frame, besides the registers.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct Restored {
-    /// The mask the frame saved.
-    pub(crate) mask: u64,
-    /// The alternate stack the frame recorded.
-    pub(crate) altstack: StackRecord,
-}
-
-/// A frame's bytes while they are built or read: offsets checked, so an
-/// architecture's layout is written as a table of constants and a mistake in
-/// one is a refused frame rather than a panic.
-#[derive(Debug)]
-pub(crate) struct FrameBytes(Vec<u8>);
-
-impl FrameBytes {
-    /// `len` zero bytes.
-    pub(crate) fn zeroed(len: usize) -> FrameBytes {
-        FrameBytes(vec![0; len])
-    }
-
-    /// `len` bytes of the program's memory at `at`.
-    pub(crate) fn read(space: &AddressSpace, at: u64, len: usize) -> Result<FrameBytes, BadFrame> {
-        let mut bytes = vec![0; len];
-        uaccess::copy_from_user(space, at, &mut bytes).map_err(|_| BadFrame)?;
-        Ok(FrameBytes(bytes))
-    }
-
-    /// Write them into the program's memory at `at`.
-    pub(crate) fn write(&self, space: &AddressSpace, at: u64) -> Result<(), BadFrame> {
-        uaccess::copy_to_user(space, at, &self.0).map_err(|_| BadFrame)
-    }
-
-    /// Put `bytes` at `at`.
-    pub(crate) fn put(&mut self, at: usize, bytes: &[u8]) -> Result<(), BadFrame> {
-        let end = at.checked_add(bytes.len()).ok_or(BadFrame)?;
-        self.0
-            .get_mut(at..end)
-            .ok_or(BadFrame)?
-            .copy_from_slice(bytes);
-        Ok(())
-    }
-
-    /// Put a 32-bit value at `at`.
-    pub(crate) fn put_u32(&mut self, at: usize, value: u32) -> Result<(), BadFrame> {
-        self.put(at, &value.to_le_bytes())
-    }
-
-    /// Put a 64-bit value at `at`.
-    pub(crate) fn put_u64(&mut self, at: usize, value: u64) -> Result<(), BadFrame> {
-        self.put(at, &value.to_le_bytes())
-    }
-
-    /// Put a native word at `at`.
-    fn put_word(&mut self, at: usize, value: u64) -> Result<(), BadFrame> {
-        let word = value.to_le_bytes();
-        self.put(at, word.get(..size_of::<usize>()).ok_or(BadFrame)?)
-    }
-
-    /// Put a `stack_t` at `at`: pointer, `int` flags, size, in native words.
-    pub(crate) fn put_stack(&mut self, at: usize, stack: StackRecord) -> Result<(), BadFrame> {
-        let word = size_of::<usize>();
-        self.put_word(at, stack.sp)?;
-        self.put(at + word, &stack.flags.to_le_bytes())?;
-        self.put_word(at + 2 * word, stack.size)
-    }
-
-    /// The `len` bytes at `at`.
-    pub(crate) fn get(&self, at: usize, len: usize) -> Result<&[u8], BadFrame> {
-        let end = at.checked_add(len).ok_or(BadFrame)?;
-        self.0.get(at..end).ok_or(BadFrame)
-    }
-
-    /// The 32-bit value at `at`.
-    pub(crate) fn u32_at(&self, at: usize) -> Result<u32, BadFrame> {
-        let mut value = [0_u8; 4];
-        value.copy_from_slice(self.get(at, 4)?);
-        Ok(u32::from_le_bytes(value))
-    }
-
-    /// The 64-bit value at `at`.
-    pub(crate) fn u64_at(&self, at: usize) -> Result<u64, BadFrame> {
-        let mut value = [0_u8; 8];
-        value.copy_from_slice(self.get(at, 8)?);
-        Ok(u64::from_le_bytes(value))
-    }
-
-    /// The native word at `at`, zero-extended.
-    fn word_at(&self, at: usize) -> Result<u64, BadFrame> {
-        let word = size_of::<usize>();
-        let mut value = [0_u8; 8];
-        value
-            .get_mut(..word)
-            .ok_or(BadFrame)?
-            .copy_from_slice(self.get(at, word)?);
-        Ok(u64::from_le_bytes(value))
-    }
-
-    /// The `stack_t` at `at`.
-    pub(crate) fn stack_at(&self, at: usize) -> Result<StackRecord, BadFrame> {
-        let word = size_of::<usize>();
-        Ok(StackRecord {
-            sp: self.word_at(at)?,
-            flags: self.u32_at(at + word)? as i32,
-            size: self.word_at(at + 2 * word)?,
-        })
-    }
-}
 
 /// Whether the way back to user mode has anything to do for the running task:
 /// its process ended or stopped, a signal to deliver to its thread, or a mask

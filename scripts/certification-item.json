@@ -93,9 +93,11 @@
         "panic.rs",
         "panic/**",
         "sched/**",
+        "signal_frame.rs",
         "smp.rs",
         "smp/**",
         "sync.rs",
+        "syscall/uaccess.rs",
         "timer.rs",
         "trap.rs",
         "user/**",
@@ -148,7 +150,6 @@
         "syscall/registry.rs",
         "syscall/system.rs",
         "syscall/thread.rs",
-        "syscall/uaccess.rs",
         "syscall/unmap_check.rs"
       ]
     },
@@ -323,13 +324,6 @@
         "finding": "F-01"
       },
       {
-        "file": "arch/aarch64/signal.rs",
-        "references": "syscall::deliver",
-        "from_ring": "core",
-        "to_ring": "load",
-        "finding": "F-02"
-      },
-      {
         "file": "arch/aarch64/trap.rs",
         "references": "syscall::deliver",
         "from_ring": "core",
@@ -337,21 +331,7 @@
         "finding": "F-02"
       },
       {
-        "file": "arch/armv7a/signal.rs",
-        "references": "syscall::deliver",
-        "from_ring": "core",
-        "to_ring": "load",
-        "finding": "F-02"
-      },
-      {
         "file": "arch/armv7a/trap.rs",
-        "references": "syscall::deliver",
-        "from_ring": "core",
-        "to_ring": "load",
-        "finding": "F-02"
-      },
-      {
-        "file": "arch/x86_64/signal.rs",
         "references": "syscall::deliver",
         "from_ring": "core",
         "to_ring": "load",

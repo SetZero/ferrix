@@ -26,7 +26,7 @@ use ferrix_linux_abi::types::{SA_RESTORER, SA_SIGINFO};
 use super::cpu;
 use super::switch::{self, UserState};
 use super::trap::{TrapFrame, USER_CPSR};
-use crate::syscall::deliver::{BadFrame, FrameBytes, FrameRequest, Restored, SIGINFO_BYTES};
+use crate::signal_frame::{BadFrame, FrameBytes, FrameRequest, Restored, SIGINFO_BYTES};
 use crate::user::space::AddressSpace;
 
 /// No red zone in the AAPCS.

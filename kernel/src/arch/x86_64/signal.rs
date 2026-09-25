@@ -33,7 +33,7 @@ use super::gdt;
 use super::switch::{self, UserState};
 use super::syscall::SyscallFrame;
 use super::trap::TrapFrame;
-use crate::syscall::deliver::{BadFrame, FrameBytes, FrameRequest, Restored, SIGINFO_BYTES};
+use crate::signal_frame::{BadFrame, FrameBytes, FrameRequest, Restored, SIGINFO_BYTES};
 use crate::user::space::AddressSpace;
 
 /// Bytes below the stack pointer the System V ABI lets a leaf function use

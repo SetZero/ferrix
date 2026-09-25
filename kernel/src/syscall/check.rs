@@ -4122,10 +4122,10 @@ mod paths {
 
     use super::{map_rw, number_for};
     use crate::arch;
+    use crate::arch::StatLayout;
     use crate::fs;
     use crate::mm;
     use crate::syscall::process::{self, Process};
-    use crate::arch::StatLayout;
     use crate::syscall::{memory, uaccess};
 
     /// What the path checks measured, for the boot log.
@@ -6319,7 +6319,7 @@ fn check_a_signal_blocked_after_it_was_sent_is_handed_on() -> Result<(), &'stati
     crate::syscall::deliver::leave_handler(
         &first,
         signal::bit(SIGUSR1),
-        crate::syscall::deliver::StackRecord::default(),
+        crate::signal_frame::StackRecord::default(),
         0,
     );
     if process.take_handed_to() != tid {
