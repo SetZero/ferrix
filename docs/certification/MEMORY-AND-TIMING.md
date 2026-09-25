@@ -54,25 +54,42 @@ adapter above it discards that distinction for every ordinary Rust container.
 
 ### 1.4 What would close it
 
+**First, a constraint that rules out the obvious answer.** The usual fix is an
+`#[alloc_error_handler]` that reports the failure properly instead of aborting
+generically. **It is not available.** The attribute is an unstable library
+feature (rust-lang issue #51540), verified against this tree's pinned 1.97.1,
+and `kernel/` and `boot/` use no unstable features by policy — a policy that
+`docs/certification/TOOLS.md` leans on, since it is part of why the toolchain
+story is as clean as it is.
+
+`Box::try_new` and `Arc::try_new` are unstable for the same reason. What *is*
+stable is `Vec::try_reserve`, which covers growth but not the `Box` and `Arc`
+allocations that dominate the 225 sites.
+
+So the item cannot make allocation failure recoverable without either adopting
+a nightly feature — which would cost more assurance than it buys — or
+hand-rolling fallible construction at each site. That is worth knowing before
+anybody plans this work, and it interacts with F-17: a Ferrocene toolchain
+would not change it either.
+
 In increasing order of cost, and none of it done:
 
-1. **Say so.** An `#[alloc_error_handler]` that panics with a catalogued
-   explanation, so the failure is diagnosed rather than generic. Cheap, and it
-   makes the present behaviour deliberate instead of inherited.
-2. **Bound the pre-user-mode item.** Everything the item allocates before the
+1. **Bound the pre-user-mode item.** Everything the item allocates before the
    first program runs is a fixed, measurable set. Measuring it would let the
    item claim a bounded working set for its own bring-up even while the paths
    a program drives stay unbounded.
-3. **Make the driveable paths fallible.** The sites a program can reach in a
+2. **Make the driveable paths fallible.** The sites a program can reach in a
    loop — `object/job.rs`, `object/channel.rs`, `user/space.rs`,
    `syscall/futex.rs` — are the ones that matter for T.EXHAUST (V-05 in
-   [VULNERABILITY-ANALYSIS.md](VULNERABILITY-ANALYSIS.md)). Fallible
-   allocation plus a quota is the real fix and it is a large change.
-4. **Preallocate.** What a SIL 4 or DAL A item would do, and incompatible with
+   [VULNERABILITY-ANALYSIS.md](VULNERABILITY-ANALYSIS.md)). On stable this
+   means hand-rolled fallible construction, not a global handler. Plus a
+   quota. It is a large change.
+3. **Preallocate.** What a SIL 4 or DAL A item would do, and incompatible with
    an OS that also hosts a compiler.
 
 **Verdict: F-23 stands.** It is now a measured finding rather than an
-impression: 225 sites, four allocators, failure is fatal, no handler, no bound.
+impression: 225 sites, four allocators, failure is fatal, no handler possible
+on stable, no bound.
 
 ---
 

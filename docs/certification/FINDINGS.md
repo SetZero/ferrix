@@ -386,9 +386,14 @@ item is fatal, not recoverable, at all 225 sites — even though `libs/heap`
 itself reports `OutOfMemory` properly and the `GlobalAlloc` adapter above it
 throws that distinction away.
 
-The analysis lists four closure routes by cost, of which the cheapest is worth
-doing on its own: an `#[alloc_error_handler]` with a catalogued explanation, so
-the present behaviour is deliberate rather than inherited.
+And the obvious fix is unavailable. `#[alloc_error_handler]` is an unstable
+library feature (rust-lang #51540), verified against the pinned 1.97.1, and
+`kernel/` uses no unstable features by policy. `Box::try_new` and
+`Arc::try_new` are unstable for the same reason; only `Vec::try_reserve` is
+stable, and it covers growth rather than the `Box` and `Arc` allocations that
+dominate the 225 sites. Making failure recoverable therefore means hand-rolled
+fallible construction site by site — and a Ferrocene toolchain (F-17) would not
+change that.
 
 ### F-24 — no worst-case execution time analysis
 **Moderate, scoped 2026-09-25** in
