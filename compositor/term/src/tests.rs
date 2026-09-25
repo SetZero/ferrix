@@ -136,7 +136,7 @@ fn a_small_write_has_small_cell_damage() {
     let mut after = before.clone();
     after.write(b"x");
     assert_eq!(
-        after.damage_since(&before),
+        after.damage_since(&before.snapshot()),
         Some(crate::grid::CellDamage {
             left: 0,
             top: 0,
@@ -151,7 +151,7 @@ fn a_small_write_has_small_cell_damage() {
 #[test]
 fn an_unchanged_grid_has_no_damage() {
     let grid = Grid::new(80, 24);
-    assert_eq!(grid.damage_since(&grid), None);
+    assert_eq!(grid.damage_since(&grid.snapshot()), None);
 }
 
 /// Incremental rasterisation produces the same bytes as painting the updated
@@ -163,7 +163,9 @@ fn cell_damage_paints_the_same_picture_as_a_full_redraw() {
     before.write(b"hello");
     let mut after = before.clone();
     after.write(b"!");
-    let damage = after.damage_since(&before).expect("a changed grid");
+    let damage = after
+        .damage_since(&before.snapshot())
+        .expect("a changed grid");
     let colours = paint::Colours::default();
     let (width, height) = (8 * paint::CELL.0, 2 * paint::CELL.1);
     let mut incremental = vec![0u8; width * height * 4];
@@ -512,4 +514,175 @@ fn agnosters_prompt_is_two_segments_and_their_separators() {
     );
     // The last separator: blue on the terminal's own background.
     assert_eq!((cell(17).background, cell(17).colour), (None, 4));
+}
+
+/// A row that scrolls off the top is kept, and the screen can look back at
+/// it without the program's rows moving.
+#[test]
+fn scrolled_rows_are_kept_and_can_be_looked_back_at() {
+    let mut grid = Grid::new(6, 2);
+    grid.write(b"one\r\ntwo\r\nthree\r\nfour");
+    assert_eq!(lines(&grid), ["three", "four"]);
+    assert_eq!(grid.history(), 2);
+
+    grid.scroll_view(1);
+    let shown = |grid: &Grid, row: usize| -> String {
+        (0..6)
+            .filter_map(|column| grid.shown(column, row).map(|(cell, _)| cell.ch))
+            .collect::<String>()
+            .trim_end()
+            .to_owned()
+    };
+    assert_eq!([shown(&grid, 0), shown(&grid, 1)], ["two", "three"]);
+    // The cursor is on the live row that is now below the screen.
+    assert_eq!(grid.shown_cursor(), None);
+
+    // Further back than the history is the oldest row.
+    grid.scroll_view(10);
+    assert_eq!(grid.view(), 2);
+    assert_eq!(shown(&grid, 0), "one");
+
+    // Output while looking back keeps the same text in view.
+    grid.write(b"\r\nfive");
+    assert_eq!(grid.view(), 3);
+    assert_eq!(shown(&grid, 0), "one");
+
+    grid.view_live();
+    assert_eq!([shown(&grid, 0), shown(&grid, 1)], ["four", "five"]);
+
+    // `clear`'s `CSI 3 J` forgets the scrollback.
+    grid.write(b"\x1b[3J");
+    assert_eq!(grid.history(), 0);
+}
+
+/// A drag selects from one edge between cells to another, across rows, and
+/// what is copied is the text: a line break where a row ended, none where it
+/// only ran on, and no trailing blanks.
+#[test]
+fn a_selection_copies_the_text_it_covers() {
+    let mut grid = Grid::new(8, 3);
+    grid.write(b"hello   \r\nabcdefghij");
+    // `abcdefgh` ran on into `ij`.
+    let (from, to) = (grid.point(1, 0, false), grid.point(0, 2, true));
+    grid.select(from, crate::grid::Unit::Cell);
+    assert_eq!(
+        grid.selected(),
+        None,
+        "a press that has not moved selects nothing"
+    );
+    grid.extend(to);
+    assert_eq!(grid.selected().as_deref(), Some("ello\nabcdefghi"));
+    assert!(grid.shown(1, 0).is_some_and(|(_, selected)| selected));
+    assert!(!grid.shown(0, 0).is_some_and(|(_, selected)| selected));
+
+    // Dragged backwards is the same selection.
+    grid.select(to, crate::grid::Unit::Cell);
+    grid.extend(from);
+    assert_eq!(grid.selected().as_deref(), Some("ello\nabcdefghi"));
+
+    grid.deselect();
+    assert_eq!(grid.selected(), None);
+}
+
+/// A double click takes the word, and a path is one word; a triple click
+/// takes the line.
+#[test]
+fn a_double_click_is_a_word_and_a_triple_click_a_line() {
+    let mut grid = Grid::new(30, 2);
+    grid.write(b"ls /usr/share (here)");
+    grid.select(grid.point(6, 0, false), crate::grid::Unit::Word);
+    assert_eq!(grid.selected().as_deref(), Some("/usr/share"));
+    grid.select(grid.point(16, 0, false), crate::grid::Unit::Word);
+    assert_eq!(grid.selected().as_deref(), Some("here"));
+    grid.select(grid.point(2, 0, false), crate::grid::Unit::Line);
+    assert_eq!(grid.selected().as_deref(), Some("ls /usr/share (here)"));
+}
+
+/// A selection is held in the text's own lines, so output that scrolls the
+/// screen carries the selection up with the text.
+#[test]
+fn a_selection_moves_with_its_text_as_the_screen_scrolls() {
+    let mut grid = Grid::new(6, 2);
+    grid.write(b"keep\r\n");
+    grid.select(grid.point(0, 0, false), crate::grid::Unit::Line);
+    grid.write(b"x\r\ny");
+    assert_eq!(grid.selected().as_deref(), Some("keep"));
+    // Scrolled off the top, it is still what a copy takes, and it is
+    // highlighted once the screen looks back at it.
+    assert!(!grid.shown(0, 0).is_some_and(|(_, selected)| selected));
+    grid.scroll_view(1);
+    assert!(grid.shown(0, 0).is_some_and(|(_, selected)| selected));
+}
+
+/// Looking back and selecting damage the cells that changed on the screen,
+/// and paint the picture a full redraw does.
+#[test]
+fn looking_back_and_selecting_damage_what_they_change() {
+    let mut grid = Grid::new(8, 2);
+    grid.write(b"one\r\ntwo\r\nthree");
+    let before = grid.snapshot();
+    grid.select(grid.point(0, 1, false), crate::grid::Unit::Cell);
+    grid.extend(grid.point(1, 1, true));
+    assert_eq!(
+        grid.damage_since(&before),
+        Some(crate::grid::CellDamage {
+            left: 0,
+            top: 1,
+            width: 2,
+            height: 1,
+        })
+    );
+
+    let colours = paint::Colours::default();
+    let (width, height) = (8 * paint::CELL.0, 2 * paint::CELL.1);
+    let mut incremental = vec![0u8; width * height * 4];
+    paint::draw(
+        &mut incremental,
+        (width, height),
+        width * 4,
+        &grid,
+        &colours,
+        1,
+    );
+    let before = grid.snapshot();
+    grid.scroll_view(1);
+    let damage = grid
+        .damage_since(&before)
+        .expect("looking back changes the screen");
+    paint::draw_damage(
+        &mut incremental,
+        (width, height),
+        width * 4,
+        &grid,
+        &colours,
+        1,
+        damage,
+    );
+    let mut full = vec![0u8; width * height * 4];
+    paint::draw(&mut full, (width, height), width * 4, &grid, &colours, 1);
+    assert_eq!(incremental, full);
+}
+
+/// A window that shrinks below the cursor keeps the cursor's row in view by
+/// moving the rows above into the scrollback.
+#[test]
+fn shrinking_below_the_cursor_moves_rows_into_the_scrollback() {
+    let mut grid = Grid::new(6, 4);
+    grid.write(b"a\r\nb\r\nc\r\nd");
+    grid.resize(6, 2);
+    assert_eq!(lines(&grid), ["c", "d"]);
+    assert_eq!(grid.cursor(), (1, 1));
+    assert_eq!(grid.history(), 2);
+}
+
+/// `CSI ? 2004 h` asks for pastes to be bracketed, and `l` stops it.
+#[test]
+fn bracketed_paste_is_a_mode_a_program_turns_on_and_off() {
+    let mut grid = Grid::new(4, 2);
+    assert!(!grid.bracketed_paste());
+    grid.write(b"\x1b[?2004h");
+    assert!(grid.bracketed_paste());
+    grid.write(b"\x1b[?2004l");
+    assert!(!grid.bracketed_paste());
+    assert_eq!(lines(&grid), ["", ""]);
 }

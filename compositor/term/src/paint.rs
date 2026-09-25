@@ -35,6 +35,8 @@ pub struct Colours {
     pub palette: [Rgb; 8],
     /// The cursor's block.
     pub cursor: Rgb,
+    /// Behind selected text.
+    pub selection: Rgb,
 }
 
 impl Default for Colours {
@@ -55,6 +57,7 @@ impl Default for Colours {
                 Rgb::new(0xCC, 0xCC, 0xD0),
             ],
             cursor: Rgb::new(0xCC, 0xCC, 0xD0),
+            selection: Rgb::new(0x3A, 0x4A, 0x6A),
         }
     }
 }
@@ -143,7 +146,7 @@ pub fn draw_damage(
     );
     for row in top..bottom {
         for column in left..right {
-            let Some(cell) = grid.cell(column, row) else {
+            let Some((cell, selected)) = grid.shown(column, row) else {
                 continue;
             };
             let (x, y) = (column * cell_width, row * cell_height);
@@ -152,10 +155,15 @@ pub fn draw_damage(
             }
             // The cursor is a block the text is drawn out of, which is what
             // a terminal with no blinking draws.
-            let on_cursor = grid.cursor_visible() && grid.cursor() == (column, row);
+            let on_cursor = grid.shown_cursor() == Some((column, row));
             let (fg, bg) = if on_cursor {
                 surface.fill_rect(x, y, CELL.0 * scale, CELL.1 * scale, colours.cursor);
                 (colours.background, colours.cursor)
+            } else if selected {
+                // Selected text keeps its own colour over the selection's,
+                // so a selected prompt still reads as that prompt.
+                surface.fill_rect(x, y, CELL.0 * scale, CELL.1 * scale, colours.selection);
+                (colour(cell.colour, cell.bold, colours), colours.selection)
             } else if let Some(index) = cell.background {
                 // A cell of its own colour: a prompt's segments, a
                 // highlighted line. Painted before the glyph, which is

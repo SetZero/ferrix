@@ -6,20 +6,27 @@
 //! connect-bind-configure-draw -- because that is the shape every client
 //! has. What is different is what it draws and what it does with a key: a
 //! grid of characters, and a byte written to the pseudoterminal.
+//!
+//! The pointer selects: a drag selects the cells it passes over, a double
+//! click whole words and a triple click whole lines, and the wheel looks
+//! back through the scrollback. Control-shift-C copies the selection to the
+//! clipboard and control-shift-V pastes the clipboard, the keys every Linux
+//! terminal uses, since control-C alone is the interrupt a program is owed.
 
 use std::collections::BTreeMap;
+use std::io::{Read as _, Write as _};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::time::{Duration, Instant};
 
 use compositor_protocol::core::{
-    self, wl_compositor, wl_display, wl_keyboard, wl_registry, wl_seat, wl_shm, wl_shm_pool,
-    wl_surface,
+    self, wl_compositor, wl_data_device, wl_data_device_manager, wl_data_offer, wl_data_source,
+    wl_display, wl_keyboard, wl_pointer, wl_registry, wl_seat, wl_shm, wl_shm_pool, wl_surface,
 };
 use compositor_protocol::xdg_shell::{self, xdg_surface, xdg_toplevel, xdg_wm_base};
 use compositor_shm::Shared;
 use compositor_wire::{Arg, ArgType, Fd, Interface, ObjectId, Reader, Writer};
 
-use crate::grid::{CellDamage, Grid};
+use crate::grid::{CellDamage, Grid, Snapshot, Unit};
 use crate::paint::{self, Colours};
 use crate::pty::Pty;
 
@@ -41,6 +48,12 @@ mod id {
     pub(super) const SEAT: ObjectId = ObjectId(12);
     pub(super) const KEYBOARD: ObjectId = ObjectId(13);
     pub(super) const OUTPUT: ObjectId = ObjectId(14);
+    pub(super) const POINTER: ObjectId = ObjectId(15);
+    pub(super) const DATA_MANAGER: ObjectId = ObjectId(16);
+    pub(super) const DATA_DEVICE: ObjectId = ObjectId(17);
+    /// The first id a data source takes. A source serves one copy and is
+    /// destroyed when the next one replaces it, so each copy makes another.
+    pub(super) const FIRST_SOURCE: u32 = 32;
 }
 
 /// How long to keep drawing after the program has finished, so that what it
@@ -102,6 +115,65 @@ struct Terminal {
     /// keys a second. `None` for a rate of zero, which means "do not repeat"
     /// rather than "repeat as fast as possible".
     repeat_interval: Option<Duration>,
+    /// Bytes on their way to the program: what was typed and what was
+    /// pasted, written as fast as it reads them.
+    input: Vec<u8>,
+    /// The serial of the last key or button, which a copy names to say the
+    /// person asked for it.
+    serial: u32,
+    /// The pointer, the selection it makes and the wheel.
+    mouse: Mouse,
+    /// The clipboard: what this terminal copied, and what it was offered.
+    clipboard: Clipboard,
+}
+
+/// What the pointer is doing.
+#[derive(Debug, Default)]
+struct Mouse {
+    /// Whether the seat has been asked for its pointer.
+    asked: bool,
+    /// Where it is on the window, in logical pixels.
+    at: (f64, f64),
+    /// Whether the left button is held, dragging a selection out.
+    dragging: bool,
+    /// The last press: when, on which cell, and which click of a run of
+    /// them it was -- one, two or three.
+    last: Option<(Instant, (usize, usize), u8)>,
+    /// A wheel's notches, and the distance a smooth scroll moved, since the
+    /// last `wl_pointer.frame`.
+    notches: i32,
+    distance: f64,
+}
+
+/// Both halves of copy and paste.
+#[derive(Debug)]
+struct Clipboard {
+    /// Whether the data device has been asked for.
+    device: bool,
+    /// The source that is the clipboard now, if this terminal copied last.
+    current: Option<ObjectId>,
+    /// Every source still alive, with the text it serves: the current one,
+    /// and any the compositor has not yet said it replaced.
+    sources: BTreeMap<ObjectId, String>,
+    /// The id the next source takes.
+    next: u32,
+    /// The offers the compositor has made, with the types each has.
+    offers: BTreeMap<ObjectId, Vec<String>>,
+    /// The offer that is the clipboard now, when someone else copied last.
+    selection: Option<ObjectId>,
+    /// A paste being read.
+    pasting: Option<Paste>,
+    /// Pipe ends to close once the request that carries them has gone:
+    /// closing one before it is sent sends nothing.
+    sent: Vec<OwnedFd>,
+}
+
+/// A paste on its way in through a pipe.
+#[derive(Debug)]
+struct Paste {
+    pipe: std::fs::File,
+    bytes: Vec<u8>,
+    started: Instant,
 }
 
 /// Which bit `wl_keyboard.modifiers` uses for control.
@@ -112,6 +184,34 @@ struct Terminal {
 /// `Key::keysym` answers it from every mask the key declares rather than
 /// from this one bit.
 const CONTROL: u32 = 1 << 2;
+
+/// Which bit `wl_keyboard.modifiers` uses for shift: the first of XKB's.
+const SHIFT: u32 = 1 << 0;
+
+/// The left button, as evdev numbers it and `wl_pointer.button` carries it.
+const BTN_LEFT: u32 = 0x110;
+
+/// How soon a second press on the same cell has to follow the first to be a
+/// double click rather than a new single one.
+const MULTI_CLICK: Duration = Duration::from_millis(400);
+
+/// How many rows a wheel's notch scrolls: three, as xterm and foot do.
+const WHEEL_ROWS: i32 = 3;
+
+/// The types copied text is offered as, and the ones a paste takes, in the
+/// order a paste prefers them: the UTF-8 type every Wayland program agrees
+/// on, the bare one some older ones offer, and X11's name for UTF-8 that
+/// `XWayland`'s programs use.
+const TEXT_TYPES: [&str; 3] = ["text/plain;charset=utf-8", "text/plain", "UTF8_STRING"];
+
+/// The most a paste takes. A clipboard holding a video, offered as text by
+/// mistake, is not something to type at a shell.
+const PASTE_LIMIT: usize = 16 << 20;
+
+/// How long a paste waits for whoever copied to finish writing: a program
+/// that took the request and never answered must not leave every later
+/// paste waiting behind it.
+const PASTE_PATIENCE: Duration = Duration::from_secs(5);
 
 /// The key a held `wl_keyboard.key` is retyping, and when it does that next.
 ///
@@ -211,6 +311,19 @@ pub fn run(
         repeat: None,
         repeat_delay: Duration::ZERO,
         repeat_interval: None,
+        input: Vec::new(),
+        serial: 0,
+        mouse: Mouse::default(),
+        clipboard: Clipboard {
+            device: false,
+            current: None,
+            sources: BTreeMap::new(),
+            next: id::FIRST_SOURCE,
+            offers: BTreeMap::new(),
+            selection: None,
+            pasting: None,
+            sent: Vec::new(),
+        },
     };
 
     // No deadline: a terminal lasts as long as its program or its window.
@@ -232,10 +345,15 @@ pub fn run(
         // frame either changed.
         state.pump()?;
         state.autorepeat();
+        state.read_paste();
+        state.feed()?;
         if state.dirty.is_some() {
             state.draw(&mut out)?;
         }
         flush(&mut connection, &mut out)?;
+        // The pipe ends a paste handed over have gone with that flush, and
+        // this process's copies are what would keep the pipe open.
+        state.clipboard.sent.clear();
         if state.over() {
             break;
         }
@@ -262,7 +380,7 @@ impl Terminal {
     /// Take whatever the program wrote.
     fn pump(&mut self) -> Result<(), String> {
         let mut buffer = [0u8; 4096];
-        // The grid is small (a typical 640×384 terminal is 53×16 cells),
+        // The screen is small (a typical 640×384 terminal is 53×16 cells),
         // and comparing it after draining a PTY batch is much cheaper than
         // repainting its whole shared-memory buffer. Take that snapshot only
         // when there is output: the usual idle pass must allocate nothing at
@@ -277,16 +395,12 @@ impl Terminal {
                 break;
             }
             if before.is_none() {
-                before = Some(self.grid.clone());
+                before = Some(self.grid.snapshot());
             }
             self.grid.write(buffer.get(..read).unwrap_or(&[]));
         }
-        if let Some(before) = before
-            && let Some(damage) = self.grid.damage_since(&before)
-        {
-            self.dirty = Some(self.dirty.map_or(Dirty::Cells(damage), |held| {
-                held.joined(Dirty::Cells(damage))
-            }));
+        if let Some(before) = before {
+            self.damaged(&before);
         }
         if self.finished.is_none() && self.pty.done() {
             self.finished = Some(Instant::now());
@@ -301,7 +415,7 @@ impl Terminal {
             let Ok(header) = reader.peek() else {
                 break;
             };
-            let Some(interface) = interface_of(header.sender) else {
+            let Some(interface) = self.interface(header.sender) else {
                 return Err(format!("an event for object {}", header.sender.0));
             };
             let Some(method) = interface.event(header.opcode) else {
@@ -396,9 +510,22 @@ impl Terminal {
                 }
             }
             id::SEAT if opcode == wl_seat::event::CAPABILITIES => {
-                self.keyboard_from(args.first().and_then(Arg::as_uint).unwrap_or(0), out);
+                self.devices_from(args.first().and_then(Arg::as_uint).unwrap_or(0), out);
             }
-            id::KEYBOARD => self.key_event(opcode, args)?,
+            id::KEYBOARD => self.key_event(opcode, args, out)?,
+            id::POINTER => self.pointer_event(opcode, args),
+            id::DATA_DEVICE => self.device_event(opcode, args, out),
+            offer if self.clipboard.offers.contains_key(&offer) => {
+                if opcode == wl_data_offer::event::OFFER
+                    && let Some(mime) = args.first().and_then(Arg::as_str)
+                    && let Some(types) = self.clipboard.offers.get_mut(&offer)
+                {
+                    types.push(mime.to_owned());
+                }
+            }
+            source if self.clipboard.sources.contains_key(&source) => {
+                self.source_event(source, opcode, args, out);
+            }
             _ => {}
         }
         Ok(())
@@ -416,6 +543,7 @@ impl Terminal {
             ("xdg_wm_base", id::SHELL, 6, true),
             ("wl_seat", id::SEAT, 7, false),
             ("wl_output", id::OUTPUT, 4, false),
+            ("wl_data_device_manager", id::DATA_MANAGER, 3, false),
         ] {
             let offer = self.globals.get(interface).copied();
             let Some((name, offered)) = offer else {
@@ -474,28 +602,51 @@ impl Terminal {
             &[ArgType::Str { nullable: false }],
             &[Arg::Str(Some("rocks.magical.term"))],
         );
+        // The clipboard is a device of the seat's, and a compositor with no
+        // clipboard is one this terminal still runs on: it copies nothing.
+        if self.globals.contains_key("wl_data_device_manager")
+            && self.globals.contains_key("wl_seat")
+        {
+            self.clipboard.device = true;
+            request(
+                out,
+                id::DATA_MANAGER,
+                wl_data_device_manager::request::GET_DATA_DEVICE,
+                &[ArgType::NewId, ArgType::Object { nullable: false }],
+                &[Arg::NewId(id::DATA_DEVICE), Arg::Object(id::SEAT)],
+            );
+        }
         // The first commit carries no buffer: it asks to be configured.
         request(out, id::SURFACE, wl_surface::request::COMMIT, &[], &[]);
         Ok(())
     }
 
-    /// Ask the seat for a keyboard, if it has one.
-    fn keyboard_from(&mut self, capabilities: u32, out: &mut Writer) {
-        if self.seat || capabilities & wl_seat::capability::KEYBOARD == 0 {
-            return;
+    /// Ask the seat for a keyboard and a pointer, if it has them.
+    fn devices_from(&mut self, capabilities: u32, out: &mut Writer) {
+        if !self.seat && capabilities & wl_seat::capability::KEYBOARD != 0 {
+            self.seat = true;
+            request(
+                out,
+                id::SEAT,
+                wl_seat::request::GET_KEYBOARD,
+                &[ArgType::NewId],
+                &[Arg::NewId(id::KEYBOARD)],
+            );
         }
-        self.seat = true;
-        request(
-            out,
-            id::SEAT,
-            wl_seat::request::GET_KEYBOARD,
-            &[ArgType::NewId],
-            &[Arg::NewId(id::KEYBOARD)],
-        );
+        if !self.mouse.asked && capabilities & wl_seat::capability::POINTER != 0 {
+            self.mouse.asked = true;
+            request(
+                out,
+                id::SEAT,
+                wl_seat::request::GET_POINTER,
+                &[ArgType::NewId],
+                &[Arg::NewId(id::POINTER)],
+            );
+        }
     }
 
     /// What the keyboard said, turned into what the program reads.
-    fn key_event(&mut self, opcode: u16, args: &[Arg<'_>]) -> Result<(), String> {
+    fn key_event(&mut self, opcode: u16, args: &[Arg<'_>], out: &mut Writer) -> Result<(), String> {
         match opcode {
             wl_keyboard::event::KEYMAP => {
                 self.read_keymap(args);
@@ -521,7 +672,8 @@ impl Terminal {
                 let code = args.get(2).and_then(Arg::as_uint).unwrap_or(0);
                 let state = args.get(3).and_then(Arg::as_uint).unwrap_or(0);
                 if state == wl_keyboard::key_state::PRESSED {
-                    self.typed(code);
+                    self.serial = args.first().and_then(Arg::as_uint).unwrap_or(self.serial);
+                    self.typed(code, out);
                 } else if let Ok(code) = u16::try_from(code)
                     && self.repeat.as_ref().is_some_and(|held| held.code == code)
                 {
@@ -620,7 +772,7 @@ impl Terminal {
 
     /// Send what the key with this evdev code types, and arm it to retype
     /// itself while it is held, if the compositor has said keys repeat.
-    fn typed(&mut self, code: u32) {
+    fn typed(&mut self, code: u32, out: &mut Writer) {
         let Ok(code) = u16::try_from(code) else {
             return;
         };
@@ -634,13 +786,18 @@ impl Terminal {
         let Some(keysym) = key.and_then(|key| key.keysym(self.modifiers)) else {
             return;
         };
+        if self.shortcut(keysym, out) {
+            return;
+        }
         let control = self.modifiers & CONTROL != 0;
         // A modifier, or a key this terminal has no bytes for: nothing is
         // typed, so nothing should retype itself either.
         let Some(bytes) = crate::keys::bytes(keysym, control) else {
             return;
         };
-        let _ = self.pty.write(&bytes);
+        // Typing is at the live rows, so a screen looking back comes home.
+        self.look_live();
+        self.send(&bytes);
         if self.repeat_interval.is_some() {
             self.repeat = Some(Repeating {
                 code,
@@ -669,10 +826,473 @@ impl Terminal {
             self.repeat = None;
             return;
         };
-        let _ = self.pty.write(&held.bytes);
+        let bytes = held.bytes.clone();
+        self.send(&bytes);
         if let Some(held) = &mut self.repeat {
             held.next = now + interval;
         }
+    }
+
+    /// The terminal's own keys, which the program never sees: control-shift-C
+    /// and control-shift-V copy and paste, and shift with Page Up and Page
+    /// Down pages through the scrollback. Whether `keysym` was one of them.
+    fn shortcut(&mut self, keysym: &str, out: &mut Writer) -> bool {
+        if self.modifiers & SHIFT == 0 {
+            return false;
+        }
+        let control = self.modifiers & CONTROL != 0;
+        let page = isize::try_from(self.grid.size().1.saturating_sub(1).max(1)).unwrap_or(1);
+        match (control, keysym) {
+            (true, "C" | "c") => self.copy(out),
+            (true, "V" | "v") => self.paste(out),
+            (false, "Prior") => self.change(|grid| grid.scroll_view(page)),
+            (false, "Next") => self.change(|grid| grid.scroll_view(-page)),
+            _ => return false,
+        }
+        true
+    }
+
+    /// Queue bytes for the program.
+    fn send(&mut self, bytes: &[u8]) {
+        // A program that has stopped reading is not owed an unbounded queue
+        // of a held key.
+        if self.input.len().saturating_add(bytes.len()) <= PASTE_LIMIT * 2 {
+            self.input.extend_from_slice(bytes);
+        }
+    }
+
+    /// Write what the program will take of what is queued for it.
+    fn feed(&mut self) -> Result<(), String> {
+        while !self.input.is_empty() {
+            let written = self
+                .pty
+                .write_some(&self.input)
+                .map_err(|error| format!("writing the pseudoterminal: {error}"))?;
+            if written == 0 {
+                break;
+            }
+            let _ = self.input.drain(..written.min(self.input.len()));
+        }
+        Ok(())
+    }
+
+    /// Change what the screen shows -- where it looks, what is selected --
+    /// and damage what that changed.
+    fn change(&mut self, change: impl FnOnce(&mut Grid)) {
+        let before = self.grid.snapshot();
+        change(&mut self.grid);
+        self.damaged(&before);
+    }
+
+    /// Damage whatever differs from `before`.
+    fn damaged(&mut self, before: &Snapshot) {
+        if let Some(damage) = self.grid.damage_since(before) {
+            self.dirty = Some(self.dirty.map_or(Dirty::Cells(damage), |held| {
+                held.joined(Dirty::Cells(damage))
+            }));
+        }
+    }
+
+    /// Look at the live rows, if the screen is looking back.
+    fn look_live(&mut self) {
+        if self.grid.view() != 0 {
+            self.change(Grid::view_live);
+        }
+    }
+
+    /// What the pointer did.
+    fn pointer_event(&mut self, opcode: u16, args: &[Arg<'_>]) {
+        let fixed = |at: usize| {
+            args.get(at)
+                .and_then(Arg::as_fixed)
+                .map_or(0.0, compositor_wire::Fixed::to_f64)
+        };
+        match opcode {
+            wl_pointer::event::ENTER => self.mouse.at = (fixed(2), fixed(3)),
+            wl_pointer::event::MOTION => {
+                self.mouse.at = (fixed(1), fixed(2));
+                if self.mouse.dragging {
+                    self.drag();
+                }
+            }
+            wl_pointer::event::BUTTON => {
+                let button = args.get(2).and_then(Arg::as_uint).unwrap_or(0);
+                let state = args.get(3).and_then(Arg::as_uint).unwrap_or(0);
+                if button != BTN_LEFT {
+                    return;
+                }
+                if state == wl_pointer::button_state::PRESSED {
+                    self.serial = args.first().and_then(Arg::as_uint).unwrap_or(self.serial);
+                    self.press();
+                } else {
+                    self.mouse.dragging = false;
+                }
+            }
+            wl_pointer::event::AXIS
+                if args.get(1).and_then(Arg::as_uint)
+                    == Some(wl_pointer::axis::VERTICAL_SCROLL) =>
+            {
+                self.mouse.distance += fixed(2);
+            }
+            wl_pointer::event::AXIS_DISCRETE
+                if args.first().and_then(Arg::as_uint)
+                    == Some(wl_pointer::axis::VERTICAL_SCROLL) =>
+            {
+                let notches = args.get(1).and_then(Arg::as_int).unwrap_or(0);
+                self.mouse.notches = self.mouse.notches.saturating_add(notches);
+            }
+            wl_pointer::event::FRAME => self.wheel(),
+            _ => {}
+        }
+    }
+
+    /// Scroll by what the wheel did in the frame that just ended.
+    ///
+    /// A wheel says how many notches it turned, and a notch is
+    /// [`WHEEL_ROWS`]; a touchpad says only how far, and a row is a cell's
+    /// height of that. A positive movement is the content moving up, which
+    /// is towards the newest rows.
+    fn wheel(&mut self) {
+        let rows = if self.mouse.notches != 0 {
+            self.mouse.distance = 0.0;
+            -self.mouse.notches.saturating_mul(WHEEL_ROWS)
+        } else {
+            let cell = f64::from(u32::try_from(paint::CELL.1).unwrap_or(24));
+            let whole = (self.mouse.distance / cell).trunc();
+            self.mouse.distance -= whole * cell;
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "a frame's scroll is a few rows, truncated to whole ones on purpose"
+            )]
+            let whole = -whole as i32;
+            whole
+        };
+        self.mouse.notches = 0;
+        if rows != 0 {
+            let rows = isize::try_from(rows).unwrap_or(0);
+            self.change(|grid| grid.scroll_view(rows));
+        }
+    }
+
+    /// The cell the pointer is over, and whether it is in that cell's right
+    /// half. Past the right edge is the right half of the last cell, so a
+    /// drag out there takes a line to its end.
+    fn under_pointer(&self) -> (usize, usize, bool) {
+        let (columns, _) = self.grid.size();
+        let (x, y) = (self.mouse.at.0.max(0.0), self.mouse.at.1.max(0.0));
+        let width = f64::from(u32::try_from(paint::CELL.0).unwrap_or(12));
+        let height = f64::from(u32::try_from(paint::CELL.1).unwrap_or(24));
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "both are clamped at zero above, and a window is far narrower than usize"
+        )]
+        let (column, row) = ((x / width) as usize, (y / height) as usize);
+        if column >= columns {
+            return (columns.saturating_sub(1), row, true);
+        }
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "a column number is far below the 2^52 an f64 holds exactly"
+        )]
+        let right = x - column as f64 * width >= width / 2.0;
+        (column, row, right)
+    }
+
+    /// The left button went down: start a selection, by the cell, the word
+    /// or the line as this is the first, second or third click in a row.
+    fn press(&mut self) {
+        let (column, row, right) = self.under_pointer();
+        let now = Instant::now();
+        let count = match self.mouse.last {
+            Some((when, at, count))
+                if now.duration_since(when) < MULTI_CLICK && at == (column, row) =>
+            {
+                count % 3 + 1
+            }
+            _ => 1,
+        };
+        self.mouse.last = Some((now, (column, row), count));
+        let unit = match count {
+            1 => Unit::Cell,
+            2 => Unit::Word,
+            _ => Unit::Line,
+        };
+        self.mouse.dragging = true;
+        self.change(|grid| {
+            let at = grid.point(column, row, right);
+            grid.select(at, unit);
+        });
+    }
+
+    /// The pointer moved with the button held: the selection follows it,
+    /// and above or below the window the screen scrolls towards it a row at
+    /// a time, so a selection can be longer than the window.
+    fn drag(&mut self) {
+        let rows = self.grid.size().1;
+        let bottom = f64::from(u32::try_from(rows * paint::CELL.1).unwrap_or(u32::MAX));
+        let step = if self.mouse.at.1 < 0.0 {
+            1
+        } else if self.mouse.at.1 >= bottom {
+            -1
+        } else {
+            0
+        };
+        let (column, row, right) = self.under_pointer();
+        self.change(|grid| {
+            if step != 0 {
+                grid.scroll_view(step);
+            }
+            let at = grid.point(column, row, right);
+            grid.extend(at);
+        });
+    }
+
+    /// What the data device said: a new offer, the clipboard changing hands,
+    /// or a drag passing over (which this terminal takes nothing from).
+    fn device_event(&mut self, opcode: u16, args: &[Arg<'_>], out: &mut Writer) {
+        match opcode {
+            wl_data_device::event::DATA_OFFER => {
+                if let Some(offer) = args.first().and_then(Arg::as_object) {
+                    let _ = self.clipboard.offers.insert(offer, Vec::new());
+                }
+            }
+            wl_data_device::event::SELECTION => {
+                let offer = args
+                    .first()
+                    .and_then(Arg::as_object)
+                    .filter(|offer| !offer.is_null());
+                self.clipboard.selection = offer;
+                self.forget_offers(offer, out);
+            }
+            wl_data_device::event::LEAVE => {
+                let keep = self.clipboard.selection;
+                self.forget_offers(keep, out);
+            }
+            _ => {}
+        }
+    }
+
+    /// Destroy every offer but `keep`: a selection that was replaced, or a
+    /// drag that has left.
+    fn forget_offers(&mut self, keep: Option<ObjectId>, out: &mut Writer) {
+        let gone: Vec<ObjectId> = self
+            .clipboard
+            .offers
+            .keys()
+            .copied()
+            .filter(|offer| Some(*offer) != keep)
+            .collect();
+        for offer in gone {
+            let _ = self.clipboard.offers.remove(&offer);
+            request(out, offer, wl_data_offer::request::DESTROY, &[], &[]);
+        }
+    }
+
+    /// What one of this terminal's sources was asked.
+    fn source_event(&mut self, source: ObjectId, opcode: u16, args: &[Arg<'_>], out: &mut Writer) {
+        match opcode {
+            wl_data_source::event::SEND => {
+                let (Some(mime), Some(fd)) = (
+                    args.first().and_then(Arg::as_str),
+                    args.get(1).and_then(Arg::as_fd),
+                ) else {
+                    return;
+                };
+                #[expect(
+                    unsafe_code,
+                    reason = "AUDIT: the descriptor arrived with this message and is this client's to own"
+                )]
+                // SAFETY: the wire reader hands over a descriptor nothing else holds.
+                let owned = unsafe { OwnedFd::from_raw_fd(fd.0) };
+                let text = self.clipboard.sources.get(&source).cloned();
+                if let Some(text) = text
+                    && TEXT_TYPES.contains(&mime)
+                {
+                    // On a thread of its own: whoever pastes reads as fast
+                    // as it likes, and a large copy is more than a pipe
+                    // holds. Writing it here would stop the window until
+                    // they had read it all -- and forever, were they
+                    // waiting for this window in turn.
+                    let _ = std::thread::Builder::new()
+                        .name("term-copy".to_owned())
+                        .spawn(move || {
+                            let mut file = std::fs::File::from(owned);
+                            let _ = file.write_all(text.as_bytes());
+                        });
+                }
+            }
+            wl_data_source::event::CANCELLED => {
+                let _ = self.clipboard.sources.remove(&source);
+                if self.clipboard.current == Some(source) {
+                    self.clipboard.current = None;
+                }
+                request(out, source, wl_data_source::request::DESTROY, &[], &[]);
+            }
+            _ => {}
+        }
+    }
+
+    /// Put the selected text on the clipboard.
+    fn copy(&mut self, out: &mut Writer) {
+        if !self.clipboard.device {
+            return;
+        }
+        let Some(text) = self.grid.selected().filter(|text| !text.is_empty()) else {
+            return;
+        };
+        let source = ObjectId(self.clipboard.next);
+        self.clipboard.next = self.clipboard.next.saturating_add(1);
+        request(
+            out,
+            id::DATA_MANAGER,
+            wl_data_device_manager::request::CREATE_DATA_SOURCE,
+            &[ArgType::NewId],
+            &[Arg::NewId(source)],
+        );
+        for mime in TEXT_TYPES {
+            request(
+                out,
+                source,
+                wl_data_source::request::OFFER,
+                &[ArgType::Str { nullable: false }],
+                &[Arg::Str(Some(mime))],
+            );
+        }
+        request(
+            out,
+            id::DATA_DEVICE,
+            wl_data_device::request::SET_SELECTION,
+            &[ArgType::Object { nullable: true }, ArgType::Uint],
+            &[Arg::Object(source), Arg::Uint(self.serial)],
+        );
+        // The source this replaces stays until the compositor cancels it,
+        // which is when nobody can ask it for anything any more.
+        let _ = self.clipboard.sources.insert(source, text);
+        self.clipboard.current = Some(source);
+    }
+
+    /// Paste the clipboard.
+    ///
+    /// Text this terminal copied itself is taken from its own hands: asked
+    /// through the compositor, it would be this terminal that had to write
+    /// into the pipe it was waiting to read. Anyone else's is asked for
+    /// through a pipe that [`Terminal::read_paste`] reads a little of on
+    /// each pass, so the window keeps drawing however long they take.
+    fn paste(&mut self, out: &mut Writer) {
+        if self.clipboard.pasting.is_some() {
+            return;
+        }
+        if let Some(text) = self
+            .clipboard
+            .current
+            .and_then(|source| self.clipboard.sources.get(&source))
+            .cloned()
+        {
+            self.deliver(text.as_bytes());
+            return;
+        }
+        let Some(offer) = self.clipboard.selection else {
+            return;
+        };
+        let Some(mime) = self.clipboard.offers.get(&offer).and_then(|types| {
+            TEXT_TYPES
+                .iter()
+                .find(|wanted| types.iter().any(|mime| mime == *wanted))
+        }) else {
+            return;
+        };
+        let Ok((read, write)) = pipe() else {
+            return;
+        };
+        request(
+            out,
+            offer,
+            wl_data_offer::request::RECEIVE,
+            &[ArgType::Str { nullable: false }, ArgType::Fd],
+            &[Arg::Str(Some(mime)), Arg::Fd(Fd(write.as_raw_fd()))],
+        );
+        self.clipboard.sent.push(write);
+        self.clipboard.pasting = Some(Paste {
+            pipe: read,
+            bytes: Vec::new(),
+            started: Instant::now(),
+        });
+    }
+
+    /// Read what has arrived of a paste, and type it once it is all there.
+    fn read_paste(&mut self) {
+        let Some(paste) = &mut self.clipboard.pasting else {
+            return;
+        };
+        let mut chunk = [0u8; 4096];
+        loop {
+            match paste.pipe.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(read) => {
+                    paste
+                        .bytes
+                        .extend_from_slice(chunk.get(..read).unwrap_or(&[]));
+                    if paste.bytes.len() > PASTE_LIMIT {
+                        self.clipboard.pasting = None;
+                        return;
+                    }
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    if paste.started.elapsed() > PASTE_PATIENCE {
+                        self.clipboard.pasting = None;
+                    }
+                    return;
+                }
+                Err(_) => {
+                    self.clipboard.pasting = None;
+                    return;
+                }
+            }
+        }
+        if let Some(paste) = self.clipboard.pasting.take() {
+            self.deliver(&paste.bytes);
+        }
+    }
+
+    /// Type pasted text at the program, as a terminal does.
+    ///
+    /// A line break becomes the carriage return the Return key sends. And
+    /// when the program asked for bracketed paste the text goes between
+    /// `ESC [ 200 ~` and `ESC [ 201 ~`, with every escape inside it taken
+    /// out: a paste that could spell the closing bracket itself could end
+    /// the paste early and have the rest of it typed as commands.
+    fn deliver(&mut self, bytes: &[u8]) {
+        let text = String::from_utf8_lossy(bytes)
+            .replace("\r\n", "\r")
+            .replace('\n', "\r");
+        if text.is_empty() {
+            return;
+        }
+        self.look_live();
+        if self.grid.bracketed_paste() {
+            let text = text.replace('\x1B', "");
+            self.send(b"\x1B[200~");
+            self.send(text.as_bytes());
+            self.send(b"\x1B[201~");
+        } else {
+            self.send(text.as_bytes());
+        }
+    }
+
+    /// Which interface an object of this client's speaks: one of the fixed
+    /// ones, or an offer or a source, which come and go.
+    fn interface(&self, id: ObjectId) -> Option<&'static Interface> {
+        interface_of(id).or_else(|| {
+            if self.clipboard.offers.contains_key(&id) {
+                Some(&core::WL_DATA_OFFER)
+            } else if self.clipboard.sources.contains_key(&id) {
+                Some(&core::WL_DATA_SOURCE)
+            } else {
+                None
+            }
+        })
     }
 
     /// Make the grid the size the window is, and tell the program.
@@ -890,6 +1510,9 @@ fn interface_of(id: ObjectId) -> Option<&'static Interface> {
         id::SEAT => &core::WL_SEAT,
         id::KEYBOARD => &core::WL_KEYBOARD,
         id::OUTPUT => &core::WL_OUTPUT,
+        id::POINTER => &core::WL_POINTER,
+        id::DATA_MANAGER => &core::WL_DATA_DEVICE_MANAGER,
+        id::DATA_DEVICE => &core::WL_DATA_DEVICE,
         _ => return None,
     })
 }
@@ -927,4 +1550,37 @@ fn flush(connection: &mut compositor_socket::Connection, out: &mut Writer) -> Re
     connection
         .send(&bytes, &fds)
         .map_err(|error| format!("writing: {error:?}"))
+}
+
+/// A pipe for a paste: the read half this client keeps, which never waits,
+/// and the write half whoever copied is handed, which does -- they write
+/// all of it however slowly this reads.
+fn pipe() -> Result<(std::fs::File, OwnedFd), String> {
+    let mut ends = [0i32; 2];
+    #[expect(
+        unsafe_code,
+        reason = "AUDIT: pipe2 is not in std; it writes two descriptors into an array this frame \
+                  owns and the result is checked"
+    )]
+    // SAFETY: `ends` is two `int`s, which is what `pipe2` writes.
+    let made = unsafe { libc::pipe2(ends.as_mut_ptr(), libc::O_CLOEXEC) };
+    if made < 0 {
+        return Err(format!("a pipe: {}", std::io::Error::last_os_error()));
+    }
+    let [read, write] = ends;
+    #[expect(
+        unsafe_code,
+        reason = "AUDIT: pipe2 just made this descriptor and nothing else holds it"
+    )]
+    // SAFETY: as the reason says; it is owned exactly once from here.
+    let read = unsafe { OwnedFd::from_raw_fd(read) };
+    #[expect(
+        unsafe_code,
+        reason = "AUDIT: pipe2 just made this descriptor and nothing else holds it"
+    )]
+    // SAFETY: as the reason says; it is owned exactly once from here.
+    let write = unsafe { OwnedFd::from_raw_fd(write) };
+    crate::pty::set_nonblocking(read.as_raw_fd())
+        .map_err(|error| format!("a pipe that does not wait: {error}"))?;
+    Ok((std::fs::File::from(read), write))
 }

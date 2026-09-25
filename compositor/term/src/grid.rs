@@ -26,13 +26,36 @@
 //! Text is UTF-8, as everything a shell on Ferrix writes is: a character is
 //! the bytes that encode it, and a sequence that is not UTF-8 is drawn as
 //! U+FFFD, once for each place it goes wrong.
-//! * `CSI ? n h|l` -- the private modes, of which only the cursor's own
-//!   visibility (25) is kept.
+//! * `CSI ? n h|l` -- the private modes, of which the cursor's own
+//!   visibility (25) and bracketed paste (2004) are kept.
+//! * `CSI 3 J` -- forget the scrollback, which `clear` asks for.
 //!
 //! An escape sequence this does not know is dropped rather than drawn: a
 //! terminal that printed the bytes of a sequence it did not understand would
 //! fill its screen with rubbish the first time a program asked about the
 //! cursor.
+//!
+//! # Scrollback and selection
+//!
+//! A row that scrolls off the top is kept, up to [`HISTORY`] of them, and
+//! the grid can be *viewed* some rows back into them. What is on the screen
+//! is then [`Grid::shown`], not [`Grid::cell`]: the program still writes at
+//! the live rows, and the person reads older ones.
+//!
+//! Every row, kept or live, has an absolute line number that never changes
+//! while the row exists: the live row `r` is line `scrolled + r`. A
+//! selection is held in those numbers, so text that scrolls on while it is
+//! selected stays selected, rather than the highlight staying where it was
+//! on the glass and the text moving out from under it.
+
+use std::collections::VecDeque;
+
+/// How many rows that scrolled off the top are kept.
+///
+/// Ten thousand is what most terminals keep by default, and at 150 columns
+/// of eight-byte cells it is about twelve megabytes -- a price paid only by
+/// a terminal whose program has written that much.
+pub const HISTORY: usize = 10_000;
 
 /// One cell: what is in it, and how it is drawn.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -141,8 +164,75 @@ pub struct Grid {
     pen: Cell,
     parsing: Parsing,
     /// How many times the grid has scrolled, which a test uses to say that
-    /// it did.
+    /// it did, and which is the absolute line number of the top live row.
     scrolled: u64,
+    /// Whether each live row ran on into the next, rather than ending in a
+    /// line feed: what copying joins back into one line.
+    wrapped: Vec<bool>,
+    /// The rows that scrolled off the top, oldest first.
+    history: VecDeque<Line>,
+    /// How many rows back into `history` the screen is looking; zero is the
+    /// live rows.
+    view: usize,
+    /// What is selected, if anything.
+    selection: Option<Selection>,
+    /// Whether the program asked for pasted text to be bracketed, `CSI ?
+    /// 2004 h`, so it can tell a paste from typing: zsh's line editor does,
+    /// so that a pasted line is not run the moment its newline arrives.
+    bracketed_paste: bool,
+}
+
+/// A row that scrolled off the top: its cells at the width it had then, and
+/// whether it ran on into the next.
+#[derive(Clone, Debug)]
+struct Line {
+    cells: Vec<Cell>,
+    wrapped: bool,
+}
+
+/// Where the pointer is, in the grid's absolute lines: the line, the cell,
+/// and whether it is in that cell's right half -- which says which side of
+/// the cell a character-wise selection's edge falls on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Point {
+    /// The absolute line number.
+    pub line: u64,
+    /// The column of the cell.
+    pub column: usize,
+    /// Whether it is in the cell's right half.
+    pub right: bool,
+}
+
+/// What one press selects: the cells dragged over, or the whole words or
+/// whole lines they touch -- one, two or three clicks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Unit {
+    /// Character by character.
+    Cell,
+    /// Whole words.
+    Word,
+    /// Whole lines.
+    Line,
+}
+
+/// A selection: where the press was, where the pointer is now, and by what.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Selection {
+    anchor: Point,
+    head: Point,
+    unit: Unit,
+}
+
+/// What the screen showed at one moment, cheaply: the cells in view and
+/// which of them were selected, and where the cursor was drawn.
+///
+/// [`Grid::damage_since`] compares against this rather than a whole second
+/// grid, which would copy the scrollback on every batch of output.
+#[derive(Clone, Debug)]
+pub struct Snapshot {
+    size: (usize, usize),
+    shown: Vec<(Cell, bool)>,
+    cursor: Option<(usize, usize)>,
 }
 
 impl Grid {
@@ -162,6 +252,11 @@ impl Grid {
             pen: Cell::default(),
             parsing: Parsing::Text,
             scrolled: 0,
+            wrapped: vec![false; rows],
+            history: VecDeque::new(),
+            view: 0,
+            selection: None,
+            bracketed_paste: false,
         }
     }
 
@@ -183,23 +278,46 @@ impl Grid {
         self.visible
     }
 
+    /// What the screen shows now, to compare a later one against.
+    #[must_use]
+    pub fn snapshot(&self) -> Snapshot {
+        let spans = self.spans();
+        let mut shown = Vec::with_capacity(self.columns * self.rows);
+        for row in 0..self.rows {
+            let line = self.line_at(row);
+            for column in 0..self.columns {
+                let cell = self.row_cells(line).and_then(|cells| cells.get(column));
+                shown.push((
+                    cell.copied().unwrap_or_default(),
+                    Self::in_spans(spans, line, column),
+                ));
+            }
+        }
+        Snapshot {
+            size: self.size(),
+            shown,
+            cursor: self.shown_cursor(),
+        }
+    }
+
     /// The smallest visual region that differs from `before`.
     ///
     /// A terminal normally changes one cell and moves its block cursor one
     /// cell. Repainting the whole shared-memory buffer for that common case
     /// turns one typed byte into a full-window copy and compositor frame. The
-    /// comparison is at the grid level, so scrolling, erasing and every escape
-    /// sequence retain their existing implementation and damage exactly what
-    /// changed.
+    /// comparison is of what is on the screen, so scrolling, erasing, every
+    /// escape sequence, looking back into the scrollback and selecting all
+    /// damage exactly what changed.
     #[must_use]
-    pub fn damage_since(&self, before: &Self) -> Option<CellDamage> {
-        if self.size() != before.size() {
+    pub fn damage_since(&self, before: &Snapshot) -> Option<CellDamage> {
+        if self.size() != before.size {
             return Some(CellDamage::full(self.columns, self.rows));
         }
+        let now = self.snapshot();
 
         let mut damage: Option<CellDamage> = None;
-        for (at, (was, now)) in before.cells.iter().zip(&self.cells).enumerate() {
-            if was != now {
+        for (at, (was, is)) in before.shown.iter().zip(&now.shown).enumerate() {
+            if was != is {
                 let one = CellDamage {
                     left: at % self.columns,
                     top: at / self.columns,
@@ -214,17 +332,15 @@ impl Grid {
         // so both its old and new positions are damaged separately -- but
         // only if one of them changed. An idle terminal must not manufacture
         // a cursor-sized frame on every pass through its event loop.
-        if before.cursor != self.cursor || before.visible != self.visible {
-            for (grid, cursor) in [(before, before.cursor), (self, self.cursor)] {
-                if grid.visible && cursor.0 < grid.columns && cursor.1 < grid.rows {
-                    let one = CellDamage {
-                        left: cursor.0,
-                        top: cursor.1,
-                        width: 1,
-                        height: 1,
-                    };
-                    damage = Some(damage.map_or(one, |held| held.joined(one)));
-                }
+        if before.cursor != now.cursor {
+            for (column, row) in [before.cursor, now.cursor].into_iter().flatten() {
+                let one = CellDamage {
+                    left: column,
+                    top: row,
+                    width: 1,
+                    height: 1,
+                };
+                damage = Some(damage.map_or(one, |held| held.joined(one)));
             }
         }
         damage
@@ -245,6 +361,231 @@ impl Grid {
         self.cells.get(row * self.columns + column)
     }
 
+    /// The cell the screen shows at a column and a row, and whether it is
+    /// selected: a live cell, or one from the scrollback when the screen is
+    /// looking back. A kept row narrower than the screen is blank past its
+    /// end.
+    #[must_use]
+    pub fn shown(&self, column: usize, row: usize) -> Option<(Cell, bool)> {
+        if column >= self.columns || row >= self.rows {
+            return None;
+        }
+        let line = self.line_at(row);
+        let cell = self
+            .row_cells(line)
+            .and_then(|cells| cells.get(column))
+            .copied()
+            .unwrap_or_default();
+        Some((cell, Self::in_spans(self.spans(), line, column)))
+    }
+
+    /// Where the cursor is drawn, if it is: it moves down the screen with
+    /// the live rows as the screen looks back, and off it.
+    #[must_use]
+    pub fn shown_cursor(&self) -> Option<(usize, usize)> {
+        let row = self.cursor.1 + self.view;
+        (self.visible && row < self.rows && self.cursor.0 < self.columns)
+            .then_some((self.cursor.0, row))
+    }
+
+    /// How many rows back the screen is looking.
+    #[must_use]
+    pub const fn view(&self) -> usize {
+        self.view
+    }
+
+    /// How many rows the scrollback holds.
+    #[must_use]
+    pub fn history(&self) -> usize {
+        self.history.len()
+    }
+
+    /// Look `rows` further back into the scrollback, or forward for a
+    /// negative number, stopping at either end.
+    pub fn scroll_view(&mut self, rows: isize) {
+        self.view = self
+            .view
+            .saturating_add_signed(rows)
+            .min(self.history.len());
+    }
+
+    /// Look at the live rows again.
+    pub fn view_live(&mut self) {
+        self.view = 0;
+    }
+
+    /// Whether the program asked for pasted text to be bracketed.
+    #[must_use]
+    pub const fn bracketed_paste(&self) -> bool {
+        self.bracketed_paste
+    }
+
+    /// The point the screen shows at a column and a row, and which half of
+    /// the cell: what a pointer at that place is over.
+    #[must_use]
+    pub fn point(&self, column: usize, row: usize, right: bool) -> Point {
+        Point {
+            line: self.line_at(row.min(self.rows.saturating_sub(1))),
+            column: column.min(self.columns.saturating_sub(1)),
+            right,
+        }
+    }
+
+    /// Start a selection at `at`, by `unit`.
+    pub fn select(&mut self, at: Point, unit: Unit) {
+        self.selection = Some(Selection {
+            anchor: at,
+            head: at,
+            unit,
+        });
+    }
+
+    /// Move the selection's free end to `at`.
+    pub fn extend(&mut self, at: Point) {
+        if let Some(selection) = &mut self.selection {
+            selection.head = at;
+        }
+    }
+
+    /// Select nothing.
+    pub fn deselect(&mut self) {
+        self.selection = None;
+    }
+
+    /// The selected text: a line break between rows, except where a row ran
+    /// on into the next, and each row's trailing blanks left off -- which is
+    /// what the program wrote, rather than the spaces the grid filled in.
+    /// `None` when nothing is selected.
+    #[must_use]
+    pub fn selected(&self) -> Option<String> {
+        let ((first, from), (last, to)) = self.spans()?;
+        let mut text = String::new();
+        for line in first..=last {
+            let Some(cells) = self.row_cells(line) else {
+                continue;
+            };
+            let start = if line == first { from } else { 0 };
+            let end = if line == last { to } else { usize::MAX };
+            let row: String = cells
+                .iter()
+                .skip(start)
+                .take(end.saturating_sub(start))
+                .map(|cell| cell.ch)
+                .collect();
+            let wrapped = self.wrapped_at(line) && line != last;
+            if wrapped {
+                text.push_str(&row);
+            } else {
+                text.push_str(row.trim_end());
+                if line != last {
+                    text.push('\n');
+                }
+            }
+        }
+        Some(text)
+    }
+
+    /// The absolute line the screen shows at `row`.
+    fn line_at(&self, row: usize) -> u64 {
+        (self.scrolled + row as u64).saturating_sub(self.view as u64)
+    }
+
+    /// The cells of an absolute line, if it is still held.
+    fn row_cells(&self, line: u64) -> Option<&[Cell]> {
+        if let Some(row) = line.checked_sub(self.scrolled) {
+            let row = usize::try_from(row).ok()?;
+            if row >= self.rows {
+                return None;
+            }
+            return self.cells.get(row * self.columns..(row + 1) * self.columns);
+        }
+        let back = usize::try_from(self.scrolled - line).ok()?;
+        let index = self.history.len().checked_sub(back)?;
+        self.history.get(index).map(|kept| kept.cells.as_slice())
+    }
+
+    /// Whether an absolute line ran on into the next.
+    fn wrapped_at(&self, line: u64) -> bool {
+        if let Some(row) = line.checked_sub(self.scrolled) {
+            return usize::try_from(row)
+                .ok()
+                .and_then(|row| self.wrapped.get(row))
+                .copied()
+                .unwrap_or(false);
+        }
+        let Ok(back) = usize::try_from(self.scrolled - line) else {
+            return false;
+        };
+        self.history
+            .len()
+            .checked_sub(back)
+            .and_then(|index| self.history.get(index))
+            .is_some_and(|kept| kept.wrapped)
+    }
+
+    /// The selection as cells: the first line and column, and the last line
+    /// and the column after the last cell. `None` when it selects nothing,
+    /// which is a press that has not moved yet.
+    fn spans(&self) -> Option<((u64, usize), (u64, usize))> {
+        let selection = self.selection?;
+        let key = |point: Point| (point.line, point.column, point.right);
+        let (start, end) = if key(selection.anchor) <= key(selection.head) {
+            (selection.anchor, selection.head)
+        } else {
+            (selection.head, selection.anchor)
+        };
+        match selection.unit {
+            // An edge falls between cells: after a cell when the pointer is
+            // in its right half, before it in the left.
+            Unit::Cell => {
+                let from = start.column + usize::from(start.right);
+                let to = end.column + usize::from(end.right);
+                if (start.line, from) >= (end.line, to) {
+                    return None;
+                }
+                Some(((start.line, from), (end.line, to)))
+            }
+            Unit::Word => {
+                let from = self.word_edge(start.line, start.column, false);
+                let to = self.word_edge(end.line, end.column, true);
+                Some(((start.line, from), (end.line, to)))
+            }
+            Unit::Line => Some(((start.line, 0), (end.line, usize::MAX))),
+        }
+    }
+
+    /// Where the word around a cell starts, or ends (the column after it).
+    /// A cell that is not part of a word is a word of one cell.
+    fn word_edge(&self, line: u64, column: usize, end: bool) -> usize {
+        let Some(cells) = self.row_cells(line) else {
+            return column + usize::from(end);
+        };
+        let word = |at: usize| cells.get(at).is_some_and(|cell| in_word(cell.ch));
+        if !word(column) {
+            return column + usize::from(end);
+        }
+        let mut at = column;
+        if end {
+            while word(at + 1) {
+                at += 1;
+            }
+            at + 1
+        } else {
+            while at > 0 && word(at - 1) {
+                at -= 1;
+            }
+            at
+        }
+    }
+
+    /// Whether a cell is inside the selection's cells.
+    fn in_spans(spans: Option<((u64, usize), (u64, usize))>, line: u64, column: usize) -> bool {
+        let Some((start, end)) = spans else {
+            return false;
+        };
+        (line, column) >= start && (line, column) < end
+    }
+
     /// One row as text, with the trailing spaces cut: what a test reads.
     #[must_use]
     pub fn line(&self, row: usize) -> String {
@@ -259,13 +600,26 @@ impl Grid {
     }
 
     /// Resize the grid, keeping what is in the cells that are still there.
+    ///
+    /// A grid that loses rows below the cursor loses them from the bottom,
+    /// which is empty; one that would lose the cursor's row instead moves
+    /// its top rows into the scrollback, so the line being typed on stays in
+    /// view and what was above it can still be scrolled back to.
     pub fn resize(&mut self, columns: usize, rows: usize) {
         let (columns, rows) = (columns.max(1), rows.max(1));
         if (columns, rows) == (self.columns, self.rows) {
             return;
         }
+        let over = (self.cursor.1 + 1).saturating_sub(rows);
+        for _ in 0..over {
+            self.keep_top_row();
+        }
         let mut cells = vec![Cell::default(); columns * rows];
+        let mut wrapped = vec![false; rows];
         for row in 0..rows.min(self.rows) {
+            if let (Some(was), Some(slot)) = (self.wrapped.get(row), wrapped.get_mut(row)) {
+                *slot = *was;
+            }
             for column in 0..columns.min(self.columns) {
                 if let (Some(cell), Some(slot)) = (
                     self.cell(column, row).copied(),
@@ -276,12 +630,17 @@ impl Grid {
             }
         }
         self.cells = cells;
+        self.wrapped = wrapped;
         self.columns = columns;
         self.rows = rows;
         self.cursor = (
             self.cursor.0.min(columns.saturating_sub(1)),
-            self.cursor.1.min(rows.saturating_sub(1)),
+            self.cursor
+                .1
+                .saturating_sub(over)
+                .min(rows.saturating_sub(1)),
         );
+        self.view = 0;
     }
 
     /// Take what a program wrote.
@@ -381,6 +740,9 @@ impl Grid {
     /// Put a character where the cursor is, and move on.
     fn put(&mut self, ch: char) {
         if self.cursor.0 >= self.columns {
+            if let Some(wrapped) = self.wrapped.get_mut(self.cursor.1) {
+                *wrapped = true;
+            }
             self.cursor.0 = 0;
             self.line_feed();
         }
@@ -402,10 +764,31 @@ impl Grid {
 
     /// Everything up one row, the bottom row emptied.
     fn scroll(&mut self) {
-        let _ = self.cells.drain(..self.columns);
+        self.keep_top_row();
         self.cells
             .extend(core::iter::repeat_n(Cell::default(), self.columns));
+        self.wrapped.push(false);
+    }
+
+    /// Move the top live row into the scrollback, leaving one row fewer.
+    ///
+    /// A screen looking back keeps looking at the same text, one row further
+    /// back, rather than having it scroll away under the person reading it.
+    fn keep_top_row(&mut self) {
+        let cells: Vec<Cell> = self.cells.drain(..self.columns).collect();
+        let wrapped = if self.wrapped.is_empty() {
+            false
+        } else {
+            self.wrapped.remove(0)
+        };
+        if self.history.len() == HISTORY {
+            let _ = self.history.pop_front();
+        }
+        self.history.push_back(Line { cells, wrapped });
         self.scrolled = self.scrolled.saturating_add(1);
+        if self.view > 0 {
+            self.view = (self.view + 1).min(self.history.len());
+        }
     }
 
     /// A `CSI` sequence, by its final byte.
@@ -440,6 +823,8 @@ impl Grid {
             b'm' => self.rendition(&numbers),
             b'h' if private && first == 25 => self.visible = true,
             b'l' if private && first == 25 => self.visible = false,
+            b'h' if private && first == 2004 => self.bracketed_paste = true,
+            b'l' if private && first == 2004 => self.bracketed_paste = false,
             // Every other sequence: dropped.
             _ => {}
         }
@@ -447,6 +832,13 @@ impl Grid {
 
     /// `CSI n J`.
     fn erase_screen(&mut self, what: usize) {
+        if what == 3 {
+            // The scrollback, and only that: `clear` sends this after the
+            // `2 J` that clears the screen.
+            self.history.clear();
+            self.view = 0;
+            return;
+        }
         let (column, row) = self.cursor;
         let at = row * self.columns + column;
         let range = match what {
@@ -459,6 +851,16 @@ impl Grid {
                 *slot = Cell::default();
             }
         }
+        let rows = match what {
+            0 => row + 1..self.rows,
+            1 => 0..row,
+            _ => 0..self.rows,
+        };
+        for index in rows {
+            if let Some(wrapped) = self.wrapped.get_mut(index) {
+                *wrapped = false;
+            }
+        }
         if what >= 2 {
             self.cursor = (0, 0);
         }
@@ -467,6 +869,11 @@ impl Grid {
     /// `CSI n K`.
     fn erase_line(&mut self, what: usize) {
         let (column, row) = self.cursor;
+        if what != 1
+            && let Some(wrapped) = self.wrapped.get_mut(row)
+        {
+            *wrapped = false;
+        }
         let start = row * self.columns;
         let range = match what {
             0 => start + column..start + self.columns,
@@ -548,4 +955,11 @@ fn extended(numbers: &mut impl Iterator<Item = usize>) -> Option<u8> {
     // Bright when the strongest channel is near full; a dark grey is black.
     let bright = r.max(g).max(b) >= 0xE0 || (hue == 0 && r.max(g).max(b) >= 0x60);
     Some(hue | u8::from(bright) << 3)
+}
+
+/// Whether a character is part of a word, for a double click: anything but
+/// blanks and the punctuation that surrounds a word rather than being in it.
+/// A path, a URL and an option like `--arch=x86_64` are each one word.
+fn in_word(ch: char) -> bool {
+    !ch.is_whitespace() && !"\"'`()[]{}<>|;,".contains(ch)
 }

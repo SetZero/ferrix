@@ -141,6 +141,41 @@ impl Pty {
         Ok(())
     }
 
+    /// Write as much of `bytes` as the pseudoterminal takes now, and say how
+    /// much that was.
+    ///
+    /// [`Pty::write`] drops what does not fit, which is right for a key --
+    /// a program that has stopped reading has stopped reading keys too --
+    /// and wrong for a paste, which is larger than the line discipline's
+    /// buffer and has to arrive whole. The rest is the caller's to offer
+    /// again once the program has read some.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the write said, other than "not now".
+    pub fn write_some(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        if bytes.is_empty() {
+            return Ok(0);
+        }
+        // SAFETY: a write of a descriptor this holds from a buffer of the
+        // length given.
+        let written = unsafe {
+            libc::write(
+                self.master,
+                bytes.as_ptr().cast::<libc::c_void>(),
+                bytes.len(),
+            )
+        };
+        if written < 0 {
+            let error = io::Error::last_os_error();
+            if error.kind() == io::ErrorKind::WouldBlock {
+                return Ok(0);
+            }
+            return Err(error);
+        }
+        Ok(written.unsigned_abs())
+    }
+
     /// Say how large the terminal is now, which raises `SIGWINCH` on the
     /// program if it changed.
     pub fn resize(&mut self, size: (u16, u16)) {
@@ -312,7 +347,7 @@ fn set_size(fd: RawFd, (columns, rows): (u16, u16)) {
 }
 
 /// Read without waiting: the terminal has a window to keep drawing.
-fn set_nonblocking(fd: RawFd) -> io::Result<()> {
+pub(crate) fn set_nonblocking(fd: RawFd) -> io::Result<()> {
     // SAFETY: both calls take a descriptor this holds.
     let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
     if flags < 0 {
