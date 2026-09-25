@@ -8,31 +8,41 @@ you touch the phone.
 
 ## State at a glance
 
-* **Branch `pixel7/stage3`**, worktree `.claude/worktrees/pixel7-stage3`. It
-  is eight commits on `pixel7/bootloader` (which is three on `main` at
-  `543428bb`). Local only: **not pushed, not merged, not gated.** Pushes are
-  the owner's to authorise.
+* **On `main`**, merged 2026-09-26 by fast-forward after the whole gate row
+  for "anything the image contains" passed on nazuna. **Not pushed**: pushes
+  are the owner's to authorise.
 * **Ferrix boots on the phone to `FERRIX-BOOT-OK stages 1-12`, on one core**,
   and **draws on the screen**: the kernel's panic screen has been seen on the
   panel, in the right colours.
-* The commits, oldest first:
+* The Pixel 7 commits, oldest first (the first three were `pixel7/bootloader`):
 
   | Commit | What |
   |---|---|
-  | `40215968` | Device-tree path on AArch64 + GICv3 driver (`gicv3.rs`, `gic.rs` front) |
-  | `0d0a3d1c` | Docs: boots to stage 12 on one core |
-  | `0862480a` | Clippy fix for `gic.rs`; **`40215968` alone fails clippy** |
-  | `502da10b` | `kernel/src/arch/aarch64/gs201.rs`: feed the watchdogs; end a boot by firing one |
-  | `0d8245ba` | Loader: display dump, first light, park for the watchdog on failure |
-  | `40d1715d` | Loader: hand ABL's framebuffer to the kernel as `BootInfo.framebuffer` |
-  | `72cca027` | Docs: the screen, and the no-persistent-writes rule |
+  | `6e83f794` | The loader as a probe: what ABL hands over |
+  | `6c3da42a` | Load and start Ferrix; `ramoops` console; stops at stage 3 |
+  | `8520dc49` | The first handover, from the Windows session |
+  | `499381a2` | Device-tree path on AArch64 + GICv3 driver (`gicv3.rs`, `gic.rs` front) |
+  | `ab996c9b` | Docs: boots to stage 12 on one core |
+  | `f250c0bb` | Clippy fix for `gic.rs`: **`499381a2` alone fails clippy** |
+  | `654022e9` | `gs201`: feed the watchdogs; end a boot by firing one |
+  | `455a01d8` | Loader: display dump, first light, park for the watchdog on failure |
+  | `20b242af` | Loader: hand ABL's framebuffer to the kernel as `BootInfo.framebuffer` |
+  | `cf4002c6` | Docs: the screen, and the no-persistent-writes rule |
+  | `65a9f5dc` | This handover, rewritten |
+  | `29b6bb5e` | `gs201.rs` into `kernel/src/arch/aarch64/`: the owner put it in the certified core ring |
+  | `83f1f8cf` | `gic::init` split for the complexity floor |
+  | `73ef630e` | `arch::init_watchdogs`/`start_watchdogs` facade instead of `cfg`s in generic code |
 
-* **Checks run:** `cargo fmt --check`; clippy `-D warnings` on the kernel for
-  aarch64, armv7a and x86_64, and on the loader; `check-asm-budget.py`;
-  `cargo test -p xtask workspace`; `cargo xtask test-boot --arch aarch64`
-  (default GICv2 + ACPI) passes stages 1-12.
-  **`cargo xtask check` has not been run.** Nothing reaches `main` before it
-  and the gate row in `docs/BACKLOG.md` pass on nazuna.
+* **Gate, on nazuna, on `73ef630e` as it was before its last rebase** onto
+  two xtask-only commits (keyboard layout, remote desktop), which reach
+  neither kernel nor loader; xtask's clippy and 293 tests passed after that
+  rebase. `cargo xtask check` passed every
+  section; `cargo xtask build --arch all --release` passed; `test-boot` passed
+  on x86_64, aarch64, armv7a and armv7a `--smp 2`. The first three `check`
+  runs failed on the certification item boundary, the complexity floor and
+  crate layering, and those three commits answer them. Also
+  `FERRIX_ARM_MACHINE=gic-version=3 test-boot --arch aarch64` reaches stages
+  3-5 and stops at stage 10, as expected without an ITS.
 
 ## The phone
 
@@ -129,29 +139,28 @@ them). Check any new one against the phone before you rely on it.
 * **The kernel only draws on a panic.** To see the screen, build with
   `ferrix.onexit=panic` added to `board::CMDLINE` (temporarily; do not commit
   it). The panic screen stays up until the watchdog fires, 30-60 s.
-* **`40215968` fails AArch64 clippy on its own.** rustfmt ran after clippy;
-  `0862480a` fixes it. Run clippy again *after* `cargo fmt`.
+* **`499381a2` fails AArch64 clippy on its own.** rustfmt ran after clippy;
+  `f250c0bb` fixes it. Run clippy again *after* `cargo fmt`.
+* **`cargo xtask check` holds more than clippy:** every kernel file needs a
+  certification ring (`scripts/certification-item.json`, the owner's call),
+  new functions stay under the complexity floor, and generic code may not
+  hold a `target_arch` conditional. Run the whole gate, not a subset.
 
 ## What to do next, most important first
 
-1. **Gate and land.** Run `cargo xtask check` in the worktree, fix what it
-   finds, rebase on `main`, and follow `docs/BACKLOG.md`'s gate row. The
-   kernel changes (`gic*.rs`, `smp.rs`, `timer.rs`, `mod.rs`, `console.rs`,
-   `gs201.rs`, `power.rs`, `main.rs`) are in the "anything the image
-   contains" row. The owner decides the push.
-2. **The boot console on screen.** The framebuffer reaches the kernel already;
+1. **The boot console on screen.** The framebuffer reaches the kernel already;
    what is missing is drawing the console there during boot, not only on a
    panic. The panic screen's renderer (`kernel/src/panic/screen.rs`) is the
    starting point.
-3. **Cores 1-7.** TF-A's PSCI starts a secondary at EL2, and the kernel's entry
+2. **Cores 1-7.** TF-A's PSCI starts a secondary at EL2, and the kernel's entry
    sequence in `kernel/src/arch/aarch64/smp.rs` expects EL1. It needs the
    EL2-to-EL1 drop that `bootloaders/pixel7/src/entry.rs` does, which will
    need `smp.rs`'s budget in `scripts/asm-allowlist.json` raised with an
    argument. Then remove `nosmp` from `board::CMDLINE`. Test on QEMU with
    `--smp 2` first, and on the phone.
-4. **Entropy.** `/chosen` should carry `rng-seed` or `kaslr-seed`. The loader
+3. **Entropy.** `/chosen` should carry `rng-seed` or `kaslr-seed`. The loader
    could pass it on as the boot info's `firmware_seed`.
-5. **A GICv3 ITS driver.** Without one a GICv3 has no MSI vectors, so the
+4. **A GICv3 ITS driver.** Without one a GICv3 has no MSI vectors, so the
    QEMU runs with `FERRIX_ARM_MACHINE=gic-version=3` stop at stage 10. This
    does not matter on the phone, which has no virtio.
 
@@ -184,6 +193,9 @@ hardware being as expected, as `display::take_over` is.
 
 ## Working here
 
+* **Worktrees:** the owner asked for Pixel 7 work to land on `main` in the
+  root checkout rather than live in a sub-worktree; the worktree it grew in
+  is removed.
 * **Commits:** `docs/CONVENTIONS.md` applies. No `Co-authored-by` or tool
   trailer (the hooks refuse it), commit from your own worktree, read
   `git diff --cached --stat` before each commit, and never move work with
