@@ -1485,6 +1485,10 @@ impl Host for Process {
     fn thread_gone(&self, ended: bool) {
         Process::thread_gone(self, ended);
     }
+
+    fn wait_interrupted(&self) -> bool {
+        self.signal_pending()
+    }
 }
 
 /// The process the running task belongs to.

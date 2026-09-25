@@ -318,7 +318,11 @@ pub(crate) fn write_pair(
 /// keeps only its low 32 bits, because that is what `get_timespec64` does
 /// there: the upper half is padding for a 32-bit program, and a libc may leave
 /// anything in it.
-pub(crate) fn read_pair(process: &Process, at: u64, width: TimeWidth) -> Result<(i64, i64), Errno> {
+pub(crate) fn read_pair(
+    process: &crate::object::process::Process,
+    at: u64,
+    width: TimeWidth,
+) -> Result<(i64, i64), Errno> {
     if width == TimeWidth::Wide || WORD == 8 {
         let mut bytes = [0_u8; 16];
         uaccess::copy_from_user(process.space(), at, &mut bytes).map_err(|_| Errno::EFAULT)?;

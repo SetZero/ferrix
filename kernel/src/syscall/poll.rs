@@ -238,7 +238,11 @@ pub(crate) fn with_sigmask(
 }
 
 /// Read a `struct timespec` of `width` as nanoseconds.
-pub(crate) fn read_timespec(process: &Process, at: u64, width: TimeWidth) -> Result<u64, Errno> {
+pub(crate) fn read_timespec(
+    process: &crate::object::process::Process,
+    at: u64,
+    width: TimeWidth,
+) -> Result<u64, Errno> {
     let (seconds, nanos) = read_pair(process, at, width)?;
     let seconds = u64::try_from(seconds).map_err(|_| Errno::EINVAL)?;
     let nanos = u64::try_from(nanos).map_err(|_| Errno::EINVAL)?;
@@ -270,7 +274,11 @@ fn is_wide(width: TimeWidth) -> bool {
 /// kernel's one reader of them, so a 64-bit `tv_nsec` on ARMv7-A keeps only
 /// its low half, as `get_timespec64` does: ferrousli leaves the padding above
 /// it unwritten, and curl's every `poll` failed with `EINVAL` on it.
-fn read_pair(process: &Process, at: u64, width: TimeWidth) -> Result<(i64, i64), Errno> {
+fn read_pair(
+    process: &crate::object::process::Process,
+    at: u64,
+    width: TimeWidth,
+) -> Result<(i64, i64), Errno> {
     crate::syscall::time::read_pair(process, at, width)
 }
 

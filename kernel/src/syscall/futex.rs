@@ -73,8 +73,8 @@ use ferrix_linux_abi::types::{
     FUTEX_WAIT_BITSET, FUTEX_WAKE, FUTEX_WAKE_BITSET,
 };
 
+use crate::object::process::{Host, Process};
 use crate::sched::{self, Task, WaitQueue};
-use crate::syscall::process::Process;
 use crate::syscall::time::TimeWidth;
 use crate::syscall::uaccess;
 use crate::user::space::AddressSpace;
@@ -193,7 +193,11 @@ static SLEEP: WaitQueue = WaitQueue::new();
 /// cannot be read; `ENOSYS` for an operation not implemented here, the
 /// priority-inheritance ones and `FUTEX_WAKE_OP` among them, and for
 /// `FUTEX_CLOCK_REALTIME` on an operation that has no timeout.
-pub(crate) fn sys_futex(process: &Process, a: &[u64; 6], width: TimeWidth) -> Result<usize, Errno> {
+pub(crate) fn sys_futex(
+    process: &dyn Host,
+    a: &[u64; 6],
+    width: TimeWidth,
+) -> Result<usize, Errno> {
     let [address, op, value, timeout, address2, value3] = *a;
     let op = op as u32;
     // The ABI's `u32 val` and `u32 val3`; the upper half of a 64-bit register
@@ -314,14 +318,14 @@ fn read_present_word(process: &Process, address: u64) -> Result<Option<u32>, Err
 /// timeout, a wait with none returned `ETIMEDOUT` from a stop: FX-0701's "a
 /// `FUTEX_WAIT` stopped and continued returned instead of being restarted".
 fn wait(
-    process: &Process,
+    process: &dyn Host,
     address: u64,
     shared: bool,
     expected: u32,
     bitset: u32,
     deadline: Option<u64>,
 ) -> Result<usize, Errno> {
-    let key = key(process, address, shared)?;
+    let key = key(process.core(), address, shared)?;
     let sleeper = Arc::new(Sleeper {
         task: sched::current(),
         woken: AtomicBool::new(false),
@@ -331,9 +335,9 @@ fn wait(
         loop {
             // Faulted in here, outside the lock, and read again under it
             // without a fault. Round again if the page went in between.
-            let _ = read_word(process, address)?;
+            let _ = read_word(process.core(), address)?;
             let mut table = TABLE.lock();
-            match read_present_word(process, address)? {
+            match read_present_word(process.core(), address)? {
                 None => {}
                 Some(word) if word != expected => return Err(Errno::EAGAIN),
                 Some(_) => {
@@ -349,7 +353,7 @@ fn wait(
 
         let _ = SLEEP.wait_until_deadline(
             // A pending signal ends the wait with `EINTR`, as it ends every wait.
-            || sleeper.woken.load(Ordering::Acquire) || process.signal_pending(),
+            || sleeper.woken.load(Ordering::Acquire) || process.wait_interrupted(),
             deadline,
         );
 
@@ -369,7 +373,7 @@ fn wait(
         if sleeper.woken.load(Ordering::Acquire) {
             return Ok(0);
         }
-        if process.signal_pending() {
+        if process.wait_interrupted() {
             // A restart code, not `EINTR`: a futex wait restarts under
             // `SA_RESTART`, which is how glibc's and musl's condition
             // variables survive a handled signal. The way back settles it.
@@ -384,13 +388,13 @@ fn wait(
 /// Rouse up to `count` waiters on `address` whose bitset shares a bit with
 /// `bitset`, oldest first, and report how many.
 fn wake(
-    process: &Process,
+    process: &dyn Host,
     address: u64,
     shared: bool,
     count: i32,
     bitset: u32,
 ) -> Result<usize, Errno> {
-    let key = key(process, address, shared)?;
+    let key = key(process.core(), address, shared)?;
     Ok(rouse(&[key], count, bitset, Sleeper::rouse))
 }
 
@@ -425,7 +429,7 @@ fn rouse(keys: &[Key], count: i32, bitset: u32, with: fn(&Sleeper)) -> usize {
 /// `wake_count` waiters on `from` and move up to `move_count` more onto `to`.
 /// Answers how many were roused or moved.
 fn requeue(
-    process: &Process,
+    process: &dyn Host,
     (from, to): (u64, u64),
     shared: bool,
     wake_count: i32,
@@ -437,17 +441,17 @@ fn requeue(
     else {
         return Err(Errno::EINVAL);
     };
-    let source = key(process, from, shared)?;
-    let target = key(process, to, shared)?;
+    let source = key(process.core(), from, shared)?;
+    let target = key(process.core(), to, shared)?;
     // As `wait` reads its word: faulted in outside the lock, then read under
     // it without a fault, round again if the page went in between.
     let mut table = loop {
         let Some(expected) = expected else {
             break TABLE.lock();
         };
-        let _ = read_word(process, from)?;
+        let _ = read_word(process.core(), from)?;
         let table = TABLE.lock();
-        match read_present_word(process, from)? {
+        match read_present_word(process.core(), from)? {
             None => {}
             Some(word) if word != expected => return Err(Errno::EAGAIN),
             Some(_) => break table,
@@ -536,6 +540,6 @@ pub(crate) fn forget_waiters(process: &Process, address: u64, count: i32) -> usi
 }
 
 /// Read a `struct timespec` of `width` as nanoseconds, by `ppoll`'s rules.
-fn read_timespec(process: &Process, at: u64, width: TimeWidth) -> Result<u64, Errno> {
-    crate::syscall::poll::read_timespec(process, at, width)
+fn read_timespec(process: &dyn Host, at: u64, width: TimeWidth) -> Result<u64, Errno> {
+    crate::syscall::poll::read_timespec(process.core(), at, width)
 }

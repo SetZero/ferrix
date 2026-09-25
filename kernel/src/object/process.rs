@@ -257,6 +257,12 @@ pub(crate) trait Host: Any + Send + Sync + fmt::Debug {
     /// spawned -- and, if that was its last, end the process or let go of
     /// what it holds, as the personality decides.
     fn thread_gone(&self, ended: bool);
+
+    /// Whether a wait on its behalf should end early: it is ending, or the
+    /// personality has something for the waiting thread -- a signal, say --
+    /// that no wait may sleep through. What a wait in the item checks beside
+    /// its own condition, as the personality's own waits do.
+    fn wait_interrupted(&self) -> bool;
 }
 
 /// The personality's own type back from a [`Host`], or `None` if `host` is

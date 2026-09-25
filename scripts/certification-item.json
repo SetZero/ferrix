@@ -242,13 +242,6 @@
     ],
     "entries": [
       {
-        "file": "syscall/futex.rs",
-        "references": "syscall::process",
-        "from_ring": "item",
-        "to_ring": "load",
-        "finding": "F-01"
-      },
-      {
         "file": "syscall/limits.rs",
         "references": "syscall::process",
         "from_ring": "item",
