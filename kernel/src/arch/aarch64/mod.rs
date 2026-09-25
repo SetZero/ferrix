@@ -111,6 +111,13 @@ pub(crate) use trap::{
 pub(crate) unsafe fn init_traps() {
     // SAFETY: called once from `kmain`, before anything faults deliberately.
     unsafe { trap::init() };
+    // After the vectors, so a fault this turns on is reported rather than
+    // taken with no handler, and before user mode so it covers every program.
+    let pan = cpu::enable_user_access_protection();
+    crate::console::println!(
+        "  cpu      EL1 kept out of user pages: PAN {}",
+        if pan { "on" } else { "unavailable" },
+    );
 }
 
 /// Publish page table writes and invalidate the whole TLB — every core's.
@@ -1276,11 +1283,15 @@ pub(crate) use switch::{
     UserState, prepare_stack, reset_user_state, restore_user_state, save_user_state, switch_to,
 };
 
-/// Permit this processor to touch user pages. A no-op here: PAN is not
-/// enabled on aarch64, so nothing in the hardware refuses the access that
-/// `permit_user_access` exists to allow. Finding F-32 tracks turning it on,
-/// and when it is, this is where the `PAN` toggle goes.
-pub(crate) fn permit_user_access() {}
+/// Permit this processor to touch user pages until [`forbid_user_access`].
+///
+/// Clears `PSTATE.PAN`. `cpu::permit_user_access` explains why almost nothing
+/// needs it.
+pub(crate) fn permit_user_access() {
+    cpu::permit_user_access();
+}
 
-/// Refuse user pages to this processor again. A no-op, as above.
-pub(crate) fn forbid_user_access() {}
+/// Refuse user pages to this processor again.
+pub(crate) fn forbid_user_access() {
+    cpu::forbid_user_access();
+}

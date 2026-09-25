@@ -1130,6 +1130,26 @@ fn accelerator_arguments(accelerator: &str) -> Result<Vec<String>> {
     Ok(arguments)
 }
 
+/// Which CPU model the `virt` machine emulates for an Arm architecture.
+///
+/// `cortex-a72` is ARMv8.0 and so has no PAN -- the feature the kernel uses to
+/// keep EL1 out of user pages -- and QEMU exposes no property to add one to
+/// this model the way x86-64's `+smap` adds SMAP to `qemu64`. `FERRIX_ARM_CPU`
+/// swaps the model, which is how `docs/certification/FINDINGS.md` F-32
+/// demonstrates that path on `max` without changing what every Arm test runs
+/// on. ARMv7-A's Cortex-A7 cannot have PAN at all: it is an ARMv8.1 feature.
+fn arm_cpu(arch: Arch) -> String {
+    if let Ok(model) = std::env::var("FERRIX_ARM_CPU") {
+        return model;
+    }
+    if arch == Arch::AArch64 {
+        "cortex-a72"
+    } else {
+        "cortex-a7"
+    }
+    .to_owned()
+}
+
 /// Assemble the QEMU command line for `arch`.
 fn qemu_command(
     arch: Arch,
@@ -1246,14 +1266,10 @@ fn qemu_command(
             // The same `virt` machine for both: a GICv2, a PL011 at the same
             // address, the architected timer, a virtio disk. Only the CPU
             // differs, and with it the width of everything the CPU does.
-            let cpu = if arch == Arch::AArch64 {
-                "cortex-a72"
-            } else {
-                "cortex-a7"
-            };
+            let cpu = arm_cpu(arch);
             let _ = command.args(VIRT_MACHINE).args([
                 "-cpu",
-                cpu,
+                &cpu,
                 "-drive",
                 &format!("format=raw,file={},if=none,id=disk", display(image)),
                 "-device",

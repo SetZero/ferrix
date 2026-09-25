@@ -5,6 +5,7 @@
 //! Rust has syntax for.
 
 use core::arch::asm;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 /// Wait for an interrupt.
 pub(crate) fn wfi() {
@@ -256,6 +257,92 @@ pub(crate) fn read_sctlr() -> u64 {
         asm!("mrs {}, sctlr_el1", out(reg) value, options(nomem, nostack, preserves_flags));
     }
     value
+}
+
+// `MSR PAN, #imm` is emitted as a word rather than written as `msr pan, #1`,
+// for two reasons found the hard way. The mnemonic needs the ARMv8.1 `pan`
+// extension this target does not enable; and `.arch_extension pan` inside an
+// `asm!` changes assembler state for the rest of the translation unit, which
+// broke section emission and failed the link on anonymous constants. A `const`
+// operand does the same, so the word is written out literally.
+//
+// `MSR (immediate)` is `0xd500401f | op1 << 16 | CRm << 8 | op2 << 5`, and PAN
+// is `op1 = 0`, `op2 = 4`, with `CRm` carrying the immediate. So `#1` is
+// `0xd500419f` and `#0` is `0xd500409f` -- the same two words Linux emits for
+// `SET_PSTATE_PAN`.
+
+/// Whether this processor has `PAN`, so that the two words above are legal.
+static PAN_ON: AtomicBool = AtomicBool::new(false);
+
+/// Turn on Privileged Access Never: EL1 may not touch a page EL0 can.
+///
+/// AArch64's answer to SMAP, and the same argument applies — `syscall::uaccess`
+/// reaches a program's memory through the direct map, never through a user
+/// linear address, so the ordinary path is invisible to PAN and needs no
+/// window. See `arch::x86_64::cpu::enable_user_access_protection`, which this
+/// mirrors, and finding F-32.
+///
+/// Two registers, because PAN is both a state bit and a policy:
+///
+/// * `PSTATE.PAN` is set now, which is what forbids the access.
+/// * `SCTLR_EL1.SPAN` is *cleared*, which is what keeps it forbidden. SPAN
+///   means "**S**et **PAN** on exception entry is disabled"; leaving it set
+///   would clear `PSTATE.PAN` on every trap from user mode, so the protection
+///   would be off for exactly the code that handles a program's system calls.
+///   Clearing SPAN is the whole point and is easy to miss.
+///
+/// Returns whether the processor had the feature.
+pub(crate) fn enable_user_access_protection() -> bool {
+    let mmfr1: u64;
+    // SAFETY: reading `ID_AA64MMFR1_EL1` has no side effects.
+    unsafe {
+        asm!("mrs {}, id_aa64mmfr1_el1", out(reg) mmfr1, options(nomem, nostack, preserves_flags));
+    }
+    // PAN is bits 23:20; zero means the feature is absent.
+    if (mmfr1 >> 20) & 0xF == 0 {
+        return false;
+    }
+
+    let sctlr = read_sctlr();
+    // SAFETY: clearing `SPAN` (bit 23) only changes whether an exception entry
+    // sets `PSTATE.PAN`; it alters no mapping and no cache or MMU setting.
+    unsafe {
+        asm!("msr sctlr_el1, {}", "isb", in(reg) sctlr & !(1 << 23), options(nostack, preserves_flags));
+    }
+    // SAFETY: `PAN` was just reported present by `ID_AA64MMFR1_EL1`, and
+    // setting it only forbids EL1 access to EL0-accessible pages -- which
+    // nothing on the ordinary path does.
+    unsafe {
+        asm!(".inst 0xd500419f", options(nomem, nostack, preserves_flags));
+    }
+
+    PAN_ON.store(true, Ordering::Relaxed);
+    true
+}
+
+/// Permit this processor to touch user pages until [`forbid_user_access`].
+///
+/// Clears `PSTATE.PAN`. As on x86-64, almost nothing needs it: only
+/// `crate::user::check`, which reaches a user address on purpose to prove the
+/// processor walks an installed space.
+pub(crate) fn permit_user_access() {
+    if PAN_ON.load(Ordering::Relaxed) {
+        // SAFETY: `msr pan, #0` clears one state bit, and is only reached when
+        // the feature was found, without which it would be undefined.
+        unsafe {
+            asm!(".inst 0xd500409f", options(nomem, nostack, preserves_flags));
+        }
+    }
+}
+
+/// Refuse user pages to this processor again.
+pub(crate) fn forbid_user_access() {
+    if PAN_ON.load(Ordering::Relaxed) {
+        // SAFETY: `msr pan, #1` sets one state bit, under the same guard.
+        unsafe {
+            asm!(".inst 0xd500419f", options(nomem, nostack, preserves_flags));
+        }
+    }
 }
 
 /// Write the data cache lines covering `start..start + len` back to the

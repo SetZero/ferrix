@@ -267,7 +267,7 @@ It also corrected an error in the Security Target it was written against, which
 is the most useful thing it did. See F-32.
 
 ### F-32 — no SMAP, SMEP or PAN; one software check guards kernel memory
-**Closed on x86-64, 2026-09-25**; open on AArch64 (PAN) and ARMv7-A.
+**Closed 2026-09-25**, with one honest caveat about the emulated CPU.
 `CR4.SMEP` and `CR4.SMAP` are set in `init_traps` when CPUID reports them, and
 secondary processors inherit them through the `CR4` snapshot
 `smp::secondary_start` already copied. The boot says so:
@@ -288,9 +288,34 @@ through the direct map and never through a user linear address — is now
 enforced by hardware rather than asserted, and it survived `test-boot`,
 `test-threads` and `test-vfs`.
 
-Residual (V-01 remains partly open): PAN is not enabled on AArch64 and ARMv7-A,
-where `permit_user_access` is a no-op and the software bound check is still the
-only barrier. Original text follows.
+**AArch64 has PAN too**, implemented the same way: `PSTATE.PAN` set, and
+`SCTLR_EL1.SPAN` *cleared* so an exception entry from user mode does not undo
+it — the part that is easy to miss, since leaving SPAN set turns the protection
+off for exactly the code that handles system calls. It needed no access windows
+beyond the three SMAP already required, which confirms the same invariant holds
+there.
+
+Two things about it are worth recording rather than glossing.
+
+The instruction is emitted as a word. `msr pan, #1` needs the ARMv8.1 `pan`
+extension the target does not enable; `.arch_extension pan` inside an `asm!`
+changes assembler state for the whole translation unit and broke section
+emission, failing the link on anonymous constants; and a `const` operand to
+`.inst` did the same. `0xd500419f` and `0xd500409f` are written literally, with
+the derivation in a comment — the same two words Linux emits.
+
+And the reference configuration's CPU does not have the feature. `cortex-a72`
+is ARMv8.0; PAN is 8.1. The boot correctly reports *"PAN unavailable"* and
+carries on. Demonstrated on a CPU that has it via `FERRIX_ARM_CPU=max`, which
+prints *"PAN on"* and reaches `FERRIX-BOOT-OK`. Whether to move the Arm
+reference CPU is a project decision about what every Arm test runs on, not a
+certification fix, and it is left open deliberately.
+
+**ARMv7-A cannot have it at all**: the Cortex-A7 is ARMv7-A and PAN is an
+ARMv8.1 feature. There the software bound check remains the only barrier, and
+V-01 stands. That is a hardware limit, not a gap that work closes.
+
+Original text follows.
 
 **Was:** **Major.** `uaccess.rs` says so in its own header and the code confirms it: no
 `CR4.SMAP` or `CR4.SMEP` bit is set on x86-64, no `PAN` on AArch64. The bound
