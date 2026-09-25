@@ -4,7 +4,7 @@ The audit register for the item defined in [ITEM.md](ITEM.md). One entry per
 finding, each naming what was measured, which objective it bears on, and what
 would close it.
 
-30 findings are open and 5 are closed. No finding here is closed by argument:
+29 findings are open and 6 are closed. No finding here is closed by argument:
 a finding closes when the thing it describes stops being true and something in
 the build says so.
 
@@ -14,7 +14,7 @@ met or met without evidence. *Minor* — a defect with no objective attached yet
 
 | | Blocking | Major | Moderate | Minor | Informational |
 |---|---:|---:|---:|---:|---:|
-| Open | 4 | 9 | 13 | 3 | 1 |
+| Open | 4 | 9 | 13 | 2 | 1 |
 
 Blocking: F-20, F-22, F-27, F-28 — a hazard analysis, a safety case,
 independent assessment and a quality management system. Two are documents that
@@ -83,8 +83,11 @@ references became 59.
 being named by it.
 
 ### F-05 — `claim.rs` names `block_ring`
-**Minor.** 1 reference from the core's resource-claim code into a load-ring
-driver protocol.
+**Closed 2026-09-25.** Only the `StillServed` enum was wanted, and it belongs
+to the claim rather than to the ring: a quiesce asks whether anything still
+serves a node, and the answer must not depend on which uncertified subsystem
+happens to be serving it. Moved to `kernel/src/claim.rs`; `block_ring`,
+`render`, `display` and `native` now answer with the core's type.
 
 ### F-06 — core names two item-ring modules
 **Minor.** 4 references from `object/job.rs` and `sched/` into

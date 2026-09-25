@@ -60,6 +60,7 @@ use crate::sync::SpinLock;
 use crate::user::vmo::{Held, Vmo};
 use crate::{mm, sched, timer};
 
+use crate::claim::StillServed;
 use crate::fs::block::BlockDevice;
 use crate::fs::devfs::{BlockRefused, BlockRegistration, Origin, register_block_from};
 
@@ -250,17 +251,6 @@ pub(crate) fn start_for(node: &DeviceNode, name: DiskName) -> Option<StartMessag
         location: location.raw(),
         name: *name.as_bytes(),
     })
-}
-
-/// Why `node` cannot be quiesced.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum StillServed {
-    /// A driver holds its end of the ring's control channel: it is alive
-    /// and serving, and quiescing under it is refused.
-    ByADriver,
-    /// The driver is gone but the ring's task has not ended within the
-    /// patience, or the caller was terminated meanwhile.
-    Waiting,
 }
 
 /// Wait until no driver serves `node`'s disk through a ring, for a quiesce.

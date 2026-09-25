@@ -373,13 +373,6 @@
         "finding": "F-04"
       },
       {
-        "file": "claim.rs",
-        "references": "block_ring",
-        "from_ring": "core",
-        "to_ring": "load",
-        "finding": "F-05"
-      },
-      {
         "file": "object/job.rs",
         "references": "syscall::registry",
         "from_ring": "core",

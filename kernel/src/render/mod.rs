@@ -60,7 +60,7 @@ use ferrix_renderctl::message::{
 };
 use ferrix_renderctl::session::{Event, RequestError, Session};
 
-use crate::block_ring::StillServed;
+use crate::claim::StillServed;
 use crate::claim::{Claims, Numbers};
 use crate::device::DeviceNode;
 use crate::object::channel::{ChannelMessage, Endpoint, ReadError};

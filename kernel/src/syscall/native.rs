@@ -1269,10 +1269,10 @@ fn device_quiesce(process: &Process, device: Handle) -> Result<usize, Errno> {
     let cancelled = || process.is_terminated();
     let served = |why| match why {
         // A driver still holds its end: refused for good.
-        block_ring::StillServed::ByADriver => status::BAD_STATE,
+        crate::claim::StillServed::ByADriver => status::BAD_STATE,
         // The driver is gone but the core has not let go in time: worth
         // asking again, and devmgr does.
-        block_ring::StillServed::Waiting => status::TIMED_OUT,
+        crate::claim::StillServed::Waiting => status::TIMED_OUT,
     };
     block_ring::wait_until_unserved(&node, &cancelled).map_err(served)?;
     crate::display::wait_until_unserved(&node, &cancelled).map_err(served)?;

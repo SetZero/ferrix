@@ -26,12 +26,27 @@ use alloc::vec::Vec;
 
 use ferrix_native_abi::signals::Signals;
 
-use crate::block_ring::StillServed;
 use crate::device::DeviceNode;
 use crate::object::channel::Endpoint;
 use crate::sched::WaitQueue;
 use crate::sync::SpinLock;
 use crate::timer;
+
+/// Why a device node cannot be quiesced.
+///
+/// Defined here rather than in `crate::block_ring` because the claim is the
+/// core's: a quiesce asks whether anything still serves a node, and the answer
+/// must not depend on which uncertified subsystem happens to be serving it.
+/// `block_ring`, `render` and `display` each answer with this.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum StillServed {
+    /// A driver holds its end of the ring's control channel: it is alive
+    /// and serving, and quiescing under it is refused.
+    ByADriver,
+    /// The driver is gone but the ring's task has not ended within the
+    /// patience, or the caller was terminated meanwhile.
+    Waiting,
+}
 
 /// How long a quiesce waits for a core's task to let go of a device whose
 /// driver has gone: the same patience the block ring gives.

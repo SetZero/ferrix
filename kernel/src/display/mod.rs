@@ -41,7 +41,7 @@ use ferrix_native_abi::types::CHANNEL_MAX_HANDLES;
 
 use ferrix_native_abi::types::DEVICE_NOT_PCI;
 
-use crate::block_ring::StillServed;
+use crate::claim::StillServed;
 use crate::claim::{Claims, Numbers};
 use crate::device::{self, DeviceNode, DmaShape};
 use crate::object::channel::{ChannelMessage, Endpoint, ReadError};
