@@ -21,6 +21,7 @@ specific, measured, and mostly documents rather than code.
 * [FINDINGS.md](FINDINGS.md) — the audit register, 27 open findings and 11 closed
 * [SECURITY-TARGET.md](SECURITY-TARGET.md) — EAL5+ claim, SFRs, and where it would fail evaluation
 * [VULNERABILITY-ANALYSIS.md](VULNERABILITY-ANALYSIS.md) — AVA_VAN.4 over the seven threats; five residual vulnerabilities
+* [MEMORY-AND-TIMING.md](MEMORY-AND-TIMING.md) — what the item allocates, and what it promises about time
 * [SOUP.md](SOUP.md) — generated; the item contains none
 * [VERIFICATION.md](VERIFICATION.md) — what exercises the item, and the traceability gap
 * [TOOLS.md](TOOLS.md) — tool classification under EN 50716 §6.7 and DO-330
@@ -71,6 +72,7 @@ boundary.
 | `unsafe` blocks, all documented | 662 |
 | Directly recursive functions in the item | **0** |
 | SMEP + SMAP (x86-64) | **on** |
+| PAN (AArch64) | **implemented**; absent from the reference CPU |
 | Assembly | 303 lines, 19 allow-listed sites |
 | Cargo features in `kernel/`/`boot/` | 0 |
 
