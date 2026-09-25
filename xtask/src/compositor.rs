@@ -1985,7 +1985,13 @@ pub(crate) fn run_compositor(args: &Args) -> Result<()> {
                 "--chrome runs on x86_64 only: Chrome for Testing publishes linux64 alone",
             ));
         }
-        args.data_image = Some(crate::chrome::volume()?);
+        // `--everything` has both downloads on the one disk the kernel
+        // mounts; `--chrome` alone has Chrome's in the rustc volume's place.
+        args.data_image = Some(if args.everything {
+            crate::everything::volume()?
+        } else {
+            crate::chrome::volume()?
+        });
         if !args.memory_given {
             args.memory = crate::chrome::MEMORY;
         }
@@ -2199,6 +2205,10 @@ fn desktop(
     if args.chrome {
         let links = chrome_links(&carried.ports);
         carried.ports.extend(links);
+        if args.everything {
+            let links = rustc_links(&carried.ports);
+            carried.ports.extend(links);
+        }
     } else {
         carried.ports.extend(crate::rustc::default_links(args));
     }
@@ -4733,6 +4743,18 @@ fn chrome_links(carried: &[crate::ports::File]) -> Vec<crate::ports::File> {
             links.push(("usr/share/fonts/truetype", "/data/usr/share/fonts/truetype"));
         }
     }
+    crate::rustc::files(&links)
+}
+
+/// The compiler's links for `--everything`, less any path Chrome's links
+/// have already made: the two volumes' glibc is one Debian's, so where both
+/// name a path they name the same place on `/data`.
+fn rustc_links(carried: &[crate::ports::File]) -> Vec<crate::ports::File> {
+    let links: Vec<(&str, &str)> = crate::rustc::DEFAULT_LINKS
+        .iter()
+        .copied()
+        .filter(|(path, _)| !carried.iter().any(|file| file.path == *path))
+        .collect();
     crate::rustc::files(&links)
 }
 

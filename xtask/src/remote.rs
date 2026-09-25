@@ -974,7 +974,9 @@ fn forwarded(args: &Args, viewer: &Viewer) -> Vec<String> {
         }
     }
     // Chrome on the desktop, which only the boot over there can give it.
-    if args.chrome {
+    if args.everything {
+        extra.push("--everything".to_owned());
+    } else if args.chrome {
         extra.push("--chrome".to_owned());
     }
     extra.extend(args.passthrough.iter().cloned());

@@ -65,6 +65,7 @@ mod chrome;
 mod compositor;
 mod console;
 mod display;
+mod everything;
 mod fat;
 mod ferrousli;
 mod flash;
@@ -211,6 +212,9 @@ OPTIONS:
     --no-net                             run-compositor: no network device and no gateway
     --chrome                             run-compositor: Chrome on the desktop, from the volume
                                          scripts/fetch-chrome.sh makes; SUPER+B opens another
+    --everything                         run-compositor: all of it at once -- --gl, --release,
+                                         --clipboard, --chrome, and rustc and cargo in the shell,
+                                         from one volume made of the rustc and Chrome ones
     --forward <HOST>:<GUEST>             the host's 127.0.0.1:HOST leads to the guest's port GUEST,
                                          e.g. 2222:22 for sshdt; repeatable; turns --net on
     --ssh <PORT>                         run-compositor: start sshdt in the guest, reached at

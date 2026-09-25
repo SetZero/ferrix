@@ -57,6 +57,12 @@ pub(crate) struct Args {
     /// from the volume `scripts/fetch-chrome.sh` makes, in place of the
     /// rustc volume, and a keybind for another window.
     pub(crate) chrome: bool,
+    /// `--everything`: `run-compositor` with every feature a watched desktop
+    /// has -- `--gl`, `--release`, `--clipboard` and `--chrome`, which it
+    /// sets, and `rustc` and `cargo` beside Chrome on one data volume made
+    /// of the two (`crate::everything`). The network and the hypervisor a
+    /// watched boot has already.
+    pub(crate) everything: bool,
     /// `-h`/`--help`.
     pub(crate) help: bool,
     /// `--smp`, virtual CPUs.
@@ -285,6 +291,17 @@ pub(crate) struct Args {
 }
 
 impl Args {
+    /// `--everything`: the flags it stands for, set as if each were given,
+    /// so a later `--no-gl` still takes the 3D card away.
+    fn everything(&mut self) {
+        self.everything = true;
+        self.chrome = true;
+        self.gl = true;
+        self.display = true;
+        self.release = true;
+        self.clipboard = true;
+    }
+
     /// Parse an iterator of arguments, `cargo xtask` and the command name
     /// having already been stripped by the caller.
     pub(crate) fn parse(raw: impl Iterator<Item = String>) -> Result<Self> {
@@ -314,6 +331,7 @@ impl Args {
                 "--net" => args.net = true,
                 "--no-net" => args.no_net = true,
                 "--chrome" => args.chrome = true,
+                "--everything" => args.everything(),
                 "--forward" => {
                     let raw = value(&mut items, "--forward")?;
                     args.forwards.push(crate::gateway::Forward::parse(&raw)?);
@@ -654,6 +672,16 @@ mod tests {
              be the bus it has always enumerated"
         );
         assert!(parse(&["run", "--clipboard"]).unwrap().clipboard);
+    }
+
+    #[test]
+    fn everything_turns_on_every_feature_of_a_watched_desktop() {
+        let args = parse(&["run-compositor", "--everything"]).unwrap();
+        assert!(args.everything && args.chrome && args.clipboard && args.release);
+        assert!(args.gl && args.display);
+        // A feature taken away after it is still taken away.
+        let args = parse(&["run-compositor", "--everything", "--no-gl"]).unwrap();
+        assert!(args.everything && args.no_gl);
     }
 
     #[test]

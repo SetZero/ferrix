@@ -70,7 +70,7 @@ pub(crate) const LINKS: &[(&str, &str)] = &[
 /// Normal boots also carry ports under `/usr/libexec`, so only gcc's child
 /// directory can be linked there. Put the compiler and its C driver on the
 /// shell's `/bin` PATH; the gate sets its own PATH instead.
-const DEFAULT_LINKS: &[(&str, &str)] = &[
+pub(crate) const DEFAULT_LINKS: &[(&str, &str)] = &[
     ("lib64", "/data/usr/lib64"),
     ("lib/x86_64-linux-gnu", "/data/usr/lib/x86_64-linux-gnu"),
     ("usr/lib/x86_64-linux-gnu", "/data/usr/lib/x86_64-linux-gnu"),
@@ -105,7 +105,7 @@ fn directory() -> Result<std::path::PathBuf> {
 }
 
 /// The volume, in [`directory`].
-fn volume() -> Result<std::path::PathBuf> {
+pub(crate) fn volume() -> Result<std::path::PathBuf> {
     let image = directory()?.join("rustc.img");
     if !image.is_file() {
         return Err(Error::new(format!(

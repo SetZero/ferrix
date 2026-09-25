@@ -643,9 +643,15 @@ the last three being the ones not in the line:
 | `--screens 2` | two cards, so two monitors, which the compositor tiles across and `test-compositor`'s monitor boot judges. Accepted by `run-compositor` too, though the boots that are gated are the headless ones |
 | `--no-net` | the one thing in that command that is on by default and can only be turned *off* |
 
-There is no `--everything`, deliberately: every device a boot does not need
-is one fewer on the bus, and several of the gates exist to assert exactly
-what a machine enumerates.
+`--everything` is all of it at once, for a desktop somebody is going to use:
+`--gl`, `--release`, `--clipboard` and `--chrome`, with `rustc` and `cargo`
+in the shell beside Chrome. The kernel mounts one data disk, so it makes a
+third volume at `~/.local/share/ferrix/everything` out of the two trees the
+fetch scripts keep -- hard links, not a copy -- and makes it again when
+either is fetched again. Both volumes have to have been fetched. It is
+`run-compositor`'s alone: the gates still boot exactly the devices each asks
+for, since every device a boot does not need is one fewer on the bus, and
+several of them exist to assert exactly what a machine enumerates.
 
 The same shape for `run`, which boots a program of your choosing rather than
 the compositor -- here `compositor/blank`, and `--init ferrousli` or a path
