@@ -15,15 +15,32 @@
 
 use alloc::boxed::Box;
 use alloc::sync::Arc;
+use core::any::Any;
 use core::cell::UnsafeCell;
+use core::fmt;
 use core::sync::atomic::{AtomicBool, AtomicI64, AtomicU8, AtomicU32, AtomicU64, Ordering};
 
 use ferrix_sched::{CpuSet, EntityState};
 
 use crate::arch;
-use crate::syscall::thread::Thread;
+use crate::object::process::Host;
 use crate::user::space::AddressSpace;
 use crate::vmap::Stack;
+
+/// A line of execution through a program, as the scheduler sees it: what a
+/// task that runs user code holds.
+///
+/// The thread itself is the personality's -- its id, the signals sent to it
+/// alone and the address to clear when it ends are POSIX's, and none of them
+/// is the scheduler's business. What the scheduler needs is the process it
+/// runs in, to count it starting and gone, and the reference that keeps the
+/// thread, and through it the process, alive while the task is.
+///
+/// `Any`, so that the personality can have its own thread back from a task.
+pub(crate) trait UserThread: Any + Send + Sync + fmt::Debug {
+    /// The process whose code it runs.
+    fn process(&self) -> &dyn Host;
+}
 
 /// A task's name, unique for the life of the machine.
 pub(crate) type TaskId = u64;
@@ -63,7 +80,7 @@ pub(crate) struct Task {
     /// `None` for a kernel thread. Holding it is what keeps the thread, and
     /// through it the process, alive while the task is: a process does not own
     /// its tasks, its tasks own it.
-    thread: Option<Arc<Thread>>,
+    thread: Option<Arc<dyn UserThread>>,
     /// The user registers no trap saves -- thread pointer, floating point --
     /// kept here while the task is not running. `Some` exactly when `thread`
     /// is. Boxed because it is half a kilobyte and most tasks have none.
@@ -151,7 +168,7 @@ pub(crate) struct NewTask {
     /// The address space it runs in, or `None` for a kernel thread.
     pub(crate) address_space: Option<Arc<AddressSpace>>,
     /// The thread it runs user code for, or `None` for a kernel thread.
-    pub(crate) thread: Option<Arc<Thread>>,
+    pub(crate) thread: Option<Arc<dyn UserThread>>,
     /// The user registers it starts with, for a task with a thread: `None`
     /// is a program's starting state, and a fork child passes a copy of its
     /// parent's.
@@ -444,7 +461,7 @@ impl Task {
     }
 
     /// The thread this task runs user code for, or `None` for a kernel thread.
-    pub(crate) fn thread(&self) -> Option<&Arc<Thread>> {
+    pub(crate) fn thread(&self) -> Option<&Arc<dyn UserThread>> {
         self.thread.as_ref()
     }
 

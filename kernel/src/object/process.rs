@@ -248,6 +248,15 @@ pub(crate) trait Host: Any + Send + Sync + fmt::Debug {
     /// last handle to a process nobody started, do. Its threads find out on
     /// their way back to user mode; nothing here waits for that.
     fn kill(&self, status: i32);
+
+    /// Count a thread about to start. Before its task is spawned, because the
+    /// task can reach its exit on another processor before the spawn returns.
+    fn thread_starting(&self);
+
+    /// Count a thread gone -- one that `ended`, or one whose task could not be
+    /// spawned -- and, if that was its last, end the process or let go of
+    /// what it holds, as the personality decides.
+    fn thread_gone(&self, ended: bool);
 }
 
 /// The personality's own type back from a [`Host`], or `None` if `host` is

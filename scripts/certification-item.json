@@ -298,20 +298,6 @@
         "finding": "F-01"
       },
       {
-        "file": "sched/mod.rs",
-        "references": "syscall::thread",
-        "from_ring": "core",
-        "to_ring": "item",
-        "finding": "F-06"
-      },
-      {
-        "file": "sched/task.rs",
-        "references": "syscall::thread",
-        "from_ring": "core",
-        "to_ring": "item",
-        "finding": "F-06"
-      },
-      {
         "file": "syscall/native.rs",
         "references": "block_ring",
         "from_ring": "item",

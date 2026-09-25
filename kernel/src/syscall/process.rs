@@ -1153,10 +1153,7 @@ impl Process {
     /// running.
     fn wake_thread(&self, thread: &Thread) {
         for task in &self.tasks() {
-            if task
-                .thread()
-                .is_some_and(|own| core::ptr::eq(Arc::as_ptr(own), thread))
-            {
+            if thread::of_task(task).is_some_and(|own| core::ptr::eq(own, thread)) {
                 sched::wake(task);
                 sched::interrupt(task);
             }
@@ -1480,6 +1477,14 @@ impl Host for Process {
     fn kill(&self, status: i32) {
         kill(self, status);
     }
+
+    fn thread_starting(&self) {
+        Process::thread_starting(self);
+    }
+
+    fn thread_gone(&self, ended: bool) {
+        Process::thread_gone(self, ended);
+    }
 }
 
 /// The process the running task belongs to.
@@ -1490,7 +1495,8 @@ pub(crate) fn current() -> Option<Arc<Process>> {
     // scheduler is core and `Process` is the Linux personality's, so the core
     // should not carry a way to name one. The thread is what owns the process
     // anyway -- `Thread::process` is the real relationship.
-    sched::current().and_then(|task| task.thread().map(|thread| Arc::clone(thread.process())))
+    let task = sched::current()?;
+    thread::of_task(&task).map(|thread| Arc::clone(thread.process()))
 }
 
 /// Load a program into a new process, without running it.

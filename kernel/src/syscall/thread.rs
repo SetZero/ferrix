@@ -27,9 +27,11 @@
 //! other way round.
 
 use alloc::sync::Arc;
+use core::any::Any;
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
-use crate::sched;
+use crate::object::process::Host;
+use crate::sched::{self, Task, UserThread};
 use crate::sync::SpinLock;
 use crate::syscall::process::Process;
 use crate::syscall::registry;
@@ -196,6 +198,12 @@ impl Thread {
     }
 }
 
+impl UserThread for Thread {
+    fn process(&self) -> &dyn Host {
+        &*self.process
+    }
+}
+
 impl Drop for Thread {
     /// Give its thread id back, unless it is its process's first, whose id is
     /// the pid and goes with the process.
@@ -209,7 +217,19 @@ impl Drop for Thread {
 
 /// The thread the running task runs, or `None` for a kernel thread.
 pub(crate) fn current() -> Option<Arc<Thread>> {
-    sched::current().and_then(|task| task.thread().cloned())
+    let task = sched::current()?;
+    let thread: Arc<dyn UserThread> = Arc::clone(task.thread()?);
+    let thread: Arc<dyn Any + Send + Sync> = thread;
+    thread.downcast().ok()
+}
+
+/// The thread `task` runs, if it runs one of this personality's.
+///
+/// The scheduler holds a task's thread as its own [`UserThread`], which knows
+/// nothing of signals or thread ids; this is the way back to the rest.
+pub(crate) fn of_task(task: &Task) -> Option<&Thread> {
+    let thread: &dyn Any = &**task.thread()?;
+    thread.downcast_ref()
 }
 
 /// The running task's thread, if it is one of `process`'s.

@@ -53,13 +53,12 @@ use ferrix_sync::{IrqControl, IrqSpinLock, Once, SpinLock};
 
 use crate::arch;
 use crate::smp::Topology;
-use crate::syscall::thread::Thread;
 use queue::CpuQueue;
 use task::{DEAD, RUNNABLE};
 
 pub(crate) use check::run as run_checks;
 pub(crate) use queue::{MIN_SLICE_NS, SLICE_NS};
-pub(crate) use task::{Task, TaskId};
+pub(crate) use task::{Task, TaskId, UserThread};
 pub(crate) use wait::WaitQueue;
 
 /// One run queue per logical processor.
@@ -879,7 +878,7 @@ pub(crate) fn spawn_on_in(
 pub(crate) fn spawn_user(
     name: &'static str,
     entry: fn(usize),
-    thread: Arc<Thread>,
+    thread: Arc<dyn UserThread>,
     cpu: Option<usize>,
     state: Option<arch::UserState>,
 ) -> Result<Arc<Task>, &'static str> {
@@ -899,7 +898,7 @@ pub(crate) fn spawn_user(
 pub(crate) fn prepare_user(
     name: &'static str,
     entry: fn(usize),
-    thread: Arc<Thread>,
+    thread: Arc<dyn UserThread>,
     cpu: Option<usize>,
     state: Option<arch::UserState>,
 ) -> Result<PreparedTask, &'static str> {
@@ -911,12 +910,11 @@ pub(crate) fn prepare_user(
     };
     // Resolved here, so that launching has nothing left to refuse.
     let queue = queue_of(cpu).ok_or("no such processor")?;
-    let space = Arc::clone(thread.process().space());
+    let space = Arc::clone(thread.process().core().space());
     // Counted before the task exists: on another processor it can reach its
     // thread's exit as soon as it is launched. A task that could not be made
     // gives the count back here, and one never launched when it is dropped.
-    let process = Arc::clone(thread.process());
-    process.thread_starting();
+    thread.process().thread_starting();
     let task = make_task(
         name,
         entry,
@@ -925,15 +923,15 @@ pub(crate) fn prepare_user(
         cpu,
         affinity,
         Some(space),
-        Some(thread),
+        Some(Arc::clone(&thread)),
         state,
     )
-    .inspect_err(|_| process.thread_gone(false))?;
+    .inspect_err(|_| thread.process().thread_gone(false))?;
     Ok(PreparedTask {
         task,
         cpu,
         queue,
-        process,
+        thread,
         launched: false,
     })
 }
@@ -953,8 +951,8 @@ pub(crate) struct PreparedTask {
     cpu: usize,
     /// That processor's queue, resolved when it was prepared.
     queue: &'static SpinLock<CpuQueue>,
-    /// Whose live-thread count it holds.
-    process: Arc<crate::syscall::process::Process>,
+    /// The thread whose process's live-thread count it holds.
+    thread: Arc<dyn UserThread>,
     /// Set by [`PreparedTask::launch`], after which a drop gives nothing back.
     launched: bool,
 }
@@ -984,7 +982,7 @@ impl Drop for PreparedTask {
             // its stack, and none will: this is its only reference.
             let _ = unsafe { crate::vmap::free_stack(stack) };
         }
-        self.process.thread_gone(false);
+        self.thread.process().thread_gone(false);
     }
 }
 
@@ -1001,7 +999,7 @@ fn spawn_task(
     cpu: usize,
     affinity: CpuSet,
     address_space: Option<Arc<crate::user::space::AddressSpace>>,
-    thread: Option<Arc<Thread>>,
+    thread: Option<Arc<dyn UserThread>>,
     user_state: Option<arch::UserState>,
 ) -> Result<Arc<Task>, &'static str> {
     // The queue before the task: a task made for a processor that does not
@@ -1035,7 +1033,7 @@ fn make_task(
     cpu: usize,
     affinity: CpuSet,
     address_space: Option<Arc<crate::user::space::AddressSpace>>,
-    thread: Option<Arc<Thread>>,
+    thread: Option<Arc<dyn UserThread>>,
     user_state: Option<arch::UserState>,
 ) -> Result<Arc<Task>, &'static str> {
     let stack = crate::vmap::allocate_stack().map_err(|problem| {
