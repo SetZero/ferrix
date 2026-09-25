@@ -3,8 +3,19 @@
 //! `compositor/evecho` opens a `/dev/input/eventN` and reads whole
 //! `input_event`s. This turns those into the [`Input`]s the seat understands:
 //! evdev's relative axes into pixels, its absolute axes into a fraction of
-//! the device's own range, its keys and buttons apart, and its `SYN_REPORT`
-//! into the end of a group.
+//! the device's own range, and its keys and buttons apart.
+//!
+//! # One move for many reports
+//!
+//! A device reports x and y as two events, and a mouse sends hundreds of
+//! reports a second, all queued between two of the compositor's reads. The
+//! pointer's moves are therefore gathered: a read's axis events become one
+//! move to where the device last said it was, sent before anything that is
+//! not a move -- a button, a key, a wheel click -- and at the end of the read.
+//! Sent one per axis event, a client was told first the new x with the old
+//! y and then the new y, a staircase instead of the hand's line, and twice
+//! per report: Chrome, drawing in software, fell tens of seconds behind a
+//! drag and put its selection somewhere the pointer had never been.
 //!
 //! # Why absolute axes are a fraction
 //!
@@ -27,8 +38,8 @@ use std::path::Path;
 
 use compositor_evecho::{Device, event_nodes};
 use ferrix_linux_abi::input::{
-    ABS_X, ABS_Y, BTN_MISC, EV_ABS, EV_KEY, EV_LED, EV_REL, EV_SYN, Event, KEY_MAX, LED_CAPSL,
-    LED_NUML, REL_HWHEEL, REL_WHEEL, REL_X, REL_Y, SYN_REPORT,
+    ABS_X, ABS_Y, BTN_MISC, EV_ABS, EV_KEY, EV_LED, EV_REL, Event, KEY_MAX, LED_CAPSL, LED_NUML,
+    REL_HWHEEL, REL_WHEEL, REL_X, REL_Y,
 };
 
 use crate::seat::Input;
@@ -54,6 +65,10 @@ struct Axes {
     /// Where it last said it was: a report may carry one axis and not the
     /// other, and the pointer has to go somewhere in both.
     at: (i32, i32),
+    /// Whether the absolute axes moved since the last move was sent.
+    moved: bool,
+    /// The relative distance gathered since the last move was sent.
+    delta: (f64, f64),
 }
 
 /// One open device, with what its absolute axes are worth.
@@ -182,7 +197,10 @@ impl Devices {
         Ok(Open {
             device,
             node,
-            axes: Axes { range, at: (0, 0) },
+            axes: Axes {
+                range,
+                ..Axes::default()
+            },
         })
     }
 
@@ -315,10 +333,9 @@ impl Devices {
                 }
             }
             for event in &self.events {
-                if let Some(input) = translate(&mut open.axes, *event) {
-                    inputs.push(input);
-                }
+                translate(&mut open.axes, *event, &mut inputs);
             }
+            open.axes.flush(&mut inputs);
         }
         inputs
     }
@@ -333,18 +350,21 @@ fn node_name(path: &Path) -> String {
     )
 }
 
-/// One evdev event as an [`Input`], or nothing for one the seat has no use
-/// for.
-fn translate(axes: &mut Axes, event: Event) -> Option<Input> {
+/// One evdev event into `out`: a key or a button after the move gathered so
+/// far, a wheel click the same, and an axis into the move, which
+/// [`Axes::flush`] sends. What the seat has no use for adds nothing.
+fn translate(axes: &mut Axes, event: Event, out: &mut Vec<Input>) {
     match event.r#type {
-        EV_KEY => Some(key_or_button(event)),
-        EV_REL => relative(event),
+        EV_KEY => {
+            axes.flush(out);
+            out.push(key_or_button(event));
+        }
+        EV_REL => axes.relative(event, out),
         EV_ABS => axes.absolute(event),
-        // The end of a report. `wl_pointer.frame` groups the events the
-        // compositor sent, and the compositor sends one after each read, so
-        // the sync itself carries nothing up.
-        EV_SYN if event.code == SYN_REPORT => None,
-        _ => None,
+        // The end of a report: the move goes on gathering until something
+        // else happens or the read ends, and `wl_pointer.frame` follows each
+        // thing the compositor sends.
+        _ => {}
     }
 }
 
@@ -381,39 +401,68 @@ const fn is_pointer_button(code: u16) -> bool {
     code >= BTN_MISC && code < 0x120
 }
 
-fn relative(event: Event) -> Option<Input> {
-    let value = f64::from(event.value);
-    match event.code {
-        REL_X => Some(Input::Motion { dx: value, dy: 0.0 }),
-        REL_Y => Some(Input::Motion { dx: 0.0, dy: value }),
-        REL_WHEEL => Some(Input::Axis {
-            axis: compositor_protocol::core::wl_pointer::axis::VERTICAL_SCROLL,
-            // A wheel click up is a negative movement of the surface's
-            // content, which is the opposite sign from evdev's.
-            value: -value * WHEEL_STEP,
-        }),
-        REL_HWHEEL => Some(Input::Axis {
-            axis: compositor_protocol::core::wl_pointer::axis::HORIZONTAL_SCROLL,
-            value: value * WHEEL_STEP,
-        }),
-        _ => None,
-    }
-}
-
 impl Axes {
-    /// One `EV_ABS` event as a fraction of the device's own range.
-    fn absolute(&mut self, event: Event) -> Option<Input> {
-        let ((min_x, max_x), (min_y, max_y)) = self.range?;
+    /// One `EV_REL` event: a distance into the move, or a wheel click after
+    /// it.
+    fn relative(&mut self, event: Event, out: &mut Vec<Input>) {
+        let value = f64::from(event.value);
+        let wheel = match event.code {
+            REL_X => {
+                self.delta.0 += value;
+                return;
+            }
+            REL_Y => {
+                self.delta.1 += value;
+                return;
+            }
+            REL_WHEEL => Input::Axis {
+                axis: compositor_protocol::core::wl_pointer::axis::VERTICAL_SCROLL,
+                // A wheel click up is a negative movement of the surface's
+                // content, which is the opposite sign from evdev's.
+                value: -value * WHEEL_STEP,
+            },
+            REL_HWHEEL => Input::Axis {
+                axis: compositor_protocol::core::wl_pointer::axis::HORIZONTAL_SCROLL,
+                value: value * WHEEL_STEP,
+            },
+            _ => return,
+        };
+        self.flush(out);
+        out.push(wheel);
+    }
+
+    /// One `EV_ABS` event: where the device now is, for the next move.
+    fn absolute(&mut self, event: Event) {
+        if self.range.is_none() {
+            return;
+        }
         match event.code {
             ABS_X => self.at.0 = event.value,
             ABS_Y => self.at.1 = event.value,
             // A multi-touch axis, or one the compositor has no use for.
-            _ => return None,
+            _ => return,
         }
-        Some(Input::Absolute {
-            x: fraction(self.at.0, min_x, max_x),
-            y: fraction(self.at.1, min_y, max_y),
-        })
+        self.moved = true;
+    }
+
+    /// Send the move gathered since the last: the distance a relative device
+    /// went, and where an absolute one is, as a fraction of its own range.
+    fn flush(&mut self, out: &mut Vec<Input>) {
+        if self.delta != (0.0, 0.0) {
+            out.push(Input::Motion {
+                dx: self.delta.0,
+                dy: self.delta.1,
+            });
+            self.delta = (0.0, 0.0);
+        }
+        if std::mem::take(&mut self.moved)
+            && let Some(((min_x, max_x), (min_y, max_y))) = self.range
+        {
+            out.push(Input::Absolute {
+                x: fraction(self.at.0, min_x, max_x),
+                y: fraction(self.at.1, min_y, max_y),
+            });
+        }
     }
 }
 

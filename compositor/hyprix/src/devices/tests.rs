@@ -18,8 +18,22 @@ fn event(kind: u16, code: u16, value: i32) -> Event {
     }
 }
 
+/// What one event sends, the move it may leave gathered included.
 fn of(axes: &mut Axes, kind: u16, code: u16, value: i32) -> Option<Input> {
-    translate(axes, event(kind, code, value))
+    let mut out = read(axes, &[(kind, code, value)]);
+    assert!(out.len() <= 1, "one event sent {out:?}");
+    out.pop()
+}
+
+/// What a read of `events` sends, as `Devices::read_ready` does it: each
+/// event, then the move left gathered.
+fn read(axes: &mut Axes, events: &[(u16, u16, i32)]) -> Vec<Input> {
+    let mut out = Vec::new();
+    for &(kind, code, value) in events {
+        translate(axes, event(kind, code, value), &mut out);
+    }
+    axes.flush(&mut out);
+    out
 }
 
 #[test]
@@ -101,7 +115,7 @@ fn a_relative_axis_is_pixels_and_a_wheel_is_a_click() {
 fn an_absolute_axis_is_a_fraction_of_the_devices_own_range() {
     let mut axes = Axes {
         range: Some(((0, 32767), (0, 32767))),
-        at: (0, 0),
+        ..Axes::default()
     };
     assert_eq!(
         of(&mut axes, EV_ABS, ABS_X, 16384),
@@ -172,5 +186,103 @@ fn the_lights_follow_the_locked_mask_once_per_change() {
     assert_eq!(
         lights.change(MOD2),
         Some([(LED_CAPSL, false), (LED_NUML, true)])
+    );
+}
+
+/// A tablet reports x and y as two events in one report; the pointer moves
+/// once, to both, never to the new x with the old y.
+#[test]
+fn a_report_of_both_axes_is_one_move_to_both() {
+    let mut axes = Axes {
+        range: Some(((0, 32767), (0, 32767))),
+        ..Axes::default()
+    };
+    let moved = read(
+        &mut axes,
+        &[
+            (EV_ABS, ABS_X, 32767),
+            (EV_ABS, ABS_Y, 32767),
+            (EV_SYN, SYN_REPORT, 0),
+        ],
+    );
+    assert_eq!(moved, [Input::Absolute { x: 1.0, y: 1.0 }]);
+}
+
+/// Many reports queued between two reads are one move, to the last place,
+/// and a relative device's distances add up: a thousand-report mouse must
+/// not become a thousand moves a client redraws for.
+#[test]
+fn a_reads_many_reports_are_one_move_to_the_last() {
+    let mut tablet = Axes {
+        range: Some(((0, 100), (0, 100))),
+        ..Axes::default()
+    };
+    let mut reports = Vec::new();
+    for at in 1..=50 {
+        reports.extend([
+            (EV_ABS, ABS_X, at),
+            (EV_ABS, ABS_Y, at * 2),
+            (EV_SYN, SYN_REPORT, 0),
+        ]);
+    }
+    assert_eq!(
+        read(&mut tablet, &reports),
+        [Input::Absolute { x: 0.5, y: 1.0 }]
+    );
+
+    let mut mouse = Axes::default();
+    let mut reports = Vec::new();
+    for _ in 0..10 {
+        reports.extend([
+            (EV_REL, REL_X, 3),
+            (EV_REL, REL_Y, -1),
+            (EV_SYN, SYN_REPORT, 0),
+        ]);
+    }
+    assert_eq!(
+        read(&mut mouse, &reports),
+        [Input::Motion {
+            dx: 30.0,
+            dy: -10.0
+        }]
+    );
+}
+
+/// A click lands where the pointer was when the button went down: the move
+/// gathered before it is sent first, and one after it is sent after.
+#[test]
+fn a_button_follows_the_move_before_it_and_precedes_the_one_after() {
+    let mut axes = Axes {
+        range: Some(((0, 100), (0, 100))),
+        ..Axes::default()
+    };
+    let sent = read(
+        &mut axes,
+        &[
+            (EV_ABS, ABS_X, 10),
+            (EV_ABS, ABS_Y, 20),
+            (EV_SYN, SYN_REPORT, 0),
+            (EV_KEY, BTN_LEFT, 1),
+            (EV_SYN, SYN_REPORT, 0),
+            (EV_ABS, ABS_X, 50),
+            (EV_SYN, SYN_REPORT, 0),
+            (EV_KEY, BTN_LEFT, 0),
+            (EV_SYN, SYN_REPORT, 0),
+        ],
+    );
+    assert_eq!(
+        sent,
+        [
+            Input::Absolute { x: 0.1, y: 0.2 },
+            Input::Button {
+                button: u32::from(BTN_LEFT),
+                pressed: true
+            },
+            Input::Absolute { x: 0.5, y: 0.2 },
+            Input::Button {
+                button: u32::from(BTN_LEFT),
+                pressed: false
+            },
+        ]
     );
 }
