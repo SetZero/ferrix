@@ -420,9 +420,12 @@ package FerrixRoadmap {
              * the customer's choice of 2026-09-24. Exit met on x86-64:
              * cargo xtask test-chrome runs it headless, and
              * cargo xtask test-chrome-window in a window on the compositor.
-             * Owed: the zygote's fork, the persistent-root stop, ferrousli in
-             * glibc's place, and the STM32MP157D-DK1, which needs an SDMMC
-             * driver and page-cache eviction first. */
+             * On ferrousli in glibc's place, headless, since 2026-09-26:
+             * cargo xtask test-chrome --interpreter ferrousli
+             * --library ferrousli.
+             * Owed: the zygote's fork, the persistent-root stop, and the
+             * STM32MP157D-DK1, which needs an SDMMC driver and page-cache
+             * eviction first. */
     }
 
     #implemented requirement <'S12'> stage12BtrfsWrite : Stage {

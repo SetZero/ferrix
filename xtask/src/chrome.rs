@@ -34,13 +34,23 @@
 //! never changes it. glibc names its paths absolutely, so the initramfs
 //! carries a symbolic link for each into `/data` ([`LINKS`]).
 //!
+//! # On ferrousli
+//!
+//! With `--interpreter ferrousli --library ferrousli`, as `test-shell` takes
+//! them, the same program runs on ferrousli's loader and `libc.so.6` in
+//! glibc's place: the loader goes where Chrome's `PT_INTERP` names, instead
+//! of the volume's link to Debian's, and `libc.so.6` into `/lib`, which
+//! `LD_LIBRARY_PATH` puts before the volume's libraries. glibc's other names,
+//! `libm.so.6` and the rest, the loader answers with ferrousli whatever the
+//! volume holds. The forty other libraries are Debian's as before.
+//!
 //! # Why x86-64 only
 //!
 //! Chrome for Testing publishes linux64 only.
 
 use crate::args::Args;
 use crate::paths::Arch;
-use crate::{Error, Result, cargo, fat, initramfs, native, qemu, rustc, zinc};
+use crate::{Error, Result, cargo, fat, initramfs, native, qemu, rustc, shell, zinc};
 
 /// The page whose DOM Chrome is asked for: its script writes a number only
 /// V8 could have computed into an element, so the DOM carries it as text the
@@ -141,9 +151,32 @@ pub(crate) fn volume() -> Result<std::path::PathBuf> {
     Ok(image)
 }
 
-/// The script, with the pages in it.
-fn script() -> String {
-    SCRIPT.replace("PAGE", PAGE).replace("PICTURE", PICTURE)
+/// The script, with the pages in it, and for ferrousli the search path that
+/// finds its `libc.so.6` in `/lib` before the volume's.
+fn script(ferrousli: bool) -> String {
+    let script = SCRIPT.replace("PAGE", PAGE).replace("PICTURE", PICTURE);
+    if ferrousli {
+        format!("export LD_LIBRARY_PATH=/lib:/lib/x86_64-linux-gnu\n{script}")
+    } else {
+        script
+    }
+}
+
+/// Chrome as `scripts/fetch-chrome.sh` unpacked it beside the volume, whose
+/// `PT_INTERP` says where a loader of ferrousli's must go.
+fn program_on_host(volume: &std::path::Path) -> Result<std::path::PathBuf> {
+    let program = volume
+        .parent()
+        .unwrap_or(std::path::Path::new("."))
+        .join("tree/chrome/chrome-headless-shell");
+    if program.is_file() {
+        Ok(program)
+    } else {
+        Err(Error::new(format!(
+            "{} is not there: scripts/fetch-chrome.sh leaves it beside the volume",
+            program.display()
+        )))
+    }
 }
 
 /// `test-chrome` or `test-chrome-window`, whichever `command` names: the
@@ -175,7 +208,9 @@ pub(crate) fn test_chrome(args: &Args) -> Result<()> {
         ));
     }
     let mut args = args.clone();
-    args.data_image = Some(volume()?);
+    let volume = volume()?;
+    args.data_image = Some(volume.clone());
+    let ferrousli = args.interpreter.is_some() || !args.libraries.is_empty();
     if !args.memory_given {
         args.memory = MEMORY;
     }
@@ -185,13 +220,26 @@ pub(crate) fn test_chrome(args: &Args) -> Result<()> {
 
     let shell =
         zinc::built(arch)?.ok_or_else(|| Error::new("zinc could not be built for x86-64"))?;
-    println!("  {arch}: building an image whose shell runs headless Chrome");
+    let libc = if ferrousli { "ferrousli" } else { "glibc" };
+    println!("  {arch}: building an image whose shell runs headless Chrome on {libc}");
     let loader = cargo::build_loader(arch, args.release)?;
-    let kernel = cargo::build_kernel_with_init(arch, args.release, &shell, &script())?;
+    let kernel = cargo::build_kernel_with_init(arch, args.release, &shell, &script(ferrousli))?;
     let natives = native::build(arch, args.release)?;
     let bytes = std::fs::read(&shell)
         .map_err(|error| Error::new(format!("reading {}: {error}", shell.display())))?;
-    let links = rustc::files(LINKS);
+    let links = if ferrousli {
+        // The loader takes `/lib64`'s place, so the link to the volume's goes.
+        let kept: Vec<_> = LINKS
+            .iter()
+            .copied()
+            .filter(|(path, _)| *path != "lib64")
+            .collect();
+        let mut files = rustc::files(&kept);
+        files.extend(shell::carried_for(arch, &program_on_host(&volume)?, &args)?);
+        files
+    } else {
+        rustc::files(LINKS)
+    };
     // zinc alone: the script is builtins, and every program it runs is on
     // the volume.
     let archive = initramfs::build(None, &natives, Some(&bytes), &links)?;
@@ -201,9 +249,7 @@ pub(crate) fn test_chrome(args: &Args) -> Result<()> {
         "  {arch}: running Chrome on Ferrix with {} MiB (timeout {}s)",
         args.memory, args.timeout
     );
-    let lines = qemu::watch_then(arch, &image, &kernel, &args, crate::shell::EXITED, |_| {
-        Ok(())
-    })?;
+    let lines = qemu::watch_then(arch, &image, &kernel, &args, shell::EXITED, |_| Ok(()))?;
     judge(arch, &lines)
 }
 
@@ -217,7 +263,7 @@ fn judge(arch: Arch, lines: &[String]) -> Result<()> {
         .unwrap_or_default();
     let exited = after_boot
         .iter()
-        .find_map(|line| line.trim().strip_prefix(crate::shell::EXITED))
+        .find_map(|line| line.trim().strip_prefix(shell::EXITED))
         .map(str::trim);
     let loaded = after_boot.iter().any(|line| line.contains(VERSION));
     let computed = after_boot.iter().any(|line| line.contains(COMPUTED));
@@ -258,7 +304,7 @@ mod tests {
 
     #[test]
     fn the_script_carries_both_pages_and_no_placeholder() {
-        let script = script();
+        let script = script(false);
         assert!(script.contains("\"computed \"+6*7"));
         // The source must not already hold what the DOM is required to.
         assert!(!script.contains(COMPUTED));

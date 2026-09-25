@@ -305,9 +305,10 @@ OPTIONS:
     --init-path <PATH>                   build, run, test-boot: ferrix.init=PATH in CMDLINE.TXT, so the
                                          kernel starts pid 1 from that file in the image, and the
                                          program built in only if it will not start
-    --interpreter <PATH|ferrousli>       test-shell: a dynamic linker, carried at --init's PT_INTERP path; {arch} is replaced
+    --interpreter <PATH|ferrousli>       test-shell: a dynamic linker, carried at --init's PT_INTERP path; {arch} is replaced;
+                                         test-chrome: at Chrome's
                                          `ferrousli`: ferrousli's ld-ferrousli, built from this tree
-    --library <PATH|ferrousli>           test-shell: a shared library, carried in /lib; as many as needed; {arch} is replaced
+    --library <PATH|ferrousli>           test-shell, test-chrome: a shared library, carried in /lib; as many as needed; {arch} is replaced
                                          `ferrousli`: ferrousli linked as libc.so.6, built from this tree
     --boot <NAME>                        test-compositor: only the boots whose name holds this
     -h, --help                           This message

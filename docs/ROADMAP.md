@@ -80,8 +80,9 @@ the customer put first on 2026-09-23. The kernel's half of starting one is
 in: `ferrix.init=` names the file pid 1 is started from, and `reboot(2)`
 commits the disks first.
 Chrome runs on Ferrix (2026-09-24): Google's prebuilt Chrome for Testing,
-headless and in a window on the compositor, on x86-64 (*Chrome*, after
-sysfs, and `docs/CHROME.md`).
+headless and in a window on the compositor, on x86-64, and headless on
+ferrousli's loader and C library in glibc's place (2026-09-26) (*Chrome*,
+after sysfs, and `docs/CHROME.md`).
 Networking is done: sockets, a net core and a ring-3 virtio-net driver, with
 `curl` fetching over HTTPS and `git` cloning inside the guest. sysfs is done
 (2026-09-24): `/sys` is a view of the devices as enumeration, the ring-3
@@ -145,7 +146,7 @@ sizes them.
 | ~~Stage 12, btrfs write~~ *done 2026-09-21* | ~~≈ 60~~ | done |
 | ~~sysfs, fed by the services that own each fact (`docs/SYSFS.md`)~~ *done 2026-09-24* | ~~26~~ | done |
 | ~~Chrome on Ferrix, headless and in a window, x86-64 (`docs/CHROME.md`)~~ *done 2026-09-24* | foot and its ports 13, the kernel's rows ≈ 30, spent | done |
-| Chrome: the zygote's fork, the persistent-root stop, ferrousli in glibc's place | unsized; ferrousli answers every glibc name the set imports since 2026-09-24 | under way |
+| Chrome: the zygote's fork, the persistent-root stop | unsized; ferrousli in glibc's place is done, headless, 2026-09-26 | under way |
 | Chrome on the STM32MP157D-DK1 (`docs/CHROME.md` §10) | ≈ 45–55 | not started |
 | Stage 13, namespaces, cgroups, seccomp | cgroups 85 (`docs/CGROUPS.md` §7: 27 for what init needs, 58 for the controllers); namespaces and seccomp unsized, the old guess for the whole stage was *month* ≈ 60 | under way: G1 to G5 done (27 of 85), which is all init needs from it, C8 for native services included; its cgroups come first, as init's prerequisite (`docs/INIT.md` §0); the controllers are next, `pids` first |
 | Stage 22, Steam: the parts with a first guess (bubblewrap's rest 13, sound 30, Venus 8; glibc's names are dynamic linking's 13 and XWayland stage 19's, both counted above) | 51 | not started |
@@ -3684,6 +3685,9 @@ Three parts, in the order they can be tested:
   global (`RTLD_LOCAL` is `RTLD_GLOBAL`), `RTLD_NEXT` is refused, and a
   library with its own `PT_TLS` cannot be opened yet -- its block would need
   a dynamic thread vector -- and is refused with a message and forgotten.
+  (Both since answered, for Chrome, 2026-09-26: `RTLD_NEXT` through the
+  caller's address, and a `dlopen`ed library's TLS in a static surplus;
+  `docs/CHROME.md` §8.)
   `tests/link.rs` calls all six from a program with no C library, through a
   stub whose `SONAME` is the loader's own name; refusing no TLS library
   fails it with 98 and a `dlsym` that finds nothing with 92. A glibc-built
@@ -4184,17 +4188,28 @@ screen. `cargo xtask run-compositor --chrome` puts it on the desktop.
   as libwayland does -- Chrome lost its connection on that -- and Hyprland's
   `env =` lines given to what it starts.
 
+**Done (2026-09-26): Chrome on ferrousli.** `cargo xtask test-chrome
+--interpreter ferrousli --library ferrousli` runs the same headless Chrome
+on ferrousli's `ld.so` and `libc.so.6` in glibc's place, the volume's other
+libraries unchanged, and requires the same three steps. What running it
+found, in `docs/CHROME.md` §8: twelve names the 2026-09-24 count missed;
+glibc's `libm.so.6` loaded beside ferrousli; a library's reference to its
+own versioned symbol; `dlsym(RTLD_NEXT)`; glibc's `locale_t` layout, which
+libc++ reads; the program's own `malloc`, which ferrousli's calls now
+follow; GNU's `strerror_r` in `libc.so.6`; and TLS in a `dlopen`ed library,
+in a static TLS surplus as glibc keeps.
+
 **Still to do:**
 
 * The zygote's fork fails on Ferrix, so the tests run Chrome with
   `--no-zygote`; `--no-sandbox` is stage 13's.
 * On the desktop's persistent btrfs root Chrome stops before its first
   frame; `run-compositor --chrome` boots a tmpfs root until that is found.
-* Chrome on ferrousli's `libc.so.6`: the 159 versioned names it lacked
-  (97 by name) are answered since 2026-09-24, at glibc's versions, the old
-  ones Chrome's 2.31 build asks for among them. What is left is to run it:
-  ferrousli's `ld.so` cannot yet be run as a command, so Chrome is started
-  through it by `PT_INTERP`, which is the next test.
+* Chrome on ferrousli in a window, which is not tried, and ferrousli's
+  `ld.so` run as a command, which it cannot be yet: Chrome reaches it by
+  `PT_INTERP`.
+* Why the GPU process's fallback path stops at the sandbox's
+  `proc_util.cc:115` with `ENOENT` on Ferrix (`docs/CHROME.md` §8, item 8).
 * A vDSO, `inotify`, and the GPU: Chrome draws in software.
 * **The STM32MP157D-DK1**, sized on 2026-09-24 (`docs/CHROME.md` §10), about
   45 to 55 points: an armhf browser, Debian 13's Chromium 150, on the same

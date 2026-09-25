@@ -6,7 +6,15 @@ a browser needs, what Ferrix has, what is missing, and what the missing part
 would cost. Whether any of it is worth doing was the product owner's to say,
 and on 2026-09-23 the customer asked for the work to start.
 
-## Where it stands, 2026-09-24
+## Where it stands, 2026-09-26
+
+**Chrome runs on ferrousli in glibc's place, since 2026-09-26.** The same
+headless Chrome, its forty Debian libraries unchanged, runs on Ferrix on
+ferrousli's `ld.so` and `libc.so.6` instead of Debian's loader and glibc,
+and `cargo xtask test-chrome --interpreter ferrousli --library ferrousli`
+requires the same three things of it -- the version, a page's script run by
+V8, a screenshot -- with its GPU process drawing through SwiftShader as it
+does on glibc (§8).
 
 **Chrome runs on Ferrix, in a window on the compositor, since 2026-09-24.**
 `cargo xtask run-compositor --chrome` opens it on the desktop, and
@@ -38,7 +46,7 @@ what is left:
 | Chrome in a window on the compositor, a Wayland client drawing in software | **done** 2026-09-24, x86-64, `cargo xtask test-chrome-window`, `run-compositor --chrome` (§9) |
 | The zygote's fork, which fails on Ferrix, so Chrome runs with `--no-zygote` | not started (§8) |
 | Chrome on the desktop's persistent btrfs root, where it stops before its first frame, so `--chrome` boots a tmpfs root | not started (§9) |
-| Chrome on ferrousli's `libc.so.6` in glibc's place | every glibc name the set imports answered, 2026-09-24 (§8); running Chrome on it is next |
+| Chrome on ferrousli's `libc.so.6` in glibc's place | **done** 2026-09-26, x86-64, headless, `cargo xtask test-chrome --interpreter ferrousli --library ferrousli` (§8); the window build on it is not tried |
 | Chrome on the STM32MP157D-DK1: an armhf Chromium, an SDMMC driver, page-cache eviction | not started, ≈ 45–55 points (§10) |
 | Chromium built against ferrousli, with Alpine's musl patches rebased | not needed for a first Chrome: the prebuilt one runs (§5, §8) |
 | A guest with the ~2 GiB a page wants | `test-chrome` boots 4 GiB, as `test-rustc` does (§2.3) |
@@ -50,8 +58,9 @@ by `ferrousli/tools/ports/foot` against ferrousli with libffi 3.5.2,
 wayland 1.24.0, wayland-protocols 1.45, libxkbcommon 1.11.0, pixman 0.46.4,
 freetype 2.14.1, expat 2.7.3, fontconfig 2.17.1, tllist 1.1.0 and fcft
 3.3.2, and DejaVu Sans Mono 2.37 is the font. **Then** headless Chrome,
-the same day (§8). **Next:** the zygote, Chrome on ferrousli in glibc's
-place, and a window, for which foot has proved the client libraries.
+the same day (§8), and a window (§9). **Then**, on 2026-09-26, Chrome on
+ferrousli in glibc's place (§8). **Next:** the zygote, and the persistent
+root.
 
 **Re-checked on 2026-09-19**, against a tree 37 commits further on. Everything
 in §2, §3 and §4 still holds but the two loose fixes in §6, which are now
@@ -118,10 +127,10 @@ Chrome is a position-independent executable linked against glibc, and it
 `dlopen`s more at run time. **Done, 2026-09-23:** a program linked against
 glibc runs on ferrousli's loader and `libc.so.6` in glibc's place on all
 three architectures, with `dlopen`, `dlsym` and the rest of `dlfcn.h` and
-every TLS model (§4). One limit is Chrome's to meet: a library `dlopen`ed
-after start-up may not have a `PT_TLS` of its own yet, since that needs a
-dynamic thread vector, and ANGLE's and Mesa's libraries are the kind a
-browser opens late. A fully static Chromium against a musl-shaped library
+every TLS model (§4). One limit was Chrome's to meet: a library `dlopen`ed
+after start-up could not have a `PT_TLS` of its own, and ANGLE's are the
+kind a browser opens late. **Met 2026-09-26** (§8): such a library's block
+goes in a surplus of static TLS kept at start-up, as glibc's does. A fully static Chromium against a musl-shaped library
 is not a configuration anybody ships: Alpine, which is the only distribution
 that builds Chromium against musl at all, builds it dynamically and carries a
 patch set to do it.
@@ -602,6 +611,72 @@ against the shared library it was 159, the rest hidden by the link or
 exported only at glibc's newest version where Chrome, built against 2.31,
 asks for older ones. All of them are answered since 2026-09-24; the same
 volume and test are to run Chrome on ferrousli's loader next.
+
+**Run on 2026-09-26, and passing.** `cargo xtask test-chrome --interpreter
+ferrousli --library ferrousli` carries ferrousli's loader at the path
+Chrome's `PT_INTERP` names and ferrousli as `/lib/libc.so.6`, with
+`LD_LIBRARY_PATH=/lib:/lib/x86_64-linux-gnu`, so that everything else is
+the volume's. The first run that passed printed the version, `computed
+42`, and wrote a 4796-byte screenshot, with no ANGLE or Vulkan error. Each
+stop was found by running Chrome on nazuna's own kernel first, through a
+copy whose `PT_INTERP` names ferrousli's loader, then on Ferrix. In the
+order they were found:
+
+1. **Twelve names the count above missed.** It said every glibc name was
+   answered; the loader stopped at `getttynam`. libblkid and libmount, which
+   GLib's GIO loads, want BSD's `err` family and the `ttyent` calls, and
+   the window build's CUPS, GMP, GnuTLS and libunistring want `lockf`,
+   `__strlcpy_chk`, obstacks and `pthread_rwlockattr_setkind_np`; with the
+   new mount API's `fsopen` family, all are in ferrousli now, with
+   `tests/c/glibc/libraries.c`. Recorded rather than corrected: the count
+   was wrong, and the loader, not a list, is what finds the last ones.
+2. **glibc's own `libm.so.6` loaded beside ferrousli.** The loader used
+   glibc's file of a split-off name where one was on the path, and the
+   volume has them all; `libm`'s first ifunc resolver read the processor's
+   features through `_rtld_global_ro`, which only glibc's loader defines,
+   and faulted. `libm.so.6`, `libpthread.so.0` and the rest are now always
+   answered by ferrousli's `libc.so.6`.
+3. **A library's reference to its own versioned symbol.** libgcc_s's
+   constructor calls its own `__cpu_indicator_init@GCC_4.8.0`; the index
+   such a reference carries is one of the object's version *definitions*,
+   and the loader looked only among its *needs*.
+4. **`dlsym(RTLD_NEXT, "close")`.** Chrome defines `close` itself and
+   finds the C library's this way; the loader refused `RTLD_NEXT`. libc's
+   `dlsym` now passes its return address to the loader (interface
+   revision 4), which searches the objects after the caller's.
+5. **`locale_t`'s layout.** libc++ built against glibc takes `ctype<char>`'s
+   table from `newlocale`'s C locale, reading `__ctype_b` 104 bytes in;
+   ferrousli's locale was 48 bytes of its own. It is glibc's
+   `struct __locale_struct` now.
+6. **Chrome's own `malloc`.** Chrome replaces the allocator with
+   PartitionAlloc, and every other object's calls bind to it; ferrousli's
+   own, being Rust calls, did not, so `strdup`'s memory came from
+   ferrousli and was freed into PartitionAlloc, which `CHECK`ed. The
+   library now calls the program's `malloc`, `free`, `calloc` and
+   `realloc` where it has them, as glibc does -- except for its fork
+   handlers, which PartitionAlloc registers holding its own lock, and
+   which a call back into it waited on for ever.
+7. **GNU's `strerror_r`.** glibc's `strerror_r` returns the message;
+   ferrousli's, POSIX's, returned 0, and Chrome traps on a null message.
+   GLib, fontconfig, systemd and p11-kit ask for GNU's too. `libc.so.6`
+   exports GNU's under the name; the static library keeps POSIX's.
+8. **TLS in a `dlopen`ed library.** The GPU process opens four with TLS --
+   ANGLE's EGL and GLES, the Vulkan loader and SwiftShader -- and the loader
+   refused them, so ANGLE had no Vulkan, the GPU process fell back, and on
+   Ferrix the fallback stopped at the sandbox's
+   `proc_util.cc:115` check with `ENOENT`. The loader now keeps glibc's
+   1664-byte surplus of static TLS, gives such a library a block there,
+   and a thread copies the images of libraries opened since it last looked
+   the first time it asks `__tls_get_addr` for one. With that the GPU
+   process runs SwiftShader and the fallback is not taken; why the fallback
+   meets `ENOENT` on Ferrix is not found.
+
+Running Chrome on the host showed one thing that is the host's: with
+`WAYLAND_DISPLAY` set, ANGLE wants `VK_KHR_wayland_surface`, which
+SwiftShader offers only if it can open `libwayland-client.so.0`. glibc's
+loader found the host's copy in `/lib/x86_64-linux-gnu`; ferrousli's, which
+has no such default, found none, and the volume has none. On Ferrix the
+variable is not set.
 
 ---
 
