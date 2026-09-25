@@ -5,14 +5,17 @@ gs201). The phone's own bootloader, ABL, is signed and stays; with the
 bootloader unlocked it will boot an Android boot image whose kernel is this
 program, which is to do for Ferrix what `boot/` does under UEFI.
 
-**Where it stands (2026-09-25):** a probe. It runs on the phone, drops from
-EL2 to EL1, reports what ABL handed over, and resets. It does not load Ferrix
-yet; the kernel has no way to run on this machine yet either (see below).
+**Where it stands (2026-09-25):** it loads and starts Ferrix. On the phone
+the kernel verifies the hand-off and its memory (stages 1 and 2: 7.7 GiB, 43
+regions) and stops at stage 3, where the AArch64 kernel still wants ACPI's
+MADT for its interrupt controller; see the last section.
 
 ## Building and running it
 
 ```
-cargo build -p ferrix-boot-pixel7 --target aarch64-unknown-none-softfloat --release
+cargo xtask flash --arch aarch64 --release --stage <dir>     # KERNEL.ELF, INITRD.IMG
+FERRIX_PIXEL7_KERNEL=<dir>/FERRIX/KERNEL.ELF FERRIX_PIXEL7_INITRD=<dir>/FERRIX/INITRD.IMG \
+    cargo build -p ferrix-boot-pixel7 --target aarch64-unknown-none-softfloat --release
 llvm-objcopy -O binary target/aarch64-unknown-none-softfloat/release/ferrix-boot-pixel7 Image
 python3 bootloaders/pixel7/mkbootimg.py Image boot.img
 avbtool add_hash_footer --image boot.img --partition_size 67108864 \
@@ -41,7 +44,9 @@ screen. "Try again" recovers it; "Factory data reset" would erase the phone.
 
 ## Reading what it did
 
-The loader writes its log as a console record in the `ramoops` region
+The loader passes the kernel `console=ramoops,0xfd3ff000,0x200000`, and the
+kernel's AArch64 console continues the loader's record instead of using the
+PL011 it would look for on QEMU. The record is in the `ramoops` region
 (`0xfd3ff000`, 2 MiB, no ECC). A hardware-watchdog reset preserves it, and the
 next Android boot shows it, after ABL's own log, in
 `/sys/fs/pstore/console-ramoops-0` (root needed). ABL overwrites the record's
@@ -69,8 +74,7 @@ would need, besides this loader building a `BootInfo`:
 
 * the GIC found from the device tree rather than ACPI's MADT, and GICv3
   redistributors (distributor `0x10400000`, redistributors `0x10440000`);
-* a console that is not the PL011 at `0x09000000` -- the `ramoops` record is
-  the obvious first one;
+* ~~a console that is not the PL011~~ -- done: the `ramoops` record;
 * PSCI's conduit (`smc`) from the device tree rather than the FADT;
 * the watchdogs stopped (`WTCON` at `0x10060000` and `0x10070000`);
 * and, to be useful, drivers: there is no virtio here.

@@ -61,10 +61,14 @@ machine or by ABL rather than by choice:
   `ICC_SRE_EL2`, then `ELR_EL2`/`SPSR_EL2` and `eret` -- so the kernel runs at
   the level it is written for;
 * a `VBAR_EL1` table, sixteen entries at fixed 128-byte offsets, so a fault in
-  the loader is reported rather than hung on.
+  the loader is reported rather than hung on;
+* and at the other end the switch into the kernel, which is `boot/`'s less the
+  half that turns the MMU off, since it never came on; with it `dc ivac`,
+  because everything the loader writes goes to RAM with the caches off, and a
+  line ABL left cached must be discarded rather than cleaned over it.
 
 All of it is in one file, `bootloaders/pixel7/src/entry.rs`, allow-listed with
-a budget of 100 lines.
+a budget of 130 lines.
 
 ## The list
 

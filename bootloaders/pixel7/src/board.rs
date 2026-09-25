@@ -13,23 +13,10 @@ pub(crate) const RAMOOPS_CONSOLE: u64 = 0xfd3f_f000;
 /// Size of that zone.
 pub(crate) const RAMOOPS_CONSOLE_SIZE: u64 = 0x20_0000;
 
-/// Where ABL is believed to leave the panel's scan-out buffer.
-///
-/// **A guess, still unconfirmed.** The device tree names no framebuffer; this
-/// is the address the mainline device tree gives the Pixel 6 (gs101), whose
-/// ABL is the same family. The screen cannot confirm it: the panel runs in DSI
-/// command mode and shows only frames the display controller is triggered to
-/// send, which painting memory does not do.
-pub(crate) const FRAMEBUFFER: u64 = 0xfac0_0000;
-
-/// The panel, in pixels.
-pub(crate) const PANEL_WIDTH: u64 = 1080;
-
-/// The panel, in pixels.
-pub(crate) const PANEL_HEIGHT: u64 = 2400;
-
-/// Bytes per framebuffer row, at four bytes a pixel.
-pub(crate) const FRAMEBUFFER_STRIDE: u64 = PANEL_WIDTH * 4;
+/// The kernel command line: continue the loader's `ramoops` record as the
+/// console, since the kernel's PL011 is QEMU's and this phone has none it can
+/// reach. Must name the same zone as the two constants above.
+pub(crate) const CMDLINE: &str = "console=ramoops,0xfd3ff000,0x200000";
 
 /// The two watchdogs, `watchdog_cl0@10060000` and `watchdog_cl1@10070000`,
 /// each with a 30 second timeout in the device tree.
@@ -40,11 +27,3 @@ pub(crate) const WTCON: u64 = 0x0;
 
 /// Its counter, `WTCNT`.
 pub(crate) const WTCNT: u64 = 0x8;
-
-/// Where ABL reads why the phone was reset: `reboot-cmd-offset` 0x810 into the
-/// always-on PMU block at 0x18060000, the syscon `pixel-reboot` names.
-pub(crate) const REBOOT_REASON: u64 = 0x1806_0810;
-
-/// The reason that brings the phone back up in ABL's fastboot mode rather than
-/// in Android: Pixel's `REBOOT_MODE_BOOTLOADER`.
-pub(crate) const REBOOT_TO_BOOTLOADER: u32 = 0xfc;

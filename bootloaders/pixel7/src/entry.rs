@@ -166,6 +166,125 @@ pub(crate) fn counter() -> (u64, u64) {
     (count, frequency)
 }
 
+/// Invalidate the data cache over a physical range, without cleaning it.
+///
+/// The loader runs with the caches off, so what it writes goes straight to
+/// RAM, and a line ABL left in a cache for the same address is stale. Cleaning
+/// it would write that stale line over the loader's data, so this discards it,
+/// before a range is written -- so no eviction can land on the loader's writes
+/// -- and again before the caches come on, so no read can hit it. At EL1 with
+/// `HCR_EL2.VM` clear, which the entry sequence left it, `dc ivac` is a true
+/// invalidate rather than a clean and invalidate.
+pub(crate) fn invalidate_dcache(start: u64, len: u64) {
+    let cache_type: u64;
+    // SAFETY: CTR_EL0 is readable at EL1 and has no side effects.
+    unsafe {
+        asm!("mrs {}, ctr_el0", out(reg) cache_type, options(nomem, nostack, preserves_flags));
+    }
+    // DminLine is log2 of the smallest line in words.
+    let line = 4u64 << ((cache_type >> 16) & 0xF);
+    let mut at = start & !(line - 1);
+    let end = start.saturating_add(len);
+    while at < end {
+        // SAFETY: invalidating a line of RAM the loader owns and has not yet
+        // written through a cache, since it has none on.
+        unsafe {
+            asm!("dc ivac, {}", in(reg) at, options(nostack, preserves_flags));
+        }
+        at += line;
+    }
+    // SAFETY: a barrier.
+    unsafe {
+        asm!("dsb sy", options(nostack, preserves_flags));
+    }
+}
+
+/// The largest physical address size this CPU implements, as a `TCR_EL1.IPS`
+/// encoding, capped at 48 bits as `boot/` caps it.
+pub(crate) fn physical_address_size() -> u64 {
+    let features: u64;
+    // SAFETY: ID_AA64MMFR0_EL1 is readable at EL1 and has no side effects.
+    unsafe {
+        asm!("mrs {}, id_aa64mmfr0_el1", out(reg) features, options(nomem, nostack, preserves_flags));
+    }
+    (features & 0xF).min(5)
+}
+
+/// What the kernel is entered with.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Handoff {
+    /// `MAIR_EL1`.
+    pub(crate) mair: u64,
+    /// `TCR_EL1`.
+    pub(crate) tcr: u64,
+    /// The identity tree, for `TTBR0_EL1`.
+    pub(crate) identity_table: u64,
+    /// The kernel's tree, for `TTBR1_EL1`.
+    pub(crate) root_table: u64,
+    /// Top of the boot stack, a kernel virtual address.
+    pub(crate) stack_top: u64,
+    /// The kernel's entry point.
+    pub(crate) entry: u64,
+    /// The `BootInfo`, a kernel virtual address.
+    pub(crate) boot_info: u64,
+}
+
+/// Install the kernel's translation regime and jump to it.
+///
+/// The same switch as `boot/src/arch/aarch64.rs`, less its first half: the MMU
+/// is already off here, as ABL left it, so there is nothing to turn off. What
+/// it adds is `CPACR_EL1`, which UEFI leaves allowing FP and SIMD and ABL's
+/// hand-off does not promise, and an instruction cache invalidate, because the
+/// kernel's text was written as data.
+///
+/// # Safety
+///
+/// The loader must be at EL1 with the MMU off; `identity_table` must map the
+/// page this function runs from at its own address, executable; and every
+/// range the kernel is handed must have been invalidated from the data cache
+/// with [`invalidate_dcache`] since it was written.
+pub(crate) unsafe fn enter_kernel(handoff: Handoff) -> ! {
+    // SAFETY: the caller's contract is the set of conditions that make this
+    // sequence sound; interrupts are masked first, since nothing here could
+    // take one.
+    unsafe {
+        asm!(
+            "msr daifset, #0xf",
+            "mov x7, #0x300000",
+            "msr cpacr_el1, x7",
+            "msr mair_el1, x1",
+            "msr tcr_el1, x2",
+            "msr ttbr0_el1, x3",
+            "msr ttbr1_el1, x4",
+            "isb",
+            "tlbi vmalle1",
+            "ic iallu",
+            "dsb nsh",
+            "isb",
+            "mrs x7, sctlr_el1",
+            "orr x7, x7, #0x1",
+            "orr x7, x7, #0x4",
+            "orr x7, x7, #0x1000",
+            "bic x7, x7, #0x80000",
+            "msr sctlr_el1, x7",
+            "isb",
+            "mov sp, x5",
+            "mov x29, xzr",
+            "mov x30, xzr",
+            "br x6",
+            in("x0") handoff.boot_info,
+            in("x1") handoff.mair,
+            in("x2") handoff.tcr,
+            in("x3") handoff.identity_table,
+            in("x4") handoff.root_table,
+            in("x5") handoff.stack_top,
+            in("x6") handoff.entry,
+            in("x7") 0u64,
+            options(noreturn),
+        );
+    }
+}
+
 /// Reset the phone through PSCI, which the device tree says is reached by
 /// `smc`. ABL then boots whatever the active slot holds.
 pub(crate) fn system_reset() -> ! {

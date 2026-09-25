@@ -55,12 +55,13 @@ pub(crate) type PageEncoding = ferrix_paging::aarch64::AArch64;
 ///
 /// Unlike x86-64, this has real work to do: the PL011 is `MMIO` and has to be
 /// mapped as device memory before a single byte can go out. Its address is
-/// still the `virt` machine's, rather than the SPCR's or the device tree's.
+/// still the `virt` machine's, rather than the SPCR's or the device tree's,
+/// unless the command line names a `ramoops` zone instead.
 pub(crate) fn init_console(
-    _view: &BootView<'_>,
+    view: &BootView<'_>,
     memory: &mut EarlyMemory,
 ) -> Result<(), EarlyError> {
-    console::init(memory)
+    console::init(view, memory)
 }
 
 pub(crate) use smp::{CpuStarter, describe_cpus, hardware_id};

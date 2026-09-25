@@ -1,7 +1,16 @@
-//! The PL011 UART.
+//! The PL011 UART, or on a machine without one the kernel can reach, a
+//! console record in `ramoops` memory.
 //!
 //! One of the two device drivers inside the kernel — see `crate::console` for
 //! why it is here at all rather than in userspace.
+//!
+//! The `ramoops` backend is for the Pixel 7, whose UART is behind a debug
+//! accessory on its USB-C port. Its loader passes
+//! `console=ramoops,<address>,<size>`, naming the console zone of the region
+//! Android's kernel keeps its log in, and has already started a record there;
+//! this appends to it, in Linux's `persistent_ram_buffer` format, so the boot
+//! log survives the watchdog reset that ends a run and Android shows it as
+//! `/sys/fs/pstore/console-ramoops-0`. It has no input and never waits.
 //!
 //! Unlike x86-64's 16550, this one is `MMIO`, so it has to be *mapped* before
 //! it can be written, and mapped as device memory: through a normal cacheable
@@ -9,8 +18,9 @@
 //! symptom is a console that prints nothing at all.
 
 use core::cell::UnsafeCell;
+use core::sync::atomic::{AtomicU64, Ordering};
 
-use ferrix_bootinfo::{KERNEL_VMAP_BASE, PAGE_SIZE};
+use ferrix_bootinfo::{BootView, KERNEL_VMAP_BASE, PAGE_SIZE};
 
 use crate::early::{EarlyError, EarlyMemory};
 
@@ -64,12 +74,82 @@ unsafe impl Sync for Base {}
 
 static BASE: Base = Base(UnsafeCell::new(0));
 
-/// Map the register window and record where it landed.
-pub(crate) fn init(memory: &mut EarlyMemory) -> Result<(), EarlyError> {
+/// `PERSISTENT_RAM_SIG`, "DBGC": the first word of a `ramoops` record.
+const RAMOOPS_SIGNATURE: u32 = 0x4347_4244;
+
+/// Bytes of a `ramoops` record's header: the signature, the write offset and
+/// the number of valid bytes.
+const RAMOOPS_HEADER: u64 = 12;
+
+/// Bytes of text the `ramoops` zone holds, or zero when the console is the
+/// PL011. Set once by [`init`], before any output.
+static RAMOOPS_CAPACITY: AtomicU64 = AtomicU64::new(0);
+
+/// Bytes of text in the `ramoops` record. Output is serialised by
+/// `crate::console`, so a plain load and store are enough.
+static RAMOOPS_LENGTH: AtomicU64 = AtomicU64::new(0);
+
+/// Parse `ramoops,<address>,<size>`, the loader's `console=` value, both
+/// numbers in hexadecimal with a `0x` prefix.
+fn ramoops_zone(value: &str) -> Option<(u64, u64)> {
+    let mut fields = value.strip_prefix("ramoops,")?.split(',');
+    let number = |text: &str| u64::from_str_radix(text.strip_prefix("0x")?, 16).ok();
+    let base = number(fields.next()?)?;
+    let size = number(fields.next()?)?;
+    (fields.next().is_none() && base.is_multiple_of(PAGE_SIZE) && size > RAMOOPS_HEADER)
+        .then_some((base, size))
+}
+
+/// Map the console the command line names -- the PL011, or a `ramoops`
+/// zone -- and record where it landed.
+pub(crate) fn init(view: &BootView<'_>, memory: &mut EarlyMemory) -> Result<(), EarlyError> {
+    if let Some((base, size)) = view.option("console").and_then(ramoops_zone) {
+        // Device memory, so every byte reaches RAM in order and survives the
+        // reset with no cache to be cleaned first.
+        memory.map_device(PL011_VIRT, base, size)?;
+        // SAFETY: single-threaded, as documented on the `Sync` impl above.
+        unsafe { *BASE.0.get() = PL011_VIRT };
+        let capacity = size - RAMOOPS_HEADER;
+        // Continue the loader's record rather than start another, so the two
+        // programs' logs read as one.
+        let length = if read(0) == RAMOOPS_SIGNATURE {
+            u64::from(read(8)).min(capacity)
+        } else {
+            0
+        };
+        RAMOOPS_LENGTH.store(length, Ordering::Relaxed);
+        RAMOOPS_CAPACITY.store(capacity, Ordering::Relaxed);
+        write(0, RAMOOPS_SIGNATURE);
+        return Ok(());
+    }
     memory.map_device(PL011_VIRT, PL011_PHYS, PAGE_SIZE)?;
     // SAFETY: single-threaded, as documented on the `Sync` impl above.
     unsafe { *BASE.0.get() = PL011_VIRT };
     Ok(())
+}
+
+/// True when the console is a `ramoops` record rather than a UART.
+fn is_ramoops() -> bool {
+    RAMOOPS_CAPACITY.load(Ordering::Relaxed) != 0
+}
+
+/// Append one byte to the `ramoops` record, dropping it once the zone is full.
+fn ramoops_append(byte: u8) {
+    let length = RAMOOPS_LENGTH.load(Ordering::Relaxed);
+    if length >= RAMOOPS_CAPACITY.load(Ordering::Relaxed) {
+        return;
+    }
+    // SAFETY: single-threaded, as documented on the `Sync` impl above.
+    let base = unsafe { *BASE.0.get() };
+    // SAFETY: the byte is inside the zone `init` mapped, past its header and
+    // below its capacity.
+    unsafe { core::ptr::write_volatile((base + RAMOOPS_HEADER + length) as *mut u8, byte) };
+    let length = length + 1;
+    RAMOOPS_LENGTH.store(length, Ordering::Relaxed);
+    // `ramoops` zones are far smaller than 4 GiB.
+    let word = u32::try_from(length).unwrap_or(u32::MAX);
+    write(4, word);
+    write(8, word);
 }
 
 /// Read one of the UART's registers.
@@ -104,6 +184,10 @@ pub(crate) fn write_byte(byte: u8) {
     if unsafe { *BASE.0.get() } == 0 {
         return;
     }
+    if is_ramoops() {
+        ramoops_append(byte);
+        return;
+    }
 
     for _ in 0..SPIN_LIMIT {
         if read(FR) & FR_TXFF == 0 {
@@ -127,7 +211,7 @@ pub(crate) fn drain() {
     const DRAIN_LIMIT: u32 = 10_000_000;
 
     // SAFETY: single-threaded, as documented on the `Sync` impl above.
-    if unsafe { *BASE.0.get() } == 0 {
+    if unsafe { *BASE.0.get() } == 0 || is_ramoops() {
         return;
     }
     for _ in 0..DRAIN_LIMIT {
@@ -145,7 +229,7 @@ pub(crate) fn drain() {
 /// dropped, and a break reads as the NUL the port puts in the FIFO for it.
 pub(crate) fn read_byte() -> Option<u8> {
     // SAFETY: single-threaded, as documented on the `Sync` impl above.
-    if unsafe { *BASE.0.get() } == 0 {
+    if unsafe { *BASE.0.get() } == 0 || is_ramoops() {
         return None;
     }
 
@@ -167,7 +251,7 @@ pub(crate) fn read_byte() -> Option<u8> {
 /// both, so the handler needs nothing but [`read_byte`].
 pub(crate) fn enable_receive_interrupt() {
     // SAFETY: single-threaded, as documented on the `Sync` impl above.
-    if unsafe { *BASE.0.get() } == 0 {
+    if unsafe { *BASE.0.get() } == 0 || is_ramoops() {
         return;
     }
     write(IMSC, read(IMSC) | IMSC_RX | IMSC_RT);
@@ -180,6 +264,10 @@ pub(crate) fn transmit_room() -> usize {
     if unsafe { *BASE.0.get() } == 0 {
         return 0;
     }
+    // A record in memory always has room: a full zone drops the byte instead.
+    if is_ramoops() {
+        return 1;
+    }
     usize::from(read(FR) & FR_TXFF == 0)
 }
 
@@ -188,6 +276,10 @@ pub(crate) fn transmit_room() -> usize {
 pub(crate) fn put(byte: u8) {
     // SAFETY: single-threaded, as documented on the `Sync` impl above.
     if unsafe { *BASE.0.get() } == 0 {
+        return;
+    }
+    if is_ramoops() {
+        ramoops_append(byte);
         return;
     }
     write(DR, u32::from(byte));
@@ -203,7 +295,7 @@ pub(crate) fn put(byte: u8) {
 /// took. QEMU's port sends at once and raises it on every write.
 pub(crate) fn transmit_interrupt(on: bool) {
     // SAFETY: single-threaded, as documented on the `Sync` impl above.
-    if unsafe { *BASE.0.get() } == 0 {
+    if unsafe { *BASE.0.get() } == 0 || is_ramoops() {
         return;
     }
     let mask = read(IMSC);
@@ -223,10 +315,10 @@ pub(crate) fn interrupt_pending() -> bool {
 
 /// What the port sends from, for the boot line that says how the console
 /// sends.
-#[expect(
-    clippy::missing_const_for_fn,
-    reason = "another architecture's version of this reads the port"
-)]
 pub(crate) fn transmit_buffer() -> &'static str {
-    "a PL011's FIFO"
+    if is_ramoops() {
+        "a ramoops record"
+    } else {
+        "a PL011's FIFO"
+    }
 }

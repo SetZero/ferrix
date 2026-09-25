@@ -75,6 +75,12 @@ dependencies = [
 [[package]]
 name = "ferrix-boot-pixel7"
 version = "0.1.0"
+dependencies = [
+ "ferrix-bootinfo",
+ "ferrix-elf",
+ "ferrix-fdt",
+ "ferrix-paging",
+]
 
 [[package]]
 name = "ferrix-bootinfo"

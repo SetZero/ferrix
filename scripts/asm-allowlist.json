@@ -53,8 +53,8 @@
     },
     {
       "file": "bootloaders/pixel7/src/entry.rs",
-      "max_lines": 100,
-      "reason": "The Pixel 7 loader is entered under the Linux arm64 boot protocol, not UEFI: ABL jumps to the image's first byte at EL2 with the MMU off and no stack. So it needs what `boot/` gets from firmware for free: the 64-byte arm64 Image header ABL reads (a branch, sizes, flags and the arm64 magic at fixed offsets), setting the stack pointer and zeroing .bss before a Rust function can run, the EL2-to-EL1 drop (HCR_EL2, CNTHCTL_EL2, CPTR_EL2, ICC_SRE_EL2, SPSR_EL2/ELR_EL2 and eret), and a VBAR_EL1 table of sixteen entries at fixed 128-byte offsets. Also the CurrentEL, HCR_EL2/SCTLR_EL2, generic-timer reads and the PSCI smc, which have no Rust spelling."
+      "max_lines": 130,
+      "reason": "The Pixel 7 loader is entered under the Linux arm64 boot protocol, not UEFI: ABL jumps to the image's first byte at EL2 with the MMU off and no stack. So it needs what `boot/` gets from firmware for free: the 64-byte arm64 Image header ABL reads (a branch, sizes, flags and the arm64 magic at fixed offsets), setting the stack pointer and zeroing .bss before a Rust function can run, the EL2-to-EL1 drop (HCR_EL2, CNTHCTL_EL2, CPTR_EL2, ICC_SRE_EL2, SPSR_EL2/ELR_EL2 and eret), and a VBAR_EL1 table of sixteen entries at fixed 128-byte offsets. At the other end, the switch into the kernel, as boot/src/arch/aarch64.rs has it less the MMU-off half, plus CPACR_EL1 and an instruction cache invalidate; and dc ivac, because the loader writes with the caches off and must discard, not clean, what ABL left cached. Also the CurrentEL, HCR_EL2/SCTLR_EL2, generic-timer reads and the PSCI smc, which have no Rust spelling."
     },
     {
       "file": "kernel/src/arch/aarch64/cpu.rs",
