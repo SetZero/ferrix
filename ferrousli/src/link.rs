@@ -212,18 +212,87 @@ pub unsafe extern "C" fn dlopen(path: *const c_char, flags: c_int) -> *mut c_voi
 /// Rust's `std` calls this to find functions it can do without, and takes null
 /// as "the C library has not got it"; that is how this came to be needed.
 ///
+/// `dlsym` itself is a few instructions of assembly per architecture, below,
+/// that pass its return address on as `caller`: `RTLD_NEXT` means "after the
+/// object that called", which only the return address can say. Chrome finds
+/// the C library's `close` that way, having defined its own.
+///
 /// # Safety
 ///
 /// `name` must be a NUL-terminated string.
-#[cfg_attr(not(test), unsafe(no_mangle))]
-pub unsafe extern "C" fn dlsym(handle: *mut c_void, name: *const c_char) -> *mut c_void {
-    if let Some(loader) = crate::loader::dlfcn() {
+#[cfg_attr(test, allow(dead_code, reason = "tests reach it through `dlsym`"))]
+unsafe extern "C" fn dlsym_caller(
+    handle: *mut c_void,
+    name: *const c_char,
+    caller: *const c_void,
+) -> *mut c_void {
+    if let Some(dlsym_from) = crate::loader::dlsym_from() {
         // SAFETY: the caller's contract is the loader's.
+        return unsafe { dlsym_from(handle, name, caller) };
+    }
+    if let Some(loader) = crate::loader::dlfcn() {
+        // SAFETY: as above.
         return unsafe { (loader.dlsym)(handle, name) };
     }
     fail();
     null_mut()
 }
+
+/// [`dlsym_caller`] with no caller known, as unit tests call it.
+///
+/// # Safety
+///
+/// `name` must be a NUL-terminated string.
+#[cfg(test)]
+pub unsafe extern "C" fn dlsym(handle: *mut c_void, name: *const c_char) -> *mut c_void {
+    // SAFETY: the caller's contract.
+    unsafe { dlsym_caller(handle, name, null_mut()) }
+}
+
+// `dlsym`: the return address becomes the third argument, and the rest is
+// [`dlsym_caller`]'s, reached by a tail call so that it returns straight to
+// the program.
+#[cfg(all(not(test), target_arch = "x86_64"))]
+core::arch::global_asm!(
+    ".pushsection .text.dlsym,\"ax\",@progbits",
+    ".p2align 4",
+    ".globl dlsym",
+    ".type dlsym, @function",
+    "dlsym:",
+    "    mov rdx, qword ptr [rsp]",
+    "    jmp {target}",
+    ".size dlsym, . - dlsym",
+    ".popsection",
+    target = sym dlsym_caller,
+);
+
+#[cfg(all(not(test), target_arch = "aarch64"))]
+core::arch::global_asm!(
+    ".pushsection .text.dlsym,\"ax\",%progbits",
+    ".p2align 2",
+    ".globl dlsym",
+    ".type dlsym, %function",
+    "dlsym:",
+    "    mov x2, x30",
+    "    b {target}",
+    ".size dlsym, . - dlsym",
+    ".popsection",
+    target = sym dlsym_caller,
+);
+
+#[cfg(all(not(test), target_arch = "arm"))]
+core::arch::global_asm!(
+    ".pushsection .text.dlsym,\"ax\",%progbits",
+    ".p2align 2",
+    ".globl dlsym",
+    ".type dlsym, %function",
+    "dlsym:",
+    "    mov r2, lr",
+    "    b {target}",
+    ".size dlsym, . - dlsym",
+    ".popsection",
+    target = sym dlsym_caller,
+);
 
 /// Closes a handle from [`dlopen`], which in a static program never gave one
 /// out, and returns -1. Loaded by `ld-ferrousli`, the loader's.

@@ -40,6 +40,12 @@ const _: () = assert!(MAX_OBJECTS <= 64);
 /// is, and the loader reads the directories instead.
 const DEFAULT_PATHS: [&str; 4] = ["/lib", "/usr/lib", "/lib64", "/usr/lib64"];
 
+/// Bytes of static TLS kept past the start-up modules' blocks for the
+/// libraries `dlopen` brings: glibc's default surplus. Chrome's GPU process
+/// opens four with TLS -- ANGLE's EGL and GLES, the Vulkan loader and
+/// SwiftShader -- which take 136 bytes of it.
+pub(crate) const TLS_SURPLUS: usize = 1664;
+
 /// Every object this process has loaded.
 #[derive(Debug)]
 pub(crate) struct Scope {
@@ -52,8 +58,12 @@ pub(crate) struct Scope {
     count: usize,
     /// `LD_LIBRARY_PATH`, as a colon-separated list, or null.
     library_path: *const c_char,
-    /// Bytes below the initial thread pointer occupied by static TLS.
+    /// Bytes below the initial thread pointer occupied by static TLS, and
+    /// [`TLS_SURPLUS`] kept for libraries `dlopen` brings later.
     tls_size: usize,
+    /// How much of `tls_size` is given out: the start-up modules' blocks,
+    /// and those `dlopen` has placed in the surplus since.
+    tls_used: usize,
     /// The greatest alignment any static TLS image requires.
     tls_align: usize,
     /// The program's `PT_INTERP`: the name this loader was loaded as, or
@@ -71,6 +81,7 @@ impl Scope {
             count: 0,
             library_path: core::ptr::null(),
             tls_size: 0,
+            tls_used: 0,
             tls_align: 1,
             interpreter: core::ptr::null(),
         }
@@ -158,7 +169,10 @@ impl Scope {
             size = rounded;
             greatest_align = greatest_align.max(tls.align);
         }
-        self.tls_size = size;
+        self.tls_used = size;
+        self.tls_size = size
+            .checked_add(TLS_SURPLUS)
+            .ok_or(Error::MalformedObject("TLS layout is too large"))?;
         self.tls_align = greatest_align;
         Ok(())
     }
@@ -185,8 +199,60 @@ impl Scope {
         // reserves this much after the control block rounded up to
         // `tls_align` covers them all, since every block starts at or after
         // the end of the control block.
-        self.tls_size = end - crate::tls::TCB_SIZE;
+        self.tls_used = end - crate::tls::TCB_SIZE;
+        self.tls_size = self.tls_used.checked_add(TLS_SURPLUS).ok_or(TOO_LARGE)?;
         self.tls_align = greatest_align;
+        Ok(())
+    }
+
+    /// Give object `index`, which `dlopen` just loaded, a block in the
+    /// static TLS surplus, if it has `PT_TLS`: the same offset from every
+    /// thread's pointer, as the start-up modules have.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::MalformedObject`] when the surplus has no room left, or the
+    /// block asks for more alignment than every thread pointer has.
+    pub(crate) fn place_in_surplus(&mut self, index: usize) -> Result<(), Error> {
+        const FULL: Error =
+            Error::MalformedObject("no room left in static TLS for a dlopened library");
+        let used = self.tls_used;
+        let size = self.tls_size;
+        let Some(tls) = self
+            .objects
+            .get_mut(index)
+            .and_then(|object| object.tls.as_mut())
+        else {
+            return Ok(());
+        };
+        if tls.align > crate::tls::TP_ALIGN {
+            return Err(Error::MalformedObject(
+                "a dlopened library's TLS asks for more alignment than a thread pointer has",
+            ));
+        }
+        #[cfg(target_arch = "x86_64")]
+        let (offset, used) = {
+            let end = used
+                .checked_add(tls.memsz)
+                .and_then(|value| value.checked_add(tls.align - 1))
+                .map(|value| value & !(tls.align - 1))
+                .ok_or(FULL)?;
+            (-(isize::try_from(end).map_err(|_| FULL)?), end)
+        };
+        #[cfg(not(target_arch = "x86_64"))]
+        let (offset, used) = {
+            let start = (crate::tls::TCB_SIZE + used)
+                .checked_add(tls.align - 1)
+                .map(|value| value & !(tls.align - 1))
+                .ok_or(FULL)?;
+            let end = start.checked_add(tls.memsz).ok_or(FULL)? - crate::tls::TCB_SIZE;
+            (isize::try_from(start).map_err(|_| FULL)?, end)
+        };
+        if used > size {
+            return Err(FULL);
+        }
+        tls.offset = offset;
+        self.tls_used = used;
         Ok(())
     }
 
@@ -398,6 +464,13 @@ impl Scope {
         if contains_slash(name) {
             return self.map_and_add(name, name, page_size);
         }
+        // Before the search path, which may hold glibc's own file of the name.
+        if PART_OF_LIBC.iter().any(|part| same(part.as_ptr(), name)) {
+            if self.already_loaded(LIBC.as_ptr()) {
+                return Ok(());
+            }
+            return self.load_one(LIBC.as_ptr(), runpath, page_size);
+        }
         // `DT_RUNPATH` of the object that asked, then `LD_LIBRARY_PATH`,
         // then the defaults.
         if let Some(mapped) = self.search(runpath, name, page_size) {
@@ -417,12 +490,6 @@ impl Scope {
             // Any failure here means "not this directory": the next one is
             // tried, and the error reported if none works is the honest one,
             // that the library is nowhere on the path.
-        }
-        if PART_OF_LIBC.iter().any(|part| same(part.as_ptr(), name)) {
-            if self.already_loaded(LIBC.as_ptr()) {
-                return Ok(());
-            }
-            return self.load_one(LIBC.as_ptr(), runpath, page_size);
         }
         Err(Error::LibraryNotFound(name))
     }
@@ -542,9 +609,14 @@ impl Scope {
 ///
 /// Since glibc 2.34 all but `libm.so.6` are empty but for compatibility
 /// symbols, their contents moved into `libc.so.6`; ferrousli is one library,
-/// maths included. So one of these names that is nowhere on the search path
-/// is satisfied by the object that answers to `libc.so.6` -- and only when it
-/// is nowhere, so that glibc's own files, where they are installed, are used.
+/// maths included. So each of these names is answered by the object that
+/// answers to `libc.so.6`, even where glibc's own file of the name is on the
+/// search path: glibc's `libm.so.6`, `librt.so.1` and `libresolv.so.2` import
+/// `GLIBC_PRIVATE` names -- `_rtld_global_ro`, which `libm`'s ifunc resolvers
+/// read the processor's features from, `__libc_fatal`, the resolver's context
+/// -- that only glibc's own loader and C library define. Loaded beside
+/// ferrousli, `libm`'s first resolver read through a null pointer; a Debian
+/// volume, such as Chrome's, carries all of them.
 const PART_OF_LIBC: [&core::ffi::CStr; 7] = [
     c"libm.so.6",
     c"libpthread.so.0",

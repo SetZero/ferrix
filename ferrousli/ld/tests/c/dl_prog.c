@@ -50,6 +50,9 @@ __attribute__((force_align_arg_pointer)) void _start(void) {
 	struct seen seen = {0, 0, 0};
 	void *extra = 0;
 	struct link_map *lm = 0;
+	void *t;
+	int *(*gd)(void);
+	int (*bump)(void);
 	char origin[4096];
 	if (!h) {
 		r = 91; /* not loaded */
@@ -65,8 +68,13 @@ __attribute__((force_align_arg_pointer)) void _start(void) {
 		r = 96; /* dl_iterate_phdr missed the program, the loader or the library */
 	} else if (dlopen(LIBRARY, RTLD_NOW) != h || dlopen(LIBRARY, RTLD_NOLOAD) != h) {
 		r = 97; /* a second open is not the same handle */
-	} else if (dlopen(TLS_LIBRARY, RTLD_NOW) || !dlerror()) {
-		r = 98; /* a library with its own TLS was not refused */
+	} else if (!(t = dlopen(TLS_LIBRARY, RTLD_NOW))
+		|| !(gd = (int *(*)(void))dlsym(t, "gd_address"))
+		|| !(bump = (int (*)(void))dlsym(t, "ld_bump"))
+		|| *gd() != 40 || bump() != 6 || bump() != 7) {
+		r = 98; /* a library with its own TLS did not open, or its variables
+		           did not start at their image's values in this thread,
+		           which was running before the library was loaded */
 	} else if (!dladdr1((void *)greet, &info, &extra, RTLD_DL_LINKMAP) || !extra
 		|| !same(((struct link_map *)extra)->l_name, LIBRARY)) {
 		r = 86; /* dladdr1 gave no link map, or another object's */

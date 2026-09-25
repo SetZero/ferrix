@@ -35,11 +35,14 @@
 //! * Every object is global. `RTLD_LOCAL` is taken as `RTLD_GLOBAL`: a later
 //!   library can bind to an earlier one's symbols whatever it was opened
 //!   with. `RTLD_NOLOAD` is honoured, and `RTLD_LAZY` is `RTLD_NOW`.
-//! * `RTLD_NEXT` is refused, with a message: it needs the caller's object,
-//!   and a C library forwarding the call has lost it.
-//! * A library with thread-local storage of its own cannot be `dlopen`ed yet:
-//!   every block is in static TLS (see [`crate::tls`]), laid out before the
-//!   program started. It is refused by name, and nothing of it is kept.
+//! * `RTLD_NEXT` needs the caller's object, which a C library forwarding the
+//!   call has lost: ferrousli's `dlsym` passes its return address through
+//!   [`dlsym_from`], and the loader's own `dlsym`, called directly, refuses
+//!   it with a message.
+//! * A library with thread-local storage of its own gets a block in the
+//!   static TLS surplus the start-up layout leaves (see [`crate::tls`]); one
+//!   that reaches a non-zero image other than through `__tls_get_addr`, or
+//!   that does not fit, is refused.
 
 use core::cell::UnsafeCell;
 use core::ffi::{c_char, c_int, c_void};
@@ -279,7 +282,7 @@ pub(crate) unsafe extern "C" fn dlopen(path: *const c_char, flags: c_int) -> *mu
             return core::ptr::null_mut();
         };
         let result = scope.open(name, page_size).and_then(|index| {
-            refuse_tls(scope, before)?;
+            place_tls(scope, before)?;
             // SAFETY: every object in the scope is mapped, and those from
             // `before` on are new and not yet relocated.
             unsafe { crate::relocate(scope, before, page_size)? };
@@ -311,13 +314,14 @@ pub(crate) unsafe extern "C" fn dlopen(path: *const c_char, flags: c_int) -> *mu
     handle
 }
 
-/// Refuse objects from `before` on that bring TLS of their own: there is no
-/// room left in anybody's static TLS for them.
-fn refuse_tls(scope: &Scope, before: usize) -> Result<(), Error> {
+/// Give each object from `before` on that brings TLS of its own a block in
+/// the static TLS surplus, and publish it for `__tls_get_addr`, before the
+/// objects are relocated.
+fn place_tls(scope: &mut Scope, before: usize) -> Result<(), Error> {
     for index in before..scope.len() {
-        if scope.get(index).is_some_and(|object| object.tls.is_some()) {
-            return Err(Error::NotAnObject(scope.name_at(index)));
-        }
+        scope.place_in_surplus(index)?;
+        // SAFETY: `dlopen`'s lock is held, and nothing reaches the object yet.
+        unsafe { crate::tls::publish_dynamic(scope, index)? };
     }
     Ok(())
 }
@@ -329,29 +333,78 @@ fn refuse_tls(scope: &Scope, before: usize) -> Result<(), Error> {
 /// `name` must be a NUL-terminated string.
 #[unsafe(no_mangle)]
 pub(crate) unsafe extern "C" fn dlsym(handle: *mut c_void, name: *const c_char) -> *mut c_void {
-    if handle.addr() == RTLD_NEXT {
-        fail("RTLD_NEXT is not supported", None);
-        return core::ptr::null_mut();
-    }
+    // SAFETY: the caller's contract.
+    unsafe { symbol(handle, name, None) }
+}
+
+/// `dlsym(handle, name)` called from `caller`, an address in the calling
+/// object -- the return address of the C library's `dlsym`. `RTLD_NEXT`
+/// searches the objects loaded after that one, in load order: how a program
+/// that defines `close` itself, as Chrome does, reaches the C library's.
+///
+/// # Safety
+///
+/// `name` must be a NUL-terminated string.
+pub(crate) unsafe extern "C" fn dlsym_from(
+    handle: *mut c_void,
+    name: *const c_char,
+    caller: *const c_void,
+) -> *mut c_void {
+    // SAFETY: the caller's contract.
+    unsafe { symbol(handle, name, Some(caller.addr())) }
+}
+
+/// Why a lookup found nothing.
+enum Missing {
+    /// No object defines the name.
+    Undefined,
+    /// The handle is not one `dlopen` gave.
+    NotAHandle,
+    /// `RTLD_NEXT` from an address in no object, or with no caller known.
+    NoCaller,
+}
+
+/// [`dlsym`] and [`dlsym_from`].
+///
+/// # Safety
+///
+/// `name` must be a NUL-terminated string.
+unsafe fn symbol(handle: *mut c_void, name: *const c_char, caller: Option<usize>) -> *mut c_void {
     let found = with_scope(|scope| {
-        if handle.is_null() {
+        if handle.addr() == RTLD_NEXT {
+            let caller = caller.ok_or(Missing::NoCaller)?;
+            let index = (0..scope.len())
+                .find(|&index| {
+                    scope
+                        .get(index)
+                        .is_some_and(|object| object.phdr != 0 && contains(object, caller))
+                })
+                .ok_or(Missing::NoCaller)?;
             // SAFETY: every object in the scope is mapped.
-            return Ok(unsafe { scope.lookup(name, None, 0) });
+            return unsafe { scope.lookup(name, None, index + 1) }.ok_or(Missing::Undefined);
+        }
+        if handle.is_null() {
+            // SAFETY: as above.
+            return unsafe { scope.lookup(name, None, 0) }.ok_or(Missing::Undefined);
         }
         match scope.index_of_handle(handle) {
             // SAFETY: as above.
-            Some(index) => Ok(unsafe { scope.lookup_from(index, name) }),
-            None => Err(()),
+            Some(index) => unsafe { scope.lookup_from(index, name) }.ok_or(Missing::Undefined),
+            None => Err(Missing::NotAHandle),
         }
     });
     let found: Found = match found {
-        Ok(Some(found)) => found,
-        Ok(None) => {
+        Ok(found) => found,
+        Err(Missing::Undefined) => {
             fail("undefined symbol", Some(name));
             return core::ptr::null_mut();
         }
-        Err(()) => {
+        Err(Missing::NotAHandle) => {
             fail("not a handle from dlopen", None);
+            return core::ptr::null_mut();
+        }
+        Err(Missing::NoCaller) => {
+            fail("RTLD_NEXT from a caller in no loaded object", None);
             return core::ptr::null_mut();
         }
     };

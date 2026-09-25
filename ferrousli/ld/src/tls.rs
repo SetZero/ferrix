@@ -15,11 +15,31 @@
 //! the program starts, so every module's block is in static TLS at an offset
 //! from the thread pointer that is the same in every thread. The answer to
 //! both calls is therefore that offset plus the variable's, found in
-//! [`MODULE_OFFSETS`], with no dynamic thread vector and no allocation. A
-//! module loaded later, by `dlopen`, will need the vector; there is no
-//! `dlopen` yet.
+//! [`MODULE_OFFSETS`], with no dynamic thread vector and no allocation.
+//!
+//! # A module `dlopen` brings
+//!
+//! The start-up layout leaves [`crate::scope::TLS_SURPLUS`] bytes of every
+//! thread's static TLS unused, as glibc's does, and a library `dlopen` loads
+//! gets its block there: an offset from the thread pointer like any other,
+//! so `__tls_get_addr` answers it from the same table. What differs is that
+//! threads already running have that block zeroed, not holding its image.
+//! So each such module has a generation, its place in the order they were
+//! opened ([`MODULE_GENERATIONS`]), and each thread keeps in its control
+//! block's `dtv` word how many it has initialised -- zero in a new thread,
+//! which is what every C library here leaves there. `__tls_get_addr` for a
+//! module newer than that first copies the images of every module the
+//! thread has not seen into its blocks ([`__ferrousli_tls_catch_up`]).
+//! A thread reaches such a module's variables only through that call, so
+//! nothing it has written is overwritten.
+//!
+//! Initial-exec and descriptor accesses bypass `__tls_get_addr`, so a
+//! module reached that way whose image is not all zeros -- zeros being what
+//! the surplus holds in every thread -- is still refused
+//! ([`needs_catch_up`]). Chrome's GPU libraries use only `__tls_get_addr`.
 
 use core::cell::UnsafeCell;
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::object::MAX_OBJECTS;
 use crate::report::Error;
@@ -42,6 +62,175 @@ unsafe impl Sync for Offsets {}
 
 /// The table `__tls_get_addr` reads, by symbol, from assembly.
 static MODULE_OFFSETS: Offsets = Offsets(UnsafeCell::new([0; MODULES]));
+
+/// Each module's generation, by module number: zero for a start-up module,
+/// and for a module `dlopen` brought its place in the order they were
+/// opened, from 1. Read by `__tls_get_addr` from assembly.
+static MODULE_GENERATIONS: Offsets = Offsets(UnsafeCell::new([0; MODULES]));
+
+/// The most modules with TLS `dlopen` may bring.
+const MAX_DYNAMIC: usize = 32;
+
+/// A module `dlopen` brought: where its block is, and what fills it.
+#[derive(Clone, Copy)]
+struct Dynamic {
+    offset: isize,
+    image: usize,
+    filesz: usize,
+    memsz: usize,
+}
+
+/// The modules `dlopen` brought, in generation order, and how many.
+struct DynamicModules(UnsafeCell<[Dynamic; MAX_DYNAMIC]>);
+
+// SAFETY: an entry is written once, under `dlopen`'s lock, before the count
+// that covers it is published with release ordering; readers read only
+// entries below a count they loaded with acquire ordering.
+unsafe impl Sync for DynamicModules {}
+
+/// See [`DynamicModules`].
+static DYNAMIC: DynamicModules = DynamicModules(UnsafeCell::new(
+    [Dynamic {
+        offset: 0,
+        image: 0,
+        filesz: 0,
+        memsz: 0,
+    }; MAX_DYNAMIC],
+));
+
+/// How many entries of [`DYNAMIC`] are published: the newest generation.
+static DYNAMIC_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+/// Publish object `index`, which `dlopen` just placed in the surplus, as the
+/// next generation: its offset and generation for `__tls_get_addr`, and its
+/// image for the threads that catch up.
+///
+/// # Errors
+///
+/// [`Error::TooManyObjects`] past [`MAX_DYNAMIC`] modules with TLS.
+///
+/// # Safety
+///
+/// Called under `dlopen`'s lock, before anything can reach the module.
+pub(crate) unsafe fn publish_dynamic(scope: &Scope, index: usize) -> Result<(), Error> {
+    let Some(tls) = scope.get(index).and_then(|object| object.tls) else {
+        return Ok(());
+    };
+    let count = DYNAMIC_COUNT.load(Ordering::Relaxed);
+    if count >= MAX_DYNAMIC || index + 1 >= MODULES {
+        return Err(Error::TooManyObjects);
+    }
+    let entry = DYNAMIC.0.get().cast::<Dynamic>().wrapping_add(count);
+    // SAFETY: the lock makes this the only writer, and entry `count` is
+    // published below, after it is written.
+    unsafe {
+        entry.write(Dynamic {
+            offset: tls.offset,
+            image: tls.image,
+            filesz: tls.filesz,
+            memsz: tls.memsz,
+        });
+    }
+    let offset = MODULE_OFFSETS
+        .0
+        .get()
+        .cast::<isize>()
+        .wrapping_add(index + 1);
+    // SAFETY: `index + 1` is inside the table, and the lock makes this the
+    // only writer; nothing reads the module's entry before it is relocated.
+    unsafe { offset.write(tls.offset) };
+    let generation = MODULE_GENERATIONS
+        .0
+        .get()
+        .cast::<isize>()
+        .wrapping_add(index + 1);
+    // SAFETY: as above.
+    unsafe { generation.write(count as isize + 1) };
+    DYNAMIC_COUNT.store(count + 1, Ordering::Release);
+    Ok(())
+}
+
+/// Whether module number `module` is one `dlopen` brought whose image is not
+/// all zeros: one a thread must catch up on before it reads it, which only
+/// `__tls_get_addr` does.
+pub(crate) fn needs_catch_up(module: usize) -> bool {
+    if module >= MODULES {
+        return false;
+    }
+    // SAFETY: `module` is inside the table, which is written only under
+    // `dlopen`'s lock, which the relocation asking this runs under.
+    let generation = unsafe {
+        MODULE_GENERATIONS
+            .0
+            .get()
+            .cast::<isize>()
+            .wrapping_add(module)
+            .read()
+    };
+    if generation <= 0 {
+        return false;
+    }
+    // SAFETY: entry `generation - 1` was written before its generation was.
+    let entry = unsafe {
+        DYNAMIC
+            .0
+            .get()
+            .cast::<Dynamic>()
+            .wrapping_add(generation as usize - 1)
+            .read()
+    };
+    (0..entry.filesz).any(|at| {
+        // SAFETY: the image is `filesz` mapped bytes.
+        let byte = unsafe { (entry.image as *const u8).wrapping_add(at).read() };
+        byte != 0
+    })
+}
+
+/// The calling thread's count of initialised generations: its control
+/// block's `dtv` word, which no C library here uses otherwise.
+fn generation_word() -> *mut usize {
+    #[cfg(target_arch = "x86_64")]
+    return (thread_pointer() + size_of::<usize>()) as *mut usize;
+    #[cfg(not(target_arch = "x86_64"))]
+    return thread_pointer() as *mut usize;
+}
+
+/// Bring the calling thread's blocks of every module `dlopen` brought since
+/// it last looked up to date: each image copied, and the rest of its block
+/// zeroed. Called by `__tls_get_addr` when a module is newer than the thread.
+#[unsafe(no_mangle)]
+unsafe extern "C" fn __ferrousli_tls_catch_up() {
+    let word = generation_word();
+    // SAFETY: the word is in this thread's control block.
+    let seen = unsafe { word.read() };
+    let count = DYNAMIC_COUNT.load(Ordering::Acquire);
+    let tp = thread_pointer() as *mut u8;
+    for generation in seen..count {
+        // SAFETY: entries below the count were written before it.
+        let entry = unsafe {
+            DYNAMIC
+                .0
+                .get()
+                .cast::<Dynamic>()
+                .wrapping_add(generation)
+                .read()
+        };
+        let block = tp.wrapping_offset(entry.offset);
+        // SAFETY: the block is this thread's, `memsz` bytes in its static TLS
+        // surplus, and the image `filesz` mapped bytes.
+        unsafe { core::ptr::copy_nonoverlapping(entry.image as *const u8, block, entry.filesz) };
+        // SAFETY: the rest of the same block.
+        unsafe {
+            core::ptr::write_bytes(
+                block.wrapping_add(entry.filesz),
+                0,
+                entry.memsz - entry.filesz,
+            );
+        }
+    }
+    // SAFETY: as above.
+    unsafe { word.write(count) };
+}
 
 /// Record every module's static TLS offset for `__tls_get_addr`.
 ///
@@ -152,11 +341,32 @@ core::arch::global_asm!(
     "    mov rax, qword ptr [rdi]",
     "    cmp rax, {modules}",
     "    jae 2f",
+    "    lea rcx, [rip + {generations}]",
+    "    mov rcx, qword ptr [rcx + 8*rax]",
+    "    test rcx, rcx",
+    "    jnz 3f",
+    "1:",
     "    lea rcx, [rip + {offsets}]",
     "    mov rax, qword ptr [rcx + 8*rax]",
     "    add rax, qword ptr [rdi + 8]",
     "    add rax, qword ptr fs:[0]",
     "    ret",
+    // A module `dlopen` brought, newer than this thread has seen: catch
+    // up, on a stack aligned for the call, keeping the argument and index.
+    "3:",
+    "    cmp rcx, qword ptr fs:[8]",
+    "    jbe 1b",
+    "    push rdi",
+    "    push rax",
+    "    push rbp",
+    "    mov rbp, rsp",
+    "    and rsp, -16",
+    "    call {catch_up}",
+    "    mov rsp, rbp",
+    "    pop rbp",
+    "    pop rax",
+    "    pop rdi",
+    "    jmp 1b",
     "2:",
     "    ud2",
     ".size __tls_get_addr, . - __tls_get_addr",
@@ -171,6 +381,8 @@ core::arch::global_asm!(
     ".popsection",
     modules = const MODULES,
     offsets = sym MODULE_OFFSETS,
+    generations = sym MODULE_GENERATIONS,
+    catch_up = sym __ferrousli_tls_catch_up,
 );
 
 // The same two on AArch64: the index in `x0`, the answer in `x0`, and `x1`
@@ -186,6 +398,11 @@ core::arch::global_asm!(
     "    ldr x1, [x0]",
     "    cmp x1, #{modules}",
     "    b.hs 2f",
+    "    adrp x2, {generations}",
+    "    add x2, x2, :lo12:{generations}",
+    "    ldr x2, [x2, x1, lsl #3]",
+    "    cbnz x2, 3f",
+    "1:",
     "    adrp x2, {offsets}",
     "    add x2, x2, :lo12:{offsets}",
     "    ldr x1, [x2, x1, lsl #3]",
@@ -194,6 +411,19 @@ core::arch::global_asm!(
     "    mrs x2, tpidr_el0",
     "    add x0, x1, x2",
     "    ret",
+    // A module `dlopen` brought, newer than this thread has seen.
+    "3:",
+    "    mrs x3, tpidr_el0",
+    "    ldr x3, [x3]",
+    "    cmp x2, x3",
+    "    b.ls 1b",
+    "    stp x29, x30, [sp, #-32]!",
+    "    mov x29, sp",
+    "    stp x0, x1, [sp, #16]",
+    "    bl {catch_up}",
+    "    ldp x0, x1, [sp, #16]",
+    "    ldp x29, x30, [sp], #32",
+    "    b 1b",
     "2:",
     "    udf #0",
     ".size __tls_get_addr, . - __tls_get_addr",
@@ -208,6 +438,8 @@ core::arch::global_asm!(
     ".popsection",
     modules = const MODULES,
     offsets = sym MODULE_OFFSETS,
+    generations = sym MODULE_GENERATIONS,
+    catch_up = sym __ferrousli_tls_catch_up,
 );
 
 // `__tls_get_addr` on ARMv7-A, in ARM state: the index in `r0`, the answer in
@@ -225,6 +457,13 @@ core::arch::global_asm!(
     "    ldr r1, [r0]",
     "    cmp r1, #{modules}",
     "    bhs 2f",
+    "    ldr r2, 5f",
+    "6:",
+    "    add r2, pc, r2",
+    "    ldr r2, [r2, r1, lsl #2]",
+    "    cmp r2, #0",
+    "    bne 7f",
+    "1:",
     "    ldr r2, 3f",
     "4:",
     "    add r2, pc, r2",
@@ -234,14 +473,29 @@ core::arch::global_asm!(
     "    mrc p15, 0, r2, c13, c0, 3",
     "    add r0, r1, r2",
     "    bx lr",
+    // A module `dlopen` brought, newer than this thread has seen; four
+    // words keep the stack's eight-byte alignment.
+    "7:",
+    "    mrc p15, 0, r3, c13, c0, 3",
+    "    ldr r3, [r3]",
+    "    cmp r2, r3",
+    "    bls 1b",
+    "    push {{r0, r1, r2, lr}}",
+    "    bl {catch_up}",
+    "    pop {{r0, r1, r2, lr}}",
+    "    b 1b",
     "2:",
     "    udf #0",
     "3:",
     "    .word {offsets} - (4b + 8)",
+    "5:",
+    "    .word {generations} - (6b + 8)",
     ".size __tls_get_addr, . - __tls_get_addr",
     ".popsection",
     modules = const MODULES,
     offsets = sym MODULE_OFFSETS,
+    generations = sym MODULE_GENERATIONS,
+    catch_up = sym __ferrousli_tls_catch_up,
 );
 
 /// `PROT_READ | PROT_WRITE`.
@@ -249,7 +503,7 @@ const PROT_READ_WRITE: usize = 0x1 | 0x2;
 /// `MAP_PRIVATE | MAP_ANONYMOUS`.
 const MAP_PRIVATE_ANONYMOUS: usize = 0x2 | 0x20;
 /// glibc's alignment for the initial control block.
-const TP_ALIGN: usize = 64;
+pub(crate) const TP_ALIGN: usize = 64;
 
 /// The prefix program code expects at `%fs`: its self pointer, dynamic thread
 /// vector and glibc-compatible `self` field. Ferrousli's C runtime replaces

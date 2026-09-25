@@ -278,14 +278,27 @@ unsafe fn tls_place(
     entry: &Entry,
 ) -> Result<Option<(isize, usize)>, Error> {
     const NO_TLS: Error = Error::MalformedObject("a TLS symbol has no PT_TLS");
+    // An initial-exec or descriptor access does not pass through
+    // `__tls_get_addr`, where a thread catches up on a module `dlopen`
+    // brought; such a module's block is right in a thread that has not only
+    // if its image is zeros, which the surplus already holds.
+    const NOT_CAUGHT_UP: Error = Error::MalformedObject(
+        "initial-exec or descriptor access to a dlopened library's initialised TLS",
+    );
     if r_sym(entry.info) == 0 {
         let own = object.tls.ok_or(NO_TLS)?;
+        if crate::tls::needs_catch_up(object.index + 1) {
+            return Err(NOT_CAUGHT_UP);
+        }
         return Ok(Some((own.offset, 0)));
     }
     // SAFETY: the caller's promise.
     let Some(found) = (unsafe { resolve(object, scope, entry)? }) else {
         return Ok(None);
     };
+    if crate::tls::needs_catch_up(found.module + 1) {
+        return Err(NOT_CAUGHT_UP);
+    }
     Ok(Some((found.tls_offset.ok_or(NO_TLS)?, found.value)))
 }
 

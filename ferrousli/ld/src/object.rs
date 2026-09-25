@@ -180,6 +180,15 @@ pub(crate) struct Object {
     pub(crate) phnum: usize,
 }
 
+/// What a version definition is called.
+#[derive(Debug, Clone, Copy)]
+enum VerdefName {
+    /// Its name.
+    Named(*const c_char),
+    /// Its name is outside the string table.
+    Unnamed,
+}
+
 /// The version a definition carries, from `DT_VERSYM` and `DT_VERDEF`.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum Defined {
@@ -424,6 +433,40 @@ impl Object {
             at = at.wrapping_add(need.vn_next as usize);
             left -= 1;
         }
+        // A reference to a symbol this object defines itself -- libgcc_s's
+        // constructor to its own `__cpu_indicator_init@GCC_4.8.0` -- carries
+        // the index of one of its own definitions instead.
+        match self.verdef_name(wanted)? {
+            VerdefName::Named(name) => Some(name),
+            VerdefName::Unnamed => None,
+        }
+    }
+
+    /// The name of this object's version definition `number`, or `None`
+    /// when it has none of that number.
+    fn verdef_name(&self, number: u16) -> Option<VerdefName> {
+        let (mut at, mut left) = self.verdef;
+        while at != 0 && left > 0 {
+            // SAFETY: `DT_VERDEF` is a chain of `Verdef` records, each with
+            // its `Verdaux` names, linked by offsets, and this stops after
+            // the count `DT_VERDEFNUM` gave.
+            let def = unsafe { (at as *const Verdef).read_unaligned() };
+            if def.vd_ndx == number {
+                // SAFETY: the first `Verdaux` of a definition is its name.
+                let aux = unsafe {
+                    (at.wrapping_add(def.vd_aux as usize) as *const Verdaux).read_unaligned()
+                };
+                return Some(match self.name(aux.vda_name) {
+                    Some(name) => VerdefName::Named(name),
+                    None => VerdefName::Unnamed,
+                });
+            }
+            if def.vd_next == 0 {
+                break;
+            }
+            at = at.wrapping_add(def.vd_next as usize);
+            left -= 1;
+        }
         None
     }
 
@@ -441,31 +484,12 @@ impl Object {
         if number == VER_NDX_GLOBAL {
             return Defined::Unversioned;
         }
-        let (mut at, mut left) = self.verdef;
-        while at != 0 && left > 0 {
-            // SAFETY: `DT_VERDEF` is a chain of `Verdef` records, each with
-            // its `Verdaux` names, linked by offsets, and this stops after
-            // the count `DT_VERDEFNUM` gave.
-            let def = unsafe { (at as *const Verdef).read_unaligned() };
-            if def.vd_ndx == number {
-                // SAFETY: the first `Verdaux` of a definition is its name.
-                let aux = unsafe {
-                    (at.wrapping_add(def.vd_aux as usize) as *const Verdaux).read_unaligned()
-                };
-                return match self.name(aux.vda_name) {
-                    Some(name) => Defined::Named { name, hidden },
-                    None => Defined::Local,
-                };
-            }
-            if def.vd_next == 0 {
-                break;
-            }
-            at = at.wrapping_add(def.vd_next as usize);
-            left -= 1;
+        match self.verdef_name(number) {
+            Some(VerdefName::Named(name)) => Defined::Named { name, hidden },
+            // A version index with no definition behind it, or one with no
+            // name, is a malformed object; treating the symbol as local keeps
+            // it from answering anything, which is the safe way to be wrong.
+            Some(VerdefName::Unnamed) | None => Defined::Local,
         }
-        // A version index with no definition behind it is a malformed
-        // object; treating the symbol as local keeps it from answering
-        // anything, which is the safe way to be wrong.
-        Defined::Local
     }
 }

@@ -358,7 +358,8 @@ fn general_dynamic_tls_agrees_with_initial_exec_in_both_dialects() {
 
 /// `dlfcn.h` against the loader alone: a library opened at run time, its
 /// function and datum found by handle and globally, an address named, every
-/// object listed, a failure reported once, and a TLS library refused.
+/// object listed, a failure reported once, and a TLS library's variables
+/// reached from a thread that was running before it was loaded.
 ///
 /// The program links against a stub whose `SONAME` is the loader's file
 /// name, so its `DT_NEEDED` names the loader, which the loader takes for
@@ -424,7 +425,7 @@ fn dlopen_dlsym_dladdr_and_dl_iterate_phdr_work_through_the_loader() {
         Some(EXPECTED),
         "dlfcn.h through the loader: 91 dlopen, 92 dlsym of a function, 93 of \
          a datum, 94 dladdr, 95 dlerror, 96 dl_iterate_phdr, 97 a second \
-         dlopen, 98 the TLS refusal, 86 and 87 dladdr1's link map and symbol, \
+         dlopen, 98 a TLS library's variables at their image's values, 86 and 87 dladdr1's link map and symbol, \
          88 to 90 dlinfo's link map, origin and refusal, 99 dlclose, and a \
          signal a fault"
     );

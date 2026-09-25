@@ -52,6 +52,9 @@ pub struct Interface {
     /// `AT_NULL`, for [`crate::auxv`] to answer from before
     /// `__libc_start_main` has recorded it.
     pub auxv: *const usize,
+    /// Revision 4: `dlsym` with the caller's address, which `RTLD_NEXT`
+    /// needs.
+    pub dlsym_from: unsafe extern "C" fn(*mut c_void, *const c_char, *const c_void) -> *mut c_void,
 }
 
 /// The revision that added the `dlfcn.h` calls.
@@ -59,6 +62,18 @@ const DLFCN: usize = 2;
 
 /// The revision that added the auxiliary vector.
 const AUXV: usize = 3;
+
+/// The revision that added `dlsym` with its caller.
+const DLSYM_FROM: usize = 4;
+
+/// The loader's `dlsym` that takes its caller's address, when it has one.
+#[must_use]
+pub fn dlsym_from()
+-> Option<unsafe extern "C" fn(*mut c_void, *const c_char, *const c_void) -> *mut c_void> {
+    interface()
+        .filter(|interface| interface.version >= DLSYM_FROM)
+        .map(|interface| interface.dlsym_from)
+}
 
 /// The loader's copy of the auxiliary vector: `None` in a static program,
 /// with a loader older than revision 3, and before the loader has published

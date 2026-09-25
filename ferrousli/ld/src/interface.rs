@@ -44,8 +44,9 @@ use crate::dl;
 
 /// The revision of [`Interface`] this loader fills in. A library built
 /// against a later one reads `version` before anything past it. Revision 2
-/// added the `dlfcn.h` calls, revision 3 the auxiliary vector.
-const VERSION: usize = 3;
+/// added the `dlfcn.h` calls, revision 3 the auxiliary vector, revision 4
+/// `dlsym` with its caller's address.
+const VERSION: usize = 4;
 
 /// What the loader exports to the C library.
 #[repr(C)]
@@ -83,6 +84,10 @@ pub(crate) struct Interface {
     /// Revision 3: the auxiliary vector on the entry stack, ending in
     /// `AT_NULL`, or null before [`publish`].
     pub(crate) auxv: *const usize,
+    /// Revision 4: `dlsym` with the caller's address, which `RTLD_NEXT`
+    /// needs.
+    pub(crate) dlsym_from:
+        unsafe extern "C" fn(*mut c_void, *const c_char, *const c_void) -> *mut c_void,
 }
 
 /// The interface, filled in once the scope is complete.
@@ -104,6 +109,7 @@ pub(crate) static mut __ferrousli_loader: Interface = Interface {
     dladdr: dl::dladdr,
     dl_iterate_phdr: dl::dl_iterate_phdr,
     auxv: core::ptr::null(),
+    dlsym_from: dl::dlsym_from,
 };
 
 /// Publish the static TLS layout the scope settled on, and the auxiliary
