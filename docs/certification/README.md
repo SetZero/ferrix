@@ -5,20 +5,29 @@ A theoretical assessment of Ferrix against four assurance ratings, conducted
 independent assessor has been engaged — the audit is internal, and says so
 everywhere it matters.
 
+**The element is developed out of context.** It has no application of its own,
+so it is analysed against *assumed* safety requirements and ships the
+conditions an integrator must discharge — ISO 26262's SEooC, EN 50716's generic
+software, DO-178C's reusable software component. See
+[SAFETY-MANUAL.md](SAFETY-MANUAL.md). This is how QNX, PikeOS and VxWorks 653
+are certified, and it is why F-20 and F-22 are no longer blocked on a device
+that does not exist.
+
 | Target | Standard | Verdict |
 |---|---|---|
 | EAL5+ | Common Criteria (ISO/IEC 15408) | **Not met.** Security Target now written; blocked on a vulnerability analysis and design evidence at module granularity. |
 | DAL C | DO-178C / ED-12C | **Not met.** The coverage blocker is retired; planning data and requirements traceability are not. |
-| Class C | IEC 62304 | **Closest of the four.** Technically strong — no SOUP in the item — and blocked on a risk management file and a QMS. |
-| SIL 2 | EN 50716:2023 | **Reachable.** Most of the Annex A technique table is already satisfied; blocked on a safety case. |
+| Class C | IEC 62304 | **Closest of the four.** No SOUP in the item; element-level safety analysis written. Blocked on a QMS and the integrator's risk file. |
+| SIL 2 | EN 50716:2023 | **Reachable.** Most of Annex A satisfied; generic software argument and application conditions written. Blocked on independent assessment. |
 
 None of the four can be claimed today. What changed is that the reasons are now
 specific, measured, and mostly documents rather than code.
 
 * [IMPLEMENTATION.md](IMPLEMENTATION.md) — **start here to build**: ten work orders, ordered
 * [TODO.md](TODO.md) — start here to re-audit: what to re-measure, and what not to write
+* [SAFETY-MANUAL.md](SAFETY-MANUAL.md) — the out-of-context argument: assumed requirements, safe state, ten assumptions of use, element failure analysis
 * [ITEM.md](ITEM.md) — what the ratings attach to, and why it is not all of Ferrix
-* [FINDINGS.md](FINDINGS.md) — the audit register, 27 open findings and 11 closed
+* [FINDINGS.md](FINDINGS.md) — the audit register, 25 open findings and 13 closed
 * [SECURITY-TARGET.md](SECURITY-TARGET.md) — EAL5+ claim, SFRs, and where it would fail evaluation
 * [VULNERABILITY-ANALYSIS.md](VULNERABILITY-ANALYSIS.md) — AVA_VAN.4 over the seven threats; five residual vulnerabilities
 * [MEMORY-AND-TIMING.md](MEMORY-AND-TIMING.md) — what the item allocates, and what it promises about time
@@ -144,9 +153,14 @@ lifecycle evidence cannot be produced retroactively — and here it is empty.
 §4.3(c) segregation is satisfied architecturally: ring-3 drivers behind an
 IOMMU, with the boundary enforced at build time.
 
-*Missing:* ISO 14971 risk management and a hazard analysis (F-20, blocking);
-ISO 13485 QMS (F-28, blocking); §5.4 detailed design to unit level and §5.5.3
-unit verification acceptance criteria (F-15).
+*Written since:* the element failure analysis (F-20) and the safety argument
+(F-22), both at the element level, with the system half exported as
+assumptions of use.
+
+*Missing:* ISO 13485 QMS (F-28, blocking); §5.4 detailed design to unit level
+and §5.5.3 unit verification acceptance criteria (F-15). The device
+manufacturer's own ISO 14971 risk file is AoU-1 and is by construction not
+ours to write.
 
 *Why it is closest:* the blockers are an organisation and a document set. The
 technical position — first-party code, gated boundary, measured coverage,
@@ -163,9 +177,14 @@ targets with committed corpora. Structured methodology (HR) — the SysML model.
 Role independence is permissive at SIL 2, where roles may be combined with
 justification, so F-27 is survivable here as it is not elsewhere.
 
-*Missing:* a safety case under EN 50126/50129 (F-22, blocking). Tool
-classification to §6.7 (F-18, F-19). A coding standard with complexity metrics
-(F-25). Dynamic memory is discouraged at SIL 2 and is pervasive (F-23).
+*Written since:* the generic software argument and its application conditions
+(F-22), tool classification and operational requirements (F-18, F-19), and the
+complexity and recursion gate (F-25, closed).
+
+*Missing:* independent assessment, which EN 50716 permits to be less
+independent at SIL 2 than above but not absent (F-27). Dynamic memory remains
+pervasive and is now an exported application condition rather than an
+unexamined gap (F-23, AoU-5).
 
 ## 4. What would actually move the needle
 
@@ -188,9 +207,18 @@ In order of value per unit of effort:
 
 ## 5. What cannot be fixed from here
 
-A hazard analysis needs an application — hazards belong to a device or a train,
-not to a kernel (F-20). Independence needs people who do not work on the code
-(F-27). A QMS needs an organisation (F-28). Field history needs years (F-30).
+Two things, down from five.
+
+Independence needs people who do not work on the code (F-27). A QMS needs an
+organisation (F-28). Field history needs years (F-30) and is unavailable rather
+than unfixed.
+
+The hazard analysis and the safety case are no longer on this list. Treating
+the element as developed out of context — which is what it is — puts the
+element's half inside reach and exports the system's half to whoever integrates
+it. That was a mistake in the original audit worth naming: it assumed a
+certified kernel needs a known application, when the whole SEooC / generic
+software / reusable component apparatus exists because it does not.
 
 And one genuinely unsettled question, worth raising with a certification body
 early rather than at assessment: **no scheme has decided how to treat

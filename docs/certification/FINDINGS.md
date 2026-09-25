@@ -4,7 +4,7 @@ The audit register for the item defined in [ITEM.md](ITEM.md). One entry per
 finding, each naming what was measured, which objective it bears on, and what
 would close it.
 
-27 findings are open and 11 are closed. F-32 is closed on x86-64 and open on the two Arm architectures. F-10 advanced from 71.4% to 81.9%. No finding here is closed by argument:
+25 findings are open and 13 are closed. F-10 advanced from 71.4% to 81.9%. No finding here is closed by argument:
 a finding closes when the thing it describes stops being true and something in
 the build says so.
 
@@ -14,12 +14,16 @@ met or met without evidence. *Minor* — a defect with no objective attached yet
 
 | | Blocking | Major | Moderate | Minor | Informational |
 |---|---:|---:|---:|---:|---:|
-| Open | 4 | 9 | 12 | 2 | 1 |
+| Open | 2 | 9 | 12 | 2 | 1 |
 
-Blocking: F-20, F-22, F-27, F-28 — a hazard analysis, a safety case,
-independent assessment and a quality management system. Two are documents that
-need an application context the repository does not have; two need an
-organisation. None is a defect in the code.
+Blocking: F-27 and F-28 — independent assessment and a quality management
+system. Both need an organisation; neither is a defect in the code.
+
+F-20 and F-22 were on this list until 2026-09-25, when the element was
+documented as a *safety element out of context*
+([SAFETY-MANUAL.md](SAFETY-MANUAL.md)) and their element-level halves were
+written. The system-level halves are exported to the integrator as assumptions
+of use, which is how every general-purpose certified kernel handles them.
 
 ---
 
@@ -252,17 +256,24 @@ The finding stands on that residual.
 ## E. Safety and security analysis
 
 ### F-20 — no hazard analysis and no risk management file
-**Blocking** for IEC 62304 Class C and EN 50716 SIL 2.
+**Closed at the element level 2026-09-25** by
+[SAFETY-MANUAL.md](SAFETY-MANUAL.md) §5: nine failure modes of the element,
+each with its effect at the element boundary, its detection, its mitigation and
+its residual. FM-9 — kernel stack overflow with no guard page and no depth
+bound — is named as the least-defended.
 
-62304 does not stand alone: it presumes ISO 14971 risk management, and §7.1
-requires every hazard to be traced to the software items that could contribute
-to it. EN 50716 sits under EN 50126 RAMS with SIL apportionment from a system
-hazard analysis. Neither exists.
+The earlier text on this finding was wrong in an instructive way. It said the
+analysis needed a device and that a generic hazard list "would be a document,
+not evidence". That is not how general-purpose kernels are certified: ISO 26262
+Part 10's *safety element out of context*, EN 50716's *generic software* and
+DO-178C's *reusable software component* all exist precisely so a component with
+no application of its own can be analysed against **assumed** safety
+requirements, with the system-level analysis exported to the integrator as an
+assumption of use. QNX, PikeOS and VxWorks 653 all ship exactly this.
 
-This one is genuinely application-dependent — hazards belong to a device or a
-train, not to a kernel — so closing it needs an operational context the
-repository does not have. A generic hazard list would be a document, not
-evidence.
+So the element's half is done and the system's half is exported as AoU-1 rather
+than missing. What remains open is the *integrator's* risk file, which by
+construction is not ours to write.
 
 ### F-21 — no Security Target
 **Closed 2026-09-25** by [SECURITY-TARGET.md](SECURITY-TARGET.md): TOE
@@ -368,8 +379,20 @@ Profile can be claimed — but an evaluator would press on whether a TOE that
 cannot record a security-relevant event can claim EAL5.
 
 ### F-22 — no safety case
-**Blocking** for EN 50716 SIL 2. No EN 50129-shaped argument, no generic
-application conditions.
+**Closed at the element level 2026-09-25** by
+[SAFETY-MANUAL.md](SAFETY-MANUAL.md): the argument is §2 (assumed safety
+requirements, with the evidence for each), §3 (the safe state, and the
+obligation it creates), §4 (ten assumptions of use) and §5 (the failure
+analysis).
+
+The generic application conditions EN 50716 asks for are AoU-1 to AoU-10, and
+several of them exist *because* a finding is open — no WCET (F-24), fatal
+allocation failure (F-23), reduced claims on ARMv7-A (F-32, V-03), no audit
+(F-21b). Those stop being embarrassments and become stated conditions the
+integrator designs around, which is what an application condition is for.
+
+What remains is assessment by somebody independent, which is F-27 and not
+this.
 
 ### F-23 — dynamic memory allocation throughout, with no bounded-allocation argument
 **Major, analysed 2026-09-25** in
