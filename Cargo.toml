@@ -61,6 +61,7 @@ members = [
     # The UEFI loader. Firmware calls into it with a stack and the MMU on, so
     # there is no bootstrap assembly on any architecture.
     "boot",
+    "bootloaders/pixel7",
 
     # The kernel proper.
     "kernel",

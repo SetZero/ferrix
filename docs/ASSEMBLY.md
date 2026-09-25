@@ -45,6 +45,27 @@ there. So the sequence is a block between `ferrix_switch_start` and
 relocation. It is the same instructions, not more of them; the product owner
 admitted the block on 2026-09-13 on exactly those conditions.
 
+### The one loader without UEFI: the Pixel 7
+
+`bootloaders/pixel7/` is the exception, because the phone offers no UEFI. Its
+signed bootloader, ABL, boots an Android boot image under the Linux arm64 boot
+protocol: it jumps to the image's first byte **at EL2, with the MMU off and no
+stack**, the device tree's address in `x0`. What UEFI does for `boot/`, that
+loader has to do itself before any Rust runs, and each piece is defined by the
+machine or by ABL rather than by choice:
+
+* the 64-byte arm64 `Image` header at the start of the image, whose branch,
+  sizes, flags and magic sit at offsets ABL reads;
+* setting the stack pointer and zeroing `.bss`;
+* the drop from EL2 to EL1 -- `HCR_EL2`, `CNTHCTL_EL2`, `CPTR_EL2`,
+  `ICC_SRE_EL2`, then `ELR_EL2`/`SPSR_EL2` and `eret` -- so the kernel runs at
+  the level it is written for;
+* a `VBAR_EL1` table, sixteen entries at fixed 128-byte offsets, so a fault in
+  the loader is reported rather than hung on.
+
+All of it is in one file, `bootloaders/pixel7/src/entry.rs`, allow-listed with
+a budget of 100 lines.
+
 ## The list
 
 Each entry names why Rust cannot express it. Entries are added to

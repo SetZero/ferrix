@@ -52,6 +52,11 @@
       "reason": "The loader's last instructions. Writing CR3 replaces the address space the return address of a Rust function call would live in, so the switch and the jump to the kernel cannot be a call. Also EFER.NXE and CR4.PGE, which are MSR and control-register writes with no Rust spelling and which must happen before the tables that rely on them are installed."
     },
     {
+      "file": "bootloaders/pixel7/src/entry.rs",
+      "max_lines": 100,
+      "reason": "The Pixel 7 loader is entered under the Linux arm64 boot protocol, not UEFI: ABL jumps to the image's first byte at EL2 with the MMU off and no stack. So it needs what `boot/` gets from firmware for free: the 64-byte arm64 Image header ABL reads (a branch, sizes, flags and the arm64 magic at fixed offsets), setting the stack pointer and zeroing .bss before a Rust function can run, the EL2-to-EL1 drop (HCR_EL2, CNTHCTL_EL2, CPTR_EL2, ICC_SRE_EL2, SPSR_EL2/ELR_EL2 and eret), and a VBAR_EL1 table of sixteen entries at fixed 128-byte offsets. Also the CurrentEL, HCR_EL2/SCTLR_EL2, generic-timer reads and the PSCI smc, which have no Rust spelling."
+    },
+    {
       "file": "kernel/src/arch/aarch64/cpu.rs",
       "max_lines": 100,
       "reason": "CPU primitives, one instruction each: `dsb`/`isb` are barriers, `tlbi` is TLB maintenance, `wfi` and `msr daifset` are CPU state, and `hvc` is the PSCI call that powers the machine off. Grows with stage 3 (VBAR_EL1, GIC, the generic timer) and must not grow with anything else."
