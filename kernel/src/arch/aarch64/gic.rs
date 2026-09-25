@@ -186,8 +186,8 @@ pub(crate) unsafe fn init_from_tree(tree: &Fdt<'_>) -> Result<u8, &'static str> 
                     distributor.address,
                     redistributors.address,
                     redistributors.size,
-                )?
-            };
+                )?;
+            }
             3
         }
     };
@@ -214,18 +214,18 @@ const _: () = assert!(
 /// Let interrupt `id` through.
 pub(crate) fn enable(id: u32) {
     if is_v3() {
-        gicv3::enable(id)
+        gicv3::enable(id);
     } else {
-        gicv2::enable(id)
+        gicv2::enable(id);
     }
 }
 
 /// Stop delivering `id`.
 pub(crate) fn disable(id: u32) {
     if is_v3() {
-        gicv3::disable(id)
+        gicv3::disable(id);
     } else {
-        gicv2::disable(id)
+        gicv2::disable(id);
     }
 }
 
