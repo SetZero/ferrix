@@ -1,7 +1,12 @@
 # Auditor's work list
 
-For whoever picks this up next, agent or otherwise. Ordered by value per unit
-of effort, not by finding number. Each item says what to do, which finding it
+The audit-side list: what to re-measure, how to know a finding closed, and
+what deliberately must not be written. For the engineering work itself see
+[IMPLEMENTATION.md](IMPLEMENTATION.md), which carries the design detail this
+file only gestures at — notably that the obvious reading of F-01 is the wrong
+change.
+
+Ordered by value per unit of effort, not by finding number. Each item says what to do, which finding it
 closes, and how to know it is done — because "done" here means something in the
 build says so, not that a document claims it.
 
