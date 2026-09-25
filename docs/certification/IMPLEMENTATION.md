@@ -112,6 +112,8 @@ model edit. That is a feature: the design document cannot drift.
 
 ## W-2 — Invert the trap-return upcall
 
+**Done 2026-09-25.** See F-02 and F-02a.
+
 **Closes:** F-02 (7 references). **Size:** small. **Value:** high — it is on
 the most trusted path in the system.
 
@@ -142,6 +144,8 @@ trait object.
 ---
 
 ## W-3 — Invert `StatLayout`
+
+**Done 2026-09-25.** See F-03.
 
 **Closes:** F-03 (3 references). **Size:** tiny. Good first task.
 
@@ -185,6 +189,8 @@ actually runs, and here it runs on every boot.
 ---
 
 ## W-6 — Complexity and recursion gate
+
+**Done 2026-09-25.** See F-25.
 
 **Closes:** F-25. **Size:** medium. No kernel changes.
 
@@ -308,8 +314,13 @@ engineering — **answer step 1 before planning anything that depends on it.**
 
 ## Suggested order
 
-W-3 (tiny, learn the gate) → W-1 (keystone) → W-2 → W-4 → W-5 → W-6 → W-7 →
-W-8 (largest) → W-9 → W-10 in parallel whenever someone can answer step 1.
+**Done:** order zero, W-3, W-2, W-6, and F-05 (the first half of W-4).
+**Remaining:** W-1 (keystone) → W-4's board half → W-5 → W-7 → W-8 (largest) →
+W-9, with W-10 in parallel whenever someone can answer step 1.
+
+W-1 is still first among what is left: twenty-six of the sixty-two original
+boundary references are it and its downstream, and W-5 and W-8 both read better
+once the core object exists. Fifty-two references remain.
 
 W-1 first among the substantial ones because ~26 of the 62 boundary references
 are it and its downstream, and because W-5 and W-8 both read better once the
