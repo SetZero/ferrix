@@ -7,7 +7,7 @@
 //! terminal was asked to run. That is `forkpty` written out, and it is
 //! written out because Ferrix's C library does not have one.
 
-use std::ffi::CString;
+use std::ffi::{CString, OsString};
 use std::io;
 use std::os::fd::RawFd;
 
@@ -198,16 +198,58 @@ fn child_side(master: RawFd, slave: RawFd, program: &str, arguments: &[String]) 
     );
     let mut pointers: Vec<*const libc::c_char> = argv.iter().map(|word| word.as_ptr()).collect();
     pointers.push(core::ptr::null());
-    // A terminal says what it is: `TERM` is how a program decides what
-    // escape sequences to send, and `xterm` is the name whose sequences this
-    // terminal understands.
-    let term = CString::new("TERM=xterm").unwrap_or_else(|_| CString::default());
-    let environment: [*const libc::c_char; 2] = [term.as_ptr(), core::ptr::null()];
+    let environment: Vec<CString> = environment(std::env::vars_os())
+        .into_iter()
+        .filter_map(|variable| CString::new(variable).ok())
+        .collect();
+    let mut variables: Vec<*const libc::c_char> = environment
+        .iter()
+        .map(|variable| variable.as_ptr())
+        .collect();
+    variables.push(core::ptr::null());
     // SAFETY: the pointers are to NUL-terminated strings held alive until
     // the call, and both arrays end with a null.
     unsafe {
-        let _ = libc::execve(path.as_ptr(), pointers.as_ptr(), environment.as_ptr());
+        let _ = libc::execve(path.as_ptr(), pointers.as_ptr(), variables.as_ptr());
     }
+}
+
+/// Where a program is looked for when nothing has said: the directories the
+/// image puts programs in.
+const DEFAULT_PATH: &str = "/bin:/usr/bin:/sbin:/usr/sbin";
+
+/// The environment the program on the terminal starts with: the terminal's
+/// own, as every terminal passes on, with `TERM` saying what this terminal
+/// is and a `PATH` when the terminal was given none.
+///
+/// This used to be `TERM` and nothing else. The shell looked commands up
+/// all the same -- zinc falls back to `/bin:/usr/bin` for its own lookups --
+/// but what it started had no `PATH` to search, so `rustc` could not find
+/// the `cc` it links with; and no `WAYLAND_DISPLAY` or `XDG_RUNTIME_DIR`, so
+/// a Wayland program started from the shell could not find the compositor
+/// the shell's own window is on.
+fn environment(inherited: impl Iterator<Item = (OsString, OsString)>) -> Vec<Vec<u8>> {
+    use std::os::unix::ffi::OsStrExt as _;
+
+    let mut variables: Vec<Vec<u8>> = Vec::new();
+    let mut path = false;
+    for (name, value) in inherited {
+        // `TERM` is this terminal's to say: `xterm` is the name whose
+        // escape sequences it understands, whatever it was started under.
+        if name == "TERM" {
+            continue;
+        }
+        path |= name == "PATH";
+        let mut variable = name.as_bytes().to_vec();
+        variable.push(b'=');
+        variable.extend_from_slice(value.as_bytes());
+        variables.push(variable);
+    }
+    variables.push(b"TERM=xterm".to_vec());
+    if !path {
+        variables.push(format!("PATH={DEFAULT_PATH}").into_bytes());
+    }
+    variables
 }
 
 /// Open `/dev/ptmx`.
@@ -289,4 +331,48 @@ fn set_nonblocking(fd: RawFd) -> io::Result<()> {
 fn close(fd: RawFd) {
     // SAFETY: a descriptor this opened.
     let _ = unsafe { libc::close(fd) };
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::OsString;
+
+    fn pairs(list: &[(&str, &str)]) -> impl Iterator<Item = (OsString, OsString)> {
+        list.iter()
+            .map(|(name, value)| (OsString::from(name), OsString::from(value)))
+            .collect::<Vec<_>>()
+            .into_iter()
+    }
+
+    fn strings(list: &[Vec<u8>]) -> Vec<String> {
+        list.iter()
+            .map(|variable| String::from_utf8_lossy(variable).into_owned())
+            .collect()
+    }
+
+    #[test]
+    fn the_program_gets_the_terminals_environment_with_its_own_term() {
+        let got = super::environment(pairs(&[
+            ("WAYLAND_DISPLAY", "wayland-1"),
+            ("TERM", "linux"),
+            ("PATH", "/opt/bin"),
+        ]));
+        assert_eq!(
+            strings(&got),
+            ["WAYLAND_DISPLAY=wayland-1", "PATH=/opt/bin", "TERM=xterm"]
+        );
+    }
+
+    #[test]
+    fn a_terminal_given_no_path_gives_its_program_one() {
+        let got = super::environment(pairs(&[("HOME", "/")]));
+        assert_eq!(
+            strings(&got),
+            [
+                "HOME=/",
+                "TERM=xterm",
+                &format!("PATH={}", super::DEFAULT_PATH)
+            ]
+        );
+    }
 }
