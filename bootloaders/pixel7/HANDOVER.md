@@ -120,7 +120,14 @@ the loader rebuilds in a second. Nothing is ever written to the phone's flash.
 
 ## Update from nazuna (2026-09-25, branch `pixel7/stage3`)
 
-Steps 1 to 3 below are written and pass under QEMU; none has run on the phone.
+Steps 1 to 3 below are written, pass under QEMU, and **boot on the phone to
+`FERRIX-BOOT-OK stages 1-12`** on one core (run at 23:38, `nosmp`): GICv3,
+virtual timer at 24.576 MHz, 251 ticks at 999 Hz, 7582 MiB managed, every
+self-check through stage 12 passing, then the watchdog reset. Three things the
+log says are missing: `random NOT SEEDED` (no firmware entropy and no `RNDR`
+on these cores -- `/chosen`'s `rng-seed` or `kaslr-seed` is the obvious
+source), `firmware has no clock` (`CLOCK_REALTIME` starts at the epoch), and
+the second to eighth cores.
 
 * `kernel/src/arch/aarch64/gicv3.rs` is the GICv3 driver (distributor,
   redistributor walk and wake, `ICC_*_EL1` through four new accessors in
@@ -141,8 +148,11 @@ Steps 1 to 3 below are written and pass under QEMU; none has run on the phone.
   written for EL1. The next kernel step after a phone run is that entry
   dropping to EL1 the way `bootloaders/pixel7/src/entry.rs` does (it will
   need its assembly budget raised), then removing `nosmp`.
-* Not yet on nazuna: `adb` and `fastboot`, and the udev rules. The factory
-  zip, `vendor_boot.img` and `avbtool.py` are in `~/.local/share/ferrix/pixel7`.
+* On nazuna: Google's platform-tools in `~/.local/share/ferrix/pixel7/
+  platform-tools`, linked into `~/.local/bin`; the factory zip,
+  `vendor_boot.img`, `avbtool.py` and the last run's `run.log` beside them.
+  `adb` and `fastboot` both reached the phone as the desktop user through
+  `uaccess`, and nazuna's adb key is authorised.
 
 ## What to do next: stage 3
 
