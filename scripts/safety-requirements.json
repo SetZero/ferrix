@@ -1,0 +1,186 @@
+{
+  "//": [
+    "The assumed safety requirements and element failure modes of",
+    "docs/certification/SAFETY-MANUAL.md, each tied to the code that implements",
+    "it and the check that demonstrates it.",
+    "",
+    "The manual is an out-of-context safety argument: an integrator reads it and",
+    "designs against it. A claim in it that quietly stopped being true would be",
+    "worse than no manual, because it would be believed. So every claim names",
+    "its evidence here, and scripts/check-safety-requirements.py fails the build",
+    "when an id in the manual is missing from this file, when a claim names",
+    "evidence that no longer exists, or when the two disagree about which ids",
+    "exist at all.",
+    "",
+    "This is the traceability F-14 and F-15 want, at the granularity the safety",
+    "argument actually uses. It is not the whole of either finding: 49,401 lines",
+    "trace to eight requirements here, and unit-level requirements remain",
+    "unwritten."
+  ],
+  "assumed_safety_requirements": [
+    {
+      "id": "ASR-1",
+      "statement": "A partition shall not read or write memory belonging to another partition or to the element.",
+      "status": "met",
+      "implemented_by": [
+        "kernel/src/user/space.rs",
+        "kernel/src/arch/x86_64/cpu.rs::enable_user_access_protection",
+        "kernel/src/arch/aarch64/cpu.rs::enable_user_access_protection"
+      ],
+      "demonstrated_by": [
+        "kernel/src/user/check.rs::check_the_processor_walks_an_installed_space",
+        "kernel/src/user/check.rs::check_a_region_outside_the_user_half_is_refused"
+      ]
+    },
+    {
+      "id": "ASR-2",
+      "statement": "No mapping shall be simultaneously writable and executable.",
+      "status": "met",
+      "implemented_by": [
+        "kernel/src/mm.rs",
+        "kernel/src/main.rs::finish_memory"
+      ],
+      "demonstrated_by": [
+        "kernel/src/panic/catalog.rs::STAGE2_FINISH_MEMORY"
+      ]
+    },
+    {
+      "id": "ASR-3",
+      "statement": "A partition shall reach a resource only through a capability it holds.",
+      "status": "met",
+      "implemented_by": [
+        "kernel/src/object/mod.rs",
+        "kernel/src/object/channel.rs"
+      ],
+      "demonstrated_by": [
+        "kernel/src/object/check.rs"
+      ]
+    },
+    {
+      "id": "ASR-4",
+      "statement": "A device shall not access memory outside the region its driver was granted.",
+      "status": "met on x86-64 and AArch64; not provided on ARMv7-A (AoU-6)",
+      "implemented_by": [
+        "kernel/src/iommu/vtd.rs",
+        "kernel/src/iommu/smmuv3.rs"
+      ],
+      "demonstrated_by": [
+        "kernel/src/iommu/gate.rs::waits_with_interrupts_on"
+      ]
+    },
+    {
+      "id": "ASR-5",
+      "statement": "Memory released by one partition shall not be readable by the next.",
+      "status": "met",
+      "implemented_by": [
+        "kernel/src/mm.rs::zero_frame"
+      ],
+      "demonstrated_by": [
+        "kernel/src/user/check.rs::check_a_committed_page_is_zeroed"
+      ]
+    },
+    {
+      "id": "ASR-6",
+      "statement": "On detecting an inconsistent internal state, the element shall enter its safe state rather than continue.",
+      "status": "met",
+      "implemented_by": [
+        "kernel/src/panic.rs",
+        "kernel/src/panic/catalog.rs"
+      ],
+      "demonstrated_by": [
+        "scripts/check-panic-audit.py"
+      ]
+    },
+    {
+      "id": "ASR-7",
+      "statement": "Data supplied by a partition shall be validated before use.",
+      "status": "met",
+      "implemented_by": [
+        "kernel/src/syscall/uaccess.rs"
+      ],
+      "demonstrated_by": [
+        "kernel/src/syscall/check.rs"
+      ]
+    },
+    {
+      "id": "ASR-8",
+      "statement": "Admission of a real-time workload shall be refused when the set is unschedulable.",
+      "status": "partially met -- no worst-case execution time is claimed (AoU-4)",
+      "implemented_by": [
+        "kernel/src/sched/mod.rs"
+      ],
+      "demonstrated_by": [
+        "kernel/src/sched/check.rs"
+      ]
+    }
+  ],
+  "failure_modes": [
+    {
+      "id": "FM-1",
+      "mitigated_by": [
+        "kernel/src/user/space.rs"
+      ]
+    },
+    {
+      "id": "FM-2",
+      "mitigated_by": [
+        "kernel/src/mm.rs"
+      ]
+    },
+    {
+      "id": "FM-3",
+      "mitigated_by": [
+        "kernel/src/object/mod.rs"
+      ]
+    },
+    {
+      "id": "FM-4",
+      "mitigated_by": [
+        "kernel/src/iommu.rs"
+      ]
+    },
+    {
+      "id": "FM-5",
+      "mitigated_by": [
+        "kernel/src/mm.rs::zero_frame"
+      ]
+    },
+    {
+      "id": "FM-6",
+      "mitigated_by": [
+        "kernel/src/panic.rs"
+      ]
+    },
+    {
+      "id": "FM-7",
+      "mitigated_by": [
+        "kernel/src/object/job.rs"
+      ]
+    },
+    {
+      "id": "FM-8",
+      "mitigated_by": [
+        "kernel/src/sched/queue.rs"
+      ]
+    },
+    {
+      "id": "FM-9",
+      "mitigated_by": [
+        "kernel/src/vmap.rs::allocate_stack",
+        "kernel/src/main.rs::check_stacks"
+      ]
+    }
+  ],
+  "assumptions_of_use": [
+    "AoU-1",
+    "AoU-2",
+    "AoU-3",
+    "AoU-4",
+    "AoU-5",
+    "AoU-6",
+    "AoU-7",
+    "AoU-8",
+    "AoU-9",
+    "AoU-10"
+  ]
+}

@@ -65,6 +65,14 @@ pub(crate) fn run(args: &Args) -> Result<()> {
         python("scripts/check-complexity.py")
     })?;
 
+    // The safety manual is an out-of-context argument an integrator designs
+    // against, so a claim in it that quietly stopped being true would be worse
+    // than no manual. Every claim names its evidence, and this fails when a
+    // citation stops resolving. docs/certification/SAFETY-MANUAL.md.
+    step("safety requirements", || {
+        python("scripts/check-safety-requirements.py")
+    })?;
+
     // The item links no external crate on any architecture, which is what lets
     // IEC 62304's SOUP obligation be answered with "none" rather than with an
     // anomaly-list evaluation per dependency. That is a property worth

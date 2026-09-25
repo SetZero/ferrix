@@ -34,7 +34,12 @@ still has to happen. It happens at the integrator, and this item's certificate
 | Reference configuration | x86-64, AArch64, ARMv7-A; release profile; rustc 1.97.1; zero Cargo features |
 
 The boundary is enforced on every build by `scripts/check-item-boundary.py`, so
-what this manual describes and what ships cannot drift apart silently.
+what this manual describes and what ships cannot drift apart silently. The
+manual's own claims are held the same way: every requirement and failure mode
+below names its evidence in `scripts/safety-requirements.json`, and
+`scripts/check-safety-requirements.py` fails the build when a citation stops
+resolving or when the manual and the register disagree about which ids exist.
+It caught a wrong citation the first time it ran.
 
 ---
 
