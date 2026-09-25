@@ -297,6 +297,7 @@ OPTIONS:
     --miri                               check: add CI's Miri steps (needs nightly and miri)
     --reset-root                         run, run-compositor: start the btrfs root over from a fresh install
     --tmpfs-root                         run, run-compositor: / in memory instead of on the btrfs root disk
+    --btrfs-root                         test-chrome-window: / on a btrfs root disk made fresh for the run
     --reset                              test-boot: ferrix.onexit=reset in CMDLINE.TXT, and require a reset;
                                          build, run: put that CMDLINE.TXT in the image
     --to <MOUNT>                         flash: the card's mounted boot partition

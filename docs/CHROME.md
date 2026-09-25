@@ -45,7 +45,7 @@ what is left:
 | What running it found missing: `CLOCK_THREAD_CPUTIME_ID` and `CLOCK_PROCESS_CPUTIME_ID`, `clock_getres`, `creat`, and `/proc/<pid>/task`'s link count | **done** 2026-09-24 (§8) |
 | Chrome in a window on the compositor, a Wayland client drawing in software | **done** 2026-09-24, x86-64, `cargo xtask test-chrome-window`, `run-compositor --chrome` (§9) |
 | The zygote's fork, which fails on Ferrix, so Chrome runs with `--no-zygote` | not started (§8) |
-| Chrome on the desktop's persistent btrfs root, where it stops before its first frame, so `--chrome` boots a tmpfs root | not started (§9) |
+| Chrome on the desktop's persistent btrfs root | **done** 2026-09-26: `/dev/shm` was not mounted there; `cargo xtask test-chrome-window --btrfs-root` (§9) |
 | Chrome on ferrousli's `libc.so.6` in glibc's place | **done** 2026-09-26, x86-64, headless, `cargo xtask test-chrome --interpreter ferrousli --library ferrousli` (§8); the window build on it is not tried |
 | Chrome on the STM32MP157D-DK1: an armhf Chromium, an SDMMC driver, page-cache eviction | not started, ≈ 45–55 points (§10) |
 | Chromium built against ferrousli, with Alpine's musl patches rebased | not needed for a first Chrome: the prebuilt one runs (§5, §8) |
@@ -59,8 +59,8 @@ wayland 1.24.0, wayland-protocols 1.45, libxkbcommon 1.11.0, pixman 0.46.4,
 freetype 2.14.1, expat 2.7.3, fontconfig 2.17.1, tllist 1.1.0 and fcft
 3.3.2, and DejaVu Sans Mono 2.37 is the font. **Then** headless Chrome,
 the same day (§8), and a window (§9). **Then**, on 2026-09-26, Chrome on
-ferrousli in glibc's place (§8). **Next:** the zygote, and the persistent
-root.
+ferrousli in glibc's place (§8), and the desktop's persistent btrfs root
+(§9). **Next:** the zygote.
 
 **Re-checked on 2026-09-19**, against a tree 37 commits further on. Everything
 in §2, §3 and §4 still holds but the two loose fixes in §6, which are now
@@ -713,12 +713,25 @@ run that passed had 532 386 such pixels on a 1024x768 screen, and its
 screenshot is Chrome's own window chrome around the page.
 
 `cargo xtask run-compositor --chrome` is the same on the desktop, with a
-network: Chrome opens with the desktop, and SUPER+B opens another. It boots a
-tmpfs root. On the desktop's persistent btrfs root Chrome stops after its
-first Wayland requests, or before them, and with its profile in `/dev/shm`
-as well; on tmpfs it does not. That is open, and is a btrfs question more
-than a browser one. `cargo xtask remote-desktop --chrome` shows it from
-another machine.
+network: Chrome opens with the desktop, and SUPER+B opens another. `cargo
+xtask remote-desktop --chrome` shows it from another machine.
+
+**On the persistent btrfs root, 2026-09-26.** Until then `--chrome` booted a
+tmpfs root, because on the desktop's btrfs root Chrome stopped after its
+first Wayland requests or before them, with its profile in `/dev/shm` as
+well as in `/tmp`. It was not btrfs's. When the kernel moves `/` onto the
+btrfs volume it mounts a fresh devfs, `/proc`, `/sys` and a tmpfs `/tmp`
+inside it (`kernel/src/fs/root_disk.rs`), but not the tmpfs `fs::init`
+mounts over `/dev/shm` on the initramfs's root; so on a btrfs root
+`/dev/shm` was devfs's bare directory, where nothing can be made. Chrome
+ended at once, crashpad unable to make its database and `PathService` with
+no user-data directory, and every POSIX shared memory object and named
+semaphore on that desktop failed with it. The root's mounts include
+`/dev/shm` now. `cargo xtask test-chrome-window --btrfs-root` boots on a
+btrfs root made fresh for the run and requires the same page on the screen:
+before the change it failed with Chrome's `Failed to get the path for 1001`,
+after it 532 386 yellow pixels, as on tmpfs. `--chrome` no longer forces a
+tmpfs root. The profile in `/tmp` is not tried again.
 
 ---
 

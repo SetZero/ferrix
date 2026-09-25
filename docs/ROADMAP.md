@@ -146,7 +146,7 @@ sizes them.
 | ~~Stage 12, btrfs write~~ *done 2026-09-21* | ~~≈ 60~~ | done |
 | ~~sysfs, fed by the services that own each fact (`docs/SYSFS.md`)~~ *done 2026-09-24* | ~~26~~ | done |
 | ~~Chrome on Ferrix, headless and in a window, x86-64 (`docs/CHROME.md`)~~ *done 2026-09-24* | foot and its ports 13, the kernel's rows ≈ 30, spent | done |
-| Chrome: the zygote's fork, the persistent-root stop | unsized; ferrousli in glibc's place is done, headless, 2026-09-26 | under way |
+| Chrome: the zygote's fork | unsized; ferrousli in glibc's place, headless, and the persistent btrfs root are done, 2026-09-26 | under way |
 | Chrome on the STM32MP157D-DK1 (`docs/CHROME.md` §10) | ≈ 45–55 | not started |
 | Stage 13, namespaces, cgroups, seccomp | cgroups 85 (`docs/CGROUPS.md` §7: 27 for what init needs, 58 for the controllers); namespaces and seccomp unsized, the old guess for the whole stage was *month* ≈ 60 | under way: G1 to G5 done (27 of 85), which is all init needs from it, C8 for native services included; its cgroups come first, as init's prerequisite (`docs/INIT.md` §0); the controllers are next, `pids` first |
 | Stage 22, Steam: the parts with a first guess (bubblewrap's rest 13, sound 30, Venus 8; glibc's names are dynamic linking's 13 and XWayland stage 19's, both counted above) | 51 | not started |
@@ -4199,12 +4199,17 @@ libc++ reads; the program's own `malloc`, which ferrousli's calls now
 follow; GNU's `strerror_r` in `libc.so.6`; and TLS in a `dlopen`ed library,
 in a static TLS surplus as glibc keeps.
 
+**Done (2026-09-26): the persistent btrfs root.** Chrome stopped on the
+desktop's btrfs root because the kernel mounted no tmpfs on `/dev/shm`
+inside it, only on the initramfs's root, and Chrome's profile is there; the
+root's mounts include it now, `run-compositor --chrome` no longer forces a
+tmpfs root, and `cargo xtask test-chrome-window --btrfs-root` requires the
+page on the screen from a fresh btrfs root (`docs/CHROME.md` §9).
+
 **Still to do:**
 
 * The zygote's fork fails on Ferrix, so the tests run Chrome with
   `--no-zygote`; `--no-sandbox` is stage 13's.
-* On the desktop's persistent btrfs root Chrome stops before its first
-  frame; `run-compositor --chrome` boots a tmpfs root until that is found.
 * Chrome on ferrousli in a window, which is not tried, and ferrousli's
   `ld.so` run as a command, which it cannot be yet: Chrome reaches it by
   `PT_INTERP`.

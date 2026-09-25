@@ -423,7 +423,8 @@ package FerrixRoadmap {
              * On ferrousli in glibc's place, headless, since 2026-09-26:
              * cargo xtask test-chrome --interpreter ferrousli
              * --library ferrousli.
-             * Owed: the zygote's fork, the persistent-root stop, and the
+             * On the persistent btrfs root since 2026-09-26.
+             * Owed: the zygote's fork, and the
              * STM32MP157D-DK1, which needs an SDMMC driver and page-cache
              * eviction first. */
     }

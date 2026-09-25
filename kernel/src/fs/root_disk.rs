@@ -6,8 +6,9 @@
 //! Linux's answer is `switch_root`, and this is Ferrix's: once the driver is
 //! serving the disk, [`switch`] mounts the btrfs volume on it at
 //! [`SYSROOT`], installs the system on it from the same archive, mounts
-//! `/dev`, `/proc`, `/sys` and `/tmp` inside it, and from then on every process the
-//! kernel makes has that volume as its `/` ([`process_context`]). The
+//! `/dev`, `/dev/shm`, `/proc`, `/sys` and `/tmp` inside it, and from then
+//! on every process the kernel makes has that volume as its `/`
+//! ([`process_context`]). The
 //! kernel's own checks keep the tmpfs, where their fixtures are mounted.
 //!
 //! # Which disk, and when
@@ -250,37 +251,48 @@ fn write_stamp(inside: &Context, stamp: &[u8]) -> Result<(), Errno> {
 
 /// `/dev`, `/proc`, `/sys` and `/tmp` inside the volume, as `fs::init` makes
 /// them in the tmpfs, so a process whose `/` is the volume finds them where
-/// it looks.
+/// it looks -- and `/dev/shm`, a tmpfs over the new devfs's directory of that
+/// name, as `fs::init` mounts one over its own.
+///
+/// Without that last one `/dev/shm` on a btrfs root was devfs's bare
+/// directory, where nothing can be made: Chrome on the desktop, whose
+/// profile is there, stopped before its first frame, and every POSIX shared
+/// memory object and named semaphore failed with it. It is mounted after
+/// `/dev`, which it is inside.
 fn mount_kernel_filesystems(inside: &Context) -> Result<(), &'static str> {
+    const NO_ROOM: &str = "has no room for /dev, /proc, /sys, /tmp or /dev/shm";
     let ns = fs::namespace();
-    let mounts: [(&[u8], Arc<dyn FileSystem>, u32); 4] = [
+    let mounts: [(&[u8], Arc<dyn FileSystem>, u32); 5] = [
         (b"/dev", Arc::new(devfs::Devfs::new()), 0o755),
         (b"/proc", Arc::new(procfs::Procfs::new()), 0o555),
         (b"/sys", Arc::new(sysfs::Sysfs::new()), 0o555),
         (b"/tmp", fs::new_tmpfs(), 0o1777),
+        (b"/dev/shm", fs::new_tmpfs(), 0o1777),
     ];
     for (path, filesystem, mode) in mounts {
+        // devfs carries `shm` already, so its `mkdir` answers `EEXIST`.
         match ns.mkdir(inside, None, path, mode) {
             Ok(()) | Err(Errno::EEXIST) => {}
-            Err(_) => return Err("has no room for /dev, /proc, /sys or /tmp"),
+            Err(_) => return Err(NO_ROOM),
         }
-        let at = ns
-            .resolve(inside, None, path, true)
-            .map_err(|_| "has no room for /dev, /proc, /sys or /tmp")?;
+        let at = ns.resolve(inside, None, path, true).map_err(|_| NO_ROOM)?;
         let _ = ns
             .mount(filesystem, &at)
-            .map_err(|_| "could not carry /dev, /proc, /sys or /tmp")?;
+            .map_err(|_| "could not carry /dev, /proc, /sys, /tmp or /dev/shm")?;
     }
-    // Sticky and writable by everyone, as every Unix `/tmp` is.
-    let tmp = ns
-        .resolve(inside, None, b"/tmp", true)
-        .map_err(|_| "lost its /tmp")?;
+    // Sticky and writable by everyone, as every Unix `/tmp` and `/dev/shm`
+    // is.
     let sticky = SetAttributes {
         permissions: Some(0o1777),
         ..SetAttributes::default()
     };
-    ns.set_attributes(&tmp, &sticky)
-        .map_err(|_| "could not make /tmp writable")?;
+    for path in [&b"/tmp"[..], b"/dev/shm"] {
+        let mounted = ns
+            .resolve(inside, None, path, true)
+            .map_err(|_| "lost its /tmp or /dev/shm")?;
+        ns.set_attributes(&mounted, &sticky)
+            .map_err(|_| "could not make /tmp or /dev/shm writable")?;
+    }
     Ok(())
 }
 

@@ -1995,13 +1995,6 @@ pub(crate) fn run_compositor(args: &Args) -> Result<()> {
         if !args.memory_given {
             args.memory = crate::chrome::MEMORY;
         }
-        // On the persistent btrfs root Chrome stops before its first frame,
-        // and on tmpfs it does not; until that is found, a Chrome desktop
-        // starts from the initramfs each time.
-        if !args.tmpfs_root {
-            println!("  --chrome: the root is tmpfs this boot (--tmpfs-root)");
-            args.tmpfs_root = true;
-        }
     } else {
         crate::rustc::prepare_default(arch, &mut args)?;
     }

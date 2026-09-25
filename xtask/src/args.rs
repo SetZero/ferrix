@@ -40,6 +40,9 @@ pub(crate) struct Args {
     /// `--tmpfs-root`: boot `run` and `run-compositor` with `/` in memory,
     /// as the test boots are, and leave the btrfs root off the bus.
     pub(crate) tmpfs_root: bool,
+    /// `--btrfs-root`: boot `test-chrome-window` with `/` on a btrfs root
+    /// disk, made fresh from the fixture for the run, as the desktop's is.
+    pub(crate) btrfs_root: bool,
     /// `--net`: give the guest a virtio-net device, with `xtask`'s own gateway
     /// behind it. Off by default for a boot that is judged, because every boot
     /// that does not need a network is a boot with one fewer device on the bus
@@ -302,6 +305,16 @@ impl Args {
         self.clipboard = true;
     }
 
+    /// `--reset-root`, `--tmpfs-root` and `--btrfs-root`: where `/` is for
+    /// the boot, and whether it starts over.
+    fn root(&mut self, flag: &str) {
+        match flag {
+            "--reset-root" => self.reset_root = true,
+            "--tmpfs-root" => self.tmpfs_root = true,
+            _ => self.btrfs_root = true,
+        }
+    }
+
     /// Parse an iterator of arguments, `cargo xtask` and the command name
     /// having already been stripped by the caller.
     pub(crate) fn parse(raw: impl Iterator<Item = String>) -> Result<Self> {
@@ -326,8 +339,7 @@ impl Args {
                 "--miri" => args.miri = true,
                 "--reset" => args.reset = true,
                 "--compositor" => args.compositor = true,
-                "--reset-root" => args.reset_root = true,
-                "--tmpfs-root" => args.tmpfs_root = true,
+                "--reset-root" | "--tmpfs-root" | "--btrfs-root" => args.root(&item),
                 "--net" => args.net = true,
                 "--no-net" => args.no_net = true,
                 "--chrome" => args.chrome = true,

@@ -1679,14 +1679,17 @@ fn attach_data_image(command: &mut Command, arch: Arch, args: &Args) {
 /// `run-compositor`, unless `--tmpfs-root` says otherwise, and never for a
 /// test, whose boot must not depend on what an earlier one left.
 fn attach_root_disk(command: &mut Command, arch: Arch, args: &Args) -> Result<()> {
-    if !matches!(args.command.as_deref(), Some("run" | "run-compositor")) {
+    // A test's root is made fresh for it, so its boot still depends on
+    // nothing an earlier one left.
+    let test = args.btrfs_root && args.command.as_deref() == Some("test-chrome-window");
+    if !test && !matches!(args.command.as_deref(), Some("run" | "run-compositor")) {
         return Ok(());
     }
     if args.tmpfs_root {
         println!("  {arch}: / in memory, as --tmpfs-root asks; the btrfs root is left off");
         return Ok(());
     }
-    let (disk, made) = btrfs_disk::ensure_root(args.reset_root)?;
+    let (disk, made) = btrfs_disk::ensure_root(args.reset_root || test)?;
     println!(
         "  {arch}: btrfs root {}, {}",
         display(&disk),

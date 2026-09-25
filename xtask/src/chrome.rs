@@ -112,10 +112,10 @@ const TIMEOUT: u64 = 1800;
 /// `--ozone-platform=wayland` makes Chrome a Wayland client, drawing through
 /// `wl_shm`; `--disable-gpu` keeps its GPU process to software, since the
 /// render node is the compositor's. `--user-data-dir` is in `/dev/shm`,
-/// which is tmpfs whatever the root is: on the desktop's persistent btrfs
-/// root, a profile in `/tmp` left Chrome waiting after its first Wayland
-/// requests, and on tmpfs it does not. `--no-sandbox --no-zygote` for the
-/// reasons at the top of this file.
+/// which is tmpfs whatever the root is -- on the desktop's persistent btrfs
+/// root too since 2026-09-26, when the kernel began mounting one there; before
+/// that, it was devfs's bare directory there, and Chrome stopped at once.
+/// `--no-sandbox --no-zygote` for the reasons at the top of this file.
 pub(crate) fn window_command(page: &str) -> String {
     format!(
         "/data/chrome-window/chrome --no-sandbox --no-zygote --ozone-platform=wayland \
