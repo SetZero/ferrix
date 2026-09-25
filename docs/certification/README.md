@@ -27,7 +27,7 @@ specific, measured, and mostly documents rather than code.
 * [TODO.md](TODO.md) — start here to re-audit: what to re-measure, and what not to write
 * [SAFETY-MANUAL.md](SAFETY-MANUAL.md) — the out-of-context argument: assumed requirements, safe state, ten assumptions of use, element failure analysis
 * [ITEM.md](ITEM.md) — what the ratings attach to, and why it is not all of Ferrix
-* [FINDINGS.md](FINDINGS.md) — the audit register, 24 open findings and 14 closed
+* [FINDINGS.md](FINDINGS.md) — the audit register, 23 open findings and 14 closed
 * [SECURITY-TARGET.md](SECURITY-TARGET.md) — EAL5+ claim, SFRs, and where it would fail evaluation
 * [VULNERABILITY-ANALYSIS.md](VULNERABILITY-ANALYSIS.md) — AVA_VAN.4 over the seven threats; five residual vulnerabilities
 * [MEMORY-AND-TIMING.md](MEMORY-AND-TIMING.md) — what the item allocates, and what it promises about time
@@ -53,15 +53,15 @@ Not Ferrix. Ferrix's acceptance test is that it hosts `rustc` and builds
 itself, which requires a general-purpose OS with a browser, a compositor and a
 self-hosting toolchain — the opposite of a frozen, analysable configuration.
 
-The item is a **48,887-line subset of the kernel**, defined in
+The item is a **49,431-line subset of the kernel**, defined in
 [`scripts/certification-item.json`](../../scripts/certification-item.json) and
 enforced on every build by `scripts/check-item-boundary.py`. Memory protection,
 scheduling, capability objects, the trap and syscall entry paths, the IOMMU,
 SMP and device enumeration are inside; the VFS, btrfs, the network stack, the
-Linux personality and the drivers are uncertified load above it, 44,330 lines
+Linux personality and the drivers are uncertified load above it, 44,203 lines
 of it.
 
-The boundary is nested so it can ratchet inward: a 38,003-line `core` ring is
+The boundary is nested so it can ratchet inward: a 38,989-line `core` ring is
 named now as the destination for a later EAL6+ or ASIL D effort, so that
 raising the target does not mean rewriting every artifact scoped to the old
 boundary.
@@ -70,8 +70,8 @@ boundary.
 
 | | |
 |---|---:|
-| Item product code | 48,887 lines |
-| Uncertified load | 44,330 lines |
+| Item product code | 49,431 lines |
+| Uncertified load | 44,203 lines |
 | In-kernel self-tests | 31,107 lines |
 | Statement coverage, certified item | **81.9%** |
 | Statement coverage, core ring | 80.4% |

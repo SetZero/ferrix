@@ -4,7 +4,7 @@ The audit register for the item defined in [ITEM.md](ITEM.md). One entry per
 finding, each naming what was measured, which objective it bears on, and what
 would close it.
 
-24 findings are open and 14 are closed. F-10 advanced from 71.4% to 81.9%. No finding here is closed by argument:
+23 findings are open and 14 are closed, of 37. F-10 advanced from 71.4% to 81.9%. No finding here is closed by argument:
 a finding closes when the thing it describes stops being true and something in
 the build says so.
 
@@ -14,7 +14,7 @@ met or met without evidence. *Minor* — a defect with no objective attached yet
 
 | | Blocking | Major | Moderate | Minor | Informational |
 |---|---:|---:|---:|---:|---:|
-| Open | 2 | 9 | 11 | 2 | 1 |
+| Open | 2 | 8 | 10 | 2 | 1 |
 
 Blocking: F-27 and F-28 — independent assessment and a quality management
 system. Both need an organisation; neither is a defect in the code.

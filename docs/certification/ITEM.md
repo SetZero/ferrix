@@ -42,13 +42,13 @@ three nested rings. A file in no ring fails the build.
 
 | Ring | Product lines | In-kernel test lines | Carries |
 |---|---:|---:|---|
-| `core` | 38,003 | 7,779 | EAL6+, ASIL D, SIL 3/4, DAL B — *aspirational* |
-| `item` | 10,884 | 248 | EAL5+, DAL C, Class C, SIL 2 — *the present claim* |
-| `load` | 44,330 | 23,080 | nothing |
+| `core` | 38,989 | 7,807 | EAL6+, ASIL D, SIL 3/4, DAL B — *aspirational* |
+| `item` | 10,442 | 248 | EAL5+, DAL C, Class C, SIL 2 — *the present claim* |
+| `load` | 44,203 | 23,080 | nothing |
 
-**The certified item is `core` + `item`: 48,887 lines of product code**, against
-44,330 lines of uncertified load. The item is 52.4% of the kernel's product
-code and 39% of the kernel's total.
+**The certified item is `core` + `item`: 49,431 lines of product code**, against
+44,203 lines of uncertified load. The item is 52.8% of the kernel's product
+code.
 
 ### `core` — the minimal trusted base
 
@@ -110,27 +110,28 @@ visible instead of letting "Ferrix is certified" absorb it.
 ## 4. What the measurement found
 
 The boundary above is a claim about dependencies, so the gate measures it.
-Today the item contains **62 upward references in 27 files** — places where a
+Today the item contains **48 upward references** (62 when the audit began) — places where a
 ring names something in a ring above it. They are recorded in the manifest
 against finding ids and analysed in [FINDINGS.md](FINDINGS.md).
 
 They are not a reason to move the boundary. They are the reason the boundary is
 worth having: each one is a specific, addressable piece of coupling that was
-invisible while the architecture was described in prose. Three are worth
-naming here because they are structural rather than incidental:
+invisible while the architecture was described in prose. Fourteen have been
+paid down since the audit began — F-02, F-02a, F-03 and F-05 — and the three
+that remain worth naming are structural rather than incidental:
 
-* **F-01** — the `Process` type and `current()` are core concepts (a process
-  *is* the address-space and capability container the core enforces between),
-  but they live in `syscall/process.rs`, a 2,229-line Linux-personality file.
-  Twelve core references reach into it. The fix is extraction, not
-  reclassification.
-* **F-02** — the trap return path calls `syscall::deliver` directly to ask
-  whether a signal is pending. That is a genuine upcall from the core into the
-  personality, on the most trusted path in the system. It wants an interface
-  the core defines and the personality registers into.
+* **F-01** — the `Process` type and `current()` are core concepts living in
+  `syscall/process.rs`, a 2,229-line Linux-personality file. The measurement in
+  `docs/certification/IMPLEMENTATION.md` W-1 found the core-facing interface is
+  only about seven operations, but that the ownership chain crosses two
+  boundaries: `Task` holds a `Thread`, and `Thread` holds the `Process`.
 * **F-07** — `syscall/native.rs`, the native ABI dispatcher, names eleven
-  modules in the load ring. Expected of a dispatcher, and still a dependency:
-  the fix is a registration table rather than a match arm per subsystem.
+  modules in the load ring. Expected of a dispatcher, and still a dependency.
+* **F-09** — the item-ring syscall modules reach the personality, mostly for
+  the `Process` type, so most of it is downstream of F-01.
+
+`trap.rs` — the most trusted file in the kernel — now names nothing above the
+core, which it did in three places when the audit began.
 
 The gate's debt register may shrink without ceremony and may not grow without a
 diff somebody argues for. Stale entries fail too, so a fixed breach cannot
