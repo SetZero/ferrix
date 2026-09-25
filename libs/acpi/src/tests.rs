@@ -2011,6 +2011,63 @@ fn a_gic_msi_frame_too_short_for_its_fields_is_malformed() {
 }
 
 // ---------------------------------------------------------------------------
+// GIC ITSes
+// ---------------------------------------------------------------------------
+
+fn gic_its_entry(id: u32, base: u64) -> Vec<u8> {
+    let mut payload = vec![0, 0];
+    payload.extend_from_slice(&id.to_le_bytes());
+    payload.extend_from_slice(&base.to_le_bytes());
+    payload.extend_from_slice(&[0; 4]);
+    entry(15, &payload)
+}
+
+#[test]
+fn decodes_the_gic_its_qemu_virt_describes() {
+    let table = madt(
+        0,
+        0,
+        &[
+            gicr_entry(0x080A_0000, 0x00F6_0000),
+            gic_its_entry(0, 0x0808_0000),
+        ],
+    );
+    let madt = Madt::parse(Table::parse(&table).unwrap()).unwrap();
+    let its: Vec<GicIts> = madt
+        .entries()
+        .filter_map(|entry| match entry {
+            MadtEntry::GicIts(its) => Some(its),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        its,
+        vec![GicIts {
+            id: 0,
+            physical_base_address: 0x0808_0000
+        }],
+        "the one ITS, beside the redistributors"
+    );
+}
+
+#[test]
+fn a_gic_its_too_short_for_its_base_is_malformed() {
+    let mut short = gic_its_entry(0, 0x0808_0000);
+    short.truncate(12);
+    short[1] = 12;
+    let table = madt(0, 0, &[short]);
+    let madt = Madt::parse(Table::parse(&table).unwrap()).unwrap();
+    assert_eq!(
+        madt.entries().next(),
+        Some(MadtEntry::Malformed {
+            kind: 15,
+            length: 12
+        }),
+        "the base address cut in half"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // DMAR
 // ---------------------------------------------------------------------------
 

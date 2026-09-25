@@ -103,6 +103,10 @@ pub const MAX_CELLS: u32 = 4;
 /// `compatible` string of a GICv3 interrupt controller.
 pub const GICV3_COMPATIBLE: &str = "arm,gic-v3";
 
+/// `compatible` string of a GICv3's Interrupt Translation Service, a child of
+/// the GIC's node.
+pub const GICV3_ITS_COMPATIBLE: &str = "arm,gic-v3-its";
+
 /// `compatible` strings of a GICv2. QEMU's `virt` machine says
 /// `cortex-a15-gic` whatever the CPU, the STM32MP1 says `cortex-a7-gic`, and
 /// `gic-400` is what most other boards of that generation carry. The register
@@ -1390,6 +1394,16 @@ impl<'a> Fdt<'a> {
         MsiFrames {
             nodes: self.compatible_nodes(GICV2M_FRAME_COMPATIBLE),
         }
+    }
+
+    /// The first enabled GICv3 Interrupt Translation Service's registers: its
+    /// control frame, with the translation frame devices write to 64 KiB
+    /// above it. `None` on a machine whose GIC has none, which then has no
+    /// message-signalled interrupts.
+    #[must_use]
+    pub fn gicv3_its(&self) -> Option<Region> {
+        self.compatible_nodes(GICV3_ITS_COMPATIBLE)
+            .find_map(|node| node.reg().next())
     }
 
     /// Every PCI host bridge whose configuration space is an ECAM window,

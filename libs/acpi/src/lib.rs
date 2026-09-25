@@ -1062,6 +1062,22 @@ pub struct Gicr {
     pub discovery_range_length: u32,
 }
 
+/// A GIC Interrupt Translation Service (MADT entry type 15): what turns a
+/// device's message write into an LPI on a GICv3.
+///
+/// A `GICv2m` frame raises an SPI chosen by the data written; an ITS
+/// translates the pair of *which device wrote* and *what it wrote* through
+/// tables the OS builds, so the entry gives only where its registers are.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct GicIts {
+    /// Firmware's identifier for the ITS, which the IORT's ITS group nodes
+    /// name it by.
+    pub id: u32,
+    /// Physical address of the ITS's registers: its control frame, with the
+    /// translation frame devices write to 64 KiB above it.
+    pub physical_base_address: u64,
+}
+
 /// One interrupt controller structure from the MADT.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum MadtEntry {
@@ -1086,6 +1102,8 @@ pub enum MadtEntry {
     GicMsiFrame(GicMsiFrame),
     /// Type 14: a GIC redistributor discovery range.
     Gicr(Gicr),
+    /// Type 15: a GIC Interrupt Translation Service.
+    GicIts(GicIts),
     /// A structure this parser does not decode, skipped by its own `length`.
     Unknown {
         /// The entry's type byte.
@@ -1304,6 +1322,7 @@ fn decode_madt_entry(kind: u8, entry: &[u8]) -> MadtEntry {
         12 => decode_gicd(entry),
         13 => decode_gic_msi_frame(entry),
         14 => decode_gicr(entry),
+        15 => decode_gic_its(entry),
         _ => return MadtEntry::Unknown { kind, length },
     };
     decoded.unwrap_or(MadtEntry::Malformed { kind, length })
@@ -1404,6 +1423,15 @@ fn decode_gicr(entry: &[u8]) -> Option<MadtEntry> {
     Some(MadtEntry::Gicr(Gicr {
         discovery_range_base: u64_at(entry, 4)?,
         discovery_range_length: u32_at(entry, 12)?,
+    }))
+}
+
+/// Type 15, twenty bytes. Bytes 2 and 3 and the last four are reserved, so
+/// sixteen are enough to decode.
+fn decode_gic_its(entry: &[u8]) -> Option<MadtEntry> {
+    Some(MadtEntry::GicIts(GicIts {
+        id: u32_at(entry, 4)?,
+        physical_base_address: u64_at(entry, 8)?,
     }))
 }
 

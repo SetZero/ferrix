@@ -2062,6 +2062,59 @@ fn qemu_virt_describes_a_gicv2m_frame_inside_its_gic() {
 }
 
 // ---------------------------------------------------------------------------
+// GICv3 ITSes
+// ---------------------------------------------------------------------------
+
+#[test]
+fn qemu_virt_describes_its_its_inside_its_gic() {
+    let blob = tree(|b| {
+        b.begin("intc@8000000");
+        b.prop_str("compatible", GICV3_COMPATIBLE);
+        b.prop_u32("#address-cells", 2);
+        b.prop_u32("#size-cells", 2);
+        b.prop_cells(
+            "reg",
+            &[0, 0x0800_0000, 0, 0x1_0000, 0, 0x080A_0000, 0, 0xF6_0000],
+        );
+        b.begin("its@8070000");
+        b.prop_str("compatible", GICV3_ITS_COMPATIBLE);
+        b.prop_str("status", "disabled");
+        b.prop_cells("reg", &[0, 0x0807_0000, 0, 0x2_0000]);
+        b.end();
+        b.begin("its@8080000");
+        b.prop_str("compatible", GICV3_ITS_COMPATIBLE);
+        b.prop("msi-controller", &[]);
+        b.prop_cells("reg", &[0, 0x0808_0000, 0, 0x2_0000]);
+        b.end();
+        b.end();
+    });
+    let fdt = parse(&blob);
+    assert_eq!(
+        fdt.gicv3_its(),
+        Some(Region {
+            address: 0x0808_0000,
+            size: 0x2_0000
+        }),
+        "the enabled one, its reg read with the GIC's two-cell counts"
+    );
+    assert_eq!(
+        fdt.interrupt_controller().map(|gic| gic.version),
+        Some(GicVersion::V3),
+        "the ITS's own compatible does not make it the GIC"
+    );
+}
+
+#[test]
+fn a_gicv3_without_an_its_has_none() {
+    let blob = virt();
+    assert_eq!(
+        parse(&blob).gicv3_its(),
+        None,
+        "the fixture's GIC has no ITS"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // IOMMUs, and what a PCI requester ID arrives at them as
 // ---------------------------------------------------------------------------
 

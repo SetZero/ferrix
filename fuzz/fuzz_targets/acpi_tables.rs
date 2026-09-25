@@ -176,6 +176,7 @@ fn madt_minimum(kind: u8) -> Option<usize> {
         12 => 21,
         13 => 24,
         14 => 16,
+        15 => 16,
         _ => return None,
     })
 }
@@ -250,6 +251,9 @@ fn check_madt(table: Table<'_>) {
                     }
                     MadtEntry::Gicr(gicr) => {
                         assert_eq!((kind, gicr.discovery_range_base), (14, u64_at(raw, 4)));
+                    }
+                    MadtEntry::GicIts(its) => {
+                        assert_eq!((kind, its.physical_base_address), (15, u64_at(raw, 8)));
                     }
                     other => panic!("type {kind} decoded as {other:?}"),
                 }
