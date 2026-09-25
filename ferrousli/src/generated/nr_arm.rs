@@ -401,6 +401,14 @@ pub const OPEN_TREE: usize = 428;
 pub const MOVE_MOUNT: usize = 429;
 /// `mount_setattr`.
 pub const MOUNT_SETATTR: usize = 442;
+/// `fsopen`.
+pub const FSOPEN: usize = 430;
+/// `fsconfig`.
+pub const FSCONFIG: usize = 431;
+/// `fsmount`.
+pub const FSMOUNT: usize = 432;
+/// `fspick`.
+pub const FSPICK: usize = 433;
 /// `name_to_handle_at`.
 pub const NAME_TO_HANDLE_AT: usize = 370;
 /// `open_by_handle_at`.

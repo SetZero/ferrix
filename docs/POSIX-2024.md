@@ -18,11 +18,11 @@ variables it specifies beside them.
 
 | Status | Interfaces | Meaning |
 |---|---|---|
-| present | 1067 | defined by `libferrousli.a`, or a macro the standard specifies as one and `include/` defines |
+| present | 1068 | defined by `libferrousli.a`, or a macro the standard specifies as one and `include/` defines |
 | macro only | 3 | a function the standard requires, which the header defines only as a macro: a call works, taking its address or `#undef` does not |
 | broken | 1 | present, but it fails to link or gives a wrong answer |
 | stubbed | 0 | a stand-in that ends the program; the last left `src/stubs.rs` on 2026-09-16, and the file is gone |
-| absent | 172 | not there |
+| absent | 171 | not there |
 
 176 interfaces are missing in one of the last four ways. None of them is
 written on a branch any more: the three unlanded branches of 2026-09-13,
@@ -45,7 +45,7 @@ new subsystem. Every area's missing names are in the index at the end.
 | Complex arithmetic | 69 | 22 | 0 | 2 | the `long double complex` forms, after the rest of `long double` math 2. Landed: every `double complex` and `float complex` function, `creal` and `cimag` among them as functions, bit for bit musl's |
 | Locales, messages and conversion | 32 | 3 | 0 | 8 | reading `.mo` catalogues for the `gettext` family 3; `iconv`'s other character sets and glibc's transliteration 2; `strfmon`, `strfmon_l` 2; `getlocalename_l` 1. Landed: the `gettext` family with the answers glibc gives without a catalogue, and `iconv` between UTF-8, UTF-16, UTF-32, UCS-2, UCS-4, ASCII, ISO-8859-1 and CP1252, for GLib (`docs/CHROME.md`); `catopen`, `catgets`, `catclose` |
 | Files, directories and I/O multiplexing | 46 | 1 | 0 | 1 | `posix_getdents` |
-| Processes, identity and the system | 103 | 6 | 0 | 5 | `confstr` 1; `setresuid`, `setresgid` 1; `nice`, `lockf` 1; `posix_close` 1; `fmtmsg` 1. Landed: `pathconf`, `fpathconf`; `encrypt` and `setkey`, DES through the bit-array interface, checked against FIPS 46-3's own vector |
+| Processes, identity and the system | 103 | 5 | 0 | 5 | `confstr` 1; `setresuid`, `setresgid` 1; `nice` 1; `posix_close` 1; `fmtmsg` 1. Landed: `lockf`, as musl's over `fcntl` record locks, for CUPS (`docs/CHROME.md` §8); `pathconf`, `fpathconf`; `encrypt` and `setkey`, DES through the bit-array interface, checked against FIPS 46-3's own vector |
 | Spawning | 25 | 25 | 0 | 7 | the `posix_spawn` family on `clone(CLONE_VM\|CLONE_VFORK)`, which lets `system` and `popen` stop forking, 5; `_Fork` 1; `fexecve` 1 |
 | Signals and non-local jumps | 28 | 4 | 0 | 2 | `psignal`, `psiginfo` 1; `sig2str`, `str2sig` 1 |
 | Time and clocks | 29 | 3 | 0 | 3 | `getdate` and `getdate_err` 2; `timespec_get` 1 |
@@ -58,7 +58,7 @@ new subsystem. Every area's missing names are in the index at the end.
 | Users, groups and databases | 29 | 9 | 0 | 3 | `<ndbm.h>` and the `dbm_*` functions |
 | Dynamic loading | 5 | 4 | 0 | 2 | `dlopen`, `dlsym`, `dlclose` and `dlerror` for a static program, failing cleanly; a loader is the README's fifth item and is not priced here. Landed: `dladdr`, over the program's own headers |
 | Across areas | | | | 3 | POSIX.1-2024's declarations in `include/` 3 |
-| **All** | **1243** | **176** | **0** | **65** | |
+| **All** | **1243** | **175** | **0** | **65** | |
 
 ## Present but broken
 
@@ -285,8 +285,8 @@ interface.
 | `<sys/utsname.h>` | present (1) | `uname` |
 | `<sys/wait.h>` | present (3) | `wait`, `waitid`, `waitpid` |
 | `<syslog.h>` | present (4) | `closelog` (XSI), `openlog` (XSI), `setlogmask` (XSI), `syslog` (XSI) |
-| `<unistd.h>` | present (82) | `_exit`, `access`, `alarm`, `chdir`, `chown`, `close`, `crypt` (XSI), `dup`, `dup2`, `dup3`, `encrypt` (XSI), `environ`, `execl`, `execle`, `execlp`, `execv`, `execve`, `execvp`, `faccessat`, `fchdir`, `fchown`, `fchownat`, `fdatasync`, `fork`, `fpathconf`, `fsync`, `ftruncate`, `getcwd`, `getegid`, `getentropy`, `geteuid`, `getgid`, `getgroups`, `gethostid` (XSI), `gethostname`, `getlogin`, `getlogin_r`, `getopt`, `getpgid`, `getpgrp`, `getpid`, `getppid`, `getresgid` (XSI), `getresuid` (XSI), `getsid`, `getuid`, `lchown`, `link`, `linkat`, `lseek`, `optarg`, `opterr`, `optind`, `optopt`, `pathconf`, `pause`, `pipe`, `pipe2`, `pread`, `pwrite`, `read`, `readlink`, `readlinkat`, `rmdir`, `setegid`, `seteuid`, `setgid`, `setpgid`, `setregid` (XSI), `setreuid` (XSI), `setsid`, `setuid`, `sleep`, `swab` (XSI), `symlink`, `symlinkat`, `sync` (XSI), `sysconf`, `truncate`, `unlink`, `unlinkat`, `write` |
-| `<unistd.h>` | absent (6) | `confstr`, `lockf` (XSI), `nice` (XSI), `posix_close`, `setresgid` (XSI), `setresuid` (XSI) |
+| `<unistd.h>` | present (83) | `_exit`, `access`, `alarm`, `chdir`, `chown`, `close`, `crypt` (XSI), `dup`, `dup2`, `dup3`, `encrypt` (XSI), `environ`, `execl`, `execle`, `execlp`, `execv`, `execve`, `execvp`, `faccessat`, `fchdir`, `fchown`, `fchownat`, `fdatasync`, `fork`, `fpathconf`, `fsync`, `ftruncate`, `getcwd`, `getegid`, `getentropy`, `geteuid`, `getgid`, `getgroups`, `gethostid` (XSI), `gethostname`, `getlogin`, `getlogin_r`, `getopt`, `getpgid`, `getpgrp`, `getpid`, `getppid`, `getresgid` (XSI), `getresuid` (XSI), `getsid`, `getuid`, `lchown`, `link`, `linkat`, `lockf` (XSI), `lseek`, `optarg`, `opterr`, `optind`, `optopt`, `pathconf`, `pause`, `pipe`, `pipe2`, `pread`, `pwrite`, `read`, `readlink`, `readlinkat`, `rmdir`, `setegid`, `seteuid`, `setgid`, `setpgid`, `setregid` (XSI), `setreuid` (XSI), `setsid`, `setuid`, `sleep`, `swab` (XSI), `symlink`, `symlinkat`, `sync` (XSI), `sysconf`, `truncate`, `unlink`, `unlinkat`, `write` |
+| `<unistd.h>` | absent (5) | `confstr`, `nice` (XSI), `posix_close`, `setresgid` (XSI), `setresuid` (XSI) |
 
 ### Spawning
 

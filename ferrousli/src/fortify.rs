@@ -34,8 +34,8 @@ use crate::process::getgroups;
 use crate::realpath::realpath;
 use crate::signal::abort;
 use crate::string::{
-    explicit_bzero, memcpy, memmove, mempcpy, memset, stpcpy, strcat, strcpy, strlen, strncat,
-    strncpy, strnlen,
+    explicit_bzero, memcpy, memmove, mempcpy, memset, stpcpy, strcat, strcpy, strlcat, strlcpy,
+    strlen, strncat, strncpy, strnlen,
 };
 use crate::syscall::{self, nr};
 use crate::unistd::{getcwd, read, readlinkat};
@@ -244,6 +244,46 @@ pub unsafe extern "C" fn __strncat_chk(
     }
     // SAFETY: the caller's contract is `strncat`'s, and the result fits.
     unsafe { strncat(dest, src, n) }
+}
+
+/// `strlcpy`, refusing a size larger than the destination: `strlcpy` writes
+/// at most `n` bytes, so `n` is what must fit.
+///
+/// # Safety
+///
+/// As `strlcpy`.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn __strlcpy_chk(
+    dest: *mut c_char,
+    src: *const c_char,
+    n: usize,
+    destlen: usize,
+) -> usize {
+    if n > destlen {
+        __chk_fail();
+    }
+    // SAFETY: the caller's contract is `strlcpy`'s, and the copy fits.
+    unsafe { strlcpy(dest, src, n) }
+}
+
+/// `strlcat`, refusing a size larger than the destination, as
+/// [`__strlcpy_chk`] does.
+///
+/// # Safety
+///
+/// As `strlcat`.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn __strlcat_chk(
+    dest: *mut c_char,
+    src: *const c_char,
+    n: usize,
+    destlen: usize,
+) -> usize {
+    if n > destlen {
+        __chk_fail();
+    }
+    // SAFETY: the caller's contract is `strlcat`'s, and the result fits.
+    unsafe { strlcat(dest, src, n) }
 }
 
 /// `explicit_bzero`, refusing a length larger than the object.

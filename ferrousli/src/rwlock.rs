@@ -185,13 +185,14 @@ impl Default for Rwlock {
     }
 }
 
-/// `pthread_rwlockattr_t`: two words of `unsigned`, of which the first is the
-/// process-shared flag.
+/// `pthread_rwlockattr_t`: two words of `unsigned`, the process-shared flag
+/// and glibc's preference between readers and writers.
 #[repr(C)]
 #[derive(Debug)]
 pub struct RwlockAttr {
     shared: c_uint,
-    reserved: c_uint,
+    /// The `PTHREAD_RWLOCK_PREFER_*_NP` kind, kept to be read back.
+    kind: c_uint,
 }
 
 /// Initialises `*rw`, process-shared if `*attr` says so.
@@ -319,7 +320,7 @@ pub unsafe extern "C" fn pthread_rwlockattr_init(attr: *mut RwlockAttr) -> c_int
     unsafe {
         attr.write(RwlockAttr {
             shared: 0,
-            reserved: 0,
+            kind: PTHREAD_RWLOCK_PREFER_READER_NP,
         });
     }
     0
@@ -365,6 +366,56 @@ pub unsafe extern "C" fn pthread_rwlockattr_setpshared(
     };
     // SAFETY: the caller vouches for `attr`.
     unsafe { (*attr).shared = shared };
+    0
+}
+
+/// glibc's `PTHREAD_RWLOCK_PREFER_READER_NP`, its default kind.
+const PTHREAD_RWLOCK_PREFER_READER_NP: c_uint = 0;
+/// glibc's `PTHREAD_RWLOCK_PREFER_WRITER_NONRECURSIVE_NP`, the last kind.
+const PTHREAD_RWLOCK_PREFER_WRITER_NONRECURSIVE_NP: c_uint = 2;
+
+/// Sets glibc's preference between readers and writers:
+/// `PTHREAD_RWLOCK_PREFER_READER_NP`, `PTHREAD_RWLOCK_PREFER_WRITER_NP` or
+/// `PTHREAD_RWLOCK_PREFER_WRITER_NONRECURSIVE_NP`. Anything else fails with
+/// `EINVAL`.
+///
+/// The kind is recorded and read back, and the lock does not act on it: a
+/// reader is let in while a writer waits whatever the kind, which is what
+/// glibc does for its default and for `PTHREAD_RWLOCK_PREFER_WRITER_NP`, and
+/// is only a fairness difference for the third, never a deadlock. GnuTLS and
+/// libunistring ask for the third.
+///
+/// # Safety
+///
+/// `attr` must be an initialised attribute object.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn pthread_rwlockattr_setkind_np(
+    attr: *mut RwlockAttr,
+    kind: c_int,
+) -> c_int {
+    let Ok(kind @ 0..=PTHREAD_RWLOCK_PREFER_WRITER_NONRECURSIVE_NP) = c_uint::try_from(kind) else {
+        return errno::EINVAL;
+    };
+    // SAFETY: the caller vouches for `attr`.
+    unsafe { (*attr).kind = kind };
+    0
+}
+
+/// Stores the kind [`pthread_rwlockattr_setkind_np`] set in `*kind`.
+///
+/// # Safety
+///
+/// `attr` must be an initialised attribute object and `kind` valid for a
+/// write of an `int`.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn pthread_rwlockattr_getkind_np(
+    attr: *const RwlockAttr,
+    kind: *mut c_int,
+) -> c_int {
+    // SAFETY: the caller vouches for `attr`.
+    let value = unsafe { (*attr).kind as c_int };
+    // SAFETY: the caller vouches for `kind`.
+    unsafe { kind.write(value) };
     0
 }
 

@@ -214,6 +214,74 @@ pub unsafe extern "C" fn fcntl(fd: c_int, cmd: c_int, arg: c_ulong) -> c_int {
 /// `F_SETLKW`: set a record lock, waiting for it.
 const F_SETLKW: c_int = 7;
 
+/// The record-lock commands on a `struct flock` whose offsets are 64-bit,
+/// which [`Flock`] always is: `F_GETLK`, `F_SETLK` and `F_SETLKW` on a 64-bit
+/// architecture, and their `*64` forms on a 32-bit one, as musl's
+/// `bits/fcntl.h` defines them.
+#[cfg(target_pointer_width = "64")]
+const LOCK_COMMANDS: [c_int; 3] = [5, 6, F_SETLKW];
+/// See the 64-bit definition.
+#[cfg(target_pointer_width = "32")]
+const LOCK_COMMANDS: [c_int; 3] = [12, 13, 14];
+
+/// `lockf`'s operations, from `unistd.h`.
+const F_ULOCK: c_int = 0;
+/// See [`F_ULOCK`].
+const F_LOCK: c_int = 1;
+/// See [`F_ULOCK`].
+const F_TLOCK: c_int = 2;
+/// See [`F_ULOCK`].
+const F_TEST: c_int = 3;
+
+/// `struct flock`'s lock types, from `asm-generic/fcntl.h`.
+const F_RDLCK: c_short = 0;
+/// See [`F_RDLCK`].
+const F_WRLCK: c_short = 1;
+/// See [`F_RDLCK`].
+const F_UNLCK: c_short = 2;
+
+/// Locks, unlocks or tests the `len` bytes of `fd` from its offset -- to the
+/// end of the file for zero, and before the offset for a negative length --
+/// as a POSIX record lock, as musl does. `F_LOCK` waits; `F_TLOCK` fails
+/// instead; `F_TEST` fails with `EACCES` when another process holds a lock
+/// on the range.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub extern "C" fn lockf(fd: c_int, op: c_int, len: i64) -> c_int {
+    let [get, set, set_wait] = LOCK_COMMANDS;
+    let (command, l_type) = match op {
+        F_TEST => (get, F_RDLCK),
+        F_ULOCK => (set, F_UNLCK),
+        F_TLOCK => (set, F_WRLCK),
+        F_LOCK => (set_wait, F_WRLCK),
+        _ => {
+            errno::set(errno::EINVAL);
+            return -1;
+        }
+    };
+    let mut lock = Flock {
+        l_type,
+        l_whence: crate::stdio::file::SEEK_CUR as c_short,
+        l_len: len,
+        ..Flock::default()
+    };
+    // SAFETY: the command reads, or for `F_TEST` writes, `lock`, a live local.
+    let ret = unsafe { fcntl(fd, command, (&raw mut lock).addr() as c_ulong) };
+    if op != F_TEST || ret < 0 {
+        return ret;
+    }
+    if lock.l_type == F_UNLCK || lock.l_pid == crate::process::getpid() {
+        return 0;
+    }
+    errno::set(errno::EACCES);
+    -1
+}
+
+/// glibc's large-file name for [`lockf`]: the length is already 64-bit.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub extern "C" fn lockf64(fd: c_int, op: c_int, len: i64) -> c_int {
+    lockf(fd, op, len)
+}
+
 /// Starts, waits for or both, as `flags` says, writing the `len` bytes of
 /// `fd` from `offset` to storage. Linux's own call; git uses it to flush a
 /// pack's pages before it renames the pack into place.

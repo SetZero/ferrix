@@ -99,7 +99,7 @@ inotify_rm_watch getresuid getresgid splice vmsplice
 setxattr lsetxattr fsetxattr getxattr lgetxattr fgetxattr listxattr llistxattr
 flistxattr removexattr lremovexattr fremovexattr
 mincore ptrace mq_getsetattr recvmmsg sendmmsg pidfd_open pidfd_send_signal
-close_range open_tree move_mount mount_setattr name_to_handle_at open_by_handle_at
+close_range open_tree move_mount mount_setattr fsopen fsconfig fsmount fspick name_to_handle_at open_by_handle_at
 """.split()
 
 # ARMv7-A's calls that carry a 32-bit offset, size or time where the library's

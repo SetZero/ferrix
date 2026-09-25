@@ -1,8 +1,9 @@
 //! Linux calls glibc wraps and musl 1.2.5 does not, or wraps differently:
 //! `statx`, the process descriptors (`pidfd_open`, `pidfd_send_signal`),
 //! `close_range` and `closefrom`, the new mount API (`open_tree`,
-//! `move_mount`, `mount_setattr`), file handles (`name_to_handle_at`,
-//! `open_by_handle_at`), `mincore`, `ptrace`, `clone`, and the message
+//! `move_mount`, `mount_setattr`, `fsopen`, `fsconfig`, `fsmount` and
+//! `fspick`), file handles (`name_to_handle_at`, `open_by_handle_at`),
+//! `mincore`, `ptrace`, `clone`, and the message
 //! queue attributes. systemd, GLib, libmount and Chrome call them.
 //!
 //! Each is its system call, the number read from the kernel's headers by
@@ -153,6 +154,69 @@ pub unsafe extern "C" fn move_mount(
             to_path.addr(),
             flags as usize,
         ],
+    ) as c_int
+}
+
+/// A file system context for the file system type `fsname`, as a descriptor
+/// that [`fsconfig`] configures and [`fsmount`] mounts.
+///
+/// # Safety
+///
+/// `fsname` must be a NUL-terminated string.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn fsopen(fsname: *const c_char, flags: c_uint) -> c_int {
+    call(nr::FSOPEN, [fsname.addr(), flags as usize, 0, 0, 0]) as c_int
+}
+
+/// Sets, with `cmd` one of the `FSCONFIG_*` commands, the parameter `key` of
+/// the file system context `fd` to `value` and `aux`, whose meaning the
+/// command gives; or creates or reconfigures the file system it describes.
+///
+/// # Safety
+///
+/// `key` must be null or a NUL-terminated string, and `value` null or what
+/// `cmd` says it points to.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn fsconfig(
+    fd: c_int,
+    cmd: c_uint,
+    key: *const c_char,
+    value: *const c_void,
+    aux: c_int,
+) -> c_int {
+    call(
+        nr::FSCONFIG,
+        [
+            fd as usize,
+            cmd as usize,
+            key.addr(),
+            value.addr(),
+            aux as usize,
+        ],
+    ) as c_int
+}
+
+/// A detached mount of the file system the context `fd` created, with the
+/// `MOUNT_ATTR_*` bits in `attr_flags`, as a descriptor for `move_mount`.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub extern "C" fn fsmount(fd: c_int, flags: c_uint, attr_flags: c_uint) -> c_int {
+    call(
+        nr::FSMOUNT,
+        [fd as usize, flags as usize, attr_flags as usize, 0, 0],
+    ) as c_int
+}
+
+/// A file system context for reconfiguring the file system mounted at `path`
+/// relative to `dirfd`.
+///
+/// # Safety
+///
+/// `path` must be a NUL-terminated string.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn fspick(dirfd: c_int, path: *const c_char, flags: c_uint) -> c_int {
+    call(
+        nr::FSPICK,
+        [dirfd as usize, path.addr(), flags as usize, 0, 0],
     ) as c_int
 }
 

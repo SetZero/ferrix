@@ -143,6 +143,16 @@ pub unsafe fn init(argv0: *mut c_char, stack_end: *mut c_void) {
     short.store(last, Ordering::Relaxed);
 }
 
+/// `program_invocation_short_name`: what follows the last `/` of `argv[0]`,
+/// or null before [`init`] or with no `argv[0]`.
+pub fn short_name() -> *const c_char {
+    #[allow(unused_unsafe, reason = "the variable is a Rust static in unit tests")]
+    // SAFETY: the variable lives as long as the process, and every access to
+    // it is atomic.
+    let short = unsafe { &PROGNAME };
+    short.load(Ordering::Relaxed)
+}
+
 /// A destructor `__cxa_thread_atexit_impl` registered, and the one before.
 struct ThreadDtor {
     /// The destructor.

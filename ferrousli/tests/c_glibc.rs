@@ -94,3 +94,18 @@ fn gnus_math_additions_answer_through_cs_calling_convention() {
 fn the_linux_calls_glibc_wraps_reach_the_kernel_with_their_arguments() {
     check(&Case::named("glibc/linux"));
 }
+
+#[test]
+fn the_window_builds_libraries_find_err_ttyent_lockf_obstacks_and_the_rest() {
+    check(&Case::named("glibc/libraries"));
+}
+
+#[test]
+fn a_checked_strlcpy_given_too_small_an_object_aborts_before_writing() {
+    check(&Case {
+        args: &["strlcpy"],
+        stderr: "*** buffer overflow detected ***: terminated\n",
+        ending: Ending::Signal(SIGABRT),
+        ..Case::named("glibc/libraries")
+    });
+}
