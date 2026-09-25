@@ -242,20 +242,6 @@
     ],
     "entries": [
       {
-        "file": "object/job.rs",
-        "references": "syscall::process",
-        "from_ring": "core",
-        "to_ring": "load",
-        "finding": "F-01"
-      },
-      {
-        "file": "object/mod.rs",
-        "references": "syscall::process",
-        "from_ring": "core",
-        "to_ring": "load",
-        "finding": "F-01"
-      },
-      {
         "file": "syscall/futex.rs",
         "references": "syscall::process",
         "from_ring": "item",
@@ -310,13 +296,6 @@
         "from_ring": "item",
         "to_ring": "load",
         "finding": "F-01"
-      },
-      {
-        "file": "object/job.rs",
-        "references": "syscall::registry",
-        "from_ring": "core",
-        "to_ring": "item",
-        "finding": "F-06"
       },
       {
         "file": "sched/mod.rs",

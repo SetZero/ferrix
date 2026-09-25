@@ -38,11 +38,12 @@ use crate::mm;
 use crate::object::channel::Endpoint;
 use crate::object::interrupt;
 use crate::object::job::{self, Job, KILLED_STATUS};
+use crate::object::process::ProcessRef;
 use crate::object::{self, Object};
 use crate::sched::Task;
 use crate::syscall::check::spinner;
 use crate::syscall::image;
-use crate::syscall::process::{self, Process, ProcessRef};
+use crate::syscall::process::{self, Process};
 use crate::syscall::{self as linux, Outcome, SyscallArgs, native, uaccess};
 use crate::user::space::{Access, Destination, FileMapping, FilePlace, SpaceError};
 use crate::user::vmo::Vmo;
@@ -593,7 +594,7 @@ fn check_an_unstarted_child_ends_with_its_handles(
         .with_handles(|table| match table.get(orphan) {
             Ok((Object::Process(child), _)) => child
                 .control()
-                .and_then(|control| control.process())
+                .and_then(|control| control.process::<Process>())
                 .map(|process| Arc::downgrade(&process)),
             _ => None,
         })

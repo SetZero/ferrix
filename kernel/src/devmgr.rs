@@ -443,7 +443,8 @@ pub(crate) fn start() -> Result<Option<Report>, &'static str> {
 /// work never came. The record outlives the process, and the latest such
 /// process replaces it: a boot check's own processes use a device before
 /// devmgr's driver does.
-static DRIVER_ENDINGS: SpinLock<Vec<(Location, Arc<process::Exit>)>> = SpinLock::new(Vec::new());
+static DRIVER_ENDINGS: SpinLock<Vec<(Location, Arc<crate::object::process::Exit>)>> =
+    SpinLock::new(Vec::new());
 
 /// Note that `driver` mapped `node`'s registers or took its interrupt: it is
 /// that device's driver now. Cheap when it is already noted, which every call

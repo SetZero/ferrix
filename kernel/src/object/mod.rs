@@ -27,6 +27,7 @@ pub(crate) mod io_mapping;
 pub(crate) mod job;
 pub(crate) mod pin;
 pub(crate) mod port;
+pub(crate) mod process;
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -66,7 +67,7 @@ pub(crate) enum Object {
     /// Pages of a VMO a device may reach.
     Pin(Arc<pin::Pin>),
     /// A process: how it ended, and not the process itself.
-    Process(crate::syscall::process::ProcessRef),
+    Process(process::ProcessRef),
     /// An event queue.
     Port(Arc<port::Port>),
 }

@@ -17,7 +17,8 @@
 //! directory holds its entries, until the name is removed. An anonymous child,
 //! which native `job_create` makes, is held only by its handles, its members
 //! and its children. A job does not hold its processes: it finds them by
-//! walking the process registry for the ones whose job it is, or is above.
+//! walking the pid table (`object::process`) for the ones whose job it is, or
+//! is above.
 //!
 //! # Populated, counted
 //!
@@ -49,7 +50,7 @@
 //! [`Job::remove_named_child`], parent then child; nothing takes a child's
 //! and then its parent's, since the count walk takes one at a time going up.
 //! The kills take one `state` at a time and let go of it before ending
-//! anything, because `process::kill` wakes tasks and takes the scheduler's
+//! anything, because a process's kill wakes tasks and takes the scheduler's
 //! locks. Nothing is woken under any of these.
 
 use alloc::boxed::Box;
@@ -68,9 +69,8 @@ use ferrix_native_abi::signals::Signals;
 use ferrix_sync::Once;
 
 use super::port::{Observer, PortError, register, triggered};
+use super::process::{self, Process};
 use crate::sched::WaitQueue;
-use crate::syscall::process::{self, Process};
-use crate::syscall::registry;
 
 /// The status a process ended by a job kill reports.
 ///
@@ -746,21 +746,21 @@ impl Job {
     }
 
     /// End every live process in this job or beneath it with `status`, found
-    /// in the process registry. Returns how many had not already ended.
+    /// in the pid table. Returns how many had not already ended.
     ///
     /// A process numbered 0 -- made when every pid was in use -- is not in
     /// the registry and is not found. `fork` refuses to make one, and nothing
     /// else can put one in a job but a boot check.
     fn end_members(&self, status: i32) -> usize {
         let mut ended = 0;
-        for member in registry::live() {
-            if !self.contains(&member.job()) {
+        for member in process::live() {
+            if !self.contains(&member.core().job()) {
                 continue;
             }
-            if !member.is_terminated() {
+            if !member.core().is_terminated() {
                 ended += 1;
             }
-            process::kill(&member, status);
+            member.kill(status);
         }
         ended
     }

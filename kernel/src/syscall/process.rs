@@ -21,6 +21,18 @@
 //! [`current`], one function, which asks the scheduler for the running task and
 //! the task for its process.
 //!
+//! # The core's half and this one
+//!
+//! A [`Process`] here is the POSIX process, and it contains the core's
+//! ([`crate::object::process::Process`]): the address space, the pid, the
+//! handle table, the job and how it ended. Everything else -- descriptors,
+//! root and working directory, signal state, `brk`, credentials, parent and
+//! children, the threads and how the process ends -- is kept here, beside it,
+//! and the core never sees it. Where the core has to hold a process as a
+//! whole, it holds this one as an [`object::process::Host`], which is how a
+//! job's kill and a native handle's drop reach [`kill`] without naming this
+//! module.
+//!
 //! # A process is a task's, not the other way round
 //!
 //! A program runs as a scheduled task of its own ([`start`]), and the task
@@ -47,8 +59,8 @@ use ferrix_vfs::{Context, Location, OpenFile};
 use ferrix_vma::VmaFlags;
 
 use crate::fs;
-use crate::object::job::{self, Job, JobError};
-use crate::object::port::{self, Observer, PortError};
+use crate::object::job::{self, Job};
+use crate::object::process::Host;
 use crate::object::{self, HandleTable};
 use crate::sched::{self, Task, WaitQueue};
 use crate::syscall::credentials::Credentials;
@@ -63,27 +75,23 @@ use ferrix_linux_abi::types::SIGCHLD;
 /// A program, as far as the system call layer is concerned.
 #[derive(Debug)]
 pub(crate) struct Process {
-    /// What it can see.
-    space: Arc<AddressSpace>,
-    /// Its process id, from [`registry::allocate`]: what `getpid` answers,
-    /// and what `/proc`, `kill` and `wait4` find it by. Zero only if every
-    /// pid was in use when it was made, in which case nothing can find it.
-    pid: u32,
+    /// What the core enforces and reports: its address space, its pid, when
+    /// it was made, its handles, its job and how it ended. First, so that it
+    /// is dropped first -- its job's count and its pid are given back before
+    /// the descriptors below are closed, as they were before the two halves
+    /// were split.
+    ///
+    /// Reached by [`Deref`](core::ops::Deref), because a POSIX process *is*
+    /// a core process with more beside it: `process.space()` and
+    /// `process.pid()` read the same here as in the core.
+    core: object::process::Process,
     /// The file mode creation mask: the permission bits a new file or
     /// directory is made without. An atomic rather than a field under the
     /// state lock, because `umask` is a swap and nothing reads it together
     /// with anything else.
     umask: AtomicU32,
-    /// When it was made, in nanoseconds on the counter: `stat`'s start time.
-    started: u64,
     /// What it was started as, which only `/proc` reads.
     identity: SpinLock<Identity>,
-    /// The handles it holds, for the native ABI.
-    ///
-    /// A lock of its own rather than a field of `state`: a channel write looks
-    /// handles up and takes them out, and has no business waiting on a `brk`
-    /// or a signal mask to do it. See `crate::syscall::native`.
-    handles: SpinLock<HandleTable>,
     /// Its file descriptors, and the open file descriptions they name.
     ///
     /// A lock of its own for the reason `handles` has one, and one more: a
@@ -143,9 +151,6 @@ pub(crate) struct Process {
     /// The status its first thread left with through `exit`, which is the
     /// process's status when its last thread ends the same way.
     leader_status: AtomicI32,
-    /// How it ended, and who is waiting to hear. Apart from the process,
-    /// because a handle to the process holds it: see [`Exit`].
-    exit: Arc<Exit>,
     /// The tasks running its code. Weak, because a task keeps its process
     /// alive and not the other way round.
     tasks: SpinLock<Vec<Weak<Task>>>,
@@ -196,14 +201,6 @@ pub(crate) struct Process {
     /// `getuid` has no business waiting on a `brk`, and a `set*id` call must
     /// see and change every id it names at once.
     credentials: SpinLock<Credentials>,
-    /// The job it is in, which is its cgroup (`object::job`). Every process is
-    /// in exactly one: the root job, its parent's for a fork, or wherever it
-    /// was moved. Its lock comes before any job's (see `object::job`, "Lock
-    /// order").
-    membership: SpinLock<Arc<Job>>,
-    /// Whether it is counted among its job's live members: from when it is
-    /// made until it is released. Changed only under `membership`.
-    counted: AtomicBool,
 }
 
 /// Where a program starts: the two numbers `exec::load` computes and the task
@@ -267,7 +264,7 @@ impl Process {
     pub(crate) fn new(space: Arc<AddressSpace>) -> Process {
         Process::with_pid(
             space,
-            registry::allocate().unwrap_or(0),
+            object::process::allocate().unwrap_or(0),
             Arc::clone(job::root()),
         )
     }
@@ -275,8 +272,8 @@ impl Process {
     /// [`Process::new`], for the process init starts: pid 1 when no other
     /// process holds it, any other pid when one does.
     pub(crate) fn new_init(space: Arc<AddressSpace>) -> Process {
-        let pid = registry::allocate_init()
-            .or_else(registry::allocate)
+        let pid = object::process::allocate_init()
+            .or_else(object::process::allocate)
             .unwrap_or(0);
         Process::with_pid(space, pid, Arc::clone(job::root()))
     }
@@ -284,16 +281,10 @@ impl Process {
     /// A process over an address space, numbered `pid`, which the caller has
     /// reserved in the registry, and counted in `job`.
     fn with_pid(space: Arc<AddressSpace>, pid: u32, job: Arc<Job>) -> Process {
-        let mut flipped = job::Flipped::new();
-        job.count_in(&mut flipped);
-        job::notify(flipped);
         Process {
-            space,
-            pid,
+            core: object::process::Process::new(space, pid, job),
             umask: AtomicU32::new(DEFAULT_UMASK),
-            started: crate::syscall::time::now_nanos(),
             identity: SpinLock::new(Identity::default()),
-            handles: SpinLock::new(HandleTable::new(object::HANDLE_LIMIT)),
             files: Arc::new(SpinLock::new(fd::standard_streams())),
             fs: Arc::new(SpinLock::new(fs::root_disk::process_context())),
             state: SpinLock::new(State::default()),
@@ -308,7 +299,6 @@ impl Process {
             released: AtomicBool::new(false),
             release_finished: AtomicBool::new(false),
             leader_status: AtomicI32::new(0),
-            exit: Arc::new(Exit::new()),
             tasks: SpinLock::new(Vec::new()),
             threads: SpinLock::new(Vec::new()),
             parent: SpinLock::new(Weak::new()),
@@ -330,8 +320,6 @@ impl Process {
             // A process the kernel starts is root's. A fork child takes its
             // parent's instead, below.
             credentials: SpinLock::new(Credentials::root()),
-            membership: SpinLock::new(job),
-            counted: AtomicBool::new(true),
         }
     }
 
@@ -373,7 +361,7 @@ impl Process {
         job: Option<Arc<Job>>,
     ) -> Process {
         let job = job.unwrap_or_else(|| parent.job());
-        let mut child = Process::with_pid(space, registry::allocate().unwrap_or(0), job);
+        let mut child = Process::with_pid(space, object::process::allocate().unwrap_or(0), job);
         child.files = if share_files {
             Arc::clone(&parent.files)
         } else {
@@ -397,66 +385,6 @@ impl Process {
         child
     }
 
-    /// What it can see.
-    pub(crate) fn space(&self) -> &Arc<AddressSpace> {
-        &self.space
-    }
-
-    /// The job it is in: its cgroup.
-    pub(crate) fn job(&self) -> Arc<Job> {
-        Arc::clone(&self.membership.lock())
-    }
-
-    /// Move it into `to`, counting it there and not where it was, if it is
-    /// still counted. Its threads go with it: a job holds processes.
-    ///
-    /// # Errors
-    ///
-    /// [`JobError::Killed`] if `to`, or a job above it, has been killed;
-    /// [`JobError::Removed`] if `rmdir` took it; [`JobError::Internal`] if
-    /// the no-internal-process rule keeps processes out of it.
-    pub(crate) fn move_to(&self, to: &Arc<Job>) -> Result<(), JobError> {
-        let mut flipped = job::Flipped::new();
-        let left = {
-            let mut membership = self.membership.lock();
-            if to.refuses() {
-                return Err(JobError::Killed);
-            }
-            if Arc::ptr_eq(&membership, to) {
-                return Ok(());
-            }
-            if self.counted.load(Ordering::Acquire) {
-                to.count_in_checked(&mut flipped)?;
-                membership.count_out(&mut flipped);
-            } else {
-                to.admits()?;
-            }
-            core::mem::replace(&mut *membership, Arc::clone(to))
-        };
-        // Outside the lock: it may be the last reference to that job.
-        drop(left);
-        job::notify(flipped);
-        Ok(())
-    }
-
-    /// Stop counting it among its job's live members, once. What makes its
-    /// job empty when it was the last.
-    fn leave_job(&self) {
-        let mut flipped = job::Flipped::new();
-        {
-            let membership = self.membership.lock();
-            if self.counted.swap(false, Ordering::AcqRel) {
-                membership.count_out(&mut flipped);
-            }
-        }
-        job::notify(flipped);
-    }
-
-    /// Its process id; zero if it was made with every pid in use.
-    pub(crate) fn pid(&self) -> u32 {
-        self.pid
-    }
-
     /// Its descriptor table.
     ///
     /// A lock rather than a closure, unlike [`Process::with_handles`], because
@@ -471,11 +399,6 @@ impl Process {
     /// path with it.
     pub(crate) fn fs_context(&self) -> &Arc<SpinLock<Context>> {
         &self.fs
-    }
-
-    /// When it was made, in nanoseconds on the counter.
-    pub(crate) fn started(&self) -> u64 {
-        self.started
     }
 
     /// Record what it was started as: the path, the file when there was one,
@@ -543,8 +466,8 @@ impl Process {
     ) -> Result<R, SpaceError> {
         let _heap = self.heap_lock.lock();
         // Not between the two halves of another thread's `MAP_FIXED`.
-        let _layout = self.space.layout();
-        let space = self.space.fork()?;
+        let _layout = self.space().layout();
+        let space = self.space().fork()?;
         Ok(make(space))
     }
 
@@ -552,16 +475,6 @@ impl Process {
     /// each waits for it.
     pub(crate) fn hold_heap_for_check(&self) -> SleepLockGuard<'_, ()> {
         self.heap_lock.lock()
-    }
-
-    /// Do something with the handle table, under its lock.
-    ///
-    /// Whatever `change` takes out of the table it should hand back rather
-    /// than drop, so that the object dies after the lock is released: an
-    /// object's drop can free memory and drain other objects, and
-    /// `crate::object::dispose` is where that belongs.
-    pub(crate) fn with_handles<R>(&self, change: impl FnOnce(&mut HandleTable) -> R) -> R {
-        change(&mut self.handles.lock())
     }
 
     /// Read or change the signal state, under the process lock.
@@ -624,7 +537,7 @@ impl Process {
         let _heap = self.heap_lock.lock();
         // The heap grows into whatever no mapping holds, which another
         // thread's `mmap` may be choosing at the same moment.
-        let _layout = self.space.layout();
+        let _layout = self.space().layout();
         let mut state = self.state.lock();
 
         let heap = match state.heap {
@@ -635,7 +548,7 @@ impl Process {
                 // page of gap so a heap overrun cannot walk straight into the
                 // last data page. An empty space starts from the lowest address
                 // anything may be mapped at, not from zero.
-                let after = self.space.highest_mapped().unwrap_or(MMAP_MIN_ADDR);
+                let after = self.space().highest_mapped().unwrap_or(MMAP_MIN_ADDR);
                 let start = after.saturating_add(PAGE_SIZE);
                 let heap = Heap {
                     start,
@@ -661,7 +574,7 @@ impl Process {
             // Growing. Reserve the new pages; they cost nothing until touched.
             let len = page_end - heap.mapped_to;
             if self
-                .space
+                .space()
                 .map_anonymous(heap.mapped_to, len, VmaFlags::READ_WRITE)
                 .is_err()
             {
@@ -697,7 +610,7 @@ impl Process {
             // `fork` would clone the tail into a child whose heap already
             // ends below it, so that the child's heap could never grow over
             // it. Both take this lock first, so neither can see the window.
-            let _ = self.space.unmap(page_end, old_mapped_to - page_end);
+            let _ = self.space().unmap(page_end, old_mapped_to - page_end);
         }
         heap.brk
     }
@@ -745,29 +658,6 @@ impl Process {
     /// Where its first task enters user mode, once a program is loaded.
     pub(crate) fn startup(&self) -> Option<Startup> {
         *self.startup.lock()
-    }
-
-    /// Whether it has terminated, by exiting or by being killed.
-    pub(crate) fn is_terminated(&self) -> bool {
-        self.exit.is_terminated()
-    }
-
-    /// How it ended, once it has.
-    pub(crate) fn exit_status(&self) -> Option<i32> {
-        self.is_terminated()
-            .then(|| self.exit.status.load(Ordering::Acquire))
-    }
-
-    /// A reference to how it ends, which outlives it.
-    pub(crate) fn exit_record(&self) -> Arc<Exit> {
-        Arc::clone(&self.exit)
-    }
-
-    /// The queue woken, once, when it has ended and let go of what it held --
-    /// for a waiter that has its own condition to check alongside
-    /// [`Process::is_released`].
-    pub(crate) fn exited(&self) -> &WaitQueue {
-        self.exit.exited()
     }
 
     /// Block until it has ended and let go of what it held, or `deadline`
@@ -958,7 +848,7 @@ impl Process {
         if self.ending.swap(true, Ordering::AcqRel) {
             return false;
         }
-        self.exit.record(status, signal);
+        self.exit().record(status, signal);
         // A `vfork` parent waits for this, and a thread in `pause` or stopped
         // waits for a signal or a continue; none should wait for the release.
         self.vfork_done.wake_all();
@@ -1022,8 +912,8 @@ impl Process {
         // descriptors are closed: a driver's pins are given back or kept
         // before `devmgr` learns that the driver has gone. Taken before the
         // queue is woken, so a waiter it wakes sees the handle's `TERMINATED`.
-        let observers = self.exit.close();
-        self.exit.exited.wake_all();
+        let observers = self.exit().close();
+        self.exited().wake_all();
         self.vfork_done.wake_all();
         self.signalled.wake_all();
         self.resumed.wake_all();
@@ -1083,7 +973,7 @@ impl Process {
         // its orphans have gone on, so a parent that reaps it finds nothing left
         // to do, and the queue woken again for the waiters that wait for this.
         self.release_finished.store(true, Ordering::Release);
-        self.exit.exited.wake_all();
+        self.exited().wake_all();
         // Its parent is told -- woken, and sent the signal it was created with,
         // `SIGCHLD` for a fork. It stays in the parent's list, ended, until
         // `wait4` takes it.
@@ -1094,14 +984,9 @@ impl Process {
     /// How its end is reported to a parent: the `si_code` and the status or
     /// signal that goes with it. Valid once it has terminated.
     fn end_report(&self) -> (i32, i32) {
-        let signal = self.exit.ended_by.load(Ordering::Acquire);
-        if signal == 0 {
-            (
-                kill::CLD_EXITED,
-                self.exit.status.load(Ordering::Acquire) & 0xFF,
-            )
-        } else {
-            (kill::CLD_KILLED, signal as i32)
+        match self.exit().signal() {
+            None => (kill::CLD_EXITED, self.exit_status().unwrap_or(0) & 0xFF),
+            Some(signal) => (kill::CLD_KILLED, signal as i32),
         }
     }
 
@@ -1469,8 +1354,8 @@ impl Process {
     /// Make it the leader of a new session and of a new process group, both
     /// numbered by its pid: what `setsid` does.
     pub(crate) fn lead_new_session(&self) {
-        self.sid.store(self.pid, Ordering::Release);
-        self.pgid.store(self.pid, Ordering::Release);
+        self.sid.store(self.pid(), Ordering::Release);
+        self.pgid.store(self.pid(), Ordering::Release);
     }
 
     /// The signal its parent is told with when it ends.
@@ -1547,18 +1432,15 @@ impl Process {
     /// bits.
     pub(crate) fn wait_status(&self) -> Option<i32> {
         let status = self.exit_status()?;
-        let signal = self.exit.ended_by.load(Ordering::Acquire);
-        Some(if signal == 0 {
-            (status & 0xFF) << 8
-        } else {
-            (signal & 0x7F) as i32
+        Some(match self.exit().signal() {
+            None => (status & 0xFF) << 8,
+            Some(signal) => (signal & 0x7F) as i32,
         })
     }
 
     /// The signal that ended it, if a signal did.
     pub(crate) fn ended_by_signal(&self) -> Option<u32> {
-        let signal = self.exit.ended_by.load(Ordering::Acquire);
-        (self.is_terminated() && signal != 0).then_some(signal)
+        self.exit().signal()
     }
 
     /// Record a successful `execve`, releasing a `vfork` parent.
@@ -1581,252 +1463,22 @@ impl Process {
     }
 }
 
-/// How a process ended, and who is waiting to hear.
-///
-/// Apart from the process, because this is what a handle to a process holds.
-/// A handle kept past the end must not keep the address space and everything
-/// else the process owned, and a wait needs nothing else. [`Process::end`]
-/// records how it ended and [`Process::release`] closes it; nothing else
-/// writes it.
-#[derive(Debug)]
-pub(crate) struct Exit {
-    /// Its exit status, valid once `terminated` is.
-    status: AtomicI32,
-    /// The signal that ended it, or zero.
-    ended_by: AtomicU32,
-    /// The terminated condition. Set after `status`, so a reader who sees it
-    /// always reads the status that goes with it.
-    terminated: AtomicBool,
-    /// Woken as it lets go of what it held: once its handles and descriptors are
-    /// closed, and again once it is released.
-    exited: WaitQueue,
-    /// Port registrations waiting for it to end, and `None` once it has
-    /// closed its handles and descriptors and they have been taken.
-    observers: SpinLock<Option<Vec<Observer>>>,
-    /// Set under the observers lock as they are taken, so that
-    /// [`Exit::is_closed`], which every poll of a handle's signals asks, need
-    /// not take the lock.
-    closed: AtomicBool,
-}
+impl core::ops::Deref for Process {
+    type Target = object::process::Process;
 
-impl Exit {
-    /// Not ended, and watched by nobody.
-    fn new() -> Exit {
-        Exit {
-            status: AtomicI32::new(0),
-            ended_by: AtomicU32::new(0),
-            terminated: AtomicBool::new(false),
-            exited: WaitQueue::new(),
-            observers: SpinLock::new(Some(Vec::new())),
-            closed: AtomicBool::new(false),
-        }
-    }
-
-    /// Whether it has terminated, by exiting or by being killed. True from the
-    /// moment it starts to end, before it has let go of anything.
-    pub(crate) fn is_terminated(&self) -> bool {
-        self.terminated.load(Ordering::Acquire)
-    }
-
-    /// Whether it has ended and closed its handles and descriptors: what a
-    /// handle's `TERMINATED` signal reports, a little after
-    /// [`Exit::is_terminated`] is true.
-    pub(crate) fn is_closed(&self) -> bool {
-        self.closed.load(Ordering::Acquire)
-    }
-
-    /// Its exit status, once it has terminated.
-    pub(crate) fn status(&self) -> Option<i32> {
-        self.is_terminated()
-            .then(|| self.status.load(Ordering::Acquire))
-    }
-
-    /// The signal that ended it, if one did.
-    pub(crate) fn signal(&self) -> Option<u32> {
-        let signal = self.ended_by.load(Ordering::Acquire);
-        (self.is_terminated() && signal != 0).then_some(signal)
-    }
-
-    /// The queue woken as it lets go of what it held; see
-    /// [`Process::is_released`].
-    pub(crate) fn exited(&self) -> &WaitQueue {
-        &self.exited
-    }
-
-    /// Queue `observer`'s packet once it has ended and closed its handles, or
-    /// at once if it already has.
-    ///
-    /// # Errors
-    ///
-    /// [`PortError::Full`] at [`port::MAX_OBSERVERS`] registrations.
-    pub(crate) fn observe(&self, observer: Observer) -> Result<(), PortError> {
-        debug_assert!(
-            crate::arch::interrupts_enabled(),
-            "a process's watchers were reached with interrupts off, which its plain lock may not be"
-        );
-        let mut observers = self.observers.lock();
-        if let Some(list) = observers.as_mut() {
-            return port::register(list, observer);
-        }
-        drop(observers);
-        observer.fire(ObjectSignals::TERMINATED);
-        Ok(())
-    }
-
-    /// Record how it ended.
-    fn record(&self, status: i32, signal: u32) {
-        self.ended_by.store(signal, Ordering::Release);
-        self.status.store(status, Ordering::Release);
-        self.terminated.store(true, Ordering::Release);
-    }
-
-    /// Take the registrations waiting for it, for the caller to fire once it
-    /// holds no lock, and refuse to keep any more.
-    fn close(&self) -> Vec<Observer> {
-        debug_assert!(
-            crate::arch::interrupts_enabled(),
-            "a process's watchers were reached with interrupts off, which its plain lock may not be"
-        );
-        let mut observers = self.observers.lock();
-        self.closed.store(true, Ordering::Release);
-        observers.take().unwrap_or_default()
+    /// The core process inside it: see the field.
+    fn deref(&self) -> &object::process::Process {
+        &self.core
     }
 }
 
-/// What a handle to a process holds.
-///
-/// Its [`Exit`], and not the process: see there. A handle `process_create`
-/// made also holds the process's [`Control`], shared by every duplicate of
-/// that handle: the weak way back to the process that `process_start` needs.
-#[derive(Debug, Clone)]
-pub(crate) struct ProcessRef {
-    /// How it ended.
-    exit: Arc<Exit>,
-    /// The way back to it, for a process made through the native ABI.
-    control: Option<Arc<Control>>,
-}
-
-/// The way from a created process's handles back to the process.
-///
-/// Weak, so that a handle kept past the end keeps nothing of the process but
-/// its [`Exit`]. Strong only until it starts: nothing else holds a process no
-/// task runs, so its handles have to, and a start hands that reference over to
-/// the process's task.
-#[derive(Debug)]
-pub(crate) struct Control {
-    /// The process, while anything else holds it.
-    process: Weak<Process>,
-    /// The only strong reference to a process nobody has started.
-    unstarted: SpinLock<Option<Arc<Process>>>,
-}
-
-impl ProcessRef {
-    /// A handle's view of `process`, with no way back to it.
-    pub(crate) fn new(process: &Process) -> ProcessRef {
-        ProcessRef {
-            exit: Arc::clone(&process.exit),
-            control: None,
-        }
+impl Host for Process {
+    fn core(&self) -> &object::process::Process {
+        &self.core
     }
 
-    /// A handle to `process`, made and not yet started, which holds it until a
-    /// start takes it over or the last such handle is closed.
-    pub(crate) fn created(process: &Arc<Process>) -> ProcessRef {
-        ProcessRef {
-            exit: Arc::clone(&process.exit),
-            control: Some(Arc::new(Control {
-                process: Arc::downgrade(process),
-                unstarted: SpinLock::new(Some(Arc::clone(process))),
-            })),
-        }
-    }
-
-    /// How it ended, and who is waiting to hear.
-    pub(crate) fn exit(&self) -> &Exit {
-        &self.exit
-    }
-
-    /// Its exit status, once it has terminated.
-    pub(crate) fn exit_status(&self) -> Option<i32> {
-        self.exit
-            .is_terminated()
-            .then(|| self.exit.status.load(Ordering::Acquire))
-    }
-
-    /// The way back to the process, if this handle was made with one.
-    pub(crate) fn control(&self) -> Option<&Arc<Control>> {
-        self.control.as_ref()
-    }
-}
-
-impl Control {
-    /// The process, if it still exists.
-    ///
-    /// Never asked on a wait path: a wait needs only the [`Exit`], and a
-    /// process that has gone answers `None` here, not a panic.
-    pub(crate) fn process(&self) -> Option<Arc<Process>> {
-        self.process.upgrade()
-    }
-
-    /// Let go of the reference that kept it before it started, now that its
-    /// task holds it.
-    pub(crate) fn started(&self) {
-        let held = self.unstarted.lock().take();
-        drop(held);
-    }
-}
-
-impl Drop for Control {
-    /// End a process nobody started, once no handle is left that could start
-    /// it.
-    ///
-    /// Such a process is held only here. Letting go of it without ending it
-    /// would free it without [`Process::end`], so no status would be recorded
-    /// and its watchers would never hear. So it is killed first, and `end`
-    /// runs.
-    ///
-    /// # Where this runs
-    ///
-    /// Only where a handle object is dropped. Every such drop goes through
-    /// `object::dispose`, and every caller of that is in task context with
-    /// interrupts on:
-    /// - a native call's handler;
-    /// - a channel's own drop or refusal, reached only inside such a drain;
-    /// - [`Process::end`] closing a handle table, which since the fault-kill
-    ///   fix never runs with interrupts masked.
-    ///
-    /// A drain running on another processor is that processor's calling task,
-    /// not an interrupt. The idle reaper, which the rule "never kill in Drop"
-    /// is about, drops only processes whose `end` has already emptied their
-    /// table, so it never holds a `Control`. The assertion is the tripwire, as
-    /// `Exit::close`'s is. The reference is taken out of the lock before the
-    /// kill, so `end` runs under nothing of this lock's.
-    fn drop(&mut self) {
-        let unstarted = self.unstarted.lock().take();
-        if let Some(process) = unstarted {
-            debug_assert!(
-                crate::arch::interrupts_enabled(),
-                "an unstarted process's last handle was dropped with interrupts off"
-            );
-            kill(&process, job::KILLED_STATUS);
-        }
-    }
-}
-
-impl Drop for Process {
-    /// Give the pid back. The number is not used again until allocation comes
-    /// round to it; see [`registry`].
-    ///
-    /// A process dropped without being released -- one built and never
-    /// shared, as a failed `execve` of a new program leaves -- leaves its
-    /// job's count here instead. A released one already has, and this does
-    /// nothing, so the reaper, which drops released processes only, never
-    /// wakes anything from here.
-    fn drop(&mut self) {
-        self.leave_job();
-        if self.pid != 0 {
-            registry::release(self.pid);
-        }
+    fn kill(&self, status: i32) {
+        kill(self, status);
     }
 }
 

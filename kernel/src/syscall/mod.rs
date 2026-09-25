@@ -279,7 +279,7 @@ fn handle(call: Syscall, args: &SyscallArgs, process: Option<&Process>) -> Resul
         // thread of this process. A process's first thread is numbered by its
         // pid, which is what glibc's `raise` and a fork child's
         // `CLONE_CHILD_SETTID` expect to agree.
-        let pid = process.map(Process::pid).filter(|&pid| pid != 0);
+        let pid = process.map(|process| process.pid()).filter(|&pid| pid != 0);
         let tid = thread::current()
             .filter(|thread| {
                 process.is_some_and(|process| core::ptr::eq(thread.process().as_ref(), process))
