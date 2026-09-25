@@ -67,15 +67,45 @@ Measured 2026-09-25. Raw per-file data in `coverage-*.json`.
 
 ### 3.1 The suite, x86-64
 
-Union of four boot gates — `test-boot`, `test-threads`, `test-vfs`,
-`test-net` — on the debug profile:
+Union of five boot gates — `test-boot`, `test-threads`, `test-vfs`,
+`test-net`, `test-jobs` — on the debug profile:
 
 | Ring | Reached | Total | Covered |
 |---|---:|---:|---:|
-| `core` | 3,138 | 4,516 | **69.5%** |
-| `item` | 1,872 | 2,500 | **74.9%** |
-| **Certified item** | **5,010** | **7,016** | **71.4%** |
-| `load` (not claimed) | 6,620 | 10,916 | 60.6% |
+| `core` | 3,904 | 4,854 | **80.4%** |
+| `item` | 1,891 | 2,219 | **85.2%** |
+| **Certified item** | **5,795** | **7,073** | **81.9%** |
+| `load` (not claimed) | 7,938 | 10,874 | 73.0% |
+
+**Not every gate can contribute.** `test-btrfs`, `test-shell`, `test-sysfs` and
+`test-restart` all pass under the plugin and all write an empty trace: the
+plugin flushes its table when QEMU exits, and those gates end by killing it.
+Their coverage is unobtainable by this method until they are taught to power
+the guest down. That is a limitation of the collection, not of the tests, and
+it is why the suite above is five gates and not nine.
+
+### 3.1.1 The residual
+
+`coverage-residual-x86_64.json` lists all **1,278** statements in the item the
+suite did not reach, by file and line. DO-178C wants each one either driven by
+a new requirements-based test or justified as unreachable defensive code, and
+neither conversation can start from a percentage.
+
+Where it concentrates:
+
+| Statements | Ring | File |
+|---:|---|---|
+| 81 | core | `device.rs` |
+| 65 | core | `iommu/smmuv3.rs` |
+| 62 | core | `mm.rs` |
+| 62 | item | `syscall/native.rs` |
+| 62 | core | `vmap.rs` |
+| 60 | item | `main.rs` |
+
+`iommu/smmuv3.rs` is the shape of a justification rather than a gap: it is the
+AArch64 IOMMU, and no x86-64 run can reach it. Measuring the same residual on
+AArch64 would move those 65 statements from *unreached* to *covered*, which is
+an argument the analysis has to make per configuration rather than once.
 
 ### 3.2 Every architecture, and both profiles
 

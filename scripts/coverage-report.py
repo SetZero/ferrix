@@ -188,6 +188,13 @@ def main() -> int:
     parser.add_argument("--elf", type=Path, required=True)
     parser.add_argument("--json", type=Path, help="write the per-file detail here")
     parser.add_argument(
+        "--residual",
+        type=Path,
+        help="write every unreached statement in the item here, by file and "
+        "line. DO-178C wants each one either driven by a test or justified "
+        "as unreachable, and neither can start from a percentage.",
+    )
+    parser.add_argument(
         "--min-item",
         type=float,
         default=None,
@@ -232,6 +239,7 @@ def main() -> int:
 
     totals: dict[str, dict[str, int]] = defaultdict(lambda: {"total": 0, "hit": 0})
     per_file: dict[str, dict[str, int]] = {}
+    residual: dict[str, dict] = {}
 
     for path, lines in table.items():
         if "kernel/src/" not in path:
@@ -245,14 +253,19 @@ def main() -> int:
             continue  # a test file's own coverage is not the item's coverage
 
         total = hit = 0
-        for _line, addresses in lines.items():
+        missed: list[int] = []
+        for line, addresses in lines.items():
             total += 1
             if any(was_executed(address) for address in addresses):
                 hit += 1
+            else:
+                missed.append(line)
 
         totals[ring]["total"] += total
         totals[ring]["hit"] += hit
         per_file[rel] = {"ring": ring, "total": total, "hit": hit}
+        if missed:
+            residual[rel] = {"ring": ring, "lines": sorted(missed)}
 
     profile = "release" if "/release/" in str(args.elf) else "debug"
     print(f"coverage: {len(blocks)} basic blocks executed, "
@@ -290,6 +303,29 @@ def main() -> int:
             + "\n"
         )
         print(f"coverage: per-file detail in {args.json}")
+
+    if args.residual:
+        inside = {k: v for k, v in residual.items() if v["ring"] in ("core", "item")}
+        count = sum(len(v["lines"]) for v in inside.values())
+        args.residual.write_text(
+            json.dumps(
+                {
+                    "//": [
+                        "Every statement in the certified item that the measured",
+                        "runs did not reach. DO-178C table A-7 wants each either",
+                        "covered by a requirements-based test or justified as",
+                        "unreachable defensive code; this is the list that work",
+                        "starts from. A percentage cannot be argued with.",
+                    ],
+                    "profile": profile,
+                    "unreached": count,
+                    "files": dict(sorted(inside.items(), key=lambda kv: -len(kv[1]["lines"]))),
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+        print(f"coverage: {count} unreached statements listed in {args.residual}")
 
     if args.min_item is not None and item_total:
         if share < args.min_item:

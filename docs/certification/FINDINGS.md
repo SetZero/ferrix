@@ -4,7 +4,7 @@ The audit register for the item defined in [ITEM.md](ITEM.md). One entry per
 finding, each naming what was measured, which objective it bears on, and what
 would close it.
 
-26 findings are open and 9 are closed. No finding here is closed by argument:
+26 findings are open and 9 are closed. F-10 advanced from 71.4% to 81.9%. No finding here is closed by argument:
 a finding closes when the thing it describes stops being true and something in
 the build says so.
 
@@ -124,17 +124,25 @@ process object is in the wrong place.
 
 ## B. Verification
 
-### F-10 — statement coverage is 71.4%, not 100%
-**Major.** Measured over `test-boot`, `test-threads`, `test-vfs` and `test-net`:
-core 69.5%, item ring 74.9%, certified item 5,010 of 7,016 statements.
+### F-10 — statement coverage is 81.9%, not 100%
+**Major**, advanced 2026-09-25 from 71.4%. Adding `test-jobs` to the union
+takes the certified item to 5,795 of 7,073 statements: core 80.4%, item ring
+85.2%.
 
-DO-178C table A-7 objective 5 at DAL C wants statement coverage complete, with
-every gap either driven by a new requirements-based test or justified as
-unreachable defensive code. 71.4% is a real measurement where there was none,
-and it is not a pass.
+The residual is now *enumerated* rather than implied:
+`coverage-residual-x86_64.json` lists all 1,278 unreached statements by file
+and line, which is the list the remaining work starts from.
 
-*Closes when:* the remaining 2,006 statements are either covered or listed with
-justifications.
+Two things learned in the attempt. Four further gates -- `test-btrfs`,
+`test-shell`, `test-sysfs`, `test-restart` -- pass under the plugin and write
+an *empty* trace, because the plugin flushes when QEMU exits and those gates
+end by killing it; their coverage is unobtainable until they power the guest
+down instead. And part of the residual is unreachable by construction rather
+than untested: `iommu/smmuv3.rs` is 65 statements of AArch64 IOMMU that no
+x86-64 run can reach, so the justification has to be made per configuration.
+
+*Closes when:* every one of the 1,278 is either covered by a test naming a
+requirement or carries a written justification.
 
 ### F-11 — coverage measures the debug profile, the item ships release
 **Closed 2026-09-25.** The release profile is now measured:

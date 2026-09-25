@@ -61,8 +61,9 @@ boundary.
 | Item product code | 48,887 lines |
 | Uncertified load | 44,330 lines |
 | In-kernel self-tests | 31,107 lines |
-| Statement coverage, certified item | **71.4%** |
-| Statement coverage, core ring | 69.5% |
+| Statement coverage, certified item | **81.9%** |
+| Statement coverage, core ring | 80.4% |
+| Unreached statements, enumerated | 1,278 |
 | SOUP in the item | **0** |
 | External crates, host-side | 21 |
 | Upward boundary references | **52**, from 62 at the start of the work |
@@ -111,7 +112,7 @@ decomposed to the item's modules.
 
 62 objectives, 5 requiring independence.
 
-*In place:* statement coverage is now measurable and measured (F-10 at 71.4%),
+*In place:* statement coverage is now measurable and measured (F-10 at 81.9%),
 which was the objective everyone assumes is impossible for a kernel. 303 lines
 of assembly across 19 allow-listed sites makes the source-to-object question
 tractable. Zero Cargo features in the item means no configuration space to
