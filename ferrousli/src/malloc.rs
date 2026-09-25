@@ -91,7 +91,7 @@
 use core::ffi::{c_int, c_void};
 use core::mem::size_of;
 use core::ptr::{null_mut, with_exposed_provenance_mut};
-use core::sync::atomic::{AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use crate::lock::SpinLock;
 use crate::syscall::{self, nr};
@@ -560,8 +560,8 @@ fn pointer(addr: usize) -> *mut c_void {
 
 /// Allocates `size` bytes aligned for any object. `malloc(0)` returns a unique
 /// pointer. On failure it returns null and sets `errno` to `ENOMEM`.
-#[cfg_attr(not(test), unsafe(no_mangle))]
-pub extern "C" fn malloc(size: usize) -> *mut c_void {
+#[cfg_attr(not(test), unsafe(export_name = "malloc"))]
+pub extern "C" fn own_malloc(size: usize) -> *mut c_void {
     pointer(allocate(size).0)
 }
 
@@ -571,8 +571,8 @@ pub extern "C" fn malloc(size: usize) -> *mut c_void {
 ///
 /// `p` must be null or a live pointer from this allocator. The program is
 /// stopped for some pointers that are not; see the module documentation.
-#[cfg_attr(not(test), unsafe(no_mangle))]
-pub unsafe extern "C" fn free(p: *mut c_void) {
+#[cfg_attr(not(test), unsafe(export_name = "free"))]
+pub unsafe extern "C" fn own_free(p: *mut c_void) {
     if !p.is_null() {
         release(p.addr());
     }
@@ -580,8 +580,8 @@ pub unsafe extern "C" fn free(p: *mut c_void) {
 
 /// Allocates zeroed memory for `nmemb` objects of `size` bytes each. Fails with
 /// `ENOMEM` if the product overflows.
-#[cfg_attr(not(test), unsafe(no_mangle))]
-pub extern "C" fn calloc(nmemb: usize, size: usize) -> *mut c_void {
+#[cfg_attr(not(test), unsafe(export_name = "calloc"))]
+pub extern "C" fn own_calloc(nmemb: usize, size: usize) -> *mut c_void {
     let Some(total) = nmemb.checked_mul(size) else {
         return pointer(out_of_memory().0);
     };
@@ -611,10 +611,10 @@ pub extern "C" fn calloc(nmemb: usize, size: usize) -> *mut c_void {
 /// # Safety
 ///
 /// `p` must be null or a live pointer from this allocator.
-#[cfg_attr(not(test), unsafe(no_mangle))]
-pub unsafe extern "C" fn realloc(p: *mut c_void, size: usize) -> *mut c_void {
+#[cfg_attr(not(test), unsafe(export_name = "realloc"))]
+pub unsafe extern "C" fn own_realloc(p: *mut c_void, size: usize) -> *mut c_void {
     if p.is_null() {
-        return malloc(size);
+        return own_malloc(size);
     }
     let addr = p.addr();
     let block = owner(addr);
@@ -665,6 +665,141 @@ pub unsafe extern "C" fn realloc(p: *mut c_void, size: usize) -> *mut c_void {
     let _ = unsafe { string::memcpy(pointer(new), p, keep) };
     release(addr);
     pointer(new)
+}
+
+/// The program's own `malloc`, `free`, `calloc` and `realloc`, where it
+/// brings them, as addresses; zero where the library's own answer.
+///
+/// A program may define the four itself -- Chrome does, over PartitionAlloc --
+/// and every other object's calls then bind to its definitions. This
+/// library's own calls cannot: they are Rust calls, which no symbol binding
+/// reaches. So memory `strdup` or `getline` hands out would come from this
+/// allocator and be freed into the program's, which glibc and musl avoid by
+/// calling their own allocator through the interposable names. Here each of
+/// [`malloc`], [`free`], [`calloc`] and [`realloc`], the names the rest of
+/// the library calls, asks the loader once which definition is the
+/// process's, and calls the program's where it is not this library's.
+/// `own_malloc` and the rest are the library's, exported under the C names.
+struct Replacements {
+    /// Whether the loader has been asked.
+    resolved: AtomicBool,
+    malloc: AtomicUsize,
+    free: AtomicUsize,
+    calloc: AtomicUsize,
+    realloc: AtomicUsize,
+}
+
+/// The one set.
+static REPLACEMENTS: Replacements = Replacements {
+    resolved: AtomicBool::new(false),
+    malloc: AtomicUsize::new(0),
+    free: AtomicUsize::new(0),
+    calloc: AtomicUsize::new(0),
+    realloc: AtomicUsize::new(0),
+};
+
+/// The set, asking the loader first if nobody has yet. Two threads asking at
+/// once find the same answers.
+fn replacements() -> &'static Replacements {
+    let set = &REPLACEMENTS;
+    if set.resolved.load(Ordering::Acquire) {
+        return set;
+    }
+    if let Some(loader) = crate::loader::dlfcn() {
+        // The object a definition is in. Not its address: this library's
+        // own `malloc` is exported, so an address of it taken here may come
+        // through the GOT, which holds the program's.
+        let object_of = |address: usize| {
+            let mut info = crate::link::DlInfo {
+                dli_fname: core::ptr::null(),
+                dli_fbase: null_mut(),
+                dli_sname: core::ptr::null(),
+                dli_saddr: null_mut(),
+            };
+            // SAFETY: `info` is a live `Dl_info` to fill.
+            let found =
+                unsafe { (loader.dladdr)(with_exposed_provenance_mut(address), &raw mut info) };
+            (found != 0).then_some(info.dli_fbase.addr())
+        };
+        let this_library = object_of(replacements as *const () as usize);
+        let ask = |name: &core::ffi::CStr, slot: &AtomicUsize| {
+            // SAFETY: a null handle searches every object, and the name is a
+            // NUL-terminated string.
+            let found = unsafe { (loader.dlsym)(null_mut(), name.as_ptr()) }.addr();
+            if found != 0 && this_library.is_some() && object_of(found) != this_library {
+                slot.store(found, Ordering::Relaxed);
+            }
+        };
+        ask(c"malloc", &set.malloc);
+        ask(c"free", &set.free);
+        ask(c"calloc", &set.calloc);
+        ask(c"realloc", &set.realloc);
+    }
+    set.resolved.store(true, Ordering::Release);
+    set
+}
+
+/// `malloc`, the process's: the program's if it brought one, else
+/// [`own_malloc`]. What the rest of the library calls.
+pub extern "C" fn malloc(size: usize) -> *mut c_void {
+    match replacements().malloc.load(Ordering::Relaxed) {
+        0 => own_malloc(size),
+        at => {
+            // SAFETY: the address is the program's `malloc`.
+            let program: extern "C" fn(usize) -> *mut c_void = unsafe { core::mem::transmute(at) };
+            program(size)
+        }
+    }
+}
+
+/// `free`, the process's, as [`malloc`] is.
+///
+/// # Safety
+///
+/// `p` must be null or a live pointer from the process's [`malloc`].
+pub unsafe extern "C" fn free(p: *mut c_void) {
+    match replacements().free.load(Ordering::Relaxed) {
+        // SAFETY: the caller's contract.
+        0 => unsafe { own_free(p) },
+        at => {
+            // SAFETY: the address is the program's `free`.
+            let program: unsafe extern "C" fn(*mut c_void) = unsafe { core::mem::transmute(at) };
+            // SAFETY: the caller's contract, with the program's allocator.
+            unsafe { program(p) }
+        }
+    }
+}
+
+/// `calloc`, the process's, as [`malloc`] is.
+pub extern "C" fn calloc(nmemb: usize, size: usize) -> *mut c_void {
+    match replacements().calloc.load(Ordering::Relaxed) {
+        0 => own_calloc(nmemb, size),
+        at => {
+            // SAFETY: the address is the program's `calloc`.
+            let program: extern "C" fn(usize, usize) -> *mut c_void =
+                unsafe { core::mem::transmute(at) };
+            program(nmemb, size)
+        }
+    }
+}
+
+/// `realloc`, the process's, as [`malloc`] is.
+///
+/// # Safety
+///
+/// `p` must be null or a live pointer from the process's [`malloc`].
+pub unsafe extern "C" fn realloc(p: *mut c_void, size: usize) -> *mut c_void {
+    match replacements().realloc.load(Ordering::Relaxed) {
+        // SAFETY: the caller's contract.
+        0 => unsafe { own_realloc(p, size) },
+        at => {
+            // SAFETY: the address is the program's `realloc`.
+            let program: unsafe extern "C" fn(*mut c_void, usize) -> *mut c_void =
+                unsafe { core::mem::transmute(at) };
+            // SAFETY: the caller's contract, with the program's allocator.
+            unsafe { program(p, size) }
+        }
+    }
 }
 
 /// `realloc` for `nmemb` objects of `size` bytes each, failing with `ENOMEM`

@@ -1060,7 +1060,13 @@ pub extern "C" fn pthread_atfork(
     parent: Option<extern "C" fn()>,
     child: Option<extern "C" fn()>,
 ) -> c_int {
-    let node = crate::malloc::malloc(size_of::<AtforkHandlers>()).cast::<AtforkHandlers>();
+    // This library's own allocator, not the process's: a node never leaves
+    // the library, and a program's allocator registers its fork handlers from
+    // inside itself -- PartitionAlloc does, holding its lock -- so the
+    // process's `malloc` here would call back into it and wait on that lock
+    // for ever. glibc keeps its first handlers in static storage for the same
+    // reason.
+    let node = crate::malloc::own_malloc(size_of::<AtforkHandlers>()).cast::<AtforkHandlers>();
     if node.is_null() {
         return errno::ENOMEM;
     }
