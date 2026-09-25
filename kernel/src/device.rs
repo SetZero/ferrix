@@ -323,6 +323,9 @@ impl Reserved {
 
 /// A PCI function's MSI-X table, and the vectors minted from it.
 struct MsixTable {
+    /// The function's requester ID, which its message writes carry and a
+    /// GICv3's ITS translates them by.
+    requester: u32,
     /// Physical address of the function's configuration space.
     config_phys: u64,
     /// Offset of the MSI-X capability in it.
@@ -341,6 +344,7 @@ struct MsixTable {
 impl fmt::Debug for MsixTable {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("MsixTable")
+            .field("requester", &self.requester)
             .field("config_phys", &self.config_phys)
             .field("capability", &self.capability)
             .field("table_phys", &self.table_phys)
@@ -425,7 +429,7 @@ impl MsixTable {
         if let Some(&number) = minted.get(&entry) {
             return Ok(vector(number));
         }
-        let msi = arch::msi_allocate()?;
+        let msi = arch::msi_allocate(self.requester)?;
         let at = u64::from(entry) * MSIX_ENTRY_SIZE;
         table.write32(at + ENTRY_ADDRESS_LOW, msi.address as u32);
         table.write32(at + ENTRY_ADDRESS_HIGH, (msi.address >> 32) as u32);
@@ -743,10 +747,9 @@ impl DeviceNode {
                 }
             }
         }
-        node.msix = seen
-            .config_phys
-            .zip(msix)
-            .and_then(|(config_phys, found)| MsixTable::of(config_phys, found, regions, reserved));
+        node.msix = seen.config_phys.zip(msix).and_then(|(config_phys, found)| {
+            MsixTable::of(address, config_phys, found, regions, reserved)
+        });
         node
     }
 
@@ -986,6 +989,7 @@ impl MsixTable {
     /// The table `msix` describes, if vectors can be minted from it: in an
     /// assigned memory BAR, whole, and clear of memory the kernel owns.
     fn of(
+        address: Address,
         config_phys: u64,
         (capability, msix): &(Capability, MsiX),
         regions: &[Region],
@@ -1006,6 +1010,7 @@ impl MsixTable {
             return None;
         }
         Some(MsixTable {
+            requester: u32::from(address.requester_id()),
             config_phys,
             capability: capability.offset,
             table_phys,

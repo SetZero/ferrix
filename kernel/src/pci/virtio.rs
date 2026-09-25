@@ -38,6 +38,7 @@
 //! It is also the harness the next piece of stage 10 needs: an IOMMU domain
 //! is proven when a descriptor pointing outside it faults.
 
+use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
 
 use ferrix_bootinfo::PAGE_SIZE;
@@ -51,7 +52,6 @@ use ferrix_pci::msix::{
 };
 use ferrix_pci::virtio::{Location, Transport};
 use ferrix_pci::{Address, ConfigSpace};
-use ferrix_sync::Once;
 use ferrix_virtio::pci::{
     self as transport, COMMON_CONFIG_LEN, CommonConfig, NO_VECTOR, QueueAddresses, TransportError,
 };
@@ -64,6 +64,7 @@ use crate::iommu;
 use crate::irq::{self, Msi};
 use crate::mm;
 use crate::mmio::Mmio;
+use crate::sync::SpinLock;
 use crate::timer;
 use crate::vmap;
 
@@ -284,19 +285,33 @@ fn on_entropy(_number: u32) {
     let _ = DELIVERED.fetch_add(1, Ordering::SeqCst);
 }
 
-/// The one message vector the check uses, allocated and registered the first
-/// time it asks and kept for the life of the machine: `irq` cannot take a
-/// handler back out, so a vector given back here could not be reused anyway.
-static VECTOR: Once<Result<Msi, &'static str>> = Once::new();
+/// The message vectors the check uses, by the requester ID of the device each
+/// is for: allocated and registered the first time that device is checked
+/// and kept for the life of the machine, since `irq` cannot take a handler
+/// back out, so a vector given back here could not be reused anyway.
+///
+/// One per device rather than one for all: a GICv3's ITS translates a message
+/// by the device that wrote it, and a vector mapped for one device is
+/// nothing when another writes the same message.
+static VECTORS: SpinLock<Vec<(u32, Msi)>> = SpinLock::new(Vec::new());
 
-/// The check's vector, or why there is none.
-fn vector() -> Result<Msi, &'static str> {
-    *VECTOR.call_once(|| {
-        let msi = arch::msi_allocate()?;
-        irq::register(msi.number, on_entropy)
-            .map_err(|_| "the MSI vector already has a handler")?;
-        Ok(msi)
-    })
+/// The check's vector for the device at `address`, or why there is none.
+fn vector(address: Address) -> Result<Msi, &'static str> {
+    let requester = u32::from(address.requester_id());
+    let known = VECTORS
+        .lock()
+        .iter()
+        .find(|(device, _)| *device == requester)
+        .map(|&(_, msi)| msi);
+    if let Some(msi) = known {
+        return Ok(msi);
+    }
+    // Enumeration checks one function at a time, so nothing else is minting
+    // this device's vector between the look above and the push below.
+    let msi = arch::msi_allocate(requester)?;
+    irq::register(msi.number, on_entropy).map_err(|_| "the MSI vector already has a handler")?;
+    VECTORS.lock().push((requester, msi));
+    Ok(msi)
 }
 
 /// MSI-X table entry 0, programmed and enabled, and what to put back.
@@ -323,7 +338,7 @@ impl Delivery {
         regions: &[Region],
         reserved: &Reserved,
     ) -> Result<Self, &'static str> {
-        let msi = vector()?;
+        let msi = vector(address)?;
         let offset = msix::entry_offset(table, 0).ok_or("the MSI-X table is empty")?;
         let region = regions
             .iter()

@@ -1254,13 +1254,15 @@ pub(crate) fn timer_irq() -> u32 {
     timer::irq()
 }
 
-/// Take an interrupt a device can raise by message, from the `GICv2m` frame.
+/// Take an interrupt the device whose writes carry requester ID `device` can
+/// raise by message: from the `GICv2m` frame, which ignores who writes, or
+/// from a GICv3's ITS, which translates by it.
 ///
 /// # Errors
 ///
-/// No usable frame, or every SPI it has already taken.
-pub(crate) fn msi_allocate() -> Result<crate::irq::Msi, &'static str> {
-    gic::msi_allocate()
+/// No usable frame or ITS, or every vector it has already taken.
+pub(crate) fn msi_allocate(device: u32) -> Result<crate::irq::Msi, &'static str> {
+    gic::msi_allocate(device)
 }
 
 /// The page a device's MSI writes land in, which an IOMMU domain must map.

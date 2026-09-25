@@ -1300,11 +1300,13 @@ pub(crate) fn timer_irq() -> u32 {
 }
 
 /// Take an interrupt a device can raise by message, from the `GICv2m` frame.
+/// Which device writes it, `_device`, makes no difference to a frame: the
+/// SPI is chosen by the data alone.
 ///
 /// # Errors
 ///
 /// No usable frame, or every SPI it has already taken.
-pub(crate) fn msi_allocate() -> Result<crate::irq::Msi, &'static str> {
+pub(crate) fn msi_allocate(_device: u32) -> Result<crate::irq::Msi, &'static str> {
     gicv2::msi_allocate()
 }
 

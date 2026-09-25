@@ -292,9 +292,9 @@ pub(crate) fn send_sgi_to_others() {
     }
 }
 
-/// Take an interrupt a device can raise by message. A GICv3 has none to give
-/// until its ITS has a driver.
-pub(crate) fn msi_allocate() -> Result<crate::irq::Msi, &'static str> {
+/// Take an interrupt the device whose writes carry requester ID `_device` can
+/// raise by message. A GICv3 has none to give until its ITS has a driver.
+pub(crate) fn msi_allocate(_device: u32) -> Result<crate::irq::Msi, &'static str> {
     if is_v3() {
         return Err("this GICv3's ITS has no driver, so there are no MSI vectors");
     }

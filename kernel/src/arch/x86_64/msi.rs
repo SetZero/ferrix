@@ -25,13 +25,15 @@ static TAKEN: AtomicU64 = AtomicU64::new(0);
 ///
 /// The message is aimed at the local APIC of the processor asking. Any
 /// processor can service the interrupt, so which one it lands on is a
-/// question of balance, not correctness.
+/// question of balance, not correctness. Which device writes it, `_device`,
+/// makes no difference: without interrupt remapping the vector is in the
+/// data.
 ///
 /// # Errors
 ///
 /// Every vector already taken, or a local APIC identifier too wide for a
 /// message's eight-bit destination.
-pub(crate) fn msi_allocate() -> Result<Msi, &'static str> {
+pub(crate) fn msi_allocate(_device: u32) -> Result<Msi, &'static str> {
     let destination =
         u8::try_from(apic::id()).map_err(|_| "this local APIC's identifier is too wide for MSI")?;
     let vector = allocate_vector().ok_or("every MSI vector is allocated")?;
