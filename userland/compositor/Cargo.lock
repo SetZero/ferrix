@@ -143,6 +143,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "compositor-hyprlang"
+version = "0.1.0"
+
+[[package]]
 name = "compositor-ipc"
 version = "0.1.0"
 dependencies = [
