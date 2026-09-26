@@ -49,6 +49,16 @@
 //! `/sbin/init` today, and one that starts to must not take a gate's boot
 //! from it.
 //!
+//! # A bootstrap channel
+//!
+//! Every program started here is started with a bootstrap channel, as
+//! `devmgr` is (`docs/INIT.md` §6, K2). The kernel writes one message on its
+//! end before the program runs -- `libs/native-abi`'s `bootstrap` module says
+//! what it holds -- and keeps that end for as long as the program runs, so a
+//! later message can carry what the first does not. The program takes its end
+//! with `process_bootstrap`; one that never does, which is every program a
+//! gate runs today, leaves it to be closed when it ends.
+//!
 //! # Which program, and how
 //!
 //! This file decides *which* program runs as pid 1 and says how it ended.
@@ -59,15 +69,22 @@
 //! that it did before the boot marker.
 
 use alloc::string::String;
+use alloc::sync::Arc;
 use alloc::vec::Vec;
+use core::convert::Infallible;
 use core::fmt;
 
 use ferrix_bootinfo::{BootView, option_in};
 use ferrix_linux_abi::errno::Errno;
+use ferrix_native_abi::bootstrap::init_hello;
+use ferrix_native_abi::rights::Rights;
 use ferrix_sync::Once;
 
 use crate::console::println;
 use crate::fallible;
+use crate::object::channel::Endpoint;
+use crate::object::{Object, Transfer};
+use crate::sync::SpinLock;
 use crate::syscall;
 use crate::syscall::program::ProgramFile;
 
@@ -104,6 +121,10 @@ pub(crate) struct Start<'a> {
     pub(crate) argv: &'a [&'a [u8]],
     /// Its environment.
     pub(crate) env: &'a [&'a [u8]],
+    /// Its end of its bootstrap channel, for the launcher to hold in the new
+    /// process for `process_bootstrap`; `None` when there was no memory for
+    /// one.
+    pub(crate) bootstrap: Option<Transfer>,
 }
 
 /// Why a program that opened would not start.
@@ -137,9 +158,9 @@ pub(crate) struct Launcher {
     pub(crate) open: fn(&[u8]) -> Result<Opened, Errno>,
     /// Read a `#!` line from the start of a file.
     pub(crate) interpreter_line: InterpreterLine,
-    /// Start a program as pid 1 with a fresh `AT_RANDOM`, and wait for it to
-    /// end: its status.
-    pub(crate) start: fn(&Start<'_>) -> Result<i32, Failure>,
+    /// Start a program as pid 1 with a fresh `AT_RANDOM` and its bootstrap,
+    /// and wait for it to end: its status.
+    pub(crate) start: fn(Start<'_>) -> Result<i32, Failure>,
 }
 
 /// The registered [`Launcher`].
@@ -154,6 +175,39 @@ pub(crate) fn register_launcher(launcher: &'static Launcher) {
 /// have something to start init with.
 pub(crate) fn has_launcher() -> bool {
     LAUNCHER.get().is_some()
+}
+
+/// The kernel's end of the bootstrap channel of the program started last,
+/// kept while it runs so that its end does not read as closed, and so that a
+/// later message has somewhere to be written.
+static CHANNEL: SpinLock<Option<Arc<Endpoint>>> = SpinLock::new(None);
+
+/// A bootstrap channel with the kernel's first message written on it: the
+/// kernel's end, and the program's (K2). What [`run`] gives each program it
+/// starts, and what the boot check reads. `None` when there was no memory
+/// for the channel or the message.
+pub(crate) fn bootstrap_channel() -> Option<(Arc<Endpoint>, Arc<Endpoint>)> {
+    let (kernel_end, program_end) = Endpoint::pair().ok()?;
+    let hello = fallible::try_to_vec(&init_hello()).ok()?;
+    kernel_end
+        .write(hello, 0, || Ok::<Vec<Transfer>, Infallible>(Vec::new()))
+        .ok()?;
+    Some((kernel_end, program_end))
+}
+
+/// A bootstrap for the next program: its end of a new channel, the kernel's
+/// end kept in [`CHANNEL`] in place of the last program's. `None`, said on a
+/// line, when there is no memory for one; the program starts without.
+fn next_bootstrap() -> Option<Transfer> {
+    let Some((kernel_end, program_end)) = bootstrap_channel() else {
+        println!("  init     no memory for a bootstrap channel; starting the program without one");
+        return None;
+    };
+    let last = CHANNEL.lock().replace(kernel_end);
+    // Through `dispose`, with the lock let go: what the last program sent the
+    // kernel and nobody read may carry handles.
+    crate::object::dispose(last.map(Object::Channel));
+    Some((Object::Channel(program_end), Rights::CHANNEL))
 }
 
 /// The command-line option naming the file pid 1 is started from.
@@ -348,7 +402,7 @@ fn run_built_in(launcher: &Launcher) {
     // shell is: its linker and libraries are not built in but read from the
     // initramfs, where `cargo xtask test-shell --interpreter` put them, and
     // the launcher reads them from there.
-    let status = (launcher.start)(&Start {
+    let status = (launcher.start)(Start {
         image: Image::BuiltIn(IMAGE),
         exe: BUILT_IN_EXE,
         exec_fn: name,
@@ -362,6 +416,7 @@ fn run_built_in(launcher: &Launcher) {
             b"PS1=ferrix# ",
             b"ENV=/etc/profile",
         ],
+        bootstrap: next_bootstrap(),
     });
     match status {
         Ok(status) => println!("  init     the shell exited with {status}"),
@@ -457,12 +512,13 @@ fn start(
     path: &[u8],
     argv: &[&[u8]],
 ) -> Result<i32, Failure> {
-    (launcher.start)(&Start {
+    (launcher.start)(Start {
         image: Image::File(&opened.program),
         exe: &opened.exe,
         exec_fn: path,
         argv,
         env: ENVIRONMENT,
+        bootstrap: next_bootstrap(),
     })
 }
 

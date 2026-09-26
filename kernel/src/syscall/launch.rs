@@ -149,11 +149,11 @@ fn open(path: &[u8]) -> Result<Opened, Errno> {
 }
 
 /// Start `start` as pid 1, with the dynamic linker it names read from the
-/// same root, and wait for it to end.
+/// same root and its bootstrap in its slot, and wait for it to end.
 ///
 /// Set-id bits are not honoured for pid 1: it starts as root already, as
 /// the built-in program always has.
-fn start(start: &Start<'_>) -> Result<i32, Failure> {
+fn start(start: Start<'_>) -> Result<i32, Failure> {
     let image = match start.image {
         Image::BuiltIn(bytes) => Source::Bytes(bytes),
         Image::File(program) => Source::File(program),
@@ -164,10 +164,17 @@ fn start(start: &Start<'_>) -> Result<i32, Failure> {
     })
 }
 
-/// [`start`], in the personality's own terms.
-fn run(start: &Start<'_>, image: Source<'_>) -> Result<i32, ExecError> {
+/// [`start`], in the personality's own terms. The bootstrap goes into the
+/// process between its load and its start, and is closed if it never runs.
+fn run(start: Start<'_>, image: Source<'_>) -> Result<i32, ExecError> {
     let context = fs::root_disk::process_context();
-    let linker = exec::linker_for(&context, image).map_err(ExecError::Linker)?;
+    let linker = match exec::linker_for(&context, image) {
+        Ok(linker) => linker,
+        Err(errno) => {
+            crate::object::dispose(start.bootstrap.map(|(object, _)| object));
+            return Err(ExecError::Linker(errno));
+        }
+    };
     let executable = exec::Executable {
         image,
         exe: start.exe,
@@ -175,5 +182,11 @@ fn run(start: &Start<'_>, image: Source<'_>) -> Result<i32, ExecError> {
         set_ids: fs::SetIds::NONE,
         interpreter: linker.as_ref().map(Source::File),
     };
-    exec::run_init(executable, start.argv, start.env, exec::random_bytes())
+    exec::run_init(
+        executable,
+        start.argv,
+        start.env,
+        exec::random_bytes(),
+        start.bootstrap,
+    )
 }

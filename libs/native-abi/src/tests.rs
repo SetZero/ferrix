@@ -4,6 +4,9 @@ use core::mem::{offset_of, size_of};
 
 use ferrix_linux_abi::nr::{from_aarch64, from_arm, from_x86_64};
 
+use crate::bootstrap::{
+    INIT_HELLO_BYTES, INIT_HELLO_HANDLES, INIT_HELLO_VERSION, init_hello, init_hello_version,
+};
 use crate::handle::Handle;
 use crate::nr::{self, ALL, FIRST, LAST, NativeCall};
 use crate::rights::{Requested, Rights, SAME_RIGHTS};
@@ -225,4 +228,36 @@ fn quotas_follow_the_job_calls() {
     for number in 0x102D..=0x102F {
         assert_eq!(nr::decode(number), None, "{number:#x} was assigned");
     }
+}
+
+#[test]
+fn init_hello_is_eight_fixed_bytes() {
+    assert_eq!(INIT_HELLO_BYTES, 8, "the header's length");
+    assert_eq!(INIT_HELLO_HANDLES, 0, "version 1 carries no handle");
+    assert_eq!(
+        init_hello(),
+        *b"FXIN\x01\x00\x00\x00",
+        "magic, then 1 little-endian"
+    );
+    assert_eq!(init_hello_version(&init_hello()), Some(INIT_HELLO_VERSION));
+}
+
+#[test]
+fn init_hello_is_recognised_and_nothing_else_is() {
+    let mut later = init_hello().to_vec();
+    later[4] = 2;
+    later.extend_from_slice(b"what version 2 adds");
+    assert_eq!(
+        init_hello_version(&later),
+        Some(2),
+        "a later version, longer"
+    );
+    assert_eq!(init_hello_version(&init_hello()[..7]), None, "short");
+    assert_eq!(init_hello_version(b""), None, "empty");
+    assert_eq!(init_hello_version(b"FXIM\x01\x00\x00\x00"), None, "magic");
+    assert_eq!(
+        init_hello_version(b"FXIN\x00\x00\x00\x00"),
+        None,
+        "version zero"
+    );
 }

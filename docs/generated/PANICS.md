@@ -2107,35 +2107,45 @@ See: kernel/src/power.rs finish; kernel/src/init.rs run; docs/INIT.md §8.3.
 ## FX-1502 — a kernel call init needs did not do what docs/INIT.md §11 says
 
 `syscall::init_calls_check::run` checks the kernel items of init's landing L8
-(docs/INIT.md §11). K3: `process_give` (0x1032) must move a handle out of the
-caller's table into its own child's bootstrap slot, and `process_bootstrap`
-(0x1033) must answer that handle once, with its rights, and zero after and in a
-process given nothing. A give must be refused with NOT_CHILD into another's
-child, NO_PROCESS for a pid naming nothing, ACCESS_DENIED without TRANSFER,
-BAD_HANDLE for handle zero, ALREADY_BOUND a second time, and BAD_STATE to a
-child that completed an execve with nothing given or that has ended, each
-leaving the handle with the caller. A handle given before an execve must be
-there after it, and one never taken must be closed when the child ends. Then a
-fork of a loaded program, given a channel end, must execve /tmp/k3-exec, take
-its bootstrap by number, close it and exit 0, the kept end hearing the close;
-its parent, given nothing, must exit with the close's EBADF (247).
+(docs/INIT.md §11). K2: the channel `init::bootstrap_channel` makes for pid 1,
+given as `exec::run_init` gives it, must hold exactly one message for
+`process_bootstrap` to find -- the 8-byte hello `FXIN` version 1 with no handle
+-- with the kernel's end open, and a program given it must take it by number,
+close it and exit 0, the kernel's end hearing the close. K3: `process_give`
+(0x1032) must move a handle out of the caller's table into its own child's
+bootstrap slot, and `process_bootstrap` (0x1033) must answer that handle once,
+with its rights, and zero after and in a process given nothing. A give must be
+refused with NOT_CHILD into another's child, NO_PROCESS for a pid naming
+nothing, ACCESS_DENIED without TRANSFER, BAD_HANDLE for handle zero,
+ALREADY_BOUND a second time, and BAD_STATE to a child that completed an execve
+with nothing given or that has ended, each leaving the handle with the caller. A
+handle given before an execve must be there after it, and one never taken must
+be closed when the child ends. Then a fork of a loaded program, given a channel
+end, must execve /tmp/k3-exec, take its bootstrap by number, close it and exit
+0, the kept end hearing the close; its parent, given nothing, must exit with the
+close's EBADF (247).
 
-1. `process_give` (`syscall/launch.rs`) judged the parent by something other
+1. `init::bootstrap_channel` no longer writes the hello from `libs/native-abi`'s
+   `bootstrap` module, or writes more than one message, or
+   `exec::give_bootstrap` does not put the program's end in the new process's
+   slot.
+2. `process_give` (`syscall/launch.rs`) judged the parent by something other
    than the child's own parent pointer, or `give_bootstrap`
    (`syscall/native.rs`) copied the handle rather than removing it, or moved it
    before checking the slot.
-2. `execve` did not seal the slot (`Process::mark_execed` calling
+3. `execve` did not seal the slot (`Process::mark_execed` calling
    `seal_bootstrap`), or sealed a slot already holding a handle, which the new
    program then cannot take.
-3. A process's release does not dispose of an untaken bootstrap
+4. A process's release does not dispose of an untaken bootstrap
    (`close_bootstrap`), so the peer never hears PEER_CLOSED.
-4. The program's machine code (`arch::USER_BOOTSTRAP_PROGRAM`) does not make the
+5. The program's machine code (`arch::USER_BOOTSTRAP_PROGRAM`) does not make the
    calls by the numbers `libs/native-abi` gives, or the dispatcher does not
    route a native number from a Linux program.
 
-See: kernel/src/syscall/init_calls_check.rs; kernel/src/syscall/native.rs;
-kernel/src/syscall/launch.rs; kernel/src/object/process.rs;
-libs/native-abi/src/nr.rs; docs/INIT.md §6, §11, §16.
+See: kernel/src/syscall/init_calls_check.rs; kernel/src/init.rs;
+kernel/src/syscall/native.rs; kernel/src/syscall/launch.rs;
+kernel/src/object/process.rs; libs/native-abi/src/nr.rs;
+libs/native-abi/src/bootstrap.rs; docs/INIT.md §6, §11, §16.
 
 <a id="fx-9001"></a>
 

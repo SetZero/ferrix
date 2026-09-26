@@ -34,6 +34,7 @@ use ferrix_vma::VmaFlags;
 
 use crate::arch;
 use crate::fallible::AllocError;
+use crate::object::{self, Transfer};
 use crate::syscall::fd;
 use crate::syscall::load::{self, LoadError, Source};
 use crate::syscall::process::{self, Process, Startup};
@@ -467,7 +468,8 @@ const INIT_PID_WAITS: u32 = 200;
 const INIT_PID_WAIT_NANOS: u64 = 5_000_000;
 
 /// [`run_executable`], as init: the process gets pid 1, as the first user
-/// process does on Linux.
+/// process does on Linux, and `bootstrap`, when there is one, waiting for it
+/// to take with `process_bootstrap` (`docs/INIT.md` §6, K2).
 ///
 /// A list of commands runs its programs one after another, each as init in
 /// turn, and the last one's pid can still be held for a moment by its task on
@@ -476,12 +478,13 @@ const INIT_PID_WAIT_NANOS: u64 = 5_000_000;
 ///
 /// # Errors
 ///
-/// [`ExecError`].
+/// [`ExecError`]; `bootstrap` is closed.
 pub(crate) fn run_init(
     program: Executable<'_>,
     args: &[&[u8]],
     env: &[&[u8]],
     random: [u8; ferrix_ustack::RANDOM_BYTES],
+    bootstrap: Option<Transfer>,
 ) -> Result<i32, ExecError> {
     for _ in 0..INIT_PID_WAITS {
         if registry::is_free(registry::INIT_PID) {
@@ -489,7 +492,38 @@ pub(crate) fn run_init(
         }
         crate::sched::sleep_for(INIT_PID_WAIT_NANOS);
     }
-    run_as(Process::new_init, program, args, env, random)
+    let process = match load_as(Process::new_init, program, args, env, random) {
+        Ok(process) => process,
+        Err(problem) => {
+            object::dispose(bootstrap.map(|(object, _)| object));
+            return Err(problem);
+        }
+    };
+    give_bootstrap(&process, bootstrap);
+    let task = match process::start(&process) {
+        Ok(task) => task,
+        Err(problem) => {
+            object::dispose(process.close_bootstrap());
+            return Err(ExecError::Start(problem));
+        }
+    };
+    drop(task);
+    process
+        .wait_for_exit(u64::MAX)
+        .ok_or(ExecError::Start("the program never reported how it ended"))
+}
+
+/// Hold `bootstrap` in `process`'s bootstrap slot, for its program to take
+/// with `process_bootstrap`: what the kernel gives pid 1 (K2). A process
+/// already given one, or past its `execve`, is refused, and the object is
+/// closed.
+pub(crate) fn give_bootstrap(process: &Process, bootstrap: Option<Transfer>) {
+    let Some((object, rights)) = bootstrap else {
+        return;
+    };
+    if let Err((_, object)) = process.with_bootstrap(|slot| slot.give(object, rights)) {
+        object::dispose([object]);
+    }
 }
 
 /// Load `program` with [`load_as`], run it, and wait for it to end.

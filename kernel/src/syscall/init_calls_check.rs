@@ -1,5 +1,15 @@
 //! The self-check of the kernel calls init needs beyond stage 13
-//! (`docs/INIT.md` §11): K3's `process_give` and `process_bootstrap`.
+//! (`docs/INIT.md` §11): K2's bootstrap channel for pid 1, and K3's
+//! `process_give` and `process_bootstrap`.
+//!
+//! **K2.** The channel `init::run` gives each program it starts is made by
+//! [`init::bootstrap_channel`], and given as `exec::run_init` gives it. Given
+//! so to a process of the check's own, `process_bootstrap` must answer a
+//! channel end on which exactly one message waits: the kernel's hello,
+//! [`INIT_HELLO_BYTES`] bytes with no handle, which `libs/native-abi`
+//! recognises as version 1, with the kernel's end still open. Given so to a
+//! loaded program, the program must take it by number and close it, and the
+//! kernel's end must hear the close.
 //!
 //! **K3, the calls.** Driven through [`native::dispatch`] by number, between a
 //! process and a fork of it, as the object checks drive the native calls. A
@@ -23,6 +33,9 @@
 use alloc::sync::Arc;
 
 use ferrix_linux_abi::errno::Errno;
+use ferrix_native_abi::bootstrap::{
+    INIT_HELLO_BYTES, INIT_HELLO_HANDLES, INIT_HELLO_VERSION, init_hello_version,
+};
 use ferrix_native_abi::handle::Handle;
 use ferrix_native_abi::nr;
 use ferrix_native_abi::rights::Rights;
@@ -31,7 +44,9 @@ use ferrix_native_abi::status;
 use ferrix_vfs::OpenFlags;
 
 use crate::arch;
+use crate::init;
 use crate::object::channel::Endpoint;
+use crate::object::check::{SCRATCH, Side};
 use crate::object::{self, Object};
 use crate::syscall::process::{self, Process};
 use crate::syscall::{exec, image, native};
@@ -64,6 +79,8 @@ pub(crate) struct Report {
     /// Whether a program took its bootstrap after an `execve`; `false` on an
     /// architecture with no program to run.
     pub(crate) from_a_program: bool,
+    /// The version of the hello read from init's bootstrap channel.
+    pub(crate) hello: u32,
 }
 
 /// Run every check.
@@ -72,10 +89,141 @@ pub(crate) struct Report {
 ///
 /// The first property that did not hold, as a sentence.
 pub(crate) fn run() -> Result<Report, &'static str> {
-    let mut report = Report::default();
+    let mut report = Report {
+        hello: check_the_kernel_greets_init()?,
+        ..Report::default()
+    };
+    check_init_takes_its_channel()?;
     check_give_and_take(&mut report)?;
     report.from_a_program = check_a_program_takes_it_after_execve()?;
     Ok(report)
+}
+
+/// Where the hello is read to, the handles it carries, and what the read
+/// reports, in a [`Side`]'s scratch region.
+const HELLO_AT: u64 = SCRATCH + 0x600;
+const HELLO_HANDLES_AT: u64 = SCRATCH + 0x700;
+const HELLO_ACTUAL_AT: u64 = SCRATCH + 0x800;
+
+/// Room offered for the hello: more than version 1 needs, so a longer
+/// message would be read whole and seen.
+const HELLO_ROOM: u64 = 64;
+
+/// K2: init's bootstrap, given as pid 1 is given it, holds one message, the
+/// kernel's hello, and its peer is open. The version read.
+fn check_the_kernel_greets_init() -> Result<u32, &'static str> {
+    let (kernel_end, program_end) =
+        init::bootstrap_channel().ok_or("no memory for init's bootstrap channel")?;
+    let side = Side::new()?;
+    exec::give_bootstrap(
+        &side.process,
+        Some((Object::Channel(program_end), Rights::CHANNEL)),
+    );
+    let outcome = read_the_hello(&side);
+    side.close_everything();
+    drop(kernel_end);
+    outcome
+}
+
+/// The body of [`check_the_kernel_greets_init`].
+fn read_the_hello(side: &Side) -> Result<u32, &'static str> {
+    let taken = side
+        .call(nr::PROCESS_BOOTSTRAP, &[])
+        .ok()
+        .and_then(|value| u32::try_from(value).ok())
+        .map(Handle)
+        .filter(|handle| handle.is_valid())
+        .ok_or("process_bootstrap in a process given init's channel answered no handle")?;
+    let read = side.call(
+        nr::CHANNEL_READ,
+        &[
+            reg(taken),
+            HELLO_AT,
+            HELLO_ROOM,
+            HELLO_HANDLES_AT,
+            4,
+            HELLO_ACTUAL_AT,
+        ],
+    );
+    if read != Ok(0) {
+        return Err("init's bootstrap channel held no message for it to read");
+    }
+    let bytes = side.get_u32(HELLO_ACTUAL_AT)? as usize;
+    let handles = side.get_u32(HELLO_ACTUAL_AT + 4)? as usize;
+    let message = side.get(HELLO_AT, bytes)?;
+    let version = init_hello_version(&message);
+    if bytes != INIT_HELLO_BYTES || handles != INIT_HELLO_HANDLES {
+        crate::console::println!(
+            "  initcall init's first message was {bytes} bytes and {handles} handles"
+        );
+        return Err("the first message on init's bootstrap channel is not version 1's shape");
+    }
+    if version != Some(INIT_HELLO_VERSION) {
+        return Err("the first message on init's bootstrap channel is not the kernel's hello");
+    }
+    if side.call(
+        nr::CHANNEL_READ,
+        &[
+            reg(taken),
+            HELLO_AT,
+            HELLO_ROOM,
+            HELLO_HANDLES_AT,
+            4,
+            HELLO_ACTUAL_AT,
+        ],
+    ) != Err(status::SHOULD_WAIT)
+    {
+        return Err("init's bootstrap channel held more than the one message");
+    }
+    let open = side.process.with_handles(|table| match table.get(taken) {
+        Ok((Object::Channel(end), _)) => !end.signals().intersects(Signals::PEER_CLOSED),
+        _ => false,
+    });
+    if !open {
+        return Err("the kernel's end of init's bootstrap channel was closed");
+    }
+    version.ok_or("the first message on init's bootstrap channel is not the kernel's hello")
+}
+
+/// K2, from a program: one given init's channel as pid 1 is takes it by
+/// number and closes it, and the kernel's end hears.
+fn check_init_takes_its_channel() -> Result<(), &'static str> {
+    if arch::USER_BOOTSTRAP_PROGRAM.is_empty() {
+        return Ok(());
+    }
+    let class = if size_of::<usize>() == 8 {
+        ferrix_elf::Class::Elf64
+    } else {
+        ferrix_elf::Class::Elf32
+    };
+    let program = image::build_with(
+        class,
+        arch::ARCH.elf_machine(),
+        image::Shape::Good,
+        arch::USER_BOOTSTRAP_PROGRAM,
+    );
+    let (kernel_end, program_end) =
+        init::bootstrap_channel().ok_or("no memory for init's bootstrap channel")?;
+    let process = exec::load(
+        &program,
+        &[b"/init-bootstrap"],
+        &[],
+        [0x4c; ferrix_ustack::RANDOM_BYTES],
+    )
+    .map_err(|_| "a program to take init's channel could not be loaded")?;
+    exec::give_bootstrap(
+        &process,
+        Some((Object::Channel(program_end), Rights::CHANNEL)),
+    );
+    let status = run_to_its_end(&process)?;
+    if status != 0 {
+        crate::console::println!("  initcall a program given init's channel exited with {status}");
+        return Err("a program given init's bootstrap channel did not take and close it");
+    }
+    if !kernel_end.signals().intersects(Signals::PEER_CLOSED) {
+        return Err("the kernel's end of init's channel did not hear the program close its end");
+    }
+    Ok(())
 }
 
 /// Make native call `number` as `caller`.

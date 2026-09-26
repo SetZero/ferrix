@@ -44,6 +44,7 @@
 #![no_std]
 #![forbid(unsafe_code)]
 
+pub mod bootstrap;
 pub mod handle;
 pub mod nr;
 pub mod rights;

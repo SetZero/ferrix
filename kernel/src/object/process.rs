@@ -152,6 +152,24 @@ impl Bootstrap {
         }
     }
 
+    /// Hold `object` as the bootstrap, if one may still be given; `object`
+    /// back if not.
+    ///
+    /// # Errors
+    ///
+    /// [`GiveRefused`], with the object.
+    pub(crate) fn give(
+        &mut self,
+        object: Object,
+        rights: Rights,
+    ) -> Result<(), (GiveRefused, Object)> {
+        if let Some(why) = self.refusal() {
+            return Err((why, object));
+        }
+        *self = Bootstrap::Held(object, rights);
+        Ok(())
+    }
+
     /// The bootstrap, taken, if it is waiting.
     pub(crate) fn take(&mut self) -> Option<(Object, Rights)> {
         if !matches!(self, Bootstrap::Held(..)) {

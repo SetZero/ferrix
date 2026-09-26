@@ -2057,7 +2057,12 @@ pub(crate) static INIT_CALLS: Explanation = Explanation {
     code: "FX-1502",
     title: "a kernel call init needs did not do what docs/INIT.md §11 says",
     meaning: "`syscall::init_calls_check::run` checks the kernel items of init's landing L8 \
-              (docs/INIT.md §11). K3: `process_give` (0x1032) must move a handle out of the \
+              (docs/INIT.md §11). K2: the channel `init::bootstrap_channel` makes for pid \
+              1, given as `exec::run_init` gives it, must hold exactly one message for \
+              `process_bootstrap` to find -- the 8-byte hello `FXIN` version 1 with no \
+              handle -- with the kernel's end open, and a program given it must take it by \
+              number, close it and exit 0, the kernel's end hearing the close. K3: \
+              `process_give` (0x1032) must move a handle out of the \
               caller's table into its own child's bootstrap slot, and `process_bootstrap` \
               (0x1033) must answer that handle once, with its rights, and zero after and in a \
               process given nothing. A give must be refused with NOT_CHILD into another's \
@@ -2070,6 +2075,9 @@ pub(crate) static INIT_CALLS: Explanation = Explanation {
               its bootstrap by number, close it and exit 0, the kept end hearing the close; \
               its parent, given nothing, must exit with the close's EBADF (247).",
     causes: &[
+        "`init::bootstrap_channel` no longer writes the hello from `libs/native-abi`'s \
+         `bootstrap` module, or writes more than one message, or `exec::give_bootstrap` \
+         does not put the program's end in the new process's slot.",
         "`process_give` (`syscall/launch.rs`) judged the parent by something other than the \
          child's own parent pointer, or `give_bootstrap` (`syscall/native.rs`) copied the \
          handle rather than removing it, or moved it before checking the slot.",
@@ -2081,9 +2089,10 @@ pub(crate) static INIT_CALLS: Explanation = Explanation {
          by the numbers `libs/native-abi` gives, or the dispatcher does not route a native \
          number from a Linux program.",
     ],
-    see: "kernel/src/syscall/init_calls_check.rs; kernel/src/syscall/native.rs; \
-          kernel/src/syscall/launch.rs; kernel/src/object/process.rs; libs/native-abi/src/nr.rs; \
-          docs/INIT.md §6, §11, §16",
+    see: "kernel/src/syscall/init_calls_check.rs; kernel/src/init.rs; \
+          kernel/src/syscall/native.rs; kernel/src/syscall/launch.rs; \
+          kernel/src/object/process.rs; libs/native-abi/src/nr.rs; \
+          libs/native-abi/src/bootstrap.rs; docs/INIT.md §6, §11, §16",
 };
 
 /// For `handle_page_fault` in `trap.rs`, the `unhandled page fault` report.
