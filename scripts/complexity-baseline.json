@@ -114,7 +114,7 @@
       "lines": 32,
       "recursive": false
     },
-    "smp.rs::flush_tlb_pages": {
+    "smp.rs::invalidate_pages": {
       "complexity": 21,
       "lines": 82,
       "recursive": false
@@ -150,8 +150,8 @@
       "recursive": false
     },
     "user/space.rs::advise_region": {
-      "complexity": 32,
-      "lines": 57,
+      "complexity": 29,
+      "lines": 50,
       "recursive": false
     },
     "user/space.rs::fault_private_file": {
@@ -161,7 +161,7 @@
     },
     "user/space.rs::protect": {
       "complexity": 15,
-      "lines": 34,
+      "lines": 30,
       "recursive": false
     },
     "user/space.rs::remap": {

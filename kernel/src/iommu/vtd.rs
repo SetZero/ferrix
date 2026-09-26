@@ -396,8 +396,13 @@ impl Unit {
     /// # Errors
     ///
     /// What the tables refused.
-    pub(crate) fn unmap(&self, attached: &Attached, iova: u64) -> Result<(), MapError> {
-        mm::unmap_io::<VtdSecondLevel>(attached.root, iova)
+    pub(crate) fn unmap(
+        &self,
+        attached: &Attached,
+        iova: u64,
+        tables: &mut mm::UnlinkedTables,
+    ) -> Result<(), MapError> {
+        mm::unmap_io::<VtdSecondLevel>(attached.root, iova, tables)
     }
 
     /// Where `attached`'s tables send an access to `iova`, walked as the unit

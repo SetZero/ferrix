@@ -434,7 +434,11 @@ impl Unit {
         self.command(CMD_CFGI_STE, u64::from(attached.stream))?;
         self.command(CMD_TLBI_S12_VMALL, u64::from(attached.vmid))?;
         if let Some(doorbell) = self.doorbell {
-            let _ = self.unmap(&attached, doorbell);
+            // The stream aborts and the unit has forgotten the VMID: nothing
+            // walks these tables any more, so they go back at once.
+            let mut tables = mm::UnlinkedTables::of(mm::TableOwner::Device);
+            let _ = self.unmap(&attached, doorbell, &mut tables);
+            tables.release();
         }
         self.release(attached);
         Ok(())
@@ -461,14 +465,20 @@ impl Unit {
         mm::map_io::<ArmStage2>(attached.root, iova, phys, flags)
     }
 
-    /// Take the page at `iova` out of `attached`'s tables. The unit may still
-    /// reach it until [`Unit::flush`] returns.
+    /// Take the page at `iova` out of `attached`'s tables, holding every table
+    /// that empties in `tables`. The unit may still reach the page, and walk
+    /// the tables, until [`Unit::flush`] returns.
     ///
     /// # Errors
     ///
     /// What the tables refused.
-    pub(crate) fn unmap(&self, attached: &Attached, iova: u64) -> Result<(), MapError> {
-        mm::unmap_io::<ArmStage2>(attached.root, iova)
+    pub(crate) fn unmap(
+        &self,
+        attached: &Attached,
+        iova: u64,
+        tables: &mut mm::UnlinkedTables,
+    ) -> Result<(), MapError> {
+        mm::unmap_io::<ArmStage2>(attached.root, iova, tables)
     }
 
     /// Where `attached`'s tables send an access to `iova`.

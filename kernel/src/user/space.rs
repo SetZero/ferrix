@@ -57,6 +57,14 @@
 //!    processor in the set and waits for each to answer;
 //! 4. only then is anything the translations reached given back.
 //!
+//! "Anything" includes the page tables step 1 emptied. A processor caches the
+//! walk as well as the leaf, and until step 3 reaches it may walk through a
+//! table whose descriptor is already out of memory; freed in step 1, the
+//! table could be reused and filled by anybody before that walk. So
+//! [`crate::mm::unmap_in`] unlinks them onto the shootdown's own
+//! [`TlbPages`], and [`crate::smp::flush_tlb_pages`] gives them back after
+//! its last answer (finding F-36). A table used to go back in step 1.
+//!
 //! A processor that installs the space after step 2 walks tables the entries
 //! are already out of. And [`AddressSpace::with_page`] relies on the same
 //! order from the other side: it translates under this lock and copies before
@@ -653,12 +661,7 @@ impl AddressSpace {
     fn unmap_copied_on_write(&self, map: &ferrix_vma::AddressSpace) -> TlbPages {
         let mut pages = TlbPages::new();
         for region in map.iter().filter(|region| region.cow) {
-            let _ = mm::unmap_in(
-                self.root * PAGE_SIZE,
-                region.range.start(),
-                region.range.bytes(),
-            );
-            pages.add_range(region.range.start(), region.range.bytes());
+            self.unmap_range(region.range, &mut pages);
         }
         pages
     }
@@ -773,7 +776,7 @@ impl AddressSpace {
             mm::deallocate_frames(root, 0);
             return Err(SpaceError::OutOfMemory);
         };
-        let pages = self.unmap_copied_on_write(&inner.map);
+        let mut pages = self.unmap_copied_on_write(&inner.map);
 
         // Read before the lock goes, because the child inherits them. A
         // native object is shared, so the child names the same one.
@@ -785,7 +788,7 @@ impl AddressSpace {
         // read, which is the whole thing fork just promised would not happen.
         let cpus = self.begin_shootdown(&inner);
         drop(inner);
-        self.shoot(&cpus, &pages);
+        self.shoot(&cpus, &mut pages);
 
         let child = fallible::try_arc_cyclic(|me| AddressSpace {
             root,
@@ -947,7 +950,7 @@ impl AddressSpace {
                         shootdown: Some((cpus, pages)),
                     }),
                 ),
-                None => self.shoot(&cpus, &pages),
+                None => self.shoot(&cpus, &mut pages),
             }
             return mapped.map_err(|_| SpaceError::OutOfMemory);
         }
@@ -1170,7 +1173,7 @@ impl AddressSpace {
         if replace {
             let cpus = self.begin_shootdown(&inner);
             drop(inner);
-            self.shoot(&cpus, &pages);
+            self.shoot(&cpus, &mut pages);
         } else {
             drop(inner);
         }
@@ -1223,7 +1226,7 @@ impl AddressSpace {
                     shootdown: Some((cpus, pages)),
                 }),
             ),
-            None => self.shoot(&cpus, &pages),
+            None => self.shoot(&cpus, &mut pages),
         }
         mapped.map_err(|_| SpaceError::OutOfMemory)
     }
@@ -1385,7 +1388,7 @@ impl AddressSpace {
 
         // Phase two. Nothing can reach these pages through this address space
         // any more, on any processor.
-        self.shoot(&cpus, &pages);
+        self.shoot(&cpus, &mut pages);
 
         // Phase three: give the pages back, not just the mapping.
         self.give_back(freeing);
@@ -1400,12 +1403,7 @@ impl AddressSpace {
     /// here, because nothing may be until every processor has been told.
     fn take_down(&self, removed: &[Unmapping], freeing: &mut Vec<Freeing>, pages: &mut TlbPages) {
         for unmapping in removed {
-            let _ = mm::unmap_in(
-                self.root * PAGE_SIZE,
-                unmapping.range.start(),
-                unmapping.range.bytes(),
-            );
-            pages.add_range(unmapping.range.start(), unmapping.range.bytes());
+            self.unmap_range(unmapping.range, pages);
             let owned = match unmapping.backing {
                 Backing::Anonymous { id, offset } => Some((id, offset, false)),
                 // A private file mapping's own pages are its shadow's; the
@@ -1639,12 +1637,17 @@ impl AddressSpace {
                 }
                 let address = region.range.start() + (start - region_first) * PAGE_SIZE;
                 let len = (end - start) * PAGE_SIZE;
-                let _ = mm::unmap_in(self.root * PAGE_SIZE, address, len);
-                flush.add_range(address, len);
+                let _ = mm::unmap_in(self.root * PAGE_SIZE, address, len, flush);
                 found = true;
             }
         }
         found
+    }
+
+    /// Take `range`'s translations out of the tables, adding the addresses
+    /// and every table the removal empties to `pages`, for its shootdown.
+    fn unmap_range(&self, range: PageRange, pages: &mut TlbPages) {
+        let _ = mm::unmap_in(self.root * PAGE_SIZE, range.start(), range.bytes(), pages);
     }
 
     /// Count a shootdown of this space pending, and read the processors it
@@ -1671,7 +1674,7 @@ impl AddressSpace {
 
     /// Run this space's own shootdown, begun under the lock, now that the lock
     /// is gone.
-    fn shoot(&self, cpus: &CpuSet, pages: &TlbPages) {
+    fn shoot(&self, cpus: &CpuSet, pages: &mut TlbPages) {
         smp::flush_tlb_pages(cpus, pages);
         self.flushed();
     }
@@ -1960,7 +1963,7 @@ impl AddressSpace {
         // The old translations are out of the tables but may still be in the
         // TLB of a processor in the set, and so may whatever a fixed
         // destination replaced.
-        self.shoot(&cpus, &pages);
+        self.shoot(&cpus, &mut pages);
         // Any other space mapping the object the pages moved out of forgets
         // them too, before the new object can give one back. And the reference
         // to that object goes before `give_back`, which reads its count.
@@ -2132,8 +2135,7 @@ impl AddressSpace {
             self.take_down(&removed, freeing, pages);
         }
         let _ = inner.map.remove(old_range).map_err(map_error)?;
-        let _ = mm::unmap_in(self.root * PAGE_SIZE, old_range.start(), old_range.bytes());
-        pages.add_range(old_range.start(), old_range.bytes());
+        self.unmap_range(old_range, pages);
         Ok(())
     }
 }
@@ -2801,8 +2803,7 @@ impl AddressSpace {
 
             // Every page in the range re-faults and is reinstalled with the
             // permissions the map now carries.
-            let _ = mm::unmap_in(self.root * PAGE_SIZE, range.start(), range.bytes());
-            pages.add_range(range.start(), range.bytes());
+            self.unmap_range(range, &mut pages);
             self.begin_shootdown(&inner)
         };
 
@@ -2811,7 +2812,7 @@ impl AddressSpace {
         // meanwhile finds no translation to forget: the pending count this
         // shootdown holds is what makes it flush the set anyway, rather than
         // release a frame the old entry still reaches.
-        self.shoot(&cpus, &pages);
+        self.shoot(&cpus, &mut pages);
         Ok(())
     }
 
@@ -3026,12 +3027,12 @@ impl AddressSpace {
         };
 
         let Advised {
-            pages,
+            mut pages,
             retiring,
             punching,
         } = advised;
         if let Some(cpus) = cpus {
-            self.shoot(&cpus, &pages);
+            self.shoot(&cpus, &mut pages);
         }
         // This space's translations are down and its shootdown has returned;
         // nothing else maps a private object, so the retirement has nobody to
@@ -3119,8 +3120,12 @@ impl AddressSpace {
             Some(object) => advised.take(object, first, count)?,
             None => None,
         };
-        let _ = mm::unmap_in(self.root * PAGE_SIZE, start, stop - start);
-        advised.pages.add_range(start, stop - start);
+        let _ = mm::unmap_in(
+            self.root * PAGE_SIZE,
+            start,
+            stop - start,
+            &mut advised.pages,
+        );
         if let Some(taken) = taken {
             // NOALLOC: `make_room` made room for it above.
             advised.retiring.push(taken);
@@ -3190,8 +3195,11 @@ impl Drop for AddressSpace {
         let me: *const AddressSpace = &raw const *self;
         let inner = self.inner.get_mut();
 
+        // Unwalked: no processor is in this space's set, and each left it
+        // through the root write that dropped its entries, walk caches and
+        // all -- the module's second rule.
         for region in inner.map.iter() {
-            let _ = mm::unmap_in(
+            let _ = mm::unmap_unwalked(
                 self.root * PAGE_SIZE,
                 region.range.start(),
                 region.range.bytes(),
@@ -3222,7 +3230,7 @@ impl Drop for AddressSpace {
 
         // The root itself. On x86-64 its upper half names the kernel's own
         // tables, which are emphatically not this space's to free -- but
-        // `unmap_in` only ever walked the ranges above, all of which are in
+        // `unmap_unwalked` only ever walked the ranges above, all of which are in
         // the user half, so nothing of the kernel's was ever reached.
         mm::deallocate_frames(self.root, 0);
     }

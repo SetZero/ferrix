@@ -986,8 +986,13 @@ pub(crate) fn add_cpus(into: &mut CpuSet, from: &CpuSet) {
 }
 
 /// The pages a shootdown asks to have invalidated: up to
-/// [`PAGE_FLUSH_CEILING`] of them, or everything.
-#[derive(Clone, Copy, Debug)]
+/// [`PAGE_FLUSH_CEILING`] of them, or everything -- and the page tables the
+/// unmaps behind it emptied, which [`flush_tlb_pages`] gives back once the
+/// invalidation has reached everyone (finding F-36).
+///
+/// Neither `Clone` nor `Copy`: the tables have one owner, and a copy that was
+/// flushed would leave the original holding tables already given back.
+#[derive(Debug)]
 pub(crate) struct TlbPages {
     /// The page addresses, the first `count` of them meaningful.
     pages: [u64; PAGE_FLUSH_CEILING],
@@ -996,6 +1001,9 @@ pub(crate) struct TlbPages {
     /// More were asked for than fit, or the caller could not say which: the
     /// whole TLB.
     everything: bool,
+    /// Tables [`crate::mm::unmap_in`] unlinked, each translating at least one
+    /// address this shootdown invalidates.
+    tables: crate::mm::UnlinkedTables,
 }
 
 impl TlbPages {
@@ -1005,7 +1013,13 @@ impl TlbPages {
             pages: [0; PAGE_FLUSH_CEILING],
             count: 0,
             everything: false,
+            tables: crate::mm::UnlinkedTables::new(),
         }
+    }
+
+    /// The tables held for release after this shootdown.
+    pub(crate) fn tables(&mut self) -> &mut crate::mm::UnlinkedTables {
+        &mut self.tables
     }
 
     /// Whether there is nothing to invalidate.
@@ -1058,14 +1072,16 @@ impl TlbPages {
         }
     }
 
-    /// Ask for everything `other` asks for as well.
-    pub(crate) fn add_all(&mut self, other: &TlbPages) {
+    /// Ask for everything `other` asks for as well, and take over the tables
+    /// it holds, which this shootdown now covers.
+    pub(crate) fn add_all(&mut self, other: &mut TlbPages) {
         if other.everything {
             self.everything = true;
         }
         for &address in other.addresses() {
             self.add(address);
         }
+        self.tables.take_from(&mut other.tables);
     }
 }
 
@@ -1152,7 +1168,18 @@ fn scoped_request(wanted: u64, cpu: usize) -> Option<TlbPages> {
 /// [`flush_tlb_everywhere`] gives and one more: the wait spins, and a holder
 /// waiting on another processor's answer is a holder every waiter for the lock
 /// waits on too.
-pub(crate) fn flush_tlb_pages(cpus: &CpuSet, pages: &TlbPages) {
+///
+/// Once the invalidation has reached every processor it must, the page tables
+/// `pages` holds go back to the allocator -- and not before, since until
+/// then a processor may still walk through one it cached (finding F-36).
+pub(crate) fn flush_tlb_pages(cpus: &CpuSet, pages: &mut TlbPages) {
+    invalidate_pages(cpus, pages);
+    pages.tables.release();
+}
+
+/// [`flush_tlb_pages`]'s invalidation, returning once every processor in
+/// `cpus` has answered, or at once when none can hold the translations.
+fn invalidate_pages(cpus: &CpuSet, pages: &TlbPages) {
     shootdown_requested();
     if pages.is_empty() {
         return;

@@ -1135,7 +1135,7 @@ impl Vmo {
             after = Some((Arc::as_ptr(&space).addr(), object));
             let mut pages = TlbPages::new();
             if let Some((cpus, copies)) = space.forget_runs(object, runs, &mut pages, from) {
-                smp::flush_tlb_pages(&cpus, &pages);
+                smp::flush_tlb_pages(&cpus, &mut pages);
                 space.flushed();
                 if let Some(copies) = copies {
                     copies.finish();
@@ -1184,12 +1184,12 @@ struct Visit {
 fn forget_together(
     mut visits: Vec<Visit>,
     runs: &[(u64, u64)],
-    own: Option<Own<'_>>,
+    mut own: Option<Own<'_>>,
     from: Option<&Vmo>,
 ) {
     let mut cpus = CpuSet::empty();
     let mut pages = TlbPages::new();
-    if let Some((own_cpus, own_pages)) = own.as_ref().and_then(|own| own.shootdown.as_ref()) {
+    if let Some((own_cpus, own_pages)) = own.as_mut().and_then(|own| own.shootdown.as_mut()) {
         smp::add_cpus(&mut cpus, own_cpus);
         pages.add_all(own_pages);
     }
@@ -1205,7 +1205,7 @@ fn forget_together(
         }
     }
 
-    smp::flush_tlb_pages(&cpus, &pages);
+    smp::flush_tlb_pages(&cpus, &mut pages);
 
     for visit in &visits {
         if visit.forgotten {
@@ -1231,8 +1231,8 @@ fn forget_together(
 
 /// Run `own`'s shootdown, if it still has one to run, on its own.
 fn own_shootdown(own: Option<Own<'_>>) {
-    if let Some(own) = own
-        && let Some((cpus, pages)) = own.shootdown.as_ref()
+    if let Some(mut own) = own
+        && let Some((cpus, pages)) = own.shootdown.as_mut()
     {
         smp::flush_tlb_pages(cpus, pages);
         own.space.flushed();

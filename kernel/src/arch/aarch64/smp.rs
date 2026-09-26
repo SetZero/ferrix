@@ -385,7 +385,7 @@ impl CpuStarter {
     /// Only once every core that was started has reported in: each one leaves
     /// the identity map before it does.
     pub(crate) fn finish(self) -> Result<(), &'static str> {
-        crate::mm::unmap_in(self.identity_root, self.identity_base, self.identity_len)
+        crate::mm::unmap_unwalked(self.identity_root, self.identity_base, self.identity_len)
             .map_err(|_| "could not take down the secondary cores' identity map")?;
         crate::mm::deallocate_frames(self.identity_root / PAGE_SIZE, 0);
         crate::mm::deallocate_frames(self.block / PAGE_SIZE, 0);

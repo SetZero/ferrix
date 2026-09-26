@@ -54,6 +54,7 @@ pub(crate) fn run(topology: &Topology) -> Result<Report, &'static str> {
     let mut report = Report::default();
     everywhere(topology, &mut report)?;
     page_sets()?;
+    tables_wait_for_their_shootdown()?;
     shootdown(&mut report)?;
     grace(topology, &mut report)?;
     contended(topology, &mut report)?;
@@ -397,11 +398,11 @@ fn page_sets() -> Result<(), &'static str> {
     let mut other = TlbPages::new();
     other.add(0x30_0000);
     other.add(0x20_0000);
-    merged.add_all(&other);
+    merged.add_all(&mut other);
     if merged.is_everything() || merged.addresses() != [0x20_0000, 0x30_0000] {
         return Err("two merged page sets did not name each page once");
     }
-    merged.add_all(&over);
+    merged.add_all(&mut over);
     if !merged.is_everything() {
         return Err("a page set merged with one asking for the whole TLB did not ask for it too");
     }
@@ -423,6 +424,71 @@ fn page_sets() -> Result<(), &'static str> {
         .and_then(|rest| rest.chars().next());
     if !matches!(first_word, Some(',' | ']')) {
         return Err("a processor mask does not print as the words it holds");
+    }
+    Ok(())
+}
+
+/// A page table an unmap empties is held until the shootdown for the unmap
+/// has returned, and given back by it (finding F-36).
+///
+/// A processor caches the walk as well as the leaf, so until its TLB is
+/// invalidated it may walk through a table whose descriptor is already gone
+/// from memory. A table that went back to the allocator before then could be
+/// handed to anybody and filled with descriptors of their choosing, which
+/// the stale walk would follow. A real walk landing in that window cannot be
+/// arranged: under TCG QEMU caches no intermediate walk at all, and under KVM
+/// the window is a few microseconds wide. So what is checked is the order:
+/// every table the unmap unlinked is
+/// still allocated when it returns, not one is counted given back, and the
+/// shootdown gives back exactly those.
+///
+/// With the tables freed in the unmap, as user unmaps did before, this fails
+/// at its first test.
+fn tables_wait_for_their_shootdown() -> Result<(), &'static str> {
+    let root = mm::allocate_frames(0).ok_or("no frame for the table check's root")?;
+    mm::zero_frame(root);
+    let Some(page) = mm::allocate_frames(0) else {
+        mm::deallocate_frames(root, 0);
+        return Err("no frame for the table check's page");
+    };
+    let outcome = unlink_and_shoot(root * PAGE_SIZE, page * PAGE_SIZE);
+    mm::deallocate_frames(page, 0);
+    mm::deallocate_frames(root, 0);
+    outcome
+}
+
+/// [`tables_wait_for_their_shootdown`] over the tree at `root`, mapping and
+/// unmapping `phys` at a user address the tree has nothing else under.
+fn unlink_and_shoot(root: u64, phys: u64) -> Result<(), &'static str> {
+    use super::TlbPages;
+
+    /// Somewhere in the user half on every architecture, alone in its tables.
+    const AT: u64 = 0x4000_0000;
+
+    mm::map_in(root, AT, phys, PAGE_SIZE, MapFlags::USER_DATA)
+        .map_err(|_| "the table check could not map its page")?;
+    let given_before = mm::user_tables_given_back();
+    let mut pages = TlbPages::new();
+    mm::unmap_in(root, AT, PAGE_SIZE, &mut pages)
+        .map_err(|_| "the table check could not unmap its page")?;
+    if mm::translate_in(root, AT).is_some() {
+        return Err("the table check's page still translates after its unmap");
+    }
+    let held = pages.tables().len();
+    if held == 0 || mm::user_tables_given_back() != given_before {
+        return Err("an unmap gave back the tables it emptied before its shootdown");
+    }
+    for frame in pages.tables().frames() {
+        if let Some(claimed) = mm::claim_frame(frame) {
+            mm::deallocate_frames(claimed, 0);
+            return Err("a table an unmap emptied was free before its shootdown");
+        }
+    }
+    // No processor ever had this tree: the empty set, as for a space nobody
+    // runs, which is still the call that has to give the tables back.
+    super::flush_tlb_pages(&CpuSet::empty(), &mut pages);
+    if !pages.tables().is_empty() || mm::user_tables_given_back() != given_before + held {
+        return Err("a shootdown did not give back the tables its unmap emptied");
     }
     Ok(())
 }

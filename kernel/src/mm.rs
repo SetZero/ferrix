@@ -63,10 +63,12 @@ use ferrix_sync::IrqSpinLock;
 use crate::fallible;
 
 mod reserve;
+mod unlinked;
 
 pub(crate) use reserve::{
     Reserved, bypass_heap_in_sections, fill_reserve, reserve, reserve_counts,
 };
+pub(crate) use unlinked::{Owner as TableOwner, UnlinkedTables, tables_kept};
 
 /// Why memory could not be brought up.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -736,12 +738,54 @@ pub(crate) fn share_kernel_slots(root: u64, slots: core::ops::Range<usize>) {
     });
 }
 
-/// Take down what [`map_in`] built at `virt`, giving back every table under
-/// `root` that it leaves empty.
+/// Take down what [`map_in`] built at `virt` in a live tree, and add to
+/// `flush` both the addresses to shoot down and every table under `root` the
+/// removal leaves empty.
+///
+/// The tables are unlinked here and given back only by
+/// [`crate::smp::flush_tlb_pages`] for `flush`, once every processor it
+/// reaches has answered: a processor may hold a walk through a table in its
+/// paging-structure or walk caches until then (finding F-36, and
+/// [`UnlinkedTables`]). The range is added to `flush` here rather than by
+/// the caller so that the two cannot part: a table on the list is always
+/// covered by an address the same shootdown invalidates.
 ///
 /// Neither the root nor the frames the mappings pointed at are freed: the
 /// caller allocated both and knows what they are.
-pub(crate) fn unmap_in(root: u64, virt: u64, len: u64) -> Result<(), ferrix_paging::MapError> {
+pub(crate) fn unmap_in(
+    root: u64,
+    virt: u64,
+    len: u64,
+    flush: &mut crate::smp::TlbPages,
+) -> Result<(), ferrix_paging::MapError> {
+    let len = len.next_multiple_of(PAGE_SIZE);
+    let mapper: Mapper<crate::arch::PageEncoding> = Mapper::new(PhysAddr(root));
+    let tables = flush.tables();
+    let unmapped = mapper.unmap_range(&mut KernelPhysMem, VirtAddr(virt), len, |freed| {
+        if let Released::Table { phys } = freed {
+            // NOALLOC: the list is linked through the tables themselves.
+            tables.push(phys);
+        }
+    });
+    // Whatever came out before an error is down too, and is shot down with
+    // the rest.
+    flush.add_range(virt, len);
+    let _ = unmapped?;
+    Ok(())
+}
+
+/// [`unmap_in`] for a tree no processor can walk and none has a walk of
+/// cached: one never installed, one every processor that ran it has left
+/// with a flush of its whole TLB (a started processor's bring-up tree), or an
+/// address space being dropped, which every processor left through the root
+/// write that dropped its entries. Its tables go back at once.
+///
+/// Anything else is [`unmap_in`]'s, for the reason it gives.
+pub(crate) fn unmap_unwalked(
+    root: u64,
+    virt: u64,
+    len: u64,
+) -> Result<(), ferrix_paging::MapError> {
     let mapper: Mapper<crate::arch::PageEncoding> = Mapper::new(PhysAddr(root));
     let _ = mapper.unmap_range(
         &mut KernelPhysMem,
@@ -799,15 +843,24 @@ pub(crate) fn map_io<E: Encoding>(
     )
 }
 
-/// Take down the page [`map_io`] put at `iova`, giving back every table under
-/// `root` it leaves empty. The frame the page pointed at is not freed: the
-/// caller knows what it is, and must not free it before the unit's cached
-/// translations are invalidated.
-pub(crate) fn unmap_io<E: Encoding>(root: u64, iova: u64) -> Result<(), ferrix_paging::MapError> {
+/// Take down the page [`map_io`] put at `iova`, adding every table under
+/// `root` it leaves empty to `tables`.
+///
+/// Neither the frame the page pointed at nor the tables may be freed before
+/// the unit's cached translations are invalidated: a unit caches the walk as
+/// well as the leaf (VT-d's paging-structure caches, the SMMU's walk cache),
+/// and would walk a freed table as the processor would (finding F-36). The
+/// caller releases `tables` after the unit's flush has completed.
+pub(crate) fn unmap_io<E: Encoding>(
+    root: u64,
+    iova: u64,
+    tables: &mut UnlinkedTables,
+) -> Result<(), ferrix_paging::MapError> {
     let mapper: Mapper<E> = Mapper::new(PhysAddr(root));
     let _ = mapper.unmap_range(&mut KernelPhysMem, VirtAddr(iova), PAGE_SIZE, |freed| {
         if let Released::Table { phys } = freed {
-            deallocate_frames(phys.0 / PAGE_SIZE, 0);
+            // NOALLOC: the list is linked through the tables themselves.
+            tables.push(phys);
         }
     })?;
     Ok(())
@@ -1469,7 +1522,8 @@ enum Route {
     HeapTaken,
     /// Given back by the heap, slab or large alike.
     HeapReturned,
-    /// A user page table given back by [`unmap_in`].
+    /// A user page table given back by [`unmap_unwalked`], or by the flush
+    /// after an [`unmap_in`].
     UserTables,
     /// A kernel page table given back by a kernel unmap.
     KernelTables,
@@ -1482,6 +1536,15 @@ const ROUTES: usize = 7;
 /// only by a check that is about to report, and a count a moment stale says
 /// the same thing about which route moved.
 static ROUTE_COUNTS: [AtomicU64; ROUTES] = [const { AtomicU64::new(0) }; ROUTES];
+
+/// User page tables given back since boot, by [`unmap_unwalked`] or by the
+/// flush after an [`unmap_in`]: for the check that the flush is what gives
+/// them back.
+pub(crate) fn user_tables_given_back() -> u64 {
+    ROUTE_COUNTS
+        .get(Route::UserTables as usize)
+        .map_or(0, |counter| counter.load(Ordering::Relaxed))
+}
 
 /// Count `frames` through `route`.
 fn count(route: Route, frames: u64) {

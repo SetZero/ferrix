@@ -455,7 +455,7 @@ impl CpuStarter {
 
         match self.identity {
             Identity::Own { root } => {
-                crate::mm::unmap_in(root, self.identity_base, self.identity_len)
+                crate::mm::unmap_unwalked(root, self.identity_base, self.identity_len)
                     .map_err(|_| FAILED)?;
                 crate::mm::deallocate_frames(root / PAGE_SIZE, 0);
             }

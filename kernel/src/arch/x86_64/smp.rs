@@ -343,7 +343,7 @@ impl CpuStarter {
     /// Only once every processor started has reported in: each one has left
     /// the trampoline's tree and GDT before it does.
     pub(crate) fn finish(self) -> Result<(), &'static str> {
-        crate::mm::unmap_in(self.root, self.code, PAGE_SIZE)
+        crate::mm::unmap_unwalked(self.root, self.code, PAGE_SIZE)
             .map_err(|_| "could not take down the trampoline's identity map")?;
         crate::mm::deallocate_frames(self.root / PAGE_SIZE, 0);
         crate::mm::deallocate_frames(self.code / PAGE_SIZE, 0);

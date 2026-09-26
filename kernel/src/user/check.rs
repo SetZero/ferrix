@@ -98,6 +98,13 @@ pub(crate) fn run() -> Result<Report, &'static str> {
          they must be"
     );
 
+    // Every unmap above handed the tables it emptied to its shootdown, and
+    // every shootdown gave them back: a list dropped unreleased keeps them for
+    // good and counts them here (finding F-36).
+    if mm::tables_kept() != 0 {
+        return Err("an unmap's page tables were never given back: its shootdown did not run");
+    }
+
     // Everything above dropped its objects before returning, so the allocator
     // must be exactly where it started. Signed, because a check that somehow
     // *gained* frames is as wrong as one that lost them and the number should

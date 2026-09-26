@@ -534,12 +534,13 @@ impl Translation {
         }
     }
 
-    /// Take the page at `iova` out of the tables.
-    fn unmap(&self, iova: u64) -> Result<(), MapError> {
+    /// Take the page at `iova` out of the tables, holding every table that
+    /// empties in `tables` until the unit's flush has completed.
+    fn unmap(&self, iova: u64, tables: &mut mm::UnlinkedTables) -> Result<(), MapError> {
         match self {
             Translation::None => Ok(()),
-            Translation::VtD { unit, attached, .. } => unit.unmap(attached, iova),
-            Translation::SmmuV3 { unit, attached, .. } => unit.unmap(attached, iova),
+            Translation::VtD { unit, attached, .. } => unit.unmap(attached, iova, tables),
+            Translation::SmmuV3 { unit, attached, .. } => unit.unmap(attached, iova, tables),
         }
     }
 
@@ -755,18 +756,22 @@ impl Domain {
             // A failure part-way leaves the pages before it unmapped but not
             // yet flushed, and the pages after it still mapped: the domain
             // then holds a partial pin for good, and the caller keeps every
-            // frame of it.
+            // frame of it -- and the tables it emptied are kept too, as
+            // `tables` is dropped unreleased.
+            let mut tables = mm::UnlinkedTables::of(mm::TableOwner::Device);
             if pinned
                 .addresses
                 .iter()
-                .any(|&iova| self.translation.unmap(iova).is_err())
+                .any(|&iova| self.translation.unmap(iova, &mut tables).is_err())
             {
                 return Err((DomainError::Tables, pinned));
             }
-            // Only once the unit has forgotten the pages may their frames go.
+            // Only once the unit has forgotten the pages may their frames go,
+            // or the tables that led to them (finding F-36).
             if let Err(why) = self.translation.flush(false) {
                 return Err((DomainError::Unit(why), pinned));
             }
+            tables.release();
         }
         let _ = self
             .pinned
@@ -786,10 +791,13 @@ fn map_all(
         let Err(error) = translation.map(phys, phys, flags) else {
             continue;
         };
+        let mut tables = mm::UnlinkedTables::of(mm::TableOwner::Device);
         for &mapped in addresses.iter().take(done) {
-            let _ = translation.unmap(mapped);
+            let _ = translation.unmap(mapped, &mut tables);
         }
-        let _ = translation.flush(false);
+        if translation.flush(false).is_ok() {
+            tables.release();
+        }
         return Err(match error {
             MapError::AlreadyMapped(_) => DomainError::AlreadyPinned,
             _ => DomainError::Tables,
