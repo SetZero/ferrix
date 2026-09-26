@@ -1680,12 +1680,18 @@ fn check_a_cycle_of_channels_is_refused(
 /// The process and channel end the waker writes into.
 static WAKER: SpinLock<Option<(Arc<Process>, Handle)>> = SpinLock::new(None);
 
+/// When [`write_after_a_delay`] last began its write, on the counter; zero
+/// until it does. What a woken wait is judged against: it must come back
+/// after this, not merely some time after it began.
+static WRITTEN_AT: AtomicU64 = AtomicU64::new(0);
+
 /// A kernel thread that writes one empty message after a delay, so a wait
 /// has something other than its deadline to end it.
 fn write_after_a_delay(_: usize) {
     crate::sched::sleep_for(WAKE_AFTER_NANOS);
     let taken = WAKER.lock().take();
     if let Some((process, end)) = taken {
+        WRITTEN_AT.store(crate::timer::now_nanos(), Ordering::Release);
         let args = SyscallArgs {
             abi: crate::trap::Abi::Native,
             number: nr::CHANNEL_WRITE,
@@ -1693,6 +1699,17 @@ fn write_after_a_delay(_: usize) {
         };
         let _ = native::dispatch(&args, Some(&*process));
     }
+}
+
+/// Whether a wait that came back at `returned` did so after the waker began
+/// its write. It used to be judged by how long the wait took from a time
+/// taken after the waker was spawned, and a check task held up for more
+/// than half the delay between the two -- by a host that stopped its
+/// processor, under the coverage plugin -- saw the write land early and
+/// failed, the wait being right (FX-0901, 2026-09-26).
+fn came_back_after_the_write(returned: u64) -> bool {
+    let written = WRITTEN_AT.load(Ordering::Acquire);
+    written != 0 && returned >= written
 }
 
 /// A deadline `nanos` from now, staged at [`DEADLINE`].
@@ -1727,6 +1744,7 @@ fn check_a_wait_is_woken_by_what_it_waits_for(counter: &mut Counter) -> Result<(
         counter,
     )?;
 
+    WRITTEN_AT.store(0, Ordering::Release);
     *WAKER.lock() = Some((Arc::clone(&side.process), near));
     let _waker = crate::sched::spawn(
         "native waker",
@@ -1735,15 +1753,14 @@ fn check_a_wait_is_woken_by_what_it_waits_for(counter: &mut Counter) -> Result<(
         ferrix_sched::NICE_0_WEIGHT,
     )
     .map_err(|_| "could not start the waker")?;
-    let start = crate::timer::now_nanos();
     stage_deadline(&side, PATIENCE_NANOS)?;
     let woke = wait(readable);
-    let waited = crate::timer::now_nanos().saturating_sub(start);
+    let returned = crate::timer::now_nanos();
     *WAKER.lock() = None;
     if woke != Ok(0) {
         return Err("a wait was not woken by the message it waited for");
     }
-    if waited < WAKE_AFTER_NANOS / 2 {
+    if !came_back_after_the_write(returned) {
         return Err("a wait returned before anything had been written");
     }
     if !Signals(side.get_u32(OBSERVED)?).intersects(Signals::READABLE) {
@@ -3209,6 +3226,7 @@ fn check_a_port_wait_is_woken_by_a_message(counter: &mut Counter) -> Result<(), 
         )
         .map_err(|_| "object_wait_async failed")?;
 
+    WRITTEN_AT.store(0, Ordering::Release);
     *WAKER.lock() = Some((Arc::clone(&side.process), near));
     let _waker = crate::sched::spawn(
         "port waker",
@@ -3217,15 +3235,14 @@ fn check_a_port_wait_is_woken_by_a_message(counter: &mut Counter) -> Result<(), 
         ferrix_sched::NICE_0_WEIGHT,
     )
     .map_err(|_| "could not start the waker")?;
-    let start = crate::timer::now_nanos();
     stage_deadline(&side, PATIENCE_NANOS)?;
     let woke = side.call(nr::PORT_WAIT, &[reg(port), DEADLINE, PACKET_AT]);
-    let waited = crate::timer::now_nanos().saturating_sub(start);
+    let returned = crate::timer::now_nanos();
     *WAKER.lock() = None;
     if woke != Ok(0) {
         return Err("a port wait was not woken by the message its registration watched");
     }
-    if waited < WAKE_AFTER_NANOS / 2 {
+    if !came_back_after_the_write(returned) {
         return Err("a port wait returned before anything had been written");
     }
     if read_packet(&side)?.0 != 21 {
