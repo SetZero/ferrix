@@ -955,18 +955,29 @@ impl Process {
         // shares the table (`CLONE_FILES`), whose descriptors are still its
         // own. Taken out under the lock and dropped after it, because closing
         // a pipe end wakes its queues.
+        //
+        // The table's room goes with them, and the charge its job carries for
+        // it, as Linux's exit puts its `files_struct`: left in place it was
+        // given back only when the last task was reaped, which a machine with
+        // work to do puts off, and a parent that had waited for its child
+        // still read the child's table in its cgroup's `memory.current`.
         if Arc::strong_count(&self.files) == 1 {
-            let closed: Vec<Arc<OpenFile>> = {
+            let (closed, emptied): (Vec<Arc<OpenFile>>, _) = {
                 let mut files = self.files.lock();
                 let open: Vec<i32> = files.iter().map(|(fd, _)| fd).collect();
-                open.into_iter()
+                let closed = open
+                    .into_iter()
                     .filter_map(|fd| files.remove(fd).ok())
-                    .collect()
+                    .collect();
+                let mut fresh = FdTable::new();
+                let _ = fresh.set_limit(files.limit());
+                (closed, core::mem::replace(&mut *files, fresh))
             };
             for file in &closed {
                 fd::closed(self, file);
             }
             drop(closed);
+            drop(emptied);
             let _ = fs::socket::collect_cycles();
         }
         // Nothing of it can run any more, so it leaves its job's count: a job
