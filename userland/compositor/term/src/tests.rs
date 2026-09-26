@@ -128,6 +128,95 @@ fn the_cursor_can_be_hidden_and_shown() {
     assert!(grid.cursor_visible());
 }
 
+/// A sequence with an intermediate byte, or one another terminal's prefix
+/// marks as its own, ends at its final byte and leaves nothing: `CSI 2 SP q`
+/// sets the cursor's shape, which zsh's vi mode sends, and used to leave its
+/// `q` on the screen.
+#[test]
+fn a_sequence_is_dropped_whole_whatever_its_bytes() {
+    let mut grid = Grid::new(20, 1);
+    grid.write(b"\x1b[2 qa\x1b[>0cb\x1b[>4;1mc\x1b[=5ud");
+    assert_eq!(grid.line(0), "abcd");
+}
+
+/// `CSI s` and `ESC 7` save the cursor, and `CSI u` and `ESC 8` put it back:
+/// btop's menus centre each line by moving right from a saved cursor and
+/// returning to it.
+#[test]
+fn a_saved_cursor_comes_back() {
+    let mut grid = Grid::new(10, 3);
+    grid.write(b"\x1b[2;3f\x1b[s\x1b[3;9fx\x1b[uy");
+    assert_eq!(lines(&grid), ["", "  y", "        x"]);
+    grid.write(b"\x1b[1;2f\x1b[31m\x1b7\x1b[0m\x1b[3;1f\x1b8z");
+    assert_eq!(grid.line(0), " z");
+    assert_eq!(
+        grid.cell(1, 0).map(|cell| cell.colour),
+        Some(1),
+        "and the pen"
+    );
+}
+
+/// btop asks for the alternate screen and then never clears it: it draws its
+/// boxes and moves about in them. The alternate screen must start blank, or
+/// the shell's text shows through every cell btop leaves alone -- and the
+/// shell's screen must come back as it was when btop ends.
+#[test]
+fn the_alternate_screen_starts_blank_and_gives_the_screen_back() {
+    let mut grid = Grid::new(10, 3);
+    grid.write(b"$ ps\r\nchrome\r\n$ btop");
+    let cursor = grid.cursor();
+    grid.write(b"\x1b[?1049h");
+    assert!(grid.alternate());
+    assert_eq!(lines(&grid), ["", "", ""], "nothing of the shell's shows");
+    grid.write(b"\x1b[2;2f\xe2\x94\x80cpu");
+    assert_eq!(lines(&grid), ["", " \u{2500}cpu", ""]);
+
+    grid.write(b"\x1b[?1049l");
+    assert!(!grid.alternate());
+    assert_eq!(lines(&grid), ["$ ps", "chrome", "$ btop"]);
+    assert_eq!(grid.cursor(), cursor, "1049 puts the cursor back");
+
+    // 1047 is the screens without the cursor.
+    grid.write(b"\x1b[?1047h\x1b[1;1f\x1b[?1047l");
+    assert_eq!(grid.cursor(), (0, 0));
+    assert_eq!(lines(&grid), ["$ ps", "chrome", "$ btop"]);
+}
+
+/// What scrolls off the alternate screen is gone, rather than landing in the
+/// ordinary screen's scrollback, and there is no looking back while it shows.
+#[test]
+fn the_alternate_screen_keeps_no_scrollback() {
+    let mut grid = Grid::new(4, 2);
+    grid.write(b"one\r\ntwo\r\nsix");
+    assert_eq!(grid.history(), 1);
+    grid.write(b"\x1b[?1049ha\r\nb\r\nc\r\nd");
+    assert_eq!(lines(&grid), ["c", "d"]);
+    assert_eq!(grid.history(), 1);
+    grid.scroll_view(1);
+    assert_eq!(grid.view(), 0);
+    grid.write(b"\x1b[?1049l");
+    assert_eq!(lines(&grid), ["two", "six"]);
+    grid.scroll_view(1);
+    assert_eq!(grid.shown(0, 0).map(|(cell, _)| cell.ch), Some('o'));
+}
+
+/// A window resized while a program has the alternate screen gives back an
+/// ordinary screen that fits it.
+#[test]
+fn a_resize_under_the_alternate_screen_fits_the_ordinary_one_too() {
+    let mut grid = Grid::new(6, 3);
+    grid.write(b"abcdef\r\nghijkl\r\nmn");
+    grid.write(b"\x1b[?1049h\x1b[1;1fxyz");
+    grid.resize(3, 2);
+    assert_eq!(lines(&grid), ["xyz", ""]);
+    grid.write(b"\x1b[?1049l");
+    assert_eq!(grid.size(), (3, 2));
+    // The cursor's row stays in view, so the top row went to the scrollback.
+    assert_eq!(lines(&grid), ["ghi", "mn"]);
+    assert_eq!(grid.history(), 1);
+    assert_eq!(grid.cursor(), (2, 1));
+}
+
 /// A normal prompt update damages the changed character and the two cursor
 /// positions, rather than the entire terminal window.
 #[test]
@@ -201,6 +290,48 @@ fn resizing_keeps_what_is_still_on_the_grid() {
 
     grid.resize(6, 3);
     assert_eq!(lines(&grid), ["abc", "ghi", ""]);
+}
+
+/// Braille is drawn rather than looked up, one bit a dot: btop's graphs are
+/// nothing else, and Hack has none of it, so each was the hollow box.
+#[test]
+fn braille_is_eight_dots_by_the_bits_of_its_code_point() {
+    let dots = |ch: char| {
+        let cell = paint::braille(ch).expect("a braille pattern");
+        // Which of the eight slots has ink at its centre, left column then
+        // right, top to bottom.
+        let (slot_width, slot_height) = (paint::CELL.0 / 2, paint::CELL.1 / 4);
+        let mut on = Vec::new();
+        for column in 0..2 {
+            for row in 0..4 {
+                let (x, y) = (
+                    column * slot_width + slot_width / 2,
+                    row * slot_height + slot_height / 2,
+                );
+                if cell
+                    .get(y * paint::CELL.0 + x)
+                    .is_some_and(|&value| value == 0xFF)
+                {
+                    on.push((column, row));
+                }
+            }
+        }
+        (on, cell.iter().filter(|&&value| value != 0).count())
+    };
+    assert_eq!(dots('\u{2800}'), (vec![], 0), "the blank pattern is blank");
+    // Dot 1 is the top left, dot 4 the top right, dot 7 and dot 8 the bottom
+    // row, which Unicode numbered last.
+    assert_eq!(dots('\u{2801}').0, [(0, 0)]);
+    assert_eq!(dots('\u{2808}').0, [(1, 0)]);
+    assert_eq!(dots('\u{2840}').0, [(0, 3)]);
+    assert_eq!(dots('\u{2880}').0, [(1, 3)]);
+    // btop's lowest bar, both bottom dots, and a full cell.
+    assert_eq!(dots('\u{28C0}').0, [(0, 3), (1, 3)]);
+    let (all, ink) = dots('\u{28FF}');
+    assert_eq!(all.len(), 8);
+    // Each dot is the same square, and none of them touch.
+    assert_eq!(ink, 8 * dots('\u{2801}').1);
+    assert!(paint::braille('\u{2900}').is_none() && paint::braille('a').is_none());
 }
 
 #[test]

@@ -14,6 +14,13 @@
 //! read back. Runs of equal coverage are filled in one call, as the panic
 //! screen's runs of set bits are, because most of a glyph's row is one value.
 //!
+//! Braille, U+2800 to U+28FF, is not in Hack, and is drawn here instead: a
+//! character is eight dots in two columns of four, each on or off by one bit
+//! of its code point. btop draws every graph it has in braille, two samples a
+//! cell across and four levels a cell high, and so do most programs that plot
+//! in a terminal; foot, kitty and alacritty draw it themselves for the same
+//! reason.
+//!
 //! Every length here is in buffer pixels: a terminal on a monitor at
 //! `scale = 2` is handed a buffer twice the size and draws its glyphs twice
 //! as large, which is what a client on a scaled output does.
@@ -195,7 +202,14 @@ fn glyph(
     scale: usize,
     (fg, bg): (Rgb, Rgb),
 ) {
-    let cell = cell(ch, bold);
+    let dots;
+    let cell = match braille(ch) {
+        Some(drawn) => {
+            dots = drawn;
+            &dots
+        }
+        None => cell(ch, bold),
+    };
     for row in 0..font::HEIGHT {
         let top = y + row * scale;
         if top >= surface.height() {
@@ -250,6 +264,47 @@ fn cell(ch: char, bold: bool) -> &'static font::Cell {
                 .map(|(_, cell)| cell)
         })
         .unwrap_or(replacement)
+}
+
+/// The first braille pattern, U+2800, which has no dots.
+const BRAILLE: u32 = 0x2800;
+
+/// Each dot's bit in a braille pattern's code point, left column then right,
+/// top to bottom: dots 1, 2, 3 and 7, then 4, 5, 6 and 8, which is the order
+/// Unicode numbers them in, the bottom row having been added last.
+const BRAILLE_DOTS: [[u32; 4]; 2] = [[0x01, 0x02, 0x04, 0x40], [0x08, 0x10, 0x20, 0x80]];
+
+/// A braille pattern's cell, or `None` for any other character.
+///
+/// The cell is two columns and four rows of equal slots, and a dot is a
+/// square in the middle of its slot, a third of the slot's width on each
+/// side of it: in a 12x24 cell a dot is four pixels square and a column of
+/// them is spaced six pixels apart, so that a full column reads as a bar and
+/// two of them side by side still read as two.
+pub(crate) fn braille(ch: char) -> Option<font::Cell> {
+    let bits = u32::from(ch)
+        .checked_sub(BRAILLE)
+        .filter(|bits| *bits <= 0xFF)?;
+    let (slot_width, slot_height) = (font::WIDTH / 2, font::HEIGHT / 4);
+    let side = slot_width * 2 / 3;
+    let (inset_x, inset_y) = ((slot_width - side) / 2, (slot_height - side) / 2);
+    let mut cell = [0u8; font::WIDTH * font::HEIGHT];
+    for (column, dots) in BRAILLE_DOTS.iter().enumerate() {
+        for (row, bit) in dots.iter().enumerate() {
+            if bits & bit == 0 {
+                continue;
+            }
+            let (left, top) = (column * slot_width + inset_x, row * slot_height + inset_y);
+            for y in top..top + side {
+                if let Some(line) =
+                    cell.get_mut(y * font::WIDTH + left..y * font::WIDTH + left + side)
+                {
+                    line.fill(0xFF);
+                }
+            }
+        }
+    }
+    Some(cell)
 }
 
 /// `bg` where `coverage` is zero, `fg` where it is `0xFF`, and the line

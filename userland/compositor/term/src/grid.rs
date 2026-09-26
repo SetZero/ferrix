@@ -27,8 +27,22 @@
 //! the bytes that encode it, and a sequence that is not UTF-8 is drawn as
 //! U+FFFD, once for each place it goes wrong.
 //! * `CSI ? n h|l` -- the private modes, of which the cursor's own
-//!   visibility (25) and bracketed paste (2004) are kept.
+//!   visibility (25), bracketed paste (2004) and the alternate screen (47,
+//!   1047 and 1049) are kept.
 //! * `CSI 3 J` -- forget the scrollback, which `clear` asks for.
+//! * `CSI s` and `CSI u`, and `ESC 7` and `ESC 8` -- save the cursor, and
+//!   put it back where it was saved.
+//!
+//! # The alternate screen
+//!
+//! A program that draws the whole screen -- btop, an editor, a pager -- asks
+//! for the alternate screen when it starts and gives it back when it ends.
+//! It starts blank, and btop counts on that: it never clears the screen, but
+//! draws its boxes and moves about in them, so a terminal that kept the
+//! shell's screen under it would show the shell's old text in every cell btop
+//! leaves alone. When the program gives the screen back, the shell's screen
+//! is as it was, cursor and all. The alternate screen keeps no scrollback:
+//! what scrolls off its top is gone, as it is in xterm.
 //!
 //! An escape sequence this does not know is dropped rather than drawn: a
 //! terminal that printed the bytes of a sequence it did not understand would
@@ -141,8 +155,10 @@ enum Parsing {
     Text,
     /// An `ESC` has arrived.
     Escape,
-    /// A `CSI` has arrived, and these are its parameter bytes.
-    Csi(Vec<u8>),
+    /// A `CSI` has arrived, and these are its parameter bytes, and whether
+    /// an intermediate byte came after them -- which makes it a sequence
+    /// nothing here knows, whatever its final byte.
+    Csi(Vec<u8>, bool),
     /// The first bytes of a UTF-8 character have arrived: the bits so far,
     /// how many continuation bytes are still to come, and the least code
     /// point a sequence of this length may encode, below which it is an
@@ -180,6 +196,20 @@ pub struct Grid {
     /// 2004 h`, so it can tell a paste from typing: zsh's line editor does,
     /// so that a pasted line is not run the moment its newline arrives.
     bracketed_paste: bool,
+    /// The ordinary screen, put aside while a program has the alternate one:
+    /// `None` when the ordinary screen is the one showing.
+    ordinary: Option<Screen>,
+    /// Where `CSI s` or `ESC 7` saved the cursor, and the pen it had then.
+    saved: ((usize, usize), Cell),
+}
+
+/// A screen that is not the one showing: its cells, which rows ran on, and
+/// where its cursor was.
+#[derive(Clone, Debug)]
+struct Screen {
+    cells: Vec<Cell>,
+    wrapped: Vec<bool>,
+    cursor: (usize, usize),
 }
 
 /// A row that scrolled off the top: its cells at the width it had then, and
@@ -257,6 +287,8 @@ impl Grid {
             view: 0,
             selection: None,
             bracketed_paste: false,
+            ordinary: None,
+            saved: ((0, 0), Cell::default()),
         }
     }
 
@@ -400,9 +432,21 @@ impl Grid {
         self.history.len()
     }
 
+    /// Whether a program has the alternate screen.
+    #[must_use]
+    pub const fn alternate(&self) -> bool {
+        self.ordinary.is_some()
+    }
+
     /// Look `rows` further back into the scrollback, or forward for a
     /// negative number, stopping at either end.
+    ///
+    /// The alternate screen has no scrollback, and the ordinary screen's is
+    /// not above it, so there is nothing to look back at while it shows.
     pub fn scroll_view(&mut self, rows: isize) {
+        if self.alternate() {
+            return;
+        }
         self.view = self
             .view
             .saturating_add_signed(rows)
@@ -605,11 +649,28 @@ impl Grid {
     /// which is empty; one that would lose the cursor's row instead moves
     /// its top rows into the scrollback, so the line being typed on stays in
     /// view and what was above it can still be scrolled back to.
+    ///
+    /// Under the alternate screen, the ordinary screen is resized too, as
+    /// though it were showing, so that it fits the window when it comes back.
     pub fn resize(&mut self, columns: usize, rows: usize) {
         let (columns, rows) = (columns.max(1), rows.max(1));
         if (columns, rows) == (self.columns, self.rows) {
             return;
         }
+        if let Some(mut ordinary) = self.ordinary.take() {
+            let size = self.size();
+            self.swap(&mut ordinary);
+            self.refit(columns, rows);
+            (self.columns, self.rows) = size;
+            self.swap(&mut ordinary);
+            self.ordinary = Some(ordinary);
+        }
+        self.refit(columns, rows);
+    }
+
+    /// Resize the live cells to `columns` by `rows`, which differ from what
+    /// they are.
+    fn refit(&mut self, columns: usize, rows: usize) {
         let over = (self.cursor.1 + 1).saturating_sub(rows);
         for _ in 0..over {
             self.keep_top_row();
@@ -643,6 +704,46 @@ impl Grid {
         self.view = 0;
     }
 
+    /// Exchange the live cells, their wrapping and the cursor with `other`'s.
+    fn swap(&mut self, other: &mut Screen) {
+        core::mem::swap(&mut self.cells, &mut other.cells);
+        core::mem::swap(&mut self.wrapped, &mut other.wrapped);
+        core::mem::swap(&mut self.cursor, &mut other.cursor);
+    }
+
+    /// Show the alternate screen, blank, with the cursor where it was.
+    fn enter_alternate(&mut self) {
+        if self.alternate() {
+            return;
+        }
+        let mut ordinary = Screen {
+            cells: vec![Cell::default(); self.columns * self.rows],
+            wrapped: vec![false; self.rows],
+            cursor: self.cursor,
+        };
+        self.swap(&mut ordinary);
+        self.ordinary = Some(ordinary);
+        // A selection is held in the ordinary screen's line numbers, and
+        // the person was reading the live rows once a program took over.
+        self.selection = None;
+        self.view = 0;
+    }
+
+    /// Show the ordinary screen again, as it was, and forget the alternate.
+    /// `cursor` says whether the cursor goes back to where the ordinary
+    /// screen had it, as 1049 asks, or stays where the program left it.
+    fn leave_alternate(&mut self, cursor: bool) {
+        let Some(mut ordinary) = self.ordinary.take() else {
+            return;
+        };
+        let left = self.cursor;
+        self.swap(&mut ordinary);
+        if !cursor {
+            self.cursor = left;
+        }
+        self.selection = None;
+    }
+
     /// Take what a program wrote.
     pub fn write(&mut self, bytes: &[u8]) {
         for byte in bytes {
@@ -657,21 +758,26 @@ impl Grid {
             // `ESC [` starts a `CSI`; `ESC` and any other byte is a
             // sequence nothing here needs, and a sequence that is dropped is
             // better than one that is printed.
-            Parsing::Escape => {
-                if byte == b'[' {
-                    self.parsing = Parsing::Csi(Vec::new());
-                }
-            }
-            Parsing::Csi(mut parameters) => {
-                // Parameters and the bytes between them, then one byte that
-                // says what the sequence is.
-                if byte.is_ascii_digit() || byte == b';' || byte == b'?' {
+            Parsing::Escape => match byte {
+                b'[' => self.parsing = Parsing::Csi(Vec::new(), false),
+                b'7' => self.saved = (self.cursor, self.pen),
+                b'8' => self.restore_cursor(),
+                _ => {}
+            },
+            Parsing::Csi(mut parameters, intermediate) => match byte {
+                // Parameters, which are digits, the `;` between them and a
+                // `?`, `<`, `=` or `>` that says whose they are; then any
+                // intermediate bytes; then one byte that says what the
+                // sequence is. A byte out of place ends it all the same, so
+                // that it is dropped rather than printed.
+                0x30..=0x3F if !intermediate => {
                     parameters.push(byte);
-                    self.parsing = Parsing::Csi(parameters);
-                } else {
-                    self.csi(&parameters, byte);
+                    self.parsing = Parsing::Csi(parameters, false);
                 }
-            }
+                0x20..=0x2F => self.parsing = Parsing::Csi(parameters, true),
+                0x40..=0x7E if !intermediate => self.csi(&parameters, byte),
+                _ => {}
+            },
             Parsing::Utf8 {
                 code,
                 needed,
@@ -774,6 +880,7 @@ impl Grid {
     ///
     /// A screen looking back keeps looking at the same text, one row further
     /// back, rather than having it scroll away under the person reading it.
+    /// The alternate screen keeps nothing: its top row is dropped.
     fn keep_top_row(&mut self) {
         let cells: Vec<Cell> = self.cells.drain(..self.columns).collect();
         let wrapped = if self.wrapped.is_empty() {
@@ -781,6 +888,9 @@ impl Grid {
         } else {
             self.wrapped.remove(0)
         };
+        if self.alternate() {
+            return;
+        }
         if self.history.len() == HISTORY {
             let _ = self.history.pop_front();
         }
@@ -794,6 +904,11 @@ impl Grid {
     /// A `CSI` sequence, by its final byte.
     fn csi(&mut self, parameters: &[u8], final_byte: u8) {
         let text = String::from_utf8_lossy(parameters);
+        // `<`, `=` and `>` say the sequence is some terminal's own, and none
+        // of those is kept.
+        if text.starts_with(['<', '=', '>']) {
+            return;
+        }
         let private = text.starts_with('?');
         let numbers: Vec<usize> = text
             .trim_start_matches('?')
@@ -825,9 +940,28 @@ impl Grid {
             b'l' if private && first == 25 => self.visible = false,
             b'h' if private && first == 2004 => self.bracketed_paste = true,
             b'l' if private && first == 2004 => self.bracketed_paste = false,
+            // 1049 saves the cursor as it goes and restores it as it comes
+            // back; 47 and 1047 are the screens alone.
+            b'h' if private && matches!(first, 47 | 1047 | 1049) => self.enter_alternate(),
+            b'l' if private && matches!(first, 47 | 1047 | 1049) => {
+                self.leave_alternate(first == 1049);
+            }
+            b's' if !private => self.saved = (self.cursor, self.pen),
+            b'u' if !private => self.restore_cursor(),
             // Every other sequence: dropped.
             _ => {}
         }
+    }
+
+    /// `CSI u` and `ESC 8`: the cursor and pen as they were saved, the
+    /// cursor kept on a grid that may have shrunk since.
+    fn restore_cursor(&mut self) {
+        let ((column, row), pen) = self.saved;
+        self.cursor = (
+            column.min(self.columns.saturating_sub(1)),
+            row.min(self.rows.saturating_sub(1)),
+        );
+        self.pen = pen;
     }
 
     /// `CSI n J`.
