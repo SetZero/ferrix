@@ -1,7 +1,7 @@
 //! One client's socket: bytes and the descriptors that travel beside them.
 
 use std::io;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd, OwnedFd};
 use std::os::unix::net::UnixStream;
 
 use compositor_wire::Fd;
@@ -23,11 +23,20 @@ pub enum RecvError {
     ControlTruncated,
 }
 
+/// The most a connection holds queued beyond what the socket took before
+/// the client is given up on: Hyprland's `wl_display_set_default_max_buffer_size`.
+///
+/// libwayland's own default is 4 KiB, and past it the client is dropped.
+/// A client that reads keeps its queue near empty; one that has stopped for
+/// good would otherwise grow the compositor without end.
+pub const MAX_QUEUED: usize = 1 << 20;
+
 /// Why a write failed.
 #[derive(Debug)]
 pub enum SendError {
-    /// The socket would block; what was written is in the count.
-    WouldBlock(usize),
+    /// More than [`MAX_QUEUED`] bytes are waiting for a client that is not
+    /// reading them. The count is how many.
+    Overflow(usize),
     /// The call failed.
     Io(io::Error),
 }
@@ -46,6 +55,9 @@ pub struct Connection {
     descriptors: Vec<OwnedFd>,
     /// Bytes queued to send that the socket would not take.
     outgoing: Vec<u8>,
+    /// Descriptors queued with them, to go with the next write. Copies, so
+    /// the caller may close its own as soon as `send` returns.
+    outgoing_fds: Vec<OwnedFd>,
 }
 
 impl Connection {
@@ -57,6 +69,7 @@ impl Connection {
             incoming: Vec::new(),
             descriptors: Vec::new(),
             outgoing: Vec::new(),
+            outgoing_fds: Vec::new(),
         })
     }
 
@@ -191,31 +204,64 @@ impl Connection {
 
     /// Queue bytes and descriptors, and write what the socket will take.
     ///
-    /// Descriptors go with the first `sendmsg`, which is what libwayland
-    /// does: a control message is attached to the message that carries the
-    /// argument naming it.
+    /// What it will not take stays queued for [`Connection::flush`]: a
+    /// socket that is full is a client busy for a moment, not a client gone.
+    /// The descriptors are copied into the queue, so the caller may close
+    /// its own once this returns, sent or not.
+    ///
+    /// Descriptors go with the first `sendmsg` that carries any of the
+    /// bytes queued with or after them, which is what libwayland does: a
+    /// descriptor may arrive before the message naming it, never after.
+    ///
+    /// # Errors
+    ///
+    /// [`SendError::Overflow`] when more than [`MAX_QUEUED`] bytes are left
+    /// waiting, and [`SendError::Io`] when the socket failed or a descriptor
+    /// could not be copied.
     pub fn send(&mut self, bytes: &[u8], fds: &[Fd]) -> Result<(), SendError> {
+        for fd in fds {
+            let copy = borrow(fd.0).try_clone_to_owned().map_err(SendError::Io)?;
+            self.outgoing_fds.push(copy);
+        }
         self.outgoing.extend_from_slice(bytes);
-        self.flush(fds)
+        self.flush()
     }
 
     /// Write what the socket will take of what is queued.
-    pub fn flush(&mut self, fds: &[Fd]) -> Result<(), SendError> {
+    ///
+    /// # Errors
+    ///
+    /// As [`Connection::send`].
+    pub fn flush(&mut self) -> Result<(), SendError> {
         while !self.outgoing.is_empty() {
-            let wrote = self.write_once(fds)?;
-            if wrote == 0 {
+            let count = self.outgoing_fds.len().min(MAX_FDS_IN);
+            let fds: Vec<Fd> = self
+                .outgoing_fds
+                .iter()
+                .take(count)
+                .map(|fd| Fd(fd.as_raw_fd()))
+                .collect();
+            let Some(wrote) = self.write_once(&fds)? else {
                 break;
-            }
+            };
             let _ = self.outgoing.drain(..wrote.min(self.outgoing.len()));
-            if !fds.is_empty() {
-                // The descriptors went with the first write.
-                return self.flush(&[]);
+            if wrote > 0 {
+                // In flight with the write, the kernel holding its own
+                // reference: the queue's copies can go.
+                drop(self.outgoing_fds.drain(..count));
             }
+        }
+        if self.outgoing.len() > MAX_QUEUED {
+            return Err(SendError::Overflow(self.outgoing.len()));
         }
         Ok(())
     }
 
-    fn write_once(&mut self, fds: &[Fd]) -> Result<usize, SendError> {
+    /// One `sendmsg` of what is queued, with `fds` beside it.
+    ///
+    /// `None` when the socket is full; `Some(0)` when the call was
+    /// interrupted and is to be made again.
+    fn write_once(&mut self, fds: &[Fd]) -> Result<Option<usize>, SendError> {
         let mut control = [0u8; control_bytes()];
         let mut iov = libc::iovec {
             iov_base: self.outgoing.as_ptr().cast_mut().cast(),
@@ -250,12 +296,12 @@ impl Connection {
         if wrote < 0 {
             let error = io::Error::last_os_error();
             return match error.kind() {
-                io::ErrorKind::WouldBlock => Err(SendError::WouldBlock(0)),
-                io::ErrorKind::Interrupted => Ok(0),
+                io::ErrorKind::WouldBlock => Ok(None),
+                io::ErrorKind::Interrupted => Ok(Some(0)),
                 _ => Err(SendError::Io(error)),
             };
         }
-        Ok(usize::try_from(wrote).unwrap_or(0))
+        Ok(Some(usize::try_from(wrote).unwrap_or(0)))
     }
 
     /// Take every descriptor a `recvmsg` delivered.
@@ -347,6 +393,19 @@ fn read_fd(at: *const i32) -> i32 {
     // byte array, so the read must be unaligned.
     unsafe {
         at.read_unaligned()
+    }
+}
+
+/// A descriptor the caller holds open, borrowed to be copied.
+fn borrow(raw: i32) -> BorrowedFd<'static> {
+    #[expect(
+        unsafe_code,
+        reason = "AUDIT: the descriptor is the caller's, open for the length of the send it was passed to, and is only copied"
+    )]
+    // SAFETY: `send`'s caller passes descriptors it holds open for the call,
+    // and the borrow is used at once to make an owned copy.
+    unsafe {
+        BorrowedFd::borrow_raw(raw)
     }
 }
 

@@ -12,7 +12,7 @@ use std::os::unix::net::UnixStream;
 
 use compositor_wire::Fd;
 
-use crate::{Connection, Listener, ListenerError, RecvError, socket_path};
+use crate::{Connection, Listener, ListenerError, MAX_QUEUED, RecvError, SendError, socket_path};
 
 /// A pair of connected sockets.
 fn pair() -> (Connection, Connection) {
@@ -111,6 +111,115 @@ fn several_descriptors_arrive_in_the_order_they_were_sent() {
         assert_eq!(text, expected);
         core::mem::forget(got);
     }
+}
+
+/// Everything `b` can read now, bytes and descriptors, taken.
+fn drain(b: &mut Connection) -> (Vec<u8>, Vec<OwnedFd>) {
+    let mut bytes = Vec::new();
+    let mut fds = Vec::new();
+    loop {
+        match b.receive() {
+            Ok(_) => {}
+            Err(RecvError::WouldBlock) => break,
+            Err(error) => panic!("reading: {error:?}"),
+        }
+        bytes.extend_from_slice(b.bytes());
+        for fd in b.fds() {
+            #[expect(
+                unsafe_code,
+                reason = "AUDIT: a test taking the descriptors the connection hands on at `consume`"
+            )]
+            // SAFETY: `consume` below hands these on without closing them, so
+            // this is the one owner.
+            fds.push(unsafe { OwnedFd::from_raw_fd(fd.0) });
+        }
+        let (read, claimed) = (b.bytes().len(), b.fds().len());
+        b.consume(read, claimed);
+    }
+    (bytes, fds)
+}
+
+/// A client whose socket is full is busy, not gone: what the socket would
+/// not take waits, and arrives, in order, once the client reads.
+///
+/// A full socket used to be an error, and the compositor dropped the client
+/// for it: Chrome, flooded by a drag, went with the whole browser.
+#[test]
+fn a_full_socket_keeps_the_rest_for_later() {
+    let (mut a, mut b) = pair();
+    let chunk: Vec<u8> = (0..=255u8).cycle().take(64 * 1024).collect();
+    let mut sent = Vec::new();
+    while !a.has_pending_writes() {
+        a.send(&chunk, &[]).expect("a full socket is not an error");
+        sent.extend_from_slice(&chunk);
+    }
+    // One more, onto the queue.
+    a.send(&chunk, &[]).expect("queued");
+    sent.extend_from_slice(&chunk);
+
+    let mut got = Vec::new();
+    while a.has_pending_writes() {
+        got.extend(drain(&mut b).0);
+        a.flush().expect("flushed");
+    }
+    got.extend(drain(&mut b).0);
+    assert_eq!(got.len(), sent.len());
+    assert!(got == sent, "every byte, in the order it was sent");
+}
+
+/// A descriptor sent while the socket is full waits with its bytes, and is
+/// the same open file when it arrives -- though the caller closed its own at
+/// once, as the clipboard does with the pipe it hands on.
+#[test]
+fn a_descriptor_behind_a_full_socket_still_arrives() {
+    let (mut a, mut b) = pair();
+    let filler = vec![0u8; 64 * 1024];
+    while !a.has_pending_writes() {
+        a.send(&filler, &[]).expect("filling");
+    }
+    let carried = readable(b"after the wait");
+    a.send(b"fd!", &[Fd(carried.as_raw_fd())]).expect("queued");
+    drop(carried);
+
+    let mut fds = Vec::new();
+    let mut bytes = Vec::new();
+    loop {
+        let (more, arrived) = drain(&mut b);
+        bytes.extend(more);
+        fds.extend(arrived);
+        if !a.has_pending_writes() {
+            break;
+        }
+        a.flush().expect("flushed");
+    }
+    let (more, arrived) = drain(&mut b);
+    bytes.extend(more);
+    fds.extend(arrived);
+    assert!(bytes.ends_with(b"fd!"));
+    assert_eq!(fds.len(), 1, "the descriptor came with its bytes");
+    let mut text = Vec::new();
+    let _ = UnixStream::from(fds.remove(0)).read_to_end(&mut text);
+    assert_eq!(text, b"after the wait");
+}
+
+/// A client that never reads is given up on once more than [`MAX_QUEUED`]
+/// waits for it, as Hyprland gives up at the same size.
+#[test]
+fn a_client_that_stops_reading_is_given_up_on() {
+    let (mut a, _b) = pair();
+    let chunk = vec![7u8; 64 * 1024];
+    let mut offered = 0usize;
+    let error = loop {
+        match a.send(&chunk, &[]) {
+            Ok(()) => offered += chunk.len(),
+            Err(error) => break error,
+        }
+        assert!(offered <= 64 * MAX_QUEUED, "the queue never filled");
+    };
+    assert!(
+        matches!(error, SendError::Overflow(waiting) if waiting > MAX_QUEUED),
+        "{error:?}"
+    );
 }
 
 #[test]

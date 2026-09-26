@@ -16,13 +16,24 @@ use std::time::Duration;
 /// `None` waits until a descriptor is ready.  A zero duration asks whether a
 /// descriptor is ready without sleeping.  Interrupted waits simply begin
 /// again: a signal has not made any compositor work ready.
-pub(crate) fn wait(fds: &[RawFd], timeout: Option<Duration>) -> io::Result<Vec<RawFd>> {
+///
+/// Those of `fds` also in `writable` are ready when they can take bytes as
+/// well: a client whose socket was full has some waiting for it.
+pub(crate) fn wait(
+    fds: &[RawFd],
+    writable: &[RawFd],
+    timeout: Option<Duration>,
+) -> io::Result<Vec<RawFd>> {
     let mut fds: Vec<libc::pollfd> = fds
         .iter()
         .copied()
         .map(|fd| libc::pollfd {
             fd,
-            events: libc::POLLIN,
+            events: if writable.contains(&fd) {
+                libc::POLLIN | libc::POLLOUT
+            } else {
+                libc::POLLIN
+            },
             revents: 0,
         })
         .collect();
@@ -35,7 +46,12 @@ pub(crate) fn wait(fds: &[RawFd], timeout: Option<Duration>) -> io::Result<Vec<R
             return Ok(fds
                 .iter()
                 .filter(|poll| {
-                    poll.revents & (libc::POLLIN | libc::POLLERR | libc::POLLHUP | libc::POLLNVAL)
+                    poll.revents
+                        & (libc::POLLIN
+                            | libc::POLLOUT
+                            | libc::POLLERR
+                            | libc::POLLHUP
+                            | libc::POLLNVAL)
                         != 0
                 })
                 .map(|poll| poll.fd)
@@ -76,7 +92,10 @@ mod tests {
 
     #[test]
     fn no_descriptors_can_still_wait_for_a_timer() {
-        assert_eq!(wait(&[], Some(Duration::ZERO)).expect("zero timeout"), []);
+        assert_eq!(
+            wait(&[], &[], Some(Duration::ZERO)).expect("zero timeout"),
+            []
+        );
     }
 
     #[test]
@@ -86,8 +105,25 @@ mod tests {
         sender.write_all(b"ready").expect("write");
         let fds = [receiver.as_raw_fd(), quiet.as_raw_fd()];
         assert_eq!(
-            wait(&fds, Some(Duration::ZERO)).expect("ready descriptor"),
+            wait(&fds, &[], Some(Duration::ZERO)).expect("ready descriptor"),
             [receiver.as_raw_fd()]
+        );
+    }
+
+    /// A socket with room in it wakes the wait only when there is something
+    /// waiting to be written to it: otherwise every client would be ready on
+    /// every pass, and the loop would never sleep.
+    #[test]
+    fn a_socket_with_room_wakes_only_when_asked_to() {
+        let (_other, socket) = UnixStream::pair().expect("pair");
+        let fds = [socket.as_raw_fd()];
+        assert_eq!(
+            wait(&fds, &[], Some(Duration::ZERO)).expect("nothing ready"),
+            []
+        );
+        assert_eq!(
+            wait(&fds, &fds, Some(Duration::ZERO)).expect("writable"),
+            [socket.as_raw_fd()]
         );
     }
 }

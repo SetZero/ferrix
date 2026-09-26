@@ -137,7 +137,7 @@ fn main() {
         }
         if let Some(reason) = client.fatal() {
             println!("protocol error {reason:?}");
-            let _ = connection.flush(&[]);
+            let _ = connection.flush();
             break;
         }
     }

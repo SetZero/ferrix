@@ -100,26 +100,36 @@ impl Slot {
         self.connection.as_raw_fd()
     }
 
-    /// Send whatever this client has queued, now.
+    /// Send whatever this client has queued, now, and whatever an earlier
+    /// send left waiting because the client's socket was full.
     ///
     /// The loop sends at the end of every pass, and that is soon enough for
     /// everything but a descriptor: the clipboard hands a client a pipe and
     /// then has to let go of it, and a descriptor let go of before the
     /// message carrying it has been sent is a descriptor the client never
-    /// gets. Gives whether the connection is still there.
+    /// gets. The connection keeps its own copy of one the socket would not
+    /// take yet, so letting go after this is safe even then. Gives whether
+    /// the connection is still there.
     pub fn flush(&mut self) -> bool {
         let outgoing = self.client.take_outgoing();
-        if outgoing.bytes.is_empty() {
+        let sent = if !outgoing.bytes.is_empty() {
+            self.connection.send(&outgoing.bytes, &outgoing.descriptors)
+        } else if self.connection.has_pending_writes() {
+            self.connection.flush()
+        } else {
             return !self.gone;
-        }
-        if self
-            .connection
-            .send(&outgoing.bytes, &outgoing.descriptors)
-            .is_err()
-        {
+        };
+        if sent.is_err() {
             self.gone = true;
         }
         !self.gone
+    }
+
+    /// Whether bytes are waiting for this client's socket to take them,
+    /// which the loop wakes for as well as for a request.
+    #[must_use]
+    pub(crate) fn has_pending_writes(&self) -> bool {
+        self.connection.has_pending_writes()
     }
 
     /// The same, to be sent to: the seat's events go out through it.
@@ -1719,8 +1729,15 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
         // A card's descriptor: readable when its driver dies, so a screen
         // nothing is redrawn on still finds out.
         fds.extend(screens.iter().filter_map(|screen| screen.backend.raw_fd()));
+        // A client whose socket was full has bytes waiting for it; the loop
+        // wakes when it can take them, not only when it next asks something.
+        let writable: Vec<i32> = slots
+            .iter()
+            .filter(|slot| slot.has_pending_writes())
+            .map(Slot::raw_fd)
+            .collect();
         ready = Some(
-            crate::wait::wait(&fds, timeout)
+            crate::wait::wait(&fds, &writable, timeout)
                 .map_err(|error| format!("hyprix: event wait: {error}"))?,
         );
     }
@@ -2487,13 +2504,31 @@ fn serve(
         return Ok(changed);
     };
     let outgoing = slot.client.take_outgoing();
-    if !outgoing.bytes.is_empty()
-        && let Err(error) = slot.connection.send(&outgoing.bytes, &outgoing.descriptors)
-    {
-        report(&format!(
-            "hyprix: client {index} could not be sent to, and is dropped: {error:?}"
-        ));
-        slot.gone = true;
+    let sent = if !outgoing.bytes.is_empty() {
+        slot.connection.send(&outgoing.bytes, &outgoing.descriptors)
+    } else if slot.connection.has_pending_writes() {
+        slot.connection.flush()
+    } else {
+        Ok(())
+    };
+    match sent {
+        Ok(()) => {}
+        // A full socket is a client busy for a moment, and what it would not
+        // take waits in the queue. A queue past Hyprland's limit is a client
+        // that has stopped reading.
+        Err(compositor_socket::SendError::Overflow(waiting)) => {
+            report(&format!(
+                "hyprix: client {index} has stopped reading, with {waiting} bytes waiting, \
+                 and is dropped"
+            ));
+            slot.gone = true;
+        }
+        Err(error) => {
+            report(&format!(
+                "hyprix: client {index} could not be sent to, and is dropped: {error:?}"
+            ));
+            slot.gone = true;
+        }
     }
     // A client the server has sent a protocol error is ended by it, and the
     // client's own log names only the request it was sending when its

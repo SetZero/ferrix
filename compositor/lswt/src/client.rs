@@ -290,7 +290,11 @@ impl Session {
     /// Send whatever is queued.
     fn flush(&mut self) -> Result<(), String> {
         if self.out.is_empty() {
-            return Ok(());
+            // What a full socket left queued still has to go.
+            return self
+                .connection
+                .flush()
+                .map_err(|error| format!("writing: {error:?}"));
         }
         let (bytes, fds) = self.out.take();
         self.connection

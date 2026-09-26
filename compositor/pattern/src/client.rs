@@ -2279,7 +2279,10 @@ fn request_with_fd(
 /// Send everything queued.
 fn flush(connection: &mut Connection, out: &mut Writer) -> Result<(), String> {
     if out.is_empty() {
-        return Ok(());
+        // What a full socket left queued still has to go.
+        return connection
+            .flush()
+            .map_err(|error| format!("writing: {error:?}"));
     }
     let (bytes, fds) = out.take();
     connection
