@@ -1,10 +1,12 @@
 package dev.ferrix.launcher
 
 import android.app.Activity
+import android.content.Context
 import android.content.pm.ActivityInfo
 import android.os.Bundle
 import android.os.Process
 import android.util.Log
+import android.view.KeyEvent
 import android.view.WindowInsets
 import android.view.WindowInsetsController
 import androidx.activity.ComponentActivity
@@ -14,15 +16,20 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets as ComposeInsets
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
@@ -34,6 +41,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Build
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Info
@@ -53,6 +61,7 @@ import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -62,6 +71,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -74,11 +84,14 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.PathParser
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -87,11 +100,16 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import java.io.IOException
+import java.io.OutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.UUID
+import kotlin.math.ceil
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONException
@@ -118,6 +136,10 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         setContent { LauncherTheme { Launcher() } }
     }
+
+    /** While the guest's screen is shown, the keys a keyboard has are the guest's. */
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean =
+        GuestScreen.keys?.invoke(event) == true || super.dispatchKeyEvent(event)
 }
 
 private const val HELPER = "http://127.0.0.1:47707"
@@ -126,17 +148,22 @@ private const val CROSVM = "/apex/com.android.virt/bin/crosvm"
 
 private const val SOCKET = "$VM_DIR/crosvm.sock"
 private const val TOUCH = "$VM_DIR/touch.sock"
+private const val KEYBOARD = "$VM_DIR/keyboard.sock"
+private const val MOUSE = "$VM_DIR/mouse.sock"
 
 /**
  * The guest: 8 vCPUs and 4 GiB, its 16550 on crosvm's standard output, a
  * control socket that `suspend`, `resume` and `stop` go to, and a screen of
- * [size] with a single-touch device on it.
+ * [size] with a single-touch device on it, a keyboard and a mouse. The
+ * 16550 takes crosvm's standard input too, which is the su process's, so
+ * that the app can say a line to the guest's shell ([GuestShell]).
  *
  * The screen needs the [Bridge] (from this APK, [apk], with the Terminal
- * app's for virtualizationservice's classes) listening on the touch socket
- * before crosvm starts, for crosvm connects to it and will not start without
- * it. If the bridge has not bound it within ten seconds, or ended, the guest
- * runs as before, with its console only.
+ * app's for virtualizationservice's classes) listening on the input devices'
+ * sockets before crosvm starts, for crosvm connects to each and will not
+ * start without them. The bridge makes the mouse's last. If it has not made
+ * them all within ten seconds, or ended, the guest runs as before, with its
+ * console only.
  *
  * The guest is `desktop.Image` when there is one, a build whose init is the
  * compositor (`cargo xtask flash --compositor`, wrapped by the loader), and
@@ -146,15 +173,17 @@ private fun guestCommand(apk: String, uid: Int, token: String, size: IntSize): S
     val (w, h) = size.width to size.height
     return "cd $VM_DIR && I=ferrix.Image && { [ ! -f desktop.Image ] || I=desktop.Image; } && " +
         "[ -f \$I ] || { echo 'FERRIX-VM no image in $VM_DIR'; exit 3; }; echo FERRIX-VM-IMAGE \$I; " +
-        "rm -f $SOCKET $TOUCH; echo FERRIX-VM-PID $$; " +
+        "rm -f $SOCKET $TOUCH $KEYBOARD $MOUSE; echo FERRIX-VM-PID $$; " +
         "T=$(pm path com.android.virtualization.terminal | sed -n 's/^package://p' | head -n 1); " +
-        "CLASSPATH=$apk:\$T app_process /system/bin ${Bridge::class.java.name} $$ $token $uid $TOUCH " +
-        "2>/dev/null & B=$!; i=0; " +
-        "while [ ! -S $TOUCH ] && [ \$i -lt 100 ] && kill -0 \$B 2>/dev/null; do sleep 0.1; i=$((i+1)); done; " +
-        "if [ -S $TOUCH ]; then set -- --gpu 'backend=2d,displays=[[mode=windowed[$w,$h]]]' " +
-        "--android-display-service ferrix --input 'single-touch[path=$TOUCH,width=$w,height=$h]'; " +
+        "CLASSPATH=$apk:\$T app_process /system/bin ${Bridge::class.java.name} $$ $token $uid " +
+        "$TOUCH $KEYBOARD $MOUSE 2>/dev/null & B=$!; i=0; " +
+        "while [ ! -S $MOUSE ] && [ \$i -lt 100 ] && kill -0 \$B 2>/dev/null; do sleep 0.1; i=$((i+1)); done; " +
+        "if [ -S $TOUCH ] && [ -S $KEYBOARD ] && [ -S $MOUSE ]; then " +
+        "set -- --gpu 'backend=2d,displays=[[mode=windowed[$w,$h]]]' --android-display-service ferrix " +
+        "--input 'single-touch[path=$TOUCH,width=$w,height=$h]' --input 'keyboard[path=$KEYBOARD]' " +
+        "--input 'mouse[path=$MOUSE]'; " +
         "else echo 'FERRIX-VM-BRIDGE did not start: no screen'; set --; fi; " +
-        "exec $CROSVM run --disable-sandbox -m 4096 --cpus 8 -s $SOCKET --serial type=stdout,num=1 " +
+        "exec $CROSVM run --disable-sandbox -m 4096 --cpus 8 -s $SOCKET --serial type=stdout,num=1,stdin " +
         "\"\$@\" \$I 2>/dev/null"
 }
 
@@ -204,6 +233,7 @@ private fun Launcher() {
     var fullScreen by remember { mutableStateOf(false) }
     var screenSize by remember { mutableStateOf(IntSize.Zero) }
     val console = remember { mutableStateListOf<String>() }
+    var shell by remember { mutableStateOf(GuestShell()) }
     val scope = rememberCoroutineScope()
     val activity = LocalContext.current as Activity
     val run: () -> Unit = {
@@ -217,10 +247,14 @@ private fun Launcher() {
         GuestScreen.token = token
         GuestScreen.link = null
         val command = guestCommand(activity.applicationInfo.sourceDir, Process.myUid(), token, screenSize)
+        val current = GuestShell()
+        shell = current
+        val reserving = scope.launch { current.reserveAsAsked() }
         scope.launch {
-            guest = runGuest(console, command) { pid ->
+            guest = runGuest(console, current, command) { pid ->
                 (guest as? Guest.Running)?.let { guest = it.copy(pid = pid) }
             }
+            reserving.cancel()
             if (GuestScreen.token == token) GuestScreen.link = null
         }
     }
@@ -251,6 +285,7 @@ private fun Launcher() {
             guest = guest,
             console = console,
             link = GuestScreen.link,
+            shell = shell,
             screenSize = screenSize,
             onBack = { fullScreen = false },
             onPause = pause,
@@ -526,6 +561,13 @@ private fun GuestCard(
  * the same menu floating in a corner and a switch between the two in it. The
  * phone's own bars are hidden meanwhile, and a swipe brings them back for a
  * moment.
+ *
+ * Beside the floating menu, a button opens the soft keyboard, with a row of
+ * the keys it lacks above it. The screen stays as it is, under both, and the
+ * guest is told how much of it they cover ([GuestShell.reserve]), so that
+ * its windows make way for them, as they would on a smaller screen. The
+ * menu also says what a finger on the screen is, a touch or a trackpad's
+ * ([PointerMode]), which the app remembers.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -533,6 +575,7 @@ private fun VmScreen(
     guest: Guest,
     console: List<String>,
     link: Link?,
+    shell: GuestShell,
     screenSize: IntSize,
     onBack: () -> Unit,
     onPause: () -> Unit,
@@ -550,6 +593,21 @@ private fun VmScreen(
     }
     var menu by remember { mutableStateOf(false) }
     var showScreen by remember { mutableStateOf(false) }
+    val preferences = remember { activity.getSharedPreferences("vm", Context.MODE_PRIVATE) }
+    var pointer by remember {
+        val saved = preferences.getString("pointer", null)
+        mutableStateOf(PointerMode.entries.firstOrNull { it.name == saved } ?: PointerMode.TOUCH)
+    }
+    val keyboard = remember(link) { link?.let { link -> Keyboard { link.send(KEYBOARD_EVENTS, it) } } }
+    var view by remember { mutableStateOf<GuestView?>(null) }
+    val ime = ComposeInsets.ime.getBottom(LocalDensity.current)
+    val extraKeys = with(LocalDensity.current) { EXTRA_KEYS_HEIGHT.roundToPx() }
+    val covered = if (showScreen && link != null && ime > 0) ime + extraKeys else 0
+    LaunchedEffect(covered) { shell.reserve(covered) }
+    DisposableEffect(shell) { onDispose { shell.reserve(0) } }
+    // The keyboard gone, by its button or by Back, the view is no editor
+    // again, and a finger on the screen does not bring it back.
+    LaunchedEffect(ime == 0) { if (ime == 0) view?.typing = false }
     LaunchedEffect(link) { showScreen = link != null }
     DisposableEffect(showScreen) {
         if (showScreen) activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
@@ -606,6 +664,23 @@ private fun VmScreen(
                         onClick = { menu = false; showScreen = !showScreen },
                     )
                 }
+                if (link != null && showScreen) {
+                    for ((mode, label) in listOf(PointerMode.TOUCH to "Touch", PointerMode.TRACKPAD to "Trackpad")) {
+                        DropdownMenuItem(
+                            text = { Text(label) },
+                            leadingIcon = if (pointer == mode) {
+                                { Icon(Icons.Rounded.Check, null) }
+                            } else {
+                                null
+                            },
+                            onClick = {
+                                menu = false
+                                pointer = mode
+                                preferences.edit().putString("pointer", mode.name).apply()
+                            },
+                        )
+                    }
+                }
                 DropdownMenuItem(
                     text = { Text("Back to main page") },
                     leadingIcon = { Icon(Icons.AutoMirrored.Rounded.ArrowBack, null) },
@@ -617,16 +692,36 @@ private fun VmScreen(
     if (showScreen && link != null) {
         Box(Modifier.fillMaxSize().background(Color.Black)) {
             AndroidView(
-                factory = { GuestView(it, screenSize.width, screenSize.height) },
-                update = { it.link = link },
+                factory = { GuestView(it, screenSize.width, screenSize.height).also { view = it } },
+                update = {
+                    it.link = link
+                    it.mode = pointer
+                    it.keyboard = keyboard
+                },
                 modifier = Modifier.fillMaxSize(),
             )
-            Box(
+            Row(
                 Modifier
                     .align(Alignment.TopEnd)
                     .padding(12.dp)
                     .background(MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.6f), CircleShape),
-            ) { menuButton() }
+            ) {
+                CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onSurface) {
+                    IconButton(onClick = { view?.showKeyboard(ime == 0) }) {
+                        Icon(KeyboardIcon, contentDescription = "Keyboard")
+                    }
+                    menuButton()
+                }
+            }
+            if (ime > 0 && keyboard != null) {
+                ExtraKeys(
+                    keyboard,
+                    Modifier
+                        .align(Alignment.BottomCenter)
+                        .offset { IntOffset(0, -ime) }
+                        .height(EXTRA_KEYS_HEIGHT),
+                )
+            }
         }
         return
     }
@@ -656,6 +751,82 @@ private fun VmScreen(
         }
         ConsolePane(console, Modifier.fillMaxSize(), fontSize = 12)
     }
+}
+
+private val EXTRA_KEYS_HEIGHT = 44.dp
+
+/**
+ * The keys a phone's soft keyboard lacks, in a row over it, as Termux has:
+ * Esc, Tab, the modifiers, the arrows and three characters it hides away.
+ * Ctrl, Alt and Super are sticky: tapped, the next key is typed with them;
+ * tapped twice, they stay down until tapped again.
+ */
+@Composable
+private fun ExtraKeys(keyboard: Keyboard, modifier: Modifier) {
+    // The row takes every touch on it, between its keys too, so that none
+    // reaches the screen under it.
+    Row(
+        modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+            .clickable(interactionSource = null, indication = null) {},
+    ) {
+        val key: @Composable (String, Keyboard.StickyKey?, () -> Unit) -> Unit = { label, sticky, onTap ->
+            val state = sticky?.state ?: Keyboard.Sticky.OFF
+            Box(
+                Modifier
+                    .weight(if (label.length > 1) 1.5f else 1f)
+                    .fillMaxHeight()
+                    .padding(horizontal = 1.dp, vertical = 4.dp)
+                    .background(
+                        when (state) {
+                            Keyboard.Sticky.OFF -> Color.Transparent
+                            Keyboard.Sticky.ONCE -> MaterialTheme.colorScheme.secondaryContainer
+                            Keyboard.Sticky.LOCKED -> MaterialTheme.colorScheme.primary
+                        },
+                        RoundedCornerShape(8.dp),
+                    )
+                    .clickable(onClick = onTap),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    label,
+                    fontSize = 13.sp,
+                    maxLines = 1,
+                    softWrap = false,
+                    color = if (state == Keyboard.Sticky.LOCKED) {
+                        MaterialTheme.colorScheme.onPrimary
+                    } else {
+                        MaterialTheme.colorScheme.onSurface
+                    },
+                )
+            }
+        }
+        key("Esc", null) { keyboard.tap(Linux.KEY_ESC) }
+        key("Tab", null) { keyboard.tap(Linux.KEY_TAB) }
+        key("Ctrl", keyboard.ctrl) { keyboard.ctrl.tap() }
+        key("Alt", keyboard.alt) { keyboard.alt.tap() }
+        key("Super", keyboard.meta) { keyboard.meta.tap() }
+        key("←", null) { keyboard.tap(Linux.KEY_LEFT) }
+        key("↑", null) { keyboard.tap(Linux.KEY_UP) }
+        key("↓", null) { keyboard.tap(Linux.KEY_DOWN) }
+        key("→", null) { keyboard.tap(Linux.KEY_RIGHT) }
+        key("|", null) { keyboard.text("|") }
+        key("/", null) { keyboard.text("/") }
+        key("-", null) { keyboard.text("-") }
+    }
+}
+
+/** Material's keyboard icon, which the core icon set does not have. */
+private val KeyboardIcon: ImageVector by lazy {
+    ImageVector.Builder("Keyboard", 24.dp, 24.dp, 24f, 24f).addPath(
+        PathParser().parsePathString(
+            "M20 5H4c-1.1 0-1.99.9-1.99 2L2 17c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm-9 " +
+                "3h2v2h-2V8zm0 3h2v2h-2v-2zM8 8h2v2H8V8zm0 3h2v2H8v-2zm-1 2H5v-2h2v2zm0-3H5V8h2v2zm9 " +
+                "7H8v-2h8v2zm0-4h-2v-2h2v2zm0-3h-2V8h2v2zm3 3h-2v-2h2v2zm0-3h-2V8h2v2z",
+        ).toNodes(),
+        fill = SolidColor(Color.Black),
+    ).build()
 }
 
 /** How near the end, in lines, the reader has to be for the console to follow. */
@@ -703,10 +874,86 @@ private fun ConsolePane(lines: List<String>, modifier: Modifier, fontSize: Int =
 }
 
 /**
- * Run the guest with `command` to its end, appending its console to
- * `console`, and the bridge's lines with it.
+ * The guest's shell on its console, which the app can say a line to, and
+ * what the console said of the compositor's monitor.
+ *
+ * The one line said is how much of the screen the soft keyboard and the
+ * extra-keys row cover: `hyprctl keyword monitor <name>,addreserved,0,<H>,0,0`,
+ * which keeps windows out of the bottom `H` of the monitor, in the
+ * compositor's logical pixels. The compositor's boot line gives the monitor's
+ * name, its mode and its logical size, and so its scale:
+ * `hyprix: 1 monitor [card0 Virtual-1 1080x2400 540x1200]` is a scale of 2.
+ * hyprctl refuses ("Broken pipe") until the compositor is listening, so
+ * nothing is said until `hyprix: card0 <name>` has been printed and two
+ * seconds have passed; then the latest value, if it is not what the guest
+ * already has. The keyboard's height moves through many values as it
+ * opens, so a value is said once it has held for 150 ms.
  */
-private suspend fun runGuest(console: MutableList<String>, command: String, started: (Int) -> Unit): Guest =
+internal class GuestShell {
+    @Volatile
+    var input: OutputStream? = null
+    private val covered = MutableStateFlow(0)
+    private val listening = MutableStateFlow(false)
+    @Volatile
+    private var monitor = "Virtual-1"
+    @Volatile
+    private var scale = 1.0
+
+    /** How much of the screen, in the phone's pixels from the bottom, is covered now. */
+    fun reserve(pixels: Int) {
+        covered.value = pixels
+    }
+
+    /** A console line: the compositor's monitor, or the compositor listening. */
+    fun heard(line: String) {
+        MONITOR.find(line)?.let { found ->
+            val (name, modeWidth, logicalWidth) = found.destructured
+            monitor = name
+            scale = (modeWidth.toDouble() / logicalWidth.toDouble()).takeIf { it.isFinite() && it > 0 } ?: 1.0
+        }
+        if (line.contains("hyprix: card0 $monitor ")) listening.value = true
+    }
+
+    /** Say each new [reserve] to the guest, from once it can hear it until the run ends. */
+    suspend fun reserveAsAsked() {
+        listening.first { it }
+        delay(2000)
+        var said = 0
+        covered.collectLatest { pixels ->
+            delay(150)
+            val logical = ceil(pixels / scale).toInt()
+            if (logical == said) return@collectLatest
+            val stream = input ?: return@collectLatest
+            val line = "hyprctl keyword monitor $monitor,addreserved,0,$logical,0,0 >/dev/null 2>&1\n"
+            try {
+                withContext(Dispatchers.IO) {
+                    stream.write(line.toByteArray())
+                    stream.flush()
+                }
+                said = logical
+                Log.i("FerrixVm", "reserved $logical at the bottom of $monitor")
+            } catch (error: IOException) {
+                Log.w("FerrixVm", "could not tell the guest's shell", error)
+            }
+        }
+    }
+
+    private companion object {
+        val MONITOR = Regex("""hyprix: \d+ monitors? \[\S+ (\S+) (\d+)x\d+ (\d+)x\d+""")
+    }
+}
+
+/**
+ * Run the guest with `command` to its end, appending its console to
+ * `console`, and the bridge's lines with it; `shell` has the guest's
+ * console input meanwhile, and hears each line.
+ */
+private suspend fun runGuest(
+    console: MutableList<String>,
+    shell: GuestShell,
+    command: String,
+    started: (Int) -> Unit,
+): Guest =
     withContext(Dispatchers.IO) {
         val began = System.nanoTime()
         var result: String? = null
@@ -715,6 +962,7 @@ private suspend fun runGuest(console: MutableList<String>, command: String, star
         } catch (error: IOException) {
             return@withContext Guest.Ended("could not run su: ${error.message}", 0, false)
         }
+        shell.input = process.outputStream
         process.inputStream.bufferedReader().useLines { lines ->
             for (raw in lines) {
                 val line = raw.trimEnd('\r')
@@ -725,6 +973,7 @@ private suspend fun runGuest(console: MutableList<String>, command: String, star
                     continue
                 }
                 if (line.startsWith("FERRIX-VM-BRIDGE ")) Log.i("FerrixVm", line)
+                shell.heard(line)
                 if (line.startsWith("FERRIX-BOOT-OK") || line.startsWith("FERRIX-PANIC") ||
                     line.startsWith("FERRIX-VM ")
                 ) {
@@ -737,6 +986,11 @@ private suspend fun runGuest(console: MutableList<String>, command: String, star
             }
         }
         val status = process.waitFor()
+        shell.input = null
+        try {
+            process.outputStream.close()
+        } catch (_: IOException) {
+        }
         val seconds = (System.nanoTime() - began) / 1_000_000_000
         val ended = result ?: if (status == 1 && console.isEmpty()) {
             "root was not granted"

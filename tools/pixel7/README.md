@@ -79,10 +79,15 @@ bridge (below):
 
 ```sh
 cd /data/local/tmp/ferrix-vm && /apex/com.android.virt/bin/crosvm run \
-    --disable-sandbox -m 4096 --cpus 8 -s crosvm.sock --serial type=stdout,num=1 \
+    --disable-sandbox -m 4096 --cpus 8 -s crosvm.sock --serial type=stdout,num=1,stdin \
     --gpu 'backend=2d,displays=[[mode=windowed[1080,2400]]]' --android-display-service ferrix \
-    --input 'single-touch[path=touch.sock,width=1080,height=2400]' ferrix.Image
+    --input 'single-touch[path=touch.sock,width=1080,height=2400]' \
+    --input 'keyboard[path=keyboard.sock]' --input 'mouse[path=mouse.sock]' ferrix.Image
 ```
+
+The 16550 takes crosvm's standard input too, the su process's, which the app
+keeps open for the run: a line it writes there reaches the guest's shell on
+its console.
 
 `ferrix.Image` is the raw loader `Image` from the helper's run directory, the
 same loader and kernel `fastboot boot` gets, which the helper pushes whenever
@@ -90,8 +95,8 @@ the phone's copy differs. It needs to have been built with guest support
 (`9df3769b` or later). The loader finds it is a guest, entered at EL1 with
 crosvm's 16550 as `stdout-path`, and sends its log and the kernel's there.
 crosvm's machine has 2 to 8 vCPUs, GICv3, PSCI through `hvc`, and RAM at
-`0x8000_0000`, and a virtio-gpu and a virtio-input single-touch device that
-Ferrix drives since its kernel reads crosvm's `pci-host-cam-generic` host
+`0x8000_0000`, a virtio-gpu, and virtio-input single-touch, keyboard and
+mouse devices, which Ferrix drives since its kernel reads crosvm's `pci-host-cam-generic` host
 and gives each function the INTx line its `interrupt-map` names. The guest
 powers off at the end of its run, and crosvm exits.
 
@@ -137,18 +142,66 @@ this phone (Android 17, Magisk):
 4. The app calls the binder itself, which works from an untrusted app:
    `setSurface` (transaction 1) with its SurfaceView's surface when it has
    one, `saveFrameForSurface` (4) and `removeSurface` (3) when it goes, and
-   `drawSavedFrameForSurface` (5) when it is back.
-5. crosvm's `--input single-touch[path=…]` connects to a Unix socket at that
-   path as it starts, and will not start if nothing listens there ("failed to
-   open event device"). The bridge listens on `touch.sock` first, and the
-   script starts crosvm once the socket is there. If it is not there within
-   ten seconds, the guest runs with its console only.
-6. The bridge also hands the app a binder of its own, which takes batches of
+   `drawSavedFrameForSurface` (5) when it is back. Each takes `forCursor`
+   last.
+5. The guest's compositor puts its pointer on the card's cursor plane, which
+   crosvm draws into a second surface, as AOSP's Terminal app has it: a
+   64×64 RGBA SurfaceView over the screen, lent with `setSurface(…,
+   forCursor = true)`. `setCursorStream` (2) takes one end of a socket pair,
+   on which crosvm writes the cursor's position as `(x: i32, y: i32)`
+   little-endian; the app reads the other end and moves the cursor's surface,
+   made a child of the screen's `SurfaceControl`, there.
+6. crosvm's `--input <type>[path=…]` connects to a Unix socket at that path as
+   it starts, and will not start if nothing listens there ("failed to open
+   event device"). The bridge listens on `touch.sock`, `keyboard.sock` and
+   `mouse.sock` first, each made under another name and renamed into place
+   once it listens, and the script starts crosvm once all three are there.
+   If they are not there within ten seconds, the guest runs with its console
+   only.
+7. The bridge also hands the app a binder of its own, which takes batches of
    virtio_input_events (8 bytes, little-endian: `u16 type, u16 code, u32
-   value`) and writes them to crosvm's connection. A finger on the screen is
-   `EV_ABS ABS_X`/`ABS_Y` in the display's pixels, `EV_KEY BTN_TOUCH` 1 or 0,
-   and `EV_SYN SYN_REPORT`.
+   value`), a transaction for each device (touch, keyboard, mouse, from
+   `FIRST_CALL_TRANSACTION`), and writes them to crosvm's connection for it.
 
-The bridge ends when crosvm does, by its process or its connection, so
+The bridge ends when crosvm does, by its process or a connection, so
 stopping the VM stops it too. It prints its steps as `FERRIX-VM-BRIDGE` lines
 among the console's.
+
+### Controls
+
+A finger on the screen is what the menu says, touch or trackpad, as Microsoft's
+Remote Desktop app has them; the app remembers the choice.
+
+- **Touch.** The pointer goes where the finger lands (`ABS_X`/`ABS_Y`, no
+  press); moving presses `BTN_TOUCH` at the landing point and drags, lifting
+  unmoved is a tap. Held still (Android's long-press time) is the mouse's
+  `BTN_RIGHT`.
+- **Trackpad.** A finger moves the pointer by how far it goes (`REL_X`/`REL_Y`,
+  1.2 guest pixels a pixel, up to three times that for a quick finger); a tap
+  is `BTN_LEFT`; held still first, it drags with `BTN_LEFT` down.
+- **Both.** Two fingers moving are the wheel (`REL_WHEEL`, a click each 12 dp,
+  content following the fingers); two fingers tapped are `BTN_RIGHT`.
+
+The keyboard button beside the menu opens the soft keyboard, the view being
+an editor for a visible password (no suggestions, no composing), and a row
+over it: Esc, Tab, Ctrl, Alt, Super, the arrows, `|`, `/` and `-`. Ctrl, Alt
+and Super are sticky: tapped, they hold the next key; tapped twice, until
+tapped again. Text becomes key presses for a US keymap, the guest's, with
+Shift where a US keyboard needs it; a character it has no key for is dropped.
+A hardware keyboard's keys go through as they are pressed and released, all
+but Back, the volume and the media keys.
+
+The soft keyboard covers the bottom of the screen, which stays where it is.
+The app tells the guest how much is covered, on its console, once the
+compositor has printed `hyprix: card0 <monitor>` and two seconds have passed,
+and each time the height has held for 150 ms and changed:
+
+```sh
+hyprctl keyword monitor Virtual-1,addreserved,0,<H>,0,0 >/dev/null 2>&1
+```
+
+`H` is the keyboard's and the row's height in the compositor's logical
+pixels, the phone's divided by the monitor's scale, rounded up; the scale is
+the mode's width over the logical width in `hyprix: 1 monitor [card0
+Virtual-1 1080x2400 540x1200]`, and 1 without it. Closing the keyboard sends
+0.
