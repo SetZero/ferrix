@@ -940,7 +940,11 @@ fn check_maps(
     process: &Process,
     layout: &Layout,
 ) -> Result<(u32, u32), &'static str> {
-    let regions = process.space().regions().len();
+    let regions = process
+        .space()
+        .regions()
+        .map_err(|_| "no memory to list the regions")?
+        .len();
     let file = ns
         .open(ctx, None, b"/proc/self/maps", &read_only(), 0)
         .map_err(|_| "/proc/self/maps did not open")?;

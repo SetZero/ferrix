@@ -95,9 +95,10 @@ use ferrix_sync::{SleepLock, SleepLockGuard};
 use ferrix_vma::{Backing, PageRange, Unmapping, Vma, VmaFlags};
 
 use crate::arch;
+use crate::fallible;
 use crate::mm;
 use crate::smp::{self, CpuMask, TlbPages};
-use crate::user::vmo::{Own, Retired, Sharing, Vmo, VmoError};
+use crate::user::vmo::{Kept, Own, Retired, Sharing, Vmo, VmoError};
 
 /// The lowest address a program may map anything at: 64 KiB, the
 /// `vm.mmap_min_addr` Linux distributions ship.
@@ -260,7 +261,7 @@ impl AddressSpace {
         })?;
 
         let layout = SleepLock::new((), &crate::sync::SchedParker);
-        Ok(Arc::new_cyclic(|me| AddressSpace {
+        fallible::try_arc_cyclic(|me| AddressSpace {
             root,
             me: me.clone(),
             cpus: CpuMask::new(),
@@ -274,7 +275,11 @@ impl AddressSpace {
                 next_id: 1,
                 native: BTreeSet::new(),
             }),
-        }))
+        })
+        .map_err(|_| {
+            mm::deallocate_frames(root, 0);
+            SpaceError::OutOfMemory
+        })
     }
 
     /// The physical address of the root table, for whoever installs it.
@@ -313,6 +318,7 @@ impl AddressSpace {
     /// preempted into a context expecting a different address space.
     pub(crate) unsafe fn install(&self, replacing: Option<&AddressSpace>) {
         let cpu = this_logical_cpu();
+        // NOALLOC: a `CpuMask` is a fixed bitmap; joining sets a bit.
         self.cpus.join(cpu);
         // SAFETY: the root was made by `new`, so `prepare_user_root` has run
         // on it and the kernel is reachable through it on the architecture
@@ -380,6 +386,126 @@ fn commit_page(vmo: &Vmo, index: u64, file: bool, address: u64) -> Result<Frame,
 }
 
 /// How a region with `flags` maps its object.
+/// A region [`AddressSpace::add_region`] maps.
+#[derive(Debug, Clone, Copy)]
+struct NewRegion {
+    /// The object id the region names.
+    id: u64,
+    /// Where.
+    range: PageRange,
+    /// How.
+    flags: VmaFlags,
+    /// What backs it.
+    backing: Backing,
+    /// How the object is shared through it.
+    sharing: Sharing,
+}
+
+/// Copy page `index` of `vmo`, whose frame `shared` another space still
+/// holds, into a frame of its own: the copy, and the original taken out of
+/// the object, to be retired.
+///
+/// Replacing takes the shared page out of this object; the reference is
+/// given back once no processor can reach it through this space or any other
+/// that maps the object.
+fn copy_on_write(
+    vmo: &Vmo,
+    index: u64,
+    shared: Frame,
+) -> Result<(Frame, Option<Retired>), SpaceError> {
+    let copy = mm::allocate_frames(0).ok_or(SpaceError::OutOfMemory)?;
+    mm::copy_frame(copy, shared);
+    match vmo.take_page(index, copy) {
+        Ok(retired) => Ok((copy, Some(retired))),
+        // Held since the count was read. A held page is this object's alone,
+        // so the write goes to it, uncopied.
+        Err(Kept::Held) => {
+            let _ = mm::release_frame(copy);
+            Ok((vmo.page(index).unwrap_or(shared), None))
+        }
+        Err(Kept::NoMemory) => {
+            let _ = mm::release_frame(copy);
+            Err(SpaceError::OutOfMemory)
+        }
+    }
+}
+
+/// Where a file mapping of `len` bytes goes: at a fixed address, or wherever
+/// the map has room nearest the hint.
+fn file_placement(
+    map: &ferrix_vma::AddressSpace,
+    place: FilePlace,
+    len: u64,
+) -> Result<PageRange, SpaceError> {
+    let at = match place {
+        FilePlace::Fixed(at) => at,
+        FilePlace::Anywhere(hint) => map
+            .find_free(len, PAGE_SIZE, hint)
+            .ok_or(SpaceError::OutOfMemory)?,
+    };
+    if !is_user_address(at) || at.checked_add(len).is_none_or(|end| end > USER_VIRT_END) {
+        return Err(SpaceError::NotUserRange(at));
+    }
+    PageRange::from_len(at, len).map_err(|_| SpaceError::BadRange)
+}
+
+/// Copies of the native-object set and the file table a forked child
+/// inherits, made fallibly (finding F-23).
+fn inherited(
+    inner: &Inner,
+) -> Result<(BTreeSet<u64>, BTreeMap<u64, FileMapping>), fallible::AllocError> {
+    let mut native = BTreeSet::new();
+    for &id in &inner.native {
+        let _ = fallible::insert_into_set(&mut native, id)?;
+    }
+    let mut files = BTreeMap::new();
+    for (&id, mapping) in &inner.files {
+        let _ = fallible::insert(&mut files, id, mapping.clone())?;
+    }
+    Ok((native, files))
+}
+
+/// Attach a forked child to every object it names.
+///
+/// The child's copy of a mapping that may write its file counts as one more
+/// first, under the child's lock, before anything can look -- and first, so
+/// that the child's `Drop` lowers exactly what was raised if an attach runs
+/// out of memory and the child is let go.
+fn attach_child(child: &Arc<AddressSpace>) -> Result<(), SpaceError> {
+    let inner = child.inner.lock();
+    for (&id, mapping) in &inner.files {
+        if mapping.may_write
+            && let Some(vmo) = inner.objects.get(&id)
+        {
+            vmo.raise_shared_may_write();
+        }
+    }
+    for (&id, vmo) in &inner.objects {
+        let sharing = if shared_object(&inner.map, id) || inner.files.contains_key(&id) {
+            Sharing::Shared
+        } else {
+            Sharing::Private
+        };
+        vmo.attach(Arc::downgrade(child), id, sharing)
+            .map_err(|_| SpaceError::OutOfMemory)?;
+    }
+    for (&id, shadow) in &inner.shadows {
+        shadow
+            .attach(Arc::downgrade(child), id, Sharing::Private)
+            .map_err(|_| SpaceError::OutOfMemory)?;
+    }
+    Ok(())
+}
+
+/// The error a refused map change is reported as: running out of memory is
+/// said, and the rest is a range the map would not take.
+fn map_error(error: ferrix_vma::VmaError) -> SpaceError {
+    match error {
+        ferrix_vma::VmaError::NoMemory => SpaceError::OutOfMemory,
+        _ => SpaceError::BadRange,
+    }
+}
+
 fn sharing_of(flags: VmaFlags) -> Sharing {
     if flags.shared {
         Sharing::Shared
@@ -448,15 +574,60 @@ impl AddressSpace {
         inner.next_id = inner.next_id.saturating_add(1);
 
         let pages = len.div_ceil(PAGE_SIZE);
-        let vmo = Vmo::new_anonymous(pages);
-
-        inner
-            .map
-            .insert(range, flags, Backing::Anonymous { id, offset: 0 })
-            .map_err(|_| SpaceError::BadRange)?;
-        vmo.attach(self.me.clone(), id, sharing_of(flags));
-        let _ = inner.objects.insert(id, vmo);
+        let vmo = Vmo::new_anonymous(pages).map_err(|_| SpaceError::OutOfMemory)?;
+        self.add_region(
+            &mut inner,
+            NewRegion {
+                id,
+                range,
+                flags,
+                backing: Backing::Anonymous { id, offset: 0 },
+                sharing: sharing_of(flags),
+            },
+            vmo,
+        )?;
         Ok(id)
+    }
+
+    /// Map `region`, naming `vmo` by its id: the region in the map, this
+    /// space among the object's mappers, and the object in the table -- all
+    /// three or, when memory runs out part-way, none (finding F-23).
+    fn add_region(
+        &self,
+        inner: &mut Inner,
+        region: NewRegion,
+        vmo: Arc<Vmo>,
+    ) -> Result<(), SpaceError> {
+        let NewRegion {
+            id,
+            range,
+            flags,
+            backing,
+            sharing,
+        } = region;
+        // Room in the object table first; the rest undoes itself below.
+        let held = fallible::reserve().map_err(|_| SpaceError::OutOfMemory)?;
+        vmo.attach(self.me.clone(), id, sharing)
+            .map_err(|_| SpaceError::OutOfMemory)?;
+        // FALLIBLE: the map's insert refuses with `VmaError::NoMemory`.
+        if let Err(error) = inner.map.insert(range, flags, backing) {
+            vmo.detach(self, id);
+            return Err(map_error(error));
+        }
+        let _ = fallible::insert_held(&held, &mut inner.objects, id, vmo);
+        Ok(())
+    }
+
+    /// Undo [`AddressSpace::add_region`] for `id` over `range`, for a mapping
+    /// whose later bookkeeping could not be done: out of the table, off the
+    /// object's mappers, out of the map. The region was just inserted whole,
+    /// so taking it out splits nothing and needs no memory.
+    fn abandon_region(&self, inner: &mut Inner, id: u64, range: PageRange) {
+        if let Some(vmo) = inner.objects.remove(&id) {
+            vmo.detach(self, id);
+        }
+        let _ = inner.native.remove(&id);
+        let _ = inner.map.remove_quietly(range);
     }
 
     /// Take this space's translations of every copy-on-write region out of
@@ -551,22 +722,31 @@ impl AddressSpace {
                     }
                 }
             };
-            let _ = objects.insert(id, forked);
+            if fallible::insert(&mut objects, id, forked).is_err() {
+                mm::deallocate_frames(root, 0);
+                return Err(SpaceError::OutOfMemory);
+            }
         }
         // Each private file mapping's shadow copies on write, as private
         // anonymous memory does: the child gets an object of its own.
         let mut shadows = BTreeMap::new();
         for (&id, shadow) in &inner.shadows {
-            match shadow.fork() {
+            let recorded = match shadow.fork() {
                 Ok(forked) => {
-                    let _ = shadows.insert(id, forked);
+                    fallible::insert(&mut shadows, id, forked).map_err(|_| SpaceError::OutOfMemory)
                 }
-                Err(why) => {
-                    mm::deallocate_frames(root, 0);
-                    return Err(SpaceError::Backing(why));
-                }
+                Err(why) => Err(SpaceError::Backing(why)),
+            };
+            if let Err(why) = recorded {
+                mm::deallocate_frames(root, 0);
+                return Err(why);
             }
         }
+        // And the tables the child inherits as they are, copied fallibly.
+        let Ok((native, files)) = inherited(&inner) else {
+            mm::deallocate_frames(root, 0);
+            return Err(SpaceError::OutOfMemory);
+        };
 
         // Only now the parent's map is marked and copied, and its writable
         // translations to the shared pages taken down.
@@ -580,8 +760,6 @@ impl AddressSpace {
         // Read before the lock goes, because the child inherits them. A
         // native object is shared, so the child names the same one.
         let next_id = inner.next_id;
-        let native = inner.native.clone();
-        let files = inner.files.clone();
 
         // The parent's writable translations to the shared pages are out of
         // its tables, but may still be in the TLB of a processor in its set —
@@ -591,7 +769,7 @@ impl AddressSpace {
         drop(inner);
         self.shoot(&cpus, &pages);
 
-        let child = Arc::new_cyclic(|me| AddressSpace {
+        let child = fallible::try_arc_cyclic(|me| AddressSpace {
             root,
             me: me.clone(),
             cpus: CpuMask::new(),
@@ -610,30 +788,11 @@ impl AddressSpace {
                 next_id,
                 native,
             }),
-        });
-        {
-            let inner = child.inner.lock();
-            for (&id, vmo) in &inner.objects {
-                let sharing = if shared_object(&inner.map, id) || inner.files.contains_key(&id) {
-                    Sharing::Shared
-                } else {
-                    Sharing::Private
-                };
-                vmo.attach(Arc::downgrade(&child), id, sharing);
-            }
-            for (&id, shadow) in &inner.shadows {
-                shadow.attach(Arc::downgrade(&child), id, Sharing::Private);
-            }
-            // The child's copy of a mapping that may write its file counts as
-            // one more, under the child's lock, before anything can look.
-            for (&id, mapping) in &inner.files {
-                if mapping.may_write
-                    && let Some(vmo) = inner.objects.get(&id)
-                {
-                    vmo.raise_shared_may_write();
-                }
-            }
-        }
+        })
+        // The root goes back with the rest: the parent's marks only make it
+        // copy on write what it could have written, which is harmless.
+        .map_err(|_| SpaceError::OutOfMemory)?;
+        attach_child(&child)?;
         Ok(child)
     }
 
@@ -720,20 +879,7 @@ impl AddressSpace {
             // exited, and copying would allocate a frame in order to duplicate
             // data this space is the sole owner of.
             let (frame, retired) = if mm::frame_references(shared) > 1 {
-                let copy = mm::allocate_frames(0).ok_or(SpaceError::OutOfMemory)?;
-                mm::copy_frame(copy, shared);
-                // Replacing takes the shared page out of this object; the
-                // reference is given back once no processor can reach it
-                // through this space or any other that maps the object.
-                match vmo.take_page(index, copy) {
-                    Some(retired) => (copy, Some(retired)),
-                    // Held since the count was read. A held page is this
-                    // object's alone, so the write goes to it, uncopied.
-                    None => {
-                        let _ = mm::release_frame(copy);
-                        (vmo.page(index).unwrap_or(shared), None)
-                    }
-                }
+                copy_on_write(&vmo, index, shared)?
             } else {
                 (shared, None)
             };
@@ -1024,11 +1170,15 @@ impl AddressSpace {
         let copy = mm::allocate_frames(0).ok_or(SpaceError::OutOfMemory)?;
         mm::copy_frame(copy, at.frame);
         let (frame, retired) = match shadow.take_page(at.index, copy) {
-            Some(retired) => (copy, Some(retired)),
+            Ok(retired) => (copy, Some(retired)),
             // Held since the count was read: the write goes to the held page.
-            None => {
+            Err(Kept::Held) => {
                 let _ = mm::release_frame(copy);
                 (shadow.page(at.index).unwrap_or(at.frame), None)
+            }
+            Err(Kept::NoMemory) => {
+                let _ = mm::release_frame(copy);
+                return Err(SpaceError::OutOfMemory);
             }
         };
         let mut pages = TlbPages::new();
@@ -1677,20 +1827,7 @@ impl AddressSpace {
             let fresh = if shared {
                 None
             } else {
-                // The pages leave an object only this space maps, so nobody
-                // else can hold a translation to them: always checked, before
-                // anything is moved or anyone told.
-                if vmo.mapper_count() != 1 {
-                    crate::panic::fatal!(
-                        crate::panic::catalog::PRIVATE_OBJECT_SHARED,
-                        "mremap found a VMO backing a private region with more than one mapper"
-                    );
-                }
-                let fresh = Vmo::new_anonymous(new_len / PAGE_SIZE);
-                let moved = fresh
-                    .adopt_pages(&vmo, first / PAGE_SIZE, old_len.min(new_len) / PAGE_SIZE)
-                    .map_err(|_| SpaceError::OutOfMemory)?;
-                Some((fresh, moved))
+                Some(self.move_private(&mut inner, &vmo, first, old_len.min(new_len), new_len)?)
             };
 
             // Everything that can be refused has been. Whatever a fixed
@@ -1749,6 +1886,74 @@ impl AddressSpace {
         placed
     }
 
+    /// Move a private region's `moved` bytes of `vmo`, from byte `first`,
+    /// into a new object `new_len` bytes long, for an `mremap`: the new
+    /// object's id, the object, and what the move took out of `vmo`.
+    ///
+    /// The move goes before the map changes, because it is the last thing
+    /// that can still be refused: a held page does not move, and the new
+    /// object needs memory.
+    fn move_private(
+        &self,
+        inner: &mut Inner,
+        vmo: &Arc<Vmo>,
+        first: u64,
+        moved: u64,
+        new_len: u64,
+    ) -> Result<(u64, Arc<Vmo>, Retired), SpaceError> {
+        // The pages leave an object only this space maps, so nobody else can
+        // hold a translation to them: always checked, before anything is
+        // moved or anyone told.
+        if vmo.mapper_count() != 1 {
+            crate::panic::fatal!(
+                crate::panic::catalog::PRIVATE_OBJECT_SHARED,
+                "mremap found a VMO backing a private region with more than one mapper"
+            );
+        }
+        let fresh_id = self.add_fresh(inner, new_len / PAGE_SIZE)?;
+        let fresh = Arc::clone(
+            inner
+                .objects
+                .get(&fresh_id)
+                .ok_or(SpaceError::OutOfMemory)?,
+        );
+        match fresh.adopt_pages(vmo, first / PAGE_SIZE, moved / PAGE_SIZE) {
+            Ok(retired) => Ok((fresh_id, fresh, retired)),
+            Err(_) => {
+                self.drop_fresh(inner, fresh_id);
+                Err(SpaceError::OutOfMemory)
+            }
+        }
+    }
+
+    /// A new private anonymous object of `pages` pages for an `mremap` to
+    /// move pages into, attached and in the table under a new id, which is
+    /// returned: made before anything is changed, so that running out of
+    /// memory is still an answer (finding F-23). Until a region names it, it
+    /// is an object nothing maps.
+    fn add_fresh(&self, inner: &mut Inner, pages: u64) -> Result<u64, SpaceError> {
+        let fresh = Vmo::new_anonymous(pages).map_err(|_| SpaceError::OutOfMemory)?;
+        let id = inner.next_id;
+        fresh
+            .attach(self.me.clone(), id, Sharing::Private)
+            .map_err(|_| SpaceError::OutOfMemory)?;
+        let Ok(held) = fallible::reserve() else {
+            fresh.detach(self, id);
+            return Err(SpaceError::OutOfMemory);
+        };
+        let _ = fallible::insert_held(&held, &mut inner.objects, id, fresh);
+        drop(held);
+        inner.next_id = inner.next_id.saturating_add(1);
+        Ok(id)
+    }
+
+    /// Undo [`AddressSpace::add_fresh`] for an `mremap` that did not move.
+    fn drop_fresh(&self, inner: &mut Inner, id: u64) {
+        if let Some(fresh) = inner.objects.remove(&id) {
+            fresh.detach(self, id);
+        }
+    }
+
     /// The backing an `mremap`'s region gets, once `cleared` says whether its
     /// old placement came out of the map and the tables, and what its pages
     /// left behind in the old object if they moved.
@@ -1763,7 +1968,7 @@ impl AddressSpace {
         vmo: &Arc<Vmo>,
         resize: Resize,
         cleared: Result<(), SpaceError>,
-        fresh: Option<(Arc<Vmo>, Retired)>,
+        fresh: Option<(u64, Arc<Vmo>, Retired)>,
         freeing: &mut Vec<Freeing>,
     ) -> (Result<Backing, SpaceError>, Option<Retired>) {
         let Resize {
@@ -1773,8 +1978,9 @@ impl AddressSpace {
             new_len,
         } = resize;
         match (cleared, fresh) {
-            (Err(why), Some((fresh, _moved))) => {
+            (Err(why), Some((fresh_id, fresh, _moved))) => {
                 fresh.return_pages(vmo, first / PAGE_SIZE);
+                self.drop_fresh(inner, fresh_id);
                 (Err(why), None)
             }
             (Err(why), None) => (Err(why), None),
@@ -1790,9 +1996,7 @@ impl AddressSpace {
                 }
                 (Ok(Backing::Anonymous { id, offset: first }), None)
             }
-            (Ok(()), Some((fresh, retired))) => {
-                let fresh_id = inner.next_id;
-                inner.next_id = inner.next_id.saturating_add(1);
+            (Ok(()), Some((fresh_id, _fresh, retired))) => {
                 // Whatever did not move -- the tail a shrink cut off -- is
                 // still the old object's, and goes back with the rest.
                 freeing.push(Freeing {
@@ -1801,8 +2005,6 @@ impl AddressSpace {
                     pages: old_len / PAGE_SIZE,
                     shadow: false,
                 });
-                fresh.attach(self.me.clone(), fresh_id, Sharing::Private);
-                let _ = inner.objects.insert(fresh_id, fresh);
                 let backing = Backing::Anonymous {
                     id: fresh_id,
                     offset: 0,
@@ -2050,6 +2252,7 @@ impl AddressSpace {
         };
         inner
             .map
+            // FALLIBLE: the map's insert refuses with `VmaError::NoMemory`.
             .insert(
                 range,
                 flags,
@@ -2059,7 +2262,7 @@ impl AddressSpace {
                     cached: false,
                 },
             )
-            .map_err(|_| SpaceError::BadRange)?;
+            .map_err(map_error)?;
         Ok(at)
     }
 
@@ -2114,8 +2317,10 @@ impl AddressSpace {
             grows_down: false,
             ..flags
         };
+        let held = fallible::reserve().map_err(|_| SpaceError::OutOfMemory)?;
         inner
             .map
+            // FALLIBLE: the map's insert refuses with `VmaError::NoMemory`.
             .insert(
                 range,
                 flags,
@@ -2125,8 +2330,10 @@ impl AddressSpace {
                     cached,
                 },
             )
-            .map_err(|_| SpaceError::BadRange)?;
-        let _ = inner.files.insert(
+            .map_err(map_error)?;
+        let _ = fallible::insert_held(
+            &held,
+            &mut inner.files,
             id,
             FileMapping {
                 file: keeper,
@@ -2211,14 +2418,19 @@ impl AddressSpace {
 
         let id = inner.next_id;
         inner.next_id = inner.next_id.saturating_add(1);
-        let vmo = Vmo::new_anonymous(len.div_ceil(PAGE_SIZE));
-
-        inner
-            .map
-            .insert(range, flags, Backing::Anonymous { id, offset: 0 })
-            .map_err(|_| SpaceError::BadRange)?;
-        vmo.attach(self.me.clone(), id, sharing_of(flags));
-        let _ = inner.objects.insert(id, vmo);
+        let vmo =
+            Vmo::new_anonymous(len.div_ceil(PAGE_SIZE)).map_err(|_| SpaceError::OutOfMemory)?;
+        self.add_region(
+            &mut inner,
+            NewRegion {
+                id,
+                range,
+                flags,
+                backing: Backing::Anonymous { id, offset: 0 },
+                sharing: sharing_of(flags),
+            },
+            vmo,
+        )?;
         Ok(at)
     }
 
@@ -2287,13 +2499,21 @@ impl AddressSpace {
         };
         let id = inner.next_id;
         inner.next_id = inner.next_id.saturating_add(1);
-        inner
-            .map
-            .insert(range, flags, Backing::Anonymous { id, offset })
-            .map_err(|_| SpaceError::BadRange)?;
-        vmo.attach(self.me.clone(), id, Sharing::Shared);
-        let _ = inner.objects.insert(id, vmo);
-        let _ = inner.native.insert(id);
+        self.add_region(
+            &mut inner,
+            NewRegion {
+                id,
+                range,
+                flags,
+                backing: Backing::Anonymous { id, offset },
+                sharing: Sharing::Shared,
+            },
+            vmo,
+        )?;
+        if fallible::insert_into_set(&mut inner.native, id).is_err() {
+            self.abandon_region(&mut inner, id, range);
+            return Err(SpaceError::OutOfMemory);
+        }
         Ok(at)
     }
 
@@ -2330,36 +2550,78 @@ impl AddressSpace {
             return Err(SpaceError::BadRange);
         }
         let mut inner = self.inner.lock();
-        let at = match place {
-            FilePlace::Fixed(at) => at,
-            FilePlace::Anywhere(hint) => inner
-                .map
-                .find_free(len, PAGE_SIZE, hint)
-                .ok_or(SpaceError::OutOfMemory)?,
-        };
-        if !is_user_address(at) || at.checked_add(len).is_none_or(|end| end > USER_VIRT_END) {
-            return Err(SpaceError::NotUserRange(at));
-        }
-        let range = PageRange::from_len(at, len).map_err(|_| SpaceError::BadRange)?;
+        let range = file_placement(&inner.map, place, len)?;
+        let at = range.start();
 
         let id = inner.next_id;
         inner.next_id = inner.next_id.saturating_add(1);
-        inner
-            .map
-            .insert(range, flags, Backing::File { id, offset })
-            .map_err(|_| SpaceError::BadRange)?;
-        vmo.attach(self.me.clone(), id, Sharing::Shared);
-        if !flags.shared {
-            let shadow = Vmo::new_anonymous(offset.saturating_add(len).div_ceil(PAGE_SIZE));
-            shadow.attach(self.me.clone(), id, Sharing::Private);
-            let _ = inner.shadows.insert(id, shadow);
+        // The shadow a private mapping writes into, made before anything is
+        // changed.
+        let shadow = if flags.shared {
+            None
+        } else {
+            let pages = offset.saturating_add(len).div_ceil(PAGE_SIZE);
+            Some(Vmo::new_anonymous(pages).map_err(|_| SpaceError::OutOfMemory)?)
+        };
+        let may_write = mapping.may_write;
+        let file = Arc::clone(&vmo);
+        self.add_region(
+            &mut inner,
+            NewRegion {
+                id,
+                range,
+                flags,
+                backing: Backing::File { id, offset },
+                sharing: Sharing::Shared,
+            },
+            vmo,
+        )?;
+        if let Err(mapping) = self.add_file(&mut inner, id, shadow, mapping) {
+            self.abandon_region(&mut inner, id, range);
+            // The mapping's file goes after the lock: it may hold the last
+            // reference to an inode.
+            drop(inner);
+            drop(mapping);
+            return Err(SpaceError::OutOfMemory);
         }
-        if mapping.may_write {
-            vmo.raise_shared_may_write();
+        if may_write {
+            file.raise_shared_may_write();
         }
-        let _ = inner.objects.insert(id, vmo);
-        let _ = inner.files.insert(id, mapping);
         Ok(at)
+    }
+
+    /// Record a file mapping's shadow, if it is private, and the mapping
+    /// itself under `id`. On refusal nothing of either is recorded, the
+    /// shadow is detached again, and the mapping comes back, for the caller
+    /// to drop once its lock is gone.
+    fn add_file(
+        &self,
+        inner: &mut Inner,
+        id: u64,
+        shadow: Option<Arc<Vmo>>,
+        mapping: FileMapping,
+    ) -> Result<(), FileMapping> {
+        if let Some(shadow) = shadow {
+            if shadow
+                .attach(self.me.clone(), id, Sharing::Private)
+                .is_err()
+            {
+                return Err(mapping);
+            }
+            let Ok(held) = fallible::reserve() else {
+                shadow.detach(self, id);
+                return Err(mapping);
+            };
+            let _ = fallible::insert_held(&held, &mut inner.shadows, id, shadow);
+        }
+        let Ok(held) = fallible::reserve() else {
+            if let Some(shadow) = inner.shadows.remove(&id) {
+                shadow.detach(self, id);
+            }
+            return Err(mapping);
+        };
+        let _ = fallible::insert_held(&held, &mut inner.files, id, mapping);
+        Ok(())
     }
 
     /// The open file a file mapping's region names by `id`, for
@@ -2829,21 +3091,33 @@ pub(crate) struct Region {
 
 impl AddressSpace {
     /// Every region, lowest first, as it stands at the moment of the call.
-    pub(crate) fn regions(&self) -> Vec<Region> {
-        self.inner
-            .lock()
-            .map
-            .iter()
-            .map(|vma| Region {
-                start: vma.range.start(),
-                end: vma.range.end(),
-                flags: vma.flags,
-                file: match vma.backing {
-                    Backing::File { id, offset } => Some((id, offset)),
-                    _ => None,
-                },
-            })
-            .collect()
+    ///
+    /// # Errors
+    ///
+    /// [`fallible::AllocError`] when there is no memory for the list; a
+    /// caller that only looks uses [`AddressSpace::with_regions`], which
+    /// needs none.
+    pub(crate) fn regions(&self) -> Result<Vec<Region>, fallible::AllocError> {
+        self.with_regions(|regions| fallible::try_collect(regions))
+    }
+
+    /// Show `visit` every region, lowest first, under the space's lock: it
+    /// must not wait, and nothing can change the map while it looks.
+    pub(crate) fn with_regions<R>(
+        &self,
+        visit: impl FnOnce(&mut dyn Iterator<Item = Region>) -> R,
+    ) -> R {
+        let inner = self.inner.lock();
+        let mut regions = inner.map.iter().map(|vma| Region {
+            start: vma.range.start(),
+            end: vma.range.end(),
+            flags: vma.flags,
+            file: match vma.backing {
+                Backing::File { id, offset } => Some((id, offset)),
+                _ => None,
+            },
+        });
+        visit(&mut regions)
     }
 
     /// Pages the objects this space maps have committed: its resident set.
@@ -2851,14 +3125,16 @@ impl AddressSpace {
     /// A page shared with another space after `fork` is counted in both, as
     /// Linux's `VmRSS` counts it. An object mapped here more than once, which
     /// `vmo_map` allows, is counted once.
-    pub(crate) fn resident_pages(&self) -> u64 {
+    ///
+    /// # Errors
+    ///
+    /// [`fallible::AllocError`] when there is no memory to list the objects
+    /// in.
+    pub(crate) fn resident_pages(&self) -> Result<u64, fallible::AllocError> {
         let inner = self.inner.lock();
-        let mut counted = BTreeSet::new();
-        inner
-            .objects
-            .values()
-            .filter(|vmo| counted.insert(Arc::as_ptr(vmo) as usize))
-            .map(|vmo| vmo.committed() as u64)
-            .sum()
+        let mut objects = fallible::try_collect(inner.objects.values())?;
+        objects.sort_unstable_by_key(|vmo| Arc::as_ptr(vmo));
+        objects.dedup_by_key(|vmo| Arc::as_ptr(vmo));
+        Ok(objects.iter().map(|vmo| vmo.committed() as u64).sum())
     }
 }

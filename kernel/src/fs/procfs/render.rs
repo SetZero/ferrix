@@ -592,7 +592,8 @@ pub(super) fn maps(process: &Process) -> Result<Vec<u8>> {
     let stack = start_stack(process);
     let root = process.fs_context().lock().root.clone();
     let mut out = Vec::new();
-    for region in process.space().regions() {
+    let regions = process.space().regions().map_err(|_| Errno::ENOMEM)?;
+    for region in regions {
         let file = region.file.and_then(|(id, offset)| {
             let file = process
                 .space()
@@ -669,19 +670,26 @@ impl Memory {
             data: 0,
             stack: 0,
         };
-        for region in process.space().regions() {
-            let bytes = region.end.saturating_sub(region.start);
-            memory.size = memory.size.saturating_add(bytes);
-            if region.flags.locked {
-                memory.locked = memory.locked.saturating_add(bytes);
+        process.space().with_regions(|regions| {
+            for region in regions {
+                memory.add(&region, stack_pointer);
             }
-            if holds(&region, stack_pointer) {
-                memory.stack = memory.stack.saturating_add(bytes);
-            } else if region.flags.write && !region.flags.shared {
-                memory.data = memory.data.saturating_add(bytes);
-            }
-        }
+        });
         memory
+    }
+
+    /// Count `region` in.
+    fn add(&mut self, region: &Region, stack_pointer: u64) {
+        let bytes = region.end.saturating_sub(region.start);
+        self.size = self.size.saturating_add(bytes);
+        if region.flags.locked {
+            self.locked = self.locked.saturating_add(bytes);
+        }
+        if holds(region, stack_pointer) {
+            self.stack = self.stack.saturating_add(bytes);
+        } else if region.flags.write && !region.flags.shared {
+            self.data = self.data.saturating_add(bytes);
+        }
     }
 }
 
@@ -839,7 +847,8 @@ fn stat_of(process: &Process, tid: u32) -> Result<Vec<u8>> {
         threads: thread_count(process),
         start_time: process.started() / (NANOS / CLOCK_TICKS),
         vsize: memory.size,
-        rss: process.space().resident_pages(),
+        // With no memory to count them in, none: `stat` is still answered.
+        rss: process.space().resident_pages().unwrap_or(0),
         // `RLIM_INFINITY`, as an `unsigned long`.
         rss_limit: usize::MAX as u64,
         // A copying loader keeps no record of where the text was put.

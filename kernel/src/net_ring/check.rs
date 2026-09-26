@@ -363,8 +363,10 @@ impl Driver {
     fn new() -> Result<Driver, &'static str> {
         let ring_bytes = (64 + ENTRIES as usize * 32).next_multiple_of(PAGE_SIZE as usize);
         let data_bytes = (ENTRIES as usize * SLOT as usize).next_multiple_of(PAGE_SIZE as usize);
-        let ring_vmo = Vmo::new_anonymous(ring_bytes as u64 / PAGE_SIZE);
-        let data_vmo = Vmo::new_anonymous(data_bytes as u64 / PAGE_SIZE);
+        let ring_vmo =
+            Vmo::new_anonymous(ring_bytes as u64 / PAGE_SIZE).map_err(|_| "no memory for a VMO")?;
+        let data_vmo =
+            Vmo::new_anonymous(data_bytes as u64 / PAGE_SIZE).map_err(|_| "no memory for a VMO")?;
         let ring_held = ring_vmo
             .hold(0, ring_vmo.len_pages())
             .map_err(|_| "the ring VMO could not be held")?;

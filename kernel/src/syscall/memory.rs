@@ -348,19 +348,16 @@ pub(crate) fn sys_msync(
         .map(|len| len & !(PAGE_SIZE - 1))
         .ok_or(Errno::ENOMEM)?;
     let end = addr.checked_add(len).ok_or(Errno::ENOMEM)?;
-    let mut covered = addr;
-    for region in process.space().regions() {
-        if covered >= end {
-            break;
+    let covered = process.space().with_regions(|regions| {
+        let mut covered = addr;
+        for region in regions {
+            if covered >= end || region.start > covered {
+                break;
+            }
+            covered = covered.max(region.end);
         }
-        if region.end <= covered {
-            continue;
-        }
-        if region.start > covered {
-            return Err(Errno::ENOMEM);
-        }
-        covered = region.end;
-    }
+        covered
+    });
     if covered < end {
         return Err(Errno::ENOMEM);
     }
@@ -591,11 +588,12 @@ pub(crate) fn sys_mremap(
         // call changes nothing.
         if new_addr < MMAP_MIN_ADDR {
             let old_end = old_addr.saturating_add(old_len);
-            let mapped = process
-                .space()
-                .regions()
-                .iter()
-                .any(|region| region.start <= old_addr && old_end <= region.end);
+            let mapped = process.space().with_regions(|mut regions| {
+                // Through the reference: `any` needs a sized iterator.
+                Iterator::any(&mut regions, |region| {
+                    region.start <= old_addr && old_end <= region.end
+                })
+            });
             return Err(if mapped { Errno::EPERM } else { Errno::EFAULT });
         }
         Destination::Fixed(new_addr)

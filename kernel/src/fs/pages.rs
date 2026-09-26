@@ -74,11 +74,11 @@ pub(crate) struct VmoStorage;
 
 impl Storage for VmoStorage {
     fn allocate(&self) -> Result<Box<dyn Pages>> {
-        Ok(Box::new(VmoPages::new(None)))
+        Ok(Box::new(VmoPages::new(None)?))
     }
 
     fn allocate_with(&self, source: Arc<dyn PageSource>) -> Result<Box<dyn Pages>> {
-        Ok(Box::new(VmoPages::new(Some(source))))
+        Ok(Box::new(VmoPages::new(Some(source))?))
     }
 
     fn max_file_size(&self) -> u64 {
@@ -160,7 +160,7 @@ fn release_all(frames: impl IntoIterator<Item = Frame>) {
 }
 
 impl VmoPages {
-    fn new(source: Option<Arc<dyn PageSource>>) -> VmoPages {
+    fn new(source: Option<Arc<dyn PageSource>>) -> Result<VmoPages> {
         let fill = source.map(|source| {
             Arc::new(Fill {
                 source,
@@ -168,10 +168,10 @@ impl VmoPages {
             })
         });
         let filler = fill.clone().map(|fill| fill as Arc<dyn Filler>);
-        VmoPages {
-            vmo: Vmo::new_filled(MAX_FILE_SIZE / PAGE_SIZE, filler),
+        Ok(VmoPages {
+            vmo: Vmo::new_filled(MAX_FILE_SIZE / PAGE_SIZE, filler).map_err(|_| Errno::ENOMEM)?,
             fill,
-        }
+        })
     }
 
     /// Page `index` is absent and its source's to fill.
@@ -407,7 +407,9 @@ impl Pages for VmoPages {
     /// other reference to it is out: a mapping's, or the one `mmap` holds
     /// between asking for the object and counting its mapping in.
     fn mapped_writes(&self) -> (Vec<u64>, bool) {
-        let written = self.vmo.take_mapped_writes();
+        // With no memory for the list, none this time: the object keeps its
+        // mark, and the next call reports them.
+        let written = self.vmo.take_mapped_writes().unwrap_or_default();
         (written, Arc::strong_count(&self.vmo) > 1)
     }
 }

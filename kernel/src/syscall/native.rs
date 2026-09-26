@@ -960,7 +960,7 @@ fn vmo_create(process: &Process, bytes: u64) -> Result<usize, Errno> {
     if pages > MAX_VMO_PAGES {
         return Err(status::NO_MEMORY);
     }
-    let vmo = Vmo::try_new_anonymous(pages).map_err(|_| status::NO_MEMORY)?;
+    let vmo = Vmo::new_anonymous(pages).map_err(|_| status::NO_MEMORY)?;
     insert_new(process, Object::Vmo(vmo), Rights::VMO)
 }
 

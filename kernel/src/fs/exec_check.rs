@@ -280,6 +280,7 @@ fn check_the_segment_is_the_files(space: &AddressSpace) -> Result<(), &'static s
     let end = (LARGE_VADDR + LARGE_FILESZ) & !(PAGE_SIZE - 1);
     let region = space
         .regions()
+        .map_err(|_| "no memory to list the regions")?
         .into_iter()
         .find(|region| region.start == LARGE_VADDR)
         .ok_or("nothing is mapped where the large segment starts")?;

@@ -700,9 +700,9 @@ fn accept(start: &Start, message: &ChannelMessage) -> Result<Arc<Renderer>, Refu
     // will say a fence has passed. The VMO is the core's: it hands out ranges
     // of it and never reads what is written there (`docs/GPU.md` §3.3), and
     // it keeps its own reference because the node writes those ranges.
-    let work = Vmo::new_anonymous(WORK_BYTES / PAGE_SIZE);
     // The wire protocol has no refusal for memory; a malformed start is the
     // nearest it has.
+    let work = Vmo::new_anonymous(WORK_BYTES / PAGE_SIZE).map_err(|_| Refusal::Malformed)?;
     let core_port = Port::new().map_err(|_| Refusal::Malformed)?;
     let renderer = Arc::new(Renderer {
         index,
@@ -1100,8 +1100,15 @@ impl Renderer {
             };
             (object, at)
         };
-        let backing = (object_flags & flags::MAPPABLE != 0)
-            .then(|| Vmo::new_anonymous(bytes.div_ceil(PAGE_SIZE)));
+        let Ok(backing) = (object_flags & flags::MAPPABLE != 0)
+            .then(|| Vmo::new_anonymous(bytes.div_ceil(PAGE_SIZE)))
+            .transpose()
+        else {
+            // The session has no error for memory; a full table is the
+            // nearest, and the slot goes back as it would on any refusal.
+            self.state.lock().give_describe(at);
+            return Err(RenderError::Request(RequestError::Full));
+        };
         let made = self.describe_and_make(
             object,
             at,

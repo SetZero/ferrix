@@ -20,8 +20,8 @@
       "recursive": false
     },
     "arch/aarch64/signal.rs::setup_signal_frame": {
-      "complexity": 23,
-      "lines": 43,
+      "complexity": 22,
+      "lines": 40,
       "recursive": false
     },
     "arch/aarch64/trap.rs::class_name": {
@@ -30,13 +30,13 @@
       "recursive": false
     },
     "arch/armv7a/signal.rs::setup_signal_frame": {
-      "complexity": 25,
-      "lines": 40,
+      "complexity": 24,
+      "lines": 38,
       "recursive": false
     },
     "arch/x86_64/signal.rs::setup_signal_frame": {
-      "complexity": 21,
-      "lines": 40,
+      "complexity": 20,
+      "lines": 36,
       "recursive": false
     },
     "arch/x86_64/trap.rs::vector_name": {
@@ -50,8 +50,8 @@
       "recursive": false
     },
     "devmgr.rs::request": {
-      "complexity": 24,
-      "lines": 71,
+      "complexity": 17,
+      "lines": 44,
       "recursive": false
     },
     "devmgr.rs::start": {
@@ -76,7 +76,7 @@
     },
     "main.rs::check_vmap": {
       "complexity": 19,
-      "lines": 31,
+      "lines": 30,
       "recursive": false
     },
     "main.rs::kmain": {
@@ -135,8 +135,8 @@
       "recursive": false
     },
     "syscall/native.rs::vmo_pin": {
-      "complexity": 21,
-      "lines": 32,
+      "complexity": 20,
+      "lines": 31,
       "recursive": false
     },
     "trap.rs::handle_page_fault": {
@@ -159,24 +159,19 @@
       "lines": 54,
       "recursive": false
     },
-    "user/space.rs::fork": {
-      "complexity": 19,
-      "lines": 70,
-      "recursive": false
-    },
     "user/space.rs::protect": {
       "complexity": 15,
       "lines": 34,
       "recursive": false
     },
     "user/space.rs::remap": {
-      "complexity": 19,
-      "lines": 81,
+      "complexity": 18,
+      "lines": 72,
       "recursive": false
     },
     "user/space.rs::resolve": {
-      "complexity": 22,
-      "lines": 90,
+      "complexity": 20,
+      "lines": 84,
       "recursive": false
     }
   }

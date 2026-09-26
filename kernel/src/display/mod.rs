@@ -1032,7 +1032,7 @@ fn accept(start: &Start, message: &ChannelMessage) -> Result<Arc<Card>, Refusal>
         return Err(Refusal::Framebuffer);
     }
 
-    let vmo = Vmo::new_anonymous(CARD_BYTES / PAGE_SIZE);
+    let vmo = Vmo::new_anonymous(CARD_BYTES / PAGE_SIZE).map_err(|_| Refusal::Malformed)?;
     // The wire protocol has no refusal for memory; a malformed start is the
     // nearest it has.
     let core_port = Port::new().map_err(|_| Refusal::Malformed)?;

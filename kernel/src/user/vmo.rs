@@ -112,6 +112,15 @@ pub(crate) struct HeldPage {
     pub(crate) index: u64,
 }
 
+/// Why [`Vmo::take_page`] left a page as it was.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Kept {
+    /// The page is held in place for a device.
+    Held,
+    /// There was no memory to record the change (finding F-23).
+    NoMemory,
+}
+
 /// Where a file's pages come from before anything has read them: the page
 /// cache of a filesystem on a disk.
 ///
@@ -266,23 +275,25 @@ pub(crate) struct Own<'a> {
 
 impl Vmo {
     /// An anonymous object of `pages` pages, with nothing committed.
-    pub(crate) fn new_anonymous(pages: u64) -> Arc<Vmo> {
-        Vmo::new_filled(pages, None)
-    }
-
-    /// [`Vmo::new_anonymous`], or [`AllocError`] when memory has run out.
     ///
     /// # Errors
     ///
-    /// [`AllocError`].
-    pub(crate) fn try_new_anonymous(pages: u64) -> Result<Arc<Vmo>, AllocError> {
-        crate::fallible::try_arc(Vmo::unfilled(pages, None))
+    /// [`AllocError`] when memory has run out.
+    pub(crate) fn new_anonymous(pages: u64) -> Result<Arc<Vmo>, AllocError> {
+        Vmo::new_filled(pages, None)
     }
 
     /// An object of `pages` pages holding a file's contents, whose absent
     /// pages `filler` fills before a fault commits them.
-    pub(crate) fn new_filled(pages: u64, filler: Option<Arc<dyn Filler>>) -> Arc<Vmo> {
-        Arc::new(Vmo::unfilled(pages, filler))
+    ///
+    /// # Errors
+    ///
+    /// [`AllocError`] when memory has run out.
+    pub(crate) fn new_filled(
+        pages: u64,
+        filler: Option<Arc<dyn Filler>>,
+    ) -> Result<Arc<Vmo>, AllocError> {
+        crate::fallible::try_arc(Vmo::unfilled(pages, filler))
     }
 
     /// The object [`Vmo::new_filled`] allocates.
@@ -375,22 +386,37 @@ impl Vmo {
     /// own object for every private region, so nothing in the kernel does
     /// this, and a caller that did would be silently wrong about which spaces
     /// see a page. Always on, not a debug assertion, for that reason.
-    pub(crate) fn attach(&self, space: Weak<AddressSpace>, object: u64, sharing: Sharing) {
+    ///
+    /// # Errors
+    ///
+    /// [`AllocError`] when there is no memory to list the mapper; nothing is
+    /// recorded.
+    pub(crate) fn attach(
+        &self,
+        space: Weak<AddressSpace>,
+        object: u64,
+        sharing: Sharing,
+    ) -> Result<(), AllocError> {
         let mut mappers = self.mappers.lock();
         mappers.retain(|mapper| mapper.space.strong_count() > 0);
         let joinable = mappers
             .iter()
             .all(|mapper| mapper.sharing == Sharing::Shared)
             && (sharing == Sharing::Shared || mappers.is_empty());
-        assert!(
-            joinable,
-            "a VMO backing a private region would have more than one mapper"
-        );
-        mappers.push(Mapper {
-            sharing,
-            space,
-            object,
-        });
+        if !joinable {
+            crate::panic::fatal!(
+                crate::panic::catalog::PRIVATE_OBJECT_SHARED,
+                "a VMO backing a private region would have more than one mapper"
+            );
+        }
+        crate::fallible::try_push(
+            &mut mappers,
+            Mapper {
+                sharing,
+                space,
+                object,
+            },
+        )
     }
 
     /// Record that the address space at `space` no longer names this object
@@ -459,18 +485,28 @@ impl Vmo {
             } else {
                 mm::share_frame(frame).map(|_| frame)
             };
-            let Some(given) = given else {
+            // Recorded before it is counted as taken, so that the unwind below
+            // gives back exactly what the map holds.
+            let recorded = given.and_then(|given| {
+                crate::fallible::insert(&mut frames, index, given)
+                    .map_err(|_| {
+                        let _ = mm::release_frame(given);
+                    })
+                    .ok()
+            });
+            if recorded.is_none() {
                 // Unwind, or the pages this got through would be held by an
                 // object that is never built and never dropped.
                 for &taken in frames.values() {
                     let _ = mm::release_frame(taken);
                 }
                 return Err(VmoError::OutOfMemory);
-            };
-            let _ = frames.insert(index, given);
+            }
         }
 
-        Ok(Arc::new(Vmo {
+        // An object that cannot be allocated drops its frames as it goes,
+        // which gives back every reference and copy taken above.
+        crate::fallible::try_arc(Vmo {
             pages: SpinLock::new(Pages {
                 frames,
                 held: BTreeMap::new(),
@@ -485,7 +521,8 @@ impl Vmo {
             // Forked for a private mapping, which a coherent object never
             // has: `vmo_map` maps it shared. The copy is the process's own.
             coherent: AtomicBool::new(false),
-        }))
+        })
+        .map_err(|_| VmoError::OutOfMemory)
     }
 
     /// The frame holding page `index`, allocating and zeroing one if this is
@@ -511,9 +548,12 @@ impl Vmo {
             return Ok(frame);
         }
 
+        // Room to record the page before the frame is taken, so a refusal
+        // leaves nothing to give back.
+        let held = crate::fallible::reserve().map_err(|_| VmoError::OutOfMemory)?;
         let frame = mm::allocate_frames(0).ok_or(VmoError::OutOfMemory)?;
         mm::zero_frame(frame);
-        let _ = pages.frames.insert(index, frame);
+        let _ = crate::fallible::insert_held(&held, &mut pages.frames, index, frame);
         Ok(frame)
     }
 
@@ -533,8 +573,9 @@ impl Vmo {
         if pages.frames.contains_key(&index) {
             return false;
         }
-        let _ = pages.frames.insert(index, frame);
-        true
+        // With no memory to record it, it did not go in, and stays the
+        // caller's, as when another fill won.
+        crate::fallible::insert(&mut pages.frames, index, frame).is_ok()
     }
 
     /// The file this object holds is now `len` bytes long: a fault through a
@@ -572,12 +613,22 @@ impl Vmo {
     /// every page this object holds, since such writes mark none, or none if
     /// no mapping that may write has been made. The mark stays while such a
     /// mapping does.
-    pub(crate) fn take_mapped_writes(&self) -> Vec<u64> {
+    ///
+    /// # Errors
+    ///
+    /// [`AllocError`] when there is no memory for the list; the mark is left
+    /// as it was, so the next call reports the pages instead.
+    pub(crate) fn take_mapped_writes(&self) -> Result<Vec<u64>, AllocError> {
         let still = self.writably_mapped();
-        if !self.mapped_written.swap(still, Ordering::SeqCst) && !still {
-            return Vec::new();
+        let was = self.mapped_written.swap(still, Ordering::SeqCst);
+        if !was && !still {
+            return Ok(Vec::new());
         }
-        self.pages.lock().frames.keys().copied().collect()
+        let written = crate::fallible::try_collect(self.pages.lock().frames.keys().copied());
+        if written.is_err() && was {
+            self.mapped_written.store(true, Ordering::SeqCst);
+        }
+        written
     }
 
     /// One fewer, as such a mapping's id leaves a space's tables.
@@ -617,9 +668,10 @@ impl Vmo {
             return Ok(Some(frame));
         }
 
+        let held = crate::fallible::reserve().map_err(|_| VmoError::OutOfMemory)?;
         let frame = mm::allocate_frames(0).ok_or(VmoError::OutOfMemory)?;
         mm::zero_frame(frame);
-        let _ = pages.frames.insert(index, frame);
+        let _ = crate::fallible::insert_held(&held, &mut pages.frames, index, frame);
         Ok(Some(frame))
     }
 
@@ -679,6 +731,12 @@ impl Vmo {
         data: &[u8],
     ) -> Result<(), VmoError> {
         self.check_span(index, offset, data.len())?;
+        // Room for the displaced original, entered before the lock so that
+        // it is held until the original is recorded below: once out of the
+        // list it must not be lost (finding F-23). The copy inside allocates
+        // only when the page had no frame, and then nothing is displaced, so
+        // one section covers both.
+        let held = crate::fallible::reserve().map_err(|_| VmoError::OutOfMemory)?;
         let displaced = {
             let mut pages = self.pages.lock();
             let (frame, displaced) = match pages.frames.get(&index).copied() {
@@ -696,9 +754,13 @@ impl Vmo {
             unsafe { core::ptr::copy_nonoverlapping(data.as_ptr(), at as *mut u8, data.len()) };
             displaced
         };
+        let mut retired = Retired::nothing();
         if let Some(shared) = displaced {
-            let mut retired = Retired::nothing();
-            let _ = retired.frames.insert(index, shared);
+            let _ = crate::fallible::insert_held(&held, &mut retired.frames, index, shared);
+        }
+        // The section ends before the retirement, which waits.
+        drop(held);
+        if !retired.is_empty() {
             self.retire(retired, None);
         }
         Ok(())
@@ -723,7 +785,7 @@ impl Vmo {
     /// and its reference given back.
     ///
     /// A held page is not replaced, and `None` comes back with `frame` still
-    /// the caller's. No fault reaches here for one — [`Vmo::hold`] leaves each
+    /// the caller's; so it does when memory has run out. No fault reaches here for one — [`Vmo::hold`] leaves each
     /// page it holds unshared, and [`Vmo::fork`] copies rather than shares it
     /// — so this is the refusal that keeps a device's page from being freed
     /// under it if that ever stops being true.
@@ -731,7 +793,7 @@ impl Vmo {
     /// Must not be called holding a spin lock; a caller holding an address
     /// space's lock uses [`Vmo::take_page`] and [`Vmo::retire`] instead.
     pub(crate) fn replace(&self, index: u64, frame: Frame) -> Option<Frame> {
-        let retired = self.take_page(index, frame)?;
+        let retired = self.take_page(index, frame).ok()?;
         let old = retired.frame(index);
         self.retire(retired, None);
         old
@@ -740,18 +802,26 @@ impl Vmo {
     /// Phase one of [`Vmo::replace`]: put `frame` in page `index`, and take
     /// out the frame that was there.
     ///
-    /// `None`, with `frame` still the caller's, if the page is held. May be
-    /// called holding an address space's lock, and nothing else.
-    pub(crate) fn take_page(&self, index: u64, frame: Frame) -> Option<Retired> {
+    /// May be called holding an address space's lock, and nothing else.
+    ///
+    /// # Errors
+    ///
+    /// [`Kept`], with `frame` still the caller's and the page unchanged: the
+    /// page is held, or there is no memory to record the change in.
+    pub(crate) fn take_page(&self, index: u64, frame: Frame) -> Result<Retired, Kept> {
         let mut pages = self.pages.lock();
         if pages.held.contains_key(&index) {
-            return None;
+            return Err(Kept::Held);
         }
+        // One section covers both inserts, because at most one of them
+        // allocates: the first only when the page had no frame, and then
+        // there is nothing for the second to do.
+        let held = crate::fallible::reserve().map_err(|_| Kept::NoMemory)?;
         let mut retired = Retired::nothing();
-        if let Some(old) = pages.frames.insert(index, frame) {
-            let _ = retired.frames.insert(index, old);
+        if let Some(old) = crate::fallible::insert_held(&held, &mut pages.frames, index, frame) {
+            let _ = crate::fallible::insert_held(&held, &mut retired.frames, index, old);
         }
-        Some(retired)
+        Ok(retired)
     }
 
     /// Give back `pages` pages from `first`, and report how many held a frame.
@@ -1089,15 +1159,11 @@ impl Vmo {
                 return Err(VmoError::OutOfMemory);
             }
             let outcome = (first..end).try_for_each(|index| {
+                // NOALLOC: `frames` was given room for every page above.
                 frames.push(state.unshared(index, &mut displaced)?);
                 Ok(())
             });
-            if outcome.is_ok() {
-                for index in first..end {
-                    *state.held.entry(index).or_insert(0) += 1;
-                }
-            }
-            outcome
+            outcome.and_then(|()| state.count_held(first, end))
         };
         // Whatever was copied before a failure is copied all the same, and
         // its original has to leave properly either way.
@@ -1127,11 +1193,42 @@ impl Pages {
         {
             return Ok(frame);
         }
+        // Room for the displaced original first, so that once it is out of
+        // the list it cannot be lost (finding F-23).
+        let held = crate::fallible::reserve().map_err(|_| VmoError::OutOfMemory)?;
         let (frame, shared) = self.exclusive(index)?;
         if let Some(shared) = shared {
-            let _ = displaced.frames.insert(index, shared);
+            let _ = crate::fallible::insert_held(&held, &mut displaced.frames, index, shared);
         }
         Ok(frame)
+    }
+
+    /// Count one more hold on every page of `first..end`. On running out of
+    /// memory part-way, the counts already raised go back down, and nothing
+    /// is held.
+    fn count_held(&mut self, first: u64, end: u64) -> Result<(), VmoError> {
+        for index in first..end {
+            if let Some(count) = self.held.get_mut(&index) {
+                *count += 1;
+            } else if crate::fallible::insert(&mut self.held, index, 1).is_err() {
+                self.uncount_held(first, index);
+                return Err(VmoError::OutOfMemory);
+            }
+        }
+        Ok(())
+    }
+
+    /// Undo [`Pages::count_held`] for `first..end`.
+    fn uncount_held(&mut self, first: u64, end: u64) {
+        for index in first..end {
+            match self.held.get_mut(&index) {
+                Some(1) => {
+                    let _ = self.held.remove(&index);
+                }
+                Some(count) => *count -= 1,
+                None => {}
+            }
+        }
     }
 
     /// The frame page `index` can be written through without anyone else
@@ -1139,8 +1236,10 @@ impl Pages {
     /// `fork` left it sharing — which is taken out and handed back second,
     /// still referenced, for the caller to retire.
     fn exclusive(&mut self, index: u64) -> Result<(Frame, Option<Frame>), VmoError> {
+        // The section first, so that the frame is not had and then lost.
+        let held = crate::fallible::reserve().map_err(|_| VmoError::OutOfMemory)?;
         let fresh = mm::allocate_frames(0).ok_or(VmoError::OutOfMemory)?;
-        match self.frames.insert(index, fresh) {
+        match crate::fallible::insert_held(&held, &mut self.frames, index, fresh) {
             Some(shared) => {
                 mm::copy_frame(fresh, shared);
                 Ok((fresh, Some(shared)))
@@ -1188,18 +1287,8 @@ impl Held {
 
 impl Drop for Held {
     fn drop(&mut self) {
-        let mut pages = self.vmo.pages.lock();
-        for index in (self.first..).take(self.frames.len()) {
-            match pages.held.get(&index).copied() {
-                Some(1) => {
-                    let _ = pages.held.remove(&index);
-                }
-                Some(count) => {
-                    let _ = pages.held.insert(index, count - 1);
-                }
-                None => {}
-            }
-        }
+        let end = self.first.saturating_add(self.frames.len() as u64);
+        self.vmo.pages.lock().uncount_held(self.first, end);
     }
 }
 

@@ -9,7 +9,7 @@
     "being re-recorded. The target is an empty map."
   ],
   "files": {
-    "user/space.rs": 32,
-    "user/vmo.rs": 31
+    "user/space.rs": 10,
+    "user/vmo.rs": 14
   }
 }

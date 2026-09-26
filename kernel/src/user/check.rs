@@ -119,7 +119,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
 /// A fresh object holds no frames at all.
 fn check_reservation_is_lazy() -> Result<(), &'static str> {
     let before = quiet_frames()?;
-    let vmo = Vmo::new_anonymous(1024);
+    let vmo = Vmo::new_anonymous(1024).map_err(|_| "no memory for a VMO")?;
 
     if vmo.committed() != 0 {
         return Err("a fresh object had pages committed");
@@ -133,7 +133,7 @@ fn check_reservation_is_lazy() -> Result<(), &'static str> {
 
 /// A committed page reads back as zero, all the way across.
 fn check_a_committed_page_is_zeroed() -> Result<(), &'static str> {
-    let vmo = Vmo::new_anonymous(4);
+    let vmo = Vmo::new_anonymous(4).map_err(|_| "no memory for a VMO")?;
     let frame = vmo.commit(2).map_err(|_| "committing a page failed")?;
 
     // Through the direct map, which is the only way the kernel can see a page
@@ -155,7 +155,7 @@ fn check_a_committed_page_is_zeroed() -> Result<(), &'static str> {
 
 /// Committing the same page twice hands back the same frame and costs nothing.
 fn check_commit_is_idempotent() -> Result<(), &'static str> {
-    let vmo = Vmo::new_anonymous(8);
+    let vmo = Vmo::new_anonymous(8).map_err(|_| "no memory for a VMO")?;
     let first = vmo.commit(3).map_err(|_| "committing a page failed")?;
 
     let between = quiet_frames()?;
@@ -176,7 +176,7 @@ fn check_commit_is_idempotent() -> Result<(), &'static str> {
 
 /// A page past the end of the object is refused rather than allocated.
 fn check_out_of_range_is_refused() -> Result<(), &'static str> {
-    let vmo = Vmo::new_anonymous(4);
+    let vmo = Vmo::new_anonymous(4).map_err(|_| "no memory for a VMO")?;
     match vmo.commit(4) {
         Err(VmoError::OutOfRange { index: 4, pages: 4 }) => {}
         _ => return Err("a page past the end of an object was not refused"),
@@ -195,7 +195,7 @@ fn check_out_of_range_is_refused() -> Result<(), &'static str> {
 fn check_a_shared_page_survives_one_drop() -> Result<(), &'static str> {
     let before = quiet_frames()?;
 
-    let first = Vmo::new_anonymous(1);
+    let first = Vmo::new_anonymous(1).map_err(|_| "no memory for a VMO")?;
     let frame = first.commit(0).map_err(|_| "committing a page failed")?;
 
     // A second holder, as `fork` would install.
@@ -229,7 +229,7 @@ fn check_a_shared_page_survives_one_drop() -> Result<(), &'static str> {
 /// rather than through the allocator.
 fn check_replacing_a_page_releases_the_old_one() -> Result<(), &'static str> {
     let before = quiet_frames()?;
-    let vmo = Vmo::new_anonymous(1);
+    let vmo = Vmo::new_anonymous(1).map_err(|_| "no memory for a VMO")?;
     let original = vmo.commit(0).map_err(|_| "committing a page failed")?;
 
     // A second holder, so the replace below must not free the original.
@@ -278,7 +278,7 @@ fn check_a_held_page_keeps_its_frame() -> Result<(), &'static str> {
 
 /// What [`check_a_held_page_keeps_its_frame`] measures.
 fn hold_pages_through_everything() -> Result<(), &'static str> {
-    let vmo = Vmo::new_anonymous(4);
+    let vmo = Vmo::new_anonymous(4).map_err(|_| "no memory for a VMO")?;
     vmo.write_page(1, 0, b"held")
         .map_err(|_| "writing a page failed")?;
 
@@ -357,7 +357,7 @@ fn hold_pages_through_everything() -> Result<(), &'static str> {
 /// A large reservation costs exactly the pages that are touched.
 fn check_only_what_is_touched_is_paid_for(reserved: u64) -> Result<usize, &'static str> {
     let before = quiet_frames()?;
-    let vmo = Vmo::new_anonymous(reserved);
+    let vmo = Vmo::new_anonymous(reserved).map_err(|_| "no memory for a VMO")?;
 
     // Touch a scattered few, out of order, so a commit that quietly filled a
     // range rather than a page would show up here.
@@ -1319,7 +1319,7 @@ fn check_a_frame_window_sees_a_kept_page_and_a_large_buffer() -> Result<(), &'st
     crate::sched::wait_until_reaper_quiet(PATIENCE_NANOS)?;
     let window = mm::FrameWindow::open();
 
-    let vmo = Vmo::new_anonymous(1);
+    let vmo = Vmo::new_anonymous(1).map_err(|_| "no memory for a VMO")?;
     let _ = vmo
         .commit(0)
         .map_err(|_| "no frame for the frame window's negative control")?;

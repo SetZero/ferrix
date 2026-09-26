@@ -636,7 +636,7 @@ fn name_bytes(name: &[u8; NAME_BYTES]) -> &[u8] {
 /// `bytes` in a VMO of its own: anonymous memory the kernel filled.
 fn vmo_of(bytes: &[u8]) -> Result<Arc<Vmo>, &'static str> {
     let pages = (bytes.len() as u64).div_ceil(PAGE_SIZE).max(1);
-    let vmo = Vmo::new_anonymous(pages);
+    let vmo = Vmo::new_anonymous(pages).map_err(|_| "no memory for a driver's image")?;
     for (index, chunk) in bytes.chunks(PAGE_SIZE as usize).enumerate() {
         vmo.write_page(index as u64, 0, chunk)
             .map_err(|_| "a driver's image did not fit its VMO")?;
