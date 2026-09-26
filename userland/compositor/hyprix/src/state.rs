@@ -6189,8 +6189,10 @@ pub(crate) fn start(
     if let Ok(env) = CHILD_ENV.lock() {
         let _ = child.envs(env.iter().map(|(name, value)| (name, value)));
     }
-    child
+    let pid = child
         .spawn()
         .map(|child| child.id())
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    crate::scope::group(program, pid);
+    Ok(pid)
 }

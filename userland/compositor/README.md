@@ -153,9 +153,12 @@ names the part of Hyprland or hyprlang it follows.
   keyword`, draws Hyprland's frames-per-second counter over the first
   screen's top left corner, a port of its `src/debug/Overlay.cpp` written in
   Spleen, `libs/kernel/fbtext`'s face (`hyprix/src/overlay.rs`).
-  `cargo xtask test-compositor` boots it as init on Ferrix
-  with two `pattern` clients in the initramfs, and requires QEMU's screendump
-  to be the same picture the host test makes, pixel for pixel.
+  On Ferrix it is `hyprix.service` under `/sbin/init` (`docs/INIT.md`,
+  L10), no longer pid 1, and each program it starts is asked into a scope of
+  its own, `app.slice/app-<name>-<pid>.scope` (`hyprix/src/scope.rs`).
+  `cargo xtask test-compositor` boots it so, with two `pattern` clients in
+  the initramfs, and requires QEMU's screendump to be the same picture the
+  host test makes, pixel for pixel.
 * **`pattern`** is a Wayland client in one file, over `wire` and `socket`
   rather than a toolkit, that draws one of `render`'s test patterns. It is
   what the compositor's tests put on screen, and it exercises the same crates

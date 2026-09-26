@@ -426,6 +426,10 @@ name = "ferrix-linux-abi"
 version = "0.1.0"
 
 [[package]]
+name = "ferrix-svc-proto"
+version = "0.1.0"
+
+[[package]]
 name = "find-msvc-tools"
 version = "0.1.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -492,6 +496,7 @@ dependencies = [
  "compositor-xkb",
  "ferrix-fbtext",
  "ferrix-linux-abi",
+ "ferrix-svc-proto",
  "libc",
 ]
 

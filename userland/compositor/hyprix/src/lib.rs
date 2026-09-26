@@ -39,6 +39,7 @@ pub mod plane;
 pub mod plugins;
 pub mod pool;
 pub mod rules;
+pub mod scope;
 pub mod seat;
 pub mod select;
 pub mod state;

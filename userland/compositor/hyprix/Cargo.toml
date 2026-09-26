@@ -38,6 +38,9 @@ compositor-wire = { path = "../wire" }
 ferrix-linux-abi = { path = "../../../libs/proto/linux-abi" }
 # The bitmap face `debug:overlay` writes its numbers in.
 ferrix-fbtext = { path = "../../../libs/kernel/fbtext" }
+# The init's control records: each program started is put in a scope of
+# its own (docs/INIT.md §5.6).
+ferrix-svc-proto = { path = "../../../libs/init/svc-proto" }
 # Declarations only: `mmap` of a client's pool, and `pause`.
 libc = "0.2.189"
 
