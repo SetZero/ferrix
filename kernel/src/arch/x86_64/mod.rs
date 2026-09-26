@@ -1187,6 +1187,9 @@ pub(crate) fn system_call(frame: &mut TrapFrame) -> Result<(), &'static str> {
         // so they are replaced rather than returned into, in the new image's
         // mode.
         Outcome::Enter { entry, stack, abi } => {
+            if abi == Abi::Compat {
+                switch::enter_compat_segments();
+            }
             UserContext::entering(entry, stack, abi).store_trap(frame);
         }
     }
@@ -1542,7 +1545,8 @@ pub(crate) fn service_interrupts(frame: &mut TrapFrame, handle: fn(u32)) {
 
 /// The context switch, and the stack layout a new task starts on.
 pub(crate) use switch::{
-    UserState, prepare_stack, reset_user_state, restore_user_state, save_user_state, switch_to,
+    UserState, prepare_stack, reset_user_state, restore_user_state, save_user_state,
+    set_thread_area, switch_to, thread_area,
 };
 pub(crate) use syscall::{UserRegs, resume_user};
 

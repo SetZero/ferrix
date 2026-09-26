@@ -557,6 +557,7 @@ extern "C" fn ferrix_syscall_entry(frame: &mut SyscallFrame) {
 /// why), so this leaves the way `rt_sigreturn` does, through the trap stub's
 /// restore path, after the way back has had its look at the new program.
 fn enter_compat_after_execve(entry: u64, stack: u64) -> ! {
+    super::switch::enter_compat_segments();
     let mut context = super::signal::UserContext::entering(entry, stack, Abi::Compat);
     if let Some(path) = crate::trap::return_path()
         && (path.needs_attention)()
@@ -678,6 +679,20 @@ pub(crate) unsafe fn program_gs_base() -> u64 {
     unsafe { cpu::read_msr(IA32_KERNEL_GS_BASE) }
 }
 
+/// Set the `GS` base the program on this processor will have when it next
+/// runs: the shadow `swapgs` hands it on the way out.
+///
+/// # Safety
+///
+/// Must be called from the kernel with its own `GS` installed, as for
+/// [`program_gs_base`], and `base` must be a user address, never the kernel's:
+/// the paranoid entry tells the two apart by the sign bit.
+pub(crate) unsafe fn set_program_gs_base(base: u64) {
+    // SAFETY: writing the shadow MSR changes only what the next `swapgs`
+    // installs for ring 3.
+    unsafe { cpu::write_msr(IA32_KERNEL_GS_BASE, base) };
+}
+
 /// Set the thread pointer a program reads through `FS`.
 ///
 /// What `arch_prctl(ARCH_SET_FS)` does, and the one system call on this
@@ -746,6 +761,7 @@ pub(crate) unsafe fn enter_user(entry: u64, stack: u64, argument: u64, abi: Abi)
         // SAFETY: the caller's guarantee is the assembly's contract.
         Abi::Native => unsafe { ferrix_enter_user(entry, stack, argument) },
         Abi::Compat => {
+            super::switch::enter_compat_segments();
             let context = super::signal::UserContext::entering(entry, stack, abi);
             // SAFETY: the caller's guarantee: this task's own kernel stack,
             // with its space and user state loaded and nothing owned on it,

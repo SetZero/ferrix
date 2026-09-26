@@ -1464,6 +1464,19 @@ pub(crate) use switch::{
     UserState, prepare_stack, reset_user_state, restore_user_state, save_user_state, switch_to,
 };
 
+/// Install a thread-local segment descriptor: i386's `set_thread_area`, which
+/// this architecture has no segments for. Never asked, since no table here
+/// maps the call; answered as a full set of slots would be.
+pub(crate) const fn set_thread_area(_index: Option<usize>, _descriptor: u64) -> Option<usize> {
+    None
+}
+
+/// Read a thread-local segment descriptor back: none here, as for
+/// [`set_thread_area`].
+pub(crate) const fn thread_area(_index: usize) -> Option<u64> {
+    None
+}
+
 /// Permit this processor to touch user pages until [`forbid_user_access`].
 ///
 /// Clears `PSTATE.PAN`. `cpu::permit_user_access` explains why almost nothing

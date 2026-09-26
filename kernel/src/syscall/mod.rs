@@ -84,6 +84,7 @@ pub(crate) mod sockets;
 pub(crate) mod stat;
 pub(crate) mod system;
 pub(crate) mod thread;
+pub(crate) mod thread_area;
 pub(crate) mod time;
 pub(crate) mod timerfd;
 pub(crate) mod tty;

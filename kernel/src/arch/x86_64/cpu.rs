@@ -545,7 +545,95 @@ pub(crate) unsafe fn reload_segments(code: u16, data: u16) {
     }
 }
 
-/// The linear address a page fault was taken on.
+/// The four data segment selectors this processor holds: `DS`, `ES`, `FS`
+/// and `GS`, in that order.
+///
+/// In the kernel these are still the program's: nothing on the way in from
+/// ring 3 loads them, and long mode's kernel never uses them. They matter only
+/// to a 32-bit program, which addresses through all four (`docs/I386.md`
+/// §3.5), and a switch between tasks keeps each task's own.
+pub(crate) fn read_data_selectors() -> [u16; 4] {
+    let (ds, es, fs, gs): (u16, u16, u16, u16);
+    // SAFETY: reading a segment register has no side effect.
+    unsafe {
+        asm!(
+            "mov {0:x}, ds",
+            "mov {1:x}, es",
+            "mov {2:x}, fs",
+            "mov {3:x}, gs",
+            out(reg) ds,
+            out(reg) es,
+            out(reg) fs,
+            out(reg) gs,
+            options(nomem, nostack, preserves_flags),
+        );
+    }
+    [ds, es, fs, gs]
+}
+
+/// Load `DS`, `ES` and `FS` for a program: selector and, from the GDT, the
+/// hidden base and limit.
+///
+/// Loading `FS` replaces `FS_BASE` with the descriptor's base, or, for a null
+/// selector, may clear it; a caller that wants a 64-bit program's thread
+/// pointer back writes the MSR after this.
+///
+/// # Safety
+///
+/// Each selector must be null or name a present data segment, or a readable
+/// code segment, in this processor's GDT whose DPL admits it. Anything else is
+/// `#GP` in ring 0.
+pub(crate) unsafe fn load_data_selectors(ds: u16, es: u16, fs: u16) {
+    // SAFETY: the caller guarantees each selector loads.
+    unsafe {
+        asm!(
+            "mov ds, {0:e}",
+            "mov es, {1:e}",
+            "mov fs, {2:e}",
+            in(reg) u32::from(ds),
+            in(reg) u32::from(es),
+            in(reg) u32::from(fs),
+            options(nostack, preserves_flags),
+        );
+    }
+}
+
+/// Load `GS` for a program without disturbing the kernel's own `GS` base.
+///
+/// A `GS` load replaces `GS_BASE`, which in the kernel is the per-CPU record.
+/// So the load happens between two `swapgs`, and it is the program's base --
+/// parked in `KERNEL_GS_BASE` while the kernel runs -- that the descriptor
+/// replaces: Linux's `load_gs_index`. Interrupts are masked for the three
+/// instructions, since a handler entered between the two `swapgs` would find
+/// the program's base where the kernel's belongs; an NMI there is the
+/// paranoid entry's, which asks the MSR rather than trusting the order.
+///
+/// # Safety
+///
+/// As [`load_data_selectors`], for `selector`.
+pub(crate) unsafe fn load_user_gs(selector: u16) {
+    let open = read_rflags() & RFLAGS_IF != 0;
+    disable_interrupts();
+    // SAFETY: the caller guarantees the selector loads; interrupts are masked
+    // between the two `swapgs`, which leave `GS_BASE` the kernel's again.
+    unsafe {
+        asm!(
+            "swapgs",
+            "mov gs, {0:e}",
+            "swapgs",
+            in(reg) u32::from(selector),
+            options(nostack, preserves_flags),
+        );
+    }
+    if open {
+        enable_interrupts();
+    }
+}
+
+/// `RFLAGS.IF`: interrupts are unmasked.
+const RFLAGS_IF: u64 = 1 << 9;
+
+/// The linear address a page fault was taken on./// The linear address a page fault was taken on.
 pub(crate) fn read_cr2() -> u64 {
     let address: u64;
     // SAFETY: reading CR2 has no side effects. It is only meaningful inside a

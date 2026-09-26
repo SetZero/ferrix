@@ -176,17 +176,6 @@ ferrix_trap_dispatch:
     // handler cannot have changed where the frame says it came from.
 .globl ferrix_trap_return
 ferrix_trap_return:
-    // Into 32-bit code, `DS` and `ES` must hold user data: long mode ignores
-    // them, but compatibility mode faults on a null one, and whatever ran on
-    // this processor since -- a 64-bit program may load a null one -- is what
-    // they hold now. Until each task keeps its own selectors (`docs/I386.md`
-    // §3.3), every return to 32-bit code loads both. RAX is popped below.
-    cmpq ${user_code32}, 144(%rsp)
-    jne 8f
-    movl ${user_data}, %eax
-    movl %eax, %ds
-    movl %eax, %es
-8:
     testb $3, 144(%rsp)
     jz ferrix_trap_restore
     swapgs
@@ -330,8 +319,6 @@ ferrix_paranoid_common:
     hardened = const super::speculation::ENTRY_HARDENING,
     clear = sym super::speculation::CLEAR_CPU_BUFFERS,
     selector = sym super::speculation::VERW_SELECTOR,
-    user_code32 = const gdt::USER_CODE32 | 3,
-    user_data = const gdt::USER_DATA | 3,
     options(att_syntax)
 );
 

@@ -41,10 +41,21 @@ pub(crate) const USER_DATA: u16 = 0x28;
 pub(crate) const USER_CODE: u16 = 0x30;
 /// The task state segment. Sixteen bytes, so it occupies two slots, 8 and 9.
 const TSS_SELECTOR: u16 = 0x40;
-/// Slots in the table: Linux's sixteen. 10 and 11 are its LDT's, and 12 to
-/// 14 the three thread-local descriptors `set_thread_area` fills; all five
-/// are empty until the i386 ABI's threads use them (`docs/I386.md` §3.5).
+/// Slots in the table: Linux's sixteen. 10 and 11 are its LDT's, left empty,
+/// and 12 to 14 the three thread-local descriptors `set_thread_area` fills,
+/// which belong to whichever thread runs here (`docs/I386.md` §3.5).
 const GDT_SLOTS: usize = 16;
+/// The first thread-local descriptor's slot: Linux's `GDT_ENTRY_TLS_MIN`.
+pub(crate) const TLS_FIRST_SLOT: usize = 12;
+/// How many thread-local descriptors a thread has.
+pub(crate) const TLS_SLOTS: usize = 3;
+
+const _: () = assert!(
+    TLS_FIRST_SLOT + TLS_SLOTS < GDT_SLOTS
+        && TLS_FIRST_SLOT as u32 == ferrix_linux_abi::user_desc::TLS_FIRST_ENTRY
+        && TLS_SLOTS == ferrix_linux_abi::user_desc::TLS_ENTRIES,
+    "the thread-local slots are Linux's, inside the table"
+);
 
 /// The base `SYSRET` computes user selectors from, without its RPL.
 ///
@@ -374,7 +385,87 @@ pub(crate) unsafe fn set_privilege_stack(top: u64) {
     unsafe { rsp0.write_unaligned(top) };
 }
 
-/// Build and load this secondary processor's own GDT and TSS.
+/// This processor's GDT, as the processor reports it, if it is one of the
+/// tables this module built: long enough to hold every slot.
+fn live_table() -> Option<*mut u64> {
+    // SAFETY: writes ten bytes of GDTR into a local.
+    let (base, limit) = unsafe { cpu::read_gdt() };
+    (usize::from(limit) + 1 >= GDT_SLOTS * 8).then_some(base as *mut u64)
+}
+
+/// The three thread-local descriptors this processor holds: the running
+/// thread's, since the switch to it loaded them and `set_thread_area` writes
+/// them here.
+///
+/// # Safety
+///
+/// Interrupts must be masked, or the thread could move to another processor
+/// between the question and the answer.
+pub(crate) unsafe fn read_tls() -> [u64; TLS_SLOTS] {
+    let mut tls = [0; TLS_SLOTS];
+    if let Some(table) = live_table() {
+        for (slot, value) in tls.iter_mut().enumerate() {
+            // SAFETY: slots 12 to 14 are inside the table `live_table`
+            // measured.
+            let at = unsafe { table.add(TLS_FIRST_SLOT + slot) };
+            // SAFETY: a slot of this processor's table, which the processor
+            // reads and nothing else writes.
+            *value = unsafe { at.read() };
+        }
+    }
+    tls
+}
+
+/// Put `tls` in this processor's thread-local slots.
+///
+/// A descriptor already loaded into a segment register is not changed by
+/// this -- the processor keeps a copy -- so a caller that changed a slot a
+/// register names reloads that register after.
+///
+/// # Safety
+///
+/// Interrupts must be masked, and every nonzero descriptor must be one
+/// `ferrix_linux_abi::user_desc` built: ring 3 data, which no kernel selector
+/// names.
+pub(crate) unsafe fn write_tls(tls: &[u64; TLS_SLOTS]) {
+    if let Some(table) = live_table() {
+        for (slot, value) in tls.iter().enumerate() {
+            // SAFETY: as in `read_tls`.
+            let at = unsafe { table.add(TLS_FIRST_SLOT + slot) };
+            // SAFETY: only this processor uses its table. Ordinary memory, as
+            // `set_privilege_stack`'s write to the TSS is: the processor reads
+            // it at the next selector load, which is an `asm!` block that may
+            // read memory, so the write is done by then.
+            unsafe { at.write(*value) };
+        }
+    }
+}
+
+/// `selector` if it can be loaded into a data segment register with `tls`
+/// in the thread-local slots, and the null selector if it cannot.
+///
+/// What a program loaded was valid when it loaded it, but a thread-local
+/// descriptor may have been emptied since, and a load of a selector naming
+/// an empty slot is `#GP` in ring 0. Linux recovers from that fault; here the
+/// selector is checked first, against the only slots a program can load: 32-bit
+/// user code, which is readable, user data, and a present thread-local
+/// descriptor. The LDT's (bit 2) name nothing, as there is none.
+pub(crate) fn loadable(selector: u16, tls: &[u64; TLS_SLOTS]) -> u16 {
+    const TABLE_INDICATOR: u16 = 1 << 2;
+    let slot = usize::from(selector >> 3);
+    let fits = match slot {
+        _ if selector & TABLE_INDICATOR != 0 => false,
+        _ if u16::try_from(slot << 3) == Ok(USER_CODE32) => true,
+        _ if u16::try_from(slot << 3) == Ok(USER_DATA) => true,
+        _ => slot
+            .checked_sub(TLS_FIRST_SLOT)
+            .and_then(|index| tls.get(index))
+            .is_some_and(|descriptor| descriptor & PRESENT != 0),
+    };
+    if fits { selector } else { 0 }
+}
+
+/// Build and load this secondary processor's own GDT and TSS./// Build and load this secondary processor's own GDT and TSS.
 ///
 /// # Safety
 ///

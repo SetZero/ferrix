@@ -18,6 +18,9 @@
 
 use core::arch::global_asm;
 
+use super::cpu;
+use super::gdt;
+
 /// Bytes the switch pushes: six registers and the return address.
 const FRAME_BYTES: u64 = 7 * 8;
 
@@ -115,22 +118,36 @@ pub(crate) unsafe fn prepare_stack(
 }
 
 /// What a program owns on this processor that no trap saves: its thread
-/// pointer, and its x87 and SSE state.
+/// pointer and `GS` base, its x87 and SSE state, and -- for a 32-bit program,
+/// which addresses through segments -- its data segment selectors and the
+/// three thread-local descriptors they may name (`docs/I386.md` §3.5).
 ///
-/// The kernel is built for a target with no SSE and never touches either, so
-/// a trap from ring 3 leaves them as the program had them. Two programs taking
-/// turns need them saved and loaded by the scheduler whenever it switches
-/// between tasks that run user code.
+/// The kernel is built for a target with no SSE and never touches any of
+/// these, so a trap from ring 3 leaves them as the program had them. Two
+/// programs taking turns need them saved and loaded by the scheduler whenever
+/// it switches between tasks that run user code.
 #[repr(C, align(16))]
 #[derive(Debug, Clone)]
 pub(crate) struct UserState {
     /// `FS_BASE`, which `arch_prctl(ARCH_SET_FS)` writes.
     thread_pointer: u64,
-    /// Keeps the save area at a sixteen-byte offset.
-    reserved: u64,
-    /// The 512-byte `FXSAVE` area.
+    /// The program's `GS_BASE`, which sits in `KERNEL_GS_BASE` while the
+    /// kernel runs. Saved so that one program's base, whatever loaded it, is
+    /// not the next one's.
+    gs_base: u64,
+    /// GDT slots 12 to 14: the thread-local descriptors `set_thread_area`
+    /// installed, zero for none.
+    tls: [u64; gdt::TLS_SLOTS],
+    /// `DS`, `ES`, `FS` and `GS`, as the program left them.
+    selectors: [u16; 4],
+    /// The 512-byte `FXSAVE` area, at a sixteen-byte offset.
     fxsave: [u8; 512],
 }
+
+const _: () = assert!(
+    core::mem::offset_of!(UserState, fxsave).is_multiple_of(16),
+    "FXSAVE64 wants its area sixteen-byte aligned"
+);
 
 impl UserState {
     /// A copy of the user state this processor holds right now: what a fork
@@ -172,7 +189,9 @@ impl UserState {
         fxsave[27] = mxcsr[3];
         UserState {
             thread_pointer: 0,
-            reserved: 0,
+            gs_base: 0,
+            tls: [0; gdt::TLS_SLOTS],
+            selectors: [0; 4],
             fxsave,
         }
     }
@@ -236,6 +255,12 @@ unsafe extern "C" {
 pub(crate) unsafe fn save_user_state(state: &mut UserState) {
     // SAFETY: reading `FS_BASE` has no side effects.
     state.thread_pointer = unsafe { super::syscall::thread_pointer() };
+    // SAFETY: the kernel side of `swapgs`, where the shadow is the program's.
+    state.gs_base = unsafe { super::syscall::program_gs_base() };
+    state.selectors = cpu::read_data_selectors();
+    // SAFETY: the caller switches tasks with interrupts masked, so these are
+    // this processor's slots and the outgoing thread's.
+    state.tls = unsafe { gdt::read_tls() };
     // SAFETY: a 512-byte area inside a sixteen-byte-aligned structure, which
     // is what `FXSAVE64` writes.
     unsafe { ferrix_fpu_save(state.fxsave.as_mut_ptr()) };
@@ -249,8 +274,18 @@ pub(crate) unsafe fn save_user_state(state: &mut UserState) {
 /// The task `state` belongs to must be the one this processor is switching to,
 /// and `entry_stack` the top of its kernel stack.
 pub(crate) unsafe fn restore_user_state(state: &UserState, entry_stack: u64) {
-    // SAFETY: a user address the program set, or zero; nothing follows it here.
-    unsafe { super::syscall::set_thread_pointer(state.thread_pointer) };
+    // SAFETY: the caller switches with interrupts masked; the descriptors are
+    // ones `set_thread_area` built, or zero.
+    unsafe { gdt::write_tls(&state.tls) };
+    // SAFETY: each selector checked loadable against the slots just written.
+    unsafe {
+        load_selectors(
+            state.selectors,
+            &state.tls,
+            state.thread_pointer,
+            state.gs_base,
+        );
+    }
     // SAFETY: an area this module initialised or `FXSAVE64` wrote, so every
     // reserved bit `FXRSTOR64` checks is clear.
     unsafe { ferrix_fpu_restore(state.fxsave.as_ptr()) };
@@ -268,8 +303,118 @@ pub(crate) unsafe fn restore_user_state(state: &UserState, entry_stack: u64) {
 /// own system call.
 pub(crate) unsafe fn reset_user_state() {
     let fresh = UserState::new();
-    // SAFETY: a zero thread pointer is always valid to hold.
-    unsafe { super::syscall::set_thread_pointer(0) };
+    // `execve` empties the thread-local slots and every selector, as Linux's
+    // `flush_thread` and `start_thread` do: the new image starts with none of
+    // the old one's segments. A 32-bit one is given user data in `DS` and `ES`
+    // as it is entered (`enter_compat_segments`).
+    with_interrupts_masked(|| {
+        // SAFETY: interrupts masked; zero descriptors.
+        unsafe { gdt::write_tls(&fresh.tls) };
+        // SAFETY: null selectors always load; the bases are zero, which is
+        // valid.
+        unsafe { load_selectors(fresh.selectors, &fresh.tls, 0, 0) };
+    });
     // SAFETY: an area built by `UserState::new`, whose reserved bits are clear.
     unsafe { ferrix_fpu_restore(fresh.fxsave.as_ptr()) };
+}
+
+/// Load a program's four data selectors, each checked against `tls`, and
+/// the `FS` and `GS` bases a null selector leaves to the MSRs: the thread
+/// pointer `arch_prctl` set, and whatever `GS` base the program had.
+///
+/// # Safety
+///
+/// Interrupts masked, `tls` already in this processor's thread-local slots,
+/// and both bases the program's own.
+unsafe fn load_selectors(
+    selectors: [u16; 4],
+    tls: &[u64; gdt::TLS_SLOTS],
+    fs_base: u64,
+    gs_base: u64,
+) {
+    let [ds, es, fs, gs] = selectors.map(|selector| gdt::loadable(selector, tls));
+    // SAFETY: each selector null or loadable, as `gdt::loadable` checked.
+    unsafe { cpu::load_data_selectors(ds, es, fs) };
+    if fs == 0 {
+        // SAFETY: a user address the program set, or zero.
+        unsafe { super::syscall::set_thread_pointer(fs_base) };
+    }
+    // SAFETY: as for the other three.
+    unsafe { cpu::load_user_gs(gs) };
+    if gs == 0 {
+        // SAFETY: the program's own base, into the shadow it lives in while
+        // the kernel runs.
+        unsafe { super::syscall::set_program_gs_base(gs_base) };
+    }
+}
+
+/// Give a 32-bit program user data in `DS` and `ES` as it is entered, from
+/// its first instruction or after an `execve`: compatibility mode faults on a
+/// null one, which is what `execve` and a new task leave. From then on the
+/// program's own selectors travel with it (`save_user_state`).
+///
+/// `FS` stays null: both ways in come after `execve`'s reset or from a new
+/// task's state, which leave it so.
+pub(crate) fn enter_compat_segments() {
+    let data = gdt::USER_DATA | 3;
+    // SAFETY: user data is a present ring 3 data segment in every GDT this
+    // kernel builds, and the null selector always loads.
+    unsafe { cpu::load_data_selectors(data, data, 0) };
+}
+
+/// Install `descriptor` in the calling thread's thread-local slot `index`, or
+/// in its first empty one when `index` is `None`, and answer the slot used:
+/// `set_thread_area`'s half that is the processor's.
+///
+/// The slots are this processor's GDT's while the thread runs -- the switch
+/// to it loaded them, and the switch away saves them -- so the write goes
+/// there, with interrupts masked so the thread cannot move in between. A
+/// data segment register naming the slot is reloaded, as Linux does, so the
+/// program sees the new descriptor at once rather than at its next switch.
+///
+/// `None` when every slot is taken (`ESRCH` on Linux) or `index` is past
+/// the three.
+pub(crate) fn set_thread_area(index: Option<usize>, descriptor: u64) -> Option<usize> {
+    with_interrupts_masked(|| {
+        // SAFETY: interrupts masked, so these are the calling thread's.
+        let mut tls = unsafe { gdt::read_tls() };
+        let index = match index {
+            Some(index) => index,
+            None => tls.iter().position(|slot| *slot == 0)?,
+        };
+        *tls.get_mut(index)? = descriptor;
+        // SAFETY: interrupts masked; `descriptor` is one `user_desc` built,
+        // ring 3 data, or zero.
+        unsafe { gdt::write_tls(&tls) };
+        let named = |selector: u16| usize::from(selector >> 3) == gdt::TLS_FIRST_SLOT + index;
+        let [ds, es, fs, gs] = cpu::read_data_selectors();
+        if [ds, es, fs].into_iter().any(named) {
+            let [ds, es, fs] = [ds, es, fs].map(|selector| gdt::loadable(selector, &tls));
+            // SAFETY: each checked loadable against the slots just written.
+            unsafe { cpu::load_data_selectors(ds, es, fs) };
+        }
+        if named(gs) {
+            // SAFETY: as above.
+            unsafe { cpu::load_user_gs(gdt::loadable(gs, &tls)) };
+        }
+        Some(index)
+    })
+}
+
+/// The descriptor in the calling thread's thread-local slot `index`, zero
+/// for an empty one: `get_thread_area`'s half that is the processor's.
+pub(crate) fn thread_area(index: usize) -> Option<u64> {
+    // SAFETY: interrupts masked by the closure's caller.
+    with_interrupts_masked(|| unsafe { gdt::read_tls() }.get(index).copied())
+}
+
+/// Run `f` with interrupts masked, and put them back as they were.
+fn with_interrupts_masked<R>(f: impl FnOnce() -> R) -> R {
+    let open = cpu::read_rflags() & (1 << 9) != 0;
+    cpu::disable_interrupts();
+    let result = f();
+    if open {
+        cpu::enable_interrupts();
+    }
+    result
 }

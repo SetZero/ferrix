@@ -32,7 +32,7 @@ use ferrix_linux_abi::types::{AT_FDCWD, O_CREAT, O_TRUNC, O_WRONLY};
 use super::{
     Personality, attributes, credentials, epoll, eventfd, exec, family, fd, file, flock, fsctl,
     futex, kill, limits, memfd, memory, namespace, path, poll, process, signal, signalfd, sockets,
-    system, thread, time, timerfd, unanswered,
+    system, thread, thread_area, time, timerfd, unanswered,
 };
 use crate::arch;
 use crate::sched;
@@ -269,6 +269,8 @@ fn with_process(call: Syscall, args: &SyscallArgs, process: &Process) -> Result<
         Syscall::Unshare => namespace::sys_unshare(process, a[0]),
         Syscall::Setns => namespace::sys_setns(process, fd::arg(a[0]), truncate(a[1])),
         Syscall::SetTidAddress => Ok(set_tid_address(process, a[0])),
+        Syscall::SetThreadArea => thread_area::sys_set_thread_area(process, a[0]),
+        Syscall::GetThreadArea => thread_area::sys_get_thread_area(process, a[0]),
         Syscall::ClockGettime => {
             time::sys_clock_gettime(process, a[0], a[1], time::TimeWidth::Native)
         }

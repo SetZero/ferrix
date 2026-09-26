@@ -89,14 +89,14 @@
     },
     {
       "file": "arch/x86_64/mod.rs",
-      "lines": "1321, 1323",
+      "lines": "1324, 1326",
       "category": "defensive",
       "match": "for _ in 0..1000 {",
       "why": "The keyboard controller's reset pulse, tried only when the FADT's reset register did not reset the machine. q35's register resets it at once (`boot-reset`), so the wait for the 8042's input buffer never starts. What it defends against is firmware that names a reset register that does nothing, which Linux's reboot order also allows for."
     },
     {
       "file": "arch/x86_64/mod.rs",
-      "lines": "1384",
+      "lines": "1387",
       "category": "failure-path",
       "match": "cpu::hlt();",
       "why": "`halt`'s loop runs on a processor that stops for good: after a panic, on the stop IPI a panic sends, or on a boot that could not build a console. A passing boot ends through `shutdown`, whose `debug_exit` ends QEMU before `halt` is entered, and the suite's one deliberate panic (`test-shell`'s `ferrix.onexit=panic`) exits QEMU from the panic report without its trace showing this instruction run."
@@ -159,21 +159,21 @@
     },
     {
       "file": "arch/x86_64/trap.rs",
-      "lines": "527, 551",
+      "lines": "514, 538",
       "category": "failure-path",
       "match": "pub(crate) const fn vector_name(vector: u64) -> &'static str {",
       "why": "`vector_name`'s standalone copy, called by `report_trap` and by the paranoid entry's fatal arms, both of which run only when the kernel is stopping. `classify` carries its own inlined copy, which the stage 3 fault check reaches with a program's `hlt`."
     },
     {
       "file": "arch/x86_64/trap.rs",
-      "lines": "628",
+      "lines": "615",
       "category": "credited-elsewhere",
       "match": "Trap::PageFault(fault) => (SIGSEGV, SEGV_MAPERR, fault.address),",
-      "why": "Run by the stage 3 fault check's read of an unmapped address, which ends the program with SIGSEGV. The line's only statement row is in the copy of `fault_signal` that `dispatch` inlines for traps that are not page faults (in the measured image, inlined through `user_fault` into `dispatch` at trap.rs:102), where the arm cannot run. The copy `handle_page_fault` inlines (under trap.rs:482) computes the si_code as the fault's present bit plus one, one instruction under line 627's row, which is reached."
+      "why": "Run by the stage 3 fault check's read of an unmapped address, which ends the program with SIGSEGV. The line's only statement row is in the copy of `fault_signal` that `dispatch` inlines for traps that are not page faults (in the measured image, inlined through `user_fault` into `dispatch` at trap.rs:102), where the arm cannot run. The copy `handle_page_fault` inlines (under trap.rs:482) computes the si_code as the fault's present bit plus one, one instruction under line 614's row, which is reached."
     },
     {
       "file": "arch/x86_64/trap.rs",
-      "lines": "644, 650, 653-654, 669, 675",
+      "lines": "631, 637, 640-641, 656, 662",
       "category": "failure-path",
       "match": "pub(crate) fn report_trap(frame: &TrapFrame) {",
       "why": "The register dump the trap path prints when the kernel stops on an exception it cannot handle (`trap::report`); a passing run never prints it."

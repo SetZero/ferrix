@@ -127,7 +127,7 @@ Counts are statements unreached by the whole suite on that architecture. A dash 
 | `syscall/native.rs` | `item` | 49 | 50 | 57 | 5 | 272, 396, 582, 1006, 1256 |
 | `syscall/uaccess.rs` | `core` | 1 | 46 | 40 | 1 | 69 |
 | `syscall/program.rs` | `item` | 9 | 16 | 15 | 4 | 77-78, 80, 82 |
-| `syscall/mod.rs` | `item` | 1 | 4 | 4 | 1 | 190 |
+| `syscall/mod.rs` | `item` | 1 | 4 | 4 | 1 | 191 |
 
 ---
 

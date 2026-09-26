@@ -230,6 +230,7 @@
         "syscall/stat.rs",
         "syscall/system.rs",
         "syscall/thread.rs",
+        "syscall/thread_area.rs",
         "syscall/time.rs",
         "syscall/timerfd.rs",
         "syscall/tty.rs",
