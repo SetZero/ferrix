@@ -2350,6 +2350,7 @@ fn report_clocks_and_power(view: &BootView<'_>, clocks: &irq::Report) {
     fs::btrfs_powerfail::init(view);
     fs::root_disk::init(view);
     init::read_option(view);
+    fs::procfs::remember_command_line(view.cmdline());
 }
 
 /// Print what interrupt and time bring-up found.

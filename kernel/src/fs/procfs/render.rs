@@ -324,6 +324,18 @@ fn cpu_times(user: u64, idle: u64) -> CpuTimes {
     }
 }
 
+/// `/proc/cmdline`: the command line the kernel was started with, and a
+/// newline, as Linux writes it. What a program reads its own `ferrix.*`
+/// settings from, the stat service's among them.
+pub(super) fn cmdline_file(_: &Kernel) -> Result<Vec<u8>> {
+    let line = super::command_line();
+    let mut out = Vec::new();
+    out.try_reserve(line.len() + 1).map_err(|_| Errno::ENOMEM)?;
+    out.extend_from_slice(line);
+    out.push(b'\n');
+    Ok(out)
+}
+
 /// `/proc/version`: the release and version `uname` reports, in the sentence
 /// Linux writes them in, with the compiler it names being the one that built
 /// this kernel.

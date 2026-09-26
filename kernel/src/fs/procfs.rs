@@ -61,6 +61,22 @@
 pub(crate) mod check;
 mod render;
 
+/// The kernel command line, kept at boot for `/proc/cmdline`: the loader's
+/// boot info, where it arrived, is memory the kernel takes back.
+static COMMAND_LINE: ferrix_sync::Once<Vec<u8>> = ferrix_sync::Once::new();
+
+/// Keep the command line the loader passed, for `/proc/cmdline`. Once, at
+/// bring-up, from the crate root.
+pub(crate) fn remember_command_line(line: &str) {
+    // FATAL-ALLOC: boot only: the command line is copied once, as the kernel comes up.
+    let _ = COMMAND_LINE.call_once(|| Vec::from(line.as_bytes()));
+}
+
+/// The command line [`remember_command_line`] kept, or nothing before it.
+fn command_line() -> &'static [u8] {
+    COMMAND_LINE.get().map_or(&[][..], Vec::as_slice)
+}
+
 use alloc::boxed::Box;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -253,12 +269,13 @@ static NET: [Entry<Kernel>; 7] = [
 ];
 
 /// `/proc`, less the process directories that follow these in a listing.
-pub(crate) static TOP: [Entry<Kernel>; 12] = [
+pub(crate) static TOP: [Entry<Kernel>; 13] = [
     Entry {
         name: b"self",
         permissions: 0o777,
         content: Content::Link(render::self_link),
     },
+    file(b"cmdline", render::cmdline_file),
     file(b"cpuinfo", render::cpuinfo),
     file(b"filesystems", render::filesystems),
     file(b"meminfo", render::meminfo),
