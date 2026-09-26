@@ -22,6 +22,16 @@ boots until the new build's device tree is compared with it for every
 address the USB work uses. Turn off "Automatic system updates" in
 developer options to keep it from happening mid-work again.
 
+**Re-rooted the same night, at the owner's word (00:52):** the stock CP3A
+`init_boot` from Google's factory image (SHA-256 checked) was patched in
+the phone's Magisk app and flashed to `init_boot_b` only; `su` works again
+(Magisk 30.7). Both images and their sums are in
+`~/.local/share/ferrix/pixel7/cp3a/` for an undo; automatic system updates
+are off (`ota_disable_automatic_update=1`). The new build's device tree is
+`cp3a/panther-cp3a.dts`: against `panther.dts` it moves only
+`pkvm_guest_firmware`'s reserved region and ABL's own initrd, and every node
+Ferrix's loader, kernel and USB driver use is byte-identical.
+
 
 **Update, 2026-09-27 (ferrix-0a): `main` boots the phone on all eight
 cores to `FERRIX-BOOT-OK`, seeded from TF-A's TRNG, with the kernel, the
