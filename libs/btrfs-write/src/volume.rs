@@ -102,6 +102,13 @@ impl<D: WriteDevice> WriteVolume<D> {
         self.geometry.nodesize
     }
 
+    /// Bytes of tree nodes the running transaction holds in memory: what
+    /// its commit writes.
+    #[must_use]
+    pub fn dirty_bytes(&self) -> u64 {
+        (self.dirty.len() as u64).saturating_mul(u64::from(self.geometry.nodesize))
+    }
+
     /// Size of a data sector.
     #[must_use]
     pub const fn sectorsize(&self) -> u32 {

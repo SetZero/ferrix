@@ -77,7 +77,10 @@ use crate::{BTRFS_SUPER_MAGIC, NAME_MAX};
 const WRITEBACK_PAGES: usize = 256;
 
 /// Dirty bytes after which a write commits of its own accord, so that a
-/// program writing forever does not hold an unbounded transaction.
+/// program writing forever does not hold an unbounded transaction. The same
+/// holds the tree nodes a transaction has changed: a program making and
+/// removing names in a loop dirties them without writing a page, and held
+/// them all in memory until the commit interval ran out.
 const COMMIT_THRESHOLD: u64 = 32 * 1024 * 1024;
 
 /// What a writable mount needs of its device.
@@ -222,6 +225,14 @@ impl<D: WriteHandle> Shared<D> {
     /// Note that the shape of the tree changed; see `structural`.
     fn shape_changed(&self) {
         *self.structural.lock() = true;
+    }
+
+    /// Commit first if the running transaction holds more tree nodes than
+    /// [`COMMIT_THRESHOLD`]: before a change to the tree's shape, so what a
+    /// loop of them holds in memory stays within the threshold and one more.
+    fn commit_if_heavy(&self) -> Result<()> {
+        let heavy = self.volume.lock().dirty_bytes() >= COMMIT_THRESHOLD;
+        if heavy { self.sync_all() } else { Ok(()) }
     }
 }
 
@@ -639,6 +650,7 @@ impl<D: WriteHandle> Inode for Node<D> {
 
     fn create(&self, name: &[u8], node: NewNode<'_>, permissions: u32) -> Result<Arc<dyn Inode>> {
         self.require_dir()?;
+        self.shared.commit_if_heavy()?;
         self.shared.shape_changed();
         let dir = self.ino;
         let now = self.shared.now();
@@ -673,6 +685,7 @@ impl<D: WriteHandle> Inode for Node<D> {
 
     fn link(&self, name: &[u8], target: &Arc<dyn Inode>) -> Result<()> {
         self.require_dir()?;
+        self.shared.commit_if_heavy()?;
         self.shared.shape_changed();
         let target = target
             .clone()
@@ -706,6 +719,7 @@ impl<D: WriteHandle> Inode for Node<D> {
         replace: bool,
     ) -> Result<()> {
         self.require_dir()?;
+        self.shared.commit_if_heavy()?;
         self.shared.shape_changed();
         let parent = new_parent
             .clone()
@@ -824,6 +838,7 @@ impl<D: WriteHandle> Node<D> {
     /// `unlink` and `rmdir`, which differ only in what they accept.
     fn remove(&self, name: &[u8], directory: bool) -> Result<()> {
         self.require_dir()?;
+        self.shared.commit_if_heavy()?;
         self.shared.shape_changed();
         let (dir, now) = (self.ino, self.shared.now());
         let gone = self.shared.with(|volume| {
