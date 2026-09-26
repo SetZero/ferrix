@@ -338,6 +338,11 @@ package FerrixStructure {
             doc /* /lib/drivers/vport, the virtio-serial port driver, a native
                  * program on user/rt. */
         }
+        part virtioSndDriver : UserBinary {
+            attribute :>> staticMusl = false;
+            doc /* /lib/drivers/snd, the virtio-snd driver (docs/AUDIO.md), a
+                 * native program on user/rt over libs/virtio-snd. */
+        }
         part init : UserBinary {
             doc /* The program the kernel starts first (kernel/src/init.rs):
                  * /bin/zinc unless a build names another with --init, or a

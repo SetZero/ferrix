@@ -196,6 +196,16 @@ impl<S: Syscall> Device<S> {
         self.ring(nr::INPUT_CONTROL_CREATE)
     }
 
+    /// Make the sound control channel for this device and answer the
+    /// driver's end of it (`docs/AUDIO.md` §3.2).
+    ///
+    /// # Errors
+    ///
+    /// `ALREADY_BOUND` when the device has one, and whatever the call said.
+    pub fn sound_control(&self) -> Result<Channel<S>, Error> {
+        self.ring(nr::SOUND_CONTROL_CREATE)
+    }
+
     /// The body every control channel shares: one call, one handle back.
     fn ring(&self, number: usize) -> Result<Channel<S>, Error> {
         let value = Call::new(number)

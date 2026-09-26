@@ -710,7 +710,9 @@ where
     ///
     /// An [`InitFailure`] with the parts, after `FAILED` and a reset, for a
     /// device that cannot be driven.
-    #[expect(
+    // `allow`, not `expect`: whether the error is large depends on the
+    // parts' types, which a 32-bit driver's are not.
+    #[allow(
         clippy::result_large_err,
         reason = "a failed bring-up hands every part back by value, as virtio-input's does"
     )]

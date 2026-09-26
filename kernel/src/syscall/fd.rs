@@ -499,6 +499,16 @@ pub(crate) fn sys_ioctl(
     if let Some(device) = crate::input::evdev::of(file.io()) {
         return crate::input::evdev::ioctl(process, &device, request, arg);
     }
+    // A sound card's playback and control nodes (`docs/AUDIO.md` §3.4). A
+    // drain and a write wait unless the descriptor is non-blocking, which
+    // an ioctl knows only from the file's status.
+    if let Some(pcm) = crate::audio::pcm::pcm_of(file.io()) {
+        let nonblock = file.status().nonblock;
+        return crate::audio::pcm::pcm_ioctl(process, &pcm, request, arg, nonblock);
+    }
+    if let Some(control) = crate::audio::pcm::control_of(file.io()) {
+        return crate::audio::pcm::control_ioctl(process, &control, request, arg);
+    }
     // A pseudoterminal, by which end of it the descriptor holds.
     if let Some(master) = fs::pty::master_of(file.io()) {
         return tty::master_ioctl(process, &master, request, arg);

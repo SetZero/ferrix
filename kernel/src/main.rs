@@ -20,6 +20,7 @@ extern crate alloc;
 )]
 mod acpi;
 mod arch;
+mod audio;
 mod backtrace;
 mod block_ring;
 mod checks;
@@ -2290,7 +2291,8 @@ fn register_load(view: &BootView<'_>) {
         .and_then(|()| net_ring::install())
         .and_then(|()| display::install())
         .and_then(|()| render::install())
-        .and_then(|()| input::install());
+        .and_then(|()| input::install())
+        .and_then(|()| audio::install());
     if let Err(hooks::Full) = registered {
         fatal!(
             catalog::LOAD_REGISTRATION,

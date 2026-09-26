@@ -102,7 +102,7 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixAssurance` | `11-assurance.sysml` | docs/RELIABILITY.md and docs/ASSEMBLY.md: the quality gates, what each one verifies, and what the tests can actually reach. The gates cargo xtask check runs are in CI. Of the xtask boot gates, CI runs test-boot and test-rustc; the ones that need a binary the repository does not carry, a disk judged on the host or a screendump run in the landing gates of docs/BACKLOG.md instead (docs/ROADMAP.md, Continuously). |
 | `FerrixViews` | `12-views.sysml` | How to read the one model as two: what runs today, and what the roadmap still owes. The filters key on the lifecycle keywords every element carries. |
 
-13 files, 16 packages, 1681 elements, 201 relations. Model digest `1c19b68b79b42fe6`.
+13 files, 16 packages, 1683 elements, 201 relations. Model digest `7bee251bfc609183`.
 
 | Maturity | Elements | Meaning |
 | --- | ---: | --- |
@@ -345,6 +345,7 @@ initramfs : Initramfs  [implemented]
   virtioNet : UserBinary
   virtioInput : UserBinary
   vport : UserBinary
+  virtioSndDriver : UserBinary
   init : UserBinary
 userland : Userland  [in progress]
   init : UserProcess  [in progress]

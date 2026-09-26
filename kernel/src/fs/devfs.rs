@@ -282,6 +282,15 @@ const PTS_CURSOR: u64 = (1 << 48) + 4;
 /// The name of the directory pseudoterminal slaves are in.
 const PTS: &[u8] = b"pts";
 
+/// `/dev/snd`'s inode number.
+const SND_INO: u64 = 1 << 42;
+
+/// The root's cursor for `/dev/snd`, after `/dev/shm`'s.
+const SND_CURSOR: u64 = (1 << 48) + 8;
+
+/// The name of the directory sound cards' nodes are in.
+const SND: &[u8] = b"snd";
+
 /// `/dev/shm`'s inode number.
 const SHM_INO: u64 = 1 << 39;
 
@@ -660,6 +669,12 @@ enum Place {
     Input,
     /// `/dev/input/event<N>`.
     Event(u32),
+    /// `/dev/snd`, while a sound card is published.
+    Snd,
+    /// `/dev/snd/controlC<N>`.
+    SoundControl(u32),
+    /// `/dev/snd/pcmC<N>D0p`.
+    SoundPcm(u32),
     /// `/dev/pts`, the directory a pseudoterminal's slave is in.
     Pts,
     /// `/dev/pts/<N>`.
@@ -692,6 +707,9 @@ impl Node {
             | Place::Render(_)
             | Place::Input
             | Place::Event(_)
+            | Place::Snd
+            | Place::SoundControl(_)
+            | Place::SoundPcm(_)
             | Place::Pts
             | Place::Slave(_)
             | Place::Shm => None,
@@ -754,6 +772,9 @@ impl Inode for Node {
                 ino: INPUT_INO,
                 ..directory
             },
+            (Place::Snd | Place::SoundControl(_) | Place::SoundPcm(_), _) => {
+                sound_metadata(self.place, self.made, directory)
+            }
             (Place::Pts, _) => Metadata {
                 ino: PTS_INO,
                 ..directory
@@ -818,7 +839,7 @@ impl Inode for Node {
     fn is_stream(&self) -> bool {
         !matches!(
             self.place,
-            Place::Root | Place::Dri | Place::Input | Place::Pts | Place::Shm
+            Place::Root | Place::Dri | Place::Input | Place::Snd | Place::Pts | Place::Shm
         )
     }
 
@@ -894,6 +915,18 @@ impl Inode for Node {
             let file: Arc<dyn Inode> = crate::input::evdev::EventFile::open(device)?;
             return Ok(Some(file));
         }
+        // A sound card's nodes: the playback node one open at a time, the
+        // control node any number (`docs/AUDIO.md` §3.1).
+        if let Place::SoundPcm(index) = self.place {
+            let card = crate::audio::card(index).ok_or(Errno::ENXIO)?;
+            let file: Arc<dyn Inode> = crate::audio::pcm::PcmFile::open(card)?;
+            return Ok(Some(file));
+        }
+        if let Place::SoundControl(index) = self.place {
+            let card = crate::audio::card(index).ok_or(Errno::ENXIO)?;
+            let file: Arc<dyn Inode> = crate::audio::pcm::ControlFile::open(card)?;
+            return Ok(Some(file));
+        }
         // A slave is one object a pair, shared by every open of it, as a
         // terminal is: two programs with the same terminal open read from
         // one queue.
@@ -921,6 +954,8 @@ impl Inode for Node {
         | Place::Card(_)
         | Place::Render(_)
         | Place::Event(_)
+        | Place::SoundControl(_)
+        | Place::SoundPcm(_)
         | Place::Slave(_) = self.place
         {
             return Err(Errno::ENXIO);
@@ -948,6 +983,8 @@ impl Inode for Node {
         | Place::Card(_)
         | Place::Render(_)
         | Place::Event(_)
+        | Place::SoundControl(_)
+        | Place::SoundPcm(_)
         | Place::Slave(_) = self.place
         {
             return Err(Errno::ENXIO);
@@ -989,6 +1026,18 @@ impl Inode for Node {
                 made: self.made,
             }));
         }
+        if self.place == Place::Snd {
+            let (index, pcm) = sound_node(name).ok_or(Errno::ENOENT)?;
+            let _card = crate::audio::card(index).ok_or(Errno::ENOENT)?;
+            return Ok(Arc::new(Node {
+                place: if pcm {
+                    Place::SoundPcm(index)
+                } else {
+                    Place::SoundControl(index)
+                },
+                made: self.made,
+            }));
+        }
         if self.place == Place::Pts {
             // A slave's name is its number and nothing else, as devpts
             // names them.
@@ -1014,6 +1063,12 @@ impl Inode for Node {
         if name == INPUT && !crate::input::device_indices().is_empty() {
             return Ok(Arc::new(Node {
                 place: Place::Input,
+                made: self.made,
+            }));
+        }
+        if name == SND && !crate::audio::card_indices().is_empty() {
+            return Ok(Arc::new(Node {
+                place: Place::Snd,
                 made: self.made,
             }));
         }
@@ -1050,6 +1105,9 @@ impl Inode for Node {
         }
         if self.place == Place::Input {
             return crate::input::evdev::read_dir(cursor, emit);
+        }
+        if self.place == Place::Snd {
+            return read_snd(cursor, emit);
         }
         if self.place == Place::Pts {
             return read_pts(cursor, emit);
@@ -1134,13 +1192,17 @@ impl Inode for Node {
         // device to be published, because nothing publishes it. It is there
         // from the first listing.
         if cursor <= SHM_CURSOR {
-            let _ = emit(DirEntry {
+            let kept = emit(DirEntry {
                 ino: SHM_INO,
                 kind: FileType::Directory,
                 name: SHM,
                 next: SHM_CURSOR + 1,
             });
+            if !kept {
+                return Ok(());
+            }
         }
+        emit_snd(cursor, emit);
         Ok(())
     }
 
@@ -1311,4 +1373,85 @@ pub(crate) fn mount() -> Result<()> {
     }
     let at = ns.resolve(&ctx, None, b"/dev", true)?;
     ns.mount(Arc::new(Devfs::new()), &at).map(drop)
+}
+
+/// A name in `/dev/snd`: `controlC<N>`, or `pcmC<N>D0p` (`true`).
+fn sound_node(name: &[u8]) -> Option<(u32, bool)> {
+    let number = |digits: &[u8]| -> Option<u32> {
+        if digits.is_empty() || (digits.len() > 1 && digits.first() == Some(&b'0')) {
+            return None;
+        }
+        core::str::from_utf8(digits).ok()?.parse().ok()
+    };
+    if let Some(rest) = name.strip_prefix(b"controlC") {
+        return number(rest).map(|index| (index, false));
+    }
+    let rest = name.strip_prefix(b"pcmC")?.strip_suffix(b"D0p")?;
+    number(rest).map(|index| (index, true))
+}
+
+/// `/dev/snd`'s entries: each card's control node, then its playback node.
+fn read_snd(cursor: u64, emit: &mut dyn FnMut(DirEntry<'_>) -> bool) -> Result<()> {
+    let mut next = FIRST_CURSOR;
+    for index in crate::audio::card_indices() {
+        let names = [
+            (
+                alloc::format!("controlC{index}"),
+                crate::audio::pcm::control_metadata(index).ino,
+            ),
+            (
+                alloc::format!("pcmC{index}D0p"),
+                crate::audio::pcm::pcm_metadata(index).ino,
+            ),
+        ];
+        for (name, ino) in &names {
+            let at = next;
+            next += 1;
+            if at < cursor {
+                continue;
+            }
+            let kept = emit(DirEntry {
+                ino: *ino,
+                kind: FileType::CharDevice,
+                name: name.as_bytes(),
+                next,
+            });
+            if !kept {
+                return Ok(());
+            }
+        }
+    }
+    Ok(())
+}
+
+/// `/dev/snd`'s metadata, and its nodes'.
+fn sound_metadata(place: Place, made: Timespec, directory: Metadata) -> Metadata {
+    let node = match place {
+        Place::SoundControl(index) => crate::audio::pcm::control_metadata(index),
+        Place::SoundPcm(index) => crate::audio::pcm::pcm_metadata(index),
+        _ => {
+            return Metadata {
+                ino: SND_INO,
+                ..directory
+            };
+        }
+    };
+    Metadata {
+        atime: made,
+        mtime: made,
+        ctime: made,
+        ..node
+    }
+}
+
+/// The root's entry for `/dev/snd`, while a card is published.
+fn emit_snd(cursor: u64, emit: &mut dyn FnMut(DirEntry<'_>) -> bool) {
+    if cursor <= SND_CURSOR && !crate::audio::card_indices().is_empty() {
+        let _ = emit(DirEntry {
+            ino: SND_INO,
+            kind: FileType::Directory,
+            name: SND,
+            next: SND_CURSOR + 1,
+        });
+    }
 }

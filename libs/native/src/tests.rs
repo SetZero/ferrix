@@ -988,6 +988,7 @@ fn every_call_in_the_native_table_has_a_wrapper() {
     let _ = device.display_control();
     let _ = device.render_control();
     let _ = device.input_control();
+    let _ = device.sound_control();
     let _ = device.info();
     let _ = device.quiesce();
     let _ = device.clock(1, false);

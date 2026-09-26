@@ -62,6 +62,10 @@ const VIRTIO_GPU_IDS: [u16; 1] = [0x1050];
 /// device, as one blk driver starts per disk.
 const VIRTIO_INPUT_IDS: [u16; 1] = [0x1052];
 
+/// virtio-snd, which has only a modern id (`docs/AUDIO.md` §3.2): one
+/// driver process per card.
+const VIRTIO_SND_IDS: [u16; 1] = [0x1059];
+
 /// virtio-console's modern PCI device id and its transitional one, which is
 /// the pair `docs/CLIPBOARD.md` §3.1 names.
 const VIRTIO_CONSOLE_IDS: [u16; 2] = [0x1043, 0x1003];
@@ -80,6 +84,8 @@ enum Kind {
     Display,
     /// `docs/INPUT.md`: an input device, numbered by the kernel.
     Input,
+    /// `docs/AUDIO.md`: a sound card, numbered by the kernel.
+    Sound,
     /// `docs/CLIPBOARD.md` §5 and §6: a virtio-serial port, which has no
     /// kernel subsystem at all. The driver is handed its device and a plain
     /// channel to hear START on, and everything after that is a Unix socket
@@ -112,6 +118,8 @@ enum Plan {
     Display,
     /// An input device, whose number the kernel chooses.
     Input,
+    /// A sound card, whose number the kernel chooses.
+    Sound,
     /// A virtio-serial port, which publishes nowhere.
     Port,
     /// A bus host, which publishes nothing itself.
@@ -122,12 +130,13 @@ enum Plan {
 
 /// The table: which driver, by name in the initramfs, drives which device,
 /// and over which ring.
-const DRIVERS: [(u16, &[u16], &[u8], Kind); 5] = [
+const DRIVERS: [(u16, &[u16], &[u8], Kind); 6] = [
     (VIRTIO_VENDOR, &VIRTIO_BLK_IDS, b"blk", Kind::Block),
     (VIRTIO_VENDOR, &VIRTIO_NET_IDS, b"net", Kind::Net),
     (VIRTIO_VENDOR, &VIRTIO_GPU_IDS, b"gpu", Kind::Display),
     (VIRTIO_VENDOR, &VIRTIO_INPUT_IDS, b"input", Kind::Input),
     (VIRTIO_VENDOR, &VIRTIO_CONSOLE_IDS, b"vport", Kind::Port),
+    (VIRTIO_VENDOR, &VIRTIO_SND_IDS, b"snd", Kind::Sound),
 ];
 
 /// The device tree bindings the kernel publishes nodes for, by the number
@@ -288,6 +297,7 @@ fn run(channel: &Channel<Kernel>) -> Result<(), Step> {
             Kind::Net => Plan::Net,
             Kind::Display => Plan::Display,
             Kind::Input => Plan::Input,
+            Kind::Sound => Plan::Sound,
             Kind::Port => Plan::Port,
             Kind::Host => Plan::Host,
             Kind::Engine => Plan::Engine,
@@ -903,6 +913,7 @@ fn start(
         Plan::Net => start_net(job, device, image, info, port, key),
         Plan::Display => start_display(job, device, image, info, port, key),
         Plan::Input => start_input(job, device, image, info, port, key),
+        Plan::Sound => start_sound(job, device, image, info, port, key),
         Plan::Port => start_plain(job, device, image, info, port, key, "vport"),
         Plan::Host => start_plain(job, device, image, info, port, key, "usbhid"),
         Plan::Engine => start_plain(job, device, image, info, port, key, "gc400"),
@@ -1097,6 +1108,53 @@ fn start_input(
         job,
         image,
         "input",
+        port,
+        key,
+        encoded.as_bytes(),
+        [device, control],
+    )
+}
+
+/// A virtio-snd driver, over the sound control channel (`docs/AUDIO.md`
+/// §3.2), with START in blk's layout, as input's.
+fn start_sound(
+    job: &Job<Kernel>,
+    device: Device<Kernel>,
+    image: &Vmo<Kernel>,
+    info: &DeviceInfo,
+    port: &Port<Kernel>,
+    key: u64,
+) -> Result<Launched, ()> {
+    let control = device.sound_control().map_err(|_| ())?;
+    let block = |block: ferrix_native_abi::types::DeviceBlock| Block {
+        phys: block.phys,
+        offset: block.offset,
+        length: block.length,
+    };
+    let start = Start {
+        common: block(info.common),
+        notify: block(info.notify),
+        isr: block(info.isr),
+        device: block(info.device),
+        notify_off_multiplier: info.notify_off_multiplier,
+        msix_table_size: info.msix_table_size,
+        pci_device_id: info.device_id,
+        location: info.location,
+        name: [b's', b'n', b'd', 0, 0, 0, 0, 0],
+    };
+    let device = device
+        .into_owned()
+        .replace(Requested::Exactly(DEVICE_RIGHTS))
+        .map_err(|_| ())?;
+    let control = control
+        .into_owned()
+        .replace(Requested::Exactly(CONTROL_RIGHTS))
+        .map_err(|_| ())?;
+    let encoded = Ring::Start(start).encode();
+    launch(
+        job,
+        image,
+        "snd",
         port,
         key,
         encoded.as_bytes(),

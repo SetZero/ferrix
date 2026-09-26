@@ -1,0 +1,25 @@
+[package]
+name = "ferrix-snd"
+description = "The virtio-snd driver process: the sound control channel's driver end over a virtio-snd PCI device, on ferrix-rt"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "snd"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+ferrix-blkring.workspace = true
+ferrix-native-abi.workspace = true
+ferrix-rt.workspace = true
+ferrix-sndctl.workspace = true
+ferrix-virtio.workspace = true
+ferrix-virtio-snd.workspace = true
+
+[lints]
+workspace = true

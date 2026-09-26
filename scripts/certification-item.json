@@ -182,6 +182,7 @@
         "over ~40,000 is a claim that can be."
       ],
       "members": [
+        "audio/**",
         "block_ring/**",
         "display/**",
         "fs/**",
@@ -294,6 +295,7 @@
     ],
     "file": "main.rs",
     "load_modules": [
+      "audio",
       "block_ring",
       "block_ring::check",
       "block_ring::driver_check",

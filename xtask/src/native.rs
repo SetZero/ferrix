@@ -97,6 +97,11 @@ pub(crate) const PROGRAMS: &[Program] = &[
         binary: "vport",
         directory: DRIVERS,
     },
+    Program {
+        package: "ferrix-snd",
+        binary: "snd",
+        directory: DRIVERS,
+    },
 ];
 
 /// Where drivers are unpacked, relative to the root, with a `MANIFEST`

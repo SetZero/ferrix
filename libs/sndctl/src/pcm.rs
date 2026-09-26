@@ -610,7 +610,10 @@ impl Stream {
         matches!(self.state, STATE_RUNNING | STATE_DRAINING)
     }
 
-    /// `DELAY`: frames between the program and the speaker, 0 unless running.
+    /// `DELAY`: frames between the program and the speaker, which
+    /// `snd_pcm_delay` counts in any state `hwsync` allows, a prepared
+    /// stream's queued frames among them. `STATUS`' delay is 0 unless
+    /// running; this is not.
     ///
     /// # Errors
     ///
@@ -618,7 +621,7 @@ impl Stream {
     /// `DRAINING` (`snd_pcm_delay` via `snd_pcm_hwsync`).
     pub fn delay(&self) -> Result<u64, Errno> {
         self.hwsync()?;
-        Ok(if self.running() { self.queued() } else { 0 })
+        Ok(self.queued())
     }
 
     /// `HWSYNC`: `hw_ptr` is always current here, so only the state is

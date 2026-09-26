@@ -107,6 +107,8 @@ pub const DEVICE_INFO: usize = 0x1049;
 pub const DEVICE_QUIESCE: usize = 0x104A;
 /// [`NativeCall::DeviceClock`].
 pub const DEVICE_CLOCK: usize = 0x104F;
+/// [`NativeCall::SoundControlCreate`].
+pub const SOUND_CONTROL_CREATE: usize = 0x1050;
 /// The largest name [`NativeCall::ProcessCreate`] takes, in bytes.
 pub const PROCESS_NAME_MAX: usize = 32;
 
@@ -326,10 +328,14 @@ pub enum NativeCall {
     /// a device with no such clock, `BAD_STATE` when the clock cannot be set
     /// now.
     DeviceClock,
+    /// `(device)` → handle. Make the sound control channel for a device this
+    /// process holds with `MANAGE`, and answer the driver's end of it
+    /// (`docs/AUDIO.md` §3.2). One per device.
+    SoundControlCreate,
 }
 
 /// Every native call, in number order.
-pub const ALL: [NativeCall; 42] = [
+pub const ALL: [NativeCall; 43] = [
     NativeCall::HandleClose,
     NativeCall::HandleDuplicate,
     NativeCall::HandleReplace,
@@ -372,6 +378,7 @@ pub const ALL: [NativeCall; 42] = [
     NativeCall::InputControlCreate,
     NativeCall::RenderControlCreate,
     NativeCall::DeviceClock,
+    NativeCall::SoundControlCreate,
 ];
 
 /// Whether `number` is in the native range at all.
@@ -429,6 +436,7 @@ pub const fn decode(number: usize) -> Option<NativeCall> {
         DEVICE_INFO => NativeCall::DeviceInfo,
         DEVICE_QUIESCE => NativeCall::DeviceQuiesce,
         DEVICE_CLOCK => NativeCall::DeviceClock,
+        SOUND_CONTROL_CREATE => NativeCall::SoundControlCreate,
         _ => return None,
     };
     Some(call)
@@ -480,5 +488,6 @@ pub const fn number(call: NativeCall) -> usize {
         NativeCall::DeviceInfo => DEVICE_INFO,
         NativeCall::DeviceQuiesce => DEVICE_QUIESCE,
         NativeCall::DeviceClock => DEVICE_CLOCK,
+        NativeCall::SoundControlCreate => SOUND_CONTROL_CREATE,
     }
 }
