@@ -784,6 +784,29 @@ pub(crate) fn read_cntvct() -> u64 {
     count
 }
 
+/// Let user mode read the virtual counter, and `CNTFRQ_EL0` with it:
+/// `CNTKCTL_EL1.EL0VCTEN`, which Linux sets on every processor. Programs read
+/// the counter directly for their clocks -- Chromium's `TimeTicks` is `mrs
+/// x0, CNTVCT_EL0` -- and without it that read is an undefined instruction.
+/// The rest of the register, the physical counter's access and the event
+/// stream, is left as it was. A processor's own register: every processor
+/// runs this.
+pub(crate) fn allow_user_counter() {
+    let control: u64;
+    // SAFETY: reading `CNTKCTL_EL1` has no side effects.
+    unsafe {
+        asm!("mrs {}, cntkctl_el1", out(reg) control, options(nomem, nostack, preserves_flags));
+    }
+    // SAFETY: setting `EL0VCTEN` only decides whether user mode may read the
+    // virtual counter; no mapping, interrupt or timer of the kernel's changes.
+    unsafe {
+        asm!("msr cntkctl_el1, {}", "isb", in(reg) control | CNTKCTL_EL0VCTEN, options(nostack, preserves_flags));
+    }
+}
+
+/// `CNTKCTL_EL1.EL0VCTEN`: user mode may read `CNTVCT_EL0` and `CNTFRQ_EL0`.
+const CNTKCTL_EL0VCTEN: u64 = 1 << 1;
+
 /// Set the instant the virtual timer fires at.
 pub(crate) fn write_cntv_cval(instant: u64) {
     // SAFETY: `CNTV_CVAL_EL0` is a comparator. Writing it changes when the
