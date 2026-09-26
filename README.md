@@ -773,7 +773,7 @@ the repository.
 |---|---|
 | `boot/` | The loaders: `boot/uefi/` for x86-64, AArch64 and ARMv7-A, `boot/pixel7/` for the phone. |
 | `kernel/` | The kernel. |
-| `libs/` | Architecture-neutral logic, nearly sixty crates in seven groups: `proto`, `kernel`, `platform`, `fs`, `network`, `drivers`, `init`. Host-testable **by design** — it is the only code `cargo test`, Miri and the fuzzers can reach. |
+| `libs/` | Architecture-neutral logic, nearly sixty crates in eight groups: `proto`, `kernel`, `platform`, `fs`, `network`, `drivers`, `init`, `crypto`. Host-testable **by design** — it is the only code `cargo test`, Miri and the fuzzers can reach. |
 | `native/` | Ring-3 programs on the native ABI: the runtime, `devmgr`, and one process per driver under `native/drivers/`. |
 | `userland/` | Linux-ABI programs, each its own workspace: [the compositor](userland/compositor/README.md), [the init](userland/init/README.md), [zinc](userland/zinc/README.md), statd and [ferrousli](userland/ferrousli/README.md), the C library. |
 | `tests/` | The fuzz targets over `libs/`, and test programs that live outside any one crate. |

@@ -31,6 +31,10 @@ name = "ferrix-acpi"
 version = "0.1.0"
 
 [[package]]
+name = "ferrix-argon2"
+version = "0.1.0"
+
+[[package]]
 name = "ferrix-blk"
 version = "0.1.0"
 dependencies = [

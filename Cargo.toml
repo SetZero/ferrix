@@ -30,6 +30,7 @@ members = [
     "libs/fs/btrfs-write",
     "libs/fs/cpio",
     "libs/kernel/crng",
+    "libs/crypto/argon2",
     "libs/proto/linux-abi",
     "libs/network/netwire",
     "libs/network/nettcp",
@@ -135,6 +136,7 @@ ferrix-btrfs-vfs = { path = "libs/fs/btrfs-vfs" }
 ferrix-btrfs-write = { path = "libs/fs/btrfs-write" }
 ferrix-cpio = { path = "libs/fs/cpio" }
 ferrix-crng = { path = "libs/kernel/crng" }
+ferrix-argon2 = { path = "libs/crypto/argon2" }
 ferrix-linux-abi = { path = "libs/proto/linux-abi" }
 ferrix-native-abi = { path = "libs/proto/native-abi" }
 ferrix-native = { path = "libs/proto/native" }

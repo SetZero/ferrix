@@ -56,6 +56,7 @@ kernel or a loader. Each crate sits in exactly one group:
 | `libs/network/` | The network stack | `net` `netwire` `nettcp` `netlink` |
 | `libs/drivers/` | Device logic over an abstract transport, and the serve loops ring-3 drivers run | `virtio*` `usb-host` `gc400` `stm32-display` `blkserve` `netserve` `vdagent` |
 | `libs/init/` | The service manager's pure core, the restart policy it shares with `devmgr`, and its wire formats | `svc` `restart` `svc-proto` |
+| `libs/crypto/` | Cryptography user space checks secrets with: the password hash `authd` stores credentials under (`docs/AUTH.md` §5.1). The kernel's random number generator is not here but in `libs/kernel/` | `argon2` |
 
 **Choosing a group for a new lib.** Ask what the crate *is*, not who uses it
 first. A format two components agree on is `proto`, even if only the kernel

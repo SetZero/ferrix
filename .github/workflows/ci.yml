@@ -622,6 +622,13 @@ jobs:
       - name: Miri (service manager)
         run: cargo +nightly miri test -p ferrix-svc --lib
 
+      # The password hash authd keeps credentials under. It forbids unsafe;
+      # what Miri adds is the index arithmetic that picks each reference
+      # block, which a wrong lane length or segment would carry out of the
+      # memory it was given.
+      - name: Miri (password hash)
+        run: cargo +nightly miri test -p ferrix-argon2 --lib
+
   # ----------------------------------------------------------------
   # Fuzz the surfaces that parse bytes somebody else chose.
   #

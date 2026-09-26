@@ -614,11 +614,28 @@ about the target time, between a floor and a ceiling:
 | Expected choice | m = 64 MiB, t = 3, p = 1 (RFC 9106's second recommendation, with p = 1) | about m = 19-32 MiB, t = 2 |
 | Ceiling | m = 256 MiB | m = 64 MiB |
 
-These are **estimates to be measured, not measurements.** BLAKE2b works on
-64-bit words, so a 32-bit Cortex-A7 is several times slower per byte than
-its clock suggests. Slice P1.1 times the crate on x86-64 under KVM, on
-AArch64, and on the DK1 itself. This table is then rewritten with what was
-read.
+**What one check took**, measured with `libs/crypto/argon2`'s
+`examples/timing` (the fastest of three runs):
+
+| Where | Floor (19 MiB, t = 2) | 64 MiB, t = 3 |
+|---|---|---|
+| The build host, natively (Ryzen 9 9900X), which a KVM guest runs at | 38 ms | 213 ms |
+| `qemu-aarch64` as a Cortex-A72, under TCG | 146 ms | 734 ms |
+| `qemu-arm` as a Cortex-A7, under TCG | 201 ms | 1064 ms |
+| The DK1 (2 × Cortex-A7 at 800 MHz) | **estimate:** 0.4 to 0.6 s | **estimate:** 2 to 3 s |
+
+Read on 2026-09-26, with the host's load between 30 and 40 from other
+sessions, so the emulated rows are upper bounds. The emulator rows are
+the emulator's speed, not a Cortex-A7's: TCG on a fast host runs 32-bit
+Arm code far quicker than an 800 MHz core does. The DK1 row is worked out,
+not measured, and stays an estimate until the board is free to time. One
+block is about 6,000 instructions of 64-bit arithmetic done in 32-bit
+halves, at about one instruction a cycle, and the floor is 38,912 blocks.
+So an x86-64 or AArch64 machine lands well above the floor at 0.5 s, and
+the DK1 at about the floor for its 1 s. That was the table's prediction,
+and the floor holds on every target. Each `authd` also says what the floor
+took when it first sets a password (`authd: argon2id at the floor ...`), and
+`cargo xtask test-auth` prints that line for every architecture it boots.
 
 `p = 1` because `authd` checks one password at a time (§3.5), so a second
 lane buys nothing. Because each hash carries its own parameters, a store

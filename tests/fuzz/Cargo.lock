@@ -46,6 +46,10 @@ name = "ferrix-acpi"
 version = "0.1.0"
 
 [[package]]
+name = "ferrix-argon2"
+version = "0.1.0"
+
+[[package]]
 name = "ferrix-blkring"
 version = "0.1.0"
 dependencies = [
@@ -103,6 +107,7 @@ dependencies = [
  "compositor-config",
  "compositor-wire",
  "ferrix-acpi",
+ "ferrix-argon2",
  "ferrix-blkring",
  "ferrix-block",
  "ferrix-btrfs",

@@ -16,6 +16,7 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4"
 ferrix-acpi = { path = "../../libs/platform/acpi" }
 ferrix-cpio = { path = "../../libs/fs/cpio" }
+ferrix-argon2 = { path = "../../libs/crypto/argon2" }
 ferrix-elf = { path = "../../libs/platform/elf" }
 ferrix-fdt = { path = "../../libs/platform/fdt" }
 ferrix-frame = { path = "../../libs/kernel/frame" }
@@ -297,3 +298,10 @@ bench = false
 debug = true
 # The fuzzer's whole job is to find these, so they must not be compiled out.
 overflow-checks = true
+
+[[bin]]
+name = "argon2_phc"
+path = "fuzz_targets/argon2_phc.rs"
+test = false
+doc = false
+bench = false
