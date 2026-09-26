@@ -1,5 +1,5 @@
-//! The PL011 UART, or on a machine without one the kernel can reach, a
-//! console record in `ramoops` memory.
+//! The PL011 UART, a 16550 behind `MMIO`, or on a machine without either the
+//! kernel can reach, a console record in `ramoops` memory.
 //!
 //! One of the two device drivers inside the kernel — see `crate::console` for
 //! why it is here at all rather than in userspace.
@@ -12,13 +12,18 @@
 //! log survives the watchdog reset that ends a run and Android shows it as
 //! `/sys/fs/pstore/console-ramoops-0`. It has no input and never waits.
 //!
-//! Unlike x86-64's 16550, this one is `MMIO`, so it has to be *mapped* before
+//! The 16550 is for the guest crosvm makes on the Pixel 7, whose console is an
+//! `ns16550a` at `MMIO` `0x3f8`: `console=uart8250,mmio,<address>`, as Linux
+//! spells it. Its registers are bytes, one apart. It is polled both ways, and
+//! crosvm's port sends each byte as it is written.
+//!
+//! Unlike x86-64's 16550, these are `MMIO`, so it has to be *mapped* before
 //! it can be written, and mapped as device memory: through a normal cacheable
 //! mapping the writes may be merged, reordered or held in a cache line, and the
 //! symptom is a console that prints nothing at all.
 
 use core::cell::UnsafeCell;
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use ferrix_bootinfo::{BootView, KERNEL_VMAP_BASE, PAGE_SIZE};
 
@@ -89,6 +94,51 @@ static RAMOOPS_CAPACITY: AtomicU64 = AtomicU64::new(0);
 /// `crate::console`, so a plain load and store are enough.
 static RAMOOPS_LENGTH: AtomicU64 = AtomicU64::new(0);
 
+/// Whether the console is a 16550 rather than the PL011. Set once by
+/// [`init`], before any output.
+static NS16550: AtomicBool = AtomicBool::new(false);
+
+/// 16550 transmit holding and receive buffer register.
+const UART_DATA: u64 = 0;
+/// 16550 line status register.
+const UART_LSR: u64 = 5;
+/// `UART_LSR`: a received byte is waiting.
+const LSR_DATA_READY: u8 = 1 << 0;
+/// `UART_LSR`: the transmit holding register can take a byte.
+const LSR_THR_EMPTY: u8 = 1 << 5;
+/// `UART_LSR`: the transmitter is idle, holding register and shift register
+/// both empty.
+const LSR_TX_IDLE: u8 = 1 << 6;
+
+/// Parse `uart8250,mmio,<address>`, the address in hexadecimal with a `0x`
+/// prefix.
+pub(super) fn ns16550_port(value: &str) -> Option<u64> {
+    let address = value.strip_prefix("uart8250,mmio,")?;
+    u64::from_str_radix(address.strip_prefix("0x")?, 16).ok()
+}
+
+/// True when the console is a 16550.
+pub(crate) fn is_ns16550() -> bool {
+    NS16550.load(Ordering::Relaxed)
+}
+
+/// Read one of the 16550's byte registers.
+fn read_u8(offset: u64) -> u8 {
+    // SAFETY: single-threaded, as documented on the `Sync` impl above.
+    let base = unsafe { *BASE.0.get() };
+    // SAFETY: `base` is the port `init` mapped, and `offset` one of its eight
+    // registers, all inside the mapped page.
+    unsafe { core::ptr::read_volatile((base + offset) as *const u8) }
+}
+
+/// Write one of the 16550's byte registers.
+fn write_u8(offset: u64, value: u8) {
+    // SAFETY: single-threaded, as documented on the `Sync` impl above.
+    let base = unsafe { *BASE.0.get() };
+    // SAFETY: as in `read_u8`.
+    unsafe { core::ptr::write_volatile((base + offset) as *mut u8, value) };
+}
+
 /// Parse `ramoops,<address>,<size>`, the loader's `console=` value, both
 /// numbers in hexadecimal with a `0x` prefix.
 pub(super) fn ramoops_zone(value: &str) -> Option<(u64, u64)> {
@@ -100,9 +150,17 @@ pub(super) fn ramoops_zone(value: &str) -> Option<(u64, u64)> {
         .then_some((base, size))
 }
 
-/// Map the console the command line names -- the PL011, or a `ramoops`
-/// zone -- and record where it landed.
+/// Map the console the command line names -- the PL011, a 16550 or a
+/// `ramoops` zone -- and record where it landed.
 pub(crate) fn init(view: &BootView<'_>, memory: &mut EarlyMemory) -> Result<(), EarlyError> {
+    if let Some(port) = view.option("console").and_then(ns16550_port) {
+        let page = port & !(PAGE_SIZE - 1);
+        memory.map_device(PL011_VIRT, page, PAGE_SIZE)?;
+        // SAFETY: single-threaded, as documented on the `Sync` impl above.
+        unsafe { *BASE.0.get() = PL011_VIRT + (port - page) };
+        NS16550.store(true, Ordering::Relaxed);
+        return Ok(());
+    }
     if let Some((base, size)) = view.option("console").and_then(ramoops_zone) {
         // Device memory, so every byte reaches RAM in order and survives the
         // reset with no cache to be cleaned first.
@@ -188,6 +246,16 @@ pub(crate) fn write_byte(byte: u8) {
         ramoops_append(byte);
         return;
     }
+    if is_ns16550() {
+        for _ in 0..SPIN_LIMIT {
+            if read_u8(UART_LSR) & LSR_THR_EMPTY != 0 {
+                break;
+            }
+            core::hint::spin_loop();
+        }
+        write_u8(UART_DATA, byte);
+        return;
+    }
 
     for _ in 0..SPIN_LIMIT {
         if read(FR) & FR_TXFF == 0 {
@@ -215,7 +283,11 @@ pub(crate) fn drain() {
         return;
     }
     for _ in 0..DRAIN_LIMIT {
-        if read(FR) & (FR_TXFE | FR_BUSY) == FR_TXFE {
+        if is_ns16550() {
+            if read_u8(UART_LSR) & LSR_TX_IDLE != 0 {
+                return;
+            }
+        } else if read(FR) & (FR_TXFE | FR_BUSY) == FR_TXFE {
             return;
         }
         core::hint::spin_loop();
@@ -231,6 +303,9 @@ pub(crate) fn read_byte() -> Option<u8> {
     // SAFETY: single-threaded, as documented on the `Sync` impl above.
     if unsafe { *BASE.0.get() } == 0 || is_ramoops() {
         return None;
+    }
+    if is_ns16550() {
+        return (read_u8(UART_LSR) & LSR_DATA_READY != 0).then(|| read_u8(UART_DATA));
     }
 
     if read(FR) & FR_RXFE != 0 {
@@ -251,7 +326,7 @@ pub(crate) fn read_byte() -> Option<u8> {
 /// both, so the handler needs nothing but [`read_byte`].
 pub(crate) fn enable_receive_interrupt() {
     // SAFETY: single-threaded, as documented on the `Sync` impl above.
-    if unsafe { *BASE.0.get() } == 0 || is_ramoops() {
+    if unsafe { *BASE.0.get() } == 0 || is_ramoops() || is_ns16550() {
         return;
     }
     write(IMSC, read(IMSC) | IMSC_RX | IMSC_RT);
@@ -268,6 +343,9 @@ pub(crate) fn transmit_room() -> usize {
     if is_ramoops() {
         return 1;
     }
+    if is_ns16550() {
+        return usize::from(read_u8(UART_LSR) & LSR_THR_EMPTY != 0);
+    }
     usize::from(read(FR) & FR_TXFF == 0)
 }
 
@@ -280,6 +358,10 @@ pub(crate) fn put(byte: u8) {
     }
     if is_ramoops() {
         ramoops_append(byte);
+        return;
+    }
+    if is_ns16550() {
+        write_u8(UART_DATA, byte);
         return;
     }
     write(DR, u32::from(byte));
@@ -295,7 +377,7 @@ pub(crate) fn put(byte: u8) {
 /// took. QEMU's port sends at once and raises it on every write.
 pub(crate) fn transmit_interrupt(on: bool) {
     // SAFETY: single-threaded, as documented on the `Sync` impl above.
-    if unsafe { *BASE.0.get() } == 0 || is_ramoops() {
+    if unsafe { *BASE.0.get() } == 0 || is_ramoops() || is_ns16550() {
         return;
     }
     let mask = read(IMSC);
@@ -318,6 +400,8 @@ pub(crate) fn interrupt_pending() -> bool {
 pub(crate) fn transmit_buffer() -> &'static str {
     if is_ramoops() {
         "a ramoops record"
+    } else if is_ns16550() {
+        "a 16550's holding register"
     } else {
         "a PL011's FIFO"
     }

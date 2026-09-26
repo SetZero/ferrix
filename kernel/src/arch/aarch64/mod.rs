@@ -966,9 +966,9 @@ const QEMU_VIRT_UART0_INTERRUPT: u32 = 33;
 
 /// The GIC interrupt the console port receives on, or `None` for a
 /// `ramoops` record, which receives nothing -- and on whose machine SPI 1 is
-/// some other device's line.
+/// some other device's line -- or for the 16550, which is polled.
 pub(crate) fn console_receive_irq(_view: &BootView<'_>) -> Option<u32> {
-    (!console::is_ramoops()).then_some(QEMU_VIRT_UART0_INTERRUPT)
+    (!console::is_ramoops() && !console::is_ns16550()).then_some(QEMU_VIRT_UART0_INTERRUPT)
 }
 
 /// Enable the console port's receive interrupt `irq`, at the GIC and in the

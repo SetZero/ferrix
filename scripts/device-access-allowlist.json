@@ -97,8 +97,8 @@
     {
       "file": "kernel/src/arch/aarch64/console.rs",
       "kind": "register",
-      "max_sites": 3,
-      "reason": "The AArch64 console's register window, reached before the MMIO accessors are usable."
+      "max_sites": 5,
+      "reason": "The AArch64 console's register window, reached before the MMIO accessors are usable: the PL011's 32-bit registers, the ramoops record's store, and the byte registers of the 16550 that is the only console of a guest of the Pixel 7's own crosvm. 5 rather than 3 for the 16550, which the owner allowed on 2026-09-26."
     },
     {
       "file": "kernel/src/pci/virtio.rs",
