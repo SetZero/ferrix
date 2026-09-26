@@ -158,6 +158,7 @@ pub(crate) fn run(args: &Args) -> Result<()> {
     step("documentation", host_doc)?;
 
     compositor(&root)?;
+    init(&root)?;
 
     if args.ferrousli {
         ferrousli(&root)?;
@@ -470,6 +471,38 @@ fn compositor(root: &std::path::Path) -> Result<()> {
     })?;
     step("compositor: tests", || {
         cargo::run(in_compositor(&["test"]), "cargo test (compositor)")
+    })
+}
+
+/// The init's gates: `init/` is a workspace of its own, as the compositor
+/// is, so the host steps above never reach it. On by default, since they are
+/// seconds. The manager it runs is `libs/svc`, which the host steps do reach.
+fn init(root: &std::path::Path) -> Result<()> {
+    let dir = root.join("init");
+    let in_init = |arguments: &[&str]| {
+        if cfg!(windows) {
+            return crate::wsl::cargo(&dir, arguments);
+        }
+        let mut command = Command::new(cargo_binary());
+        let _ = command.current_dir(&dir).args(arguments);
+        command
+    };
+    if cfg!(windows) {
+        step("init: WSL", || {
+            crate::wsl::require_toolchain("init is a Linux program, with Linux's system calls")
+        })?;
+    }
+    step("init: formatting", || {
+        cargo::run(in_init(&["fmt", "--check"]), "cargo fmt (init)")
+    })?;
+    step("init: clippy", || {
+        cargo::run(
+            in_init(&["clippy", "--all-targets", "--", "-D", "warnings"]),
+            "cargo clippy (init)",
+        )
+    })?;
+    step("init: tests", || {
+        cargo::run(in_init(&["test"]), "cargo test (init)")
     })
 }
 

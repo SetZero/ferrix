@@ -1,0 +1,22 @@
+[package]
+name = "getty"
+description = "/sbin/getty, which gives a terminal a session and a shell, and the generator that names the terminals"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "getty"
+path = "src/main.rs"
+
+[[bin]]
+name = "getty-generator"
+path = "src/bin/getty-generator.rs"
+
+[dependencies]
+libc = "0.2.189"
+
+[lints]
+workspace = true

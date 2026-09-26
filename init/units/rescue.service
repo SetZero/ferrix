@@ -1,0 +1,17 @@
+# The shell rescue.target starts when default.target cannot be reached
+# (docs/INIT.md §8.1), so a broken unit is fixable from the machine itself.
+[Unit]
+Description=Rescue shell
+DefaultDependencies=no
+Conflicts=shutdown.target
+Before=shutdown.target
+
+[Service]
+Type=exec
+ExecStart=/bin/sh -i
+StandardInput=tty-force
+StandardOutput=inherit
+StandardError=inherit
+TTYPath=/dev/console
+SendSIGHUP=yes
+TimeoutStopSec=5s

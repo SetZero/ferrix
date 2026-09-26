@@ -13,11 +13,11 @@ use crate::{Error, Result};
 
 /// A static, fixed-address executable against the target's own musl, which
 /// rust-lld links without a C toolchain.
-const RUSTFLAGS: &str =
+pub(crate) const RUSTFLAGS: &str =
     "-C link-self-contained=yes -C target-feature=+crt-static -C relocation-model=static";
 
 /// The Rust target zinc is built for on `arch`, if there is one yet.
-fn target(arch: Arch) -> Option<&'static str> {
+pub(crate) fn target(arch: Arch) -> Option<&'static str> {
     match arch.name() {
         "x86_64" => Some("x86_64-unknown-linux-musl"),
         "aarch64" => Some("aarch64-unknown-linux-musl"),

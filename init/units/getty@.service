@@ -1,0 +1,21 @@
+# A shell on a terminal (docs/INIT.md §4.4). getty-generator links one
+# instance into multi-user.target.wants for each console.
+[Unit]
+Description=Shell on %I
+After=basic.target
+
+[Service]
+Type=exec
+ExecStart=/sbin/getty %i
+Restart=always
+RestartSec=0
+TTYPath=/dev/%i
+# An interactive shell ignores SIGTERM; SIGHUP is what ends a session, and
+# the short timeout keeps a shell that ignores that too from holding
+# shutdown for the default 90 seconds.
+SendSIGHUP=yes
+TimeoutStopSec=5s
+TasksMax=512
+
+[Install]
+WantedBy=multi-user.target

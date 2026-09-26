@@ -1,0 +1,7 @@
+[Unit]
+Description=Rescue mode
+Requires=sysinit.target
+After=sysinit.target
+Wants=rescue.service
+After=rescue.service
+AllowIsolate=yes

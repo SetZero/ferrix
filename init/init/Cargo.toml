@@ -1,0 +1,18 @@
+[package]
+name = "init"
+description = "/sbin/init: the event loop and the Linux backends around libs/svc's manager"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+# Declarations only, as in zinc: clone3, mount, epoll and signalfd are the C
+# library std already links, or raw system calls through its `syscall`.
+libc = "0.2.189"
+# The manager: unit files, the graph, operations, every kind's state machine.
+ferrix-svc = { path = "../../libs/svc" }
+
+[lints]
+workspace = true

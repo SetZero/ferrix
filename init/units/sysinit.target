@@ -1,0 +1,7 @@
+[Unit]
+Description=System initialization
+DefaultDependencies=no
+# Without default dependencies a target has no Conflicts=shutdown.target, and
+# shutdown stops only what conflicts with it (docs/INIT.md §8.2).
+Conflicts=shutdown.target
+Before=shutdown.target

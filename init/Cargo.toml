@@ -1,0 +1,73 @@
+# The init: `/sbin/init`, `/sbin/getty` and the getty generator
+# (docs/INIT.md §3).
+#
+# A workspace of its own, not a member of Ferrix's, for the reason zinc and the
+# compositor are: these are Linux user programs built with std, speaking only
+# the Linux ABI, and the Ferrix workspace's dependency policy is written for a
+# kernel. The manager itself is `libs/svc`, a `no_std` crate of that workspace,
+# which is pure and host-tested there; what is here is the event loop and the
+# backends that turn its actions into system calls.
+[workspace]
+resolver = "3"
+members = ["getty", "init"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+# Matches Ferrix's rust-toolchain.toml, which rustup finds from here.
+rust-version = "1.97"
+license = "MIT"
+publish = false
+
+# ---------------------------------------------------------------------------
+# Lints
+#
+# The Ferrix discipline. A panic in pid 1 ends the machine, so the ways of
+# reaching one are denied and every failing call is a line on the console and
+# a unit that fails, never an abort.
+# ---------------------------------------------------------------------------
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+missing_docs = "deny"
+missing_debug_implementations = "deny"
+unused_results = "deny"
+unreachable_pub = "warn"
+unused_qualifications = "warn"
+
+[workspace.lints.clippy]
+correctness = { level = "deny", priority = -1 }
+suspicious = { level = "warn", priority = -1 }
+style = { level = "warn", priority = -1 }
+perf = { level = "warn", priority = -1 }
+
+undocumented_unsafe_blocks = "deny"
+missing_safety_doc = "deny"
+multiple_unsafe_ops_per_block = "deny"
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+unreachable = "deny"
+indexing_slicing = "deny"
+string_slice = "deny"
+allow_attributes_without_reason = "deny"
+todo = "deny"
+unimplemented = "deny"
+dbg_macro = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
+uninlined_format_args = "warn"
+semicolon_if_nothing_returned = "warn"
+doc_markdown = "warn"
+
+[profile.dev]
+overflow-checks = true
+# §5.7: pid 1 does not unwind. The kernel reports its exit (§8.3).
+panic = "abort"
+
+# Stripped: the release build is what goes into the initramfs.
+[profile.release]
+overflow-checks = true
+strip = true
+lto = true
+codegen-units = 1
+panic = "abort"

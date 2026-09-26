@@ -73,6 +73,7 @@ mod fat;
 mod ferrousli;
 mod flash;
 mod gateway;
+mod init;
 mod init_file;
 mod initramfs;
 mod input;
@@ -178,6 +179,8 @@ COMMANDS:
     test-foot     Boot the compositor with foot, the ported Wayland terminal, and require its font and its text on screen
     test-vkgears  Boot the compositor with vkgears and the Venus card, and require it drew frames on the host's GPU (Linux hosts)
     test-jobs     Boot an interactive shell on the console, type a session with jobs at it, and require the answers
+    test-init     Boot /sbin/init as pid 1, type at the shell its getty gives, and require its session, a failing
+                  service's restart budget, a service's cgroup, and a shutdown btrfs check finds clean
     test-restart  Boot a shell beside a virtio-gpu, kill -9 the gpu driver twice, and require it started again each time
     test-sysfs    Boot a shell beside a card, input devices and a network adapter, read sysfs, and unbind and bind the card through it
     test-threads  Boot threads-test as init and require std::thread, Mutex, mpsc and /proc's thread count
@@ -393,6 +396,7 @@ fn run() -> Result<()> {
         "test-seat" => seat::test_seat(&args),
         "test-pty" => pty::test_pty(&args),
         "test-jobs" => jobs::test_jobs(&args),
+        "test-init" => init::test_init(&args),
         "test-restart" => restart::test_restart(&args),
         "test-sysfs" => sysfs::test_sysfs(&args),
         "test-threads" => threads::test_threads(&args),
