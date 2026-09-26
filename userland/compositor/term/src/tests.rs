@@ -95,13 +95,14 @@ fn a_colour_sequence_paints_the_cells_that_follow_it() {
     assert!(!cell(&grid, 0).bold);
     assert_eq!(cell(&grid, 3).colour, 7, "the reset put the pen back");
 
-    // Bold, and the bright form of a colour, which is the same eight.
+    // Bold is a weight, and the bright form of a colour is a colour of its
+    // own, eight past it, drawn in whatever weight the pen has.
     grid.write(b"\r\x1b[1;32mg");
     let painted = cell(&grid, 0);
     assert_eq!((painted.colour, painted.bold), (2, true));
-    grid.write(b"\r\x1b[94mb");
+    grid.write(b"\r\x1b[22;94mb");
     let painted = cell(&grid, 0);
-    assert_eq!((painted.colour, painted.bold), (4, true));
+    assert_eq!((painted.colour, painted.bold), (12, false));
 }
 
 /// A sequence the terminal does not know is dropped, not drawn: a terminal
@@ -586,8 +587,64 @@ fn a_background_is_kept_and_an_extended_colour_is_one_colour() {
     grid.write(b"\x1b[38;5;31ma\x1b[38;5;9mb\x1b[48;2;255;255;0mc");
     let cell = |column: usize| grid.cell(column, 0).copied().expect("a cell");
     assert_ne!(cell(0).colour, 1);
-    assert_eq!((cell(1).colour, cell(1).bold), (1, true), "9 is bright red");
+    assert_eq!(
+        (cell(1).colour, cell(1).bold),
+        (9, false),
+        "9 is bright red"
+    );
     assert_eq!(cell(2).background, Some(3 | 8), "bright yellow");
+}
+
+/// A colour the sixteen do not have is kept exactly, beside the nearest of
+/// them; one of the sixteen, or a reset, takes it away again.
+#[test]
+fn an_exact_colour_is_kept_as_it_is() {
+    let mut grid = Grid::new(8, 1);
+    grid.write(b"\x1b[38;2;64;64;64;48;2;1;2;3ma\x1b[38;5;31mb\x1b[31mc\x1b[0md\x1b[38;5;9me");
+    let cell = |column: usize| grid.cell(column, 0).copied().expect("a cell");
+    assert_eq!(
+        (cell(0).rgb, cell(0).background_rgb),
+        (Some([64, 64, 64]), Some([1, 2, 3]))
+    );
+    // A dark grey is black among the sixteen, and still not bold: the weight
+    // is `1`'s to say.
+    assert_eq!((cell(0).colour, cell(0).bold), (0, false));
+    // 256-colour 31 at xterm's levels: 0, 95, 135, 175, 215, 255.
+    assert_eq!(cell(1).rgb, Some([0, 135, 175]));
+    assert_eq!(cell(1).background_rgb, Some([1, 2, 3]));
+    assert_eq!(
+        (cell(2).rgb, cell(2).colour),
+        (None, 1),
+        "31 is the palette's red"
+    );
+    assert_eq!((cell(3).rgb, cell(3).background_rgb), (None, None));
+    assert_eq!(
+        (cell(4).rgb, cell(4).colour, cell(4).bold),
+        (None, 9, false)
+    );
+}
+
+/// btop's dim labels -- `info`, `terminate`, `kill` -- are a dark grey on
+/// its own near-black background, and must be drawn in it: rounded to the
+/// sixteen, they were black on black.
+#[test]
+fn a_dim_label_is_painted_in_its_own_grey() {
+    let mut grid = Grid::new(1, 1);
+    grid.write(b"\x1b[?25l\x1b[48;2;0;0;0m\x1b[38;2;64;64;64m\xe2\x96\x88");
+    let (width, height) = paint::CELL;
+    let mut pixels = vec![0u8; width * height * 4];
+    paint::draw(
+        &mut pixels,
+        (width, height),
+        width * 4,
+        &grid,
+        &paint::Colours::default(),
+        1,
+    );
+    // A full block covers the cell: its middle is the grey itself, and a
+    // grey is the same whatever order the buffer's channels are in.
+    let middle = (height / 2 * width + width / 2) * 4;
+    assert_eq!(pixels.get(middle..middle + 3), Some(&[64_u8, 64, 64][..]));
 }
 
 /// The prompts' characters are drawn from the font, not as the box every

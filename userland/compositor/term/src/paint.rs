@@ -38,8 +38,10 @@ pub const CELL: (usize, usize) = (font::WIDTH, font::HEIGHT);
 pub struct Colours {
     /// Behind the text.
     pub background: Rgb,
-    /// The eight colours a cell may take, and the eight bright ones.
-    pub palette: [Rgb; 8],
+    /// The sixteen colours a cell may take by number: the eight, then the
+    /// eight bright ones. A program asking for any other colour gets it
+    /// exactly (`grid::Cell::rgb`).
+    pub palette: [Rgb; 16],
     /// The cursor's block.
     pub cursor: Rgb,
     /// Behind selected text.
@@ -48,8 +50,9 @@ pub struct Colours {
 
 impl Default for Colours {
     /// The colours a terminal has had since the VT100's successors: black,
-    /// red, green, yellow, blue, magenta, cyan and white, over a background
-    /// dark enough to read them on.
+    /// red, green, yellow, blue, magenta, cyan and white, then each half the
+    /// way to white for its bright form -- what bold used to draw them as --
+    /// over a background dark enough to read them on.
     fn default() -> Self {
         Self {
             background: Rgb::new(0x10, 0x10, 0x18),
@@ -62,6 +65,14 @@ impl Default for Colours {
                 Rgb::new(0xAA, 0x66, 0xCC),
                 Rgb::new(0x44, 0xCC, 0xCC),
                 Rgb::new(0xCC, 0xCC, 0xD0),
+                Rgb::new(0x8F, 0x8F, 0x93),
+                Rgb::new(0xE5, 0xA1, 0xA1),
+                Rgb::new(0xA1, 0xE5, 0xB2),
+                Rgb::new(0xE5, 0xD4, 0xA1),
+                Rgb::new(0xA1, 0xC3, 0xE5),
+                Rgb::new(0xD4, 0xB2, 0xE5),
+                Rgb::new(0xA1, 0xE5, 0xE5),
+                Rgb::new(0xE5, 0xE5, 0xE7),
             ],
             cursor: Rgb::new(0xCC, 0xCC, 0xD0),
             selection: Rgb::new(0x3A, 0x4A, 0x6A),
@@ -163,6 +174,10 @@ pub fn draw_damage(
             // The cursor is a block the text is drawn out of, which is what
             // a terminal with no blinking draws.
             let on_cursor = grid.shown_cursor() == Some((column, row));
+            let fg = match cell.rgb {
+                Some([r, g, b]) => Rgb::new(r, g, b),
+                None => colour(cell.colour, colours),
+            };
             let (fg, bg) = if on_cursor {
                 surface.fill_rect(x, y, CELL.0 * scale, CELL.1 * scale, colours.cursor);
                 (colours.background, colours.cursor)
@@ -170,16 +185,19 @@ pub fn draw_damage(
                 // Selected text keeps its own colour over the selection's,
                 // so a selected prompt still reads as that prompt.
                 surface.fill_rect(x, y, CELL.0 * scale, CELL.1 * scale, colours.selection);
-                (colour(cell.colour, cell.bold, colours), colours.selection)
+                (fg, colours.selection)
             } else if let Some(index) = cell.background {
                 // A cell of its own colour: a prompt's segments, a
-                // highlighted line. Painted before the glyph, which is
-                // blended over it.
-                let bg = colour(index & 7, index >= 8, colours);
+                // highlighted line, btop's whole screen. Painted before the
+                // glyph, which is blended over it.
+                let bg = match cell.background_rgb {
+                    Some([r, g, b]) => Rgb::new(r, g, b),
+                    None => colour(index, colours),
+                };
                 surface.fill_rect(x, y, CELL.0 * scale, CELL.1 * scale, bg);
-                (colour(cell.colour, cell.bold, colours), bg)
+                (fg, bg)
             } else {
-                (colour(cell.colour, cell.bold, colours), colours.background)
+                (fg, colours.background)
             };
             if cell.ch == ' ' {
                 continue;
@@ -327,18 +345,11 @@ fn mix(bg: Rgb, fg: Rgb, coverage: u8) -> Rgb {
     )
 }
 
-/// One cell's colour: the palette's, brightened when it is bold.
-fn colour(index: u8, bold: bool, colours: &Colours) -> Rgb {
-    let base = colours
+/// One of the sixteen colours, by number.
+fn colour(index: u8, colours: &Colours) -> Rgb {
+    colours
         .palette
-        .get(usize::from(index).min(7))
+        .get(usize::from(index & 15))
         .copied()
-        .unwrap_or(Rgb::new(0xCC, 0xCC, 0xD0));
-    if !bold {
-        return base;
-    }
-    // Bold is the same hue, brighter: half the way to white, which is what a
-    // terminal with eight colours and a bright bit does.
-    let lift = |value: u8| value.saturating_add((0xFF - value) / 2);
-    Rgb::new(lift(base.r), lift(base.g), lift(base.b))
+        .unwrap_or(Rgb::new(0xCC, 0xCC, 0xD0))
 }

@@ -67,8 +67,8 @@ use std::collections::VecDeque;
 /// How many rows that scrolled off the top are kept.
 ///
 /// Ten thousand is what most terminals keep by default, and at 150 columns
-/// of eight-byte cells it is about twelve megabytes -- a price paid only by
-/// a terminal whose program has written that much.
+/// of sixteen-byte cells it is about twenty-four megabytes -- a price paid
+/// only by a terminal whose program has written that much.
 pub const HISTORY: usize = 10_000;
 
 /// One cell: what is in it, and how it is drawn.
@@ -76,13 +76,26 @@ pub const HISTORY: usize = 10_000;
 pub struct Cell {
     /// The character, a space for an empty cell.
     pub ch: char,
-    /// Its colour, as an index into the eight the terminal has.
+    /// Its colour, as an index into the sixteen the terminal has: the eight,
+    /// then their bright forms.
     pub colour: u8,
-    /// Whether it is drawn bright.
+    /// Whether it is drawn in the bold face. A weight, not a colour: the
+    /// bright colours are colours of their own, as they are in xterm and foot.
     pub bold: bool,
     /// What is behind it: one of the eight colours, or eight to fifteen for
     /// their bright forms, or the terminal's own background when `None`.
     pub background: Option<u8>,
+    /// The colour exactly, red, green and blue, when the program asked for
+    /// one the sixteen do not have: `38;2;r;g;b`, or `38;5;n` past the
+    /// sixteen. `colour` is then the nearest of them, which is what it was
+    /// drawn in before; this is what it is drawn in now.
+    ///
+    /// btop draws almost everything in colours like these, and its dim grey
+    /// labels -- `info`, `terminate`, `kill` under the process list -- came
+    /// out as black on the terminal's near-black background.
+    pub rgb: Option<[u8; 3]>,
+    /// The same for the background.
+    pub background_rgb: Option<[u8; 3]>,
 }
 
 impl Default for Cell {
@@ -93,6 +106,8 @@ impl Default for Cell {
             colour: 7,
             bold: false,
             background: None,
+            rgb: None,
+            background_rgb: None,
         }
     }
 }
@@ -1029,28 +1044,43 @@ impl Grid {
                 0 => self.pen = Cell::default(),
                 1 => self.pen.bold = true,
                 22 => self.pen.bold = false,
-                30..=37 => self.pen.colour = u8::try_from(number - 30).unwrap_or(7),
-                39 => self.pen.colour = 7,
-                // Bright foregrounds are the same eight, drawn bold.
-                90..=97 => {
-                    self.pen.colour = u8::try_from(number - 90).unwrap_or(7);
-                    self.pen.bold = true;
+                30..=37 => {
+                    self.pen.colour = u8::try_from(number - 30).unwrap_or(7);
+                    self.pen.rgb = None;
                 }
-                40..=47 => self.pen.background = u8::try_from(number - 40).ok(),
-                49 => self.pen.background = None,
-                100..=107 => self.pen.background = u8::try_from(number - 100 + 8).ok(),
+                39 => {
+                    self.pen.colour = 7;
+                    self.pen.rgb = None;
+                }
+                90..=97 => {
+                    self.pen.colour = u8::try_from(number - 90 + 8).unwrap_or(15);
+                    self.pen.rgb = None;
+                }
+                40..=47 => {
+                    self.pen.background = u8::try_from(number - 40).ok();
+                    self.pen.background_rgb = None;
+                }
+                49 => {
+                    self.pen.background = None;
+                    self.pen.background_rgb = None;
+                }
+                100..=107 => {
+                    self.pen.background = u8::try_from(number - 100 + 8).ok();
+                    self.pen.background_rgb = None;
+                }
                 // `38;5;n`, `38;2;r;g;b` and the same after 48: one colour
                 // in several numbers, which must be taken together or the
                 // `5` and the `n` would be read as codes of their own.
                 38 | 48 => {
-                    let Some(index) = extended(&mut numbers) else {
+                    let Some((index, rgb)) = extended(&mut numbers) else {
                         continue;
                     };
                     if number == 38 {
-                        self.pen.colour = index & 7;
-                        self.pen.bold = index >= 8;
+                        self.pen.colour = index;
+                        self.pen.rgb = rgb;
                     } else {
                         self.pen.background = Some(index);
+                        self.pen.background_rgb = rgb;
                     }
                 }
                 // Everything else: not kept.
@@ -1060,20 +1090,22 @@ impl Grid {
     }
 }
 
-/// The rest of an extended colour, `5;n` or `2;r;g;b`, as the nearest of the
-/// sixteen this terminal has: which of red, green and blue are on, and
-/// whether it is bright.
-fn extended(numbers: &mut impl Iterator<Item = usize>) -> Option<u8> {
+/// The rest of an extended colour, `5;n` or `2;r;g;b`: the nearest of the
+/// sixteen this terminal has -- which of red, green and blue are on, and
+/// whether it is bright -- and the colour exactly, unless it is one of the
+/// sixteen, which are the terminal's own to draw.
+fn extended(numbers: &mut impl Iterator<Item = usize>) -> Option<(u8, Option<[u8; 3]>)> {
     let (r, g, b) = match numbers.next()? {
         5 => {
             let index = numbers.next()?;
             if index < 16 {
-                return u8::try_from(index).ok();
+                return Some((u8::try_from(index).ok()?, None));
             }
             if index < 232 {
-                // The six-level cube: 16 + 36r + 6g + b, each 0 to 5.
+                // The six-level cube: 16 + 36r + 6g + b, each 0 to 5, at
+                // xterm's levels: 0, then 95 to 255 in steps of 40.
                 let cube = index - 16;
-                let level = |value: usize| value * 51;
+                let level = |value: usize| if value == 0 { 0 } else { 55 + value * 40 };
                 (level(cube / 36), level(cube / 6 % 6), level(cube % 6))
             } else {
                 // The grey ramp, from 8 to 238.
@@ -1088,7 +1120,11 @@ fn extended(numbers: &mut impl Iterator<Item = usize>) -> Option<u8> {
     let hue = u8::from(on(r)) | u8::from(on(g)) << 1 | u8::from(on(b)) << 2;
     // Bright when the strongest channel is near full; a dark grey is black.
     let bright = r.max(g).max(b) >= 0xE0 || (hue == 0 && r.max(g).max(b) >= 0x60);
-    Some(hue | u8::from(bright) << 3)
+    let byte = |value: usize| u8::try_from(value.min(255)).unwrap_or(u8::MAX);
+    Some((
+        hue | u8::from(bright) << 3,
+        Some([byte(r), byte(g), byte(b)]),
+    ))
 }
 
 /// Whether a character is part of a word, for a double click: anything but

@@ -269,9 +269,9 @@ fn environment(inherited: impl Iterator<Item = (OsString, OsString)>) -> Vec<Vec
     let mut variables: Vec<Vec<u8>> = Vec::new();
     let mut path = false;
     for (name, value) in inherited {
-        // `TERM` is this terminal's to say: `xterm` is the name whose
-        // escape sequences it understands, whatever it was started under.
-        if name == "TERM" {
+        // `TERM` and `COLORTERM` are this terminal's to say, whatever it
+        // was started under.
+        if name == "TERM" || name == "COLORTERM" {
             continue;
         }
         path |= name == "PATH";
@@ -280,7 +280,13 @@ fn environment(inherited: impl Iterator<Item = (OsString, OsString)>) -> Vec<Vec
         variable.extend_from_slice(value.as_bytes());
         variables.push(variable);
     }
-    variables.push(b"TERM=xterm".to_vec());
+    // What the host's terminals say, since it is as true here: xterm's
+    // sequences with 256 colours, and any colour at all by `38;2`. A program
+    // that reads only `TERM` -- btop, a prompt theme -- otherwise keeps to
+    // eight colours; there is no terminfo on the image for either name, so
+    // nothing that looks one up is told less.
+    variables.push(b"TERM=xterm-256color".to_vec());
+    variables.push(b"COLORTERM=truecolor".to_vec());
     if !path {
         variables.push(format!("PATH={DEFAULT_PATH}").into_bytes());
     }
@@ -390,11 +396,17 @@ mod tests {
         let got = super::environment(pairs(&[
             ("WAYLAND_DISPLAY", "wayland-1"),
             ("TERM", "linux"),
+            ("COLORTERM", "no"),
             ("PATH", "/opt/bin"),
         ]));
         assert_eq!(
             strings(&got),
-            ["WAYLAND_DISPLAY=wayland-1", "PATH=/opt/bin", "TERM=xterm"]
+            [
+                "WAYLAND_DISPLAY=wayland-1",
+                "PATH=/opt/bin",
+                "TERM=xterm-256color",
+                "COLORTERM=truecolor"
+            ]
         );
     }
 
@@ -405,7 +417,8 @@ mod tests {
             strings(&got),
             [
                 "HOME=/",
-                "TERM=xterm",
+                "TERM=xterm-256color",
+                "COLORTERM=truecolor",
                 &format!("PATH={}", super::DEFAULT_PATH)
             ]
         );
