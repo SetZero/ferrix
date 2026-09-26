@@ -755,10 +755,10 @@ outside init as well:
 | | Change | Also wanted by | Points |
 |---|---|---|---|
 | K0 | `ferrix.init=<path>`: start pid 1 from a file, the embedded program as the fallback. **Done in L3** | any image that is not a gate | 2 |
-| K2 | Init started with a bootstrap channel, as `devmgr` is | §7.3 | 2 |
-| K3 | `process_give(pid, handle)`: a parent installs one handle in its own child that has not yet called `execve`; `process_bootstrap()` returns that handle once, to the child | any Linux program that starts a native-aware one | 2 |
-| K4 | `port_fd(port)`: a descriptor readable while the port has packets | hyprix and the terminal, once they use a native service | 3 |
-| K6 | Read a process's exit status and signal from its handle (in the reserved `0x1032..0x1037`) | `devmgr` reports 137 for every death today | 1 |
+| K2 | Init started with a bootstrap channel, as `devmgr` is. **Done 2026-09-26**, kernel half of L8 | §7.3 | 2 |
+| K3 | `process_give(pid, handle)`: a parent installs one handle in its own child that has not yet called `execve`; `process_bootstrap()` returns that handle once, to the child. **Done 2026-09-26**, kernel half of L8 | any Linux program that starts a native-aware one | 2 |
+| K4 | `port_fd(port)`: a descriptor readable while the port has packets. **Done 2026-09-26**, kernel half of L8 | hyprix and the terminal, once they use a native service | 3 |
+| K6 | Read a process's exit status and signal from its handle (in the reserved `0x1032..0x1037`). **Done 2026-09-26**, kernel half of L8 | `devmgr` reports 137 for every death today | 1 |
 | K7 | `reboot(2)` syncs `/` and `/data` first, as `power::finish` does. **Done in L3** | any program calling it | 1 |
 
 Together that is 11 points. None of the six changes the ABI of an existing
@@ -1187,3 +1187,71 @@ something a person drives, and turns stage one's `kill -TERM 1` into
 `memory`'s charging and `cpu.weight` are in. Until L10 moves the images over,
 `cargo xtask run` and every gate but `test-init` still start a program as
 pid 1 themselves.
+
+**K2, K3, K4, K6, as built (2026-09-26, the kernel half of L8).** Four
+native calls, numbered in `libs/native-abi/src/nr.rs`, and one message
+layout in `libs/native-abi/src/bootstrap.rs`, so `init/` can take both by
+path. A Linux program makes each with `syscall(number, ...)`; a failure is
+`-1` and `errno`, as `libs/native-abi`'s `status` names it.
+
+* **K3.** `process_give(pid, handle)`, `0x1032`, moves one handle out of the
+  caller's table into the bootstrap slot of `pid`, which must be the caller's
+  own child (its parent pointer, not its pid, is compared) and must not have
+  completed an `execve`. Needs `TRANSFER`; one give per child, ever. Refused,
+  with the handle left under its number: `ESRCH` (`NO_PROCESS`) for a pid
+  naming no live process or naming a thread, `ECHILD` (`NOT_CHILD`) for
+  another's process, `EBADF`, `EACCES` without `TRANSFER`, `EBUSY`
+  (`ALREADY_BOUND`) for a second give whether or not the first was taken, and
+  `EIDRM` (`BAD_STATE`) for a child that has exec'd with nothing given or has
+  ended. `process_bootstrap()`, `0x1033`, moves the slot's handle into the
+  caller's table and answers its value, once; every later call, and a call in
+  a process given nothing, answers **0**, which is never a handle (not an
+  error). `EMFILE` with a full table leaves it for a later call. The slot is
+  on the core process beside the handle table, so the handle has no number
+  until the program asks, and it survives every `execve` until taken; an
+  `execve` seals an empty slot under the same lock a give is judged under, so
+  a give racing one lands before it or is refused after it. A slot never
+  taken is closed when the process ends.
+* **K2.** Every program `init::run` starts -- `ferrix.init=`'s file, the
+  built-in program, each command of a list, `/sbin/init` -- gets a fresh
+  channel from `init::bootstrap_channel` in its slot, put there by
+  `exec::run_init` between load and start. Before it runs, the kernel's end
+  carries one message: eight bytes, `FXIN` and a little-endian `u32` version,
+  **1**, and no handles (`init_hello()`, recognised by
+  `init_hello_version(bytes)`, which accepts any version from 1, since a later
+  one only adds after the header). The kernel keeps its end while the program
+  runs, so the program's end does not read `PEER_CLOSED`. Pid 1 takes its end
+  with `process_bootstrap()`, rights `Rights::CHANNEL`.
+* **K6.** `process_status(process, out)`, `0x1034`, writes a `ProcessStatus`,
+  two `u32`s: `state` and `value`. `PROCESS_RUNNING` (0) with 0 until the
+  process starts to end; `PROCESS_EXITED` (1) with the exit code, 0 to 255;
+  `PROCESS_KILLED` (2) with the signal -- 9 for a job's kill, the fault's
+  signal for a fault. It stops saying running before the handle asserts
+  `TERMINATED`, so a waiter woken by `TERMINATED` always reads an end. Needs
+  `WAIT`. `devmgr` does not use it yet: that is its own change.
+* **K4.** `port_fd(port, flags)`, `0x101B`, beside the other port calls,
+  answers a descriptor that `poll`, `select` and `epoll` report readable
+  (`POLLIN`, `EPOLLIN`) while the port has any packet queued, and not
+  otherwise; every queued packet wakes a wait on it. Packets are still taken
+  with `port_wait`; `read` and `write` are `EINVAL`. `flags` is
+  `PORT_FD_CLOEXEC` (1) or 0, anything else `EINVAL`. Needs `WAIT`. It holds
+  the port, so it outlives the handle.
+
+The check is one boot line, `initcall`, and one catalogue entry, FX-1502
+(`kernel/src/syscall/init_calls_check.rs`), on all three architectures. It
+reads init's hello through `process_bootstrap` and `channel_read` by number,
+and has a ring-3 program take the channel and close it; drives every give
+and refusal between a process and forks of it, then has a fork given a
+channel end `execve` a program from `/tmp` that takes and closes it and exits
+0, while its parent, given nothing, exits with `EBADF` (247) from closing
+handle 0; reads a running process, a `SIGTERM`'d one (killed, 15), a job-killed
+one (killed, 9) and a program that exited 42; and wakes a five-second
+`epoll_wait` on a port's descriptor with a packet queued 50 ms in (50 ms on
+x86_64). Each item's negative control, booted once on x86_64, stopped the
+boot with FX-1502 on the check's own sentence: execve not sealing the slot
+("process_give to a child that had completed an execve was not refused with
+BAD_STATE"), the hello not written ("init's bootstrap channel held no message
+for it to read"), the recorded signal ignored ("process_status of a process a
+signal ended did not say killed, by it"), and the descriptor offering no wake
+queue ("a packet queued on a port did not wake an epoll_wait on its
+descriptor", after 51 ms with 0 waits woken).

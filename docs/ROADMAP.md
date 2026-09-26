@@ -2171,7 +2171,9 @@ whose only handle is closed, which must be heard and freed.
   x86-64, masked in the device's own MSI-X table, came with stage 10's PCI
   vectors.)
 * The calls that act on a process beyond making and starting it.
-  `0x1032..=0x1037` is held for them.
+  `0x1032..=0x1037` is held for them; init's `process_give`,
+  `process_bootstrap` and `process_status` took `0x1032..=0x1034` on
+  2026-09-26 (`docs/INIT.md` §16).
 
 **Exit:** two user processes exchange messages and a handle over a channel, and
 a `Job` kill takes down a process tree.
