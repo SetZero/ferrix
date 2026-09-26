@@ -1,7 +1,8 @@
 /* dlopen, dlsym, dladdr, dladdr1, dlinfo, dl_iterate_phdr, dlerror and dlclose, called with
    no C library at all, so that what they prove is the loader's. LIBRARY is
    libgreet.so's path and TLS_LIBRARY a library with its own PT_TLS, both
-   given on the command line. Each check exits with its own number. */
+   given on the command line; FOUND is the path of a library opened by name,
+   found through LD_LIBRARY_PATH. Each check exits with its own number. */
 
 #define _GNU_SOURCE
 #include <dlfcn.h>
@@ -38,11 +39,26 @@ static int directory_of(const char *dir, const char *path) {
 	return *dir == 0;
 }
 
-/* Entered with the stack as the kernel left it, 16-aligned rather than 8 off
-   as a called function expects, so GCC realigns it before calling anything
-   that may keep aligned vectors on it. */
-__attribute__((force_align_arg_pointer)) void _start(void) {
+/* Write over the value of LD_LIBRARY_PATH where the kernel put it, as
+   Chrome writes its process title over the environment: the loader must
+   have kept its own copy. */
+static void overwrite_library_path(char **envp) {
+	static const char name[] = "LD_LIBRARY_PATH=";
+	for (; *envp; envp++) {
+		const char *n = name;
+		char *e = *envp;
+		while (*n && *e == *n) { e++; n++; }
+		if (!*n)
+			for (; *e; e++)
+				*e = 'x';
+	}
+}
+
+/* The kernel's stack: argc, argv's pointers and a null, then envp's. */
+__attribute__((force_align_arg_pointer, used)) static void run(long *sp) {
 	long r = 42;
+	char **envp = (char **)(sp + 1 + sp[0] + 1);
+	void *found;
 	void *h = dlopen(LIBRARY, RTLD_NOW);
 	int (*greet)(void) = h ? (int (*)(void))dlsym(h, "greet") : 0;
 	int *value = h ? dlsym(h, "greeting_value") : 0;
@@ -87,9 +103,16 @@ __attribute__((force_align_arg_pointer)) void _start(void) {
 		r = 89; /* dlinfo's origin is not the library's directory */
 	} else if (dlinfo(h, 12345, &lm) != -1 || !dlerror()) {
 		r = 90; /* an unknown request did not fail with a reason */
+	} else if (overwrite_library_path(envp), !(found = dlopen("libfound.so", RTLD_NOW))
+		|| !dladdr(dlsym(found, "greet"), &info) || !same(info.dli_fname, FOUND)) {
+		r = 85; /* a library by name not found through LD_LIBRARY_PATH once the
+		           environment was written over, or not named by its path */
 	} else if (dlclose(h) != 0 || dlclose((void *)1) != -1) {
 		r = 99; /* dlclose on a handle, and on something that is not one */
 	}
 	__asm__ volatile("syscall" :: "a"(231L), "D"(r) : "rcx", "r11", "memory");
 	__builtin_unreachable();
 }
+
+/* Entered with the stack pointer at argc, which run needs to find envp. */
+__asm__(".globl _start\n_start:\n\tmov %rsp, %rdi\n\tcall run\n\thlt\n");

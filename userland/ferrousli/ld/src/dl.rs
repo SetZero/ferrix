@@ -130,6 +130,9 @@ fn startup() -> (Arguments, usize) {
 /// everything loaded at start-up, is finished before any of them.
 static ORDER: [AtomicU8; MAX_OBJECTS] = [const { AtomicU8::new(0) }; MAX_OBJECTS];
 
+// [`ORDER`] holds each scope index in a byte.
+const _: () = assert!(MAX_OBJECTS <= 256);
+
 /// How many entries of [`ORDER`] are written.
 static ORDERED: AtomicUsize = AtomicUsize::new(0);
 

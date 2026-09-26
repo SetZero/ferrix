@@ -41,12 +41,12 @@ use crate::scope::Scope;
 /// finish here, and [`crate::interface`] the TLS images a new thread needs.
 static mut SCOPE: Scope = Scope::new();
 
-/// The completed scope. Empty until [`save_scope`] runs, which is before the
-/// program can call anything that reads it.
+/// The completed scope. Filled by the loader before any initialiser runs,
+/// which is before the program can call anything that reads it.
 pub(crate) fn scope() -> &'static Scope {
     let scope = &raw const SCOPE;
-    // SAFETY: written once by `save_scope` before the program starts, and
-    // only read afterwards.
+    // SAFETY: filled by the only thread before the program starts, and
+    // written afterwards only by `dlopen`, under its lock.
     unsafe { &*scope }
 }
 
@@ -475,19 +475,6 @@ pub(crate) unsafe fn enter(entry: usize, stack: &crate::auxv::Stack) -> ! {
             options(noreturn, nostack),
         )
     }
-}
-
-/// Save the completed scope for the callback the program registers at exit.
-///
-/// # Safety
-///
-/// Called once, after every object in `scope` has been mapped and relocated,
-/// and before [`enter`] makes the program reachable.
-pub(crate) unsafe fn save_scope(scope: Scope) {
-    let at = &raw mut SCOPE;
-    // SAFETY: this loader has one initial thread and calls this once before it
-    // transfers control to the program. Everything else only reads it later.
-    unsafe { at.write(scope) };
 }
 
 /// Run the `DT_FINI_ARRAY` and `DT_FINI` entries of every initialised

@@ -29,8 +29,17 @@ use crate::sym::{self, Found};
 /// The longest path the loader will build for a library.
 const PATH_MAX: usize = 1024;
 
-// `lookup_from` marks the objects it has queued in one `u64`.
-const _: () = assert!(MAX_OBJECTS <= 64);
+/// The longest `LD_LIBRARY_PATH` the loader keeps a copy of.
+const LIBRARY_PATH_MAX: usize = 4096;
+
+/// Bytes for the paths libraries were found at by searching, which are
+/// built in a buffer on the stack and so must be copied to be kept. When it
+/// is full, a library is reported by the name it was asked for instead.
+const PATH_POOL: usize = 32 * 1024;
+
+/// Words of a set with one bit per object, as `lookup_from` marks the
+/// objects it has queued.
+const QUEUED_WORDS: usize = MAX_OBJECTS.div_ceil(64);
 
 /// Where a library is looked for when its name has no slash in it.
 ///
@@ -54,10 +63,21 @@ pub(crate) struct Scope {
     objects: [Object; MAX_OBJECTS],
     /// The name each was loaded as, for diagnostics and for finding it again.
     names: [*const c_char; MAX_OBJECTS],
+    /// The path each was found at by searching, or null when it was not
+    /// searched for: glibc reports this path, not the name, to `dladdr`,
+    /// `dl_iterate_phdr` and `link_map`. NSS loads its soft token from the
+    /// directory `dladdr` names for `libnss3.so`, and did not find it when
+    /// that was the bare name.
+    paths: [*const c_char; MAX_OBJECTS],
+    /// The bytes [`Self::paths`] point into, and how many are used.
+    path_pool: [u8; PATH_POOL],
+    path_pool_used: usize,
     /// How many there are.
     count: usize,
     /// `LD_LIBRARY_PATH`, as a colon-separated list, or null.
     library_path: *const c_char,
+    /// The copy of it [`Self::library_path`] points at.
+    library_path_copy: [u8; LIBRARY_PATH_MAX],
     /// Bytes below the initial thread pointer occupied by static TLS, and
     /// [`TLS_SURPLUS`] kept for libraries `dlopen` brings later.
     tls_size: usize,
@@ -78,8 +98,12 @@ impl Scope {
         Scope {
             objects: [Object::EMPTY; MAX_OBJECTS],
             names: [core::ptr::null(); MAX_OBJECTS],
+            paths: [core::ptr::null(); MAX_OBJECTS],
+            path_pool: [0; PATH_POOL],
+            path_pool_used: 0,
             count: 0,
             library_path: core::ptr::null(),
+            library_path_copy: [0; LIBRARY_PATH_MAX],
             tls_size: 0,
             tls_used: 0,
             tls_align: 1,
@@ -92,8 +116,25 @@ impl Scope {
     /// Searched before the defaults and after an object's own `DT_RUNPATH`,
     /// which is the order every loader uses and the order a program that ships
     /// its own libraries beside itself depends on.
+    ///
+    /// Copied, as glibc copies it, because `dlopen` searches it long after
+    /// the program started, and the environment block it came from is the
+    /// program's to overwrite: Chrome writes its process title over it, and
+    /// NSS's `dlopen` of its soft token then searched only the defaults. A
+    /// list longer than the copy holds is used where it is.
     pub(crate) fn set_library_path(&mut self, path: *const c_char) {
+        let mut len = 0;
+        // SAFETY: `path` is NUL-terminated, and this stops at the NUL.
+        while unsafe { path.wrapping_add(len).read() } != 0 {
+            len += 1;
+        }
         self.library_path = path;
+        if let Some(copy) = self.library_path_copy.get_mut(..=len) {
+            // SAFETY: `len + 1` bytes of `path` are its value and its NUL.
+            let value = unsafe { core::slice::from_raw_parts(path.cast::<u8>(), len + 1) };
+            copy.copy_from_slice(value);
+            self.library_path = copy.as_ptr().cast();
+        }
     }
 
     /// How many objects are loaded.
@@ -276,6 +317,10 @@ impl Scope {
             .get_mut(self.count)
             .ok_or(Error::TooManyObjects)?;
         *slot = name;
+        // A slot a failed `dlopen` gave back may hold an earlier object's.
+        if let Some(path) = self.paths.get_mut(self.count) {
+            *path = core::ptr::null();
+        }
         self.count += 1;
         Ok(())
     }
@@ -310,6 +355,13 @@ impl Scope {
             {
                 return Some(index);
             }
+            if self
+                .paths
+                .get(index)
+                .is_some_and(|path| !path.is_null() && same(*path, name))
+            {
+                return Some(index);
+            }
             if let Some(soname) = object.soname()
                 && same(soname, name)
             {
@@ -319,10 +371,14 @@ impl Scope {
         None
     }
 
-    /// The name object `index` was loaded as.
+    /// The path object `index` was found at, or the name it was loaded as
+    /// when it was not searched for.
     #[must_use]
     pub(crate) fn name_at(&self, index: usize) -> *const c_char {
-        self.names.get(index).copied().unwrap_or(core::ptr::null())
+        match self.paths.get(index) {
+            Some(path) if !path.is_null() => *path,
+            _ => self.names.get(index).copied().unwrap_or(core::ptr::null()),
+        }
     }
 
     /// Load `name` and everything it needs, as `dlopen` asks, and answer its
@@ -386,8 +442,15 @@ impl Scope {
     #[must_use]
     pub(crate) unsafe fn lookup_from(&self, root: usize, name: *const c_char) -> Option<Found> {
         let hash = sym::hash(name);
-        // `MAX_OBJECTS` is 64, so one word marks every object queued.
-        let mut queued: u64 = 1 << root;
+        let mut queued = [0_u64; QUEUED_WORDS];
+        let mark = |queued: &mut [u64; QUEUED_WORDS], index: usize| -> Option<bool> {
+            let word = queued.get_mut(index / 64)?;
+            let bit = 1 << (index % 64);
+            let fresh = *word & bit == 0;
+            *word |= bit;
+            Some(fresh)
+        };
+        let _ = mark(&mut queued, root)?;
         let mut queue = [0_usize; MAX_OBJECTS];
         *queue.first_mut()? = root;
         let (mut head, mut tail) = (0, 1);
@@ -409,8 +472,7 @@ impl Scope {
                 let Some(next) = needed else {
                     continue;
                 };
-                if queued & (1 << next) == 0 {
-                    queued |= 1 << next;
+                if mark(&mut queued, next)? {
                     *queue.get_mut(tail)? = next;
                     tail += 1;
                 }
@@ -473,19 +535,19 @@ impl Scope {
         }
         // `DT_RUNPATH` of the object that asked, then `LD_LIBRARY_PATH`,
         // then the defaults.
-        if let Some(mapped) = self.search(runpath, name, page_size) {
-            return self.add_mapped(name, mapped);
-        }
-        if let Some(mapped) = self.search(self.library_path, name, page_size) {
-            return self.add_mapped(name, mapped);
-        }
         let mut buffer = [0_u8; PATH_MAX];
+        if let Some(mapped) = self.search(runpath, name, &mut buffer, page_size) {
+            return self.add_found(name, &buffer, mapped);
+        }
+        if let Some(mapped) = self.search(self.library_path, name, &mut buffer, page_size) {
+            return self.add_found(name, &buffer, mapped);
+        }
         for directory in DEFAULT_PATHS {
             let Some(path) = join(&mut buffer, directory.as_bytes(), name) else {
                 continue;
             };
             if let Ok(mapped) = map::object(path, page_size) {
-                return self.add_mapped(name, mapped);
+                return self.add_found(name, &buffer, mapped);
             }
             // Any failure here means "not this directory": the next one is
             // tried, and the error reported if none works is the honest one,
@@ -494,24 +556,25 @@ impl Scope {
         Err(Error::LibraryNotFound(name))
     }
 
-    /// Look for `name` in each directory of a colon-separated list.
+    /// Look for `name` in each directory of a colon-separated list, leaving
+    /// the path it was found at in `buffer`.
     fn search(
         &self,
         list: *const c_char,
         name: *const c_char,
+        buffer: &mut [u8; PATH_MAX],
         page_size: usize,
     ) -> Option<map::Mapped> {
         if list.is_null() {
             return None;
         }
-        let mut buffer = [0_u8; PATH_MAX];
         let mut directory = [0_u8; PATH_MAX];
         let mut at = list;
         loop {
             let (len, next) = next_directory(at, &mut directory)?;
             if len > 0
                 && let Some(text) = directory.get(..len)
-                && let Some(path) = join(&mut buffer, text, name)
+                && let Some(path) = join(buffer, text, name)
                 && let Ok(mapped) = map::object(path, page_size)
             {
                 return Some(mapped);
@@ -529,6 +592,41 @@ impl Scope {
     ) -> Result<(), Error> {
         let mapped = map::object(path, page_size)?;
         self.add_mapped(name, mapped)
+    }
+
+    /// [`Self::add_mapped`] for a library found by searching, keeping the
+    /// NUL-terminated path in `found` as the one it is reported by.
+    fn add_found(
+        &mut self,
+        name: *const c_char,
+        found: &[u8; PATH_MAX],
+        mapped: map::Mapped,
+    ) -> Result<(), Error> {
+        let index = self.count;
+        self.add_mapped(name, mapped)?;
+        let kept = self.keep_path(found);
+        if let Some(slot) = self.paths.get_mut(index) {
+            *slot = kept;
+        }
+        Ok(())
+    }
+
+    /// Copy a NUL-terminated path into [`Self::path_pool`], or null when it
+    /// does not fit.
+    fn keep_path(&mut self, path: &[u8; PATH_MAX]) -> *const c_char {
+        let Some(len) = path.iter().position(|&byte| byte == 0) else {
+            return core::ptr::null();
+        };
+        let start = self.path_pool_used;
+        let Some(room) = self.path_pool.get_mut(start..=start + len) else {
+            return core::ptr::null();
+        };
+        let Some(bytes) = path.get(..=len) else {
+            return core::ptr::null();
+        };
+        room.copy_from_slice(bytes);
+        self.path_pool_used = start + len + 1;
+        room.as_ptr().cast()
     }
 
     /// Read a mapped object's dynamic table and add it to the scope.

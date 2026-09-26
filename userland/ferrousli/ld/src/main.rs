@@ -152,7 +152,11 @@ unsafe fn link(stack: &auxv::Stack) -> Result<usize, report::Error> {
     // which the kernel mapped with it.
     let (program, interpreter) = unsafe { program_object(stack)? };
 
-    let mut scope = scope::Scope::new();
+    // Built where it is kept, not on this stack and moved there: with room
+    // for `MAX_OBJECTS` objects it is over a hundred kilobytes.
+    // SAFETY: the only thread, before the program runs; nothing holds a
+    // reference to the scope yet.
+    let scope = unsafe { &mut *start::scope_mut() };
     if let Some(path) = interpreter {
         scope.set_interpreter(path);
     }
@@ -177,12 +181,12 @@ unsafe fn link(stack: &auxv::Stack) -> Result<usize, report::Error> {
     scope.layout_tls()?;
     // Before any constructor, which may already ask for a TLS variable.
     // SAFETY: the only thread, before the program runs, after the layout.
-    unsafe { tls::publish_offsets(&scope) };
+    unsafe { tls::publish_offsets(scope) };
 
     // SAFETY: every object in the scope is mapped.
-    unsafe { relocate(&scope, 0, page_size)? };
+    unsafe { relocate(scope, 0, page_size)? };
 
-    tls::install(&scope)?;
+    tls::install(scope)?;
     // SAFETY: the only thread, before the program runs.
     unsafe { interface::publish(scope.tls_size(), scope.tls_align(), stack.auxv) };
     // `dlopen` runs its libraries' initialisers with these too.
@@ -193,11 +197,6 @@ unsafe fn link(stack: &auxv::Stack) -> Result<usize, report::Error> {
     );
     // SAFETY: the only thread, before the program runs.
     unsafe { dl::set_arguments(args, page_size) };
-    // Saved before any initialiser runs, since one may call `dlsym` or
-    // `dlopen`, which find the scope there.
-    // SAFETY: all objects are mapped and relocated, and this is the sole path
-    // that reaches the program's entry point.
-    unsafe { start::save_scope(scope) };
     // SAFETY: every object is relocated and its initial TLS blocks are in
     // place, so an initialiser may call anything. The program's own are its
     // C library's to ask for (`interface`), so they start at 1.

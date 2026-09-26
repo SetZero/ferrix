@@ -442,6 +442,31 @@ core::arch::global_asm!(
     catch_up = sym __ferrousli_tls_catch_up,
 );
 
+/// The last module number ARMv7-A's `__tls_get_addr` answers for. It
+/// compares with this rather than with [`MODULES`], branching when above it,
+/// because an ARM immediate is eight bits rotated right by an even amount:
+/// 256 is one, and 257 -- `MODULES` since the loader holds 256 objects -- is
+/// not, and does not assemble.
+#[cfg(target_arch = "arm")]
+const LAST_MODULE: usize = MODULES - 1;
+
+/// Whether `value` is an ARM-state data-processing immediate.
+#[cfg(target_arch = "arm")]
+const fn arm_immediate(value: usize) -> bool {
+    let value = value as u32;
+    let mut rotation = 0;
+    while rotation < 32 {
+        if value.rotate_left(rotation) <= 0xff {
+            return true;
+        }
+        rotation += 2;
+    }
+    false
+}
+
+#[cfg(target_arch = "arm")]
+const _: () = assert!(arm_immediate(LAST_MODULE));
+
 // `__tls_get_addr` on ARMv7-A, in ARM state: the index in `r0`, the answer in
 // `r0`, and `r1` to `r3` free. The table's address is its distance from the
 // `add` that reads `pc`, eight bytes past itself. GCC's ARM code asks for
@@ -455,8 +480,8 @@ core::arch::global_asm!(
     ".type __tls_get_addr, %function",
     "__tls_get_addr:",
     "    ldr r1, [r0]",
-    "    cmp r1, #{modules}",
-    "    bhs 2f",
+    "    cmp r1, #{last}",
+    "    bhi 2f",
     "    ldr r2, 5f",
     "6:",
     "    add r2, pc, r2",
@@ -492,7 +517,7 @@ core::arch::global_asm!(
     "    .word {generations} - (6b + 8)",
     ".size __tls_get_addr, . - __tls_get_addr",
     ".popsection",
-    modules = const MODULES,
+    last = const LAST_MODULE,
     offsets = sym MODULE_OFFSETS,
     generations = sym MODULE_GENERATIONS,
     catch_up = sym __ferrousli_tls_catch_up,

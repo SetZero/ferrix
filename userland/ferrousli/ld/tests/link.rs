@@ -403,11 +403,23 @@ fn dlopen_dlsym_dladdr_and_dl_iterate_phdr_work_through_the_loader() {
             .expect("a path"),
     ]);
 
+    // Opened by name, and found only through `LD_LIBRARY_PATH`.
+    let found_dir = dir.join("found");
+    std::fs::create_dir_all(&found_dir).expect("make the search directory");
+    let found = found_dir.join("libfound.so");
+    compile(&[
+        "-shared",
+        "-o",
+        found.to_str().expect("a path"),
+        manifest().join("tests/c/greet.c").to_str().expect("a path"),
+    ]);
+
     let program = dir.join("prog");
     compile(&[
         "-pie",
         &format!("-DLIBRARY=\"{}\"", library.display()),
         &format!("-DTLS_LIBRARY=\"{}\"", tls_library.display()),
+        &format!("-DFOUND=\"{}\"", found.display()),
         "-o",
         program.to_str().expect("a path"),
         manifest()
@@ -419,15 +431,19 @@ fn dlopen_dlsym_dladdr_and_dl_iterate_phdr_work_through_the_loader() {
         "-Wl,-e,_start",
     ]);
 
-    let status = Command::new(&program).status().expect("run the program");
+    let status = Command::new(&program)
+        .env("LD_LIBRARY_PATH", &found_dir)
+        .status()
+        .expect("run the program");
     assert_eq!(
         status.code(),
         Some(EXPECTED),
         "dlfcn.h through the loader: 91 dlopen, 92 dlsym of a function, 93 of \
          a datum, 94 dladdr, 95 dlerror, 96 dl_iterate_phdr, 97 a second \
          dlopen, 98 a TLS library's variables at their image's values, 86 and 87 dladdr1's link map and symbol, \
-         88 to 90 dlinfo's link map, origin and refusal, 99 dlclose, and a \
-         signal a fault"
+         88 to 90 dlinfo's link map, origin and refusal, 85 a library found \
+         through LD_LIBRARY_PATH after the environment was written over, or \
+         not named by its path, 99 dlclose, and a signal a fault"
     );
 }
 

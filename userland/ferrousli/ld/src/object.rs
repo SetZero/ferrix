@@ -23,11 +23,12 @@ use crate::elf::{
 /// How many objects one process may load: the program, the loader, and the
 /// libraries of both.
 ///
-/// Chosen to be larger than anything that has been asked of it and small
-/// enough that the table is a few kilobytes of `.bss`. A desktop program
-/// links against a few dozen libraries; the largest measured here is far
-/// under this.
-pub(crate) const MAX_OBJECTS: usize = 64;
+/// Chosen to be larger than anything that has been asked of it. It was 64
+/// until Chrome's full browser, which loads 80 objects before it `dlopen`s
+/// ANGLE, Vulkan, SwiftShader and GTK's; headless Chrome loads 46. Each
+/// object costs a few hundred bytes of `.bss`, in the scope and in the tables
+/// `dl` and `tls` keep beside it.
+pub(crate) const MAX_OBJECTS: usize = 256;
 
 /// How many `DT_NEEDED` entries one object may carry.
 pub(crate) const MAX_NEEDED: usize = 48;
