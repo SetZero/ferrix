@@ -23,13 +23,14 @@ that does not exist.
 None of the four can be claimed today. What changed is that the reasons are now
 specific, measured, and mostly documents rather than code.
 
-* [IMPLEMENTATION.md](IMPLEMENTATION.md) — **start here to build**: ten work orders, ordered
+* [IMPLEMENTATION.md](IMPLEMENTATION.md) — **start here to build**: eleven work orders, ordered
 * [TODO.md](TODO.md) — start here to re-audit: what to re-measure, and what not to write
-* [SAFETY-MANUAL.md](SAFETY-MANUAL.md) — the out-of-context argument: assumed requirements, safe state, ten assumptions of use, element failure analysis
+* [SAFETY-MANUAL.md](SAFETY-MANUAL.md) — the out-of-context argument: assumed requirements, safe state, eleven assumptions of use, element failure analysis
 * [ITEM.md](ITEM.md) — what the ratings attach to, and why it is not all of Ferrix
 * [FINDINGS.md](FINDINGS.md) — the audit register, 20 open findings and 18 closed
 * [SECURITY-TARGET.md](SECURITY-TARGET.md) — EAL5+ claim, SFRs, and where it would fail evaluation
-* [VULNERABILITY-ANALYSIS.md](VULNERABILITY-ANALYSIS.md) — AVA_VAN.4 over the seven threats; five residual vulnerabilities
+* [VULNERABILITY-ANALYSIS.md](VULNERABILITY-ANALYSIS.md) — AVA_VAN.4 over the seven threats; six residual vulnerabilities
+* [SPECULATION.md](SPECULATION.md) — the side-channel defences, per architecture, behind one build switch, and what they cost
 * [MEMORY-AND-TIMING.md](MEMORY-AND-TIMING.md) — what the item allocates, and what it promises about time
 * [SOUP.md](SOUP.md) — generated; the item contains none
 * [VERIFICATION.md](VERIFICATION.md) — what exercises the item, and the traceability gap
@@ -83,7 +84,8 @@ boundary.
 | Directly recursive functions in the item | **0**, of 1,863 |
 | SMEP + SMAP (x86-64) | **on** |
 | PAN (AArch64) | **implemented**; absent from the reference CPU |
-| Assembly | 303 lines, 19 allow-listed sites |
+| Side-channel defences | **on** by default, per processor; one switch, `--mitigations off`, takes them out |
+| Assembly | 492 lines, 22 allow-listed sites |
 | Cargo features in `kernel/`/`boot/` | 0 |
 
 Two of these were unknown before this audit and are the reason it was worth
@@ -125,8 +127,9 @@ cannot have it at all, so V-01 still stands on Arm (AoU-6).
 *Missing:* Design evidence at module granularity for `ADV_TDS.3`; the SysML model
 describes Ferrix, not the TOE (F-15). The TSF still has 56 upward references into the load ring
 (`ADV_INT.2`, F-07, F-09 and F-33), 21 of them from the Linux dispatcher; the clearest counter-example, the core
-naming the Linux personality's process type (F-01), is gone. There are no side-channel defences and no layout
-randomisation (F-31). And the TOE claims neither audit nor
+naming the Linux personality's process type (F-01), is gone. The side-channel defences are built and on by
+default, but there is no layout randomisation and no cache partitioning (F-31,
+V-06). And the TOE claims neither audit nor
 authentication (F-21b), which is defensible for an isolation kernel and is why
 no Protection Profile is claimed.
 
@@ -139,10 +142,12 @@ decomposed to the item's modules.
 62 objectives, 5 requiring independence.
 
 *In place:* statement coverage is now measurable and measured (F-10 at 81.9%),
-which was the objective everyone assumes is impossible for a kernel. 303 lines
-of assembly across 19 allow-listed sites makes the source-to-object question
-tractable. Zero Cargo features in the item means no configuration space to
-enumerate. Deactivated code is confined to three architectures behind `cfg`.
+which was the objective everyone assumes is impossible for a kernel. 492 lines
+of assembly across 22 allow-listed sites makes the source-to-object question
+tractable. Zero Cargo features in the item, and one two-valued build switch of
+which only `on` is claimed, mean the configuration space is enumerated in a
+sentence. Deactivated code is confined to three architectures behind `cfg`,
+and to the side-channel defences behind `ferrix_mitigations_off`.
 
 *Missing:* every planning document — PSAC, SDP, SVP, SCMP, SQAP — none drafted.
 Low-level requirements (F-15) and requirements-to-test traceability (F-14),
@@ -227,7 +232,9 @@ F-12), the complexity and recursion gate (F-25), board support, bring-up
 and power registering with the item (F-04, F-08), and the split of `Process`
 into a core object and a POSIX extension (F-01, F-06, W-1), which took the
 boundary from 36 references to 29 by the gate's count of the day and left `object/` and `sched/` naming
-nothing above the core.
+nothing above the core; and the side-channel defences behind one build switch
+(F-31's first half, [SPECULATION.md](SPECULATION.md)). KASLR is F-31's second
+half and is not started.
 
 ## 5. What cannot be fixed from here
 

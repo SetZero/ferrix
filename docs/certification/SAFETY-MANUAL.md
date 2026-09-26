@@ -31,7 +31,7 @@ still has to happen. It happens at the integrator, and this item's certificate
 | Size | 49,431 lines of product code, 38,989 of it in `core` |
 | Scope | memory protection, scheduling, capability objects, trap and syscall entry, IOMMU, SMP, device enumeration |
 | Not in scope | VFS, btrfs, network stack, Linux personality, ring-3 drivers — 44,215 lines of uncertified load |
-| Reference configuration | x86-64, AArch64, ARMv7-A; release profile; rustc 1.97.1; zero Cargo features |
+| Reference configuration | x86-64, AArch64, ARMv7-A; release profile; rustc 1.97.1; zero Cargo features; built `--mitigations on`, the default |
 
 The boundary is enforced on every build by `scripts/check-item-boundary.py`, so
 what this manual describes and what ships cannot drift apart silently. The
@@ -137,9 +137,11 @@ needing either shall provide it above the element. (Finding F-21b.)
 
 ### AoU-8 — the configuration is the one in §1
 The claims hold for the reference configuration and no other. Changing the
-toolchain, enabling a Cargo feature, or moving a file between rings changes
-what is claimed. The boundary gate makes the last of these visible; the other
-two are the integrator's to control.
+toolchain, enabling a Cargo feature, building with `--mitigations off`, or
+moving a file between rings changes what is claimed. The boundary gate makes
+the last of these visible, and the boot log says which build it is — *"speculation
+defences off: built with --mitigations off"* — so the third is visible on the
+running system; the first two are the integrator's to control.
 
 ### AoU-9 — no independent assessment has been performed
 No accredited laboratory, notified body or independent assessor has examined
@@ -151,6 +153,25 @@ that reason. (Finding F-27.)
 ### AoU-10 — no field history
 The element has no operational history. Proven-in-use and prior-use credit
 (IEC 61508 route 2s, EN 50716's equivalent) are unavailable. (Finding F-30.)
+
+### AoU-11 — the processor is one the side-channel defences cover
+ASR-1's separation holds against speculative reads only on a processor that
+offers what [SPECULATION.md](SPECULATION.md) builds on, and the element cannot
+supply what the processor lacks. The integrator shall run the element, built
+`--mitigations on`, only on processors whose boot log line
+`cpu      speculation exposure:` names nothing **NOT covered** and nothing
+**EXPOSED** — which on x86-64 means an IBRS form (enhanced, automatic, or
+always-on), `IBPB`, `SSBD` unless the part says `SSB_NO`, and a part not
+affected by Meltdown; on AArch64, `CSV2` or firmware implementing SMCCC
+`ARCH_WORKAROUND_1`, `SSBS` or `ARCH_WORKAROUND_2`, and a core Arm lists as
+unaffected by Meltdown or reporting `CSV3`; on ARMv7-A, a core Arm lists as
+unaffected, or firmware that set `ACTLR.IBE` on one that is not. On an
+MDS-affected x86-64 part the integrator shall disable SMT. Partitions that
+must not learn each other's cache access patterns shall not share a cache: no
+cache is partitioned (V-06). QEMU's TCG, on which most gates run, offers no
+speculation controls and executes no speculation, so its log lines are not a
+counter-example; the gate under KVM is where the controls are exercised.
+(Finding F-31.)
 
 ---
 
@@ -205,7 +226,8 @@ claimed — AoU-4).
 | This manual | assumed requirements, safe state, assumptions of use, failure analysis |
 | [ITEM.md](ITEM.md) | exactly what is and is not in the element |
 | [SECURITY-TARGET.md](SECURITY-TARGET.md) | the security counterpart, CC EAL5+ |
-| [VULNERABILITY-ANALYSIS.md](VULNERABILITY-ANALYSIS.md) | AVA_VAN.4, five residual vulnerabilities |
+| [VULNERABILITY-ANALYSIS.md](VULNERABILITY-ANALYSIS.md) | AVA_VAN.4, six residual vulnerabilities |
+| [SPECULATION.md](SPECULATION.md) | the side-channel defences behind AoU-11, per architecture, and what they cost |
 | [VERIFICATION.md](VERIFICATION.md) | what exercises the element; 81.9% statement coverage |
 | [MEMORY-AND-TIMING.md](MEMORY-AND-TIMING.md) | the determinism arguments behind AoU-4 and AoU-5 |
 | [TOOLS.md](TOOLS.md) | tool classification and operational requirements |

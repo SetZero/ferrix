@@ -208,14 +208,23 @@ A certificate attaches to a configuration, not to a repository.
 | Toolchain | rustc 1.97.1, pinned exactly in `rust-toolchain.toml` |
 | Unstable features | none in `kernel/` or `boot/` |
 | Cargo features | 7 in the workspace, **0** in `kernel/` or `boot/` |
+| Build settings | **one**, `cargo xtask --mitigations on\|off`; the reference is `on`, the default |
 | External crates | 21, listed in [SOUP.md](SOUP.md) |
-| Assembly | 303 lines across 19 allow-listed sites, ~99.2% Rust |
+| Assembly | 492 lines across 22 allow-listed sites outside the Pixel 7 loader, ~99.76% Rust (`check-asm-budget.py`) |
 
 The feature count is the line worth pausing on. A certified item must be one
 configuration with all dead and deactivated code justified; Linux's ~18,000
 Kconfig symbols are why that objective is unmeetable there at any budget. Here
-the configuration space is three architectures and nothing else, which is most
-of why this item is analysable at all.
+the configuration space is three architectures and one switch with two
+settings, which is most of why this item is analysable at all.
+
+The switch is the side-channel defences ([SPECULATION.md](SPECULATION.md)).
+`off` builds with `--cfg ferrix_mitigations_off`, set only by `xtask`, and
+compiles every defence out; it exists to measure what they cost and for owners
+who have decided they need none. It is not a Cargo feature, and the claims
+here are made of `on` alone (SAFETY-MANUAL AoU-8). `cargo xtask check` builds
+the kernel in both settings on all three architectures so that `off` cannot
+stop compiling unnoticed, and the running kernel says which it is.
 
 ---
 

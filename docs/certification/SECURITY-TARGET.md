@@ -119,6 +119,7 @@ and all are assumed hostile, which is the central design claim being made.
 | A.FIRMWARE | UEFI, TF-A and the loader behave as specified and deliver an unmodified TOE image. The TOE performs no secure or measured boot (§9.2). |
 | A.ADMIN | Whoever composes the system image and selects which drivers run is trusted to do so competently. |
 | A.HARDWARE | The MMU, IOMMU and interrupt controller behave as their specifications state. |
+| A.PROCESSOR | The processor offers the speculation controls [SPECULATION.md](SPECULATION.md) builds on, and they behave as the vendor states: SAFETY-MANUAL AoU-11, checkable from the boot log. |
 
 ### 3.4 Organisational security policies
 None claimed.
@@ -148,6 +149,7 @@ None claimed.
 | OE.FIRMWARE | Firmware delivers an unmodified image (A.FIRMWARE). |
 | OE.ADMIN | Image composition is performed competently (A.ADMIN). |
 | OE.HARDWARE | MMU, IOMMU and interrupt controller conform to specification (A.HARDWARE). |
+| OE.PROCESSOR | The TOE runs, built `--mitigations on`, only on a processor whose boot log reports no side-channel hazard uncovered (A.PROCESSOR). |
 
 ---
 
@@ -231,7 +233,7 @@ How the TOE meets each objective, with the evidence that exists today.
 
 | Objective | Implementation | Evidence |
 |---|---|---|
-| O.ISOLATE | Per-process page tables built by `kernel/src/user/space.rs`; higher-half kernel mapping; TLB shootdown on SMP. | `user/check.rs`, `user/rmap_check.rs`; every boot |
+| O.ISOLATE | Per-process page tables built by `kernel/src/user/space.rs`; higher-half kernel mapping; TLB shootdown on SMP. Against speculative reads, the defences in `kernel/src/arch/speculation.rs` and each architecture's `speculation.rs`: program-chosen indices clamped at the system call boundary, the processor's speculation controls, a predictor barrier at each switch of address space. | `user/check.rs`, `user/rmap_check.rs`; `arch/speculation_check.rs`, every boot: *"speculation defences read back on 4 processors"* |
 | O.WXN | Enforced at map time; `WXN`/`NX` set on all three architectures. | Every boot sweeps all mappings: *"w^x 2387 mappings swept, 899 executable, none writable"* |
 | O.CAPABILITY | `kernel/src/object/`: handle tables, rights masks, transfer only over channels. | `object/check.rs`, 3,318 lines; *"18 refusals as specified"* |
 | O.DMA | `kernel/src/iommu/{vtd,smmuv3}.rs`; a driver receives an `IoMapping` and a domain. | `iommu/gate.rs`; `scripts/check-device-access.py` holds the seam at build time |
@@ -265,7 +267,9 @@ than one, since they are the threats the TOE exists to address.
 ### 8.3 Why EAL5 is the right claim
 §2.2. The three arguments that carry it: the TOE is 49,431 lines and 100%
 first-party source, so `ADV_IMP.1` is satisfiable; the reference configuration
-has zero Cargo features, so there is no configuration space to enumerate; and
+has zero Cargo features and one two-valued build switch, `--mitigations`, of
+which only `on` is evaluated, so the configuration space is enumerated in a
+sentence; and
 eleven build-time gates support `ADV_INT.2`'s well-structuredness in a way
 review notes cannot.
 
@@ -311,7 +315,16 @@ centralised; on Arm it still has no hardware defence in depth.
 modules. `docs/sysml/` is the right notation and describes Ferrix rather than
 the TOE, at system granularity (F-15).
 
-### 9.5 The TSF is not free of upward dependencies
+### 9.5 The TSF does not randomise its layout or partition caches
+The side-channel defences (F-31, [SPECULATION.md](SPECULATION.md)) stop a
+program steering a speculative read, on processors A.PROCESSOR admits. They do
+not randomise where the kernel is (no KASLR), do not unmap the kernel from a
+program's tables (no KPTI — not needed on the reference processors), and do
+not partition a cache, so two processes sharing one can time each other
+(V-06). An evaluator at `AVA_VAN.4` would accept the first two as argued and
+press on the third for any deployment where processes share a cache.
+
+### 9.6 The TSF is not free of upward dependencies
 56 references reach from the TOE into the uncertified load ring (F-07, F-09
 and F-33), down from 94 by the same measure. (The 29 and 62 given here before
 2026-09-26 were lower bounds; the gate could not resolve module-relative paths

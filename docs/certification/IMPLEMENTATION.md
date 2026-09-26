@@ -486,10 +486,40 @@ engineering — **answer step 1 before planning anything that depends on it.**
 
 ---
 
+## W-11 — Side-channel defences, and layout randomisation
+
+**Advanced 2026-09-26: the side-channel half is done.** See F-31 and
+[SPECULATION.md](SPECULATION.md). One build switch, `cargo xtask --mitigations
+on|off`, `on` the default and the reference; `on` clamps every program-chosen
+index at the system call boundary and applies each processor's speculation
+controls, per architecture, read back on every processor at boot (FX-0307).
+`cargo xtask check` builds the kernel both ways. Measured under KVM: +1.0% on
+system calls, +2.8% on fork-exec-wait.
+
+**Closes:** F-31, with the steps below. **Size:** large for KASLR, small for
+each of the rest.
+
+1. **KASLR.** SPECULATION.md §6's four steps, in order: a position-independent
+   kernel, the loaders choosing a slot from the firmware RNG and applying the
+   kernel's relocations, the slide in `BootInfo` and every fixed-address
+   consumer reading it, then the direct map and vmap arena randomised. Start in
+   `boot/`; the kernel half is mechanical once the loaders relocate.
+2. **KPTI**, only if a Meltdown-affected processor enters the reference
+   configuration: SPECULATION.md §6 lists the four pieces. Today AoU-11 excludes
+   such a processor and the boot log names it.
+3. **IBT and shadow stacks**: argue them out, or wait for stable compiler
+   support; `-Z cf-protection` is nightly-only.
+4. **The residuals in SPECULATION.md §9**: `csdb` for the libraries' clamps
+   (needs the clamp to be the kernel's, reached through a trait the tables
+   take), the tables deeper than the system call boundary, and a written
+   position on cache partitioning.
+
+---
+
 ## Suggested order
 
-**Done:** order zero, W-3, W-2, W-6, W-9, W-4 (with F-08), W-1, and most of
-W-7.
+**Done:** order zero, W-3, W-2, W-6, W-9, W-4 (with F-08), W-1, most of W-7,
+and W-11's side-channel half.
 **Remaining:** W-5 → W-7's last gates → W-8 (largest), with W-10 in parallel
 whenever someone can answer step 1.
 

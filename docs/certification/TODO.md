@@ -247,6 +247,17 @@ targets and `syscall/check.rs`'s 9,537 lines of refusal tests are raw material;
 what is missing is an analysis structured by threat with a documented verdict
 per attack path.
 
+### 4.2 Side-channel defences and layout randomisation — **F-31**
+**Side-channel half done 2026-09-26** by [SPECULATION.md](SPECULATION.md),
+behind the one build switch `--mitigations on|off`. KASLR is not started.
+
+To re-audit: boot `x86_64 --accel kvm` and read the two `cpu      speculation`
+lines — under KVM the processor's controls are real, under TCG there are none.
+Re-measure the cost with both settings under KVM before quoting it; the
+figures in SPECULATION.md §8 are medians of eight boots on a loaded host.
+Check that `cargo xtask check` still has its `--mitigations off` clippy steps,
+and that AoU-11's list matches what `arch/*/speculation.rs` actually applies.
+
 ---
 
 ## 5. Tools

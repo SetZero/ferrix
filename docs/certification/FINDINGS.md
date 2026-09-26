@@ -4,7 +4,7 @@ The audit register for the item defined in [ITEM.md](ITEM.md). One entry per
 finding, each naming what was measured, which objective it bears on, and what
 would close it.
 
-20 findings are open and 18 are closed, of 38. F-10 advanced from 71.4% to 81.9%. No finding here is closed by argument:
+20 findings are open and 18 are closed, of 38. F-10 advanced from 71.4% to 81.9%, and F-31's side-channel half was built (2026-09-26). No finding here is closed by argument:
 a finding closes when the thing it describes stops being true and something in
 the build says so.
 
@@ -534,12 +534,42 @@ analysis checked the registers.
 the copy, and PAN on AArch64.
 
 ### F-31 — no side-channel or layout-randomisation defences
-**Moderate.** No Spectre, Meltdown or cache-timing analysis has been performed
-and no mitigation exists: no retpolines, no KPTI, no IBT or shadow stacks. No
-ASLR or KASLR either, so an attacker who achieves V-01 faces a fixed layout.
+**Moderate, advanced 2026-09-26** by [SPECULATION.md](SPECULATION.md). Not
+closed: the layout-randomisation half is untouched.
 
-At `AVA_VAN.4`'s moderate attack potential this is arguably in scope for a TOE
-whose entire claim is isolation between mutually distrusting processes.
+*Was:* no Spectre, Meltdown or cache-timing analysis, and no mitigation — no
+retpolines, no KPTI, no IBT or shadow stacks, no ASLR or KASLR.
+
+*Now:* the speculative-execution half is analysed per architecture and built,
+behind the kernel's one build switch. `cargo xtask --mitigations on`, the
+default and the reference configuration, gives every program-chosen index at
+the system call boundary a clamp a misprediction cannot see past (syscall
+numbers, handles, descriptors, user addresses), and applies what each
+processor needs and offers: on x86-64 enhanced or automatic IBRS, STIBP, SSBD,
+`IBPB` and a return stack refill at each switch of address space, `VERW` on an
+MDS-exposed part, a `swapgs` fence and cleared registers on entry; on AArch64
+the Spectre-BHB loop, `SSBS` or firmware's workaround 2, and firmware's
+workaround 1 at a switch; on ARMv7-A `BPIALL`/`ICIALLU` for the cores Arm lists
+as affected, of which the reference Cortex-A7 is not one. Every processor reads
+back what it wrote and the boot check fails otherwise (FX-0307); the boot log
+names what is covered and what is not. `--mitigations off` compiles all of it
+out, and `cargo xtask check` builds both settings. Measured cost under KVM: +1.0%
+on two million system calls, +2.8% on a thousand fork-exec-waits.
+
+What a processor needs and the build cannot give it — a Meltdown-affected part,
+or one with no IBRS form, no `IBPB`, no `SSBD` — is excluded by the new AoU-11
+rather than mitigated. Retpolines were evaluated and rejected: the pinned
+compiler has them only through a deprecated target feature scheduled to become
+an error, and not in the precompiled `core` and `alloc`.
+
+*Closes when:* KASLR exists (SPECULATION.md §6 lists the four steps, loaders
+first); IBT and shadow stacks are either built or argued out; and the
+residuals SPECULATION.md §9 lists — cache timing between processes, KPTI for
+an affected CPU if one enters the reference configuration, the libraries'
+clamps without `csdb`, the tables deeper than the system call boundary — are
+each built or argued. At `AVA_VAN.4`'s moderate attack potential the half that
+is done was the half that mattered more: without it, isolation between
+processes held only against programs that did not time their loads.
 
 ### F-21b — the TOE claims no audit and no authentication
 **Moderate.** There is no FAU family at all, and FIA lives in the uncertified
@@ -551,13 +581,13 @@ cannot record a security-relevant event can claim EAL5.
 **Closed at the element level 2026-09-25** by
 [SAFETY-MANUAL.md](SAFETY-MANUAL.md): the argument is §2 (assumed safety
 requirements, with the evidence for each), §3 (the safe state, and the
-obligation it creates), §4 (ten assumptions of use) and §5 (the failure
+obligation it creates), §4 (eleven assumptions of use) and §5 (the failure
 analysis).
 
-The generic application conditions EN 50716 asks for are AoU-1 to AoU-10, and
+The generic application conditions EN 50716 asks for are AoU-1 to AoU-11, and
 several of them exist *because* a finding is open — no WCET (F-24), fatal
 allocation failure (F-23), reduced claims on ARMv7-A (F-32, V-03), no audit
-(F-21b). Those stop being embarrassments and become stated conditions the
+(F-21b), processors the side-channel defences do not cover (F-31). Those stop being embarrassments and become stated conditions the
 integrator designs around, which is what an application condition is for.
 
 What remains is assessment by somebody independent, which is F-27 and not

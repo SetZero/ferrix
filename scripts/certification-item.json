@@ -27,8 +27,16 @@
       "the one under evaluation: three architectures, release profile, the",
       "gate set cargo xtask check runs, and the toolchain rust-toolchain.toml",
       "pins. Seven Cargo features exist in the whole workspace and none is in",
-      "kernel/ or boot/, so there is no configuration space to enumerate --",
-      "which is most of why this item is analysable at all."
+      "kernel/ or boot/, so there is no Cargo configuration space to enumerate",
+      "-- which is most of why this item is analysable at all.",
+      "",
+      "One build setting exists, and it is not a Cargo feature: `cargo xtask",
+      "--mitigations on|off`. `off` builds with `--cfg ferrix_mitigations_off`,",
+      "which only xtask sets, and compiles out every side-channel defence",
+      "(docs/certification/SPECULATION.md). The certified setting is `on`, the",
+      "default -- what a plain `cargo build` makes and every gate boots. `off`",
+      "exists and is built by `cargo xtask check` on every architecture so it",
+      "cannot rot, and no claim is made of it."
     ],
     "architectures": [
       "x86_64",
@@ -37,7 +45,12 @@
     ],
     "profile": "release",
     "toolchain": "1.97.1",
-    "kernel_cargo_features": 0
+    "kernel_cargo_features": 0,
+    "mitigations": "on",
+    "mitigations_settings": [
+      "on",
+      "off"
+    ]
   },
   "test_file_patterns": [
     "check.rs",
