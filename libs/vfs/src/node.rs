@@ -376,6 +376,25 @@ pub trait Inode: Send + Sync + fmt::Debug {
         self.read_at(0, buf)
     }
 
+    /// Whether one read of this stream takes all it has, up to the length
+    /// asked, rather than stopping after the first piece: Linux's
+    /// `pipe_read` goes on through a pipe's buffers until the pipe is empty,
+    /// and its memory devices fill the whole request -- measured on a 7.0
+    /// host, `read` of 65536 from /dev/zero is 65536, and `readv` of a pipe
+    /// holding six bytes into two segments of four is 6.
+    ///
+    /// The system call layer reads through a buffer of a page. After a piece
+    /// that took something it reads on only from a stream that says yes, and
+    /// then with `nonblock` set ([`crate::OpenFile::read_more`]), so a reader
+    /// that already has bytes is never made to wait for more.
+    ///
+    /// The default, no, is right for a stream whose one read is one record
+    /// or one line -- an eventfd's counter, a terminal's line, a datagram --
+    /// where reading on would take the next, which one Linux read never does.
+    fn fills_reads(&self) -> bool {
+        false
+    }
+
     /// Take back `bytes`, the start of what the last [`Inode::read_stream`]
     /// gave, which could not be delivered to the reader. The default drops
     /// them: most streams cannot put data back.

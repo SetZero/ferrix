@@ -72,7 +72,14 @@ enum Position {
 /// `read`.
 pub(crate) fn sys_read(process: &Process, fd: i32, buf: u64, len: u64) -> Result<usize, Errno> {
     let file = fd::file(process, fd)?;
-    count(read_into(process, &file, buf, len, Position::Current)?)
+    count(read_into(
+        process,
+        &file,
+        buf,
+        len,
+        Position::Current,
+        false,
+    )?)
 }
 
 /// `write`.
@@ -95,7 +102,14 @@ pub(crate) fn sys_pread64(
 ) -> Result<usize, Errno> {
     let offset = u64::try_from(offset).map_err(|_| Errno::EINVAL)?;
     let file = fd::file(process, fd)?;
-    count(read_into(process, &file, buf, len, Position::At(offset))?)
+    count(read_into(
+        process,
+        &file,
+        buf,
+        len,
+        Position::At(offset),
+        false,
+    )?)
 }
 
 /// `pwrite64`. A negative offset is refused before the descriptor is looked
@@ -113,7 +127,9 @@ pub(crate) fn sys_pwrite64(
 }
 
 /// `readv`: fill the segments in order, stopping at the first that is not
-/// filled, since a short read means there was no more to read.
+/// filled, since a short read means there was no more to read. A stream goes
+/// on into the next segment as one read of it goes on from one page to the
+/// next: only one that fills reads, and without waiting (`read_into`).
 pub(crate) fn sys_readv(
     process: &Process,
     fd: i32,
@@ -129,20 +145,15 @@ pub(crate) fn sys_readv(
             Err(Errno::EBADF)
         };
     }
-    // What reads go to, not the node that was opened: a FIFO or a terminal's
-    // node made by mknod on tmpfs is no stream itself, but its pipe or its
-    // terminal is.
-    let stream = file.is_stream();
     let mut done = 0_u64;
     for (base, len) in segments {
-        let got = match read_into(process, &file, base, len, Position::Current) {
+        let got = match read_into(process, &file, base, len, Position::Current, done > 0) {
             Ok(got) => got,
             Err(_) if done > 0 => break,
             Err(errno) => return Err(errno),
         };
         done = done.saturating_add(got);
-        // A stream has given what it had: asking it again would wait.
-        if got < len || (stream && got > 0) {
+        if got < len {
             break;
         }
     }
@@ -204,29 +215,59 @@ fn bounce(len: u64) -> Result<Vec<u8>, Errno> {
 }
 
 /// Read from `file` into the program's `[buf, buf + len)`, reporting how much
-/// arrived.
+/// arrived. `started` says an earlier segment of the same `readv` already
+/// took bytes.
+///
+/// A stream is read a page at a time as a file is, but only its first page
+/// may wait: once it has given anything, each page after is
+/// `OpenFile::read_more`, what the stream has now, and only from a stream
+/// that fills a read as Linux's does -- a pipe, a memory device. A pipe
+/// holding six bytes read into two segments of four gives all six, and
+/// `/dev/zero` read for 64 KiB gives 64 KiB, where one page and then a stop
+/// gave four and 4096. A stream whose read is one record or one line stops
+/// after it, as before.
 fn read_into(
     process: &Process,
     file: &OpenFile,
     buf: u64,
     len: u64,
     position: Position,
+    started: bool,
 ) -> Result<u64, Errno> {
-    let read = |done: u64, slot: &mut [u8]| match position {
-        Position::Current => file.read(slot),
-        Position::At(offset) => file.read_at(offset.checked_add(done).ok_or(Errno::EINVAL)?, slot),
+    // What reads go to, not the node that was opened: a FIFO or a terminal's
+    // node made by mknod on tmpfs is no stream itself, but its pipe or its
+    // terminal is.
+    let stream = file.is_stream();
+    let read = |done: u64, slot: &mut [u8]| {
+        if stream && (started || done > 0) {
+            return file.read_more(slot);
+        }
+        match position {
+            Position::Current => file.read(slot),
+            Position::At(offset) => {
+                file.read_at(offset.checked_add(done).ok_or(Errno::EINVAL)?, slot)
+            }
+        }
     };
     let len = len.min(MAX_RW_COUNT);
     if len == 0 {
+        if started {
+            // An empty segment after bytes arrived is passed over, asking
+            // the file nothing, as Linux's iterator passes it over.
+            return Ok(0);
+        }
         // Still asked of the file: a zero-length read of a directory is
         // `EISDIR` and of a stream by position is `ESPIPE`, not zero.
         return read(0, &mut []).map(|_| 0);
     }
     let mut buffer = bounce(len)?;
-    // Asked of what reads go to, as `sys_readv` asks it.
-    let stream = file.is_stream();
     let mut done = 0_u64;
     while done < len {
+        // A memory device fills gigabytes if asked; Linux's stops at a
+        // signal with what it has, and so does this.
+        if stream && done > 0 && process.signal_pending() {
+            break;
+        }
         let want = usize::try_from((len - done).min(CHUNK as u64)).map_err(|_| Errno::EINVAL)?;
         let slot = buffer.get_mut(..want).ok_or(Errno::EINVAL)?;
         let got = match read(done, slot) {
@@ -247,9 +288,8 @@ fn read_into(
             return Err(Errno::EFAULT);
         }
         done += got as u64;
-        // Short means the end of the file, and a stream that gave anything
-        // has given what it had: asking again would wait for more.
-        if got < want || stream {
+        // Short means the end of the file, or all a stream has for now.
+        if got < want {
             break;
         }
     }

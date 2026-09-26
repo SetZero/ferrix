@@ -765,6 +765,7 @@ fn check_the_calls(process: &Process) -> Result<u64, &'static str> {
         .and_then(|piped| {
             check_a_pipe_keeps_what_a_bad_buffer_missed(process, page).map(|()| piped)
         })
+        .and_then(|piped| check_a_stream_read_takes_all_there_is(process, page).map(|()| piped))
         .and_then(|piped| check_a_fifo_is_one_pipe(process, page).map(|fifo| piped + fifo))
         .and_then(|bytes| check_statfs_says_tmp_is_tmpfs(process, page).map(|()| bytes))
         .and_then(|bytes| check_truncate_and_fallocate_grow(process, page).map(|()| bytes))
@@ -1121,6 +1122,132 @@ fn check_a_pipe_keeps_what_a_bad_buffer_missed(
         fd::sys_close(process, writer),
         0,
         "a pipe's write end would not close",
+    )
+}
+
+/// How much the fill check reads at once: sixteen pages, as a program
+/// reading /dev/zero in 64 KiB blocks does.
+const FILL: u64 = 16 * PAGE_SIZE;
+
+/// A read of a pipe or a memory device takes all they have, as Linux's does,
+/// rather than one page and then a stop -- measured on a 7.0 host: `readv`
+/// of a pipe holding six bytes into two segments of four is 6, `read` of
+/// 65536 from a pipe holding 8292 bytes written in three pieces is 8292, and
+/// from /dev/zero `readv` into two segments of eight is 16 and `read` and
+/// `pread` of 65536 are 65536. The pipe is a blocking one with its writer
+/// open, so a read that waited for more rather than returning what was
+/// there would hang the boot here.
+fn check_a_stream_read_takes_all_there_is(
+    process: &Process,
+    page: u64,
+) -> Result<(), &'static str> {
+    let region = memory::sys_mmap(
+        process,
+        &MmapRequest {
+            addr: 0,
+            len: FILL + PAGE_SIZE,
+            prot: PROT_READ | PROT_WRITE,
+            flags: MAP_ANONYMOUS | MAP_PRIVATE,
+            fd: -1,
+            offset: 0,
+            unit: OffsetUnit::Bytes,
+        },
+    )
+    .map_err(|_| "no memory for the stream fill check")?;
+    let region = u64::try_from(region).map_err(|_| "mmap returned an impossible address")?;
+    let outcome = fill_from_a_pipe(process, page, region)
+        .and_then(|()| fill_from_zero(process, page, region));
+    let _ = memory::sys_munmap(process, region, FILL + PAGE_SIZE);
+    outcome
+}
+
+/// The pipe half of [`check_a_stream_read_takes_all_there_is`].
+fn fill_from_a_pipe(process: &Process, page: u64, region: u64) -> Result<(), &'static str> {
+    answers(
+        pipe::sys_pipe2(process, page + AT_FDS, 0),
+        0,
+        "pipe2 was refused",
+    )?;
+    let (reader, writer) = pair(process, page)?;
+    answers(
+        file::sys_write(process, writer, page + AT_DATA, 6),
+        6,
+        "a write into a pipe came back short",
+    )?;
+    put_iovecs(process, page, &[page + AT_BACK, 4, page + AT_BACK + 4, 4])?;
+    answers(
+        file::sys_readv(process, reader, page + AT_IOVEC, 2),
+        6,
+        "readv of a pipe holding six bytes into two segments of four did not take all six",
+    )?;
+    if read_back(process, page + AT_BACK, 6)? != DATA.get(..6).unwrap_or_default() {
+        return Err("readv of a pipe gave back different bytes than were written");
+    }
+    for piece in [PAGE_SIZE, PAGE_SIZE, 100] {
+        answers(
+            file::sys_write(process, writer, region, piece),
+            usize::try_from(piece).unwrap_or(0),
+            "a write into a pipe came back short",
+        )?;
+    }
+    answers(
+        file::sys_read(process, reader, region, FILL),
+        usize::try_from(2 * PAGE_SIZE + 100).unwrap_or(0),
+        "a read of a pipe holding more than a page stopped at the first page",
+    )?;
+    answers(
+        fd::sys_close(process, reader),
+        0,
+        "a pipe's read end would not close",
+    )?;
+    answers(
+        fd::sys_close(process, writer),
+        0,
+        "a pipe's write end would not close",
+    )
+}
+
+/// The /dev/zero half of [`check_a_stream_read_takes_all_there_is`]. Its
+/// path is staged past the buffer, in the region's last page.
+fn fill_from_zero(process: &Process, page: u64, region: u64) -> Result<(), &'static str> {
+    let path = region + FILL;
+    uaccess::copy_to_user(process.space(), path, b"/dev/zero\0")
+        .map_err(|_| "could not stage /dev/zero's path")?;
+    uaccess::copy_to_user(process.space(), region, &vec![0xA5; FILL as usize])
+        .map_err(|_| "could not stage a buffer for zeros")?;
+    let zero = descriptor(
+        by_number(
+            process,
+            Syscall::Openat,
+            [CWD, path, u64::from(O_RDONLY), 0, 0, 0],
+        ),
+        "/dev/zero would not open",
+    )?;
+    let filled = file::sys_read(process, zero, region, FILL);
+    let clean = read_back(process, region, FILL as usize)?
+        .iter()
+        .all(|&b| b == 0);
+    let positioned = file::sys_pread64(process, zero, region, FILL, 1000);
+    put_iovecs(process, page, &[page + AT_BACK, 8, page + AT_BACK + 8, 8])?;
+    let vectored = file::sys_readv(process, zero, page + AT_IOVEC, 2);
+    answers(fd::sys_close(process, zero), 0, "/dev/zero would not close")?;
+    answers(
+        filled,
+        FILL as usize,
+        "a read of 64 KiB from /dev/zero was not filled",
+    )?;
+    if !clean {
+        return Err("a read of 64 KiB from /dev/zero left something other than zeros");
+    }
+    answers(
+        positioned,
+        FILL as usize,
+        "a pread of 64 KiB from /dev/zero was not filled",
+    )?;
+    answers(
+        vectored,
+        16,
+        "readv of /dev/zero into two segments of eight did not fill both",
     )
 }
 

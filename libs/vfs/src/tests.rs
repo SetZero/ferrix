@@ -1641,6 +1641,89 @@ fn a_stream_whose_seek_does_nothing_seeks_to_zero_and_refuses_offsets() {
     assert!(!crate::Inode::seek_is_noop(&Recorder::default()));
 }
 
+/// A stream that fills reads, as a pipe does, holding `left` bytes: a read
+/// that would wait counts itself and is refused as a blocking pipe's would
+/// hang.
+#[derive(Debug)]
+struct Tap {
+    left: AtomicUsize,
+    waits: AtomicUsize,
+}
+
+impl crate::Inode for Tap {
+    fn metadata(&self) -> crate::Metadata {
+        stream_metadata()
+    }
+    fn into_any(self: Arc<Self>) -> Arc<dyn core::any::Any + Send + Sync> {
+        self
+    }
+    fn is_stream(&self) -> bool {
+        true
+    }
+    fn fills_reads(&self) -> bool {
+        true
+    }
+    fn read_stream(&self, buf: &mut [u8], nonblock: bool) -> Result<usize, Errno> {
+        let left = self.left.load(Ordering::Relaxed);
+        if left == 0 {
+            if nonblock {
+                return Err(Errno::EAGAIN);
+            }
+            let _ = self.waits.fetch_add(1, Ordering::Relaxed);
+            return Err(Errno::EDEADLK);
+        }
+        let count = left.min(buf.len());
+        buf[..count].fill(b't');
+        self.left.store(left - count, Ordering::Relaxed);
+        Ok(count)
+    }
+}
+
+#[test]
+fn a_read_goes_on_only_from_a_stream_that_fills_and_never_waits() {
+    let open = |inode: Arc<dyn crate::Inode>, flags: &OpenFlags| {
+        let at = Location::detached(Arc::new(Pipes), inode, b"s", Arc::new(SpinParker));
+        OpenFile::new(at, flags).unwrap()
+    };
+    let tap = Arc::new(Tap {
+        left: AtomicUsize::new(6),
+        waits: AtomicUsize::new(0),
+    });
+    let file = open(Arc::clone(&tap) as Arc<dyn crate::Inode>, &READ);
+    let mut buf = [0_u8; 4];
+    assert_eq!(file.read(&mut buf), Ok(4));
+    assert_eq!(file.read_more(&mut buf), Ok(2), "what is there is taken");
+    assert_eq!(file.read_more(&mut buf), Ok(0), "an empty stream ends it");
+    assert_eq!(
+        tap.waits.load(Ordering::Relaxed),
+        0,
+        "and is never waited on"
+    );
+
+    // A stream of records is not read on, and not even asked: a second
+    // read of an eventfd would take its next count.
+    let counter = open(Arc::new(Counter), &READ);
+    assert_eq!(counter.read_more(&mut buf), Ok(0));
+    assert_eq!(open(Arc::new(Zeros), &READ).read_more(&mut buf), Ok(0));
+
+    // And a file not open for reading is refused as a read is.
+    let write_only = OpenFlags {
+        read: false,
+        ..READ_WRITE
+    };
+    assert_eq!(
+        open(
+            Arc::new(Tap {
+                left: AtomicUsize::new(1),
+                waits: AtomicUsize::new(0),
+            }),
+            &write_only
+        )
+        .read_more(&mut buf),
+        Err(Errno::EBADF)
+    );
+}
+
 #[test]
 fn a_detached_location_opens_and_names_itself_without_a_tree() {
     let (ns, ctx) = fresh();

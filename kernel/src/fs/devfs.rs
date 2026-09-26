@@ -112,7 +112,9 @@
 //!   and `pread64` and `pwrite64` are a plain read and write. Measured on a
 //!   Linux 7.0 host: `SEEK_SET` 100, `SEEK_CUR` -5, `SEEK_END` 10, a
 //!   negative `SEEK_SET`, `SEEK_DATA` and `SEEK_HOLE` all answer 0, and a
-//!   `pread` at 1000 reads.
+//!   `pread` at 1000 reads. They also [fill reads](Inode::fills_reads): a
+//!   `read` of 65536 from `zero` or `urandom` is 65536 there, and `readv`
+//!   of `zero` into two segments of eight is 16.
 //! - The terminals -- `tty`, `console`, `ptmx` and what it opens, the
 //!   `pts` slaves -- are `ESPIPE`, as they are on Linux.
 
@@ -826,6 +828,13 @@ impl Inode for Node {
                 Behaviour::Null | Behaviour::Zero | Behaviour::Full | Behaviour::Random
             )
         })
+    }
+
+    /// The memory devices fill a read whatever its length, as Linux's
+    /// `read_iter_zero` and `urandom_read_iter` do; see the module's
+    /// documentation.
+    fn fills_reads(&self) -> bool {
+        self.ignores_position()
     }
 
     /// Disks are registered and dropped without the VFS being told, so a miss

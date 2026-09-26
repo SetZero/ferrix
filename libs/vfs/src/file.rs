@@ -332,6 +332,28 @@ impl OpenFile {
         Ok(count)
     }
 
+    /// Go on with a read of a stream that has already taken bytes, as one
+    /// Linux read would: what the stream has now, never waiting for more.
+    /// `Ok(0)` where the read ends here -- a stream that does not
+    /// [fill reads](Inode::fills_reads), one with nothing more yet, or end
+    /// of file -- and for anything that is not a stream, whose reads the
+    /// caller goes on with by offset.
+    ///
+    /// # Errors
+    ///
+    /// What the stream answers but `EAGAIN`; the caller has bytes to report
+    /// and reports them instead.
+    pub fn read_more(&self, buf: &mut [u8]) -> Result<usize> {
+        self.check_io(self.read)?;
+        if !self.io.is_stream() || !self.io.fills_reads() {
+            return Ok(0);
+        }
+        match self.io.read_stream(buf, true) {
+            Err(Errno::EAGAIN) => Ok(0),
+            other => other,
+        }
+    }
+
     /// `pread64`: at `offset`, leaving the file position alone.
     ///
     /// # Errors

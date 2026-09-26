@@ -288,6 +288,12 @@ impl Inode for End {
         }
     }
 
+    /// A read takes everything the pipe has, as Linux's `pipe_read` does,
+    /// not one page of it; see [`Inode::fills_reads`].
+    fn fills_reads(&self) -> bool {
+        true
+    }
+
     /// Put back bytes a read took and could not copy out to the reader, as
     /// Linux leaves them in the pipe: a `read` or `readv` into a bad buffer
     /// is `EFAULT` and the pipe still holds everything it held. Another
