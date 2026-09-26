@@ -452,6 +452,7 @@ extern "C" fn secondary_start(record: u64) -> ! {
     // exception masked.
     unsafe { super::trap::init() };
     super::gic::init_this_cpu();
+    cpu::allow_user_counter();
     crate::smp::install_secondary_record(record);
     // The boot core's side-channel defences, before this one can run a
     // program: after the record, which is where it says what it applied.
