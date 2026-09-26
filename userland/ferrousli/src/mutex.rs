@@ -73,45 +73,56 @@ const PRIO_INHERIT_PROTOCOL: c_int = 1;
 /// `PTHREAD_PRIO_PROTECT`.
 const PRIO_PROTECT: c_int = 2;
 
-/// `pthread_mutex_t`, in musl's layout: 40 bytes, or 24 on a 32-bit target,
-/// where musl puts the two list pointers before the count.
+/// `pthread_mutex_t`, in glibc's layout: 40 bytes, or 24 on a 32-bit target.
+///
+/// What a program sees of a mutex is its size and the bytes its static
+/// initialiser writes, so the layout that matters is the one a program
+/// built against glibc brings: `PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP` puts
+/// the kind at glibc's `__kind`, 16 bytes in on a 64-bit target and 12 on a
+/// 32-bit one, and a C library that looks for it elsewhere takes the mutex
+/// for a normal one. LLVM initialises its mutexes so, and `rustc` hung on
+/// its first recursive lock when this was musl's layout, which keeps the
+/// kind first. Every other field is this library's own to use as it likes,
+/// since a program touches a mutex only through these functions; they sit
+/// where glibc's fields of the same purpose do.
 #[repr(C)]
 #[derive(Debug)]
 pub struct Mutex {
-    /// `_m_type`: the kind word.
-    pub kind: AtomicI32,
-    /// `_m_lock`: the lock word.
+    /// glibc's `__lock`: the lock word.
     pub lock: AtomicI32,
-    /// `_m_waiters`: threads sleeping, or about to.
+    /// glibc's `__count`: extra holds of a recursive mutex; -1 briefly after
+    /// the kernel handed over a priority-inheriting one.
+    pub count: AtomicI32,
+    /// glibc's `__owner` on a 64-bit target: unused here, the owner being in
+    /// the lock word. On a 32-bit one, where glibc's `__kind` follows its
+    /// `__owner` directly, this holds the waiters instead.
+    #[cfg(target_pointer_width = "64")]
+    spare: AtomicI32,
+    /// Threads sleeping, or about to: glibc's `__nusers` on a 64-bit target,
+    /// its `__owner` on a 32-bit one.
     pub waiters: AtomicI32,
-    /// Unused by this layout.
+    /// glibc's `__kind`: the kind word.
+    pub kind: AtomicI32,
+    /// glibc's `__spins` and `__elision`: unused.
     #[cfg(target_pointer_width = "64")]
-    spare: [AtomicI32; 2],
-    /// `_m_count`: extra holds of a recursive mutex; -1 briefly after the
-    /// kernel handed over a priority-inheriting one.
-    #[cfg(target_pointer_width = "64")]
-    pub count: AtomicI32,
-    /// `_m_prev`: the previous entry's `next` field, or the list head.
+    spins: AtomicI32,
+    /// The previous entry's `next` field, or the list head: glibc's
+    /// `__list.__prev`, or its `__nusers` on a 32-bit target.
     pub prev: AtomicPtr<c_void>,
-    /// `_m_next`: the next entry's `next` field, or the list head. This is
-    /// the kernel's `struct robust_list`.
+    /// The next entry's `next` field, or the list head. This is the
+    /// kernel's `struct robust_list`, where glibc's `__list.__next` is.
     pub next: AtomicPtr<c_void>,
-    /// `_m_count`, after the pointers on a 32-bit target.
-    #[cfg(target_pointer_width = "32")]
-    pub count: AtomicI32,
 }
 
 #[cfg(target_pointer_width = "64")]
-const _: () = assert!(size_of::<Mutex>() == 40);
+const _: () = assert!(size_of::<Mutex>() == 40 && offset_of!(Mutex, kind) == 16);
 #[cfg(target_pointer_width = "32")]
-const _: () = assert!(size_of::<Mutex>() == 24);
-const _: () = assert!(offset_of!(Mutex, count) == 20);
+const _: () = assert!(size_of::<Mutex>() == 24 && offset_of!(Mutex, kind) == 12);
+const _: () = assert!(offset_of!(Mutex, lock) == 0 && offset_of!(Mutex, count) == 4);
 #[cfg(target_pointer_width = "64")]
-const _: () = assert!(offset_of!(Mutex, prev) == 24);
+const _: () = assert!(offset_of!(Mutex, prev) == 24 && offset_of!(Mutex, next) == 32);
 #[cfg(target_pointer_width = "32")]
-const _: () = assert!(offset_of!(Mutex, prev) == 12);
-#[cfg(target_pointer_width = "64")]
-const _: () = assert!(offset_of!(Mutex, next) == 32);
+const _: () = assert!(offset_of!(Mutex, prev) == 16 && offset_of!(Mutex, next) == 20);
 
 /// The distance from a mutex's `next` field to its lock word, which the
 /// kernel's robust list handling is told.
@@ -121,12 +132,14 @@ impl Mutex {
     /// An unlocked mutex of `kind`.
     pub const fn new(kind: c_int) -> Self {
         Self {
-            kind: AtomicI32::new(kind),
             lock: AtomicI32::new(0),
-            waiters: AtomicI32::new(0),
-            #[cfg(target_pointer_width = "64")]
-            spare: [const { AtomicI32::new(0) }; 2],
             count: AtomicI32::new(0),
+            #[cfg(target_pointer_width = "64")]
+            spare: AtomicI32::new(0),
+            waiters: AtomicI32::new(0),
+            kind: AtomicI32::new(kind),
+            #[cfg(target_pointer_width = "64")]
+            spins: AtomicI32::new(0),
             prev: AtomicPtr::new(null_mut()),
             next: AtomicPtr::new(null_mut()),
         }
@@ -846,9 +859,10 @@ mod tests {
         // SAFETY: as above.
         let ret = unsafe { pthread_mutexattr_setprotocol(&raw mut attr, PRIO_PROTECT) };
         assert_eq!(ret, errno::ENOTSUP);
+        // glibc's: its `__lock` less its `__list.__next`.
         #[cfg(target_pointer_width = "64")]
-        assert_eq!(ROBUST_OFFSET, -28);
+        assert_eq!(ROBUST_OFFSET, -32);
         #[cfg(target_pointer_width = "32")]
-        assert_eq!(ROBUST_OFFSET, -12);
+        assert_eq!(ROBUST_OFFSET, -20);
     }
 }
