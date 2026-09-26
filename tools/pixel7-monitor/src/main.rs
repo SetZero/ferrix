@@ -44,8 +44,14 @@ fn start_helper(app: State<'_, App>, image: Option<String>) -> Result<(), String
 }
 
 #[tauri::command]
-fn vm_start(handle: AppHandle, app: State<'_, App>, cpus: u32, memory: u32) -> Result<(), String> {
-    vm::start(handle, app.guest.clone(), cpus.clamp(1, 8), memory.clamp(256, 6144))
+fn vm_start(
+    handle: AppHandle,
+    app: State<'_, App>,
+    cpus: u32,
+    memory: u32,
+    stats: Option<u32>,
+) -> Result<(), String> {
+    vm::start(handle, app.guest.clone(), cpus.clamp(1, 8), memory.clamp(256, 6144), stats)
 }
 
 #[tauri::command]

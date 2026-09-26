@@ -40,7 +40,14 @@ class LineChart {
       for (const s of series) for (const [t, v] of s.points) if (t >= start && v > max) max = v;
       max = niceCeiling(max || 1);
     }
-    const min = this.min;
+    // A floor of `null` follows the data down, for a value that can go
+    // negative, such as a battery's draw while it charges.
+    let min = this.min;
+    if (min === null) {
+      min = 0;
+      for (const s of series) for (const [t, v] of s.points) if (t >= start && v < min) min = v;
+      if (min < 0) min = -niceCeiling(-min);
+    }
     const x = (t) => left + ((t - start) / this.span) * plotW;
     const y = (v) => top + plotH - ((v - min) / (max - min || 1)) * plotH;
 

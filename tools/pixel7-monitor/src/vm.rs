@@ -39,15 +39,32 @@ fn now() -> f64 {
 /// Start a guest with `cpus` vCPUs and `memory` MiB. Its lines go to the
 /// window as `vm-line`, and its end as `vm-ended`, with the console kept as a
 /// run record.
-pub fn start(app: AppHandle, running: Arc<Mutex<Option<Child>>>, cpus: u32, memory: u32) -> Result<(), String> {
+///
+/// With `stats`, the guest's pid 1 is Ferrix's stat service,
+/// `/sbin/ferrix-statd`, for that many seconds, 0 for until stopped: crosvm's
+/// `-p` puts the options in the guest's `bootargs`, and the loader hands
+/// every `ferrix.*` one to the kernel.
+pub fn start(
+    app: AppHandle,
+    running: Arc<Mutex<Option<Child>>>,
+    cpus: u32,
+    memory: u32,
+    stats: Option<u32>,
+) -> Result<(), String> {
     let mut slot = running.lock().map_err(|_| "poisoned")?;
     if slot.is_some() {
         return Err("a guest is already running".into());
     }
     let command = format!(
         "cd {VM_DIR} && [ -f ferrix.Image ] || {{ echo 'FERRIX-VM no image in {VM_DIR}: plug the phone in with the helper running'; exit 3; }}; \
-         rm -f crosvm.sock; exec {CROSVM} run --disable-sandbox -m {memory} --cpus {cpus} \
-         -s {VM_DIR}/crosvm.sock --serial type=stdout,num=1 ferrix.Image 2>/dev/null"
+         rm -f crosvm.sock; exec {CROSVM} run --disable-sandbox -m {memory} --cpus {cpus} {params}\
+         -s {VM_DIR}/crosvm.sock --serial type=stdout,num=1 ferrix.Image 2>/dev/null",
+        params = match stats {
+            Some(seconds) => format!(
+                "-p ferrix.init=/sbin/ferrix-statd -p ferrix.statd.seconds={seconds} "
+            ),
+            None => String::new(),
+        }
     );
     let mut child = Command::new("adb")
         .arg("-s")

@@ -19,6 +19,110 @@ let vmStarted = 0;
 let lastHelperRun = null;
 let selectedRun = null;
 
+// ---------------------------------------------------------- Ferrix's stats
+
+// What `ferrix-statd` prints inside Ferrix: one `FERRIX-STAT {json}` line a
+// sample, `t` being Ferrix's uptime. Kept per run: a new START begins again.
+const ferrix = { start: null, samples: [], end: null };
+
+function isStatLine(line) {
+  return line.startsWith("FERRIX-STAT");
+}
+
+function takeStatLine(line, live) {
+  const space = line.indexOf(" ");
+  if (space < 0) return;
+  let value;
+  try {
+    value = JSON.parse(line.slice(space + 1));
+  } catch {
+    return;
+  }
+  const tag = line.slice(0, space);
+  if (tag === "FERRIX-STAT-START") {
+    ferrix.start = value;
+    ferrix.samples = [];
+    ferrix.end = null;
+    if (live) showTab("ferrix");
+  } else if (tag === "FERRIX-STAT") {
+    ferrix.samples.push(value);
+    if (ferrix.samples.length > 20000) ferrix.samples.shift();
+  } else if (tag === "FERRIX-STAT-END") {
+    ferrix.end = value;
+  }
+  $("ferrix-badge").textContent = ferrix.samples.length ? `● ${ferrix.samples.length}` : "";
+}
+
+const ferrixCharts = {
+  cpu: new LineChart($("chart-f-cpu"), { max: 100, unit: "%" }),
+  mem: new LineChart($("chart-f-mem"), { unit: " MiB" }),
+  rate: new LineChart($("chart-f-rate"), { unit: "" }),
+  tasks: new LineChart($("chart-f-tasks"), { unit: "" }),
+};
+
+function ferrixSeries(pick, label, color) {
+  const points = [];
+  for (const s of ferrix.samples) {
+    const v = pick(s);
+    if (v !== null && v !== undefined && !Number.isNaN(v)) points.push([s.t, v]);
+  }
+  return { label, color, points };
+}
+
+function drawFerrix() {
+  const samples = ferrix.samples;
+  if (!samples.length) return;
+  const first = samples[0].t;
+  const last = samples[samples.length - 1].t;
+  // The whole run, however long, and a minute at least.
+  const span = Math.max(60, last - first + 1);
+  for (const chart of Object.values(ferrixCharts)) chart.span = span;
+  const cores = samples[samples.length - 1].cpu.length;
+  ferrixCharts.cpu.draw([
+    ferrixSeries((s) => s.all, "all", COLORS[0]),
+    ...Array.from({ length: cores }, (_, i) =>
+      ferrixSeries((s) => s.cpu[i], `cpu${i}`, COLORS[(i + 1) % COLORS.length])),
+  ], last);
+  ferrixCharts.mem.draw([
+    ferrixSeries((s) => (s.mem.total - s.mem.available) / 1024, "used", COLORS[0]),
+    ferrixSeries((s) => s.mem.cached / 1024, "cached", COLORS[1]),
+  ], last);
+  ferrixCharts.rate.draw([
+    ferrixSeries((s) => s.rate.irq, "interrupts", COLORS[3]),
+    ferrixSeries((s) => s.rate.ctxt, "switches", COLORS[5]),
+  ], last);
+  ferrixCharts.tasks.draw([
+    ferrixSeries((s) => s.tasks.threads, "threads", COLORS[0]),
+    ferrixSeries((s) => s.tasks.processes, "processes", COLORS[2]),
+    ferrixSeries((s) => s.tasks.running, "running", COLORS[4]),
+  ], last);
+
+  const now = samples[samples.length - 1];
+  $("f-cpu-now").textContent = `${now.all.toFixed(1)}% of ${cores} · at ${now.t.toFixed(1)} s`;
+  $("f-mem-now").textContent = `${((now.mem.total - now.mem.available) / 1024).toFixed(0)} / ${(now.mem.total / 1024).toFixed(0)} MiB`;
+  $("f-rate-now").textContent = `${now.rate.irq.toFixed(0)} irq · ${now.rate.ctxt.toFixed(0)} ctxt`;
+  $("f-tasks-now").textContent = `${now.tasks.processes} processes · ${now.tasks.threads} threads`;
+  $("f-top-when").textContent = ferrix.end ? `ended after ${ferrix.end.seconds} s` : `at ${now.t.toFixed(1)} s`;
+  const rows = [`<div class="row head"><span>pid</span><span>command</span><span>CPU</span><span>RSS</span></div>`];
+  for (const task of now.top) {
+    rows.push(`<div class="row"><span>${task.pid}</span><span></span><span>${task.cpu.toFixed(1)}%</span><span>${(task.rss_kib / 1024).toFixed(1)} MiB</span></div>`);
+  }
+  $("f-top").innerHTML = rows.join("");
+  now.top.forEach((task, i) => {
+    $("f-top").children[i + 1].children[1].textContent = `${task.comm}${task.threads > 1 ? ` (${task.threads})` : ""}`;
+  });
+}
+
+function showTab(name) {
+  document.querySelectorAll(".tab").forEach((tab) => tab.classList.toggle("selected", tab.dataset.tab === name));
+  $("tab-phone").classList.toggle("hidden", name !== "phone");
+  $("tab-ferrix").classList.toggle("hidden", name !== "ferrix");
+  drawCharts();
+  drawFerrix();
+}
+
+document.querySelectorAll(".tab").forEach((tab) => (tab.onclick = () => showTab(tab.dataset.tab)));
+
 // ------------------------------------------------------------------ charts
 
 const charts = {
@@ -27,7 +131,7 @@ const charts = {
   mem: new LineChart($("chart-mem"), { unit: " GiB", decimals: 1 }),
   temp: new LineChart($("chart-temp"), { min: 20, unit: "°", decimals: 1 }),
   gpu: new LineChart($("chart-gpu"), { unit: " MHz" }),
-  bat: new LineChart($("chart-bat"), { unit: " mA" }),
+  bat: new LineChart($("chart-bat"), { min: null, unit: " mA" }),
   vm: new LineChart($("chart-vm"), { unit: "%" }),
 };
 
@@ -236,13 +340,22 @@ function nearEnd(pre) {
   return pre.scrollHeight - pre.scrollTop - pre.clientHeight <= lineHeight * FOLLOW_LINES;
 }
 
+function shown(line, filter) {
+  if (isStatLine(line) && !$("show-stats").checked) return false;
+  return !filter || line.toLowerCase().includes(filter);
+}
+
 function appendLine(line, t = null) {
   consoleLines.push(line);
+  if (isStatLine(line)) {
+    takeStatLine(line, true);
+    drawFerrix();
+  }
   trackStages(line, t);
   const pre = $("console");
   const follow = nearEnd(pre);
   const filter = $("filter").value.trim().toLowerCase();
-  if (!filter || line.toLowerCase().includes(filter)) pre.appendChild(renderLine(line, filter));
+  if (shown(line, filter)) pre.appendChild(renderLine(line, filter));
   $("lines").textContent = `${consoleLines.length} lines`;
   if (follow) pre.scrollTop = pre.scrollHeight;
 }
@@ -270,7 +383,7 @@ function rerender() {
   pre.textContent = "";
   const fragment = document.createDocumentFragment();
   for (const line of consoleLines) {
-    if (!filter || line.toLowerCase().includes(filter)) fragment.appendChild(renderLine(line, filter));
+    if (shown(line, filter)) fragment.appendChild(renderLine(line, filter));
   }
   pre.appendChild(fragment);
   pre.scrollTop = pre.scrollHeight;
@@ -288,13 +401,26 @@ async function loadRun(path, label) {
     const text = await invoke("read_run", { path });
     clearConsole();
     vmStarted = 0;
+    // A phone record holds ABL's log before the loader's first line, and the
+    // next boot's after Ferrix's last: `[   12.070097] [I] ...` lines.
     const loader = text.indexOf("ferrix-pixel7 loader");
-    const lines = (loader >= 0 ? text.slice(loader) : text).split("\n");
+    let lines = (loader >= 0 ? text.slice(loader) : text).split("\n");
+    const next = lines.findIndex((line) => /^\[\s*\d+\.\d+\] \[[IWE]\]/.test(line));
+    if (next > 0) lines = lines.slice(0, next);
+    ferrix.samples = [];
+    ferrix.start = null;
+    ferrix.end = null;
     for (const line of lines) {
       consoleLines.push(line);
+      if (isStatLine(line)) takeStatLine(line, false);
       trackStages(line, null);
     }
     rerender();
+    $("lines").textContent = `${consoleLines.length} lines`;
+    if (ferrix.samples.length) {
+      showTab("ferrix");
+      drawFerrix();
+    }
     setSource(label);
     if (!$("result").textContent) showResult("bad", "no FERRIX-BOOT-OK or FERRIX-PANIC in the record");
   } catch (error) {
@@ -359,10 +485,17 @@ $("vm-run").onclick = async () => {
   vmRunning = true;
   vmPaused = false;
   setVmButtons();
-  setSource(`VM · ${$("cpus").value} vCPUs · ${Number($("memory").value) / 1024} GiB`);
+  setSource(`VM · ${$("cpus").value} vCPUs · ${Number($("memory").value) / 1024} GiB${$("stats").value !== "" ? " · ferrix-statd" : ""}`);
+  ferrix.samples = [];
+  $("ferrix-badge").textContent = "";
   showResult("busy", "Starting the guest…");
   try {
-    await invoke("vm_start", { cpus: Number($("cpus").value), memory: Number($("memory").value) });
+    const stats = $("stats").value;
+    await invoke("vm_start", {
+      cpus: Number($("cpus").value),
+      memory: Number($("memory").value),
+      stats: stats === "" ? null : Number(stats),
+    });
   } catch (error) {
     vmRunning = false;
     setVmButtons();
@@ -390,6 +523,7 @@ function setVmButtons() {
 }
 
 $("filter").oninput = rerender;
+$("show-stats").onchange = rerender;
 $("to-end").onclick = () => { const pre = $("console"); pre.scrollTop = pre.scrollHeight; };
 $("runs-refresh").onclick = refreshRuns;
 
@@ -414,6 +548,6 @@ listen("vm-ended", (event) => {
   refreshRuns();
 });
 
-window.addEventListener("resize", drawCharts);
+window.addEventListener("resize", () => { drawCharts(); drawFerrix(); });
 resetBoot();
 refreshRuns();
