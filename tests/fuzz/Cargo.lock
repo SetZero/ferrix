@@ -50,6 +50,10 @@ name = "ferrix-argon2"
 version = "0.1.0"
 
 [[package]]
+name = "ferrix-auth-proto"
+version = "0.1.0"
+
+[[package]]
 name = "ferrix-blkring"
 version = "0.1.0"
 dependencies = [
@@ -108,6 +112,7 @@ dependencies = [
  "compositor-wire",
  "ferrix-acpi",
  "ferrix-argon2",
+ "ferrix-auth-proto",
  "ferrix-blkring",
  "ferrix-block",
  "ferrix-btrfs",

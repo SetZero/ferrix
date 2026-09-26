@@ -35,6 +35,10 @@ name = "ferrix-argon2"
 version = "0.1.0"
 
 [[package]]
+name = "ferrix-auth-proto"
+version = "0.1.0"
+
+[[package]]
 name = "ferrix-blk"
 version = "0.1.0"
 dependencies = [

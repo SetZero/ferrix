@@ -12,6 +12,7 @@ members = [
     "libs/drivers/blkserve",
     "libs/proto/devmgr-proto",
     "libs/init/svc-proto",
+    "libs/proto/auth-proto",
     "libs/proto/displayctl",
     "libs/proto/renderctl",
     "libs/proto/inputctl",
@@ -118,6 +119,7 @@ ferrix-blkring = { path = "libs/proto/blkring" }
 ferrix-blkserve = { path = "libs/drivers/blkserve" }
 ferrix-devmgr-proto = { path = "libs/proto/devmgr-proto" }
 ferrix-svc-proto = { path = "libs/init/svc-proto" }
+ferrix-auth-proto = { path = "libs/proto/auth-proto" }
 ferrix-displayctl = { path = "libs/proto/displayctl" }
 ferrix-renderctl = { path = "libs/proto/renderctl" }
 ferrix-inputctl = { path = "libs/proto/inputctl" }

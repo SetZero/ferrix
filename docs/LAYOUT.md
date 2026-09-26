@@ -49,7 +49,7 @@ kernel or a loader. Each crate sits in exactly one group:
 
 | Group | Holds | Crates |
 |---|---|---|
-| `libs/proto/` | The interfaces between components: the ABIs the kernel offers, the rings and control protocols it shares with ring-3 drivers, the loader hand-off | `linux-abi` `native-abi` `native` `bootinfo` `devmgr-proto` `blkring` `netring` `displayctl` `renderctl` `inputctl` `sndctl` `logctl` |
+| `libs/proto/` | The interfaces between components: the ABIs the kernel offers, the rings and control protocols it shares with ring-3 drivers, the loader hand-off | `linux-abi` `native-abi` `native` `bootinfo` `devmgr-proto` `blkring` `netring` `displayctl` `renderctl` `inputctl` `sndctl` `logctl` `auth-proto` |
 | `libs/kernel/` | Kernel-internal cores: memory, scheduling, synchronisation, objects, randomness, the process stack image, the vDSO, the panic screen | `frame` `heap` `kmem` `paging` `vma` `sched` `sync` `objects` `fallible` `crng` `ustack` `vdso` `qr` `fbtext` |
 | `libs/platform/` | Parsers for what firmware and the boot medium hand over | `acpi` `fdt` `pci` `elf` |
 | `libs/fs/` | Storage and filesystems, including the text of the pseudo-filesystems | `vfs` `block` `btrfs` `btrfs-vfs` `btrfs-write` `cpio` `procfs` `sysfs` `cgroupfs` |
