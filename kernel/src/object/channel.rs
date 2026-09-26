@@ -1,12 +1,29 @@
 //! Channels: two endpoints, each reading what the other writes.
 //!
-//! Each endpoint owns the queue of messages written *to* it, and knows its
-//! peer only weakly. The weak link is what makes closing work without a
-//! separate state: when the last handle to an endpoint goes, its reference
-//! count reaches zero, its peer's link stops upgrading, and the peer sees
-//! `PEER_CLOSED` from that moment. An endpoint travelling in a message is
-//! still held, and still open, which is the right answer — it has an owner,
-//! who simply has not read it yet.
+//! A channel's state -- each end's queue of messages written *to* it, its
+//! waiters, its port registrations and whether it is closed -- lives in one
+//! `Channel` both ends share, and an [`Endpoint`] is a handle's view of one
+//! side of it. An end is open exactly while its `Endpoint` is alive: while a
+//! handle, a message in flight, or a call its own holder is making holds it.
+//! An endpoint travelling in a message is still open, which is the right
+//! answer -- it has an owner, who simply has not read it yet. The last of
+//! those going marks its side closed, and the peer sees `PEER_CLOSED` from
+//! that moment.
+//!
+//! # Nothing on one side holds the other
+//!
+//! An end reaches its peer's queue, waiters and registrations through the
+//! channel, never through the peer's `Endpoint`, so nothing done on one end
+//! -- a write, a look at its signals, a read that makes room -- holds the
+//! other open. Before, each end knew its peer by a weak link it upgraded for
+//! every such look, and the upgrade kept the peer alive until it was let go:
+//! a write held the end it wrote to until it had woken that end's reader, so
+//! a driver woken by the kernel's READY could read it and close its handle
+//! while the kernel's write, preempted or on a processor the host was not
+//! running, still held the driver's end. A quiesce made the instant the
+//! driver's handle closed saw its channel still open and refused the device
+//! as served (FX-1004). "Open" now means held by an owner, and only an
+//! owner's handles hold it.
 //!
 //! # A write is all or nothing
 //!
@@ -18,17 +35,25 @@
 //! the other way round: a read releases its own queue before it touches the
 //! reader's table.
 //!
+//! A side is marked closed under its queue lock, as its queue is emptied, and
+//! a write looks at the mark under the same lock: a message either lands
+//! before the close and is freed with the rest, or is refused as written to a
+//! closed peer. None is left in a closed side's queue.
+//!
 //! # No cycles
 //!
 //! Two endpoints each queued in the other's inbox would keep each other alive
 //! after every handle to both is closed, with everything they hold. So a
 //! send carrying an endpoint is refused if it would close such a loop:
 //! [`check_carry`] walks from what the message carries, through the endpoints
-//! queued in each, looking for the end it is about to land in.
+//! queued in each, looking for the end it is about to land in. The shared
+//! `Channel` adds no edge: what a side's queue holds is freed when that
+//! side's `Endpoint` goes, whichever end still holds the channel.
 
 use alloc::collections::BTreeSet;
-use alloc::sync::{Arc, Weak};
+use alloc::sync::Arc;
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use crate::sync::SpinLock;
 use ferrix_native_abi::signals::Signals;
@@ -98,47 +123,121 @@ pub(crate) enum ReadError {
     },
 }
 
-/// One end of a channel.
+/// Which of a channel's two sides an [`Endpoint`] is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Side {
+    /// The first end [`Endpoint::pair`] returns.
+    First,
+    /// The second.
+    Second,
+}
+
+impl Side {
+    /// The other side.
+    fn other(self) -> Side {
+        match self {
+            Side::First => Side::Second,
+            Side::Second => Side::First,
+        }
+    }
+}
+
+/// One side of a channel: what is written to it, and who waits on it.
 #[derive(Debug)]
-pub(crate) struct Endpoint {
-    /// The other end. Weak, so that closing one end is its count reaching zero.
-    peer: Weak<Endpoint>,
-    /// Messages written by the peer, waiting for this end to read them.
+struct Half {
+    /// Messages written by the other side, waiting for this one to read them.
     inbox: SpinLock<MessageQueue<Transfer>>,
-    /// Woken when this end's signals may have changed: a message arrived, the
-    /// peer's queue gained room, or the peer closed.
+    /// Woken when this side's signals may have changed: a message arrived, the
+    /// other side's queue gained room, or the other side closed.
     waiters: WaitQueue,
-    /// Port registrations waiting on this end's signals. Taken only inside
+    /// Port registrations waiting on this side's signals. Taken only inside
     /// `inbox`'s lock, which is what serialises a registration against the
     /// change it waits for.
     observers: SpinLock<Vec<Observer>>,
+    /// Whether this side's [`Endpoint`] has gone. Set once, under `inbox`'s
+    /// lock as the queue is emptied, and never cleared.
+    closed: AtomicBool,
+}
+
+impl Half {
+    /// An open side with nothing queued.
+    fn new() -> Half {
+        Half {
+            inbox: SpinLock::new(MessageQueue::new(LIMITS)),
+            waiters: WaitQueue::new(),
+            observers: SpinLock::new(Vec::new()),
+            closed: AtomicBool::new(false),
+        }
+    }
+
+    /// Whether this side's `Endpoint` has gone.
+    fn is_closed(&self) -> bool {
+        self.closed.load(Ordering::Acquire)
+    }
+}
+
+/// A channel: both sides, held by both ends.
+///
+/// Freed when both ends have gone, and holding nothing by then: each side's
+/// queue was emptied, and its registrations let go, as its end closed.
+#[derive(Debug)]
+struct Channel {
+    /// The first end's side.
+    first: Half,
+    /// The second end's.
+    second: Half,
+}
+
+impl Channel {
+    /// The side `side` names.
+    fn half(&self, side: Side) -> &Half {
+        match side {
+            Side::First => &self.first,
+            Side::Second => &self.second,
+        }
+    }
+}
+
+/// One end of a channel.
+#[derive(Debug)]
+pub(crate) struct Endpoint {
+    /// The channel, shared with the other end.
+    channel: Arc<Channel>,
+    /// Which side of it this end is.
+    side: Side,
 }
 
 impl Endpoint {
     /// A new channel's two ends.
     ///
-    /// `None` only if the allocator's cyclic construction did not run its
-    /// closure, which it always does; the `Option` is the price of not writing
-    /// an `unwrap` in the kernel.
+    /// Always `Some` today: the allocator's failure is fatal (AoU-5). The
+    /// `Option` is where a fallible construction will say no, which is what
+    /// making the paths a program can drive fallible asks of this one (item 2
+    /// of `docs/certification/MEMORY-AND-TIMING.md` §1).
     pub(crate) fn pair() -> Option<(Arc<Endpoint>, Arc<Endpoint>)> {
-        let mut second = None;
-        let first = Arc::new_cyclic(|first| {
-            let other = Arc::new(Endpoint {
-                peer: Weak::clone(first),
-                inbox: SpinLock::new(MessageQueue::new(LIMITS)),
-                waiters: WaitQueue::new(),
-                observers: SpinLock::new(Vec::new()),
-            });
-            let this = Endpoint {
-                peer: Arc::downgrade(&other),
-                inbox: SpinLock::new(MessageQueue::new(LIMITS)),
-                waiters: WaitQueue::new(),
-                observers: SpinLock::new(Vec::new()),
-            };
-            second = Some(other);
-            this
+        let channel = Arc::new(Channel {
+            first: Half::new(),
+            second: Half::new(),
         });
-        second.map(|second| (first, second))
+        let first = Arc::new(Endpoint {
+            channel: Arc::clone(&channel),
+            side: Side::First,
+        });
+        let second = Arc::new(Endpoint {
+            channel,
+            side: Side::Second,
+        });
+        Some((first, second))
+    }
+
+    /// This end's side.
+    fn own(&self) -> &Half {
+        self.channel.half(self.side)
+    }
+
+    /// The other end's side, reached without holding the other end.
+    fn peer(&self) -> &Half {
+        self.channel.half(self.side.other())
     }
 
     /// Queue a message for the peer, taking its handles with `take` only once
@@ -158,9 +257,14 @@ impl Endpoint {
         handle_count: usize,
         take: impl FnOnce() -> Result<Vec<Transfer>, E>,
     ) -> Result<(), WriteFailure<E>> {
-        let peer = self.peer.upgrade().ok_or(WriteFailure::PeerClosed)?;
+        let peer = self.peer();
         let (refused, fired) = {
             let mut inbox = peer.inbox.lock();
+            // Under the lock the close empties the queue under, so nothing
+            // lands in a queue nobody will read.
+            if peer.is_closed() {
+                return Err(WriteFailure::PeerClosed);
+            }
             if !inbox.accepts(bytes.len(), handle_count) {
                 return Err(WriteFailure::TooBig);
             }
@@ -182,7 +286,9 @@ impl Endpoint {
         match refused {
             None => {
                 // After the queue lock is gone: a woken reader goes straight
-                // for it, and a port's wake-up takes locks of its own.
+                // for it, and a port's wake-up takes locks of its own. The
+                // reader may close its end before this returns, and it is
+                // closed when it does: this holds the channel, not that end.
                 for observer in fired {
                     observer.fire(Signals::READABLE);
                 }
@@ -203,9 +309,8 @@ impl Endpoint {
     /// meaningful to an end nobody else writes from, which the answer then
     /// stays true for until it writes: a reader only makes room.
     pub(crate) fn peer_has_room(&self) -> bool {
-        self.peer
-            .upgrade()
-            .is_some_and(|peer| !peer.inbox.lock().is_full())
+        let peer = self.peer();
+        !peer.is_closed() && !peer.inbox.lock().is_full()
     }
 
     /// Take the next message, if it fits.
@@ -228,7 +333,7 @@ impl Endpoint {
         topology_held: bool,
     ) -> Result<ChannelMessage, ReadError> {
         let (taken, was_full) = {
-            let mut inbox = self.inbox.lock();
+            let mut inbox = self.own().inbox.lock();
             let was_full = inbox.is_full();
             // Decided under the same lock as the pop, so the message looked at
             // is the message taken.
@@ -244,12 +349,9 @@ impl Endpoint {
             (inbox.pop_fitting(byte_capacity, handle_capacity), was_full)
         };
         // A reader that makes room in a full queue is what a blocked writer
-        // is waiting for.
-        if was_full
-            && taken.is_ok()
-            && let Some(peer) = self.peer.upgrade()
-        {
-            peer.waiters.wake_all();
+        // is waiting for; a closed peer has nobody waiting.
+        if was_full && taken.is_ok() {
+            self.peer().waiters.wake_all();
         }
         match taken {
             Ok(message) => Ok(message),
@@ -272,13 +374,13 @@ impl Endpoint {
     /// Wakes this end's waiters, because the message is readable again and a
     /// second reader may have gone to sleep while it was out.
     pub(crate) fn unread(&self, message: ChannelMessage) {
-        self.inbox.lock().unpop(message);
-        self.waiters.wake_all();
+        self.own().inbox.lock().unpop(message);
+        self.own().waiters.wake_all();
     }
 
     /// Whether nobody holds the other end.
     pub(crate) fn peer_closed(&self) -> bool {
-        self.peer.strong_count() == 0
+        self.peer().is_closed()
     }
 
     /// Queue a packet with `observer` the next time a message is readable on
@@ -294,7 +396,8 @@ impl Endpoint {
     /// [`PortError::Full`] when this end already holds
     /// [`super::port::MAX_OBSERVERS`] registrations.
     pub(crate) fn observe(&self, observer: Observer) -> Result<(), PortError> {
-        let inbox = self.inbox.lock();
+        let own = self.own();
+        let inbox = own.inbox.lock();
         let mut asserted = Signals::NONE;
         if !inbox.is_empty() {
             asserted = asserted | Signals::READABLE;
@@ -307,27 +410,36 @@ impl Endpoint {
             observer.fire(asserted);
             return Ok(());
         }
-        let registered = register(&mut self.observers.lock(), observer);
+        let registered = register(&mut own.observers.lock(), observer);
         drop(inbox);
         registered
     }
 
     /// The queue woken when this end's signals may have changed.
     pub(crate) fn waiters(&self) -> &WaitQueue {
-        &self.waiters
+        &self.own().waiters
     }
 
     /// What a waiter on this end would see now.
     pub(crate) fn signals(&self) -> Signals {
         let mut signals = Signals::NONE;
-        if !self.inbox.lock().is_empty() {
+        if !self.own().inbox.lock().is_empty() {
             signals = signals | Signals::READABLE;
         }
-        match self.peer.upgrade() {
-            None => signals | Signals::PEER_CLOSED,
-            Some(peer) if !peer.inbox.lock().is_full() => signals | Signals::WRITABLE,
-            Some(_) => signals,
+        let peer = self.peer();
+        if peer.is_closed() {
+            signals | Signals::PEER_CLOSED
+        } else if !peer.inbox.lock().is_full() {
+            signals | Signals::WRITABLE
+        } else {
+            signals
         }
+    }
+
+    /// The identity the cycle walk knows this end by: its side's address,
+    /// which the peer can name too without holding it.
+    fn identity(&self) -> usize {
+        core::ptr::from_ref(self.own()) as usize
     }
 }
 
@@ -342,22 +454,23 @@ impl Endpoint {
 /// it: the answer is only about a graph nothing else is adding edges to.
 pub(crate) fn check_carry(writer: &Endpoint, carried: Vec<Arc<Endpoint>>) -> Reach {
     // A closed peer is no cycle, and the write itself will say it is closed.
-    let Some(peer) = writer.peer.upgrade() else {
+    if writer.peer_closed() {
         return Reach::Clear;
-    };
+    }
     reaches(
         carried,
         identity,
-        identity(&peer),
+        core::ptr::from_ref(writer.peer()) as usize,
         queued_endpoints,
         MAX_WALK,
     )
 }
 
-/// An endpoint's address, which is how the walk tells endpoints apart. Stable
-/// for as long as the walk holds the `Arc`, which it does until it returns.
+/// An endpoint's identity, which is how the walk tells endpoints apart: see
+/// [`Endpoint::identity`]. Stable for as long as the walk holds the `Arc`,
+/// which it does until it returns.
 fn identity(endpoint: &Arc<Endpoint>) -> usize {
-    Arc::as_ptr(endpoint) as usize
+    endpoint.identity()
 }
 
 /// The endpoints queued, unread, in `endpoint`'s inbox: the edges the cycle
@@ -367,7 +480,7 @@ fn identity(endpoint: &Arc<Endpoint>) -> usize {
 /// hold other objects has to be followed here, or it is a way round the check,
 /// and the compiler is what asks the question.
 fn queued_endpoints(endpoint: &Arc<Endpoint>) -> Vec<Arc<Endpoint>> {
-    let inbox = endpoint.inbox.lock();
+    let inbox = endpoint.own().inbox.lock();
     let mut distinct = BTreeSet::new();
     inbox
         .iter()
@@ -389,7 +502,7 @@ fn queued_endpoints(endpoint: &Arc<Endpoint>) -> Vec<Arc<Endpoint>> {
         // cloning sixteen thousand references under the topology lock to
         // find the walk was too far anyway would be the cost the bound is
         // there to prevent.
-        .filter(|queued| distinct.insert(Arc::as_ptr(queued) as usize))
+        .filter(|queued| distinct.insert(queued.identity()))
         .take(MAX_WALK + 1)
         .map(Arc::clone)
         .collect()
@@ -404,33 +517,44 @@ fn carries_endpoints(message: &ChannelMessage) -> bool {
 }
 
 impl Drop for Endpoint {
-    /// Tell the peer it is alone, and free what was queued and never read,
-    /// one level at a time.
+    /// Close this side, tell the peer it is alone, and free what was queued
+    /// and never read, one level at a time.
     fn drop(&mut self) {
-        if let Some(peer) = self.peer.upgrade() {
-            // Under the survivor's inbox lock, the lock its registrations are
-            // made under, so one made a moment ago is found here.
-            let fired = {
-                let _inbox = peer.inbox.lock();
-                triggered(&mut peer.observers.lock(), Signals::PEER_CLOSED)
-            };
-            for observer in fired {
-                observer.fire(Signals::PEER_CLOSED);
-            }
-            peer.waiters.wake_all();
+        let unread = self.take_unread();
+        let peer = self.peer();
+        // Under the survivor's inbox lock, the lock its registrations are
+        // made under, so one made a moment ago is found here.
+        let fired = {
+            let _inbox = peer.inbox.lock();
+            triggered(&mut peer.observers.lock(), Signals::PEER_CLOSED)
+        };
+        for observer in fired {
+            observer.fire(Signals::PEER_CLOSED);
         }
-        dispose(self.take_unread());
+        peer.waiters.wake_all();
+        dispose(unread);
     }
 }
 
 impl Endpoint {
-    /// Take out what the messages queued for it and never read carry: what
-    /// closing it has to free, and what [`dispose`] queues rather than drop
-    /// inside the close.
-    pub(super) fn take_unread(&mut self) -> Vec<Object> {
-        self.inbox
-            .get_mut()
-            .drain()
+    /// Close this side and take out what the messages queued for it and
+    /// never read carry: what closing it has to free, and what [`dispose`]
+    /// queues rather than drop inside the close.
+    ///
+    /// Closed from here on, though the `Endpoint` is not dropped yet: the
+    /// peer sees `PEER_CLOSED`, and a write to this side is refused rather
+    /// than left in a queue nobody reads. Its registrations go too; the ports
+    /// they name are held weakly, so letting them go frees no object.
+    pub(super) fn take_unread(&self) -> Vec<Object> {
+        let own = self.own();
+        let messages = {
+            let mut inbox = own.inbox.lock();
+            own.closed.store(true, Ordering::Release);
+            inbox.drain()
+        };
+        let registrations = core::mem::take(&mut *own.observers.lock());
+        drop(registrations);
+        messages
             .into_iter()
             .flat_map(|message| message.handles.into_iter().map(|(object, _)| object))
             .collect()

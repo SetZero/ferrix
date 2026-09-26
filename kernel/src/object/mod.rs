@@ -170,10 +170,11 @@ static DISPOSING: AtomicBool = AtomicBool::new(false);
 pub(crate) fn dispose(objects: impl IntoIterator<Item = Object>) {
     for object in objects {
         match object {
-            // Another reference -- a message in flight, a peer's look at it
-            // -- keeps it open; whoever drops that one closes it.
+            // Another reference -- a message in flight, a call its holder is
+            // making on it -- keeps it open; whoever drops that one closes
+            // it. Nothing done on the peer holds it (see `channel`).
             Object::Channel(end) => {
-                if let Some(mut end) = Arc::into_inner(end) {
+                if let Some(end) = Arc::into_inner(end) {
                     let carried = end.take_unread();
                     if !carried.is_empty() {
                         ORPHANS.lock().extend(carried);
