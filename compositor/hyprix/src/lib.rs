@@ -24,6 +24,7 @@ pub mod act;
 pub mod animate;
 pub mod backend;
 pub mod clipboard;
+pub mod command;
 pub mod control;
 pub(crate) mod damage;
 pub mod deliver;

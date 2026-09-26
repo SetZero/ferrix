@@ -5883,10 +5883,12 @@ pub(crate) fn start(
     socket: &std::path::Path,
     instance: Option<&str>,
 ) -> Result<u32, String> {
-    let mut parts = command.split_whitespace();
-    let program = parts.next().ok_or_else(|| "an empty command".to_owned())?;
+    let words = crate::command::words(command)?;
+    let (program, arguments) = words
+        .split_first()
+        .ok_or_else(|| "an empty command".to_owned())?;
     let mut child = std::process::Command::new(program);
-    let _ = child.args(parts).env("WAYLAND_DISPLAY", socket);
+    let _ = child.args(arguments).env("WAYLAND_DISPLAY", socket);
     // The environment Hyprland gives everything it starts
     // (`CCompositor::initServer`). Without it a program started by
     // `exec-once` cannot find the compositor to ask: `hyprctl` looks for
