@@ -1101,12 +1101,14 @@ impl AddressSpace {
                 Some(original) => mm::copy_frame(frame, original),
                 None => mm::zero_frame(frame),
             }
-            // Unreachable: the shadow lacked the page under this space's lock,
-            // and every change to a shadow is made under it. Refused rather
-            // than trusted all the same, which the process hears as a fault.
+            // The shadow lacked the page under this space's lock, and every
+            // change to a shadow is made under it, so no page can have arrived
+            // meanwhile: a frame that did not go in is one there was no memory
+            // to record (finding F-23), and the fault ran out of memory as
+            // surely as if the copy's own frame had been refused.
             if !shadow.insert_absent(index, frame) {
                 let _ = mm::release_frame(frame);
-                return Err(SpaceError::BadRange);
+                return Err(SpaceError::OutOfMemory);
             }
             let flags = user_page(region.flags.write, execute);
             return self.install_page(inner, placed(frame), flags, present.is_some());
