@@ -322,7 +322,11 @@ timeout setting"). No listener at all is "No rules configured", and the
 program runs anyway, as upstream does. `condition_cmd` holds `on-timeout` off
 while it exits nonzero and is asked again every `condition_retry` seconds.
 Any input ends every listener's retry. An `on-resume` runs only after its
-`on-timeout` ran. Commands go to `/bin/sh -c` and are reaped.
+`on-timeout` ran. Commands go to `/bin/sh -c`, detached by
+`toolkit::spawn` as upstream's `runAsync` leaves them. `condition_cmd` is
+waited for, as `runSync` waits. A detached command's shell is then init's
+to reap, and hyprix as pid 1 reaps no orphans (the BACKLOG row on it), so
+each command a listener runs leaves one zombie until that row is done.
 
 **Idle.** One `ext_idle_notification_v1` per listener, made with
 `get_input_idle_notification` when `ignore_wayland_inhibit` or the
@@ -331,9 +335,9 @@ as upstream's `run()` does. hyprix offers `ext_idle_notifier_v1` version 2
 and answers both requests (`server/src/client/desktop.rs`); against a
 version-1 notifier hypridle falls back to the inhibitable request and says
 so. `hyprland_lock_notifier_v1` drives `on_lock_cmd` and `on_unlock_cmd`.
-The idle notifications are hypridle's own wire-level client, like
-`lswt`'s, not `compositor/toolkit`'s: a daemon with no surface needs none
-of the runtime.
+All of it goes through `compositor/toolkit`: `idle_notification`, `bind`
+and `request` for the lock notifier, and `watch_fd` for the `loginctl`
+socket. hypridle has no surface and no wire code of its own.
 
 **`loginctl lock-session` -- the decision.** Upstream runs `lock_cmd` when
 logind emits `org.freedesktop.login1.Session.Lock`, which `loginctl
