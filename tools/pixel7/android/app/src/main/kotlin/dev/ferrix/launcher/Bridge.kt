@@ -29,8 +29,23 @@ internal const val KEYBOARD_EVENTS = IBinder.FIRST_CALL_TRANSACTION + 1
 internal const val MOUSE_EVENTS = IBinder.FIRST_CALL_TRANSACTION + 2
 
 /**
+ * The vsock context id the guest's display service is kept under:
+ * crosvm is told `--android-display-service cid:<this>`, and the bridge asks
+ * virtualizationservice for that id's. Since the phone's update to
+ * CP3A.260905.009 (2026-09-27) the service keeps one display service per VM,
+ * named by its cid, and crosvm refuses a name without the `cid:` prefix. The
+ * guest has no vsock, so no id is allocated for it; this one is above
+ * virtualizationservice's range (2048 to 65535), so no VM it starts has it.
+ */
+internal const val DISPLAY_CID = 70000
+
+/** virtualizationservice's internal interface, and its `waitDisplayService(int cid)`. */
+private const val INTERNAL = "android.system.virtualizationservice_internal.IVirtualizationServiceInternal"
+private const val WAIT_DISPLAY_SERVICE = 17
+
+/**
  * The root half of the guest's screen, run by the VM's su script under
- * `app_process` with this APK and the Terminal app's APK on its class path:
+ * `app_process` with this APK on its class path:
  *
  *     Bridge <crosvm pid> <token> <app uid> <touch socket> <keyboard socket> <mouse socket>
  *
@@ -115,28 +130,43 @@ object Bridge {
      * A function asking virtualizationservice for this run's crosvm's display
      * service, or null while it holds none or only the one it held before.
      *
-     * virtualizationservice keeps the last display service set, and a crosvm
-     * sets its own only once its GPU is made, after the input sockets are
-     * connected. A crosvm still running from an earlier run -- one whose app
-     * was reinstalled under it -- answers pings, so waiting for "a live one"
-     * handed the app that VM's screen while its keys went to the new VM, and
-     * nothing typed ever showed (2026-09-26). So the one held when this is
-     * made, before the sockets exist and so before crosvm starts, is never
-     * taken: proxies of one remote object are one object. The Terminal app's
-     * stubs have no `clearDisplayService` to forget it with; its build keeps
-     * only the methods it calls.
+     * virtualizationservice keeps the last display service set under
+     * [DISPLAY_CID], and a crosvm sets its own only once its GPU is made,
+     * after the input sockets are connected. A crosvm still running from an
+     * earlier run -- one whose app was reinstalled under it -- answers pings,
+     * so waiting for "a live one" handed the app that VM's screen while its
+     * keys went to the new VM, and nothing typed ever showed (2026-09-26). So
+     * the one held when this is made, before the sockets exist and so before
+     * crosvm starts, is never taken: proxies of one remote object are one
+     * object.
+     *
+     * The call is made by its transaction code, with no stubs: the Terminal
+     * app's, which the bridge once borrowed, were shrunk by its build down to
+     * the calls it inlines (CP3A.260905.009), and the code is the one those
+     * inlined calls use.
      */
     private fun displayServiceGetter(): () -> IBinder? {
         val manager = Class.forName("android.os.ServiceManager")
-        val binder = manager.getMethod("waitForService", String::class.java)
+        val service = manager.getMethod("waitForService", String::class.java)
             .invoke(null, "android.system.virtualizationservice") as IBinder
-        val stub = Class.forName(
-            "android.system.virtualizationservice_internal.IVirtualizationServiceInternal\$Stub",
-        )
-        val service = stub.getMethod("asInterface", IBinder::class.java).invoke(null, binder)
-        val wait = service.javaClass.getMethod("waitDisplayService")
-        val before = holding(service, wait)
-        return { (wait.invoke(service) as IBinder?)?.takeIf { it != before } }
+        val before = holding(service)
+        return { waitDisplayService(service)?.takeIf { it != before } }
+    }
+
+    /** `waitDisplayService(DISPLAY_CID)`, which blocks while there is none. */
+    private fun waitDisplayService(service: IBinder): IBinder? {
+        val data = Parcel.obtain()
+        val reply = Parcel.obtain()
+        try {
+            data.writeInterfaceToken(INTERNAL)
+            data.writeInt(DISPLAY_CID)
+            service.transact(WAIT_DISPLAY_SERVICE, data, reply, 0)
+            reply.readException()
+            return reply.readStrongBinder()
+        } finally {
+            reply.recycle()
+            data.recycle()
+        }
     }
 
     /**
@@ -144,9 +174,9 @@ object Bridge {
      * `waitDisplayService` blocks while it holds none, so it is asked on a
      * thread given a moment to answer.
      */
-    private fun holding(service: Any, wait: java.lang.reflect.Method): IBinder? {
+    private fun holding(service: IBinder): IBinder? {
         var held: IBinder? = null
-        val asking = Thread { held = runCatching { wait.invoke(service) as IBinder? }.getOrNull() }
+        val asking = Thread { held = runCatching { waitDisplayService(service) }.getOrNull() }
         asking.isDaemon = true
         asking.start()
         asking.join(1000)

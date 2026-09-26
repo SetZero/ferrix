@@ -159,10 +159,9 @@ private const val MOUSE = "$VM_DIR/mouse.sock"
  * 16550 takes crosvm's standard input too, which is the su process's, so
  * that the app can say a line to the guest's shell ([GuestShell]).
  *
- * The screen needs the [Bridge] (from this APK, [apk], with the Terminal
- * app's for virtualizationservice's classes) listening on the input devices'
- * sockets before crosvm starts, for crosvm connects to each and will not
- * start without them. The bridge makes the mouse's last. If it has not made
+ * The screen needs the [Bridge] (from this APK, [apk]) listening on the
+ * input devices' sockets before crosvm starts, for crosvm connects to each
+ * and will not start without them. The bridge makes the mouse's last. If it has not made
  * them all within ten seconds, or ended, the guest runs as before, with its
  * console only.
  *
@@ -184,12 +183,11 @@ private fun guestCommand(apk: String, uid: Int, token: String, size: IntSize): S
         "[ -f \$I ] || { echo 'FERRIX-VM no image in $VM_DIR'; exit 3; }; echo FERRIX-VM-IMAGE \$I; " +
         "$CROSVM stop $SOCKET >/dev/null 2>&1; " +
         "rm -f $SOCKET $TOUCH $KEYBOARD $MOUSE; echo FERRIX-VM-PID $$; " +
-        "T=$(pm path com.android.virtualization.terminal | sed -n 's/^package://p' | head -n 1); " +
-        "CLASSPATH=$apk:\$T app_process /system/bin ${Bridge::class.java.name} $$ $token $uid " +
+        "CLASSPATH=$apk app_process /system/bin ${Bridge::class.java.name} $$ $token $uid " +
         "$TOUCH $KEYBOARD $MOUSE 2>/dev/null & B=$!; i=0; " +
         "while [ ! -S $MOUSE ] && [ \$i -lt 100 ] && kill -0 \$B 2>/dev/null; do sleep 0.1; i=$((i+1)); done; " +
         "if [ -S $TOUCH ] && [ -S $KEYBOARD ] && [ -S $MOUSE ]; then " +
-        "set -- --gpu 'backend=2d,displays=[[mode=windowed[$w,$h]]]' --android-display-service ferrix " +
+        "set -- --gpu 'backend=2d,displays=[[mode=windowed[$w,$h]]]' --android-display-service cid:$DISPLAY_CID " +
         "--input 'single-touch[path=$TOUCH,width=$w,height=$h]' --input 'keyboard[path=$KEYBOARD]' " +
         "--input 'mouse[path=$MOUSE]'; " +
         "else echo 'FERRIX-VM-BRIDGE did not start: no screen'; set --; fi; " +
