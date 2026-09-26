@@ -1034,7 +1034,21 @@ fn boot_and_dump(
     binds: &[(&str, &[&str])],
     args: &Args,
 ) -> Result<(Vec<Image>, Vec<String>)> {
-    let (image, kernel) = build_image(arch, programs, &undithered(config), Carried::none(), args)?;
+    boot_and_dump_carrying(arch, programs, config, wanted, binds, Carried::none(), args)
+}
+
+/// [`boot_and_dump`], with files of the boot's own in the initramfs: a
+/// program the compositor's own set does not have, and what it reads.
+fn boot_and_dump_carrying(
+    arch: Arch,
+    programs: &Programs,
+    config: &str,
+    wanted: &Wanted<'_>,
+    binds: &[(&str, &[&str])],
+    carried: Carried,
+    args: &Args,
+) -> Result<(Vec<Image>, Vec<String>)> {
+    let (image, kernel) = build_image(arch, programs, &undithered(config), carried, args)?;
 
     let port = free_port()?;
     let mut qemu_args = args.clone();
@@ -2236,6 +2250,13 @@ fn desktop(
     } else {
         carried.ports.extend(crate::rustc::default_links(args));
     }
+    // The applications fuzzel lists, and their icons.
+    let chrome = args
+        .chrome
+        .then(|| crate::chrome::window_command(CHROME_WELCOME_PAGE));
+    carried
+        .ports
+        .extend(crate::fuzzel::files(chrome.as_deref())?);
     let config = crate::ssh::with_server(config, args, &mut carried.ports)?;
     // A wallpaper, from this machine's own and from nowhere else:
     // `crate::wallpaper` says where they come from and why a run never goes
@@ -2394,7 +2415,7 @@ fn said_on_its_own(line: &str) -> &str {
 /// each takes minutes under emulation and there are twenty of them, so a
 /// change to one is otherwise an hour a try.
 type Boot = fn(Arch, &Programs, &Args) -> Result<()>;
-const BOOTS: [(&str, Boot); 24] = [
+const BOOTS: [(&str, Boot); 25] = [
     ("restart", test_driver_restart),
     ("dispatchers", test_dispatchers),
     ("bar", test_bar),
@@ -2419,6 +2440,7 @@ const BOOTS: [(&str, Boot); 24] = [
     ("transform", test_transform),
     ("typing", test_typing),
     ("desktop", test_desktop),
+    ("fuzzel", test_fuzzel),
 ];
 
 /// The desktop boot's configuration: the two windows `dispatchers` tiles
@@ -3381,6 +3403,43 @@ fn test_menu(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
         screen.width * screen.height
     );
     Ok(())
+}
+
+/// A twenty-fifth boot: fuzzel, the launcher, against its own `fuzzel.ini`.
+///
+/// It is started as the desktop comes up, and three pictures are required:
+/// fuzzel over the empty screen with every entry listed and the first
+/// selected; the list after `/bin/vkbd` has typed `pat` through
+/// `zwp_virtual_keyboard_v1`, with the test pattern ranked first and
+/// selected; and after `vkbd` has pressed Return, fuzzel gone and the
+/// pattern's window it started tiled alone. The first two are the pictures
+/// `userland/compositor/fuzzel`'s own host test makes of the same frames -- fuzzel's
+/// drawing composited by `userland/compositor/render` as the compositor composites a
+/// layer surface -- so a launcher that drew one pixel differently on Ferrix
+/// fails here.
+fn test_fuzzel(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
+    let fuzzel = build(arch, "compositor-fuzzel", "fuzzel")?;
+    let carried = Carried {
+        busybox: None,
+        zinc: None,
+        ports: crate::fuzzel::boot_files(&fuzzel)?,
+    };
+    let (screens, said) = boot_and_dump_carrying(
+        arch,
+        programs,
+        crate::fuzzel::BOOT_CONFIG,
+        &Wanted {
+            states: &crate::fuzzel::EXPECTED,
+            others: &[],
+            moving: None,
+            pointer: None,
+            awaiting: &crate::fuzzel::AWAITING,
+        },
+        &crate::fuzzel::BINDS,
+        carried,
+        args,
+    )?;
+    crate::fuzzel::judge(arch, screens.len(), &said)
 }
 
 /// A fifteenth boot: the screen lock, through `ext-session-lock-v1`.

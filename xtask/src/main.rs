@@ -73,6 +73,7 @@ mod everything;
 mod fat;
 mod ferrousli;
 mod flash;
+mod fuzzel;
 mod gateway;
 mod init;
 mod init_file;
