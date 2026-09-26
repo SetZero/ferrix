@@ -378,6 +378,20 @@ pub(crate) fn render_did<'a>(line: &'a str, word: &str) -> Option<&'a str> {
     words.next().filter(|said| *said != "none")
 }
 
+/// What the card's reads must say on the marker line (`compositor_drm`'s
+/// `events`): `EAGAIN` for a read of 8 with nothing queued, 0 for a read of
+/// 8 with a flip's event queued, which leaves it there, and the 32-byte event
+/// for a read of 4096 after, as Linux's `drm_read` answers.
+const CARD_EVENTS: &str = "EAGAIN 0 32";
+
+/// The three words after `events` on the marker line, if it has them.
+pub(crate) fn card_events(line: &str) -> Option<String> {
+    let mut words = line.split_whitespace().skip_while(|word| *word != "events");
+    let _ = words.next()?;
+    let said: Vec<&str> = words.take(3).collect();
+    (said.len() == 3).then(|| said.join(" "))
+}
+
 /// The id of the primary plane the marker line names, if it names one: its
 /// last three words are `plane <id> Primary`.
 pub(crate) fn primary_plane(line: &str) -> Option<u32> {
@@ -532,6 +546,13 @@ fn boot_and_dump(arch: Arch, program: &Path, args: &Args, name: &str) -> Result<
             )));
         };
         println!("  {arch}: the card's primary plane {plane} shows the framebuffer");
+        if card_events(marker).as_deref() != Some(CARD_EVENTS) {
+            return Err(Error::new(format!(
+                "{arch}: the card's reads were not Linux's `drm_read`'s, \
+                 `events {CARD_EVENTS}`: `{marker}`"
+            )));
+        }
+        println!("  {arch}: the card's reads: events {CARD_EVENTS}");
         judge_render(arch, args.gl, args.venus, lines)?;
         // A GL console holds a texture on the host's GPU and no surface, and
         // QEMU's `screendump` reads only a surface (`docs/GPU.md` §3.1). So
@@ -648,6 +669,21 @@ mod tests {
         assert!(parse_ppm(b"P6\n2 2\n65535\n").is_err(), "wide samples");
         assert!(parse_ppm(b"P6\n2").is_err(), "no header");
         assert!(parse_ppm(b"P6\nx 2\n255\n").is_err(), "not a number");
+    }
+
+    #[test]
+    fn the_marker_line_says_what_the_cards_reads_did() {
+        let line = "compositor: scanout 1024x768 1024x768 colour 0x1e1e2e \
+                    events EAGAIN 0 32 plane 4 Primary";
+        assert_eq!(card_events(line).as_deref(), Some(CARD_EVENTS));
+        assert_eq!(primary_plane(line), Some(4), "and still names its plane");
+        assert_eq!(
+            card_events("compositor: scanout 1024x768 events none flip 22 plane 4 Primary")
+                .as_deref(),
+            Some("none flip 22")
+        );
+        assert_eq!(card_events("compositor: scanout events EAGAIN 0"), None);
+        assert_eq!(card_events("compositor: scanout plane 4 Primary"), None);
     }
 
     #[test]

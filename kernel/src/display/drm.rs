@@ -330,12 +330,20 @@ impl Inode for CardFile {
         self.readable.wake_all();
     }
 
-    /// Page-flip events, whole records only. A blocking read ends with a
+    /// Page-flip events, whole records only, as Linux's `drm_read` reads
+    /// them: as many as fit; with one queued that does not fit, 0, the event
+    /// left for a larger read; with none, `EAGAIN` under `O_NONBLOCK` and
+    /// otherwise a wait, whatever the count. A blocking read ends with a
     /// restart code when the reader has a signal to take.
+    ///
+    /// Measured on a 7.0 host, `card1` (amdgpu) and `card2` (nvidia) with
+    /// nothing queued answer a read of 8 and of 0 with `EAGAIN`; the case of
+    /// an event that does not fit could not be made there, neither card
+    /// giving an unprivileged opener an event, and is `drm_read`'s own code,
+    /// `if (length > count - ret)` putting the event back and answering
+    /// `ret`. This used to answer `EINVAL` for any read smaller than an
+    /// event.
     fn read_stream(&self, buf: &mut [u8], nonblock: bool) -> VfsResult<usize> {
-        if buf.len() < EventVblank::SIZE {
-            return Err(Errno::EINVAL);
-        }
         let mut written = 0;
         let mut take = || {
             let mut state = self.state.lock();
@@ -348,7 +356,9 @@ impl Inode for CardFile {
                 }
                 written += EventVblank::SIZE;
             }
-            written > 0 || self.card.is_gone()
+            // An event still queued is one that did not fit: the read ends,
+            // with what it took, 0 if nothing.
+            written > 0 || !state.events.is_empty() || self.card.is_gone()
         };
         if nonblock {
             if take() {

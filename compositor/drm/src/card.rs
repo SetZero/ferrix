@@ -466,11 +466,78 @@ pub fn show(card: &Card) -> io::Result<String> {
         modeset::describe_planes(&planes, plan.crtc_index, plan.crtc, framebuffer.fb_id)
             .map_err(io::Error::other)?;
 
+    let events = events(card, plan.crtc, framebuffer.fb_id);
     Ok(format!(
-        "{MARKER} {} {width}x{height} colour 0x{:06x} {described}",
+        "{MARKER} {} {width}x{height} colour 0x{:06x} {events} {described}",
         modeset::mode_name(&plan.mode),
         modeset::BACKGROUND
     ))
+}
+
+/// What reads of the card smaller and larger than an event said, around a
+/// page flip that promised one: `events EAGAIN 0 32`, or `events none <what
+/// went otherwise>`.
+///
+/// Linux's `drm_read`, under `O_NONBLOCK` with nothing queued, is `EAGAIN`
+/// whatever the count -- measured on a 7.0 host, `card1` (amdgpu) and
+/// `card2` (nvidia) answer a read of 8 and of 0 so -- and with an event
+/// queued that does not fit, it puts the event back and answers what it
+/// copied, 0 (`drm_file.c`: `if (length > count - ret) goto put_back_event`),
+/// which a read of 4096 then takes whole. So: a read of 8 with nothing
+/// queued, a flip to the framebuffer already shown asking for its event, a
+/// wait for it, a read of 8 and a read of 4096. The descriptor's flags are
+/// put back after.
+fn events(card: &Card, crtc: u32, framebuffer: u32) -> String {
+    // SAFETY: the descriptor is the card's own and open; F_GETFL takes no
+    // argument.
+    let flags = unsafe { libc::fcntl(card.fd, libc::F_GETFL) };
+    // SAFETY: as above, with the flags it answered and one more.
+    if flags < 0 || unsafe { libc::fcntl(card.fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
+        return format!("events none fcntl {}", io::Error::last_os_error().kind());
+    }
+    let said = read_events(card, crtc, framebuffer);
+    // SAFETY: as above, putting back the flags the card had.
+    let _ = unsafe { libc::fcntl(card.fd, libc::F_SETFL, flags) };
+    said
+}
+
+/// [`events`]'s reads, the card non-blocking.
+fn read_events(card: &Card, crtc: u32, framebuffer: u32) -> String {
+    let mut buffer = [0u8; 4096];
+    let mut read = |count: usize| {
+        // SAFETY: `buffer` is live and at least `count` bytes long.
+        let got = unsafe { libc::read(card.fd, buffer.as_mut_ptr().cast(), count) };
+        match got {
+            -1 => match io::Error::last_os_error().raw_os_error() {
+                Some(libc::EAGAIN) => "EAGAIN".to_owned(),
+                Some(errno) => format!("errno{errno}"),
+                None => "failed".to_owned(),
+            },
+            got => got.to_string(),
+        }
+    };
+    let empty = read(8);
+    let mut flip = CrtcPageFlip {
+        crtc_id: crtc,
+        fb_id: framebuffer,
+        flags: drm::PAGE_FLIP_EVENT,
+        ..CrtcPageFlip::ZERO
+    };
+    if let Err(error) = card.ioctl(drm::IOCTL_MODE_PAGE_FLIP, &mut flip) {
+        return format!("events none flip {}", error.kind());
+    }
+    let mut poll = libc::pollfd {
+        fd: card.fd,
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    // SAFETY: one live `pollfd`.
+    if unsafe { libc::poll(&raw mut poll, 1, 5000) } != 1 {
+        return format!("events none {empty} no event came");
+    }
+    let small = read(8);
+    let whole = read(4096);
+    format!("events {empty} {small} {whole}")
 }
 
 /// Every plane the card lists once universal planes are asked for, read the
