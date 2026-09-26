@@ -11,8 +11,8 @@ android {
         applicationId = "dev.ferrix.launcher"
         minSdk = 31
         targetSdk = 36
-        versionCode = 2
-        versionName = "2"
+        versionCode = 3
+        versionName = "3"
     }
 
     buildFeatures {

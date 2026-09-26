@@ -17,8 +17,13 @@ seen without it.
                    vendor_boot.img, fastboot boot the image, wait for Android,
                    and save the ramoops record the run left
 
-Nothing is written to the phone. `fastboot boot` runs the image from RAM, and
-Ferrix's watchdog brings Android back about 75 seconds later.
+Nothing is written to the phone's partitions. `fastboot boot` runs the image
+from RAM, and Ferrix's watchdog brings Android back about 75 seconds later.
+
+For the app's other button, which runs Ferrix as a guest of the phone's own
+crosvm and needs no PC, the helper also keeps the raw loader `Image` from the
+same run directory at /data/local/tmp/ferrix-vm/ferrix.Image, pushing it
+whenever the phone's copy differs: an ordinary file, as an app's data is.
 
 Usage:  python3 bootloaders/pixel7/launcher/helper.py [--image boot.img]
 """
@@ -26,6 +31,7 @@ Usage:  python3 bootloaders/pixel7/launcher/helper.py [--image boot.img]
 from __future__ import annotations
 
 import argparse
+import hashlib
 import http.server
 import json
 import pathlib
@@ -36,6 +42,8 @@ import time
 PORT = 47707
 SERIAL = "28171FDH2001RC"
 RUNS = pathlib.Path.home() / ".local/share/ferrix/pixel7"
+VM_DIR = "/data/local/tmp/ferrix-vm"
+VM_IMAGE = f"{VM_DIR}/ferrix.Image"
 
 
 def run(*command: str, timeout: float = 60) -> subprocess.CompletedProcess[str]:
@@ -53,6 +61,7 @@ class Phone:
         self.lock = threading.Lock()
         self.phase = "idle"
         self.last: dict[str, str] = {}
+        self.pushed: str | None = None
 
     def image(self) -> pathlib.Path | None:
         """The image given, or else the newest boot.img a run directory holds."""
@@ -70,15 +79,41 @@ class Phone:
     def in_fastboot(self) -> bool:
         return self.serial in run("fastboot", "devices", timeout=10).stdout
 
+    def vm_image(self) -> pathlib.Path | None:
+        """The raw loader `Image` beside the boot image, for the guest."""
+        image = self.image()
+        vm = image.parent / "Image" if image else None
+        return vm if vm and vm.is_file() else None
+
     def keep_reverse(self) -> None:
-        """Point the phone's 127.0.0.1:PORT here whenever adb can reach it."""
+        """Point the phone's 127.0.0.1:PORT here whenever adb can reach it,
+        and keep the guest's image current there."""
         while True:
             try:
-                if self.in_android() and f"tcp:{PORT}" not in self.adb("reverse", "--list").stdout:
-                    self.adb("reverse", f"tcp:{PORT}", f"tcp:{PORT}")
+                if self.in_android():
+                    if f"tcp:{PORT}" not in self.adb("reverse", "--list").stdout:
+                        self.adb("reverse", f"tcp:{PORT}", f"tcp:{PORT}")
+                    if not self.lock.locked():
+                        self.keep_vm_image()
             except (OSError, subprocess.TimeoutExpired):
                 pass
             time.sleep(3)
+
+    def keep_vm_image(self) -> None:
+        """Push the guest's image when the phone's copy is not this one."""
+        local = self.vm_image()
+        if local is None:
+            return
+        digest = hashlib.sha256(local.read_bytes()).hexdigest()
+        if digest == self.pushed:
+            return
+        remote = self.adb("shell", f"sha256sum {VM_IMAGE} 2>/dev/null").stdout.split()
+        if not remote or remote[0] != digest:
+            self.adb("shell", f"mkdir -p {VM_DIR} && chmod 777 {VM_DIR}")
+            if self.adb("push", str(local), VM_IMAGE, timeout=120).returncode != 0:
+                return
+            print(f"pushed {local} to {VM_IMAGE}", flush=True)
+        self.pushed = digest
 
     def status(self) -> dict[str, object]:
         image = self.image()
@@ -91,6 +126,7 @@ class Phone:
             if image
             else None,
             "last": self.last,
+            "vm_image": str(self.vm_image()) if self.pushed else None,
         }
 
     def boot(self) -> str | None:

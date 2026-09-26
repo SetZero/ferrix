@@ -25,6 +25,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Build
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.PlayArrow
@@ -34,6 +35,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -45,6 +47,7 @@ import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -57,6 +60,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
@@ -71,13 +75,19 @@ import org.json.JSONException
 import org.json.JSONObject
 
 /**
- * One button that reboots the phone into Ferrix.
+ * Two ways to run Ferrix on this phone.
  *
- * The phone cannot start Ferrix by itself, so the button asks the helper on the
- * PC (`bootloaders/pixel7/launcher/helper.py`), which adb reverse makes
- * reachable at 127.0.0.1 over the USB cable. The helper runs `fastboot boot`:
- * nothing is written to the phone, and Ferrix's watchdog brings Android back
+ * **Boot Ferrix** reboots the phone into it. The phone cannot start Ferrix by
+ * itself, so the button asks the helper on the PC
+ * (`bootloaders/pixel7/launcher/helper.py`), which adb reverse makes reachable
+ * at 127.0.0.1 over the USB cable. The helper runs `fastboot boot`: nothing is
+ * written to the phone's partitions, and Ferrix's watchdog brings Android back
  * about 75 seconds later.
+ *
+ * **Run in a VM** needs no PC and no reboot: Ferrix runs as a guest of the
+ * phone's own KVM, through Android's crosvm, started as root, and its console
+ * is shown here. The image is the one the helper last put in
+ * /data/local/tmp/ferrix-vm.
  */
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -88,6 +98,21 @@ class MainActivity : ComponentActivity() {
 }
 
 private const val HELPER = "http://127.0.0.1:47707"
+private const val VM_DIR = "/data/local/tmp/ferrix-vm"
+private const val CROSVM = "/apex/com.android.virt/bin/crosvm"
+
+/** The guest: 8 vCPUs and 4 GiB, its 16550 on crosvm's standard output. */
+private const val GUEST_COMMAND =
+    "cd $VM_DIR && [ -f ferrix.Image ] || { echo 'FERRIX-VM no image in $VM_DIR'; exit 3; }; " +
+        "echo FERRIX-VM-PID $$; exec $CROSVM run --disable-sandbox -m 4096 --cpus 8 " +
+        "--serial type=stdout,num=1 ferrix.Image 2>/dev/null"
+
+/** How the guest is doing. */
+private sealed interface Guest {
+    data object Idle : Guest
+    data class Running(val pid: Int?) : Guest
+    data class Ended(val result: String, val seconds: Long, val booted: Boolean) : Guest
+}
 
 /** What the helper last said, or why it could not be asked. */
 private sealed interface Helper {
@@ -119,6 +144,8 @@ private fun Launcher() {
     var helper by remember { mutableStateOf<Helper>(Helper.Asking) }
     var confirming by remember { mutableStateOf(false) }
     var refusal by remember { mutableStateOf<String?>(null) }
+    var guest by remember { mutableStateOf<Guest>(Guest.Idle) }
+    val console = remember { mutableStateListOf<String>() }
     val scope = rememberCoroutineScope()
     val lifecycle = LocalLifecycleOwner.current.lifecycle
 
@@ -154,10 +181,28 @@ private fun Launcher() {
             )
             refusal?.let { Notice(Icons.Rounded.Warning, it, MaterialTheme.colorScheme.error) }
             if (current is Helper.Reachable) current.last?.let { LastRunCard(it) }
+            GuestCard(
+                guest = guest,
+                console = console,
+                onRun = {
+                    console.clear()
+                    guest = Guest.Running(null)
+                    scope.launch { guest = runGuest(console) { pid -> guest = Guest.Running(pid) } }
+                },
+                onStop = {
+                    val running = guest as? Guest.Running
+                    running?.pid?.let { pid ->
+                        scope.launch(Dispatchers.IO) {
+                            ProcessBuilder("su", "-c", "kill $pid").start().waitFor()
+                        }
+                    }
+                },
+            )
             Spacer(Modifier.height(8.dp))
             Text(
-                "Nothing on the phone is changed: Ferrix runs from RAM, sent by the " +
-                    "PC with fastboot boot, and Android comes back by itself.",
+                "Booting changes nothing on the phone: Ferrix runs from RAM, sent by " +
+                    "the PC with fastboot boot, and Android comes back by itself. The " +
+                    "VM runs beside Android, under its KVM, and asks for root once.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -324,6 +369,119 @@ private fun LastRunCard(last: LastRun) {
         }
     }
 }
+
+@Composable
+private fun GuestCard(
+    guest: Guest,
+    console: List<String>,
+    onRun: () -> Unit,
+    onStop: () -> Unit,
+) {
+    Card(
+        shape = RoundedCornerShape(24.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("Or run it in a VM", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "On the phone's own KVM, beside Android: no PC, no reboot.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            when (guest) {
+                is Guest.Running -> {
+                    LinearProgressIndicator(Modifier.fillMaxWidth())
+                    FilledTonalButton(
+                        onClick = onStop,
+                        enabled = guest.pid != null,
+                        shape = RoundedCornerShape(20.dp),
+                        modifier = Modifier.fillMaxWidth().height(56.dp),
+                    ) { Text("Stop") }
+                }
+                else -> FilledTonalButton(
+                    onClick = onRun,
+                    shape = RoundedCornerShape(20.dp),
+                    modifier = Modifier.fillMaxWidth().height(56.dp),
+                ) {
+                    Icon(Icons.Rounded.Build, contentDescription = null)
+                    Spacer(Modifier.width(12.dp))
+                    Text("Run in a VM", style = MaterialTheme.typography.titleMedium)
+                }
+            }
+            if (guest is Guest.Ended) {
+                Notice(
+                    if (guest.booted) Icons.Rounded.CheckCircle else Icons.Rounded.Warning,
+                    "${guest.result} · ${guest.seconds} s",
+                    if (guest.booted) Color(0xFF3DDC84) else MaterialTheme.colorScheme.error,
+                )
+            }
+            if (console.isNotEmpty()) ConsolePane(console)
+        }
+    }
+}
+
+@Composable
+private fun ConsolePane(lines: List<String>) {
+    val scroll = rememberScrollState()
+    LaunchedEffect(lines.size) { scroll.animateScrollTo(scroll.maxValue) }
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .height(320.dp)
+            .background(Color(0xFF0B0B10), RoundedCornerShape(16.dp))
+            .padding(12.dp)
+            .verticalScroll(scroll),
+    ) {
+        Text(
+            lines.joinToString("\n"),
+            fontFamily = FontFamily.Monospace,
+            fontSize = 11.sp,
+            lineHeight = 14.sp,
+            color = Color(0xFFC8C8D2),
+        )
+    }
+}
+
+/** Run the guest to its end, appending its console to `console`. */
+private suspend fun runGuest(console: MutableList<String>, started: (Int) -> Unit): Guest =
+    withContext(Dispatchers.IO) {
+        val began = System.nanoTime()
+        var result: String? = null
+        val process = try {
+            ProcessBuilder("su", "-c", GUEST_COMMAND).start()
+        } catch (error: IOException) {
+            return@withContext Guest.Ended("could not run su: ${error.message}", 0, false)
+        }
+        process.inputStream.bufferedReader().useLines { lines ->
+            for (raw in lines) {
+                val line = raw.trimEnd('\r')
+                if (line.startsWith("FERRIX-VM-PID ")) {
+                    line.removePrefix("FERRIX-VM-PID ").toIntOrNull()?.let {
+                        withContext(Dispatchers.Main) { started(it) }
+                    }
+                    continue
+                }
+                if (line.startsWith("FERRIX-BOOT-OK") || line.startsWith("FERRIX-PANIC") ||
+                    line.startsWith("FERRIX-VM ")
+                ) {
+                    result = line.removePrefix("FERRIX-VM ")
+                }
+                withContext(Dispatchers.Main) {
+                    console.add(line)
+                    if (console.size > 2000) console.removeAt(0)
+                }
+            }
+        }
+        val status = process.waitFor()
+        val seconds = (System.nanoTime() - began) / 1_000_000_000
+        val ended = result ?: if (status == 1 && console.isEmpty()) {
+            "root was not granted"
+        } else {
+            "the guest stopped with no FERRIX-BOOT-OK (status $status)"
+        }
+        Guest.Ended(ended, seconds, ended.startsWith("FERRIX-BOOT-OK"))
+    }
 
 @Composable
 private fun Notice(icon: ImageVector, text: String, tint: Color) {
