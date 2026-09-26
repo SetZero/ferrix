@@ -18,7 +18,7 @@ use ferrix_bootinfo::{
     Arch, BOOT_STACK_SIZE, BOOTINFO_MAGIC, BOOTINFO_VERSION, BootInfo, FIRMWARE_SEED, Framebuffer,
     KASLR_NOT_OFFERED, KERNEL_VIRT_BASE, Kaslr, LAYOUT, MemKind, MemRegion, PAGE_SIZE,
     PHYSMAP_ALIGN, PHYSMAP_BASE, PHYSMAP_END, allocator_owns, direct_map_address, direct_map_runs,
-    physmap_origin,
+    physmap_origin, read_only_span, split_run,
 };
 use ferrix_elf::{Class, EM_AARCH64, Elf, FixupKind, PF_W, PF_X, Segment};
 use ferrix_paging::aarch64::{AArch64, MAIR_EL1};
@@ -249,16 +249,30 @@ fn build_tables(
         )
         .map_err(|_| "could not build the identity map")?;
 
-    for (base, run) in direct_map_runs(regions.iter().copied(), origin, len) {
-        kernel
-            .map_range(
-                tables,
-                VirtAddr(direct_map_address(origin, base)),
-                PhysAddr(base),
-                run,
-                MapFlags::KERNEL_DATA,
-            )
-            .map_err(|_| "could not build the direct map")?;
+    // The kernel's text and read-only data read only in the direct map, as
+    // `boot/` maps them; `read_only_span` says why.
+    let sealed = read_only_span(elf.loadable().map(|segment| {
+        let (base, length) = segment_pages(&segment);
+        let phys = image.base + (base - KERNEL_VIRT_BASE);
+        (phys, phys + length, segment.flags & PF_W != 0)
+    }))?;
+    for run in direct_map_runs(regions.iter().copied(), origin, len) {
+        for (base, run, read_only) in split_run(run, sealed).into_iter().flatten() {
+            let flags = if read_only {
+                MapFlags::KERNEL_RODATA
+            } else {
+                MapFlags::KERNEL_DATA
+            };
+            kernel
+                .map_range(
+                    tables,
+                    VirtAddr(direct_map_address(origin, base)),
+                    PhysAddr(base),
+                    run,
+                    flags,
+                )
+                .map_err(|_| "could not build the direct map")?;
+        }
     }
 
     for segment in elf.loadable() {
@@ -283,8 +297,7 @@ fn map_segment(
         device: false,
         uncached: false,
     };
-    let base = segment.vaddr & !(PAGE_SIZE - 1);
-    let length = (segment.vaddr - base + segment.memsz).next_multiple_of(PAGE_SIZE);
+    let (base, length) = segment_pages(segment);
     kernel
         .map_range(
             tables,
@@ -294,6 +307,14 @@ fn map_segment(
             flags,
         )
         .map_err(|_| "could not map a kernel segment")
+}
+
+/// The whole pages a segment occupies, as its first page's link address and a
+/// length.
+fn segment_pages(segment: &Segment) -> (u64, u64) {
+    let base = segment.vaddr & !(PAGE_SIZE - 1);
+    let length = (segment.vaddr - base + segment.memsz).next_multiple_of(PAGE_SIZE);
+    (base, length)
 }
 
 /// `TCR_EL1` with 48-bit addressing and a 4 KiB granule in both halves, as

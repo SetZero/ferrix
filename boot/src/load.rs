@@ -5,7 +5,7 @@ use core::ptr;
 use ferrix_bootinfo::{
     IdentityPlan, IdentityTree, KERNEL_VIRT_BASE, LAYOUT, MemKind, MemRegion, PAGE_SIZE,
     PHYSMAP_ALIGN, PHYSMAP_BASE, PHYSMAP_END, Placement, direct_map_runs, physmap_origin,
-    rsdp_region,
+    read_only_span, rsdp_region, split_run,
 };
 use ferrix_elf::{Elf, PF_W, PF_X, Segment};
 use ferrix_paging::{MapFlags, Mapper, PhysAddr, PhysMem, VirtAddr};
@@ -424,7 +424,8 @@ pub(crate) struct AddressSpace {
 /// instructions after the switch still fetch, a direct map of physical
 /// memory, and the kernel image where [`crate::kaslr`] put it. The boot
 /// stack and the boot info need no mapping of their own — they are in RAM, so
-/// the direct map already covers them.
+/// the direct map already covers them. The direct map is writable except
+/// over the image's text and read-only data, which it aliases read only.
 ///
 /// `map` is the memory map `direct` was measured from, and says which parts of
 /// that span are memory at all. `plan` is where the switch is identity mapped,
@@ -461,19 +462,33 @@ pub(crate) fn build_address_space(
         .entries()
         .map(|descriptor| describe(&descriptor))
         .chain(rsdp_region(rsdp));
-    for (base, len) in direct_map_runs(regions, direct.origin, direct.len) {
-        kernel
-            .map_range(
-                memory,
-                VirtAddr(direct.address(base)),
-                PhysAddr(base),
-                len,
-                // Never executable: nothing is ever run through the direct
-                // map, and it covers every byte of RAM including the kernel's
-                // own text.
-                MapFlags::KERNEL_DATA,
-            )
-            .map_err(|_| BootError::plain("could not build the direct map"))?;
+    // And the kernel's own text and read-only data read only in it, as they
+    // are in the image mapping; `read_only_span` says why.
+    let sealed = read_only_span(elf.loadable().map(|segment| {
+        let (base, length) = segment_pages(&segment);
+        let phys = image.memory.address + (base - image.link);
+        (phys, phys + length, segment.flags & PF_W != 0)
+    }))
+    .map_err(BootError::plain)?;
+    for run in direct_map_runs(regions, direct.origin, direct.len) {
+        for (base, len, read_only) in split_run(run, sealed).into_iter().flatten() {
+            // Never executable: nothing is ever run through the direct map,
+            // and it covers every byte of RAM including the kernel's own text.
+            let flags = if read_only {
+                MapFlags::KERNEL_RODATA
+            } else {
+                MapFlags::KERNEL_DATA
+            };
+            kernel
+                .map_range(
+                    memory,
+                    VirtAddr(direct.address(base)),
+                    PhysAddr(base),
+                    len,
+                    flags,
+                )
+                .map_err(|_| BootError::plain("could not build the direct map"))?;
+        }
     }
 
     for segment in elf.loadable() {
@@ -565,11 +580,7 @@ fn map_segment(
         uncached: false,
     };
 
-    // The linker page-aligns segments, so rounding the base down and the length
-    // up cannot make two segments overlap — and if a future linker script broke
-    // that, the mapper would refuse rather than silently re-permission a page.
-    let base = segment.vaddr & !(PAGE_SIZE - 1);
-    let length = (segment.vaddr - base + segment.memsz).next_multiple_of(PAGE_SIZE);
+    let (base, length) = segment_pages(segment);
     let offset = base - image.link;
 
     kernel
@@ -581,6 +592,18 @@ fn map_segment(
             flags,
         )
         .map_err(|_| BootError::plain("could not map a kernel segment"))
+}
+
+/// The whole pages a segment occupies, as its first page's link address and a
+/// length.
+///
+/// The linker page-aligns segments, so rounding the base down and the length
+/// up cannot make two segments overlap — and if a future linker script broke
+/// that, the mapper would refuse rather than silently re-permission a page.
+fn segment_pages(segment: &Segment) -> (u64, u64) {
+    let base = segment.vaddr & !(PAGE_SIZE - 1);
+    let length = (segment.vaddr - base + segment.memsz).next_multiple_of(PAGE_SIZE);
+    (base, length)
 }
 
 /// Convert one firmware memory descriptor into a Ferrix memory region.

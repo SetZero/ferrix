@@ -479,6 +479,72 @@ where
     }
 }
 
+/// The physical span of a kernel image's text and read-only data, from its
+/// loadable segments as `(first byte, one past the last, writable)`: the
+/// smallest span holding every segment that is not writable, or `None` if
+/// there is none.
+///
+/// The direct map aliases every byte of RAM, the image's own included. An
+/// alias of the text that can be written is a way to change the kernel's code
+/// that never touches the image mapping, whose W^X then protects nothing; so
+/// both loaders map this span of the direct map read only. The image's data
+/// and `.bss` stay writable there: they are writable in the image mapping
+/// anyway, and the kernel's early page tables are in `.bss` and are written
+/// through the direct map.
+///
+/// # Errors
+///
+/// A writable segment inside the span. The span would have to be cut around
+/// it, and the link script's order — text, read-only data, then data — says
+/// that cannot happen; a script that broke the order would otherwise get a
+/// read-only direct map over data the kernel writes through it.
+pub fn read_only_span<I>(segments: I) -> Result<Option<(u64, u64)>, &'static str>
+where
+    I: Iterator<Item = (u64, u64, bool)> + Clone,
+{
+    let sealed = segments.clone().filter(|&(_, _, writable)| !writable);
+    let base = sealed.clone().map(|(base, _, _)| base).min();
+    let end = sealed.map(|(_, end, _)| end).max();
+    let (Some(base), Some(end)) = (base, end) else {
+        return Ok(None);
+    };
+    if segments
+        .filter(|&(_, _, writable)| writable)
+        .any(|(from, to, _)| from < end && to > base)
+    {
+        return Err("a writable kernel segment lies between the read-only ones");
+    }
+    Ok(Some((base, end)))
+}
+
+/// One run of the direct map, as [`direct_map_runs`] yields it, cut around
+/// `sealed`, the span [`read_only_span`] found: the part below it, the part
+/// inside it and the part above it, each as `(base, len, read_only)` and each
+/// `None` where it is empty.
+///
+/// Three pieces rather than a list, because a run and a span have at most
+/// that many; the mapper picks the largest block that fits each piece, so the
+/// cost of the cut is a table or two of 4 KiB pages at its two edges.
+#[must_use]
+pub fn split_run(
+    (base, len): (u64, u64),
+    sealed: Option<(u64, u64)>,
+) -> [Option<(u64, u64, bool)>; 3] {
+    let end = base.saturating_add(len);
+    let piece =
+        |from: u64, to: u64, read_only: bool| (from < to).then_some((from, to - from, read_only));
+    let Some((seal_base, seal_end)) = sealed else {
+        return [piece(base, end, false), None, None];
+    };
+    let inside_base = seal_base.clamp(base, end);
+    let inside_end = seal_end.clamp(inside_base, end);
+    [
+        piece(base, inside_base, false),
+        piece(inside_base, inside_end, true),
+        piece(inside_end, end, false),
+    ]
+}
+
 // ---------------------------------------------------------------------------
 // The loader's identity map
 // ---------------------------------------------------------------------------
@@ -1994,6 +2060,82 @@ mod tests {
             "a region straddling the origin is mapped from the origin"
         );
         assert!(runs(&[region(0x5000_0000, 0x1000, MemKind::Mmio)], 0, u64::MAX).is_empty());
+    }
+
+    #[test]
+    fn the_image_text_and_rodata_are_one_span_and_data_is_outside_it() {
+        // The link script's three segments: text, read-only data, data.
+        let segments = [
+            (0x20_0000, 0x40_0000, false),
+            (0x40_0000, 0x48_0000, false),
+            (0x48_0000, 0x50_0000, true),
+        ];
+        assert_eq!(
+            read_only_span(segments.iter().copied()),
+            Ok(Some((0x20_0000, 0x48_0000)))
+        );
+        assert_eq!(
+            read_only_span([(0x48_0000, 0x50_0000, true)].iter().copied()),
+            Ok(None),
+            "an image with nothing read only seals nothing"
+        );
+        let broken = [
+            (0x20_0000, 0x30_0000, false),
+            (0x30_0000, 0x31_0000, true),
+            (0x31_0000, 0x40_0000, false),
+        ];
+        assert!(
+            read_only_span(broken.iter().copied()).is_err(),
+            "data between text and rodata cannot be sealed with them"
+        );
+    }
+
+    #[test]
+    fn a_direct_map_run_is_cut_around_the_sealed_span_and_only_there() {
+        let sealed = Some((0x20_3000, 0x48_0000));
+        assert_eq!(
+            split_run((0, 0x4000_0000), sealed),
+            [
+                Some((0, 0x20_3000, false)),
+                Some((0x20_3000, 0x27_D000, true)),
+                Some((0x48_0000, 0x4000_0000 - 0x48_0000, false)),
+            ]
+        );
+        assert_eq!(
+            split_run((0, 0x10_0000), sealed),
+            [Some((0, 0x10_0000, false)), None, None],
+            "a run below the span is untouched"
+        );
+        assert_eq!(
+            split_run((0x100_0000, 0x10_0000), sealed),
+            [None, None, Some((0x100_0000, 0x10_0000, false))],
+            "a run above the span is untouched"
+        );
+        assert_eq!(
+            split_run((0x30_0000, 0x10_0000), sealed),
+            [None, Some((0x30_0000, 0x10_0000, true)), None],
+            "a run inside the span is sealed whole"
+        );
+        assert_eq!(
+            split_run((0x40_0000, 0x10_0000), sealed),
+            [
+                None,
+                Some((0x40_0000, 0x8_0000, true)),
+                Some((0x48_0000, 0x8_0000, false))
+            ],
+            "a run straddling the span's end is cut there"
+        );
+        assert_eq!(
+            split_run((0, 0x10_0000), None),
+            [Some((0, 0x10_0000, false)), None, None],
+            "no span, no cut"
+        );
+        // Every byte of a run is in exactly one piece.
+        for run in [(0, 0x4000_0000), (0x20_0000, 0x1000), (0x47_F000, 0x2000)] {
+            let pieces = split_run(run, sealed);
+            let total: u64 = pieces.iter().flatten().map(|&(_, len, _)| len).sum();
+            assert_eq!(total, run.1);
+        }
     }
 
     #[test]

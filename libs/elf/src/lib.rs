@@ -554,7 +554,7 @@ impl<'a> Elf<'a> {
     }
 
     /// Just the segments that have to be loaded into memory.
-    pub fn loadable(&self) -> impl Iterator<Item = Segment> + 'a {
+    pub fn loadable(&self) -> impl Iterator<Item = Segment> + Clone + 'a {
         self.segments().filter(Segment::is_load)
     }
 
