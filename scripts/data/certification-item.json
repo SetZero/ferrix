@@ -320,6 +320,7 @@
       "fs::signalfd_check",
       "fs::sysfs::check",
       "fs::timerfd_check",
+      "gs201_usb",
       "input",
       "net",
       "net::check",
