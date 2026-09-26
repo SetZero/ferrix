@@ -46,6 +46,7 @@ pub mod layout;
 pub mod netlink;
 pub mod nr;
 pub mod socket;
+pub mod sound;
 pub mod types;
 pub mod virtgpu;
 mod wire;

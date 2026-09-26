@@ -3257,4 +3257,5 @@ mod drm;
 mod inet;
 mod input;
 mod netlink;
+mod sound;
 mod virtgpu;

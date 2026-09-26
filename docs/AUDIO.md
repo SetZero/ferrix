@@ -470,6 +470,35 @@ re-baselines once U2's first attempt has sized it.
    Chromium and Steam all speak, and none of the rest. `compositor/README.md`'s
    no-C rule is the compositor's, not the clients' (`docs/CHROME.md` §3), so
    either is allowed. Not needed until U2.
+
+   **What exists in Rust (surveyed 2026-09-26).** No complete PulseAudio
+   server, but the parts of one:
+   * `pulseaudio` (github.com/colinmarc/pulseaudio-rs, MIT, 0.3.1 of
+     2025-11-30, about 12k lines, no C, no tokio): the whole native
+     protocol's messages, typed in both directions, up to protocol version
+     35. It is not a server. It has no memfd or shared-memory transport,
+     which a server does not need, because a server that answers `AUTH` with
+     both off gets its samples inline on the socket. A fix to
+     `CREATE_PLAYBACK_STREAM`'s flags (3c0325f, 2026-07-01) is on its
+     branch and not in 0.3.1, so the pin is a git revision. Its `patrace`
+     sits between a real client and a real server and prints every command,
+     which is how U2's tests get their sequences.
+   * moonshine's `pulse_server` (github.com/hgaiser/moonshine, BSD-2, about
+     1.5k lines in `moonshine-core/src/session/stream/audio/`): a
+     playback-only server on that crate. It has stream states, request
+     accounting after `pa_memblockq`, introspection, and mixing and
+     resampling into one output. It has been run against Wine and Proton,
+     native games and Waydroid. Its `buffer.rs` appears to derive from
+     magic-mirror's, which is BUSL-1.1, so that file is not a source.
+   * magic-mirror (BUSL-1.1) is moonshine's ancestor. It is read, not
+     copied.
+
+   The proposal is a Rust server on `pulseaudio` at the pinned revision,
+   laid out after moonshine's with credit. Its mixer and resampler are
+   written here or taken from `dasp` or `rubato`, not from either
+   project's `buffer.rs`. That puts U2 at 1.5k to 2k lines. PipeWire stays
+   the alternative if Steam's runtime turns out to want PipeWire's own
+   protocol.
 6. **The test's strictness.** Exact frames if §4's reading of QEMU holds.
    If the first run shows QEMU changing samples with the mixing engine off,
    accept a tolerance of ±1 per sample, or treat it as a finding against
@@ -517,6 +546,16 @@ re-baselines once U2's first attempt has sized it.
 
 ## 8. Where it stands
 
-Nothing has landed. This document is the design, with §2's calls read from
-source and §3.3's device read from QEMU 9.2.4's, and none of it run yet. The
-first landing is L1, which needs none of §6's open decisions.
+L1 is done (2026-09-26): `libs/linux-abi::sound` holds every PCM and
+control request the header defines, the constants §3.4 uses and the layouts
+of the structures it answers. It is pinned line by line to a committed probe
+(`probe/sound.c`, `sound.sh`, `sound-64.txt`, `sound-32.txt`, from
+linux-libc-dev 7.0.0-29.29, the 32-bit view built with a 64-bit `time_t`).
+The probe agreed with §3.4's numbers and with §6's note on the time64 mmap
+offsets. It added one thing this document had not said: on ARMv7-A
+`SYNC_PTR`'s control half puts `avail_min` at 76, directly after
+`appl_ptr`, where 64-bit has it at 80. The crate gained `wide_layout!` for
+structures with a layout per width.
+
+The rest of this document is design, with §2's calls read from source and
+§3.3's device read from QEMU 9.2.4's, and none of it run yet. L2 is next.
