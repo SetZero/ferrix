@@ -23,7 +23,11 @@
 //! * a packet socket bound to the interface for ARP reads that request, with
 //!   the `sockaddr_ll` of its sender, and a frame it sends is the next one the
 //!   kernel submits, addressed as the socket said;
-//! * closing the driver's end takes the interface away again.
+//! * closing the driver's end parks the interface: its carrier goes, its index
+//!   and address stay;
+//! * a ring made for the same device again, with the same HELLO, takes the
+//!   parked interface up again under its old index, address and all -- what a
+//!   driver `devmgr` starts again relies on.
 
 use alloc::sync::Arc;
 use alloc::vec;
@@ -154,10 +158,62 @@ fn serve_a_ring(node: &Arc<DeviceNode>, report: &mut Report) -> Result<(), &'sta
 
     drop(control);
     wait_for_task(id)?;
-    if net::core().with(|stack, _| stack.interface(index).is_some()) {
-        return Err("the interface outlived the driver that brought it");
+    check_parked(index)?;
+    take_it_up_again(node, index)?;
+
+    // Nobody serves this device's interface after the check.
+    super::forget_device(node);
+    if net::core().look(|stack| stack.interface(index).is_some()) {
+        return Err("a parked interface outlived its device's forgetting");
     }
     Ok(())
+}
+
+/// The interface of a ring whose driver went is still there under its index,
+/// with the address it was given, and without carrier.
+fn check_parked(index: u32) -> Result<(), &'static str> {
+    net::core().look(|stack| {
+        let Some(interface) = stack.interface(index) else {
+            return Err("the interface did not outlive the driver that brought it");
+        };
+        if interface.flags & ferrix_net::iface::IFF_RUNNING != 0 {
+            return Err("a parked interface kept its carrier");
+        }
+        if !interface.owns(IpAddress::V4(OURS)) {
+            return Err("a parked interface lost its address");
+        }
+        Ok(())
+    })
+}
+
+/// A second driver for the same device, saying the same HELLO, is given the
+/// parked interface back rather than a new one, carrier and all.
+fn take_it_up_again(node: &Arc<DeviceNode>, index: u32) -> Result<(), &'static str> {
+    let (id, control) = super::create(node)
+        .map_err(|_| "a ring could not be made again for a device whose driver went")?;
+    let driver = Driver::new()?;
+    driver.send_hello(&control, vmo_rights())?;
+    match driver.read(&control)? {
+        (ferrix_netring::Message::Ready, Some(_)) => {}
+        _ => return Err("a HELLO for a parked interface was not answered with READY"),
+    }
+    if wait_for_interface()? != index {
+        return Err("a driver started again was given a new interface, not its old one");
+    }
+    net::core().look(|stack| {
+        let Some(interface) = stack.interface(index) else {
+            return Err("the interface taken up again went away");
+        };
+        if interface.flags & ferrix_net::iface::IFF_RUNNING == 0 {
+            return Err("an interface taken up again did not get its carrier back");
+        }
+        if !interface.owns(IpAddress::V4(OURS)) {
+            return Err("an interface taken up again lost its address");
+        }
+        Ok(())
+    })?;
+    drop(control);
+    wait_for_task(id)
 }
 
 /// The Ethernet protocol the check's own frame names, one of the two IEEE

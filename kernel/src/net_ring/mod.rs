@@ -16,7 +16,20 @@
 //!    hands what arrived up to the stack, and rings the driver when the driver
 //!    asked to be rung;
 //! 4. ends when the control channel closes, the driver says STOPPED or the
-//!    ring is corrupt, taking the interface down.
+//!    ring is corrupt, taking the interface's carrier down.
+//!
+//! # An interface outlives its driver
+//!
+//! A driver that dies leaves its interface in the net core, parked: no
+//! carrier, nothing queued for it, but its index, name, addresses and routes
+//! kept. The next ring made for the same device and naming the same interface
+//! takes it up again, so a driver `devmgr` starts again brings back `eth0` as
+//! it was, and a socket bound to its address, a route through it and whatever
+//! configured it see only the carrier go and come back, as when a cable is
+//! pulled. A device whose driver never comes back leaves its interface down
+//! in the same way. A ring's claim of its device is `crate::claim`'s, so a
+//! quiesce waits for a dead driver's ring to end before the device is handed
+//! to the next one.
 //!
 //! # The kernel never drives a device
 //!
@@ -41,6 +54,7 @@ use ferrix_netring::control::{HELLO_RIGHTS, MAX_MESSAGE, READY_RIGHTS};
 use ferrix_netring::kernel::{Completed, KernelSide, SubmitError};
 use ferrix_netring::{Hello, Message, Op, Refusal, RingMemory, Status, Wait};
 
+use crate::claim::{Claims, StillServed};
 use crate::device::DeviceNode;
 use crate::hooks::Full;
 use crate::mm;
@@ -98,11 +112,13 @@ struct Start {
 /// Rings whose task has not started yet.
 static STARTING: SpinLock<Vec<Start>> = SpinLock::new(Vec::new());
 
-/// Devices that have a ring.
-static CLAIMED: SpinLock<Vec<Arc<DeviceNode>>> = SpinLock::new(Vec::new());
+/// Devices that have a ring, each claimed through its ring's control channel,
+/// which a quiesce waits out.
+static CLAIMS: Claims = Claims::new();
 
 /// Which device node each interface a ring added is served from, by the
-/// interface's index: what sysfs shows the interface inside. The net core
+/// interface's index: what sysfs shows the interface inside, and which
+/// parked interface a ring made for that device again takes up. The net core
 /// knows interfaces and not devices, and this is where the two meet.
 static PLACED: SpinLock<Vec<(u32, usize)>> = SpinLock::new(Vec::new());
 
@@ -123,6 +139,23 @@ fn forget(index: u32) {
     net::core().forget_interface(index);
 }
 
+/// The interface a ring for device `node` added before, parked or not.
+fn placed_on(node: usize) -> Option<u32> {
+    PLACED
+        .lock()
+        .iter()
+        .find(|(_, placed)| *placed == node)
+        .map(|(index, _)| *index)
+}
+
+/// Take the interface a dead ring left on `node` out of the net core: for a
+/// check that made a ring on a device nobody will serve again.
+pub(crate) fn forget_device(node: &Arc<DeviceNode>) {
+    if let Some(index) = placed_on(node.index()) {
+        forget(index);
+    }
+}
+
 /// Every ring's task by its ring's number, so a check that ended one ring
 /// can wait for that ring's task and no other: a machine with a real network
 /// adapter has a driver's ring running for the life of the machine.
@@ -140,7 +173,27 @@ static NEXT_RING: AtomicUsize = AtomicUsize::new(1);
 ///
 /// [`Full`] when the item has no room for the registration.
 pub(crate) fn install() -> Result<(), Full> {
-    native::serve(NativeCall::NetRingCreate, control_create)
+    native::serve(NativeCall::NetRingCreate, control_create)?;
+    native::register_server(&SERVER)
+}
+
+/// What a quiesce waits out for the net ring.
+static SERVER: native::Server = native::Server {
+    wait_until_unserved,
+    release: None,
+};
+
+/// Wait until no ring's channel claims `node`, for a quiesce
+/// (`crate::claim`).
+///
+/// # Errors
+///
+/// [`StillServed`].
+fn wait_until_unserved(
+    node: &Arc<DeviceNode>,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<(), StillServed> {
+    CLAIMS.wait_until_released(node, cancelled)
 }
 
 /// `net_ring_create`.
@@ -175,12 +228,8 @@ fn control_create(caller: &dyn Host, registers: &[u64; 6]) -> Result<usize, Errn
 pub(crate) fn create(node: &Arc<DeviceNode>) -> Result<(usize, Arc<Endpoint>), CreateError> {
     let (kernel_end, driver_end) = Endpoint::pair().map_err(|_| CreateError::NoMemory)?;
     let id = NEXT_RING.fetch_add(1, Ordering::Relaxed);
-    {
-        let mut claimed = CLAIMED.lock();
-        if claimed.iter().any(|held| Arc::ptr_eq(held, node)) {
-            return Err(CreateError::InUse);
-        }
-        claimed.push(Arc::clone(node));
+    if !CLAIMS.claim(node, &kernel_end) {
+        return Err(CreateError::InUse);
     }
     STARTING.lock().push(Start {
         id,
@@ -199,7 +248,7 @@ pub(crate) fn create(node: &Arc<DeviceNode>) -> Result<(usize, Arc<Endpoint>), C
         }
         Err(_) => {
             let _ = take_start(id);
-            unclaim(node);
+            CLAIMS.release(node);
             return Err(CreateError::NoMemory);
         }
     }
@@ -211,11 +260,6 @@ fn take_start(id: usize) -> Option<Start> {
     let mut starting = STARTING.lock();
     let at = starting.iter().position(|start| start.id == id)?;
     Some(starting.remove(at))
-}
-
-/// Let go of a device, so another ring may have it.
-fn unclaim(node: &Arc<DeviceNode>) {
-    CLAIMED.lock().retain(|held| !Arc::ptr_eq(held, node));
 }
 
 /// Wait until ring `id`'s task has stopped, or `deadline` passes. A ring
@@ -248,12 +292,10 @@ fn run(id: usize) {
     let Some(start) = take_start(id) else {
         return;
     };
-    let outcome = serve_ring(&start);
-    if outcome.is_none() {
-        // Refused or never begun: the device is free for another ring.
-        unclaim(&start.device);
-    }
-    unclaim(&start.device);
+    // Served, refused or never begun, the device is free for another ring,
+    // and a quiesce waiting for it is woken.
+    let _ = serve_ring(&start);
+    CLAIMS.release(&start.device);
 }
 
 /// Wait for HELLO, take the ring up, serve it, and end.
@@ -385,32 +427,15 @@ fn take_up(start: &Start, message: &ChannelMessage) -> Result<Serving, Refusal> 
             }
         })?;
 
-    let core = net::core();
-    let name = accepted.hello.interface.name();
-    if core.with(|stack, _| stack.interface_by_name(name).is_some()) {
-        return Err(Refusal::NameInUse);
-    }
-    let flags = accepted.hello.interface.flags;
-    let mut interface = NetInterface::ethernet(
-        0,
-        name,
-        accepted.hello.interface.mac,
-        accepted.hello.interface.mtu,
-    );
-    interface.flags = IFF_UP
-        | if flags.broadcast { IFF_BROADCAST } else { 0 }
-        | if flags.multicast { IFF_MULTICAST } else { 0 };
-    let index = core.add_interface(interface);
-    PLACED.lock().push((index, start.device.index()));
-    core.set_carrier(index, flags.carrier);
-
     let Ok(kernel_port) = Port::new() else {
         // The wire protocol has no refusal for memory; a malformed start is
         // the nearest it has.
-        forget(index);
         return Err(Refusal::Malformed);
     };
+    let core = net::core();
+    let index = add_or_take_up(start, &accepted.hello)?;
     core.wake_on_transmit(index, &kernel_port);
+    core.set_carrier(index, accepted.hello.interface.flags.carrier);
     let ready = {
         let mut bytes = [0_u8; MAX_MESSAGE];
         let written = Message::Ready
@@ -431,7 +456,7 @@ fn take_up(start: &Start, message: &ChannelMessage) -> Result<Serving, Refusal> 
         .write(ready, 1, || Ok::<Vec<Transfer>, Infallible>(vec![handed]))
         .is_err()
     {
-        forget(index);
+        core.park_interface(index);
         return Err(Refusal::Malformed);
     }
     Ok(Serving {
@@ -449,6 +474,40 @@ fn take_up(start: &Start, message: &ChannelMessage) -> Result<Serving, Refusal> 
         received: 0,
         sent: 0,
     })
+}
+
+/// The interface a HELLO names, added to the net core or, when a ring for
+/// this device left it parked with the same name and hardware address, that
+/// one taken up again with its index, addresses and routes.
+///
+/// A parked interface the HELLO does not match -- another name, another
+/// address -- is forgotten first: the device is serving something else now.
+fn add_or_take_up(start: &Start, hello: &Hello) -> Result<u32, Refusal> {
+    let core = net::core();
+    let name = hello.interface.name();
+    let mac = hello.interface.mac;
+    if let Some(parked) = placed_on(start.device.index()) {
+        let same = core.look(|stack| {
+            stack
+                .interface(parked)
+                .is_some_and(|old| old.name.as_bytes() == name && old.hardware == mac)
+        });
+        if same {
+            return Ok(parked);
+        }
+        forget(parked);
+    }
+    if core.look(|stack| stack.interface_by_name(name).is_some()) {
+        return Err(Refusal::NameInUse);
+    }
+    let flags = hello.interface.flags;
+    let mut interface = NetInterface::ethernet(0, name, mac, hello.interface.mtu);
+    interface.flags = IFF_UP
+        | if flags.broadcast { IFF_BROADCAST } else { 0 }
+        | if flags.multicast { IFF_MULTICAST } else { 0 };
+    let index = core.add_interface(interface);
+    PLACED.lock().push((index, start.device.index()));
+    Ok(index)
 }
 
 /// How many bytes of the ring VMO the header may use.
@@ -738,10 +797,11 @@ impl Serving {
         self.side.woke(&mut self.ring);
     }
 
-    /// End the ring: take the interface down and give up every slot.
+    /// End the ring: park the interface for the next driver and give up
+    /// every slot.
     fn finish(&mut self) {
         let abandoned = self.side.abandon();
-        forget(self.interface);
+        net::core().park_interface(self.interface);
         let _ = abandoned;
         let _ = PACKET_SIGNAL;
     }

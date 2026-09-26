@@ -163,6 +163,16 @@ they are unpinned, and not even an orderly STOPPED proves the reset — it is th
 untrusted driver's word. Until devmgr confirms, the pages stay held, leaked by
 design, and the kernel says so.
 
+However a ring ends, its **interface is parked, not removed**: the carrier goes,
+frames the stack would send through it are dropped, and its index, name,
+addresses and routes stay. The next ring made for the same device whose HELLO
+names the same interface and hardware address takes it up again under the same
+index, so a driver started again brings `eth0` back as it was, and a socket
+bound to its address or a route through it sees only the carrier come back. A
+HELLO naming something else on that device replaces the parked interface. The
+device's claim is released when the ring's task ends, and a quiesce waits for
+that (`kernel/src/claim.rs`).
+
 ## 8. What is not here
 
 Ports, mappings, the pinned pages and the device. Those are the kernel's glue

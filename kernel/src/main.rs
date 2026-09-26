@@ -1408,7 +1408,8 @@ fn check_net_ring() {
     println!(
         "  netring  {} HELLOs refused as specified, {} slots posted for a driver to fill, \
          {} frames taken up the stack and {} answered back down it, \
-         {} through a packet socket",
+         {} through a packet socket; the interface parked when its driver went \
+         and taken up again, address and all, by the next",
         report.refusals, report.posted, report.received, report.sent, report.packet_frames,
     );
 }

@@ -84,7 +84,11 @@ pub(crate) struct NetCore {
     /// The port each driven interface's ring sleeps on, which hears when
     /// frames are queued for that interface. Without it a frame waits until
     /// the ring wakes for its driver or its recheck, up to 20 ms, and every
-    /// acknowledgment of a download pays that.
+    /// acknowledgment of a download pays that. An interface with none has no
+    /// ring serving it, and its frames are dropped.
+    ///
+    /// Locked last: `take_frames` holds the stack and `pending` while it
+    /// reads this, and nothing holding this takes either.
     transmit_wakers: SpinLock<Vec<(u32, Arc<Port>)>>,
 }
 
@@ -162,12 +166,16 @@ impl NetCore {
     ///
     /// Called with the stack locked, and it allocates nothing the stack has
     /// not already allocated but that short list: the frames are moved, not
-    /// copied.
+    /// copied. A frame for an interface no ring serves -- one parked after
+    /// its driver died -- is dropped, as a link with no carrier drops it, so
+    /// that it cannot fill the queue every other interface shares.
     fn take_frames(&self, stack: &mut Stack, at: Millis) -> Vec<u32> {
         let mut pending = self.pending.lock();
+        let wakers = self.transmit_wakers.lock();
         let mut interfaces = Vec::new();
         while let Some(outgoing) = stack.poll_transmit(at) {
-            if pending.frames.len() >= MAX_PENDING {
+            let served = wakers.iter().any(|(index, _)| *index == outgoing.interface);
+            if !served || pending.frames.len() >= MAX_PENDING {
                 pending.dropped += 1;
                 continue;
             }
@@ -245,6 +253,18 @@ impl NetCore {
     /// Add an interface, and answer the index it was given.
     pub(crate) fn add_interface(&self, interface: Interface) -> u32 {
         self.with(|stack, _| stack.add_interface(interface))
+    }
+
+    /// Keep an interface whose driver has gone for the next one: its carrier
+    /// down, no ring told of its frames and none left waiting for it, but its
+    /// index, addresses and routes as they were (`crate::net_ring`).
+    pub(crate) fn park_interface(&self, index: u32) {
+        self.set_carrier(index, false);
+        self.transmit_wakers
+            .lock()
+            .retain(|(interface, _)| *interface != index);
+        let mut pending = self.pending.lock();
+        pending.frames.retain(|frame| frame.interface != index);
     }
 
     /// Take an interface away, and drop what was waiting for it.
