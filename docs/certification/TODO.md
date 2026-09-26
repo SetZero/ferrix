@@ -313,6 +313,19 @@ refused its filling, a section must fail before it starts.
 
 ---
 
+### 4.5 Job quotas — **F-35**
+**Open**, found 2026-09-26 when the vulnerability analysis's T.EXHAUST paths
+were read against the code (IMPLEMENTATION.md W-13).
+
+To re-audit: read `BUILT` in `kernel/src/fs/cgroupfs.rs` -- the controllers
+the kernel has, empty when this was written -- and what `object/job.rs`
+refuses (`JobError::Limited`, depth and descendants only). F-35 closes when
+`pids`, `memory` and `cpu` are built and each has a boot check that a job at
+its cap is refused or held while a sibling is not, or when the ST no longer
+claims FRU_RSA.1. Then re-judge T.EXHAUST and V-05 in
+VULNERABILITY-ANALYSIS.md: the heap one job drives stays unquota'd until its
+allocations are charged too.
+
 ## 5. Tools
 
 ### 5.1 Evaluate Ferrocene — **F-17**

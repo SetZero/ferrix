@@ -533,6 +533,8 @@ Unblocks DAL C, 62304 §5.4 and `ADV_TDS.3` at once.
 **Done 2026-09-25.** See F-21a and VULNERABILITY-ANALYSIS.md. It found that
 no SMAP, SMEP or PAN was enabled, which F-32 then fixed on x86-64 and AArch64.
 The attack tests per threat below remain worth writing as regression tests.
+Corrected 2026-09-26: its T.EXHAUST paths credited job quotas that are not
+built, and the verdict is now *not resisted* but for CPU per task (F-35, W-13).
 
 **Closes:** F-21a. **Size:** medium. Last EAL5 gap that is engineering.
 
@@ -654,12 +656,52 @@ with it.
 
 ---
 
+## W-13 — Job quotas, or withdraw FRU_RSA.1
+
+**Closes:** F-35, and narrows V-05. **Size:** large; the plan is written.
+
+The Security Target claims quotas of physical memory, kernel objects and CPU
+per job (FRU_RSA.1). `object/job.rs` bounds only the job tree's depth and
+descendants, and cgroupfs builds no controller. `docs/CGROUPS.md` already
+plans the three that would be the quotas, with their acceptance checks:
+
+* **P1, `pids`**: `pids.max` charged in `clone_with`, `process_create` and
+  `clone_thread` before the pid is allocated. Bounds the processes, and with
+  them the handle tables, a job can make. A fork bomb in a `pids.max 16`
+  cgroup fails `EAGAIN` at 16.
+* **M1, `memory`**: frames charged to the owning job on the user path
+  (`commit_page`, the copy-on-write and fork copies, the page-cache fill),
+  `memory.max`, and the scoped OOM kill. A process past `memory.max` is
+  killed and a sibling untouched. The kernel heap a job drives is not in M1;
+  charging it is the rest of V-05, and needs the allocation sites to know
+  their job.
+* **S1, `cpu.weight`**: a group entity per job in `libs/sched`'s EEVDF, so a
+  job's share no longer grows with its task count. Two busy cgroups at 1:3
+  within 10%.
+
+Each is a controller in `BUILT` (`kernel/src/fs/cgroupfs.rs`) and a boot
+check in the item that a job at its cap is refused or held while a sibling is
+not. Then the ST's §7 row for O.QUOTA cites those checks, §9.7 goes, and the
+analysis re-judges T.EXHAUST.
+
+*Or*, if the quotas are not to be built for the rating: withdraw FRU_RSA.1
+and O.QUOTA from the ST, and state T.EXHAUST as a threat the TOE does not
+counter, exported to the integrator as an assumption of use (provision
+memory, and do not host a program that can be hostile to the others' share).
+That is honest and cheaper, and loses the objective.
+
+**Verify:** the three boot checks, and `cat /sys/fs/cgroup/cgroup.controllers`
+listing `cpu memory pids`.
+
+---
+
 ## Suggested order
 
 **Done:** order zero, W-3, W-2, W-6, W-9, W-4 (with F-08), W-1, W-5 (with
 F-09 and F-33), W-7's measurement and ratchet, W-11, and W-12 (F-23).
 **Remaining:** F-10's tests, by module from COVERAGE-WORKLIST.md → W-8
-(largest), with W-10 in parallel whenever someone can answer step 1.
+(largest), with W-10 in parallel whenever someone can answer step 1. W-13
+(F-35) is independent of all three; its controllers are stage 13's to build.
 
 W-1 landed as a split rather than a move, and took the boundary from 36
 references to 29 by the gate's count of the day. What it leaves is F-09's:

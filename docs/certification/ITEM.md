@@ -89,7 +89,7 @@ personality's:
 | `syscall/linux.rs` (was the body of `syscall/mod.rs`) | the Linux dispatcher's routing: `exit`, `clone`, `execve`, then every table | it names 21 of the personality's modules; the item keeps the decode and hands the call on through a `Personality` trait it defines, which `main.rs` composes with it |
 | `syscall/memory.rs` | `mmap`, `munmap`, `mprotect`, `mremap`, `msync`, `madvise`, `brk` | argument decoding, by its own account, onto the core's `AddressSpace`, which is where a mapping is refused or made |
 | `syscall/futex.rs` | `futex(2)` | Linux's operations and timeouts; the native ABI waits on objects and ports, never a futex |
-| `syscall/limits.rs` | `getrlimit`, `setrlimit`, `prlimit64`, `sched_*` | the POSIX process's limits and credentials; the quota the ST claims (FRU_RSA.1) is the job's, in the core |
+| `syscall/limits.rs` | `getrlimit`, `setrlimit`, `prlimit64`, `sched_*` | the POSIX process's limits and credentials; the quota the ST claims (FRU_RSA.1) is the job's, in the core, and is not built yet (F-35) |
 | `syscall/system.rs` | `uname`, `sysinfo`, `sethostname`, `syslog`, `reboot` | checks over POSIX credentials, which the ST claims nothing about; `power`, which `reboot` reaches, stays |
 | `syscall/thread.rs` | the POSIX thread | since W-1 the scheduler holds a `UserThread`; only the Linux dispatcher needed this |
 

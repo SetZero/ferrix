@@ -59,7 +59,9 @@ outside the TOE; it is covered by A.FIRMWARE in §3.3.
   DMA into memory it was not given.
 * **Residual information protection.** A physical frame is zeroed before it is
   handed to a new owner.
-* **Resource bounding.** Jobs carry quotas the TOE enforces.
+* **Resource bounding.** Jobs are where the TOE's quotas attach. Only the
+  job tree's depth and breadth are bounded so far; the memory, object and CPU
+  quotas FRU_RSA.1 claims are not built (§9.7, F-35).
 
 ---
 
@@ -239,7 +241,7 @@ How the TOE meets each objective, with the evidence that exists today.
 | O.CAPABILITY | `kernel/src/object/`: handle tables, rights masks, transfer only over channels. | `object/check.rs`, 3,318 lines; *"18 refusals as specified"* |
 | O.DMA | `kernel/src/iommu/{vtd,smmuv3}.rs`; a driver receives an `IoMapping` and a domain. | `iommu/gate.rs`; `scripts/check-device-access.py` holds the seam at build time |
 | O.SCRUB | `mm::zero_frame` on every frame handed to a VMO. | `kernel/src/mm.rs:1140`, called from `user/vmo.rs` at three sites |
-| O.QUOTA | `kernel/src/object/job.rs`. | `object/check.rs` |
+| O.QUOTA | **Not met.** `kernel/src/object/job.rs` bounds a job tree's depth and descendants, and nothing else; no job is charged memory, objects or CPU (§9.7, F-35). | none for FRU_RSA.1 |
 | O.VALIDATE | `kernel/src/syscall/uaccess.rs`, backed on x86-64 by SMEP and SMAP since 2026-09-25, and on AArch64 by PAN where the CPU has it. The reference `cortex-a72` does not, and ARMv7-A cannot (V-01). | `syscall/check.rs`, 9,537 lines, 427 refusal assertions; the boot reports *SMEP on, SMAP on* |
 | O.FAILSAFE | `kernel/src/panic.rs` with a catalogue of explanations. | `scripts/check-panic-audit.py`; `gen-panic-catalog.py --check` |
 
@@ -347,3 +349,15 @@ the TOE and is exempt by file, with 37 edges argued in ITEM.md §2 rather than
 checked. And the load ring runs in ring 0, in the same address space and heap:
 the boundary is one of dependency and assurance, not of protection, which is
 why A.ADMIN and the SAFETY-MANUAL's assumptions of use carry the rest.
+
+### 9.7 The quotas FRU_RSA.1 claims are not built
+FRU_RSA.1 claims maximum quotas of physical memory, kernel objects and CPU
+time per job. What `object/job.rs` enforces is `cgroup.max.depth` and
+`cgroup.max.descendants`; cgroupfs builds no controller, so nothing charges a
+job for frames, heap, processes or processor time, and the only object bounds
+are per process (4,096 handles, `RLIMIT_NOFILE`) and global (`PID_MAX`). The
+vulnerability analysis credited job quotas with two T.EXHAUST paths until
+2026-09-26 and now finds T.EXHAUST not resisted but for CPU per task (V-05).
+An evaluator would fail FRU_RSA.1 on this. Either the `pids`, `memory` and
+`cpu` controllers `docs/CGROUPS.md` plans are built with their checks, or the
+claim is withdrawn and T.EXHAUST stated as not countered (F-35).

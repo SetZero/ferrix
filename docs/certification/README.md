@@ -23,11 +23,11 @@ that does not exist.
 None of the four can be claimed today. What changed is that the reasons are now
 specific, measured, and mostly documents rather than code.
 
-* [IMPLEMENTATION.md](IMPLEMENTATION.md) — **start here to build**: eleven work orders, ordered
+* [IMPLEMENTATION.md](IMPLEMENTATION.md) — **start here to build**: thirteen work orders, ordered
 * [TODO.md](TODO.md) — start here to re-audit: what to re-measure, and what not to write
 * [SAFETY-MANUAL.md](SAFETY-MANUAL.md) — the out-of-context argument: assumed requirements, safe state, eleven assumptions of use, element failure analysis
 * [ITEM.md](ITEM.md) — what the ratings attach to, and why it is not all of Ferrix
-* [FINDINGS.md](FINDINGS.md) — the audit register, 15 open findings and 24 closed
+* [FINDINGS.md](FINDINGS.md) — the audit register, 16 open findings and 24 closed
 * [SECURITY-TARGET.md](SECURITY-TARGET.md) — EAL5+ claim, SFRs, and where it would fail evaluation
 * [VULNERABILITY-ANALYSIS.md](VULNERABILITY-ANALYSIS.md) — AVA_VAN.4 over the seven threats; six residual vulnerabilities
 * [SPECULATION.md](SPECULATION.md) — the side-channel defences, per architecture, behind one build switch, and what they cost
@@ -84,6 +84,7 @@ boundary.
 | `unsafe` blocks, all documented | 662 |
 | Directly recursive functions in the item | **0**, of 2,033 |
 | Allocations in the item that stop the machine when memory runs out | **0** a program can reach; 73 at bring-up, by design (F-23) |
+| Job quotas the ST claims (FRU_RSA.1) that are built | **0** of 3: memory, objects and CPU uncharged; only the job tree's depth and descendants are bounded (F-35) |
 | SMEP + SMAP (x86-64) | **on** |
 | PAN (AArch64) | **implemented**; absent from the reference CPU |
 | Side-channel defences | **on** by default, per processor; one switch, `--mitigations off`, takes them out |
@@ -143,7 +144,9 @@ the crate root is exempt by file (SECURITY-TARGET §9.6). The side-channel defen
 default (F-31, closed), but there is no cache partitioning and no KPTI, so a
 program with a timer can still find the kernel and time a neighbour (V-06). And the TOE claims neither audit nor
 authentication (F-21b), which is defensible for an isolation kernel and is why
-no Protection Profile is claimed.
+no Protection Profile is claimed. FRU_RSA.1 is claimed and not built: a job's
+memory, objects and CPU are not charged, so T.EXHAUST is not resisted but for
+CPU per task (F-35, V-05).
 
 *Nearest credible claim:* EAL4+ looks defensible on this evidence with an ST
 written, which is also where RHEL and SUSE sit. EAL5 needs the design
@@ -230,6 +233,10 @@ In order of value per unit of effort:
    "written in a memory-safe language" as a talking point and as evidence.
    Whether it covers `armv7a-none-eabi` and the UEFI targets is the first
    question.
+4. **Build the job quotas the ST claims, or withdraw the claim (F-35, W-13).**
+   The `pids`, `memory` and `cpu` controllers `docs/CGROUPS.md` plans are the
+   quotas FRU_RSA.1 names; until they land an evaluator fails that SFR, and
+   T.EXHAUST is the one threat the analysis finds not resisted.
 Done since the audit began: the vulnerability analysis (F-21a), SMEP, SMAP and
 PAN (F-32), the release profile and both Arm architectures measured (F-11,
 F-12), the complexity and recursion gate (F-25), board support, bring-up

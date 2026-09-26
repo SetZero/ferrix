@@ -4,7 +4,7 @@ The audit register for the item defined in [ITEM.md](ITEM.md). One entry per
 finding, each naming what was measured, which objective it bears on, and what
 would close it.
 
-15 findings are open and 24 are closed, of 39. F-23 closed when every allocation in the item was made to report failure, with a gate that counts the ones that do not (2026-09-26). F-10 is re-measured at 74.7% on x86-64, 73.7% on AArch64 and 70.9% on ARMv7-A, the 81.9% published before having been wrong, and then at 82.2% on x86-64 once two more defects of the tool were fixed and x86-64's architecture code, `trap` and `smp` were covered or argued statement by statement, F-07, F-09 and F-33 closed, which leaves the boundary with no upward reference, F-31 closed when its layout half, KASLR, was built after its side-channel half, and F-34, a writable alias of the kernel's text in the direct map, was found and closed the same day (2026-09-26). No finding here is closed by argument:
+16 findings are open and 24 are closed, of 40. F-35 was opened when the vulnerability analysis was read against the code: the job quotas the Security Target claims for T.EXHAUST are not built (2026-09-26). F-23 closed when every allocation in the item was made to report failure, with a gate that counts the ones that do not (2026-09-26). F-10 is re-measured at 74.7% on x86-64, 73.7% on AArch64 and 70.9% on ARMv7-A, the 81.9% published before having been wrong, and then at 82.2% on x86-64 once two more defects of the tool were fixed and x86-64's architecture code, `trap` and `smp` were covered or argued statement by statement, F-07, F-09 and F-33 closed, which leaves the boundary with no upward reference, F-31 closed when its layout half, KASLR, was built after its side-channel half, and F-34, a writable alias of the kernel's text in the direct map, was found and closed the same day (2026-09-26). No finding here is closed by argument:
 a finding closes when the thing it describes stops being true and something in
 the build says so.
 
@@ -14,7 +14,7 @@ met or met without evidence. *Minor* — a defect with no objective attached yet
 
 | | Blocking | Major | Moderate | Minor | Informational |
 |---|---:|---:|---:|---:|---:|
-| Open | 2 | 5 | 7 | 0 | 1 |
+| Open | 2 | 6 | 7 | 0 | 1 |
 
 Blocking: F-27 and F-28 — independent assessment and a quality management
 system. Both need an organisation; neither is a defect in the code.
@@ -744,6 +744,40 @@ which is writable in its own mapping too.
 load ring. Defensible for an isolation kernel and the reason no OS Protection
 Profile can be claimed — but an evaluator would press on whether a TOE that
 cannot record a security-relevant event can claim EAL5.
+
+### F-35 — the job quotas FRU_RSA.1 claims are not built
+**Major.** Opened 2026-09-26. The Security Target claims `FRU_RSA.1`: the TSF
+enforces maximum quotas of physical memory, kernel objects and CPU time that a
+job can use simultaneously, for O.QUOTA against T.EXHAUST, and its summary
+specification names `kernel/src/object/job.rs` as the implementation and
+`object/check.rs` as the evidence. The vulnerability analysis credited "job
+quotas" with resisting its first two T.EXHAUST paths. Read against the code,
+none of the three quotas exists:
+
+* **Memory.** Nothing is charged for the frames or the heap a job holds.
+  cgroupfs builds no controller (`BUILT` in `kernel/src/fs/cgroupfs.rs` is
+  empty); `memory` charging is landing M1 of `docs/CGROUPS.md`.
+  `vm.overcommit_memory` reads 1, and no rlimit on memory is enforced.
+* **Kernel objects.** `object/job.rs` limits the job tree only:
+  `cgroup.max.depth` and `cgroup.max.descendants`, when a parent sets them.
+  A process holds at most 4,096 handles (`HANDLE_LIMIT`) and `RLIMIT_NOFILE`
+  descriptors, but nothing limits the processes a job makes except the global
+  `PID_MAX`, so a job's tables are as many as it makes processes. `pids` is P1.
+* **CPU.** EEVDF shares per task; there is no group entity, `cpu.weight` or
+  `cpu.max` (S1, S2).
+
+What does hold is F-23's: running out is an error the item reports, not a
+stop. The denial of service to other jobs is not bounded, and the analysis
+now says so: T.EXHAUST is *not resisted* but for CPU per task, and V-05 covers
+memory, objects and CPU as well as the heap. The safety manual's FM-7 already
+credited only the job limits on depth and descendants.
+
+*Closes when* a job's memory, processes and CPU are charged and capped, with a
+boot check for each that a job at its cap is refused or throttled while a
+sibling is untouched -- P1, M1 and S1 of `docs/CGROUPS.md` are the plan, and
+their acceptance tests are those checks -- and the summary specification
+cites them. *Or* the Security Target withdraws `FRU_RSA.1` and states
+T.EXHAUST as not countered, which is honest and loses O.QUOTA.
 
 ### F-22 — no safety case
 **Closed at the element level 2026-09-25** by
