@@ -7,11 +7,11 @@ use std::process::Stdio;
 /// (it is started from a child that exits at once, so nothing is left to
 /// reap and it outlives this program).
 ///
-/// That is what waybar's `on-click`, fuzzel's launch, hyprlock's and
-/// hypridle's commands do upstream (`g_spawn_command_line_async`, a
-/// `fork`/`setsid`/`execl("/bin/sh", "-c")`), so a command line from the
-/// user's file means here what it means there -- `pidof hyprlock ||
-/// hyprlock` included.
+/// That is what waybar's `on-click` and hyprlock's and hypridle's commands
+/// do upstream (a `fork`/`setsid`/`execl("/bin/sh", "-c")`), so a command
+/// line from the user's file means here what it means there -- `pidof
+/// hyprlock || hyprlock` included. fuzzel is not one of them: it splits a
+/// desktop entry's `Exec` itself and calls `execvp`.
 ///
 /// # Errors
 ///
