@@ -148,7 +148,6 @@
         "syscall/mod.rs",
         "syscall/native.rs",
         "syscall/program.rs",
-        "syscall/registry.rs",
         "syscall/system.rs",
         "syscall/thread.rs",
         "syscall/unmap_check.rs"
@@ -202,6 +201,7 @@
         "syscall/pipe.rs",
         "syscall/poll.rs",
         "syscall/process.rs",
+        "syscall/registry.rs",
         "syscall/signal.rs",
         "syscall/signalfd.rs",
         "syscall/sockets.rs",
@@ -264,13 +264,6 @@
       },
       {
         "file": "syscall/native.rs",
-        "references": "syscall::process",
-        "from_ring": "item",
-        "to_ring": "load",
-        "finding": "F-01"
-      },
-      {
-        "file": "syscall/registry.rs",
         "references": "syscall::process",
         "from_ring": "item",
         "to_ring": "load",

@@ -30,11 +30,10 @@ use alloc::sync::Arc;
 use core::any::Any;
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
-use crate::object::process::Host;
+use crate::object::process::{self as pids, Host};
 use crate::sched::{self, Task, UserThread};
 use crate::sync::SpinLock;
 use crate::syscall::process::Process;
-use crate::syscall::registry;
 use crate::syscall::signal::{self, Signals, ThreadSignals};
 
 /// One line of execution through a process.
@@ -210,7 +209,7 @@ impl Drop for Thread {
     fn drop(&mut self) {
         let tid = *self.tid.get_mut();
         if tid != 0 && tid != self.process.pid() {
-            registry::release_thread(tid, &self.process);
+            pids::release_naming(tid, &*self.process);
         }
     }
 }

@@ -65,8 +65,11 @@ here may depend on a filesystem, a network stack or a device driver, and
 
 Bring-up (`main.rs`, `init.rs`), the native ABI dispatcher and the handful of
 syscalls that belong to the item rather than to the Linux personality
-(`registry`, `native`, `uaccess`, `memory`, `thread`, `program`, `limits`,
-`system`, `futex`), PCI enumeration, `devmgr`, the entropy source and power.
+(`native`, `uaccess`, `memory`, `thread`, `program`, `limits`, `system`,
+`futex`), PCI enumeration, `devmgr`, the entropy source and power. The pid
+table was the item's `syscall/registry.rs` until W-1 moved it into the core
+(`object/process.rs`); what that file keeps is the Linux personality's typed
+lookup, and it is in `load` with the rest of the personality.
 
 The native ABI is here rather than in `core` because it is the interface the
 item *exports*, and an interface is evaluated with the thing that exports it.

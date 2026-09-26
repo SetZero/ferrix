@@ -46,7 +46,6 @@ use crate::smp;
 use crate::syscall::attributes::int;
 use crate::syscall::credentials;
 use crate::syscall::process::Process;
-use crate::syscall::registry;
 use crate::syscall::time;
 use crate::syscall::uaccess::{self, WORD};
 
@@ -288,7 +287,7 @@ pub(crate) fn sys_sysinfo(process: &Process, at: u64) -> Result<usize, Errno> {
         Some(bytes) if bytes <= word_max => (1_u32, bytes, free_pages * PAGE_SIZE),
         _ => (PAGE_SIZE as u32, total_pages, free_pages),
     };
-    let procs = u16::try_from(registry::live().len()).unwrap_or(u16::MAX);
+    let procs = u16::try_from(crate::object::process::live().len()).unwrap_or(u16::MAX);
 
     let mut bytes = [0_u8; 112];
     let buffer = bytes.get_mut(..SYSINFO_SIZE).ok_or(Errno::EINVAL)?;

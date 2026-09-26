@@ -144,11 +144,6 @@
       "lines": 38,
       "recursive": false
     },
-    "syscall/registry.rs::check": {
-      "complexity": 21,
-      "lines": 32,
-      "recursive": false
-    },
     "syscall/system.rs::sys_syslog": {
       "complexity": 16,
       "lines": 21,
