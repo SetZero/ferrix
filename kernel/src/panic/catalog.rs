@@ -262,6 +262,53 @@ pub(crate) static STAGE9_ALLOCATION: Explanation = Explanation {
           docs/certification/MEMORY-AND-TIMING.md",
 };
 
+/// For `check_native_refusals` in `main.rs`.
+pub(crate) static STAGE9_REFUSALS: Explanation = Explanation {
+    code: "FX-0903",
+    title: "a native call accepted what the ABI says it refuses",
+    meaning: "`syscall::native_check::run` drives the native calls from a process of its \
+              own with what each must refuse: a handle of another kind (`WRONG_TYPE`), one \
+              without the right the call needs (`ACCESS_DENIED`), one named twice in a \
+              message (`INVALID_ARGS`), a send whose cycle check would walk past its bound \
+              (`TOO_BIG`), a copy through a VMO a device reads past the caches \
+              (`BAD_STATE`), a clock asked for with an unknown option or zero hertz, and a \
+              handle table with no room (`NO_HANDLES`) from a duplicate, a create and a \
+              read. A refused call must leave what it was given where it was: the handle \
+              named twice still open, the endpoint a refused send carried still the \
+              sender's, a packet whose buffer faulted and a message a full table could not \
+              take still queued for the next attempt.",
+    causes: &[
+        "A handler checked rights before the object's kind, or not at all, or turned a \
+         handle table's refusal into another status.",
+        "A refused call took a handle, a packet or a message it then had nowhere to put.",
+        "The cycle check's walk bound in `object/channel.rs` changed without the check.",
+    ],
+    see: "kernel/src/syscall/native_check.rs; kernel/src/syscall/native.rs; \
+          kernel/src/object/channel.rs; libs/objects",
+};
+
+/// For `check_services` in `main.rs`.
+pub(crate) static SERVICES: Explanation = Explanation {
+    code: "FX-0904",
+    title: "a service the item leans on failed its self-check",
+    meaning: "`service_check::run` drives the small services the rest of the item leans on \
+              in the shapes a passing boot does not: a registration list past its bound, a \
+              device's claim while its driver lives and after it has gone, the lowest free \
+              node number, a boot-mode word on a machine that keeps none, `devmgr` asked to \
+              bind a device that does not exist and one that already has its driver, the \
+              IOMMU gate's waits past their deadline and past their patience, and the \
+              sentences the interrupt table, init, the copy layer and the DMA fault audit \
+              report failures with.",
+    causes: &[
+        "A list took a registration past its bound, or gave them back out of order.",
+        "A quiesce went ahead under a live driver, or a cancelled one was not told so.",
+        "`devmgr` answered a request it should refuse, or answered with the wrong error.",
+        "A failure's wording changed without its documentation.",
+    ],
+    see: "kernel/src/service_check.rs; kernel/src/hooks.rs; kernel/src/claim.rs; \
+          kernel/src/devmgr.rs; kernel/src/iommu/check.rs; kernel/src/iommu/gate.rs",
+};
+
 /// For `kmain` in `main.rs`, when `self_check` fails.
 pub(crate) static STAGE1_HANDOFF: Explanation = Explanation {
     code: "FX-0101",
@@ -2143,6 +2190,8 @@ pub(crate) static ALL: &[&Explanation] = &[
     &SYSFS,
     &STAGE9_OBJECTS,
     &STAGE9_ALLOCATION,
+    &STAGE9_REFUSALS,
+    &SERVICES,
     &STAGE10_PCI,
     &STAGE10_DEVICES,
     &STAGE10_IOMMU,

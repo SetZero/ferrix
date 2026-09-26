@@ -196,6 +196,8 @@ pub(crate) fn run(topology: &Topology) -> Result<Report, &'static str> {
     }
 
     one_task()?;
+    describes_itself()?;
+    a_reaper_without_memory_frees_one_at_a_time(topology)?;
     a_dead_task_is_not_filed_as_a_sleeper()?;
     made_runnable_here_runs_without_another_interrupt()?;
     mark!(0);
@@ -1198,4 +1200,165 @@ fn describe_unstarted(tasks: &[Arc<Task>], started: u64, wanted_cpu: impl Fn(usi
         );
     }
     super::report_queues();
+}
+
+/// Before the scheduler runs: a sleep, a wait on one queue and a wait on
+/// several spin until their deadlines, since there is no task to switch away
+/// from and nothing to be woken by, and the processors' times read as none,
+/// since there is no queue to read them from.
+///
+/// # Errors
+///
+/// The first of these that did not hold, as a sentence.
+pub(crate) fn before_start() -> Result<(), &'static str> {
+    if super::started() {
+        return Err("the checks for before the scheduler ran after it started");
+    }
+    match super::cpu_times() {
+        Ok(times) if times.is_empty() => {}
+        _ => return Err("processor times were read before there were queues to read"),
+    }
+
+    let deadline = crate::timer::now_nanos().saturating_add(EARLY_WAIT_NANOS);
+    super::sleep_until(deadline);
+    if crate::timer::now_nanos() < deadline {
+        return Err("a sleep before the scheduler ended before its deadline");
+    }
+
+    let queue = WaitQueue::new();
+    let other = WaitQueue::new();
+    let deadline = crate::timer::now_nanos().saturating_add(EARLY_WAIT_NANOS);
+    if queue.wait_until_deadline(|| false, deadline) || crate::timer::now_nanos() < deadline {
+        return Err("a wait before the scheduler ended before its deadline, or as satisfied");
+    }
+    let deadline = crate::timer::now_nanos().saturating_add(EARLY_WAIT_NANOS);
+    if WaitQueue::wait_on_any(&[&queue, &other], || false, deadline, EARLY_WAIT_NANOS / 4)
+        || crate::timer::now_nanos() < deadline
+    {
+        return Err("a wait on two queues before the scheduler ended early, or as satisfied");
+    }
+    if !queue.wait_until_deadline(|| true, 0) {
+        return Err("a wait already satisfied before the scheduler was not");
+    }
+    Ok(())
+}
+
+/// How long each of [`before_start`]'s waits lasts.
+const EARLY_WAIT_NANOS: u64 = 1_000_000;
+
+/// A task and a wait queue print as what they are: what a failure report
+/// that names one shows. The task's print carries its number and name.
+fn describes_itself() -> Result<(), &'static str> {
+    let me = super::current().ok_or("the checking task is not running")?;
+    let printed = alloc::format!("{:?}", *me);
+    let named = alloc::format!("name: {:?}", me.name);
+    if !printed.starts_with("Task {") || !printed.contains(&named) {
+        return Err("a task does not print as itself");
+    }
+    if !alloc::format!("{:?}", WaitQueue::new()).starts_with("WaitQueue {") {
+        return Err("a wait queue does not print as one");
+    }
+    Ok(())
+}
+
+/// With no memory for its lists, the reaper frees dead tasks one at a time,
+/// and gives every stack back all the same (finding F-23).
+///
+/// No idle loop may reap the dead tasks first, and one reaps whenever it
+/// believes every processor idle -- which a processor whose idle task was
+/// preempted on its way out of a halt still claims to be. So no idle loop
+/// runs at all while the tasks die: every other processor holds a spinning
+/// task of this check's, and the two tasks that die are pinned here, where
+/// this task stays runnable between them. The reap is then made with every
+/// allocation of this task failing.
+fn a_reaper_without_memory_frees_one_at_a_time(topology: &Topology) -> Result<(), &'static str> {
+    let allocations = crate::vmap::usage().allocations;
+    let me = super::current().ok_or("the checking task is not running")?;
+    let here = me.cpu();
+    HOLD.store(true, Ordering::Release);
+    HOLDING.store(0, Ordering::Release);
+    let mut holders = Vec::new();
+    for cpu in (0..topology.online()).filter(|&cpu| cpu != here) {
+        holders.push(super::spawn_on(
+            "check-hold",
+            hold,
+            0,
+            NICE_0_WEIGHT,
+            cpu,
+            CpuSet::of(cpu),
+        )?);
+    }
+    let outcome = reap_while_held(&me, here, holders.len() as u64);
+    HOLD.store(false, Ordering::Release);
+    let deadline = crate::timer::now_nanos().saturating_add(PATIENCE_NANOS);
+    while !holders.iter().all(|holder| holder.is_dead()) {
+        if crate::timer::now_nanos() >= deadline {
+            return Err("a task holding a processor for the reaper check never ended");
+        }
+        super::yield_now();
+    }
+    drop(holders);
+    let (reaped, failed) = outcome?;
+    if reaped < 2 || failed == 0 {
+        crate::console::println!("  reap     {reaped} reaped with {failed} allocations failed");
+        return Err("the reaper without memory did not free the dead tasks one at a time");
+    }
+    reap_to(allocations, "a reap without memory")
+}
+
+/// Whether the reaper check's holders keep spinning.
+static HOLD: AtomicBool = AtomicBool::new(false);
+/// How many of them have started.
+static HOLDING: AtomicU64 = AtomicU64::new(0);
+
+/// Keep a processor from running its idle loop until [`HOLD`] is cleared.
+fn hold(_argument: usize) {
+    let _ = HOLDING.fetch_add(1, Ordering::AcqRel);
+    while HOLD.load(Ordering::Acquire) {
+        core::hint::spin_loop();
+    }
+}
+
+/// [`a_reaper_without_memory_frees_one_at_a_time`] once the other processors
+/// are held: two tasks die here, and are reaped with no memory. Answers how
+/// many were reaped and how many allocations failed.
+fn reap_while_held(me: &Task, here: usize, holders: u64) -> Result<(usize, u64), &'static str> {
+    let deadline = crate::timer::now_nanos().saturating_add(PATIENCE_NANOS);
+    while HOLDING.load(Ordering::Acquire) < holders {
+        if crate::timer::now_nanos() >= deadline {
+            return Err("a task holding a processor for the reaper check never started");
+        }
+        super::yield_now();
+    }
+    DONE.store(0, Ordering::Release);
+    let first = super::spawn_on(
+        "check-reap-a",
+        worker,
+        1,
+        NICE_0_WEIGHT,
+        here,
+        CpuSet::of(here),
+    )?;
+    let second = super::spawn_on(
+        "check-reap-b",
+        worker,
+        2,
+        NICE_0_WEIGHT,
+        here,
+        CpuSet::of(here),
+    )?;
+    while DONE.load(Ordering::Acquire) < 2
+        || !first.is_dead()
+        || !second.is_dead()
+        || super::ZOMBIES.lock().len() < 2
+    {
+        if crate::timer::now_nanos() >= deadline {
+            return Err("two tasks for the reaper never reached it");
+        }
+        super::yield_now();
+    }
+    drop((first, second));
+    crate::fallible::inject(me.id, 1);
+    let reaped = super::reap();
+    Ok((reaped, crate::fallible::stop_injecting()))
 }

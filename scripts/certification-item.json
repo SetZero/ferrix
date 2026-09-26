@@ -157,9 +157,12 @@
         "pci/**",
         "power.rs",
         "random.rs",
+        "service_check.rs",
         "syscall/mod.rs",
         "syscall/native.rs",
+        "syscall/native_check.rs",
         "syscall/program.rs",
+        "syscall/program_check.rs",
         "syscall/unmap_check.rs"
       ]
     },

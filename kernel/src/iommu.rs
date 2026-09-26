@@ -68,9 +68,12 @@ use crate::device::{DeviceNode, Location};
 use crate::sync::SpinLock;
 use crate::{acpi, arch, fdt, mm, println};
 
+mod check;
 mod gate;
 mod smmuv3;
 mod vtd;
+
+pub(crate) use check::run as check_gate;
 
 use gate::Gate;
 

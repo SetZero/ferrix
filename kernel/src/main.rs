@@ -48,6 +48,7 @@ mod power;
 mod random;
 mod render;
 mod sched;
+mod service_check;
 mod signal_frame;
 mod smp;
 mod stm32mp1;
@@ -322,6 +323,19 @@ fn check_timer_and_start_clocks(info: &BootInfo) {
             "stage 3 self-check failed: {problem}"
         );
     }
+    check_waits_before_the_scheduler();
+}
+
+/// What a wait and a sleep do while there is no task to switch away from:
+/// stage 5's, checked here because this is the one stretch of boot where they
+/// can be seen doing it, with the clock stage 3 just proved.
+fn check_waits_before_the_scheduler() {
+    if let Err(problem) = sched::check_before_start() {
+        fatal!(
+            catalog::STAGE5_SCHEDULER,
+            "stage 5 self-check failed before the scheduler started: {problem}"
+        );
+    }
 }
 
 /// The last line of boot before init: the success marker when every check
@@ -383,6 +397,38 @@ fn check_programs() {
     // Finding F-23's negative control: allocations made to fail under the
     // native calls stage 9 just proved, and the kernel required to carry on.
     check_allocation_failure();
+}
+
+/// The registration lists, a device's claim and number, the boot-mode word,
+/// and the sentences failures are reported with.
+fn check_services() {
+    let report = match service_check::run() {
+        Ok(report) => report,
+        Err(problem) => fatal!(catalog::SERVICES, "service self-check failed: {problem}"),
+    };
+    println!(
+        "  services {} registrations kept in order, {} refusals as documented, {} failure \
+         sentences read back",
+        report.registered, report.refusals, report.sentences,
+    );
+}
+
+/// The native calls' refusals stage 9's check does not make: the wrong kind
+/// of handle, a missing right, a handle named twice, a full table, a send too
+/// deep to check, a faulting packet buffer, a copy past the caches, a clock.
+fn check_native_refusals() {
+    let report = match syscall::native_check::run() {
+        Ok(report) => report,
+        Err(problem) => fatal!(
+            catalog::STAGE9_REFUSALS,
+            "native refusal self-check failed: {problem}"
+        ),
+    };
+    println!(
+        "  refusals {} native calls refused as the ABI says, a table refused past {} handles and \
+         kept what it could not deliver, a send refused past {} queued endpoints",
+        report.refusals, report.filled, report.walked,
+    );
 }
 
 /// Stage 6: the memory objects, the frames they must give back, and the
@@ -1163,8 +1209,15 @@ fn check_block_ring() {
     // nodes, the disks and interfaces devmgr's drivers published, and which
     // driver devmgr says drives which device. Only a check: sysfs is mounted
     // by whoever wants it, not by this.
+    //
+    // Then the small services the stages above lean on, and the native
+    // calls' refusals, in the shapes a passing boot never puts them in: after
+    // the device nodes, which two of them claim and clock, and after
+    // `devmgr`, which one of them asks for a driver.
     if checks::run() {
         check_sysfs();
+        check_services();
+        check_native_refusals();
     }
 }
 

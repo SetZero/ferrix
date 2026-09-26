@@ -71,6 +71,8 @@ Causes are listed most likely first.
 | [FX-0890](#fx-0890) | sysfs did not show the machine's devices as Linux shows them |
 | [FX-0901](#fx-0901) | the native ABI's objects failed their self-check |
 | [FX-0902](#fx-0902) | an allocation failure was not survived |
+| [FX-0903](#fx-0903) | a native call accepted what the ABI says it refuses |
+| [FX-0904](#fx-0904) | a service the item leans on failed its self-check |
 | [FX-1001](#fx-1001) | PCI enumeration failed its self-check |
 | [FX-1002](#fx-1002) | a device node handed out memory or an interrupt it does not have |
 | [FX-1003](#fx-1003) | an IOMMU domain gave a device the wrong addresses |
@@ -1536,6 +1538,54 @@ failure that corrupts state, leaks, or is reported as something it is not.
 
 See: kernel/src/object/alloc_check.rs; kernel/src/fallible.rs;
 kernel/src/mm/reserve.rs; docs/certification/MEMORY-AND-TIMING.md.
+
+<a id="fx-0903"></a>
+
+## FX-0903 — a native call accepted what the ABI says it refuses
+
+`syscall::native_check::run` drives the native calls from a process of its own
+with what each must refuse: a handle of another kind (`WRONG_TYPE`), one without
+the right the call needs (`ACCESS_DENIED`), one named twice in a message
+(`INVALID_ARGS`), a send whose cycle check would walk past its bound
+(`TOO_BIG`), a copy through a VMO a device reads past the caches (`BAD_STATE`),
+a clock asked for with an unknown option or zero hertz, and a handle table with
+no room (`NO_HANDLES`) from a duplicate, a create and a read. A refused call
+must leave what it was given where it was: the handle named twice still open,
+the endpoint a refused send carried still the sender's, a packet whose buffer
+faulted and a message a full table could not take still queued for the next
+attempt.
+
+1. A handler checked rights before the object's kind, or not at all, or turned a
+   handle table's refusal into another status.
+2. A refused call took a handle, a packet or a message it then had nowhere to
+   put.
+3. The cycle check's walk bound in `object/channel.rs` changed without the
+   check.
+
+See: kernel/src/syscall/native_check.rs; kernel/src/syscall/native.rs;
+kernel/src/object/channel.rs; libs/objects.
+
+<a id="fx-0904"></a>
+
+## FX-0904 — a service the item leans on failed its self-check
+
+`service_check::run` drives the small services the rest of the item leans on in
+the shapes a passing boot does not: a registration list past its bound, a
+device's claim while its driver lives and after it has gone, the lowest free
+node number, a boot-mode word on a machine that keeps none, `devmgr` asked to
+bind a device that does not exist and one that already has its driver, the IOMMU
+gate's waits past their deadline and past their patience, and the sentences the
+interrupt table, init, the copy layer and the DMA fault audit report failures
+with.
+
+1. A list took a registration past its bound, or gave them back out of order.
+2. A quiesce went ahead under a live driver, or a cancelled one was not told so.
+3. `devmgr` answered a request it should refuse, or answered with the wrong
+   error.
+4. A failure's wording changed without its documentation.
+
+See: kernel/src/service_check.rs; kernel/src/hooks.rs; kernel/src/claim.rs;
+kernel/src/devmgr.rs; kernel/src/iommu/check.rs; kernel/src/iommu/gate.rs.
 
 <a id="fx-1001"></a>
 

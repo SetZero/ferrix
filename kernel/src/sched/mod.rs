@@ -57,6 +57,7 @@ use crate::smp::Topology;
 use queue::CpuQueue;
 use task::{DEAD, RUNNABLE};
 
+pub(crate) use check::before_start as check_before_start;
 pub(crate) use check::run as run_checks;
 pub(crate) use queue::{MIN_SLICE_NS, SLICE_NS};
 pub(crate) use task::{Task, TaskId, UserThread};
