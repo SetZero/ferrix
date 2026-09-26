@@ -8,18 +8,17 @@
 //!
 //! One function, [`dispatch`], agreed with the stage 6 owner so that neither
 //! side has to know the other's job. Their trap vector saves registers, fills
-//! a [`SyscallArgs`] from the frame, and calls it. It returns an [`Outcome`]
-//! which their code applies. That puts every register convention on their side
-//! of the line and every ABI decision on this one, and it is the reason
-//! `SyscallArgs` has public fields, no constructor and nothing fallible in it:
-//! a trampoline that has already switched stacks must not meet a `Result`.
+//! a [`SyscallArgs`] from the frame, and calls `crate::trap::system_call`,
+//! which `main.rs` points here. It returns an [`Outcome`] which their code
+//! applies. That puts every register convention on their side of the line and
+//! every ABI decision on this one. Both types are the core's
+//! (`crate::trap`), and the core reaches this function only through what was
+//! registered with it, so the trap path names nothing above the core
+//! (`docs/certification/FINDINGS.md`, F-09).
 //!
 //! [`Outcome`] has two variants rather than being a bare `isize` because "put
-//! this in the return register" does not describe every call. `execve` and a
-//! freshly created `clone` child both resume on a register frame that was
-//! *constructed* rather than returned into, so there is nothing to return.
-//! Saying that as data — an entry point and a stack pointer — keeps this layer
-//! free of any architecture's `TrapFrame`.
+//! this in the return register" does not describe every call; `crate::trap`
+//! says why.
 //!
 //! # Three number tables, one dispatch
 //!
@@ -95,41 +94,10 @@ use crate::sched;
 use crate::syscall::memory::{MmapRequest, OffsetUnit};
 use crate::syscall::process::Process;
 
-/// A system call as it arrived, before anything has been decided about it.
-///
-/// Deliberately dumb. The number is raw — this architecture's, not folded onto
-/// [`Syscall`] yet — and the arguments are in the order the architecture's
-/// calling convention puts them, because the only code that can put them in
-/// that order is the code that read the registers.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct SyscallArgs {
-    /// The number the program passed, in this architecture's own table.
-    pub(crate) number: usize,
-    /// The six argument registers, in order. A call taking fewer leaves the
-    /// rest as whatever the program happened to have in them, which is why no
-    /// handler may read past its own arity.
-    pub(crate) args: [u64; 6],
-}
-
-/// What the trap path should do when a call returns.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Outcome {
-    /// Write this into the return register and resume the program.
-    ///
-    /// Already encoded as Linux encodes it: a value in `-4095..=-1` is
-    /// `-errno`, anything else is success.
-    Return(isize),
-    /// Discard the saved registers and begin executing at `entry` with `stack`.
-    ///
-    /// `execve`, and the child side of `clone`. Data rather than "the frame has
-    /// been replaced", so that this module never names a `TrapFrame`.
-    Enter {
-        /// Where the program's first instruction is.
-        entry: u64,
-        /// The stack pointer it starts with, already 16-byte aligned.
-        stack: u64,
-    },
-}
+/// The shape of a system call and of its answer, which the core's trap path
+/// owns: re-exported so the personality's handlers and their checks name them
+/// where they always have.
+pub(crate) use crate::trap::{Outcome, SyscallArgs};
 
 /// Answer one system call.
 ///

@@ -141,6 +141,9 @@ fn kmain(view: &BootView<'_>, memory: &mut EarlyMemory) -> ! {
     // (`crate::trap::ReturnPath`). Registered here because the first user
     // program is a boot check below, not init.
     syscall::deliver::install();
+    // The way in likewise: the core's system call path answers through
+    // whatever is registered with it, and the dispatcher is the item's.
+    trap::set_syscall_entry(syscall::dispatch);
     println!("  traps    vectors installed");
 
     let stats = bring_up_memory(view);

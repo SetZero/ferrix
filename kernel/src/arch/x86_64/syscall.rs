@@ -414,7 +414,7 @@ pub(crate) unsafe fn resume_user(regs: &UserRegs) -> ! {
 /// it just built on this processor's kernel stack.
 #[unsafe(no_mangle)]
 extern "C" fn ferrix_syscall_entry(frame: &mut SyscallFrame) {
-    let args = crate::syscall::SyscallArgs {
+    let args = crate::trap::SyscallArgs {
         number: frame.rax as usize,
         args: [
             frame.rdi, frame.rsi, frame.rdx, frame.r10, frame.r8, frame.r9,
@@ -461,14 +461,14 @@ extern "C" fn ferrix_syscall_entry(frame: &mut SyscallFrame) {
     // frame is restored, because the way out swaps `GS` on a live stack.
     super::enable_interrupts();
     let regs = UserRegs(*frame);
-    let outcome = crate::syscall::dispatch(&args, Some(&regs));
+    let outcome = crate::trap::system_call(&args, Some(&regs));
     super::disable_interrupts();
 
     match outcome {
-        crate::syscall::Outcome::Return(value) => {
+        crate::trap::Outcome::Return(value) => {
             frame.rax = value as u64;
         }
-        crate::syscall::Outcome::Enter { entry, stack } => {
+        crate::trap::Outcome::Enter { entry, stack } => {
             // `execve` and a fresh `clone` child: the registers this frame
             // holds belong to a program that no longer exists, so they are
             // replaced rather than returned into. Everything else is cleared

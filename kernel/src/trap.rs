@@ -10,6 +10,9 @@
 use core::ptr;
 use core::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
 
+use ferrix_linux_abi::errno::Errno;
+use ferrix_sync::Once;
+
 use crate::arch;
 use crate::console::println;
 
@@ -152,6 +155,84 @@ pub(crate) fn dispatch(frame: &mut arch::TrapFrame) {
         let mut context = arch::UserContext::from_trap(frame);
         (path.return_to_user)(&mut context);
         context.store_trap(frame);
+    }
+}
+
+/// A system call as it arrived, before anything has been decided about it.
+///
+/// Deliberately dumb. The number is raw — this architecture's, not folded onto
+/// a personality's table yet — and the arguments are in the order the
+/// architecture's calling convention puts them, because the only code that can
+/// put them in that order is the code that read the registers. Public fields,
+/// no constructor and nothing fallible in it: a trampoline that has already
+/// switched stacks must not meet a `Result`.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct SyscallArgs {
+    /// The number the program passed, in this architecture's own table.
+    pub(crate) number: usize,
+    /// The six argument registers, in order. A call taking fewer leaves the
+    /// rest as whatever the program happened to have in them, which is why no
+    /// handler may read past its own arity.
+    pub(crate) args: [u64; 6],
+}
+
+/// What the trap path should do when a call returns.
+///
+/// Two variants rather than a bare `isize` because "put this in the return
+/// register" does not describe every call. `execve` and a freshly created
+/// `clone` child both resume on a register frame that was *constructed*
+/// rather than returned into, so there is nothing to return. Saying that as
+/// data — an entry point and a stack pointer — keeps everything above the
+/// trap path free of any architecture's `TrapFrame`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Outcome {
+    /// Write this into the return register and resume the program.
+    ///
+    /// Already encoded as Linux encodes it: a value in `-4095..=-1` is
+    /// `-errno`, anything else is success.
+    Return(isize),
+    /// Discard the saved registers and begin executing at `entry` with `stack`.
+    ///
+    /// `execve`, and the child side of `clone`. Data rather than "the frame has
+    /// been replaced", so that nothing above this names a `TrapFrame`.
+    Enter {
+        /// Where the program's first instruction is.
+        entry: u64,
+        /// The stack pointer it starts with, already 16-byte aligned.
+        stack: u64,
+    },
+}
+
+/// What answers a system call: `regs` is the caller's saved user registers,
+/// which a fork child resumes from, and `None` from a kernel caller.
+pub(crate) type SyscallEntry = fn(&SyscallArgs, Option<&arch::UserRegs>) -> Outcome;
+
+/// The registered answer to a system call, set once at bring-up.
+///
+/// The trap path owns the way in; which calls exist and what they do is the
+/// item's dispatcher above it (`crate::syscall::dispatch`), which the core may
+/// not name (`docs/certification/FINDINGS.md`, F-09). So the core states the
+/// shape of the call and `main.rs` registers the dispatcher into it, as the
+/// personality registers the [`ReturnPath`]. A [`Once`] rather than a lock:
+/// this is read on every system call, and the read is one acquiring load.
+static SYSCALL_ENTRY: Once<SyscallEntry> = Once::new();
+
+/// Answer system calls with `entry` from now on. The first registration
+/// stands; `main.rs` makes it before anything can enter user mode.
+pub(crate) fn set_syscall_entry(entry: SyscallEntry) {
+    let _ = SYSCALL_ENTRY.call_once(|| entry);
+}
+
+/// Answer one system call: what every architecture's system call path calls,
+/// with the registers it read.
+///
+/// With nothing registered every call is `ENOSYS`, which is what a kernel
+/// with no dispatcher above its core can honestly say, and never a panic: the
+/// caller is a trap vector with a program waiting on it.
+pub(crate) fn system_call(args: &SyscallArgs, regs: Option<&arch::UserRegs>) -> Outcome {
+    match SYSCALL_ENTRY.get() {
+        Some(entry) => entry(args, regs),
+        None => Outcome::Return(Errno::ENOSYS.as_return_value()),
     }
 }
 

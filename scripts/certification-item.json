@@ -367,27 +367,6 @@
         "finding": "F-09"
       },
       {
-        "file": "arch/aarch64/trap.rs",
-        "references": "syscall",
-        "from_ring": "core",
-        "to_ring": "item",
-        "finding": "F-09"
-      },
-      {
-        "file": "arch/armv7a/trap.rs",
-        "references": "syscall",
-        "from_ring": "core",
-        "to_ring": "item",
-        "finding": "F-09"
-      },
-      {
-        "file": "arch/x86_64/syscall.rs",
-        "references": "syscall",
-        "from_ring": "core",
-        "to_ring": "item",
-        "finding": "F-09"
-      },
-      {
         "file": "syscall/futex.rs",
         "references": "syscall::poll",
         "from_ring": "item",

@@ -422,7 +422,7 @@ pub(crate) unsafe fn enter_user(entry: u64, stack: u64, argument: u64) -> ! {
 /// A system call from SVC mode, which is a kernel bug, or an `execve` this path
 /// does not yet honour.
 pub(crate) fn system_call(frame: &mut TrapFrame) -> Result<(), &'static str> {
-    use crate::syscall::{Outcome, SyscallArgs, dispatch};
+    use crate::trap::{Outcome, SyscallArgs, system_call as dispatch};
     use ferrix_linux_abi::nr::Syscall;
 
     if !frame.came_from_user() {
