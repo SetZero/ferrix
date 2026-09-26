@@ -99,6 +99,7 @@ mod serial;
 mod sha256;
 mod shell;
 mod ssh;
+mod statd;
 mod symbolize;
 mod sysfs;
 mod test_disk;
@@ -315,6 +316,7 @@ OPTIONS:
     --fast                               check: skip the cross-target clippy passes
     --ferrousli                          check: also ferrousli's fmt, clippy and tests, debug and release
     --zinc                               check: also zinc's fmt, clippy, tests and pty completion test
+    --statd                              build, run, test-boot: carry the stat service at /sbin/ferrix-statd
     --miri                               check: add CI's Miri steps (needs nightly and miri)
     --reset-root                         run, run-compositor: start the btrfs root over from a fresh install
     --tmpfs-root                         run, run-compositor: / in memory instead of on the btrfs root disk
@@ -672,9 +674,11 @@ fn image_cmdline(args: &Args) -> Option<String> {
 /// programs in `/sbin`, built and checked for `arch` first.
 fn build_image(arch: Arch, args: &Args) -> Result<(PathBuf, PathBuf)> {
     let natives = native::build(arch, args.release)?;
+    let service = if args.statd { statd::file(arch)? } else { None };
     let Some(program) = optional_program(arch, args)? else {
         let (loader, kernel) = build_halves(arch, args)?;
-        let links = rustc::default_links(args);
+        let mut links = rustc::default_links(args);
+        links.extend(service);
         let cmdline = image_cmdline(args);
         let image = if links.is_empty() {
             fat::write_image(arch, &loader, &kernel, &natives, cmdline.as_deref())?
@@ -690,6 +694,7 @@ fn build_image(arch: Arch, args: &Args) -> Result<(PathBuf, PathBuf)> {
     let utilities = uutils::carried(arch)?;
     let mut ports = ports::installed(arch)?;
     ports.extend(rustc::default_links(args));
+    ports.extend(service);
     let initramfs = initramfs::build_with_utilities(
         Some(&program),
         &natives,
