@@ -49,6 +49,7 @@ what is left:
 | Chrome in a window on the compositor, a Wayland client drawing in software | **done** 2026-09-24, x86-64, `cargo xtask test-chrome-window`, `run-compositor --chrome` (§9) |
 | The zygote, which could not learn its children's pids until `SCM_CREDENTIALS` carried them | **done** 2026-09-26: `test-chrome` (glibc and ferrousli) and `test-chrome-window` run without `--no-zygote` (§8) |
 | Chrome's speed: a futex wait woken every 5 ms, the HPET as the clock under KVM, `munmap` walking every page of a reservation, a shootdown for every write to a page after a fork, and the virtio-gpu doorbell held by QEMU | **done** 2026-09-26: idle 443% of a processor → 15%, the machine 96% busy → 6%, a turning box 1.5 frames a second → 60.8; then a vDSO (idle → 13%) and a kick to one processor (QEMU on the host 81% of a core → 65%); `cargo xtask bench-chrome` (§9) |
+| Chrome playing a video with its sound, every futex call in the system behind one lock | **done** 2026-09-26: the kernel's futex table in 256 buckets; Chrome's processor time a third lower and flat, video frames dropped 29% → 19%, three alternated runs of each at a host load of 25–39; the sound's remaining gaps follow the host's load; `cargo xtask bench-chrome-video` (§9) |
 | Chrome on the desktop's persistent btrfs root | **done** 2026-09-26: `/dev/shm` was not mounted there; `cargo xtask test-chrome-window --btrfs-root` (§9) |
 | Chrome's text, its name for the system, and Chrome for Testing's bar | **done** 2026-09-26: Inter and Liberation from the tree with slight hinting, Ferrix in the user agent, no bar; `navigator.platform` and the client hints are Chrome's build's and say Linux (§9) |
 | Chrome on ferrousli's `libc.so.6` in glibc's place | **done** 2026-09-26, x86-64, headless and in a window: `cargo xtask test-chrome` and `test-chrome-window`, each with `--interpreter ferrousli --library ferrousli` (§8); `run-compositor --chrome` does not take the flags |
@@ -932,6 +933,64 @@ runs, 0.54 s in all. In most of them the compositor was idle and Chrome sent
 its next frame late; twice the compositor's own frame took 28–49 ms. So
 read a dip in `bench-chrome` against the host's load before blaming a
 change for it.
+
+**A video with its sound, the same day.** The customer heard YouTube
+stutter on `run-compositor --everything`: the sound broke up and the
+picture jerked. `cargo xtask bench-chrome-video` measures it. It boots
+`bench-chrome`'s desktop with Chrome playing a local video, looping:
+720p30 VP9 with a continuous 440 Hz tone in Opus, as a video site sends
+to a window that size. The sound goes through the virtio-snd card into
+QEMU's `wav` backend. Each phase is reported as `bench-chrome` reports it,
+and then:
+
+- the frames the page showed and dropped each second, and how far its
+  clock moved;
+- the kernel's underrun lines;
+- the frames the device took in each host second;
+- the silences and jumps inside the tone.
+
+`FERRIX_BENCH_VIDEO` names another video. The C library is named, never
+defaulted: glibc, or ferrousli with `--interpreter` or `--library`.
+
+The first runs found Chrome's processor time climbing phase by phase on
+the same video (41%, 98%, 182%), a quarter of the video's frames dropped,
+and silences of 21–512 ms in the tone. The timer sampler of the speed
+work, applied again, showed the renderer spending twice as long in the
+kernel as in its own code. One processor in five went on `_mm_pause`,
+spinning for the futex table's lock in `futex::wait` and `futex::rouse`.
+The table was one lock over one list of every waiter in the system. The
+renderer made about 4,500 futex calls a second, and each one scanned the
+browser's hundred and fifty parked threads with the lock held. Under KVM
+a holder's virtual processor can also be descheduled by the host, and
+every other caller then spins until it runs again.
+
+The table is now 256 buckets with a lock each, as Linux's is
+(`kernel/src/syscall/futex.rs`). A boot check requeues a waiter across two
+buckets, with a negative control. Three runs of each, alternated one at a
+time on glibc under KVM, the host at a load of 25–39 throughout (38.6,
+28.3 and 39.5 at the before runs' starts, 37.1, 25.4 and 38.0 at the
+after runs'):
+
+| | before | after |
+|---|---|---|
+| Chrome's processor time a phase | 53–166%, mean 96%, climbing within a run | 40–88%, mean 62%, flat |
+| the guest busy | 28% | 22% |
+| video frames dropped | 980 of 3,395 (29%) | 636 of 3,429 (19%) |
+| the futex lock in the sampler | about 20% of a processor | about 0.5% |
+| underruns | 3 | 5 |
+| silences in the tone, the loop's own left out | 5 | 11, 9 of them in one run whose load rose to 39 |
+
+**What is left of the sound's gaps is the host.** At these loads they did
+not move with the fix. A host sampler, run beside the bench, put QEMU's
+four vCPU threads in the host's run queue for 14% of the time against 20%
+running. The compositor's worst flips (up to 381 ms) matched the
+sampler's own longest gaps (301 ms), as with `bench-chrome`'s dips above.
+One run at load 25 had no underrun and no silence but the loop's.
+
+One trap: QEMU's `wav:PATH` backend, with its mixing engine off, runs at
+its own default of 44100 Hz whatever the stream's rate. So a 48 kHz card
+plays 8% slow into it, and Chrome's media clock with it. The bench uses
+the engine at 48 kHz, as a desktop's sound server does.
 
 Memory has not moved: 521 MiB is in use, and most of that is page cache
 for Chrome's 294 MB program. `/proc/meminfo` counts the cache as used,

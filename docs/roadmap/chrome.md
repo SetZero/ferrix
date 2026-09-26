@@ -83,6 +83,14 @@ fixed, and a vDSO added on x86-64; `cargo xtask bench-chrome` measures it
 (§9). It plays sound through `/dev/snd` (`cargo xtask test-chrome-audio`,
 `docs/AUDIO.md`).
 
+**Done (2026-09-26): a video with its sound.** Every futex call in the
+system went through one lock, and Chrome's renderer, playing a video,
+spent a fifth of a processor spinning for it. The table is now in
+buckets: Chrome's processor time is a third lower and flat, and the video
+drops 19% of its frames instead of 29%, at a host load of 25–39. The
+sound's remaining gaps follow the host's load. `cargo xtask
+bench-chrome-video` measures it (`docs/CHROME.md` §9).
+
 **Still to do:**
 
 * `--no-sandbox`, which is stage 13's.
