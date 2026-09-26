@@ -233,7 +233,21 @@ pub fn start(launch: &Launch, warnings: &mut Vec<String>) -> Result<(), String> 
     command
         .spawn()
         .map(|_child| ())
-        .map_err(|error| format!("{}: failed to execute: {error}", launch.line))
+        .map_err(|error| format!("{}: failed to execute: {}", launch.line, strerror(&error)))
+}
+
+/// An error as fuzzel's `LOG_ERRNO_P` prints one: `strerror`, then the
+/// number in brackets.
+fn strerror(error: &std::io::Error) -> String {
+    let text = error.to_string();
+    let text = text
+        .rsplit_once(" (os error ")
+        .map_or(text.as_str(), |(before, _)| before)
+        .to_owned();
+    match error.raw_os_error() {
+        Some(number) => format!("{text} ({number})"),
+        None => text,
+    }
 }
 
 #[cfg(test)]
@@ -299,6 +313,20 @@ mod tests {
         let typed = plan(None, "echo hi", None).unwrap_or_else(|_| unreachable_plan());
         assert_eq!(typed.argv, vec!["echo", "hi"]);
         assert_eq!(plan(None, "%u", None), Err(Refused::Empty));
+    }
+
+    #[test]
+    fn a_missing_program_is_said_as_fuzzel_says_it() {
+        let launch = plan(None, "surely-not-a-program-here arg", None)
+            .unwrap_or_else(|_| unreachable_plan());
+        let mut warnings = Vec::new();
+        assert_eq!(
+            super::start(&launch, &mut warnings),
+            Err(
+                "surely-not-a-program-here arg: failed to execute: No such file or directory (2)"
+                    .to_owned()
+            )
+        );
     }
 
     fn unreachable_plan() -> super::Launch {

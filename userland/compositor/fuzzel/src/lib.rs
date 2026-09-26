@@ -21,7 +21,9 @@ pub mod keys;
 pub mod keysym;
 pub mod launcher;
 pub mod matching;
+pub mod paint;
 pub mod prompt;
+pub mod window;
 
 #[cfg(test)]
 mod testdir;
