@@ -824,14 +824,17 @@ pub(crate) const USER_STEP_STATUS: i32 = 0;
 /// survived. Every exception here is taken into a mode with its own banked
 /// stack pointer and stored on the SVC stack, which USR mode cannot set.
 ///
+/// Then the exceptions a program raises itself, each of which has to end it
+/// with the signal Linux gives it: see `trap::check`.
+///
 /// # Errors
 ///
-/// Never.
+/// A program that did not end as it had to.
 pub(crate) fn check_exception_entry() -> Result<(), &'static str> {
     crate::console::println!(
         "  entry    every exception on {NAME} enters on a stack a program cannot set"
     );
-    Ok(())
+    trap::check::run()
 }
 
 /// A program that spins, then writes a tagged line and exits with a status it

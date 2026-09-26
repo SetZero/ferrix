@@ -783,14 +783,17 @@ pub(crate) const USER_STEP_STATUS: i32 = 0;
 /// survived. An exception taken at EL1 here runs on `SP_EL1`, which a program
 /// never sets, and the per-CPU register `TPIDR_EL1` is not one EL0 can write.
 ///
+/// Then the exceptions a program raises itself, each of which has to end it
+/// with the signal Linux gives it: see `trap::check`.
+///
 /// # Errors
 ///
-/// Never.
+/// A program that did not end as it had to.
 pub(crate) fn check_exception_entry() -> Result<(), &'static str> {
     crate::console::println!(
         "  entry    every exception on {NAME} enters on a stack a program cannot set"
     );
-    Ok(())
+    trap::check::run()
 }
 
 /// A program that `execve`s `/exec-target` and, if that returns, exits with

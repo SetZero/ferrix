@@ -24,6 +24,8 @@
 
 use super::cpu;
 
+pub(super) mod check;
+
 /// Bytes in a saved frame. Must match [`TrapFrame`] exactly, and must be a
 /// multiple of sixteen because `AArch64` faults on a misaligned stack pointer.
 const FRAME_SIZE: usize = 304;
