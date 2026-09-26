@@ -29,7 +29,9 @@
 //!
 //! Touch is not forwarded: `wl_touch` would need the whole multi-touch
 //! protocol, and the seat announces no touch capability, so a client would
-//! never be given an object to send it on. `EV_MSC` scan codes, `EV_SW`
+//! never be given an object to send it on. A touchscreen is a pointer
+//! instead, as a tablet is, and its finger coming down is the left button
+//! (`Axes::touch_clicks`): the Pixel 7's VM has no other pointer. `EV_MSC` scan codes, `EV_SW`
 //! switches and `EV_LED` are dropped, which is what libinput does with them
 //! for a Wayland seat.
 
@@ -38,8 +40,8 @@ use std::path::Path;
 
 use compositor_evecho::{Device, event_nodes};
 use ferrix_linux_abi::input::{
-    ABS_X, ABS_Y, BTN_MISC, EV_ABS, EV_KEY, EV_LED, EV_REL, Event, KEY_MAX, LED_CAPSL, LED_NUML,
-    REL_HWHEEL, REL_WHEEL, REL_X, REL_Y,
+    ABS_X, ABS_Y, BTN_LEFT, BTN_MISC, BTN_TOUCH, EV_ABS, EV_KEY, EV_LED, EV_REL, Event,
+    INPUT_PROP_DIRECT, KEY_MAX, LED_CAPSL, LED_NUML, REL_HWHEEL, REL_WHEEL, REL_X, REL_Y,
 };
 
 use crate::seat::Input;
@@ -69,6 +71,11 @@ struct Axes {
     moved: bool,
     /// The relative distance gathered since the last move was sent.
     delta: (f64, f64),
+    /// Whether `BTN_TOUCH` is the left button: a device whose absolute axes
+    /// are on the screen itself, `INPUT_PROP_DIRECT`, a touchscreen, where
+    /// a finger coming down is a click. Not a pen tablet, which is not
+    /// direct, and whose pen coming near must click nothing.
+    touch_clicks: bool,
 }
 
 /// One open device, with what its absolute axes are worth.
@@ -194,11 +201,17 @@ impl Devices {
             None
         };
         let node = node_name(path);
+        let direct = device
+            .description()
+            .props
+            .get(usize::from(INPUT_PROP_DIRECT / 8))
+            .is_some_and(|byte| byte & (1 << (INPUT_PROP_DIRECT % 8)) != 0);
         Ok(Open {
             device,
             node,
             axes: Axes {
                 range,
+                touch_clicks: direct && range.is_some(),
                 ..Axes::default()
             },
         })
@@ -220,7 +233,14 @@ impl Devices {
     pub fn describe(&self) -> Vec<String> {
         self.open
             .iter()
-            .map(|open| format!("{} {}", open.node, open.device.description().name))
+            .map(|open| {
+                let clicks = if open.axes.touch_clicks {
+                    ", a touch clicks"
+                } else {
+                    ""
+                };
+                format!("{} {}{clicks}", open.node, open.device.description().name)
+            })
             .collect()
     }
 
@@ -357,7 +377,7 @@ fn translate(axes: &mut Axes, event: Event, out: &mut Vec<Input>) {
     match event.r#type {
         EV_KEY => {
             axes.flush(out);
-            out.push(key_or_button(event));
+            out.push(key_or_button(event, axes.touch_clicks));
         }
         EV_REL => axes.relative(event, out),
         EV_ABS => axes.absolute(event),
@@ -373,9 +393,15 @@ fn translate(axes: &mut Axes, event: Event, out: &mut Vec<Input>) {
 /// evdev puts both under `EV_KEY` and tells them apart by the code:
 /// `BTN_MISC` (0x100) and above are buttons, which is where
 /// `input.h`'s own comment draws the line, and what `wl_pointer.button`
-/// carries.
-fn key_or_button(event: Event) -> Input {
+/// carries. On a device where `touch_clicks`, `BTN_TOUCH` is `BTN_LEFT`.
+fn key_or_button(event: Event, touch_clicks: bool) -> Input {
     let pressed = event.value != 0;
+    if touch_clicks && event.code == BTN_TOUCH {
+        return Input::Button {
+            button: u32::from(BTN_LEFT),
+            pressed,
+        };
+    }
     if event.code >= BTN_MISC && event.code <= KEY_MAX && is_pointer_button(event.code) {
         return Input::Button {
             button: u32::from(event.code),

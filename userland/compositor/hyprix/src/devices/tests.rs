@@ -80,6 +80,46 @@ fn a_tool_button_is_not_a_pointer_button() {
     );
 }
 
+/// A touchscreen's finger coming down and lifting is the left button, and
+/// the move to where it came down goes first.
+#[test]
+fn a_touchscreens_touch_is_the_left_button() {
+    let mut axes = Axes {
+        range: Some(((0, 1079), (0, 2399))),
+        touch_clicks: true,
+        ..Axes::default()
+    };
+    let down = read(
+        &mut axes,
+        &[
+            (EV_ABS, ABS_X, 540),
+            (EV_ABS, ABS_Y, 1200),
+            (EV_KEY, BTN_TOUCH, 1),
+            (EV_SYN, SYN_REPORT, 0),
+        ],
+    );
+    assert!(
+        matches!(down.first(), Some(Input::Absolute { .. })),
+        "the move first: {down:?}"
+    );
+    assert_eq!(
+        down.get(1),
+        Some(&Input::Button {
+            button: u32::from(BTN_LEFT),
+            pressed: true
+        }),
+        "then the press"
+    );
+    assert_eq!(
+        of(&mut axes, EV_KEY, BTN_TOUCH, 0),
+        Some(Input::Button {
+            button: u32::from(BTN_LEFT),
+            pressed: false
+        }),
+        "and the release"
+    );
+}
+
 #[test]
 fn a_relative_axis_is_pixels_and_a_wheel_is_a_click() {
     let mut axes = Axes::default();
