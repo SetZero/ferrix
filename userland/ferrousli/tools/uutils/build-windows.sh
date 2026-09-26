@@ -53,7 +53,7 @@ win() { cygpath -m "$1"; }
 project coreutils
 
 step "toolchain"
-toolchain=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' "$ferrousli/../rust-toolchain.toml")
+toolchain=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' "$ferrousli/../../rust-toolchain.toml")
 [ -n "$toolchain" ] || fail "no channel in rust-toolchain.toml"
 export RUSTUP_TOOLCHAIN=$toolchain
 echo "rust $toolchain"
