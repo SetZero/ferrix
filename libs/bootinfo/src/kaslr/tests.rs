@@ -163,4 +163,10 @@ fn a_loader_that_moved_nothing_says_why() {
         ..moved
     };
     assert!(!guessed.is_random(), "a counter is not a secret");
+    let trng = Kaslr {
+        source: SOURCE_SMCCC_TRNG,
+        ..moved
+    };
+    assert!(trng.is_random(), "firmware's TRNG is a secret source");
+    assert_eq!(trng.source_text(), "SMCCC TRNG");
 }

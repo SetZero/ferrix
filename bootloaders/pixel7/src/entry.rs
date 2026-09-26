@@ -285,6 +285,31 @@ pub(crate) unsafe fn enter_kernel(handoff: Handoff) -> ! {
     }
 }
 
+/// An SMCCC call to EL3 firmware, with all four result registers.
+///
+/// # Safety
+///
+/// `function` must be one the caller knows firmware answers, or one SMCCC
+/// defines to answer `NOT_SUPPORTED` when it is not implemented, and what it
+/// does must be what the caller intends.
+pub(crate) unsafe fn smc_call(function: u64, argument: u64) -> [u64; 4] {
+    let mut result = [function, argument, 0, 0];
+    // SAFETY: the caller guarantees the function. SMCCC lets the callee
+    // corrupt every register the C ABI does, which is what the clobber says.
+    unsafe {
+        asm!(
+            "smc #0",
+            inlateout("x0") result[0],
+            inlateout("x1") result[1],
+            inlateout("x2") result[2],
+            inlateout("x3") result[3],
+            clobber_abi("C"),
+            options(nostack),
+        );
+    }
+    result
+}
+
 /// Wait for a watchdog to reset the phone.
 ///
 /// Not PSCI's `SYSTEM_RESET`. It appears to work -- two display probes whose

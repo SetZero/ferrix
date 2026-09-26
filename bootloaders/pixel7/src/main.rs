@@ -17,6 +17,7 @@
 mod board;
 mod display;
 mod entry;
+mod kaslr;
 mod load;
 mod log;
 mod memory;
@@ -106,6 +107,7 @@ fn start(device_tree: u64, framebuffer: Framebuffer) -> Result<(), &'static str>
             "so the kernel has no seed from firmware"
         }
     );
+    let randomness = kaslr::gather(&tree);
     load::boot(
         &mut memory,
         load::Carried {
@@ -114,6 +116,7 @@ fn start(device_tree: u64, framebuffer: Framebuffer) -> Result<(), &'static str>
             loader,
             framebuffer,
             seed,
+            randomness,
         },
     )
 }

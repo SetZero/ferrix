@@ -16,15 +16,15 @@ use core::ptr;
 
 use ferrix_bootinfo::{
     Arch, BOOT_STACK_SIZE, BOOTINFO_MAGIC, BOOTINFO_VERSION, BootInfo, FIRMWARE_SEED, Framebuffer,
-    KASLR_NOT_OFFERED, KERNEL_VIRT_BASE, Kaslr, LAYOUT, MemKind, MemRegion, PAGE_SIZE,
-    PHYSMAP_ALIGN, PHYSMAP_BASE, PHYSMAP_END, allocator_owns, direct_map_address, direct_map_runs,
-    physmap_origin, read_only_span, split_run,
+    KERNEL_VIRT_BASE, MemKind, MemRegion, PAGE_SIZE, PHYSMAP_ALIGN, PHYSMAP_BASE, PHYSMAP_END,
+    allocator_owns, direct_map_runs, physmap_origin, read_only_span, split_run,
 };
 use ferrix_elf::{Class, EM_AARCH64, Elf, FixupKind, PF_W, PF_X, Segment};
 use ferrix_paging::aarch64::{AArch64, MAIR_EL1};
 use ferrix_paging::{MapFlags, Mapper, PhysAddr, PhysMem, VirtAddr};
 
 use crate::entry::{self, Handoff};
+use crate::kaslr;
 use crate::log::say;
 use crate::memory::{MAX_REGIONS, Memory, NO_REGION};
 use crate::payload;
@@ -65,6 +65,26 @@ pub(crate) struct Carried<'a> {
     pub(crate) framebuffer: Framebuffer,
     /// The random bytes in ABL's `/chosen`, removed from the kernel's copy.
     pub(crate) seed: Seed,
+    /// Three words from TF-A's TRNG for the layout, or `None` for none.
+    pub(crate) randomness: Option<[u64; 3]>,
+}
+
+/// Where the direct map begins, and the physical span it covers.
+#[derive(Clone, Copy, Debug)]
+struct DirectMap {
+    /// The physical address at `base`.
+    origin: u64,
+    /// Bytes from there that are mapped.
+    len: u64,
+    /// Where it begins: [`PHYSMAP_BASE`] unless [`crate::kaslr`] moved it.
+    base: u64,
+}
+
+impl DirectMap {
+    /// The direct-map address of `phys`, which must not be below the origin.
+    const fn address(self, phys: u64) -> u64 {
+        self.base + (phys - self.origin)
+    }
 }
 
 /// The page table pool: physical memory, used directly, because the MMU is
@@ -132,15 +152,15 @@ fn parse_kernel(bytes: &[u8]) -> Result<Elf<'_>, &'static str> {
     }
     elf.check_machine(EM_AARCH64)
         .map_err(|_| "the kernel was built for another architecture")?;
-    // A PIE is accepted and placed at its link address: `place_kernel`
-    // applies its fixups for no move at all. `boot/` moves it (KASLR); this
-    // loader does not, and says so, until it has been tried on the phone.
+    // A PIE is moved where `kaslr` chooses, and its fixups applied for that
+    // slide, which is none at all when nothing moved.
     elf.validate_segments()
         .map_err(|_| "the kernel has a malformed segment")?;
     Ok(elf)
 }
 
-/// Copy the kernel's segments into one allocation, laid out as linked.
+/// Copy the kernel's segments into one allocation, laid out as linked. Its
+/// fixups wait for [`apply_fixups`], once the slide is chosen.
 fn place_kernel(memory: &mut Memory, elf: &Elf<'_>) -> Result<Taken, &'static str> {
     let (low, high) = elf
         .load_span(PAGE_SIZE)
@@ -158,18 +178,17 @@ fn place_kernel(memory: &mut Memory, elf: &Elf<'_>) -> Result<Taken, &'static st
         // this segment is part of; `.bss` is already zero.
         unsafe { ptr::copy_nonoverlapping(data.as_ptr(), destination as *mut u8, data.len()) };
     }
-    apply_fixups(elf, image, low)?;
     Ok(image)
 }
 
-/// Apply a PIE's fixups for the image in `image`, linked at `low`, run where
-/// it was linked.
+/// Apply a PIE's fixups for the image in `image`, linked at `low`, to run
+/// `slide` bytes above it.
 ///
 /// A `RELA` table keeps its addends in the table rather than in the words it
-/// patches, so an unmoved PIE still needs this. Each is an aligned word,
+/// patches, so an unmoved PIE, `slide` zero, still needs this. Each is an aligned word,
 /// written with one volatile store, as everything here is written with the
 /// caches off.
-fn apply_fixups(elf: &Elf<'_>, image: Taken, low: u64) -> Result<(), &'static str> {
+fn apply_fixups(elf: &Elf<'_>, image: Taken, low: u64, slide: u64) -> Result<(), &'static str> {
     for fixup in elf.fixups() {
         let fixup = fixup.map_err(|_| "the kernel has a fixup this loader cannot apply")?;
         let FixupKind::Relative(_) = fixup.kind else {
@@ -185,7 +204,7 @@ fn apply_fixups(elf: &Elf<'_>, image: Taken, low: u64) -> Result<(), &'static st
         // which nothing else refers to yet.
         let stored = unsafe { ptr::read_volatile(at) };
         let value = fixup
-            .apply(0, stored)
+            .apply(slide, stored)
             .ok_or("the kernel has a fixup this loader cannot apply")?;
         // SAFETY: as above.
         unsafe { ptr::write_volatile(at, value) };
@@ -195,7 +214,7 @@ fn apply_fixups(elf: &Elf<'_>, image: Taken, low: u64) -> Result<(), &'static st
 
 /// The direct map a machine with this memory gets: from the lowest RAM,
 /// rounded down to [`PHYSMAP_ALIGN`], to the highest, rounded up.
-fn direct_map(regions: &[MemRegion]) -> Result<(u64, u64), &'static str> {
+fn direct_map(regions: &[MemRegion]) -> Result<DirectMap, &'static str> {
     let ram = regions.iter().filter(|region| region.kind.is_ram());
     let low = ram.clone().map(|region| region.base).min();
     let high = ram.map(MemRegion::end).max();
@@ -204,7 +223,11 @@ fn direct_map(regions: &[MemRegion]) -> Result<(u64, u64), &'static str> {
     };
     let origin = physmap_origin(low);
     let len = (high.next_multiple_of(PHYSMAP_ALIGN) - origin).min(PHYSMAP_END - PHYSMAP_BASE);
-    Ok((origin, len))
+    Ok(DirectMap {
+        origin,
+        len,
+        base: PHYSMAP_BASE,
+    })
 }
 
 /// Build the kernel's tree and the loader's identity tree.
@@ -213,8 +236,8 @@ fn build_tables(
     elf: &Elf<'_>,
     image: Taken,
     regions: &[MemRegion],
-    (origin, len): (u64, u64),
-    loader: (u64, u64),
+    direct: DirectMap,
+    (loader, slide): ((u64, u64), u64),
 ) -> Result<(PhysAddr, PhysAddr), &'static str> {
     let kernel_root = tables
         .allocate_table()
@@ -256,7 +279,7 @@ fn build_tables(
         let phys = image.base + (base - KERNEL_VIRT_BASE);
         (phys, phys + length, segment.flags & PF_W != 0)
     }))?;
-    for run in direct_map_runs(regions.iter().copied(), origin, len) {
+    for run in direct_map_runs(regions.iter().copied(), direct.origin, direct.len) {
         for (base, run, read_only) in split_run(run, sealed).into_iter().flatten() {
             let flags = if read_only {
                 MapFlags::KERNEL_RODATA
@@ -266,7 +289,7 @@ fn build_tables(
             kernel
                 .map_range(
                     tables,
-                    VirtAddr(direct_map_address(origin, base)),
+                    VirtAddr(direct.address(base)),
                     PhysAddr(base),
                     run,
                     flags,
@@ -276,17 +299,19 @@ fn build_tables(
     }
 
     for segment in elf.loadable() {
-        map_segment(&kernel, tables, &segment, image)?;
+        map_segment(&kernel, tables, &segment, image, slide)?;
     }
     Ok((kernel_root, identity_root))
 }
 
-/// Map one kernel segment with the permissions the linker gave it.
+/// Map one kernel segment with the permissions the linker gave it, `slide`
+/// bytes above where it was linked.
 fn map_segment(
     kernel: &Mapper<AArch64>,
     tables: &mut Tables,
     segment: &Segment,
     image: Taken,
+    slide: u64,
 ) -> Result<(), &'static str> {
     let flags = MapFlags {
         read: true,
@@ -301,7 +326,7 @@ fn map_segment(
     kernel
         .map_range(
             tables,
-            VirtAddr(base),
+            VirtAddr(base + slide),
             PhysAddr(image.base + (base - KERNEL_VIRT_BASE)),
             length,
             flags,
@@ -345,7 +370,8 @@ struct Placed {
     device_tree: (Taken, u64),
     initrd: Option<(Taken, u64)>,
     roots: (PhysAddr, PhysAddr),
-    direct: (u64, u64),
+    direct: DirectMap,
+    choice: kaslr::Choice,
 }
 
 /// Write the boot info, the command line and the memory map into the info
@@ -357,7 +383,7 @@ fn write_boot_info(
     framebuffer: Framebuffer,
     seed: &Seed,
 ) {
-    let (origin, len) = placed.direct;
+    let direct = placed.direct;
     let info = placed.info;
     let cmdline_room = (REGIONS_OFFSET - CMDLINE_OFFSET) as usize;
     let cmdline = cmdline.get(..cmdline.len().min(cmdline_room)).unwrap_or("");
@@ -383,19 +409,19 @@ fn write_boot_info(
         magic: BOOTINFO_MAGIC,
         version: BOOTINFO_VERSION,
         arch: Arch::AArch64,
-        regions: direct_map_address(origin, info.base + REGIONS_OFFSET),
+        regions: direct.address(info.base + REGIONS_OFFSET),
         regions_len: count as u64,
-        physmap_base: PHYSMAP_BASE,
-        physmap_phys: origin,
-        physmap_len: len,
+        physmap_base: direct.base,
+        physmap_phys: direct.origin,
+        physmap_len: direct.len,
         kernel_phys: placed.image.base,
-        kernel_virt: KERNEL_VIRT_BASE,
+        kernel_virt: placed.choice.kernel_virt,
         kernel_len: placed.image.len,
         root_table_phys: placed.roots.0.0,
         ttbr0_phys: placed.roots.1.0,
         loader_alias_phys: 0,
         loader_alias_len: 0,
-        boot_stack_top: direct_map_address(origin, placed.stack.base + placed.stack.len),
+        boot_stack_top: direct.address(placed.stack.base + placed.stack.len),
         boot_stack_size: placed.stack.len,
         framebuffer: Framebuffer {
             reclaimable: u32::from(
@@ -413,14 +439,14 @@ fn write_boot_info(
         cmdline: if cmdline.is_empty() {
             0
         } else {
-            direct_map_address(origin, info.base + CMDLINE_OFFSET)
+            direct.address(info.base + CMDLINE_OFFSET)
         },
         cmdline_len: cmdline.len() as u64,
         firmware_time: 0,
         firmware_seed: seed.bytes,
         firmware_flags: if seed.is_any() { FIRMWARE_SEED } else { 0 },
         firmware_seed_len: seed.found as u64,
-        kaslr: Kaslr::fixed(&LAYOUT, KASLR_NOT_OFFERED),
+        kaslr: placed.choice.kaslr,
     };
     // SAFETY: the info area is the loader's, larger than one boot info.
     unsafe { ptr::write_volatile(info.base as *mut BootInfo, boot_info) };
@@ -446,11 +472,6 @@ pub(crate) fn boot(memory: &mut Memory, carried: Carried<'_>) -> Result<(), &'st
             bytes.len() as u64,
         )),
     };
-    // `boot/` moves the kernel, the direct map and the vmap arena each boot.
-    // This loader has no tested source of randomness on the phone and has not
-    // been tried moving anything there, so it keeps the fixed layout and the
-    // kernel reports it as not randomised.
-    say!("  kaslr    not offered by this loader: the kernel runs at its link address");
     say!(
         "  kernel {:#x}+{:#x}, tables {:#x}, stack {:#x}, info {:#x}",
         image.base,
@@ -467,12 +488,34 @@ pub(crate) fn boot(memory: &mut Memory, carried: Carried<'_>) -> Result<(), &'st
     let direct = direct_map(regions)?;
     say!(
         "  {count} memory regions, direct map {:#x}+{:#x}",
-        direct.0,
-        direct.1
+        direct.origin,
+        direct.len
     );
 
+    // Where the image, the direct map and the arena go, now that the direct
+    // map's size is known; the fixups follow the image's slide.
+    let choice = kaslr::choose(
+        &elf,
+        (KERNEL_VIRT_BASE, image.len),
+        direct.len,
+        kaslr::declined(carried.cmdline),
+        carried.randomness,
+    )?;
+    apply_fixups(&elf, image, KERNEL_VIRT_BASE, choice.slide())?;
+    let direct = DirectMap {
+        base: choice.physmap_base,
+        ..direct
+    };
+
     let mut tables = Tables { pool, used: 0 };
-    let roots = build_tables(&mut tables, &elf, image, regions, direct, carried.loader)?;
+    let roots = build_tables(
+        &mut tables,
+        &elf,
+        image,
+        regions,
+        direct,
+        (carried.loader, choice.slide()),
+    )?;
     say!("  {} page tables", tables.used / PAGE_SIZE);
 
     let placed = Placed {
@@ -483,6 +526,7 @@ pub(crate) fn boot(memory: &mut Memory, carried: Carried<'_>) -> Result<(), &'st
         initrd,
         roots,
         direct,
+        choice,
     };
     write_boot_info(
         &placed,
@@ -499,7 +543,8 @@ pub(crate) fn boot(memory: &mut Memory, carried: Carried<'_>) -> Result<(), &'st
     {
         entry::invalidate_dcache(taken.base, taken.len);
     }
-    say!("entering Ferrix at {:#x}", elf.entry());
+    let entry_point = elf.entry() + choice.slide();
+    say!("entering Ferrix at {:#x}", entry_point);
     // SAFETY: at EL1 with the MMU off since the entry sequence; the identity
     // tree maps this loader's image, which this code is in; every range the
     // kernel is handed was invalidated just above, after its last write.
@@ -509,9 +554,9 @@ pub(crate) fn boot(memory: &mut Memory, carried: Carried<'_>) -> Result<(), &'st
             tcr: tcr_el1(entry::physical_address_size()),
             identity_table: roots.1.0,
             root_table: roots.0.0,
-            stack_top: direct_map_address(direct.0, stack.base + stack.len),
-            entry: elf.entry(),
-            boot_info: direct_map_address(direct.0, info.base),
+            stack_top: direct.address(stack.base + stack.len),
+            entry: entry_point,
+            boot_info: direct.address(info.base),
         })
     }
 }

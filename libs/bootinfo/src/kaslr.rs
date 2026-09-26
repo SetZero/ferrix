@@ -55,6 +55,9 @@ pub const SOURCE_CPU_RNG: u32 = 2;
 /// [`Kaslr::source`]: a cycle counter read at boot, which is not random: a
 /// guess at how long firmware took recovers it.
 pub const SOURCE_COUNTER: u32 = 3;
+/// [`Kaslr::source`]: firmware's True Random Number Generator, asked through
+/// Arm's SMCCC `TRNG_RND64` (DEN0098), which the Pixel 7's TF-A answers.
+pub const SOURCE_SMCCC_TRNG: u32 = 4;
 
 /// What the loader did about layout randomisation.
 ///
@@ -104,7 +107,9 @@ impl Kaslr {
     #[must_use]
     pub const fn is_random(&self) -> bool {
         self.state == KASLR_MOVED
-            && (self.source == SOURCE_FIRMWARE_RNG || self.source == SOURCE_CPU_RNG)
+            && (self.source == SOURCE_FIRMWARE_RNG
+                || self.source == SOURCE_CPU_RNG
+                || self.source == SOURCE_SMCCC_TRNG)
     }
 
     /// Why the layout is where it is, in a phrase for a boot log.
@@ -129,6 +134,7 @@ impl Kaslr {
             SOURCE_FIRMWARE_RNG => "EFI_RNG",
             SOURCE_CPU_RNG => "RDRAND",
             SOURCE_COUNTER => "the cycle counter, which is guessable and so not KASLR",
+            SOURCE_SMCCC_TRNG => "SMCCC TRNG",
             _ => "nothing",
         }
     }

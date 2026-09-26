@@ -48,7 +48,7 @@ mod kaslr;
 pub use kaslr::{
     KASLR_DECLINED, KASLR_FIXED_IMAGE, KASLR_MOVED, KASLR_NO_ENTROPY, KASLR_NOT_OFFERED,
     KERNEL_TOP_GUARD, Kaslr, SOURCE_COUNTER, SOURCE_CPU_RNG, SOURCE_FIRMWARE_RNG, SOURCE_NONE,
-    Slots,
+    SOURCE_SMCCC_TRNG, Slots,
 };
 
 /// Magic number identifying a [`BootInfo`], ASCII `FERRIXBI`.
