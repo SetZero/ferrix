@@ -46,12 +46,35 @@ const EXPECTED: &str = "../render/tests/data/dwindle-two-clients.xrle";
 const BAR_EXPECTED: &str = "../render/tests/data/layer-bar-two-clients.xrle";
 
 /// A directory of this test's own, named for the process so two runs at once
-/// do not share one.
-fn workspace(name: &str) -> PathBuf {
+/// do not share one, and removed when the test is done with it.
+///
+/// The removal is in `Drop` so that it happens however the test ends: a
+/// passing test, a failed assertion and a panicking fixture all unwind
+/// through it. Removing it by hand at the end of each test left it behind
+/// whenever an assertion fired first, and most tests never removed it at
+/// all -- 882 of these directories, 21 GB of frames, once filled `/tmp`'s
+/// quota and failed the next run with `EDQUOT`.
+struct Workspace(PathBuf);
+
+impl std::ops::Deref for Workspace {
+    type Target = Path;
+
+    fn deref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for Workspace {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn workspace(name: &str) -> Workspace {
     let path = std::env::temp_dir().join(format!("hyprix-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&path);
     std::fs::create_dir_all(&path).expect("a directory to work in");
-    path
+    Workspace(path)
 }
 
 /// A configuration with the blur's dither turned off, written into `work`.
@@ -129,7 +152,7 @@ fn run_configured(
         .map(|(pattern, title, shape)| (*pattern, (*title).to_owned(), *shape))
         .collect();
     let socket_for_clients = socket.clone();
-    let work_for_clients = work.clone();
+    let work_for_clients = work.to_path_buf();
     let started = std::thread::spawn(move || {
         // The clients wait for the socket rather than racing it: the
         // compositor binds it before it accepts anything.
@@ -167,16 +190,9 @@ fn run_configured(
 
     let ran = hyprix::run(&options);
     let clients = started.join().expect("the clients finished");
-    let line = match ran {
-        Ok(line) => line,
-        Err(why) => {
-            let _ = std::fs::remove_dir_all(&work);
-            return Err(why);
-        }
-    };
+    let line = ran?;
 
     let last = last_frame(&frames);
-    let _ = std::fs::remove_dir_all(&work);
     Ok((last, format!("{line} | {clients}")))
 }
 
@@ -770,7 +786,6 @@ fn subscribed(name: &str, kill: bool) -> Vec<String> {
     let line = hyprix::run(&options).expect("the compositor ran");
     clients.join().expect("the clients finished");
     let lines = reader.join().expect("the subscriber finished");
-    let _ = std::fs::remove_dir_all(&work);
     assert!(
         line.contains("subscribers 1"),
         "the compositor saw no subscriber: {line}"
@@ -961,7 +976,7 @@ fn frames_after(name: &str, config: &str, after: &str) -> Vec<Vec<u8>> {
         .filter(|path| path.extension().is_some_and(|kind| kind == "ppm"))
         .collect();
     names.sort();
-    let drawn = names
+    names
         .iter()
         .map(|path| {
             let bytes = std::fs::read(path).expect("a frame");
@@ -971,9 +986,7 @@ fn frames_after(name: &str, config: &str, after: &str) -> Vec<Vec<u8>> {
             let _ = parts.next();
             parts.next().expect("pixels").to_vec()
         })
-        .collect();
-    let _ = std::fs::remove_dir_all(&work);
-    drawn
+        .collect()
 }
 
 /// Where the gradient window's left edge is on a row, once both windows are
@@ -2428,7 +2441,6 @@ fn a_small_commit_redraws_a_small_part_of_the_screen() {
     let said = clients.join().expect("the clients finished");
     let report = format!("{line} | {said}");
     let frame = last_frame(&frames);
-    let _ = std::fs::remove_dir_all(&work);
 
     assert!(
         said.contains("marked 12"),
