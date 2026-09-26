@@ -12,12 +12,17 @@
 //!   they are on the table now and re-exported from it. The argument lists
 //!   are the handler's: `(job, image_vmo, name_ptr, name_len)` and
 //!   `(process, bootstrap or 0)`.
+//! * **A process's bootstrap and its end**, `0x1032` to `0x1034`: init's K3
+//!   and K6 (`docs/INIT.md` §16), `process_give`, `process_bootstrap` and
+//!   `process_status`.
 //! * **`vmo_map`**, `0x1024`, whose number is on main's table and whose handler
 //!   and `MAP_READ`/`MAP_WRITE` constants are not. The constants are copied here
 //!   until they land in `libs/native-abi`'s `types`.
 
+use ferrix_native_abi::handle::Handle;
 use ferrix_native_abi::nr;
 use ferrix_native_abi::signals::Signals;
+use ferrix_native_abi::types::ProcessStatus;
 
 use crate::call::{Call, Syscall};
 use crate::error::{Error, decode, decode_handle, decode_unit};
@@ -87,6 +92,26 @@ impl<S: Syscall> Process<S> {
         }
     }
 
+    /// `process_status`: whether the process has ended, and how: its exit
+    /// code or the signal that killed it.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::AccessDenied`] without `WAIT`; [`Error::WrongType`].
+    pub fn status(&self) -> Result<ProcessStatus, Error> {
+        let mut out = [0_u8; 8];
+        let value = Call::new(nr::PROCESS_STATUS)
+            .value(register(self.handle()))
+            .output(&mut out)
+            .make(self.syscall());
+        decode_unit(value)?;
+        let [s0, s1, s2, s3, v0, v1, v2, v3] = out;
+        Ok(ProcessStatus {
+            state: u32::from_ne_bytes([s0, s1, s2, s3]),
+            value: u32::from_ne_bytes([v0, v1, v2, v3]),
+        })
+    }
+
     /// Queue a packet carrying `key` on `port` when the process ends.
     ///
     /// No call of its own: `object_wait_async` for `TERMINATED`. The packet is
@@ -99,6 +124,49 @@ impl<S: Syscall> Process<S> {
     /// As [`Object::wait_async`].
     pub fn notify_on_exit(&self, port: &Port<S>, key: u64) -> Result<(), Error> {
         self.wait_async(port, Signals::TERMINATED, key)
+    }
+}
+
+/// `process_give`: move `bootstrap` into the bootstrap slot of the caller's
+/// child `pid`, which has not yet completed an `execve`. The handle leaves
+/// this process only if the call succeeds.
+///
+/// # Errors
+///
+/// [`Error::NoProcess`], [`Error::NotChild`], [`Error::AlreadyBound`] for a
+/// child given one before, [`Error::BadState`] for one past its `execve` or
+/// ended, [`Error::AccessDenied`] without `TRANSFER`; with `bootstrap`.
+pub fn give_bootstrap<S: Syscall>(
+    sys: S,
+    pid: u32,
+    bootstrap: OwnedHandle<S>,
+) -> Result<(), (Error, OwnedHandle<S>)> {
+    let value = Call::new(nr::PROCESS_GIVE)
+        .value(pid as usize)
+        .value(register(bootstrap.raw()))
+        .make(sys);
+    match decode_unit(value) {
+        Ok(()) => {
+            let _ = bootstrap.into_raw();
+            Ok(())
+        }
+        Err(error) => Err((error, bootstrap)),
+    }
+}
+
+/// `process_bootstrap`: this process's bootstrap handle, the first time;
+/// `None` after that, or when it was given none.
+///
+/// # Errors
+///
+/// [`Error::NoHandles`] with a full table, and the handle is kept for a later
+/// call.
+pub fn take_bootstrap<S: Syscall>(sys: S) -> Result<Option<OwnedHandle<S>>, Error> {
+    let value = decode(Call::new(nr::PROCESS_BOOTSTRAP).make(sys))?;
+    match u32::try_from(value) {
+        Ok(0) => Ok(None),
+        Ok(raw) => Ok(Some(OwnedHandle::from_raw(sys, Handle(raw)))),
+        Err(_) => Err(Error::Unexpected(value)),
     }
 }
 

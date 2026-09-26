@@ -1,10 +1,10 @@
 //! Ports: the event queue one thread waits on for many sources.
 
 use ferrix_native_abi::nr;
-use ferrix_native_abi::types::{PACKET_USER, PortPacket};
+use ferrix_native_abi::types::{PACKET_USER, PORT_FD_CLOEXEC, PortPacket};
 
 use crate::call::{Call, Syscall};
-use crate::error::{Error, decode_handle, decode_unit};
+use crate::error::{Error, decode, decode_handle, decode_unit};
 use crate::handle::{Deadline, Object, OwnedHandle, object_handle, register};
 
 /// A packet's size in a caller's buffer.
@@ -44,6 +44,23 @@ impl<S: Syscall> Port<S> {
             .input(&packet)
             .make(self.syscall());
         decode_unit(value)
+    }
+
+    /// `port_fd`: a Linux file descriptor that polls readable while the port
+    /// has a packet queued, close-on-exec if `close_on_exec`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::AccessDenied`] without `WAIT`; [`Error::NoHandles`] when the
+    /// descriptor table is full.
+    pub fn descriptor(&self, close_on_exec: bool) -> Result<i32, Error> {
+        let flags = if close_on_exec { PORT_FD_CLOEXEC } else { 0 };
+        let value = Call::new(nr::PORT_FD)
+            .value(register(self.handle()))
+            .value(flags as usize)
+            .make(self.syscall());
+        let fd = decode(value)?;
+        i32::try_from(fd).map_err(|_| Error::Unexpected(fd))
     }
 
     /// `port_wait`: the next packet, waiting up to `deadline` for one.

@@ -44,8 +44,12 @@ pub enum Error {
     /// whose number is decided and whose handler is not built — which is what
     /// every wrapper in [`crate::pending`] answers today.
     Unsupported,
-    /// `ESRCH`: the caller is not a process.
+    /// `ESRCH`: the caller is not a process, or a pid names no live one
+    /// ([`status::NO_PROCESS`]).
     NoProcess,
+    /// [`status::NOT_CHILD`]: a pid names a process that is not the caller's
+    /// child.
+    NotChild,
     /// `EINTR`: the process is being killed, and the call gave up waiting.
     Interrupted,
     /// Some other `errno`, which no native call is documented to return.
@@ -77,6 +81,7 @@ impl Error {
             status::BAD_STATE => Error::BadState,
             Errno::ENOSYS => Error::Unsupported,
             Errno::ESRCH => Error::NoProcess,
+            status::NOT_CHILD => Error::NotChild,
             Errno::EINTR => Error::Interrupted,
             other => Error::Other(other),
         }
@@ -103,6 +108,7 @@ impl Error {
             Error::BadState => status::BAD_STATE,
             Error::Unsupported => Errno::ENOSYS,
             Error::NoProcess => Errno::ESRCH,
+            Error::NotChild => status::NOT_CHILD,
             Error::Interrupted => Errno::EINTR,
             Error::Other(errno) => errno,
             Error::Unexpected(_) => return None,

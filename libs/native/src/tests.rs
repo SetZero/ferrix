@@ -993,6 +993,10 @@ fn every_call_in_the_native_table_has_a_wrapper() {
     let _ = device.clock(1, false);
     let _ = pending::create_process(&job, &vmo, "x");
     let _ = Process::from_owned(handle()).start(handle());
+    let _ = Process::from_owned(handle()).status();
+    let _ = pending::give_bootstrap(&sys, 2, handle());
+    let _ = pending::take_bootstrap(&sys);
+    let _ = port.descriptor(true);
     let _ = interrupt.bind(&port, 0);
     let _ = interrupt.ack();
     let _ = device.io_mapping(IoMappingSpec::default());
