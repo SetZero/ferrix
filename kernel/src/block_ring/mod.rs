@@ -255,6 +255,8 @@ pub(crate) fn start_for(node: &DeviceNode, name: DiskName) -> Option<StartMessag
         pci_device_id: function.device,
         location: location.raw(),
         name: *name.as_bytes(),
+        pci_subsystem_vendor_id: function.subsystem_vendor,
+        pci_subsystem_id: function.subsystem,
     })
 }
 
