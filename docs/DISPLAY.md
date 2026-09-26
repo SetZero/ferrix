@@ -856,3 +856,148 @@ The connector's `EDID` property, which `compositor_drm::Plan` would read.
 Hotplug. The panic screen:
 the firmware left no framebuffer on this board, so a panic is serial only,
 as §2.4 says.
+
+## 7. A connector's EDID: `drm.edid_firmware=` (2026-09-26)
+
+**Why.** A `hyprland.conf` names its monitors by description --
+`monitor = desc:Lenovo Group Limited R27qe Gen2 UTP03KBB, preferred, 2560x0, 1`
+-- and so does waybar's `"output"`. Under QEMU `card0`'s connector had no
+EDID, so hyprix gave the screen no description, its `wl_output` and
+`xdg_output` description was only `Virtual-1`, and neither the monitor rule
+nor the bar found it. The customer chose to give QEMU's screen the real
+monitor's EDID the Linux way, `drm.edid_firmware=[<connector>:]<file>`, and
+to leave their configuration as it is.
+
+**Decided: the kernel, not the driver.** Where the blob is handed out is
+the DRM uAPI, which the display core owns (§2.3): a connector's `EDID`
+property and `DRM_IOCTL_MODE_GETPROPBLOB`. Where the bytes come from was
+the question, and the core reads the file itself:
+
+* It is what Linux does. `drm_edid_load.c` is the DRM core's, not a
+  driver's: `drm_load_edid_firmware` reads the option and `request_firmware`
+  reads `/lib/firmware/<file>` for whatever connector is being probed,
+  whichever driver it belongs to.
+* It is the smaller change. The core already has the command line
+  (`/proc/cmdline`'s copy) and reads files whole (`fs::read_file`). The
+  ring-3 drivers are native programs with handles and no filesystem: the
+  driver-side design would have been a new displayctl message (protocol
+  version 7), a way for a native driver to be handed `/proc/cmdline` and a
+  firmware file, and the same parse in `user/gpu` and `user/ltdc` both.
+* One place means every client sees the same bytes: hyprix through the
+  property, anything else through the same ioctls, and
+  `/sys/class/drm/card0-Virtual-1/edid`, which the core now has too.
+
+The grammar and the checks are `libs/displayctl/src/edid.rs`'s, host-tested
+(`edid_tests.rs`): the comma-separated entries, the first `<connector>:`
+entry whose connector the name *starts with* (Linux's `strncmp` over the
+entry's length, so `DP-1:` is `DP-10`'s too), else the last entry with no
+connector; a file whose size is not what its base block's extension count
+says is refused, a base block with a bad checksum, fewer than six header
+bytes right or a version other than 1 is refused, two wrong header bytes
+are put right, and an extension block that is not valid is dropped and the
+base block's count and checksum made to agree -- all as `edid_load` and
+`drm_edid_block_valid` do. `kernel/src/display/edid.rs` reads the option
+from the loader's command line when a driver's HELLO is accepted, before
+READY, once per card: that is Linux's connector probe. The connector is
+named as Linux names one, `Virtual-1` or `HDMI-A-1`, numbered per card
+(`card1`'s first connector is `Virtual-1` to the kernel, where hyprix
+renames it `Virtual-2`; an entry with no connector covers both). One boot
+line per file named:
+`display  card0 Virtual-1: EDID from "edid/LEN-R27qe-Gen2.bin": LEN R27qe Gen2 UTP03KBB, 2 extensions`,
+or why not, and the connector keeps no EDID. A card is never refused over
+it. Two things are not Linux's: the six built-in EDIDs
+(`edid/1024x768.bin` and the rest, which later Linux kernels removed
+too; 6.1 still has them), and the search path, which is `/lib/firmware`
+alone. And the option is the first of its key on the command line, as every Ferrix option is (`CMDLINE.TXT` before
+the image's `DEFAULTS.TXT`), where a Linux module parameter's last wins.
+
+**The uAPI.** A connector given an EDID has one property, `EDID` (id 66,
+after the plane's `type`), an immutable blob, `count_values` and
+`count_enum_blobs` 0, listed by `OBJ_GETPROPERTIES` and by `GETCONNECTOR`'s
+`props_ptr`. Its value is the blob's id (67 + the head) while a display is
+connected and 0 while none is, as Linux clears the property on a
+disconnect. `GETPROPBLOB` copies the bytes only when `length` is exactly
+the blob's, and writes the length back either way; an id that names no
+blob is `ENOENT`. A connector with no EDID has no property at all, as
+before: Linux attaches `EDID` to every connector that is not virtual,
+virtio-gpu's only when the device has `VIRTIO_GPU_F_EDID`, which ours
+declines, so a virtual connector without one listing nothing is Linux's
+answer.
+
+**Identity, not modes.** Linux's `virtio_gpu_conn_get_modes` would take
+the EDID's modes and none of its own. Ferrix takes the monitor's name for
+itself and nothing else: the connector keeps the device's preferred mode
+and the standard sizes (§2.3), and `mm_width` and `mm_height` stay 0. That
+is what `run-compositor` needs. The R27qe prefers 2560x1440, while the
+screen `run-compositor` watches is the size of its window and follows it
+when it is resized (§3): the user's line says `preferred`, the card's
+preferred mode is the window's, so the window wins, and nothing can ask the
+card for a mode QEMU does not scan out. (A virtio-gpu scans out any size up
+to `MAX_DIMENSION`, and 2560x1440 is among the standard sizes listed
+anyway, so a `monitor = …, 2560x1440, …` line still picks it.)
+
+**xtask.** `run-compositor` looks for the monitor on the host when it
+builds the image: every `/sys/class/drm/card*-*/edid` is read, checked with
+the same `check`, described as hyprix describes one (the PNP registry's
+make, the `0xFC` name, the `0xFF` serial), and the first whose description
+starts with `--edid <DESCRIPTION>` is taken -- by default
+`Lenovo Group Limited R27qe Gen2`, the customer's monitor under waybar's
+bar. Never by connector: `card2-DP-1` today is another connector after the
+host's next boot. The EDID goes to `/lib/firmware/edid/LEN-R27qe-Gen2.bin`
+in the initramfs, `drm.edid_firmware=edid/LEN-R27qe-Gen2.bin` into the
+image's `DEFAULTS.TXT`, and the host's `/usr/share/hwdata/pnp.ids` to the
+same path in the guest, where `compositor/drm`'s `registered` turns `LEN`
+into `Lenovo Group Limited`. Neither file is ever committed: both are read
+from the machine the image is built on. On a host without `pnp.ids` the
+make is the code and the description `LEN R27qe Gen2 UTP03KBB`, which the
+user's `desc:Lenovo…` line does not match; xtask says so. On a host without
+the monitor xtask says `edid: no monitor of this machine describes itself
+as …; the screen has no EDID and is only Virtual-1`, carries nothing and
+adds no argument, and the desktop is what it was before. `--edid none`
+asks for that.
+
+**What the user's configuration then does.** Hyprland picks a monitor's
+rule as the last line that *names* it, by connector or `desc:`, and only
+when none does the catch-all `monitor = , …`
+(`CMonitorRuleManager::get`, 0.56.2). hyprix took the last line that
+matched at all, so the customer's `monitor = , preferred, auto, 1` below
+their three `desc:` lines won over all three; it now picks as Hyprland
+does (`MonitorRule::for_monitor`). With the EDID the one QEMU screen is the
+R27qe, alone at `2560x0`, at the window's size. What that did, looked for:
+
+* **The pointer.** hyprix's pointer moved over the box from the layout's
+  corner, 0, 0, to the far edge of the rightmost screen. A lone screen at
+  `2560x0` left 2560 empty pixels on the left: the pointer could go there,
+  and QEMU's tablet, whose range is the whole window, landed there for
+  most of it. The box now starts at the leftmost and topmost screen, as
+  Hyprland's layout box does (`Screen::desktop`, `Seat::place_at`).
+  `test-compositor --boot edid` is the check, and its negative control
+  (the fix's `place_at` taken out) failed it: 178 pixels of the arrow in
+  the wrong place.
+* **Windows, layer surfaces, screenshots.** Each is placed and drawn
+  relative to its monitor's rectangle, and `wl_output.geometry` says
+  `2560, 0`, which a client places against. The EDID boot's first picture,
+  the tiled pair drawn at `2560x0`, is `dwindle-two-clients.xrle` to the
+  pixel. A screenshot of an output is of that output
+  (`zwlr_screencopy_v1` names the output, not a region of the layout); a
+  region given in layout coordinates, as `grim -g` gives one, has to say
+  2560 and not 0, as it does on the customer's Hyprland.
+* **waybar** matches its `"output"` against `wl_output.description` with
+  ` (Virtual-1)` cut off, which is now the monitor's description, so the
+  bar goes on this screen.
+
+**Tests.** `libs/displayctl` (12: the grammar, the checks, the identity,
+the property and blob answers); `xtask` (3: finding a monitor among
+connector directories, describing one, what an image carries);
+`compositor/config` (rule precedence) and `hyprix` (the pointer over a
+screen at `2560x0`). `test-compositor --boot edid` boots with the host's
+monitor, or on a host without it a stand-in EDID xtask makes (`FRX Ferrix
+Test EDID0001`), and requires the kernel's line, `hyprctl monitors` saying
+`description: Lenovo Group Limited R27qe Gen2 UTP03KBB` and `at 2560x0`,
+and the pointer boot's two pictures at that place.
+
+**Not done.** The board: the LTDC driver reads its monitor's EDID and does
+not hand it to the core, so `HDMI-A-1` has no `EDID` property and no
+description unless the command line names a file (`docs/BACKLOG.md`).
+The EDID's physical size in `GETCONNECTOR`'s `mm_width` and `mm_height`.
+QEMU's own EDID (`VIRTIO_GPU_F_EDID`, `GET_EDID`) when nothing is named.
