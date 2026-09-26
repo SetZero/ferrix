@@ -79,6 +79,16 @@ pub(crate) fn run(arch: Arch, image: &Path, args: &Args) -> Result<()> {
 
 /// Boot the image headless and require the kernel to report success.
 pub(crate) fn test_boot(arch: Arch, image: &Path, kernel: &Path, args: &Args) -> Result<()> {
+    test_boot_lines(arch, image, kernel, args).map(|_| ())
+}
+
+/// [`test_boot`], returning what the guest printed.
+pub(crate) fn test_boot_lines(
+    arch: Arch,
+    image: &Path,
+    kernel: &Path,
+    args: &Args,
+) -> Result<Vec<String>> {
     println!("  {arch}: booting under QEMU (timeout {}s)", args.timeout);
     let watched = watch(arch, image, kernel, args, SUCCESS_MARKER)?;
     match watched.verdict {
@@ -87,6 +97,15 @@ pub(crate) fn test_boot(arch: Arch, image: &Path, kernel: &Path, args: &Args) ->
             if code != 0 && code != DEBUG_EXIT_SUCCESS {
                 return Err(Error::new(format!(
                     "the {arch} kernel reported success but QEMU exited {code}"
+                )));
+            }
+            let off = crate::cargo::mitigations_off();
+            if let Some(problem) =
+                crate::kaslr::problem(&watched.lines, off, crate::kaslr::declined(args))
+            {
+                return Err(Error::new(format!(
+                    "{arch}: {problem}.\n  Serial output is in {}",
+                    watched.log.display()
                 )));
             }
             if let Some(problem) = entropy_problem(&watched.lines) {
@@ -123,7 +142,7 @@ pub(crate) fn test_boot(arch: Arch, image: &Path, kernel: &Path, args: &Args) ->
                 println!("  {arch}: the machine reset, as ferrix.onexit=reset asked");
             }
             println!("  {arch}: boot ok");
-            Ok(())
+            Ok(watched.lines)
         }
         Verdict::Panicked => Err(panicked(arch, &watched.log)),
         Verdict::Silent => Err(Error::new(format!(
@@ -956,11 +975,24 @@ fn watch_hooked(
     sieved
         .dma
         .judge(arch, verdict == Verdict::Reached, &lines, &log_path)?;
+    finish_watching(lines, verdict, status, log_path)
+}
+
+/// What [`watch_hooked`] saw, once QEMU is gone; and, for a coverage run, the
+/// boot's slide written beside its trace, since the trace records the
+/// addresses the kernel ran at, which KASLR moved.
+fn finish_watching(
+    lines: Vec<String>,
+    verdict: Verdict,
+    status: std::process::ExitStatus,
+    log: PathBuf,
+) -> Result<Watched> {
+    crate::kaslr::record_coverage_slide(&lines)?;
     Ok(Watched {
         lines,
         verdict,
         status,
-        log: log_path,
+        log,
     })
 }
 

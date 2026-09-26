@@ -48,6 +48,12 @@ pub(crate) fn build_loader(arch: Arch, release: bool) -> Result<PathBuf> {
 /// Whether this run builds its kernels with `--mitigations off`.
 static MITIGATIONS_OFF: AtomicBool = AtomicBool::new(false);
 
+/// Whether this run builds its kernels with `--mitigations off`, for a check
+/// that has to know what the image it boots was built to do.
+pub(crate) fn mitigations_off() -> bool {
+    MITIGATIONS_OFF.load(Ordering::Relaxed)
+}
+
 /// Say how every kernel this run builds is to be built: `main` calls it once,
 /// with what `--mitigations` said.
 pub(crate) fn set_mitigations(setting: Mitigations) {

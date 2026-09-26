@@ -5,6 +5,7 @@
 //! cargo xtask run       --arch x86_64 [--release] [--gdb] [--smp N] [--memory M]
 //!                       [--accel auto|tcg|whpx|kvm|hvf] [--init PATH/{arch}/busybox] [--net]
 //! cargo xtask test-boot --arch x86_64 [--release] [--timeout SECONDS] [--reset] [--net]
+//! cargo xtask test-kaslr --arch x86_64 [--release] [--timeout SECONDS]
 //! cargo xtask test-shell --arch all --init PATH/{arch}/busybox [--timeout SECONDS]
 //! cargo xtask test-vfs  --arch all --init PATH/{arch}/busybox [--timeout SECONDS]
 //! cargo xtask test-threads --arch all [--timeout SECONDS]
@@ -75,6 +76,7 @@ mod init_file;
 mod initramfs;
 mod input;
 mod jobs;
+mod kaslr;
 mod keyboard;
 mod native;
 mod net;
@@ -159,7 +161,9 @@ COMMANDS:
     wallpapers    Convert pictures for run-compositor's desktop and keep them on this machine
     test-btrfs    Boot, write a tree on the blank btrfs disk, and require host btrfs check to find nothing
     test-powerfail  Kill QEMU while it writes btrfs, replay at the next boot, and require btrfs check to pass, --seeds times
-    test-boot     Boot the image under QEMU and assert the kernel came up
+    test-boot     Boot the image under QEMU and assert the kernel came up, moved (KASLR) unless built
+                  --mitigations off or told nokaslr
+    test-kaslr    Boot the image twice and require the loader to have put the kernel somewhere new
     test-shell    Boot with a static busybox built in and require its script's output; again with it
                   started from a file by ferrix.init=; under busybox, require reboot(2) to commit /data
     test-vfs      Boot with busybox in the initramfs and require stage 8's exit programs and applets
@@ -211,7 +215,8 @@ OPTIONS:
     --seeds <N>                          test-powerfail cuts   [default: 8]
     --accel <auto|tcg|whpx|kvm|hvf>      QEMU accelerator      [default: auto for run
                                          without --gdb, tcg otherwise]
-    --gdb                                Wait for a debugger on :1234
+    --gdb                                Wait for a debugger on :1234, with nokaslr in CMDLINE.TXT so the
+                                         kernel runs where its ELF's symbols say
     --net                                run, test-boot, test-shell, test-vfs, run-compositor:
                                          a virtio-net device,
                                          behind xtask's own NAT gateway (10.0.2.2, guest 10.0.2.15);
@@ -369,6 +374,7 @@ fn run() -> Result<()> {
         "test-btrfs" => btrfs_check::test_btrfs(&args, |arch| build_image(arch, &args)),
         "test-powerfail" => powerfail::test_powerfail(&args, |arch| build_parts(arch, &args)),
         "test-boot" => test_boot(&args),
+        "test-kaslr" => test_kaslr(&args),
         "test-shell" => test_shell(&args),
         "test-vfs" => test_vfs(&args),
         "test-net" => test_net(&args),
@@ -467,6 +473,16 @@ fn test_boot(args: &Args) -> Result<()> {
     for arch in args.arches()? {
         let (image, kernel) = build_image(arch, args)?;
         qemu::test_boot(arch, &image, &kernel, args)?;
+    }
+    Ok(())
+}
+
+/// Boot each architecture's image twice and require two layouts
+/// (`kaslr::test_kaslr`), each boot a whole `test-boot`.
+fn test_kaslr(args: &Args) -> Result<()> {
+    for arch in args.arches()? {
+        let (image, kernel) = build_image(arch, args)?;
+        kaslr::test_kaslr(arch, || qemu::test_boot_lines(arch, &image, &kernel, args))?;
     }
     Ok(())
 }
@@ -614,9 +630,14 @@ fn test_net(args: &Args) -> Result<()> {
 /// The command line an image carries: `ferrix.onexit=reset` under `--reset`, so
 /// the machine resets when boot ends and `test-boot` can require that it did,
 /// `ferrix.init=<PATH>` under `--init-path`, so pid 1 is started from
-/// that file in the image, and each `--kernel-option` after those.
+/// that file in the image, `nokaslr` under `--gdb`, so that the kernel runs
+/// where the ELF a debugger reads its symbols from says it does, and each
+/// `--kernel-option` after those.
 fn image_cmdline(args: &Args) -> Option<String> {
     let mut options = Vec::new();
+    if args.gdb {
+        options.push("nokaslr".to_owned());
+    }
     if args.reset {
         options.push(qemu::RESET_OPTION.to_owned());
     }

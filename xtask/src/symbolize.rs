@@ -6,6 +6,7 @@
 //! profiles keep them for exactly this — so the boot test looks each address
 //! up as the report arrives and prints the function beside it.
 
+use std::cell::Cell;
 use std::path::Path;
 
 use ferrix_elf::Elf;
@@ -17,9 +18,16 @@ use ferrix_elf::Elf;
 pub(crate) const TRACE_LABEL: &str = "trace";
 
 /// A kernel image held open for lookups.
+///
+/// And how far the image it describes had moved in the boot being read: a
+/// backtrace gives the addresses the kernel ran at, and with KASLR those are
+/// not the addresses in the ELF. The panic report says the slide on a line
+/// before its trace (`kernel/src/panic.rs`), and [`Symbolizer::annotate`]
+/// takes it from there.
 #[derive(Debug)]
 pub(crate) struct Symbolizer {
     image: Vec<u8>,
+    slide: Cell<u64>,
 }
 
 impl Symbolizer {
@@ -28,13 +36,23 @@ impl Symbolizer {
     pub(crate) fn open(path: &Path) -> Option<Self> {
         let image = std::fs::read(path).ok()?;
         let _ = Elf::parse(&image).ok()?.symbols()?;
-        Some(Symbolizer { image })
+        Some(Symbolizer {
+            image,
+            slide: Cell::new(0),
+        })
     }
 
     /// `line` with the function its return address is in appended, if it is a
     /// backtrace line and the address is inside a known function.
+    ///
+    /// A line giving the boot's slide is remembered, and the address on every
+    /// trace line after it is taken back to where it was linked first.
     pub(crate) fn annotate(&self, line: &str) -> Option<String> {
-        let address = trace_address(line)?;
+        if let Some(slide) = crate::kaslr::slide_in(line) {
+            self.slide.set(slide);
+            return None;
+        }
+        let address = trace_address(line)?.wrapping_sub(self.slide.get());
         let elf = Elf::parse(&self.image).ok()?;
         // A return address is the instruction after the call. The byte before
         // it is the call itself, which names the right function even when the

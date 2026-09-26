@@ -43,14 +43,26 @@ const INITRD_PATH: &str = "FERRIX/INITRD.IMG";
 /// too (2026-09-24), a tenth of a second of every boot. The rust toolchain's
 /// own `llvm-objcopy` (the `llvm-tools` component `rust-toolchain.toml` asks
 /// for) does it; without one the whole kernel is copied and a line says so.
+///
+/// Except that a kernel which keeps its relocations beside the sections they
+/// patch -- the ARMv7-A kernel, linked with `--emit-relocs` so the loader can
+/// move it (KASLR) -- loses only its debug information: `--strip-all` would
+/// take the relocations with the symbol table they index, and the kernel,
+/// built to move, would refuse to start at its link address. That keeps
+/// about 1 MB of relocations and 2 MB of symbols on the card.
 fn card_kernel(kernel: &Path) -> PathBuf {
     let stripped = kernel.with_extension("stripped.elf");
     let Some(objcopy) = llvm_objcopy() else {
         println!("    llvm-objcopy not found; copying the kernel with its debug information");
         return kernel.to_path_buf();
     };
+    let how = if keeps_relocations(kernel) {
+        "--strip-debug"
+    } else {
+        "--strip-all"
+    };
     let status = std::process::Command::new(&objcopy)
-        .arg("--strip-all")
+        .arg(how)
         .arg(kernel)
         .arg(&stripped)
         .status();
@@ -64,6 +76,15 @@ fn card_kernel(kernel: &Path) -> PathBuf {
             kernel.to_path_buf()
         }
     }
+}
+
+/// Whether `kernel` is a fixed-address image that keeps the relocations the
+/// loader moves it with, which a full strip would remove.
+fn keeps_relocations(kernel: &Path) -> bool {
+    std::fs::read(kernel).is_ok_and(|bytes| {
+        ferrix_elf::Elf::parse(&bytes)
+            .is_ok_and(|elf| elf.header().elf_type == ferrix_elf::ET_EXEC && elf.is_relocatable())
+    })
 }
 
 /// The initramfs as the card gets it: every program in it without its debug
