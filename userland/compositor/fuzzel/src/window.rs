@@ -57,6 +57,27 @@ impl Log {
     }
 }
 
+/// `--print-timing-info`: how long a stage took, as fuzzel's `time_finish`
+/// says it (a warning, so it shows at the default log level).
+struct Timing {
+    enabled: bool,
+    log: Log,
+}
+
+impl Timing {
+    fn since(&self, what: &str, started: std::time::Instant) {
+        if !self.enabled {
+            return;
+        }
+        let took = started.elapsed();
+        self.log.warn(&format!(
+            "{what} in {}s {}µs",
+            took.as_secs(),
+            took.subsec_micros()
+        ));
+    }
+}
+
 /// Print a line on standard output, as fuzzel's `printf` does.
 fn print(line: &str) {
     let mut out = std::io::stdout().lock();
@@ -160,8 +181,9 @@ pub fn run(program: &str, args: &[String]) -> i32 {
         Ok(file) => Some((path, file)),
         Err(error) => {
             log.warn(&format!(
-                "{}: failed to create lock file: {error}",
-                path.display()
+                "{}: failed to create lock file: {}",
+                path.display(),
+                exec::error_text(&error)
             ));
             None
         }
@@ -302,7 +324,13 @@ fn scaling(client: &Client, config: &Config) -> Scaling {
 
 /// Everything after the configuration: the entries, the window and the loop.
 fn session(config: &Config, cli: &cli::Cli, log: Log) -> i32 {
+    let timing = Timing {
+        enabled: config.print_timing_info,
+        log,
+    };
+    let started = std::time::Instant::now();
     let (apps, cache_path) = entries(config, log);
+    timing.since("apps loaded", started);
     let default_status = if config.dmenu.enabled { 1 } else { 0 };
     if config.dmenu.exit_immediately_if_empty && apps.is_empty() {
         return default_status;
@@ -317,6 +345,7 @@ fn session(config: &Config, cli: &cli::Cli, log: Log) -> i32 {
         let _ = launcher.matches.select_containing(&launcher.apps, select);
     }
 
+    let started = std::time::Instant::now();
     let mut client = match Client::connect() {
         Ok(client) => client,
         Err(error) => {
@@ -327,7 +356,14 @@ fn session(config: &Config, cli: &cli::Cli, log: Log) -> i32 {
         }
     };
     let scaling = scaling(&client, config);
-    let look = Look::new(compositor_text::Fonts::system(), config, scaling);
+    timing.since("connected to the compositor", started);
+    let started = std::time::Instant::now();
+    let fonts = compositor_text::Fonts::system();
+    timing.since("fonts found", started);
+    let started = std::time::Instant::now();
+    let look = Look::new(fonts, config, scaling);
+    timing.since("font loaded", started);
+    let started = std::time::Instant::now();
     let (lines, longest) = config.message.as_ref().map_or((0, 0), |m| {
         let lines: Vec<&str> = m.split('\n').collect();
         let longest = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0);
@@ -366,6 +402,7 @@ fn session(config: &Config, cli: &cli::Cli, log: Log) -> i32 {
     } else {
         vec![None; launcher.apps.len()]
     };
+    timing.since("icon paths resolved", started);
     let have_icons = launcher.apps.iter().any(|a| a.icon_name.is_some());
     let painter = Painter {
         look,
