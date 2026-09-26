@@ -45,6 +45,8 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+mod idle;
+
 use crate::args::Args;
 use crate::display::{DEVICE_ID, Image, Qmp, free_port, mismatches, parse_ppm};
 use crate::paths::{self, Arch};
@@ -105,6 +107,9 @@ const LSWT_PATH: &str = "bin/lswt";
 const SHOT_PATH: &str = "bin/shot";
 const LOCK_PATH: &str = "bin/lock";
 const VKBD_PATH: &str = "bin/vkbd";
+/// hypridle, and the `loginctl` that reaches it (`userland/compositor/hypridle`).
+const HYPRIDLE_PATH: &str = "bin/hypridle";
+const LOGINCTL_PATH: &str = "bin/loginctl";
 /// `reboot`, with the word for the firmware busybox's cannot pass; it takes
 /// the name, which busybox then does not link.
 const REBOOT_PATH: &str = "bin/reboot";
@@ -886,6 +891,10 @@ struct Programs {
     lock: PathBuf,
     /// `vkbd`, which types as `wtype` does.
     vkbd: PathBuf,
+    /// `hypridle`, which runs commands when the seat goes idle.
+    hypridle: PathBuf,
+    /// `loginctl lock-session`, which reaches hypridle's `lock_cmd`.
+    loginctl: PathBuf,
     /// `reboot`, which asks the firmware to come back up somewhere.
     reboot: PathBuf,
 }
@@ -904,12 +913,14 @@ impl Programs {
             shot: build(arch, "compositor-shot", "shot")?,
             lock: build(arch, "compositor-lock", "lock")?,
             vkbd: build(arch, "compositor-vkbd", "vkbd")?,
+            hypridle: build(arch, "compositor-hypridle", "hypridle")?,
+            loginctl: build(arch, "compositor-hypridle", "loginctl")?,
             reboot: build(arch, "compositor-reboot", "reboot")?,
         })
     }
 
     /// The ones the initramfs carries, each with the path it goes at.
-    fn carried(&self) -> [(&'static str, &Path); 10] {
+    fn carried(&self) -> [(&'static str, &Path); 12] {
         [
             (CLIENT_PATH, self.client.as_path()),
             (CTL_PATH, self.ctl.as_path()),
@@ -920,6 +931,8 @@ impl Programs {
             (SHOT_PATH, self.shot.as_path()),
             (LOCK_PATH, self.lock.as_path()),
             (VKBD_PATH, self.vkbd.as_path()),
+            (HYPRIDLE_PATH, self.hypridle.as_path()),
+            (LOGINCTL_PATH, self.loginctl.as_path()),
             (REBOOT_PATH, self.reboot.as_path()),
         ]
     }
@@ -2394,7 +2407,7 @@ fn said_on_its_own(line: &str) -> &str {
 /// each takes minutes under emulation and there are twenty of them, so a
 /// change to one is otherwise an hour a try.
 type Boot = fn(Arch, &Programs, &Args) -> Result<()>;
-const BOOTS: [(&str, Boot); 24] = [
+const BOOTS: [(&str, Boot); 26] = [
     ("restart", test_driver_restart),
     ("dispatchers", test_dispatchers),
     ("bar", test_bar),
@@ -2419,6 +2432,8 @@ const BOOTS: [(&str, Boot); 24] = [
     ("transform", test_transform),
     ("typing", test_typing),
     ("desktop", test_desktop),
+    ("idle", idle::test_idle),
+    ("idle-user", idle::test_idle_user),
 ];
 
 /// The desktop boot's configuration: the two windows `dispatchers` tiles
