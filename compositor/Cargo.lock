@@ -290,6 +290,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "compositor-toolkit"
+version = "0.1.0"
+dependencies = [
+ "compositor-protocol",
+ "compositor-shm",
+ "compositor-socket",
+ "compositor-wire",
+ "compositor-xkb",
+ "hyprix",
+ "libc",
+ "tiny-skia",
+]
+
+[[package]]
 name = "compositor-virgl"
 version = "0.1.0"
 

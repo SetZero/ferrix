@@ -1,0 +1,33 @@
+[package]
+name = "compositor-toolkit"
+description = "The Wayland client runtime the desktop clients share: connection, globals, outputs, layer and lock surfaces, popups, the seat, buffers and an event loop"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "compositor_toolkit"
+path = "src/lib.rs"
+
+[dependencies]
+compositor-protocol = { path = "../protocol" }
+compositor-shm = { path = "../shm" }
+compositor-socket = { path = "../socket" }
+compositor-wire = { path = "../wire" }
+compositor-xkb = { path = "../xkb" }
+# poll, signalfd, sigprocmask, setsid and the keymap's mmap: the calls std
+# does not make. Already the workspace's, through compositor-socket.
+libc = "0.2.189"
+# What a surface is drawn with. The same exact pin as compositor-render, for
+# the same reason; the default features stay off here too.
+tiny-skia = { version = "=0.12.0", default-features = false, features = ["std", "simd"] }
+
+[dev-dependencies]
+# The compositor itself, run in a thread of the test, so the runtime is
+# tried against the server it will meet on Ferrix rather than a mock.
+hyprix = { path = "../hyprix" }
+
+[lints]
+workspace = true

@@ -218,5 +218,17 @@ shell says it does, and the program reports it.
 
 ### Where it stands
 
-The interface of all four crates is on `clients-base` (2026-09-26); the
-bodies are being written behind it.
+* **`compositor/toolkit` is on `main`** (2026-09-26). Its tests run hyprix
+  in the test process, headless, and judge the frame it composed: a bar
+  anchored across the top is drawn there, a lock surface covers the screen
+  and comes off at unlock, and timers, children, signals and the waker come
+  back as events. Two things are not tried end to end: the keyboard, since
+  a headless seat has no keyboard (the key translation is tested as a
+  function against `compositor/xkb`'s `us` and `de` tables), and popups,
+  since hyprix refuses an `xdg_popup` whose parent comes from
+  `zwlr_layer_surface_v1.get_popup` -- a gap in the compositor, which the
+  waybar stream is fixing; the test for it is `#[ignore]`d with that reason.
+* `compositor/hyprlang` and `compositor/image` are written and gated on
+  `clients-base`, and land next; `compositor/text` is being written there.
+* Not yet: the xtask flag that carries the user's dotfiles and fonts, and the
+  boot check of a toolkit client drawing text in the user's font.
