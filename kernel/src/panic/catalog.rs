@@ -656,6 +656,30 @@ pub(crate) static CONSOLE_OUTPUT: Explanation = Explanation {
     see: "kernel/src/console/output.rs check; kernel/src/console.rs emit",
 };
 
+/// For `kmain` in `main.rs`, when `logctl::check::run` fails.
+pub(crate) static LOG_CONTROL: Explanation = Explanation {
+    code: "FX-1008",
+    title: "the log core did not serve the kernel log to a driver",
+    meaning: "A driver whose device may carry the kernel log off the machine -- the Pixel 7's \
+              USB serial port -- reads it over a log control channel (`libs/logctl`). The check \
+              claims the log as `log_control_create` does and plays the driver: a READ must be \
+              answered with DATA holding the log's oldest bytes, the next READ with the bytes \
+              after them, a second reader must be refused while the first holds the log, a \
+              driver that sends DATA must be refused and its claim ended, and a claim must end \
+              when its channel closes. A failure means the driver on the phone would get \
+              nothing, get the log out of order, or keep the log from the next driver after it \
+              went.",
+    causes: &[
+        "The log core's task does not answer: it waits for the console to wake it, which the \
+         console never does, instead of looking again every `logctl::POLL_NANOS`.",
+        "The reader's cursor does not start at the log's beginning, or `Ring::read` does not \
+         move it past what it copied.",
+        "The claim is not let go when the task ends, so `CLAIMED` stays set and every later \
+         `log_control_create` answers `ALREADY_BOUND`.",
+    ],
+    see: "kernel/src/logctl/check.rs; kernel/src/logctl/mod.rs; libs/logctl",
+};
+
 /// For `kmain` in `main.rs`, when `console::log_check::run` fails.
 pub(crate) static CONSOLE_LOG: Explanation = Explanation {
     code: "FX-0505",
@@ -2374,6 +2398,7 @@ pub(crate) static ALL: &[&Explanation] = &[
     &STAGE10_DRIVER,
     &STAGE10_DEVMGR,
     &STAGE10_DMA_FAULT,
+    &LOG_CONTROL,
     &STAGE11_MOUNT,
     &NET_CORE,
     &NET_RING,

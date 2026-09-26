@@ -39,6 +39,7 @@ mod init;
 mod input;
 mod iommu;
 mod irq;
+mod logctl;
 mod mm;
 mod mmio;
 mod net;
@@ -1299,6 +1300,8 @@ fn check_device_objects() {
 fn check_block_ring() {
     if checks::run() {
         check_ring_control();
+        // Before devmgr, which may start a driver that claims the log.
+        check_log_control();
     }
     // `devmgr` starts the drivers, the driver check waits for their disks
     // (and starts them itself where `devmgr` did not) and mounts what comes
@@ -1467,6 +1470,23 @@ fn check_driver(started_by_devmgr: bool) {
         check_btrfs_disk();
     }
     check_btrfs_write();
+}
+
+/// The log core, played from a driver's end: READ answered with the log's
+/// oldest bytes and then the next, a second reader refused, a driver that
+/// breaks the protocol refused, and a claim ended by its channel.
+fn check_log_control() {
+    match logctl::check::run() {
+        Ok(report) => println!(
+            "  logctl   {} bytes from the log's oldest in two DATA ({} lost before them), a \
+             second reader refused, a driver that lied refused, a closed claim ended in {} ms",
+            report.carried, report.lost, report.released_ms,
+        ),
+        Err(problem) => fatal!(
+            catalog::LOG_CONTROL,
+            "log control self-check failed: {problem}"
+        ),
+    }
 }
 
 /// Stage 10: `devmgr`, started from the initramfs with every device and
@@ -2307,7 +2327,8 @@ fn register_load(view: &BootView<'_>) {
         .and_then(|()| display::install())
         .and_then(|()| render::install())
         .and_then(|()| input::install())
-        .and_then(|()| audio::install());
+        .and_then(|()| audio::install())
+        .and_then(|()| logctl::install());
     if let Err(hooks::Full) = registered {
         fatal!(
             catalog::LOAD_REGISTRATION,

@@ -109,6 +109,8 @@ pub const DEVICE_QUIESCE: usize = 0x104A;
 pub const DEVICE_CLOCK: usize = 0x104F;
 /// [`NativeCall::SoundControlCreate`].
 pub const SOUND_CONTROL_CREATE: usize = 0x1050;
+/// [`NativeCall::LogControlCreate`].
+pub const LOG_CONTROL_CREATE: usize = 0x1051;
 /// The largest name [`NativeCall::ProcessCreate`] takes, in bytes.
 pub const PROCESS_NAME_MAX: usize = 32;
 
@@ -332,10 +334,17 @@ pub enum NativeCall {
     /// process holds with `MANAGE`, and answer the driver's end of it
     /// (`docs/AUDIO.md` §3.2). One per device.
     SoundControlCreate,
+    /// `(device)` → handle. Make a control channel on which the device's
+    /// driver reads the kernel log (`libs/logctl`), and answer the driver's
+    /// end of it. Needs `MANAGE` on a device whose binding may stream the log
+    /// off the machine -- the Pixel 7's USB device controller -- and
+    /// `ACCESS_DENIED` for any other; one reader at a time, `ALREADY_BOUND`
+    /// while another holds it, and the claim ends when the channel closes.
+    LogControlCreate,
 }
 
 /// Every native call, in number order.
-pub const ALL: [NativeCall; 43] = [
+pub const ALL: [NativeCall; 44] = [
     NativeCall::HandleClose,
     NativeCall::HandleDuplicate,
     NativeCall::HandleReplace,
@@ -379,6 +388,7 @@ pub const ALL: [NativeCall; 43] = [
     NativeCall::RenderControlCreate,
     NativeCall::DeviceClock,
     NativeCall::SoundControlCreate,
+    NativeCall::LogControlCreate,
 ];
 
 /// Whether `number` is in the native range at all.
@@ -437,6 +447,7 @@ pub const fn decode(number: usize) -> Option<NativeCall> {
         DEVICE_QUIESCE => NativeCall::DeviceQuiesce,
         DEVICE_CLOCK => NativeCall::DeviceClock,
         SOUND_CONTROL_CREATE => NativeCall::SoundControlCreate,
+        LOG_CONTROL_CREATE => NativeCall::LogControlCreate,
         _ => return None,
     };
     Some(call)
@@ -489,5 +500,6 @@ pub const fn number(call: NativeCall) -> usize {
         NativeCall::DeviceQuiesce => DEVICE_QUIESCE,
         NativeCall::DeviceClock => DEVICE_CLOCK,
         NativeCall::SoundControlCreate => SOUND_CONTROL_CREATE,
+        NativeCall::LogControlCreate => LOG_CONTROL_CREATE,
     }
 }

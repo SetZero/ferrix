@@ -403,11 +403,18 @@ firmware's console:
 and a panic prints `kaslr     slide 0x…` before its backtrace, which is how
 `xtask`'s symboliser and `scripts/gen/coverage-report.py` take run-time addresses
 back to link-time ones. The attacker in [SECURITY-TARGET.md](SECURITY-TARGET.md)
-is a program. The console is not something a program reads back. The
-kernel keeps no log (`sys_syslog` returns nothing, `/proc` exposes no kernel
-address: `wchan`, `kstkeip` and `kstkesp` are zero), and output to the
-console goes to the serial line and the screen, not into anything a program
-can read. Who sees the slide is who sits at the serial port or the screen,
+is a program. Since 2026-09-26 the kernel keeps a log of what the console
+sends (`kernel/src/console/log.rs`), which `syslog(2)` reads and a ring-3
+driver may stream off the machine (the Pixel 7's USB serial port,
+`kernel/src/logctl`). The lines that print the layout are kept out of it
+(`console::write_unlogged`): the panic's slide and backtrace, a fatal trap's
+headline and registers, stage 2's image, direct-map and page-array addresses,
+and the W^X and sealed-image sweeps' failure lines. They still go to the
+serial line and the screen. Reading the log is privileged besides, every
+`syslog` action included (`dmesg_restrict` on), and a log control channel
+is a capability only a device binding that carries the log to its owner
+holds. `/proc` exposes no kernel address: `wchan`, `kstkeip` and `kstkesp`
+are zero. Who sees the slide is who sits at the serial port or the screen,
 and that person could as well write `nokaslr` into `CMDLINE.TXT`. The one path
 that crosses is a program that can read the framebuffer the boot console
 drew on. That is the display server, which the integrator places, and AoU-11

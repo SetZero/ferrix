@@ -69,7 +69,7 @@ use ferrix_bootinfo::{BootView, MemKind, PAGE_SIZE};
 use ferrix_fdt::{Fdt, GicInterrupt, Trigger as TreeTrigger, VIRTIO_MMIO_COMPATIBLE};
 use ferrix_native_abi::types::{
     DEVICE_NOT_PCI, DEVICE_TREE_BLOCKS, DEVICE_VIRTIO_PCI, DeviceBlock, DeviceInfo,
-    TREE_STM32_USBH, USB_INPUT_FUNCTIONS,
+    TREE_GS201_DWC3, TREE_STM32_USBH, USB_INPUT_FUNCTIONS,
 };
 use ferrix_pci::Address;
 use ferrix_pci::bar::{Bar, Region};
@@ -831,6 +831,16 @@ impl DeviceNode {
             Location::Tree(_) if self.binding == TREE_STM32_USBH => USB_INPUT_FUNCTIONS,
             _ => 1,
         }
+    }
+
+    /// Whether the device's driver may read the kernel log over a log control
+    /// channel (`log_control_create`): a device that carries it off the
+    /// machine for its owner, which today is only the Pixel 7's USB device
+    /// controller, whose serial port streams the boot to the host. The log
+    /// holds every program's console output, so this is a capability of the
+    /// binding, not of whoever holds a device.
+    pub(crate) const fn reads_log(&self) -> bool {
+        matches!(self.location, Location::Tree(_)) && self.binding == TREE_GS201_DWC3
     }
 
     /// How the device reaches memory.

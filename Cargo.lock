@@ -259,6 +259,7 @@ dependencies = [
  "ferrix-inputctl",
  "ferrix-kmem",
  "ferrix-linux-abi",
+ "ferrix-logctl",
  "ferrix-native-abi",
  "ferrix-net",
  "ferrix-netlink",
@@ -292,6 +293,10 @@ dependencies = [
 
 [[package]]
 name = "ferrix-linux-abi"
+version = "0.1.0"
+
+[[package]]
+name = "ferrix-logctl"
 version = "0.1.0"
 
 [[package]]

@@ -83,6 +83,7 @@ Causes are listed most likely first.
 | [FX-1005](#fx-1005) | the ring-3 virtio-blk driver did not serve the test disk |
 | [FX-1006](#fx-1006) | devmgr could not be started, or did not report |
 | [FX-1007](#fx-1007) | an IOMMU faulted DMA that no check provoked |
+| [FX-1008](#fx-1008) | the log core did not serve the kernel log to a driver |
 | [FX-1101](#fx-1101) | the btrfs disk did not mount and read back as the host wrote it |
 | [FX-1150](#fx-1150) | the net core did not carry a packet round its own loopback |
 | [FX-1151](#fx-1151) | the net ring did not carry a frame between the kernel and a driver |
@@ -1912,6 +1913,30 @@ See: kernel/src/iommu.rs audit_faults; kernel/src/pci/virtio.rs
 probe_out_of_domain; kernel/src/iommu/vtd.rs Unit::take_fault;
 kernel/src/iommu/smmuv3.rs Unit::take_fault; xtask/src/dma_faults.rs;
 docs/certification/VULNERABILITY-ANALYSIS.md T.DMA.
+
+<a id="fx-1008"></a>
+
+## FX-1008 — the log core did not serve the kernel log to a driver
+
+A driver whose device may carry the kernel log off the machine -- the Pixel 7's
+USB serial port -- reads it over a log control channel (`libs/logctl`). The
+check claims the log as `log_control_create` does and plays the driver: a READ
+must be answered with DATA holding the log's oldest bytes, the next READ with
+the bytes after them, a second reader must be refused while the first holds the
+log, a driver that sends DATA must be refused and its claim ended, and a claim
+must end when its channel closes. A failure means the driver on the phone would
+get nothing, get the log out of order, or keep the log from the next driver
+after it went.
+
+1. The log core's task does not answer: it waits for the console to wake it,
+   which the console never does, instead of looking again every
+   `logctl::POLL_NANOS`.
+2. The reader's cursor does not start at the log's beginning, or `Ring::read`
+   does not move it past what it copied.
+3. The claim is not let go when the task ends, so `CLAIMED` stays set and every
+   later `log_control_create` answers `ALREADY_BOUND`.
+
+See: kernel/src/logctl/check.rs; kernel/src/logctl/mod.rs; libs/logctl.
 
 <a id="fx-1101"></a>
 

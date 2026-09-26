@@ -206,6 +206,21 @@ impl<S: Syscall> Device<S> {
         self.ring(nr::SOUND_CONTROL_CREATE)
     }
 
+    /// Make a log control channel for this device and answer the driver's
+    /// end of it: the kernel log, read with `ferrix_logctl`'s READ and
+    /// answered with DATA from the oldest byte the log still keeps. The claim
+    /// ends when the channel is closed.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::AccessDenied`] for a device whose binding may not read the
+    /// log (only the Pixel 7's USB device controller's may),
+    /// [`Error::AlreadyBound`] while another reader holds it, and whatever
+    /// the call said.
+    pub fn log_control(&self) -> Result<Channel<S>, Error> {
+        self.ring(nr::LOG_CONTROL_CREATE)
+    }
+
     /// The body every control channel shares: one call, one handle back.
     fn ring(&self, number: usize) -> Result<Channel<S>, Error> {
         let value = Call::new(number)

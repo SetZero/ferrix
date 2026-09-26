@@ -152,13 +152,14 @@ impl Served {
 /// of these calls makes a channel for a driver, not the path a driver's work
 /// takes. A `Once` per call, as [`crate::hooks`] keeps them: written at
 /// bring-up, read without a lock.
-static SERVED: [Served; 9] = [
+static SERVED: [Served; 10] = [
     Served::new(NativeCall::BlockRingCreate),
     Served::new(NativeCall::NetRingCreate),
     Served::new(NativeCall::DisplayControlCreate),
     Served::new(NativeCall::RenderControlCreate),
     Served::new(NativeCall::InputControlCreate),
     Served::new(NativeCall::SoundControlCreate),
+    Served::new(NativeCall::LogControlCreate),
     Served::new(NativeCall::JobForCgroup),
     Served::new(NativeCall::ProcessGive),
     Served::new(NativeCall::PortFd),
@@ -399,6 +400,7 @@ pub(crate) fn dispatch(args: &SyscallArgs, caller: Option<&dyn Host>) -> Result<
         | NativeCall::RenderControlCreate
         | NativeCall::InputControlCreate
         | NativeCall::SoundControlCreate
+        | NativeCall::LogControlCreate
         | NativeCall::JobForCgroup
         | NativeCall::ProcessGive
         | NativeCall::PortFd => served(call, caller, &a),

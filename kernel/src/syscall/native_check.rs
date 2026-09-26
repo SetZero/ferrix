@@ -2,7 +2,8 @@
 //! the wrong kind, one without the right a call needs, one named twice in a
 //! message, a table with no room, a send whose cycle check would walk too far,
 //! a packet whose buffer faults, a copy through a VMO a device reads past the
-//! caches, and a clock asked for badly.
+//! caches, a clock asked for badly, and the kernel log asked for by a device
+//! that may not read it.
 //!
 //! Each is a sentence `docs/NATIVE-ABI.md` promises a program: which status
 //! it gets, and that a refused call leaves what it was given where it was.
@@ -80,6 +81,7 @@ fn checks(side: &Side, report: &mut Report) -> Result<(), &'static str> {
     a_packet_whose_buffer_faults_is_kept(side, report)?;
     a_copy_past_the_caches_is_refused(side, report)?;
     a_clock_asked_for_badly_is_refused(side, report)?;
+    a_log_reader_its_binding_does_not_allow_is_refused(side, report)?;
     a_send_that_would_walk_too_far_is_refused(side, report)?;
     a_full_table_refuses_and_loses_nothing(side, report)?;
     a_table_that_cannot_grow_refuses_for_memory(report)?;
@@ -323,6 +325,33 @@ fn a_clock_asked_for_badly_is_refused(
         side.call(nr::DEVICE_CLOCK, &[reg(device), 1, 0]),
         status::WRONG_TYPE,
         "a clock was read from a device whose board keeps none for it",
+        report,
+    )
+}
+
+/// `log_control_create` refuses a device whose binding may not carry the
+/// kernel log off the machine with `ACCESS_DENIED`, even with `MANAGE` on it:
+/// only the Pixel 7's USB device controller may, and no machine the boot
+/// tests run on has one. What a device that may read gets is the log core's
+/// own check (`logctl/check.rs`).
+fn a_log_reader_its_binding_does_not_allow_is_refused(
+    side: &Side,
+    report: &mut Report,
+) -> Result<(), &'static str> {
+    let Some(node) = crate::device::devices()
+        .iter()
+        .find(|node| !node.reads_log())
+    else {
+        return Ok(());
+    };
+    let device = side
+        .process
+        .with_handles(|table| table.insert(Object::Device(node.clone()), Rights::DEVICE))
+        .map_err(|_| "no room for a device handle")?;
+    refused(
+        side.call(nr::LOG_CONTROL_CREATE, &[reg(device)]),
+        status::ACCESS_DENIED,
+        "the kernel log was given to a device whose binding may not read it",
         report,
     )
 }

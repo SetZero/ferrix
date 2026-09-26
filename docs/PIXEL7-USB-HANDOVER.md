@@ -168,6 +168,17 @@ Each phase ends with something run on the phone and written down here.
    records to a ring-3 reader (`sys_syslog` returns nothing today)? A tty
    the driver serves, which statd opens? Or both? Then send the boot's lines
    and statd's.
+
+   *Decided, and the kernel half built (2026-09-26, branch
+   `pixel7-usb-log`):* a kernel log. `kernel/src/console/log.rs` keeps every
+   byte the console sends -- the kernel's lines and programs' output, statd's
+   included, before CRLF -- in a static 128 KiB ring, less the lines that
+   print the kernel's layout. The driver reads it by capability:
+   `device.log_control()` (`LOG_CONTROL_CREATE`, 0x1051) on its
+   `TREE_GS201_DWC3` node gives a channel, READ `{ max }` is answered with
+   DATA `{ lost, bytes }` of up to `MAX_DATA` (4072) bytes from the oldest
+   byte still kept (`libs/logctl`), one reader at a time, and the claim ends
+   when the channel closes. `syslog(2)` reads the same log, privileged.
 5. **The monitor.** `tools/pixel7/monitor` reads `/dev/ttyACM*` while the
    phone is in Ferrix and feeds the same parser it uses for a guest
    (`vm-line`). The owner is in `dialout`, and `cdc_acm` loads on demand.

@@ -1228,6 +1228,18 @@ package FerrixStructure {
                  * stream and requires it never to overrun, never to submit
                  * across a period or during a halt, and to refuse every lie. */
         }
+        #implemented part logctl : LibraryCrate {
+            attribute :>> path = "libs/logctl";
+            attribute :>> forbidsUnsafe = true;
+            attribute :>> hostTests = 12;
+            doc /* The log control protocol: how a ring-3 driver reads the
+                 * kernel log over a control channel, for the Pixel 7's USB
+                 * serial port (docs/PIXEL7-USB-HANDOVER.md phase 4). Three
+                 * messages decoded strictly -- READ, DATA with the bytes the
+                 * ring lost since the last, REFUSED -- and the kernel's half
+                 * of the conversation: one READ outstanding, answered once
+                 * the log has a byte, lost counts carried to the next DATA. */
+        }
         #implemented part pci : LibraryCrate {
             attribute :>> path = "libs/platform/pci";
             attribute :>> forbidsUnsafe = true;
