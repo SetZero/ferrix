@@ -559,3 +559,185 @@ fn a_backing_that_cannot_count_is_merely_wasteful() {
     let address = heap.allocate(&mut pages, request).unwrap();
     heap.deallocate(&mut pages, address, request);
 }
+
+// ---------------------------------------------------------------------------
+// The reserve
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_filled_reserve_holds_depth_objects_of_every_class() {
+    let mut pages = Pages::with_budget(256);
+    let mut heap = Heap::new();
+    let mut reserve = Reserve::new();
+
+    assert!(!reserve.is_full(1));
+    reserve.fill(&mut heap, &mut pages, 4).unwrap();
+    assert!(reserve.is_full(4));
+    assert!(!reserve.is_full(5));
+    assert_eq!(reserve.counts(), [4; CLASSES]);
+    let held: usize = CLASS_SIZES.iter().map(|size| size * 4).sum();
+    assert_eq!(
+        heap.allocated_bytes(),
+        held,
+        "held objects are allocated, as far as the heap knows"
+    );
+
+    // A second fill to the same depth takes nothing.
+    let before = heap.allocated_bytes();
+    reserve.fill(&mut heap, &mut pages, 4).unwrap();
+    assert_eq!(heap.allocated_bytes(), before);
+}
+
+#[test]
+fn a_taken_object_is_freed_as_if_the_heap_had_handed_it_out() {
+    let mut pages = Pages::with_budget(256);
+    let mut heap = Heap::new();
+    let mut reserve = Reserve::new();
+    reserve.fill(&mut heap, &mut pages, 2).unwrap();
+    let free_before = heap.free_objects(&pages);
+
+    // A 24-byte, 8-aligned request is the 32-byte class's.
+    let request = Request::new(24, 8);
+    let object = reserve.take(&pages, request).unwrap();
+    assert_eq!(object % 32, 0);
+    assert_eq!(reserve.counts()[2], 1);
+    heap.deallocate(&mut pages, object, request);
+
+    let free_after = heap.free_objects(&pages);
+    assert_eq!(
+        free_after[2],
+        free_before[2] + 1,
+        "back on its own class's list"
+    );
+    let allocated = heap.allocated_bytes();
+    let next = heap.allocate(&mut pages, request).unwrap();
+    assert_eq!(next, object, "and handed out again from there");
+    assert_eq!(heap.allocated_bytes(), allocated + 32);
+}
+
+#[test]
+fn a_reserve_hands_out_distinct_objects_until_it_is_empty() {
+    let mut pages = Pages::with_budget(256);
+    let mut heap = Heap::new();
+    let mut reserve = Reserve::new();
+    reserve.fill(&mut heap, &mut pages, 3).unwrap();
+
+    let mut live = Vec::new();
+    for &size in &CLASS_SIZES {
+        let request = Request::new(size, 1);
+        for _ in 0..3 {
+            live.push((reserve.take(&pages, request).unwrap(), request));
+        }
+        assert_eq!(
+            reserve.take(&pages, request),
+            None,
+            "three held, three taken"
+        );
+    }
+    // The heap's own allocations do not collide with what the reserve holds.
+    for &size in &CLASS_SIZES {
+        let request = Request::new(size, size);
+        live.push((heap.allocate(&mut pages, request).unwrap(), request));
+    }
+    assert_disjoint(&live);
+    assert!(reserve.is_full(0));
+    assert!(!reserve.is_full(1));
+}
+
+#[test]
+fn a_fill_that_runs_out_keeps_what_it_got() {
+    // One page: enough for the first class's four objects, not for more.
+    let mut pages = Pages::with_budget(1);
+    let mut heap = Heap::new();
+    let mut reserve = Reserve::new();
+    assert_eq!(
+        reserve.fill(&mut heap, &mut pages, 4),
+        Err(HeapError::OutOfMemory)
+    );
+    assert_eq!(reserve.counts()[0], 4);
+    assert!(!reserve.is_full(4));
+
+    // With more pages the same fill finishes the job without redoing it.
+    pages.budget = 256;
+    reserve.fill(&mut heap, &mut pages, 4).unwrap();
+    assert!(reserve.is_full(4));
+}
+
+#[test]
+fn a_large_block_is_held_by_order_and_taken_by_order() {
+    let mut pages = Pages::with_budget(64);
+    let mut heap = Heap::new();
+    let mut reserve = Reserve::new();
+
+    // 5000 bytes is two pages: order one.
+    let request = Request::new(5000, 8);
+    assert_eq!(reserve.take(&pages, request), None);
+    reserve.hold_large(&mut heap, &mut pages, request).unwrap();
+    assert_eq!(pages.outstanding(), 2);
+    reserve.hold_large(&mut heap, &mut pages, request).unwrap();
+    assert_eq!(pages.outstanding(), 2, "one block per order is enough");
+
+    // A request of another order is not served by it.
+    assert_eq!(reserve.take(&pages, Request::new(9000, 8)), None);
+    let block = reserve.take(&pages, request).unwrap();
+    assert_eq!(reserve.take(&pages, request), None);
+    heap.deallocate(&mut pages, block, request);
+    assert_eq!(
+        pages.outstanding(),
+        0,
+        "freed back to the page supply as its order"
+    );
+    assert_eq!(heap.large_pages(), 0);
+
+    // A request a class serves needs nothing held.
+    reserve
+        .hold_large(&mut heap, &mut pages, Request::new(64, 8))
+        .unwrap();
+    assert_eq!(pages.outstanding(), 0);
+
+    // Past the orders a reserve holds, it says so.
+    let huge = Request::new(PAGE_SIZE << RESERVE_LARGE_ORDERS, 8);
+    assert!(matches!(
+        reserve.hold_large(&mut heap, &mut pages, huge),
+        Err(HeapError::TooLarge(_))
+    ));
+}
+
+#[test]
+fn a_released_reserve_leaves_the_heap_as_it_found_it() {
+    let mut pages = Pages::with_budget(256);
+    let mut heap = Heap::new();
+    let mut reserve = Reserve::new();
+    reserve.fill(&mut heap, &mut pages, 5).unwrap();
+    reserve
+        .hold_large(&mut heap, &mut pages, Request::new(3 * PAGE_SIZE, 8))
+        .unwrap();
+    reserve.release(&mut heap, &mut pages);
+    assert_eq!(reserve.counts(), [0; CLASSES]);
+    assert_eq!(heap.allocated_bytes(), 0);
+    assert_eq!(heap.large_pages(), 0);
+}
+
+#[test]
+fn releasing_the_large_blocks_keeps_the_small_ones() {
+    let mut pages = Pages::with_budget(256);
+    let mut heap = Heap::new();
+    let mut reserve = Reserve::new();
+    reserve.fill(&mut heap, &mut pages, 2).unwrap();
+    reserve
+        .hold_large(&mut heap, &mut pages, Request::new(2 * PAGE_SIZE, 8))
+        .unwrap();
+    assert_eq!(heap.large_pages(), 2);
+    reserve.release_large(&mut heap, &mut pages);
+    assert_eq!(heap.large_pages(), 0);
+    assert!(reserve.is_full(2));
+}
+
+#[test]
+fn a_misaligned_request_is_not_served_from_the_reserve() {
+    let mut pages = Pages::with_budget(64);
+    let mut heap = Heap::new();
+    let mut reserve = Reserve::new();
+    reserve.fill(&mut heap, &mut pages, 1).unwrap();
+    assert_eq!(reserve.take(&pages, Request::new(16, 3)), None);
+}

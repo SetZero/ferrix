@@ -257,7 +257,10 @@ impl Heap {
     }
 
     /// The buddy order that serves a request too large for a class.
-    fn order_of(request: Request) -> Result<u8, HeapError> {
+    ///
+    /// Public for the same reason as [`Heap::class_of`]: a [`Reserve`] holds
+    /// large blocks by order, and must agree with the free path about which.
+    pub fn order_of(request: Request) -> Result<u8, HeapError> {
         let bytes = request.effective_size();
         let pages = bytes.div_ceil(PAGE_SIZE);
         let order = u8::try_from(pages.next_power_of_two().trailing_zeros())
@@ -481,6 +484,193 @@ impl Heap {
             }
         }
         counts
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A reserve for when the heap runs dry
+// ---------------------------------------------------------------------------
+
+/// Orders of large block a [`Reserve`] can hold, one block each: up to
+/// `PAGE_SIZE << (RESERVE_LARGE_ORDERS - 1)`, 64 KiB.
+pub const RESERVE_LARGE_ORDERS: usize = 5;
+
+/// Heap objects set aside, to be handed out when the heap itself cannot.
+///
+/// Finding F-23 in `docs/certification/FINDINGS.md`. Some allocations are
+/// made inside the standard library with a layout nobody outside it can name
+/// -- an `Arc`'s, a `BTreeMap` node's -- so they cannot be made fallible
+/// where they happen. What can be done is to make sure, *before* one starts,
+/// that it cannot fail: fill a reserve while failing is still an answer, and
+/// let the allocator fall back on it if the heap runs dry part-way. That is
+/// this type. The kernel keeps one per processor and decides when it may be
+/// drawn on; this is only the bookkeeping, where a test can reach it.
+///
+/// **Every block in a reserve is an ordinary heap allocation** of a whole
+/// class, or of a whole large order, allocated through [`Heap::allocate`]. So
+/// a block handed out by [`Reserve::take`] for a request of the same class or
+/// order is freed by [`Heap::deallocate`] exactly as if the heap had handed
+/// it out, and the heap's accounting never learns there was a reserve at all.
+/// That is why [`Reserve::take`] matches on class and order and nothing
+/// looser: a block of the wrong class would be freed onto the wrong list.
+///
+/// Small blocks are kept on per-class lists threaded through their first
+/// word, like the heap's own free lists, so a reserve costs a few words of
+/// bookkeeping however deep it is.
+#[derive(Debug)]
+pub struct Reserve {
+    /// Head of each class's list of held objects, or [`END`].
+    heads: [u64; CLASSES],
+    /// How many objects each class's list holds.
+    counts: [u16; CLASSES],
+    /// One held block of each large order, or [`END`].
+    large: [u64; RESERVE_LARGE_ORDERS],
+}
+
+impl Default for Reserve {
+    fn default() -> Self {
+        Reserve::new()
+    }
+}
+
+impl Reserve {
+    /// An empty reserve.
+    #[must_use]
+    pub const fn new() -> Reserve {
+        Reserve {
+            heads: [END; CLASSES],
+            counts: [0; CLASSES],
+            large: [END; RESERVE_LARGE_ORDERS],
+        }
+    }
+
+    /// Top every class up to `depth` objects from `heap`.
+    ///
+    /// # Errors
+    ///
+    /// The heap's error, when it runs out part-way. What was taken before
+    /// that stays held: a later `fill` continues from it.
+    pub fn fill(
+        &mut self,
+        heap: &mut Heap,
+        backing: &mut impl Backing,
+        depth: u16,
+    ) -> Result<(), HeapError> {
+        for class in 0..CLASSES {
+            let size = Heap::class_size(class);
+            while self.count(class) < depth {
+                let object = heap.allocate(backing, Request::new(size, size))?;
+                self.hold(backing, class, object);
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether every class holds at least `depth` objects.
+    #[must_use]
+    pub fn is_full(&self, depth: u16) -> bool {
+        self.counts.iter().all(|&count| count >= depth)
+    }
+
+    /// Objects held in each class.
+    #[must_use]
+    pub const fn counts(&self) -> [u16; CLASSES] {
+        self.counts
+    }
+
+    /// Make sure a block that serves `request` is held, when `request` is too
+    /// large for a class. A request a class serves needs nothing here: it is
+    /// what [`Reserve::fill`] is for.
+    ///
+    /// # Errors
+    ///
+    /// The heap's error; [`HeapError::TooLarge`] for an order past
+    /// [`RESERVE_LARGE_ORDERS`].
+    pub fn hold_large(
+        &mut self,
+        heap: &mut Heap,
+        backing: &mut impl Backing,
+        request: Request,
+    ) -> Result<(), HeapError> {
+        if Heap::class_of(request).is_some() {
+            return Ok(());
+        }
+        let order = Heap::order_of(request)?;
+        let Some(slot) = self.large.get_mut(usize::from(order)) else {
+            return Err(HeapError::TooLarge(request.effective_size()));
+        };
+        if *slot == END {
+            *slot = heap.allocate(backing, Request::new(PAGE_SIZE << order, PAGE_SIZE))?;
+        }
+        Ok(())
+    }
+
+    /// A held block that serves `request`, if there is one: one of its class,
+    /// or of its large order.
+    pub fn take(&mut self, backing: &impl Backing, request: Request) -> Option<u64> {
+        if !request.align.is_power_of_two() {
+            return None;
+        }
+        if let Some(class) = Heap::class_of(request) {
+            let head = self.heads.get(class).copied().unwrap_or(END);
+            if head == END {
+                return None;
+            }
+            let next = backing.read_link(head);
+            if let Some(slot) = self.heads.get_mut(class) {
+                *slot = next;
+            }
+            if let Some(count) = self.counts.get_mut(class) {
+                *count = count.saturating_sub(1);
+            }
+            return Some(head);
+        }
+        let order = Heap::order_of(request).ok()?;
+        let slot = self.large.get_mut(usize::from(order))?;
+        let block = core::mem::replace(slot, END);
+        (block != END).then_some(block)
+    }
+
+    /// Give the large blocks held back to `heap`, keeping the small ones.
+    ///
+    /// A large block is whole pages, which a frame count sees, so a caller
+    /// that holds one only for the length of one operation gives it back at
+    /// the end of it rather than keep pages out of the frame allocator.
+    pub fn release_large(&mut self, heap: &mut Heap, backing: &mut impl Backing) {
+        for (order, slot) in (0u8..).zip(self.large.iter_mut()) {
+            let block = core::mem::replace(slot, END);
+            if block != END {
+                heap.deallocate(backing, block, Request::new(PAGE_SIZE << order, PAGE_SIZE));
+            }
+        }
+    }
+
+    /// Give everything held back to `heap`.
+    pub fn release(&mut self, heap: &mut Heap, backing: &mut impl Backing) {
+        for class in 0..CLASSES {
+            let size = Heap::class_size(class);
+            while let Some(object) = self.take(backing, Request::new(size, size)) {
+                heap.deallocate(backing, object, Request::new(size, size));
+            }
+        }
+        self.release_large(heap, backing);
+    }
+
+    /// Objects held in `class`.
+    fn count(&self, class: usize) -> u16 {
+        self.counts.get(class).copied().unwrap_or(u16::MAX)
+    }
+
+    /// Put `object`, a whole object of `class`, on that class's list.
+    fn hold(&mut self, backing: &mut impl Backing, class: usize, object: u64) {
+        let head = self.heads.get(class).copied().unwrap_or(END);
+        backing.write_link(object, head);
+        if let Some(slot) = self.heads.get_mut(class) {
+            *slot = object;
+        }
+        if let Some(count) = self.counts.get_mut(class) {
+            *count = count.saturating_add(1);
+        }
     }
 }
 

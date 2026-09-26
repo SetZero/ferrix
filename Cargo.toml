@@ -18,6 +18,7 @@ members = [
     "libs/elf",
     "libs/fbtext",
     "libs/fdt",
+    "libs/fallible",
     "libs/frame",
     "libs/heap",
     "libs/btrfs",
@@ -111,6 +112,7 @@ ferrix-elf = { path = "libs/elf" }
 ferrix-fbtext = { path = "libs/fbtext" }
 ferrix-fdt = { path = "libs/fdt" }
 ferrix-frame = { path = "libs/frame" }
+ferrix-fallible = { path = "libs/fallible" }
 ferrix-heap = { path = "libs/heap" }
 ferrix-btrfs = { path = "libs/btrfs" }
 ferrix-btrfs-vfs = { path = "libs/btrfs-vfs" }

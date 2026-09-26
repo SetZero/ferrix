@@ -159,6 +159,13 @@ name = "ferrix-elf"
 version = "0.1.0"
 
 [[package]]
+name = "ferrix-fallible"
+version = "0.1.0"
+dependencies = [
+ "ferrix-sync",
+]
+
+[[package]]
 name = "ferrix-fbtext"
 version = "0.1.0"
 
