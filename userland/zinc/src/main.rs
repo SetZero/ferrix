@@ -223,7 +223,10 @@ fn main() {
     let mut sh = Shell::new(name);
     sh.argzero = tok::metafy(&argv0);
 
-    let mut command: Option<Vec<u8>> = None;
+    // `-c` is a flag: the command is the first operand after the options,
+    // so that `sh -c -- 'cmd'` -- what glibc's `system` and `popen` run --
+    // and `sh -ec 'cmd'` both find it, as POSIX and zsh do.
+    let mut run_command = false;
     let mut force_interactive = false;
     let mut no_rcs = false;
     // A login shell: `-l`, or a name beginning with `-`, which is how
@@ -258,10 +261,7 @@ fn main() {
             _ if a.first() == Some(&b'-') && a.len() > 1 => {
                 for &c in a.iter().skip(1) {
                     match c {
-                        b'c' => {
-                            k += 1;
-                            command = args.get(k).map(|c| tok::metafy(c));
-                        }
+                        b'c' => run_command = true,
                         b'i' => force_interactive = true,
                         b'l' => login = true,
                         b'f' => no_rcs = true,
@@ -275,12 +275,17 @@ fn main() {
             _ => break,
         }
     }
-    let rest: Vec<Vec<u8>> = args
+    let mut rest: Vec<Vec<u8>> = args
         .get(k..)
         .unwrap_or(&[])
         .iter()
         .map(|a| tok::metafy(a))
         .collect();
+    if run_command && rest.is_empty() {
+        sh.error("-c: string expected");
+        exec::exit_now(2);
+    }
+    let command = run_command.then(|| rest.remove(0));
 
     if let Some(cmd) = command {
         if let Some((zero, pos)) = rest.split_first() {
