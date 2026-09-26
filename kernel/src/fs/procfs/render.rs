@@ -756,12 +756,12 @@ fn state_of(process: &Process, tid: u32) -> State {
     }
 }
 
-/// Its parent's pid. No process has a parent yet: `getppid` answers 1 for
-/// every caller, and this does too, except for pid 1 itself, whose parent
-/// Linux reports as 0 — a process that was its own parent would send a tree
-/// walker round in a circle.
+/// Its parent's pid, as `getppid` answers it: 0 for a process the kernel
+/// started, pid 1 among them, as Linux reports init's. This said 1 for every
+/// process long after processes had parents, so a zombie in `/proc` always
+/// looked like init's to reap, whoever its parent was.
 fn parent_of(process: &Process) -> u32 {
-    if process.pid() == 1 { 0 } else { 1 }
+    process.parent_pid()
 }
 
 /// Processors online, which every process may run on.
