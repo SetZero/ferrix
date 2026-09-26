@@ -6184,6 +6184,15 @@ pub(crate) fn start(
     if std::env::var_os("XDG_SESSION_TYPE").is_none() {
         let _ = child.env("XDG_SESSION_TYPE", "wayland");
     }
+    // A locale, which a distribution's login sets and nothing on Ferrix did.
+    // Without one, `setlocale(LC_ALL, "")` names `C.UTF-8;C;C;C;C;C` -- UTF-8
+    // for characters, C for the rest, as musl's does -- and btop refuses to
+    // start on a name that is not plainly UTF-8. UTF-8 is what the terminal
+    // speaks and what every program here writes, and C.UTF-8 is the locale
+    // ferrousli and musl build in.
+    if std::env::var_os("LANG").is_none() && std::env::var_os("LC_ALL").is_none() {
+        let _ = child.env("LANG", "C.UTF-8");
+    }
     // The configuration's own, last, so that an `env =` line can set any of
     // the above too, as it can in Hyprland.
     if let Ok(env) = CHILD_ENV.lock() {
