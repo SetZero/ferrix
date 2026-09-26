@@ -112,6 +112,7 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONException
 import org.json.JSONObject
 
@@ -880,14 +881,18 @@ private fun ConsolePane(lines: List<String>, modifier: Modifier, fontSize: Int =
  * The one line said is how much of the screen the soft keyboard and the
  * extra-keys row cover: `hyprctl keyword monitor <name>,addreserved,0,<H>,0,0`,
  * which keeps windows out of the bottom `H` of the monitor, in the
- * compositor's logical pixels. The compositor's boot line gives the monitor's
- * name, its mode and its logical size, and so its scale:
- * `hyprix: 1 monitor [card0 Virtual-1 1080x2400 540x1200]` is a scale of 2.
- * hyprctl refuses ("Broken pipe") until the compositor is listening, so
- * nothing is said until `hyprix: card0 <name>` has been printed and two
- * seconds have passed; then the latest value, if it is not what the guest
- * already has. The keyboard's height moves through many values as it
- * opens, so a value is said once it has held for 150 ms.
+ * compositor's logical pixels. The compositor's boot line names the monitor,
+ * `hyprix: 1 monitor [card0 Virtual-1 1080x2400 1080x2400]`, but both sizes
+ * in it are the card's mode, whatever the scale: taking their ratio for the
+ * scale reserved a scale-2 desktop's whole height (2026-09-26). So the shell
+ * is asked, `hyprctl monitors`, and its `scale: 2.00` under the monitor's
+ * `Monitor <name> (ID n):` is read off the console. hyprctl refuses
+ * ("Broken pipe") until the compositor is listening, so nothing is said
+ * until `hyprix: card0 <name>` has been printed and two seconds have passed;
+ * nothing is reserved until the scale is known, and then the latest value,
+ * if it is not what the guest already has. The keyboard's height moves
+ * through many values as it opens, so a value is said once it has held for
+ * 150 ms.
  */
 internal class GuestShell {
     @Volatile
@@ -896,50 +901,78 @@ internal class GuestShell {
     private val listening = MutableStateFlow(false)
     @Volatile
     private var monitor = "Virtual-1"
+    private val scale = MutableStateFlow<Double?>(null)
+    /** The monitor whose `hyprctl monitors` block the console is in, if any. */
     @Volatile
-    private var scale = 1.0
+    private var inBlock: String? = null
 
     /** How much of the screen, in the phone's pixels from the bottom, is covered now. */
     fun reserve(pixels: Int) {
         covered.value = pixels
     }
 
-    /** A console line: the compositor's monitor, or the compositor listening. */
+    /**
+     * A console line: the compositor's monitor, the compositor listening, or
+     * a line of `hyprctl monitors`' answer.
+     */
     fun heard(line: String) {
-        MONITOR.find(line)?.let { found ->
-            val (name, modeWidth, logicalWidth) = found.destructured
-            monitor = name
-            scale = (modeWidth.toDouble() / logicalWidth.toDouble()).takeIf { it.isFinite() && it > 0 } ?: 1.0
-        }
+        MONITOR.find(line)?.let { monitor = it.groupValues[1] }
         if (line.contains("hyprix: card0 $monitor ")) listening.value = true
+        BLOCK.find(line)?.let { inBlock = it.groupValues[1] }
+        if (inBlock == monitor) {
+            SCALE.find(line)?.let { found ->
+                found.groupValues[1].toDoubleOrNull()?.takeIf { it.isFinite() && it > 0 }?.let {
+                    scale.value = it
+                    inBlock = null
+                }
+            }
+        }
+    }
+
+    /** Write `line` to the guest's shell; whether it went. */
+    private suspend fun say(line: String): Boolean {
+        val stream = input ?: return false
+        return try {
+            withContext(Dispatchers.IO) {
+                stream.write(line.toByteArray())
+                stream.flush()
+            }
+            true
+        } catch (error: IOException) {
+            Log.w("FerrixVm", "could not tell the guest's shell", error)
+            false
+        }
     }
 
     /** Say each new [reserve] to the guest, from once it can hear it until the run ends. */
     suspend fun reserveAsAsked() {
         listening.first { it }
         delay(2000)
+        // Asked again until it answers: the first ask can still meet a
+        // compositor that is not listening.
+        var known: Double? = null
+        while (known == null) {
+            say("hyprctl monitors\n")
+            known = withTimeoutOrNull(3000) { scale.first { it != null } }
+        }
+        val factor = known ?: return
+        Log.i("FerrixVm", "the guest's $monitor is at scale $factor")
         var said = 0
         covered.collectLatest { pixels ->
             delay(150)
-            val logical = ceil(pixels / scale).toInt()
+            val logical = ceil(pixels / factor).toInt()
             if (logical == said) return@collectLatest
-            val stream = input ?: return@collectLatest
-            val line = "hyprctl keyword monitor $monitor,addreserved,0,$logical,0,0 >/dev/null 2>&1\n"
-            try {
-                withContext(Dispatchers.IO) {
-                    stream.write(line.toByteArray())
-                    stream.flush()
-                }
+            if (say("hyprctl keyword monitor $monitor,addreserved,0,$logical,0,0 >/dev/null 2>&1\n")) {
                 said = logical
-                Log.i("FerrixVm", "reserved $logical at the bottom of $monitor")
-            } catch (error: IOException) {
-                Log.w("FerrixVm", "could not tell the guest's shell", error)
+                Log.i("FerrixVm", "reserved $logical logical pixels (of $pixels) at the bottom of $monitor")
             }
         }
     }
 
     private companion object {
-        val MONITOR = Regex("""hyprix: \d+ monitors? \[\S+ (\S+) (\d+)x\d+ (\d+)x\d+""")
+        val MONITOR = Regex("""hyprix: \d+ monitors? \[\S+ (\S+) \d+x\d+""")
+        val BLOCK = Regex("""^Monitor (\S+) \(ID \d+\):""")
+        val SCALE = Regex("""^\s*scale: ([0-9.]+)""")
     }
 }
 
