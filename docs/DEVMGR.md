@@ -176,11 +176,13 @@ DIED     devmgr -> kernel, 16 bytes
 0   4  type = 4
 4   4  length = 16
 8   4  location
-12  4  status     the driver's exit status; 137 if killed
+12  4  status     the driver's exit code, or 128 and the signal that killed it
 ```
 
-   It reports the status as 137 whether the driver was killed or exited,
-   since a `TERMINATED` packet carries no status;
+   A `TERMINATED` packet carries no status, so `devmgr` reads it from the
+   process handle (`process_status`, `docs/INIT.md` K6): `137` for a
+   `SIGKILL`, `1` for a driver that exited 1. One whose status cannot be read
+   is reported as `137`, as every death was before K6;
 3. starts a **display** driver again, once the quiesce succeeded: in a new
    job, on a duplicate of its kept device handle, with the START it was
    first given, and waits for PUBLISHED as at boot. The kernel numbers cards
@@ -203,9 +205,12 @@ RESTARTED devmgr -> kernel, 16 bytes
 12  4  restarts   how many times this device's driver was started again
 ```
 
-   A native program has no clock, so the budget is a count, not a rate:
-   eight restarts per device, after which the device stays quiesced, as does
-   one whose restarted driver dies before it publishes.
+   Whether to start it again is the service manager's own restart policy
+   (`libs/init/restart`, `docs/INIT.md` §5.4): `Restart=always` for a kind
+   that is started again and `Restart=no` for the rest, no delay, and a start
+   limit of eight. A native program has no clock, so the limit is a count,
+   not a rate: eight restarts per device, after which the device stays
+   quiesced, as does one whose restarted driver dies before it publishes.
 
 Every other kind is not started again. A dead disk driver is a dead disk,
 said on the console, and the device stays quiesced: what a mounted

@@ -139,6 +139,7 @@ dependencies = [
  "ferrix-devmgr-proto",
  "ferrix-native-abi",
  "ferrix-netring",
+ "ferrix-restart",
  "ferrix-rt",
 ]
 

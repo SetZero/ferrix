@@ -770,7 +770,7 @@ outside init as well:
 | K2 | Init started with a bootstrap channel, as `devmgr` is. **Done 2026-09-26**, kernel half of L8 | §7.3 | 2 |
 | K3 | `process_give(pid, handle)`: a parent installs one handle in its own child that has not yet called `execve`; `process_bootstrap()` returns that handle once, to the child. **Done 2026-09-26**, kernel half of L8 | any Linux program that starts a native-aware one | 2 |
 | K4 | `port_fd(port)`: a descriptor readable while the port has packets. **Done 2026-09-26**, kernel half of L8 | hyprix and the terminal, once they use a native service | 3 |
-| K6 | Read a process's exit status and signal from its handle (in the reserved `0x1032..0x1037`). **Done 2026-09-26**, kernel half of L8 | `devmgr` reports 137 for every death today | 1 |
+| K6 | Read a process's exit status and signal from its handle (in the reserved `0x1032..0x1037`). **Done 2026-09-26**, kernel half of L8 | `devmgr` reports each driver's own status since L11 | 1 |
 | K7 | `reboot(2)` syncs `/` and `/data` first, as `power::finish` does. **Done in L3** | any program calling it | 1 |
 
 Together that is 11 points. None of the six changes the ABI of an existing
@@ -817,7 +817,7 @@ cgroup half is what §0 asks for first.
 | L8 | K2, K3, K4, K6; `Type=native` in the cgroup's job; the directory (§6). **Done 2026-09-26** (§16) | L5, C8 | `test-init` stage five | 16 |
 | L9 | `.socket` units. **Done 2026-09-26** (§16), sshd aside | L4 | `test-init`: sshd activated on connect | 5 |
 | L10 | Move the images over: `cargo xtask run` and `run-compositor` boot init with `multi-user.target` / `graphical.target`; hyprix stops being pid 1 and makes a scope per client. **Done 2026-09-26** (§16) | L5, L6 | `test-compositor` under init | 6 |
-| L11 | `devmgr` shares the restart policy | L2 | `test-restart` | 2 |
+| L11 | `devmgr` shares the restart policy. **Done 2026-09-26** by ferrix-55b: the policy is its own no-alloc crate, `libs/init/restart`, with systemd's fixed-window start limit, and devmgr reads each death's status through K6 | L2 | `test-restart` | 2 |
 | L12 | *later*: the kernel starts init alone and init starts `devmgr` (§7.3) | L8 | `test-boot` on all three architectures | 8 |
 | L13 | *after the rest of stage 13*: `PrivateTmp=`, `ProtectSystem=`, `PrivateNetwork=`, `SystemCallFilter=`, `NoNewPrivileges=` | L4, stage 13 | `test-init` stage six | 8 |
 

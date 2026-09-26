@@ -15,6 +15,8 @@
 #![no_std]
 #![no_main]
 
+use core::time::Duration;
+
 use ferrix_blkring::control::{Block, CONTROL_RIGHTS, DEVICE_RIGHTS, Message as Ring, Start};
 use ferrix_blkring::identity::DiskName;
 use ferrix_devmgr_proto::{
@@ -25,13 +27,15 @@ use ferrix_native_abi::handle::Handle;
 use ferrix_native_abi::rights::Requested;
 use ferrix_native_abi::signals::Signals;
 use ferrix_native_abi::types::{
-    CHANNEL_MAX_HANDLES, DEVICE_TREE_BLOCKS, DEVICE_VIRTIO_PCI, DeviceInfo, TREE_GS201_DWC3,
-    TREE_STM32_GPU, TREE_STM32_HDMI, TREE_STM32_USBH,
+    CHANNEL_MAX_HANDLES, DEVICE_TREE_BLOCKS, DEVICE_VIRTIO_PCI, DeviceInfo, PROCESS_EXITED,
+    PROCESS_KILLED, ProcessStatus, TREE_GS201_DWC3, TREE_STM32_GPU, TREE_STM32_HDMI,
+    TREE_STM32_USBH,
 };
 use ferrix_netring::control::{
     CONTROL_RIGHTS as NET_CONTROL_RIGHTS, DEVICE_RIGHTS as NET_DEVICE_RIGHTS, MAX_MESSAGE,
     Message as NetRing, Start as NetStart,
 };
+use ferrix_restart::{Decision, Ended, Exit, Policy, Restart, Signal};
 use ferrix_rt::native::channel::{self, Channel, ReadError};
 use ferrix_rt::native::device::Device;
 use ferrix_rt::native::error::Error;
@@ -190,6 +194,48 @@ enum Step {
 /// many, and its device stays quiesced as a device with no restart does.
 const MAX_RESTARTS: u32 = 8;
 
+/// A device's restart policy, the service manager's own (`libs/init/restart`,
+/// `docs/INIT.md` §5.4): `Restart=always` for a kind that is
+/// [`restarted`] and `Restart=no` for the rest, no delay, and a start limit of
+/// [`MAX_RESTARTS`] which, with no clock to renew it, is a count.
+fn policy_for(kind: Kind) -> Policy {
+    let restart = if restarted(kind) {
+        Restart::Always
+    } else {
+        Restart::No
+    };
+    Policy::new(restart, Duration::ZERO, MAX_RESTARTS, Duration::MAX)
+}
+
+/// How a dead driver ended, as `process_status` (K6) says. A status that
+/// cannot be read counts as a `SIGKILL`, which is what devmgr said of every
+/// death before it could ask.
+fn exit_of(process: &Process<Kernel>) -> Exit {
+    let killed = |signal| Exit::Signal {
+        signal: Signal(signal),
+        core: false,
+    };
+    match process.status() {
+        Ok(ProcessStatus {
+            state: PROCESS_EXITED,
+            value,
+        }) => Exit::Code(i32::try_from(value).unwrap_or(i32::MAX)),
+        Ok(ProcessStatus {
+            state: PROCESS_KILLED,
+            value,
+        }) => killed(u8::try_from(value).unwrap_or(u8::MAX)),
+        _ => killed(9),
+    }
+}
+
+/// DIED's status, as a shell reads one: the exit code, or 128 and the signal.
+fn died_status(exit: Exit) -> i32 {
+    match exit {
+        Exit::Code(code) => code,
+        Exit::Signal { signal, .. } => 128 + i32::from(signal.0),
+    }
+}
+
 /// Whether a driver of `kind` is started again when it dies
 /// (`docs/DEVMGR.md` §4).
 ///
@@ -227,8 +273,9 @@ struct Started {
     /// A write to `unbind` asked for this driver to go, and the token its
     /// DONE carries once the death is seen and the device quiesced.
     unbinding: Option<u16>,
-    /// How many times its driver has been started again.
-    restarts: u32,
+    /// Whether its driver is started again when it dies, and how many times
+    /// it has been.
+    policy: Policy,
     /// The device, for the quiesce when the driver dies.
     device: Device<Kernel>,
     /// The driver's job, killed if it never publishes.
@@ -364,7 +411,7 @@ fn run(channel: &Channel<Kernel>) -> Result<(), Step> {
                     plan,
                     quiesced: false,
                     unbinding: None,
-                    restarts: 0,
+                    policy: policy_for(kind),
                     device: keep,
                     job,
                     process,
@@ -672,24 +719,25 @@ fn serve(
             done(channel, token, answer);
             continue;
         }
+        let exit = exit_of(&entry.process);
         let _ = channel.write(
             &Message::Died {
                 location: entry.location,
-                status: 137,
+                status: died_status(exit),
             }
             .encode(),
         );
         // Only a device that was quiesced is handed on: until then the dead
         // driver's core may still hold it, and the new one would be refused.
+        // The policy counts the restart it decides on.
         if entry.quiesced
-            && restarted(entry.kind)
-            && entry.restarts < MAX_RESTARTS
-            && restart(channel, port, key, entry, drivers, inbox)
+            && entry.policy.decide(Ended::of(exit), None) == Decision::Now
+            && launch_again(channel, port, key, entry, drivers, inbox)
         {
             let _ = channel.write(
                 &Message::Restarted {
                     location: entry.location,
-                    restarts: entry.restarts,
+                    restarts: u32::try_from(entry.policy.budget.used()).unwrap_or(u32::MAX),
                 }
                 .encode(),
             );
@@ -798,21 +846,6 @@ fn answer(
             done(channel, token, answered);
         }
     }
-}
-
-/// Start `entry`'s driver again after it died, counting the restart against
-/// [`MAX_RESTARTS`]. `false`, with the device left quiesced, when it could
-/// not be started or did not publish.
-fn restart(
-    channel: &Channel<Kernel>,
-    port: &Port<Kernel>,
-    key: u64,
-    entry: &mut Started,
-    drivers: &Drivers<'_>,
-    inbox: &mut Inbox,
-) -> bool {
-    entry.restarts += 1;
-    launch_again(channel, port, key, entry, drivers, inbox)
 }
 
 /// Start `entry`'s driver again, in a job of its own, on a duplicate of the

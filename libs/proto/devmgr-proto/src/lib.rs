@@ -268,7 +268,8 @@ pub enum Message {
     Died {
         /// The device's PCI address word.
         location: u32,
-        /// The driver's exit status; 137 if killed.
+        /// The driver's exit status, as a shell reads one: its exit code, or
+        /// 128 and the signal that killed it -- 137 for `SIGKILL`.
         status: i32,
     },
     /// `devmgr` to kernel: the driver of the device at `location`, which
