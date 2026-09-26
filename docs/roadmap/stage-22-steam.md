@@ -54,8 +54,9 @@ staged until now.
   game inside bubblewrap: user, mount and pid namespaces, `pivot_root`,
   `seccomp` filters, and the Chromium helper's own sandbox on top. That is
   stage 13 entire, plus what stage 13 does not name and Steam will:
-  `inotify`, `pidfd_open` and `pidfd_send_signal` (`SO_PEERCRED` has been
-  answered since 2026-09-13), `/proc/<pid>/` fields the runtime reads, and
+  `/proc/<pid>/` fields the runtime reads (`inotify`, `pidfd_open` and
+  `pidfd_send_signal` have been answered since 2026-09-27, `SO_PEERCRED`
+  since 2026-09-13), and
   `prctl` beyond what stage 7
   answers. Stage 13's month, plus 13 points of the rest.
 * **Somewhere to put it.** A Steam library is tens of gigabytes on a

@@ -164,6 +164,15 @@ twenty-five points each are opened, replayed, checked for consistency and
 for any completed promise rolled back. `scripts/test/btrfs-check-writer.sh` runs
 it at that size, and `cargo test` a small one.
 
+**Since the exit — `umount` writes the volume out (ferrix-e4,
+2026-09-27).** `umount2` never called the filesystem's `sync`, so a volume
+unmounted without one came back without what was written since its last
+commit -- a black-box pass lost files, renames and the tail of a 40 MiB
+file on the writable test disk. It syncs first now; a failed write-out
+keeps the mount and returns the error, and `MNT_FORCE` unmounts anyway.
+Still open from the same pass: no file grows past 32 MiB, and eight
+concurrent writers leave the mount answering `EIO` (`docs/BACKLOG.md`).
+
 **Since the exit — the marker.** The boot marker moved to `FERRIX-BOOT-OK
 stages 1-12` on 2026-09-23. Stage 12's write check had run before it in
 every boot since the exit; the marker was simply left behind when the stage

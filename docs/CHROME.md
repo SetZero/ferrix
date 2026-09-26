@@ -625,8 +625,7 @@ A trial kernel that let `madvise` answer and raised the read limit, never
 landed, is how the later items were found before the earlier were fixed;
 `--single-process` did the same for the children before item 3 was.
 
-**What it still says, and none of it stops it:** `inotify_init` is `ENOSYS`,
-so Chrome watches no files; `pkey_alloc`, `landlock_create_ruleset` and
+**What it still says, and none of it stops it:** `pkey_alloc`, `landlock_create_ruleset` and
 `rseq` are `ENOSYS`, which Chrome and glibc take in their stride; and there
 is no D-Bus or udev to talk to.
 

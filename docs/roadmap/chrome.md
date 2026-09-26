@@ -99,8 +99,8 @@ bench-chrome-video` measures it (`docs/CHROME.md` §9).
   yet: Chrome reaches it by `PT_INTERP`.
 * Why the GPU process's fallback path stops at the sandbox's
   `proc_util.cc:115` with `ENOENT` on Ferrix (`docs/CHROME.md` §8, item 8).
-* `inotify`, and the GPU: Chrome draws in software. (The vDSO landed on
-  x86-64 on 2026-09-26: `docs/CHROME.md` §3.)
+* The GPU: Chrome draws in software. (`inotify` landed on 2026-09-27; the
+  vDSO on x86-64 on 2026-09-26: `docs/CHROME.md` §3.)
 * Where Chrome still says Linux: `navigator.platform`, the client hints
   and `chrome://version`, all constants in Chrome's build. The customer
   chose the flag alone over a patched binary; a Chromium built from

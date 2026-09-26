@@ -255,7 +255,7 @@ pub trait Kind {
 | `.socket` | 2 | A listening socket init holds; the service starts on the first connection |
 | `.builtin` | 1 | Something the kernel provides, always active (§7.2) |
 | `.timer` | later | Starts a unit on a schedule |
-| `.path` | later | Starts a unit when a path changes (needs `inotify`, absent) |
+| `.path` | later | Starts a unit when a path changes (needs `inotify`, in the kernel since 2026-09-27) |
 
 ### 4.3 Dependencies and operations
 
