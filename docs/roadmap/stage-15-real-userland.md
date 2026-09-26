@@ -1,0 +1,170 @@
+# Stage 15 — A real userland  ·  *week*
+
+Static musl busybox as `/bin`, a working init, job control, ttys, pipes. Enough
+of a system to be used rather than demonstrated.
+
+**Exit:** an interactive shell over the serial console that a person can use.
+
+**Most of this stage arrived early, under other stages' names.** `/bin` is
+the uutils family and zinc rather than busybox (`docs/UUTILS.md`), pipes and
+the pseudo-terminals are stage 8's and stage 18's, and the console's line
+discipline -- `ICANON`, `ISIG`, `ECHO`, the signal characters -- has been
+honoured since stage 8, over a receive interrupt since the UART drivers
+gained one. What was left when this stage was looked at properly on
+2026-09-19 was not the kernel's at all: every system call job control is made
+of had been answered since stage 7 and nothing in user space used them.
+
+**Done -- job control, and a gate that types (2026-09-19).** `userland/zinc/src/jobs.rs`
+is the shell's half of what the kernel already offered. A pipeline is one
+process group, so `kill %1` and the terminal's Ctrl-C reach all of it; a
+foreground job is handed the terminal with `tcsetpgrp` and the shell takes it
+back when the job ends or stops; a job stopped by Ctrl-Z stays in a table
+that `jobs`, `fg`, `bg`, `wait`, `disown` and `kill %1` name, with zsh's `%+`,
+`%-`, `%n`, `%name` and `%?text` specifications and zsh's lines
+(`[1]  + suspended  sleep 30`). The shell steals the terminal before its
+first prompt, stopping its own group until it has it, as the glibc manual's
+job-control shell does -- a shell started in the background is otherwise
+stopped by `SIGTTOU` at its first prompt with nothing on the screen to say
+why. `exit` with a job suspended is refused once and obeyed the second time.
+Before this the shipped shell answered `fg` with *no job control in this
+shell*.
+
+Two gates, because a process group is invisible in a transcript.
+`userland/zinc/tests/pty_jobs.py`, in `cargo xtask check --zinc`, drives the shell on
+a host pseudo-terminal and reads the process groups themselves out of
+`/proc/<pid>/stat`: that the job's group is not the shell's, that a job's own
+children share it, and that the terminal's foreground group is the job's
+while it runs and the shell's again afterwards. Its negative control -- the
+same shell with the terminal handover taken out -- fails ten of its checks.
+`cargo xtask test-jobs` is the stage's exit read literally: it boots zinc as
+init on x86-64 with no script, so the kernel starts `sh -i`, and types a
+session at the serial port through QEMU's stdin -- `sleep 30 &`, `jobs`,
+`kill %1`, a pipeline, Ctrl-Z, `bg`, `fg`, Ctrl-C, `exit` -- requiring the
+answer to each keystroke. `qemu::Watching::type_in` is the new half of the
+harness: until now every gate here only read what the guest said.
+
+**Done -- the kernel's half of starting an init (L3, 2026-09-24).**
+`ferrix.init=<path>` on the kernel command line starts pid 1 from that file
+in the switched root, a `#!` script under its interpreter, and falls back to
+the built-in program with one line saying why when the file will not start;
+xtask's `--init-path` writes it into `CMDLINE.TXT`. `reboot(2)` commits `/`
+and `/data` before it stops the machine, as the kernel's own power-off does,
+and `ferrix.onexit=panic` gives Linux's answer to init exiting (`FX-1501`).
+`cargo xtask test-shell` boots its shell a second time from
+`ferrix.init=/etc/shell-test`, and under busybox writes `/data/k7`, powers
+off with `poweroff -f -n` and reads the file back on a second boot of the
+same volume. `docs/INIT.md` §16 has the details and the negative controls.
+
+**Done -- L1, the unit files (2026-09-24, 5 points).** `libs/init/svc` is the
+manager's pure core, `no_std` so that `devmgr` can share its restart
+policy later. Its first landing reads units as systemd does: the INI
+subset with `conf-parser.c`'s corners, the three layered directories as a
+source the backend fills, drop-ins in name order with a higher directory
+hiding a lower one's file of the same name, masking by `/dev/null` or an
+empty file, aliases, templates and their specifiers, `.wants/` links, and
+the keys of every version-1 kind with systemd's value syntaxes. A key init
+does not know is a warning, so a systemd unit file loads. 52 host tests,
+Miri, and the `svc_unit` fuzz target. `docs/INIT.md` §16 records what
+the building changed in the design.
+
+**Done -- L2, the manager (2026-09-24, 8 points).** The rest of
+`libs/init/svc`: `Manager::step(event, now) -> actions` and `deadline()`, as
+`docs/INIT.md` §3 has them. Requests become transactions of operations
+along systemd's dependencies, with its conflict rules, a `Wants=` cycle
+broken with a warning and a `Requires=` cycle refused; what is not ordered
+starts in the same step. It builds the slice tree with its limits, runs
+services through systemd's states for `simple`, `exec`, `oneshot` and
+`forking`, stops them by `KillMode=` with `cgroup.kill` after
+`TimeoutStopSec=`, counts a service stopped only when its cgroup is
+empty, restarts by `Restart=` with a doubling backoff and the start limit,
+boots `default.target` with `rescue.target` as the fallback, and shuts
+down in reverse order before killing every cgroup left. 92 host tests
+replay event scripts; Miri runs them, and the `svc_manager` fuzz target
+drives the manager with events in any order. The core never holds a
+handle: every action names a `UnitId`, a `GroupPath`, a `Token` or a
+`ClientId`, for the init program's backends to map (`docs/INIT.md` §16).
+
+**Done -- L4, the init program (2026-09-26, 10 points).** `userland/init/` is a
+workspace beside zinc's, built the same way for all three architectures.
+`/sbin/init` is pid 1 around `libs/init/svc`'s manager: it mounts `/run` and
+cgroup2, moves itself into `init.scope`, runs the generators, and waits in
+one `epoll_wait` on a signalfd, each child's exec report and each cgroup's
+`cgroup.events`, turning what it finds into the manager's events and its
+actions into system calls. A service starts in its own cgroup by
+`clone3(CLONE_INTO_CGROUP)` and leads its own session; it is stopped by
+`KillMode=` and counted stopped when its cgroup is empty; `SIGTERM` to pid 1
+stops everything in reverse order and powers off through `reboot(2)`.
+`/sbin/getty` gives a terminal a session and a login shell, and the getty
+generator links one into `multi-user.target` for the console. The kernel's
+`/proc/<pid>/stat` now reports a process's group, session, controlling
+terminal and foreground group, which it had written as the pid, 0 and -1.
+`cargo xtask test-init` is `docs/INIT.md` §15's stages one and two: it types
+at the getty's shell and requires its own session and terminal from
+`/proc/self/stat`, a failing service's restart budget, a daemon's grandchild
+in its service's `cgroup.procs` and gone when the service stops, the
+shutdown order, and a clean `btrfs check` afterwards. Both negative controls
+fired. `docs/INIT.md` §16 has the details.
+
+**Done -- L5, L6, L7 and L9 (2026-09-26, 19 points), and L8's kernel half.**
+`/bin/svc` over `/run/ferrix/control` with systemctl's verbs, root-only
+changes judged by `SO_PEERCRED`, and a per-unit log of what services print
+(L6); `Type=notify` readiness over `NotifyFd=` and `forking` services by
+their `PIDFile=` (L7); `.socket` units with `LISTEN_FDS` for `Accept=no` and
+an instance per connection for `Accept=yes` (L9); and stage 13's scoped OOM
+kill with init's `OOMPolicy=` on it, `Delegate=`, and scopes (L5). The kernel
+calls L8 needs -- pid 1's bootstrap channel, `process_give` and
+`process_bootstrap`, `process_status`, `port_fd` -- are in. `test-init`
+types every one of these at the prompt on all three architectures;
+`docs/INIT.md` §16 has what each stage requires and its negative control.
+
+**Done -- L8, the directory (2026-09-26, 16 points).** Pid 1 reads the
+kernel's hello on its bootstrap channel, gives every service that declares
+`Uses=` or `Offers=` a channel of its own before it runs, starts `Type=native`
+services with `process_create` in the job behind their cgroup, and routes an
+OPEN to the unit that offers the name -- starting it first -- or refuses one
+the asker did not declare. `test-init` shows a native service started by the
+first OPEN and answering down the routed channel, and a refusal.
+
+**Still to do:** L10: no image boots the init yet -- `cargo xtask run` and
+every gate but `test-init` start a program as pid 1 themselves -- and hyprix
+is still pid 1 on the desktop.
+
+**Designed (2026-09-23): `docs/INIT.md`.** `/sbin/init` is pid 1 and a
+service manager in one program. Its units are in systemd's syntax, with
+slices, scopes, templates, generators and socket activation, and each service
+runs in a cgroup of its own. Its manager is a pure state machine in
+`libs/init/svc`, and every effect goes through a backend that a microkernel could
+serve instead. Init hands each service a bootstrap channel and routes named
+native services between them.
+
+Init waited on stage 13's cgroups, which the customer put first; what its
+first boot needs of them (C1 to C5 and C7) landed on 2026-09-24. Its landings
+come to 67 points up to hyprix no longer being pid 1, 61 of them spent on
+L1 to L9: six kernel items of 11 points besides stage 13, two of them
+(K0, K7) built, and `cargo xtask test-init` growing a stage per landing. Its
+first two landings, the unit parser and the dependency engine, were
+host-only and were built while stage 13 was.
+
+**Where it stands.** The init is a service manager a person drives, with
+the directory native services are reached through (L1 to L9), gated by
+`cargo xtask test-init` on all three architectures. What is left is L10,
+which moves the images onto it; it is built on branch `init-l10` and not
+yet on `main` (2026-09-26). The
+stage's exit has been met by `test-jobs` since 2026-09-19; the images still
+start their own pid 1 until L10.
+
+**Next: authentication (`docs/AUTH.md`, approved by the customer on
+2026-09-26, all eleven decisions as recommended).** `authd`, a service
+that checks a person's password with Argon2id, throttles and audits, with
+`passwd`, `authctl` and hyprlock's real backend on it: phase 1, 27 points,
+not started. Phase 2 moves the desktop off root (31, and L10) and phase 3
+adds PAM for ferrousli's programs, TOTP, ssh passwords and privilege
+prompts (about 32). Its P0 is a kernel hole it names:
+`process_create` gave the process it made root's credentials instead of
+its creator's (2 points, being fixed).
+
+`test-jobs` is x86-64 only, because `sleep` is uutils' and uutils is built
+for x86-64 alone (`docs/UUTILS.md` D3).
+
+---
+

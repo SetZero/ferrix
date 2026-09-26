@@ -34,7 +34,7 @@ volume and boots it:
 
 ## What exists today
 
-[The roadmap](docs/ROADMAP.md) is the authority; its *Where it stands* is
+[The roadmap](docs/roadmap/README.md) is the authority; its *Where it stands* is
 kept current with every landing. In short:
 
 * **The kernel.** Stages 0–12 are in the boot test on all three
@@ -774,7 +774,7 @@ the repository.
 | `xtask/` | Host build driver: cross-compiles every half, converts the 32-bit loader from ELF to PE, writes the FAT32 image and initramfs, drives QEMU and every `test-*` gate. |
 | `scripts/` | `check/` the quality gates, `gen/` the generators, `fetch/` the pinned downloads, `test/` hand-run test drivers, `data/` the allow-lists and baselines. |
 | `tools/` | Host applications for particular hardware: the Pixel 7 launcher and monitor. |
-| `docs/` | [Layout](docs/LAYOUT.md) · [Architecture](docs/ARCHITECTURE.md) · [Roadmap](docs/ROADMAP.md) · [Backlog](docs/BACKLOG.md) · [Assembly](docs/ASSEMBLY.md) · [Reliability](docs/RELIABILITY.md) · [Boot log](docs/BOOT-LOG.md) · [Display](docs/DISPLAY.md) · [GPU](docs/GPU.md) · [Conventions](docs/CONVENTIONS.md) · [SysML v2 model](docs/sysml/README.md) |
+| `docs/` | [Layout](docs/LAYOUT.md) · [Architecture](docs/ARCHITECTURE.md) · [Roadmap](docs/roadmap/README.md) · [Backlog](docs/BACKLOG.md) · [Assembly](docs/ASSEMBLY.md) · [Reliability](docs/RELIABILITY.md) · [Boot log](docs/BOOT-LOG.md) · [Display](docs/DISPLAY.md) · [GPU](docs/GPU.md) · [Conventions](docs/CONVENTIONS.md) · [SysML v2 model](docs/sysml/README.md) |
 
 ## Quality gates
 

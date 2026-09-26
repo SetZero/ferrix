@@ -1,0 +1,38 @@
+# Summary
+
+[Overview](README.md)
+
+- [Stage 0 — Foundation ✅](stage-00-foundation.md)
+- [Stage 1 — Boot, both architectures ✅](stage-01-boot-both-architectures.md)
+- [Stage 2 — Physical and virtual memory ✅](stage-02-physical-virtual-memory.md)
+- [Stage 3 — Traps, interrupts, time ✅](stage-03-traps-interrupts-time.md)
+- [Stage 4 — SMP ✅](stage-04-smp.md)
+- [ARMv7-A — a third architecture ✅](armv7a.md)
+- [Stage 5 — Tasks and the scheduler ✅](stage-05-tasks-scheduler.md)
+- [Stage 6 — User mode ✅](stage-06-user-mode.md)
+- [Stage 7 — The Linux syscall ABI ✅](stage-07-linux-syscall-abi.md)
+- [Stage 8 — VFS, initramfs, the pseudo-filesystems ✅](stage-08-vfs-initramfs-pseudo-filesystems.md)
+- [Stage 9 — The native ABI: handles, channels, ports, VMOs ✅](stage-09-native-abi.md)
+- [Stage 10 — Userspace drivers ✅](stage-10-userspace-drivers.md)
+- [Stage 11 — Block core and btrfs, read ✅](stage-11-block-core-btrfs-read.md)
+- [Networking — sockets, a net core, virtio-net ✅](networking.md)
+- [Dynamic linking — PIE, `PT_INTERP`, a loader ✅](dynamic-linking.md)
+- [Stage 12 — btrfs, write ✅](stage-12-btrfs-write.md)
+- [sysfs — the device tree, fed by the services that own it ✅](sysfs.md)
+- [Chrome — a browser on Ferrix 🟡](chrome.md)
+- [Stage 13 — Namespaces, cgroups v2, seccomp 🟡](stage-13-namespaces-cgroups-v2-seccomp.md)
+- [Stage 14 — Real-time domains ⚪](stage-14-real-time-domains.md)
+- [Stage 15 — A real userland 🟡](stage-15-real-userland.md)
+- [Stage 16 — `rustc` ✅](stage-16-rustc.md)
+- [Stage 17 — Display and input ✅](stage-17-display-input.md)
+- [Stage 18 — The compositor ✅](stage-18-compositor.md)
+- [Stage 19 — Hyprland fidelity, and the GPU 🟡](stage-19-hyprland-fidelity-gpu.md)
+- [Stage 20 — Self-hosting 🟡](stage-20-self-hosting.md)
+- [Stage 21 — Bare metal, and a GPU of Ferrix's own ⚪](stage-21-bare-metal-gpu-ferrix.md)
+- [Stage 22 — Steam 🟡](stage-22-steam.md)
+- [Written ahead of their stage](written-ahead.md)
+- [Continuously, from stage 1](continuously.md)
+
+---
+
+[How to edit the roadmap](HOW-TO-EDIT.md)
