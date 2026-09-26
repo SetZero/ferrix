@@ -210,7 +210,7 @@ impl Stylesheet {
                 match read(&target) {
                     Some(text) => self.add(&text, &target, read, diag, depth + 1),
                     None => {
-                        pending.push((place, format!("Failed to import: {}", target.display())))
+                        pending.push((place, format!("Failed to import: {}", target.display())));
                     }
                 }
             }

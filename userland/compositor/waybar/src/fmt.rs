@@ -27,6 +27,10 @@ pub enum Arg {
     F64(f64),
     /// waybar's `pow_format`: a value, a unit, and how to scale it.
     Pow(Pow),
+    /// A time, as libfmt's chrono formatter takes a `zoned_time`: seconds
+    /// since the epoch in local time, with the zone's name. Its spec is
+    /// `strftime`'s (`{:%H:%M}`).
+    Time(i64, String),
 }
 
 /// waybar's `pow_format`.
@@ -320,6 +324,15 @@ fn format_arg(out: &mut String, arg: &Arg, spec_text: &str) -> Result<(), Error>
         out.push_str(&format_pow(pow, spec_text)?);
         return Ok(());
     }
+    if let Arg::Time(seconds, zone) = arg {
+        let spec = if spec_text.is_empty() {
+            "%F %T"
+        } else {
+            spec_text
+        };
+        out.push_str(&strftime(spec, *seconds, zone)?);
+        return Ok(());
+    }
     let spec = parse_spec(spec_text)?;
     let (body, numeric) = match arg {
         Arg::Str(text) => {
@@ -343,7 +356,7 @@ fn format_arg(out: &mut String, arg: &Arg, spec_text: &str) -> Result<(), Error>
         }
         Arg::F32(value) => (float_text(f64::from(*value), Some(*value), &spec)?, true),
         Arg::F64(value) => (float_text(*value, None, &spec)?, true),
-        Arg::Pow(_) => (String::new(), false),
+        Arg::Pow(_) | Arg::Time(..) => (String::new(), false),
     };
     pad(out, &body, &spec, numeric);
     Ok(())
@@ -473,6 +486,136 @@ fn pad(out: &mut String, body: &str, spec: &Spec, numeric: bool) {
     out.extend(core::iter::repeat_n(fill, before));
     out.push_str(body);
     out.extend(core::iter::repeat_n(fill, after));
+}
+
+/// The civil date of a day count since 1970-01-01: year, month (1-12),
+/// day (1-31). Howard Hinnant's `civil_from_days`, which `date.h` (and so
+/// waybar's clock) is built on.
+#[must_use]
+pub fn civil(days: i64) -> (i64, u32, u32) {
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = u32::try_from(doy - (153 * mp + 2) / 5 + 1).unwrap_or(1);
+    let month = u32::try_from(if mp < 10 { mp + 3 } else { mp - 9 }).unwrap_or(1);
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    (year, month, day)
+}
+
+const DAYS: [&str; 7] = [
+    "Sunday",
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+];
+const MONTHS: [&str; 12] = [
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+];
+
+/// `strftime` in the C locale, for `seconds` of local time since the epoch
+/// in zone `zone`: the conversions libfmt's chrono formatter takes.
+///
+/// # Errors
+///
+/// libfmt's for a conversion it does not know.
+pub fn strftime(spec: &str, seconds: i64, zone: &str) -> Result<String, Error> {
+    let days = seconds.div_euclid(86_400);
+    let second_of_day = seconds.rem_euclid(86_400);
+    let (year, month, day) = civil(days);
+    let (hour, minute, second) = (
+        second_of_day / 3600,
+        second_of_day / 60 % 60,
+        second_of_day % 60,
+    );
+    let weekday = usize::try_from((days + 4).rem_euclid(7)).unwrap_or(0);
+    let jan1 = {
+        // Days since the epoch of January 1st of `year`.
+        let mut d = days;
+        while civil(d).0 == year {
+            d -= 1;
+        }
+        d + 1
+    };
+    let yday = days - jan1 + 1;
+    let month_name = MONTHS
+        .get(usize::try_from(month).unwrap_or(1) - 1)
+        .copied()
+        .unwrap_or("");
+    let day_name = DAYS.get(weekday).copied().unwrap_or("");
+    let short = |name: &str| name.chars().take(3).collect::<String>();
+    let hour12 = if hour % 12 == 0 { 12 } else { hour % 12 };
+    let mut out = String::new();
+    let mut chars = spec.chars();
+    while let Some(c) = chars.next() {
+        if c != '%' {
+            out.push(c);
+            continue;
+        }
+        let mut conversion = chars.next().ok_or_else(|| error("invalid format"))?;
+        // `%E` and `%O` modifiers are the C locale's plain forms.
+        if conversion == 'E' || conversion == 'O' {
+            conversion = chars.next().ok_or_else(|| error("invalid format"))?;
+        }
+        match conversion {
+            'H' => out.push_str(&format!("{hour:02}")),
+            'I' => out.push_str(&format!("{hour12:02}")),
+            'M' => out.push_str(&format!("{minute:02}")),
+            'S' => out.push_str(&format!("{second:02}")),
+            'p' => out.push_str(if hour < 12 { "AM" } else { "PM" }),
+            'a' => out.push_str(&short(day_name)),
+            'A' => out.push_str(day_name),
+            'b' | 'h' => out.push_str(&short(month_name)),
+            'B' => out.push_str(month_name),
+            'd' => out.push_str(&format!("{day:02}")),
+            'e' => out.push_str(&format!("{day:>2}")),
+            'm' => out.push_str(&format!("{month:02}")),
+            'Y' => out.push_str(&year.to_string()),
+            'y' => out.push_str(&format!("{:02}", year.rem_euclid(100))),
+            'C' => out.push_str(&format!("{:02}", year.div_euclid(100))),
+            'j' => out.push_str(&format!("{yday:03}")),
+            'u' => out.push_str(&(if weekday == 0 { 7 } else { weekday }).to_string()),
+            'w' => out.push_str(&weekday.to_string()),
+            'F' => out.push_str(&format!("{year}-{month:02}-{day:02}")),
+            'T' => out.push_str(&format!("{hour:02}:{minute:02}:{second:02}")),
+            'R' => out.push_str(&format!("{hour:02}:{minute:02}")),
+            'D' => out.push_str(&format!("{month:02}/{day:02}/{:02}", year.rem_euclid(100))),
+            'r' => out.push_str(&format!(
+                "{hour12:02}:{minute:02}:{second:02} {}",
+                if hour < 12 { "AM" } else { "PM" }
+            )),
+            'c' => out.push_str(&format!(
+                "{} {} {day:>2} {hour:02}:{minute:02}:{second:02} {year}",
+                short(day_name),
+                short(month_name)
+            )),
+            'x' => out.push_str(&format!("{month:02}/{day:02}/{:02}", year.rem_euclid(100))),
+            'X' => out.push_str(&format!("{hour:02}:{minute:02}:{second:02}")),
+            'Z' => out.push_str(zone),
+            'z' => out.push_str("+0000"),
+            'n' => out.push('\n'),
+            't' => out.push('\t'),
+            '%' => out.push('%'),
+            _ => return Err(error("invalid format")),
+        }
+    }
+    Ok(out)
 }
 
 /// `formatter<pow_format>::format`, as `util/format.hpp` has it.
@@ -655,6 +798,17 @@ mod tests {
         assert_eq!(f("[{n:<3}]", &args), "[5  ]");
         assert_eq!(f("[{n:+}]", &args), "[+5]");
         assert_eq!(f("{s:d}", &args), "ERROR invalid format specifier");
+    }
+
+    #[test]
+    fn times_format_as_strftime() {
+        // 2026-09-26 17:04:05 UTC, a Saturday.
+        let args = Args::new().positional(Arg::Time(1_790_442_245, "UTC".into()));
+        assert_eq!(f("{:%H:%M}", &args), "17:04");
+        assert_eq!(f("{:%a %d %b %Y}", &args), "Sat 26 Sep 2026");
+        assert_eq!(f("{:%j %Z}", &args), "269 UTC");
+        assert_eq!(super::civil(0), (1970, 1, 1));
+        assert_eq!(super::civil(-1), (1969, 12, 31));
     }
 
     #[test]

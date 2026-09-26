@@ -134,7 +134,7 @@ fn report_style(sheet: &Stylesheet, out: &mut Vec<String>) {
             for declared in &declaration.set {
                 match declared {
                     Declared::Value(Prop::Unsupported(name)) => {
-                        out.push(format!("style: {at}: property \"{name}\": not carried out"))
+                        out.push(format!("style: {at}: property \"{name}\": not carried out"));
                     }
                     Declared::Value(Prop::BackgroundImage(images)) => {
                         out.extend(images.iter().filter_map(|image| other_image(image, &at)));
