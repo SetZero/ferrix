@@ -341,6 +341,22 @@ impl Args {
     }
 
     /// `--mitigations on|off`.
+    /// `--ssh PORT` forwards that host port to the guest's sshd, which
+    /// needs the network, so it turns the network on as well.
+    fn ssh(&mut self, items: &mut impl Iterator<Item = String>) -> Result<()> {
+        let port: u16 = number(items, "--ssh")?;
+        if port == 0 {
+            return Err(Error::new("--ssh wants a port other than 0"));
+        }
+        self.ssh = Some(port);
+        self.forwards.push(crate::gateway::Forward {
+            host: port,
+            guest: crate::ssh::GUEST_PORT,
+        });
+        self.net = true;
+        Ok(())
+    }
+
     fn mitigations(&mut self, items: &mut impl Iterator<Item = String>) -> Result<()> {
         self.mitigations = Mitigations::parse(&value(items, "--mitigations")?)?;
         Ok(())
@@ -391,18 +407,7 @@ impl Args {
                     args.forwards.push(crate::gateway::Forward::parse(&raw)?);
                     args.net = true;
                 }
-                "--ssh" => {
-                    let port: u16 = number(&mut items, "--ssh")?;
-                    if port == 0 {
-                        return Err(Error::new("--ssh wants a port other than 0"));
-                    }
-                    args.ssh = Some(port);
-                    args.forwards.push(crate::gateway::Forward {
-                        host: port,
-                        guest: crate::ssh::GUEST_PORT,
-                    });
-                    args.net = true;
-                }
+                "--ssh" => args.ssh(&mut items)?,
                 "--ssh-key" => args.ssh_keys.push(value(&mut items, "--ssh-key")?),
                 "--display" => args.display = true,
                 // A 3D card is still a card: `--gl` on its own turns the
