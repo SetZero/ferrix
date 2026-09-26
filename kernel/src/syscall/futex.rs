@@ -276,13 +276,24 @@ pub(crate) fn sys_futex(
             if value3 == 0 {
                 return Err(Errno::EINVAL);
             }
-            // Absolute. Every clock here is the counter -- see
-            // `time::sys_clock_gettime` -- so a deadline on `CLOCK_MONOTONIC`
-            // and one on `CLOCK_REALTIME` are the same number.
+            // Absolute, on `CLOCK_MONOTONIC` -- the counter -- or with
+            // `FUTEX_CLOCK_REALTIME` on the real-time clock, which is the
+            // counter plus its offset, as `clock_nanosleep` turns one. Read
+            // as a counter deadline, a real-time one lay decades ahead, and
+            // glibc's `pthread_cond_timedwait`, `sem_timedwait` and
+            // `pthread_mutex_timedlock` never timed out (ferrix-ea,
+            // 2026-09-26).
             let deadline = if timeout == 0 {
                 None
             } else {
-                Some(read_timespec(process, timeout, width)?)
+                let absolute = read_timespec(process, timeout, width)?;
+                Some(if op & FUTEX_CLOCK_REALTIME != 0 {
+                    let counter =
+                        i128::from(absolute) - i128::from(crate::syscall::time::realtime_offset());
+                    u64::try_from(counter.max(0)).unwrap_or(u64::MAX)
+                } else {
+                    absolute
+                })
             };
             wait(process, address, shared, value, value3, deadline)
         }
