@@ -64,7 +64,7 @@ use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 
 use ferrix_bootinfo::{BootInfo, BootView, KASLR_FIXED_IMAGE, KASLR_MOVED, MemKind, PAGE_SIZE};
-use ferrix_paging::MapFlags;
+use ferrix_paging::{MapError, MapFlags};
 
 use console::println;
 use early::EarlyMemory;
@@ -2441,6 +2441,7 @@ fn memory_check(stats: &mm::Stats) -> Result<(), &'static str> {
     mm::deallocate_frames(frame, 0);
     checked?;
     check_no_device_window_over_the_image()?;
+    check_no_device_window_wraps()?;
     check_stacks()?;
     Ok(())
 }
@@ -2711,6 +2712,41 @@ fn check_no_device_window_over_the_image() -> Result<(), &'static str> {
     Ok(())
 }
 
+/// A device window whose end, rounded out to a page, is past the top of the
+/// address space is refused as a bad length, and keeps no address space.
+///
+/// `map_device` used to add the length to the offset within the page, and
+/// round the sum up, with no check: with overflow checks on in every
+/// profile, a caller's wrapped range stopped the kernel there, and without
+/// them it would have sized the window from the wrapped sum. The ranges are
+/// the ways a sum can wrap: the offset plus the length, the rounding up of
+/// that, and the base plus the rounded span, the last with an in-range
+/// length at the very top page. Nothing is mapped, so nothing is read.
+fn check_no_device_window_wraps() -> Result<(), &'static str> {
+    let windows_before = vmap::usage().allocations;
+    let top_page = !(PAGE_SIZE - 1);
+    let probes = [
+        (0x1040, u64::MAX - 0x20),
+        (0x1000, u64::MAX),
+        (top_page, PAGE_SIZE),
+        (top_page + 0x40, 0x100),
+    ];
+    for (phys, bytes) in probes {
+        match vmap::map_device(phys, bytes) {
+            Err(vmap::VmapError::BadLength(len)) if len == bytes => {}
+            Err(_) => return Err("a device window that wraps failed for the wrong reason"),
+            Ok(at) => {
+                let _ = vmap::unmap_device(at);
+                return Err("a device window that wraps was mapped");
+            }
+        }
+    }
+    if vmap::usage().allocations != windows_before {
+        return Err("a refused device window that wraps kept its address space");
+    }
+    Ok(())
+}
+
 /// The guard pages either side of an allocation are not mapped.
 ///
 /// Not read or written, only translated. A guard page whose absence is proved
@@ -2967,7 +3003,8 @@ fn self_check(view: &BootView<'_>, memory: &mut EarlyMemory) -> Result<(), &'sta
 
     check_layout(view)?;
     check_direct_map(view, memory)?;
-    check_early_mapper(view, memory)
+    check_early_mapper(view, memory)?;
+    check_no_early_window_wraps(memory)
 }
 
 /// Prove the kernel runs where the loader says it put it, and that it moved
@@ -3150,6 +3187,25 @@ fn check_direct_map(view: &BootView<'_>, memory: &EarlyMemory) -> Result<(), &'s
 fn framebuffer_bytes(framebuffer: &ferrix_bootinfo::Framebuffer) -> u64 {
     let pixels = u64::from(framebuffer.stride).saturating_mul(u64::from(framebuffer.height));
     pixels.saturating_mul(4).min(framebuffer.size)
+}
+
+/// No early device window whose end wraps the address space: the top page,
+/// whose end is one past the last address, and a length that rounds past it.
+/// Refused before the image test, which clamps a wrapped end, and before the
+/// rounding, which would stop the kernel on the overflow; and nothing mapped.
+fn check_no_early_window_wraps(memory: &mut EarlyMemory) -> Result<(), &'static str> {
+    let top_page = !(PAGE_SIZE - 1);
+    for (phys, bytes) in [(top_page, PAGE_SIZE), (PAGE_SIZE, u64::MAX)] {
+        match memory.map_device(vmap::DEMAND_WINDOW, phys, bytes) {
+            Err(early::EarlyError::MapFailed(MapError::RangeOverflow)) => {}
+            Err(_) => return Err("an early device window that wraps failed for the wrong reason"),
+            Ok(()) => return Err("an early device window that wraps was mapped"),
+        }
+    }
+    if memory.translate(vmap::DEMAND_WINDOW).is_some() {
+        return Err("a refused early device window that wraps left a mapping behind");
+    }
+    Ok(())
 }
 
 /// Prove the kernel can read and extend the page tables the loader left.

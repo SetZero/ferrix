@@ -314,10 +314,11 @@ fn map_window(
     {
         return Err(Errno::EINVAL);
     }
+    let start = phys.checked_add(offset).ok_or(Errno::EINVAL)?;
     let at = place(process, addr, len, flags)?;
     let mapped = process
         .space()
-        .map_window(at, len, phys + offset, vma, cached, window)
+        .map_window(at, len, start, vma, cached, window)
         .map_err(refused)?;
     Ok(usize_of(mapped))
 }

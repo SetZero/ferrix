@@ -81,6 +81,7 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     check_an_empty_space_maps_nothing()?;
     check_a_region_outside_the_user_half_is_refused()?;
     check_the_kernel_image_is_no_device_memory()?;
+    check_a_device_range_that_wraps_is_refused()?;
     check_a_fault_outside_every_region_is_a_segfault()?;
     check_a_write_to_a_read_only_region_is_refused()?;
     check_a_read_of_an_inaccessible_region_is_refused()?;
@@ -457,6 +458,42 @@ fn check_the_kernel_image_is_no_device_memory() -> Result<(), &'static str> {
     }
     if space.region_count() != 0 {
         return Err("a refused mapping of the kernel's image was inserted anyway");
+    }
+    Ok(())
+}
+
+/// A device or window mapping whose physical range wraps the address space
+/// is a bad range, and inserts nothing.
+///
+/// The image test clamps the end of the range it is given, so a range that
+/// wrapped past the top came out clear of an image low in memory; the map
+/// then refused it for its backing, but only because it happened to check
+/// the same sum. The top page, whose end is one past the last address, and a
+/// whole-pages length from a low page that runs past the top.
+fn check_a_device_range_that_wraps_is_refused() -> Result<(), &'static str> {
+    let space = AddressSpace::new().map_err(|_| "could not make an address space")?;
+    // The last page's address, and as a length the most whole pages there are.
+    let top = !(PAGE_SIZE - 1);
+    for (physical, len) in [(top, PAGE_SIZE), (PAGE_SIZE, top)] {
+        match space.map_device(None, len, physical, VmaFlags::READ_WRITE) {
+            Err(SpaceError::BadRange) => {}
+            _ => return Err("a user device mapping whose range wraps was not a bad range"),
+        }
+        let keeper: Arc<dyn core::any::Any + Send + Sync> = Arc::new(());
+        match space.map_window(
+            FilePlace::Anywhere(None),
+            len,
+            physical,
+            VmaFlags::READ,
+            false,
+            keeper,
+        ) {
+            Err(SpaceError::BadRange) => {}
+            _ => return Err("a user window whose range wraps was not a bad range"),
+        }
+    }
+    if space.region_count() != 0 {
+        return Err("a refused mapping whose range wraps was inserted anyway");
     }
     Ok(())
 }

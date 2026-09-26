@@ -133,10 +133,22 @@ impl EarlyMemory {
     ///
     /// # Errors
     ///
+    /// [`EarlyError::MapFailed`] with
+    /// [`ferrix_paging::MapError::RangeOverflow`] for a range whose end,
+    /// rounded out to a page, is past the top of the address space, before
+    /// anything else is asked of it: a wrapped `phys + len` would otherwise be
+    /// judged against the image by its clamped end, and the rounding would
+    /// stop the kernel on the overflow check.
     /// [`EarlyError::KernelImage`] for a range that touches the kernel's own
     /// image, which no device window may map ([`crate::mm::overlaps_image`]);
     /// [`EarlyError::MapFailed`] for what the mapper refuses.
     pub(crate) fn map_device(&mut self, virt: u64, phys: u64, len: u64) -> Result<(), EarlyError> {
+        let span = len
+            .checked_next_multiple_of(PAGE_SIZE)
+            .filter(|&span| phys.checked_add(span).is_some())
+            .ok_or(EarlyError::MapFailed(
+                ferrix_paging::MapError::RangeOverflow,
+            ))?;
         if crate::mm::image_span_overlaps(self.kernel_phys, self.kernel_len, phys, len) {
             return Err(EarlyError::KernelImage(phys));
         }
@@ -146,7 +158,7 @@ impl EarlyMemory {
                 self,
                 VirtAddr(virt),
                 PhysAddr(phys),
-                len.next_multiple_of(PAGE_SIZE),
+                span,
                 MapFlags::KERNEL_DEVICE,
             )
             .map_err(EarlyError::MapFailed)?;

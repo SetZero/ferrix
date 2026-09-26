@@ -2274,6 +2274,30 @@ fn shared_object(map: &ferrix_vma::AddressSpace, id: u64) -> bool {
 // behaviour of anything above it.
 // ---------------------------------------------------------------------------
 
+/// What [`AddressSpace::map_device`] and [`AddressSpace::map_window`] refuse
+/// before looking at the map: a physical range that wraps the address space
+/// as a bad range, first, so that nothing after reasons about a wrapped end
+/// -- the image test clamps it, and would call a range clear of an image it
+/// had wrapped over; execute, or the kernel's image, as `Refused(refused_at)`;
+/// and a length or address that is not whole pages as a bad range.
+fn check_device_range(
+    physical: u64,
+    len: u64,
+    flags: VmaFlags,
+    refused_at: u64,
+) -> Result<(), SpaceError> {
+    if physical.checked_add(len).is_none() {
+        return Err(SpaceError::BadRange);
+    }
+    if flags.execute || mm::overlaps_image(physical, len) {
+        return Err(SpaceError::Refused(refused_at));
+    }
+    if len == 0 || !len.is_multiple_of(PAGE_SIZE) || !physical.is_multiple_of(PAGE_SIZE) {
+        return Err(SpaceError::BadRange);
+    }
+    Ok(())
+}
+
 impl AddressSpace {
     /// Place `len` bytes of device memory, starting at physical address
     /// `physical`, in this space: at `at` if one is given, otherwise wherever
@@ -2297,8 +2321,9 @@ impl AddressSpace {
     ///
     /// [`SpaceError::Refused`] if `flags` asks for execute, or the range
     /// touches the kernel's image;
-    /// [`SpaceError::BadRange`] for a length or physical address that is not
-    /// whole pages, or a range overlapping a mapping;
+    /// [`SpaceError::BadRange`] for a physical range that wraps the address
+    /// space, a length or physical address that is not whole pages, or a
+    /// range overlapping a mapping;
     /// [`SpaceError::NotUserRange`] outside the user half; and
     /// [`SpaceError::OutOfMemory`] if no gap that large is free.
     pub(crate) fn map_device(
@@ -2308,12 +2333,7 @@ impl AddressSpace {
         physical: u64,
         flags: VmaFlags,
     ) -> Result<u64, SpaceError> {
-        if flags.execute || mm::overlaps_image(physical, len) {
-            return Err(SpaceError::Refused(at.unwrap_or(0)));
-        }
-        if len == 0 || !len.is_multiple_of(PAGE_SIZE) || !physical.is_multiple_of(PAGE_SIZE) {
-            return Err(SpaceError::BadRange);
-        }
+        check_device_range(physical, len, flags, at.unwrap_or(0))?;
         let mut inner = self.inner.lock();
         let at = match at {
             Some(at) => at,
@@ -2373,12 +2393,7 @@ impl AddressSpace {
         cached: bool,
         keeper: Arc<dyn Any + Send + Sync>,
     ) -> Result<u64, SpaceError> {
-        if flags.execute || mm::overlaps_image(physical, len) {
-            return Err(SpaceError::Refused(0));
-        }
-        if len == 0 || !len.is_multiple_of(PAGE_SIZE) || !physical.is_multiple_of(PAGE_SIZE) {
-            return Err(SpaceError::BadRange);
-        }
+        check_device_range(physical, len, flags, 0)?;
         let mut inner = self.inner.lock();
         let at = match place {
             FilePlace::Fixed(at) => at,

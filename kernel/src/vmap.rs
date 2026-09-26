@@ -464,14 +464,21 @@ pub(crate) fn free(base: u64) -> Result<(), VmapError> {
 ///
 /// # Errors
 ///
-/// [`VmapError::KernelImage`] for a range that touches the kernel's own
-/// image, whose text and read-only data have no writable mapping anywhere
-/// (`mm::check_sealed_image`) and which holds no device's registers; and
-/// whatever [`reserve`] or the mapper refuses.
+/// [`VmapError::BadLength`] for a range whose end, rounded out to a page,
+/// is past the top of the address space -- `phys + len` wrapping, which
+/// would otherwise size the window from the wrapped sum, or stop the kernel
+/// on the overflow check; [`VmapError::KernelImage`] for a range that
+/// touches the kernel's own image, whose text and read-only data have no
+/// writable mapping anywhere (`mm::check_sealed_image`) and which holds no
+/// device's registers; and whatever [`reserve`] or the mapper refuses.
 pub(crate) fn map_device(phys: u64, len: u64) -> Result<u64, VmapError> {
     let offset = phys % PAGE_SIZE;
     let base = phys - offset;
-    let span = (len + offset).next_multiple_of(PAGE_SIZE);
+    let span = len
+        .checked_add(offset)
+        .and_then(|bytes| bytes.checked_next_multiple_of(PAGE_SIZE))
+        .filter(|&span| base.checked_add(span).is_some())
+        .ok_or(VmapError::BadLength(len))?;
     if mm::overlaps_image(base, span) {
         return Err(VmapError::KernelImage(phys));
     }
