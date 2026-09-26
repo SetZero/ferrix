@@ -74,8 +74,8 @@ None of it is pushed.
   machine-wide exposure line, since the one printed is the boot core's, and
   Linux's Spectre v2 safe list (A35/A53/A55), since the A55 is reported as
   `NOT covered` for v2.
-* **Running the phone with nobody there.** `$P/build-run.sh <name>` builds
-  `pixel7-next` into `$P/<name>/`, keeping the tree's diff and a debug
+* **Running the phone with nobody there.** `WT=<worktree> $P/build-run.sh <name>`
+  builds that worktree into `$P/<name>/`, keeping the tree's diff and a debug
   kernel. `$P/boot-run.sh <name>` boots it and saves the record. Neither
   overwrites an existing run. adb and `su` work while the phone is locked,
   so a run needs nobody at the phone, only the screen does.
