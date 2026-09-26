@@ -667,44 +667,135 @@ load file, add it to `REACHED`.
 
 ---
 
-## W-13 — Job quotas, or withdraw FRU_RSA.1
+## W-13 — Job quotas (FRU_RSA.1)
 
-**Closes:** F-35, and narrows V-05. **Size:** large; the plan is written.
+**Closes:** F-35, and narrows V-05. **Size:** large. **Chosen 2026-09-26:**
+build the quotas, not withdraw the claim. What follows is the design, argued
+before the code; §"As built" below is filled in as each part lands.
 
-The Security Target claims quotas of physical memory, kernel objects and CPU
-per job (FRU_RSA.1). `object/job.rs` bounds only the job tree's depth and
-descendants, and cgroupfs builds no controller. `docs/CGROUPS.md` already
-plans the three that would be the quotas, with their acceptance checks:
+`object/job.rs` bounds the job tree's depth and descendants and nothing else.
+`docs/CGROUPS.md` plans P1 (`pids`), M1 (`memory`) and S1 (`cpu.weight`) as
+cgroupfs controllers. FRU_RSA.1 is a claim about the *job*, in the core, so
+the charging goes in the core and cgroupfs is one view of it, as it is of the
+tree; a native supervisor sets the same limits through a job handle.
 
-* **P1, `pids`**: `pids.max` charged in `clone_with`, `process_create` and
-  `clone_thread` before the pid is allocated. Bounds the processes, and with
-  them the handle tables, a job can make. A fork bomb in a `pids.max 16`
-  cgroup fails `EAGAIN` at 16.
-* **M1, `memory`**: frames charged to the owning job on the user path
-  (`commit_page`, the copy-on-write and fork copies, the page-cache fill),
-  `memory.max`, and the scoped OOM kill. A process past `memory.max` is
-  killed and a sibling untouched. The kernel heap a job drives is not in M1;
-  charging it is the rest of V-05, and needs the allocation sites to know
-  their job.
-* **S1, `cpu.weight`**: a group entity per job in `libs/sched`'s EEVDF, so a
-  job's share no longer grows with its task count. Two busy cgroups at 1:3
-  within 10%.
+### The counters: one quota slot per job, in a table of atomics
 
-Each is a controller in `BUILT` (`kernel/src/fs/cgroupfs.rs`) and a boot
-check in the item that a job at its cap is refused or held while a sibling is
-not. Then the ST's §7 row for O.QUOTA cites those checks, §9.7 goes, and the
-analysis re-judges T.EXHAUST.
+Every job but the tree's root gets a **slot** (`kernel/src/object/quota.rs`):
+for each resource a use count, a limit and a count of refusals, plus the
+CPU weight and load, all atomics. A slot names its parent's by index.
 
-*Or*, if the quotas are not to be built for the rating: withdraw FRU_RSA.1
-and O.QUOTA from the ST, and state T.EXHAUST as a threat the TOE does not
-counter, exported to the integrator as an assumption of use (provision
-memory, and do not host a program that can be hostile to the others' share).
-That is honest and cheaper, and loses the objective.
+* **Why a table and not a field of `Job`.** A frame is freed under whatever
+  lock its last holder had -- a VMO's pages lock, an address space's, a page
+  table walk -- and has to find its charge there. An `Arc<Job>` cannot be
+  dropped under those locks (a drop frees memory and may be a job's last), and
+  a pointer needs `unsafe`. A `u32` index into a table that is never freed
+  needs neither, and fits the frame record's link field, which an allocated
+  frame does not use. The table grows by chunks of 256 slots behind `Once`,
+  on demand, from process context; nothing is ever taken out of it, so an
+  index read anywhere stays valid.
+* **Hierarchical and exact.** A charge of *n* walks from the job to the top
+  of its tree, and at each level adds *n* only if the level's use stays at or
+  under its limit (a compare-and-swap loop, so two charges racing for the last
+  unit cannot both win). A refusal at any level takes back what the levels
+  below it took, and counts a refusal there. An uncharge walks the same path
+  and subtracts. So a child's use is in every ancestor's count, a limit
+  anywhere above refuses, and use never exceeds a limit even for an instant.
+* **The root is not charged.** The tree's root has no slot, and a process in
+  it charges nothing: the default configuration pays one load of a word on
+  each path, and no shared cache line is written by every processor's page
+  faults. A limit is only ever below the root, as on Linux.
+* **A slot outlives its job for as long as anything is charged to it.** It
+  counts holds: its job, each frame tagged with it, each object token, each
+  child slot, each task that names it for the scheduler. When the last goes,
+  it is free for reuse and lets go of its parent. A frame charged to a job
+  that has since gone still uncharges exactly the levels it charged, because
+  the chain of parents is kept with the slots. Nothing is reparented, and
+  there is no zombie job: only its counters stay.
 
-**Verify:** the three boot checks, and `cat /sys/fs/cgroup/cgroup.controllers`
-listing `cpu memory pids`.
+### What each resource is, and where it is charged
 
----
+**Tasks** (`pids`, as Linux counts them): a process and each thread beside its
+first. Charged in the core's `Process::new` before the process is counted in
+its job, and by a thread's id allocation (`registry::allocate_thread`); let go
+at `Drop for Process` and at a thread's release. A process moved to another
+job takes its task count with it, without a limit check, as Linux's
+`pids_can_attach` does. Refused: `EAGAIN` from `fork` and `clone`, as Linux
+answers, and `SHOULD_WAIT` from native `process_create`.
+
+**Memory** (`memory`, in pages): every frame a program's memory is built of,
+charged to the job of the task that caused it -- Linux's first-touch rule --
+and uncharged when the frame goes back to the allocator, wherever that is.
+Charged: a fault's commit of an anonymous or file page, a copy-on-write copy,
+`fork`'s copy of a held page, a `write` or native `vmo_write` that commits,
+the page cache's fill from a disk, and the page tables `map_in` builds for a
+user space. The frame record keeps the slot index, so the uncharge needs no
+lookup and no lock: it is in `mm::release_frame` and `mm::deallocate_frames`,
+under every free path at once. Charges do not move with a process (cgroup
+v2's rule). A frame shared by `fork` is charged once, to whoever allocated it.
+Refused: the allocation fails as if memory had run out, which F-23 made an
+answer everywhere -- `ENOMEM` from a call, the fault's signal from a fault,
+`NO_MEMORY` natively. *Not charged*, and argued: the kernel heap (V-05's
+residual; bounded per job below), kernel stacks (one per task, so bounded by
+the task limit), IOMMU tables and device memory (a driver's, from a device
+handle only a driver holds).
+
+**Kernel objects**: the objects the native ABI names and a program can
+multiply without a handle to show for it -- a VMO, each end of a channel, a
+port, a job, a pin. Charged to the running task's job when the object is
+made, held by a token inside it, and uncharged when the object is dropped,
+however long after and wherever it went (a channel end parked inside another
+channel's queue is still counted). The handle limit alone does not bound
+them: a chain of channels, each holding the last one's end in its queue,
+keeps any number alive with one handle. Refused: `NO_MEMORY` and `ENOMEM`,
+as Linux answers a kernel-memory charge. With the task limit and the per
+process limits already there (4,096 handles, `RLIMIT_NOFILE`), this bounds
+the heap a job's native objects hold. A page-cache object is the file's, not
+a program's, and is not charged as an object; its pages are charged as memory.
+
+**CPU**: a weight per job (`cpu.weight`, 1 to 10,000, default 100), so that a
+job's share no longer grows with its runnable tasks. Not a group entity in
+`libs/sched`'s EEVDF -- S1's 13 points, the largest change to the scheduler
+since EEVDF -- but the same arithmetic done on each task's weight: a job's
+*load* is the sum of its runnable tasks' weights and of its busy children's
+weights, and a task's effective weight is its own weight times, at each level
+from its job up to the root's child, that job's weight over that job's load.
+A task in the root job keeps its weight exactly, so nothing changes until a
+job exists; *n* runnable tasks in one job share one task's weight. That is
+Linux's own approximation of a group's per-processor share
+(`calc_group_shares`: the group's weight times this processor's part of its
+load), without the per-processor refinement. The load is kept as a task
+becomes runnable and stops (one atomic add, and a walk up only when a job
+turns busy or idle); the weight is recomputed at enqueue and at each tick of
+the running task. A task follows its process to a new job at its next trap or
+system call. What it is not: a bandwidth cap (`cpu.max`, S2), and a bound on
+the time a job's tasks spend in the kernel beyond EEVDF's own.
+
+### Interfaces
+
+* Native: `job_set_limit(job, resource, value)` and `job_get_quota(job,
+  resource, out)`, needing `MANAGE` and `WAIT`; resources memory (bytes),
+  objects, tasks and CPU weight. A limit binds the job and everything under
+  it, so a supervisor bounds an untrusted program by a job *above* any it
+  hands the program.
+* cgroupfs: `BUILT` holds `cpu`, `memory` and `pids`. Each child cgroup whose
+  parent enables them has `pids.max`, `pids.current`, `pids.events`,
+  `memory.max`, `memory.current`, `memory.events` and `cpu.weight`, over the
+  same slot. `memory` is a domain controller, so the no-internal-process rule
+  becomes reachable.
+
+### Evidence
+
+Boot checks, under a `quota` line on every architecture: each limit refuses at
+exactly its value; a parent's limit refuses a child's charge; a job filled to
+its limits and emptied reads zero everywhere and frees its slot; a fork bomb
+in a limited job is refused at its limit while a sibling can still make
+processes; a memory hog in a limited job is refused while a sibling job keeps
+committing; eight spinning tasks in one job and one in another share a
+processor about evenly. Each with a negative control. A `test-vfs` command
+sets `pids.max` to 10 and forks until refused. Cost: page fault, fork and a
+null system call timed under KVM before and after, in the root job and in a
+limited one.
 
 ## W-14 — Page tables go back after their shootdown
 
