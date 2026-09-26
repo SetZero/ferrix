@@ -45,7 +45,7 @@ what is left:
 | What running it found missing: `CLOCK_THREAD_CPUTIME_ID` and `CLOCK_PROCESS_CPUTIME_ID`, `clock_getres`, `creat`, and `/proc/<pid>/task`'s link count | **done** 2026-09-24 (§8) |
 | Chrome in a window on the compositor, a Wayland client drawing in software | **done** 2026-09-24, x86-64, `cargo xtask test-chrome-window`, `run-compositor --chrome` (§9) |
 | The zygote, which could not learn its children's pids until `SCM_CREDENTIALS` carried them | **done** 2026-09-26: `test-chrome` (glibc and ferrousli) and `test-chrome-window` run without `--no-zygote` (§8) |
-| Chrome's speed: a futex wait woken every 5 ms, the HPET as the clock under KVM, and `munmap` walking every page of a reservation | **done** 2026-09-26: idle 443% of a processor → 35%, a turning box 1.5 frames a second → 58.6; `cargo xtask bench-chrome` (§9) |
+| Chrome's speed: a futex wait woken every 5 ms, the HPET as the clock under KVM, `munmap` walking every page of a reservation, a shootdown for every write to a page after a fork, and the virtio-gpu doorbell held by QEMU | **done** 2026-09-26: idle 443% of a processor → 15%, the machine 96% busy → 6%, a turning box 1.5 frames a second → 60.8; `cargo xtask bench-chrome` (§9) |
 | Chrome on the desktop's persistent btrfs root | **done** 2026-09-26: `/dev/shm` was not mounted there; `cargo xtask test-chrome-window --btrfs-root` (§9) |
 | Chrome on ferrousli's `libc.so.6` in glibc's place | **done** 2026-09-26, x86-64, headless, `cargo xtask test-chrome --interpreter ferrousli --library ferrousli` (§8); the window build on it is not tried |
 | Chrome on the STM32MP157D-DK1: an armhf Chromium, an SDMMC driver, page-cache eviction | not started, ≈ 45–55 points (§10) |
@@ -791,6 +791,41 @@ With all three:
 
 The screen refreshes at 60 Hz, so an animation at 58.6 frames a second is
 all of them.
+
+Two more followed the same night, both found the same way. The first was
+a profile whose kernel samples were tagged with the process they ran
+for, and shootdowns counted by the syscall in progress. The second was
+the driver's own user samples.
+
+- **Every write to a page after a `fork` was a TLB shootdown.**
+  `AddressSpace::with_page` carries every copy to a program's memory. It
+  faulted the page in first and looked second. In a copy-on-write region
+  (every region of a process that has ever forked), a write fault takes
+  the page down and puts it back, even when the page is already this
+  process's alone and writable. Chrome's browser process forks. Every
+  `clock_gettime` it made, forty thousand a second, wrote its timespec
+  through a shootdown: thirty thousand shootdowns a second, most sent to
+  another processor and waited for. `with_page` now looks first and
+  faults only when it must. Chrome while scrolling went from 64% to 28%.
+- **The GPU driver was billed for QEMU's work.** QEMU's virtio-gpu
+  devices default `ioeventfd` off, unlike its other virtio devices. The
+  driver's doorbell was then an exit that held the guest's processor
+  while QEMU handled the queue, the frame's GL included. Nearly all the
+  driver's samples fell on the instruction after the doorbell's store.
+  xtask now gives every card `ioeventfd=on`. The driver went from 12–20%
+  of a processor to 1%.
+
+| phase | Chrome's processor time | machine busy | frames a second | ms a frame |
+|---|---|---|---|---|
+| left alone | 15% | 6% | 60.8 | 4.0 |
+| scrolled | 29% | 10% | 60.8 | 5.7 |
+| pointed at | 26% | 10% | 60.4 | 4.3 |
+
+What is left is Chrome's own work and its forty thousand `clock_gettime`
+calls a second, which a vDSO would answer without entering the kernel.
+Memory has not moved: 521 MiB is in use, and the most of that is page
+cache for Chrome's 294 MB program. `/proc/meminfo` counts the cache as
+used, because it reports `Cached` as 0.
 
 ---
 
