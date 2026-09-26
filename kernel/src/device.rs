@@ -254,7 +254,7 @@ impl fmt::Display for Location {
 }
 
 /// Physical memory no aperture may overlap, as `start..end` ranges.
-#[derive(Clone, Debug, Default)]
+#[derive(Debug, Default)]
 pub(crate) struct Reserved {
     /// The ranges, unsorted: there are a few dozen, and they are searched
     /// once per aperture at boot.
