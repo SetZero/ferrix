@@ -78,6 +78,7 @@ members = [
     # a pure function lives in `libs/native`.
     "user/rt",
     "user/channel-echo",
+    "user/pong",
     "user/blk",
     "user/net",
     "user/gpu",

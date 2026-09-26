@@ -386,6 +386,14 @@ name = "ferrix-pci"
 version = "0.1.0"
 
 [[package]]
+name = "ferrix-pong"
+version = "0.1.0"
+dependencies = [
+ "ferrix-native-abi",
+ "ferrix-rt",
+]
+
+[[package]]
 name = "ferrix-procfs"
 version = "0.1.0"
 

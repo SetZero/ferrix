@@ -1,0 +1,21 @@
+[package]
+name = "ferrix-pong"
+description = "A native test service for the init's directory: READY, then an answer down each channel CONNECT hands it"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "pong"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+ferrix-rt.workspace = true
+ferrix-native-abi.workspace = true
+
+[lints]
+workspace = true
