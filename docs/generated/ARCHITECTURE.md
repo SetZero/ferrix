@@ -102,14 +102,14 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixAssurance` | `11-assurance.sysml` | docs/RELIABILITY.md and docs/ASSEMBLY.md: the quality gates, what each one verifies, and what the tests can actually reach. The gates cargo xtask check runs are in CI. Of the xtask boot gates, CI runs test-boot and test-rustc; the ones that need a binary the repository does not carry, a disk judged on the host or a screendump run in the landing gates of docs/BACKLOG.md instead (docs/ROADMAP.md, Continuously). |
 | `FerrixViews` | `12-views.sysml` | How to read the one model as two: what runs today, and what the roadmap still owes. The filters key on the lifecycle keywords every element carries. |
 
-13 files, 16 packages, 1670 elements, 198 relations. Model digest `76da9eb2699b4fda`.
+13 files, 16 packages, 1674 elements, 199 relations. Model digest `315a003addb8dbca`.
 
 | Maturity | Elements | Meaning |
 | --- | ---: | --- |
 | `#implemented` | 268 | The code exists and the QEMU boot test exercises it on every architecture it applies to. |
-| `#inProgress` | 9 | The owning stage has started; part of the element runs. |
+| `#inProgress` | 10 | The owning stage has started; part of the element runs. |
 | `#writtenAhead` | 3 | A libs/ crate exists and passes its host tests, but nothing in kernel/ calls it yet. |
-| `#planned` | 39 | Only the design exists, in docs/ARCHITECTURE.md. Nothing stands in for it. |
+| `#planned` | 38 | Only the design exists, in docs/ARCHITECTURE.md. Nothing stands in for it. |
 | `@deferred` | 20 | Work a finished stage explicitly left behind, carrying the reason that stage gave. |
 
 An element carries its own keyword or none; a keyword is never inherited from a parent, so a `#planned` field inside an `#implemented` part still reads as planned.
@@ -347,7 +347,7 @@ initramfs : Initramfs  [implemented]
   vport : UserBinary
   init : UserBinary
 userland : Userland  [in progress]
-  init : UserProcess  [planned]
+  init : UserProcess  [in progress]
   shell : UserProcess  [implemented]
   devmgr : UserProcess  [implemented]
   drivers : DriverProcess  [implemented]
@@ -3202,13 +3202,13 @@ Most of it arrived under other stages' names: /bin is the uutils family and zinc
 
 Job control landed on 2026-09-19, in the shell rather than the kernel: every call it is made of -- setpgid, TIOCSPGRP, TIOCSCTTY, the line discipline's SIGTSTP, wait4's WUNTRACED -- had been answered since stage 7 with nothing using them. zinc/src/jobs.rs puts a pipeline in one process group, hands the terminal to the foreground job and takes it back, and keeps the table jobs, fg, bg, wait, disown and kill %1 name. Verified by jobsSession and by zinc's pty gate.
 
-Left: a real init. The kernel starts the shell itself as pid 1, so nothing in user space mounts the pseudo-filesystems, reaps what a session orphans, gives a shell a session and a controlling terminal of its own, respawns it, or brings the machine down. That is also what a second tty would need.
+A working init landed on 2026-09-26 (L1 to L4 of docs/INIT.md): /sbin/init over libs/svc's manager, a cgroup per service, a getty on the console, shutdown by SIGTERM. Verified by initSession. Left: the images boot it (L10), and svc, slices, readiness, the directory and sockets between (L5 to L9).
 
-Designed on 2026-09-23 in docs/INIT.md: pid 1 and a service manager, systemd-shaped units, a cgroup per service, a pure manager in libs/svc behind backends a microkernel could serve. 67 points to L10; the stage 13 cgroups its first boot needs landed on 2026-09-24.
+Designed on 2026-09-23 in docs/INIT.md: pid 1 and a service manager, systemd-shaped units, a cgroup per service, a pure manager in libs/svc behind backends a microkernel could serve. 67 points to L10, 26 of them spent; the stage 13 cgroups its first boot needs landed on 2026-09-24.
 
 **Allocated to: **`ferrix.userland`
 
-**Verified by: **`FerrixRoadmap::JobsSession`
+**Verified by: **`FerrixRoadmap::InitSession` and `FerrixRoadmap::JobsSession`
 
 ### S16 — Stage 16 rustc
 
@@ -3534,9 +3534,10 @@ flowchart LR
   n9_FerrixRoadmap_BoardBoot["Board boot"]
   n10_FerrixRoadmap_JobsSession["Jobs session"]
   n11_FerrixRoadmap_stage15Userland["S15  stage15Userland"]
-  n12_FerrixRoadmap_RustcTest["Rustc test"]
-  n13_FerrixRequirements_hostsRustc["G  hostsRustc"]
-  n14_FerrixRoadmap_stage16Rustc["S16  stage16Rustc"]
+  n12_FerrixRoadmap_InitSession["Init session"]
+  n13_FerrixRoadmap_RustcTest["Rustc test"]
+  n14_FerrixRequirements_hostsRustc["G  hostsRustc"]
+  n15_FerrixRoadmap_stage16Rustc["S16  stage16Rustc"]
   n0_FerrixRoadmap_bootX86 -. "verified by" .-> n1_FerrixRoadmap_stage1Boot
   n0_FerrixRoadmap_bootX86 -. "verified by" .-> n2_FerrixRoadmap_stage2Memory
   n0_FerrixRoadmap_bootX86 -. "verified by" .-> n3_FerrixRoadmap_stage3TrapsInterruptsTime
@@ -3555,11 +3556,12 @@ flowchart LR
   n7_FerrixRoadmap_bootArmv7a -. "verified by" .-> n8_FerrixRoadmap_armv7aPort
   n9_FerrixRoadmap_BoardBoot -. "verified by" .-> n8_FerrixRoadmap_armv7aPort
   n10_FerrixRoadmap_JobsSession -. "verified by" .-> n11_FerrixRoadmap_stage15Userland
-  n12_FerrixRoadmap_RustcTest -. "verified by" .-> n13_FerrixRequirements_hostsRustc
-  n12_FerrixRoadmap_RustcTest -. "verified by" .-> n14_FerrixRoadmap_stage16Rustc
+  n12_FerrixRoadmap_InitSession -. "verified by" .-> n11_FerrixRoadmap_stage15Userland
+  n13_FerrixRoadmap_RustcTest -. "verified by" .-> n14_FerrixRequirements_hostsRustc
+  n13_FerrixRoadmap_RustcTest -. "verified by" .-> n15_FerrixRoadmap_stage16Rustc
   classDef implemented fill:#dceae2,stroke:#2c6e4e,color:#16191d
   classDef inProgress fill:#dae5f0,stroke:#2a5f8f,color:#16191d
-  class n1_FerrixRoadmap_stage1Boot,n2_FerrixRoadmap_stage2Memory,n3_FerrixRoadmap_stage3TrapsInterruptsTime,n4_FerrixRoadmap_stage4Smp,n5_FerrixRoadmap_stage5Scheduler,n8_FerrixRoadmap_armv7aPort,n12_FerrixRoadmap_RustcTest,n14_FerrixRoadmap_stage16Rustc implemented
+  class n1_FerrixRoadmap_stage1Boot,n2_FerrixRoadmap_stage2Memory,n3_FerrixRoadmap_stage3TrapsInterruptsTime,n4_FerrixRoadmap_stage4Smp,n5_FerrixRoadmap_stage5Scheduler,n8_FerrixRoadmap_armv7aPort,n13_FerrixRoadmap_RustcTest,n15_FerrixRoadmap_stage16Rustc implemented
   class n11_FerrixRoadmap_stage15Userland inProgress
 ```
 
@@ -3632,6 +3634,7 @@ flowchart LR
 | `armv7aPort` | `FerrixRoadmap::bootArmv7a` |
 | `armv7aPort` | `FerrixRoadmap::BoardBoot` |
 | `stage15Userland` | `FerrixRoadmap::JobsSession` |
+| `stage15Userland` | `FerrixRoadmap::InitSession` |
 | `hostsRustc` | `FerrixRoadmap::RustcTest` |
 | `stage16Rustc` | `FerrixRoadmap::RustcTest` |
 | `aGateNeedsNoArming` | `FerrixAssurance::hooksArmed` |
@@ -3645,7 +3648,7 @@ flowchart LR
 | `everyStageEndsInSomethingThatRuns` | `FerrixAssurance::bootTest` |
 | `provedOnEveryBoot` | `FerrixAssurance::bootTest` |
 
-30 edges — each reads “requirement is verified by element”.
+31 edges — each reads “requirement is verified by element”.
 
 ### Coverage
 
@@ -3916,7 +3919,7 @@ Every element carrying @stage, which names the roadmap stage that owns it. An el
 | 14 | `FerrixScheduling::Scheduler::edf` | part | `#planned` |
 | 14 | `FerrixScheduling::Scheduler::switchDomainMode` | action | `#planned` |
 | 14 | `FerrixAssurance::CyclicTest` | verification | `#planned` |
-| 15 | `FerrixStructure::Userland::init` | part | `#planned` |
+| 15 | `FerrixStructure::Userland::init` | part | `#inProgress` |
 | 15 | `FerrixObjects::PosixIpc` | part | `#implemented` |
 | 17 | `FerrixStructure::Workspace::virtioGpu` | part | `#implemented` |
 | 17 | `FerrixStructure::Workspace::virtioInput` | part | `#implemented` |
@@ -3962,6 +3965,6 @@ Every diagram in this document, drawn from the model by scripts/sysml/diagrams.p
 | 17 | The roadmap, stage by stage | 28 nodes, 39 edges | `10-roadmap.sysml` | [roadmap-stages.svg](diagrams/roadmap-stages.svg) |
 | 18 | The gates and the rules they uphold | 16 nodes, 10 edges | `11-assurance.sysml` | [gates-and-rules.svg](diagrams/gates-and-rules.svg) |
 | 19 | Stages and the parts that answer them | 46 nodes, 31 edges | `10-roadmap.sysml` | [stages-and-parts.svg](diagrams/stages-and-parts.svg) |
-| 20 | The boot tests and the stages they verify | 15 nodes, 20 edges | `10-roadmap.sysml` | [tests-and-stages.svg](diagrams/tests-and-stages.svg) |
+| 20 | The boot tests and the stages they verify | 16 nodes, 21 edges | `10-roadmap.sysml` | [tests-and-stages.svg](diagrams/tests-and-stages.svg) |
 
 20 figures.

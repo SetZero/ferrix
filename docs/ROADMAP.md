@@ -74,11 +74,11 @@ made passes the boot test.
 Dynamic linking is done: Debian's glibc busybox runs on its own `ld-linux`,
 and on ferrousli's loader and `libc.so.6` in glibc's place, on all three
 architectures, since ferrousli itself was ported to AArch64 and ARMv7-A on
-2026-09-23. Stage 15 has job control and lacks a real init;
-one is designed in `docs/INIT.md`, and it waits on stage 13's cgroups, which
-the customer put first on 2026-09-23. The kernel's half of starting one is
-in: `ferrix.init=` names the file pid 1 is started from, and `reboot(2)`
-commits the disks first.
+2026-09-23. Stage 15 has job control and, since 2026-09-26, a real init:
+`/sbin/init` runs services in cgroups of their own over `libs/svc`'s manager,
+gives the console a getty, and powers the machine off, on all three
+architectures (`cargo xtask test-init`). The images do not boot it yet; that
+is L10 of `docs/INIT.md`.
 Chrome runs on Ferrix (2026-09-24): Google's prebuilt Chrome for Testing,
 headless and in a window on the compositor, on x86-64, and headless on
 ferrousli's loader and C library in glibc's place (2026-09-26) (*Chrome*,
@@ -152,7 +152,7 @@ sizes them.
 | Stage 22, Steam: the parts with a first guess (bubblewrap's rest 13, sound 30, Venus 8; glibc's names are dynamic linking's 13 and XWayland stage 19's, both counted above) | 51 | not started |
 | Stage 22, Steam: the 32-bit x86 ABI and what the runtime and Proton find missing | unsized, ≈ 100 as a guess | not started |
 | Stage 14, real-time domains | *month* ≈ 40 | not started |
-| Stage 15, a real userland | *week* ≈ 20, of which job control is spent; most of the rest landed as zinc and uutils, and what is left is an init, sized at 67 points in `docs/INIT.md` §13, of which L3's 3, L1's 5 and L2's 8 are spent, and 18 later | partially complete: init and gettys remain, designed; the kernel's `ferrix.init=` and a committing `reboot(2)` landed 2026-09-24 (L3), and so did `libs/svc`, the manager's pure core (L1, L2) and the stage 13 cgroups its first boot needs (G1 to G4) |
+| Stage 15, a real userland | *week* ≈ 20, of which job control is spent; most of the rest landed as zinc and uutils, and what is left is an init, sized at 67 points in `docs/INIT.md` §13, of which L3's 3, L1's 5, L2's 8 and L4's 10 are spent, and 18 later | partially complete: a working init (L1 to L4) landed by 2026-09-26: `/sbin/init`, `getty` and the generator over `libs/svc`, gated by `test-init` on all three architectures; the images still start their program as pid 1 until L10, and `svc`, slices, readiness and the directory are L5 to L9 |
 | ~~Stage 16, `rustc`~~ *exit met 2026-09-22* | ~~*the goal* ≈ 40~~ 8 spent | done |
 | Stage 20, self-hosting | *longer*, unsized | in progress: the x86-64 image builds on Ferrix and boots (2026-09-23); every build of the matrix recorded, Ferrix making them stops on FX-0001 (2026-09-24) |
 | Stage 21, bare metal and a GPU of Ferrix's own | over 100, unsized | planned when bare-metal work is requested |
@@ -4477,13 +4477,33 @@ drives the manager with events in any order. The core never holds a
 handle: every action names a `UnitId`, a `GroupPath`, a `Token` or a
 `ClientId`, for the init program's backends to map (`docs/INIT.md` §16).
 
-**Still to do:** a real init. The kernel starts the shell itself as pid 1
-(`kernel/src/init.rs`) in every image but one that names another, so nothing
-in user space mounts `/proc` and `/dev`, reaps what a session orphans, gives a
-shell a session and a controlling terminal of its own, respawns one that dies,
-or brings the machine down. That is the rest of "a working init", and the
-other half of the word *ttys*: one console is one terminal, and a getty per
-terminal is what makes more of them.
+**Done -- L4, the init program (2026-09-26, 10 points).** `init/` is a
+workspace beside zinc's, built the same way for all three architectures.
+`/sbin/init` is pid 1 around `libs/svc`'s manager: it mounts `/run` and
+cgroup2, moves itself into `init.scope`, runs the generators, and waits in
+one `epoll_wait` on a signalfd, each child's exec report and each cgroup's
+`cgroup.events`, turning what it finds into the manager's events and its
+actions into system calls. A service starts in its own cgroup by
+`clone3(CLONE_INTO_CGROUP)` and leads its own session; it is stopped by
+`KillMode=` and counted stopped when its cgroup is empty; `SIGTERM` to pid 1
+stops everything in reverse order and powers off through `reboot(2)`.
+`/sbin/getty` gives a terminal a session and a login shell, and the getty
+generator links one into `multi-user.target` for the console. The kernel's
+`/proc/<pid>/stat` now reports a process's group, session, controlling
+terminal and foreground group, which it had written as the pid, 0 and -1.
+`cargo xtask test-init` is `docs/INIT.md` §15's stages one and two: it types
+at the getty's shell and requires its own session and terminal from
+`/proc/self/stat`, a failing service's restart budget, a daemon's grandchild
+in its service's `cgroup.procs` and gone when the service stops, the
+shutdown order, and a clean `btrfs check` afterwards. Both negative controls
+fired. `docs/INIT.md` §16 has the details.
+
+**Still to do:** the rest of the init. L1 to L4 are what `docs/INIT.md` §13
+calls a working init, but no image boots it yet: `cargo xtask run` and
+every gate but `test-init` still start a program as pid 1 themselves, until
+L10 moves them over. Between are `svc` and the control socket (L6), slices,
+scopes and the resource keys (L5), `notify` readiness and `forking` (L7),
+the directory and native services (L8), and `.socket` units (L9).
 
 **Designed (2026-09-23): `docs/INIT.md`.** `/sbin/init` is pid 1 and a
 service manager in one program. Its units are in systemd's syntax, with
@@ -4495,17 +4515,17 @@ native services between them.
 
 Init waited on stage 13's cgroups, which the customer put first; what its
 first boot needs of them (C1 to C5 and C7) landed on 2026-09-24. Its landings
-come to 67 points up to hyprix no longer being pid 1, 16 of them spent on
-L3, L1 and L2: six kernel items of 11 points besides stage 13, two of them
+come to 67 points up to hyprix no longer being pid 1, 26 of them spent on
+L3, L1, L2 and L4: six kernel items of 11 points besides stage 13, two of them
 (K0, K7) built, and `cargo xtask test-init` growing a stage per landing. Its
 first two landings, the unit parser and the dependency engine, were
 host-only and were built while stage 13 was.
 
-**Where it stands.** The pure core is done. The next landing is L4, the
-init program: pid 1, its event loop and the Linux backends over
-`libs/svc`, `getty` and the generator, gated by `cargo xtask test-init`.
-What it needs of stage 13, `CLONE_INTO_CGROUP` (G4) included, landed on
-2026-09-24.
+**Where it stands.** A working init is in (L1 to L4), gated by
+`cargo xtask test-init` on all three architectures. The next landing is
+L6, `svc` and the control socket, which makes it something a person drives;
+L5, L7 and L9 can go beside it. The stage's exit has been met by `test-jobs`
+since 2026-09-19; the images still start their own pid 1 until L10.
 
 `test-jobs` is x86-64 only, because `sleep` is uutils' and uutils is built
 for x86-64 alone (`docs/UUTILS.md` D3).

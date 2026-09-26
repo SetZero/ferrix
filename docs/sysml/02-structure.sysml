@@ -364,17 +364,20 @@ package FerrixStructure {
         doc /* Linux binaries speaking the Linux ABI -- zinc, the uutils
              * family and C programs ported over ferrousli, somebody else's
              * busybox, rustc -- and devmgr and its drivers, native programs
-             * that speak the native ABI as well. Stage 15 owes a real init. */
+             * that speak the native ABI as well, and /sbin/init, which
+             * test-init alone boots so far. */
         port posix : ~LinuxSyscallPort;
         port native : ~NativeSyscallPort;
 
-        #planned part init : UserProcess {
+        #inProgress part init : UserProcess {
             @stage { number = 15; }
-            doc /* There is none yet: the kernel starts the shell itself as
-                 * pid 1, so nothing in user space mounts the
-                 * pseudo-filesystems, reaps what a session orphans, gives a
-                 * shell a session and a controlling terminal of its own,
-                 * respawns it or brings the machine down. */
+            doc /* /sbin/init (init/, docs/INIT.md), since 2026-09-26: pid 1
+                 * around libs/svc's manager. It mounts /run and cgroup2, runs
+                 * each service in a cgroup of its own from clone3, reaps,
+                 * restarts, gives the console a getty and a shell with a
+                 * session of its own, and powers off on SIGTERM. Only
+                 * cargo xtask test-init boots it; the images still start
+                 * their program as pid 1 until L10. */
         }
         #implemented part shell : UserProcess {
             doc /* busybox sh was the first foreign binary to run on Ferrix:

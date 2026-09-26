@@ -798,7 +798,7 @@ cgroup half is what §0 asks for first.
 | L1 | `libs/svc`: the unit-file parser, drop-ins, templates, the model; a fuzzer | | host tests, Miri, fuzz | 5 |
 | L2 | `libs/svc`: the graph, transactions, operations, the slice tree, the restart policy, `step` | L1 | host tests replaying event scripts | 8 |
 | L3 | K0, K7. **Done 2026-09-24** (§16) | | `test-boot`, `test-shell` | 3 |
-| L4 | `init` minimal: pid 1, reaping, `/run` and cgroupfs, `init.scope`, a cgroup per service, `simple`/`exec`/`oneshot`, `KillMode=`, restart, shutdown by `cgroup.kill`; `getty` and the generator | L2, L3, C1-C5 | `test-init` stages one and two (§15) | 10 |
+| L4 | `init` minimal: pid 1, reaping, `/run` and cgroupfs, `init.scope`, a cgroup per service, `simple`/`exec`/`oneshot`, `KillMode=`, restart, shutdown by `cgroup.kill`; `getty` and the generator. **Done 2026-09-26** (§16) | L2, L3, C1-C5 | `test-init` stages one and two (§15) | 10 |
 | L5 | Slices and scopes; the resource keys; `OOMPolicy=`; `Delegate=` | L4, C6, C7 | `test-init` stage three | 6 |
 | L6 | `svc` and the control socket; `log` output; `set-property`, `top` | L4 | `test-init` stage four | 5 |
 | L7 | `notify` readiness; `forking` | L4 | host tests + `test-init` | 3 |
@@ -848,7 +848,8 @@ landing adds a stage, and each stage requires its lines:
    getty on the console gives a zinc prompt whose session and controlling
    terminal are its own, read from `/proc/self/stat`, not taken from the
    transcript. A test service that exits 1 is restarted by its budget and then
-   reported `failed`. `svc poweroff` from the prompt ends with every unit
+   reported `failed`. `svc poweroff` (`kill -TERM 1` until L6 builds `svc`)
+   from the prompt ends with every unit
    stopped in reverse order, `sync`, and a `btrfs check` of the volume that
    finds it clean.
 2. **Groups** (L4). A service forks twice and its main process exits. The
@@ -871,16 +872,17 @@ on the forking service, which must leave the grandchild alive and fail that
 stage's check. `test-jobs` moves onto a getty under init, and then it tests
 the system people will actually use.
 
-## 16. Where it stands (2026-09-24)
+## 16. Where it stands (2026-09-26)
 
 | | State | On `main` as |
 |---|---|---|
 | L3 | done, 2026-09-24 | "Start pid 1 from the file ferrix.init= names, and commit the disks in reboot(2)" |
 | L1 | done, 2026-09-24 | "Read unit files in systemd's syntax" |
 | L2 | done, 2026-09-24 | "Run units as one state machine of events and actions" |
-| L4 to L13 | not started | |
+| L4 | done, 2026-09-26 | "Add /sbin/init, getty and the getty generator around libs/svc's manager" |
+| L5 to L13 | not started | |
 
-51 of L1 to L10's 67 points are left.
+41 of L1 to L10's 67 points are left.
 
 **L1, as built (5 points).** `libs/svc` is on `main`: `no_std` with
 `alloc`, `forbid(unsafe_code)`, 52 host tests, a Miri step in CI and in
@@ -1064,81 +1066,124 @@ did not survive poweroff -f -n"), and no `ferrix.onexit=panic` ("did not
 panic with FX-1501"). Under zinc only the first boot runs, because zinc
 cannot make the call.
 
-**What the next session does first.** L4. What it needs of stage 13, C1
-to C5, is in since G4 landed on 2026-09-24 (`docs/CGROUPS.md` §7.1), and
-L2 has given it the manager. `cargo xtask test-init` builds an
-image with no program in the kernel and `/sbin/init` in the initramfs, and
-puts `qemu::init_option("/sbin/init")` into `CMDLINE.TXT`, as
-`init_file::Parts::image` does. It judges the kernel's `init     …` lines
-as `init_file` does.
+**L4, as built (10 points).** `init/` is a workspace of its own beside
+zinc's and built the same way, a static musl program linked by rust-lld on
+any host, for all three architectures: `/sbin/init`, `/sbin/getty` and
+`/lib/ferrix/generators/getty-generator`, with the units of `init/units` in
+`/lib/ferrix/units`. `cargo xtask check` runs its formatting, clippy and 8
+host tests by default, as it runs the compositor's.
 
-**L4, what was found before it was built (2026-09-24).** L4 was designed
-against L2's manager and stopped at the day's wind-down with no code
-written. What its design found in `main`, each read from the code:
+* **The loop** is §9's, over L2's manager. Init ignores every signal but
+  `SIGCHLD`, `SIGTERM` and `SIGINT`, which it blocks and reads through a
+  signalfd, and becomes a subreaper. It mounts a tmpfs on `/run` and cgroup2
+  on `/sys/fs/cgroup`, moves itself into `init.scope`, enables the
+  controllers the root offers, runs each generator with a deadline of 5 s,
+  reads the three directories into a `Source` and steps `Boot`. Then it waits
+  in one `epoll_wait` whose timeout is `deadline()`, and turns each wake into
+  events in the order the manager wants them: exec reports first, then every
+  child reaped, then every cgroup that emptied, then the timer. If cgroup2
+  cannot be mounted, init says why and becomes `/bin/sh -i` on the console.
+* **Spawn** is §5.2. Everything the child needs is worked out before
+  `clone3(CLONE_INTO_CGROUP)`: the program on the search path, `$VAR`
+  expanded as systemd expands it, `User=` and `Group=` from `/etc/passwd`
+  and `/etc/group`, `EnvironmentFile=` read. A failure there is
+  `SpawnFailed`, and the child allocates nothing. The child unblocks its
+  signals, resets every disposition, leads a session of its own as under
+  systemd, takes its terminal for a `tty` stream, sets up its three streams,
+  changes directory and user, and calls `execve`. A pipe closed on exec says
+  how that went: end of file is `Execed`; otherwise the child writes the
+  step and its errno, init says so in a line, and the child ends with
+  systemd's exit code for the step (203 for `execve`). Output to `log` goes
+  to the console until L6 gives the log a pipe.
+* **`Emptied`.** Init believes a cgroup populated from the spawn or move
+  into it, as the manager does, and sends `Emptied` when a cgroup believed
+  populated reads `populated 0`. It reads every cgroup's `cgroup.events`
+  after every wake, not only those that raised `EPOLLPRI`. The read at offset
+  0 is what clears the event, and a process spawned and gone between two
+  waits leaves no event behind.
+* **`Power`** is §8.2's steps 2 and 3: `sync`, `/` and `/data` remounted
+  read-only (refused with `EINVAL` today, and said), the rest unmounted in
+  reverse order, and `reboot(2)`, which commits both disks anyway (K7).
+  `SIGTERM` or `SIGINT` to pid 1 is `Request::Poweroff` from a client that
+  gets no answer. `Route`, `Refuse` and `Reply` wait for L6 and L8.
+* **`getty TTY`** calls `setsid` (an `EPERM` is ignored), opens the
+  terminal, takes it with `TIOCSCTTY` 1, puts it on descriptors 0, 1 and 2,
+  prints `Ferrix <host> on <tty>`, and becomes `$SHELL`, `/bin/sh` by
+  default, as a login shell. There is no `login` yet. `getty-generator`
+  links `getty@<name>.service` into `multi-user.target.wants` for each
+  `console=` on the command line, and for `console` when there is none,
+  which is always today: there is no `/proc/cmdline`.
+* **The units** are the targets, `getty@.service` (`Type=exec`,
+  `Restart=always`, `SendSIGHUP=yes`, `TimeoutStopSec=5s`), `rescue.target`
+  with `rescue.service`, and `default.target` as a link to
+  `multi-user.target`.
 
-* **`/proc/<pid>/stat` cannot pass stage one yet.** `stat_of`
-  (`kernel/src/fs/procfs/render.rs`) still writes `pgrp` and `session` as
-  the pid, `tty_nr` 0 and `tpgid` -1, under a comment that predates
-  `setsid`. L4 fixes it first: `pgrp` from `pgid()`, `session` from `sid()`,
-  and, when the console's session is the process's (and not 0), `tty_nr`
-  0x501 (the console is 5:1) and `tpgid` its foreground group. A
-  pseudo-terminal has no lookup from session to pty, so its `tty_nr` stays 0
-  and the docs say so.
-* **`/sbin/init` goes only where zinc goes.** With nothing named and nothing
-  built in, the kernel starts `/sbin/init` (L3). The images that carry no
-  program (`test-boot`'s, `test-btrfs`, `test-powerfail`, a board image with
-  none) would then run init and never end, so init's files cannot go into
-  every initramfs. Every image that carries zinc builds a program or a
-  command list into the kernel, so the built-in one still wins there. Init's
-  files join those images, `test-shell`'s and `test-init`'s own, through a
-  helper that returns them as carried files per architecture.
-* **Mounts.** The kernel mounts `/proc`, `/dev`, `/tmp`, `/dev/shm` and now
-  `/sys` (sysfs, whose `fs/cgroup` is an empty directory). Nothing mounts
-  cgroup2 or `/run`, and the initramfs has no `/run`. So init makes `/run`,
-  mounts a tmpfs on it and cgroup2 on `/sys/fs/cgroup`, and skips `/sys`.
-* **`MS_REMOUNT` is `EINVAL`** (`kernel/src/syscall/fsctl.rs`), so §8.2's
-  read-only remount fails today. Init logs it and goes on: K7's `reboot(2)`
-  commits `/` and `/data` regardless.
-* **No `/proc/cmdline`.** The generator's `console=` has nothing to read;
-  it falls back to `/dev/console`, which is devfs's only terminal anyway.
-* **The terminal.** `TIOCSCTTY` is `EPERM` unless the caller leads its
-  session, and with argument 1 takes the console from a live session. So
-  getty calls `setsid` (an `EPERM` is ignored), opens the terminal, then
-  `TIOCSCTTY` with 1. There is no `login` yet, so getty starts zinc as the
-  session. `getty@.service` wants `SendSIGHUP=yes` and a short
-  `TimeoutStopSec=`, or an interactive zinc that ignores `SIGTERM` holds
-  shutdown for the default 90 seconds.
-* **The loop.** `signalfd` (on `main` since 9eaee398) for `SIGCHLD`,
-  `SIGTERM` and `SIGINT`, blocked in init and unblocked in each child. The
-  exec pipe carries the child's errno on failure; its end of file means
-  `Spawned`, then `Execed`. Each made cgroup's `cgroup.events` is watched
-  with `EPOLLPRI` and read at once, since a fresh open reports `POLLPRI`
-  (G3), and a change from 1 to 0 is `Emptied`. A `Group` signal goes to each
-  pid in the group's `cgroup.procs`.
-* **The workspace.** `init/` follows `zinc/` (`Cargo.toml`,
-  `.cargo/config.toml`, the targets and flags in `xtask/src/zinc.rs`), with a
-  path dependency on `libs/svc` as `compositor/drm` has on `libs/linux-abi`.
-  Its `check` steps run by default, as the compositor's do.
-* **`test-init`'s stage two with zinc's builtins only**, so it runs on all
-  three architectures without uutils: a process that blocks for good is
-  `read x < /dev/ptmx` (a master with no slave blocks). Without `svc` (L6),
-  one service is stopped through `BindsTo=`: `forker.service` is
-  `Type=oneshot`, `RemainAfterExit=yes`, `BindsTo=` and `After=`
-  `anchor.service`, and killing anchor's main process from the prompt, by the
-  pid it wrote to a file, makes the manager stop forker. The negative control,
-  `KillMode=process`, looks for the grandchild right after
-  `forker.service: stopped`, before a next start's cleaning could kill it. The
-  "gone" check retries, since `/proc/<pid>` outlives an exit until init reaps
-  it. Markers are built from shell variables (`echo stage2-$y`), because the
-  console echoes the typed line. The lines to match are L2's:
-  `<unit>: active`, `<unit>: failed (<result>)`, `<unit>: stopped`,
-  `<unit>: <result>; restarting at <t>`, `booting <target>` and
-  `going down: poweroff.target`; the flaky service ends
-  `failed (start-limit-hit)`, and shutdown stops `multi-user.target`, then
-  `getty@console.service`, then `basic.target`, then `sysinit.target`.
-  `test-init`'s image carries zinc as plain files (`bin/zinc`, `bin/sh`),
-  keeping oh-my-zsh out, with a getty drop-in for `TERM=dumb` and a fixed
-  `PS1`, and a fresh blank volume as `/data` for `btrfs_check`, as
-  `init_file` makes one for K7.
+The kernel's part is `/proc/<pid>/stat`. It now gives `pgrp` and `session`
+from the process, and, when the console is the controlling terminal of the
+process's session, `tty_nr` 1281 (5:1) and the foreground group as `tpgid`.
+A pseudo-terminal's session reads as having none, since nothing maps a
+session to its pty.
 
-No gap in L2's interface turned up while designing against it.
+**The gate.** `cargo xtask test-init` (`xtask/src/init.rs`) is §15's
+stages one and two, and passes on all three architectures. It boots a
+kernel with no program built in, `ferrix.init=/sbin/init`, zinc at
+`/bin/sh`, its own units in `/etc/ferrix/units` and a fresh blank volume at
+`/data`, and types at the prompt the getty gives. Every check is on a line
+the kernel or init printed, or on a line the shell printed in answer. A
+marker is built from a variable (`echo "$m-self $s"`), because the console
+echoes the typed line.
+
+* Stage one: `multi-user.target` becomes active and the getty prints its
+  banner. The shell's own `/proc/self/stat` must show init as its parent,
+  its own session and process group, the console as its controlling
+  terminal (1281), and its own group in the foreground. `$TERM` must be
+  `dumb`, which only the test's drop-in for `getty@.service` sets.
+  `flaky.service` exits 1, is restarted by `Restart=on-failure`, and ends
+  `failed (start-limit-hit)` on its third start. No unit file may draw a
+  warning. `kill -TERM 1` must stop `multi-user.target`, then
+  `getty@console.service`, then `basic.target`, then `sysinit.target`, and
+  the kernel must say `reboot: Power down`. `btrfs check` of the volume,
+  written from the prompt just before, must find nothing wrong.
+* Stage two: `forker.service` is a oneshot that remains after its main
+  process exits. It leaves behind a grandchild that writes its own pid and
+  blocks on `read x < /dev/ptmx`. That pid must be in the service's
+  `cgroup.procs`. Killing `anchor.service`'s main process from the prompt,
+  by the pid it wrote, must stop `forker.service` through `BindsTo=`, and
+  `/proc/<pid>` of the grandchild must then go.
+
+Both negative controls fired, each on its own check alone, on x86-64 under
+TCG. The kernel without the `stat` change failed stage one with "its
+controlling terminal is Some(0), not the console (1281); the console's
+foreground group is Some(-1), not the shell's". `KillMode=process` on
+`forker.service` failed stage two with "stopping forker.service left its
+grandchild 356 alive", after 20 looks 1.5 s apart.
+
+**What building L4 changed.**
+
+* **The manager logs a unit's warnings as it loads it**, as
+  `file:line: message`. Before, they were kept in the loaded unit and never
+  said. The test's own drop-in, `Environment=TERM=dumb "PS1=init-test%# "`,
+  lost the whole assignment to the specifier `%#`, and nothing said so. It is
+  `%%#` now, and `test-init` fails on any warning about a unit file. One
+  new host test, and one for a remaining oneshot stopped through `BindsTo=`
+  under each kill mode.
+* **`sysinit.target` names `Conflicts=shutdown.target` itself.** With
+  `DefaultDependencies=no` it has no default conflict, and shutdown stops only
+  what conflicts with `shutdown.target`, so the first boot powered off with it
+  still active. systemd's own `sysinit.target` has the same line.
+* **Init's lines reach the console between the shell's.** A line of init's
+  may follow a prompt on the same line, so the gate looks for init's lines
+  anywhere in a line, not only at its start. Its first negative control
+  failed on the wrong check before that was fixed.
+* As found before building: `MS_REMOUNT` is `EINVAL`, and init says so and
+  goes on. Init's files go only into images that name `/sbin/init`, which is
+  `test-init`'s alone. The gate uses zinc's builtins only, so it runs on
+  AArch64 and ARMv7-A without uutils.
+
+**What the next session does first.** L5 to L9 all build on L4 (§12). L6,
+`svc` and the control socket with `log` output, is what makes init
+something a person drives, and turns stage one's `kill -TERM 1` into
+`svc poweroff`. L5 needs stage 13's controllers (C6), of which `pids`,
+`memory`'s charging and `cpu.weight` are in. Until L10 moves the images over,
+`cargo xtask run` and every gate but `test-init` still start a program as
+pid 1 themselves.

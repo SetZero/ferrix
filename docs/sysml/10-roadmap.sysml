@@ -506,17 +506,18 @@ package FerrixRoadmap {
              * keeps the table jobs, fg, bg, wait, disown and kill %1 name.
              * Verified by jobsSession and by zinc's pty gate.
              *
-             * Left: a real init. The kernel starts the shell itself as pid
-             * 1, so nothing in user space mounts the pseudo-filesystems,
-             * reaps what a session orphans, gives a shell a session and a
-             * controlling terminal of its own, respawns it, or brings the
-             * machine down. That is also what a second tty would need.
+             * A working init landed on 2026-09-26 (L1 to L4 of
+             * docs/INIT.md): /sbin/init over libs/svc's manager, a cgroup
+             * per service, a getty on the console, shutdown by SIGTERM.
+             * Verified by initSession. Left: the images boot it (L10), and
+             * svc, slices, readiness, the directory and sockets between
+             * (L5 to L9).
              *
              * Designed on 2026-09-23 in docs/INIT.md: pid 1 and a service
              * manager, systemd-shaped units, a cgroup per service, a pure
              * manager in libs/svc behind backends a microkernel could
-             * serve. 67 points to L10; the stage 13 cgroups its first
-             * boot needs landed on 2026-09-24. */
+             * serve. 67 points to L10, 26 of them spent; the stage 13
+             * cgroups its first boot needs landed on 2026-09-24. */
     }
 
     #implemented requirement <'S16'> stage16Rustc : Stage {
@@ -813,6 +814,22 @@ package FerrixRoadmap {
     }
 
     verification jobsSession : JobsSession;
+
+    verification def InitSession {
+        doc /* cargo xtask test-init: boot /sbin/init as pid 1 from
+             * ferrix.init= on all three architectures and type at the shell
+             * its getty gives. Its own session and the console as its
+             * controlling terminal, from /proc/self/stat; a failing
+             * service's restart budget; a daemon's grandchild in its
+             * service's cgroup.procs and gone when the service stops; the
+             * shutdown order after kill -TERM 1; and btrfs check of the
+             * volume afterwards. docs/INIT.md section 15, stages one and
+             * two. */
+        subject os : Ferrix;
+        objective { verify stage15Userland; }
+    }
+
+    verification initSession : InitSession;
 
     #implemented verification def RustcTest {
         doc /* The acceptance test itself: cargo xtask test-rustc, and the CI
