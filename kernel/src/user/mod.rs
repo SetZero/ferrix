@@ -5,6 +5,7 @@
 //! builds address spaces it does not itself run in, and hands a processor to
 //! code it does not trust.
 
+pub(crate) mod alloc_check;
 pub(crate) mod check;
 pub(crate) mod madvise_check;
 pub(crate) mod rmap_check;

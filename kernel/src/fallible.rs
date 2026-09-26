@@ -25,13 +25,19 @@
 //! memory had run out, without touching the heap. `object/alloc_check.rs`
 //! drives the native ABI with it on every boot and requires every call to
 //! either succeed or answer `NO_MEMORY`, and the kernel to be intact after.
+//! [`inject_once`] fails the `n`th alone, so that `user/alloc_check.rs` can
+//! fail each allocation an operation makes in turn, one run per allocation;
+//! asked to, it counts the frame allocator's allocations among them
+//! ([`frame_refused`]), because a frame refused is the other way memory runs
+//! out and the paths that meet it are as much the item's as a heap
+//! allocation's.
 //! Scoped to one task, so the rest of the machine -- which includes the
 //! uncertified load, whose allocations are still infallible -- is untouched.
 
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::sync::{Arc, Weak};
 use core::alloc::Layout;
-use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 pub(crate) use ferrix_fallible::{
     AllocError, push_within, try_boxed_str, try_collect, try_deque_with_capacity, try_extend,
@@ -173,6 +179,12 @@ static TARGET: AtomicU64 = AtomicU64::new(0);
 /// Every how many of its fallible allocations one fails.
 static PERIOD: AtomicU32 = AtomicU32::new(0);
 
+/// Whether only the [`PERIOD`]th fails, rather than every one.
+static ONCE: AtomicBool = AtomicBool::new(false);
+
+/// Whether the frame allocator's allocations are counted and failed too.
+static FRAMES: AtomicBool = AtomicBool::new(false);
+
 /// Its fallible allocations since [`inject`], counted toward [`PERIOD`].
 static SEEN: AtomicU32 = AtomicU32::new(0);
 
@@ -180,7 +192,7 @@ static SEEN: AtomicU32 = AtomicU32::new(0);
 static FAILED: AtomicU64 = AtomicU64::new(0);
 
 /// The policy `ferrix_fallible` asks: fail every [`PERIOD`]th fallible
-/// allocation the [`TARGET`] task makes.
+/// allocation the [`TARGET`] task makes, or with [`ONCE`] that one alone.
 fn policy() -> bool {
     let target = TARGET.load(Ordering::Acquire);
     if target == 0 || crate::sched::current_id() != Some(target) {
@@ -188,7 +200,11 @@ fn policy() -> bool {
     }
     let period = PERIOD.load(Ordering::Relaxed).max(1);
     let seen = SEEN.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
-    let fail = seen.is_multiple_of(period);
+    let fail = if ONCE.load(Ordering::Relaxed) {
+        seen == period
+    } else {
+        seen.is_multiple_of(period)
+    };
     if fail {
         let _ = FAILED.fetch_add(1, Ordering::Relaxed);
     }
@@ -198,7 +214,22 @@ fn policy() -> bool {
 /// Make every `period`th fallible allocation by task `task` fail, until
 /// [`stop_injecting`].
 pub(crate) fn inject(task: TaskId, period: u32) {
+    arm(task, period, false, false);
+}
+
+/// Make the `nth` fallible allocation by task `task` fail, and no other,
+/// until [`stop_injecting`]; with `frames`, counting the frame allocator's
+/// allocations among them ([`frame_refused`]).
+pub(crate) fn inject_once(task: TaskId, nth: u32, frames: bool) {
+    arm(task, nth, true, frames);
+}
+
+/// Start failing `task`'s allocations: every `period`th, or with `once` that
+/// one alone; and with `frames`, its frame allocations as well.
+fn arm(task: TaskId, period: u32, once: bool, frames: bool) {
     let _ = ferrix_fallible::set_injector(policy);
+    ONCE.store(once, Ordering::Relaxed);
+    FRAMES.store(frames, Ordering::Relaxed);
     PERIOD.store(period.max(1), Ordering::Relaxed);
     SEEN.store(0, Ordering::Relaxed);
     FAILED.store(0, Ordering::Relaxed);
@@ -210,5 +241,14 @@ pub(crate) fn inject(task: TaskId, period: u32) {
 pub(crate) fn stop_injecting() -> u64 {
     ferrix_fallible::arm(false);
     TARGET.store(0, Ordering::Release);
+    FRAMES.store(false, Ordering::Relaxed);
     FAILED.load(Ordering::Relaxed)
+}
+
+/// Whether the frame allocation about to be made is to be refused, as if the
+/// frame allocator were empty: under [`inject_once`] with `frames`, on the
+/// task it names, when it is that allocation's turn. `mm::allocate_frames`
+/// asks. Nothing but a load while no such injection is armed.
+pub(crate) fn frame_refused() -> bool {
+    FRAMES.load(Ordering::Relaxed) && TARGET.load(Ordering::Acquire) != 0 && policy()
 }

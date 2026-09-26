@@ -305,7 +305,15 @@ fn insert_region(frames: &mut Frames<'static>, region: &MemRegion, hole: u64, ho
 // ---------------------------------------------------------------------------
 
 /// Take `2^order` contiguous frames.
+///
+/// `None` when there are none -- or when the allocation check is failing
+/// this task's allocations one at a time and this is the one
+/// (`fallible::frame_refused`), which reaches every caller's answer to an
+/// empty allocator without emptying it for the rest of the machine.
 pub(crate) fn allocate_frames(order: u8) -> Option<Frame> {
+    if fallible::frame_refused() {
+        return None;
+    }
     let frame = with_frames(|frames| frames.allocate(order))??;
     count(Route::Allocated, 1 << order);
     Some(frame)
@@ -316,6 +324,9 @@ pub(crate) fn allocate_frames(order: u8) -> Option<Frame> {
 /// block given back or split on its own as one from [`allocate_frames`]
 /// would be (`ferrix_frame::Frames::allocate_run`).
 pub(crate) fn allocate_frame_run(blocks: u64) -> Option<Frame> {
+    if fallible::frame_refused() {
+        return None;
+    }
     let frame = with_frames(|frames| frames.allocate_run(blocks))??;
     count(Route::Allocated, blocks << ferrix_frame::MAX_ORDER);
     Some(frame)

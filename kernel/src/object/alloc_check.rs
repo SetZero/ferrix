@@ -107,6 +107,17 @@ pub(crate) fn run() -> Result<Report, &'static str> {
     let mut report = check_the_native_calls_survive()?;
     report.drawn = drawn;
     report.torn_down = check_a_teardown_needs_no_memory()?;
+    let frame = mm::allocate_frames(0).ok_or("no frame for the sweep's window")?;
+    let swept = crate::user::alloc_check::run(frame);
+    mm::deallocate_frames(frame, 0);
+    let swept = swept?;
+    crate::console::println!(
+        "  sweep    {} memory operations run once per allocation each makes, that one failed: \
+         {} failures met, {} absorbed, the rest answered as running out of memory; nothing kept",
+        swept.scenarios,
+        swept.failed,
+        swept.absorbed,
+    );
     if object::abandoned() != 0 {
         return Err("an object was given up rather than disposed of");
     }
