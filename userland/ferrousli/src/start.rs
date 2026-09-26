@@ -9,7 +9,7 @@
 //! instructions, and that includes constructors.
 
 use core::ffi::{CStr, c_char, c_int, c_void};
-use core::sync::atomic::Ordering;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use crate::exit::exit;
 use crate::stdlib::environ;
@@ -47,23 +47,28 @@ unsafe extern "C" {
     static __fini_array_end: Hook;
 }
 
-/// Sets up the process, runs `main`, and exits with what it returns.
+/// Whether [`prepare`] has run.
+static PREPARED: AtomicBool = AtomicBool::new(false);
+
+/// Records the environment, the program's name and the auxiliary vector, and
+/// sets up the main thread: what must be done before any code that uses this
+/// library runs. Once; a second call does nothing.
+///
+/// A static program's `__libc_start_main` does it first thing. Loaded by
+/// `ld-ferrousli`, this library does it sooner, from its own constructor
+/// ([`PREPARE`]): the loader runs a library's constructors after those of
+/// everything it needs, so this library's run first, and another library's
+/// constructor may then use threads -- LLVM's allocator calls
+/// `pthread_setspecific` from `rustc`'s before `main`, as glibc allows.
 ///
 /// # Safety
 ///
-/// Called once, by `_start`, with the `argc` and `argv` the kernel placed on
-/// the stack. The environment must follow `argv`'s terminating null, and the
-/// auxiliary vector the environment's.
-#[cfg_attr(not(test), unsafe(no_mangle))]
-pub unsafe extern "C" fn __libc_start_main(
-    main: Main,
-    argc: c_int,
-    argv: *mut *mut c_char,
-    init: InitHook,
-    fini: Hook,
-    rtld_fini: Hook,
-    stack_end: *mut c_void,
-) -> ! {
+/// `argv` must be the kernel's, on the initial stack, with the environment
+/// and the auxiliary vector after it, and `stack_end` that stack's top.
+unsafe fn prepare(argc: c_int, argv: *mut *mut c_char, stack_end: *mut c_void) {
+    if PREPARED.swap(true, Ordering::Relaxed) {
+        return;
+    }
     let count = usize::try_from(argc).unwrap_or(0);
     let envp = argv.wrapping_add(count + 1);
     environ().store(envp, Ordering::Relaxed);
@@ -83,6 +88,56 @@ pub unsafe extern "C" fn __libc_start_main(
     unsafe { auxv::init(at.wrapping_add(1).cast::<usize>().cast_const()) };
     // SAFETY: nothing has read the thread pointer, and this runs once.
     unsafe { thread::init_main() };
+}
+
+/// This library's constructor, which [`prepare`]s the process when the
+/// loader loaded it. `argv` is the kernel's, and the word below it `argc`,
+/// which is the stack's top as `__libc_start_main` is given it. In a static
+/// program there is no loader and `__libc_start_main` has prepared already.
+///
+/// # Safety
+///
+/// Called by the loader, as a constructor, with the process's arguments.
+unsafe extern "C" fn prepare_when_loaded(
+    argc: c_int,
+    argv: *mut *mut c_char,
+    _envp: *mut *mut c_char,
+) {
+    if crate::loader::interface().is_none() {
+        return;
+    }
+    // SAFETY: the loader passes the kernel's `argv`, which sits one word
+    // above `argc`, the initial stack's top.
+    unsafe { prepare(argc, argv, argv.wrapping_sub(1).cast()) };
+}
+
+/// [`prepare_when_loaded`], in `.init_array`.
+#[cfg(not(test))]
+#[used]
+#[unsafe(link_section = ".init_array")]
+static PREPARE: InitHook = Some(prepare_when_loaded);
+
+/// Sets up the process, runs `main`, and exits with what it returns.
+///
+/// # Safety
+///
+/// Called once, by `_start`, with the `argc` and `argv` the kernel placed on
+/// the stack. The environment must follow `argv`'s terminating null, and the
+/// auxiliary vector the environment's.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub unsafe extern "C" fn __libc_start_main(
+    main: Main,
+    argc: c_int,
+    argv: *mut *mut c_char,
+    init: InitHook,
+    fini: Hook,
+    rtld_fini: Hook,
+    stack_end: *mut c_void,
+) -> ! {
+    let count = usize::try_from(argc).unwrap_or(0);
+    let envp = argv.wrapping_add(count + 1);
+    // SAFETY: the caller's promise is `prepare`'s.
+    unsafe { prepare(argc, argv, stack_end) };
 
     // The dynamic loader supplied this through `rdx`, and `crt1.o` passed it
     // here. Register it before constructors and `main` can add their own
