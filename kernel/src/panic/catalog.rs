@@ -336,6 +336,34 @@ pub(crate) static STAGE9_QUOTAS: Explanation = Explanation {
           docs/certification/IMPLEMENTATION.md",
 };
 
+/// For `check_kernel_memory` in `main.rs`, when `fs::kmem_check::run` fails.
+pub(crate) static STAGE9_KMEM: Explanation = Explanation {
+    code: "FX-0906",
+    title: "the kernel heap a job drove through the Linux calls was not bounded by its job",
+    meaning: "`fs::kmem_check::run` fills a job with a small memory limit with each kind of \
+              object a program can make and keep through the Linux calls -- files in a \
+              tmpfs, pipes, socket pairs, descriptors in flight, epoll registrations, \
+              eventfds, regions of an address space -- until one is refused. Each must be \
+              refused with ENOMEM by the job's limit and not by something else, with the \
+              job's memory never past its limit and its kernel-memory count above zero; a \
+              sibling job must still make one; and once the objects are gone every byte \
+              charged must have come back. A kernel failing this lets one job take the \
+              kernel heap from the rest through a path its memory limit does not see \
+              (certification finding F-37, T.EXHAUST).",
+    causes: &[
+        "An allocation site stopped carrying a `ferrix_kmem::Charge`, or made the object \
+         before charging it, so a refusal left something behind.",
+        "A charge was made to the wrong job: a buffer's growth to the running task where it \
+         belongs to the object's maker, or the other way round.",
+        "An object outlived what held it -- a cached dentry, a weak reference, a queue that \
+         kept its room -- so its charge never came back.",
+        "The kernel's account was not installed as the first job was made \
+         (`quota::install_kernel_heap`), so nothing was charged at all.",
+    ],
+    see: "kernel/src/fs/kmem_check.rs; libs/kmem/src/lib.rs; kernel/src/object/quota.rs; \
+          docs/certification/IMPLEMENTATION.md W-15",
+};
+
 /// For `kmain` in `main.rs`, when `self_check` fails.
 pub(crate) static STAGE1_HANDOFF: Explanation = Explanation {
     code: "FX-0101",
@@ -2220,6 +2248,7 @@ pub(crate) static ALL: &[&Explanation] = &[
     &STAGE9_REFUSALS,
     &SERVICES,
     &STAGE9_QUOTAS,
+    &STAGE9_KMEM,
     &STAGE10_PCI,
     &STAGE10_DEVICES,
     &STAGE10_IOMMU,

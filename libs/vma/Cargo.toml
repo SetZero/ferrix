@@ -9,6 +9,10 @@ publish = false
 
 [dependencies]
 ferrix-fallible = { workspace = true }
+ferrix-kmem = { workspace = true }
+
+[dev-dependencies]
+ferrix-kmem = { workspace = true, features = ["testing"] }
 
 [lints]
 workspace = true

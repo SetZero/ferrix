@@ -204,8 +204,8 @@ fn load_and_run(
         ..OpenFlags::default()
     };
     let file = OpenFile::new(placeholder.location().clone(), &flags)
-        .map_err(|_| "could not open the large program's name for reading")?
-        .with_io(inode);
+        .and_then(|file| file.with_io(inode))
+        .map_err(|_| "could not open the large program's name for reading")?;
     let program =
         ProgramFile::open(file).map_err(|_| "the large program's headers could not be read")?;
     if program.len() != FILE_LEN || program.object().is_none() {

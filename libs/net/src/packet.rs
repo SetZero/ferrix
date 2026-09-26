@@ -18,6 +18,7 @@ use alloc::collections::VecDeque;
 use alloc::vec;
 use alloc::vec::Vec;
 
+use ferrix_kmem::{Charge, buffer_footprint, reserve_deque};
 use ferrix_netwire::ethernet::{self, Mac};
 
 use crate::iface::Medium;
@@ -121,9 +122,21 @@ pub struct PacketSocket {
     pub capacity: usize,
     /// How many are waiting.
     queued: usize,
+    /// What the waiting frames count against the capacity: their bytes and
+    /// [`FRAME_COST`] each.
+    cost: usize,
     /// The frames waiting.
     queue: VecDeque<Frame>,
+    /// The heap `queue` holds, charged to the job that made the socket
+    /// (certification finding F-37).
+    room: Charge,
+    /// Likewise, the frames' bytes.
+    frames: Charge,
 }
+
+/// What a waiting frame counts against its socket's capacity beside its
+/// bytes, as [`crate::socket::DATAGRAM_COST`] does for a datagram.
+pub const FRAME_COST: usize = size_of::<Frame>() + 8;
 
 impl PacketSocket {
     /// A socket for `protocol` on every interface.
@@ -135,7 +148,11 @@ impl PacketSocket {
             interface: None,
             capacity,
             queued: 0,
+            cost: 0,
             queue: VecDeque::new(),
+            // To the job opening the socket; nothing is never refused.
+            room: Charge::bytes(0).unwrap_or_default(),
+            frames: Charge::bytes(0).unwrap_or_default(),
         }
     }
 
@@ -148,11 +165,22 @@ impl PacketSocket {
     }
 
     /// Keep a frame, or drop it when the queue is full.
+    ///
+    /// Dropped too when the socket's job is at its memory limit.
     pub fn deliver(&mut self, frame: Frame) -> bool {
-        if self.queued + frame.bytes.len() > self.capacity {
+        let cost = frame.bytes.len().saturating_add(FRAME_COST);
+        if self.cost.saturating_add(cost) > self.capacity {
             return false;
         }
+        let bytes = buffer_footprint::<u8>(frame.bytes.capacity());
+        if reserve_deque(&mut self.queue, 1, &mut self.room).is_err()
+            || self.frames.grow(bytes).is_err()
+        {
+            return false;
+        }
+        self.cost += cost;
         self.queued += frame.bytes.len();
+        // Room was had just above: this does not grow the queue.
         self.queue.push_back(frame);
         true
     }
@@ -167,6 +195,11 @@ impl PacketSocket {
     pub fn take(&mut self) -> Option<Frame> {
         let frame = self.queue.pop_front()?;
         self.queued = self.queued.saturating_sub(frame.bytes.len());
+        self.cost = self
+            .cost
+            .saturating_sub(frame.bytes.len().saturating_add(FRAME_COST));
+        self.frames
+            .shrink(buffer_footprint::<u8>(frame.bytes.capacity()));
         Some(frame)
     }
 

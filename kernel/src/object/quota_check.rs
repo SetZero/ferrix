@@ -32,6 +32,9 @@ pub(crate) struct Report {
     pub(crate) pages: u64,
     /// How many of them were page tables.
     pub(crate) tables: u64,
+    /// Bytes of kernel heap the limited job's space held beside them: its
+    /// regions, charged as memory too.
+    pub(crate) heap: u64,
     /// Pages a sibling committed after the limited job was refused.
     pub(crate) sibling_pages: u64,
     /// The object limit the objects met.
@@ -182,21 +185,31 @@ fn fork(parent: &Arc<Process>) -> Result<Arc<Process>, &'static str> {
 fn check_memory(tree: &Arc<Job>, report: &mut Report) -> Result<(), &'static str> {
     const LIMIT: u64 = 48;
     const BASE: u64 = 0x40_0000;
+    const BYTES: u64 = LIMIT * PAGE_SIZE;
     let hog = tree.new_child().map_err(|_| "a job refused a child")?;
     let sibling = tree.new_child().map_err(|_| "a job refused a child")?;
-    let _ = hog.set_limit(Resource::Memory, LIMIT);
-    let pages = |job: &Job| job.usage(Resource::Memory).map_or(0, |usage| usage.used);
+    let _ = hog.set_limit(Resource::Memory, BYTES);
+    let used = |job: &Job, resource| job.usage(resource).map_or(0, |usage| usage.used);
+    // Frames, a page each: what is charged as memory and is not heap.
+    let pages = |job: &Job| {
+        used(job, Resource::Memory).saturating_sub(used(job, Resource::Kernel)) / PAGE_SIZE
+    };
 
     let (faulted, refused) = as_task_of(&hog, || fault_in(BASE, LIMIT + 8));
     let (faulted, space) = faulted?;
-    if !refused || pages(&hog) != LIMIT || faulted >= LIMIT {
+    // The space's regions are heap charged to the job too (F-37), so the
+    // frames stop short of the limit by what they hold: refused at exactly
+    // the limit means the next page would not have fitted.
+    let memory = used(&hog, Resource::Memory);
+    if !refused || memory > BYTES || memory + PAGE_SIZE <= BYTES || faulted >= LIMIT {
         return Err("faults were not refused at exactly their job's memory limit");
     }
     if hog.usage(Resource::Memory).map(|usage| usage.refused) == Some(0) {
         return Err("a refused fault was not counted as memory.events counts it");
     }
-    report.pages = LIMIT;
-    report.tables = LIMIT - faulted;
+    report.pages = pages(&hog);
+    report.tables = report.pages.saturating_sub(faulted);
+    report.heap = used(&hog, Resource::Kernel);
 
     let (other, _) = as_task_of(&sibling, || fault_in(BASE, LIMIT));
     let (other, other_space) = other?;
@@ -208,6 +221,12 @@ fn check_memory(tree: &Arc<Job>, report: &mut Report) -> Result<(), &'static str
     drop((space, other_space));
     if pages(&hog) != 0 || pages(&sibling) != 0 || pages(tree) != 0 {
         return Err("address spaces gone and their frames still charged");
+    }
+    if [&hog, &sibling, tree]
+        .iter()
+        .any(|job| used(job, Resource::Memory) != 0 || used(job, Resource::Kernel) != 0)
+    {
+        return Err("address spaces gone and the heap of their regions still charged");
     }
     Ok(())
 }

@@ -16,6 +16,8 @@
 
 use alloc::collections::VecDeque;
 
+use ferrix_kmem::{Charge, buffer_footprint};
+
 use crate::node::Readiness;
 
 /// Linux's default pipe capacity: sixteen pages.
@@ -50,6 +52,9 @@ pub enum WriteOutcome {
     WouldBlock,
     /// No reader is left. The caller reports `EPIPE`, and raises `SIGPIPE`.
     Broken,
+    /// The buffer could not grow: the pipe's job is at its memory limit, or
+    /// the heap is empty. Nothing was queued; the caller reports `ENOMEM`.
+    NoMemory,
 }
 
 /// The queue, and how many of each end are open.
@@ -59,10 +64,16 @@ pub struct PipeBuffer {
     capacity: usize,
     readers: usize,
     writers: usize,
+    /// The heap `data` holds, charged to the job that made the pipe as the
+    /// buffer grows, and given back as the pipe goes (F-37). The buffer
+    /// keeps the room it grew to, and so does the charge.
+    charge: Charge,
 }
 
 impl PipeBuffer {
-    /// An empty pipe holding at most `capacity` bytes, with no ends open.
+    /// An empty pipe holding at most `capacity` bytes, with no ends open,
+    /// whose buffer is charged to the running task's job as it grows. A
+    /// charge of nothing is never refused, so this cannot fail.
     #[must_use]
     pub fn new(capacity: usize) -> PipeBuffer {
         PipeBuffer {
@@ -70,7 +81,48 @@ impl PipeBuffer {
             capacity: capacity.max(PIPE_BUF),
             readers: 0,
             writers: 0,
+            charge: Charge::bytes(0).unwrap_or_default(),
         }
+    }
+
+    /// The heap the buffer holds and is charged for, in bytes.
+    #[must_use]
+    pub fn charged(&self) -> u64 {
+        self.charge.charged()
+    }
+
+    /// Make room for `count` more bytes, charged, before taking them from
+    /// somewhere that cannot have them back: what `splice` from another pipe
+    /// does. False, with nothing changed, if the room cannot be had.
+    pub fn reserve(&mut self, count: usize) -> bool {
+        self.make_room(count)
+    }
+
+    /// Make room for `count` more bytes, charged: the next power of two
+    /// that holds them, up to the capacity, so a pipe of short writes grows
+    /// a few times and not at every one. False, with nothing changed, when
+    /// the charge or the allocation is refused.
+    fn make_room(&mut self, count: usize) -> bool {
+        let len = self.data.len();
+        let needed = len.saturating_add(count);
+        if needed <= self.data.capacity() {
+            return true;
+        }
+        let target = needed.next_power_of_two().min(self.capacity.max(needed));
+        let before = buffer_footprint::<u8>(self.data.capacity());
+        if self.charge.resize(buffer_footprint::<u8>(target)).is_err() {
+            return false;
+        }
+        if self.data.try_reserve_exact(target - len).is_err() {
+            let _ = self.charge.resize(before);
+            return false;
+        }
+        // The deque may round its room up; the charge follows what it holds,
+        // and keeps what it had if the job has no more to give.
+        let _ = self
+            .charge
+            .resize(buffer_footprint::<u8>(self.data.capacity()));
+        true
     }
 
     /// A read end was opened.
@@ -186,6 +238,9 @@ impl PipeBuffer {
     /// and a writer that filled the room since has only pushed the pipe past
     /// its capacity until they are read, as `free` saturates at none.
     pub fn unread(&mut self, bytes: &[u8]) {
+        // The room is there unless a writer took it meanwhile; then it grows
+        // uncharged, by at most one read, rather than lose the bytes.
+        let _ = self.make_room(bytes.len());
         for &byte in bytes.iter().rev() {
             self.data.push_front(byte);
         }
@@ -216,6 +271,9 @@ impl PipeBuffer {
             }
             data.len().min(free)
         };
+        if !self.make_room(count) {
+            return WriteOutcome::NoMemory;
+        }
         self.data
             .extend(data.get(..count).unwrap_or_default().iter().copied());
         WriteOutcome::Wrote(count)

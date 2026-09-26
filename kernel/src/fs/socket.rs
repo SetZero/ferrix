@@ -102,6 +102,7 @@ use core::any::Any;
 use core::fmt;
 use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
+use ferrix_kmem::{Charge, arc_footprint, buffer_footprint, footprint};
 use ferrix_linux_abi::socket::{
     AF_UNIX, Linger, MSG_DONTWAIT, MSG_NOSIGNAL, MSG_PEEK, MSG_WAITALL, SHUT_RD, SHUT_RDWR,
     SHUT_WR, SIOCINQ, SIOCOUTQ, SO_ACCEPTCONN, SO_BROADCAST, SO_DEBUG, SO_DOMAIN, SO_DONTROUTE,
@@ -159,21 +160,33 @@ pub(crate) struct Passed {
     /// Who sent the message, when it carries that: see the module
     /// documentation.
     credentials: Option<Ucred>,
+    /// The list of files, charged to the sender's job for as long as the
+    /// message is in flight, as Linux charges `scm_fp_dup`'s copy (F-37).
+    /// Each file stays charged to whoever opened it.
+    _charge: Charge,
 }
 
 impl Passed {
-    /// Files to pass, counted in flight if any is a socket.
-    pub(crate) fn new(files: Vec<Arc<OpenFile>>) -> Passed {
+    /// Files to pass, counted in flight if any is a socket, and charged to
+    /// the sender's job.
+    ///
+    /// # Errors
+    ///
+    /// `ENOMEM` past the job's memory limit.
+    pub(crate) fn new(files: Vec<Arc<OpenFile>>) -> Result<Passed, Errno> {
+        let charge = Charge::bytes(buffer_footprint::<Arc<OpenFile>>(files.capacity()))
+            .map_err(|_| Errno::ENOMEM)?;
         let sockets = files.iter().filter(|file| is_socket(file)).count();
         if sockets > 0 {
             let _ = IN_FLIGHT.fetch_add(sockets, Ordering::AcqRel);
             moved_in_flight();
         }
-        Passed {
+        Ok(Passed {
             files,
             sockets,
             credentials: None,
-        }
+            _charge: charge,
+        })
     }
 
     /// The same, carrying `credentials` as its sender's.
@@ -299,6 +312,9 @@ struct Channel {
     /// Whether the socket reading this direction set `SO_PASSCRED`, which
     /// its senders look at to stamp what they send.
     wants_credentials: AtomicBool,
+    /// Its heap and its queue's floor, charged to the job that made it; each
+    /// segment written into the queue is charged to its writer (F-37).
+    _charge: Charge,
 }
 
 impl fmt::Debug for Channel {
@@ -310,9 +326,21 @@ impl fmt::Debug for Channel {
 }
 
 impl Channel {
-    /// An empty direction of a socket of `kind`, at the default buffer size.
-    fn new(kind: SocketType) -> Arc<Channel> {
-        Arc::new(Channel {
+    /// An empty direction of a socket of `kind`, at the default buffer size,
+    /// charged to the running task's job.
+    ///
+    /// # Errors
+    ///
+    /// `ENOMEM` past the job's memory limit.
+    fn new(kind: SocketType) -> Result<Arc<Channel>, Errno> {
+        // The queue's floor too: its segments pay for the rest of it.
+        let charge = Charge::bytes(
+            arc_footprint::<Channel>()
+                .saturating_add(arc_footprint::<WaitQueue>().saturating_mul(2))
+                .saturating_add(SocketBuffer::<Ancillary>::floor_footprint()),
+        )
+        .map_err(|_| Errno::ENOMEM)?;
+        Ok(Arc::new(Channel {
             buffer: SpinLock::new(
                 SocketBuffer::new(kind.buffer_kind(), SOCKET_BUFFER_DEFAULT)
                     .stopping_before(Passed::names_its_sender),
@@ -321,7 +349,8 @@ impl Channel {
             writable: Arc::new(WaitQueue::new()),
             refused: AtomicBool::new(false),
             wants_credentials: AtomicBool::new(false),
-        })
+            _charge: charge,
+        }))
     }
 
     /// Wake both directions' waiters: an end closed or shut down, which can
@@ -381,6 +410,10 @@ pub(crate) struct Socket {
     arrivals: Arc<WaitQueue>,
     /// What `stat` reports through it.
     metadata: Metadata,
+    /// Its heap, charged to the job that made it: itself, its entry in
+    /// [`SOCKETS`], and the names it may hold -- its own, its peer's, one
+    /// in a table -- at their longest (F-37).
+    _charge: Charge,
 }
 
 /// What a listening socket is holding: the connections that have arrived and
@@ -395,6 +428,9 @@ struct Backlog {
     /// Never longer than `limit`, and allocated to `limit` at `listen`, so
     /// that pushing one never allocates under the lock.
     waiting: VecDeque<Waiting>,
+    /// The room `waiting` holds, charged to the job that called `listen`
+    /// (F-37).
+    charge: Charge,
 }
 
 /// One connection waiting to be accepted.
@@ -495,7 +531,15 @@ impl Socket {
         credentials: Ucred,
         peer_credentials: Option<Ucred>,
         (uid, gid): (u32, u32),
-    ) -> Arc<Socket> {
+    ) -> Result<Arc<Socket>, Errno> {
+        let names = footprint(SOCKADDR_UN_SIZE, 1).saturating_mul(4);
+        let charge = Charge::bytes(
+            arc_footprint::<Socket>()
+                .saturating_add(arc_footprint::<WaitQueue>())
+                .saturating_add(size_of::<Weak<Socket>>())
+                .saturating_add(names),
+        )
+        .map_err(|_| Errno::ENOMEM)?;
         let ino = sockfs().next_ino.fetch_add(1, Ordering::Relaxed);
         let now = fs::clock().now();
         let socket = Arc::new(Socket {
@@ -531,6 +575,7 @@ impl Socket {
                 mtime: now,
                 ctime: now,
             },
+            _charge: charge,
         });
         let mut listed = SOCKETS.lock();
         if listed.len().is_power_of_two() {
@@ -538,7 +583,7 @@ impl Socket {
         }
         listed.push(Arc::downgrade(&socket));
         drop(listed);
-        socket
+        Ok(socket)
     }
 
     /// Whether `SO_PASSCRED` is set: a receive hands back an
@@ -614,14 +659,42 @@ impl Socket {
         // `n + 1`, because Linux's queue-full test is a strict `>` against
         // the backlog, so `listen(0)` still takes one connection.
         let limit = asked.min(SOMAXCONN).saturating_add(1);
-        let waiting = VecDeque::with_capacity(limit);
+        let mut charge =
+            Charge::bytes(buffer_footprint::<Waiting>(limit)).map_err(|_| Errno::ENOMEM)?;
+        let mut waiting = VecDeque::new();
+        waiting
+            .try_reserve_exact(limit)
+            .map_err(|_| Errno::ENOMEM)?;
         let mut listener = self.listener.lock();
         match listener.as_mut() {
             // Listening again only changes the number: the connections
-            // already waiting stay, as they do on Linux.
-            Some(held) => held.limit = limit,
-            None => *listener = Some(Backlog { limit, waiting }),
+            // already waiting stay, as they do on Linux. A larger number
+            // takes the new room and its charge, so that pushing up to it
+            // still never allocates under the lock.
+            Some(held) => {
+                if limit > held.waiting.capacity() {
+                    core::mem::swap(&mut held.charge, &mut charge);
+                    while let Some(one) = held.waiting.pop_front() {
+                        // NOALLOC: `waiting` has room for `limit`, and
+                        // `held` never had more than its own limit.
+                        waiting.push_back(one);
+                    }
+                    core::mem::swap(&mut held.waiting, &mut waiting);
+                }
+                held.limit = limit;
+            }
+            None => {
+                *listener = Some(Backlog {
+                    limit,
+                    waiting,
+                    charge,
+                });
+                return Ok(());
+            }
         }
+        // What the old room was, given back with no lock held.
+        drop(listener);
+        drop((waiting, charge));
         Ok(())
     }
 
@@ -697,7 +770,7 @@ impl Socket {
             // Made before the lock is taken and wired after it is dropped: the
             // far end is created with no send channel, so dropping it if there
             // is no room closes nothing of this socket's.
-            let far = Channel::new(self.kind);
+            let far = Channel::new(self.kind)?;
             let server = Socket::new(
                 self.kind,
                 None,
@@ -705,7 +778,7 @@ impl Socket {
                 target.credentials,
                 Some(self.credentials),
                 (target.metadata.uid, target.metadata.gid),
-            );
+            )?;
             let queued = {
                 let mut listener = target.listener.lock();
                 let Some(backlog) = listener.as_mut() else {
@@ -897,7 +970,7 @@ impl Socket {
         {
             passed = Some(
                 passed
-                    .unwrap_or_else(|| Passed::new(Vec::new()))
+                    .map_or_else(|| Passed::new(Vec::new()), Ok)?
                     .with_credentials(stamp),
             );
         }
@@ -966,6 +1039,7 @@ impl Socket {
                 WriteOutcome::Broken if done == 0 => return Err(self.broken(flags)),
                 WriteOutcome::Broken => return Ok(done),
                 WriteOutcome::TooBig => Errno::EMSGSIZE,
+                WriteOutcome::NoMemory => Errno::ENOMEM,
                 WriteOutcome::WouldBlock if nonblock => Errno::EAGAIN,
                 WriteOutcome::WouldBlock => match wait(
                     &peer.writable,
@@ -1020,6 +1094,7 @@ impl Socket {
                 }
                 WriteOutcome::Broken => return Err(self.broken(flags)),
                 WriteOutcome::TooBig => return Err(Errno::EMSGSIZE),
+                WriteOutcome::NoMemory => return Err(Errno::ENOMEM),
                 WriteOutcome::WouldBlock if nonblock => return Err(Errno::EAGAIN),
                 WriteOutcome::WouldBlock => wait(
                     &peer.writable,
@@ -1630,7 +1705,7 @@ fn open(socket: Arc<Socket>, nonblock: bool) -> Result<Arc<OpenFile>, Errno> {
     // Where the description's sleeping lock waits; a stream never takes it.
     let parker = Arc::clone(fs::namespace().parker());
     OpenFile::new(
-        Location::detached(sockfs, socket, name.as_bytes(), parker),
+        Location::detached(sockfs, socket, name.as_bytes(), parker)?,
         &flags,
     )
 }
@@ -1649,7 +1724,7 @@ pub(crate) fn new_socket(
     let credentials = credentials_of(creator);
     let owner = crate::syscall::path::creator_ids(creator);
     open(
-        Socket::new(kind, None, Channel::new(kind), credentials, None, owner),
+        Socket::new(kind, None, Channel::new(kind)?, credentials, None, owner)?,
         nonblock,
     )
 }
@@ -1665,8 +1740,8 @@ pub(crate) fn new_pair(
     nonblock: bool,
     creator: &Process,
 ) -> Result<(Arc<OpenFile>, Arc<OpenFile>), Errno> {
-    let first = Channel::new(kind);
-    let second = Channel::new(kind);
+    let first = Channel::new(kind)?;
+    let second = Channel::new(kind)?;
     let credentials = Some(credentials_of(creator));
     let owner = crate::syscall::path::creator_ids(creator);
     let mine = credentials_of(creator);
@@ -1677,8 +1752,8 @@ pub(crate) fn new_pair(
         mine,
         credentials,
         owner,
-    );
-    let other = Socket::new(kind, Some(first), second, mine, credentials, owner);
+    )?;
+    let other = Socket::new(kind, Some(first), second, mine, credentials, owner)?;
     Ok((open(one, nonblock)?, open(other, nonblock)?))
 }
 
@@ -1929,7 +2004,7 @@ pub(crate) fn open_on_sockfs(
     let sockfs: Arc<SockFs> = Arc::clone(sockfs());
     let parker = Arc::clone(fs::namespace().parker());
     OpenFile::new(
-        Location::detached(sockfs, inode, name.as_bytes(), parker),
+        Location::detached(sockfs, inode, name.as_bytes(), parker)?,
         &flags,
     )
 }

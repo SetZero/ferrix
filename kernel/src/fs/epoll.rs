@@ -51,6 +51,7 @@ use alloc::vec::Vec;
 use core::any::Any;
 use core::fmt;
 
+use ferrix_kmem::{Charge, arc_footprint};
 use ferrix_linux_abi::types::{
     EPOLLERR, EPOLLET, EPOLLHUP, EPOLLIN, EPOLLONESHOT, EPOLLOUT, EPOLLPRI, EPOLLRDNORM,
     EPOLLWRNORM,
@@ -101,10 +102,14 @@ struct Item {
     seen_changes: u64,
     /// For `EPOLLET`: the readiness bits when the set last looked.
     seen_bits: u32,
+    /// The file's allocation, which the weak reference keeps once the file
+    /// is closed until a wait drops the registration: charged to the job
+    /// that registered it (F-37).
+    _pinned: Charge,
 }
 
 /// What a set holds.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct State {
     /// The registrations, in the order waits consider them.
     items: Vec<Item>,
@@ -118,6 +123,10 @@ struct State {
     /// Bumped by every change to `items`, so a set holding this one sees a
     /// change.
     generation: u64,
+    /// The room `items` holds, charged to the job that made the set (F-37).
+    items_room: Charge,
+    /// The room `parents` holds, likewise.
+    parents_room: Charge,
 }
 
 /// One event a wait may deliver.
@@ -148,6 +157,8 @@ pub(crate) struct Epoll {
     /// Woken when a registration is added, changed or removed, so a wait on
     /// the set sees a file added while it sleeps, as `ep_insert` wakes one.
     changed: Arc<WaitQueue>,
+    /// Its heap but its lists', charged to the job that made it (F-37).
+    _charge: Charge,
 }
 
 impl fmt::Debug for Epoll {
@@ -162,10 +173,28 @@ impl fmt::Debug for Epoll {
 ///
 /// Whatever [`OpenFile::new`] refuses, which for an epoll set is nothing.
 pub(crate) fn create() -> Result<Arc<OpenFile>, Errno> {
+    let refused = |_| Errno::ENOMEM;
+    let charge =
+        Charge::bytes(arc_footprint::<Epoll>().saturating_add(arc_footprint::<WaitQueue>()))
+            .map_err(refused)?;
+    // Nothing is never refused; these grow with the set.
+    let (items_room, parents_room) = (
+        Charge::bytes(0).map_err(refused)?,
+        Charge::bytes(0).map_err(refused)?,
+    );
     let set = Arc::new_cyclic(|this| Epoll {
-        state: SpinLock::new(State::default()),
+        state: SpinLock::new(State {
+            items: Vec::new(),
+            next_serial: 0,
+            revision: 0,
+            parents: Vec::new(),
+            generation: 0,
+            items_room,
+            parents_room,
+        }),
         this: this.clone(),
         changed: Arc::new(WaitQueue::new()),
+        _charge: charge,
     });
     fs::anon::open(set, NAME, false)
 }
@@ -264,6 +293,41 @@ impl Epoll {
         let weak = Arc::downgrade(file);
         // Looked at before the lock, as every look is.
         let seen = look(&weak).unwrap_or((0, 0));
+        let pinned = Charge::bytes(arc_footprint::<OpenFile>()).map_err(|_| Errno::ENOMEM)?;
+        // The inner set learns of this one first, so the depth check never
+        // misses a parent; a registration refused below takes it back.
+        if let Some(inner) = &nested {
+            inner.add_parent(&self.this)?;
+        }
+        let added = self.insert(fd, key, weak, nested.as_ref(), interest, seen, pinned);
+        if let (Err(_), Some(inner)) = (&added, &nested) {
+            inner.remove_parent(&self.this);
+        }
+        added?;
+        self.changed.wake_all();
+        Ok(())
+    }
+
+    /// Put a registration in, charged: the rest of [`Epoll::add`].
+    ///
+    /// # Errors
+    ///
+    /// `EEXIST` for a file and number already registered, `ENOMEM` for no
+    /// room.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "AUDIT: one registration's fields, taken apart once"
+    )]
+    fn insert(
+        &self,
+        fd: i32,
+        key: usize,
+        weak: Weak<OpenFile>,
+        nested: Option<&Arc<Epoll>>,
+        interest: Interest,
+        seen: (u32, u64),
+        pinned: Charge,
+    ) -> Result<(), Errno> {
         {
             let mut state = self.state.lock();
             if state
@@ -273,15 +337,20 @@ impl Epoll {
             {
                 return Err(Errno::EEXIST);
             }
+            let State {
+                items, items_room, ..
+            } = &mut *state;
+            ferrix_kmem::reserve(items, 1, items_room).map_err(|_| Errno::ENOMEM)?;
             let events = interest.events | EPOLLERR | EPOLLHUP;
             let serial = state.next_serial;
             state.next_serial = state.next_serial.wrapping_add(1);
+            // NOALLOC: room was had just above.
             state.items.push(Item {
                 serial,
                 fd,
                 key,
                 file: weak,
-                nested: nested.as_ref().map(Arc::downgrade),
+                nested: nested.map(Arc::downgrade),
                 events,
                 data: interest.data,
                 gone: false,
@@ -289,15 +358,45 @@ impl Epoll {
                 due: seen.0 & events != 0,
                 seen_changes: seen.1,
                 seen_bits: seen.0,
+                _pinned: pinned,
             });
             state.generation = state.generation.wrapping_add(1);
             state.revision = state.revision.wrapping_add(1);
         }
-        if let Some(inner) = nested {
-            inner.state.lock().parents.push(self.this.clone());
-        }
-        self.changed.wake_all();
         Ok(())
+    }
+
+    /// Note that `parent` holds this set, for the depth check, charged to
+    /// this set's job. Parents gone are pruned first, so a set added and
+    /// removed again and again does not grow the list.
+    ///
+    /// # Errors
+    ///
+    /// `ENOMEM` for no room.
+    fn add_parent(&self, parent: &Weak<Epoll>) -> Result<(), Errno> {
+        let mut state = self.state.lock();
+        let State {
+            parents,
+            parents_room,
+            ..
+        } = &mut *state;
+        parents.retain(|held| held.strong_count() > 0);
+        ferrix_kmem::reserve(parents, 1, parents_room).map_err(|_| Errno::ENOMEM)?;
+        // NOALLOC: room was had just above.
+        parents.push(parent.clone());
+        Ok(())
+    }
+
+    /// Forget one note that `parent` holds this set.
+    fn remove_parent(&self, parent: &Weak<Epoll>) {
+        let mut state = self.state.lock();
+        if let Some(at) = state
+            .parents
+            .iter()
+            .position(|held| Weak::ptr_eq(held, parent))
+        {
+            let _ = state.parents.remove(at);
+        }
     }
 
     /// `EPOLL_CTL_MOD`: new events and cookie, armed again, and due a report
@@ -361,14 +460,7 @@ impl Epoll {
             state.items.remove(at)
         };
         if let Some(inner) = removed.nested.as_ref().and_then(Weak::upgrade) {
-            let mut state = inner.state.lock();
-            if let Some(at) = state
-                .parents
-                .iter()
-                .position(|parent| Weak::ptr_eq(parent, &self.this))
-            {
-                let _ = state.parents.remove(at);
-            }
+            inner.remove_parent(&self.this);
         }
         self.changed.wake_all();
         Ok(())

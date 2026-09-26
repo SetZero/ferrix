@@ -1901,12 +1901,7 @@ impl Inode for Node {
         let writer: Option<procfs::Writer> = attr
             .writable()
             .then(|| Box::new(move |data: &[u8]| write(dir, attr, data)) as procfs::Writer);
-        Ok(Some(procfs::snapshot(
-            self.metadata(),
-            bytes,
-            writer,
-            Errno::EACCES,
-        )))
+        procfs::snapshot(self.metadata(), bytes, writer, Errno::EACCES).map(Some)
     }
 
     fn read_at(&self, offset: u64, buf: &mut [u8]) -> Result<usize> {

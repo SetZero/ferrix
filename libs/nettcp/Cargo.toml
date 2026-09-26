@@ -8,6 +8,7 @@ license.workspace = true
 publish = false
 
 [dependencies]
+ferrix-kmem = { workspace = true }
 ferrix-netwire = { workspace = true }
 
 [lints]

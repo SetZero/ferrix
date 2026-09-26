@@ -266,8 +266,8 @@ fn mount_kernel_filesystems(inside: &Context) -> Result<(), &'static str> {
         (b"/dev", Arc::new(devfs::Devfs::new()), 0o755),
         (b"/proc", Arc::new(procfs::Procfs::new()), 0o555),
         (b"/sys", Arc::new(sysfs::Sysfs::new()), 0o555),
-        (b"/tmp", fs::new_tmpfs(), 0o1777),
-        (b"/dev/shm", fs::new_tmpfs(), 0o1777),
+        (b"/tmp", fs::kernel_tmpfs(), 0o1777),
+        (b"/dev/shm", fs::kernel_tmpfs(), 0o1777),
     ];
     for (path, filesystem, mode) in mounts {
         // devfs carries `shm` already, so its `mkdir` answers `EEXIST`.

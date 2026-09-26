@@ -1298,7 +1298,7 @@ pub(crate) fn attach_device(file: Arc<OpenFile>) -> Result<Arc<OpenFile>> {
         return Ok(file);
     }
     let device = open_char_device(inode.metadata().rdev)?;
-    Ok(file.with_io(device))
+    file.with_io(device)
 }
 
 /// Mount a devfs on `/dev`, making the directory if the archive had none.

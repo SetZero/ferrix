@@ -47,6 +47,7 @@ use core::any::Any;
 use core::fmt;
 use core::sync::atomic::{AtomicBool, Ordering};
 
+use ferrix_kmem::{Charge, arc_footprint};
 use ferrix_vfs::{Errno, Inode, Metadata, OpenFile, Readiness};
 
 use crate::fs;
@@ -181,6 +182,12 @@ pub(crate) struct TimerFd {
     state: SpinLock<State>,
     /// Woken when a read may no longer wait: the count rose from zero.
     readable: Arc<WaitQueue>,
+    /// Its heap and its entry in the timer list, charged to the job that
+    /// made it (F-37). The list's weak entry keeps the allocation until the
+    /// next timer made prunes it, which the charge does not outlive: what
+    /// the list holds of gone timers is at most what was live, and charged,
+    /// when the last one was made.
+    _charge: Charge,
 }
 
 impl fmt::Debug for TimerFd {
@@ -199,10 +206,17 @@ impl fmt::Debug for TimerFd {
 ///
 /// Whatever [`fs::anon::open`] refuses, which for a timerfd is nothing.
 pub(crate) fn create(clock: Clock, nonblock: bool) -> Result<Arc<OpenFile>, Errno> {
+    let charge = Charge::bytes(
+        arc_footprint::<TimerFd>()
+            .saturating_add(arc_footprint::<WaitQueue>())
+            .saturating_add(size_of::<Weak<TimerFd>>()),
+    )
+    .map_err(|_| Errno::ENOMEM)?;
     let timer = Arc::new(TimerFd {
         clock,
         state: SpinLock::new(State::default()),
         readable: Arc::new(WaitQueue::new()),
+        _charge: charge,
     });
     enlist(&timer);
     fs::anon::open(timer, NAME, nonblock)

@@ -1881,3 +1881,41 @@ fn a_quiet_removal_matches_a_reported_one_and_needs_no_memory_once_reserved() {
     assert_eq!(quiet, reported);
     check(&quiet);
 }
+
+/// Splitting one mapping into a region a page by `mprotect` is charged to
+/// the job that made the space, region by region, and refused at its limit
+/// with the map as it was (certification finding F-37); `fork`'s copy is
+/// charged too, and everything comes back as the maps go.
+#[test]
+fn regions_are_charged_to_the_spaces_job() {
+    let job = ferrix_kmem::testing::Job::enter(8 * 1024);
+    let mut space = AddressSpace::new(0x1000, 0x1_0000_0000).unwrap();
+    map(
+        &mut space,
+        0x10_0000,
+        0x10_0000 + 4096 * PAGE_SIZE,
+        VmaFlags::READ_WRITE,
+    );
+    let mut split = 0;
+    let refused = loop {
+        let at = 0x10_0000 + (2 * split + 1) * PAGE_SIZE;
+        let before = space.clone();
+        match space.protect(range(at, at + PAGE_SIZE), VmaFlags::READ) {
+            Ok(()) => split += 1,
+            Err(error) => {
+                assert_eq!(space, before, "a refused mprotect changed the map");
+                break error;
+            }
+        }
+    };
+    assert_eq!(refused, VmaError::NoMemory);
+    assert_eq!(space.charged(), job.used());
+    assert!(job.used() <= 8 * 1024 && split > 16, "{split} splits");
+    let child = space.clone_for_fork().unwrap_err();
+    assert_eq!(child, VmaError::NoMemory, "the copy is charged too");
+    job.set_limit(u64::MAX);
+    let child = space.clone_for_fork().unwrap();
+    assert_eq!(job.used(), space.charged() + child.charged());
+    drop((space, child));
+    assert_eq!((job.used(), job.holds()), (0, 0));
+}

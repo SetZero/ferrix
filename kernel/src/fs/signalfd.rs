@@ -42,6 +42,7 @@ use core::any::Any;
 use core::fmt;
 use core::sync::atomic::{AtomicU64, Ordering};
 
+use ferrix_kmem::{Charge, arc_footprint};
 use ferrix_linux_abi::types::SIGNALFD_SIGINFO_BYTES;
 use ferrix_vfs::{Errno, Inode, Metadata, OpenFile, Readiness};
 
@@ -70,6 +71,8 @@ pub(crate) struct SignalFd {
     /// The process that made it, whose signals a reader that is no process's
     /// thread reads. Weak: the descriptor does not keep its maker alive.
     maker: Weak<Process>,
+    /// Its heap, charged to the job that made it (F-37).
+    _charge: Charge,
 }
 
 impl fmt::Debug for SignalFd {
@@ -94,9 +97,11 @@ pub(crate) fn create(maker: &Process, mask: u64, nonblock: bool) -> Result<Arc<O
         .filter(|found| core::ptr::eq(Arc::as_ptr(found), maker))
         .as_ref()
         .map_or_else(Weak::new, Arc::downgrade);
+    let charge = Charge::bytes(arc_footprint::<SignalFd>()).map_err(|_| Errno::ENOMEM)?;
     let signalfd = Arc::new(SignalFd {
         mask: AtomicU64::new(mask & !UNBLOCKABLE),
         maker,
+        _charge: charge,
     });
     fs::anon::open(signalfd, NAME, nonblock)
 }

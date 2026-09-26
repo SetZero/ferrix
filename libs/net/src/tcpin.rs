@@ -9,6 +9,7 @@
 
 use alloc::vec;
 
+use ferrix_kmem::{Charge, boxed_footprint};
 use ferrix_nettcp::{Connection, Request, SeqNumber, State};
 use ferrix_netwire::tcp::{self, Flags};
 
@@ -128,6 +129,13 @@ impl Stack {
         }
         let family = waiting.family;
         let options = waiting.options;
+        let owner = waiting.owner;
+        // Charged to the listener's job before anything is made; a job at
+        // its limit drops the request as a full backlog does.
+        let Ok(heap) = Charge::to(owner, boxed_footprint::<StreamSocket>()) else {
+            self.counters.no_socket += 1;
+            return;
+        };
         let request = Request {
             sequence: SeqNumber(segment.header.sequence),
             window: segment.header.window,
@@ -136,8 +144,12 @@ impl Stack {
             selective_ack: segment.header.options.sack_permitted,
         };
         let iss = SeqNumber(self.random.next_u32());
-        let connection =
+        let mut connection =
             Connection::accept(self.config.tcp, local.port, remote.port, iss, &request);
+        if connection.charge_to(owner).is_err() {
+            self.counters.no_socket += 1;
+            return;
+        }
         let id = self.install_stream(StreamSocket {
             family,
             local,
@@ -148,6 +160,7 @@ impl Stack {
             read_shut: false,
             listener: Some(listener),
             closing: false,
+            heap,
         });
         if let Some(Socket::Listen(waiting)) = self.sockets.get_mut(&listener.0) {
             waiting.pending.push(id);

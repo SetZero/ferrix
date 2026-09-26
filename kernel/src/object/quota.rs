@@ -67,18 +67,29 @@ pub(crate) const UNLIMITED: u64 = u64::MAX;
 /// What a job is charged for.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Resource {
-    /// Physical memory, in frames.
+    /// Memory, in bytes: the frames of its programs' memory and page tables,
+    /// a page each, and the kernel heap the Linux personality holds for them
+    /// ([`Resource::Kernel`], F-37). `memory.max` limits the sum, as Linux's
+    /// does with kernel memory folded in.
     Memory,
     /// Kernel objects a program made: VMOs, channel ends, ports, jobs, pins.
     Objects,
     /// Tasks: a process, and each thread beside its first.
     Tasks,
+    /// The part of [`Resource::Memory`] that is kernel heap, in bytes:
+    /// `memory.stat`'s `kernel`. Charged only with memory, by
+    /// [`charge_kernel`], and never limited on its own.
+    Kernel,
 }
 
 impl Resource {
     /// Every resource, in the order the slot keeps them.
-    pub(crate) const ALL: [Resource; RESOURCES] =
-        [Resource::Memory, Resource::Objects, Resource::Tasks];
+    pub(crate) const ALL: [Resource; RESOURCES] = [
+        Resource::Memory,
+        Resource::Objects,
+        Resource::Tasks,
+        Resource::Kernel,
+    ];
 
     /// Where the slot keeps it.
     const fn at(self) -> usize {
@@ -86,12 +97,16 @@ impl Resource {
             Resource::Memory => 0,
             Resource::Objects => 1,
             Resource::Tasks => 2,
+            Resource::Kernel => 3,
         }
     }
 }
 
 /// How many resources a slot counts.
-const RESOURCES: usize = 3;
+const RESOURCES: usize = 4;
+
+/// What a frame is charged as: a page of memory.
+const FRAME_BYTES: u64 = ferrix_bootinfo::PAGE_SIZE;
 
 /// A charge a limit refused.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -363,7 +378,7 @@ pub(crate) fn charge_frame(index: u32) -> Result<(), Exceeded> {
     if index == NONE {
         return Ok(());
     }
-    charge(index, Resource::Memory, 1)?;
+    charge(index, Resource::Memory, FRAME_BYTES)?;
     hold(index);
     Ok(())
 }
@@ -373,8 +388,81 @@ pub(crate) fn uncharge_frame(index: u32) {
     if index == NONE {
         return;
     }
-    uncharge(index, Resource::Memory, 1);
+    uncharge(index, Resource::Memory, FRAME_BYTES);
     release(index);
+}
+
+/// Charge `bytes` of kernel heap to `index` and every slot above it: memory,
+/// against the memory limit, and counted again as [`Resource::Kernel`] so
+/// `memory.stat` can say how much of it is heap.
+///
+/// # Errors
+///
+/// [`Exceeded`], with nothing charged anywhere.
+pub(crate) fn charge_kernel(index: u32, bytes: u64) -> Result<(), Exceeded> {
+    charge(index, Resource::Memory, bytes)?;
+    charge_regardless(index, Resource::Kernel, bytes);
+    Ok(())
+}
+
+/// Take back what [`charge_kernel`] charged.
+pub(crate) fn uncharge_kernel(index: u32, bytes: u64) {
+    uncharge(index, Resource::Kernel, bytes);
+    uncharge(index, Resource::Memory, bytes);
+}
+
+/// The account `ferrix_kmem` charges through: kernel heap a program's calls
+/// hold, charged to the running task's job ([`charge_kernel`]), and holding
+/// that job's slot for as long as the charge lives.
+#[derive(Debug)]
+struct KernelHeap;
+
+impl ferrix_kmem::Account for KernelHeap {
+    fn current(&self) -> u32 {
+        crate::sched::running_group()
+    }
+
+    fn charge(&self, owner: u32, bytes: u64) -> Result<(), ferrix_kmem::Refused> {
+        charge_kernel(owner, bytes).map_err(|Exceeded| ferrix_kmem::Refused)
+    }
+
+    fn uncharge(&self, owner: u32, bytes: u64) {
+        uncharge_kernel(owner, bytes);
+    }
+
+    fn hold(&self, owner: u32) {
+        hold_group(owner);
+    }
+
+    fn release(&self, owner: u32) {
+        release_group(owner);
+    }
+}
+
+/// Run `work` charging nothing to anyone: for what the kernel makes for a
+/// process whatever its job, and cannot report the failure of -- a new
+/// process's first descriptors. Each such use is a constant a process,
+/// which the task limit bounds.
+pub(crate) fn charging_nobody<R>(work: impl FnOnce() -> R) -> R {
+    let own = crate::sched::running_group();
+    if own == NONE {
+        return work();
+    }
+    crate::sched::set_current_group(NONE);
+    let done = work();
+    crate::sched::set_current_group(own);
+    done
+}
+
+/// The one [`KernelHeap`].
+static KERNEL_HEAP: KernelHeap = KernelHeap;
+
+/// Charge the kernel heap a program's calls hold to its job from now on.
+/// Called as the first job below the root is made: until one is, there is
+/// no slot a charge could go to, and the root's programs are charged to
+/// nobody anyway.
+fn install_kernel_heap() {
+    ferrix_kmem::install(&KERNEL_HEAP);
 }
 
 /// A charge held by whatever it was made for, and taken back as it is dropped:
@@ -460,6 +548,7 @@ impl Quota {
     ///
     /// [`AllocError`].
     pub(crate) fn new(parent: Option<&Quota>) -> Result<Quota, AllocError> {
+        install_kernel_heap();
         let index = claim(parent.map_or(NONE, |parent| parent.index))?;
         Ok(Quota { index })
     }

@@ -52,8 +52,10 @@ use alloc::sync::{Arc, Weak};
 use core::fmt;
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
+use ferrix_kmem::{Charge, arc_footprint, footprint};
 use ferrix_sync::SpinLock;
 
+use crate::Result;
 use crate::node::Inode;
 
 /// Source of dentry identifiers, which the mount table keys on.
@@ -74,6 +76,11 @@ pub struct Dentry {
     /// How many mounts sit on this dentry. Checked on every step of every
     /// walk, so it is a counter rather than a question for the mount table.
     mounts: AtomicU32,
+    /// The kernel heap it holds, charged to the job whose walk made it, as
+    /// Linux charges a dentry (`SLAB_ACCOUNT`): itself, its name, and its
+    /// entry in its parent's children (F-37). A cached dentry nobody holds
+    /// stays charged until the cache lets it go.
+    _charge: Charge,
 }
 
 /// The parts of a dentry a rename or an unlink changes.
@@ -88,22 +95,61 @@ struct State {
 
 impl Dentry {
     /// A root: no parent, and an inode.
-    pub(crate) fn root(inode: Arc<dyn Inode>) -> Arc<Dentry> {
+    ///
+    /// # Errors
+    ///
+    /// `ENOMEM` past the job's memory limit.
+    pub(crate) fn root(inode: Arc<dyn Inode>) -> Result<Arc<Dentry>> {
         Dentry::new(Box::from(&b"/"[..]), None, Some(inode))
+    }
+
+    /// A namespace's root, made at boot and never charged: `Namespace::new`
+    /// cannot fail.
+    pub(crate) fn uncharged_root(inode: Arc<dyn Inode>) -> Arc<Dentry> {
+        Arc::new(Dentry {
+            id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
+            state: SpinLock::new(State {
+                name: Box::from(&b"/"[..]),
+                parent: None,
+                inode: Some(inode),
+                unhashed: false,
+            }),
+            children: SpinLock::new(BTreeMap::new()),
+            generation: AtomicU64::new(0),
+            mounts: AtomicU32::new(0),
+            _charge: Charge::none(),
+        })
     }
 
     /// A root with a name of its own, for an object in no tree: see
     /// `Location::detached`.
-    pub(crate) fn named_root(name: Box<[u8]>, inode: Arc<dyn Inode>) -> Arc<Dentry> {
+    ///
+    /// # Errors
+    ///
+    /// `ENOMEM` past the job's memory limit.
+    pub(crate) fn named_root(name: Box<[u8]>, inode: Arc<dyn Inode>) -> Result<Arc<Dentry>> {
         Dentry::new(name, None, Some(inode))
+    }
+
+    /// What a dentry called `name` holds of the heap: itself, its name, and
+    /// for one with a parent, the name and link its parent's children keep.
+    fn footprint(name: usize, child: bool) -> usize {
+        let own = arc_footprint::<Dentry>().saturating_add(footprint(name, 1));
+        if child {
+            own.saturating_add(footprint(name, 1))
+                .saturating_add(size_of::<(Box<[u8]>, Weak<Dentry>)>())
+        } else {
+            own
+        }
     }
 
     fn new(
         name: Box<[u8]>,
         parent: Option<Arc<Dentry>>,
         inode: Option<Arc<dyn Inode>>,
-    ) -> Arc<Dentry> {
-        Arc::new(Dentry {
+    ) -> Result<Arc<Dentry>> {
+        let charge = crate::charge(Dentry::footprint(name.len(), parent.is_some()))?;
+        Ok(Arc::new(Dentry {
             id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
             state: SpinLock::new(State {
                 name,
@@ -114,7 +160,8 @@ impl Dentry {
             children: SpinLock::new(BTreeMap::new()),
             generation: AtomicU64::new(0),
             mounts: AtomicU32::new(0),
-        })
+            _charge: charge,
+        }))
     }
 
     /// Unique identifier.
@@ -179,23 +226,27 @@ impl Dentry {
     ///
     /// The caller keeps its own reference to `inode`, so that what is dropped
     /// here under the children lock is never the last one.
+    ///
+    /// # Errors
+    ///
+    /// `ENOMEM` past the job's memory limit, with nothing cached.
     pub(crate) fn insert_looked_up(
         self: &Arc<Self>,
         name: &[u8],
         inode: Option<Arc<dyn Inode>>,
         generation: u64,
-    ) -> Option<(Arc<Dentry>, bool)> {
+    ) -> Result<Option<(Arc<Dentry>, bool)>> {
         let mut children = self.children.lock();
         if let Some(existing) = children.get(name).and_then(Weak::upgrade) {
-            return Some((existing, false));
+            return Ok(Some((existing, false)));
         }
         if self.generation() != generation {
-            return None;
+            return Ok(None);
         }
-        let child = Dentry::new(Box::from(name), Some(Arc::clone(self)), inode);
+        let child = Dentry::new(Box::from(name), Some(Arc::clone(self)), inode)?;
         children.retain(|_, weak| weak.strong_count() > 0);
         let _ = children.insert(Box::from(name), Arc::downgrade(&child));
-        Some((child, true))
+        Ok(Some((child, true)))
     }
 
     /// A child for what a lookup found, known to this walk alone.
@@ -203,11 +254,15 @@ impl Dentry {
     /// For a directory that does not cache lookups: the dentry holds its
     /// parent, so `..` and `path_of` work from it, but no later walk will find
     /// it and it goes away with whoever holds it.
+    ///
+    /// # Errors
+    ///
+    /// `ENOMEM` past the job's memory limit.
     pub(crate) fn uncached_child(
         self: &Arc<Self>,
         name: &[u8],
         inode: Option<Arc<dyn Inode>>,
-    ) -> Arc<Dentry> {
+    ) -> Result<Arc<Dentry>> {
         Dentry::new(Box::from(name), Some(Arc::clone(self)), inode)
     }
 

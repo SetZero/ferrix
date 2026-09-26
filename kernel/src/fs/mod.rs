@@ -40,6 +40,7 @@ pub(crate) mod epoll_check;
 pub(crate) mod eventfd;
 pub(crate) mod eventfd_check;
 pub(crate) mod exec_check;
+pub(crate) mod kmem_check;
 pub(crate) mod memfd_check;
 pub(crate) mod mmap_check;
 mod pages;
@@ -129,7 +130,7 @@ const NANOS: u64 = 1_000_000_000;
 
 /// The namespace, built empty on first use if [`init`] has not run yet.
 pub(crate) fn namespace() -> &'static Namespace {
-    NAMESPACE.call_once(|| Namespace::new(new_tmpfs(), Arc::new(crate::sync::SchedParker)))
+    NAMESPACE.call_once(|| Namespace::new(kernel_tmpfs(), Arc::new(crate::sync::SchedParker)))
 }
 
 /// The initramfs as the loader handed it over, kept for the root disk to
@@ -160,9 +161,26 @@ pub(crate) fn clock() -> Arc<dyn Clock> {
     Arc::new(RealtimeClock)
 }
 
-/// A new, empty tmpfs whose file contents are VMO pages.
-pub(crate) fn new_tmpfs() -> Arc<Tmpfs> {
+/// A new, empty tmpfs whose file contents are VMO pages, charged to the
+/// running task's job: what `mount -t tmpfs` makes.
+///
+/// # Errors
+///
+/// `ENOMEM` past the job's memory limit.
+pub(crate) fn new_tmpfs() -> Result<Arc<Tmpfs>, Errno> {
     Tmpfs::new(
+        anonymous_device(),
+        clock(),
+        Arc::new(pages::VmoStorage),
+        0o755,
+    )
+}
+
+/// A new, empty tmpfs the kernel keeps for every job, charged to nobody: the
+/// namespace's root, `/tmp` and `/dev/shm` as boot mounts them, the memfd
+/// filesystem. Its files are charged to their makers.
+pub(crate) fn kernel_tmpfs() -> Arc<Tmpfs> {
+    Tmpfs::for_kernel(
         anonymous_device(),
         clock(),
         Arc::new(pages::VmoStorage),
@@ -391,7 +409,7 @@ pub(crate) fn init(view: &BootView<'_>) -> Result<Report, InitError> {
     let tmp = ns
         .resolve(&ctx, None, b"/tmp", true)
         .map_err(InitError::Tmp)?;
-    let _ = ns.mount(new_tmpfs(), &tmp).map_err(InitError::Tmp)?;
+    let _ = ns.mount(kernel_tmpfs(), &tmp).map_err(InitError::Tmp)?;
     let mounted = ns
         .resolve(&ctx, None, b"/tmp", true)
         .map_err(InitError::Tmp)?;
@@ -418,7 +436,7 @@ pub(crate) fn init(view: &BootView<'_>) -> Result<Report, InitError> {
         .resolve(&ctx, None, b"/dev/shm", true)
         .map_err(|errno| InitError::Mount("/dev/shm", errno))?;
     let _ = ns
-        .mount(new_tmpfs(), &shm)
+        .mount(kernel_tmpfs(), &shm)
         .map_err(|errno| InitError::Mount("/dev/shm", errno))?;
     let mounted = ns
         .resolve(&ctx, None, b"/dev/shm", true)

@@ -42,6 +42,7 @@
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 
+use ferrix_kmem::{Charge, buffer_footprint};
 use ferrix_linux_abi::socket::SOCKET_BUFFER_MIN;
 
 /// Whether a buffer keeps the boundaries between writes.
@@ -71,6 +72,10 @@ pub enum WriteOutcome {
     /// A record larger than the buffer could ever hold: `EMSGSIZE`, rather
     /// than a wait nothing could end.
     TooBig,
+    /// The queue could not grow: the writer's job is at its memory limit, or
+    /// the heap is empty. Nothing was queued, and the ancillary data is left
+    /// with the caller, which reports `ENOMEM`.
+    NoMemory,
 }
 
 /// What a read did.
@@ -100,9 +105,71 @@ pub enum ReadOutcome<A> {
 struct Segment<A> {
     bytes: VecDeque<u8>,
     ancillary: Option<A>,
+    /// The heap the segment holds, charged to the job of the writer that
+    /// made it, growth included, and given back as it is read (F-37): its
+    /// bytes, and [`SLOTS_A_SEGMENT`] places in the queue.
+    heap: Charge,
 }
 
+/// The places in its buffer's queue each segment is charged for: the queue
+/// grows by doubling and is given back once under a quarter full
+/// ([`SocketBuffer::compact`]), so it never has more than four places a
+/// segment beyond the [`QUEUE_FLOOR`] it keeps.
+const SLOTS_A_SEGMENT: usize = 4;
+
+/// The places a queue keeps however few segments it holds, charged with
+/// the socket rather than a segment.
+pub const QUEUE_FLOOR: usize = 4;
+
 impl<A> Segment<A> {
+    /// A segment holding a copy of `data`, charged to the running task's
+    /// job; `None` if the charge or the allocation is refused.
+    fn new(data: &[u8], ancillary: Option<A>) -> Option<Segment<A>> {
+        let heap = Charge::bytes(Segment::<A>::footprint(data.len())).ok()?;
+        let mut bytes = VecDeque::new();
+        bytes.try_reserve_exact(data.len()).ok()?;
+        bytes.extend(data.iter().copied());
+        let mut segment = Segment {
+            bytes,
+            ancillary,
+            heap,
+        };
+        let _ = segment
+            .heap
+            .resize(Segment::<A>::footprint(segment.bytes.capacity()));
+        Some(segment)
+    }
+
+    /// What a segment whose bytes have room for `room` is charged.
+    fn footprint(room: usize) -> usize {
+        buffer_footprint::<u8>(room)
+            .saturating_add(SLOTS_A_SEGMENT.saturating_mul(size_of::<Segment<A>>()))
+    }
+
+    /// Add `data` to the end, growing to the next power of two that holds
+    /// it, charged to the segment's job. False, with nothing added, when
+    /// the charge or the allocation is refused.
+    fn append(&mut self, data: &[u8]) -> bool {
+        let len = self.bytes.len();
+        let needed = len.saturating_add(data.len());
+        if needed > self.bytes.capacity() {
+            let target = needed.next_power_of_two();
+            let before = Segment::<A>::footprint(self.bytes.capacity());
+            if self.heap.resize(Segment::<A>::footprint(target)).is_err() {
+                return false;
+            }
+            if self.bytes.try_reserve_exact(target - len).is_err() {
+                let _ = self.heap.resize(before);
+                return false;
+            }
+            let _ = self
+                .heap
+                .resize(Segment::<A>::footprint(self.bytes.capacity()));
+        }
+        self.bytes.extend(data.iter().copied());
+        true
+    }
+
     /// What the segment counts against the capacity: its bytes, or one for
     /// an empty record.
     ///
@@ -159,6 +226,55 @@ impl<A> SocketBuffer<A> {
             boundary: None,
             stops_before: |_| false,
         }
+    }
+
+    /// What the queue holds of the heap beyond its segments' charges: its
+    /// [`QUEUE_FLOOR`] places, for whoever makes the buffer to be charged.
+    #[must_use]
+    pub fn floor_footprint() -> usize {
+        buffer_footprint::<Segment<A>>(QUEUE_FLOOR)
+    }
+
+    /// The heap the queued segments hold and are charged for, in bytes.
+    #[must_use]
+    pub fn charged_heap(&self) -> u64 {
+        self.segments
+            .iter()
+            .map(|segment| segment.heap.charged())
+            .fold(0, u64::saturating_add)
+    }
+
+    /// Make room in the queue for one more segment: twice the places, at
+    /// least four. The segment that takes it is charged for its share.
+    fn room_for_segment(&mut self) -> bool {
+        let len = self.segments.len();
+        if len < self.segments.capacity() {
+            return true;
+        }
+        let target = len.saturating_add(1).next_power_of_two().max(4);
+        self.segments.try_reserve_exact(target - len).is_ok()
+    }
+
+    /// Give the queue back most of its places once it is under a quarter
+    /// full, so that what a burst of segments grew it to is not kept after
+    /// their charges have gone. Kept as it is when there is no memory for a
+    /// smaller one.
+    fn compact(&mut self) {
+        let (len, room) = (self.segments.len(), self.segments.capacity());
+        if room <= QUEUE_FLOOR || len >= room / 4 {
+            return;
+        }
+        let mut smaller = VecDeque::new();
+        if smaller
+            .try_reserve_exact(len.saturating_mul(2).max(QUEUE_FLOOR / 2))
+            .is_err()
+        {
+            return;
+        }
+        // Room was had just above: moving the segments allocates nothing,
+        // and so cannot stop part-way.
+        smaller.extend(self.segments.drain(..));
+        self.segments = smaller;
     }
 
     /// The same buffer, with a stream read that has already taken bytes
@@ -282,15 +398,26 @@ impl<A> SocketBuffer<A> {
         if count == 0 {
             return WriteOutcome::WouldBlock;
         }
-        let accepted = data.get(..count).unwrap_or_default().iter().copied();
+        let accepted = data.get(..count).unwrap_or_default();
         match self.segments.back_mut() {
             Some(last) if ancillary.is_none() && last.ancillary.is_none() => {
-                last.bytes.extend(accepted);
+                if !last.append(accepted) {
+                    return WriteOutcome::NoMemory;
+                }
             }
-            _ => self.segments.push_back(Segment {
-                bytes: accepted.collect(),
-                ancillary: ancillary.take(),
-            }),
+            _ => {
+                if !self.room_for_segment() {
+                    return WriteOutcome::NoMemory;
+                }
+                let Some(segment) = Segment::new(accepted, None) else {
+                    return WriteOutcome::NoMemory;
+                };
+                // Room was had just above: this does not grow the queue.
+                self.segments.push_back(Segment {
+                    ancillary: ancillary.take(),
+                    ..segment
+                });
+            }
         }
         self.queued = self.queued.saturating_add(count);
         self.charged = self.charged.saturating_add(count);
@@ -306,13 +433,15 @@ impl<A> SocketBuffer<A> {
         if self.reader_closed {
             return WriteOutcome::Broken;
         }
-        let record = Segment {
-            bytes: data.iter().copied().collect(),
-            ancillary: None,
-        };
-        if self.free() < record.charge() {
+        if self.free() < data.len().max(1) {
             return WriteOutcome::WouldBlock;
         }
+        if !self.room_for_segment() {
+            return WriteOutcome::NoMemory;
+        }
+        let Some(record) = Segment::new(data, None) else {
+            return WriteOutcome::NoMemory;
+        };
         self.charged = self.charged.saturating_add(record.charge());
         self.queued = self.queued.saturating_add(data.len());
         self.segments.push_back(Segment {
@@ -425,6 +554,7 @@ impl<A> SocketBuffer<A> {
             let left = segment.bytes.len();
             if left == 0 {
                 let _ = self.segments.pop_front();
+                self.compact();
             }
             if carries {
                 self.boundary = Some(left);
@@ -484,6 +614,7 @@ impl<A> SocketBuffer<A> {
         let Some(record) = self.segments.pop_front() else {
             return ReadOutcome::WouldBlock;
         };
+        self.compact();
         self.queued = self.queued.saturating_sub(record.bytes.len());
         self.charged = self.charged.saturating_sub(record.charge());
         ReadOutcome::Read {
@@ -532,8 +663,9 @@ impl<A> SocketBuffer<A> {
         self.queued = 0;
         self.charged = 0;
         self.boundary = None;
-        self.segments
-            .drain(..)
+        // Taken whole, so the queue's places go with its segments.
+        core::mem::take(&mut self.segments)
+            .into_iter()
             .filter_map(|segment| segment.ancillary)
             .collect()
     }

@@ -281,6 +281,17 @@ const APPLETS_ON_X86_64: &[(usize, &[&str])] = &[
             "4096 bytes (4.0KB) copied, 0.000507 seconds, 7.7MB/s",
         ],
     ),
+    (
+        21,
+        &[
+            "file creation refused within memory.max",
+            "memory.current within memory.max",
+            "memory.stat counts kernel memory",
+            "memory.events counted the refusal",
+            "memory.current back to 0",
+            "removed",
+        ],
+    ),
 ];
 
 /// A log of the applets alone, numbered after the criterion's commands, each

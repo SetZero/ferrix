@@ -136,5 +136,5 @@ pub(crate) fn open(
     };
     let anon: Arc<AnonFs> = Arc::clone(anon_fs());
     let parker = Arc::clone(fs::namespace().parker());
-    OpenFile::new(Location::detached(anon, inode, name, parker), &flags)
+    OpenFile::new(Location::detached(anon, inode, name, parker)?, &flags)
 }

@@ -74,6 +74,7 @@ Causes are listed most likely first.
 | [FX-0903](#fx-0903) | a native call accepted what the ABI says it refuses |
 | [FX-0904](#fx-0904) | a service the item leans on failed its self-check |
 | [FX-0905](#fx-0905) | a job quota did not bound what it claims to |
+| [FX-0906](#fx-0906) | the kernel heap a job drove through the Linux calls was not bounded by its job |
 | [FX-1001](#fx-1001) | PCI enumeration failed its self-check |
 | [FX-1002](#fx-1002) | a device node handed out memory or an interrupt it does not have |
 | [FX-1003](#fx-1003) | an IOMMU domain gave a device the wrong addresses |
@@ -1615,6 +1616,32 @@ lets one job take memory, tasks, objects or processor time from the rest
 
 See: kernel/src/object/quota.rs; kernel/src/object/quota_check.rs;
 kernel/src/mm.rs; docs/certification/IMPLEMENTATION.md.
+
+<a id="fx-0906"></a>
+
+## FX-0906 — the kernel heap a job drove through the Linux calls was not bounded by its job
+
+`fs::kmem_check::run` fills a job with a small memory limit with each kind of
+object a program can make and keep through the Linux calls -- files in a tmpfs,
+pipes, socket pairs, descriptors in flight, epoll registrations, eventfds,
+regions of an address space -- until one is refused. Each must be refused with
+ENOMEM by the job's limit and not by something else, with the job's memory never
+past its limit and its kernel-memory count above zero; a sibling job must still
+make one; and once the objects are gone every byte charged must have come back.
+A kernel failing this lets one job take the kernel heap from the rest through a
+path its memory limit does not see (certification finding F-37, T.EXHAUST).
+
+1. An allocation site stopped carrying a `ferrix_kmem::Charge`, or made the
+   object before charging it, so a refusal left something behind.
+2. A charge was made to the wrong job: a buffer's growth to the running task
+   where it belongs to the object's maker, or the other way round.
+3. An object outlived what held it -- a cached dentry, a weak reference, a queue
+   that kept its room -- so its charge never came back.
+4. The kernel's account was not installed as the first job was made
+   (`quota::install_kernel_heap`), so nothing was charged at all.
+
+See: kernel/src/fs/kmem_check.rs; libs/kmem/src/lib.rs;
+kernel/src/object/quota.rs; docs/certification/IMPLEMENTATION.md W-15.
 
 <a id="fx-1001"></a>
 

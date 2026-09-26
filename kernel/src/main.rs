@@ -401,6 +401,7 @@ fn check_programs() {
     // Finding F-35: the job quotas FRU_RSA.1 claims, each driven to its
     // limit through the path a program's use takes.
     check_quotas();
+    check_kernel_memory();
 }
 
 /// The registration lists, a device's claim and number, the boot-mode word,
@@ -1181,16 +1182,47 @@ fn check_quotas() {
     };
     println!(
         "  quota    a fork loop refused at its job's {} tasks; faults refused at {} pages ({} \
-         of them page tables) while a sibling job faulted in {}; objects refused at {}; one \
+         of them page tables, beside {} bytes of its regions' heap) while a sibling job \
+         faulted in {}; objects refused at {}; one \
          task alone in its job kept {}.{}% of a processor against eight in another; every \
          counter back to zero and every quota slot given back",
         report.tasks,
         report.pages,
         report.tables,
+        report.heap,
         report.sibling_pages,
         report.objects,
         report.alone_share / 10,
         report.alone_share % 10,
+    );
+}
+
+/// Finding F-37: the kernel heap a program makes through the Linux calls,
+/// charged to its job and refused at its memory limit, kind by kind, with a
+/// sibling untouched and everything given back.
+///
+/// Halts rather than returning, as every other stage's check does.
+fn check_kernel_memory() {
+    let report = match fs::kmem_check::run() {
+        Ok(report) => report,
+        Err(problem) => fatal!(
+            catalog::STAGE9_KMEM,
+            "kernel memory self-check failed: {problem}"
+        ),
+    };
+    println!(
+        "  kmem     at a {} KiB memory limit a job made {} files, {} pipes, {} socket pairs, \
+         {} descriptors in flight, {} epoll registrations, {} eventfds and {} regions of one \
+         mapping, and was refused one more of each with ENOMEM while a sibling made one; \
+         every byte of heap charged came back",
+        fs::kmem_check::LIMIT / 1024,
+        report.files,
+        report.pipes,
+        report.sockets,
+        report.in_flight,
+        report.registrations,
+        report.eventfds,
+        2 * report.regions + 1,
     );
 }
 

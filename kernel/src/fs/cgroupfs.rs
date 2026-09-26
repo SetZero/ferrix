@@ -629,12 +629,7 @@ impl Inode for Interface {
             };
             Box::new(move |data: &[u8]| write_to(&job, kind, data, &opener)) as procfs::Writer
         });
-        Ok(Some(procfs::snapshot(
-            metadata,
-            bytes,
-            writer,
-            Errno::EACCES,
-        )))
+        procfs::snapshot(metadata, bytes, writer, Errno::EACCES).map(Some)
     }
 }
 
@@ -762,9 +757,13 @@ fn contents(job: &Arc<Job>, kind: Kind) -> Vec<u8> {
         Kind::Freeze => out.extend_from_slice(b"0\n"),
         Kind::Kill => {}
         Kind::CpuWeight => render::number(&mut out, u64::from(job.cpu_weight())),
-        Kind::MemoryCurrent => render::number(&mut out, bytes(usage(job, Resource::Memory).used)),
-        Kind::MemoryMax => render::max(&mut out, limit_bytes(usage(job, Resource::Memory).limit)),
+        Kind::MemoryCurrent => render::number(&mut out, usage(job, Resource::Memory).used),
+        Kind::MemoryMax => {
+            let limit = usage(job, Resource::Memory).limit;
+            render::max(&mut out, (limit != quota::UNLIMITED).then_some(limit));
+        }
         Kind::MemoryEvents => render::memory_events(&mut out, usage(job, Resource::Memory).refused),
+        Kind::MemoryStat => render::memory_stat(&mut out, usage(job, Resource::Kernel).used),
         Kind::PidsCurrent => render::number(&mut out, usage(job, Resource::Tasks).used),
         Kind::PidsMax => {
             let limit = usage(job, Resource::Tasks).limit;
@@ -783,16 +782,6 @@ fn usage(job: &Job, resource: Resource) -> quota::Usage {
         limit: quota::UNLIMITED,
         refused: 0,
     })
-}
-
-/// Pages as the bytes the `memory` files count in.
-fn bytes(pages: u64) -> u64 {
-    pages.saturating_mul(ferrix_bootinfo::PAGE_SIZE)
-}
-
-/// A limit in pages as `memory.max` prints it: `None` for no limit.
-fn limit_bytes(pages: u64) -> Option<u64> {
-    (pages != quota::UNLIMITED).then(|| bytes(pages))
 }
 
 /// The live processes directly in `job`, not beneath it, in pid order.
@@ -867,8 +856,11 @@ fn write_to(job: &Arc<Job>, kind: Kind, data: &[u8], opener: &Writer) -> Result<
         }
         Kind::MemoryMax => {
             let limit = write::parse_memory_max(data).map_err(errno)?;
-            let pages = limit.map_or(quota::UNLIMITED, |bytes| bytes / ferrix_bootinfo::PAGE_SIZE);
-            let _ = job.set_limit(Resource::Memory, pages);
+            // Whole pages, as Linux's page counter keeps it.
+            let bytes = limit.map_or(quota::UNLIMITED, |bytes| {
+                bytes - bytes % ferrix_bootinfo::PAGE_SIZE
+            });
+            let _ = job.set_limit(Resource::Memory, bytes);
         }
         Kind::CpuWeight => {
             let _ = job.set_cpu_weight(write::parse_weight(data).map_err(errno)?);
@@ -878,6 +870,7 @@ fn write_to(job: &Arc<Job>, kind: Kind, data: &[u8], opener: &Writer) -> Result<
         | Kind::Stat
         | Kind::MemoryCurrent
         | Kind::MemoryEvents
+        | Kind::MemoryStat
         | Kind::PidsCurrent
         | Kind::PidsEvents => return Err(Errno::EACCES),
     }

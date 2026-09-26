@@ -78,7 +78,7 @@ fn check_the_files(harness: &mut Harness) -> Checked<()> {
     }
     let job = job_of(harness, b"check-q")?;
     let limit = |resource| job.usage(resource).map(|usage| usage.limit);
-    if limit(Resource::Tasks) != Some(3) || limit(Resource::Memory) != Some(2) {
+    if limit(Resource::Tasks) != Some(3) || limit(Resource::Memory) != Some(8192) {
         return Err("pids.max and memory.max did not reach the job's quota");
     }
     if job.cpu_weight() != 300 {

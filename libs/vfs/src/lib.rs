@@ -100,3 +100,14 @@ pub use node::{
 /// The result every operation here returns: a value, or the error number a
 /// program would be given.
 pub type Result<T> = core::result::Result<T, Errno>;
+
+/// Charge the running task's job `bytes` of kernel heap for something a
+/// program made here (`ferrix_kmem`, certification finding F-37): `ENOMEM`
+/// past its memory limit, as Linux answers a refused kernel-memory charge.
+///
+/// # Errors
+///
+/// `ENOMEM`.
+pub(crate) fn charge(bytes: usize) -> Result<ferrix_kmem::Charge> {
+    ferrix_kmem::Charge::bytes(bytes).map_err(|_| Errno::ENOMEM)
+}

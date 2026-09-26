@@ -34,7 +34,7 @@ impl Clock for Ticking {
 }
 
 fn tmpfs(device: u64) -> Arc<dyn FileSystem> {
-    Tmpfs::new(
+    Tmpfs::for_kernel(
         device,
         Arc::new(Ticking::default()),
         Arc::new(HeapStorage::new(1 << 30)),
@@ -964,7 +964,7 @@ fn a_reserved_descriptor_is_taken_names_nothing_and_is_filled_once() {
 
     // A fork now copies the descriptors and not the reservation, which
     // nothing would ever fill in the child.
-    let child = table.clone();
+    let child = table.try_clone().unwrap();
     assert_eq!(child.len(), 2);
 
     assert_eq!(table.fill(reserved, 'c'), Ok(1));
@@ -1209,6 +1209,7 @@ fn a_pipe_delivers_bytes_in_order_against_a_model() {
                 }
                 WriteOutcome::WouldBlock => {}
                 WriteOutcome::Broken => panic!("a reader is open"),
+                WriteOutcome::NoMemory => panic!("no job limits this pipe"),
             }
         } else {
             let mut buf = vec![0_u8; len];
@@ -1472,7 +1473,8 @@ fn a_stream_is_told_whether_its_open_file_may_wait() {
         recorder.clone(),
         b"pipe:[7]",
         Arc::new(SpinParker),
-    );
+    )
+    .unwrap();
     let file = OpenFile::new(at, &READ_WRITE).unwrap();
     let mut buf = [0_u8; 4];
     assert_eq!(file.read(&mut buf), Ok(4));
@@ -1499,7 +1501,8 @@ fn a_stream_is_told_whether_its_open_file_may_wait() {
         Arc::new(Positioned),
         b"console",
         Arc::new(SpinParker),
-    );
+    )
+    .unwrap();
     let console = OpenFile::new(at, &READ_WRITE).unwrap();
     console.set_status(Status {
         append: false,
@@ -1547,7 +1550,8 @@ fn a_stream_that_ignores_its_position_seeks_to_zero_and_takes_offsets() {
         Arc::new(Zeros),
         b"zero",
         Arc::new(SpinParker),
-    );
+    )
+    .unwrap();
     let zero = OpenFile::new(at, &READ_WRITE).unwrap();
     assert!(zero.is_stream() && zero.takes_offsets());
     for (offset, whence) in [
@@ -1574,7 +1578,8 @@ fn a_stream_that_ignores_its_position_seeks_to_zero_and_takes_offsets() {
         Arc::new(Recorder::default()),
         b"pipe:[7]",
         Arc::new(SpinParker),
-    );
+    )
+    .unwrap();
     let pipe = OpenFile::new(at, &READ_WRITE).unwrap();
     assert!(!pipe.takes_offsets());
     assert_eq!(pipe.seek(0, Whence::Set), Err(Errno::ESPIPE));
@@ -1612,7 +1617,8 @@ fn a_stream_whose_seek_does_nothing_seeks_to_zero_and_refuses_offsets() {
         Arc::new(Counter),
         b"anon_inode:[eventfd]",
         Arc::new(SpinParker),
-    );
+    )
+    .unwrap();
     let counter = OpenFile::new(at, &READ_WRITE).unwrap();
     assert!(counter.is_stream() && !counter.takes_offsets());
     for (offset, whence) in [
@@ -1681,7 +1687,8 @@ fn a_stream_that_takes_offsets_may_still_refuse_lseek() {
         Arc::new(Events),
         b"card0",
         Arc::new(SpinParker),
-    );
+    )
+    .unwrap();
     let flags = OpenFlags {
         nonblock: true,
         ..READ_WRITE
@@ -1738,7 +1745,7 @@ impl crate::Inode for Tap {
 #[test]
 fn a_read_goes_on_only_from_a_stream_that_fills_and_never_waits() {
     let open = |inode: Arc<dyn crate::Inode>, flags: &OpenFlags| {
-        let at = Location::detached(Arc::new(Pipes), inode, b"s", Arc::new(SpinParker));
+        let at = Location::detached(Arc::new(Pipes), inode, b"s", Arc::new(SpinParker)).unwrap();
         OpenFile::new(at, flags).unwrap()
     };
     let tap = Arc::new(Tap {
@@ -1788,7 +1795,8 @@ fn a_detached_location_opens_and_names_itself_without_a_tree() {
         Arc::new(Recorder::default()),
         b"pipe:[7]",
         Arc::new(SpinParker),
-    );
+    )
+    .unwrap();
     assert!(at.is_detached() && !ctx.root.is_detached());
     assert_eq!(ns.path_of(&at, &ctx.root), b"pipe:[7]");
     assert_eq!(
@@ -1813,7 +1821,7 @@ fn with_io_sends_reads_elsewhere_and_keeps_what_stat_reports() {
     assert_eq!(file.read(&mut buf), Ok(3));
 
     let recorder = Arc::new(Recorder::default());
-    let swapped = file.with_io(recorder);
+    let swapped = file.with_io(recorder).unwrap();
     assert!(Arc::ptr_eq(swapped.inode(), file.inode()));
     assert!(swapped.location().same(file.location()));
     assert!(swapped.readable() && !swapped.writable());
@@ -2459,7 +2467,9 @@ fn the_offset_lock_is_held_across_a_positioned_call_and_no_spin_lock_is() {
 
     let watched = Watched::new(b"", 0);
     for opened in [&plain, &appending, &dir] {
-        let file = opened.with_io(Arc::clone(&watched) as Arc<dyn crate::Inode>);
+        let file = opened
+            .with_io(Arc::clone(&watched) as Arc<dyn crate::Inode>)
+            .unwrap();
         watched.attach(&file);
         if file.kind() == FileType::Directory {
             let mut listed = 0;
@@ -2492,7 +2502,9 @@ fn pread_and_pwrite_leave_the_offset_lock_alone() {
     let (ns, ctx) = fresh();
     let opened = ns.open(&ctx, None, b"/f", &RW_CREATE, 0o644).unwrap();
     let watched = Watched::new(b"0123456789", 0);
-    let file = opened.with_io(Arc::clone(&watched) as Arc<dyn crate::Inode>);
+    let file = opened
+        .with_io(Arc::clone(&watched) as Arc<dyn crate::Inode>)
+        .unwrap();
     watched.attach(&file);
     let mut buf = [0_u8; 4];
     assert_eq!(file.read_at(2, &mut buf), Ok(4));
@@ -2571,7 +2583,9 @@ fn sequential_reads_advance_the_offset_by_what_each_got() {
 fn a_short_read_advances_the_offset_by_the_bytes_it_got() {
     let (ns, ctx) = fresh();
     let opened = ns.open(&ctx, None, b"/f", &RW_CREATE, 0o644).unwrap();
-    let file = opened.with_io(Watched::new(b"0123456789", 3) as Arc<dyn crate::Inode>);
+    let file = opened
+        .with_io(Watched::new(b"0123456789", 3) as Arc<dyn crate::Inode>)
+        .unwrap();
     let mut buf = [0_u8; 8];
     assert_eq!(file.read(&mut buf), Ok(3));
     assert_eq!(&buf[..3], b"012");
@@ -3593,4 +3607,131 @@ fn a_magic_link_leads_to_its_object_and_not_to_its_text() {
         Some(Errno::ENOENT)
     );
     assert!(ns.mkdir(&ctx, None, b"/proc/cwd", 0o755).is_err());
+}
+
+// -- Kernel memory charged to the job (certification finding F-37) ----------
+
+mod charged {
+    use alloc::format;
+
+    use ferrix_kmem::testing::Job;
+
+    use super::{RW_CREATE, fresh};
+    use crate::Errno;
+    use crate::fd::FdTable;
+    use crate::pipe::{PipeBuffer, WriteOutcome};
+    use crate::socket::{self, SocketBuffer};
+
+    /// A job at its limit is refused one more file, with nothing made; a
+    /// sibling job makes one; and every byte comes back as the files go.
+    #[test]
+    fn files_their_names_and_dentries_are_the_makers_and_come_back() {
+        let (ns, ctx) = fresh();
+        let job = Job::enter(64 * 1024);
+        let mut made = 0;
+        let refused = loop {
+            let path = format!("/f{made}");
+            match ns.open(&ctx, None, path.as_bytes(), &RW_CREATE, 0o644) {
+                Ok(file) => {
+                    drop(file);
+                    made += 1;
+                }
+                Err(errno) => break errno,
+            }
+        };
+        assert_eq!(refused, Errno::ENOMEM);
+        assert!(made > 20, "only {made} files in 64 KiB");
+        assert!(job.used() <= 64 * 1024 && job.refused() >= 1);
+        let path = format!("/f{made}");
+        assert_eq!(
+            ns.resolve(&ctx, None, path.as_bytes(), true).err(),
+            Some(Errno::ENOENT),
+            "a refused create left its name behind"
+        );
+        let sibling = Job::enter(64 * 1024);
+        let _ = ns.open(&ctx, None, b"/sibling", &RW_CREATE, 0o644).unwrap();
+        assert!(sibling.used() > 0);
+        sibling.outside(|| {
+            for at in 0..made {
+                ns.unlink(&ctx, None, format!("/f{at}").as_bytes()).unwrap();
+            }
+        });
+        drop(sibling);
+        // The dentry cache still names the removed files' negative entries,
+        // which stay the job's until it lets them go, as Linux's do.
+        drop(ns);
+        assert_eq!((job.used(), job.holds()), (0, 0));
+    }
+
+    /// A pipe's buffer is charged as it grows, to the job that made it, and
+    /// refused at its limit with nothing queued.
+    #[test]
+    fn a_pipe_buffer_grows_within_its_job() {
+        let job = Job::enter(16 * 1024);
+        let mut pipe = PipeBuffer::new(65536);
+        pipe.open_reader();
+        pipe.open_writer();
+        let page = [7_u8; 4096];
+        let mut queued = 0;
+        let refusal = loop {
+            match pipe.write(&page) {
+                WriteOutcome::Wrote(count) => queued += count,
+                other => break other,
+            }
+        };
+        assert_eq!(refusal, WriteOutcome::NoMemory);
+        assert_eq!(pipe.len(), queued, "a refused write queued something");
+        assert_eq!(pipe.charged(), job.used());
+        assert!(job.used() <= 16 * 1024);
+        drop(pipe);
+        assert_eq!((job.used(), job.holds()), (0, 0));
+    }
+
+    /// Empty records cost their queue slot, charged to the writer; a record
+    /// refused leaves its ancillary data with the caller.
+    #[test]
+    fn empty_records_are_charged_for_what_they_hold() {
+        let job = Job::enter(8 * 1024);
+        let mut buffer: SocketBuffer<u32> = SocketBuffer::new(socket::Kind::Record, 1 << 20);
+        let mut sent = 0;
+        let mut ancillary = Some(9);
+        let refusal = loop {
+            match buffer.write(b"", &mut ancillary) {
+                socket::WriteOutcome::Wrote(_) => {
+                    sent += 1;
+                    ancillary = Some(9);
+                }
+                other => break other,
+            }
+        };
+        assert_eq!(refusal, socket::WriteOutcome::NoMemory);
+        assert_eq!(
+            ancillary,
+            Some(9),
+            "a refused record took its ancillary data"
+        );
+        assert!(sent > 10 && sent < 1000, "{sent} empty records in 8 KiB");
+        assert_eq!(buffer.charged_heap(), job.used());
+        let _ = buffer.drain();
+        drop(buffer);
+        assert_eq!((job.used(), job.holds()), (0, 0));
+    }
+
+    /// `dup2` far up a table grows it to there, charged: refused past the
+    /// job's limit, with the table as it was.
+    #[test]
+    fn a_descriptor_table_is_charged_for_its_highest_number() {
+        let job = Job::enter(4096);
+        let mut table: FdTable<u32> = FdTable::new();
+        table.set_limit(1 << 20).unwrap();
+        let _ = table.insert(1, false).unwrap();
+        assert_eq!(table.install(100_000, 2, false), Err(Errno::ENOMEM));
+        assert_eq!(table.get(100_000), Err(Errno::EBADF));
+        assert_eq!(table.install(100, 3, false), Ok(None));
+        assert_eq!(table.charged(), job.used());
+        let copy = table.try_clone().unwrap();
+        assert_eq!(copy.get(100), Ok(&3));
+        drop((table, copy));
+        assert_eq!((job.used(), job.holds()), (0, 0));
+    }
 }

@@ -19,6 +19,7 @@ use alloc::sync::Arc;
 use core::any::Any;
 use core::fmt;
 
+use ferrix_kmem::{Charge, arc_footprint};
 use ferrix_vfs::{Errno, Inode, Metadata, OpenFile, Readiness};
 
 use crate::fs;
@@ -59,6 +60,8 @@ pub(crate) struct EventFd {
     readable: Arc<WaitQueue>,
     /// Woken when a write may no longer wait: a read took from the counter.
     writable: Arc<WaitQueue>,
+    /// Its heap, charged to the job that made it (F-37).
+    _charge: Charge,
 }
 
 impl fmt::Debug for EventFd {
@@ -80,11 +83,16 @@ pub(crate) fn create(
     semaphore: bool,
     nonblock: bool,
 ) -> Result<Arc<OpenFile>, Errno> {
+    let charge = Charge::bytes(
+        arc_footprint::<EventFd>().saturating_add(arc_footprint::<WaitQueue>().saturating_mul(2)),
+    )
+    .map_err(|_| Errno::ENOMEM)?;
     let eventfd = Arc::new(EventFd {
         count: SpinLock::new(u64::from(initial)),
         semaphore,
         readable: Arc::new(WaitQueue::new()),
         writable: Arc::new(WaitQueue::new()),
+        _charge: charge,
     });
     fs::anon::open(eventfd, NAME, nonblock)
 }

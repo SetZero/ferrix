@@ -9,8 +9,12 @@ publish = false
 
 [dependencies]
 ferrix-cpio.workspace = true
+ferrix-kmem.workspace = true
 ferrix-linux-abi.workspace = true
 ferrix-sync.workspace = true
+
+[dev-dependencies]
+ferrix-kmem = { workspace = true, features = ["testing"] }
 
 [lints]
 workspace = true

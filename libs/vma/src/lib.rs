@@ -65,6 +65,8 @@ extern crate alloc;
 use alloc::vec::Vec;
 use core::fmt;
 
+use ferrix_kmem::{Charge, buffer_footprint};
+
 /// The page size every address and length in this crate is quantised to.
 pub const PAGE_SIZE: u64 = 4096;
 
@@ -531,7 +533,34 @@ pub struct AddressSpace {
     regions: Vec<Vma>,
     low: u64,
     high: u64,
+    /// The room `regions` holds, charged to the job that made the space.
+    room: Room,
 }
+
+/// The heap an address space's regions hold, charged to the job of the task
+/// that made the space, as it grows (certification finding F-37): a program
+/// that splits one mapping into a region a page by `mprotect` or `munmap`,
+/// or maps one page of a file at many addresses, pays for every region.
+///
+/// A copy by `Clone` is charged to nobody -- `fork` copies with
+/// [`AddressSpace::clone_for_fork`], which is charged -- and two maps compare
+/// equal whatever their charges.
+#[derive(Debug, Default)]
+struct Room(Charge);
+
+impl Clone for Room {
+    fn clone(&self) -> Room {
+        Room(Charge::none())
+    }
+}
+
+impl PartialEq for Room {
+    fn eq(&self, _: &Room) -> bool {
+        true
+    }
+}
+
+impl Eq for Room {}
 
 impl AddressSpace {
     /// Creates an empty address space usable over `[low, high)`.
@@ -556,7 +585,43 @@ impl AddressSpace {
             regions: Vec::new(),
             low,
             high,
+            room: Room(Charge::bytes(0).map_err(|_| VmaError::NoMemory)?),
         })
+    }
+
+    /// The heap its regions hold and are charged for, in bytes.
+    #[must_use]
+    pub fn charged(&self) -> u64 {
+        self.room.0.charged()
+    }
+
+    /// Room for `additional` more regions, charged first: what the vector
+    /// will grow to, which is twice what it has or what is needed if more.
+    ///
+    /// # Errors
+    ///
+    /// [`VmaError::NoMemory`], with nothing changed, when the job is at its
+    /// limit or the heap is empty.
+    fn grow(&mut self, additional: usize) -> Result<(), VmaError> {
+        let (len, room) = (self.regions.len(), self.regions.capacity());
+        let needed = len.checked_add(additional).ok_or(VmaError::NoMemory)?;
+        if needed <= room {
+            return Ok(());
+        }
+        let target = needed.max(room.saturating_mul(2)).max(4);
+        self.room
+            .0
+            .resize(buffer_footprint::<Vma>(target))
+            .map_err(|_| VmaError::NoMemory)?;
+        if let Err(error) = ferrix_fallible::try_reserve(&mut self.regions, additional) {
+            let _ = self.room.0.resize(buffer_footprint::<Vma>(room));
+            return Err(error.into());
+        }
+        let _ = self
+            .room
+            .0
+            .resize(buffer_footprint::<Vma>(self.regions.capacity()));
+        Ok(())
     }
 
     /// Lowest usable address.
@@ -656,7 +721,7 @@ impl AddressSpace {
         if self.overlaps(region.range) {
             return Err(VmaError::Overlap);
         }
-        ferrix_fallible::try_reserve(&mut self.regions, 1)?;
+        self.grow(1)?;
         self.place(region);
         Ok(())
     }
@@ -735,10 +800,21 @@ impl AddressSpace {
             .regions
             .get(self.first_touching(range.start))
             .is_some_and(|region| region.range.start < range.start && region.range.end > range.end);
-        if splits {
-            self.regions
-                .try_reserve(1)
+        if splits && self.regions.len() == self.regions.capacity() {
+            let room = self.regions.capacity();
+            let target = room.saturating_mul(2).max(4);
+            self.room
+                .0
+                .resize(buffer_footprint::<Vma>(target))
                 .map_err(|_| VmaError::NoMemory)?;
+            if self.regions.try_reserve(1).is_err() {
+                let _ = self.room.0.resize(buffer_footprint::<Vma>(room));
+                return Err(VmaError::NoMemory);
+            }
+            let _ = self
+                .room
+                .0
+                .resize(buffer_footprint::<Vma>(self.regions.capacity()));
         }
         self.carve(range, &mut |_| {});
         Ok(())
@@ -751,8 +827,7 @@ impl AddressSpace {
     ///
     /// [`VmaError::NoMemory`].
     pub fn reserve(&mut self, regions: usize) -> Result<(), VmaError> {
-        ferrix_fallible::try_reserve(&mut self.regions, regions)?;
-        Ok(())
+        self.grow(regions)
     }
 
     /// Room for carving `range`: a list with space for everything it could
@@ -767,7 +842,7 @@ impl AddressSpace {
             .first_beyond(range.end)
             .saturating_sub(self.first_touching(range.start));
         let unmapped = ferrix_fallible::try_with_capacity(touched.saturating_add(1))?;
-        ferrix_fallible::try_reserve(&mut self.regions, regions)?;
+        self.grow(regions)?;
         Ok(unmapped)
     }
 
@@ -792,7 +867,7 @@ impl AddressSpace {
             return Err(VmaError::NotMapped);
         }
         // Each edge may split one region.
-        ferrix_fallible::try_reserve(&mut self.regions, 2)?;
+        self.grow(2)?;
         self.split_at(range.start);
         self.split_at(range.end);
         let first = self.first_touching(range.start);
@@ -854,7 +929,11 @@ impl AddressSpace {
     /// [`VmaError::NoMemory`], with nothing marked: the copy's room is taken
     /// first.
     pub fn clone_for_fork(&mut self) -> Result<AddressSpace, VmaError> {
-        let mut regions = ferrix_fallible::try_with_capacity(self.regions.len())?;
+        let len = self.regions.len();
+        let mut room =
+            Charge::bytes(buffer_footprint::<Vma>(len)).map_err(|_| VmaError::NoMemory)?;
+        let mut regions = ferrix_fallible::try_with_capacity(len)?;
+        let _ = room.resize(buffer_footprint::<Vma>(regions.capacity()));
         for region in &mut self.regions {
             if needs_cow(region) {
                 region.cow = true;
@@ -867,6 +946,7 @@ impl AddressSpace {
             regions,
             low: self.low,
             high: self.high,
+            room: Room(room),
         })
     }
 

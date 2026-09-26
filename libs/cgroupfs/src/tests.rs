@@ -411,6 +411,10 @@ fn the_controller_files_print_as_linux_prints_them() {
     assert_eq!(rendered(|out| render::number(out, 4096)), b"4096\n");
     assert_eq!(rendered(|out| render::pids_events(out, 3)), b"max 3\n");
     assert_eq!(
+        rendered(|out| render::memory_stat(out, 8192)),
+        b"kernel 8192\n"
+    );
+    assert_eq!(
         rendered(|out| render::memory_events(out, 2)),
         b"low 0\nhigh 0\nmax 2\noom 0\noom_kill 0\noom_group_kill 0\n"
     );

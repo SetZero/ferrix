@@ -393,6 +393,26 @@ impl Connection {
         self.state == State::Closed
     }
 
+    /// Charge what its queues hold, and their growth, to `owner`: the job of
+    /// the program that made it, or of the listener it arrived on
+    /// (certification finding F-37).
+    ///
+    /// # Errors
+    ///
+    /// [`ferrix_kmem::Refused`] past that job's limit.
+    pub fn charge_to(&mut self, owner: u32) -> Result<(), ferrix_kmem::Refused> {
+        self.send.charge_to(owner)?;
+        self.recv.charge_to(owner)?;
+        self.holes.charge_to(owner)
+    }
+
+    /// Whether the last write stopped short because the send queue's job
+    /// could not be charged for it to grow.
+    #[must_use]
+    pub fn write_refused(&self) -> bool {
+        self.send.refused()
+    }
+
     /// Queue `data` to be sent, and say how much was taken.
     ///
     /// Nothing is sent here: the bytes join the send queue and

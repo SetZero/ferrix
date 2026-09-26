@@ -35,6 +35,7 @@
 use alloc::sync::Arc;
 use core::fmt;
 
+use ferrix_kmem::{Charge, arc_footprint};
 use ferrix_linux_abi::errno::Errno;
 use ferrix_sync::{SleepLock, SpinLock};
 
@@ -116,6 +117,10 @@ pub struct OpenFile {
     /// The file position, or a directory's cursor. Held across the I/O it
     /// positions, which may sleep; see the module documentation.
     offset: SleepLock<u64>,
+    /// The kernel heap it holds, charged to the job that opened it for as
+    /// long as it is open anywhere -- a descriptor table, another process's
+    /// after a `fork`, a socket's queue in flight (F-37).
+    _charge: Charge,
 }
 
 impl fmt::Debug for OpenFile {
@@ -149,6 +154,7 @@ impl OpenFile {
         } else {
             inode.open()?.unwrap_or_else(|| Arc::clone(&inode))
         };
+        let charge = crate::charge(arc_footprint::<OpenFile>())?;
         let offset = SleepLock::new(0, location.mount.parker().as_ref());
         Ok(Arc::new(OpenFile {
             location,
@@ -163,6 +169,7 @@ impl OpenFile {
                 nonblock: flags.nonblock,
             }),
             offset,
+            _charge: charge,
         }))
     }
 
@@ -176,9 +183,13 @@ impl OpenFile {
     /// Everything else -- the location, what `stat` reports, the access mode
     /// and the status flags -- is this open's, and the offset starts at zero
     /// as a new open's does.
-    #[must_use]
-    pub fn with_io(&self, io: Arc<dyn Inode>) -> Arc<OpenFile> {
-        Arc::new(OpenFile {
+    ///
+    /// # Errors
+    ///
+    /// `ENOMEM` past the job's memory limit.
+    pub fn with_io(&self, io: Arc<dyn Inode>) -> Result<Arc<OpenFile>> {
+        let charge = crate::charge(arc_footprint::<OpenFile>())?;
+        Ok(Arc::new(OpenFile {
             location: self.location.clone(),
             inode: Arc::clone(&self.inode),
             io,
@@ -188,7 +199,8 @@ impl OpenFile {
             path_only: self.path_only,
             status: SpinLock::new(self.status()),
             offset: SleepLock::new(0, self.location.mount.parker().as_ref()),
-        })
+            _charge: charge,
+        }))
     }
 
     /// Where it was opened.

@@ -48,6 +48,7 @@ use core::any::Any;
 use core::fmt;
 use core::sync::atomic::{AtomicU64, Ordering};
 
+use ferrix_kmem::{Charge, arc_footprint, footprint};
 use ferrix_linux_abi::errno::Errno;
 use ferrix_sync::{SpinLock, SpinLockGuard};
 
@@ -542,7 +543,7 @@ impl Tmpfs {
             pages: self.shared.storage.allocate()?,
             len: 0,
         };
-        let node = Node::new(&self.shared, body, permissions, now);
+        let node = Node::new(&self.shared, body, permissions, now)?;
         {
             let mut state = node.state.lock();
             state.nlink = 0;
@@ -553,9 +554,49 @@ impl Tmpfs {
         Ok(node as Arc<dyn Inode>)
     }
 
-    /// An empty tmpfs whose root directory has `permissions`.
-    #[must_use]
+    /// An empty tmpfs whose root directory has `permissions`, charged to
+    /// the running task's job -- the instance and its root -- as a mount
+    /// makes one.
+    ///
+    /// # Errors
+    ///
+    /// `ENOMEM` past the job's memory limit.
     pub fn new(
+        device: u64,
+        clock: Arc<dyn Clock>,
+        storage: Arc<dyn Storage>,
+        permissions: u32,
+    ) -> Result<Arc<Tmpfs>> {
+        let charge = crate::charge(
+            arc_footprint::<Node>()
+                .saturating_add(arc_footprint::<Shared>())
+                .saturating_add(arc_footprint::<Tmpfs>()),
+        )?;
+        let shared = Arc::new(Shared {
+            device,
+            clock,
+            storage,
+            next_ino: AtomicU64::new(1),
+            renames: SpinLock::new(()),
+        });
+        let now = shared.clock.now();
+        let root = Node::with_charge(
+            &shared,
+            Body::Dir(Dir::new(Weak::new())),
+            permissions,
+            now,
+            charge,
+        );
+        Ok(Arc::new(Tmpfs { shared, root }))
+    }
+
+    /// An empty tmpfs as [`Tmpfs::new`] makes one, charged to nobody: for an
+    /// instance the kernel keeps for every job -- the namespace's root,
+    /// `/tmp` and `/dev/shm` as boot mounts them, the one every memfd lives
+    /// on -- whoever happens to cause it first. Its files are charged to
+    /// their makers as any tmpfs's are.
+    #[must_use]
+    pub fn for_kernel(
         device: u64,
         clock: Arc<dyn Clock>,
         storage: Arc<dyn Storage>,
@@ -569,7 +610,13 @@ impl Tmpfs {
             renames: SpinLock::new(()),
         });
         let now = shared.clock.now();
-        let root = Node::new(&shared, Body::Dir(Dir::new(Weak::new())), permissions, now);
+        let root = Node::with_charge(
+            &shared,
+            Body::Dir(Dir::new(Weak::new())),
+            permissions,
+            now,
+            Charge::none(),
+        );
         Arc::new(Tmpfs { shared, root })
     }
 }
@@ -614,6 +661,11 @@ pub struct Node {
     me: Weak<Node>,
     shared: Arc<Shared>,
     state: SpinLock<State>,
+    /// The kernel heap the inode holds -- itself, and a symbolic link's
+    /// target -- charged to the job that made it for as long as it exists,
+    /// linked or open (F-37). Its pages are charged as they are written, to
+    /// the writer's job, as frames; its names are charged by [`Entry`].
+    _charge: Charge,
 }
 
 impl fmt::Debug for Node {
@@ -699,6 +751,25 @@ struct Entry {
     ino: u64,
     kind: FileType,
     node: Arc<Node>,
+    /// The name's heap, charged to the job that made the name (F-37).
+    _charge: Charge,
+}
+
+impl Entry {
+    /// Charge the running task's job for a name `name` in a directory: the
+    /// entry, the name twice (both maps key on it), and the other map's
+    /// key. Made before anything is changed, so a refusal changes nothing.
+    ///
+    /// # Errors
+    ///
+    /// `ENOMEM` past the job's memory limit.
+    fn charge(name: &[u8]) -> Result<Charge> {
+        let bytes = footprint(name.len(), 1)
+            .saturating_mul(2)
+            .saturating_add(size_of::<(u64, Entry)>())
+            .saturating_add(size_of::<(Box<[u8]>, u64)>());
+        crate::charge(bytes)
+    }
 }
 
 impl Dir {
@@ -718,7 +789,13 @@ impl Dir {
             .and_then(|cursor| self.by_cursor.get(cursor))
     }
 
-    fn insert(&mut self, name: &[u8], node: Arc<Node>, kind: FileType) -> Result<()> {
+    fn insert(
+        &mut self,
+        name: &[u8],
+        node: Arc<Node>,
+        kind: FileType,
+        charge: Charge,
+    ) -> Result<()> {
         let cursor = self.next_cursor;
         self.next_cursor = cursor.checked_add(1).ok_or(Errno::ENOSPC)?;
         let entry = Entry {
@@ -726,6 +803,7 @@ impl Dir {
             ino: node.ino,
             kind,
             node,
+            _charge: charge,
         };
         let _ = self.by_name.insert(Box::from(name), cursor);
         let _ = self.by_cursor.insert(cursor, entry);
@@ -774,7 +852,27 @@ impl<'a> Locked<'a> {
 }
 
 impl Node {
-    fn new(shared: &Arc<Shared>, body: Body, permissions: u32, now: Timespec) -> Arc<Node> {
+    /// A new inode, charged to the running task's job.
+    ///
+    /// # Errors
+    ///
+    /// `ENOMEM` past the job's memory limit.
+    fn new(shared: &Arc<Shared>, body: Body, permissions: u32, now: Timespec) -> Result<Arc<Node>> {
+        let extra = match &body {
+            Body::Symlink(target) => footprint(target.len(), 1),
+            _ => 0,
+        };
+        let charge = crate::charge(arc_footprint::<Node>().saturating_add(extra))?;
+        Ok(Node::with_charge(shared, body, permissions, now, charge))
+    }
+
+    fn with_charge(
+        shared: &Arc<Shared>,
+        body: Body,
+        permissions: u32,
+        now: Timespec,
+        charge: Charge,
+    ) -> Arc<Node> {
         let nlink = if matches!(body, Body::Dir(_)) { 2 } else { 1 };
         Arc::new_cyclic(|me| Node {
             ino: shared.next_ino.fetch_add(1, Ordering::Relaxed),
@@ -791,6 +889,7 @@ impl Node {
                 ctime: now,
                 body,
             }),
+            _charge: charge,
         })
     }
 
@@ -939,6 +1038,9 @@ impl Node {
             return Err(Errno::EINVAL);
         }
 
+        // Charged before anything moves: a refusal must not lose the name
+        // it would have taken out of the old directory.
+        let charge = Entry::charge(new)?;
         let mut nodes: Vec<&Node> = alloc::vec![self, new_parent, &source];
         if let Some(victim) = &victim {
             nodes.push(victim);
@@ -990,7 +1092,7 @@ impl Node {
             if victim_ino.is_some() {
                 let _ = dir.remove(new);
             }
-            dir.insert(new, entry.node, entry.kind)?;
+            dir.insert(new, entry.node, entry.kind, charge)?;
             if victim_dir {
                 state.nlink = state.nlink.saturating_sub(1);
             }
@@ -1259,7 +1361,8 @@ impl Inode for Node {
     fn create(&self, name: &[u8], node: NewNode<'_>, permissions: u32) -> Result<Arc<dyn Inode>> {
         let now = self.now();
         let kind = node.kind();
-        let child = Node::new(&self.shared, self.body_for(node)?, permissions, now);
+        let child = Node::new(&self.shared, self.body_for(node)?, permissions, now)?;
+        let charge = Entry::charge(name)?;
         let mut state = self.state.lock();
         {
             let dir = state.dir()?;
@@ -1269,7 +1372,7 @@ impl Inode for Node {
             if dir.get(name).is_some() {
                 return Err(Errno::EEXIST);
             }
-            dir.insert(name, Arc::clone(&child), kind)?;
+            dir.insert(name, Arc::clone(&child), kind, charge)?;
         }
         if kind == FileType::Directory {
             state.nlink = state.nlink.saturating_add(1);
@@ -1283,6 +1386,7 @@ impl Inode for Node {
         if target.ino == self.ino {
             return Err(Errno::EPERM);
         }
+        let charge = Entry::charge(name)?;
         let mut locked = Locked::new(&[self, &target]);
         let now = self.now();
         let kind = {
@@ -1309,7 +1413,7 @@ impl Inode for Node {
             if dir.get(name).is_some() {
                 return Err(Errno::EEXIST);
             }
-            dir.insert(name, Arc::clone(&target), kind)?;
+            dir.insert(name, Arc::clone(&target), kind, charge)?;
             state.touch(now);
         }
         let state = locked.state(target.ino)?;

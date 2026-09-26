@@ -415,7 +415,8 @@ impl Process {
         child.files = if share_files {
             Arc::clone(&parent.files)
         } else {
-            fallible::try_arc(SpinLock::new(parent.files.lock().clone()))?
+            let copied = parent.files.lock().try_clone().map_err(|_| AllocError)?;
+            fallible::try_arc(SpinLock::new(copied))?
         };
         child.fs = if share_fs {
             Arc::clone(&parent.fs)

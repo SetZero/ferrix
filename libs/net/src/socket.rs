@@ -10,6 +10,7 @@ use alloc::boxed::Box;
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 
+use ferrix_kmem::{Charge, buffer_footprint, reserve_deque};
 use ferrix_nettcp::Connection;
 
 use crate::addr::{Endpoint, IpAddress};
@@ -143,6 +144,11 @@ impl Default for Options {
     }
 }
 
+/// What a waiting datagram counts against its socket's capacity beside its
+/// payload: its place in the queue and the smallest allocation a payload
+/// takes.
+pub const DATAGRAM_COST: usize = size_of::<Datagram>() + 8;
+
 /// A datagram socket: UDP, or the ICMP echo socket `ping` uses.
 #[derive(Debug)]
 pub struct DatagramSocket {
@@ -158,8 +164,16 @@ pub struct DatagramSocket {
     pub capacity: usize,
     /// How many bytes of payload are waiting.
     queued: usize,
+    /// What the waiting datagrams count against the capacity: their payload
+    /// and [`DATAGRAM_COST`] each, so an empty datagram fills the queue too.
+    cost: usize,
     /// The datagrams waiting.
     queue: VecDeque<Datagram>,
+    /// The heap `queue` holds, and the payloads in it, charged to the job
+    /// that made the socket as they arrive (certification finding F-37).
+    room: Charge,
+    /// Likewise, the payloads.
+    payloads: Charge,
     /// An error waiting to be reported, from an ICMP message or a failed send.
     pub error: Option<Error>,
     /// Whether reading has been shut down.
@@ -183,22 +197,46 @@ impl DatagramSocket {
             options: Options::default(),
             capacity,
             queued: 0,
+            cost: 0,
             queue: VecDeque::new(),
+            // To the job opening the socket; nothing is never refused.
+            room: Charge::bytes(0).unwrap_or_default(),
+            payloads: Charge::bytes(0).unwrap_or_default(),
             error: None,
             read_shut: false,
             write_shut: false,
         }
     }
 
+    /// The heap its queue holds and is charged for, in bytes.
+    #[must_use]
+    pub fn charged(&self) -> u64 {
+        self.room.charged().saturating_add(self.payloads.charged())
+    }
+
     /// Put a datagram in the queue, or drop it because the queue is full.
     ///
     /// Answers whether it was kept. A datagram dropped for want of room is
     /// silently lost, which is what UDP means.
+    ///
+    /// A datagram counts its payload and [`DATAGRAM_COST`] against the
+    /// capacity, as Linux counts an skb's truesize, so a flood of empty ones
+    /// fills the queue. One whose socket's job is at its memory limit is
+    /// dropped as one arriving at a full queue is.
     pub fn deliver(&mut self, datagram: Datagram) -> bool {
-        if self.read_shut || self.queued + datagram.payload.len() > self.capacity {
+        let cost = datagram.payload.len().saturating_add(DATAGRAM_COST);
+        if self.read_shut || self.cost.saturating_add(cost) > self.capacity {
             return false;
         }
+        let payload = buffer_footprint::<u8>(datagram.payload.capacity());
+        if reserve_deque(&mut self.queue, 1, &mut self.room).is_err()
+            || self.payloads.grow(payload).is_err()
+        {
+            return false;
+        }
+        self.cost += cost;
         self.queued += datagram.payload.len();
+        // Room was had just above: this does not grow the queue.
         self.queue.push_back(datagram);
         true
     }
@@ -213,6 +251,11 @@ impl DatagramSocket {
     pub fn take(&mut self) -> Option<Datagram> {
         let datagram = self.queue.pop_front()?;
         self.queued = self.queued.saturating_sub(datagram.payload.len());
+        self.cost = self
+            .cost
+            .saturating_sub(datagram.payload.len().saturating_add(DATAGRAM_COST));
+        self.payloads
+            .shrink(buffer_footprint::<u8>(datagram.payload.capacity()));
         Some(datagram)
     }
 
@@ -330,6 +373,10 @@ pub struct StreamSocket {
     /// Whether the program has let go of the socket, so the stack may forget
     /// it once the connection has finished closing.
     pub closing: bool,
+    /// Its own heap, charged to the job that made it: the program that
+    /// connected, or the one listening where it arrived (certification
+    /// finding F-37). Its queues charge their growth to the same job.
+    pub heap: Charge,
 }
 
 impl StreamSocket {
@@ -363,6 +410,10 @@ pub struct ListenSocket {
     pub pending: Vec<SocketId>,
     /// Its options.
     pub options: Options,
+    /// The job of the program that opened it, which the connections that
+    /// arrive on it are charged to until one is accepted, as Linux charges a
+    /// request socket to its listener's cgroup (certification finding F-37).
+    pub owner: u32,
 }
 
 impl ListenSocket {

@@ -42,6 +42,7 @@ use core::any::Any;
 use core::fmt;
 use core::sync::atomic::{AtomicU32, Ordering};
 
+use ferrix_kmem::{Charge, arc_footprint, buffer_footprint, reserve_deque};
 use ferrix_linux_abi::errno::Errno;
 use ferrix_linux_abi::netlink::{
     NETLINK_ADD_MEMBERSHIP, NETLINK_DROP_MEMBERSHIP, NETLINK_ROUTE, NetlinkAddress, NlMsgHdr,
@@ -111,6 +112,11 @@ struct State {
     queued: usize,
     /// What a program has set.
     options: Options,
+    /// The room `queue` holds, charged to the job that opened the socket
+    /// (certification finding F-37).
+    room: Charge,
+    /// The replies in it, likewise.
+    replies: Charge,
 }
 
 /// An `AF_NETLINK` socket.
@@ -122,6 +128,8 @@ pub(crate) struct NetlinkSocket {
     metadata: Metadata,
     /// Everything that changes.
     state: SpinLock<State>,
+    /// Its own heap, charged to the job that opened it.
+    _charge: Charge,
 }
 
 impl fmt::Debug for NetlinkSocket {
@@ -145,6 +153,13 @@ impl NetlinkSocket {
         nonblock: bool,
         owner: (u32, u32),
     ) -> Result<Arc<OpenFile>, Errno> {
+        let refused = |_| Errno::ENOMEM;
+        let charge = Charge::bytes(arc_footprint::<NetlinkSocket>()).map_err(refused)?;
+        // Nothing is never refused; these grow with the replies.
+        let (room, replies) = (
+            Charge::bytes(0).map_err(refused)?,
+            Charge::bytes(0).map_err(refused)?,
+        );
         let ino = fs::socket::next_ino();
         let socket = Arc::new(NetlinkSocket {
             kind,
@@ -160,7 +175,10 @@ impl NetlinkSocket {
                     send_buffer: SOCKET_BUFFER_DEFAULT,
                     receive_buffer: SOCKET_BUFFER_DEFAULT,
                 },
+                room,
+                replies,
             }),
+            _charge: charge,
         });
         fs::socket::open_on_sockfs(socket, ino, nonblock)
     }
@@ -239,8 +257,8 @@ impl NetlinkSocket {
             .try_reserve_exact(MAX_REPLY)
             .map_err(|_| Errno::ENOMEM)?;
         buffer.resize(MAX_REPLY, 0);
-        let written = net::core()
-            .with(|stack, _| route::answer(stack, port, data, &mut buffer, privileged));
+        let written =
+            net::core().with(|stack, _| route::answer(stack, port, data, &mut buffer, privileged));
         buffer.truncate(written);
         self.queue(&buffer)?;
         // The queue is this socket's, not the stack's, so the wake the net
@@ -289,9 +307,11 @@ impl NetlinkSocket {
         let taken = full.min(out.len());
         let source = front.get(..taken).unwrap_or_default();
         out.get_mut(..taken)?.copy_from_slice(source);
-        if !peek {
-            let _ = state.queue.pop_front();
+        if !peek && let Some(taken) = state.queue.pop_front() {
             state.queued = state.queued.saturating_sub(full);
+            state
+                .replies
+                .shrink(buffer_footprint::<u8>(taken.capacity()));
         }
         Some(Received {
             bytes: taken,
@@ -315,9 +335,19 @@ impl NetlinkSocket {
             if state.queued.saturating_add(length) > MAX_QUEUED {
                 return Err(Errno::ENOBUFS);
             }
+            let State {
+                queue,
+                room,
+                replies,
+                ..
+            } = &mut *state;
+            reserve_deque(queue, 1, room).map_err(|_| Errno::ENOMEM)?;
             let mut datagram = Vec::new();
             datagram
                 .try_reserve_exact(length)
+                .map_err(|_| Errno::ENOMEM)?;
+            replies
+                .grow(buffer_footprint::<u8>(datagram.capacity()))
                 .map_err(|_| Errno::ENOMEM)?;
             datagram.extend_from_slice(&message.header.to_bytes());
             datagram.extend_from_slice(message.payload);

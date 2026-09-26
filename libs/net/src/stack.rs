@@ -16,6 +16,7 @@
 use alloc::collections::{BTreeMap, VecDeque};
 use alloc::vec::Vec;
 
+use ferrix_kmem::{Charge, boxed_footprint};
 use ferrix_nettcp::Connection;
 
 use crate::addr::{Endpoint, IpAddress, Ipv4, Ipv6};
@@ -358,6 +359,7 @@ impl Stack {
             ready: VecDeque::new(),
             pending: Vec::new(),
             options: crate::socket::Options::default(),
+            owner: ferrix_kmem::current(),
         }))
     }
 
@@ -740,7 +742,11 @@ impl Stack {
             .get(&id.0)
             .map(Socket::options)
             .unwrap_or_default();
-        let connection = Connection::connect(self.config.tcp, local.port, remote.port, iss);
+        let mut connection = Connection::connect(self.config.tcp, local.port, remote.port, iss);
+        let heap = Charge::bytes(boxed_footprint::<StreamSocket>()).map_err(|_| Error::NoMemory)?;
+        connection
+            .charge_to(heap.owner())
+            .map_err(|_| Error::NoMemory)?;
         let _ = self.sockets.insert(
             id.0,
             Socket::Stream(alloc::boxed::Box::new(StreamSocket {
@@ -753,6 +759,7 @@ impl Stack {
                 read_shut: false,
                 listener: None,
                 closing: false,
+                heap,
             })),
         );
         self.counters.connected += 1;

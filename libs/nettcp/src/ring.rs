@@ -15,6 +15,8 @@
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 
+use ferrix_kmem::{Charge, Refused, buffer_footprint};
+
 use crate::seq::SeqNumber;
 
 /// A bounded first-in, first-out queue of bytes.
@@ -24,16 +26,66 @@ pub struct ByteQueue {
     bytes: VecDeque<u8>,
     /// The most bytes the queue will hold.
     capacity: usize,
+    /// The heap `bytes` holds, charged to the job its connection is
+    /// [`ByteQueue::charge_to`] as it grows (certification finding F-37).
+    heap: Charge,
+    /// Whether the last write took less than there was room for because its
+    /// job could not be charged for the growth.
+    refused: bool,
 }
 
 impl ByteQueue {
-    /// An empty queue that will hold `capacity` bytes.
+    /// An empty queue that will hold `capacity` bytes, charged to nobody
+    /// until [`ByteQueue::charge_to`] says whom.
     #[must_use]
     pub fn with_capacity(capacity: usize) -> ByteQueue {
         ByteQueue {
             bytes: VecDeque::new(),
             capacity,
+            heap: Charge::none(),
+            refused: false,
         }
+    }
+
+    /// Charge the queue's growth, and what it holds now, to `owner`: the
+    /// job of the program that made the connection, or of the listener it
+    /// arrived on.
+    ///
+    /// # Errors
+    ///
+    /// [`Refused`] past that job's limit, with the charge as it was.
+    pub fn charge_to(&mut self, owner: u32) -> Result<(), Refused> {
+        self.heap = Charge::to(owner, buffer_footprint::<u8>(self.bytes.capacity()))?;
+        Ok(())
+    }
+
+    /// Whether the last write stopped short because the queue could not grow.
+    #[must_use]
+    pub fn refused(&self) -> bool {
+        self.refused
+    }
+
+    /// Room for `wanted` more bytes, grown and charged to the next power of
+    /// two up to the capacity; what fits in the room there is already when
+    /// the growth is refused.
+    fn room_for(&mut self, wanted: usize) -> usize {
+        let (len, room) = (self.bytes.len(), self.bytes.capacity());
+        let needed = len.saturating_add(wanted);
+        if needed <= room {
+            return wanted;
+        }
+        let target = needed.next_power_of_two().min(self.capacity.max(needed));
+        if self.heap.resize(buffer_footprint::<u8>(target)).is_err() {
+            return room.saturating_sub(len);
+        }
+        if self.bytes.try_reserve_exact(target - len).is_err() {
+            let _ = self.heap.resize(buffer_footprint::<u8>(room));
+            return room.saturating_sub(len);
+        }
+        let _ = self
+            .heap
+            .resize(buffer_footprint::<u8>(self.bytes.capacity()));
+        wanted
     }
 
     /// How many bytes are queued.
@@ -70,9 +122,14 @@ impl ByteQueue {
 
     /// Append as much of `data` as there is room for, and say how much that
     /// was.
+    ///
+    /// Less than there is room for when the queue's job cannot be charged
+    /// for it to grow: [`ByteQueue::refused`] then says so.
     pub fn write(&mut self, data: &[u8]) -> usize {
         let room = self.free();
-        let taken = data.len().min(room);
+        let wanted = data.len().min(room);
+        let taken = self.room_for(wanted).min(wanted);
+        self.refused = taken < wanted;
         self.bytes.extend(data.iter().take(taken).copied());
         taken
     }
@@ -134,11 +191,21 @@ impl Hole {
 pub struct Reassembly {
     /// The runs, in sequence order, none of them touching or overlapping.
     holes: Vec<Hole>,
-    /// The most bytes the whole list will hold.
+    /// The most bytes the whole list will hold, each run's bookkeeping
+    /// counted with its bytes.
     capacity: usize,
     /// How many bytes it holds now.
     held: usize,
+    /// What it holds of the heap, charged to its connection's job
+    /// (certification finding F-37).
+    heap: Charge,
 }
+
+/// What a run costs beside its bytes: its entry in the list and the
+/// smallest allocation its bytes take. Counted against the capacity, so a
+/// peer sending one-byte runs with gaps between them fills the list at the
+/// same heap as one sending whole segments.
+const RUN_COST: usize = size_of::<Hole>() + 8;
 
 impl Reassembly {
     /// An empty list that will hold `capacity` bytes across all its runs.
@@ -148,7 +215,23 @@ impl Reassembly {
             holes: Vec::new(),
             capacity,
             held: 0,
+            heap: Charge::none(),
         }
+    }
+
+    /// Charge what it holds from now on to `owner`.
+    ///
+    /// # Errors
+    ///
+    /// [`Refused`] past that job's limit.
+    pub fn charge_to(&mut self, owner: u32) -> Result<(), Refused> {
+        self.heap = Charge::to(owner, self.cost(self.holes.len()))?;
+        Ok(())
+    }
+
+    /// What `runs` runs and the bytes held cost against the capacity.
+    fn cost(&self, runs: usize) -> usize {
+        self.held.saturating_add(runs.saturating_mul(RUN_COST))
     }
 
     /// Whether nothing is held.
@@ -167,6 +250,7 @@ impl Reassembly {
     pub fn clear(&mut self) {
         self.holes.clear();
         self.held = 0;
+        self.heap.shrink(usize::MAX);
     }
 
     /// Change the ceiling on what may be held.
@@ -183,9 +267,24 @@ impl Reassembly {
         if bytes.is_empty() {
             return;
         }
-        let room = self.capacity.saturating_sub(self.held);
+        let room = self
+            .capacity
+            .saturating_sub(self.cost(self.holes.len() + 1));
         let taken = bytes.len().min(room);
         if taken == 0 {
+            return;
+        }
+        let before = self.heap.charged();
+        if self
+            .heap
+            .resize(self.cost(self.holes.len() + 1).saturating_add(taken))
+            .is_err()
+            || self.holes.try_reserve(1).is_err()
+        {
+            // Dropped, as a run past the capacity is: the peer sends it again.
+            let _ = self
+                .heap
+                .resize(usize::try_from(before).unwrap_or(usize::MAX));
             return;
         }
         let hole = Hole {
@@ -200,6 +299,13 @@ impl Reassembly {
             .unwrap_or(self.holes.len());
         self.holes.insert(at, hole);
         self.coalesce();
+        self.settle();
+    }
+
+    /// Bring the charge down to what is held, after runs merged or left.
+    fn settle(&mut self) {
+        let cost = self.cost(self.holes.len());
+        let _ = self.heap.resize(cost);
     }
 
     /// Merge runs that touch or overlap, keeping the earlier copy of any byte
@@ -233,6 +339,7 @@ impl Reassembly {
         }
         let hole = self.holes.remove(0);
         self.held -= hole.bytes.len();
+        self.settle();
         Some(hole.bytes)
     }
 
@@ -249,6 +356,7 @@ impl Reassembly {
             self.held -= drop;
         }
         self.holes.retain(|hole| !hole.bytes.is_empty());
+        self.settle();
     }
 
     /// The runs held, newest-first, as the sequence ranges a SACK option

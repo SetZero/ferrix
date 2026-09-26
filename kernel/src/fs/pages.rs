@@ -45,6 +45,7 @@ use core::any::Any;
 
 use ferrix_bootinfo::PAGE_SIZE;
 use ferrix_frame::Frame;
+use ferrix_kmem::{Charge, arc_footprint, boxed_footprint};
 use ferrix_vfs::tmpfs::{PageSource, Pages, Storage};
 use ferrix_vfs::{Errno, Result};
 
@@ -108,6 +109,11 @@ pub(crate) struct VmoPages {
     /// missing pages are zeros. The VMO holds it too, as its [`Filler`], so
     /// that a fault through a mapping fills a page the way a read does.
     fill: Option<Arc<Fill>>,
+    /// The heap the store holds -- itself, the object, the filler -- charged
+    /// to the job that made the file, or first opened it from a disk
+    /// (F-37). The object's pages are frames, charged to whoever commits
+    /// each.
+    _charge: Charge,
 }
 
 /// How a file on a disk fills its object: shared by the store, for reads and
@@ -161,6 +167,17 @@ fn release_all(frames: impl IntoIterator<Item = Frame>) {
 
 impl VmoPages {
     fn new(source: Option<Arc<dyn PageSource>>) -> Result<VmoPages> {
+        let filled = if source.is_some() {
+            arc_footprint::<Fill>()
+        } else {
+            0
+        };
+        let charge = Charge::bytes(
+            boxed_footprint::<VmoPages>()
+                .saturating_add(arc_footprint::<Vmo>())
+                .saturating_add(filled),
+        )
+        .map_err(|_| Errno::ENOMEM)?;
         let fill = source.map(|source| {
             Arc::new(Fill {
                 source,
@@ -171,6 +188,7 @@ impl VmoPages {
         Ok(VmoPages {
             vmo: Vmo::new_filled(MAX_FILE_SIZE / PAGE_SIZE, filler).map_err(|_| Errno::ENOMEM)?,
             fill,
+            _charge: charge,
         })
     }
 

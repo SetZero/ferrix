@@ -98,6 +98,14 @@ pub fn pids_events(out: &mut Vec<u8>, max: u64) {
     let _ = writeln!(Out(out), "max {max}");
 }
 
+/// Append `memory.stat`: of the bytes `memory.current` counts, how many are
+/// kernel memory held for the cgroup's programs, under Linux's key. Linux
+/// prints some forty keys; this is the one Ferrix counts, and a reader
+/// looks a key up by its name.
+pub fn memory_stat(out: &mut Vec<u8>, kernel: u64) {
+    let _ = writeln!(Out(out), "kernel {kernel}");
+}
+
 /// Append `memory.events`, in the order Linux prints it: how many charges
 /// `memory.max` refused under `max`, and the rest, which Ferrix never counts
 /// (no `memory.low`, no `memory.high`, no OOM kill), as zeros.

@@ -33,6 +33,7 @@
 
 use alloc::vec::Vec;
 
+use ferrix_kmem::{Charge, NOBODY, buffer_footprint};
 use ferrix_linux_abi::errno::Errno;
 use ferrix_sync::nospec;
 
@@ -73,14 +74,20 @@ impl Reserved {
 
 /// A process's descriptors.
 ///
-/// `Clone` is `fork` without `CLONE_FILES`: the child gets its own table
-/// naming the same descriptions, and none of the parent's reservations.
+/// [`FdTable::try_clone`] is `fork` without `CLONE_FILES`: the child gets
+/// its own table naming the same descriptions, and none of the parent's
+/// reservations.
 #[derive(Debug)]
 pub struct FdTable<T> {
     slots: Vec<Option<Slot<T>>>,
     limit: u32,
     /// Numbers in use, reserved ones included.
     open: usize,
+    /// The room `slots` holds, charged to the job of whoever first grew the
+    /// table -- the process itself, or its maker -- as it grows (F-37). A
+    /// table is as large as its highest descriptor, which `dup2` may put
+    /// anywhere below the limit.
+    room: Charge,
 }
 
 impl<T> Default for FdTable<T> {
@@ -89,20 +96,32 @@ impl<T> Default for FdTable<T> {
     }
 }
 
-impl<T: Clone> Clone for FdTable<T> {
-    fn clone(&self) -> Self {
-        let mut table = FdTable {
-            slots: self
-                .slots
+impl<T: Clone> FdTable<T> {
+    /// A copy naming the same items, and none of the reservations, charged
+    /// to the running task's job: `fork`'s.
+    ///
+    /// # Errors
+    ///
+    /// `ENOMEM` past the job's memory limit, or with no memory.
+    pub fn try_clone(&self) -> Result<Self> {
+        let mut room = crate::charge(0)?;
+        let mut slots = Vec::new();
+        ferrix_kmem::reserve(&mut slots, self.slots.len(), &mut room).map_err(|_| Errno::ENOMEM)?;
+        // Room was had just above: this does not grow the vector.
+        slots.extend(
+            self.slots
                 .iter()
-                .map(|slot| slot.as_ref().filter(|slot| slot.item.is_some()).cloned())
-                .collect(),
+                .map(|slot| slot.as_ref().filter(|slot| slot.item.is_some()).cloned()),
+        );
+        let mut table = FdTable {
+            slots,
             limit: self.limit,
             open: 0,
+            room,
         };
         table.open = table.slots.iter().flatten().count();
         table.trim();
-        table
+        Ok(table)
     }
 }
 
@@ -114,7 +133,37 @@ impl<T> FdTable<T> {
             slots: Vec::new(),
             limit: DEFAULT_LIMIT,
             open: 0,
+            room: Charge::none(),
         }
+    }
+
+    /// Make the table `len` slots long, charged.
+    ///
+    /// A table charged to nobody -- made empty, or given a new process's
+    /// first descriptors by the kernel -- is charged, room and all, to the
+    /// job of whoever first grows it, which is the one that fills it.
+    ///
+    /// # Errors
+    ///
+    /// `ENOMEM` past the job's memory limit, or with no memory.
+    fn grow_to(&mut self, len: usize) -> Result<()> {
+        let now = self.slots.len();
+        if len <= now {
+            return Ok(());
+        }
+        if self.room.owner() == NOBODY {
+            self.room = crate::charge(buffer_footprint::<Option<Slot<T>>>(self.slots.capacity()))?;
+        }
+        ferrix_kmem::reserve(&mut self.slots, len - now, &mut self.room)
+            .map_err(|_| Errno::ENOMEM)?;
+        self.slots.resize_with(len, || None);
+        Ok(())
+    }
+
+    /// The heap its slots hold and are charged for, in bytes.
+    #[must_use]
+    pub fn charged(&self) -> u64 {
+        self.room.charged()
     }
 
     /// The limit on descriptor numbers: every descriptor is below it.
@@ -220,7 +269,7 @@ impl<T> FdTable<T> {
     /// if nothing is free from there.
     pub fn insert_from(&mut self, min: i32, item: T, cloexec: bool) -> Result<i32> {
         let (index, fd) = self.lowest_free(min)?;
-        self.take(index, Some(item), cloexec);
+        self.take(index, Some(item), cloexec)?;
         Ok(fd)
     }
 
@@ -229,10 +278,11 @@ impl<T> FdTable<T> {
     ///
     /// # Errors
     ///
-    /// `EMFILE` if every number below the limit is taken.
+    /// `EMFILE` if every number below the limit is taken, `ENOMEM` if the
+    /// table cannot grow to it.
     pub fn reserve(&mut self, cloexec: bool) -> Result<Reserved> {
         let (index, fd) = self.lowest_free(0)?;
-        self.take(index, None, cloexec);
+        self.take(index, None, cloexec)?;
         Ok(Reserved { index, fd })
     }
 
@@ -287,14 +337,17 @@ impl<T> FdTable<T> {
     }
 
     /// Mark the free number `index` taken, holding `item`.
-    fn take(&mut self, index: usize, item: Option<T>, cloexec: bool) {
-        if self.slots.len() <= index {
-            self.slots.resize_with(index.saturating_add(1), || None);
-        }
+    ///
+    /// # Errors
+    ///
+    /// `ENOMEM` if the table cannot grow to it.
+    fn take(&mut self, index: usize, item: Option<T>, cloexec: bool) -> Result<()> {
+        self.grow_to(index.saturating_add(1))?;
         if let Some(slot) = self.slots.get_mut(index) {
             *slot = Some(Slot { item, cloexec });
             self.open = self.open.saturating_add(1);
         }
+        Ok(())
     }
 
     /// Install `item` at exactly `fd`, replacing what was there: `dup2` and
@@ -309,9 +362,7 @@ impl<T> FdTable<T> {
         if index >= usize::try_from(self.limit).map_err(|_| Errno::EBADF)? {
             return Err(Errno::EBADF);
         }
-        if self.slots.len() <= index {
-            self.slots.resize_with(index.saturating_add(1), || None);
-        }
+        self.grow_to(index.saturating_add(1))?;
         let index = nospec::bounded(index, self.slots.len()).ok_or(Errno::EBADF)?;
         let slot = self.slots.get_mut(index).ok_or(Errno::EBADF)?;
         match slot {

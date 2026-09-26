@@ -356,6 +356,11 @@ impl Stack {
         }
         let taken = stream.connection.write(data);
         if taken == 0 && !data.is_empty() {
+            // A queue with room that its job could not be charged to grow
+            // into is not full, and waiting for room would never end.
+            if stream.connection.write_refused() {
+                return Err(Error::NoMemory);
+            }
             return Err(Error::WouldBlock);
         }
         Ok(taken)

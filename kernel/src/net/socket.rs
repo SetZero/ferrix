@@ -19,6 +19,7 @@ use alloc::vec::Vec;
 use core::any::Any;
 use core::fmt;
 
+use ferrix_kmem::{Charge, arc_footprint};
 use ferrix_linux_abi::errno::Errno;
 use ferrix_linux_abi::inet::{
     ICMP_FILTER, ICMPV6_FILTER, IP_HDRINCL, IP_TOS, IP_TTL, IPPROTO_ICMP, IPPROTO_ICMPV6,
@@ -117,6 +118,18 @@ pub(crate) struct InetSocket {
     metadata: Metadata,
     /// What a program has set.
     options: SpinLock<Options>,
+    /// Its heap and its entry in the stack's table, charged to the job that
+    /// opened or accepted it (certification finding F-37). A connection's
+    /// own state and queues are charged in the stack.
+    _charge: Charge,
+}
+
+/// What an open socket holds of the heap beside what the stack charges: the
+/// socket, and its entry in the stack's table, B-tree nodes being at least
+/// half full.
+fn socket_charge() -> Result<Charge, Errno> {
+    Charge::bytes(arc_footprint::<InetSocket>().saturating_add(2 * size_of::<(u32, NetSocket)>()))
+        .map_err(|_| Errno::ENOMEM)
 }
 
 impl fmt::Debug for InetSocket {
@@ -172,13 +185,15 @@ impl InetSocket {
         nonblock: bool,
         owner: (u32, u32),
     ) -> Result<Arc<OpenFile>, Errno> {
+        // Before the stack has a socket to leak if it is refused.
+        let charge = socket_charge()?;
         let id = net::core().with(|stack, _| match kind {
             InetKind::Stream => stack.open_tcp(family),
             InetKind::Datagram => stack.open_udp(family),
             InetKind::Echo => stack.open_icmp(family),
             InetKind::Raw { protocol } => stack.open_raw(family, protocol),
         });
-        Self::wrap(id, family, kind, nonblock, owner)
+        Self::wrap(id, family, kind, nonblock, owner, charge)
     }
 
     /// Put an existing stack socket behind an open file, which is what
@@ -189,6 +204,7 @@ impl InetSocket {
         kind: InetKind,
         nonblock: bool,
         owner: (u32, u32),
+        charge: Charge,
     ) -> Result<Arc<OpenFile>, Errno> {
         let ino = fs::socket::next_ino();
         let socket = Arc::new(InetSocket {
@@ -205,6 +221,7 @@ impl InetSocket {
                 hop_limit_messages: false,
                 hop_limit_messages_2292: false,
             }),
+            _charge: charge,
         });
         fs::socket::open_on_sockfs(socket, ino, nonblock)
     }
@@ -244,8 +261,9 @@ impl InetSocket {
         if !self.kind.is_stream() {
             return Err(Errno::EOPNOTSUPP);
         }
-        // At most `SOMAXCONN`, as Linux caps it: a backlog of a billion is a
-        // program's mistake, and each connection waiting holds its buffers.
+        // At most `SOMAXCONN`, as Linux caps it: connections waiting to be
+        // accepted are charged to this socket's job, but a backlog of a
+        // billion is still a program's mistake.
         let backlog = usize::try_from(backlog.max(0))
             .unwrap_or(0)
             .min(ferrix_linux_abi::socket::SOMAXCONN);
@@ -265,13 +283,15 @@ impl InetSocket {
         }
         let deadline = self.deadline(self.options.lock().receive_timeout, nonblock);
         loop {
+            // Before a connection is taken, which a refusal would leak.
+            let charge = socket_charge()?;
             let taken = net::core().with(|stack, _| stack.accept(self.id));
             match taken {
                 Ok(id) => {
                     let peer = net::core()
                         .with(|stack, _| stack.remote_endpoint(id))
                         .unwrap_or(Endpoint::new(self.unspecified(), 0));
-                    let file = Self::wrap(id, self.family, self.kind, nonblock, owner)?;
+                    let file = Self::wrap(id, self.family, self.kind, nonblock, owner, charge)?;
                     return Ok((file, self.encode(peer)));
                 }
                 Err(Error::WouldBlock) if nonblock => return Err(Errno::EAGAIN),

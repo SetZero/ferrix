@@ -120,8 +120,12 @@ pub(crate) fn user_path(process: &Process, at: u64) -> Result<Vec<u8>, Errno> {
 /// One description rather than three opens, which is how Linux's first
 /// process gets them and what a program can observe: `fcntl(0, F_SETFL,
 /// O_NONBLOCK)` changes descriptor 1 too.
+///
+/// Charged to no job (`quota::charging_nobody`): a job at its memory limit
+/// must not be able to make this fail, which would stop the kernel. The
+/// table is charged to the process's job the first time it grows.
 pub(crate) fn standard_streams() -> FdTable<Arc<OpenFile>> {
-    match console_table() {
+    match crate::object::quota::charging_nobody(console_table) {
         Ok(table) => table,
         Err(errno) => fatal!(
             catalog::CONSOLE_DESCRIPTORS,

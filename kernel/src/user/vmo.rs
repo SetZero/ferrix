@@ -229,6 +229,36 @@ struct Mapper {
     space: Weak<AddressSpace>,
     /// The id the space's regions name the object by.
     object: u64,
+    /// What the name holds of the heap, charged to the job that mapped the
+    /// object ([`MAPPER_HEAP`], certification finding F-37).
+    _charge: ferrix_kmem::Charge,
+}
+
+/// The heap one id a space names an object by holds, at its largest: its
+/// entry in this list, whose room [`compact`] keeps within four times what
+/// it lists, and its entries in the space's tables of objects and of files,
+/// B-tree nodes being at least half full. A shared mapping of a file makes
+/// no object for the object limit to count, so this is what bounds one.
+const MAPPER_HEAP: usize = 4 * size_of::<Mapper>()
+    + 2 * size_of::<(u64, Arc<Vmo>)>()
+    + 2 * size_of::<(u64, crate::user::space::FileMapping)>();
+
+/// Give a mapper list back most of its room once it lists under a quarter
+/// of it, so that an object mapped a million times and unmapped does not
+/// keep the room for a million: the charges went with the mappers. Kept as
+/// it is when there is no memory for the smaller list.
+fn compact(mappers: &mut Vec<Mapper>) {
+    let (len, room) = (mappers.len(), mappers.capacity());
+    if room <= 16 || len >= room / 4 {
+        return;
+    }
+    let Ok(mut smaller) = crate::fallible::try_with_capacity(len.saturating_mul(2).max(4)) else {
+        return;
+    };
+    // NOALLOC: the room for every mapper was had just above, so nothing
+    // here can fail part-way and drop the mappers not yet moved.
+    smaller.append(mappers);
+    *mappers = smaller;
 }
 
 /// A VMO's pages, under one lock.
@@ -481,8 +511,10 @@ impl Vmo {
         object: u64,
         sharing: Sharing,
     ) -> Result<(), AllocError> {
+        let charge = ferrix_kmem::Charge::bytes(MAPPER_HEAP).map_err(|_| AllocError)?;
         let mut mappers = self.mappers.lock();
         mappers.retain(|mapper| mapper.space.strong_count() > 0);
+        compact(&mut mappers);
         let joinable = mappers
             .iter()
             .all(|mapper| mapper.sharing == Sharing::Shared)
@@ -499,6 +531,7 @@ impl Vmo {
                 sharing,
                 space,
                 object,
+                _charge: charge,
             },
         )
     }
@@ -511,10 +544,12 @@ impl Vmo {
     /// compares addresses rather than following one, so a space in the middle
     /// of being dropped can name itself.
     pub(crate) fn detach(&self, space: *const AddressSpace, object: u64) {
-        self.mappers.lock().retain(|mapper| {
+        let mut mappers = self.mappers.lock();
+        mappers.retain(|mapper| {
             mapper.space.strong_count() > 0
                 && !(core::ptr::eq(mapper.space.as_ptr(), space) && mapper.object == object)
         });
+        compact(&mut mappers);
     }
 
     /// How many address spaces name this object, counting a space once per

@@ -342,6 +342,21 @@ pub(crate) const APPLETS: &[Command] = &[
             "4+0 records out",
         ]),
     },
+    // The kernel memory a program drives through the Linux calls, charged to
+    // its cgroup (finding F-37): files made in `/tmp` from a shell whose
+    // `memory.max` leaves it 256 KiB, until one is refused.
+    Command {
+        argv: &["sh", "-c", KMEM_SCRIPT],
+        status: 6,
+        expect: Expect::Lines(&[
+            "file creation refused within memory.max",
+            "memory.current within memory.max",
+            "memory.stat counts kernel memory",
+            "memory.events counted the refusal",
+            "memory.current back to 0",
+            "removed",
+        ]),
+    },
     // `mount -t proc` and `mount -t devtmpfs` go here once mount takes them.
 ];
 
@@ -509,6 +524,46 @@ rmdir /tmp/cq/q && echo removed
 echo "-pids -memory -cpu" > /tmp/cq/cgroup.subtree_control || exit 8
 umount /tmp/cq
 exit 9
+"#;
+
+/// Root mounts cgroup2 and makes `k` with the `memory` controller. A shell
+/// moves itself into `k`, sets `memory.max` 256 KiB above what `k` holds,
+/// and makes empty files in `/tmp/km` until the shell cannot make one --
+/// each is kernel memory, an inode, a name and a dentry, and no page. At
+/// the limit the shell has no memory left to say anything, so the outer
+/// shell counts the files. Required: that some
+/// hundreds were made and the next refused, that `memory.current` stayed
+/// within `memory.max`, that `memory.stat`'s `kernel` counted them and
+/// `memory.events` the refusal, and that removing them, with the shell gone,
+/// brought `memory.current` back to zero. Only builtins read what is
+/// checked, as in [`QUOTA_SCRIPT`].
+const KMEM_SCRIPT: &str = r#"mkdir -p /tmp/cm && mount -t cgroup2 none /tmp/cm || exit 1
+echo "+memory" > /tmp/cm/cgroup.subtree_control || exit 2
+mkdir /tmp/cm/k /tmp/km || exit 3
+sh -c 'echo $$ > /tmp/cm/k/cgroup.procs || exit 1
+read now < /tmp/cm/k/memory.current
+echo $((now + 262144)) > /tmp/cm/k/memory.max || exit 2
+n=0
+while [ $n -lt 100000 ]; do
+: > /tmp/km/f$n 2>/dev/null || break
+n=$((n+1))
+done' 2>/dev/null
+n=0
+for made in /tmp/km/f*; do n=$((n+1)); done
+[ $n -ge 100 ] && [ $n -lt 100000 ] && echo "file creation refused within memory.max" || echo "$n files"
+read current < /tmp/cm/k/memory.current
+read max < /tmp/cm/k/memory.max
+[ $current -le $max ] && echo "memory.current within memory.max" || echo "$current above $max"
+read key kernel < /tmp/cm/k/memory.stat
+[ "$key" = kernel ] && [ $kernel -gt 0 ] && echo "memory.stat counts kernel memory"
+while read key count; do [ "$key" = max ] && [ $count -ge 1 ] && echo "memory.events counted the refusal"; done < /tmp/cm/k/memory.events
+rm -r /tmp/km || exit 4
+read after < /tmp/cm/k/memory.current
+[ $after -eq 0 ] && echo "memory.current back to 0" || echo "memory.current $after after"
+rmdir /tmp/cm/k && echo removed
+echo "-memory" > /tmp/cm/cgroup.subtree_control || exit 5
+umount /tmp/cm
+exit 6
 "#;
 
 /// The list as `kernel/build.rs` takes it: each argument ends in a NUL, and

@@ -1027,7 +1027,9 @@ fn control(process: &Process, message: &MsgHdr, socket: &Any) -> Result<Option<P
         None => passed,
     };
     if !rights || descriptors.is_empty() {
-        return Ok(credentials.map(|_| stamp(Passed::new(Vec::new()))));
+        return credentials
+            .map(|_| Passed::new(Vec::new()).map(stamp))
+            .transpose();
     }
     let mut files = Vec::new();
     files
@@ -1045,7 +1047,7 @@ fn control(process: &Process, message: &MsgHdr, socket: &Any) -> Result<Option<P
         }
     }
     drop(table);
-    Ok(Some(stamp(Passed::new(files))))
+    Passed::new(files).map(|passed| Some(stamp(passed)))
 }
 
 /// The credentials an `SCM_CREDENTIALS` message names, if the sender may

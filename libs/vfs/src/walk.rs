@@ -303,7 +303,7 @@ impl Namespace {
         let inode = dir.inode().ok_or(Errno::ENOENT)?;
         if !inode.caches_lookups() && !inode.caches_lookup_of(name) {
             let found = look_up(inode.as_ref(), name)?;
-            return Ok(dir.uncached_child(name, found));
+            return dir.uncached_child(name, found);
         }
         // Until an answer is recorded under a generation nothing changed
         // during: a name has one live dentry or none, which is what lets a
@@ -314,7 +314,7 @@ impl Namespace {
             }
             let generation = dir.generation();
             let found = look_up(inode.as_ref(), name)?;
-            if let Some((child, cached)) = dir.insert_looked_up(name, found.clone(), generation) {
+            if let Some((child, cached)) = dir.insert_looked_up(name, found.clone(), generation)? {
                 if cached {
                     self.remember(&child);
                 }

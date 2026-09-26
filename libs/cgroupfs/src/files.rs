@@ -61,6 +61,8 @@ pub enum Kind {
     MemoryMax,
     /// `memory.events`.
     MemoryEvents,
+    /// `memory.stat`: what of `memory.current` is kernel heap.
+    MemoryStat,
     /// `pids.current`.
     PidsCurrent,
     /// `pids.max`.
@@ -96,6 +98,7 @@ pub const FILES: &[File] = &[
         Controller::Memory,
         false,
     ),
+    controlled("memory.stat", Kind::MemoryStat, Controller::Memory, false),
     controlled("pids.current", Kind::PidsCurrent, Controller::Pids, false),
     controlled("pids.max", Kind::PidsMax, Controller::Pids, true),
     controlled("pids.events", Kind::PidsEvents, Controller::Pids, false),

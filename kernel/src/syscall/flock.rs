@@ -65,6 +65,7 @@
 use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
 
+use ferrix_kmem::Charge;
 use ferrix_linux_abi::errno::Errno;
 use ferrix_linux_abi::nr::Syscall;
 use ferrix_linux_abi::types::{
@@ -293,7 +294,7 @@ impl Owner {
 }
 
 /// One owner's lock on a range of one file.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct Record {
     /// The file.
     key: Key,
@@ -305,6 +306,18 @@ struct Record {
     start: u64,
     /// Its last byte, inclusive; [`OFFSET_MAX`] to the end of the file.
     end: u64,
+    /// Its slot in [`RECORDS`], charged to the job that set it (F-37): one
+    /// owner may lock any number of disjoint ranges, as on Linux, whose
+    /// `file_lock_cache` is charged the same way. A piece a split leaves
+    /// keeps the charge of the lock it came from.
+    charge: Charge,
+}
+
+/// Charge the running task's job for one record: what a lock or an unlock
+/// that splits a lock in two adds. `ENOLCK` past its limit, as Linux answers
+/// a lock it has no memory for.
+fn record_charge() -> Result<Charge, Errno> {
+    Charge::bytes(size_of::<Record>()).map_err(|_| Errno::ENOLCK)
 }
 
 impl Record {
@@ -547,12 +560,17 @@ fn set_lock(
         return Err(Errno::EINVAL);
     }
     let key = key_of(file);
+    // What the range may add: its own record, and one more when it falls
+    // inside a lock and splits it. Charged before anything changes; whatever
+    // is not used goes back as it drops.
+    let mut spare = Some(record_charge()?);
     let Some(exclusive) = exclusive else {
-        carve(&mut RECORDS.lock(), key, owner, start, end);
+        carve(&mut RECORDS.lock(), key, owner, start, end, &mut spare);
         RELEASED.wake_all();
         return Ok(0);
     };
-    if place(key, owner, exclusive, start, end) {
+    let mut charge = Some(record_charge()?);
+    if place(key, owner, exclusive, start, end, &mut charge, &mut spare) {
         // Taking a range can narrow what the owner held there, from a write
         // lock to a read lock, which may let a waiter in.
         RELEASED.wake_all();
@@ -564,7 +582,7 @@ fn set_lock(
     let mut placed = false;
     let _ = RELEASED.wait_until_deadline(
         || {
-            placed = place(key, owner, exclusive, start, end);
+            placed = place(key, owner, exclusive, start, end, &mut charge, &mut spare);
             placed || process.signal_pending()
         },
         FOREVER,
@@ -580,7 +598,19 @@ fn set_lock(
 /// Take `start..=end` of `key` for `owner` if nothing conflicts: replace
 /// whatever `owner` held there, and merge the result with `owner`'s
 /// neighbouring locks of the same type, as Linux's `posix_lock_inode` does.
-fn place(key: Key, owner: &Owner, exclusive: bool, start: u64, end: u64) -> bool {
+///
+/// `charge` pays for the new record and `spare` for a lock the range splits;
+/// both are taken only when the range is placed, so a caller that waits
+/// keeps them for its next try.
+fn place(
+    key: Key,
+    owner: &Owner,
+    exclusive: bool,
+    start: u64,
+    end: u64,
+    charge: &mut Option<Charge>,
+    spare: &mut Option<Charge>,
+) -> bool {
     let mut records = RECORDS.lock();
     records.retain(|record| record.owner.alive());
     if records
@@ -589,44 +619,73 @@ fn place(key: Key, owner: &Owner, exclusive: bool, start: u64, end: u64) -> bool
     {
         return false;
     }
-    carve(&mut records, key, owner, start, end);
+    carve(&mut records, key, owner, start, end, spare);
     records.push(Record {
         key,
         owner: owner.clone(),
         exclusive,
         start,
         end,
+        charge: charge.take().unwrap_or_default(),
     });
     coalesce(&mut records, key, owner);
     true
 }
 
 /// Remove `start..=end` from every lock `owner` holds on `key`, splitting a
-/// lock the range falls inside into what is left either side.
-fn carve(records: &mut Vec<Record>, key: Key, owner: &Owner, start: u64, end: u64) {
+/// lock the range falls inside into what is left either side. A lock cut on
+/// one side keeps its charge; the second piece of one split in two takes
+/// `spare`. At most one lock is split, since one owner's locks on a file
+/// never overlap.
+fn carve(
+    records: &mut Vec<Record>,
+    key: Key,
+    owner: &Owner,
+    start: u64,
+    end: u64,
+    spare: &mut Option<Charge>,
+) {
     let mut left = Vec::new();
-    records.retain(|record| {
+    let mut at = 0;
+    while let Some(record) = records.get(at) {
         if record.key != key
             || !record.owner.same(owner)
             || record.end < start
             || end < record.start
         {
-            return true;
+            at += 1;
+            continue;
         }
-        if record.start < start {
+        let Record {
+            key: held,
+            owner: holder,
+            exclusive,
+            start: first,
+            end: last,
+            charge,
+        } = records.remove(at);
+        let mut charge = Some(charge);
+        if first < start {
             left.push(Record {
+                key: held,
+                owner: holder.clone(),
+                exclusive,
+                start: first,
                 end: start - 1,
-                ..record.clone()
+                charge: charge.take().or_else(|| spare.take()).unwrap_or_default(),
             });
         }
-        if record.end > end {
+        if last > end {
             left.push(Record {
+                key: held,
+                owner: holder,
+                exclusive,
                 start: end + 1,
-                ..record.clone()
+                end: last,
+                charge: charge.take().or_else(|| spare.take()).unwrap_or_default(),
             });
         }
-        false
-    });
+    }
     records.extend(left);
 }
 

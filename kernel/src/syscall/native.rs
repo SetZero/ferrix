@@ -1225,10 +1225,11 @@ fn job_set_limit(process: &Process, job: Handle, resource: u64, at: u64) -> Resu
     let set = match limited(resource)? {
         Limited::Quota(Resource::Memory) => job.set_limit(
             Resource::Memory,
+            // Whole pages, as `memory.max` keeps it.
             if limit == types::UNLIMITED {
                 quota::UNLIMITED
             } else {
-                limit / PAGE_SIZE
+                limit - limit % PAGE_SIZE
             },
         ),
         Limited::Quota(resource) => job.set_limit(resource, limit),
@@ -1254,11 +1255,7 @@ fn job_get_quota(process: &Process, job: Handle, resource: u64, out: u64) -> Res
                 limit: quota::UNLIMITED,
                 refused: 0,
             });
-            let bytes = |pages: u64| match resource {
-                Resource::Memory if pages != quota::UNLIMITED => pages.saturating_mul(PAGE_SIZE),
-                _ => pages,
-            };
-            [bytes(usage.used), bytes(usage.limit), usage.refused]
+            [usage.used, usage.limit, usage.refused]
         }
     };
     let mut bytes = [0u8; 24];

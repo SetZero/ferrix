@@ -250,6 +250,7 @@ dependencies = [
  "ferrix-frame",
  "ferrix-heap",
  "ferrix-inputctl",
+ "ferrix-kmem",
  "ferrix-linux-abi",
  "ferrix-native-abi",
  "ferrix-net",
@@ -315,6 +316,7 @@ dependencies = [
 name = "ferrix-net"
 version = "0.1.0"
 dependencies = [
+ "ferrix-kmem",
  "ferrix-nettcp",
  "ferrix-netwire",
 ]
@@ -358,6 +360,7 @@ dependencies = [
 name = "ferrix-nettcp"
 version = "0.1.0"
 dependencies = [
+ "ferrix-kmem",
  "ferrix-netwire",
 ]
 
@@ -472,6 +475,7 @@ name = "ferrix-vfs"
 version = "0.1.0"
 dependencies = [
  "ferrix-cpio",
+ "ferrix-kmem",
  "ferrix-linux-abi",
  "ferrix-sync",
 ]
@@ -526,6 +530,7 @@ name = "ferrix-vma"
 version = "0.1.0"
 dependencies = [
  "ferrix-fallible",
+ "ferrix-kmem",
 ]
 
 [[package]]

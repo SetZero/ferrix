@@ -7,6 +7,7 @@ use alloc::vec::Vec;
 use core::fmt;
 use core::sync::atomic::{AtomicU64, Ordering};
 
+use ferrix_kmem::{Charge, arc_footprint};
 use ferrix_linux_abi::errno::Errno;
 use ferrix_sync::{Parker, SleepLock, SpinLock};
 
@@ -36,6 +37,9 @@ pub struct Mount {
     /// namespace's, so that an open file reaches it through its location
     /// and nothing that opens a file has to be told.
     parker: Arc<dyn Parker>,
+    /// The kernel heap it holds, charged to the job that mounted it, or that
+    /// made the pipe or socket a detached one is for (F-37).
+    _charge: Charge,
 }
 
 impl Mount {
@@ -125,22 +129,27 @@ impl Location {
     /// [`Namespace::path_of`] reports it as `name` alone, which is how Linux
     /// reports `pipe:[1234]`. `parker` is where the open file's sleeping
     /// lock waits; a stream never takes it, but every description has one.
-    #[must_use]
+    ///
+    /// # Errors
+    ///
+    /// `ENOMEM` past the job's memory limit.
     pub fn detached(
         fs: Arc<dyn FileSystem>,
         inode: Arc<dyn Inode>,
         name: &[u8],
         parker: Arc<dyn Parker>,
-    ) -> Location {
-        let dentry = Dentry::named_root(Box::from(name), inode);
+    ) -> Result<Location> {
+        let charge = crate::charge(arc_footprint::<Mount>())?;
+        let dentry = Dentry::named_root(Box::from(name), inode)?;
         let mount = Arc::new(Mount {
             id: DETACHED_MOUNT,
             fs,
             root: Arc::clone(&dentry),
             parent: None,
             parker,
+            _charge: charge,
         });
-        Location { mount, dentry }
+        Ok(Location { mount, dentry })
     }
 
     /// Whether this is a [`Location::detached`] one.
@@ -237,12 +246,15 @@ impl Namespace {
         cache_limit: usize,
         parker: Arc<dyn Parker>,
     ) -> Namespace {
+        // Made before any program runs: nobody to charge, and nothing to
+        // refuse.
         let root = Arc::new(Mount {
             id: 1,
-            root: Dentry::root(fs.root()),
+            root: Dentry::uncharged_root(fs.root()),
             fs,
             parent: None,
             parker: Arc::clone(&parker),
+            _charge: Charge::none(),
         });
         Namespace {
             root,
@@ -888,22 +900,27 @@ impl Namespace {
     /// # Errors
     ///
     /// `ENOTDIR` if `at` is not a directory, `EBUSY` if something is already
-    /// mounted exactly there.
+    /// mounted exactly there, `ENOMEM` past the job's memory limit.
     pub fn mount(&self, fs: Arc<dyn FileSystem>, at: &Location) -> Result<Arc<Mount>> {
         if at.inode()?.metadata().kind != FileType::Directory {
             return Err(Errno::ENOTDIR);
         }
         let key = (at.mount.id, at.dentry.id());
+        // Charged before the table is locked: a refusal drops `fs`, which
+        // may be its last reference.
+        let charge = crate::charge(arc_footprint::<Mount>())?;
+        let root = Dentry::root(fs.root())?;
         let mut mounts = self.mounts.lock();
         if mounts.contains_key(&key) {
             return Err(Errno::EBUSY);
         }
         let mount = Arc::new(Mount {
             id: self.next_mount.fetch_add(1, Ordering::Relaxed),
-            root: Dentry::root(fs.root()),
+            root,
             fs,
             parent: Some((Arc::clone(&at.mount), Arc::clone(&at.dentry))),
             parker: Arc::clone(&self.parker),
+            _charge: charge,
         });
         let _ = mounts.insert(key, Arc::clone(&mount));
         at.dentry.add_mount();

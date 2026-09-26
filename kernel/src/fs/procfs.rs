@@ -67,6 +67,7 @@ use alloc::vec::Vec;
 use core::any::Any;
 use core::fmt;
 
+use ferrix_kmem::{Charge, arc_footprint, buffer_footprint};
 use ferrix_vfs::{
     DirEntry, Errno, FIRST_CURSOR, FileSystem, FileType, Inode, Location, Metadata, OpenFile,
     Result, StatFs, Timespec,
@@ -639,26 +640,29 @@ impl Node {
         let splices = self.splices();
         match self.place {
             Place::Top(tree) => match tree.entry().map(|(entry, _)| &entry.content) {
-                Some(Content::File { render, write }) => Ok(Some(Snapshot {
+                Some(Content::File { render, write }) => Snapshot::new(
                     metadata,
-                    bytes: render(&())?,
-                    write: write.map(|write| -> Writer { Box::new(move |data| write(&(), data)) }),
+                    render(&())?,
+                    write.map(|write| -> Writer { Box::new(move |data| write(&(), data)) }),
                     refusal,
                     splices,
-                })),
+                )
+                .map(Some),
                 _ => Ok(None),
             },
             Place::Entry(pid, index) => match PER_PROCESS.get(index).map(|entry| &entry.content) {
                 Some(Content::File { render, write }) => {
                     let process = alive(pid)?;
-                    Ok(Some(Snapshot {
+                    let bytes = render(&process)?;
+                    Snapshot::new(
                         metadata,
-                        bytes: render(&process)?,
-                        write: write
+                        bytes,
+                        write
                             .map(|write| -> Writer { Box::new(move |data| write(&process, data)) }),
                         refusal,
                         splices,
-                    }))
+                    )
+                    .map(Some)
                 }
                 _ => Ok(None),
             },
@@ -667,14 +671,14 @@ impl Node {
                     Some(Content::File { render, write }) => {
                         let of = thread_alive(pid, tid)?;
                         let bytes = render(&of)?;
-                        Ok(Some(Snapshot {
+                        Snapshot::new(
                             metadata,
                             bytes,
-                            write: write
-                                .map(|write| -> Writer { Box::new(move |data| write(&of, data)) }),
+                            write.map(|write| -> Writer { Box::new(move |data| write(&of, data)) }),
                             refusal,
                             splices,
-                        }))
+                        )
+                        .map(Some)
                     }
                     _ => Ok(None),
                 }
@@ -1149,15 +1153,10 @@ pub(crate) fn snapshot(
     bytes: Vec<u8>,
     write: Option<Writer>,
     refusal: Errno,
-) -> Arc<dyn Inode> {
-    Arc::new(Snapshot {
-        metadata,
-        bytes,
-        write,
-        refusal,
-        // kernfs gives every sysfs and cgroupfs file a `splice_read`.
-        splices: true,
-    })
+) -> Result<Arc<dyn Inode>> {
+    // kernfs gives every sysfs and cgroupfs file a `splice_read`.
+    let snapshot = Snapshot::new(metadata, bytes, write, refusal, true)?;
+    Ok(Arc::new(snapshot))
 }
 
 /// One open of a generated file: its contents as they were at open.
@@ -1172,6 +1171,38 @@ struct Snapshot {
     refusal: Errno,
     /// Whether `sendfile` and `splice` may read it, as `Node::splices` says.
     splices: bool,
+    /// Its heap, the contents included, charged to the job that opened it
+    /// (F-37): a process's `maps` grows with its regions, and every open
+    /// holds a copy.
+    _charge: Charge,
+}
+
+impl Snapshot {
+    /// Contents rendered at open, charged to the running task's job.
+    ///
+    /// # Errors
+    ///
+    /// `ENOMEM` past the job's memory limit.
+    fn new(
+        metadata: Metadata,
+        bytes: Vec<u8>,
+        write: Option<Writer>,
+        refusal: Errno,
+        splices: bool,
+    ) -> Result<Snapshot> {
+        let charge = Charge::bytes(
+            arc_footprint::<Snapshot>().saturating_add(buffer_footprint::<u8>(bytes.capacity())),
+        )
+        .map_err(|_| Errno::ENOMEM)?;
+        Ok(Snapshot {
+            metadata,
+            bytes,
+            write,
+            refusal,
+            splices,
+            _charge: charge,
+        })
+    }
 }
 
 impl fmt::Debug for Snapshot {

@@ -43,7 +43,7 @@ fn reading() -> OpenFlags {
 
 /// A tmpfs root with an empty `/mnt`, not yet mounted over.
 fn unmounted() -> (Namespace, Context) {
-    let root = Tmpfs::new(
+    let root = Tmpfs::for_kernel(
         ROOT_DEV,
         Arc::new(Ticking::default()),
         Arc::new(HeapStorage::new(1 << 20)),

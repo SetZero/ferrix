@@ -57,6 +57,7 @@ use core::any::Any;
 use core::fmt;
 use core::sync::atomic::{AtomicU64, Ordering};
 
+use ferrix_kmem::{Charge, arc_footprint};
 use ferrix_sync::Once;
 
 use crate::sync::SpinLock;
@@ -92,6 +93,9 @@ pub(crate) struct Pipe {
     readers_opened: AtomicU64,
     /// Write ends ever opened, likewise.
     writers_opened: AtomicU64,
+    /// The heap the pipe holds but its buffer, charged to the job that made
+    /// it; the buffer charges its own growth to the same job (F-37).
+    _charge: Charge,
 }
 
 impl fmt::Debug for Pipe {
@@ -104,15 +108,24 @@ impl fmt::Debug for Pipe {
 }
 
 impl Pipe {
-    /// An empty pipe with no ends.
-    fn new() -> Arc<Pipe> {
-        Arc::new(Pipe {
+    /// An empty pipe with no ends, charged to the running task's job.
+    ///
+    /// # Errors
+    ///
+    /// `ENOMEM` past the job's memory limit.
+    fn new() -> Result<Arc<Pipe>, Errno> {
+        let charge = Charge::bytes(
+            arc_footprint::<Pipe>().saturating_add(arc_footprint::<WaitQueue>().saturating_mul(2)),
+        )
+        .map_err(|_| Errno::ENOMEM)?;
+        Ok(Arc::new(Pipe {
             buffer: SpinLock::new(PipeBuffer::new(PIPE_CAPACITY)),
             readable: Arc::new(WaitQueue::new()),
             writable: Arc::new(WaitQueue::new()),
             readers_opened: AtomicU64::new(0),
             writers_opened: AtomicU64::new(0),
-        })
+            _charge: charge,
+        }))
     }
 
     /// Wake both directions: an end opened or closed, which can end a wait
@@ -144,12 +157,24 @@ struct End {
     writes: bool,
     /// What `stat` reports through this end.
     metadata: Metadata,
+    /// Its heap, charged to the job that opened it (F-37).
+    _charge: Charge,
 }
 
 impl End {
     /// Make an end, counting it into the pipe, and wake anyone whose open was
     /// waiting for one.
-    fn open(pipe: &Arc<Pipe>, reads: bool, writes: bool, metadata: Metadata) -> Arc<End> {
+    ///
+    /// # Errors
+    ///
+    /// `ENOMEM` past the job's memory limit, with nothing counted.
+    fn open(
+        pipe: &Arc<Pipe>,
+        reads: bool,
+        writes: bool,
+        metadata: Metadata,
+    ) -> Result<Arc<End>, Errno> {
+        let charge = Charge::bytes(arc_footprint::<End>()).map_err(|_| Errno::ENOMEM)?;
         {
             let mut buffer = pipe.buffer.lock();
             if reads {
@@ -162,12 +187,13 @@ impl End {
             }
         }
         pipe.wake_both();
-        Arc::new(End {
+        Ok(Arc::new(End {
             pipe: Arc::clone(pipe),
             reads,
             writes,
             metadata,
-        })
+            _charge: charge,
+        }))
     }
 
     /// Bytes were taken out: a writer waiting for room may now have it.
@@ -333,6 +359,7 @@ impl Inode for End {
                     crate::syscall::kill::send_to_current(ferrix_linux_abi::types::SIGPIPE);
                     Errno::EPIPE
                 }
+                WriteOutcome::NoMemory => Errno::ENOMEM,
                 WriteOutcome::WouldBlock if nonblock => Errno::EAGAIN,
                 WriteOutcome::WouldBlock => match self.wait_to_write(rest.len()) {
                     Ok(()) => continue,
@@ -457,14 +484,14 @@ pub(crate) fn new_pipe(
     };
     // What `/proc/self/fd` will show, in Linux's spelling.
     let name = format!("pipe:[{ino}]");
-    let pipe = Pipe::new();
+    let pipe = Pipe::new()?;
     let reader = open_end(
-        End::open(&pipe, true, false, metadata),
+        End::open(&pipe, true, false, metadata)?,
         name.as_bytes(),
         nonblock,
     )?;
     let writer = open_end(
-        End::open(&pipe, false, true, metadata),
+        End::open(&pipe, false, true, metadata)?,
         name.as_bytes(),
         nonblock,
     )?;
@@ -481,7 +508,7 @@ fn open_end(end: Arc<End>, name: &[u8], nonblock: bool) -> Result<Arc<OpenFile>,
     };
     let pipefs: Arc<PipeFs> = Arc::clone(pipefs());
     let parker = Arc::clone(super::namespace().parker());
-    OpenFile::new(Location::detached(pipefs, end, name, parker), &flags)
+    OpenFile::new(Location::detached(pipefs, end, name, parker)?, &flags)
 }
 
 // ---------------------------------------------------------------------------
@@ -495,18 +522,22 @@ fn open_end(end: Arc<End>, name: &[u8], nonblock: bool) -> Result<Arc<OpenFile>,
 static FIFOS: SpinLock<BTreeMap<(u64, u64), Weak<Pipe>>> = SpinLock::new(BTreeMap::new());
 
 /// The pipe behind the FIFO `key` names, made if nobody has it open.
-fn shared_pipe(key: (u64, u64)) -> Arc<Pipe> {
+///
+/// # Errors
+///
+/// `ENOMEM` past the job's memory limit.
+fn shared_pipe(key: (u64, u64)) -> Result<Arc<Pipe>, Errno> {
     let mut table = FIFOS.lock();
     if let Some(pipe) = table.get(&key).and_then(Weak::upgrade) {
-        return pipe;
+        return Ok(pipe);
     }
     // Forget the pipes nobody holds any more, so the table is as large as the
     // FIFOs open now rather than every FIFO ever opened. Only weak references
     // are dropped here, so nothing is freed under the lock.
     table.retain(|_, pipe| pipe.strong_count() > 0);
-    let pipe = Pipe::new();
+    let pipe = Pipe::new()?;
     let _ = table.insert(key, Arc::downgrade(&pipe));
-    pipe
+    Ok(pipe)
 }
 
 /// An open file of a named pipe, made into an end of the pipe every opener of
@@ -529,17 +560,17 @@ pub(crate) fn attach_fifo(file: Arc<OpenFile>) -> Result<Arc<OpenFile>, Errno> {
     let nonblock = file.status().nonblock;
     let metadata = file.inode().metadata();
     let key = (file.location().mount.filesystem().device(), metadata.ino);
-    let pipe = shared_pipe(key);
+    let pipe = shared_pipe(key)?;
     let no_reader = pipe.buffer.lock().readers() == 0;
     if writes && !reads && nonblock && no_reader {
         return Err(Errno::ENXIO);
     }
-    let end = End::open(&pipe, reads, writes, metadata);
+    let end = End::open(&pipe, reads, writes, metadata)?;
     if !nonblock && reads != writes {
         // On failure `end` is dropped, which counts it out again.
         wait_for_partner(&pipe, reads)?;
     }
-    Ok(file.with_io(end))
+    file.with_io(end)
 }
 
 /// Block a FIFO opener until the other kind of end has opened: a writer for a
@@ -592,6 +623,8 @@ enum Joined {
     Full,
     /// The sink has no reader left.
     Broken,
+    /// The sink's buffer could not grow: its job is at its memory limit.
+    NoMemory,
 }
 
 /// The pipe end `file` reads or writes through: an anonymous pipe's, or an
@@ -683,6 +716,7 @@ pub(crate) fn splice_pipes(
                 return Ok(count);
             }
             Joined::EndOfFile => return Ok(0),
+            Joined::NoMemory => Errno::ENOMEM,
             Joined::Broken => {
                 crate::syscall::kill::send_to_current(ferrix_linux_abi::types::SIGPIPE);
                 Errno::EPIPE
@@ -732,6 +766,11 @@ fn join(from: &Pipe, to: &Pipe, bounce: &mut [u8]) -> Joined {
     let Some(slot) = bounce.get_mut(..count) else {
         return Joined::Full;
     };
+    // Charged before the source gives anything up, which it could not have
+    // back if the sink's job were then refused the room.
+    if !sink.reserve(count) {
+        return Joined::NoMemory;
+    }
     // Neither can come back short: the source holds `count` bytes, and the
     // sink has room for them, which is all a write of any size needs.
     let ReadOutcome::Read(read) = source.read(slot) else {
@@ -741,5 +780,7 @@ fn join(from: &Pipe, to: &Pipe, bounce: &mut [u8]) -> Joined {
         WriteOutcome::Wrote(wrote) => Joined::Moved(wrote),
         WriteOutcome::Broken => Joined::Broken,
         WriteOutcome::WouldBlock => Joined::Full,
+        // The room was had before the source was read, so this is not met.
+        WriteOutcome::NoMemory => Joined::NoMemory,
     }
 }

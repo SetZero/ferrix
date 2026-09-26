@@ -49,7 +49,7 @@ static MEMFD_FS: Once<Arc<Tmpfs>> = Once::new();
 
 /// The one memfd tmpfs.
 fn memfd_fs() -> &'static Arc<Tmpfs> {
-    MEMFD_FS.call_once(fs::new_tmpfs)
+    MEMFD_FS.call_once(fs::kernel_tmpfs)
 }
 
 /// `memfd_create(name, flags)`.
@@ -89,7 +89,7 @@ pub(crate) fn sys_memfd_create(process: &Process, name: u64, flags: u32) -> Resu
         inode,
         shown.as_bytes(),
         Arc::new(crate::sync::SchedParker),
-    );
+    )?;
     let open = OpenFlags {
         read: true,
         write: true,

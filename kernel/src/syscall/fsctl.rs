@@ -401,7 +401,7 @@ fn filesystem_named(
 ) -> Result<Arc<dyn FileSystem>, Errno> {
     match name {
         b"tmpfs" | b"proc" | b"devtmpfs" if read_only => Err(Errno::EINVAL),
-        b"tmpfs" => Ok(fs::new_tmpfs()),
+        b"tmpfs" => Ok(fs::new_tmpfs()?),
         b"proc" => Ok(Arc::new(Procfs::new())),
         b"devtmpfs" => Ok(Arc::new(Devfs::new())),
         b"cgroup2" => Ok(Arc::new(fs::cgroupfs::Cgroupfs::new())),

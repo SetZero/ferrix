@@ -306,6 +306,7 @@
       "fs::epoll_check",
       "fs::eventfd_check",
       "fs::exec_check",
+  "fs::kmem_check",
       "fs::memfd_check",
       "fs::mmap_check",
       "fs::procfs::check",
