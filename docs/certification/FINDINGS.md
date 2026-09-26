@@ -4,7 +4,7 @@ The audit register for the item defined in [ITEM.md](ITEM.md). One entry per
 finding, each naming what was measured, which objective it bears on, and what
 would close it.
 
-16 findings are open and 22 are closed, of 38. F-10 advanced from 71.4% to 81.9%, F-07, F-09 and F-33 closed, which leaves the boundary with no upward reference, and F-31 closed when its layout half, KASLR, was built after its side-channel half (2026-09-26). No finding here is closed by argument:
+16 findings are open and 23 are closed, of 39. F-10 advanced from 71.4% to 81.9%, F-07, F-09 and F-33 closed, which leaves the boundary with no upward reference, F-31 closed when its layout half, KASLR, was built after its side-channel half, and F-34, a writable alias of the kernel's text in the direct map, was found and closed the same day (2026-09-26). No finding here is closed by argument:
 a finding closes when the thing it describes stops being true and something in
 the build says so.
 
@@ -636,6 +636,50 @@ carried:
 At `AVA_VAN.4`'s moderate attack potential the half built first was the half
 that mattered more. Without it, isolation between processes held only
 against programs that did not time their loads.
+
+### F-34 — the direct map aliased the kernel's text writable
+**Found and closed 2026-09-26.** Recorded as a finding although it never stood
+open over a landing, so that O.WXN's evidence can say what the W^X sweep did
+not see and when that stopped.
+
+*Was:* **Major.** The direct map aliases every byte of RAM, the kernel image's
+own frames included, and both loaders mapped all of it read-write and never
+executable. The image mapping's text was read-execute and its read-only data
+read-only, and the W^X sweep passed, since it asks each mapping about itself
+and the alias was never executable. But a write through the alias changed the
+code the image mapping runs. So O.WXN held for every mapping and the property
+it exists for did not: a kernel write primitive (V-01 on Arm, or any
+out-of-bounds write) could patch kernel text without making anything
+executable writable. It was found by the KASLR work (F-31). KASLR moves the
+direct map but not the image's physical placement, so a disclosure of the
+direct map's base was enough to find the alias.
+
+*Now:* both loaders (`boot/` and the Pixel 7 loader) cut each direct-map run
+around the physical span of the image's non-writable segments
+(`ferrix_bootinfo::read_only_span` and `split_run`, host-tested) and map that
+span `KERNEL_RODATA`. `.data` and `.bss` stay writable in the alias: they are
+writable in the image anyway, never executable in either, and the kernel's
+early page tables are in `.bss` and are written through the direct map. No
+kernel code writes its own text or read-only data. There are no alternatives,
+static keys or text pokes, and the KASLR fixups are applied by the loaders
+before the switch. The stage 2 device-window checks opened a writable device
+window over the image's first page, and they now use its first page of data.
+
+*Checked by the build:* after the W^X sweep, every boot walks the kernel's
+tables for every mapping of the text's and read-only data's frames. It fails
+with FX-0204 if one is writable, or if the direct map does not alias the whole
+span (*"sealed 4416 KiB of text and read-only data, 1697 mappings of it,
+none writable"* on x86-64). A loader with the cut but without the seal was
+refused by name. A write of one byte of text through `mm::direct_map` faults
+on all three architectures with FX-9001 (*"page fault at … (kernel write,
+protection)"*). Both results are quoted in the commit that added the sweep.
+The cost is 1022 more 4 KiB leaves on each architecture: the image sits on a
+page boundary, so each edge of the span breaks one 2 MiB block. Boot time
+under KVM did not change measurably.
+
+*Not reached:* the image's physical placement is still fixed (V-06), so a
+disclosure of the direct map's base still gives the alias of the image's data,
+which is writable in its own mapping too.
 
 ### F-21b — the TOE claims no audit and no authentication
 **Moderate.** There is no FAU family at all, and FIA lives in the uncertified

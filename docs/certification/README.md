@@ -27,7 +27,7 @@ specific, measured, and mostly documents rather than code.
 * [TODO.md](TODO.md) — start here to re-audit: what to re-measure, and what not to write
 * [SAFETY-MANUAL.md](SAFETY-MANUAL.md) — the out-of-context argument: assumed requirements, safe state, eleven assumptions of use, element failure analysis
 * [ITEM.md](ITEM.md) — what the ratings attach to, and why it is not all of Ferrix
-* [FINDINGS.md](FINDINGS.md) — the audit register, 16 open findings and 22 closed
+* [FINDINGS.md](FINDINGS.md) — the audit register, 16 open findings and 23 closed
 * [SECURITY-TARGET.md](SECURITY-TARGET.md) — EAL5+ claim, SFRs, and where it would fail evaluation
 * [VULNERABILITY-ANALYSIS.md](VULNERABILITY-ANALYSIS.md) — AVA_VAN.4 over the seven threats; six residual vulnerabilities
 * [SPECULATION.md](SPECULATION.md) — the side-channel defences, per architecture, behind one build switch, and what they cost
@@ -86,6 +86,7 @@ boundary.
 | PAN (AArch64) | **implemented**; absent from the reference CPU |
 | Side-channel defences | **on** by default, per processor; one switch, `--mitigations off`, takes them out |
 | KASLR | kernel image, direct map and vmap arena **moved every boot**: 18, 16 and 17 bits on the 64-bit pair, 11, 8 and 9 on ARMv7-A; off with the same switch |
+| Writable mappings of the kernel's text | **0**, every mapping of its frames swept each boot; the direct map's alias was one until 2026-09-26 (F-34) |
 | Assembly | 500 lines, 22 allow-listed sites, outside the Pixel 7 loader |
 | Cargo features in `kernel/`/`boot/` | 0 |
 
@@ -128,7 +129,9 @@ memory, and it corrected this ST's own claim to the contrary.
 
 *Fixed since:* F-32. SMEP and SMAP are on for x86-64, and PAN is implemented
 for AArch64. The reference `cortex-a72` is ARMv8.0 and lacks PAN, and ARMv7-A
-cannot have it at all, so V-01 still stands on Arm (AoU-6).
+cannot have it at all, so V-01 still stands on Arm (AoU-6). And F-34: the
+direct map aliased the kernel's text writable, which the W^X sweep could not
+see. The alias is read only now, and every boot sweeps for it.
 
 *Missing:* Design evidence at module granularity for `ADV_TDS.3`; the SysML model
 describes Ferrix, not the TOE (F-15). The TSF no longer names the load ring anywhere
@@ -230,8 +233,9 @@ boundary from 36 references to 29 by the gate's count of the day and left `objec
 nothing above the core; the native ABI's subsystems and the Linux dispatcher
 registering with the item, and the rest of the personality moved out of it
 (F-07, F-09, F-33, W-5), which left the boundary with no upward reference by
-the resolving gate's count, from 56; and the side-channel defences and KASLR
-behind one build switch (F-31, [SPECULATION.md](SPECULATION.md)).
+the resolving gate's count, from 56; the side-channel defences and KASLR
+behind one build switch (F-31, [SPECULATION.md](SPECULATION.md)); and the
+direct map's writable alias of the kernel's text, sealed (F-34).
 
 ## 5. What cannot be fixed from here
 

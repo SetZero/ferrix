@@ -549,6 +549,14 @@ package FerrixBoot {
                  * be writable and executable. Reports what it swept, because a
                  * sweep that walks nothing also finds nothing. */
         }
+        then action sealedImageSweep {
+            doc /* Walk every leaf over the frames of the image's text and
+                 * read-only data; none may be writable, whichever mapping it
+                 * is, and the direct map must alias every one of them. The
+                 * W^X sweep cannot see a writable alias that is not
+                 * executable, and the loaders map the direct map read only
+                 * over that span for this reason (F-34). */
+        }
         then action reclaimBootMemory {
             doc /* The loader's own memory and the ACPI-reclaim regions go to
                  * the buddy: 2 to 4 MiB on a 512 MiB QEMU machine. */

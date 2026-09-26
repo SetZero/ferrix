@@ -288,6 +288,16 @@ figures in SPECULATION.md §8 are medians of eight boots on a loaded host.
 Check that `cargo xtask check` still has its `--mitigations off` clippy steps,
 and that AoU-11's list matches what `arch/*/speculation.rs` actually applies.
 
+### 4.3 The direct map's alias of the kernel's text — **F-34**
+**Done 2026-09-26.** Found by the KASLR work, and closed the same day.
+
+To re-audit: read the `sealed` line of any boot, beside the `w^x` line. It
+counts every mapping of the frames holding the image's text and read-only
+data. That is more than the image's own pages, because the direct map's alias
+is among them, and the line says none is writable. Then reproduce the negative
+control the commit quotes: a scratch write of one byte of text through
+`mm::direct_map` must fault with FX-9001 on each architecture.
+
 ---
 
 ## 5. Tools

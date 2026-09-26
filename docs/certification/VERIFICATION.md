@@ -41,7 +41,8 @@ code that runs inside ring 0 on every boot and prints what it proved rather
 than that it passed:
 
 ```
-w^x       2387 mappings swept, 899 executable, none writable
+w^x       3485 mappings swept, 917 executable, none writable
+sealed    4416 KiB of text and read-only data, 1697 mappings of it, none writable
 handles   1 device aperture mapped into a process and reached from a forked
           child, 1 interrupt held from delivery to acknowledgement, 2 VMO
           pages pinned for a device and found at their device addresses,
@@ -52,8 +53,9 @@ reclaim   84 MiB from the loader and ACPI, 434 free; arena 34 live, 708 KiB
 ```
 
 Counted quantities, not assertions of success. For the Security Target's
-objectives this is directly usable: the `w^x` line is O.WXN demonstrated on
-every run, and the `handles` line is O.CAPABILITY's refusals exercised.
+objectives this is directly usable: the `w^x` and `sealed` lines are O.WXN
+demonstrated on every run, the second over the direct map's alias of the text
+that the first cannot see (F-34), and the `handles` line is O.CAPABILITY's refusals exercised.
 
 The largest bodies of in-kernel test code sit against the item: `syscall/
 check.rs` at 9,537 lines, `object/check.rs` at 3,318, `user/check.rs` at 1,263,

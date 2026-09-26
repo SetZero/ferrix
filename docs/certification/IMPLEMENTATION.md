@@ -579,6 +579,11 @@ each of the rest.
    (needs the clamp to be the kernel's, reached through a trait the tables
    take), the tables deeper than the system call boundary, and a written
    position on cache partitioning.
+5. **The direct map's alias of the text — done 2026-09-26 (F-34).** Found by
+   step 1: the direct map aliased the image's text and read-only data
+   writable, which W^X could not see. Both loaders now map that span read
+   only, and every boot sweeps each mapping of its frames (`sealed` line,
+   FX-0204).
 
 ---
 

@@ -102,7 +102,7 @@ This is generated from the SysML v2 model in `docs/sysml/`, which is itself an i
 | `FerrixAssurance` | `11-assurance.sysml` | docs/RELIABILITY.md and docs/ASSEMBLY.md: the quality gates, what each one verifies, and what the tests can actually reach. The gates cargo xtask check runs are in CI. Of the xtask boot gates, CI runs test-boot and test-rustc; the ones that need a binary the repository does not carry, a disk judged on the host or a screendump run in the landing gates of docs/BACKLOG.md instead (docs/ROADMAP.md, Continuously). |
 | `FerrixViews` | `12-views.sysml` | How to read the one model as two: what runs today, and what the roadmap still owes. The filters key on the lifecycle keywords every element carries. |
 
-13 files, 16 packages, 1655 elements, 198 relations. Model digest `26b2e1fb2e3e7a0f`.
+13 files, 16 packages, 1656 elements, 198 relations. Model digest `dde2cf05c03d29e9`.
 
 | Maturity | Elements | Meaning |
 | --- | ---: | --- |
@@ -972,6 +972,7 @@ The half of stage 2 that cannot run until the rest of boot has, in an order that
 - **`dropIdentityMap`** — Drop identity map
 - **`addressZeroTranslatesToNothing`** — A null dereference in kernel code must fault rather than find the first page of physical memory.
 - **`wxSweep`** — Walk every live leaf through Mapper::for_each_leaf; none may be writable and executable. Reports what it swept, because a sweep that walks nothing also finds nothing.
+- **`sealedImageSweep`** — Walk every leaf over the frames of the image's text and read-only data; none may be writable, whichever mapping it is, and the direct map must alias every one of them. The W^X sweep cannot see a writable alias that is not executable, and the loaders map the direct map read only over that span for this reason (F-34).
 - **`reclaimBootMemory`** — The loader's own memory and the ACPI-reclaim regions go to the buddy: 2 to 4 MiB on a 512 MiB QEMU machine.
 
 ### Traps
