@@ -38,7 +38,21 @@ that list.
 The kernel crate. Its source paths are load-bearing: the certification
 evidence (`docs/certification/coverage-*.json`) and the baselines in
 `scripts/data/` anchor to `kernel/src/**` by file and line, so a file moved
-inside `kernel/src` means regenerating that evidence.
+inside `kernel/src` means regenerating that evidence, and every file has a
+ring in `scripts/data/certification-item.json`.
+
+| Directory | Holds |
+|---|---|
+| `kernel/src/arch/<isa>/` | What one instruction set architecture defines: entry and traps, context switch, signal frames, bringing up the other processors, speculation defences, the architected timer, and the interrupt controller a core reaches through system registers (`aarch64/gic/`, x86's APIC) |
+| `kernel/src/arch/arm_common/` | Drivers for Arm peripherals both Arm architectures can have: the GICv2, the PL011 and the STM32MP1's USART |
+| `kernel/src/platform/<vendor>/<soc>/` | The kernel's part in one system on chip's devices, found in the device tree at boot: `google/gs201` (the Pixel 7) and `st/stm32mp1` (the DK1), the vendor being the prefix of the chip's device-tree `compatible`. Declared inline in `main.rs`, and each file has its own ring |
+| `kernel/src/` otherwise | Everything the architecture does not change: memory, scheduling, objects, system calls, filesystems |
+
+`#[cfg(target_arch)]` appears only under `kernel/src/arch/`
+(`scripts/check/check-crate-layering.sh`, rule 4). So a driver that only one
+architecture can compile lives under that architecture, and one under
+`platform/` compiles everywhere and does nothing on a machine without its
+chip. `#[path]` is not used: a module lives where its `mod` line says.
 
 ## `libs/`
 

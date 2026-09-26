@@ -282,6 +282,7 @@ log path and commit; a new sighting is added to its row the day it is seen.
 | The cost of the 20 µs one-shot armed on every wake onto the caller's processor, measured on pipe and futex paths | open |
 | `EPOLLRDHUP` and `EPOLLPRI` are never reported, a written deviation of the epoll landing (d047480d): `Readiness` carries neither a half-closed peer nor urgent data | open |
 | Per-CPU frame and heap caches, deferred since stage 2 | open, once a workload can measure them |
+| Two PL011 drivers: `kernel/src/arch/aarch64/console.rs` drives a PL011 (and a 16550) itself, beside `kernel/src/arch/arm_common/pl011.rs`, which only ARMv7-A compiles. One driver for both, a code change rather than a move, so it was left out of the kernel/src relayout (2026-09-27) | open |
 | `Inode::ioctl`: `sys_ioctl` special-cases the console, sockets and `/dev/dri/card<N>` by the open object's type; a hook on the inode replaces the three branches (os-02's review of the display stack, 2026-09-16). `/dev/input/eventN` (`docs/INPUT.md` §3.3, L6) would be a fourth special case | open, kernel VFS owner |
 | Checked register offsets in the ring-3 virtio drivers: `Block::read`/`write` in `native/drivers/blk` and `native/drivers/gpu` assert on a device-controlled `notify_off` × multiplier, and on ARMv7-A `offset + size_of::<T>()` can wrap past the bounds check; one shared checked-offset accessor for both (os-02's review, 2026-09-16) | open, driver owner |
 | devmgr's `await_published` kills a driver that exits without publishing and marks it dead, but never quiesces its device, as it did not before that change either. The IOMMU mappings go with the process, so this is hygiene rather than safety: quiesce the device once its driver is gone. Stage 10 (os-02's review of the display stack, 2026-09-16) | open, devmgr owner |
@@ -525,6 +526,12 @@ The roadmap's *Burndown* lists that scope.
 Dated, newest first. A decision here is final until the customer says
 otherwise; one a later decision replaced is deleted, and the history keeps it.
 
+* **2026-09-27 (customer, ferrix-55)** `kernel/src` is grouped by what each
+  file is (`docs/LAYOUT.md`): `arch/<isa>/`, `arch/arm_common/`,
+  `platform/<vendor>/<soc>/`. Every file kept its ring in the move.
+  `#[cfg(target_arch)]` stays under `arch/` alone -- the certification
+  consultant declined an exception for driver selector files -- so
+  architecture-bound drivers stay under `arch/`.
 * **2026-09-26 (customer)** **Authentication is a ring-3 service,
   `authd`, as `docs/AUTH.md` proposes, with all eleven of its decisions as
   recommended.** Among them: Argon2id written in the tree, root locked and
