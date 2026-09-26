@@ -1162,8 +1162,12 @@ fn accelerator_arguments(accelerator: &str) -> Result<Vec<String>> {
 /// is an exit to QEMU. A browser asking the time six thousand times a second,
 /// and the scheduler asking at every switch, spent processors on nothing
 /// else. Only KVM is asked: TCG has no invariant TSC to give and says so.
+///
+/// UMIP under both, which TCG emulates: without it a program's `SIDT` reads
+/// the address of the IDT inside the kernel image, and KASLR is undone by one
+/// instruction (`SPECULATION.md` §6).
 fn x86_cpu(accelerator: &str) -> String {
-    let base = "qemu64,+pdpe1gb,+smep,+smap,+rdrand,+rdseed";
+    let base = "qemu64,+pdpe1gb,+smep,+smap,+umip,+rdrand,+rdseed";
     if accelerator == "tcg" {
         return base.to_owned();
     }

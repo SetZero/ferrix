@@ -157,6 +157,18 @@ pub(crate) unsafe fn init_traps() {
         if smep { "on" } else { "unavailable" },
         if smap { "on" } else { "unavailable" },
     );
+    // KASLR's: a moved image is no secret while ring 3 can ask for the IDT's
+    // address. Not in a kernel built `--mitigations off`, which does not move.
+    let umip = if super::HARDENED {
+        if cpu::enable_umip() {
+            "on"
+        } else {
+            "unavailable, so SIDT gives the image's slide away (AoU-11)"
+        }
+    } else {
+        "off, as built"
+    };
+    crate::console::println!("  cpu      descriptor table addresses kept from ring 3: UMIP {umip}");
 }
 
 /// Decide which side-channel defences this machine gets, apply them on the

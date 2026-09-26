@@ -73,6 +73,9 @@ const CR4_PGE: u64 = 1 << 7;
 /// `CR4.SMEP` — the processor refuses to *execute* a user page in ring 0.
 const CR4_SMEP: u64 = 1 << 20;
 
+/// `CR4.UMIP` — `SGDT`, `SIDT`, `SLDT`, `SMSW` and `STR` fault outside ring 0.
+const CR4_UMIP: u64 = 1 << 11;
+
 /// `CR4.SMAP` — the processor refuses to *read or write* a user page in ring 0
 /// unless `EFLAGS.AC` is set.
 const CR4_SMAP: u64 = 1 << 21;
@@ -133,6 +136,32 @@ pub(crate) fn enable_user_access_protection() -> (bool, bool) {
     SMAP_ON.store(smap, Ordering::Relaxed);
 
     (smep, smap)
+}
+
+/// Keep the descriptor tables' addresses from ring 3, where the processor
+/// offers UMIP, and say whether it did.
+///
+/// Without it any program can execute `SIDT` and read the IDT's address, and
+/// the IDT is a static in the kernel image: that one instruction gives away
+/// the image's slide, and KASLR with it (`docs/certification/SPECULATION.md`
+/// §6). `SGDT` gives a GDT's address the same way. With `CR4.UMIP` set each
+/// of those instructions faults outside ring 0, and the program gets
+/// `SIGSEGV`, as it would on Linux.
+///
+/// Secondary processors inherit it with the rest of the boot processor's
+/// `CR4`.
+pub(crate) fn enable_umip() -> bool {
+    use core::arch::x86_64::{__cpuid, __cpuid_count};
+
+    // CPUID.(EAX=7,ECX=0):ECX.UMIP is bit 2, and leaf 7 is only read when
+    // leaf 0 says it exists.
+    if __cpuid(0).eax < 7 || __cpuid_count(7, 0).ecx & (1 << 2) == 0 {
+        return false;
+    }
+    // SAFETY: CPUID reported UMIP, which is legal to set in long mode and
+    // changes only what ring 3 may execute.
+    unsafe { write_cr4(read_cr4() | CR4_UMIP) };
+    read_cr4() & CR4_UMIP != 0
 }
 
 /// Whether `stac` and `clac` may be executed at all.
