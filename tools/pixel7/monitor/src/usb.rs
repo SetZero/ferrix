@@ -7,8 +7,9 @@
 //! vendor and product, `1209:0001`, with the product string Ferrix gives it.
 //! Any other `ttyACM` on this machine is left alone.
 
-use std::fs::{self, File};
+use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader};
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::thread;
@@ -23,6 +24,13 @@ use crate::runs;
 const VENDOR: &str = "1209";
 const PRODUCT: &str = "0001";
 const PRODUCT_NAME: &str = "Ferrix console";
+
+/// Linux's `O_NOCTTY`: open a terminal without making it the process's
+/// controlling terminal. Without it, a monitor started with `setsid`, as
+/// the phone's notes start it, took the port as its controlling terminal,
+/// and the phone leaving USB hung it up: `SIGHUP` ended the monitor
+/// silently. The same value on every Linux architecture this runs on.
+const O_NOCTTY: i32 = 0o400;
 
 /// How often to look for the port while it is not there.
 const LOOK_EVERY: Duration = Duration::from_millis(500);
@@ -87,7 +95,11 @@ fn stream(app: &AppHandle, port: &str) {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status();
-    let Ok(file) = File::open(Path::new(port)) else {
+    let Ok(file) = OpenOptions::new()
+        .read(true)
+        .custom_flags(O_NOCTTY)
+        .open(Path::new(port))
+    else {
         return;
     };
     let _ = app.emit("usb-state", State { port: Some(port.to_string()), record: None, seconds: 0.0 });
