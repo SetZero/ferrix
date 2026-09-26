@@ -231,7 +231,13 @@ fn step(table: &mut HandleTable<u64>, model: &mut Model, input: &mut Input<'_>) 
                         model.opened(handle, object, rights);
                     }
                 }
-                Err(back) => assert_eq!(back, objects, "a refused batch must come back whole"),
+                Err((why, back)) => {
+                    assert!(
+                        matches!(why, TableError::Full | TableError::NoMemory),
+                        "a batch refused for {why:?}"
+                    );
+                    assert_eq!(back, objects, "a refused batch must come back whole");
+                }
             }
         }
         _ => {
