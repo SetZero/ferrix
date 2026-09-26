@@ -328,3 +328,42 @@ held at high speed, and the combo PHY is untouched); input from the host
 the PHY's suspend and LPM, kept off; and reading the core's release
 (`VER_NUMBER`, `0xC1A0`), which decides reset-timing quirks the driver now
 covers by always waiting.
+The log core's REFUSED once went missing on an aarch64 boot; that is a
+row too, and its boot check prints `logctl   SIGHTING: ...` each time it
+happens again.
+
+### Next agent: start here
+
+ferrix-9c wound down on 2026-09-26 at 6f5090f6, with nothing unlanded
+and every worktree, branch and target directory of its own removed.
+
+* **Before any phone boot**, ask the product owner session (`ferrix-2c`
+  that evening; ask ListAgents who holds the role now) and the phone's
+  other users (then `phone-link-9f` and `ferrix-d4`), and wait for an
+  explicit "free". The PO's standing OK covers only boots whose writes are
+  the 31 offsets above, behind the same guard. Anything new, such as the
+  combo PHY's window for SuperSpeed, needs its own OK with the address list
+  checked against `panther.dts` first. After each run, check its
+  `ramoops` record's `usbdev: write` offsets against the list.
+* **A run:** `FERRIX_PIXEL7_CMDLINE_EXTRA="ferrix.init=/sbin/ferrix-statd
+  ferrix.statd.seconds=60" WT=<worktree> $P/build-run.sh <name>`, then
+  `$P/boot-run.sh <name>` (`P=~/.local/share/ferrix/pixel7`). Give your
+  worktree its own `CARGO_TARGET_DIR` (a copy of `build-run.sh` with `T`
+  changed). The port comes up about 50 s into the run and stays about a
+  minute with those settings. Run records: `$P/usbdev1`, `usblog1`,
+  `usblog2`; the monitor's own is `$P/usb-20260926-174123`.
+* **To watch it**, rebuild and restart `tools/pixel7/monitor` from `main`:
+  a monitor built before 6f5090f6 has no USB watcher. Until the owner
+  installs the udev rule above, ModemManager takes the log's first
+  seconds.
+* **Where the parts are:** `boot/pixel7/src/usb.rs` (survey),
+  `kernel/src/gs201_usb.rs` (binding), `libs/drivers/dwc3` and
+  `libs/drivers/usb-device` (host-tested, `cargo test -p ferrix-dwc3
+  -p ferrix-usb-device`), `native/drivers/usbdev` (driver),
+  `kernel/src/console/log.rs` and `kernel/src/logctl` (the log and its
+  reader, in the certified item: ask the certification session before
+  changing either), `tools/pixel7/monitor/src/usb.rs` (watcher).
+* **Still in someone else's hands:** the log's coverage arguments, in
+  `~/.local/share/ferrix/pixel7-usb-log/coverage-argued-x86_64.pending.json`,
+  for the certification session (ferrix-55) to merge into its next
+  evidence run. Leave the file where it is.
