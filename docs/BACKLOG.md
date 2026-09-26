@@ -89,16 +89,18 @@ the reference, and a row run there does not count.
 aside first; a re-gate that overwrites it turns a result into a rumour — the
 one full trace of FX-0701 was lost that way.
 
-**One build directory per session on the Linux host (2026-09-16).** Every
-session sets `CARGO_TARGET_DIR=~/.local/share/ferrix/target-<session>` for all
-its worktrees on nazuna and never lets a worktree grow its own `target/`; a
-worktree is removed the moment its landing is in. The root filesystem filled
-twice in one day from per-worktree build output (16 GB each) while the host
-held 24 GB for every session together. One target directory serves one tree at a time: a second tree built
-concurrently by the same session gets `target-<session>-2`, because Cargo
-names a workspace member's artifacts without its path and two trees at
-different commits clobber each other. The host's checkout updates in
-place when `main` is pushed to it.
+**One build directory per worktree on the Linux host (2026-09-16,
+corrected 2026-09-26).** Every worktree sets
+`CARGO_TARGET_DIR=~/.local/share/ferrix/target-<session>-<branch>` and never
+grows its own `target/`; the directory goes when the worktree does. Two
+worktrees never share one, not even two of the same session's: xtask finds
+the repository through `CARGO_MANIFEST_DIR`, which is fixed when xtask
+compiles, so a shared directory runs whichever tree last built xtask, with
+that tree's `build/` images (a certification row was voided that way on
+2026-09-26), and Cargo names a workspace member's artifacts without its path,
+so a stale crate from the other tree passes for current. The root filesystem
+filled twice on 2026-09-16 from build output; delete a directory the moment
+its worktree is removed.
 
 **Nobody works in the root checkout, and landings are small and often
 (customer, 2026-09-16).** The root checkout keeps `main` checked out and
@@ -159,7 +161,16 @@ weaker form is written down as such in the stage's section.
 ## Owners
 
 Session names change on every restart. `ListAgents` shows what is alive; this
-table is the roster of 2026-09-26, 18:00, from the fleet coordinator. A row
+table is the roster of 2026-09-26, 18:00, from the fleet coordinator. At 19:15 the
+customer cut the number of sessions running at once, because the host ran at
+load 50 to 80 and every gate took one to two hours: a session marked **winding
+down** finishes the task named in its row, lands it, files what is left as open
+rows, removes its worktrees and target directories, and takes nothing new. Any
+session that has finished everything it owns, winding down or not, reports to
+the coordinator and then asks the customer in its own session, with a question
+the customer has to answer ("ferrix-xx is done: ... May I be stopped?"), so
+that a waiting question shows which session is finished; a question only the
+customer can decide is asked the same way. A row
 below whose owner is "open" has no live session; take it by putting your
 session's name in its owner cell in your first landing.
 
@@ -170,12 +181,14 @@ session's name in its owner cell in your first landing.
 | ferrix-15 | The init (`docs/INIT.md`): L10 landing, L11 to L13 waiting on the customer; stage 13's OOM kill |
 | ferrix-41 | Stage 22's 32-bit x86 ABI (`docs/I386.md`, branch `i386-abi`): I1 landing, I2 to I4 next |
 | ferrix-90 | Audio (`docs/AUDIO.md`): L1 to L7 done 2026-09-26, Chrome plays through `/dev/snd`; next ARMv7-A's run, then the sound server (U1 alsa-lib, U2 the Pulse server, waiting on the customer) |
-| ferrix-d5 | The Rust desktop clients (`docs/DESKTOP-CLIENTS.md`: the clients-base crates, waybar, fuzzel, hyprlock, hypridle), the EDID override, `docs/AUTH.md` |
-| ferrix-c7 | Chrome on ferrousli's `ld.so` (the loader) |
-| ferrix-55 | Certification engineering (`docs/certification/`: F-23, F-31, F-35, the coverage evidence), winding down |
-| ferrix-e1 | The repository relayout (`docs/LAYOUT.md`) |
-| ferrix-9c | The Pixel 7's USB CDC-ACM device driver (`docs/PIXEL7-USB-HANDOVER.md`) |
-| ferrix-d4 | The Pixel 7's GUI: research, options A to D with the customer |
+| ferrix-d5 | The Rust desktop clients (`docs/DESKTOP-CLIENTS.md`: the clients-base crates, waybar, fuzzel, hyprlock, hypridle), the EDID override, `docs/AUTH.md` and its phase 1; at most three streams running at once |
+| ferrix-c7 | Chrome on ferrousli's `ld.so` (the loader). **Winding down** after `chrome-window-ferrousli` lands |
+| ferrix-55 | Certification engineering (`docs/certification/`: F-23, F-31, F-35, the coverage evidence). **Winding down** after small-5, the FX-0905 fix and the coverage evidence |
+| ferrix-e1 | The repository relayout (`docs/LAYOUT.md`), landed 2026-09-26 as 26303ad5. **Winding down** after its post-landing rows and cleanup |
+| ferrix-9c | The Pixel 7's USB CDC-ACM device driver (`docs/PIXEL7-USB-HANDOVER.md`): the phone showed up as `/dev/ttyACM0` on nazuna on 2026-09-26. **Winding down** once `usbdev` with the kernel log channel has landed |
+| ferrix-d4 | The Pixel 7's GUI: the customer chose option A on 2026-09-26, a desktop in the launcher app's crosvm VM (≈ 17) |
+| ferrix-8e | This file's cleanup (landed 6b942df1); two_clients' GPU-frame flake. **Winding down** after that |
+| ferrix-b0 | Bad Apple!! with sound and Doom written in Rust, both on Ferrix (the customer's order, 2026-09-26) |
 | open | The Pixel 7 bring-up (`boot/pixel7`, statd, `tools/pixel7`; was ferrix-0a); Chrome's extensions bubble and `test-chrome-window`'s context-menu step (was ferrix-a8); every row below owned by an `os-*` session before 2026-09-26 |
 
 ---
