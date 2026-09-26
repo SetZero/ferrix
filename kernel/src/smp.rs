@@ -281,6 +281,12 @@ pub(crate) fn start_secondaries(view: &BootView<'_>) -> Result<(), &'static str>
         .get()
         .ok_or("the processors have not been discovered")?;
 
+    // The side-channel defences, decided and applied on this processor before
+    // another is started, because each applies what this one decided as it
+    // starts -- and long before the first program. Here even on a machine with
+    // no other processor, which the loop below simply skips.
+    arch::init_speculation(view);
+
     // Before any secondary can unmask interrupts: an IPI arriving at a line
     // with nothing registered is counted as unclaimed and otherwise lost.
     crate::irq::register(arch::ipi_irq(), on_ipi)

@@ -1536,11 +1536,6 @@ fn check_devices(view: &BootView<'_>, pci: Vec<device::DeviceNode>, reserved: &d
 /// here has its own message, because "stage 4 failed" says
 /// nothing about which of a dozen processors, or which of the checks, did.
 fn bring_up_processors(view: &BootView<'_>) -> &'static smp::Topology {
-    // The side-channel defences, decided and applied on this processor before
-    // another is started, because each applies what this one decided as it
-    // starts; and long before the first program.
-    arch::init_speculation(view);
-
     // Counting first, starting nothing.
     let cpus = match smp::discover(view) {
         Ok(topology) => topology,
