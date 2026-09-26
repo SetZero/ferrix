@@ -567,17 +567,18 @@ fn build_with_shell(
                 archive.symlink(&format!("bin/{applet}"), "busybox")?;
             }
         }
-        // uutils/coreutils, beside a program for the same reason zinc is: the
-        // boot check carries none and its archive stays the bytes it was. The
-        // links are absolute, unlike busybox's, because they point out of the
-        // directory they are in.
-        for (name, bytes) in uutils {
-            archive.file(&format!("{UUTILS_DIR}/{name}"), 0o755, bytes)?;
-            // Relative, as busybox's are: the links are in the directory the
-            // program is in.
-            for link in links_of(name) {
-                archive.symlink(&format!("{UUTILS_DIR}/{link}"), name)?;
-            }
+    }
+    // uutils/coreutils, whether or not a program is beside it, for zinc's
+    // reason below: an image whose pid 1 is `/sbin/init` carries no program,
+    // and its getty's shell found no `sleep` while the archive had been
+    // handed every utility (`docs/INIT.md`, L10). The boot check carries none
+    // and its archive stays the bytes it was.
+    for (name, bytes) in uutils {
+        archive.file(&format!("{UUTILS_DIR}/{name}"), 0o755, bytes)?;
+        // Relative, as busybox's are: the links are in the directory the
+        // program is in.
+        for link in links_of(name) {
+            archive.symlink(&format!("{UUTILS_DIR}/{link}"), name)?;
         }
     }
     // zinc, whether or not busybox is beside it: `run-compositor` boots the
