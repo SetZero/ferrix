@@ -1,8 +1,9 @@
 # Pixel 7 USB device driver: handover
 
-**Status, 2026-09-26 evening (ferrix-9c): phases 1, 2 and 5 are done on
-branch `pixel7-usb`, phase 1 run on the phone; phases 3 and 4 are being
-written.** §8 is where it stands and what the phone said. The rest of this
+**Status, 2026-09-26 night (ferrix-9c): done.** During a native boot
+the phone presents a USB serial port and the monitor streams the boot
+and `ferrix-statd` from it live, proven on the phone (run `usblog2`).
+§8 is where it stands and what the phone said. The rest of this
 document is the brief as it was written: why it is wanted, what the
 hardware is, what Ferrix already has to build it from, the rules that bound
 it, and the order to do it in. Read `boot/pixel7/HANDOVER.md` first;
@@ -257,31 +258,73 @@ The kernel binding (phase 2) was in the same image and published its node:
 `usb      DWC3 0x33313130 at 0x11210000, left on by ABL`, one aperture and
 one vector. devmgr started nothing, since `usbdev` was not yet built in.
 
-### What is on the branch
+### Done: the port streams the kernel's log to the monitor (2026-09-26)
 
-* Phase 1: the survey, kept in the loader as `display.rs`'s report is.
-* Phase 2: `kernel/src/gs201_usb.rs`, `TREE_GS201_DWC3 = 4` (agreed with
-  ferrix-d4, whose DECON binding would be 5). It turns nothing on, and it
-  publishes only when `pd-hsi0` reads on and `GSNPSID` names a DWC3.
-* devmgr: a `Gadget` kind, `TREE_GS201_DWC3 -> usbdev`, taken at its word.
-* Phase 5: the monitor finds the port by `1209:0001` "Ferrix console" in
-  sysfs, streams it through the guest's `appendLine`, and keeps a
-  `usb-<time>` record. Untried against a real port.
-* Phase 4's design, chosen with the certification agent (ferrix-55): a
-  kernel log ring (static, 128 KiB, lock-free) of every console byte, with
-  the KASLR slide and kernel addresses kept out; read by capability, over a
-  log-control channel only the DWC3's node may open (`LOG_CONTROL_CREATE`),
-  and by `syslog(2)`, now privileged for every action. Being written on
-  `pixel7-usb-log`.
-* Phase 3's libraries (`libs/drivers/usb-device`, `libs/drivers/dwc3`) are being written on
-  `pixel7-usb-libs`; `native/drivers/usbdev` follows.
+What §1 asks for works on the phone. During a native boot Ferrix presents
+a CDC-ACM port on the USB-C port, nazuna sees it as `/dev/ttyACM0`
+(`1209:0001`, "Ferrix console"), and `tools/pixel7/monitor` streams the
+boot and `ferrix-statd`'s samples from it live: its boot card fills stage
+by stage, the Ferrix tab graphs the samples as they arrive, and the port
+going away ends the stream and keeps it as a `usb-<time>` run record.
 
-### Still open
+Three RAM boots, each approved by the PO (`ferrix-2c`), every register
+write logged to `ramoops` and checked against the approved list:
 
-* **The S2MPU.** Whether HSI0's DMA reaches the pages Ferrix pins is
-  unknown, since the S2MPU is not read. ABL's own event buffer was at
-  `0xF8CD_D000`. The first driver run answers it: if no event ever arrives,
-  suspect the S2MPU first.
-* **The first writing boot** needs the PO's OK on the DWC3 write list, each
-  write guarded on the state recorded above (device mode, halted).
+| Run | Image | What it showed |
+|---|---|---|
+| `usbdev1` | `d7110880` | First writing boot. The guard read the state the survey recorded, then 543 writes, all in the DWC3 window. Enumerated at high speed about 50 s into the run, configured; the host's line echoed back and a heartbeat came every second. The event buffer and TRBs sit in Ferrix's own pinned pages (`0x9016_7000`...), so **the S2MPU passes HSI0's DMA** |
+| `usblog1` | `9b5cd5f4` | The kernel log over the port: the monitor showed the boot's twelve stages, `FERRIX-BOOT-OK` and `ferrix-statd` live. Two bugs, both fixed after it: usbdev logged every write, and with the log going over USB each line sent made five more; and the monitor, started with `setsid`, took the port as its controlling terminal and was killed by `SIGHUP` when the phone left |
+| `usblog2` | `c97c4afb` | Both fixes on the phone. The monitor, started with `setsid` as before, streamed the run and outlived the port, keeping `usb-20260926-174123/run.log`: 199 lines, `FERRIX-BOOT-OK`, 122 `FERRIX-STAT` samples. 49 writes logged, where `usblog1` logged 53,697; the `ramoops` record 115 KB rather than 1.99 MB |
 
+Every write in every run was to one of 31 offsets of the DWC3 window:
+`C110 C118 C200 C400-C40C C700 C704 C708 C720 C800-C85C`. The PO's standing
+OK covers further boots with that list and the same guard (`GSNPSID` a
+DWC3, device mode, run/stop clear, halted), each still with the phone's
+other users asked first; any other offset or block needs a new OK.
+
+What each part is, now on `main`:
+
+* `boot/pixel7/src/usb.rs`: the read-only survey, in every record.
+* `kernel/src/gs201_usb.rs`: `TREE_GS201_DWC3 = 4`, published only when
+  `pd-hsi0` reads on and `GSNPSID` names a DWC3; nothing written.
+* `libs/drivers/usb-device`: chapter 9 and the CDC-ACM function.
+* `libs/drivers/dwc3`: the controller, tested against a register model
+  with a write-back cache in front of its memory, which caught one real
+  missing invalidate. It refuses to write unless the controller is as
+  ABL leaves it, and replaces ABL's event buffer before it runs.
+* `native/drivers/usbdev`: the ring-3 driver, devmgr's `Gadget` kind.
+  It asks for the log only while a host holds the port open (DTR), and
+  asks again only once the last piece has gone, so a slow or absent host
+  leaves the log in the kernel's ring. What the host sends is dropped.
+* The kernel log (phase 4, designed with the certification agent,
+  ferrix-55): `kernel/src/console/log.rs`, a static 128 KiB ring of every
+  console byte less the kernel's layout (the KASLR slide, trace frames,
+  trap registers); `syslog(2)` reads it, privileged for every action, so
+  `dmesg` works; `kernel/src/logctl` serves it over `LOG_CONTROL_CREATE`,
+  which only this controller's node may call, one reader at a time
+  (`libs/proto/logctl`). Its coverage arguments are staged for ferrix-55's
+  next evidence run, not committed.
+* `tools/pixel7/monitor`: the USB watcher. A monitor started before this
+  landed must be rebuilt and restarted to have it.
+
+**ModemManager takes the start of the log.** nazuna's ModemManager opens
+every new `ttyACM` to probe it, 4 s after it appears, and holds it until
+the port goes. Holding it open raises DTR, so `usbdev` streams to it, and
+it drops what it reads: in `usblog2` the monitor's record began at
+`usbdev`'s own start rather than at the loader's first line. The fix is
+on the host, a udev rule the owner installs, which needs root:
+
+```
+# /etc/udev/rules.d/70-ferrix-console.rules
+ATTRS{idVendor}=="1209", ATTRS{idProduct}=="0001", ENV{ID_MM_DEVICE_IGNORE}="1"
+```
+
+### Left open
+
+Each is a row in `docs/BACKLOG.md`, owner open: the udev rule above;
+SuperSpeed (the port is
+held at high speed, and the combo PHY is untouched); input from the host
+(a shell or a tty over the port); devmgr restarting `usbdev` if it dies;
+the PHY's suspend and LPM, kept off; and reading the core's release
+(`VER_NUMBER`, `0xC1A0`), which decides reset-timing quirks the driver now
+covers by always waiting.
