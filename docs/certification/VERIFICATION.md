@@ -68,15 +68,23 @@ check.rs` at 9,537 lines, `object/check.rs` at 3,318, `user/check.rs` at 1,263,
 Measured 2026-09-26, and **not comparable with the figures published on
 2026-09-25**, which two defects in the measurement made wrong in opposite
 directions (§3.4). Raw per-file data in `coverage-*.json`; the ratchet in
-`coverage-floor.json`.
+`coverage-floor.json`. **x86-64's column is re-measured** later the same day,
+on main at 195a2e93 with F-10's x86-64 tests and with two more defects of the
+tool fixed (§3.4), which change what counts as a statement; the Arm columns
+are still a6d505a2's under the earlier tool, and are not comparable with it
+until they are re-measured.
 
 ### 3.1 The suite, every architecture
 
 The union of every boot gate that exercises the item and passes under the
-plugin — `cargo xtask coverage` runs them. Thirteen on x86-64: `test-boot`,
+plugin — `cargo xtask coverage` runs them. Sixteen on x86-64: `test-boot`,
 `test-shell`, `test-vfs`, `test-net`, `test-threads`, `test-pty`, `test-btrfs`,
 `test-powerfail`, `test-display`, `test-input`, `test-jobs`, `test-restart` and
-`test-sysfs`. Nine on AArch64 and on ARMv7-A (`--smp 2`): the x86-64-only four
+`test-sysfs`, and three more boots of `test-boot` on machines the rest do not
+present: `boot-legacy`, a q35 with no HPET and a processor with `RDRAND` and
+no `RDSEED` (`FERRIX_X86_MACHINE=hpet=off`, `FERRIX_X86_CPU`), whose clock is
+the TSC measured against the PIT; `boot-reset`, which ends in the firmware's
+reset rather than a power-off; and `boot-single`, one processor. Nine on AArch64 and on ARMv7-A (`--smp 2`): the x86-64-only four
 are `test-jobs`, `test-restart` and `test-sysfs`, which carry uutils, and
 `test-vfs`, which fails off x86-64 for a reason of its own (§3.5). AArch64 runs
 `test-boot` a second time on a `virt` with a GICv3 and its ITS
@@ -86,10 +94,16 @@ nobody reached. Debug profile, measured on main at a6d505a2, with KASLR:
 
 | Ring | x86-64 | AArch64 | ARMv7-A |
 |---|---:|---:|---:|
-| `core` | 3,754 / 5,205 — 72.1% | 3,890 / 5,441 — 71.5% | 3,625 / 5,325 — 68.1% |
-| `item` | 1,349 / 1,623 — 83.1% | 1,299 / 1,600 — 81.2% | 1,270 / 1,583 — 80.2% |
-| **Certified item** | **5,103 / 6,828 — 74.7%** | **5,189 / 7,041 — 73.7%** | **4,895 / 6,908 — 70.9%** |
-| `load` (not claimed) | 8,139 / 11,674 — 69.7% | 8,000 / 11,709 — 68.3% | 8,115 / 11,809 — 68.7% |
+| `core` | 4,050 / 5,022 — 80.6% | 3,890 / 5,441 — 71.5% | 3,625 / 5,325 — 68.1% |
+| `item` | 1,483 / 1,713 — 86.6% | 1,299 / 1,600 — 81.2% | 1,270 / 1,583 — 80.2% |
+| **Certified item** | **5,533 / 6,735 — 82.2%** | **5,189 / 7,041 — 73.7%** | **4,895 / 6,908 — 70.9%** |
+| `load` (not claimed) | 8,644 / 11,954 — 72.3% | 8,000 / 11,709 — 68.3% | 8,115 / 11,809 — 68.7% |
+
+x86-64 at 195a2e93, the Arm pair at a6d505a2. On x86-64 the same suite's
+traces read 74.8% under the earlier tool before the tests below were written;
+the tool's two fixes account for most of the rise, by taking out of the
+denominator lines with no statement in the image and rows filed under the
+wrong file, and the tests for the rest.
 
 **Every gate now counts.** `test-btrfs`, `test-shell`, `test-sysfs`,
 `test-restart` and the rest used to pass under the plugin and write an empty
@@ -101,11 +115,11 @@ start and `test-shell` boots four times. The one boot that still leaves
 nothing is `test-powerfail`'s churn, whose point is that QEMU is killed with no
 chance to finish anything; its replay boots count.
 
-**Most of it is the boot.** One `test-boot` reaches 71.6% of the item on
-x86-64; the other twelve gates add 3.1 points between them. The self-checks
+**Most of it is the boot.** One `test-boot` reaches 78.7% of the item on
+x86-64; the other fifteen gates add 3.5 points between them. The self-checks
 that run on every boot (§2) are the item's real test suite, and the gates
-mostly exercise the uncertified load ring above it — 69.7% of `load` against
-one boot's 57.9%.
+mostly exercise the uncertified load ring above it — 72.3% of `load` against
+one boot's 59.8%.
 
 ### 3.1.1 The residual
 
@@ -117,21 +131,47 @@ defensive code, and neither conversation can start from a percentage.
 
 | | x86-64 | AArch64 | ARMv7-A |
 |---|---:|---:|---:|
-| Unreached | 1,725 | 1,852 | 2,013 |
-| Argued: another architecture or board | 131 | 124 | 144 |
-| Argued: reached only when stopping | 15 | 8 | 61 |
-| Hardware the machine does not present | 259 | 239 | 362 |
-| **Needs a test** | **1,320** | **1,481** | **1,446** |
+| Unreached | 1,202 | 1,852 | 2,013 |
+| Argued: another architecture or board | 130 | 124 | 144 |
+| Argued: reached only when stopping | 56 | 8 | 61 |
+| Argued: reached only when something has failed | 9 | - | - |
+| Argued: run, and credited to another line | 1 | - | - |
+| Hardware the machine does not present | 249 | 239 | 362 |
+| **Needs a test** | **757** | **1,481** | **1,446** |
 
 [COVERAGE-WORKLIST.md](COVERAGE-WORKLIST.md) groups the last row by module,
 with each file's count on every architecture and the lines no architecture
 reaches, so that a module can be taken as one piece of work. The largest on
-x86-64: `user/space.rs` 107, `iommu.rs` 94, `main.rs` 70, `mm.rs` 69,
-`sched/task.rs` 60, `syscall/native.rs` 59.
+x86-64: `user/space.rs` 110, `iommu.rs` 83, `main.rs` 68, `syscall/native.rs`
+49, `console/screen.rs` 44, `mm.rs` and `user/vmo.rs` 41.
+
+**Argued one statement at a time.** A file-level category cannot argue a line
+of an otherwise covered file, and most of what F-10 leaves is exactly that.
+`coverage-argued-<arch>.json` holds an argument per statement or small range:
+the category, why no run of the measured machine reaches it -- for a
+defensive path, what would have to go wrong -- and text the first line must
+contain, so it cannot slide onto another statement when the file changes.
+The generator fails on an argument for a line that is no longer in the
+residual, as the boundary gate does on a stale debt entry. Two categories
+join the file-level ones: *reached only when something has already failed*,
+and *run, and credited to another line*, for a statement a test executes
+whose only row in the line table sits in an inlined copy that cannot run it.
+
+**x86-64's architecture code, `trap` and `smp` have nothing left that needs
+a test.** Of `arch/x86_64`'s 637 statements 593 are reached and 44 argued:
+22 on hardware the TCG machine lacks and gate 6's KVM boot has (the invariant
+TSC, the speculation controls), 15 on the stopping path, 6 defensive (the
+reset's fallbacks, a stopped HPET, a trampoline past a page) and one credited
+to another line. Stage 3 on x86-64 now runs six programs that end by
+their own exceptions -- a divide error, `ud2`, an unmapped read, `hlt` in
+ring 3, an x87 zero divide, a read past a mapped file's end -- and a seventh
+that asks `arch_prctl` both of its refusals; stage 4 checks shootdown page sets merged and
+past their ceiling. `trap.rs`'s 22 left are the stopping path and three
+invariants; `smp.rs`'s 6 are `debug_assert!` and `fatal!` messages.
 
 The failure path is mostly covered now, and by a passing test: `test-shell`'s
 last boot asks for `ferrix.onexit=panic` and gets FX-1501, so the panic report
-runs — 15 statements of it are left on x86-64 and 8 on AArch64. ARMv7-A's
+runs — 16 statements of it are left on x86-64 and 8 on AArch64. ARMv7-A's
 61 are mostly the panic screen's renderer (53), which that boot does not draw
 there.
 
@@ -196,9 +236,9 @@ statement coverage. This is that measurement, for ring-0 code, on every
 architecture and both profiles in the reference configuration, without
 modifying the toolchain.
 
-**What it does not.** 74.7% is not 100%. The residual is enumerated and
-sorted, and 1,320 of x86-64's 1,725 statements still need a test rather than an
-argument (F-10); AArch64 and ARMv7-A owe 1,481 and 1,446. There is no decision
+**What it does not.** 82.2% is not 100%. The residual is enumerated and
+sorted, and 757 of x86-64's 1,202 statements still need a test rather than an
+argument (F-10); AArch64 and ARMv7-A owe 1,481 and 1,446 as last measured. There is no decision
 or MC/DC coverage, which DAL C does not require and DAL B and A do (F-13).
 
 Two biases, both optimistic and both declared in the tool's own docstring: a
@@ -230,6 +270,23 @@ ARMv7-A — and then reading the raw blocks against `objdump`.
 The published 81.9% had both, one pulling each way, and neither this tool nor
 anyone could have told it from a correct figure. Both are fixed in the tool,
 and TOOLS.md TOR-3 records them beside the three found before.
+
+Two more, found the same day by walking the residual line by line, both in
+how the line table is read:
+
+3. **Rows of discarded functions.** At `opt-level = 1` a small function is
+   inlined into every caller and its out-of-line copy dropped by the linker,
+   whose rows stay behind at a few bytes above zero. A line whose only row
+   was one of those -- the closing brace of `cpu.rs`'s `outb` -- counted as a
+   statement nobody reached: about a quarter of every residual.
+4. **Rows under the wrong file.** After a line-table sequence ends objdump
+   prints no header for the next one, so its rows were filed under whichever
+   file came last: `check.rs`, `drm.rs` and `signal.rs` statements read as
+   `syscall/uaccess.rs`'s, and a line 1392 appeared in the 431 lines of
+   `gdt.rs`. This one over-reported as well as under-reported.
+
+Both are fixed, and x86-64's column above is measured with the fix; TOOLS.md
+TOR-3 records them.
 
 ### 3.5 What the suite leaves out
 

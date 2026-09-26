@@ -6,95 +6,164 @@ The statements in the certified item that the measured suite did not reach, on e
 
 | Architecture | Profile | Unreached | Argued | Hardware absent | Needs a test |
 |---|---|---:|---:|---:|---:|
-| x86_64 | debug | 1725 | 146 | 259 | **1320** |
+| x86_64 | debug | 1202 | 196 | 249 | **757** |
 | aarch64 | debug | 1852 | 132 | 239 | **1481** |
 | armv7a | debug | 2013 | 205 | 362 | **1446** |
 
-*Argued* is the first three categories below; *hardware absent* is a statement about which machine was measured rather than an argument; *needs a test* is the gap.
+*Argued* is the first four categories below; *hardware absent* is a statement about which machine was measured rather than an argument; *needs a test* is the gap.
 
 ---
 
 ## x86_64
 
-**1725** unreached statements, debug profile.
+**1202** unreached statements, debug profile.
 
 | Category | Statements | Share |
 |---|---:|---:|
-| Unreachable on the measured architecture | 131 | 8% |
-| Reached only when the kernel is stopping | 15 | 1% |
-| Reached only when something has already failed | 0 | 0% |
-| Hardware the measured machine does not have | 259 | 15% |
-| Needs a test | 1320 | 77% |
+| Unreachable on the measured architecture | 130 | 11% |
+| Reached only when the kernel is stopping | 56 | 5% |
+| Reached only when something has already failed | 9 | 1% |
+| Run, and credited to another line | 1 | 0% |
+| Hardware the measured machine does not have | 249 | 21% |
+| Needs a test | 757 | 63% |
 
-### x86_64: Unreachable on the measured architecture — 131 statements
+### x86_64: Unreachable on the measured architecture — 130 statements
 
 Justified. These statements belong to another architecture or another board, and no run on x86_64 can reach them. The same code is ordinary covered code where it belongs, so this justification is per configuration and the other architectures owe their own.
 
 | Statements | Ring | File |
 |---:|---|---|
-| 131 | `core` | `iommu/smmuv3.rs` |
+| 129 | `core` | `iommu/smmuv3.rs` |
+| 1 | `core` | `arch/speculation.rs` |
 
-### x86_64: Reached only when the kernel is stopping — 15 statements
+### x86_64: Reached only when the kernel is stopping — 56 statements
 
 Justified. The panic report, its catalogue and the backtrace walker run when the kernel has already decided to stop. Exercising them means crashing deliberately, which only `test-shell`'s `ferrix.onexit=panic` boot does -- and a passing run that reached the rest would be a failing run.
 
 | Statements | Ring | File |
 |---:|---|---|
-| 9 | `core` | `panic.rs` |
-| 3 | `core` | `backtrace.rs` |
+| 19 | `core` | `trap.rs` |
+| 13 | `core` | `panic.rs` |
+| 8 | `core` | `arch/x86_64/trap.rs` |
+| 6 | `core` | `smp.rs` |
+| 5 | `core` | `arch/x86_64/paranoid.rs` |
 | 3 | `core` | `panic/screen.rs` |
+| 2 | `core` | `arch/x86_64/mod.rs` |
 
-### x86_64: Reached only when something has already failed — 0 statements
+### x86_64: Reached only when something has already failed — 9 statements
 
 Justified, line by line. Each of these runs only when hardware misbehaves or an invariant the rest of the kernel keeps has broken: a counter that never advances, a reset that did not reset, a table that lost an entry it was just given. A passing run cannot show one without first breaking what it defends against, and removing it would leave the failure unhandled. Each argument below says what would have to go wrong.
 
-None.
+| Statements | Ring | File |
+|---:|---|---|
+| 3 | `core` | `trap.rs` |
+| 2 | `core` | `arch/x86_64/cpu.rs` |
+| 2 | `core` | `arch/x86_64/mod.rs` |
+| 1 | `core` | `arch/x86_64/clock.rs` |
+| 1 | `core` | `arch/x86_64/smp.rs` |
 
-### x86_64: Hardware the measured machine does not have — 259 statements
+### x86_64: Run, and credited to another line — 1 statements
+
+Justified, line by line. The statement runs, and a test shows what it does, but the line table gives it a statement row only in an inlined copy that cannot execute it; the copy that does run carries its instructions under another line's row. No run can credit the line, and no test could make one. Each argument names the test and the row that carries it.
+
+| Statements | Ring | File |
+|---:|---|---|
+| 1 | `core` | `arch/x86_64/trap.rs` |
+
+### x86_64: Hardware the measured machine does not have — 249 statements
 
 **Not a justification, a configuration statement.** Enumeration and setup for devices this QEMU invocation does not present. A different machine would reach some of it, so the honest closure is either to measure on a machine that has the hardware or to state which devices the claim excludes.
 
 | Statements | Ring | File |
 |---:|---|---|
-| 146 | `core` | `device.rs` |
-| 49 | `item` | `pci/virtio.rs` |
-| 32 | `item` | `pci.rs` |
-| 24 | `core` | `iommu/vtd.rs` |
+| 131 | `core` | `device.rs` |
+| 37 | `item` | `pci/virtio.rs` |
+| 31 | `item` | `pci.rs` |
+| 20 | `core` | `iommu/vtd.rs` |
+| 10 | `core` | `arch/x86_64/clock.rs` |
+| 7 | `core` | `arch/x86_64/speculation.rs` |
 | 6 | `core` | `fdt.rs` |
-| 2 | `core` | `acpi.rs` |
+| 4 | `core` | `arch/x86_64/console.rs` |
+| 1 | `core` | `acpi.rs` |
+| 1 | `core` | `arch/speculation.rs` |
+| 1 | `core` | `arch/x86_64/smp.rs` |
 
-### x86_64: Needs a test — 1320 statements
+### x86_64: Needs a test — 757 statements
 
 **The real gap.** No argument covers these; they are reachable on the measured configuration and nothing exercised them. This is the number that has to reach zero for DO-178C table A-7 objective 5. [COVERAGE-WORKLIST.md](COVERAGE-WORKLIST.md) groups them by module.
 
 | Statements | Ring | File |
 |---:|---|---|
-| 107 | `core` | `user/space.rs` |
-| 94 | `core` | `iommu.rs` |
-| 70 | `item` | `main.rs` |
-| 69 | `core` | `mm.rs` |
-| 60 | `core` | `sched/task.rs` |
-| 59 | `item` | `syscall/native.rs` |
-| 48 | `core` | `user/vmo.rs` |
-| 47 | `core` | `object/job.rs` |
-| 47 | `core` | `smp.rs` |
-| 46 | `core` | `arch/x86_64/mod.rs` |
-| 42 | `core` | `console/screen.rs` |
-| 41 | `core` | `arch/x86_64/cpu.rs` |
-| 41 | `core` | `object/process.rs` |
-| 38 | `core` | `sched/mod.rs` |
-| 36 | `core` | `syscall/uaccess.rs` |
-| 34 | `core` | `trap.rs` |
-| 31 | `core` | `vmap.rs` |
-| 30 | `core` | `arch/x86_64/syscall.rs` |
-| 24 | `core` | `arch/x86_64/trap.rs` |
-| 22 | `core` | `object/channel.rs` |
-| 21 | `core` | `sched/queue.rs` |
-| 19 | `core` | `arch/x86_64/clock.rs` |
-| 18 | `item` | `devmgr.rs` |
-| 16 | `core` | `console/output.rs` |
-| 16 | `item` | `init.rs` |
-| 244 | | *and 30 more files* |
+| 110 | `core` | `user/space.rs` |
+| 83 | `core` | `iommu.rs` |
+| 68 | `item` | `main.rs` |
+| 49 | `item` | `syscall/native.rs` |
+| 44 | `core` | `console/screen.rs` |
+| 41 | `core` | `mm.rs` |
+| 41 | `core` | `user/vmo.rs` |
+| 35 | `core` | `object/job.rs` |
+| 32 | `core` | `sched/mod.rs` |
+| 29 | `core` | `object/port.rs` |
+| 27 | `core` | `vmap.rs` |
+| 24 | `core` | `sched/task.rs` |
+| 23 | `core` | `object/process.rs` |
+| 16 | `item` | `devmgr.rs` |
+| 15 | `item` | `init.rs` |
+| 13 | `core` | `object/interrupt.rs` |
+| 11 | `core` | `console/output.rs` |
+| 11 | `core` | `object/channel.rs` |
+| 9 | `core` | `console.rs` |
+| 9 | `core` | `object/mod.rs` |
+| 9 | `item` | `syscall/program.rs` |
+| 8 | `core` | `console/input.rs` |
+| 7 | `core` | `iommu/gate.rs` |
+| 6 | `core` | `irq.rs` |
+| 6 | `core` | `object/pin.rs` |
+| 31 | | *and 11 more files* |
+
+### x86_64: argued line by line — 74 statements
+
+From `coverage-argued-x86_64.json`. Each row is one argument, for the lines it names and no others; the category is the one it is counted in above.
+
+| File | Lines | Category | Why it is not reached |
+|---|---|---|---|
+| `arch/speculation.rs` | 126 | Hardware the measured machine does not have | `with`'s only rows in the image are in `Plan::for_processor`'s arms for a speculation control the processor offers -- enhanced, automatic or always-on IBRS, STIBP, SSBD, IBPB. QEMU's TCG emulates none of them (`TCG doesn't support requested feature: CPUID.07H:EDX.spec-ctrl`), and `x86_cpu` asks for them only under a hypervisor. The same arms run under KVM: gate 6 on the AMD reference host prints `speculation defences: ..., AutoIBRS, STIBP, SSBD, predictor barrier on switch, ...`. The unconditional defences are folded into a constant and carry no row. |
+| `arch/speculation.rs` | 162 | Unreachable on the measured architecture | `none` names an empty set of defences, and no x86-64 processor's set is empty in the certified build: `Plan::for_processor` starts every plan from the index clamps, the SWAPGS fence, the cleared entry registers and the RSB fill (`x86_64/speculation.rs` 166-169). Only a `--mitigations off` build records `Defences::NONE` here, and that is not the certified configuration. ARMv7-A's plan for a Cortex-A7, which needs no defence, is empty; the line is that architecture's. |
+| `arch/x86_64/clock.rs` | 138 | Reached only when something has already failed | The loop's second pass: the HPET's main counter read the same value twice in a row. At the 10 MHz or more the HPET specification requires, one read through the device window takes longer than a tick, so a counter that is counting always differs on the next read. What it defends against is a timer block firmware left present but stopped, which it reports as an error after a million reads instead of dividing by zero elapsed time later. |
+| `arch/x86_64/clock.rs` | 149 | Hardware the measured machine does not have | The TSC is measured against the HPET only on a processor whose CPUID says the TSC is invariant (`invariant_tsc`). QEMU's TCG refuses the bit (`TCG doesn't support requested feature: CPUID.80000007H:EDX.invtsc`); `x86_cpu` asks for it under KVM, where gate 6 prints `clock TSC, calibrated against the HPET at ... MHz`. |
+| `arch/x86_64/clock.rs` | 165 | Hardware the measured machine does not have | A 32-bit HPET, capability bit 13 clear, on a processor without an invariant TSC. QEMU's HPET always reports a 64-bit main counter and has no property that narrows it; the AMD chipsets the module comment names are the hardware that takes this line. |
+| `arch/x86_64/clock.rs` | 192-193, 199-200, 205, 209, 211-212 | Hardware the measured machine does not have | The whole of the measurement against the HPET, which only an invariant TSC (line 149) or a 32-bit HPET (line 165) calls; the measured TCG processor has neither. Gate 6 under KVM runs it on every boot, as its `calibrated against the HPET` line says. The PIT's measurement beside it is reached, by the suite's `boot-legacy` gate on a q35 with `hpet=off`. |
+| `arch/x86_64/console.rs` | 186 | Hardware the measured machine does not have | The row is the loop's second and later passes, for a transmit holding register still full when a byte is to be written. QEMU's 16550 passes each byte to its character device as it is written and reports the register empty again at once, so the first read of the line status always finds room. A real UART at 115200 baud is busy for 87 us a byte. |
+| `arch/x86_64/console.rs` | 213 | Hardware the measured machine does not have | As line 186, for `drain`: the second pass waits for the shift register, and QEMU's port reports the transmitter idle on the first read. The function's own comment says so: harmless under QEMU, whose port sends instantly. |
+| `arch/x86_64/console.rs` | 227, 232 | Hardware the measured machine does not have | The prologue and epilogue of `read_byte`'s standalone copy, which runs only through the poll pointer `read_console_byte` hands `console::input::read_byte`: input stays polled when `console::input::init` finds no interrupt for the port, on an x86-64 machine whose MADT gives COM1's line no I/O APIC input. q35 routes COM1 through the I/O APIC, so input is interrupt-driven from before the first read, and the handler runs `read_byte` inlined into `take_console_byte`, which is reached. |
+| `arch/x86_64/cpu.rs` | 494, 500 | Reached only when something has already failed | The triple fault is `reset`'s last way, taken only after the FADT's reset register and ten pulses of the keyboard controller's reset line have each failed to reset the machine. On q35 the FADT names port 0xCF9, which resets it at once: the suite's `boot-reset` gate shows the loader starting again. Reaching this would take a machine that ignores both documented resets. |
+| `arch/x86_64/mod.rs` | 140 | Reached only when the kernel is stopping | The closing brace of `check_exception_entry` is only the early return of a `?`, when the NMI, breakpoint or saved-register check has failed; the passing path leaves by the tail jump to `trap::check::run` (objdump of the measured image: `pop %rbp; ret` under line 140, `pop %rbp; jmp trap::check::run` under 139). A failed check stops the boot with `STAGE3_TRAPS`. |
+| `arch/x86_64/mod.rs` | 1238, 1240 | Reached only when something has already failed | The keyboard controller's reset pulse, tried only when the FADT's reset register did not reset the machine. q35's register resets it at once (`boot-reset`), so the wait for the 8042's input buffer never starts. What it defends against is firmware that names a reset register that does nothing, which Linux's reboot order also allows for. |
+| `arch/x86_64/mod.rs` | 1301 | Reached only when the kernel is stopping | `halt`'s loop runs on a processor that stops for good: after a panic, on the stop IPI a panic sends, or on a boot that could not build a console. A passing boot ends through `shutdown`, whose `debug_exit` ends QEMU before `halt` is entered, and the suite's one deliberate panic (`test-shell`'s `ferrix.onexit=panic`) exits QEMU from the panic report without its trace showing this instruction run. |
+| `arch/x86_64/paranoid.rs` | 122 | Reached only when the kernel is stopping | An exception nested on its own interrupt stack, which the stack's occupancy count exists to catch and stop on (FX-9006): the entry clears DR7 so that a breakpoint on the handler's own path cannot nest, and the stage 3 check shows it does not. |
+| `arch/x86_64/paranoid.rs` | 134 | Reached only when the kernel is stopping | A machine check, a hardware error the kernel stops on. QEMU raises one only when a host tool injects it (`mce` in the monitor), which no gate does, and a run that took one would be a failing run. |
+| `arch/x86_64/paranoid.rs` | 135, 137 | Reached only when the kernel is stopping | Any vector but #DB, NMI and #MC reaching the paranoid entry: only the double fault's gate also names an IST stack here, and a double fault stops the kernel. |
+| `arch/x86_64/paranoid.rs` | 149 | Reached only when the kernel is stopping | A #DB in the kernel that no armed hardware breakpoint raised -- a single step or a general detect, neither of which the kernel asks for -- which it stops on. The breakpoints the stage 3 check arms each set their DR6 bit. |
+| `arch/x86_64/smp.rs` | 56 | Hardware the measured machine does not have | An x2APIC entry in the MADT, which firmware writes only for a processor whose APIC ID does not fit the eight bits of a local APIC entry: on QEMU, more than 255 processors with interrupt remapping in x2APIC mode. The suite boots four and one; q35's firmware describes each with a local APIC entry. |
+| `arch/x86_64/smp.rs` | 242 | Reached only when something has already failed | The trampoline's length is fixed when the image is built, by three symbols around the assembly in this file, and is well under a page. The refusal defends against an edit that grows it past 4 KiB, which would otherwise be copied over whatever follows its frame below one mebibyte. |
+| `arch/x86_64/speculation.rs` | 185, 190, 326, 332, 334, 342 | Hardware the measured machine does not have | STIBP and SSBD in IA32_SPEC_CTRL, AMD's automatic IBRS in EFER, and reading each back: planned and applied only on a processor that offers them. QEMU's TCG offers none (`TCG doesn't support requested feature: CPUID.07H:EDX.spec-ctrl [bit 26]`, `stibp`, `ssbd`, `auto-ibrs`). Gate 6's KVM boot on the AMD reference host applies all three and reads them back on every processor: `speculation defences read back on 4 processors`. |
+| `arch/x86_64/speculation.rs` | 340 | Hardware the measured machine does not have | AMD's VIRT_SPEC_CTRL, used for SSBD only on a processor that offers it without SSBD in IA32_SPEC_CTRL: a guest of an older AMD host. Neither TCG nor the KVM reference host (which offers SSBD directly) presents that combination. |
+| `arch/x86_64/trap.rs` | 500, 524 | Reached only when the kernel is stopping | `vector_name`'s standalone copy, called by `report_trap` and by the paranoid entry's fatal arms, both of which run only when the kernel is stopping. `classify` carries its own inlined copy, which the stage 3 fault check reaches with a program's `hlt`. |
+| `arch/x86_64/trap.rs` | 598 | Run, and credited to another line | Run by the stage 3 fault check's read of an unmapped address, which ends the program with SIGSEGV. The line's only statement row is in the copy of `fault_signal` that `dispatch` inlines for traps that are not page faults (in the measured image, inlined through `user_fault` into `dispatch` at trap.rs:102), where the arm cannot run. The copy `handle_page_fault` inlines (under trap.rs:460) computes the si_code as the fault's present bit plus one, one instruction under line 597's row, which is reached. |
+| `arch/x86_64/trap.rs` | 614, 620, 623-624, 639, 645 | Reached only when the kernel is stopping | The register dump the trap path prints when the kernel stops on an exception it cannot handle (`trap::report`); a passing run never prints it. |
+| `smp.rs` | 734, 738-739 | Reached only when the kernel is stopping | The failure arm of a `debug_assert!` and its message's arguments: a shootdown requested while holding a lock that disables preemption, which the assertion exists to stop on. It holds on every run of the suite. |
+| `smp.rs` | 760 | Reached only when the kernel is stopping | The failure arm of a `debug_assert!`: a shootdown that has to wait for other processors requested with interrupts masked, which no other processor could answer. It holds on every run. |
+| `smp.rs` | 801 | Reached only when the kernel is stopping | The millisecond count in the `fatal!` a processor raises when no shootdown turn started for the timeout while it waited, printed as the kernel stops. |
+| `smp.rs` | 857 | Reached only when the kernel is stopping | The millisecond count in the `fatal!` raised when a processor never answered a shootdown or a grace period, printed as the kernel stops. |
+| `trap.rs` | 30 | Reached only when something has already failed | The Interrupt arm of `Trap`'s derived Debug. The only formatting of a `Trap` is the `signal ... ended by signal` line in `user_fault_as`, whose trap comes from `user_fault` or `handle_page_fault`; `dispatch` sends every Interrupt to the controller and never there. Reaching this would mean the dispatcher had treated a device interrupt as a program's fault. |
+| `trap.rs` | 135 | Reached only when the kernel is stopping | The stop when the architecture cannot read a system call trap's registers. On x86-64 only `int $0x80` classifies as one, and its gate is not open to ring 3. |
+| `trap.rs` | 138, 143-144 | Reached only when the kernel is stopping | An invalid opcode or an unexpected exception taken in the kernel, which stops it. The same exceptions from a program are reached, by the stage 3 fault check, through the arm above these. |
+| `trap.rs` | 235 | Reached only when something has already failed | A system call with no dispatcher registered. `main.rs` registers the item's dispatcher before anything can enter user mode, and the first registration stands, so in this item every call finds one. The arm is what the core answers when built without a dispatcher above it, rather than a panic in a trap vector. |
+| `trap.rs` | 332 | Reached only when the kernel is stopping | A fault from user mode with no personality registered, which the kernel stops on; `main.rs` registers the Linux personality's return path before the first program. |
+| `trap.rs` | 350 | Reached only when the kernel is stopping | A fault from user mode that the personality finds no process for, which the kernel stops on: every task that enters ring 3 is a process's thread. |
+| `trap.rs` | 387 | Reached only when something has already failed | A fault from user mode on a task with no address space. `sched` gives a task made for a thread its process's space before it first runs, so this would be the kernel having entered ring 3 without recording who was running; it is reported as fatal rather than resolved. |
+| `trap.rs` | 465, 467, 470-473 | Reached only when the kernel is stopping | The report of a page fault the kernel could not resolve -- one in the kernel outside the demand window, or a user one with no program to blame -- printed as the kernel stops. |
+| `trap.rs` | 487, 492, 502, 510-512, 514 | Reached only when the kernel is stopping | `fatal` and `report`, the trap path's stop: the architecture's register dump, the abridged report for a second failure, and the panic's conclusion. Reached only when the kernel stops on a trap. |
 
 ---
 
@@ -107,6 +176,7 @@ None.
 | Unreachable on the measured architecture | 124 | 7% |
 | Reached only when the kernel is stopping | 8 | 0% |
 | Reached only when something has already failed | 0 | 0% |
+| Run, and credited to another line | 0 | 0% |
 | Hardware the measured machine does not have | 239 | 13% |
 | Needs a test | 1481 | 80% |
 
@@ -132,6 +202,12 @@ Justified. The panic report, its catalogue and the backtrace walker run when the
 ### aarch64: Reached only when something has already failed — 0 statements
 
 Justified, line by line. Each of these runs only when hardware misbehaves or an invariant the rest of the kernel keeps has broken: a counter that never advances, a reset that did not reset, a table that lost an entry it was just given. A passing run cannot show one without first breaking what it defends against, and removing it would leave the failure unhandled. Each argument below says what would have to go wrong.
+
+None.
+
+### aarch64: Run, and credited to another line — 0 statements
+
+Justified, line by line. The statement runs, and a test shows what it does, but the line table gives it a statement row only in an inlined copy that cannot execute it; the copy that does run carries its instructions under another line's row. No run can credit the line, and no test could make one. Each argument names the test and the row that carries it.
 
 None.
 
@@ -191,6 +267,7 @@ None.
 | Unreachable on the measured architecture | 144 | 7% |
 | Reached only when the kernel is stopping | 61 | 3% |
 | Reached only when something has already failed | 0 | 0% |
+| Run, and credited to another line | 0 | 0% |
 | Hardware the measured machine does not have | 362 | 18% |
 | Needs a test | 1446 | 72% |
 
@@ -216,6 +293,12 @@ Justified. The panic report, its catalogue and the backtrace walker run when the
 ### armv7a: Reached only when something has already failed — 0 statements
 
 Justified, line by line. Each of these runs only when hardware misbehaves or an invariant the rest of the kernel keeps has broken: a counter that never advances, a reset that did not reset, a table that lost an entry it was just given. A passing run cannot show one without first breaking what it defends against, and removing it would leave the failure unhandled. Each argument below says what would have to go wrong.
+
+None.
+
+### armv7a: Run, and credited to another line — 0 statements
+
+Justified, line by line. The statement runs, and a test shows what it does, but the line table gives it a statement row only in an inlined copy that cannot execute it; the copy that does run carries its instructions under another line's row. No run can credit the line, and no test could make one. Each argument names the test and the row that carries it.
 
 None.
 

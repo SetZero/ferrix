@@ -16,7 +16,7 @@ that does not exist.
 | Target | Standard | Verdict |
 |---|---|---|
 | EAL5+ | Common Criteria (ISO/IEC 15408) | **Not met.** Security Target and vulnerability analysis written, and the boundary has no upward reference left; blocked on design evidence at module granularity and an accredited laboratory. |
-| DAL C | DO-178C / ED-12C | **Not met.** Coverage is measured on every architecture, at 74.7% on x86-64; planning data, requirements traceability and the 1,320 statements that still need a test are not done. |
+| DAL C | DO-178C / ED-12C | **Not met.** Coverage is measured on every architecture, at 82.2% on x86-64; planning data, requirements traceability and the 757 x86-64 statements that still need a test are not done. |
 | Class C | IEC 62304 | **Closest of the four.** No SOUP in the item; element-level safety analysis written. Blocked on a QMS and the integrator's risk file. |
 | SIL 2 | EN 50716:2023 | **Reachable.** Most of Annex A satisfied; generic software argument and application conditions written. Blocked on independent assessment. |
 
@@ -72,12 +72,12 @@ boundary.
 
 | | |
 |---|---:|
-| Item product code | 55,311 lines |
+| Item product code | 55,327 lines |
 | Uncertified load | 48,086 lines |
-| In-kernel self-tests | 33,122 lines |
-| Statement coverage, certified item | **74.7%** x86-64, 73.7% AArch64, 70.9% ARMv7-A |
-| Statement coverage, core ring | 72.1% x86-64 |
-| Unreached statements, x86-64 | 1,725 — **146 argued, 1,320 need a test** |
+| In-kernel self-tests | 33,509 lines |
+| Statement coverage, certified item | **82.2%** x86-64, 73.7% AArch64, 70.9% ARMv7-A (Arm before the tool's latest fixes) |
+| Statement coverage, core ring | 80.6% x86-64 |
+| Unreached statements, x86-64 | 1,202 — **196 argued, 249 hardware absent, 757 need a test** |
 | SOUP in the item | **0** |
 | External crates, host-side | 21 |
 | Upward boundary references | **0**, from 94 at the start of the work (29 and 62 before the gate could resolve module paths) |
@@ -153,7 +153,7 @@ decomposed to the item's modules.
 
 62 objectives, 5 requiring independence.
 
-*In place:* statement coverage is now measurable and measured (F-10 at 74.7%),
+*In place:* statement coverage is now measurable and measured (F-10 at 82.2% on x86-64),
 which was the objective everyone assumes is impossible for a kernel. 492 lines
 of assembly across 22 allow-listed sites makes the source-to-object question
 tractable. Zero Cargo features in the item, and one two-valued build switch of
@@ -220,10 +220,12 @@ In order of value per unit of effort:
    assert rich properties; they need requirement ids attached and low-level
    requirements to attach them to. This one piece of work unblocks DAL C,
    62304 §5.4 and `ADV_TDS.3`.
-2. **Cover the 1,320 statements that need a test (F-10).** Every gate now
-   counts on every architecture, and `cargo xtask coverage` ratchets the
+2. **Cover the 757 x86-64 statements that need a test (F-10).** Every gate
+   now counts on every architecture, and `cargo xtask coverage` ratchets the
    union; what is left is tests. COVERAGE-WORKLIST.md splits them by module,
-   so the work divides. AArch64 owes 1,481 and ARMv7-A 1,446.
+   so the work divides, and `coverage-argued-<arch>.json` takes a statement
+   that cannot be reached with its reason. x86-64's architecture code, `trap`
+   and `smp` are done. AArch64 owes 1,481 and ARMv7-A 1,446 as last measured.
 3. **Adopt Ferrocene (F-17).** A qualified toolchain is the difference between
    "written in a memory-safe language" as a talking point and as evidence.
    Whether it covers `armv7a-none-eabi` and the UEFI targets is the first

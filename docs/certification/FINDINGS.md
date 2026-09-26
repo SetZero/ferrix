@@ -4,7 +4,7 @@ The audit register for the item defined in [ITEM.md](ITEM.md). One entry per
 finding, each naming what was measured, which objective it bears on, and what
 would close it.
 
-15 findings are open and 24 are closed, of 39. F-23 closed when every allocation in the item was made to report failure, with a gate that counts the ones that do not (2026-09-26). F-10 is re-measured at 74.7% on x86-64, 73.7% on AArch64 and 70.9% on ARMv7-A, the 81.9% published before having been wrong, F-07, F-09 and F-33 closed, which leaves the boundary with no upward reference, F-31 closed when its layout half, KASLR, was built after its side-channel half, and F-34, a writable alias of the kernel's text in the direct map, was found and closed the same day (2026-09-26). No finding here is closed by argument:
+15 findings are open and 24 are closed, of 39. F-23 closed when every allocation in the item was made to report failure, with a gate that counts the ones that do not (2026-09-26). F-10 is re-measured at 74.7% on x86-64, 73.7% on AArch64 and 70.9% on ARMv7-A, the 81.9% published before having been wrong, and then at 82.2% on x86-64 once two more defects of the tool were fixed and x86-64's architecture code, `trap` and `smp` were covered or argued statement by statement, F-07, F-09 and F-33 closed, which leaves the boundary with no upward reference, F-31 closed when its layout half, KASLR, was built after its side-channel half, and F-34, a writable alias of the kernel's text in the direct map, was found and closed the same day (2026-09-26). No finding here is closed by argument:
 a finding closes when the thing it describes stops being true and something in
 the build says so.
 
@@ -329,7 +329,7 @@ only `debug_hook`, which its own handler runs. The boot's lines are unchanged.
 
 ## B. Verification
 
-### F-10 — statement coverage is 74.7%, not 100%
+### F-10 — statement coverage is 82.2% on x86-64, not 100%
 **Major**, re-measured 2026-09-26 on main at a6d505a2, with KASLR. Every boot
 gate that exercises the item now contributes, on every architecture: the
 certified item is 5,103 of 6,828 statements on x86-64 (74.7%), 5,189 of 7,041
@@ -360,6 +360,25 @@ when stopping -- 259 are a statement about which machine was measured, and
 **1,320 simply need a test**; AArch64 owes 1,481 and ARMv7-A 1,446.
 [COVERAGE-WORKLIST.md](COVERAGE-WORKLIST.md) groups them by module for the
 test-writing that closes this.
+
+**x86-64, later the same day** (on main at 195a2e93): 5,533 of 6,735
+statements, **82.2%**. Most of the rise is the tool, which had two more
+defects (VERIFICATION.md §3.4): lines whose only rows were in function copies
+the linker discarded counted as unreached statements, about a quarter of the
+residual, and rows after a line-table sequence end were filed under the wrong
+file, crediting `uaccess.rs` with other files' statements. The rest is the
+first module-by-module pass: `arch/x86_64`, x86-64's share of `arch`, `trap`
+and `smp` have **nothing left that needs a test**. Stage 3 on x86-64 runs
+programs that end by their own divide error, invalid opcode, unmapped read,
+privileged instruction, x87 exception and read past a mapped file's end, and
+asks `arch_prctl` both refusals; stage 4 checks shootdown page sets; the suite
+boots a PC without an HPET or RDSEED, a reset and a single processor. What
+those modules still do not reach, 74 statements, is argued line by line in
+`coverage-argued-x86_64.json`: the stopping path, 9 defensive paths, one
+statement a test runs but the line table credits elsewhere, and hardware the
+TCG machine lacks but gate 6's KVM boot has (the invariant TSC, the speculation
+controls). x86-64 still owes **757** statements a test, in the other modules;
+the Arm figures above predate the tool's fixes.
 
 *Closes when:* the *needs-a-test* category is covered or individually
 justified on every architecture. The argued categories have their argument

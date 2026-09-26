@@ -41,9 +41,10 @@ out of the gap by an argument of its own, in `coverage-argued-<arch>.json`:
    "why": "what would have to go wrong for this to run, and why it cannot
            be made to on the measured machine"}
 
-`category` is one of the four above or `defensive` -- reached only when
+`category` is one of the four above, `defensive` -- reached only when
 hardware or an invariant has already failed, which a passing run cannot
-show. `match` is text the first line must contain, so that an argument
+show -- or `credited-elsewhere`: a statement a test runs whose only row in
+the line table is in an inlined copy that cannot run it. `match` is text the first line must contain, so that an argument
 cannot drift onto another statement when the file changes. Each argued
 line must be in the residual: an argument for a line a test now reaches, or
 one that no longer exists, is stale and `--check` fails, as the boundary
@@ -220,6 +221,15 @@ HEADINGS = {
         "would leave the failure unhandled. Each argument below says what "
         "would have to go wrong.",
     ),
+    "credited-elsewhere": (
+        "Run, and credited to another line",
+        "Justified, line by line. The statement runs, and a test shows what it "
+        "does, but the line table gives it a statement row only in an inlined "
+        "copy that cannot execute it; the copy that does run carries its "
+        "instructions under another line's row. No run can credit the line, "
+        "and no test could make one. Each argument names the test and the row "
+        "that carries it.",
+    ),
     "absent-hardware": (
         "Hardware the measured machine does not have",
         "**Not a justification, a configuration statement.** Enumeration and "
@@ -237,7 +247,7 @@ HEADINGS = {
     ),
 }
 
-ARGUED = ("other-architecture", "failure-path", "defensive")
+ARGUED = ("other-architecture", "failure-path", "defensive", "credited-elsewhere")
 LINE_CATEGORIES = tuple(HEADINGS)
 
 # {arch: {(file, line): category}}, from `coverage-argued-<arch>.json`;
@@ -286,7 +296,7 @@ def render(residuals: dict[str, dict]) -> str:
         )
     lines += [
         "",
-        "*Argued* is the first three categories below; *hardware absent* is a "
+        "*Argued* is the first four categories below; *hardware absent* is a "
         "statement about which machine was measured rather than an argument; "
         "*needs a test* is the gap.",
         "",

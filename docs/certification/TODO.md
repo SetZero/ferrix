@@ -198,6 +198,13 @@ that need a test**.
 
 The work left is tests, one module at a time, from COVERAGE-WORKLIST.md.
 
+**Re-measured the same day on x86-64** at 82.2% over sixteen boots, with two
+more defects of the tool fixed (VERIFICATION.md §3.4): 757 need a test. The
+architecture code, `trap` and `smp` are done on x86-64 -- covered, or argued
+per statement in `coverage-argued-x86_64.json`. Next by size: `user/space.rs`
+110, `iommu.rs` 83, `main.rs` 68, `syscall/native.rs` 49. The Arm pair
+repeat the pass for their own architecture code.
+
 ### 2.4 Make coverage a ratchet
 **Done 2026-09-26** as `cargo xtask coverage` against `coverage-floor.json`.
 Not in `cargo xtask check`, since it needs boots, and not in CI, whose packaged
