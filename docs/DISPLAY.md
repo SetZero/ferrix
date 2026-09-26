@@ -458,9 +458,11 @@ from `BootInfo`. What changes is what a person sees:
   <name>`, and starts `/bin/pattern --wallpaper` on it before anything the
   configuration starts: a `background` layer surface anchored to all four
   edges, which scales a picture cut for another screen until it covers this
-  one. `--wallpaper none`, or an empty directory, is the plain background,
-  and a line says which. A gate boot carries none and its archive is what it
-  was.
+  one. `--wallpaper none` is the plain background. An empty directory is
+  *ember* (2026-09-27), a picture xtask draws itself in the brand's colours
+  (`wallpaper::ember`), so a first desktop is not a grey one and nothing
+  shown in public is somebody else's art; a line says which. A gate boot
+  carries none and its archive is what it was.
 * **A wallpaper that moves, which is what `mpvpaper` is for (2026-09-18).**
   Hyprland has no video wallpaper of its own: its wiki sends a person to
   `mpvpaper`, started from `exec-once`, which puts mpv on the same
