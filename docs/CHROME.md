@@ -45,6 +45,7 @@ what is left:
 | What running it found missing: `CLOCK_THREAD_CPUTIME_ID` and `CLOCK_PROCESS_CPUTIME_ID`, `clock_getres`, `creat`, and `/proc/<pid>/task`'s link count | **done** 2026-09-24 (§8) |
 | Chrome in a window on the compositor, a Wayland client drawing in software | **done** 2026-09-24, x86-64, `cargo xtask test-chrome-window`, `run-compositor --chrome` (§9) |
 | The zygote's fork, which fails on Ferrix, so Chrome runs with `--no-zygote` | not started (§8) |
+| Chrome's speed: a futex wait woken every 5 ms, the HPET as the clock under KVM, and `munmap` walking every page of a reservation | **done** 2026-09-26: idle 443% of a processor → 35%, a turning box 1.5 frames a second → 58.6; `cargo xtask bench-chrome` (§9) |
 | Chrome on the desktop's persistent btrfs root | **done** 2026-09-26: `/dev/shm` was not mounted there; `cargo xtask test-chrome-window --btrfs-root` (§9) |
 | Chrome on ferrousli's `libc.so.6` in glibc's place | **done** 2026-09-26, x86-64, headless, `cargo xtask test-chrome --interpreter ferrousli --library ferrousli` (§8); the window build on it is not tried |
 | Chrome on the STM32MP157D-DK1: an armhf Chromium, an SDMMC driver, page-cache eviction | not started, ≈ 45–55 points (§10) |
@@ -732,6 +733,56 @@ btrfs root made fresh for the run and requires the same page on the screen:
 before the change it failed with Chrome's `Failed to get the path for 1001`,
 after it 532 386 yellow pixels, as on tmpfs. `--chrome` no longer forces a
 tmpfs root. The profile in `/tmp` is not tried again.
+
+**How fast, 2026-09-26.** On the desktop, clicks took seconds to land and
+some were lost. `cargo xtask bench-chrome` measures it. The command boots
+Chrome on the compositor with a page that turns a box forever and has a
+thousand lines to scroll. It leaves the page alone for ten seconds, turns
+the wheel for ten and sweeps the pointer for ten. Beside Chrome, a busybox
+script reads every process's `/proc/<pid>/stat`, which now reports real
+processor time (utime was always 0 before). It also reads `/proc/stat` and
+`/proc/meminfo`. The report gives each phase's processor time by process
+name, how busy the machine was, and the compositor's frames.
+
+The first run, under KVM with `--gl`:
+
+| phase | Chrome's processor time | machine busy | frames a second | ms a frame |
+|---|---|---|---|---|
+| left alone | 443% | 96% | 1.5 | 25 |
+| scrolled | 451% | 97% | 7.3 | 23 |
+| pointed at | 394% | 94% | 1.7 | 13 |
+
+It was the kernel, not Chrome. A sampling profile showed almost every
+sample in ring 0: the timer interrupt recorded the address it interrupted.
+The three causes and their fixes:
+
+- **A futex wait woke every 5 ms to look again.** This was the wait queue's
+  own safety net against a lost notify. A futex wake, a signal and a
+  process ending all wake the waiter by name, so the net caught nothing.
+  Chrome parks about 150 threads, and each woke 200 times a second. A
+  futex wait now trusts its wakes, as `poll` does. On its own this took
+  Chrome at idle from 443% to 191%, and the animation from 1.5 frames a
+  second to 45.
+- **Each wake-up read the HPET, and each HPET read exits to QEMU.** The
+  kernel prefers an invariant TSC. `qemu64` does not advertise one, so
+  under KVM the clock was the HPET. A KVM boot now asks for `+invtsc`, and
+  the log says `clock TSC, calibrated against the HPET`.
+- **`munmap` of a reservation walked every page of it.** Chrome's allocator
+  hands back gigabytes of address space it barely touched. The unmap walked
+  from the root once per page, found nothing, and stepped one page. It now
+  steps over an absent descriptor's whole span. A gigabyte with one page at
+  its end reads 5 118 descriptors instead of about a million.
+
+With all three:
+
+| phase | Chrome's processor time | machine busy | frames a second | ms a frame |
+|---|---|---|---|---|
+| left alone | 35% | 17% | 58.6 | 4.6 |
+| scrolled | 84% | 31% | 48.0 | 6.2 |
+| pointed at | 44% | 21% | 60.1 | 4.6 |
+
+The screen refreshes at 60 Hz, so an animation at 58.6 frames a second is
+all of them.
 
 ---
 
