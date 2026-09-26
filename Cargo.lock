@@ -469,6 +469,10 @@ name = "ferrix-sysfs"
 version = "0.1.0"
 
 [[package]]
+name = "ferrix-usb-device"
+version = "0.1.0"
+
+[[package]]
 name = "ferrix-usb-host"
 version = "0.1.0"
 dependencies = [
