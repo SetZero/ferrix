@@ -19,6 +19,15 @@
 //! deadline to the waiter coming back must stay under [`LATE_LIMIT_NANOS`],
 //! a quarter of that recheck.
 //!
+//! Each of the three is timed up to [`ATTEMPTS`] times, and passes on the
+//! first attempt that meets both. An emulator whose host stops it for a few
+//! hundred milliseconds across a deadline makes the thread's timer fire that
+//! much late, and a stop of most of a second lets the recheck get there
+//! first: the guest's clock ran on while none of it did, which no kernel can
+//! tell from oversleeping. Every attempt is judged on the same evidence and
+//! printed, so a kernel that sleeps past deadlines, or never wakes the
+//! queue, fails all of them; only a stall gets another chance (FX-0883).
+//!
 //! Refused as Linux refuses: a read into fewer than eight bytes, a write, and
 //! a read at an offset. `lseek` answers 0, as Linux's `noop_llseek` does. The
 //! run is done twice and must keep no frame, the thread's stack included: with
@@ -87,6 +96,11 @@ const ARM_DELAY_NANOS: u64 = 50 * MILLI;
 /// pass, while a loaded host running other gates has a margin of hundreds of
 /// milliseconds over the few a wake takes.
 const LATE_LIMIT_NANOS: u64 = crate::fs::wake::TRUSTED_RECHECK_NANOS / 4;
+/// How many times a waiter is timed before a late one is a failure: enough
+/// that one stall of the host, which spoils the attempt it lands in, cannot
+/// fail the check, and few enough that a kernel that is late every time is
+/// not waited on for long.
+const ATTEMPTS: u32 = 3;
 /// How long the check gives a waiter to start waiting, and to come back once
 /// its timer has expired.
 const PATIENCE_NANOS: u64 = 2_000_000_000;
@@ -122,6 +136,58 @@ enum HowWaits {
     Poll,
     /// `epoll_wait` on a set holding it.
     Epoll,
+}
+
+impl HowWaits {
+    /// The call, as the boot log names it.
+    const fn call(self) -> &'static str {
+        match self {
+            HowWaits::Read => "read",
+            HowWaits::Poll => "poll",
+            HowWaits::Epoll => "epoll_wait",
+        }
+    }
+}
+
+/// How one timed waiter came back after its deadline, on the counter.
+#[derive(Debug, Clone, Copy)]
+enum Timed {
+    /// Ended by the deadline's wake, within [`LATE_LIMIT_NANOS`].
+    OnTime(u64),
+    /// Ended by the deadline's wake, but later than that.
+    Late(u64),
+    /// Ended by its own recheck, the wake never having reached it.
+    Rechecked(u64),
+}
+
+impl Timed {
+    /// How long after its deadline the waiter came back.
+    const fn late(self) -> u64 {
+        match self {
+            Timed::OnTime(late) | Timed::Late(late) | Timed::Rechecked(late) => late,
+        }
+    }
+
+    /// What ended the wait, for the line an attempt prints.
+    const fn ended_by(self) -> &'static str {
+        match self {
+            Timed::OnTime(_) | Timed::Late(_) => "woken by the deadline",
+            Timed::Rechecked(_) => "ended by its own recheck",
+        }
+    }
+
+    /// What an attempt that came back like this is a failure of, if every
+    /// attempt did.
+    const fn failure(self) -> &'static str {
+        match self {
+            Timed::OnTime(_) | Timed::Late(_) => {
+                "a waiter on a timerfd came back too long after its deadline"
+            }
+            Timed::Rechecked(_) => {
+                "a waiter on a timerfd was ended by its recheck, not by the deadline's wake"
+            }
+        }
+    }
 }
 
 /// What the check measured, for the boot log.
@@ -585,42 +651,69 @@ fn set_the_clock_under_timers(
 }
 
 /// A blocked read, a `poll` and an `epoll_wait`, each waiting in a task of its
-/// own before the timer is armed, are ended by the wake at the deadline.
+/// own before the timer is armed, are ended by the wake at the deadline --
+/// on one of [`ATTEMPTS`] attempts each, for the reason the module gives.
 fn check_waiters_are_woken(
     process: &Arc<Process>,
     page: u64,
     counts: &mut Counts,
 ) -> Result<(), &'static str> {
     for how in [HowWaits::Read, HowWaits::Poll, HowWaits::Epoll] {
-        let timer = create(process, CLOCK_MONOTONIC, 0)?;
-        let file = fd::file(process, timer).map_err(|_| "the timerfd is gone")?;
-        let inner = timerfd::of(&file).ok_or("a timerfd is not one")?;
-        let target = watch(process, page, timer, how)?;
-        *ANSWER.lock() = None;
-        *WAITER.lock() = Some(Waiter {
-            process: Arc::clone(process),
-            page,
-            target,
-            file: Arc::clone(&file),
-            how,
-        });
-        let late = wait_out_a_deadline(process, page, timer, &inner)?;
-        counts.late = counts.late.max(late);
-        if how != HowWaits::Read {
-            // The expiration the waiter was told of, still to be taken.
-            if read_count(process, page, timer) != Ok(1) {
-                return Err("a timerfd a poll or epoll_wait was woken for did not read 1");
+        let mut attempt = 1;
+        let late = loop {
+            let timed = time_a_waiter(process, page, how)?;
+            if let Timed::OnTime(late) = timed {
+                break late;
             }
-        }
-        if how == HowWaits::Epoll {
-            closed(process, target)?;
-        }
+            crate::console::println!(
+                "  timerfd  attempt {attempt} of {ATTEMPTS}: a waiter in {} came back {} ms \
+                 after its deadline, {}",
+                how.call(),
+                timed.late() / MILLI,
+                timed.ended_by(),
+            );
+            if attempt == ATTEMPTS {
+                return Err(timed.failure());
+            }
+            attempt += 1;
+        };
+        counts.late = counts.late.max(late);
         counts.expirations += 1;
-        drop(inner);
-        drop(file);
-        closed(process, timer)?;
     }
     Ok(())
+}
+
+/// One attempt of [`check_waiters_are_woken`]: a new timer, a waiter on it,
+/// and how the waiter came back.
+fn time_a_waiter(process: &Arc<Process>, page: u64, how: HowWaits) -> Result<Timed, &'static str> {
+    let timer = create(process, CLOCK_MONOTONIC, 0)?;
+    let file = fd::file(process, timer).map_err(|_| "the timerfd is gone")?;
+    let inner = timerfd::of(&file).ok_or("a timerfd is not one")?;
+    let target = watch(process, page, timer, how)?;
+    *ANSWER.lock() = None;
+    *WAITER.lock() = Some(Waiter {
+        process: Arc::clone(process),
+        page,
+        target,
+        file: Arc::clone(&file),
+        how,
+    });
+    let timed = wait_out_a_deadline(process, page, timer, &inner)?;
+    // The expiration the waiter was told of, still to be taken. A waiter its
+    // recheck ended may have been told of none.
+    if how != HowWaits::Read
+        && matches!(timed, Timed::OnTime(_) | Timed::Late(_))
+        && read_count(process, page, timer) != Ok(1)
+    {
+        return Err("a timerfd a poll or epoll_wait was woken for did not read 1");
+    }
+    if how == HowWaits::Epoll {
+        closed(process, target)?;
+    }
+    drop(inner);
+    drop(file);
+    closed(process, timer)?;
+    Ok(timed)
 }
 
 /// What the waiting task watches: the timer itself for a read or a `poll`,
@@ -652,13 +745,14 @@ fn watch(process: &Process, page: u64, timer: i32, how: HowWaits) -> Result<i32,
 }
 
 /// Start the waiter, arm the timer once it waits, and answer how late after
-/// the deadline it came back.
+/// the deadline it came back, and whether the deadline's wake is what ended
+/// its wait.
 fn wait_out_a_deadline(
     process: &Process,
     page: u64,
     timer: i32,
     inner: &TimerFd,
-) -> Result<u64, &'static str> {
+) -> Result<Timed, &'static str> {
     let ended_before = inner.waits_ended_by_a_wake();
     let waiter = crate::sched::spawn("timerfd-waiter", waiter, 0, ferrix_sched::NICE_0_WEIGHT)?;
     until_listed(inner);
@@ -689,18 +783,14 @@ fn wait_out_a_deadline(
     if back < deadline {
         return Err("a waiter on a timerfd came back before the deadline");
     }
-    if inner.waits_ended_by_a_wake() == ended_before {
-        return Err("a waiter on a timerfd was ended by its recheck, not by the deadline's wake");
-    }
     let late = back - deadline;
-    if late > LATE_LIMIT_NANOS {
-        crate::console::println!(
-            "  timerfd  a waiter came back {} ms after its deadline",
-            late / MILLI
-        );
-        return Err("a waiter on a timerfd came back too long after its deadline");
+    if inner.waits_ended_by_a_wake() == ended_before {
+        return Ok(Timed::Rechecked(late));
     }
-    Ok(late)
+    if late > LATE_LIMIT_NANOS {
+        return Ok(Timed::Late(late));
+    }
+    Ok(Timed::OnTime(late))
 }
 
 /// Wait until a task is listed on the timer's queue, has answered, or the

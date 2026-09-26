@@ -1753,12 +1753,17 @@ pub(crate) static STAGE8_TIMERFD: Explanation = Explanation {
               one armed with TFD_TIMER_CANCEL_ON_SET read ECANCELED once, and leave a monotonic \
               one alone. A blocked read, a poll and an epoll_wait, each waiting before the timer \
               is armed, must be ended by the timerfds thread's wake at the deadline and come back \
-              within a quarter of the one-second recheck. The run is done twice and must leave no \
-              frame behind, the thread's stack included.",
+              within a quarter of the one-second recheck, on one of three attempts each: each \
+              attempt that misses prints a line saying how late it was and what ended it. The run \
+              is done twice and must leave no frame behind, the thread's stack included.",
     causes: &[
         "The `timerfds` thread did not start when a timer was armed, sleeps past the earliest \
          deadline, or counts an expiration without waking the timer's queue, so a waiter is \
          ended by its recheck a second late.",
+        "The host stopped the emulator across a deadline in all three attempts: the guest's \
+         clock runs on while it is stopped, so the timer fires as late as the stop was long. \
+         One stop spoils one attempt; three in a row is a host too loaded to time anything on, \
+         and the attempt lines show the lateness each time.",
         "`State::count` miscounts the intervals that passed, or moves the deadline to the wrong \
          side of now.",
         "`TimerFd::set` keeps the count of the setting it replaced, or keeps no interval when \
