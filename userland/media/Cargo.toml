@@ -8,7 +8,7 @@
 # (`pcm`) builds only for Linux.
 [workspace]
 resolver = "3"
-members = ["badapple", "bav", "pcm", "pulse-server", "resample"]
+members = ["badapple", "bav", "pa-tone", "pcm", "pulse-server", "pulsed", "resample"]
 
 [workspace.package]
 version = "0.1.0"

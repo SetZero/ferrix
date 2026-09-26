@@ -478,7 +478,7 @@ repeats. Each slice lands on its own:
 | # | Slice | Exit | Points |
 |---|---|---|---|
 | U2a | **Done 2026-09-27.** `pulse-server`, the protocol state machine, on `pulseaudio` at the pinned revision: `AUTH` at protocol 35 with shared memory and memfd both refused, so samples come inline; the client's name; the server's, sink's and source's information and lists (one sink, the card's 48 kHz S16_LE stereo); `CREATE_PLAYBACK_STREAM` and `DELETE_PLAYBACK_STREAM` with the buffer attributes, and requests accounted as `pa_memblockq` does (`tlength`, `minreq`, `prebuf`); `CORK`, `FLUSH`, `DRAIN`, `GET_PLAYBACK_LATENCY`. One stream, no mixing | Host tests replay command sequences `patrace` recorded between the host's `paplay` or Chrome and its server, and each answer matches in kind and field | 4 |
-| U2b | `pulsed`, the daemon: `$XDG_RUNTIME_DIR/pulse/native`, one stream written through `media/pcm` to `/dev/snd` and clocked by the card; `pa-tone`, a Rust client that sends tone's counter over the protocol | `test-audio`'s fifth boot, `pulsed` and `pa-tone`, frame for frame, with a negative control | 4 |
+| U2b | **Done 2026-09-27.** `pulsed`, the daemon: `$XDG_RUNTIME_DIR/pulse/native`, one stream written through `media/pcm` to `/dev/snd` and clocked by the card; `pa-tone`, a Rust client that sends tone's counter over the protocol | `test-audio`'s fifth boot, `pulsed` and `pa-tone`, frame for frame, with a negative control | 4 |
 | U2c | Mixing: any number of streams summed with saturation into the card's one format, each resampled from its own rate by `media/resample` and its channels mapped (mono to stereo), per-stream volume and mute, an underrun filled with silence | Host tests of the mix against a model; a boot of two `pa-tone`s at 44.1 and 48 kHz whose sum the file holds within the resampler's bound | 5 |
 | U2d | The desktop: `pulsed` as an init unit of the session, Debian's `libpulse0` and what it links on Chrome's volume, Chrome through Pulse rather than ALSA (it prefers Pulse once `libpulse.so.0` loads) | `test-chrome-audio` through `pulsed`; `run-compositor --everything` plays a video's sound through it | 5 |
 
@@ -767,4 +767,19 @@ one second of silence. The latency reply's `write_offset` and `read_offset`
 are what it keeps time by. The buffer attributes a client leaves to the
 server are PulseAudio's rules with a `tlength` of 250 ms rather than 2 s,
 since the card has 320 ms of its own.
+
+U2b is done (2026-09-27): `userland/media/pulsed` is the daemon, and
+`pa-tone` a client that sends tone's counter over the protocol as
+libpulse's simple API would. `pulsed` waits for its sockets at most a
+quarter of a period, then writes the card a period at a time for as long
+as it has room, from the stream that is playing, through `media/pcm`. It
+never makes up what a stream has not sent: an underrunning stream gives
+the card less, and QEMU records nothing for a starved card, so nothing is
+heard that no client wrote. `test-audio`'s fifth boot runs both under zinc
+and holds QEMU's file to the counter, frame for frame. It passed on all
+three architectures on its first gate. Writing it found a flaw in the
+`aplay` boot from U1: a script that ends lets init exit, and the machine
+powers off while QEMU's audio backend still holds the last 100 ms or so,
+which never reach the file. Under KVM that cut 6084 frames. The scripts
+now stay up, and the harness waits a second after a program's last word.
 

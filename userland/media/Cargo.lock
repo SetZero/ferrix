@@ -265,6 +265,13 @@ name = "media-bav"
 version = "0.1.0"
 
 [[package]]
+name = "media-pa-tone"
+version = "0.1.0"
+dependencies = [
+ "pulseaudio",
+]
+
+[[package]]
 name = "media-pcm"
 version = "0.1.0"
 dependencies = [
@@ -277,6 +284,15 @@ name = "media-pulse-server"
 version = "0.1.0"
 dependencies = [
  "pulseaudio",
+]
+
+[[package]]
+name = "media-pulsed"
+version = "0.1.0"
+dependencies = [
+ "media-pcm",
+ "media-pulse-server",
+ "mio",
 ]
 
 [[package]]

@@ -1,0 +1,23 @@
+[package]
+name = "media-pulsed"
+description = "The PulseAudio-protocol server: clients on a Unix socket, their streams played through /dev/snd, clocked by the card"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "pulsed"
+path = "src/main.rs"
+
+[dependencies]
+media-pulse-server = { path = "../pulse-server" }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+media-pcm = { path = "../pcm" }
+# The sockets' readiness, through epoll. The version pulseaudio pins.
+mio = { version = "1", features = ["os-poll", "net"] }
+
+[lints]
+workspace = true

@@ -44,6 +44,10 @@ use pulseaudio::protocol::{
 
 use stream::{Owed, Stream};
 
+/// The types a [`Card`] is described in, for a daemon that names none of the
+/// protocol's own.
+pub use pulseaudio::protocol::{SampleFormat, SampleSpec as Spec};
+
 /// The protocol version spoken at most: the crate's, which is libpulse's
 /// since 15.0.
 pub const PROTOCOL_VERSION: u16 = protocol::MAX_VERSION;

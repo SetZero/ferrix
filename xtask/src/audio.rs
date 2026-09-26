@@ -46,6 +46,10 @@ const FRAMES: u32 = 48_000;
 /// Frames in a period, which the negative control moves one of.
 const PERIOD: u32 = 960;
 
+/// How long QEMU is left running after a program's last word, for its audio
+/// backend to write what it still holds.
+const SETTLE: Duration = Duration::from_secs(1);
+
 /// How long to wait for the second to play and drain, in an emulated guest,
 /// after two restarts of the driver for the restart boot.
 const PATIENCE: Duration = Duration::from_secs(120);
@@ -135,6 +139,9 @@ fn boot_and_record(
             seen.iter()
                 .any(|line| line.contains(DONE) || line.contains(FAILED))
         })?;
+        // QEMU's audio backend writes the file at the audio's own pace, a
+        // buffer behind the device: a moment for the last of it to land.
+        let _ = watching.read_more(Instant::now() + SETTLE, |_| false)?;
         lines = watching.lines().to_vec();
         lines.extend_from_slice(watching.after());
         Ok(())
@@ -252,6 +259,7 @@ pub(crate) fn test_audio(args: &Args) -> Result<()> {
              card played all {FRAMES} frames whole"
         );
         test_aplay(arch, &wav, args)?;
+        test_pulsed(arch, &wav, args)?;
     }
     Ok(())
 }
@@ -262,8 +270,11 @@ const COUNTER_WAV: &str = "usr/share/ferrix/counter.wav";
 /// What the aplay boot's shell runs: ferrousli's aplay, through alsa-lib's
 /// `default` device and so its configuration and `plug`, playing the same
 /// second tone plays. It says so in tone's words, for [`played_whole`].
+/// The shell stays up after, as tone does: were init to exit, the machine
+/// would power off with QEMU's audio backend still holding the last 100 ms
+/// or so, which never reach the file.
 const APLAY_SCRIPT: &str = "aplay -D default /usr/share/ferrix/counter.wav \
-    && echo 'tone: done' || echo \"tone: failed: aplay exited $?\"";
+    && echo 'tone: done' || echo \"tone: failed: aplay exited $?\"; sleep 30";
 
 /// The fourth boot, on x86-64, where the ports are built (`docs/AUDIO.md`,
 /// U1): ferrousli's busybox as the shell, alsa-lib and aplay built against
@@ -298,6 +309,70 @@ fn test_aplay(arch: Arch, wav: &Path, args: &Args) -> Result<()> {
     println!(
         "  {arch}: ferrousli's aplay played all {FRAMES} frames of the counter through \
          alsa-lib's default device, whole and in order"
+    );
+    Ok(())
+}
+
+/// Where the pulsed boot's server listens.
+const PULSE_SOCKET: &str = "/tmp/pulse-native";
+
+/// What the pulsed boot's shell runs: the server in the background, and the
+/// client that plays tone's counter through it and says so in tone's words.
+/// Then `wait`, for the server, which does not end: the shell stays up, for
+/// the reason [`APLAY_SCRIPT`] gives (zinc has no `sleep`).
+fn pulsed_script() -> String {
+    format!("/bin/pulsed {PULSE_SOCKET} &\n/bin/pa-tone {PULSE_SOCKET}\nwait\n")
+}
+
+/// Build one of `userland/media`'s programs for `arch`: `package`'s `bin`.
+fn build_media(arch: Arch, package: &str, bin: &str) -> Result<PathBuf> {
+    let target = crate::display::target(arch)
+        .ok_or_else(|| Error::new(format!("{arch} has no user-space target for {bin}")))?;
+    let target_dir = paths::target_dir().join("media").join(bin);
+    println!("  building userland/media/{bin} for {target}");
+    let program = target_dir.join(target).join("release").join(bin);
+    crate::builds::Build::cargo(
+        format!("cargo build (userland/media/{bin}) --target {target}"),
+        paths::workspace_root().join("userland/media"),
+    )
+    .args(["build", "--release", "-p", package, "--target", target])
+    .env("CARGO_TARGET_DIR", &target_dir)
+    .output(&program)
+    .run()?;
+    Ok(program)
+}
+
+/// A program as the file the guest runs from `/bin`.
+fn program_file(program: &Path, name: &str) -> Result<crate::ports::File> {
+    Ok(crate::ports::File {
+        path: format!("bin/{name}"),
+        mode: 0o755,
+        content: crate::ports::Content::Bytes(
+            std::fs::read(program)
+                .map_err(|error| Error::new(format!("{}: {error}", program.display())))?,
+        ),
+    })
+}
+
+/// The fifth boot (`docs/AUDIO.md`, U2b): zinc starts `pulsed`, the
+/// PulseAudio-protocol server, and `pa-tone`, which sends tone's counter to
+/// it over the protocol; the server plays it through `/dev/snd`, clocked by
+/// the card, and QEMU's file must hold the counter frame for frame. Skipped,
+/// saying so, where zinc is not built.
+fn test_pulsed(arch: Arch, wav: &Path, args: &Args) -> Result<()> {
+    let Some(shell) = crate::zinc::built(arch)? else {
+        println!("  {arch}: zinc is not built here, so pulsed's boot is skipped");
+        return Ok(());
+    };
+    let files = [
+        program_file(&build_media(arch, "media-pulsed", "pulsed")?, "pulsed")?,
+        program_file(&build_media(arch, "media-pa-tone", "pa-tone")?, "pa-tone")?,
+    ];
+    let lines = boot_and_record(arch, &shell, &pulsed_script(), &files, wav, args)?;
+    played_whole(arch, &lines, wav)?;
+    println!(
+        "  {arch}: pa-tone sent all {FRAMES} frames of the counter to pulsed over the \
+         PulseAudio protocol, and the card played them whole and in order"
     );
     Ok(())
 }

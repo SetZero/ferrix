@@ -1,0 +1,19 @@
+[package]
+name = "media-pa-tone"
+description = "A second of tone's counter played over the PulseAudio protocol, for xtask test-audio's pulsed boot"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "pa-tone"
+path = "src/main.rs"
+
+[dependencies]
+# The same pinned revision the server stands on.
+pulseaudio = { git = "https://github.com/colinmarc/pulseaudio-rs", rev = "3c0325feceb35c8356dfb1e0da5ede6e85aa409c" }
+
+[lints]
+workspace = true
