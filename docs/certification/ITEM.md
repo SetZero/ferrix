@@ -76,6 +76,13 @@ paths, the IOMMU, SMP, the MMU and CPU control for three architectures, the
 firmware tables that say where the CPUs and timers are, the device registry
 that makes an MMIO claim exclusive, and the panic path.
 
+A device's claim by a driver's control channel (`claim.rs`) is exclusive
+too, but for one caller: the input core may claim the STM32 USB host's node
+once per keyboard or mouse, up to eight, because an input channel carries
+only ports, never memory, and the node's `MANAGE` handle is one driver's,
+so the extra claims open no DMA path; a core whose channel carries DMA
+memory stays at one claim per device.
+
 This is the code that must be correct for isolation to mean anything. Nothing
 here may depend on a filesystem, a network stack or a device driver, and
 `check-item-boundary.py` asserts that rather than trusting it.

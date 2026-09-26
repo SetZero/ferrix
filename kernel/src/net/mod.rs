@@ -78,6 +78,9 @@ pub(crate) struct NetCore {
     /// The stack itself.
     stack: SpinLock<Stack>,
     /// Frames on their way out.
+    ///
+    /// Locked after the stack and before `transmit_wakers` when nested, as
+    /// `take_frames` does: the stack, then this, then the wakers.
     pending: SpinLock<Pending>,
     /// Woken whenever anything in the stack moved.
     progress: WaitQueue,

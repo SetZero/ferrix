@@ -77,6 +77,21 @@ impl Claims {
     /// Claim `node` for one more channel, `limit` at most at once: a USB
     /// host's driver asks the input core for a channel per keyboard or mouse
     /// behind it, all on the host's one node. `false` as [`Claims::claim`].
+    ///
+    /// # Which callers share a node, and why that is safe
+    ///
+    /// One only: the input core, for the STM32 USB host's node, whose
+    /// `DeviceNode::input_functions` is `USB_INPUT_FUNCTIONS` (eight); every
+    /// other node, and every other core, claims with a limit of one. Sharing
+    /// opens no DMA path (T.DMA): an input control channel carries no memory
+    /// -- HELLO hands over only the driver's port and READY only the core's
+    /// (`ferrix-inputctl`), so no VMO, pin or IOMMU mapping passes through
+    /// it -- and every channel is made by the holder of the node's `MANAGE`
+    /// handle (`native::control_channel`), which `devmgr` gives one driver,
+    /// so the host controller's DMA stays that driver's own domain however
+    /// many claims it holds. A core whose channel carries memory for a
+    /// device's DMA must claim with a limit of one, or give each claim a
+    /// domain of its own.
     pub(crate) fn claim_up_to(
         &self,
         node: &Arc<DeviceNode>,
