@@ -823,22 +823,44 @@ fn cpu_ticks(process: &Process, tid: u32) -> u64 {
     nanos / (NANOS / CLOCK_TICKS)
 }
 
+/// The console's device, 5:1, as `stat`'s `tty_nr` encodes a device:
+/// `new_encode_dev`, the minor's low byte, then the major.
+const CONSOLE_TTY_NR: u32 = 5 << 8 | 1;
+
+/// `stat`'s `tty_nr` and `tpgid` for a process in `session`: the console
+/// and its foreground group when the console is that session's controlling
+/// terminal, and Linux's "none", 0 and -1, otherwise.
+///
+/// A pseudo-terminal's session has one too, but nothing maps a session to
+/// its pty, so such a process reads as having none, as every process did
+/// before `setsid` was answered.
+fn controlling_terminal(session: u32) -> (u32, i32) {
+    let (holder, foreground) = fs::terminal::with(|t| (t.session, t.foreground));
+    if session == 0 || holder != session {
+        return (0, -1);
+    }
+    let tpgid = match foreground {
+        0 => -1,
+        group => i32::try_from(group).unwrap_or(-1),
+    };
+    (CONSOLE_TTY_NR, tpgid)
+}
+
 /// A stat file, for the thread numbered `tid` of `process`.
 fn stat_of(process: &Process, tid: u32) -> Result<Vec<u8>> {
     let memory = Memory::of(process);
     let comm = process.comm();
-    let pid = process.pid();
+    let session = process.sid();
+    let (tty_nr, tpgid) = controlling_terminal(session);
     let stat = Stat {
         pid: tid,
         comm: &comm,
         state: state_of(process),
         ppid: parent_of(process),
-        // No process has joined a group or a session other than its own,
-        // because `setpgid` and `setsid` are not answered yet.
-        pgrp: pid,
-        session: pid,
-        tty_nr: 0,
-        tpgid: -1,
+        pgrp: process.pgid(),
+        session,
+        tty_nr,
+        tpgid,
         // No `PF_*` flag applies: in particular `PF_RANDOMIZE` is clear,
         // because nothing randomizes the layout.
         flags: 0,
