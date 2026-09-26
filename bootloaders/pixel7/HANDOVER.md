@@ -273,15 +273,10 @@ them). Check any new one against the phone before you rely on it.
 
 ## What to do next, most important first
 
-1. **Entropy beyond 64 bits.** ABL gives 8 bytes, and the kernel credits
-   them (`BootInfo.firmware_seed_len`), so the phone boots
-   `NOT SEEDED: 64 of 256 bits`. The rest would have to come from the SoC's
-   TRNG. That is a security block, so under "Never write anything that
-   survives a reset" it needs the owner's word before anyone reads it.
-2. **A faster boot console**, if anything comes to need one: map the
+1. **A faster boot console**, if anything comes to need one: map the
    framebuffer write-combining rather than as device memory (run 4 lost
    about 28 s to drawing).
-3. **The kernel is a PIE now, and boots on the phone** (KASLR,
+2. **The kernel is a PIE now, and boots on the phone** (KASLR,
    `docs/certification/SPECULATION.md` §6.1, 2026-09-26). `boot/` moves it
    each boot; this loader does not. It places the kernel at its link address
    and applies its `R_AARCH64_RELATIVE` fixups there (`load.rs`
@@ -293,8 +288,10 @@ them). Check any new one against the phone before you rely on it.
    s. The kernel the loader embeds is stripped with `llvm-objcopy
    --strip-all`, which keeps AArch64's `.rela.dyn`. ARMv7-A would need
    `--strip-debug`, since its fixups come from `--emit-relocs` sections.
-   What is left is moving the kernel here, which needs a randomness source
-   ABL's 8 bytes cannot spare, and a run to try it.
+   What is left is moving the kernel here. The randomness is there now:
+   TF-A answers SMCCC `TRNG_RND64` (see the entropy entry under "Done"), so
+   this loader could ask it for a slide the way the kernel does, from EL1
+   with the MMU off. Then a run to try it.
    Since `47934c84` (F-34) this loader also maps the kernel's text and
    read-only data read-only in the direct map. Run 13 (`$P/run13-sealed/`)
    passed stage 2's FX-0204 check (`sealed 3536 KiB of text and read-only
@@ -327,6 +324,15 @@ them). Check any new one against the phone before you rely on it.
   counts every line: the tree held 1569 lines, not 733, and the owner had
   the cap and nine budgets moved to the truth. AArch64's secondary entry,
   58 lines, is the one that had really grown, by the EL2 drop.
+* **Entropy.** The owner allowed reading the SoC's random source, read
+  only. Android's `/sys/class/misc/hw_random/rng_current` said
+  `smccc_trng`, so no register of the security block is touched: the kernel
+  asks TF-A through SMCCC (`kernel/src/arch/aarch64/trng.rs`), after PSCI
+  1.0, `PSCI_FEATURES(SMCCC_VERSION)`, SMCCC 1.1, `TRNG_VERSION` and
+  `TRNG_FEATURES(TRNG_RND64)`, and credits each bit. Run 14
+  (`$P/run14-trng/`) booted `random   seeded with 448 bits: 8 bytes from
+  firmware, 48 from its TRNG, 0 words from the CPU, timer jitter`, the
+  phone's first seeded boot, and reached `FERRIX-BOOT-OK` on 8 cores.
 * **The seed** (`bootloaders/pixel7/src/seed.rs`) folds `/chosen`'s
   `rng-seed` and `kaslr-seed` into `firmware_seed` and NOPs both out of the
   kernel's copy of the tree. The owner chose to credit ABL's 8 bytes rather
