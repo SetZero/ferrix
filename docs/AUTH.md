@@ -310,8 +310,13 @@ connections guess no faster than one:
 * A success resets the count. The count is kept in the store (§5.2) with
   `fsync`, so restarting `authd` or rebooting does not reset it.
 * An unknown account is checked against a dummy hash with the same
-  parameters, and fails with the same text in the same time. A caller learns
-  nothing from the answer about which accounts exist.
+  parameters, and fails with the same text in the same time. It is also
+  counted and throttled as an account is, in a bounded table in memory keyed
+  by a keyed hash of the name, so that from the fourth failure on it answers
+  "wait" just as an account does (ferrix-55's review). A caller learns nothing
+  from the answers about which accounts exist, and naming accounts makes no
+  file. A restart of `authd` forgets those tallies and not an account's, and
+  only root can restart it.
 * Hashing is serialized: one Argon2id at a time for the whole machine. That
   bounds `authd`'s memory to one hash's (§5.1), and makes guessing through
   many services no faster.
@@ -818,6 +823,13 @@ negative control that must be seen to fire, per the repository's rule.
 | P0 | `process_create` gives the child its creator's credentials, as `fork` does. A boot check makes a native process as uid 1000 in a delegated job and requires `getuid` in it to be 1000. Its negative control is the old `Credentials::root()`, which must fail that line. | ferrix-15 (was: kernel, native ABI) | the kernel row of the gate table; `test-init --arch all` | 2 |
 | P0a | Init refuses `User=` and `Group=` on a `Type=native` unit, failing closed. Init makes a native service's process itself, so such a unit ran as root and the keys were silently ignored (found by ferrix-15 beside P0). **Done 2026-09-26**: the unit, `SupplementaryGroups=` too, loads as `bad-setting`, and `test-init` requires it of `pong-as-user.service`. | ferrix-15 | `test-init --arch all` | with P0 |
 | P0b | With init's L11, a native service's process is made by a forked child that has already become the unit's user, so `process_create` (after P0) gives it that user's credentials. | ferrix-15 | `test-init --arch all` | with L11 |
+| P0c | A `Delegate=yes` unit with `User=1000` gets `MANAGE` on its own job through `job_for_cgroup` (`kernel/src/fs/cgroupfs.rs:356-357`), and native `job_set_limit` (`kernel/src/syscall/native.rs:1244`) asks for `MANAGE` alone, so the unit can lift its own `MemoryMax=` or `TasksMax=` to unlimited. Ancestor slices still bound it. The fix: a `SET_LIMIT` job right, granted only to a caller that may write `memory.max`. Found by ferrix-15 and confirmed by ferrix-2c in the code; after ferrix-55's OK. | ferrix-15 | `test-init --arch all` | 2 |
+
+P0 and P0c have one shape: `MANAGE` on a job is too coarse a right. A
+delegated user holds it for its own subtree, as it must to move its own
+processes, and it then reached everything `MANAGE` guards: making a root
+process (P0) and lifting its own limits (P0c). Any new call that takes a
+job should ask for the narrowest right it needs, not for `MANAGE`.
 
 ### Phase 1: `authd`, passwords, and a real hyprlock (27 points)
 
@@ -911,7 +923,10 @@ gains, in the words it already uses:
   credentials for the uid a process runs as." A matching assumption
   **A.AUTH**: the authentication service and the programs that act on its
   verdict (`login`, `su`, `sessiond`, hyprix) are competently built,
-  which is `A.ADMIN`'s shape.
+  which is `A.ADMIN`'s shape. It also relies on the Linux personality's uid
+  model and on its `SO_PEERCRED`, both in the uncertified load ring. No
+  organisational security policy is needed for this (ferrix-55's review,
+  2026-09-26; the TOE claims no FIA or FAU, F-21b).
 * **§9.1**, a sentence: FIA and FAU are still absent from the TOE. Their
   environment counterparts are `authd` and its audit log, and on ARMv7-A and
   the DK1 a ring-3 driver can read that service's memory
@@ -931,6 +946,27 @@ gains, in the words it already uses:
   own today, since it is a hole whatever else is decided.
 * `docs/sysml/`: the service, its store and its channels, in the model's
   maturity terms.
+
+### 8.3 Known weaknesses of the environment
+
+Listed here and in `docs/certification/VULNERABILITY-ANALYSIS.md`'s
+"What this analysis does not cover", until each is fixed:
+
+* **E-01, `SO_PEERCRED` names who made a socket, not who connected it**
+  (§1, §3.4). A root-made socket used by a process that dropped to another
+  uid reads as root. That gains a question, not an answer, since root never
+  skips a password. K-E fixes it: the kernel takes the ids at `connect` and
+  at `listen`, as Linux does. It is about 3 points: a listener records its
+  credentials when it listens (`Socket::listen`, `kernel/src/fs/socket.rs`
+  near 651); `connect_stream` (near 755-802) gives the server's end the
+  connecting process's current ids, where it now uses `self.credentials`,
+  and the client's end the listener's listen-time ids, where it now uses
+  `target.credentials`. The caller in `kernel/src/syscall/sockets.rs`
+  (near 331-335) passes the process in, and a boot check beside the
+  existing `SO_PEERCRED` one (`kernel/src/syscall/check.rs` near 9084)
+  changes a socket's ids between making it and connecting it. Its negative
+  control is the old creation-time ids. The review asked for it in phase 1,
+  as its own kernel slice before `authd` lands and after ferrix-55's OK.
 
 ---
 
