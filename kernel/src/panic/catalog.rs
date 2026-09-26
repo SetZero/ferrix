@@ -1666,7 +1666,9 @@ pub(crate) static CONSOLE_DESCRIPTORS: Explanation = Explanation {
               the console there and through a namespace of its own otherwise. Neither route \
               touches anything a program controls, so a failure is a kernel bug rather than \
               a condition to report to one: a process created without them would have its \
-              first `open` land on descriptor 0 and its output written into that file.",
+              first `open` land on descriptor 0 and its output written into that file. \
+              Running out of memory for the table is not this: it is reported, and \
+              process_create answers NO_MEMORY.",
     causes: &[
         "The console inode in `kernel/src/fs/console.rs` started refusing to be opened, or \
          `OpenFile::new` gained a check the console does not pass.",

@@ -185,7 +185,7 @@ report failure:
 |---|---|
 | `syscall/process.rs` | the program name and arguments recorded (`record_exec`), the thread and task lists a start pushes onto -- among the 13 the gate records |
 | `syscall/registry.rs` | the `Arc` the new process is registered in |
-| `syscall/fd.rs` | `standard_streams`, which stops the kernel explicitly (`CONSOLE_DESCRIPTORS`) if the console's descriptors cannot be made |
+| `syscall/fd.rs` | `standard_streams`: the console's open description, whose `Arc` `OpenFile::new` makes. The table grows fallibly (F-37) and a refusal is `NO_MEMORY`, not a stop (2026-09-26; stage 7 checks it with every allocation failing); only a console that cannot be opened at all, a kernel bug, still stops it (`CONSOLE_DESCRIPTORS`) |
 | `syscall/load.rs`, `syscall/exec.rs` | the ELF loader's lists |
 
 Each of these is the load's and covered by AoU-5, as it was before; the

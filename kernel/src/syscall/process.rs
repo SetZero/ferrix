@@ -336,7 +336,7 @@ impl Process {
             umask: AtomicU32::new(DEFAULT_UMASK),
             oom_score_adj: AtomicI32::new(0),
             identity: SpinLock::new(Identity::default()),
-            files: fallible::try_arc(SpinLock::new(fd::standard_streams()))?,
+            files: fallible::try_arc(SpinLock::new(fd::standard_streams()?))?,
             fs: fallible::try_arc(SpinLock::new(fs::root_disk::process_context()))?,
             state: SpinLock::new(State::new()?),
             heap_lock: SleepLock::new((), &crate::sync::SchedParker),

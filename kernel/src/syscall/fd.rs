@@ -37,6 +37,7 @@ use ferrix_vfs::fd::FdTable;
 use ferrix_vfs::{FileType, Location, OpenFile, OpenFlags, Whence};
 
 use crate::arch;
+use crate::fallible::AllocError;
 use crate::fs;
 use crate::fs::console;
 use crate::panic::{catalog, fatal};
@@ -122,11 +123,24 @@ pub(crate) fn user_path(process: &Process, at: u64) -> Result<Vec<u8>, Errno> {
 /// O_NONBLOCK)` changes descriptor 1 too.
 ///
 /// Charged to no job (`quota::charging_nobody`): a job at its memory limit
-/// must not be able to make this fail, which would stop the kernel. The
-/// table is charged to the process's job the first time it grows.
-pub(crate) fn standard_streams() -> FdTable<Arc<OpenFile>> {
+/// must not be able to make this fail. The table is charged to the
+/// process's job the first time it grows.
+///
+/// # Errors
+///
+/// [`AllocError`] when there is no memory for the table, which
+/// `process_create` answers with `NO_MEMORY` (F-23): it used to stop the
+/// kernel, on an item path. The injection policy the checks fail
+/// allocations with is asked first, since the table's own growth does not
+/// ask it. The console's open description is still made by `OpenFile::new`,
+/// whose `Arc` cannot report a refusal (MEMORY-AND-TIMING §1.3). A console
+/// that cannot be opened, or a new table with no room for three, is a kernel
+/// bug and stops it (`CONSOLE_DESCRIPTORS`).
+pub(crate) fn standard_streams() -> Result<FdTable<Arc<OpenFile>>, AllocError> {
+    ferrix_fallible::check()?;
     match crate::object::quota::charging_nobody(console_table) {
-        Ok(table) => table,
+        Ok(table) => Ok(table),
+        Err(Errno::ENOMEM) => Err(AllocError),
         Err(errno) => fatal!(
             catalog::CONSOLE_DESCRIPTORS,
             "a new process could not be given the console: errno {}",

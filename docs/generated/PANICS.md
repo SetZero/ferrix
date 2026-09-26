@@ -1027,7 +1027,9 @@ descriptors 0, 1 and 2, opened through `/dev/console` when the namespace has the
 console there and through a namespace of its own otherwise. Neither route
 touches anything a program controls, so a failure is a kernel bug rather than a
 condition to report to one: a process created without them would have its first
-`open` land on descriptor 0 and its output written into that file.
+`open` land on descriptor 0 and its output written into that file. Running out
+of memory for the table is not this: it is reported, and process_create answers
+NO_MEMORY.
 
 1. The console inode in `kernel/src/fs/console.rs` started refusing to be
    opened, or `OpenFile::new` gained a check the console does not pass.

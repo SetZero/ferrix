@@ -5972,7 +5972,8 @@ fn check_untested_signal_paths() -> Result<(), &'static str> {
          reported; an alarm raised SIGALRM; SA_ONSTACK chose the alternate stack; a blocked \
          fault was forced; a thread took its own signal before its process's; a signal was \
          judged against its taker's mask, a fork child's included; SA_RESTART restarts, poll \
-         and a flagless handler do not; signal state with no memory is refused, not fatal"
+         and a flagless handler do not; signal state and a new process's descriptors with no memory are refused, not \
+         fatal"
     );
     Ok(())
 }
@@ -6007,7 +6008,32 @@ fn check_signal_state_reports_running_out() -> Result<(), &'static str> {
     if !made {
         return Err("signal state was refused with memory to spare");
     }
-    Ok(())
+    check_standard_streams_report_running_out(task)
+}
+
+/// A new process's descriptors 0, 1 and 2 report running out of memory as an
+/// error, which `process_create` answers with `NO_MEMORY`, rather than stop
+/// the kernel (finding F-23): with every fallible allocation of this task
+/// failing the table is refused, and without it the table holds three.
+///
+/// `standard_streams` used to turn any failure into a fatal stop
+/// (`CONSOLE_DESCRIPTORS`). The table's own growth does not ask the
+/// injection policy, so `standard_streams` asks it first: without that
+/// (scratch), the first test here fails, since the table is made with every
+/// allocation failing.
+fn check_standard_streams_report_running_out(
+    task: crate::sched::TaskId,
+) -> Result<(), &'static str> {
+    crate::fallible::inject(task, 1);
+    let refused = fd::standard_streams().is_err();
+    let failed = crate::fallible::stop_injecting();
+    if !refused || failed == 0 {
+        return Err("a new process's descriptors were made with every allocation failing");
+    }
+    match fd::standard_streams() {
+        Ok(table) if table.len() == 3 => Ok(()),
+        _ => Err("a new process's descriptors were refused with memory to spare"),
+    }
 }
 
 /// Build a child linked to `parent`, registered and adopted, ready to end.
