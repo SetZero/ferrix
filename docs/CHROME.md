@@ -840,6 +840,24 @@ call through the vDSO between two system calls, reading the TSC under KVM.
 | scrolled | 27% | 10% | 60.3 | 4.8 |
 | pointed at | 22% | 8% | 60.5 | 4.8 |
 
+**The host's side.** A wake of a task on another processor used to
+interrupt every other processor. On four, that was three interrupts to tell
+one, and under KVM each is an exit and a host thread woken. The kick now
+interrupts the one processor, and sends nothing while an earlier kick's
+interrupt has yet to arrive. Over six runs of each, alternated, QEMU's own
+processor time on the host fell from 80.9% of a host core to 65.0%, and
+every phase still drew 60 frames a second.
+
+A first measurement had held that back for a lost second of frames in one
+phase in five. The bench was wrong, not the kick. The compositor reports
+its frames at the first frame a second or more after its last report, about
+every 1.015 s, and a phase is ten seconds and some 40 ms. So a phase holds
+ten reports, or nine when it began just after one. Counted over ten
+seconds, nine reports read as 545 frames where 605 were drawn, and main's
+own runs did it as often. `bench-chrome` now gives a phase's reports beside
+its frames, and its frames a second are frames per report. A real stall
+still shows: the report that covers it counts fewer frames for its second.
+
 Memory has not moved: 521 MiB is in use, and most of that is page cache
 for Chrome's 294 MB program. `/proc/meminfo` counts the cache as used,
 because it reports `Cached` as 0. A trial kernel, not landed, reported

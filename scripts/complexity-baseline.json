@@ -109,11 +109,6 @@
       "lines": 62,
       "recursive": false
     },
-    "sched/mod.rs::init": {
-      "complexity": 15,
-      "lines": 32,
-      "recursive": false
-    },
     "smp.rs::invalidate_pages": {
       "complexity": 21,
       "lines": 82,

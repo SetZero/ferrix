@@ -1512,3 +1512,22 @@ fn check_this_cpu(expected: &PerCpu) -> Result<(), &'static str> {
     }
     Ok(())
 }
+
+/// Interrupt processor `cpu`, and no other where the architecture can
+/// address one: what the scheduler's kick sends, having set its flag.
+///
+/// Every other processor is interrupted where it cannot -- `send_ipi_to`
+/// refuses, or broadcasts behind the name as the Arm architectures do -- or
+/// before the processors are known, which is what the kick always did.
+/// Declared last in this file so that the lines above keep the numbers the
+/// coverage arguments cite them by.
+pub(crate) fn interrupt_one(cpu: usize) {
+    let record = TOPOLOGY
+        .get()
+        .and_then(|topology| topology.cpus.get(cpu))
+        .filter(|record| record.is_online());
+    let sent = record.map(|record| arch::send_ipi_to(record.hardware_id));
+    if !matches!(sent, Some(Ok(()))) {
+        let _ = arch::send_ipi_to_others();
+    }
+}

@@ -71,6 +71,10 @@ static QUEUES: Once<Vec<SpinLock<CpuQueue>>> = Once::new();
 /// the way out of it.
 static NEED_RESCHED: Once<Vec<AtomicBool>> = Once::new();
 
+/// Per processor: a kick's interrupt is on its way that the processor has not
+/// yet taken. See [`kick`].
+static KICK_PENDING: Once<Vec<AtomicBool>> = Once::new();
+
 /// One flag per processor, set while its idle task holds an exited task's
 /// stack it is about to free. Read by the checks that count frames, which
 /// must not measure while a free is in flight: see [`reaping_anywhere`].
@@ -675,12 +679,21 @@ fn resched_here(cpu: usize) {
     crate::timer::after(queue::MIN_ARM_NS);
 }
 
-/// Interrupt another processor so it notices its flag.
+/// Interrupt another processor so it notices its flag: that one alone, and
+/// only if an interrupt from an earlier kick has not yet reached it.
 ///
-/// Broadcast, because that is the only inter-processor interrupt the
-/// architectures offer today: a processor with nothing to do wakes, finds
-/// nothing, and goes back to waiting. Stage 10 wants a targeted one anyway,
-/// for a device interrupt steered to one core.
+/// **This was a broadcast**, and every wake of a task on another processor
+/// interrupted all of them: on four, three interrupts to tell one, the other
+/// two woken out of `hlt` -- under a hypervisor an exit and a host thread
+/// woken each -- to find nothing and wait again. A browser wakes tasks across
+/// processors thousands of times a second.
+///
+/// One interrupt in flight is enough for any number of kicks. Each kick sets
+/// the target's flag before it looks at [`KICK_PENDING`], and the target
+/// lowers that mark with a swap on the way out of its next interrupt, before
+/// it reads the flag (`preempt_on_irq_exit`): a kick that found the mark up
+/// is read by that exit, and one after it finds the mark down and sends
+/// another. The flag itself means what it always did.
 fn kick(cpu: usize) {
     // The flag is set here, on the target's behalf, rather than by the target
     // inside its own interrupt handler. So the interrupt carries no meaning
@@ -689,7 +702,20 @@ fn kick(cpu: usize) {
     // scheduler hook in the IPI handler, and why a processor woken by
     // somebody else's shootdown finds this flag and acts on it just as well.
     mark_resched(cpu);
-    let _ = arch::send_ipi_to_others();
+    let pending = KICK_PENDING.get().and_then(|marks| marks.get(cpu));
+    if pending.is_some_and(|mark| mark.swap(true, Ordering::AcqRel)) {
+        return;
+    }
+    crate::smp::interrupt_one(cpu);
+}
+
+/// Each processor's reschedule flag, and its mark that a kick's interrupt is
+/// on its way: the two [`kick`] raises, made together.
+fn init_resched_flags(online: usize) {
+    // FATAL-ALLOC: boot only: stage 5 makes each processor's scheduling state once, as the scheduler starts.
+    let _ = NEED_RESCHED.call_once(|| (0..online).map(|_| AtomicBool::new(false)).collect());
+    // FATAL-ALLOC: boot only: stage 5 makes each processor's scheduling state once, as the scheduler starts.
+    let _ = KICK_PENDING.call_once(|| (0..online).map(|_| AtomicBool::new(false)).collect());
 }
 
 /// Bring up the scheduler, and make the context calling it a task.
@@ -719,8 +745,7 @@ pub(crate) fn init(topology: &'static Topology) -> Result<(), &'static str> {
         queues.push(SpinLock::new(CpuQueue::new()?));
     }
     let _ = QUEUES.call_once(|| queues);
-    // FATAL-ALLOC: boot only: stage 5 makes each processor's scheduling state once, as the scheduler starts.
-    let _ = NEED_RESCHED.call_once(|| (0..online).map(|_| AtomicBool::new(false)).collect());
+    init_resched_flags(online);
     // FATAL-ALLOC: boot only: stage 5 makes each processor's scheduling state once, as the scheduler starts.
     let _ = REAPING.call_once(|| (0..online).map(|_| AtomicBool::new(false)).collect());
     // FATAL-ALLOC: boot only: stage 5 makes each processor's scheduling state once, as the scheduler starts.
@@ -1685,6 +1710,10 @@ pub(crate) fn preempt_on_irq_exit(from_user: bool) {
     let Some(cpu) = this_cpu() else {
         return;
     };
+    // Any interrupt's exit does what a kick's would: see `kick`.
+    if let Some(mark) = KICK_PENDING.get().and_then(|marks| marks.get(cpu)) {
+        let _ = mark.swap(false, Ordering::AcqRel);
+    }
 
     // Before the switch, not after: `schedule` may not come back to this
     // context for a while, and a balance that runs on the way out of every
