@@ -33,6 +33,7 @@ ferrix-virtio = { path = "../libs/virtio" }
 ferrix-displayctl = { path = "../libs/displayctl" }
 ferrix-renderctl = { path = "../libs/renderctl" }
 ferrix-inputctl = { path = "../libs/inputctl" }
+ferrix-sndctl = { path = "../libs/sndctl" }
 ferrix-virtio-blk = { path = "../libs/virtio-blk" }
 ferrix-virtio-net = { path = "../libs/virtio-net" }
 ferrix-virtio-gpu = { path = "../libs/virtio-gpu" }
@@ -252,6 +253,13 @@ bench = false
 [[bin]]
 name = "inputctl"
 path = "fuzz_targets/inputctl.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sndctl"
+path = "fuzz_targets/sndctl.rs"
 test = false
 doc = false
 bench = false

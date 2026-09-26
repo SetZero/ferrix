@@ -14,6 +14,7 @@ members = [
     "libs/displayctl",
     "libs/renderctl",
     "libs/inputctl",
+    "libs/sndctl",
     "libs/bootinfo",
     "libs/elf",
     "libs/fbtext",
@@ -109,6 +110,7 @@ ferrix-devmgr-proto = { path = "libs/devmgr-proto" }
 ferrix-displayctl = { path = "libs/displayctl" }
 ferrix-renderctl = { path = "libs/renderctl" }
 ferrix-inputctl = { path = "libs/inputctl" }
+ferrix-sndctl = { path = "libs/sndctl" }
 ferrix-bootinfo = { path = "libs/bootinfo" }
 ferrix-elf = { path = "libs/elf" }
 ferrix-fbtext = { path = "libs/fbtext" }

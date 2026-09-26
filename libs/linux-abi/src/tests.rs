@@ -1427,6 +1427,8 @@ fn errno_values_are_the_generic_ones() {
     );
     assert_eq!(Errno::ENODATA.0, 61, "ENODATA is what a missing xattr is");
     assert_eq!(Errno::EOVERFLOW.0, 75, "EOVERFLOW is 75");
+    assert_eq!(Errno::EBADFD.0, 77, "EBADFD is 77, asm-generic/errno.h");
+    assert_eq!(Errno::ESTRPIPE.0, 86, "ESTRPIPE is 86, asm-generic/errno.h");
     assert_eq!(Errno::ECONNREFUSED.0, 111, "ECONNREFUSED is 111");
     assert_eq!(Errno::ECANCELED.0, 125, "ECANCELED is 125");
 }

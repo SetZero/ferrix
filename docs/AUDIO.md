@@ -157,13 +157,17 @@ pointers.
   may fault, and a fault may not be taken with preemption disabled
   (`docs/INPUT.md` §5, the fourth finding).
 * **Submission.** The core tells the driver about a range of the buffer once
-  it holds samples. It submits each period as it fills. At `START` and
-  `DRAIN` it also submits the partial period up to `appl_ptr`, and the next
-  submission continues from where that one ended. A completion advances
+  it holds samples. It submits each period as it fills. When nothing is in
+  flight it submits whatever is queued at once, part of a period or not, so
+  the device is never idle with frames waiting; that covers `START`. At a
+  `DRAIN` everything left goes. The next submission continues from where the
+  last ended, and none crosses a period boundary. A completion advances
   `hw_ptr` by exactly the frames it carried. So `hw_ptr` moves in periods
   while playing, and the card says so with `INFO_BATCH`.
 * **Start.** A write that brings the queued frames to `start_threshold`
   starts the stream, as does `PCM_START` or `PCM_DRAIN` from `PREPARED`.
+  `HW_PARAMS` sets the threshold to 1, as Linux's does, so by default the
+  first write starts it.
 * **Underrun.** When a completion leaves `avail ≥ stop_threshold` while
   `RUNNING`, the stream enters `XRUN`. The core halts it, and every
   following write answers `EPIPE` until `PREPARE`. The device is never left
@@ -203,11 +207,11 @@ restart an input driver.
 
 | Type | Direction | Body | Handles |
 |---|---|---|---|
-| `HELLO` | driver → core | version; location; the device's stream count; for each stream (at most 10, QEMU's limit), its direction, format and rate bitmaps and channel range from `PCM_INFO` | driver port (`WRITE \| TRANSFER`) |
-| `READY` | core → driver | the card's index; for each stream the core publishes, its id and version 1's configuration | core port (`WRITE`); one buffer VMO per published stream (`READ \| MAP`) |
+| `HELLO` | driver → core | version; location; the device's stream count; for each stream (at most 10, QEMU's limit), its direction, channel range, rates as bits over the crate's table and formats as ALSA's `FORMAT_*` bits, translated by the driver from `PCM_INFO` | driver port (`WRITE \| TRANSFER`) |
+| `READY` | core → driver | the card's index; for each stream the core publishes (at most 2), its id and version 1's configuration: rate in Hz, ALSA format, channels, period and buffer bytes | core port (`WRITE`); one buffer VMO per published stream (`READ \| MAP`) |
 | `REFUSED` | core → driver | reason | — |
 | `SUBMIT` | core → driver | stream; sequence number; offset and length in bytes within the buffer VMO | — |
-| `ELAPSED` | driver → core | stream; sequence number; the device's status and `latency_bytes` | — |
+| `ELAPSED` | driver → core | stream; sequence number; whether the device played it (a refused buffer is an underrun); `latency_bytes` | — |
 | `HALT` | core → driver | stream | — |
 | `HALTED` | driver → core | stream; how many submissions came back unplayed | — |
 | `STOP` / `STOPPED` | as blk | | |
@@ -228,7 +232,8 @@ quiesce, the same as an input driver that lies. The device's word is checked
 by the driver first (§3.3).
 
 **A driver that goes away** takes the card with it. Each open stream enters
-`DISCONNECTED`. Every ioctl then answers `ENODEV`, and `poll` reports
+`DISCONNECTED`. Every ioctl then answers `EBADFD`, as
+`snd_pcm_common_ioctl` answers for a disconnected card, and `poll` reports
 `POLLERR | POLLHUP`, as a Linux client sees an unplugged USB card. The nodes
 leave `/dev/snd`, and the card's index is not given out again this boot.
 
@@ -460,9 +465,10 @@ re-baselines once U2's first attempt has sized it.
    work is a later row, not a blocker.
 4. **Written deviations:** one opener per stream (`EBUSY`), no status and
    control page mapping on x86-64 either, although Linux maps them there,
-   `REWIND` and `FORWARD` moving nothing, and `SW_PARAMS`' silence fields
-   stored but not acted on. Each is a behaviour alsa-lib handles on some
-   Linux machine today.
+   `REWIND` and `FORWARD` moving nothing, `SYNC_PTR` refusing to move
+   `appl_ptr` (`EPERM`, which is how mapped access commits frames), and
+   `SW_PARAMS`' silence fields stored but not acted on. Each is a behaviour
+   alsa-lib handles on some Linux machine today.
 5. **The server (U2):** PipeWire ported, or a Rust server. PipeWire is what
    Steam's runtime and every current distribution expect, and it is a large
    C port with a session manager (WirePlumber) and optional D-Bus. A Rust
@@ -568,6 +574,33 @@ range, and a transmit completion that wrote anything but its status. The
 `virtio_snd` fuzz target ran 223,434,735 inputs in five minutes on nazuna
 without a failure.
 
+L3 is done (2026-09-26): `libs/sndctl` is the protocol and the stream.
+`message` is §3.2's messages, decoded strictly. `session` judges HELLO and
+routes the driver's reports. `pcm` is the stream as Linux keeps it,
+function by function from `sound/core/pcm_native.c` and `pcm_lib.c`: the
+states, pointers, `boundary` at both widths, the thresholds, when a stream
+starts, underruns and drains, `SYNC_PTR`, `STATUS`, `DELAY` and `poll`.
+`refine` is `HW_REFINE` and `HW_PARAMS`, with Linux's interval and mask rules
+against the one configuration. Reading those sources settled four things
+this document had guessed at or had wrong:
+
+* A disconnected stream answers `EBADFD`, not `ENODEV` (§3.2, corrected).
+* `HW_PARAMS` defaults `start_threshold` to 1 (§3.1).
+* Linux refines only the parameters in `rmask` and lets its rules carry
+  the change. With one configuration, refining every parameter gives the
+  same answer (`refine`'s module comment).
+* A drain that hears nothing for `max(100 ms, buffer × 1100 / rate)` ends
+  in `SETUP` with `EIO`.
+
+Its 30 tests drive the stream with a model program and device: a second of
+a counter written in 700-frame blocks plays whole and in order and drains;
+underrun, drop, reset, close and a driver that lies are each checked; the
+refine answers alsa-lib's `any`, `set_*` and `set_*_near` calls. The
+`sndctl` fuzz target ran 5,047,081 scripts in five minutes on nazuna,
+mixing requests, completions and lies, without breaking a property.
+ `ferrix-linux-abi` gained `EBADFD` and
+`ESTRPIPE`.
+
 The rest of this document is design, with §2's calls read from source and
-§3.3's device read from QEMU 9.2.4's, and none of it run yet. L3,
-`libs/sndctl`, is next.
+§3.3's device read from QEMU 9.2.4's, and none of it run on Ferrix yet. L4,
+`libs/virtio-snd`, is next.

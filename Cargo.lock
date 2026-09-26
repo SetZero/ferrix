@@ -420,6 +420,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferrix-sndctl"
+version = "0.1.0"
+dependencies = [
+ "ferrix-linux-abi",
+ "ferrix-native-abi",
+]
+
+[[package]]
 name = "ferrix-stm32-display"
 version = "0.1.0"
 

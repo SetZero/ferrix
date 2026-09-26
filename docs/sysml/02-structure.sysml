@@ -1183,6 +1183,26 @@ package FerrixStructure {
                  * at a SYN_REPORT with its clean reports the ones delivered,
                  * in order. */
         }
+        #implemented part sndctl : LibraryCrate {
+            attribute :>> path = "libs/sndctl";
+            attribute :>> forbidsUnsafe = true;
+            attribute :>> hostTests = 30;
+            doc /* The control protocol between the kernel's audio core and a
+                 * ring-3 sound driver, and a PCM stream's state as ALSA keeps
+                 * it, written ahead of both for the audio iteration
+                 * (docs/AUDIO.md L3). Nine fixed messages decoded strictly;
+                 * the core's side of the conversation, which publishes the
+                 * first stream that plays version 1's one configuration and
+                 * refuses any report out of turn; the stream, Linux's
+                 * pcm_native.c and pcm_lib.c function by function: states,
+                 * pointers and boundary at both widths, thresholds, start,
+                 * underrun, drain, SYNC_PTR, STATUS and poll, with what is
+                 * submitted to the driver and when; and HW_REFINE and
+                 * HW_PARAMS with Linux's interval and mask rules. The sndctl
+                 * fuzz target drives requests, completions and lies at a
+                 * stream and requires it never to overrun, never to submit
+                 * across a period or during a halt, and to refuse every lie. */
+        }
         #implemented part pci : LibraryCrate {
             attribute :>> path = "libs/pci";
             attribute :>> forbidsUnsafe = true;
@@ -1430,7 +1450,7 @@ package FerrixStructure {
         dependency from xtask to elf, netwire;
         dependency from fuzz to acpi, blkRing, blockQueue, btrfs, cpio, displayctl, elf, fdt,
             frameCrate, inputctl, linuxAbi, nativeAbi, netCore, netlink, nettcp, netwire,
-            objects, pci, renderctl, sync, ustack, vfs, virtio, virtioBlk, virtioGpu,
+            objects, pci, renderctl, sndctl, sync, ustack, vfs, virtio, virtioBlk, virtioGpu,
             virtioInput, virtioNet;
         dependency from blkRing to linuxAbi, nativeAbi;
         dependency from blkServe to blkRing, virtio, virtioBlk;
@@ -1438,6 +1458,7 @@ package FerrixStructure {
         dependency from btrfsWrite to btrfs;
         dependency from displayctl to linuxAbi, nativeAbi;
         dependency from inputctl to linuxAbi, nativeAbi;
+        dependency from sndctl to linuxAbi, nativeAbi;
         dependency from nativeAbi to linuxAbi;
         dependency from nativeCrate to linuxAbi, nativeAbi;
         dependency from netCore to netwire, nettcp;

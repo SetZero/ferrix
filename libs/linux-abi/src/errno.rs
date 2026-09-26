@@ -111,6 +111,12 @@ impl Errno {
     pub const ENODATA: Self = Self(61);
     /// Value too large for defined data type.
     pub const EOVERFLOW: Self = Self(75);
+    /// File descriptor in bad state: what a PCM stream answers a request its
+    /// state does not allow, and every request once its card is gone.
+    pub const EBADFD: Self = Self(77);
+    /// Streams pipe error: what a PCM stream answers while its device is
+    /// suspended.
+    pub const ESTRPIPE: Self = Self(86);
     /// Socket operation on non-socket.
     pub const ENOTSOCK: Self = Self(88);
     /// Destination address required.
