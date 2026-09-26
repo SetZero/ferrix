@@ -151,6 +151,8 @@ struct Gate {
     arm_machine: Option<&'static str>,
     /// `FERRIX_ARM_CPU`, for a boot on a different Arm processor.
     arm_cpu: Option<&'static str>,
+    /// `--reset`: end in a reset, not a power-off.
+    reset: bool,
 }
 
 impl Gate {
@@ -163,6 +165,7 @@ impl Gate {
             only: None,
             arm_machine: None,
             arm_cpu: None,
+            reset: false,
         }
     }
 
@@ -186,6 +189,14 @@ impl Gate {
     const fn on_cpu(self, cpu: &'static str) -> Gate {
         Gate {
             arm_cpu: Some(cpu),
+            ..self
+        }
+    }
+
+    /// The same gate, ending in a reset: `--reset`.
+    const fn resetting(self) -> Gate {
+        Gate {
+            reset: true,
             ..self
         }
     }
@@ -236,6 +247,16 @@ const SUITE: &[Gate] = &[
     Gate::new("test-boot", "boot-a15", false)
         .only(Arch::Armv7a)
         .on_cpu("cortex-a15"),
+    // Every other boot ends in a power-off, so the reset a program's
+    // `reboot` or `ferrix.onexit=reset` asks for was never taken on Arm:
+    // PSCI's SYSTEM_RESET, after the console has drained. The gate requires
+    // the loader to start again.
+    Gate::new("test-boot", "boot-reset", false)
+        .only(Arch::AArch64)
+        .resetting(),
+    Gate::new("test-boot", "boot-reset", false)
+        .only(Arch::Armv7a)
+        .resetting(),
     Gate::new("test-shell", "shell", true),
     Gate::new("test-vfs", "vfs", true).only(Arch::X86_64),
     Gate::new("test-net", "net", true),
@@ -358,6 +379,9 @@ fn run_gate(
     }
     if gate.userland {
         let _ = command.args(["--init", init]);
+    }
+    if gate.reset {
+        let _ = command.arg("--reset");
     }
     if let Some(machine) = gate.arm_machine {
         let _ = command.env("FERRIX_ARM_MACHINE", machine);
