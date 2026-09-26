@@ -177,8 +177,8 @@ impl Core {
             Some(0xD4E | 0xD4F) => 132,
             // Cortex-A715, Cortex-A720.
             Some(0xD4D | 0xD81) => 38,
-            // Cortex-A78, A78AE, A78C, X1, A710, X2, Neoverse N2, V1.
-            Some(0xD41 | 0xD42 | 0xD4B | 0xD44 | 0xD47 | 0xD48 | 0xD49 | 0xD40) => 32,
+            // Cortex-A78, A78AE, A78C, X1, X1C, A710, X2, Neoverse N2, V1.
+            Some(0xD41 | 0xD42 | 0xD4B | 0xD44 | 0xD4C | 0xD47 | 0xD48 | 0xD49 | 0xD40) => 32,
             // Cortex-A76, A77, A76AE, Neoverse N1.
             Some(0xD0B..=0xD0E) => 24,
             // Cortex-A57, A72.

@@ -157,7 +157,7 @@ unimplemented `hvc` on a machine with no EL2 is an undefined instruction.
 |---|---|---|
 | Spectre v1 | clamps with `csdb` (§2) | always |
 | Spectre v2 | `SMCCC_ARCH_WORKAROUND_1` when that core switches address space | the core lacks `CSV2`, is not a Cortex-A35, A53 or A55, and firmware answers that *this core* needs the workaround |
-| Spectre-BHB | a loop of taken branches on every vector entry from EL0 — 8 on Cortex-A57/A72, 24 on A76/A77/N1, 32 on A78/X1/A710/X2/N2/V1, 38 on A715/A720, 132 on X3/V2 (Linux's figures); one count for the machine, the largest any core needs | the core is on Arm's list and lacks `ECBHB` |
+| Spectre-BHB | a loop of taken branches on every vector entry from EL0 — 8 on Cortex-A57/A72, 24 on A76/A77/N1, 32 on A78/X1/X1C/A710/X2/N2/V1, 38 on A715/A720, 132 on X3/V2 (Linux's figures); one count for the machine, the largest any core needs | the core is on Arm's list and lacks `ECBHB` |
 | Speculative store bypass | `SCTLR_EL1.DSSBS` cleared, so EL1 runs with `PSTATE.SSBS` clear from every exception on, and `MSR SSBS` where the core has it; a program starts with it clear. Without `SSBS`, `SMCCC_ARCH_WORKAROUND_2` | the core has `SSBS`, or firmware answers that this core needs workaround 2 |
 | Meltdown | **none** — reported | §6 |
 
@@ -171,6 +171,14 @@ headers, not written from memory. The list's other entries are other
 implementers' cores (Broadcom's Brahma-B53, HiSilicon's TSV110, Qualcomm's Kryo
 silver parts) and are not built: such a core without `CSV2` is reported NOT
 covered unless firmware covers it.
+
+**The Spectre-BHB figures** are Linux's `spectre_bhb_loop_affected`, in the
+same `proton-pack.c`. The Cortex-X1C, part `0xD4C` in both trees'
+`cputype.h`, is in its 32-branch list and was missing here until 2026-09-26:
+an X1C would have been reported "not on Arm's list" and run without the loop.
+Linux's lists also hold other implementers' cores — Qualcomm's Kryo 4xx gold
+and HiSilicon's HIP09 at 24, Ampere's Ampere-1 at 11 — which are not built,
+so such a core is reported not on the list.
 
 **Firmware is asked per core.** The SMC Calling Convention (ARM DEN 0028D,
 issue 1.3, §7.5.2 and §7.6.2) defines `SMCCC_ARCH_FEATURES`' answer about each workaround
