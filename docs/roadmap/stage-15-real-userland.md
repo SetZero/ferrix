@@ -132,9 +132,15 @@ desktop image -- `run-compositor`, the compositor's gates and a board's card
 each program it starts in a scope of its own. `test-jobs` types its session
 at the getty's shell.
 
-**Still to do:** nothing of L1 to L10. L11 to L13 of `docs/INIT.md` are
-later by design: `devmgr` on `libs/init/svc`'s restart policy, init starting
-`devmgr`, and the sandboxing keys after the rest of stage 13.
+**Done -- L11, `devmgr` on the restart policy (2026-09-26, 2 points).** The
+policy is its own crate, `libs/init/restart`, which allocates nothing so
+that `devmgr` can link it, and `libs/init/svc` re-exports it; its start limit
+is systemd's fixed window. `devmgr` restarts a driver by it and reports how
+each driver died through K6.
+
+**Still to do:** nothing of L1 to L11. L12 and L13 of `docs/INIT.md` are
+later by design: init starting `devmgr`, and the sandboxing keys after the
+rest of stage 13.
 
 **Designed (2026-09-23): `docs/INIT.md`.** `/sbin/init` is pid 1 and a
 service manager in one program. Its units are in systemd's syntax, with

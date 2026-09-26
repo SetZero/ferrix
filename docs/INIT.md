@@ -894,11 +894,14 @@ the system people will actually use.
 | L5, L6, L7, L9 | done, 2026-09-26 | "Give the manager reload, a readiness status, and socket units"; "Add libs/init/svc-proto: svc's control records and readiness lines"; "Give init svc, the log, readiness, sockets and resources" |
 | L8 | done, 2026-09-26: the kernel half (K2, K3, K4, K6), then init's | "Let a parent hand its child a bootstrap handle across execve" and the five after it; "Route the directory's OPENs, and start Type=native services" |
 | L10 | done, 2026-09-26 | "Boot the images through init, and the compositor as its service" |
-| L11 to L13 | not started, and later by design (§13) | |
+| L11 | done, 2026-09-26, by ferrix-55b with T0 | "Give the restart policy a crate of its own that allocates nothing"; "Restart drivers by the service manager's policy, and report how they died" |
+| L12, L13 | not started, and later by design (§13) | |
 
-All of L1 to L10's 67 points are spent. L11 to L13, 18 more, come later:
-`devmgr` sharing the restart policy, init starting `devmgr` (the microkernel
-step), and the sandboxing keys, which wait for the rest of stage 13.
+All of L1 to L11's 69 points are spent. L11 put `devmgr` on the restart
+policy, which moved into `libs/init/restart` because `devmgr` has no
+allocator; its start limit became systemd's fixed window. L12 and L13, 16
+more, come later: init starting `devmgr` (the microkernel step), and the
+sandboxing keys, which wait for the rest of stage 13.
 
 **L1, as built (5 points).** `libs/init/svc` is on `main`: `no_std` with
 `alloc`, `forbid(unsafe_code)`, 52 host tests, a Miri step in CI and in
