@@ -44,6 +44,8 @@
 //! `LD_LIBRARY_PATH` puts before the volume's libraries. glibc's other names,
 //! `libm.so.6` and the rest, the loader answers with ferrousli whatever the
 //! volume holds. The forty other libraries are Debian's as before.
+//! `test-chrome-window` takes the same two flags, for the full browser and
+//! the eighty objects it loads.
 //!
 //! # Why x86-64 only
 //!
@@ -100,6 +102,58 @@ pub(crate) const LINKS: &[(&str, &str)] = &[
     // sound goes through alsa-lib to `/dev/snd` (docs/AUDIO.md §3.5).
     ("usr/share/alsa", "/data/usr/share/alsa"),
 ];
+
+/// The search path that finds ferrousli's `libc.so.6` in `/lib` before the
+/// volume's libraries.
+const LIBRARY_PATH: &str = "/lib:/lib/x86_64-linux-gnu";
+
+/// Whether `--interpreter` or `--library` asks for Chrome on ferrousli.
+pub(crate) fn on_ferrousli(args: &Args) -> bool {
+    args.interpreter.is_some() || !args.libraries.is_empty()
+}
+
+/// The files that stand ferrousli in for the volume's glibc: [`LINKS`] less
+/// `/lib64`, whose place the loader takes, and the loader at the path the
+/// program `name` beside the volume names, with `libc.so.6` in `/lib`.
+///
+/// # Errors
+///
+/// As [`shell::carried_for`], and when the program is not beside the volume.
+pub(crate) fn ferrousli_files(
+    arch: Arch,
+    volume: &std::path::Path,
+    name: &str,
+    args: &Args,
+) -> Result<Vec<crate::ports::File>> {
+    let kept: Vec<_> = LINKS
+        .iter()
+        .copied()
+        .filter(|(path, _)| *path != "lib64")
+        .collect();
+    let mut files = rustc::files(&kept);
+    files.extend(shell::carried_for(
+        arch,
+        &program_on_host(volume, name)?,
+        args,
+    )?);
+    Ok(files)
+}
+
+/// The `env =` line that gives what the compositor starts ferrousli's search
+/// path, when Chrome is on ferrousli.
+pub(crate) fn window_library_path(ferrousli: bool) -> String {
+    if ferrousli {
+        format!("env = LD_LIBRARY_PATH,{LIBRARY_PATH}\n")
+    } else {
+        String::new()
+    }
+}
+
+/// The headless shell, under the tree beside the volume.
+const HEADLESS_PROGRAM: &str = "chrome/chrome-headless-shell";
+
+/// The full browser, under the tree beside the volume.
+pub(crate) const WINDOW_PROGRAM: &str = "chrome-window/chrome";
 
 /// Guest memory unless `--memory` says otherwise: Chrome wants about two
 /// GiB to open a page, and the page cache holds its 260 MiB of code.
@@ -285,19 +339,20 @@ pub(crate) fn volume() -> Result<std::path::PathBuf> {
 fn script(ferrousli: bool) -> String {
     let script = SCRIPT.replace("PAGE", PAGE).replace("PICTURE", PICTURE);
     if ferrousli {
-        format!("export LD_LIBRARY_PATH=/lib:/lib/x86_64-linux-gnu\n{script}")
+        format!("export LD_LIBRARY_PATH={LIBRARY_PATH}\n{script}")
     } else {
         script
     }
 }
 
-/// Chrome as `scripts/fetch/fetch-chrome.sh` unpacked it beside the volume, whose
-/// `PT_INTERP` says where a loader of ferrousli's must go.
-fn program_on_host(volume: &std::path::Path) -> Result<std::path::PathBuf> {
+/// Chrome's program `name` as `scripts/fetch/fetch-chrome.sh` unpacked it beside
+/// the volume, whose `PT_INTERP` says where a loader of ferrousli's must go.
+fn program_on_host(volume: &std::path::Path, name: &str) -> Result<std::path::PathBuf> {
     let program = volume
         .parent()
         .unwrap_or(std::path::Path::new("."))
-        .join("tree/chrome/chrome-headless-shell");
+        .join("tree")
+        .join(name);
     if program.is_file() {
         Ok(program)
     } else {
@@ -341,7 +396,7 @@ pub(crate) fn test_chrome(args: &Args) -> Result<()> {
     let mut args = args.clone();
     let volume = volume()?;
     args.data_image = Some(volume.clone());
-    let ferrousli = args.interpreter.is_some() || !args.libraries.is_empty();
+    let ferrousli = on_ferrousli(&args);
     if !args.memory_given {
         args.memory = MEMORY;
     }
@@ -359,15 +414,7 @@ pub(crate) fn test_chrome(args: &Args) -> Result<()> {
     let bytes = std::fs::read(&shell)
         .map_err(|error| Error::new(format!("reading {}: {error}", shell.display())))?;
     let links = if ferrousli {
-        // The loader takes `/lib64`'s place, so the link to the volume's goes.
-        let kept: Vec<_> = LINKS
-            .iter()
-            .copied()
-            .filter(|(path, _)| *path != "lib64")
-            .collect();
-        let mut files = rustc::files(&kept);
-        files.extend(shell::carried_for(arch, &program_on_host(&volume)?, &args)?);
-        files
+        ferrousli_files(arch, &volume, HEADLESS_PROGRAM, &args)?
     } else {
         rustc::files(LINKS)
     };

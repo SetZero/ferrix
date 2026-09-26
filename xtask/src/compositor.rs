@@ -4742,11 +4742,13 @@ const CHROME_WINDOW_PATIENCE: Duration = Duration::from_secs(240);
 /// The configuration `test-chrome-window` gives the compositor.
 ///
 /// Chrome's environment and command are [`crate::chrome::window_command`]'s,
-/// which `run-compositor --chrome` starts too.
-fn chrome_window_config() -> String {
+/// which `run-compositor --chrome` starts too; on ferrousli, with its search
+/// path.
+fn chrome_window_config(ferrousli: bool) -> String {
     format!(
-        "# Carried into the initramfs by `cargo xtask test-chrome-window`.\n{}exec-once = {}\n",
+        "# Carried into the initramfs by `cargo xtask test-chrome-window`.\n{}{}exec-once = {}\n",
         crate::chrome::WINDOW_ENV,
+        crate::chrome::window_library_path(ferrousli),
         crate::chrome::window_command(CHROME_WINDOW_PAGE)
     )
 }
@@ -4851,12 +4853,19 @@ pub(crate) fn test_chrome_window(args: &Args) -> Result<()> {
         ));
     }
     let mut args = args.clone();
-    args.data_image = Some(crate::chrome::volume()?);
+    let volume = crate::chrome::volume()?;
+    args.data_image = Some(volume.clone());
     if !args.memory_given {
         args.memory = crate::chrome::MEMORY;
     }
+    let ferrousli = crate::chrome::on_ferrousli(&args);
     let programs = Programs::build(arch)?;
-    let mut ports = crate::rustc::files(crate::chrome::LINKS);
+    let mut ports = if ferrousli {
+        println!("  {arch}: Chrome in a window on ferrousli's loader and libc.so.6");
+        crate::chrome::ferrousli_files(arch, &volume, crate::chrome::WINDOW_PROGRAM, &args)?
+    } else {
+        crate::rustc::files(crate::chrome::LINKS)
+    };
     ports.extend(crate::chrome::window_files());
     let carried = Carried {
         ports,
@@ -4865,7 +4874,7 @@ pub(crate) fn test_chrome_window(args: &Args) -> Result<()> {
     let (image, kernel) = build_image(
         arch,
         &programs,
-        &undithered(&chrome_window_config()),
+        &undithered(&chrome_window_config(ferrousli)),
         carried,
         &args,
     )?;
