@@ -3,7 +3,8 @@
  * names the headless shell needs: BSD's err and warn families, the terminal
  * table, lockf, __strlcpy_chk, GNU's obstacks, the rest of the new mount
  * API, and the reader-writer lock's kind -- libblkid and libmount, CUPS,
- * GMP, GnuTLS and libunistring call them.
+ * GMP, GnuTLS and libunistring call them -- and posix_fadvise64, which the
+ * browser itself imports.
  *
  * With "strlcpy" as its argument the program asks __strlcpy_chk for more than
  * the object holds, which must abort before writing.
@@ -38,6 +39,10 @@ int fsopen(const char *, unsigned int);
 int fsconfig(int, unsigned int, const char *, const void *, int);
 int fsmount(int, unsigned int, unsigned int);
 int fspick(int, const char *, unsigned int);
+
+/* The header makes it posix_fadvise; a glibc program calls it by name. */
+#undef posix_fadvise64
+int posix_fadvise64(int, off_t, off_t, int);
 
 int pthread_rwlockattr_setkind_np(pthread_rwlockattr_t *, int);
 int pthread_rwlockattr_getkind_np(const pthread_rwlockattr_t *, int *);
@@ -179,6 +184,15 @@ int main(int argc, char **argv)
 		CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 0);
 		errno = 0;
 		CHECK(lockf(fd, 9, 0) == -1 && errno == EINVAL);
+		close(fd);
+	}
+
+	/* posix_fadvise64: advice taken, and the error returned, not set. */
+	{
+		int fd = open("locked", O_RDONLY);
+		CHECK(fd >= 0);
+		CHECK(posix_fadvise64(fd, 0, 0, POSIX_FADV_SEQUENTIAL) == 0);
+		CHECK(posix_fadvise64(-1, 0, 0, POSIX_FADV_NORMAL) == EBADF);
 		close(fd);
 	}
 

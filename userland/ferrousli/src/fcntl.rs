@@ -351,6 +351,13 @@ pub extern "C" fn posix_fadvise(fd: c_int, offset: i64, len: i64, advice: c_int)
     }
 }
 
+/// glibc's large-file name for [`posix_fadvise`], which Chrome's full
+/// browser imports.
+#[cfg_attr(not(test), unsafe(no_mangle))]
+pub extern "C" fn posix_fadvise64(fd: c_int, offset: i64, len: i64, advice: c_int) -> c_int {
+    posix_fadvise(fd, offset, len, advice)
+}
+
 /// The `fallocate` system call: `mode` done to the `len` bytes of `fd` from
 /// `offset`, answered as the kernel answers it.
 #[cfg(not(target_arch = "arm"))]
