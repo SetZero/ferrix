@@ -14,6 +14,8 @@
 //!   refused -- the Pixel 7's console, whose parser is the one part of it a
 //!   machine with a PL011 can run;
 //! * which driver a GIC firmware describes with version zero gets;
+//! * rewinding a system call a signal interrupted, and pointing one whose
+//!   restart is `restart_syscall`'s at that call;
 //! * masking a line at the controller and letting it through again, which a
 //!   device whose driver holds its interrupt relies on, read back from the
 //!   distributor or this core's redistributor, a shared line and a private
@@ -65,7 +67,8 @@ pub(crate) fn check() -> Result<(), &'static str> {
     let decoded = check_trap_decoding()?;
     check_frames_render()?;
     let zones = check_ramoops_zones()?;
-    let versions = super::gic::check_described_version()?;
+    let versions = check_described_version()?;
+    check_restart_rewind()?;
     let lines = check_masking()?;
     let refused = check_refusals()?;
     println!(
@@ -300,4 +303,69 @@ fn check_refusals() -> Result<usize, &'static str> {
         refused += 1;
     }
     Ok(refused)
+}
+
+/// Which driver each description firmware can give gets: the version it
+/// states, or for version zero the one its register blocks imply. Returns
+/// how many descriptions.
+///
+/// # Errors
+///
+/// A description given the wrong driver.
+fn check_described_version() -> Result<usize, &'static str> {
+    let layout = |version, cpu_interface, redistributors| super::gic::Layout {
+        distributor: 0x0800_0000,
+        cpu_interface,
+        redistributors,
+        version,
+        msi_frame: None,
+        its: None,
+    };
+    let cases = [
+        (layout(0, 0x0801_0000, None), 2),
+        (layout(0, 0, Some((0x080A_0000, 0x00F6_0000))), 3),
+        (layout(2, 0x0801_0000, None), 2),
+        (layout(3, 0, Some((0x080A_0000, 0x00F6_0000))), 3),
+        (layout(4, 0, Some((0x080A_0000, 0x00F6_0000))), 4),
+        // Neither register block: nothing to probe, and nothing is chosen.
+        (layout(0, 0, None), 0),
+    ];
+    if cases
+        .iter()
+        .any(|(layout, version)| super::gic::described_version(black_box(layout)) != *version)
+    {
+        return Err("a GIC firmware described was given the wrong driver");
+    }
+    Ok(cases.len())
+}
+
+/// A system call a signal interrupted is rewound to run again when the
+/// handler returns, and one whose restart is `restart_syscall`'s -- a
+/// `clock_nanosleep` a stop interrupted -- is pointed at that call instead:
+/// the program's own number in `x8` is kept for the first and replaced for
+/// the second, `x0` gets its argument back, and the return address steps
+/// back over the `svc`. Linux's `arch_do_signal_or_restart`.
+fn check_restart_rewind() -> Result<(), &'static str> {
+    use ferrix_linux_abi::nr::aarch64::{CLOCK_NANOSLEEP, RESTART_SYSCALL};
+
+    for restart_block in [false, true] {
+        let mut trap = frame(FROM_USER, 0b01_0101, 0);
+        trap.x[0] = (-4_i64) as u64;
+        trap.x[8] = CLOCK_NANOSLEEP as u64;
+        let mut context = super::UserContext::from_trap(&trap);
+        context.rewind_syscall(CLOCK_NANOSLEEP as u64, 7, black_box(restart_block));
+        context.store_trap(&mut trap);
+        let number = if restart_block {
+            RESTART_SYSCALL
+        } else {
+            CLOCK_NANOSLEEP
+        };
+        if trap.x.first() != Some(&7)
+            || trap.x.get(8) != Some(&(number as u64))
+            || trap.elr != PC - 4
+        {
+            return Err("an interrupted system call was not rewound to run again as it must");
+        }
+    }
+    Ok(())
 }

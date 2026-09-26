@@ -13,6 +13,8 @@
 //!   here: a `console=` override in `/chosen/bootargs`, one naming no port,
 //!   and a tree with no `stdout-path` whose first port is turned off --
 //!   what a board being brought up has and QEMU's `virt` does not;
+//! * cleaning a buffer from the data cache for a device that does not snoop,
+//!   which leaves what it holds;
 //! * masking a line at the controller and letting it through again, which a
 //!   device whose driver holds its interrupt relies on, read back from the
 //!   distributor, a shared line and a private one;
@@ -27,7 +29,7 @@ use alloc::format;
 use alloc::vec::Vec;
 use core::hint::black_box;
 
-use ferrix_fdt::{FDT_BEGIN_NODE, FDT_END, FDT_END_NODE, FDT_MAGIC, FDT_PROP, HEADER_SIZE};
+use ferrix_fdt::{FDT_BEGIN_NODE, FDT_END, FDT_END_NODE, FDT_MAGIC, FDT_PROP, Fdt, HEADER_SIZE};
 use ferrix_linux_abi::types::{SIGBUS, SIGILL, SIGSEGV, SIGTRAP};
 
 use super::trap::{TrapFrame, UserRegs, classify, fault_signal};
@@ -69,7 +71,8 @@ const FAR: u32 = 0x0dea_d000;
 pub(crate) fn check() -> Result<(), &'static str> {
     let decoded = check_trap_decoding()?;
     check_frames_render()?;
-    let trees = super::console::check_chosen(&console_trees())?;
+    let trees = check_chosen(&console_trees())?;
+    check_cache_maintenance()?;
     let lines = check_masking()?;
     let refused = check_refusals()?;
     println!(
@@ -334,7 +337,7 @@ impl Tree {
 const PL011_AT: u32 = 0x0900_0000;
 const USART_AT: u32 = 0x4001_0000;
 
-/// Trees for [`super::console::check_chosen`], each with the address of the
+/// Trees for [`check_chosen`], each with the address of the
 /// port it must choose.
 fn console_trees() -> Vec<(Vec<u8>, u64)> {
     let mut trees = Vec::new();
@@ -422,4 +425,45 @@ fn check_refusals() -> Result<usize, &'static str> {
         return Err("the GICv2m doorbell is not a page");
     }
     Ok(4)
+}
+
+/// The port [`super::console::chosen`] picks from each of `trees`, held to the address of
+/// the one it must: for the boot check, whose trees have
+/// what QEMU's `virt` does not -- an override in `/chosen/bootargs`, no
+/// `stdout-path`, a port turned off. Returns how many trees.
+///
+/// # Errors
+///
+/// A tree that does not parse, or one whose console is another port.
+fn check_chosen(trees: &[(Vec<u8>, u64)]) -> Result<usize, &'static str> {
+    for (blob, address) in trees {
+        let tree =
+            Fdt::parse(blob).map_err(|_| "a device tree built for the check did not parse")?;
+        let chosen = super::console::chosen(&tree)
+            .and_then(|(node, _)| node.reg().next())
+            .map(|registers| registers.address);
+        if chosen != Some(*address) {
+            return Err("a device tree's console was not the port its description chooses");
+        }
+    }
+    Ok(trees.len())
+}
+
+/// Cleaning and invalidating a range of the data cache to the point of
+/// coherency leaves what the range holds: the maintenance a buffer gets
+/// before a device that does not snoop the caches is given it -- the DK1's
+/// display and GPU, which QEMU's `virt` does not have. Over an odd start and
+/// length, so the first and last lines are partial.
+fn check_cache_maintenance() -> Result<(), &'static str> {
+    let buffer: Vec<u8> = (0..=255_u8).cycle().take(1000).collect();
+    let start = buffer.as_ptr() as u64 + 3;
+    super::flush_for_device(black_box(start), black_box(990));
+    if buffer
+        .iter()
+        .zip((0..=255_u8).cycle())
+        .any(|(held, was)| *held != was)
+    {
+        return Err("cleaning a buffer from the data cache changed what it held");
+    }
+    Ok(())
 }

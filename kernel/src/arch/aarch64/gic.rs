@@ -27,21 +27,21 @@ use crate::arch::gicv2;
 static VERSION: AtomicU8 = AtomicU8::new(0);
 
 /// Where the two register blocks are, according to firmware.
-struct Layout {
+pub(super) struct Layout {
     /// Physical address of the distributor.
-    distributor: u64,
+    pub(super) distributor: u64,
     /// Physical address of the CPU interface, which every core shares. Zero on
     /// a GICv3, which has none.
-    cpu_interface: u64,
+    pub(super) cpu_interface: u64,
     /// The first redistributor discovery range, a GICv3's: address and bytes.
-    redistributors: Option<(u64, u64)>,
+    pub(super) redistributors: Option<(u64, u64)>,
     /// The architecture version firmware reports, or zero for "probe it".
-    version: u8,
+    pub(super) version: u8,
     /// The first `GICv2m` frame: its address, and its SPI range if firmware
     /// states one.
-    msi_frame: Option<(u64, Option<(u32, u32)>)>,
+    pub(super) msi_frame: Option<(u64, Option<(u32, u32)>)>,
     /// The first GICv3 ITS's control frame.
-    its: Option<u64>,
+    pub(super) its: Option<u64>,
 }
 
 /// Read the distributor and CPU interface addresses out of the MADT.
@@ -118,7 +118,7 @@ fn first_its(madt: &Madt<'_>) -> Option<u64> {
 /// machine that also gave a CPU interface address, that is a GICv2 layout:
 /// GICv3 has no CPU interface to give an address for, and has a redistributor
 /// range instead.
-const fn described_version(layout: &Layout) -> u8 {
+pub(super) const fn described_version(layout: &Layout) -> u8 {
     match layout.version {
         0 if layout.cpu_interface != 0 => 2,
         0 if layout.redistributors.is_some() => 3,
@@ -289,40 +289,6 @@ pub(super) fn idle_line_for_check(private: bool) -> Option<u32> {
     } else {
         gicv2::idle_line_for_check(private)
     }
-}
-
-/// Which driver each description firmware can give gets: the version it
-/// states, or for version zero the one its register blocks imply. Returns
-/// how many descriptions.
-///
-/// # Errors
-///
-/// A description given the wrong driver.
-pub(super) fn check_described_version() -> Result<usize, &'static str> {
-    let layout = |version, cpu_interface, redistributors| Layout {
-        distributor: 0x0800_0000,
-        cpu_interface,
-        redistributors,
-        version,
-        msi_frame: None,
-        its: None,
-    };
-    let cases = [
-        (layout(0, 0x0801_0000, None), 2),
-        (layout(0, 0, Some((0x080A_0000, 0x00F6_0000))), 3),
-        (layout(2, 0x0801_0000, None), 2),
-        (layout(3, 0, Some((0x080A_0000, 0x00F6_0000))), 3),
-        (layout(4, 0, Some((0x080A_0000, 0x00F6_0000))), 4),
-        // Neither register block: nothing to probe, and nothing is chosen.
-        (layout(0, 0, None), 0),
-    ];
-    if cases
-        .iter()
-        .any(|(layout, version)| described_version(core::hint::black_box(layout)) != *version)
-    {
-        return Err("a GIC firmware described was given the wrong driver");
-    }
-    Ok(cases.len())
 }
 
 /// Claim the interrupt that arrived, or `None` if there was none.
