@@ -5132,9 +5132,9 @@ struct BenchSnap {
     idle: u64,
     /// `/proc/meminfo`, in KiB, by key.
     memory: std::collections::BTreeMap<String, u64>,
-    /// The frames the compositor had reported drawing before it, and the
-    /// microseconds they took.
-    frames: (u64, u64),
+    /// The reports the compositor had made before it, the frames they
+    /// counted, and the microseconds those frames took.
+    frames: (u64, u64, u64),
 }
 
 impl BenchSnap {
@@ -5170,13 +5170,14 @@ impl BenchSnap {
 /// and the compositor's frame reports between them.
 fn bench_snapshots(said: &[String]) -> Vec<(String, BenchSnap)> {
     let mut snaps: Vec<(String, BenchSnap)> = Vec::new();
-    let (mut counted, mut spent) = (0u64, 0u64);
+    let (mut reports, mut counted, mut spent) = (0u64, 0u64, 0u64);
     for line in said {
         let line = said_on_its_own(line);
         if let Some(rest) = line.strip_prefix("hyprix: frames ") {
             let words: Vec<&str> = rest.split_whitespace().collect();
             // "N slowest of the last M X us, all of them Y us (...".
             if let (Some(m), Some(y)) = (words.get(5), words.get(11)) {
+                reports += 1;
                 counted += m.parse::<u64>().unwrap_or(0);
                 spent += y.parse::<u64>().unwrap_or(0);
             }
@@ -5190,7 +5191,7 @@ fn bench_snapshots(said: &[String]) -> Vec<(String, BenchSnap)> {
         };
         if snaps.last().is_none_or(|(last, _)| last != tag) {
             let snap = BenchSnap {
-                frames: (counted, spent),
+                frames: (reports, counted, spent),
                 ..BenchSnap::default()
             };
             snaps.push((tag.to_owned(), snap));
@@ -5202,8 +5203,17 @@ fn bench_snapshots(said: &[String]) -> Vec<(String, BenchSnap)> {
     snaps
 }
 
-/// One phase's row: how busy the machine was, the frames drawn and their
-/// time, and the processor time each process name spent.
+/// One phase's row: how busy the machine was, the compositor's reports in
+/// it, the frames they counted and their time, and the processor time each
+/// process name spent.
+///
+/// The frames per second are the frames per report, not the frames over
+/// ten seconds. The compositor reports at the first frame a second or more
+/// after its last report, so a phase holds whole reports only: ten of them,
+/// or nine when the phase's ten seconds and a little began just after one.
+/// Counted over ten seconds, the nine read as sixty frames lost, a second
+/// of nothing drawn that nobody saw. A report that covers a real stall
+/// counts fewer frames for its second, so the rate still shows it.
 fn bench_row(tag: &str, before: &BenchSnap, after: &BenchSnap) -> String {
     let mut by: std::collections::BTreeMap<&str, u64> = std::collections::BTreeMap::new();
     for (pid, (name, ticks)) in &after.ticks {
@@ -5219,8 +5229,14 @@ fn bench_row(tag: &str, before: &BenchSnap, after: &BenchSnap) -> String {
     } else {
         100.0 * busy as f64 / (busy + idle) as f64
     };
-    let drawn = after.frames.0.saturating_sub(before.frames.0);
-    let took = after.frames.1.saturating_sub(before.frames.1);
+    let reports = after.frames.0.saturating_sub(before.frames.0);
+    let drawn = after.frames.1.saturating_sub(before.frames.1);
+    let took = after.frames.2.saturating_sub(before.frames.2);
+    let rate = if reports == 0 {
+        0.0
+    } else {
+        drawn as f64 / reports as f64
+    };
     let per_frame = if drawn == 0 {
         0.0
     } else {
@@ -5233,8 +5249,7 @@ fn bench_row(tag: &str, before: &BenchSnap, after: &BenchSnap) -> String {
         .map(|(name, ticks)| format!("{name} {}%", ticks / 10))
         .collect();
     format!(
-        "bench-chrome: {tag:<7} {busy_share:>5.1} {drawn:>7} {:>5.1} {per_frame:>9.2}  {}\n",
-        drawn as f64 / 10.0,
+        "bench-chrome: {tag:<7} {busy_share:>5.1} {reports:>7} {drawn:>6} {rate:>5.1} {per_frame:>9.2}  {}\n",
         spent.join(", ")
     )
 }
@@ -5252,7 +5267,7 @@ fn bench_report(said: &[String]) -> Result<String> {
         )));
     }
     let mut out = String::from(
-        "bench-chrome: phase   busy%  frames   fps  ms/frame  processor time by process name\n",
+        "bench-chrome: phase   busy% reports frames   fps  ms/frame  processor time by process name\n",
     );
     for pair in snaps.windows(2) {
         if let [(_, before), (tag, after)] = pair {
@@ -5513,8 +5528,9 @@ mod tests {
         }
         let report = super::bench_report(&said).unwrap();
         assert!(
-            report
-                .contains("bench-chrome: idle     50.0      60   6.0      5.00  chrome 5%, gpu 2%"),
+            report.contains(
+                "bench-chrome: idle     50.0       1     60  60.0      5.00  chrome 5%, gpu 2%"
+            ),
             "{report}"
         );
         assert!(
