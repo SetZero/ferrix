@@ -25,6 +25,18 @@
 //! link for each into `/data` ([`LINKS`]). `/usr` itself stays the
 //! initramfs's, where the ports are.
 //!
+//! # On ferrousli
+//!
+//! With `--interpreter ferrousli --library ferrousli`, as `test-chrome` takes
+//! them, every program on the volume runs on ferrousli's loader and
+//! `libc.so.6` in glibc's place: the loader goes where their `PT_INTERP`
+//! names, instead of the link to Debian's, and `libc.so.6` into `/lib`, which
+//! `LD_LIBRARY_PATH` puts first. That is `rustc`, `cargo`, the gcc driver,
+//! `collect2`, `rust-lld` and the program they make -- LLVM and
+//! `librustc_driver` among the libraries, which found in ferrousli's loader
+//! `$ORIGIN`, program headers past the first page, and dependency-first
+//! constructors, and in the library glibc's mutex layout.
+//!
 //! # Why x86-64 only
 //!
 //! The volume holds x86-64 binaries. An AArch64 sysroot is the same script
@@ -32,7 +44,7 @@
 
 use crate::args::Args;
 use crate::paths::Arch;
-use crate::{Error, Result, cargo, fat, initramfs, native, ports, qemu, zinc};
+use crate::{Error, Result, cargo, fat, initramfs, native, ports, qemu, shell, zinc};
 
 /// The script the shell runs. Version checks first, so a failure says whether
 /// the toolchain ran at all or only its link failed.
@@ -49,6 +61,20 @@ cc hello.c -o hello-c || exit 7
 ./hello-c || exit 8
 exit 16
 "#;
+
+/// The search path that finds ferrousli's `libc.so.6` in `/lib` before the
+/// volume's libraries.
+const LIBRARY_PATH: &str = "/lib:/lib/x86_64-linux-gnu";
+
+/// The script, with ferrousli's search path first when the compiler runs on
+/// it.
+fn script(ferrousli: bool) -> String {
+    if ferrousli {
+        format!("export LD_LIBRARY_PATH={LIBRARY_PATH}\n{SCRIPT}")
+    } else {
+        SCRIPT.to_owned()
+    }
+}
 
 /// What the program rustc made must print.
 const HELLO: &str = "rustc-gate: hello from rustc on Ferrix";
@@ -236,17 +262,36 @@ pub(crate) fn test_rustc(args: &Args) -> Result<()> {
         args.timeout = TIMEOUT;
     }
 
+    let ferrousli = args.interpreter.is_some() || !args.libraries.is_empty();
+
     let shell =
         zinc::built(arch)?.ok_or_else(|| Error::new("zinc could not be built for x86-64"))?;
-    println!("  {arch}: building an image whose shell compiles with rustc");
+    let libc = if ferrousli { "ferrousli" } else { "glibc" };
+    println!("  {arch}: building an image whose shell compiles with rustc on {libc}");
     let loader = cargo::build_loader(arch, args.release)?;
-    let kernel = cargo::build_kernel_with_init(arch, args.release, &shell, SCRIPT)?;
+    let kernel = cargo::build_kernel_with_init(arch, args.release, &shell, &script(ferrousli))?;
     let natives = native::build(arch, args.release)?;
     let bytes = std::fs::read(&shell)
         .map_err(|error| Error::new(format!("reading {}: {error}", shell.display())))?;
+    let mut links = if ferrousli {
+        // The loader takes `/lib64`'s place, so the link to the volume's goes.
+        let kept: Vec<_> = LINKS
+            .iter()
+            .copied()
+            .filter(|(path, _)| *path != "lib64")
+            .collect();
+        let mut links = files(&kept);
+        links.extend(shell::carried_for(
+            arch,
+            &tree()?.join("rust/bin/rustc"),
+            &args,
+        )?);
+        links
+    } else {
+        files(LINKS)
+    };
     // `selfhost` links the headers beside [`LINKS`] itself, so they are
     // this gate's own addition, for its hello.c.
-    let mut links = files(LINKS);
     links.extend(files(&[("usr/include", "/data/usr/include")]));
     // zinc alone: the script is builtins, and every program it runs is on
     // the volume.
@@ -257,9 +302,7 @@ pub(crate) fn test_rustc(args: &Args) -> Result<()> {
         "  {arch}: compiling hello.rs on Ferrix with {} MiB (timeout {}s)",
         args.memory, args.timeout
     );
-    let lines = qemu::watch_then(arch, &image, &kernel, &args, crate::shell::EXITED, |_| {
-        Ok(())
-    })?;
+    let lines = qemu::watch_then(arch, &image, &kernel, &args, shell::EXITED, |_| Ok(()))?;
     judge(arch, &lines)
 }
 
@@ -274,7 +317,7 @@ fn judge(arch: Arch, lines: &[String]) -> Result<()> {
         .unwrap_or_default();
     let exited = after_boot
         .iter()
-        .find_map(|line| line.trim().strip_prefix(crate::shell::EXITED))
+        .find_map(|line| line.trim().strip_prefix(shell::EXITED))
         .map(str::trim);
     let ran = after_boot.iter().any(|line| line.starts_with(VERSION));
     let cargo_ran = after_boot
