@@ -60,6 +60,7 @@ use crate::timer;
 use crate::user::vmo::Vmo;
 
 pub(crate) mod drm;
+pub(crate) mod edid;
 
 /// Linux's major number for DRM devices.
 pub(crate) const DRM_MAJOR: u32 = 226;
@@ -177,6 +178,9 @@ pub(crate) struct Card {
     /// The modes scanout 0 runs, the running one first, for a card that
     /// runs only some (HELLO's timings); empty for one that shows any size.
     timings: Timings,
+    /// Each head's EDID, where `drm.edid_firmware` named one that could be
+    /// read ([`edid::load`]); `None` for a head without.
+    edids: Vec<Option<Vec<u8>>>,
 }
 
 /// The range of the card VMO a buffer id was given.
@@ -438,6 +442,26 @@ impl Card {
     /// a card that shows any size.
     pub(crate) fn timings(&self) -> &[Timing] {
         self.timings.as_slice()
+    }
+
+    /// Whether `head`'s connector was given an EDID, connected or not: the
+    /// connectors that have the `EDID` property.
+    pub(crate) fn carries_edid(&self, head: usize) -> bool {
+        self.edids.get(head).is_some_and(Option::is_some)
+    }
+
+    /// `head`'s EDID while a display is there, as Linux's property holds the
+    /// blob only while the connector is connected, and none otherwise.
+    pub(crate) fn edid(&self, head: usize) -> Option<&[u8]> {
+        let connected = self
+            .modes
+            .lock()
+            .get(head)
+            .is_some_and(|mode| mode.enabled && head < self.scanouts);
+        if !connected {
+            return None;
+        }
+        self.edids.get(head)?.as_deref()
     }
 
     /// Whether the driver is gone.
@@ -1075,6 +1099,14 @@ fn accept(start: &Start, message: &ChannelMessage) -> Result<Arc<Card>, Refusal>
     // nearest it has.
     let core_port = Port::new().map_err(|_| Refusal::Malformed)?;
     let index = NUMBERS.take().ok_or(Refusal::Malformed)?;
+    let hdmi = matches!(start.device.location(), device::Location::Tree(_));
+    // Read before READY, as Linux reads an override at the connector's first
+    // probe: from the initramfs, which takes no time a driver would notice.
+    let edids = edid::load(
+        index,
+        drm::connector_type(hdmi),
+        usize::from(hello.scanouts).min(MAX_SCANOUTS),
+    );
     let card = Arc::new(Card {
         index,
         node: start.device.index(),
@@ -1099,8 +1131,9 @@ fn accept(start: &Start, message: &ChannelMessage) -> Result<Arc<Card>, Refusal>
         changed: Arc::new(WaitQueue::new()),
         opened: AtomicBool::new(false),
         dma: start.device.dma_shape(),
-        hdmi: matches!(start.device.location(), device::Location::Tree(_)),
+        hdmi,
         timings: hello.timings,
+        edids,
     });
 
     // Announced and listed before devmgr is told. devmgr answers a bind

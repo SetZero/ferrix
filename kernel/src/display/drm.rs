@@ -57,9 +57,9 @@ use ferrix_bootinfo::PAGE_SIZE;
 use ferrix_displayctl::message::{CURSOR_SIZE, MAX_DIMENSION, MAX_SCANOUTS, Rect, Status, Timing};
 use ferrix_linux_abi::drm::{
     self, CardRes, ClipRect, CreateDumb, Crtc, CrtcPageFlip, DestroyDumb, Event, EventVblank,
-    FbCmd, FbCmd2, FbDirtyCmd, Field, GetCap, GetConnector, GetEncoder, GetPlane, GetPlaneRes,
-    GetProperty, Layout, MapDumb, ModeCursor, ModeCursor2, ModeInfo, ObjGetProperties, PrimeHandle,
-    PropertyEnum, SetClientCap, Version,
+    FbCmd, FbCmd2, FbDirtyCmd, Field, GetBlob, GetCap, GetConnector, GetEncoder, GetPlane,
+    GetPlaneRes, GetProperty, Layout, MapDumb, ModeCursor, ModeCursor2, ModeInfo, ObjGetProperties,
+    PrimeHandle, PropertyEnum, SetClientCap, Version,
 };
 use ferrix_linux_abi::errno::Errno;
 use ferrix_linux_abi::socket::Width;
@@ -119,8 +119,29 @@ fn heads(card: &Card) -> usize {
 
 /// The plane `type` property's id, above every head's block.
 const TYPE_PROPERTY_ID: u32 = 1 + PER_HEAD * MAX_SCANOUTS as u32;
+/// The connector `EDID` property's id, after it.
+const EDID_PROPERTY_ID: u32 = TYPE_PROPERTY_ID + 1;
+/// The id of head 0's EDID blob; each head's is its own, in order.
+const FIRST_EDID_BLOB_ID: u32 = EDID_PROPERTY_ID + 1;
 /// The first framebuffer id; everything below is a fixed object's.
 const FIRST_FRAMEBUFFER_ID: u32 = 128;
+
+const _: () = assert!(
+    FIRST_EDID_BLOB_ID + (MAX_SCANOUTS as u32) <= FIRST_FRAMEBUFFER_ID,
+    "every fixed object's id is below the framebuffers'"
+);
+
+/// The id of `head`'s EDID blob.
+const fn edid_blob_id(head: usize) -> u32 {
+    FIRST_EDID_BLOB_ID + head as u32
+}
+
+/// The head whose EDID blob `id` names, if it names one the card holds: a
+/// connected connector's that was given an EDID.
+fn head_of_blob(card: &Card, id: u32) -> Option<usize> {
+    let head = usize::try_from(id.checked_sub(FIRST_EDID_BLOB_ID)?).ok()?;
+    (head < heads(card) && card.edid(head).is_some()).then_some(head)
+}
 
 /// The one format the primary plane takes.
 const PLANE_FORMATS: [u32; 1] = [drm::FORMAT_XRGB8888];
@@ -658,6 +679,7 @@ pub(crate) fn ioctl(
         drm::IOCTL_MODE_GETPLANE => get_plane(process, file, arg),
         drm::IOCTL_MODE_OBJ_GETPROPERTIES => obj_get_properties(process, file, arg),
         drm::IOCTL_MODE_GETPROPERTY => get_property(process, arg),
+        drm::IOCTL_MODE_GETPROPBLOB => get_blob(process, &file.card, arg),
         _ => Err(Errno::ENOTTY),
     }
 }
@@ -757,10 +779,13 @@ fn get_plane(process: &Process, file: &CardFile, arg: u64) -> Result<usize, Errn
 
 /// What an object id names, with its `DRM_MODE_OBJECT_*` type.
 fn object_type(file: &CardFile, id: u32) -> Option<u32> {
-    if id == TYPE_PROPERTY_ID {
+    if id == TYPE_PROPERTY_ID || id == EDID_PROPERTY_ID {
         return Some(drm::MODE_OBJECT_PROPERTY);
     }
     let card = &file.card;
+    if head_of_blob(card, id).is_some() {
+        return Some(drm::MODE_OBJECT_BLOB);
+    }
     for (kind, object) in [
         (CRTC, drm::MODE_OBJECT_CRTC),
         (ENCODER, drm::MODE_OBJECT_ENCODER),
@@ -783,17 +808,26 @@ fn object_type(file: &CardFile, id: u32) -> Option<u32> {
 /// client without atomic. An id of another type than the one asked for is
 /// `ENOENT`, as `__drm_mode_object_find` has it. The plane has its `type`;
 /// the CRTC has none, since Linux attaches CRTC properties only to atomic
-/// drivers; the connector has none either, where Linux has `DPMS`,
-/// `link-status`, `non-desktop` and `TILE` (`docs/DISPLAY.md` §2.3). Encoders,
-/// framebuffers and properties carry no property list, which is `EINVAL`.
+/// drivers. The connector has `EDID` when `drm.edid_firmware` gave it one
+/// (`docs/DISPLAY.md` §7), whose value is its blob's id while a display is
+/// there and 0 while none is, and nothing else, where Linux has `DPMS`,
+/// `link-status`, `non-desktop` and `TILE` too (§2.3). Encoders,
+/// framebuffers, properties and blobs carry no property list, which is
+/// `EINVAL`.
 fn obj_get_properties(process: &Process, file: &CardFile, arg: u64) -> Result<usize, Errno> {
     let mut request: ObjGetProperties = read_arg(process, arg)?;
     let found = object_type(file, request.obj_id)
         .filter(|&kind| request.obj_type == drm::MODE_OBJECT_ANY || request.obj_type == kind)
         .ok_or(Errno::ENOENT)?;
+    let edid;
     let properties: &[(u32, u64)] = match found {
         drm::MODE_OBJECT_PLANE => &[(TYPE_PROPERTY_ID, drm::PLANE_TYPE_PRIMARY)],
-        drm::MODE_OBJECT_CRTC | drm::MODE_OBJECT_CONNECTOR => &[],
+        drm::MODE_OBJECT_CONNECTOR => {
+            edid = head_of(&file.card, request.obj_id, CONNECTOR)
+                .and_then(|head| edid_property(&file.card, head));
+            edid.as_slice()
+        }
+        drm::MODE_OBJECT_CRTC => &[],
         _ => return Err(Errno::EINVAL),
     };
     write_prefix(
@@ -814,11 +848,27 @@ fn obj_get_properties(process: &Process, file: &CardFile, arg: u64) -> Result<us
     write_arg(process, arg, &request)
 }
 
-/// `GETPROPERTY` of the plane `type` property, as `drm_mode_getproperty_ioctl`
-/// answers it: an immutable enum whose values are the three plane types,
-/// each named, copied as far as the caller's arrays have room.
+/// `head`'s connector's `EDID` property and its value, if the connector has
+/// one: the blob's id while a display is there, 0 while none is.
+fn edid_property(card: &Card, head: usize) -> Option<(u32, u64)> {
+    if !card.carries_edid(head) {
+        return None;
+    }
+    let blob = card.edid(head).map_or(0, |_| u64::from(edid_blob_id(head)));
+    Some((EDID_PROPERTY_ID, blob))
+}
+
+/// `GETPROPERTY`, as `drm_mode_getproperty_ioctl` answers it. The plane
+/// `type` property is an immutable enum whose values are the three plane
+/// types, each named, copied as far as the caller's arrays have room; the
+/// connector `EDID` property is an immutable blob, which has neither values
+/// nor enum records (`ferrix_displayctl::edid::describe_property`).
 fn get_property(process: &Process, arg: u64) -> Result<usize, Errno> {
     let mut property: GetProperty = read_arg(process, arg)?;
+    if property.prop_id == EDID_PROPERTY_ID {
+        ferrix_displayctl::edid::describe_property(&mut property);
+        return write_arg(process, arg, &property);
+    }
     if property.prop_id != TYPE_PROPERTY_ID {
         return Err(Errno::ENOENT);
     }
@@ -856,6 +906,20 @@ fn get_property(process: &Process, arg: u64) -> Result<usize, Errno> {
     property.count_values = PLANE_TYPES.len() as u32;
     property.count_enum_blobs = PLANE_TYPES.len() as u32;
     write_arg(process, arg, &property)
+}
+
+/// `GETPROPBLOB`, as `drm_mode_getblob_ioctl` answers it: an id that names
+/// no blob is `ENOENT`; the bytes are copied only into room of exactly the
+/// blob's length, and the length is written back either way, so a caller
+/// asks once with none to learn it (`ferrix_displayctl::edid::answer_blob`).
+fn get_blob(process: &Process, card: &Card, arg: u64) -> Result<usize, Errno> {
+    let mut request: GetBlob = read_arg(process, arg)?;
+    let head = head_of_blob(card, request.blob_id).ok_or(Errno::ENOENT)?;
+    let bytes = card.edid(head).ok_or(Errno::ENOENT)?;
+    if ferrix_displayctl::edid::answer_blob(&mut request, bytes.len()) {
+        uaccess::copy_to_user(process.space(), request.data, bytes).map_err(|_| Errno::EFAULT)?;
+    }
+    write_arg(process, arg, &request)
 }
 
 fn get_cap(process: &Process, card: &Card, arg: u64) -> Result<usize, Errno> {
@@ -1187,9 +1251,10 @@ fn version(process: &Process, arg: u64) -> Result<usize, Errno> {
     Ok(0)
 }
 
-/// The type every connector of `card` has.
-const fn connector_type(card: &Card) -> u32 {
-    if card.hdmi {
+/// The type every connector of a card has: a board's HDMI output's, or a
+/// virtual card's.
+pub(crate) const fn connector_type(hdmi: bool) -> u32 {
+    if hdmi {
         drm::CONNECTOR_HDMIA
     } else {
         drm::CONNECTOR_VIRTUAL
@@ -1241,7 +1306,7 @@ pub(crate) fn connectors(card: &Card) -> Vec<ConnectorView> {
         .map(|head| {
             let modes = modes_of(card, head);
             ConnectorView {
-                kind: connector_type(card),
+                kind: connector_type(card.hdmi),
                 kind_index: u32::try_from(head).unwrap_or(0).saturating_add(1),
                 connected: !modes.is_empty(),
                 modes: modes
@@ -1275,11 +1340,29 @@ fn connector(process: &Process, card: &Card, arg: u64) -> Result<usize, Errno> {
         connector.count_encoders,
         &[object_id(head, ENCODER)],
     )?;
+    // The properties as `OBJ_GETPROPERTIES` lists them, copied while the
+    // caller's count has room, as `drm_mode_getconnector` copies them.
+    let properties = edid_property(card, head);
+    let properties = properties.as_slice();
+    write_prefix(
+        process,
+        connector.props_ptr,
+        connector.count_props,
+        properties,
+        |(id, _)| id.to_le_bytes().to_vec(),
+    )?;
+    write_prefix(
+        process,
+        connector.prop_values_ptr,
+        connector.count_props,
+        properties,
+        |(_, value)| value.to_le_bytes().to_vec(),
+    )?;
     connector.count_modes = u32::try_from(modes.len()).unwrap_or(0);
-    connector.count_props = 0;
+    connector.count_props = u32::try_from(properties.len()).unwrap_or(0);
     connector.count_encoders = 1;
     connector.encoder_id = object_id(head, ENCODER);
-    connector.connector_type = connector_type(card);
+    connector.connector_type = connector_type(card.hdmi);
     // Linux numbers connectors of one type from one upwards, and a program
     // prints the name as `Virtual-1`, `Virtual-2`.
     connector.connector_type_id = u32::try_from(head).unwrap_or(0).saturating_add(1);

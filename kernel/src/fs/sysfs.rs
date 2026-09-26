@@ -371,6 +371,9 @@ enum Attr {
     Status,
     Enabled,
     Modes,
+    /// A connector's EDID, the bytes as its `EDID` property's blob holds
+    /// them, and empty where it has none, as Linux's `edid` file is.
+    Edid,
     Version,
     Name,
     Phys,
@@ -432,6 +435,7 @@ impl Attr {
             Attr::Status => b"status",
             Attr::Enabled => b"enabled",
             Attr::Modes => b"modes",
+            Attr::Edid => b"edid",
             Attr::Version => b"version",
             Attr::Name => b"name",
             Attr::Phys => b"phys",
@@ -1046,7 +1050,7 @@ fn drm_and_disk_entries(list: &mut Listing, dir: Dir) -> Result<()> {
         }
         Dir::Connector(card, _) => {
             let _ = path_of(dir).ok_or(Errno::ENOENT)?;
-            list.files(dir, &[Attr::Enabled, Attr::Modes, Attr::Status]);
+            list.files(dir, &[Attr::Edid, Attr::Enabled, Attr::Modes, Attr::Status]);
             list.link_to(b"subsystem", Dir::ClassOf(Class::Drm));
             list.link_to(b"device", Dir::Card(card));
         }
@@ -1428,11 +1432,13 @@ fn render(dir: Dir, attr: Attr) -> Result<Vec<u8>> {
         }
         Dir::Connector(card, head) => {
             let shown = display::card(card).ok_or(Errno::ENOENT)?;
+            let head = usize::try_from(head).map_err(|_| Errno::ENOENT)?;
             let connector = display::drm::connectors(&shown)
                 .into_iter()
-                .nth(usize::try_from(head).map_err(|_| Errno::ENOENT)?)
+                .nth(head)
                 .ok_or(Errno::ENOENT)?;
             match attr {
+                Attr::Edid => out.extend_from_slice(shown.edid(head).unwrap_or_default()),
                 Attr::Status => drm_text::status(&mut out, connector.connected),
                 Attr::Enabled => drm_text::enabled(&mut out, connector.connected),
                 _ => drm_text::modes(&mut out, &connector.modes),
