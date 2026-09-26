@@ -17,6 +17,11 @@
 //! 4. ends when the driver closes its end, says STOPPED, or breaks the
 //!    protocol, taking the node away and revoking every open.
 //!
+//! A device's claim is `crate::claim`'s, so a quiesce waits for a dead
+//! driver's tasks to end before the device goes to the next driver, and
+//! event numbers are the lowest free, so a keyboard whose driver `devmgr`
+//! starts again comes back as the `event<N>` it was.
+//!
 //! # The kernel invents no events
 //!
 //! Not even a repeat: `docs/INPUT.md` §3.1 is a written deviation from Linux,
@@ -29,7 +34,7 @@ use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::convert::Infallible;
-use core::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 use ferrix_blkring::identity::Location;
 use ferrix_inputctl::message::{
@@ -44,6 +49,7 @@ use ferrix_native_abi::signals::Signals;
 use ferrix_native_abi::status;
 use ferrix_native_abi::types::{CHANNEL_MAX_HANDLES, DEVICE_NOT_PCI};
 
+use crate::claim::{Claims, Numbers, StillServed};
 use crate::device::DeviceNode;
 use crate::hooks::Full;
 use crate::object::channel::{ChannelMessage, Endpoint, ReadError};
@@ -98,10 +104,14 @@ struct Start {
 }
 
 static STARTING: SpinLock<Vec<Start>> = SpinLock::new(Vec::new());
-static CLAIMED: SpinLock<Vec<Arc<DeviceNode>>> = SpinLock::new(Vec::new());
+/// The devices a driver's channel claims, as many per device as it has input
+/// functions, which a quiesce waits out (`crate::claim`).
+static CLAIMS: Claims = Claims::new();
 static DEVICES: SpinLock<Vec<Arc<InputDevice>>> = SpinLock::new(Vec::new());
 static NEXT_ID: AtomicUsize = AtomicUsize::new(1);
-static NEXT_EVENT: AtomicU32 = AtomicU32::new(0);
+/// The `event<N>` numbers: a device whose driver came back is `event0`
+/// again, not `event1` after a hole.
+static NUMBERS: Numbers = Numbers::new(0);
 static NEXT_OPEN: AtomicUsize = AtomicUsize::new(1);
 
 /// One open of an `event<N>` node: its queue, and who it is for the grab.
@@ -235,7 +245,27 @@ pub(crate) fn device_indices() -> Vec<u32> {
 ///
 /// [`Full`] when the item has no room for the registration.
 pub(crate) fn install() -> Result<(), Full> {
-    native::serve(NativeCall::InputControlCreate, control_create)
+    native::serve(NativeCall::InputControlCreate, control_create)?;
+    native::register_server(&SERVER)
+}
+
+/// What a quiesce waits out for input.
+static SERVER: native::Server = native::Server {
+    wait_until_unserved,
+    release: None,
+};
+
+/// Wait until no input driver's channel claims `node`, for a quiesce
+/// (`crate::claim`).
+///
+/// # Errors
+///
+/// [`StillServed`].
+fn wait_until_unserved(
+    node: &Arc<DeviceNode>,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<(), StillServed> {
+    CLAIMS.wait_until_released(node, cancelled)
 }
 
 /// `input_control_create`.
@@ -268,16 +298,8 @@ fn control_create(caller: &dyn Host, registers: &[u64; 6]) -> Result<usize, Errn
 /// channel or the task could not be made.
 pub(crate) fn create(node: &Arc<DeviceNode>) -> Result<Arc<Endpoint>, CreateError> {
     let (kernel_end, driver_end) = Endpoint::pair().map_err(|_| CreateError::NoMemory)?;
-    {
-        let mut claimed = CLAIMED.lock();
-        let held = claimed
-            .iter()
-            .filter(|held| Arc::ptr_eq(held, node))
-            .count();
-        if held >= node.input_functions() {
-            return Err(CreateError::InUse);
-        }
-        claimed.push(Arc::clone(node));
+    if !CLAIMS.claim_up_to(node, &kernel_end, node.input_functions()) {
+        return Err(CreateError::InUse);
     }
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
     let (location, announce) = match node.location() {
@@ -286,14 +308,14 @@ pub(crate) fn create(node: &Arc<DeviceNode>) -> Result<Arc<Endpoint>, CreateErro
     };
     STARTING.lock().push(Start {
         id,
-        control: kernel_end,
+        control: Arc::clone(&kernel_end),
         device: Arc::clone(node),
         location,
         announce,
     });
     if sched::spawn("input", run, id, ferrix_sched::NICE_0_WEIGHT).is_err() {
         let _ = take_start(id);
-        unclaim(node);
+        CLAIMS.release_one(node, &kernel_end);
         return Err(CreateError::NoMemory);
     }
     Ok(driver_end)
@@ -303,15 +325,6 @@ fn take_start(id: usize) -> Option<Start> {
     let mut starting = STARTING.lock();
     let at = starting.iter().position(|start| start.id == id)?;
     Some(starting.remove(at))
-}
-
-/// Give back one of the node's claims: a USB host holds one per device, and
-/// one device going leaves the others theirs.
-fn unclaim(node: &Arc<DeviceNode>) {
-    let mut claimed = CLAIMED.lock();
-    if let Some(at) = claimed.iter().position(|held| Arc::ptr_eq(held, node)) {
-        let _ = claimed.remove(at);
-    }
 }
 
 /// One device's task.
@@ -329,9 +342,14 @@ fn run(id: usize) {
         }
         *device.gone.lock() = true;
         device.wake();
+        // A program still holding the old device's opens keeps its
+        // `InputDevice`, and a lookup of the number finds the next one.
+        NUMBERS.give_back(device.index);
         crate::console::println!("  input    event{} is gone", device.index);
     }
-    unclaim(&start.device);
+    // One of the node's claims: a USB host holds one per device, and one
+    // device going leaves the others theirs.
+    CLAIMS.release_one(&start.device, &start.control);
 }
 
 fn receive(control: &Endpoint, deadline: u64) -> Option<ChannelMessage> {
@@ -380,7 +398,9 @@ fn take_up(start: &Start) -> Option<Arc<InputDevice>> {
 fn accept(start: &Start, message: &ChannelMessage) -> Result<Arc<InputDevice>, Refusal> {
     let session = judge(start, message)?;
 
-    let index = NEXT_EVENT.fetch_add(1, Ordering::Relaxed);
+    // The protocol has no refusal for memory; a malformed start is the
+    // nearest it has, as the net ring's.
+    let index = NUMBERS.take().ok_or(Refusal::Malformed)?;
     let left_out = session.capabilities().left_out;
     let name = describe(&session);
     let device = Arc::new(InputDevice {
@@ -402,7 +422,13 @@ fn accept(start: &Start, message: &ChannelMessage) -> Result<Arc<InputDevice>, R
     {
         crate::devmgr::published(location);
     }
-    send_ready(&start.control, index)?;
+    if let Err(refusal) = send_ready(&start.control, index) {
+        // Not left published, nor its number held, for a driver that never
+        // heard it was.
+        DEVICES.lock().retain(|held| !Arc::ptr_eq(held, &device));
+        NUMBERS.give_back(index);
+        return Err(refusal);
+    }
 
     // The boot line says what the device is and what was left out, which is
     // `docs/INPUT.md` L5's exit.

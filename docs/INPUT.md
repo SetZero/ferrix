@@ -796,7 +796,11 @@ node allows eight times at once (`USB_INPUT_FUNCTIONS`) where every other
 node allows one. A tree node's HELLO carries `DEVICE_NOT_PCI` for its
 location, as the display core's does, and sends devmgr no PUBLISHED, since
 every tree node shares that word. A device unplugged has its channel closed,
-which the core hears as the device going (`event<N> is gone`). devmgr does wait, a
+which the core hears as the device going (`event<N> is gone`); its number is
+free again, and `event<N>` numbers are always the lowest free, so a device
+whose driver is started again comes back under the number it had. Each
+channel is one of the node's claims (`kernel/src/claim.rs`), and a quiesce
+waits until every one of a dead driver's has gone. devmgr does wait, a
 bounded five seconds, for the driver to say on its bootstrap channel that
 its first enumeration has settled -- what was plugged in at boot found and
 published -- before it sends REPORT, which the kernel starts init at: a
