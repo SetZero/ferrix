@@ -335,7 +335,7 @@ as upstream's `run()` does. hyprix offers `ext_idle_notifier_v1` version 2
 and answers both requests (`server/src/client/desktop.rs`); against a
 version-1 notifier hypridle falls back to the inhibitable request and says
 so. `hyprland_lock_notifier_v1` drives `on_lock_cmd` and `on_unlock_cmd`.
-All of it goes through `compositor/toolkit`: `idle_notification`, `bind`
+All of it goes through `userland/compositor/toolkit`: `idle_notification`, `bind`
 and `request` for the lock notifier, and `watch_fd` for the `loginctl`
 socket. hypridle has no surface and no wire code of its own.
 
@@ -411,7 +411,7 @@ it.
 ### Where it stands
 
 Built and passing: the host tests, `idle` and `idle-user` on x86_64 and
-aarch64, and every other `test-compositor` boot on x86_64. Until `compositor/hyprlang` lands,
+aarch64, and every other `test-compositor` boot on x86_64. Until `userland/compositor/hyprlang` lands,
 `hypridle/src/conf.rs` is a private reader of the hyprlang it needs. It is
 the one file that changes when hypridle switches to that crate (BACKLOG
 row), and the fleet rule is that hypridle lands only on top of the
