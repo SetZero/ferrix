@@ -638,6 +638,8 @@ const AT_LINK_PROC: u64 = 1136;
 const AT_ZEROS: u64 = 1168;
 /// `/dev/null`, which `splice` drains a pipe into; after the zeros' 16.
 const AT_DEV_NULL: u64 = 1184;
+/// The two `iovec`s the FIFO's `readv` fills, after `/dev/null`'s ten.
+const AT_IOVEC: u64 = 1200;
 /// Where `/proc/mounts` is read to, to the end of the page.
 const AT_LISTING: u64 = 1536;
 
@@ -1104,6 +1106,7 @@ fn check_a_fifo_is_one_pipe(process: &Process, page: u64) -> Result<u64, &'stati
         Errno::EAGAIN,
         "a drained FIFO with a writer still open did not answer EAGAIN",
     )?;
+    check_a_fifo_reads_as_its_pipe(process, page, reader, writer)?;
     answers(
         fd::sys_close(process, writer),
         0,
@@ -1115,6 +1118,87 @@ fn check_a_fifo_is_one_pipe(process: &Process, page: u64) -> Result<u64, &'stati
         "a FIFO's reader would not close",
     )?;
     Ok(len as u64)
+}
+
+/// `readv` of a FIFO under /tmp stops where it stops on an anonymous pipe.
+///
+/// The read loop asks whether the file is a stream, and a stream stops at the
+/// first segment that took anything, since asking again may wait. It asks
+/// what reads go to, and a FIFO's node on tmpfs is no stream but its pipe is.
+/// Asked of the node, as it once was, `readv` read on into the next segment
+/// as a file's does, and a blocking reader would have waited there for bytes
+/// its writer might never send.
+fn check_a_fifo_reads_as_its_pipe(
+    process: &Process,
+    page: u64,
+    reader: i32,
+    writer: i32,
+) -> Result<(), &'static str> {
+    answers(
+        pipe::sys_pipe2(process, page + AT_FDS, O_NONBLOCK),
+        0,
+        "pipe2 was refused",
+    )?;
+    let (pipe_reader, pipe_writer) = pair(process, page)?;
+    let piped = readv_after_write(process, page, pipe_reader, pipe_writer);
+    answers(
+        fd::sys_close(process, pipe_reader),
+        0,
+        "a pipe's read end would not close",
+    )?;
+    answers(
+        fd::sys_close(process, pipe_writer),
+        0,
+        "a pipe's write end would not close",
+    )?;
+    if readv_after_write(process, page, reader, writer)? != piped? {
+        return Err(
+            "readv of a FIFO under /tmp did not stop where a pipe's does: it read the FIFO as a \
+             file with a position rather than as its pipe",
+        );
+    }
+    Ok(())
+}
+
+/// Write [`DATA`] into `writer`, `readv` it from `reader` into two segments,
+/// four bytes and then sixty, and read whatever that left. Returns what the
+/// `readv` took.
+fn readv_after_write(
+    process: &Process,
+    page: u64,
+    reader: i32,
+    writer: i32,
+) -> Result<usize, &'static str> {
+    let len = DATA.len();
+    answers(
+        file::sys_write(process, writer, page + AT_DATA, len as u64),
+        len,
+        "a write into a pipe came back short",
+    )?;
+    let word = size_of::<usize>();
+    let segments = [page + AT_BACK, 4, page + AT_BACK + 4, 60];
+    for (index, value) in (0_u64..).zip(segments) {
+        let bytes = value.to_le_bytes();
+        let native = bytes.get(..word).ok_or("impossible pointer width")?;
+        uaccess::copy_to_user(
+            process.space(),
+            page + AT_IOVEC + index * word as u64,
+            native,
+        )
+        .map_err(|_| "could not stage an iovec")?;
+    }
+    let took = file::sys_readv(process, reader, page + AT_IOVEC, 2)
+        .map_err(|_| "readv of a pipe with bytes in it was refused")?;
+    let rest = if took < len {
+        file::sys_read(process, reader, page + AT_BACK + took as u64, 64)
+            .map_err(|_| "a read after a short readv was refused")?
+    } else {
+        0
+    };
+    if took + rest != len || read_back(process, page + AT_BACK, len)? != DATA {
+        return Err("a readv and the read after it did not give back what was written");
+    }
+    Ok(took)
 }
 
 /// `statfs` of /tmp reports tmpfs in this word size's layout, and in

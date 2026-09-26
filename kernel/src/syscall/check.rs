@@ -4988,6 +4988,12 @@ mod paths {
         if read != Ok(64) || p.read_out(64)?.iter().any(|&byte| byte != 0) {
             return Err("a node numbered 1:5 did not read as zeros as /dev/zero does");
         }
+        if readv_of_two(p, ZERO_NODE.path)? != readv_of_two(p, b"/dev/zero")? {
+            return Err(
+                "readv of a node numbered 1:5 did not stop where /dev/zero's does: it read the \
+                 node as a file with a position rather than as the device's stream",
+            );
+        }
 
         for node in &UNANSWERED_NODES {
             let name = p.path(node.path)?;
@@ -5019,6 +5025,34 @@ mod paths {
             made += 1;
         }
         Ok(made)
+    }
+
+    /// What `readv` of two eight-byte segments takes from the character device
+    /// at `path`.
+    ///
+    /// Whether it goes on into the second segment is the read loop asking
+    /// whether the file is a stream, which a stream answers no to by stopping
+    /// at the first segment that took anything. That question is asked of what
+    /// reads go to, so a node `mknodat` made on tmpfs, which is no stream
+    /// itself, answers as the device its number names does. It was once asked
+    /// of the node: `readv` read on into the second segment, and of a FIFO or
+    /// a terminal, whose next read waits, it would have waited there.
+    fn readv_of_two(p: &mut Paths<'_>, path: &[u8]) -> Result<usize, &'static str> {
+        let name = p.path(path)?;
+        let fd = p
+            .call(Syscall::Openat, [CWD, name, u64::from(O_RDONLY), 0, 0, 0])
+            .map_err(|_| "a character device did not open for readv")? as u64;
+        let word = size_of::<usize>() as u64;
+        let array = p.out + PAGE_SIZE / 2;
+        let segments = [p.out, 8, p.out + 8, 8];
+        for (index, value) in (0_u64..).zip(segments) {
+            super::write_word(p.process, array + index * word, value)?;
+        }
+        let took = p.call(Syscall::Readv, [fd, array, 2, 0, 0, 0]);
+        if p.call(Syscall::Close, [fd, 0, 0, 0, 0, 0]) != Ok(0) {
+            return Err("close of a device node's descriptor was refused");
+        }
+        took.map_err(|_| "readv of a character device was refused")
     }
 
     /// `unlinkat` removes names, with and without `AT_REMOVEDIR`, and refuses

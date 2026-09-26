@@ -125,7 +125,10 @@ pub(crate) fn sys_readv(
             Err(Errno::EBADF)
         };
     }
-    let stream = file.inode().is_stream();
+    // What reads go to, not the node that was opened: a FIFO or a terminal's
+    // node made by mknod on tmpfs is no stream itself, but its pipe or its
+    // terminal is.
+    let stream = file.is_stream();
     let mut done = 0_u64;
     for (base, len) in segments {
         let got = match read_into(process, &file, base, len, Position::Current) {
@@ -214,7 +217,8 @@ fn read_into(
         return read(0, &mut []).map(|_| 0);
     }
     let mut buffer = bounce(len)?;
-    let stream = file.inode().is_stream();
+    // Asked of what reads go to, as `sys_readv` asks it.
+    let stream = file.is_stream();
     let mut done = 0_u64;
     while done < len {
         let want = usize::try_from((len - done).min(CHUNK as u64)).map_err(|_| Errno::EINVAL)?;
