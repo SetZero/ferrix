@@ -353,6 +353,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "compositor-waybar"
+version = "0.1.0"
+dependencies = [
+ "tiny-skia",
+]
+
+[[package]]
 name = "compositor-wire"
 version = "0.1.0"
 
