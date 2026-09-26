@@ -14,6 +14,36 @@ use std::ptr;
 use ferrix_svc::event::Exit;
 use ferrix_svc::value::Signal;
 
+/// Native calls (`docs/ARCHITECTURE.md` §2), made the way a Linux program
+/// makes them: through the same `syscall` instruction, numbered from
+/// `0x1000`. `libs/native` describes each call as a [`Raw`] and asks this to
+/// make it.
+///
+/// [`Raw`]: ferrix_native::Raw
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Native;
+
+impl ferrix_native::Syscall for Native {
+    fn call(self, raw: ferrix_native::Raw<'_>) -> usize {
+        let [a0, a1, a2, a3, a4, a5] = raw.args();
+        let number = libc::c_long::try_from(raw.number()).unwrap_or(-1);
+        // SAFETY: `libs/native` built `raw` from borrowed memory, and every
+        // pointer among its arguments names memory it borrows for as long as
+        // `raw` lives, which is past this call (`ferrix_native::call`).
+        let ret = unsafe { libc::syscall(number, a0, a1, a2, a3, a4, a5) };
+        if ret == -1 {
+            // The C library turned the kernel's `-errno` into -1 and errno;
+            // `libs/native` decodes the kernel's form, so give it that back.
+            let errno = io::Error::last_os_error()
+                .raw_os_error()
+                .unwrap_or(libc::EIO);
+            (-isize::try_from(errno).unwrap_or(isize::MAX)).cast_unsigned()
+        } else {
+            usize::try_from(ret).unwrap_or(usize::MAX)
+        }
+    }
+}
+
 /// `clone3` (`asm-generic/unistd.h`, `asm-x86/unistd_64.h` and
 /// `asm-arm/unistd-common.h` all give 435).
 const SYS_CLONE3: libc::c_long = 435;
@@ -449,6 +479,19 @@ pub(crate) fn become_user(uid: u32, gid: u32, groups: &[u32]) -> io::Result<()> 
     let _ = check(unsafe { libc::setgid(gid) })?;
     // SAFETY: no pointers.
     check(unsafe { libc::setuid(uid) }).map(drop)
+}
+
+/// Block until `fd` has a byte or its writer has gone, reading the byte:
+/// the child's wait for init's go-ahead.
+pub(crate) fn wait_readable(fd: RawFd) {
+    let mut byte = [0_u8; 1];
+    loop {
+        // SAFETY: `byte` is writable for one byte.
+        let got = unsafe { libc::read(fd, byte.as_mut_ptr().cast(), 1) };
+        if got >= 0 || io::Error::last_os_error().kind() != io::ErrorKind::Interrupted {
+            return;
+        }
+    }
 }
 
 /// `execve(2)`, which returns only when it fails.

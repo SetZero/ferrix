@@ -15,6 +15,11 @@ libc = "0.2.189"
 ferrix-svc = { path = "../../libs/svc" }
 # The control socket's records and the readiness lines.
 ferrix-svc-proto = { path = "../../libs/svc-proto" }
+# The native calls, for bootstrap channels, native services and the
+# directory (docs/INIT.md §6): the numbers and layouts, and the typed
+# wrappers over them.
+ferrix-native = { path = "../../libs/native" }
+ferrix-native-abi = { path = "../../libs/native-abi" }
 
 [lints]
 workspace = true

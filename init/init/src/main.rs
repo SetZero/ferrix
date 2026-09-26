@@ -28,6 +28,7 @@
 mod admin;
 mod cgroup;
 mod control;
+mod directory;
 mod logs;
 mod probe;
 mod readiness;
@@ -57,6 +58,7 @@ use ferrix_svc_proto::control::{Answer, Call, UnitStatus};
 
 use crate::cgroup::Groups;
 use crate::control::{Control, Heard};
+use crate::directory::Directory;
 use crate::logs::Logs;
 use crate::probe::Machine;
 use crate::readiness::Readiness;
@@ -112,6 +114,8 @@ mod token {
     pub(crate) const NOTIFY: u64 = 7 << 32;
     /// A `.socket` unit's sockets; the unit's number below.
     pub(crate) const SOCKET: u64 = 8 << 32;
+    /// The port, as `port_fd`'s descriptor (§6, §9).
+    pub(crate) const PORT: u64 = 9 << 32;
     /// The kind of `token`.
     pub(crate) fn kind(token: u64) -> u64 {
         token & !0xffff_ffff
@@ -159,6 +163,9 @@ struct Init {
     forking: BTreeMap<u32, UnitId>,
     /// The `.socket` units' sockets.
     sockets: Sockets,
+    /// Bootstrap channels, native services and the directory (§6), unless
+    /// the kernel has no native calls to make them with.
+    directory: Option<Directory>,
 }
 
 /// What a control connection is waiting for from the manager.
@@ -255,7 +262,24 @@ impl Init {
                 None
             }
         };
+        let directory = match Directory::open() {
+            Ok((directory, fd, said)) => {
+                say(&said);
+                if let Err(error) = sys::watch(epoll.as_fd(), fd, libc::EPOLLIN as u32, token::PORT)
+                {
+                    say(&format!("watching the port failed: {error}"));
+                }
+                Some(directory)
+            }
+            Err(error) => {
+                say(&format!(
+                    "no native calls ({error:?}): no bootstrap channels, native services or directory"
+                ));
+                None
+            }
+        };
         Ok(Init {
+            directory,
             manager,
             epoll,
             signals,
@@ -317,6 +341,7 @@ impl Init {
                 token::LISTEN => self.accept(),
                 token::CLIENT => self.client(u64::from(token::number(token)), events),
                 token::NOTIFY => self.read_notify(token::number(token)),
+                token::PORT => self.drain_port(),
                 token::SOCKET => self.connected(UnitId(token::number(token))),
                 _ => {}
             }
@@ -435,6 +460,10 @@ impl Init {
                 self.groups.set_limits(unit, &limits, &mut log);
             }
             Action::RemoveGroup { unit } => {
+                let offered = self.offers(unit);
+                if let Some(directory) = self.directory.as_mut() {
+                    directory.forget(unit, &offered);
+                }
                 if let Some(fd) = self.groups.events_fd(unit) {
                     sys::unwatch(self.epoll.as_fd(), fd);
                 }
@@ -504,9 +533,30 @@ impl Init {
                 }
             }
             Action::Close { connection } => self.sockets.close(connection),
-            Action::Route { to, name, .. } | Action::Refuse { to, name, .. } => {
-                let unit = self.display(to);
-                say(&format!("{unit}: the directory ({}) comes with L8", name.0));
+            Action::Route { to, name, end } => {
+                let manager = &self.manager;
+                let client = |unit: UnitId| {
+                    manager
+                        .name(unit)
+                        .map_or_else(|| format!("unit {}", unit.0), |n| n.as_str().to_owned())
+                };
+                let routed = match self.directory.as_mut() {
+                    Some(directory) => directory.route(to, &name.0, end, client),
+                    None => Err("no directory".to_owned()),
+                };
+                if let Err(why) = routed {
+                    say(&format!("routing {}: {why}", name.0));
+                }
+            }
+            Action::Refuse { to, name, end } => {
+                if let Some(directory) = self.directory.as_mut() {
+                    directory.refuse(
+                        to,
+                        &name.0,
+                        end,
+                        "the unit does not name it in Uses=, or no unit offers it",
+                    );
+                }
             }
             Action::Reply { client, reply } => self.reply(client, reply),
             Action::Power(action) => power(action),
@@ -546,6 +596,28 @@ impl Init {
                 .connection
                 .and_then(|token| self.sockets.connection(token)),
         };
+        if spec.service_type == ServiceType::Native && spec.role == Role::Main {
+            return self.spawn_native(unit, spec);
+        }
+        let given = if spec.bootstrap && spec.role == Role::Main {
+            match self
+                .directory
+                .as_mut()
+                .map(|directory| directory.channel_for(unit))
+            {
+                Some(Ok(given)) => Some(given),
+                Some(Err(error)) => {
+                    say(&format!(
+                        "{}: no bootstrap channel: {error:?}",
+                        self.display(unit)
+                    ));
+                    None
+                }
+                None => None,
+            }
+        } else {
+            None
+        };
         let prepared = match spawn::prepare(spec, &self.terminal, &passed) {
             Ok(prepared) => prepared,
             Err(unprepared) => return failed(self, unprepared.errno, &unprepared.why),
@@ -565,8 +637,18 @@ impl Init {
                 report,
                 log,
                 notify,
+                go,
             }) => {
                 self.groups.filled(&spec.group);
+                if let Some(given) = given
+                    && let Err(error) = Directory::give(pid, given.end)
+                {
+                    say(&format!("{}: process_give: {error:?}", self.display(unit)));
+                }
+                // Given or not, the child may run now.
+                if let Some(go) = go {
+                    sys::write_once(go.as_raw_fd(), b"g");
+                }
                 if let Some(notify) = notify {
                     let (id, fd) = self.readiness.add(unit, notify);
                     if let Err(error) = sys::watch(
@@ -616,6 +698,72 @@ impl Init {
 }
 
 impl Init {
+    /// Start a `Type=native` service's main process (§5.2): in the job
+    /// behind its cgroup, from the ELF file `ExecStart=` names, with a
+    /// bootstrap channel of its own. Its pid is the one its cgroup has.
+    fn spawn_native(&mut self, unit: UnitId, spec: &ferrix_svc::event::SpawnSpec) {
+        let name = self.display(unit);
+        let fail = |init: &mut Init, why: String| {
+            say(&format!("{name}: {why}"));
+            init.queue.push_back(Event::SpawnFailed {
+                unit,
+                error: ferrix_svc::event::Errno(libc::EINVAL),
+            });
+        };
+        let Some(directory) = self.directory.as_mut() else {
+            return fail(self, "Type=native needs the native calls".to_owned());
+        };
+        let given = match directory.channel_for(unit) {
+            Ok(given) => given,
+            Err(error) => return fail(self, format!("no bootstrap channel: {error:?}")),
+        };
+        let Some(cgroup) = self.groups.dir(&spec.group) else {
+            return fail(self, format!("its cgroup {} was never made", spec.group));
+        };
+        let Some(directory) = self.directory.as_mut() else {
+            return;
+        };
+        let key = match directory.start_native(unit, cgroup, &spec.command.path, given.end) {
+            Ok(key) => key,
+            Err(why) => return fail(self, why),
+        };
+        self.groups.filled(&spec.group);
+        let Some(pid) = self.groups.procs(unit).into_iter().next() else {
+            return fail(self, "started, and not in its cgroup".to_owned());
+        };
+        if let Some(directory) = self.directory.as_mut() {
+            directory.found_pid(key, pid);
+        }
+        self.queue.push_back(Event::Spawned {
+            unit,
+            pid: Pid(pid),
+        });
+    }
+
+    /// The port has packets: native services' ends and their channels'
+    /// messages.
+    fn drain_port(&mut self) {
+        let Some(directory) = self.directory.as_mut() else {
+            return;
+        };
+        let (events, lines) = directory.drain();
+        for line in lines {
+            say(&line);
+        }
+        self.queue.extend(events);
+    }
+
+    /// The names a unit's file says it `Offers=`.
+    fn offers(&self, unit: UnitId) -> Vec<String> {
+        let Some(name) = self.manager.name(unit) else {
+            return Vec::new();
+        };
+        match self.source.load(name.as_str()).map(|loaded| loaded.config) {
+            Ok(Config::Service(service)) => service.offers,
+            _ => Vec::new(),
+        }
+    }
+
     /// `Delegate=yes`: the cgroup just made is its `User=`'s to manage.
     fn delegate(&mut self, unit: UnitId) {
         let Some(name) = self.manager.name(unit).map(|name| name.as_str().to_owned()) else {

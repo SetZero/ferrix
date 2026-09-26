@@ -251,6 +251,38 @@ const TEST_UNITS: &[(&str, &str)] = &[
          WantedBy=multi-user.target\n",
     ),
     (
+        "pong.service",
+        "[Unit]\n\
+         Description=A native service that answers what the directory routes to it\n\
+         \n\
+         [Service]\n\
+         Type=native\n\
+         ExecStart=/sbin/pong\n\
+         Offers=ferrix.test\n",
+    ),
+    (
+        "asker.service",
+        "[Unit]\n\
+         Description=Opens ferrix.test, which it declares\n\
+         \n\
+         [Service]\n\
+         Type=oneshot\n\
+         RemainAfterExit=yes\n\
+         Uses=ferrix.test\n\
+         ExecStart=/bin/dirclient ferrix.test\n",
+    ),
+    (
+        "rogue.service",
+        "[Unit]\n\
+         Description=Opens ferrix.test, having declared only ferrix.other\n\
+         \n\
+         [Service]\n\
+         Type=oneshot\n\
+         RemainAfterExit=yes\n\
+         Uses=ferrix.other\n\
+         ExecStart=/bin/dirclient ferrix.test\n",
+    ),
+    (
         "getty@.service.d/test.conf",
         "[Service]\n\
          Environment=TERM=dumb \"PS1=init-test%%# \"\n",
@@ -258,7 +290,7 @@ const TEST_UNITS: &[(&str, &str)] = &[
 ];
 
 /// The units the test's `multi-user.target` wants besides the getty.
-const WANTED: [&str; 11] = [
+const WANTED: [&str; 13] = [
     "flaky.service",
     "anchor.service",
     "forker.service",
@@ -270,6 +302,8 @@ const WANTED: [&str; 11] = [
     "hog.service",
     "tasks.service",
     "deleg.service",
+    "asker.service",
+    "rogue.service",
 ];
 
 /// Who the test's user is: root, and `ferrix`, whom `su` becomes to be
@@ -286,6 +320,8 @@ pub(crate) struct Built {
     getty: PathBuf,
     generator: PathBuf,
     svc: PathBuf,
+    /// The directory's test client, carried by `test-init` alone.
+    dirclient: PathBuf,
 }
 
 /// Build `init/` for `arch`, or `None` on an architecture it is not built
@@ -303,6 +339,7 @@ pub(crate) fn built(arch: Arch) -> Result<Option<Built>> {
         getty: release.join("getty"),
         generator: release.join("getty-generator"),
         svc: release.join("svc"),
+        dirclient: release.join("dirclient"),
     };
     crate::builds::Build::cargo(
         format!("cargo build (init) --target {target}"),
@@ -317,6 +354,7 @@ pub(crate) fn built(arch: Arch) -> Result<Option<Built>> {
     .output(&built.getty)
     .output(&built.generator)
     .output(&built.svc)
+    .output(&built.dirclient)
     .run()?;
     Ok(Some(built))
 }
@@ -371,7 +409,7 @@ pub(crate) fn carried(arch: Arch) -> Result<Vec<File>> {
 }
 
 /// The test's own units, zinc, and busybox for its `su`, as carried files.
-fn test_files(shell: &[u8], busybox: &[u8]) -> Vec<File> {
+fn test_files(shell: &[u8], busybox: &[u8], dirclient: &[u8]) -> Vec<File> {
     let mut files: Vec<File> = ["bin/sh", "bin/zinc"]
         .into_iter()
         .map(|path| File {
@@ -394,6 +432,11 @@ fn test_files(shell: &[u8], busybox: &[u8]) -> Vec<File> {
             content: Content::Link(format!("/etc/ferrix/units/{name}")),
         });
     }
+    files.push(File {
+        path: "bin/dirclient".to_owned(),
+        mode: 0o755,
+        content: Content::Bytes(dirclient.to_vec()),
+    });
     files.push(File {
         path: "bin/busybox".to_owned(),
         mode: 0o755,
@@ -440,7 +483,11 @@ fn test_arch(arch: Arch, args: &Args, checker: &Checker) -> Result<()> {
         return Err(Error::new(format!("init is not built for {arch}")));
     }
     let busybox = read(&crate::busybox::program(arch)?)?;
-    files.extend(test_files(&shell, &busybox));
+    let dirclient = built(arch)?
+        .map(|built| read(&built.dirclient))
+        .transpose()?
+        .unwrap_or_default();
+    files.extend(test_files(&shell, &busybox, &dirclient));
     println!("  {arch}: building an image whose init is {PATH}");
     let loader = cargo::build_loader(arch, args.release)?;
     let kernel = cargo::build_kernel(arch, args.release)?;
@@ -484,7 +531,8 @@ fn test_arch(arch: Arch, args: &Args, checker: &Checker) -> Result<()> {
     println!(
         "  {arch}: init booted multi-user.target, gave the console a session, spent a failing \
          service's budget, ended a service's grandchild with its cgroup, answered svc, waited for \
-         readiness, activated sockets, OOM-killed a service in its own slice, and powered off clean"
+         readiness, activated sockets, OOM-killed a service in its own slice, routed a native \
+         service through the directory, and powered off clean"
     );
     Ok(())
 }
@@ -596,7 +644,66 @@ fn session(at: &mut Watching<'_>, failures: &mut Vec<String>) -> Result<()> {
     readiness(at, failures)?;
     sockets(at, failures)?;
     resources(at, failures)?;
+    directory(at, failures)?;
     power_off(at, failures)
+}
+
+/// The directory (L8, stage five): the kernel greeted init on its
+/// bootstrap channel; `asker.service`, which declares `Uses=ferrix.test`,
+/// opened it and was answered by `pong.service`, a native service started
+/// by that OPEN in its own cgroup; `rogue.service`, which does not declare
+/// it, was REFUSED.
+fn directory(at: &mut Watching<'_>, failures: &mut Vec<String>) -> Result<()> {
+    if !has(
+        &everything(at),
+        "init     the kernel greeted init, version 1",
+    ) {
+        failures.push("init did not read the kernel's hello on its bootstrap channel".into());
+    }
+    let deadline = Instant::now() + PATIENCE;
+    let both = |lines: &[String]| {
+        let said = |unit: &str, what: &str| {
+            lines
+                .iter()
+                .any(|line| line.contains(&format!("{unit}[")) && line.contains(what))
+        };
+        said("asker.service", "dir-") && said("rogue.service", "dir-")
+    };
+    let _ = at.read_more(deadline, both)?;
+    let all = everything(at);
+    let line_of = |unit: &str| {
+        all.iter()
+            .find(|line| line.contains(&format!("{unit}[")) && line.contains("dir-"))
+            .map(|line| line.trim().to_owned())
+    };
+    match line_of("asker.service") {
+        Some(line) if line.ends_with("dir-answer: pong ferrix.test to asker.service") => {}
+        other => failures.push(format!(
+            "asker.service's OPEN of ferrix.test was not answered by pong.service: {other:?}"
+        )),
+    }
+    match line_of("rogue.service") {
+        Some(line) if line.contains("dir-refused: ferrix.test") => {}
+        other => failures.push(format!(
+            "rogue.service's OPEN of a name it does not declare was not REFUSED: {other:?}"
+        )),
+    }
+    let main = ask(at, "svc status pong.service\n", "Main PID: ")?
+        .and_then(|line| line.trim().strip_prefix("Main PID: ").map(str::to_owned));
+    let listed = ask(
+        at,
+        "read p < /sys/fs/cgroup/system.slice/pong.service/cgroup.procs; m=pong; echo \"$m-proc $p\"\n",
+        "pong-proc ",
+    )?
+    .and_then(|line| line.trim().strip_prefix("pong-proc ").map(str::to_owned));
+    match (main, listed) {
+        (Some(main), Some(listed)) if main == listed && !main.is_empty() => {}
+        (main, listed) => failures.push(format!(
+            "pong.service's native process is not the one in its cgroup: main {main:?}, \
+             cgroup.procs {listed:?}"
+        )),
+    }
+    Ok(())
 }
 
 /// Resources (L5, stage three): `hog.service`, in `test.slice` under a
@@ -901,6 +1008,11 @@ fn administer(at: &mut Watching<'_>, failures: &mut Vec<String>) -> Result<()> {
         failures.push("svc top did not list echoer.service".into());
     }
     Ok(())
+}
+
+/// Every line of the boot so far, the marker's and what came after it.
+fn everything(at: &Watching<'_>) -> Vec<String> {
+    at.lines().iter().chain(at.after()).cloned().collect()
 }
 
 /// `echoer.service`'s main pid, from `svc status`, which must also say it

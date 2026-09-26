@@ -3,6 +3,34 @@
 version = 4
 
 [[package]]
+name = "dirclient"
+version = "0.1.0"
+dependencies = [
+ "ferrix-native",
+ "ferrix-native-abi",
+ "libc",
+]
+
+[[package]]
+name = "ferrix-linux-abi"
+version = "0.1.0"
+
+[[package]]
+name = "ferrix-native"
+version = "0.1.0"
+dependencies = [
+ "ferrix-linux-abi",
+ "ferrix-native-abi",
+]
+
+[[package]]
+name = "ferrix-native-abi"
+version = "0.1.0"
+dependencies = [
+ "ferrix-linux-abi",
+]
+
+[[package]]
 name = "ferrix-svc"
 version = "0.1.0"
 
@@ -21,6 +49,8 @@ dependencies = [
 name = "init"
 version = "0.1.0"
 dependencies = [
+ "ferrix-native",
+ "ferrix-native-abi",
  "ferrix-svc",
  "ferrix-svc-proto",
  "libc",

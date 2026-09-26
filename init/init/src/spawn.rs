@@ -151,6 +151,9 @@ pub(crate) struct Prepared {
     notify: Option<libc::c_int>,
     /// Where `LISTEN_PID=` is in `envp`: the child writes its own pid there.
     listen_pid: Option<usize>,
+    /// Whether the child waits, before `execve`, for init to have given it
+    /// its bootstrap channel (§5.2 step 3).
+    waits_for_bootstrap: bool,
 }
 
 /// Why a spawn could not be worked out.
@@ -299,6 +302,7 @@ pub(crate) fn prepare(
     let listen_pid = environment.keys().position(|name| name == "LISTEN_PID");
     Ok(Prepared {
         listen_pid,
+        waits_for_bootstrap: spec.bootstrap && spec.role == ferrix_svc::event::Role::Main,
         path: c_string(&path)?,
         argv: argv
             .iter()
@@ -514,6 +518,9 @@ pub(crate) struct Started {
     pub(crate) log: Option<OwnedFd>,
     /// The read end of a `Type=notify` service's readiness pipe.
     pub(crate) notify: Option<OwnedFd>,
+    /// For a child waiting for its bootstrap channel: the pipe to write
+    /// one byte to once it is given, or to drop to let it run without.
+    pub(crate) go: Option<OwnedFd>,
 }
 
 /// Start `prepared` in the cgroup `cgroup` is open on.
@@ -542,6 +549,11 @@ pub(crate) fn start(
     } else {
         None
     };
+    let go = if prepared.waits_for_bootstrap {
+        Some(sys::pipe()?)
+    } else {
+        None
+    };
     let notify = match prepared.notify {
         Some(_) => {
             let (read, write) = sys::pipe()?;
@@ -559,6 +571,7 @@ pub(crate) fn start(
         notify: notify.as_ref().map(|(_, write)| write.as_raw_fd()),
         sockets: sockets.iter().map(AsRawFd::as_raw_fd).collect(),
         connection: connection.as_ref().map(AsRawFd::as_raw_fd),
+        go: go.as_ref().map(|(read, _)| read.as_raw_fd()),
     };
     match sys::fork_into(cgroup)? {
         Forked::Child => child(prepared, &argv, &mut envp, &pipes),
@@ -576,6 +589,10 @@ pub(crate) fn start(
                 notify: notify.map(|(read, write)| {
                     drop(write);
                     read
+                }),
+                go: go.map(|(read, write)| {
+                    drop(read);
+                    write
                 }),
             })
         }
@@ -628,6 +645,9 @@ struct Pipes {
     notify: Option<RawFd>,
     sockets: Vec<RawFd>,
     connection: Option<RawFd>,
+    /// The read end of the pipe init writes once the bootstrap channel is
+    /// given.
+    go: Option<RawFd>,
 }
 
 /// The child, from `clone3` to `execve`.
@@ -728,6 +748,12 @@ fn child(
         && let Err(error) = sys::become_user(*uid, *gid, groups)
     {
         fail(Step::User, error);
+    }
+    // The last step before the program: wait for init to have given the
+    // bootstrap channel, since a give after `execve` is refused. A byte or
+    // the pipe's end, either way the program runs.
+    if let Some(go) = pipes.go {
+        sys::wait_readable(go);
     }
     let error = sys::execve(&prepared.path, argv, envp);
     fail(Step::Exec, error)
