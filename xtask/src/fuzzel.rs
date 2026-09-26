@@ -101,7 +101,7 @@ pub(crate) fn files(chrome: Option<&str>) -> Result<Vec<File>> {
 /// the guest.
 pub(crate) const BOOT_CONFIG: &str = "\
 # Carried into the initramfs by `cargo xtask test-compositor`.
-exec-once = /bin/fuzzel --log-level=info
+exec-once = /bin/fuzzel --log-level=info --print-timing-info
 bind = , F1, exec, /bin/vkbd p a t
 bind = , F2, exec, /bin/vkbd Return
 ";
