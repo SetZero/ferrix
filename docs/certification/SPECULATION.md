@@ -241,7 +241,12 @@ Once, on the boot processor, before the second processor starts:
 ```
 
 (`x86_64 --accel kvm` on an AMD Ryzen 9 9900X host.) Every secondary applies
-the same plan as it starts and records what it applied. After stage 7's
+the boot processor's plan as it starts, adjusted to its own core, and records
+what it applied. On AArch64 the branch history loop and `SSBS` depend on the
+core, so a secondary decides them itself, in both directions: a Pixel 7 boots on
+a Cortex-A55, which needs no loop, and starts A78s and X1s, which need 32
+branches of it. The loop's count is one word every entry reads, so it is the
+largest any core needs. After stage 7's
 programs, `arch::check_speculation` (`arch/speculation_check.rs`) requires:
 
 * the clamp to return an index inside its bound unchanged, and — run on its
@@ -253,14 +258,16 @@ programs, `arch::check_speculation` (`arch/speculation_check.rs`) requires:
 * a switch barrier to have been issued where the plan has one;
 * on x86-64, `VERW` to take its operand, on machines whose exit path never
   runs it;
-* on AArch64, the entry loop's count to agree with the plan.
+* on AArch64, the entry loop's count to be non-zero exactly when some
+  processor recorded that it needs the loop.
 
 ```
   cpu      speculation defences read back on 4 processors, 207 switch barriers
 ```
 
-A failure is FX-0307. Processors that applied less than the boot processor —
-a big.LITTLE machine's little cores — are counted and named, not failed.
+A failure is FX-0307. Processors that applied something other than the boot
+processor — a big.LITTLE machine's little cores, or its big ones when it boots
+on a little one — are counted and named, not failed.
 
 ---
 

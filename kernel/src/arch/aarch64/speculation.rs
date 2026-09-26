@@ -23,7 +23,7 @@ use core::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering};
 use ferrix_bootinfo::BootView;
 
 use super::cpu;
-use crate::arch::speculation::{Defences, HARDENED, record_this_cpu};
+use crate::arch::speculation::{Defences, HARDENED, applied_by, record_this_cpu};
 use crate::console::println;
 
 /// `SCTLR_EL1.DSSBS`: the value `PSTATE.SSBS` takes on an exception to EL1.
@@ -59,7 +59,7 @@ static SWITCH_WORKAROUND: AtomicU8 = AtomicU8::new(0);
 /// Whether each processor calls `ARCH_WORKAROUND_2` to turn the store bypass
 /// mitigation on.
 static FIRMWARE_SSBD: AtomicU8 = AtomicU8::new(0);
-/// The plan's defences, for the secondaries.
+/// The boot processor's plan, which each secondary adjusts to its own core.
 static PLAN_DEFENCES: AtomicU32 = AtomicU32::new(0);
 
 /// How many branches the entry loop takes: the largest any processor needs,
@@ -286,23 +286,43 @@ fn apply(plan: Defences, core: Core) -> Defences {
     }
 }
 
-/// Apply the boot processor's plan on a secondary, as it starts.
+/// Apply the boot processor's plan on a secondary, as it starts, adjusted to
+/// this core.
+///
+/// The cores of one machine need not be alike: a Pixel 7 boots on a
+/// Cortex-A55, which needs no branch history loop, and starts two A78s and two
+/// X1s, which need 32 branches of it. So what depends on the core -- the loop
+/// and `SSBS` -- is decided here, per core, in both directions: a little core
+/// may drop what the boot processor has, and a big one add what it lacks. What
+/// depends on firmware stays the boot processor's decision, since firmware is
+/// the same for every core.
 pub(crate) fn apply_this_cpu() {
     if !HARDENED {
         record_this_cpu(Defences::NONE);
         return;
     }
-    let plan = Defences::from_bits(PLAN_DEFENCES.load(Ordering::Acquire));
     let core = Core::read();
-    // A little core may lack what the boot processor has, and need less.
-    let mut plan = plan;
-    if core.ssbs == 0 && FIRMWARE_SSBD.load(Ordering::Relaxed) == 0 {
-        plan = Defences::from_bits(plan.bits() & !Defences::SSBD.bits());
-    }
-    if core.bhb_loops() == 0 {
-        plan = Defences::from_bits(plan.bits() & !Defences::BHB_LOOP.bits());
-    }
+    let plan = for_core(
+        Defences::from_bits(PLAN_DEFENCES.load(Ordering::Acquire)),
+        core,
+    );
     record_this_cpu(apply(plan, core));
+}
+
+/// `plan` with what depends on the core decided for `core`.
+fn for_core(plan: Defences, core: Core) -> Defences {
+    let without =
+        |plan: Defences, defence: Defences| Defences::from_bits(plan.bits() & !defence.bits());
+    let plan = if core.bhb_loops() > 0 {
+        plan.with(Defences::BHB_LOOP)
+    } else {
+        without(plan, Defences::BHB_LOOP)
+    };
+    if core.ssbs > 0 || FIRMWARE_SSBD.load(Ordering::Relaxed) != 0 {
+        plan.with(Defences::SSBD)
+    } else {
+        without(plan, Defences::SSBD)
+    }
 }
 
 /// Issue the switch barrier: firmware's `ARCH_WORKAROUND_1`, which
@@ -316,17 +336,24 @@ pub(crate) fn switch_barrier() -> bool {
     true
 }
 
-/// What the boot check adds on this architecture: that the entry loop's
-/// count is what the plan says.
+/// What the boot check adds on this architecture: that the entry loop runs
+/// exactly when some processor recorded that it needs it.
+///
+/// The count is one for the whole machine -- every vector entry reads the same
+/// word -- so it is held to every processor's record, not to the boot
+/// processor's plan, which on a machine of mixed cores says nothing about the
+/// big ones.
 ///
 /// # Errors
 ///
-/// A plan with the loop and no count, or a count and no plan.
+/// A processor that needs the loop and no count, or a count that no processor
+/// asked for.
 pub(crate) fn check() -> Result<(), &'static str> {
-    let planned =
-        Defences::from_bits(PLAN_DEFENCES.load(Ordering::Acquire)).contains(Defences::BHB_LOOP);
-    if planned != (BHB_LOOPS.load(Ordering::Relaxed) != 0) {
-        return Err("the branch history loop's count disagrees with the plan");
+    let needed = (0..crate::smp::count()).any(|logical| {
+        applied_by(logical).is_some_and(|applied| applied.contains(Defences::BHB_LOOP))
+    });
+    if needed != (BHB_LOOPS.load(Ordering::Relaxed) != 0) {
+        return Err("the branch history loop's count disagrees with what the processors recorded");
     }
     Ok(())
 }
