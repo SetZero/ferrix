@@ -242,6 +242,54 @@ fn comments_end_a_line_and_a_doubled_hash_is_a_hash() {
 }
 
 #[test]
+fn a_line_that_begins_with_a_hash_is_a_comment_however_many_follow() {
+    let config = clean(
+        "################\n\
+         ### MONITORS ###\n\
+         #\n\
+         \t## indented, doubled\n\
+         general:layout = master\n",
+    );
+    assert_eq!(config.str("general:layout"), Some("master"));
+}
+
+#[test]
+fn a_keyword_inside_a_category_is_the_keyword() {
+    let config = clean(
+        "animations {\n\
+         enabled = true\n\
+         bezier = quick, 0.15, 0, 0.1, 1\n\
+         animation = fade, 1, 3.03, quick\n\
+         }\n\
+         general {\n\
+         exec-once = bar\n\
+         bind = SUPER, Q, exec, term\n\
+         }\n",
+    );
+    let keywords: Vec<&str> = config
+        .animations
+        .iter()
+        .map(|raw| raw.keyword.as_str())
+        .collect();
+    assert_eq!(keywords, ["bezier", "animation"]);
+    assert_eq!(config.animations[1].value, "fade, 1, 3.03, quick");
+    assert_eq!(config.bool("animations:enabled"), Some(true));
+    assert_eq!(config.exec_once, ["bar"]);
+    assert_eq!(config.binds.len(), 1);
+}
+
+#[test]
+fn an_unknown_name_inside_a_category_is_still_the_category_s_option() {
+    assert_eq!(
+        messages("general {\nnot_a_thing = 1\n}\n"),
+        [(
+            2,
+            "config option <general:not_a_thing> does not exist.".to_owned()
+        )]
+    );
+}
+
+#[test]
 fn the_value_is_everything_after_the_first_equals_sign() {
     let config = clean("exec-once = env A=B C==D prog\n");
     assert_eq!(config.exec_once, ["env A=B C==D prog"]);
@@ -617,14 +665,6 @@ fn keywords_collect_in_order() {
     assert_eq!(
         messages("env = LONELY\n"),
         [(1, "env expects NAME, value, not \"LONELY\"".to_owned())]
-    );
-}
-
-#[test]
-fn a_keyword_inside_a_category_is_an_option_that_does_not_exist() {
-    assert_eq!(
-        messages("general {\nbind = SUPER, Q, killactive\n}\n"),
-        [(2, "config option <general:bind> does not exist.".to_owned())]
     );
 }
 

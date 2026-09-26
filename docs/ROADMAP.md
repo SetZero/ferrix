@@ -5817,6 +5817,16 @@ being read and quietly not obeyed.
   right answer for a typo and the wrong one for an option Hyprland has. Of
   the 71 that were there, 70 already held Hyprland's default exactly.
 
+"No diagnostic at all" was not so (found 2026-09-26). The parser gave the
+same file 31. 24 were its banner lines -- `################` over
+`### MONITORS ###` -- which it read as a literal `#` where hyprlang
+takes any line that begins with one as a comment. The other 7 were its
+`bezier` and `animation` lines, written inside `animations { }` and read as
+the options `animations:bezier` and `animations:animation`, so its curves
+and speeds were refused and Hyprland's defaults drawn instead. hyprlang
+tries the category's option first and then a keyword by the bare name,
+wherever the line stands. Both are fixed and the file reads with none.
+
 And the blur, which is the compositor's whole frame budget, ran over the
 whole window whatever the damage said: a terminal's cursor blinking cost 92
 milliseconds of a 1920x1080 screen where blurring what changed costs 1.8.

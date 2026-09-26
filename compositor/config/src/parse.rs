@@ -80,6 +80,14 @@ impl Parser<'_> {
                 );
                 continue;
             }
+            // A line that begins with `#` is a comment however many follow
+            // it: hyprlang looks for the first `#` of the trimmed line and,
+            // at position 0, stops there, before `##` means anything. So the
+            // banners every starter configuration has -- `################`
+            // over `### MONITORS ###` -- are comments, not a literal `#`.
+            if raw.trim_start().starts_with('#') {
+                continue;
+            }
             let stripped = strip_comment(raw);
             let line = stripped.trim();
             if line.is_empty() {
@@ -143,6 +151,16 @@ impl Parser<'_> {
             key.push(':');
         }
         key.push_str(left);
+        // hyprlang tries the category's option first and then a keyword by
+        // the bare name, wherever the line is: a keyword has no category of
+        // its own (`CConfig::parseLine` hands its handlers the name as
+        // written, not the category's path). A starter configuration writes
+        // its `bezier` and `animation` lines inside `animations { }`, and
+        // read as the options `animations:bezier` and `animations:animation`
+        // they were refused and the curves lost.
+        if !categories.is_empty() && options::find(&key).is_none() && is_keyword(left) {
+            key = left.to_owned();
+        }
 
         match key.as_str() {
             "source" => self.source(name, &value, depth),
@@ -204,6 +222,29 @@ pub(crate) fn expand(config: &Config, value: &str) -> Result<String, String> {
     }
     out.push_str(rest);
     Ok(out)
+}
+
+/// Whether `key` is a keyword -- one of the names [`apply`] and the parser
+/// take as a keyword rather than an option -- and not an option.
+fn is_keyword(key: &str) -> bool {
+    matches!(
+        key,
+        "windowrule"
+            | "windowrulev2"
+            | "layerrule"
+            | "monitor"
+            | "workspace"
+            | "animation"
+            | "bezier"
+            | "plugin"
+            | "exec-once"
+            | "exec"
+            | "exec-shutdown"
+            | "env"
+            | "unbind"
+            | "source"
+            | "submap"
+    ) || (key.starts_with("bind") && !key.contains(':'))
 }
 
 /// Apply `key = value`, variables already expanded, to `config`: a keyword
