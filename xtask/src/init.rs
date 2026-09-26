@@ -408,6 +408,88 @@ pub(crate) fn carried(arch: Arch) -> Result<Vec<File>> {
     Ok(files)
 }
 
+/// The command line an image that boots init carries (§8.1).
+pub(crate) fn command_line() -> String {
+    format!("{}\n", qemu::init_option(PATH))
+}
+
+/// A word of `ExecStart=`, quoted as systemd reads one.
+fn exec_word(word: &str) -> String {
+    if !word.is_empty()
+        && word
+            .bytes()
+            .all(|b| b.is_ascii_graphic() && b != b'"' && b != b'\\')
+    {
+        return word.to_owned();
+    }
+    let escaped = word.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("\"{escaped}\"")
+}
+
+/// What a desktop image carries so that init is pid 1 and the compositor a
+/// service of `graphical.target` (landing L10): init and its units, the
+/// compositor at `/bin/hyprix` with `hyprix.service` running it with
+/// `arguments`, and `default.target` pointed at `graphical.target`. Without
+/// a shell in the image the console's getty is masked, since it would only
+/// fail and be restarted.
+///
+/// # Errors
+///
+/// When init cannot be built for `arch`.
+pub(crate) fn desktop_files(
+    arch: Arch,
+    hyprix: &[u8],
+    arguments: &[&str],
+    shell: bool,
+) -> Result<Vec<File>> {
+    let mut files = carried(arch)?;
+    if files.is_empty() {
+        return Err(Error::new(format!("init is not built for {arch}")));
+    }
+    let mut command = vec!["/bin/hyprix".to_owned()];
+    command.extend(arguments.iter().map(|word| exec_word(word)));
+    let unit = format!(
+        "# The compositor, a service of graphical.target (docs/INIT.md, L10).\n\
+         [Unit]\n\
+         Description=The compositor\n\
+         \n\
+         [Service]\n\
+         ExecStart={}\n\
+         Restart=on-failure\n\
+         StandardOutput=console\n\
+         StandardError=console\n",
+        command.join(" ")
+    );
+    let unit_file = |path: &str, text: &str| File {
+        path: path.to_owned(),
+        mode: 0o644,
+        content: Content::Bytes(text.as_bytes().to_vec()),
+    };
+    let link = |path: &str, target: &str| File {
+        path: path.to_owned(),
+        mode: 0o777,
+        content: Content::Link(target.to_owned()),
+    };
+    files.push(File {
+        path: "bin/hyprix".to_owned(),
+        mode: 0o755,
+        content: Content::Bytes(hyprix.to_vec()),
+    });
+    files.push(unit_file("etc/ferrix/units/hyprix.service", &unit));
+    files.push(link(
+        "etc/ferrix/units/graphical.target.wants/hyprix.service",
+        "/etc/ferrix/units/hyprix.service",
+    ));
+    files.push(link(
+        "etc/ferrix/units/default.target",
+        "/lib/ferrix/units/graphical.target",
+    ));
+    if !shell {
+        files.push(link("etc/ferrix/units/getty@.service", "/dev/null"));
+    }
+    Ok(files)
+}
+
 /// The test's own units, zinc, and busybox for its `su`, as carried files.
 fn test_files(shell: &[u8], busybox: &[u8], dirclient: &[u8]) -> Vec<File> {
     let mut files: Vec<File> = ["bin/sh", "bin/zinc"]
@@ -1226,6 +1308,15 @@ mod tests {
 
     fn lines(text: &[&str]) -> Vec<String> {
         text.iter().map(|line| (*line).to_owned()).collect()
+    }
+
+    #[test]
+    fn exec_words_are_quoted_only_when_they_must_be() {
+        assert_eq!(exec_word("--config"), "--config");
+        assert_eq!(exec_word("/hypr/hyprland.conf"), "/hypr/hyprland.conf");
+        assert_eq!(exec_word("two words"), "\"two words\"");
+        assert_eq!(exec_word("say \"hi\""), "\"say \\\"hi\\\"\"");
+        assert_eq!(exec_word(""), "\"\"");
     }
 
     #[test]

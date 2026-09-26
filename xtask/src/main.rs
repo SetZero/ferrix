@@ -478,7 +478,15 @@ fn run() -> Result<()> {
 fn run_machine(mut args: Args) -> Result<()> {
     let arch = args.single_arch()?;
     rustc::prepare_default(arch, &mut args)?;
-    let (image, _) = build_image(arch, &args)?;
+    // Without a program named, the machine a person runs is the system:
+    // `/sbin/init` as pid 1, a getty on the console with zinc behind it, and
+    // `svc` to drive it (`docs/INIT.md`, L10). A program named with `--init`
+    // is still pid 1 itself, as it was asked to be.
+    let (image, _) = if optional_program(arch, &args)?.is_none() && args.init_path.is_none() {
+        build_init_image(arch, &args)?
+    } else {
+        build_image(arch, &args)?
+    };
     // Someone at the console wants the machine in front of them, so `run`
     // takes whatever hypervisor it has: WHPX on Windows, KVM on Linux, HVF on
     // macOS, emulation where there is none. The tests keep `tcg`, for the
@@ -720,6 +728,33 @@ fn build_image(arch: Arch, args: &Args) -> Result<(PathBuf, PathBuf)> {
     )?;
     let cmdline = image_cmdline(args);
     let image = fat::write_image_with(arch, &loader, &kernel, &initramfs, cmdline.as_deref())?;
+    Ok((image, kernel))
+}
+
+/// The image `run` boots when no program is named: a kernel with nothing in
+/// it, and an initramfs with `/sbin/init`, its units, zinc for the getty,
+/// and the utilities and ports a shell wants, with `ferrix.init=/sbin/init`
+/// on the command line.
+fn build_init_image(arch: Arch, args: &Args) -> Result<(PathBuf, PathBuf)> {
+    let natives = native::build(arch, args.release)?;
+    let (loader, kernel) = build_halves(arch, args)?;
+    let shell = zinc::build(arch)?;
+    if shell.is_none() {
+        return Err(Error::new(format!(
+            "zinc is not built for {arch}, so init's getty would have no shell: name one with --init"
+        )));
+    }
+    let utilities = uutils::carried(arch)?;
+    let mut carried = ports::installed(arch)?;
+    carried.extend(rustc::default_links(args));
+    carried.extend(init::carried(arch)?);
+    let initramfs =
+        initramfs::build_with_utilities(None, &natives, shell.as_deref(), &utilities, &carried)?;
+    let mut cmdline = init::command_line();
+    if let Some(extra) = image_cmdline(args) {
+        cmdline = format!("{} {extra}", cmdline.trim_end());
+    }
+    let image = fat::write_image_with(arch, &loader, &kernel, &initramfs, Some(&cmdline))?;
     Ok((image, kernel))
 }
 

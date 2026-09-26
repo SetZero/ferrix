@@ -19,7 +19,7 @@
 //! | Ctrl-Z | the line discipline raises `SIGTSTP` for the foreground group, and the shell sees the stop through `wait4`'s `WUNTRACED` |
 //! | `bg`, `fg` | `SIGCONT` and `tcsetpgrp`, in both directions |
 //! | Ctrl-C | `SIGINT` reaches the job and not the shell |
-//! | `exit` | the session ends, and the kernel says with what |
+//! | `exit` | the session ends, and init gives the console a new one: its getty respawned |
 //!
 //! # Why x86-64 only
 //!
@@ -33,7 +33,11 @@ use std::time::{Duration, Instant};
 
 use crate::args::Args;
 use crate::paths::Arch;
-use crate::{Error, Result, cargo, fat, initramfs, native, ports, qemu, uutils, zinc};
+use crate::{Error, Result, cargo, fat, init, initramfs, native, ports, qemu, uutils, zinc};
+
+/// What the getty prints as it gives the console a session: `Ferrix <host>
+/// on /dev/console`.
+const BANNER: &str = " on /dev/console";
 
 /// How long to wait for the answer to one keystroke.
 ///
@@ -177,8 +181,8 @@ const SESSION: &[Step] = &[
     },
     Step {
         keys: b"exit\n",
-        wants: &[crate::shell::EXITED],
-        proves: "the session ends, and the kernel reports the shell's status",
+        wants: &[BANNER],
+        proves: "the session ends, and init gives the console a new one",
         settle: false,
     },
 ];
@@ -200,10 +204,11 @@ pub(crate) fn test_jobs(args: &Args) -> Result<()> {
     }
     let shell =
         zinc::built(arch)?.ok_or_else(|| Error::new("zinc could not be built for x86-64"))?;
-    println!("  {arch}: building an image whose init is an interactive shell");
+    println!("  {arch}: building an image whose init is /sbin/init, with a getty on the console");
     let loader = cargo::build_loader(arch, args.release)?;
-    // No script: the kernel starts `sh -i`, which is the thing under test.
-    let kernel = cargo::build_kernel_with_init(arch, args.release, &shell, "")?;
+    // Nothing in the kernel: `/sbin/init` is pid 1 and its getty gives the
+    // console a login shell, the session a person gets (`docs/INIT.md`, L10).
+    let kernel = cargo::build_kernel(arch, args.release)?;
     let natives = native::build(arch, args.release)?;
     let utilities = uutils::carried(arch)?;
     if utilities.is_empty() {
@@ -214,14 +219,12 @@ pub(crate) fn test_jobs(args: &Args) -> Result<()> {
     }
     let bytes = std::fs::read(&shell)
         .map_err(|error| Error::new(format!("reading {}: {error}", shell.display())))?;
-    let archive = initramfs::build_with_utilities(
-        Some(&shell),
-        &natives,
-        Some(&bytes),
-        &utilities,
-        &ports::installed(arch)?,
-    )?;
-    let image = fat::write_image_with(arch, &loader, &kernel, &archive, None)?;
+    let mut carried = ports::installed(arch)?;
+    carried.extend(init::carried(arch)?);
+    let archive =
+        initramfs::build_with_utilities(None, &natives, Some(&bytes), &utilities, &carried)?;
+    let command_line = init::command_line();
+    let image = fat::write_image_with(arch, &loader, &kernel, &archive, Some(&command_line))?;
 
     println!(
         "  {arch}: typing a session at the serial console (timeout {}s)",
@@ -238,7 +241,12 @@ pub(crate) fn test_jobs(args: &Args) -> Result<()> {
             // The shell has to have started and printed a prompt before the
             // first keystroke: a byte typed at a console nobody is reading
             // sits in the kernel's ring, and the shell's first read would
-            // take it as the answer to a prompt it had not printed yet.
+            // take it as the answer to a prompt it had not printed yet. The
+            // getty's banner comes just before the shell starts.
+            let deadline = Instant::now() + PATIENCE;
+            let _ = watching.read_more(deadline, |lines| {
+                lines.iter().any(|line| line.contains(BANNER))
+            })?;
             std::thread::sleep(SETTLE);
             for step in SESSION {
                 let before = watching.after().len();
@@ -274,26 +282,18 @@ pub(crate) fn test_jobs(args: &Args) -> Result<()> {
         message.push_str("  The whole transcript is above and in the serial log.");
         return Err(Error::new(message));
     }
-    // The shell exited because `exit` was typed, and the kernel said so; a
-    // shell that died of a signal instead would have printed a status too,
-    // so the status itself is checked.
-    let exited = lines
-        .iter()
-        .rev()
-        .find(|line| line.contains(crate::shell::EXITED));
-    match exited {
-        Some(line) if line.contains(&format!("{} 0", crate::shell::EXITED)) => {}
-        Some(line) => {
-            return Err(Error::new(format!(
-                "{arch}: the session ended, but not with `exit`: {}",
-                line.trim()
-            )));
-        }
-        None => {
-            return Err(Error::new(format!(
-                "{arch}: the shell never exited, so the session was not ended by what was typed"
-            )));
-        }
+    // `exit` ended the session, and init gave the console a new one: the
+    // step above required the getty's banner again. A shell that died
+    // instead of exiting fails its unit, or waits for a restart, and init
+    // says so.
+    if let Some(line) = lines.iter().find(|line| {
+        line.contains("getty@console.service: ")
+            && (line.contains("failed") || line.contains("restarting"))
+    }) {
+        return Err(Error::new(format!(
+            "{arch}: the session ended, but not with `exit`: {}",
+            line.trim()
+        )));
     }
     println!("  {arch}: a person can hold a session with jobs at the serial console");
     Ok(())

@@ -1167,13 +1167,36 @@ fn boot_and_dump(
     // a dead machine: three boots did exactly that and said they had passed,
     // the night the compositor first drew on several threads, before a
     // fourth stopped early enough to spoil its picture.
+    judge_still_running(arch, &said)?;
+    Ok((taken, said))
+}
+
+/// That neither the kernel nor the compositor stopped during a boot whose
+/// pictures matched.
+fn judge_still_running(arch: Arch, said: &[String]) -> Result<()> {
     if let Some(line) = said.iter().find(|line| line.contains("FERRIX-PANIC")) {
         return Err(Error::new(format!(
             "{arch}: the kernel stopped while the compositor ran: {}",
             line.trim()
         )));
     }
-    Ok((taken, said))
+    if let Some(line) = said.iter().find(|line| compositor_ended(line)) {
+        return Err(Error::new(format!(
+            "{arch}: the compositor ended while it was being tested: {}",
+            line.trim()
+        )));
+    }
+    Ok(())
+}
+
+/// Whether `line` says the compositor ended. It is `hyprix.service` under
+/// init (L10), which restarts it after a failure, so a crash reads as the
+/// unit failing or being restarted, not as pid 1 exiting; a test's pictures
+/// taken after a restart would be of a second compositor.
+fn compositor_ended(line: &str) -> bool {
+    line.contains(crate::shell::EXITED)
+        || (line.contains("hyprix.service: ")
+            && (line.contains("failed") || line.contains("restarting")))
 }
 
 /// Read the guest until every line in `awaiting` has been said, or the time
@@ -1207,7 +1230,9 @@ fn build_image(
     let (loader, kernel, initramfs) = build_parts(arch, programs, config, carried_too, args)?;
     // The kernel as well as the image: the watcher symbolises a panic's
     // addresses out of it.
-    let image = crate::fat::write_image_with(arch, &loader, &kernel, &initramfs, None)?;
+    let command_line = crate::init::command_line();
+    let image =
+        crate::fat::write_image_with(arch, &loader, &kernel, &initramfs, Some(&command_line))?;
     Ok((image, kernel))
 }
 
@@ -1222,20 +1247,23 @@ fn build_desktop_image(
     args: &Args,
 ) -> Result<(PathBuf, PathBuf)> {
     let (loader, kernel, initramfs) = build_parts(arch, programs, config, carried_too, args)?;
+    let command_line = crate::init::command_line();
     let image = crate::fat::write_image_carrying(
         arch,
         &loader,
         &kernel,
         &initramfs,
-        None,
+        Some(&command_line),
         Some(DESKTOP_DEFAULTS),
     )?;
     Ok((image, kernel))
 }
 
 /// What [`build_image`] puts in an image, which is also what `flash` copies
-/// onto a card: the loader, the kernel with the compositor as init, and the
-/// initramfs.
+/// onto a card: the loader, a kernel with no program in it, and the
+/// initramfs, in which `/sbin/init` is pid 1 and the compositor
+/// `hyprix.service` under `graphical.target` (`docs/INIT.md`, L10). Every
+/// image made from these parts names `/sbin/init` on its command line.
 fn build_parts(
     arch: Arch,
     programs: &Programs,
@@ -1244,18 +1272,21 @@ fn build_parts(
     args: &Args,
 ) -> Result<(PathBuf, PathBuf, Vec<u8>)> {
     let loader = crate::cargo::build_loader(arch, args.release)?;
-    // One argument a line: a script has no quoting, and `Options::unshell`
-    // says so. `--instance` is what puts the control socket where `hyprctl`
-    // looks for it.
-    let script = format!("--config\n/{CONFIG_PATH}\n--instance\n{INSTANCE}");
-    let kernel =
-        crate::cargo::build_kernel_with_init(arch, args.release, &programs.hyprix, &script)?;
+    let kernel = crate::cargo::build_kernel(arch, args.release)?;
     let natives = crate::native::build(arch, args.release)?;
     let read = |path: &Path| -> Result<Vec<u8>> {
         std::fs::read(path)
             .map_err(|error| Error::new(format!("reading {}: {error}", path.display())))
     };
-    let mut carried = Vec::new();
+    // `--instance` is what puts the control socket where `hyprctl` looks for
+    // it.
+    let config_path = format!("/{CONFIG_PATH}");
+    let mut carried = crate::init::desktop_files(
+        arch,
+        &read(&programs.hyprix)?,
+        &["--config", &config_path, "--instance", INSTANCE],
+        carried_too.zinc.is_some(),
+    )?;
     for (path, program) in programs.carried() {
         carried.push(crate::ports::File {
             path: path.to_owned(),
@@ -2097,6 +2128,11 @@ const SERIAL_SHELL: &str = "/bin/busybox setsid -c /bin/busybox sh -i";
 /// fails. A card's `CMDLINE.TXT` saying `ferrix.checks=run` runs them anyway.
 pub(crate) const DESKTOP_DEFAULTS: &str = "ferrix.checks=skip\n";
 
+/// [`DESKTOP_DEFAULTS`] on a card, which also names `/sbin/init`: a QEMU
+/// image says so in its `CMDLINE.TXT`, and a card's `CMDLINE.TXT` is its
+/// owner's.
+const DESKTOP_BOARD_DEFAULTS: &str = "ferrix.checks=skip ferrix.init=/sbin/init\n";
+
 /// The screen a board's HDMI output runs: the DK1's LTDC scans out 720p60
 /// and nothing else (`docs/DISPLAY.md` §6).
 const BOARD_SCREEN: (u32, u32) = (1280, 720);
@@ -2176,7 +2212,7 @@ pub(crate) fn board_files(arch: Arch, args: &Args) -> Result<crate::flash::Board
         loader,
         kernel,
         initramfs,
-        defaults: Some(DESKTOP_DEFAULTS),
+        defaults: Some(DESKTOP_BOARD_DEFAULTS),
     })
 }
 
@@ -2523,6 +2559,14 @@ fn test_desktop(arch: Arch, programs: &Programs, args: &Args) -> Result<()> {
     Ok(())
 }
 
+/// How many of the compositor's clients init says it put in a scope of
+/// their own: `init     app-pattern-<pid>.scope: active` (§5.6).
+fn scopes(said: &[String]) -> usize {
+    said.iter()
+        .filter(|line| line.contains("init     app-pattern-") && line.contains(".scope: active"))
+        .count()
+}
+
 /// What [`test_desktop`] requires of what the guest said.
 fn judge_desktop(arch: Arch, said: &[String]) -> Result<()> {
     let any = |text: &str| said.iter().any(|line| line.contains(text));
@@ -2542,6 +2586,15 @@ fn judge_desktop(arch: Arch, said: &[String]) -> Result<()> {
         Some("stage 5's checks ran on a boot that skipped them".to_owned())
     } else if !any("  devmgr   ") {
         Some("devmgr was never started".to_owned())
+    } else if !any("init     starting /sbin/init") {
+        Some("the kernel did not start /sbin/init as pid 1".to_owned())
+    } else if !any("init     hyprix.service: active") {
+        Some("the compositor did not run as hyprix.service under init".to_owned())
+    } else if scopes(said) < 2 {
+        Some(format!(
+            "the compositor's two clients were not each put in a scope: {} app-pattern scopes",
+            scopes(said)
+        ))
     } else {
         None
     };
@@ -2642,7 +2695,7 @@ fn test_driver_restart(arch: Arch, programs: &Programs, args: &Args) -> Result<(
         let mut qmp = Qmp::connect(port, Instant::now() + Duration::from_secs(10))?;
         let ended = |line: &String| {
             line.contains(FAILED)
-                || line.contains(crate::shell::EXITED)
+                || compositor_ended(line)
                 || line.contains(crate::qemu::PANIC_MARKER)
         };
         let _ = watching.read_more(Instant::now() + RESTART_PATIENCE, |lines| {
@@ -2711,9 +2764,7 @@ fn back_after_the_last_kill(lines: &[String]) -> bool {
 fn judge_restart(arch: Arch, said: &[String]) -> Result<()> {
     let count = |want: &str| said.iter().filter(|line| line.contains(want)).count();
     if let Some(line) = said.iter().find(|line| {
-        line.contains(FAILED)
-            || line.contains(crate::shell::EXITED)
-            || line.contains(crate::qemu::PANIC_MARKER)
+        line.contains(FAILED) || compositor_ended(line) || line.contains(crate::qemu::PANIC_MARKER)
     }) {
         return Err(Error::new(format!(
             "{arch}: the machine did not survive its display driver being killed: {}",
