@@ -131,6 +131,9 @@ pub const CFG_ABS_INFO: u8 = 0x12;
 
 /// Bytes of `struct virtio_input_absinfo`.
 pub const ABS_INFO_LEN: usize = 20;
+/// Bytes of the `struct virtio_input_absinfo` before `res` was added:
+/// `min`, `max`, `fuzz` and `flat`. crosvm still answers this one.
+pub const ABS_INFO_SHORT_LEN: usize = 16;
 /// Bytes of `struct virtio_input_devids`.
 pub const DEVIDS_LEN: usize = 8;
 
@@ -281,9 +284,14 @@ pub struct AbsInfo {
 
 /// The range of `ABS_*` axis `axis`. An axis the device does not have is
 /// [`InputError::Absent`].
+///
+/// An answer of [`ABS_INFO_SHORT_LEN`] bytes is the structure as it was
+/// before `res`, which crosvm's touch devices still send (the Pixel 7's VM,
+/// 2026-09-26): its resolution is 0, unknown, as Linux's driver leaves it
+/// when it reads the field from an answer that never held one.
 pub fn abs_info<D: ConfigSelect + ?Sized>(dev: &mut D, axis: u16) -> Result<AbsInfo, InputError> {
     let axis = subsel(axis)?;
-    let answer = sized(dev, CFG_ABS_INFO, axis, ABS_INFO_LEN)?;
+    let answer = sized(dev, CFG_ABS_INFO, axis, ABS_INFO_SHORT_LEN)?;
     let bytes = answer.as_bytes();
     let short = InputError::AnswerTooShort {
         select: CFG_ABS_INFO,
@@ -296,7 +304,11 @@ pub fn abs_info<D: ConfigSelect + ?Sized>(dev: &mut D, axis: u16) -> Result<AbsI
         max: field(4)?,
         fuzz: field(8)?,
         flat: field(12)?,
-        res: field(16)?,
+        res: if answer.len() >= ABS_INFO_LEN {
+            field(16)?
+        } else {
+            0
+        },
     };
     if info.min > info.max {
         return Err(InputError::AbsRange {

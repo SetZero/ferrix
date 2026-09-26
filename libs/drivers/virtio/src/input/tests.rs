@@ -347,14 +347,31 @@ fn absinfo_is_min_max_fuzz_flat_res() {
         })
     );
 
-    // Too short for the structure, even with the bytes behind it.
+    // The structure before `res`, as crosvm answers: the resolution is
+    // unknown, whatever lies in the union behind it.
+    let mut dev = Device::new(vec![(0x12, 0x01, 16, payload.clone())]);
+    assert_eq!(
+        abs_info(&mut dev, 1),
+        Ok(AbsInfo {
+            min: -5,
+            max: 0x7fff,
+            fuzz: 2,
+            flat: 3,
+            res: 0
+        })
+    );
+    // Between the two, the older structure and not a partial `res`.
     let mut dev = Device::new(vec![(0x12, 0x01, 19, payload.clone())]);
+    assert_eq!(abs_info(&mut dev, 1).map(|info| info.res), Ok(0));
+
+    // Too short even for that, with the bytes behind it.
+    let mut dev = Device::new(vec![(0x12, 0x01, 15, payload.clone())]);
     assert_eq!(
         abs_info(&mut dev, 1),
         Err(InputError::AnswerTooShort {
             select: 0x12,
             subsel: 1,
-            size: 19
+            size: 15
         })
     );
 
