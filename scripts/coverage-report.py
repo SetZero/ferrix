@@ -86,10 +86,20 @@ ROOT = Path(__file__).resolve().parent.parent
 # whichever path came before it, which silently inflates that file's coverage.
 # An unplaceable header clears the current file instead, so its rows are
 # skipped rather than misfiled.
-FILE_HEADER = re.compile(r"^(\S+\.rs):$")
-# `image.rs   86   0xffffffff80000110   x` -- name, line, address, then an
-# optional view column and an `x` when the row begins a statement.
-LINE_ROW = re.compile(r"^\S+\s+(\d+)\s+(0x[0-9a-fA-F]+)\s*(\d*)\s*(x?)\s*$")
+#
+# A header is printed only when a row's file differs from the last one
+# printed, and the end of a sequence (a `-` in the line column) resets the
+# line program's file to the unit's first, which objdump does not print
+# again. Run wide (`-w`), it names that file once per unit, as `CU: path:`,
+# and a sequence end returns to it. Before 2026-09-26 the rows after one were
+# filed under whichever header came last -- `core`'s `map.rs` counted as
+# lines of `arch/gicv2.rs`, `check.rs` and `drm.rs` as `syscall/uaccess.rs`
+# -- about 700 statement rows on AArch64.
+FILE_HEADER = re.compile(r"^(CU: )?(\S+\.rs):$")
+# `image.rs   86   0xffffffff80000110   x` -- name, line (`-` ends a
+# sequence), address, then an optional view column and an `x` when the row
+# begins a statement.
+LINE_ROW = re.compile(r"^\S+\s+(\d+|-)\s+(0x[0-9a-fA-F]+)\s*(\d*)\s*(x?)\s*$")
 
 
 def load_gate():
@@ -201,7 +211,7 @@ def read_line_table(elf: Path) -> dict[str, dict[int, list[int]]]:
     """
     low, high = elf_text_range(elf)
     output = subprocess.run(
-        ["objdump", "--dwarf=decodedline", str(elf)],
+        ["objdump", "--dwarf=decodedline", "-w", str(elf)],
         capture_output=True,
         text=True,
         check=True,
@@ -209,18 +219,24 @@ def read_line_table(elf: Path) -> dict[str, dict[int, list[int]]]:
 
     table: dict[str, dict[int, list[int]]] = defaultdict(lambda: defaultdict(list))
     current: str | None = None
+    unit: str | None = None
 
     for raw in output.splitlines():
         text = raw.strip()
         header = FILE_HEADER.match(text)
         if header:
-            path = header.group(1)
+            path = header.group(2)
             current = path if "/" in path else None
-            continue
-        if current is None:
+            if header.group(1):
+                unit = current
             continue
         row = LINE_ROW.match(text)
         if not row:
+            continue
+        if row.group(1) == "-":
+            current = unit
+            continue
+        if current is None:
             continue
         line = int(row.group(1))
         # Line 0 is compiler-generated; the `x` column is DWARF's is_stmt, and
