@@ -142,6 +142,24 @@ def reconstruct(low32: int, low: int, high: int) -> int | None:
     return candidate if low <= candidate < high else None
 
 
+def trace_slide(trace: Path, given: int | None) -> int:
+    """How far KASLR moved the kernel in the boot `trace` recorded.
+
+    The trace holds the addresses the kernel ran at; the line table holds the
+    ones it was linked at. The loader moves the image each boot and prints the
+    difference (`boot/src/kaslr.rs`), and xtask writes it beside the trace as
+    `<trace>.slide` (`xtask/src/kaslr.rs`). `--slide` overrides it for every
+    trace; a trace with neither is taken to be of a kernel that did not move,
+    as one built `--mitigations off` or booted with `nokaslr` does not.
+    """
+    if given is not None:
+        return given
+    sidecar = trace.with_name(trace.name + ".slide")
+    if sidecar.exists():
+        return int(sidecar.read_text().strip(), 16)
+    return 0
+
+
 def read_line_table(elf: Path) -> dict[str, dict[int, list[int]]]:
     """{source path: {line: [addresses]}} for every statement row."""
     output = subprocess.run(
@@ -186,6 +204,13 @@ def main() -> int:
         help="one or more traces; coverage is the union, as a test suite's is",
     )
     parser.add_argument("--elf", type=Path, required=True)
+    parser.add_argument(
+        "--slide",
+        type=lambda text: int(text, 16),
+        default=None,
+        help="how far KASLR moved the kernel, in hex, for every trace; by "
+        "default each trace's own `<trace>.slide`, or 0 without one",
+    )
     parser.add_argument("--json", type=Path, help="write the per-file detail here")
     parser.add_argument(
         "--residual",
@@ -216,11 +241,15 @@ def main() -> int:
     for trace in args.drcov:
         found = read_drcov(trace)
         blocks.extend(found)
+        # Reconstructed against where the image ran, then moved back to where
+        # it was linked, which is what the line table is in.
+        slide = trace_slide(trace, args.slide)
         for low32, size in found:
-            start = reconstruct(low32, low, high)
+            start = reconstruct(low32, low + slide, high + slide)
             if start is not None:
+                start -= slide
                 ranges.add((start, start + max(size, 1)))
-        print(f"coverage: {trace.name}: {len(found)} blocks")
+        print(f"coverage: {trace.name}: {len(found)} blocks, slide {slide:#x}")
 
     executed = sorted(ranges)
 
