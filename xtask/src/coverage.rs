@@ -156,6 +156,8 @@ struct Gate {
     /// Anything else the boot's environment needs: `FERRIX_X86_MACHINE`
     /// and `FERRIX_X86_CPU` for a different PC.
     env: &'static [(&'static str, &'static str)],
+    /// Arguments the gate is given after the suite's own, such as `--smp 1`.
+    extra: &'static [&'static str],
 }
 
 impl Gate {
@@ -170,6 +172,7 @@ impl Gate {
             arm_cpu: None,
             reset: false,
             env: &[],
+            extra: &[],
         }
     }
 
@@ -208,6 +211,11 @@ impl Gate {
     /// The same gate, with `env` in its environment.
     const fn with_env(self, env: &'static [(&'static str, &'static str)]) -> Gate {
         Gate { env, ..self }
+    }
+
+    /// The same gate, given `extra` as well.
+    const fn with_args(self, extra: &'static [&'static str]) -> Gate {
+        Gate { extra, ..self }
     }
 }
 
@@ -283,6 +291,11 @@ const SUITE: &[Gate] = &[
     Gate::new("test-boot", "boot-reset", false)
         .only(Arch::X86_64)
         .resetting(),
+    // One processor: a scoped shootdown with nobody else online flushes
+    // only here, which no multiprocessor boot does once discovery is done.
+    Gate::new("test-boot", "boot-single", false)
+        .only(Arch::X86_64)
+        .with_args(&["--smp", "1"]),
     Gate::new("test-shell", "shell", true),
     Gate::new("test-vfs", "vfs", true).only(Arch::X86_64),
     Gate::new("test-net", "net", true),
@@ -415,7 +428,7 @@ fn run_gate(
     if let Some(cpu) = gate.arm_cpu {
         let _ = command.env("FERRIX_ARM_CPU", cpu);
     }
-    let _ = command.envs(gate.env.iter().copied());
+    let _ = command.envs(gate.env.iter().copied()).args(gate.extra);
     if args.release {
         let _ = command.arg("--release");
     }

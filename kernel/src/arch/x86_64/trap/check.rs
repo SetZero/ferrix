@@ -13,9 +13,10 @@
 //! Before this, the one program the boot ended by a fault wrote through a null
 //! pointer (`object/check.rs`), so a divide error, an invalid opcode, a
 //! privileged instruction and a floating-point exception each reached a line
-//! of `fault_signal` no boot had run.
+//! of `fault_signal` no boot had run, and nothing had touched a file mapping
+//! past its file's end, which the dispatcher turns into `SIGBUS` itself.
 
-use ferrix_linux_abi::types::{SIGFPE, SIGILL, SIGSEGV};
+use ferrix_linux_abi::types::{SIGBUS, SIGFPE, SIGILL, SIGSEGV};
 
 use super::super::cpu;
 use crate::console::println;
@@ -77,6 +78,35 @@ const X87: &[u8] = &[
     0x00, 0x00, 0x0f, 0x05,
 ];
 
+/// A read of the second page of a shared mapping of a one-page file: `#PF`,
+/// which the address space answers with the file's end rather than a missing
+/// mapping, so the dispatcher sends `SIGBUS` and not what `fault_signal` would
+/// say. Exits with 96 if the file or the mapping could not be made.
+///
+/// ```text
+///   leaq name(%rip), %rdi ; xorl %esi, %esi ; movl $319, %eax ; syscall
+///   testq %rax, %rax ; js 1f ; movq %rax, %r8           ; memfd_create
+///   movq %rax, %rdi ; movl $4096, %esi ; movl $77, %eax ; syscall
+///   testq %rax, %rax ; jnz 1f                           ; ftruncate to a page
+///   xorl %edi, %edi ; movl $8192, %esi ; movl $1, %edx ; movl $1, %r10d
+///   xorl %r9d, %r9d ; movl $9, %eax ; syscall            ; two pages, shared
+///   cmpq $-4096, %rax ; ja 1f
+///   movq 4096(%rax), %rax                                ; past the file
+///   movl $231, %eax ; movl $97, %edi ; syscall
+/// 1: movl $231, %eax ; movl $96, %edi ; syscall
+/// name: .asciz "bus"
+/// ```
+const PAST_END: &[u8] = &[
+    0x48, 0x8d, 0x3d, 0x68, 0x00, 0x00, 0x00, 0x31, 0xf6, 0xb8, 0x3f, 0x01, 0x00, 0x00, 0x0f, 0x05,
+    0x48, 0x85, 0xc0, 0x78, 0x4e, 0x49, 0x89, 0xc0, 0x48, 0x89, 0xc7, 0xbe, 0x00, 0x10, 0x00, 0x00,
+    0xb8, 0x4d, 0x00, 0x00, 0x00, 0x0f, 0x05, 0x48, 0x85, 0xc0, 0x75, 0x37, 0x31, 0xff, 0xbe, 0x00,
+    0x20, 0x00, 0x00, 0xba, 0x01, 0x00, 0x00, 0x00, 0x41, 0xba, 0x01, 0x00, 0x00, 0x00, 0x45, 0x31,
+    0xc9, 0xb8, 0x09, 0x00, 0x00, 0x00, 0x0f, 0x05, 0x48, 0x3d, 0x00, 0xf0, 0xff, 0xff, 0x77, 0x13,
+    0x48, 0x8b, 0x80, 0x00, 0x10, 0x00, 0x00, 0xb8, 0xe7, 0x00, 0x00, 0x00, 0xbf, 0x61, 0x00, 0x00,
+    0x00, 0x0f, 0x05, 0xb8, 0xe7, 0x00, 0x00, 0x00, 0xbf, 0x60, 0x00, 0x00, 0x00, 0x0f, 0x05, 0x62,
+    0x75, 0x73, 0x00,
+];
+
 /// `arch_prctl(ARCH_SET_FS, 0xffff800000000000)` has to be `EPERM` and
 /// `arch_prctl(ARCH_GET_FS, 0)` `EINVAL`; the program exits with 0 when both
 /// are, 1 when the first is not and 2 when the second is not.
@@ -117,7 +147,7 @@ pub(crate) fn run() -> Result<(), &'static str> {
     if cpu::read_cr0() & CR0_NE == 0 {
         return Err("CR0.NE is clear, so an x87 exception is not an exception");
     }
-    let cases: [(&[u8], &[u8], i32, &'static str); 5] = [
+    let cases: [(&[u8], &[u8], i32, &'static str); 6] = [
         (
             b"/divide",
             DIVIDE,
@@ -148,6 +178,12 @@ pub(crate) fn run() -> Result<(), &'static str> {
             killed_by(SIGFPE),
             "a program's x87 floating-point exception did not end it with SIGFPE",
         ),
+        (
+            b"/past-end",
+            PAST_END,
+            killed_by(SIGBUS),
+            "a program's read past the end of a mapped file did not end it with SIGBUS",
+        ),
     ];
     for (name, code, expected, problem) in cases {
         let status = run_program(name, code)?;
@@ -161,7 +197,8 @@ pub(crate) fn run() -> Result<(), &'static str> {
     }
     println!(
         "  fault    a program's divide error, invalid opcode, unmapped read, privileged \
-         instruction and x87 exception ended it with SIGFPE, SIGILL, SIGSEGV, SIGSEGV and SIGFPE"
+         instruction, x87 exception and read past a mapped file's end ended it with SIGFPE, \
+         SIGILL, SIGSEGV, SIGSEGV, SIGFPE and SIGBUS"
     );
 
     match run_program(b"/prctl", PRCTL)? {

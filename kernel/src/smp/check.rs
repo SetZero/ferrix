@@ -53,6 +53,7 @@ pub(crate) struct Report {
 pub(crate) fn run(topology: &Topology) -> Result<Report, &'static str> {
     let mut report = Report::default();
     everywhere(topology, &mut report)?;
+    page_sets()?;
     shootdown(&mut report)?;
     grace(topology, &mut report)?;
     contended(topology, &mut report)?;
@@ -366,6 +367,44 @@ fn read_probe(_me: &'static PerCpu) {
     if seen != EXPECTED.load(Ordering::Acquire) {
         let _ = STALE.fetch_add(1, Ordering::Relaxed);
     }
+}
+
+/// A scoped shootdown's page set: pages up to the ceiling one by one, the
+/// whole TLB past it, and a set merged into another carrying either along.
+///
+/// A retirement merges the set its caller's own space already built into its
+/// own before it sends one shootdown for both (`user::vmo`), and a merged set
+/// that dropped the caller's "everything" would leave pages cached on the
+/// processors that ran it.
+fn page_sets() -> Result<(), &'static str> {
+    use super::{PAGE_FLUSH_CEILING, TlbPages};
+
+    let mut listed = TlbPages::new();
+    listed.add_range(0x10_0000, PAGE_FLUSH_CEILING as u64 * PAGE_SIZE);
+    listed.add(0x10_0000 + 5);
+    if listed.is_everything() || listed.addresses().len() != PAGE_FLUSH_CEILING {
+        return Err("a page set at its ceiling did not list every page once");
+    }
+    let mut over = TlbPages::new();
+    over.add_range(0x10_0000, (PAGE_FLUSH_CEILING as u64 + 1) * PAGE_SIZE);
+    if !over.is_everything() {
+        return Err("a page set past its ceiling did not ask for the whole TLB");
+    }
+
+    let mut merged = TlbPages::new();
+    merged.add(0x20_0000);
+    let mut other = TlbPages::new();
+    other.add(0x30_0000);
+    other.add(0x20_0000);
+    merged.add_all(&other);
+    if merged.is_everything() || merged.addresses() != [0x20_0000, 0x30_0000] {
+        return Err("two merged page sets did not name each page once");
+    }
+    merged.add_all(&over);
+    if !merged.is_everything() {
+        return Err("a page set merged with one asking for the whole TLB did not ask for it too");
+    }
+    Ok(())
 }
 
 /// A page is moved to another frame, again and again, and every processor
