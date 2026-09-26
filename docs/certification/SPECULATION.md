@@ -607,8 +607,14 @@ that race's background rate, so an alternating control was run on x86-64 TCG
 | this branch with the kernel half of 6afa79fc (row 238's fix) | — | 0 of 6 runs |
 
 Each branch also hit FX-0884, the signalfd check, once in its twenty
-`test-shell` runs. One in twenty against none is not a difference the control
-can distinguish from chance, and every FX-1004 seen is the refusal
+`test-shell` runs, with a different sentence each time. Both have since been
+explained and fixed, neither in this work: `docs/BACKLOG.md`'s done row in P1
+for FX-0884 records the two causes — a signal that landed between the
+waiter's listing and its last look, which the wait did not count as a wake,
+and the exec check's programs still holding their address spaces when
+signalfd's frame count began — the two fixes, and the negative controls that
+reproduce each on demand. One in twenty against none is not a difference the
+control can distinguish from chance, and every FX-1004 seen is the refusal
 `docs/BACKLOG.md` row 238 describes — the driver's end still referenced by
 `Endpoint::write` while it wakes the reader — on a path this work does not
 touch: nothing here changes `object/`, `claim.rs` or `block_ring/`. What `on`
