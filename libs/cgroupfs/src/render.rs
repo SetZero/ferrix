@@ -76,3 +76,34 @@ pub fn proc_cgroup<'a>(out: &mut Vec<u8>, names: impl IntoIterator<Item = &'a [u
     path(out, names);
     out.push(b'\n');
 }
+
+/// Append `pids.max` or `memory.max`: `max` for no limit, else the number.
+pub fn max(out: &mut Vec<u8>, limit: Option<u64>) {
+    match limit {
+        None => out.extend_from_slice(b"max\n"),
+        Some(value) => {
+            let _ = writeln!(Out(out), "{value}");
+        }
+    }
+}
+
+/// Append a single number and a newline: `pids.current`, `memory.current`,
+/// `cpu.weight`.
+pub fn number(out: &mut Vec<u8>, value: u64) {
+    let _ = writeln!(Out(out), "{value}");
+}
+
+/// Append `pids.events`: how many forks the limit refused.
+pub fn pids_events(out: &mut Vec<u8>, max: u64) {
+    let _ = writeln!(Out(out), "max {max}");
+}
+
+/// Append `memory.events`, in the order Linux prints it: how many charges
+/// `memory.max` refused under `max`, and the rest, which Ferrix never counts
+/// (no `memory.low`, no `memory.high`, no OOM kill), as zeros.
+pub fn memory_events(out: &mut Vec<u8>, max: u64) {
+    let _ = write!(
+        Out(out),
+        "low 0\nhigh 0\nmax {max}\noom 0\noom_kill 0\noom_group_kill 0\n"
+    );
+}

@@ -14,7 +14,11 @@
 //!
 //! The tree, `cgroup.procs` read and moves, `cgroup.kill`, `cgroup.events`
 //! read and polled for `POLLPRI` (G3), the limits on depth and descendants,
-//! and `cgroup.subtree_control` with no controller to enable yet. `cgroup.freeze`
+//! and `cgroup.subtree_control` with three controllers to enable: `cpu`
+//! (`cpu.weight`), `memory` (`memory.max`, `memory.current`,
+//! `memory.events`) and `pids` (`pids.max`, `pids.current`, `pids.events`).
+//! Each of their files reads and writes the job's quota (`object::quota`,
+//! `FRU_RSA.1`), which a native job handle reaches as well. `cgroup.freeze`
 //! reads `0` and refuses writes until F1.
 //!
 //! # Delegation (G4)
@@ -37,7 +41,7 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::any::Any;
 
-use ferrix_cgroupfs::controllers::{self, Set};
+use ferrix_cgroupfs::controllers::{self, Controller, Set};
 use ferrix_cgroupfs::files::{self, Kind};
 use ferrix_cgroupfs::write::{self, Target};
 use ferrix_cgroupfs::{Refusal, name, render};
@@ -56,12 +60,14 @@ use crate::hooks::Full;
 use crate::object::Object;
 use crate::object::job::{self, Job, JobError, NodeAttributes};
 use crate::object::process::Host;
+use crate::object::quota::{self, Resource};
 use crate::sync::SpinLock;
 use crate::syscall::fd;
 use crate::syscall::native;
 use crate::syscall::process::{self, Process};
 use crate::syscall::registry;
 
+mod controllers_check;
 mod delegation_check;
 mod events_check;
 mod native_check;
@@ -73,8 +79,12 @@ type Result<T> = core::result::Result<T, Errno>;
 /// tells a cgroup v2 mount from a v1 one before trusting it.
 const CGROUP2_SUPER_MAGIC: u64 = 0x6367_7270;
 
-/// The controllers this kernel has built. None yet: `pids` is landing P1.
-const BUILT: Set = Set::EMPTY;
+/// The controllers this kernel has built: `cpu`, `memory` and `pids`, over
+/// the job quotas. `io` is landing B1.
+const BUILT: Set = Set::EMPTY
+    .with(Controller::Cpu)
+    .with(Controller::Memory)
+    .with(Controller::Pids);
 
 /// Where a directory's children begin in its cursor space, past its files.
 const CHILD_CURSORS: u64 = 1 << 32;
@@ -405,7 +415,7 @@ impl Inode for Directory {
     }
 
     fn lookup(&self, name: &[u8]) -> Result<Arc<dyn Inode>> {
-        if let Some(file) = files::named(name, self.is_root()) {
+        if let Some(file) = files::named(name, self.is_root(), offered(&self.job)) {
             return Ok(Arc::new(Interface {
                 job: Arc::clone(&self.job),
                 file,
@@ -426,7 +436,9 @@ impl Inode for Directory {
             return Err(Errno::EACCES);
         }
         name::check(name).map_err(errno)?;
-        if files::named(name, self.is_root()).is_some() || self.child(name).is_some() {
+        if files::named(name, self.is_root(), offered(&self.job)).is_some()
+            || self.child(name).is_some()
+        {
             return Err(Errno::EEXIST);
         }
         let text = core::str::from_utf8(name).map_err(|_| Errno::EINVAL)?;
@@ -465,7 +477,7 @@ impl Inode for Directory {
         let root = self.is_root();
         let first = usize::try_from(cursor.saturating_sub(FIRST_CURSOR)).unwrap_or(usize::MAX);
         if cursor < CHILD_CURSORS {
-            for (index, file) in files::of(root).enumerate().skip(first) {
+            for (index, file) in files::of(root, offered(&self.job)).enumerate().skip(first) {
                 let accepted = emit(DirEntry {
                     ino: ino(&self.job, 1 + file_slot(file)),
                     kind: FileType::Regular,
@@ -749,8 +761,38 @@ fn contents(job: &Arc<Job>, kind: Kind) -> Vec<u8> {
         Kind::Stat => render::stat(&mut out, job.descendants().unwrap_or(u32::MAX)),
         Kind::Freeze => out.extend_from_slice(b"0\n"),
         Kind::Kill => {}
+        Kind::CpuWeight => render::number(&mut out, u64::from(job.cpu_weight())),
+        Kind::MemoryCurrent => render::number(&mut out, bytes(usage(job, Resource::Memory).used)),
+        Kind::MemoryMax => render::max(&mut out, limit_bytes(usage(job, Resource::Memory).limit)),
+        Kind::MemoryEvents => render::memory_events(&mut out, usage(job, Resource::Memory).refused),
+        Kind::PidsCurrent => render::number(&mut out, usage(job, Resource::Tasks).used),
+        Kind::PidsMax => {
+            let limit = usage(job, Resource::Tasks).limit;
+            render::max(&mut out, (limit != quota::UNLIMITED).then_some(limit));
+        }
+        Kind::PidsEvents => render::pids_events(&mut out, usage(job, Resource::Tasks).refused),
     }
     out
+}
+
+/// What `job` holds of `resource`: nothing, and no limit, for the root,
+/// which has no controller files anyway.
+fn usage(job: &Job, resource: Resource) -> quota::Usage {
+    job.usage(resource).unwrap_or(quota::Usage {
+        used: 0,
+        limit: quota::UNLIMITED,
+        refused: 0,
+    })
+}
+
+/// Pages as the bytes the `memory` files count in.
+fn bytes(pages: u64) -> u64 {
+    pages.saturating_mul(ferrix_bootinfo::PAGE_SIZE)
+}
+
+/// A limit in pages as `memory.max` prints it: `None` for no limit.
+fn limit_bytes(pages: u64) -> Option<u64> {
+    (pages != quota::UNLIMITED).then(|| bytes(pages))
 }
 
 /// The live processes directly in `job`, not beneath it, in pid order.
@@ -807,8 +849,6 @@ fn write_to(job: &Arc<Job>, kind: Kind, data: &[u8], opener: &Writer) -> Result<
             let _ = job.kill_members().map_err(|_| Errno::ENOMEM)?;
         }
         Kind::SubtreeControl => {
-            // Nothing is built yet, so nothing parses but an empty change;
-            // the rules below are ready for the first controller (P1).
             let change = controllers::parse_change(data, BUILT).map_err(errno)?;
             job.change_subtree_control(change, offered(job))
                 .map_err(|refused| match refused {
@@ -821,7 +861,25 @@ fn write_to(job: &Arc<Job>, kind: Kind, data: &[u8], opener: &Writer) -> Result<
         Kind::MaxDescendants => job.set_max_descendants(write::parse_limit(data).map_err(errno)?),
         Kind::Type => write::parse_type(data).map_err(errno)?,
         Kind::Threads | Kind::Freeze => return Err(Errno::EOPNOTSUPP),
-        Kind::Controllers | Kind::Events | Kind::Stat => return Err(Errno::EACCES),
+        Kind::PidsMax => {
+            let limit = write::parse_pids_max(data).map_err(errno)?;
+            let _ = job.set_limit(Resource::Tasks, limit.unwrap_or(quota::UNLIMITED));
+        }
+        Kind::MemoryMax => {
+            let limit = write::parse_memory_max(data).map_err(errno)?;
+            let pages = limit.map_or(quota::UNLIMITED, |bytes| bytes / ferrix_bootinfo::PAGE_SIZE);
+            let _ = job.set_limit(Resource::Memory, pages);
+        }
+        Kind::CpuWeight => {
+            let _ = job.set_cpu_weight(write::parse_weight(data).map_err(errno)?);
+        }
+        Kind::Controllers
+        | Kind::Events
+        | Kind::Stat
+        | Kind::MemoryCurrent
+        | Kind::MemoryEvents
+        | Kind::PidsCurrent
+        | Kind::PidsEvents => return Err(Errno::EACCES),
     }
     Ok(data.len())
 }
@@ -849,6 +907,8 @@ pub(crate) struct Report {
     pub(crate) cloned: bool,
     /// Native registrations for `EMPTY` fired by the populated flip.
     pub(crate) emptied: u32,
+    /// Writes to the controllers' files refused as Linux refuses them.
+    pub(crate) controlled: u32,
 }
 
 /// Where [`check`] mounts its cgroupfs: under `/tmp`, and gone afterwards.
@@ -1000,6 +1060,7 @@ pub(crate) fn check() -> Checked<Report> {
     harness.report.moves = delegated.moves;
     harness.report.cloned = delegated.cloned;
     harness.report.emptied = native_check::run(&mut harness)?;
+    harness.report.controlled = controllers_check::run(&mut harness, &process)?;
 
     let root = ns
         .resolve(&harness.ctx, None, CHECK_AT, true)
@@ -1132,7 +1193,7 @@ fn check_the_limits(harness: &mut Harness) -> Checked<()> {
     for (file, data, errno, what) in [
         (
             &b"/check-b/cgroup.subtree_control"[..],
-            &b"+memory\n"[..],
+            &b"+io\n"[..],
             Errno::EINVAL,
             "cgroup.subtree_control enabled a controller that is not built",
         ),

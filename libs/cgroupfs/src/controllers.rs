@@ -55,7 +55,7 @@ impl Controller {
     }
 
     /// Its bit in a [`Set`].
-    fn bit(self) -> u8 {
+    const fn bit(self) -> u8 {
         1 << (self as u8)
     }
 }
@@ -75,7 +75,7 @@ impl Set {
 
     /// It, with `controller` added.
     #[must_use]
-    pub fn with(self, controller: Controller) -> Set {
+    pub const fn with(self, controller: Controller) -> Set {
         Set(self.0 | controller.bit())
     }
 

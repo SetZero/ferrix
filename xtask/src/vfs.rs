@@ -310,6 +310,22 @@ pub(crate) const APPLETS: &[Command] = &[
             "root took its shell back",
         ]),
     },
+    // The job quotas FRU_RSA.1 claims, as a Linux program sees them
+    // (finding F-35): cgroup2's `pids`, `memory` and `cpu` controllers, and a
+    // fork loop in a cgroup with `pids.max` 10 refused at its tenth task.
+    Command {
+        argv: &["sh", "-c", QUOTA_SCRIPT],
+        status: 9,
+        expect: Expect::Lines(&[
+            "cpu memory pids",
+            "10",
+            "67108864",
+            "200",
+            "a fork refused within pids.max",
+            "pids.events counted it",
+            "removed",
+        ]),
+    },
     // `lseek` on the memory devices answers 0, as Linux's does, rather than
     // `ESPIPE`: busybox `dd` seeks its output for `seek=` and its input for
     // `skip=`, and dies if the output's seek is refused. The last copy goes
@@ -451,6 +467,48 @@ echo $$ > /tmp/cg/cgroup.procs && echo "root took its shell back"
 rmdir /tmp/cg/deleg/work /tmp/cg/deleg /tmp/cg/other || exit 6
 umount /tmp/cg || exit 7
 exit 8
+"#;
+
+/// Root mounts cgroup2, enables `pids`, `memory` and `cpu` for the root's
+/// children, and makes `q` with `pids.max` 10, `memory.max` 64M and
+/// `cpu.weight` 200, which read back as Linux prints them. A shell moves
+/// itself into `q` and forks `sleep`s in a loop until a fork is refused,
+/// reading `pids.current` after each and keeping the most it saw. How many
+/// forks that takes depends on the shell -- zinc runs a thread beside each
+/// background job, and `pids` counts threads as Linux does -- so what is
+/// required is that some forks went through, that one was refused before
+/// the tenth, that `pids.current` never passed `pids.max`, and that
+/// `pids.events` counted the refusal. `cgroup.kill` ends the `sleep`s, and
+/// `q` is removed once it says it is empty. Only builtins read what is
+/// checked, since the image's utilities differ by architecture.
+const QUOTA_SCRIPT: &str = r#"mkdir -p /tmp/cq && mount -t cgroup2 none /tmp/cq || exit 1
+echo "+pids +memory +cpu" > /tmp/cq/cgroup.subtree_control || exit 2
+mkdir /tmp/cq/q || exit 3
+cat /tmp/cq/q/cgroup.controllers
+echo 10 > /tmp/cq/q/pids.max || exit 4
+echo 64M > /tmp/cq/q/memory.max || exit 5
+echo 200 > /tmp/cq/q/cpu.weight || exit 6
+cat /tmp/cq/q/pids.max /tmp/cq/q/memory.max /tmp/cq/q/cpu.weight
+sh -c 'echo $$ > /tmp/cq/q/cgroup.procs || exit 1
+n=0
+peak=0
+while [ $n -lt 40 ]; do
+sleep 30 & [ $? -eq 0 ] || break
+n=$((n+1))
+read c < /tmp/cq/q/pids.current
+[ $c -gt $peak ] && peak=$c
+echo "$n $peak" > /tmp/cq-n
+done' 2>/dev/null
+read n peak < /tmp/cq-n
+[ $n -ge 1 ] && [ $n -le 9 ] && [ $peak -le 10 ] && echo "a fork refused within pids.max" || echo "$n forks, $peak tasks at most"
+read key refused < /tmp/cq/q/pids.events
+[ $refused -ge 1 ] && echo "pids.events counted it"
+echo 1 > /tmp/cq/q/cgroup.kill || exit 7
+for i in 1 2 3 4 5 6 7 8 9 10; do read key populated < /tmp/cq/q/cgroup.events; [ "$populated" = 0 ] && break; sleep 1; done
+rmdir /tmp/cq/q && echo removed
+echo "-pids -memory -cpu" > /tmp/cq/cgroup.subtree_control || exit 8
+umount /tmp/cq
+exit 9
 "#;
 
 /// The list as `kernel/build.rs` takes it: each argument ends in a NUL, and

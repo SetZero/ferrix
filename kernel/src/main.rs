@@ -618,12 +618,14 @@ fn check_cgroupfs() {
          and ended by cgroup.kill, {} writes and names refused as Linux refuses them, {} epoll \
          wait on cgroup.events woken with EPOLLPRI by the last release and not before, {} moves \
          judged by delegation to uid 1000, {} native waits for EMPTY fired with the populated \
-         flip, {}",
+         flip, cpu memory pids enabled and a fork refused at pids.max with {} controller writes \
+         refused as Linux refuses them, {}",
         checked.made,
         checked.refusals,
         checked.woken,
         checked.moves,
         checked.emptied,
+        checked.controlled,
         if checked.cloned {
             "a child started by CLONE_INTO_CGROUP in its cgroup from its first instruction"
         } else {

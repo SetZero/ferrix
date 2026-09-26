@@ -258,6 +258,18 @@ const APPLETS_ON_X86_64: &[(usize, &[&str])] = &[
     (
         19,
         &[
+            "cpu memory pids",
+            "10",
+            "67108864",
+            "200",
+            "a fork refused within pids.max",
+            "pids.events counted it",
+            "removed",
+        ],
+    ),
+    (
+        20,
+        &[
             "4+0 records in",
             "4+0 records out",
             "4096 bytes (4.0KB) copied, 0.000531 seconds, 7.4MB/s",

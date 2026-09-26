@@ -4,8 +4,13 @@
 //! Linux's `cgroup_base_files`, in its order, with the ones it marks
 //! `CFTYPE_NOT_ON_ROOT` marked here too: the root has no type, no events, no
 //! freeze and no kill, because nothing can be above it to judge them by and
-//! killing it would kill the machine. A controller's files (`memory.max` and
-//! the rest) are its landing's, and are listed beside it.
+//! killing it would kill the machine.
+//!
+//! A controller's files follow, each marked with its controller: a cgroup
+//! has them only while its parent's `cgroup.subtree_control` enables it, and
+//! the root never, as on Linux, whose root has no limits to set.
+
+use crate::controllers::{Controller, Set};
 
 /// One file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -18,6 +23,8 @@ pub struct File {
     pub on_root: bool,
     /// Whether it can be written; `false` means read-only, mode 0444.
     pub writable: bool,
+    /// The controller it belongs to, or `None` for cgroup's own.
+    pub controller: Option<Controller>,
 }
 
 /// Which file a [`File`] is, for the kernel to dispatch on without comparing
@@ -46,6 +53,20 @@ pub enum Kind {
     Freeze,
     /// `cgroup.kill`, which is write-only on Linux: mode 0200.
     Kill,
+    /// `cpu.weight`.
+    CpuWeight,
+    /// `memory.current`.
+    MemoryCurrent,
+    /// `memory.max`.
+    MemoryMax,
+    /// `memory.events`.
+    MemoryEvents,
+    /// `pids.current`.
+    PidsCurrent,
+    /// `pids.max`.
+    PidsMax,
+    /// `pids.events`.
+    PidsEvents,
 }
 
 /// Every file, in Linux's order.
@@ -61,26 +82,67 @@ pub const FILES: &[File] = &[
     file("cgroup.stat", Kind::Stat, true, false),
     file("cgroup.freeze", Kind::Freeze, false, true),
     file("cgroup.kill", Kind::Kill, false, true),
+    controlled("cpu.weight", Kind::CpuWeight, Controller::Cpu, true),
+    controlled(
+        "memory.current",
+        Kind::MemoryCurrent,
+        Controller::Memory,
+        false,
+    ),
+    controlled("memory.max", Kind::MemoryMax, Controller::Memory, true),
+    controlled(
+        "memory.events",
+        Kind::MemoryEvents,
+        Controller::Memory,
+        false,
+    ),
+    controlled("pids.current", Kind::PidsCurrent, Controller::Pids, false),
+    controlled("pids.max", Kind::PidsMax, Controller::Pids, true),
+    controlled("pids.events", Kind::PidsEvents, Controller::Pids, false),
 ];
 
-/// A table entry.
+/// A table entry of cgroup's own.
 const fn file(name: &'static str, kind: Kind, on_root: bool, writable: bool) -> File {
     File {
         name,
         kind,
         on_root,
         writable,
+        controller: None,
     }
 }
 
-/// The files a cgroup has: every one, or the root's.
-pub fn of(root: bool) -> impl Iterator<Item = &'static File> {
-    FILES.iter().filter(move |file| file.on_root || !root)
+/// A table entry of a controller's, which the root never has.
+const fn controlled(
+    name: &'static str,
+    kind: Kind,
+    controller: Controller,
+    writable: bool,
+) -> File {
+    File {
+        name,
+        kind,
+        on_root: false,
+        writable,
+        controller: Some(controller),
+    }
+}
+
+/// The files a cgroup has: the root's, or every one of cgroup's own and the
+/// files of each controller in `enabled`, what its parent's
+/// `cgroup.subtree_control` enables.
+pub fn of(root: bool, enabled: Set) -> impl Iterator<Item = &'static File> {
+    FILES.iter().filter(move |file| {
+        (file.on_root || !root)
+            && file
+                .controller
+                .is_none_or(|controller| enabled.contains(controller))
+    })
 }
 
 /// The file called `name` in a cgroup, if it has one.
-pub fn named(name: &[u8], root: bool) -> Option<&'static File> {
-    of(root).find(|file| file.name.as_bytes() == name)
+pub fn named(name: &[u8], root: bool, enabled: Set) -> Option<&'static File> {
+    of(root, enabled).find(|file| file.name.as_bytes() == name)
 }
 
 impl File {

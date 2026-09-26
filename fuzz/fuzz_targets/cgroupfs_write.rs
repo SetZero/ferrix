@@ -18,6 +18,8 @@
 //!    and disables no controller at once.
 //! 5. **A name `check` accepts is a path component**: no `/`, no newline, not
 //!    `.` or `..`, and at most 255 bytes.
+//! 6. **A controller's limit round-trips**: `pids.max`, `memory.max` and
+//!    `cpu.weight` parsed and printed parse back equal, within their ranges.
 
 #![no_main]
 
@@ -65,6 +67,31 @@ fuzz_target!(|data: &[u8]| {
                 controller.name()
             );
         }
+    }
+
+    if let Ok(value) = write::kstrtoull(stripped) {
+        assert_eq!(
+            write::kstrtoull(value.to_string().as_bytes()),
+            Ok(value),
+            "a number kstrtoull read does not read back"
+        );
+    }
+    if let Ok(limit) = write::parse_pids_max(text) {
+        assert!(limit.is_none_or(|count| count < write::PIDS_MAX));
+        let mut out = Vec::new();
+        render::max(&mut out, limit);
+        assert_eq!(write::parse_pids_max(&out), Ok(limit), "pids.max does not round-trip");
+    }
+    if let Ok(limit) = write::parse_memory_max(text) {
+        let mut out = Vec::new();
+        render::max(&mut out, limit);
+        assert_eq!(write::parse_memory_max(&out), Ok(limit), "memory.max does not round-trip");
+    }
+    if let Ok(weight) = write::parse_weight(text) {
+        assert!((1..=10_000).contains(&weight));
+        let mut out = Vec::new();
+        render::number(&mut out, u64::from(weight));
+        assert_eq!(write::parse_weight(&out), Ok(weight), "cpu.weight does not round-trip");
     }
 
     let _ = write::parse_procs(text);

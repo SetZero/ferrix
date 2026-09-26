@@ -30,7 +30,7 @@ fn names_follow_mkdir() {
 
 #[test]
 fn the_root_lacks_what_linux_keeps_off_it() {
-    let root: Vec<&str> = files::of(true).map(|file| file.name).collect();
+    let root: Vec<&str> = files::of(true, Set::EMPTY).map(|file| file.name).collect();
     assert_eq!(
         root,
         [
@@ -43,18 +43,27 @@ fn the_root_lacks_what_linux_keeps_off_it() {
             "cgroup.stat",
         ]
     );
-    assert_eq!(files::of(false).count(), files::FILES.len());
-    assert!(files::named(b"cgroup.kill", true).is_none());
     assert_eq!(
-        files::named(b"cgroup.kill", false).map(|file| (file.kind, file.mode())),
+        files::of(
+            false,
+            controllers::ALL
+                .iter()
+                .fold(Set::EMPTY, |set, c| set.with(*c))
+        )
+        .count(),
+        files::FILES.len()
+    );
+    assert!(files::named(b"cgroup.kill", true, Set::EMPTY).is_none());
+    assert_eq!(
+        files::named(b"cgroup.kill", false, Set::EMPTY).map(|file| (file.kind, file.mode())),
         Some((Kind::Kill, 0o200))
     );
     assert_eq!(
-        files::named(b"cgroup.events", false).map(files::File::mode),
+        files::named(b"cgroup.events", false, Set::EMPTY).map(files::File::mode),
         Some(0o444)
     );
     assert_eq!(
-        files::named(b"cgroup.procs", true).map(files::File::mode),
+        files::named(b"cgroup.procs", true, Set::EMPTY).map(files::File::mode),
         Some(0o644)
     );
 }
@@ -299,4 +308,110 @@ fn no_internal_processes_when_moving_in() {
         ..Standing::default()
     };
     assert_eq!(controllers::vet_destination(plain), Ok(()));
+}
+
+#[test]
+fn a_controllers_files_are_there_only_where_it_is_enabled() {
+    let pids = Set::EMPTY.with(Controller::Pids);
+    let names = |root, enabled| {
+        files::of(root, enabled)
+            .map(|file| file.name)
+            .collect::<Vec<_>>()
+    };
+    assert!(
+        !names(false, Set::EMPTY)
+            .iter()
+            .any(|name| name.starts_with("pids."))
+    );
+    let with_pids = names(false, pids);
+    for name in ["pids.max", "pids.current", "pids.events"] {
+        assert!(with_pids.contains(&name), "{name} is missing");
+    }
+    assert!(!with_pids.iter().any(|name| name.starts_with("memory.")));
+    // The root has none, whatever its children enable.
+    let all = controllers::ALL
+        .iter()
+        .fold(Set::EMPTY, |set, c| set.with(*c));
+    assert!(
+        !names(true, all)
+            .iter()
+            .any(|name| name.contains("max") && !name.starts_with("cgroup."))
+    );
+    assert_eq!(
+        files::named(b"memory.max", false, all).map(|file| (file.kind, file.mode())),
+        Some((Kind::MemoryMax, 0o644))
+    );
+    assert_eq!(
+        files::named(b"memory.current", false, all).map(files::File::mode),
+        Some(0o444)
+    );
+    assert_eq!(files::named(b"cpu.weight", false, pids), None);
+}
+
+#[test]
+fn pids_max_reads_as_linux_reads_it() {
+    assert_eq!(write::parse_pids_max(b"max\n"), Ok(None));
+    assert_eq!(write::parse_pids_max(b"10\n"), Ok(Some(10)));
+    assert_eq!(write::parse_pids_max(b"0"), Ok(Some(0)));
+    assert_eq!(write::parse_pids_max(b"-0"), Ok(Some(0)));
+    assert_eq!(write::parse_pids_max(b"0x10"), Ok(Some(16)));
+    assert_eq!(write::parse_pids_max(b"4194304"), Ok(Some(4_194_304)));
+    assert_eq!(
+        write::parse_pids_max(b"4194305"),
+        Err(Refusal::Invalid),
+        "PIDS_MAX"
+    );
+    assert_eq!(write::parse_pids_max(b"-1"), Err(Refusal::Invalid));
+    assert_eq!(write::parse_pids_max(b"ten"), Err(Refusal::Invalid));
+    assert_eq!(write::parse_pids_max(b""), Err(Refusal::Invalid));
+    assert_eq!(
+        write::parse_pids_max(b"99999999999999999999999"),
+        Err(Refusal::Range)
+    );
+}
+
+#[test]
+fn memory_max_reads_sizes_as_memparse_does() {
+    assert_eq!(write::parse_memory_max(b"max"), Ok(None));
+    assert_eq!(write::parse_memory_max(b"4096\n"), Ok(Some(4096)));
+    assert_eq!(write::parse_memory_max(b"64K"), Ok(Some(64 << 10)));
+    assert_eq!(write::parse_memory_max(b"64k"), Ok(Some(64 << 10)));
+    assert_eq!(write::parse_memory_max(b"16M"), Ok(Some(16 << 20)));
+    assert_eq!(write::parse_memory_max(b"1G"), Ok(Some(1 << 30)));
+    assert_eq!(write::parse_memory_max(b"0x1000"), Ok(Some(4096)));
+    assert_eq!(write::parse_memory_max(b"0"), Ok(Some(0)));
+    assert_eq!(write::parse_memory_max(b"0K"), Ok(Some(0)));
+    assert_eq!(write::parse_memory_max(b"16MB"), Err(Refusal::Invalid));
+    assert_eq!(write::parse_memory_max(b"M"), Err(Refusal::Invalid));
+    assert_eq!(write::parse_memory_max(b"-1"), Err(Refusal::Invalid));
+    assert_eq!(write::parse_memory_max(b"0x"), Err(Refusal::Invalid));
+    assert_eq!(
+        write::parse_memory_max(b"20E"),
+        Ok(Some(u64::MAX)),
+        "saturates"
+    );
+}
+
+#[test]
+fn cpu_weight_takes_one_to_ten_thousand() {
+    assert_eq!(write::parse_weight(b"100\n"), Ok(100));
+    assert_eq!(write::parse_weight(b"1"), Ok(1));
+    assert_eq!(write::parse_weight(b"10000"), Ok(10_000));
+    assert_eq!(write::parse_weight(b"0"), Err(Refusal::Range));
+    assert_eq!(write::parse_weight(b"10001"), Err(Refusal::Range));
+    assert_eq!(write::parse_weight(b"-5"), Err(Refusal::Invalid));
+    assert_eq!(write::parse_weight(b"heavy"), Err(Refusal::Invalid));
+}
+
+#[test]
+fn the_controller_files_print_as_linux_prints_them() {
+    let rendered = |write: fn(&mut Vec<u8>)| text(write);
+    assert_eq!(rendered(|out| render::max(out, None)), b"max\n");
+    assert_eq!(rendered(|out| render::max(out, Some(16))), b"16\n");
+    assert_eq!(rendered(|out| render::number(out, 4096)), b"4096\n");
+    assert_eq!(rendered(|out| render::pids_events(out, 3)), b"max 3\n");
+    assert_eq!(
+        rendered(|out| render::memory_events(out, 2)),
+        b"low 0\nhigh 0\nmax 2\noom 0\noom_kill 0\noom_group_kill 0\n"
+    );
 }
