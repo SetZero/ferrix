@@ -312,8 +312,11 @@ modules. `docs/sysml/` is the right notation and describes Ferrix rather than
 the TOE, at system granularity (F-15).
 
 ### 9.5 The TSF is not free of upward dependencies
-48 references reach from the TOE into the uncertified load ring (F-01 to F-09),
-down from 62. The trap return path no longer reaches the load ring (F-02, F-02a);
+29 references reach from the TOE into the uncertified load ring (F-07 and
+F-09), down from 62. The trap return path no longer reaches the load ring
+(F-02, F-02a), board support, bring-up and power register with the item rather
+than being named by it (F-04, F-08), and the core no longer names the Linux
+personality's process or thread (F-01, F-06);
 the architecture trap entries still name the item ring's syscall dispatcher. An evaluator would reasonably ask whether
 the TSF boundary is real, and the honest answer today is that it is enforced
 and not yet clean.

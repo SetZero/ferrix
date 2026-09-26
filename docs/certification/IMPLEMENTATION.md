@@ -41,8 +41,104 @@ commit` commits on failure. Check the status and the text separately.
 
 ## W-1 — Split `Process` into a core object and a POSIX extension
 
-**Closes:** F-01 (10 references), and most of F-09 (14) downstream.
-**Size:** large. Do it first anyway — it is the keystone.
+**Done 2026-09-26.** F-01 and F-06 closed; F-09 re-scoped. The design as built
+is below, then the trap and the measurement that shaped it, kept because the
+trap is still the obvious wrong change.
+
+**Closes:** F-01 (10 references), F-06 (3). **Size:** large.
+
+### The design as built
+
+Three decisions, each answering one link of the `Task -> Thread -> Process`
+chain.
+
+**1. The core process is a type of its own, and the POSIX process contains
+it.** `kernel/src/object/process.rs` holds `Process { space, pid, started,
+handles, membership, counted, exit }` -- what the core enforces or reports,
+and nothing else -- with `Exit`, `ProcessRef` and `Control`, which are what a
+native handle to a process holds. The personality's `syscall::process::
+Process` has it as its *first* field (so it drops first, as the pid and the
+job count were given back before the descriptors closed) and implements
+`Deref` to it, so `process.space()` and `process.pid()` read as they did at the
+personality's call sites; one, a `Process::pid` path in `syscall/mod.rs`, had
+to become a closure. The
+core type has no field leading back to the extension: not a typed one, and
+not a type-erased one either.
+
+**2. Where the core must hold a process whole, it holds a `Host`.** A job kill
+walks every process; a native handle to an unstarted process must kill it
+when the last handle goes; the pid table must find processes by number. Each
+needs the *whole* process -- whose ending closes descriptors and tells a
+parent -- without naming what that is. `object::process::Host` is the
+personality's object seen through the five questions the core asks of it:
+
+| `Host` method | Asked by | The personality answers with |
+|---|---|---|
+| `core()` | everything | its core half |
+| `kill(status)` | `Job::kill`, `Control`'s drop | `syscall::process::kill` |
+| `thread_starting()` | `sched::prepare_user` | its live-thread count |
+| `thread_gone(ended)` | `sched`, a prepared task dropped unlaunched | the count, and the end or release it triggers |
+| `wait_interrupted()` | `futex` waits | `signal_pending` |
+
+`Arc<PosixProcess>` coerces to `Arc<dyn Host>`, and the personality has its
+own type back by `object::process::downcast` (`Any`, a type-id compare). The
+pid table moved into the core with it -- the numbers, their cyclic
+allocation, and a weak `Host` per number -- because a job kill has to find
+every process and could not name the item-ring registry to do it.
+`syscall/registry.rs` kept only the personality's typed view and the Linux
+rule that thread ids share the pid space, and moved to `load` in a commit of
+its own, since that is what it now is.
+
+**3. The scheduler holds a `UserThread`, and the POSIX thread stays the
+personality's.** This was the real design question. A thread is what the
+scheduler schedules, which argued for the core; but every field of
+`syscall::thread::Thread` beyond the process reference is POSIX -- the thread
+id from the pid space, the signals sent to it alone, the mask, the address
+`set_tid_address` registered. The scheduler used none of them. What it needs
+is the process the thread runs in, to count it starting and gone, and the
+reference that keeps the thread alive while the task is. That is
+`sched::UserThread`, a trait with one method, `process() -> &dyn Host`;
+`sched::Task` holds `Arc<dyn UserThread>`, and `thread::of_task` downcasts it
+back to the POSIX thread on the syscall path, where it used to clone an `Arc`.
+
+So the chain is now `Task (core) -> dyn UserThread (core) -> dyn Host (core)`,
+with the concrete `Thread` and `Process` behind the two trait objects, and no
+core file names the personality.
+
+**Lock order and the preemption rule** are unchanged: `Host::kill` is the same
+`end` as before, reached from the same places; the pid table is the same
+`SpinLock` with the same "drop outside the lock" rule. One thing did change:
+entries are now compared by address (`ptr::addr_eq` on the weak pointer)
+rather than by upgrading, because an upgrade under the table lock could
+produce a process's last reference and dropping a process takes that lock.
+
+### What is left, and where it is filed
+
+`check-item-boundary.py` went from 36 references to 29 (48 to 41 when first
+measured, before F-04 and F-08 closed): seven removed (both
+core references to `syscall::process`, all three of F-06, `futex.rs`'s, and
+`registry.rs`'s by the ring move). Six item-ring files still name
+`syscall::process`, and they do so for POSIX *state*, not for the core
+concept, so they are no longer F-01's:
+
+| File | Why it names the POSIX process | Now filed as |
+|---|---|---|
+| `syscall/mod.rs` | it is the Linux dispatcher: `current()`, `exit_group` | F-09 |
+| `syscall/thread.rs` | the POSIX thread holds its POSIX process and its signal state | F-09 |
+| `syscall/memory.rs` | `brk` is the POSIX heap; `mmap` of a file needs the fd table | F-09 |
+| `syscall/limits.rs` | rlimits read the fd table and the credentials | F-09 |
+| `syscall/system.rs` | `sethostname` checks credentials | F-09 |
+| `syscall/native.rs` | process creation goes through the Linux loader | F-07 |
+
+Each is a Linux-personality syscall sitting in the item ring, which is F-09's
+defect exactly. The next step for them is not another trait on `Host` -- that
+would pull POSIX questions into the core's interface -- but deciding, file by
+file, whether the item ring should hold them at all. `syscall/thread.rs` is the
+clearest case: after this change nothing in the core or the item needs the
+POSIX thread except the Linux dispatcher, and it belongs in `load` once the
+dispatcher does. It was not moved here because `syscall/mod.rs` names it by a
+module-relative path the gate cannot see, and a move that hides an edge is not
+a fix.
 
 ### The trap
 
@@ -68,7 +164,7 @@ context and the signal state into the trusted core — the exact inversion the
 boundary exists to prevent. `check-item-boundary.py` would go green while the
 item got structurally worse, which is the failure mode worth naming loudest.
 
-### The change
+### The change, as first written
 
 Split it. A core object holding what the core enforces, and a personality
 extension holding what POSIX needs.
@@ -83,7 +179,7 @@ extension holding what POSIX needs.
    direction.
 3. `current()` moves with the core type.
 
-### What the measurement says (2026-09-25)
+### What the measurement said (2026-09-25)
 
 Investigated properly before starting, and the shape is different from what
 F-01's wording suggests.
@@ -125,30 +221,34 @@ That is an architectural restructuring of the process/thread/task ownership
 model, not a file move. It wants a deliberate design pass, and it is the reason
 this order remains open after a session that closed eleven other findings.
 
-### Order, to keep the tree green
+### How it landed
 
-Land as a sequence, not one commit:
+The order above (a re-export first, one consumer per commit) assumed the type
+would move; it was split instead, which cannot be done a consumer at a time.
+Four code commits, each green, then the documents:
 
-1. Create `object/process.rs` with the core fields, `Process` re-exported from
-   `syscall::process` so nothing breaks.
-2. Move core consumers (`object/mod.rs`, `object/job.rs`, `sched/mod.rs`,
-   `sched/task.rs`, `trap.rs`) to the new path, one file per commit.
-3. Move the personality fields out into the extension.
-4. Delete the re-export and remove the F-01 entries from
-   `scripts/certification-item.json`.
+1. `object::process` with the core fields, `Exit`, `ProcessRef`, `Control`,
+   `Host` and the pid table; the POSIX process contains the core one; `object/
+   mod.rs` and `object/job.rs` switch. Retires 3 (F-01 ×2, F-06 ×1).
+2. `sched::UserThread`; `Task` holds one. Retires 2 (F-06).
+3. `Host::wait_interrupted`; `futex.rs` takes a `Host`. Retires 1 (F-01).
+4. `syscall/registry.rs` to `load`. Retires 1 (F-01). A boundary change,
+   argued in its own commit so it can be judged -- or reverted -- on its own.
 
 ### Verify
 
-`python3 scripts/check-item-boundary.py` reports ~24 fewer references, and the
-`F-01`/`F-09` entries are gone from the manifest (the gate fails on stale
-entries, so it will tell you which). `cargo xtask test-boot --arch all` passes;
-`object/check.rs` and `sched/check.rs` cover this code and run on every boot.
+`python3 scripts/check-item-boundary.py --report` shows no `F-01` or `F-06`
+entry and nothing from `object/` or `sched/` above the core. Every boot gate
+exercises this code: `object/check.rs` and `sched/check.rs` on every boot,
+`test-threads` for the thread path, `test-jobs` for job control, and `test-shell`
+for fork, exec and wait.
 
 ### Pitfall
 
-`docs/sysml/` describes the object model. `gen-arch-doc.py --check` fails if
-the model and the generated document disagree, so a new core object means a
-model edit. That is a feature: the design document cannot drift.
+`docs/sysml/` describes the object model; `06-objects.sysml` now has `Process`
+(core), `PosixProcess :> Process` and `Thread`, and `05-scheduling.sysml`
+`UserThread`. `gen-arch-doc.py --check` fails if the model and the generated
+document disagree.
 
 ---
 
@@ -374,13 +474,16 @@ engineering — **answer step 1 before planning anything that depends on it.**
 
 ## Suggested order
 
-**Done:** order zero, W-3, W-2, W-6, W-9, W-4 (with F-08), and most of W-7.
-**Remaining:** W-1 (keystone) → W-5 → W-7's last gates →
-W-8 (largest), with W-10 in parallel whenever someone can answer step 1.
+**Done:** order zero, W-3, W-2, W-6, W-9, W-4 (with F-08), W-1, and most of
+W-7.
+**Remaining:** W-5 → W-7's last gates → W-8 (largest), with W-10 in parallel
+whenever someone can answer step 1.
 
-W-1 is still first among what is left: twenty-four of the 36 remaining
-boundary references are it and its downstream, and W-5 and W-8 both read
-better once the core object exists.
+W-1 landed as a split rather than a move, and took the boundary from 36
+references to 29. What it leaves is F-09's: six Linux-personality syscall
+files in the item ring that name the POSIX process for its state. W-5 reads
+better now that process creation is the one thing the native dispatcher
+still needs the personality for.
 
 ## Not on this list
 

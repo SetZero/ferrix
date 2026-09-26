@@ -48,28 +48,28 @@ python3 scripts/check-item-boundary.py --report
 
 ## 1. Boundary — the cheapest real wins
 
-The debt register in `scripts/certification-item.json` holds 36 upward
+The debt register in `scripts/certification-item.json` holds 29 upward
 references, down from 62 when the audit began. It may shrink freely; it may not grow. After each fix, delete the
 entries it retires — the gate fails on stale entries, so it will tell you which.
 
-### 1.1 Extract `Process` into the core — **F-01, 10 references**
-`Process`, `ProcessRef` and `current()` are core concepts (a process *is* the
-address-space and capability container) living in `kernel/src/syscall/
-process.rs`, 2,229 lines of Linux personality.
+### 1.1 Split `Process` into a core object and a POSIX extension — **F-01, 10 references; F-06, 3**
+**Done 2026-09-26** (IMPLEMENTATION.md W-1). F-01 and F-06 are closed: the
+core process is `kernel/src/object/process.rs`, and nothing under `object/` or
+`sched/` names the personality. Seven references are gone.
 
-**Do not move the type wholesale.** It carries the file-descriptor table, the
-filesystem context and the signal state, and moving it would pull all three
-into the core while the gate went green. It has to be split, and the
-`Task -> Thread -> Process` chain crosses the boundary twice, so `Thread` needs
-a home decided too. IMPLEMENTATION.md W-1 has the measurement.
+What to re-check at the next audit, because it is where a later change could
+quietly undo this:
 
-*Highest value single change in this list.* It is 10 of 36 references, it is
-the most-cited structural defect, and F-09's 14 references are mostly
-downstream of it — so it plausibly retires ~24 at once. It is also the clearest
-`ADV_INT.2` counter-example in the item.
-
-*Done when:* `check-item-boundary.py` reports 10 fewer, the `F-01` entries are
-gone from the manifest, and `core` no longer names `syscall::process`.
+* **The core type grows no personality field.** `object::process::Process`
+  has seven fields. One typed as, or leading to, POSIX state -- or a
+  type-erased slot for "the extension" -- restores the dependency the split
+  removed, and the gate would not see it, since it names nothing.
+* **`Host` stays small.** Five methods today. Each new one is a question the
+  core asks the personality; one that is really a POSIX question (the fd
+  table, credentials) belongs in the personality, not on the trait.
+* **The six item-ring references to `syscall::process` are F-09's and F-07's
+  now.** They are to POSIX state. Do not count them as F-01 regressing, and
+  do not let them be "fixed" by adding POSIX methods to `Host`.
 
 ### 1.2 Invert the `StatLayout` dependency — **F-03, 3 references**
 **Done 2026-09-25.**
@@ -101,9 +101,11 @@ should define a hook the personality registers into at init.
 most trusted path in the system, and while it stands the core cannot be built
 or analysed without the personality present.
 
-### 1.5 A registration table for the native dispatcher — **F-07, 9 references**
+### 1.5 A registration table for the native dispatcher — **F-07, 10 references**
 `syscall/native.rs` names ten load-ring modules. Subsystems should register
-handlers in a table the dispatcher walks.
+handlers in a table the dispatcher walks. One of the ten, `syscall::process`,
+was F-01's until W-1; it is process creation through the Linux loader, which
+a table entry can own like any other subsystem.
 
 ### 1.6 Bring-up and power — **F-08, 6 references**
 **Done 2026-09-26.** Power commits registered `Flush`es, init starts pid 1

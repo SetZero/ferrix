@@ -15,7 +15,7 @@ that does not exist.
 
 | Target | Standard | Verdict |
 |---|---|---|
-| EAL5+ | Common Criteria (ISO/IEC 15408) | **Not met.** Security Target and vulnerability analysis written; blocked on design evidence at module granularity, the boundary's 36 upward references, and an accredited laboratory. |
+| EAL5+ | Common Criteria (ISO/IEC 15408) | **Not met.** Security Target and vulnerability analysis written; blocked on design evidence at module granularity, the boundary's 29 upward references, and an accredited laboratory. |
 | DAL C | DO-178C / ED-12C | **Not met.** Coverage is measured, at 81.9%; planning data, requirements traceability and the 1,054 statements that still need a test are not done. |
 | Class C | IEC 62304 | **Closest of the four.** No SOUP in the item; element-level safety analysis written. Blocked on a QMS and the integrator's risk file. |
 | SIL 2 | EN 50716:2023 | **Reachable.** Most of Annex A satisfied; generic software argument and application conditions written. Blocked on independent assessment. |
@@ -27,7 +27,7 @@ specific, measured, and mostly documents rather than code.
 * [TODO.md](TODO.md) — start here to re-audit: what to re-measure, and what not to write
 * [SAFETY-MANUAL.md](SAFETY-MANUAL.md) — the out-of-context argument: assumed requirements, safe state, ten assumptions of use, element failure analysis
 * [ITEM.md](ITEM.md) — what the ratings attach to, and why it is not all of Ferrix
-* [FINDINGS.md](FINDINGS.md) — the audit register, 21 open findings and 16 closed
+* [FINDINGS.md](FINDINGS.md) — the audit register, 19 open findings and 18 closed
 * [SECURITY-TARGET.md](SECURITY-TARGET.md) — EAL5+ claim, SFRs, and where it would fail evaluation
 * [VULNERABILITY-ANALYSIS.md](VULNERABILITY-ANALYSIS.md) — AVA_VAN.4 over the seven threats; five residual vulnerabilities
 * [MEMORY-AND-TIMING.md](MEMORY-AND-TIMING.md) — what the item allocates, and what it promises about time
@@ -53,15 +53,15 @@ Not Ferrix. Ferrix's acceptance test is that it hosts `rustc` and builds
 itself, which requires a general-purpose OS with a browser, a compositor and a
 self-hosting toolchain — the opposite of a frozen, analysable configuration.
 
-The item is a **50,726-line subset of the kernel**, defined in
+The item is a **51,159-line subset of the kernel**, defined in
 [`scripts/certification-item.json`](../../scripts/certification-item.json) and
 enforced on every build by `scripts/check-item-boundary.py`. Memory protection,
 scheduling, capability objects, the trap and syscall entry paths, the IOMMU,
 SMP and device enumeration are inside; the VFS, btrfs, the network stack, the
-Linux personality and the drivers are uncertified load above it, 44,438 lines
+Linux personality and the drivers are uncertified load above it, 44,272 lines
 of it.
 
-The boundary is nested so it can ratchet inward: a 40,038-line `core` ring is
+The boundary is nested so it can ratchet inward: a 40,704-line `core` ring is
 named now as the destination for a later EAL6+ or ASIL D effort, so that
 raising the target does not mean rewriting every artifact scoped to the old
 boundary.
@@ -70,15 +70,15 @@ boundary.
 
 | | |
 |---|---:|
-| Item product code | 50,726 lines |
-| Uncertified load | 44,438 lines |
-| In-kernel self-tests | 31,135 lines |
+| Item product code | 51,159 lines |
+| Uncertified load | 44,272 lines |
+| In-kernel self-tests | 31,136 lines |
 | Statement coverage, certified item | **81.9%** |
 | Statement coverage, core ring | 80.4% |
 | Unreached statements | 1,278 — **103 argued, 1,054 need a test** |
 | SOUP in the item | **0** |
 | External crates, host-side | 21 |
-| Upward boundary references | **36**, from 62 at the start of the work |
+| Upward boundary references | **29**, from 62 at the start of the work |
 | `unsafe` blocks, all documented | 662 |
 | Directly recursive functions in the item | **0** |
 | SMEP + SMAP (x86-64) | **on** |
@@ -123,8 +123,9 @@ for AArch64. The reference `cortex-a72` is ARMv8.0 and lacks PAN, and ARMv7-A
 cannot have it at all, so V-01 still stands on Arm (AoU-6).
 
 *Missing:* Design evidence at module granularity for `ADV_TDS.3`; the SysML model
-describes Ferrix, not the TOE (F-15). The TSF still has 36 upward references into the load ring
-(`ADV_INT.2`, F-01, F-06, F-07 and F-09). There are no side-channel defences and no layout
+describes Ferrix, not the TOE (F-15). The TSF still has 29 upward references into the load ring
+(`ADV_INT.2`, F-07 and F-09); the clearest counter-example, the core
+naming the Linux personality's process type (F-01), is gone. There are no side-channel defences and no layout
 randomisation (F-31). And the TOE claims neither audit nor
 authentication (F-21b), which is defensible for an isolation kernel and is why
 no Protection Profile is claimed.
@@ -196,33 +197,34 @@ unexamined gap (F-23, AoU-5).
 
 In order of value per unit of effort:
 
-1. **Split `Process` into a core object and a POSIX extension (F-01, W-1).**
-   Ten of the 36 remaining boundary references are this one type, most of
-   F-09's fourteen are downstream of it, and it is the most-cited structural
-   defect in the register. It is a redesign of the task, thread and process
-   ownership chain, not a file move; IMPLEMENTATION.md says why.
-2. **Trace tests to requirements (F-14, F-15, W-8).** The boot gates already
+1. **Trace tests to requirements (F-14, F-15, W-8).** The boot gates already
    assert rich properties; they need requirement ids attached and low-level
    requirements to attach them to. This one piece of work unblocks DAL C,
    62304 §5.4 and `ADV_TDS.3`.
-3. **Cover the 1,054 statements that need a test (F-10).** Four gates —
+2. **Cover the 1,054 statements that need a test (F-10).** Four gates —
    `test-btrfs`, `test-shell`, `test-sysfs`, `test-restart` — write an empty
    trace because they end by killing QEMU; powering the guest down instead is
    the cheapest part. The two Arm architectures have one gate's worth of data
    each and want the suite.
-4. **Adopt Ferrocene (F-17).** A qualified toolchain is the difference between
+3. **Adopt Ferrocene (F-17).** A qualified toolchain is the difference between
    "written in a memory-safe language" as a talking point and as evidence.
    Whether it covers `armv7a-none-eabi` and the UEFI targets is the first
    question.
-5. **Invert the native dispatcher's references (F-07).** Board support,
-   bring-up and power now register with the item instead of being named by it
-   (F-04, F-08); the dispatcher is the last of the load ring the item names
-   outside F-01's shadow.
+4. **Invert the native dispatcher's references, and decide what the item
+   holds of the personality (F-07, F-09).** Board support, bring-up and power
+   now register with the item instead of being named by it (F-04, F-08), and
+   the core no longer names the personality's process or thread (F-01, F-06).
+   What is left is the dispatcher, and six Linux-personality syscall files in
+   the item ring that name the POSIX process for its state; for each, the
+   question is whether the item should hold it at all.
 
 Done since the audit began: the vulnerability analysis (F-21a), SMEP, SMAP and
 PAN (F-32), the release profile and both Arm architectures measured (F-11,
-F-12), the complexity and recursion gate (F-25), and board support, bring-up
-and power registering with the item (F-04, F-08).
+F-12), the complexity and recursion gate (F-25), board support, bring-up
+and power registering with the item (F-04, F-08), and the split of `Process`
+into a core object and a POSIX extension (F-01, F-06, W-1), which took the
+boundary from 36 references to 29 and left `object/` and `sched/` naming
+nothing above the core.
 
 ## 5. What cannot be fixed from here
 

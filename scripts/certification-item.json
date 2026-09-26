@@ -242,46 +242,11 @@
     ],
     "entries": [
       {
-        "file": "syscall/limits.rs",
-        "references": "syscall::process",
-        "from_ring": "item",
-        "to_ring": "load",
-        "finding": "F-01"
-      },
-      {
-        "file": "syscall/memory.rs",
-        "references": "syscall::process",
-        "from_ring": "item",
-        "to_ring": "load",
-        "finding": "F-01"
-      },
-      {
-        "file": "syscall/mod.rs",
-        "references": "syscall::process",
-        "from_ring": "item",
-        "to_ring": "load",
-        "finding": "F-01"
-      },
-      {
         "file": "syscall/native.rs",
         "references": "syscall::process",
         "from_ring": "item",
         "to_ring": "load",
-        "finding": "F-01"
-      },
-      {
-        "file": "syscall/system.rs",
-        "references": "syscall::process",
-        "from_ring": "item",
-        "to_ring": "load",
-        "finding": "F-01"
-      },
-      {
-        "file": "syscall/thread.rs",
-        "references": "syscall::process",
-        "from_ring": "item",
-        "to_ring": "load",
-        "finding": "F-01"
+        "finding": "F-07"
       },
       {
         "file": "syscall/native.rs",
@@ -345,6 +310,41 @@
         "from_ring": "item",
         "to_ring": "load",
         "finding": "F-07"
+      },
+      {
+        "file": "syscall/limits.rs",
+        "references": "syscall::process",
+        "from_ring": "item",
+        "to_ring": "load",
+        "finding": "F-09"
+      },
+      {
+        "file": "syscall/memory.rs",
+        "references": "syscall::process",
+        "from_ring": "item",
+        "to_ring": "load",
+        "finding": "F-09"
+      },
+      {
+        "file": "syscall/mod.rs",
+        "references": "syscall::process",
+        "from_ring": "item",
+        "to_ring": "load",
+        "finding": "F-09"
+      },
+      {
+        "file": "syscall/system.rs",
+        "references": "syscall::process",
+        "from_ring": "item",
+        "to_ring": "load",
+        "finding": "F-09"
+      },
+      {
+        "file": "syscall/thread.rs",
+        "references": "syscall::process",
+        "from_ring": "item",
+        "to_ring": "load",
+        "finding": "F-09"
       },
       {
         "file": "arch/aarch64/trap.rs",

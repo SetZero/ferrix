@@ -42,12 +42,12 @@ three nested rings. A file in no ring fails the build.
 
 | Ring | Product lines | In-kernel test lines | Carries |
 |---|---:|---:|---|
-| `core` | 40,038 | 7,807 | EAL6+, ASIL D, SIL 3/4, DAL B — *aspirational* |
-| `item` | 10,688 | 248 | EAL5+, DAL C, Class C, SIL 2 — *the present claim* |
-| `load` | 44,438 | 23,080 | nothing |
+| `core` | 40,704 | 7,808 | EAL6+, ASIL D, SIL 3/4, DAL B — *aspirational* |
+| `item` | 10,455 | 248 | EAL5+, DAL C, Class C, SIL 2 — *the present claim* |
+| `load` | 44,272 | 23,080 | nothing |
 
-**The certified item is `core` + `item`: 50,726 lines of product code**, against
-44,438 lines of uncertified load. The item is 53.3% of the kernel's product
+**The certified item is `core` + `item`: 51,159 lines of product code**, against
+44,272 lines of uncertified load. The item is 53.6% of the kernel's product
 code.
 
 ### `core` — the minimal trusted base
@@ -92,7 +92,7 @@ drivers' kernel halves; STM32MP1 board support.
 
 This is not a list of code that matters less — it is most of what makes Ferrix
 useful. It is excluded because a defect in it is bounded by the item's own
-enforcement, and because a claim over 93,646 lines is one nobody can afford to
+enforcement, and because a claim over 95,431 lines is one nobody can afford to
 substantiate.
 
 ---
@@ -113,7 +113,7 @@ free, precisely because the cost of discovering the right boundary later is
 every document written against the wrong one.
 
 The same nesting is what makes the ratings honestly *ordered*. `core` at
-38,003 lines is in the size range where EAL6-grade work has actually been done
+40,704 lines is in the size range where EAL6-grade work has actually been done
 (INTEGRITY-178B, ~10k SLOC, is the benchmark and is still four times smaller).
 It is not there yet. Saying which ring carries which target keeps that gap
 visible instead of letting "Ferrix is certified" absorb it.
@@ -123,25 +123,28 @@ visible instead of letting "Ferrix is certified" absorb it.
 ## 4. What the measurement found
 
 The boundary above is a claim about dependencies, so the gate measures it.
-Today the item contains **36 upward references** (62 when the audit began) — places where a
+Today the item contains **29 upward references** (62 when the audit began) — places where a
 ring names something in a ring above it. They are recorded in the manifest
 against finding ids and analysed in [FINDINGS.md](FINDINGS.md).
 
 They are not a reason to move the boundary. They are the reason the boundary is
 worth having: each one is a specific, addressable piece of coupling that was
-invisible while the architecture was described in prose. Twenty-six have been
-paid down since the audit began — F-02, F-02a, F-03, F-04, F-05 and F-08 — and
-the three that remain worth naming are structural rather than incidental:
+invisible while the architecture was described in prose. Thirty-three have
+been paid down since the audit began — F-02, F-02a, F-03, F-04, F-05 and F-08,
+and F-01 and F-06 by splitting the process (W-1) — and the two that remain
+worth naming are structural rather than incidental:
 
-* **F-01** — the `Process` type and `current()` are core concepts living in
-  `syscall/process.rs`, a 2,229-line Linux-personality file. The measurement in
-  `docs/certification/IMPLEMENTATION.md` W-1 found the core-facing interface is
-  only about seven operations, but that the ownership chain crosses two
-  boundaries: `Task` holds a `Thread`, and `Thread` holds the `Process`.
 * **F-07** — `syscall/native.rs`, the native ABI dispatcher, names ten
   modules in the load ring. Expected of a dispatcher, and still a dependency.
-* **F-09** — the item-ring syscall modules reach the personality, mostly for
-  the `Process` type, so most of it is downstream of F-01.
+* **F-09** — Linux-personality syscalls sitting in the item ring: `brk`,
+  rlimits, the Linux dispatcher, the POSIX thread. Since W-1 split the core
+  process out of the POSIX one (`kernel/src/object/process.rs`), what these
+  files want from the personality is its state, not the process concept, and
+  the open question for each is whether the item should hold it at all.
+
+`object/` and `sched/` name nothing above the core since W-1: a task holds a
+`sched::UserThread` and the core holds a process whole only as an
+`object::process::Host`, a trait the personality implements.
 
 `trap.rs` — the most trusted file in the kernel — now names nothing above the
 core, which it did in three places when the audit began.

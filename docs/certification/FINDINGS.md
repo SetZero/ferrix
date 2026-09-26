@@ -4,7 +4,7 @@ The audit register for the item defined in [ITEM.md](ITEM.md). One entry per
 finding, each naming what was measured, which objective it bears on, and what
 would close it.
 
-21 findings are open and 16 are closed, of 37. F-10 advanced from 71.4% to 81.9%. No finding here is closed by argument:
+19 findings are open and 18 are closed, of 37. F-10 advanced from 71.4% to 81.9%. No finding here is closed by argument:
 a finding closes when the thing it describes stops being true and something in
 the build says so.
 
@@ -14,7 +14,7 @@ met or met without evidence. *Minor* — a defect with no objective attached yet
 
 | | Blocking | Major | Moderate | Minor | Informational |
 |---|---:|---:|---:|---:|---:|
-| Open | 2 | 8 | 9 | 1 | 1 |
+| Open | 2 | 7 | 9 | 0 | 1 |
 
 Blocking: F-27 and F-28 — independent assessment and a quality management
 system. Both need an organisation; neither is a defect in the code.
@@ -29,28 +29,41 @@ of use, which is how every general-purpose certified kernel handles them.
 
 ## A. Boundary integrity
 
-Measured by `scripts/check-item-boundary.py`; 36 upward references in 15 files,
+Measured by `scripts/check-item-boundary.py`; 29 upward references in 10 files,
 from 62 in 27 when the audit began.
 These are recorded in `scripts/certification-item.json` as a debt register that
 may shrink freely and may not grow.
 
 ### F-01 — the `Process` type is a core concept living in the Linux personality
-**Major.** 10 references from `core` into `syscall::process` (12 when the audit
-began), for `Process`,
-`ProcessRef` and `current()`.
+**Closed 2026-09-26** by W-1, as a split rather than a move.
 
-A process *is* the address-space and capability container the core enforces
-isolation between, so the core is right to need it. But it is defined in
-`syscall/process.rs`, 2,229 lines of Linux-personality code (`fork`, `wait4`,
-`getpid`), which means the trusted base structurally depends on a file that is
-almost entirely untrusted. EAL5 `ADV_INT.2` asks for well-structured internals
-and this is the clearest counter-example in the item.
+The finding was that the core named `syscall::process` -- 2,229 lines of
+`fork`, `wait4` and signal bookkeeping -- because a process *is* the container
+the core isolates, and the type lived in the personality. It was 10
+references: 2 from the core and 8 from the item ring.
 
-*Closes when:* the core fields of `Process` (space, pid, handles, start time)
-live in `kernel/src/object/process.rs` with `ProcessRef` and `current()`, the
-POSIX state stays in the personality, and the 10 references point into `core`.
-Moving the type whole would drag the fd table, filesystem context and signal
-state into the core; IMPLEMENTATION.md W-1 says why that is the wrong change.
+The core half is now `kernel/src/object/process.rs`: the address space, the
+pid, the start time, the handle table, the job, and how the process ended,
+with `ProcessRef`, `Control` and the pid table. The POSIX process contains it
+and adds the descriptor table, the filesystem context, the signal state,
+`brk`, the credentials, the family and the threads, none of which the core
+type can reach. Where the core must hold a process whole it holds a `Host`, a
+trait of five methods the personality implements; the scheduler holds a
+thread as a one-method `UserThread`. IMPLEMENTATION.md W-1 has the design.
+
+Of the 10 references, 4 are gone: `object/job.rs`, `object/mod.rs` and
+`syscall/futex.rs` no longer name the personality, and `syscall/registry.rs`,
+whose table moved into the core, went to `load` with the typed lookup it kept.
+**The other 6 were not made to point into the core, and this entry does not
+claim they were.** They are item-ring files naming the POSIX process for POSIX
+state -- `brk`, the fd table, credentials, the dispatcher's `current()`, the
+POSIX thread's signals, the Linux loader -- which is not the core-concept
+defect this finding described. They are refiled where the register already
+describes them: five under F-09 and `syscall/native.rs`'s under F-07.
+
+*Verified by:* no `F-01` entry in `scripts/certification-item.json`, and
+nothing under `object/` or `sched/` naming `syscall::` in `check-item-
+boundary.py --report`; the full boot gate row, `test-threads` and `test-jobs`.
 
 ### F-02 — the trap return path calls signal delivery directly
 **Closed 2026-09-25.** Six of the seven references are gone. The frame types
@@ -132,14 +145,22 @@ happens to be serving it. Moved to `kernel/src/claim.rs`; `block_ring`,
 `render`, `display` and `native` now answer with the core's type.
 
 ### F-06 — core names two item-ring modules
-**Minor.** 3 references from `object/job.rs` and `sched/` into
-`syscall::registry` and `syscall::thread`. Inner-ring only: it does not affect
-the present ratings, and it is on the ratchet's path to an EAL6+/ASIL D `core`.
+**Closed 2026-09-26** by W-1. The three references were `object/job.rs` to
+`syscall::registry`, to find a job's members, and `sched/mod.rs` and `sched/
+task.rs` to `syscall::thread`, because a task held the POSIX thread. The pid
+table is the core's now, and a task holds a `sched::UserThread` -- the
+scheduler's view of a thread, which is the process it runs in and nothing
+POSIX. Inner-ring only, so no present rating moved; it is the ratchet's path
+to an EAL6+/ASIL D `core`, and `object/` and `sched/` now name nothing above it.
 
 ### F-07 — the native ABI dispatcher fans out across the load ring
-**Major.** 9 references from `syscall/native.rs` into `block_ring`, `net_ring`,
-`fs::cgroupfs`, `display`, `render`, `input` and three personality syscall
-modules. Its tenth, `stm32mp1`, was F-04's and went with it.
+**Major.** 10 references from `syscall/native.rs` into `block_ring`, `net_ring`,
+`fs::cgroupfs`, `display`, `render`, `input` and four personality syscall
+modules. `stm32mp1`, once one of them, was F-04's and went with it. The fourth
+personality module, `syscall::process`, was filed under F-01 until W-1: what
+the dispatcher still wants of it is process creation through the Linux loader
+and the POSIX wait check, which is this finding's fan-out, not the core
+concept.
 
 Expected of a dispatcher and still a dependency: the item's exported interface
 cannot be analysed without the whole of the load ring it dispatches into.
@@ -175,7 +196,8 @@ ring are invisible to `check-item-boundary.py`, and closing this finding does
 not claim them. A `use crate::syscall::{exec, process}` nests its brace below
 `crate::`, which the gate's expansion does not reach: `devmgr.rs` still has
 one, for the native process creation `devmgr` is started with and for the
-`Process` type, which are F-07's and F-01's ground. And `main.rs`, the crate
+`Process` type, which are F-07's ground (the second was F-01's until W-1
+split the core process out). And `main.rs`, the crate
 root, calls the load ring by bare module paths (`fs::install`,
 `syscall::launch::install`, `stm32mp1::install`, and long before this change
 `fs::init` and `fs::root_disk::init`). Those are the composition root's
@@ -183,12 +205,23 @@ edges and how registration is meant to happen, but the gate cannot tell them
 from a dependency either.
 
 ### F-09 — item-ring syscalls reach personality modules
-**Moderate.** 14 references from `syscall/{futex,limits,memory,mod,registry,
-system,thread}.rs` into `syscall::{process,time,poll,fd,attributes,credentials,
-signal}` and `render::node`.
+**Moderate.** 19 references: from `syscall/{futex,limits,memory,mod,system,
+thread}.rs` into `syscall::{process,time,poll,fd,attributes,credentials,
+signal}` and `render::node`, and from the three `arch` trap entries into
+`syscall`.
 
-The consequence of F-01 mostly: these modules want the process object, and the
-process object is in the wrong place.
+This used to read "the consequence of F-01 mostly". W-1 answered that part --
+the core process exists, and `futex.rs` needs nothing POSIX any more -- and
+what is left is plainer. These are Linux-personality syscalls sitting in the
+item ring: `brk`, rlimits, `sethostname`'s privilege check, the dispatcher,
+the POSIX thread. Five of the 19 are the references to `syscall::process`
+that W-1 refiled here from F-01, because each is to POSIX state rather than to
+the core concept; the count went up by relabelling, not by new coupling. The
+fourteen this entry had before are all still here.
+
+*Closes when:* each file either stops needing POSIX state or is judged to be
+the personality's and leaves the item. `syscall/thread.rs` is the first
+candidate: after W-1 only the Linux dispatcher needs it.
 
 ---
 
