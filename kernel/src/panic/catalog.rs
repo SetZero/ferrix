@@ -194,8 +194,10 @@ pub(crate) static BOOT_OUT_OF_MEMORY: Explanation = Explanation {
               up there is nobody to report to: the structure being built is one every later \
               step depends on, such as the root job, a processor's run queue or the table of \
               processors. Those allocations are fatal by design and marked `FATAL-ALLOC` \
-              where they are made, and `scripts/check-fallible-alloc.py` lists them. Reaching \
-              one means the machine does not have the memory to run the kernel at all.",
+              where they are made, and `scripts/check-fallible-alloc.py` lists them; one \
+              that stops through the standard library's allocation error handler before the \
+              boot marker is reported here too. Reaching one means the machine does not have \
+              the memory to run the kernel at all.",
     causes: &[
         "The machine has far less memory than the kernel needs, or firmware reported \
          almost none of it as usable.",
@@ -203,6 +205,31 @@ pub(crate) static BOOT_OUT_OF_MEMORY: Explanation = Explanation {
     ],
     see: "docs/certification/MEMORY-AND-TIMING.md; scripts/check-fallible-alloc.py; \
           kernel/src/fallible.rs",
+};
+
+/// For the panic the standard library's allocation error handler raises,
+/// recognised by `panic.rs`.
+pub(crate) static ALLOCATION_ABORTED: Explanation = Explanation {
+    code: "FX-0008",
+    title: "an allocation that cannot report failure found the heap empty",
+    meaning: "The kernel's allocator reports an empty heap by returning null. A caller in \
+              the certified item turns that into an error it returns (`ENOMEM`, \
+              `NO_MEMORY`) or, while the kernel is still coming up, a stop with its own \
+              code (FX-0007). An ordinary `Box`, `Vec` or map cannot: the standard library \
+              calls its allocation error handler instead, which panics, and this is that \
+              panic. It is reached from code that has not been converted to report failure \
+              -- the uncertified load, and the item's sites \
+              `scripts/check-fallible-alloc.py` still lists or marks `FATAL-ALLOC` -- when \
+              memory really has run out.",
+    causes: &[
+        "Memory ran out, and the allocation that found it so was one of the infallible \
+         ones: the trace names it.",
+        "A leak elsewhere consumed memory until an unrelated allocation failed; the frame \
+         and heap counts in the boot report and /proc/meminfo say whether memory was \
+         being lost.",
+    ],
+    see: "docs/certification/MEMORY-AND-TIMING.md; scripts/check-fallible-alloc.py; \
+          kernel/src/mm.rs",
 };
 
 /// For `check_allocation_failure` in `main.rs`.
@@ -2034,6 +2061,7 @@ pub(crate) static ALL: &[&Explanation] = &[
     &PRIVATE_OBJECT_SHARED,
     &LOAD_REGISTRATION,
     &BOOT_OUT_OF_MEMORY,
+    &ALLOCATION_ABORTED,
     &STAGE1_HANDOFF,
     &MEMORY_BRING_UP,
     &VMAP_ARENA_BRING_UP,

@@ -42,12 +42,14 @@
 
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 use ferrix_bootinfo::{KERNEL_VMAP_BASE, KERNEL_VMAP_RESERVED, KERNEL_VMAP_SIZE, PAGE_SIZE};
 use ferrix_paging::MapFlags;
 use ferrix_sync::IrqSpinLock;
-use ferrix_vma::{AddressSpace, Backing, PageRange, VmaFlags};
+use ferrix_vma::{AddressSpace, Backing, PageRange, VmaError, VmaFlags};
 
+use crate::fallible;
 use crate::mm;
 
 // The address space below the arena is left to the fixed windows early boot
@@ -156,6 +158,10 @@ struct Arena {
     /// Live allocations, keyed by the address the caller holds.
     live: BTreeMap<u64, Allocation>,
 }
+
+/// Spans [`release_span`] could not give back for want of memory to split
+/// the region around them.
+static SPANS_KEPT: AtomicU64 = AtomicU64::new(0);
 
 /// The arena, once [`init`] has run.
 ///
@@ -300,6 +306,9 @@ fn reserve(len: u64, flags: VmaFlags, kind: Kind) -> Result<Mapping, VmapError> 
         .find_free(span_bytes, PAGE_SIZE, None)
         .ok_or(VmapError::NoAddressSpace(span_bytes))?;
     let span = PageRange::from_len(at, span_bytes).map_err(|_| VmapError::BadLength(span_bytes))?;
+    // Room first for the record of the allocation, so nothing is changed
+    // unless all of it can be.
+    let held = fallible::reserve().map_err(|_| VmapError::OutOfMemory)?;
     arena
         .space
         // Private, and offset by its own address: the convention `Backing`
@@ -308,11 +317,15 @@ fn reserve(len: u64, flags: VmaFlags, kind: Kind) -> Result<Mapping, VmapError> 
         // object. Allocation identity does not depend on that -- it lives in
         // `arena.live` beside the arena, for the reason this module's header
         // gives -- but the region count does.
+        // FALLIBLE: the arena map's insert refuses with `VmaError::NoMemory`.
         .insert(span, flags, Backing::Anonymous { id: 0, offset: at })
-        .map_err(|_| VmapError::NoAddressSpace(span_bytes))?;
+        .map_err(|error| match error {
+            VmaError::NoMemory => VmapError::OutOfMemory,
+            _ => VmapError::NoAddressSpace(span_bytes),
+        })?;
 
     let base = at + GUARD_BYTES;
-    let _ = arena.live.insert(base, Allocation { span, len, kind });
+    let _ = fallible::insert_held(&held, &mut arena.live, base, Allocation { span, len, kind });
     Ok(Mapping { base, len })
 }
 
@@ -366,11 +379,19 @@ fn claim(base: u64) -> Result<Allocation, VmapError> {
 fn release_span(span: PageRange) -> Result<(), VmapError> {
     let mut locked = ARENA.lock();
     let arena = locked.as_mut().ok_or(VmapError::NotReady)?;
-    let _ = arena
-        .space
-        .remove(span)
-        .map_err(|_| VmapError::NotAllocated(span.start()))?;
-    Ok(())
+    // Quietly: a span goes back as something is torn down, and the list of
+    // what went would be the one allocation it made. Giving back a span from
+    // the middle of a merged region splits it, which can need the map to
+    // grow; with no memory for that the span stays reserved -- address space
+    // lost, not memory, since its frames are already free -- and is counted.
+    match arena.space.remove_quietly(span) {
+        Ok(()) => Ok(()),
+        Err(VmaError::NoMemory) => {
+            let _ = SPANS_KEPT.fetch_add(1, Ordering::Relaxed);
+            Err(VmapError::OutOfMemory)
+        }
+        Err(_) => Err(VmapError::NotAllocated(span.start())),
+    }
 }
 
 /// Map `pages` of fresh anonymous memory into the arena.
@@ -563,6 +584,7 @@ pub(crate) fn device_windows() -> Vec<(u64, u64)> {
                 Kind::Device { phys } => Some((phys, phys.saturating_add(allocation.len))),
                 Kind::Anonymous => None,
             })
+            // FATAL-ALLOC: boot only: stage 10 withholds these windows once, before any program runs.
             .collect()
     })
 }
@@ -682,8 +704,20 @@ pub(crate) unsafe fn free_stack(stack: Stack) -> Result<(), VmapError> {
 pub(crate) unsafe fn free_stacks(stacks: &[Stack]) -> Result<(), VmapError> {
     // Out of the live set first, all of them, so the addresses stay reserved
     // until the unmapping below has finished: see `claim`.
-    let mut ranges = Vec::with_capacity(stacks.len());
-    let mut spans = Vec::with_capacity(stacks.len());
+    let (Ok(mut ranges), Ok(mut spans)) = (
+        fallible::try_with_capacity(stacks.len()),
+        fallible::try_with_capacity(stacks.len()),
+    ) else {
+        // No memory for one shootdown over all of them: one each, which
+        // needs none.
+        let mut first_error = None;
+        for stack in stacks {
+            if let Err(error) = free(stack.base) {
+                first_error = first_error.or(Some(error));
+            }
+        }
+        return first_error.map_or(Ok(()), Err);
+    };
     let mut first_error = None;
     for stack in stacks {
         match claim(stack.base) {
@@ -694,9 +728,9 @@ pub(crate) unsafe fn free_stacks(stacks: &[Stack]) -> Result<(), VmapError> {
                 if matches!(allocation.kind, Kind::Device { .. }) {
                     let _ = mm::unmap_kernel(stack.base, allocation.len, |_, _| {});
                 } else {
-                    ranges.push((stack.base, allocation.len));
+                    let _ = fallible::push_within(&mut ranges, (stack.base, allocation.len));
                 }
-                spans.push(allocation.span);
+                let _ = fallible::push_within(&mut spans, allocation.span);
             }
             Err(error) => first_error = first_error.or(Some(error)),
         }

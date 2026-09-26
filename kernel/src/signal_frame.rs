@@ -12,7 +12,6 @@
 //! accessors, so an architecture's layout is a table of constants and a
 //! mistake in one is a refused frame rather than a panic.
 
-use alloc::vec;
 use alloc::vec::Vec;
 
 use crate::syscall::uaccess;
@@ -75,13 +74,20 @@ pub(crate) struct FrameBytes(Vec<u8>);
 
 impl FrameBytes {
     /// `len` zero bytes.
-    pub(crate) fn zeroed(len: usize) -> FrameBytes {
-        FrameBytes(vec![0; len])
+    ///
+    /// # Errors
+    ///
+    /// [`BadFrame`] when there is no memory for them: a signal whose frame
+    /// cannot be built is handled as one whose frame cannot be written.
+    pub(crate) fn zeroed(len: usize) -> Result<FrameBytes, BadFrame> {
+        crate::fallible::try_filled(0, len)
+            .map(FrameBytes)
+            .map_err(|_| BadFrame)
     }
 
     /// `len` bytes of the program's memory at `at`.
     pub(crate) fn read(space: &AddressSpace, at: u64, len: usize) -> Result<FrameBytes, BadFrame> {
-        let mut bytes = vec![0; len];
+        let FrameBytes(mut bytes) = FrameBytes::zeroed(len)?;
         uaccess::copy_from_user(space, at, &mut bytes).map_err(|_| BadFrame)?;
         Ok(FrameBytes(bytes))
     }

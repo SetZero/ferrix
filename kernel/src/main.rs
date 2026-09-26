@@ -60,7 +60,6 @@ mod trap;
 mod user;
 mod vmap;
 
-use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 
@@ -321,6 +320,7 @@ fn check_timer_and_start_clocks(info: &BootInfo) {
 /// ran, and the unchecked one, which no boot test accepts, when they were
 /// skipped.
 fn say_booted() {
+    panic::mark_booted();
     if checks::run() {
         // Last before the marker, so every driver the boot starts has run: a
         // DMA fault its unit recorded and nothing provoked fails the boot
@@ -2373,6 +2373,14 @@ fn bring_up_memory(view: &BootView<'_>) -> mm::Stats {
             "could not bring up memory: {problem}"
         ),
     };
+    // The boot processor's allocation reserve, filled now so that what it
+    // holds is part of the heap every later check starts from.
+    if mm::fill_reserve().is_err() {
+        fatal!(
+            catalog::BOOT_OUT_OF_MEMORY,
+            "no memory for the boot processor's allocation reserve"
+        );
+    }
     report_memory(&stats);
     console::screen::start(view);
     stats
@@ -2445,7 +2453,7 @@ fn memory_check(stats: &mm::Stats) -> Result<(), &'static str> {
 fn check_vmap(aperture: u64) -> Result<(), &'static str> {
     const PAGES: u64 = 8;
 
-    let free_before = mm::free_frames();
+    let free_before = warm_vmap(PAGES)?;
 
     let first = vmap::allocate(PAGES, MapFlags::KERNEL_DATA).map_err(|_| "vmap refused a range")?;
     let second =
@@ -2476,8 +2484,7 @@ fn check_vmap(aperture: u64) -> Result<(), &'static str> {
     vmap::check_failed_device_map(aperture)?;
     vmap::check_invariants()?;
 
-    vmap::free(first.base).map_err(|_| "vmap refused to free its own allocation")?;
-    vmap::free(second.base).map_err(|_| "vmap refused to free its own allocation")?;
+    free_pair(first, second)?;
 
     if vmap::free(first.base).is_ok() {
         return Err("vmap freed the same allocation twice");
@@ -2489,6 +2496,26 @@ fn check_vmap(aperture: u64) -> Result<(), &'static str> {
         return Err("a vmap allocation leaked frames: the free count moved");
     }
     Ok(())
+}
+
+/// Allocate and free a pair of `pages`-page ranges, and answer the free
+/// frames after, for [`check_vmap`] to count from: the arena's own records
+/// grow on first use and keep what they grew to, and since the allocation
+/// reserve holds the spare objects of every size class, that growth can take
+/// a slab page the pair measured afterwards then reuses. Growth is not a
+/// leak.
+fn warm_vmap(pages: u64) -> Result<u64, &'static str> {
+    let warm = vmap::allocate(pages, MapFlags::KERNEL_DATA).map_err(|_| "vmap refused a range")?;
+    let warmer =
+        vmap::allocate(pages, MapFlags::KERNEL_DATA).map_err(|_| "vmap refused a second range")?;
+    free_pair(warm, warmer)?;
+    Ok(mm::free_frames())
+}
+
+/// Free two vmap allocations.
+fn free_pair(first: vmap::Mapping, second: vmap::Mapping) -> Result<(), &'static str> {
+    vmap::free(first.base).map_err(|_| "vmap refused to free its own allocation")?;
+    vmap::free(second.base).map_err(|_| "vmap refused to free its own allocation")
 }
 
 /// Every page of an allocation is mapped, distinct and zeroed.
@@ -2794,11 +2821,14 @@ fn check_frames() -> Result<(), &'static str> {
     frames_hammer()
 }
 
+/// What the heap check says when the heap refuses it.
+const NO_HEAP: &str = "the heap refused an allocation it had room for";
+
 /// Check that `alloc` works, which is the whole point of the stage.
 fn check_heap() -> Result<(), &'static str> {
     // A `Box`, which is the smallest possible proof that `GlobalAlloc` is wired
     // up at all.
-    let boxed = Box::new(0x5EED_1234_ABCD_0001u64);
+    let boxed = fallible::try_box(0x5EED_1234_ABCD_0001u64).map_err(|_| NO_HEAP)?;
     if *boxed != 0x5EED_1234_ABCD_0001 {
         return Err("a Box did not hold what was put in it");
     }
@@ -2808,7 +2838,7 @@ fn check_heap() -> Result<(), &'static str> {
     // move data between size classes and then between whole pages.
     let mut values: Vec<u64> = Vec::new();
     for value in 0..4096u64 {
-        values.push(value.wrapping_mul(2_654_435_761));
+        fallible::try_push(&mut values, value.wrapping_mul(2_654_435_761)).map_err(|_| NO_HEAP)?;
     }
     for (index, value) in values.iter().enumerate() {
         if *value != (index as u64).wrapping_mul(2_654_435_761) {
@@ -2821,7 +2851,8 @@ fn check_heap() -> Result<(), &'static str> {
     // an order nothing controls.
     let mut map: BTreeMap<u64, u64> = BTreeMap::new();
     for key in 0..2048u64 {
-        let _ = map.insert(key.wrapping_mul(2_654_435_761) % 100_003, key);
+        let _ = fallible::insert(&mut map, key.wrapping_mul(2_654_435_761) % 100_003, key)
+            .map_err(|_| NO_HEAP)?;
     }
     let entries = map.len();
     if entries == 0 {

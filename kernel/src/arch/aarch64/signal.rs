@@ -117,6 +117,20 @@ impl UserContext {
     }
 }
 
+/// Write the frame record the handler's frame pointer names: the
+/// interrupted frame pointer and link register.
+fn write_frame_record(
+    space: &AddressSpace,
+    at: u64,
+    frame_pointer: Option<&u64>,
+    link: Option<&u64>,
+) -> Result<(), BadFrame> {
+    let mut record = FrameBytes::zeroed(RECORD_BYTES as usize)?;
+    record.put_u64(0, frame_pointer.copied().unwrap_or(0))?;
+    record.put_u64(8, link.copied().unwrap_or(0))?;
+    record.write(space, at)
+}
+
 /// Write `request`'s frame and point `context` at the handler: `x0` the
 /// signal, `x1` the `siginfo`, `x2` the `ucontext`, `x29` the frame record,
 /// `x30` the restorer.
@@ -129,7 +143,7 @@ pub(crate) fn setup_signal_frame(
     let frame_at = record_at.checked_sub(FRAME_BYTES as u64).ok_or(BadFrame)? & !15;
     let regs = &context.0;
 
-    let mut frame = FrameBytes::zeroed(FRAME_BYTES);
+    let mut frame = FrameBytes::zeroed(FRAME_BYTES)?;
     frame.put(0, &request.info)?;
     frame.put_stack(UC_STACK, request.altstack)?;
     frame.put_u64(UC_SIGMASK, request.mask)?;
@@ -152,10 +166,7 @@ pub(crate) fn setup_signal_frame(
     // The end record, eight zero bytes after the last one, is already zero.
     frame.write(space, frame_at)?;
 
-    let mut record = FrameBytes::zeroed(RECORD_BYTES as usize);
-    record.put_u64(0, regs.x.get(29).copied().unwrap_or(0))?;
-    record.put_u64(8, regs.x.get(30).copied().unwrap_or(0))?;
-    record.write(space, record_at)?;
+    write_frame_record(space, record_at, regs.x.get(29), regs.x.get(30))?;
 
     let restorer = if request.flags & SA_RESTORER == 0 {
         0

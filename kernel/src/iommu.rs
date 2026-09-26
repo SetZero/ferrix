@@ -167,6 +167,7 @@ pub(crate) fn units(view: &BootView<'_>) -> Vec<Unit> {
 /// Record a unit, unless it is empty or already recorded.
 fn add(units: &mut Vec<Unit>, kind: Kind, phys: u64, len: u64) {
     if phys != 0 && len != 0 && !units.iter().any(|unit| unit.phys == phys) {
+        // FATAL-ALLOC: boot only: IOMMU units are found, placed and programmed once, before any program runs.
         units.push(Unit { kind, phys, len });
     }
 }
@@ -253,6 +254,7 @@ fn place_iort(table: &iort::Iort<'_>, units: &[Unit], function: Address) -> Behi
 /// kernel numbered the segments itself, and this does not guess which is
 /// which.
 fn place_tree(tree: &Fdt<'_>, units: &[Unit], function: Address) -> Behind {
+    // FATAL-ALLOC: boot only: IOMMU units are found, placed and programmed once, before any program runs.
     let hosts: Vec<EcamHost> = tree.ecam_hosts().collect();
     let named = hosts
         .iter()
@@ -309,12 +311,14 @@ pub(crate) fn discover(
             Location::Pci(address) => Some(address),
             Location::VirtioMmio(_) | Location::Tree(_) => None,
         })
+        // FATAL-ALLOC: boot only: IOMMU units are found, placed and programmed once, before any program runs.
         .collect();
 
     let mut placements = Vec::new();
     let mut record = |function: Address, found: Behind| match found {
         Behind::Unit { unit, stream } => {
             report.behind += 1;
+            // FATAL-ALLOC: boot only: IOMMU units are found, placed and programmed once, before any program runs.
             placements.push(Placement {
                 function,
                 unit,
@@ -695,10 +699,14 @@ impl Domain {
         if frames.is_empty() {
             return Err(DomainError::Empty);
         }
-        let addresses = frames
-            .iter()
-            .map(|frame| frame.checked_mul(PAGE_SIZE).ok_or(DomainError::OutOfRange))
-            .collect::<Result<Vec<u64>, DomainError>>()?;
+        let mut addresses =
+            crate::fallible::try_with_capacity(frames.len()).map_err(|_| DomainError::Tables)?;
+        for frame in frames {
+            let phys = frame
+                .checked_mul(PAGE_SIZE)
+                .ok_or(DomainError::OutOfRange)?;
+            let _ = crate::fallible::push_within(&mut addresses, phys);
+        }
         if let Some(changing) = self.translation.changing() {
             if addresses.iter().any(|&phys| phys >> TRANSLATED_BITS != 0) {
                 return Err(DomainError::OutOfRange);
@@ -883,7 +891,9 @@ fn bring_up_vtd(table: &dmar::Dmar<'_>, programmed: &mut Programmed, report: &mu
                 let index = programmed.vtd.len();
                 programmed
                     .behind
+                    // FATAL-ALLOC: boot only: IOMMU units are found, placed and programmed once, before any program runs.
                     .extend(endpoints(&unit).map(|address| (address, index)));
+                // FATAL-ALLOC: boot only: IOMMU units are found, placed and programmed once, before any program runs.
                 programmed.vtd.push(opened);
                 report.vtd += 1;
             }
@@ -913,7 +923,9 @@ fn bring_up_smmu(table: &iort::Iort<'_>, programmed: &mut Programmed, report: &m
             .and_then(|opened| opened.enable().map(|()| opened));
         match opened {
             Ok(opened) => {
+                // FATAL-ALLOC: boot only: IOMMU units are found, placed and programmed once, before any program runs.
                 offsets.push((node.offset, programmed.smmu.len()));
+                // FATAL-ALLOC: boot only: IOMMU units are found, placed and programmed once, before any program runs.
                 programmed.smmu.push(opened);
                 report.smmu_v3 += 1;
             }
@@ -930,6 +942,7 @@ fn bring_up_smmu(table: &iort::Iort<'_>, programmed: &mut Programmed, report: &m
         let Ok(segment) = u16::try_from(complex.segment) else {
             continue;
         };
+        // FATAL-ALLOC: boot only: IOMMU units are found, placed and programmed once, before any program runs.
         programmed.streams.extend(
             node.id_mappings()
                 .filter(|mapping| !mapping.is_single())
@@ -1045,6 +1058,7 @@ static STRAY_EVENTS: AtomicU64 = AtomicU64::new(0);
 /// Said on the console too, before the write: `xtask` holds every fault the
 /// emulated unit traces over a whole run, well past the boot, to these lines.
 fn record_provoked(stream: u32, page: u64) {
+    // FATAL-ALLOC: boot only: a boot check provokes the fault this records.
     PROVOKED.lock().push((stream, page));
     println!(
         "  iommu    stream {stream:#x} is made to write page {page:#x} outside its domain, on purpose"
@@ -1177,8 +1191,13 @@ pub(crate) fn check_domains(nodes: &[Arc<DeviceNode>]) -> Result<DomainReport, &
     else {
         return Ok(report);
     };
-    let domain = node.domain();
-    if !Arc::ptr_eq(&domain, &node.domain()) {
+    let domain = node
+        .domain()
+        .map_err(|_| "no memory for a device's domain")?;
+    let again = node
+        .domain()
+        .map_err(|_| "no memory for a device's domain")?;
+    if !Arc::ptr_eq(&domain, &again) {
         return Err("a device node handed out two domains");
     }
     let Some(first) = mm::allocate_frames(0) else {

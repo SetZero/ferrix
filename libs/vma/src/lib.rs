@@ -101,6 +101,16 @@ pub enum VmaError {
     /// The backing object would have to extend past its own 64-bit end to
     /// cover the range, so no offset arithmetic on it could be trusted later.
     BackingOverflow,
+    /// There was no memory for the map to grow, or for the list of what an
+    /// unmapping removed. Nothing was changed: the room is reserved before
+    /// anything is touched.
+    NoMemory,
+}
+
+impl From<ferrix_fallible::AllocError> for VmaError {
+    fn from(_: ferrix_fallible::AllocError) -> VmaError {
+        VmaError::NoMemory
+    }
 }
 
 impl fmt::Display for VmaError {
@@ -113,6 +123,7 @@ impl fmt::Display for VmaError {
             VmaError::Overlap => "the range is already mapped",
             VmaError::NotMapped => "part of the range is not mapped",
             VmaError::BackingOverflow => "the backing object would extend past its own end",
+            VmaError::NoMemory => "there was no memory for the map to change",
         };
         formatter.write_str(message)
     }
@@ -645,6 +656,7 @@ impl AddressSpace {
         if self.overlaps(region.range) {
             return Err(VmaError::Overlap);
         }
+        ferrix_fallible::try_reserve(&mut self.regions, 1)?;
         self.place(region);
         Ok(())
     }
@@ -669,8 +681,11 @@ impl AddressSpace {
     ) -> Result<Vec<Unmapping>, VmaError> {
         self.check_range(range)?;
         validate_backing(backing, range.bytes())?;
-        let mut unmapped = Vec::new();
-        self.carve(range, &mut unmapped);
+        // A carve splits at most one region, and the new one goes in after.
+        let mut unmapped = self.room_to_carve(range, 2)?;
+        self.carve(range, &mut |removed| {
+            let _ = ferrix_fallible::push_within(&mut unmapped, removed);
+        });
         self.place(Vma {
             range,
             flags,
@@ -692,8 +707,67 @@ impl AddressSpace {
     /// nothing has been changed.
     pub fn remove(&mut self, range: PageRange) -> Result<Vec<Unmapping>, VmaError> {
         self.check_range(range)?;
-        let mut unmapped = Vec::new();
-        self.carve(range, &mut unmapped);
+        let mut unmapped = self.room_to_carve(range, 1)?;
+        self.carve(range, &mut |removed| {
+            let _ = ferrix_fallible::push_within(&mut unmapped, removed);
+        });
+        Ok(unmapped)
+    }
+
+    /// Unmaps `range`, as [`AddressSpace::remove`] does, without reporting
+    /// what went: for a caller that already knows, such as an arena giving a
+    /// span back.
+    ///
+    /// Needs memory only to split a region, and none at all once
+    /// [`AddressSpace::reserve`] has made room for one more region.
+    ///
+    /// # Errors
+    ///
+    /// [`VmaError::OutOfRange`], or [`VmaError::NoMemory`] when a split found
+    /// no room; in either case nothing has been changed.
+    pub fn remove_quietly(&mut self, range: PageRange) -> Result<(), VmaError> {
+        self.check_range(range)?;
+        // Only a range strictly inside one region splits it, and only that
+        // needs room. The standard library's own reserve rather than the
+        // injecting one: with the room there it allocates nothing, and a test
+        // that injects failures must not be told otherwise.
+        let splits = self
+            .regions
+            .get(self.first_touching(range.start))
+            .is_some_and(|region| region.range.start < range.start && region.range.end > range.end);
+        if splits {
+            self.regions
+                .try_reserve(1)
+                .map_err(|_| VmaError::NoMemory)?;
+        }
+        self.carve(range, &mut |_| {});
+        Ok(())
+    }
+
+    /// Make room for `regions` more regions than the map holds now, so that
+    /// changes needing no more than that cannot fail for memory.
+    ///
+    /// # Errors
+    ///
+    /// [`VmaError::NoMemory`].
+    pub fn reserve(&mut self, regions: usize) -> Result<(), VmaError> {
+        ferrix_fallible::try_reserve(&mut self.regions, regions)?;
+        Ok(())
+    }
+
+    /// Room for carving `range`: a list with space for everything it could
+    /// report, and `regions` more slots in the map. Reserved before anything
+    /// is touched, so a failure changes nothing.
+    fn room_to_carve(
+        &mut self,
+        range: PageRange,
+        regions: usize,
+    ) -> Result<Vec<Unmapping>, VmaError> {
+        let touched = self
+            .first_beyond(range.end)
+            .saturating_sub(self.first_touching(range.start));
+        let unmapped = ferrix_fallible::try_with_capacity(touched.saturating_add(1))?;
+        ferrix_fallible::try_reserve(&mut self.regions, regions)?;
         Ok(unmapped)
     }
 
@@ -717,6 +791,8 @@ impl AddressSpace {
         if !self.is_fully_mapped(range) {
             return Err(VmaError::NotMapped);
         }
+        // Each edge may split one region.
+        ferrix_fallible::try_reserve(&mut self.regions, 2)?;
         self.split_at(range.start);
         self.split_at(range.end);
         let first = self.first_touching(range.start);
@@ -772,14 +848,26 @@ impl AddressSpace {
     /// Marking can make two neighbours that differed only in `cow` identical,
     /// so the map is re-merged before it is copied and both sides come back
     /// canonical.
-    pub fn clone_for_fork(&mut self) -> AddressSpace {
+    ///
+    /// # Errors
+    ///
+    /// [`VmaError::NoMemory`], with nothing marked: the copy's room is taken
+    /// first.
+    pub fn clone_for_fork(&mut self) -> Result<AddressSpace, VmaError> {
+        let mut regions = ferrix_fallible::try_with_capacity(self.regions.len())?;
         for region in &mut self.regions {
             if needs_cow(region) {
                 region.cow = true;
             }
         }
         self.merge_all();
-        self.clone()
+        // Merging only shrank the map, so the copy fits the room taken above.
+        regions.extend_from_slice(&self.regions);
+        Ok(AddressSpace {
+            regions,
+            low: self.low,
+            high: self.high,
+        })
     }
 
     /// Verifies every part of the structural invariant.
@@ -888,7 +976,8 @@ impl AddressSpace {
     // -- Mutation primitives ------------------------------------------------
 
     /// Inserts a region into a range known to be free, then merges it with
-    /// whichever neighbours it now continues.
+    /// whichever neighbours it now continues. The caller has reserved room
+    /// for it.
     fn place(&mut self, region: Vma) {
         let index = self.first_touching(region.range.start);
         let index = index.min(self.regions.len());
@@ -982,7 +1071,7 @@ impl AddressSpace {
     /// This is the whole of `munmap` and the first half of `MAP_FIXED`. It
     /// never leaves two mergeable neighbours behind, because everything it
     /// removes leaves a hole between what is left.
-    fn carve(&mut self, range: PageRange, out: &mut Vec<Unmapping>) {
+    fn carve(&mut self, range: PageRange, out: &mut dyn FnMut(Unmapping)) {
         let first = self.first_touching(range.start);
         let last = self.first_beyond(range.end);
         if first >= last {
@@ -995,7 +1084,7 @@ impl AddressSpace {
         let (last, tail) = self.carve_tail(last, range);
         self.carve_whole(first, last, out);
         if let Some(tail) = tail {
-            out.push(tail);
+            out(tail);
         }
     }
 
@@ -1005,7 +1094,12 @@ impl AddressSpace {
     /// Returns whether that was the shape, in which case there is nothing else
     /// to do, since a region reaching past both edges is necessarily the only
     /// one the range touches.
-    fn carve_interior(&mut self, index: usize, range: PageRange, out: &mut Vec<Unmapping>) -> bool {
+    fn carve_interior(
+        &mut self,
+        index: usize,
+        range: PageRange,
+        out: &mut dyn FnMut(Unmapping),
+    ) -> bool {
         let Some(region) = self.regions.get_mut(index) else {
             return false;
         };
@@ -1025,7 +1119,7 @@ impl AddressSpace {
         let removed = unmapping_of(region, range);
         region.range.end = range.start;
         self.regions.insert(index.saturating_add(1), tail);
-        out.push(removed);
+        out(removed);
         true
     }
 
@@ -1033,7 +1127,12 @@ impl AddressSpace {
     /// remainder ends where `range` begins.
     ///
     /// Returns the index of the first region that is now wholly inside `range`.
-    fn carve_head(&mut self, index: usize, range: PageRange, out: &mut Vec<Unmapping>) -> usize {
+    fn carve_head(
+        &mut self,
+        index: usize,
+        range: PageRange,
+        out: &mut dyn FnMut(Unmapping),
+    ) -> usize {
         let Some(region) = self.regions.get_mut(index) else {
             return index;
         };
@@ -1048,7 +1147,7 @@ impl AddressSpace {
         };
         let removed = unmapping_of(region, cut);
         region.range.end = range.start;
-        out.push(removed);
+        out(removed);
         index.saturating_add(1)
     }
 
@@ -1083,16 +1182,18 @@ impl AddressSpace {
 
     /// Deletes the regions in `first..last`, which are wholly inside the range
     /// being carved, and reports each of them.
-    fn carve_whole(&mut self, first: usize, last: usize, out: &mut Vec<Unmapping>) {
+    fn carve_whole(&mut self, first: usize, last: usize, out: &mut dyn FnMut(Unmapping)) {
         if first >= last || last > self.regions.len() {
             return;
         }
-        out.extend(self.regions.drain(first..last).map(|region| Unmapping {
-            range: region.range,
-            flags: region.flags,
-            backing: region.backing,
-            cow: region.cow,
-        }));
+        for region in self.regions.drain(first..last) {
+            out(Unmapping {
+                range: region.range,
+                flags: region.flags,
+                backing: region.backing,
+                cow: region.cow,
+            });
+        }
     }
 }
 

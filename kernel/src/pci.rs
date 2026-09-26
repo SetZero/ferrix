@@ -111,6 +111,7 @@ fn hosts(view: &BootView<'_>) -> (Vec<Host>, usize, Source) {
         if let Ok(mcfg) = firmware.acpi().mcfg() {
             for allocation in mcfg.entries() {
                 match allocation.window_base() {
+                    // FATAL-ALLOC: boot only: PCI enumeration runs once, at stage 10, before any program runs.
                     Some(phys) => described.push(Described {
                         segment: Some(allocation.segment),
                         start_bus: allocation.start_bus,
@@ -125,6 +126,7 @@ fn hosts(view: &BootView<'_>) -> (Vec<Host>, usize, Source) {
     } else {
         if let Ok(tree) = fdt::open(view) {
             for host in tree.ecam_hosts() {
+                // FATAL-ALLOC: boot only: PCI enumeration runs once, at stage 10, before any program runs.
                 described.push(Described {
                     segment: host.segment,
                     start_bus: host.start_bus,
@@ -136,6 +138,7 @@ fn hosts(view: &BootView<'_>) -> (Vec<Host>, usize, Source) {
         Source::DeviceTree
     };
 
+    // FATAL-ALLOC: boot only: PCI enumeration runs once, at stage 10, before any program runs.
     let named: BTreeSet<u16> = described.iter().filter_map(|host| host.segment).collect();
     let mut hosts: Vec<Host> = Vec::new();
     for host in described {
@@ -161,6 +164,7 @@ fn hosts(view: &BootView<'_>) -> (Vec<Host>, usize, Source) {
             refused += 1;
             continue;
         }
+        // FATAL-ALLOC: boot only: PCI enumeration runs once, at stage 10, before any program runs.
         hosts.push(Host {
             window,
             phys: host.phys,
@@ -199,6 +203,7 @@ impl Space {
             .checked_mul(BYTES_PER_BUS)
             .and_then(|offset| self.host.phys.checked_add(offset))
             .and_then(|phys| vmap::map_device(phys, BYTES_PER_BUS).ok());
+        // FATAL-ALLOC: boot only: PCI enumeration runs once, at stage 10, before any program runs.
         let _ = buses.insert(bus, mapped);
         mapped.map(Mmio::at)
     }
@@ -374,6 +379,7 @@ pub(crate) fn check(view: &BootView<'_>) -> Result<(Report, Vec<DeviceNode>, Res
     let ecam: Vec<(u64, u64)> = hosts
         .iter()
         .map(|host| (host.phys, host.phys.saturating_add(host.window.len())))
+        // FATAL-ALLOC: boot only: PCI enumeration runs once, at stage 10, before any program runs.
         .collect();
     let reserved = Reserved::of(view, &ecam);
     let mut report = Report {
@@ -416,6 +422,7 @@ fn check_host(
     let mut found: Vec<Function> = Vec::new();
     for item in Walk::new(&space, host.window.segment(), host.window.buses()) {
         match item {
+            // FATAL-ALLOC: boot only: PCI enumeration runs once, at stage 10, before any program runs.
             Ok(function) => found.push(function),
             Err(_) => report.unfollowed += 1,
         }
@@ -447,6 +454,7 @@ fn check_host(
         let secondary_bus = BusNumbers::read(&space, function.address)
             .ok()
             .map(|numbers| numbers.secondary);
+        // FATAL-ALLOC: boot only: PCI enumeration runs once, at stage 10, before any program runs.
         nodes.push(DeviceNode::pci(
             function.address,
             &Seen {
@@ -514,6 +522,7 @@ fn check_function(
             Ok(Some(region)) => {
                 report.bars += 1;
                 report.aperture_bytes = report.aperture_bytes.saturating_add(region.size);
+                // FATAL-ALLOC: boot only: PCI enumeration runs once, at stage 10, before any program runs.
                 regions.push(region);
             }
             // An unimplemented slot, or the upper half of a 64-bit BAR.

@@ -351,7 +351,9 @@ pub(crate) unsafe fn init_secondary() -> Result<(), &'static str> {
             .top;
     }
     // Leaked: the processor uses these for the rest of its life.
-    let tables: &'static mut Tables = Box::leak(Box::new(Tables::new()));
+    let tables: &'static mut Tables = Box::leak(
+        crate::fallible::try_box(Tables::new()).map_err(|_| "no memory for a processor's GDT")?,
+    );
     // SAFETY: fresh tables that nothing else refers to, and fresh stacks.
     unsafe { load(tables, tops) };
     Ok(())

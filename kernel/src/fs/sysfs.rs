@@ -749,6 +749,7 @@ fn path_of(dir: Dir) -> Option<Vec<Vec<u8>>> {
         Dir::BusDrivers(bus) => path(&[b"bus", bus_name(bus), b"drivers"]),
         Dir::Driver(bus, driver) => {
             let (_, name) = devmgr::drivers_on(bus)
+                .ok()?
                 .into_iter()
                 .find(|(at, _)| *at == driver)?;
             path(&[b"bus", bus_name(bus), b"drivers", &name])
@@ -924,14 +925,14 @@ fn index_entries(list: &mut Listing, dir: Dir) -> Result<()> {
             }
         }
         Dir::BusDrivers(bus) => {
-            for (driver, name) in devmgr::drivers_on(bus) {
+            for (driver, name) in devmgr::drivers_on(bus).map_err(|_| Errno::ENOMEM)? {
                 list.dir(&name, Dir::Driver(bus, driver));
             }
         }
         Dir::Driver(bus, driver) => {
             let _ = path_of(dir).ok_or(Errno::ENOENT)?;
             list.files(dir, &[Attr::Bind, Attr::Unbind]);
-            for index in devmgr::bound_to(driver) {
+            for index in devmgr::bound_to(driver).map_err(|_| Errno::ENOMEM)? {
                 if bus_of(index) == Some(bus)
                     && let Some(name) = device_name(index)
                 {

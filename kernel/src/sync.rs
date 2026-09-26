@@ -37,7 +37,8 @@ pub(crate) type SpinLock<T> = ferrix_sync::PreemptSpinLock<T, crate::sched::Pree
 pub(crate) struct SchedParker;
 
 impl ferrix_sync::Parker for SchedParker {
-    fn new_parking(&self) -> alloc::boxed::Box<dyn ferrix_sync::Parking> {
-        alloc::boxed::Box::new(crate::sched::WaitQueue::new())
+    fn new_parking(&self) -> Option<alloc::boxed::Box<dyn ferrix_sync::Parking>> {
+        let queue = crate::fallible::try_box(crate::sched::WaitQueue::new()).ok()?;
+        Some(queue)
     }
 }

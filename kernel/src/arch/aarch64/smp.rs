@@ -67,6 +67,7 @@ pub(crate) fn describe_cpus(view: &BootView<'_>) -> Result<Described, &'static s
         return Ok(Described {
             id_name: "MPIDR",
             boot,
+            // FATAL-ALLOC: boot only: stage 4 lists the processors firmware describes, once.
             ids: alloc::vec![boot],
         });
     }
@@ -96,6 +97,7 @@ fn cpus_from_madt(view: &BootView<'_>) -> Result<Vec<u64>, &'static str> {
         if let MadtEntry::Gicc(gicc) = entry
             && gicc.is_enabled()
         {
+            // FATAL-ALLOC: boot only: stage 4 lists the processors firmware describes, once.
             ids.push(gicc.mpidr & MPIDR_AFFINITY);
         }
     }
@@ -121,6 +123,7 @@ fn cpus_from_tree(view: &BootView<'_>) -> Result<Vec<u64>, &'static str> {
                 }
         })
         .map(|(id, _)| id)
+        // FATAL-ALLOC: boot only: stage 4 lists the processors firmware describes, once.
         .collect())
 }
 

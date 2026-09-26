@@ -9,34 +9,11 @@
     "being re-recorded. The target is an empty map."
   ],
   "files": {
-    "arch/aarch64/smp.rs": 3,
-    "arch/armv7a/smp.rs": 2,
-    "arch/x86_64/gdt.rs": 1,
-    "arch/x86_64/smp.rs": 2,
-    "claim.rs": 2,
-    "console/input.rs": 1,
-    "console/output.rs": 2,
-    "device.rs": 19,
-    "devmgr.rs": 24,
-    "init.rs": 11,
-    "iommu.rs": 11,
-    "iommu/smmuv3.rs": 1,
-    "iommu/vtd.rs": 2,
-    "main.rs": 3,
-    "mm.rs": 4,
-    "pci.rs": 9,
-    "pci/virtio.rs": 1,
     "sched/mod.rs": 28,
     "sched/queue.rs": 2,
     "sched/task.rs": 1,
     "sched/wait.rs": 3,
-    "signal_frame.rs": 2,
-    "smp.rs": 7,
-    "sync.rs": 1,
-    "syscall/program.rs": 2,
-    "syscall/uaccess.rs": 2,
     "user/space.rs": 32,
-    "user/vmo.rs": 31,
-    "vmap.rs": 7
+    "user/vmo.rs": 31
   }
 }

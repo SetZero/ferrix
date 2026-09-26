@@ -1573,9 +1573,19 @@ fn vmo_pin(
     } else {
         ferrix_paging::MapFlags::DMA
     };
-    let pin = object::pin::Pin::new(node.domain(), held, flags).map_err(domain_status)?;
-    let pin = fallible::try_arc(pin).map_err(|_| status::NO_MEMORY)?;
+    let pin = pin_through(&node, held, flags)?;
     insert_new(process, Object::Pin(pin), Rights::PIN)
+}
+
+/// Pin `held` into `node`'s IOMMU domain with `flags`.
+fn pin_through(
+    node: &DeviceNode,
+    held: crate::user::vmo::Held,
+    flags: ferrix_paging::MapFlags,
+) -> Result<Arc<object::pin::Pin>, Errno> {
+    let domain = node.domain().map_err(|_| status::NO_MEMORY)?;
+    let pin = object::pin::Pin::new(domain, held, flags).map_err(domain_status)?;
+    fallible::try_arc(pin).map_err(|_| status::NO_MEMORY)
 }
 
 /// The status a refused pin travels as.

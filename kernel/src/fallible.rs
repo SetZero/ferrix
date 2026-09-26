@@ -35,8 +35,8 @@ use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 pub(crate) use ferrix_fallible::{
     AllocError, push_within, try_boxed_str, try_collect, try_deque_with_capacity, try_extend,
-    try_filled, try_format, try_push, try_reserve, try_reserve_deque, try_string,
-    try_with_capacity,
+    try_extend_from_slice, try_filled, try_format, try_push, try_reserve, try_reserve_deque,
+    try_string, try_to_vec, try_with_capacity,
 };
 use ferrix_fallible::{btree_node_bound, check};
 use ferrix_heap::LARGEST_CLASS;
@@ -44,6 +44,8 @@ use ferrix_heap::LARGEST_CLASS;
 pub(crate) use crate::mm::Reserved;
 use crate::sched::TaskId;
 
+/// A boxed value, fallibly.
+pub(crate) use ferrix_fallible::try_box;
 /// `vec.insert(index, value)`, fallibly: named apart from the map [`insert`].
 pub(crate) use ferrix_fallible::try_insert as try_insert_at;
 

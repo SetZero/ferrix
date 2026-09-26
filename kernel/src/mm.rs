@@ -60,9 +60,13 @@ use ferrix_paging::{
 };
 use ferrix_sync::IrqSpinLock;
 
+use crate::fallible;
+
 mod reserve;
 
-pub(crate) use reserve::{Reserved, bypass_heap_in_sections, reserve, reserve_counts};
+pub(crate) use reserve::{
+    Reserved, bypass_heap_in_sections, fill_reserve, reserve, reserve_counts,
+};
 
 /// Why memory could not be brought up.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -388,6 +392,7 @@ pub(crate) fn release_frame(frame: Frame) -> bool {
 /// For the fault handler's one real decision: a copy-on-write fault on a page
 /// nobody else holds any more does not need to copy anything.
 pub(crate) fn frame_references(frame: Frame) -> u32 {
+    // NOALLOC: the frame allocator's per-frame record, looked up.
     with_frames(|frames| frames.entry(frame).map_or(0, PageEntry::refcount)).unwrap_or(0)
 }
 
@@ -494,8 +499,15 @@ unsafe impl GlobalAlloc for KernelAllocator {
             .or_else(|| reserve::draw(request));
         // A null return is how `GlobalAlloc` reports failure. A fallible
         // caller -- `try_reserve`, `ferrix_fallible` -- turns it into an
-        // error; an infallible one calls the allocation error handler.
-        address.map_or(core::ptr::null_mut(), |address| address as *mut u8)
+        // error; an infallible one calls the allocation error handler, and
+        // the count is how the panic that follows is recognised as that.
+        address.map_or_else(
+            || {
+                let _ = REFUSALS.fetch_add(1, Ordering::Relaxed);
+                core::ptr::null_mut()
+            },
+            |address| address as *mut u8,
+        )
     }
 
     unsafe fn dealloc(&self, pointer: *mut u8, layout: Layout) {
@@ -506,6 +518,15 @@ unsafe impl GlobalAlloc for KernelAllocator {
 
 #[global_allocator]
 static ALLOCATOR: KernelAllocator = KernelAllocator;
+
+/// Allocations the heap has refused, reserve and all, since boot.
+static REFUSALS: AtomicU64 = AtomicU64::new(0);
+
+/// How many allocations the heap has refused since boot: nonzero before the
+/// panic an infallible allocation's failure ends in.
+pub(crate) fn heap_refusals() -> u64 {
+    REFUSALS.load(Ordering::Relaxed)
+}
 
 // ---------------------------------------------------------------------------
 // Kernel mappings
@@ -822,11 +843,34 @@ pub(crate) fn unmap_kernel(
 /// returned afterwards.
 pub(crate) fn unmap_kernel_all(
     ranges: &[(u64, u64)],
-    mut released: impl FnMut(Frame, u8),
+    released: impl FnMut(Frame, u8),
 ) -> Result<u64, ferrix_paging::MapError> {
-    let mut pages: Deferred<(Frame, u8), 32> = Deferred::new((0, 0));
+    let mut pages: Deferred<(Frame, u8), DEFERRED_PAGES> = Deferred::new((0, 0));
     let mut tables: Deferred<Frame, 8> = Deferred::new(0);
 
+    // Room for everything it could release, made before anything is unmapped.
+    // An unmap happens as something is torn down, with nobody to tell that
+    // memory ran out (finding F-23), so when there is no room it does the
+    // work in pieces small enough for the inline slots instead, one shootdown
+    // each: slower, and needing no memory at all.
+    let page_bound = ranges.iter().fold(0_u64, |sum, &(_, len)| {
+        sum.saturating_add(len.div_ceil(PAGE_SIZE))
+    });
+    let table_bound = page_bound / 512 + 4 * ranges.len() as u64 + 4;
+    if !pages.make_room(page_bound) || !tables.make_room(table_bound) {
+        return unmap_kernel_in_pieces(ranges, released);
+    }
+    unmap_and_release(ranges, &mut pages, &mut tables, released)
+}
+
+/// Unmap `ranges`, shoot the translations down everywhere, and only then
+/// release what they held, holding it in `pages` and `tables` meanwhile.
+fn unmap_and_release<const N: usize>(
+    ranges: &[(u64, u64)],
+    pages: &mut Deferred<(Frame, u8), N>,
+    tables: &mut Deferred<Frame, 8>,
+    mut released: impl FnMut(Frame, u8),
+) -> Result<u64, ferrix_paging::MapError> {
     let mut removed = Ok(0u64);
     for &(virt, len) in ranges {
         let this = with_tables(|mapper| {
@@ -841,6 +885,7 @@ pub(crate) fn unmap_kernel_all(
                         // rather than a table: a level-3 leaf is order 0 and
                         // a 2 MiB block is order 9.
                         let order = (ferrix_paging::Level::PAGE.depth() - level.depth()) * 9;
+                        // NOALLOC: `Deferred::push`, into room made before the unmap began.
                         pages.push((phys.0 / PAGE_SIZE, order));
                     }
                     // A page table the mapper allocated through
@@ -849,6 +894,7 @@ pub(crate) fn unmap_kernel_all(
                     // the caller: the caller asked to unmap a range and has
                     // no idea a table existed, and telling it about one would
                     // make every `released` closure in the tree have to know.
+                    // NOALLOC: `Deferred::push`, into room made before the unmap began.
                     Released::Table { phys } => tables.push(phys.0 / PAGE_SIZE),
                 },
             )
@@ -876,14 +922,50 @@ pub(crate) fn unmap_kernel_all(
     removed
 }
 
+/// Pages an unmap holds inline, and the size of the pieces
+/// [`unmap_kernel_in_pieces`] cuts a range into.
+const DEFERRED_PAGES: usize = 32;
+
+/// [`unmap_kernel_all`] with no memory to spare: each range in pieces of at
+/// most [`DEFERRED_PAGES`] pages, each piece unmapped, shot down and released
+/// before the next, so that what one releases always fits inline. A piece
+/// that small can empty at most one table at each level, which the eight
+/// inline table slots hold.
+fn unmap_kernel_in_pieces(
+    ranges: &[(u64, u64)],
+    mut released: impl FnMut(Frame, u8),
+) -> Result<u64, ferrix_paging::MapError> {
+    let piece = DEFERRED_PAGES as u64 * PAGE_SIZE;
+    let mut total = 0_u64;
+    for &(virt, len) in ranges {
+        let end = virt.saturating_add(len.next_multiple_of(PAGE_SIZE));
+        let mut at = virt;
+        while at < end {
+            let this = piece.min(end - at);
+            let mut pages: Deferred<(Frame, u8), DEFERRED_PAGES> = Deferred::new((0, 0));
+            let mut tables: Deferred<Frame, 8> = Deferred::new(0);
+            let bytes = unmap_and_release(&[(at, this)], &mut pages, &mut tables, &mut released)?;
+            total = total.saturating_add(bytes);
+            at += this;
+        }
+    }
+    Ok(total)
+}
+
 /// What an unmap released, held until every TLB has forgotten it.
 ///
 /// Inline for an unmap of up to `N` things, which is every unmap the kernel
-/// makes today, and spilling to the heap past that. **Not a `Vec` from the
+/// makes today, and spilling to the heap past that -- into room made before
+/// the unmap began ([`Deferred::make_room`]), so that holding never
+/// allocates. **Not a `Vec` from the
 /// start**, and not for speed: an unmap that allocated would, whenever its
 /// size class had no slab page, take one from the frame allocator and keep it
 /// — and the stage 2 checks, which require an unmap to give back exactly the
 /// frames its map took, would be measuring the heap's bookkeeping instead.
+/// Frames or tables an unmap could not hold for release: see
+/// [`Deferred::push`]. Zero on a correct kernel.
+static LOST_TO_UNMAPS: AtomicU64 = AtomicU64::new(0);
+
 #[derive(Debug)]
 struct Deferred<T: Copy, const N: usize> {
     /// The first `N` items.
@@ -904,13 +986,27 @@ impl<T: Copy, const N: usize> Deferred<T, N> {
         }
     }
 
-    /// Hold on to `item`.
+    /// Make room to hold `count` things in all, beyond the inline ones.
+    /// Returns whether there is room.
+    fn make_room(&mut self, count: u64) -> bool {
+        let spill = usize::try_from(count)
+            .unwrap_or(usize::MAX)
+            .saturating_sub(N);
+        spill == 0 || fallible::try_reserve(&mut self.spill, spill).is_ok()
+    }
+
+    /// Hold on to `item`, in the room made for it.
+    ///
+    /// Past that room it is not held: the thing it names is never released,
+    /// which loses memory rather than allocate on a path that cannot report
+    /// failure. [`unmap_kernel_all`] makes room for the most an unmap can
+    /// release, so this is not reached; [`LOST_TO_UNMAPS`] would count it.
     fn push(&mut self, item: T) {
         if let Some(slot) = self.inline.get_mut(self.held) {
             *slot = item;
             self.held += 1;
-        } else {
-            self.spill.push(item);
+        } else if fallible::push_within(&mut self.spill, item).is_err() {
+            let _ = LOST_TO_UNMAPS.fetch_add(1, Ordering::Relaxed);
         }
     }
 

@@ -190,6 +190,19 @@ fn enter(large: Option<Layout>) -> Result<(), AllocError> {
     Ok(())
 }
 
+/// Fill this processor's reserve now, rather than at its first section: for
+/// bring-up, so that what the reserve holds is there before anything
+/// measures the heap.
+///
+/// # Errors
+///
+/// [`AllocError`] when the heap cannot fill it.
+pub(crate) fn fill_reserve() -> Result<(), AllocError> {
+    let section = reserve(None)?;
+    drop(section);
+    Ok(())
+}
+
 /// Count a section closed, and give back a large block the outermost one did
 /// not use: whole pages are not kept out of the frame allocator between
 /// sections.

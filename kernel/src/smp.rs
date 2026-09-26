@@ -149,8 +149,11 @@ impl Topology {
             return Err("the processor running this code is not among those firmware describes");
         }
 
+        // FATAL-ALLOC: boot only: stage 4 builds the processor table once, before the secondaries start.
         let mut ordered = Vec::with_capacity(ids.len());
+        // FATAL-ALLOC: boot only: stage 4 builds the processor table once, before the secondaries start.
         ordered.push(boot);
+        // FATAL-ALLOC: boot only: stage 4 builds the processor table once, before the secondaries start.
         ordered.extend(ids.iter().copied().filter(|id| *id != boot));
 
         let records: Vec<PerCpu> = ordered
@@ -168,10 +171,12 @@ impl Topology {
                 tlb_seen: AtomicU64::new(0),
                 gp_seen: AtomicU64::new(0),
             })
+            // FATAL-ALLOC: boot only: stage 4 builds the processor table once, before the secondaries start.
             .collect();
 
         // Leaked, deliberately: a register on every processor is about to
         // hold an address into this, for as long as the machine runs.
+        // FATAL-ALLOC: boot only: stage 4 builds the processor table once, before the secondaries start.
         let cpus: &'static mut [PerCpu] = Box::leak(records.into_boxed_slice());
         for cpu in cpus.iter_mut() {
             cpu.this = (&raw const *cpu) as u64;
@@ -964,6 +969,7 @@ impl CpuMask {
         for (index, word) in self.words.iter().enumerate() {
             let bits = word.load(Ordering::SeqCst);
             for bit in (0..64).filter(|bit| bits & (1 << bit) != 0) {
+                // NOALLOC: a `CpuSet` is a fixed bit set.
                 let _ = set.insert(index * 64 + bit);
             }
         }
@@ -974,6 +980,7 @@ impl CpuMask {
 /// Add every processor in `from` to `into`.
 pub(crate) fn add_cpus(into: &mut CpuSet, from: &CpuSet) {
     for cpu in from.iter() {
+        // NOALLOC: a `CpuSet` is a fixed bit set.
         let _ = into.insert(cpu);
     }
 }

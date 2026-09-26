@@ -67,6 +67,7 @@ use ferrix_linux_abi::errno::Errno;
 use ferrix_sync::Once;
 
 use crate::console::println;
+use crate::fallible;
 use crate::syscall;
 use crate::syscall::program::ProgramFile;
 
@@ -181,6 +182,7 @@ pub(crate) fn read_option(view: &BootView<'_>) {
     match value {
         None => {}
         Some(path) if path.starts_with('/') => {
+            // FATAL-ALLOC: boot only: the command line is read once, as the kernel comes up.
             let _ = NAMED.call_once(|| Vec::from(path.as_bytes()));
             println!("  init     {OPTION}={path}: pid 1 is started from that file");
         }
@@ -282,6 +284,11 @@ impl fmt::Display for Refusal {
     }
 }
 
+/// A refusal for want of memory.
+fn no_memory(_: fallible::AllocError) -> Refusal {
+    Refusal::Open(Errno::ENOMEM)
+}
+
 /// Start the file at `path` as pid 1, and wait for it to end.
 ///
 /// A `#!` script runs under its interpreter with its own path as the last
@@ -297,11 +304,13 @@ fn run_file(launcher: &Launcher, path: &[u8]) -> Result<i32, Refusal> {
         if opened.program.head().starts_with(b"#!") {
             return Err(Refusal::Open(Errno::ENOEXEC));
         }
-        argv.push(interpreter);
-        argv.extend(argument);
+        fallible::try_push(&mut argv, interpreter).map_err(no_memory)?;
+        fallible::try_extend(&mut argv, argument).map_err(no_memory)?;
     }
-    argv.push(Vec::from(path));
-    let args: Vec<&[u8]> = argv.iter().map(Vec::as_slice).collect();
+    let own = fallible::try_to_vec(path).map_err(no_memory)?;
+    fallible::try_push(&mut argv, own).map_err(no_memory)?;
+    let args: Vec<&[u8]> =
+        fallible::try_collect(argv.iter().map(Vec::as_slice)).map_err(no_memory)?;
     println!("  init     starting {}", Argv(&args));
     start(launcher, &opened, path, &args).map_err(Refusal::Start)
 }
@@ -363,7 +372,10 @@ fn run_built_in(launcher: &Launcher) {
 /// Run each command in `list`, each with the program its `argv[0]` names in
 /// [`PROGRAM_DIR`].
 fn run_commands(launcher: &Launcher, list: &[u8]) {
-    let commands = parse(list);
+    let Ok(commands) = parse(list) else {
+        println!("  init     no memory to read the commands");
+        return;
+    };
     println!("  init     running {} commands", commands.len());
     // The programs the commands have needed so far, each with the path it was
     // asked for by and the name it resolved to, so that twenty commands over
@@ -379,15 +391,24 @@ fn run_commands(launcher: &Launcher, list: &[u8]) {
             println!("  init     command {index} names no program");
             continue;
         };
-        let mut path = Vec::from(PROGRAM_DIR);
-        path.extend_from_slice(name);
+        let Ok(mut path) = fallible::try_to_vec(PROGRAM_DIR) else {
+            println!("  init     command {index}: no memory for its path");
+            continue;
+        };
+        if fallible::try_extend_from_slice(&mut path, name).is_err() {
+            println!("  init     command {index}: no memory for its path");
+            continue;
+        }
 
-        let known = loaded.iter().position(|(seen, ..)| seen == &path);
+        let known = loaded.iter().position(|(seen, ..)| *seen == path);
         let at = match known {
             Some(at) => at,
             None => match (launcher.open)(&path) {
                 Ok(opened) => {
-                    loaded.push((path.clone(), opened));
+                    if fallible::try_push(&mut loaded, (path, opened)).is_err() {
+                        println!("  init     command {index}: no memory to keep its program");
+                        continue;
+                    }
                     loaded.len().saturating_sub(1)
                 }
                 Err(errno) => {
@@ -399,10 +420,10 @@ fn run_commands(launcher: &Launcher, list: &[u8]) {
                 }
             },
         };
-        let Some((_, opened)) = loaded.get(at) else {
+        let Some((path, opened)) = loaded.get(at) else {
             continue;
         };
-        match start(launcher, opened, &path, argv) {
+        match start(launcher, opened, path, argv) {
             Ok(status) => println!("  init     command {index} exited with {status}"),
             Err(problem) => {
                 println!("  init     command {index} could not be started: {problem}");
@@ -451,17 +472,21 @@ fn start(
 /// A command left unterminated at the end is dropped rather than run with
 /// arguments missing; the build script refuses such a list, so this is the
 /// second line of defence rather than the first.
-fn parse(list: &[u8]) -> Vec<Vec<&[u8]>> {
+///
+/// # Errors
+///
+/// [`fallible::AllocError`] when there is no memory for the list.
+fn parse(list: &[u8]) -> Result<Vec<Vec<&[u8]>>, fallible::AllocError> {
     let mut commands = Vec::new();
     let mut current = Vec::new();
     for word in list.split(|byte| *byte == 0) {
         if !word.is_empty() {
-            current.push(word);
+            fallible::try_push(&mut current, word)?;
         } else if !current.is_empty() {
-            commands.push(core::mem::take(&mut current));
+            fallible::try_push(&mut commands, core::mem::take(&mut current))?;
         }
     }
-    commands
+    Ok(commands)
 }
 
 /// An argument vector as one line of the log.

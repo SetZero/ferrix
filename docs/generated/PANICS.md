@@ -25,6 +25,7 @@ Causes are listed most likely first.
 | [FX-0005](#fx-0005) | a private region's object was mapped by more than one address space |
 | [FX-0006](#fx-0006) | the load ring did not register what the item needs from it |
 | [FX-0007](#fx-0007) | memory ran out while the kernel was coming up |
+| [FX-0008](#fx-0008) | an allocation that cannot report failure found the heap empty |
 | [FX-0101](#fx-0101) | the loader's hand-off is not what the kernel needs |
 | [FX-0201](#fx-0201) | the frame allocator could not be built |
 | [FX-0202](#fx-0202) | the kernel address arena could not be created |
@@ -235,8 +236,10 @@ asked -- a program gets `ENOMEM` or `NO_MEMORY`, and nothing stops
 there is nobody to report to: the structure being built is one every later step
 depends on, such as the root job, a processor's run queue or the table of
 processors. Those allocations are fatal by design and marked `FATAL-ALLOC` where
-they are made, and `scripts/check-fallible-alloc.py` lists them. Reaching one
-means the machine does not have the memory to run the kernel at all.
+they are made, and `scripts/check-fallible-alloc.py` lists them; one that stops
+through the standard library's allocation error handler before the boot marker
+is reported here too. Reaching one means the machine does not have the memory to
+run the kernel at all.
 
 1. The machine has far less memory than the kernel needs, or firmware reported
    almost none of it as usable.
@@ -245,6 +248,28 @@ means the machine does not have the memory to run the kernel at all.
 
 See: docs/certification/MEMORY-AND-TIMING.md; scripts/check-fallible-alloc.py;
 kernel/src/fallible.rs.
+
+<a id="fx-0008"></a>
+
+## FX-0008 — an allocation that cannot report failure found the heap empty
+
+The kernel's allocator reports an empty heap by returning null. A caller in the
+certified item turns that into an error it returns (`ENOMEM`, `NO_MEMORY`) or,
+while the kernel is still coming up, a stop with its own code (FX-0007). An
+ordinary `Box`, `Vec` or map cannot: the standard library calls its allocation
+error handler instead, which panics, and this is that panic. It is reached from
+code that has not been converted to report failure -- the uncertified load, and
+the item's sites `scripts/check-fallible-alloc.py` still lists or marks
+`FATAL-ALLOC` -- when memory really has run out.
+
+1. Memory ran out, and the allocation that found it so was one of the infallible
+   ones: the trace names it.
+2. A leak elsewhere consumed memory until an unrelated allocation failed; the
+   frame and heap counts in the boot report and /proc/meminfo say whether memory
+   was being lost.
+
+See: docs/certification/MEMORY-AND-TIMING.md; scripts/check-fallible-alloc.py;
+kernel/src/mm.rs.
 
 <a id="fx-0101"></a>
 

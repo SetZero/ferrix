@@ -153,6 +153,14 @@ impl UserContext {
     }
 }
 
+/// Write the `sigreturn` trampoline a handler without a restorer returns
+/// into: `mov r7, #number` and `svc 0`.
+fn write_retcode(frame: &mut FrameBytes, uc: usize, rt: bool) -> Result<(), BadFrame> {
+    let number = if rt { NR_RT_SIGRETURN } else { NR_SIGRETURN };
+    frame.put_u32(uc + RETCODE, 0xe3a0_7000 | number)?;
+    frame.put_u32(uc + RETCODE + 4, 0xef00_0000 | number)
+}
+
 /// Write `request`'s frame -- `rt_sigframe` for an `SA_SIGINFO` handler,
 /// `sigframe` otherwise -- and point `context` at the handler, in Thumb state
 /// if its address says so: `r0` the signal, and for the first `r1` the
@@ -168,7 +176,7 @@ pub(crate) fn setup_signal_frame(
     let frame_at = request.stack.checked_sub(size as u64).ok_or(BadFrame)? & !7;
     let frame_at = u32::try_from(frame_at).map_err(|_| BadFrame)?;
 
-    let mut frame = FrameBytes::zeroed(size);
+    let mut frame = FrameBytes::zeroed(size)?;
     if rt {
         frame.put(0, &request.info)?;
     } else {
@@ -179,9 +187,7 @@ pub(crate) fn setup_signal_frame(
     frame.put_u32(uc + OLDMASK, request.mask as u32)?;
     frame.put_u64(uc + UC_SIGMASK, request.mask)?;
     write_vfp(&mut frame, uc + REGSPACE)?;
-    let number = if rt { NR_RT_SIGRETURN } else { NR_SIGRETURN };
-    frame.put_u32(uc + RETCODE, 0xe3a0_7000 | number)?;
-    frame.put_u32(uc + RETCODE + 4, 0xef00_0000 | number)?;
+    write_retcode(&mut frame, uc, rt)?;
     frame.write(space, u64::from(frame_at))?;
 
     let handler = u32::try_from(request.handler).map_err(|_| BadFrame)?;

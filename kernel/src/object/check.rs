@@ -2026,7 +2026,9 @@ fn check_a_pin_gives_a_device_exactly_its_pages(counter: &mut Counter) -> Result
         .filter_map(|word| <[u8; 8]>::try_from(word).ok())
         .map(u64::from_ne_bytes)
         .collect();
-    let domain = node.domain();
+    let domain = node
+        .domain()
+        .map_err(|_| "no memory for a device's domain")?;
     let Some(second) = addresses
         .get(1)
         .and_then(|&address| domain.resolve(address))

@@ -902,7 +902,7 @@ fn protect_rejects_a_range_outside_the_window() {
 fn protect_keeps_the_copy_on_write_marking() {
     let mut space = space();
     map(&mut space, 0x10_000, 0x20_000, VmaFlags::READ_WRITE);
-    let _child = space.clone_for_fork();
+    let _child = space.clone_for_fork().unwrap();
     check(&space);
 
     assert_eq!(
@@ -1330,7 +1330,7 @@ fn clone_for_fork_marks_private_writable_regions_on_both_sides() {
     let mut parent = space();
     map(&mut parent, 0x10_000, 0x12_000, VmaFlags::READ_WRITE);
 
-    let child = parent.clone_for_fork();
+    let child = parent.clone_for_fork().unwrap();
     check(&parent);
     check(&child);
 
@@ -1359,7 +1359,7 @@ fn clone_for_fork_leaves_shared_and_read_only_regions_alone() {
     map(&mut parent, 0x10_000, 0x11_000, shared);
     map(&mut parent, 0x12_000, 0x13_000, VmaFlags::READ);
 
-    let child = parent.clone_for_fork();
+    let child = parent.clone_for_fork().unwrap();
     check(&parent);
     check(&child);
 
@@ -1391,7 +1391,7 @@ fn clone_for_fork_leaves_device_registers_alone() {
         .expect("valid");
     check(&parent);
 
-    let child = parent.clone_for_fork();
+    let child = parent.clone_for_fork().unwrap();
     check(&child);
 
     assert!(
@@ -1404,7 +1404,7 @@ fn clone_for_fork_leaves_device_registers_alone() {
 fn clone_for_fork_merges_regions_that_marking_made_identical() {
     let mut parent = space();
     map(&mut parent, 0x10_000, 0x12_000, VmaFlags::READ_WRITE);
-    let _first_child = parent.clone_for_fork();
+    let _first_child = parent.clone_for_fork().unwrap();
     check(&parent);
 
     map(&mut parent, 0x12_000, 0x14_000, VmaFlags::READ_WRITE);
@@ -1414,7 +1414,7 @@ fn clone_for_fork_merges_regions_that_marking_made_identical() {
         "a fresh mapping is not copy-on-write, so it is not a continuation of the old one"
     );
 
-    let second_child = parent.clone_for_fork();
+    let second_child = parent.clone_for_fork().unwrap();
     check(&parent);
     check(&second_child);
     assert_eq!(
@@ -1802,4 +1802,79 @@ fn a_region_put_back_down_keeps_its_copy_on_write_marking() {
     );
     check(&space);
     assert_eq!(space.region_count(), 1, "the refusal changed nothing");
+}
+
+/// Allocation failure, injected through `ferrix_fallible`: every change that
+/// would have to grow the map refuses with `NoMemory` and changes nothing.
+#[test]
+fn a_change_that_cannot_grow_the_map_changes_nothing() {
+    std::thread_local! {
+        static FAIL: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
+    }
+    fn policy() -> bool {
+        FAIL.with(core::cell::Cell::get)
+    }
+    let _ = ferrix_fallible::set_injector(policy);
+    ferrix_fallible::arm(true);
+
+    let mut space = space();
+    space
+        .insert(
+            range(0x2000, 0xA000),
+            VmaFlags::READ_WRITE,
+            Backing::Anonymous { id: 1, offset: 0 },
+        )
+        .unwrap();
+    let before = space.clone();
+
+    FAIL.with(|fail| fail.set(true));
+    let refused = [
+        space
+            .insert(
+                range(0xB000, 0xC000),
+                VmaFlags::READ_WRITE,
+                Backing::Anonymous { id: 2, offset: 0 },
+            )
+            .err(),
+        space.remove(range(0x4000, 0x5000)).err(),
+        space
+            .map_fixed(
+                range(0x4000, 0x5000),
+                VmaFlags::READ_EXECUTE,
+                Backing::Anonymous { id: 3, offset: 0 },
+            )
+            .err(),
+        space
+            .protect(range(0x3000, 0x4000), VmaFlags::READ_EXECUTE)
+            .err(),
+        space.clone_for_fork().err(),
+    ];
+    FAIL.with(|fail| fail.set(false));
+
+    assert!(
+        refused
+            .iter()
+            .all(|error| *error == Some(VmaError::NoMemory)),
+        "{refused:?}"
+    );
+    assert_eq!(space, before, "a refused change left the map as it was");
+    space.check_invariants().unwrap();
+}
+
+#[test]
+fn a_quiet_removal_matches_a_reported_one_and_needs_no_memory_once_reserved() {
+    let mut reported = space();
+    reported
+        .insert(
+            range(0x2000, 0xA000),
+            VmaFlags::READ_WRITE,
+            Backing::Anonymous { id: 1, offset: 0 },
+        )
+        .unwrap();
+    let mut quiet = reported.clone();
+    let _ = reported.remove(range(0x4000, 0x5000)).unwrap();
+    quiet.reserve(1).unwrap();
+    quiet.remove_quietly(range(0x4000, 0x5000)).unwrap();
+    assert_eq!(quiet, reported);
+    check(&quiet);
 }

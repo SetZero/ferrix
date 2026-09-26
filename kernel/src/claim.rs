@@ -68,14 +68,14 @@ impl Claims {
     }
 
     /// Claim `node` for the channel whose core end is `control`; `false`
-    /// when it is claimed already.
+    /// when it is claimed already, or when there was no memory to record the
+    /// claim -- which the caller answers as it does a device in use.
     pub(crate) fn claim(&self, node: &Arc<DeviceNode>, control: &Arc<Endpoint>) -> bool {
         let mut held = self.held.lock();
         if held.iter().any(|(claimed, _)| Arc::ptr_eq(claimed, node)) {
             return false;
         }
-        held.push((Arc::clone(node), Arc::clone(control)));
-        true
+        crate::fallible::try_push(&mut held, (Arc::clone(node), Arc::clone(control))).is_ok()
     }
 
     /// Let `node` go, and wake a quiesce waiting for it.
@@ -141,15 +141,16 @@ impl Numbers {
         }
     }
 
-    /// The lowest number nothing holds, now held.
-    pub(crate) fn take(&self) -> u32 {
+    /// The lowest number nothing holds, now held; `None` when there was no
+    /// memory to hold it.
+    pub(crate) fn take(&self) -> Option<u32> {
         let mut taken = self.taken.lock();
         let mut number = self.first;
         while taken.contains(&number) {
             number = number.saturating_add(1);
         }
-        taken.push(number);
-        number
+        crate::fallible::try_push(&mut taken, number).ok()?;
+        Some(number)
     }
 
     /// Give `number` back, for the next node to be published under.

@@ -21,7 +21,7 @@
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::convert::Infallible;
-use core::sync::atomic::{AtomicU16, Ordering};
+use core::sync::atomic::{AtomicU16, AtomicU64, Ordering};
 
 use ferrix_blkring::Location;
 use ferrix_blkring::control::DEVICE_RIGHTS;
@@ -36,6 +36,7 @@ use ferrix_native_abi::signals::Signals;
 use ferrix_native_abi::types::{CHANNEL_MAX_BYTES, CHANNEL_MAX_HANDLES};
 use ferrix_sync::Once;
 
+use crate::fallible::{self, AllocError};
 use crate::object::channel::{Endpoint, ReadError};
 use crate::object::job::{self, Job};
 use crate::object::process::Process;
@@ -142,39 +143,62 @@ static ANSWERED: WaitQueue = WaitQueue::new();
 /// The next request's token.
 static NEXT_TOKEN: AtomicU16 = AtomicU16::new(1);
 
+/// A driver's name, as the manifest gave it: a fixed array, so handing one
+/// out allocates nothing. Reads as the name without its padding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct DriverName([u8; NAME_BYTES]);
+
+impl core::ops::Deref for DriverName {
+    type Target = [u8];
+
+    fn deref(&self) -> &[u8] {
+        name_bytes(&self.0)
+    }
+}
+
 /// The drivers `devmgr` can start on `bus`: each one's number and name.
-pub(crate) fn drivers_on(bus: Bus) -> Vec<(u16, Vec<u8>)> {
+///
+/// # Errors
+///
+/// [`AllocError`] when there is no memory for the list.
+pub(crate) fn drivers_on(bus: Bus) -> Result<Vec<(u16, DriverName)>, AllocError> {
     let bindings = BINDINGS.lock();
-    bindings
-        .drivers
-        .iter()
-        .filter(|(_, on)| *on == bus)
-        .filter_map(|&(driver, _)| {
-            let name = bindings.names.get(usize::from(driver))?;
-            Some((driver, name_bytes(name).to_vec()))
-        })
-        .collect()
+    fallible::try_collect(
+        bindings
+            .drivers
+            .iter()
+            .filter(|(_, on)| *on == bus)
+            .filter_map(|&(driver, _)| {
+                let name = bindings.names.get(usize::from(driver))?;
+                Some((driver, DriverName(*name)))
+            }),
+    )
 }
 
 /// The driver that drives the device with index `device`, if one does.
-pub(crate) fn driver_of(device: usize) -> Option<(u16, Vec<u8>)> {
+pub(crate) fn driver_of(device: usize) -> Option<(u16, DriverName)> {
     let bindings = BINDINGS.lock();
     let (_, driver) = bindings.bound.iter().find(|(at, _)| *at == device)?;
     let name = bindings.names.get(usize::from(*driver))?;
-    Some((*driver, name_bytes(name).to_vec()))
+    Some((*driver, DriverName(*name)))
 }
 
 /// The devices `driver` drives, by index, ascending.
-pub(crate) fn bound_to(driver: u16) -> Vec<usize> {
-    let mut devices: Vec<usize> = BINDINGS
-        .lock()
-        .bound
-        .iter()
-        .filter(|(_, by)| *by == driver)
-        .map(|(device, _)| *device)
-        .collect();
+///
+/// # Errors
+///
+/// [`AllocError`] when there is no memory for the list.
+pub(crate) fn bound_to(driver: u16) -> Result<Vec<usize>, AllocError> {
+    let mut devices: Vec<usize> = fallible::try_collect(
+        BINDINGS
+            .lock()
+            .bound
+            .iter()
+            .filter(|(_, by)| *by == driver)
+            .map(|(device, _)| *device),
+    )?;
     devices.sort_unstable();
-    devices
+    Ok(devices)
 }
 
 /// What a write to `bind` or `unbind` asks for.
@@ -213,10 +237,9 @@ pub(crate) fn request(kind: Request, device: usize, driver: u16) -> Result<(), E
             token,
         },
     };
-    PENDING.lock().push((token, None));
-    let sent = channel.write(message.encode().to_vec(), 0, || {
-        Ok::<Vec<Transfer>, Infallible>(Vec::new())
-    });
+    let bytes = fallible::try_to_vec(&message.encode()).map_err(|_| Errno::ENOMEM)?;
+    fallible::try_push(&mut PENDING.lock(), (token, None)).map_err(|_| Errno::ENOMEM)?;
+    let sent = channel.write(bytes, 0, || Ok::<Vec<Transfer>, Infallible>(Vec::new()));
     let answered = sent.is_ok()
         && ANSWERED.wait_until_deadline(
             || {
@@ -241,6 +264,12 @@ pub(crate) fn request(kind: Request, device: usize, driver: u16) -> Result<(), E
         (Ok(_), true, Some(ANSWER_BUSY)) => Err(Errno::EBUSY),
         (Ok(_), true, _) => Err(Errno::EIO),
     };
+    report_request(kind, device, driver, result);
+    result
+}
+
+/// Say on the console how a request through sysfs went.
+fn report_request(kind: Request, device: usize, driver: u16, result: Result<(), Errno>) {
     let what = match kind {
         Request::Bind => "bind",
         Request::Unbind => "unbind",
@@ -250,8 +279,7 @@ pub(crate) fn request(kind: Request, device: usize, driver: u16) -> Result<(), E
         .lock()
         .names
         .get(usize::from(driver))
-        .map(|name| name_bytes(name).to_vec())
-        .unwrap_or_default();
+        .map_or(DriverName([0; NAME_BYTES]), |name| DriverName(*name));
     let name = core::str::from_utf8(&name).unwrap_or("?");
     match (at, result) {
         (Some(at), Ok(())) => crate::console::println!(
@@ -270,8 +298,11 @@ pub(crate) fn request(kind: Request, device: usize, driver: u16) -> Result<(), E
         }
         (None, _) => {}
     }
-    result
 }
+
+/// Reports from `devmgr` that there was no memory to record: sysfs does not
+/// show those bindings.
+static UNRECORDED: AtomicU64 = AtomicU64::new(0);
 
 /// Take in what a message from `devmgr` says about drivers. Answers whether
 /// it was such a message.
@@ -287,8 +318,12 @@ fn record(message: Message) -> bool {
                 return true;
             };
             let mut bindings = BINDINGS.lock();
-            if !bindings.drivers.iter().any(|(at, _)| *at == driver) {
-                bindings.drivers.push((driver, bus));
+            if !bindings.drivers.iter().any(|(at, _)| *at == driver)
+                && fallible::try_push(&mut bindings.drivers, (driver, bus)).is_err()
+            {
+                // sysfs will not list the driver: what memory running out
+                // costs here, rather than the listener stopping.
+                let _ = UNRECORDED.fetch_add(1, Ordering::Relaxed);
             }
         }
         Message::Bound { device, driver } => {
@@ -297,7 +332,9 @@ fn record(message: Message) -> bool {
             };
             let mut bindings = BINDINGS.lock();
             bindings.bound.retain(|(at, _)| *at != device);
-            bindings.bound.push((device, driver));
+            if fallible::try_push(&mut bindings.bound, (device, driver)).is_err() {
+                let _ = UNRECORDED.fetch_add(1, Ordering::Relaxed);
+            }
         }
         Message::Unbound { device } => {
             if let Ok(device) = usize::try_from(device) {
@@ -357,13 +394,18 @@ pub(crate) fn start() -> Result<Option<Report>, &'static str> {
         return Ok(None);
     };
     let names = manifest(read);
+    // FATAL-ALLOC: boot only: devmgr is started once, as the kernel comes up, before the boot marker.
     BINDINGS.lock().names.clone_from(&names);
     let mut images = Vec::new();
     for name in &names {
+        // FATAL-ALLOC: boot only: devmgr is started once, as the kernel comes up, before the boot marker.
         let mut path = DRIVERS.to_vec();
+        // FATAL-ALLOC: boot only: devmgr is started once, as the kernel comes up, before the boot marker.
         path.push(b'/');
+        // FATAL-ALLOC: boot only: devmgr is started once, as the kernel comes up, before the boot marker.
         path.extend_from_slice(name_bytes(name));
         let bytes = read(&path).map_err(|_| "a driver the manifest names is not in the image")?;
+        // FATAL-ALLOC: boot only: devmgr is started once, as the kernel comes up, before the boot marker.
         images.push(vmo_of(&bytes)?);
     }
     let nodes = device::devices();
@@ -389,16 +431,21 @@ pub(crate) fn start() -> Result<Option<Report>, &'static str> {
         let len = message
             .encode(&mut bytes)
             .ok_or("more drivers than one DEVICES message names")?;
+        // FATAL-ALLOC: boot only: devmgr is started once, as the kernel comes up, before the boot marker.
         let mut transfers: Vec<Transfer> = Vec::with_capacity(message.handles());
         if first {
+            // FATAL-ALLOC: boot only: devmgr is started once, as the kernel comes up, before the boot marker.
             transfers.push((Object::Job(drivers_job()?), Rights::JOB));
         }
         for node in nodes.iter().skip(index).take(take) {
+            // FATAL-ALLOC: boot only: devmgr is started once, as the kernel comes up, before the boot marker.
             transfers.push((Object::Device(Arc::clone(node)), DEVICE_RIGHTS));
+            // FATAL-ALLOC: boot only: devmgr is started once, as the kernel comes up, before the boot marker.
             transfers.push((Object::Device(Arc::clone(node)), KEPT_DEVICE_RIGHTS));
         }
         if let Some(images) = images.take() {
             for vmo in images {
+                // FATAL-ALLOC: boot only: devmgr is started once, as the kernel comes up, before the boot marker.
                 transfers.push((
                     Object::Vmo(vmo),
                     Rights(Rights::READ.0 | Rights::TRANSFER.0),
@@ -407,6 +454,7 @@ pub(crate) fn start() -> Result<Option<Report>, &'static str> {
         }
         let handles = transfers.len();
         kernel_end
+            // FATAL-ALLOC: boot only: devmgr is started once, as the kernel comes up, before the boot marker.
             .write(bytes.get(..len).unwrap_or(&[]).to_vec(), handles, || {
                 Ok::<Vec<Transfer>, Infallible>(transfers)
             })
@@ -446,6 +494,7 @@ fn start_program(
     let process = (processes.load)(image, NAME).map_err(|_| "/sbin/devmgr does not load")?;
     let bootstrap = process
         .core()
+        // FALLIBLE: the handle table's insert hands the object back.
         .with_handles(|table| table.insert(Object::Channel(devmgr_end), Rights::CHANNEL))
         .map_err(|_| "no room for devmgr's bootstrap handle")?;
     let mut publish = || {
@@ -480,8 +529,10 @@ pub(crate) fn note_driver(node: &device::DeviceNode, driver: &Process) {
         match drivers.iter_mut().find(|(at, _)| *at == location) {
             Some((_, noted)) if Arc::ptr_eq(noted, &exit) => None,
             Some((_, noted)) => Some(core::mem::replace(noted, exit)),
+            // Not noted when there is no memory to: a check that asks how
+            // the driver ended hears nothing, and nothing else depends on it.
             None => {
-                drivers.push((location, exit));
+                let _ = fallible::try_push(&mut drivers, (location, exit));
                 None
             }
         }
@@ -521,11 +572,15 @@ pub(crate) fn published(location: Location) {
     let Some(channel) = CHANNEL.lock().clone() else {
         return;
     };
-    let bytes = Message::Published {
+    let message = Message::Published {
         location: location.raw(),
     }
-    .encode()
-    .to_vec();
+    .encode();
+    // Not sent when there is no memory to: `devmgr` then treats the driver as
+    // one that never published, as it would a driver that failed.
+    let Ok(bytes) = fallible::try_to_vec(&message) else {
+        return;
+    };
     let _ = channel.write(bytes, 0, || Ok::<Vec<Transfer>, Infallible>(Vec::new()));
 }
 
@@ -565,6 +620,7 @@ fn manifest(read: ReadFile) -> Vec<[u8; NAME_BYTES]> {
             }
             name
         })
+        // FATAL-ALLOC: boot only: devmgr is started once, as the kernel comes up, before the boot marker.
         .collect()
 }
 

@@ -157,6 +157,7 @@ pub(crate) fn describe_cpus(view: &BootView<'_>) -> Result<Described, &'static s
         return Ok(Described {
             id_name: "MPIDR",
             boot,
+            // FATAL-ALLOC: boot only: stage 4 lists the processors firmware describes, once.
             ids: alloc::vec![boot],
         });
     }
@@ -173,6 +174,7 @@ pub(crate) fn describe_cpus(view: &BootView<'_>) -> Result<Described, &'static s
                 }
         })
         .map(|(id, _)| id)
+        // FATAL-ALLOC: boot only: stage 4 lists the processors firmware describes, once.
         .collect();
 
     Ok(Described {

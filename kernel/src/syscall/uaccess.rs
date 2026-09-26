@@ -74,6 +74,8 @@ pub(crate) enum UserError {
     Overflow,
     /// The page is not mapped, is not writable, or could not be faulted in.
     Fault,
+    /// There was no memory to copy into.
+    NoMemory,
 }
 
 impl From<SpaceError> for UserError {
@@ -385,11 +387,12 @@ pub(crate) fn copy_cstr_from_user(
         let span = span.min(limit - out.len());
         // Reserved before the page is held, so that extending `out` under the
         // space's lock never has to allocate.
-        out.reserve(span);
+        crate::fallible::try_reserve(out, span).map_err(|_| UserError::NoMemory)?;
         let terminated = resolve(space, at, Access::READ, |source| {
             // SAFETY: as `copy_from_user`. `span` stays inside the held page.
             let bytes = unsafe { core::slice::from_raw_parts(source as *const u8, span) };
             let end = bytes.iter().position(|&b| b == 0);
+            // NOALLOC: into the room reserved above.
             out.extend_from_slice(bytes.get(..end.unwrap_or(span)).unwrap_or_default());
             end.is_some()
         })?;

@@ -1036,7 +1036,7 @@ fn accept(start: &Start, message: &ChannelMessage) -> Result<Arc<Card>, Refusal>
     // The wire protocol has no refusal for memory; a malformed start is the
     // nearest it has.
     let core_port = Port::new().map_err(|_| Refusal::Malformed)?;
-    let index = NUMBERS.take();
+    let index = NUMBERS.take().ok_or(Refusal::Malformed)?;
     let card = Arc::new(Card {
         index,
         node: start.device.index(),

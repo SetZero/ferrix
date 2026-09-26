@@ -263,6 +263,18 @@ const USER_CS: u64 = (gdt::USER_CODE | 3) as u64;
 /// Ring 3's stack selector, likewise.
 const USER_SS: u64 = (gdt::USER_DATA | 3) as u64;
 
+/// Write the program's x87 and SSE state, as `FXSAVE` lays it out, to
+/// `fpstate`.
+fn write_fp_area(space: &AddressSpace, fpstate: u64) -> Result<(), BadFrame> {
+    // SAFETY: on the running task's own way back to ring 3, so the processor
+    // holds this program's x87 and SSE registers.
+    let state = unsafe { UserState::capture() };
+    let mut area = FrameBytes::zeroed(FXSAVE_BYTES)?;
+    area.put(0, state.fxsave())?;
+    area.put_u32(SW_MAGIC1, 0)?;
+    area.write(space, fpstate)
+}
+
 /// Write `request`'s frame below its stack and point `context` at the handler:
 /// `RDI` the signal, `RSI` the `siginfo`, `RDX` the `ucontext`, and the stack
 /// pointer at `pretcode`, as if the handler had just been called from it.
@@ -285,15 +297,9 @@ pub(crate) fn setup_signal_frame(
         .checked_sub(8)
         .ok_or(BadFrame)?;
 
-    // SAFETY: on the running task's own way back to ring 3, so the processor
-    // holds this program's x87 and SSE registers.
-    let state = unsafe { UserState::capture() };
-    let mut area = FrameBytes::zeroed(FXSAVE_BYTES);
-    area.put(0, state.fxsave())?;
-    area.put_u32(SW_MAGIC1, 0)?;
-    area.write(space, fpstate)?;
+    write_fp_area(space, fpstate)?;
 
-    let mut frame = FrameBytes::zeroed(FRAME_BYTES);
+    let mut frame = FrameBytes::zeroed(FRAME_BYTES)?;
     frame.put_u64(0, request.restorer)?;
     frame.put_u64(UC, UC_FLAGS)?;
     frame.put_stack(UC_STACK, request.altstack)?;
@@ -367,13 +373,13 @@ fn restore_fpu(space: &AddressSpace, at: u64) -> Result<(), BadFrame> {
     // SAFETY: inside the running task's own system call, so the registers are
     // its own; captured only to learn `MXCSR_MASK` and to carry the area.
     let mut state = unsafe { UserState::capture() };
-    let mut live = FrameBytes::zeroed(FXSAVE_BYTES);
+    let mut live = FrameBytes::zeroed(FXSAVE_BYTES)?;
     live.put(0, state.fxsave())?;
     let mask = match live.u32_at(MXCSR_MASK)? {
         0 => DEFAULT_MXCSR_MASK,
         mask => mask,
     };
-    let mut wanted = FrameBytes::zeroed(FXSAVE_BYTES);
+    let mut wanted = FrameBytes::zeroed(FXSAVE_BYTES)?;
     wanted.put(0, area.get(0, FXSAVE_BYTES)?)?;
     wanted.put_u32(MXCSR, area.u32_at(MXCSR)? & mask)?;
     state

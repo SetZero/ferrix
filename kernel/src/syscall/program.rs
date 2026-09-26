@@ -80,9 +80,7 @@ impl ProgramFile {
             let mut rest = zeroed(end - head.len() as u64)?;
             let got = read_at(&file, head.len() as u64, &mut rest)?;
             rest.truncate(got);
-            head.try_reserve_exact(rest.len())
-                .map_err(|_| Errno::ENOMEM)?;
-            head.extend_from_slice(&rest);
+            crate::fallible::try_extend_from_slice(&mut head, &rest).map_err(|_| Errno::ENOMEM)?;
         }
 
         let object = file
@@ -154,10 +152,7 @@ fn read_at(file: &OpenFile, offset: u64, buf: &mut [u8]) -> Result<usize, Errno>
 /// A zeroed buffer of `len` bytes, or `ENOMEM`.
 fn zeroed(len: u64) -> Result<Vec<u8>, Errno> {
     let len = usize::try_from(len).map_err(|_| Errno::ENOMEM)?;
-    let mut buffer = Vec::new();
-    buffer.try_reserve_exact(len).map_err(|_| Errno::ENOMEM)?;
-    buffer.resize(len, 0);
-    Ok(buffer)
+    crate::fallible::try_filled(0, len).map_err(|_| Errno::ENOMEM)
 }
 
 /// How much of a segment's contents is copied at a time, where it is copied

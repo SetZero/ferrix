@@ -317,12 +317,15 @@ impl Unit {
     /// Write `function`'s context entry to point at `root`.
     fn install(&self, function: Address, root: u64) -> Result<Attached, &'static str> {
         let mut tables = self.tables.lock();
+        // Room for both records before anything is written, so a failure
+        // leaves the unit as it was.
+        let held = crate::fallible::reserve().map_err(|_| "no memory to record a domain")?;
         let bus = function.bus();
         let context = match tables.contexts.get(&bus) {
             Some(&context) => context,
             None => {
                 let context = table().ok_or("no frame for a context table")?;
-                let _ = tables.contexts.insert(bus, context);
+                let _ = crate::fallible::insert_held(&held, &mut tables.contexts, bus, context);
                 write_entry(self.root + u64::from(bus) * 16, context | PRESENT);
                 context
             }
@@ -335,7 +338,7 @@ impl Unit {
             .filter_map(|candidate| u16::try_from(candidate).ok())
             .find(|candidate| !tables.identifiers.contains(candidate))
             .ok_or("the unit has no domain identifier left")?;
-        let _ = tables.identifiers.insert(identifier);
+        let _ = crate::fallible::insert_into_set_held(&held, &mut tables.identifiers, identifier);
         // The high half first, so the entry is never present with a stale
         // domain identifier or address width.
         write_entry(entry + 8, AW_39 | u64::from(identifier) << 8);

@@ -307,10 +307,13 @@ fn vector(address: Address) -> Result<Msi, &'static str> {
         return Ok(msi);
     }
     // Enumeration checks one function at a time, so nothing else is minting
-    // this device's vector between the look above and the push below.
+    // this device's vector between the look above and the push below. Room
+    // for it is made first: `irq` cannot take a handler back out.
+    crate::fallible::try_reserve(&mut VECTORS.lock(), 1)
+        .map_err(|_| "no memory to record the check's MSI vector")?;
     let msi = arch::msi_allocate(requester)?;
     irq::register(msi.number, on_entropy).map_err(|_| "the MSI vector already has a handler")?;
-    VECTORS.lock().push((requester, msi));
+    let _ = crate::fallible::push_within(&mut VECTORS.lock(), (requester, msi));
     Ok(msi)
 }
 

@@ -259,12 +259,13 @@ impl AddressSpace {
             SpaceError::BadRange
         })?;
 
+        let layout = SleepLock::new((), &crate::sync::SchedParker);
         Ok(Arc::new_cyclic(|me| AddressSpace {
             root,
             me: me.clone(),
             cpus: CpuMask::new(),
             flushes: Flushes::new(),
-            layout: SleepLock::new((), &crate::sync::SchedParker),
+            layout,
             inner: SpinLock::new(Inner {
                 map,
                 objects: BTreeMap::new(),
@@ -458,6 +459,21 @@ impl AddressSpace {
         Ok(id)
     }
 
+    /// Take this space's translations of every copy-on-write region out of
+    /// its tables, for `fork`: the pages its shootdown must cover.
+    fn unmap_copied_on_write(&self, map: &ferrix_vma::AddressSpace) -> TlbPages {
+        let mut pages = TlbPages::new();
+        for region in map.iter().filter(|region| region.cow) {
+            let _ = mm::unmap_in(
+                self.root * PAGE_SIZE,
+                region.range.start(),
+                region.range.bytes(),
+            );
+            pages.add_range(region.range.start(), region.range.bytes());
+        }
+        pages
+    }
+
     /// A second address space holding everything this one does, shared
     /// copy-on-write: the memory half of `fork`.
     ///
@@ -554,18 +570,12 @@ impl AddressSpace {
 
         // Only now the parent's map is marked and copied, and its writable
         // translations to the shared pages taken down.
-        let map = inner.map.clone_for_fork();
-        let mut pages = TlbPages::new();
-        for region in inner.map.iter() {
-            if region.cow {
-                let _ = mm::unmap_in(
-                    self.root * PAGE_SIZE,
-                    region.range.start(),
-                    region.range.bytes(),
-                );
-                pages.add_range(region.range.start(), region.range.bytes());
-            }
-        }
+        let Ok(map) = inner.map.clone_for_fork() else {
+            // Nothing is marked yet; the forked objects go as this returns.
+            mm::deallocate_frames(root, 0);
+            return Err(SpaceError::OutOfMemory);
+        };
+        let pages = self.unmap_copied_on_write(&inner.map);
 
         // Read before the lock goes, because the child inherits them. A
         // native object is shared, so the child names the same one.

@@ -82,8 +82,10 @@ use ferrix_pci::msix::{
 use ferrix_pci::virtio::{Location as VirtioLocation, SharedMemory, Transport};
 use ferrix_sync::{IrqSpinLock, Once};
 
+use crate::fallible::{self, AllocError};
 use crate::hooks::{Full, Hooks};
 use crate::mmio::Mmio;
+use crate::sync::SpinLock;
 use crate::{acpi, arch, fdt, iommu, irq, vmap};
 
 /// GIC interrupt identifiers below this are software-generated or private to
@@ -280,7 +282,9 @@ impl Reserved {
                 reserved.add(region.base, region.len);
             }
         }
+        // FATAL-ALLOC: boot only: stage 10 builds the device registry once, before any program runs.
         reserved.ranges.extend_from_slice(ecam);
+        // FATAL-ALLOC: boot only: stage 10 builds the device registry once, before any program runs.
         reserved.ranges.extend(vmap::device_windows());
         // An IOMMU is programmed by the kernel alone: a driver that could map
         // its registers could hand its own device the whole of memory.
@@ -301,6 +305,7 @@ impl Reserved {
     /// Reserve `len` bytes at `start`.
     fn add(&mut self, start: u64, len: u64) {
         if len > 0 {
+            // FATAL-ALLOC: boot only: stage 10 builds the device registry once, before any program runs.
             self.ranges.push((start, start.saturating_add(len)));
         }
     }
@@ -429,12 +434,15 @@ impl MsixTable {
         if let Some(&number) = minted.get(&entry) {
             return Ok(vector(number));
         }
+        // Room to record the vector before it is allocated: an MSI vector is
+        // not given back.
+        let held = fallible::reserve().map_err(|_| "no memory to record an MSI-X vector")?;
         let msi = arch::msi_allocate(self.requester)?;
         let at = u64::from(entry) * MSIX_ENTRY_SIZE;
         table.write32(at + ENTRY_ADDRESS_LOW, msi.address as u32);
         table.write32(at + ENTRY_ADDRESS_HIGH, (msi.address >> 32) as u32);
         table.write32(at + ENTRY_DATA, msi.data);
-        let _ = minted.insert(entry, msi.number);
+        let _ = fallible::insert_held(&held, &mut minted, entry, msi.number);
         Ok(vector(msi.number))
     }
 }
@@ -635,7 +643,7 @@ pub(crate) struct DeviceNode {
     msix: Option<MsixTable>,
     /// The IOMMU domain its DMA goes through, made the first time it is asked
     /// for.
-    domain: Once<Arc<iommu::Domain>>,
+    domain: SpinLock<Option<Arc<iommu::Domain>>>,
     /// Apertures not minted because the kernel or another device has that
     /// memory.
     withheld: usize,
@@ -666,7 +674,7 @@ impl DeviceNode {
             apertures: Vec::new(),
             vectors: Vec::new(),
             msix: None,
-            domain: Once::new(),
+            domain: SpinLock::new(None),
             withheld: 0,
             interrupt_tables: Vec::new(),
             undecoded: false,
@@ -738,6 +746,7 @@ impl DeviceNode {
             }
             for &(offset, len) in msix::withheld(region, table, PAGE_SIZE).as_slice() {
                 if let Some(start) = base.checked_add(offset) {
+                    // FATAL-ALLOC: boot only: stage 10 builds the device registry once, before any program runs.
                     node.interrupt_tables.push((start, len));
                 }
             }
@@ -767,6 +776,7 @@ impl DeviceNode {
         if reserved.covers(aperture) {
             self.withheld += 1;
         } else {
+            // FATAL-ALLOC: boot only: stage 10 builds the device registry once, before any program runs.
             self.apertures.push(aperture);
         }
     }
@@ -939,13 +949,25 @@ impl DeviceNode {
 
     /// The IOMMU domain the device's DMA goes through: one per node, the same
     /// one every time.
-    pub(crate) fn domain(&self) -> Arc<iommu::Domain> {
-        Arc::clone(self.domain.call_once(|| {
-            Arc::new(match self.location {
-                Location::Pci(address) => iommu::domain_for(address),
-                Location::VirtioMmio(_) | Location::Tree(_) => iommu::Domain::untranslated(),
-            })
-        }))
+    ///
+    /// Made on first use, under the node's lock so that only one is ever
+    /// attached. A domain whose `Arc` could not be allocated is dropped,
+    /// which detaches it, and the next use tries again.
+    ///
+    /// # Errors
+    ///
+    /// [`AllocError`].
+    pub(crate) fn domain(&self) -> Result<Arc<iommu::Domain>, AllocError> {
+        let mut held = self.domain.lock();
+        if let Some(domain) = held.as_ref() {
+            return Ok(Arc::clone(domain));
+        }
+        let domain = fallible::try_arc(match self.location {
+            Location::Pci(address) => iommu::domain_for(address),
+            Location::VirtioMmio(_) | Location::Tree(_) => iommu::Domain::untranslated(),
+        })?;
+        *held = Some(Arc::clone(&domain));
+        Ok(domain)
     }
 
     /// `len` bytes at `phys`, if they lie inside one of the device's
@@ -1054,11 +1076,13 @@ fn tree_nodes(view: &BootView<'_>, reserved: &Reserved) -> Vec<DeviceNode> {
             for interrupt in interrupts.by_ref() {
                 let usable = interrupt.id >= FIRST_SHARED_INTERRUPT
                     && !irq::is_registered(interrupt.id)
+                    // FATAL-ALLOC: boot only: stage 10 builds the device registry once, before any program runs.
                     && held.insert(interrupt.id);
                 if !usable {
                     node.withheld_vectors += 1;
                     break;
                 }
+                // FATAL-ALLOC: boot only: stage 10 builds the device registry once, before any program runs.
                 node.vectors.push(Vector {
                     number: interrupt.id,
                     trigger: interrupt.trigger.map(|trigger| match trigger {
@@ -1070,10 +1094,12 @@ fn tree_nodes(view: &BootView<'_>, reserved: &Reserved) -> Vec<DeviceNode> {
             }
             node.withheld_vectors += interrupts.count();
         }
+        // FATAL-ALLOC: boot only: stage 10 builds the device registry once, before any program runs.
         nodes.push(node);
     }
     for board in BOARD.iter() {
         if let Some(node) = board_node(&tree, board, reserved, &mut held) {
+            // FATAL-ALLOC: boot only: stage 10 builds the device registry once, before any program runs.
             nodes.push(node);
         }
     }
@@ -1199,6 +1225,7 @@ fn board_node(
     let interrupt = prepared.interrupt;
     let usable = interrupt.id >= FIRST_SHARED_INTERRUPT
         && !irq::is_registered(interrupt.id)
+        // FATAL-ALLOC: boot only: stage 10 builds the device registry once, before any program runs.
         && held.insert(interrupt.id);
     if !usable {
         crate::console::println!(
@@ -1207,6 +1234,7 @@ fn board_node(
         );
         return None;
     }
+    // FATAL-ALLOC: boot only: stage 10 builds the device registry once, before any program runs.
     node.vectors.push(Vector {
         number: interrupt.id,
         trigger: interrupt.trigger.map(|trigger| match trigger {
@@ -1296,6 +1324,7 @@ pub(crate) fn publish(
         tree: tree.len(),
         ..Report::default()
     };
+    // FATAL-ALLOC: boot only: stage 10 builds the device registry once, before any program runs.
     nodes.extend(tree);
 
     // Two nodes with overlapping apertures are two drivers for one set of
@@ -1309,6 +1338,7 @@ pub(crate) fn publish(
                 .iter()
                 .any(|&(start, end)| aperture.overlaps(start, end));
             if !clash {
+                // FATAL-ALLOC: boot only: stage 10 builds the device registry once, before any program runs.
                 claimed.push((aperture.phys, aperture.end()));
             }
             !clash
@@ -1321,6 +1351,7 @@ pub(crate) fn publish(
     }
     check_exclusive(&nodes)?;
 
+    // FATAL-ALLOC: boot only: stage 10 builds the device registry once, before any program runs.
     let published = DEVICES.call_once(|| nodes.into_iter().map(Arc::new).collect());
     report.nodes = published.len();
     report.msix_tables = published.iter().filter(|node| node.msix.is_some()).count();
@@ -1388,6 +1419,7 @@ fn check_exclusive(nodes: &[DeviceNode]) -> Result<(), Failure> {
                 .iter()
                 .map(move |aperture| (aperture.phys, aperture.end(), node.location))
         })
+        // FATAL-ALLOC: boot only: stage 10 builds the device registry once, before any program runs.
         .collect();
     all.sort_unstable_by_key(|&(start, ..)| start);
     for pair in all.windows(2) {
@@ -1412,6 +1444,7 @@ fn check_exclusive(nodes: &[DeviceNode]) -> Result<(), Failure> {
                     what: "a vector is not a shared peripheral interrupt",
                 });
             }
+            // FATAL-ALLOC: boot only: stage 10 builds the device registry once, before any program runs.
             if !numbers.insert(vector.number) {
                 return Err(Failure {
                     location: node.location,

@@ -109,7 +109,70 @@ fn panic(info: &PanicInfo<'_>) -> ! {
     let entry = EXPLANATION.load(Ordering::Acquire);
     // SAFETY: only `explain` stores here, and only the address of a `'static`
     // catalog entry, which is never written through.
-    conclude(unsafe { entry.as_ref() })
+    let entry = unsafe { entry.as_ref() };
+    conclude(entry.or_else(|| allocation_failure(info)))
+}
+
+/// The explanation for a panic that is the standard library's allocation
+/// error handler, if this is one: an allocation that cannot report failure
+/// found the heap empty (finding F-23).
+///
+/// Recognised by its message, which is `alloc`'s own and fixed for the
+/// pinned toolchain, and only when the heap has refused something, so a
+/// panic that merely says the same words is not taken for one.
+fn allocation_failure(info: &PanicInfo<'_>) -> Option<&'static Explanation> {
+    /// What `alloc::alloc::__rdl_alloc_error_handler` says, up to the size.
+    const MESSAGE: &str = "memory allocation of ";
+    if crate::mm::heap_refusals() == 0 {
+        return None;
+    }
+    let mut prefix = Prefix {
+        wanted: MESSAGE.as_bytes(),
+        matched: 0,
+    };
+    let _ = core::fmt::write(&mut prefix, format_args!("{}", info.message()));
+    if prefix.matched != MESSAGE.len() {
+        return None;
+    }
+    // Before the boot marker, a stop by design (`FATAL-ALLOC`); after it, a
+    // site that should have reported the failure and could not.
+    Some(if BOOTED.load(Ordering::Acquire) {
+        &catalog::ALLOCATION_ABORTED
+    } else {
+        &catalog::BOOT_OUT_OF_MEMORY
+    })
+}
+
+/// Whether the kernel has finished coming up: set as the boot marker is
+/// printed, before init starts.
+static BOOTED: AtomicBool = AtomicBool::new(false);
+
+/// Say that the kernel has come up. An allocation failure that stops it from
+/// here on is not one of the boot's (see [`allocation_failure`]).
+pub(crate) fn mark_booted() {
+    BOOTED.store(true, Ordering::Release);
+}
+
+/// A `fmt::Write` that checks what is written starts with `wanted`, without
+/// keeping it: there is no heap a panic can trust.
+struct Prefix {
+    /// The bytes the text must start with.
+    wanted: &'static [u8],
+    /// How many of them it has matched so far.
+    matched: usize,
+}
+
+impl core::fmt::Write for Prefix {
+    fn write_str(&mut self, piece: &str) -> core::fmt::Result {
+        for &byte in piece.as_bytes() {
+            match self.wanted.get(self.matched) {
+                Some(&expected) if expected == byte => self.matched += 1,
+                Some(_) => return Err(core::fmt::Error),
+                None => return Ok(()),
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Begin a report of a failure the kernel will not survive, and say whether

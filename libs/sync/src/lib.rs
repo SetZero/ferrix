@@ -1541,8 +1541,10 @@ pub trait Parking: Send + Sync {
 /// One per lock rather than one shared, so a release wakes the waiters of
 /// that lock and no other's.
 pub trait Parker: Send + Sync + fmt::Debug {
-    /// A fresh parking with nobody on it.
-    fn new_parking(&self) -> Box<dyn Parking>;
+    /// A fresh parking with nobody on it, or `None` when there is no memory
+    /// for one, in which case the lock's waiters spin: see
+    /// [`SleepLock::new`].
+    fn new_parking(&self) -> Option<Box<dyn Parking>>;
 }
 
 /// The [`Parker`] whose waiters spin.
@@ -1555,8 +1557,9 @@ pub trait Parker: Send + Sync + fmt::Debug {
 pub struct SpinParker;
 
 impl Parker for SpinParker {
-    fn new_parking(&self) -> Box<dyn Parking> {
-        Box::new(SpinParking)
+    fn new_parking(&self) -> Option<Box<dyn Parking>> {
+        // A zero-sized parking: `Box::new` of it allocates nothing.
+        Some(Box::new(SpinParking))
     }
 }
 
@@ -1632,12 +1635,22 @@ impl<T> SleepLock<T> {
     /// Not `const`, because the parking is lent at run time. A lock that has
     /// to be a `static` is a spin lock; a kernel that makes one of these
     /// before its scheduler runs gives it a parker that spins.
+    ///
+    /// Never fails. A parker with no memory for a parking answers `None`, and
+    /// the lock then parks its waiters by spinning, which `SpinParking`
+    /// does without allocating: slower under contention, never wrong, and
+    /// better than a lock that could not be made at all when memory has run
+    /// out (the kernel's finding F-23).
     #[must_use]
     pub fn new(value: T, parker: &dyn Parker) -> Self {
+        let parking = parker
+            .new_parking()
+            // A zero-sized parking: `Box::new` of it allocates nothing.
+            .unwrap_or_else(|| Box::new(SpinParking));
         Self {
             locked: AtomicBool::new(false),
             waiters: AtomicUsize::new(0),
-            parking: parker.new_parking(),
+            parking,
             data: UnsafeCell::new(value),
         }
     }

@@ -390,10 +390,12 @@ impl Unit {
             let vmid = (1..=self.vmids)
                 .filter_map(|candidate| u16::try_from(candidate).ok())
                 .find(|candidate| !state.vmids.contains(candidate));
-            if let Some(vmid) = vmid {
-                let _ = state.vmids.insert(vmid);
-            }
-            vmid
+            // No memory to record it is no VMID to give.
+            vmid.filter(|&vmid| {
+                crate::fallible::reserve().is_ok_and(|held| {
+                    crate::fallible::insert_into_set_held(&held, &mut state.vmids, vmid)
+                })
+            })
         };
         let Some(vmid) = vmid else {
             mm::deallocate_frames(root / PAGE_SIZE, 0);

@@ -141,6 +141,7 @@ impl Transmit {
         if self.ring.len() == 0 {
             self.moved_at = arch::counter_now();
         }
+        // NOALLOC: a fixed ring, which refuses when full.
         if self.ring.push(byte) {
             return;
         }
@@ -148,6 +149,7 @@ impl Transmit {
             arch::console::write_byte(oldest);
             let _ = POLLED.fetch_add(1, Ordering::Relaxed);
         }
+        // NOALLOC: a fixed ring, with room made just above.
         let _ = self.ring.push(byte);
     }
 

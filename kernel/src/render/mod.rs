@@ -693,7 +693,7 @@ fn accept(start: &Start, message: &ChannelMessage) -> Result<Arc<Renderer>, Refu
     if start.location.map(Location::raw) != Some(hello.location) {
         return Err(Refusal::WrongLocation);
     }
-    let index = NUMBERS.take();
+    let index = NUMBERS.take().ok_or(Refusal::Malformed)?;
     // READY carries the two handles `Ready::HANDLE_RIGHTS` fixes: the work
     // VMO, which is where an object's description and a command buffer live
     // on their way to the device, and the core's port, which is how a driver

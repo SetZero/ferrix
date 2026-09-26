@@ -187,6 +187,7 @@ fn receive(mut take: impl FnMut() -> Option<u8>) {
             let Some(byte) = take() else {
                 break;
             };
+            // NOALLOC: a fixed ring, which refuses when full.
             if ring.push(byte) {
                 added = true;
             } else {

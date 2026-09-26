@@ -713,14 +713,14 @@ struct CondvarParking {
 }
 
 impl Parker for CondvarParker {
-    fn new_parking(&self) -> Box<dyn Parking> {
-        Box::new(CondvarParking {
+    fn new_parking(&self) -> Option<Box<dyn Parking>> {
+        Some(Box::new(CondvarParking {
             generation: std::sync::Mutex::new(()),
             woken: std::sync::Condvar::new(),
             parks: Arc::clone(&self.parks),
             asked: Arc::clone(&self.asked),
             unparks: Arc::clone(&self.unparks),
-        })
+        }))
     }
 }
 
@@ -845,4 +845,33 @@ fn sleeping_waiters_all_get_their_turn() {
         handle.join().expect("a counting thread panicked");
     }
     assert_eq!(*lock.lock(), THREADS * PER_THREAD);
+}
+
+/// A parker with no memory, as a kernel's is when the heap has run out.
+#[derive(Debug)]
+struct EmptyParker;
+
+impl Parker for EmptyParker {
+    fn new_parking(&self) -> Option<Box<dyn Parking>> {
+        None
+    }
+}
+
+#[test]
+fn a_lock_whose_parking_could_not_be_made_still_excludes() {
+    let lock = Arc::new(SleepLock::new(0_usize, &EmptyParker));
+    let threads: Vec<_> = (0..4)
+        .map(|_| {
+            let lock = Arc::clone(&lock);
+            thread::spawn(move || {
+                for _ in 0..1000 {
+                    *lock.lock() += 1;
+                }
+            })
+        })
+        .collect();
+    for thread in threads {
+        thread.join().unwrap();
+    }
+    assert_eq!(*lock.lock(), 4000);
 }

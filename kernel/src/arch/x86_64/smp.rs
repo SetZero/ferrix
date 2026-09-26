@@ -50,9 +50,11 @@ pub(crate) fn describe_cpus(view: &BootView<'_>) -> Result<Described, &'static s
         // test wait for a processor that will never answer.
         match entry {
             MadtEntry::LocalApic(local) if local.is_enabled() => {
+                // FATAL-ALLOC: boot only: stage 4 lists the processors firmware describes, once.
                 ids.push(u64::from(local.apic_id));
             }
             MadtEntry::LocalX2Apic(local) if local.is_enabled() => {
+                // FATAL-ALLOC: boot only: stage 4 lists the processors firmware describes, once.
                 ids.push(u64::from(local.x2apic_id));
             }
             _ => {}
