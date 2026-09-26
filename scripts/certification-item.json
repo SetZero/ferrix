@@ -194,6 +194,7 @@
         "syscall/fsctl.rs",
         "syscall/image.rs",
         "syscall/kill.rs",
+        "syscall/launch.rs",
         "syscall/load.rs",
         "syscall/memfd.rs",
         "syscall/namespace.rs",
@@ -393,48 +394,6 @@
         "from_ring": "item",
         "to_ring": "load",
         "finding": "F-07"
-      },
-      {
-        "file": "devmgr.rs",
-        "references": "block_ring",
-        "from_ring": "item",
-        "to_ring": "load",
-        "finding": "F-08"
-      },
-      {
-        "file": "devmgr.rs",
-        "references": "fs",
-        "from_ring": "item",
-        "to_ring": "load",
-        "finding": "F-08"
-      },
-      {
-        "file": "init.rs",
-        "references": "fs",
-        "from_ring": "item",
-        "to_ring": "load",
-        "finding": "F-08"
-      },
-      {
-        "file": "init.rs",
-        "references": "syscall::load",
-        "from_ring": "item",
-        "to_ring": "load",
-        "finding": "F-08"
-      },
-      {
-        "file": "power.rs",
-        "references": "fs::data_disk",
-        "from_ring": "item",
-        "to_ring": "load",
-        "finding": "F-08"
-      },
-      {
-        "file": "power.rs",
-        "references": "fs::root_disk",
-        "from_ring": "item",
-        "to_ring": "load",
-        "finding": "F-08"
       },
       {
         "file": "arch/aarch64/trap.rs",

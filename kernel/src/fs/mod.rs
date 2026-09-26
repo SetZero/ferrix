@@ -72,13 +72,51 @@ use ferrix_vfs::{
     Timespec,
 };
 
+use crate::hooks::Full;
 use crate::mm;
+use crate::power::Flush;
 use crate::syscall::program::ProgramFile;
 use crate::syscall::time;
 use crate::vmap;
 
 /// The namespace every process resolves paths in.
 static NAMESPACE: Once<Namespace> = Once::new();
+
+/// `/`'s commit before the machine stops: the root disk's last half-minute,
+/// which its committer has not reached yet.
+static ROOT_FLUSH: Flush = Flush {
+    mount: "/",
+    commit: root_disk::sync,
+};
+
+/// `/data`'s, which has no committer of its own.
+static DATA_FLUSH: Flush = Flush {
+    mount: "/data",
+    commit: data_disk::sync,
+};
+
+/// Register what the certified item reaches the filesystem through, which it
+/// does without naming it: the commits power makes before the machine stops,
+/// `/` first, and how `devmgr` reads its program and drivers.
+///
+/// Called once from `main.rs`, before anything is mounted to commit and
+/// before `devmgr` is started. A disk that is never mounted commits nothing,
+/// so both flushes are registered on every machine.
+///
+/// # Errors
+///
+/// [`Full`] when power's list of flushes is.
+pub(crate) fn install() -> Result<(), Full> {
+    crate::power::register_flush(&ROOT_FLUSH)?;
+    crate::power::register_flush(&DATA_FLUSH)?;
+    crate::devmgr::register_reader(read_from_root);
+    Ok(())
+}
+
+/// Read the file at `path` in the root the initramfs was unpacked into.
+fn read_from_root(path: &[u8]) -> Result<Vec<u8>, Errno> {
+    read_file(&namespace().context(), None, path)
+}
 
 /// The next anonymous device minor, for filesystems with no device behind
 /// them. Linux gives these major 0; so does Ferrix.

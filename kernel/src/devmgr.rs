@@ -13,6 +13,10 @@
 //! The kernel reads the images; it never runs them. An image is memory
 //! `process_create` loads, never a file mapping, which is what keeps a driver
 //! from ever faulting on the disk it serves (`docs/DEVMGR.md` §5).
+//!
+//! The images are read through a [`ReadFile`] the filesystem registers at
+//! bring-up, not by naming the filesystem: `devmgr` is part of the certified
+//! item and the filesystem is not (`docs/certification/ITEM.md`).
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -30,6 +34,7 @@ use ferrix_linux_abi::errno::Errno;
 use ferrix_native_abi::rights::Rights;
 use ferrix_native_abi::signals::Signals;
 use ferrix_native_abi::types::{CHANNEL_MAX_BYTES, CHANNEL_MAX_HANDLES};
+use ferrix_sync::Once;
 
 use crate::object::channel::{Endpoint, ReadError};
 use crate::object::job::{self, Job};
@@ -38,7 +43,7 @@ use crate::sched::WaitQueue;
 use crate::sync::SpinLock;
 use crate::syscall::{exec, process};
 use crate::user::vmo::Vmo;
-use crate::{device, fs, sched, timer};
+use crate::{device, sched, timer};
 
 /// The program.
 const PROGRAM: &[u8] = b"/sbin/devmgr";
@@ -58,6 +63,34 @@ const REPORT_PATIENCE_NANOS: u64 = 20_000_000_000;
 /// with a handle of its own while `devmgr` keeps this one for the next
 /// quiesce (`docs/DEVMGR.md` §4).
 const KEPT_DEVICE_RIGHTS: Rights = Rights(DEVICE_RIGHTS.0 | Rights::DUPLICATE.0);
+
+/// Read a whole file from the root the initramfs was unpacked into: how
+/// `devmgr`'s program, its drivers and their manifest are read.
+///
+/// The filesystem's to answer and the load ring's to register, which it does
+/// from `main.rs` before [`start`] runs.
+pub(crate) type ReadFile = fn(&[u8]) -> Result<Vec<u8>, Errno>;
+
+/// The registered [`ReadFile`].
+static READ_FILE: Once<ReadFile> = Once::new();
+
+/// Read `devmgr`'s files with `read`. The first registration stands.
+pub(crate) fn register_reader(read: ReadFile) {
+    let _ = READ_FILE.call_once(|| read);
+}
+
+/// The [`ReadFile`] of a kernel whose filesystem registered none, which has
+/// no `/sbin/devmgr` to start. `main.rs` checks that a boot of this kernel is
+/// not one.
+fn no_files(_path: &[u8]) -> Result<Vec<u8>, Errno> {
+    Err(Errno::ENOENT)
+}
+
+/// Whether a [`ReadFile`] is registered: the boot's check that [`start`]
+/// has something to read `devmgr` with.
+pub(crate) fn has_reader() -> bool {
+    READ_FILE.get().is_some()
+}
 
 /// The kernel's end of `devmgr`'s bootstrap channel, once it is started.
 static CHANNEL: SpinLock<Option<Arc<Endpoint>>> = SpinLock::new(None);
@@ -318,19 +351,18 @@ pub(crate) struct Report {
 /// What did not happen, as a sentence: `devmgr` could not be started, or
 /// said nothing in time, or something other than REPORT.
 pub(crate) fn start() -> Result<Option<Report>, &'static str> {
-    let ctx = fs::namespace().context();
-    let Ok(image) = fs::read_file(&ctx, None, PROGRAM) else {
+    let read = READ_FILE.get().copied().unwrap_or(no_files);
+    let Ok(image) = read(PROGRAM) else {
         return Ok(None);
     };
-    let names = manifest(&ctx);
+    let names = manifest(read);
     BINDINGS.lock().names.clone_from(&names);
     let mut images = Vec::new();
     for name in &names {
         let mut path = DRIVERS.to_vec();
         path.push(b'/');
         path.extend_from_slice(name_bytes(name));
-        let bytes = fs::read_file(&ctx, None, &path)
-            .map_err(|_| "a driver the manifest names is not in the image")?;
+        let bytes = read(&path).map_err(|_| "a driver the manifest names is not in the image")?;
         images.push(vmo_of(&bytes)?);
     }
     let nodes = device::devices();
@@ -417,7 +449,7 @@ static DRIVER_ENDINGS: SpinLock<Vec<(Location, Arc<process::Exit>)>> = SpinLock:
 /// that device's driver now. Cheap when it is already noted, which every call
 /// after its first is.
 pub(crate) fn note_driver(node: &device::DeviceNode, driver: &process::Process) {
-    let Some(location) = crate::block_ring::location_of(node) else {
+    let Some(location) = location_of(node) else {
         return;
     };
     let exit = driver.exit_record();
@@ -435,6 +467,19 @@ pub(crate) fn note_driver(node: &device::DeviceNode, driver: &process::Process) 
     // A record let go of here may be the last reference to how an old driver
     // ended, and is dropped with the table unlocked.
     drop(replaced);
+}
+
+/// The PCI location `devmgr`'s messages and every ring's HELLO name `node`
+/// by, if it is a PCI function.
+pub(crate) fn location_of(node: &device::DeviceNode) -> Option<Location> {
+    let device::Location::Pci(address) = node.location() else {
+        return None;
+    };
+    Some(Location::new(
+        address.segment(),
+        address.bus(),
+        (address.device() << 3) | address.function(),
+    ))
 }
 
 /// How the driver of the device at `location` ended, if one was noted and
@@ -480,8 +525,8 @@ fn drivers_job() -> Arc<Job> {
 
 /// The manifest's names, each NUL-padded to a driver name; an image without
 /// one lists no drivers.
-fn manifest(ctx: &ferrix_vfs::Context) -> Vec<[u8; NAME_BYTES]> {
-    let Ok(text) = fs::read_file(ctx, None, MANIFEST) else {
+fn manifest(read: ReadFile) -> Vec<[u8; NAME_BYTES]> {
+    let Ok(text) = read(MANIFEST) else {
         return Vec::new();
     };
     text.split(|&byte| byte == b'\n')

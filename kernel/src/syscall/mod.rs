@@ -54,6 +54,7 @@ pub(crate) mod fsctl;
 pub(crate) mod futex;
 pub(crate) mod image;
 pub(crate) mod kill;
+pub(crate) mod launch;
 pub(crate) mod limits;
 pub(crate) mod load;
 pub(crate) mod memfd;

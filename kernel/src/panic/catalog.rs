@@ -161,17 +161,20 @@ pub(crate) static LOAD_REGISTRATION: Explanation = Explanation {
     code: "FX-0006",
     title: "the load ring did not register what the item needs from it",
     meaning: "The certified item may not name what is above it (`docs/certification/ITEM.md`), so \
-              board support registers what the item must reach at bring-up: its device \
-              bindings and its boot mode. A registration missing here is a machine that would \
-              publish no board devices, which would pass unnoticed until a driver never \
-              started, so the kernel stops at the first line that can say so.",
+              the filesystem, the Linux personality and board support register what the item \
+              must reach at bring-up: the commits power makes before the machine stops, the \
+              launcher init starts pid 1 with, the reader `devmgr` reads its drivers with, \
+              board support's device bindings and its boot mode. A registration missing here \
+              is a machine that would power off without committing its disks, start no init, \
+              or publish no board devices, and each of those would pass unnoticed until it \
+              mattered, so the kernel stops at the first line that can say so.",
     causes: &[
         "An `install` call was removed from `register_load` in `main.rs`.",
         "A registration list is full: another registration was added without raising the \
-         bound its list declares (`device::BOARD`).",
+         bound its list declares (`power::FLUSHES`, `device::BOARD`).",
     ],
-    see: "kernel/src/main.rs register_load; kernel/src/hooks.rs; kernel/src/device.rs; \
-          docs/certification/FINDINGS.md F-04",
+    see: "kernel/src/main.rs register_load; kernel/src/hooks.rs; kernel/src/power.rs; \
+          kernel/src/init.rs; docs/certification/FINDINGS.md F-04 and F-08",
 };
 
 /// For `kmain` in `main.rs`, when `self_check` fails.

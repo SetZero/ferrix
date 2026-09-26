@@ -313,17 +313,9 @@ pub(crate) fn release_claim(node: &Arc<DeviceNode>) {
         .retain(|claim| !Arc::ptr_eq(&claim.device, node));
 }
 
-/// The PCI location HELLO must name for `node`, if it is a PCI function.
-pub(crate) fn location_of(node: &DeviceNode) -> Option<Location> {
-    let device::Location::Pci(address) = node.location() else {
-        return None;
-    };
-    Some(Location::new(
-        address.segment(),
-        address.bus(),
-        (address.device() << 3) | address.function(),
-    ))
-}
+/// The PCI location HELLO must name for `node`, if it is a PCI function:
+/// `devmgr`'s, since its messages name devices the same way.
+pub(crate) use crate::devmgr::location_of;
 
 /// Take ring `id`'s start off the list.
 fn take_start(id: usize) -> Option<Start> {

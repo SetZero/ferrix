@@ -48,7 +48,17 @@
 //! builds its program in and none of them may change: no image carries a
 //! `/sbin/init` today, and one that starts to must not take a gate's boot
 //! from it.
+//!
+//! # Which program, and how
+//!
+//! This file decides *which* program runs as pid 1 and says how it ended.
+//! *How* a program is opened and started -- the root filesystem it is read
+//! from, `#!` lines, the dynamic linker, the Linux personality's process --
+//! is above the certified item, so init names none of it: the load ring
+//! registers a [`Launcher`] at bring-up, from `main.rs`, and the boot checks
+//! that it did before the boot marker.
 
+use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt;
 
@@ -57,10 +67,93 @@ use ferrix_linux_abi::errno::Errno;
 use ferrix_sync::Once;
 
 use crate::console::println;
-use crate::fs;
-use crate::syscall::load::Source;
+use crate::syscall;
 use crate::syscall::program::ProgramFile;
-use crate::syscall::{self, exec};
+
+/// A program opened to be started: its image, and the path it was read from
+/// with its links resolved, which `/proc/self/exe` names.
+#[derive(Debug)]
+pub(crate) struct Opened {
+    /// The file, with its headers read.
+    pub(crate) program: ProgramFile,
+    /// Where it was read from, resolved.
+    pub(crate) exe: Vec<u8>,
+}
+
+/// An image to start: the one built into the kernel, or one opened from a
+/// file.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Image<'a> {
+    /// [`IMAGE`], in kernel memory.
+    BuiltIn(&'static [u8]),
+    /// A file [`Launcher::open`] opened.
+    File(&'a ProgramFile),
+}
+
+/// Everything a program is started with, as `execve` would be told it.
+#[derive(Debug)]
+pub(crate) struct Start<'a> {
+    /// What runs.
+    pub(crate) image: Image<'a>,
+    /// What `/proc/self/exe` names.
+    pub(crate) exe: &'a [u8],
+    /// What `AT_EXECFN` names: the path before it was resolved.
+    pub(crate) exec_fn: &'a [u8],
+    /// Its arguments.
+    pub(crate) argv: &'a [&'a [u8]],
+    /// Its environment.
+    pub(crate) env: &'a [&'a [u8]],
+}
+
+/// Why a program that opened would not start.
+#[derive(Debug)]
+pub(crate) enum Failure {
+    /// The dynamic linker it names could not be read.
+    Linker(Errno),
+    /// It would not load or run, as the personality put it.
+    Exec(String),
+}
+
+impl fmt::Display for Failure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Failure::Linker(errno) => write!(f, "its linker: errno {}", errno.0),
+            Failure::Exec(why) => f.write_str(why),
+        }
+    }
+}
+
+/// Read a `#!` line from the start of a file: its interpreter, and the one
+/// argument it may carry.
+pub(crate) type InterpreterLine = fn(&[u8]) -> Result<(Vec<u8>, Option<Vec<u8>>), Errno>;
+
+/// How a program is opened and started as pid 1: what init needs from above
+/// the certified item, registered by the load ring with
+/// [`register_launcher`].
+#[derive(Debug)]
+pub(crate) struct Launcher {
+    /// Open the program at an absolute path in `/`.
+    pub(crate) open: fn(&[u8]) -> Result<Opened, Errno>,
+    /// Read a `#!` line from the start of a file.
+    pub(crate) interpreter_line: InterpreterLine,
+    /// Start a program as pid 1 with a fresh `AT_RANDOM`, and wait for it to
+    /// end: its status.
+    pub(crate) start: fn(&Start<'_>) -> Result<i32, Failure>,
+}
+
+/// The registered [`Launcher`].
+static LAUNCHER: Once<&'static Launcher> = Once::new();
+
+/// Start programs with `launcher`. The first registration stands.
+pub(crate) fn register_launcher(launcher: &'static Launcher) {
+    let _ = LAUNCHER.call_once(|| launcher);
+}
+
+/// Whether a [`Launcher`] is registered: the boot's check that [`run`] will
+/// have something to start init with.
+pub(crate) fn has_launcher() -> bool {
+    LAUNCHER.get().is_some()
+}
 
 /// The command-line option naming the file pid 1 is started from.
 const OPTION: &str = "ferrix.init";
@@ -143,8 +236,12 @@ const SHOWN_BYTES: usize = 60;
 /// Returns when the last program exits, which on an interactive session is
 /// when somebody types `exit`.
 pub(crate) fn run() {
+    let Some(&launcher) = LAUNCHER.get() else {
+        println!("  init     nothing is registered to start a program with");
+        return;
+    };
     if let Some(path) = NAMED.get() {
-        match run_file(path) {
+        match run_file(launcher, path) {
             Ok(status) => {
                 println!("  init     {} exited with {status}", Argv(&[path]));
                 return;
@@ -157,14 +254,14 @@ pub(crate) fn run() {
         }
     }
     if !COMMANDS.is_empty() {
-        run_commands(COMMANDS);
+        run_commands(launcher, COMMANDS);
         return;
     }
     if IMAGE.is_empty() {
-        run_default();
+        run_default(launcher);
         return;
     }
-    run_built_in();
+    run_built_in(launcher);
 }
 
 /// Why a file could not be started as pid 1.
@@ -173,14 +270,14 @@ enum Refusal {
     /// Opening it, or its `#!` interpreter, was refused.
     Open(Errno),
     /// It opened, and would not load or run.
-    Exec(exec::ExecError),
+    Start(Failure),
 }
 
 impl fmt::Display for Refusal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Refusal::Open(errno) => write!(f, "errno {}", errno.0),
-            Refusal::Exec(problem) => write!(f, "{problem:?}"),
+            Refusal::Start(failure) => write!(f, "{failure}"),
         }
     }
 }
@@ -190,15 +287,14 @@ impl fmt::Display for Refusal {
 /// A `#!` script runs under its interpreter with its own path as the last
 /// argument, one level deep, as `execve` runs one; any other file runs with
 /// its path as its only argument, as Linux starts `init=`.
-fn run_file(path: &[u8]) -> Result<i32, Refusal> {
-    let ctx = fs::root_disk::process_context();
-    let (mut program, mut exe, _) = fs::open_program(&ctx, None, path).map_err(Refusal::Open)?;
+fn run_file(launcher: &Launcher, path: &[u8]) -> Result<i32, Refusal> {
+    let mut opened = (launcher.open)(path).map_err(Refusal::Open)?;
     let mut argv: Vec<Vec<u8>> = Vec::new();
-    if program.head().starts_with(b"#!") {
+    if opened.program.head().starts_with(b"#!") {
         let (interpreter, argument) =
-            exec::interpreter_line(program.head()).map_err(Refusal::Open)?;
-        (program, exe, _) = fs::open_program(&ctx, None, &interpreter).map_err(Refusal::Open)?;
-        if program.head().starts_with(b"#!") {
+            (launcher.interpreter_line)(opened.program.head()).map_err(Refusal::Open)?;
+        opened = (launcher.open)(&interpreter).map_err(Refusal::Open)?;
+        if opened.program.head().starts_with(b"#!") {
             return Err(Refusal::Open(Errno::ENOEXEC));
         }
         argv.push(interpreter);
@@ -207,13 +303,13 @@ fn run_file(path: &[u8]) -> Result<i32, Refusal> {
     argv.push(Vec::from(path));
     let args: Vec<&[u8]> = argv.iter().map(Vec::as_slice).collect();
     println!("  init     starting {}", Argv(&args));
-    start(&program, &exe, path, &args).map_err(Refusal::Exec)
+    start(launcher, &opened, path, &args).map_err(Refusal::Start)
 }
 
 /// §8.1's default: `/sbin/init`, when nothing was named or built in. An image
 /// without one is every image today, and says nothing.
-fn run_default() {
-    match run_file(DEFAULT_INIT) {
+fn run_default(launcher: &Launcher) {
+    match run_file(launcher, DEFAULT_INIT) {
         Ok(status) => println!("  init     {} exited with {status}", Argv(&[DEFAULT_INIT])),
         Err(Refusal::Open(Errno::ENOENT)) => {}
         Err(why) => println!(
@@ -225,7 +321,7 @@ fn run_default() {
 
 /// Start the program built into the kernel: `sh -i`, or `sh -c` with the
 /// built-in script.
-fn run_built_in() {
+fn run_built_in(launcher: &Launcher) {
     let interactive: [&[u8]; 2] = [b"sh", b"-i"];
     let scripted: [&[u8]; 3] = [b"sh", b"-c", SCRIPT];
     let (args, how): (&[&[u8]], _) = if SCRIPT.is_empty() {
@@ -241,50 +337,33 @@ fn run_built_in() {
     let name = args.first().copied().unwrap_or(b"");
     // A built-in program may be dynamically linked too, as a distribution's
     // shell is: its linker and libraries are not built in but read from the
-    // initramfs, where `cargo xtask test-shell --interpreter` put them.
-    let context = fs::root_disk::process_context();
-    let linker = match exec::linker_for(&context, Source::Bytes(IMAGE)) {
-        Ok(linker) => linker,
-        Err(errno) => {
-            println!(
-                "  init     the shell could not be started: its linker: errno {}",
-                errno.0
-            );
-            return;
-        }
-    };
-    let program = exec::Executable {
-        image: Source::Bytes(IMAGE),
+    // initramfs, where `cargo xtask test-shell --interpreter` put them, and
+    // the launcher reads them from there.
+    let status = (launcher.start)(&Start {
+        image: Image::BuiltIn(IMAGE),
         exe: BUILT_IN_EXE,
         exec_fn: name,
-        set_ids: fs::SetIds::NONE,
-        interpreter: linker.as_ref().map(Source::File),
-    };
-    let status = exec::run_init(
-        program,
-        args,
+        argv: args,
         // `ENV` is what an interactive POSIX shell reads before its first
         // prompt; xtask's initramfs puts the network setup there.
-        &[
+        env: &[
             b"PATH=/bin",
             b"HOME=/",
             b"TERM=dumb",
             b"PS1=ferrix# ",
             b"ENV=/etc/profile",
         ],
-        random_bytes(),
-    );
+    });
     match status {
         Ok(status) => println!("  init     the shell exited with {status}"),
-        Err(problem) => println!("  init     the shell could not be started: {problem:?}"),
+        Err(problem) => println!("  init     the shell could not be started: {problem}"),
     }
 }
 
 /// Run each command in `list`, each with the program its `argv[0]` names in
 /// [`PROGRAM_DIR`].
-fn run_commands(list: &[u8]) {
+fn run_commands(launcher: &Launcher, list: &[u8]) {
     let commands = parse(list);
-    let ctx = fs::root_disk::process_context();
     println!("  init     running {} commands", commands.len());
     // The programs the commands have needed so far, each with the path it was
     // asked for by and the name it resolved to, so that twenty commands over
@@ -292,7 +371,7 @@ fn run_commands(list: &[u8]) {
     // answering to a hundred names. Since 2026-09-24 an open program is its
     // headers and its file, which the loader maps, so keeping one costs
     // nothing; before, each was the whole file read into memory.
-    let mut loaded: Vec<(Vec<u8>, ProgramFile, Vec<u8>)> = Vec::new();
+    let mut loaded: Vec<(Vec<u8>, Opened)> = Vec::new();
     for (index, argv) in commands.iter().enumerate() {
         println!("  init     command {index}: {}", Argv(argv));
         syscall::report_unanswered(UNANSWERED_LINES);
@@ -306,9 +385,9 @@ fn run_commands(list: &[u8]) {
         let known = loaded.iter().position(|(seen, ..)| seen == &path);
         let at = match known {
             Some(at) => at,
-            None => match fs::open_program(&ctx, None, &path) {
-                Ok((image, exe, _set_ids)) => {
-                    loaded.push((path.clone(), image, exe));
+            None => match (launcher.open)(&path) {
+                Ok(opened) => {
+                    loaded.push((path.clone(), opened));
                     loaded.len().saturating_sub(1)
                 }
                 Err(errno) => {
@@ -320,13 +399,13 @@ fn run_commands(list: &[u8]) {
                 }
             },
         };
-        let Some((_, image, exe)) = loaded.get(at) else {
+        let Some((_, opened)) = loaded.get(at) else {
             continue;
         };
-        match start(image, exe, &path, argv) {
+        match start(launcher, opened, &path, argv) {
             Ok(status) => println!("  init     command {index} exited with {status}"),
             Err(problem) => {
-                println!("  init     command {index} could not be started: {problem:?}");
+                println!("  init     command {index} could not be started: {problem}");
             }
         }
     }
@@ -346,27 +425,24 @@ fn run_commands(list: &[u8]) {
 /// `path` is the name before it was resolved, which is what `AT_EXECFN` says:
 /// a multicall binary reads it, or `argv[0]`, to know which of its programs
 /// it has been asked for.
+///
+/// init comes out of the initramfs like any other program, so it may be
+/// dynamically linked like any other program; the launcher reads the linker
+/// it names from the same place. There is no process to fail back to here,
+/// which is why this is the one caller that reports the failure itself.
 fn start(
-    program: &ProgramFile,
-    exe: &[u8],
+    launcher: &Launcher,
+    opened: &Opened,
     path: &[u8],
     argv: &[&[u8]],
-) -> Result<i32, exec::ExecError> {
-    // init comes out of the initramfs like any other program, so it may be
-    // dynamically linked like any other program, and the linker it names is
-    // read from the same initramfs. There is no process to fail back to here,
-    // which is why this is the one caller that reports the failure itself.
-    let context = fs::root_disk::process_context();
-    let linker =
-        exec::linker_for(&context, Source::File(program)).map_err(exec::ExecError::Linker)?;
-    let executable = exec::Executable {
-        image: Source::File(program),
-        exe,
+) -> Result<i32, Failure> {
+    (launcher.start)(&Start {
+        image: Image::File(&opened.program),
+        exe: &opened.exe,
         exec_fn: path,
-        set_ids: fs::SetIds::NONE,
-        interpreter: linker.as_ref().map(Source::File),
-    };
-    exec::run_init(executable, argv, ENVIRONMENT, random_bytes())
+        argv,
+        env: ENVIRONMENT,
+    })
 }
 
 /// The commands in a list `kernel/build.rs` embedded: each argument ends in a
@@ -407,9 +483,4 @@ impl fmt::Display for Argv<'_> {
         }
         Ok(())
     }
-}
-
-/// Sixteen bytes for `AT_RANDOM`: [`crate::syscall::exec::random_bytes`].
-fn random_bytes() -> [u8; ferrix_ustack::RANDOM_BYTES] {
-    exec::random_bytes()
 }

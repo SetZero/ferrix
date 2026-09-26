@@ -20,18 +20,53 @@
 //!
 //! # What power reaches without naming
 //!
-//! A board whose firmware keeps a boot mode registers a [`BootMode`], which
-//! `reboot(2)`'s RESTART2 word goes to, at bring-up from `main.rs`; power
-//! does not name the board.
+//! Two things above the certified item have to be told the machine is
+//! stopping, and power names neither. A filesystem registers a [`Flush`],
+//! and every registered one is committed before the machine stops, in the
+//! order they were registered. A board whose firmware keeps a boot mode
+//! registers a [`BootMode`], which `reboot(2)`'s RESTART2 word goes to.
+//! Both are registered at bring-up, from `main.rs`, and the boot checks that
+//! the flushes were before `init` can start a program that writes.
 
 use core::sync::atomic::{AtomicU8, Ordering};
 
 use ferrix_bootinfo::{BootView, option_in};
+use ferrix_linux_abi::errno::Errno;
 use ferrix_sync::Once;
 
 use crate::arch;
 use crate::console::println;
+use crate::hooks::{Full, Hooks};
 use crate::panic::{catalog, fatal};
+
+/// A filesystem's writes not yet on its disk, committed before the machine
+/// stops.
+#[derive(Debug)]
+pub(crate) struct Flush {
+    /// Where it is mounted, as the log names it: `/`, `/data`.
+    pub(crate) mount: &'static str,
+    /// Commit it. Nothing mounted there is nothing to commit, and `Ok`.
+    pub(crate) commit: fn() -> Result<(), Errno>,
+}
+
+/// Every registered [`Flush`]. Four is two more than the kernel registers.
+static FLUSHES: Hooks<Flush, 4> = Hooks::new();
+
+/// Commit `flush` before the machine stops, after every flush registered
+/// before it.
+///
+/// # Errors
+///
+/// [`Full`] when the list is.
+pub(crate) fn register_flush(flush: &'static Flush) -> Result<(), Full> {
+    FLUSHES.register(flush)
+}
+
+/// How many flushes are registered: the boot's check that a filesystem will
+/// be committed before the machine stops.
+pub(crate) fn flushes() -> usize {
+    FLUSHES.len()
+}
 
 /// Ask the firmware to come back up as a `reboot(2)` word says, at the next
 /// reset: what it will do, or why nothing changes.
@@ -107,19 +142,22 @@ pub(crate) fn init(view: &BootView<'_>) {
     }
 }
 
-/// Commit `/` and `/data`: the root disk's last half-minute, which its
-/// committer has not reached yet, and the data disk, which has none.
+/// Commit every registered [`Flush`]: on this kernel `/` and `/data`, the
+/// root disk's last half-minute, which its committer has not reached yet, and
+/// the data disk, which has none.
 ///
 /// Before the machine stops, whoever stops it: [`finish`] when init has
 /// exited, and `reboot(2)` when a program asks, so that a program calling it
 /// without a `sync` of its own loses no transaction either. A failure is said
 /// and does not stop the machine stopping.
 pub(crate) fn sync_disks() {
-    if crate::fs::root_disk::sync().is_err() {
-        println!("  power    / could not be committed before the power-off");
-    }
-    if crate::fs::data_disk::sync().is_err() {
-        println!("  power    /data could not be committed before the power-off");
+    for flush in FLUSHES.iter() {
+        if (flush.commit)().is_err() {
+            println!(
+                "  power    {} could not be committed before the power-off",
+                flush.mount
+            );
+        }
     }
 }
 
