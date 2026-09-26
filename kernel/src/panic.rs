@@ -12,8 +12,9 @@
 //!   at        kernel/src/main.rs:152:23
 //!   on        processor 0 (hardware id 0x0)
 //!   stopped   this processor halts here, and 3 more were asked to
-//!   trace     #0  0xffffffff800018e7
-//!   trace     #1  0xffffffff8000812c
+//!   kaslr     slide 0x23912000
+//!   trace     #0  0xffffffffa39138e7
+//!   trace     #1  0xffffffffa391a12c
 //!   code      FX-0302  the timer interrupt did not arrive as programmed
 //!   means     ...
 //!   causes    1. ...
@@ -23,7 +24,8 @@
 //! The marker and the message share the first line because that is the line
 //! the boot test judges on. `xtask` keeps reading for a moment after it, and
 //! appends to each trace address the function it is in, from the kernel ELF it
-//! booted. When firmware left a framebuffer, the same text is drawn on it last
+//! booted, less the slide the line before the trace gives when the loader
+//! moved the kernel (KASLR). When firmware left a framebuffer, the same text is drawn on it last
 //! ([`screen`]).
 //!
 //! The trap path's fatal reports share everything after their opening lines:
