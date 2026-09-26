@@ -21,11 +21,13 @@
 //!   the name and numbers §6.1 gives it — and gone again once the driver says
 //!   STOPPED, after which the next round's ring finds the device free;
 //! * the second round of all that gives every frame back;
-//! * a driver that closes the channel without STOPPED takes its disk with it
-//!   too, but leaves the device bound until `device_quiesce`, which turns the
-//!   device off and frees it for the next ring — asked after the ring has
-//!   ended, and asked the instant the driver is gone, repeatedly, since the
-//!   quiesce then has to wait for the ring's task to notice;
+//! * a driver that closes the channel without STOPPED leaves its disk parked
+//!   -- still published, for the next driver -- and the device bound until
+//!   `device_quiesce`, which turns the device off and frees it for the next
+//!   ring -- asked after the ring has ended, and asked the instant the driver
+//!   is gone, repeatedly, since the quiesce then has to wait for the ring's
+//!   task to notice; the next round's accepted HELLO takes the parked disk up
+//!   under its name, and the check forgets the last one;
 //! * `device_info` describes the device as enumeration found it, every virtio
 //!   block it names inside an aperture, and the START the kernel would build
 //!   from it agrees; `device_quiesce` is refused without `MANAGE` and while a
@@ -48,7 +50,7 @@ use ferrix_native_abi::status;
 use ferrix_native_abi::types::{DEVICE_INFO_BYTES, DEVICE_VIRTIO_PCI};
 use ferrix_vfs::initramfs::makedev;
 
-use super::{VIRTIO_BLK_MAJOR, location_of, start_for};
+use super::{VIRTIO_BLK_MAJOR, forget_parked, is_parked, location_of, start_for};
 use crate::device::{self, DeviceNode};
 use crate::fs::devfs;
 use crate::object::check::{SCRATCH, Side, device_handle, reg};
@@ -163,6 +165,12 @@ pub(crate) fn run() -> Result<Report, &'static str> {
         QUIESCE_AT_ONCE.store(false, core::sync::atomic::Ordering::Relaxed);
         outcome?;
     }
+    // Nobody serves the check's disk after it: its parked node goes.
+    let location = location_of(&node).ok_or("the node is not a PCI function after all")?;
+    forget_parked(location);
+    if devfs::block_device(makedev(VIRTIO_BLK_MAJOR, 0)).is_some() || is_parked(location) {
+        return Err("a parked disk outlived its forgetting");
+    }
     Ok(Report {
         refusals: counter.refusals,
         published: counter.published,
@@ -205,7 +213,7 @@ fn round(
         "a device was quiesced under the driver serving it",
         counter,
     )?;
-    end(&side, device, control, rdev, ending, counter)?;
+    end(&side, device, control, rdev, location, ending, counter)?;
     side.close_everything();
     Ok(())
 }
@@ -300,13 +308,15 @@ fn published(rdev: u64) -> Result<(), &'static str> {
     }
 }
 
-/// End the ring as `ending` says, require its disk to go, and after a death
-/// require the device to stay bound.
+/// End the ring as `ending` says: after STOPPED require its disk to go, and
+/// after a death require the device to stay bound and the disk to stay
+/// published, parked for the next driver.
 fn end(
     side: &Side,
     device: Handle,
     control: Handle,
     rdev: u64,
+    location: ferrix_blkring::Location,
     ending: Ending,
     counter: &mut Counter,
 ) -> Result<(), &'static str> {
@@ -359,12 +369,14 @@ fn end(
             .call(nr::HANDLE_CLOSE, &[reg(control)])
             .map_err(|_| "closing the control channel failed")?;
     }
-    let deadline = timer::now_nanos().saturating_add(PATIENCE_NANOS);
-    while devfs::block_device(rdev).is_some() {
-        if timer::now_nanos() > deadline {
-            return Err("the disk stayed published after its driver was gone");
+    if ending == Ending::Stopped {
+        let deadline = timer::now_nanos().saturating_add(PATIENCE_NANOS);
+        while devfs::block_device(rdev).is_some() {
+            if timer::now_nanos() > deadline {
+                return Err("the disk stayed published after its driver stopped");
+            }
+            sched::yield_now();
         }
-        sched::yield_now();
     }
     counter.published += 1;
     if ending == Ending::DriverDied {
@@ -379,6 +391,11 @@ fn end(
             let _ = side
                 .call(nr::DEVICE_QUIESCE, &[reg(device)])
                 .map_err(|_| "quiescing a device whose driver died failed")?;
+        }
+        // The quiesce waited for the ring's task to end, so the disk is
+        // parked by now, and still published for the next driver.
+        if devfs::block_device(rdev).is_none() || !is_parked(location) {
+            return Err("a disk whose driver died was not kept published for the next one");
         }
         // And one again after; its task ends with the round's handles.
         let _ = ring(side, device)?;

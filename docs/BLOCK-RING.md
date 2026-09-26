@@ -355,8 +355,19 @@ and `serial` are carried as given: stage 11 validates neither beyond size.
   and fail anything still outstanding with EIO.
 * **The driver dies.** The driver's process ending (`TERMINATED`) or the
   control channel's `PEER_CLOSED` is an implicit STOPPED, **without** any
-  guarantee that the device was reset. The kernel fails everything
-  outstanding with EIO and stops using the ring. **It must not free the data
+  guarantee that the device was reset. The kernel stops using the ring but
+  does **not** fail what was outstanding: since 2026-09-26 (the customer's
+  choice, T0) the disk is *parked*. The commands the driver held go back on
+  the disk's queue in their epochs, so barrier order holds, its node stays
+  published, and callers keep waiting. The next ring made for the same PCI
+  location whose HELLO describes the same disk under the same name takes the
+  parked disk up and dispatches what waited, so a filesystem mounted on it
+  sees a slow request, not an error, when devmgr starts the driver again. A
+  request is idempotent at this layer, so one the dead driver had already
+  done is only done twice. A disk parked for 30 seconds answers new requests
+  with EIO at once, and each waiting request keeps its own 30-second
+  patience. A HELLO describing another disk on that location ends the parked
+  one first, failing what waited with EIO. **It must not free the data
   VMO's pinned pages** until the device is known quiesced: after an unpin on an
   untranslated domain — which is every domain today — the device can still DMA
   to those frames. The pages stay held (leaked) until devmgr has reset the
@@ -379,8 +390,9 @@ and `serial` are carried as given: stage 11 validates neither beyond size.
     — and the kernel prints a console line saying so.
   * After devmgr confirms the reset, the pins may be released and the data VMO
     freed. If devmgr cannot reset the device, they are never freed.
-  * The kernel's side is unchanged: every outstanding request fails with EIO at
-    once, without waiting for the reset.
+  * The kernel's side does not wait for the reset: a parked disk's requests
+    wait for the next driver, whose bring-up resets the device before its
+    HELLO, and are dispatched to it only then.
 
 ### 6.4 devmgr → driver: START (type 6)
 

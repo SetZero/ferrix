@@ -1352,7 +1352,8 @@ fn check_ring_control() {
     } else {
         println!(
             "  ring     {} calls and HELLOs refused as specified, {} disk published from an \
-             accepted HELLO and unpublished when its driver stopped or died, {} frames leaked",
+             accepted HELLO, unpublished when its driver stopped and parked for the next when it \
+             died, {} frames leaked",
             report.refusals, report.published, report.leaked,
         );
     }

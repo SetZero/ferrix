@@ -213,13 +213,16 @@ RESTARTED devmgr -> kernel, 16 bytes
    quiesced, as does one whose restarted driver dies before it publishes.
 
 Every other kind is not started again. A dead disk driver is a dead disk,
-said on the console, and the device stays quiesced: what a mounted
-filesystem should do with a disk that went and came back is its own
-decision. The net and input cores wait for a dead driver's claim in the
-quiesce, and are ready for a driver started again: a net interface is parked
-with its index, name and addresses until the next driver's HELLO takes it up
-(`docs/NET-RING.md`), and an input device comes back as the `event<N>` it
-was. They are not in `restarted` yet, and neither is a disk: a dead
+said on the console, and the device stays quiesced. The net and input cores
+wait for a dead driver's claim in the quiesce, and are ready for a driver
+started again. A net interface is parked with its index, name and addresses
+until the next driver's HELLO takes it up (`docs/NET-RING.md`). An input
+device takes the lowest free `event<N>`: a device whose driver dies alone
+comes back under its number, but when two die together the one that comes
+back first takes the lower. A disk is parked too: the block ring keeps its
+node published and its requests queued, and replays them to the next driver
+for the same location, so a filesystem mounted on it never sees the death
+(`docs/BLOCK-RING.md` §6.3). They are not in `restarted` yet: a dead
 driver's pins are quarantined by the kernel, but those cores do not yet give
 them back at the next driver's HELLO (`object::pin::quarantine_release`).
 The serial port (`vport`) has no core to wait for.

@@ -798,7 +798,8 @@ location, as the display core's does, and sends devmgr no PUBLISHED, since
 every tree node shares that word. A device unplugged has its channel closed,
 which the core hears as the device going (`event<N> is gone`); its number is
 free again, and `event<N>` numbers are always the lowest free, so a device
-whose driver is started again comes back under the number it had. Each
+whose driver dies alone and is started again comes back under the number it
+had. When two die together, the first to come back takes the lower number. Each
 channel is one of the node's claims (`kernel/src/claim.rs`), and a quiesce
 waits until every one of a dead driver's has gone. devmgr does wait, a
 bounded five seconds, for the driver to say on its bootstrap channel that

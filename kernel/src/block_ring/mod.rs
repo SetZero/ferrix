@@ -16,7 +16,24 @@
 //!    completions off the ring, copies a write's bytes in and a read's out of
 //!    the data VMO, and wakes the caller;
 //! 4. ends when the driver's control channel closes, the driver says STOPPED
-//!    or the ring is corrupt, failing every outstanding request with EIO.
+//!    or the ring is corrupt.
+//!
+//! # A disk outlives a driver that dies
+//!
+//! STOPPED ends a disk: every outstanding request fails with EIO and the
+//! node is unpublished. A driver that dies -- its channel closed without
+//! STOPPED, or its ring corrupt -- does not. Its disk is *parked*: the
+//! commands the driver held are put back on the queue, in their epochs so
+//! barrier order holds, its node stays published, and readers and writers
+//! keep waiting. The next ring made for the same PCI location whose HELLO
+//! describes the same disk under the same name takes the parked disk up and
+//! dispatches what waited to its own driver, so a filesystem mounted on the
+//! disk sees a slow request rather than an error when `devmgr` starts a dead
+//! driver again (`docs/DEVMGR.md` §4). A request is idempotent at the block
+//! layer, so one the dead driver had already done is only done twice. A disk
+//! parked longer than [`PARK_PATIENCE_NANOS`] answers new requests with EIO
+//! at once, and each waiting request has its own patience as before; a HELLO
+//! describing another disk on that location ends the parked one first.
 //!
 //! # The kernel never serves a disk
 //!
@@ -86,6 +103,10 @@ const HELLO_PATIENCE_NANOS: u64 = 10_000_000_000;
 
 /// How long a read waits for its driver before answering EIO.
 const READ_PATIENCE_NANOS: u64 = 30_000_000_000;
+
+/// How long a parked disk waits for a driver to take it up again before a
+/// new request is answered EIO at once rather than left to wait.
+const PARK_PATIENCE_NANOS: u64 = READ_PATIENCE_NANOS;
 
 /// How long the ring's task sleeps before looking again of its own accord.
 const RECHECK_NANOS: u64 = 50_000_000;
@@ -161,6 +182,79 @@ static TASKS: SpinLock<Vec<Arc<Task>>> = SpinLock::new(Vec::new());
 
 /// The next ring's number.
 static NEXT_RING: AtomicUsize = AtomicUsize::new(1);
+
+/// A disk whose driver died, waiting for the next one.
+#[derive(Debug)]
+struct Parked {
+    /// The PCI location its driver served it from.
+    location: Location,
+    /// Its name, which the next driver's HELLO must give again.
+    name: DiskName,
+    /// The disk, its queue and its waiting requests.
+    disk: Arc<RingDisk>,
+    /// Its node, still published.
+    registration: BlockRegistration,
+}
+
+/// Disks whose driver died (the module's comment says what follows).
+static PARKED: SpinLock<Vec<Parked>> = SpinLock::new(Vec::new());
+
+/// Park `disk`: its node stays published and its requests wait for the next
+/// ring made for `location`. With no memory to record it, it is ended as a
+/// stopped driver's disk is.
+fn park(location: Location, name: DiskName, disk: Arc<RingDisk>, registration: BlockRegistration) {
+    disk.state.lock().parked_at = Some(timer::now_nanos());
+    let parked = Parked {
+        location,
+        name,
+        disk,
+        registration,
+    };
+    let mut list = PARKED.lock();
+    if list.try_reserve(1).is_ok() {
+        list.push(parked);
+    } else {
+        drop(list);
+        parked.disk.end();
+    }
+}
+
+/// The disk parked at `location`, if HELLO's `device` and `name` describe
+/// it. One that does not match is ended and its node unpublished, and `None`
+/// answered: the location serves another disk now.
+fn take_parked(location: Location, device: &Device, name: &DiskName) -> Option<Parked> {
+    let parked = {
+        let mut list = PARKED.lock();
+        let at = list.iter().position(|parked| parked.location == location)?;
+        list.swap_remove(at)
+    };
+    if parked.disk.device == *device && parked.name == *name {
+        return Some(parked);
+    }
+    parked.disk.end();
+    None
+}
+
+/// Whether a disk is parked at `location`, waiting for its next driver.
+pub(crate) fn is_parked(location: Location) -> bool {
+    PARKED
+        .lock()
+        .iter()
+        .any(|parked| parked.location == location)
+}
+
+/// End the disk parked at `location`, if there is one, and unpublish it: for
+/// a check that made a ring on a device nobody will serve again.
+pub(crate) fn forget_parked(location: Location) {
+    let parked = {
+        let mut list = PARKED.lock();
+        let Some(at) = list.iter().position(|parked| parked.location == location) else {
+            return;
+        };
+        list.swap_remove(at)
+    };
+    parked.disk.end();
+}
 
 /// Make a ring for `node` and start its task; answer the driver's end of its
 /// control channel.
@@ -413,8 +507,11 @@ fn run(id: usize) {
         return;
     };
     let ending = ring.serve();
-    set_served(id, None);
+    // Parked (or ended) before a quiesce can see the ring unserved: devmgr
+    // starts the next driver the moment the quiesce answers, and its HELLO
+    // must find the disk parked, not still registered by this ring.
     ring.finish(ending);
+    set_served(id, None);
     if ending == Ending::Stopped {
         unclaim(id);
     }
@@ -571,28 +668,42 @@ fn take_up<'s>(
     .map_err(|_| Refusal::Device)?;
     // The wire protocol has no refusal for memory; the device's is nearest.
     let kernel_port = Port::new().map_err(|_| Refusal::Device)?;
-    let disk = Arc::new(RingDisk::new(device, limits, Arc::clone(&kernel_port)));
-    // The device node the ring was made for, which sysfs shows the disk in.
-    let node = CLAIMS
-        .lock()
-        .iter()
-        .find(|claim| claim.id == start.id)
-        .map(|claim| claim.device.index());
-    let registration = register_block_from(
-        accepted.name.as_str().as_bytes(),
-        VIRTIO_BLK_MAJOR,
-        accepted.name.minor(),
-        Arc::clone(&disk) as Arc<dyn BlockDevice>,
-        Origin {
-            node,
-            serial: accepted.serial,
-        },
-    )
-    .map_err(|refused| match refused {
-        BlockRefused::InvalidName => Refusal::Name,
-        BlockRefused::NameInUse | BlockRefused::NumberInUse => Refusal::NameInUse,
-    })?;
+    let name = accepted.name;
+    let (disk, registration) = match take_parked(start.location, &device, &name) {
+        // A dead driver's disk, taken up with what waited on it.
+        Some(parked) => {
+            parked.disk.take_up(Arc::clone(&kernel_port));
+            (parked.disk, parked.registration)
+        }
+        None => {
+            let disk = Arc::new(RingDisk::new(device, limits, Arc::clone(&kernel_port)));
+            // The device node the ring was made for, which sysfs shows the
+            // disk in.
+            let node = CLAIMS
+                .lock()
+                .iter()
+                .find(|claim| claim.id == start.id)
+                .map(|claim| claim.device.index());
+            let registration = register_block_from(
+                name.as_str().as_bytes(),
+                VIRTIO_BLK_MAJOR,
+                name.minor(),
+                Arc::clone(&disk) as Arc<dyn BlockDevice>,
+                Origin {
+                    node,
+                    serial: accepted.serial,
+                },
+            )
+            .map_err(|refused| match refused {
+                BlockRefused::InvalidName => Refusal::Name,
+                BlockRefused::NameInUse | BlockRefused::NumberInUse => Refusal::NameInUse,
+            })?;
+            (disk, registration)
+        }
+    };
     if served_elsewhere(start.id, start.location) {
+        // Refused: a disk taken up waits on, parked, for a ring that is not.
+        park(start.location, name, disk, registration);
         return Err(Refusal::LocationInUse);
     }
     // Served from before READY goes out, not after: the driver may act on
@@ -607,6 +718,7 @@ fn take_up<'s>(
         .is_err()
     {
         set_served(start.id, None);
+        park(start.location, name, disk, registration);
         return Err(Refusal::Malformed);
     }
     let region_bytes = u64::from(device.max_sectors()) * u64::from(device.block_size());
@@ -620,7 +732,9 @@ fn take_up<'s>(
         data: Pages::over(&data_held, accepted.data.len_bytes()),
         _ring_held: ring_held,
         _data_held: data_held,
-        _registration: registration,
+        registration,
+        location: start.location,
+        name,
         region_bytes,
         free: (0..regions).collect(),
         flying: BTreeMap::new(),
@@ -747,6 +861,8 @@ struct DiskState {
     next_id: u64,
     /// Whether the ring is over.
     ended: bool,
+    /// When its driver died, while it waits parked for the next one.
+    parked_at: Option<u64>,
 }
 
 /// A block device served by a ring-3 driver through a ring.
@@ -757,8 +873,9 @@ pub(crate) struct RingDisk {
     state: SpinLock<DiskState>,
     /// Woken when a read finishes or the ring ends.
     done: WaitQueue,
-    /// The ring's completion port, nudged when a read is queued.
-    port: Arc<Port>,
+    /// The serving ring's completion port, nudged when a read is queued:
+    /// the next ring's once a parked disk is taken up again.
+    port: SpinLock<Arc<Port>>,
 }
 
 impl fmt::Debug for RingDisk {
@@ -779,10 +896,34 @@ impl RingDisk {
                 reads: BTreeMap::new(),
                 next_id: 0,
                 ended: false,
+                parked_at: None,
             }),
             done: WaitQueue::new(),
-            port,
+            port: SpinLock::new(port),
         }
+    }
+
+    /// Be served by a new ring, which `port` is the completion port of.
+    fn take_up(&self, port: Arc<Port>) {
+        *self.port.lock() = port;
+        self.state.lock().parked_at = None;
+    }
+
+    /// The disk is over: fail every outstanding request and wake every
+    /// reader.
+    fn end(&self) {
+        {
+            let mut state = self.state.lock();
+            state.ended = true;
+            // A reader that gave up is not coming back for its answer.
+            state.reads.retain(|_, pending| !pending.abandoned);
+            for pending in state.reads.values_mut() {
+                if pending.result.is_none() {
+                    pending.result = Some(Err(Errno::EIO));
+                }
+            }
+        }
+        self.done.wake_all();
     }
 
     /// Read `count` sectors from `sector` into `out`, which is exactly that
@@ -817,7 +958,10 @@ impl RingDisk {
     fn request(&self, request: Request, payload: Option<Vec<u8>>) -> Result<Vec<u8>, Errno> {
         let id = {
             let mut state = self.state.lock();
-            if state.ended {
+            let given_up = state
+                .parked_at
+                .is_some_and(|at| timer::now_nanos().saturating_sub(at) > PARK_PATIENCE_NANOS);
+            if state.ended || given_up {
                 return Err(Errno::EIO);
             }
             let id = state.next_id;
@@ -841,7 +985,8 @@ impl RingDisk {
             id
         };
         // A full port already holds a nudge the task has not taken.
-        let _ = self.port.queue_user(SUBMIT_KEY, [0; 2]);
+        let port = Arc::clone(&self.port.lock());
+        let _ = port.queue_user(SUBMIT_KEY, [0; 2]);
         // Not interruptible by signals, as a disk read on Linux is not; the
         // ring's end, or the patience, is what ends it.
         let deadline = timer::now_nanos().saturating_add(READ_PATIENCE_NANOS);
@@ -978,8 +1123,13 @@ struct Serving<'s> {
     _ring_held: Held,
     /// The data VMO's pages, held while the ring is served.
     _data_held: Held,
-    /// The disk's node, unpublished when the ring is over.
-    _registration: BlockRegistration,
+    /// The disk's node, unpublished when a stopped ring is over and kept
+    /// with the disk when its driver died.
+    registration: BlockRegistration,
+    /// The PCI location the ring serves, which a parked disk waits at.
+    location: Location,
+    /// The disk's name, which the next driver must give again.
+    name: DiskName,
     /// Bytes in one data region.
     region_bytes: u64,
     /// Data regions not in use.
@@ -1181,21 +1331,29 @@ impl Serving<'_> {
         }
     }
 
-    /// The ring is over: fail every outstanding read and wake every reader.
+    /// The ring is over. STOPPED ends the disk: every outstanding request
+    /// fails and the node goes. A dead driver's disk is parked instead, with
+    /// the commands it held put back on the queue for the next ring.
     fn finish(mut self, ending: Ending) {
         let _outstanding = self.side.end(ending).count();
+        if ending != Ending::DriverDied {
+            self.disk.end();
+            return;
+        }
         {
             let mut state = self.disk.state.lock();
-            state.ended = true;
-            // A reader that gave up is not coming back for its answer.
-            state.reads.retain(|_, pending| !pending.abandoned);
-            for pending in state.reads.values_mut() {
-                if pending.result.is_none() {
-                    pending.result = Some(Err(Errno::EIO));
-                }
+            for &token in self.flying.keys() {
+                let _ = state.queue.requeue(Token::from_raw(token));
             }
         }
-        self.disk.done.wake_all();
+        let Serving {
+            disk,
+            registration,
+            location,
+            name,
+            ..
+        } = self;
+        park(location, name, disk, registration);
     }
 }
 
