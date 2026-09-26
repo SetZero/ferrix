@@ -94,9 +94,10 @@ bench-chrome-video` measures it (`docs/CHROME.md` §9).
 **Still to do:**
 
 * `--no-sandbox`, which is stage 13's.
-* `run-compositor --chrome` on ferrousli, which only the test takes the
-  flags for; and ferrousli's `ld.so` run as a command, which it cannot be
-  yet: Chrome reaches it by `PT_INTERP`.
+* ferrousli's `ld.so` run as a command, which it cannot be yet: Chrome
+  reaches it by `PT_INTERP`. (`run-compositor --chrome` and `--everything`
+  run Chrome, and the compiler in the desktop's terminals, on ferrousli by
+  default since 2026-09-27; `--interpreter glibc` for the volume's own.)
 * Why the GPU process's fallback path stops at the sandbox's
   `proc_util.cc:115` with `ENOENT` on Ferrix (`docs/CHROME.md` §8, item 8).
 * The GPU: Chrome draws in software. (`inotify` landed on 2026-09-27; the
