@@ -1,6 +1,6 @@
 # Ferrix — backlog and decisions
 
-`docs/ROADMAP.md` says what each stage is and how it knows it is finished.
+`docs/roadmap/` says what each stage is and how it knows it is finished.
 This file says who is doing what right now, in what order, and which
 decisions were taken along the way. It exists because a dozen sessions work on
 the tree at once, and a decision that lives only in a message between two of
@@ -8,8 +8,9 @@ them is a decision the third one reverts.
 
 The customer is the product owner and decides scope and priority; the fleet
 coordinator keeps the landing order. A session that lands a piece of this
-file updates its row in the same landing, the way the roadmap's stage
-sections are updated. When a row is done it is deleted, not struck through;
+file updates its row in the same landing, the way it updates the stage's
+file under `docs/roadmap/` (and the overview's status table when a row
+changes). When a row is done it is deleted, not struck through;
 the roadmap records what landed, and this file's own history
 (`git log -p -- docs/BACKLOG.md`) keeps the investigations and the wind-down
 records of earlier days.

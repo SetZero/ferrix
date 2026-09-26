@@ -92,9 +92,10 @@ rule below comes from something seen there.
    roadmap. Re-gate when the rebase changed code the landing touches or
    depends on. Otherwise the gate still applies, and saying so in the report
    is enough.
-4. **Keep shared-doc edits to your own lines.** Every agent edits
-   `ROADMAP.md`, `BACKLOG.md` and the design doc, so every rebase conflicts
-   there. Edit your own row, paragraph or "where it stands" entry, and never
+4. **Keep shared-doc edits to your own lines.** Every agent edits the
+   roadmap -- the stage's file under `docs/roadmap/`, and the overview's
+   status table when a row changes -- `BACKLOG.md` and the design doc, so
+   every rebase conflicts there. Edit your own row, paragraph or "where it stands" entry, and never
    reflow a neighbour's. On a conflict, take `main`'s side and add your lines
    again. Recount a total such as the roadmap's host-test count against
    `main`'s number, rather than merging two sums.
