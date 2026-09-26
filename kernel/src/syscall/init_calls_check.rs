@@ -870,8 +870,12 @@ fn check_a_program_takes_it_after_execve() -> Result<bool, &'static str> {
     code.extend_from_slice(EXEC_TARGET);
     let caller = image::build_with(class, machine, image::Shape::Good, &code);
 
+    // Where the child's `execve` will look: the btrfs root once
+    // `root_disk::switch` has put it in place, whose `/tmp` is its own
+    // tmpfs, not the kernel's. Written through the kernel's namespace, the
+    // program would be where no new process can see it.
     let ns = crate::fs::namespace();
-    let ctx = ns.context();
+    let ctx = crate::fs::root_disk::process_context();
     let create = OpenFlags {
         write: true,
         create: true,
