@@ -103,16 +103,16 @@ pub(crate) fn dispatch(
     let fd = fd::arg(a[0]);
     let answer = match call {
         Syscall::Pipe => pipe::sys_pipe2(process, a[0], 0),
-        Syscall::Pipe2 => pipe::sys_pipe2(process, a[0], super::truncate(a[1])),
+        Syscall::Pipe2 => pipe::sys_pipe2(process, a[0], super::linux::truncate(a[1])),
         Syscall::Sendfile | Syscall::Sendfile64 => {
             pipe::sys_sendfile(process, fd, fd::arg(a[1]), a[2], a[3])
         }
         Syscall::Splice => {
-            let flags = super::truncate(a[5]);
+            let flags = super::linux::truncate(a[5]);
             pipe::sys_splice(process, fd, a[1], fd::arg(a[2]), a[3], a[4], flags)
         }
         Syscall::CopyFileRange => {
-            let flags = super::truncate(a[5]);
+            let flags = super::linux::truncate(a[5]);
             pipe::sys_copy_file_range(process, fd, a[1], fd::arg(a[2]), a[3], a[4], flags)
         }
         Syscall::Statfs => sys_statfs(process, a[0], a[1]),
@@ -124,8 +124,8 @@ pub(crate) fn dispatch(
         Syscall::Fsync => sys_fsync(process, fd, false),
         Syscall::Fdatasync => sys_fsync(process, fd, true),
         Syscall::Readahead => sys_readahead(process, fd, readahead_count(a)),
-        Syscall::Truncate => sys_truncate(process, a[0], super::native_signed(a[1])),
-        Syscall::Truncate64 => sys_truncate(process, a[0], super::wide(a, 1)),
+        Syscall::Truncate => sys_truncate(process, a[0], super::linux::native_signed(a[1])),
+        Syscall::Truncate64 => sys_truncate(process, a[0], super::linux::wide(a, 1)),
         // `fallocate(fd, mode, offset, len)`: on ARMv7-A the offset is in the
         // register pair from 2 and the length in the pair from 4, which
         // `wide` reaches from slot 3. QEMU's linux-user reads the same six
@@ -133,13 +133,13 @@ pub(crate) fn dispatch(
         Syscall::Fallocate => sys_fallocate(
             process,
             fd,
-            super::truncate(a[1]),
-            super::wide(a, 2),
-            super::wide(a, 3),
+            super::linux::truncate(a[1]),
+            super::linux::wide(a, 2),
+            super::linux::wide(a, 3),
         ),
         Syscall::Chroot => sys_chroot(process, a[0]),
-        Syscall::Mount => sys_mount(process, a[0], a[1], a[2], super::truncate(a[3])),
-        Syscall::Umount2 => sys_umount2(process, a[0], super::truncate(a[1])),
+        Syscall::Mount => sys_mount(process, a[0], a[1], a[2], super::linux::truncate(a[3])),
+        Syscall::Umount2 => sys_umount2(process, a[0], super::linux::truncate(a[1])),
         // `pivot_root` moves the root mount aside and puts another in its
         // place. The namespace's root is fixed at its creation and has no
         // parent to move under, which is the case Linux answers `EINVAL` for.
@@ -299,7 +299,7 @@ pub(crate) fn sys_readahead(process: &Process, fd: i32, count: u64) -> Result<us
 /// on a 64-bit architecture, so the count is the third. On ARMv7-A the EABI
 /// starts the offset at the next even register, r2 and r3, which leaves r1
 /// empty and the 32-bit count in r4 -- what `regpairs_aligned` makes QEMU's
-/// linux-user read, and what `super::wide` assumes for the offset.
+/// linux-user read, and what `super::linux::wide` assumes for the offset.
 fn readahead_count(a: &[u64; 6]) -> u64 {
     if size_of::<usize>() == 8 {
         a[2]

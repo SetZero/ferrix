@@ -700,7 +700,7 @@ pub(crate) fn call_by_number(
 ) -> Result<usize, Errno> {
     let number = number_for(call).ok_or(Errno::ENOSYS)?;
     let decoded = arch::decode_syscall(number).ok_or(Errno::ENOSYS)?;
-    crate::syscall::handle(decoded, &SyscallArgs { number, args }, Some(process))
+    crate::syscall::linux::handle(decoded, &SyscallArgs { number, args }, Some(process))
 }
 
 // ---------------------------------------------------------------------------

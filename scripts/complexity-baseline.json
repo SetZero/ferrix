@@ -154,21 +154,6 @@
       "lines": 37,
       "recursive": false
     },
-    "syscall/mod.rs::descriptors": {
-      "complexity": 38,
-      "lines": 57,
-      "recursive": false
-    },
-    "syscall/mod.rs::dispatch": {
-      "complexity": 16,
-      "lines": 53,
-      "recursive": false
-    },
-    "syscall/mod.rs::with_process": {
-      "complexity": 51,
-      "lines": 68,
-      "recursive": false
-    },
     "syscall/native.rs::channel_read": {
       "complexity": 16,
       "lines": 54,

@@ -207,6 +207,7 @@
         "syscall/image.rs",
         "syscall/kill.rs",
         "syscall/launch.rs",
+        "syscall/linux.rs",
         "syscall/load.rs",
         "syscall/memfd.rs",
         "syscall/namespace.rs",
@@ -270,13 +271,6 @@
       },
       {
         "file": "syscall/memory.rs",
-        "references": "syscall::process",
-        "from_ring": "item",
-        "to_ring": "load",
-        "finding": "F-09"
-      },
-      {
-        "file": "syscall/mod.rs",
         "references": "syscall::process",
         "from_ring": "item",
         "to_ring": "load",
@@ -407,146 +401,6 @@
         "from_ring": "core",
         "to_ring": "load",
         "finding": "F-33"
-      },
-      {
-        "file": "syscall/mod.rs",
-        "references": "syscall::attributes",
-        "from_ring": "item",
-        "to_ring": "load",
-        "finding": "F-09"
-      },
-      {
-        "file": "syscall/mod.rs",
-        "references": "syscall::credentials",
-        "from_ring": "item",
-        "to_ring": "load",
-        "finding": "F-09"
-      },
-      {
-        "file": "syscall/mod.rs",
-        "references": "syscall::epoll",
-        "from_ring": "item",
-        "to_ring": "load",
-        "finding": "F-09"
-      },
-      {
-        "file": "syscall/mod.rs",
-        "references": "syscall::eventfd",
-        "from_ring": "item",
-        "to_ring": "load",
-        "finding": "F-09"
-      },
-      {
-        "file": "syscall/mod.rs",
-        "references": "syscall::exec",
-        "from_ring": "item",
-        "to_ring": "load",
-        "finding": "F-09"
-      },
-      {
-        "file": "syscall/mod.rs",
-        "references": "syscall::family",
-        "from_ring": "item",
-        "to_ring": "load",
-        "finding": "F-09"
-      },
-      {
-        "file": "syscall/mod.rs",
-        "references": "syscall::fd",
-        "from_ring": "item",
-        "to_ring": "load",
-        "finding": "F-09"
-      },
-      {
-        "file": "syscall/mod.rs",
-        "references": "syscall::file",
-        "from_ring": "item",
-        "to_ring": "load",
-        "finding": "F-09"
-      },
-      {
-        "file": "syscall/mod.rs",
-        "references": "syscall::flock",
-        "from_ring": "item",
-        "to_ring": "load",
-        "finding": "F-09"
-      },
-      {
-        "file": "syscall/mod.rs",
-        "references": "syscall::fsctl",
-        "from_ring": "item",
-        "to_ring": "load",
-        "finding": "F-09"
-      },
-      {
-        "file": "syscall/mod.rs",
-        "references": "syscall::kill",
-        "from_ring": "item",
-        "to_ring": "load",
-        "finding": "F-09"
-      },
-      {
-        "file": "syscall/mod.rs",
-        "references": "syscall::memfd",
-        "from_ring": "item",
-        "to_ring": "load",
-        "finding": "F-09"
-      },
-      {
-        "file": "syscall/mod.rs",
-        "references": "syscall::namespace",
-        "from_ring": "item",
-        "to_ring": "load",
-        "finding": "F-09"
-      },
-      {
-        "file": "syscall/mod.rs",
-        "references": "syscall::path",
-        "from_ring": "item",
-        "to_ring": "load",
-        "finding": "F-09"
-      },
-      {
-        "file": "syscall/mod.rs",
-        "references": "syscall::poll",
-        "from_ring": "item",
-        "to_ring": "load",
-        "finding": "F-09"
-      },
-      {
-        "file": "syscall/mod.rs",
-        "references": "syscall::signal",
-        "from_ring": "item",
-        "to_ring": "load",
-        "finding": "F-09"
-      },
-      {
-        "file": "syscall/mod.rs",
-        "references": "syscall::signalfd",
-        "from_ring": "item",
-        "to_ring": "load",
-        "finding": "F-09"
-      },
-      {
-        "file": "syscall/mod.rs",
-        "references": "syscall::sockets",
-        "from_ring": "item",
-        "to_ring": "load",
-        "finding": "F-09"
-      },
-      {
-        "file": "syscall/mod.rs",
-        "references": "syscall::time",
-        "from_ring": "item",
-        "to_ring": "load",
-        "finding": "F-09"
-      },
-      {
-        "file": "syscall/mod.rs",
-        "references": "syscall::timerfd",
-        "from_ring": "item",
-        "to_ring": "load",
-        "finding": "F-09"
       }
     ]
   },
@@ -601,6 +455,7 @@
       "syscall::exec",
       "syscall::image",
       "syscall::launch",
+      "syscall::linux",
       "syscall::time"
     ]
   }
