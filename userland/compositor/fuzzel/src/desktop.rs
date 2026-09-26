@@ -261,6 +261,54 @@ pub fn find_programs(search: &Search) -> Vec<Application> {
     apps
 }
 
+/// fuzzel's `path_find_programs`, for `list-executables-in-path`: every
+/// executable regular file in each `PATH` directory, named by its file name,
+/// the first of a name kept. They are added after the sorted entries,
+/// unsorted, as fuzzel adds them. Also answers the directories fuzzel would
+/// warn it could not open.
+#[must_use]
+pub fn path_programs(path: &str) -> (Vec<Application>, Vec<String>) {
+    use std::os::unix::fs::PermissionsExt as _;
+    let mut out: Vec<Application> = Vec::new();
+    let mut warnings = Vec::new();
+    for dir in path.split(':').filter(|dir| !dir.is_empty()) {
+        let entries = match std::fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(error) => {
+                warnings.push(format!("failed to open {dir} from PATH: {error}"));
+                continue;
+            }
+        };
+        let mut names: Vec<String> = entries
+            .filter_map(|e| e.ok().and_then(|e| e.file_name().into_string().ok()))
+            .collect();
+        names.sort();
+        for name in names {
+            let full = Path::new(dir).join(&name);
+            let Ok(meta) = std::fs::metadata(&full) else {
+                continue;
+            };
+            // `S_IXUSR`: executable by its owner.
+            if !meta.is_file() || meta.permissions().mode() & 0o100 == 0 {
+                continue;
+            }
+            let title: Text = name.chars().collect();
+            if out.iter().any(|app| app.title == title) {
+                continue;
+            }
+            out.push(Application {
+                title_lower: lower(&name),
+                title,
+                exec: Some(format!("{dir}/{name}")),
+                visible: true,
+                startup_notify: true,
+                ..Application::default()
+            });
+        }
+    }
+    (out, warnings)
+}
+
 /// `sort_application_by_title`: `c32casecmp` on the titles. Stable, where
 /// fuzzel's `qsort` leaves equal titles in whatever order it leaves them.
 pub fn sort_by_title(apps: &mut [Application]) {

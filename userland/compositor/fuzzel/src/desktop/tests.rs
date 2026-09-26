@@ -305,3 +305,27 @@ fn the_directories_and_ids() {
                 || d == std::path::Path::new("/usr/share"))
     );
 }
+
+#[test]
+fn executables_on_the_path() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = TestDir::new("path");
+    let a = dir.write("a/run-me", "#!/bin/sh\n");
+    let b = dir.write("b/run-me", "#!/bin/sh\n");
+    let _ = dir.write("a/not-me", "data");
+    for path in [&a, &b] {
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755));
+    }
+    let path = format!(
+        "{}:{}:/nonexistent-path-dir",
+        dir.path().join("a").display(),
+        dir.path().join("b").display()
+    );
+    let (programs, warnings) = super::path_programs(&path);
+    assert_eq!(programs.len(), 1);
+    assert_eq!(
+        programs.first().and_then(|p| p.exec.clone()),
+        Some(format!("{}/run-me", dir.path().join("a").display()))
+    );
+    assert_eq!(warnings.len(), 1);
+}

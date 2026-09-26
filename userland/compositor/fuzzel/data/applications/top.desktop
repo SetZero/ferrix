@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Top
+GenericName=System Monitor
+Comment=busybox's process list, in a terminal
+Exec=top
+Icon=ferrix-monitor
+Terminal=true
+Keywords=process;cpu;memory;
+Categories=System;Monitor;
