@@ -229,7 +229,8 @@ function onSample(s) {
   // The helper's native boot: its phase while it runs, and its record once
   // Android is back.
   if (helper && helper.phase !== "idle") {
-    showResult("busy", `Native boot: ${helper.phase}…`);
+    const away = helper.phase.startsWith("Ferrix") ? " The phone is off USB until Android is back; its graphs fill in then." : "";
+    showResult("busy", `Native boot: ${helper.phase}…${away}`);
     setSource(`native boot of ${shortImage(helper.image)}`);
   }
   const last = helper && helper.last && helper.last.when ? helper.last : null;
@@ -469,11 +470,18 @@ $("boot").onclick = async () => {
       await invoke("start_helper", { image: null });
       for (let i = 0; i < 20 && !(lastSample && lastSample.helper); i++) await sleep(500);
     }
-    if (!confirm("Reboot the phone into Ferrix? Android comes back about 75 s later.")) return;
+    // On the phone the service must end, or the phone stays in Ferrix: the
+    // kernel feeds the watchdog while pid 1 runs. "Until stopped" is a minute.
+    const choice = $("stats").value;
+    const stats = choice === "" ? null : (Number(choice) || 60);
+    const what = stats === null
+      ? "Android comes back about 75 s later."
+      : `Ferrix's stat service runs for ${stats} s after the boot checks, and Android comes back about ${75 + stats} s later. The graphs fill in from the record then: nothing reaches the PC while Ferrix runs.`;
+    if (!confirm(`Reboot the phone into Ferrix? ${what}`)) return;
     clearConsole();
-    setSource("native boot");
+    setSource(stats === null ? "native boot" : `native boot · ferrix-statd ${stats} s`);
     showResult("busy", "Rebooting into Ferrix…");
-    await invoke("boot_native");
+    await invoke("boot_native", { stats });
   } catch (error) {
     showResult("bad", String(error));
   }

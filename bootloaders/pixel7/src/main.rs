@@ -83,11 +83,16 @@ extern "C" fn main(device_tree: u64) -> ! {
     entry::wait_for_watchdog()
 }
 
-/// A guest's kernel command line: [`GUEST_CMDLINE`], then every `ferrix.*`
-/// word of crosvm's `bootargs`, as many as `buffer` holds.
-fn guest_cmdline<'a>(tree: &Fdt<'_>, buffer: &'a mut [u8]) -> &'a str {
+/// The kernel's command line: `base`, then every `ferrix.*` word of the
+/// device tree's `bootargs`, as many as `buffer` holds.
+///
+/// In a guest, `bootargs` is crosvm's, which `crosvm run -p` adds to. On the
+/// phone it is ABL's: Android's own, and the boot image header's command
+/// line, which `launcher/helper.py` fills for a run that asks for Ferrix's
+/// stat service. Either way only `ferrix.*` words are taken.
+fn command_line<'a>(base: &'a str, tree: &Fdt<'_>, buffer: &'a mut [u8]) -> &'a str {
     let mut used = 0;
-    let words = core::iter::once(GUEST_CMDLINE).chain(
+    let words = core::iter::once(base).chain(
         tree.bootargs()
             .unwrap_or("")
             .split_whitespace()
@@ -103,10 +108,10 @@ fn guest_cmdline<'a>(tree: &Fdt<'_>, buffer: &'a mut [u8]) -> &'a str {
         text.copy_from_slice(word.as_bytes());
         used += space + word.len();
     }
-    buffer
-        .get(..used)
-        .and_then(|line| core::str::from_utf8(line).ok())
-        .unwrap_or(GUEST_CMDLINE)
+    match buffer.get(..used).map(core::str::from_utf8) {
+        Some(Ok(line)) => line,
+        _ => base,
+    }
 }
 
 /// Whether the device tree at `device_tree` is crosvm's: its `stdout-path`
@@ -169,12 +174,13 @@ fn start(device_tree: u64, framebuffer: Framebuffer) -> Result<(), &'static str>
         }
     );
     let randomness = kaslr::gather(&tree);
-    let mut guest_line = [0_u8; 1024];
-    let cmdline = if board::is_guest() {
-        guest_cmdline(&tree, &mut guest_line)
+    let mut line = [0_u8; 1024];
+    let base = if board::is_guest() {
+        GUEST_CMDLINE
     } else {
         CMDLINE
     };
+    let cmdline = command_line(base, &tree, &mut line);
     say!("  kernel command line: {cmdline}");
     load::boot(
         &mut memory,

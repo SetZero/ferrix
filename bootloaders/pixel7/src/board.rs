@@ -25,8 +25,8 @@ pub(crate) const RAMOOPS_CONSOLE_SIZE: u64 = 0x20_0000;
 /// kernel's secondary entry drops each to EL1.
 ///
 /// Anything in `FERRIX_PIXEL7_CMDLINE_EXTRA` when the loader was built is
-/// appended (`build.rs`): ABL's own `bootargs` are Android's, so this is how a
-/// phone run is given, say, `ferrix.init=/sbin/ferrix-statd`.
+/// appended (`build.rs`), and then every `ferrix.*` word of ABL's `bootargs`,
+/// which carry the boot image header's command line (`main.rs`).
 pub(crate) const CMDLINE: &str = concat!(
     "console=ramoops,0xfd3ff000,0x200000 ferrix.fbcon",
     env!("PIXEL7_CMDLINE_EXTRA")

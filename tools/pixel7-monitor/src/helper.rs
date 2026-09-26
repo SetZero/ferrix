@@ -39,9 +39,13 @@ pub fn status() -> Option<serde_json::Value> {
     request("GET", "/status").ok()
 }
 
-/// Ask the helper to boot the phone into Ferrix.
-pub fn boot() -> Result<serde_json::Value, String> {
-    request("POST", "/boot")
+/// Ask the helper to boot the phone into Ferrix, with Ferrix's stat service
+/// for `stats` seconds if that is given.
+pub fn boot(stats: Option<u32>) -> Result<serde_json::Value, String> {
+    match stats {
+        Some(seconds) => request("POST", &format!("/boot?stats={seconds}")),
+        None => request("POST", "/boot"),
+    }
 }
 
 /// The helper's script, in the checkout this app was built from.

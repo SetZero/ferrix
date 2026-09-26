@@ -16,6 +16,12 @@ seen without it.
     POST /boot     answer at once, then: adb reboot bootloader, fastboot stage
                    vendor_boot.img, fastboot boot the image, wait for Android,
                    and save the ramoops record the run left
+    POST /boot?stats=N
+                   the same, with Ferrix's stat service (`statd/`) as pid 1
+                   for N seconds: a copy of the image whose boot image header
+                   carries `ferrix.init=/sbin/ferrix-statd
+                   ferrix.statd.seconds=N`, which ABL puts in the device
+                   tree's bootargs and the loader hands the kernel
 
 Nothing is written to the phone's partitions. `fastboot boot` runs the image
 from RAM, and Ferrix's watchdog brings Android back about 75 seconds later.
@@ -33,6 +39,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import http.server
+import urllib.parse
 import json
 import pathlib
 import subprocess
@@ -42,6 +49,9 @@ import time
 PORT = 47707
 SERIAL = "28171FDH2001RC"
 RUNS = pathlib.Path.home() / ".local/share/ferrix/pixel7"
+HERE = pathlib.Path(__file__).resolve().parent
+MKBOOTIMG = HERE.parent / "mkbootimg.py"
+AVBTOOL = RUNS / "avbtool.py"
 VM_DIR = "/data/local/tmp/ferrix-vm"
 VM_IMAGE = f"{VM_DIR}/ferrix.Image"
 
@@ -129,17 +139,38 @@ class Phone:
             "vm_image": str(self.vm_image()) if self.pushed else None,
         }
 
-    def boot(self) -> str | None:
-        """Start a boot in the background; a reason it cannot, or None."""
+    def boot(self, stats: int | None = None) -> str | None:
+        """Start a boot in the background, with the stat service for `stats`
+        seconds if that is given; a reason it cannot, or None."""
         image = self.image()
         if image is None or not image.is_file():
             return "no boot.img to boot"
         if not self.vendor_boot.is_file():
             return f"no {self.vendor_boot}"
+        if stats is not None:
+            if not 5 <= stats <= 300:
+                return "stats must be 5 to 300 seconds on the phone: the watchdog is fed while Ferrix runs"
+            if not (image.parent / "Image").is_file() or not AVBTOOL.is_file():
+                return "no raw Image beside the boot image, or no avbtool, to add the stat service with"
         if not self.lock.acquire(blocking=False):
             return "a boot is already under way"
-        threading.Thread(target=self.cycle, args=(image,), daemon=True).start()
+        threading.Thread(target=self.cycle, args=(image, stats), daemon=True).start()
         return None
+
+    def with_options(self, image: pathlib.Path, options: str) -> pathlib.Path:
+        """A copy of `image`'s boot image with `options` in its header."""
+        out = RUNS / "launcher-options" / "boot.img"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        steps = (
+            ("python3", str(MKBOOTIMG), str(image.parent / "Image"), str(out), "--cmdline", options),
+            ("python3", str(AVBTOOL), "add_hash_footer", "--image", str(out),
+             "--partition_size", "67108864", "--partition_name", "boot", "--algorithm", "NONE"),
+        )
+        for step in steps:
+            result = run(*step, timeout=120)
+            if result.returncode != 0:
+                raise RuntimeError(f"{pathlib.Path(step[1]).name} failed: {result.stderr.strip()[-200:]}")
+        return out
 
     def wait(self, what: str, done, seconds: float) -> None:
         self.phase = what
@@ -149,15 +180,21 @@ class Phone:
                 raise RuntimeError(f"timed out: {what}")
             time.sleep(1)
 
-    def cycle(self, image: pathlib.Path) -> None:
+    def cycle(self, image: pathlib.Path, stats: int | None = None) -> None:
         started = time.strftime("%Y%m%d-%H%M%S")
         record = RUNS / f"launcher-{started}"
+        booted = image
         try:
+            if stats is not None:
+                self.phase = f"adding the stat service for {stats} s"
+                booted = self.with_options(
+                    image, f"ferrix.init=/sbin/ferrix-statd ferrix.statd.seconds={stats}"
+                )
             self.phase = "rebooting to the bootloader"
             self.adb("reboot", "bootloader")
             self.wait("waiting for fastboot", self.in_fastboot, 90)
             self.phase = "sending Ferrix"
-            for step in (("stage", str(self.vendor_boot)), ("boot", str(image))):
+            for step in (("stage", str(self.vendor_boot)), ("boot", str(booted))):
                 result = run("fastboot", "-s", self.serial, *step, timeout=120)
                 if result.returncode != 0:
                     raise RuntimeError(f"fastboot {step[0]} failed: {result.stderr.strip()}")
@@ -182,6 +219,7 @@ class Phone:
             self.last = {
                 "when": started,
                 "image": str(image),
+                "stats": str(stats) if stats is not None else "",
                 "result": ended.strip(),
                 "seconds": str(seconds),
                 "record": str(record / "run.log"),
@@ -211,10 +249,19 @@ def handler(phone: Phone):
                 self.reply(404, {"error": "no such path"})
 
         def do_POST(self) -> None:
-            if self.path != "/boot":
+            url = urllib.parse.urlsplit(self.path)
+            if url.path != "/boot":
                 self.reply(404, {"error": "no such path"})
                 return
-            refused = phone.boot()
+            query = urllib.parse.parse_qs(url.query)
+            stats = None
+            if "stats" in query:
+                try:
+                    stats = int(query["stats"][0])
+                except ValueError:
+                    self.reply(400, {"error": "stats is a number of seconds"})
+                    return
+            refused = phone.boot(stats)
             if refused:
                 self.reply(409, {"error": refused})
             else:

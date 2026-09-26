@@ -42,11 +42,16 @@ is the watchdog's reset back to Android.
 * **A crosvm guest on the phone**: the monitor's "Stats" choice, or
   `crosvm run -p ferrix.init=/sbin/ferrix-statd -p ferrix.statd.seconds=0 …`;
   the loader passes every `ferrix.*` word of crosvm's `bootargs` on.
-* **A native boot on the phone**: the loader's command line is compiled in,
-  so the options go in when it is built:
-  `FERRIX_PIXEL7_CMDLINE_EXTRA="ferrix.init=/sbin/ferrix-statd ferrix.statd.seconds=20" $P/build-run.sh <name>`.
-  Give it a number of seconds: the kernel feeds the watchdog while it runs,
-  so a service that never ends keeps the phone in Ferrix.
+* **A native boot on the phone**: the monitor's "Boot Ferrix" with "Stats"
+  set, or the helper's `POST /boot?stats=<seconds>`. The helper boots a copy
+  of the image with the options in its boot image header, which ABL puts in
+  the device tree's `bootargs`; the loader hands every `ferrix.*` word of
+  those to the kernel. The options can also be compiled into the loader,
+  with `FERRIX_PIXEL7_CMDLINE_EXTRA="…" $P/build-run.sh <name>`. Either way
+  give it a number of seconds: the kernel feeds the watchdog while it runs,
+  so a service that never ends keeps the phone in Ferrix. Nothing reaches the
+  PC while Ferrix runs, because it has no USB, so the graphs come from the
+  `ramoops` record once Android is back.
 * **QEMU**: `cargo xtask test-boot --arch aarch64 --statd --kernel-option
   ferrix.init=/sbin/ferrix-statd --kernel-option ferrix.statd.seconds=3`.
 

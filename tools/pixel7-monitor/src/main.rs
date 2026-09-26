@@ -27,8 +27,8 @@ struct App {
 }
 
 #[tauri::command]
-fn boot_native() -> Result<serde_json::Value, String> {
-    helper::boot()
+fn boot_native(stats: Option<u32>) -> Result<serde_json::Value, String> {
+    helper::boot(stats)
 }
 
 #[tauri::command]

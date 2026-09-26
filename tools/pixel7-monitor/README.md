@@ -39,8 +39,10 @@ USB with adb authorised, and nothing else: no Claude, no terminal.
   * **Busiest processes**: a table of the top five.
 
   A VM run with "Stats" on starts it as pid 1 and the tab fills live. A
-  native boot built with it (`statd/README.md`) leaves its samples in the
-  `ramoops` record, and loading that run graphs the whole run. The console
+  native boot with "Stats" on runs it for that long ("until stopped" is a
+  minute there). The phone is off USB meanwhile, since Ferrix has no USB,
+  and its samples are in the `ramoops` record. The monitor loads that record
+  when Android is back and graphs the whole run. The console
   hides the `FERRIX-STAT` lines unless "stat lines" is ticked.
 * **Runs**: every `run.log` under `~/.local/share/ferrix/pixel7`, newest
   first, with its result. Clicking one loads it into the console.
