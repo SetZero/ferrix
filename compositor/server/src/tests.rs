@@ -4361,9 +4361,8 @@ fn a_drag_over_a_window_offers_it_every_type() {
         [core::wl_data_device::event::MOTION]
     );
 
-    // Leaving takes the offer with it: the protocol says the `leave`
-    // destroys it, and a client that kept it would hold an object the
-    // server has taken back.
+    // Leaving ends the offer but does not take it back: the client destroys
+    // it, and until then it is a live object the client may send to.
     client.drag_leave();
     assert_eq!(
         sent(&mut client)
@@ -4373,7 +4372,59 @@ fn a_drag_over_a_window_offers_it_every_type() {
         [core::wl_data_device::event::LEAVE]
     );
     assert_eq!(client.drag_offer(), None);
-    assert!(client.objects().get(offer).is_none());
+    assert!(client.objects().get(offer).is_some());
+}
+
+/// An offer the drag has left is the client's to destroy, and until it does
+/// it may still be sent to.
+///
+/// `wl_data_device.leave` says the client "must destroy the `wl_data_offer`
+/// introduced at enter time at this point" -- the client, by its own
+/// `destroy`. Chrome, dragging its own selected text, sent
+/// `wl_data_offer.set_actions` in the same breath as the `leave` arrived;
+/// a server that had already let the offer go answered with
+/// `invalid_object` and ended the connection, and Chrome with it. What an
+/// offer that has been left asks for is nobody's any more, so the
+/// compositor is not told.
+#[test]
+fn an_offer_the_drag_left_can_still_be_sent_to_and_destroyed() {
+    let mut client = dragging_client();
+    let offer = client
+        .drag_enter(ObjectId(20), (0.0, 0.0), &["text/plain".to_owned()], 3)
+        .expect("an offer");
+    let _ = sent(&mut client);
+    client.drag_leave();
+    let _ = sent(&mut client);
+    let _ = client.take_events();
+
+    let mut bytes = request(
+        offer.0,
+        core::wl_data_offer::request::SET_ACTIONS,
+        &[ArgType::Uint, ArgType::Uint],
+        &[Arg::Uint(1), Arg::Uint(1)],
+    );
+    bytes.extend(request(
+        offer.0,
+        core::wl_data_offer::request::ACCEPT,
+        &[ArgType::Uint, ArgType::Str { nullable: true }],
+        &[Arg::Uint(1), Arg::Str(None)],
+    ));
+    bytes.extend(request(
+        offer.0,
+        core::wl_data_offer::request::DESTROY,
+        &[],
+        &[],
+    ));
+    assert_eq!(client.read(&bytes, &[]), bytes.len());
+    assert_eq!(client.fatal(), None);
+    assert!(
+        !client.take_events().iter().any(|event| matches!(
+            event,
+            Event::DragActions { .. } | Event::DragAccepted { .. }
+        )),
+        "a left offer steers no drag"
+    );
+    assert!(client.objects().get(offer).is_none(), "the destroy took it");
 }
 
 /// What the target says comes back for the compositor: the type it will
@@ -4431,14 +4482,28 @@ fn the_target_says_what_it_will_take() {
             .any(|event| matches!(event, Event::DragFinished { .. }))
     );
 
-    // And the drop, which is what tells the target it may take it.
+    // And the drop, which is what tells the target it may take it. The drag
+    // leaves with it, and the offer stays the one to take the data from.
     assert!(client.drag_drop());
     assert_eq!(
         sent(&mut client)
             .iter()
             .map(|event| event.opcode)
             .collect::<Vec<u16>>(),
-        [core::wl_data_device::event::DROP]
+        [
+            core::wl_data_device::event::DROP,
+            core::wl_data_device::event::LEAVE
+        ]
+    );
+    assert_eq!(client.drag_offer(), Some(offer));
+    let finish = request(offer.0, core::wl_data_offer::request::FINISH, &[], &[]);
+    assert_eq!(client.read(&finish, &[]), finish.len());
+    assert!(
+        client
+            .take_events()
+            .iter()
+            .any(|event| matches!(event, Event::DragFinished { .. })),
+        "a dropped offer is not a left one: its `finish` counts"
     );
 }
 

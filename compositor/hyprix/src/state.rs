@@ -64,6 +64,26 @@ pub struct Slot {
 }
 
 impl Slot {
+    /// A fresh client on one end of a socket pair, offered the globals the
+    /// compositor offers with one screen, for a test that drives a slot the
+    /// way the loop does.
+    #[cfg(test)]
+    pub(crate) fn for_test() -> Self {
+        let (ours, _theirs) = std::os::unix::net::UnixStream::pair().expect("a socket pair");
+        Self {
+            client: Client::new(globals(1)),
+            connection: Connection::new(ours).expect("a connection"),
+            pools: BTreeMap::new(),
+            retired: std::collections::BTreeSet::new(),
+            windows: Vec::new(),
+            layers: Vec::new(),
+            firsts: BTreeMap::new(),
+            pid: 0,
+            gone: false,
+            serial: 1,
+        }
+    }
+
     /// Which connection this is of all the compositor has had.
     pub(crate) const fn serial(&self) -> u64 {
         self.serial
@@ -736,7 +756,10 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
             if actions
                 .iter()
                 .any(|action| matches!(action, crate::seat::Action::Pointer { .. }))
-                && (carried.is_some() || screens.iter().any(|screen| !screen.plane.on))
+                && (carried
+                    .as_ref()
+                    .is_some_and(crate::dragging::Carried::holding)
+                    || screens.iter().any(|screen| !screen.plane.on))
             {
                 changed = true;
             }
@@ -748,7 +771,9 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                 &sources,
                 now,
                 follow_mouse,
-                carried.is_some(),
+                carried
+                    .as_ref()
+                    .is_some_and(crate::dragging::Carried::holding),
             );
             let mut pending = Vec::new();
             for asked in done.dispatch {
@@ -789,7 +814,9 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                     &sources,
                     now,
                     follow_mouse,
-                    carried.is_some(),
+                    carried
+                        .as_ref()
+                        .is_some_and(crate::dragging::Carried::holding),
                 );
                 changed = true;
             }
@@ -892,7 +919,9 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                     &sources,
                     now,
                     follow_mouse,
-                    carried.is_some(),
+                    carried
+                        .as_ref()
+                        .is_some_and(crate::dragging::Carried::holding),
                 );
                 changed = true;
             }
@@ -982,7 +1011,9 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                 &sources,
                 now,
                 follow_mouse,
-                carried.is_some(),
+                carried
+                    .as_ref()
+                    .is_some_and(crate::dragging::Carried::holding),
             );
             changed = true;
         }
@@ -1357,15 +1388,18 @@ pub fn run_with(options: &Options, report: &mut dyn FnMut(&str)) -> Result<Strin
                 };
                 // The surface a drag is carrying, drawn at the pointer:
                 // that is what makes a drag look like one.
-                let drag_icon = carried.as_ref().filter(|_| !dark).and_then(|held| {
-                    Some(crate::frame::Placed {
-                        client: held.client,
-                        surface: held.icon?,
-                        rect: Rect::new(cursor_at.0, cursor_at.1, 0, 0),
-                        above: true,
-                        rules: crate::frame::LayerRules::default(),
-                    })
-                });
+                let drag_icon = carried
+                    .as_ref()
+                    .filter(|held| !dark && held.holding())
+                    .and_then(|held| {
+                        Some(crate::frame::Placed {
+                            client: held.client,
+                            surface: held.icon?,
+                            rect: Rect::new(cursor_at.0, cursor_at.1, 0, 0),
+                            above: true,
+                            rules: crate::frame::LayerRules::default(),
+                        })
+                    });
                 // The pointer, unless the session is locked: a lock screen
                 // draws its own and the compositor's arrow over it would be
                 // two pointers.
@@ -2454,14 +2488,21 @@ fn serve(
     };
     let outgoing = slot.client.take_outgoing();
     if !outgoing.bytes.is_empty()
-        && slot
-            .connection
-            .send(&outgoing.bytes, &outgoing.descriptors)
-            .is_err()
+        && let Err(error) = slot.connection.send(&outgoing.bytes, &outgoing.descriptors)
     {
+        report(&format!(
+            "hyprix: client {index} could not be sent to, and is dropped: {error:?}"
+        ));
         slot.gone = true;
     }
-    if slot.client.is_finished() {
+    // A client the server has sent a protocol error is ended by it, and the
+    // client's own log names only the request it was sending when its
+    // socket closed -- which is seldom the one that was wrong.
+    if let Some(fatal) = slot.client.fatal() {
+        report(&format!(
+            "hyprix: client {index} broke the protocol, and is dropped: {}",
+            fatal.message()
+        ));
         slot.gone = true;
     }
     Ok(changed)
@@ -4736,6 +4777,7 @@ fn carry_drag(
                     mimes,
                     actions,
                     over: None,
+                    at: None,
                     accepted: None,
                     action: 0,
                     dropped: false,
@@ -4783,6 +4825,11 @@ fn carry_drag(
     let Some(held) = carried.as_mut() else {
         return changed;
     };
+    // A drag that has dropped is waiting for the target's `finish` and
+    // nothing else: the pointer is the windows' again.
+    if !held.holding() {
+        return changed;
+    }
     // Where the pointer is now, without moving its own focus: a window told
     // `wl_pointer.enter` mid-drag would think the person had clicked it.
     let at = seat.pointer();
@@ -4792,12 +4839,19 @@ fn carry_drag(
     // this is the one place the compositor asks: a drag ends when nothing
     // is held down any more.
     if !held.dropped && !seat.buttons_held() {
-        held.dropped(slots);
-        report("hyprix: the drag was dropped");
+        let taken = held.dropped(slots);
+        report(if taken {
+            "hyprix: the drag was dropped, and taken"
+        } else {
+            "hyprix: the drag was dropped on nothing that takes it"
+        });
         changed = true;
-        // A drag with no source is an icon and nothing else: there is
-        // nobody to say `finish` to, so it ends here.
-        if held.source.is_none()
+        // A drop nobody took, and a drag with no source -- an icon and
+        // nothing else -- have nobody to say `finish`, so they end here.
+        // Waiting for one kept the drag on for good: its icon followed the
+        // pointer, and no window was sent the pointer again, since none is
+        // while a drag is carried.
+        if (!taken || held.source.is_none())
             && let Some(mut held) = carried.take()
         {
             held.ended(slots, false);

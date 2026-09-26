@@ -36,6 +36,12 @@ pub struct Dragging {
     pub offer: Option<ObjectId>,
     /// Which surface the offer was entered on.
     pub surface: Option<ObjectId>,
+    /// Offers a drag has left that the client has not yet destroyed. They
+    /// are live objects until it does, and anything sent to one is ignored.
+    pub left: Vec<ObjectId>,
+    /// The offer a drop was made on. The drag has left it, but it is the
+    /// one the client takes the data from and says `finish` on.
+    pub dropped: Option<ObjectId>,
 }
 
 impl Client {
@@ -132,10 +138,8 @@ impl Client {
                 Arg::Object(offer),
             ],
         );
-        self.dragging = Dragging {
-            offer: Some(offer),
-            surface: Some(surface),
-        };
+        self.dragging.offer = Some(offer);
+        self.dragging.surface = Some(surface);
         Some(offer)
     }
 
@@ -161,9 +165,13 @@ impl Client {
 
     /// The drag left this client's surface.
     ///
-    /// The offer goes with it: the protocol says it is destroyed by the
-    /// `leave`, and a client that kept it would be holding an object the
-    /// compositor has taken back.
+    /// The offer is over, but it is not gone: `leave` says the client "must
+    /// destroy the `wl_data_offer` introduced at enter time at this point",
+    /// and until its `destroy` arrives the offer is a live object it may
+    /// still send to. A `set_actions` already on its way when the `leave`
+    /// went out is the ordinary case -- Chrome sends one on every motion --
+    /// and a server that had let the offer go answered it with
+    /// `invalid_object`, which ended the connection and Chrome with it.
     pub fn drag_leave(&mut self) {
         let Some(device) = self.devices.first().copied() else {
             return;
@@ -175,27 +183,53 @@ impl Client {
         let _ = self
             .out
             .write(device, wl_data_device::event::LEAVE, &[], &[]);
-        self.destroy(offer, Role::DataOffer);
+        self.dragging.left.push(offer);
+    }
+
+    /// The client destroyed `id`; an offer it had been left with is done.
+    pub(super) fn forget_drag(&mut self, id: ObjectId, role: Role) {
+        if role == Role::DataOffer {
+            self.dragging.left.retain(|left| *left != id);
+            if self.dragging.dropped == Some(id) {
+                self.dragging.dropped = None;
+            }
+        }
     }
 
     /// The button came up over this client: it may take what was dragged.
+    ///
+    /// The drag leaves as it drops, which is what Hyprland and wlroots do:
+    /// the pointer is the windows' again at once, and the offer stays for
+    /// the client to take the data from and say `finish` on. A compositor
+    /// that sent no `leave` and waited for the `finish` instead held the
+    /// drag on for good when Chrome dropped its own text on its own page --
+    /// Chrome never said `finish`, and no window was sent the pointer again.
     pub fn drag_drop(&mut self) -> bool {
         let Some(device) = self.devices.first().copied() else {
             return false;
         };
-        if self.dragging.offer.is_none() {
+        let Some(offer) = self.dragging.offer.take() else {
             return false;
-        }
+        };
+        self.dragging.surface = None;
         let _ = self
             .out
             .write(device, wl_data_device::event::DROP, &[], &[]);
+        let _ = self
+            .out
+            .write(device, wl_data_device::event::LEAVE, &[], &[]);
+        self.dragging.dropped = Some(offer);
         true
     }
 
-    /// The offer this client holds for a drag, if it holds one.
+    /// The offer this client holds for a drag, if it holds one: the one
+    /// being dragged over it, or the one it was dropped on.
     #[must_use]
     pub const fn drag_offer(&self) -> Option<ObjectId> {
-        self.dragging.offer
+        match self.dragging.offer {
+            Some(offer) => Some(offer),
+            None => self.dragging.dropped,
+        }
     }
 
     /// Forget the drag without telling the client, which is what a drop
@@ -203,6 +237,7 @@ impl Client {
     pub const fn drag_done(&mut self) {
         self.dragging.offer = None;
         self.dragging.surface = None;
+        self.dragging.dropped = None;
     }
 
     /// Tell this client's source which type the target said it would take,
@@ -268,6 +303,19 @@ impl Client {
         opcode: u16,
         args: &[Arg<'_>],
     ) -> bool {
+        // What an offer the drag has left says is about a drag that is
+        // over, and steering the next one with it would be wrong.
+        let left = role == Role::DataOffer && self.dragging.left.contains(&sender);
+        if left
+            && matches!(
+                opcode,
+                wl_data_offer::request::ACCEPT
+                    | wl_data_offer::request::SET_ACTIONS
+                    | wl_data_offer::request::FINISH
+            )
+        {
+            return true;
+        }
         match (role, opcode) {
             (Role::DataSource, wl_data_source::request::SET_ACTIONS) => {
                 let Some(actions) = args.first().and_then(Arg::as_uint) else {
