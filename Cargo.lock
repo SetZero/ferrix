@@ -489,6 +489,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ferrix-usbdev"
+version = "0.1.0"
+dependencies = [
+ "ferrix-blkring",
+ "ferrix-dwc3",
+ "ferrix-native-abi",
+ "ferrix-rt",
+]
+
+[[package]]
 name = "ferrix-usbhid"
 version = "0.1.0"
 dependencies = [

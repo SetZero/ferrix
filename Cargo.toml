@@ -88,6 +88,7 @@ members = [
     "native/drivers/input",
     "native/drivers/snd",
     "native/drivers/usbhid",
+    "native/drivers/usbdev",
     "native/drivers/gc400",
     "native/drivers/vport",
     "native/devmgr",
