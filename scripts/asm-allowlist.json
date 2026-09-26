@@ -64,7 +64,7 @@
     {
       "file": "kernel/src/arch/aarch64/smp.rs",
       "max_lines": 30,
-      "reason": "The secondary core entry. PSCI CPU_ON starts a core at a physical address with its MMU off, and everything the kernel runs on is in the upper half: the first instructions have to install MAIR/TCR/TTBR0/TTBR1 and turn the MMU on while executing at an address only an identity map makes meaningful, then branch to a virtual one. The loader's switch again, once per core, and no Rust function can be entered with the MMU off and no stack."
+      "reason": "The secondary core entry. PSCI CPU_ON starts a core at a physical address with its MMU off, and everything the kernel runs on is in the upper half: the first instructions have to install MAIR/TCR/TTBR0/TTBR1 and turn the MMU on while executing at an address only an identity map makes meaningful, then branch to a virtual one. The loader's switch again, once per core, and no Rust function can be entered with the MMU off and no stack. PSCI starts a core at the highest non-secure level, which on a machine with EL2 -- TF-A on the Pixel 7 -- is EL2, so the sequence first checks CurrentEL and, at EL2, makes EL1 a plain kernel's level (HCR_EL2, CNTHCTL_EL2, CNTVOFF_EL2, CPTR_EL2, HSTR_EL2, VPIDR/VMPIDR_EL2, ICC_SRE_EL2 where ID_AA64PFR0_EL1 says the GIC has system registers, SCTLR_EL1) and drops to it with an eret, as bootloaders/pixel7/src/entry.rs does for the boot core. That drop is the price of starting cores on real firmware rather than QEMU's, and it is register writes and an eret at a physical address: nothing Rust can say."
     },
     {
       "file": "kernel/src/arch/aarch64/speculation.rs",

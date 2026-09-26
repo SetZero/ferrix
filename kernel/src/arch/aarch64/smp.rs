@@ -138,13 +138,54 @@ pub(crate) fn hardware_id() -> u64 {
 // All eight words are loaded *before* the MMU goes on. After it, `x0` is a
 // physical address with nothing mapped at it: the identity map covers this
 // code and nothing else.
+//
+// PSCI starts a core at the highest non-secure level there is. QEMU's own
+// PSCI, called from EL1 on a machine without EL2, starts it at EL1; TF-A on
+// the Pixel 7 starts it at EL2, where the kernel's registers mean nothing. So
+// a core that arrives at EL2 first makes EL1 what the Pixel 7 loader made it
+// for the boot core (`bootloaders/pixel7/src/entry.rs`) -- no traps, the
+// counter and physical timer reachable, the GIC's system registers allowed
+// where the CPU has them, the MMU and caches off -- and drops to it. `x0`
+// survives the drop untouched.
 core::arch::global_asm!(
     r#"
 .section .text
 .balign 64
 .globl ferrix_secondary_entry
 ferrix_secondary_entry:
-    msr  spsel, #1
+    mrs  x9, CurrentEL
+    cmp  x9, #8
+    b.ne 2f
+    mov  x9, #0x80000000
+    msr  hcr_el2, x9
+    isb
+    mov  x9, #3
+    msr  cnthctl_el2, x9
+    msr  cntvoff_el2, xzr
+    mov  x9, #0x33ff
+    msr  cptr_el2, x9
+    msr  hstr_el2, xzr
+    mrs  x9, midr_el1
+    msr  vpidr_el2, x9
+    mrs  x9, mpidr_el1
+    msr  vmpidr_el2, x9
+    mrs  x9, id_aa64pfr0_el1
+    ubfx x9, x9, #24, #4
+    cbz  x9, 1f
+    mrs  x9, icc_sre_el2
+    orr  x9, x9, #0x1
+    orr  x9, x9, #0x8
+    msr  icc_sre_el2, x9
+    isb
+1:  movz x9, #0x0800
+    movk x9, #0x30d0, lsl #16
+    msr  sctlr_el1, x9
+    adr  x9, 2f
+    msr  elr_el2, x9
+    mov  x9, #0x3c5
+    msr  spsr_el2, x9
+    eret
+2:  msr  spsel, #1
     ldp  x1, x2, [x0, #0]
     ldp  x3, x4, [x0, #16]
     ldp  x5, x6, [x0, #32]
