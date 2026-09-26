@@ -73,12 +73,14 @@ rustflags = [
 #     relocation firmware can apply, and nothing asks for an interpreter;
 #   * `-znotext`, because read-only data holds absolute pointers too, and a PE
 #     loader applies relocations before it applies section permissions.
+#
+# The link script is named by `boot/build.rs`, absolutely, not here: see why
+# there.
 [target.armv7-unknown-linux-musleabi]
 linker = "rust-lld"
 rustflags = [
     "-C", "linker-flavor=ld.lld",
     "-C", "link-self-contained=no",
-    "-C", "link-arg=-Tboot/linker/armv7a.ld",
     "-C", "link-arg=-pie",
     "-C", "link-arg=--no-dynamic-linker",
     "-C", "link-arg=-znotext",
