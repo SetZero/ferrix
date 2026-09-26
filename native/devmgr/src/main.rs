@@ -239,17 +239,19 @@ fn died_status(exit: Exit) -> i32 {
 /// Whether a driver of `kind` is started again when it dies
 /// (`docs/DEVMGR.md` §4).
 ///
-/// A display or sound driver only: their cores wait for a dead driver's
-/// claim to go (`kernel/src/claim.rs`), publish the card again under the
-/// number it had, and give a dead driver's quarantined pins back only once
-/// the next one has reset the device (`kernel/src/object/pin.rs`). A disk's
-/// death under a mounted filesystem is still a dead disk: what a filesystem
-/// does with a device that went and came back is its own decision. The net
-/// and input cores wait for the claim too, but do not yet give a dead
-/// driver's quarantined pins back at the next HELLO, and the serial port has
-/// no core to wait for.
+/// A display, sound, network, input or disk driver. Each of their cores
+/// waits for a dead driver's claim to go (`kernel/src/claim.rs`), gives the
+/// device back as it was -- the card or event node under the lowest free
+/// number, the network interface parked with its addresses, the disk parked
+/// with its requests queued -- and gives a dead driver's quarantined pins
+/// back only once the next one has reset the device and sent HELLO
+/// (`kernel/src/object/pin.rs`). The serial port has no core to wait for,
+/// and the USB host, GPU engine and gadget kinds are not restarted yet.
 const fn restarted(kind: Kind) -> bool {
-    matches!(kind, Kind::Display | Kind::Sound)
+    matches!(
+        kind,
+        Kind::Display | Kind::Sound | Kind::Net | Kind::Input | Kind::Block
+    )
 }
 
 /// A driver devmgr started, and what it keeps of it.

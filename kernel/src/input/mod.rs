@@ -397,6 +397,9 @@ fn take_up(start: &Start) -> Option<Arc<InputDevice>> {
 #[inline(never)]
 fn accept(start: &Start, message: &ChannelMessage) -> Result<Arc<InputDevice>, Refusal> {
     let session = judge(start, message)?;
+    // The driver reset the device before it sent HELLO, so what a dead one's
+    // pins kept from the allocator can go back (`object::pin`'s quarantine).
+    crate::object::pin::quarantine_release(&start.device);
 
     // The protocol has no refusal for memory; a malformed start is the
     // nearest it has, as the net ring's.

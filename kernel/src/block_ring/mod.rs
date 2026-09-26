@@ -706,6 +706,16 @@ fn take_up<'s>(
         park(start.location, name, disk, registration);
         return Err(Refusal::LocationInUse);
     }
+    // The driver reset the device before it sent HELLO, so what a dead one's
+    // pins kept from the allocator can go back (`object::pin`'s quarantine).
+    let node = CLAIMS
+        .lock()
+        .iter()
+        .find(|claim| claim.id == start.id)
+        .map(|claim| Arc::clone(&claim.device));
+    if let Some(node) = node {
+        object::pin::quarantine_release(&node);
+    }
     // Served from before READY goes out, not after: the driver may act on
     // READY, and devmgr may ask after the device, the instant it is sent.
     set_served(start.id, Some((start.location, Arc::clone(&start.control))));

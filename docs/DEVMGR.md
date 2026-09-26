@@ -183,7 +183,8 @@ DIED     devmgr -> kernel, 16 bytes
    process handle (`process_status`, `docs/INIT.md` K6): `137` for a
    `SIGKILL`, `1` for a driver that exited 1. One whose status cannot be read
    is reported as `137`, as every death was before K6;
-3. starts a **display** or **sound** driver again, once the quiesce
+3. starts a **display**, **sound**, **network**, **input** or **disk**
+   driver again, once the quiesce
    succeeded: in a new job, on a duplicate of its kept device handle, with
    the START it was first given, and waits for PUBLISHED as at boot. The
    kernel numbers cards and render nodes lowest-free, so the card comes back
@@ -212,53 +213,37 @@ RESTARTED devmgr -> kernel, 16 bytes
    not a rate: eight restarts per device, after which the device stays
    quiesced, as does one whose restarted driver dies before it publishes.
 
-Every other kind is not started again. A dead disk driver is a dead disk,
-said on the console, and the device stays quiesced. The net and input cores
-wait for a dead driver's claim in the quiesce, and are ready for a driver
-started again. A net interface is parked with its index, name and addresses
-until the next driver's HELLO takes it up (`docs/NET-RING.md`). An input
-device takes the lowest free `event<N>`: a device whose driver dies alone
-comes back under its number, but when two die together the one that comes
-back first takes the lower. A disk is parked too: the block ring keeps its
-node published and its requests queued, and replays them to the next driver
-for the same location, so a filesystem mounted on it never sees the death
-(`docs/BLOCK-RING.md` §6.3). They are not in `restarted` yet: a dead
-driver's pins are quarantined by the kernel, but those cores do not yet give
-them back at the next driver's HELLO (`object::pin::quarantine_release`).
-The serial port (`vport`) has no core to wait for.
+What each kind gets back (2026-09-27, T0 of the live kernel update plan):
 
-**Where it stands (2026-09-26).** The last step is ferrix-90's, after its pin
-quarantine lands. `Kind::Net`, `Kind::Input` and `Kind::Block` join
-`restarted()`. Each core calls `object::pin::quarantine_release(node)` where
-it accepts the new driver's HELLO: after that driver's bring-up reset, not at
-`control_create`. Each kind gets a `test-restart` row (x86-64 only, since
-`kill` comes from uutils). A disk's row runs on the x86-64 btrfs root:
-kill the driver, read and write a file after it comes back, and run
-`btrfs check` on the image afterwards. The sentence above about a dead disk
-changes with it.
+* A **network** interface is parked with its index, name and addresses until
+  the next driver's HELLO takes it up (`docs/NET-RING.md`), so a socket
+  bound to it sees only the carrier go and come back.
+* An **input** device takes the lowest free `event<N>`: a device whose
+  driver dies alone comes back under its number, but when two die together
+  the one that comes back first takes the lower.
+* A **disk** is parked too: the block ring keeps its node published and its
+  requests queued, and replays them to the next driver for the same
+  location, so a filesystem mounted on it never sees the death
+  (`docs/BLOCK-RING.md` §6.3). Replaying the dead driver's in-flight writes
+  is safe because a block write is idempotent at its LBA and the replay keeps
+  the queue's epoch and barrier order. A disk no driver takes up within 30
+  seconds answers new requests with EIO, and each waiting request keeps its
+  own 30-second patience. Every disk driver killed under a btrfs root leaves
+  `/` writable, and `btrfs check` clean.
 
-Three things are already in place for that step:
-
-* A net interface is parked, not removed. The new driver's HELLO must carry
-  the same name and hardware address, or the parked interface is replaced
-  and loses its addresses.
-* Input numbers are lowest-free, and a USB host's node takes up to eight
-  claims at once (`claim_up_to`). A core whose channel carries DMA memory
-  must stay at one claim per device (`docs/certification/ITEM.md`).
-* `SERVERS` in `syscall/native.rs` holds eight quiesce servers and six are
-  registered: block, net, display, render, input and sound. Another core with
-  a claim is a seventh.
-
-Before a kind joins, check whether its device's reset leaves in-flight
-buffers queued. QEMU's snd does, and its driver drains before HELLO; check
-virtio-net's receive queue. `Port`, `Engine` and `Gadget` stay open. `devmgr`
-itself stays fatal until the kernel can offer a new `devmgr` the devices
-again (`docs/INIT.md` L12).
+Each core gives a dead driver's quarantined pins back only once it has
+accepted the next driver's HELLO, which that driver sends after resetting
+the device (`object::pin::quarantine_release`). Every other kind is not
+started again: the serial port (`vport`) has no core to wait for, and the
+USB host (`usbhid`), the GPU engine (`gc400`) and the gadget (`usbdev`) stay
+quiesced after their driver dies. `devmgr` itself stays fatal until the
+kernel can offer a new `devmgr` the devices again (`docs/INIT.md` L12).
 
 It began as a bug. With no restart, `kill -9` of the `gpu` driver under the
 desktop took the card away for good, the compositor ended on `ENODEV`, and
 the compositor was init, so the machine powered off.
-`cargo xtask test-restart` (a shell kills it twice) and
+`cargo xtask test-restart` (a shell kills it twice; `--boot input`, `net`,
+`blk` or `all` for the other kinds, the disk's on a btrfs root) and
 `cargo xtask test-compositor --boot restart` (a script kills it twice under
 hyprix) are the gates. For sound, `cargo xtask test-audio`'s restart boot
 kills `snd` twice under a running stream, requires the quarantine to have

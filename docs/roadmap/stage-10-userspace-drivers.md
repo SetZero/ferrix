@@ -702,8 +702,12 @@ pixel). A sound driver is started again the same way (2026-09-26), gated by
 mapped, their frames held, until the device's core accepts the next driver's
 HELLO (`kernel/src/object/pin.rs`, finding F-38): QEMU writes a dead
 driver's buffers late, and those writes must not reach frames handed on.
-**Still to do:** the net, input and serial cores' claims and their calls to
-`object::pin::quarantine_release`, so their drivers can be restarted too; a GPU renderer that comes back, since hyprix
+Network, input and disk drivers are started again too (2026-09-27, T0 of
+the live kernel update plan): a network interface is parked with its
+addresses, and a disk with its requests queued, for the next driver to take
+up, so a btrfs root survives every disk driver being killed. Gated by
+`cargo xtask test-restart --boot all`. **Still to do:** the serial port,
+USB host, GPU engine and gadget kinds; a GPU renderer that comes back, since hyprix
 draws in software after a restart; and a card with two connectors, whose
 screens would each try to reopen it.
 
