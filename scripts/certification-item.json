@@ -259,45 +259,15 @@
       "from the audit's 62 to the 29 before this note, was a lower bound. The",
       "27 entries added that day were there all along: nested `use` groups,",
       "paths through `use` and sibling `mod` names, and code the old string",
-      "pattern had read as a literal (docs/certification/FINDINGS.md, A)."
+      "pattern had read as a literal (docs/certification/FINDINGS.md, A).",
+      "",
+      "Empty since 2026-09-26, when W-5 closed F-07, F-09 and F-33, the last",
+      "three findings with entries here. Empty is a measurement by the",
+      "resolving gate, not a default: the list stays, so that a new upward",
+      "reference has to be argued into it against a finding, and a closed one",
+      "cannot come back unrecorded."
     ],
-    "entries": [
-      {
-        "file": "arch/x86_64/paranoid.rs",
-        "references": "fs",
-        "from_ring": "core",
-        "to_ring": "load",
-        "finding": "F-33"
-      },
-      {
-        "file": "arch/x86_64/paranoid.rs",
-        "references": "syscall::exec",
-        "from_ring": "core",
-        "to_ring": "load",
-        "finding": "F-33"
-      },
-      {
-        "file": "arch/x86_64/paranoid.rs",
-        "references": "syscall::image",
-        "from_ring": "core",
-        "to_ring": "load",
-        "finding": "F-33"
-      },
-      {
-        "file": "arch/x86_64/paranoid.rs",
-        "references": "syscall::load",
-        "from_ring": "core",
-        "to_ring": "load",
-        "finding": "F-33"
-      },
-      {
-        "file": "arch/x86_64/paranoid.rs",
-        "references": "syscall::process",
-        "from_ring": "core",
-        "to_ring": "load",
-        "finding": "F-33"
-      }
-    ]
+    "entries": []
   },
   "composition_root": {
     "//": [

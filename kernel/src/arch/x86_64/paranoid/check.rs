@@ -1,0 +1,293 @@
+//! The paranoid entries' boot check: an NMI in the kernel, and hardware
+//! breakpoints in the `SYSCALL` trampoline's ring-0 stretches and on the
+//! `#DB` handler's own path, each survived where it lands.
+//!
+//! Verification, not the entry: a file of its own so that the manifest counts
+//! it as the test it is (`scripts/certification-item.json`,
+//! `test_file_patterns`). The system call window's check runs a real program
+//! -- [`super::super::USER_TEST_PROGRAM`], built into an ELF and loaded by
+//! the Linux personality's loader -- because only a program's own `syscall`
+//! reaches the trampoline with its stack and `GS`. That is a fixture reached
+//! from the load ring, which a verification file may do and the core's
+//! product code may not (`docs/certification/FINDINGS.md`, F-33): the entry
+//! it checks names nothing above the core.
+//!
+//! A child of the entry's module, so it reads the entry's counters without
+//! the entry exporting them.
+
+use core::hint::spin_loop;
+use core::sync::atomic::Ordering;
+
+use ferrix_sched::{CpuSet, NICE_0_WEIGHT};
+use ferrix_sync::IrqControl;
+
+use super::super::cpu;
+use super::{BREAKPOINTS, FOREIGN_GS, HOOK_RUNS, NMIS, debug_hook};
+use crate::console::println;
+use crate::sync::SpinLock;
+
+/// The instruction the nesting check breaks on first.
+#[inline(never)]
+fn breakpoint_target() -> u64 {
+    core::hint::black_box(HOOK_RUNS.load(Ordering::Relaxed))
+}
+
+/// `DR7`'s local enable for `slot`. The slot's type and length fields left
+/// zero mean an instruction breakpoint, one byte.
+const fn dr7_local(slot: usize) -> u64 {
+    1 << (slot * 2)
+}
+
+/// Kernel `#DB`s taken so far for breakpoint `slot`.
+fn hits(slot: usize) -> u64 {
+    BREAKPOINTS
+        .get(slot)
+        .map_or(0, |count| count.load(Ordering::Relaxed))
+}
+
+unsafe extern "C" {
+    /// The trampoline's `sysretq`, after the `swapgs` back, still on the
+    /// program's stack.
+    static ferrix_syscall_sysret: [u8; 0];
+}
+
+/// How long the system call window check may take, program and all.
+const WINDOW_PATIENCE_NANOS: u64 = 30_000_000_000;
+
+/// How long an NMI sent to this processor has to arrive.
+const NMI_PATIENCE_NANOS: u64 = 1_000_000_000;
+
+/// What the pinned task of [`check_system_call_window`] found: the program's
+/// status, or why it has none. `None` while it runs.
+static WINDOW: SpinLock<Option<Result<i32, &'static str>>> = SpinLock::new(None);
+
+/// The boot checks for these entries, each of which halts the machine or
+/// fails if the entry is not there.
+///
+/// # Errors
+///
+/// What failed, for the stage 3 report.
+pub(crate) fn run() -> Result<(), &'static str> {
+    let nmis = check_nmi()?;
+    let (entries, returns, status) = check_system_call_window()?;
+    let hook_runs = check_breakpoints_do_not_nest()?;
+    println!(
+        "  nmi      {nmis} NMI sent to this processor with interrupts masked was taken on its \
+         own stack and returned from"
+    );
+    println!(
+        "  debug    {entries} breakpoints on the system call entry and {returns} on its \
+         sysretq, each on the program's stack, found the kernel's GS; the program exited \
+         with {status}"
+    );
+    println!(
+        "  debug    a breakpoint on code the #DB handler runs did not fire inside it: \
+         {hook_runs} handler runs, one stack"
+    );
+    Ok(())
+}
+
+/// An NMI taken in the kernel is survived.
+///
+/// Sent to this processor through its own local APIC with interrupts masked,
+/// which an NMI ignores. Without the paranoid entry vector 2 is fatal.
+fn check_nmi() -> Result<u64, &'static str> {
+    let before = NMIS.load(Ordering::Relaxed);
+    let foreign = FOREIGN_GS.load(Ordering::Relaxed);
+
+    let saved = <super::super::Irq as IrqControl>::disable();
+    let sent = super::super::apic::send_nmi_to_self();
+    let deadline = crate::timer::now_nanos().saturating_add(NMI_PATIENCE_NANOS);
+    while sent.is_ok()
+        && NMIS.load(Ordering::Relaxed) == before
+        && crate::timer::now_nanos() < deadline
+    {
+        spin_loop();
+    }
+    <super::super::Irq as IrqControl>::restore(saved);
+
+    sent?;
+    let taken = NMIS.load(Ordering::Relaxed).wrapping_sub(before);
+    if taken == 0 {
+        return Err("an NMI sent to this processor never arrived");
+    }
+    if FOREIGN_GS.load(Ordering::Relaxed) != foreign {
+        return Err("an NMI handler ran with a GS that names no processor's record");
+    }
+    Ok(taken)
+}
+
+/// A `#DB` in the `SYSCALL` trampoline's ring-0 stretches on the program's
+/// stack is survived, with the kernel's `GS`.
+///
+/// Instruction breakpoints on the stub's first instruction -- `swapgs`, with
+/// the program's `GS` and stack -- and on its `sysretq`, after the `swapgs`
+/// back, while [`super::super::USER_TEST_PROGRAM`] writes a line and exits. Debug
+/// registers are per processor, so the program and the task that arms them
+/// are pinned to one. Returns the hits at each, and the program's status.
+fn check_system_call_window() -> Result<(u64, u64, i32), &'static str> {
+    let cpu = crate::smp::this_cpu()
+        .ok_or("the per-CPU register is not installed")?
+        .logical;
+    let entries = hits(0);
+    let returns = hits(1);
+    let foreign = FOREIGN_GS.load(Ordering::Relaxed);
+    *WINDOW.lock() = None;
+
+    let task = crate::sched::spawn_on(
+        "syscall window",
+        window_task,
+        cpu,
+        NICE_0_WEIGHT,
+        cpu,
+        CpuSet::of(cpu),
+    )?;
+    let deadline = crate::timer::now_nanos().saturating_add(WINDOW_PATIENCE_NANOS);
+    let outcome = loop {
+        if let Some(outcome) = *WINDOW.lock() {
+            break outcome;
+        }
+        if crate::timer::now_nanos() > deadline {
+            return Err("the system call window check never finished");
+        }
+        crate::sched::sleep_for(1_000_000);
+    };
+    while !task.is_dead() && crate::timer::now_nanos() < deadline {
+        crate::sched::sleep_for(1_000_000);
+    }
+    drop(task);
+    let _ = crate::sched::reap();
+
+    let status = outcome?;
+    let entries = hits(0).wrapping_sub(entries);
+    let returns = hits(1).wrapping_sub(returns);
+    if FOREIGN_GS.load(Ordering::Relaxed) != foreign {
+        return Err("a #DB in the system call window ran with the program's GS");
+    }
+    // Two calls, `write` and `exit_group`, and only the first returns.
+    if entries < 2 || returns < 1 {
+        return Err("a breakpoint in the system call window did not fire");
+    }
+    if status != super::super::USER_TEST_STATUS {
+        return Err("the program with breakpoints in its system calls exited wrongly");
+    }
+    Ok((entries, returns, status))
+}
+
+/// The pinned half of [`check_system_call_window`], on processor `cpu`.
+fn window_task(cpu: usize) {
+    let outcome = run_with_window_breakpoints(cpu);
+    *WINDOW.lock() = Some(outcome);
+}
+
+/// Arm the two breakpoints on this processor, run the program on it, disarm.
+fn run_with_window_breakpoints(cpu: usize) -> Result<i32, &'static str> {
+    use crate::syscall::exec::{Executable, load_executable};
+
+    let file = crate::syscall::image::build_with(
+        ferrix_elf::Class::Elf64,
+        super::super::ARCH.elf_machine(),
+        crate::syscall::image::Shape::Good,
+        super::super::USER_TEST_PROGRAM,
+    );
+    let program = Executable {
+        image: crate::syscall::load::Source::Bytes(&file),
+        exe: b"/window",
+        exec_fn: b"/window",
+        set_ids: crate::fs::SetIds::NONE,
+        interpreter: None,
+    };
+    let process = load_executable(
+        program,
+        &[b"/window"],
+        &[],
+        [0x5a; ferrix_ustack::RANDOM_BYTES],
+    )
+    .map_err(|_| "the system call window program could not be loaded")?;
+
+    // `LSTAR`'s target, whose first instruction is `swapgs` on the program's
+    // stack. Taken from `syscall`, whose declaration is the symbol's only one:
+    // a second, of another type, is renamed `.1` by the release profile's link
+    // and left undefined.
+    let entry = super::super::syscall::stub_address();
+    let sysret = (&raw const ferrix_syscall_sysret) as u64;
+    // SAFETY: an instruction of the trampoline, not in the paranoid entry nor
+    // on an IST stack, which is what a `#DB` there needs; unarmed until DR7.
+    unsafe { cpu::write_breakpoint_address(0, entry) };
+    // SAFETY: as above, for the trampoline's `sysretq`.
+    unsafe { cpu::write_breakpoint_address(1, sysret) };
+    // SAFETY: arms the two slots just written, and nothing else.
+    unsafe { cpu::write_dr7(dr7_local(0) | dr7_local(1)) };
+
+    let status = crate::syscall::process::start_on(&process, Some(cpu))
+        .ok()
+        .and_then(|_task| process.wait_for_exit(u64::MAX));
+
+    // SAFETY: disarming changes nothing but that they stop firing. This task
+    // is pinned, so this is the processor they were armed on.
+    unsafe { cpu::write_dr7(0) };
+
+    // The GS base the program ran with, parked on the kernel's side. If it were
+    // a per-CPU record, both halves of `swapgs` would hold the same address,
+    // and a handler that skipped the swap would find the kernel's GS anyway:
+    // the breakpoints above would prove nothing.
+    // SAFETY: a kernel task, with the kernel's GS, outside the trampoline.
+    let program_gs = unsafe { super::super::syscall::program_gs_base() };
+    if is_cpu_record(program_gs) {
+        return Err("a program ran with a per-CPU record as its GS base");
+    }
+    status.ok_or("the system call window program could not be started")
+}
+
+/// Whether `address` is one of the processors' per-CPU records.
+fn is_cpu_record(address: u64) -> bool {
+    crate::smp::topology().is_some_and(|topology| {
+        topology
+            .cpus()
+            .iter()
+            .any(|cpu| core::ptr::from_ref(cpu) as u64 == address)
+    })
+}
+
+/// A breakpoint on code the `#DB` handler itself runs does not fire inside it.
+///
+/// Breakpoints on [`breakpoint_target`] and on [`debug_hook`], which every
+/// kernel `#DB` handler calls. The target's `#DB` runs the hook with no
+/// breakpoint firing, because the entry cleared `DR7`; calling the hook here
+/// shows its breakpoint was armed. Without the clear, the hook's `#DB` would
+/// land on the top of the stack the target's handler is still using, which the
+/// occupancy count reports as FX-9006. Returns the hook's runs: three, two in
+/// handlers and one here.
+fn check_breakpoints_do_not_nest() -> Result<u64, &'static str> {
+    let targets = hits(0);
+    let hooks = hits(2);
+    let runs = HOOK_RUNS.load(Ordering::Relaxed);
+
+    // Masked, so that arming, both breakpoints and disarming happen on one
+    // processor.
+    let saved = <super::super::Irq as IrqControl>::disable();
+    // SAFETY: a kernel function outside the paranoid entry and the IST stacks;
+    // unarmed until DR7, and disarmed below before interrupts open again.
+    unsafe { cpu::write_breakpoint_address(0, breakpoint_target as fn() -> u64 as usize as u64) };
+    // SAFETY: as above, for the hook every kernel `#DB` handler runs.
+    unsafe { cpu::write_breakpoint_address(2, debug_hook as fn() as usize as u64) };
+    // SAFETY: arms the two slots just written, and nothing else.
+    unsafe { cpu::write_dr7(dr7_local(0) | dr7_local(2)) };
+    let _ = core::hint::black_box(breakpoint_target());
+    debug_hook();
+    // SAFETY: disarming.
+    unsafe { cpu::write_dr7(0) };
+    <super::super::Irq as IrqControl>::restore(saved);
+
+    if hits(0).wrapping_sub(targets) != 1 {
+        return Err("an instruction breakpoint in the kernel did not fire exactly once");
+    }
+    if hits(2).wrapping_sub(hooks) != 1 {
+        return Err("a breakpoint on the #DB handler's path fired other than once");
+    }
+    let runs = HOOK_RUNS.load(Ordering::Relaxed).wrapping_sub(runs);
+    if runs != 3 {
+        return Err("the #DB handler did not run once per breakpoint");
+    }
+    Ok(runs)
+}

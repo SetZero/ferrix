@@ -130,7 +130,7 @@ pub(crate) use trap::{
 ///
 /// What did not come back.
 pub(crate) fn check_exception_entry() -> Result<(), &'static str> {
-    paranoid::check()
+    paranoid::check::run()
 }
 
 /// Install the descriptor tables and the trap handlers.
