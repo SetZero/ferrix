@@ -18,7 +18,9 @@
 //! - the native ABI's [`HandleTable`], which is its capabilities;
 //! - its [`Job`], which is where kill authority over it lives, and the
 //!   tasks it has charged there (`object::quota`);
-//! - how it ended ([`Exit`]), which is what a handle to it holds.
+//! - how it ended ([`Exit`]), which is what a handle to it holds;
+//! - the one handle waiting for it to take with `process_bootstrap`
+//!   ([`Bootstrap`]), which outlives an `execve` as the handle table does.
 //!
 //! # How the personality's half is reached
 //!
@@ -55,13 +57,14 @@ use core::any::Any;
 use core::fmt;
 use core::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, Ordering};
 
+use ferrix_native_abi::rights::Rights;
 use ferrix_native_abi::signals::Signals as ObjectSignals;
 
 use crate::fallible::{self, AllocError};
 use crate::object::job::{self, Job, JobError};
 use crate::object::port::{self, Observer, Observers, PortError};
 use crate::object::quota::{self, Resource};
-use crate::object::{self as objects, HandleTable};
+use crate::object::{self as objects, HandleTable, Object};
 use crate::sched::WaitQueue;
 use crate::sync::SpinLock;
 use crate::user::space::AddressSpace;
@@ -103,6 +106,77 @@ pub(crate) struct Process {
     /// How it ended, and who is waiting to hear. Apart from the process,
     /// because a handle to the process holds it: see [`Exit`].
     exit: Arc<Exit>,
+    /// Its bootstrap handle until it takes it: see [`Bootstrap`]. A lock of
+    /// its own, taken after a handle table's and never before one.
+    bootstrap: SpinLock<Bootstrap>,
+}
+
+/// Where a process's bootstrap handle waits for `process_bootstrap`
+/// (`docs/INIT.md` §6, K2 and K3).
+///
+/// Outside the handle table, so that the handle has no number until the
+/// process asks for it: a program cannot close it, or be handed another
+/// object under its number, before it knows it has one. And outside the
+/// personality, because what the slot holds is an object, which is the
+/// core's to keep and to close.
+#[derive(Debug)]
+pub(crate) enum Bootstrap {
+    /// Nothing given yet, and one may be: the process has not completed an
+    /// `execve`.
+    Open,
+    /// Given, and not yet taken.
+    Held(Object, Rights),
+    /// Given and taken. Nothing more is given.
+    Taken,
+    /// It completed an `execve` with nothing given, or it has ended. Nothing
+    /// is given from here on.
+    Sealed,
+}
+
+/// Why a bootstrap could not be given.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GiveRefused {
+    /// It was given one before.
+    Given,
+    /// It has completed an `execve`, or ended.
+    Sealed,
+}
+
+impl Bootstrap {
+    /// Why nothing may be given now, or `None` if something may.
+    pub(crate) fn refusal(&self) -> Option<GiveRefused> {
+        match self {
+            Bootstrap::Open => None,
+            Bootstrap::Held(..) | Bootstrap::Taken => Some(GiveRefused::Given),
+            Bootstrap::Sealed => Some(GiveRefused::Sealed),
+        }
+    }
+
+    /// The bootstrap, taken, if it is waiting.
+    pub(crate) fn take(&mut self) -> Option<(Object, Rights)> {
+        if !matches!(self, Bootstrap::Held(..)) {
+            return None;
+        }
+        match core::mem::replace(self, Bootstrap::Taken) {
+            Bootstrap::Held(object, rights) => Some((object, rights)),
+            _ => None,
+        }
+    }
+
+    /// Put back what [`Bootstrap::take`] took and could not be delivered,
+    /// unless the process has ended since; the object back if so.
+    ///
+    /// # Errors
+    ///
+    /// The object, for the caller to dispose of.
+    pub(crate) fn put_back(&mut self, object: Object, rights: Rights) -> Result<(), Object> {
+        if matches!(self, Bootstrap::Taken) {
+            *self = Bootstrap::Held(object, rights);
+            Ok(())
+        } else {
+            Err(object)
+        }
+    }
 }
 
 impl Process {
@@ -137,6 +211,7 @@ impl Process {
             slot: AtomicU32::new(slot),
             over_quota,
             exit,
+            bootstrap: SpinLock::new(Bootstrap::Open),
         })
     }
 
@@ -307,6 +382,31 @@ impl Process {
     /// How it ended, and who is waiting to hear.
     pub(crate) fn exit(&self) -> &Exit {
         &self.exit
+    }
+
+    /// Do something with its bootstrap slot, under its lock. What `change`
+    /// takes out it hands back, for the reason [`Process::with_handles`]
+    /// gives.
+    pub(crate) fn with_bootstrap<R>(&self, change: impl FnOnce(&mut Bootstrap) -> R) -> R {
+        change(&mut self.bootstrap.lock())
+    }
+
+    /// It has completed an `execve`: a bootstrap not yet given never will be.
+    /// One already given stays for the new program to take.
+    pub(crate) fn seal_bootstrap(&self) {
+        let mut slot = self.bootstrap.lock();
+        if slot.refusal().is_none() {
+            *slot = Bootstrap::Sealed;
+        }
+    }
+
+    /// It has ended: seal the slot, and answer what it still held, for the
+    /// caller to dispose of with no lock held.
+    pub(crate) fn close_bootstrap(&self) -> Option<Object> {
+        match core::mem::replace(&mut *self.bootstrap.lock(), Bootstrap::Sealed) {
+            Bootstrap::Held(object, _) => Some(object),
+            _ => None,
+        }
     }
 
     /// A reference to how it ends, which outlives it.

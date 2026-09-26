@@ -606,6 +606,27 @@ fn check_signalfd() {
 /// waited on with epoll, a subtree delegated by `chown`, a child started in
 /// a cgroup by `clone3`, and a cgroup's job waited on for `EMPTY` through a
 /// handle `job_for_cgroup` gave.
+/// The kernel calls init needs beyond stage 13 (`docs/INIT.md` §11).
+fn check_init_calls() {
+    let report = match syscall::init_calls_check::run() {
+        Ok(report) => report,
+        Err(problem) => fatal!(
+            catalog::INIT_CALLS,
+            "init's kernel calls self-check failed: {problem}"
+        ),
+    };
+    println!(
+        "  initcall {} bootstraps given and taken, {} refusals as the ABI says, {}",
+        report.taken,
+        report.refusals,
+        if report.from_a_program {
+            "a program took its bootstrap after its execve and one given none was answered zero"
+        } else {
+            "no program run on this architecture"
+        },
+    );
+}
+
 fn check_cgroupfs() {
     let checked = match fs::cgroupfs::check() {
         Ok(checked) => checked,
@@ -1286,11 +1307,13 @@ fn check_block_ring() {
     // Then the small services the stages above lean on, and the native
     // calls' refusals, in the shapes a passing boot never puts them in: after
     // the device nodes, which two of them claim and clock, and after
-    // `devmgr`, which one of them asks for a driver.
+    // `devmgr`, which one of them asks for a driver. And the native calls
+    // init needs, which run a program from a file, so after the filesystems.
     if checks::run() {
         check_sysfs();
         check_services();
         check_native_refusals();
+        check_init_calls();
     }
 }
 
@@ -2255,8 +2278,8 @@ fn report_clock_and_random(view: &BootView<'_>) {
 /// that lost a registration would power off without committing its disks,
 /// which is not something to find out by losing them.
 fn register_load(view: &BootView<'_>) {
-    syscall::launch::install();
-    let registered = fs::install()
+    let registered = syscall::launch::install()
+        .and_then(|()| fs::install())
         .and_then(|()| stm32mp1::install(view))
         .and_then(|()| block_ring::install())
         .and_then(|()| net_ring::install())

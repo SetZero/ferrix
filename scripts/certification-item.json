@@ -207,6 +207,7 @@
         "syscall/fsctl.rs",
         "syscall/futex.rs",
         "syscall/image.rs",
+        "syscall/init_calls_check.rs",
         "syscall/kill.rs",
         "syscall/launch.rs",
         "syscall/limits.rs",
@@ -328,6 +329,7 @@
       "syscall::deliver",
       "syscall::exec",
       "syscall::image",
+      "syscall::init_calls_check",
       "syscall::launch",
       "syscall::linux",
       "syscall::time"

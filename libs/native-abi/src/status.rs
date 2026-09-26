@@ -54,8 +54,14 @@ pub const ALREADY_BOUND: Errno = Errno::EBUSY;
 /// killed takes no new processes or children.
 pub const BAD_STATE: Errno = Errno::EIDRM;
 
+/// A process id names no live process.
+pub const NO_PROCESS: Errno = Errno::ESRCH;
+
+/// A process id names a live process that is not the caller's child.
+pub const NOT_CHILD: Errno = Errno::ECHILD;
+
 /// Every name above, for the tests that hold them distinct.
-pub const ALL: [Errno; 14] = [
+pub const ALL: [Errno; 16] = [
     BAD_HANDLE,
     WRONG_TYPE,
     ACCESS_DENIED,
@@ -70,4 +76,6 @@ pub const ALL: [Errno; 14] = [
     FAULT,
     ALREADY_BOUND,
     BAD_STATE,
+    NO_PROCESS,
+    NOT_CHILD,
 ];

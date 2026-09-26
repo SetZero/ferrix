@@ -89,6 +89,7 @@ Causes are listed most likely first.
 | [FX-1201](#fx-1201) | a btrfs volume Ferrix wrote did not read back as it was written |
 | [FX-1301](#fx-1301) | cgroupfs did not show the job tree as cgroup v2 |
 | [FX-1501](#fx-1501) | init exited, and ferrix.onexit=panic asked for a panic |
+| [FX-1502](#fx-1502) | a kernel call init needs did not do what docs/INIT.md §11 says |
 | [FX-9001](#fx-9001) | a page fault the kernel cannot resolve |
 | [FX-9002](#fx-9002) | a system call the trap path cannot carry out |
 | [FX-9003](#fx-9003) | the processor refused to execute an instruction |
@@ -2100,6 +2101,41 @@ disks were committed before this panic, as they are before a power-off.
    a file that would not start, and the image carries no /sbin/init.
 
 See: kernel/src/power.rs finish; kernel/src/init.rs run; docs/INIT.md §8.3.
+
+<a id="fx-1502"></a>
+
+## FX-1502 — a kernel call init needs did not do what docs/INIT.md §11 says
+
+`syscall::init_calls_check::run` checks the kernel items of init's landing L8
+(docs/INIT.md §11). K3: `process_give` (0x1032) must move a handle out of the
+caller's table into its own child's bootstrap slot, and `process_bootstrap`
+(0x1033) must answer that handle once, with its rights, and zero after and in a
+process given nothing. A give must be refused with NOT_CHILD into another's
+child, NO_PROCESS for a pid naming nothing, ACCESS_DENIED without TRANSFER,
+BAD_HANDLE for handle zero, ALREADY_BOUND a second time, and BAD_STATE to a
+child that completed an execve with nothing given or that has ended, each
+leaving the handle with the caller. A handle given before an execve must be
+there after it, and one never taken must be closed when the child ends. Then a
+fork of a loaded program, given a channel end, must execve /tmp/k3-exec, take
+its bootstrap by number, close it and exit 0, the kept end hearing the close;
+its parent, given nothing, must exit with the close's EBADF (247).
+
+1. `process_give` (`syscall/launch.rs`) judged the parent by something other
+   than the child's own parent pointer, or `give_bootstrap`
+   (`syscall/native.rs`) copied the handle rather than removing it, or moved it
+   before checking the slot.
+2. `execve` did not seal the slot (`Process::mark_execed` calling
+   `seal_bootstrap`), or sealed a slot already holding a handle, which the new
+   program then cannot take.
+3. A process's release does not dispose of an untaken bootstrap
+   (`close_bootstrap`), so the peer never hears PEER_CLOSED.
+4. The program's machine code (`arch::USER_BOOTSTRAP_PROGRAM`) does not make the
+   calls by the numbers `libs/native-abi` gives, or the dispatcher does not
+   route a native number from a Linux program.
+
+See: kernel/src/syscall/init_calls_check.rs; kernel/src/syscall/native.rs;
+kernel/src/syscall/launch.rs; kernel/src/object/process.rs;
+libs/native-abi/src/nr.rs; docs/INIT.md §6, §11, §16.
 
 <a id="fx-9001"></a>
 

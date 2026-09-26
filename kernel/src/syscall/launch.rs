@@ -11,20 +11,30 @@
 //! them with [`install`] at bring-up. A native process is the same: the item
 //! decides who may make one and in which job, and the ELF loader and the
 //! process it loads into are this personality's.
+//!
+//! And `process_give`, the native call by which a Linux program hands its
+//! child a bootstrap handle before the child's `execve` (`docs/INIT.md` §6,
+//! K3): whose child a process is, and whether it has completed an `execve`,
+//! are this personality's to say, and the move itself is the item's
+//! ([`native::give_bootstrap`]).
 
 use alloc::format;
 use alloc::sync::Arc;
 
 use ferrix_linux_abi::errno::Errno;
+use ferrix_native_abi::handle::Handle;
+use ferrix_native_abi::nr::NativeCall;
 use ferrix_native_abi::status;
 
 use crate::fs;
+use crate::hooks::Full;
 use crate::init::{Failure, Image, Launcher, Opened, Start};
 use crate::object::process::{self as core_process, Host};
 use crate::syscall::exec::{self, ExecError};
 use crate::syscall::load::{LoadError, Source};
-use crate::syscall::native::{Argument, Processes, StartRefused};
+use crate::syscall::native::{self, Argument, Processes, StartRefused};
 use crate::syscall::process::{self, Process};
+use crate::syscall::registry;
 use crate::user::space::SpaceError;
 
 /// What `init` is lent.
@@ -42,14 +52,44 @@ static PROCESSES: Processes = Processes {
 };
 
 /// Lend `init` this personality's way of starting a program, and the native
-/// ABI its way of making and starting a process.
+/// ABI its way of making and starting a process, and answer `process_give`.
 ///
 /// Called once from `main.rs`, before the boot marker; `init::run` is the
 /// only caller of the first and runs after it, and nothing makes a native
 /// process before `devmgr` is started.
-pub(crate) fn install() {
+///
+/// # Errors
+///
+/// [`Full`] when the item has no room for `process_give`'s handler.
+pub(crate) fn install() -> Result<(), Full> {
     crate::init::register_launcher(&LAUNCHER);
-    crate::syscall::native::register_processes(&PROCESSES);
+    native::register_processes(&PROCESSES);
+    native::serve(NativeCall::ProcessGive, process_give)
+}
+
+/// `process_give(pid, handle)`: move `handle` into the bootstrap slot of the
+/// caller's child `pid`, which must not have completed an `execve`.
+///
+/// The pid must be a process's own, not one of its threads' numbers, which
+/// the table also finds it by. Its parent is compared by identity, so a pid
+/// reused by an unrelated process is refused as not the caller's child. The
+/// `execve` question is the slot's own: `execve` seals it
+/// ([`crate::object::process::Process::seal_bootstrap`]) under the same lock
+/// the move is judged under.
+fn process_give(caller: &dyn Host, registers: &[u64; 6]) -> Result<usize, Errno> {
+    let [pid, handle, ..] = *registers;
+    let parent = process::of_host(caller).ok_or(status::NO_PROCESS)?;
+    let pid = u32::try_from(pid).map_err(|_| status::NO_PROCESS)?;
+    let child = registry::find(pid)
+        .filter(|child| child.pid() == pid)
+        .ok_or(status::NO_PROCESS)?;
+    let is_child = child
+        .parent()
+        .is_some_and(|its| core::ptr::eq(Arc::as_ptr(&its), parent));
+    if !is_child {
+        return Err(status::NOT_CHILD);
+    }
+    native::give_bootstrap(parent.core(), child.core(), Handle::from_register(handle))
 }
 
 /// A native process with `image` loaded, named `name`, made and not started.

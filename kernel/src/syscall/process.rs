@@ -941,6 +941,9 @@ impl Process {
         // memory and drain other objects, which is `object::dispose`'s job,
         // and must not run under this process's table lock or state lock.
         object::dispose(self.with_handles(HandleTable::close));
+        // And a bootstrap handle it was given and never took (`docs/INIT.md`
+        // §6), which no table held.
+        object::dispose(self.close_bootstrap());
         // Its descriptors close now, as Linux's exit closes them, rather than
         // when the last reference to the process goes -- which a parent that
         // has not reaped it yet still holds. Otherwise a pipe's write end
@@ -1521,6 +1524,9 @@ impl Process {
 
     /// Record a successful `execve`, releasing a `vfork` parent.
     pub(crate) fn mark_execed(&self) {
+        // A bootstrap not given by now never will be; one given stays for
+        // the new program to take (`process_give`, `docs/INIT.md` §6).
+        self.core.seal_bootstrap();
         self.execed.store(true, Ordering::Release);
         self.vfork_done.wake_all();
     }

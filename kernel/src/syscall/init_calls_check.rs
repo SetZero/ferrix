@@ -1,0 +1,428 @@
+//! The self-check of the kernel calls init needs beyond stage 13
+//! (`docs/INIT.md` §11): K3's `process_give` and `process_bootstrap`.
+//!
+//! **K3, the calls.** Driven through [`native::dispatch`] by number, between a
+//! process and a fork of it, as the object checks drive the native calls. A
+//! give moves the handle, not a copy of it: the parent's number names nothing
+//! after it, and the child's `process_bootstrap` answers a handle to the same
+//! channel end with the same rights, once, and zero after. It is refused to a
+//! process that is not the caller's child, to a pid that names nothing, for a
+//! handle without `TRANSFER`, a second time, to a child that has completed an
+//! `execve` with nothing given, and to one that has ended -- each refusal
+//! leaving the handle with the caller. A handle given before the `execve`
+//! outlives it, and one never taken is closed when the child ends, which the
+//! peer end hears.
+//!
+//! **K3, from a program.** A fork of a loaded program is given a channel end
+//! and started; it `execve`s a program from `/tmp` that takes its bootstrap by
+//! number, closes it, and exits with what the close answered.
+//! It must exit 0, and the kept end must hear the close. The parent, given
+//! nothing, then runs the same `execve` and must exit with the close's
+//! `EBADF`: `process_bootstrap` answered zero.
+
+use alloc::sync::Arc;
+
+use ferrix_linux_abi::errno::Errno;
+use ferrix_native_abi::handle::Handle;
+use ferrix_native_abi::nr;
+use ferrix_native_abi::rights::Rights;
+use ferrix_native_abi::signals::Signals;
+use ferrix_native_abi::status;
+use ferrix_vfs::OpenFlags;
+
+use crate::arch;
+use crate::object::channel::Endpoint;
+use crate::object::{self, Object};
+use crate::syscall::process::{self, Process};
+use crate::syscall::{exec, image, native};
+use crate::trap::SyscallArgs;
+
+/// The path [`arch::USER_EXEC_PROGRAM`] carries at its end, on every
+/// architecture, NUL included.
+const EXEC_PATH: &[u8] = b"/exec-target\0";
+
+/// The path this check has it run instead: the same length, so the program
+/// is patched without knowing its instruction set, as stage 7's spinning
+/// program is; and under `/tmp`, which is a tmpfs on every boot, since by the
+/// time this runs `/` may be a disk's root.
+const EXEC_TARGET: &[u8] = b"/tmp/k3-exec\0";
+
+/// How long a program run here is given to end.
+const PATIENCE_NANOS: u64 = 30_000_000_000;
+
+/// What [`arch::USER_BOOTSTRAP_PROGRAM`] exits with when `process_bootstrap`
+/// answered zero: the close's `-EBADF`, as `exit_group` keeps its low byte.
+const NOTHING_STATUS: i32 = -(Errno::EBADF.0 as i32) & 0xFF;
+
+/// What the check did, for the boot log.
+#[derive(Debug, Default, Clone, Copy)]
+pub(crate) struct Report {
+    /// Calls refused as the ABI says.
+    pub(crate) refusals: u32,
+    /// Bootstrap handles given and taken.
+    pub(crate) taken: u32,
+    /// Whether a program took its bootstrap after an `execve`; `false` on an
+    /// architecture with no program to run.
+    pub(crate) from_a_program: bool,
+}
+
+/// Run every check.
+///
+/// # Errors
+///
+/// The first property that did not hold, as a sentence.
+pub(crate) fn run() -> Result<Report, &'static str> {
+    let mut report = Report::default();
+    check_give_and_take(&mut report)?;
+    report.from_a_program = check_a_program_takes_it_after_execve()?;
+    Ok(report)
+}
+
+/// Make native call `number` as `caller`.
+fn call(caller: &Arc<Process>, number: usize, args: &[u64]) -> Result<usize, Errno> {
+    let mut registers = [0_u64; 6];
+    for (slot, value) in registers.iter_mut().zip(args) {
+        *slot = *value;
+    }
+    let args = SyscallArgs {
+        number,
+        args: registers,
+    };
+    native::dispatch(&args, Some(&**caller))
+}
+
+/// A handle as a register.
+fn reg(handle: Handle) -> u64 {
+    u64::from(handle.0)
+}
+
+/// A channel, one end in `holder`'s table with `rights` and the other kept.
+fn channel_in(
+    holder: &Process,
+    rights: Rights,
+) -> Result<(Handle, Arc<Endpoint>, Arc<Endpoint>), &'static str> {
+    let (near, far) = Endpoint::pair().map_err(|_| "no memory for a channel")?;
+    let handle = holder
+        .with_handles(|table| table.insert(Object::Channel(Arc::clone(&near)), rights))
+        .map_err(|_| "no room for a channel end")?;
+    Ok((handle, near, far))
+}
+
+/// Whether `handle` in `holder` names the channel end `end`, with `rights`.
+fn names(holder: &Process, handle: Handle, end: &Arc<Endpoint>, rights: Rights) -> bool {
+    holder.with_handles(|table| {
+        matches!(
+            table.get(handle),
+            Ok((Object::Channel(named), held)) if Arc::ptr_eq(named, end) && held == rights
+        )
+    })
+}
+
+/// Require `result` to be exactly the refusal `wanted`.
+fn refused(
+    result: Result<usize, Errno>,
+    wanted: Errno,
+    what: &'static str,
+    report: &mut Report,
+) -> Result<(), &'static str> {
+    if result == Err(wanted) {
+        report.refusals += 1;
+        Ok(())
+    } else {
+        Err(what)
+    }
+}
+
+/// Close every handle in each of `processes`, as their ends would.
+fn close_all(processes: &[&Arc<Process>]) {
+    for process in processes {
+        object::dispose(process.with_handles(object::HandleTable::clear));
+    }
+}
+
+/// The calls, by number, between a process and forks of it.
+fn check_give_and_take(report: &mut Report) -> Result<(), &'static str> {
+    let parent = process::new_for_check().map_err(|_| "could not make a parent")?;
+    let stranger = process::new_for_check().map_err(|_| "could not make a stranger")?;
+    let child = process::fork_for_check(&parent).map_err(|_| "could not fork a child")?;
+    let outcome = give_and_take(&parent, &stranger, &child, report);
+    close_all(&[&parent, &stranger, &child]);
+    outcome
+}
+
+/// The body of [`check_give_and_take`].
+fn give_and_take(
+    parent: &Arc<Process>,
+    stranger: &Arc<Process>,
+    child: &Arc<Process>,
+    report: &mut Report,
+) -> Result<(), &'static str> {
+    let pid = u64::from(child.pid());
+    let (given, near, far) = channel_in(parent, Rights::CHANNEL)?;
+    let (strangers, ..) = channel_in(stranger, Rights::CHANNEL)?;
+
+    refused(
+        call(stranger, nr::PROCESS_GIVE, &[pid, reg(strangers)]),
+        status::NOT_CHILD,
+        "process_give into another's child was not refused with NOT_CHILD",
+        report,
+    )?;
+    refused(
+        call(parent, nr::PROCESS_GIVE, &[0, reg(given)]),
+        status::NO_PROCESS,
+        "process_give to pid 0 was not refused with NO_PROCESS",
+        report,
+    )?;
+    refused(
+        call(parent, nr::PROCESS_GIVE, &[1 << 40, reg(given)]),
+        status::NO_PROCESS,
+        "process_give to a pid wider than 32 bits was not refused with NO_PROCESS",
+        report,
+    )?;
+    let kept = parent
+        .with_handles(|table| {
+            table.duplicate(
+                given,
+                ferrix_native_abi::rights::Requested::Exactly(Rights::READ),
+            )
+        })
+        .map_err(|_| "could not make a handle without TRANSFER")?;
+    refused(
+        call(parent, nr::PROCESS_GIVE, &[pid, reg(kept)]),
+        status::ACCESS_DENIED,
+        "process_give of a handle without TRANSFER was not refused with ACCESS_DENIED",
+        report,
+    )?;
+    refused(
+        call(parent, nr::PROCESS_GIVE, &[pid, 0]),
+        status::BAD_HANDLE,
+        "process_give of handle zero was not refused with BAD_HANDLE",
+        report,
+    )?;
+    if !names(parent, given, &near, Rights::CHANNEL) || !names(parent, kept, &near, Rights::READ) {
+        return Err("a refused process_give did not leave the handle with the caller");
+    }
+    if call(child, nr::PROCESS_BOOTSTRAP, &[]) != Ok(0) {
+        return Err("process_bootstrap in a process given nothing did not answer zero");
+    }
+
+    if call(parent, nr::PROCESS_GIVE, &[pid, reg(given)]) != Ok(0) {
+        return Err("process_give of a channel end to the caller's child was refused");
+    }
+    if parent.with_handles(|table| table.get(given).is_ok()) {
+        return Err("process_give left the handle in the caller's table: a copy, not a move");
+    }
+    let (second, ..) = channel_in(parent, Rights::CHANNEL)?;
+    refused(
+        call(parent, nr::PROCESS_GIVE, &[pid, reg(second)]),
+        status::ALREADY_BOUND,
+        "a second process_give to one child was not refused with ALREADY_BOUND",
+        report,
+    )?;
+    let taken = call(child, nr::PROCESS_BOOTSTRAP, &[])
+        .map_err(|_| "process_bootstrap in a child given a handle was refused")?;
+    let taken = Handle(u32::try_from(taken).map_err(|_| "process_bootstrap answered no handle")?);
+    if !taken.is_valid() || !names(child, taken, &near, Rights::CHANNEL) {
+        return Err("process_bootstrap did not answer the end given, with the rights it had");
+    }
+    if call(child, nr::PROCESS_BOOTSTRAP, &[]) != Ok(0) {
+        return Err("a second process_bootstrap did not answer zero");
+    }
+    refused(
+        call(parent, nr::PROCESS_GIVE, &[pid, reg(second)]),
+        status::ALREADY_BOUND,
+        "process_give after the child took its bootstrap was not refused with ALREADY_BOUND",
+        report,
+    )?;
+    report.taken += 1;
+    drop(far);
+
+    check_execve_seals_and_keeps(parent, second, report)?;
+    check_an_end_closes_it(parent, report)
+}
+
+/// An `execve` with nothing given refuses a give from then on; one given
+/// before an `execve` is still there after it.
+fn check_execve_seals_and_keeps(
+    parent: &Arc<Process>,
+    spare: Handle,
+    report: &mut Report,
+) -> Result<(), &'static str> {
+    let sealed = process::fork_for_check(parent).map_err(|_| "could not fork a child")?;
+    let kept = process::fork_for_check(parent).map_err(|_| "could not fork a child")?;
+    let outcome = (|| {
+        sealed.mark_execed();
+        refused(
+            call(
+                parent,
+                nr::PROCESS_GIVE,
+                &[u64::from(sealed.pid()), reg(spare)],
+            ),
+            status::BAD_STATE,
+            "process_give to a child that had completed an execve was not refused with BAD_STATE",
+            report,
+        )?;
+        if !parent.with_handles(|table| table.get(spare).is_ok()) {
+            return Err("a process_give refused after an execve did not leave the handle");
+        }
+        let (given, near, _far) = channel_in(parent, Rights::CHANNEL)?;
+        if call(
+            parent,
+            nr::PROCESS_GIVE,
+            &[u64::from(kept.pid()), reg(given)],
+        ) != Ok(0)
+        {
+            return Err("process_give to a child that had not yet exec'd was refused");
+        }
+        kept.mark_execed();
+        let taken = call(&kept, nr::PROCESS_BOOTSTRAP, &[])
+            .ok()
+            .and_then(|value| u32::try_from(value).ok())
+            .map(Handle)
+            .ok_or("process_bootstrap after an execve was refused")?;
+        if !names(&kept, taken, &near, Rights::CHANNEL) {
+            return Err("a bootstrap given before an execve was not there after it");
+        }
+        report.taken += 1;
+        Ok(())
+    })();
+    close_all(&[&sealed, &kept]);
+    outcome
+}
+
+/// A bootstrap never taken is closed as its holder ends, and the peer end
+/// hears it; an ended child refuses a give.
+fn check_an_end_closes_it(parent: &Arc<Process>, report: &mut Report) -> Result<(), &'static str> {
+    let doomed = process::fork_for_check(parent).map_err(|_| "could not fork a child")?;
+    let (given, near, far) = channel_in(parent, Rights::CHANNEL)?;
+    if call(
+        parent,
+        nr::PROCESS_GIVE,
+        &[u64::from(doomed.pid()), reg(given)],
+    ) != Ok(0)
+    {
+        return Err("process_give to a child about to end was refused");
+    }
+    // Held here and in the slot: the slot's end must go for the peer to hear.
+    drop(near);
+    process::kill(&doomed, object::job::KILLED_STATUS);
+    if !far.signals().intersects(Signals::PEER_CLOSED) {
+        return Err("a bootstrap never taken was not closed when its holder ended");
+    }
+    let (spare, ..) = channel_in(parent, Rights::CHANNEL)?;
+    refused(
+        call(
+            parent,
+            nr::PROCESS_GIVE,
+            &[u64::from(doomed.pid()), reg(spare)],
+        ),
+        status::BAD_STATE,
+        "process_give to a child that had ended was not refused with BAD_STATE",
+        report,
+    )
+}
+
+/// A fork given a channel end runs a program that `execve`s another, which
+/// takes its bootstrap by number and closes it; its parent, given nothing,
+/// runs the same and is answered zero. `false` with no program to run.
+fn check_a_program_takes_it_after_execve() -> Result<bool, &'static str> {
+    if arch::USER_BOOTSTRAP_PROGRAM.is_empty() || arch::USER_EXEC_PROGRAM.is_empty() {
+        return Ok(false);
+    }
+    let class = if size_of::<usize>() == 8 {
+        ferrix_elf::Class::Elf64
+    } else {
+        ferrix_elf::Class::Elf32
+    };
+    let machine = arch::ARCH.elf_machine();
+    let target = image::build_with(
+        class,
+        machine,
+        image::Shape::Good,
+        arch::USER_BOOTSTRAP_PROGRAM,
+    );
+    let mut code = arch::USER_EXEC_PROGRAM.to_vec();
+    let path_at = code
+        .len()
+        .checked_sub(EXEC_PATH.len())
+        .filter(|&at| code.get(at..) == Some(EXEC_PATH))
+        .ok_or("the program that calls execve does not end with the path it runs")?;
+    code.truncate(path_at);
+    code.extend_from_slice(EXEC_TARGET);
+    let caller = image::build_with(class, machine, image::Shape::Good, &code);
+
+    let ns = crate::fs::namespace();
+    let ctx = ns.context();
+    let create = OpenFlags {
+        write: true,
+        create: true,
+        truncate: true,
+        ..OpenFlags::default()
+    };
+    let path = EXEC_TARGET.strip_suffix(b"\0").unwrap_or(EXEC_TARGET);
+    let file = ns
+        .open(&ctx, None, path, &create, 0o755)
+        .map_err(|_| "could not create the program that takes its bootstrap")?;
+    let written = file.write(&target);
+    drop(file);
+    let outcome = if written == Ok(target.len()) {
+        run_the_programs(&caller)
+    } else {
+        Err("could not write the program that takes its bootstrap")
+    };
+    let _ = ns.unlink(&ctx, None, path);
+    outcome.map(|()| true)
+}
+
+/// The body of [`check_a_program_takes_it_after_execve`], with the program
+/// at [`EXEC_TARGET`].
+fn run_the_programs(caller: &[u8]) -> Result<(), &'static str> {
+    let parent = exec::load(
+        caller,
+        &[b"/bootstrap-caller"],
+        &[],
+        [0x4b; ferrix_ustack::RANDOM_BYTES],
+    )
+    .map_err(|_| "a program that calls execve could not be loaded")?;
+    let child = process::fork_for_check(&parent)
+        .map_err(|_| "a program that calls execve could not be forked")?;
+    let (given, near, far) = channel_in(&parent, Rights::CHANNEL)?;
+    drop(near);
+    if call(
+        &parent,
+        nr::PROCESS_GIVE,
+        &[u64::from(child.pid()), reg(given)],
+    ) != Ok(0)
+    {
+        return Err("process_give to a fork about to execve was refused");
+    }
+    let status = run_to_its_end(&child)?;
+    if status != 0 {
+        crate::console::println!(
+            "  initcall a program given a bootstrap before its execve exited with {status}"
+        );
+        return Err("a program given a bootstrap before its execve did not take and close it");
+    }
+    if !far.signals().intersects(Signals::PEER_CLOSED) {
+        return Err("the handle a program took with process_bootstrap was not the end given");
+    }
+    let status = run_to_its_end(&parent)?;
+    if status != NOTHING_STATUS {
+        crate::console::println!(
+            "  initcall a program given no bootstrap exited with {status}, not {NOTHING_STATUS}"
+        );
+        return Err("process_bootstrap in a program given nothing did not answer zero");
+    }
+    Ok(())
+}
+
+/// Start `process`, and wait for it to end and its task to be gone.
+fn run_to_its_end(process: &Arc<Process>) -> Result<i32, &'static str> {
+    let task = process::start(process).map_err(|_| "a program the check made would not start")?;
+    let deadline = crate::timer::now_nanos().saturating_add(PATIENCE_NANOS);
+    let status = process
+        .wait_for_exit(deadline)
+        .ok_or("a program the check made never ended")?;
+    crate::sched::wait_until_gone(&task, crate::sched::REAPER_PATIENCE_NANOS)?;
+    Ok(status)
+}

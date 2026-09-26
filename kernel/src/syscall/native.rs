@@ -43,8 +43,9 @@
 //!
 //! # What is not here yet
 //!
-//! The calls that act on a process beyond making and starting it, in
-//! `0x1032..=0x1037`. Those numbers do not decode yet, and answer `ENOSYS`.
+//! The calls that act on a process beyond making, starting and giving it its
+//! bootstrap, in `0x1034..=0x1037`. Those numbers do not decode yet, and
+//! answer `ENOSYS`.
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -76,7 +77,7 @@ use crate::object::interrupt::{Interrupt, InterruptError};
 use crate::object::io_mapping::{IoMapping, IoMappingError};
 use crate::object::job::{self, Job};
 use crate::object::port::{Observer, Port, PortError};
-use crate::object::process::{Host, Process, ProcessRef};
+use crate::object::process::{Bootstrap, GiveRefused, Host, Process, ProcessRef};
 use crate::object::quota::{self, Resource, Usage};
 use crate::object::{self, HandleTable, Object};
 use crate::syscall::uaccess::{self, UserError};
@@ -149,13 +150,14 @@ impl Served {
 /// of these calls makes a channel for a driver, not the path a driver's work
 /// takes. A `Once` per call, as [`crate::hooks`] keeps them: written at
 /// bring-up, read without a lock.
-static SERVED: [Served; 6] = [
+static SERVED: [Served; 7] = [
     Served::new(NativeCall::BlockRingCreate),
     Served::new(NativeCall::NetRingCreate),
     Served::new(NativeCall::DisplayControlCreate),
     Served::new(NativeCall::RenderControlCreate),
     Served::new(NativeCall::InputControlCreate),
     Served::new(NativeCall::JobForCgroup),
+    Served::new(NativeCall::ProcessGive),
 ];
 
 /// Answer `call` with `handler`. Called from `main.rs`'s `register_load`, by
@@ -385,7 +387,9 @@ pub(crate) fn dispatch(args: &SyscallArgs, caller: Option<&dyn Host>) -> Result<
         | NativeCall::DisplayControlCreate
         | NativeCall::RenderControlCreate
         | NativeCall::InputControlCreate
-        | NativeCall::JobForCgroup => served(call, caller, &a),
+        | NativeCall::JobForCgroup
+        | NativeCall::ProcessGive => served(call, caller, &a),
+        NativeCall::ProcessBootstrap => process_bootstrap(process),
         NativeCall::DeviceInfo => device_info(process, handle(a[0]), a[1]),
         NativeCall::DeviceQuiesce => device_quiesce(process, handle(a[0])),
         NativeCall::DeviceClock => device_clock(process, handle(a[0]), a[1], a[2]),
@@ -1413,6 +1417,69 @@ fn move_handle(from: &Process, to: &Process, handle: Handle) -> Result<Handle, E
         Err(Err(object)) => {
             object::dispose([object]);
             Err(status::NO_HANDLES)
+        }
+    }
+}
+
+/// Move `handle` out of `from`'s table into `to`'s bootstrap slot, where
+/// `process_bootstrap` finds it: the item's half of `process_give`. The
+/// personality answers the call, since only it knows whose child `to` is and
+/// whether it has completed an `execve`, and hands the move to this.
+///
+/// Under both locks, the table's first, so the object is in exactly one place
+/// throughout, and the slot's state is judged in the same moment as the move:
+/// an `execve` sealing the slot comes before the move or after it, never in
+/// between. A refusal leaves the handle where it was, under its number.
+///
+/// # Errors
+///
+/// `BAD_HANDLE`, `ACCESS_DENIED` without `TRANSFER`, `ALREADY_BOUND` for a
+/// slot given before, `BAD_STATE` for a sealed one.
+pub(crate) fn give_bootstrap(from: &Process, to: &Process, handle: Handle) -> Result<usize, Errno> {
+    from.with_handles(|source| {
+        let (_, rights) = source.get(handle).map_err(table_error)?;
+        if !rights.contains(Rights::TRANSFER) {
+            return Err(status::ACCESS_DENIED);
+        }
+        to.with_bootstrap(|slot| {
+            match slot.refusal() {
+                Some(GiveRefused::Given) => return Err(status::ALREADY_BOUND),
+                Some(GiveRefused::Sealed) => return Err(status::BAD_STATE),
+                None => {}
+            }
+            let (object, rights) = source.remove(handle).map_err(table_error)?;
+            *slot = Bootstrap::Held(object, rights);
+            Ok(())
+        })
+    })?;
+    Ok(0)
+}
+
+/// `process_bootstrap`.
+///
+/// The slot is emptied first and the handle placed after, so two threads
+/// asking at once cannot both be given it. A table with no room puts it back
+/// for a later call; one closed meanwhile, by the process's end, leaves it to
+/// be disposed of here, since the slot is sealed by then too.
+fn process_bootstrap(process: &Process) -> Result<usize, Errno> {
+    let Some((object, rights)) = process.with_bootstrap(Bootstrap::take) else {
+        return Ok(returned(Handle::INVALID));
+    };
+    // FALLIBLE: the handle table's reserve refuses with `TableError::NoMemory`.
+    let placed = process.with_handles(|table| match table.reserve(1) {
+        Ok(()) => table
+            // FALLIBLE: the handle table's insert hands the object back.
+            .insert(object, rights)
+            .map_err(|object| (status::NO_HANDLES, object)),
+        Err(error) => Err((table_error(error), object)),
+    });
+    match placed {
+        Ok(handle) => Ok(returned(handle)),
+        Err((why, object)) => {
+            if let Err(object) = process.with_bootstrap(|slot| slot.put_back(object, rights)) {
+                object::dispose([object]);
+            }
+            Err(why)
         }
     }
 }

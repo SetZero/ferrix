@@ -69,6 +69,10 @@ pub const JOB_GET_QUOTA: usize = 0x102C;
 pub const PROCESS_CREATE: usize = 0x1030;
 /// [`NativeCall::ProcessStart`].
 pub const PROCESS_START: usize = 0x1031;
+/// [`NativeCall::ProcessGive`].
+pub const PROCESS_GIVE: usize = 0x1032;
+/// [`NativeCall::ProcessBootstrap`].
+pub const PROCESS_BOOTSTRAP: usize = 0x1033;
 
 /// [`NativeCall::InterruptCreate`].
 pub const INTERRUPT_CREATE: usize = 0x1038;
@@ -104,8 +108,8 @@ pub const PROCESS_NAME_MAX: usize = 32;
 
 /// A native system call.
 ///
-/// `0x1032..=0x1037` is left for the calls that act on a process beyond
-/// making and starting it.
+/// `0x1034..=0x1037` is left for the calls that act on a process beyond
+/// making, starting and giving it its bootstrap.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum NativeCall {
     /// `(handle)`. Close a handle. The object lives on if anything else holds it.
@@ -221,6 +225,28 @@ pub enum NativeCall {
     /// already ended, and the bootstrap then stays with the caller. Needs
     /// `MANAGE` on the process and `TRANSFER` on the bootstrap.
     ProcessStart,
+    /// `(pid, handle)`. Move `handle` out of the caller's table and hold it
+    /// as the bootstrap handle of `pid`, which must be the caller's own child
+    /// and must not yet have completed an `execve`: how a Linux program that
+    /// starts a native-aware one with `fork` and `execve` gives it a channel
+    /// (`docs/INIT.md` §6, K3). The child takes it with
+    /// [`NativeCall::ProcessBootstrap`], before or after its `execve`; it is
+    /// kept across every `execve` until then, and closed if the child ends
+    /// first. One give per process, ever. Needs `TRANSFER` on the handle.
+    /// Refused, with the handle left where it was: `BAD_HANDLE` for a handle
+    /// not held, `ACCESS_DENIED` without `TRANSFER`, `NO_PROCESS` for a pid
+    /// that names no live process (or names a thread rather than a process),
+    /// `NOT_CHILD` for a process that is not the caller's child,
+    /// `ALREADY_BOUND` for a child given one before (taken or not), and
+    /// `BAD_STATE` for a child that has completed an `execve` or has ended.
+    ProcessGive,
+    /// `()` → handle. The calling process's bootstrap handle, moved into its
+    /// table: the one [`NativeCall::ProcessGive`] or the kernel gave it. Once:
+    /// every later call answers zero, which is never a handle, and so does a
+    /// call from a process given none. `NO_HANDLES` with a full table, and
+    /// the handle is kept for a later call. Callable from any process, a
+    /// Linux one by `syscall(0x1033)`.
+    ProcessBootstrap,
     /// `(resource, vector)` → handle. Claim a hardware interrupt.
     InterruptCreate,
     /// `(interrupt, port, key: *u64)`. Deliver the interrupt to a port as
@@ -276,7 +302,7 @@ pub enum NativeCall {
 }
 
 /// Every native call, in number order.
-pub const ALL: [NativeCall; 38] = [
+pub const ALL: [NativeCall; 40] = [
     NativeCall::HandleClose,
     NativeCall::HandleDuplicate,
     NativeCall::HandleReplace,
@@ -302,6 +328,8 @@ pub const ALL: [NativeCall; 38] = [
     NativeCall::JobGetQuota,
     NativeCall::ProcessCreate,
     NativeCall::ProcessStart,
+    NativeCall::ProcessGive,
+    NativeCall::ProcessBootstrap,
     NativeCall::InterruptCreate,
     NativeCall::InterruptBind,
     NativeCall::InterruptAck,
@@ -355,6 +383,8 @@ pub const fn decode(number: usize) -> Option<NativeCall> {
         JOB_GET_QUOTA => NativeCall::JobGetQuota,
         PROCESS_CREATE => NativeCall::ProcessCreate,
         PROCESS_START => NativeCall::ProcessStart,
+        PROCESS_GIVE => NativeCall::ProcessGive,
+        PROCESS_BOOTSTRAP => NativeCall::ProcessBootstrap,
         INTERRUPT_CREATE => NativeCall::InterruptCreate,
         INTERRUPT_BIND => NativeCall::InterruptBind,
         INTERRUPT_ACK => NativeCall::InterruptAck,
@@ -402,6 +432,8 @@ pub const fn number(call: NativeCall) -> usize {
         NativeCall::JobGetQuota => JOB_GET_QUOTA,
         NativeCall::ProcessCreate => PROCESS_CREATE,
         NativeCall::ProcessStart => PROCESS_START,
+        NativeCall::ProcessGive => PROCESS_GIVE,
+        NativeCall::ProcessBootstrap => PROCESS_BOOTSTRAP,
         NativeCall::InterruptCreate => INTERRUPT_CREATE,
         NativeCall::InterruptBind => INTERRUPT_BIND,
         NativeCall::InterruptAck => INTERRUPT_ACK,

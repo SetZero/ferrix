@@ -57,6 +57,7 @@ pub(crate) mod flock;
 pub(crate) mod fsctl;
 pub(crate) mod futex;
 pub(crate) mod image;
+pub(crate) mod init_calls_check;
 pub(crate) mod kill;
 pub(crate) mod launch;
 pub(crate) mod limits;

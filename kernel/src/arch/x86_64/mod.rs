@@ -1525,3 +1525,32 @@ pub(crate) const USER_OOM_PROGRAM: &[u8] = &[
     0x31, 0xff, 0xeb, 0x05, 0xbf, 0x01, 0x00, 0x00, 0x00, 0xb8, 0xe7, 0x00, 0x00, 0x00, 0x0f, 0x05,
     0x0f, 0x0b,
 ];
+
+// And init's check's program, last for the same reason.
+/// A program that takes its bootstrap handle with `process_bootstrap`, closes
+/// it with `handle_close`, and exits with what the close returned: 0 when it
+/// was given a handle, `-EBADF & 0xFF` (247) when `process_bootstrap`
+/// answered zero, which names nothing (`docs/INIT.md` §6, K3). A Linux
+/// program making native calls by number, as a musl program's `syscall()`
+/// makes them.
+///
+/// ```text
+///   movl $0x1033, %eax ; syscall    ; process_bootstrap()
+///   movq %rax, %rdi                 ; its answer, a handle or zero
+///   movl $0x1000, %eax ; syscall    ; handle_close(it)
+///   movl %eax, %edi
+///   movl $231, %eax ; syscall       ; exit_group(what the close said)
+/// ```
+///
+/// Assembled by the host's GNU assembler and read back with its
+/// disassembler.
+pub(crate) const USER_BOOTSTRAP_PROGRAM: &[u8] = &[
+    0xb8, 0x33, 0x10, 0x00, 0x00, // movl $0x1033, %eax
+    0x0f, 0x05, // syscall
+    0x48, 0x89, 0xc7, // movq %rax, %rdi
+    0xb8, 0x00, 0x10, 0x00, 0x00, // movl $0x1000, %eax
+    0x0f, 0x05, // syscall
+    0x89, 0xc7, // movl %eax, %edi
+    0xb8, 0xe7, 0x00, 0x00, 0x00, // movl $231, %eax
+    0x0f, 0x05, // syscall
+];

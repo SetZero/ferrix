@@ -828,7 +828,7 @@ fn check_two_processes() -> Result<Counter, &'static str> {
     check_a_port_hears_a_process_end(&sender, &mut counter)?;
     check_a_full_channel_says_wait(&sender, near, &receiver, far, &mut counter)?;
     check_a_closed_peer_frees_what_was_queued(&sender, near, &receiver, far, &mut counter)?;
-    if sender.call(0x1032, &[]) != Err(Errno::ENOSYS) {
+    if sender.call(0x1037, &[]) != Err(Errno::ENOSYS) {
         return Err("a gap in the native range was not ENOSYS");
     }
 

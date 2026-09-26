@@ -297,6 +297,30 @@ pub(crate) const USER_FAULT_PROGRAM: &[u8] = &[
     0x00, 0x00, 0x00, 0xef, // svc  #0
 ];
 
+/// A program that takes its bootstrap handle with `process_bootstrap`, closes
+/// it with `handle_close`, and exits with what the close returned: 0 when it
+/// was given a handle, `-EBADF & 0xFF` (247) when `process_bootstrap`
+/// answered zero, which names nothing (`docs/INIT.md` §6, K3). A Linux
+/// program making native calls by number, as a musl program's `syscall()`
+/// makes them.
+///
+/// ```text
+///   movw r7, #0x1033 ; svc #0   ; process_bootstrap(), its answer in r0
+///   movw r7, #0x1000 ; svc #0   ; handle_close(r0)
+///   mov r7, #248     ; svc #0   ; exit_group(what the close said)
+/// ```
+///
+/// Assembled by the host's GNU assembler for Arm, in ARM state, and read
+/// back with its disassembler.
+pub(crate) const USER_BOOTSTRAP_PROGRAM: &[u8] = &[
+    0x33, 0x70, 0x01, 0xe3, // movw r7, #0x1033
+    0x00, 0x00, 0x00, 0xef, // svc  #0
+    0x00, 0x70, 0x01, 0xe3, // movw r7, #0x1000
+    0x00, 0x00, 0x00, 0xef, // svc  #0
+    0xf8, 0x70, 0xa0, 0xe3, // mov  r7, #248
+    0x00, 0x00, 0x00, 0xef, // svc  #0
+];
+
 /// A program that forks, has its child exit with 23, waits for it, and exits
 /// with the child's exit code plus one: 24 when `fork`, the child's copy of
 /// its parent's registers and `wait4`'s status word are all right, 99 when
