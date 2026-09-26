@@ -43,7 +43,7 @@
 
 use core::fmt::{self, Write as _};
 use core::ptr;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
 use ferrix_blkring::control::{Message as StartMessage, START_BYTES, Start};
 use ferrix_dwc3::layout::AREA_BYTES;
@@ -180,7 +180,13 @@ impl fmt::Write for Line {
 /// all (`docs/PIXEL7-USB-HANDOVER.md` §8) is that each run's record shows
 /// the guard's reads and which registers were written. Until the
 /// controller runs, every write is logged; after that, only the first
-/// write to each register. Logging them all, as the first run did, fed
+/// write to each register, and not at once: it is queued with its time
+/// and said when the driver is next idle ([`say_deferred`]). Said at once,
+/// the dozen writes of the host's `SET_CONFIGURATION` cost a console line
+/// each while the boot's own checks were still printing, drawn on the
+/// phone's screen too, and in one run the answer came after the host's
+/// five seconds: it gave up ("can't set config #1, error -110") and there
+/// was no port. Logging them all, as the first run did, fed
 /// itself once the log went over USB: each line sent is a transfer, and
 /// each transfer is five more writes to log. Reads after the first write
 /// -- mostly `GEVNTCOUNT`, at each interrupt -- are not logged.
@@ -198,6 +204,50 @@ struct Window {
 /// write is logged. A flag of the process's, since the controller owns the
 /// window once it has started.
 static RUNNING: AtomicBool = AtomicBool::new(false);
+
+/// First writes waiting to be said, each its offset in the high half and
+/// its value in the low, beside when it was made. The process has one
+/// thread, so the order of these atomics is its own.
+static DEFERRED: [AtomicU64; DEFERRED_WRITES] = [const { AtomicU64::new(0) }; DEFERRED_WRITES];
+static DEFERRED_AT: [AtomicU64; DEFERRED_WRITES] = [const { AtomicU64::new(0) }; DEFERRED_WRITES];
+static DEFERRED_LEN: AtomicUsize = AtomicUsize::new(0);
+
+/// How many first writes can wait. The controller has fewer registers the
+/// driver writes than this; past it, a write is said at once.
+const DEFERRED_WRITES: usize = 64;
+
+/// Queue a first write to be said when the driver is idle, or say it now if
+/// the queue is full.
+fn defer_write(offset: u32, value: u32) {
+    let at = DEFERRED_LEN.load(Ordering::Relaxed);
+    match (DEFERRED.get(at), DEFERRED_AT.get(at)) {
+        (Some(write), Some(when)) => {
+            write.store(
+                u64::from(offset) << 32 | u64::from(value),
+                Ordering::Relaxed,
+            );
+            when.store(
+                ferrix_rt::linux::monotonic_nanos().unwrap_or(0),
+                Ordering::Relaxed,
+            );
+            DEFERRED_LEN.store(at + 1, Ordering::Relaxed);
+        }
+        _ => say(format_args!("usbdev: write {offset:#06x} = {value:#010x}")),
+    }
+}
+
+/// Say the first writes the queue holds, with when each was made.
+fn say_deferred() {
+    let len = DEFERRED_LEN.swap(0, Ordering::Relaxed);
+    for (write, when) in DEFERRED.iter().zip(&DEFERRED_AT).take(len) {
+        let packed = write.load(Ordering::Relaxed);
+        let (offset, value) = (packed >> 32, packed & 0xFFFF_FFFF);
+        let ms = when.load(Ordering::Relaxed) / 1_000_000;
+        say(format_args!(
+            "usbdev: write {offset:#06x} = {value:#010x} (at {ms} ms)"
+        ));
+    }
+}
 
 /// Words in the controller's 64 KiB window.
 const WINDOW_WORDS: usize = 0x1_0000 / 4;
@@ -231,8 +281,10 @@ impl Registers for Window {
             *bits |= 1 << (word % 64);
             !was
         });
-        if !RUNNING.load(Ordering::Relaxed) || first {
+        if !RUNNING.load(Ordering::Relaxed) {
             say(format_args!("usbdev: write {offset:#06x} = {value:#010x}"));
+        } else if first {
+            defer_write(offset, value);
         }
         self.wrote = true;
         // SAFETY: as for `read32`, and the mapping is writable.
@@ -520,7 +572,9 @@ impl Driver {
                 Ok(packet) if packet.kind == PACKET_SIGNAL && packet.key == KEY_LOG => {
                     self.take_log();
                 }
-                Ok(_) | Err(Error::TimedOut) => {}
+                // Idle: what was written while the host waited can be said.
+                Err(Error::TimedOut) => say_deferred(),
+                Ok(_) => {}
                 Err(_) => return Err(Step::Events),
             }
         }
