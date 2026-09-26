@@ -14,12 +14,16 @@
 //! picture follows the song however the machine is loaded. Without a card
 //! the clock is the wall clock.
 //!
-//! It runs as init in `xtask test-badapple`, so it never exits: it says what
-//! it did, holds the last frame, and waits. Its lines start `badapple:`.
+//! As init (`xtask test-badapple`, `run-badapple`) it has the card to
+//! itself and never exits: it says what it did, holds the last frame, and
+//! waits. On a desktop -- `WAYLAND_DISPLAY` set -- it is a window instead
+//! (`window.rs`), which ends the program when it is closed. Its lines start
+//! `badapple:`.
 
 mod args;
 mod clock;
 mod scale;
+mod step;
 
 #[cfg(target_os = "linux")]
 mod linux;
@@ -27,6 +31,8 @@ mod linux;
 mod screen;
 #[cfg(target_os = "linux")]
 mod sound;
+#[cfg(target_os = "linux")]
+mod window;
 
 #[cfg(target_os = "linux")]
 fn main() {

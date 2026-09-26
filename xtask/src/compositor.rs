@@ -868,6 +868,22 @@ const BINDS: [(&str, &[&str]); 2] = [
 /// One value rather than a parameter apiece, because each boot below passes
 /// the whole set through unchanged and a program added for one boot would
 /// otherwise be a new argument in every signature between here and
+/// A gate's compositor image for a client built elsewhere: the compositor
+/// and its own programs, `config` as `/etc/hyprland.conf`, and `files`
+/// carried beside them. `userland/media`'s Bad Apple!! window
+/// (`crate::badapple`) is such a client.
+pub(crate) fn client_image(
+    arch: Arch,
+    config: &str,
+    files: Vec<crate::ports::File>,
+    args: &Args,
+) -> Result<(PathBuf, PathBuf)> {
+    let programs = Programs::build(arch)?;
+    let mut carried = Carried::none();
+    carried.ports = files;
+    build_image(arch, &programs, config, carried, args)
+}
+
 /// `build_image`.
 #[derive(Clone, Debug)]
 struct Programs {
@@ -2286,6 +2302,7 @@ fn desktop(
         carried.ports.extend(crate::rustc::default_links(args));
     }
     let config = crate::ssh::with_server(config, args, &mut carried.ports)?;
+    let config = crate::badapple::on_the_desktop(arch, config, &mut carried.ports, args)?;
     // A wallpaper, from this machine's own and from nowhere else:
     // `crate::wallpaper` says where they come from and why a run never goes
     // looking. It is started before anything the configuration starts, so

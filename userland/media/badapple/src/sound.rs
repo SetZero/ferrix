@@ -3,6 +3,7 @@
 
 use std::fs::File;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use media_pcm::{CHANNELS, Playback, RATE};
 use media_resample::{Resampler, to_i16};
@@ -35,13 +36,14 @@ pub(crate) fn open() -> Result<Playback, String> {
     Playback::open(|config| config.buffer / 2).map_err(|error| format!("the card: {error}"))
 }
 
-/// Play `song` on `playback`, at most `seconds`, telling `clock` where the
-/// speaker is after every period.
+/// Play `song` on `playback`, at most `seconds` and until `stop` is set,
+/// telling `clock` where the speaker is after every period.
 pub(crate) fn play(
     song: &str,
     seconds: Option<u32>,
     mut playback: Playback,
     clock: &Arc<Clock>,
+    stop: &AtomicBool,
 ) -> Result<Played, String> {
     let file = File::open(song).map_err(|error| format!("{song}: {error}"))?;
     let source = MediaSourceStream::new(Box::new(file), Default::default());
@@ -79,6 +81,13 @@ pub(crate) fn play(
     let mut out: Vec<i16> = Vec::new();
     let mut ended = false;
     while !ended {
+        // The window was closed: stop at once, leaving what the card holds
+        // to play out or not.
+        if stop.load(Ordering::Relaxed) {
+            played.frames = playback.written();
+            played.underruns = playback.underruns();
+            return Ok(played);
+        }
         match format.next_packet() {
             Ok(packet) if packet.track_id() != track_id => continue,
             Ok(packet) => match decoder.decode(&packet) {

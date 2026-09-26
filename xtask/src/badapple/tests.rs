@@ -1,6 +1,7 @@
 use super::{
-    DECIMATE, Fit, HEIGHT, WIDTH, WINDOW, correlation, fit, mono, picture_mismatches,
-    prepared_signal, progress, windows,
+    DECIMATE, Fit, GUEST_PLAYER, GUEST_SONG, GUEST_VIDEO, HEIGHT, WIDTH, WINDOW, correlation,
+    desktop_entry, fit, mono, picture_mismatches, prepared_signal, progress, window_config,
+    windows,
 };
 use crate::display::Image;
 
@@ -170,4 +171,44 @@ fn stereo_bytes_become_mono() {
         "a trailing odd byte is dropped"
     );
     assert_eq!(WINDOW, 2 * 48_000 / DECIMATE);
+}
+
+#[test]
+fn a_window_s_last_fit_is_the_one_on_the_screen() {
+    let lines = owned(&[
+        "badapple: window 982x726 fit 7 0 968 726 video 512x384 6572 frames at 30/1",
+        "badapple: ready",
+        "badapple: window 1024x768 fit 0 0 1024 768",
+    ]);
+    assert_eq!(
+        fit(&lines),
+        Some(Fit {
+            x: 0,
+            y: 0,
+            width: 1024,
+            height: 768
+        })
+    );
+}
+
+#[test]
+fn the_desktop_starts_what_the_image_carries() {
+    let entry = desktop_entry();
+    let exec = format!("Exec=/{GUEST_PLAYER} /{GUEST_VIDEO} /{GUEST_SONG}\n");
+    assert!(
+        entry.starts_with("[Desktop Entry]\nType=Application\n"),
+        "{entry}"
+    );
+    assert!(entry.contains(&exec), "{entry}");
+    let config = window_config(12);
+    assert!(
+        config.contains(&format!(
+            "exec-once = /{GUEST_PLAYER} /{GUEST_VIDEO} /{GUEST_SONG} 12\n"
+        )),
+        "{config}"
+    );
+    assert!(
+        config.contains("windowrule = fullscreen, match:class ^(badapple)$"),
+        "{config}"
+    );
 }

@@ -65,8 +65,22 @@ scaled by nearest pixel to fill it and centred. On a virtio-gpu each frame
 is a `DIRTYFB` of the rows that changed, and the host's copy is what is
 scanned out, so a half-drawn frame is never shown.
 
-`cargo xtask test-badapple` plays 30 s and makes four checks (details in
-`xtask/src/badapple.rs`):
+**On the desktop** the player is a window. When `WAYLAND_DISPLAY` is set it
+opens a toplevel through the compositor toolkit (`Client::toplevel`, added
+to `userland/compositor/toolkit` for it) instead of the card. The
+compositor tiles and sizes the window, and the picture is fitted into it.
+The sound card is still the clock. Frame callbacks only say when the
+compositor is ready for the next picture, so a frame is never drawn over
+one not yet shown. Closing the window stops the song and ends the program.
+At the end of the video the last frame stays until the window is closed.
+`run-compositor --everything` carries the player, the video and the song,
+a `.desktop` entry for a launcher, and `SUPER M` to start it. The image
+has no launcher yet, so the keybind is the way in today.
+
+`cargo xtask test-badapple` makes four checks (details in
+`xtask/src/badapple.rs`). It checks two boots: 30 s with the player as init
+on the card, and 12 s with it as a fullscreen window in hyprix, started by
+`exec-once`.
 * **The picture:** the frame the player holds at the end must be on the
   screen exactly, at every one of its 196608 pixels.
 * **The song:** each two seconds of what the card played must correlate
@@ -139,5 +153,12 @@ Planned, in the order it would be built:
   * The negative control failed at every pixel.
   * Under a host load of 40, the player showed 789 to 889 of 900 frames,
     skipping the rest to stay with the song.
+* **2026-09-26, later:** Bad Apple!! is on the desktop, at the customer's
+  order: a window in hyprix, in the `--everything` image, started with
+  `SUPER M`. The window boot in `test-badapple` passes on all three
+  architectures: frame 359 was exact at every pixel, every window of the
+  song correlated at 1.000, and picture and song were 0 to 7 ms apart. On
+  the `--everything` desktop itself (x86-64, KVM, GL), `SUPER M` started it
+  tiled beside the terminal and Chrome, 11 ms off the song at 20 s.
 * **Doom:** in the backlog by the customer's word of 2026-09-26. Not
   started; §3 is where to begin.

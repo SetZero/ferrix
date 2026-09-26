@@ -71,6 +71,13 @@ const RATE: u16 = 30;
 /// Where the files go in the initramfs.
 const GUEST_VIDEO: &str = "usr/share/badapple/badapple.bav";
 const GUEST_SONG: &str = "usr/share/badapple/badapple.m4a";
+/// The player, where the desktop keeps its programs.
+const GUEST_PLAYER: &str = "bin/badapple";
+/// Its entry for a launcher (fuzzel reads `$XDG_DATA_DIRS/applications`).
+const GUEST_ENTRY: &str = "usr/share/applications/badapple.desktop";
+/// How much of the video the window boot plays: enough for one progress
+/// line (every ten seconds) and a held frame.
+const WINDOW_SECONDS: u32 = 12;
 
 /// The card's rate.
 const SAMPLE_RATE: usize = 48_000;
@@ -228,8 +235,8 @@ struct Played {
     held: Option<(u32, Image)>,
 }
 
-/// Boot the player with the files, a screen and a card whose far end writes
-/// `wav`; once it holds a frame, dump the screen.
+/// Boot the player as init with the files, a screen and a card whose far
+/// end writes `wav`; once it holds a frame, dump the screen.
 fn boot(
     arch: Arch,
     player: &Path,
@@ -244,6 +251,52 @@ fn boot(
     let natives = crate::native::build(arch, args.release)?;
     let initramfs = crate::initramfs::build(None, &natives, None, files)?;
     let image = crate::fat::write_image_with(arch, &loader, &kernel, &initramfs, None)?;
+    watch(arch, (&image, &kernel), seconds, wav, args)
+}
+
+/// The desktop's configuration for the window boot: one screen, the window
+/// made fullscreen so it is where the screendump looks, and the player
+/// started as a desktop's `exec-once` starts a program.
+fn window_config(seconds: u32) -> String {
+    format!(
+        "# Written into the initramfs by `cargo xtask test-badapple`.\n\
+         monitor = , 1024x768@60, auto, 1\n\
+         windowrule = fullscreen, match:class ^(badapple)$\n\
+         exec-once = /{GUEST_PLAYER} /{GUEST_VIDEO} /{GUEST_SONG} {seconds}\n"
+    )
+}
+
+/// Boot the compositor with the player as a window in it, as the desktop
+/// runs it; once it holds a frame, dump the screen.
+fn window_boot(
+    arch: Arch,
+    player: &Path,
+    files: &[crate::ports::File],
+    seconds: u32,
+    wav: &Path,
+    args: &Args,
+) -> Result<Played> {
+    let mut carried = files.to_vec();
+    carried.push(player_file(player)?);
+    // A judged boot draws in memory: a GL card cannot be dumped.
+    let quiet = Args {
+        gl: false,
+        ..args.clone()
+    };
+    let (image, kernel) =
+        crate::compositor::client_image(arch, &window_config(seconds), carried, &quiet)?;
+    watch(arch, (&image, &kernel), seconds, wav, &quiet)
+}
+
+/// Run a built image with a screen, QMP and a card writing `wav` until the
+/// player holds a frame, and dump the screen then.
+fn watch(
+    arch: Arch,
+    (image, kernel): (&Path, &Path),
+    seconds: u32,
+    wav: &Path,
+    args: &Args,
+) -> Result<Played> {
     if wav.exists() {
         std::fs::remove_file(wav).map_err(io(wav))?;
     }
@@ -286,8 +339,17 @@ fn boot(
         played.lines = every;
         Ok(())
     };
-    let _ = crate::qemu::watch_then(arch, &image, &kernel, &qemu_args, READY, hook)?;
+    let _ = crate::qemu::watch_then(arch, image, kernel, &qemu_args, READY, hook)?;
     Ok(played)
+}
+
+/// The player, as the file the guest runs.
+fn player_file(player: &Path) -> Result<crate::ports::File> {
+    Ok(crate::ports::File {
+        path: GUEST_PLAYER.to_owned(),
+        mode: 0o755,
+        content: crate::ports::Content::Bytes(std::fs::read(player).map_err(io(player))?),
+    })
 }
 
 /// Where the player put the picture: `fit X Y W H` in its screen line.
@@ -299,10 +361,13 @@ struct Fit {
     height: usize,
 }
 
+/// The last word on it: on the card, the one screen line; in a window, the
+/// window line after its last resize.
 fn fit(lines: &[String]) -> Option<Fit> {
     let line = lines
         .iter()
-        .find(|line| line.contains("badapple: screen "))?;
+        .rev()
+        .find(|line| line.contains("badapple: screen ") || line.contains("badapple: window "))?;
     let mut words = line
         .split_whitespace()
         .skip_while(|word| *word != "fit")
@@ -520,6 +585,56 @@ fn show(arch: Arch, lines: &[String]) {
     }
 }
 
+/// Put Bad Apple!! on the `run-compositor --everything` desktop: the player,
+/// the video and the song, an entry a launcher lists, and `SUPER M` to start
+/// it. A machine that has not fetched the video gets a desktop without it,
+/// and is told how to have it.
+///
+/// # Errors
+///
+/// A fetched video that fails its check, or a player that does not build.
+pub(crate) fn on_the_desktop(
+    arch: Arch,
+    config: String,
+    ports: &mut Vec<crate::ports::File>,
+    args: &Args,
+) -> Result<String> {
+    if !args.everything || crate::display::target(arch).is_none() {
+        return Ok(config);
+    }
+    if !media_dir()?.join(SOURCE).is_file() {
+        println!(
+            "  {arch}: no Bad Apple!! on this desktop: scripts/fetch/fetch-badapple.sh fetches it"
+        );
+        return Ok(config);
+    }
+    let inputs = inputs(None)?;
+    ports.extend(inputs.files);
+    ports.push(player_file(&build_player(arch, false)?)?);
+    ports.push(crate::ports::File {
+        path: GUEST_ENTRY.to_owned(),
+        mode: 0o644,
+        content: crate::ports::Content::Bytes(desktop_entry().into_bytes()),
+    });
+    Ok(format!(
+        "{config}bind = SUPER, M, exec, /{GUEST_PLAYER} /{GUEST_VIDEO} /{GUEST_SONG}\n"
+    ))
+}
+
+/// The launcher's entry (the Desktop Entry specification).
+fn desktop_entry() -> String {
+    format!(
+        "[Desktop Entry]\n\
+         Type=Application\n\
+         Name=Bad Apple!!\n\
+         Comment=The shadow-art video, with its song\n\
+         Exec=/{GUEST_PLAYER} /{GUEST_VIDEO} /{GUEST_SONG}\n\
+         Terminal=false\n\
+         Categories=AudioVideo;Video;Player;\n\
+         Keywords=touhou;video;music;\n"
+    )
+}
+
 /// What every boot on an architecture shares.
 struct Inputs {
     files: Vec<crate::ports::File>,
@@ -631,7 +746,16 @@ pub(crate) fn test_badapple(args: &Args) -> Result<()> {
             return Err(Error::new(format!("{arch}: the player never finished")));
         }
         check_picture(arch, &inputs, played)?;
-        check_song(arch, &inputs, &wav)?;
+        check_song(arch, &inputs, &wav, SECONDS)?;
+
+        // The same player as a window on the desktop.
+        let played = window_boot(arch, &player, &inputs.files, WINDOW_SECONDS, &wav, args)?;
+        show(arch, &played.lines);
+        if let Some(line) = played.lines.iter().find(|line| line.contains(FAILED)) {
+            return Err(Error::new(format!("{arch}, in a window: {}", line.trim())));
+        }
+        check_picture(arch, &inputs, played)?;
+        check_song(arch, &inputs, &wav, WINDOW_SECONDS)?;
 
         let negative = build_player(arch, true)?;
         let played = boot(arch, &negative, &inputs.files, NEGATIVE_SECONDS, &wav, args)?;
@@ -678,11 +802,11 @@ fn check_picture(arch: Arch, inputs: &Inputs, played: Played) -> Result<()> {
 }
 
 /// Every two seconds of what the card played is the song.
-fn check_song(arch: Arch, inputs: &Inputs, wav: &Path) -> Result<()> {
+fn check_song(arch: Arch, inputs: &Inputs, wav: &Path, seconds: u32) -> Result<()> {
     let bytes = std::fs::read(wav).map_err(io(wav))?;
     let heard = prepared_signal(&wav_mono(&bytes)?);
     let found = windows(&heard, &inputs.reference);
-    let expected = (SECONDS as usize - 1) * SAMPLE_RATE / DECIMATE / WINDOW;
+    let expected = (seconds as usize - 1) * SAMPLE_RATE / DECIMATE / WINDOW;
     let poor: Vec<String> = found
         .iter()
         .filter(|(_, _, score)| *score < CORRELATION)

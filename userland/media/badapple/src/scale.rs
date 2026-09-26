@@ -115,7 +115,9 @@ impl Fit {
                 let shade = line.get(column).copied().unwrap_or(0);
                 let shade = if invert { 15 - shade.min(15) } else { shade };
                 let grey = grey_of(shade);
-                pixel.copy_from_slice(&[grey, grey, grey, 0]);
+                // Opaque: a window's buffer is RGBA, and the card's XRGB
+                // ignores the fourth byte.
+                pixel.copy_from_slice(&[grey, grey, grey, 255]);
             }
             previous = Some((source, start));
         }

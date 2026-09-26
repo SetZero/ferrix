@@ -114,7 +114,7 @@ fn drawing_scales_and_greys() {
         [255, 0],
         "row 3"
     );
-    assert_eq!(pixels[3], 0, "X is zero");
+    assert_eq!(pixels[3], 255, "opaque");
     fit.draw(&shades, &mut pixels, 16, 0..1, true);
     assert_eq!(grey(&pixels, 0, 0), 255, "inverted");
     assert_eq!(grey(&pixels, 0, 1), 0, "only the rows asked for");
@@ -127,7 +127,7 @@ fn drawing_stops_at_a_short_buffer() {
     fit.draw(&[15; 4], &mut pixels, 16, 0..4, false);
     assert_eq!(
         pixels[..16],
-        [255, 255, 255, 0].repeat(4)[..],
+        [255, 255, 255, 255].repeat(4)[..],
         "the row that fits"
     );
 }

@@ -29,6 +29,9 @@ libc = "0.2.189"
 # The screen: /dev/dri/card0's dumb buffers, as the compositor's `blank`
 # shows them. Linux-only code, so only a Linux build pulls it in.
 compositor-drm = { path = "../../compositor/drm" }
+# The window, when a compositor is running: the desktop clients' Wayland
+# runtime, whose toplevel this was the first client of.
+compositor-toolkit = { path = "../../compositor/toolkit" }
 
 [lints]
 workspace = true
