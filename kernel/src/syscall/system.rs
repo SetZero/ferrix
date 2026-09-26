@@ -31,6 +31,7 @@
 //! [`Utsname::sysname`]: ferrix_linux_abi::types::Utsname::sysname
 
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicU64, Ordering};
 
 use ferrix_bootinfo::{Arch, PAGE_SIZE, is_user_address};
 use ferrix_linux_abi::errno::Errno;
@@ -40,7 +41,7 @@ use ferrix_sync::IrqControl;
 use crate::sync::SpinLock;
 
 use crate::arch;
-use crate::console::println;
+use crate::console::{log, println};
 use crate::mm;
 use crate::smp;
 use crate::syscall::attributes::int;
@@ -339,63 +340,184 @@ pub(crate) fn sys_getcpu(process: &Process, cpu_at: u64, node_at: u64) -> Result
     Ok(0)
 }
 
-/// The size `SYSLOG_ACTION_SIZE_BUFFER` reports: Linux's default
-/// `CONFIG_LOG_BUF_SHIFT` of 17.
-const LOG_BUFFER: usize = 1 << 17;
-
-/// `syslog`, the kernel log's system call -- **with no kernel log behind it**.
+/// How often a `SYSLOG_ACTION_READ` waiting for the log looks at it again.
 ///
-/// The kernel prints to its console and keeps nothing, so there is nothing
-/// to read. Every action answers as Linux answers with an empty buffer:
-/// reading all of it or reading and clearing it copies zero bytes, the unread
-/// count is zero, opening, closing, clearing and switching console output off
-/// or on succeed, and the buffer size is the default `dmesg` sizes its read
-/// by. `SYSLOG_ACTION_READ` waits for a message, as on Linux, and since none
-/// will ever come it waits until the process is ended. The argument checks are
-/// `kernel/printk/printk.c`'s.
+/// The console never wakes a reader -- recording a byte is all it may do, from
+/// any context (`console::log`) -- so a waiting reader looks for itself: often
+/// enough that `dmesg -w` follows a boot as it prints, and seldom enough to
+/// cost nothing while nothing does.
+const READ_POLL_NANOS: u64 = 15_000_000;
+
+/// The most a read copies out under the reader's lock at once, through the
+/// stack.
+const CHUNK: usize = 512;
+
+/// `SYSLOG_ACTION_READ`'s cursor: one for the whole system, as Linux's
+/// `syslog_seq` is, so that two readers share the log rather than each read it
+/// all. A place in the kernel log's sequence (`console::log`).
+static READER: SpinLock<u64> = SpinLock::new(0);
+
+/// Where `SYSLOG_ACTION_CLEAR` left the log: `READ_ALL` reads nothing before
+/// it. Linux's `clear_seq`.
+static CLEARED: AtomicU64 = AtomicU64::new(0);
+
+/// `syslog`, the kernel log's system call.
+///
+/// The log is the console's: every byte it sent since boot, the kernel's
+/// lines and programs' output alike, as they were written, in a ring of
+/// [`log::CAPACITY`] bytes (`console::log`). The actions are Linux's
+/// (`kernel/printk/printk.c`), over raw bytes rather than records: a line
+/// carries no `<level>` prefix, which busybox's `dmesg` prints as it is.
+///
+/// * `READ` (2) takes what the one system-wide reader has not read yet, and
+///   waits for something if there is nothing, interruptibly and restarted
+///   under `SA_RESTART` as a blocking read is. The console never wakes it, so
+///   it looks again every [`READ_POLL_NANOS`].
+/// * `READ_ALL` (3) copies the newest `len` bytes kept since the last clear,
+///   and `READ_CLEAR` (4) does the same and then clears.
+/// * `CLEAR` (5) makes `READ_ALL` start from here; the reader's place is its
+///   own, as on Linux.
+/// * `SIZE_UNREAD` (9) is what `READ` would have to read, and `SIZE_BUFFER`
+///   (10) the ring's length.
+/// * Close, open, console off and on, and the console level (0, 1, 6, 7, 8)
+///   succeed and change nothing: the log has nothing to open, and the console
+///   prints everything.
+///
+/// **Every action is privileged**, `READ_ALL` and `SIZE_BUFFER` included: this
+/// is Linux with `dmesg_restrict` on, which is Linux's own hardened default.
+/// The log holds every program's console output, which is that program's and
+/// not the reader's, and a kernel log is where kernel addresses turn up. The
+/// kernel keeps the lines that print its layout out of the log
+/// (`console::write_unlogged`), but that is a list somebody maintains, and a
+/// privilege check is the line that does not depend on it.
 pub(crate) fn sys_syslog(
     process: &Process,
     action: i32,
     buf: u64,
     len: i32,
 ) -> Result<usize, Errno> {
-    // `check_syslog_permissions` with `dmesg_restrict` off: reading the whole
-    // buffer and asking its size are anyone's, everything else root's.
-    if !matches!(action, 3 | 10) {
-        credentials::require_privilege(process)?;
-    }
+    credentials::require_privilege(process)?;
     match action {
-        // Close, open, clear, console off, console on, unread size.
-        0 | 1 | 5 | 6 | 7 | 9 => Ok(0),
-        // Read, read all, read and clear.
+        // Close, open, console off, console on.
+        0 | 1 | 6 | 7 => Ok(0),
         2..=4 => {
-            if buf == 0 || len < 0 {
-                return Err(Errno::EINVAL);
-            }
-            if len == 0 {
+            let Some(len) = user_buffer(buf, len)? else {
                 return Ok(0);
+            };
+            match action {
+                2 => read_waiting(process, buf, len),
+                _ => read_all(process, buf, len, action == 4),
             }
-            let last = buf.checked_add(u64::from(len.unsigned_abs()) - 1);
-            if !is_user_address(buf) || !last.is_some_and(is_user_address) {
-                return Err(Errno::EFAULT);
-            }
-            // Nothing is ever logged, so a read waits for a signal to end it,
-            // restarted under `SA_RESTART` as a blocking read is. It waits on
-            // its process's signals, never on its process's end, which only
-            // this thread leaving can bring about.
-            if action == 2 {
-                let _ = process
-                    .signalled()
-                    .wait_until_deadline(|| process.signal_pending(), u64::MAX);
-                return Err(Errno::ERESTARTSYS);
-            }
+        }
+        5 => {
+            let _ = CLEARED.fetch_max(log::written(), Ordering::Relaxed);
             Ok(0)
         }
         // Console level.
         8 if (1..=8).contains(&len) => Ok(0),
-        10 => Ok(LOG_BUFFER),
+        9 => Ok(clamp(log::unread(*READER.lock()))),
+        10 => Ok(log::CAPACITY),
         _ => Err(Errno::EINVAL),
     }
+}
+
+/// A read's buffer, checked as Linux checks it: `None` for a length of zero,
+/// which reads nothing.
+fn user_buffer(buf: u64, len: i32) -> Result<Option<usize>, Errno> {
+    if buf == 0 || len < 0 {
+        return Err(Errno::EINVAL);
+    }
+    if len == 0 {
+        return Ok(None);
+    }
+    let last = buf.checked_add(u64::from(len.unsigned_abs()) - 1);
+    if !is_user_address(buf) || !last.is_some_and(is_user_address) {
+        return Err(Errno::EFAULT);
+    }
+    Ok(usize::try_from(len.unsigned_abs()).ok())
+}
+
+/// A count of bytes, as a system call's answer.
+fn clamp(count: u64) -> usize {
+    usize::try_from(count).unwrap_or(usize::MAX)
+}
+
+/// `SYSLOG_ACTION_READ`: what the reader has not read, up to `len` bytes and
+/// at least one, waiting until there is one.
+///
+/// It waits on its process's signals, never on its process's end, which only
+/// this thread leaving can bring about; a process ended while it waits counts
+/// as a signal pending.
+fn read_waiting(process: &Process, buf: u64, len: usize) -> Result<usize, Errno> {
+    loop {
+        let copied = read_unread(process, buf, len)?;
+        if copied != 0 {
+            return Ok(copied);
+        }
+        let deadline = crate::timer::now_nanos().saturating_add(READ_POLL_NANOS);
+        let _ = process
+            .signalled()
+            .wait_until_deadline(|| process.signal_pending(), deadline);
+        if process.signal_pending() {
+            return Err(Errno::ERESTARTSYS);
+        }
+    }
+}
+
+/// Take up to `len` bytes from the reader's place, at most a [`CHUNK`], and
+/// copy them to `buf`. Bytes the log dropped before the reader came for them
+/// are skipped, as Linux skips records it no longer holds.
+fn read_unread(process: &Process, buf: u64, len: usize) -> Result<usize, Errno> {
+    let mut chunk = [0u8; CHUNK];
+    let room = chunk.get_mut(..len.min(CHUNK)).unwrap_or_default();
+    let copied = {
+        let mut cursor = READER.lock();
+        // A reader parked past the log's end (`park_reader`) stays there
+        // rather than being brought back to it.
+        if log::unread(*cursor) == 0 {
+            return Ok(0);
+        }
+        log::read(&mut cursor, room).copied
+    };
+    let taken = room.get(..copied).unwrap_or_default();
+    uaccess::copy_to_user(process.space(), buf, taken).map_err(|_| Errno::EFAULT)?;
+    Ok(copied)
+}
+
+/// `SYSLOG_ACTION_READ_ALL`, and with `clear` `READ_CLEAR`: the newest `len`
+/// bytes kept since the last clear, oldest first.
+fn read_all(process: &Process, buf: u64, len: usize, clear: bool) -> Result<usize, Errno> {
+    let end = log::written();
+    let from = end.saturating_sub(len as u64);
+    let mut cursor = from.max(CLEARED.load(Ordering::Relaxed));
+    let mut chunk = [0u8; CHUNK];
+    let mut done = 0usize;
+    while cursor < end && done < len {
+        let wanted = clamp(end.saturating_sub(cursor)).min(len - done);
+        let room = chunk.get_mut(..wanted.min(CHUNK)).unwrap_or_default();
+        let read = log::read(&mut cursor, room);
+        let taken = room.get(..read.copied).unwrap_or_default();
+        let at = buf.saturating_add(done as u64);
+        uaccess::copy_to_user(process.space(), at, taken).map_err(|_| Errno::EFAULT)?;
+        done = done.saturating_add(read.copied);
+    }
+    if clear {
+        let _ = CLEARED.fetch_max(end, Ordering::Relaxed);
+    }
+    Ok(done)
+}
+
+/// Park `SYSLOG_ACTION_READ`'s reader past the end of the log, so that a read
+/// waits however much is logged, and answer where it was. For the syscall
+/// check's program that must stay blocked in the read until it is killed;
+/// [`unpark_reader`] puts it back.
+pub(crate) fn park_reader() -> u64 {
+    core::mem::replace(&mut *READER.lock(), u64::MAX)
+}
+
+/// Put `SYSLOG_ACTION_READ`'s reader back where [`park_reader`] found it.
+pub(crate) fn unpark_reader(at: u64) {
+    *READER.lock() = at;
 }
 
 /// `LINUX_REBOOT_MAGIC1` and the four `MAGIC2`s (`linux/reboot.h`): Linus's

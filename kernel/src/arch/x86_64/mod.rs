@@ -748,9 +748,9 @@ pub(crate) const USER_EXITS_PROGRAM: &[u8] = &[
     0xbf, 0x07, 0x00, 0x00, 0x00, 0x0f, 0x05, 0x0f, 0x0b,
 ];
 
-/// A program that blocks in `syslog`'s read and never returns from it, since
-/// nothing is logged: for the check that a program killed there with no signal
-/// is still released. Exits 1 if the read ever returns.
+/// A program that blocks in `syslog`'s read, which the check keeps from ever
+/// returning by parking the reader past the log: for the check that a program
+/// killed there with no signal is still released. Exits 1 if the read returns.
 ///
 /// Assembled by rustc's LLVM and read back out of the object file.
 pub(crate) const USER_SYSLOG_PROGRAM: &[u8] = &[

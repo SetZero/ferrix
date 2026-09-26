@@ -5351,10 +5351,22 @@ const SYSLOG_POLL_NANOS: u64 = 1_000_000;
 /// because a terminated process counts as one pending. A wait that did not
 /// would never let its thread reach its exit, and the process would never be
 /// released: `wait_for_exit` would run to its deadline.
+///
+/// The kernel log always has something to read at boot, so the system's one
+/// reader is parked past its end for the check, and put back after.
 fn check_a_reader_blocked_in_syslog_is_released_by_a_kill() -> Result<(), &'static str> {
     if arch::USER_SYSLOG_PROGRAM.is_empty() {
         return Ok(());
     }
+    let parked = system::park_reader();
+    let outcome = kill_a_reader_blocked_in_syslog();
+    system::unpark_reader(parked);
+    outcome
+}
+
+/// [`check_a_reader_blocked_in_syslog_is_released_by_a_kill`], with the reader
+/// parked.
+fn kill_a_reader_blocked_in_syslog() -> Result<(), &'static str> {
     let file = image::build_with(
         class_of_this_build(),
         arch::ARCH.elf_machine(),

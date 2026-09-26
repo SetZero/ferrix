@@ -210,3 +210,8 @@ pub(crate) fn read(cursor: &mut u64, out: &mut [u8]) -> Read {
 pub(crate) fn written() -> u64 {
     LOG.written()
 }
+
+/// How many bytes a reader of the kernel log at `cursor` has still to read.
+pub(crate) fn unread(cursor: u64) -> u64 {
+    LOG.unread(cursor)
+}
