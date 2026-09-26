@@ -987,6 +987,21 @@ running. The compositor's worst flips (up to 381 ms) matched the
 sampler's own longest gaps (301 ms), as with `bench-chrome`'s dips above.
 One run at load 25 had no underrun and no silence but the loop's.
 
+**Real YouTube, over the network, the next night.** A probe kept outside
+the tree (`~/ferrix-logs/chrome-perf/youtube/bench-page-probe.patch` on
+nazuna) lets the bench open any page with `--net`, taking a screen every
+ten seconds. YouTube's embed refuses to play as a page of its own ("error
+153"), and its watch page opens behind a consent dialog. So the probe opens
+a page served from the host (`index.html` beside the patch, served by
+`python3 -m http.server --bind 127.0.0.1`), which holds the embed in an
+iframe; the guest reaches the host at 10.0.2.2. *Big Buck Bunny* played
+there with its sound, through the ring-3 network driver (`playing.png`).
+With the timer sampler applied, at a load of 34–39, the guest was idle
+for two thirds of the samples. The renderer's futex calls spun for about
+2% of a processor, on locks shared by the same words, as Linux's would.
+The network driver hardly showed. The run had three underruns. Nothing
+guest-side is left to account for them: they follow the host.
+
 One trap: QEMU's `wav:PATH` backend, with its mixing engine off, runs at
 its own default of 44100 Hz whatever the stream's rate. So a 48 kHz card
 plays 8% slow into it, and Chrome's media clock with it. The bench uses
